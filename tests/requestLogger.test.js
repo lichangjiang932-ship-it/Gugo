@@ -49,6 +49,16 @@ test('requestLogger never writes a query bearer token and does not mutate the re
   assert.doesNotMatch(lines[0], /tkn_do_not_log/)
 })
 
+test('request log URLs redact one-time stream tickets', () => {
+  const logged = redactUrlForLog(
+    '/api/channels/channel-1/stream?ticket=sse_ticket_do_not_log&cursor=42',
+  )
+
+  assert.match(logged, /ticket=\[REDACTED\]/)
+  assert.match(logged, /cursor=42/)
+  assert.doesNotMatch(logged, /sse_ticket_do_not_log/)
+})
+
 test('request log URLs redact local HTML preview capability tickets from path segments', () => {
   const logged = redactUrlForLog('/api/local-files/previews/super-secret-preview-ticket/assets/site.css?v=1')
   assert.equal(logged, '/api/local-files/previews/[REDACTED]/assets/site.css?v=1')

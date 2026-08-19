@@ -6,8 +6,12 @@ import MentionsAutocomplete from '../components/MentionsAutocomplete.jsx'
 import { applyMention, getMentionQuery } from '../components/mentionsAutocompleteLogic.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { listAgentsApi } from '../lib/agentClient.js'
-import { getAuthToken } from '../lib/accountClient.js'
-import { channelStreamUrl, listChannelMessagesApi, listChannelsApi, sendChannelMessageApi } from '../lib/channelClient.js'
+import {
+  listChannelsApi,
+  mergeChannelMessages,
+  sendChannelMessageApi,
+  startChannelMessageSync,
+} from '../lib/channelClient.js'
 import {
   AgentChip,
   ChannelListGroup,
@@ -65,29 +69,16 @@ export default function ChannelsPage() {
 
   useEffect(() => {
     if (!activeId) return undefined
-    let cancelled = false
-    listChannelMessagesApi(activeId, { limit: 50 })
-      .then((data) => { if (!cancelled) setMessages(data.messages || []) })
-      .catch((requestError) => setError(requestError.message || t('errors.loadFailed')))
-    return () => { cancelled = true }
-  }, [activeId, t])
-
-  useEffect(() => {
-    if (!activeId) return undefined
-    const token = getAuthToken()
-    const stream = new EventSource(token ? `${channelStreamUrl(activeId)}?token=${encodeURIComponent(token)}` : channelStreamUrl(activeId))
-    stream.addEventListener('channel_message', (event) => {
-      try {
-        const message = JSON.parse(event.data)
-        setMessages((current) => current.some((item) => item.id === message.id) ? current : [...current, message])
-      } catch { /* Ignore malformed SSE payloads. */ }
+    return startChannelMessageSync({
+      channelId: activeId,
+      applyMessages: (incoming) => setMessages((current) => mergeChannelMessages(current, incoming)),
+      reportError: (requestError) => setError(requestError.message || t('errors.loadFailed')),
     })
-    return () => stream.close()
-  }, [activeId])
+  }, [activeId, t])
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ block: 'end' }) }, [messages.length, activeId])
 
-  const selectChannel = (id) => { setShowSettings(false); setActiveId(id) }
+  const selectChannel = (id) => { setShowSettings(false); setMessages([]); setActiveId(id) }
   const pickMention = (agent, state = mentionState) => {
     const next = applyMention(draft, state, agent)
     setDraft(next)
@@ -144,7 +135,7 @@ export default function ChannelsPage() {
           </>
         ) : <EmptyChannel onCreate={() => setShowCreate(true)} t={t} />}
       </main>
-      {showCreate && <CreateChannelPanel agents={agents} t={t} onClose={() => setShowCreate(false)} onCreated={(channel) => { setChannels((current) => [channel, ...current]); setActiveId(channel.id); setShowCreate(false) }} />}
+      {showCreate && <CreateChannelPanel agents={agents} t={t} onClose={() => setShowCreate(false)} onCreated={(channel) => { setChannels((current) => [channel, ...current]); setMessages([]); setActiveId(channel.id); setShowCreate(false) }} />}
     </div>
   )
 }

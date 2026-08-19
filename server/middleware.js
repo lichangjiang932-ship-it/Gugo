@@ -127,6 +127,7 @@ const SENSITIVE_LOG_QUERY_KEYS = new Set([
   'key',
   'password',
   'secret',
+  'ticket',
   'token',
 ])
 

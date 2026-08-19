@@ -13,24 +13,53 @@
 import crypto from 'node:crypto'
 
 const TICKET_TTL_MS = 60 * 1000
+const MAX_PENDING_TICKETS = 4096
 
-// ticket → { userId, expiresAt }
+// ticket → { userId, scope, expiresAt }
 const tickets = new Map()
 
-export function createStreamTicket(userId, { now = Date.now, ttlMs = TICKET_TTL_MS } = {}) {
+function normalizedScope(scope) {
+  const value = String(scope || '').trim()
+  return value || null
+}
+
+function pruneTickets(issuedAt) {
+  for (const [ticket, entry] of tickets) {
+    if (entry.expiresAt <= issuedAt) tickets.delete(ticket)
+  }
+
+  while (tickets.size >= MAX_PENDING_TICKETS) {
+    const oldestTicket = tickets.keys().next().value
+    if (!oldestTicket) break
+    tickets.delete(oldestTicket)
+  }
+}
+
+export function createStreamTicket(userId, {
+  now = Date.now,
+  ttlMs = TICKET_TTL_MS,
+  scope = null,
+} = {}) {
   if (!userId) throw new Error('userId 必填')
+  const issuedAt = now()
+  pruneTickets(issuedAt)
   const ticket = `st_${crypto.randomBytes(24).toString('hex')}`
-  tickets.set(ticket, { userId, expiresAt: now() + ttlMs })
+  tickets.set(ticket, {
+    userId,
+    scope: normalizedScope(scope),
+    expiresAt: issuedAt + ttlMs,
+  })
   return ticket
 }
 
-export function consumeStreamTicket(ticket, { now = Date.now } = {}) {
+export function consumeStreamTicket(ticket, { now = Date.now, scope = null } = {}) {
   if (typeof ticket !== 'string' || !ticket) return null
   const entry = tickets.get(ticket)
   if (!entry) return null
-  // 一次性:无论是否过期,取出即删
+  // 一次性:无论是否过期或 scope 不匹配,取出即删。
   tickets.delete(ticket)
-  if (entry.expiresAt < now()) return null
+  if (entry.expiresAt <= now()) return null
+  if (entry.scope !== normalizedScope(scope)) return null
   return entry.userId
 }
 
@@ -38,3 +67,10 @@ export function consumeStreamTicket(ticket, { now = Date.now } = {}) {
 export function _clearStreamTickets() {
   tickets.clear()
 }
+
+// 测试用:验证过期清扫与容量上限，不暴露 ticket 内容。
+export function _getStreamTicketCount() {
+  return tickets.size
+}
+
+export const _MAX_PENDING_TICKETS = MAX_PENDING_TICKETS

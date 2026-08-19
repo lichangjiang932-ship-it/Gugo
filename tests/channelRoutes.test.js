@@ -25,6 +25,16 @@ function makeRes() {
     statusCode: 0,
     headers: {},
     chunks: [],
+    listeners: new Map(),
+    on(event, listener) {
+      const listeners = this.listeners.get(event) || []
+      listeners.push(listener)
+      this.listeners.set(event, listeners)
+      return this
+    },
+    emit(event) {
+      for (const listener of this.listeners.get(event) || []) listener()
+    },
     writeHead(status, headers = {}) {
       this.statusCode = status
       this.headers = headers
@@ -46,6 +56,7 @@ function makeRes() {
 async function call(route, opts) {
   const req = makeReq(opts)
   const res = makeRes()
+  res.request = req
   await route(req, res)
   return res
 }
@@ -158,4 +169,110 @@ test('channelRoutes: adding an agent outside current user returns 403', { concur
     body: { agentId: agents.other.id },
   })
   assert.equal(bad.statusCode, 403)
+})
+
+test('channelRoutes: SSE tickets are one-time and bound to one channel', { concurrency: false }, async () => {
+  const { route, token, agents } = await setup()
+  const firstCreate = await call(route, {
+    method: 'POST',
+    url: '/api/channels',
+    token,
+    body: { name: 'First stream', kind: 'group', agentIds: [agents.a.id] },
+  })
+  const secondCreate = await call(route, {
+    method: 'POST',
+    url: '/api/channels',
+    token,
+    body: { name: 'Second stream', kind: 'group', agentIds: [agents.b.id] },
+  })
+  const firstId = firstCreate.json().channel.id
+  const secondId = secondCreate.json().channel.id
+
+  const wrongChannelTicketResponse = await call(route, {
+    method: 'POST',
+    url: `/api/channels/${firstId}/stream-ticket`,
+    token,
+  })
+  assert.equal(wrongChannelTicketResponse.statusCode, 201)
+  const wrongChannelTicket = wrongChannelTicketResponse.json().ticket
+  const wrongChannelStream = await call(route, {
+    url: `/api/channels/${secondId}/stream?ticket=${encodeURIComponent(wrongChannelTicket)}`,
+  })
+  assert.equal(wrongChannelStream.statusCode, 401)
+  const burnedTicket = await call(route, {
+    url: `/api/channels/${firstId}/stream?ticket=${encodeURIComponent(wrongChannelTicket)}`,
+  })
+  assert.equal(burnedTicket.statusCode, 401)
+
+  const ticketResponse = await call(route, {
+    method: 'POST',
+    url: `/api/channels/${firstId}/stream-ticket`,
+    token,
+  })
+  assert.equal(ticketResponse.statusCode, 201)
+  const body = ticketResponse.json()
+  assert.equal(body.ok, true)
+  assert.equal(body.expiresIn, 60)
+  assert.match(body.ticket, /^st_[a-f0-9]{48}$/)
+  assert.equal(body.ticket.includes(token), false)
+
+  const originalSetInterval = globalThis.setInterval
+  const originalClearInterval = globalThis.clearInterval
+  let heartbeat = null
+  globalThis.setInterval = (callback, delay) => {
+    heartbeat = {
+      callback,
+      delay,
+      unrefCalled: false,
+      unref() { this.unrefCalled = true },
+    }
+    return heartbeat
+  }
+  globalThis.clearInterval = (timer) => { timer.clearCount = (timer.clearCount || 0) + 1 }
+  let stream
+  try {
+    stream = await call(route, {
+      url: `/api/channels/${firstId}/stream?ticket=${encodeURIComponent(body.ticket)}`,
+    })
+    assert.equal(stream.statusCode, 200)
+    assert.equal(stream.headers['Cache-Control'], 'no-cache, no-transform')
+    assert.equal(stream.headers['X-Accel-Buffering'], 'no')
+    assert.match(Buffer.concat(stream.chunks).toString('utf8'), /event: ready[\s\S]*"channelId"/)
+    assert.equal(heartbeat.delay, 15_000)
+    assert.equal(heartbeat.unrefCalled, true)
+    heartbeat.callback()
+    assert.match(Buffer.concat(stream.chunks).toString('utf8'), /: keep-alive\n\n/)
+
+    stream.request.emit('close')
+    stream.emit('close')
+    assert.equal(heartbeat.clearCount, 1)
+  } finally {
+    globalThis.setInterval = originalSetInterval
+    globalThis.clearInterval = originalClearInterval
+  }
+
+  const replay = await call(route, {
+    url: `/api/channels/${firstId}/stream?ticket=${encodeURIComponent(body.ticket)}`,
+  })
+  assert.equal(replay.statusCode, 401)
+  const durableTokenQuery = await call(route, {
+    url: `/api/channels/${firstId}/stream?token=${encodeURIComponent(token)}`,
+  })
+  assert.equal(durableTokenQuery.statusCode, 401)
+})
+
+test('channelRoutes: stream-ticket issuance authenticates and hides missing channels', { concurrency: false }, async () => {
+  const { route, token } = await setup()
+  const unauthenticated = await call(route, {
+    method: 'POST',
+    url: '/api/channels/missing/stream-ticket',
+  })
+  assert.equal(unauthenticated.statusCode, 401)
+
+  const missing = await call(route, {
+    method: 'POST',
+    url: '/api/channels/missing/stream-ticket',
+    token,
+  })
+  assert.equal(missing.statusCode, 404)
 })

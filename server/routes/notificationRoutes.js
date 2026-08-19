@@ -8,6 +8,9 @@ import {
   markRead,
   subscribeNotifications,
 } from '../services/notificationsStore.js'
+import { createStreamTicket, consumeStreamTicket } from '../utils/streamTicket.js'
+
+const NOTIFICATION_STREAM_SCOPE = 'notifications'
 
 function unauthorized(res) {
   return sendJson(res, 401, { error: 'Unauthorized' })
@@ -26,26 +29,46 @@ export async function handleNotificationRequest(req, res) {
   const url = new URL(req.url, 'http://localhost')
   const parts = routeParts(url.pathname)
 
+  if (req.method === 'POST' && url.pathname === '/api/notifications/stream-ticket') {
+    const userId = authenticateRequest(req)
+    if (!userId) return unauthorized(res)
+    return sendJson(res, 201, {
+      ticket: createStreamTicket(userId, { scope: NOTIFICATION_STREAM_SCOPE }),
+      expiresIn: 60,
+    })
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/notifications/stream') {
     let userId = authenticateRequest(req)
     if (!userId) {
-      const queryToken = url.searchParams.get('token')
-      if (queryToken) {
-        req.headers.authorization = `Bearer ${queryToken}`
-        userId = authenticateRequest(req)
-      }
+      const ticket = url.searchParams.get('ticket')
+      if (ticket) userId = consumeStreamTicket(ticket, { scope: NOTIFICATION_STREAM_SCOPE })
     }
     if (!userId) return unauthorized(res)
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
     })
+    res.flushHeaders?.()
     sendSse(res, 'ready', { ok: true })
     const unsubscribe = subscribeNotifications(userId, (notification) => {
       sendSse(res, 'notification', notification)
     })
-    req.on('close', unsubscribe)
+    const heartbeat = setInterval(() => {
+      if (!res.destroyed && !res.writableEnded) res.write(': keep-alive\n\n')
+    }, 15_000)
+    heartbeat.unref?.()
+    let cleanedUp = false
+    const cleanup = () => {
+      if (cleanedUp) return
+      cleanedUp = true
+      clearInterval(heartbeat)
+      unsubscribe()
+    }
+    req.on('close', cleanup)
+    res.on?.('close', cleanup)
     return
   }
 

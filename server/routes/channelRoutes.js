@@ -12,6 +12,7 @@ import {
   updateChannel,
 } from '../services/channelStore.js'
 import { dispatchUserMessage } from '../services/channelDispatcher.js'
+import { createStreamTicket, consumeStreamTicket } from '../utils/streamTicket.js'
 
 function unauthorized(res) {
   return sendJson(res, 401, { ok: false, error: 'Unauthorized' })
@@ -26,14 +27,15 @@ function sendSse(res, event, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`)
 }
 
-function authForSse(req, url) {
+function channelStreamScope(channelId) {
+  return `channel:${channelId}`
+}
+
+function authForSse(req, url, channelId) {
   let userId = authenticateRequest(req)
   if (!userId) {
-    const queryToken = url.searchParams.get('token')
-    if (queryToken) {
-      req.headers.authorization = `Bearer ${queryToken}`
-      userId = authenticateRequest(req)
-    }
+    const ticket = url.searchParams.get('ticket')
+    if (ticket) userId = consumeStreamTicket(ticket, { scope: channelStreamScope(channelId) })
   }
   return userId
 }
@@ -49,22 +51,49 @@ export async function handleChannelRequest(req, res) {
   const url = new URL(req.url, 'http://localhost')
   const parts = routeParts(url.pathname)
 
-  if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'channels' && parts[2] && parts[3] === 'stream') {
-    const userId = authForSse(req, url)
+  if (req.method === 'POST' && parts[0] === 'api' && parts[1] === 'channels' && parts[2] && parts[3] === 'stream-ticket' && parts.length === 4) {
+    const userId = authenticateRequest(req)
     if (!userId) return unauthorized(res)
     const channelId = decodeURIComponent(parts[2])
     const channel = getChannel({ userId, channelId })
     if (!channel) return sendJson(res, 404, { ok: false, error: 'channel not found' })
+    return sendJson(res, 201, {
+      ok: true,
+      ticket: createStreamTicket(userId, { scope: channelStreamScope(channelId) }),
+      expiresIn: 60,
+    })
+  }
+
+  if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'channels' && parts[2] && parts[3] === 'stream') {
+    const channelId = decodeURIComponent(parts[2])
+    const userId = authForSse(req, url, channelId)
+    if (!userId) return unauthorized(res)
+    const channel = getChannel({ userId, channelId })
+    if (!channel) return sendJson(res, 404, { ok: false, error: 'channel not found' })
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
     })
+    res.flushHeaders?.()
     sendSse(res, 'ready', { ok: true, channelId })
     const unsubscribe = subscribeChannelMessages(channelId, (message) => {
       sendSse(res, 'channel_message', message)
     })
-    req.on('close', unsubscribe)
+    const heartbeat = setInterval(() => {
+      if (!res.destroyed && !res.writableEnded) res.write(': keep-alive\n\n')
+    }, 15_000)
+    heartbeat.unref?.()
+    let cleanedUp = false
+    const cleanup = () => {
+      if (cleanedUp) return
+      cleanedUp = true
+      clearInterval(heartbeat)
+      unsubscribe()
+    }
+    req.on('close', cleanup)
+    res.on?.('close', cleanup)
     return undefined
   }
 
