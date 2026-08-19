@@ -19,6 +19,7 @@ const MAX_PLUGIN_SCHEMA_DEPTH = 32
 const MAX_PLUGIN_SCHEMA_NODES = 8_192
 const MAX_PLUGIN_SCHEMA_BYTES = 512 * 1024
 const PLUGIN_TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/
+const PLUGIN_MODEL_PROVIDER_KIND_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const PLUGIN_TOOL_RISK_METADATA = Object.freeze({
   riskClass: 'external',
   category: 'external',
@@ -218,6 +219,14 @@ export function createRuntimePluginRegistry({
     }
   }
 
+  const assertContributionDeclared = (record, declaration) => {
+    if (record.manifest.contributes.includes(declaration)) return
+    const error = new Error(`plugin contribution is not declared: ${record.manifest.id}/${declaration}`)
+    error.code = 'PLUGIN_CONTRIBUTION_UNDECLARED'
+    error.retryable = false
+    throw error
+  }
+
   const emitAudit = (event, details = {}) => {
     if (typeof audit !== 'function') return
     try {
@@ -284,6 +293,7 @@ export function createRuntimePluginRegistry({
     if (typeof listener !== 'function') {
       throw new TypeError('plugin event listener must be a function')
     }
+    assertContributionDeclared(record, `event:${event}`)
     const contribution = {
       pluginId: record.manifest.id,
       event,
@@ -310,6 +320,7 @@ export function createRuntimePluginRegistry({
     assertPluginWritable(record)
     const normalizedName = String(name || '').trim()
     if (!normalizedName) throw new TypeError('plugin service name is required')
+    assertContributionDeclared(record, `service:${normalizedName}`)
     if (services.has(normalizedName)) {
       throw new Error(`plugin service already provided: ${normalizedName}`)
     }
@@ -332,6 +343,7 @@ export function createRuntimePluginRegistry({
     if (!name || name !== specName) {
       throw new TypeError('plugin tool name must match spec.function.name')
     }
+    assertContributionDeclared(record, `tool:${name}`)
     const reservedOwner = reservedToolOwner(name)
     if (reservedOwner) {
       throw new Error(`plugin tool cannot shadow ${reservedOwner} tool: ${name}`)
@@ -365,7 +377,12 @@ export function createRuntimePluginRegistry({
 
   const registerModelProviderContribution = (record, kind, adapter) => {
     assertPluginWritable(record)
-    const dispose = registerModelProvider(kind, adapter)
+    const normalizedKind = String(kind || '').trim().toLowerCase()
+    if (!PLUGIN_MODEL_PROVIDER_KIND_RE.test(normalizedKind)) {
+      throw new TypeError('model provider kind must match [a-z0-9][a-z0-9_-]{0,63}')
+    }
+    assertContributionDeclared(record, `model-provider:${normalizedKind}`)
+    const dispose = registerModelProvider(normalizedKind, adapter)
     if (typeof dispose !== 'function') {
       throw new TypeError('model provider registration must return a disposer')
     }
