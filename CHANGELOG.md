@@ -6,6 +6,24 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.28] - 2026-08-19
+
+### Added
+
+- Added owner-scoped local runtime plugin lifecycle controls with persisted enablement, startup restoration, serialized state changes, and sandboxed transformer tool registration.
+- Added unified right-side previews for current attachments and delivered files across images, audio, video, PDF, text, code, Markdown, and Office formats.
+
+### Changed
+
+- Added authenticated HEAD and byte-range attachment responses so local audio and video previews support normal browser seeking while remaining user-isolated.
+- Kept HTML and SVG attachments download-only by default, with explicit sandboxed inline preview responses protected by restrictive content headers.
+
+### Fixed
+
+- Hardened Windows credential-key ACL replacement so stale explicit grants are removed before access is limited to the current OS user.
+- Required differential-update blockmaps before publishing a Windows release, preventing incomplete updater asset sets.
+- Made fetch-backed file preview failures recoverable in place with a real retry and an original-file fallback.
+
 ## [0.11.27] - 2026-08-19
 
 ### Added
