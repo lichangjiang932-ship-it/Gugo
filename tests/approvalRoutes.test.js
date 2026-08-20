@@ -129,14 +129,6 @@ test('permission widening uses the durable inbox while tightening remains immedi
   assert.equal(approvedBody.approvalSettings.mode, 'acceptEdits')
   assert.equal(approvedBody.modeTransition.widened, true)
 
-  const noReason = await fetch(`${origin}/api/approvals/settings`, {
-    method: 'POST',
-    headers: headers(user.token),
-    body: JSON.stringify({ mode: 'bypass', approveEscalation: true }),
-  })
-  assert.equal(noReason.status, 400)
-  assert.equal((await noReason.json()).error.code, 'PERMISSION_JUSTIFICATION_REQUIRED')
-
   const bypass = await fetch(`${origin}/api/approvals/settings`, {
     method: 'POST',
     headers: headers(user.token),
@@ -228,6 +220,29 @@ test('plan mode widening requires inbox approval and a denied request leaves pla
     method: 'POST', headers: headers(user.token), body: JSON.stringify({ decision: 'deny' }),
   })
   assert.equal((await bypassDenied.json()).approvalSettings.mode, 'plan')
+})
+
+test('bypass widening no longer requires a written justification', async () => {
+  const user = issueTestSession({ email: 'approval-bypass-no-reason@example.com' })
+  const request = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST',
+    headers: headers(user.token),
+    body: JSON.stringify({ mode: 'bypass', approveEscalation: true }),
+  })
+  const body = await request.json()
+  assert.equal(request.status, 202)
+  assert.equal(body.mode, 'normal')
+  assert.equal(body.modeTransition.pending, true)
+
+  const decided = await fetch(`${origin}/api/approvals/${body.modeTransition.approvalId}/decide`, {
+    method: 'POST',
+    headers: headers(user.token),
+    body: JSON.stringify({ decision: 'approve' }),
+  })
+  const decidedBody = await decided.json()
+  assert.equal(decided.status, 200)
+  assert.equal(decidedBody.approvalSettings.mode, 'bypass')
+  assert.equal(decidedBody.approvalSettings.modeHistory[0].justification, null)
 })
 
 test('permission escalation arguments cannot be edited and stale approvals fail closed', async () => {

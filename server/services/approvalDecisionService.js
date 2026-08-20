@@ -63,7 +63,6 @@ function validatePermissionModeApproval(approval) {
     !PERMISSION_MODES.includes(fromMode)
     || !PERMISSION_MODES.includes(requestedMode)
     || !isPermissionModeWidening(fromMode, requestedMode)
-    || (requestedMode === 'bypass' && !justification)
   ) {
     return decisionError('权限模式升级审批参数无效', {
       code: 'PERMISSION_APPROVAL_INVALID',

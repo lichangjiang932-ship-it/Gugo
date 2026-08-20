@@ -16,6 +16,21 @@ test('extracts quoted Windows paths including spaces without partial duplicates'
   assert.deepEqual(extractLocalAbsolutePaths('\u8bf7\u8bfb\u53d6 "D:\\destok\\My Project"'), ['D:\\destok\\My Project'])
 })
 
+test('truncates a known file extension when task text follows the path without a separator', () => {
+  assert.deepEqual(
+    extractLocalAbsolutePaths('\u8bf7\u4fee\u6539 E:\\\u679c\\gallery.html1.\u5728\u6211\u7684\u4fa7\u8fb9\u680f\u6253\u5f00\u73b0\u5728\u7f51\u9875\uff0c\u6ca1\u6709\u56fe\u7247\u663e\u793a'),
+    ['E:\\\u679c\\gallery.html'],
+  )
+  assert.deepEqual(
+    extractLocalAbsolutePaths('\u8bfb\u53d6 D:\\destok\\Gugo\\README.md\u5e76\u5206\u6790'),
+    ['D:\\destok\\Gugo\\README.md'],
+  )
+  assert.deepEqual(
+    extractLocalAbsolutePaths('\u8bf7\u8bfb "D:\\My Project\\notes.txt" \u4e2d\u7684\u5185\u5bb9'),
+    ['D:\\My Project\\notes.txt'],
+  )
+})
+
 test('keeps balanced parentheses inside Windows paths and strips sentence closers only', () => {
   assert.deepEqual(
     extractLocalAbsolutePaths('\u8bf7\u8bfb\u53d6 D:\\destok\\Gugo\\README.md\u3002'),

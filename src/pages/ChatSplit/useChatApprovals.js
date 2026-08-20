@@ -100,10 +100,7 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
     if (widened && typeof window !== 'undefined') {
       const approved = window.confirm(t('approvals.mode.escalationConfirm'))
       if (!approved) return false
-      if (mode === 'bypass') {
-        justification = String(window.prompt(t('approvals.mode.bypassJustification')) || '').trim()
-        if (!justification) return false
-      }
+      if (mode === 'bypass') justification = 'user-confirmed'
     }
     const next = { ...approvalSettings, mode }
     setApprovalSettings(next)

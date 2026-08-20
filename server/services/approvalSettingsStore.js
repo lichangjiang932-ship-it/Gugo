@@ -37,13 +37,6 @@ export function preparePermissionModeChange({ userId, mode, justification = '' }
   const currentMode = getApprovalMode({ userId })
   const widened = isPermissionModeWidening(currentMode, mode)
   const normalizedJustification = String(justification || '').trim().slice(0, 1000)
-  if (mode === 'bypass' && currentMode !== mode && !normalizedJustification) {
-    throw permissionModeError('切换到全部放行必须填写理由', {
-      code: 'PERMISSION_JUSTIFICATION_REQUIRED',
-      currentMode,
-      requestedMode: mode,
-    })
-  }
   return {
     mode,
     previousMode: currentMode,

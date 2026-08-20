@@ -12,6 +12,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Local HTML preview now collects media declared in JS array literals (for example `var images = ['a.jpg']`), so JS-driven galleries render their same-directory images through the preview ticket instead of failing to load them.
 - Raised `ink-ghost` to WCAG AA contrast in the light, white, and dark themes, added it to the visual contrast gate, and switched the small session-list hint to `ink-fade`.
 - Added a runtime transformer plugin management list (enable/disable/reload) under Settings → Plugins with local-owner and loopback gating feedback.
+- Fixed local path preflight to truncate known file extensions when task text follows a path without a separator, so authorization prompts no longer show a combined bogus path (PATH_NOT_FOUND).
+- Removed the mandatory written justification for switching to “bypass all” approval mode; the existing risk-confirmation dialog is now sufficient, and the mode history records an empty justification.
 
 >>>>>>> Stashed changes
 ### Added

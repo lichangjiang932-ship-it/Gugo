@@ -109,6 +109,23 @@ function optionalString(...values) {
   return ''
 }
 
+// Users often type a file path followed immediately by a task/step number with
+// no separator (for example "E:\fruit\gallery.html1.open the gallery page"). The path
+// regex cannot tell where the file ends and will treat the whole text as the
+// path, making authorization fail with "path does not exist". When the matched
+// text contains a known file extension followed by more characters, truncate
+// at the last known extension. Directory names containing dots that are not a
+// known extension are left untouched.
+const KNOWN_FILE_EXTENSION_RE = /\.(?:avif|bmp|cjs|css|csv|docx?|gif|html?|jpe?g|js|json|md|mjs|mp3|mp4|pdf|png|pptx?|py|sh|svg|tsx?|txt|webp|xlsx?|ya?ml|zip)/giu
+
+function truncateAtKnownExtension(value) {
+  const text = String(value || '')
+  let last = null
+  for (const match of text.matchAll(KNOWN_FILE_EXTENSION_RE)) last = match
+  if (!last) return value
+  return text.slice(0, last.index + last[0].length)
+}
+
 /**
  * Normalize the read_file probe contract for both the preflight evidence and
  * the optional local-file preview. PDF access is deliberately fail-closed:
@@ -199,7 +216,7 @@ export function extractLocalAbsolutePaths(content) {
   const text = String(content || '')
   const found = []
   const add = (value) => {
-    const candidate = cleanCandidate(sanitizeSuggestedDirectoryPath(value))
+    const candidate = cleanCandidate(sanitizeSuggestedDirectoryPath(truncateAtKnownExtension(value)))
     if (!candidate || !isAbsoluteLocalPath(candidate)) return
     const key = comparablePath(candidate).value
     if (!found.some((item) => comparablePath(item).value === key)) found.push(candidate)
