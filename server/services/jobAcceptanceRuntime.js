@@ -7,6 +7,7 @@ import {
 import { cancelJobWake } from './jobWakeStore.js'
 import { deriveJobProgress, resolveWorkflowState } from './jobWorkflow.js'
 import { notifyJobStopHook, notifyJobTerminal } from './jobRuntimeLifecycle.js'
+import { applyRuntimeTaskReviewGuard } from './taskReviewGuard.js'
 
 const JOB_VERIFY_MAX_REPAIR_ATTEMPTS = (() => {
   const value = Number(process.env.JOB_VERIFY_MAX_REPAIR_ATTEMPTS)
@@ -18,6 +19,7 @@ export async function buildToolStepResult({
   step,
   result,
   taskEvaluator,
+  taskReviewGuard = applyRuntimeTaskReviewGuard,
 }) {
   const truncated = !!(
     result.incomplete
@@ -33,13 +35,24 @@ export async function buildToolStepResult({
     toolIterations: result.iterations,
     evidence: step.kind === 'verify' && result.text ? [result.text] : [],
   }
-  const acceptance = step.kind === 'verify' && !truncated
+  const evaluatedAcceptance = step.kind === 'verify' && !truncated
     ? await taskEvaluator({
         job,
         step,
         text: result.text,
         evidence: output.evidence,
         artifactIds: result.artifactIds,
+      })
+    : null
+  const acceptance = evaluatedAcceptance
+    ? await taskReviewGuard({
+        acceptance: evaluatedAcceptance,
+        job,
+        step,
+        text: result.text,
+        evidence: output.evidence,
+        artifactIds: result.artifactIds,
+        workerModelName: job?.modelName,
       })
     : null
   if (acceptance) output.acceptance = acceptance
@@ -59,14 +72,31 @@ export async function buildToolStepResult({
   }
 }
 
-export async function buildTextStepResult({ job, step, text, taskEvaluator }) {
+export async function buildTextStepResult({
+  job,
+  step,
+  text,
+  taskEvaluator,
+  taskReviewGuard = applyRuntimeTaskReviewGuard,
+}) {
   const output = {
     phase: step.kind,
     text,
     evidence: step.kind === 'verify' && text ? [text] : [],
   }
-  const acceptance = step.kind === 'verify'
+  const evaluatedAcceptance = step.kind === 'verify'
     ? await taskEvaluator({ job, step, text, evidence: output.evidence, artifactIds: [] })
+    : null
+  const acceptance = evaluatedAcceptance
+    ? await taskReviewGuard({
+        acceptance: evaluatedAcceptance,
+        job,
+        step,
+        text,
+        evidence: output.evidence,
+        artifactIds: [],
+        workerModelName: job?.modelName,
+      })
     : null
   if (acceptance) output.acceptance = acceptance
   return {

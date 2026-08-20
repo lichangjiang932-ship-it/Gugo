@@ -77,6 +77,10 @@ export function getPluginService(name) {
   return RUNTIME.getService(name)
 }
 
+export function invokePluginService(name, method, args = []) {
+  return RUNTIME.invokeService(name, method, args)
+}
+
 export function renderRuntimePromptBlocks(input = {}) {
   return RUNTIME.renderPromptBlocks(input)
 }

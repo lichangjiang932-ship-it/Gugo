@@ -17,6 +17,7 @@ await registerPlugin({
     'event:request',
     'prompt:example-project-context',
     'service:example-cache',
+    'service:task-review-guard',
     'model-provider:example-native',
   ],
 }, (context) => {
@@ -50,6 +51,19 @@ setup 失败仍走原有原子回滚：已注册的 tool/event/prompt/service/pr
 `render(scope)` 必须同步返回字符串或 `null`。scope 是冻结的白名单对象，仅包含 `userId`、`sessionId`、`agentId` 和最多 32 个已解析 `skillIds`；不会提供原始 query、transcript、tool trace、workspace instructions 或 canary prompt。plugin 不能选择 message role、插入位置或替换宿主块。宿主将有效输出固定放在 memory 后、workspace instructions/canary overlay 前，并仅把 `pluginId:promptId` provenance 写入 assistant model context，不持久化 prompt 正文。
 
 宿主限制最多 16 个有效块、每块 16 KiB、总计 64 KiB。异步返回、非文本、超限或 render 异常均只省略对应块并产生脱敏 `plugin.prompt_failed` audit；不会阻断 turn，也不会截断后继续执行。该 API 只属于随宿主启动的可信进程内代码。磁盘 transformer 没有 registry context，因此不能注入 prompt、React/renderer JavaScript 或取得上述 scope。
+
+## Host service invocation and task review guard
+
+宿主通过 `invokePluginService(name, method, args)` 调用 active service，而不是跨生命周期长期持有 service callback。调用计入 plugin 的 in-flight callback：卸载先原子撤销 service 可见性，再等待已开始调用完成；service callback 不能同步等待卸载自身，否则以既有 deadlock guard 失败。
+
+当前生产消费点为唯一的 `service:task-review-guard`。可信进程内 plugin 可提供 `{ review(scope) }`，在核心 TaskEvaluator/独立 Reviewer 已返回 `pass` 后执行附加终态检查。它是严格的 veto-only seam：
+
+- 核心 verdict 为 `fixable|blocked|needs_user` 时不调用 guard，plugin 无法升级为 pass；
+- 核心 pass 时，guard 只能返回 `pass|fixable|blocked|needs_user`；非 pass 会进入既有 repair/blocked/waiting 状态；
+- scope 是冻结、有界的 objective、acceptance criteria、worker model、worker verification、evidence、artifact IDs 和 base acceptance；不包含完整 Job、消息、transcript、tool trace 或任意宿主 service；
+- guard 返回的新 evidence 和 reviewer metadata 会被忽略；宿主保留核心证据及独立 Reviewer provenance，只接受有界 summary/issues；
+- active guard 抛错、缺少 `review` 或返回非法 verdict 时 fail closed 为 `blocked`；未提供该 service 时行为与原来完全一致；
+- 最终 acceptance 仅持久化白名单 `guard.pluginId/service/mode/decision/error`。磁盘 transformer 没有 service registry context，不能成为 review guard。
 
 ## Transformer adapter
 

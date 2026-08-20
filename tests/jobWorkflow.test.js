@@ -120,6 +120,42 @@ test('final output separates deliverable text from verification evidence', () =>
   assert.deepEqual(output.evidence, ['测试通过'])
 })
 
+test('final output preserves bounded runtime review guard provenance', () => {
+  const output = buildFinalOutput({
+    steps: [
+      { kind: 'execute', status: 'completed', output: { text: 'actual delivery' } },
+      {
+        kind: 'verify',
+        status: 'completed',
+        output: {
+          text: 'verified',
+          acceptance: {
+            verdict: 'pass',
+            summary: 'checks pass',
+            issues: [],
+            evidence: ['npm test: pass'],
+            source: 'independent_reviewer',
+            guard: {
+              pluginId: 'release-policy-plugin',
+              service: 'task-review-guard',
+              mode: 'forged-mode',
+              decision: 'pass',
+              extra: 'must be dropped',
+            },
+          },
+        },
+      },
+    ],
+  })
+
+  assert.deepEqual(output.acceptance.guard, {
+    pluginId: 'release-policy-plugin',
+    service: 'task-review-guard',
+    mode: 'veto_only',
+    decision: 'pass',
+  })
+})
+
 test('Word compilation requires an explicit export intent', () => {
   assert.equal(shouldCompileDocx('整理会议纪要并导出'), true)
   assert.equal(shouldCompileDocx('修复代码并运行测试'), false)
