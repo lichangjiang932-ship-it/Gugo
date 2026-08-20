@@ -2730,6 +2730,60 @@ test('plugin tool invocation isolates data, host context, and callback-scoped ca
   assert.deepEqual(forgedSignalResult, { value: 'forged-signal', nested: { aborted: false } })
   assert.equal(forgedSignalCalls, 0)
 
+  let contextDescriptorCalls = 0
+  const proxyContext = new Proxy({
+    userId: 'hidden-user',
+    job: { id: 'hidden-job' },
+    step: { id: 'hidden-step' },
+  }, {
+    getOwnPropertyDescriptor(target, key) {
+      contextDescriptorCalls += 1
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+  await tool.exec(
+    { value: 'proxy-context', nested: { hostMutable: true } },
+    proxyContext,
+  )
+  const isolatedProxyContext = receivedScopes[4]
+  assert.deepEqual({
+    userId: isolatedProxyContext.userId,
+    jobId: isolatedProxyContext.jobId,
+    stepId: isolatedProxyContext.stepId,
+    skillId: isolatedProxyContext.skillId,
+    toolCallId: isolatedProxyContext.toolCallId,
+    idempotencyKey: isolatedProxyContext.idempotencyKey,
+  }, {
+    userId: null,
+    jobId: null,
+    stepId: null,
+    skillId: null,
+    toolCallId: null,
+    idempotencyKey: null,
+  })
+  assert.equal(contextDescriptorCalls, 0)
+
+  let nestedContextDescriptorCalls = 0
+  const nestedContextProxy = (id) => new Proxy({ id }, {
+    getOwnPropertyDescriptor(target, key) {
+      nestedContextDescriptorCalls += 1
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+  await tool.exec(
+    { value: 'proxy-nested-context', nested: { hostMutable: true } },
+    {
+      userId: 'visible-user',
+      job: nestedContextProxy('hidden-job'),
+      step: nestedContextProxy('hidden-step'),
+    },
+  )
+  const isolatedNestedContext = receivedScopes[5]
+  assert.equal(isolatedNestedContext.userId, 'visible-user')
+  assert.equal(isolatedNestedContext.jobId, null)
+  assert.equal(isolatedNestedContext.stepId, null)
+  assert.equal(nestedContextDescriptorCalls, 0)
+
   assert.equal(await registry.unregisterPlugin('tool-boundary-plugin'), true)
 })
 

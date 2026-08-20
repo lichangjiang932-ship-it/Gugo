@@ -65,6 +65,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Added compensating `off()` cleanup when loop `on()` mutates before throwing or returning an invalid disposer, preventing untracked listener leaks.
 - Enforced synchronous loop event cleanup completion, consuming native Promise rejections without assimilating custom thenables or traversing Proxy results.
 - Reserved built-in endpoint kinds against generic and runtime plugin adapter replacement, preventing mixed host/custom build, parse, and stream execution.
+- Hardened runtime tool execution-context, job, and step metadata reads to ignore Proxy or uninspectable containers before plugin callback accounting.
 
 ## [0.11.31] - 2026-08-20
 

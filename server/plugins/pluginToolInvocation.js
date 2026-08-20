@@ -25,6 +25,15 @@ function ownValue(object, key) {
   return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined
 }
 
+function ownContextValue(object, key) {
+  if (!object || typeof object !== 'object' || nodeTypes.isProxy(object)) return undefined
+  try {
+    return ownValue(object, key)
+  } catch {
+    return undefined
+  }
+}
+
 function normalizedMetadata(value) {
   if (typeof value !== 'string' && !(typeof value === 'number' && Number.isFinite(value))) return null
   const text = String(value).trim()
@@ -90,7 +99,7 @@ function accountedExecutor(exec, name) {
 
 function isolatedCancellationSignal(executionContext) {
   const controller = new AbortController()
-  const hostSignal = ownValue(executionContext, 'signal')
+  const hostSignal = ownContextValue(executionContext, 'signal')
   if (!hostSignal || nodeTypes.isProxy(hostSignal)) {
     return { signal: controller.signal, dispose() {} }
   }
@@ -123,16 +132,16 @@ function isolatedCancellationSignal(executionContext) {
 }
 
 function executionScope(executionContext, { name, pluginId, signal }) {
-  const job = ownValue(executionContext, 'job')
-  const step = ownValue(executionContext, 'step')
+  const job = ownContextValue(executionContext, 'job')
+  const step = ownContextValue(executionContext, 'step')
   return Object.freeze({
     name,
-    userId: normalizedMetadata(ownValue(executionContext, 'userId')),
-    jobId: normalizedMetadata(ownValue(job, 'id')),
-    stepId: normalizedMetadata(ownValue(step, 'id')),
-    skillId: normalizedMetadata(ownValue(executionContext, 'skillId')),
-    toolCallId: normalizedMetadata(ownValue(executionContext, 'toolCallId')),
-    idempotencyKey: normalizedMetadata(ownValue(executionContext, 'idempotencyKey')),
+    userId: normalizedMetadata(ownContextValue(executionContext, 'userId')),
+    jobId: normalizedMetadata(ownContextValue(job, 'id')),
+    stepId: normalizedMetadata(ownContextValue(step, 'id')),
+    skillId: normalizedMetadata(ownContextValue(executionContext, 'skillId')),
+    toolCallId: normalizedMetadata(ownContextValue(executionContext, 'toolCallId')),
+    idempotencyKey: normalizedMetadata(ownContextValue(executionContext, 'idempotencyKey')),
     origin: 'plugin',
     source: pluginId,
     signal,
