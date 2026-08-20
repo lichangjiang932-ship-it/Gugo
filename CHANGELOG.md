@@ -36,6 +36,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Fenced runtime prompt thenable checks, text normalization, block-size validation, and thrown-value sanitization inside synchronous lifecycle accounting while preserving fail-open auditing.
 - Added lifecycle cleanup scoping so uninstall and setup-rollback disposers fail fast instead of deadlocking when they await self-unregister or registry shutdown.
 - Snapshotted disposer own methods at registration and detached cleanup failures inside lifecycle accounting, preventing accessor, prototype, method-swap, cause, retry, and error-identity leakage.
+- Scoped plugin setup completion and returned-effect registration inside installation accounting, failing fast on self-waits and exporting only detached non-retryable setup errors.
 
 ## [0.11.31] - 2026-08-20
 

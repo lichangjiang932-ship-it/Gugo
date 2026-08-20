@@ -44,7 +44,7 @@ function boundedText(value) {
   return typeof value === 'string' ? value.trim().slice(0, MAX_ERROR_TEXT) : ''
 }
 
-export function isolatePluginDisposerError(thrown, pluginId) {
+function isolatePluginLifecycleError(thrown, pluginId, phase, fallbackCode, fallbackLabel = phase) {
   const primitive = thrown === null || (typeof thrown !== 'object' && typeof thrown !== 'function')
     ? String(thrown)
     : ''
@@ -52,13 +52,27 @@ export function isolatePluginDisposerError(thrown, pluginId) {
   const ownCode = errorField(thrown, 'code')
   const code = typeof ownCode === 'string' && ERROR_CODE_RE.test(ownCode)
     ? ownCode
-    : 'PLUGIN_DISPOSER_FAILED'
-  const error = new Error(message || `plugin disposer failed: ${pluginId}`)
+    : fallbackCode
+  const error = new Error(message || `plugin ${fallbackLabel} failed: ${pluginId}`)
   error.code = code
   error.retryable = false
   error.pluginId = pluginId
-  error.phase = 'dispose'
+  error.phase = phase
   return error
+}
+
+export function isolatePluginDisposerError(thrown, pluginId) {
+  return isolatePluginLifecycleError(
+    thrown,
+    pluginId,
+    'dispose',
+    'PLUGIN_DISPOSER_FAILED',
+    'disposer',
+  )
+}
+
+export function isolatePluginSetupError(thrown, pluginId) {
+  return isolatePluginLifecycleError(thrown, pluginId, 'setup', 'PLUGIN_SETUP_FAILED')
 }
 
 function flattenEffects(value, target) {

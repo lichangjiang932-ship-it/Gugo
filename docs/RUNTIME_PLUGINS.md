@@ -45,6 +45,8 @@ retryable: false
 
 setup 失败仍走原有原子回滚：已注册的 tool/event/prompt/service/provider 和自定义 disposer 逆序撤销，plugin record 被移除。卸载时先撤销可见贡献，再等待 in-flight callback 排空；活跃依赖存在时不能卸载被依赖 plugin。正常卸载和 setup rollback 的 disposer 都运行在显式 lifecycle cleanup scope；cleanup 不能等待卸载自身或等待整个 registry shutdown，否则分别以 `PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK` / `PLUGIN_CALLBACK_SHUTDOWN_DEADLOCK`、`retryable=false` 立即失败，避免 uninstall/install-settled 自等待死锁。其他调用方发起的重复卸载仍复用同一个 uninstall promise。
 
+setup 本身运行在显式 installation scope：setup 不能等待卸载自身或等待 registry shutdown，否则分别以 `PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK` / `PLUGIN_CALLBACK_SHUTDOWN_DEADLOCK` 立即失败。setup Promise/thenable completion 和返回 effect 的注册时 descriptor traversal 也位于该 scope；setup 抛出值只投影 own data-property 的有界 `message/code` 到新的 `retryable=false` Error，默认 code 为 `PLUGIN_SETUP_FAILED`，不泄露原始 identity、accessor、cause 或 stack。
+
 对象型 disposer 只接受 own data-property function `dispose` 或 `uninstall`，并在注册时捕获方法；getter、prototype callback 和清理期 method swap 不会成为可执行 cleanup。disposer 抛出值在 cleanup scope 结束前仅通过 own data-property 投影有界 `message/code`，转换为新的 `retryable=false` Error；原始 identity、accessor、cause、stack 和其他属性不进入 audit 或 `AggregateError`，非法 code 统一为 `PLUGIN_DISPOSER_FAILED`。
 
 ## Loop event boundaries

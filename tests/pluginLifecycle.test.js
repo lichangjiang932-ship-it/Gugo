@@ -1065,6 +1065,125 @@ test('plugin tool trust metadata is host-owned and fails closed', async () => {
   await registry.unregisterPlugin('spoofed-trust-plugin')
 })
 
+test('plugin setup self-unregister fails fast instead of awaiting install settlement', async () => {
+  const registry = createRuntimePluginRegistry()
+  let observedError = null
+  const installed = await settleWithin(registry.registerPlugin(manifest('setup-self-unregister'), async () => {
+    try {
+      await registry.unregisterPlugin('setup-self-unregister')
+    } catch (error) {
+      observedError = error
+    }
+  }))
+
+  assert.equal(installed.state, 'active')
+  assert.equal(observedError?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(observedError?.retryable, false)
+  assert.match(observedError?.message || '', /would deadlock callback drain/)
+  assert.equal(await registry.unregisterPlugin('setup-self-unregister'), true)
+})
+
+test('plugin setup shutdown fails fast instead of awaiting its own installation', async () => {
+  const registry = createRuntimePluginRegistry()
+  let observedError = null
+  const installed = await settleWithin(registry.registerPlugin(manifest('setup-shutdown'), async () => {
+    try {
+      await registry.shutdown()
+    } catch (error) {
+      observedError = error
+    }
+  }))
+
+  assert.equal(installed.state, 'active')
+  assert.equal(observedError?.code, 'PLUGIN_CALLBACK_SHUTDOWN_DEADLOCK')
+  assert.equal(observedError?.retryable, false)
+  assert.match(observedError?.message || '', /would deadlock callback drain/)
+  assert.equal(await registry.unregisterPlugin('setup-shutdown'), true)
+})
+
+test('plugin setup return-effect traversal remains inside installation accounting', async () => {
+  const registry = createRuntimePluginRegistry()
+  let unregisterAttempt = null
+  let cleanupCalls = 0
+  const effect = new Proxy({
+    dispose() {
+      cleanupCalls += 1
+    },
+  }, {
+    getOwnPropertyDescriptor(target, key) {
+      if (!unregisterAttempt) {
+        unregisterAttempt = registry.unregisterPlugin('setup-return-effect-accounting').then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        )
+      }
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+
+  const installed = await registry.registerPlugin(
+    manifest('setup-return-effect-accounting'),
+    () => effect,
+  )
+  assert.equal(installed.state, 'active')
+  const attempted = await settleWithin(unregisterAttempt)
+  assert.equal(attempted.value, undefined)
+  assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(cleanupCalls, 0)
+  assert.equal(await registry.unregisterPlugin('setup-return-effect-accounting'), true)
+  assert.equal(cleanupCalls, 1)
+})
+
+test('plugin setup thrown values cross as detached non-retryable errors', async () => {
+  const registry = createRuntimePluginRegistry()
+  let unregisterAttempt = null
+  let messageGetterCalls = 0
+  const thrown = {}
+  Object.defineProperties(thrown, {
+    message: {
+      get() {
+        messageGetterCalls += 1
+        return 'getter must not execute'
+      },
+    },
+    code: { value: 'PLUGIN_CUSTOM_SETUP_FAILURE' },
+    retryable: { value: true },
+    cause: { value: { setupCapability: true } },
+  })
+  const trappedError = new Proxy(thrown, {
+    getOwnPropertyDescriptor(target, key) {
+      if (!unregisterAttempt) {
+        unregisterAttempt = registry.unregisterPlugin('setup-error-boundary').then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        )
+      }
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+
+  await assert.rejects(
+    settleWithin(registry.registerPlugin(manifest('setup-error-boundary'), () => {
+      throw trappedError
+    })),
+    (error) => {
+      assert.notEqual(error, trappedError)
+      assert.equal(error?.code, 'PLUGIN_CUSTOM_SETUP_FAILURE')
+      assert.equal(error?.retryable, false)
+      assert.equal(error?.message, 'plugin setup failed: setup-error-boundary')
+      assert.equal(error?.pluginId, 'setup-error-boundary')
+      assert.equal(error?.phase, 'setup')
+      assert.equal(Object.hasOwn(error, 'cause'), false)
+      return true
+    },
+  )
+  assert.equal(messageGetterCalls, 0)
+  const attempted = await settleWithin(unregisterAttempt)
+  assert.equal(attempted.value, undefined)
+  assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(registry.getPlugin('setup-error-boundary'), null)
+})
+
 test('unload during async setup cancels install and waits for complete rollback', async () => {
   const registry = createRuntimePluginRegistry()
   let releaseSetup

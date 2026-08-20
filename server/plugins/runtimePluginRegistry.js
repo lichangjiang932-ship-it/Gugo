@@ -16,6 +16,7 @@ import { registerModelProviderAdapter } from '../adapters/modelProviderRegistry.
 import {
   createEffectTracker,
   isolatePluginDisposerError,
+  isolatePluginSetupError,
   normalizeRuntimePluginManifest,
 } from './pluginLifecycle.js'
 
@@ -181,6 +182,7 @@ export function createRuntimePluginRegistry({
   const loopBindings = new Set()
   const callbackScope = new AsyncLocalStorage()
   const cleanupScope = new AsyncLocalStorage()
+  const setupScope = new AsyncLocalStorage()
   let installSequence = 0
   let promptSequence = 0
   let shuttingDown = false
@@ -256,7 +258,9 @@ export function createRuntimePluginRegistry({
     const callbackInvocation = callbackScope.getStore()
     if (callbackInvocation?.active === true) return callbackInvocation
     const cleanupInvocation = cleanupScope.getStore()
-    return cleanupInvocation?.active === true ? cleanupInvocation : null
+    if (cleanupInvocation?.active === true) return cleanupInvocation
+    const setupInvocation = setupScope.getStore()
+    return setupInvocation?.active === true ? setupInvocation : null
   }
 
   const disposePluginEffects = async (record) => {
@@ -265,6 +269,22 @@ export function createRuntimePluginRegistry({
       return await cleanupScope.run(invocation, async () => {
         const errors = await record.effects.disposeAll()
         return errors.map((error) => isolatePluginDisposerError(error, record.manifest.id))
+      })
+    } finally {
+      invocation.active = false
+    }
+  }
+
+  const invokePluginSetup = async (record, setup, context) => {
+    const invocation = { record, kind: 'setup', active: true }
+    try {
+      return await setupScope.run(invocation, async () => {
+        try {
+          const setupEffects = await setup(context)
+          if (setupEffects != null) record.effects.track(setupEffects)
+        } catch (error) {
+          throw isolatePluginSetupError(error, record.manifest.id)
+        }
       })
     } finally {
       invocation.active = false
@@ -686,8 +706,7 @@ export function createRuntimePluginRegistry({
     })
 
     try {
-      const setupEffects = await setup(context)
-      if (setupEffects != null) record.effects.track(setupEffects)
+      await invokePluginSetup(record, setup, context)
       if (record.cancelRequested) {
         const cancelled = new Error(`plugin install cancelled: ${normalized.id}`)
         cancelled.code = 'PLUGIN_INSTALL_CANCELLED'
