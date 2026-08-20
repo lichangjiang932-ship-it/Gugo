@@ -65,6 +65,12 @@ setup 失败仍走原有原子回滚：已注册的 tool/event/prompt/service/pr
 
 宿主限制最多 16 个有效块、每块 16 KiB、总计 64 KiB。异步返回、非文本、超限或 render 异常均只省略对应块并产生脱敏 `plugin.prompt_failed` audit；不会阻断 turn，也不会截断后继续执行。该 API 只属于随宿主启动的可信进程内代码。磁盘 transformer 没有 registry context，因此不能注入 prompt、React/renderer JavaScript 或取得上述 scope。
 
+## Model provider lifecycle
+
+`context.models.providers.register(kind, adapter)` 只接受 adapter 自身的函数数据属性：必需的 `buildRequest/parseResponse`、可选的 `extractUsage`，以及必须成组出现的 `createStreamState/consumeStreamPayload/finishStream`。getter、setter 和 prototype 方法在注册时拒绝且不会被读取；callback 必须同步，Promise 返回值以 `PLUGIN_MODEL_PROVIDER_ASYNC_UNSUPPORTED` 拒绝。
+
+runtime plugin adapter 的每次 callback 都进入该 plugin 的 in-flight callback accounting，并受既有 self-unregister/shutdown deadlock guard 保护。卸载先撤销 provider kind；进入 `uninstalling` 后，request 或 stream state 中曾捕获的 adapter 快照也不能启动新的 plugin callback，而是以 `PLUGIN_MODEL_PROVIDER_UNAVAILABLE`、`retryable=false` 失败。这意味着卸载前已经构建 request、但尚未执行的 response/stream adapter 不会在 plugin cleanup 后继续运行进程内代码。普通宿主注册的非 plugin adapter 仍保留原有 request lease 行为。
+
 ## Lifecycle-safe service invocation and policy guards
 
 宿主通过 `invokePluginService(name, method, args)` 调用 active service，而不是跨生命周期长期持有 service callback。plugin consumer 同样只能调用 `context.services.invoke(name, method, args)`；`context.services.get()` 和宿主 raw service getter 不再存在。跨 plugin 调用前，consumer manifest 必须在 `requires` 中声明实际提供该 service 的 plugin ID，否则以 `PLUGIN_SERVICE_DEPENDENCY_UNDECLARED` 拒绝；consumer 卸载后，先前捕获的 context 以 `PLUGIN_SERVICE_CONSUMER_INACTIVE` 拒绝新调用。

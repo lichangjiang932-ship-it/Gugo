@@ -108,7 +108,33 @@ test('a non-streaming custom provider response keeps its request adapter after u
   ).content, 'response after unload')
 })
 
-test('model provider registry rejects duplicate kinds and partial streaming adapters', () => {
+test('model provider registry rejects duplicate kinds, accessors, inherited methods, and partial streaming adapters', () => {
+  let getterCalls = 0
+  const accessorAdapter = {
+    parseResponse() {},
+  }
+  Object.defineProperty(accessorAdapter, 'buildRequest', {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return () => ({})
+    },
+  })
+  assert.throws(
+    () => registerModelProviderAdapter('accessor-native', accessorAdapter),
+    /buildRequest must be an own function property/,
+  )
+  assert.equal(getterCalls, 0)
+
+  const inheritedAdapter = Object.create({
+    buildRequest() {},
+    parseResponse() {},
+  })
+  assert.throws(
+    () => registerModelProviderAdapter('inherited-native', inheritedAdapter),
+    /buildRequest must be an own function property/,
+  )
+
   assert.throws(() => registerModelProviderAdapter('partial-stream', {
     buildRequest() {},
     parseResponse() {},
@@ -121,6 +147,86 @@ test('model provider registry rejects duplicate kinds and partial streaming adap
   } finally {
     dispose()
   }
+})
+
+test('runtime model provider callbacks are fenced by plugin lifecycle', async () => {
+  const registry = createRuntimePluginRegistry()
+  let buildCalls = 0
+  let parseCalls = 0
+  let selfUnregister = null
+  await registry.registerPlugin({
+    id: 'fenced-provider-plugin',
+    name: 'Fenced provider plugin',
+    version: '1.0.0',
+    contributes: ['model-provider:fenced-native'],
+  }, (context) => {
+    const providerAdapter = adapter()
+    providerAdapter.buildRequest = function buildRequest(args) {
+      buildCalls += 1
+      selfUnregister = registry.unregisterPlugin('fenced-provider-plugin')
+      return adapter().buildRequest(args)
+    }
+    providerAdapter.parseResponse = function parseResponse(data) {
+      parseCalls += 1
+      return adapter().parseResponse(data)
+    }
+    context.models.providers.register('fenced-native', providerAdapter)
+  })
+
+  const profile = resolveEndpointProfile({
+    baseUrl: 'https://fenced.example.test',
+    modelName: 'fenced-1',
+    env: {},
+    overrides: { kind: 'fenced-native', supportsStreaming: false },
+  })
+  const providerRequest = buildModelProviderRequest({
+    config: { baseUrl: profile.baseUrl, modelName: profile.modelName },
+    profile,
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  assert.equal(buildCalls, 1)
+  await assert.rejects(
+    selfUnregister,
+    (error) => error?.code === 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK',
+  )
+
+  assert.equal(await registry.unregisterPlugin('fenced-provider-plugin'), true)
+  assert.throws(
+    () => parseModelProviderResponse({ answer: 'stale response' }, profile, { providerRequest }),
+    (error) => error?.code === 'PLUGIN_MODEL_PROVIDER_UNAVAILABLE' && error?.retryable === false,
+  )
+  assert.equal(parseCalls, 0)
+})
+
+test('runtime model provider callbacks must stay synchronous', async () => {
+  const registry = createRuntimePluginRegistry()
+  await registry.registerPlugin({
+    id: 'async-provider-plugin',
+    name: 'Async provider plugin',
+    version: '1.0.0',
+    contributes: ['model-provider:async-native'],
+  }, (context) => {
+    const providerAdapter = adapter()
+    providerAdapter.buildRequest = async (args) => adapter().buildRequest(args)
+    context.models.providers.register('async-native', providerAdapter)
+  })
+
+  const profile = resolveEndpointProfile({
+    baseUrl: 'https://async.example.test',
+    modelName: 'async-1',
+    env: {},
+    overrides: { kind: 'async-native', supportsStreaming: false },
+  })
+  assert.throws(
+    () => buildModelProviderRequest({
+      config: { baseUrl: profile.baseUrl, modelName: profile.modelName },
+      profile,
+      messages: [{ role: 'user', content: 'hello' }],
+    }),
+    (error) => error?.code === 'PLUGIN_MODEL_PROVIDER_ASYNC_UNSUPPORTED'
+      && error?.retryable === false,
+  )
+  assert.equal(await registry.unregisterPlugin('async-provider-plugin'), true)
 })
 
 test('runtime plugins publish model providers and uninstall them with the plugin lifecycle', async () => {
