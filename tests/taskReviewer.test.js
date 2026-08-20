@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { registerPlugin, unregisterPlugin } from '../server/plugins/pluginRegistry.js'
 import { createDefaultExecuteStep } from '../server/services/jobRuntime.js'
 import { createTaskReviewer } from '../server/services/taskReviewer.js'
 
@@ -88,6 +89,55 @@ test('configured reviewer fails closed on malformed output or model failure', as
   assert.equal(failedAcceptance.verdict, 'blocked')
   assert.equal(failedAcceptance.reviewer.mode, 'reviewer_error')
   assert.match(failedAcceptance.reviewer.error, /endpoint unavailable/)
+})
+
+test('trusted runtime task review guard can veto but not replace an independent reviewer pass', async () => {
+  await registerPlugin({
+    id: 'task-review-guard-test',
+    name: 'Task review guard test',
+    version: '1.0.0',
+    contributes: ['service:task-review-guard'],
+  }, (ctx) => {
+    ctx.services.provide('task-review-guard', {
+      review(scope) {
+        assert.equal(scope.baseAcceptance.reviewer.independent, true)
+        assert.equal('job' in scope, false)
+        return {
+          verdict: 'blocked',
+          summary: 'Signed release evidence is missing',
+          issues: ['missing release signature'],
+        }
+      },
+    })
+  })
+
+  try {
+    const taskEvaluator = createTaskReviewer({
+      reviewerModelName: 'reviewer-model',
+      requireIndependent: true,
+      runReviewerModel: async () => '<task_evaluation>{"verdict":"pass","summary":"independent checks pass","issues":[],"evidence":["npm test pass"]}</task_evaluation>',
+    })
+    const execute = createDefaultExecuteStep({
+      enableServerTools: false,
+      runModel: async () => workerPass,
+      taskEvaluator,
+    })
+    const review = reviewInput()
+    const result = await execute({ job: review.job, step: review.step })
+
+    assert.equal(result.ok, false)
+    assert.equal(result.acceptance.verdict, 'blocked')
+    assert.equal(result.acceptance.source, 'runtime_review_guard')
+    assert.equal(result.acceptance.reviewer.independent, true)
+    assert.deepEqual(result.acceptance.guard, {
+      pluginId: 'task-review-guard-test',
+      service: 'task-review-guard',
+      mode: 'veto_only',
+      decision: 'veto',
+    })
+  } finally {
+    assert.equal(await unregisterPlugin('task-review-guard-test'), true)
+  }
 })
 
 test('independent reviewer can veto a worker pass in the default job executor', async () => {

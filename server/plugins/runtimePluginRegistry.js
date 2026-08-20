@@ -357,6 +357,50 @@ export function createRuntimePluginRegistry({
     })
   }
 
+  const invokeService = async (name, method, args = []) => {
+    const normalizedName = String(name || '').trim()
+    const normalizedMethod = String(method || '').trim()
+    const contribution = services.get(normalizedName)
+    if (!contribution || contribution.record.state !== 'active') {
+      return Object.freeze({ found: false, pluginId: null, value: undefined })
+    }
+    const target = contribution.value
+    const callback = normalizedMethod ? target?.[normalizedMethod] : target
+    if (typeof callback !== 'function') {
+      const error = new TypeError(`plugin service method is not callable: ${normalizedName}/${normalizedMethod}`)
+      error.code = 'PLUGIN_SERVICE_METHOD_INVALID'
+      error.retryable = false
+      error.pluginId = contribution.pluginId
+      error.serviceName = normalizedName
+      throw error
+    }
+    const values = Array.isArray(args) ? args : []
+    let value
+    try {
+      value = await invokePluginCallback(
+        contribution.record,
+        'service',
+        (...input) => callback.apply(target, input),
+        values,
+      )
+    } catch (cause) {
+      const error = new Error(
+        cause instanceof Error ? cause.message : String(cause || 'plugin service failed'),
+        { cause },
+      )
+      error.code = cause?.code || 'PLUGIN_SERVICE_CALL_FAILED'
+      error.retryable = cause?.retryable === true
+      error.pluginId = contribution.pluginId
+      error.serviceName = normalizedName
+      throw error
+    }
+    return Object.freeze({
+      found: true,
+      pluginId: contribution.pluginId,
+      value,
+    })
+  }
+
   const registerPromptContribution = (record, definition) => {
     assertPluginWritable(record)
     if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
@@ -738,6 +782,7 @@ export function createRuntimePluginRegistry({
       const contribution = services.get(String(name || '').trim())
       return contribution?.record?.state === 'active' ? contribution.value : undefined
     },
+    invokeService,
     renderPromptBlocks,
     shutdown,
   })

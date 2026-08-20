@@ -28,6 +28,12 @@ Reviewer 不继承 worker 的工具循环，也不直接修改任务。它读取
 - `blocked`：阻止完成并保留结构化原因；
 - `needs_user`：转成可恢复 waiting/paused 状态。
 
+## Trusted runtime review guard
+
+独立 Reviewer 之后可选执行一个可信进程内 runtime service：`service:task-review-guard`。该 guard 不是 Reviewer 替代品，也不能授予 pass：核心 verdict 非 pass 时完全不调用；只有核心 pass 才允许 guard 保持 pass 或降级为 `fixable|blocked|needs_user`。active guard 异常或返回非法结构时 fail closed 为 `blocked`，未安装 guard 时保持原行为。
+
+guard 只读取冻结、有界的目标、完成标准、worker model、worker verification、已有证据、artifact IDs 和 base acceptance。它不能读取完整 Job/消息/trace，不能替换 `acceptance.reviewer`，也不能新增被宿主当作事实的 evidence。调用受 runtime plugin in-flight 生命周期保护；磁盘 transformer 不获得 service registry context。
+
 ## 审计
 
 每次最终 verify 裁决都会写入：
@@ -44,6 +50,8 @@ Reviewer 不继承 worker 的工具循环，也不直接修改任务。它读取
 - `reviewerModel`；
 - `workerModel`；
 - Reviewer 调用失败时的有界错误摘要。
+
+若 guard 被调用，`acceptance.guard` 还会记录白名单字段：`pluginId`、固定 service、`mode=veto_only`、`decision=pass|veto|error`，以及失败时的稳定 error code；不会持久化 guard 输入、输出原文或 plugin callback。
 
 ## 安全边界与限制
 

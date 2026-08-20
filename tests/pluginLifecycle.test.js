@@ -154,6 +154,46 @@ test('runtime plugin installs real tool, event, and service contributions and re
   assert.equal(unbind(), false)
 })
 
+test('host service invocation tracks in-flight callbacks across atomic unload', async () => {
+  const registry = createRuntimePluginRegistry()
+  let releaseReview
+  let reviewStarted
+  const started = new Promise((resolve) => { reviewStarted = resolve })
+  await registry.registerPlugin(manifest('service-invocation-plugin', {
+    contributes: ['service:review-guard'],
+  }), (ctx) => {
+    ctx.services.provide('review-guard', {
+      async review(scope) {
+        reviewStarted()
+        await new Promise((resolve) => { releaseReview = resolve })
+        return { accepted: scope.id }
+      },
+    })
+  })
+
+  const invocation = registry.invokeService('review-guard', 'review', [{ id: 'review-1' }])
+  await started
+  const unloading = registry.unregisterPlugin('service-invocation-plugin')
+  assert.equal(registry.getService('review-guard'), undefined)
+  assert.deepEqual(await registry.invokeService('review-guard', 'review', []), {
+    found: false,
+    pluginId: null,
+    value: undefined,
+  })
+  let unloaded = false
+  unloading.then(() => { unloaded = true })
+  await Promise.resolve()
+  assert.equal(unloaded, false)
+
+  releaseReview()
+  assert.deepEqual(await invocation, {
+    found: true,
+    pluginId: 'service-invocation-plugin',
+    value: { accepted: 'review-1' },
+  })
+  assert.equal(await settleWithin(unloading), true)
+})
+
 test('setup failure rolls back active event and tool side effects before rejecting install', async () => {
   const registry = createRuntimePluginRegistry()
   const events = createLoopEvents()

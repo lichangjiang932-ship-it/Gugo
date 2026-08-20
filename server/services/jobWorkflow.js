@@ -248,6 +248,19 @@ function normalizeReviewer(value) {
   }
 }
 
+function normalizeReviewGuard(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const decision = cleanText(value.decision).toLowerCase()
+  if (!['pass', 'veto', 'error'].includes(decision)) return null
+  return {
+    pluginId: cleanText(value.pluginId).slice(0, 80) || 'unknown',
+    service: 'task-review-guard',
+    mode: 'veto_only',
+    decision,
+    ...(cleanText(value.error) ? { error: cleanText(value.error).slice(0, 120) } : {}),
+  }
+}
+
 function normalizeAcceptance(value, fallback = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const verdict = cleanText(value.verdict).toLowerCase()
@@ -255,6 +268,7 @@ function normalizeAcceptance(value, fallback = {}) {
   const issues = normalizeStringList(value.issues)
   const evidence = normalizeStringList(value.evidence)
   const reviewer = normalizeReviewer(value.reviewer || fallback.reviewer)
+  const guard = normalizeReviewGuard(value.guard || fallback.guard)
   return {
     verdict,
     summary: cleanText(value.summary) || cleanText(fallback.summary) || (
@@ -264,6 +278,7 @@ function normalizeAcceptance(value, fallback = {}) {
     evidence,
     source: cleanText(value.source) || cleanText(fallback.source) || 'structured',
     ...(reviewer ? { reviewer } : {}),
+    ...(guard ? { guard } : {}),
   }
 }
 
