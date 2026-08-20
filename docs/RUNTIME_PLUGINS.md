@@ -45,11 +45,17 @@ retryable: false
 
 setup 失败仍走原有原子回滚：已注册的 tool/event/prompt/service/provider 和自定义 disposer 逆序撤销，plugin record 被移除。卸载时先撤销可见贡献，再等待 in-flight callback 排空；活跃依赖存在时不能卸载被依赖 plugin。
 
-## Tool event boundaries
+## Loop event boundaries
 
-`context.events.on(event, listener)` 只能订阅固定的 Agent Loop event catalog，且必须逐项声明 `event:<event>`。其中 `event:pre-tool` 是受限的 args-only waterfall seam：宿主在隔离副本上调用 listener，最终只采纳返回对象的 `args`。tool name、call id/type、checkpoint status/approval/execution args、dynamic registration identity、idempotency key 及其他宿主字段始终恢复为原始值，plugin 不能借 event 伪造已批准、已执行或可幂等恢复的调用。
+`context.events.on(event, listener)` 只能订阅固定的 Agent Loop event catalog，且必须逐项声明 `event:<event>`。event 按宿主权威分为三类：
 
-替换后的 `args` 仍依次经过 tool schema、动态注册身份、只读/工作区/产物策略、当前权限模式、durable approval、side-effect checkpoint 和执行前最终验证；`pre-tool` 不能自动批准、切换工具或绕过恢复语义。进程 hook 的私有结果由宿主 symbol 单独传递，不开放为 plugin 可持久化字段。`post-tool` 只接收最终 call/result 的深冻结结构化克隆；返回值、原地修改和 observer 异常都不能改写真实结果、审计或 checkpoint，也不会重放已提交副作用。
+- `request` 可按 waterfall 改写一次物理模型请求；`request-error` 只能为首次失败声明一次 `{ kind: 'retry', request }`。它们是显式模型调用控制面，不授予 tool、prompt contribution 或终态权威；
+- `pre-tool` 是受限的 args-only waterfall seam：宿主在隔离副本上调用 listener，最终只采纳返回对象的 `args`。tool name、call id/type、checkpoint status/approval/execution args、dynamic registration identity、idempotency key 及其他宿主字段始终恢复为原始值；
+- `pre-step`、`post-tool`、`compaction`、`turn-stopping` 是 observer-only seam。它们只收到深冻结结构化克隆，返回值和原地修改均被忽略；单个 observer 异常 fail-open，后续 observer 仍按注册顺序执行。
+
+`pre-step` 不能替换 messages 或 tool specs；需要 prompt 或 tool 能力时必须分别使用精确声明的 `prompt:<id>` 或 `tool:<name>`。`pre-tool` 替换后的 `args` 仍依次经过 tool schema、动态注册身份、只读/工作区/产物策略、当前权限模式、durable approval、side-effect checkpoint 和执行前最终验证，不能自动批准、切换工具或绕过恢复语义。进程 hook 的私有结果由宿主 symbol 单独传递，不开放为 plugin 可持久化字段。
+
+所有 runtime event context 都是冻结的 metadata-only 对象，只包含 `userId/sessionId/jobId/stepId/iteration/phase` 及适用时的 `executed/attempt`；不传真实 job、step、AbortSignal、model request/error 或宿主 service 引用。observer 不能改写真实终态、压缩结果、审计或 checkpoint，也不会重放已提交副作用。
 
 ## Trusted prompt context
 

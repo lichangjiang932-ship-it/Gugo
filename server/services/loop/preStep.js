@@ -1,3 +1,5 @@
+import { observeLoopEvent } from './eventIsolation.js'
+
 function eventContext(context, state) {
   return {
     ...(context && typeof context === 'object' ? context : {}),
@@ -5,11 +7,14 @@ function eventContext(context, state) {
   }
 }
 
-/**
- * Run the extensible boundary that precedes one model/tool-loop iteration.
- * Listeners may replace the state, while returning undefined keeps it intact.
- */
+/** Observe one model/tool-loop iteration without granting prompt or tool mutation authority. */
 export async function runPreStep({ loopEvents, context = {}, state = {} } = {}) {
-  if (!loopEvents || typeof loopEvents.waterfall !== 'function') return state
-  return loopEvents.waterfall('pre-step', state, eventContext(context, state))
+  if (!loopEvents) return state
+  await observeLoopEvent({
+    loopEvents,
+    event: 'pre-step',
+    value: state,
+    context: eventContext(context, state),
+  })
+  return state
 }

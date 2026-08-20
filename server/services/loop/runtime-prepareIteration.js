@@ -14,7 +14,7 @@ export async function prepareIteration(s) {
         error.name = 'AbortError'
         throw error
       }
-  i.preStepState = await runPreStep({
+  await runPreStep({
         loopEvents: s.activeLoopEvents,
         context: s.loopEventContext({ phase: 'pre-step' }),
         state: {
@@ -23,12 +23,6 @@ export async function prepareIteration(s) {
           toolSpecs: s.activeToolSpecs,
         },
       })
-  if (Array.isArray(i.preStepState?.messages) && i.preStepState.messages !== s.convo) {
-        s.convo = i.preStepState.messages
-      }
-  if (Array.isArray(i.preStepState?.toolSpecs) && i.preStepState.toolSpecs !== s.activeToolSpecs) {
-        s.activeToolSpecs = i.preStepState.toolSpecs
-      }
   i.artifactRecoveryPhaseAtIterationStart = s.artifactRecoveryPhase
   i.artifactRecoveryToolAtIterationStart = s.forcedArtifactToolName
   i.steeringLeaseId = null

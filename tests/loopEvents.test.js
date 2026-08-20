@@ -8,6 +8,7 @@ import {
   runPreTool,
   TOOL_HOOK_RESULT,
 } from '../server/services/loop/executeToolCalls.js'
+import { runPreStep } from '../server/services/loop/preStep.js'
 import { runModelStep } from '../server/services/loop/step.js'
 
 test('loop events expose the fixed kernel event catalog', () => {
@@ -89,6 +90,29 @@ test('serial awaits each observer before invoking the next one', async () => {
   assert.deepEqual(calls, ['first:start', 'first:end', 'second'])
 })
 
+test('observer dispatch fails open and continues in registration order', async () => {
+  const events = createLoopEvents()
+  const calls = []
+  const observerError = new Error('observer failed')
+  assert.equal(events.has('turn-stopping'), false)
+  events.on('turn-stopping', () => {
+    calls.push('first')
+    throw observerError
+  })
+  events.on('turn-stopping', () => {
+    calls.push('second')
+    return 'observed'
+  })
+  assert.equal(events.has('turn-stopping'), true)
+
+  const results = await events.observe('turn-stopping', { text: 'done' }, {})
+
+  assert.deepEqual(calls, ['first', 'second'])
+  assert.equal(results[0].ok, false)
+  assert.equal(results[0].error, observerError)
+  assert.deepEqual(results[1], { ok: true, value: 'observed' })
+})
+
 test('waterfall applies sequential replacements and keeps the current value for undefined', async () => {
   const events = createLoopEvents()
   const seen = []
@@ -114,6 +138,38 @@ test('waterfall applies sequential replacements and keeps the current value for 
 
   assert.deepEqual(seen, [[2, 'turn-2'], [3, 'unchanged']])
   assert.deepEqual(result, { name: 'read_file', args: { count: 6 } })
+})
+
+test('pre-step is an immutable observer and cannot replace messages or tools', async () => {
+  const events = createLoopEvents()
+  const state = {
+    iteration: 3,
+    messages: [{ role: 'user', content: 'trusted request' }],
+    toolSpecs: [{ function: { name: 'read_file' } }],
+  }
+  const context = { job: { id: 'host-job' }, phase: 'pre-step' }
+  events.on('pre-step', (snapshot, eventContext) => {
+    assert.equal(Object.isFrozen(snapshot), true)
+    assert.equal(Object.isFrozen(snapshot.messages), true)
+    assert.equal(Object.isFrozen(snapshot.messages[0]), true)
+    assert.equal(Object.isFrozen(snapshot.toolSpecs), true)
+    assert.equal(Object.isFrozen(eventContext), true)
+    assert.equal(Object.isFrozen(eventContext.job), true)
+    assert.throws(() => { snapshot.messages[0].content = 'forged request' }, TypeError)
+    assert.throws(() => { eventContext.job.id = 'forged-job' }, TypeError)
+    return {
+      iteration: 99,
+      messages: [{ role: 'system', content: 'forged prompt' }],
+      toolSpecs: [{ function: { name: 'undeclared_tool' } }],
+    }
+  })
+
+  const observed = await runPreStep({ loopEvents: events, context, state })
+
+  assert.equal(observed, state)
+  assert.deepEqual(state.messages, [{ role: 'user', content: 'trusted request' }])
+  assert.deepEqual(state.toolSpecs, [{ function: { name: 'read_file' } }])
+  assert.deepEqual(context, { job: { id: 'host-job' }, phase: 'pre-step' })
 })
 
 test('pre-tool projection accepts args only and preserves host-owned call identity', async () => {
@@ -211,7 +267,12 @@ test('request-error receives the prepared request and may claim only one retry',
   await assert.rejects(runModelStep({
     request: { model: 'original' },
     loopEvents: events,
-    context: { turnId: 'turn-prepared-request' },
+    context: {
+      userId: 'user-prepared-request',
+      jobId: 'job-prepared-request',
+      phase: 'model-request',
+      hostService: { secret: 'must-not-cross-event-boundary' },
+    },
     runModel: async (request) => {
       modelRequests.push(request)
       throw modelRequests.length === 1 ? firstError : retryError
@@ -226,11 +287,15 @@ test('request-error receives the prepared request and may claim only one retry',
     attempt: 1,
   })
   assert.deepEqual(errorEvents[0].context, {
-    turnId: 'turn-prepared-request',
+    userId: 'user-prepared-request',
+    jobId: 'job-prepared-request',
+    phase: 'model-request',
     attempt: 1,
-    error: firstError,
-    request: { model: 'original', preparedForAttempt: 1 },
   })
+  assert.equal(Object.isFrozen(errorEvents[0].context), true)
+  assert.equal('error' in errorEvents[0].context, false)
+  assert.equal('request' in errorEvents[0].context, false)
+  assert.equal('hostService' in errorEvents[0].context, false)
   assert.deepEqual(modelRequests, [
     { model: 'original', preparedForAttempt: 1 },
     {
