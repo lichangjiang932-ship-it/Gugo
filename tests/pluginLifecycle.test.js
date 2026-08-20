@@ -2064,6 +2064,34 @@ test('plugin effect Sets ignore overridden iterators and snapshot cleanup callba
   assert.deepEqual(calls, ['original'])
 })
 
+test('plugin effect Set brand checks do not execute Proxy traps', async () => {
+  const registry = createRuntimePluginRegistry()
+  let propertyReads = 0
+  let prototypeReads = 0
+  const effects = new Proxy(new Set([() => {}]), {
+    get(target, key, receiver) {
+      propertyReads += 1
+      return Reflect.get(target, key, receiver)
+    },
+    getPrototypeOf(target) {
+      prototypeReads += 1
+      return Reflect.getPrototypeOf(target)
+    },
+  })
+
+  await assert.rejects(
+    registry.registerPlugin(manifest('effect-set-proxy-brand'), (ctx) => {
+      ctx.lifecycle.onDispose(effects)
+    }),
+    (error) => error?.code === 'PLUGIN_DISPOSER_DEFINITION_INVALID'
+      && error?.retryable === false
+      && /must provide a disposer/.test(error?.message || ''),
+  )
+  assert.equal(propertyReads, 0)
+  assert.equal(prototypeReads, 0)
+  assert.equal(registry.getPlugin('effect-set-proxy-brand'), null)
+})
+
 test('plugin setup thrown values cross as detached non-retryable errors', async () => {
   const registry = createRuntimePluginRegistry()
   let unregisterAttempt = null

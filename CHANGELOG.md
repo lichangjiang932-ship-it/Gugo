@@ -54,6 +54,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Moved runtime model-provider required-method and stream-group validation into the wrapper, preventing custom host adapters from registering incomplete or accessor/prototype-backed definitions.
 - Hardened runtime plugin tool cancellation bridging with AbortSignal/EventTarget intrinsics and Proxy fail-safe rejection, preventing host-signal traps or overridden methods from executing before callbacks.
 - Replaced sync callback thenable assimilation with own-descriptor detection and native-Promise-only rejection handling, preventing custom `then()` code from escaping lifecycle accounting.
+- Replaced plugin effect `instanceof Set` checks with intrinsic Set brand validation, preventing Proxy `getPrototypeOf` traps and iterator substitution during cleanup registration.
 
 ## [0.11.31] - 2026-08-20
 

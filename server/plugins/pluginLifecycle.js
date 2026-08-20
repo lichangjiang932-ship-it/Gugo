@@ -133,7 +133,15 @@ function flattenEffects(value, target, state = null, depth = 0) {
   }
   if (value == null) return
   const isArray = Array.isArray(value)
-  const isSet = !isArray && value instanceof Set
+  let setValues = null
+  if (!isArray && (typeof value === 'object' || typeof value === 'function')) {
+    try {
+      setValues = Set.prototype.values.call(value)
+    } catch {
+      // Non-Set values continue through disposer definition validation.
+    }
+  }
+  const isSet = setValues !== null
   if (!isArray && !isSet) {
     traversal.effectCount += 1
     if (traversal.effectCount > MAX_PLUGIN_EFFECTS) {
@@ -153,13 +161,7 @@ function flattenEffects(value, target, state = null, depth = 0) {
       }
       return
     }
-    let values
-    try {
-      values = Set.prototype.values.call(value)
-    } catch {
-      throw effectCollectionError('plugin side effect set must be a genuine Set')
-    }
-    for (const item of values) flattenEffects(item, target, traversal, depth + 1)
+    for (const item of setValues) flattenEffects(item, target, traversal, depth + 1)
   } finally {
     traversal.collections.delete(value)
   }
