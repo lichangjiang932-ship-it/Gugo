@@ -30,6 +30,10 @@ function unavailableError(record, kind, method) {
   )
 }
 
+function providerDefinitionError(message) {
+  return providerError('PLUGIN_MODEL_PROVIDER_DEFINITION_INVALID', message)
+}
+
 function ownValue(object, key) {
   if (!object || (typeof object !== 'object' && typeof object !== 'function')) return undefined
   const descriptor = Object.getOwnPropertyDescriptor(object, key)
@@ -125,16 +129,33 @@ function snapshotStreamState(value) {
 
 export function snapshotRuntimeModelProvider({ record, kind, adapter, invokeSync }) {
   if (!adapter || typeof adapter !== 'object' || Array.isArray(adapter)) {
-    throw new TypeError('model provider adapter must be an object')
+    throw providerDefinitionError('model provider adapter must be an object')
   }
   const callbacks = new Map()
   for (const method of METHODS) {
-    const descriptor = Object.getOwnPropertyDescriptor(adapter, method)
+    let descriptor
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(adapter, method)
+    } catch {
+      throw providerDefinitionError(`model provider adapter.${method} cannot be inspected safely`)
+    }
     if (!descriptor) continue
     if (!Object.hasOwn(descriptor, 'value') || typeof descriptor.value !== 'function') {
-      throw new TypeError(`model provider adapter.${method} must be an own function property`)
+      throw providerDefinitionError(`model provider adapter.${method} must be an own function property`)
     }
     callbacks.set(method, descriptor.value)
+  }
+  for (const method of ['buildRequest', 'parseResponse']) {
+    if (!callbacks.has(method)) {
+      throw providerDefinitionError(`model provider adapter.${method} must be an own function property`)
+    }
+  }
+  const streamMethods = ['createStreamState', 'consumeStreamPayload', 'finishStream']
+  const streamMethodCount = streamMethods.filter((method) => callbacks.has(method)).length
+  if (streamMethodCount !== 0 && streamMethodCount !== streamMethods.length) {
+    throw providerDefinitionError(
+      'model provider streaming adapter must define createStreamState, consumeStreamPayload, and finishStream together',
+    )
   }
 
   const streamStates = new WeakMap()

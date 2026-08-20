@@ -186,6 +186,67 @@ test('runtime registry host adapters are constructor-time descriptor snapshots',
   assert.equal(calls.mutatedAudit, 0)
 })
 
+test('runtime model-provider definitions fail before custom host registration', async () => {
+  let hostRegistrationCalls = 0
+  let getterCalls = 0
+  const requiredAccessor = {
+    parseResponse() { return {} },
+  }
+  Object.defineProperty(requiredAccessor, 'buildRequest', {
+    get() {
+      getterCalls += 1
+      return () => ({})
+    },
+  })
+  const validMethods = {
+    buildRequest() { return {} },
+    parseResponse() { return {} },
+  }
+  const cases = [
+    ['provider-missing-required', { buildRequest() { return {} } }, /parseResponse/],
+    ['provider-inherited-required', Object.create(validMethods), /buildRequest/],
+    ['provider-accessor-required', requiredAccessor, /buildRequest/],
+    [
+      'provider-partial-stream',
+      { ...validMethods, createStreamState() { return {} } },
+      /streaming adapter must define/,
+    ],
+    [
+      'provider-descriptor-trap',
+      new Proxy(validMethods, {
+        getOwnPropertyDescriptor() {
+          throw new Error('descriptor trap must stay detached')
+        },
+      }),
+      /cannot be inspected safely/,
+    ],
+  ]
+
+  for (const [pluginId, adapter, message] of cases) {
+    const kind = pluginId.replace('provider-', '')
+    const registry = createRuntimePluginRegistry({
+      registerModelProvider() {
+        hostRegistrationCalls += 1
+        return () => {}
+      },
+    })
+    await assert.rejects(
+      registry.registerPlugin(manifest(pluginId, {
+        contributes: [`model-provider:${kind}`],
+      }), (ctx) => {
+        ctx.models.providers.register(kind, adapter)
+      }),
+      (error) => error?.code === 'PLUGIN_MODEL_PROVIDER_DEFINITION_INVALID'
+        && error?.retryable === false
+        && message.test(error?.message || ''),
+    )
+    assert.equal(registry.getPlugin(pluginId), null)
+    assert.deepEqual(registry.listPlugins(), [])
+  }
+  assert.equal(hostRegistrationCalls, 0)
+  assert.equal(getterCalls, 0)
+})
+
 test('plugin context config is a detached deeply frozen plain-data snapshot', async () => {
   const source = {
     mode: 'original',
