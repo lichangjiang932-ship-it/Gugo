@@ -102,7 +102,7 @@ export default function ProviderEditor({ editing, setEditing, providers = [], bu
   const isLocalPreset = selectedPreset?.local === true
   const isLocalOrCustom = isLocalPreset || editing.presetId === 'custom'
   const modelList = [...new Set(String(editing.modelsText || '').split(/[\n,]/).map((model) => model.trim()).filter(Boolean))]
-  return createPortal(<div className="fixed inset-0 z-50 bg-ink/40 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+  return createPortal(<div className="fixed inset-0 z-[80] bg-ink/40 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
     <div className="w-[620px] max-w-full max-h-[92vh] my-auto bg-paper border border-ink/20 rounded-md flex flex-col overflow-hidden">
       <div className="flex items-center shrink-0 px-5 pt-5 pb-3 border-b border-ink/10"><div className="font-semibold text-ink flex-1">{t('modelProviders.editor')}</div><button type="button" onClick={() => setEditing(null)}><X className="w-4 h-4" /></button></div>
       <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-3">

@@ -20,11 +20,9 @@ import {
   changeApprovalMode,
   forgetTool,
   getApprovalSettings,
-  PERMISSION_MODE_CHANGE_TOOL,
   preparePermissionModeChange,
   setRiskOverride,
 } from '../services/approvalSettingsStore.js'
-import { enqueueApprovalRequest } from '../services/approvalGate.js'
 import { decideApprovalRequest } from '../services/approvalDecisionService.js'
 import { createStreamTicket, consumeStreamTicket } from '../utils/streamTicket.js'
 
@@ -113,38 +111,14 @@ export async function handleApprovalRequest(req, res) {
               error.requestedMode = requestedMode
               throw error
             }
-            const existing = listPendingApprovals({ userId, status: 'pending', limit: 500 })
-              .find((approval) => (
-                approval.toolName === PERMISSION_MODE_CHANGE_TOOL
-                && approval.args?.fromMode === prepared.previousMode
-                && approval.args?.toMode === requestedMode
-              ))
-            const approval = existing || enqueueApprovalRequest({
+            // 用户已在风险确认弹窗中明确批准：立即切换并记录历史，不再创建
+            // 审批收件箱条目。modeHistory 仍保留审计痕迹。
+            modeTransition = changeApprovalMode({
               userId,
-              origin: 'chat',
-              toolName: PERMISSION_MODE_CHANGE_TOOL,
-              args: {
-                fromMode: prepared.previousMode,
-                toMode: requestedMode,
-                justification: prepared.justification,
-              },
-              risk: 'high',
-              metadataSource: 'declared',
-              reason: `权限模式升级：${prepared.previousMode} → ${requestedMode}`,
-              notificationTitle: '权限升级等待批准',
-              notificationBody: `批准后将权限模式从 ${prepared.previousMode} 切换为 ${requestedMode}`,
-              notificationData: { requestedMode },
+              mode: requestedMode,
+              approveEscalation: true,
+              justification: body.justification,
             })
-            modeTransition = {
-              mode: prepared.previousMode,
-              previousMode: prepared.previousMode,
-              requestedMode,
-              changed: false,
-              widened: true,
-              pending: true,
-              approvalId: approval.id,
-            }
-            responseStatus = 202
           } else {
             modeTransition = changeApprovalMode({
               userId,

@@ -31,7 +31,7 @@ export default function IntegrationEditor({ form, meta, saving, testingId, testM
   const fields = normalizeFields(meta)
   const requiredFields = fields.filter((field) => !field.optional)
   const optionalFields = fields.filter((field) => field.optional)
-  return createPortal(<div className="fixed inset-0 z-50 bg-ink/35 flex items-center justify-center p-4">
+  return createPortal(<div className="fixed inset-0 z-[80] bg-ink/35 flex items-center justify-center p-4">
     <form onSubmit={onSave} className="w-full max-w-lg max-h-[88vh] overflow-y-auto rounded-md border border-ink bg-paper shadow-xl p-5 flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3"><div><h2 className="font-display text-xl text-ink">{meta?.label || form.provider}</h2><div className="font-mono text-[10px] text-ink-fade">{form.provider}</div></div><button type="button" onClick={onClose} className="p-1 rounded hover:bg-paper-2 text-ink-fade hover:text-ink"><X className="w-4 h-4" /></button></div>
       <label className="flex flex-col gap-1.5"><span className="text-xs text-ink-fade">{t('integrations.name')}</span><input value={form.name} onChange={(event) => onChange('name', event.target.value)} className="h-10 px-3 rounded-md border border-ink-fade/40 bg-paper text-sm outline-none focus:border-focus" /></label>
