@@ -10,6 +10,8 @@ follow [Semantic Versioning](https://semver.org/).
 
 - Fixed artifact intent denial so explicit “not generating images” phrases (不是让你生成图片 / 并非要生成图片) and existing-image reuse (调用现有图片) no longer unlock generate_image, and mode/view state descriptions (改为摩天轮，图片就竖起来) are no longer treated as image creation requests.
 - Local HTML preview now collects media declared in JS array literals (for example `var images = ['a.jpg']`), so JS-driven galleries render their same-directory images through the preview ticket instead of failing to load them.
+- Raised `ink-ghost` to WCAG AA contrast in the light, white, and dark themes, added it to the visual contrast gate, and switched the small session-list hint to `ink-fade`.
+- Added a runtime transformer plugin management list (enable/disable/reload) under Settings → Plugins with local-owner and loopback gating feedback.
 
 >>>>>>> Stashed changes
 ### Added

@@ -26,6 +26,24 @@ export async function listRuntimePluginInventoryApi() {
   return jsonOk(resp)
 }
 
+const RUNTIME_PLUGIN_ACTIONS = Object.freeze(['enable', 'disable', 'reload'])
+
+/**
+ * 对本机 owner 可见的 transformer 插件执行 enable / disable / reload。
+ * 仅接受白名单动作；非 loopback 或非本机 owner 时服务端返回 403。
+ */
+export async function runtimePluginActionApi(pluginId, action) {
+  const id = String(pluginId || '').trim()
+  const safeAction = RUNTIME_PLUGIN_ACTIONS.includes(String(action || '').toLowerCase())
+    ? String(action).toLowerCase()
+    : 'enable'
+  const resp = await fetch(`/api/plugins/runtime/${encodeURIComponent(id)}/${safeAction}`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}
+
 /**
  * 将 type='skill-bundle' 的 plugin 安装为当前用户的 skill。
  * 需登录。2xx 返 { ok:true, skill }; 其他返 { ok:false, error } 抑或抛。

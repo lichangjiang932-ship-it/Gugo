@@ -113,7 +113,7 @@ test('normal and semantic text tokens meet WCAG AA against each theme paper surf
   for (const [themeName, block] of themes) {
     assert.ok(block, `missing ${themeName} theme block`)
     const paper = hexToken(block, 'paper')
-    for (const token of ['ink', 'ink-soft', 'ink-fade', 'accent-ink', 'danger', 'warning', 'running', 'success']) {
+    for (const token of ['ink', 'ink-soft', 'ink-fade', 'ink-ghost', 'accent-ink', 'danger', 'warning', 'running', 'success']) {
       const ratio = contrastRatio(hexToken(block, token), paper)
       assert.ok(ratio >= 4.5, `${themeName} ${token}/paper contrast ${ratio.toFixed(2)} is below 4.5`)
     }

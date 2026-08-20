@@ -9,8 +9,9 @@ import {
   ShieldCheck,
   Users,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { readDesktopPetPreferences, validateDesktopPetImage, writeDesktopPetPreferences } from '../../lib/desktopPetPreferences.js'
+import { listRuntimePluginInventoryApi, runtimePluginActionApi } from '../../lib/pluginClient.js'
 import IntegrationsPanel from '../IntegrationsPanel.jsx'
 import {
   SettingsGroup,
@@ -214,7 +215,117 @@ export function SettingsPetPanel({ compact = false, t }) {
   return <SettingsPanel title={t('settings.pet')} description={t('settings.petSubtitle')}>{content}</SettingsPanel>
 }
 
+function RuntimePluginList({ plugins, error, busy, onAction, t }) {
+  if (error) {
+    const localOwnerOnly = error?.code === 'LOCAL_OWNER_ONLY'
+    return (
+      <SettingsRow
+        title={localOwnerOnly ? t('settings.pluginLocalOwnerOnly') : t('settings.pluginLoadFailed')}
+        description={localOwnerOnly ? t('settings.runtimePluginsLocalOnlyHint') : String(error?.message || '').slice(0, 200)}
+      />
+    )
+  }
+  if (!plugins) {
+    return <SettingsRow title={t('settings.pluginLoading')} description="" />
+  }
+  if (plugins.length === 0) {
+    return <SettingsRow title={t('settings.pluginNone')} description={t('settings.pluginNoneHint')} />
+  }
+  return plugins.map((plugin) => {
+    const enabled = plugin?.enabled === true
+    const active = plugin?.active === true
+    const controllable = plugin?.controllable === true
+    const statusKey = active
+      ? 'settings.pluginActive'
+      : enabled ? 'settings.pluginEnabled' : 'settings.pluginInactive'
+    const description = [
+      plugin?.version ? `v${plugin.version}` : '',
+      plugin?.toolName ? `tool: ${plugin.toolName}` : '',
+      plugin?.lastError ? String(plugin.lastError).slice(0, 120) : '',
+    ].filter(Boolean).join(' · ')
+    return (
+      <SettingsRow key={String(plugin?.id || '')} title={String(plugin?.name || plugin?.id || '')} description={description}>
+        <span className={`text-xs ${active ? 'text-emerald-600' : 'text-ink-fade'}`}>{t(statusKey)}</span>
+        {controllable && (
+          <span className="flex items-center gap-1.5">
+            {!enabled && (
+              <button
+                type="button"
+                disabled={busy === `${plugin.id}:enable`}
+                onClick={() => onAction(plugin.id, 'enable')}
+                className="settings-action-button"
+              >
+                {t('settings.pluginEnable')}
+              </button>
+            )}
+            {enabled && (
+              <button
+                type="button"
+                disabled={busy === `${plugin.id}:disable`}
+                onClick={() => onAction(plugin.id, 'disable')}
+                className="settings-action-button"
+              >
+                {t('settings.pluginDisable')}
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={busy === `${plugin.id}:reload` || !enabled}
+              onClick={() => onAction(plugin.id, 'reload')}
+              className="settings-action-button"
+              title={t('settings.pluginReload')}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              {t('settings.pluginReload')}
+            </button>
+          </span>
+        )}
+      </SettingsRow>
+    )
+  })
+}
+
 export function SettingsPluginsPanel({ navigate, t }) {
+  const [plugins, setPlugins] = useState(null)
+  const [error, setError] = useState(null)
+  const [busy, setBusy] = useState('')
+  const load = useCallback(async () => {
+    try {
+      const data = await listRuntimePluginInventoryApi()
+      setPlugins(Array.isArray(data?.plugins) ? data.plugins : [])
+      setError(null)
+    } catch (cause) {
+      setPlugins([])
+      setError(cause)
+    }
+  }, [])
+  useEffect(() => {
+    let cancelled = false
+    listRuntimePluginInventoryApi()
+      .then((data) => {
+        if (cancelled) return
+        setPlugins(Array.isArray(data?.plugins) ? data.plugins : [])
+        setError(null)
+      })
+      .catch((cause) => {
+        if (cancelled) return
+        setPlugins([])
+        setError(cause)
+      })
+    return () => { cancelled = true }
+  }, [])
+  const act = useCallback(async (id, action) => {
+    setBusy(`${id}:${action}`)
+    try {
+      await runtimePluginActionApi(id, action)
+      setError(null)
+      await load()
+    } catch (cause) {
+      setError(cause)
+    } finally {
+      setBusy('')
+    }
+  }, [load])
   return (
     <SettingsPanel title={t('settings.plugins')} description={t('settings.pluginsDescription')}>
       <SettingsGroup>
@@ -230,6 +341,9 @@ export function SettingsPluginsPanel({ navigate, t }) {
             {t('settings.manageMcp')}
           </button>
         </SettingsRow>
+      </SettingsGroup>
+      <SettingsGroup title={t('settings.runtimePlugins')} description={t('settings.runtimePluginsDescription')}>
+        <RuntimePluginList plugins={plugins} error={error} busy={busy} onAction={act} t={t} />
       </SettingsGroup>
     </SettingsPanel>
   )

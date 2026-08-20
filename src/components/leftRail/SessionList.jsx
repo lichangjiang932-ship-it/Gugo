@@ -164,6 +164,6 @@ export default function SessionList({
         <Search className="h-[18px] w-[18px]" />
       </button>
     </div>
-    {expanded && (orderedSessions.length ? <div className="flex flex-col gap-0.5">{orderedSessions.map((session, index) => renderSession(session, index))}</div> : <div className="px-3 py-8 text-center"><p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p><p className="mt-1 text-xs leading-5 text-ink-ghost">{t('nav.emptyHint')}</p></div>)}
+    {expanded && (orderedSessions.length ? <div className="flex flex-col gap-0.5">{orderedSessions.map((session, index) => renderSession(session, index))}</div> : <div className="px-3 py-8 text-center"><p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p><p className="mt-1 text-xs leading-5 text-ink-fade">{t('nav.emptyHint')}</p></div>)}
   </section>
 }

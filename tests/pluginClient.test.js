@@ -1,7 +1,31 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { listRuntimePluginInventoryApi } from '../src/lib/pluginClient.js'
+import { listRuntimePluginInventoryApi, runtimePluginActionApi } from '../src/lib/pluginClient.js'
+
+test('runtime plugin action client posts only whitelisted actions to the loopback-gated endpoint', async () => {
+  const originalFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url, init })
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  try {
+    await runtimePluginActionApi('demo-transformer', 'reload')
+    await runtimePluginActionApi('demo-transformer', 'unknown-action')
+    assert.deepEqual(calls.map((call) => call.url), [
+      '/api/plugins/runtime/demo-transformer/reload',
+      '/api/plugins/runtime/demo-transformer/enable',
+    ])
+    assert.ok(calls.every((call) => call.init.method === 'POST'))
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
 
 test('runtime plugin client reads the versioned inventory without loading plugin code', async () => {
   const originalFetch = globalThis.fetch
