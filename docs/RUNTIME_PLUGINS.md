@@ -43,6 +43,8 @@ code: PLUGIN_CONTRIBUTION_UNDECLARED
 retryable: false
 ```
 
+`context.tools.register()` 的 `name/spec/exec` 与 `context.prompts.register()` 的 `id/render` 必须是定义对象自己的 data property。宿主在注册时通过 descriptor 一次捕获所需值；getter 不执行，prototype property 被拒绝，注册后的 callback/schema/id swap 不改变已安装 contribution。非法定义以 `PLUGIN_CONTRIBUTION_DEFINITION_INVALID`、`retryable=false` 在可见副作用前失败。
+
 setup 失败仍走原有原子回滚：已注册的 tool/event/prompt/service/provider 和自定义 disposer 逆序撤销，plugin record 被移除。卸载时先撤销可见贡献，再等待 in-flight callback 排空；活跃依赖存在时不能卸载被依赖 plugin。正常卸载和 setup rollback 的 disposer 都运行在显式 lifecycle cleanup scope；cleanup 不能等待卸载自身或等待整个 registry shutdown，否则分别以 `PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK` / `PLUGIN_CALLBACK_SHUTDOWN_DEADLOCK`、`retryable=false` 立即失败，避免 uninstall/install-settled 自等待死锁。其他调用方发起的重复卸载仍复用同一个 uninstall promise。
 
 setup 本身运行在显式 installation scope：setup 不能等待卸载自身或等待 registry shutdown，否则分别以 `PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK` / `PLUGIN_CALLBACK_SHUTDOWN_DEADLOCK` 立即失败。setup Promise/thenable completion 和返回 effect 的注册时 descriptor traversal 也位于该 scope；setup 抛出值只投影 own data-property 的有界 `message/code` 到新的 `retryable=false` Error，默认 code 为 `PLUGIN_SETUP_FAILED`，不泄露原始 identity、accessor、cause 或 stack。

@@ -7,6 +7,7 @@ import {
   registerDynamicTool,
 } from '../utils/toolSchemaCatalog.js'
 import { createPluginContext } from './pluginContext.js'
+import { snapshotContributionDefinition } from './pluginContributionDefinition.js'
 import { createRuntimePluginEventListener } from './pluginEventInvocation.js'
 import { snapshotRuntimeModelProvider } from './pluginModelProvider.js'
 import { createRuntimePluginPromptRenderer } from './pluginPromptInvocation.js'
@@ -494,10 +495,12 @@ export function createRuntimePluginRegistry({
 
   const registerPromptContribution = (record, definition) => {
     assertPluginWritable(record)
-    if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
-      throw new TypeError('plugin prompt definition must be an object')
-    }
-    const id = String(definition.id || '').trim()
+    const snapshot = snapshotContributionDefinition(
+      definition,
+      'plugin prompt definition',
+      ['id', 'render'],
+    )
+    const id = String(snapshot.id || '').trim()
     if (!PLUGIN_PROMPT_ID_RE.test(id)) {
       throw new TypeError('plugin prompt id must match [a-z0-9][a-z0-9._-]{0,63}')
     }
@@ -505,7 +508,7 @@ export function createRuntimePluginRegistry({
     if (promptContributions.has(id)) {
       throw new Error(`plugin prompt already registered: ${id}`)
     }
-    const render = definition.render
+    const render = snapshot.render
     if (typeof render !== 'function') {
       throw new TypeError('plugin prompt render must be a function')
     }
@@ -592,11 +595,13 @@ export function createRuntimePluginRegistry({
 
   const registerToolContribution = (record, definition) => {
     assertPluginWritable(record)
-    if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
-      throw new TypeError('plugin tool definition must be an object')
-    }
-    const name = String(definition.name || '').trim()
-    const spec = snapshotPluginToolSpec(definition.spec)
+    const snapshot = snapshotContributionDefinition(
+      definition,
+      'plugin tool definition',
+      ['name', 'spec', 'exec'],
+    )
+    const name = String(snapshot.name || '').trim()
+    const spec = snapshotPluginToolSpec(snapshot.spec)
     const specName = String(spec.function.name || '').trim()
     if (!name || name !== specName) {
       throw new TypeError('plugin tool name must match spec.function.name')
@@ -606,7 +611,7 @@ export function createRuntimePluginRegistry({
     if (reservedOwner) {
       throw new Error(`plugin tool cannot shadow ${reservedOwner} tool: ${name}`)
     }
-    const pluginExec = definition.exec
+    const pluginExec = snapshot.exec
     if (typeof pluginExec !== 'function') {
       throw new TypeError('plugin tool exec must be a function')
     }

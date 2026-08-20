@@ -706,6 +706,160 @@ test('setup failure rolls back active event and tool side effects before rejecti
   unbind()
 })
 
+test('runtime tool and prompt definitions reject accessors without invoking them', async () => {
+  const toolCases = [
+    ['name', { spec: TOOL_SPEC, exec: async () => ({ ok: true }) }],
+    ['spec', { name: 'plugin_echo', exec: async () => ({ ok: true }) }],
+    ['exec', { name: 'plugin_echo', spec: TOOL_SPEC }],
+  ]
+  for (const [field, values] of toolCases) {
+    const registry = createRuntimePluginRegistry()
+    let getterCalls = 0
+    const definition = { ...values }
+    Object.defineProperty(definition, field, {
+      enumerable: true,
+      get() {
+        getterCalls += 1
+        return field === 'name'
+          ? 'plugin_echo'
+          : field === 'spec'
+            ? TOOL_SPEC
+            : async () => ({ ok: true })
+      },
+    })
+    await assert.rejects(
+      registry.registerPlugin(manifest(`accessor-tool-${field}`), (ctx) => {
+        ctx.tools.register(definition)
+      }),
+      (error) => error?.code === 'PLUGIN_CONTRIBUTION_DEFINITION_INVALID'
+        && error?.retryable === false
+        && new RegExp(`definition\\.${field}`).test(error?.message || ''),
+    )
+    assert.equal(getterCalls, 0)
+    assert.equal(registry.getPlugin(`accessor-tool-${field}`), null)
+    assert.equal(getDynamicTool('plugin_echo'), null)
+  }
+
+  const promptCases = [
+    ['id', { render: () => 'prompt' }],
+    ['render', { id: 'lifecycle-context' }],
+  ]
+  for (const [field, values] of promptCases) {
+    const registry = createRuntimePluginRegistry()
+    let getterCalls = 0
+    const definition = { ...values }
+    Object.defineProperty(definition, field, {
+      enumerable: true,
+      get() {
+        getterCalls += 1
+        return field === 'id' ? 'lifecycle-context' : () => 'prompt'
+      },
+    })
+    await assert.rejects(
+      registry.registerPlugin(manifest(`accessor-prompt-${field}`), (ctx) => {
+        ctx.prompts.register(definition)
+      }),
+      (error) => error?.code === 'PLUGIN_CONTRIBUTION_DEFINITION_INVALID'
+        && error?.retryable === false
+        && new RegExp(`definition\\.${field}`).test(error?.message || ''),
+    )
+    assert.equal(getterCalls, 0)
+    assert.equal(registry.getPlugin(`accessor-prompt-${field}`), null)
+  }
+})
+
+test('runtime tool and prompt definitions reject inherited contribution fields', async () => {
+  const toolRegistry = createRuntimePluginRegistry()
+  const inheritedTool = Object.create({
+    name: 'plugin_echo',
+    spec: TOOL_SPEC,
+    exec: async () => ({ ok: true }),
+  })
+  await assert.rejects(
+    toolRegistry.registerPlugin(manifest('inherited-tool-definition'), (ctx) => {
+      ctx.tools.register(inheritedTool)
+    }),
+    (error) => error?.code === 'PLUGIN_CONTRIBUTION_DEFINITION_INVALID'
+      && /definition\.name/.test(error?.message || ''),
+  )
+  assert.equal(toolRegistry.getPlugin('inherited-tool-definition'), null)
+  assert.equal(getDynamicTool('plugin_echo'), null)
+
+  const promptRegistry = createRuntimePluginRegistry()
+  const inheritedPrompt = Object.create({
+    id: 'lifecycle-context',
+    render: () => 'prompt',
+  })
+  await assert.rejects(
+    promptRegistry.registerPlugin(manifest('inherited-prompt-definition'), (ctx) => {
+      ctx.prompts.register(inheritedPrompt)
+    }),
+    (error) => error?.code === 'PLUGIN_CONTRIBUTION_DEFINITION_INVALID'
+      && /definition\.id/.test(error?.message || ''),
+  )
+  assert.equal(promptRegistry.getPlugin('inherited-prompt-definition'), null)
+})
+
+test('runtime tool and prompt definitions are registration-time descriptor snapshots', async () => {
+  const registry = createRuntimePluginRegistry()
+  let propertyReads = 0
+  let descriptorReads = 0
+  const toolTarget = {
+    name: 'plugin_echo',
+    spec: {
+      ...TOOL_SPEC,
+      function: { ...TOOL_SPEC.function, description: 'original definition' },
+    },
+    exec: async ({ value }) => ({ ok: true, value, owner: 'original' }),
+  }
+  const promptTarget = {
+    id: 'lifecycle-context',
+    render: () => 'original prompt',
+  }
+  const proxy = (target) => new Proxy(target, {
+    get(object, key, receiver) {
+      propertyReads += 1
+      return Reflect.get(object, key, receiver)
+    },
+    getOwnPropertyDescriptor(object, key) {
+      descriptorReads += 1
+      return Reflect.getOwnPropertyDescriptor(object, key)
+    },
+  })
+
+  await registry.registerPlugin(manifest('definition-snapshot-plugin', {
+    contributes: ['tool:plugin_echo', 'prompt:lifecycle-context'],
+  }), (ctx) => {
+    ctx.tools.register(proxy(toolTarget))
+    ctx.prompts.register(proxy(promptTarget))
+  })
+  const registrationDescriptorReads = descriptorReads
+  toolTarget.name = 'mutated_name'
+  toolTarget.spec.function.description = 'mutated definition'
+  toolTarget.exec = async () => ({ ok: true, owner: 'mutated' })
+  promptTarget.id = 'mutated-context'
+  promptTarget.render = () => 'mutated prompt'
+
+  assert.equal(propertyReads, 0)
+  assert.equal(getDynamicTool('plugin_echo')?.spec?.function?.description, 'original definition')
+  assert.deepEqual(await getDynamicTool('plugin_echo').exec({ value: 'snapshot' }), {
+    ok: true,
+    value: 'snapshot',
+    owner: 'original',
+  })
+  assert.deepEqual(registry.renderPromptBlocks(), {
+    blocks: [{
+      id: 'lifecycle-context',
+      pluginId: 'definition-snapshot-plugin',
+      text: 'original prompt',
+    }],
+    errors: [],
+  })
+  assert.equal(propertyReads, 0)
+  assert.equal(descriptorReads, registrationDescriptorReads)
+  assert.equal(await registry.unregisterPlugin('definition-snapshot-plugin'), true)
+})
+
 test('undeclared runtime contributions fail closed before producing side effects', async () => {
   const cases = [
     {

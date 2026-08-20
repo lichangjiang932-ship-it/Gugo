@@ -37,6 +37,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Added lifecycle cleanup scoping so uninstall and setup-rollback disposers fail fast instead of deadlocking when they await self-unregister or registry shutdown.
 - Snapshotted disposer own methods at registration and detached cleanup failures inside lifecycle accounting, preventing accessor, prototype, method-swap, cause, retry, and error-identity leakage.
 - Scoped plugin setup completion and returned-effect registration inside installation accounting, failing fast on self-waits and exporting only detached non-retryable setup errors.
+- Snapshotted runtime tool and prompt contribution definitions from own data properties, rejecting getter/prototype callbacks and registration-time method or schema swaps.
 
 ## [0.11.31] - 2026-08-20
 
