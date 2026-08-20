@@ -486,7 +486,7 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
   }
 
   if (req.url?.startsWith('/api/evolution/')) {
-    return handleEvolutionRequest(req, res)
+    return handleEvolutionRequest(req, res, { env: getEnv() })
   }
 
   // 静态文件

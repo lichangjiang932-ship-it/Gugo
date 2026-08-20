@@ -10,6 +10,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-evolution-approval-'
 process.env.APP_DATA_DIR = tempDir
 process.env.APP_DB_PATH = path.join(tempDir, 'app.db')
 
+const { createAppServer } = await import('../server/appServer.js')
 const { closeDb, getDb } = await import('../server/db.js')
 const { handleEvolutionRequest } = await import('../server/routes/evolutionRoutes.js')
 const { buildEvolutionApprovalReview } = await import('../server/services/evolutionApprovalService.js')
@@ -243,4 +244,32 @@ test('multi-user mode fails closed even for an authenticated loopback request', 
   assert.equal(response.status, 403)
   assert.equal((await response.json()).error.code, 'LOCAL_OWNER_ONLY')
   routeEnv.AUTH_MODE = 'local'
+})
+
+test('app server passes its runtime env into the evolution local-owner gate', async () => {
+  const user = issueTestSession({ email: 'approval-runtime-env@example.com' })
+  const seeded = seedReview(user.userId)
+  const previousMode = process.env.AUTH_MODE
+  const previousOwner = process.env.LOCAL_USER_ID
+  process.env.AUTH_MODE = 'local'
+  process.env.LOCAL_USER_ID = user.userId
+  const isolatedServer = createAppServer({
+    getEnv: () => ({ AUTH_MODE: 'multi_user', LOCAL_USER_ID: user.userId }),
+  })
+  await new Promise((resolve) => isolatedServer.listen(0, '127.0.0.1', resolve))
+  try {
+    const isolatedOrigin = `http://127.0.0.1:${isolatedServer.address().port}`
+    const response = await fetch(
+      `${isolatedOrigin}/api/evolution/approval-reviews/${seeded.evaluationId}`,
+      { headers: headers(user.token) },
+    )
+    assert.equal(response.status, 403)
+    assert.equal((await response.json()).error.code, 'LOCAL_OWNER_ONLY')
+  } finally {
+    await new Promise((resolve) => isolatedServer.close(resolve))
+    if (previousMode === undefined) delete process.env.AUTH_MODE
+    else process.env.AUTH_MODE = previousMode
+    if (previousOwner === undefined) delete process.env.LOCAL_USER_ID
+    else process.env.LOCAL_USER_ID = previousOwner
+  }
 })
