@@ -25,6 +25,7 @@ import { migrateToV62 } from '../server/migrations/v62EvolutionExclusions.js'
 import { migrateToV63 } from '../server/migrations/v63EvolutionCandidates.js'
 import { migrateToV64 } from '../server/migrations/v64EvolutionReplay.js'
 import { migrateToV65 } from '../server/migrations/v65EvolutionEvaluations.js'
+import { migrateToV66 } from '../server/migrations/v66EvolutionApprovals.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -37,9 +38,59 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 65)
+  assert.equal(LATEST_SCHEMA_VERSION, 66)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v66 persists one immutable local-owner decision per evaluation', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_candidates (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_replay_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_evaluations (id TEXT PRIMARY KEY);
+      INSERT INTO users (id) VALUES ('user-1');
+      INSERT INTO evolution_candidates (id) VALUES ('candidate-1');
+      INSERT INTO evolution_replay_runs (id) VALUES ('replay-1');
+      INSERT INTO evolution_evaluations (id) VALUES ('evaluation-1');
+    `)
+    migrateToV66(db)
+    migrateToV66(db)
+    db.prepare(`
+      INSERT INTO evolution_approval_decisions (
+        id, user_id, evaluation_id, replay_id, candidate_id, decision, reason,
+        candidate_sha256, replay_fingerprint, evaluation_fingerprint,
+        rollback_baseline_sha256, rollback_target_json, review_snapshot_json,
+        approver_mode, decision_fingerprint, created_at
+      ) VALUES ('approval-1', 'user-1', 'evaluation-1', 'replay-1', 'candidate-1',
+        'approved', 'reviewed', ?, ?, ?, ?, '{}', '{}', 'local_owner_loopback', ?, 1)
+    `).run(...Array.from({ length: 5 }, (_, index) => String.fromCharCode(97 + index).repeat(64)))
+    assert.deepEqual(
+      db.prepare('SELECT decision, approver_mode FROM evolution_approval_decisions').get(),
+      { decision: 'approved', approver_mode: 'local_owner_loopback' },
+    )
+    assert.throws(() => db.prepare(`
+      INSERT INTO evolution_approval_decisions (
+        id, user_id, evaluation_id, replay_id, candidate_id, decision, reason,
+        candidate_sha256, replay_fingerprint, evaluation_fingerprint,
+        rollback_baseline_sha256, rollback_target_json, review_snapshot_json,
+        approver_mode, decision_fingerprint, created_at
+      ) SELECT 'approval-2', user_id, evaluation_id, replay_id, candidate_id,
+        'rejected', reason, candidate_sha256, replay_fingerprint, evaluation_fingerprint,
+        rollback_baseline_sha256, rollback_target_json, review_snapshot_json,
+        approver_mode, decision_fingerprint, 2 FROM evolution_approval_decisions
+    `).run(), /UNIQUE constraint failed/)
+    assert.throws(() => db.prepare(`
+      UPDATE evolution_approval_decisions SET approver_mode = 'remote' WHERE id = 'approval-1'
+    `).run(), /CHECK constraint failed/)
+    db.prepare("DELETE FROM users WHERE id = 'user-1'").run()
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM evolution_approval_decisions').get().count, 0)
+  } finally {
+    db.close()
+  }
 })
 
 test('v65 persists independent structured evaluations with constrained verdicts', () => {

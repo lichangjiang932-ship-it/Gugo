@@ -118,3 +118,33 @@ export async function getEvolutionEvaluationApi(id) {
   })
   return jsonOk(resp)
 }
+
+export async function getEvolutionApprovalReviewApi(evaluationId) {
+  const resp = await fetch(
+    `/api/evolution/approval-reviews/${encodeURIComponent(String(evaluationId || ''))}`,
+    { headers: authHeaders() },
+  )
+  return jsonOk(resp)
+}
+
+export async function decideEvolutionApprovalApi(input) {
+  const resp = await fetch('/api/evolution/approvals', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(input || {}),
+  })
+  return jsonOk(resp)
+}
+
+export async function listEvolutionApprovalsApi({ limit = 50 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  const resp = await fetch(`/api/evolution/approvals?${query}`, { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function getEvolutionApprovalApi(id) {
+  const resp = await fetch(`/api/evolution/approvals/${encodeURIComponent(String(id || ''))}`, {
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}
