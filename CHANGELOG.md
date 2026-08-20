@@ -44,6 +44,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Froze detached runtime plugin inventory snapshots and stopped registry query identifiers from executing object coercion callbacks.
 - Snapshotted runtime prompt render scope from own string data properties and dense skill ID arrays, rejecting getter, prototype, sparse-array, and coercion callbacks before renderer execution.
 - Snapshotted runtime registry host adapters from constructor option own data properties, preventing getter, prototype, and post-construction method-swap influence.
+- Snapshotted trusted UI contribution definitions and dense input/tool-name arrays once before manifest validation and installation, preventing accessor, prototype, method-swap, sparse-array, and TOCTOU influence.
 
 ## [0.11.31] - 2026-08-20
 

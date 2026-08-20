@@ -131,6 +131,240 @@ test('UI contributions register atomically, sort deterministically, and dispose 
   assert.equal(listUiContributions('conversation-node').some((entry) => entry.pluginId.startsWith('test.ui-')), false)
 })
 
+test('UI contribution definitions reject accessors without invoking them', () => {
+  const cases = [
+    ['slot', { id: 'accessor', component: EmptyContribution }],
+    ['id', { slot: 'conversation-node', component: EmptyContribution }],
+    ['component', { id: 'accessor', slot: 'conversation-node' }],
+  ]
+  for (const [field, values] of cases) {
+    let getterCalls = 0
+    const definition = { ...values }
+    Object.defineProperty(definition, field, {
+      enumerable: true,
+      get() {
+        getterCalls += 1
+        return field === 'slot'
+          ? 'conversation-node'
+          : field === 'id'
+            ? 'accessor'
+            : EmptyContribution
+      },
+    })
+    assert.throws(
+      () => registerUiContributions(`test.ui-accessor-${field}`, [definition]),
+      (error) => error?.code === 'UI_CONTRIBUTION_DEFINITION_INVALID'
+        && error?.retryable === false
+        && new RegExp(`contribution\\.${field}`).test(error?.message || ''),
+    )
+    assert.equal(getterCalls, 0)
+  }
+
+  let inputGetterCalls = 0
+  const inputs = []
+  Object.defineProperty(inputs, 0, {
+    enumerable: true,
+    get() {
+      inputGetterCalls += 1
+      return { id: 'forged', slot: 'conversation-node', component: EmptyContribution }
+    },
+  })
+  assert.throws(
+    () => registerUiContributions('test.ui-input-accessor', inputs),
+    (error) => error?.code === 'UI_CONTRIBUTION_DEFINITION_INVALID'
+      && /contributions\[0\]/.test(error?.message || ''),
+  )
+  assert.equal(inputGetterCalls, 0)
+})
+
+test('UI contributions reject inherited definitions and accessor tool names', () => {
+  const inherited = Object.create({
+    id: 'inherited',
+    slot: 'conversation-node',
+    component: EmptyContribution,
+  })
+  assert.throws(
+    () => registerUiContributions('test.ui-inherited', [inherited]),
+    /Unsupported UI contribution slot/,
+  )
+
+  let getterCalls = 0
+  const toolNames = []
+  Object.defineProperty(toolNames, 0, {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return 'forged-tool'
+    },
+  })
+  assert.throws(
+    () => registerUiContributions('test.ui-tool-name-accessor', [{
+      id: 'tool-view',
+      slot: 'tool-view',
+      component: EmptyContribution,
+      toolNames,
+    }]),
+    (error) => error?.code === 'UI_CONTRIBUTION_DEFINITION_INVALID'
+      && /toolNames\[0\]/.test(error?.message || ''),
+  )
+  assert.equal(getterCalls, 0)
+})
+
+test('UI contribution and tool-name arrays reject sparse or inherited entries', () => {
+  const definition = { id: 'array-entry', slot: 'conversation-node', component: EmptyContribution }
+  const sparseInputs = new Array(1)
+  const inheritedInputs = new Array(1)
+  Object.setPrototypeOf(inheritedInputs, { 0: definition })
+
+  for (const [pluginId, inputs] of [
+    ['test.ui-sparse-inputs', sparseInputs],
+    ['test.ui-inherited-inputs', inheritedInputs],
+  ]) {
+    assert.throws(
+      () => registerUiContributions(pluginId, inputs),
+      (error) => error?.code === 'UI_CONTRIBUTION_DEFINITION_INVALID'
+        && /contributions\[0\]/.test(error?.message || ''),
+    )
+  }
+
+  const sparseNames = new Array(1)
+  const inheritedNames = new Array(1)
+  Object.setPrototypeOf(inheritedNames, { 0: 'inherited-tool' })
+  for (const [pluginId, toolNames] of [
+    ['test.ui-sparse-tool-names', sparseNames],
+    ['test.ui-inherited-tool-names', inheritedNames],
+  ]) {
+    assert.throws(
+      () => registerUiContributions(pluginId, [{
+        id: 'tool-view',
+        slot: 'tool-view',
+        component: EmptyContribution,
+        toolNames,
+      }]),
+      (error) => error?.code === 'UI_CONTRIBUTION_DEFINITION_INVALID'
+        && /toolNames\[0\]/.test(error?.message || ''),
+    )
+  }
+})
+
+test('trusted UI validation and installation reuse one contribution snapshot', () => {
+  const OriginalComponent = () => null
+  const MutatedComponent = () => null
+  let definitionPropertyReads = 0
+  let definitionDescriptorReads = 0
+  let listPropertyReads = 0
+  let listDescriptorReads = 0
+  const target = {
+    id: 'single-snapshot',
+    slot: 'conversation-node',
+    component: OriginalComponent,
+  }
+  const definition = new Proxy(target, {
+    get(object, key, receiver) {
+      definitionPropertyReads += 1
+      return Reflect.get(object, key, receiver)
+    },
+    getOwnPropertyDescriptor(object, key) {
+      definitionDescriptorReads += 1
+      return Reflect.getOwnPropertyDescriptor(object, key)
+    },
+  })
+  const inputs = new Proxy([definition], {
+    get(object, key, receiver) {
+      listPropertyReads += 1
+      return Reflect.get(object, key, receiver)
+    },
+    getOwnPropertyDescriptor(object, key) {
+      listDescriptorReads += 1
+      return Reflect.getOwnPropertyDescriptor(object, key)
+    },
+  })
+
+  const dispose = registerTrustedUiPlugin({
+    id: 'test-ui-single-snapshot',
+    name: 'Single snapshot',
+    version: '1.0.0',
+    contributes: ['ui:conversation-node:single-snapshot'],
+  }, inputs)
+  const readsAfterRegistration = {
+    definitionDescriptorReads,
+    listDescriptorReads,
+  }
+  target.component = MutatedComponent
+
+  try {
+    const installed = listUiContributions('conversation-node')
+      .find((entry) => entry.pluginId === 'test-ui-single-snapshot')
+    assert.equal(installed.component, OriginalComponent)
+    assert.equal(definitionPropertyReads, 0)
+    assert.equal(listPropertyReads, 0)
+    assert.deepEqual({ definitionDescriptorReads, listDescriptorReads }, readsAfterRegistration)
+  } finally {
+    assert.equal(dispose(), true)
+  }
+})
+
+test('UI contributions are registration-time descriptor snapshots', () => {
+  const OriginalRoute = () => null
+  const MutatedRoute = () => null
+  const OriginalTool = () => null
+  const MutatedTool = () => null
+  let propertyReads = 0
+  let descriptorReads = 0
+  const routeTarget = {
+    id: 'snapshot-route',
+    slot: 'route',
+    path: '/snapshot-original',
+    component: OriginalRoute,
+    order: 10,
+  }
+  const toolNames = ['snapshot-tool']
+  const toolTarget = {
+    id: 'snapshot-tool-view',
+    slot: 'tool-view',
+    component: OriginalTool,
+    toolNames,
+  }
+  const proxy = (target) => new Proxy(target, {
+    get(object, key, receiver) {
+      propertyReads += 1
+      return Reflect.get(object, key, receiver)
+    },
+    getOwnPropertyDescriptor(object, key) {
+      descriptorReads += 1
+      return Reflect.getOwnPropertyDescriptor(object, key)
+    },
+  })
+
+  const dispose = registerUiContributions('test.ui-definition-snapshot', [
+    proxy(routeTarget),
+    proxy(toolTarget),
+  ])
+  const registrationDescriptorReads = descriptorReads
+  routeTarget.path = '/snapshot-mutated'
+  routeTarget.component = MutatedRoute
+  routeTarget.order = -100
+  toolTarget.component = MutatedTool
+  toolNames[0] = 'mutated-tool'
+
+  try {
+    const route = listUiContributions('route')
+      .find((entry) => entry.pluginId === 'test.ui-definition-snapshot')
+    const tool = listUiContributions('tool-view')
+      .find((entry) => entry.pluginId === 'test.ui-definition-snapshot')
+    assert.equal(route.path, '/snapshot-original')
+    assert.equal(route.component, OriginalRoute)
+    assert.equal(route.order, 10)
+    assert.equal(tool.component, OriginalTool)
+    assert.deepEqual(tool.toolNames, ['snapshot-tool'])
+    assert.equal(Object.isFrozen(tool.toolNames), true)
+    assert.equal(propertyReads, 0)
+    assert.equal(descriptorReads, registrationDescriptorReads)
+  } finally {
+    assert.equal(dispose(), true)
+  }
+})
+
 test('UI plugin unregistration removes every slot owned by that plugin', () => {
   registerUiContributions('test.ui-remove', [
     { id: 'node', slot: 'conversation-node', component: EmptyContribution },

@@ -31,44 +31,130 @@ function boundedIdentifier(value, label) {
   return text
 }
 
+function uiDefinitionError(label) {
+  const error = new TypeError(`${label} must use own data properties`)
+  error.code = 'UI_CONTRIBUTION_DEFINITION_INVALID'
+  error.retryable = false
+  return error
+}
+
+function ownArrayValues(value, label, { min = 0, max, rangeMessage = null }) {
+  if (!Array.isArray(value)) {
+    if (rangeMessage) throw new TypeError(rangeMessage)
+    throw uiDefinitionError(label)
+  }
+  let lengthDescriptor
+  try {
+    lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+  } catch {
+    throw uiDefinitionError(`${label}.length`)
+  }
+  const length = lengthDescriptor?.value
+  if (!Number.isSafeInteger(length) || length < min || length > max) {
+    if (rangeMessage) throw new TypeError(rangeMessage)
+    throw uiDefinitionError(label)
+  }
+  const values = []
+  for (let index = 0; index < length; index += 1) {
+    let descriptor
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    } catch {
+      throw uiDefinitionError(`${label}[${index}]`)
+    }
+    if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
+      throw uiDefinitionError(`${label}[${index}]`)
+    }
+    values.push(descriptor.value)
+  }
+  return values
+}
+
+function snapshotContributionDefinition(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw uiDefinitionError('UI contribution')
+  }
+  let keys
+  try {
+    keys = Reflect.ownKeys(input)
+  } catch {
+    throw uiDefinitionError('UI contribution')
+  }
+  if (keys.length > 64 || keys.some((key) => typeof key !== 'string')) {
+    throw uiDefinitionError('UI contribution')
+  }
+  const snapshot = {}
+  for (const key of keys) {
+    let descriptor
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(input, key)
+    } catch {
+      throw uiDefinitionError(`UI contribution.${key}`)
+    }
+    if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
+      throw uiDefinitionError(`UI contribution.${key}`)
+    }
+    Object.defineProperty(snapshot, key, {
+      value: descriptor.value,
+      enumerable: true,
+      configurable: false,
+      writable: false,
+    })
+  }
+  return Object.freeze(snapshot)
+}
+
 function normalizeContribution(pluginId, input) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('UI contribution must be an object')
-  const slot = String(input.slot || '').trim()
+  const definition = snapshotContributionDefinition(input)
+  const slot = typeof definition.slot === 'string' ? definition.slot.trim() : ''
   if (!supportedSlots.has(slot)) throw new TypeError(`Unsupported UI contribution slot: ${slot || '(empty)'}`)
-  const id = boundedIdentifier(input.id, 'UI contribution id')
+  const id = boundedIdentifier(definition.id, 'UI contribution id')
   const key = `${pluginId}:${id}`
-  const order = Number.isFinite(Number(input.order)) ? Number(input.order) : 0
-  const normalized = { ...input, pluginId, id, key, slot, order }
+  const order = Number.isFinite(definition.order) ? definition.order : 0
+  const normalized = { ...definition, pluginId, id, key, slot, order }
 
   if (slot === 'route') {
-    const path = String(input.path || '').trim()
+    const path = typeof definition.path === 'string' ? definition.path.trim() : ''
     if (!/^\/[a-z0-9/_-]*$/i.test(path) || path.includes('//')) throw new TypeError('Route contribution path is invalid')
     if (RESERVED_ROUTE_PATHS.has(path)) throw new TypeError(`Route contribution cannot replace host route: ${path}`)
-    if (!input.component) throw new TypeError('Route contribution requires a component')
+    if (!definition.component) throw new TypeError('Route contribution requires a component')
     normalized.path = path
-    normalized.requiresAuth = input.requiresAuth !== false
+    normalized.requiresAuth = definition.requiresAuth !== false
   } else if (slot === 'account-menu') {
-    if (!input.component && !String(input.path || '').startsWith('/')) throw new TypeError('Account menu contribution requires a component or absolute app path')
-    if (!input.component && !input.labelKey && !input.label) throw new TypeError('Account menu contribution requires a label')
-    normalized.requiresLogin = input.requiresLogin !== false
+    const path = typeof definition.path === 'string' ? definition.path : ''
+    if (!definition.component && !path.startsWith('/')) throw new TypeError('Account menu contribution requires a component or absolute app path')
+    if (!definition.component && !definition.labelKey && !definition.label) throw new TypeError('Account menu contribution requires a label')
+    normalized.path = path
+    normalized.requiresLogin = definition.requiresLogin !== false
   } else if (slot === 'settings-section') {
-    normalized.sectionId = boundedIdentifier(input.sectionId || input.id, 'Settings section id')
+    normalized.sectionId = boundedIdentifier(definition.sectionId || definition.id, 'Settings section id')
     if (RESERVED_SETTINGS_SECTIONS.has(normalized.sectionId)) throw new TypeError(`Settings contribution cannot replace host section: ${normalized.sectionId}`)
-    if (!input.component || (!input.labelKey && !input.label)) throw new TypeError('Settings section contribution requires a component and label')
+    if (!definition.component || (!definition.labelKey && !definition.label)) throw new TypeError('Settings section contribution requires a component and label')
   } else if (slot === 'tool-view') {
-    if (!input.component) throw new TypeError('Tool view contribution requires a component')
-    if (!Array.isArray(input.toolNames) || input.toolNames.length === 0 || input.toolNames.length > 64) {
-      throw new TypeError('Tool view contribution requires between 1 and 64 tool names')
-    }
-    normalized.toolNames = Object.freeze(input.toolNames.map((name) => boundedIdentifier(name, 'Tool name')))
+    if (!definition.component) throw new TypeError('Tool view contribution requires a component')
+    const toolNames = ownArrayValues(definition.toolNames, 'UI contribution.toolNames', {
+      min: 1,
+      max: 64,
+      rangeMessage: 'Tool view contribution requires between 1 and 64 tool names',
+    })
+    normalized.toolNames = Object.freeze(toolNames.map((name) => boundedIdentifier(name, 'Tool name')))
   } else if (slot === 'workbench-tab') {
-    normalized.tabId = boundedIdentifier(input.tabId || input.id, 'Workbench tab id')
+    normalized.tabId = boundedIdentifier(definition.tabId || definition.id, 'Workbench tab id')
     if (RESERVED_WORKBENCH_TABS.has(normalized.tabId)) throw new TypeError(`Workbench contribution cannot replace host tab: ${normalized.tabId}`)
-    if (!input.component || (!input.labelKey && !input.label)) throw new TypeError('Workbench tab contribution requires a component and label')
-  } else if (!input.component) {
+    if (!definition.component || (!definition.labelKey && !definition.label)) throw new TypeError('Workbench tab contribution requires a component and label')
+  } else if (!definition.component) {
     throw new TypeError(`${slot} contribution requires a component`)
   }
   return Object.freeze(normalized)
+}
+
+function normalizeContributionInputs(pluginId, inputs) {
+  return ownArrayValues(inputs, 'UI contributions', {
+    min: 1,
+    max: 100,
+    rangeMessage: 'UI contributions must contain between 1 and 100 entries',
+  })
+    .map((input) => normalizeContribution(pluginId, input))
 }
 
 function contributionIdentity(contribution) {
@@ -87,15 +173,7 @@ function refreshSnapshots(changedSlots) {
   for (const listener of listeners) listener()
 }
 
-export function registerUiContributions(pluginIdValue, inputs) {
-  const pluginId = boundedIdentifier(pluginIdValue, 'UI plugin id')
-  if (uiPlugins.has(pluginId)) {
-    throw new Error(`UI plugin contributions are lifecycle-managed: ${pluginId}`)
-  }
-  if (!Array.isArray(inputs) || inputs.length === 0 || inputs.length > 100) {
-    throw new TypeError('UI contributions must contain between 1 and 100 entries')
-  }
-  const normalized = inputs.map((input) => normalizeContribution(pluginId, input))
+function installUiContributions(normalized) {
   const pendingKeys = new Set()
   const pendingIdentities = new Set()
   for (const contribution of normalized) {
@@ -129,6 +207,14 @@ export function registerUiContributions(pluginIdValue, inputs) {
   }
 }
 
+export function registerUiContributions(pluginIdValue, inputs) {
+  const pluginId = boundedIdentifier(pluginIdValue, 'UI plugin id')
+  if (uiPlugins.has(pluginId)) {
+    throw new Error(`UI plugin contributions are lifecycle-managed: ${pluginId}`)
+  }
+  return installUiContributions(normalizeContributionInputs(pluginId, inputs))
+}
+
 function uiPluginSnapshot(record) {
   if (!record) return null
   return Object.freeze({
@@ -149,10 +235,7 @@ export function registerTrustedUiPlugin(manifest, inputs) {
   if (missing.length > 0) {
     throw new Error(`UI plugin dependencies are not active: ${missing.join(', ')}`)
   }
-  if (!Array.isArray(inputs) || inputs.length === 0 || inputs.length > 100) {
-    throw new TypeError('UI contributions must contain between 1 and 100 entries')
-  }
-  const normalizedContributions = inputs.map((input) => normalizeContribution(normalizedManifest.id, input))
+  const normalizedContributions = normalizeContributionInputs(normalizedManifest.id, inputs)
   const actualDeclarations = normalizedContributions.map((contribution) => (
     `ui:${contribution.slot}:${contribution.id}`
   ))
@@ -163,7 +246,7 @@ export function registerTrustedUiPlugin(manifest, inputs) {
     throw new TypeError('UI plugin manifest contributions must exactly match registered UI contributions')
   }
 
-  const disposeContributions = registerUiContributions(normalizedManifest.id, inputs)
+  const disposeContributions = installUiContributions(normalizedContributions)
   const record = {
     manifest: normalizedManifest,
     state: 'active',
