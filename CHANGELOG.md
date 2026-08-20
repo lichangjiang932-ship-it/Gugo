@@ -41,6 +41,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Hardened the shared runtime/UI plugin manifest envelope to own data properties and dense string arrays, preventing getter, prototype, sparse-array, and post-registration mutation influence.
 - Isolated runtime plugin context config and audit payloads as bounded deeply frozen plain data, preventing host-reference, accessor, capability, and post-emission mutation leakage.
 - Removed the unused Job/Step loop-binding context channel and snapshotted loop event-bus own methods, preventing getter, prototype, method-swap, and host-reference leakage.
+- Froze detached runtime plugin inventory snapshots and stopped registry query identifiers from executing object coercion callbacks.
 
 ## [0.11.31] - 2026-08-20
 

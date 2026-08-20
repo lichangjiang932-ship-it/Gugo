@@ -295,6 +295,69 @@ test('runtime loop event bus methods are registration-time descriptor snapshots'
   assert.equal(await registry.unregisterPlugin('event-bus-snapshot'), true)
 })
 
+test('runtime plugin inventory returns deeply frozen detached snapshots', async () => {
+  const registry = createRuntimePluginRegistry()
+  const installed = await registry.registerPlugin(manifest('frozen-inventory', {
+    requires: [],
+    contributes: ['service:frozen-inventory-service'],
+  }), (ctx) => {
+    ctx.services.provide('frozen-inventory-service', { ready: true })
+  })
+  const listed = registry.listPlugins()
+  const fetched = registry.getPlugin('frozen-inventory')
+
+  for (const snapshot of [installed, listed[0], fetched]) {
+    assert.equal(Object.isFrozen(snapshot), true)
+    assert.equal(Object.isFrozen(snapshot.requires), true)
+    assert.equal(Object.isFrozen(snapshot.contributes), true)
+    assert.throws(() => { snapshot.state = 'forged' }, TypeError)
+    assert.throws(() => { snapshot.contributes.push('tool:forged') }, TypeError)
+  }
+  assert.equal(Object.isFrozen(listed), true)
+  assert.throws(() => listed.push({ id: 'forged' }), TypeError)
+  assert.equal(registry.getPlugin('frozen-inventory').state, 'active')
+  assert.equal(await registry.unregisterPlugin('frozen-inventory'), true)
+})
+
+test('runtime registry queries reject object coercion without executing it', async () => {
+  const registry = createRuntimePluginRegistry()
+  await registry.registerPlugin(manifest('query-coercion-boundary', {
+    contributes: ['service:query-coercion-service'],
+  }), (ctx) => {
+    ctx.services.provide('query-coercion-service', {
+      review: () => ({ ok: true }),
+    })
+  })
+  let coercionCalls = 0
+  const coercive = {
+    toString() {
+      coercionCalls += 1
+      return 'query-coercion-boundary'
+    },
+    [Symbol.toPrimitive]() {
+      coercionCalls += 1
+      return 'query-coercion-boundary'
+    },
+  }
+
+  assert.equal(registry.getPlugin(coercive), null)
+  assert.equal(registry.hasService(coercive), false)
+  assert.deepEqual(await registry.invokeService(coercive, coercive, []), {
+    found: false,
+    pluginId: null,
+    value: undefined,
+  })
+  await assert.rejects(
+    registry.invokeService('query-coercion-service', coercive, []),
+    (error) => error?.code === 'PLUGIN_SERVICE_METHOD_INVALID'
+      && error?.retryable === false,
+  )
+  assert.equal(await registry.unregisterPlugin(coercive), false)
+  assert.equal(coercionCalls, 0)
+  assert.equal(registry.getPlugin('query-coercion-boundary')?.state, 'active')
+  assert.equal(await registry.unregisterPlugin('query-coercion-boundary'), true)
+})
+
 test('runtime plugin installs real tool, event, and service contributions and reverses every effect', async () => {
   const registry = createRuntimePluginRegistry()
   const events = createLoopEvents()

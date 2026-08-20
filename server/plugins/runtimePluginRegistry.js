@@ -157,6 +157,10 @@ function loopEventBusError(method) {
   return error
 }
 
+function trimmedString(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 function snapshotLoopEventBus(events) {
   if (!events || (typeof events !== 'object' && typeof events !== 'function')) {
     throw loopEventBusError('on')
@@ -190,13 +194,13 @@ function reservedToolOwner(name) {
 
 function pluginSnapshot(record) {
   if (!record) return null
-  return {
+  return Object.freeze({
     ...record.manifest,
-    requires: [...record.manifest.requires],
-    contributes: [...record.manifest.contributes],
+    requires: Object.freeze([...record.manifest.requires]),
+    contributes: Object.freeze([...record.manifest.contributes]),
     state: record.state,
     installedAt: record.installedAt,
-  }
+  })
 }
 
 export function createRuntimePluginRegistry({
@@ -396,7 +400,7 @@ export function createRuntimePluginRegistry({
   const registerEventContribution = (record, event, listener) => {
     assertPluginWritable(record)
     if (!LOOP_EVENT_NAME_SET.has(event)) {
-      throw new TypeError(`Unknown loop event: ${String(event)}`)
+      throw new TypeError(`Unknown loop event: ${typeof event === 'string' ? event : '(invalid)'}`)
     }
     if (typeof listener !== 'function') {
       throw new TypeError('plugin event listener must be a function')
@@ -428,7 +432,7 @@ export function createRuntimePluginRegistry({
 
   const provideService = (record, name, value) => {
     assertPluginWritable(record)
-    const normalizedName = String(name || '').trim()
+    const normalizedName = trimmedString(name)
     if (!normalizedName) throw new TypeError('plugin service name is required')
     assertContributionDeclared(record, `service:${normalizedName}`)
     if (services.has(normalizedName)) {
@@ -452,8 +456,8 @@ export function createRuntimePluginRegistry({
   }
 
   const invokeService = async (name, method, args = []) => {
-    const normalizedName = String(name || '').trim()
-    const normalizedMethod = String(method || '').trim()
+    const normalizedName = trimmedString(name)
+    const normalizedMethod = trimmedString(method)
     const contribution = services.get(normalizedName)
     if (!contribution || contribution.record.state !== 'active') {
       return Object.freeze({ found: false, pluginId: null, value: undefined })
@@ -486,7 +490,7 @@ export function createRuntimePluginRegistry({
 
   const serviceForConsumer = (record, name) => {
     assertServiceConsumerAvailable(record)
-    const normalizedName = String(name || '').trim()
+    const normalizedName = trimmedString(name)
     const contribution = services.get(normalizedName)
     if (!contribution || contribution.record.state !== 'active') {
       return { normalizedName, contribution: null }
@@ -529,7 +533,7 @@ export function createRuntimePluginRegistry({
       'plugin prompt definition',
       ['id', 'render'],
     )
-    const id = String(snapshot.id || '').trim()
+    const id = trimmedString(snapshot.id)
     if (!PLUGIN_PROMPT_ID_RE.test(id)) {
       throw new TypeError('plugin prompt id must match [a-z0-9][a-z0-9._-]{0,63}')
     }
@@ -629,9 +633,9 @@ export function createRuntimePluginRegistry({
       'plugin tool definition',
       ['name', 'spec', 'exec'],
     )
-    const name = String(snapshot.name || '').trim()
+    const name = trimmedString(snapshot.name)
     const spec = snapshotPluginToolSpec(snapshot.spec)
-    const specName = String(spec.function.name || '').trim()
+    const specName = trimmedString(spec.function.name)
     if (!name || name !== specName) {
       throw new TypeError('plugin tool name must match spec.function.name')
     }
@@ -671,7 +675,7 @@ export function createRuntimePluginRegistry({
 
   const registerModelProviderContribution = (record, kind, adapter) => {
     assertPluginWritable(record)
-    const normalizedKind = String(kind || '').trim().toLowerCase()
+    const normalizedKind = trimmedString(kind).toLowerCase()
     if (!PLUGIN_MODEL_PROVIDER_KIND_RE.test(normalizedKind)) {
       throw new TypeError('model provider kind must match [a-z0-9][a-z0-9_-]{0,63}')
     }
@@ -786,7 +790,7 @@ export function createRuntimePluginRegistry({
   }
 
   const unregisterPlugin = async (id) => {
-    const normalizedId = String(id || '').trim()
+    const normalizedId = trimmedString(id)
     const record = plugins.get(normalizedId)
     if (!record) return false
     const invocation = activeCallbackInvocation()
@@ -896,10 +900,10 @@ export function createRuntimePluginRegistry({
     registerPlugin,
     unregisterPlugin,
     bindLoopEvents,
-    listPlugins: () => [...plugins.values()].map(pluginSnapshot),
-    getPlugin: (id) => pluginSnapshot(plugins.get(String(id || '').trim())),
+    listPlugins: () => Object.freeze([...plugins.values()].map(pluginSnapshot)),
+    getPlugin: (id) => pluginSnapshot(plugins.get(trimmedString(id))),
     hasService: (name) => {
-      const contribution = services.get(String(name || '').trim())
+      const contribution = services.get(trimmedString(name))
       return contribution?.record?.state === 'active'
     },
     invokeService,

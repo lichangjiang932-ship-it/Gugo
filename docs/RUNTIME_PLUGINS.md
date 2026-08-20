@@ -156,4 +156,4 @@ tool:plugin_<normalized-plugin-id>
 - `source`、`controllable`、`active`、`runtimeState` 和 `installedAt`；
 - transformer 的持久期望状态、生成工具名及脱敏后的最近错误。
 
-清单会合并活跃的宿主 runtime plugin、磁盘 transformer 和 SQLite 中遗留的期望状态。它不序列化 setup、tool executor、event listener、service value 或 model adapter，也不会向 renderer 暴露 entry source、绝对路径或任意 JavaScript 加载能力。renderer 的 `listRuntimePluginInventoryApi()` 仅执行该 GET 请求。
+清单会合并活跃的宿主 runtime plugin、磁盘 transformer 和 SQLite 中遗留的期望状态。registry 的 `listPlugins()` / `getPlugin()` 返回 top-level、`requires` 和 `contributes` 均冻结的 detached 快照，调用方不能改写运行时状态；查询结果数组同样冻结。`getPlugin/hasService/invokeService/unregisterPlugin` 等名称参数只接受真实字符串，不执行对象的 `toString` / `Symbol.toPrimitive`。清单不序列化 setup、tool executor、event listener、service value 或 model adapter，也不会向 renderer 暴露 entry source、绝对路径或任意 JavaScript 加载能力。renderer 的 `listRuntimePluginInventoryApi()` 仅执行该 GET 请求。
