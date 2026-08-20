@@ -3,12 +3,16 @@ import test from 'node:test'
 
 import {
   createEvolutionReplaySuiteApi,
+  decideEvolutionApprovalApi,
   evaluateEvolutionReplayApi,
   generateEvolutionCandidateApi,
+  getEvolutionApprovalApi,
+  getEvolutionApprovalReviewApi,
   getEvolutionCandidateApi,
   getEvolutionDatasetApi,
   getEvolutionEvaluationApi,
   getEvolutionReplayRunApi,
+  listEvolutionApprovalsApi,
   listEvolutionCandidatesApi,
   listEvolutionEvaluationsApi,
   listEvolutionEvidenceApi,
@@ -190,6 +194,52 @@ test('evolution client requests independent evaluations without sending an evalu
     assert.deepEqual(JSON.parse(requests[0].init.body), { replayId: 'replay-1' })
     assert.equal(requests[1].url, '/api/evolution/evaluations?limit=10')
     assert.equal(requests[2].url, '/api/evolution/evaluations/evaluation%2F1')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('evolution client reviews and records a human decision without an apply or rollout request', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url, init })
+    const body = url.startsWith('/api/evolution/approval-reviews/')
+      ? { ok: true, review: { evaluationId: 'evaluation-1', eligibility: { canApprove: true } } }
+      : url === '/api/evolution/approvals' && init.method === 'POST'
+        ? { ok: true, approval: { id: 'approval-1', decision: 'approved' } }
+        : url.startsWith('/api/evolution/approvals?')
+          ? { ok: true, approvals: [] }
+          : { ok: true, approval: { id: 'approval-1', reviewSnapshot: {} } }
+    return new Response(JSON.stringify(body), {
+      status: init.method === 'POST' ? 201 : 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  try {
+    const input = {
+      evaluationId: 'evaluation-1',
+      decision: 'approved',
+      reason: 'Reviewed all evidence',
+      confirmations: {
+        candidateContentSha256: 'a'.repeat(64),
+        replayRunFingerprint: 'b'.repeat(64),
+        evaluationFingerprint: 'c'.repeat(64),
+        rollbackBaselineSha256: 'd'.repeat(64),
+      },
+    }
+    await getEvolutionApprovalReviewApi('evaluation/1')
+    const decided = await decideEvolutionApprovalApi(input)
+    await listEvolutionApprovalsApi({ limit: 10 })
+    await getEvolutionApprovalApi('approval/1')
+    assert.equal(decided.approval.decision, 'approved')
+    assert.equal(requests[0].url, '/api/evolution/approval-reviews/evaluation%2F1')
+    assert.equal(requests[1].url, '/api/evolution/approvals')
+    assert.equal(requests[1].init.method, 'POST')
+    assert.deepEqual(JSON.parse(requests[1].init.body), input)
+    assert.equal(requests[2].url, '/api/evolution/approvals?limit=10')
+    assert.equal(requests[3].url, '/api/evolution/approvals/approval%2F1')
+    assert.equal(requests.every(({ url }) => !/apply|install|rollout/u.test(url)), true)
   } finally {
     globalThis.fetch = originalFetch
   }

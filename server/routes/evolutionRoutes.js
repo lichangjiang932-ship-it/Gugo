@@ -1,4 +1,11 @@
+import { isLocalOwnerUser } from '../adapters/authAccount.js'
 import { authenticateRequest } from '../middleware.js'
+import {
+  buildEvolutionApprovalReview,
+  decideEvolutionApproval,
+  getEvolutionApprovalDecision,
+  listEvolutionApprovalDecisions,
+} from '../services/evolutionApprovalService.js'
 import {
   generateEvolutionCandidate,
   getEvolutionCandidate,
@@ -27,12 +34,23 @@ import {
   runEvolutionReplay,
 } from '../services/evolutionReplayService.js'
 import { readJson, sendJson } from '../utils.js'
+import { isLoopbackRequest } from '../utils/loopbackRequest.js'
 
 function errorBody(code, message) {
   return { ok: false, error: { code, message } }
 }
 
+function authorizeLocalOwner(req, res, userId, env) {
+  if (isLoopbackRequest(req) && isLocalOwnerUser(userId, env)) return true
+  sendJson(res, 403, errorBody(
+    'LOCAL_OWNER_ONLY',
+    '演进批准只能由服务宿主机的本地所有者决定',
+  ))
+  return false
+}
+
 export async function handleEvolutionRequest(req, res, {
+  env = process.env,
   evaluatorModelName,
   runCandidateModel,
   runEvaluationModel,
@@ -42,6 +60,12 @@ export async function handleEvolutionRequest(req, res, {
   const userId = authenticateRequest(req)
   if (!userId) return sendJson(res, 401, errorBody('UNAUTHORIZED', '请先登录'))
   const url = new URL(req.url, 'http://localhost')
+  const approvalReviewMatch = url.pathname.match(/^\/api\/evolution\/approval-reviews\/([^/]+)$/u)
+  const approvalMatch = url.pathname.match(/^\/api\/evolution\/approvals\/([^/]+)$/u)
+  const approvalPath = url.pathname === '/api/evolution/approvals'
+    || Boolean(approvalReviewMatch)
+    || Boolean(approvalMatch)
+  if (approvalPath && !authorizeLocalOwner(req, res, userId, env)) return
   try {
     if (url.pathname === '/api/evolution/feedback') {
       if (req.method !== 'POST') {
@@ -224,6 +248,47 @@ export async function handleEvolutionRequest(req, res, {
         id: decodeURIComponent(evaluationMatch[1]),
       })
       return sendJson(res, 200, { ok: true, evaluation })
+    }
+    if (approvalReviewMatch) {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
+      }
+      const review = buildEvolutionApprovalReview({
+        userId,
+        evaluationId: decodeURIComponent(approvalReviewMatch[1]),
+      })
+      return sendJson(res, 200, { ok: true, review })
+    }
+    if (url.pathname === '/api/evolution/approvals') {
+      if (req.method === 'GET') {
+        return sendJson(res, 200, {
+          ok: true,
+          schemaVersion: 1,
+          approvals: listEvolutionApprovalDecisions({ userId, limit: url.searchParams.get('limit') }),
+        })
+      }
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET 或 POST'))
+      }
+      const body = await readJson(req, { maxBytes: 16 * 1024 })
+      const approval = decideEvolutionApproval({
+        userId,
+        evaluationId: body.evaluationId,
+        decision: body.decision,
+        reason: body.reason,
+        confirmations: body.confirmations,
+      })
+      return sendJson(res, 201, { ok: true, approval })
+    }
+    if (approvalMatch) {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
+      }
+      const approval = getEvolutionApprovalDecision({
+        userId,
+        id: decodeURIComponent(approvalMatch[1]),
+      })
+      return sendJson(res, 200, { ok: true, approval })
     }
     return sendJson(res, 404, errorBody('NOT_FOUND', '证据端点不存在'))
   } catch (error) {

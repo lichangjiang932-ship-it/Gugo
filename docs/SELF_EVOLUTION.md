@@ -46,7 +46,7 @@ dataset 指纹只能证明同一 curation 规则下的输入与派生结果，�
 - provenance 保存 dataset/curation 版本、curated record IDs、不可变 evidence IDs、实际 generator model、无工具生成模式和内容 SHA-256；
 - `GET /api/evolution/candidates?limit=1..100` 返回摘要，`GET /api/evolution/candidates/:id` 返回当前用户的完整候选；全部响应 `Cache-Control: no-store`。
 
-不存在 candidate update、delete、apply、install、approve 或 rollout API。`permissionsRequested` 只是等待后续独立权限审查的元数据，不授予 manifest contribution、工具信任或 renderer 权限。
+不存在 candidate update、delete、apply、install、直接 approve 或 rollout API。`permissionsRequested` 只是等待后续独立权限审查的元数据，不授予 manifest contribution、工具信任或 renderer 权限。
 
 ## Phase 4: isolated replay（当前已实现）
 
@@ -73,14 +73,26 @@ Evaluator 只接收已脱敏的 case input 和 baseline/candidate output，不�
 - 只有无回归、有质量改善、成本与延迟证据完整、无需权限审查时才可 `pass`；
 - replay 现在记录双方规范化 token usage 和 provider cost；provider 未提供 usage 时不会用猜测值冒充成本证据。
 
-Evaluation 保存 rubric 版本、逐 case 证据、宿主 metrics/issues、独立模型身份和 evaluation fingerprint。`GET /api/evolution/evaluations` 返回摘要，单项 GET 返回 case assessments；全部 `Cache-Control: no-store`。Evaluation 即使 `pass` 也没有批准权，不存在 approve、apply、install 或 rollout API。
+Evaluation 保存 rubric 版本、逐 case 证据、宿主 metrics/issues、独立模型身份和 evaluation fingerprint。`GET /api/evolution/evaluations` 返回摘要，单项 GET 返回 case assessments；全部 `Cache-Control: no-store`。Evaluation 即使 `pass` 也不能自行批准；批准只能进入下一阶段的独立人工决策记录。
+
+## Phase 6: local-owner human approval（当前已实现）
+
+`GET /api/evolution/approval-reviews/:evaluationId` 生成只读审查包，包含 baseline→candidate 全文替换 diff、candidate/dataset provenance、replay 模型与隔离参数、逐 case evaluation、权限请求和明确的 baseline rollback target。宿主同时返回四个必须逐字确认的不可变标识：candidate content SHA-256、replay run fingerprint、evaluation fingerprint 和 rollback baseline SHA-256。
+
+`POST /api/evolution/approvals` 只记录 `approved|rejected` 人工决定，并要求 1–2000 字符理由和上述四项精确确认。安全边界如下：
+
+- 所有 approval review/create/list/get 路由都要求已登录、TCP loopback、`AUTH_MODE=local` 且当前用户是已固定的 local owner；multi-user 模式 fail closed；
+- 同一 evaluation 只能产生一条 append-only 决定；改变决定必须创建新的 replay/evaluation，不能更新旧记录；
+- `approved` 仅接受 prompt candidate、宿主 verdict=`pass` 且 `permissionsRequested=[]`；非 pass 或 plugin/config 不可批准，新增权限返回 `EVOLUTION_APPROVAL_PERMISSION_CHANGE_UNSUPPORTED`；
+- `rejected` 仍绑定相同不可变证据和 rollback target，不能成为绕过确认的弱路径；
+- approval 保存脱敏 review snapshot、local-owner-loopback approver mode 和 decision fingerprint；所有响应 `Cache-Control: no-store`；
+- approval 不修改 candidate 的 `proposed` 状态，不写 active prompt/config，不加载 plugin，也不存在 apply、install、activate、deploy 或 rollout 路由。
 
 ## Required next gates
 
 后续能力必须按以下顺序增加，不能跳级：
 
-1. **Human approval**：显示 diff、来源、评测结果、权限变化和明确回滚目标；仅本地 owner 可批准。
-2. **Canary rollout**：小比例、限定作用域、不可变版本标识和完整观测。
-3. **Automatic rollback**：预先声明阈值；质量、安全或可靠性退化时恢复上一不可变版本。
+1. **Canary rollout**：小比例、限定作用域、不可变版本标识和完整观测；只能消费明确 approved 的不可变 prompt candidate。
+2. **Automatic rollback**：预先声明阈值；质量、安全或可靠性退化时恢复 approval 中已绑定的 baseline 不可变版本。
 
 任何候选都不能扩大 manifest `contributes`、工具风险信任或 renderer 执行权限而不经过独立权限审批。磁盘 transformer 仍只能在 worker sandbox 中运行，不能注入 React/renderer JavaScript。
