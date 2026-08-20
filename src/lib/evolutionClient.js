@@ -96,3 +96,25 @@ export async function getEvolutionReplayRunApi(id) {
   })
   return jsonOk(resp)
 }
+
+export async function evaluateEvolutionReplayApi(replayId) {
+  const resp = await fetch('/api/evolution/evaluations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ replayId }),
+  })
+  return jsonOk(resp)
+}
+
+export async function listEvolutionEvaluationsApi({ limit = 50 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  const resp = await fetch(`/api/evolution/evaluations?${query}`, { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function getEvolutionEvaluationApi(id) {
+  const resp = await fetch(`/api/evolution/evaluations/${encodeURIComponent(String(id || ''))}`, {
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}

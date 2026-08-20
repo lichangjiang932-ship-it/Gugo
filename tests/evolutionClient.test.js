@@ -3,11 +3,14 @@ import test from 'node:test'
 
 import {
   createEvolutionReplaySuiteApi,
+  evaluateEvolutionReplayApi,
   generateEvolutionCandidateApi,
   getEvolutionCandidateApi,
   getEvolutionDatasetApi,
+  getEvolutionEvaluationApi,
   getEvolutionReplayRunApi,
   listEvolutionCandidatesApi,
+  listEvolutionEvaluationsApi,
   listEvolutionEvidenceApi,
   listEvolutionExclusionsApi,
   listEvolutionReplayRunsApi,
@@ -157,6 +160,36 @@ test('evolution client creates suites and reads isolated replay results without 
     assert.equal(requests[2].init.method, 'POST')
     assert.equal(requests[3].url, '/api/evolution/replays?limit=20')
     assert.equal(requests[4].url, '/api/evolution/replays/run%2F1')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('evolution client requests independent evaluations without sending an evaluator model or approval', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url, init })
+    const body = url === '/api/evolution/evaluations' && init.method === 'POST'
+      ? { ok: true, evaluation: { id: 'evaluation-1', verdict: 'pass' } }
+      : url.startsWith('/api/evolution/evaluations?')
+        ? { ok: true, evaluations: [] }
+        : { ok: true, evaluation: { id: 'evaluation-1', caseAssessments: [] } }
+    return new Response(JSON.stringify(body), {
+      status: init.method === 'POST' ? 201 : 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  try {
+    const evaluated = await evaluateEvolutionReplayApi('replay-1')
+    await listEvolutionEvaluationsApi({ limit: 10 })
+    await getEvolutionEvaluationApi('evaluation/1')
+    assert.equal(evaluated.evaluation.verdict, 'pass')
+    assert.equal(requests[0].url, '/api/evolution/evaluations')
+    assert.equal(requests[0].init.method, 'POST')
+    assert.deepEqual(JSON.parse(requests[0].init.body), { replayId: 'replay-1' })
+    assert.equal(requests[1].url, '/api/evolution/evaluations?limit=10')
+    assert.equal(requests[2].url, '/api/evolution/evaluations/evaluation%2F1')
   } finally {
     globalThis.fetch = originalFetch
   }

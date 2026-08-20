@@ -60,15 +60,27 @@ dataset 指纹只能证明同一 curation 规则下的输入与派生结果，�
 - baseline、case 和双方输出都经过敏感信息脱敏；任一调用失败、输出为空或过大时不写入部分 run；
 - 完成后保存双方输出、耗时、模型参数、baseline/candidate SHA-256、suite/candidate 引用和整体 run fingerprint。
 
-`GET /api/evolution/replay-suites`、`GET /api/evolution/replays` 返回摘要，单项 GET 返回不可变详情；全部 `Cache-Control: no-store`。Replay 结果没有 verdict，也不存在 evaluate、approve、apply、install 或 rollout API；同场输出不等于质量结论。
+`GET /api/evolution/replay-suites`、`GET /api/evolution/replays` 返回摘要，单项 GET 返回不可变详情；全部 `Cache-Control: no-store`。Replay 结果没有 verdict，也不存在嵌套 evaluate、approve、apply、install 或 rollout API；同场输出不等于质量结论。
+
+## Phase 5: independent evaluation（当前已实现）
+
+配置 `EVOLUTION_EVALUATOR_MODEL_NAME` 后，`POST /api/evolution/evaluations` 对一个不可变 replay 创建 user-scoped、append-only evaluation。客户端不能指定 evaluator；实际模型名必须与 replay worker 不同且与服务端配置完全一致，否则 `EVOLUTION_EVALUATOR_NOT_INDEPENDENT` fail closed。
+
+Evaluator 只接收已脱敏的 case input 和 baseline/candidate output，不提供 tools。它必须为每个 case 返回 0–4 分、`pass|fail|unknown` safety、直接 evidence 和 issues；缺 case、重复 case、非法分值或无具体 evidence 的输出不会落库。模型返回的 aggregate verdict 被忽略，最终 `pass|fail|inconclusive` 完全由宿主策略计算：
+
+- 任一质量、安全、成本或延迟回归直接 `fail`；
+- 没有至少一个质量改善、安全证据为 unknown、成本/延迟证据缺失或 candidate 请求新权限时只能 `inconclusive`；
+- 只有无回归、有质量改善、成本与延迟证据完整、无需权限审查时才可 `pass`；
+- replay 现在记录双方规范化 token usage 和 provider cost；provider 未提供 usage 时不会用猜测值冒充成本证据。
+
+Evaluation 保存 rubric 版本、逐 case 证据、宿主 metrics/issues、独立模型身份和 evaluation fingerprint。`GET /api/evolution/evaluations` 返回摘要，单项 GET 返回 case assessments；全部 `Cache-Control: no-store`。Evaluation 即使 `pass` 也没有批准权，不存在 approve、apply、install 或 rollout API。
 
 ## Required next gates
 
 后续能力必须按以下顺序增加，不能跳级：
 
-1. **Evaluation**：结构化 rubric、独立 Reviewer、回归/安全/成本/延迟指标；缺证据不得 pass。
-2. **Human approval**：显示 diff、来源、评测结果、权限变化和明确回滚目标；仅本地 owner 可批准。
-3. **Canary rollout**：小比例、限定作用域、不可变版本标识和完整观测。
-4. **Automatic rollback**：预先声明阈值；质量、安全或可靠性退化时恢复上一不可变版本。
+1. **Human approval**：显示 diff、来源、评测结果、权限变化和明确回滚目标；仅本地 owner 可批准。
+2. **Canary rollout**：小比例、限定作用域、不可变版本标识和完整观测。
+3. **Automatic rollback**：预先声明阈值；质量、安全或可靠性退化时恢复上一不可变版本。
 
 任何候选都不能扩大 manifest `contributes`、工具风险信任或 renderer 执行权限而不经过独立权限审批。磁盘 transformer 仍只能在 worker sandbox 中运行，不能注入 React/renderer JavaScript。
