@@ -25,6 +25,81 @@ test('validateTransformer: validates loading without invoking transform', async 
   assert.match(invalid.error, /Unexpected|SyntaxError|token/i)
 })
 
+test('plugin sandbox definitions reject accessors and Proxy containers without executing them', async () => {
+  let getterCalls = 0
+  const accessorPlugin = {}
+  Object.defineProperty(accessorPlugin, 'source', {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return 'function transform(input) { return input }'
+    },
+  })
+  await assert.rejects(
+    () => validateTransformer({ plugin: accessorPlugin }),
+    (error) => error?.code === 'PLUGIN_SANDBOX_DEFINITION_INVALID'
+      && error?.retryable === false
+      && /plugin\.source/.test(error?.message || ''),
+  )
+  assert.equal(getterCalls, 0)
+
+  let descriptorCalls = 0
+  const proxyPlugin = new Proxy({
+    source: 'function transform(input) { return input }',
+  }, {
+    getOwnPropertyDescriptor(target, key) {
+      descriptorCalls += 1
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+  await assert.rejects(
+    () => validateTransformer({ plugin: proxyPlugin }),
+    (error) => error?.code === 'PLUGIN_SANDBOX_DEFINITION_INVALID'
+      && error?.retryable === false
+      && /definition at plugin$/.test(error?.message || ''),
+  )
+  assert.equal(descriptorCalls, 0)
+})
+
+test('plugin sandbox capabilities use bounded own descriptors without calling array methods', async () => {
+  let filterCalls = 0
+  const capabilities = ['log']
+  Object.defineProperty(capabilities, 'filter', {
+    value() {
+      filterCalls += 1
+      return []
+    },
+  })
+  const allowed = await runTransformer({
+    plugin: { source: "function transform() { console['log']('x'); return 'ok' }" },
+    input: null,
+    capabilities,
+  })
+  assert.equal(allowed.ok, true)
+  assert.equal(allowed.output, 'ok')
+  assert.equal(filterCalls, 0)
+
+  let proxyTrapCalls = 0
+  const proxyCapabilities = new Proxy(['log'], {
+    getOwnPropertyDescriptor(target, key) {
+      proxyTrapCalls += 1
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+    get(target, key, receiver) {
+      proxyTrapCalls += 1
+      return Reflect.get(target, key, receiver)
+    },
+  })
+  const rejected = await runTransformer({
+    plugin: { source: "function transform() { console['log']('x'); return 'ok' }" },
+    input: null,
+    capabilities: proxyCapabilities,
+  })
+  assert.equal(rejected.ok, false)
+  assert.match(rejected.error, /console|undefined|log/)
+  assert.equal(proxyTrapCalls, 0)
+})
+
 test('runTransformer: 基本调用 string input 转大写', async () => {
   const result = await runTransformer({
     plugin: examplePlugin,

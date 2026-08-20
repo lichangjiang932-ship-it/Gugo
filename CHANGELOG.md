@@ -67,6 +67,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Reserved built-in endpoint kinds against generic and runtime plugin adapter replacement, preventing mixed host/custom build, parse, and stream execution.
 - Hardened runtime tool execution-context, job, and step metadata reads to ignore Proxy or uninspectable containers before plugin callback accounting.
 - Rejected Proxy prompt-scope inputs and skill arrays before descriptor traversal, preventing pre-render trap execution.
+- Hardened transformer sandbox definitions and capability snapshots against accessors, Proxy traps, overridden array methods, and source coercion.
 
 ## [0.11.31] - 2026-08-20
 

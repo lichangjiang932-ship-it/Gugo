@@ -146,7 +146,7 @@ service callback 与 result snapshot 位于同一个 provider callback accountin
 tool:plugin_<normalized-plugin-id>
 ```
 
-宿主 manifest 精确声明该工具；实际 transformer 源码仍由 worker sandbox 执行，输入上限、源码上限、能力白名单、本地 owner 限制和多用户 fail-closed 策略不变。
+宿主 manifest 精确声明该工具；实际 transformer 源码仍由 worker sandbox 执行，输入上限、源码上限、能力白名单、本地 owner 限制和多用户 fail-closed 策略不变。sandbox 只从非 Proxy plugin 定义的 own data-property 读取 `source` 或 `entryPath`；accessor、prototype callback、descriptor trap 和对象 source coercion 在创建 worker 前以 `PLUGIN_SANDBOX_DEFINITION_INVALID`、`retryable=false` 拒绝。capability 列表通过有界稠密 own descriptor snapshot 过滤，不调用实例覆写的 `filter`、iterator 或 Proxy trap。
 
 ### Atomic reload
 

@@ -1,11 +1,13 @@
 import fs from 'node:fs/promises'
 import { Worker } from 'node:worker_threads'
 import { performance } from 'node:perf_hooks'
+import { types as nodeTypes } from 'node:util'
 import { PLUGIN_CAPABILITIES } from './pluginManifest.js'
 
 const DEFAULT_TIMEOUT_MS = 5000
 const DEFAULT_MEMORY_LIMIT_MB = 32
 const ERROR_LIMIT = 1024
+const MAX_CAPABILITY_ENTRIES = 64
 
 const WORKER_SOURCE = `
 const { parentPort, workerData } = require('node:worker_threads')
@@ -29,7 +31,7 @@ try {
       context,
     )
   }
-  vm.runInContext(String(source) + "\\n;module.exports = transform;", context, {
+  vm.runInContext(source + "\\n;module.exports = transform;", context, {
     filename: 'plugin-transformer.js',
   })
   const transform = vm.runInContext('module.exports', context)
@@ -48,9 +50,69 @@ try {
 }
 `
 
+function sandboxDefinitionError(field) {
+  const error = new TypeError(`Invalid plugin sandbox definition at ${field}`)
+  error.code = 'PLUGIN_SANDBOX_DEFINITION_INVALID'
+  error.retryable = false
+  return error
+}
+
+function ownDefinitionValue(object, key) {
+  let descriptor
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(object, key)
+  } catch {
+    throw sandboxDefinitionError(`plugin.${key}`)
+  }
+  if (!descriptor) return undefined
+  if (!Object.hasOwn(descriptor, 'value')) throw sandboxDefinitionError(`plugin.${key}`)
+  return descriptor.value
+}
+
+async function transformerSource(plugin) {
+  if (!plugin || typeof plugin !== 'object' || Array.isArray(plugin) || nodeTypes.isProxy(plugin)) {
+    throw sandboxDefinitionError('plugin')
+  }
+  const source = ownDefinitionValue(plugin, 'source')
+  if (source !== undefined) {
+    if (typeof source !== 'string') throw sandboxDefinitionError('plugin.source')
+    return source
+  }
+  const entryPath = ownDefinitionValue(plugin, 'entryPath')
+  if (typeof entryPath !== 'string' || !entryPath) {
+    throw sandboxDefinitionError('plugin.entryPath')
+  }
+  return await fs.readFile(entryPath, 'utf8')
+}
+
 function sanitizeCapabilities(capabilities) {
-  if (!Array.isArray(capabilities)) return []
-  return capabilities.filter((cap) => PLUGIN_CAPABILITIES.includes(cap))
+  if (!Array.isArray(capabilities) || nodeTypes.isProxy(capabilities)) return []
+  let lengthDescriptor
+  try {
+    lengthDescriptor = Object.getOwnPropertyDescriptor(capabilities, 'length')
+  } catch {
+    return []
+  }
+  const length = lengthDescriptor?.value
+  if (!Number.isSafeInteger(length) || length < 0 || length > MAX_CAPABILITY_ENTRIES) return []
+  const allowed = []
+  for (let index = 0; index < length; index += 1) {
+    let descriptor
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(capabilities, String(index))
+    } catch {
+      return []
+    }
+    const capability = descriptor && Object.hasOwn(descriptor, 'value')
+      ? descriptor.value
+      : undefined
+    if (typeof capability === 'string'
+      && PLUGIN_CAPABILITIES.includes(capability)
+      && !allowed.includes(capability)) {
+      allowed.push(capability)
+    }
+  }
+  return allowed
 }
 
 function durationSince(startedAt) {
@@ -70,12 +132,7 @@ async function runTransformerWorker({
   memoryLimitMb = DEFAULT_MEMORY_LIMIT_MB,
   capabilities = [],
 }) {
-  if (!plugin || typeof plugin !== 'object') {
-    throw new Error('plugin is required')
-  }
-  const source = typeof plugin.source === 'string'
-    ? plugin.source
-    : await fs.readFile(plugin.entryPath, 'utf8')
+  const source = await transformerSource(plugin)
   const allowedCapabilities = sanitizeCapabilities(capabilities)
   const startedAt = performance.now()
 
