@@ -63,7 +63,7 @@ registry constructor 的 `config/registerTool/registerModelProvider/audit` 只�
 
 ## Loop event boundaries
 
-runtime registry 绑定每个 Agent Loop 时只捕获 event bus 自身的 `on/off` function data property；getter、prototype callback 和绑定后的 method swap 均不能改变连接目标，非法 bus 以 `PLUGIN_LOOP_EVENT_BUS_INVALID`、`retryable=false` 拒绝。绑定 API 不再接收或保留 `job/step` context；插件所需的最小 metadata 只能由各事件投影显式提供。
+runtime registry 绑定每个 Agent Loop 时只捕获 event bus 自身的 `on/off` function data property；getter、prototype callback 和绑定后的 method swap 均不能改变连接目标，非法 bus 以 `PLUGIN_LOOP_EVENT_BUS_INVALID`、`retryable=false` 拒绝。一个 event contribution 附着到多个 loop binding 时使用穷尽 rollback：后续 binding 注册失败后，即使较早 binding 的 disposer 抛错，其余已附着 listener 仍全部移除，contribution record 也在错误返回前撤销；attach 与 rollback 错误只在内部聚合并继续经过 setup error boundary。绑定 API 不再接收或保留 `job/step` context；插件所需的最小 metadata 只能由各事件投影显式提供。
 
 `context.events.on(event, listener)` 只能订阅固定的 Agent Loop event catalog，且必须逐项声明 `event:<event>`。event 按宿主权威分为三类：
 

@@ -1238,6 +1238,60 @@ test('setup failure rolls back active event and tool side effects before rejecti
   unbind()
 })
 
+test('event registration rollback detaches every binding despite disposer failures', async () => {
+  const registry = createRuntimePluginRegistry()
+  const createBus = ({ attachFails = false, disposeFails = false } = {}) => {
+    const listeners = new Set()
+    let disposeCalls = 0
+    return {
+      listeners,
+      get disposeCalls() { return disposeCalls },
+      events: {
+        on(event, listener) {
+          if (attachFails) throw new Error('loop binding attach failed')
+          listeners.add(listener)
+          return () => {
+            disposeCalls += 1
+            listeners.delete(listener)
+            if (disposeFails) throw new Error('loop binding dispose failed')
+          }
+        },
+        off(event, listener) {
+          return listeners.delete(listener)
+        },
+      },
+    }
+  }
+  const first = createBus({ disposeFails: true })
+  const second = createBus()
+  const failing = createBus({ attachFails: true })
+  const unbind = [
+    registry.bindLoopEvents(first.events),
+    registry.bindLoopEvents(second.events),
+    registry.bindLoopEvents(failing.events),
+  ]
+
+  try {
+    await assert.rejects(
+      registry.registerPlugin(manifest('event-registration-rollback'), (ctx) => {
+        ctx.events.on('request', () => undefined)
+      }),
+      (error) => error?.code === 'PLUGIN_SETUP_FAILED'
+        && error?.retryable === false
+        && /event registration rollback failed/.test(error?.message || ''),
+    )
+    assert.equal(first.listeners.size, 0)
+    assert.equal(second.listeners.size, 0)
+    assert.equal(failing.listeners.size, 0)
+    assert.equal(first.disposeCalls, 1)
+    assert.equal(second.disposeCalls, 1)
+    assert.equal(failing.disposeCalls, 0)
+    assert.equal(registry.getPlugin('event-registration-rollback'), null)
+  } finally {
+    for (const dispose of unbind.reverse()) dispose()
+  }
+})
+
 test('runtime tool and prompt definitions reject accessors without invoking them', async () => {
   const toolCases = [
     ['name', { spec: TOOL_SPEC, exec: async () => ({ ok: true }) }],

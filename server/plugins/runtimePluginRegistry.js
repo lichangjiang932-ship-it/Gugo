@@ -480,11 +480,22 @@ export function createRuntimePluginRegistry(options = {}) {
   }
 
   const detachContribution = (contribution) => {
+    const errors = []
     for (const binding of loopBindings) {
       const dispose = binding.attachments.get(contribution)
       if (!dispose) continue
       binding.attachments.delete(contribution)
-      dispose()
+      try {
+        dispose()
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+    if (errors.length > 0) {
+      throw new AggregateError(
+        errors,
+        `plugin event contribution detach failed: ${contribution.pluginId}/${contribution.event}`,
+      )
     }
   }
 
@@ -511,8 +522,20 @@ export function createRuntimePluginRegistry(options = {}) {
     try {
       for (const binding of loopBindings) attachContribution(binding, contribution)
     } catch (error) {
-      detachContribution(contribution)
+      let rollbackError = null
+      try {
+        detachContribution(contribution)
+      } catch (caught) {
+        rollbackError = caught
+      }
       record.eventContributions.delete(contribution)
+      if (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          `plugin event registration rollback failed: ${record.manifest.id}/${event}`,
+          { cause: error },
+        )
+      }
       throw error
     }
     return trackVisibleEffect(record, () => {
