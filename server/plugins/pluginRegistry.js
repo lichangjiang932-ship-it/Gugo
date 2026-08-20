@@ -85,8 +85,8 @@ export function renderRuntimePromptBlocks(input = {}) {
   return RUNTIME.renderPromptBlocks(input)
 }
 
-export function bindRuntimePluginsToLoop(loopEvents, context = {}) {
-  return RUNTIME.bindLoopEvents(loopEvents, context)
+export function bindRuntimePluginsToLoop(loopEvents) {
+  return RUNTIME.bindLoopEvents(loopEvents)
 }
 
 export function shutdownRuntimePlugins() {

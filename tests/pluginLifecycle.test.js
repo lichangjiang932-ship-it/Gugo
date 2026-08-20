@@ -194,6 +194,107 @@ test('plugin audit emits detached immutable plain data and rejects capabilities'
   assert.equal(await registry.unregisterPlugin('context-audit-boundary'), true)
 })
 
+test('runtime loop binding ignores obsolete host context without traversing it', () => {
+  const registry = createRuntimePluginRegistry()
+  const events = createLoopEvents()
+  let getterCalls = 0
+  const context = {}
+  Object.defineProperty(context, 'job', {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return { capability() {} }
+    },
+  })
+
+  const unbind = registry.bindLoopEvents(events, context)
+  assert.equal(getterCalls, 0)
+  assert.equal(unbind(), true)
+})
+
+test('runtime loop event bus rejects accessors and inherited methods without invoking them', () => {
+  const registry = createRuntimePluginRegistry()
+  let getterCalls = 0
+  const accessorBus = {
+    off() {},
+  }
+  Object.defineProperty(accessorBus, 'on', {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return () => () => {}
+    },
+  })
+  assert.throws(
+    () => registry.bindLoopEvents(accessorBus),
+    (error) => error?.code === 'PLUGIN_LOOP_EVENT_BUS_INVALID'
+      && error?.retryable === false
+      && /event bus\.on/.test(error?.message || ''),
+  )
+  assert.equal(getterCalls, 0)
+
+  const inheritedBus = Object.create({
+    on() { return () => {} },
+    off() {},
+  })
+  assert.throws(
+    () => registry.bindLoopEvents(inheritedBus),
+    (error) => error?.code === 'PLUGIN_LOOP_EVENT_BUS_INVALID'
+      && /event bus\.on/.test(error?.message || ''),
+  )
+})
+
+test('runtime loop event bus methods are registration-time descriptor snapshots', async () => {
+  const registry = createRuntimePluginRegistry()
+  const listeners = new Set()
+  let originalOnCalls = 0
+  let mutatedOnCalls = 0
+  let propertyReads = 0
+  let descriptorReads = 0
+  const target = {
+    on(event, listener) {
+      originalOnCalls += 1
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    off(event, listener) {
+      return listeners.delete(listener)
+    },
+  }
+  const bus = new Proxy(target, {
+    get(object, key, receiver) {
+      propertyReads += 1
+      return Reflect.get(object, key, receiver)
+    },
+    getOwnPropertyDescriptor(object, key) {
+      descriptorReads += 1
+      return Reflect.getOwnPropertyDescriptor(object, key)
+    },
+  })
+
+  const unbind = registry.bindLoopEvents(bus)
+  const registrationDescriptorReads = descriptorReads
+  target.on = () => {
+    mutatedOnCalls += 1
+    return () => {}
+  }
+  target.off = () => false
+  await registry.registerPlugin(manifest('event-bus-snapshot', {
+    contributes: ['event:request'],
+  }), (ctx) => {
+    ctx.events.on('request', (request) => request)
+  })
+
+  assert.equal(originalOnCalls, 1)
+  assert.equal(mutatedOnCalls, 0)
+  assert.equal(propertyReads, 0)
+  assert.equal(descriptorReads, registrationDescriptorReads)
+  assert.equal(listeners.size, 1)
+  assert.equal(unbind(), true)
+  assert.equal(listeners.size, 0)
+  assert.equal(await registry.unregisterPlugin('event-bus-snapshot'), true)
+})
+
 test('runtime plugin installs real tool, event, and service contributions and reverses every effect', async () => {
   const registry = createRuntimePluginRegistry()
   const events = createLoopEvents()

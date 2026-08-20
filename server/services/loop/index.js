@@ -13,10 +13,7 @@ import { runToolsLoopCore } from './runtime.js'
 
 export async function runToolsLoop(options = {}) {
   const context = createLoopContext(options)
-  const disposeRuntimePlugins = bindRuntimePluginsToLoop(context.events, {
-    job: context.input.job,
-    step: context.input.step,
-  })
+  const disposeRuntimePlugins = bindRuntimePluginsToLoop(context.events)
   const disposeHookBridge = installToolHookBridge({
     loopEvents: context.events,
     dispatchHooks,

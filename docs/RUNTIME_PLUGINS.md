@@ -57,6 +57,8 @@ setup 本身运行在显式 installation scope：setup 不能等待卸载自身�
 
 ## Loop event boundaries
 
+runtime registry 绑定每个 Agent Loop 时只捕获 event bus 自身的 `on/off` function data property；getter、prototype callback 和绑定后的 method swap 均不能改变连接目标，非法 bus 以 `PLUGIN_LOOP_EVENT_BUS_INVALID`、`retryable=false` 拒绝。绑定 API 不再接收或保留 `job/step` context；插件所需的最小 metadata 只能由各事件投影显式提供。
+
 `context.events.on(event, listener)` 只能订阅固定的 Agent Loop event catalog，且必须逐项声明 `event:<event>`。event 按宿主权威分为三类：
 
 - `request` 可按 waterfall 改写一次物理模型请求的数据字段；`request-error` 只能为首次失败声明一次 `{ kind: 'retry', request }`。宿主先剥离并在返回后恢复 `signal`、stream callback 等非数据能力，plugin 不能读取、替换或删除它们；`request-error.error` 仅投影冻结的 `name/message/code/statusCode/retryable` metadata，不传原始 Error、cause 或 stack。它们是显式模型调用控制面，不授予 tool、prompt contribution 或终态权威；

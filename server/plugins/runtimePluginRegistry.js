@@ -150,10 +150,34 @@ function snapshotPluginToolSpec(input) {
   return snapshot
 }
 
-function assertLoopEventBus(events) {
-  if (!events || typeof events.on !== 'function' || typeof events.off !== 'function') {
-    throw new TypeError('loop event bus must provide on/off')
+function loopEventBusError(method) {
+  const error = new TypeError(`loop event bus.${method} must be an own function property`)
+  error.code = 'PLUGIN_LOOP_EVENT_BUS_INVALID'
+  error.retryable = false
+  return error
+}
+
+function snapshotLoopEventBus(events) {
+  if (!events || (typeof events !== 'object' && typeof events !== 'function')) {
+    throw loopEventBusError('on')
   }
+  const methods = {}
+  for (const method of ['on', 'off']) {
+    let descriptor
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(events, method)
+    } catch {
+      throw loopEventBusError(method)
+    }
+    if (!descriptor
+      || !Object.hasOwn(descriptor, 'value')
+      || typeof descriptor.value !== 'function') {
+      throw loopEventBusError(method)
+    }
+    const callback = descriptor.value
+    methods[method] = (...args) => callback.call(events, ...args)
+  }
+  return Object.freeze(methods)
 }
 
 function reservedToolOwner(name) {
@@ -818,9 +842,8 @@ export function createRuntimePluginRegistry({
     return record.uninstallPromise
   }
 
-  const bindLoopEvents = (events, context = {}) => {
-    assertLoopEventBus(events)
-    const binding = { events, context: { ...context }, attachments: new Map() }
+  const bindLoopEvents = (events) => {
+    const binding = { events: snapshotLoopEventBus(events), attachments: new Map() }
     try {
       for (const record of plugins.values()) {
         if (record.state !== 'active') continue
