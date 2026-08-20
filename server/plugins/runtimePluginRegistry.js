@@ -15,6 +15,7 @@ import { createRuntimePluginToolExecutor } from './pluginToolInvocation.js'
 import { registerModelProviderAdapter } from '../adapters/modelProviderRegistry.js'
 import {
   createEffectTracker,
+  isolatePluginDisposerError,
   normalizeRuntimePluginManifest,
 } from './pluginLifecycle.js'
 
@@ -261,7 +262,10 @@ export function createRuntimePluginRegistry({
   const disposePluginEffects = async (record) => {
     const invocation = { record, kind: 'dispose', active: true }
     try {
-      return await cleanupScope.run(invocation, () => record.effects.disposeAll())
+      return await cleanupScope.run(invocation, async () => {
+        const errors = await record.effects.disposeAll()
+        return errors.map((error) => isolatePluginDisposerError(error, record.manifest.id))
+      })
     } finally {
       invocation.active = false
     }

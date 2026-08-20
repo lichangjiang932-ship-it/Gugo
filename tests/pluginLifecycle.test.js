@@ -2280,3 +2280,119 @@ test('plugin rollback disposer cannot await unregister before install settles', 
   assert.equal(observedError?.retryable, false)
   assert.equal(registry.getPlugin('rollback-disposer-self-unregister'), null)
 })
+
+test('plugin disposer objects use registration-time own-method snapshots', async () => {
+  const registry = createRuntimePluginRegistry()
+  const calls = []
+  let getCalls = 0
+  let descriptorCalls = 0
+  const target = {
+    dispose() {
+      calls.push('original')
+    },
+  }
+  const effect = new Proxy(target, {
+    get(object, key, receiver) {
+      getCalls += 1
+      return Reflect.get(object, key, receiver)
+    },
+    getOwnPropertyDescriptor(object, key) {
+      descriptorCalls += 1
+      return Reflect.getOwnPropertyDescriptor(object, key)
+    },
+  })
+  await registry.registerPlugin(manifest('disposer-method-snapshot'), (ctx) => {
+    ctx.lifecycle.onDispose(effect)
+  })
+  const registrationDescriptorCalls = descriptorCalls
+  target.dispose = () => calls.push('mutated')
+
+  assert.equal(await registry.unregisterPlugin('disposer-method-snapshot'), true)
+  assert.deepEqual(calls, ['original'])
+  assert.equal(getCalls, 0)
+  assert.equal(descriptorCalls, registrationDescriptorCalls)
+})
+
+test('plugin disposer definitions reject accessors and inherited methods without invoking them', async () => {
+  let getterCalls = 0
+  const accessorRegistry = createRuntimePluginRegistry()
+  const accessorEffect = {}
+  Object.defineProperty(accessorEffect, 'dispose', {
+    get() {
+      getterCalls += 1
+      return () => {}
+    },
+  })
+  await assert.rejects(
+    accessorRegistry.registerPlugin(manifest('accessor-disposer-definition'), (ctx) => {
+      ctx.lifecycle.onDispose(accessorEffect)
+    }),
+    /dispose must be an own function property/,
+  )
+  assert.equal(getterCalls, 0)
+  assert.equal(accessorRegistry.getPlugin('accessor-disposer-definition'), null)
+
+  const inheritedRegistry = createRuntimePluginRegistry()
+  const inheritedEffect = Object.create({ dispose() {} })
+  await assert.rejects(
+    inheritedRegistry.registerPlugin(manifest('inherited-disposer-definition'), (ctx) => {
+      ctx.lifecycle.onDispose(inheritedEffect)
+    }),
+    /plugin side effect must provide a disposer/,
+  )
+  assert.equal(inheritedRegistry.getPlugin('inherited-disposer-definition'), null)
+})
+
+test('plugin disposer thrown values are detached before cleanup accounting ends', async () => {
+  const registry = createRuntimePluginRegistry()
+  let unregisterAttempt = null
+  let messageGetterCalls = 0
+  const thrown = {}
+  Object.defineProperties(thrown, {
+    message: {
+      get() {
+        messageGetterCalls += 1
+        return 'getter must not execute'
+      },
+    },
+    code: { value: 'PLUGIN_CUSTOM_DISPOSER_FAILURE' },
+    retryable: { value: true },
+    cause: { value: { disposerCapability: true } },
+  })
+  const trappedError = new Proxy(thrown, {
+    getOwnPropertyDescriptor(target, key) {
+      if (!unregisterAttempt) {
+        unregisterAttempt = registry.unregisterPlugin('disposer-error-boundary').then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        )
+      }
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+  await registry.registerPlugin(manifest('disposer-error-boundary'), (ctx) => {
+    ctx.lifecycle.onDispose(() => { throw trappedError })
+  })
+
+  await assert.rejects(
+    settleWithin(registry.unregisterPlugin('disposer-error-boundary')),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true)
+      assert.equal(error.errors.length, 1)
+      const detached = error.errors[0]
+      assert.notEqual(detached, trappedError)
+      assert.equal(detached?.code, 'PLUGIN_CUSTOM_DISPOSER_FAILURE')
+      assert.equal(detached?.retryable, false)
+      assert.equal(detached?.message, 'plugin disposer failed: disposer-error-boundary')
+      assert.equal(detached?.pluginId, 'disposer-error-boundary')
+      assert.equal(detached?.phase, 'dispose')
+      assert.equal(Object.hasOwn(detached, 'cause'), false)
+      return true
+    },
+  )
+  assert.equal(messageGetterCalls, 0)
+  const attempted = await settleWithin(unregisterAttempt)
+  assert.equal(attempted.value, undefined)
+  assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(registry.getPlugin('disposer-error-boundary'), null)
+})

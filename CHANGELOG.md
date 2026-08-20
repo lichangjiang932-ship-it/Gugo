@@ -35,6 +35,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Kept runtime model-provider thenable checks, result/state snapshots, shape validation, and thrown-value sanitization inside synchronous lifecycle accounting, exporting only detached non-retryable errors.
 - Fenced runtime prompt thenable checks, text normalization, block-size validation, and thrown-value sanitization inside synchronous lifecycle accounting while preserving fail-open auditing.
 - Added lifecycle cleanup scoping so uninstall and setup-rollback disposers fail fast instead of deadlocking when they await self-unregister or registry shutdown.
+- Snapshotted disposer own methods at registration and detached cleanup failures inside lifecycle accounting, preventing accessor, prototype, method-swap, cause, retry, and error-identity leakage.
 
 ## [0.11.31] - 2026-08-20
 

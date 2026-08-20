@@ -1,14 +1,64 @@
 import { normalizePluginManifest } from '../../shared/pluginManifest.js'
 
+const MAX_ERROR_TEXT = 4_096
+const ERROR_CODE_RE = /^[A-Z][A-Z0-9_]{0,127}$/
+
 export function normalizeRuntimePluginManifest(manifest) {
   return normalizePluginManifest(manifest)
 }
 
+function ownDisposer(effect, name) {
+  const descriptor = Object.getOwnPropertyDescriptor(effect, name)
+  if (!descriptor) return null
+  if (!Object.hasOwn(descriptor, 'value') || typeof descriptor.value !== 'function') {
+    throw new TypeError(`plugin side effect ${name} must be an own function property`)
+  }
+  return descriptor.value
+}
+
 function resolveDisposer(effect) {
   if (typeof effect === 'function') return effect
-  if (effect && typeof effect.dispose === 'function') return () => effect.dispose()
-  if (effect && typeof effect.uninstall === 'function') return () => effect.uninstall()
+  if (!effect || typeof effect !== 'object') return null
+  const dispose = ownDisposer(effect, 'dispose')
+  if (dispose) return () => dispose.call(effect)
+  const uninstall = ownDisposer(effect, 'uninstall')
+  if (uninstall) return () => uninstall.call(effect)
   return null
+}
+
+function ownErrorValue(error, key) {
+  if (!error || (typeof error !== 'object' && typeof error !== 'function')) return undefined
+  const descriptor = Object.getOwnPropertyDescriptor(error, key)
+  return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined
+}
+
+function errorField(error, key) {
+  try {
+    return ownErrorValue(error, key)
+  } catch {
+    return undefined
+  }
+}
+
+function boundedText(value) {
+  return typeof value === 'string' ? value.trim().slice(0, MAX_ERROR_TEXT) : ''
+}
+
+export function isolatePluginDisposerError(thrown, pluginId) {
+  const primitive = thrown === null || (typeof thrown !== 'object' && typeof thrown !== 'function')
+    ? String(thrown)
+    : ''
+  const message = boundedText(errorField(thrown, 'message')) || boundedText(primitive)
+  const ownCode = errorField(thrown, 'code')
+  const code = typeof ownCode === 'string' && ERROR_CODE_RE.test(ownCode)
+    ? ownCode
+    : 'PLUGIN_DISPOSER_FAILED'
+  const error = new Error(message || `plugin disposer failed: ${pluginId}`)
+  error.code = code
+  error.retryable = false
+  error.pluginId = pluginId
+  error.phase = 'dispose'
+  return error
 }
 
 function flattenEffects(value, target) {
