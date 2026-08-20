@@ -42,6 +42,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Isolated runtime plugin context config and audit payloads as bounded deeply frozen plain data, preventing host-reference, accessor, capability, and post-emission mutation leakage.
 - Removed the unused Job/Step loop-binding context channel and snapshotted loop event-bus own methods, preventing getter, prototype, method-swap, and host-reference leakage.
 - Froze detached runtime plugin inventory snapshots and stopped registry query identifiers from executing object coercion callbacks.
+- Snapshotted runtime prompt render scope from own string data properties and dense skill ID arrays, rejecting getter, prototype, sparse-array, and coercion callbacks before renderer execution.
 
 ## [0.11.31] - 2026-08-20
 

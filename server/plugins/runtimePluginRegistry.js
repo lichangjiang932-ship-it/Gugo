@@ -14,7 +14,10 @@ import {
 import { snapshotContributionDefinition } from './pluginContributionDefinition.js'
 import { createRuntimePluginEventListener } from './pluginEventInvocation.js'
 import { snapshotRuntimeModelProvider } from './pluginModelProvider.js'
-import { createRuntimePluginPromptRenderer } from './pluginPromptInvocation.js'
+import {
+  createRuntimePluginPromptRenderer,
+  snapshotRuntimePluginPromptScope,
+} from './pluginPromptInvocation.js'
 import { createRuntimePluginService } from './pluginServiceInvocation.js'
 import { createRuntimePluginToolExecutor } from './pluginToolInvocation.js'
 import { registerModelProviderAdapter } from '../adapters/modelProviderRegistry.js'
@@ -572,16 +575,7 @@ export function createRuntimePluginRegistry({
   }
 
   const renderPromptBlocks = (input = {}) => {
-    const scope = Object.freeze({
-      userId: String(input?.userId || '').trim() || null,
-      sessionId: String(input?.sessionId || '').trim() || null,
-      agentId: String(input?.agentId || '').trim() || null,
-      skillIds: Object.freeze([
-        ...new Set((Array.isArray(input?.skillIds) ? input.skillIds : [])
-          .map((value) => String(value || '').trim())
-          .filter(Boolean)),
-      ].slice(0, 32)),
-    })
+    const scope = snapshotRuntimePluginPromptScope(input)
     const blocks = []
     const errors = []
     let totalBytes = 0

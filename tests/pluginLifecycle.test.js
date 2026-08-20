@@ -1188,6 +1188,106 @@ test('undeclared runtime contributions fail closed before producing side effects
   assert.equal(getDynamicTool('plugin_echo'), null)
 })
 
+test('runtime prompt scope is an own-data snapshot without getter or coercion execution', async () => {
+  const registry = createRuntimePluginRegistry()
+  const scopes = []
+  await registry.registerPlugin(manifest('prompt-scope-boundary', {
+    contributes: ['prompt:scope-boundary'],
+  }), (ctx) => {
+    ctx.prompts.register({
+      id: 'scope-boundary',
+      render: (scope) => {
+        scopes.push(scope)
+        return 'scope'
+      },
+    })
+  })
+
+  registry.renderPromptBlocks({
+    userId: ' user ',
+    sessionId: 'session',
+    agentId: 'agent',
+    skillIds: [' skill-a ', 'skill-a', 'skill-b'],
+  })
+  assert.deepEqual(scopes[0], {
+    userId: 'user',
+    sessionId: 'session',
+    agentId: 'agent',
+    skillIds: ['skill-a', 'skill-b'],
+  })
+  assert.equal(Object.isFrozen(scopes[0]), true)
+  assert.equal(Object.isFrozen(scopes[0].skillIds), true)
+
+  let getterCalls = 0
+  const accessorInput = {}
+  Object.defineProperty(accessorInput, 'userId', {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return 'forged'
+    },
+  })
+  assert.throws(
+    () => registry.renderPromptBlocks(accessorInput),
+    (error) => error?.code === 'PLUGIN_PROMPT_SCOPE_INVALID'
+      && error?.retryable === false,
+  )
+  assert.equal(getterCalls, 0)
+
+  const inheritedInput = Object.create({
+    userId: 'forged-user',
+    skillIds: ['forged-skill'],
+  })
+  registry.renderPromptBlocks(inheritedInput)
+  assert.deepEqual(scopes[1], {
+    userId: null,
+    sessionId: null,
+    agentId: null,
+    skillIds: [],
+  })
+
+  let coercionCalls = 0
+  const coercive = {
+    [Symbol.toPrimitive]() {
+      coercionCalls += 1
+      return 'forged'
+    },
+  }
+  assert.throws(
+    () => registry.renderPromptBlocks({ userId: coercive }),
+    (error) => error?.code === 'PLUGIN_PROMPT_SCOPE_INVALID',
+  )
+  assert.equal(coercionCalls, 0)
+
+  const accessorSkills = []
+  Object.defineProperty(accessorSkills, 0, {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return 'forged-skill'
+    },
+  })
+  assert.throws(
+    () => registry.renderPromptBlocks({ skillIds: accessorSkills }),
+    (error) => error?.code === 'PLUGIN_PROMPT_SCOPE_INVALID'
+      && /skillIds\[0\]/.test(error?.message || ''),
+  )
+  assert.equal(getterCalls, 0)
+
+  const sparseSkills = []
+  sparseSkills.length = 1
+  const inheritedSkills = Object.create(Array.prototype)
+  inheritedSkills[0] = 'forged-skill'
+  Object.setPrototypeOf(sparseSkills, inheritedSkills)
+  assert.throws(
+    () => registry.renderPromptBlocks({ skillIds: sparseSkills }),
+    (error) => error?.code === 'PLUGIN_PROMPT_SCOPE_INVALID'
+      && /skillIds\[0\]/.test(error?.message || ''),
+  )
+  assert.equal(scopes.length, 2)
+  assert.equal(await registry.unregisterPlugin('prompt-scope-boundary'), true)
+})
+
 test('runtime prompt contributions are bounded, synchronous, deterministic, and fail open', async () => {
   const audit = []
   const registry = createRuntimePluginRegistry({ audit: (event) => audit.push(event) })

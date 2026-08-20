@@ -1,6 +1,7 @@
 const MAX_BLOCK_BYTES = 16 * 1024
 const MAX_ERROR_TEXT = 4_096
 const ERROR_CODE_RE = /^[A-Z][A-Z0-9_]{0,127}$/
+const MAX_SCOPE_SKILL_IDS = 32
 
 function promptError(code, message, identity) {
   const error = new TypeError(message)
@@ -43,6 +44,58 @@ function isolatedPromptFailure(thrown, identity) {
     message || `plugin prompt render failed: ${identity.promptId}`,
     identity,
   )
+}
+
+function promptScopeError(field) {
+  const error = new TypeError(`plugin prompt scope.${field} must be an own data property`)
+  error.code = 'PLUGIN_PROMPT_SCOPE_INVALID'
+  error.retryable = false
+  return error
+}
+
+function ownScopeValue(object, field, label = field) {
+  let descriptor
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(object, field)
+  } catch {
+    throw promptScopeError(label)
+  }
+  if (!descriptor) return undefined
+  if (!Object.hasOwn(descriptor, 'value')) throw promptScopeError(label)
+  return descriptor.value
+}
+
+function scopeText(value, field) {
+  if (value === undefined || value === null || value === '') return null
+  if (typeof value !== 'string') throw promptScopeError(field)
+  return value.trim() || null
+}
+
+function scopeSkillIds(value) {
+  if (value === undefined) return Object.freeze([])
+  if (!Array.isArray(value)) throw promptScopeError('skillIds')
+  const length = ownScopeValue(value, 'length', 'skillIds.length')
+  if (!Number.isSafeInteger(length) || length < 0) throw promptScopeError('skillIds.length')
+  const normalized = []
+  for (let index = 0; index < Math.min(length, MAX_SCOPE_SKILL_IDS); index += 1) {
+    const item = ownScopeValue(value, String(index), `skillIds[${index}]`)
+    if (typeof item !== 'string') throw promptScopeError(`skillIds[${index}]`)
+    const text = item.trim()
+    if (text && !normalized.includes(text)) normalized.push(text)
+  }
+  return Object.freeze(normalized)
+}
+
+export function snapshotRuntimePluginPromptScope(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw promptScopeError('input')
+  }
+  return Object.freeze({
+    userId: scopeText(ownScopeValue(input, 'userId'), 'userId'),
+    sessionId: scopeText(ownScopeValue(input, 'sessionId'), 'sessionId'),
+    agentId: scopeText(ownScopeValue(input, 'agentId'), 'agentId'),
+    skillIds: scopeSkillIds(ownScopeValue(input, 'skillIds')),
+  })
 }
 
 function completePromptResult(rendered, identity) {
