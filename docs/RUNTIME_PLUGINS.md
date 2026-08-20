@@ -43,7 +43,7 @@ code: PLUGIN_CONTRIBUTION_UNDECLARED
 retryable: false
 ```
 
-setup 失败仍走原有原子回滚：已注册的 tool/event/prompt/service/provider 和自定义 disposer 逆序撤销，plugin record 被移除。卸载时先撤销可见贡献，再等待 in-flight callback 排空；活跃依赖存在时不能卸载被依赖 plugin。
+setup 失败仍走原有原子回滚：已注册的 tool/event/prompt/service/provider 和自定义 disposer 逆序撤销，plugin record 被移除。卸载时先撤销可见贡献，再等待 in-flight callback 排空；活跃依赖存在时不能卸载被依赖 plugin。正常卸载和 setup rollback 的 disposer 都运行在显式 lifecycle cleanup scope；cleanup 不能等待卸载自身或等待整个 registry shutdown，否则分别以 `PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK` / `PLUGIN_CALLBACK_SHUTDOWN_DEADLOCK`、`retryable=false` 立即失败，避免 uninstall/install-settled 自等待死锁。其他调用方发起的重复卸载仍复用同一个 uninstall promise。
 
 ## Loop event boundaries
 

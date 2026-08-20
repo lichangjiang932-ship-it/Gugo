@@ -2218,3 +2218,65 @@ test('plugin callback shutdown fails fast instead of awaiting its own callback d
   await settleWithin(registry.shutdown())
   assert.deepEqual(registry.listPlugins(), [])
 })
+
+test('plugin disposer self-unregister fails fast instead of awaiting its own uninstall', async () => {
+  const registry = createRuntimePluginRegistry()
+  let observedError = null
+  await registry.registerPlugin(manifest('disposer-self-unregister'), (ctx) => {
+    ctx.lifecycle.onDispose(async () => {
+      try {
+        await registry.unregisterPlugin('disposer-self-unregister')
+      } catch (error) {
+        observedError = error
+      }
+    })
+  })
+
+  assert.equal(await settleWithin(registry.unregisterPlugin('disposer-self-unregister')), true)
+  assert.equal(observedError?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(observedError?.retryable, false)
+  assert.match(observedError?.message || '', /would deadlock callback drain/)
+  assert.equal(registry.getPlugin('disposer-self-unregister'), null)
+})
+
+test('plugin disposer shutdown fails fast instead of awaiting the active cleanup chain', async () => {
+  const registry = createRuntimePluginRegistry()
+  let observedError = null
+  await registry.registerPlugin(manifest('disposer-shutdown'), (ctx) => {
+    ctx.lifecycle.onDispose(async () => {
+      try {
+        await registry.shutdown()
+      } catch (error) {
+        observedError = error
+      }
+    })
+  })
+
+  assert.equal(await settleWithin(registry.unregisterPlugin('disposer-shutdown')), true)
+  assert.equal(observedError?.code, 'PLUGIN_CALLBACK_SHUTDOWN_DEADLOCK')
+  assert.equal(observedError?.retryable, false)
+  assert.match(observedError?.message || '', /would deadlock callback drain/)
+  assert.deepEqual(registry.listPlugins(), [])
+})
+
+test('plugin rollback disposer cannot await unregister before install settles', async () => {
+  const registry = createRuntimePluginRegistry()
+  let observedError = null
+  await assert.rejects(
+    settleWithin(registry.registerPlugin(manifest('rollback-disposer-self-unregister'), (ctx) => {
+      ctx.lifecycle.onDispose(async () => {
+        try {
+          await registry.unregisterPlugin('rollback-disposer-self-unregister')
+        } catch (error) {
+          observedError = error
+        }
+      })
+      throw new Error('setup failed after registering disposer')
+    })),
+    /setup failed after registering disposer/,
+  )
+
+  assert.equal(observedError?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(observedError?.retryable, false)
+  assert.equal(registry.getPlugin('rollback-disposer-self-unregister'), null)
+})

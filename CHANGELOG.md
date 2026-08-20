@@ -34,6 +34,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Isolated runtime event inputs/results/errors inside lifecycle accounting, hid and restored model-request capabilities, projected request failures as metadata only, and discarded observer return capabilities.
 - Kept runtime model-provider thenable checks, result/state snapshots, shape validation, and thrown-value sanitization inside synchronous lifecycle accounting, exporting only detached non-retryable errors.
 - Fenced runtime prompt thenable checks, text normalization, block-size validation, and thrown-value sanitization inside synchronous lifecycle accounting while preserving fail-open auditing.
+- Added lifecycle cleanup scoping so uninstall and setup-rollback disposers fail fast instead of deadlocking when they await self-unregister or registry shutdown.
 
 ## [0.11.31] - 2026-08-20
 

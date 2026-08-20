@@ -179,6 +179,7 @@ export function createRuntimePluginRegistry({
   const promptContributions = new Map()
   const loopBindings = new Set()
   const callbackScope = new AsyncLocalStorage()
+  const cleanupScope = new AsyncLocalStorage()
   let installSequence = 0
   let promptSequence = 0
   let shuttingDown = false
@@ -251,8 +252,19 @@ export function createRuntimePluginRegistry({
   }
 
   const activeCallbackInvocation = () => {
-    const invocation = callbackScope.getStore()
-    return invocation?.active === true ? invocation : null
+    const callbackInvocation = callbackScope.getStore()
+    if (callbackInvocation?.active === true) return callbackInvocation
+    const cleanupInvocation = cleanupScope.getStore()
+    return cleanupInvocation?.active === true ? cleanupInvocation : null
+  }
+
+  const disposePluginEffects = async (record) => {
+    const invocation = { record, kind: 'dispose', active: true }
+    try {
+      return await cleanupScope.run(invocation, () => record.effects.disposeAll())
+    } finally {
+      invocation.active = false
+    }
   }
 
   const assertPluginWritable = (record) => {
@@ -691,7 +703,7 @@ export function createRuntimePluginRegistry({
       revokeVisibleEffects(record)
       const rollbackErrors = [
         ...record.revocationErrors,
-        ...await record.effects.disposeAll(),
+        ...await disposePluginEffects(record),
       ]
       record.revocationErrors.length = 0
       plugins.delete(normalized.id)
@@ -754,7 +766,7 @@ export function createRuntimePluginRegistry({
       await waitForCallbacksToDrain(record)
       const errors = [
         ...record.revocationErrors,
-        ...await record.effects.disposeAll(),
+        ...await disposePluginEffects(record),
       ]
       record.revocationErrors.length = 0
       plugins.delete(normalizedId)
