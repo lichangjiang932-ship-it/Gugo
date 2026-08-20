@@ -65,9 +65,13 @@ setup 失败仍走原有原子回滚：已注册的 tool/event/prompt/service/pr
 
 宿主限制最多 16 个有效块、每块 16 KiB、总计 64 KiB。异步返回、非文本、超限或 render 异常均只省略对应块并产生脱敏 `plugin.prompt_failed` audit；不会阻断 turn，也不会截断后继续执行。该 API 只属于随宿主启动的可信进程内代码。磁盘 transformer 没有 registry context，因此不能注入 prompt、React/renderer JavaScript 或取得上述 scope。
 
-## Host service invocation and policy guards
+## Lifecycle-safe service invocation and policy guards
 
-宿主通过 `invokePluginService(name, method, args)` 调用 active service，而不是跨生命周期长期持有 service callback。调用计入 plugin 的 in-flight callback：卸载先原子撤销 service 可见性，再等待已开始调用完成；service callback 不能同步等待卸载自身，否则以既有 deadlock guard 失败。
+宿主通过 `invokePluginService(name, method, args)` 调用 active service，而不是跨生命周期长期持有 service callback。plugin consumer 同样只能调用 `context.services.invoke(name, method, args)`；`context.services.get()` 和宿主 raw service getter 不再存在。跨 plugin 调用前，consumer manifest 必须在 `requires` 中声明实际提供该 service 的 plugin ID，否则以 `PLUGIN_SERVICE_DEPENDENCY_UNDECLARED` 拒绝；consumer 卸载后，先前捕获的 context 以 `PLUGIN_SERVICE_CONSUMER_INACTIVE` 拒绝新调用。
+
+service method 必须是 service 对象自己的 data property，不能通过 prototype 或 getter 注入 callback。参数与返回值在边界处复制为深冻结 plain-data snapshot，仅允许有限数字、字符串、布尔值、null/undefined、稠密数组和 plain object；拒绝函数、symbol、bigint、accessor、特殊 prototype、cycle、非有限数字、深度超过 32、节点超过 8192 或数据超过 1 MiB。非法参数/结果分别返回 `PLUGIN_SERVICE_ARGUMENT_INVALID` / `PLUGIN_SERVICE_RESULT_INVALID`，因此 service 不能通过返回值泄露 callback、宿主对象或其他进程内能力。
+
+有效调用计入 provider plugin 的 in-flight callback：卸载先原子撤销 service 可见性，再等待已开始调用完成；service callback 不能同步等待卸载自身，否则以既有 deadlock guard 失败。`context.services.has()` 和 `hasPluginService()` 只返回 lifecycle-aware availability，不返回 service value。
 
 ### Task review guard
 

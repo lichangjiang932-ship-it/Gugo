@@ -73,8 +73,8 @@ export function getRuntimePlugin(id) {
   return RUNTIME.getPlugin(id)
 }
 
-export function getPluginService(name) {
-  return RUNTIME.getService(name)
+export function hasPluginService(name) {
+  return RUNTIME.hasService(name)
 }
 
 export function invokePluginService(name, method, args = []) {
