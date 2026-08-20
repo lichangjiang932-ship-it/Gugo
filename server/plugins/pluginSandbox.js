@@ -136,7 +136,7 @@ function stableErrorCode(err) {
 
 try {
   const { source, input, capabilities, validateOnly } = workerData
-  const context = vm.createContext({})
+  const context = vm.createContext(Object.create(null))
   vm.runInContext(
     "globalThis.module = Object.create(null); globalThis.module.exports = undefined; globalThis.exports = Object.create(null); Object.defineProperty(globalThis, 'console', { value: undefined, writable: false, configurable: true });",
     context,

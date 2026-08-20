@@ -262,6 +262,45 @@ test('plugin sandbox input is bounded plain data without getter or Proxy executi
   )
 })
 
+test('plugin sandbox vm cannot escape to the worker realm through constructor chains', async () => {
+  const probes = [
+    "function transform() { return globalThis.constructor.constructor('return typeof process')() }",
+    "function transform() { return ({}).constructor.constructor('return typeof process')() }",
+    "function transform() { return Function('return typeof process')() }",
+    "function transform() { return (0, eval)('typeof process') }",
+  ]
+  for (const source of probes) {
+    const result = await runTransformer({ plugin: { source }, input: null })
+    assert.equal(result.ok, true)
+    assert.equal(result.output, 'undefined')
+  }
+})
+
+test('plugin sandbox vm keeps standard intrinsics and rejects host realm capability reads', async () => {
+  const intrinsics = await runTransformer({
+    plugin: {
+      source: "function transform() { return JSON.stringify({ o: typeof Object, a: typeof Array, m: typeof Math, p: typeof Promise, s: typeof String }) }",
+    },
+    input: null,
+  })
+  assert.equal(intrinsics.ok, true)
+  assert.deepEqual(JSON.parse(intrinsics.output), {
+    o: 'function',
+    a: 'function',
+    m: 'object',
+    p: 'function',
+    s: 'function',
+  })
+
+  const envRead = await runTransformer({
+    plugin: {
+      source: "function transform() { return globalThis.constructor.constructor('return typeof process.env')() }",
+    },
+    input: null,
+  })
+  assert.equal(envRead.ok, false)
+})
+
 test('runTransformer: 基本调用 string input 转大写', async () => {
   const result = await runTransformer({
     plugin: examplePlugin,

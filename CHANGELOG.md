@@ -72,6 +72,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Snapshotted bounded transformer output inside the worker and detached thrown-value errors without Promise/thenable assimilation, getter execution, Proxy traversal, or object coercion.
 - Hardened transformer sandbox invocation options against accessors, inherited fields, Proxy traps, resource-value coercion, and caller-controlled validate-only mode.
 - Enforced the 512 KiB transformer source ceiling inside the sandbox for inline and regular-file sources, including stat-to-read growth detection.
+- Cut the transformer VM prototype chain so constructor-based escapes stay inside the context realm and cannot read worker process, environment, or module capabilities.
 
 ## [0.11.31] - 2026-08-20
 
