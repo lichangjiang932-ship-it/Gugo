@@ -3505,6 +3505,43 @@ test('plugin disposer definitions reject accessors and inherited methods without
   assert.equal(inheritedRegistry.getPlugin('inherited-disposer-definition'), null)
 })
 
+test('async visible contribution revocation cannot await self-unregister', async () => {
+  let registry = null
+  let selfUnregisterError = null
+  registry = createRuntimePluginRegistry({
+    registerTool() {
+      return async () => {
+        await Promise.resolve()
+        try {
+          await registry.unregisterPlugin('visible-revocation-self-unregister')
+        } catch (error) {
+          selfUnregisterError = error
+        }
+      }
+    },
+  })
+  await registry.registerPlugin(manifest('visible-revocation-self-unregister', {
+    contributes: ['tool:visible_revocation_self_unregister'],
+  }), (ctx) => {
+    ctx.tools.register({
+      name: 'visible_revocation_self_unregister',
+      spec: {
+        ...TOOL_SPEC,
+        function: { ...TOOL_SPEC.function, name: 'visible_revocation_self_unregister' },
+      },
+      exec: async () => ({ ok: true }),
+    })
+  })
+
+  assert.equal(
+    await settleWithin(registry.unregisterPlugin('visible-revocation-self-unregister')),
+    true,
+  )
+  assert.equal(selfUnregisterError?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(selfUnregisterError?.retryable, false)
+  assert.equal(registry.getPlugin('visible-revocation-self-unregister'), null)
+})
+
 test('visible contribution revocation errors are detached before aggregation', async () => {
   let messageGetterCalls = 0
   const thrown = {}

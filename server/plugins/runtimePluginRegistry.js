@@ -432,14 +432,30 @@ export function createRuntimePluginRegistry(options = {}) {
   }
 
   const revokeVisibleEffects = (record) => {
-    for (const dispose of [...record.visibleEffects].reverse()) {
-      try {
-        dispose()
-      } catch (error) {
-        record.revocationErrors.push(isolatePluginDisposerError(error, record.manifest.id))
+    if (record.revocationPromise) return record.revocationPromise
+    const invocation = { record, kind: 'revoke', active: true }
+    const revocation = cleanupScope.run(invocation, async () => {
+      const pending = []
+      for (const dispose of [...record.visibleEffects].reverse()) {
+        try {
+          pending.push(dispose())
+        } catch (error) {
+          record.revocationErrors.push(isolatePluginDisposerError(error, record.manifest.id))
+        }
       }
-    }
-    record.visibleEffects.clear()
+      record.visibleEffects.clear()
+      for (const result of pending) {
+        try {
+          await result
+        } catch (error) {
+          record.revocationErrors.push(isolatePluginDisposerError(error, record.manifest.id))
+        }
+      }
+    })
+    record.revocationPromise = revocation.finally(() => {
+      invocation.active = false
+    })
+    return record.revocationPromise
   }
 
   const detachBinding = (binding) => {
@@ -780,6 +796,7 @@ export function createRuntimePluginRegistry(options = {}) {
       eventContributions: new Set(),
       visibleEffects: new Set(),
       revocationErrors: [],
+      revocationPromise: null,
       activeCallbacks: 0,
       callbackDrainWaiters: new Set(),
     }
@@ -827,7 +844,7 @@ export function createRuntimePluginRegistry(options = {}) {
       return pluginSnapshot(record)
     } catch (error) {
       record.state = 'failed'
-      revokeVisibleEffects(record)
+      await revokeVisibleEffects(record)
       const rollbackErrors = [
         ...record.revocationErrors,
         ...await disposePluginEffects(record),
@@ -867,8 +884,10 @@ export function createRuntimePluginRegistry(options = {}) {
     if (record.state === 'installing') {
       record.cancelRequested = true
       record.state = 'cancelling'
-      revokeVisibleEffects(record)
-      record.cancelPromise = record.installSettled
+      record.cancelPromise = (async () => {
+        await revokeVisibleEffects(record)
+        await record.installSettled
+      })()
       await record.cancelPromise
       return !plugins.has(normalizedId)
     }
@@ -887,9 +906,9 @@ export function createRuntimePluginRegistry(options = {}) {
       throw new Error(`plugin is required by active plugins: ${dependents.join(', ')}`)
     }
     record.state = 'uninstalling'
-    revokeVisibleEffects(record)
     emitAudit('plugin.uninstalling', { pluginId: normalizedId })
     record.uninstallPromise = (async () => {
+      await revokeVisibleEffects(record)
       await waitForCallbacksToDrain(record)
       const errors = [
         ...record.revocationErrors,

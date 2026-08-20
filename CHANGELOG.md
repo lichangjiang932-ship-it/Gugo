@@ -59,6 +59,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Isolated trusted UI registry notifications with fixed listener batches, preventing observer exceptions or subscription mutation from changing contribution lifecycle outcomes.
 - Consumed native Promise rejections from UI registry observers without assimilating custom thenables, preventing unhandled async notification failures or deferred plugin code execution.
 - Detached visible-contribution revocation failures before audit and aggregation, preventing raw error identity, accessors, causes, stacks, or retry claims from crossing plugin cleanup boundaries.
+- Moved visible-contribution revocation into a coalesced async cleanup scope, preserving immediate visibility removal while preventing delayed self-unregister/shutdown completion cycles.
 
 ## [0.11.31] - 2026-08-20
 
