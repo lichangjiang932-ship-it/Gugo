@@ -9,6 +9,7 @@ import {
 import { createPluginContext } from './pluginContext.js'
 import { snapshotRuntimeModelProvider } from './pluginModelProvider.js'
 import { snapshotPluginServiceData } from './pluginServiceData.js'
+import { createRuntimePluginToolExecutor } from './pluginToolInvocation.js'
 import { registerModelProviderAdapter } from '../adapters/modelProviderRegistry.js'
 import {
   createEffectTracker,
@@ -181,13 +182,6 @@ export function createRuntimePluginRegistry({
   let promptSequence = 0
   let shuttingDown = false
   let shutdownPromise = null
-
-  const pluginToolUnavailableError = (record, name) => {
-    const error = new Error(`plugin tool is unavailable: ${record.manifest.id}/${name}`)
-    error.code = 'PLUGIN_TOOL_UNAVAILABLE'
-    error.retryable = false
-    return error
-  }
 
   const finishCallback = (record) => {
     record.activeCallbacks -= 1
@@ -612,10 +606,12 @@ export function createRuntimePluginRegistry({
     const dispose = registerTool({
       name,
       spec,
-      async exec(...args) {
-        if (record.state !== 'active') throw pluginToolUnavailableError(record, name)
-        return invokePluginCallback(record, 'tool', pluginExec, args)
-      },
+      exec: createRuntimePluginToolExecutor({
+        record,
+        name,
+        exec: pluginExec,
+        invoke: invokePluginCallback,
+      }),
       // Runtime plugins are process-level host contributions. A plugin has no
       // authenticated request identity here, so accepting a caller-supplied
       // userId would let it forge tenant scope. User-scoped tools must be
