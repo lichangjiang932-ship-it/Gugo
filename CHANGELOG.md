@@ -57,6 +57,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Replaced plugin effect `instanceof Set` checks with intrinsic Set brand validation, preventing Proxy `getPrototypeOf` traps and iterator substitution during cleanup registration.
 - Hardened model-provider and endpoint kind registration/query boundaries to require real strings, preventing object coercion before registry reads or state changes.
 - Isolated trusted UI registry notifications with fixed listener batches, preventing observer exceptions or subscription mutation from changing contribution lifecycle outcomes.
+- Consumed native Promise rejections from UI registry observers without assimilating custom thenables, preventing unhandled async notification failures or deferred plugin code execution.
 
 ## [0.11.31] - 2026-08-20
 

@@ -16,7 +16,7 @@ import {
 
 const EmptyContribution = () => null
 
-test('UI contribution notifications isolate observer failures and snapshot each batch', () => {
+test('UI contribution notifications isolate observer failures and snapshot each batch', async () => {
   const calls = []
   const listeners = new Set()
   const lateListener = () => calls.push('late')
@@ -34,6 +34,14 @@ test('UI contribution notifications isolate observer failures and snapshot each 
 
   notifyUiContributionListeners(listeners)
   assert.deepEqual(calls, ['throwing', 'removed', 'throwing', 'late'])
+
+  let thenCalls = 0
+  notifyUiContributionListeners(new Set([
+    async () => { throw new Error('async observer failure must be consumed') },
+    () => ({ then() { thenCalls += 1 } }),
+  ]))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(thenCalls, 0)
 })
 
 test('first-party pages use the shared UI route contribution seam', () => {
