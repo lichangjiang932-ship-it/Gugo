@@ -33,6 +33,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Snapshotted runtime service methods at registration and fenced service result/error completion inside provider callback accounting, preventing method swaps, Proxy traps, raw causes, and retry control from escaping the lifecycle boundary.
 - Isolated runtime event inputs/results/errors inside lifecycle accounting, hid and restored model-request capabilities, projected request failures as metadata only, and discarded observer return capabilities.
 - Kept runtime model-provider thenable checks, result/state snapshots, shape validation, and thrown-value sanitization inside synchronous lifecycle accounting, exporting only detached non-retryable errors.
+- Fenced runtime prompt thenable checks, text normalization, block-size validation, and thrown-value sanitization inside synchronous lifecycle accounting while preserving fail-open auditing.
 
 ## [0.11.31] - 2026-08-20
 

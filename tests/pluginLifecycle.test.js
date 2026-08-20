@@ -796,6 +796,95 @@ test('runtime prompt contributions are bounded, synchronous, deterministic, and 
   assert.equal(await registry.unregisterPlugin('prompt-bounds-plugin'), true)
 })
 
+test('runtime prompt completion remains inside synchronous callback accounting', async () => {
+  const registry = createRuntimePluginRegistry()
+  let unregisterAttempt = null
+  await registry.registerPlugin(manifest('prompt-result-accounting-plugin', {
+    contributes: ['prompt:result-accounting'],
+  }), (ctx) => {
+    ctx.prompts.register({
+      id: 'result-accounting',
+      render: () => new Proxy({ text: 'not accepted' }, {
+        get(target, key, receiver) {
+          if (key === 'then' && !unregisterAttempt) {
+            unregisterAttempt = registry.unregisterPlugin('prompt-result-accounting-plugin').then(
+              (value) => ({ value }),
+              (error) => ({ error }),
+            )
+          }
+          return Reflect.get(target, key, receiver)
+        },
+      }),
+    })
+  })
+
+  assert.deepEqual(registry.renderPromptBlocks(), {
+    blocks: [],
+    errors: [{
+      id: 'result-accounting',
+      pluginId: 'prompt-result-accounting-plugin',
+      code: 'PLUGIN_PROMPT_RESULT_INVALID',
+    }],
+  })
+  const attempted = await settleWithin(unregisterAttempt)
+  assert.equal(attempted.value, undefined)
+  assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(registry.getPlugin('prompt-result-accounting-plugin')?.state, 'active')
+  assert.equal(await registry.unregisterPlugin('prompt-result-accounting-plugin'), true)
+})
+
+test('runtime prompt thrown values are sanitized before callback accounting ends', async () => {
+  const registry = createRuntimePluginRegistry()
+  let unregisterAttempt = null
+  let messageGetterCalls = 0
+  const thrown = {}
+  Object.defineProperties(thrown, {
+    message: {
+      get() {
+        messageGetterCalls += 1
+        return 'getter must not execute'
+      },
+    },
+    code: { value: 'PLUGIN_CUSTOM_PROMPT_FAILURE' },
+    retryable: { value: true },
+    cause: { value: { promptCapability: true } },
+  })
+  const trappedError = new Proxy(thrown, {
+    getOwnPropertyDescriptor(target, key) {
+      if (!unregisterAttempt) {
+        unregisterAttempt = registry.unregisterPlugin('prompt-error-accounting-plugin').then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        )
+      }
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+  await registry.registerPlugin(manifest('prompt-error-accounting-plugin', {
+    contributes: ['prompt:error-accounting'],
+  }), (ctx) => {
+    ctx.prompts.register({
+      id: 'error-accounting',
+      render: () => { throw trappedError },
+    })
+  })
+
+  assert.deepEqual(registry.renderPromptBlocks(), {
+    blocks: [],
+    errors: [{
+      id: 'error-accounting',
+      pluginId: 'prompt-error-accounting-plugin',
+      code: 'PLUGIN_CUSTOM_PROMPT_FAILURE',
+    }],
+  })
+  assert.equal(messageGetterCalls, 0)
+  const attempted = await settleWithin(unregisterAttempt)
+  assert.equal(attempted.value, undefined)
+  assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(registry.getPlugin('prompt-error-accounting-plugin')?.state, 'active')
+  assert.equal(await registry.unregisterPlugin('prompt-error-accounting-plugin'), true)
+})
+
 test('runtime prompt contribution count and total byte budgets fail open', async () => {
   const countRegistry = createRuntimePluginRegistry()
   const countIds = Array.from({ length: 17 }, (_, index) => `count-context-${index}`)

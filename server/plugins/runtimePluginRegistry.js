@@ -9,6 +9,7 @@ import {
 import { createPluginContext } from './pluginContext.js'
 import { createRuntimePluginEventListener } from './pluginEventInvocation.js'
 import { snapshotRuntimeModelProvider } from './pluginModelProvider.js'
+import { createRuntimePluginPromptRenderer } from './pluginPromptInvocation.js'
 import { createRuntimePluginService } from './pluginServiceInvocation.js'
 import { createRuntimePluginToolExecutor } from './pluginToolInvocation.js'
 import { registerModelProviderAdapter } from '../adapters/modelProviderRegistry.js'
@@ -26,7 +27,6 @@ const PLUGIN_TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/
 const PLUGIN_MODEL_PROVIDER_KIND_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const PLUGIN_PROMPT_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const MAX_PLUGIN_PROMPT_BLOCKS = 16
-const MAX_PLUGIN_PROMPT_BLOCK_BYTES = 16 * 1024
 const MAX_PLUGIN_PROMPT_TOTAL_BYTES = 64 * 1024
 const PLUGIN_SERVICE_CONSUMER_STATES = new Set([
   'installing',
@@ -469,14 +469,20 @@ export function createRuntimePluginRegistry({
     if (promptContributions.has(id)) {
       throw new Error(`plugin prompt already registered: ${id}`)
     }
-    if (typeof definition.render !== 'function') {
+    const render = definition.render
+    if (typeof render !== 'function') {
       throw new TypeError('plugin prompt render must be a function')
     }
     const contribution = {
       id,
       pluginId: record.manifest.id,
       record,
-      render: definition.render,
+      render: createRuntimePluginPromptRenderer({
+        record,
+        id,
+        render,
+        invokeSync: invokePluginCallbackSync,
+      }),
       sequence: ++promptSequence,
     }
     promptContributions.set(id, contribution)
@@ -517,30 +523,16 @@ export function createRuntimePluginRegistry({
             `runtime prompt block limit exceeded at ${contribution.id}`,
           )
         }
-        const rendered = invokePluginCallbackSync(
-          contribution.record,
-          'prompt',
-          contribution.render,
-          [scope],
-        )
-        if (rendered == null || rendered === '') continue
-        if (typeof rendered !== 'string') {
-          throw promptRenderError('PLUGIN_PROMPT_RESULT_INVALID', 'plugin prompt render must return text')
-        }
-        const text = rendered.trim()
-        if (!text) continue
-        const bytes = Buffer.byteLength(text, 'utf8')
-        if (bytes > MAX_PLUGIN_PROMPT_BLOCK_BYTES) {
-          throw promptRenderError('PLUGIN_PROMPT_BLOCK_TOO_LARGE', 'plugin prompt block exceeds 16 KiB')
-        }
-        if (totalBytes + bytes > MAX_PLUGIN_PROMPT_TOTAL_BYTES) {
+        const rendered = contribution.render(scope)
+        if (rendered == null) continue
+        if (totalBytes + rendered.bytes > MAX_PLUGIN_PROMPT_TOTAL_BYTES) {
           throw promptRenderError('PLUGIN_PROMPT_TOTAL_TOO_LARGE', 'runtime prompt blocks exceed 64 KiB')
         }
-        totalBytes += bytes
+        totalBytes += rendered.bytes
         blocks.push(Object.freeze({
           id: contribution.id,
           pluginId: contribution.pluginId,
-          text,
+          text: rendered.text,
         }))
       } catch (error) {
         const code = String(error?.code || 'PLUGIN_PROMPT_RENDER_FAILED').slice(0, 80)

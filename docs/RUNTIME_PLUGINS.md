@@ -75,7 +75,7 @@ plugin `exec`、result snapshot 和 thrown-value sanitization 全部位于同一
 
 `render(scope)` 必须同步返回字符串或 `null`。scope 是冻结的白名单对象，仅包含 `userId`、`sessionId`、`agentId` 和最多 32 个已解析 `skillIds`；不会提供原始 query、transcript、tool trace、workspace instructions 或 canary prompt。plugin 不能选择 message role、插入位置或替换宿主块。宿主将有效输出固定放在 memory 后、workspace instructions/canary overlay 前，并仅把 `pluginId:promptId` provenance 写入 assistant model context，不持久化 prompt 正文。
 
-宿主限制最多 16 个有效块、每块 16 KiB、总计 64 KiB。异步返回、非文本、超限或 render 异常均只省略对应块并产生脱敏 `plugin.prompt_failed` audit；不会阻断 turn，也不会截断后继续执行。该 API 只属于随宿主启动的可信进程内代码。磁盘 transformer 没有 registry context，因此不能注入 prompt、React/renderer JavaScript 或取得上述 scope。
+宿主限制最多 16 个有效块、每块 16 KiB、总计 64 KiB。thenable 检查、文本归一化、单块字节校验和 thrown-value sanitization 均在同一个同步 callback accounting scope 内完成；返回 Proxy 不能在 callback drain 后触发反射。抛出值仅通过 own data-property 读取有界 `message/code`，再生成新的 `retryable=false` Error，不传原始 identity、getter、cause、stack 或其他属性。异步返回、非文本、超限或 render 异常均只省略对应块并产生脱敏 `plugin.prompt_failed` audit；不会阻断 turn，也不会截断后继续执行。该 API 只属于随宿主启动的可信进程内代码。磁盘 transformer 没有 registry context，因此不能注入 prompt、React/renderer JavaScript 或取得上述 scope。
 
 ## Model provider lifecycle
 
