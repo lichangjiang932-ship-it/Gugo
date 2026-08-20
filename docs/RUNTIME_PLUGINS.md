@@ -51,6 +51,8 @@ setup 失败仍走原有原子回滚：已注册的 tool/event/prompt/service/pr
 
 setup 本身运行在显式 installation scope：setup 不能等待卸载自身或等待 registry shutdown，否则分别以 `PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK` / `PLUGIN_CALLBACK_SHUTDOWN_DEADLOCK` 立即失败。setup Promise/thenable completion 和返回 effect 的注册时 descriptor traversal 也位于该 scope；setup 抛出值只投影 own data-property 的有界 `message/code` 到新的 `retryable=false` Error，默认 code 为 `PLUGIN_SETUP_FAILED`，不泄露原始 identity、accessor、cause 或 stack。
 
+setup 返回或 `context.lifecycle.onDispose()` 接收的 effect 数组必须由 own `length` 与稠密 own data-property 元素组成；宿主不读取数组 iterator、getter、prototype 或稀疏项。Set 集合仅通过内建 `Set.prototype.values` 展开，不调用实例覆写的 `Symbol.iterator`；循环集合及非法数组以 `PLUGIN_DISPOSER_DEFINITION_INVALID`、`retryable=false` 在注册 disposer 前拒绝。集合展开后立即捕获每个 disposer 的 own method，后续替换原数组、Set 或 callback 不改变 cleanup 链。
+
 对象型 disposer 只接受 own data-property function `dispose` 或 `uninstall`，并在注册时捕获方法；getter、prototype callback 和清理期 method swap 不会成为可执行 cleanup。disposer 抛出值在 cleanup scope 结束前仅通过 own data-property 投影有界 `message/code`，转换为新的 `retryable=false` Error；原始 identity、accessor、cause、stack 和其他属性不进入 audit 或 `AggregateError`，非法 code 统一为 `PLUGIN_DISPOSER_FAILED`。
 
 registry constructor 的 `config/registerTool/registerModelProvider/audit` 只从 options 自身的 data property 捕获；getter 不执行，prototype adapter 被忽略，创建后的 method swap 不改变已安装宿主 adapter。非法 constructor adapter 以 `PLUGIN_HOST_ADAPTER_INVALID`、`retryable=false` 在 plugin 安装前拒绝。

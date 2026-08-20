@@ -1787,6 +1787,91 @@ test('plugin setup return-effect traversal remains inside installation accountin
   assert.equal(cleanupCalls, 1)
 })
 
+test('plugin effect arrays use dense own descriptor snapshots without iterator access', async () => {
+  const registry = createRuntimePluginRegistry()
+  const calls = []
+  let propertyReads = 0
+  let iteratorGetterCalls = 0
+  const original = () => calls.push('original')
+  const source = [original]
+  Object.defineProperty(source, Symbol.iterator, {
+    configurable: true,
+    get() {
+      iteratorGetterCalls += 1
+      return Array.prototype[Symbol.iterator]
+    },
+  })
+  const effects = new Proxy(source, {
+    get(target, key, receiver) {
+      propertyReads += 1
+      return Reflect.get(target, key, receiver)
+    },
+  })
+
+  await registry.registerPlugin(manifest('effect-array-descriptor-snapshot'), (ctx) => {
+    ctx.lifecycle.onDispose(effects)
+  })
+  source[0] = () => calls.push('mutated')
+  assert.equal(propertyReads, 0)
+  assert.equal(iteratorGetterCalls, 0)
+  assert.equal(await registry.unregisterPlugin('effect-array-descriptor-snapshot'), true)
+  assert.deepEqual(calls, ['original'])
+})
+
+test('plugin effect arrays reject accessors, sparse entries, and inherited entries', async () => {
+  let getterCalls = 0
+  const accessorEffects = []
+  Object.defineProperty(accessorEffects, 0, {
+    get() {
+      getterCalls += 1
+      return () => {}
+    },
+  })
+  const sparseEffects = new Array(1)
+  const inheritedEffects = new Array(1)
+  Object.setPrototypeOf(inheritedEffects, { 0: () => {} })
+
+  for (const [pluginId, effects] of [
+    ['accessor-effect-array', accessorEffects],
+    ['sparse-effect-array', sparseEffects],
+    ['inherited-effect-array', inheritedEffects],
+  ]) {
+    const registry = createRuntimePluginRegistry()
+    await assert.rejects(
+      registry.registerPlugin(manifest(pluginId), () => effects),
+      (error) => error?.code === 'PLUGIN_DISPOSER_DEFINITION_INVALID'
+        && error?.retryable === false
+        && /array\[0\] must be an own data property/.test(error?.message || ''),
+    )
+    assert.equal(registry.getPlugin(pluginId), null)
+  }
+  assert.equal(getterCalls, 0)
+})
+
+test('plugin effect Sets ignore overridden iterators and snapshot cleanup callbacks', async () => {
+  const registry = createRuntimePluginRegistry()
+  const calls = []
+  let iteratorGetterCalls = 0
+  const original = () => calls.push('original')
+  const effects = new Set([original])
+  Object.defineProperty(effects, Symbol.iterator, {
+    configurable: true,
+    get() {
+      iteratorGetterCalls += 1
+      return function* forgedIterator() {
+        yield () => calls.push('forged')
+      }
+    },
+  })
+
+  await registry.registerPlugin(manifest('effect-set-intrinsic-iterator'), () => effects)
+  effects.delete(original)
+  effects.add(() => calls.push('mutated'))
+  assert.equal(iteratorGetterCalls, 0)
+  assert.equal(await registry.unregisterPlugin('effect-set-intrinsic-iterator'), true)
+  assert.deepEqual(calls, ['original'])
+})
+
 test('plugin setup thrown values cross as detached non-retryable errors', async () => {
   const registry = createRuntimePluginRegistry()
   let unregisterAttempt = null

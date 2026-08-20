@@ -75,13 +75,72 @@ export function isolatePluginSetupError(thrown, pluginId) {
   return isolatePluginLifecycleError(thrown, pluginId, 'setup', 'PLUGIN_SETUP_FAILED')
 }
 
-function flattenEffects(value, target) {
+function effectCollectionError(message) {
+  const error = new TypeError(message)
+  error.code = 'PLUGIN_DISPOSER_DEFINITION_INVALID'
+  error.retryable = false
+  return error
+}
+
+function snapshotEffectArray(value) {
+  let lengthDescriptor
+  try {
+    lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+  } catch {
+    throw effectCollectionError('plugin side effect array length must be an own data property')
+  }
+  const length = lengthDescriptor?.value
+  if (!lengthDescriptor
+    || !Object.hasOwn(lengthDescriptor, 'value')
+    || !Number.isSafeInteger(length)
+    || length < 0) {
+    throw effectCollectionError('plugin side effect array length must be an own data property')
+  }
+  const snapshot = []
+  for (let index = 0; index < length; index += 1) {
+    let descriptor
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    } catch {
+      throw effectCollectionError(`plugin side effect array[${index}] must be an own data property`)
+    }
+    if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
+      throw effectCollectionError(`plugin side effect array[${index}] must be an own data property`)
+    }
+    snapshot.push(descriptor.value)
+  }
+  return snapshot
+}
+
+function flattenEffects(value, target, collections = new WeakSet()) {
   if (value == null) return
-  if (Array.isArray(value) || value instanceof Set) {
-    for (const item of value) flattenEffects(item, target)
+  const isArray = Array.isArray(value)
+  const isSet = !isArray && value instanceof Set
+  if (!isArray && !isSet) {
+    target.push(value)
     return
   }
-  target.push(value)
+  if (collections.has(value)) {
+    throw effectCollectionError('plugin side effect collections must not contain cycles')
+  }
+  collections.add(value)
+  try {
+    if (isArray) {
+      for (const item of snapshotEffectArray(value)) {
+        flattenEffects(item, target, collections)
+      }
+      return
+    }
+    let values
+    try {
+      values = Set.prototype.values.call(value)
+    } catch {
+      throw effectCollectionError('plugin side effect set must be a genuine Set')
+    }
+    for (const item of values) flattenEffects(item, target, collections)
+  } finally {
+    collections.delete(value)
+  }
 }
 
 function once(disposer) {

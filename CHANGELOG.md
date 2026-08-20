@@ -47,6 +47,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Snapshotted trusted UI contribution definitions and dense input/tool-name arrays once before manifest validation and installation, preventing accessor, prototype, method-swap, sparse-array, and TOCTOU influence.
 - Hardened trusted UI registry queries to accept only real strings and return frozen plugin lists, preventing object-coercion callbacks and caller-side list mutation.
 - Snapshotted runtime plugin plain-data and tool-schema array lengths from own descriptors, preventing Proxy property-read execution and post-descriptor length TOCTOU.
+- Hardened setup/disposer effect collections to dense own-data arrays and intrinsic Set traversal, rejecting accessor, prototype, sparse, iterator-override, and cyclic collection influence.
 
 ## [0.11.31] - 2026-08-20
 
