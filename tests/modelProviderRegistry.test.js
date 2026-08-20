@@ -12,7 +12,12 @@ import {
   isNativeProviderKind,
   registerModelProviderAdapter,
 } from '../server/adapters/nativeModelProviders.js'
-import { resolveEndpointProfile } from '../server/utils/endpointProfile.js'
+import { registerEndpointKind, resolveEndpointProfile } from '../server/utils/endpointProfile.js'
+import {
+  getModelProviderAdapter,
+  hasModelProviderAdapter,
+  unregisterModelProviderAdapter,
+} from '../server/adapters/modelProviderRegistry.js'
 import { createRuntimePluginRegistry } from '../server/plugins/runtimePluginRegistry.js'
 
 function adapter() {
@@ -146,6 +151,35 @@ test('model provider registry rejects duplicate kinds, accessors, inherited meth
     assert.throws(() => registerModelProviderAdapter('duplicate-native', adapter()), /already registered/)
   } finally {
     dispose()
+  }
+})
+
+test('model provider kind boundaries reject object coercion without changing registry state', () => {
+  let propertyReads = 0
+  const hostileKind = new Proxy({}, {
+    get() {
+      propertyReads += 1
+      throw new Error('kind coercion must not execute')
+    },
+  })
+  const dispose = registerModelProviderAdapter('strict-kind-native', adapter())
+  try {
+    assert.throws(
+      () => registerModelProviderAdapter(hostileKind, adapter()),
+      /model provider kind must be a string/,
+    )
+    assert.throws(
+      () => registerEndpointKind(hostileKind),
+      /endpoint kind must be a string/,
+    )
+    assert.equal(getModelProviderAdapter(hostileKind), null)
+    assert.equal(hasModelProviderAdapter(hostileKind), false)
+    assert.equal(unregisterModelProviderAdapter(hostileKind), false)
+    assert.equal(isNativeProviderKind(hostileKind), false)
+    assert.equal(hasModelProviderAdapter('strict-kind-native'), true)
+    assert.equal(propertyReads, 0)
+  } finally {
+    assert.equal(dispose(), true)
   }
 })
 

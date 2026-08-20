@@ -22,7 +22,8 @@ export function listNativeProviderKinds() {
 }
 
 export function isNativeProviderKind(kind = '') {
-  const normalized = String(kind || '').trim().toLowerCase()
+  if (typeof kind !== 'string') return false
+  const normalized = kind.trim().toLowerCase()
   return NATIVE_PROVIDER_KINDS.has(normalized) || hasModelProviderAdapter(normalized)
 }
 

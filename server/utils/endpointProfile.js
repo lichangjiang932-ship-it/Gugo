@@ -33,7 +33,10 @@ const CUSTOM_ENDPOINT_KIND_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const CUSTOM_ENDPOINT_KINDS = new Set()
 
 export function registerEndpointKind(kind) {
-  const normalized = String(kind || '').trim().toLowerCase()
+  if (typeof kind !== 'string') {
+    throw new TypeError('endpoint kind must be a string matching [a-z0-9][a-z0-9_-]{0,63}')
+  }
+  const normalized = kind.trim().toLowerCase()
   if (!CUSTOM_ENDPOINT_KIND_RE.test(normalized)) {
     throw new TypeError('endpoint kind must match [a-z0-9][a-z0-9_-]{0,63}')
   }

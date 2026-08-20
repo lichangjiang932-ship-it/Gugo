@@ -5,11 +5,18 @@ const adapters = new Map()
 const endpointKindDisposers = new Map()
 
 function normalizeKind(kind) {
-  const value = String(kind || '').trim().toLowerCase()
+  if (typeof kind !== 'string') {
+    throw new TypeError('model provider kind must be a string matching [a-z0-9][a-z0-9_-]{0,63}')
+  }
+  const value = kind.trim().toLowerCase()
   if (!PROVIDER_KIND_RE.test(value)) {
     throw new TypeError('model provider kind must match [a-z0-9][a-z0-9_-]{0,63}')
   }
   return value
+}
+
+function normalizeQueryKind(kind) {
+  return typeof kind === 'string' ? kind.trim().toLowerCase() : null
 }
 
 function ownMethod(adapter, name, { required = false } = {}) {
@@ -69,7 +76,8 @@ export function registerModelProviderAdapter(kind, adapter) {
 }
 
 export function unregisterModelProviderAdapter(kind) {
-  const normalizedKind = String(kind || '').trim().toLowerCase()
+  const normalizedKind = normalizeQueryKind(kind)
+  if (normalizedKind === null) return false
   const deleted = adapters.delete(normalizedKind)
   endpointKindDisposers.get(normalizedKind)?.()
   endpointKindDisposers.delete(normalizedKind)
@@ -77,11 +85,13 @@ export function unregisterModelProviderAdapter(kind) {
 }
 
 export function getModelProviderAdapter(kind) {
-  return adapters.get(String(kind || '').trim().toLowerCase()) || null
+  const normalizedKind = normalizeQueryKind(kind)
+  return normalizedKind === null ? null : adapters.get(normalizedKind) || null
 }
 
 export function hasModelProviderAdapter(kind) {
-  return adapters.has(String(kind || '').trim().toLowerCase())
+  const normalizedKind = normalizeQueryKind(kind)
+  return normalizedKind === null ? false : adapters.has(normalizedKind)
 }
 
 export function listModelProviderAdapterKinds() {
