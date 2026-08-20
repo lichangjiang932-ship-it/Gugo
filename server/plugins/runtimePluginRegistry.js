@@ -7,6 +7,7 @@ import {
   registerDynamicTool,
 } from '../utils/toolSchemaCatalog.js'
 import { createPluginContext } from './pluginContext.js'
+import { snapshotRuntimeModelProvider } from './pluginModelProvider.js'
 import { snapshotPluginServiceData } from './pluginServiceData.js'
 import { registerModelProviderAdapter } from '../adapters/modelProviderRegistry.js'
 import {
@@ -218,8 +219,13 @@ export function createRuntimePluginRegistry({
       const result = callbackScope.run(invocation, () => callback(...args))
       if (result && typeof result.then === 'function') {
         void Promise.resolve(result).catch(() => {})
-        const error = new TypeError('plugin prompt render must be synchronous')
-        error.code = 'PLUGIN_PROMPT_ASYNC_UNSUPPORTED'
+        const isPrompt = kind === 'prompt'
+        const error = new TypeError(isPrompt
+          ? 'plugin prompt render must be synchronous'
+          : 'plugin model provider callbacks must be synchronous')
+        error.code = isPrompt
+          ? 'PLUGIN_PROMPT_ASYNC_UNSUPPORTED'
+          : 'PLUGIN_MODEL_PROVIDER_ASYNC_UNSUPPORTED'
         error.retryable = false
         throw error
       }
@@ -633,7 +639,13 @@ export function createRuntimePluginRegistry({
       throw new TypeError('model provider kind must match [a-z0-9][a-z0-9_-]{0,63}')
     }
     assertContributionDeclared(record, `model-provider:${normalizedKind}`)
-    const dispose = registerModelProvider(normalizedKind, adapter)
+    const wrappedAdapter = snapshotRuntimeModelProvider({
+      record,
+      kind: normalizedKind,
+      adapter,
+      invokeSync: invokePluginCallbackSync,
+    })
+    const dispose = registerModelProvider(normalizedKind, wrappedAdapter)
     if (typeof dispose !== 'function') {
       throw new TypeError('model provider registration must return a disposer')
     }

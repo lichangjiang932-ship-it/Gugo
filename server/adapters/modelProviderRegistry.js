@@ -12,29 +12,37 @@ function normalizeKind(kind) {
   return value
 }
 
+function ownMethod(adapter, name, { required = false } = {}) {
+  const descriptor = Object.getOwnPropertyDescriptor(adapter, name)
+  if (!descriptor) {
+    if (required) throw new TypeError(`model provider adapter.${name} must be an own function property`)
+    return null
+  }
+  if (!Object.hasOwn(descriptor, 'value') || typeof descriptor.value !== 'function') {
+    throw new TypeError(`model provider adapter.${name} must be an own function property`)
+  }
+  return descriptor.value
+}
+
 function snapshotAdapter(adapter) {
   if (!adapter || typeof adapter !== 'object' || Array.isArray(adapter)) {
     throw new TypeError('model provider adapter must be an object')
   }
-  for (const name of ['buildRequest', 'parseResponse']) {
-    if (typeof adapter[name] !== 'function') {
-      throw new TypeError(`model provider adapter.${name} must be a function`)
-    }
-  }
+  const buildRequest = ownMethod(adapter, 'buildRequest', { required: true })
+  const parseResponse = ownMethod(adapter, 'parseResponse', { required: true })
+  const extractUsage = ownMethod(adapter, 'extractUsage')
   const streamMethods = ['createStreamState', 'consumeStreamPayload', 'finishStream']
-  const streamMethodCount = streamMethods.filter((name) => typeof adapter[name] === 'function').length
+  const streamCallbacks = streamMethods.map((name) => ownMethod(adapter, name))
+  const streamMethodCount = streamCallbacks.filter(Boolean).length
   if (streamMethodCount !== 0 && streamMethodCount !== streamMethods.length) {
     throw new TypeError('model provider streaming adapter must define createStreamState, consumeStreamPayload, and finishStream together')
   }
-  if (adapter.extractUsage !== undefined && typeof adapter.extractUsage !== 'function') {
-    throw new TypeError('model provider adapter.extractUsage must be a function when present')
-  }
   return Object.freeze({
-    buildRequest: adapter.buildRequest,
-    parseResponse: adapter.parseResponse,
-    ...(typeof adapter.extractUsage === 'function' ? { extractUsage: adapter.extractUsage } : {}),
+    buildRequest,
+    parseResponse,
+    ...(extractUsage ? { extractUsage } : {}),
     ...(streamMethodCount === streamMethods.length
-      ? Object.fromEntries(streamMethods.map((name) => [name, adapter[name]]))
+      ? Object.fromEntries(streamMethods.map((name, index) => [name, streamCallbacks[index]]))
       : {}),
   })
 }

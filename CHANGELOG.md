@@ -26,6 +26,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Restricted tool events so `event:pre-tool` can replace only args on an isolated call copy and `event:post-tool` receives only an immutable outcome snapshot, preserving host-owned identity, checkpoint, registration, idempotency, validation, approval, audit, and result boundaries.
 - Converted pre-step, compaction, and turn-stopping events to fail-open immutable observers with metadata-only context, preventing event declarations from bypassing exact prompt/tool contributions or rewriting host terminal and recovery state.
 - Replaced raw runtime service lookup with lifecycle-aware invocation, declared provider dependencies, own-method dispatch, and bounded immutable data snapshots so stale consumers and service results cannot leak process capabilities.
+- Fenced runtime model-provider adapters behind own synchronous methods and plugin callback accounting, preventing stale request/stream snapshots from executing plugin code after unload.
 
 ## [0.11.31] - 2026-08-20
 
