@@ -18,10 +18,116 @@ const SANDBOX_DATA_LIMITS = Object.freeze({
 const WORKER_SOURCE = `
 const { parentPort, workerData } = require('node:worker_threads')
 const vm = require('node:vm')
+const { types: nodeTypes } = require('node:util')
+
+function outputError(reason) {
+  const error = new TypeError('Plugin sandbox output must contain bounded plain data: ' + reason)
+  error.code = 'PLUGIN_SANDBOX_OUTPUT_INVALID'
+  return error
+}
+
+function snapshotOutput(input, plainObjectPrototype) {
+  const seen = new WeakSet()
+  let nodes = 0
+  let bytes = 0
+
+  const clone = (value, depth) => {
+    nodes += 1
+    if (nodes > ${SANDBOX_DATA_LIMITS.maxNodes}) throw outputError('data has too many nodes')
+    if (depth > ${SANDBOX_DATA_LIMITS.maxDepth}) throw outputError('data is too deep')
+    if (value === undefined || value === null || typeof value === 'boolean') return value
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) throw outputError('numbers must be finite')
+      return value
+    }
+    if (typeof value === 'string') {
+      bytes += Buffer.byteLength(value, 'utf8')
+      if (bytes > ${SANDBOX_DATA_LIMITS.maxBytes}) throw outputError('data is too large')
+      return value
+    }
+    if (!value || typeof value !== 'object') {
+      throw outputError('functions and non-data values are not allowed')
+    }
+    if (nodeTypes.isProxy(value)) throw outputError('Proxy values are not allowed')
+    if (nodeTypes.isPromise(value)) throw outputError('Promise values are not allowed')
+    if (seen.has(value)) throw outputError('cycles are not allowed')
+    seen.add(value)
+    try {
+      if (Array.isArray(value)) {
+        const descriptors = Object.getOwnPropertyDescriptors(value)
+        const lengthDescriptor = descriptors.length
+        if (!lengthDescriptor
+          || !Object.hasOwn(lengthDescriptor, 'value')
+          || !Number.isSafeInteger(lengthDescriptor.value)
+          || lengthDescriptor.value < 0) {
+          throw outputError('arrays must expose an own data length')
+        }
+        const output = []
+        for (let index = 0; index < lengthDescriptor.value; index += 1) {
+          const descriptor = descriptors[index]
+          if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
+            throw outputError('arrays must be dense data arrays')
+          }
+          output.push(clone(descriptor.value, depth + 1))
+        }
+        return output
+      }
+      const prototype = Object.getPrototypeOf(value)
+      if (prototype !== plainObjectPrototype && prototype !== null) {
+        throw outputError('objects must be plain data objects')
+      }
+      const descriptors = Object.getOwnPropertyDescriptors(value)
+      const output = {}
+      for (const key of Reflect.ownKeys(descriptors)) {
+        if (typeof key !== 'string') throw outputError('object keys must be strings')
+        const descriptor = descriptors[key]
+        if (!Object.hasOwn(descriptor, 'value')) {
+          throw outputError('getters and setters are not allowed')
+        }
+        bytes += Buffer.byteLength(key, 'utf8')
+        if (bytes > ${SANDBOX_DATA_LIMITS.maxBytes}) throw outputError('data is too large')
+        Object.defineProperty(output, key, {
+          value: clone(descriptor.value, depth + 1),
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        })
+      }
+      return output
+    } finally {
+      seen.delete(value)
+    }
+  }
+
+  return clone(input, 0)
+}
+
+function ownErrorText(err, key) {
+  if (!err || typeof err !== 'object' || nodeTypes.isProxy(err)) return null
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(err, key)
+    return descriptor && Object.hasOwn(descriptor, 'value') && typeof descriptor.value === 'string'
+      ? descriptor.value
+      : null
+  } catch {
+    return null
+  }
+}
 
 function truncateError(err) {
-  const msg = err && typeof err.message === 'string' ? err.message : String(err)
-  return msg.slice(0, ${ERROR_LIMIT})
+  let message = ownErrorText(err, 'message')
+  if (message === null && (typeof err === 'string'
+    || typeof err === 'number'
+    || typeof err === 'boolean'
+    || typeof err === 'bigint')) {
+    message = String(err)
+  }
+  return (message || 'plugin_error').slice(0, ${ERROR_LIMIT})
+}
+
+function stableErrorCode(err) {
+  const code = ownErrorText(err, 'code')
+  return code === 'PLUGIN_SANDBOX_OUTPUT_INVALID' ? code : undefined
 }
 
 try {
@@ -41,18 +147,18 @@ try {
     filename: 'plugin-transformer.js',
   })
   const transform = vm.runInContext('module.exports', context)
+  const plainObjectPrototype = vm.runInContext('Object.prototype', context)
   if (typeof transform !== 'function') {
     throw new Error('transform must be a function')
   }
   if (validateOnly) {
     parentPort.postMessage({ ok: true })
   } else {
-    const output = transform(input)
-    JSON.stringify(output)
+    const output = snapshotOutput(transform(input), plainObjectPrototype)
     parentPort.postMessage({ ok: true, output })
   }
 } catch (err) {
-  parentPort.postMessage({ ok: false, error: truncateError(err) })
+  parentPort.postMessage({ ok: false, code: stableErrorCode(err), error: truncateError(err) })
 }
 `
 
@@ -177,7 +283,13 @@ async function runTransformerWorker({
         settle(validateOnly ? { ok: true } : { ok: true, output: message.output })
         return
       }
-      settle({ ok: false, error: String(message?.error || 'plugin_error').slice(0, ERROR_LIMIT) })
+      const error = message && typeof message.error === 'string'
+        ? message.error.slice(0, ERROR_LIMIT)
+        : 'plugin_error'
+      const code = message && message.code === 'PLUGIN_SANDBOX_OUTPUT_INVALID'
+        ? message.code
+        : undefined
+      settle(code ? { ok: false, code, error } : { ok: false, error })
     })
 
     worker.once('error', (err) => {

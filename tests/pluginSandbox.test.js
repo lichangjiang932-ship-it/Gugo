@@ -171,6 +171,35 @@ test('runTransformer: object input 转大写', async () => {
   assert.deepEqual(result.output, { text: 'HI' })
 })
 
+test('plugin sandbox output is bounded plain data without getter, Proxy, or thenable execution', async () => {
+  const invalidSources = [
+    "function transform() { return Object.defineProperty({}, 'secret', { enumerable: true, get() { throw new Error('output-getter-ran') } }) }",
+    "function transform() { return new Proxy({}, { getOwnPropertyDescriptor() { throw new Error('output-proxy-trap-ran') }, getPrototypeOf() { throw new Error('output-proxy-trap-ran') } }) }",
+    "async function transform() { return 'async-output' }",
+    "function transform() { return { then() { throw new Error('output-then-ran') } } }",
+    "function transform() { return 'x'.repeat((64 * 1024) + 1) }",
+    "function transform() { return Object.create({ inherited: true }) }",
+  ]
+  for (const source of invalidSources) {
+    const result = await runTransformer({ plugin: { source }, input: null })
+    assert.equal(result.ok, false)
+    assert.equal(result.code, 'PLUGIN_SANDBOX_OUTPUT_INVALID')
+    assert.doesNotMatch(result.error, /output-(?:getter|proxy-trap|then)-ran/)
+  }
+})
+
+test('plugin sandbox thrown-value projection does not execute message accessors or object coercion', async () => {
+  const result = await runTransformer({
+    plugin: {
+      source: "function transform() { const error = {}; Object.defineProperty(error, 'message', { get() { throw new Error('message-getter-ran') } }); error.toString = function () { throw new Error('to-string-ran') }; throw error }",
+    },
+    input: null,
+  })
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'plugin_error')
+  assert.doesNotMatch(result.error, /message-getter-ran|to-string-ran/)
+})
+
 test('runTransformer: 超时后终止 worker', async () => {
   const timeoutMs = 100
   const result = await runTransformer({

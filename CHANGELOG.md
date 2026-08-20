@@ -69,6 +69,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Rejected Proxy prompt-scope inputs and skill arrays before descriptor traversal, preventing pre-render trap execution.
 - Hardened transformer sandbox definitions and capability snapshots against accessors, Proxy traps, overridden array methods, and source coercion.
 - Snapshotted bounded transformer input before worker creation, rejecting getters, capabilities, cycles, special prototypes, and nested Proxy values without trap execution.
+- Snapshotted bounded transformer output inside the worker and detached thrown-value errors without Promise/thenable assimilation, getter execution, Proxy traversal, or object coercion.
 
 ## [0.11.31] - 2026-08-20
 
