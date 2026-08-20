@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import '../src/plugins/firstPartyUiContributions.js'
 import { resolveSettingsSectionFromSearch, settingsPathForSection } from '../src/lib/settingsNavigation.js'
+import { notifyUiContributionListeners } from '../src/plugins/uiContributionNotifications.js'
 import {
   UI_CONTRIBUTION_SLOTS,
   getUiPlugin,
@@ -14,6 +15,26 @@ import {
 } from '../src/plugins/uiContributionRegistry.js'
 
 const EmptyContribution = () => null
+
+test('UI contribution notifications isolate observer failures and snapshot each batch', () => {
+  const calls = []
+  const listeners = new Set()
+  const lateListener = () => calls.push('late')
+  const removedListener = () => calls.push('removed')
+  listeners.add(() => {
+    calls.push('throwing')
+    listeners.delete(removedListener)
+    listeners.add(lateListener)
+    throw new Error('observer failure must not escape')
+  })
+  listeners.add(removedListener)
+
+  notifyUiContributionListeners(listeners)
+  assert.deepEqual(calls, ['throwing', 'removed'])
+
+  notifyUiContributionListeners(listeners)
+  assert.deepEqual(calls, ['throwing', 'removed', 'throwing', 'late'])
+})
 
 test('first-party pages use the shared UI route contribution seam', () => {
   const routes = listUiContributions('route').filter((entry) => entry.pluginId === 'gugo-first-party')

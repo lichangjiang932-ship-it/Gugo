@@ -1,5 +1,6 @@
 import { Component as ReactComponent, Fragment, createElement, useSyncExternalStore } from 'react'
 import { normalizePluginManifest } from '../../shared/pluginManifest.js'
+import { notifyUiContributionListeners } from './uiContributionNotifications.js'
 
 export const UI_CONTRIBUTION_SLOTS = Object.freeze([
   'route',
@@ -170,7 +171,7 @@ function refreshSnapshots(changedSlots) {
       .sort((left, right) => left.order - right.order || left.key.localeCompare(right.key))
     snapshots.set(slot, Object.freeze(values))
   }
-  for (const listener of listeners) listener()
+  notifyUiContributionListeners(listeners)
 }
 
 function installUiContributions(normalized) {

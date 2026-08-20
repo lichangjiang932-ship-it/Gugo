@@ -56,6 +56,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Replaced sync callback thenable assimilation with own-descriptor detection and native-Promise-only rejection handling, preventing custom `then()` code from escaping lifecycle accounting.
 - Replaced plugin effect `instanceof Set` checks with intrinsic Set brand validation, preventing Proxy `getPrototypeOf` traps and iterator substitution during cleanup registration.
 - Hardened model-provider and endpoint kind registration/query boundaries to require real strings, preventing object coercion before registry reads or state changes.
+- Isolated trusted UI registry notifications with fixed listener batches, preventing observer exceptions or subscription mutation from changing contribution lifecycle outcomes.
 
 ## [0.11.31] - 2026-08-20
 
