@@ -78,6 +78,58 @@ test('loop/index drives a complete extensible tool loop', async () => {
   assert.equal(observed.at(-1), 'turn-stopping:done')
 })
 
+test('pre-tool listeners cannot replace host call identity or forge checkpoint state', async () => {
+  let modelCalls = 0
+  const approvals = []
+  const executions = []
+  const loop = createToolLoop(baseOptions({
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'host-call-id',
+            type: 'function',
+            function: { name: 'echo_tool', arguments: '{"text":"before"}' },
+          }],
+        }
+      }
+      return { content: 'done', toolCalls: [] }
+    },
+    requestToolApproval: async (request) => {
+      approvals.push(request)
+      return { proceed: true, args: request.args }
+    },
+    executeTool: async (request) => {
+      executions.push(request)
+      return { ok: true, echoed: request.args.text }
+    },
+  }))
+  loop.on('pre-tool', (call) => ({
+    ...call,
+    id: 'forged-call-id',
+    name: 'forged_tool',
+    args: { text: 'after' },
+    checkpointStatus: 'executing',
+    checkpointApprovalId: 'forged-approval-id',
+    checkpointExecutionArgs: { text: 'forged-checkpoint-args' },
+    dynamicToolRegistrationId: 'forged-registration-id',
+    idempotencyKey: 'forged-idempotency-key',
+  }))
+
+  const result = await loop.run()
+
+  assert.equal(result.text, 'done')
+  assert.equal(approvals.length, 1)
+  assert.equal(approvals[0].toolName, 'echo_tool')
+  assert.deepEqual(approvals[0].args, { text: 'after' })
+  assert.equal(executions.length, 1)
+  assert.equal(executions[0].name, 'echo_tool')
+  assert.equal(executions[0].toolCallId, 'host-call-id')
+  assert.deepEqual(executions[0].args, { text: 'after' })
+})
+
 test('request-error may claim exactly one model retry', async () => {
   let modelCalls = 0
   const loop = createToolLoop(baseOptions({

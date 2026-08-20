@@ -23,6 +23,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Added manifest-gated trusted runtime prompt-context contributions with fixed additive ordering, frozen metadata-only scope, strict count/byte budgets, fail-open auditing, reversible lifecycle, and no disk-transformer access.
 - Added lifecycle-aware runtime service invocation and a trusted veto-only task review guard that can downgrade but never upgrade core Reviewer verdicts, preserves host evidence, and fails closed when an active guard malfunctions.
 - Added a trusted task plan guard that can only require the existing durable human approval gate, cannot rewrite plans or cancel stricter host policy, and closes retry/manual-completion approval bypasses.
+- Restricted tool events so `event:pre-tool` can replace only args on an isolated call copy and `event:post-tool` receives only an immutable outcome snapshot, preserving host-owned identity, checkpoint, registration, idempotency, validation, approval, audit, and result boundaries.
 
 ## [0.11.31] - 2026-08-20
 
