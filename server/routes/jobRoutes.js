@@ -145,17 +145,31 @@ export async function handleJobRequest(req, res, runtime) {
     }
 
     if (req.method === 'POST' && parts[3] === 'retry') {
-      const job = runtime.retryJob(jobId, { userId })
-      return job
-        ? sendJson(res, 200, { job })
-        : sendJson(res, 404, { error: 'job not found' })
+      try {
+        const job = runtime.retryJob(jobId, { userId })
+        return job
+          ? sendJson(res, 200, { job })
+          : sendJson(res, 404, { error: 'job not found' })
+      } catch (error) {
+        if (error?.code === 'JOB_PLAN_APPROVAL_REQUIRED') {
+          return sendJson(res, 409, { error: error.message, code: error.code })
+        }
+        throw error
+      }
     }
 
     if (req.method === 'POST' && parts[3] === 'steps' && parts[4] && parts[5] === 'retry') {
-      const job = runtime.retryStep(jobId, decodeURIComponent(parts[4]), { userId })
-      return job
-        ? sendJson(res, 200, { job })
-        : sendJson(res, 404, { error: 'step not found' })
+      try {
+        const job = runtime.retryStep(jobId, decodeURIComponent(parts[4]), { userId })
+        return job
+          ? sendJson(res, 200, { job })
+          : sendJson(res, 404, { error: 'step not found' })
+      } catch (error) {
+        if (error?.code === 'JOB_PLAN_APPROVAL_REQUIRED') {
+          return sendJson(res, 409, { error: error.message, code: error.code })
+        }
+        throw error
+      }
     }
 
     // ★ 结构化计划: 步骤完成标记 + evidence
@@ -171,6 +185,9 @@ export async function handleJobRequest(req, res, runtime) {
         if (error?.statusCode === 422 && String(error?.code || '').startsWith('JOB_COMPLETION_EVIDENCE_')) {
           return sendJson(res, 422, { error: error.message, code: error.code })
         }
+        if (error?.code === 'JOB_PLAN_APPROVAL_REQUIRED') {
+          return sendJson(res, 409, { error: error.message, code: error.code })
+        }
         throw error
       }
     }
@@ -181,7 +198,7 @@ export async function handleJobRequest(req, res, runtime) {
       if (!body.title || !body.steps?.length) {
         return sendJson(res, 400, { error: 'title 和 steps 是必填项' })
       }
-      const job = runtime.createPlan({
+      const job = await runtime.createPlan({
         userId,
         title: body.title,
         prompt: body.prompt || body.title,
