@@ -2442,6 +2442,51 @@ test('plugin tool invocation isolates data, host context, and callback-scoped ca
   detachedController.abort()
   assert.equal(detachedSignal.aborted, false)
 
+  let proxySignalReads = 0
+  const proxyController = new AbortController()
+  const proxySignal = new Proxy(proxyController.signal, {
+    get(target, key, receiver) {
+      proxySignalReads += 1
+      return Reflect.get(target, key, receiver)
+    },
+  })
+  const proxySignalResult = await tool.exec(
+    { value: 'proxy-signal', nested: { hostMutable: true } },
+    { signal: proxySignal },
+  )
+  const isolatedProxySignal = receivedScopes[2].signal
+  assert.deepEqual(proxySignalResult, { value: 'proxy-signal', nested: { aborted: false } })
+  assert.equal(proxySignalReads, 0)
+  proxyController.abort()
+  assert.equal(isolatedProxySignal.aborted, false)
+
+  let forgedSignalCalls = 0
+  const forgedSignal = Object.create(AbortSignal.prototype)
+  Object.defineProperties(forgedSignal, {
+    aborted: {
+      get() {
+        forgedSignalCalls += 1
+        return false
+      },
+    },
+    addEventListener: {
+      value() {
+        forgedSignalCalls += 1
+      },
+    },
+    removeEventListener: {
+      value() {
+        forgedSignalCalls += 1
+      },
+    },
+  })
+  const forgedSignalResult = await tool.exec(
+    { value: 'forged-signal', nested: { hostMutable: true } },
+    { signal: forgedSignal },
+  )
+  assert.deepEqual(forgedSignalResult, { value: 'forged-signal', nested: { aborted: false } })
+  assert.equal(forgedSignalCalls, 0)
+
   assert.equal(await registry.unregisterPlugin('tool-boundary-plugin'), true)
 })
 

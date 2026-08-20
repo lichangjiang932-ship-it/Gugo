@@ -81,7 +81,7 @@ runtime registry 绑定每个 Agent Loop 时只捕获 event bus 自身的 `on/of
 
 `context.tools.register({ name, spec, exec })` 的 `exec(args, scope)` 只接收深冻结的 plain-data args 和冻结的 metadata-only scope。scope 固定包含 `name/userId/jobId/stepId/skillId/toolCallId/idempotencyKey/origin/source/signal`；tool name、`origin=plugin` 和 source plugin ID 由宿主写入。真实 `job`、`step`、budget、approval context、checkpoint、registration identity、权限对象和宿主 service 均不跨入 plugin callback。
 
-`signal` 是唯一显式的非数据能力，但不是宿主原始 AbortSignal：wrapper 为每次调用创建独立 signal，只在该 callback 存续期间转发 abort，并在 callback 返回后解除宿主 listener。插件保留的 signal 不会观察后续宿主状态。args 与 result 上限均为 32 层、32768 节点和 8 MiB UTF-8 文本；拒绝 accessor、function、symbol、bigint、特殊 prototype、cycle 和非有限数字，稳定错误分别为 `PLUGIN_TOOL_ARGUMENT_INVALID`、`PLUGIN_TOOL_RESULT_INVALID`，且 `retryable=false`。
+`signal` 是唯一显式的非数据能力，但不是宿主原始 AbortSignal：wrapper 为每次调用创建独立 signal，只在该 callback 存续期间转发 abort，并在 callback 返回后解除宿主 listener。宿主 signal 仅通过 `AbortSignal` / `EventTarget` intrinsic getter 与 listener 方法读取，不调用实例覆写的 `aborted/addEventListener/removeEventListener`；Proxy signal 在任何 intrinsic 访问前 fail-safe 忽略，不能观察内部 symbol 访问或执行 trap。插件保留的 wrapper signal 不会观察 callback 结束后的宿主状态。args 与 result 上限均为 32 层、32768 节点和 8 MiB UTF-8 文本；拒绝 accessor、function、symbol、bigint、特殊 prototype、cycle 和非有限数字，稳定错误分别为 `PLUGIN_TOOL_ARGUMENT_INVALID`、`PLUGIN_TOOL_RESULT_INVALID`，且 `retryable=false`。
 
 plugin `exec`、result snapshot 和 thrown-value sanitization 全部位于同一个 lifecycle callback accounting scope；返回 Proxy 时产生的宿主遍历也不能逃到 callback drain 之后执行。抛出值只投影自己的有界字符串 `message/code`，跨边界生成新的 Error；原始 identity、accessor、cause、stack 和其他属性均不传递，getter 不会被读取。非法或缺失 code 归一为 `PLUGIN_TOOL_EXECUTION_FAILED`，所有 plugin execution error 固定 `retryable=false`；取消只由宿主原始 signal 判定，插件不能通过错误对象触发自动重试。
 

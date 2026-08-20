@@ -1,3 +1,5 @@
+import { types as nodeTypes } from 'node:util'
+
 import { snapshotPluginData } from './pluginServiceData.js'
 
 const DATA_LIMITS = Object.freeze({
@@ -6,6 +8,9 @@ const DATA_LIMITS = Object.freeze({
   maxBytes: 8 * 1024 * 1024,
 })
 const MAX_METADATA_LENGTH = 4_096
+const abortSignalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')?.get
+const addEventListener = EventTarget.prototype.addEventListener
+const removeEventListener = EventTarget.prototype.removeEventListener
 
 function toolError(code, message) {
   const error = new TypeError(message)
@@ -86,19 +91,33 @@ function accountedExecutor(exec, name) {
 function isolatedCancellationSignal(executionContext) {
   const controller = new AbortController()
   const hostSignal = ownValue(executionContext, 'signal')
-  if (!(hostSignal instanceof AbortSignal)) {
+  if (!hostSignal || nodeTypes.isProxy(hostSignal)) {
     return { signal: controller.signal, dispose() {} }
   }
-  if (hostSignal.aborted) {
+  let aborted
+  try {
+    aborted = abortSignalAborted?.call(hostSignal)
+  } catch {
+    return { signal: controller.signal, dispose() {} }
+  }
+  if (aborted) {
     controller.abort()
     return { signal: controller.signal, dispose() {} }
   }
   const abort = () => controller.abort()
-  hostSignal.addEventListener('abort', abort, { once: true })
+  try {
+    addEventListener.call(hostSignal, 'abort', abort, { once: true })
+  } catch {
+    return { signal: controller.signal, dispose() {} }
+  }
   return {
     signal: controller.signal,
     dispose() {
-      hostSignal.removeEventListener('abort', abort)
+      try {
+        removeEventListener.call(hostSignal, 'abort', abort)
+      } catch {
+        // The wrapper signal remains detached even if host cleanup rejects.
+      }
     },
   }
 }
