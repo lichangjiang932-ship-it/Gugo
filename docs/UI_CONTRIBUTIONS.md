@@ -35,7 +35,7 @@ dispose()
 
 每个 contribution 只从定义对象自身的 data property 生成一次注册快照；getter、symbol key 和 prototype 字段不进入 registry，注册后的 `component/path/order` 等 method/value swap 不改变已安装 contribution。输入列表与 `toolNames` 必须是稠密的 own data-property 数组；非法定义以 `UI_CONTRIBUTION_DEFINITION_INVALID`、`retryable=false` 在可见副作用前拒绝。trusted manifest 的声明校验与实际安装复用同一批快照，避免二次遍历或 TOCTOU。
 
-注册结果按 `order`、再按稳定 key 排序。宿主核心 route、settings section 和 workbench tab 是保留目标，扩展不能覆盖；不同插件也不能声明相同目标。`listUiPlugins()` / `getUiPlugin()` 只返回冻结的生命周期快照。
+注册结果按 `order`、再按稳定 key 排序。宿主核心 route、settings section 和 workbench tab 是保留目标，扩展不能覆盖；不同插件也不能声明相同目标。`getUiPlugin()` / `listUiContributions()` 的查询标识只接受真实字符串，不执行对象 coercion callback；`listUiPlugins()` 及其生命周期快照均冻结。
 
 ## Slots
 

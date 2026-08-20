@@ -45,6 +45,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Snapshotted runtime prompt render scope from own string data properties and dense skill ID arrays, rejecting getter, prototype, sparse-array, and coercion callbacks before renderer execution.
 - Snapshotted runtime registry host adapters from constructor option own data properties, preventing getter, prototype, and post-construction method-swap influence.
 - Snapshotted trusted UI contribution definitions and dense input/tool-name arrays once before manifest validation and installation, preventing accessor, prototype, method-swap, sparse-array, and TOCTOU influence.
+- Hardened trusted UI registry queries to accept only real strings and return frozen plugin lists, preventing object-coercion callbacks and caller-side list mutation.
 
 ## [0.11.31] - 2026-08-20
 

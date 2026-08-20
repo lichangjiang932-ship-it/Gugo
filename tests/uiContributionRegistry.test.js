@@ -34,6 +34,32 @@ test('first-party pages use the shared UI route contribution seam', () => {
   assert.equal(listUiPlugins().some((entry) => entry.id === 'gugo-first-party'), true)
 })
 
+test('UI registry queries reject object coercion and return frozen lists', () => {
+  let coercionCalls = 0
+  const coercive = {
+    toString() {
+      coercionCalls += 1
+      return 'gugo-first-party'
+    },
+    [Symbol.toPrimitive]() {
+      coercionCalls += 1
+      return 'route'
+    },
+  }
+
+  assert.equal(getUiPlugin(coercive), null)
+  assert.deepEqual(listUiContributions(coercive), [])
+  assert.throws(() => unregisterUiPlugin(coercive), /UI plugin id is invalid/)
+  assert.equal(coercionCalls, 0)
+
+  const plugins = listUiPlugins()
+  assert.equal(Object.isFrozen(plugins), true)
+  assert.ok(plugins.every((plugin) => Object.isFrozen(plugin)))
+  assert.throws(() => plugins.push({ id: 'forged' }), TypeError)
+  assert.equal(getUiPlugin(' gugo-first-party ')?.id, 'gugo-first-party')
+  assert.equal(listUiContributions(' route '), listUiContributions('route'))
+})
+
 test('trusted UI plugins bind shared manifests, dependencies, and disposal', () => {
   const disposeBase = registerTrustedUiPlugin({
     id: 'test-ui-base',

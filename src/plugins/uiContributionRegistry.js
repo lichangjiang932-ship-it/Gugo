@@ -264,13 +264,13 @@ export function registerTrustedUiPlugin(manifest, inputs) {
 }
 
 export function listUiPlugins() {
-  return [...uiPlugins.values()]
+  return Object.freeze([...uiPlugins.values()]
     .map(uiPluginSnapshot)
-    .sort((left, right) => left.id.localeCompare(right.id))
+    .sort((left, right) => left.id.localeCompare(right.id)))
 }
 
 export function getUiPlugin(pluginIdValue) {
-  const pluginId = String(pluginIdValue || '').trim()
+  const pluginId = typeof pluginIdValue === 'string' ? pluginIdValue.trim() : ''
   return uiPluginSnapshot(uiPlugins.get(pluginId))
 }
 
@@ -302,7 +302,7 @@ export function unregisterUiPlugin(pluginIdValue) {
 }
 
 export function listUiContributions(slotValue) {
-  const slot = String(slotValue || '').trim()
+  const slot = typeof slotValue === 'string' ? slotValue.trim() : ''
   if (!supportedSlots.has(slot)) return Object.freeze([])
   return snapshots.get(slot)
 }
