@@ -3542,6 +3542,50 @@ test('async visible contribution revocation cannot await self-unregister', async
   assert.equal(registry.getPlugin('visible-revocation-self-unregister'), null)
 })
 
+test('visible contribution async completion is consumed and aggregated once', async () => {
+  let disposerCalls = 0
+  let thenCalls = 0
+  const thrown = Object.assign(new Error('visible async revocation failed'), {
+    code: 'PLUGIN_VISIBLE_ASYNC_REVOCATION_FAILURE',
+  })
+  const registry = createRuntimePluginRegistry({
+    registerTool() {
+      return () => {
+        disposerCalls += 1
+        return {
+          then(resolve, reject) {
+            thenCalls += 1
+            reject(thrown)
+          },
+        }
+      }
+    },
+  })
+  await registry.registerPlugin(manifest('visible-revocation-completion-once', {
+    contributes: ['tool:visible_revocation_completion_once'],
+  }), (ctx) => {
+    ctx.tools.register({
+      name: 'visible_revocation_completion_once',
+      spec: {
+        ...TOOL_SPEC,
+        function: { ...TOOL_SPEC.function, name: 'visible_revocation_completion_once' },
+      },
+      exec: async () => ({ ok: true }),
+    })
+  })
+
+  await assert.rejects(
+    registry.unregisterPlugin('visible-revocation-completion-once'),
+    (error) => error instanceof AggregateError
+      && error.errors.length === 1
+      && error.errors[0]?.code === 'PLUGIN_VISIBLE_ASYNC_REVOCATION_FAILURE'
+      && error.errors[0]?.retryable === false,
+  )
+  assert.equal(disposerCalls, 1)
+  assert.equal(thenCalls, 1)
+  assert.equal(registry.getPlugin('visible-revocation-completion-once'), null)
+})
+
 test('visible contribution revocation errors are detached before aggregation', async () => {
   let messageGetterCalls = 0
   const thrown = {}

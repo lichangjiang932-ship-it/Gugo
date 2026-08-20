@@ -181,6 +181,7 @@ function once(disposer) {
 export function createEffectTracker() {
   const effects = []
   const tracked = new Map()
+  const disposed = new Set()
   let accepting = true
 
   const track = (value) => {
@@ -217,23 +218,35 @@ export function createEffectTracker() {
     return registered
   }
 
+  const markDisposed = (disposer) => {
+    if (tracked.get(disposer) !== disposer) return false
+    disposed.add(disposer)
+    return true
+  }
+
   const disposeAll = async () => {
     accepting = false
     const errors = []
     for (let index = effects.length - 1; index >= 0; index -= 1) {
+      const effect = effects[index]
+      if (disposed.has(effect)) continue
       try {
-        await effects[index]()
+        await effect()
       } catch (error) {
         errors.push(error)
+      } finally {
+        disposed.add(effect)
       }
     }
     effects.length = 0
     tracked.clear()
+    disposed.clear()
     return errors
   }
 
   return Object.freeze({
     track,
+    markDisposed,
     disposeAll,
     get size() { return effects.length },
     get closed() { return !accepting },

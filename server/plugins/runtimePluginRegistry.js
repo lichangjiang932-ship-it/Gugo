@@ -438,17 +438,20 @@ export function createRuntimePluginRegistry(options = {}) {
       const pending = []
       for (const dispose of [...record.visibleEffects].reverse()) {
         try {
-          pending.push(dispose())
+          pending.push({ dispose, result: dispose() })
         } catch (error) {
           record.revocationErrors.push(isolatePluginDisposerError(error, record.manifest.id))
+          record.effects.markDisposed(dispose)
         }
       }
       record.visibleEffects.clear()
-      for (const result of pending) {
+      for (const { dispose, result } of pending) {
         try {
           await result
         } catch (error) {
           record.revocationErrors.push(isolatePluginDisposerError(error, record.manifest.id))
+        } finally {
+          record.effects.markDisposed(dispose)
         }
       }
     })
