@@ -24,6 +24,7 @@ import { migrateToV61 } from '../server/migrations/v61EvolutionEvidence.js'
 import { migrateToV62 } from '../server/migrations/v62EvolutionExclusions.js'
 import { migrateToV63 } from '../server/migrations/v63EvolutionCandidates.js'
 import { migrateToV64 } from '../server/migrations/v64EvolutionReplay.js'
+import { migrateToV65 } from '../server/migrations/v65EvolutionEvaluations.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -36,9 +37,48 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 64)
+  assert.equal(LATEST_SCHEMA_VERSION, 65)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v65 persists independent structured evaluations with constrained verdicts', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_candidates (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_replay_runs (id TEXT PRIMARY KEY);
+      INSERT INTO users (id) VALUES ('user-1');
+      INSERT INTO evolution_candidates (id) VALUES ('candidate-1');
+      INSERT INTO evolution_replay_runs (id) VALUES ('replay-1');
+    `)
+    migrateToV65(db)
+    migrateToV65(db)
+    db.prepare(`
+      INSERT INTO evolution_evaluations (
+        id, user_id, replay_id, candidate_id, rubric_version, evaluator_model,
+        independent, verdict, summary, case_assessments_json, metrics_json,
+        issues_json, evaluation_fingerprint, created_at
+      ) VALUES ('evaluation-1', 'user-1', 'replay-1', 'candidate-1', 'v1',
+        'reviewer', 1, 'inconclusive', 'summary', '[]', '{}', '[]', ?, 1)
+    `).run('a'.repeat(64))
+    assert.deepEqual(
+      db.prepare('SELECT independent, verdict, evaluator_model FROM evolution_evaluations').get(),
+      { independent: 1, verdict: 'inconclusive', evaluator_model: 'reviewer' },
+    )
+    assert.throws(() => db.prepare(`
+      UPDATE evolution_evaluations SET independent = 0 WHERE id = 'evaluation-1'
+    `).run(), /CHECK constraint failed/)
+    assert.throws(() => db.prepare(`
+      UPDATE evolution_evaluations SET verdict = 'approved' WHERE id = 'evaluation-1'
+    `).run(), /CHECK constraint failed/)
+    db.prepare("DELETE FROM users WHERE id = 'user-1'").run()
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM evolution_evaluations').get().count, 0)
+  } finally {
+    db.close()
+  }
 })
 
 test('v64 persists immutable replay suites and constrained completed runs', () => {

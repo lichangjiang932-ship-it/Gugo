@@ -14,6 +14,11 @@ import {
   listEvolutionEvidence,
 } from '../services/evolutionEvidenceStore.js'
 import {
+  evaluateEvolutionReplay,
+  getEvolutionEvaluation,
+  listEvolutionEvaluations,
+} from '../services/evolutionEvaluationService.js'
+import {
   createEvolutionReplaySuite,
   getEvolutionReplayRun,
   getEvolutionReplaySuite,
@@ -28,7 +33,9 @@ function errorBody(code, message) {
 }
 
 export async function handleEvolutionRequest(req, res, {
+  evaluatorModelName,
   runCandidateModel,
+  runEvaluationModel,
   runReplayModel,
 } = {}) {
   res.setHeader('Cache-Control', 'no-store')
@@ -186,6 +193,37 @@ export async function handleEvolutionRequest(req, res, {
       }
       const replay = getEvolutionReplayRun({ userId, id: decodeURIComponent(replayMatch[1]) })
       return sendJson(res, 200, { ok: true, replay })
+    }
+    if (url.pathname === '/api/evolution/evaluations') {
+      if (req.method === 'GET') {
+        return sendJson(res, 200, {
+          ok: true,
+          schemaVersion: 1,
+          evaluations: listEvolutionEvaluations({ userId, limit: url.searchParams.get('limit') }),
+        })
+      }
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET 或 POST'))
+      }
+      const body = await readJson(req, { maxBytes: 8 * 1024 })
+      const evaluation = await evaluateEvolutionReplay({
+        userId,
+        replayId: body.replayId,
+        ...(evaluatorModelName !== undefined ? { evaluatorModelName } : {}),
+        ...(typeof runEvaluationModel === 'function' ? { runModel: runEvaluationModel } : {}),
+      })
+      return sendJson(res, 201, { ok: true, evaluation })
+    }
+    const evaluationMatch = url.pathname.match(/^\/api\/evolution\/evaluations\/([^/]+)$/u)
+    if (evaluationMatch) {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
+      }
+      const evaluation = getEvolutionEvaluation({
+        userId,
+        id: decodeURIComponent(evaluationMatch[1]),
+      })
+      return sendJson(res, 200, { ok: true, evaluation })
     }
     return sendJson(res, 404, errorBody('NOT_FOUND', '证据端点不存在'))
   } catch (error) {

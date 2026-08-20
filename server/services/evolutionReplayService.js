@@ -202,6 +202,17 @@ function replayMessages(systemContent, replayCase) {
   ]
 }
 
+function normalizedUsage(value) {
+  if (!value || typeof value !== 'object') return null
+  const keys = ['promptTokens', 'completionTokens', 'totalTokens', 'cacheHitTokens', 'cacheMissTokens']
+  const usage = Object.fromEntries(keys.map((key) => {
+    const number = Number(value[key])
+    return [key, Number.isFinite(number) && number >= 0 ? number : 0]
+  }))
+  if (!keys.some((key) => Number.isFinite(Number(value[key])))) return null
+  return usage
+}
+
 async function replayOne({ runModel, userId, modelName, parameters, systemContent, replayCase, signal }) {
   const startedAt = Date.now()
   const response = await runModel({
@@ -219,9 +230,13 @@ async function replayOne({ runModel, userId, modelName, parameters, systemConten
   if (!raw || raw.length > 12_000) {
     throw serviceError('EVOLUTION_REPLAY_OUTPUT_INVALID', 'replay output is empty or too large', 502)
   }
+  const usage = normalizedUsage(response?.usage)
+  const cost = Number(response?.costUsd)
   return {
     output: sanitizeEvolutionText(raw),
     durationMs: Math.max(0, Date.now() - startedAt),
+    usage,
+    costUsd: usage && Number.isFinite(cost) && cost >= 0 ? cost : null,
   }
 }
 
