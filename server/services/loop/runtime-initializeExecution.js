@@ -1,3 +1,4 @@
+import { observeLoopEvent } from './eventIsolation.js'
 import { assertRuntimeStage } from './runtimeContract.js'
 
 export async function initializeExecution(s) {
@@ -12,12 +13,14 @@ export async function initializeExecution(s) {
   s.finalCheckpointPersisted = false
   s.pendingEphemeralToolMessages = []
   s.iter = Math.max(0, Number(s.restoredState?.iterations) || 0)
-  s.loopEventContext = (extra = {}) => ({
-      job: s.job,
-      step: s.step,
-      signal: s.signal,
+  s.loopEventContext = (extra = {}) => Object.freeze({
+      userId: String(s.job?.userId || '').trim() || null,
+      sessionId: String(s.job?.sessionId || '').trim() || null,
+      jobId: String(s.job?.id || '').trim() || null,
+      stepId: String(s.step?.id || '').trim() || null,
       iteration: s.iter,
-      ...extra,
+      phase: String(extra.phase || '').trim() || null,
+      ...(typeof extra.executed === 'boolean' ? { executed: extra.executed } : {}),
     })
   s.iterationWindow = resolveIterationWindow({
       restoredStart: s.restoredState?.iterationWindowStart,
@@ -137,11 +140,12 @@ export async function initializeExecution(s) {
       await s.onProgress(toolProgressPayload(s.progressState, { iteration, phase }))
     }
   s.emitTurnStopping = async (result, phase = 'turn-stopping') => {
-      await s.activeLoopEvents.serial(
-        'turn-stopping',
-        result,
-        s.loopEventContext({ phase }),
-      )
+      await observeLoopEvent({
+        loopEvents: s.activeLoopEvents,
+        event: 'turn-stopping',
+        value: result,
+        context: s.loopEventContext({ phase }),
+      })
       return result
     }
   s.restoredFinalIsInterrupted = s.restoredState?.final?.interrupted === true

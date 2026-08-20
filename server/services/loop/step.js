@@ -5,10 +5,33 @@ function assertRequest(value) {
   return value
 }
 
+const MODEL_EVENT_CONTEXT_FIELDS = Object.freeze([
+  'userId',
+  'sessionId',
+  'jobId',
+  'stepId',
+  'iteration',
+  'phase',
+  'executed',
+])
+
+function modelEventContext(context, attempt) {
+  const source = context && typeof context === 'object' ? context : {}
+  const metadata = {}
+  for (const field of MODEL_EVENT_CONTEXT_FIELDS) {
+    const value = source[field]
+    if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
+      metadata[field] = value
+    }
+  }
+  metadata.attempt = attempt
+  return Object.freeze(metadata)
+}
+
 async function prepareRequest(loopEvents, request, context, attempt) {
   const initial = assertRequest(request)
   if (!loopEvents || typeof loopEvents.waterfall !== 'function') return initial
-  const prepared = await loopEvents.waterfall('request', initial, { ...context, attempt })
+  const prepared = await loopEvents.waterfall('request', initial, modelEventContext(context, attempt))
   return assertRequest(prepared)
 }
 
@@ -52,12 +75,7 @@ export async function runModelStep({
       error,
       request: failedRequest,
       attempt: 1,
-    }, {
-      ...context,
-      attempt: 1,
-      error,
-      request: failedRequest,
-    })
+    }, modelEventContext(context, 1))
     if (decision?.kind !== 'retry') throw error
     attemptedRequest = decision.request ?? failedRequest
   }

@@ -1,3 +1,5 @@
+import { observeLoopEvent } from './eventIsolation.js'
+
 function assertToolCall(call) {
   if (!call || typeof call !== 'object' || Array.isArray(call)) {
     throw new TypeError('Loop tool call must be an object')
@@ -92,33 +94,14 @@ export async function runPreTool({ loopEvents, call, context = {} } = {}) {
   }
 }
 
-function clonePostToolResult(result) {
-  try {
-    return structuredClone(result)
-  } catch {
-    return {
-      unavailable: true,
-      reason: 'post-tool result was not cloneable data',
-    }
-  }
-}
-
-function deepFreeze(value, seen = new Set()) {
-  if (!value || typeof value !== 'object' || seen.has(value)) return value
-  seen.add(value)
-  for (const child of Object.values(value)) deepFreeze(child, seen)
-  return Object.freeze(value)
-}
-
 /** Observe an isolated immutable snapshot of the final tool outcome. */
 export async function runPostTool({ loopEvents, call, result, context = {} } = {}) {
-  const payload = deepFreeze({
-    call: clonePreToolCall(assertToolCall(call)),
-    result: clonePostToolResult(result),
+  return observeLoopEvent({
+    loopEvents,
+    event: 'post-tool',
+    value: { call: assertToolCall(call), result },
+    context,
   })
-  if (!loopEvents || typeof loopEvents.serial !== 'function') return payload
-  await loopEvents.serial('post-tool', payload, context)
-  return payload
 }
 
 /**

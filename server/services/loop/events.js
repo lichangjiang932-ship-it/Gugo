@@ -28,6 +28,11 @@ export function createLoopEvents() {
     return [...listeners.get(event)]
   }
 
+  const has = (event) => {
+    assertEventName(event)
+    return listeners.get(event).size > 0
+  }
+
   const on = (event, listener) => {
     assertEventName(event)
     assertListener(listener)
@@ -53,6 +58,18 @@ export function createLoopEvents() {
     return results
   }
 
+  const observe = async (event, value, context) => {
+    const results = []
+    for (const listener of snapshot(event)) {
+      try {
+        results.push({ ok: true, value: await listener(value, context) })
+      } catch (error) {
+        results.push({ ok: false, error })
+      }
+    }
+    return results
+  }
+
   const waterfall = async (event, value, context) => {
     let current = value
     for (const listener of snapshot(event)) {
@@ -62,5 +79,5 @@ export function createLoopEvents() {
     return current
   }
 
-  return Object.freeze({ on, off, emit, serial, waterfall })
+  return Object.freeze({ has, on, off, emit, observe, serial, waterfall })
 }

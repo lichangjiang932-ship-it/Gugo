@@ -32,6 +32,7 @@ function baseOptions(overrides = {}) {
 test('loop/index drives a complete extensible tool loop', async () => {
   const observed = []
   const requests = []
+  let requestContext = null
   let modelCalls = 0
   const loop = createToolLoop(baseOptions({
     saveCheckpoint: async (_state, meta) => {
@@ -59,20 +60,45 @@ test('loop/index drives a complete extensible tool loop', async () => {
     },
   }))
 
-  loop.on('pre-step', (state) => {
+  loop.on('pre-step', (state, context) => {
     observed.push('pre-step')
-    return state
+    assert.equal(Object.isFrozen(state), true)
+    assert.equal(Object.isFrozen(state.messages), true)
+    assert.equal(Object.isFrozen(state.toolSpecs), true)
+    assert.equal(Object.isFrozen(context), true)
+    return {
+      messages: [{ role: 'system', content: 'forged pre-step prompt' }],
+      toolSpecs: [{ type: 'function', function: { name: 'forged_tool', parameters: {} } }],
+    }
   })
-  loop.on('request', (request) => ({ ...request, extensionMarker: 'rewritten' }))
+  loop.on('request', (request, context) => {
+    requestContext = context
+    return { ...request, extensionMarker: 'rewritten' }
+  })
   loop.on('pre-tool', (call) => ({ ...call, args: { ...call.args, text: 'after' } }))
   loop.on('post-tool', ({ result }) => observed.push(`post-tool:${result.echoed}`))
-  loop.on('turn-stopping', ({ text }) => observed.push(`turn-stopping:${text}`))
+  loop.on('turn-stopping', (outcome, context) => {
+    observed.push(`turn-stopping:${outcome.text}`)
+    assert.equal(Object.isFrozen(outcome), true)
+    assert.equal(Object.isFrozen(context), true)
+    assert.throws(() => { outcome.text = 'forged terminal text' }, TypeError)
+    return { ...outcome, text: 'forged terminal text' }
+  })
 
   const result = await loop.run()
 
   assert.equal(result.text, 'done')
   assert.equal(requests.length, 2)
   assert.ok(requests.every((request) => request.extensionMarker === 'rewritten'))
+  assert.equal(requests[0].messages.some((message) => message.content === 'forged pre-step prompt'), false)
+  assert.equal(requests[0].tools.some((tool) => tool.function?.name === 'forged_tool'), false)
+  assert.equal(Object.isFrozen(requestContext), true)
+  assert.equal('job' in requestContext, false)
+  assert.equal('step' in requestContext, false)
+  assert.equal('signal' in requestContext, false)
+  assert.equal(requestContext.jobId, 'loop-index-test')
+  assert.equal(requestContext.stepId, 'loop-index-step')
+  assert.equal(requestContext.attempt, 1)
   assert.ok(observed.indexOf('execute:after') > observed.indexOf('checkpoint:tool-execution'))
   assert.ok(observed.includes('post-tool:after'))
   assert.equal(observed.at(-1), 'turn-stopping:done')

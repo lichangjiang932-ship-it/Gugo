@@ -1,3 +1,5 @@
+import { observeLoopEvent } from './eventIsolation.js'
+
 export async function initializeSteering(s) {
   const { ARTIFACT_DELIVERY_GUARD_MARKER, ARTIFACT_RECOVERY_DIAGNOSIS_MARKER, ARTIFACT_RECOVERY_FORCE_MARKER, LIVE_ARTIFACT_CONTRACT_MARKER, LIVE_STEERING_GUARD_MARKER, MAX_INSTALL_ATTEMPT_SIGNATURES, MAX_LOCAL_HTML_DELIVERY_RETRIES, VERIFICATION_TOOLS, allowedArtifactTools, attachJobBudget, callModelWithContextRecovery, createJobBudget, createModelPhaseHeartbeat, createSubagentApprovalContext, createToolLoopGuard, getJobBudget, hasCommandExecutionTool, hasMutationExecutionIntent, installAttemptSignature, isCommandExecutionTool, isContextLengthError, isFileArtifactTool, isForcedToolChoiceCompatibilityError, isProbeLikeCall, parseSkillIdFromPrompt, replaceRuntimeCapabilityBlock, requestedArtifactOutputDirective, resolveArtifactDeliveryTargets, runModelStep, runWithModelBudget, shouldRequirePdfLayoutVerification, stripEphemeralToolMediaMessages, toolNameFromSpec } = s.d
   s.steeringArtifactTerms = new Map([
@@ -379,10 +381,15 @@ export async function initializeSteering(s) {
           },
         })
         if (request.recovery?.compacted === true) {
-          await s.activeLoopEvents.serial('compaction', {
-            recovery: request.recovery,
-            messages: request.messages,
-          }, s.loopEventContext({ phase: 'context-compaction' }))
+          await observeLoopEvent({
+            loopEvents: s.activeLoopEvents,
+            event: 'compaction',
+            value: {
+              recovery: request.recovery,
+              messages: request.messages,
+            },
+            context: s.loopEventContext({ phase: 'context-compaction' }),
+          })
         }
         return {
           ...request,
