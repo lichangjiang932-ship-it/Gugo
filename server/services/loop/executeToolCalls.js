@@ -64,17 +64,58 @@ export function installToolHookBridge({
   }
 }
 
-/** Allow plugins to rewrite a call before validation, approval, and execution. */
+function clonePreToolCall(call) {
+  try {
+    return structuredClone(call)
+  } catch (cause) {
+    const error = new TypeError('Loop tool call must be cloneable data before pre-tool dispatch', { cause })
+    error.code = 'LOOP_PRE_TOOL_CALL_INVALID'
+    throw error
+  }
+}
+
+/** Allow plugins to replace args without taking ownership of call identity or checkpoints. */
 export async function runPreTool({ loopEvents, call, context = {} } = {}) {
   const initial = assertToolCall(call)
   if (!loopEvents || typeof loopEvents.waterfall !== 'function') return initial
-  const prepared = await loopEvents.waterfall('pre-tool', initial, context)
-  return assertToolCall(prepared)
+  const prepared = assertToolCall(await loopEvents.waterfall(
+    'pre-tool',
+    clonePreToolCall(initial),
+    context,
+  ))
+  return {
+    ...initial,
+    args: prepared.args,
+    ...(Object.hasOwn(prepared, TOOL_HOOK_RESULT)
+      ? { [TOOL_HOOK_RESULT]: prepared[TOOL_HOOK_RESULT] }
+      : {}),
+  }
 }
 
-/** Observe the final tool outcome in registration order. */
+function clonePostToolResult(result) {
+  try {
+    return structuredClone(result)
+  } catch {
+    return {
+      unavailable: true,
+      reason: 'post-tool result was not cloneable data',
+    }
+  }
+}
+
+function deepFreeze(value, seen = new Set()) {
+  if (!value || typeof value !== 'object' || seen.has(value)) return value
+  seen.add(value)
+  for (const child of Object.values(value)) deepFreeze(child, seen)
+  return Object.freeze(value)
+}
+
+/** Observe an isolated immutable snapshot of the final tool outcome. */
 export async function runPostTool({ loopEvents, call, result, context = {} } = {}) {
-  const payload = { call: assertToolCall(call), result }
+  const payload = deepFreeze({
+    call: clonePreToolCall(assertToolCall(call)),
+    result: clonePostToolResult(result),
+  })
   if (!loopEvents || typeof loopEvents.serial !== 'function') return payload
   await loopEvents.serial('post-tool', payload, context)
   return payload

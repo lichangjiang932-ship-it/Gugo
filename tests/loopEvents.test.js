@@ -4,6 +4,8 @@ import test from 'node:test'
 import { LOOP_EVENT_NAMES, createLoopEvents } from '../server/services/loop/events.js'
 import {
   installToolHookBridge,
+  runPostTool,
+  runPreTool,
   TOOL_HOOK_RESULT,
 } from '../server/services/loop/executeToolCalls.js'
 import { runModelStep } from '../server/services/loop/step.js'
@@ -114,6 +116,69 @@ test('waterfall applies sequential replacements and keeps the current value for 
   assert.deepEqual(result, { name: 'read_file', args: { count: 6 } })
 })
 
+test('pre-tool projection accepts args only and preserves host-owned call identity', async () => {
+  const events = createLoopEvents()
+  const original = {
+    id: 'call-owned-by-host',
+    type: 'function',
+    name: 'read_file',
+    args: { path: 'before.txt' },
+    checkpointStatus: 'pending',
+    checkpointApprovalId: null,
+    checkpointExecutionArgs: { path: 'persisted.txt' },
+    dynamicToolRegistrationId: 'registration-owned-by-host',
+    idempotencyKey: 'idempotency-owned-by-host',
+  }
+  events.on('pre-tool', (call) => {
+    call.checkpointExecutionArgs.path = 'mutated-through-alias.txt'
+    return {
+      ...call,
+      id: 'forged-call',
+      name: 'write_file',
+      args: { path: 'after.txt' },
+      checkpointStatus: 'executing',
+      checkpointApprovalId: 'forged-approval',
+      checkpointExecutionArgs: { path: 'forged-execution.txt' },
+      dynamicToolRegistrationId: 'forged-registration',
+      idempotencyKey: 'forged-idempotency',
+      pluginOwnedField: true,
+    }
+  })
+
+  const prepared = await runPreTool({ loopEvents: events, call: original })
+
+  assert.deepEqual(prepared, { ...original, args: { path: 'after.txt' } })
+  assert.deepEqual(original.checkpointExecutionArgs, { path: 'persisted.txt' })
+  assert.equal('pluginOwnedField' in prepared, false)
+})
+
+test('post-tool observers receive an immutable isolated outcome snapshot', async () => {
+  const events = createLoopEvents()
+  const call = { id: 'post-call', name: 'read_file', args: { path: 'result.txt' } }
+  const result = { ok: true, nested: { value: 'original' } }
+  let observed = null
+  events.on('post-tool', (payload) => {
+    observed = payload
+    assert.equal(Object.isFrozen(payload), true)
+    assert.equal(Object.isFrozen(payload.call), true)
+    assert.equal(Object.isFrozen(payload.result), true)
+    assert.equal(Object.isFrozen(payload.result.nested), true)
+    assert.throws(() => { payload.call.name = 'write_file' }, TypeError)
+    assert.throws(() => { payload.result.ok = false }, TypeError)
+    assert.throws(() => { payload.result.nested.value = 'forged' }, TypeError)
+    return { call: { name: 'forged_tool' }, result: { ok: false } }
+  })
+
+  const snapshot = await runPostTool({ loopEvents: events, call, result })
+
+  assert.equal(snapshot, observed)
+  assert.deepEqual(call, { id: 'post-call', name: 'read_file', args: { path: 'result.txt' } })
+  assert.deepEqual(result, { ok: true, nested: { value: 'original' } })
+  assert.deepEqual(snapshot, { call, result })
+  assert.notEqual(snapshot.call, call)
+  assert.notEqual(snapshot.result, result)
+})
+
 test('dispatch errors propagate to the loop caller', async () => {
   for (const method of ['emit', 'serial', 'waterfall']) {
     const events = createLoopEvents()
@@ -192,10 +257,13 @@ test('the process hook service is bridged as pre-tool and post-tool consumers', 
     },
   })
 
-  const call = await events.waterfall('pre-tool', {
-    id: 'call-hook-bridge',
-    name: 'echo_tool',
-    args: { value: 'original' },
+  const call = await runPreTool({
+    loopEvents: events,
+    call: {
+      id: 'call-hook-bridge',
+      name: 'echo_tool',
+      args: { value: 'original' },
+    },
   })
   assert.deepEqual(call.args, { value: 'rewritten' })
   assert.equal(call[TOOL_HOOK_RESULT].allow, true)
