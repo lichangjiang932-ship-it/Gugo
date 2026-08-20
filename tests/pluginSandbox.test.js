@@ -100,6 +100,54 @@ test('plugin sandbox capabilities use bounded own descriptors without calling ar
   assert.equal(proxyTrapCalls, 0)
 })
 
+test('plugin sandbox input is bounded plain data without getter or Proxy execution', async () => {
+  const identityPlugin = { source: 'function transform(input) { return input }' }
+  let getterCalls = 0
+  const accessorInput = {}
+  Object.defineProperty(accessorInput, 'secret', {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return 'forged'
+    },
+  })
+  await assert.rejects(
+    () => runTransformer({ plugin: identityPlugin, input: accessorInput }),
+    (error) => error?.code === 'PLUGIN_SANDBOX_INPUT_INVALID'
+      && error?.retryable === false
+      && /getters and setters/.test(error?.message || ''),
+  )
+  assert.equal(getterCalls, 0)
+
+  let proxyTrapCalls = 0
+  const proxyInput = new Proxy({ secret: 'forged' }, {
+    getOwnPropertyDescriptor(target, key) {
+      proxyTrapCalls += 1
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+    getPrototypeOf(target) {
+      proxyTrapCalls += 1
+      return Reflect.getPrototypeOf(target)
+    },
+  })
+  for (const input of [proxyInput, { nested: proxyInput }]) {
+    await assert.rejects(
+      () => runTransformer({ plugin: identityPlugin, input }),
+      (error) => error?.code === 'PLUGIN_SANDBOX_INPUT_INVALID'
+        && error?.retryable === false
+        && /Proxy values/.test(error?.message || ''),
+    )
+  }
+  assert.equal(proxyTrapCalls, 0)
+
+  await assert.rejects(
+    () => runTransformer({ plugin: identityPlugin, input: 'x'.repeat((64 * 1024) + 1) }),
+    (error) => error?.code === 'PLUGIN_SANDBOX_INPUT_INVALID'
+      && error?.retryable === false
+      && /too large/.test(error?.message || ''),
+  )
+})
+
 test('runTransformer: 基本调用 string input 转大写', async () => {
   const result = await runTransformer({
     plugin: examplePlugin,

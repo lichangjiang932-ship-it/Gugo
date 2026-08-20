@@ -3,11 +3,17 @@ import { Worker } from 'node:worker_threads'
 import { performance } from 'node:perf_hooks'
 import { types as nodeTypes } from 'node:util'
 import { PLUGIN_CAPABILITIES } from './pluginManifest.js'
+import { snapshotPluginData } from './pluginServiceData.js'
 
 const DEFAULT_TIMEOUT_MS = 5000
 const DEFAULT_MEMORY_LIMIT_MB = 32
 const ERROR_LIMIT = 1024
 const MAX_CAPABILITY_ENTRIES = 64
+const SANDBOX_DATA_LIMITS = Object.freeze({
+  maxDepth: 32,
+  maxNodes: 8_192,
+  maxBytes: 64 * 1024,
+})
 
 const WORKER_SOURCE = `
 const { parentPort, workerData } = require('node:worker_threads')
@@ -133,6 +139,13 @@ async function runTransformerWorker({
   capabilities = [],
 }) {
   const source = await transformerSource(plugin)
+  const isolatedInput = snapshotPluginData(input, {
+    code: 'PLUGIN_SANDBOX_INPUT_INVALID',
+    label: 'Plugin sandbox input',
+    freeze: false,
+    rejectProxies: true,
+    ...SANDBOX_DATA_LIMITS,
+  })
   const allowedCapabilities = sanitizeCapabilities(capabilities)
   const startedAt = performance.now()
 
@@ -141,7 +154,7 @@ async function runTransformerWorker({
     let terminatingForTimeout = false
     const worker = new Worker(WORKER_SOURCE, {
       eval: true,
-      workerData: { source, input, capabilities: allowedCapabilities, validateOnly },
+      workerData: { source, input: isolatedInput, capabilities: allowedCapabilities, validateOnly },
       resourceLimits: { maxOldGenerationSizeMb: memoryLimitMb },
     })
 

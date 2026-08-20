@@ -68,6 +68,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Hardened runtime tool execution-context, job, and step metadata reads to ignore Proxy or uninspectable containers before plugin callback accounting.
 - Rejected Proxy prompt-scope inputs and skill arrays before descriptor traversal, preventing pre-render trap execution.
 - Hardened transformer sandbox definitions and capability snapshots against accessors, Proxy traps, overridden array methods, and source coercion.
+- Snapshotted bounded transformer input before worker creation, rejecting getters, capabilities, cycles, special prototypes, and nested Proxy values without trap execution.
 
 ## [0.11.31] - 2026-08-20
 

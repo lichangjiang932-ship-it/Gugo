@@ -1,3 +1,5 @@
+import { types as nodeTypes } from 'node:util'
+
 const DEFAULT_MAX_DEPTH = 32
 const DEFAULT_MAX_NODES = 8_192
 const DEFAULT_MAX_BYTES = 1024 * 1024
@@ -9,6 +11,7 @@ export function snapshotPluginData(input, {
   maxDepth = DEFAULT_MAX_DEPTH,
   maxNodes = DEFAULT_MAX_NODES,
   maxBytes = DEFAULT_MAX_BYTES,
+  rejectProxies = false,
 }) {
   const seen = new WeakSet()
   let nodes = 0
@@ -39,6 +42,9 @@ export function snapshotPluginData(input, {
     }
     if (!value || typeof value !== 'object') {
       throw invalid('functions and non-data values are not allowed')
+    }
+    if (rejectProxies && nodeTypes.isProxy(value)) {
+      throw invalid('Proxy values are not allowed')
     }
     if (seen.has(value)) throw invalid('cycles are not allowed')
     seen.add(value)
