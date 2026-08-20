@@ -247,6 +247,40 @@ test('runtime model-provider definitions fail before custom host registration', 
   assert.equal(getterCalls, 0)
 })
 
+test('runtime provider thenable rejection never assimilates plugin code', async () => {
+  let wrappedAdapter = null
+  let thenCalls = 0
+  const registry = createRuntimePluginRegistry({
+    registerModelProvider(_kind, adapter) {
+      wrappedAdapter = adapter
+      return () => {}
+    },
+  })
+  await registry.registerPlugin(manifest('provider-thenable-boundary', {
+    contributes: ['model-provider:thenable-boundary'],
+  }), (ctx) => {
+    ctx.models.providers.register('thenable-boundary', {
+      buildRequest() {
+        return {
+          then() {
+            thenCalls += 1
+          },
+        }
+      },
+      parseResponse() { return {} },
+    })
+  })
+
+  assert.throws(
+    () => wrappedAdapter.buildRequest({}),
+    (error) => error?.code === 'PLUGIN_MODEL_PROVIDER_ASYNC_UNSUPPORTED'
+      && error?.retryable === false,
+  )
+  await Promise.resolve()
+  assert.equal(thenCalls, 0)
+  assert.equal(await registry.unregisterPlugin('provider-thenable-boundary'), true)
+})
+
 test('plugin context config is a detached deeply frozen plain-data snapshot', async () => {
   const source = {
     mode: 'original',
@@ -1513,12 +1547,14 @@ test('runtime prompt scope is an own-data snapshot without getter or coercion ex
 
 test('runtime prompt contributions are bounded, synchronous, deterministic, and fail open', async () => {
   const audit = []
+  let thenCalls = 0
   const registry = createRuntimePluginRegistry({ audit: (event) => audit.push(event) })
   const definitions = [
     ['first-context', () => 'first'],
     ['invalid-context', () => ({ text: 'not accepted' })],
     ['oversized-context', () => 'x'.repeat((16 * 1024) + 1)],
     ['async-context', async () => 'not accepted'],
+    ['thenable-context', () => ({ then() { thenCalls += 1 } })],
     ['second-context', () => 'second'],
   ]
   await registry.registerPlugin(manifest('prompt-bounds-plugin', {
@@ -1540,7 +1576,10 @@ test('runtime prompt contributions are bounded, synchronous, deterministic, and 
     ['invalid-context', 'PLUGIN_PROMPT_RESULT_INVALID'],
     ['oversized-context', 'PLUGIN_PROMPT_BLOCK_TOO_LARGE'],
     ['async-context', 'PLUGIN_PROMPT_ASYNC_UNSUPPORTED'],
+    ['thenable-context', 'PLUGIN_PROMPT_ASYNC_UNSUPPORTED'],
   ])
+  await Promise.resolve()
+  assert.equal(thenCalls, 0)
   assert.deepEqual(
     audit.filter(({ event }) => event === 'plugin.prompt_failed').map(({ promptId, code }) => [promptId, code]),
     rendered.errors.map(({ id, code }) => [id, code]),
@@ -1557,14 +1596,14 @@ test('runtime prompt completion remains inside synchronous callback accounting',
     ctx.prompts.register({
       id: 'result-accounting',
       render: () => new Proxy({ text: 'not accepted' }, {
-        get(target, key, receiver) {
+        getOwnPropertyDescriptor(target, key) {
           if (key === 'then' && !unregisterAttempt) {
             unregisterAttempt = registry.unregisterPlugin('prompt-result-accounting-plugin').then(
               (value) => ({ value }),
               (error) => ({ error }),
             )
           }
-          return Reflect.get(target, key, receiver)
+          return Reflect.getOwnPropertyDescriptor(target, key)
         },
       }),
     })

@@ -93,7 +93,7 @@ plugin `exec`、result snapshot 和 thrown-value sanitization 全部位于同一
 
 `render(scope)` 必须同步返回字符串或 `null`。scope 是冻结的白名单对象，仅包含 `userId`、`sessionId`、`agentId` 和最多 32 个已解析 `skillIds`；宿主只从 render 输入自身的 data property 读取这些字段，字符串不做对象 coercion，`skillIds` 必须是稠密的 own string data-property 数组。getter、prototype/sparse 项或非法类型以 `PLUGIN_PROMPT_SCOPE_INVALID`、`retryable=false` 在 renderer 前拒绝。scope 不会提供原始 query、transcript、tool trace、workspace instructions 或 canary prompt。plugin 不能选择 message role、插入位置或替换宿主块。宿主将有效输出固定放在 memory 后、workspace instructions/canary overlay 前，并仅把 `pluginId:promptId` provenance 写入 assistant model context，不持久化 prompt 正文。
 
-宿主限制最多 16 个有效块、每块 16 KiB、总计 64 KiB。thenable 检查、文本归一化、单块字节校验和 thrown-value sanitization 均在同一个同步 callback accounting scope 内完成；返回 Proxy 不能在 callback drain 后触发反射。抛出值仅通过 own data-property 读取有界 `message/code`，再生成新的 `retryable=false` Error，不传原始 identity、getter、cause、stack 或其他属性。异步返回、非文本、超限或 render 异常均只省略对应块并产生脱敏 `plugin.prompt_failed` audit；不会阻断 turn，也不会截断后继续执行。该 API 只属于随宿主启动的可信进程内代码。磁盘 transformer 没有 registry context，因此不能注入 prompt、React/renderer JavaScript 或取得上述 scope。
+宿主限制最多 16 个有效块、每块 16 KiB、总计 64 KiB。thenable 检查、文本归一化、单块字节校验和 thrown-value sanitization 均在同一个同步 callback accounting scope 内完成；自定义 thenable 只检查 own `then` descriptor，不调用或交给 `Promise.resolve()` assimilate，native Promise 仅通过内建 `Promise.prototype.then` 安装 rejection handler。返回 Proxy 不能在 callback drain 后触发反射或继续运行 thenable 代码。抛出值仅通过 own data-property 读取有界 `message/code`，再生成新的 `retryable=false` Error，不传原始 identity、getter、cause、stack 或其他属性。异步返回、非文本、超限或 render 异常均只省略对应块并产生脱敏 `plugin.prompt_failed` audit；不会阻断 turn，也不会截断后继续执行。该 API 只属于随宿主启动的可信进程内代码。磁盘 transformer 没有 registry context，因此不能注入 prompt、React/renderer JavaScript 或取得上述 scope。
 
 ## Model provider lifecycle
 
@@ -103,7 +103,7 @@ runtime plugin adapter 的每次 callback 都进入该 plugin 的 in-flight call
 
 runtime provider callback 的参数会复制为深冻结 plain-data snapshot，结果也必须通过同一数据边界；上限为 32 层、32768 节点和 16 MiB UTF-8 文本。accessor、function、symbol、bigint、特殊 prototype、cycle 和非有限数字均 fail closed，分别使用 `PLUGIN_MODEL_PROVIDER_ARGUMENT_INVALID` 或 `PLUGIN_MODEL_PROVIDER_RESULT_INVALID`。`createStreamState` 的返回值会被复制为 wrapper 私有的 mutable plain-data state，宿主只持有不可伪造的 opaque token。每次 stream callback 都在独立 working clone 上运行，只有 callback、event result 和新 state 全部验证成功后才原子提交；插件保留的原始对象或旧 callback state 引用不能继续修改实际 state。伪造 token 或 capability state 以 `PLUGIN_MODEL_PROVIDER_STREAM_STATE_INVALID` 拒绝；stream payload 和 event result 仍分别是冻结输入与冻结输出。
 
-provider 的 thenable 检查、result snapshot、shape 校验和下一版 stream state 快照都在同一个同步 callback accounting scope 内完成，返回 Proxy 的反射不能逃到 callback drain 之后。抛出值仅通过 own data-property 读取有界 `message/code`，再生成新的 `retryable=false` Error；原始 identity、getter、cause、stack 和其他属性不跨边界。非法或缺失 code 使用 `PLUGIN_MODEL_PROVIDER_EXECUTION_FAILED`，detached Error 另带宿主写入的 `pluginId/providerKind/method` provenance。
+provider 的 thenable 检查、result snapshot、shape 校验和下一版 stream state 快照都在同一个同步 callback accounting scope 内完成。自定义 thenable 只检查 own `then` descriptor，拒绝时不会调用 `then()` 或通过 `Promise.resolve()` assimilate；只有真正 native Promise 使用内建 `Promise.prototype.then` 消化潜在 rejection。返回 Proxy 的反射和 thenable 代码均不能逃到 callback drain 之后。抛出值仅通过 own data-property 读取有界 `message/code`，再生成新的 `retryable=false` Error；原始 identity、getter、cause、stack 和其他属性不跨边界。非法或缺失 code 使用 `PLUGIN_MODEL_PROVIDER_EXECUTION_FAILED`，detached Error 另带宿主写入的 `pluginId/providerKind/method` provenance。
 
 ## Lifecycle-safe service invocation and policy guards
 

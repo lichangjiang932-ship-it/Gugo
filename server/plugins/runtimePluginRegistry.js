@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { types as nodeTypes } from 'node:util'
 
 import { LOOP_EVENT_NAMES } from '../services/loop/eventNames.js'
 import { CONNECTOR_TOOL_NAMES } from '../services/connectorTools.js'
@@ -171,6 +172,23 @@ function trimmedString(value) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function pluginAsyncResultKind(result) {
+  if (!result || (typeof result !== 'object' && typeof result !== 'function')) return null
+  if (nodeTypes.isPromise(result)) return 'promise'
+  const descriptor = Object.getOwnPropertyDescriptor(result, 'then')
+  if (!descriptor) return null
+  if (!Object.hasOwn(descriptor, 'value')) return 'thenable'
+  return typeof descriptor.value === 'function' ? 'thenable' : null
+}
+
+function suppressNativePromiseRejection(promise) {
+  try {
+    Promise.prototype.then.call(promise, undefined, () => {})
+  } catch {
+    // Async plugin results are rejected regardless of rejection-handler attachment.
+  }
+}
+
 function snapshotLoopEventBus(events) {
   if (!events || (typeof events !== 'object' && typeof events !== 'function')) {
     throw loopEventBusError('on')
@@ -307,8 +325,9 @@ export function createRuntimePluginRegistry(options = {}) {
       return callbackScope.run(invocation, () => {
         try {
           const result = callback(...args)
-          if (result && typeof result.then === 'function') {
-            void Promise.resolve(result).catch(() => {})
+          const asyncResultKind = pluginAsyncResultKind(result)
+          if (asyncResultKind) {
+            if (asyncResultKind === 'promise') suppressNativePromiseRejection(result)
             const isPrompt = kind === 'prompt'
             const error = new TypeError(isPrompt
               ? 'plugin prompt render must be synchronous'

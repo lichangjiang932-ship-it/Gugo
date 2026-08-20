@@ -53,6 +53,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Bounded plugin effect collections to 32 levels, 8192 traversal nodes, and 4096 disposers, failing closed before cleanup registration on oversized input.
 - Moved runtime model-provider required-method and stream-group validation into the wrapper, preventing custom host adapters from registering incomplete or accessor/prototype-backed definitions.
 - Hardened runtime plugin tool cancellation bridging with AbortSignal/EventTarget intrinsics and Proxy fail-safe rejection, preventing host-signal traps or overridden methods from executing before callbacks.
+- Replaced sync callback thenable assimilation with own-descriptor detection and native-Promise-only rejection handling, preventing custom `then()` code from escaping lifecycle accounting.
 
 ## [0.11.31] - 2026-08-20
 
