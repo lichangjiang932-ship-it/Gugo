@@ -50,6 +50,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Hardened setup/disposer effect collections to dense own-data arrays and intrinsic Set traversal, rejecting accessor, prototype, sparse, iterator-override, and cyclic collection influence.
 - Made runtime service argument lists fail closed when they are not real arrays, preventing silent empty-argument execution and object coercion/iterator callbacks.
 - Made plugin effect-batch registration validate fully before committing, preventing caught definition failures from leaving partial cleanup prefixes.
+- Bounded plugin effect collections to 32 levels, 8192 traversal nodes, and 4096 disposers, failing closed before cleanup registration on oversized input.
 
 ## [0.11.31] - 2026-08-20
 

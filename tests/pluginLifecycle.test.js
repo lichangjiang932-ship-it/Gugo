@@ -1914,6 +1914,32 @@ test('plugin effect batches commit atomically after every disposer validates', a
   assert.equal(committedCleanupCalls, 1)
 })
 
+test('plugin effect collections reject excessive depth, nodes, and disposer counts', async () => {
+  let tooDeep = () => {}
+  for (let depth = 0; depth < 34; depth += 1) tooDeep = [tooDeep]
+  const cases = [
+    ['effect-collection-too-deep', tooDeep, /too deep/],
+    ['effect-collection-too-many-nodes', new Array(8_193), /too many nodes/],
+    [
+      'effect-collection-too-many-disposers',
+      Array.from({ length: 4_097 }, () => () => {}),
+      /too many disposers/,
+    ],
+  ]
+
+  for (const [pluginId, effects, message] of cases) {
+    const registry = createRuntimePluginRegistry()
+    await assert.rejects(
+      registry.registerPlugin(manifest(pluginId), () => effects),
+      (error) => error?.code === 'PLUGIN_DISPOSER_DEFINITION_INVALID'
+        && error?.retryable === false
+        && message.test(error?.message || ''),
+    )
+    assert.equal(registry.getPlugin(pluginId), null)
+    assert.deepEqual(registry.listPlugins(), [])
+  }
+})
+
 test('plugin effect Sets ignore overridden iterators and snapshot cleanup callbacks', async () => {
   const registry = createRuntimePluginRegistry()
   const calls = []

@@ -2,6 +2,9 @@ import { normalizePluginManifest } from '../../shared/pluginManifest.js'
 
 const MAX_ERROR_TEXT = 4_096
 const ERROR_CODE_RE = /^[A-Z][A-Z0-9_]{0,127}$/
+const MAX_PLUGIN_EFFECT_COLLECTION_DEPTH = 32
+const MAX_PLUGIN_EFFECT_COLLECTION_NODES = 8_192
+const MAX_PLUGIN_EFFECTS = 4_096
 
 export function normalizeRuntimePluginManifest(manifest) {
   return normalizePluginManifest(manifest)
@@ -96,6 +99,9 @@ function snapshotEffectArray(value) {
     || length < 0) {
     throw effectCollectionError('plugin side effect array length must be an own data property')
   }
+  if (length > MAX_PLUGIN_EFFECT_COLLECTION_NODES) {
+    throw effectCollectionError('plugin side effect collection has too many nodes')
+  }
   const snapshot = []
   for (let index = 0; index < length; index += 1) {
     let descriptor
@@ -112,22 +118,38 @@ function snapshotEffectArray(value) {
   return snapshot
 }
 
-function flattenEffects(value, target, collections = new WeakSet()) {
+function flattenEffects(value, target, state = null, depth = 0) {
+  const traversal = state || {
+    collections: new WeakSet(),
+    nodes: 0,
+    effectCount: 0,
+  }
+  traversal.nodes += 1
+  if (traversal.nodes > MAX_PLUGIN_EFFECT_COLLECTION_NODES) {
+    throw effectCollectionError('plugin side effect collection has too many nodes')
+  }
+  if (depth > MAX_PLUGIN_EFFECT_COLLECTION_DEPTH) {
+    throw effectCollectionError('plugin side effect collection is too deep')
+  }
   if (value == null) return
   const isArray = Array.isArray(value)
   const isSet = !isArray && value instanceof Set
   if (!isArray && !isSet) {
+    traversal.effectCount += 1
+    if (traversal.effectCount > MAX_PLUGIN_EFFECTS) {
+      throw effectCollectionError('plugin side effect collection has too many disposers')
+    }
     target.push(value)
     return
   }
-  if (collections.has(value)) {
+  if (traversal.collections.has(value)) {
     throw effectCollectionError('plugin side effect collections must not contain cycles')
   }
-  collections.add(value)
+  traversal.collections.add(value)
   try {
     if (isArray) {
       for (const item of snapshotEffectArray(value)) {
-        flattenEffects(item, target, collections)
+        flattenEffects(item, target, traversal, depth + 1)
       }
       return
     }
@@ -137,9 +159,9 @@ function flattenEffects(value, target, collections = new WeakSet()) {
     } catch {
       throw effectCollectionError('plugin side effect set must be a genuine Set')
     }
-    for (const item of values) flattenEffects(item, target, collections)
+    for (const item of values) flattenEffects(item, target, traversal, depth + 1)
   } finally {
-    collections.delete(value)
+    traversal.collections.delete(value)
   }
 }
 
