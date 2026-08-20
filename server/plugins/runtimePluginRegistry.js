@@ -436,7 +436,7 @@ export function createRuntimePluginRegistry(options = {}) {
       try {
         dispose()
       } catch (error) {
-        record.revocationErrors.push(error)
+        record.revocationErrors.push(isolatePluginDisposerError(error, record.manifest.id))
       }
     }
     record.visibleEffects.clear()

@@ -3505,6 +3505,58 @@ test('plugin disposer definitions reject accessors and inherited methods without
   assert.equal(inheritedRegistry.getPlugin('inherited-disposer-definition'), null)
 })
 
+test('visible contribution revocation errors are detached before aggregation', async () => {
+  let messageGetterCalls = 0
+  const thrown = {}
+  Object.defineProperties(thrown, {
+    message: {
+      get() {
+        messageGetterCalls += 1
+        return 'getter must not execute'
+      },
+    },
+    code: { value: 'PLUGIN_VISIBLE_REVOCATION_FAILURE' },
+    retryable: { value: true },
+    cause: { value: { hostCapability: true } },
+  })
+  const registry = createRuntimePluginRegistry({
+    registerTool() {
+      return () => { throw thrown }
+    },
+  })
+  await registry.registerPlugin(manifest('visible-revocation-error-boundary', {
+    contributes: ['tool:visible_revocation_error'],
+  }), (ctx) => {
+    ctx.tools.register({
+      name: 'visible_revocation_error',
+      spec: {
+        ...TOOL_SPEC,
+        function: { ...TOOL_SPEC.function, name: 'visible_revocation_error' },
+      },
+      exec: async () => ({ ok: true }),
+    })
+  })
+
+  await assert.rejects(
+    registry.unregisterPlugin('visible-revocation-error-boundary'),
+    (error) => {
+      assert.equal(error instanceof AggregateError, true)
+      assert.equal(error.errors.length, 1)
+      const detached = error.errors[0]
+      assert.notEqual(detached, thrown)
+      assert.equal(detached?.code, 'PLUGIN_VISIBLE_REVOCATION_FAILURE')
+      assert.equal(detached?.retryable, false)
+      assert.equal(detached?.message, 'plugin disposer failed: visible-revocation-error-boundary')
+      assert.equal(detached?.pluginId, 'visible-revocation-error-boundary')
+      assert.equal(detached?.phase, 'dispose')
+      assert.equal(Object.hasOwn(detached, 'cause'), false)
+      return true
+    },
+  )
+  assert.equal(messageGetterCalls, 0)
+  assert.equal(registry.getPlugin('visible-revocation-error-boundary'), null)
+})
+
 test('plugin disposer thrown values are detached before cleanup accounting ends', async () => {
   const registry = createRuntimePluginRegistry()
   let unregisterAttempt = null

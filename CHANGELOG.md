@@ -58,6 +58,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Hardened model-provider and endpoint kind registration/query boundaries to require real strings, preventing object coercion before registry reads or state changes.
 - Isolated trusted UI registry notifications with fixed listener batches, preventing observer exceptions or subscription mutation from changing contribution lifecycle outcomes.
 - Consumed native Promise rejections from UI registry observers without assimilating custom thenables, preventing unhandled async notification failures or deferred plugin code execution.
+- Detached visible-contribution revocation failures before audit and aggregation, preventing raw error identity, accessors, causes, stacks, or retry claims from crossing plugin cleanup boundaries.
 
 ## [0.11.31] - 2026-08-20
 
