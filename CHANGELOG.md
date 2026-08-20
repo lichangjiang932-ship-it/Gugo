@@ -66,6 +66,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Enforced synchronous loop event cleanup completion, consuming native Promise rejections without assimilating custom thenables or traversing Proxy results.
 - Reserved built-in endpoint kinds against generic and runtime plugin adapter replacement, preventing mixed host/custom build, parse, and stream execution.
 - Hardened runtime tool execution-context, job, and step metadata reads to ignore Proxy or uninspectable containers before plugin callback accounting.
+- Rejected Proxy prompt-scope inputs and skill arrays before descriptor traversal, preventing pre-render trap execution.
 
 ## [0.11.31] - 2026-08-20
 

@@ -1,3 +1,5 @@
+import { types as nodeTypes } from 'node:util'
+
 const MAX_BLOCK_BYTES = 16 * 1024
 const MAX_ERROR_TEXT = 4_096
 const ERROR_CODE_RE = /^[A-Z][A-Z0-9_]{0,127}$/
@@ -73,7 +75,7 @@ function scopeText(value, field) {
 
 function scopeSkillIds(value) {
   if (value === undefined) return Object.freeze([])
-  if (!Array.isArray(value)) throw promptScopeError('skillIds')
+  if (nodeTypes.isProxy(value) || !Array.isArray(value)) throw promptScopeError('skillIds')
   const length = ownScopeValue(value, 'length', 'skillIds.length')
   if (!Number.isSafeInteger(length) || length < 0) throw promptScopeError('skillIds.length')
   const normalized = []
@@ -87,7 +89,7 @@ function scopeSkillIds(value) {
 }
 
 export function snapshotRuntimePluginPromptScope(input = {}) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || nodeTypes.isProxy(input)) {
     throw promptScopeError('input')
   }
   return Object.freeze({

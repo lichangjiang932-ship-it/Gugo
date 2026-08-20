@@ -1717,6 +1717,36 @@ test('runtime prompt scope is an own-data snapshot without getter or coercion ex
     (error) => error?.code === 'PLUGIN_PROMPT_SCOPE_INVALID'
       && /skillIds\[0\]/.test(error?.message || ''),
   )
+
+  let proxyInputDescriptorCalls = 0
+  const proxyInput = new Proxy({ userId: 'forged-user' }, {
+    getOwnPropertyDescriptor(target, key) {
+      proxyInputDescriptorCalls += 1
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+  assert.throws(
+    () => registry.renderPromptBlocks(proxyInput),
+    (error) => error?.code === 'PLUGIN_PROMPT_SCOPE_INVALID'
+      && error?.retryable === false
+      && /scope\.input/.test(error?.message || ''),
+  )
+  assert.equal(proxyInputDescriptorCalls, 0)
+
+  let proxySkillsDescriptorCalls = 0
+  const proxySkills = new Proxy(['forged-skill'], {
+    getOwnPropertyDescriptor(target, key) {
+      proxySkillsDescriptorCalls += 1
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+  assert.throws(
+    () => registry.renderPromptBlocks({ skillIds: proxySkills }),
+    (error) => error?.code === 'PLUGIN_PROMPT_SCOPE_INVALID'
+      && error?.retryable === false
+      && /scope\.skillIds/.test(error?.message || ''),
+  )
+  assert.equal(proxySkillsDescriptorCalls, 0)
   assert.equal(scopes.length, 2)
   assert.equal(await registry.unregisterPlugin('prompt-scope-boundary'), true)
 })
