@@ -681,6 +681,44 @@ test('plugin services reject accessor arguments, inherited methods, and capabili
   )
   assert.equal(calls, 0)
 
+  let propertyReads = 0
+  let iteratorGetterCalls = 0
+  let coercionCalls = 0
+  const nonArrayTarget = {
+    toString() {
+      coercionCalls += 1
+      return 'forged'
+    },
+    [Symbol.toPrimitive]() {
+      coercionCalls += 1
+      return 'forged'
+    },
+  }
+  Object.defineProperty(nonArrayTarget, Symbol.iterator, {
+    get() {
+      iteratorGetterCalls += 1
+      return function* forgedArguments() {
+        yield { id: 'forged' }
+      }
+    },
+  })
+  const nonArrayArgs = new Proxy(nonArrayTarget, {
+    get(target, key, receiver) {
+      propertyReads += 1
+      return Reflect.get(target, key, receiver)
+    },
+  })
+  await assert.rejects(
+    registry.invokeService('invalid-service-data', 'review', nonArrayArgs),
+    (error) => error?.code === 'PLUGIN_SERVICE_ARGUMENT_INVALID'
+      && error?.retryable === false
+      && /arguments must be a plain data array/.test(error?.message || ''),
+  )
+  assert.equal(propertyReads, 0)
+  assert.equal(iteratorGetterCalls, 0)
+  assert.equal(coercionCalls, 0)
+  assert.equal(calls, 0)
+
   await assert.rejects(
     registry.invokeService('invalid-service-data', 'inherited', []),
     (error) => error?.code === 'PLUGIN_SERVICE_METHOD_INVALID',

@@ -48,6 +48,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Hardened trusted UI registry queries to accept only real strings and return frozen plugin lists, preventing object-coercion callbacks and caller-side list mutation.
 - Snapshotted runtime plugin plain-data and tool-schema array lengths from own descriptors, preventing Proxy property-read execution and post-descriptor length TOCTOU.
 - Hardened setup/disposer effect collections to dense own-data arrays and intrinsic Set traversal, rejecting accessor, prototype, sparse, iterator-override, and cyclic collection influence.
+- Made runtime service argument lists fail closed when they are not real arrays, preventing silent empty-argument execution and object coercion/iterator callbacks.
 
 ## [0.11.31] - 2026-08-20
 

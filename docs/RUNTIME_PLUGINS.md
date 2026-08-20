@@ -111,7 +111,7 @@ provider 的 thenable 检查、result snapshot、shape 校验和下一版 stream
 
 service method 必须是 service 对象自己的 function data property，不能通过 prototype 或 getter 注入 callback。宿主在 `provide()` 时一次性捕获最多 256 个 own property 中的函数 descriptor；后续 method swap、accessor 或 Proxy descriptor trap 不会改变已注册 callback。无法安全反射的定义在产生可见 service 前以 `PLUGIN_SERVICE_DEFINITION_INVALID`、`retryable=false` 拒绝。
 
-参数与返回值在边界处复制为深冻结 plain-data snapshot，仅允许有限数字、字符串、布尔值、null/undefined、稠密数组和 plain object；拒绝函数、symbol、bigint、accessor、特殊 prototype、cycle、非有限数字、深度超过 32、节点超过 8192 或数据超过 1 MiB。非法参数/结果分别返回 `PLUGIN_SERVICE_ARGUMENT_INVALID` / `PLUGIN_SERVICE_RESULT_INVALID`，因此 service 不能通过返回值泄露 callback、宿主对象或其他进程内能力。
+调用参数列表本身必须是真实数组；对象、iterator 或其他非数组输入不会静默降级为空参数，也不会执行 coercion/iterator callback，而是在 provider callback 前以 `PLUGIN_SERVICE_ARGUMENT_INVALID` 拒绝。参数与返回值在边界处复制为深冻结 plain-data snapshot，仅允许有限数字、字符串、布尔值、null/undefined、稠密数组和 plain object；拒绝函数、symbol、bigint、accessor、特殊 prototype、cycle、非有限数字、深度超过 32、节点超过 8192 或数据超过 1 MiB。非法参数/结果分别返回 `PLUGIN_SERVICE_ARGUMENT_INVALID` / `PLUGIN_SERVICE_RESULT_INVALID`，因此 service 不能通过返回值泄露 callback、宿主对象或其他进程内能力。
 
 service callback 与 result snapshot 位于同一个 provider callback accounting scope，返回 Proxy 时产生的遍历不能逃到 callback drain 之后执行。抛出值只复制自己的有界字符串 `message/code` 到新的 Error；原始 identity、accessor、cause、stack 和其他属性均不跨边界，所有 service failure 固定 `retryable=false`。有效调用计入 provider plugin 的 in-flight callback：卸载先原子撤销 service 可见性，再等待已开始调用完成；service callback 不能同步等待卸载自身，否则以既有 deadlock guard 失败。`context.services.has()` 和 `hasPluginService()` 只返回 lifecycle-aware availability，不返回 service value。
 

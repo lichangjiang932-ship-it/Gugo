@@ -96,7 +96,14 @@ export function createRuntimePluginService({ record, name, value, invoke }) {
       const callback = resolveCallback(method)
       let values
       try {
-        values = snapshotPluginServiceData(Array.isArray(args) ? args : [], {
+        if (!Array.isArray(args)) {
+          throw serviceError(
+            'PLUGIN_SERVICE_ARGUMENT_INVALID',
+            'plugin service arguments must be a plain data array',
+            identity,
+          )
+        }
+        values = snapshotPluginServiceData(args, {
           code: 'PLUGIN_SERVICE_ARGUMENT_INVALID',
           label: 'plugin service arguments',
         })
