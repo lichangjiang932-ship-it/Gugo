@@ -2,17 +2,20 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  createEvolutionCanaryApi,
   createEvolutionReplaySuiteApi,
   decideEvolutionApprovalApi,
   evaluateEvolutionReplayApi,
   generateEvolutionCandidateApi,
   getEvolutionApprovalApi,
   getEvolutionApprovalReviewApi,
+  getEvolutionCanaryApi,
   getEvolutionCandidateApi,
   getEvolutionDatasetApi,
   getEvolutionEvaluationApi,
   getEvolutionReplayRunApi,
   listEvolutionApprovalsApi,
+  listEvolutionCanariesApi,
   listEvolutionCandidatesApi,
   listEvolutionEvaluationsApi,
   listEvolutionEvidenceApi,
@@ -22,6 +25,8 @@ import {
   recordChatFeedback,
   runEvolutionReplayApi,
   setEvolutionEvidenceExcludedApi,
+  startEvolutionCanaryApi,
+  stopEvolutionCanaryApi,
 } from '../src/lib/evolutionClient.js'
 
 test('evolution client persists feedback and reads only the versioned evidence corpus', async () => {
@@ -240,6 +245,55 @@ test('evolution client reviews and records a human decision without an apply or 
     assert.equal(requests[2].url, '/api/evolution/approvals?limit=10')
     assert.equal(requests[3].url, '/api/evolution/approvals/approval%2F1')
     assert.equal(requests.every(({ url }) => !/apply|install|rollout/u.test(url)), true)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('evolution client creates, reads, lists, and manually stops scoped canaries', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url, init })
+    const body = url === '/api/evolution/canaries' && init.method === 'POST'
+      ? { ok: true, canary: { id: 'canary-1', state: 'created' } }
+      : url.startsWith('/api/evolution/canaries?')
+        ? { ok: true, canaries: [] }
+        : url.endsWith('/start')
+          ? { ok: true, canary: { id: 'canary-1', state: 'active' } }
+          : url.endsWith('/stop')
+            ? { ok: true, canary: { id: 'canary-1', state: 'stopped' } }
+            : { ok: true, canary: { id: 'canary-1', state: 'created' } }
+    return new Response(JSON.stringify(body), {
+      status: init.method === 'POST' && !url.endsWith('/stop') ? 201 : 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  try {
+    const input = {
+      approvalId: 'approval-1',
+      sessionIds: ['session-1'],
+      trafficPercent: 5,
+      reason: 'Start a bounded canary',
+    }
+    const created = await createEvolutionCanaryApi(input)
+    await listEvolutionCanariesApi({ limit: 10 })
+    await getEvolutionCanaryApi('canary/1')
+    const started = await startEvolutionCanaryApi('canary/1', 'Explicit start')
+    const stopped = await stopEvolutionCanaryApi('canary/1', 'Manual stop')
+    assert.equal(created.canary.state, 'created')
+    assert.equal(started.canary.state, 'active')
+    assert.equal(stopped.canary.state, 'stopped')
+    assert.equal(requests[0].url, '/api/evolution/canaries')
+    assert.equal(requests[0].init.method, 'POST')
+    assert.deepEqual(JSON.parse(requests[0].init.body), input)
+    assert.equal(requests[1].url, '/api/evolution/canaries?limit=10')
+    assert.equal(requests[2].url, '/api/evolution/canaries/canary%2F1')
+    assert.equal(requests[3].url, '/api/evolution/canaries/canary%2F1/start')
+    assert.deepEqual(JSON.parse(requests[3].init.body), { reason: 'Explicit start' })
+    assert.equal(requests[4].url, '/api/evolution/canaries/canary%2F1/stop')
+    assert.deepEqual(JSON.parse(requests[4].init.body), { reason: 'Manual stop' })
+    assert.equal(requests.every(({ url }) => !/apply|install|activate|rollback/u.test(url)), true)
   } finally {
     globalThis.fetch = originalFetch
   }

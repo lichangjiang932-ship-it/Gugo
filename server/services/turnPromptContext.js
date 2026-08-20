@@ -94,6 +94,7 @@ export function prepareTurnPromptContext({
   recentMessages = [],
   includeRecentTranscript = true,
   query = '',
+  canaryAssignment = null,
   env = process.env,
 } = {}, dependencies = {}) {
   const readAgent = dependencies.getAgent || getAgent
@@ -126,7 +127,14 @@ export function prepareTurnPromptContext({
   const preparedSkills = normalizedSkillIds.map((id) => preparedById.get(id)).filter(Boolean)
 
   const blocks = []
-  const instructions = safeStep('workspace instructions failed', null, () => readInstructions({ env }), warn)
+  const canaryPrompt = canaryAssignment?.target === 'prompt:workspace-instructions'
+    && typeof canaryAssignment?.promptContent === 'string'
+    && canaryAssignment.promptContent.trim()
+    ? canaryAssignment
+    : null
+  const instructions = canaryPrompt
+    ? { text: canaryPrompt.promptContent.trim() }
+    : safeStep('workspace instructions failed', null, () => readInstructions({ env }), warn)
   const identity = safeStep('identity block failed', null, () => buildIdentityBlock({ agent }), warn)
   const ishiki = safeStep('ishiki block failed', null, () => buildIshikiBlock({ agent }), warn)
   const skills = safeStep('skills block failed', null, () => buildSkillsBlockFromPrepared({
@@ -165,5 +173,15 @@ export function prepareTurnPromptContext({
     memoryIds: memory.memoryIds,
     compactionArchiveId: sessions?.sources?.archiveId || null,
     compactionBoundary: sessions?.sources?.compactionBoundary || null,
+    canaryAssignment: canaryPrompt ? {
+      id: canaryPrompt.id,
+      releaseId: canaryPrompt.releaseId,
+      variant: canaryPrompt.variant,
+      bucket: canaryPrompt.bucket,
+      target: canaryPrompt.target,
+      baselineSha256: canaryPrompt.baselineSha256,
+      candidateSha256: canaryPrompt.candidateSha256,
+      releaseFingerprint: canaryPrompt.releaseFingerprint,
+    } : null,
   }
 }

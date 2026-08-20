@@ -26,6 +26,7 @@ import { migrateToV63 } from '../server/migrations/v63EvolutionCandidates.js'
 import { migrateToV64 } from '../server/migrations/v64EvolutionReplay.js'
 import { migrateToV65 } from '../server/migrations/v65EvolutionEvaluations.js'
 import { migrateToV66 } from '../server/migrations/v66EvolutionApprovals.js'
+import { migrateToV67 } from '../server/migrations/v67EvolutionCanaries.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -38,9 +39,78 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 66)
+  assert.equal(LATEST_SCHEMA_VERSION, 67)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v67 persists scoped canary lifecycle, assignments, and terminal outcomes', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_candidates (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_replay_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_evaluations (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_approval_decisions (id TEXT PRIMARY KEY);
+      INSERT INTO users (id) VALUES ('user-1');
+      INSERT INTO evolution_candidates (id) VALUES ('candidate-1');
+      INSERT INTO evolution_replay_runs (id) VALUES ('replay-1');
+      INSERT INTO evolution_evaluations (id) VALUES ('evaluation-1');
+      INSERT INTO evolution_approval_decisions (id) VALUES ('approval-1');
+    `)
+    migrateToV67(db)
+    migrateToV67(db)
+    db.prepare(`
+      INSERT INTO evolution_canary_releases (
+        id, user_id, approval_id, evaluation_id, replay_id, candidate_id,
+        target, traffic_percent, creation_reason, session_ids_json, baseline_sha256,
+        candidate_sha256, release_fingerprint, created_at
+      ) VALUES ('canary-1', 'user-1', 'approval-1', 'evaluation-1', 'replay-1',
+        'candidate-1', 'prompt:workspace-instructions', 5, 'bounded canary', '["session-1"]', ?, ?, ?, 1)
+    `).run('a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64))
+    db.prepare(`
+      INSERT INTO evolution_canary_events (id, user_id, release_id, event_type, reason, created_at)
+      VALUES ('event-1', 'user-1', 'canary-1', 'started', 'manual start', 1)
+    `).run()
+    db.prepare(`
+      INSERT INTO evolution_canary_assignments (
+        id, user_id, release_id, session_id, turn_id, variant, decision_reason, bucket,
+        baseline_sha256, observed_baseline_sha256, candidate_sha256, assigned_at
+      ) VALUES ('assignment-1', 'user-1', 'canary-1', 'session-1', 'turn-1',
+        'candidate', 'traffic_candidate', 4, ?, ?, ?, 2)
+    `).run('a'.repeat(64), 'a'.repeat(64), 'b'.repeat(64))
+    db.prepare(`
+      INSERT INTO evolution_canary_outcomes (
+        id, user_id, release_id, assignment_id, terminal_state,
+        duration_ms, usage_json, error_code, created_at
+      ) VALUES ('outcome-1', 'user-1', 'canary-1', 'assignment-1',
+        'completed', 1200, '{"costUsd":0.01}', NULL, 3)
+    `).run()
+    assert.deepEqual(
+      db.prepare('SELECT traffic_percent, target FROM evolution_canary_releases').get(),
+      { traffic_percent: 5, target: 'prompt:workspace-instructions' },
+    )
+    assert.throws(() => db.prepare(`
+      UPDATE evolution_canary_releases SET traffic_percent = 11 WHERE id = 'canary-1'
+    `).run(), /CHECK constraint failed/)
+    assert.throws(() => db.prepare(`
+      UPDATE evolution_canary_assignments SET variant = 'global' WHERE id = 'assignment-1'
+    `).run(), /CHECK constraint failed/)
+    assert.throws(() => db.prepare(`
+      INSERT INTO evolution_canary_outcomes (
+        id, user_id, release_id, assignment_id, terminal_state,
+        duration_ms, usage_json, error_code, created_at
+      ) VALUES ('outcome-2', 'user-1', 'canary-1', 'assignment-1',
+        'failed', 1, NULL, 'FAILED', 4)
+    `).run(), /UNIQUE constraint failed/)
+    db.prepare("DELETE FROM users WHERE id = 'user-1'").run()
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM evolution_canary_releases').get().count, 0)
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM evolution_canary_outcomes').get().count, 0)
+  } finally {
+    db.close()
+  }
 })
 
 test('v66 persists one immutable local-owner decision per evaluation', () => {

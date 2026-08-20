@@ -148,3 +148,43 @@ export async function getEvolutionApprovalApi(id) {
   })
   return jsonOk(resp)
 }
+
+export async function createEvolutionCanaryApi(input) {
+  const resp = await fetch('/api/evolution/canaries', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(input || {}),
+  })
+  return jsonOk(resp)
+}
+
+export async function listEvolutionCanariesApi({ limit = 50 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  const resp = await fetch(`/api/evolution/canaries?${query}`, { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function getEvolutionCanaryApi(id) {
+  const resp = await fetch(`/api/evolution/canaries/${encodeURIComponent(String(id || ''))}`, {
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}
+
+export async function startEvolutionCanaryApi(id, reason) {
+  const resp = await fetch(`/api/evolution/canaries/${encodeURIComponent(String(id || ''))}/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ reason }),
+  })
+  return jsonOk(resp)
+}
+
+export async function stopEvolutionCanaryApi(id, reason) {
+  const resp = await fetch(`/api/evolution/canaries/${encodeURIComponent(String(id || ''))}/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ reason }),
+  })
+  return jsonOk(resp)
+}

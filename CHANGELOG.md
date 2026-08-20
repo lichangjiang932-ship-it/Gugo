@@ -17,7 +17,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Added no-tool self-evolution candidate generation that stores inert, user-scoped prompt/plugin/config proposals with curated provenance and no apply or install path.
 - Added immutable prompt replay suites that run baseline and candidate instructions against identical sanitized cases, fixed models, and fixed parameters without tools or evaluation authority.
 - Added independent replay evaluation with host-computed quality, safety, latency, and cost gates that cannot pass with missing evidence and grants no approval authority.
-- Added immutable local-owner human decisions bound to candidate, replay, evaluation, and rollback fingerprints, without applying, installing, or rolling out candidates.
+- Added immutable local-owner human decisions bound to candidate, replay, evaluation, and rollback fingerprints, without applying or installing candidates.
+- Added local-owner-only prompt canaries for approved workspace-instruction candidates, restricted to explicit chat sessions and deterministic 1–10% traffic, with per-turn baseline revalidation, append-only assignments/outcomes, and manual stop only.
 
 ## [0.11.31] - 2026-08-20
 

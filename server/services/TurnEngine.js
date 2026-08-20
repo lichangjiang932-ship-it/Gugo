@@ -37,6 +37,10 @@ import {
   selectStoredMessagesAfterCompaction,
 } from './turnMessageContext.js'
 import { prepareTurnPromptContext } from './turnPromptContext.js'
+import {
+  recordEvolutionCanaryOutcome,
+  resolveEvolutionCanaryAssignment,
+} from './evolutionCanaryService.js'
 import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
 import {
   applyDirectoryAuthorizationToolsConfig,
@@ -66,7 +70,7 @@ import {
 } from './turnSteeringStore.js'
 import { normalizeTurnIntentMode } from '../utils/executionIntent.js'
 import { getLocalFileAccessStatus } from './localFileAccessService.js'
-import { newTraceId, withLogContext } from '../utils/logger.js'
+import { logWarn, newTraceId, withLogContext } from '../utils/logger.js'
 
 const TERMINAL_TYPES = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
 const STREAM_DELTA_TYPES = ['assistant.delta', 'reasoning.delta']
@@ -687,6 +691,8 @@ export class TurnEngine {
     toolSpecs = SERVER_TOOL_SPECS,
     readApprovalMode = getApprovalMode,
     preparePromptContext = prepareTurnPromptContext,
+    resolveCanaryAssignment = resolveEvolutionCanaryAssignment,
+    recordCanaryOutcome = recordEvolutionCanaryOutcome,
     resolveToolSpecs = resolveTurnToolSpecs,
     scheduleMemoryExtraction = scheduleAutoMemoryExtraction,
     runMemoryModel = callBackgroundModel,
@@ -725,7 +731,8 @@ export class TurnEngine {
       runLoop, runModel, executeTool, appendEvent, publishActivity, lastEvent, replayEvents,
       readSession, claimSession, writeSession, readMessages, readPreviousUserMessage,
       writeMessage, idFactory, now, toolSpecs,
-      readApprovalMode, preparePromptContext, resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
+      readApprovalMode, preparePromptContext, resolveCanaryAssignment, recordCanaryOutcome,
+      resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
       getContextWindow, readFileAccessStatus, validateAttachments, bindAttachments, prepareAttachments,
       removeMessage, executionLeases, runtimeCore: sharedRuntimeCore,
       enqueueSteering, claimSteering, acknowledgeSteering, acknowledgeAppliedSteering,
@@ -1362,6 +1369,19 @@ export class TurnEngine {
     const managedAttachments = Array.isArray(currentUserMessage?.modelContext?.attachments)
       ? currentUserMessage.modelContext.attachments
       : []
+    let canaryAssignment = null
+    try {
+      canaryAssignment = await this.deps.resolveCanaryAssignment({
+        userId,
+        sessionId,
+        turnId,
+        env: this.deps.env,
+        now: this.deps.now(),
+      })
+    } catch (error) {
+      // Canary routing is optional and must fail closed to the baseline prompt.
+      try { logWarn('evolution.canary.resolve', error, { userId, sessionId, turnId }) } catch { /* optional */ }
+    }
     let promptContext = {
       messages: [],
       effectiveAgentId: agentId,
@@ -1369,6 +1389,7 @@ export class TurnEngine {
       memoryIds: [],
       compactionArchiveId: null,
       compactionBoundary: null,
+      canaryAssignment: null,
     }
     try {
       promptContext = await this.deps.preparePromptContext({
@@ -1380,10 +1401,12 @@ export class TurnEngine {
         recentMessages: storedMessages,
         includeRecentTranscript: false,
         query: content,
+        canaryAssignment,
         env: this.deps.env,
       }) || promptContext
     } catch {
-      // Optional memory/agent/skill context must never prevent a turn from running.
+      // Optional memory/agent/skill/canary context must never prevent a turn from running.
+      canaryAssignment = null
     }
     const selectedStoredMessages = selectStoredMessagesAfterCompaction(
       storedMessages,
@@ -1473,6 +1496,23 @@ export class TurnEngine {
     let latestEstimatedPromptTokens = normalizePromptTokenEstimate(
       restoredCheckpointState?.latestEstimatedPromptTokens,
     )
+    const recordCanaryTerminal = (terminalState, errorCode = null, completedAt = this.deps.now()) => {
+      if (!canaryAssignment?.id) return
+      try {
+        this.deps.recordCanaryOutcome({
+          userId,
+          sessionId,
+          turnId,
+          terminalState,
+          durationMs: Math.max(0, completedAt - effectiveTurnStartedAt),
+          usage: turnModelUsage || latestModelUsage,
+          errorCode,
+          now: completedAt,
+        })
+      } catch (error) {
+        try { logWarn('evolution.canary.outcome', error, { userId, sessionId, turnId }) } catch { /* optional */ }
+      }
+    }
     let streamedAssistantText = String(pendingRecoveryAttempt?.assistantText || '')
     const verifiedLocalFilesAt = (verifiedAt = this.deps.now()) => extractVerifiedLocalFiles(
       checkpointMessages,
@@ -1867,6 +1907,7 @@ export class TurnEngine {
         } catch {
           // The durable terminal event is authoritative; evidence projection is best-effort.
         }
+        recordCanaryTerminal('cancelled', null, cancelledAt)
         return
       }
       if (result?.interrupted) {
@@ -1957,6 +1998,7 @@ export class TurnEngine {
           ...(turnModelUsage ? { turnModelUsage } : {}),
           ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
         })
+        recordCanaryTerminal('failed', failure.code)
         return
       }
       if (result?.paused) {
@@ -2058,6 +2100,7 @@ export class TurnEngine {
         ...(turnModelUsage ? { turnModelUsage } : {}),
         ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
       })
+      recordCanaryTerminal('completed', null, completedAt)
       // Best-effort async notification to external subscribers.
       void this.deps.dispatchHooks?.({
         userId,
@@ -2117,6 +2160,7 @@ export class TurnEngine {
         } catch {
           // The durable terminal event is authoritative; evidence projection is best-effort.
         }
+        recordCanaryTerminal('cancelled', null, cancelledAt)
         return
       }
       const failure = normalizeFailure(error)
@@ -2158,6 +2202,7 @@ export class TurnEngine {
         ...(turnModelUsage ? { turnModelUsage } : {}),
         ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
       })
+      recordCanaryTerminal('failed', failure.code, failedAt)
     }
   }
 }
