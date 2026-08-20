@@ -88,11 +88,24 @@ Evaluation 保存 rubric 版本、逐 case 证据、宿主 metrics/issues、独�
 - approval 保存脱敏 review snapshot、local-owner-loopback approver mode 和 decision fingerprint；所有响应 `Cache-Control: no-store`；
 - approval 不修改 candidate 的 `proposed` 状态，不写 active prompt/config，不加载 plugin，也不存在 apply、install、activate、deploy 或 rollout 路由。
 
-## Required next gates
+## Phase 7: scoped prompt canary（当前已实现）
 
-后续能力必须按以下顺序增加，不能跳级：
+`POST /api/evolution/canaries` 只从 P10 的不可变 `approved` 决定创建尚未运行的 canary release；本地所有者随后必须显式调用 `POST /api/evolution/canaries/:id/start`，创建本身不会隐式分流。当前唯一支持的目标是 `prompt:workspace-instructions`；candidate 必须是 prompt、evaluation verdict 必须为 `pass`、`permissionsRequested=[]`，且 candidate/replay/evaluation/approval 的内容和四项指纹链必须再次一致。
 
-1. **Canary rollout**：小比例、限定作用域、不可变版本标识和完整观测；只能消费明确 approved 的不可变 prompt candidate。
-2. **Automatic rollback**：预先声明阈值；质量、安全或可靠性退化时恢复 approval 中已绑定的 baseline 不可变版本。
+安全与流量边界：
+
+- create/start/list/get/stop API 均要求已登录、TCP loopback、`AUTH_MODE=local` 和固定 local owner；multi-user 模式 fail closed；所有响应使用 `Cache-Control: no-store`；
+- 创建时必须显式提供 1–10 个属于当前用户的聊天 session，以及整数 `trafficPercent=1..10`；不存在全局 scope、100% rollout、plugin/config canary 或 renderer/runtime 权限变化；
+- release 保存不可变 approval/evaluation/replay/candidate 引用、创建理由、session scope、流量比例、baseline/candidate SHA-256 和 release fingerprint；显式 start 前再次验证完整 provenance 和实时 baseline，start/stop lifecycle 使用独立 append-only event，已停止 release 不可重新启动；
+- 分流使用 `release fingerprint + sessionId + turnId` 的稳定 SHA-256 bucket，同一 turn 不会因重试改变 variant；control 与 candidate 使用同一正常 TurnEngine，仅替换 workspace instruction block，不覆盖 identity、Ishiki、安全、skill、memory 或 session block；
+- 创建 release 和每个 turn 执行前都会读取当前 workspace instructions。SHA-256 与 replay baseline 不一致时绝不注入 candidate，而是追加 `baseline_mismatch`/`baseline_unavailable` 的 fail-closed baseline assignment，保留观测而不静默忽略漂移；
+- 每个 assignment 都保存 variant、bucket、decision reason、approved/observed baseline SHA-256；`turn.completed|turn.failed|turn.cancelled` 后追加一次 terminal outcome，只白名单保存 token usage、provider cost、耗时和规范化错误码，不保存 prompt、transcript、tool trace 或 raw payload；detail GET 最多返回最近 200 条白名单化 observation，list 只返回聚合统计；
+- `POST /api/evolution/canaries/:id/stop` 是当前唯一停止能力。stop 后新 turn 不再被分配；已分配的同一 turn 保持稳定 assignment，恢复执行时仍实时重验 baseline；没有自动阈值、自动 stop、自动 rollback、apply/install/activate/deploy 路由。
+
+Canary outcome 是可靠性、延迟和成本观测，不是自动质量 verdict；人工批准也没有被提升为全局激活权限。
+
+## Required next gate
+
+后续只能进入 **Automatic rollback**：预先声明阈值，并在质量、安全或可靠性退化时恢复 approval 中已绑定的 baseline 不可变版本。P12 实现前不得把 P11 的观测直接解释为自动 rollback 授权。
 
 任何候选都不能扩大 manifest `contributes`、工具风险信任或 renderer 执行权限而不经过独立权限审批。磁盘 transformer 仍只能在 worker sandbox 中运行，不能注入 React/renderer JavaScript。

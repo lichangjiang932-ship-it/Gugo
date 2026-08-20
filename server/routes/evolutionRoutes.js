@@ -12,6 +12,13 @@ import {
   listEvolutionCandidates,
 } from '../services/evolutionCandidateService.js'
 import {
+  createEvolutionCanary,
+  getEvolutionCanary,
+  listEvolutionCanaries,
+  startEvolutionCanary,
+  stopEvolutionCanary,
+} from '../services/evolutionCanaryService.js'
+import {
   buildEvolutionDataset,
   listEvolutionExclusions,
   setEvolutionEvidenceExcluded,
@@ -44,7 +51,7 @@ function authorizeLocalOwner(req, res, userId, env) {
   if (isLoopbackRequest(req) && isLocalOwnerUser(userId, env)) return true
   sendJson(res, 403, errorBody(
     'LOCAL_OWNER_ONLY',
-    '演进批准只能由服务宿主机的本地所有者决定',
+    '演进批准与 canary 只能由服务宿主机的本地所有者操作',
   ))
   return false
 }
@@ -62,10 +69,17 @@ export async function handleEvolutionRequest(req, res, {
   const url = new URL(req.url, 'http://localhost')
   const approvalReviewMatch = url.pathname.match(/^\/api\/evolution\/approval-reviews\/([^/]+)$/u)
   const approvalMatch = url.pathname.match(/^\/api\/evolution\/approvals\/([^/]+)$/u)
-  const approvalPath = url.pathname === '/api/evolution/approvals'
+  const canaryStartMatch = url.pathname.match(/^\/api\/evolution\/canaries\/([^/]+)\/start$/u)
+  const canaryStopMatch = url.pathname.match(/^\/api\/evolution\/canaries\/([^/]+)\/stop$/u)
+  const canaryMatch = url.pathname.match(/^\/api\/evolution\/canaries\/([^/]+)$/u)
+  const localOwnerPath = url.pathname === '/api/evolution/approvals'
+    || url.pathname === '/api/evolution/canaries'
     || Boolean(approvalReviewMatch)
     || Boolean(approvalMatch)
-  if (approvalPath && !authorizeLocalOwner(req, res, userId, env)) return
+    || Boolean(canaryStartMatch)
+    || Boolean(canaryStopMatch)
+    || Boolean(canaryMatch)
+  if (localOwnerPath && !authorizeLocalOwner(req, res, userId, env)) return
   try {
     if (url.pathname === '/api/evolution/feedback') {
       if (req.method !== 'POST') {
@@ -289,6 +303,60 @@ export async function handleEvolutionRequest(req, res, {
         id: decodeURIComponent(approvalMatch[1]),
       })
       return sendJson(res, 200, { ok: true, approval })
+    }
+    if (url.pathname === '/api/evolution/canaries') {
+      if (req.method === 'GET') {
+        return sendJson(res, 200, {
+          ok: true,
+          schemaVersion: 1,
+          canaries: listEvolutionCanaries({ userId, limit: url.searchParams.get('limit') }),
+        })
+      }
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET 或 POST'))
+      }
+      const body = await readJson(req, { maxBytes: 16 * 1024 })
+      const canary = createEvolutionCanary({
+        userId,
+        approvalId: body.approvalId,
+        sessionIds: body.sessionIds,
+        trafficPercent: body.trafficPercent,
+        reason: body.reason,
+        env,
+      })
+      return sendJson(res, 201, { ok: true, canary })
+    }
+    if (canaryStartMatch) {
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
+      }
+      const body = await readJson(req, { maxBytes: 8 * 1024 })
+      const canary = startEvolutionCanary({
+        userId,
+        id: decodeURIComponent(canaryStartMatch[1]),
+        reason: body.reason,
+        env,
+      })
+      return sendJson(res, 200, { ok: true, canary })
+    }
+    if (canaryStopMatch) {
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
+      }
+      const body = await readJson(req, { maxBytes: 8 * 1024 })
+      const canary = stopEvolutionCanary({
+        userId,
+        id: decodeURIComponent(canaryStopMatch[1]),
+        reason: body.reason,
+      })
+      return sendJson(res, 200, { ok: true, canary })
+    }
+    if (canaryMatch) {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
+      }
+      const canary = getEvolutionCanary({ userId, id: decodeURIComponent(canaryMatch[1]) })
+      return sendJson(res, 200, { ok: true, canary })
     }
     return sendJson(res, 404, errorBody('NOT_FOUND', '证据端点不存在'))
   } catch (error) {

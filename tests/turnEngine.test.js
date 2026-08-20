@@ -49,6 +49,68 @@ function createTestEngine(options = {}) {
   return new TurnEngine({ scheduleMemoryExtraction: () => {}, ...options })
 }
 
+test('TurnEngine injects a resolved prompt canary and records its terminal outcome', async () => {
+  const turnId = 'turn-prompt-canary'
+  const outcomes = []
+  const assignment = {
+    id: 'canary-assignment-1',
+    releaseId: 'canary-release-1',
+    variant: 'candidate',
+    decisionReason: 'traffic_candidate',
+    eligible: true,
+    bucket: 3,
+    target: 'prompt:workspace-instructions',
+    baselineSha256: 'a'.repeat(64),
+    observedBaselineSha256: 'a'.repeat(64),
+    candidateSha256: 'b'.repeat(64),
+    releaseFingerprint: 'c'.repeat(64),
+    promptContent: 'Scoped candidate workspace instructions.',
+  }
+  const engine = createTestEngine({
+    resolveCanaryAssignment(input) {
+      assert.equal(input.userId, userId)
+      assert.equal(input.sessionId, 'turn-engine-session')
+      assert.equal(input.turnId, turnId)
+      return assignment
+    },
+    preparePromptContext(input) {
+      assert.equal(input.canaryAssignment, assignment)
+      return {
+        messages: [{ role: 'system', content: assignment.promptContent }],
+        effectiveAgentId: null,
+        skillIds: [],
+        memoryIds: [],
+        compactionArchiveId: null,
+        compactionBoundary: null,
+        canaryAssignment: {
+          id: assignment.id,
+          releaseId: assignment.releaseId,
+          variant: assignment.variant,
+          target: assignment.target,
+        },
+      }
+    },
+    recordCanaryOutcome(input) { outcomes.push(input) },
+    runLoop: async ({ messages }) => {
+      assert.equal(messages.some(({ content }) => content === assignment.promptContent), true)
+      return { text: 'Canary completed.', artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Run the scoped canary.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  assert.equal(outcomes.length, 1)
+  assert.equal(outcomes[0].terminalState, 'completed')
+  assert.equal(outcomes[0].turnId, turnId)
+  assert.equal(events(turnId).at(-1).type, 'turn.completed')
+})
+
 test('TurnEngine flushes deferred deltas before tools, checkpoints, and terminal events', async () => {
   const turnId = 'turn-write-behind-barrier'
   const batches = []
