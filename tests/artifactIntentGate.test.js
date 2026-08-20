@@ -567,6 +567,18 @@ test('existing uploaded images route to the requested file generator instead of 
       prompt: '请把上传的 report.pdf 转成 PNG 图片',
       expected: ['render_pdf_pages'],
     },
+    {
+      prompt: 'E:\\果\\gallery.html 1.在我的侧边栏打开现在网页，没有图片显示 2.图片要一致正面对着我，如果我把模式改为摩天轮，图片就全部竖起来，使其正面面对我，别的模式也是一样，确保在我旋转的时候其正面面向我 3.是图片在圆的边缘围绕着圆心转，我不拖动的话圆保持不动。不是让你生成图片，让你调用现有图片',
+      expected: [],
+    },
+    {
+      prompt: '不是让你生成图片，直接修改本地 gallery.html 的显示逻辑',
+      expected: [],
+    },
+    {
+      prompt: '并非要生成图片，用现有图片调整网页背景',
+      expected: [],
+    },
   ]
 
   for (const { prompt, expected } of cases) {

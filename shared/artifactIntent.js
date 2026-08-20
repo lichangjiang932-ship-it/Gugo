@@ -54,7 +54,7 @@ const ARTIFACT_TERMS = Object.freeze({
 
 const BEFORE_ACTION = /(?:帮我|请|麻烦|给我|我要|我需要|我想要|希望|来(?:一|个|份|套)?|写|编写|撰写|做|制作|生成|创建|输出|导出|整理成|转换成|转换为|转成|转为|改成|改为|做成|放入|放进|加入|写入|整理到|设计|起草|重做|重制|修改|编辑|更新|优化|润色|make|create|generate|build|produce|export|convert|design|draft|prepare|write|revise|edit|update|redesign|give\s+me|i\s+(?:want|need))[^。！？!?\n]{0,32}$/i
 const AFTER_ACTION = /^[^，,；;。！？!?\n]{0,12}(?:写|编写|撰写|做|制作|生成|创建|输出|导出|重做|修改|编辑|更新|优化|润色|make|create|generate|export|edit|update)/i
-const DIRECT_NEGATION = /(?:不要|不再|别再?|禁止|避免|无需|不用|不需要|不可|不能|不应|不想要|勿|拒绝|防止|阻止|确保不会|没有要求|没要求|没有让|没让|未要求|(?:没有|没|未)(?:有)?说(?:过)?(?:要)?|without|do\s+not|don't|dont|never|avoid|prevent|stop|must\s+not|should\s+not|no\s+need\s+to)[^，,；;。！？!?\n]{0,28}$/i
+const DIRECT_NEGATION = /(?:不要|不再|别再?|禁止|避免|无需|不用|不需要|不可|不能|不应|不想要|勿|拒绝|防止|阻止|确保不会|没有要求|没要求|没有让|没让|没有叫你|没叫你|未要求|不是(?:让|要|要求|叫|需要|用来|来|想|打算|为了|指)|并非(?:让|要|要求|叫|需要)?|(?:没有|没|未)(?:有)?说(?:过)?(?:要)?|without|do\s+not|don't|dont|never|avoid|prevent|stop|must\s+not|should\s+not|no\s+need\s+to)[^，,；;。！？!?\n]{0,28}$/i
 const AUTO_OR_ACCIDENTAL = /(?:自动|随意|擅自|自行|莫名|错误|意外|偷偷|被|乱)[^。！？!?\n]{0,10}(?:生成|制作|创建|输出|导出|变成|转成|generate|create|make|export)[^。！？!?\n]{0,8}$/i
 const META_QUESTION = /(?:为什么|为何|怎么会|怎会|如何避免|排查|检查|调查|修复|解决|防止|阻止|关于|提到|讨论|解释|原因|问题|bug|逻辑|代码|工具|why|how\s+did|fix|debug|investigate|prevent|stop|about|discuss)[^。！？!?\n]{0,28}$/i
 const CAPABILITY_QUESTION = /(?:能不能|能否|可以不可以|是否可以|会不会|能|可以)[^。！？!?\n]{0,8}(?:生成|制作|创建|导出)[^。！？!?\n]{0,4}$/i
@@ -108,11 +108,25 @@ const EXISTING_ASSET_PLACEMENT = /(?:(?:这|那|该|此)(?:一)?(?:张|幅|个)?
 // unlock generate_image in that situation.
 const EXISTING_IMAGE_COLLECTION_INPUT = /(?:(?:读取|扫描|遍历|使用|展示|收录|来自|从|read|scan|browse|use|show|include|from|目录|文件夹|folder|directory)[\s\S]{0,96}(?:全部|所有|每(?:一|个|张)|all|every|each)[\s\S]{0,40}(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)|(?:全部|所有|每(?:一|个|张)|all|every|each)[\s\S]{0,40}(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)[\s\S]{0,96}(?:读取|扫描|遍历|使用|展示|收录|目录|文件夹|read|scan|browse|use|show|include|folder|directory))/i
 const EXISTING_IMAGE_SET_CONTEXT = /(?:(?:已有|现有|本地|上传(?:的)?|附件(?:中|里|的)?|existing|local|uploaded|attached)[^。！？!?；;\n]{0,32}(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)|(?:目录|文件夹|路径|盘|地方|位置|folder|directory|path|drive|location)[^。！？!?；;\n]{0,32}(?:有(?:很多|许多|大量|一批)?|包含|存放|放着|contains?|has|with)[^。！？!?；;\n]{0,32}(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)|(?:有很多|有许多|有大量|有一批|many|multiple|a\s+collection\s+of)[^。！？!?；;\n]{0,24}(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?))/i
-const EXISTING_IMAGE_REUSE_CONTEXT = /(?:(?:用|使用|利用|读取|扫描|遍历|展示|显示|收录|包含|引用|导入|use|using|read|scan|browse|show|display|include|reference|import)[^。！？!?；;\n]{0,40}(?:(?:这些|那些|上述|其中|已有|现有|本地|上传(?:的)?|附件(?:中|里|的)?|these|those|existing|local|uploaded|attached)[^。！？!?；;\n]{0,16})?(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)|(?:确保|保证|make\s+sure|ensure)[^。！？!?；;\n]{0,64}(?:全部|所有|每(?:一|个|张)|所有内容|all|every|each|everything)[^。！？!?；;\n]{0,32}(?:被?使用|展示|显示|收录|包含|use|used|show|shown|display|include|included))/i
+const EXISTING_IMAGE_REUSE_CONTEXT = /(?:(?:用|使用|利用|读取|扫描|遍历|展示|显示|收录|包含|引用|导入|调用|use|using|read|scan|browse|show|display|include|reference|import)[^。！？!?；;\n]{0,40}(?:(?:这些|那些|上述|其中|已有|现有|本地|上传(?:的)?|附件(?:中|里|的)?|these|those|existing|local|uploaded|attached)[^。！？!?；;\n]{0,16})?(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)|(?:确保|保证|make\s+sure|ensure)[^。！？!?；;\n]{0,64}(?:全部|所有|每(?:一|个|张)|所有内容|all|every|each|everything)[^。！？!?；;\n]{0,32}(?:被?使用|展示|显示|收录|包含|use|used|show|shown|display|include|included))/i
 const EXISTING_ASSET_MUTATION_COMMAND_PREFIX = /^(?:(?:请|帮我|麻烦(?:你)?|直接|继续|再|只)\s*)*(?:(?:把|将|在|向|给|用|使用)\s*|(?:please\s+)?(?:add|insert|put|place|embed|use|set|replace)\b)/i
 const EXISTING_ASSET_MUTATION_ACTION_BEFORE = /(?:加入|添加|插入|放入|放进|放到|置入|嵌入|作为|用作|设为|设置为|设成|替换为|(?:add|insert|put|place|embed|use|set|replace))\s*$/i
 const EXISTING_ASSET_MUTATION_ACTION_AFTER = /^\s*(?:加入|添加|插入|放入|放进|放到|置入|嵌入|作为|用作|设为|设置为|设成|替换为)/i
 const ADDITIONAL_IMAGE_PRODUCTION = /(?:(?:另外|另行|同时|还要|并且|以及|再)\s*(?:请|帮我|麻烦)?\s*(?:生成|创建|制作|画|绘制)|(?:also|additionally|separately)\s+(?:generate|create|make|draw))[^。！？!?\n]{0,32}(?:图|图片|图像|照片|海报|插图|image|photo|picture|poster|illustration)/i
+// “改为摩天轮，图片就全部竖起来” describes a layout/view mode effect, not an
+// image-generation request. The trailing “改为/调成/切到…” mode phrase must
+// suppress the adjacent image mention while real creation commands like
+// “生成一张人物图片” remain untouched.
+const IMAGE_MODE_STATE_BEFORE = /(?:模式|样式|视角|视图|效果|布局|形态|视图模式)(?:改为|设为|调成|改成|换成|变为|设成|切到|切换到|换成|调为)?[^。！？!?\n]{0,20}$/i
+const IMAGE_STATE_RESULT_AFTER = /^[^。！？!?\n]{0,16}(?:就|便|会|则|应该|应当)?(?:全部|所有|都|一直|始终|随之)?(?:竖|立|横|转|旋|翻|显示|面向|朝向|正对|面对|排列|围绕|旋转|保持|变为|变成|处于)/i
+// “让你调用现有图片” names existing assets as input, not new production.
+// A comma or clause boundary can cut a preceding negation, so reuse cues on
+// the immediate tail must also suppress the adjacent image mention.
+const IMAGE_REUSE_EXISTING_BEFORE = /(?:调用|使用|利用|复用|采用|展示|显示|读取|导入|引用|换用)(?:现有|已有|本地|这些|那些|上传)?(?:的)?(?:图片|图像|照片|素材)?$/i
+// A clause-level denial such as “不是让你生成图片” or “并非要生成图片” must
+// suppress every artifact mention in that sentence, even when a comma or other
+// clause separators sit between the denial and the generation verb.
+const ARTIFACT_CREATION_DENIAL_CLAUSE = /(?:不是|并非|没有|没|未)(?:让|要|要求|叫|需要|打算|想要)?[^。！？!?；;\n]{0,28}(?:生成|创建|制作|画|绘制|产出|输出)/i
 const EXPLICIT_IMAGE_CREATION = /(?:(?:生成|创建|制作|设计|画|绘制)\s*(?:一|1)?(?:张|幅|个)?[^。！？!?\n]{0,16}(?:图|图片|图像|照片|海报|插图|插画|徽标|标志|logo)|(?:generate|create|make|design|draw)\s+(?:an?\s+)?[^.!?\n]{0,16}(?:image|picture|photo|poster|illustration|logo|graphic))/i
 
 function hasUnnegatedExplicitImageCreation(prompt = '') {
@@ -600,6 +614,8 @@ function occurrenceIsExplicitRequest(text, match, type) {
   const after = text.slice(match.index + match[0].length, match.index + match[0].length + 32)
   const identifierPrefix = text.slice(Math.max(0, match.index - 16), match.index)
 
+  if (ARTIFACT_CREATION_DENIAL_CLAUSE.test(clauseAroundOccurrence(text, match))) return false
+
   if (/(?:create|generate)[_-]$/i.test(identifierPrefix)) return false
   if (/^(?:报告|report)$/i.test(match[0])
     && RESULT_REPORT_OBJECT.test(after)
@@ -608,6 +624,10 @@ function occurrenceIsExplicitRequest(text, match, type) {
   if (AUTO_OR_ACCIDENTAL.test(before) || CAPABILITY_QUESTION.test(before)) return false
   if (occurrenceIsDeniedByCorrection(text, match, type)) return false
   if (artifactMentionIsInputMaterial(text, match, type)) return false
+  if (type === 'image'
+    && (IMAGE_MODE_STATE_BEFORE.test(before)
+      || IMAGE_STATE_RESULT_AFTER.test(after)
+      || IMAGE_REUSE_EXISTING_BEFORE.test(before))) return false
 
   const requested = BEFORE_ACTION.test(before)
     || ARTIFACT_OUTPUT_RELATION_BEFORE.test(before)

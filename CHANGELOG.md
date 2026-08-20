@@ -6,6 +6,11 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed artifact intent denial so explicit “not generating images” phrases (不是让你生成图片 / 并非要生成图片) and existing-image reuse (调用现有图片) no longer unlock generate_image, and mode/view state descriptions (改为摩天轮，图片就竖起来) are no longer treated as image creation requests.
+
+>>>>>>> Stashed changes
 ### Added
 
 - Added a shared immutable plugin manifest envelope for runtime and trusted build-time UI plugins, with exact UI contribution declarations and dependency-aware unload protection.
