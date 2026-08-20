@@ -70,6 +70,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Hardened transformer sandbox definitions and capability snapshots against accessors, Proxy traps, overridden array methods, and source coercion.
 - Snapshotted bounded transformer input before worker creation, rejecting getters, capabilities, cycles, special prototypes, and nested Proxy values without trap execution.
 - Snapshotted bounded transformer output inside the worker and detached thrown-value errors without Promise/thenable assimilation, getter execution, Proxy traversal, or object coercion.
+- Hardened transformer sandbox invocation options against accessors, inherited fields, Proxy traps, resource-value coercion, and caller-controlled validate-only mode.
 
 ## [0.11.31] - 2026-08-20
 

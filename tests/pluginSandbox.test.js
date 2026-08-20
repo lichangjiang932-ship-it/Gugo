@@ -25,6 +25,90 @@ test('validateTransformer: validates loading without invoking transform', async 
   assert.match(invalid.error, /Unexpected|SyntaxError|token/i)
 })
 
+test('plugin sandbox invocation options are own-data snapshots with host-owned modes', async () => {
+  const plugin = { source: "function transform() { throw new Error('transform-ran') }" }
+  let getterCalls = 0
+  const accessorOptions = { input: null }
+  Object.defineProperty(accessorOptions, 'plugin', {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return plugin
+    },
+  })
+  await assert.rejects(
+    () => runTransformer(accessorOptions),
+    (error) => error?.code === 'PLUGIN_SANDBOX_OPTIONS_INVALID'
+      && error?.retryable === false
+      && /options\.plugin/.test(error?.message || ''),
+  )
+  assert.equal(getterCalls, 0)
+
+  let descriptorCalls = 0
+  const proxyOptions = new Proxy({ plugin, input: null }, {
+    getOwnPropertyDescriptor(target, key) {
+      descriptorCalls += 1
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+  await assert.rejects(
+    () => runTransformer(proxyOptions),
+    (error) => error?.code === 'PLUGIN_SANDBOX_OPTIONS_INVALID'
+      && /options$/.test(error?.message || ''),
+  )
+  assert.equal(descriptorCalls, 0)
+
+  const inheritedOptions = Object.create({ plugin })
+  await assert.rejects(
+    () => runTransformer(inheritedOptions),
+    (error) => error?.code === 'PLUGIN_SANDBOX_OPTIONS_INVALID'
+      && /options\.plugin/.test(error?.message || ''),
+  )
+
+  let coercionCalls = 0
+  const coerciveNumber = {
+    [Symbol.toPrimitive]() {
+      coercionCalls += 1
+      return 100
+    },
+  }
+  for (const invalidOptions of [
+    { plugin, timeoutMs: coerciveNumber },
+    { plugin, timeoutMs: 0 },
+    { plugin, timeoutMs: 60_001 },
+    { plugin, memoryLimitMb: coerciveNumber },
+    { plugin, memoryLimitMb: 7 },
+    { plugin, memoryLimitMb: 257 },
+  ]) {
+    await assert.rejects(
+      () => runTransformer(invalidOptions),
+      (error) => error?.code === 'PLUGIN_SANDBOX_OPTIONS_INVALID'
+        && error?.retryable === false,
+    )
+  }
+  assert.equal(coercionCalls, 0)
+
+  let modeGetterCalls = 0
+  const runOptions = { plugin, input: null }
+  Object.defineProperty(runOptions, 'validateOnly', {
+    get() {
+      modeGetterCalls += 1
+      return true
+    },
+  })
+  const run = await runTransformer(runOptions)
+  assert.equal(run.ok, false)
+  assert.match(run.error, /transform-ran/)
+  assert.equal(modeGetterCalls, 0)
+
+  const validation = await validateTransformer({
+    plugin,
+    input: null,
+    validateOnly: false,
+  })
+  assert.equal(validation.ok, true)
+})
+
 test('plugin sandbox definitions reject accessors and Proxy containers without executing them', async () => {
   let getterCalls = 0
   const accessorPlugin = {}

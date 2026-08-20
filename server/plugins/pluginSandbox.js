@@ -7,6 +7,9 @@ import { snapshotPluginData } from './pluginServiceData.js'
 
 const DEFAULT_TIMEOUT_MS = 5000
 const DEFAULT_MEMORY_LIMIT_MB = 32
+const MAX_TIMEOUT_MS = 60_000
+const MIN_MEMORY_LIMIT_MB = 8
+const MAX_MEMORY_LIMIT_MB = 256
 const ERROR_LIMIT = 1024
 const MAX_CAPABILITY_ENTRIES = 64
 const SANDBOX_DATA_LIMITS = Object.freeze({
@@ -227,6 +230,48 @@ function sanitizeCapabilities(capabilities) {
   return allowed
 }
 
+function sandboxOptionsError(field) {
+  const error = new TypeError(`Invalid plugin sandbox options at ${field}`)
+  error.code = 'PLUGIN_SANDBOX_OPTIONS_INVALID'
+  error.retryable = false
+  return error
+}
+
+function ownOptionValue(options, key) {
+  let descriptor
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(options, key)
+  } catch {
+    throw sandboxOptionsError(`options.${key}`)
+  }
+  if (!descriptor) return undefined
+  if (!Object.hasOwn(descriptor, 'value')) throw sandboxOptionsError(`options.${key}`)
+  return descriptor.value
+}
+
+function sandboxInvocationOptions(options, validateOnly) {
+  if (!options || typeof options !== 'object' || Array.isArray(options) || nodeTypes.isProxy(options)) {
+    throw sandboxOptionsError('options')
+  }
+  const plugin = ownOptionValue(options, 'plugin')
+  if (plugin === undefined) throw sandboxOptionsError('options.plugin')
+  const input = ownOptionValue(options, 'input')
+  const capabilities = ownOptionValue(options, 'capabilities') ?? []
+  const configuredTimeout = ownOptionValue(options, 'timeoutMs')
+  const timeoutMs = configuredTimeout === undefined ? DEFAULT_TIMEOUT_MS : configuredTimeout
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMEOUT_MS) {
+    throw sandboxOptionsError('options.timeoutMs')
+  }
+  const configuredMemory = ownOptionValue(options, 'memoryLimitMb')
+  const memoryLimitMb = configuredMemory === undefined ? DEFAULT_MEMORY_LIMIT_MB : configuredMemory
+  if (!Number.isInteger(memoryLimitMb)
+    || memoryLimitMb < MIN_MEMORY_LIMIT_MB
+    || memoryLimitMb > MAX_MEMORY_LIMIT_MB) {
+    throw sandboxOptionsError('options.memoryLimitMb')
+  }
+  return { plugin, input, validateOnly, timeoutMs, memoryLimitMb, capabilities }
+}
+
 function durationSince(startedAt) {
   return Math.max(1, Math.round(performance.now() - startedAt))
 }
@@ -236,14 +281,14 @@ function isMemoryLimitError(err) {
   return msg.includes('memory') || msg.includes('heap') || msg.includes('out of memory')
 }
 
-async function runTransformerWorker({
-  plugin,
-  input,
-  validateOnly = false,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-  memoryLimitMb = DEFAULT_MEMORY_LIMIT_MB,
-  capabilities = [],
-}) {
+async function runTransformerWorker(options, validateOnly) {
+  const {
+    plugin,
+    input,
+    timeoutMs,
+    memoryLimitMb,
+    capabilities,
+  } = sandboxInvocationOptions(options, validateOnly)
   const source = await transformerSource(plugin)
   const isolatedInput = snapshotPluginData(input, {
     code: 'PLUGIN_SANDBOX_INPUT_INVALID',
@@ -306,10 +351,10 @@ async function runTransformerWorker({
 
 /** Run a transformer plugin in a worker thread and a vm context. */
 export function runTransformer(options) {
-  return runTransformerWorker(options)
+  return runTransformerWorker(options, false)
 }
 
 /** Validate transformer loading in the sandbox without invoking transform(input). */
 export function validateTransformer(options) {
-  return runTransformerWorker({ ...options, validateOnly: true })
+  return runTransformerWorker(options, true)
 }
