@@ -22,6 +22,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Added immutable pre-start canary rollback policies and deterministic automatic rollback on predeclared reliability, latency, or fully measured provider-cost regressions, without rewriting workspace instructions or exposing a manual rollback endpoint.
 - Added manifest-gated trusted runtime prompt-context contributions with fixed additive ordering, frozen metadata-only scope, strict count/byte budgets, fail-open auditing, reversible lifecycle, and no disk-transformer access.
 - Added lifecycle-aware runtime service invocation and a trusted veto-only task review guard that can downgrade but never upgrade core Reviewer verdicts, preserves host evidence, and fails closed when an active guard malfunctions.
+- Added a trusted task plan guard that can only require the existing durable human approval gate, cannot rewrite plans or cancel stricter host policy, and closes retry/manual-completion approval bypasses.
 
 ## [0.11.31] - 2026-08-20
 

@@ -1,8 +1,8 @@
 import crypto from 'node:crypto'
 import { buildExploredPlan } from './jobPlanner.js'
 import {
-  appendJobArtifact, appendJobEvent, appendJobSteps, completeJobStep,
-  createJob as persistJob, getJob as getJobRow, getJobWithChildren, listJobSteps,
+  appendJobArtifact, appendJobEvent, completeJobStep,
+  getJob as getJobRow, getJobWithChildren, listJobSteps,
   listJobs, listRecoverableJobs, replacePendingJobSteps, updateJob, updateJobStep,
 } from './jobStore.js'
 import { createDocx } from './artifactGen.js'
@@ -42,14 +42,15 @@ import {
   findNextRunnableStep,
   normalizeStructuredPlanSteps,
   resolveWorkflowState,
-  shouldCompileDocx, stepRequiresPlanApproval, withStableStepIds,
+  shouldCompileDocx, stepRequiresPlanApproval,
 } from './jobWorkflow.js'
 import { buildTextStepResult, buildToolStepResult, completeManualJobTransition, emitTaskReviewEvent, persistRejectedStepResult, runVerificationRepairLoop } from './jobAcceptanceRuntime.js'
 import { createTaskReviewer } from './taskReviewer.js'
+import { applyRuntimeTaskPlanGuard } from './taskPlanGuard.js'
+import { assertJobPlanApprovalResolved, assertJobPlanRetryAllowed, persistGuardedGeneratedPlan, persistGuardedStructuredPlan } from './jobPlanPolicyRuntime.js'
 import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
 import { createJobExecutionLeaseCoordinator } from './jobExecutionLeaseRuntime.js'
 import { createJobRuntimeCore } from './runtimeCore.js'
-import { persistPlannedJob } from './jobCreation.js'
 import { releaseJobBudget } from '../utils/jobBudget.js'
 import { userCancellationError } from '../utils/toolCancellation.js'
 import { resumeJobDirectoryAuthorization } from './jobDirectoryAuthorization.js'
@@ -433,8 +434,10 @@ export class JobRuntime {
     maxConcurrency = process.env.JOB_RUNTIME_CONCURRENCY,
     executionLeases = createJobExecutionLeaseCoordinator(),
     runtimeCore = null,
+    taskPlanGuard = applyRuntimeTaskPlanGuard,
   } = {}) {
     this.planner = planner
+    this.taskPlanGuard = taskPlanGuard
     this.runtimeCore = runtimeCore || createJobRuntimeCore({ executionLeases })
     this.executeStep = executeStep || createDefaultExecuteStep({ runtimeCore: this.runtimeCore })
     // listeners 改成 Map<listener, userId>;userId === null 表示无过滤(给内部/测试用)。
@@ -564,18 +567,13 @@ export class JobRuntime {
     const { userId, requirePlanApproval = false, modelName, sourceType = null, sourceId = null, grants = [] } = options
     if (!userId) throw new Error('createJob requires userId')
     const selectedModel = String(modelName || '').trim().slice(0, 512) || undefined
-    const plan = await this.planner(prompt, { userId, modelName: selectedModel })
     const id = newId('job')
-    const event = persistPlannedJob({
-      id,
-      userId,
-      prompt,
-      plan,
+    const { event } = await persistGuardedGeneratedPlan({
+      id, userId, prompt, sourceType, sourceId, grants,
+      plan: await this.planner(prompt, { userId, modelName: selectedModel }),
       modelName: selectedModel,
       requirePlanApproval,
-      sourceType,
-      sourceId,
-      grants,
+      taskPlanGuard: this.taskPlanGuard,
     })
     this.jobUserCache.set(id, userId)
     this.emit(event)
@@ -725,6 +723,7 @@ export class JobRuntime {
   retryJob(jobId, { userId } = {}) {
     const currentJob = this.getJob(jobId, { userId })
     if (!currentJob) return null
+    assertJobPlanRetryAllowed(currentJob)
     cancelJobWake({ jobId, userId })
     for (const step of currentJob.steps) {
       if (['failed', 'cancelled'].includes(step.status)) {
@@ -769,6 +768,7 @@ export class JobRuntime {
     const job = this.getJob(jobId, { userId })
     const step = job?.steps.find((item) => item.id === stepId)
     if (!job || !step) return null
+    assertJobPlanApprovalResolved(job)
     const completedAt = Date.now()
     // completeJobStep validates evidence before writing. Keep wake/checkpoint
     // cleanup after that gate so a rejected completion is entirely side-effect free.
@@ -799,24 +799,17 @@ export class JobRuntime {
    * 创建结构化计划(带风险/目标/验收标准)。
    * 借鉴 Reasonix submit_plan 设计。
    */
-  createPlan({ userId, title, prompt, steps, modelName } = {}) {
+  async createPlan({ userId, title, prompt, steps, modelName } = {}) {
     if (!userId) throw new Error('createPlan requires userId')
-    const id = `job-${crypto.randomUUID()}`
-    const t = Date.now()
-    const persistedSteps = withStableStepIds(id, normalizeStructuredPlanSteps(steps))
-
-    persistJob({
-      id,
-      userId,
-      title,
-      prompt,
-      modelName: String(modelName || '').trim().slice(0, 512) || undefined,
-      status: 'queued',
-      progress: 0,
-      now: t,
+    const selectedModel = String(modelName || '').trim().slice(0, 512) || undefined
+    const id = newId('job')
+    const { event } = await persistGuardedStructuredPlan({
+      id, userId, title, prompt, steps,
+      modelName: selectedModel,
+      taskPlanGuard: this.taskPlanGuard,
     })
-    appendJobSteps(id, persistedSteps)
     this.jobUserCache.set(id, userId)
+    this.emit(event)
     return this.getJob(id, { userId })
   }
 
@@ -824,6 +817,7 @@ export class JobRuntime {
     const job = this.getJob(jobId, { userId })
     const step = job?.steps.find((item) => item.id === stepId)
     if (!job || !step) return null
+    assertJobPlanRetryAllowed(job, step)
     cancelJobWake({ jobId, userId })
     // Preserve completed calls, their results, idempotency keys, and the
     // accumulated budget. Only the old terminal result must be removed before
@@ -1238,7 +1232,10 @@ export class JobRuntime {
             stepId: nextStep.id,
             type: 'plan_proposed',
             message: 'Plan proposed; waiting for explicit approval before execution',
-            payload: { plan },
+            payload: {
+              plan,
+              ...(nextStep.input?.planGuard ? { planGuard: nextStep.input.planGuard } : {}),
+            },
           }))
         }
       })) return true

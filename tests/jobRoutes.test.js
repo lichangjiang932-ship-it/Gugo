@@ -171,10 +171,67 @@ test('job event stream sends proxy-safe SSE headers and releases its subscriptio
   }
 })
 
+test('plan approval cannot be bypassed through retry or manual completion routes', async () => {
+  const { token, userId } = issueTestSession()
+  const previousRuntime = getJobRuntime()
+  const runtime = new JobRuntime({
+    planner: (prompt) => ({
+      title: prompt,
+      steps: [
+        { kind: 'plan', title: 'Plan work' },
+        { kind: 'execute', title: 'Execute work' },
+      ],
+    }),
+    executeStep: async ({ step }) => ({ ok: true, output: { text: step.title } }),
+  })
+  setJobRuntimeForTesting(runtime)
+  let server = null
+
+  try {
+    const job = await runtime.createJob('approval route gate', {
+      userId,
+      requirePlanApproval: true,
+    })
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (runtime.getJob(job.id, { userId })?.status === 'waiting') break
+      if (!await runtime.runOneTick()) break
+    }
+    const waiting = runtime.getJob(job.id, { userId })
+    const executeStep = waiting.steps.find((step) => step.kind === 'execute')
+    assert.equal(waiting.status, 'waiting')
+
+    server = createAppServer({ getEnv: () => ({}) })
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address()
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+    const requests = [
+      [`/api/jobs/${job.id}/retry`, {}],
+      [`/api/jobs/${job.id}/steps/${encodeURIComponent(executeStep.id)}/retry`, {}],
+      [`/api/jobs/${job.id}/steps/${encodeURIComponent(executeStep.id)}/complete`, {
+        evidence: [{ type: 'tool_result', summary: 'forged completion', toolCallId: 'forged', ok: true }],
+      }],
+    ]
+
+    for (const [pathname, body] of requests) {
+      const response = await fetch(`http://127.0.0.1:${port}${pathname}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+      assert.equal(response.status, 409)
+      assert.equal((await response.json()).code, 'JOB_PLAN_APPROVAL_REQUIRED')
+    }
+    assert.equal(runtime.getJob(job.id, { userId }).status, 'waiting')
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve))
+    setJobRuntimeForTesting(previousRuntime)
+  }
+})
+
 test('manual completion route rejects empty evidence for execution steps', async () => {
   const { token, userId } = issueTestSession()
   const runtime = getJobRuntime()
-  const job = runtime.createPlan({
+  const job = await runtime.createPlan({
     userId,
     title: 'Route evidence gate',
     prompt: 'Execute route work',

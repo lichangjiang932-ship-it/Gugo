@@ -5,6 +5,20 @@ import {
 } from './jobStore.js'
 import { normalizeJobCreationSteps, withStableStepIds } from './jobWorkflow.js'
 
+function normalizePlanGuard(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const decision = String(value.decision || '').trim().toLowerCase()
+  if (!['pass', 'require_approval', 'error'].includes(decision)) return null
+  const error = String(value.error || '').trim().slice(0, 120)
+  return {
+    pluginId: String(value.pluginId || '').trim().slice(0, 80) || 'unknown',
+    service: 'task-plan-guard',
+    mode: 'approval_only',
+    decision,
+    ...(error ? { error } : {}),
+  }
+}
+
 export function persistPlannedJob({
   id,
   userId,
@@ -15,8 +29,18 @@ export function persistPlannedJob({
   sourceType,
   sourceId,
   grants,
+  planGuard = null,
 }) {
-  const normalizedSteps = normalizeJobCreationSteps(plan.steps, { requirePlanApproval })
+  const normalizedPlanGuard = normalizePlanGuard(planGuard)
+  const effectivePlanApproval = requirePlanApproval === true
+    || ['require_approval', 'error'].includes(normalizedPlanGuard?.decision)
+  const normalizedSteps = normalizeJobCreationSteps(plan.steps, {
+    requirePlanApproval: effectivePlanApproval,
+  }).map((step) => (
+    step.kind === 'plan' && normalizedPlanGuard
+      ? { ...step, input: { ...(step.input || {}), planGuard: normalizedPlanGuard } }
+      : step
+  ))
   persistJob({
     id,
     userId,
@@ -35,7 +59,8 @@ export function persistPlannedJob({
     message: '任务已创建',
     payload: {
       stepCount: normalizedSteps.length,
-      requirePlanApproval: requirePlanApproval === true,
+      requirePlanApproval: effectivePlanApproval,
+      ...(normalizedPlanGuard ? { planGuard: normalizedPlanGuard } : {}),
     },
   })
 }

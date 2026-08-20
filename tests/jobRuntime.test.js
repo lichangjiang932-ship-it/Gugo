@@ -11,6 +11,7 @@ const {
   recoverInterruptedJobs,
 } = await import('../server/services/jobRuntime.js')
 const { getApprovalMode, setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
+const { registerPlugin, unregisterPlugin } = await import('../server/plugins/pluginRegistry.js')
 const { updateJobStep } = await import('../server/services/jobStore.js')
 const {
   getJobTurnCheckpoint,
@@ -112,7 +113,7 @@ test('runtime retries fixable verification and only completes after a passing ve
       return { ok: true, output: { text: step.title, complete: true } }
     },
   })
-  const job = runtime.createPlan({
+  const job = await runtime.createPlan({
     userId: TEST_USER,
     title: 'repair verification',
     prompt: 'repair and verify',
@@ -150,7 +151,7 @@ test('runtime bounds repeated verification repairs and preserves the failed verd
       return { ok: true, output: { text: step.title, complete: true } }
     },
   })
-  const job = runtime.createPlan({
+  const job = await runtime.createPlan({
     userId: TEST_USER,
     title: 'bounded repair',
     prompt: 'do not loop forever',
@@ -190,7 +191,7 @@ test('finalize rejection cannot transition a job to completed', async () => {
       return { ok: true, output: { text: step.title } }
     },
   })
-  const job = runtime.createPlan({
+  const job = await runtime.createPlan({
     userId: TEST_USER,
     title: 'finalization gate',
     prompt: 'produce required output',
@@ -243,6 +244,123 @@ test('goal jobs always pause for durable plan approval regardless of the global 
   } finally {
     setApprovalMode({ userId: TEST_USER, mode: 'normal' })
   }
+})
+
+test('trusted runtime task plan guard forces durable approval without rewriting either plan source', async () => {
+  const observedSources = []
+  const executed = []
+  await registerPlugin({
+    id: 'task-plan-guard-test',
+    name: 'Task plan guard test',
+    version: '1.0.0',
+    contributes: ['service:task-plan-guard'],
+  }, (ctx) => {
+    ctx.services.provide('task-plan-guard', {
+      review(scope) {
+        assert.equal(Object.isFrozen(scope), true)
+        assert.equal(Object.isFrozen(scope.steps), true)
+        observedSources.push(scope.planningSource)
+        return {
+          decision: 'require_approval',
+          steps: [{ title: 'plugin must not replace host steps' }],
+        }
+      },
+    })
+  })
+
+  const runtime = new JobRuntime({
+    planner: (prompt) => ({ ...stubPlanner(prompt), planningSource: 'model' }),
+    executeStep: async ({ step }) => {
+      executed.push(step.kind)
+      return { ok: true, output: { text: step.title } }
+    },
+  })
+
+  try {
+    const generated = await runtime.createJob('guard generated plan', { userId: TEST_USER })
+    const generatedPlan = generated.steps.find((step) => step.kind === 'plan')
+    assert.equal(generatedPlan.input.requirePlanApproval, true)
+    assert.deepEqual(generatedPlan.input.planGuard, {
+      pluginId: 'task-plan-guard-test',
+      service: 'task-plan-guard',
+      mode: 'approval_only',
+      decision: 'require_approval',
+    })
+    assert.deepEqual(generated.steps.map((step) => step.title), ['规划', '第 1 份', '第 2 份', '校验', '收尾'])
+    assert.deepEqual(generated.events.find((event) => event.type === 'created').payload.planGuard, generatedPlan.input.planGuard)
+
+    await runtime.runOneTick()
+    const waiting = runtime.getJob(generated.id, { userId: TEST_USER })
+    assert.equal(waiting.status, 'waiting')
+    assert.deepEqual(executed, ['plan'])
+    assert.deepEqual(waiting.events.find((event) => event.type === 'plan_proposed').payload.planGuard, generatedPlan.input.planGuard)
+    const executeStep = waiting.steps.find((step) => step.kind === 'batch_item')
+    for (const action of [
+      () => runtime.retryJob(waiting.id, { userId: TEST_USER }),
+      () => runtime.retryStep(waiting.id, executeStep.id, { userId: TEST_USER }),
+      () => runtime.completeStep(waiting.id, executeStep.id, { userId: TEST_USER, evidence: [] }),
+    ]) {
+      assert.throws(action, (error) => error?.code === 'JOB_PLAN_APPROVAL_REQUIRED')
+    }
+    assert.equal(runtime.getJob(waiting.id, { userId: TEST_USER }).status, 'waiting')
+    assert.equal(runtime.approvePlan(waiting.id, { userId: TEST_USER }).approved, true)
+
+    const structured = await runtime.createPlan({
+      userId: TEST_USER,
+      title: 'guard structured plan',
+      prompt: 'run a user-authored structured plan',
+      steps: [{ id: 'work', title: 'User-authored work', kind: 'execute' }],
+    })
+    assert.equal(structured.steps[0].kind, 'plan')
+    assert.equal(structured.steps[0].input.requirePlanApproval, true)
+    assert.equal(structured.steps[1].title, 'User-authored work')
+    assert.equal(structured.events.find((event) => event.type === 'created').payload.planGuard.decision, 'require_approval')
+    assert.deepEqual(observedSources, ['model', 'user'])
+  } finally {
+    assert.equal(await unregisterPlugin('task-plan-guard-test'), true)
+  }
+})
+
+test('a guarded plan that fails before proposal can retry and still requires approval', async () => {
+  let planAttempts = 0
+  let targetJobId = null
+  const runtime = new JobRuntime({
+    planner: stubPlanner,
+    taskPlanGuard: async () => ({
+      requirePlanApproval: true,
+      guard: {
+        pluginId: 'recovery-policy-plugin',
+        service: 'task-plan-guard',
+        mode: 'approval_only',
+        decision: 'require_approval',
+      },
+    }),
+    executeStep: async ({ job, step }) => {
+      if (job.id === targetJobId && step.kind === 'plan') {
+        planAttempts += 1
+        if (planAttempts === 1) return { ok: false, error: 'plan presentation failed', output: {} }
+      }
+      return { ok: true, output: { text: step.title } }
+    },
+  })
+
+  const job = await runtime.createJob('retry guarded plan', { userId: TEST_USER })
+  targetJobId = job.id
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (runtime.getJob(job.id, { userId: TEST_USER })?.status === 'failed') break
+    if (!await runtime.runOneTick()) break
+  }
+  assert.equal(runtime.getJob(job.id, { userId: TEST_USER }).status, 'failed')
+
+  assert.equal(runtime.retryJob(job.id, { userId: TEST_USER }).status, 'queued')
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (runtime.getJob(job.id, { userId: TEST_USER })?.status === 'waiting') break
+    if (!await runtime.runOneTick()) break
+  }
+  const waiting = runtime.getJob(job.id, { userId: TEST_USER })
+  assert.equal(waiting.status, 'waiting')
+  assert.equal(planAttempts, 2)
+  assert.ok(waiting.events.some((event) => event.type === 'plan_proposed'))
 })
 
 test('D6: jobUserCache is evicted once a job reaches a terminal state', async () => {
@@ -666,7 +784,7 @@ test('structured plans are normalized into runnable steps', async () => {
     },
   })
 
-  const job = runtime.createPlan({
+  const job = await runtime.createPlan({
     userId: TEST_USER,
     title: '结构化计划',
     prompt: '执行结构化计划',
@@ -686,9 +804,9 @@ test('structured plans are normalized into runnable steps', async () => {
   assert.equal(runtime.getJob(job.id, { userId: TEST_USER }).status, 'completed')
 })
 
-test('manual step completion persists verification evidence', () => {
+test('manual step completion persists verification evidence', async () => {
   const runtime = new JobRuntime()
-  const job = runtime.createPlan({
+  const job = await runtime.createPlan({
     userId: TEST_USER,
     title: '人工验收',
     prompt: '记录验收证据',
@@ -719,9 +837,9 @@ test('manual step completion persists verification evidence', () => {
   assert.ok(completed.events.some((event) => event.type === 'step_completed'))
 })
 
-test('manual completion cannot bypass a rejected structured acceptance verdict', () => {
+test('manual completion cannot bypass a rejected structured acceptance verdict', async () => {
   const runtime = new JobRuntime()
-  const job = runtime.createPlan({
+  const job = await runtime.createPlan({
     userId: TEST_USER,
     title: 'Manual acceptance gate',
     prompt: 'Verify before completion',
@@ -751,9 +869,9 @@ test('manual completion cannot bypass a rejected structured acceptance verdict',
   assert.equal(completed.events.some((event) => event.type === 'completed'), false)
 })
 
-test('manual execution completion rejects missing evidence without changing job state', () => {
+test('manual execution completion rejects missing evidence without changing job state', async () => {
   const runtime = new JobRuntime()
-  const job = runtime.createPlan({
+  const job = await runtime.createPlan({
     userId: TEST_USER,
     title: 'Evidence required',
     prompt: 'Execute and verify work',
@@ -778,9 +896,9 @@ test('manual execution completion rejects missing evidence without changing job 
   assert.equal(unchanged.events.length, eventsBefore)
 })
 
-test('manual plan and prose completion remain compatible without evidence', () => {
+test('manual plan and prose completion remain compatible without evidence', async () => {
   const runtime = new JobRuntime()
-  const job = runtime.createPlan({
+  const job = await runtime.createPlan({
     userId: TEST_USER,
     title: 'Compatible plan',
     prompt: 'Plan before execution',
