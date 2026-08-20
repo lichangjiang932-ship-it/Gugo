@@ -93,6 +93,10 @@ function scriptReferences(source) {
     [/\bnew\s+URL\s*\(\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|`([^`$]*)`)\s*,\s*import\.meta\.url\b/gi, 'resource'],
     [/\bfetch\s*\(\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|`([^`$]*)`)/gi, 'resource'],
     [/\bnew\s+(?:Worker|SharedWorker)\s*\(\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|`([^`$]*)`)/gi, 'script'],
+    // JS-driven media galleries declare filenames in array literals and
+    // assign them later from variables; static property scans cannot see the
+    // files, so collect bare media strings following an array open or comma.
+    [/(?:[[,])\s*["']([^"'\s]+\\.(?:avif|bmp|gif|jpe?g|png|svg|webp))["']/gi, 'image'],
   ]
   for (const [pattern, kind] of patterns) {
     for (const match of String(source || '').matchAll(pattern)) {

@@ -52,6 +52,36 @@ test('local HTML delivery validates nested CSS, scripts, data, and decodable bac
   }
 })
 
+test('local HTML delivery collects media declared in JS array literals', async () => {
+  const root = temporarySite()
+  try {
+    const htmlPath = write(root, 'gallery.html', `<!doctype html><html><body>
+      <script>
+        var images = [
+          'photo-one.jpg',
+          'photo-two.png',
+          'not a media file.jpg still needs to stay out',
+        ];
+        function build() {
+          var img = document.createElement('img');
+          img.src = images[0];
+        }
+      </script>
+    </body></html>`)
+    write(root, 'photo-one.jpg', Buffer.from('image-one-bytes'))
+    write(root, 'photo-two.png', Buffer.from('image-two-bytes'))
+    const result = await validateLocalHtmlDelivery({ filePath: htmlPath, decodeImages: false })
+    assert.equal(result.ok, true)
+    const images = result.resources
+      .filter((resource) => resource.kind === 'image')
+      .map((resource) => path.relative(root, resource.requestPath))
+      .sort()
+    assert.deepEqual(images, ['photo-one.jpg', 'photo-two.png'])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('local HTML delivery rejects missing CSS backgrounds and corrupt image bytes', async () => {
   const root = temporarySite()
   try {

@@ -688,6 +688,20 @@ function astScriptReferences(source) {
       const property = staticPropertyName(node.key)
       const kind = JS_RESOURCE_PROPERTIES.get(String(property).toLowerCase())
       if (kind) appendStaticResourceReferences(references, node.value, kind, scopeIndex, { localShapeOnly: true })
+    } else if (node.type === 'ArrayExpression') {
+      // JS-driven galleries declare their media in array literals (for example
+      // var images = ['a.jpg', 'b.png']) and assign img.src later from a
+      // variable, which static property scans cannot follow. Collect only
+      // bare media filenames with no spaces or separators so descriptive
+      // strings such as 'a.jpg missing' cannot widen the dependency graph.
+      for (const element of node.elements) {
+        if (element?.type === 'Literal' && typeof element.value === 'string'
+          && /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(element.value)
+          && isStaticLocalResourceShape(element.value)
+          && /^[A-Za-z0-9._/\\-]+$/.test(element.value)) {
+          references.push({ value: element.value, kind: 'image' })
+        }
+      }
     } else if (node.type === 'AssignmentExpression' && node.left?.type === 'MemberExpression') {
       const property = staticPropertyName(node.left.property)
       const kind = JS_RESOURCE_PROPERTIES.get(String(property).toLowerCase())

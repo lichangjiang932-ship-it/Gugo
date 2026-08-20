@@ -9,6 +9,7 @@ follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Fixed artifact intent denial so explicit “not generating images” phrases (不是让你生成图片 / 并非要生成图片) and existing-image reuse (调用现有图片) no longer unlock generate_image, and mode/view state descriptions (改为摩天轮，图片就竖起来) are no longer treated as image creation requests.
+- Local HTML preview now collects media declared in JS array literals (for example `var images = ['a.jpg']`), so JS-driven galleries render their same-directory images through the preview ticket instead of failing to load them.
 
 >>>>>>> Stashed changes
 ### Added
