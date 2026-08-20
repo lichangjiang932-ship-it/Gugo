@@ -28,6 +28,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Replaced raw runtime service lookup with lifecycle-aware invocation, declared provider dependencies, own-method dispatch, and bounded immutable data snapshots so stale consumers and service results cannot leak process capabilities.
 - Fenced runtime model-provider adapters behind own synchronous methods and plugin callback accounting, preventing stale request/stream snapshots from executing plugin code after unload.
 - Isolated runtime model-provider arguments and results as bounded plain data, with wrapper-owned opaque stream state tokens that reject capability leakage and forged state.
+- Isolated runtime plugin tool invocations behind frozen plain-data arguments/results, metadata-only execution context, and callback-scoped cancellation signals without exposing raw Job, Step, budget, or approval objects.
 
 ## [0.11.31] - 2026-08-20
 

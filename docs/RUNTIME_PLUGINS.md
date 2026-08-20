@@ -57,6 +57,14 @@ setup 失败仍走原有原子回滚：已注册的 tool/event/prompt/service/pr
 
 所有 runtime event context 都是冻结的 metadata-only 对象，只包含 `userId/sessionId/jobId/stepId/iteration/phase` 及适用时的 `executed/attempt`；不传真实 job、step、AbortSignal、model request/error 或宿主 service 引用。observer 不能改写真实终态、压缩结果、审计或 checkpoint，也不会重放已提交副作用。
 
+## Runtime tool invocation
+
+`context.tools.register({ name, spec, exec })` 的 `exec(args, scope)` 只接收深冻结的 plain-data args 和冻结的 metadata-only scope。scope 固定包含 `name/userId/jobId/stepId/skillId/toolCallId/idempotencyKey/origin/source/signal`；tool name、`origin=plugin` 和 source plugin ID 由宿主写入。真实 `job`、`step`、budget、approval context、checkpoint、registration identity、权限对象和宿主 service 均不跨入 plugin callback。
+
+`signal` 是唯一显式的非数据能力，但不是宿主原始 AbortSignal：wrapper 为每次调用创建独立 signal，只在该 callback 存续期间转发 abort，并在 callback 返回后解除宿主 listener。插件保留的 signal 不会观察后续宿主状态。args 与 result 上限均为 32 层、32768 节点和 8 MiB UTF-8 文本；拒绝 accessor、function、symbol、bigint、特殊 prototype、cycle 和非有限数字，稳定错误分别为 `PLUGIN_TOOL_ARGUMENT_INVALID`、`PLUGIN_TOOL_RESULT_INVALID`，且 `retryable=false`。
+
+这些限制不改变宿主权威：schema 验证、dynamic registration identity、durable approval、idempotency、side-effect checkpoint、审计和结果包装仍由宿主执行。卸载仍先撤销工具可见性并等待已开始 callback；stale executor 继续以 `PLUGIN_TOOL_UNAVAILABLE` 拒绝。普通非 runtime-plugin dynamic tool 不经过该 wrapper，维持已有专用 adapter 契约。
+
 ## Trusted prompt context
 
 可信进程内 plugin 可通过 `context.prompts.register({ id, render })` 提供只追加的 chat-turn system context。`id` 必须匹配 `[a-z0-9][a-z0-9._-]{0,63}`，且 manifest 必须精确声明 `prompt:<id>`。不同 plugin 不能占用同一 prompt id；输出按注册顺序确定性渲染，卸载后立即不可见。

@@ -798,10 +798,20 @@ test('public Agent Loop executes a plugin tool once and feeds its result back to
       exec: async (args, executionContext) => {
         executions += 1
         assert.deepEqual(args, { value: 'from-model' })
+        assert.equal(Object.isFrozen(args), true)
+        assert.equal(Object.isFrozen(executionContext), true)
+        assert.equal(executionContext.name, 'plugin_echo')
         assert.equal(executionContext.userId, 'plugin-loop-user')
+        assert.equal(executionContext.jobId, 'plugin-tool-loop-job')
+        assert.equal(executionContext.stepId, 'plugin-tool-loop-step')
         assert.equal(executionContext.toolCallId, 'plugin-echo-call')
         assert.equal(executionContext.origin, 'plugin')
         assert.equal(executionContext.source, 'loop-tool-plugin')
+        assert.equal(executionContext.signal instanceof AbortSignal, true)
+        assert.equal(Object.hasOwn(executionContext, 'job'), false)
+        assert.equal(Object.hasOwn(executionContext, 'step'), false)
+        assert.equal(Object.hasOwn(executionContext, 'budget'), false)
+        assert.equal(Object.hasOwn(executionContext, 'approvalContext'), false)
         return { echoed: args.value }
       },
     })
@@ -846,6 +856,155 @@ test('public Agent Loop executes a plugin tool once and feeds its result back to
     args: { value: 'after-unload' },
     job: { userId: 'plugin-loop-user' },
   }), { ok: false, error: 'unknown tool: plugin_echo' })
+})
+
+test('plugin tool invocation isolates data, host context, and callback-scoped cancellation', async () => {
+  const registry = createRuntimePluginRegistry()
+  let markStarted
+  const started = new Promise((resolve) => { markStarted = resolve })
+  const receivedArgs = []
+  const receivedScopes = []
+  let pluginResult = null
+
+  await registry.registerPlugin(manifest('tool-boundary-plugin'), (ctx) => {
+    ctx.tools.register({
+      name: 'plugin_echo',
+      spec: TOOL_SPEC,
+      exec: async (args, scope) => {
+        receivedArgs.push(args)
+        receivedScopes.push(scope)
+        assert.equal(Object.isFrozen(args), true)
+        assert.equal(Object.isFrozen(args.nested), true)
+        assert.equal(Object.isFrozen(scope), true)
+        if (args.value === 'wait') {
+          markStarted()
+          await new Promise((resolve) => {
+            if (scope.signal.aborted) resolve()
+            else scope.signal.addEventListener('abort', resolve, { once: true })
+          })
+        }
+        pluginResult = {
+          value: args.value,
+          nested: { aborted: scope.signal.aborted },
+        }
+        return pluginResult
+      },
+    })
+  })
+
+  const tool = getDynamicTool('plugin_echo')
+  const hostController = new AbortController()
+  const hostContext = {
+    name: 'forged-name',
+    userId: 'tool-user',
+    job: { id: 'tool-job', secret: 'host-job-secret' },
+    step: { id: 'tool-step', secret: 'host-step-secret' },
+    signal: hostController.signal,
+    budget: { consume() {} },
+    approvalContext: { approve() {} },
+    skillId: 'tool-skill',
+    toolCallId: 'tool-call',
+    idempotencyKey: 'tool-idempotency',
+    origin: 'forged-origin',
+    source: 'forged-source',
+  }
+  const input = { value: 'wait', nested: { hostMutable: true } }
+  const inFlight = tool.exec(input, hostContext)
+  await started
+
+  const scope = receivedScopes[0]
+  assert.notEqual(scope.signal, hostController.signal)
+  assert.deepEqual({
+    name: scope.name,
+    userId: scope.userId,
+    jobId: scope.jobId,
+    stepId: scope.stepId,
+    skillId: scope.skillId,
+    toolCallId: scope.toolCallId,
+    idempotencyKey: scope.idempotencyKey,
+    origin: scope.origin,
+    source: scope.source,
+  }, {
+    name: 'plugin_echo',
+    userId: 'tool-user',
+    jobId: 'tool-job',
+    stepId: 'tool-step',
+    skillId: 'tool-skill',
+    toolCallId: 'tool-call',
+    idempotencyKey: 'tool-idempotency',
+    origin: 'plugin',
+    source: 'tool-boundary-plugin',
+  })
+  for (const key of ['job', 'step', 'budget', 'approvalContext']) {
+    assert.equal(Object.hasOwn(scope, key), false)
+  }
+
+  input.nested.hostMutable = false
+  assert.equal(receivedArgs[0].nested.hostMutable, true)
+  hostController.abort()
+  const result = await inFlight
+  assert.equal(scope.signal.aborted, true)
+  assert.deepEqual(result, { value: 'wait', nested: { aborted: true } })
+  assert.equal(Object.isFrozen(result), true)
+  assert.equal(Object.isFrozen(result.nested), true)
+  pluginResult.nested.aborted = false
+  assert.equal(result.nested.aborted, true)
+
+  const detachedController = new AbortController()
+  const immediate = await tool.exec(
+    { value: 'immediate', nested: { hostMutable: true } },
+    { signal: detachedController.signal },
+  )
+  const detachedSignal = receivedScopes[1].signal
+  assert.deepEqual(immediate, { value: 'immediate', nested: { aborted: false } })
+  detachedController.abort()
+  assert.equal(detachedSignal.aborted, false)
+
+  assert.equal(await registry.unregisterPlugin('tool-boundary-plugin'), true)
+})
+
+test('plugin tool invocation rejects accessor arguments and capability results', async () => {
+  const registry = createRuntimePluginRegistry()
+  let executions = 0
+  let returnCapability = false
+  await registry.registerPlugin(manifest('tool-data-rejection-plugin'), (ctx) => {
+    ctx.tools.register({
+      name: 'plugin_echo',
+      spec: TOOL_SPEC,
+      exec: async ({ value }) => {
+        executions += 1
+        if (returnCapability) return { value, capability() {} }
+        return { value }
+      },
+    })
+  })
+
+  const tool = getDynamicTool('plugin_echo')
+  let getterCalls = 0
+  const accessorArgs = { value: 'blocked' }
+  Object.defineProperty(accessorArgs, 'trap', {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return 'not data'
+    },
+  })
+  await assert.rejects(
+    tool.exec(accessorArgs),
+    (error) => error?.code === 'PLUGIN_TOOL_ARGUMENT_INVALID'
+      && error?.retryable === false,
+  )
+  assert.equal(getterCalls, 0)
+  assert.equal(executions, 0)
+
+  returnCapability = true
+  await assert.rejects(
+    tool.exec({ value: 'blocked-result' }),
+    (error) => error?.code === 'PLUGIN_TOOL_RESULT_INVALID'
+      && error?.retryable === false,
+  )
+  assert.equal(executions, 1)
+  assert.equal(await registry.unregisterPlugin('tool-data-rejection-plugin'), true)
 })
 
 test('approval awaiting for plugin A cannot authorize same-name plugin B', async () => {
@@ -1342,6 +1501,7 @@ test('uninstall atomically revokes visibility while allowing an in-flight tool c
     })
   })
 
+  const staleExecutor = getDynamicTool('plugin_echo')
   const inFlight = executeServerTool({
     name: 'plugin_echo',
     args: { value: 'started-before-unload' },
@@ -1352,6 +1512,21 @@ test('uninstall atomically revokes visibility while allowing an in-flight tool c
 
   assert.equal(registry.getPlugin('atomic-unload')?.state, 'uninstalling')
   assert.equal(getDynamicTool('plugin_echo'), null)
+  let staleGetterCalls = 0
+  const staleArgs = {}
+  Object.defineProperty(staleArgs, 'value', {
+    enumerable: true,
+    get() {
+      staleGetterCalls += 1
+      return 'must-not-be-read'
+    },
+  })
+  await assert.rejects(
+    staleExecutor.exec(staleArgs),
+    (error) => error?.code === 'PLUGIN_TOOL_UNAVAILABLE'
+      && error?.retryable === false,
+  )
+  assert.equal(staleGetterCalls, 0)
   assert.equal(registry.hasService('atomic-service'), false)
   assert.deepEqual(
     await events.waterfall('request', { model: 'test' }, {}),
