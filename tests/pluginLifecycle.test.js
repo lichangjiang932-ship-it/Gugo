@@ -1007,6 +1007,93 @@ test('plugin tool invocation rejects accessor arguments and capability results',
   assert.equal(await registry.unregisterPlugin('tool-data-rejection-plugin'), true)
 })
 
+test('plugin tool result traversal remains inside lifecycle callback accounting', async () => {
+  const registry = createRuntimePluginRegistry()
+  let unregisterAttempt = null
+  await registry.registerPlugin(manifest('tool-result-accounting-plugin'), (ctx) => {
+    ctx.tools.register({
+      name: 'plugin_echo',
+      spec: TOOL_SPEC,
+      exec: async () => new Proxy({ value: 'accounted-result' }, {
+        getPrototypeOf(target) {
+          if (!unregisterAttempt) {
+            unregisterAttempt = registry.unregisterPlugin('tool-result-accounting-plugin').then(
+              (value) => ({ value }),
+              (error) => ({ error }),
+            )
+          }
+          return Reflect.getPrototypeOf(target)
+        },
+      }),
+    })
+  })
+
+  const result = await getDynamicTool('plugin_echo').exec({ value: 'probe' })
+  assert.deepEqual(result, { value: 'accounted-result' })
+  assert.equal(Object.isFrozen(result), true)
+  const attempted = await settleWithin(unregisterAttempt)
+  assert.equal(attempted.value, undefined)
+  assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(registry.getPlugin('tool-result-accounting-plugin')?.state, 'active')
+  assert.equal(await registry.unregisterPlugin('tool-result-accounting-plugin'), true)
+})
+
+test('plugin tool thrown values cross the boundary as detached data-only errors', async () => {
+  const registry = createRuntimePluginRegistry()
+  let unregisterAttempt = null
+  let messageGetterCalls = 0
+  const thrown = {}
+  Object.defineProperties(thrown, {
+    message: {
+      configurable: true,
+      get() {
+        messageGetterCalls += 1
+        return 'getter must not execute'
+      },
+    },
+    code: { value: 'PLUGIN_CUSTOM_FAILURE' },
+    retryable: { value: true },
+    cause: { value: { hostCapability: true } },
+  })
+  const trappedError = new Proxy(thrown, {
+    getOwnPropertyDescriptor(target, key) {
+      if (!unregisterAttempt) {
+        unregisterAttempt = registry.unregisterPlugin('tool-error-accounting-plugin').then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        )
+      }
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+
+  await registry.registerPlugin(manifest('tool-error-accounting-plugin'), (ctx) => {
+    ctx.tools.register({
+      name: 'plugin_echo',
+      spec: TOOL_SPEC,
+      exec: async () => { throw trappedError },
+    })
+  })
+
+  await assert.rejects(
+    getDynamicTool('plugin_echo').exec({ value: 'probe' }),
+    (error) => {
+      assert.notEqual(error, trappedError)
+      assert.equal(error?.code, 'PLUGIN_CUSTOM_FAILURE')
+      assert.equal(error?.retryable, false)
+      assert.equal(error?.message, 'plugin tool plugin_echo execution failed')
+      assert.equal(Object.hasOwn(error, 'cause'), false)
+      return true
+    },
+  )
+  assert.equal(messageGetterCalls, 0)
+  const attempted = await settleWithin(unregisterAttempt)
+  assert.equal(attempted.value, undefined)
+  assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(registry.getPlugin('tool-error-accounting-plugin')?.state, 'active')
+  assert.equal(await registry.unregisterPlugin('tool-error-accounting-plugin'), true)
+})
+
 test('approval awaiting for plugin A cannot authorize same-name plugin B', async () => {
   let executionsA = 0
   let executionsB = 0
