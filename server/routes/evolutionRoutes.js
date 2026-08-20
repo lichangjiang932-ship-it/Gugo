@@ -33,6 +33,9 @@ import {
   listEvolutionEvaluations,
 } from '../services/evolutionEvaluationService.js'
 import {
+  createEvolutionCanaryRollbackPolicy,
+} from '../services/evolutionRollbackService.js'
+import {
   createEvolutionReplaySuite,
   getEvolutionReplayRun,
   getEvolutionReplaySuite,
@@ -69,6 +72,7 @@ export async function handleEvolutionRequest(req, res, {
   const url = new URL(req.url, 'http://localhost')
   const approvalReviewMatch = url.pathname.match(/^\/api\/evolution\/approval-reviews\/([^/]+)$/u)
   const approvalMatch = url.pathname.match(/^\/api\/evolution\/approvals\/([^/]+)$/u)
+  const canaryPolicyMatch = url.pathname.match(/^\/api\/evolution\/canaries\/([^/]+)\/rollback-policy$/u)
   const canaryStartMatch = url.pathname.match(/^\/api\/evolution\/canaries\/([^/]+)\/start$/u)
   const canaryStopMatch = url.pathname.match(/^\/api\/evolution\/canaries\/([^/]+)\/stop$/u)
   const canaryMatch = url.pathname.match(/^\/api\/evolution\/canaries\/([^/]+)$/u)
@@ -76,6 +80,7 @@ export async function handleEvolutionRequest(req, res, {
     || url.pathname === '/api/evolution/canaries'
     || Boolean(approvalReviewMatch)
     || Boolean(approvalMatch)
+    || Boolean(canaryPolicyMatch)
     || Boolean(canaryStartMatch)
     || Boolean(canaryStopMatch)
     || Boolean(canaryMatch)
@@ -325,6 +330,19 @@ export async function handleEvolutionRequest(req, res, {
         env,
       })
       return sendJson(res, 201, { ok: true, canary })
+    }
+    if (canaryPolicyMatch) {
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
+      }
+      const body = await readJson(req, { maxBytes: 16 * 1024 })
+      const policy = createEvolutionCanaryRollbackPolicy({
+        userId,
+        releaseId: decodeURIComponent(canaryPolicyMatch[1]),
+        policy: body.policy,
+        reason: body.reason,
+      })
+      return sendJson(res, 201, { ok: true, policy })
     }
     if (canaryStartMatch) {
       if (req.method !== 'POST') {

@@ -27,6 +27,7 @@ import { migrateToV64 } from '../server/migrations/v64EvolutionReplay.js'
 import { migrateToV65 } from '../server/migrations/v65EvolutionEvaluations.js'
 import { migrateToV66 } from '../server/migrations/v66EvolutionApprovals.js'
 import { migrateToV67 } from '../server/migrations/v67EvolutionCanaries.js'
+import { migrateToV68 } from '../server/migrations/v68EvolutionCanaryRollback.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -39,9 +40,108 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 67)
+  assert.equal(LATEST_SCHEMA_VERSION, 68)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v68 persists immutable rollback policy, evaluations, and one rollback', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_candidates (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_replay_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_evaluations (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_approval_decisions (id TEXT PRIMARY KEY);
+      INSERT INTO users (id) VALUES ('user-1');
+      INSERT INTO evolution_candidates (id) VALUES ('candidate-1');
+      INSERT INTO evolution_replay_runs (id) VALUES ('replay-1');
+      INSERT INTO evolution_evaluations (id) VALUES ('evaluation-1');
+      INSERT INTO evolution_approval_decisions (id) VALUES ('approval-1');
+    `)
+    migrateToV67(db)
+    migrateToV68(db)
+    migrateToV68(db)
+    db.prepare(`
+      INSERT INTO evolution_canary_releases (
+        id, user_id, approval_id, evaluation_id, replay_id, candidate_id,
+        target, traffic_percent, creation_reason, session_ids_json, baseline_sha256,
+        candidate_sha256, release_fingerprint, created_at
+      ) VALUES ('canary-1', 'user-1', 'approval-1', 'evaluation-1', 'replay-1',
+        'candidate-1', 'prompt:workspace-instructions', 5, 'bounded', '["session-1"]', ?, ?, ?, 1)
+    `).run('a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64))
+    db.prepare(`
+      INSERT INTO evolution_canary_rollback_policies (
+        id, user_id, release_id, policy_version, window_size,
+        minimum_candidate_outcomes, minimum_baseline_outcomes,
+        maximum_candidate_failure_rate, maximum_candidate_cancellation_rate,
+        maximum_latency_ratio, maximum_cost_ratio, reason, baseline_sha256,
+        release_fingerprint, policy_fingerprint, created_at
+      ) VALUES ('policy-1', 'user-1', 'canary-1', 'canary-rollback-v1', 20,
+        3, 3, 0.34, 0.34, 1.5, 1.25, 'guardrails', ?, ?, ?, 2)
+    `).run('a'.repeat(64), 'c'.repeat(64), 'd'.repeat(64))
+    db.prepare(`
+      INSERT INTO evolution_canary_events (id, user_id, release_id, event_type, reason, created_at)
+      VALUES ('event-1', 'user-1', 'canary-1', 'started', 'start', 3)
+    `).run()
+    db.prepare(`
+      INSERT INTO evolution_canary_assignments (
+        id, user_id, release_id, session_id, turn_id, variant, decision_reason, bucket,
+        baseline_sha256, observed_baseline_sha256, candidate_sha256, assigned_at
+      ) VALUES ('assignment-1', 'user-1', 'canary-1', 'session-1', 'turn-1',
+        'candidate', 'traffic_candidate', 1, ?, ?, ?, 4)
+    `).run('a'.repeat(64), 'a'.repeat(64), 'b'.repeat(64))
+    db.prepare(`
+      INSERT INTO evolution_canary_outcomes (
+        id, user_id, release_id, assignment_id, terminal_state,
+        duration_ms, usage_json, error_code, created_at
+      ) VALUES ('outcome-1', 'user-1', 'canary-1', 'assignment-1',
+        'failed', 100, '{"costUsd":0.01}', 'FAILED', 5)
+    `).run()
+    db.prepare(`
+      INSERT INTO evolution_canary_outcome_context (
+        outcome_id, assignment_id, effective_variant, decision_reason, recorded_at
+      ) VALUES ('outcome-1', 'assignment-1', 'candidate', 'traffic_candidate', 5)
+    `).run()
+    db.prepare(`
+      INSERT INTO evolution_canary_rollback_evaluations (
+        id, user_id, release_id, policy_id, outcome_id, decision,
+        metrics_json, breaches_json, evaluation_fingerprint, created_at
+      ) VALUES ('guard-1', 'user-1', 'canary-1', 'policy-1', 'outcome-1',
+        'rollback', '{}', '["maximum_candidate_failure_rate"]', ?, 6)
+    `).run('e'.repeat(64))
+    db.prepare(`
+      INSERT INTO evolution_canary_rollbacks (
+        id, user_id, release_id, policy_id, evaluation_id,
+        rollback_baseline_sha256, release_fingerprint, baseline_status,
+        observed_baseline_sha256, trigger_fingerprint, reason, created_at
+      ) VALUES ('rollback-1', 'user-1', 'canary-1', 'policy-1', 'guard-1',
+        ?, ?, 'verified', ?, ?, 'automatic rollback', 6)
+    `).run('a'.repeat(64), 'c'.repeat(64), 'a'.repeat(64), 'e'.repeat(64))
+    assert.deepEqual(
+      db.prepare('SELECT decision FROM evolution_canary_rollback_evaluations').get(),
+      { decision: 'rollback' },
+    )
+    assert.throws(() => db.prepare(`
+      UPDATE evolution_canary_rollback_policies SET maximum_cost_ratio = 0.5 WHERE id = 'policy-1'
+    `).run(), /CHECK constraint failed/)
+    assert.throws(() => db.prepare(`
+      INSERT INTO evolution_canary_rollbacks (
+        id, user_id, release_id, policy_id, evaluation_id,
+        rollback_baseline_sha256, release_fingerprint, baseline_status,
+        observed_baseline_sha256, trigger_fingerprint, reason, created_at
+      ) SELECT 'rollback-2', user_id, release_id, policy_id, evaluation_id,
+        rollback_baseline_sha256, release_fingerprint, baseline_status,
+        observed_baseline_sha256, trigger_fingerprint, reason, 7
+      FROM evolution_canary_rollbacks
+    `).run(), /UNIQUE constraint failed/)
+    db.prepare("DELETE FROM users WHERE id = 'user-1'").run()
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM evolution_canary_rollbacks').get().count, 0)
+  } finally {
+    db.close()
+  }
 })
 
 test('v67 persists scoped canary lifecycle, assignments, and terminal outcomes', () => {

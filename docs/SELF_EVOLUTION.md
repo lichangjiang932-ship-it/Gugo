@@ -94,18 +94,36 @@ Evaluation 保存 rubric 版本、逐 case 证据、宿主 metrics/issues、独�
 
 安全与流量边界：
 
-- create/start/list/get/stop API 均要求已登录、TCP loopback、`AUTH_MODE=local` 和固定 local owner；multi-user 模式 fail closed；所有响应使用 `Cache-Control: no-store`；
+- create/rollback-policy/start/list/get/stop API 均要求已登录、TCP loopback、`AUTH_MODE=local` 和固定 local owner；multi-user 模式 fail closed；所有响应使用 `Cache-Control: no-store`；
 - 创建时必须显式提供 1–10 个属于当前用户的聊天 session，以及整数 `trafficPercent=1..10`；不存在全局 scope、100% rollout、plugin/config canary 或 renderer/runtime 权限变化；
-- release 保存不可变 approval/evaluation/replay/candidate 引用、创建理由、session scope、流量比例、baseline/candidate SHA-256 和 release fingerprint；显式 start 前再次验证完整 provenance 和实时 baseline，start/stop lifecycle 使用独立 append-only event，已停止 release 不可重新启动；
+- release 保存不可变 approval/evaluation/replay/candidate 引用、创建理由、session scope、流量比例、baseline/candidate SHA-256 和 release fingerprint；显式 start 前再次验证完整 provenance、实时 baseline 和 P12 immutable rollback policy，start/stop lifecycle 使用独立 append-only event，已停止 release 不可重新启动；
 - 分流使用 `release fingerprint + sessionId + turnId` 的稳定 SHA-256 bucket，同一 turn 不会因重试改变 variant；control 与 candidate 使用同一正常 TurnEngine，仅替换 workspace instruction block，不覆盖 identity、Ishiki、安全、skill、memory 或 session block；
 - 创建 release 和每个 turn 执行前都会读取当前 workspace instructions。SHA-256 与 replay baseline 不一致时绝不注入 candidate，而是追加 `baseline_mismatch`/`baseline_unavailable` 的 fail-closed baseline assignment，保留观测而不静默忽略漂移；
 - 每个 assignment 都保存 variant、bucket、decision reason、approved/observed baseline SHA-256；`turn.completed|turn.failed|turn.cancelled` 后追加一次 terminal outcome，只白名单保存 token usage、provider cost、耗时和规范化错误码，不保存 prompt、transcript、tool trace 或 raw payload；detail GET 最多返回最近 200 条白名单化 observation，list 只返回聚合统计；
-- `POST /api/evolution/canaries/:id/stop` 是当前唯一停止能力。stop 后新 turn 不再被分配；已分配的同一 turn 保持稳定 assignment，恢复执行时仍实时重验 baseline；没有自动阈值、自动 stop、自动 rollback、apply/install/activate/deploy 路由。
+- `POST /api/evolution/canaries/:id/stop` 保留人工停止能力。stop 后新 turn 不再被分配；已分配的同一 turn 保持稳定 assignment，恢复执行时仍实时重验 baseline；不存在 apply/install/activate/deploy 路由。
 
 Canary outcome 是可靠性、延迟和成本观测，不是自动质量 verdict；人工批准也没有被提升为全局激活权限。
 
-## Required next gate
+## Phase 8: predeclared automatic rollback（当前已实现）
 
-后续只能进入 **Automatic rollback**：预先声明阈值，并在质量、安全或可靠性退化时恢复 approval 中已绑定的 baseline 不可变版本。P12 实现前不得把 P11 的观测直接解释为自动 rollback 授权。
+canary 创建后、本地所有者必须在 start 前调用 `POST /api/evolution/canaries/:id/rollback-policy`，一次性声明 immutable `canary-rollback-v1` policy。Policy 绑定 release fingerprint 和 approval 中确认的 rollback baseline SHA-256；创建后不可更新、替换或删除。start 时再次精确校验绑定关系。升级前已启动但没有 v68 policy 的历史 canary 对新 turn fail closed，已有 assignment 也只按 baseline 执行。
+
+Policy 必须明确声明：
+
+- `windowSize=3..200`；
+- `minimumCandidateOutcomes=3..100` 和 `minimumBaselineOutcomes=3..100`，且均不得超过窗口；
+- candidate 最大失败率、最大取消率（0..1）；
+- candidate/baseline 最大平均延迟比和最大平均 provider cost 比（1..10）。
+
+每个新 terminal outcome 与实际执行的 effective variant/reason 一起原子落库，然后由宿主确定性计算 guard evaluation：
+
+- 只使用 `traffic_candidate|traffic_baseline` 的直接 outcome；baseline drift、baseline unavailable、candidate provenance mismatch 和缺 policy 的 fail-closed turn 不污染比较样本；
+- 失败率/取消率达到最小 candidate 样本后可独立触发；延迟需要双方达到最小样本；成本还要求窗口内双方每个比较 outcome 都有 provider cost，缺失成本不得猜测或触发成本回滚；
+- 每次 evaluation 保存 `insufficient_evidence|continue|rollback`、白名单 metrics、breaches、policy fingerprint 派生的 evaluation fingerprint；模型不能参与或覆盖阈值判定；
+- 任一已声明阈值被严格超过时，在同一数据库事务中写入每个 release 唯一的 append-only rollback record，release 立即变为 `rolled_back`，新 turn 不再获得 candidate assignment；
+- rollback record 绑定 release fingerprint、trigger fingerprint 和 approval baseline SHA-256，并记录当前 workspace baseline 为 `verified|drifted|unavailable`。回滚撤销的是 canary prompt overlay，不覆盖或重写用户的 `AGENTS.md`；因此 baseline 漂移时不会冒充已恢复文件内容；
+- 已经分配并执行中的 turn 保持版本隔离；没有人工 `/rollback` API，人工仍只能 stop。自动 rollback 不能扩大 session scope、traffic、prompt target、plugin/config 或任何权限。
+
+当前自动判定仅覆盖 P11 可直接测量的可靠性、延迟和 provider cost。没有独立 live grader 的情况下，系统不会从 terminal state 猜测质量或安全结论；未来若加入质量/安全 rollback signal，必须先建立独立、逐 turn、可审计且不可由 candidate 自报的证据层。
 
 任何候选都不能扩大 manifest `contributes`、工具风险信任或 renderer 执行权限而不经过独立权限审批。磁盘 transformer 仍只能在 worker sandbox 中运行，不能注入 React/renderer JavaScript。
