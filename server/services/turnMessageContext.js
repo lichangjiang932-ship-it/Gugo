@@ -892,6 +892,7 @@ export function buildAssistantModelContext({
   deliveryArtifactIds,
   iterations = 0,
   paused = false,
+  pluginPromptBlockIds = [],
   compactionArchiveId = null,
   compactionRecovery = null,
   usage = null,
@@ -921,6 +922,11 @@ export function buildAssistantModelContext({
     && Number.isFinite(Number(estimatedPromptTokens))
     && Number(estimatedPromptTokens) >= 0
   ) ? Math.floor(Number(estimatedPromptTokens)) : null
+  const normalizedPluginPromptBlockIds = [...new Set(
+    (Array.isArray(pluginPromptBlockIds) ? pluginPromptBlockIds : [])
+      .map((value) => String(value || '').trim().slice(0, 160))
+      .filter(Boolean),
+  )].slice(0, 32)
   const normalizedStartedAt = Number.isFinite(Number(turnStartedAt))
     ? Math.max(0, Number(turnStartedAt))
     : null
@@ -949,6 +955,9 @@ export function buildAssistantModelContext({
       : {}),
     iterations: Math.max(0, Number(iterations) || 0),
     paused: !!paused,
+    ...(normalizedPluginPromptBlockIds.length
+      ? { pluginPromptBlockIds: normalizedPluginPromptBlockIds }
+      : {}),
     ...(normalizedUsage ? { usage: normalizedUsage } : {}),
     ...(normalizedTurnModelUsage ? { turnModelUsage: normalizedTurnModelUsage } : {}),
     ...(normalizedEstimatedPromptTokens !== null

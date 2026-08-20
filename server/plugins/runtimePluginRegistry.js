@@ -20,6 +20,10 @@ const MAX_PLUGIN_SCHEMA_NODES = 8_192
 const MAX_PLUGIN_SCHEMA_BYTES = 512 * 1024
 const PLUGIN_TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/
 const PLUGIN_MODEL_PROVIDER_KIND_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
+const PLUGIN_PROMPT_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
+const MAX_PLUGIN_PROMPT_BLOCKS = 16
+const MAX_PLUGIN_PROMPT_BLOCK_BYTES = 16 * 1024
+const MAX_PLUGIN_PROMPT_TOTAL_BYTES = 64 * 1024
 const PLUGIN_TOOL_RISK_METADATA = Object.freeze({
   riskClass: 'external',
   category: 'external',
@@ -161,9 +165,11 @@ export function createRuntimePluginRegistry({
 } = {}) {
   const plugins = new Map()
   const services = new Map()
+  const promptContributions = new Map()
   const loopBindings = new Set()
   const callbackScope = new AsyncLocalStorage()
   let installSequence = 0
+  let promptSequence = 0
   let shuttingDown = false
   let shutdownPromise = null
 
@@ -191,6 +197,25 @@ export function createRuntimePluginRegistry({
     const invocation = { record, kind, active: true }
     try {
       return await callbackScope.run(invocation, () => callback(...args))
+    } finally {
+      invocation.active = false
+      finishCallback(record)
+    }
+  }
+
+  const invokePluginCallbackSync = (record, kind, callback, args) => {
+    record.activeCallbacks += 1
+    const invocation = { record, kind, active: true }
+    try {
+      const result = callbackScope.run(invocation, () => callback(...args))
+      if (result && typeof result.then === 'function') {
+        void Promise.resolve(result).catch(() => {})
+        const error = new TypeError('plugin prompt render must be synchronous')
+        error.code = 'PLUGIN_PROMPT_ASYNC_UNSUPPORTED'
+        error.retryable = false
+        throw error
+      }
+      return result
     } finally {
       invocation.active = false
       finishCallback(record)
@@ -332,6 +357,112 @@ export function createRuntimePluginRegistry({
     })
   }
 
+  const registerPromptContribution = (record, definition) => {
+    assertPluginWritable(record)
+    if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
+      throw new TypeError('plugin prompt definition must be an object')
+    }
+    const id = String(definition.id || '').trim()
+    if (!PLUGIN_PROMPT_ID_RE.test(id)) {
+      throw new TypeError('plugin prompt id must match [a-z0-9][a-z0-9._-]{0,63}')
+    }
+    assertContributionDeclared(record, `prompt:${id}`)
+    if (promptContributions.has(id)) {
+      throw new Error(`plugin prompt already registered: ${id}`)
+    }
+    if (typeof definition.render !== 'function') {
+      throw new TypeError('plugin prompt render must be a function')
+    }
+    const contribution = {
+      id,
+      pluginId: record.manifest.id,
+      record,
+      render: definition.render,
+      sequence: ++promptSequence,
+    }
+    promptContributions.set(id, contribution)
+    return trackVisibleEffect(record, () => {
+      if (promptContributions.get(id) !== contribution) return false
+      return promptContributions.delete(id)
+    })
+  }
+
+  const promptRenderError = (code, message) => {
+    const error = new TypeError(message)
+    error.code = code
+    error.retryable = false
+    return error
+  }
+
+  const renderPromptBlocks = (input = {}) => {
+    const scope = Object.freeze({
+      userId: String(input?.userId || '').trim() || null,
+      sessionId: String(input?.sessionId || '').trim() || null,
+      agentId: String(input?.agentId || '').trim() || null,
+      skillIds: Object.freeze([
+        ...new Set((Array.isArray(input?.skillIds) ? input.skillIds : [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)),
+      ].slice(0, 32)),
+    })
+    const blocks = []
+    const errors = []
+    let totalBytes = 0
+    const ordered = [...promptContributions.values()].sort((a, b) => a.sequence - b.sequence)
+    for (const contribution of ordered) {
+      if (contribution.record.state !== 'active') continue
+      try {
+        if (blocks.length >= MAX_PLUGIN_PROMPT_BLOCKS) {
+          throw promptRenderError(
+            'PLUGIN_PROMPT_BLOCK_LIMIT',
+            `runtime prompt block limit exceeded at ${contribution.id}`,
+          )
+        }
+        const rendered = invokePluginCallbackSync(
+          contribution.record,
+          'prompt',
+          contribution.render,
+          [scope],
+        )
+        if (rendered == null || rendered === '') continue
+        if (typeof rendered !== 'string') {
+          throw promptRenderError('PLUGIN_PROMPT_RESULT_INVALID', 'plugin prompt render must return text')
+        }
+        const text = rendered.trim()
+        if (!text) continue
+        const bytes = Buffer.byteLength(text, 'utf8')
+        if (bytes > MAX_PLUGIN_PROMPT_BLOCK_BYTES) {
+          throw promptRenderError('PLUGIN_PROMPT_BLOCK_TOO_LARGE', 'plugin prompt block exceeds 16 KiB')
+        }
+        if (totalBytes + bytes > MAX_PLUGIN_PROMPT_TOTAL_BYTES) {
+          throw promptRenderError('PLUGIN_PROMPT_TOTAL_TOO_LARGE', 'runtime prompt blocks exceed 64 KiB')
+        }
+        totalBytes += bytes
+        blocks.push(Object.freeze({
+          id: contribution.id,
+          pluginId: contribution.pluginId,
+          text,
+        }))
+      } catch (error) {
+        const code = String(error?.code || 'PLUGIN_PROMPT_RENDER_FAILED').slice(0, 80)
+        errors.push(Object.freeze({
+          id: contribution.id,
+          pluginId: contribution.pluginId,
+          code,
+        }))
+        emitAudit('plugin.prompt_failed', {
+          pluginId: contribution.pluginId,
+          promptId: contribution.id,
+          code,
+        })
+      }
+    }
+    return Object.freeze({
+      blocks: Object.freeze(blocks),
+      errors: Object.freeze(errors),
+    })
+  }
+
   const registerToolContribution = (record, definition) => {
     assertPluginWritable(record)
     if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
@@ -429,6 +560,7 @@ export function createRuntimePluginRegistry({
       registerTool: (definition) => registerToolContribution(record, definition),
       registerEvent: (event, listener) => registerEventContribution(record, event, listener),
       registerModelProvider: (kind, adapter) => registerModelProviderContribution(record, kind, adapter),
+      registerPrompt: (definition) => registerPromptContribution(record, definition),
       provideService: (name, value) => provideService(record, name, value),
       getService: (name) => {
         const contribution = services.get(String(name || '').trim())
@@ -606,6 +738,7 @@ export function createRuntimePluginRegistry({
       const contribution = services.get(String(name || '').trim())
       return contribution?.record?.state === 'active' ? contribution.value : undefined
     },
+    renderPromptBlocks,
     shutdown,
   })
 }

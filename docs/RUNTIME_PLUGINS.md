@@ -1,6 +1,6 @@
 # Runtime Plugin Contributions
 
-Gugo 的进程内 runtime plugin 通过 `server/plugins/runtimePluginRegistry.js` 注册可撤销的工具、Agent Loop 事件、服务和模型 provider。runtime 与构建期可信 UI plugin 共用 `shared/pluginManifest.js` 的不可变 manifest envelope。
+Gugo 的进程内 runtime plugin 通过 `server/plugins/runtimePluginRegistry.js` 注册可撤销的工具、Agent Loop 事件、prompt context、服务和模型 provider。runtime 与构建期可信 UI plugin 共用 `shared/pluginManifest.js` 的不可变 manifest envelope。
 
 > 安全边界：`registerPlugin()` 是宿主进程内可信代码 API。磁盘 `transformer` 插件由 `runtimePluginControlService.js` 包装，并继续在 `pluginSandbox.js` 中执行；它不能获得 registry context，也不能注入 React/renderer JavaScript。
 
@@ -15,6 +15,7 @@ await registerPlugin({
   contributes: [
     'tool:example_echo',
     'event:request',
+    'prompt:example-project-context',
     'service:example-cache',
     'model-provider:example-native',
   ],
@@ -29,6 +30,7 @@ await registerPlugin({
 | --- | --- |
 | `context.tools.register({ name })` | `tool:<name>` |
 | `context.events.on(event)` | `event:<event>` |
+| `context.prompts.register({ id, render })` | `prompt:<id>` |
 | `context.services.provide(name)` | `service:<name>` |
 | `context.models.providers.register(kind)` | `model-provider:<normalized-kind>` |
 
@@ -39,7 +41,15 @@ code: PLUGIN_CONTRIBUTION_UNDECLARED
 retryable: false
 ```
 
-setup 失败仍走原有原子回滚：已注册的 tool/event/service/provider 和自定义 disposer 逆序撤销，plugin record 被移除。卸载时先撤销可见贡献，再等待 in-flight callback 排空；活跃依赖存在时不能卸载被依赖 plugin。
+setup 失败仍走原有原子回滚：已注册的 tool/event/prompt/service/provider 和自定义 disposer 逆序撤销，plugin record 被移除。卸载时先撤销可见贡献，再等待 in-flight callback 排空；活跃依赖存在时不能卸载被依赖 plugin。
+
+## Trusted prompt context
+
+可信进程内 plugin 可通过 `context.prompts.register({ id, render })` 提供只追加的 chat-turn system context。`id` 必须匹配 `[a-z0-9][a-z0-9._-]{0,63}`，且 manifest 必须精确声明 `prompt:<id>`。不同 plugin 不能占用同一 prompt id；输出按注册顺序确定性渲染，卸载后立即不可见。
+
+`render(scope)` 必须同步返回字符串或 `null`。scope 是冻结的白名单对象，仅包含 `userId`、`sessionId`、`agentId` 和最多 32 个已解析 `skillIds`；不会提供原始 query、transcript、tool trace、workspace instructions 或 canary prompt。plugin 不能选择 message role、插入位置或替换宿主块。宿主将有效输出固定放在 memory 后、workspace instructions/canary overlay 前，并仅把 `pluginId:promptId` provenance 写入 assistant model context，不持久化 prompt 正文。
+
+宿主限制最多 16 个有效块、每块 16 KiB、总计 64 KiB。异步返回、非文本、超限或 render 异常均只省略对应块并产生脱敏 `plugin.prompt_failed` audit；不会阻断 turn，也不会截断后继续执行。该 API 只属于随宿主启动的可信进程内代码。磁盘 transformer 没有 registry context，因此不能注入 prompt、React/renderer JavaScript 或取得上述 scope。
 
 ## Transformer adapter
 
