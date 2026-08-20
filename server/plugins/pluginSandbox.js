@@ -12,6 +12,7 @@ const MIN_MEMORY_LIMIT_MB = 8
 const MAX_MEMORY_LIMIT_MB = 256
 const ERROR_LIMIT = 1024
 const MAX_CAPABILITY_ENTRIES = 64
+const MAX_TRANSFORMER_SOURCE_BYTES = 512 * 1024
 const SANDBOX_DATA_LIMITS = Object.freeze({
   maxDepth: 32,
   maxNodes: 8_192,
@@ -184,6 +185,49 @@ function ownDefinitionValue(object, key) {
   return descriptor.value
 }
 
+function sandboxSourceError(reason) {
+  const error = new TypeError(`Invalid plugin sandbox source: ${reason}`)
+  error.code = 'PLUGIN_SANDBOX_SOURCE_INVALID'
+  error.retryable = false
+  return error
+}
+
+function validateInlineSource(source) {
+  if (Buffer.byteLength(source, 'utf8') > MAX_TRANSFORMER_SOURCE_BYTES) {
+    throw sandboxSourceError('source exceeds 512 KiB')
+  }
+  return source
+}
+
+async function boundedFileSource(entryPath) {
+  const handle = await fs.open(entryPath, 'r')
+  try {
+    const stat = await handle.stat()
+    if (!stat.isFile()) throw sandboxSourceError('entryPath must reference a regular file')
+    if (stat.size > MAX_TRANSFORMER_SOURCE_BYTES) {
+      throw sandboxSourceError('source exceeds 512 KiB')
+    }
+    const buffer = Buffer.allocUnsafe(MAX_TRANSFORMER_SOURCE_BYTES + 1)
+    let offset = 0
+    while (offset < buffer.length) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        offset,
+        buffer.length - offset,
+        offset,
+      )
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    if (offset > MAX_TRANSFORMER_SOURCE_BYTES) {
+      throw sandboxSourceError('source exceeds 512 KiB')
+    }
+    return buffer.subarray(0, offset).toString('utf8')
+  } finally {
+    await handle.close()
+  }
+}
+
 async function transformerSource(plugin) {
   if (!plugin || typeof plugin !== 'object' || Array.isArray(plugin) || nodeTypes.isProxy(plugin)) {
     throw sandboxDefinitionError('plugin')
@@ -191,13 +235,13 @@ async function transformerSource(plugin) {
   const source = ownDefinitionValue(plugin, 'source')
   if (source !== undefined) {
     if (typeof source !== 'string') throw sandboxDefinitionError('plugin.source')
-    return source
+    return validateInlineSource(source)
   }
   const entryPath = ownDefinitionValue(plugin, 'entryPath')
   if (typeof entryPath !== 'string' || !entryPath) {
     throw sandboxDefinitionError('plugin.entryPath')
   }
-  return await fs.readFile(entryPath, 'utf8')
+  return await boundedFileSource(entryPath)
 }
 
 function sanitizeCapabilities(capabilities) {

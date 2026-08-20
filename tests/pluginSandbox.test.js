@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -143,6 +145,34 @@ test('plugin sandbox definitions reject accessors and Proxy containers without e
       && /definition at plugin$/.test(error?.message || ''),
   )
   assert.equal(descriptorCalls, 0)
+})
+
+test('plugin sandbox source is bounded for inline and entryPath definitions', async () => {
+  const sourcePrefix = 'function transform(input) { return input }\n'
+  const exactSource = sourcePrefix + ' '.repeat((512 * 1024) - Buffer.byteLength(sourcePrefix))
+  const exact = await validateTransformer({ plugin: { source: exactSource } })
+  assert.equal(exact.ok, true)
+
+  await assert.rejects(
+    () => validateTransformer({ plugin: { source: `${exactSource}x` } }),
+    (error) => error?.code === 'PLUGIN_SANDBOX_SOURCE_INVALID'
+      && error?.retryable === false
+      && /512 KiB/.test(error?.message || ''),
+  )
+
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gugo-plugin-source-'))
+  try {
+    const oversizedEntry = path.join(tempDir, 'entry.js')
+    await fs.writeFile(oversizedEntry, `${exactSource}x`, 'utf8')
+    await assert.rejects(
+      () => validateTransformer({ plugin: { entryPath: oversizedEntry } }),
+      (error) => error?.code === 'PLUGIN_SANDBOX_SOURCE_INVALID'
+        && error?.retryable === false
+        && /512 KiB/.test(error?.message || ''),
+    )
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true })
+  }
 })
 
 test('plugin sandbox capabilities use bounded own descriptors without calling array methods', async () => {
