@@ -7,6 +7,7 @@ import {
   registerDynamicTool,
 } from '../utils/toolSchemaCatalog.js'
 import { createPluginContext } from './pluginContext.js'
+import { snapshotPluginServiceData } from './pluginServiceData.js'
 import { registerModelProviderAdapter } from '../adapters/modelProviderRegistry.js'
 import {
   createEffectTracker,
@@ -24,6 +25,13 @@ const PLUGIN_PROMPT_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const MAX_PLUGIN_PROMPT_BLOCKS = 16
 const MAX_PLUGIN_PROMPT_BLOCK_BYTES = 16 * 1024
 const MAX_PLUGIN_PROMPT_TOTAL_BYTES = 64 * 1024
+const PLUGIN_SERVICE_CONSUMER_STATES = new Set([
+  'installing',
+  'active',
+  'cancelling',
+  'failed',
+  'uninstalling',
+])
 const PLUGIN_TOOL_RISK_METADATA = Object.freeze({
   riskClass: 'external',
   category: 'external',
@@ -365,7 +373,12 @@ export function createRuntimePluginRegistry({
       return Object.freeze({ found: false, pluginId: null, value: undefined })
     }
     const target = contribution.value
-    const callback = normalizedMethod ? target?.[normalizedMethod] : target
+    const methodDescriptor = normalizedMethod && target != null
+      ? Object.getOwnPropertyDescriptor(Object(target), normalizedMethod)
+      : null
+    const callback = normalizedMethod
+      ? (methodDescriptor && Object.hasOwn(methodDescriptor, 'value') ? methodDescriptor.value : null)
+      : target
     if (typeof callback !== 'function') {
       const error = new TypeError(`plugin service method is not callable: ${normalizedName}/${normalizedMethod}`)
       error.code = 'PLUGIN_SERVICE_METHOD_INVALID'
@@ -374,15 +387,22 @@ export function createRuntimePluginRegistry({
       error.serviceName = normalizedName
       throw error
     }
-    const values = Array.isArray(args) ? args : []
     let value
     try {
-      value = await invokePluginCallback(
+      const values = snapshotPluginServiceData(Array.isArray(args) ? args : [], {
+        code: 'PLUGIN_SERVICE_ARGUMENT_INVALID',
+        label: 'plugin service arguments',
+      })
+      const returned = await invokePluginCallback(
         contribution.record,
         'service',
         (...input) => callback.apply(target, input),
         values,
       )
+      value = snapshotPluginServiceData(returned, {
+        code: 'PLUGIN_SERVICE_RESULT_INVALID',
+        label: 'plugin service result',
+      })
     } catch (cause) {
       const error = new Error(
         cause instanceof Error ? cause.message : String(cause || 'plugin service failed'),
@@ -399,6 +419,62 @@ export function createRuntimePluginRegistry({
       pluginId: contribution.pluginId,
       value,
     })
+  }
+
+  const serviceConsumerError = (record, code, message) => {
+    const error = new Error(message)
+    error.code = code
+    error.retryable = false
+    error.pluginId = record.manifest.id
+    return error
+  }
+
+  const assertServiceConsumerAvailable = (record) => {
+    if (plugins.get(record.manifest.id) === record
+      && PLUGIN_SERVICE_CONSUMER_STATES.has(record.state)) return
+    throw serviceConsumerError(
+      record,
+      'PLUGIN_SERVICE_CONSUMER_INACTIVE',
+      `plugin service consumer is no longer active: ${record.manifest.id}`,
+    )
+  }
+
+  const serviceForConsumer = (record, name) => {
+    assertServiceConsumerAvailable(record)
+    const normalizedName = String(name || '').trim()
+    const contribution = services.get(normalizedName)
+    if (!contribution || contribution.record.state !== 'active') {
+      return { normalizedName, contribution: null }
+    }
+    if (contribution.record !== record
+      && !record.manifest.requires.includes(contribution.pluginId)) {
+      const error = serviceConsumerError(
+        record,
+        'PLUGIN_SERVICE_DEPENDENCY_UNDECLARED',
+        `plugin service provider is not declared as a dependency: ${record.manifest.id}/${contribution.pluginId}`,
+      )
+      error.serviceName = normalizedName
+      error.providerPluginId = contribution.pluginId
+      throw error
+    }
+    return { normalizedName, contribution }
+  }
+
+  const invokeServiceForConsumer = async (record, name, method, args = []) => {
+    const { normalizedName, contribution } = serviceForConsumer(record, name)
+    if (!contribution) {
+      return Object.freeze({ found: false, pluginId: null, value: undefined })
+    }
+    return invokeService(normalizedName, method, args)
+  }
+
+  const hasServiceForConsumer = (record, name) => {
+    try {
+      return serviceForConsumer(record, name).contribution !== null
+    } catch (error) {
+      if (error?.code === 'PLUGIN_SERVICE_DEPENDENCY_UNDECLARED') return false
+      throw error
+    }
   }
 
   const registerPromptContribution = (record, definition) => {
@@ -606,14 +682,8 @@ export function createRuntimePluginRegistry({
       registerModelProvider: (kind, adapter) => registerModelProviderContribution(record, kind, adapter),
       registerPrompt: (definition) => registerPromptContribution(record, definition),
       provideService: (name, value) => provideService(record, name, value),
-      getService: (name) => {
-        const contribution = services.get(String(name || '').trim())
-        return contribution?.record?.state === 'active' ? contribution.value : undefined
-      },
-      hasService: (name) => {
-        const contribution = services.get(String(name || '').trim())
-        return contribution?.record?.state === 'active'
-      },
+      invokeService: (name, method, args) => invokeServiceForConsumer(record, name, method, args),
+      hasService: (name) => hasServiceForConsumer(record, name),
       emitAudit: (event, details) => emitAudit(event, {
         pluginId: normalized.id,
         details,
@@ -778,9 +848,9 @@ export function createRuntimePluginRegistry({
     bindLoopEvents,
     listPlugins: () => [...plugins.values()].map(pluginSnapshot),
     getPlugin: (id) => pluginSnapshot(plugins.get(String(id || '').trim())),
-    getService: (name) => {
+    hasService: (name) => {
       const contribution = services.get(String(name || '').trim())
-      return contribution?.record?.state === 'active' ? contribution.value : undefined
+      return contribution?.record?.state === 'active'
     },
     invokeService,
     renderPromptBlocks,

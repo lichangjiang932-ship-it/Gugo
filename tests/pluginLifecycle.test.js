@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import {
   _resetRuntimePluginsForTests,
-  getPluginService,
+  hasPluginService,
   registerPlugin,
   unregisterPlugin,
 } from '../server/plugins/pluginRegistry.js'
@@ -123,7 +123,7 @@ test('runtime plugin installs real tool, event, and service contributions and re
 
   assert.equal(installed.state, 'active')
   assert.equal(getDynamicTool('plugin_echo')?.source, 'lifecycle-plugin')
-  assert.deepEqual(registry.getService('echo'), { source: 'lifecycle-plugin' })
+  assert.equal(registry.hasService('echo'), true)
   assert.deepEqual(
     await events.waterfall('request', { model: 'test' }, {}),
     { model: 'test', lifecyclePlugin: true },
@@ -146,7 +146,7 @@ test('runtime plugin installs real tool, event, and service contributions and re
   assert.equal(await registry.unregisterPlugin('lifecycle-plugin'), true)
   assert.equal(await registry.unregisterPlugin('lifecycle-plugin'), false)
   assert.equal(getDynamicTool('plugin_echo'), null)
-  assert.equal(registry.getService('echo'), undefined)
+  assert.equal(registry.hasService('echo'), false)
   assert.deepEqual(registry.renderPromptBlocks({ sessionId: 'after-unload' }), { blocks: [], errors: [] })
   assert.deepEqual(await events.waterfall('request', { model: 'test' }, {}), { model: 'test' })
   assert.deepEqual(cleanupOrder, ['returned', 'second', 'first'])
@@ -174,7 +174,7 @@ test('host service invocation tracks in-flight callbacks across atomic unload', 
   const invocation = registry.invokeService('review-guard', 'review', [{ id: 'review-1' }])
   await started
   const unloading = registry.unregisterPlugin('service-invocation-plugin')
-  assert.equal(registry.getService('review-guard'), undefined)
+  assert.equal(registry.hasService('review-guard'), false)
   assert.deepEqual(await registry.invokeService('review-guard', 'review', []), {
     found: false,
     pluginId: null,
@@ -192,6 +192,108 @@ test('host service invocation tracks in-flight callbacks across atomic unload', 
     value: { accepted: 'review-1' },
   })
   assert.equal(await settleWithin(unloading), true)
+})
+
+test('plugin service consumers require declared providers and receive isolated data only', async () => {
+  const registry = createRuntimePluginRegistry()
+  let observedArgument = null
+  let dependentServices = null
+  let providerCalls = 0
+
+  await registry.registerPlugin(manifest('bounded-service-provider', {
+    contributes: ['service:bounded-service'],
+  }), (ctx) => {
+    ctx.services.provide('bounded-service', {
+      async review(argument) {
+        providerCalls += 1
+        observedArgument = argument
+        assert.equal(Object.isFrozen(argument), true)
+        assert.equal(Object.isFrozen(argument.nested), true)
+        assert.throws(() => { argument.nested.value = 'forged' }, TypeError)
+        return { accepted: argument.id, nested: { value: 'provider-result' } }
+      },
+    })
+  })
+
+  await registry.registerPlugin(manifest('undeclared-service-consumer', {
+    contributes: [],
+  }), async (ctx) => {
+    assert.equal(ctx.services.has('bounded-service'), false)
+    assert.equal(ctx.services.get, undefined)
+    await assert.rejects(
+      ctx.services.invoke('bounded-service', 'review', [{ id: 'forbidden' }]),
+      (error) => error?.code === 'PLUGIN_SERVICE_DEPENDENCY_UNDECLARED'
+        && error?.providerPluginId === 'bounded-service-provider',
+    )
+  })
+
+  await registry.registerPlugin(manifest('declared-service-consumer', {
+    requires: ['bounded-service-provider'],
+    contributes: [],
+  }), (ctx) => {
+    dependentServices = ctx.services
+    assert.equal(ctx.services.has('bounded-service'), true)
+  })
+
+  const argument = { id: 'review-1', nested: { value: 'host-value' } }
+  const invoked = await dependentServices.invoke('bounded-service', 'review', [argument])
+  assert.deepEqual(invoked, {
+    found: true,
+    pluginId: 'bounded-service-provider',
+    value: { accepted: 'review-1', nested: { value: 'provider-result' } },
+  })
+  assert.notEqual(observedArgument, argument)
+  assert.deepEqual(argument, { id: 'review-1', nested: { value: 'host-value' } })
+  assert.equal(Object.isFrozen(invoked), true)
+  assert.equal(Object.isFrozen(invoked.value), true)
+  assert.equal(Object.isFrozen(invoked.value.nested), true)
+  assert.throws(() => { invoked.value.nested.value = 'forged' }, TypeError)
+  assert.equal(providerCalls, 1)
+
+  assert.equal(await registry.unregisterPlugin('undeclared-service-consumer'), true)
+  assert.equal(await registry.unregisterPlugin('declared-service-consumer'), true)
+  await assert.rejects(
+    dependentServices.invoke('bounded-service', 'review', [{ id: 'stale' }]),
+    (error) => error?.code === 'PLUGIN_SERVICE_CONSUMER_INACTIVE',
+  )
+  assert.equal(providerCalls, 1)
+  assert.equal(await registry.unregisterPlugin('bounded-service-provider'), true)
+})
+
+test('plugin services reject accessor arguments, inherited methods, and capability results', async () => {
+  const registry = createRuntimePluginRegistry()
+  let calls = 0
+  await registry.registerPlugin(manifest('invalid-service-data-plugin', {
+    contributes: ['service:invalid-service-data'],
+  }), (ctx) => {
+    const inherited = Object.create({ inherited() { return { ok: true } } })
+    inherited.review = () => {
+      calls += 1
+      return { leaked: () => 'capability' }
+    }
+    ctx.services.provide('invalid-service-data', inherited)
+  })
+
+  const accessorArgument = {}
+  Object.defineProperty(accessorArgument, 'secret', { enumerable: true, get: () => 'leaked' })
+  await assert.rejects(
+    registry.invokeService('invalid-service-data', 'review', [accessorArgument]),
+    (error) => error?.code === 'PLUGIN_SERVICE_ARGUMENT_INVALID',
+  )
+  assert.equal(calls, 0)
+
+  await assert.rejects(
+    registry.invokeService('invalid-service-data', 'inherited', []),
+    (error) => error?.code === 'PLUGIN_SERVICE_METHOD_INVALID',
+  )
+  assert.equal(calls, 0)
+
+  await assert.rejects(
+    registry.invokeService('invalid-service-data', 'review', []),
+    (error) => error?.code === 'PLUGIN_SERVICE_RESULT_INVALID',
+  )
+  assert.equal(calls, 1)
+  assert.equal(await registry.unregisterPlugin('invalid-service-data-plugin'), true)
 })
 
 test('setup failure rolls back active event and tool side effects before rejecting install', async () => {
@@ -353,7 +455,7 @@ test('dependency guard prevents unloading a service required by an active plugin
   await registry.registerPlugin(manifest('dependent-plugin', {
     requires: ['base-plugin'],
   }), (ctx) => {
-    assert.equal(ctx.services.get('base-service').ready, true)
+    assert.equal(ctx.services.has('base-service'), true)
   })
 
   await assert.rejects(
@@ -377,7 +479,7 @@ test('plugin setup cannot mutate manifest arrays to bypass the dependency guard'
     assert.equal(Object.isFrozen(ctx.plugin.contributes), true)
     assert.throws(() => ctx.plugin.requires.splice(0), TypeError)
     assert.throws(() => ctx.plugin.contributes.push('tool:forged'), TypeError)
-    assert.equal(ctx.services.get('immutable-base-service').ready, true)
+    assert.equal(ctx.services.has('immutable-base-service'), true)
   })
 
   assert.deepEqual(registry.getPlugin('immutable-dependent')?.requires, ['immutable-base'])
@@ -456,7 +558,7 @@ test('escaped setup context is sealed before uninstall starts', async () => {
     /lifecycle is closed/,
   )
   assert.equal(getDynamicTool('plugin_restore'), null)
-  assert.equal(registry.getService('late-service'), undefined)
+  assert.equal(registry.hasService('late-service'), false)
 })
 
 test('plugin tool trust metadata is host-owned and fails closed', async () => {
@@ -542,7 +644,7 @@ test('concurrent shutdown coalesces, cancels installing plugins, and fences new 
   const duplicateShutdown = registry.shutdown()
   assert.equal(duplicateShutdown, firstShutdown)
   assert.equal(registry.getPlugin('shutdown-installing')?.state, 'cancelling')
-  assert.equal(registry.getService('shutdown-installing-service'), undefined)
+  assert.equal(registry.hasService('shutdown-installing-service'), false)
   await assert.rejects(
     registry.registerPlugin(manifest('shutdown-racing-install'), () => {}),
     (error) => error?.code === 'PLUGIN_REGISTRY_SHUTTING_DOWN',
@@ -571,7 +673,7 @@ test('installing dependent blocks base unload and revalidates the dependency bef
   const dependentInstall = registry.registerPlugin(manifest('async-dependent', {
     requires: ['async-base'],
   }), async (ctx) => {
-    assert.equal(ctx.services.get('async-base-service').ready, true)
+    assert.equal(ctx.services.has('async-base-service'), true)
     await setupGate
   })
 
@@ -603,9 +705,9 @@ test('dependent cleanup blocks base unload until the dependent record is removed
   }), (ctx) => {
     ctx.lifecycle.onDispose(async () => {
       markCleanupStarted()
-      assert.equal(ctx.services.get('cleanup-base-service').ready, true)
+      assert.equal(ctx.services.has('cleanup-base-service'), true)
       await cleanupGate
-      assert.equal(ctx.services.get('cleanup-base-service').ready, true)
+      assert.equal(ctx.services.has('cleanup-base-service'), true)
     })
   })
 
@@ -638,9 +740,9 @@ test('failed dependent rollback blocks base unload until rollback removes the re
   }), (ctx) => {
     ctx.lifecycle.onDispose(async () => {
       markRollbackStarted()
-      assert.equal(ctx.services.get('rollback-base-service').ready, true)
+      assert.equal(ctx.services.has('rollback-base-service'), true)
       await rollbackGate
-      assert.equal(ctx.services.get('rollback-base-service').ready, true)
+      assert.equal(ctx.services.has('rollback-base-service'), true)
     })
     throw new Error('dependent setup exploded')
   })
@@ -664,7 +766,7 @@ test('public Agent Loop binds active runtime plugin events for each run', async 
     ctx.events.on('request', (request) => ({ ...request, runtimePluginMarker: 'active' }))
     ctx.services.provide('loop-marker', 'active')
   })
-  assert.equal(getPluginService('loop-marker'), 'active')
+  assert.equal(hasPluginService('loop-marker'), true)
 
   const result = await runToolLoop({
     job: { id: 'plugin-loop-job', origin: 'chat', prompt: 'answer once' },
@@ -683,7 +785,7 @@ test('public Agent Loop binds active runtime plugin events for each run', async 
   assert.equal(result.text, 'plugin event observed')
   assert.equal(requests, 1)
   assert.equal(await unregisterPlugin('loop-request-plugin'), true)
-  assert.equal(getPluginService('loop-marker'), undefined)
+  assert.equal(hasPluginService('loop-marker'), false)
 })
 
 test('public Agent Loop executes a plugin tool once and feeds its result back to the model', async () => {
@@ -1250,7 +1352,7 @@ test('uninstall atomically revokes visibility while allowing an in-flight tool c
 
   assert.equal(registry.getPlugin('atomic-unload')?.state, 'uninstalling')
   assert.equal(getDynamicTool('plugin_echo'), null)
-  assert.equal(registry.getService('atomic-service'), undefined)
+  assert.equal(registry.hasService('atomic-service'), false)
   assert.deepEqual(
     await events.waterfall('request', { model: 'test' }, {}),
     { model: 'test' },

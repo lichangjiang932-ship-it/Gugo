@@ -7,7 +7,7 @@ export function createPluginContext({
   registerModelProvider,
   registerPrompt,
   provideService,
-  getService,
+  invokeService,
   hasService,
   emitAudit,
 }) {
@@ -45,8 +45,8 @@ export function createPluginContext({
       provide(name, value) {
         return provideService(name, value)
       },
-      get(name) {
-        return getService(name)
+      invoke(name, method, args = []) {
+        return invokeService(name, method, args)
       },
       has(name) {
         return hasService(name)
