@@ -53,6 +53,8 @@ setup 本身运行在显式 installation scope：setup 不能等待卸载自身�
 
 对象型 disposer 只接受 own data-property function `dispose` 或 `uninstall`，并在注册时捕获方法；getter、prototype callback 和清理期 method swap 不会成为可执行 cleanup。disposer 抛出值在 cleanup scope 结束前仅通过 own data-property 投影有界 `message/code`，转换为新的 `retryable=false` Error；原始 identity、accessor、cause、stack 和其他属性不进入 audit 或 `AggregateError`，非法 code 统一为 `PLUGIN_DISPOSER_FAILED`。
 
+`context.config` 是 registry 创建时生成的深冻结 plain-data 快照，上限为 32 层、8192 节点和 1 MiB UTF-8 文本；不会保留宿主配置引用，accessor、function、特殊 prototype、cycle 和超限值以 `PLUGIN_CONTEXT_CONFIG_INVALID` 拒绝。`context.audit.emit(event, details)` 的 event 必须是最多 128 字符的受限标识，details 是最多 16 层、4096 节点和 256 KiB 的深冻结 detached plain data；非法事件/数据分别以 `PLUGIN_AUDIT_EVENT_INVALID` / `PLUGIN_AUDIT_DATA_INVALID` 拒绝，且不会到达宿主 audit sink。audit envelope 自身也被冻结，sink 异常继续保持 observability fail-open。
+
 ## Loop event boundaries
 
 `context.events.on(event, listener)` 只能订阅固定的 Agent Loop event catalog，且必须逐项声明 `event:<event>`。event 按宿主权威分为三类：

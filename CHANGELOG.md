@@ -39,6 +39,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Scoped plugin setup completion and returned-effect registration inside installation accounting, failing fast on self-waits and exporting only detached non-retryable setup errors.
 - Snapshotted runtime tool and prompt contribution definitions from own data properties, rejecting getter/prototype callbacks and registration-time method or schema swaps.
 - Hardened the shared runtime/UI plugin manifest envelope to own data properties and dense string arrays, preventing getter, prototype, sparse-array, and post-registration mutation influence.
+- Isolated runtime plugin context config and audit payloads as bounded deeply frozen plain data, preventing host-reference, accessor, capability, and post-emission mutation leakage.
 
 ## [0.11.31] - 2026-08-20
 

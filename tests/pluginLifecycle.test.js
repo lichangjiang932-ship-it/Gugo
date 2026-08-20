@@ -83,6 +83,117 @@ test.afterEach(async () => {
   }
 })
 
+test('plugin context config is a detached deeply frozen plain-data snapshot', async () => {
+  const source = {
+    mode: 'original',
+    nested: { enabled: true },
+    entries: ['first'],
+  }
+  const registry = createRuntimePluginRegistry({ config: source })
+  source.mode = 'mutated'
+  source.nested.enabled = false
+  source.entries[0] = 'mutated'
+
+  await registry.registerPlugin(manifest('context-config-snapshot'), (ctx) => {
+    assert.deepEqual(ctx.config, {
+      mode: 'original',
+      nested: { enabled: true },
+      entries: ['first'],
+    })
+    assert.notEqual(ctx.config, source)
+    assert.notEqual(ctx.config.nested, source.nested)
+    assert.equal(Object.isFrozen(ctx.config), true)
+    assert.equal(Object.isFrozen(ctx.config.nested), true)
+    assert.equal(Object.isFrozen(ctx.config.entries), true)
+    assert.throws(() => { ctx.config.nested.enabled = false }, TypeError)
+    assert.throws(() => { ctx.config.entries.push('forged') }, TypeError)
+  })
+  assert.equal(await registry.unregisterPlugin('context-config-snapshot'), true)
+})
+
+test('plugin context config rejects accessors and capabilities without invoking them', () => {
+  let getterCalls = 0
+  const accessorConfig = {}
+  Object.defineProperty(accessorConfig, 'secret', {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return 'not-readable'
+    },
+  })
+  assert.throws(
+    () => createRuntimePluginRegistry({ config: accessorConfig }),
+    (error) => error?.code === 'PLUGIN_CONTEXT_CONFIG_INVALID'
+      && error?.retryable === false,
+  )
+  assert.equal(getterCalls, 0)
+  assert.throws(
+    () => createRuntimePluginRegistry({ config: { callback() {} } }),
+    (error) => error?.code === 'PLUGIN_CONTEXT_CONFIG_INVALID'
+      && error?.retryable === false,
+  )
+})
+
+test('plugin audit emits detached immutable plain data and rejects capabilities', async () => {
+  const audit = []
+  const registry = createRuntimePluginRegistry({ audit: (entry) => audit.push(entry) })
+  let detailGetterCalls = 0
+  let eventCoercionCalls = 0
+  await registry.registerPlugin(manifest('context-audit-boundary'), (ctx) => {
+    const details = {
+      status: 'original',
+      nested: { count: 1 },
+    }
+    ctx.audit.emit('plugin.custom-event', details)
+    details.status = 'mutated'
+    details.nested.count = 2
+
+    const accessorDetails = {}
+    Object.defineProperty(accessorDetails, 'secret', {
+      enumerable: true,
+      get() {
+        detailGetterCalls += 1
+        return 'not-readable'
+      },
+    })
+    assert.throws(
+      () => ctx.audit.emit('plugin.invalid-details', accessorDetails),
+      (error) => error?.code === 'PLUGIN_AUDIT_DATA_INVALID'
+        && error?.retryable === false,
+    )
+    assert.throws(
+      () => ctx.audit.emit('plugin.invalid-capability', { callback() {} }),
+      (error) => error?.code === 'PLUGIN_AUDIT_DATA_INVALID'
+        && error?.retryable === false,
+    )
+    assert.throws(
+      () => ctx.audit.emit({
+        [Symbol.toPrimitive]() {
+          eventCoercionCalls += 1
+          return 'plugin.forged'
+        },
+      }, {}),
+      (error) => error?.code === 'PLUGIN_AUDIT_EVENT_INVALID'
+        && error?.retryable === false,
+    )
+  })
+
+  const custom = audit.find((entry) => entry.event === 'plugin.custom-event')
+  assert.ok(custom)
+  assert.deepEqual(custom.details, {
+    status: 'original',
+    nested: { count: 1 },
+  })
+  assert.equal(Object.isFrozen(custom), true)
+  assert.equal(Object.isFrozen(custom.details), true)
+  assert.equal(Object.isFrozen(custom.details.nested), true)
+  assert.equal(detailGetterCalls, 0)
+  assert.equal(eventCoercionCalls, 0)
+  assert.equal(audit.some((entry) => entry.event === 'plugin.invalid-details'), false)
+  assert.equal(audit.some((entry) => entry.event === 'plugin.invalid-capability'), false)
+  assert.equal(await registry.unregisterPlugin('context-audit-boundary'), true)
+})
+
 test('runtime plugin installs real tool, event, and service contributions and reverses every effect', async () => {
   const registry = createRuntimePluginRegistry()
   const events = createLoopEvents()

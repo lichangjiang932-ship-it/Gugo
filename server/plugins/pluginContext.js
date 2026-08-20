@@ -13,7 +13,7 @@ export function createPluginContext({
 }) {
   const context = {
     plugin: manifest,
-    config: Object.freeze({ ...(config || {}) }),
+    config,
     lifecycle: Object.freeze({
       onDispose(effect) {
         return track(effect)

@@ -7,6 +7,10 @@ import {
   registerDynamicTool,
 } from '../utils/toolSchemaCatalog.js'
 import { createPluginContext } from './pluginContext.js'
+import {
+  snapshotPluginAuditEntry,
+  snapshotPluginContextConfig,
+} from './pluginContextData.js'
 import { snapshotContributionDefinition } from './pluginContributionDefinition.js'
 import { createRuntimePluginEventListener } from './pluginEventInvocation.js'
 import { snapshotRuntimeModelProvider } from './pluginModelProvider.js'
@@ -177,6 +181,7 @@ export function createRuntimePluginRegistry({
   registerModelProvider = registerModelProviderAdapter,
   audit = null,
 } = {}) {
+  const pluginConfig = snapshotPluginContextConfig(config)
   const plugins = new Map()
   const services = new Map()
   const promptContributions = new Map()
@@ -309,7 +314,7 @@ export function createRuntimePluginRegistry({
   const emitAudit = (event, details = {}) => {
     if (typeof audit !== 'function') return
     try {
-      audit({ event, ...details })
+      audit(Object.freeze({ event, ...details }))
     } catch {
       // Observability must never change lifecycle correctness.
     }
@@ -695,7 +700,7 @@ export function createRuntimePluginRegistry({
 
     const context = createPluginContext({
       manifest: normalized,
-      config,
+      config: pluginConfig,
       track: record.effects.track,
       registerTool: (definition) => registerToolContribution(record, definition),
       registerEvent: (event, listener) => registerEventContribution(record, event, listener),
@@ -704,10 +709,13 @@ export function createRuntimePluginRegistry({
       provideService: (name, value) => provideService(record, name, value),
       invokeService: (name, method, args) => invokeServiceForConsumer(record, name, method, args),
       hasService: (name) => hasServiceForConsumer(record, name),
-      emitAudit: (event, details) => emitAudit(event, {
-        pluginId: normalized.id,
-        details,
-      }),
+      emitAudit: (event, details) => {
+        const entry = snapshotPluginAuditEntry(event, details)
+        emitAudit(entry.event, {
+          pluginId: normalized.id,
+          details: entry.details,
+        })
+      },
     })
 
     try {
