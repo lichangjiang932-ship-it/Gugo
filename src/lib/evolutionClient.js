@@ -171,6 +171,18 @@ export async function getEvolutionCanaryApi(id) {
   return jsonOk(resp)
 }
 
+export async function createEvolutionCanaryRollbackPolicyApi(id, input) {
+  const resp = await fetch(
+    `/api/evolution/canaries/${encodeURIComponent(String(id || ''))}/rollback-policy`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(input || {}),
+    },
+  )
+  return jsonOk(resp)
+}
+
 export async function startEvolutionCanaryApi(id, reason) {
   const resp = await fetch(`/api/evolution/canaries/${encodeURIComponent(String(id || ''))}/start`, {
     method: 'POST',

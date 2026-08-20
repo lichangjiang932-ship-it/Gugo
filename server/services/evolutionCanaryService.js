@@ -6,6 +6,13 @@ import { getEvolutionCandidate } from './evolutionCandidateService.js'
 import { sanitizeEvolutionText } from './evolutionDatasetService.js'
 import { getEvolutionEvaluation } from './evolutionEvaluationService.js'
 import { getEvolutionReplayRun } from './evolutionReplayService.js'
+import {
+  assertEvolutionCanaryRollbackPolicyReady,
+  evaluateEvolutionCanaryRollback,
+  getEvolutionCanaryRollbackState,
+  hasEvolutionCanaryRollback,
+  hasEvolutionCanaryRollbackPolicy,
+} from './evolutionRollbackService.js'
 import { getSession } from './sessionStore.js'
 import { readWorkspaceInstructions } from './workspaceInstructions.js'
 
@@ -114,9 +121,11 @@ function releaseStats(releaseId) {
     WHERE release_id = ? GROUP BY variant, decision_reason
   `).all(releaseId)
   const outcomeRows = getDb().prepare(`
-    SELECT assignment.variant, outcome.terminal_state, outcome.duration_ms, outcome.usage_json
+    SELECT COALESCE(context.effective_variant, assignment.variant) AS variant,
+      outcome.terminal_state, outcome.duration_ms, outcome.usage_json
     FROM evolution_canary_outcomes AS outcome
     JOIN evolution_canary_assignments AS assignment ON assignment.id = outcome.assignment_id
+    LEFT JOIN evolution_canary_outcome_context AS context ON context.outcome_id = outcome.id
     WHERE outcome.release_id = ?
   `).all(releaseId)
   const assignments = { baseline: 0, candidate: 0 }
@@ -146,13 +155,17 @@ function releaseStats(releaseId) {
 function releaseObservations(releaseId) {
   return getDb().prepare(`
     SELECT assignment.id, assignment.session_id, assignment.turn_id,
-      assignment.variant, assignment.decision_reason, assignment.bucket,
+      assignment.variant AS assigned_variant,
+      COALESCE(context.effective_variant, assignment.variant) AS effective_variant,
+      COALESCE(context.decision_reason, assignment.decision_reason) AS effective_reason,
+      assignment.bucket,
       assignment.baseline_sha256, assignment.observed_baseline_sha256,
       assignment.candidate_sha256, assignment.assigned_at,
       outcome.terminal_state, outcome.duration_ms, outcome.usage_json,
       outcome.error_code, outcome.created_at AS outcome_created_at
     FROM evolution_canary_assignments AS assignment
     LEFT JOIN evolution_canary_outcomes AS outcome ON outcome.assignment_id = assignment.id
+    LEFT JOIN evolution_canary_outcome_context AS context ON context.outcome_id = outcome.id
     WHERE assignment.release_id = ?
     ORDER BY assignment.assigned_at DESC, assignment.rowid DESC
     LIMIT 200
@@ -160,8 +173,9 @@ function releaseObservations(releaseId) {
     assignmentId: entry.id,
     sessionId: entry.session_id,
     turnId: entry.turn_id,
-    variant: entry.variant,
-    decisionReason: entry.decision_reason,
+    assignedVariant: entry.assigned_variant,
+    variant: entry.effective_variant,
+    decisionReason: entry.effective_reason,
     bucket: entry.bucket,
     baselineSha256: entry.baseline_sha256,
     observedBaselineSha256: entry.observed_baseline_sha256,
@@ -179,6 +193,12 @@ function releaseObservations(releaseId) {
 
 function releaseView(row, { includeDetails = false } = {}) {
   const latest = latestEventRow(row.id)
+  const automaticRollback = getEvolutionCanaryRollbackState({
+    userId: row.user_id,
+    releaseId: row.id,
+    includeEvaluations: includeDetails,
+  })
+  const rollback = automaticRollback.rollback
   return {
     id: row.id,
     approvalId: row.approval_id,
@@ -191,13 +211,17 @@ function releaseView(row, { includeDetails = false } = {}) {
     ...(includeDetails ? {
       sessionIds: parseJson(row.session_ids_json, []),
       observations: releaseObservations(row.id),
-    } : {}),
+      automaticRollback,
+    } : {
+      rollbackPolicyConfigured: Boolean(automaticRollback.policy),
+      rollback: automaticRollback.rollback,
+    }),
     baselineSha256: row.baseline_sha256,
     candidateSha256: row.candidate_sha256,
     releaseFingerprint: row.release_fingerprint,
-    state: latest?.event_type === 'started' ? 'active' : latest ? 'stopped' : 'created',
-    stateReason: latest?.reason || null,
-    stateChangedAt: latest?.created_at ?? row.created_at,
+    state: rollback ? 'rolled_back' : latest?.event_type === 'started' ? 'active' : latest ? 'stopped' : 'created',
+    stateReason: rollback?.reason || latest?.reason || null,
+    stateChangedAt: rollback?.createdAt ?? latest?.created_at ?? row.created_at,
     stats: releaseStats(row.id),
     createdAt: row.created_at,
   }
@@ -218,6 +242,12 @@ function activeReleaseRows(userId) {
     WHERE canary.user_id = ?
       AND (SELECT event_type FROM evolution_canary_events
         WHERE release_id = canary.id ORDER BY rowid DESC LIMIT 1) = 'started'
+      AND EXISTS (
+        SELECT 1 FROM evolution_canary_rollback_policies AS policy WHERE policy.release_id = canary.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM evolution_canary_rollbacks AS rollback WHERE rollback.release_id = canary.id
+      )
     ORDER BY canary.created_at DESC, canary.rowid DESC
   `).all(userId)
 }
@@ -334,6 +364,12 @@ export function startEvolutionCanary({
     || row.release_fingerprint !== expectedFingerprint) {
     throw serviceError('EVOLUTION_CANARY_PROVENANCE_MISMATCH', 'canary release provenance is inconsistent', 409)
   }
+  assertEvolutionCanaryRollbackPolicyReady({
+    userId: owner,
+    releaseId: row.id,
+    baselineSha256: row.baseline_sha256,
+    releaseFingerprint: row.release_fingerprint,
+  })
   assertCurrentBaseline(replay, env)
   const reason = boundedReason(reasonValue, 'EVOLUTION_CANARY_REASON_INVALID')
   const startedAt = timestamp(now)
@@ -358,7 +394,7 @@ export function stopEvolutionCanary({ userId, id, reason: reasonValue, now = Dat
   const row = getDb().prepare('SELECT * FROM evolution_canary_releases WHERE id = ? AND user_id = ?')
     .get(String(id || '').trim(), owner)
   if (!row) throw serviceError('EVOLUTION_CANARY_NOT_FOUND', 'canary release was not found', 404)
-  if (latestEventRow(row.id)?.event_type !== 'started') {
+  if (hasEvolutionCanaryRollback(row.id) || latestEventRow(row.id)?.event_type !== 'started') {
     throw serviceError('EVOLUTION_CANARY_NOT_ACTIVE', 'canary release is not active', 409)
   }
   const reason = boundedReason(reasonValue, 'EVOLUTION_CANARY_STOP_REASON_INVALID')
@@ -409,12 +445,13 @@ export function resolveEvolutionCanaryAssignment({
 
   let baselineContent = null
   let observedBaselineSha256 = null
+  const rollbackPolicyConfigured = hasEvolutionCanaryRollbackPolicy(release.id)
   let runtimeBlocker = 'baseline_unavailable'
   try {
     baselineContent = currentWorkspaceInstructions(env)
     observedBaselineSha256 = sha256(baselineContent)
     runtimeBlocker = observedBaselineSha256 === release.baseline_sha256
-      ? null
+      ? rollbackPolicyConfigured ? null : 'rollback_policy_missing'
       : 'baseline_mismatch'
   } catch {
     // A new assignment records the fail-closed decision; an existing turn is downgraded in memory.
@@ -486,6 +523,9 @@ export function recordEvolutionCanaryOutcome({
   durationMs,
   usage,
   errorCode = null,
+  effectiveVariant: effectiveVariantValue = null,
+  decisionReason: decisionReasonValue = null,
+  env = process.env,
   now = Date.now(),
 } = {}) {
   const owner = String(userId || '').trim()
@@ -503,18 +543,47 @@ export function recordEvolutionCanaryOutcome({
     ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(rawDuration)))
     : 0
   const normalizedUsage = normalizeUsage(usage)
+  const effectiveVariant = ['baseline', 'candidate'].includes(effectiveVariantValue)
+    ? effectiveVariantValue
+    : assignment.variant
+  const allowedDecisionReasons = new Set([
+    'traffic_baseline', 'traffic_candidate', 'baseline_mismatch',
+    'baseline_unavailable', 'candidate_provenance_mismatch',
+    'rollback_policy_missing',
+  ])
+  const decisionReason = allowedDecisionReasons.has(decisionReasonValue)
+    ? decisionReasonValue
+    : assignment.decision_reason
   const normalizedErrorCode = errorCode
     ? String(errorCode).trim().replace(/[^a-zA-Z0-9_.:-]/gu, '_').slice(0, 160) || null
     : null
-  getDb().prepare(`
-    INSERT OR IGNORE INTO evolution_canary_outcomes (
-      id, user_id, release_id, assignment_id, terminal_state,
-      duration_ms, usage_json, error_code, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    randomUUID(), owner, assignment.release_id, assignment.id, terminalState,
-    duration, normalizedUsage ? JSON.stringify(normalizedUsage) : null,
-    normalizedErrorCode, timestamp(now),
-  )
+  const db = getDb()
+  const outcomeId = randomUUID()
+  const createdAt = timestamp(now)
+  db.transaction(() => {
+    const inserted = db.prepare(`
+      INSERT OR IGNORE INTO evolution_canary_outcomes (
+        id, user_id, release_id, assignment_id, terminal_state,
+        duration_ms, usage_json, error_code, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      outcomeId, owner, assignment.release_id, assignment.id, terminalState,
+      duration, normalizedUsage ? JSON.stringify(normalizedUsage) : null,
+      normalizedErrorCode, createdAt,
+    )
+    if (inserted.changes !== 1) return
+    db.prepare(`
+      INSERT INTO evolution_canary_outcome_context (
+        outcome_id, assignment_id, effective_variant, decision_reason, recorded_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `).run(outcomeId, assignment.id, effectiveVariant, decisionReason, createdAt)
+    evaluateEvolutionCanaryRollback({
+      userId: owner,
+      releaseId: assignment.release_id,
+      outcomeId,
+      env,
+      now: createdAt,
+    })
+  })()
   return getEvolutionCanary({ userId: owner, id: assignment.release_id })
 }

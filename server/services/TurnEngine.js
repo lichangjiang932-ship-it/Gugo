@@ -1507,6 +1507,9 @@ export class TurnEngine {
           durationMs: Math.max(0, completedAt - effectiveTurnStartedAt),
           usage: turnModelUsage || latestModelUsage,
           errorCode,
+          effectiveVariant: canaryAssignment.variant,
+          decisionReason: canaryAssignment.decisionReason,
+          env: this.deps.env,
           now: completedAt,
         })
       } catch (error) {

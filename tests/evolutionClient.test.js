@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   createEvolutionCanaryApi,
+  createEvolutionCanaryRollbackPolicyApi,
   createEvolutionReplaySuiteApi,
   decideEvolutionApprovalApi,
   evaluateEvolutionReplayApi,
@@ -259,11 +260,13 @@ test('evolution client creates, reads, lists, and manually stops scoped canaries
       ? { ok: true, canary: { id: 'canary-1', state: 'created' } }
       : url.startsWith('/api/evolution/canaries?')
         ? { ok: true, canaries: [] }
-        : url.endsWith('/start')
-          ? { ok: true, canary: { id: 'canary-1', state: 'active' } }
-          : url.endsWith('/stop')
-            ? { ok: true, canary: { id: 'canary-1', state: 'stopped' } }
-            : { ok: true, canary: { id: 'canary-1', state: 'created' } }
+        : url.endsWith('/rollback-policy')
+          ? { ok: true, policy: { id: 'policy-1', version: 'canary-rollback-v1' } }
+          : url.endsWith('/start')
+            ? { ok: true, canary: { id: 'canary-1', state: 'active' } }
+            : url.endsWith('/stop')
+              ? { ok: true, canary: { id: 'canary-1', state: 'stopped' } }
+              : { ok: true, canary: { id: 'canary-1', state: 'created' } }
     return new Response(JSON.stringify(body), {
       status: init.method === 'POST' && !url.endsWith('/stop') ? 201 : 200,
       headers: { 'content-type': 'application/json' },
@@ -279,9 +282,23 @@ test('evolution client creates, reads, lists, and manually stops scoped canaries
     const created = await createEvolutionCanaryApi(input)
     await listEvolutionCanariesApi({ limit: 10 })
     await getEvolutionCanaryApi('canary/1')
+    const rollbackPolicyInput = {
+      policy: {
+        windowSize: 20,
+        minimumCandidateOutcomes: 3,
+        minimumBaselineOutcomes: 3,
+        maximumCandidateFailureRate: 0.34,
+        maximumCandidateCancellationRate: 0.34,
+        maximumLatencyRatio: 1.5,
+        maximumCostRatio: 1.25,
+      },
+      reason: 'Declare guardrails before start',
+    }
+    const policy = await createEvolutionCanaryRollbackPolicyApi('canary/1', rollbackPolicyInput)
     const started = await startEvolutionCanaryApi('canary/1', 'Explicit start')
     const stopped = await stopEvolutionCanaryApi('canary/1', 'Manual stop')
     assert.equal(created.canary.state, 'created')
+    assert.equal(policy.policy.version, 'canary-rollback-v1')
     assert.equal(started.canary.state, 'active')
     assert.equal(stopped.canary.state, 'stopped')
     assert.equal(requests[0].url, '/api/evolution/canaries')
@@ -289,11 +306,14 @@ test('evolution client creates, reads, lists, and manually stops scoped canaries
     assert.deepEqual(JSON.parse(requests[0].init.body), input)
     assert.equal(requests[1].url, '/api/evolution/canaries?limit=10')
     assert.equal(requests[2].url, '/api/evolution/canaries/canary%2F1')
-    assert.equal(requests[3].url, '/api/evolution/canaries/canary%2F1/start')
-    assert.deepEqual(JSON.parse(requests[3].init.body), { reason: 'Explicit start' })
-    assert.equal(requests[4].url, '/api/evolution/canaries/canary%2F1/stop')
-    assert.deepEqual(JSON.parse(requests[4].init.body), { reason: 'Manual stop' })
-    assert.equal(requests.every(({ url }) => !/apply|install|activate|rollback/u.test(url)), true)
+    assert.equal(requests[3].url, '/api/evolution/canaries/canary%2F1/rollback-policy')
+    assert.deepEqual(JSON.parse(requests[3].init.body), rollbackPolicyInput)
+    assert.equal(requests[4].url, '/api/evolution/canaries/canary%2F1/start')
+    assert.deepEqual(JSON.parse(requests[4].init.body), { reason: 'Explicit start' })
+    assert.equal(requests[5].url, '/api/evolution/canaries/canary%2F1/stop')
+    assert.deepEqual(JSON.parse(requests[5].init.body), { reason: 'Manual stop' })
+    assert.equal(requests.every(({ url }) => !/apply|install|activate|deploy/u.test(url)), true)
+    assert.equal(requests.some(({ url }) => url.endsWith('/rollback')), false)
   } finally {
     globalThis.fetch = originalFetch
   }

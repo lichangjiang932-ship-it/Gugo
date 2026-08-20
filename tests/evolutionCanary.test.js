@@ -22,6 +22,9 @@ const {
   startEvolutionCanary,
   stopEvolutionCanary,
 } = await import('../server/services/evolutionCanaryService.js')
+const {
+  createEvolutionCanaryRollbackPolicy,
+} = await import('../server/services/evolutionRollbackService.js')
 const { prepareTurnPromptContext } = await import('../server/services/turnPromptContext.js')
 const { readWorkspaceInstructions } = await import('../server/services/workspaceInstructions.js')
 const { upsertSession } = await import('../server/services/sessionStore.js')
@@ -39,6 +42,16 @@ const server = http.createServer((req, res) => handleEvolutionRequest(req, res, 
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const origin = `http://127.0.0.1:${server.address().port}`
 let sequence = 0
+
+const DEFAULT_ROLLBACK_POLICY = Object.freeze({
+  windowSize: 20,
+  minimumCandidateOutcomes: 3,
+  minimumBaselineOutcomes: 3,
+  maximumCandidateFailureRate: 1,
+  maximumCandidateCancellationRate: 1,
+  maximumLatencyRatio: 10,
+  maximumCostRatio: 10,
+})
 
 function sha256(value) {
   return createHash('sha256').update(String(value)).digest('hex')
@@ -132,6 +145,34 @@ function createChatSession(userId, id) {
   return id
 }
 
+function declareRollbackPolicy(userId, releaseId, overrides = {}, now = 1) {
+  return createEvolutionCanaryRollbackPolicy({
+    userId,
+    releaseId,
+    policy: { ...DEFAULT_ROLLBACK_POLICY, ...overrides },
+    reason: 'Predeclared automatic rollback guardrails',
+    now,
+  })
+}
+
+function collectCanaryAssignments(userId, sessionId, prefix, now = 1_000) {
+  const assignments = { baseline: [], candidate: [] }
+  for (let index = 0; index < 1_000
+    && (assignments.baseline.length < 3 || assignments.candidate.length < 3); index += 1) {
+    const assignment = resolveEvolutionCanaryAssignment({
+      userId,
+      sessionId,
+      turnId: `${prefix}-${index}`,
+      env: routeEnv,
+      now: now + index,
+    })
+    if (assignments[assignment.variant].length < 3) assignments[assignment.variant].push(assignment)
+  }
+  assert.equal(assignments.baseline.length, 3)
+  assert.equal(assignments.candidate.length, 3)
+  return assignments
+}
+
 test.after(async () => {
   await new Promise((resolve) => server.close(resolve))
   closeDb()
@@ -160,6 +201,7 @@ test('canary is approval-bound, session-scoped, deterministic, drift-safe, and m
   assert.equal(resolveEvolutionCanaryAssignment({
     userId: owner.userId, sessionId: scopedSession, turnId: 'before-start', env: routeEnv,
   }), null)
+  declareRollbackPolicy(owner.userId, canary.id, {}, 125)
   const started = startEvolutionCanary({
     userId: owner.userId,
     id: canary.id,
@@ -264,6 +306,17 @@ test('canary start revalidates the baseline after release creation', () => {
     env: routeEnv,
     now: 800,
   })
+  assert.throws(
+    () => startEvolutionCanary({
+      userId: owner.userId,
+      id: canary.id,
+      reason: 'Policy is intentionally missing',
+      env: routeEnv,
+      now: 800,
+    }),
+    (error) => error.code === 'EVOLUTION_CANARY_ROLLBACK_POLICY_REQUIRED',
+  )
+  declareRollbackPolicy(owner.userId, canary.id, {}, 800)
   fs.writeFileSync(path.join(workspaceDir, 'AGENTS.md'), '# Workspace\n\nChanged before start.\n')
   assert.throws(
     () => startEvolutionCanary({
@@ -294,6 +347,272 @@ test('canary start revalidates the baseline after release creation', () => {
   })
 })
 
+test('legacy active canary without a rollback policy fails closed to baseline', () => {
+  const owner = issueTestSession({ email: 'legacy-canary-policy-owner@example.com' })
+  routeEnv.LOCAL_USER_ID = owner.userId
+  const sessionId = createChatSession(owner.userId, 'legacy-canary-policy-session')
+  const seeded = seedApprovedCanary(owner.userId)
+  const canary = createEvolutionCanary({
+    userId: owner.userId,
+    approvalId: seeded.approvalId,
+    sessionIds: [sessionId],
+    trafficPercent: 10,
+    reason: 'Simulate a release started before v68',
+    env: routeEnv,
+    now: 850,
+  })
+  getDb().prepare(`
+    INSERT INTO evolution_canary_events (id, user_id, release_id, event_type, reason, created_at)
+    VALUES ('legacy-start-event', ?, ?, 'started', 'legacy start', 851)
+  `).run(owner.userId, canary.id)
+  assert.equal(resolveEvolutionCanaryAssignment({
+    userId: owner.userId,
+    sessionId,
+    turnId: 'legacy-new-turn',
+    env: routeEnv,
+  }), null)
+  getDb().prepare(`
+    INSERT INTO evolution_canary_assignments (
+      id, user_id, release_id, session_id, turn_id, variant, decision_reason, bucket,
+      baseline_sha256, observed_baseline_sha256, candidate_sha256, assigned_at
+    ) VALUES ('legacy-assignment', ?, ?, ?, 'legacy-existing-turn', 'candidate',
+      'traffic_candidate', 1, ?, ?, ?, 852)
+  `).run(
+    owner.userId, canary.id, sessionId, seeded.baselineSha256,
+    seeded.baselineSha256, seeded.candidateSha256,
+  )
+  const existing = resolveEvolutionCanaryAssignment({
+    userId: owner.userId,
+    sessionId,
+    turnId: 'legacy-existing-turn',
+    env: routeEnv,
+  })
+  assert.equal(existing.variant, 'baseline')
+  assert.equal(existing.eligible, false)
+  assert.equal(existing.decisionReason, 'rollback_policy_missing')
+  assert.equal(existing.promptContent, seeded.baselineContent)
+})
+
+test('predeclared candidate reliability thresholds automatically roll back the canary overlay', () => {
+  const owner = issueTestSession({ email: 'canary-rollback-owner@example.com' })
+  routeEnv.LOCAL_USER_ID = owner.userId
+  const sessionId = createChatSession(owner.userId, 'canary-rollback-session')
+  const seeded = seedApprovedCanary(owner.userId)
+  const canary = createEvolutionCanary({
+    userId: owner.userId,
+    approvalId: seeded.approvalId,
+    sessionIds: [sessionId],
+    trafficPercent: 10,
+    reason: 'Exercise automatic rollback',
+    env: routeEnv,
+    now: 900,
+  })
+  const policy = declareRollbackPolicy(owner.userId, canary.id, {
+    maximumCandidateFailureRate: 0.2,
+    maximumCandidateCancellationRate: 0.2,
+  }, 901)
+  assert.equal(policy.baselineSha256, seeded.baselineSha256)
+  startEvolutionCanary({
+    userId: owner.userId,
+    id: canary.id,
+    reason: 'Start guarded canary',
+    env: routeEnv,
+    now: 902,
+  })
+
+  const assignments = collectCanaryAssignments(
+    owner.userId,
+    sessionId,
+    'rollback-turn',
+  )
+
+  for (const [index, assignment] of assignments.baseline.entries()) {
+    recordEvolutionCanaryOutcome({
+      userId: owner.userId,
+      sessionId,
+      turnId: assignment.turnId,
+      terminalState: 'completed',
+      durationMs: 100,
+      usage: { costUsd: 0.01 },
+      effectiveVariant: assignment.variant,
+      decisionReason: assignment.decisionReason,
+      env: routeEnv,
+      now: 2_000 + index,
+    })
+  }
+  for (const [index, assignment] of assignments.candidate.entries()) {
+    const result = recordEvolutionCanaryOutcome({
+      userId: owner.userId,
+      sessionId,
+      turnId: assignment.turnId,
+      terminalState: index === 2 ? 'failed' : index === 1 ? 'cancelled' : 'completed',
+      durationMs: 110,
+      usage: { costUsd: 0.011 },
+      errorCode: index === 2 ? 'MODEL_FAILED' : index === 1 ? 'USER_CANCELLED' : null,
+      effectiveVariant: assignment.variant,
+      decisionReason: assignment.decisionReason,
+      env: routeEnv,
+      now: 3_000 + index,
+    })
+    if (index < 2) assert.equal(result.state, 'active')
+    else {
+      assert.equal(result.state, 'rolled_back')
+      assert.deepEqual(
+        result.automaticRollback.rollback.reason,
+        'Automatic rollback: maximum_candidate_failure_rate, maximum_candidate_cancellation_rate',
+      )
+      assert.equal(result.automaticRollback.rollback.rollbackBaselineSha256, seeded.baselineSha256)
+      assert.equal(result.automaticRollback.rollback.baselineStatus, 'verified')
+      assert.deepEqual(
+        result.automaticRollback.evaluations[0].breaches,
+        ['maximum_candidate_failure_rate', 'maximum_candidate_cancellation_rate'],
+      )
+    }
+  }
+  assert.equal(resolveEvolutionCanaryAssignment({
+    userId: owner.userId,
+    sessionId,
+    turnId: 'new-turn-after-automatic-rollback',
+    env: routeEnv,
+  }), null)
+})
+
+test('predeclared latency and cost ratios automatically roll back with complete evidence', () => {
+  const owner = issueTestSession({ email: 'canary-ratio-owner@example.com' })
+  routeEnv.LOCAL_USER_ID = owner.userId
+  const sessionId = createChatSession(owner.userId, 'canary-ratio-session')
+  const seeded = seedApprovedCanary(owner.userId)
+  const canary = createEvolutionCanary({
+    userId: owner.userId,
+    approvalId: seeded.approvalId,
+    sessionIds: [sessionId],
+    trafficPercent: 10,
+    reason: 'Exercise comparative rollback guardrails',
+    env: routeEnv,
+    now: 4_000,
+  })
+  declareRollbackPolicy(owner.userId, canary.id, {
+    maximumLatencyRatio: 1.5,
+    maximumCostRatio: 1.5,
+  }, 4_001)
+  startEvolutionCanary({
+    userId: owner.userId,
+    id: canary.id,
+    reason: 'Start comparative canary',
+    env: routeEnv,
+    now: 4_002,
+  })
+  const assignments = collectCanaryAssignments(
+    owner.userId,
+    sessionId,
+    'ratio-turn',
+    4_100,
+  )
+  for (const [index, assignment] of assignments.baseline.entries()) {
+    recordEvolutionCanaryOutcome({
+      userId: owner.userId,
+      sessionId,
+      turnId: assignment.turnId,
+      terminalState: 'completed',
+      durationMs: 100,
+      usage: { costUsd: 0.01 },
+      effectiveVariant: assignment.variant,
+      decisionReason: assignment.decisionReason,
+      env: routeEnv,
+      now: 5_000 + index,
+    })
+  }
+  let rolledBack = null
+  for (const [index, assignment] of assignments.candidate.entries()) {
+    rolledBack = recordEvolutionCanaryOutcome({
+      userId: owner.userId,
+      sessionId,
+      turnId: assignment.turnId,
+      terminalState: 'completed',
+      durationMs: 200,
+      usage: { costUsd: 0.02 },
+      effectiveVariant: assignment.variant,
+      decisionReason: assignment.decisionReason,
+      env: routeEnv,
+      now: 6_000 + index,
+    })
+  }
+  assert.equal(rolledBack.state, 'rolled_back')
+  assert.deepEqual(
+    rolledBack.automaticRollback.evaluations[0].breaches,
+    ['maximum_latency_ratio', 'maximum_cost_ratio'],
+  )
+  assert.equal(rolledBack.automaticRollback.evaluations[0].metrics.latencyRatio, 2)
+  assert.equal(rolledBack.automaticRollback.evaluations[0].metrics.costRatio, 2)
+})
+
+test('incomplete cost evidence cannot trigger a cost rollback', () => {
+  const owner = issueTestSession({ email: 'canary-missing-cost-owner@example.com' })
+  routeEnv.LOCAL_USER_ID = owner.userId
+  const sessionId = createChatSession(owner.userId, 'canary-missing-cost-session')
+  const seeded = seedApprovedCanary(owner.userId)
+  const canary = createEvolutionCanary({
+    userId: owner.userId,
+    approvalId: seeded.approvalId,
+    sessionIds: [sessionId],
+    trafficPercent: 10,
+    reason: 'Require complete cost evidence',
+    env: routeEnv,
+    now: 7_000,
+  })
+  declareRollbackPolicy(owner.userId, canary.id, {
+    maximumCostRatio: 1.1,
+  }, 7_001)
+  startEvolutionCanary({
+    userId: owner.userId,
+    id: canary.id,
+    reason: 'Start cost evidence canary',
+    env: routeEnv,
+    now: 7_002,
+  })
+  const assignments = collectCanaryAssignments(
+    owner.userId,
+    sessionId,
+    'missing-cost-turn',
+    7_100,
+  )
+  for (const [index, assignment] of assignments.baseline.entries()) {
+    recordEvolutionCanaryOutcome({
+      userId: owner.userId,
+      sessionId,
+      turnId: assignment.turnId,
+      terminalState: 'completed',
+      durationMs: 100,
+      usage: { costUsd: 0.01 },
+      effectiveVariant: assignment.variant,
+      decisionReason: assignment.decisionReason,
+      env: routeEnv,
+      now: 8_000 + index,
+    })
+  }
+  let result = null
+  for (const [index, assignment] of assignments.candidate.entries()) {
+    result = recordEvolutionCanaryOutcome({
+      userId: owner.userId,
+      sessionId,
+      turnId: assignment.turnId,
+      terminalState: 'completed',
+      durationMs: 100,
+      usage: index === 1 ? {} : { costUsd: 1 },
+      effectiveVariant: assignment.variant,
+      decisionReason: assignment.decisionReason,
+      env: routeEnv,
+      now: 9_000 + index,
+    })
+  }
+  assert.equal(result.state, 'active')
+  assert.equal(result.automaticRollback.rollback, null)
+  assert.equal(result.automaticRollback.evaluations[0].decision, 'insufficient_evidence')
+  assert.equal(result.automaticRollback.evaluations[0].metrics.evidence.costReady, false)
+  assert.equal(result.automaticRollback.evaluations[0].metrics.costRatio, null)
+  assert.deepEqual(result.automaticRollback.evaluations[0].breaches, [])
+})
+
 test('workspace prompt context replaces only the workspace instruction block', async () => {
   const result = await prepareTurnPromptContext({
     userId: 'prompt-canary-user',
@@ -322,7 +641,7 @@ test('workspace prompt context replaces only the workspace instruction block', a
   assert.equal('promptContent' in result.canaryAssignment, false)
 })
 
-test('canary API is local-owner-only, bounded, no-store, and exposes no global or rollback action', async () => {
+test('canary API is local-owner-only, bounded, no-store, and exposes no global or manual rollback action', async () => {
   fs.writeFileSync(path.join(workspaceDir, 'AGENTS.md'), '# Workspace\n\nUse the approved baseline.\n')
   const owner = issueTestSession({ email: 'canary-route-owner@example.com' })
   const other = issueTestSession({ email: 'canary-route-other@example.com' })
@@ -360,11 +679,67 @@ test('canary API is local-owner-only, bounded, no-store, and exposes no global o
   const created = (await createdResponse.json()).canary
   assert.equal(created.state, 'created')
 
+  const forbiddenPolicy = await request(
+    other.token,
+    `/api/evolution/canaries/${created.id}/rollback-policy`,
+    {
+      method: 'POST',
+      body: {
+        policy: DEFAULT_ROLLBACK_POLICY,
+        reason: 'Another user cannot declare the policy',
+      },
+    },
+  )
+  assert.equal(forbiddenPolicy.status, 403)
+  assert.equal((await forbiddenPolicy.json()).error.code, 'LOCAL_OWNER_ONLY')
+
+  const policyResponse = await request(
+    owner.token,
+    `/api/evolution/canaries/${created.id}/rollback-policy`,
+    {
+      method: 'POST',
+      body: {
+        policy: DEFAULT_ROLLBACK_POLICY,
+        reason: 'Declare automatic rollback thresholds before start',
+      },
+    },
+  )
+  assert.equal(policyResponse.status, 201)
+  assert.equal((await policyResponse.json()).policy.version, 'canary-rollback-v1')
+
+  const duplicatePolicy = await request(
+    owner.token,
+    `/api/evolution/canaries/${created.id}/rollback-policy`,
+    {
+      method: 'POST',
+      body: {
+        policy: { ...DEFAULT_ROLLBACK_POLICY, maximumCostRatio: 2 },
+        reason: 'Cannot replace an immutable policy',
+      },
+    },
+  )
+  assert.equal(duplicatePolicy.status, 409)
+  assert.equal((await duplicatePolicy.json()).error.code, 'EVOLUTION_CANARY_ROLLBACK_POLICY_EXISTS')
+
   const startedResponse = await request(owner.token, `/api/evolution/canaries/${created.id}/start`, {
     method: 'POST', body: { reason: 'Explicit manual start' },
   })
   assert.equal(startedResponse.status, 200)
   assert.equal((await startedResponse.json()).canary.state, 'active')
+
+  const lockedPolicy = await request(
+    owner.token,
+    `/api/evolution/canaries/${created.id}/rollback-policy`,
+    {
+      method: 'POST',
+      body: {
+        policy: DEFAULT_ROLLBACK_POLICY,
+        reason: 'Cannot mutate thresholds after start',
+      },
+    },
+  )
+  assert.equal(lockedPolicy.status, 409)
+  assert.equal((await lockedPolicy.json()).error.code, 'EVOLUTION_CANARY_ROLLBACK_POLICY_LOCKED')
 
   const listedResponse = await request(owner.token, '/api/evolution/canaries')
   const listed = (await listedResponse.json()).canaries.find(({ id }) => id === created.id)
