@@ -83,6 +83,109 @@ test.afterEach(async () => {
   }
 })
 
+test('runtime registry host options reject accessors without invoking them', () => {
+  const values = {
+    config: {},
+    registerTool: () => () => {},
+    registerModelProvider: () => () => {},
+    audit: () => {},
+  }
+  for (const field of Object.keys(values)) {
+    let getterCalls = 0
+    const options = {}
+    Object.defineProperty(options, field, {
+      enumerable: true,
+      get() {
+        getterCalls += 1
+        return values[field]
+      },
+    })
+    assert.throws(
+      () => createRuntimePluginRegistry(options),
+      (error) => error?.code === 'PLUGIN_HOST_ADAPTER_INVALID'
+        && error?.retryable === false
+        && new RegExp(`option ${field}`).test(error?.message || ''),
+    )
+    assert.equal(getterCalls, 0)
+  }
+})
+
+test('runtime registry host options ignore prototype adapters', async () => {
+  let inheritedAuditCalls = 0
+  const options = Object.create({
+    audit() {
+      inheritedAuditCalls += 1
+    },
+  })
+  const registry = createRuntimePluginRegistry(options)
+  await registry.registerPlugin(manifest('prototype-host-options'), () => {})
+  assert.equal(inheritedAuditCalls, 0)
+  assert.equal(await registry.unregisterPlugin('prototype-host-options'), true)
+})
+
+test('runtime registry host adapters are constructor-time descriptor snapshots', async () => {
+  const calls = {
+    tool: 0,
+    provider: 0,
+    audit: 0,
+    mutatedTool: 0,
+    mutatedProvider: 0,
+    mutatedAudit: 0,
+    toolDispose: 0,
+    providerDispose: 0,
+  }
+  const options = {
+    registerTool(definition) {
+      calls.tool += 1
+      assert.equal(definition.name, 'plugin_echo')
+      return () => { calls.toolDispose += 1 }
+    },
+    registerModelProvider(kind) {
+      calls.provider += 1
+      assert.equal(kind, 'host-snapshot')
+      return () => { calls.providerDispose += 1 }
+    },
+    audit() {
+      calls.audit += 1
+    },
+  }
+  const registry = createRuntimePluginRegistry(options)
+  options.registerTool = () => {
+    calls.mutatedTool += 1
+    return () => {}
+  }
+  options.registerModelProvider = () => {
+    calls.mutatedProvider += 1
+    return () => {}
+  }
+  options.audit = () => { calls.mutatedAudit += 1 }
+
+  await registry.registerPlugin(manifest('host-adapter-snapshot', {
+    contributes: ['tool:plugin_echo', 'model-provider:host-snapshot'],
+  }), (ctx) => {
+    ctx.tools.register({
+      name: 'plugin_echo',
+      spec: TOOL_SPEC,
+      exec: async () => ({ ok: true }),
+    })
+    ctx.models.providers.register('host-snapshot', {
+      buildRequest: () => ({}),
+      parseResponse: () => ({}),
+    })
+  })
+  assert.equal(calls.tool, 1)
+  assert.equal(calls.provider, 1)
+  assert.ok(calls.audit >= 2)
+  assert.equal(calls.mutatedTool, 0)
+  assert.equal(calls.mutatedProvider, 0)
+  assert.equal(calls.mutatedAudit, 0)
+
+  assert.equal(await registry.unregisterPlugin('host-adapter-snapshot'), true)
+  assert.equal(calls.toolDispose, 1)
+  assert.equal(calls.providerDispose, 1)
+  assert.equal(calls.mutatedAudit, 0)
+})
+
 test('plugin context config is a detached deeply frozen plain-data snapshot', async () => {
   const source = {
     mode: 'original',

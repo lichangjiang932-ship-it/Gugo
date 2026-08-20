@@ -206,12 +206,55 @@ function pluginSnapshot(record) {
   })
 }
 
-export function createRuntimePluginRegistry({
-  config = {},
-  registerTool = registerDynamicTool,
-  registerModelProvider = registerModelProviderAdapter,
-  audit = null,
-} = {}) {
+function hostAdapterError(field, expected) {
+  const error = new TypeError(`runtime plugin host option ${field} must be an own ${expected} property`)
+  error.code = 'PLUGIN_HOST_ADAPTER_INVALID'
+  error.retryable = false
+  return error
+}
+
+function ownHostOption(options, field, fallback) {
+  let descriptor
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(options, field)
+  } catch {
+    throw hostAdapterError(field, 'data')
+  }
+  if (!descriptor) return fallback
+  if (!Object.hasOwn(descriptor, 'value')) throw hostAdapterError(field, 'data')
+  return descriptor.value === undefined ? fallback : descriptor.value
+}
+
+function snapshotHostOptions(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw hostAdapterError('options', 'object data')
+  }
+  const snapshot = {
+    config: ownHostOption(options, 'config', {}),
+    registerTool: ownHostOption(options, 'registerTool', registerDynamicTool),
+    registerModelProvider: ownHostOption(
+      options,
+      'registerModelProvider',
+      registerModelProviderAdapter,
+    ),
+    audit: ownHostOption(options, 'audit', null),
+  }
+  for (const field of ['registerTool', 'registerModelProvider']) {
+    if (typeof snapshot[field] !== 'function') throw hostAdapterError(field, 'function data')
+  }
+  if (snapshot.audit !== null && typeof snapshot.audit !== 'function') {
+    throw hostAdapterError('audit', 'function data')
+  }
+  return Object.freeze(snapshot)
+}
+
+export function createRuntimePluginRegistry(options = {}) {
+  const {
+    config,
+    registerTool,
+    registerModelProvider,
+    audit,
+  } = snapshotHostOptions(options)
   const pluginConfig = snapshotPluginContextConfig(config)
   const plugins = new Map()
   const services = new Map()
