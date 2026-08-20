@@ -207,24 +207,32 @@ export function createRuntimePluginRegistry({
     }
   }
 
-  const invokePluginCallbackSync = (record, kind, callback, args) => {
+  const invokePluginCallbackSync = (record, kind, callback, args, options = {}) => {
     record.activeCallbacks += 1
     const invocation = { record, kind, active: true }
+    const complete = typeof options.complete === 'function' ? options.complete : (value) => value
+    const isolateError = typeof options.isolateError === 'function' ? options.isolateError : null
     try {
-      const result = callbackScope.run(invocation, () => callback(...args))
-      if (result && typeof result.then === 'function') {
-        void Promise.resolve(result).catch(() => {})
-        const isPrompt = kind === 'prompt'
-        const error = new TypeError(isPrompt
-          ? 'plugin prompt render must be synchronous'
-          : 'plugin model provider callbacks must be synchronous')
-        error.code = isPrompt
-          ? 'PLUGIN_PROMPT_ASYNC_UNSUPPORTED'
-          : 'PLUGIN_MODEL_PROVIDER_ASYNC_UNSUPPORTED'
-        error.retryable = false
-        throw error
-      }
-      return result
+      return callbackScope.run(invocation, () => {
+        try {
+          const result = callback(...args)
+          if (result && typeof result.then === 'function') {
+            void Promise.resolve(result).catch(() => {})
+            const isPrompt = kind === 'prompt'
+            const error = new TypeError(isPrompt
+              ? 'plugin prompt render must be synchronous'
+              : 'plugin model provider callbacks must be synchronous')
+            error.code = isPrompt
+              ? 'PLUGIN_PROMPT_ASYNC_UNSUPPORTED'
+              : 'PLUGIN_MODEL_PROVIDER_ASYNC_UNSUPPORTED'
+            error.retryable = false
+            throw error
+          }
+          return complete(result)
+        } catch (error) {
+          throw isolateError ? isolateError(error) : error
+        }
+      })
     } finally {
       invocation.active = false
       finishCallback(record)

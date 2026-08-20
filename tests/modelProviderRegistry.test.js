@@ -229,6 +229,122 @@ test('runtime model provider callbacks must stay synchronous', async () => {
   assert.equal(await registry.unregisterPlugin('async-provider-plugin'), true)
 })
 
+test('runtime model provider result traversal remains inside callback accounting', async () => {
+  const registry = createRuntimePluginRegistry()
+  let unregisterAttempt = null
+  await registry.registerPlugin({
+    id: 'provider-result-accounting-plugin',
+    name: 'Provider result accounting plugin',
+    version: '1.0.0',
+    contributes: ['model-provider:provider-result-accounting-native'],
+  }, (context) => {
+    const providerAdapter = adapter()
+    providerAdapter.buildRequest = ({ config }) => new Proxy({
+      url: `${config.baseUrl}/accounted`,
+      init: { method: 'POST', body: '{}' },
+    }, {
+      getPrototypeOf(target) {
+        if (!unregisterAttempt) {
+          unregisterAttempt = registry.unregisterPlugin('provider-result-accounting-plugin')
+        }
+        return Reflect.getPrototypeOf(target)
+      },
+    })
+    context.models.providers.register('provider-result-accounting-native', providerAdapter)
+  })
+
+  const profile = resolveEndpointProfile({
+    baseUrl: 'https://provider-accounting.example.test',
+    modelName: 'accounted-1',
+    env: {},
+    overrides: { kind: 'provider-result-accounting-native', supportsStreaming: false },
+  })
+  const request = buildModelProviderRequest({
+    config: { baseUrl: profile.baseUrl, modelName: profile.modelName },
+    profile,
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  assert.equal(request.url, 'https://provider-accounting.example.test/accounted')
+  await assert.rejects(
+    unregisterAttempt,
+    (error) => error?.code === 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK'
+      && error?.retryable === false,
+  )
+  assert.equal(registry.getPlugin('provider-result-accounting-plugin')?.state, 'active')
+  assert.equal(await registry.unregisterPlugin('provider-result-accounting-plugin'), true)
+})
+
+test('runtime model provider thrown values cross as detached non-retryable errors', async () => {
+  const registry = createRuntimePluginRegistry()
+  let unregisterAttempt = null
+  let messageGetterCalls = 0
+  const thrown = {}
+  Object.defineProperties(thrown, {
+    message: {
+      get() {
+        messageGetterCalls += 1
+        return 'getter must not execute'
+      },
+    },
+    code: { value: 'PLUGIN_CUSTOM_PROVIDER_FAILURE' },
+    retryable: { value: true },
+    cause: { value: { providerCapability: true } },
+  })
+  const trappedError = new Proxy(thrown, {
+    getOwnPropertyDescriptor(target, key) {
+      if (!unregisterAttempt) {
+        unregisterAttempt = registry.unregisterPlugin('provider-error-accounting-plugin')
+      }
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+
+  await registry.registerPlugin({
+    id: 'provider-error-accounting-plugin',
+    name: 'Provider error accounting plugin',
+    version: '1.0.0',
+    contributes: ['model-provider:provider-error-accounting-native'],
+  }, (context) => {
+    const providerAdapter = adapter()
+    providerAdapter.parseResponse = () => { throw trappedError }
+    context.models.providers.register('provider-error-accounting-native', providerAdapter)
+  })
+
+  const profile = resolveEndpointProfile({
+    baseUrl: 'https://provider-error.example.test',
+    modelName: 'error-1',
+    env: {},
+    overrides: { kind: 'provider-error-accounting-native', supportsStreaming: false },
+  })
+  const providerRequest = buildModelProviderRequest({
+    config: { baseUrl: profile.baseUrl, modelName: profile.modelName },
+    profile,
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  assert.throws(
+    () => parseModelProviderResponse({ answer: 'never returned' }, profile, { providerRequest }),
+    (error) => {
+      assert.notEqual(error, trappedError)
+      assert.equal(error?.code, 'PLUGIN_CUSTOM_PROVIDER_FAILURE')
+      assert.equal(error?.retryable, false)
+      assert.equal(error?.message, 'plugin model provider callback failed: provider-error-accounting-native/parseResponse')
+      assert.equal(error?.pluginId, 'provider-error-accounting-plugin')
+      assert.equal(error?.providerKind, 'provider-error-accounting-native')
+      assert.equal(error?.method, 'parseResponse')
+      assert.equal(Object.hasOwn(error, 'cause'), false)
+      return true
+    },
+  )
+  assert.equal(messageGetterCalls, 0)
+  await assert.rejects(
+    unregisterAttempt,
+    (error) => error?.code === 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK'
+      && error?.retryable === false,
+  )
+  assert.equal(registry.getPlugin('provider-error-accounting-plugin')?.state, 'active')
+  assert.equal(await registry.unregisterPlugin('provider-error-accounting-plugin'), true)
+})
+
 test('runtime model providers exchange isolated data and keep stream state opaque', async () => {
   const registry = createRuntimePluginRegistry()
   let requestResult = null

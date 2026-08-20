@@ -13,6 +13,8 @@ const DATA_LIMITS = Object.freeze({
   maxNodes: 32_768,
   maxBytes: 16 * 1024 * 1024,
 })
+const MAX_ERROR_TEXT = 4_096
+const ERROR_CODE_RE = /^[A-Z][A-Z0-9_]{0,127}$/
 
 function providerError(code, message) {
   const error = new TypeError(message)
@@ -26,6 +28,43 @@ function unavailableError(record, kind, method) {
     'PLUGIN_MODEL_PROVIDER_UNAVAILABLE',
     `plugin model provider is unavailable: ${record.manifest.id}/${kind}/${method}`,
   )
+}
+
+function ownValue(object, key) {
+  if (!object || (typeof object !== 'object' && typeof object !== 'function')) return undefined
+  const descriptor = Object.getOwnPropertyDescriptor(object, key)
+  return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined
+}
+
+function errorField(error, key) {
+  try {
+    return ownValue(error, key)
+  } catch {
+    return undefined
+  }
+}
+
+function boundedText(value) {
+  return typeof value === 'string' ? value.trim().slice(0, MAX_ERROR_TEXT) : ''
+}
+
+function isolatedProviderFailure(thrown, record, kind, method) {
+  const primitive = thrown === null || (typeof thrown !== 'object' && typeof thrown !== 'function')
+    ? String(thrown)
+    : ''
+  const message = boundedText(errorField(thrown, 'message')) || boundedText(primitive)
+  const ownCode = errorField(thrown, 'code')
+  const code = typeof ownCode === 'string' && ERROR_CODE_RE.test(ownCode)
+    ? ownCode
+    : 'PLUGIN_MODEL_PROVIDER_EXECUTION_FAILED'
+  const error = providerError(
+    code,
+    message || `plugin model provider callback failed: ${kind}/${method}`,
+  )
+  error.pluginId = record.manifest.id
+  error.providerKind = kind
+  error.method = method
+  return error
 }
 
 function snapshotData(value, { code, label, freeze = true }) {
@@ -102,13 +141,17 @@ export function snapshotRuntimeModelProvider({ record, kind, adapter, invokeSync
   const assertAvailable = (method) => {
     if (record.state !== 'active') throw unavailableError(record, kind, method)
   }
-  const invoke = (method, callback, args) => {
+  const invoke = (method, callback, args, complete = (value) => value) => {
     assertAvailable(method)
     return invokeSync(
       record,
       'model-provider',
       (...input) => callback.apply(adapter, input),
       args,
+      {
+        complete,
+        isolateError: (error) => isolatedProviderFailure(error, record, kind, method),
+      },
     )
   }
   const wrapped = {}
@@ -121,7 +164,7 @@ export function snapshotRuntimeModelProvider({ record, kind, adapter, invokeSync
         assertAvailable(method)
         if (method === 'createStreamState') {
           const input = snapshotArguments(args, method)
-          const pluginState = snapshotStreamState(invoke(method, callback, input))
+          const pluginState = invoke(method, callback, input, snapshotStreamState)
           const token = Object.defineProperty({}, 'kind', {
             value: kind,
             enumerable: true,
@@ -144,16 +187,20 @@ export function snapshotRuntimeModelProvider({ record, kind, adapter, invokeSync
           const input = method === 'consumeStreamPayload'
             ? [snapshotArguments([args[0]], method)[0], workingState]
             : [workingState]
-          const result = assertResultShape(
-            snapshotResult(invoke(method, callback, input), method),
-            method,
-          )
-          streamStates.set(token, snapshotStreamState(workingState))
-          return result
+          const completed = invoke(method, callback, input, (value) => ({
+            result: assertResultShape(snapshotResult(value, method), method),
+            nextState: snapshotStreamState(workingState),
+          }))
+          streamStates.set(token, completed.nextState)
+          return completed.result
         }
         const input = snapshotArguments(args, method)
-        const result = snapshotResult(invoke(method, callback, input), method)
-        return assertResultShape(result, method)
+        return invoke(
+          method,
+          callback,
+          input,
+          (value) => assertResultShape(snapshotResult(value, method), method),
+        )
       },
     })
   }

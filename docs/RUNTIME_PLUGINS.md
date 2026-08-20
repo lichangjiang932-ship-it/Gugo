@@ -85,6 +85,8 @@ runtime plugin adapter 的每次 callback 都进入该 plugin 的 in-flight call
 
 runtime provider callback 的参数会复制为深冻结 plain-data snapshot，结果也必须通过同一数据边界；上限为 32 层、32768 节点和 16 MiB UTF-8 文本。accessor、function、symbol、bigint、特殊 prototype、cycle 和非有限数字均 fail closed，分别使用 `PLUGIN_MODEL_PROVIDER_ARGUMENT_INVALID` 或 `PLUGIN_MODEL_PROVIDER_RESULT_INVALID`。`createStreamState` 的返回值会被复制为 wrapper 私有的 mutable plain-data state，宿主只持有不可伪造的 opaque token。每次 stream callback 都在独立 working clone 上运行，只有 callback、event result 和新 state 全部验证成功后才原子提交；插件保留的原始对象或旧 callback state 引用不能继续修改实际 state。伪造 token 或 capability state 以 `PLUGIN_MODEL_PROVIDER_STREAM_STATE_INVALID` 拒绝；stream payload 和 event result 仍分别是冻结输入与冻结输出。
 
+provider 的 thenable 检查、result snapshot、shape 校验和下一版 stream state 快照都在同一个同步 callback accounting scope 内完成，返回 Proxy 的反射不能逃到 callback drain 之后。抛出值仅通过 own data-property 读取有界 `message/code`，再生成新的 `retryable=false` Error；原始 identity、getter、cause、stack 和其他属性不跨边界。非法或缺失 code 使用 `PLUGIN_MODEL_PROVIDER_EXECUTION_FAILED`，detached Error 另带宿主写入的 `pluginId/providerKind/method` provenance。
+
 ## Lifecycle-safe service invocation and policy guards
 
 宿主通过 `invokePluginService(name, method, args)` 调用 active service，而不是跨生命周期长期持有 service callback。plugin consumer 同样只能调用 `context.services.invoke(name, method, args)`；`context.services.get()` 和宿主 raw service getter 不再存在。跨 plugin 调用前，consumer manifest 必须在 `requires` 中声明实际提供该 service 的 plugin ID，否则以 `PLUGIN_SERVICE_DEPENDENCY_UNDECLARED` 拒绝；consumer 卸载后，先前捕获的 context 以 `PLUGIN_SERVICE_CONSUMER_INACTIVE` 拒绝新调用。
