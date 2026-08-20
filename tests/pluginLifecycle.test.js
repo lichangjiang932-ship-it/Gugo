@@ -1326,6 +1326,60 @@ test('loop event attachment compensates on failures before a disposer is tracked
   }
 })
 
+test('loop event cleanup rejects async and Proxy completions without assimilation', async () => {
+  for (const mode of ['promise', 'thenable', 'proxy']) {
+    const registry = createRuntimePluginRegistry()
+    const listeners = new Set()
+    let cleanupCalls = 0
+    let thenCalls = 0
+    let descriptorCalls = 0
+    const events = {
+      on(event, listener) {
+        listeners.add(listener)
+        return () => {
+          cleanupCalls += 1
+          listeners.delete(listener)
+          if (mode === 'promise') return Promise.reject(new Error('async cleanup failed'))
+          if (mode === 'thenable') {
+            return { then() { thenCalls += 1 } }
+          }
+          return new Proxy({}, {
+            getOwnPropertyDescriptor(target, key) {
+              descriptorCalls += 1
+              return Reflect.getOwnPropertyDescriptor(target, key)
+            },
+          })
+        }
+      },
+      off(event, listener) {
+        return listeners.delete(listener)
+      },
+    }
+    const unbind = registry.bindLoopEvents(events)
+    const pluginId = `event-cleanup-completion-${mode}`
+    try {
+      await registry.registerPlugin(manifest(pluginId), (ctx) => {
+        ctx.events.on('request', () => undefined)
+      })
+      await assert.rejects(
+        registry.unregisterPlugin(pluginId),
+        (error) => error instanceof AggregateError
+          && error.errors.length === 1
+          && error.errors[0]?.code === 'PLUGIN_LOOP_EVENT_CLEANUP_ASYNC_UNSUPPORTED'
+          && error.errors[0]?.retryable === false,
+      )
+      await Promise.resolve()
+      assert.equal(cleanupCalls, 1)
+      assert.equal(listeners.size, 0)
+      assert.equal(thenCalls, 0)
+      assert.equal(descriptorCalls, 0)
+      assert.equal(registry.getPlugin(pluginId), null)
+    } finally {
+      unbind()
+    }
+  }
+})
+
 test('runtime tool and prompt definitions reject accessors without invoking them', async () => {
   const toolCases = [
     ['name', { spec: TOOL_SPEC, exec: async () => ({ ok: true }) }],

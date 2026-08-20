@@ -189,6 +189,16 @@ function suppressNativePromiseRejection(promise) {
   }
 }
 
+function assertLoopCleanupSynchronous(result) {
+  const asyncResultKind = nodeTypes.isProxy(result) ? 'thenable' : pluginAsyncResultKind(result)
+  if (!asyncResultKind) return
+  if (asyncResultKind === 'promise') suppressNativePromiseRejection(result)
+  const error = new TypeError('loop event cleanup must be synchronous')
+  error.code = 'PLUGIN_LOOP_EVENT_CLEANUP_ASYNC_UNSUPPORTED'
+  error.retryable = false
+  throw error
+}
+
 function snapshotLoopEventBus(events) {
   if (!events || (typeof events !== 'object' && typeof events !== 'function')) {
     throw loopEventBusError('on')
@@ -464,7 +474,7 @@ export function createRuntimePluginRegistry(options = {}) {
   const detachBinding = (binding) => {
     if (!loopBindings.delete(binding)) return false
     for (const dispose of [...binding.attachments.values()].reverse()) {
-      try { dispose() } catch { /* best-effort per-loop cleanup */ }
+      try { assertLoopCleanupSynchronous(dispose()) } catch { /* best-effort per-loop cleanup */ }
     }
     binding.attachments.clear()
     return true
@@ -472,7 +482,9 @@ export function createRuntimePluginRegistry(options = {}) {
 
   const rollbackUntrackedAttachment = (binding, contribution, error) => {
     try {
-      binding.events.off(contribution.event, contribution.listener)
+      assertLoopCleanupSynchronous(
+        binding.events.off(contribution.event, contribution.listener),
+      )
     } catch (rollbackError) {
       throw new AggregateError(
         [error, rollbackError],
@@ -508,12 +520,13 @@ export function createRuntimePluginRegistry(options = {}) {
       if (!dispose) continue
       binding.attachments.delete(contribution)
       try {
-        dispose()
+        assertLoopCleanupSynchronous(dispose())
       } catch (error) {
         errors.push(error)
       }
     }
-    if (errors.length > 0) {
+    if (errors.length === 1) throw errors[0]
+    if (errors.length > 1) {
       throw new AggregateError(
         errors,
         `plugin event contribution detach failed: ${contribution.pluginId}/${contribution.event}`,
@@ -988,7 +1001,7 @@ export function createRuntimePluginRegistry(options = {}) {
       loopBindings.add(binding)
     } catch (error) {
       for (const dispose of [...binding.attachments.values()].reverse()) {
-        try { dispose() } catch { /* preserve original bind error */ }
+        try { assertLoopCleanupSynchronous(dispose()) } catch { /* preserve original bind error */ }
       }
       throw error
     }

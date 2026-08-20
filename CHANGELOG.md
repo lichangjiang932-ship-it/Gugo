@@ -63,6 +63,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Marked visible cleanup completions as consumed before generic disposal, ensuring custom cleanup thenables and failures execute and aggregate exactly once.
 - Made multi-loop event registration rollback exhaustive, ensuring one failing binding disposer cannot leave listeners attached to other loop instances.
 - Added compensating `off()` cleanup when loop `on()` mutates before throwing or returning an invalid disposer, preventing untracked listener leaks.
+- Enforced synchronous loop event cleanup completion, consuming native Promise rejections without assimilating custom thenables or traversing Proxy results.
 
 ## [0.11.31] - 2026-08-20
 
