@@ -296,6 +296,182 @@ test('plugin services reject accessor arguments, inherited methods, and capabili
   assert.equal(await registry.unregisterPlugin('invalid-service-data-plugin'), true)
 })
 
+test('plugin service methods are registration snapshots without invocation-time reflection', async () => {
+  const registry = createRuntimePluginRegistry()
+  let descriptorCalls = 0
+  let getterCalls = 0
+  let originalCalls = 0
+  let replacementCalls = 0
+  const target = {
+    review() {
+      originalCalls += 1
+      return { owner: 'original' }
+    },
+  }
+  Object.defineProperty(target, 'accessorMethod', {
+    configurable: true,
+    get() {
+      getterCalls += 1
+      return () => ({ owner: 'accessor' })
+    },
+  })
+  const service = new Proxy(target, {
+    getOwnPropertyDescriptor(object, key) {
+      descriptorCalls += 1
+      return Reflect.getOwnPropertyDescriptor(object, key)
+    },
+  })
+
+  await registry.registerPlugin(manifest('service-method-snapshot-plugin', {
+    contributes: ['service:method-snapshot'],
+  }), (ctx) => ctx.services.provide('method-snapshot', service))
+  const descriptorsAfterRegistration = descriptorCalls
+  target.review = () => {
+    replacementCalls += 1
+    return { owner: 'replacement' }
+  }
+
+  assert.deepEqual(await registry.invokeService('method-snapshot', 'review', []), {
+    found: true,
+    pluginId: 'service-method-snapshot-plugin',
+    value: { owner: 'original' },
+  })
+  assert.equal(originalCalls, 1)
+  assert.equal(replacementCalls, 0)
+  assert.equal(descriptorCalls, descriptorsAfterRegistration)
+  await assert.rejects(
+    registry.invokeService('method-snapshot', 'accessorMethod', []),
+    (error) => error?.code === 'PLUGIN_SERVICE_METHOD_INVALID'
+      && error?.retryable === false,
+  )
+  assert.equal(getterCalls, 0)
+  assert.equal(await registry.unregisterPlugin('service-method-snapshot-plugin'), true)
+})
+
+test('plugin service definition failures do not execute or retain thrown accessors', async () => {
+  const registry = createRuntimePluginRegistry()
+  let messageGetterCalls = 0
+  const thrown = {}
+  Object.defineProperty(thrown, 'message', {
+    get() {
+      messageGetterCalls += 1
+      return 'getter must not execute'
+    },
+  })
+  const service = new Proxy({}, {
+    ownKeys() { throw thrown },
+  })
+
+  await assert.rejects(
+    registry.registerPlugin(manifest('invalid-service-definition-plugin', {
+      contributes: ['service:invalid-definition'],
+    }), (ctx) => ctx.services.provide('invalid-definition', service)),
+    (error) => {
+      assert.equal(error?.code, 'PLUGIN_SERVICE_DEFINITION_INVALID')
+      assert.equal(error?.retryable, false)
+      assert.equal(error?.message, 'plugin service definition cannot be inspected safely')
+      assert.equal(Object.hasOwn(error, 'cause'), false)
+      return true
+    },
+  )
+  assert.equal(messageGetterCalls, 0)
+  assert.equal(registry.getPlugin('invalid-service-definition-plugin'), null)
+  assert.equal(registry.hasService('invalid-definition'), false)
+})
+
+test('plugin service result traversal remains inside provider callback accounting', async () => {
+  const registry = createRuntimePluginRegistry()
+  let unregisterAttempt = null
+  await registry.registerPlugin(manifest('service-result-accounting-plugin', {
+    contributes: ['service:result-accounting'],
+  }), (ctx) => {
+    ctx.services.provide('result-accounting', {
+      async review() {
+        return new Proxy({ value: 'accounted-result' }, {
+          getPrototypeOf(target) {
+            if (!unregisterAttempt) {
+              unregisterAttempt = registry.unregisterPlugin('service-result-accounting-plugin').then(
+                (value) => ({ value }),
+                (error) => ({ error }),
+              )
+            }
+            return Reflect.getPrototypeOf(target)
+          },
+        })
+      },
+    })
+  })
+
+  assert.deepEqual(await registry.invokeService('result-accounting', 'review', []), {
+    found: true,
+    pluginId: 'service-result-accounting-plugin',
+    value: { value: 'accounted-result' },
+  })
+  const attempted = await settleWithin(unregisterAttempt)
+  assert.equal(attempted.value, undefined)
+  assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(registry.getPlugin('service-result-accounting-plugin')?.state, 'active')
+  assert.equal(await registry.unregisterPlugin('service-result-accounting-plugin'), true)
+})
+
+test('plugin service thrown values cross the boundary as detached data-only errors', async () => {
+  const registry = createRuntimePluginRegistry()
+  let unregisterAttempt = null
+  let messageGetterCalls = 0
+  const thrown = {}
+  Object.defineProperties(thrown, {
+    message: {
+      configurable: true,
+      get() {
+        messageGetterCalls += 1
+        return 'getter must not execute'
+      },
+    },
+    code: { value: 'PLUGIN_CUSTOM_SERVICE_FAILURE' },
+    retryable: { value: true },
+    cause: { value: { providerCapability: true } },
+  })
+  const trappedError = new Proxy(thrown, {
+    getOwnPropertyDescriptor(target, key) {
+      if (!unregisterAttempt) {
+        unregisterAttempt = registry.unregisterPlugin('service-error-accounting-plugin').then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        )
+      }
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+
+  await registry.registerPlugin(manifest('service-error-accounting-plugin', {
+    contributes: ['service:error-accounting'],
+  }), (ctx) => {
+    ctx.services.provide('error-accounting', {
+      async review() { throw trappedError },
+    })
+  })
+
+  await assert.rejects(
+    registry.invokeService('error-accounting', 'review', []),
+    (error) => {
+      assert.notEqual(error, trappedError)
+      assert.equal(error?.code, 'PLUGIN_CUSTOM_SERVICE_FAILURE')
+      assert.equal(error?.retryable, false)
+      assert.equal(error?.message, 'plugin service call failed: error-accounting')
+      assert.equal(error?.pluginId, 'service-error-accounting-plugin')
+      assert.equal(error?.serviceName, 'error-accounting')
+      assert.equal(Object.hasOwn(error, 'cause'), false)
+      return true
+    },
+  )
+  assert.equal(messageGetterCalls, 0)
+  const attempted = await settleWithin(unregisterAttempt)
+  assert.equal(attempted.value, undefined)
+  assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(registry.getPlugin('service-error-accounting-plugin')?.state, 'active')
+  assert.equal(await registry.unregisterPlugin('service-error-accounting-plugin'), true)
+})
+
 test('setup failure rolls back active event and tool side effects before rejecting install', async () => {
   const registry = createRuntimePluginRegistry()
   const events = createLoopEvents()

@@ -8,7 +8,7 @@ import {
 } from '../utils/toolSchemaCatalog.js'
 import { createPluginContext } from './pluginContext.js'
 import { snapshotRuntimeModelProvider } from './pluginModelProvider.js'
-import { snapshotPluginServiceData } from './pluginServiceData.js'
+import { createRuntimePluginService } from './pluginServiceInvocation.js'
 import { createRuntimePluginToolExecutor } from './pluginToolInvocation.js'
 import { registerModelProviderAdapter } from '../adapters/modelProviderRegistry.js'
 import {
@@ -357,7 +357,16 @@ export function createRuntimePluginRegistry({
     if (services.has(normalizedName)) {
       throw new Error(`plugin service already provided: ${normalizedName}`)
     }
-    const contribution = { pluginId: record.manifest.id, record, value }
+    const contribution = {
+      pluginId: record.manifest.id,
+      record,
+      service: createRuntimePluginService({
+        record,
+        name: normalizedName,
+        value,
+        invoke: invokePluginCallback,
+      }),
+    }
     services.set(normalizedName, contribution)
     return trackVisibleEffect(record, () => {
       if (services.get(normalizedName) !== contribution) return false
@@ -372,48 +381,7 @@ export function createRuntimePluginRegistry({
     if (!contribution || contribution.record.state !== 'active') {
       return Object.freeze({ found: false, pluginId: null, value: undefined })
     }
-    const target = contribution.value
-    const methodDescriptor = normalizedMethod && target != null
-      ? Object.getOwnPropertyDescriptor(Object(target), normalizedMethod)
-      : null
-    const callback = normalizedMethod
-      ? (methodDescriptor && Object.hasOwn(methodDescriptor, 'value') ? methodDescriptor.value : null)
-      : target
-    if (typeof callback !== 'function') {
-      const error = new TypeError(`plugin service method is not callable: ${normalizedName}/${normalizedMethod}`)
-      error.code = 'PLUGIN_SERVICE_METHOD_INVALID'
-      error.retryable = false
-      error.pluginId = contribution.pluginId
-      error.serviceName = normalizedName
-      throw error
-    }
-    let value
-    try {
-      const values = snapshotPluginServiceData(Array.isArray(args) ? args : [], {
-        code: 'PLUGIN_SERVICE_ARGUMENT_INVALID',
-        label: 'plugin service arguments',
-      })
-      const returned = await invokePluginCallback(
-        contribution.record,
-        'service',
-        (...input) => callback.apply(target, input),
-        values,
-      )
-      value = snapshotPluginServiceData(returned, {
-        code: 'PLUGIN_SERVICE_RESULT_INVALID',
-        label: 'plugin service result',
-      })
-    } catch (cause) {
-      const error = new Error(
-        cause instanceof Error ? cause.message : String(cause || 'plugin service failed'),
-        { cause },
-      )
-      error.code = cause?.code || 'PLUGIN_SERVICE_CALL_FAILED'
-      error.retryable = cause?.retryable === true
-      error.pluginId = contribution.pluginId
-      error.serviceName = normalizedName
-      throw error
-    }
+    const value = await contribution.service.invoke(normalizedMethod, args)
     return Object.freeze({
       found: true,
       pluginId: contribution.pluginId,
