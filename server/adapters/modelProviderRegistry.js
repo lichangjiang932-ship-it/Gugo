@@ -1,6 +1,7 @@
-import { registerEndpointKind } from '../utils/endpointProfile.js'
+import { ENDPOINT_KINDS, registerEndpointKind } from '../utils/endpointProfile.js'
 
 const PROVIDER_KIND_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
+const RESERVED_PROVIDER_KINDS = new Set(ENDPOINT_KINDS)
 const adapters = new Map()
 const endpointKindDisposers = new Map()
 
@@ -56,6 +57,9 @@ function snapshotAdapter(adapter) {
 
 export function registerModelProviderAdapter(kind, adapter) {
   const normalizedKind = normalizeKind(kind)
+  if (RESERVED_PROVIDER_KINDS.has(normalizedKind)) {
+    throw new TypeError(`model provider adapter cannot replace built-in endpoint kind: ${normalizedKind}`)
+  }
   if (adapters.has(normalizedKind)) {
     throw new Error(`model provider adapter already registered: ${normalizedKind}`)
   }

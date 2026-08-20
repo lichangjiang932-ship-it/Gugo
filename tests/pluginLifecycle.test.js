@@ -247,6 +247,40 @@ test('runtime model-provider definitions fail before custom host registration', 
   assert.equal(getterCalls, 0)
 })
 
+test('runtime model providers cannot replace reserved kinds through custom host adapters', async () => {
+  let hostRegistrationCalls = 0
+  let descriptorCalls = 0
+  const adapter = new Proxy({
+    buildRequest() { return {} },
+    parseResponse() { return {} },
+  }, {
+    getOwnPropertyDescriptor(target, key) {
+      descriptorCalls += 1
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+  const registry = createRuntimePluginRegistry({
+    registerModelProvider() {
+      hostRegistrationCalls += 1
+      return () => {}
+    },
+  })
+
+  await assert.rejects(
+    registry.registerPlugin(manifest('provider-reserved-kind', {
+      contributes: ['model-provider:gemini'],
+    }), (ctx) => {
+      ctx.models.providers.register('gemini', adapter)
+    }),
+    (error) => error?.code === 'PLUGIN_MODEL_PROVIDER_KIND_RESERVED'
+      && error?.retryable === false
+      && /gemini/.test(error?.message || ''),
+  )
+  assert.equal(hostRegistrationCalls, 0)
+  assert.equal(descriptorCalls, 0)
+  assert.equal(registry.getPlugin('provider-reserved-kind'), null)
+})
+
 test('runtime provider thenable rejection never assimilates plugin code', async () => {
   let wrappedAdapter = null
   let thenCalls = 0

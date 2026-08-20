@@ -12,7 +12,11 @@ import {
   isNativeProviderKind,
   registerModelProviderAdapter,
 } from '../server/adapters/nativeModelProviders.js'
-import { registerEndpointKind, resolveEndpointProfile } from '../server/utils/endpointProfile.js'
+import {
+  ENDPOINT_KINDS,
+  registerEndpointKind,
+  resolveEndpointProfile,
+} from '../server/utils/endpointProfile.js'
 import {
   getModelProviderAdapter,
   hasModelProviderAdapter,
@@ -181,6 +185,25 @@ test('model provider kind boundaries reject object coercion without changing reg
   } finally {
     assert.equal(dispose(), true)
   }
+})
+
+test('model provider adapters cannot replace built-in endpoint kinds', () => {
+  let descriptorCalls = 0
+  const trappedAdapter = new Proxy(adapter(), {
+    getOwnPropertyDescriptor(target, key) {
+      descriptorCalls += 1
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+
+  for (const kind of ENDPOINT_KINDS) {
+    assert.throws(
+      () => registerModelProviderAdapter(kind, trappedAdapter),
+      new RegExp(`cannot replace built-in endpoint kind: ${kind}`),
+    )
+    assert.equal(getModelProviderAdapter(kind), null)
+  }
+  assert.equal(descriptorCalls, 0)
 })
 
 test('runtime model provider callbacks are fenced by plugin lifecycle', async () => {

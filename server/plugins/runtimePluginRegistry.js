@@ -3,6 +3,7 @@ import { types as nodeTypes } from 'node:util'
 
 import { LOOP_EVENT_NAMES } from '../services/loop/eventNames.js'
 import { CONNECTOR_TOOL_NAMES } from '../services/connectorTools.js'
+import { ENDPOINT_KINDS } from '../utils/endpointProfile.js'
 import {
   getBuiltinSpec,
   registerDynamicTool,
@@ -36,6 +37,7 @@ const MAX_PLUGIN_SCHEMA_NODES = 8_192
 const MAX_PLUGIN_SCHEMA_BYTES = 512 * 1024
 const PLUGIN_TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/
 const PLUGIN_MODEL_PROVIDER_KIND_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
+const RESERVED_MODEL_PROVIDER_KIND_SET = new Set(ENDPOINT_KINDS)
 const PLUGIN_PROMPT_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const MAX_PLUGIN_PROMPT_BLOCKS = 16
 const MAX_PLUGIN_PROMPT_TOTAL_BYTES = 64 * 1024
@@ -820,6 +822,12 @@ export function createRuntimePluginRegistry(options = {}) {
       throw new TypeError('model provider kind must match [a-z0-9][a-z0-9_-]{0,63}')
     }
     assertContributionDeclared(record, `model-provider:${normalizedKind}`)
+    if (RESERVED_MODEL_PROVIDER_KIND_SET.has(normalizedKind)) {
+      const error = new TypeError(`runtime plugin cannot replace built-in model provider kind: ${normalizedKind}`)
+      error.code = 'PLUGIN_MODEL_PROVIDER_KIND_RESERVED'
+      error.retryable = false
+      throw error
+    }
     const wrappedAdapter = snapshotRuntimeModelProvider({
       record,
       kind: normalizedKind,
