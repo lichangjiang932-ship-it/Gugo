@@ -49,13 +49,15 @@ setup 失败仍走原有原子回滚：已注册的 tool/event/prompt/service/pr
 
 `context.events.on(event, listener)` 只能订阅固定的 Agent Loop event catalog，且必须逐项声明 `event:<event>`。event 按宿主权威分为三类：
 
-- `request` 可按 waterfall 改写一次物理模型请求；`request-error` 只能为首次失败声明一次 `{ kind: 'retry', request }`。它们是显式模型调用控制面，不授予 tool、prompt contribution 或终态权威；
+- `request` 可按 waterfall 改写一次物理模型请求的数据字段；`request-error` 只能为首次失败声明一次 `{ kind: 'retry', request }`。宿主先剥离并在返回后恢复 `signal`、stream callback 等非数据能力，plugin 不能读取、替换或删除它们；`request-error.error` 仅投影冻结的 `name/message/code/statusCode/retryable` metadata，不传原始 Error、cause 或 stack。它们是显式模型调用控制面，不授予 tool、prompt contribution 或终态权威；
 - `pre-tool` 是受限的 args-only waterfall seam：宿主在隔离副本上调用 listener，最终只采纳返回对象的 `args`。tool name、call id/type、checkpoint status/approval/execution args、dynamic registration identity、idempotency key 及其他宿主字段始终恢复为原始值；
 - `pre-step`、`post-tool`、`compaction`、`turn-stopping` 是 observer-only seam。它们只收到深冻结结构化克隆，返回值和原地修改均被忽略；单个 observer 异常 fail-open，后续 observer 仍按注册顺序执行。
 
 `pre-step` 不能替换 messages 或 tool specs；需要 prompt 或 tool 能力时必须分别使用精确声明的 `prompt:<id>` 或 `tool:<name>`。`pre-tool` 替换后的 `args` 仍依次经过 tool schema、动态注册身份、只读/工作区/产物策略、当前权限模式、durable approval、side-effect checkpoint 和执行前最终验证，不能自动批准、切换工具或绕过恢复语义。进程 hook 的私有结果由宿主 symbol 单独传递，不开放为 plugin 可持久化字段。
 
 所有 runtime event context 都是冻结的 metadata-only 对象，只包含 `userId/sessionId/jobId/stepId/iteration/phase` 及适用时的 `executed/attempt`；不传真实 job、step、AbortSignal、model request/error 或宿主 service 引用。observer 不能改写真实终态、压缩结果、审计或 checkpoint，也不会重放已提交副作用。
+
+每个 runtime plugin listener 都接收独立、深冻结、有界的数据投影；control-event 返回值在同一个 lifecycle callback accounting scope 内复制为 detached plain data，上限为 32 层、32768 节点和 16 MiB。observer 返回值直接丢弃，不进入宿主对象图。返回 Proxy 时产生的遍历仍受 callback drain 保护；抛出值只生成新的、有界、`retryable=false` Error，不传原始 identity、accessor、cause 或 stack。非法输入/结果分别以 `PLUGIN_EVENT_ARGUMENT_INVALID` / `PLUGIN_EVENT_RESULT_INVALID` 拒绝，其他 listener failure 默认为 `PLUGIN_EVENT_LISTENER_FAILED`。
 
 ## Runtime tool invocation
 

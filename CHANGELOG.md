@@ -31,6 +31,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Isolated runtime plugin tool invocations behind frozen plain-data arguments/results, metadata-only execution context, and callback-scoped cancellation signals without exposing raw Job, Step, budget, or approval objects.
 - Kept runtime plugin tool result traversal and thrown-value sanitization inside lifecycle callback accounting, exporting only detached non-retryable errors without accessor, cause, stack, or object identity leakage.
 - Snapshotted runtime service methods at registration and fenced service result/error completion inside provider callback accounting, preventing method swaps, Proxy traps, raw causes, and retry control from escaping the lifecycle boundary.
+- Isolated runtime event inputs/results/errors inside lifecycle accounting, hid and restored model-request capabilities, projected request failures as metadata only, and discarded observer return capabilities.
 
 ## [0.11.31] - 2026-08-20
 

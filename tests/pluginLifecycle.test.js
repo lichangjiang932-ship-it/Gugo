@@ -472,6 +472,213 @@ test('plugin service thrown values cross the boundary as detached data-only erro
   assert.equal(await registry.unregisterPlugin('service-error-accounting-plugin'), true)
 })
 
+test('runtime request events hide and restore host-owned request capabilities', async () => {
+  const registry = createRuntimePluginRegistry()
+  const events = createLoopEvents()
+  const unbind = registry.bindLoopEvents(events)
+  let observedRequest = null
+  const hostSignal = new AbortController().signal
+  const onTextDelta = async () => {}
+
+  await registry.registerPlugin(manifest('request-capability-boundary-plugin', {
+    contributes: ['event:request'],
+  }), (ctx) => {
+    ctx.events.on('request', (request, eventContext) => {
+      observedRequest = request
+      assert.equal(Object.isFrozen(request), true)
+      assert.equal(Object.isFrozen(request.messages), true)
+      assert.equal(Object.isFrozen(eventContext), true)
+      assert.equal(Object.hasOwn(request, 'signal'), false)
+      assert.equal(Object.hasOwn(request, 'onTextDelta'), false)
+      return {
+        ...request,
+        signal: 'forged-signal',
+        onTextDelta: 'forged-callback',
+        pluginMarker: 'accepted-data',
+      }
+    })
+  })
+
+  const prepared = await events.waterfall('request', {
+    messages: [{ role: 'user', content: 'request-data' }],
+    tools: [],
+    signal: hostSignal,
+    onTextDelta,
+  }, { phase: 'model-request' })
+
+  assert.equal(prepared.signal, hostSignal)
+  assert.equal(prepared.onTextDelta, onTextDelta)
+  assert.equal(prepared.pluginMarker, 'accepted-data')
+  assert.notEqual(prepared, observedRequest)
+  assert.notEqual(prepared.messages, observedRequest.messages)
+  assert.equal(await registry.unregisterPlugin('request-capability-boundary-plugin'), true)
+  unbind()
+})
+
+test('runtime request-error events receive metadata only and restore retry request capabilities', async () => {
+  const registry = createRuntimePluginRegistry()
+  const events = createLoopEvents()
+  const unbind = registry.bindLoopEvents(events)
+  const hostSignal = new AbortController().signal
+  const onReasoningDelta = async () => {}
+  const modelError = new Error('provider unavailable', { cause: { secret: true } })
+  modelError.code = 'MODEL_PROVIDER_UNAVAILABLE'
+  modelError.statusCode = 503
+  modelError.retryable = true
+  let observedError = null
+
+  await registry.registerPlugin(manifest('request-error-boundary-plugin', {
+    contributes: ['event:request-error'],
+  }), (ctx) => {
+    ctx.events.on('request-error', (payload) => {
+      observedError = payload.error
+      assert.equal(Object.isFrozen(payload), true)
+      assert.equal(Object.isFrozen(payload.error), true)
+      assert.equal(Object.isFrozen(payload.request), true)
+      assert.equal(Object.hasOwn(payload.error, 'cause'), false)
+      assert.equal(Object.hasOwn(payload.error, 'stack'), false)
+      assert.equal(Object.hasOwn(payload.request, 'signal'), false)
+      assert.equal(Object.hasOwn(payload.request, 'onReasoningDelta'), false)
+      return {
+        kind: 'retry',
+        request: {
+          ...payload.request,
+          signal: 'forged-signal',
+          onReasoningDelta: 'forged-callback',
+          retriedByPlugin: true,
+        },
+      }
+    })
+  })
+
+  const decision = await events.waterfall('request-error', {
+    kind: 'error',
+    error: modelError,
+    request: {
+      messages: [{ role: 'user', content: 'retry-data' }],
+      signal: hostSignal,
+      onReasoningDelta,
+    },
+    attempt: 1,
+  }, { phase: 'model-request', attempt: 1 })
+
+  assert.deepEqual(observedError, {
+    name: 'Error',
+    message: 'provider unavailable',
+    code: 'MODEL_PROVIDER_UNAVAILABLE',
+    statusCode: 503,
+    retryable: true,
+  })
+  assert.equal(decision.kind, 'retry')
+  assert.equal(decision.request.signal, hostSignal)
+  assert.equal(decision.request.onReasoningDelta, onReasoningDelta)
+  assert.equal(decision.request.retriedByPlugin, true)
+  assert.equal(await registry.unregisterPlugin('request-error-boundary-plugin'), true)
+  unbind()
+})
+
+test('runtime event completion traversal remains inside callback accounting', async () => {
+  const registry = createRuntimePluginRegistry()
+  const events = createLoopEvents()
+  const unbind = registry.bindLoopEvents(events)
+  let unregisterAttempt = null
+  await registry.registerPlugin(manifest('event-result-accounting-plugin', {
+    contributes: ['event:request'],
+  }), (ctx) => {
+    ctx.events.on('request', (request) => new Proxy({ ...request, accounted: true }, {
+      getPrototypeOf(target) {
+        if (!unregisterAttempt) {
+          unregisterAttempt = registry.unregisterPlugin('event-result-accounting-plugin').then(
+            (value) => ({ value }),
+            (error) => ({ error }),
+          )
+        }
+        return Reflect.getPrototypeOf(target)
+      },
+    }))
+  })
+
+  assert.deepEqual(await events.waterfall('request', { model: 'test' }, {}), {
+    model: 'test',
+    accounted: true,
+  })
+  const attempted = await settleWithin(unregisterAttempt)
+  assert.equal(attempted.value, undefined)
+  assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(registry.getPlugin('event-result-accounting-plugin')?.state, 'active')
+  assert.equal(await registry.unregisterPlugin('event-result-accounting-plugin'), true)
+  unbind()
+})
+
+test('runtime event thrown values are detached and observer results are discarded', async () => {
+  const registry = createRuntimePluginRegistry()
+  const events = createLoopEvents()
+  const unbind = registry.bindLoopEvents(events)
+  let unregisterAttempt = null
+  let messageGetterCalls = 0
+  let observerResultTrapCalls = 0
+  const thrown = {}
+  Object.defineProperties(thrown, {
+    message: {
+      get() {
+        messageGetterCalls += 1
+        return 'getter must not execute'
+      },
+    },
+    code: { value: 'PLUGIN_CUSTOM_EVENT_FAILURE' },
+    retryable: { value: true },
+    cause: { value: { eventCapability: true } },
+  })
+  const trappedError = new Proxy(thrown, {
+    getOwnPropertyDescriptor(target, key) {
+      if (!unregisterAttempt) {
+        unregisterAttempt = registry.unregisterPlugin('event-error-accounting-plugin').then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        )
+      }
+      return Reflect.getOwnPropertyDescriptor(target, key)
+    },
+  })
+
+  await registry.registerPlugin(manifest('event-error-accounting-plugin', {
+    contributes: ['event:request', 'event:pre-step'],
+  }), (ctx) => {
+    ctx.events.on('request', async () => { throw trappedError })
+    ctx.events.on('pre-step', async () => new Proxy({ capability() {} }, {
+      getPrototypeOf(target) {
+        observerResultTrapCalls += 1
+        return Reflect.getPrototypeOf(target)
+      },
+    }))
+  })
+
+  await assert.rejects(
+    events.waterfall('request', { model: 'test' }, {}),
+    (error) => {
+      assert.notEqual(error, trappedError)
+      assert.equal(error?.code, 'PLUGIN_CUSTOM_EVENT_FAILURE')
+      assert.equal(error?.retryable, false)
+      assert.equal(error?.message, 'plugin event listener failed: request')
+      assert.equal(error?.pluginId, 'event-error-accounting-plugin')
+      assert.equal(error?.event, 'request')
+      assert.equal(Object.hasOwn(error, 'cause'), false)
+      return true
+    },
+  )
+  assert.equal(messageGetterCalls, 0)
+  const attempted = await settleWithin(unregisterAttempt)
+  assert.equal(attempted.value, undefined)
+  assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(registry.getPlugin('event-error-accounting-plugin')?.state, 'active')
+
+  const observerResults = await events.observe('pre-step', { iteration: 1 }, {})
+  assert.deepEqual(observerResults, [{ ok: true, value: undefined }])
+  assert.equal(observerResultTrapCalls, 0)
+  assert.equal(await registry.unregisterPlugin('event-error-accounting-plugin'), true)
+  unbind()
+})
+
 test('setup failure rolls back active event and tool side effects before rejecting install', async () => {
   const registry = createRuntimePluginRegistry()
   const events = createLoopEvents()

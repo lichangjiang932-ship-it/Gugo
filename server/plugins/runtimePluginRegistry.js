@@ -7,6 +7,7 @@ import {
   registerDynamicTool,
 } from '../utils/toolSchemaCatalog.js'
 import { createPluginContext } from './pluginContext.js'
+import { createRuntimePluginEventListener } from './pluginEventInvocation.js'
 import { snapshotRuntimeModelProvider } from './pluginModelProvider.js'
 import { createRuntimePluginService } from './pluginServiceInvocation.js'
 import { createRuntimePluginToolExecutor } from './pluginToolInvocation.js'
@@ -330,10 +331,12 @@ export function createRuntimePluginRegistry({
     const contribution = {
       pluginId: record.manifest.id,
       event,
-      async listener(...args) {
-        if (record.state !== 'active') return undefined
-        return invokePluginCallback(record, 'event', listener, args)
-      },
+      listener: createRuntimePluginEventListener({
+        record,
+        event,
+        listener,
+        invoke: invokePluginCallback,
+      }),
     }
     record.eventContributions.add(contribution)
     try {
