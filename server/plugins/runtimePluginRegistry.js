@@ -88,8 +88,15 @@ function snapshotPluginToolSpec(input) {
     try {
       if (Array.isArray(value)) {
         const descriptors = Object.getOwnPropertyDescriptors(value)
+        const lengthDescriptor = descriptors.length
+        if (!lengthDescriptor
+          || !Object.hasOwn(lengthDescriptor, 'value')
+          || !Number.isSafeInteger(lengthDescriptor.value)
+          || lengthDescriptor.value < 0) {
+          throw new TypeError('plugin tool schema arrays must expose an own data length')
+        }
         const out = []
-        for (let index = 0; index < value.length; index += 1) {
+        for (let index = 0; index < lengthDescriptor.value; index += 1) {
           const descriptor = descriptors[index]
           if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
             throw new TypeError('plugin tool schema arrays must be dense data arrays')

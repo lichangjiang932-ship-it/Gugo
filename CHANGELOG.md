@@ -46,6 +46,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Snapshotted runtime registry host adapters from constructor option own data properties, preventing getter, prototype, and post-construction method-swap influence.
 - Snapshotted trusted UI contribution definitions and dense input/tool-name arrays once before manifest validation and installation, preventing accessor, prototype, method-swap, sparse-array, and TOCTOU influence.
 - Hardened trusted UI registry queries to accept only real strings and return frozen plugin lists, preventing object-coercion callbacks and caller-side list mutation.
+- Snapshotted runtime plugin plain-data and tool-schema array lengths from own descriptors, preventing Proxy property-read execution and post-descriptor length TOCTOU.
 
 ## [0.11.31] - 2026-08-20
 

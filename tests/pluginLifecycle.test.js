@@ -237,6 +237,27 @@ test('plugin context config rejects accessors and capabilities without invoking 
   )
 })
 
+test('plugin plain-data array snapshots do not execute Proxy property reads', async () => {
+  let propertyReads = 0
+  const sourceEntries = ['original']
+  const entries = new Proxy(sourceEntries, {
+    get(target, key, receiver) {
+      propertyReads += 1
+      return Reflect.get(target, key, receiver)
+    },
+  })
+  const registry = createRuntimePluginRegistry({ config: { entries } })
+  assert.equal(propertyReads, 0)
+  sourceEntries[0] = 'mutated'
+
+  await registry.registerPlugin(manifest('context-array-descriptor-snapshot'), (ctx) => {
+    assert.deepEqual(ctx.config.entries, ['original'])
+    assert.equal(Object.isFrozen(ctx.config.entries), true)
+  })
+  assert.equal(propertyReads, 0)
+  assert.equal(await registry.unregisterPlugin('context-array-descriptor-snapshot'), true)
+})
+
 test('plugin audit emits detached immutable plain data and rejects capabilities', async () => {
   const audit = []
   const registry = createRuntimePluginRegistry({ audit: (entry) => audit.push(entry) })
@@ -2606,6 +2627,46 @@ test('plugin schema snapshots reject enumerable __proto__ inheritance forgeries'
     assert.equal(getDynamicTool(name), null)
   }
   assert.deepEqual(registry.listPlugins(), [])
+})
+
+test('plugin tool schema arrays use descriptor snapshots without property reads', async () => {
+  const registry = createRuntimePluginRegistry()
+  let propertyReads = 0
+  const requiredSource = ['value']
+  const required = new Proxy(requiredSource, {
+    get(target, key, receiver) {
+      propertyReads += 1
+      return Reflect.get(target, key, receiver)
+    },
+  })
+  await registry.registerPlugin(manifest('schema-array-descriptor-snapshot', {
+    contributes: ['tool:plugin_descriptor_array'],
+  }), (ctx) => {
+    ctx.tools.register({
+      name: 'plugin_descriptor_array',
+      spec: {
+        type: 'function',
+        function: {
+          name: 'plugin_descriptor_array',
+          description: 'Descriptor array snapshot probe.',
+          parameters: {
+            type: 'object',
+            properties: { value: { type: 'string' } },
+            required,
+            additionalProperties: false,
+          },
+        },
+      },
+      exec: async () => ({ ok: true }),
+    })
+  })
+  requiredSource[0] = 'mutated'
+
+  const stored = getDynamicTool('plugin_descriptor_array')?.spec
+  assert.deepEqual(stored?.function?.parameters?.required, ['value'])
+  assert.equal(Object.isFrozen(stored?.function?.parameters?.required), true)
+  assert.equal(propertyReads, 0)
+  assert.equal(await registry.unregisterPlugin('schema-array-descriptor-snapshot'), true)
 })
 
 test('plugin schemas are immutable host snapshots and cyclic schemas fail closed', async () => {

@@ -45,8 +45,15 @@ export function snapshotPluginData(input, {
     try {
       if (Array.isArray(value)) {
         const descriptors = Object.getOwnPropertyDescriptors(value)
+        const lengthDescriptor = descriptors.length
+        if (!lengthDescriptor
+          || !Object.hasOwn(lengthDescriptor, 'value')
+          || !Number.isSafeInteger(lengthDescriptor.value)
+          || lengthDescriptor.value < 0) {
+          throw invalid('arrays must expose an own data length')
+        }
         const output = []
-        for (let index = 0; index < value.length; index += 1) {
+        for (let index = 0; index < lengthDescriptor.value; index += 1) {
           const descriptor = descriptors[index]
           if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
             throw invalid('arrays must be dense data arrays')

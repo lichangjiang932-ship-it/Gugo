@@ -57,6 +57,8 @@ registry constructor 的 `config/registerTool/registerModelProvider/audit` 只�
 
 `context.config` 是 registry 创建时生成的深冻结 plain-data 快照，上限为 32 层、8192 节点和 1 MiB UTF-8 文本；不会保留宿主配置引用，accessor、function、特殊 prototype、cycle 和超限值以 `PLUGIN_CONTEXT_CONFIG_INVALID` 拒绝。`context.audit.emit(event, details)` 的 event 必须是最多 128 字符的受限标识，details 是最多 16 层、4096 节点和 256 KiB 的深冻结 detached plain data；非法事件/数据分别以 `PLUGIN_AUDIT_EVENT_INVALID` / `PLUGIN_AUDIT_DATA_INVALID` 拒绝，且不会到达宿主 audit sink。audit envelope 自身也被冻结，sink 异常继续保持 observability fail-open。
 
+所有 runtime plugin plain-data 边界以及 tool schema 中的数组，都从同一批 own descriptors 读取 `length` 和稠密元素；不会通过 `array.length` 普通属性访问执行 Proxy `get`，也不会在 descriptor 快照后再次读取原数组。原数组后续 mutation 不影响 config、参数、结果、stream state、audit 或已注册 schema 快照。
+
 ## Loop event boundaries
 
 runtime registry 绑定每个 Agent Loop 时只捕获 event bus 自身的 `on/off` function data property；getter、prototype callback 和绑定后的 method swap 均不能改变连接目标，非法 bus 以 `PLUGIN_LOOP_EVENT_BUS_INVALID`、`retryable=false` 拒绝。绑定 API 不再接收或保留 `job/step` context；插件所需的最小 metadata 只能由各事件投影显式提供。
