@@ -31,3 +31,145 @@ test('shared plugin manifests fail closed for invalid identity, version, depende
   assert.throws(() => normalizePluginManifest({ ...valid, requires: ['base', 'base'] }), /must not contain duplicates/)
   assert.throws(() => normalizePluginManifest({ ...valid, contributes: [''] }), /non-empty strings/)
 })
+
+test('shared plugin manifests reject own accessors without invoking them', () => {
+  const fields = ['id', 'name', 'version', 'requires', 'contributes']
+  for (const field of fields) {
+    let getterCalls = 0
+    const input = {
+      id: 'accessor-manifest',
+      name: 'Accessor manifest',
+      version: '1.0.0',
+    }
+    Object.defineProperty(input, field, {
+      enumerable: true,
+      get() {
+        getterCalls += 1
+        return field === 'id'
+          ? 'accessor-manifest'
+          : field === 'name'
+            ? 'Accessor manifest'
+            : field === 'version'
+              ? '1.0.0'
+              : []
+      },
+    })
+    assert.throws(
+      () => normalizePluginManifest(input),
+      (error) => error?.code === 'PLUGIN_MANIFEST_DEFINITION_INVALID'
+        && error?.retryable === false
+        && new RegExp(`manifest\\.${field}`).test(error?.message || ''),
+    )
+    assert.equal(getterCalls, 0)
+  }
+})
+
+test('shared plugin manifests reject inherited required fields and ignore inherited optional fields', () => {
+  const inheritedRequired = Object.create({
+    id: 'inherited-manifest',
+    name: 'Inherited manifest',
+    version: '1.0.0',
+  })
+  assert.throws(
+    () => normalizePluginManifest(inheritedRequired),
+    (error) => error?.code === 'PLUGIN_MANIFEST_DEFINITION_INVALID'
+      && /manifest\.id/.test(error?.message || ''),
+  )
+
+  const inheritedOptional = Object.create({
+    requires: ['forged-dependency'],
+    contributes: ['tool:forged'],
+  })
+  Object.assign(inheritedOptional, {
+    id: 'own-manifest',
+    name: 'Own manifest',
+    version: '1.0.0',
+  })
+  assert.deepEqual(normalizePluginManifest(inheritedOptional), {
+    id: 'own-manifest',
+    name: 'Own manifest',
+    version: '1.0.0',
+    requires: [],
+    contributes: [],
+  })
+})
+
+test('shared plugin manifest arrays reject accessors and sparse prototype values without invoking them', () => {
+  let getterCalls = 0
+  const accessorRequires = []
+  Object.defineProperty(accessorRequires, 0, {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return 'base-plugin'
+    },
+  })
+  assert.throws(
+    () => normalizePluginManifest({
+      id: 'array-accessor-manifest',
+      name: 'Array accessor manifest',
+      version: '1.0.0',
+      requires: accessorRequires,
+    }),
+    (error) => error?.code === 'PLUGIN_MANIFEST_DEFINITION_INVALID'
+      && /requires\[0\]/.test(error?.message || ''),
+  )
+  assert.equal(getterCalls, 0)
+
+  const sparseContributes = []
+  sparseContributes.length = 1
+  const inherited = Object.create(Array.prototype)
+  inherited[0] = 'tool:forged'
+  Object.setPrototypeOf(sparseContributes, inherited)
+  assert.throws(
+    () => normalizePluginManifest({
+      id: 'sparse-manifest',
+      name: 'Sparse manifest',
+      version: '1.0.0',
+      contributes: sparseContributes,
+    }),
+    (error) => error?.code === 'PLUGIN_MANIFEST_DEFINITION_INVALID'
+      && /contributes\[0\]/.test(error?.message || ''),
+  )
+})
+
+test('shared plugin manifests are descriptor snapshots independent of later input mutation', () => {
+  let propertyReads = 0
+  let descriptorReads = 0
+  const requires = ['base-plugin']
+  const contributes = ['tool:example']
+  const target = {
+    id: 'descriptor-snapshot',
+    name: 'Descriptor snapshot',
+    version: '1.2.3',
+    requires,
+    contributes,
+  }
+  const input = new Proxy(target, {
+    get(object, key, receiver) {
+      propertyReads += 1
+      return Reflect.get(object, key, receiver)
+    },
+    getOwnPropertyDescriptor(object, key) {
+      descriptorReads += 1
+      return Reflect.getOwnPropertyDescriptor(object, key)
+    },
+  })
+
+  const normalized = normalizePluginManifest(input)
+  const readsAfterNormalization = descriptorReads
+  target.id = 'mutated-manifest'
+  requires[0] = 'mutated-base'
+  contributes[0] = 'tool:mutated'
+
+  assert.equal(propertyReads, 0)
+  assert.ok(readsAfterNormalization >= 5)
+  assert.deepEqual(normalized, {
+    id: 'descriptor-snapshot',
+    name: 'Descriptor snapshot',
+    version: '1.2.3',
+    requires: ['base-plugin'],
+    contributes: ['tool:example'],
+  })
+  assert.equal(descriptorReads, readsAfterNormalization)
+})

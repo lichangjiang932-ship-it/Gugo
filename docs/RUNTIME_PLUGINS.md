@@ -26,6 +26,8 @@ await registerPlugin({
 })
 ```
 
+共享 manifest 只接受自身 data property：必填的 `id/name/version` 和可选的 `requires/contributes` 都在注册时通过 descriptor 捕获。getter 不执行，prototype 字段不被继承；两个数组必须是稠密的 own string data property 数组。宿主生成冻结快照，后续修改原 manifest 或数组不影响已安装 plugin；非法定义以 `PLUGIN_MANIFEST_DEFINITION_INVALID`、`retryable=false` 失败。
+
 `contributes` 是权限上界，不是说明文字：
 
 | Context API | 必须声明 |
