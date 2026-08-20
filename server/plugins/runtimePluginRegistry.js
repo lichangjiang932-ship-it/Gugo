@@ -470,11 +470,33 @@ export function createRuntimePluginRegistry(options = {}) {
     return true
   }
 
+  const rollbackUntrackedAttachment = (binding, contribution, error) => {
+    try {
+      binding.events.off(contribution.event, contribution.listener)
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        `loop event attachment compensation failed: ${contribution.pluginId}/${contribution.event}`,
+        { cause: rollbackError },
+      )
+    }
+    throw error
+  }
+
   const attachContribution = (binding, contribution) => {
     if (binding.attachments.has(contribution)) return
-    const dispose = binding.events.on(contribution.event, contribution.listener)
+    let dispose
+    try {
+      dispose = binding.events.on(contribution.event, contribution.listener)
+    } catch (error) {
+      rollbackUntrackedAttachment(binding, contribution, error)
+    }
     if (typeof dispose !== 'function') {
-      throw new TypeError('loop event registration must return a disposer')
+      rollbackUntrackedAttachment(
+        binding,
+        contribution,
+        new TypeError('loop event registration must return a disposer'),
+      )
     }
     binding.attachments.set(contribution, dispose)
   }

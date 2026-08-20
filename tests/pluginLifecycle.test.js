@@ -1292,6 +1292,40 @@ test('event registration rollback detaches every binding despite disposer failur
   }
 })
 
+test('loop event attachment compensates on failures before a disposer is tracked', async () => {
+  for (const mode of ['throw', 'invalid-disposer']) {
+    const registry = createRuntimePluginRegistry()
+    const listeners = new Set()
+    let offCalls = 0
+    const unbind = registry.bindLoopEvents({
+      on(event, listener) {
+        listeners.add(listener)
+        if (mode === 'throw') throw new Error('loop event attach failed after mutation')
+        return { invalid: true }
+      },
+      off(event, listener) {
+        offCalls += 1
+        return listeners.delete(listener)
+      },
+    })
+    const pluginId = `event-attach-compensation-${mode}`
+    try {
+      await assert.rejects(
+        registry.registerPlugin(manifest(pluginId), (ctx) => {
+          ctx.events.on('request', () => undefined)
+        }),
+        (error) => error?.code === 'PLUGIN_SETUP_FAILED'
+          && error?.retryable === false,
+      )
+      assert.equal(listeners.size, 0)
+      assert.equal(offCalls, 1)
+      assert.equal(registry.getPlugin(pluginId), null)
+    } finally {
+      unbind()
+    }
+  }
+})
+
 test('runtime tool and prompt definitions reject accessors without invoking them', async () => {
   const toolCases = [
     ['name', { spec: TOOL_SPEC, exec: async () => ({ ok: true }) }],

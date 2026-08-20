@@ -62,6 +62,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Moved visible-contribution revocation into a coalesced async cleanup scope, preserving immediate visibility removal while preventing delayed self-unregister/shutdown completion cycles.
 - Marked visible cleanup completions as consumed before generic disposal, ensuring custom cleanup thenables and failures execute and aggregate exactly once.
 - Made multi-loop event registration rollback exhaustive, ensuring one failing binding disposer cannot leave listeners attached to other loop instances.
+- Added compensating `off()` cleanup when loop `on()` mutates before throwing or returning an invalid disposer, preventing untracked listener leaks.
 
 ## [0.11.31] - 2026-08-20
 
