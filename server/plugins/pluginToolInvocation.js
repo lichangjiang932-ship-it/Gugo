@@ -46,6 +46,43 @@ function snapshotResult(result, name) {
   })
 }
 
+function errorField(error, key) {
+  try {
+    return ownValue(error, key)
+  } catch {
+    return undefined
+  }
+}
+
+function isolatedExecutionError(thrown, name) {
+  const primitive = thrown === null || (typeof thrown !== 'object' && typeof thrown !== 'function')
+    ? String(thrown)
+    : ''
+  const ownMessage = errorField(thrown, 'message')
+  const message = typeof ownMessage === 'string'
+    ? ownMessage
+    : primitive
+  const boundedMessage = message.trim().slice(0, MAX_METADATA_LENGTH)
+  const ownCode = errorField(thrown, 'code')
+  const code = typeof ownCode === 'string' && /^[A-Z][A-Z0-9_]{0,127}$/.test(ownCode)
+    ? ownCode
+    : 'PLUGIN_TOOL_EXECUTION_FAILED'
+  const error = new Error(boundedMessage || `plugin tool ${name} execution failed`)
+  error.code = code
+  error.retryable = false
+  return error
+}
+
+function accountedExecutor(exec, name) {
+  return async (...args) => {
+    try {
+      return snapshotResult(await exec(...args), name)
+    } catch (error) {
+      throw isolatedExecutionError(error, name)
+    }
+  }
+}
+
 function isolatedCancellationSignal(executionContext) {
   const controller = new AbortController()
   const hostSignal = ownValue(executionContext, 'signal')
@@ -84,6 +121,7 @@ function executionScope(executionContext, { name, pluginId, signal }) {
 }
 
 export function createRuntimePluginToolExecutor({ record, name, exec, invoke }) {
+  const executeAndSnapshot = accountedExecutor(exec, name)
   const unavailable = () => {
     const error = new Error(`plugin tool is unavailable: ${record.manifest.id}/${name}`)
     error.code = 'PLUGIN_TOOL_UNAVAILABLE'
@@ -102,8 +140,7 @@ export function createRuntimePluginToolExecutor({ record, name, exec, invoke }) 
     })
     try {
       if (record.state !== 'active') throw unavailable()
-      const result = await invoke(record, 'tool', exec, [input, scope])
-      return snapshotResult(result, name)
+      return await invoke(record, 'tool', executeAndSnapshot, [input, scope])
     } finally {
       cancellation.dispose()
     }
