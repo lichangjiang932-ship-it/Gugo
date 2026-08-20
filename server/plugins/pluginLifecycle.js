@@ -164,18 +164,30 @@ export function createEffectTracker() {
     const flattened = []
     flattenEffects(value, flattened)
     const registered = []
+    const staged = new Map()
+    const additions = []
     for (const effect of flattened) {
       if (tracked.has(effect)) {
         registered.push(tracked.get(effect))
         continue
       }
+      if (staged.has(effect)) {
+        registered.push(staged.get(effect))
+        continue
+      }
       const disposer = resolveDisposer(effect)
-      if (!disposer) throw new TypeError('plugin side effect must provide a disposer')
+      if (!disposer) {
+        throw effectCollectionError('plugin side effect must provide a disposer')
+      }
       const guarded = once(disposer)
+      staged.set(effect, guarded)
+      additions.push({ effect, guarded })
+      registered.push(guarded)
+    }
+    for (const { effect, guarded } of additions) {
       tracked.set(effect, guarded)
       tracked.set(guarded, guarded)
       effects.push(guarded)
-      registered.push(guarded)
     }
     if (registered.length <= 1) return registered[0] || null
     return registered

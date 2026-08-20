@@ -1886,6 +1886,34 @@ test('plugin effect arrays reject accessors, sparse entries, and inherited entri
   assert.equal(getterCalls, 0)
 })
 
+test('plugin effect batches commit atomically after every disposer validates', async () => {
+  const registry = createRuntimePluginRegistry()
+  let rejectedPrefixCleanupCalls = 0
+  let committedCleanupCalls = 0
+  let observedError = null
+
+  await registry.registerPlugin(manifest('effect-batch-atomicity'), (ctx) => {
+    try {
+      ctx.lifecycle.onDispose([
+        () => { rejectedPrefixCleanupCalls += 1 },
+        {},
+      ])
+    } catch (error) {
+      observedError = error
+    }
+    ctx.lifecycle.onDispose(() => { committedCleanupCalls += 1 })
+  })
+
+  assert.equal(observedError?.code, 'PLUGIN_DISPOSER_DEFINITION_INVALID')
+  assert.equal(observedError?.retryable, false)
+  assert.match(observedError?.message || '', /must provide a disposer/)
+  assert.equal(rejectedPrefixCleanupCalls, 0)
+  assert.equal(committedCleanupCalls, 0)
+  assert.equal(await registry.unregisterPlugin('effect-batch-atomicity'), true)
+  assert.equal(rejectedPrefixCleanupCalls, 0)
+  assert.equal(committedCleanupCalls, 1)
+})
+
 test('plugin effect Sets ignore overridden iterators and snapshot cleanup callbacks', async () => {
   const registry = createRuntimePluginRegistry()
   const calls = []
