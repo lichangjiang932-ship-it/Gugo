@@ -10,6 +10,7 @@ import {
 } from './promptCompiler.js'
 import { prepareMemoryInjectionContext } from './memoryContextService.js'
 import { logWarn } from '../utils/logger.js'
+import { renderRuntimePromptBlocks } from '../plugins/pluginRegistry.js'
 import { readWorkspaceInstructions } from './workspaceInstructions.js'
 
 function normalizeIds(values, limit = 32) {
@@ -102,6 +103,7 @@ export function prepareTurnPromptContext({
   const prepareSkills = dependencies.prepareSkillsForPrompt || prepareSkillsForPrompt
   const prepareSkillCatalog = dependencies.prepareSkillCatalogForPrompt || prepareSkillCatalogForPrompt
   const prepareMemory = dependencies.prepareMemoryInjectionContext || prepareMemoryInjectionContext
+  const renderPluginPrompts = dependencies.renderRuntimePromptBlocks || renderRuntimePromptBlocks
   const warn = dependencies.logWarn || logWarn
   const readInstructions = dependencies.readWorkspaceInstructions || readWorkspaceInstructions
   const normalizedSkillIds = normalizeIds(skillIds)
@@ -161,6 +163,31 @@ export function prepareTurnPromptContext({
     tokenCap: Number.isFinite(tokenCap) ? tokenCap : 800,
   }), warn)
   if (memory.text) blocks.push({ role: 'system', content: memory.text })
+  const runtimePrompts = safeStep(
+    'runtime plugin prompt context failed',
+    { blocks: [], errors: [] },
+    () => renderPluginPrompts({
+      userId,
+      sessionId,
+      agentId: effectiveAgentId,
+      skillIds: preparedSkills.map((skill) => String(skill.id)),
+    }),
+    warn,
+  )
+  for (const error of runtimePrompts.errors || []) {
+    try {
+      warn(
+        'turn.prompt',
+        `runtime plugin prompt omitted: ${error.pluginId}/${error.id} (${error.code})`,
+      )
+    } catch { /* optional context */ }
+  }
+  for (const block of runtimePrompts.blocks || []) {
+    blocks.push({
+      role: 'system',
+      content: `# Runtime Plugin Context: ${block.id}\nSource: ${block.pluginId}\n\n${block.text}`,
+    })
+  }
   // Keep the four compiled blocks as one stable prefix. Workspace instructions
   // may change independently while a task is running, so placing them before
   // identity would invalidate the provider-side prefix cache for every block.
@@ -171,6 +198,7 @@ export function prepareTurnPromptContext({
     effectiveAgentId,
     skillIds: preparedSkills.map((skill) => String(skill.id)),
     memoryIds: memory.memoryIds,
+    pluginPromptBlockIds: (runtimePrompts.blocks || []).map((block) => `${block.pluginId}:${block.id}`),
     compactionArchiveId: sessions?.sources?.archiveId || null,
     compactionBoundary: sessions?.sources?.compactionBoundary || null,
     canaryAssignment: canaryPrompt ? {

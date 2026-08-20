@@ -912,6 +912,7 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
         effectiveAgentId: 'agent-resolved',
         skillIds: ['skill-review'],
         memoryIds: ['memory-1'],
+        pluginPromptBlockIds: ['trusted-context:project-hints'],
       }
     },
     resolveToolSpecs: async (request) => {
@@ -983,6 +984,12 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   assert.equal(loopOptions.intentMode, 'execute')
   assert.equal(contextWindowRequest.userId, userId)
   assert.equal(contextWindowRequest.modelName, 'context-model')
+  const assistant = listMessages({ userId, sessionId: 'turn-engine-session' })
+    .find((message) => message.id === 'turn-context:assistant')
+  assert.deepEqual(
+    assistant.modelContext.pluginPromptBlockIds,
+    ['trusted-context:project-hints'],
+  )
 })
 
 test('TurnEngine sanitizes oversized inline skill fields before persisting turn.started', async () => {

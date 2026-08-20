@@ -46,6 +46,7 @@ const TEST_CONTRIBUTIONS = Object.freeze([
   'tool:browser_plugin_probe',
   'event:request',
   'event:pre-step',
+  'prompt:lifecycle-context',
   'service:echo',
   'service:base-service',
   'service:immutable-base-service',
@@ -90,7 +91,12 @@ test('runtime plugin installs real tool, event, and service contributions and re
 
   const installed = await registry.registerPlugin(
     manifest('lifecycle-plugin', {
-      contributes: ['tool:plugin_echo', 'event:request', 'service:echo'],
+      contributes: [
+        'tool:plugin_echo',
+        'event:request',
+        'prompt:lifecycle-context',
+        'service:echo',
+      ],
     }),
     (ctx) => {
       ctx.lifecycle.onDispose(() => cleanupOrder.push('first'))
@@ -100,6 +106,15 @@ test('runtime plugin installs real tool, event, and service contributions and re
         exec: async ({ value }) => ({ ok: true, value }),
       })
       ctx.events.on('request', (request) => ({ ...request, lifecyclePlugin: true }))
+      ctx.prompts.register({
+        id: 'lifecycle-context',
+        render(scope) {
+          assert.deepEqual(Object.keys(scope), ['userId', 'sessionId', 'agentId', 'skillIds'])
+          assert.equal(Object.isFrozen(scope), true)
+          assert.equal(Object.isFrozen(scope.skillIds), true)
+          return `Scoped to ${scope.sessionId}`
+        },
+      })
       ctx.services.provide('echo', { source: ctx.plugin.id })
       ctx.lifecycle.onDispose(() => cleanupOrder.push('second'))
       return () => cleanupOrder.push('returned')
@@ -113,11 +128,26 @@ test('runtime plugin installs real tool, event, and service contributions and re
     await events.waterfall('request', { model: 'test' }, {}),
     { model: 'test', lifecyclePlugin: true },
   )
+  assert.deepEqual(registry.renderPromptBlocks({
+    userId: 'prompt-user',
+    sessionId: 'prompt-session',
+    agentId: 'prompt-agent',
+    skillIds: ['skill-b', 'skill-a', 'skill-a'],
+    query: 'must not cross the prompt plugin boundary',
+  }), {
+    blocks: [{
+      id: 'lifecycle-context',
+      pluginId: 'lifecycle-plugin',
+      text: 'Scoped to prompt-session',
+    }],
+    errors: [],
+  })
 
   assert.equal(await registry.unregisterPlugin('lifecycle-plugin'), true)
   assert.equal(await registry.unregisterPlugin('lifecycle-plugin'), false)
   assert.equal(getDynamicTool('plugin_echo'), null)
   assert.equal(registry.getService('echo'), undefined)
+  assert.deepEqual(registry.renderPromptBlocks({ sessionId: 'after-unload' }), { blocks: [], errors: [] })
   assert.deepEqual(await events.waterfall('request', { model: 'test' }, {}), { model: 'test' })
   assert.deepEqual(cleanupOrder, ['returned', 'second', 'first'])
   assert.equal(unbind(), true)
@@ -177,6 +207,14 @@ test('undeclared runtime contributions fail closed before producing side effects
       declaration: 'model-provider:undeclared-provider',
       setup: (ctx) => ctx.models.providers.register('undeclared-provider', {}),
     },
+    {
+      id: 'undeclared-prompt-plugin',
+      declaration: 'prompt:undeclared-context',
+      setup: (ctx) => ctx.prompts.register({
+        id: 'undeclared-context',
+        render: () => 'must not be registered',
+      }),
+    },
   ]
 
   for (const item of cases) {
@@ -194,6 +232,77 @@ test('undeclared runtime contributions fail closed before producing side effects
     assert.deepEqual(registry.listPlugins(), [])
   }
   assert.equal(getDynamicTool('plugin_echo'), null)
+})
+
+test('runtime prompt contributions are bounded, synchronous, deterministic, and fail open', async () => {
+  const audit = []
+  const registry = createRuntimePluginRegistry({ audit: (event) => audit.push(event) })
+  const definitions = [
+    ['first-context', () => 'first'],
+    ['invalid-context', () => ({ text: 'not accepted' })],
+    ['oversized-context', () => 'x'.repeat((16 * 1024) + 1)],
+    ['async-context', async () => 'not accepted'],
+    ['second-context', () => 'second'],
+  ]
+  await registry.registerPlugin(manifest('prompt-bounds-plugin', {
+    contributes: definitions.map(([id]) => `prompt:${id}`),
+  }), (ctx) => {
+    for (const [id, render] of definitions) ctx.prompts.register({ id, render })
+  })
+
+  const rendered = registry.renderPromptBlocks({
+    userId: 'bounded-user',
+    sessionId: 'bounded-session',
+    skillIds: Array.from({ length: 40 }, (_, index) => `skill-${index}`),
+  })
+  assert.deepEqual(rendered.blocks.map(({ id, text }) => [id, text]), [
+    ['first-context', 'first'],
+    ['second-context', 'second'],
+  ])
+  assert.deepEqual(rendered.errors.map(({ id, code }) => [id, code]), [
+    ['invalid-context', 'PLUGIN_PROMPT_RESULT_INVALID'],
+    ['oversized-context', 'PLUGIN_PROMPT_BLOCK_TOO_LARGE'],
+    ['async-context', 'PLUGIN_PROMPT_ASYNC_UNSUPPORTED'],
+  ])
+  assert.deepEqual(
+    audit.filter(({ event }) => event === 'plugin.prompt_failed').map(({ promptId, code }) => [promptId, code]),
+    rendered.errors.map(({ id, code }) => [id, code]),
+  )
+  assert.equal(await registry.unregisterPlugin('prompt-bounds-plugin'), true)
+})
+
+test('runtime prompt contribution count and total byte budgets fail open', async () => {
+  const countRegistry = createRuntimePluginRegistry()
+  const countIds = Array.from({ length: 17 }, (_, index) => `count-context-${index}`)
+  await countRegistry.registerPlugin(manifest('prompt-count-plugin', {
+    contributes: countIds.map((id) => `prompt:${id}`),
+  }), (ctx) => {
+    for (const id of countIds) ctx.prompts.register({ id, render: () => id })
+  })
+  const countResult = countRegistry.renderPromptBlocks()
+  assert.equal(countResult.blocks.length, 16)
+  assert.deepEqual(countResult.errors, [{
+    id: 'count-context-16',
+    pluginId: 'prompt-count-plugin',
+    code: 'PLUGIN_PROMPT_BLOCK_LIMIT',
+  }])
+  assert.equal(await countRegistry.unregisterPlugin('prompt-count-plugin'), true)
+
+  const totalRegistry = createRuntimePluginRegistry()
+  const totalIds = Array.from({ length: 5 }, (_, index) => `total-context-${index}`)
+  await totalRegistry.registerPlugin(manifest('prompt-total-plugin', {
+    contributes: totalIds.map((id) => `prompt:${id}`),
+  }), (ctx) => {
+    for (const id of totalIds) ctx.prompts.register({ id, render: () => 'x'.repeat(15 * 1024) })
+  })
+  const totalResult = totalRegistry.renderPromptBlocks()
+  assert.equal(totalResult.blocks.length, 4)
+  assert.deepEqual(totalResult.errors, [{
+    id: 'total-context-4',
+    pluginId: 'prompt-total-plugin',
+    code: 'PLUGIN_PROMPT_TOTAL_TOO_LARGE',
+  }])
+  assert.equal(await totalRegistry.unregisterPlugin('prompt-total-plugin'), true)
 })
 
 test('dependency guard prevents unloading a service required by an active plugin', async () => {

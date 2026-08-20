@@ -5,6 +5,7 @@ export function createPluginContext({
   registerTool,
   registerEvent,
   registerModelProvider,
+  registerPrompt,
   provideService,
   getService,
   hasService,
@@ -34,6 +35,11 @@ export function createPluginContext({
           return registerModelProvider(kind, adapter)
         },
       }),
+    }),
+    prompts: Object.freeze({
+      register(definition) {
+        return registerPrompt(definition)
+      },
     }),
     services: Object.freeze({
       provide(name, value) {

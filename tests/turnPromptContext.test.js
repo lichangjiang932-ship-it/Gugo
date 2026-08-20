@@ -54,6 +54,61 @@ test('turn prompt keeps compiled blocks in stable order before dynamic context',
   assert.match(contents[4], /^# Long-term memory/)
   assert.match(contents[5], /^# Workspace instructions/)
 })
+test('trusted runtime prompt blocks use a fixed additive slot and receive only frozen scope metadata', () => {
+  const observedScopes = []
+  const warnings = []
+  const prepared = prepareTurnPromptContext({
+    userId: 'runtime-prompt-user',
+    agentId: AGENT.id,
+    skillIds: [SKILL.id],
+    sessionId: 'runtime-prompt-session',
+    query: 'raw query must not reach the runtime prompt callback',
+    env: { WORKSPACE_TEXT: '# Workspace instructions\nRemain authoritative.' },
+  }, {
+    getAgent: () => AGENT,
+    prepareSkillsForPrompt: () => [SKILL],
+    prepareMemoryInjectionContext: () => ({
+      text: '# Long-term memory\nStable memory.',
+      memoryIds: ['runtime-prompt-memory'],
+    }),
+    readWorkspaceInstructions: ({ env }) => ({ text: env.WORKSPACE_TEXT }),
+    renderRuntimePromptBlocks: (scope) => {
+      observedScopes.push(scope)
+      return {
+        blocks: [{
+          id: 'project-hints',
+          pluginId: 'trusted-project-plugin',
+          text: 'Use the trusted project hints.',
+        }],
+        errors: [{
+          id: 'failed-hints',
+          pluginId: 'trusted-project-plugin',
+          code: 'PLUGIN_PROMPT_RENDER_FAILED',
+        }],
+      }
+    },
+    logWarn: (...args) => warnings.push(args.join(' ')),
+  })
+  const contents = prepared.messages.map((message) => message.content)
+  const memoryIndex = contents.findIndex((content) => content.startsWith('# Long-term memory'))
+  const pluginIndex = contents.findIndex((content) => content.startsWith('# Runtime Plugin Context: project-hints'))
+  const workspaceIndex = contents.findIndex((content) => content.startsWith('# Workspace instructions'))
+
+  assert.equal(memoryIndex >= 0, true)
+  assert.equal(pluginIndex, memoryIndex + 1)
+  assert.equal(workspaceIndex, pluginIndex + 1)
+  assert.match(contents[pluginIndex], /Source: trusted-project-plugin/)
+  assert.deepEqual(prepared.pluginPromptBlockIds, ['trusted-project-plugin:project-hints'])
+  assert.deepEqual(observedScopes, [{
+    userId: 'runtime-prompt-user',
+    sessionId: 'runtime-prompt-session',
+    agentId: AGENT.id,
+    skillIds: [SKILL.id],
+  }])
+  assert.equal('query' in observedScopes[0], false)
+  assert.equal(warnings.some((warning) => warning.includes('failed-hints')), true)
+})
+
 test('changing workspace instructions preserves compiled block cache hits and contents', () => {
   clearPromptCompilerCache()
   const first = prepare('# Workspace instructions\nVersion one.')

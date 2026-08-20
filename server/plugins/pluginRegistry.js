@@ -77,6 +77,10 @@ export function getPluginService(name) {
   return RUNTIME.getService(name)
 }
 
+export function renderRuntimePromptBlocks(input = {}) {
+  return RUNTIME.renderPromptBlocks(input)
+}
+
 export function bindRuntimePluginsToLoop(loopEvents, context = {}) {
   return RUNTIME.bindLoopEvents(loopEvents, context)
 }

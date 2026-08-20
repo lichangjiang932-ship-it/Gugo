@@ -20,6 +20,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Added immutable local-owner human decisions bound to candidate, replay, evaluation, and rollback fingerprints, without applying or installing candidates.
 - Added local-owner-only prompt canaries for approved workspace-instruction candidates, restricted to explicit chat sessions and deterministic 1–10% traffic, with per-turn baseline revalidation and append-only assignments/outcomes.
 - Added immutable pre-start canary rollback policies and deterministic automatic rollback on predeclared reliability, latency, or fully measured provider-cost regressions, without rewriting workspace instructions or exposing a manual rollback endpoint.
+- Added manifest-gated trusted runtime prompt-context contributions with fixed additive ordering, frozen metadata-only scope, strict count/byte budgets, fail-open auditing, reversible lifecycle, and no disk-transformer access.
 
 ## [0.11.31] - 2026-08-20
 
