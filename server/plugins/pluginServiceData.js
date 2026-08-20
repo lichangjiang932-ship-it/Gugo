@@ -1,8 +1,15 @@
-const MAX_DEPTH = 32
-const MAX_NODES = 8_192
-const MAX_BYTES = 1024 * 1024
+const DEFAULT_MAX_DEPTH = 32
+const DEFAULT_MAX_NODES = 8_192
+const DEFAULT_MAX_BYTES = 1024 * 1024
 
-export function snapshotPluginServiceData(input, { code, label }) {
+export function snapshotPluginData(input, {
+  code,
+  label,
+  freeze = true,
+  maxDepth = DEFAULT_MAX_DEPTH,
+  maxNodes = DEFAULT_MAX_NODES,
+  maxBytes = DEFAULT_MAX_BYTES,
+}) {
   const seen = new WeakSet()
   let nodes = 0
   let bytes = 0
@@ -15,12 +22,12 @@ export function snapshotPluginServiceData(input, { code, label }) {
   }
   const countText = (value) => {
     bytes += Buffer.byteLength(value, 'utf8')
-    if (bytes > MAX_BYTES) throw invalid('data is too large')
+    if (bytes > maxBytes) throw invalid('data is too large')
   }
   const clone = (value, depth) => {
     nodes += 1
-    if (nodes > MAX_NODES) throw invalid('data has too many nodes')
-    if (depth > MAX_DEPTH) throw invalid('data is too deep')
+    if (nodes > maxNodes) throw invalid('data has too many nodes')
+    if (depth > maxDepth) throw invalid('data is too deep')
     if (value === undefined || value === null || typeof value === 'boolean') return value
     if (typeof value === 'number') {
       if (!Number.isFinite(value)) throw invalid('numbers must be finite')
@@ -46,7 +53,7 @@ export function snapshotPluginServiceData(input, { code, label }) {
           }
           output.push(clone(descriptor.value, depth + 1))
         }
-        return Object.freeze(output)
+        return freeze ? Object.freeze(output) : output
       }
       const prototype = Object.getPrototypeOf(value)
       if (prototype !== Object.prototype && prototype !== null) {
@@ -64,15 +71,19 @@ export function snapshotPluginServiceData(input, { code, label }) {
         Object.defineProperty(output, key, {
           value: clone(descriptor.value, depth + 1),
           enumerable: true,
-          configurable: false,
-          writable: false,
+          configurable: !freeze,
+          writable: !freeze,
         })
       }
-      return Object.freeze(output)
+      return freeze ? Object.freeze(output) : output
     } finally {
       seen.delete(value)
     }
   }
 
   return clone(input, 0)
+}
+
+export function snapshotPluginServiceData(input, options) {
+  return snapshotPluginData(input, options)
 }

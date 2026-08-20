@@ -27,6 +27,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Converted pre-step, compaction, and turn-stopping events to fail-open immutable observers with metadata-only context, preventing event declarations from bypassing exact prompt/tool contributions or rewriting host terminal and recovery state.
 - Replaced raw runtime service lookup with lifecycle-aware invocation, declared provider dependencies, own-method dispatch, and bounded immutable data snapshots so stale consumers and service results cannot leak process capabilities.
 - Fenced runtime model-provider adapters behind own synchronous methods and plugin callback accounting, preventing stale request/stream snapshots from executing plugin code after unload.
+- Isolated runtime model-provider arguments and results as bounded plain data, with wrapper-owned opaque stream state tokens that reject capability leakage and forged state.
 
 ## [0.11.31] - 2026-08-20
 

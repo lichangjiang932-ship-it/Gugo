@@ -229,6 +229,182 @@ test('runtime model provider callbacks must stay synchronous', async () => {
   assert.equal(await registry.unregisterPlugin('async-provider-plugin'), true)
 })
 
+test('runtime model providers exchange isolated data and keep stream state opaque', async () => {
+  const registry = createRuntimePluginRegistry()
+  let requestResult = null
+  let parseResult = null
+  let issuedState = null
+  let callbackState = null
+  let finishCallbackState = null
+  await registry.registerPlugin({
+    id: 'isolated-provider-plugin',
+    name: 'Isolated provider plugin',
+    version: '1.0.0',
+    contributes: ['model-provider:isolated-native'],
+  }, (context) => {
+    const providerAdapter = adapter()
+    providerAdapter.buildRequest = (input) => {
+      assert.equal(Object.isFrozen(input), true)
+      assert.equal(Object.isFrozen(input.config), true)
+      assert.equal(Object.isFrozen(input.messages), true)
+      assert.equal(Object.isFrozen(input.messages[0]), true)
+      requestResult = {
+        url: `${input.config.baseUrl}/isolated`,
+        init: { method: 'POST', body: JSON.stringify({ messages: input.messages }) },
+      }
+      return requestResult
+    }
+    providerAdapter.parseResponse = (data) => {
+      assert.equal(Object.isFrozen(data), true)
+      parseResult = {
+        content: data.answer,
+        toolCalls: [],
+        usage: null,
+        finishReason: 'stop',
+      }
+      return parseResult
+    }
+    providerAdapter.createStreamState = () => {
+      issuedState = { chunks: 0, nested: { finished: false } }
+      return issuedState
+    }
+    providerAdapter.consumeStreamPayload = (data, state) => {
+      assert.equal(Object.isFrozen(data), true)
+      assert.equal(Object.isFrozen(data.nested), true)
+      callbackState = state
+      state.chunks += 1
+      return [{ type: 'text', delta: `${data.text}:${state.chunks}` }]
+    }
+    providerAdapter.finishStream = (state) => {
+      finishCallbackState = state
+      state.nested.finished = true
+      return [{ type: 'finish', finishReason: 'stop' }]
+    }
+    context.models.providers.register('isolated-native', providerAdapter)
+  })
+
+  const profile = resolveEndpointProfile({
+    baseUrl: 'https://isolated.example.test',
+    modelName: 'isolated-1',
+    env: {},
+    overrides: { kind: 'isolated-native', supportsStreaming: true },
+  })
+  const request = buildModelProviderRequest({
+    config: { baseUrl: profile.baseUrl, modelName: profile.modelName },
+    profile,
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+  requestResult.url = 'https://mutated.example.test'
+  assert.equal(request.url, 'https://isolated.example.test/isolated')
+
+  const parsed = parseModelProviderResponse({ answer: 'world' }, profile, { providerRequest: request })
+  parseResult.content = 'mutated'
+  assert.equal(parsed.content, 'world')
+
+  const state = createNativeProviderStreamState(profile.kind)
+  assert.deepEqual(Object.keys(state), ['kind'])
+  issuedState.chunks = 99
+  const events = consumeNativeProviderStreamPayload({ text: 'chunk', nested: { value: 1 } }, state)
+  assert.notEqual(callbackState, issuedState)
+  assert.equal(callbackState.chunks, 1)
+  assert.deepEqual(events, [{ type: 'text', delta: 'chunk:1' }])
+  assert.equal(Object.isFrozen(events), true)
+  assert.equal(Object.isFrozen(events[0]), true)
+
+  const escapedState = callbackState
+  escapedState.chunks = 99
+  assert.deepEqual(
+    consumeNativeProviderStreamPayload({ text: 'next', nested: { value: 2 } }, state),
+    [{ type: 'text', delta: 'next:2' }],
+  )
+  assert.notEqual(callbackState, escapedState)
+  assert.equal(callbackState.chunks, 2)
+  assert.deepEqual(finishNativeProviderStream(state), [{ type: 'finish', finishReason: 'stop' }])
+  assert.notEqual(finishCallbackState, callbackState)
+  assert.equal(finishCallbackState.nested.finished, true)
+
+  assert.equal(await registry.unregisterPlugin('isolated-provider-plugin'), true)
+})
+
+test('runtime model providers reject accessor data, capability results, and forged stream state', async () => {
+  const registry = createRuntimePluginRegistry()
+  let parseCalls = 0
+  let invalidParseResult = false
+  let invalidStreamState = true
+  await registry.registerPlugin({
+    id: 'invalid-data-provider-plugin',
+    name: 'Invalid data provider plugin',
+    version: '1.0.0',
+    contributes: ['model-provider:invalid-data-native'],
+  }, (context) => {
+    const providerAdapter = adapter()
+    providerAdapter.parseResponse = (data) => {
+      parseCalls += 1
+      if (invalidParseResult) {
+        return {
+          content: data.answer,
+          toolCalls: [],
+          usage: null,
+          finishReason: 'stop',
+          capability() {},
+        }
+      }
+      return adapter().parseResponse(data)
+    }
+    providerAdapter.createStreamState = () => invalidStreamState
+      ? { capability() {} }
+      : { chunks: 0 }
+    context.models.providers.register('invalid-data-native', providerAdapter)
+  })
+
+  const profile = resolveEndpointProfile({
+    baseUrl: 'https://invalid-data.example.test',
+    modelName: 'invalid-data-1',
+    env: {},
+    overrides: { kind: 'invalid-data-native', supportsStreaming: true },
+  })
+  let getterCalls = 0
+  const accessorResponse = { answer: 'world' }
+  Object.defineProperty(accessorResponse, 'trap', {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return 'not data'
+    },
+  })
+  assert.throws(
+    () => parseModelProviderResponse(accessorResponse, profile),
+    (error) => error?.code === 'PLUGIN_MODEL_PROVIDER_ARGUMENT_INVALID'
+      && error?.retryable === false,
+  )
+  assert.equal(getterCalls, 0)
+  assert.equal(parseCalls, 0)
+
+  invalidParseResult = true
+  assert.throws(
+    () => parseModelProviderResponse({ answer: 'world' }, profile),
+    (error) => error?.code === 'PLUGIN_MODEL_PROVIDER_RESULT_INVALID'
+      && error?.retryable === false,
+  )
+  assert.equal(parseCalls, 1)
+
+  assert.throws(
+    () => createNativeProviderStreamState(profile.kind),
+    (error) => error?.code === 'PLUGIN_MODEL_PROVIDER_STREAM_STATE_INVALID'
+      && error?.retryable === false,
+  )
+  invalidStreamState = false
+  const state = createNativeProviderStreamState(profile.kind)
+  assert.throws(
+    () => consumeNativeProviderStreamPayload({ text: 'chunk' }, { kind: profile.kind }),
+    (error) => error?.code === 'PLUGIN_MODEL_PROVIDER_STREAM_STATE_INVALID'
+      && error?.retryable === false,
+  )
+  assert.deepEqual(finishNativeProviderStream(state), [{ type: 'finish', finishReason: 'stop' }])
+
+  assert.equal(await registry.unregisterPlugin('invalid-data-provider-plugin'), true)
+})
+
 test('runtime plugins publish model providers and uninstall them with the plugin lifecycle', async () => {
   const registry = createRuntimePluginRegistry()
   await registry.registerPlugin({
