@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.34] - 2026-08-24
+
+### Fixed
+
+- Synchronized the plugin host compatibility version with package metadata so offline capability evaluation, coverage, and release CI no longer fail during module loading.
+
 ## [0.11.33] - 2026-08-23
 
 ### Fixed
@@ -701,7 +707,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.33...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.34...HEAD
+[0.11.34]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.33...v0.11.34
 [0.11.33]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.32...v0.11.33
 [0.11.32]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.31...v0.11.32
 [0.11.31]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.30...v0.11.31
