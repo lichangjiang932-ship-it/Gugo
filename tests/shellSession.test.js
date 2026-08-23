@@ -648,17 +648,19 @@ test('a timed-out command is interrupted and the same session remains usable', a
 })
 
 test('idle sessions are removed automatically', async () => {
+  const idleTimeoutMs = 40
   const result = await runShellSessionCommand({
     userId: 'idle-user',
     rootPath: workspace,
     cwd: workspace,
     command: shellEcho('idle'),
-    idleTimeoutMs: 40,
+    idleTimeoutMs,
   })
   assert.equal(result.code, 0)
   assert.equal(_testing.getSessionCount(), 1)
   await waitForCondition(() => _testing.getSessionCount() === 0, {
-    message: 'idle shell session was not removed automatically',
+    timeoutMs: idleTimeoutMs + _testing.INTERRUPT_GRACE_MS + 5_000,
+    message: 'idle shell session was not removed after its shutdown grace period',
   })
   assert.equal(_testing.getSessionCount(), 0)
 })

@@ -1,7 +1,7 @@
 const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/
 
 export const PLUGIN_API_VERSION = '1.0.0'
-export const PLUGIN_HOST_VERSION = '0.11.35'
+export const PLUGIN_HOST_VERSION = '0.11.36'
 
 function parseSemver(value) {
   if (typeof value !== 'string') return null

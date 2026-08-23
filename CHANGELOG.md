@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.36] - 2026-08-24
+
+### Fixed
+
+- Made the idle shell-session cleanup regression gate wait through the full production shutdown grace period, eliminating deterministic timeout races under instrumented Linux CI without shortening process cleanup safety.
+
 ## [0.11.35] - 2026-08-24
 
 ### Fixed
@@ -715,7 +721,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.35...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.36...HEAD
+[0.11.36]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.35...v0.11.36
 [0.11.35]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.34...v0.11.35
 [0.11.34]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.33...v0.11.34
 [0.11.33]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.32...v0.11.33
