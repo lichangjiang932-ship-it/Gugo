@@ -1,6 +1,6 @@
 # Runtime Plugin Contributions
 
-Gugo 的进程内 runtime plugin 通过 `server/plugins/runtimePluginRegistry.js` 注册可撤销的工具、完整 Agent Loop、Agent Loop 事件、prompt context、服务、策略和模型 provider。runtime 与构建期可信 UI plugin 共用 `shared/pluginManifest.js` 的不可变 manifest envelope。
+Gugo 的进程内 runtime plugin 通过 `server/plugins/runtimePluginRegistry.js` 注册可撤销的工具、完整 Agent Loop、Agent Loop 事件、只读 Agent Events、prompt context、服务、策略和模型 provider。runtime 与构建期可信 UI plugin 共用 `shared/pluginManifest.js` 的不可变 manifest envelope。
 
 > 安全边界：`registerPlugin()` 是宿主进程内可信代码 API。磁盘 `transformer` 插件由 `runtimePluginControlService.js` 包装，并继续在 `pluginSandbox.js` 中执行；它不能获得 registry context，也不能注入 React/renderer JavaScript。
 
@@ -27,7 +27,7 @@ await registerPlugin({
   id: 'example-runtime',
   name: 'Example runtime plugin',
   version: '1.0.0',
-  apiVersion: '1.0.0',
+  apiVersion: '1.1.0',
   hostVersion: '>=0.11.0 <1.0.0',
   requires: ['example-runtime-base'],
   dependencyVersions: {
@@ -36,6 +36,7 @@ await registerPlugin({
   contributes: [
     'tool:example_echo',
     'event:request',
+    'agent-event:turn.completed',
     'prompt:example-project-context',
     'service:example-cache',
     'service:task-review-guard',
@@ -54,7 +55,7 @@ await registerPlugin({
 
 共享 manifest 只接受自身 data property：必填的 `id/name/version` 和可选的 `requires/contributes` 都在注册时通过 descriptor 捕获。getter 不执行，prototype 字段不被继承；两个数组必须是稠密的 own string data property 数组。宿主生成冻结快照，后续修改原 manifest 或数组不影响已安装 plugin；非法定义以 `PLUGIN_MANIFEST_DEFINITION_INVALID`、`retryable=false` 失败。
 
-`apiVersion`、`hostVersion` 和 `dependencyVersions` 是执行门禁，不是库存标签。当前 plugin API 为 `1.0.0`；声明的 API 必须与宿主处于同一稳定 major 且不得高于宿主实现，`hostVersion` 与依赖范围使用 manifest 接受的 semver 子集（精确版本、`^`、`~`、比较器交集或 `*`）。磁盘 plugin 在加入 inventory 前检查宿主/API，并在完整扫描后按依赖版本做级联淘汰；进程内 runtime plugin 在任何 setup 代码执行前检查 active dependency 的不可变 manifest version，并在 setup 完成、转为 active 前再次检查。失败分别返回 `PLUGIN_API_VERSION_INCOMPATIBLE`、`PLUGIN_HOST_VERSION_INCOMPATIBLE`、`PLUGIN_DEPENDENCY_UNAVAILABLE` 或 `PLUGIN_DEPENDENCY_VERSION_INCOMPATIBLE`，均为 `retryable=false`。尚未声明这些字段的旧 manifest 继续按 legacy 规则加载；这只是迁移兼容，不代表其具有版本兼容承诺。
+`apiVersion`、`hostVersion` 和 `dependencyVersions` 是执行门禁，不是库存标签。当前 plugin API 为 `1.1.0`；声明的 API 必须与宿主处于同一稳定 major 且不得高于宿主实现，`hostVersion` 与依赖范围使用 manifest 接受的 semver 子集（精确版本、`^`、`~`、比较器交集或 `*`）。磁盘 plugin 在加入 inventory 前检查宿主/API，并在完整扫描后按依赖版本做级联淘汰；进程内 runtime plugin 在任何 setup 代码执行前检查 active dependency 的不可变 manifest version，并在 setup 完成、转为 active 前再次检查。失败分别返回 `PLUGIN_API_VERSION_INCOMPATIBLE`、`PLUGIN_HOST_VERSION_INCOMPATIBLE`、`PLUGIN_DEPENDENCY_UNAVAILABLE` 或 `PLUGIN_DEPENDENCY_VERSION_INCOMPATIBLE`，均为 `retryable=false`。尚未声明这些字段的旧 manifest 继续按 legacy 规则加载；这只是迁移兼容，不代表其具有版本兼容承诺。
 
 `contributes` 是权限上界，不是说明文字：
 
@@ -62,6 +63,7 @@ await registerPlugin({
 | --- | --- |
 | `context.tools.register({ name })` | `tool:<name>` |
 | `context.events.on(event)` | `event:<event>` |
+| `context.agentEvents.subscribe(eventType, listener)` | `agent-event:<eventType>` |
 | `context.prompts.register({ id, render })` | `prompt:<id>` |
 | `context.services.provide(name)` | `service:<name>` |
 | `context.models.providers.register(kind)` | `model-provider:<normalized-kind>` |
@@ -75,6 +77,16 @@ await registerPlugin({
 code: PLUGIN_CONTRIBUTION_UNDECLARED
 retryable: false
 ```
+
+### 只读 Agent Events（API 1.1）
+
+`context.agentEvents.subscribe(eventType, listener, { contractVersion: 1 })` 消费 `shared/turnEvents.js` 的权威 `TURN_EVENT_TYPES`，用于观测已经持久化的 Turn 生命周期。它与 `context.events.on()` 完全独立：后者是 Agent Loop 内部 hook，部分事件允许受限改写请求；Agent Events 永远只读，listener 返回值被忽略，不能改变模型请求、工具调用、checkpoint 或终态。
+
+每个事件类型都必须以 `agent-event:<eventType>` 精确声明，不支持 `*`。listener 接收一个分离、深冻结的 `turn.event` v1 transport envelope；其中不包含 `userId`、数据库对象、`AbortSignal` 或宿主 service 引用。单个 listener 抛错时 fail-open，并写入脱敏的 `plugin.agent_event_failed` audit；同一 consumer 的事件按发布顺序串行执行，一个插件不能污染其他 listener 的快照。
+
+交付边界是“持久化成功之后”：内置 SQLite 从事务提交点发布，回滚不会泄露事件，幂等重写也不会重复通知；emitter 只在 adapter 返回权威 stored event 或与整个 write-behind batch 一一对应的权威回执后补发。自定义 v6 adapter 缺少可校验的逐项 batch 回执时会安全降级为不补发，而不会把请求快照冒充成已提交事实。
+
+当前契约只是 **best-effort、进程内、提交后 live observer**，不是 reliable queue、exactly-once stream 或跨重启订阅。进程内有界 event identity 去重只用于抑制 Store 与 emitter 双入口，不承诺缓存淘汰后或进程重启后不重复；跨进程写入、进程崩溃窗口和历史事件均可能不可见。v1 API 也不暴露权威 replay/cursor，因此插件不能声称可从该接口恢复状态。可靠 v2 需要独立于 retention-pruned `turn_events` 的宿主 outbox、全局单调 cursor、稳定 subscription ID、持久 ACK、retry/backoff、DLQ 及 truncation watermark。卸载或热重载会先移除订阅可见性，再排空卸载前已经接受的 callback。
 
 `context.tools.register()` 的 `name/spec/exec` 与 `context.prompts.register()` 的 `id/render` 必须是定义对象自己的 data property。宿主在注册时通过 descriptor 一次捕获所需值；getter 不执行，prototype property 被拒绝，注册后的 callback/schema/id swap 不改变已安装 contribution。非法定义以 `PLUGIN_CONTRIBUTION_DEFINITION_INVALID`、`retryable=false` 在可见副作用前失败。
 

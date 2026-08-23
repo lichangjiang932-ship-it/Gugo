@@ -1,6 +1,12 @@
 import { getDb } from '../db.js'
 import { isDeepStrictEqual } from 'node:util'
-import { canAdvanceTurnEventCursor, parseTurnEvent } from '../../shared/turnEvents.js'
+import {
+  canAdvanceTurnEventCursor,
+  createTurnEventTransportEnvelope,
+  parseTurnEvent,
+} from '../../shared/turnEvents.js'
+import { projectTurnEventForClient } from '../../shared/turnEventProjection.js'
+import { publishAgentEventEnvelope } from '../core/agentEventConsumerRuntime.js'
 import { saveTurnCheckpoint } from './turnCheckpointStore.js'
 
 const subscribers = new Map()
@@ -188,30 +194,7 @@ export function assertContiguousTurnEvents(events = [], {
   return replayEvents
 }
 
-export function turnEventForClient(event) {
-  if (event?.type !== 'turn.checkpoint') return event
-  if (event.payload?.storage === 'turn_checkpoints') return event
-  const state = event.payload?.state && typeof event.payload.state === 'object'
-    ? event.payload.state
-    : {}
-  const budget = state.budget && typeof state.budget === 'object' ? state.budget : {}
-  return {
-    ...event,
-    payload: {
-      state: {
-        iterations: Math.max(0, Number(state.iterations) || 0),
-        toolCalls: Array.isArray(state.toolCalls) ? state.toolCalls.length : 0,
-        artifactCount: Array.isArray(state.artifactIds) ? state.artifactIds.length : 0,
-        budget: {
-          used: Math.max(0, Number(budget.used) || 0),
-          maxTotalCalls: Math.max(0, Number(budget.maxTotalCalls) || 0),
-          modelCalls: Math.max(0, Number(budget.modelCalls) || 0),
-          maxModelCalls: Math.max(0, Number(budget.maxModelCalls) || 0),
-        },
-      },
-    },
-  }
-}
+export const turnEventForClient = projectTurnEventForClient
 
 /**
  * Retention is applied to whole turns, never to individual events. This keeps
@@ -463,7 +446,20 @@ export function appendTurnEventsInTransaction(entries = [], db, {
 /** Publish only events whose owning transaction has committed. */
 export function publishCommittedTurnEvents(insertedEvents = []) {
   for (const entry of insertedEvents) {
-    publishTurnEvent(entry.userId, turnEventForClient(entry.event))
+    const clientEvent = turnEventForClient(entry.event)
+    publishTurnEvent(entry.userId, clientEvent)
+    try {
+      // Agent Event consumers observe the exact versioned event sent to modern
+      // transports. Delivery is isolated and never changes persistence success.
+      const delivery = publishAgentEventEnvelope(
+        createTurnEventTransportEnvelope(clientEvent),
+        { userId: entry.userId },
+      )
+      if (delivery && typeof delivery.catch === 'function') delivery.catch(() => {})
+    } catch {
+      // A consumer host failure is observability debt, never a reason to make a
+      // durable Turn appear uncommitted or to publish a contradictory terminal.
+    }
   }
   if (insertedEvents.length > 0) {
     // Event timestamps and retention share the same clock. A single cleanup

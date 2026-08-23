@@ -5,6 +5,7 @@ export function createPluginContext({
   registerConfigHealthCheck,
   registerTool,
   registerEvent,
+  registerAgentEvent,
   registerModelProvider,
   registerLoop,
   registerPolicy,
@@ -34,6 +35,11 @@ export function createPluginContext({
     events: Object.freeze({
       on(event, listener) {
         return registerEvent(event, listener)
+      },
+    }),
+    agentEvents: Object.freeze({
+      subscribe(eventType, listener, options) {
+        return registerAgentEvent(eventType, listener, options)
       },
     }),
     models: Object.freeze({

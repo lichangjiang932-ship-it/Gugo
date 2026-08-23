@@ -6,6 +6,23 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.39] - 2026-08-24
+
+### Added
+
+- Added plugin API 1.1 read-only Agent Event subscriptions with exact manifest declarations, shared `turn.event` v1 envelopes, detached deep-frozen payloads, per-consumer ordered delivery, listener failure isolation, and unload draining.
+
+### Changed
+
+- Published live Agent Events only after durable persistence succeeds and only from authoritative stored-event or complete batch receipts; custom v6 writers without verifiable per-entry receipts now safely omit deferred live delivery instead of presenting request snapshots as committed facts.
+- Scoped Store/emitter duplicate suppression by user while keeping user identity outside the plugin envelope, and unified checkpoint privacy projection across realtime transports and plugin observers.
+- Documented Agent Events v1 as a best-effort, process-local, post-commit observer without durable replay, exactly-once, cross-process, or crash-recovery guarantees.
+
+### Fixed
+
+- Prevented transaction rollback, idempotent retry, concurrent failed-retry losers, and deferred write-behind paths from emitting premature, duplicate, or non-authoritative Agent Events.
+- Prevented identical event coordinates owned by different users from suppressing one another in the process-local live feed.
+
 ## [0.11.38] - 2026-08-24
 
 ### Added
@@ -748,7 +765,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.38...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.39...HEAD
+[0.11.39]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.38...v0.11.39
 [0.11.38]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.37...v0.11.38
 [0.11.37]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.36...v0.11.37
 [0.11.36]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.35...v0.11.36

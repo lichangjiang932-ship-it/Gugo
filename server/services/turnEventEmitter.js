@@ -1,5 +1,6 @@
 import { createTurnEvent } from '../../shared/turnEvents.js'
 import { EventWriteBehindError } from './eventWriteBehind.js'
+import { publishCommittedAgentEvent } from '../core/agentEventConsumerRuntime.js'
 import { logWarn } from '../utils/logger.js'
 
 export const TURN_EVENT_PERSISTENCE_FAILURE_CODE = 'TURN_EVENT_PERSISTENCE_FAILED'
@@ -147,6 +148,21 @@ function reportedBarrierFailure(result, fallbackBatch, now) {
   })
 }
 
+function authoritativeDeferredEntries(result, requestedBatch) {
+  const committed = Array.isArray(result?.committedEntries) ? result.committedEntries : []
+  if (committed.length !== requestedBatch.length) return []
+  for (let index = 0; index < committed.length; index += 1) {
+    const requested = requestedBatch[index]
+    const stored = committed[index]
+    if (stored?.userId !== requested?.userId
+      || stored?.event?.sessionId !== requested?.event?.sessionId
+      || stored?.event?.turnId !== requested?.event?.turnId
+      || stored?.event?.sequence !== requested?.event?.sequence
+      || stored?.event?.type !== requested?.event?.type) return []
+  }
+  return committed
+}
+
 /**
  * Ordered Session Log writer for one Turn.
  *
@@ -170,6 +186,7 @@ export function createTurnEventEmitter({
   createClosedError = defaultClosedError,
   onWriterOpen = null,
   onWriterClose = null,
+  publishCommittedEvent = publishCommittedAgentEvent,
   warn = logWarn,
 } = {}) {
   if (!userId) throw new TypeError('userId is required')
@@ -181,6 +198,7 @@ export function createTurnEventEmitter({
   if (typeof appendEvent !== 'function') throw new TypeError('appendEvent is required')
   if (typeof verifyEventCommit !== 'function') throw new TypeError('verifyEventCommit is required')
   if (typeof createEventWriteBehind !== 'function') throw new TypeError('createEventWriteBehind is required')
+  if (typeof publishCommittedEvent !== 'function') throw new TypeError('publishCommittedEvent must be a function')
 
   let nextSequence = sequence
   let appendQueue = Promise.resolve()
@@ -195,6 +213,15 @@ export function createTurnEventEmitter({
   }
   onWriterOpen?.(eventWriteBehind)
   let observedFailureSignal = failureSignal(writerStats(eventWriteBehind))
+
+  const publishLiveEvent = (entry) => {
+    try {
+      const delivery = publishCommittedEvent(entry)
+      if (delivery && typeof delivery.catch === 'function') delivery.catch(() => {})
+    } catch {
+      // Live observers are non-authoritative and cannot change persistence ACKs.
+    }
+  }
 
   const journalReportedFailure = async (failure) => {
     const batch = Array.isArray(failure?.failedEntries) ? failure.failedEntries : []
@@ -250,6 +277,9 @@ export function createTurnEventEmitter({
         const failure = reportedBarrierFailure(result, deferredBatch, now)
         await journalReportedFailure(failure)
         throw failure
+      }
+      for (const entry of authoritativeDeferredEntries(result, deferredBatch)) {
+        publishLiveEvent(entry)
       }
       return result
     } catch (error) {
@@ -386,6 +416,12 @@ export function createTurnEventEmitter({
             failedAt,
           })
         }
+      }
+      if (!(DEFERRED_EVENT_TYPES.has(type) && checkpointState === null && !commitEvent)) {
+        // A transaction helper may coalesce a concurrent/idempotent request
+        // onto an event that was committed by another writer. Publish the
+        // authoritative persistence result, never the losing request event.
+        publishLiveEvent({ userId, event: stored })
       }
       nextSequence += 1
       return stored

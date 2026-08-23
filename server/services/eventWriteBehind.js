@@ -18,6 +18,33 @@ function errorMessage(error) {
   return String(error?.message || error || 'event write failed').slice(0, 2_000)
 }
 
+function authoritativeCommittedEntries(batch, result) {
+  if (!Array.isArray(result) || result.length !== batch.length) return []
+  const entries = []
+  for (let index = 0; index < batch.length; index += 1) {
+    const requested = batch[index]
+    const requestedEvent = requested?.event
+    const storedEvent = result[index]
+    if (!requested || typeof requested !== 'object'
+      || !requestedEvent || typeof requestedEvent !== 'object'
+      || !storedEvent || typeof storedEvent !== 'object'
+      || storedEvent.sessionId !== requestedEvent.sessionId
+      || storedEvent.turnId !== requestedEvent.turnId
+      || storedEvent.sequence !== requestedEvent.sequence
+      || storedEvent.type !== requestedEvent.type) {
+      // A custom adapter without an exact per-entry receipt cannot safely feed
+      // live observers. Persistence still succeeds; observability degrades.
+      return []
+    }
+    entries.push({
+      userId: requested.userId,
+      event: storedEvent,
+      checkpointState: requested.checkpointState ?? null,
+    })
+  }
+  return entries
+}
+
 function terminalFenceError(error) {
   const seen = new Set()
   let current = error
@@ -132,6 +159,7 @@ export function createEventWriteBehind({
   let activeFlush = null
   let closePromise = null
   let barrierFailure = null
+  let committedSinceBarrier = []
   const stats = {
     enqueued: 0,
     written: 0,
@@ -223,6 +251,7 @@ export function createEventWriteBehind({
         const result = await writer(batch)
         stats.batches += 1
         stats.written += batch.length
+        committedSinceBarrier.push(...authoritativeCommittedEntries(batch, result))
         return { ok: true, result, attempts: attempt }
       } catch (error) {
         lastError = error
@@ -295,10 +324,15 @@ export function createEventWriteBehind({
     if (barrierFailure) {
       const failure = barrierFailure
       barrierFailure = null
+      // A failed ordered generation is not a safe live-delivery boundary,
+      // even if an earlier sub-batch happened to reach storage.
+      committedSinceBarrier = []
       failure.stats = snapshotStats()
       throw failure
     }
-    return snapshotStats()
+    const committedEntries = committedSinceBarrier
+    committedSinceBarrier = []
+    return { ...snapshotStats(), committedEntries }
   }
 
   const flush = () => {

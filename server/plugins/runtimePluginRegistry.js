@@ -35,6 +35,7 @@ import { createRuntimePluginCallbackRuntime } from './runtimePluginCallbackRunti
 import { createRuntimePluginConfigReloadController } from './runtimePluginConfigReloadController.js'
 import { createRuntimePluginContributionCoordinator } from './runtimePluginContributionCoordinator.js'
 import { assertNoRuntimePluginDependents } from './runtimePluginDependencyGuard.js'
+import { createRuntimePluginAgentEventRegistry } from './runtimePluginAgentEventRegistry.js'
 import { createRuntimePluginEventRegistry } from './runtimePluginEventRegistry.js'
 import { createRuntimePluginServiceRegistry } from './runtimePluginServiceRegistry.js'
 import { createRuntimePluginPromptRegistry } from './runtimePluginPromptRegistry.js'
@@ -61,6 +62,7 @@ export function createRuntimePluginRegistry(options = {}) {
     isRuntimeCapabilityInUse,
     isRuntimeCapabilitySlotActive,
     registerHttpCapability,
+    agentEventConsumerHost,
     audit,
   } = snapshotRuntimePluginHostOptions(options)
   const supportsRuntimeCapabilityReplacement = (
@@ -158,6 +160,15 @@ export function createRuntimePluginRegistry(options = {}) {
     detachLoopEventBindings,
   } = createRuntimePluginEventRegistry({
     listActiveRecords: () => plugins.values(),
+    assertPluginWritable,
+    assertContributionDeclared,
+    createManagedContribution,
+    invokePluginCallback,
+    emitAudit,
+  })
+
+  const { registerAgentEventContribution } = createRuntimePluginAgentEventRegistry({
+    host: agentEventConsumerHost,
     assertPluginWritable,
     assertContributionDeclared,
     createManagedContribution,
@@ -648,6 +659,7 @@ export function createRuntimePluginRegistry(options = {}) {
     deactivationChecks: new Set(),
     configHealthChecks: new Set(),
     eventContributions: new Set(),
+    agentEventContributions: new Set(),
     httpCapabilities: new Set(),
     visibleEffects: new Set(),
     revocationErrors: [],
@@ -663,6 +675,9 @@ export function createRuntimePluginRegistry(options = {}) {
     registerConfigHealthCheck: (check) => registerConfigHealthCheck(record, check),
     registerTool: (definition) => registerToolContribution(record, definition),
     registerEvent: (event, listener) => registerEventContribution(record, event, listener),
+    registerAgentEvent: (eventType, listener, options) => (
+      registerAgentEventContribution(record, eventType, listener, options)
+    ),
     registerModelProvider: (kind, adapter, options) => (
       registerModelProviderContribution(record, kind, adapter, options)
     ),

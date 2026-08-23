@@ -1,5 +1,8 @@
+import { types as utilTypes } from 'node:util'
+
 import { registerModelProviderAdapter } from '../adapters/modelProviderRegistry.js'
 import { registerDynamicTool } from '../utils/toolSchemaCatalog.js'
+import { agentEventConsumerHost } from '../core/agentEventConsumerRuntime.js'
 import {
   attachRuntimePluginBeginRevoke,
   createRuntimePluginRevokeReceipt,
@@ -44,8 +47,35 @@ function ownHostOption(options, field, fallback) {
   return descriptor.value === undefined ? fallback : descriptor.value
 }
 
+function snapshotAgentEventConsumerHost(host) {
+  if (!host || typeof host !== 'object' || Array.isArray(host) || utilTypes.isProxy(host)) {
+    throw hostAdapterError('agentEventConsumerHost', 'v1 host data')
+  }
+  let contractVersionDescriptor
+  let registerDescriptor
+  try {
+    contractVersionDescriptor = Object.getOwnPropertyDescriptor(host, 'contractVersion')
+    registerDescriptor = Object.getOwnPropertyDescriptor(host, 'register')
+  } catch {
+    throw hostAdapterError('agentEventConsumerHost', 'v1 host data')
+  }
+  if (!contractVersionDescriptor
+    || !Object.hasOwn(contractVersionDescriptor, 'value')
+    || contractVersionDescriptor.value !== 1
+    || !registerDescriptor
+    || !Object.hasOwn(registerDescriptor, 'value')
+    || typeof registerDescriptor.value !== 'function'
+    || utilTypes.isProxy(registerDescriptor.value)) {
+    throw hostAdapterError('agentEventConsumerHost', 'v1 host data')
+  }
+  return Object.freeze({
+    contractVersion: contractVersionDescriptor.value,
+    register: registerDescriptor.value,
+  })
+}
+
 export function snapshotRuntimePluginHostOptions(options) {
-  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+  if (!options || typeof options !== 'object' || Array.isArray(options) || utilTypes.isProxy(options)) {
     throw hostAdapterError('options', 'object data')
   }
   const snapshot = {
@@ -78,6 +108,11 @@ export function snapshotRuntimePluginHostOptions(options) {
       'registerHttpCapability',
       unavailableHttpCapabilityHost,
     ),
+    agentEventConsumerHost: snapshotAgentEventConsumerHost(ownHostOption(
+      options,
+      'agentEventConsumerHost',
+      agentEventConsumerHost,
+    )),
     audit: ownHostOption(options, 'audit', null),
   }
   for (const field of [

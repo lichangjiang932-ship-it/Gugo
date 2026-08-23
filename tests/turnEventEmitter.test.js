@@ -5,7 +5,10 @@ import {
   createTurnEventEmitter,
   findEventPersistenceFailure,
 } from '../server/services/turnEventEmitter.js'
-import { EventWriteBehindError } from '../server/services/eventWriteBehind.js'
+import {
+  createEventWriteBehind,
+  EventWriteBehindError,
+} from '../server/services/eventWriteBehind.js'
 
 function emitterScope(overrides = {}) {
   let nextId = 0
@@ -74,6 +77,100 @@ test('turn event emitter flushes deferred deltas before durable lifecycle events
     emit('turn.progress', { phase: 'late' }),
     (error) => error?.code === 'TURN_EVENT_EMITTER_CLOSED',
   )
+})
+
+test('turn event emitter publishes the authoritative stored event only after append succeeds', async () => {
+  const published = []
+  const emit = createTurnEventEmitter(emitterScope({
+    createEventWriteBehind: () => ({ enqueue: (entry) => entry, flush: async () => {} }),
+    appendEvent: async ({ event }) => ({ ...event, id: `stored-${event.id}` }),
+    publishCommittedEvent: (entry) => { published.push(entry) },
+  }))
+
+  const stored = await emit('turn.progress', { phase: 'working' })
+  assert.equal(stored.id, 'stored-event-1')
+  assert.deepEqual(published.map((entry) => entry.event.id), ['stored-event-1'])
+
+  const failed = createTurnEventEmitter(emitterScope({
+    createEventWriteBehind: () => ({ enqueue: (entry) => entry, flush: async () => {} }),
+    appendEvent: async () => { throw new Error('custom adapter append failed') },
+    recordEventWriteFailure: async () => {},
+    publishCommittedEvent: (entry) => { published.push(entry) },
+  }))
+  await assert.rejects(
+    failed('turn.progress', { phase: 'not-durable' }),
+    (error) => error?.code === 'TURN_EVENT_PERSISTENCE_FAILED',
+  )
+  assert.deepEqual(published.map((entry) => entry.event.id), ['stored-event-1'])
+})
+
+test('turn event emitter publishes deferred deltas in order only after a successful durability barrier', async () => {
+  const published = []
+  const writer = createEventWriteBehind({
+    writeBatch: async (batch) => batch.map(({ event }) => ({
+      ...event,
+      id: `stored-${event.id}`,
+    })),
+    maxDelayMs: 10_000,
+    maxQueueSize: 1,
+  })
+  const emit = createTurnEventEmitter(emitterScope({
+    createEventWriteBehind: () => writer,
+    appendEvent: async ({ event }) => event,
+    publishCommittedEvent: (entry) => {
+      published.push([entry.event.type, entry.event.id])
+    },
+  }))
+
+  await emit('assistant.delta', { text: 'a' })
+  await emit('reasoning.delta', { text: 'b' })
+  assert.deepEqual(published, [])
+  await emit('turn.progress', { phase: 'working' })
+  assert.deepEqual(published, [
+    ['assistant.delta', 'stored-event-1'],
+    ['reasoning.delta', 'stored-event-2'],
+    ['turn.progress', 'event-3'],
+  ])
+
+  const failedPublished = []
+  const failed = createTurnEventEmitter(emitterScope({
+    createEventWriteBehind: () => ({
+      enqueue: (entry) => entry,
+      flush: async () => { throw new Error('custom adapter flush failed') },
+    }),
+    appendEvent: async ({ event }) => event,
+    recordEventWriteFailure: async () => {},
+    publishCommittedEvent: (entry) => { failedPublished.push(entry.event.type) },
+  }))
+  await failed('assistant.delta', { text: 'not durable' })
+  await assert.rejects(
+    failed('turn.progress', { phase: 'must-not-publish' }),
+    (error) => error?.code === 'TURN_EVENT_PERSISTENCE_FAILED',
+  )
+  assert.deepEqual(failedPublished, [])
+})
+
+test('turn event emitter suppresses deferred live delivery without authoritative batch receipts', async () => {
+  const published = []
+  const pending = []
+  const emit = createTurnEventEmitter(emitterScope({
+    createEventWriteBehind: () => ({
+      enqueue(entry) {
+        pending.push(entry)
+        return entry
+      },
+      async flush() {
+        pending.splice(0)
+        return { ok: true }
+      },
+    }),
+    appendEvent: async ({ event }) => event,
+    publishCommittedEvent: (entry) => { published.push(entry.event.id) },
+  }))
+
+  await emit('assistant.delta', { text: 'stored, but no per-entry receipt' })
+  await emit('turn.progress', { phase: 'working' })
+  assert.deepEqual(published, ['event-2'])
 })
 
 test('turn event emitter rejects legacy non-throwing durability failures and reuses the missing sequence', async () => {

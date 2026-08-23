@@ -8,6 +8,12 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-turn-persistence-tra
 process.env.APP_DATA_DIR = tempDir
 
 const { closeDb, createUser, getDb } = await import('../server/db.js')
+const {
+  AGENT_EVENT_CONSUMER_CONTRACT_VERSION,
+} = await import('../server/core/agentEventConsumerHost.js')
+const {
+  agentEventConsumerHost,
+} = await import('../server/core/agentEventConsumerRuntime.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
 const { createTurnExecutionLeaseCoordinator } = await import(
   '../server/services/turnExecutionLeaseRuntime.js'
@@ -119,6 +125,66 @@ function claimExecutionLease({ sessionId, turnId, ownerId }) {
   const lease = getTurnExecutionLease(scope)
   return { ownerId: lease.ownerId, fencingToken: lease.fencingToken }
 }
+
+test('Agent Event plugins observe only newly committed Turn events', async () => {
+  const sessionId = 'agent-event-durable-session'
+  const turnId = 'agent-event-durable-turn'
+  const received = []
+  const registration = agentEventConsumerHost.register({
+    id: 'test.agent-event.durable-commit',
+    contractVersion: AGENT_EVENT_CONSUMER_CONTRACT_VERSION,
+    eventTypes: ['turn.started', 'heartbeat'],
+    listener: (envelope) => received.push(envelope.event.id),
+  })
+  upsertSession({
+    id: sessionId,
+    userId,
+    title: 'Agent Event durable commit',
+    createdAt: 50,
+    updatedAt: 50,
+  })
+  const started = startedEvent({ sessionId, turnId, createdAt: 50 })
+
+  try {
+    appendTurnEvent({ userId, event: started })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(received, [started.id])
+
+    // Idempotent re-append reads the existing event but must not fan it out a
+    // second time because no new row committed.
+    appendTurnEvent({ userId, event: started })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(received, [started.id])
+
+    const failedId = `${turnId}:injected-write-failure`
+    getDb().exec(`
+      CREATE TRIGGER fail_agent_event_durable_commit
+      BEFORE INSERT ON turn_events
+      WHEN NEW.id = '${failedId}'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected Agent Event persistence failure');
+      END;
+    `)
+    const failed = createTurnEvent({
+      id: failedId,
+      sessionId,
+      turnId,
+      sequence: 1,
+      type: 'heartbeat',
+      payload: { at: 51 },
+      createdAt: 51,
+    })
+    assert.throws(
+      () => appendTurnEvent({ userId, event: failed }),
+      /injected Agent Event persistence failure/u,
+    )
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(received, [started.id])
+  } finally {
+    getDb().exec('DROP TRIGGER IF EXISTS fail_agent_event_durable_commit')
+    await registration.revoke()
+  }
+})
 
 test('commitTurnStart rolls back the new session, all messages, and turn.started together', async () => {
   const sessionId = 'aggregate-start-rollback-session'
@@ -813,7 +879,7 @@ test('failed retry transaction bypass requires an explicitly retryable failure',
   }
 })
 
-test('concurrent failed retries coalesce to one attempt without journaling a write failure', async () => {
+test('concurrent failed retries coalesce to one attempt without journaling a write failure', async (t) => {
   const sessionId = 'aggregate-failed-retry-race-session'
   const turnId = 'aggregate-failed-retry-race-turn'
   upsertSession({ id: sessionId, userId, title: 'Failed retry race' })
@@ -878,6 +944,14 @@ test('concurrent failed retries coalesce to one attempt without journaling a wri
     reasoningText: '',
   }
   const journal = []
+  const observedAttemptIds = []
+  const agentEventRegistration = agentEventConsumerHost.register({
+    id: 'test.agent-event.failed-retry-race',
+    contractVersion: AGENT_EVENT_CONSUMER_CONTRACT_VERSION,
+    eventTypes: ['turn.attempt'],
+    listener: (envelope) => observedAttemptIds.push(envelope.event.id),
+  })
+  t.after(() => agentEventRegistration.revoke())
   const emitRetry = async (id, createdAt) => {
     const emitter = createTurnEventEmitter({
       userId,
@@ -924,7 +998,9 @@ test('concurrent failed retries coalesce to one attempt without journaling a wri
     emitRetry(`${turnId}:attempt-a`, 623),
     emitRetry(`${turnId}:attempt-b`, 624),
   ])
+  await new Promise((resolve) => setImmediate(resolve))
   assert.equal(results[0].id, results[1].id)
+  assert.deepEqual(observedAttemptIds, [results[0].id])
   assert.equal(listTurnEvents({ userId, sessionId, turnId, limit: 100 })
     .filter((event) => event.type === 'turn.attempt').length, 1)
   assert.deepEqual(journal, [])
