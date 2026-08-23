@@ -70,6 +70,19 @@ async function closeSessions() {
   }
 }
 
+async function waitForCondition(predicate, {
+  timeoutMs = 5_000,
+  intervalMs = 10,
+  message = 'condition was not satisfied before the deadline',
+} = {}) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+  assert.equal(predicate(), true, message)
+}
+
 before(() => {
   workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-shell-session-'))
   process.env.APP_DATA_DIR = path.join(workspace, '.data')
@@ -644,7 +657,9 @@ test('idle sessions are removed automatically', async () => {
   })
   assert.equal(result.code, 0)
   assert.equal(_testing.getSessionCount(), 1)
-  await new Promise((resolve) => setTimeout(resolve, 120))
+  await waitForCondition(() => _testing.getSessionCount() === 0, {
+    message: 'idle shell session was not removed automatically',
+  })
   assert.equal(_testing.getSessionCount(), 0)
 })
 

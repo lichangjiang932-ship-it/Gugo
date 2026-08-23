@@ -533,6 +533,35 @@ test('recovery refuses directory and symbolic-link runtime config targets', (t) 
   }))
 })
 
+test('recovery refuses runtime config targets below linked directories', (t) => {
+  const fixture = createFixture(t)
+  const realDataDir = path.join(fixture.cwd, 'real-data')
+  const linkedDataDir = path.join(fixture.cwd, 'linked-data')
+  const configPath = path.join(linkedDataDir, 'runtime.json')
+  fs.mkdirSync(realDataDir)
+  fs.writeFileSync(path.join(realDataDir, 'runtime.json'), '{ invalid linked-parent json')
+  try {
+    fs.symlinkSync(realDataDir, linkedDataDir, process.platform === 'win32' ? 'junction' : 'dir')
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error?.code)) {
+      t.diagnostic(`linked-directory assertion skipped: ${error.code}`)
+      return
+    }
+    throw error
+  }
+
+  const env = {
+    ...fixture.env,
+    APP_DATA_DIR: linkedDataDir,
+    APP_DB_PATH: path.join(linkedDataDir, 'app.db'),
+  }
+  assert.throws(() => createRuntimeConfigRecoveryServer({
+    startupError: runtimeFileError(configPath),
+    cwd: fixture.cwd,
+    env,
+  }), { code: 'RECOVERY_TARGET_UNSAFE' })
+})
+
 test('replacement is rejected when the startup target identity drifts', async (t) => {
   const fixture = createFixture(t)
   const { baseUrl, token } = await startFixtureServer(t, fixture, runtimeFileError(fixture.configPath))

@@ -82,6 +82,32 @@ test('Release workflow is gated by reusable CI and reruns update existing releas
   assert.match(verification, /Read-ServerDiagnostics/)
 })
 
+test('Release secret scanning cannot pass without scanning an explicit checkout ref', () => {
+  const ci = read('.github/workflows/ci.yml')
+  const ignoreEntries = read('.gitleaksignore')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+
+  assert.match(ci, /if:\s*\$\{\{ inputs\.checkout_ref == '' \}\}[\s\S]*gitleaks\/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7/)
+  assert.match(ci, /name: Install pinned Gitleaks for explicit ref scan[\s\S]*if:\s*\$\{\{ inputs\.checkout_ref != '' \}\}/)
+  assert.match(ci, /GITLEAKS_VERSION:\s*'8\.24\.3'/)
+  assert.match(ci, /GITLEAKS_ARCHIVE_SHA256:\s*9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c/)
+  assert.match(ci, /name: Scan explicit release ref history with Gitleaks[\s\S]*target_sha="\$\(git rev-parse HEAD\)"[\s\S]*--log-opts="\$target_sha"/)
+
+  const expectedFalsePositives = [
+    'bc4b8a250e3b24d584ccfaa28f29070d011afc7d:tests/runtimeReadiness.test.js:generic-api-key:86',
+    'bc4b8a250e3b24d584ccfaa28f29070d011afc7d:tests/evolutionOperations.test.js:generic-api-key:1322',
+    'bc4b8a250e3b24d584ccfaa28f29070d011afc7d:tests/shellSession.test.js:generic-api-key:351',
+  ]
+  for (const fingerprint of expectedFalsePositives) {
+    assert.equal(ignoreEntries.includes(fingerprint), true, `missing exact Gitleaks fingerprint ${fingerprint}`)
+  }
+  for (const entry of ignoreEntries) {
+    assert.match(entry, /^[0-9a-f]{40}:[^:]+:[^:]+:\d+$/, `Gitleaks ignore must remain fingerprint-only: ${entry}`)
+  }
+})
+
 test('Web release includes the server parser dependency closure without browser barrels', () => {
   const runtimeParserEntries = [
     'src/lib/officeExport/documentExport.js',

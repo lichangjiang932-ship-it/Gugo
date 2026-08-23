@@ -32,6 +32,10 @@ function setupDom(pathname = '/') {
   globalThis.InputEvent = dom.window.InputEvent
   globalThis.MouseEvent = dom.window.MouseEvent
   globalThis.localStorage = dom.window.localStorage
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: dom.window.navigator,
+  })
   dom.window.HTMLElement.prototype.attachEvent = () => {}
   dom.window.HTMLElement.prototype.detachEvent = () => {}
   globalThis.confirm = () => true

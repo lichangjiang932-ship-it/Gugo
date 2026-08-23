@@ -39,6 +39,7 @@ import { buildPptxArtifactBuffer } from './pptxArtifactFormat.js'
 import { buildXlsxArtifactBuffer } from './xlsxArtifactFormat.js'
 import { snapshotXlsxSheets } from './xlsxArtifactContract.js'
 import { writeGeneratedArtifactAtomically } from './artifactAtomicWriter.js'
+import { removeOwnedFailedPublication } from './artifactPublicationCleanup.js'
 import {
   ARTIFACT_DIR,
   ensureArtifactDir,
@@ -306,10 +307,13 @@ async function readJsonFileWithIdentity(filePath) {
     handle = await fs.promises.open(filePath, 'r')
     const openedIdentity = await handle.stat({ bigint: true })
     if (!sameFileIdentity(pathIdentity, openedIdentity)) return null
-    const value = JSON.parse(await handle.readFile('utf8'))
+    const contents = await handle.readFile()
+    const readIdentity = await handle.stat({ bigint: true })
+    if (!sameFileSnapshot(openedIdentity, readIdentity)) return null
+    const value = JSON.parse(contents.toString('utf8'))
     const currentIdentity = await fs.promises.lstat(filePath, { bigint: true })
-    if (!sameFileIdentity(currentIdentity, openedIdentity)) return null
-    return { value, identity: openedIdentity }
+    if (!sameFileIdentity(currentIdentity, readIdentity)) return null
+    return { value, identity: readIdentity, contents }
   } catch (error) {
     if (error?.code === 'ENOENT') return null
     throw error
@@ -365,7 +369,9 @@ async function createAttemptRecord(recordPath, record) {
 async function removeValidatedJsonRecord(recordPath, expectedValue) {
   const observed = await readJsonFileWithIdentity(recordPath)
   if (!observed || JSON.stringify(observed.value) !== JSON.stringify(expectedValue)) return false
-  return await removeOwnedFailedPublication(recordPath, observed.identity)
+  return await removeOwnedFailedPublication(recordPath, observed.identity, {
+    expectedContents: observed.contents,
+  })
 }
 
 async function reclaimStaleArtifactPublicationLock(lockPath, publication) {
@@ -396,7 +402,9 @@ async function reclaimStaleArtifactPublicationLock(lockPath, publication) {
       sourcePath: publication.sourcePath,
     })
     if (!recovered) return false
-    return await removeOwnedFailedPublication(lockPath, observedLock.identity)
+    return await removeOwnedFailedPublication(lockPath, observedLock.identity, {
+      expectedContents: observedLock.contents,
+    })
   } catch {
     // Any mismatch means the stale process no longer owns all paths involved.
     // Preserve the evidence and require manual reconciliation.
@@ -416,12 +424,13 @@ async function acquireArtifactPublicationLock(lockPath, publication) {
       marker: publication.marker,
       attemptId,
     })
+    const serializedOwner = JSON.stringify(owner)
     let lockIdentity = null
     try {
       handle = await fs.promises.open(lockPath, 'wx')
       lockCreated = true
       lockIdentity = await handle.stat({ bigint: true })
-      await handle.writeFile(JSON.stringify(owner))
+      await handle.writeFile(serializedOwner)
       await handle.sync()
       await handle.close()
       handle = null
@@ -442,7 +451,11 @@ async function acquireArtifactPublicationLock(lockPath, publication) {
       }
       } catch (error) {
         try { await handle?.close() } catch { /* best-effort handle cleanup */ }
-      if (lockCreated && lockIdentity) await removeOwnedFailedPublication(lockPath, lockIdentity)
+      if (lockCreated && lockIdentity) {
+        await removeOwnedFailedPublication(lockPath, lockIdentity, {
+          expectedContents: serializedOwner,
+        })
+      }
       if (error?.code !== 'EEXIST') throw error
       // The destination may be visible while the exclusive-copy fallback is
       // still filling it. Never treat that path as a completed publication
@@ -547,13 +560,15 @@ async function createPublicationMarker(markerPath, marker) {
     path.dirname(markerPath),
     `.${path.basename(markerPath)}-${process.pid}-${crypto.randomBytes(8).toString('hex')}.tmp`,
   )
+  const serializedMarker = JSON.stringify(marker)
   let handle = null
   let markerIdentity
   try {
     handle = await fs.promises.open(temporary, 'wx')
     markerIdentity = await handle.stat({ bigint: true })
-    await handle.writeFile(JSON.stringify(marker), 'utf8')
+    await handle.writeFile(serializedMarker, 'utf8')
     await handle.sync()
+    markerIdentity = await handle.stat({ bigint: true })
     await handle.close()
     handle = null
     try {
@@ -568,7 +583,7 @@ async function createPublicationMarker(markerPath, marker) {
           'The artifact publication marker was replaced immediately after it was claimed.',
         )
       }
-      return { identity: markerIdentity }
+      return { identity: markerIdentity, contents: serializedMarker }
     } catch (error) {
       if (error?.code === 'EEXIST') return false
       if (LOCAL_ARTIFACT_LINK_FALLBACK_CODES.has(error?.code)) {
@@ -590,6 +605,7 @@ async function recoverInterruptedPublicationMarker(markerPath, expected) {
   const canonical = Buffer.from(JSON.stringify(expected), 'utf8')
   let handle = null
   let openedIdentity
+  let observedContents
   try {
     const pathIdentity = await fs.promises.lstat(markerPath, { bigint: true })
     if (!pathIdentity.isFile() || pathIdentity.isSymbolicLink()) return false
@@ -597,8 +613,9 @@ async function recoverInterruptedPublicationMarker(markerPath, expected) {
     handle = await fs.promises.open(markerPath, 'r')
     openedIdentity = await handle.stat({ bigint: true })
     if (!sameFileIdentity(pathIdentity, openedIdentity)) return false
-    const bytes = await handle.readFile()
-    if (bytes.length >= canonical.length || !canonical.subarray(0, bytes.length).equals(bytes)) {
+    observedContents = await handle.readFile()
+    if (observedContents.length >= canonical.length
+      || !canonical.subarray(0, observedContents.length).equals(observedContents)) {
       return false
     }
   } catch (error) {
@@ -609,7 +626,9 @@ async function recoverInterruptedPublicationMarker(markerPath, expected) {
   }
 
   try {
-    return await removeOwnedFailedPublication(markerPath, openedIdentity)
+    return await removeOwnedFailedPublication(markerPath, openedIdentity, {
+      expectedContents: observedContents,
+    })
   } catch (error) {
     return error?.code === 'ENOENT'
   }
@@ -672,33 +691,6 @@ function validSerializedFileIdentity(identity) {
 function fileIdentityFromRecord(identity) {
   if (!validSerializedFileIdentity(identity)) return null
   return { dev: BigInt(identity.dev), ino: BigInt(identity.ino) }
-}
-
-async function removeOwnedFailedPublication(fullPath, identity) {
-  if (!identity) return false
-  const cleanupClaim = path.join(path.dirname(fullPath),
-    `.artifact-cleanup-${process.pid}-${crypto.randomBytes(12).toString('hex')}.tmp`)
-  try {
-    const current = await fs.promises.lstat(fullPath, { bigint: true })
-    if (!sameFileIdentity(current, identity)) return false
-    // Avoid path ABA by claiming the current pathname into a unique sibling,
-    // then verify the moved inode before deleting it.
-    await fs.promises.rename(fullPath, cleanupClaim)
-    const claimed = await fs.promises.lstat(cleanupClaim, { bigint: true })
-    if (!sameFileIdentity(claimed, identity)) {
-      try {
-        // Restore the path only when nobody else claimed it in the meantime.
-        await fs.promises.link(cleanupClaim, fullPath)
-        await fs.promises.unlink(cleanupClaim)
-      } catch { /* keep the unexpected owner recoverable at the claim path */ }
-      return false
-    }
-    await fs.promises.unlink(cleanupClaim)
-    return true
-  } catch (error) {
-    // The path disappeared or was replaced. Never remove an unverified path.
-    return error?.code === 'ENOENT'
-  }
 }
 async function readAttemptRecord(recordPath, phase, owner) {
   const observed = await readJsonFileWithIdentity(recordPath)
@@ -865,7 +857,9 @@ async function cleanupCurrentArtifactPublicationAttempt({ lockPath, lockIdentity
     const destination = await readAttemptRecord(destinationRecordPath, 'destination', owner)
     if (destination
       && !await removeValidatedJsonRecord(destinationRecordPath, destination.value)) return false
-    return await removeOwnedFailedPublication(lockPath, lockIdentity)
+    return await removeOwnedFailedPublication(lockPath, lockIdentity, {
+      expectedContents: JSON.stringify(owner),
+    })
   } catch {
     return false
   }
@@ -1213,7 +1207,9 @@ export async function createLocalFileArtifactAsync({ sourcePath, filename = '', 
         })
         if (!created) {
           if (markerCreated) {
-            await removeOwnedFailedPublication(markerPath, markerCreated.identity)
+            await removeOwnedFailedPublication(markerPath, markerCreated.identity, {
+              expectedContents: markerCreated.contents,
+            })
           }
           throw artifactPublicationError(
             'ARTIFACT_PUBLICATION_OWNERSHIP_CONFLICT',

@@ -116,9 +116,48 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.checkout_ref || github.ref }}
       - name: Scan repository history with Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        if: ${{ inputs.checkout_ref == '' }}
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: '8.24.3'
+
+      # gitleaks-action treats every tag creation as a push, then exits successfully
+      # when the tag payload contains no commits. Release calls always provide an
+      # explicit checkout_ref, so scan the checked-out ref instead of the event payload.
+      - name: Install pinned Gitleaks for explicit ref scan
+        if: ${{ inputs.checkout_ref != '' }}
+        shell: bash
+        env:
+          GITLEAKS_VERSION: '8.24.3'
+          GITLEAKS_ARCHIVE_SHA256: 9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          archive_path="$RUNNER_TEMP/$archive"
+          install_dir="$RUNNER_TEMP/gitleaks-$GITLEAKS_VERSION"
+          curl --fail --location --silent --show-error \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" \
+            --output "$archive_path"
+          printf '%s  %s\n' "$GITLEAKS_ARCHIVE_SHA256" "$archive_path" | sha256sum --check -
+          mkdir -p "$install_dir"
+          tar -xzf "$archive_path" -C "$install_dir" gitleaks
+          echo "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Scan explicit release ref history with Gitleaks
+        if: ${{ inputs.checkout_ref != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_sha="$(git rev-parse HEAD)"
+          gitleaks detect \
+            --source . \
+            --redact \
+            --verbose \
+            --exit-code 2 \
+            --report-format sarif \
+            --report-path results.sarif \
+            --log-opts="$target_sha"
 
   docker:
     name: Docker configuration and image build

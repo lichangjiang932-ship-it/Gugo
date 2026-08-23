@@ -39,6 +39,16 @@ function isPublicationMarkerLink(args) {
   return String(args[1] || '').includes(`${path.sep}.artifact-publications${path.sep}`)
 }
 
+function statWithFileIdentity(stat, identity) {
+  return new Proxy(stat, {
+    get(target, property) {
+      if (property === 'dev' || property === 'ino') return identity[property]
+      const value = Reflect.get(target, property, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
 function stablePublicationPaths(filename, publicationKey) {
   const digest = crypto.createHash('sha256').update(publicationKey).digest('hex')
   const parsed = path.parse(filename)
@@ -544,13 +554,29 @@ test('failed old lock initialization never removes a replacement lock owner', as
   fs.writeFileSync(sourcePath, '%PDF-1.4\nlock-owner-aba')
 
   const originalOpen = fs.promises.open
+  const originalLstat = fs.promises.lstat
   let injected = false
+  let retiredIdentity = null
   fs.promises.open = async (target, flags, ...args) => {
     const handle = await originalOpen(target, flags, ...args)
+    if (String(target) === lockPath && flags === 'r' && injected && retiredIdentity) {
+      return {
+        stat: async (...statArgs) => statWithFileIdentity(
+          await handle.stat(...statArgs),
+          retiredIdentity,
+        ),
+        readFile: (...readArgs) => handle.readFile(...readArgs),
+        close: (...closeArgs) => handle.close(...closeArgs),
+      }
+    }
     if (String(target) !== lockPath || flags !== 'wx' || injected) return handle
     let closed = false
     return {
-      stat: (...statArgs) => handle.stat(...statArgs),
+      stat: async (...statArgs) => {
+        const stat = await handle.stat(...statArgs)
+        retiredIdentity ||= stat
+        return stat
+      },
       writeFile: (...writeArgs) => handle.writeFile(...writeArgs),
       sync: async () => {
         await handle.close()
@@ -568,6 +594,14 @@ test('failed old lock initialization never removes a replacement lock owner', as
       },
     }
   }
+  fs.promises.lstat = async (target, ...args) => {
+    const stat = await originalLstat(target, ...args)
+    const isLockCleanupClaim = path.dirname(String(target)) === path.dirname(lockPath)
+      && path.basename(String(target)).startsWith('.artifact-cleanup-')
+    return injected && retiredIdentity && (String(target) === lockPath || isLockCleanupClaim)
+      ? statWithFileIdentity(stat, retiredIdentity)
+      : stat
+  }
   try {
     await assert.rejects(
       () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
@@ -577,6 +611,7 @@ test('failed old lock initialization never removes a replacement lock owner', as
     assert.equal(fs.readFileSync(lockPath, 'utf8'), successorLock)
   } finally {
     fs.promises.open = originalOpen
+    fs.promises.lstat = originalLstat
     fs.rmSync(lockPath, { force: true })
   }
 })
@@ -590,8 +625,11 @@ test('failed old publication never removes a successor marker at the same path',
   fs.writeFileSync(sourcePath, '%PDF-1.4\nmarker-owner-aba')
 
   const originalLink = fs.promises.link
+  const originalLstat = fs.promises.lstat
   const originalRename = fs.promises.rename
   let markerReplacedBeforeCleanup = false
+  let markerCleanupClaim = null
+  let retiredIdentity = null
   fs.promises.link = async (source, target) => {
     if (String(target) !== artifactPath) return originalLink(source, target)
     fs.writeFileSync(artifactPath, 'concurrent-winner', { flag: 'wx' })
@@ -601,11 +639,19 @@ test('failed old publication never removes a successor marker at the same path',
   }
   fs.promises.rename = async (source, target) => {
     if (String(source) === markerPath && !markerReplacedBeforeCleanup) {
+      markerCleanupClaim = String(target)
+      retiredIdentity = await originalLstat(markerPath, { bigint: true })
       fs.unlinkSync(markerPath)
       fs.writeFileSync(markerPath, successorMarker, { flag: 'wx' })
       markerReplacedBeforeCleanup = true
     }
     return originalRename(source, target)
+  }
+  fs.promises.lstat = async (target, ...args) => {
+    const stat = await originalLstat(target, ...args)
+    return markerReplacedBeforeCleanup && retiredIdentity && String(target) === markerCleanupClaim
+      ? statWithFileIdentity(stat, retiredIdentity)
+      : stat
   }
   try {
     await assert.rejects(
@@ -617,6 +663,7 @@ test('failed old publication never removes a successor marker at the same path',
     assert.equal(fs.readFileSync(artifactPath, 'utf8'), 'concurrent-winner')
   } finally {
     fs.promises.link = originalLink
+    fs.promises.lstat = originalLstat
     fs.promises.rename = originalRename
     fs.rmSync(markerPath, { force: true })
     fs.rmSync(artifactPath, { force: true })

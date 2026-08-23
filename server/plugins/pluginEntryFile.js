@@ -9,10 +9,6 @@ function entryError(code, message) {
   })
 }
 
-function sameCanonicalPath(left, right) {
-  return path.normalize(left) === path.normalize(right)
-}
-
 function isWithinDirectory(directory, candidate) {
   const normalizedDirectory = path.normalize(directory)
   const normalizedCandidate = path.normalize(candidate)
@@ -23,16 +19,43 @@ function isWithinDirectory(directory, candidate) {
   return normalizedCandidate.startsWith(prefix)
 }
 
+async function unlinkedDirectoryIdentity(directoryPath) {
+  const resolved = path.resolve(directoryPath)
+  const { root } = path.parse(resolved)
+  const components = resolved.slice(root.length).split(path.sep).filter(Boolean)
+  let current = root
+  let stat = await fs.lstat(current, { bigint: true })
+  if (stat.isSymbolicLink() || !stat.isDirectory()) return null
+
+  for (const component of components) {
+    current = path.join(current, component)
+    stat = await fs.lstat(current, { bigint: true })
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return null
+  }
+  return stat
+}
+
 async function canonicalEntryIdentity(rootDir, entryPath) {
   let canonicalRoot
   let canonicalEntry
+  let rootIdentityBefore
+  let rootIdentityAfter
+  let canonicalRootIdentity
   try {
+    rootIdentityBefore = await unlinkedDirectoryIdentity(rootDir)
     canonicalRoot = await fs.realpath(rootDir)
     canonicalEntry = await fs.realpath(entryPath)
+    canonicalRootIdentity = await fs.lstat(canonicalRoot, { bigint: true })
+    rootIdentityAfter = await unlinkedDirectoryIdentity(rootDir)
   } catch {
     throw entryError('PLUGIN_ENTRY_READ_FAILED', '插件入口无法读取')
   }
-  if (!sameCanonicalPath(canonicalRoot, path.resolve(rootDir))) {
+  if (!rootIdentityBefore
+    || !rootIdentityAfter
+    || canonicalRootIdentity.isSymbolicLink()
+    || !canonicalRootIdentity.isDirectory()
+    || !sameFileIdentity(rootIdentityBefore, rootIdentityAfter)
+    || !sameFileIdentity(rootIdentityAfter, canonicalRootIdentity)) {
     throw entryError('PLUGIN_ENTRY_SCOPE_INVALID', '插件目录已被符号链接或目录联接替换')
   }
   if (!isWithinDirectory(canonicalRoot, canonicalEntry)) {

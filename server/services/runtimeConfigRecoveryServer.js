@@ -55,6 +55,31 @@ function samePath(left, right) {
   return Boolean(left && right) && comparablePath(left) === comparablePath(right)
 }
 
+function sameFileIdentity(left, right) {
+  return Boolean(left && right) && left.dev === right.dev && left.ino === right.ino
+}
+
+function isUnlinkedDirectoryPath(directoryPath) {
+  const resolved = path.resolve(directoryPath)
+  const { root } = path.parse(resolved)
+  const components = resolved.slice(root.length).split(path.sep).filter(Boolean)
+  let current = root
+  let stat = fs.lstatSync(current, { bigint: true })
+  if (stat.isSymbolicLink() || !stat.isDirectory()) return false
+
+  for (const component of components) {
+    current = path.join(current, component)
+    stat = fs.lstatSync(current, { bigint: true })
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return false
+  }
+
+  const canonicalPath = fs.realpathSync.native(resolved)
+  const canonicalStat = fs.lstatSync(canonicalPath, { bigint: true })
+  return !canonicalStat.isSymbolicLink()
+    && canonicalStat.isDirectory()
+    && sameFileIdentity(stat, canonicalStat)
+}
+
 function resolveRecoverableUserConfigPath({ error, cwd, env }) {
   if (!RECOVERABLE_CODE_SET.has(String(error?.code || ''))) return null
   if (typeof error?.sourcePath !== 'string' || !error.sourcePath.trim()) return null
@@ -79,10 +104,10 @@ export function isRecoverableUserRuntimeConfigError({
 }
 
 function targetIdentity(filePath) {
-  let parentRealPath
+  let parentIsUnlinked
   let stat
   try {
-    parentRealPath = fs.realpathSync.native(path.dirname(filePath))
+    parentIsUnlinked = isUnlinkedDirectoryPath(path.dirname(filePath))
     stat = fs.lstatSync(filePath, { bigint: true })
   } catch (cause) {
     const error = recoveryError(
@@ -93,7 +118,7 @@ function targetIdentity(filePath) {
     error.cause = cause
     throw error
   }
-  if (!samePath(parentRealPath, path.dirname(filePath))
+  if (!parentIsUnlinked
     || stat.isSymbolicLink()
     || !stat.isFile()) {
     throw recoveryError(

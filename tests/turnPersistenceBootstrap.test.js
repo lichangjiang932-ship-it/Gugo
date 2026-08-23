@@ -107,6 +107,10 @@ test('explicit trusted module is selected before the built-in adapter', async (t
   const root = tempRoot(t)
   const modulePath = path.join(root, 'adapter.mjs')
   fs.writeFileSync(modulePath, adapterModuleSource(), 'utf8')
+  const [canonicalModulePath, canonicalRoot] = await Promise.all([
+    fs.promises.realpath(modulePath),
+    fs.promises.realpath(root),
+  ])
   let callerFactoryCalls = 0
 
   const result = await resolveBuiltinSqliteTurnPersistenceBootstrap({
@@ -124,8 +128,8 @@ test('explicit trusted module is selected before the built-in adapter', async (t
   assert.equal(result.adapter.id, 'builtin.sqlite')
   assert.equal(result.provenance.source, 'module')
   assert.equal(result.provenance.configured, true)
-  assert.equal(result.provenance.modulePath, fs.realpathSync(modulePath))
-  assert.equal(result.provenance.trustedRoot, fs.realpathSync(root))
+  assert.equal(result.provenance.modulePath, canonicalModulePath)
+  assert.equal(result.provenance.trustedRoot, canonicalRoot)
   assert.equal(Object.isFrozen(result.provenance), true)
   assert.equal(callerFactoryCalls, 0)
   assert.equal(
@@ -328,6 +332,7 @@ test('module exports are read only as own data properties and adapters are fully
   const root = tempRoot(t)
   const modulePath = path.join(root, 'placeholder.mjs')
   fs.writeFileSync(modulePath, 'export default null\n', 'utf8')
+  const canonicalModuleUrl = pathToFileURL(await fs.promises.realpath(modulePath)).href
   let getterCalls = 0
   const namespace = {}
   Object.defineProperty(namespace, 'turnPersistenceAdapter', {
@@ -342,7 +347,7 @@ test('module exports are read only as own data properties and adapters are fully
     cwd: root,
     env: { [TURN_PERSISTENCE_MODULE_ENV]: modulePath },
     importModule: async (specifier) => {
-      assert.equal(specifier, pathToFileURL(fs.realpathSync(modulePath)).href)
+      assert.equal(specifier, canonicalModuleUrl)
       return namespace
     },
   }), (error) => error?.code === 'TURN_PERSISTENCE_BOOTSTRAP_EXPORT_INVALID')

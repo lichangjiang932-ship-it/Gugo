@@ -1,3 +1,7 @@
 # Historical false positive: an empty MODEL_API_KEY assignment in the
 # operations guide was joined with the following environment-variable name.
 c93fd0c74f8240cd03ac5661941974039b72a090:docs/OPERATION_GUIDE.md:generic-api-key:75
+# Test fixtures: RFC WebSocket nonce, durable idempotency key, and shell transfer token.
+bc4b8a250e3b24d584ccfaa28f29070d011afc7d:tests/runtimeReadiness.test.js:generic-api-key:86
+bc4b8a250e3b24d584ccfaa28f29070d011afc7d:tests/evolutionOperations.test.js:generic-api-key:1322
+bc4b8a250e3b24d584ccfaa28f29070d011afc7d:tests/shellSession.test.js:generic-api-key:351

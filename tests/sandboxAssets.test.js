@@ -15,6 +15,15 @@ const ASSETS = {
 
 const sandboxDir = path.resolve(process.cwd(), 'public/sandbox')
 
+test('vendored minified sandbox assets disable Git text normalization', () => {
+  const attributes = fs.readFileSync(path.resolve(process.cwd(), '.gitattributes'), 'utf8')
+  const sandboxAttributes = attributes
+    .split(/\r?\n/u)
+    .find((line) => line.trim().startsWith('public/sandbox/*.min.js '))
+  assert.equal(typeof sandboxAttributes, 'string')
+  assert.match(sandboxAttributes, /(?:^|\s)-text(?:\s|$)/u)
+})
+
 for (const [file, expectedSha256] of Object.entries(ASSETS)) {
   test(`public/sandbox/${file} exists and is non-trivial`, () => {
     const full = path.join(sandboxDir, file)

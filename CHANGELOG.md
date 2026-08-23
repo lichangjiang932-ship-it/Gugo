@@ -6,6 +6,14 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.35] - 2026-08-24
+
+### Fixed
+
+- Hardened artifact publication cleanup against pathname replacement and ABA races while preserving files whose ownership cannot be proven.
+- Accepted equivalent Windows long and 8.3 path aliases for trusted runtime configuration and plugin roots while continuing to reject symbolic-link and junction ancestry.
+- Repaired cross-platform release gates for explicit-ref secret scanning, Node 20 UI tests, Windows static assets, provider fixtures, and runtime recovery checks.
+
 ## [0.11.34] - 2026-08-24
 
 ### Fixed
@@ -707,7 +715,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.34...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.35...HEAD
+[0.11.35]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.34...v0.11.35
 [0.11.34]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.33...v0.11.34
 [0.11.33]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.32...v0.11.33
 [0.11.32]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.31...v0.11.32

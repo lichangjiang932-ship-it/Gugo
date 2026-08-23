@@ -124,3 +124,32 @@ test('canonical containment keeps case-distinct directories separate when the fi
     await fs.rm(parent, { recursive: true, force: true })
   }
 })
+
+test('plugin entry reads reject roots below linked directories', async (t) => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'gugo-plugin-entry-linked-parent-'))
+  const realParent = path.join(parent, 'real-parent')
+  const linkedParent = path.join(parent, 'linked-parent')
+  const realRoot = path.join(realParent, 'plugin')
+  const rootDir = path.join(linkedParent, 'plugin')
+  const entryPath = path.join(rootDir, 'entry.js')
+  try {
+    await fs.mkdir(realRoot, { recursive: true })
+    await fs.writeFile(path.join(realRoot, 'entry.js'), 'safe-source')
+    try {
+      await fs.symlink(realParent, linkedParent, process.platform === 'win32' ? 'junction' : 'dir')
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error?.code)) {
+        t.skip(`linked-directory assertion unavailable: ${error.code}`)
+        return
+      }
+      throw error
+    }
+
+    await assert.rejects(
+      () => readPluginEntryFile({ rootDir, entryPath, maxBytes: 1024 }),
+      (error) => error?.code === 'PLUGIN_ENTRY_SCOPE_INVALID',
+    )
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true })
+  }
+})

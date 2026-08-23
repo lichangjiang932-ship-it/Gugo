@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import path from 'node:path'
 import test from 'node:test'
 
 import Database from 'better-sqlite3'
@@ -19,6 +20,7 @@ const EMPTY_REVISION = `sha256-${'0'.repeat(64)}`
 const NEXT_REVISION = `sha256-${'1'.repeat(64)}`
 const PACKAGE_DIGEST = `sha256-${'2'.repeat(64)}`
 const MANAGED_ROOT = 'C:\\gugo-data\\plugins'
+const SOURCE_DIRECTORY = path.resolve('tests', 'fixtures', 'local-plugin-package', 'sample')
 
 function packageReceipt(overrides = {}) {
   return Object.freeze({
@@ -328,7 +330,7 @@ test('import forwards only CAS business input and protects builtin plugin ids', 
   }))
 
   const result = await service.importLocalPluginPackage({
-    sourceDirectory: '  C:\\sources\\sample  ',
+    sourceDirectory: `  ${SOURCE_DIRECTORY}  `,
     expectedRevision: EMPTY_REVISION.toUpperCase(),
     replace: true,
     expectedPluginId: 'sample-plugin',
@@ -339,7 +341,7 @@ test('import forwards only CAS business input and protects builtin plugin ids', 
   const { assertMutationAvailable, ...businessInput } = received
   assert.equal(typeof assertMutationAvailable, 'function')
   assert.deepEqual(businessInput, {
-    sourceDir: 'C:\\sources\\sample',
+    sourceDir: SOURCE_DIRECTORY,
     managedRoot: MANAGED_ROOT,
     expectedRevision: EMPTY_REVISION,
     expectedPluginId: 'sample-plugin',
@@ -368,7 +370,7 @@ test('import rejects dependency, root, cwd and env injection fields before store
     ['deps', { installLocalPluginPackage() {} }],
   ]) {
     await assert.rejects(service.importLocalPluginPackage({
-      sourceDirectory: 'C:\\sources\\sample',
+      sourceDirectory: SOURCE_DIRECTORY,
       expectedRevision: EMPTY_REVISION,
       [field]: value,
     }), errorCode('PLUGIN_PACKAGE_SERVICE_INPUT_INVALID', 400))
@@ -401,7 +403,7 @@ test('import preserves actionable CAS code while redacting dependency paths', as
     },
   }))
   await assert.rejects(service.importLocalPluginPackage({
-    sourceDirectory: 'C:\\sources\\sample',
+    sourceDirectory: SOURCE_DIRECTORY,
     expectedRevision: EMPTY_REVISION,
   }), (error) => {
     assert.equal(error.code, 'PLUGIN_PACKAGE_REVISION_CONFLICT')
@@ -420,7 +422,7 @@ test('committed package remains successful when refresh fails and exposes no raw
     },
   }))
   const result = await service.importLocalPluginPackage({
-    sourceDirectory: 'C:\\sources\\sample',
+    sourceDirectory: SOURCE_DIRECTORY,
     expectedRevision: EMPTY_REVISION,
   })
   assert.equal(result.result.changed, true)
@@ -442,7 +444,7 @@ test('committed import remains durable but pending when refresh reports discover
     ),
   }))
   const result = await service.importLocalPluginPackage({
-    sourceDirectory: 'C:\\sources\\sample',
+    sourceDirectory: SOURCE_DIRECTORY,
     expectedRevision: EMPTY_REVISION,
   })
   assert.equal(result.result.changed, true)
@@ -460,7 +462,7 @@ test('committed import is pending when refreshed target is absent or receipt-mis
       refreshPlugins: () => refreshSnapshot(distributedPlugins),
     }))
     const result = await service.importLocalPluginPackage({
-      sourceDirectory: 'C:\\sources\\sample',
+      sourceDirectory: SOURCE_DIRECTORY,
       expectedRevision: EMPTY_REVISION,
     })
     assert.equal(result.refreshPending, true)
@@ -534,7 +536,7 @@ test('package mutation fails closed when builtin identity discovery is incomplet
     },
   }))
   await assert.rejects(service.importLocalPluginPackage({
-    sourceDirectory: 'C:\\sources\\sample',
+    sourceDirectory: SOURCE_DIRECTORY,
     expectedRevision: EMPTY_REVISION,
   }), errorCode('PLUGIN_PACKAGE_UNINSTALL_GUARD_UNAVAILABLE', 503))
   assert.equal(installCalls, 0)

@@ -1,3 +1,3 @@
 # Generated third-party browser bundles are vendored byte-for-byte. Their
 # upstream output may contain intentional trailing whitespace in embedded CSS.
-public/sandbox/*.min.js -whitespace linguist-vendored
+public/sandbox/*.min.js -text -whitespace linguist-vendored
