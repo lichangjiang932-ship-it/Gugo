@@ -42,7 +42,10 @@ test('planning and permission tools show human summaries instead of raw JSON', (
 })
 
 test('running tools expose a live elapsed clock', () => {
-  assert.match(renderToolCall('bash_exec', { command: 'npm test' }), /data-testid="live-elapsed"/)
+  const markup = renderToolCall('bash_exec', { command: 'npm test' })
+  assert.match(markup, /data-testid="live-elapsed"/)
+  assert.match(markup, /&lt;1s/)
+  assert.doesNotMatch(markup, />0s</)
 })
 
 test('PDF generation uses the tool name and a readable title summary', () => {

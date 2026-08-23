@@ -7,7 +7,7 @@ import JSZip from 'jszip'
 import {
   HEAD_FONT, BODY_FONT, CJK_FONT,
   PREMIUM_THEMES, resolvePremiumTheme,
-  escapeXml, normalizeBullets, injectEaFont,
+  escapeXml, normalizeBullets, injectEaFont, injectEaFontWithReceipt,
   SLIDE_W, SLIDE_H, BULLET_MAX_CHARS, BULLETS_PER_PAGE,
 } from '../src/lib/pptCore.js'
 
@@ -95,9 +95,31 @@ test('injectEaFont 重复注入不会重复 a:ea', async () => {
   assert.match(after, /<a:ea typeface="Microsoft YaHei"\/>/)
 })
 
+test('injectEaFontWithReceipt 区分首次注入与已存在字体', async () => {
+  const zip = new JSZip()
+  zip.file('ppt/theme/theme1.xml', `<a:theme><a:themeElements><a:fontScheme>
+    <a:majorFont><a:latin typeface="Calibri"/></a:majorFont>
+    <a:minorFont><a:latin typeface="Calibri"/></a:minorFont>
+  </a:fontScheme></a:themeElements></a:theme>`)
+  const initial = await zip.generateAsync({ type: 'uint8array' })
+  const injected = await injectEaFontWithReceipt(initial, CJK_FONT)
+  const alreadyPresent = await injectEaFontWithReceipt(injected.bytes, CJK_FONT)
+
+  assert.equal(injected.status, 'injected')
+  assert.equal(alreadyPresent.status, 'alreadyPresent')
+  assert.equal(Object.hasOwn(alreadyPresent, 'warning'), false)
+})
+
 test('injectEaFont 失败时不抛错', async () => {
   // 给个坏的 buffer（不是 zip），应该原样返回 Uint8Array
   const garbage = new Uint8Array([1, 2, 3, 4, 5])
   const out = await injectEaFont(garbage, 'Microsoft YaHei')
   assert.ok(out instanceof Uint8Array)
+})
+
+test('injectEaFontWithReceipt 暴露有界失败诊断', async () => {
+  const result = await injectEaFontWithReceipt(new Uint8Array([1, 2, 3]), CJK_FONT)
+  assert.equal(result.status, 'failed')
+  assert.ok(result.bytes instanceof Uint8Array)
+  assert.ok(result.warning.length <= 200)
 })

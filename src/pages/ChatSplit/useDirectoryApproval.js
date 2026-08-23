@@ -90,6 +90,7 @@ export default function useDirectoryApproval({ lang, t, toast }) {
         path: grant?.path || selectedPath,
         accessMode: grant?.accessMode || safeAccessMode,
         authorizationScope: grant?.scope || safeScope,
+        grantId: grant?.id || null,
         resourceType: grant?.resourceType || 'directory',
         workspaceConfigTrusted: trustWorkspaceConfig && grant?.resourceType === 'directory',
         workspaceTrustScope: trustWorkspaceConfig && grant?.resourceType === 'directory'

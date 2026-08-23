@@ -19,6 +19,7 @@ export default function SettingsDiagnosticsPanel({
   const model = diagnostics?.model
   const endpoint = diagnostics?.endpoint
   const mail = diagnostics?.mail
+  const turnHost = diagnostics?.runtime?.turnHost
   const localModelNeedsConfiguration = authMode === 'local'
     && diagnostics
     && model?.configured === false
@@ -42,6 +43,34 @@ export default function SettingsDiagnosticsPanel({
           </button>
         </SettingsRow>
       </SettingsGroup>
+
+      {turnHost ? (
+        <SettingsGroup title={t('settings.agentRuntime')}>
+          <SettingsRow
+            title={t('settings.agentRuntimeStatus')}
+            description={t(turnHost.ready
+              ? 'settings.agentRuntimeReadyDescription'
+              : 'settings.agentRuntimeUnavailableDescription')}
+          >
+            <StatusDot ok={turnHost.ready} />
+            <span className="settings-inline-status">
+              {t(turnHost.ready ? 'settings.agentRuntimeReady' : 'settings.agentRuntimeUnavailable')}
+            </span>
+          </SettingsRow>
+          <SettingsRow title={t('settings.turnPersistence')}>
+            <StatusDot ok={turnHost.persistenceConfigured} />
+            <span className="settings-inline-status">
+              {t(turnHost.persistenceConfigured ? 'settings.hostPortReady' : 'settings.hostPortUnavailable')}
+            </span>
+          </SettingsRow>
+          <SettingsRow title={t('settings.compactionArchiveStorage')}>
+            <StatusDot ok={turnHost.compactionArchiveConfigured} />
+            <span className="settings-inline-status">
+              {t(turnHost.compactionArchiveConfigured ? 'settings.hostPortReady' : 'settings.hostPortUnavailable')}
+            </span>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : null}
 
       {localModelNeedsConfiguration ? (
         <SettingsGroup>

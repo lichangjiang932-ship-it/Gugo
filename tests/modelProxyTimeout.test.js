@@ -216,7 +216,7 @@ test('本地端点不返回云端备选 —— 不许「本地慢就偷偷切云
   assert.ok(configs[0].baseUrl.includes('127.0.0.1'))
 })
 
-test('云端主 provider 仍保留 failover 备选（同名模型）', () => {
+test('云端主 provider 只有显式授权才保留同名模型备选', () => {
   const env = {
     MODEL_NAME: 'deepseek-chat',
     // 两个 provider 都提供同名模型(镜像 / 中转站场景)
@@ -231,7 +231,11 @@ test('云端主 provider 仍保留 failover 备选（同名模型）', () => {
     MODEL_PROVIDER_BACKUP_MODELS: 'deepseek-chat',
     MODEL_PROVIDER_BACKUP_API_KEY: 'sk-backup',
   }
-  const configs = resolveModelFailoverConfigs({ modelName: 'deepseek-chat', env })
+  assert.equal(resolveModelFailoverConfigs({ modelName: 'deepseek-chat', env }).length, 1)
+  const configs = resolveModelFailoverConfigs({
+    modelName: 'deepseek-chat',
+    env: { ...env, MODEL_FAILOVER_CROSS_PROVIDER: '1' },
+  })
   assert.ok(configs.length >= 2, '云端应保留同名模型的备选 provider')
   for (const config of configs) {
     assert.equal(config.modelName, 'deepseek-chat', '转移后模型名必须一致')

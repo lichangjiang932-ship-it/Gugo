@@ -25,6 +25,12 @@ Upstream license texts:
 The checked-in Babel bundle also includes the upstream
 `regenerator-runtime` MIT notice in its source banner.
 
+The offline artifact preview sandbox additionally vendors the unmodified
+browser distributions of `mermaid@10.9.5` and `chart.js@4.4.1`, both under the
+MIT license. Their exact source URLs and SHA-256 verification procedure are
+recorded in `public/sandbox/README.md`. These copies replace runtime CDN loads;
+Gugo does not contact those source URLs while rendering a preview.
+
 ## Bundled Windows media sidecars
 
 The Windows desktop installer contains separate `ffmpeg.exe` and `ffprobe.exe`

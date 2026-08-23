@@ -6,8 +6,12 @@ import { compressSession } from '../../lib/compactionClient.js'
 export default function useSlashCommandExecution({
   changeApprovalMode,
   dispatch,
+  modelConfigRevision,
   modelName,
+  modelProviderId,
+  modelReadiness,
   navigate,
+  onModelUnavailable,
   setDesktopPetVisible,
   setInput,
   setSlashInlinePanel,
@@ -20,6 +24,10 @@ export default function useSlashCommandExecution({
 }) {
   return useCallback(async (entry, args = '') => {
     if (!entry) return false
+    if (entry.requiresModel && modelReadiness?.canSend === false) {
+      onModelUnavailable?.(modelReadiness)
+      return false
+    }
     slashRegistry.recordRecent(entry.name)
     if (entry.kind === 'skill') {
       setSlashInlinePanel(null)
@@ -38,8 +46,17 @@ export default function useSlashCommandExecution({
         openFeedback: () => setSlashInlinePanel('feedback'),
         openGoals: () => setSlashInlinePanel('goals'),
         openSideChat: () => { setWorkbenchTab('chat'); setWorkbenchOpen(true) },
-        compactSession: (options) => compressSession({ ...options, modelName }),
-        createGoalJob: (goal, options) => createJob(goal, { ...options, modelName }),
+        compactSession: (options) => compressSession({
+          ...options,
+          modelName,
+          modelProviderId,
+          modelConfigRevision,
+        }),
+        createGoalJob: (goal, options) => createJob(goal, {
+          ...options,
+          modelName,
+          providerId: modelProviderId,
+        }),
         togglePet: () => setDesktopPetVisible((visible) => !visible),
         setApprovalMode: changeApprovalMode,
         recordFeedback: (value) => recordChatFeedback(value, stateRef.current.activeSessionId),
@@ -63,7 +80,7 @@ export default function useSlashCommandExecution({
       return true
     }
   }, [
-    changeApprovalMode, dispatch, modelName, navigate, setDesktopPetVisible, setInput, setSlashInlinePanel, setWorkbenchMessage,
+    changeApprovalMode, dispatch, modelConfigRevision, modelName, modelProviderId, modelReadiness, navigate, onModelUnavailable, setDesktopPetVisible, setInput, setSlashInlinePanel, setWorkbenchMessage,
     setWorkbenchOpen, setWorkbenchTab, slashRegistry, stateRef, triggerSendFlow,
   ])
 }

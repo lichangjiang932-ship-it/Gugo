@@ -22,8 +22,10 @@ const {
 const { validateOfficeArchiveSafety } = await import('../server/services/managedAttachmentContent.js')
 const { deleteSession, getSessionSnapshot, upsertSession } = await import('../server/services/sessionStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+const { activateTestCompactionArchivePort } = await import('./helpers/testCompactionArchivePort.js')
 const { default: JSZip } = await import('jszip')
 
+const compactionArchiveController = activateTestCompactionArchivePort({ env: process.env })
 const server = createAppServer({ getEnv: () => ({ AUTH_MODE: 'multi_user' }) })
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const origin = `http://127.0.0.1:${server.address().port}`
@@ -38,6 +40,7 @@ const originalAttachmentEnv = Object.fromEntries([
 
 test.after(async () => {
   await new Promise((resolve) => server.close(resolve))
+  compactionArchiveController.release()
   closeDb()
   for (const [key, value] of Object.entries(originalAttachmentEnv)) {
     if (value == null) delete process.env[key]
@@ -117,6 +120,24 @@ test('per-turn upload and send limits use the configured value', async () => {
     (error) => error?.code === 'ATTACHMENT_COUNT_EXCEEDED' && /1/.test(error.message),
   )
   delete process.env.ATTACHMENT_MAX_PER_TURN
+})
+
+test('per-turn configuration cannot exceed the runtime port limit', () => {
+  const attachmentIds = Array.from(
+    { length: 33 },
+    (_, index) => `attachment-${String(index).padStart(2, '0')}`,
+  )
+  assert.throws(
+    () => validateManagedAttachmentsForTurn({
+      userId: 'unused-user',
+      sessionId: 'unused-session',
+      attachmentIds,
+      env: { ...process.env, ATTACHMENT_MAX_PER_TURN: '256' },
+    }),
+    (error) => error?.code === 'ATTACHMENT_COUNT_EXCEEDED'
+      && error?.statusCode === 400
+      && /32/.test(error.message),
+  )
 })
 
 test('cleanup removes expired pending rows, stale temporary files, and disk orphans', async () => {
@@ -275,6 +296,81 @@ test('a missing disk object returns 410 and removes its corrupt database row', a
     (error) => error?.code === 'ATTACHMENT_CONTENT_MISSING' && error?.statusCode === 410,
   )
   assert.equal(rowCount(attachment.id), 0)
+})
+
+test('a clear staging window cannot make attachment reads delete metadata', async () => {
+  const identity = makeIdentity('clear-staging-read')
+  const attachment = await upload({ identity, name: 'staged-and-restored.txt' })
+  const bucketPath = path.dirname(attachment.fullPath)
+  const stagedPath = `${bucketPath}.user-data-staging-test`
+  const now = Date.now()
+
+  getDb().prepare(`
+    INSERT INTO user_data_clear_operations (
+      operation_id, owner_id, lease_owner, lease_pid, lease_expires_at,
+      status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'staging', ?, ?)
+  `).run(
+    crypto.randomUUID(),
+    identity.userId,
+    'managed-attachment-security-test',
+    process.pid,
+    now + 60_000,
+    now,
+    now,
+  )
+  fs.renameSync(bucketPath, stagedPath)
+
+  try {
+    assert.throws(
+      () => getManagedAttachment({ userId: identity.userId, id: attachment.id }),
+      (error) => error?.code === 'USER_DATA_CLEAR_IN_PROGRESS' && error?.statusCode === 409,
+    )
+    assert.equal(rowCount(attachment.id), 1)
+  } finally {
+    fs.renameSync(stagedPath, bucketPath)
+    getDb().prepare('DELETE FROM user_data_clear_operations WHERE owner_id = ?').run(identity.userId)
+  }
+
+  const restored = getManagedAttachment({ userId: identity.userId, id: attachment.id })
+  assert.equal(restored?.fullPath, attachment.fullPath)
+  assert.equal(rowCount(attachment.id), 1)
+})
+
+test('an active clear journal also blocks invalid-path metadata self-repair', async () => {
+  const identity = makeIdentity('clear-invalid-path-read')
+  const attachment = await upload({ identity, name: 'invalid-path.txt' })
+  const now = Date.now()
+  getDb().prepare('UPDATE managed_attachments SET storage_path = ? WHERE id = ?').run(
+    '../outside-attachment-root',
+    attachment.id,
+  )
+  getDb().prepare(`
+    INSERT INTO user_data_clear_operations (
+      operation_id, owner_id, lease_owner, lease_pid, lease_expires_at,
+      status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'staging', ?, ?)
+  `).run(
+    crypto.randomUUID(),
+    identity.userId,
+    'managed-attachment-security-test',
+    process.pid,
+    now + 60_000,
+    now,
+    now,
+  )
+
+  try {
+    assert.throws(
+      () => getManagedAttachment({ userId: identity.userId, id: attachment.id }),
+      (error) => error?.code === 'USER_DATA_CLEAR_IN_PROGRESS' && error?.statusCode === 409,
+    )
+    assert.equal(rowCount(attachment.id), 1)
+  } finally {
+    getDb().prepare('DELETE FROM user_data_clear_operations WHERE owner_id = ?').run(identity.userId)
+    getDb().prepare('DELETE FROM managed_attachments WHERE id = ?').run(attachment.id)
+    fs.rmSync(attachment.fullPath, { force: true })
+  }
 })
 
 test('single, session, and user deletion remove metadata and physical bytes together', async () => {

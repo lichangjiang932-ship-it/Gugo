@@ -6,7 +6,6 @@ export const USER = {
   handle: '',
   email: '',
   avatar: '',
-  plan: '',
   joinedAt: '',
   totalCalls: 0,
 }

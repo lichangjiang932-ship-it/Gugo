@@ -15,6 +15,15 @@ import {
 import { buildCompaction, validateToolCallChain } from '../server/services/compactionService.js'
 import { createUser, getDb } from '../server/db.js'
 import { upsertSession } from '../server/services/sessionStore.js'
+import { activateTestCompactionArchivePort } from './helpers/testCompactionArchivePort.js'
+
+const compactionArchiveController = activateTestCompactionArchivePort({
+  source: 'test.context-compaction-runtime',
+})
+
+test.after(() => {
+  compactionArchiveController.release()
+})
 
 const TOOLS = [{
   type: 'function',

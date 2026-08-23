@@ -5,6 +5,7 @@ export default function ProviderDiagnostics({ diagnostics, onClose, t }) {
   return <div className="border border-ink/15 rounded-md p-3 flex flex-col gap-2">
     <div className="flex items-center gap-2">
       <span className="text-xs font-medium text-ink">{t('modelProviders.diagnostics')}</span>
+      {diagnostics.modelName && <span className="text-xs text-ink-fade">{t('modelProviders.testTarget', { model: diagnostics.modelName })}</span>}
       {diagnostics.running && <span className="text-xs text-ink-fade">{t('modelProviders.diagRunning')}</span>}
       <button type="button" onClick={onClose} className="ml-auto p-0.5 text-ink-fade hover:text-ink"><X className="w-3.5 h-3.5" /></button>
     </div>

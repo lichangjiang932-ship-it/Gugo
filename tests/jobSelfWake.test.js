@@ -13,6 +13,16 @@ const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const userId = issueTestSession({ email: 'self-wake@example.com' }).userId
 
+const resolveTestModelBinding = () => ({
+  providerId: null,
+  modelName: 'job-self-wake-test-model',
+  configRevision: null,
+  env: {
+    MODEL_BASE_URL: 'http://127.0.0.1:11434/v1',
+    MODEL_NAME: 'job-self-wake-test-model',
+  },
+})
+
 function oneStepPlanner(prompt) {
   return {
     title: prompt,
@@ -57,7 +67,11 @@ test('a sleeping job survives runtime reconstruction and resumes the same checkp
       return { content: 'awake in the same job', toolCalls: [] }
     },
   })
-  const firstRuntime = new JobRuntime({ planner: oneStepPlanner, executeStep })
+  const firstRuntime = new JobRuntime({
+    planner: oneStepPlanner,
+    executeStep,
+    modelBindingResolver: resolveTestModelBinding,
+  })
   const created = await firstRuntime.createJob('durable sleep', { userId })
   await firstRuntime.drain()
 
@@ -76,7 +90,11 @@ test('a sleeping job survives runtime reconstruction and resumes the same checkp
   })
 
   // A new runtime instance represents a process restart: only SQLite state is shared.
-  const secondRuntime = new JobRuntime({ planner: oneStepPlanner, executeStep })
+  const secondRuntime = new JobRuntime({
+    planner: oneStepPlanner,
+    executeStep,
+    modelBindingResolver: resolveTestModelBinding,
+  })
   await secondRuntime.drain()
 
   const completed = secondRuntime.getJob(created.id, { userId })
@@ -100,7 +118,11 @@ test('user steering wakes a sleeping job early and cancels the old timer', async
       return { content: 'changed direction', toolCalls: [] }
     },
   })
-  const runtime = new JobRuntime({ planner: oneStepPlanner, executeStep })
+  const runtime = new JobRuntime({
+    planner: oneStepPlanner,
+    executeStep,
+    modelBindingResolver: resolveTestModelBinding,
+  })
   const created = await runtime.createJob('interruptible sleep', { userId })
   await runtime.drain()
   assert.equal(runtime.getJob(created.id, { userId }).status, 'waiting')

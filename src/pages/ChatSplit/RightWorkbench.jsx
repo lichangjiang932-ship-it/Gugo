@@ -233,8 +233,8 @@ export default function RightWorkbench({
     event.preventDefault()
     const content = sideInput.trim()
     if (!content || isGenerating) return
-    setSideInput('')
-    onSendMessage(content)
+    const accepted = onSendMessage?.(content)
+    if (accepted !== false) setSideInput('')
   }
 
   const navigateBrowser = (event) => {

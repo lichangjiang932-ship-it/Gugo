@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -179,6 +180,132 @@ test('loadPlugins: 重复 id 被拒', () => {
     const r = loadPlugins({ rootDir: root })
     assert.equal(r.plugins.length, 1)
     assert.ok(r.errors.some((e) => /duplicate/.test(e.message)))
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('loadPlugins: entry 不能通过 symlink 或 junction 逃出插件目录', (t) => {
+  const root = mkdtemp()
+  const outside = mkdtemp()
+  try {
+    const pluginDir = writePlugin(root, 'linked-entry', {
+      ...VALID,
+      id: 'linked-entry',
+      entry: 'linked/theme.json',
+    })
+    fs.writeFileSync(path.join(outside, 'theme.json'), '{"outside":true}\n')
+
+    try {
+      fs.symlinkSync(
+        outside,
+        path.join(pluginDir, 'linked'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      )
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error?.code)) {
+        t.skip(`symlink unavailable: ${error.code}`)
+        return
+      }
+      throw error
+    }
+
+    const loaded = loadPlugins({ rootDir: root })
+    assert.deepEqual(loaded.plugins, [])
+    assert.equal(loaded.errors.length, 1)
+    assert.equal(loaded.errors[0].dir, 'linked-entry')
+    assert.match(loaded.errors[0].message, /entry escapes plugin directory/i)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+    fs.rmSync(outside, { recursive: true, force: true })
+  }
+})
+
+test('loadPlugins: integrity 校验入口原始字节并支持 hex 与 SRI Base64', () => {
+  const root = mkdtemp()
+  try {
+    const source = Buffer.from('{"theme":"verified"}\n', 'utf8')
+    const hex = createHash('sha256').update(source).digest('hex')
+    const base64 = createHash('sha256').update(source).digest('base64')
+    writePlugin(root, 'verified-hex', {
+      ...VALID,
+      id: 'verified-hex',
+      integrity: `sha256-${hex}`,
+    }, { 'theme.json': source })
+    writePlugin(root, 'verified-sri', {
+      ...VALID,
+      id: 'verified-sri',
+      integrity: `sha256-${base64}`,
+    }, { 'theme.json': source })
+    writePlugin(root, 'tampered', {
+      ...VALID,
+      id: 'tampered',
+      integrity: `sha256-${hex}`,
+    }, { 'theme.json': '{"theme":"tampered"}\n' })
+
+    const loaded = loadPlugins({ rootDir: root })
+    assert.deepEqual(loaded.plugins.map((plugin) => plugin.id).sort(), ['verified-hex', 'verified-sri'])
+    assert.equal(loaded.errors.length, 1)
+    assert.equal(loaded.errors[0].dir, 'tampered')
+    assert.match(loaded.errors[0].message, /PLUGIN_INTEGRITY_MISMATCH/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('loadPlugins: 在登记前执行 API、宿主和依赖版本兼容门禁', () => {
+  const root = mkdtemp()
+  try {
+    const entry = { 'theme.json': '{}' }
+    writePlugin(root, 'base', {
+      ...VALID,
+      id: 'base-plugin',
+      version: '2.4.0',
+      apiVersion: '1.0.0',
+      hostVersion: '>=0.11.0 <1.0.0',
+    }, entry)
+    writePlugin(root, 'compatible', {
+      ...VALID,
+      id: 'compatible-plugin',
+      requires: ['base-plugin'],
+      dependencyVersions: { 'base-plugin': '^2.0.0' },
+    }, entry)
+    writePlugin(root, 'wrong-api', {
+      ...VALID,
+      id: 'wrong-api',
+      apiVersion: '2.0.0',
+    }, entry)
+    writePlugin(root, 'wrong-host', {
+      ...VALID,
+      id: 'wrong-host',
+      hostVersion: '>=2.0.0',
+    }, entry)
+    writePlugin(root, 'wrong-dependency-version', {
+      ...VALID,
+      id: 'wrong-dependency-version',
+      requires: ['base-plugin'],
+      dependencyVersions: { 'base-plugin': '^1.0.0' },
+    }, entry)
+    writePlugin(root, 'depends-on-rejected', {
+      ...VALID,
+      id: 'depends-on-rejected',
+      requires: ['wrong-dependency-version'],
+    }, entry)
+
+    const loaded = loadPlugins({
+      rootDir: root,
+      hostVersion: '0.11.31',
+      apiVersion: '1.0.0',
+    })
+    assert.deepEqual(
+      loaded.plugins.map((plugin) => plugin.id).sort(),
+      ['base-plugin', 'compatible-plugin'],
+    )
+    const messages = loaded.errors.map((error) => error.message)
+    assert.ok(messages.some((message) => message.includes('PLUGIN_API_VERSION_INCOMPATIBLE')))
+    assert.ok(messages.some((message) => message.includes('PLUGIN_HOST_VERSION_INCOMPATIBLE')))
+    assert.ok(messages.some((message) => message.includes('PLUGIN_DEPENDENCY_VERSION_INCOMPATIBLE')))
+    assert.ok(messages.some((message) => message.includes('PLUGIN_DEPENDENCY_UNAVAILABLE')))
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

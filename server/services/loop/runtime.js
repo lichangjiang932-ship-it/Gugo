@@ -1,4 +1,8 @@
 import path from 'node:path'
+import {
+  createTruncatedToolCallResult,
+  inspectToolLoopModelResponse,
+} from '../../core/toolLoopAdapter.js'
 import { isLoopPauseResult } from '../../utils/agenticTools.js'
 import {
   filterCurrentDynamicToolSpecs,
@@ -7,8 +11,8 @@ import {
   snapshotDynamicToolSpecRegistrations,
 } from '../toolRegistry.js'
 import { createToolAbortScope } from '../../utils/toolCancellation.js'
-import { attachJobBudget, getJobBudget, createJobBudget, runWithModelBudget } from '../../utils/jobBudget.js'
-import { formatDeniedToolResult, requestApproval, resumePersistedApproval, revalidateToolPermission } from '../approvalGate.js'
+import { attachJobBudget, getJobBudget, createJobBudget, recordRecoveredModelResult, runWithModelBudget } from '../../utils/jobBudget.js'
+import { formatDeniedToolResult, requestApproval, resumePersistedApproval, revalidateHookAuthorization, revalidateToolPermission } from '../approvalGate.js'
 import { writeToolAudit } from '../../utils/audit.js'
 import { isContextLengthError } from '../../adapters/modelProxy.js'
 import { callModelWithContextRecovery } from '../contextCompactionRuntime.js'
@@ -45,6 +49,8 @@ import { initializeExecution } from './runtime-initializeExecution.js'
 import { initializeSteering } from './runtime-initializeSteering.js'
 import { prepareIteration } from './runtime-prepareIteration.js'
 import { executeToolCalls } from './runtime-executeToolCalls.js'
+import { createSideEffectExecution } from './sideEffectExecution.js'
+import { installToolFailureRecovery } from './toolFailureRecovery.js'
 import { createOutcomeRecorder } from './runtime-createOutcomeRecorder.js'
 import { completeToolBatch } from './runtime-completeToolBatch.js'
 import { completeIteration } from './runtime-completeIteration.js'
@@ -52,6 +58,15 @@ import { runModelRequest } from './runtime-runModelRequest.js'
 import { processModelResult } from './runtime-processModelResult.js'
 import { finalizeRuntime } from './runtime-finalizeRuntime.js'
 import { assertRuntimeDependencies } from './runtimeContract.js'
+import { isTrustedInternalLoopPrincipal } from './internalExecutionPrincipal.js'
+import {
+  createSideEffectScope,
+  getSideEffectExecutionLedger,
+  resolveSideEffectExecutionLedger,
+  SIDE_EFFECT_LEDGER_CONFLICT,
+  SIDE_EFFECT_OUTCOME_UNKNOWN,
+  sideEffectRecoveryBlock,
+} from '../sideEffectExecutionLedger.js'
 
 const DELIVERABLE_SELECTION_GUARD_MARKER = '[FINAL DELIVERABLE SELECTION REQUIRED]'
 const DELIVERABLE_SELECTION_FALLBACK_MARKER = '[FINAL DELIVERABLE SAFE FALLBACK]'
@@ -196,7 +211,10 @@ const runtimeDependencies = {
   createRedundantImageGuard,
   createRepeatCallGuard,
   createSteeringController,
+  createSideEffectScope,
+  createSideEffectExecution,
   createSubagentApprovalContext,
+  createTruncatedToolCallResult,
   createToolAbortScope,
   createToolLoopGuard,
   createWorkspaceTargetGuard,
@@ -213,12 +231,14 @@ const runtimeDependencies = {
   getDefaultOutputDirectory,
   getJobBudget,
   getProjectDirectory,
+  getSideEffectExecutionLedger,
   getToolMetadata,
   matchesDynamicToolRegistration,
   hasCommandExecutionTool,
   hasEffectiveReadOnlyBoundary,
   hasMutationExecutionIntent,
   installAttemptSignature,
+  inspectToolLoopModelResponse,
   isArtifactRevisionRequest,
   isCommandExecutionTool,
   isContextLengthError,
@@ -228,6 +248,7 @@ const runtimeDependencies = {
   isExplorationOnlyCall,
   isFileArtifactTool,
   isForcedToolChoiceCompatibilityError,
+  installToolFailureRecovery,
   isLocalMutationCall,
   isLocalMutationContinuationRequest,
   isLoopPauseResult,
@@ -237,6 +258,7 @@ const runtimeDependencies = {
   isSubstantiveToolCall,
   isSuccessfulPdfLayoutVerification,
   isSuccessfulToolResult,
+  isTrustedInternalLoopPrincipal,
   isTextDeliverableRequest,
   isVerificationCall,
   latestPriorTurnOutcome,
@@ -257,6 +279,7 @@ const runtimeDependencies = {
   progressChangesFor,
   recordToolProgress,
   recoverPriorLocalMutationTargets,
+  recordRecoveredModelResult,
   rememberApprovedSubagentCall,
   replaceRuntimeCapabilityBlock,
   requestApproval,
@@ -272,7 +295,9 @@ const runtimeDependencies = {
   restoreFailureRecovery,
   restoreNamedToolSpecs,
   restoreToolProgress,
+  resolveSideEffectExecutionLedger,
   resumePersistedApproval,
+  revalidateHookAuthorization,
   revalidateToolPermission,
   runModelStep,
   runPostTool,
@@ -281,6 +306,9 @@ const runtimeDependencies = {
   runWithModelBudget,
   sameArtifactIdList,
   sanitizeIncompleteTerminalText,
+  SIDE_EFFECT_LEDGER_CONFLICT,
+  SIDE_EFFECT_OUTCOME_UNKNOWN,
+  sideEffectRecoveryBlock,
   scopeTextToolCallIds,
   selectJobToolSpecs,
   snapshotDynamicToolSpecRegistrations,
@@ -311,11 +339,44 @@ async function runPhase(phase, state) {
   return outcome || { kind: 'next' }
 }
 
-export async function runToolsLoopCore(context) {
+const preparedToolsLoopRuntimes = new WeakMap()
+const NO_PREPARED_TERMINAL_OUTCOME = Object.freeze({ terminal: false })
+
+function preparedRuntimeError(code, message) {
+  return Object.assign(new TypeError(message), {
+    code,
+    retryable: false,
+  })
+}
+
+function getPreparedRuntimeRecord(prepared) {
+  const record = preparedToolsLoopRuntimes.get(prepared)
+  if (!record) {
+    throw preparedRuntimeError(
+      'TOOLS_LOOP_RUNTIME_PREPARED_INVALID',
+      'A prepared Tools Loop runtime handle created by this module is required',
+    )
+  }
+  if (record.status !== 'prepared') {
+    throw preparedRuntimeError(
+      'TOOLS_LOOP_RUNTIME_PREPARED_STALE',
+      'The prepared Tools Loop runtime handle is already in use or consumed',
+    )
+  }
+  return record
+}
+
+/**
+ * Run the initialization boundary and retain its mutable state behind an
+ * opaque, module-branded handle. The handle deliberately has no properties:
+ * the handle itself cannot be used to inspect or replace the phase state.
+ */
+export async function prepareToolsLoopRuntime(context) {
   // The generated phases intentionally share this dependency bag. Validate the
   // small bootstrap subset here so refactors fail at the boundary, not mid-turn.
   assertRuntimeDependencies(runtimeDependencies)
   const s = { context, d: runtimeDependencies, iteration: null }
+  let terminalOutcome = null
   for (const phase of [
     initializeInputs,
     initializeArtifacts,
@@ -325,9 +386,65 @@ export async function runToolsLoopCore(context) {
     initializeSteering,
   ]) {
     const outcome = await runPhase(phase, s)
-    if (outcome.kind === 'return') return outcome.value
+    if (outcome.kind === 'return') {
+      terminalOutcome = outcome
+      break
+    }
   }
 
+  const prepared = Object.freeze(Object.create(null))
+  preparedToolsLoopRuntimes.set(prepared, {
+    state: s,
+    terminalOutcome,
+    status: 'prepared',
+  })
+  return prepared
+}
+
+/**
+ * Trusted host-internal escape hatch for installing canonical brokers around a
+ * prepared runtime without putting mutable state on the handle. The callback
+ * receives mutable state and can retain it, so this must never be re-exported
+ * as a plugin or public API boundary.
+ * Operations are synchronous and cannot be nested with execution or another
+ * operation on the same handle.
+ */
+export function usePreparedToolsLoopRuntime(prepared, operation) {
+  const record = getPreparedRuntimeRecord(prepared)
+  if (typeof operation !== 'function') {
+    throw preparedRuntimeError(
+      'TOOLS_LOOP_RUNTIME_OPERATION_INVALID',
+      'Prepared Tools Loop runtime operation must be a function',
+    )
+  }
+  record.status = 'accessing'
+  try {
+    return operation(record.state)
+  } finally {
+    if (record.status === 'accessing') record.status = 'prepared'
+  }
+}
+
+/**
+ * Inspect the initialization outcome without exposing its mutable record.
+ * A terminal outcome consumes the handle because running its partially
+ * initialized state would violate the phase contract.
+ */
+export function consumePreparedToolsLoopTerminalOutcome(prepared) {
+  const record = getPreparedRuntimeRecord(prepared)
+  if (!record.terminalOutcome) return NO_PREPARED_TERMINAL_OUTCOME
+
+  const result = Object.freeze({
+    terminal: true,
+    value: record.terminalOutcome.value,
+  })
+  record.status = 'consumed'
+  record.state = null
+  record.terminalOutcome = null
+  return result
+}
+
+async function runPreparedToolsLoopState(s) {
   for (; s.iter < s.maxIters; s.iter += 1) {
     s.iteration = {}
     let outcome = await runPhase(prepareIteration, s)
@@ -357,4 +474,23 @@ export async function runToolsLoopCore(context) {
     if (outcome?.kind === 'continue') continue
   }
   return finalizeRuntime(s)
+}
+
+/** Execute exactly once from a module-branded prepared runtime handle. */
+export async function executePreparedToolsLoop(prepared) {
+  const record = getPreparedRuntimeRecord(prepared)
+  record.status = 'executing'
+  try {
+    if (record.terminalOutcome) return record.terminalOutcome.value
+    return await runPreparedToolsLoopState(record.state)
+  } finally {
+    record.status = 'consumed'
+    record.state = null
+    record.terminalOutcome = null
+  }
+}
+
+export async function runToolsLoopCore(context) {
+  const prepared = await prepareToolsLoopRuntime(context)
+  return executePreparedToolsLoop(prepared)
 }

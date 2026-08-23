@@ -1,8 +1,13 @@
+import { types as nodeTypes } from 'node:util'
+
 import { snapshotPluginServiceData } from './pluginServiceData.js'
 
 const MAX_SERVICE_PROPERTIES = 256
 const MAX_ERROR_TEXT = 4_096
 const ERROR_CODE_RE = /^[A-Z][A-Z0-9_]{0,127}$/
+const abortSignalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')?.get
+const addEventListener = EventTarget.prototype.addEventListener
+const removeEventListener = EventTarget.prototype.removeEventListener
 
 function serviceError(code, message, { pluginId, serviceName }) {
   const error = new Error(message)
@@ -17,6 +22,64 @@ function ownValue(object, key) {
   if (!object || (typeof object !== 'object' && typeof object !== 'function')) return undefined
   const descriptor = Object.getOwnPropertyDescriptor(object, key)
   return descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined
+}
+
+function isolatedServiceCancellation(executionContext, identity) {
+  const controller = new AbortController()
+  if (!executionContext || typeof executionContext !== 'object' || nodeTypes.isProxy(executionContext)) {
+    return null
+  }
+  let hostSignal
+  try {
+    hostSignal = ownValue(executionContext, 'signal')
+  } catch {
+    return null
+  }
+  if (!hostSignal || nodeTypes.isProxy(hostSignal)) return null
+  let aborted
+  try {
+    aborted = abortSignalAborted?.call(hostSignal)
+  } catch {
+    return null
+  }
+  let rejectCancellation
+  let cancellationSettled = false
+  const cancelled = new Promise((_, reject) => {
+    rejectCancellation = reject
+  })
+  // A losing cancellation branch must never become an unhandled rejection.
+  cancelled.catch(() => {})
+  const abort = () => {
+    if (cancellationSettled) return false
+    cancellationSettled = true
+    controller.abort()
+    rejectCancellation(serviceError(
+      'PLUGIN_SERVICE_CALL_ABORTED',
+      `plugin service call aborted: ${identity.serviceName}`,
+      identity,
+    ))
+    return true
+  }
+  if (aborted) abort()
+  try {
+    if (!aborted) addEventListener.call(hostSignal, 'abort', abort, { once: true })
+  } catch {
+    return null
+  }
+  return {
+    context: Object.freeze({ signal: controller.signal }),
+    revoke: abort,
+    wait(value) {
+      return Promise.race([Promise.resolve(value), cancelled])
+    },
+    dispose() {
+      try {
+        removeEventListener.call(hostSignal, 'abort', abort)
+      } catch {
+        // The isolated signal remains detached even if host cleanup rejects.
+      }
+    },
+  }
 }
 
 function errorField(error, key) {
@@ -80,6 +143,7 @@ export function createRuntimePluginService({ record, name, value, invoke }) {
   })
   const directCallback = typeof value === 'function' ? value : null
   const methods = snapshotServiceMethods(value, identity)
+  const activeCancellations = new Set()
 
   const resolveCallback = (method) => {
     const callback = method ? methods.get(method) : directCallback
@@ -92,7 +156,11 @@ export function createRuntimePluginService({ record, name, value, invoke }) {
   }
 
   return Object.freeze({
-    async invoke(method, args = []) {
+    revoke() {
+      for (const cancellation of [...activeCancellations]) cancellation.revoke()
+      return true
+    },
+    async invoke(method, args = [], executionContext = null) {
       const callback = resolveCallback(method)
       let values
       try {
@@ -110,17 +178,32 @@ export function createRuntimePluginService({ record, name, value, invoke }) {
       } catch (error) {
         throw isolatedServiceFailure(error, identity)
       }
-      return invoke(record, 'service', async (...input) => {
-        try {
-          const returned = await callback.apply(value, input)
-          return snapshotPluginServiceData(returned, {
-            code: 'PLUGIN_SERVICE_RESULT_INVALID',
-            label: 'plugin service result',
-          })
-        } catch (error) {
-          throw isolatedServiceFailure(error, identity)
+      const cancellation = isolatedServiceCancellation(executionContext, identity)
+      if (cancellation) activeCancellations.add(cancellation)
+      try {
+        return await invoke(record, 'service', async (...input) => {
+          try {
+            const callbackInput = cancellation?.context
+              ? [...input, cancellation.context]
+              : input
+            const callbackResult = callback.apply(value, callbackInput)
+            const returned = cancellation
+              ? await cancellation.wait(callbackResult)
+              : await callbackResult
+            return snapshotPluginServiceData(returned, {
+              code: 'PLUGIN_SERVICE_RESULT_INVALID',
+              label: 'plugin service result',
+            })
+          } catch (error) {
+            throw isolatedServiceFailure(error, identity)
+          }
+        }, values)
+      } finally {
+        if (cancellation) {
+          activeCancellations.delete(cancellation)
+          cancellation.dispose()
         }
-      }, values)
+      }
     },
   })
 }

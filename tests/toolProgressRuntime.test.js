@@ -5,6 +5,16 @@ import os from 'node:os'
 import path from 'node:path'
 
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
+const { trustedInternalLoopPrincipal } = await import('../server/services/loop/internalExecutionPrincipal.js')
+const { revalidateToolPermission } = await import('../server/services/approvalGate.js')
+
+const SIDE_EFFECT_TEST_OWNER = `tool-progress-owner-${process.pid}`
+const approveTool = async ({ userId, origin, toolName, args }) => {
+  const gate = revalidateToolPermission({ userId, origin, toolName, args, allowAsk: true })
+  assert.equal(gate.proceed, true, gate.reason)
+  return { ...gate, approvalId: `tool-progress-test-${toolName}` }
+}
+const INTERNAL_APPROVAL_PRINCIPAL = trustedInternalLoopPrincipal()
 
 function spec(name) {
   return SERVER_TOOL_SPECS.find((item) => item?.function?.name === name)
@@ -44,6 +54,7 @@ test('tool loop reports executor-derived progress and real file changes', async 
     messages: [{ role: 'user', content: 'update src/a.js and verify it' }],
     toolSpecs: [spec('write_file'), spec('read_file')],
     enableToolHooks: false,
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     runModel: async () => {
       modelCalls += 1
       if (modelCalls === 1) {
@@ -103,6 +114,7 @@ test('bash expected-output evidence drives progress and the exact verification t
     toolSpecs: [spec('bash_exec'), spec('read_file')],
     maxIters: 8,
     enableToolHooks: false,
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     runModel: async ({ messages }) => {
       requests.push(structuredClone(messages))
       modelCalls += 1
@@ -166,7 +178,8 @@ test('bash progress resolves an inferred relative output against cwd exactly onc
     const result = await runToolsLoop({
       job: {
         id: 'shell-relative-progress-job',
-        userId: null,
+        userId: SIDE_EFFECT_TEST_OWNER,
+        sessionId: `shell-relative-progress-session-${process.pid}`,
         origin: 'chat',
         prompt: 'Create nested/relative-progress.txt with a command and verify it.',
       },
@@ -176,6 +189,7 @@ test('bash progress resolves an inferred relative output against cwd exactly onc
       toolSpecs: [spec('bash_exec'), spec('read_file')],
       maxIters: 5,
       enableToolHooks: false,
+      requestToolApproval: approveTool,
       runModel: async () => {
         modelCalls += 1
         if (modelCalls === 1) {
@@ -223,7 +237,8 @@ test('inline Python writes contribute executor-verified file progress', async ()
     const result = await runToolsLoop({
       job: {
         id: 'inline-python-progress-job',
-        userId: null,
+        userId: SIDE_EFFECT_TEST_OWNER,
+        sessionId: `inline-python-progress-session-${process.pid}`,
         origin: 'chat',
         prompt: 'Create python-output/inline-progress.txt with Python and verify it.',
       },
@@ -233,6 +248,7 @@ test('inline Python writes contribute executor-verified file progress', async ()
       toolSpecs: [spec('bash_exec'), spec('read_file')],
       maxIters: 5,
       enableToolHooks: false,
+      requestToolApproval: approveTool,
       runModel: async () => {
         modelCalls += 1
         if (modelCalls === 1) {
@@ -290,6 +306,7 @@ test('failed expected outputs do not create progress or mutation evidence', asyn
     toolSpecs: [spec('bash_exec')],
     maxIters: 1,
     enableToolHooks: false,
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     runModel: async ({ toolChoice }) => {
       modelCalls += 1
       return toolChoice === 'none'
@@ -333,6 +350,7 @@ test('completed progress is not counted twice after checkpoint resume', async ()
     messages: [{ role: 'user', content: 'update resume.txt and verify it' }],
     toolSpecs: [spec('write_file'), spec('read_file')],
     enableToolHooks: false,
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     saveCheckpoint: async (state) => { checkpoint = structuredClone(state); return true },
     runModel: async () => ({
       content: '',
@@ -357,6 +375,7 @@ test('completed progress is not counted twice after checkpoint resume', async ()
     messages: [{ role: 'user', content: 'update resume.txt and verify it' }],
     toolSpecs: [spec('write_file'), spec('read_file')],
     enableToolHooks: false,
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     loadCheckpoint: async () => checkpoint,
     saveCheckpoint: async (state) => { checkpoint = structuredClone(state); return true },
     runModel: async () => {
@@ -391,12 +410,13 @@ test('two real edit_file match failures inject their production fs_tool_failed r
   const result = await withFsShellWorkspace(async (workspace) => {
     fs.writeFileSync(path.join(workspace, 'existing.txt'), 'current contents\n', 'utf8')
     return runToolsLoop({
-      job: { id: 'reflection-job', userId: null, origin: 'job', prompt: 'inspect an editing failure pattern' },
+      job: { id: 'reflection-job', userId: SIDE_EFFECT_TEST_OWNER, origin: 'job', prompt: 'inspect an editing failure pattern' },
       step: { id: 'reflection-step', kind: 'plan' },
       messages: [{ role: 'user', content: 'inspect an editing failure pattern' }],
       toolSpecs: [spec('edit_file')],
       executionGuardMode: 'read_only_exploration',
       enableToolHooks: false,
+      requestToolApproval: approveTool,
       saveCheckpoint: async (state) => { checkpoints.push(structuredClone(state)); return true },
       runModel: async ({ messages }) => {
         requests.push(structuredClone(messages))
@@ -444,12 +464,13 @@ test('two real non-zero bash exits inject production tool_execution_failed recov
   const checkpoints = []
   let modelCalls = 0
   const result = await withFsShellWorkspace(() => runToolsLoop({
-    job: { id: 'shell-reflection-job', userId: null, origin: 'job', prompt: 'diagnose a failing project command' },
+    job: { id: 'shell-reflection-job', userId: SIDE_EFFECT_TEST_OWNER, origin: 'job', prompt: 'diagnose a failing project command' },
     step: { id: 'shell-reflection-step', kind: 'plan' },
     messages: [{ role: 'user', content: 'diagnose a failing project command' }],
     toolSpecs: [spec('bash_exec')],
     executionGuardMode: 'read_only_exploration',
     enableToolHooks: false,
+    requestToolApproval: approveTool,
     saveCheckpoint: async (state) => { checkpoints.push(structuredClone(state)); return true },
     runModel: async ({ messages }) => {
       requests.push(structuredClone(messages))
@@ -502,6 +523,7 @@ test('empty and unrelated diffs cannot clear a changed file verification target'
     toolSpecs: [spec('write_file'), spec('git_diff')],
     maxIters: 8,
     enableToolHooks: false,
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     runModel: async ({ messages }) => {
       requests.push(structuredClone(messages))
       modelCalls += 1
@@ -563,6 +585,7 @@ test('a successful project check verifies known changed-file targets', async () 
     messages: [{ role: 'user', content: 'update src/a.js and run the project test' }],
     toolSpecs: [spec('write_file'), spec('run_project_check')],
     enableToolHooks: false,
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     runModel: async () => {
       modelCalls += 1
       if (modelCalls === 1) {

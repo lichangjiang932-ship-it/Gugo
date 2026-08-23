@@ -17,6 +17,11 @@ async function setup({ runText = 'agent reply', describeAttachments = null, inbo
 
   dispatcher.configureChannelDispatcherForTests({
     runSubagent: async () => ({ resultText: runText }),
+    resolveModelBinding: () => ({
+      providerId: 'social-bridge-provider',
+      modelName: 'social-bridge-model',
+      configRevision: 1,
+    }),
   })
 
   const issued = authMod.issueEmailCode({ email: `bridge-${Date.now()}-${Math.random()}@example.com` })

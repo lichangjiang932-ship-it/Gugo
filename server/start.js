@@ -1,6 +1,3 @@
-import { applyRuntimeConfig } from './utils/runtimeEnv.js'
+import { startRuntimeServer } from './services/runtimeServerStartup.js'
 
-applyRuntimeConfig()
-
-const { startAppServer } = await import('./appServer.js')
-startAppServer()
+await startRuntimeServer({ cwd: process.cwd(), env: process.env })

@@ -59,10 +59,14 @@ function featureRuntimeState(runtime, envKeys) {
   }
 }
 
-export function getWorkspaceOnboardingStatus({ userId } = {}) {
+export function getWorkspaceOnboardingStatus({
+  userId,
+  cwd = process.cwd(),
+  env = process.env,
+} = {}) {
   if (!userId) throw serviceError('userId is required', 400, 'USER_REQUIRED')
   const localFiles = getLocalFileAccessStatus({ userId })
-  const runtime = getWorkspaceRuntimeConfiguration()
+  const runtime = getWorkspaceRuntimeConfiguration({ cwd, env })
   const approval = getApprovalSettings({ userId })
   const writableDirectories = localFiles.grants.filter((grant) => (
     grant.resourceType === 'directory'
@@ -88,6 +92,8 @@ export function configureWorkspaceOnboarding({
   approvalMode = 'normal',
   confirmation,
   bypassConfirmation,
+  cwd = process.cwd(),
+  env = process.env,
 } = {}) {
   if (!userId) throw serviceError('userId is required', 400, 'USER_REQUIRED')
   if (confirmation !== 'ENABLE_WORKSPACE_CAPABILITIES') {
@@ -101,7 +107,7 @@ export function configureWorkspaceOnboarding({
   }
 
   const envFeatures = normalizeFeatures(features)
-  const runtimeBefore = getWorkspaceRuntimeConfiguration()
+  const runtimeBefore = getWorkspaceRuntimeConfiguration({ cwd, env })
   const locks = Object.entries(envFeatures).flatMap(([envKey, enabled]) => {
     const state = runtimeBefore.features[envKey]
     return state.locked && state.enabled !== enabled
@@ -133,7 +139,7 @@ export function configureWorkspaceOnboarding({
       confirmation: 'TRUST_WORKSPACE_CONFIG',
     })
     setApprovalMode({ userId, mode: approvalMode })
-    updateWorkspaceRuntimeConfiguration({ features: envFeatures })
+    updateWorkspaceRuntimeConfiguration({ features: envFeatures, cwd, env })
   } catch (error) {
     try { setApprovalMode({ userId, mode: previousMode }) } catch { /* best effort */ }
     if (!previousTrust) {
@@ -151,6 +157,6 @@ export function configureWorkspaceOnboarding({
 
   return {
     ...getLocalFileAccessStatus({ userId }),
-    onboarding: getWorkspaceOnboardingStatus({ userId }),
+    onboarding: getWorkspaceOnboardingStatus({ userId, cwd, env }),
   }
 }

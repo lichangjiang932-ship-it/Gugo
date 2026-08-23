@@ -9,7 +9,7 @@
 
 **Gugo**（yma）—— 浏览器即用的本地/内网 Web AI 工作台。React 19 SPA + Node.js HTTP（**零框架**） + SQLite（better-sqlite3, WAL）。和 Claude Code / Cursor / Cherry Studio / openhanako 同品类，但走 Web 路线。
 
-当前：v0.10.24 · DB schema **v49** · **383 个 test 文件** · 零后端框架依赖。
+当前：v0.11.31 · DB schema **v101** · **608 个默认 test 文件 + 1 个离线 eval** · 零后端框架依赖。
 
 ---
 
@@ -44,7 +44,7 @@
 
 ### 2.5 不准做的事
 
-1. **不要改 `server/db.js` 的旧 migration 函数**。要加字段就写 `migrateToVN+1`，把 `DB_SCHEMA_VERSION` 推一档。
+1. **不要改 `server/db.js` 的旧 migration 函数**。新 schema 变更写到 `server/migrations/vN*.js`，并在 `server/migrations/index.js` 顺序注册；`LATEST_SCHEMA_VERSION` 和 `DB_SCHEMA_VERSION` 会从注册表末项派生，禁止手改版本常量。
 2. **不要把 SOUL/IDENTITY 直接塞 messages[0]**，那是 `promptCompiler.js` 的活，走 4-block 编译路径。
 3. **不要在 prompt 注入路径里 throw**。沿用现有 try/catch 吞错 + 不阻断 chat 的策略。
 4. **不要新增后端框架依赖**（express/fastify/koa 都不要）。本项目是零框架 HTTP，手写 router + middleware 是设计选择，不是"还没来得及迁"。
@@ -67,7 +67,8 @@ server/
 ├── mcp/            # MCP 客户端（stdio + SSE）
 ├── hub/            # 独立 Hub 进程入口（HUB_ENABLED=1）
 ├── utils/          # 纯函数工具，不能 import services/
-├── db.js           # ⚠️ 改这里 = 加 migration
+├── migrations/     # v31+ 独立 migration + 唯一版本注册表
+├── db.js           # DB bootstrap + v2-v30 兼容层；新 migration 不写这里
 ├── middleware.js   # 安全头/CORS/CSP/鉴权
 └── appServer.js    # HTTP 入口
 src/
@@ -94,11 +95,11 @@ scripts/
 
 ### 4.1 后端新能力
 
-1. **DB schema 改动**：`server/db.js`
-   - 写 `migrateToVN+1(db)`，幂等（`IF NOT EXISTS` / `hasColumn` 守门）
-   - 末尾 `setSchemaVersionInternal(db, N+1)`
-   - `runMigrations` 链尾追加
-   - `DB_SCHEMA_VERSION` 改成 N+1
+1. **DB schema 改动**：`server/migrations/vNFeatureName.js`
+   - 导出 `migrateToVN(db)`，保持幂等（`IF NOT EXISTS` / `hasColumn` 守门）
+   - 在 `server/migrations/index.js` 导入并按连续版本顺序追加到 `schemaMigrations`
+   - migration 只负责 schema/data 变换；runner 会在同一迁移流程中写入 schema 版本
+   - 不要手改 `DB_SCHEMA_VERSION`、`LATEST_SCHEMA_VERSION`，也不要把 v31+ migration 塞回 `server/db.js`
    - 跨表 FK 用 `ON DELETE SET NULL`（任务/记忆）或 `ON DELETE CASCADE`（强从属）。**不要默认 RESTRICT**。
 2. **业务逻辑**：`server/services/xxxStore.js` (或 `xxxService.js`)
    - 所有函数签名带 `userId`（强制隔离），不准跨用户写

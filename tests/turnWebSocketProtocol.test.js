@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createTurnEventTransportEnvelope } from '../shared/turnEvents.js'
 import {
   createTurnWebSocketFrame,
   validateTurnWebSocketClientFrame,
@@ -47,6 +48,23 @@ test('turn WebSocket protocol rejects unknown fields and malformed payloads', ()
   assert.ok(malformed.issues.length > 0)
 })
 
+test('turn WebSocket protocol accepts only the declared runtime recovery actions', () => {
+  for (const action of ['retry', 'restart_runtime']) {
+    const frame = createTurnWebSocketFrame('error', {
+      code: 'TURN_ENGINE_UNAVAILABLE',
+      message: 'turn runtime is unavailable',
+      action,
+    })
+    assert.deepEqual(validateTurnWebSocketServerFrame(frame), { ok: true, value: frame })
+  }
+
+  const invalid = createTurnWebSocketFrame('error', {
+    code: 'TURN_ENGINE_UNAVAILABLE',
+    action: 'restart_automatically',
+  })
+  assert.equal(validateTurnWebSocketServerFrame(invalid).ok, false)
+})
+
 test('turn WebSocket protocol validates event and activity payload fields', () => {
   const event = {
     id: 'event-1',
@@ -67,6 +85,7 @@ test('turn WebSocket protocol validates event and activity payload fields', () =
   const eventFrame = createTurnWebSocketFrame('turn.event', { event })
   const activityFrame = createTurnWebSocketFrame('turn.activity', { activity })
   assert.deepEqual(validateTurnWebSocketServerFrame(eventFrame), { ok: true, value: eventFrame })
+  assert.deepEqual(eventFrame, createTurnEventTransportEnvelope(event))
   assert.deepEqual(validateTurnWebSocketServerFrame(activityFrame), { ok: true, value: activityFrame })
 
   const removedField = createTurnWebSocketFrame('turn.event', {

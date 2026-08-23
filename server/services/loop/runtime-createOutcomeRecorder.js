@@ -19,7 +19,11 @@ export async function createOutcomeRecorder(s) {
             result: outcome.result,
             job: s.job,
             step: s.step,
+            toolCallId: outcome.call?.id,
           })
+          const publicationFailures = Array.isArray(localArtifacts.publicationFailures)
+            ? localArtifacts.publicationFailures
+            : []
           if (localArtifacts.length > 0) {
             outcome.artifactId = localArtifacts[0].id
             outcome.artifactIds = localArtifacts.map((artifact) => artifact.id)
@@ -30,6 +34,22 @@ export async function createOutcomeRecorder(s) {
               filename: localArtifacts[0].filename,
               url: localArtifacts[0].url,
               artifacts: outcome.artifacts,
+            }
+          }
+          if (publicationFailures.length > 0) {
+            outcome.result = {
+              ...outcome.result,
+              artifactPublication: {
+                ok: false,
+                code: 'artifact_publication_failed',
+                status: localArtifacts.length > 0 ? 'partial' : 'failed',
+                retryable: publicationFailures.some((failure) => failure.retryable === true),
+                message: localArtifacts.length > 0
+                  ? 'Some local outputs could not be added to the managed artifact store.'
+                  : 'The local output was created, but no downloadable artifact could be published.',
+                guidance: 'Do not rerun the source tool automatically; verify its real side effects first.',
+                failures: publicationFailures,
+              },
             }
           }
         }

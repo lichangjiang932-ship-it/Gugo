@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-turn-artifacts-'))
 process.env.APP_DATA_DIR = tempDir
@@ -21,9 +24,91 @@ const {
   SERVER_TOOL_SPECS,
 } = await import('../server/services/toolLoopRuntime.js')
 const {
+  localArtifactPublicationKey,
+  persistLocalToolArtifactsAsync,
+} = await import('../server/services/loop/heuristics/toolSelection.js')
+const { createLocalFileArtifactAsync } = await import('../server/services/artifactGen.js')
+const { getSideEffectExecutionLedger } = await import('../server/services/sideEffectExecutionLedger.js')
+const {
   isLocalMutationCall,
   isReadOnlyPowerShellVerificationCall,
 } = await import('../server/services/toolLoopHeuristics.js')
+const { createTestTurnEnginePersistence } = await import('./helpers/turnEnginePersistence.js')
+
+function isPublicationMarkerLink(args) {
+  return String(args[1] || '').includes(`${path.sep}.artifact-publications${path.sep}`)
+}
+
+function stablePublicationPaths(filename, publicationKey) {
+  const digest = crypto.createHash('sha256').update(publicationKey).digest('hex')
+  const parsed = path.parse(filename)
+  const stableFilename = `${parsed.name}-${digest.slice(0, 20)}${parsed.ext}`
+  return {
+    artifactPath: path.join(process.env.ARTIFACT_DIR, stableFilename),
+    lockPath: path.join(process.env.ARTIFACT_DIR, `.publish-${digest.slice(0, 32)}.lock`),
+    markerPath: path.join(process.env.ARTIFACT_DIR, '.artifact-publications', `${digest}.json`),
+  }
+}
+
+const artifactCrashPublisherPath = fileURLToPath(new URL('./fixtures/artifactCrashPublisher.mjs', import.meta.url))
+
+function crashStablePublisher({ mode, sourcePath, filename, publicationKey }) {
+  const childDataDirectory = path.join(tempDir, `crash-child-${crypto.randomBytes(8).toString('hex')}`)
+  const result = spawnSync(process.execPath, [
+    artifactCrashPublisherPath,
+    mode,
+    sourcePath,
+    filename,
+    publicationKey,
+  ], {
+    env: {
+      ...process.env,
+      APP_DATA_DIR: childDataDirectory,
+      ARTIFACT_DIR: process.env.ARTIFACT_DIR,
+      YMA_TEST_DATA_ROOT: childDataDirectory,
+      YMA_TEST_DEFAULT_OUTPUT_DIR: path.join(childDataDirectory, 'output'),
+    },
+    encoding: 'utf8',
+    timeout: 20_000,
+  })
+  assert.equal(result.error, undefined, result.stderr || result.error?.message)
+  assert.notEqual(result.status, 0, 'crash fixture unexpectedly completed publication')
+  assert.notEqual(result.status, 70, result.stderr || 'crash fixture missed its injection point')
+  return result
+}
+
+function publicationAttemptResidue(publicationKey) {
+  const digest = crypto.createHash('sha256').update(publicationKey).digest('hex')
+  const markerDirectory = path.join(process.env.ARTIFACT_DIR, '.artifact-publications')
+  return {
+    digest,
+    lockPath: path.join(process.env.ARTIFACT_DIR, `.publish-${digest.slice(0, 32)}.lock`),
+    stagingPaths: fs.readdirSync(process.env.ARTIFACT_DIR)
+      .filter((name) => name.startsWith(`.publish-${digest.slice(0, 20)}-`) && name.endsWith('.tmp'))
+      .map((name) => path.join(process.env.ARTIFACT_DIR, name)),
+    attemptRecords: fs.readdirSync(markerDirectory)
+      .filter((name) => name.startsWith(`.${digest}-`) && /\.(?:stage|destination)\.json$/u.test(name))
+      .map((name) => path.join(markerDirectory, name)),
+  }
+}
+
+function cleanupPublicationTestResidue(filename, publicationKey) {
+  const { digest, lockPath, stagingPaths } = publicationAttemptResidue(publicationKey)
+  const { artifactPath, markerPath } = stablePublicationPaths(filename, publicationKey)
+  const markerDirectory = path.dirname(markerPath)
+  const markerEntries = fs.readdirSync(markerDirectory)
+    .filter((name) => name.includes(digest))
+    .map((name) => path.join(markerDirectory, name))
+  for (const target of [
+    ...stagingPaths,
+    ...markerEntries,
+    lockPath,
+    artifactPath,
+    `${artifactPath}.displaced`,
+  ]) {
+    try { fs.unlinkSync(target) } catch (error) { if (error?.code !== 'ENOENT') throw error }
+  }
+}
 
 createUser({ id: 'artifact-user', email: 'turn-artifact@example.com' })
 setApprovalMode({ userId: 'artifact-user', mode: 'bypass' })
@@ -37,6 +122,7 @@ test.after(() => {
 test('chat TurnEngine persists generated files without a jobs-table foreign key', async () => {
   let calls = 0
   const engine = new TurnEngine({
+    persistence: createTestTurnEnginePersistence(),
     runModel: async () => {
       calls += 1
       return calls === 1
@@ -73,6 +159,7 @@ test('chat TurnEngine persists generated files without a jobs-table foreign key'
 test('/webpage creates a persisted self-contained HTML artifact for preview', async () => {
   let calls = 0
   const engine = new TurnEngine({
+    persistence: createTestTurnEnginePersistence(),
     runModel: async () => {
       calls += 1
       return calls === 1
@@ -204,17 +291,932 @@ test('archive_create publishes its ZIP as a downloadable turn artifact', async (
   assert.equal(result.text, 'The ZIP archive is ready.')
   assert.equal(result.artifactIds.length, 1)
   assert.equal(publishedResult.artifactId, result.artifactIds[0])
-  assert.equal(publishedResult.filename, 'bundled-output.zip')
-  assert.match(publishedResult.url, /^\/api\/artifacts\/bundled-output\.zip$/)
+  assert.match(publishedResult.filename, /^bundled-output-[a-f0-9]{20}\.zip$/)
+  assert.equal(publishedResult.url, `/api/artifacts/${publishedResult.filename}`)
   const artifacts = listTurnArtifacts({
     userId: 'artifact-user', sessionId: 'artifact-session', turnId: 'archive-artifact-turn',
   })
   assert.deepEqual(artifacts.map(({ id, filename, type, url }) => ({ id, filename, type, url })), [{
     id: result.artifactIds[0],
-    filename: 'bundled-output.zip',
+    filename: publishedResult.filename,
     type: 'zip',
-    url: '/api/artifacts/bundled-output.zip',
+    url: publishedResult.url,
   }])
+})
+
+test('local tool artifact publication is idempotent across committed-ledger checkpoint recovery', async () => {
+  const turnId = 'local-artifact-ledger-recovery-turn'
+  const callId = 'local-artifact-ledger-recovery-call'
+  const sourcePath = path.join(tempDir, 'ledger-recovery-output.zip')
+  fs.writeFileSync(sourcePath, Buffer.from('PK\x03\x04ledger-recovery'))
+  const archiveCreate = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'archive_create')
+  const setDeliverables = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'set_deliverables')
+  assert.ok(archiveCreate)
+  assert.ok(setDeliverables)
+
+  let checkpoint = null
+  let failCompletedCheckpoint = true
+  let executeCalls = 0
+  const saveCheckpoint = async (state) => {
+    if (failCompletedCheckpoint
+      && state?.toolCalls?.some((call) => call.id === callId && call.checkpointStatus === 'completed')) {
+      failCompletedCheckpoint = false
+      throw new Error('injected crash after local artifact publication')
+    }
+    checkpoint = structuredClone(state)
+    return true
+  }
+  const common = {
+    job: {
+      id: turnId,
+      origin: 'chat',
+      userId: 'artifact-user',
+      sessionId: 'artifact-session',
+      prompt: 'Create the ZIP output.',
+    },
+    step: { id: `${turnId}-step`, kind: 'chat' },
+    messages: [{ role: 'user', content: 'Create the ZIP output.' }],
+    intentMode: 'execute',
+    toolSpecs: [archiveCreate, setDeliverables],
+    maxIters: 5,
+    enableToolHooks: false,
+    sideEffectLedger: getSideEffectExecutionLedger(),
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    saveCheckpoint,
+    executeTool: async ({ name }) => {
+      assert.equal(name, 'archive_create')
+      executeCalls += 1
+      return { ok: true, output: sourcePath, format: 'zip', entries: 1 }
+    },
+  }
+
+  await assert.rejects(
+    runToolsLoop({
+      ...common,
+      runModel: async () => ({
+        content: '',
+        toolCalls: [{
+          id: callId,
+          type: 'function',
+          function: {
+            name: 'archive_create',
+            arguments: JSON.stringify({ inputs: ['source.txt'], output: sourcePath }),
+          },
+        }],
+      }),
+    }),
+    (error) => error?.name === 'CheckpointFlushError'
+      && /Checkpoint flush failed before side effect/.test(String(error?.message || '')),
+  )
+  assert.equal(checkpoint.toolCalls[0].checkpointStatus, 'executing')
+  assert.equal(executeCalls, 1)
+  const firstArtifacts = listTurnArtifacts({
+    userId: 'artifact-user', sessionId: 'artifact-session', turnId,
+  })
+  assert.equal(firstArtifacts.length, 1)
+
+  let resumedModelCalls = 0
+  const resumed = await runToolsLoop({
+    ...common,
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    runModel: async () => {
+      resumedModelCalls += 1
+      if (resumedModelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: `${callId}-select`,
+            type: 'function',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [firstArtifacts[0].id] }),
+            },
+          }],
+        }
+      }
+      return { content: 'The recovered ZIP is ready.', toolCalls: [] }
+    },
+  })
+
+  const recoveredArtifacts = listTurnArtifacts({
+    userId: 'artifact-user', sessionId: 'artifact-session', turnId,
+  })
+  assert.ok(String(resumed.text || '').trim())
+  assert.equal(executeCalls, 1, 'a committed side effect must be replayed only as a result')
+  assert.deepEqual(recoveredArtifacts, firstArtifacts)
+  assert.deepEqual(resumed.artifactIds, [firstArtifacts[0].id])
+  assert.equal(
+    fs.readdirSync(process.env.ARTIFACT_DIR)
+      .filter((name) => /^ledger-recovery-output-[a-f0-9]{20}\.zip$/.test(name)).length,
+    1,
+  )
+})
+
+test('concurrent local publication reuses one artifact and stays isolated across users', async () => {
+  const sourcePath = path.join(tempDir, 'parallel-local-output.pdf')
+  fs.writeFileSync(sourcePath, '%PDF-1.4\nparallel-output')
+  const call = { id: 'parallel-local-call', name: 'bash_exec', args: { cwd: tempDir } }
+  const result = {
+    ok: true,
+    cwd: tempDir,
+    verifiedOutputs: [{ path: sourcePath, declaredPath: sourcePath, scope: 'grant', type: 'file' }],
+  }
+  const job = {
+    id: 'parallel-local-turn', origin: 'chat', userId: 'artifact-user', sessionId: 'artifact-session',
+  }
+  const [left, right] = await Promise.all([
+    persistLocalToolArtifactsAsync({ call, result, job, step: null, toolCallId: call.id }),
+    persistLocalToolArtifactsAsync({ call, result, job, step: null, toolCallId: call.id }),
+  ])
+  assert.equal(left.length, 1)
+  assert.equal(right.length, 1)
+  assert.equal(left[0].id, right[0].id)
+  assert.equal(left[0].filename, right[0].filename)
+  assert.equal(listTurnArtifacts({
+    userId: job.userId, sessionId: job.sessionId, turnId: job.id,
+  }).length, 1)
+
+  createUser({ id: 'artifact-user-b', email: 'turn-artifact-b@example.com' })
+  upsertSession({ id: 'artifact-session-b', userId: 'artifact-user-b', title: 'Artifacts B' })
+  const otherJob = {
+    ...job,
+    userId: 'artifact-user-b',
+    sessionId: 'artifact-session-b',
+  }
+  const [other] = await persistLocalToolArtifactsAsync({
+    call, result, job: otherJob, step: null, toolCallId: call.id,
+  })
+  assert.notEqual(other.id, left[0].id)
+  assert.notEqual(other.filename, left[0].filename)
+  assert.equal(listTurnArtifacts({
+    userId: otherJob.userId, sessionId: otherJob.sessionId, turnId: otherJob.id,
+  }).length, 1)
+  assert.deepEqual(listTurnArtifacts({
+    userId: job.userId, sessionId: job.sessionId, turnId: job.id,
+  }).map((artifact) => artifact.id), [left[0].id])
+})
+
+test('stable local artifact replay survives cleanup of the transient source file', async () => {
+  const sourcePath = path.join(tempDir, 'cleaned-before-replay.zip')
+  fs.writeFileSync(sourcePath, Buffer.from('PK\x03\x04durable-managed-copy'))
+  const call = { id: 'cleaned-source-call', name: 'archive_create', args: { output: sourcePath } }
+  const result = { ok: true, output: sourcePath, format: 'zip', entries: 1 }
+  const job = {
+    id: 'cleaned-source-turn', origin: 'chat', userId: 'artifact-user', sessionId: 'artifact-session',
+  }
+
+  const first = await persistLocalToolArtifactsAsync({
+    call, result, job, step: null, toolCallId: call.id,
+  })
+  assert.equal(first.length, 1)
+  const publishedPath = path.join(process.env.ARTIFACT_DIR, first[0].filename)
+  assert.equal(fs.existsSync(publishedPath), true)
+  fs.unlinkSync(sourcePath)
+
+  const replayed = await persistLocalToolArtifactsAsync({
+    call, result, job, step: null, toolCallId: call.id,
+  })
+  assert.equal(replayed.length, 1)
+  assert.equal(replayed[0].id, first[0].id)
+  assert.equal(replayed[0].filename, first[0].filename)
+  assert.equal(fs.readFileSync(publishedPath, 'utf8'), 'PK\x03\x04durable-managed-copy')
+  assert.deepEqual(replayed.publicationFailures, [])
+  assert.equal(listTurnArtifacts({
+    userId: job.userId, sessionId: job.sessionId, turnId: job.id,
+  }).length, 1)
+})
+
+test('interrupted marker staging never exposes a partial ownership marker and retry succeeds', async () => {
+  const filename = 'marker-staging-interruption.pdf'
+  const publicationKey = 'marker-staging-interruption'
+  const sourcePath = path.join(tempDir, filename)
+  const { artifactPath, markerPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, '%PDF-1.4\nmarker-staging-interruption')
+
+  const originalOpen = fs.promises.open
+  let interrupted = false
+  fs.promises.open = async (target, flags, ...args) => {
+    const handle = await originalOpen(target, flags, ...args)
+    const isMarkerStaging = flags === 'wx'
+      && String(target).includes(`${path.sep}.artifact-publications${path.sep}`)
+      && String(target).endsWith('.tmp')
+    if (!isMarkerStaging || interrupted) return handle
+    interrupted = true
+    return {
+      stat: (...statArgs) => handle.stat(...statArgs),
+      writeFile: async (value, ...writeArgs) => {
+        await handle.writeFile(String(value).slice(0, 12), ...writeArgs)
+        throw new Error('injected marker staging interruption')
+      },
+      sync: (...syncArgs) => handle.sync(...syncArgs),
+      close: (...closeArgs) => handle.close(...closeArgs),
+    }
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      /injected marker staging interruption/,
+    )
+    assert.equal(interrupted, true)
+    assert.equal(fs.existsSync(markerPath), false)
+    assert.equal(fs.existsSync(artifactPath), false)
+    assert.deepEqual(
+      fs.readdirSync(path.dirname(markerPath)).filter((name) => name.endsWith('.tmp')),
+      [],
+    )
+  } finally {
+    fs.promises.open = originalOpen
+  }
+
+  const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+  assert.equal(retried.fullPath, artifactPath)
+  assert.equal(fs.existsSync(markerPath), true)
+  assert.equal(fs.readFileSync(artifactPath, 'utf8'), '%PDF-1.4\nmarker-staging-interruption')
+})
+
+test('failed old lock initialization never removes a replacement lock owner', async () => {
+  const filename = 'lock-owner-aba.pdf'
+  const publicationKey = 'lock-owner-aba'
+  const sourcePath = path.join(tempDir, filename)
+  const { lockPath } = stablePublicationPaths(filename, publicationKey)
+  const successorLock = JSON.stringify({ owner: 'successor-lock' })
+  fs.writeFileSync(sourcePath, '%PDF-1.4\nlock-owner-aba')
+
+  const originalOpen = fs.promises.open
+  let injected = false
+  fs.promises.open = async (target, flags, ...args) => {
+    const handle = await originalOpen(target, flags, ...args)
+    if (String(target) !== lockPath || flags !== 'wx' || injected) return handle
+    let closed = false
+    return {
+      stat: (...statArgs) => handle.stat(...statArgs),
+      writeFile: (...writeArgs) => handle.writeFile(...writeArgs),
+      sync: async () => {
+        await handle.close()
+        closed = true
+        fs.unlinkSync(lockPath)
+        fs.writeFileSync(lockPath, successorLock, { flag: 'wx' })
+        injected = true
+        const error = new Error('injected lock initialization failure after replacement')
+        error.code = 'EIO'
+        throw error
+      },
+      close: async () => {
+        if (!closed) await handle.close()
+        closed = true
+      },
+    }
+  }
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      /injected lock initialization failure after replacement/,
+    )
+    assert.equal(injected, true)
+    assert.equal(fs.readFileSync(lockPath, 'utf8'), successorLock)
+  } finally {
+    fs.promises.open = originalOpen
+    fs.rmSync(lockPath, { force: true })
+  }
+})
+
+test('failed old publication never removes a successor marker at the same path', async () => {
+  const filename = 'marker-owner-aba.pdf'
+  const publicationKey = 'marker-owner-aba'
+  const sourcePath = path.join(tempDir, filename)
+  const { artifactPath, markerPath } = stablePublicationPaths(filename, publicationKey)
+  const successorMarker = JSON.stringify({ owner: 'successor-marker' })
+  fs.writeFileSync(sourcePath, '%PDF-1.4\nmarker-owner-aba')
+
+  const originalLink = fs.promises.link
+  const originalRename = fs.promises.rename
+  let markerReplacedBeforeCleanup = false
+  fs.promises.link = async (source, target) => {
+    if (String(target) !== artifactPath) return originalLink(source, target)
+    fs.writeFileSync(artifactPath, 'concurrent-winner', { flag: 'wx' })
+    const error = new Error('simulated concurrent artifact winner')
+    error.code = 'EEXIST'
+    throw error
+  }
+  fs.promises.rename = async (source, target) => {
+    if (String(source) === markerPath && !markerReplacedBeforeCleanup) {
+      fs.unlinkSync(markerPath)
+      fs.writeFileSync(markerPath, successorMarker, { flag: 'wx' })
+      markerReplacedBeforeCleanup = true
+    }
+    return originalRename(source, target)
+  }
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => error?.code === 'ARTIFACT_PUBLICATION_OWNERSHIP_CONFLICT',
+    )
+    assert.equal(markerReplacedBeforeCleanup, true)
+    assert.equal(fs.readFileSync(markerPath, 'utf8'), successorMarker)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), 'concurrent-winner')
+  } finally {
+    fs.promises.link = originalLink
+    fs.promises.rename = originalRename
+    fs.rmSync(markerPath, { force: true })
+    fs.rmSync(artifactPath, { force: true })
+  }
+})
+
+test('legacy truncated ownership marker is safely recovered when no artifact target exists', async () => {
+  const filename = 'legacy-truncated-marker.pdf'
+  const publicationKey = 'legacy-truncated-marker'
+  const sourcePath = path.join(tempDir, filename)
+  const { artifactPath, markerPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, '%PDF-1.4\nlegacy-truncated-marker')
+
+  const first = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+  const canonicalMarker = fs.readFileSync(markerPath, 'utf8')
+  fs.unlinkSync(first.fullPath)
+  fs.writeFileSync(markerPath, canonicalMarker.slice(0, Math.floor(canonicalMarker.length / 2)))
+
+  const recovered = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+  assert.equal(recovered.fullPath, artifactPath)
+  assert.equal(fs.readFileSync(artifactPath, 'utf8'), '%PDF-1.4\nlegacy-truncated-marker')
+  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath, 'utf8')), JSON.parse(canonicalMarker))
+})
+
+test('stable publication fails closed when marker filesystem lacks atomic hard links', async () => {
+  const filename = 'marker-atomic-unsupported.pdf'
+  const publicationKey = 'marker-atomic-unsupported'
+  const sourcePath = path.join(tempDir, filename)
+  const { artifactPath, markerPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, '%PDF-1.4\nmarker-atomic-unsupported')
+
+  const originalLink = fs.promises.link
+  let markerLinkAttempts = 0
+  fs.promises.link = async (...args) => {
+    if (!isPublicationMarkerLink(args)) return originalLink(...args)
+    markerLinkAttempts += 1
+    const error = new Error('atomic marker hard links are unavailable')
+    error.code = 'EPERM'
+    throw error
+  }
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => error?.code === 'ARTIFACT_PUBLICATION_MARKER_ATOMIC_UNSUPPORTED',
+    )
+    assert.equal(markerLinkAttempts, 1)
+    assert.equal(fs.existsSync(markerPath), false)
+    assert.equal(fs.existsSync(artifactPath), false)
+    assert.deepEqual(
+      fs.readdirSync(path.dirname(markerPath)).filter((name) => name.endsWith('.tmp')),
+      [],
+    )
+  } finally {
+    fs.promises.link = originalLink
+  }
+})
+
+test('stable publication falls back to exclusive copy when the artifact filesystem rejects hard links', async () => {
+  const sourcePath = path.join(tempDir, 'hard-link-fallback.pdf')
+  fs.writeFileSync(sourcePath, '%PDF-1.4\nfallback')
+  const call = { id: 'hard-link-fallback-call', name: 'bash_exec', args: { cwd: tempDir } }
+  const result = {
+    ok: true,
+    cwd: tempDir,
+    verifiedOutputs: [{ path: sourcePath, declaredPath: sourcePath, scope: 'grant', type: 'file' }],
+  }
+  const job = {
+    id: 'hard-link-fallback-turn', origin: 'chat', userId: 'artifact-user', sessionId: 'artifact-session',
+  }
+  const originalLink = fs.promises.link
+  let linkAttempts = 0
+  fs.promises.link = async (...args) => {
+    if (isPublicationMarkerLink(args)) return originalLink(...args)
+    linkAttempts += 1
+    const error = new Error('hard links are unavailable on this test filesystem')
+    error.code = 'EPERM'
+    throw error
+  }
+  try {
+    const artifacts = await persistLocalToolArtifactsAsync({
+      call, result, job, step: null, toolCallId: call.id,
+    })
+    assert.equal(artifacts.length, 1)
+    assert.equal(linkAttempts, 1)
+    assert.deepEqual(artifacts.publicationFailures, [])
+    assert.equal(
+      fs.readFileSync(path.join(process.env.ARTIFACT_DIR, artifacts[0].filename), 'utf8'),
+      '%PDF-1.4\nfallback',
+    )
+    assert.deepEqual(
+      fs.readdirSync(process.env.ARTIFACT_DIR).filter((name) => /^\.publish-.*\.(?:lock|tmp)$/.test(name)),
+      [],
+    )
+  } finally {
+    fs.promises.link = originalLink
+  }
+})
+
+test('stale claimed staging is completed and collected after a real process crash', async () => {
+  const filename = 'stale-staging-crash.pdf'
+  const publicationKey = 'stale-staging-crash'
+  const sourcePath = path.join(tempDir, filename)
+  const content = `%PDF-1.4\n${'staging-recovery-'.repeat(256)}`
+  fs.writeFileSync(sourcePath, content)
+
+  crashStablePublisher({ mode: 'stage_after_claim', sourcePath, filename, publicationKey })
+  const before = publicationAttemptResidue(publicationKey)
+  const { artifactPath } = stablePublicationPaths(filename, publicationKey)
+  assert.equal(fs.existsSync(before.lockPath), true)
+  assert.equal(before.stagingPaths.length, 1)
+  assert.equal(before.attemptRecords.some((entry) => entry.endsWith('.stage.json')), true)
+  assert.equal(fs.existsSync(artifactPath), false)
+
+  const recovered = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+  assert.equal(recovered.fullPath, artifactPath)
+  assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+  const after = publicationAttemptResidue(publicationKey)
+  assert.equal(fs.existsSync(after.lockPath), false)
+  assert.deepEqual(after.stagingPaths, [])
+  assert.deepEqual(after.attemptRecords, [])
+})
+
+test('exclusive-copy fallback resumes a claimed exact prefix after a real process crash', async () => {
+  const filename = 'fallback-half-write-crash.pdf'
+  const publicationKey = 'fallback-half-write-crash'
+  const sourcePath = path.join(tempDir, filename)
+  const content = `%PDF-1.4\n${'fallback-recovery-'.repeat(256)}`
+  fs.writeFileSync(sourcePath, content)
+
+  crashStablePublisher({ mode: 'destination_after_claim', sourcePath, filename, publicationKey })
+  const before = publicationAttemptResidue(publicationKey)
+  const { artifactPath } = stablePublicationPaths(filename, publicationKey)
+  const partial = fs.readFileSync(artifactPath)
+  assert.ok(partial.length > 0 && partial.length < Buffer.byteLength(content))
+  assert.deepEqual(partial, Buffer.from(content).subarray(0, partial.length))
+  assert.equal(before.stagingPaths.length, 1)
+  assert.equal(before.attemptRecords.some((entry) => entry.endsWith('.destination.json')), true)
+  fs.unlinkSync(sourcePath)
+
+  const recovered = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+  assert.equal(recovered.fullPath, artifactPath)
+  assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+  const after = publicationAttemptResidue(publicationKey)
+  assert.equal(fs.existsSync(after.lockPath), false)
+  assert.deepEqual(after.stagingPaths, [])
+  assert.deepEqual(after.attemptRecords, [])
+})
+
+test('staging crash before its durable identity claim fails closed without deleting the empty inode', async (t) => {
+  const filename = 'staging-before-claim.pdf'
+  const publicationKey = 'staging-before-claim'
+  const sourcePath = path.join(tempDir, filename)
+  fs.writeFileSync(sourcePath, `%PDF-1.4\n${'before-stage-claim-'.repeat(64)}`)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  crashStablePublisher({ mode: 'stage_before_claim', sourcePath, filename, publicationKey })
+  const residue = publicationAttemptResidue(publicationKey)
+  assert.equal(residue.stagingPaths.length, 1)
+  assert.equal(residue.attemptRecords.some((entry) => entry.endsWith('.stage.json')), false)
+  const stagingPath = residue.stagingPaths[0]
+  const beforeIdentity = fs.lstatSync(stagingPath, { bigint: true })
+  assert.equal(beforeIdentity.size, 0n)
+
+  await assert.rejects(
+    () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+    (error) => error?.code === 'ARTIFACT_PUBLICATION_BUSY',
+  )
+  const afterIdentity = fs.lstatSync(stagingPath, { bigint: true })
+  assert.equal(afterIdentity.dev, beforeIdentity.dev)
+  assert.equal(afterIdentity.ino, beforeIdentity.ino)
+  assert.equal(afterIdentity.size, 0n)
+})
+
+test('fallback crash before destination claim fails closed without adopting or deleting the empty target', async (t) => {
+  const filename = 'destination-before-claim.pdf'
+  const publicationKey = 'destination-before-claim'
+  const sourcePath = path.join(tempDir, filename)
+  fs.writeFileSync(sourcePath, `%PDF-1.4\n${'before-destination-claim-'.repeat(64)}`)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  crashStablePublisher({ mode: 'destination_before_claim', sourcePath, filename, publicationKey })
+  const { artifactPath } = stablePublicationPaths(filename, publicationKey)
+  const residue = publicationAttemptResidue(publicationKey)
+  assert.equal(residue.attemptRecords.some((entry) => entry.endsWith('.destination.json')), false)
+  const beforeIdentity = fs.lstatSync(artifactPath, { bigint: true })
+  assert.equal(beforeIdentity.size, 0n)
+
+  await assert.rejects(
+    () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+    (error) => error?.code === 'ARTIFACT_PUBLICATION_BUSY',
+  )
+  const afterIdentity = fs.lstatSync(artifactPath, { bigint: true })
+  assert.equal(afterIdentity.dev, beforeIdentity.dev)
+  assert.equal(afterIdentity.ino, beforeIdentity.ino)
+  assert.equal(afterIdentity.size, 0n)
+})
+
+test('crash recovery never removes a pathname competitor that replaced the claimed destination', async (t) => {
+  const filename = 'destination-replaced-after-crash.pdf'
+  const publicationKey = 'destination-replaced-after-crash'
+  const sourcePath = path.join(tempDir, filename)
+  fs.writeFileSync(sourcePath, `%PDF-1.4\n${'replacement-guard-'.repeat(64)}`)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  crashStablePublisher({ mode: 'destination_after_claim', sourcePath, filename, publicationKey })
+  const { artifactPath } = stablePublicationPaths(filename, publicationKey)
+  const displacedPath = `${artifactPath}.displaced`
+  fs.renameSync(artifactPath, displacedPath)
+  const competitor = '%PDF-1.4\nnon-cooperating-replacement'
+  fs.writeFileSync(artifactPath, competitor)
+
+  await assert.rejects(
+    () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+    (error) => error?.code === 'ARTIFACT_PUBLICATION_BUSY',
+  )
+  assert.equal(fs.readFileSync(artifactPath, 'utf8'), competitor)
+  assert.equal(fs.existsSync(displacedPath), true)
+})
+
+test('crash recovery preserves in-place tampering that is not an exact trusted prefix', async (t) => {
+  const filename = 'destination-tampered-after-crash.pdf'
+  const publicationKey = 'destination-tampered-after-crash'
+  const sourcePath = path.join(tempDir, filename)
+  fs.writeFileSync(sourcePath, `%PDF-1.4\n${'tamper-guard-'.repeat(64)}`)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  crashStablePublisher({ mode: 'destination_after_claim', sourcePath, filename, publicationKey })
+  const { artifactPath } = stablePublicationPaths(filename, publicationKey)
+  const beforeIdentity = fs.lstatSync(artifactPath, { bigint: true })
+  const tampered = Buffer.from('not-an-exact-prefix-of-the-trusted-stage')
+  const handle = fs.openSync(artifactPath, 'r+')
+  try {
+    fs.ftruncateSync(handle, 0)
+    fs.writeSync(handle, tampered, 0, tampered.length, 0)
+    fs.fsyncSync(handle)
+  } finally {
+    fs.closeSync(handle)
+  }
+  const tamperedIdentity = fs.lstatSync(artifactPath, { bigint: true })
+  assert.equal(tamperedIdentity.dev, beforeIdentity.dev)
+  assert.equal(tamperedIdentity.ino, beforeIdentity.ino)
+
+  await assert.rejects(
+    () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+    (error) => error?.code === 'ARTIFACT_PUBLICATION_BUSY',
+  )
+  assert.deepEqual(fs.readFileSync(artifactPath), tampered)
+})
+
+test('stable publication serializes hard-link and exclusive-copy publishers without clobbering', async () => {
+  const firstSource = path.join(tempDir, 'publication-lock-first.pdf')
+  const secondSource = path.join(tempDir, 'publication-lock-second.pdf')
+  fs.writeFileSync(firstSource, '%PDF-1.4\nfirst-writer')
+  fs.writeFileSync(secondSource, '%PDF-1.4\nfirst-writer')
+
+  const originalLink = fs.promises.link
+  const originalOpen = fs.promises.open
+  let linkAttempts = 0
+  let signalFallbackEntered
+  let releaseFallback
+  let signalSecondLink
+  const fallbackEntered = new Promise((resolve) => { signalFallbackEntered = resolve })
+  const fallbackRelease = new Promise((resolve) => { releaseFallback = resolve })
+  const secondLinkAttempted = new Promise((resolve) => { signalSecondLink = resolve })
+  let firstPublication = null
+  let secondPublication = null
+
+  fs.promises.link = async (...args) => {
+    if (isPublicationMarkerLink(args)) return originalLink(...args)
+    linkAttempts += 1
+    if (linkAttempts === 1) {
+      const error = new Error('force the first publisher through the exclusive-copy fallback')
+      error.code = 'EPERM'
+      throw error
+    }
+    signalSecondLink()
+    return originalLink(...args)
+  }
+  fs.promises.open = async (target, flags, ...args) => {
+    const isFinalClaim = flags === 'wx'
+      && !String(target).endsWith('.lock')
+      && !String(target).endsWith('.tmp')
+      && !String(target).endsWith('.json')
+    if (isFinalClaim) {
+      signalFallbackEntered()
+      await fallbackRelease
+    }
+    return originalOpen(target, flags, ...args)
+  }
+
+  try {
+    const options = {
+      filename: 'publication-lock-race.pdf',
+      publicationKey: 'publication-lock-race',
+    }
+    firstPublication = createLocalFileArtifactAsync({ ...options, sourcePath: firstSource })
+    await fallbackEntered
+    secondPublication = createLocalFileArtifactAsync({ ...options, sourcePath: secondSource })
+
+    const bypassedLock = await Promise.race([
+      secondLinkAttempted.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 100)),
+    ])
+    assert.equal(bypassedLock, false, 'a hard-link publisher must wait for the fallback publication lock')
+
+    releaseFallback()
+    const [first, second] = await Promise.all([firstPublication, secondPublication])
+    assert.equal(first.fullPath, second.fullPath)
+    assert.equal(linkAttempts, 1)
+    assert.equal(fs.readFileSync(first.fullPath, 'utf8'), '%PDF-1.4\nfirst-writer')
+    assert.deepEqual(
+      fs.readdirSync(process.env.ARTIFACT_DIR).filter((name) => /^\.publish-.*\.(?:lock|tmp)$/.test(name)),
+      [],
+    )
+  } finally {
+    releaseFallback()
+    await Promise.allSettled([firstPublication, secondPublication].filter(Boolean))
+    fs.promises.link = originalLink
+    fs.promises.open = originalOpen
+  }
+})
+
+test('exclusive-copy fallback never overwrites a non-cooperating pathname winner', async () => {
+  const sourcePath = path.join(tempDir, 'non-cooperating-source.pdf')
+  fs.writeFileSync(sourcePath, '%PDF-1.4\nmanaged-source')
+  const originalLink = fs.promises.link
+  const originalOpen = fs.promises.open
+  let winnerPath = ''
+  let injected = false
+
+  fs.promises.link = async (...args) => {
+    if (isPublicationMarkerLink(args)) return originalLink(...args)
+    const error = new Error('hard links are unavailable on this test filesystem')
+    error.code = 'EPERM'
+    throw error
+  }
+  fs.promises.open = async (target, flags, ...args) => {
+    const isFinalClaim = flags === 'wx'
+      && !String(target).endsWith('.lock')
+      && !String(target).endsWith('.tmp')
+      && !String(target).endsWith('.json')
+    if (isFinalClaim && !injected) {
+      injected = true
+      winnerPath = String(target)
+      const competitor = await originalOpen(target, 'wx')
+      await competitor.writeFile('%PDF-1.4\nnon-cooperating-winner')
+      await competitor.sync()
+      await competitor.close()
+    }
+    return originalOpen(target, flags, ...args)
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({
+        sourcePath,
+        filename: 'non-cooperating-race.pdf',
+        publicationKey: 'non-cooperating-race',
+      }),
+      (error) => error?.code === 'ARTIFACT_PUBLICATION_OWNERSHIP_CONFLICT',
+    )
+    assert.equal(injected, true)
+    assert.equal(fs.readFileSync(winnerPath, 'utf8'), '%PDF-1.4\nnon-cooperating-winner')
+  } finally {
+    fs.promises.link = originalLink
+    fs.promises.open = originalOpen
+  }
+})
+
+test('stable publication rejects source drift for the same execution identity', async () => {
+  const firstSource = path.join(tempDir, 'publication-drift-first.pdf')
+  const secondSource = path.join(tempDir, 'publication-drift-second.pdf')
+  fs.writeFileSync(firstSource, '%PDF-1.4\noriginal')
+  fs.writeFileSync(secondSource, '%PDF-1.4\nchanged')
+  const options = {
+    filename: 'publication-drift.pdf',
+    publicationKey: 'publication-drift-identity',
+  }
+  const first = await createLocalFileArtifactAsync({ ...options, sourcePath: firstSource })
+
+  await assert.rejects(
+    () => createLocalFileArtifactAsync({ ...options, sourcePath: secondSource }),
+    (error) => error?.code === 'ARTIFACT_PUBLICATION_CONTENT_DRIFT',
+  )
+  assert.equal(fs.readFileSync(first.fullPath, 'utf8'), '%PDF-1.4\noriginal')
+})
+
+test('stable publication never adopts an existing target after its ownership marker is removed', async () => {
+  const sourcePath = path.join(tempDir, 'publication-owner-source.pdf')
+  fs.writeFileSync(sourcePath, '%PDF-1.4\nowned')
+  const options = {
+    sourcePath,
+    filename: 'publication-owner.pdf',
+    publicationKey: 'publication-owner-identity',
+  }
+  const first = await createLocalFileArtifactAsync(options)
+  const digest = first.id.slice('local-'.length)
+  fs.unlinkSync(path.join(process.env.ARTIFACT_DIR, '.artifact-publications', `${digest}.json`))
+
+  await assert.rejects(
+    () => createLocalFileArtifactAsync(options),
+    (error) => error?.code === 'ARTIFACT_PUBLICATION_OWNERSHIP_CONFLICT',
+  )
+  assert.equal(fs.readFileSync(first.fullPath, 'utf8'), '%PDF-1.4\nowned')
+})
+
+test('stable publication detects managed artifact tampering during crash reconciliation', async () => {
+  const sourcePath = path.join(tempDir, 'publication-tamper-source.pdf')
+  fs.writeFileSync(sourcePath, '%PDF-1.4\ntrusted')
+  const options = {
+    sourcePath,
+    filename: 'publication-tamper.pdf',
+    publicationKey: 'publication-tamper-identity',
+  }
+  const first = await createLocalFileArtifactAsync(options)
+  fs.writeFileSync(first.fullPath, '%PDF-1.4\ntampered')
+  fs.unlinkSync(sourcePath)
+
+  await assert.rejects(
+    () => createLocalFileArtifactAsync(options),
+    (error) => error?.code === 'ARTIFACT_PUBLICATION_CONTENT_DRIFT',
+  )
+})
+
+test('exclusive-copy fallback removes only its own incomplete destination after failure', async () => {
+  const sourcePath = path.join(tempDir, 'exclusive-copy-failure.pdf')
+  fs.writeFileSync(sourcePath, '%PDF-1.4\ncopy-failure')
+  const originalLink = fs.promises.link
+  const originalOpen = fs.promises.open
+  let failedPath = ''
+
+  fs.promises.link = async (...args) => {
+    if (isPublicationMarkerLink(args)) return originalLink(...args)
+    const error = new Error('hard links are unavailable on this test filesystem')
+    error.code = 'EPERM'
+    throw error
+  }
+  fs.promises.open = async (target, flags, ...args) => {
+    const handle = await originalOpen(target, flags, ...args)
+    const isFinalClaim = flags === 'wx'
+      && !String(target).endsWith('.lock')
+      && !String(target).endsWith('.tmp')
+      && !String(target).endsWith('.json')
+    if (isFinalClaim) failedPath = String(target)
+    if (flags !== 'r+' || String(target) !== failedPath) return handle
+    return {
+      stat: (...statArgs) => handle.stat(...statArgs),
+      read: (...readArgs) => handle.read(...readArgs),
+      write: async () => { throw new Error('injected exclusive copy failure') },
+      sync: (...syncArgs) => handle.sync(...syncArgs),
+      close: (...closeArgs) => handle.close(...closeArgs),
+    }
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({
+        sourcePath,
+        filename: 'exclusive-copy-failure.pdf',
+        publicationKey: 'exclusive-copy-failure',
+      }),
+      /injected exclusive copy failure/,
+    )
+    assert.ok(failedPath)
+    assert.equal(fs.existsSync(failedPath), false)
+    assert.deepEqual(
+      fs.readdirSync(process.env.ARTIFACT_DIR).filter((name) => /^\.publish-.*\.(?:lock|tmp)$/.test(name)),
+      [],
+    )
+  } finally {
+    fs.promises.link = originalLink
+    fs.promises.open = originalOpen
+  }
+})
+
+test('stable publication uses short staging names for a maximum-length artifact filename', async () => {
+  const sourcePath = path.join(tempDir, 'short-source.pdf')
+  fs.writeFileSync(sourcePath, '%PDF-1.4\nlong-name')
+  const requestedFilename = `${'a'.repeat(236)}.pdf`
+  assert.equal(requestedFilename.length, 240)
+
+  const artifact = await createLocalFileArtifactAsync({
+    sourcePath,
+    filename: requestedFilename,
+    publicationKey: 'maximum-length-artifact-publication',
+  })
+  assert.ok(artifact.filename.length <= 240)
+  assert.ok(Buffer.byteLength(artifact.filename, 'utf8') <= 240)
+  assert.equal(fs.readFileSync(artifact.fullPath, 'utf8'), '%PDF-1.4\nlong-name')
+  assert.deepEqual(
+    fs.readdirSync(process.env.ARTIFACT_DIR).filter((name) => /^\.publish-.*\.tmp$/.test(name)),
+    [],
+  )
+})
+
+test('background artifact idempotency requires a step identity', () => {
+  const call = { id: 'reused-call-id', name: 'bash_exec' }
+  const job = { id: 'background-job', origin: 'job', userId: 'artifact-user' }
+  assert.equal(localArtifactPublicationKey({ call, job, step: null, toolCallId: call.id }), '')
+  assert.notEqual(localArtifactPublicationKey({
+    call,
+    job,
+    step: { id: 'background-step' },
+    toolCallId: call.id,
+  }), '')
+})
+
+test('local artifact publication failures remain observable without changing source-tool success', async () => {
+  const missingPath = path.join(tempDir, 'output-removed-before-publication.pdf')
+  const artifacts = await persistLocalToolArtifactsAsync({
+    call: { id: 'missing-output-call', name: 'bash_exec', args: { cwd: tempDir } },
+    result: {
+      ok: true,
+      cwd: tempDir,
+      verifiedOutputs: [{ path: missingPath, declaredPath: missingPath, scope: 'grant', type: 'file' }],
+    },
+    job: {
+      id: 'missing-output-turn', origin: 'chat', userId: 'artifact-user', sessionId: 'artifact-session',
+    },
+    step: null,
+    toolCallId: 'missing-output-call',
+  })
+  assert.deepEqual(artifacts, [])
+  assert.deepEqual(artifacts.publicationFailures, [{
+    code: 'artifact_publication_failed',
+    causeCode: 'ENOENT',
+    candidateIndex: 0,
+    filename: 'output-removed-before-publication.pdf',
+    retryable: false,
+    message: 'The local output disappeared before its downloadable copy could be published. Do not rerun the source tool automatically.',
+  }])
+})
+
+test('tool runtime exposes artifact publication failure in the durable tool result', async () => {
+  const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
+  assert.ok(bashExec)
+  const missingPath = path.join(tempDir, 'runtime-publication-missing.txt')
+  let modelCalls = 0
+  let completedResult = null
+  let durableToolResult = null
+  await runToolsLoop({
+    job: {
+      id: 'runtime-publication-failure-turn',
+      origin: 'chat',
+      userId: 'artifact-user',
+      sessionId: 'artifact-session',
+      prompt: 'Run the requested local command.',
+    },
+    step: { id: 'runtime-publication-failure-step', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Run the requested local command.' }],
+    intentMode: 'execute',
+    toolSpecs: [bashExec],
+    maxIters: 3,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'runtime-publication-failure-call',
+            type: 'function',
+            function: {
+              name: 'bash_exec',
+              arguments: JSON.stringify({ command: 'produce-output', cwd: tempDir }),
+            },
+          }],
+        }
+      }
+      const toolMessage = messages.findLast((message) => message.role === 'tool')
+      durableToolResult = toolMessage ? JSON.parse(toolMessage.content) : null
+      return { content: 'The command ran, but its downloadable copy was unavailable.', toolCalls: [] }
+    },
+    executeTool: async () => ({
+      ok: true,
+      cwd: tempDir,
+      stdout: 'source command completed',
+      verifiedOutputs: [{
+        path: missingPath,
+        declaredPath: missingPath,
+        scope: 'grant',
+        type: 'file',
+      }],
+    }),
+    onToolCompleted: async (outcome) => {
+      if (outcome.call?.id === 'runtime-publication-failure-call') {
+        completedResult = structuredClone(outcome.result)
+      }
+    },
+  })
+
+  for (const observed of [completedResult, durableToolResult]) {
+    assert.equal(observed?.ok, true)
+    assert.equal(observed?.artifactPublication?.ok, false)
+    assert.equal(observed?.artifactPublication?.status, 'failed')
+    assert.equal(observed?.artifactPublication?.retryable, false)
+    assert.match(observed?.artifactPublication?.guidance || '', /Do not rerun/u)
+    assert.equal(observed?.artifactPublication?.failures?.[0]?.causeCode, 'ENOENT')
+  }
 })
 
 test('verified write_file and bash_exec outputs keep Windows Unicode filenames as turn artifacts', () => {

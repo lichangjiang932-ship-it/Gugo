@@ -24,7 +24,25 @@ JSON 可以直接写环境变量键，也可以放在 `env` 对象中：
 
 配置键必须使用大写环境变量形式，值必须是字符串、数字、布尔值或 `null`。包含 API key、token、secret、password、credential 或 private key 的键会被拒绝；模型密钥继续使用系统环境变量、`.env` 或现有的用户凭据库。
 
-`npm run serve` 会在加载后端模块前合并这些层，因此仍直接读取 `process.env` 的旧模块也能得到一致配置。直接执行 `node server/appServer.js` 只保留旧的 `.env` 动态读取兼容，正式启动应使用 `npm run serve`。
+`npm run serve` 与直接执行 `node server/appServer.js` 都会经过同一个共享启动器，在加载应用宿主前完成配置 preflight，并把同一份运行环境传入后端。
+
+`GUGO_TURN_PERSISTENCE_MODULE` 可在进程启动前替换完整的 Turn 持久化适配器；相对路径按启动目录解析。生产服务与 Vite 开发宿主只从宿主进程环境或部署根 `.env` 读取它；`GUGO_LOAD_DOTENV=0` 时不会读取 `.env`。CLI 可能从不可信项目目录启动，因此只接受进程环境中的该配置，明确忽略当前目录 `.env` 对 persistence 模块与信任根的选择。所有入口都禁止由用户级 `runtime.json`、普通插件库存或数据库状态选择该模块。该模块会作为受信任代码在宿主进程内执行，不属于普通运行时插件。默认只允许加载启动目录内的普通文件；需要收窄或另设部署目录时，用 `GUGO_TURN_PERSISTENCE_TRUST_ROOT` 指定可信根目录。模块必须导出 `turnPersistenceAdapter` 或默认导出，并完整实现当前 Turn persistence contract；路径、导入或契约校验失败时启动会 fail-closed，不会静默回退 SQLite。可信根只约束入口文件，不能限制该模块主动导入或执行的其他代码，因此必须把它视为与宿主同权限的部署组件。
+
+Turn 事件默认写入 SQLite。若事件写入和数据库内的失败日志同时不可用，运行时会把完整失败事件与 checkpoint 状态追加到权限受限的 `server-data/turn-emergency-failures.jsonl`；主数据目录也不可写时会回退到系统临时目录。生产部署可用 `TURN_EMERGENCY_FAILURE_LOG_PATH` 指向独立可写卷，并将该文件纳入本地备份与访问控制。
+
+## 独立 Hub 进程
+
+运行 `npm run hub` 会自动启用独立 Hub。直接执行 `node server/hub/index.js` 或从其他宿主调用 `startHubProcess` 时，只有 `HUB_ENABLED=1` 才会启动；其他值会安全退出且不加载 Hub 数据库运行时。
+
+Hub 当前读取以下运行参数：
+
+| 环境变量 | 默认值 | 说明 |
+|---|---:|---|
+| `HUB_TICK_MS` | `30000` | 队列调度间隔（毫秒），最小 `100`。 |
+| `HUB_LEASE_MS` | `30000` | 作业租约时长（毫秒），最小 `300`；活动作业会在到期前续租。 |
+| `HUB_SHUTDOWN_TIMEOUT_MS` | `10000` | 关闭时等待活动作业完成的时长（毫秒），必须为正整数。 |
+
+无效值会回退到对应默认值。关闭等待超时后，Hub 会中止当前执行，并等待最后一份租约证明失效后再关闭数据库，避免已失去所有权的处理器提交终态。
 
 ## 认证模式与模型凭据
 
@@ -33,6 +51,10 @@ JSON 可以直接写环境变量键，也可以放在 `env` 对象中：
 `AUTH_MODE` 未设置时默认为 `local`。该模式面向一台电脑上的单个可信使用者：浏览器首次打开应用时，服务端会自动选择或创建一个本地所有者并建立会话，不要求注册、邮箱验证码或密码。
 
 Gugo 不附带任何可用的模型 API Key。本地所有者进入“设置 → 模型”后，可添加自己的 OpenAI 兼容、Anthropic、Gemini、Ollama 或 LM Studio Provider。模型 API Key 和自定义请求头会加密保存在服务端；也可以通过 `.env` 配置服务端默认模型。公开的 `/api/health` 只检查服务和数据库 liveness，不要求模型已配置；模型 readiness 请看需认证的 `/api/health/full` 或“设置 → 系统诊断”。
+
+删除 Provider 时，服务会先拒绝仍被任务、子代理或演进证据引用的配置；允许删除后，SQLite 使用 `secure_delete` 覆写已删除单元，并在删除前后截断 WAL。该操作只覆盖当前权威数据库及其 WAL，不会追溯清除用户自行复制的备份、磁盘快照或导出包；这些副本必须按各自的保留策略单独删除。
+
+未配置 `CREDENTIAL_ENCRYPTION_KEY` 时，服务会在数据库旁生成 `.credentials.key`，并在每次首次使用前把它限制为仅当前 OS 用户可访问。若 chmod 或 Windows ACL 加固失败，凭据读写会以 `CREDENTIAL_VAULT_KEY_PERMISSIONS_UNSAFE` 拒绝继续；服务不会删除已有密钥，也不会在弱权限下读取它。请修复密钥文件权限后重试，或注入一个 32 字节（64 位十六进制或 Base64）的 `CREDENTIAL_ENCRYPTION_KEY`。密钥与数据库必须一并备份，丢失密钥后已有密文无法恢复。
 
 本机建议配置：
 

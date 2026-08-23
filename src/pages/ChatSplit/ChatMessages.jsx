@@ -13,12 +13,14 @@ export default function ChatMessages({
   isGenerating = false,
   onPermAllow,
   onPermDeny,
+  onManageModels,
   onNavigatePermissions,
   onAuthorizeDirectoryRequest,
   onOpenArtifact,
   onOpenInPreview,
   onExpandCompaction,
   onQuoteSelection,
+  onRetryModelFailure,
   onPromptSelect,
 }) {
   const { t, lang } = useT()
@@ -68,6 +70,8 @@ export default function ChatMessages({
                 onExpandCompaction={onExpandCompaction}
                 onOpenArtifact={onOpenArtifact}
                 onOpenInPreview={onOpenInPreview}
+                onManageModels={onManageModels}
+                onRetryModelFailure={onRetryModelFailure}
                 t={t}
               />
             ))}

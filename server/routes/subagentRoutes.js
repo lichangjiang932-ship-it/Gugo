@@ -1,5 +1,6 @@
 import { readJson } from '../utils.js'
 import { authenticateRequest } from '../middleware.js'
+import { getActiveSubagentRunPersistencePort } from '../core/subagentRunPersistencePort.js'
 import { getSubagentRun, listSubagentTypes, runSubagent } from '../services/subagentRuntime.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
@@ -13,7 +14,12 @@ function writeSse(res, event) {
   res.write(`data: ${JSON.stringify(event)}\n\n`)
 }
 
-export async function handleSubagentRequest(req, res) {
+export async function handleSubagentRequest(req, res, {
+  runSubagentImpl = runSubagent,
+  getSubagentRunImpl = getSubagentRun,
+  listSubagentTypesImpl = listSubagentTypes,
+  assertReady = getActiveSubagentRunPersistencePort,
+} = {}) {
   const userId = authenticateRequest(req)
   if (!userId) return sendJson(res, 401, { ok: false, error: 'Unauthorized' })
 
@@ -21,8 +27,9 @@ export async function handleSubagentRequest(req, res) {
   const pathname = url.pathname
 
   try {
+    assertReady()
     if (req.method === 'GET' && pathname === '/api/subagent/types') {
-      return sendJson(res, 200, { ok: true, types: listSubagentTypes() })
+      return sendJson(res, 200, { ok: true, types: listSubagentTypesImpl() })
     }
 
     if (req.method === 'POST' && pathname === '/api/subagent/run') {
@@ -36,7 +43,7 @@ export async function handleSubagentRequest(req, res) {
         })
         writeSse(res, { type: 'start', description: body.description || '' })
         try {
-          const run = await runSubagent({
+          const run = await runSubagentImpl({
             userId,
             type: body.subagent_type || body.type || 'general',
             prompt: body.prompt,
@@ -45,7 +52,9 @@ export async function handleSubagentRequest(req, res) {
             skillIds: body.skillIds || body.skill_ids || [],
             parentSessionId: body.parentSessionId || null,
             parentMessageId: body.parentMessageId || null,
-            modelName: body.modelName,
+            modelName: body.modelName ?? body.model_name,
+            modelProviderId: body.modelProviderId || body.model_provider_id || null,
+            modelConfigRevision: body.modelConfigRevision ?? body.model_config_revision ?? null,
           })
           writeSse(res, { type: 'done', run })
         } catch (err) {
@@ -56,7 +65,7 @@ export async function handleSubagentRequest(req, res) {
         return
       }
 
-      const run = await runSubagent({
+      const run = await runSubagentImpl({
         userId,
         type: body.subagent_type || body.type || 'general',
         prompt: body.prompt,
@@ -65,7 +74,9 @@ export async function handleSubagentRequest(req, res) {
         skillIds: body.skillIds || body.skill_ids || [],
         parentSessionId: body.parentSessionId || null,
         parentMessageId: body.parentMessageId || null,
-        modelName: body.modelName,
+        modelName: body.modelName ?? body.model_name,
+        modelProviderId: body.modelProviderId || body.model_provider_id || null,
+        modelConfigRevision: body.modelConfigRevision ?? body.model_config_revision ?? null,
       })
       return sendJson(res, 200, { ok: true, run, result_text: run.resultText })
     }
@@ -74,7 +85,7 @@ export async function handleSubagentRequest(req, res) {
     if (runMatch) {
       const id = runMatch[1]
       if (req.method === 'GET') {
-        const run = getSubagentRun({ userId, id })
+        const run = await getSubagentRunImpl({ userId, id })
         if (!run) return sendJson(res, 404, { ok: false, error: 'run not found' })
         return sendJson(res, 200, { ok: true, run })
       }

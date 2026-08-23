@@ -1,4 +1,8 @@
 import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
+import {
+  getBoundRuntimeProvider,
+  getBoundRuntimeProviderProvenance,
+} from '../core/runtimeCapabilityState.js'
 import { prepareOutboundMessages } from './outboundMessagePipeline.js'
 import {
   getModelProviderAdapter,
@@ -12,18 +16,43 @@ export const NATIVE_PROVIDER_KINDS = new Set(['anthropic', 'gemini'])
 const CUSTOM_STREAM_ADAPTER = Symbol('customModelProviderStreamAdapter')
 const customRequestAdapters = new WeakMap()
 
+function boundProviderSelection(kind = '') {
+  const normalized = typeof kind === 'string' ? kind.trim().toLowerCase() : ''
+  if (!normalized) return { bound: false, adapter: null }
+  const implementation = getBoundRuntimeProvider(normalized)
+  if (!implementation) return { bound: false, adapter: null }
+  return {
+    bound: true,
+    adapter: implementation.builtin === true ? null : implementation,
+  }
+}
+
+export function getEffectiveModelProviderAdapter(kind = '') {
+  const selection = boundProviderSelection(kind)
+  return selection.bound ? selection.adapter : getModelProviderAdapter(kind)
+}
+
+export function getEffectiveModelProviderProvenance(kind = '') {
+  const selection = boundProviderSelection(kind)
+  return selection.bound ? getBoundRuntimeProviderProvenance(kind) : null
+}
+
 export {
   registerModelProviderAdapter,
   unregisterModelProviderAdapter,
 }
 
 export function listNativeProviderKinds() {
-  return [...new Set([...NATIVE_PROVIDER_KINDS, ...listModelProviderAdapterKinds()])].sort()
+  return [...new Set([...NATIVE_PROVIDER_KINDS, ...listModelProviderAdapterKinds()])]
+    .filter((kind) => isNativeProviderKind(kind))
+    .sort()
 }
 
 export function isNativeProviderKind(kind = '') {
   if (typeof kind !== 'string') return false
   const normalized = kind.trim().toLowerCase()
+  const selection = boundProviderSelection(normalized)
+  if (selection.bound) return Boolean(selection.adapter) || NATIVE_PROVIDER_KINDS.has(normalized)
   return NATIVE_PROVIDER_KINDS.has(normalized) || hasModelProviderAdapter(normalized)
 }
 
@@ -302,10 +331,10 @@ export function buildNativeProviderRequest(args = {}) {
   })
   if (messages.length === 0) throw new Error('消息不能为空。')
   const prepared = { ...args, messages }
+  const adapter = getEffectiveModelProviderAdapter(args.profile?.kind)
+  if (adapter) return captureRequestAdapter(adapter.buildRequest(prepared), adapter)
   if (args.profile?.kind === 'anthropic') return buildAnthropicRequest(prepared)
   if (args.profile?.kind === 'gemini') return buildGeminiRequest(prepared)
-  const adapter = getModelProviderAdapter(args.profile?.kind)
-  if (adapter) return captureRequestAdapter(adapter.buildRequest(prepared), adapter)
   throw new Error(`Unsupported native provider kind: ${args.profile?.kind || 'unknown'}`)
 }
 
@@ -369,6 +398,8 @@ function anthropicUsage(usage, { allowPartial = false } = {}) {
 }
 
 export function extractNativeProviderUsage(data, kind = '', options = {}, adapterSnapshot = null) {
+  const adapter = adapterSnapshot || getEffectiveModelProviderAdapter(kind)
+  if (adapter?.extractUsage) return adapter.extractUsage(data, options)
   if (kind === 'anthropic') {
     const usage = data?.usage
     if (!usage) return null
@@ -384,8 +415,6 @@ export function extractNativeProviderUsage(data, kind = '', options = {}, adapte
       cached: usage.cachedContentTokenCount,
     }, options)
   }
-  const adapter = adapterSnapshot || getModelProviderAdapter(kind)
-  if (adapter?.extractUsage) return adapter.extractUsage(data, options)
   return null
 }
 
@@ -398,6 +427,8 @@ function normalizedToolCall({ id, name, args }, index = 0) {
 }
 
 export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = null) {
+  const adapter = adapterSnapshot || getEffectiveModelProviderAdapter(kind)
+  if (adapter) return adapter.parseResponse(data, { kind })
   if (kind === 'anthropic') {
     const blocks = Array.isArray(data?.content) ? data.content : []
     return {
@@ -409,8 +440,6 @@ export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = n
       finishReason: data?.stop_reason === 'max_tokens' ? 'length' : data?.stop_reason === 'tool_use' ? 'tool_calls' : 'stop',
     }
   }
-  const adapter = adapterSnapshot || getModelProviderAdapter(kind)
-  if (adapter) return adapter.parseResponse(data, { kind })
   if (kind !== 'gemini') throw new Error(`Unsupported native provider kind: ${kind || 'unknown'}`)
   const candidate = data?.candidates?.[0]
   const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : []
@@ -425,7 +454,7 @@ export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = n
 }
 
 export function createNativeProviderStreamState(kind = '', adapterSnapshot = null) {
-  const adapter = adapterSnapshot || getModelProviderAdapter(kind)
+  const adapter = adapterSnapshot || getEffectiveModelProviderAdapter(kind)
   if (adapter) {
     if (typeof adapter.createStreamState !== 'function') {
       throw new Error(`Native provider does not support streaming: ${kind}`)
@@ -438,7 +467,9 @@ export function createNativeProviderStreamState(kind = '', adapterSnapshot = nul
     Object.defineProperty(state, CUSTOM_STREAM_ADAPTER, { value: adapter })
     return state
   }
-  return { kind, toolCalls: new Map(), usage: null, finishReason: null, finished: false }
+  const state = { kind, toolCalls: new Map(), usage: null, finishReason: null, finished: false }
+  Object.defineProperty(state, CUSTOM_STREAM_ADAPTER, { value: null })
+  return state
 }
 
 function mergeUsage(previous, current) {
@@ -481,7 +512,9 @@ function finishEvents(state) {
 }
 
 export function consumeNativeProviderStreamPayload(data, state) {
-  const customAdapter = state?.[CUSTOM_STREAM_ADAPTER] || getModelProviderAdapter(state?.kind)
+  const customAdapter = state && Object.hasOwn(state, CUSTOM_STREAM_ADAPTER)
+    ? state[CUSTOM_STREAM_ADAPTER]
+    : getEffectiveModelProviderAdapter(state?.kind)
   if (customAdapter) {
     if (typeof customAdapter.consumeStreamPayload !== 'function') {
       throw new Error(`Native provider does not support streaming: ${state?.kind || 'unknown'}`)
@@ -554,7 +587,9 @@ export function consumeNativeProviderStreamPayload(data, state) {
 }
 
 export function finishNativeProviderStream(state) {
-  const customAdapter = state?.[CUSTOM_STREAM_ADAPTER] || getModelProviderAdapter(state?.kind)
+  const customAdapter = state && Object.hasOwn(state, CUSTOM_STREAM_ADAPTER)
+    ? state[CUSTOM_STREAM_ADAPTER]
+    : getEffectiveModelProviderAdapter(state?.kind)
   if (customAdapter) {
     const events = customAdapter.finishStream(state)
     if (!Array.isArray(events)) throw new TypeError('native provider stream adapter must return an event array')

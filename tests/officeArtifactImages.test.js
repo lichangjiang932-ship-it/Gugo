@@ -22,10 +22,32 @@ await sharp({
 }).png().toFile(imagePath)
 
 const { createDocx, createPptx, createXlsx } = await import('../server/services/artifactGen.js')
+const {
+  prepareOfficeArtifactImages,
+  resolveOfficeArtifactImageInputs,
+} = await import('../server/services/officeArtifactImages.js')
 const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 const { setAllFilesAccess, setDefaultOutputDirectory } = await import('../server/services/localFileAccessService.js')
 const { createDefaultExecuteStep, JobRuntime } = await import('../server/services/jobRuntime.js')
+const { buildInitialPlan } = await import('../server/services/jobPlanner.js')
+
+const directImageOwner = issueTestSession().userId
+setAllFilesAccess({ userId: directImageOwner, enabled: true, confirmation: 'ALLOW_ALL_LOCAL_FILES' })
+
+function authorizedImages(placement = {}) {
+  return resolveOfficeArtifactImageInputs([{ path: imagePath, ...placement }], { userId: directImageOwner })
+}
+
+const resolveTestModelBinding = () => ({
+  providerId: null,
+  modelName: 'office-images-test-model',
+  configRevision: null,
+  env: {
+    MODEL_BASE_URL: 'http://127.0.0.1:11434/v1',
+    MODEL_NAME: 'office-images-test-model',
+  },
+})
 
 test.after(() => {
   closeDb()
@@ -39,8 +61,9 @@ async function openArtifact(result) {
 test('createPptx embeds authorized image bytes and slide relationships', async () => {
   const result = await createPptx({
     title: 'PPT image',
+    userId: directImageOwner,
     slides: [{ title: 'Image slide', bullets: ['Real image'] }],
-    images: [{ sourcePath: imagePath, alt: 'blue panel', target_index: 1 }],
+    images: authorizedImages({ alt: 'blue panel', target_index: 1 }),
   })
   const zip = await openArtifact(result)
   const media = Object.keys(zip.files).filter((name) => /^ppt\/media\/.+\.(?:png|jpe?g)$/i.test(name))
@@ -54,8 +77,9 @@ test('createPptx embeds authorized image bytes and slide relationships', async (
 test('createDocx embeds image bytes, drawing markup, and image relationship', async () => {
   const result = await createDocx({
     title: 'DOCX image',
+    userId: directImageOwner,
     paragraphs: [{ text: 'Body' }],
-    images: [{ sourcePath: imagePath, alt: 'blue panel', target_index: 1 }],
+    images: authorizedImages({ alt: 'blue panel', target_index: 1 }),
   })
   const zip = await openArtifact(result)
   assert.equal(result.imageCount, 1)
@@ -68,8 +92,9 @@ test('createDocx embeds image bytes, drawing markup, and image relationship', as
 test('createXlsx embeds image bytes with worksheet and drawing relationships', async () => {
   const result = await createXlsx({
     title: 'XLSX image',
+    userId: directImageOwner,
     sheets: [{ name: 'Data', rows: [['name', 'value'], ['a', 1]] }],
-    images: [{ sourcePath: imagePath, alt: 'blue panel', target_index: 1, anchor: 'D2' }],
+    images: authorizedImages({ alt: 'blue panel', target_index: 1, anchor: 'D2' }),
   })
   const zip = await openArtifact(result)
   assert.equal(result.imageCount, 1)
@@ -86,6 +111,89 @@ test('office generators reject raw unresolved model paths', async () => {
     () => createDocx({ title: 'unsafe', paragraphs: [{ text: 'x' }], images: [{ path: imagePath }] }),
     /not resolved through authorized local-file access/,
   )
+  await assert.rejects(
+    () => createDocx({ title: 'forged', paragraphs: [{ text: 'x' }], images: [{ sourcePath: imagePath }] }),
+    /not resolved through authorized local-file access/,
+  )
+})
+
+test('office image authorization is bound to its user and cannot be replayed', async () => {
+  const owner = issueTestSession().userId
+  const otherUser = issueTestSession().userId
+  setAllFilesAccess({ userId: owner, enabled: true, confirmation: 'ALLOW_ALL_LOCAL_FILES' })
+  const images = resolveOfficeArtifactImageInputs([{ path: imagePath }], { userId: owner })
+
+  await assert.rejects(
+    () => prepareOfficeArtifactImages(images, { userId: otherUser }),
+    /belongs to a different user/,
+  )
+  const [prepared] = await prepareOfficeArtifactImages(images, { userId: owner })
+  assert.ok(prepared.buffer.length > 0)
+  await assert.rejects(
+    () => prepareOfficeArtifactImages(images, { userId: owner }),
+    /already been consumed/,
+  )
+})
+
+test('office image authorization fails closed after access is revoked', async () => {
+  const owner = issueTestSession().userId
+  setAllFilesAccess({ userId: owner, enabled: true, confirmation: 'ALLOW_ALL_LOCAL_FILES' })
+  const images = resolveOfficeArtifactImageInputs([{ path: imagePath }], { userId: owner })
+  setAllFilesAccess({ userId: owner, enabled: false })
+
+  await assert.rejects(
+    () => prepareOfficeArtifactImages(images, { userId: owner }),
+  )
+})
+
+test('office image authorization rejects a file changed after resolution', async () => {
+  const owner = issueTestSession().userId
+  const changedPath = path.join(root, `changed-${Date.now()}.png`)
+  fs.copyFileSync(imagePath, changedPath)
+  setAllFilesAccess({ userId: owner, enabled: true, confirmation: 'ALLOW_ALL_LOCAL_FILES' })
+  const images = resolveOfficeArtifactImageInputs([{ path: changedPath }], { userId: owner })
+  fs.writeFileSync(changedPath, 'changed after authorization')
+
+  await assert.rejects(
+    () => prepareOfficeArtifactImages(images, { userId: owner }),
+    /changed after authorization/,
+  )
+})
+
+test('office image authorization rejects a file changed while its open handle is being read', async () => {
+  const owner = issueTestSession().userId
+  const changedDuringReadPath = path.join(root, `changed-during-read-${Date.now()}.png`)
+  fs.copyFileSync(imagePath, changedDuringReadPath)
+  setAllFilesAccess({ userId: owner, enabled: true, confirmation: 'ALLOW_ALL_LOCAL_FILES' })
+  const images = resolveOfficeArtifactImageInputs([{ path: changedDuringReadPath }], { userId: owner })
+  const canonicalTarget = fs.realpathSync(changedDuringReadPath)
+  const originalOpen = fs.promises.open
+  let interceptedRead = false
+
+  fs.promises.open = async (...args) => {
+    const handle = await originalOpen(...args)
+    if (path.resolve(String(args[0])) !== path.resolve(canonicalTarget)) return handle
+    return {
+      stat: (...statArgs) => handle.stat(...statArgs),
+      async readFile(...readArgs) {
+        const bytes = await handle.readFile(...readArgs)
+        interceptedRead = true
+        fs.writeFileSync(canonicalTarget, Buffer.alloc(bytes.length + 17, 0x41))
+        return bytes
+      },
+      close: (...closeArgs) => handle.close(...closeArgs),
+    }
+  }
+
+  try {
+    await assert.rejects(
+      () => prepareOfficeArtifactImages(images, { userId: owner }),
+      /changed after authorization/,
+    )
+    assert.equal(interceptedRead, true, 'test must mutate the file inside the open-handle read window')
+  } finally {
+    fs.promises.open = originalOpen
+  }
 })
 
 test('agent tool loop resolves all-files image input and produces a real embedded DOCX image', async () => {
@@ -95,6 +203,8 @@ test('agent tool loop resolves all-files image input and produces a real embedde
   setAllFilesAccess({ userId, enabled: true, confirmation: 'ALLOW_ALL_LOCAL_FILES' })
   let calls = 0
   const runtime = new JobRuntime({
+    modelBindingResolver: resolveTestModelBinding,
+    planner: buildInitialPlan,
     executeStep: createDefaultExecuteStep({
       runModelWithTools: async () => {
         calls += 1

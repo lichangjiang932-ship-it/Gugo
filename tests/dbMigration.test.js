@@ -13,7 +13,7 @@ process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-tests', String(process.pi
 
 function cleanDb() {
   const db = getDb()
-  for (const table of ['ledger', 'sessions', 'login_codes', 'users', 'rate_limits']) {
+  for (const table of ['sessions', 'login_codes', 'users', 'rate_limits']) {
     db.prepare(`DELETE FROM ${table}`).run()
   }
 }
@@ -26,7 +26,7 @@ test.after(() => {
   cleanDb()
 })
 
-test('legacy JSON migration is idempotent for ledger rows', () => {
+test('legacy JSON migration ignores retired billing data while preserving users and sessions idempotently', () => {
   const store = {
     users: {
       user_1: {
@@ -36,7 +36,9 @@ test('legacy JSON migration is idempotent for ledger rows', () => {
         createdAt: 1700000000000,
       },
     },
-    sessions: {},
+    sessions: {
+      'legacy-session-token': 'user_1',
+    },
     ledger: [
       {
         id: 'legacy-ledger-1',
@@ -53,9 +55,25 @@ test('legacy JSON migration is idempotent for ledger rows', () => {
   migrateFromJson(store)
   assert.doesNotThrow(() => migrateFromJson(store))
 
-  const rows = getDb().prepare('SELECT * FROM ledger WHERE id = ?').all('legacy-ledger-1')
-  assert.equal(rows.length, 1)
-  assert.equal(rows[0].balance, 100)
+  const db = getDb()
+  const user = db.prepare('SELECT id, email, created_at FROM users WHERE id = ?').get('user_1')
+  assert.deepEqual(user, {
+    id: 'user_1',
+    email: 'legacy@example.com',
+    created_at: 1700000000000,
+  })
+  const sessions = db.prepare(
+    'SELECT token, user_id FROM sessions WHERE token = ?',
+  ).all('legacy-session-token')
+  assert.deepEqual(sessions, [{ token: 'legacy-session-token', user_id: 'user_1' }])
+  assert.equal(
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ledger'").get(),
+    undefined,
+  )
+  assert.equal(
+    db.prepare('PRAGMA table_info(users)').all().some((column) => column.name === 'credits'),
+    false,
+  )
 })
 
 test('legacy sqlite schema upgrades before creating user-scoped indexes', () => {
@@ -169,6 +187,108 @@ test('legacy sqlite schema upgrades before creating user-scoped indexes', () => 
   }
 })
 
+test('fresh database reopens without retired billing schema or side-effect data loss', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-fresh-reopen-'))
+  const dbPath = path.join(dir, 'app.db')
+  const initializeScript = `
+    process.env.APP_DB_PATH = ${JSON.stringify(dbPath)};
+    const { getDb, closeDb } = await import('./server/db.js');
+    getDb();
+    closeDb();
+  `
+  const verifyScript = `
+    process.env.APP_DB_PATH = ${JSON.stringify(dbPath)};
+    const { getDb, closeDb } = await import('./server/db.js');
+    const db = getDb();
+    const tableExists = (table) => Boolean(db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?"
+    ).get(table));
+    const hasColumn = (table, column) => db.prepare(
+      'PRAGMA table_info(' + table + ')'
+    ).all().some((row) => row.name === column);
+    const state = {
+      ledgerExists: tableExists('ledger'),
+      usersCreditsExists: hasColumn('users', 'credits'),
+      subagentCreditsExists: hasColumn('subagent_runs', 'credits'),
+      sessionCostCreditsExists: hasColumn('session_meters', 'cost_credits'),
+      sideEffectTableExists: tableExists('side_effect_executions'),
+      sideEffect: db.prepare(\`
+        SELECT owner_id, scope_kind, scope_key, tool_call_id, idempotency_key,
+               tool_name, args_digest, status, outcome_json, created_at,
+               updated_at, prepared_at, finished_at
+          FROM side_effect_executions
+         WHERE owner_id = ? AND scope_key = ? AND tool_call_id = ?
+      \`).get('reopen-owner', 'turn:reopen', 'call-reopen'),
+    };
+    console.log(JSON.stringify(state));
+    closeDb();
+  `
+
+  try {
+    const initialized = spawnSync(
+      process.execPath,
+      ['--input-type=module', '--eval', initializeScript],
+      { cwd: process.cwd(), encoding: 'utf8' },
+    )
+    assert.equal(initialized.status, 0, initialized.stderr || initialized.stdout)
+
+    const seedDb = new Database(dbPath)
+    try {
+      seedDb.prepare(`
+        INSERT INTO side_effect_executions (
+          owner_id, scope_kind, scope_key, tool_call_id, idempotency_key,
+          tool_name, args_digest, status, outcome_json, created_at,
+          updated_at, prepared_at, finished_at
+        ) VALUES (?, 'turn', ?, ?, ?, 'write_file', ?, 'committed', ?, 101, 102, 101, 102)
+      `).run(
+        'reopen-owner',
+        'turn:reopen',
+        'call-reopen',
+        'idem-reopen',
+        'a'.repeat(64),
+        JSON.stringify({ ok: true, marker: 'fresh-reopen' }),
+      )
+    } finally {
+      seedDb.close()
+    }
+
+    const expected = {
+      ledgerExists: false,
+      usersCreditsExists: false,
+      subagentCreditsExists: false,
+      sessionCostCreditsExists: false,
+      sideEffectTableExists: true,
+      sideEffect: {
+        owner_id: 'reopen-owner',
+        scope_kind: 'turn',
+        scope_key: 'turn:reopen',
+        tool_call_id: 'call-reopen',
+        idempotency_key: 'idem-reopen',
+        tool_name: 'write_file',
+        args_digest: 'a'.repeat(64),
+        status: 'committed',
+        outcome_json: JSON.stringify({ ok: true, marker: 'fresh-reopen' }),
+        created_at: 101,
+        updated_at: 102,
+        prepared_at: 101,
+        finished_at: 102,
+      },
+    }
+
+    for (let startup = 1; startup <= 2; startup += 1) {
+      const result = spawnSync(
+        process.execPath,
+        ['--input-type=module', '--eval', verifyScript],
+        { cwd: process.cwd(), encoding: 'utf8' },
+      )
+      assert.equal(result.status, 0, result.stderr || result.stdout)
+      assert.deepEqual(JSON.parse(result.stdout.trim()), expected, `startup ${startup}`)
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('rate limit cleanup does not delete other keys with longer windows', () => {
   const now = 1_700_000_000_000
   const db = getDb()
@@ -223,8 +343,8 @@ test('E2: inserting a job with unknown user_id is rejected by FK', () => {
 test('E2: deleting a user cascades to their jobs', () => {
   const db = getDb()
   const now = Date.now()
-  db.prepare('INSERT INTO users (id, email, credits, created_at, updated_at) VALUES (?,?,?,?,?)')
-    .run('cascade-user', 'cascade@example.com', 0, now, now)
+  db.prepare('INSERT INTO users (id, email, created_at, updated_at) VALUES (?,?,?,?)')
+    .run('cascade-user', 'cascade@example.com', now, now)
   db.prepare(
     'INSERT INTO jobs (id, user_id, title, prompt, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
   ).run('job_cascade', 'cascade-user', 't', 'p', 'queued', now, now)

@@ -30,6 +30,12 @@ function assertMeta(meta) {
   }
 }
 
+function assertWriteSequence(value) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError('initialWriteSequence must be a non-negative safe integer')
+  }
+}
+
 function mergeMeta(baseMeta, flushMeta) {
   assertMeta(baseMeta)
   assertMeta(flushMeta)
@@ -96,12 +102,15 @@ export function createCheckpointBarrier({
   saveCheckpoint = null,
   stateFactory = null,
   meta: baseMeta,
+  initialWriteSequence = 0,
 } = {}) {
   assertSaveCheckpoint(saveCheckpoint)
   assertStateFactory(stateFactory)
   assertMeta(baseMeta)
+  assertWriteSequence(initialWriteSequence)
 
   const enabled = saveCheckpoint != null
+  let latestWriteSequence = initialWriteSequence
 
   const flush = async (overrides = {}) => {
     if (overrides == null || typeof overrides !== 'object' || Array.isArray(overrides)) {
@@ -111,7 +120,16 @@ export function createCheckpointBarrier({
     const overrideFactory = Object.hasOwn(overrides, 'stateFactory')
       ? overrides.stateFactory
       : stateFactory
-    const meta = mergeMeta(baseMeta, overrides.meta)
+    const mergedMeta = mergeMeta(baseMeta, overrides.meta)
+    const meta = enabled ? { ...(mergedMeta || {}) } : mergedMeta
+    if (enabled) {
+      Object.defineProperty(meta, 'checkpointWriteSequence', {
+        value: ++latestWriteSequence,
+        enumerable: false,
+        configurable: false,
+        writable: false,
+      })
+    }
     const options = {
       saveCheckpoint,
       stateFactory: overrideFactory,
@@ -126,5 +144,8 @@ export function createCheckpointBarrier({
     enabled,
     flush,
     beforeSideEffect: flush,
+    get latestWriteSequence() {
+      return latestWriteSequence
+    },
   })
 }

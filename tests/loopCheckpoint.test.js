@@ -57,6 +57,31 @@ test('each barrier invocation takes and persists a fresh state before returning'
   ])
 })
 
+test('barrier write sequences resume monotonically without becoming public metadata', async () => {
+  const observed = []
+  const barrier = createCheckpointBarrier({
+    initialWriteSequence: 7,
+    stateFactory: (meta) => ({ checkpointWriteSequence: meta.checkpointWriteSequence }),
+    saveCheckpoint: async (state, meta) => {
+      observed.push({
+        stateSequence: state.checkpointWriteSequence,
+        metaSequence: meta.checkpointWriteSequence,
+        enumerable: Object.keys(meta).includes('checkpointWriteSequence'),
+      })
+      return true
+    },
+  })
+
+  await barrier.flush()
+  await barrier.flush()
+
+  assert.deepEqual(observed, [
+    { stateSequence: 8, metaSequence: 8, enumerable: false },
+    { stateSequence: 9, metaSequence: 9, enumerable: false },
+  ])
+  assert.equal(barrier.latestWriteSequence, 9)
+})
+
 test('base and per-flush metadata merge without polluting checkpoint state', async () => {
   const state = { messages: ['user'], nested: { stable: true } }
   let factoryMeta

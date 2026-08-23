@@ -1,4 +1,5 @@
 import { getDb } from '../db.js'
+import { assertUserDataMutationAllowed } from './userDataClearGuard.js'
 
 // A turn can briefly monopolize the event loop while packaging a large local
 // artifact. Keep enough expiry headroom for a saturated Windows host; the
@@ -14,6 +15,44 @@ function validScope({ userId, sessionId, turnId } = {}) {
   return !!(userId && sessionId && turnId)
 }
 
+function normalizedFencingToken(value) {
+  const token = Number(value)
+  return Number.isSafeInteger(token) && token > 0 ? token : null
+}
+
+function rememberFencingToken(db, { userId, sessionId, turnId, fencingToken, now }) {
+  db.prepare(`
+    INSERT INTO turn_execution_fences
+      (user_id, session_id, turn_id, fencing_token, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, session_id, turn_id) DO UPDATE SET
+      fencing_token = MAX(turn_execution_fences.fencing_token, excluded.fencing_token),
+      updated_at = MAX(turn_execution_fences.updated_at, excluded.updated_at)
+  `).run(userId, sessionId, turnId, fencingToken, now)
+}
+
+function allocateFencingToken(db, { userId, sessionId, turnId, currentToken, now }) {
+  const counter = db.prepare(`
+    SELECT fencing_token
+    FROM turn_execution_fences
+    WHERE user_id = ? AND session_id = ? AND turn_id = ?
+  `).get(userId, sessionId, turnId)
+  const previous = Math.max(
+    normalizedFencingToken(counter?.fencing_token) || 0,
+    normalizedFencingToken(currentToken) || 0,
+  )
+  if (previous >= Number.MAX_SAFE_INTEGER) {
+    const error = new Error('turn execution fencing token space is exhausted')
+    error.code = 'TURN_EXECUTION_FENCE_EXHAUSTED'
+    error.status = 503
+    error.retryable = false
+    throw error
+  }
+  const fencingToken = previous + 1
+  rememberFencingToken(db, { userId, sessionId, turnId, fencingToken, now })
+  return fencingToken
+}
+
 function mapLease(row) {
   return row ? {
     userId: row.user_id,
@@ -22,6 +61,7 @@ function mapLease(row) {
     ownerId: row.owner_id,
     acquiredAt: row.acquired_at,
     expiresAt: row.expires_at,
+    fencingToken: row.fencing_token,
     cancelRequestedAt: row.cancel_requested_at ?? null,
     acceptingSteering: row.accepting_steering !== 0,
   } : null
@@ -44,29 +84,60 @@ export function claimTurnExecutionLease({
   const expiresAt = now + normalizedDuration(leaseMs)
   const db = getDb()
   return db.transaction(() => {
-    const terminal = db.prepare(`
-      SELECT 1 FROM turn_events
+    assertUserDataMutationAllowed(
+      db,
+      userId,
+      'A turn cannot start while local session data is being deleted',
+    )
+    const latest = db.prepare(`
+      SELECT type FROM turn_events
       WHERE user_id = ? AND session_id = ? AND turn_id = ?
-        AND type IN ('turn.completed', 'turn.cancelled', 'turn.failed')
+      ORDER BY sequence DESC
       LIMIT 1
     `).get(userId, sessionId, turnId)
-    if (terminal) return false
+    if (['turn.completed', 'turn.cancelled', 'turn.failed'].includes(latest?.type)) return false
+    const current = db.prepare(`
+      SELECT owner_id, expires_at, fencing_token
+      FROM turn_execution_leases
+      WHERE user_id = ? AND session_id = ? AND turn_id = ?
+    `).get(userId, sessionId, turnId)
+    if (current && current.owner_id !== ownerId && current.expires_at > now) return false
+
+    const sameLiveOwner = current?.owner_id === ownerId && current.expires_at > now
+    const fencingToken = sameLiveOwner
+      ? normalizedFencingToken(current.fencing_token)
+      : allocateFencingToken(db, {
+          userId,
+          sessionId,
+          turnId,
+          currentToken: current?.fencing_token,
+          now,
+        })
+    if (!fencingToken) {
+      throw new Error('turn execution lease has an invalid fencing token')
+    }
+    if (sameLiveOwner) {
+      rememberFencingToken(db, { userId, sessionId, turnId, fencingToken, now })
+    }
     const result = db.prepare(`
       INSERT INTO turn_execution_leases
-        (user_id, session_id, turn_id, owner_id, acquired_at, expires_at, cancel_requested_at, accepting_steering)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, 1)
+        (user_id, session_id, turn_id, owner_id, acquired_at, expires_at,
+         cancel_requested_at, accepting_steering, fencing_token)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, 1, ?)
       ON CONFLICT(user_id, session_id, turn_id) DO UPDATE SET
         owner_id = excluded.owner_id,
         acquired_at = excluded.acquired_at,
         expires_at = excluded.expires_at,
+        fencing_token = excluded.fencing_token,
         accepting_steering = CASE
           WHEN turn_execution_leases.owner_id = excluded.owner_id
+            AND turn_execution_leases.expires_at > excluded.acquired_at
             THEN turn_execution_leases.accepting_steering
           ELSE 1
         END
       WHERE turn_execution_leases.owner_id = excluded.owner_id
          OR turn_execution_leases.expires_at <= excluded.acquired_at
-    `).run(userId, sessionId, turnId, ownerId, now, expiresAt)
+    `).run(userId, sessionId, turnId, ownerId, now, expiresAt, fencingToken)
     return result.changes === 1
   }).immediate()
 }
@@ -76,10 +147,12 @@ export function renewTurnExecutionLease({
   sessionId,
   turnId,
   ownerId,
+  fencingToken,
   now = Date.now(),
   leaseMs = DEFAULT_TURN_EXECUTION_LEASE_MS,
 } = {}) {
-  if (!validScope({ userId, sessionId, turnId }) || !ownerId) {
+  const token = normalizedFencingToken(fencingToken)
+  if (!validScope({ userId, sessionId, turnId }) || !ownerId || !token) {
     return { renewed: false, cancelRequested: false }
   }
   const expiresAt = now + normalizedDuration(leaseMs)
@@ -89,14 +162,15 @@ export function renewTurnExecutionLease({
       UPDATE turn_execution_leases
       SET expires_at = ?
       WHERE user_id = ? AND session_id = ? AND turn_id = ?
-        AND owner_id = ? AND expires_at > ?
-    `).run(expiresAt, userId, sessionId, turnId, ownerId, now)
+        AND owner_id = ? AND fencing_token = ? AND expires_at > ?
+    `).run(expiresAt, userId, sessionId, turnId, ownerId, token, now)
     if (updated.changes !== 1) return { renewed: false, cancelRequested: false }
     const row = db.prepare(`
       SELECT cancel_requested_at
       FROM turn_execution_leases
-      WHERE user_id = ? AND session_id = ? AND turn_id = ? AND owner_id = ?
-    `).get(userId, sessionId, turnId, ownerId)
+      WHERE user_id = ? AND session_id = ? AND turn_id = ?
+        AND owner_id = ? AND fencing_token = ?
+    `).get(userId, sessionId, turnId, ownerId, token)
     return { renewed: true, cancelRequested: row?.cancel_requested_at != null }
   })()
 }
@@ -128,19 +202,24 @@ export function tryCloseTurnSteeringInbox({
   sessionId,
   turnId,
   ownerId,
+  fencingToken,
   now = Date.now(),
 } = {}) {
-  if (!validScope({ userId, sessionId, turnId }) || !ownerId) {
+  const token = normalizedFencingToken(fencingToken)
+  if (!validScope({ userId, sessionId, turnId }) || !ownerId || !token) {
     return { closed: false, reason: 'not_owner', pendingCount: 0 }
   }
   const db = getDb()
   return db.transaction(() => {
     const lease = db.prepare(`
-      SELECT owner_id, expires_at, accepting_steering
+      SELECT owner_id, expires_at, accepting_steering, fencing_token
       FROM turn_execution_leases
       WHERE user_id = ? AND session_id = ? AND turn_id = ?
     `).get(userId, sessionId, turnId)
-    if (!lease || lease.owner_id !== ownerId || lease.expires_at <= now) {
+    if (!lease
+      || lease.owner_id !== ownerId
+      || lease.fencing_token !== token
+      || lease.expires_at <= now) {
       return { closed: false, reason: 'not_owner', pendingCount: 0 }
     }
     if (lease.accepting_steering === 0) {
@@ -161,20 +240,29 @@ export function tryCloseTurnSteeringInbox({
       UPDATE turn_execution_leases
       SET accepting_steering = 0
       WHERE user_id = ? AND session_id = ? AND turn_id = ?
-        AND owner_id = ? AND expires_at > ? AND accepting_steering = 1
-    `).run(userId, sessionId, turnId, ownerId, now).changes === 1
+        AND owner_id = ? AND fencing_token = ?
+        AND expires_at > ? AND accepting_steering = 1
+    `).run(userId, sessionId, turnId, ownerId, token, now).changes === 1
     return closed
       ? { closed: true, reason: 'closed', pendingCount: 0 }
       : { closed: false, reason: 'not_owner', pendingCount: 0 }
   }).immediate()
 }
 
-export function releaseTurnExecutionLease({ userId, sessionId, turnId, ownerId } = {}) {
-  if (!validScope({ userId, sessionId, turnId }) || !ownerId) return false
+export function releaseTurnExecutionLease({
+  userId,
+  sessionId,
+  turnId,
+  ownerId,
+  fencingToken,
+} = {}) {
+  const token = normalizedFencingToken(fencingToken)
+  if (!validScope({ userId, sessionId, turnId }) || !ownerId || !token) return false
   return getDb().prepare(`
     DELETE FROM turn_execution_leases
-    WHERE user_id = ? AND session_id = ? AND turn_id = ? AND owner_id = ?
-  `).run(userId, sessionId, turnId, ownerId).changes === 1
+    WHERE user_id = ? AND session_id = ? AND turn_id = ?
+      AND owner_id = ? AND fencing_token = ?
+  `).run(userId, sessionId, turnId, ownerId, token).changes === 1
 }
 
 export function getTurnExecutionLease({ userId, sessionId, turnId } = {}) {
@@ -228,6 +316,7 @@ export function listUnfinishedTurnExecutions({ before = Date.now(), limit = 10_0
       latest.created_at AS last_event_at,
       lease.owner_id,
       lease.expires_at,
+      lease.fencing_token,
       lease.cancel_requested_at
     FROM summaries AS summary
     JOIN turn_events AS latest
@@ -255,6 +344,7 @@ export function listUnfinishedTurnExecutions({ before = Date.now(), limit = 10_0
     lease: row.owner_id ? {
       ownerId: row.owner_id,
       expiresAt: row.expires_at,
+      fencingToken: row.fencing_token,
       cancelRequestedAt: row.cancel_requested_at ?? null,
     } : null,
   }))

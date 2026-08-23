@@ -1,4 +1,5 @@
 import { getDb } from '../db.js'
+import { assertManagedArtifactMutationAllowed } from './userDataClearGuard.js'
 import { normalizeTaskGrants } from '../utils/taskGrants.js'
 
 const STRUCTURED_EVIDENCE_STEP_KINDS = new Set(['execute', 'batch_item', 'verify'])
@@ -102,6 +103,8 @@ function mapJob(row) {
     title: row.title,
     prompt: row.prompt,
     modelName: row.model_name || null,
+    modelProviderId: row.model_provider_id || null,
+    modelConfigRevision: Number.isInteger(row.model_config_revision) ? row.model_config_revision : null,
     sourceType: row.source_type || null,
     sourceId: row.source_id || null,
     grants: (() => {
@@ -180,6 +183,8 @@ export function createJob({
   title,
   prompt,
   modelName = null,
+  modelProviderId = null,
+  modelConfigRevision = null,
   sourceType = null,
   sourceId = null,
   grants = [],
@@ -189,6 +194,14 @@ export function createJob({
 }) {
   if (!userId) throw new Error('createJob requires userId')
   const selectedModel = boundedText(modelName, 512) || null
+  const selectedProviderId = boundedText(modelProviderId, 512) || null
+  const selectedConfigRevision = Number(modelConfigRevision)
+  const normalizedConfigRevision = Number.isInteger(selectedConfigRevision) && selectedConfigRevision > 0
+    ? selectedConfigRevision
+    : null
+  if ((selectedProviderId === null) !== (normalizedConfigRevision === null)) {
+    throw new Error('modelProviderId and modelConfigRevision must be provided together')
+  }
   const normalizedSourceType = boundedText(sourceType, 64) || null
   const normalizedSourceId = boundedText(sourceId, 512) || null
   const normalizedGrants = normalizeTaskGrants(grants)
@@ -197,16 +210,18 @@ export function createJob({
   }
   getDb().prepare(`
     INSERT INTO jobs (
-      id, user_id, title, prompt, model_name, source_type, source_id, grants_json,
-      status, progress, created_at, updated_at
+      id, user_id, title, prompt, model_name, model_provider_id, model_config_revision,
+      source_type, source_id, grants_json, status, progress, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     userId,
     title,
     prompt,
     selectedModel,
+    selectedProviderId,
+    normalizedConfigRevision,
     normalizedSourceType,
     normalizedSourceId,
     JSON.stringify(normalizedGrants),
@@ -272,6 +287,38 @@ export function updateJob(id, updates = {}, now = Date.now()) {
   return getJob(id)
 }
 
+/**
+ * Refresh the immutable model snapshot only for an explicit user retry.
+ * Automatic recovery must keep using the original snapshot so config drift is
+ * detected before execution resumes.
+ */
+export function updateJobModelSnapshot(id, {
+  userId,
+  modelName,
+  modelProviderId = null,
+  modelConfigRevision = null,
+} = {}, now = Date.now()) {
+  if (!userId) throw new Error('updateJobModelSnapshot requires userId')
+  const current = getJob(id, { userId })
+  if (!current) return null
+  const selectedModel = boundedText(modelName, 512) || null
+  const selectedProviderId = boundedText(modelProviderId, 512) || null
+  const selectedRevision = Number(modelConfigRevision)
+  const normalizedRevision = Number.isInteger(selectedRevision) && selectedRevision > 0
+    ? selectedRevision
+    : null
+  if (!selectedModel) throw new Error('modelName is required')
+  if ((selectedProviderId === null) !== (normalizedRevision === null)) {
+    throw new Error('modelProviderId and modelConfigRevision must be provided together')
+  }
+  getDb().prepare(`
+    UPDATE jobs
+    SET model_name = ?, model_provider_id = ?, model_config_revision = ?, updated_at = ?
+    WHERE id = ? AND user_id = ?
+  `).run(selectedModel, selectedProviderId, normalizedRevision, now, id, userId)
+  return getJob(id, { userId })
+}
+
 export function appendJobSteps(jobId, steps = [], now = Date.now()) {
   const stmt = getDb().prepare(`
     INSERT INTO job_steps
@@ -298,44 +345,192 @@ export function appendJobSteps(jobId, steps = [], now = Date.now()) {
   tx(steps)
 }
 
-export function replacePendingJobSteps(jobId, steps = [], now = Date.now()) {
-  const db = getDb()
+function replacePendingJobStepsInDb(db, jobId, steps = [], now = Date.now()) {
   const insert = db.prepare(`
     INSERT INTO job_steps
       (id, job_id, parent_step_id, title, kind, status, sort_order, input_json, created_at, updated_at)
     VALUES
       (@id, @jobId, @parentStepId, @title, @kind, @status, @sortOrder, @inputJson, @createdAt, @updatedAt)
   `)
-  const tx = db.transaction((rows) => {
-    const immutable = db.prepare(`
-      SELECT COUNT(*) AS count
-        FROM job_steps
-       WHERE job_id = ?
-         AND kind <> 'plan'
-         AND status NOT IN ('queued', 'pending')
-    `).get(jobId)
-    if (immutable.count > 0) throw new Error('plan steps can no longer be edited after execution starts')
-    db.prepare(`
-      DELETE FROM job_steps
-       WHERE job_id = ?
-         AND kind <> 'plan'
-         AND status IN ('queued', 'pending')
-    `).run(jobId)
-    rows.forEach((step, index) => insert.run({
-      id: step.id,
-      jobId,
-      parentStepId: step.parentStepId || null,
-      title: step.title,
-      kind: step.kind,
-      status: step.status || 'queued',
-      sortOrder: step.sortOrder ?? index + 1,
-      inputJson: step.input == null ? null : JSON.stringify(step.input),
-      createdAt: now,
-      updatedAt: now,
-    }))
-  })
+  const immutable = db.prepare(`
+    SELECT COUNT(*) AS count
+      FROM job_steps
+     WHERE job_id = ?
+       AND kind <> 'plan'
+       AND status NOT IN ('queued', 'pending')
+  `).get(jobId)
+  if (immutable.count > 0) throw new Error('plan steps can no longer be edited after execution starts')
+  db.prepare(`
+    DELETE FROM job_steps
+     WHERE job_id = ?
+       AND kind <> 'plan'
+       AND status IN ('queued', 'pending')
+  `).run(jobId)
+  steps.forEach((step, index) => insert.run({
+    id: step.id,
+    jobId,
+    parentStepId: step.parentStepId || null,
+    title: step.title,
+    kind: step.kind,
+    status: step.status || 'queued',
+    sortOrder: step.sortOrder ?? index + 1,
+    inputJson: step.input == null ? null : JSON.stringify(step.input),
+    createdAt: now,
+    updatedAt: now,
+  }))
+}
+
+export function replacePendingJobSteps(jobId, steps = [], now = Date.now()) {
+  const db = getDb()
+  const tx = db.transaction((rows) => replacePendingJobStepsInDb(db, jobId, rows, now))
   tx(steps)
   return listJobSteps(jobId)
+}
+
+/**
+ * Atomically approve the latest durable plan proposal. The caller supplies the
+ * semantic digest function so this storage layer stays independent from the
+ * policy module (which already depends on job creation/storage).
+ */
+export function approveJobPlan({
+  jobId,
+  userId,
+  proposalEventId,
+  proposalPlanDigest,
+  approvedPlanDigest,
+  replacementSteps = null,
+  edited = false,
+  previousMode = null,
+  contract,
+  version,
+  computePlanDigest,
+  now = Date.now(),
+} = {}) {
+  if (!jobId || !userId) throw new Error('approveJobPlan requires jobId and userId')
+  if (typeof computePlanDigest !== 'function') throw new Error('approveJobPlan requires computePlanDigest')
+  const expectedProposalId = Number(proposalEventId)
+  if (!Number.isInteger(expectedProposalId) || expectedProposalId < 1) {
+    throw new Error('approveJobPlan requires a valid proposalEventId')
+  }
+  const db = getDb()
+  const transaction = db.transaction(() => {
+    const jobRow = db.prepare('SELECT * FROM jobs WHERE id = ? AND user_id = ?').get(jobId, userId)
+    if (!jobRow) return { status: 'not_found' }
+
+    const latestProposal = mapEvent(db.prepare(`
+      SELECT * FROM job_events
+       WHERE job_id = ? AND type = 'plan_proposed'
+       ORDER BY id DESC
+       LIMIT 1
+    `).get(jobId))
+    if (!latestProposal || latestProposal.id !== expectedProposalId) {
+      return {
+        status: 'proposal_changed',
+        proposalEventId: latestProposal?.id || null,
+      }
+    }
+    const currentSteps = db.prepare('SELECT * FROM job_steps WHERE job_id = ? ORDER BY sort_order ASC')
+      .all(jobId)
+      .map(mapStep)
+    const currentPlanDigest = computePlanDigest(currentSteps)
+    const approvalEvents = db.prepare(`
+      SELECT * FROM job_events
+       WHERE job_id = ? AND type = 'plan_approved'
+       ORDER BY id DESC
+    `).all(jobId).map(mapEvent)
+    const existingApproval = approvalEvents.find((event) => (
+      event.payload?.contract === contract
+        && event.payload?.version === version
+        && Number(event.payload?.proposalEventId) === expectedProposalId
+        && event.payload?.proposalPlanDigest === proposalPlanDigest
+        && event.payload?.approvedPlanDigest === approvedPlanDigest
+    ))
+    if (existingApproval && currentPlanDigest === approvedPlanDigest) {
+      return {
+        status: 'approved',
+        idempotent: true,
+        event: existingApproval,
+        approvedPlanDigest,
+      }
+    }
+
+    if (jobRow.status !== 'waiting') return { status: 'not_waiting' }
+    const latestSuspension = mapEvent(db.prepare(`
+      SELECT * FROM job_events
+       WHERE job_id = ? AND type IN ('plan_proposed', 'awaiting_user')
+       ORDER BY id DESC
+       LIMIT 1
+    `).get(jobId))
+    if (latestSuspension?.type !== 'plan_proposed' || latestSuspension.id !== expectedProposalId) {
+      return { status: 'not_waiting_for_plan' }
+    }
+    if (latestProposal.payload?.contract !== contract
+      || latestProposal.payload?.version !== version
+      || latestProposal.payload?.planDigest !== proposalPlanDigest) {
+      return { status: 'proposal_contract_invalid' }
+    }
+    if (currentPlanDigest !== proposalPlanDigest) {
+      return {
+        status: 'plan_changed',
+        currentPlanDigest,
+      }
+    }
+
+    if (replacementSteps !== null) {
+      replacePendingJobStepsInDb(db, jobId, replacementSteps, now)
+    }
+    const finalSteps = db.prepare('SELECT * FROM job_steps WHERE job_id = ? ORDER BY sort_order ASC')
+      .all(jobId)
+      .map(mapStep)
+    const finalPlanDigest = computePlanDigest(finalSteps)
+    if (finalPlanDigest !== approvedPlanDigest) {
+      const error = new Error('approved plan digest did not match the persisted plan')
+      error.code = 'JOB_PLAN_APPROVAL_DIGEST_MISMATCH'
+      throw error
+    }
+
+    const update = db.prepare(`
+      UPDATE jobs
+         SET status = 'queued', error = NULL, finished_at = NULL, updated_at = ?
+       WHERE id = ? AND user_id = ? AND status = 'waiting'
+    `).run(now, jobId, userId)
+    if (update.changes !== 1) {
+      const error = new Error('job plan approval lost its compare-and-swap race')
+      error.code = 'JOB_PLAN_APPROVAL_CAS_FAILED'
+      throw error
+    }
+
+    const stepCount = finalSteps.filter((step) => step.kind !== 'plan').length
+    const payload = {
+      contract,
+      version,
+      scope: 'job',
+      proposalEventId: expectedProposalId,
+      proposalPlanDigest,
+      approvedPlanDigest: finalPlanDigest,
+      previousMode,
+      mode: previousMode,
+      edited: edited === true,
+      stepCount,
+    }
+    const info = db.prepare(`
+      INSERT INTO job_events (job_id, step_id, type, message, payload_json, created_at)
+      VALUES (?, NULL, 'plan_approved', ?, ?, ?)
+    `).run(
+      jobId,
+      'Plan approved; execution has been requeued',
+      JSON.stringify(payload),
+      now,
+    )
+    const event = mapEvent(db.prepare('SELECT * FROM job_events WHERE id = ?').get(info.lastInsertRowid))
+    return {
+      status: 'approved',
+      idempotent: false,
+      event,
+      approvedPlanDigest: finalPlanDigest,
+    }
+  })
+  return transaction()
 }
 
 export function getJobStep(stepId) {
@@ -458,11 +653,20 @@ export function appendJobArtifact({
   now = Date.now(),
 }) {
   if (!userId) throw new Error('appendJobArtifact requires userId')
-  getDb().prepare(`
-    INSERT INTO job_artifacts (id, job_id, user_id, step_id, type, title, url, filename, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, jobId, userId, stepId, type, title, url, filename, now)
-  return listJobArtifacts(jobId).find((artifact) => artifact.id === id) || null
+  const db = getDb()
+  return db.transaction(() => {
+    assertManagedArtifactMutationAllowed(
+      db,
+      'Artifacts cannot change while local data is being cleared',
+    )
+    db.prepare(`
+      INSERT INTO job_artifacts (id, job_id, user_id, step_id, type, title, url, filename, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, jobId, userId, stepId, type, title, url, filename, now)
+    return mapArtifact(db.prepare(
+      'SELECT * FROM job_artifacts WHERE id = ? AND user_id = ?',
+    ).get(id, userId))
+  }).immediate()
 }
 
 export function listJobArtifacts(jobId) {

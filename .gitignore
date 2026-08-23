@@ -47,6 +47,17 @@ server-data/
 /coverage/
 /tmp/
 /temp/
+/artifacts/
+/.tmp-*/
+
+# Generated root-level test/repro outputs. Keep local copies available without
+# ever publishing them as source or release assets.
+/echo
+/Attachment-background-revision*.html
+/Original-replace*.html
+/Revised-copy*.html
+/*.pptx
+/*.docx
 
 # Local databases and sidecars must never be published from the repository root.
 /*.db
@@ -61,6 +72,13 @@ server-data/
 /*.sqlite3-journal
 /*.sqlite3-wal
 /*.sqlite3-shm
+
+# Invalid SQLite paths from pre-v99 startup coercion bugs. Keep any recovered
+# local files on disk, but never allow them into source control.
+/undefined
+/undefined-journal
+/undefined-wal
+/undefined-shm
 
 # Root-level certificate/private-key material and generated backup archives.
 /*.pem

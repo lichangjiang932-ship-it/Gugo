@@ -43,6 +43,9 @@ import {
 import {
   requestedArtifactOutputDirective,
 } from './htmlArtifactInput.js'
+import {
+  markSideEffectOutcomeKnownFailed,
+} from '../sideEffectExecution.js'
 
 export function artifactDeliveryError(expectedTools) {
   const names = [...expectedTools].join(', ')
@@ -343,18 +346,31 @@ export function publishedArtifactResult({
 }
 
 export function cleanupGeneratedArtifactBatch({ artifacts = [], deliveries = [] } = {}) {
+  let cleanupComplete = true
   for (const delivery of deliveries) {
     const deliveryPath = String(delivery?.path || delivery?.localPath || '').trim()
     if (!deliveryPath || !path.isAbsolute(deliveryPath)) continue
-    try { fs.rmSync(deliveryPath, { force: true }) } catch { /* best-effort cleanup */ }
+    try {
+      fs.rmSync(deliveryPath, { force: true })
+      if (fs.existsSync(deliveryPath)) cleanupComplete = false
+    } catch {
+      cleanupComplete = false
+    }
   }
   for (const artifact of artifacts) {
-    deleteArtifactSourceSnapshot(artifact?.id)
-    discardInvalidGeneratedArtifactFile({
-      filePath: artifact?.fullPath,
+    try {
+      deleteArtifactSourceSnapshot(artifact?.id)
+    } catch {
+      cleanupComplete = false
+    }
+    const filePath = String(artifact?.fullPath || '').trim()
+    const removed = discardInvalidGeneratedArtifactFile({
+      filePath,
       artifactDirectory: getArtifactDir(),
     })
+    if (filePath && !removed && fs.existsSync(filePath)) cleanupComplete = false
   }
+  return cleanupComplete
 }
 
 /**
@@ -366,17 +382,16 @@ export function cleanupGeneratedArtifactBatch({ artifacts = [], deliveries = [] 
 export async function publishGeneratedArtifactBatch({ name, entries, job, step, requiresLocalArtifactDelivery }) {
   const batch = Array.isArray(entries) ? entries : []
   const artifacts = batch.map((entry) => entry.artifact)
-  for (const { artifact } of batch) {
-    await validateGeneratedArtifactFile({
-      filePath: artifact?.fullPath,
-      filename: artifact?.filename,
-      artifactType: artifact?.type,
-      toolName: name,
-    })
-  }
-
   const deliveries = []
   try {
+    for (const { artifact } of batch) {
+      await validateGeneratedArtifactFile({
+        filePath: artifact?.fullPath,
+        filename: artifact?.filename,
+        artifactType: artifact?.type,
+        toolName: name,
+      })
+    }
     getDb().transaction(() => {
       for (const { artifact, args, extra } of batch) {
         writeArtifactSourceSnapshot({ artifactId: artifact.id, toolName: name, args })
@@ -400,7 +415,12 @@ export async function publishGeneratedArtifactBatch({ name, entries, job, step, 
     })()
     return deliveries
   } catch (error) {
-    cleanupGeneratedArtifactBatch({ artifacts, deliveries })
-    throw error
+    const cleanupComplete = cleanupGeneratedArtifactBatch({ artifacts, deliveries })
+    throw cleanupComplete
+      ? markSideEffectOutcomeKnownFailed(error, {
+          code: error?.code,
+          retryable: error?.retryable === true,
+        })
+      : error
   }
 }

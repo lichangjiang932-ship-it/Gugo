@@ -1,12 +1,31 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { validateRuntimeStoragePath } from './runtimeStoragePath.js'
 
 // 只在第一次没找到 .env 时提示一次,避免每次调用都刷屏
 let missingEnvWarned = false
-const MAX_RUNTIME_CONFIG_BYTES = 64 * 1024
+export const MAX_RUNTIME_CONFIG_BYTES = 64 * 1024
 const RUNTIME_CONFIG_RELATIVE_PATH = path.join('.gugo', 'runtime.json')
 const SENSITIVE_CONFIG_KEY = /(API_?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|PRIVATE_?KEY)/i
 const BOOTSTRAP_ENV_KEYS = new Set(Object.keys(process.env))
+const USER_CONFIG_SELF_RELOCATION_KEYS = Object.freeze(['APP_DATA_DIR', 'APP_CONFIG_PATH'])
+const RUNTIME_STARTUP_IDENTITY_KEYS = Object.freeze([
+  'APP_DATA_DIR',
+  'APP_DB_PATH',
+  'APP_CONFIG_PATH',
+])
+
+function runtimeConfigSelfRelocationError(key, filePath, requestedPath = null) {
+  const error = new Error(
+    `${key} cannot relocate its own runtime config source: ${filePath}`,
+  )
+  error.code = 'RUNTIME_CONFIG_SELF_RELOCATION'
+  error.retryable = false
+  error.key = key
+  error.sourcePath = filePath
+  error.requestedPath = requestedPath
+  return error
+}
 
 export const WORKSPACE_FEATURE_ENV_KEYS = Object.freeze([
   'WORKSPACE_FS_ENABLED',
@@ -15,37 +34,98 @@ export const WORKSPACE_FEATURE_ENV_KEYS = Object.freeze([
   'WORKSPACE_GIT_MUTATION_ENABLED',
 ])
 
+function runtimeConfigFileError(message, {
+  code = 'RUNTIME_CONFIG_FILE_INVALID',
+  statusCode = 422,
+  sourcePath = null,
+  key = null,
+  cause = null,
+} = {}) {
+  const error = new Error(message)
+  error.code = code
+  error.statusCode = statusCode
+  error.retryable = false
+  if (sourcePath) error.sourcePath = sourcePath
+  if (key) error.key = key
+  if (cause) error.cause = cause
+  return error
+}
+
 function normalizeRuntimeConfigValue(key, value, filePath) {
   if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
-    throw new Error(`runtime config key must be uppercase env style: ${key} (${filePath})`)
+    throw runtimeConfigFileError(`runtime config key must be uppercase env style: ${key}`, {
+      sourcePath: filePath,
+      key,
+    })
   }
   if (SENSITIVE_CONFIG_KEY.test(key)) {
-    throw new Error(`sensitive runtime config key is not allowed in JSON: ${key} (${filePath})`)
+    throw runtimeConfigFileError(`sensitive runtime config key is not allowed in JSON: ${key}`, {
+      sourcePath: filePath,
+      key,
+    })
   }
   if (value == null) return ''
   if (['string', 'number', 'boolean'].includes(typeof value)) return String(value)
-  throw new Error(`runtime config value must be a scalar: ${key} (${filePath})`)
+  throw runtimeConfigFileError(`runtime config value must be a scalar: ${key}`, {
+    sourcePath: filePath,
+    key,
+  })
+}
+
+export function parseRuntimeConfigContent(content, { filePath = null } = {}) {
+  const bytes = Buffer.isBuffer(content) ? content : Buffer.from(String(content ?? ''), 'utf8')
+  if (bytes.byteLength > MAX_RUNTIME_CONFIG_BYTES) {
+    throw runtimeConfigFileError(`runtime config exceeds ${MAX_RUNTIME_CONFIG_BYTES} bytes`, {
+      code: 'RUNTIME_CONFIG_FILE_TOO_LARGE',
+      statusCode: 413,
+      sourcePath: filePath,
+    })
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(bytes.toString('utf8'))
+  } catch (cause) {
+    throw runtimeConfigFileError('runtime config contains invalid JSON', {
+      sourcePath: filePath,
+      cause,
+    })
+  }
+  const values = parsed?.env ?? parsed
+  if (!values || typeof values !== 'object' || Array.isArray(values)) {
+    throw runtimeConfigFileError('runtime config must be a JSON object', { sourcePath: filePath })
+  }
+  const env = Object.fromEntries(
+    Object.entries(values).map(([key, value]) => [key, normalizeRuntimeConfigValue(key, value, filePath)]),
+  )
+  return Object.freeze({ document: parsed, env, content: bytes })
+}
+
+export function readRuntimeConfigFileSnapshot(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return Object.freeze({ exists: false, path: filePath || null, document: null, env: {}, content: null })
+  }
+  const stat = fs.statSync(filePath)
+  if (!stat.isFile()) {
+    throw runtimeConfigFileError('runtime config is not a regular file', { sourcePath: filePath })
+  }
+  if (stat.size > MAX_RUNTIME_CONFIG_BYTES) {
+    throw runtimeConfigFileError(`runtime config exceeds ${MAX_RUNTIME_CONFIG_BYTES} bytes`, {
+      code: 'RUNTIME_CONFIG_FILE_TOO_LARGE',
+      statusCode: 413,
+      sourcePath: filePath,
+    })
+  }
+  const parsed = parseRuntimeConfigContent(fs.readFileSync(filePath), { filePath })
+  return Object.freeze({ exists: true, path: filePath, ...parsed })
 }
 
 export function readRuntimeConfigFile(filePath) {
-  if (!filePath || !fs.existsSync(filePath)) return {}
-  const stat = fs.statSync(filePath)
-  if (!stat.isFile()) throw new Error(`runtime config is not a regular file: ${filePath}`)
-  if (stat.size > MAX_RUNTIME_CONFIG_BYTES) {
-    throw new Error(`runtime config exceeds ${MAX_RUNTIME_CONFIG_BYTES} bytes: ${filePath}`)
-  }
-  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'))
-  const values = parsed?.env ?? parsed
-  if (!values || typeof values !== 'object' || Array.isArray(values)) {
-    throw new Error(`runtime config must be a JSON object: ${filePath}`)
-  }
-  return Object.fromEntries(
-    Object.entries(values).map(([key, value]) => [key, normalizeRuntimeConfigValue(key, value, filePath)]),
-  )
+  return readRuntimeConfigFileSnapshot(filePath).env
 }
 
 export function resolveRuntimeConfigPaths({ cwd = process.cwd(), env = process.env } = {}) {
-  const dataDir = path.resolve(env.APP_DATA_DIR || path.join(cwd, 'server-data'))
+  const configuredDataDir = validateRuntimeStoragePath(env.APP_DATA_DIR, { key: 'APP_DATA_DIR' })
+  const dataDir = path.resolve(cwd, configuredDataDir || 'server-data')
   const project = path.join(cwd, RUNTIME_CONFIG_RELATIVE_PATH)
   const explicit = env.APP_CONFIG_PATH ? path.resolve(cwd, env.APP_CONFIG_PATH) : null
   return {
@@ -64,8 +144,9 @@ export function readRuntimeEnvFile(cwd = process.cwd()) {
     if (!missingEnvWarned && !process.env.MODEL_BASE_URL && !process.env.MODEL_PROVIDERS) {
       missingEnvWarned = true
       console.warn(
-        `[env] 未找到 ${envPath} —— 模型配置将只从系统环境变量读取。`
-        + '\n[env] 如果你已经写了 .env，请确认是从**仓库根目录**启动服务（npm run serve）。',
+        `[env] 未找到 ${envPath} —— 仍可在“设置 → 模型”中保存并使用本地 BYOK Provider；`
+        + 'MODEL_* 环境变量仅用于部署默认配置。'
+        + '\n[env] 如果你希望加载 .env，请确认是从**仓库根目录**启动服务（npm run serve）。',
       )
     }
     return {}
@@ -103,14 +184,134 @@ export function getRuntimeEnv(env = process.env, { cwd = process.cwd(), loadDotE
   return { ...user, ...project, ...explicit, ...dotenv, ...env }
 }
 
+function discoverRuntimeStartupConfigLayers({
+  cwd = process.cwd(),
+  env = process.env,
+} = {}) {
+  const dotenv = env.GUGO_LOAD_DOTENV !== '0' ? readRuntimeEnvFile(cwd) : {}
+  const bootstrapEnv = { ...dotenv, ...env }
+  const bootstrapPaths = resolveRuntimeConfigPaths({ cwd, env: bootstrapEnv })
+  const project = readRuntimeConfigFile(bootstrapPaths.project)
+  // Project configuration may itself select the deployment-owned explicit
+  // config file, so resolve that path only after the fixed project layer has
+  // been read. Dotenv and the caller environment retain their higher priority.
+  const explicitPaths = resolveRuntimeConfigPaths({
+    cwd,
+    env: { ...project, ...dotenv, ...env },
+  })
+  const explicit = explicitPaths.explicit
+    && ![explicitPaths.user, explicitPaths.project].includes(explicitPaths.explicit)
+    ? readRuntimeConfigFile(explicitPaths.explicit)
+    : {}
+  if (explicitPaths.explicit && Object.hasOwn(explicit, 'APP_CONFIG_PATH')) {
+    const relocatedExplicitPath = explicit.APP_CONFIG_PATH
+      ? path.resolve(cwd, explicit.APP_CONFIG_PATH)
+      : null
+    if (relocatedExplicitPath !== explicitPaths.explicit) {
+      throw runtimeConfigSelfRelocationError(
+        'APP_CONFIG_PATH',
+        explicitPaths.explicit,
+        relocatedExplicitPath,
+      )
+    }
+  }
+  const storageDiscoveryEnv = { ...project, ...explicit, ...dotenv, ...env }
+  const storagePaths = resolveRuntimeConfigPaths({ cwd, env: storageDiscoveryEnv })
+  return Object.freeze({
+    dotenv,
+    project,
+    explicit,
+    paths: Object.freeze({
+      user: storagePaths.user,
+      project: bootstrapPaths.project,
+      explicit: explicitPaths.explicit,
+    }),
+  })
+}
+
+/**
+ * Resolve the exact startup-owned config source paths without reading the user
+ * runtime.json. Recovery mode uses this to prove that an error belongs to the
+ * user-editable source instead of a project or deployment-owned source.
+ */
+export function resolveRuntimeStartupConfigPaths(options = {}) {
+  return discoverRuntimeStartupConfigLayers(options).paths
+}
+
+/**
+ * Resolve the process startup environment before SQLite is opened.
+ *
+ * Storage paths need one extra discovery pass because `.env`, project config,
+ * or an explicit config can relocate APP_DATA_DIR, which in turn relocates the
+ * user runtime.json file. The returned paths are absolute and anchored to the
+ * caller-provided cwd so every process-owned service receives one data root.
+ */
+export function resolveRuntimeStartupEnvironment({
+  cwd = process.cwd(),
+  env = process.env,
+} = {}) {
+  const {
+    dotenv,
+    project,
+    explicit,
+    paths: sourcePaths,
+  } = discoverRuntimeStartupConfigLayers({ cwd, env })
+  const user = readRuntimeConfigFile(sourcePaths.user)
+  const selfRelocatingKey = USER_CONFIG_SELF_RELOCATION_KEYS.find((key) => (
+    Object.hasOwn(user, key)
+  ))
+  if (selfRelocatingKey) {
+    throw runtimeConfigSelfRelocationError(selfRelocatingKey, sourcePaths.user)
+  }
+  const resolved = { ...user, ...project, ...explicit, ...dotenv, ...env }
+  const configuredDataDir = validateRuntimeStoragePath(resolved.APP_DATA_DIR, { key: 'APP_DATA_DIR' })
+  const configuredDbPath = validateRuntimeStoragePath(resolved.APP_DB_PATH, { key: 'APP_DB_PATH' })
+  const appDataDir = path.resolve(cwd, configuredDataDir || 'server-data')
+  const appDbPath = configuredDbPath
+    ? path.resolve(cwd, configuredDbPath)
+    : path.join(appDataDir, 'app.db')
+  return Object.freeze({
+    ...resolved,
+    APP_DATA_DIR: appDataDir,
+    APP_DB_PATH: appDbPath,
+    ...(sourcePaths.explicit ? { APP_CONFIG_PATH: sourcePaths.explicit } : {}),
+  })
+}
+
+export function assertRuntimeStartupIdentityStable(before, after) {
+  for (const key of RUNTIME_STARTUP_IDENTITY_KEYS) {
+    const left = before?.[key] ? String(before[key]) : null
+    const right = after?.[key] ? String(after[key]) : null
+    if (left === right) continue
+    const error = new Error(`${key} changed during runtime startup preflight`)
+    error.code = 'RUNTIME_CONFIG_IDENTITY_CHANGED_DURING_PREFLIGHT'
+    error.retryable = false
+    error.key = key
+    error.before = left
+    error.after = right
+    throw error
+  }
+  return true
+}
+
+/** Apply only process storage identity before importing/starting DB consumers. */
+export function applyRuntimeStorageBootstrap(options = {}) {
+  const resolved = resolveRuntimeStartupEnvironment(options)
+  process.env.APP_DATA_DIR = resolved.APP_DATA_DIR
+  process.env.APP_DB_PATH = resolved.APP_DB_PATH
+  return resolved
+}
+
 function readRuntimeConfigDocument(filePath) {
-  if (!filePath || !fs.existsSync(filePath)) return { env: {}, onboarding: {} }
-  // Reuse the strict validation (size, shape, key names and secret rejection)
-  // before preserving optional non-env metadata.
-  const validatedEnv = readRuntimeConfigFile(filePath)
-  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+  const snapshot = readRuntimeConfigFileSnapshot(filePath)
+  if (!snapshot.exists) return { env: {}, onboarding: {} }
+  const parsed = snapshot.document
+  const metadata = parsed?.env && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? Object.fromEntries(Object.entries(parsed).filter(([key]) => key !== 'env'))
+    : {}
   return {
-    env: validatedEnv,
+    ...metadata,
+    env: snapshot.env,
     onboarding: parsed?.env && parsed?.onboarding && typeof parsed.onboarding === 'object'
       ? parsed.onboarding
       : {},
@@ -205,6 +406,7 @@ export function updateWorkspaceRuntimeConfiguration({
   const paths = resolveRuntimeConfigPaths({ cwd, env })
   const document = readRuntimeConfigDocument(paths.user)
   const next = {
+    ...document,
     env: { ...document.env, ...values },
     onboarding: { ...document.onboarding, completedAt },
   }
@@ -221,10 +423,14 @@ export function updateWorkspaceRuntimeConfiguration({
   return getWorkspaceRuntimeConfiguration({ cwd, env: { ...env, ...values } })
 }
 
-export function applyRuntimeConfig({ cwd = process.cwd(), env = process.env } = {}) {
-  const resolved = getRuntimeEnv(env, { cwd })
+export function applyRuntimeConfig({
+  cwd = process.cwd(),
+  env = process.env,
+  resolvedEnv = null,
+} = {}) {
+  const resolved = resolvedEnv || resolveRuntimeStartupEnvironment({ cwd, env })
   for (const [key, value] of Object.entries(resolved)) {
-    if (env[key] === undefined) process.env[key] = String(value)
+    process.env[key] = String(value)
   }
   return resolved
 }

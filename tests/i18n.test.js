@@ -50,6 +50,49 @@ test('input history navigation setting copy exists in all five languages', () =>
   }
 })
 
+test('external and model-provider fee warnings are explicit in all five languages', () => {
+  const markers = {
+    zh: { external: '外部服务', provider: '上游模型供应商' },
+    en: { external: 'external service', provider: 'upstream model provider' },
+    ja: { external: '外部サービス', provider: '上流モデル Provider' },
+    ko: { external: '외부 서비스', provider: '상위 모델 Provider' },
+    'zh-TW': { external: '外部服務', provider: '上游模型供應商' },
+  }
+  for (const [language, marker] of Object.entries(markers)) {
+    assert.ok(translations[language].chatMessages.sideEffectUnknownBody.includes(marker.external), language)
+    assert.ok(translations[language].sideEffectRecovery.safetyWarning.includes(marker.external), language)
+    assert.ok(translations[language].chatMessages.modelRequestUnknownBody.includes(marker.provider), language)
+    assert.ok(translations[language].modelRequestRecovery.warning.includes(marker.provider), language)
+    assert.ok(translations[language].modelRequestRecovery.verify.includes(marker.provider), language)
+  }
+})
+
+test('model provider settings state the BYOK and no-platform-billing boundary in all five languages', () => {
+  const markers = {
+    zh: ['Gugo 不提供付费模型或平台计费', '上游 Provider', 'Gugo 服务端'],
+    en: ['does not sell model access or bill you', 'upstream provider', 'Gugo server'],
+    ja: ['プラットフォーム課金を行いません', '上流 Provider', 'Gugo サーバー'],
+    ko: ['플랫폼 요금을 청구하지 않습니다', '업스트림 Provider', 'Gugo 서버'],
+    'zh-TW': ['不收取平台費用', '上游 Provider', 'Gugo 伺服器'],
+  }
+  for (const [language, expected] of Object.entries(markers)) {
+    const notice = translations[language]?.modelProviders?.byokNotice || ''
+    for (const marker of expected) assert.ok(notice.includes(marker), `${language}: ${marker}`)
+  }
+})
+
+test('task center model readiness copy distinguishes configuration and Agent capability in all five languages', () => {
+  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+    const copy = translations[lang]?.taskCenter?.modelReadiness
+    assert.ok(copy?.unconfigured, `${lang}: unconfigured`)
+    assert.ok(copy?.untested, `${lang}: untested`)
+    assert.ok(copy?.chatOnly, `${lang}: chatOnly`)
+    assert.ok(copy?.agentReady, `${lang}: agentReady`)
+    assert.ok(copy?.unavailable, `${lang}: unavailable`)
+    assert.ok(copy?.configure, `${lang}: configure`)
+  }
+})
+
 test('directory authorization lifetime copy exists in all five languages', () => {
   for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
     assert.ok(translations[lang]?.localFiles?.authorizationLifetime)

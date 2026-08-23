@@ -4,6 +4,7 @@ import PermissionModeSwitcher from '../../../components/PermissionModeSwitcher.j
 import { normalizeOptionalTokenCount } from '../../../lib/contextUsage.js'
 import ModelPicker from '../ModelPicker.jsx'
 import ContextUsagePanel from '../chatMessages/ContextUsagePanel.jsx'
+import { modelReadinessMessageKey } from '../chatModelReadiness.js'
 
 /**
  * 上下文用量圆环:满环 = 上下文窗口用满。颜色随用量变化:
@@ -29,6 +30,7 @@ export default function ComposerActions({
   contextUsage,
   fileInputRef,
   isGenerating,
+  modelReadiness = { kind: 'ready', canSend: true },
   modelOptions,
   modelPickerOpen,
   onAbort,
@@ -37,15 +39,22 @@ export default function ComposerActions({
   onFileChange,
   onManageModels,
   onModelChange,
+  onModelRetry,
   onOpenModelPicker,
   onSend,
   onToggleContext,
   sendDisabled,
   selectedModel,
+  selectedModelProviderId,
   t,
 }) {
   const contextPopoverRef = useRef(null)
-  const primaryActionLabel = t(isGenerating ? 'chatComposer.stop' : 'chatComposer.send')
+  const readinessMessageKey = modelReadinessMessageKey(modelReadiness)
+  const primaryActionLabel = isGenerating
+    ? t('chatComposer.stop')
+    : readinessMessageKey
+      ? t(readinessMessageKey)
+      : t('chatComposer.send')
   const usage = contextUsage || {}
   const measuredTokens = normalizeOptionalTokenCount(usage.actualPromptTokens)
   const hasMeasuredTokens = measuredTokens !== null
@@ -93,7 +102,18 @@ export default function ComposerActions({
         <PermissionModeSwitcher mode={approvalMode} onChange={onApprovalModeChange} disabled={isGenerating} />
       </div>
       <div className="flex min-w-0 items-center gap-1.5">
-        <ModelPicker open={modelPickerOpen} modelOptions={modelOptions} selectedModel={selectedModel} onOpen={onOpenModelPicker} onClose={onCloseModelPicker} onSelect={onModelChange} onManage={onManageModels} />
+        <ModelPicker
+          open={modelPickerOpen}
+          modelOptions={modelOptions}
+          modelReadiness={modelReadiness}
+          selectedModel={selectedModel}
+          selectedModelProviderId={selectedModelProviderId}
+          onOpen={onOpenModelPicker}
+          onClose={onCloseModelPicker}
+          onSelect={onModelChange}
+          onManage={onManageModels}
+          onRetry={onModelRetry}
+        />
         <div ref={contextPopoverRef} className="relative">
           {contextPanelOpen && (
             <div className="absolute bottom-[calc(100%+12px)] right-0 z-50 w-[min(25rem,calc(100vw-2rem))]" data-testid="context-usage-popover">

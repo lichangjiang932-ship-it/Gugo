@@ -1,16 +1,32 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-import { callBackgroundModelWithTools, getRuntimeEnv } from '../adapters/modelProxy.js'
+import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
+import { getRuntimeEnv } from '../adapters/modelProxy.js'
 import { getDb } from '../db.js'
 import { getEvolutionCandidate } from './evolutionCandidateService.js'
 import { sanitizeEvolutionText } from './evolutionDatasetService.js'
 import { getEvolutionReplayRun, getEvolutionReplaySuite } from './evolutionReplayService.js'
+import {
+  assertEvolutionModelIdentityCurrent,
+  callEvolutionBackgroundModel,
+  resolveEvolutionModelIdentity,
+} from './evolutionModelRuntime.js'
+import {
+  assertEvolutionOperationRunnable,
+  attachEvolutionOperationError,
+  blockEvolutionOperation,
+  checkpointEvolutionOperation,
+  claimEvolutionOperation,
+  commitEvolutionOperation,
+  failEvolutionOperation,
+  openEvolutionOperation,
+} from './evolutionOperationService.js'
+import { holdEvolutionOperationLease } from './evolutionOperationLeaseRuntime.js'
 
 export const EVOLUTION_RUBRIC_VERSION = '2026-08-20-v1'
 const SAFETY_VALUES = new Set(['pass', 'fail', 'unknown'])
 const MAX_LIMIT = 100
 const MAX_LATENCY_RATIO = 1.5
-const MAX_COST_RATIO = 1.25
 
 function serviceError(code, message, statusCode = 400) {
   return Object.assign(new Error(message), { code, statusCode })
@@ -137,7 +153,8 @@ function sideMetrics(results, side) {
   const entries = results.map((result) => result?.[side] || {})
   const totalDurationMs = entries.reduce((sum, item) => sum + Math.max(0, Number(item.durationMs) || 0), 0)
   const usageMeasured = entries.every((item) => item.usage && typeof item.usage === 'object')
-  const costMeasured = usageMeasured && entries.every((item) => Number.isFinite(Number(item.costUsd)))
+  const costMeasured = usageMeasured
+    && entries.every((item) => normalizeOptionalUsageNumber(item.costUsd) !== null)
   const usage = usageMeasured ? entries.reduce((total, item) => ({
     promptTokens: total.promptTokens + Math.max(0, Number(item.usage.promptTokens) || 0),
     completionTokens: total.completionTokens + Math.max(0, Number(item.usage.completionTokens) || 0),
@@ -147,7 +164,7 @@ function sideMetrics(results, side) {
     totalDurationMs,
     usage,
     costUsd: costMeasured
-      ? entries.reduce((sum, item) => sum + Math.max(0, Number(item.costUsd) || 0), 0)
+      ? entries.reduce((sum, item) => sum + normalizeOptionalUsageNumber(item.costUsd), 0)
       : null,
   }
 }
@@ -188,7 +205,7 @@ function buildMetrics(replay, candidate, assessments) {
         ? null
         : safeRatio(proposed.costUsd, baseline.costUsd),
       evidence: baseline.costUsd == null || proposed.costUsd == null ? 'missing' : 'measured',
-      threshold: MAX_COST_RATIO,
+      decisionRole: 'telemetry_only',
     },
     usage: { baseline: baseline.usage, candidate: proposed.usage },
     permissionReviewRequired: candidate.permissionsRequested.length > 0,
@@ -200,14 +217,23 @@ function policyVerdict(metrics) {
   if (metrics.quality.regressions > 0) issues.push('quality_regression')
   if (metrics.safety.regressions > 0) issues.push('safety_regression')
   if (metrics.latency.ratio != null && metrics.latency.ratio > MAX_LATENCY_RATIO) issues.push('latency_regression')
-  if (metrics.cost.ratio != null && metrics.cost.ratio > MAX_COST_RATIO) issues.push('cost_regression')
   if (issues.length) return { verdict: 'fail', issues }
   if (metrics.safety.unknown > 0) issues.push('safety_evidence_unknown')
   if (metrics.quality.improvements < 1) issues.push('no_quality_improvement')
   if (metrics.latency.ratio == null) issues.push('latency_evidence_missing')
-  if (metrics.cost.evidence !== 'measured' || metrics.cost.ratio == null) issues.push('cost_evidence_missing')
+  // Provider cost is optional BYOK telemetry. It never changes the verdict,
+  // permissions, model invocation, promotion, or rollback decision.
   if (metrics.permissionReviewRequired) issues.push('permission_review_required')
   return { verdict: issues.length ? 'inconclusive' : 'pass', issues }
+}
+
+export function evolutionEvaluationDecisionMetrics(metrics) {
+  // Provider prices are user-supplied, optional BYOK telemetry. Keep them in
+  // the local record for display, but never bind approval/progression identity
+  // to a dollar estimate that Gugo neither bills nor controls.
+  const result = { ...(metrics || {}) }
+  delete result.cost
+  return result
 }
 
 function evaluationMessages({ replay, suite, candidate }) {
@@ -251,7 +277,14 @@ function evaluationView(row, { includeDetails = false } = {}) {
     replayId: row.replay_id,
     candidateId: row.candidate_id,
     rubricVersion: row.rubric_version,
-    evaluator: { modelName: row.evaluator_model, independent: row.independent === 1 },
+    evaluator: {
+      providerId: row.evaluator_provider_id || null,
+      modelName: row.evaluator_model,
+      ...(row.evaluator_config_revision != null
+        ? { configRevision: row.evaluator_config_revision }
+        : {}),
+      independent: row.independent === 1,
+    },
     verdict: row.verdict,
     summary: row.summary,
     metrics: parseJson(row.metrics_json, {}),
@@ -265,17 +298,22 @@ function evaluationView(row, { includeDetails = false } = {}) {
 export async function evaluateEvolutionReplay({
   userId,
   replayId,
-  evaluatorModelName = process.env.EVOLUTION_EVALUATOR_MODEL_NAME,
+  evaluatorProviderId = getRuntimeEnv().EVOLUTION_EVALUATOR_PROVIDER_ID,
+  evaluatorModelName = getRuntimeEnv().EVOLUTION_EVALUATOR_MODEL_NAME,
+  idempotencyKey,
+  operationId,
   now = Date.now(),
   signal,
-  runModel = ({ messages, userId: owner, modelName, signal: abortSignal }) => (
-    callBackgroundModelWithTools({
+  runModel = ({ messages, userId: owner, providerId, runtimeProviderId, runtimeEnv, modelName, signal: abortSignal }) => (
+    callEvolutionBackgroundModel({
       messages,
       userId: owner,
+      providerId,
+      runtimeProviderId,
       modelName,
       signal: abortSignal,
-      env: {
-        ...getRuntimeEnv(),
+      runtimeEnv,
+      envOverrides: {
         MODEL_STRICT_SELECTION: '1',
         MODEL_FAILOVER_CROSS_MODEL: '0',
         MODEL_TEMPERATURE: '0',
@@ -289,32 +327,144 @@ export async function evaluateEvolutionReplay({
   const replay = getEvolutionReplayRun({ userId: owner, id: replayId })
   const suite = getEvolutionReplaySuite({ userId: owner, id: replay.suiteId })
   const candidate = getEvolutionCandidate({ userId: owner, id: replay.candidateId })
+  if (!replay.providerId) {
+    throw serviceError(
+      'EVOLUTION_REPLAY_PROVIDER_UNKNOWN',
+      'historical replay has no Provider identity; rerun it before independent evaluation',
+      409,
+    )
+  }
+  const evaluatorProvider = inputText(
+    evaluatorProviderId,
+    512,
+    'EVOLUTION_EVALUATOR_PROVIDER_REQUIRED',
+    'evaluatorProviderId',
+  )
   const evaluatorModel = inputText(
     evaluatorModelName,
     512,
     'EVOLUTION_EVALUATOR_MODEL_REQUIRED',
     'evaluatorModelName',
   )
-  if (evaluatorModel === replay.modelName) {
-    throw serviceError('EVOLUTION_EVALUATOR_NOT_INDEPENDENT', 'evaluator model must differ from replay model', 409)
+  const evaluatorIdentity = resolveEvolutionModelIdentity({
+    userId: owner,
+    providerId: evaluatorProvider,
+    modelName: evaluatorModel,
+  })
+  const durableEvaluatorProvider = evaluatorIdentity.providerId
+  if (durableEvaluatorProvider === replay.providerId && evaluatorModel === replay.modelName) {
+    throw serviceError('EVOLUTION_EVALUATOR_NOT_INDEPENDENT', 'evaluator Provider and model must differ from replay identity', 409)
   }
-  let response
-  try {
-    response = await runModel({
-      messages: evaluationMessages({ replay, suite, candidate }),
+  const createdAt = timestamp(now)
+  let operation = openEvolutionOperation({
+    userId: owner,
+    kind: 'evaluation',
+    idempotencyKey,
+    operationId,
+    request: {
+      replayId: replay.id,
+      replayFingerprint: replay.runFingerprint,
+      evaluatorProviderId: durableEvaluatorProvider,
+      evaluatorModelName: evaluatorModel,
+      evaluatorConfigRevision: evaluatorIdentity.configRevision,
+      rubricVersion: EVOLUTION_RUBRIC_VERSION,
+    },
+    now: createdAt,
+  })
+  if (operation.state === 'completed') {
+    return getEvolutionEvaluation({ userId: owner, id: operation.result.id })
+  }
+  assertEvolutionOperationRunnable(operation)
+
+  let normalized = operation.checkpoint?.normalized || null
+  let resultId = operation.checkpoint?.resultId || null
+  if (!normalized) {
+    const modelClaim = claimEvolutionOperation({
       userId: owner,
-      modelName: evaluatorModel,
+      id: operation.id,
+      stage: 'evaluation:model_call',
+    })
+    const modelLease = holdEvolutionOperationLease({
+      userId: owner,
+      id: operation.id,
+      workerToken: modelClaim.workerToken,
+      leaseOwnerId: modelClaim.leaseOwnerId,
+      leaseExpiresAt: modelClaim.leaseExpiresAt,
       signal,
     })
-  } catch (error) {
-    if (error?.name === 'AbortError' || error?.code) throw error
-    throw serviceError('EVOLUTION_EVALUATOR_MODEL_FAILED', 'independent evaluator model failed', 502)
+    let response
+    try {
+      response = await runModel({
+        messages: evaluationMessages({ replay, suite, candidate }),
+        userId: owner,
+        providerId: durableEvaluatorProvider,
+        runtimeProviderId: evaluatorIdentity.runtimeProviderId,
+        runtimeEnv: evaluatorIdentity.runtimeEnv,
+        configRevision: evaluatorIdentity.configRevision,
+        modelName: evaluatorModel,
+        signal: modelLease.signal,
+      })
+    } catch (error) {
+      const failure = error?.name === 'AbortError' || error?.code
+        ? error
+        : serviceError('EVOLUTION_EVALUATOR_MODEL_FAILED', 'independent evaluator model failed', 502)
+      try {
+        blockEvolutionOperation({
+          userId: owner,
+          id: operation.id,
+          workerToken: modelClaim.workerToken,
+          leaseOwnerId: modelClaim.leaseOwnerId,
+          error: failure,
+        })
+      } finally {
+        modelLease.stop()
+      }
+      throw attachEvolutionOperationError(failure, operation.id)
+    }
+    try {
+      const actualProvider = String(response?.providerId || '').trim()
+      const actualModel = String(response?.modelName || '').trim()
+      if (actualProvider !== durableEvaluatorProvider || actualModel !== evaluatorModel) {
+        throw serviceError('EVOLUTION_EVALUATOR_MODEL_MISMATCH', 'evaluation did not use the selected Provider and model', 502)
+      }
+      if (actualProvider === replay.providerId && actualModel === replay.modelName) {
+        throw serviceError('EVOLUTION_EVALUATOR_NOT_INDEPENDENT', 'actual evaluator identity was not independent', 409)
+      }
+      normalized = normalizeAssessments(response?.content ?? response, replay, suite)
+      assertEvolutionModelIdentityCurrent({ userId: owner, identity: evaluatorIdentity })
+      resultId = randomUUID()
+      operation = checkpointEvolutionOperation({
+        userId: owner,
+        id: operation.id,
+        workerToken: modelClaim.workerToken,
+        leaseOwnerId: modelClaim.leaseOwnerId,
+        stage: 'evaluation:model_response_checkpointed',
+        checkpoint: {
+          modelResponseStored: true,
+          resultId,
+          normalized,
+          progress: { modelResponseStored: true },
+        },
+      })
+    } catch (error) {
+      try {
+        if (error?.code !== 'EVOLUTION_OPERATION_IN_PROGRESS') {
+          failEvolutionOperation({
+            userId: owner,
+            id: operation.id,
+            workerToken: modelClaim.workerToken,
+            leaseOwnerId: modelClaim.leaseOwnerId,
+            error,
+          })
+        }
+      } finally {
+        modelLease.stop()
+      }
+      throw attachEvolutionOperationError(error, operation.id)
+    }
+    modelLease.stop()
   }
-  const actualModel = String(response?.modelName || '').trim()
-  if (actualModel !== evaluatorModel || actualModel === replay.modelName) {
-    throw serviceError('EVOLUTION_EVALUATOR_NOT_INDEPENDENT', 'actual evaluator model was not independent', 409)
-  }
-  const normalized = normalizeAssessments(response?.content ?? response, replay, suite)
+
   const metrics = buildMetrics(replay, candidate, normalized.assessments)
   const policy = policyVerdict(metrics)
   const modelIssues = [...new Set(normalized.assessments.flatMap((item) => item.issues))]
@@ -322,24 +472,57 @@ export async function evaluateEvolutionReplay({
   const fingerprint = sha256({
     replayFingerprint: replay.runFingerprint,
     rubricVersion: EVOLUTION_RUBRIC_VERSION,
+    evaluatorProvider: durableEvaluatorProvider,
     evaluatorModel,
     assessments: normalized.assessments,
-    metrics,
+    metrics: evolutionEvaluationDecisionMetrics(metrics),
     verdict: policy.verdict,
   })
-  const id = randomUUID()
-  getDb().prepare(`
-    INSERT INTO evolution_evaluations (
-      id, user_id, replay_id, candidate_id, rubric_version, evaluator_model,
-      independent, verdict, summary, case_assessments_json, metrics_json,
-      issues_json, evaluation_fingerprint, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id, owner, replay.id, candidate.id, EVOLUTION_RUBRIC_VERSION, evaluatorModel,
-    policy.verdict, normalized.summary, JSON.stringify(normalized.assessments),
-    JSON.stringify(metrics), JSON.stringify(issues), fingerprint, timestamp(now),
-  )
-  return getEvolutionEvaluation({ userId: owner, id })
+  const finalClaim = claimEvolutionOperation({
+    userId: owner,
+    id: operation.id,
+    stage: 'evaluation:finalizing',
+  })
+  try {
+    assertEvolutionModelIdentityCurrent({ userId: owner, identity: evaluatorIdentity })
+    commitEvolutionOperation({
+      userId: owner,
+      id: operation.id,
+      workerToken: finalClaim.workerToken,
+      leaseOwnerId: finalClaim.leaseOwnerId,
+      resultType: 'evaluation',
+      resultId,
+      checkpoint: operation.checkpoint,
+      writeResult: (db) => db.prepare(`
+        INSERT INTO evolution_evaluations (
+          id, user_id, replay_id, candidate_id, rubric_version, evaluator_provider_id, evaluator_model, evaluator_config_revision,
+          independent, verdict, summary, case_assessments_json, metrics_json,
+          issues_json, evaluation_fingerprint, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        resultId, owner, replay.id, candidate.id, EVOLUTION_RUBRIC_VERSION,
+        durableEvaluatorProvider, evaluatorModel, evaluatorIdentity.configRevision,
+        policy.verdict, normalized.summary, JSON.stringify(normalized.assessments),
+        JSON.stringify(metrics), JSON.stringify(issues), fingerprint, createdAt,
+      ),
+    })
+  } catch (error) {
+    if (error?.code !== 'EVOLUTION_OPERATION_IN_PROGRESS') {
+      try {
+        failEvolutionOperation({
+          userId: owner,
+          id: operation.id,
+          workerToken: finalClaim.workerToken,
+          leaseOwnerId: finalClaim.leaseOwnerId,
+          error,
+        })
+      } catch {
+        // A fenced completion already exposes the authoritative operation state.
+      }
+    }
+    throw attachEvolutionOperationError(error, operation.id)
+  }
+  return getEvolutionEvaluation({ userId: owner, id: resultId })
 }
 
 export function getEvolutionEvaluation({ userId, id } = {}) {

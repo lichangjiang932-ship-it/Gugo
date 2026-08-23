@@ -328,9 +328,3 @@ export function seedSystemSkills({
   }
   return results
 }
-
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const results = seedSystemSkills()
-  logger.info('\n[seed] done:', JSON.stringify(results, null, 2))
-  process.exit(0)
-}

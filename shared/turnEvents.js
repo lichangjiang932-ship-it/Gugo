@@ -8,10 +8,14 @@ import {
 export const TURN_EVENT_TYPES = Object.freeze([
   'turn.started', 'turn.attempt', 'model.phase', 'model.failover', 'assistant.delta', 'reasoning.delta',
   'tool.call', 'tool.started', 'tool.completed', 'turn.progress', 'approval.required',
-  'approval.resolved', 'turn.checkpoint', 'turn.interrupted', 'turn.paused', 'turn.resumed',
+  'approval.resolved', 'turn.checkpoint', 'turn.interrupted', 'turn.blocked', 'turn.paused', 'turn.resumed',
   'turn.completed', 'turn.cancelled',
   'turn.failed', 'heartbeat',
 ])
+
+export const TURN_EVENT_TRANSPORT_VERSION = 1
+export const TURN_EVENT_TRANSPORT_TYPE = 'turn.event'
+export const TURN_EVENT_TRANSPORT_QUERY_PARAM = 'turnEventVersion'
 
 const jsonRecord = z.record(z.string(), z.unknown())
 const nullableText = z.string().nullable().optional()
@@ -55,6 +59,16 @@ const toolFailureSchema = z.object({
   hint: z.string().optional(),
   attempts: z.number().int().positive().optional(),
 }).strict()
+const turnFailureSchema = toolFailureSchema.extend({
+  persistence: z.object({
+    failedEventCount: z.number().int().nonnegative(),
+    blockedEventCount: z.number().int().nonnegative(),
+    failedEventTypes: z.array(z.string().min(1)).max(32),
+    firstFailedSequence: z.number().int().nonnegative().optional(),
+    lastFailedSequence: z.number().int().nonnegative().optional(),
+    failedAt: z.number().int().nonnegative().optional(),
+  }).strict().optional(),
+}).strict()
 const completedArtifactSchema = z.object({
   id: z.string().min(1),
   filename: z.string().min(1),
@@ -94,6 +108,10 @@ const turnResolutionSchema = z.object({
   path: z.string().min(1).optional(),
   access_mode: z.enum(['read_only', 'read_write']).optional(),
   accessMode: z.enum(['read_only', 'read_write']).optional(),
+  authorization_scope: z.enum(['session', 'persistent']).optional(),
+  authorizationScope: z.enum(['session', 'persistent']).optional(),
+  grant_id: z.string().min(1).max(160).optional(),
+  grantId: z.string().min(1).max(160).optional(),
   resource_type: z.string().min(1).optional(),
   resourceType: z.string().min(1).optional(),
   response: z.string().min(1).optional(),
@@ -111,6 +129,9 @@ const turnResolutionSchema = z.object({
 export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   'turn.started': z.object({
     content: z.string().optional(), displayContent: nullableText, modelName: nullableText,
+    modelProviderId: nullableText,
+    modelConfigRevision: z.number().int().positive().nullable().optional(),
+    modelMode: z.enum(['agent', 'chat_only']).optional(),
     model: z.string().optional(),
     agentId: nullableText, skillIds: z.array(z.string()).optional(),
     skillDefinitions: z.array(inlineSkillDefinitionSchema).max(inlineSkillLimits.maxDefinitions).optional(),
@@ -119,6 +140,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
       disabled: z.array(z.string()).optional(),
     }).strict().optional(),
     intentMode: z.enum(['auto', 'answer', 'execute']).optional(),
+    approvalMode: z.enum(['normal', 'acceptEdits', 'plan', 'bypass']).optional(),
     userMessageId: z.string().optional(),
     attachments: z.array(managedAttachmentSchema).optional(),
     importedHistoryCount: z.number().int().nonnegative().optional(),
@@ -217,6 +239,71 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     turnModelUsage: jsonRecord.nullable().optional(),
     estimatedPromptTokens: z.number().int().nonnegative().optional(),
   }).strict(),
+  'turn.blocked': z.object({
+    code: z.string().min(1),
+    message: z.string().min(1),
+    retryable: z.literal(false),
+    manualRetryable: z.literal(true),
+    recoveryStatus: z.literal('dead_letter'),
+    recoveryKind: z.enum([
+      'side_effect_unknown',
+      'side_effect_outcome_unknown',
+      'model_request_outcome_unknown',
+    ]).optional(),
+    turnId: z.string().min(1).max(256).optional(),
+    toolCallId: z.string().min(1).max(256).optional(),
+    modelRequestId: z.string().min(1).max(256).optional(),
+    requiresUserVerification: z.literal(true).optional(),
+    recoveryAction: z.object({
+      kind: z.literal('open_settings'),
+      path: z.literal('/settings?tab=recovery'),
+    }).strict().optional(),
+    checkpointSequence: z.number().int().nonnegative().nullable().optional(),
+    artifactIds: z.array(z.string()).optional(),
+    deliveryArtifactIds: z.array(z.string()).optional(),
+    verifiedLocalFiles: verifiedLocalFilesSchema,
+    retainedLocalFiles: retainedLocalFilesSchema,
+    iterations: z.number().int().nonnegative().optional(),
+  }).strict().superRefine((payload, context) => {
+    if (['side_effect_unknown', 'side_effect_outcome_unknown', 'model_request_outcome_unknown'].includes(payload.recoveryKind)
+      && !payload.recoveryAction) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['recoveryAction'],
+        message: 'side-effect recovery requires the safe settings action',
+      })
+    }
+    if (payload.recoveryKind === 'side_effect_outcome_unknown') {
+      for (const key of ['turnId', 'toolCallId', 'requiresUserVerification']) {
+        if (payload[key]) continue
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: `side-effect outcome recovery requires ${key}`,
+        })
+      }
+    }
+    if (payload.recoveryKind === 'model_request_outcome_unknown') {
+      for (const key of ['turnId', 'modelRequestId', 'requiresUserVerification']) {
+        if (payload[key]) continue
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: `model request outcome recovery requires ${key}`,
+        })
+      }
+    }
+    if (!payload.recoveryKind && (
+      payload.turnId || payload.toolCallId || payload.modelRequestId
+        || payload.requiresUserVerification || payload.recoveryAction
+    )) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['recoveryKind'],
+        message: 'recovery metadata requires recoveryKind',
+      })
+    }
+  }),
   'turn.paused': z.object({
     text: z.string(),
     clarification: z.union([jsonRecord, z.string().min(1)]),
@@ -267,7 +354,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     // Keep the legacy top-level fields so older clients can still render the failure.
     code: z.string().optional(),
     message: z.string().optional(),
-    error: toolFailureSchema.optional(),
+    error: turnFailureSchema.optional(),
     partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
@@ -286,6 +373,9 @@ const TurnEventBaseSchema = z.object({
   sessionId: z.string().min(1).max(160),
   turnId: z.string().min(1).max(160),
   sequence: z.number().int().nonnegative(),
+  // Replay-only metadata. A retained event may legitimately jump over
+  // superseded checkpoint history at or before this durable boundary.
+  compactedThrough: z.number().int().nonnegative().optional(),
   type: z.enum(TURN_EVENT_TYPES),
   payload: jsonRecord.default({}),
   createdAt: z.number().int().nonnegative(),
@@ -299,12 +389,77 @@ export const TurnEventSchema = TurnEventBaseSchema.superRefine((event, context) 
   }
 })
 
+export const TurnEventTransportEnvelopeSchema = z.object({
+  v: z.literal(TURN_EVENT_TRANSPORT_VERSION),
+  type: z.literal(TURN_EVENT_TRANSPORT_TYPE),
+  event: TurnEventSchema,
+}).strict()
+
 export function parseTurnEvent(value) {
   return TurnEventSchema.parse(value)
 }
 
-export function createTurnEvent({ id, sessionId, turnId, sequence, type, payload = {}, createdAt = Date.now() }) {
-  return parseTurnEvent({ id, sessionId, turnId, sequence, type, payload, createdAt })
+export function parseTurnEventTransportEnvelope(value) {
+  return TurnEventTransportEnvelopeSchema.parse(value)
+}
+
+export function createTurnEventTransportEnvelope(event) {
+  return parseTurnEventTransportEnvelope({
+    v: TURN_EVENT_TRANSPORT_VERSION,
+    type: TURN_EVENT_TRANSPORT_TYPE,
+    event: parseTurnEvent(event),
+  })
+}
+
+/**
+ * Decode the versioned transport envelope while retaining the pre-v1 SSE
+ * payload as an explicit compatibility path. Invalid envelope-like values do
+ * not fall back to a bare event, so a version mismatch remains fail closed.
+ */
+export function parseTurnEventTransportPayload(value) {
+  const envelopeLike = value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && (
+      value.type === TURN_EVENT_TRANSPORT_TYPE
+      || Object.prototype.hasOwnProperty.call(value, 'v')
+      || Object.prototype.hasOwnProperty.call(value, 'event')
+    )
+  return envelopeLike
+    ? parseTurnEventTransportEnvelope(value).event
+    : parseTurnEvent(value)
+}
+
+export function createTurnEvent({
+  id,
+  sessionId,
+  turnId,
+  sequence,
+  compactedThrough,
+  type,
+  payload = {},
+  createdAt = Date.now(),
+}) {
+  return parseTurnEvent({
+    id,
+    sessionId,
+    turnId,
+    sequence,
+    ...(compactedThrough === undefined ? {} : { compactedThrough }),
+    type,
+    payload,
+    createdAt,
+  })
+}
+
+export function canAdvanceTurnEventCursor(event, after = -1) {
+  const cursor = Number.isInteger(after) ? after : Math.max(-1, Math.floor(Number(after) || 0))
+  const expectedSequence = cursor + 1
+  if (event?.sequence === expectedSequence) return true
+  return Number.isInteger(event?.sequence)
+    && event.sequence > expectedSequence
+    && Number.isInteger(event.compactedThrough)
+    && event.sequence <= event.compactedThrough
 }
 
 export const TURN_ACTIVITY_KINDS = Object.freeze(['tool_call_ready', 'tool_output_delta'])

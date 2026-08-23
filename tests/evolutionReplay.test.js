@@ -11,17 +11,37 @@ process.env.APP_DB_PATH = path.join(tempDir, 'app.db')
 
 const { closeDb, getDb } = await import('../server/db.js')
 const { handleEvolutionRequest } = await import('../server/routes/evolutionRoutes.js')
+const { evolutionReplayFingerprintResults } = await import('../server/services/evolutionReplayService.js')
+const { upsertModelProvider } = await import('../server/services/modelProviderStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 getDb()
-let candidateModel = async () => ({ content: '{}', modelName: 'candidate-model' })
-let replayModel = async () => ({ content: 'output', modelName: 'replay-model' })
+let candidateModel = async () => ({ content: '{}', providerId: 'candidate-provider', modelName: 'candidate-model' })
+let replayModel = async () => ({ content: 'output', providerId: 'replay-provider', modelName: 'replay-model' })
 const server = http.createServer((req, res) => handleEvolutionRequest(req, res, {
   runCandidateModel: (input) => candidateModel(input),
   runReplayModel: (input) => replayModel(input),
 }))
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const origin = `http://127.0.0.1:${server.address().port}`
+
+test('Replay identity excludes optional Provider cost telemetry', () => {
+  const lowCost = [{
+    caseId: 'case:1',
+    baseline: { output: 'baseline', durationMs: 10, costUsd: 0.01 },
+    candidate: { output: 'candidate', durationMs: 9, costUsd: 0.02 },
+  }]
+  const highCost = [{
+    caseId: 'case:1',
+    baseline: { output: 'baseline', durationMs: 10, costUsd: 100 },
+    candidate: { output: 'candidate', durationMs: 9, costUsd: 200 },
+  }]
+  assert.deepEqual(
+    evolutionReplayFingerprintResults(lowCost),
+    evolutionReplayFingerprintResults(highCost),
+  )
+  assert.equal(lowCost[0].baseline.costUsd, 0.01, 'telemetry record remains unchanged')
+})
 
 function headers(token, json = false) {
   return { Authorization: `Bearer ${token}`, ...(json ? { 'Content-Type': 'application/json' } : {}) }
@@ -37,6 +57,7 @@ async function request(token, pathname, { method = 'GET', body } = {}) {
 
 async function createCandidate(token, dataset, kind = 'prompt') {
   candidateModel = async () => ({
+    providerId: 'candidate-provider',
     modelName: 'candidate-model',
     content: JSON.stringify({
       title: `${kind} proposal`,
@@ -55,6 +76,8 @@ async function createCandidate(token, dataset, kind = 'prompt') {
       objective: 'Create replay proposal',
       datasetFingerprint: dataset.datasetFingerprint,
       sourceRecordIds: [dataset.records[0].id],
+      providerId: 'candidate-provider',
+      modelName: 'candidate-model',
     },
   })
   assert.equal(response.status, 201)
@@ -102,6 +125,7 @@ test('isolated replay runs baseline and prompt candidate with identical no-tool 
   replayModel = async (input) => {
     calls.push(input)
     return {
+      providerId: 'replay-provider',
       modelName: 'fixed-model-v1',
       content: `token=result-secret output ${calls.length} C:\\Users\\Model\\result.txt`,
     }
@@ -112,6 +136,7 @@ test('isolated replay runs baseline and prompt candidate with identical no-tool 
       suiteId: suite.id,
       candidateId: candidate.id,
       baselineContent: 'token=baseline-secret baseline instructions',
+      providerId: 'replay-provider',
       modelName: 'fixed-model-v1',
       parameters: { temperature: 0, maxTokens: 512 },
     },
@@ -122,6 +147,7 @@ test('isolated replay runs baseline and prompt candidate with identical no-tool 
   assert.equal(replay.state, 'completed')
   assert.equal(replay.isolationMode, 'model_no_tools')
   assert.deepEqual(replay.parameters, { temperature: 0, maxTokens: 512 })
+  assert.equal(replay.providerId, 'replay-provider')
   assert.equal(replay.modelName, 'fixed-model-v1')
   assert.equal(replay.results.length, 1)
   assert.equal(Object.hasOwn(replay, 'verdict'), false)
@@ -133,6 +159,7 @@ test('isolated replay runs baseline and prompt candidate with identical no-tool 
   assert.equal(calls.length, 2)
   for (const call of calls) {
     assert.equal(Object.hasOwn(call, 'tools'), false)
+    assert.equal(call.providerId, 'replay-provider')
     assert.equal(call.modelName, 'fixed-model-v1')
     assert.deepEqual(call.parameters, { temperature: 0, maxTokens: 512 })
     assert.doesNotMatch(JSON.stringify(call.messages), /case-secret|baseline-secret|C:\\Users/iu)
@@ -184,7 +211,7 @@ test('replay fails closed for stale suites, non-prompt candidates, and model dri
   let replayCalls = 0
   replayModel = async () => {
     replayCalls += 1
-    return { modelName: 'fixed-model', content: 'output' }
+    return { providerId: 'replay-provider', modelName: 'fixed-model', content: 'output' }
   }
   const unsupported = await request(session.token, '/api/evolution/replays/run', {
     method: 'POST',
@@ -192,6 +219,7 @@ test('replay fails closed for stale suites, non-prompt candidates, and model dri
       suiteId: suite.id,
       candidateId: plugin.id,
       baselineContent: 'baseline',
+      providerId: 'replay-provider',
       modelName: 'fixed-model',
       parameters: { temperature: 0, maxTokens: 256 },
     },
@@ -201,19 +229,94 @@ test('replay fails closed for stale suites, non-prompt candidates, and model dri
   assert.equal(replayCalls, 0)
 
   const prompt = await createCandidate(session.token, dataset, 'prompt')
-  replayModel = async () => ({ modelName: 'different-model', content: 'output' })
+  replayModel = async () => ({ providerId: 'different-provider', modelName: 'fixed-model', content: 'output' })
   const drift = await request(session.token, '/api/evolution/replays/run', {
     method: 'POST',
     body: {
       suiteId: suite.id,
       candidateId: prompt.id,
       baselineContent: 'baseline',
+      providerId: 'replay-provider',
       modelName: 'fixed-model',
       parameters: { temperature: 0, maxTokens: 256 },
     },
   })
   assert.equal(drift.status, 502)
   assert.equal((await drift.json()).error.code, 'EVOLUTION_REPLAY_MODEL_MISMATCH')
+  const runs = await request(session.token, '/api/evolution/replays')
+  assert.deepEqual((await runs.json()).replays, [])
+})
+
+test('replay keeps one Provider snapshot and fails atomically when its revision changes mid-run', async () => {
+  const session = issueTestSession({ email: 'replay-revision-drift@example.com' })
+  await request(session.token, '/api/evolution/feedback', {
+    method: 'POST', body: { feedback: 'Replay must never mix Provider revisions' },
+  })
+  const dataset = (await (await request(session.token, '/api/evolution/dataset?limit=200')).json()).dataset
+  const suite = (await (await request(session.token, '/api/evolution/replay-suites', {
+    method: 'POST',
+    body: {
+      name: 'revision drift suite',
+      datasetFingerprint: dataset.datasetFingerprint,
+      cases: [{ sourceRecordId: dataset.records[0].id, title: 'case', input: 'input' }],
+    },
+  })).json()).suite
+  const candidate = await createCandidate(session.token, dataset, 'prompt')
+  const provider = upsertModelProvider({
+    userId: session.userId,
+    provider: {
+      key: 'replayrevision',
+      label: 'Replay revision',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      apiKey: 'revision-one',
+      models: ['revision-model'],
+      defaultModel: 'revision-model',
+      enabled: true,
+      isDefault: true,
+      kind: 'openai-compatible',
+    },
+  })
+  const snapshots = []
+  replayModel = async (input) => {
+    snapshots.push({
+      runtimeEnv: input.runtimeEnv,
+      configRevision: input.configRevision,
+      runtimeProviderId: input.runtimeProviderId,
+    })
+    if (snapshots.length === 1) {
+      upsertModelProvider({
+        userId: session.userId,
+        provider: {
+          ...provider,
+          baseUrl: 'http://127.0.0.1:11435/v1',
+          apiKey: 'revision-two',
+        },
+      })
+    }
+    return { providerId: provider.id, modelName: 'revision-model', content: `output-${snapshots.length}` }
+  }
+
+  const response = await request(session.token, '/api/evolution/replays/run', {
+    method: 'POST',
+    body: {
+      suiteId: suite.id,
+      candidateId: candidate.id,
+      baselineContent: 'baseline',
+      providerId: provider.id,
+      modelName: 'revision-model',
+      parameters: { temperature: 0, maxTokens: 256 },
+    },
+  })
+
+  assert.equal(response.status, 409)
+  assert.equal((await response.json()).error.code, 'EVOLUTION_MODEL_PROVIDER_CONFIG_CHANGED')
+  assert.equal(snapshots.length, 2)
+  assert.equal(snapshots[0].runtimeEnv, snapshots[1].runtimeEnv)
+  assert.equal(snapshots[0].configRevision, provider.configRevision)
+  assert.equal(snapshots[1].configRevision, provider.configRevision)
+  assert.equal(snapshots[0].runtimeProviderId, provider.key)
+  assert.equal(snapshots[1].runtimeProviderId, provider.key)
+  assert.equal(snapshots[0].runtimeEnv.MODEL_API_KEY, 'revision-one')
   const runs = await request(session.token, '/api/evolution/replays')
   assert.deepEqual((await runs.json()).replays, [])
 })

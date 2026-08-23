@@ -55,8 +55,9 @@ test('ordinary questions, terse follow-ups, refresh and checkpoint resume keep o
   }
 })
 
-test('plan, normal, acceptEdits and bypass expose the same schemas', async () => {
-  const catalogs = []
+test('plan mode projects the model schema to the execution policy read-only allowlist', async () => {
+  const catalogs = new Map()
+  const decisions = new Map()
   for (const permissionMode of ['plan', 'normal', 'acceptEdits', 'bypass']) {
     const resolved = await resolveTurnToolSpecs({
       userId: null,
@@ -64,17 +65,44 @@ test('plan, normal, acceptEdits and bypass expose the same schemas', async () =>
       permissionMode,
       enabledConnectorTools: [],
       prompt: '只读分析这个项目。',
+      onDecision: (decision) => decisions.set(permissionMode, decision),
     })
-    catalogs.push(namesOf(resolved))
-    assert.ok(namesOf(resolved).includes('write_file'), permissionMode)
-    assert.ok(namesOf(resolved).includes('bash_exec'), permissionMode)
-    assert.ok(namesOf(resolved).includes('request_directory'), permissionMode)
-    assert.ok(namesOf(resolved).includes('set_deliverables'), permissionMode)
+    catalogs.set(permissionMode, namesOf(resolved))
   }
-  for (const catalog of catalogs.slice(1)) assert.deepEqual(catalog, catalogs[0])
+
+  assert.deepEqual(catalogs.get('plan'), ['git_status', 'list_directory', 'read_file', 'request_directory'])
+  for (const name of [
+    'apply_patch', 'bash_exec', 'create_docx', 'fetch_url', 'mcp__docs__read',
+    'mcp__docs__write', 'set_deliverables', 'web_search', 'write_file',
+  ]) {
+    assert.equal(catalogs.get('plan').includes(name), false, name)
+    assert.ok(decisions.get('plan').excludedTools.some((entry) => (
+      entry.name === name
+      && entry.stage === 'permission'
+      && entry.reason === 'permission_mode_plan'
+    )), name)
+  }
+
+  assert.deepEqual(catalogs.get('acceptEdits'), catalogs.get('normal'))
+  assert.deepEqual(catalogs.get('bypass'), catalogs.get('normal'))
+  assert.ok(catalogs.get('normal').includes('write_file'))
+  assert.ok(catalogs.get('normal').includes('bash_exec'))
 })
 
-test('execution switches and web-search readiness do not delete registered schemas', async () => {
+test('unauthorized plan mode exposes only the directory authorization entry point', async () => {
+  const resolved = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: BASE_SPECS,
+    permissionMode: 'plan',
+    fileAccessStatus: { grants: [] },
+    enabledConnectorTools: [],
+    prompt: '只读分析这个项目。',
+  })
+
+  assert.deepEqual(namesOf(resolved), ['request_directory'])
+})
+
+test('execution switches delete disabled schemas from the model-visible catalog', async () => {
   let decision = null
   const resolved = await resolveTurnToolSpecs({
     userId: null,
@@ -90,8 +118,12 @@ test('execution switches and web-search readiness do not delete registered schem
   })
   const names = namesOf(resolved)
   for (const name of ['write_file', 'bash_exec', 'web_search', 'set_deliverables']) {
-    assert.ok(names.includes(name), name)
-    assert.equal(decision?.excludedTools.some((entry) => entry.name === name), false, name)
+    assert.equal(names.includes(name), false, name)
+    assert.ok(decision?.excludedTools.some((entry) => (
+      entry.name === name
+      && entry.stage === 'availability'
+      && entry.reason === 'tool_disabled'
+    )), name)
   }
 })
 

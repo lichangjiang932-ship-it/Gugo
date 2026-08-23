@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../db.js'
+import { enqueueSessionContentEventInDb } from './sessionContentOutboxStore.js'
 
 export const MAX_TURN_STEERING_LENGTH = 20_000
 const MAX_CLIENT_REQUEST_ID_LENGTH = 256
@@ -183,6 +184,29 @@ export function enqueueTurnSteering({
       now,
       now,
     )
+    enqueueSessionContentEventInDb(db, {
+      userId,
+      sessionId,
+      eventType: 'message.upsert',
+      payload: {
+        message: {
+          id: messageId,
+          role: 'user',
+          content: text,
+          modelContext: {
+            version: 1,
+            turnId,
+            modelContent: text,
+            liveSteering: true,
+            steeringId: id,
+            steeringClientRequestId: requestId,
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+      createdAt: now,
+    })
     db.prepare(`
       UPDATE sessions
       SET updated_at = CASE WHEN COALESCE(updated_at, 0) < ? THEN ? ELSE updated_at END

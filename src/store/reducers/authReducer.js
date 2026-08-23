@@ -11,7 +11,6 @@ export function reduceAuthState(state, action) {
           name: payload.name ?? state.user.name,
           email: payload.email ?? state.user.email,
           avatar: payload.avatar ?? state.user.avatar,
-          plan: payload.plan ?? state.user.plan,
           joinedAt: payload.joinedAt ?? state.user.joinedAt ?? Date.now(),
           totalCalls: payload.totalCalls ?? state.user.totalCalls ?? 0,
         },
@@ -23,7 +22,7 @@ export function reduceAuthState(state, action) {
     case 'LOGOUT': {
       return {
         ...state,
-        user: { name: null, email: null, avatar: null, plan: null, joinedAt: null, totalCalls: 0 },
+        user: { name: null, email: null, avatar: null, joinedAt: null, totalCalls: 0 },
         isLoggedIn: false,
       }
     }
@@ -41,11 +40,10 @@ export function reduceAuthState(state, action) {
               name: payload.user.email?.split('@')[0] || null,
               email: payload.user.email || null,
               avatar: null,
-              plan: null,
               joinedAt: payload.user.createdAt || Date.now(),
               totalCalls: 0,
             }
-          : { name: null, email: null, avatar: null, plan: null, joinedAt: null, totalCalls: 0 },
+          : { name: null, email: null, avatar: null, joinedAt: null, totalCalls: 0 },
       }
     }
 
@@ -55,7 +53,7 @@ export function reduceAuthState(state, action) {
         authMode: 'unknown',
         authReady: true,
         isLoggedIn: false,
-        user: { name: null, email: null, avatar: null, plan: null, joinedAt: null, totalCalls: 0 },
+        user: { name: null, email: null, avatar: null, joinedAt: null, totalCalls: 0 },
       }
 
     default:

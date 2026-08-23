@@ -1,4 +1,5 @@
 import { authenticateRequest } from '../middleware.js'
+import { randomUUID } from 'node:crypto'
 import { readJson } from '../utils.js'
 import { callBackgroundModel, getModelContextWindow } from '../adapters/modelProxy.js'
 import {
@@ -16,6 +17,14 @@ import {
   getCompactionSummaryTokenLimit,
 } from '../services/contextCompactionRuntime.js'
 import { dispatchHooks } from '../services/hooksService.js'
+import {
+  describeModelReadinessFailure,
+  isModelReadinessError,
+  resolveChatModelRuntimeBinding,
+} from '../services/modelReadinessService.js'
+import {
+  acquireCompactionArchivePort as acquireActiveCompactionArchivePort,
+} from '../core/compactionArchivePort.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 const MANUAL_COMPACTION_RESERVE_TOKENS = 64
@@ -113,32 +122,76 @@ export function attachManualCompactionArchive(result, archiveId) {
 export function resolveCompactionModelContext({
   userId,
   modelName,
+  modelProviderId = '',
+  modelConfigRevision = null,
+  env = process.env,
+  resolveBinding = resolveChatModelRuntimeBinding,
   resolveContextWindow = getModelContextWindow,
   invokeModel = callBackgroundModel,
 } = {}) {
   const selectedModel = String(modelName || '').trim() || undefined
-  return {
+  const selectedProviderId = String(modelProviderId || '').trim()
+  const revision = Number(modelConfigRevision)
+  const selectedRevision = Number.isInteger(revision) && revision > 0 ? revision : null
+  const binding = resolveBinding({
+    userId,
+    providerId: selectedProviderId,
     modelName: selectedModel,
-    contextWindow: resolveContextWindow({ userId, modelName: selectedModel }),
+    configRevision: selectedRevision,
+    env,
+  })
+  const runtimeProviderId = binding.source === 'environment'
+    ? String(binding.providerId || '').trim()
+    : ''
+  const runtimeRequest = {
+    userId: null,
+    usageOwnerId: userId,
+    modelName: binding.modelName,
+    ...(runtimeProviderId ? { modelProviderId: runtimeProviderId } : {}),
+    env: binding.env,
+  }
+  return {
+    modelName: binding.modelName,
+    modelProviderId: binding.providerId || null,
+    modelConfigRevision: binding.configRevision ?? null,
+    contextWindow: resolveContextWindow(runtimeRequest),
     callModel: ({ messages, signal }) => invokeModel({
-      userId,
-      modelName: selectedModel,
+      ...runtimeRequest,
       messages,
       signal,
     }),
   }
 }
 
-export async function handleCompactionRequest(req, res) {
+export async function handleCompactionRequest(req, res, {
+  compactionArchivePort,
+  acquireCompactionArchivePort = acquireActiveCompactionArchivePort,
+  resolveModelContext = resolveCompactionModelContext,
+} = {}) {
   const userId = authenticateRequest(req)
   if (!userId) return sendJson(res, 401, { ok: false, error: 'Unauthorized' })
 
   const url = new URL(req.url, 'http://localhost')
   const pathname = url.pathname
 
+  let compactionArchiveLease = null
+  let requestCompactionArchivePort = compactionArchivePort
+  const acquireRequestCompactionArchivePort = () => {
+    if (requestCompactionArchivePort) return requestCompactionArchivePort
+    compactionArchiveLease = acquireCompactionArchivePort()
+    requestCompactionArchivePort = compactionArchiveLease.port
+    return requestCompactionArchivePort
+  }
+
   try {
     if (req.method === 'POST' && pathname === '/api/compaction/compress') {
       const body = await readJson(req)
+      const idempotencyHeader = req.headers?.['idempotency-key']
+      const hookInvocationId = String(
+        (Array.isArray(idempotencyHeader) ? idempotencyHeader[0] : idempotencyHeader)
+          || body.requestId
+          || randomUUID(),
+      ).trim()
       // pre_compact hooks may veto compaction or override the semantic summary
       // prompt before any archive/summary work runs.
       const preCompact = await dispatchHooks({
@@ -147,6 +200,8 @@ export async function handleCompactionRequest(req, res) {
         tool: null,
         args: { keepMessages: body.keepMessages, messageCount: Array.isArray(body.messages) ? body.messages.length : 0 },
         sessionId: body.sessionId || null,
+        requestId: body.requestId || hookInvocationId,
+        hookInvocationId: `${hookInvocationId}:pre_compact`,
         payload: { customPrompt: typeof body.compactPrompt === 'string' ? body.compactPrompt : null },
       })
       if (!preCompact.allow) {
@@ -177,9 +232,13 @@ export async function handleCompactionRequest(req, res) {
         })
       }
 
-      const modelContext = resolveCompactionModelContext({
+      acquireRequestCompactionArchivePort()
+
+      const modelContext = resolveModelContext({
         userId,
         modelName: body.modelName,
+        modelProviderId: body.modelProviderId,
+        modelConfigRevision: body.modelConfigRevision,
       })
       let semanticSummary = {
         attempted: false,
@@ -243,12 +302,12 @@ export async function handleCompactionRequest(req, res) {
       }
       result = fit.result
 
-      const archive = createCompactionArchive({
+      const archive = await createCompactionArchive({
         userId,
         sessionId: body.sessionId || 'unknown',
         archivedMessages: result.archivedMessages,
         summaryText: result.summaryText,
-      })
+      }, { compactionArchivePort: requestCompactionArchivePort })
       const { summaryMessage, outboundMessages } = attachManualCompactionArchive(result, archive.id)
       return sendJson(res, 200, {
         ok: true,
@@ -269,13 +328,26 @@ export async function handleCompactionRequest(req, res) {
 
     const match = pathname.match(/^\/api\/compaction\/archive\/([^/]+)$/)
     if (req.method === 'GET' && match) {
-      const archive = getCompactionArchive({ userId, id: match[1] })
+      acquireRequestCompactionArchivePort()
+      const archive = await getCompactionArchive(
+        { userId, id: match[1] },
+        { compactionArchivePort: requestCompactionArchivePort },
+      )
       if (!archive) return sendJson(res, 404, { ok: false, error: 'archive not found' })
       return sendJson(res, 200, { ok: true, archive })
     }
 
     return sendJson(res, 404, { ok: false, error: 'unknown compaction route' })
   } catch (err) {
+    if (isModelReadinessError(err)) {
+      const failure = describeModelReadinessFailure(err)
+      return sendJson(res, failure.statusCode, {
+        ok: false,
+        error: failure.error,
+      })
+    }
     return sendJson(res, err?.statusCode || 400, { ok: false, error: err?.message || String(err) })
+  } finally {
+    compactionArchiveLease?.release()
   }
 }

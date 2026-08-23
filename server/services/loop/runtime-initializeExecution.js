@@ -1,5 +1,8 @@
 import { observeLoopEvent } from './eventIsolation.js'
 import { assertRuntimeStage } from './runtimeContract.js'
+import { restoreModelInvocationCheckpoint } from './modelInvocationCheckpoint.js'
+
+const LEGACY_EMPTY_MODEL_RESPONSE_TEXT = '模型未返回可显示内容，本次任务未完成。请重试，或检查当前模型配置。'
 
 export async function initializeExecution(s) {
   const { ARTIFACT_RECOVERY_DIAGNOSIS_MARKER, ARTIFACT_RECOVERY_FORCE_MARKER, ARTIFACT_RECOVERY_PHASE_DIAGNOSE, ARTIFACT_RECOVERY_PHASE_FORCE, FAILURE_RECOVERY_THRESHOLD, MAX_ITERS, buildJobToolIdempotencyKey, createCheckpointBarrier, createRepeatCallGuard, createSteeringController, isSuccessfulToolResult, normalizeCompactionRecovery, normalizeToolResult, observeToolCalls, progressChangesFor, recordToolProgress, resolveIterationWindow, restoreFailureRecovery, restoreToolProgress, serializeExecutionConvergence, serializeFailureRecovery, serializeToolProgress, sourceHandoffViolation, synchronizeCheckpointToolCallMessages, toolProgressPayload } = s.d
@@ -12,6 +15,16 @@ export async function initializeExecution(s) {
   s.finalText = ''
   s.finalCheckpointPersisted = false
   s.pendingEphemeralToolMessages = []
+  s.restoredModelInvocation = restoreModelInvocationCheckpoint(
+    s.restoredState?.modelInvocation,
+    {
+      stepId: s.step?.id,
+      modelProviderId: s.job?.modelProviderId,
+      modelName: s.job?.modelName,
+      modelConfigRevision: s.job?.modelConfigRevision,
+    },
+  )
+  s.modelInvocation = s.restoredModelInvocation
   s.iter = Math.max(0, Number(s.restoredState?.iterations) || 0)
   s.loopEventContext = (extra = {}) => Object.freeze({
       userId: String(s.job?.userId || '').trim() || null,
@@ -148,6 +161,17 @@ export async function initializeExecution(s) {
       })
       return result
     }
+  const restoredFinal = s.restoredState?.final
+  if (restoredFinal?.harnessAdapter === true
+      && typeof restoredFinal.text === 'string'
+      && !restoredFinal.text.trim()) {
+    s.restoredState.final = {
+      ...restoredFinal,
+      text: LEGACY_EMPTY_MODEL_RESPONSE_TEXT,
+      incomplete: true,
+      reason: 'empty_model_response',
+    }
+  }
   s.restoredFinalIsInterrupted = s.restoredState?.final?.interrupted === true
   s.restoredFinalIsTerminal = Boolean(
       s.restoredState?.final?.incomplete
@@ -190,11 +214,14 @@ export async function initializeExecution(s) {
       && !s.hasSuccessfulRepresentativeRead
       && !s.representativeReadsInjected
       && !s.checkpointCalls?.length
-  s.buildCheckpointState = ({ final = null } = {}) => {
+  s.buildCheckpointState = ({ final = null, checkpointWriteSequence = null } = {}) => {
     // This closure is installed before steering initializes the budget and loop
     // guard. Keep that ordering explicit and fail fast if it is ever invoked early.
     assertRuntimeStage(s, 'checkpoint-state')
     return {
+        ...(Number.isSafeInteger(checkpointWriteSequence) && checkpointWriteSequence > 0
+          ? { checkpointWriteSequence }
+          : {}),
         messages: s.convo,
         toolCalls: s.checkpointCalls || [],
         artifactIds: s.artifactIds,
@@ -208,6 +235,7 @@ export async function initializeExecution(s) {
         failureRecovery: serializeFailureRecovery(s.failureRecovery),
         loopGuard: s.loopGuard.snapshot(),
         capabilityDecision: s.capabilityDecisionSnapshot(),
+        ...(s.modelInvocation ? { modelInvocation: s.modelInvocation } : {}),
         ...(s.directoryAuthorizationResolution ? { directoryAuthorizationResolution: s.directoryAuthorizationResolution } : {}),
         completionGuards: {
           partialResultEntries: s.partialResultFallback.snapshot(),
@@ -259,6 +287,10 @@ export async function initializeExecution(s) {
   s.checkpointBarrier = createCheckpointBarrier({
       saveCheckpoint: s.saveCheckpoint,
       stateFactory: s.buildCheckpointState,
+      initialWriteSequence: Number.isSafeInteger(s.restoredState?.checkpointWriteSequence)
+        && s.restoredState.checkpointWriteSequence > 0
+        ? s.restoredState.checkpointWriteSequence
+        : 0,
     })
   s.persistTurn = async ({ final = null, boundary = 'state-change' } = {}) => (
       s.checkpointBarrier.flush({ meta: { boundary, final } })

@@ -28,7 +28,7 @@ function envVisionAssist(env = process.env) {
   const baseUrl = (env.VISION_ASSIST_BASE_URL || '').trim().replace(/\/+$/, '')
   const modelName = (env.VISION_ASSIST_MODEL || '').trim()
   const apiKey = (env.VISION_ASSIST_API_KEY || '').trim()
-  if (!baseUrl || !modelName || !apiKey) return null
+  if (!baseUrl || !modelName) return null
   return {
     config: {
       baseUrl,
@@ -44,8 +44,14 @@ export function resolveVisionAssistConfig({ userId, env = process.env } = {}) {
   if (userId && userResolver) {
     try {
       const fromDb = userResolver(userId)
-      if (fromDb && fromDb.config?.baseUrl && fromDb.config?.modelName && fromDb.secret?.apiKey) {
-        return fromDb
+      if (fromDb && fromDb.config?.baseUrl && fromDb.config?.modelName) {
+        return {
+          ...fromDb,
+          secret: {
+            ...(fromDb.secret || {}),
+            apiKey: String(fromDb.secret?.apiKey || '').trim(),
+          },
+        }
       }
     } catch {
       // 退回 env
@@ -86,9 +92,12 @@ async function describeOneImage({ imagePart, config, secret, fetchImpl, language
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 30_000)
   try {
+    const headers = { 'Content-Type': 'application/json' }
+    const apiKey = String(secret?.apiKey || '').trim()
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`
     const response = await fetchImpl(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret.apiKey}` },
+      headers,
       body: JSON.stringify({
         model: config.modelName,
         temperature: 0.2,

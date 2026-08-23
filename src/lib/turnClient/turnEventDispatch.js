@@ -6,6 +6,7 @@ import { createToolOutputBuffer } from './toolOutputBuffer.js'
 const TOOL_OUTPUT_FLUSH_EVENT_TYPES = new Set([
   'tool.completed',
   'turn.interrupted',
+  'turn.blocked',
   'turn.completed',
   'turn.paused',
   'turn.cancelled',
@@ -17,8 +18,29 @@ const TERMINAL_TOOL_CALL_STATUS = new Map([
   ['turn.paused', TOOL_CALL_STATUS.CANCELLED],
   ['turn.cancelled', TOOL_CALL_STATUS.CANCELLED],
   ['turn.interrupted', TOOL_CALL_STATUS.CANCELLED],
+  ['turn.blocked', TOOL_CALL_STATUS.CANCELLED],
   ['turn.failed', TOOL_CALL_STATUS.ERROR],
 ])
+
+export const SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND = 'side_effect_outcome_unknown'
+export const MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND = 'model_request_outcome_unknown'
+const LEGACY_SIDE_EFFECT_UNKNOWN_RECOVERY_KIND = 'side_effect_unknown'
+
+export function isSideEffectOutcomeUnknownRecoveryKind(value) {
+  return value === SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND
+    || value === LEGACY_SIDE_EFFECT_UNKNOWN_RECOVERY_KIND
+}
+
+export function isModelRequestOutcomeUnknownRecoveryKind(value) {
+  return value === MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND
+}
+
+const CLEARED_SERVER_RECOVERY_META = Object.freeze({
+  serverRecoveryBlocked: false,
+  serverRecoveryKind: null,
+  serverRecoveryToolCallId: null,
+  serverRecoveryActionPath: null,
+})
 
 function resultText(result) {
   if (typeof result === 'string') return result
@@ -226,6 +248,7 @@ export async function dispatchTurnEvent(event, {
         reasoning: payload.reasoningText || '',
       },
       meta: {
+        ...CLEARED_SERVER_RECOVERY_META,
         interrupted: false,
         failed: false,
         paused: false,
@@ -244,6 +267,7 @@ export async function dispatchTurnEvent(event, {
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
+        ...CLEARED_SERVER_RECOVERY_META,
         interrupted: false,
         failed: false,
         paused: false,
@@ -414,6 +438,7 @@ export async function dispatchTurnEvent(event, {
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
+        ...CLEARED_SERVER_RECOVERY_META,
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
@@ -445,6 +470,7 @@ export async function dispatchTurnEvent(event, {
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
+        ...CLEARED_SERVER_RECOVERY_META,
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
@@ -474,6 +500,7 @@ export async function dispatchTurnEvent(event, {
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
+        ...CLEARED_SERVER_RECOVERY_META,
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
@@ -495,18 +522,28 @@ export async function dispatchTurnEvent(event, {
       ...streamCursor,
     })
     cursorCommitted = true
-  } else if (event.type === 'turn.interrupted' || event.type === 'turn.failed') {
+  } else if (event.type === 'turn.interrupted'
+    || event.type === 'turn.blocked'
+    || event.type === 'turn.failed') {
+    const blocked = event.type === 'turn.blocked'
+    const sideEffectUnknown = blocked && isSideEffectOutcomeUnknownRecoveryKind(payload.recoveryKind)
+    const modelRequestUnknown = blocked && isModelRequestOutcomeUnknownRecoveryKind(payload.recoveryKind)
     const failure = normalizeTurnFailurePayload(payload, {
-      fallbackCode: event.type === 'turn.interrupted' ? 'TURN_INTERRUPTED' : 'TURN_FAILED',
-      fallbackMessage: event.type === 'turn.interrupted' ? 'Turn interrupted' : 'Server turn failed',
+      fallbackCode: event.type === 'turn.interrupted'
+        ? 'TURN_INTERRUPTED'
+        : blocked ? 'TURN_RECOVERY_BLOCKED' : 'TURN_FAILED',
+      fallbackMessage: event.type === 'turn.interrupted'
+        ? 'Turn interrupted'
+        : blocked ? 'Turn recovery is blocked until its execution environment is repaired' : 'Server turn failed',
     })
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
+        ...CLEARED_SERVER_RECOVERY_META,
         serverFailure: failure.error,
         streaming: event.type === 'turn.interrupted',
-        turnCompletedAt: event.type === 'turn.interrupted' ? null : event.createdAt,
-        ...(event.type === 'turn.interrupted' ? { latency: null } : {}),
+        turnCompletedAt: event.type === 'turn.interrupted' || blocked ? null : event.createdAt,
+        ...(event.type === 'turn.interrupted' || blocked ? { latency: null } : {}),
         modelActivity: null,
         progress: null,
         ...(event.type === 'turn.failed' ? { serverConnectionState: null } : {}),
@@ -534,7 +571,31 @@ export async function dispatchTurnEvent(event, {
         interrupted: event.type === 'turn.interrupted',
         ...(event.type === 'turn.interrupted'
           ? { failed: false, paused: false, serverConnectionState: 'interrupted' }
-          : { failed: true, streaming: false }),
+          : blocked
+            ? {
+                failed: false,
+                paused: false,
+                streaming: false,
+                serverConnectionState: 'blocked',
+                serverRecoveryBlocked: true,
+                ...(sideEffectUnknown ? {
+                  serverRecoveryKind: SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND,
+                  serverRecoveryToolCallId: typeof payload.toolCallId === 'string' ? payload.toolCallId : null,
+                  serverRecoveryActionPath: payload.recoveryAction?.path === '/settings?tab=recovery'
+                    ? payload.recoveryAction.path
+                    : '/settings?tab=recovery',
+                } : {}),
+                ...(modelRequestUnknown ? {
+                  serverRecoveryKind: MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND,
+                  serverRecoveryModelRequestId: typeof payload.modelRequestId === 'string'
+                    ? payload.modelRequestId
+                    : null,
+                  serverRecoveryActionPath: payload.recoveryAction?.path === '/settings?tab=recovery'
+                    ? payload.recoveryAction.path
+                    : '/settings?tab=recovery',
+                } : {}),
+              }
+            : { failed: true, streaming: false }),
       },
       ...streamCursor,
     })

@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { useEffect, useId, useRef, useState } from 'react'
-import { Check, ChevronDown, ChevronUp, Copy, FileText } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, ChevronUp, Copy, FileText, RotateCcw } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import CompactionPill from '../../../components/CompactionPill.jsx'
 import ChoicePicker from '../../../components/ChoicePicker.jsx'
@@ -22,7 +22,19 @@ import ActivityStream from './ActivityStream.jsx'
 import { buildCollapsedUserMessagePreview, copyableMessageText, shouldCollapseUserMessage, splitUserSkillCommand } from './messageContent.js'
 import DirectoryRequestCard from '../../taskRun/DirectoryRequestCard.jsx'
 import { buildAttachmentPreviewArtifact } from '../../../lib/attachmentPreview.js'
+import {
+  artifactTypeForSkill,
+  getVisibleModelErrorMessage,
+  isModelPreExecutionFailure,
+  isModelSetupFailure,
+  isPreExecutionFailure,
+  isRuntimeUnavailableFailure,
+} from '../../../lib/chatFlowGuards.js'
 import { UiContributionSlot } from '../../../plugins/uiContributionRegistry.js'
+import {
+  isModelRequestOutcomeUnknownRecoveryKind,
+  isSideEffectOutcomeUnknownRecoveryKind,
+} from '../../../lib/turnClient/turnEventDispatch.js'
 
 function stableTimelineSegments(content, toolCalls) {
   let previousToolKey = 'start'
@@ -49,6 +61,8 @@ export default function MessageRow({
   onAuthorizeDirectoryRequest,
   onOpenArtifact,
   onOpenInPreview,
+  onManageModels,
+  onRetryModelFailure,
   t,
 }) {
   const serverClarification = msg.meta?.serverClarification
@@ -112,6 +126,10 @@ export default function MessageRow({
     ...verifiedLocalFileReferences,
     ...retainedLocalFileReferences,
   ]
+  const expectsFileReceipt = Boolean(
+    String(msg.meta?.artifactType || '').trim()
+      || artifactTypeForSkill(msg.meta?.skillId),
+  )
   const artifactReferences = mergeArtifactReferences({
     serverReferences: serverArtifactReferences,
     verifiedLocalFileReferences,
@@ -128,6 +146,14 @@ export default function MessageRow({
   const openArtifact = onOpenArtifact || ((artifact) => {
     if (artifact?.preview) onOpenInPreview?.(msg, artifact.preview)
   })
+  const showSideEffectRecoveryCard = msg.role === 'assistant'
+    && msg.meta?.serverRecoveryBlocked === true
+    && isSideEffectOutcomeUnknownRecoveryKind(msg.meta?.serverRecoveryKind)
+    && msg.meta?.serverConnectionState === 'blocked'
+  const showModelRequestRecoveryCard = msg.role === 'assistant'
+    && msg.meta?.serverRecoveryBlocked === true
+    && isModelRequestOutcomeUnknownRecoveryKind(msg.meta?.serverRecoveryKind)
+    && msg.meta?.serverConnectionState === 'blocked'
 
   return (
     <motion.div
@@ -165,6 +191,7 @@ export default function MessageRow({
               isCurrentStreamingMessage={isCurrentStreamingMessage}
               isMessageComplete={isMessageComplete}
               msg={msg}
+              onManageModels={onManageModels}
               onOpenArtifact={openArtifact}
               onOpenInPreview={onOpenInPreview}
               showArtifactPreview={showArtifactPreview}
@@ -185,6 +212,13 @@ export default function MessageRow({
             t={t}
           />
         )}
+        {showSideEffectRecoveryCard || showModelRequestRecoveryCard ? (
+          <SideEffectRecoveryCard
+            modelRequest={showModelRequestRecoveryCard}
+            msg={msg}
+            t={t}
+          />
+        ) : null}
         {msg.role === 'assistant' && isDirectoryRequest && (
           <InlineDirectoryRequestCard
             key={directoryRequestKey}
@@ -201,16 +235,21 @@ export default function MessageRow({
             isCurrentStreamingMessage={isCurrentStreamingMessage}
             lang={lang}
             msg={msg}
+            onRetryModelFailure={isModelPreExecutionFailure(msg) ? onRetryModelFailure : null}
             showArtifactPreview={showArtifactPreview}
             t={t}
           />
         )}
-        {msg.role === 'assistant' && msg.meta?.failed && msg.meta?.type !== 'model_reply' && (
+        {msg.role === 'assistant'
+          && msg.meta?.failed
+          && msg.meta?.type !== 'model_reply'
+          && !isPreExecutionFailure(msg)
+          && (expectsFileReceipt || localFileReferences.length > 0) && (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
             <span className="text-accent-ink" data-testid="reply-completion-state">
-              {localFileReferences.length > 0
-                ? t('chatMessages.replyPartiallyCompleted')
-                : t('chatMessages.replyIncomplete')}
+              {t(localFileReferences.length > 0
+                ? 'chatMessages.replyPartiallyCompleted'
+                : 'chatMessages.replyIncomplete')}
             </span>
           </div>
         )}
@@ -230,7 +269,40 @@ export default function MessageRow({
   )
 }
 
-function AssistantContent({ artifactPreview, artifactReferences, canPresentDeliverables, deliveryArtifacts, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, retainedLocalFileReferences, showArtifactPreview, t, verifiedLocalFileReferences }) {
+function SideEffectRecoveryCard({ modelRequest = false, msg, t }) {
+  const recoveryQuery = new URLSearchParams({
+    tab: 'recovery',
+    turnId: String(msg?.meta?.serverTurnId || ''),
+    modelRequestId: String(msg?.meta?.serverRecoveryModelRequestId || ''),
+  })
+  return (
+    <section
+      className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm"
+      data-testid={modelRequest ? 'model-request-recovery-blocked' : 'side-effect-recovery-blocked'}
+      role="alert"
+    >
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+        <div className="min-w-0">
+          <strong className="block text-ink">
+            {t(modelRequest ? 'chatMessages.modelRequestUnknownTitle' : 'chatMessages.sideEffectUnknownTitle')}
+          </strong>
+          <p className="mt-1 text-xs leading-5 text-ink-soft">
+            {t(modelRequest ? 'chatMessages.modelRequestUnknownBody' : 'chatMessages.sideEffectUnknownBody')}
+          </p>
+          <a
+            className="mt-3 inline-flex min-h-8 items-center rounded-control border border-amber-600/30 bg-paper px-3 text-xs font-semibold text-amber-800 transition-colors hover:border-amber-600/50 hover:bg-amber-500/10"
+            href={modelRequest ? `#/settings?${recoveryQuery}` : '#/settings?tab=recovery'}
+          >
+            {t(modelRequest ? 'chatMessages.openModelRequestRecovery' : 'chatMessages.openSideEffectRecovery')}
+          </a>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function AssistantContent({ artifactPreview, artifactReferences, canPresentDeliverables, deliveryArtifacts, isCurrentStreamingMessage, isMessageComplete, msg, onManageModels, onOpenArtifact, retainedLocalFileReferences, showArtifactPreview, t, verifiedLocalFileReferences }) {
   const inlineFileReferences = artifactReferences
   const openInlineArtifact = (href) => {
     // 先按产物 URL 匹配,再按本地路径(含 file:/// 与 D:\ 形式)匹配,
@@ -253,10 +325,15 @@ function AssistantContent({ artifactPreview, artifactReferences, canPresentDeliv
   const timeline = stableTimelineSegments(stripChoices(msg.content), msg.meta?.toolCalls)
   const presentation = assistantTimelinePresentation(timeline)
   const hasExecution = isCurrentStreamingMessage || presentation.execution.length > 0
+  const preExecutionFailure = isPreExecutionFailure(msg)
+  const modelSetupFailure = msg.meta?.failed === true && isModelSetupFailure(msg)
+  const runtimeRestartRequired = msg.meta?.failed === true
+    && msg.meta?.serverFailure?.action === 'restart_runtime'
+    && isRuntimeUnavailableFailure(msg)
   return (
     <>
       <div data-quotable="true">
-        {(hasExecution || msg.meta?.serverTurnId || msg.meta?.type === 'model_reply') && (
+        {!preExecutionFailure && (hasExecution || msg.meta?.serverTurnId || msg.meta?.type === 'model_reply') && (
           <ExecutionDisclosure
             key={isCurrentStreamingMessage ? 'execution-running' : 'execution-complete'}
             hasExecution={hasExecution}
@@ -274,7 +351,11 @@ function AssistantContent({ artifactPreview, artifactReferences, canPresentDeliv
             {isCurrentStreamingMessage && <ActivityStream msg={msg} />}
           </ExecutionDisclosure>
         )}
-        {presentation.answer && (
+        {runtimeRestartRequired ? (
+          <RuntimeRecoveryCard msg={msg} t={t} />
+        ) : modelSetupFailure ? (
+          <ModelSetupFailureCard msg={msg} onManageModels={onManageModels} t={t} />
+        ) : presentation.answer && (
           <MarkdownRenderer
             artifactReferences={inlineFileReferences}
             streaming={isCurrentStreamingMessage}
@@ -304,6 +385,65 @@ function AssistantContent({ artifactPreview, artifactReferences, canPresentDeliv
         />
       )}
     </>
+  )
+}
+
+function ModelSetupFailureCard({ msg, onManageModels, t }) {
+  const actionCopy = String(t('errors.modelConfigurationAction') || '').trim()
+  const content = String(stripChoices(msg.content) || '').trim()
+  const title = String(t('errors.modelConfigurationFailure') || '').trim()
+  const fallbackDetail = String(getVisibleModelErrorMessage(msg, t) || '').trim()
+  const rawDetail = content || fallbackDetail
+  const detail = actionCopy ? rawDetail.replace(actionCopy, '').trim() : rawDetail
+  return (
+    <section
+      className="rounded-card border border-amber-400/50 bg-amber-50/70 p-4 text-sm text-ink"
+      data-testid="model-setup-error-card"
+      role="alert"
+    >
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <strong className="block">{title}</strong>
+          {detail && detail !== title && (
+            <div className="mt-1 text-xs leading-5 text-ink-soft">{detail}</div>
+          )}
+          <button
+            type="button"
+            className="mt-3 inline-flex min-h-8 items-center rounded-control border border-amber-600/30 bg-paper px-3 text-xs font-semibold text-amber-800 transition-colors hover:border-amber-600/50 hover:bg-amber-500/10"
+            data-testid="open-model-settings"
+            onClick={onManageModels}
+          >
+            {t('modelProviders.manage')}
+          </button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function RuntimeRecoveryCard({ msg, t }) {
+  return (
+    <section
+      className="rounded-card border border-amber-400/50 bg-amber-50/70 p-4 text-sm text-ink"
+      data-testid="runtime-recovery-error-card"
+      role="alert"
+    >
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <strong className="block">{t('errors.runtimeAttentionRequired')}</strong>
+          <div className="mt-1 text-xs leading-5 text-ink-soft">{getVisibleModelErrorMessage(msg, t)}</div>
+          <a
+            className="mt-3 inline-flex min-h-8 items-center rounded-control border border-amber-600/30 bg-paper px-3 text-xs font-semibold text-amber-800 transition-colors hover:border-amber-600/50 hover:bg-amber-500/10"
+            data-testid="open-runtime-diagnostics"
+            href="#/settings?tab=about"
+          >
+            {t('errors.openRuntimeDiagnostics')}
+          </a>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -350,26 +490,39 @@ function TimelineSegments({ artifacts, onLinkClick, onOpenArtifact, segments, st
   ))
 }
 
+function finiteOptionalNumber(value) {
+  if (value === undefined || value === null || value === '') return null
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
 function ExecutionDisclosure({ children, hasExecution, msg, running, t }) {
   const [expanded, setExpanded] = useState(running)
   const contentId = useId()
   const [fallbackStartedAt] = useState(() => Date.now())
-  const storedLatency = Number(msg.meta?.latency)
-  const storedStartedAt = Number(msg.meta?.turnStartedAt)
-  const storedCompletedAt = Number(msg.meta?.turnCompletedAt)
-  const derivedLatency = Number.isFinite(storedStartedAt) && Number.isFinite(storedCompletedAt)
+  const storedLatency = finiteOptionalNumber(msg.meta?.latency)
+  const storedStartedAt = finiteOptionalNumber(msg.meta?.turnStartedAt)
+  const storedCompletedAt = finiteOptionalNumber(msg.meta?.turnCompletedAt)
+  const hasStoredLatency = storedLatency !== null
+  const hasStoredInterval = storedStartedAt !== null && storedCompletedAt !== null
+  const hasElapsedTime = msg.meta?.executionStarted !== false
+    && !isPreExecutionFailure(msg)
+    && (running || hasStoredLatency || hasStoredInterval)
+  const derivedLatency = hasStoredInterval
     ? Math.max(0, storedCompletedAt - storedStartedAt)
     : null
   const elapsedMs = !running
-    ? Number.isFinite(storedLatency) ? Math.max(0, storedLatency) : derivedLatency ?? 0
+    ? hasStoredLatency ? Math.max(0, storedLatency) : derivedLatency ?? 0
     : null
-  const startedAt = Number(msg.meta?.turnStartedAt || msg.timestamp) || fallbackStartedAt
+  const startedAt = storedStartedAt ?? finiteOptionalNumber(msg.timestamp) ?? fallbackStartedAt
   const elapsed = useElapsedMilliseconds({ elapsedMs, running, startedAt })
-  const elapsedLabel = t('chatMessages.elapsed', { value: formatTaskDuration(elapsed, t) })
-  const label = `${t('chatMessages.execution')} · ${elapsedLabel}`
+  const elapsedLabel = hasElapsedTime ? t('chatMessages.elapsed', { value: formatTaskDuration(elapsed, t) }) : ''
+  const label = elapsedLabel ? `${t('chatMessages.execution')} · ${elapsedLabel}` : t('chatMessages.execution')
 
   if (!hasExecution) {
-    return <div className="chat-task-duration" data-testid="task-duration-header">{elapsedLabel}</div>
+    return elapsedLabel
+      ? <div className="chat-task-duration" data-testid="task-duration-header">{elapsedLabel}</div>
+      : null
   }
 
   return (
@@ -401,7 +554,9 @@ function useElapsedMilliseconds({ elapsedMs, running, startedAt }) {
 }
 
 function formatTaskDuration(milliseconds, t) {
-  const totalSeconds = Math.max(0, Math.floor(Number(milliseconds || 0) / 1000))
+  const normalizedMilliseconds = Math.max(0, Number(milliseconds) || 0)
+  if (normalizedMilliseconds < 1000) return t('chatMessages.durationLessThanSecond')
+  const totalSeconds = Math.floor(normalizedMilliseconds / 1000)
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
   return minutes > 0
@@ -578,17 +733,29 @@ function UserMeta({ lang, msg, t }) {
   )
 }
 
-function AssistantMeta({ isCurrentStreamingMessage, lang, msg, showArtifactPreview, t }) {
+function AssistantMeta({ isCurrentStreamingMessage, lang, msg, onRetryModelFailure, showArtifactPreview, t }) {
+  const latency = finiteOptionalNumber(msg.meta?.latency)
   return (
     <div className={`${showArtifactPreview ? 'mt-2 px-2' : 'mt-1'} flex flex-wrap items-center gap-2 text-xs text-ink-fade/85 tabular-nums`}>
       <div data-testid="assistant-message-meta" className="chat-message-meta pointer-events-none flex items-center gap-2 opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100">
         <span title={formatMessageDateTime(msg.timestamp, lang)}>{formatMessageTime(msg.timestamp, lang)}</span>
         {msg.meta?.type === 'model_reply' && <span>{t('chatMessages.model', { name: msg.meta.modelName })}</span>}
-        {msg.meta?.type === 'model_reply' && msg.meta.latency !== undefined && <span>{t('chatMessages.latency', { value: msg.meta.latency })}</span>}
+        {msg.meta?.type === 'model_reply' && latency !== null && <span>{t('chatMessages.latency', { value: latency })}</span>}
       </div>
       <div className="flex-1" />
       {!isCurrentStreamingMessage && (
         <div data-testid="assistant-message-actions" className="chat-message-actions pointer-events-none ml-auto flex items-center gap-2 opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100">
+          {typeof onRetryModelFailure === 'function' && (
+            <button
+              type="button"
+              onClick={() => onRetryModelFailure(msg)}
+              className="inline-flex items-center gap-1 text-ink-fade transition-colors hover:text-ink"
+              title={t('chatMessages.resendMessage')}
+              data-testid="retry-model-request"
+            >
+              <RotateCcw className="h-3 w-3" aria-hidden="true" />{t('chatMessages.resend')}
+            </button>
+          )}
           <CopyButton content={msg.content} t={t} />
         </div>
       )}

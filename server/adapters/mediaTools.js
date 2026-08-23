@@ -355,6 +355,7 @@ function runBinary(executable, args, {
       try {
         if (process.platform === 'win32') {
           const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+            env: sanitizeChildEnv(),
             shell: false,
             stdio: 'ignore',
             windowsHide: true,

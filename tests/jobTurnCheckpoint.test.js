@@ -6,7 +6,7 @@ import test from 'node:test'
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-turn-checkpoint-tests', String(process.pid))
 process.env.APPROVAL_MODE = 'off'
 
-const { DB_SCHEMA_VERSION, getSchemaVersion } = await import('../server/db.js')
+const { DB_SCHEMA_VERSION, getDb, getSchemaVersion } = await import('../server/db.js')
 const { appendJobSteps, createJob } = await import('../server/services/jobStore.js')
 const {
   deleteJobTurnCheckpoint,
@@ -15,6 +15,10 @@ const {
 } = await import('../server/services/jobTurnCheckpointStore.js')
 const { runToolsLoop } = await import('../server/services/jobTools.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
+const {
+  createSideEffectExecutionLedger,
+  createSideEffectScope,
+} = await import('../server/services/sideEffectExecutionLedger.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const alice = issueTestSession({ email: 'checkpoint-alice@example.com' }).userId
@@ -206,6 +210,10 @@ test('resume never replays a side-effecting call left in executing state', async
 
 test('an explicitly idempotent executor safely resumes an executing call with the same key and args', async () => {
   const expectedKey = 'job:idempotent-job:step:idempotent-step:tool:write-retry'
+  const idempotentUser = issueTestSession({
+    email: `checkpoint-idempotent-${process.pid}@example.com`,
+  }).userId
+  setApprovalMode({ userId: idempotentUser, mode: 'bypass' })
   let checkpoint = {
     messages: [
       { role: 'user', content: 'write once' },
@@ -221,7 +229,6 @@ test('an explicitly idempotent executor safely resumes an executing call with th
     ],
     toolCalls: [{
       ...call('write-retry', 'write_file', { path: 'original.txt', content: 'once' }, 'executing'),
-      checkpointApprovalId: 'approval-resolved',
       checkpointExecutionArgs: { path: 'hook-rewritten.txt', content: 'once' },
       idempotencyKey: expectedKey,
     }],
@@ -239,7 +246,7 @@ test('an explicitly idempotent executor safely resumes an executing call with th
   )
 
   const result = await runToolsLoop({
-    job: { id: 'idempotent-job', userId: alice },
+    job: { id: 'idempotent-job', userId: idempotentUser },
     step: { id: 'idempotent-step' },
     messages: [],
     loadCheckpoint: async () => ({ state: checkpoint }),
@@ -279,6 +286,237 @@ test('an explicitly idempotent executor safely resumes an executing call with th
   assert.equal(checkpoint.final.text, 'resumed safely')
 })
 
+test('job checkpoint store rejects a stale checkpoint write sequence', () => {
+  const suffix = `${process.pid}-${Date.now()}`
+  const jobId = `checkpoint-cas-job-${suffix}`
+  const stepId = `checkpoint-cas-step-${suffix}`
+  createJob({ id: jobId, userId: alice, title: 'checkpoint CAS', prompt: 'checkpoint CAS' })
+  appendJobSteps(jobId, [{ id: stepId, title: 'step', kind: 'execute' }])
+
+  const newest = saveJobTurnCheckpoint({
+    jobId,
+    stepId,
+    userId: alice,
+    state: { marker: 'newer', checkpointWriteSequence: 2 },
+  })
+  const staleAttempt = saveJobTurnCheckpoint({
+    jobId,
+    stepId,
+    userId: alice,
+    state: { marker: 'stale', checkpointWriteSequence: 1 },
+  })
+
+  assert.equal(staleAttempt.revision, newest.revision)
+  assert.equal(staleAttempt.state.marker, 'newer')
+  assert.equal(staleAttempt.state.checkpointWriteSequence, 2)
+  assert.equal(getJobTurnCheckpoint({ jobId, stepId, userId: alice }).state.marker, 'newer')
+})
+
+test('job checkpoint store rejects conflicting content at the same write sequence', () => {
+  const suffix = `${process.pid}-${Date.now()}-${Math.random()}`
+  const jobId = `checkpoint-equal-cas-job-${suffix}`
+  const stepId = `checkpoint-equal-cas-step-${suffix}`
+  createJob({ id: jobId, userId: alice, title: 'checkpoint equal CAS', prompt: 'checkpoint equal CAS' })
+  appendJobSteps(jobId, [{ id: stepId, title: 'step', kind: 'execute' }])
+
+  const committed = saveJobTurnCheckpoint({
+    jobId,
+    stepId,
+    userId: alice,
+    state: { marker: 'committed', checkpointWriteSequence: 2 },
+  })
+  const conflicting = saveJobTurnCheckpoint({
+    jobId,
+    stepId,
+    userId: alice,
+    state: { marker: 'conflicting', checkpointWriteSequence: 2 },
+  })
+
+  assert.equal(conflicting.revision, committed.revision)
+  assert.equal(conflicting.state.marker, 'committed')
+  assert.equal(conflicting.state.checkpointWriteSequence, 2)
+})
+
+test('job checkpoint store does not downgrade a sequenced checkpoint with an unversioned write', () => {
+  const suffix = `${process.pid}-${Date.now()}-${Math.random()}`
+  const jobId = `checkpoint-unversioned-cas-job-${suffix}`
+  const stepId = `checkpoint-unversioned-cas-step-${suffix}`
+  createJob({ id: jobId, userId: alice, title: 'checkpoint unversioned CAS', prompt: 'checkpoint unversioned CAS' })
+  appendJobSteps(jobId, [{ id: stepId, title: 'step', kind: 'execute' }])
+
+  const committed = saveJobTurnCheckpoint({
+    jobId,
+    stepId,
+    userId: alice,
+    state: { marker: 'committed', checkpointWriteSequence: 2 },
+  })
+  const unversioned = saveJobTurnCheckpoint({
+    jobId,
+    stepId,
+    userId: alice,
+    state: { marker: 'legacy-late-write' },
+  })
+
+  assert.equal(unversioned.revision, committed.revision)
+  assert.equal(unversioned.state.marker, 'committed')
+  assert.equal(unversioned.state.checkpointWriteSequence, 2)
+})
+
+test('job checkpoint store treats an identical equal-sequence retry as idempotent', () => {
+  const suffix = `${process.pid}-${Date.now()}-${Math.random()}`
+  const jobId = `checkpoint-idempotent-cas-job-${suffix}`
+  const stepId = `checkpoint-idempotent-cas-step-${suffix}`
+  createJob({ id: jobId, userId: alice, title: 'checkpoint idempotent CAS', prompt: 'checkpoint idempotent CAS' })
+  appendJobSteps(jobId, [{ id: stepId, title: 'step', kind: 'execute' }])
+
+  const state = {
+    marker: 'committed',
+    nested: { alpha: 1, beta: 2 },
+    checkpointWriteSequence: 2,
+  }
+  const committed = saveJobTurnCheckpoint({ jobId, stepId, userId: alice, state })
+  const retried = saveJobTurnCheckpoint({
+    jobId,
+    stepId,
+    userId: alice,
+    state: {
+      checkpointWriteSequence: 2,
+      nested: { beta: 2, alpha: 1 },
+      marker: 'committed',
+    },
+  })
+
+  assert.equal(retried.revision, committed.revision)
+  assert.deepEqual(retried.state, committed.state)
+})
+
+test('job checkpoint store keeps legacy unversioned updates compatible', () => {
+  const suffix = `${process.pid}-${Date.now()}-${Math.random()}`
+  const jobId = `checkpoint-legacy-cas-job-${suffix}`
+  const stepId = `checkpoint-legacy-cas-step-${suffix}`
+  createJob({ id: jobId, userId: alice, title: 'checkpoint legacy CAS', prompt: 'checkpoint legacy CAS' })
+  appendJobSteps(jobId, [{ id: stepId, title: 'step', kind: 'execute' }])
+
+  const initial = saveJobTurnCheckpoint({
+    jobId,
+    stepId,
+    userId: alice,
+    state: { marker: 'legacy-initial' },
+  })
+  const updated = saveJobTurnCheckpoint({
+    jobId,
+    stepId,
+    userId: alice,
+    state: { marker: 'legacy-updated' },
+  })
+
+  assert.equal(updated.revision, initial.revision + 1)
+  assert.equal(updated.state.marker, 'legacy-updated')
+  assert.equal(updated.state.checkpointWriteSequence, undefined)
+})
+
+test('a ledger-backed idempotent executor resumes an executing record with the same key and commits it', async () => {
+  const suffix = `${process.pid}-${Date.now()}-${Math.random()}`
+  const ledgerUser = issueTestSession({
+    email: `checkpoint-ledger-idempotent-${process.pid}-${Date.now()}@example.com`,
+  }).userId
+  setApprovalMode({ userId: ledgerUser, mode: 'bypass' })
+  const job = { id: `ledger-idempotent-job-${suffix}`, userId: ledgerUser }
+  const step = { id: `ledger-idempotent-step-${suffix}` }
+  const toolCallId = `ledger-idempotent-write-${suffix}`
+  const verificationCallId = `ledger-idempotent-read-${suffix}`
+  const executionArgs = { path: 'ledger-idempotent.txt', content: 'once' }
+  const expectedKey = `job:${job.id}:step:${step.id}:tool:${toolCallId}`
+  let checkpoint = {
+    messages: [
+      { role: 'user', content: 'write once' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: toolCallId,
+          type: 'function',
+          function: { name: 'write_file', arguments: JSON.stringify(executionArgs) },
+        }],
+      },
+    ],
+    toolCalls: [{
+      ...call(toolCallId, 'write_file', executionArgs, 'executing'),
+      checkpointExecutionArgs: executionArgs,
+      checkpointReadOnly: false,
+      idempotencyKey: expectedKey,
+    }],
+    artifactIds: [],
+    iterations: 0,
+  }
+  const ledger = createSideEffectExecutionLedger({ db: getDb() })
+  const ledgerInput = {
+    scope: createSideEffectScope({ job, step, approvalOrigin: 'job' }),
+    toolCallId,
+    idempotencyKey: expectedKey,
+    toolName: 'write_file',
+    args: executionArgs,
+  }
+  ledger.prepare(ledgerInput)
+  ledger.claimExecution(ledgerInput)
+
+  const executions = []
+  const executeTool = async ({ name, args, toolCallId: receivedCallId, idempotencyKey }) => {
+    executions.push({ name, args, toolCallId: receivedCallId, idempotencyKey })
+    return name === 'read_file'
+      ? { ok: true, path: args.path, content: 'once' }
+      : { ok: true, path: args.path, changedPaths: [args.path] }
+  }
+  executeTool.supportsIdempotentResume = ({ name, idempotencyKey }) => (
+    name === 'write_file' && idempotencyKey === expectedKey
+  )
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job,
+    step,
+    messages: [],
+    sideEffectLedger: ledger,
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return { state: checkpoint }
+    },
+    executeTool,
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: verificationCallId,
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"path":"ledger-idempotent.txt"}' },
+          }],
+        }
+      }
+      return { content: 'ledger-backed resume completed', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.text, 'ledger-backed resume completed')
+  assert.equal(executions.filter((entry) => entry.name === 'write_file').length, 1)
+  assert.deepEqual(executions[0], {
+    name: 'write_file',
+    args: executionArgs,
+    toolCallId,
+    idempotencyKey: expectedKey,
+  })
+  const committed = ledger.read(ledgerInput)
+  assert.equal(committed.status, 'committed')
+  assert.deepEqual(ledger.parseOutcome(committed), {
+    ok: true,
+    path: executionArgs.path,
+    changedPaths: [executionArgs.path],
+    sideEffectLedgerReplay: true,
+  })
+})
+
 test('an executing connector checkpoint switched to plan is denied before idempotent resume', async () => {
   const toolCallId = 'connector-write-retry'
   const expectedKey = `job:connector-plan-job:step:connector-plan-step:tool:${toolCallId}`
@@ -299,7 +537,6 @@ test('an executing connector checkpoint switched to plan is denied before idempo
     ],
     toolCalls: [{
       ...call(toolCallId, 'github_create_issue', originalArgs, 'executing'),
-      checkpointApprovalId: 'connector-approved-before-restart',
       checkpointExecutionArgs: finalArgs,
       idempotencyKey: expectedKey,
     }],
@@ -544,4 +781,188 @@ test('resume restores the repeated-call fuse and blocks the third identical call
   assert.equal(result.text, 'Stopped after the durable repeated-call fuse.')
   assert.equal(executions, 2, 'the third identical call must be rejected before the executor runs')
   assert.equal(resumedModelCalls, 2)
+})
+
+test('resume reuses a durably completed model response without another provider request', async () => {
+  let checkpoint = null
+  let modelCalls = 0
+  const modelRequestIds = []
+  let interruptAfterResponse = true
+  const saveCheckpoint = async (state) => {
+    checkpoint = structuredClone(state)
+    return { state: checkpoint }
+  }
+
+  await assert.rejects(runToolsLoop({
+    job: { id: 'resume-model-response-job', userId: alice },
+    step: { id: 'resume-model-response-step' },
+    messages: [{ role: 'user', content: 'answer once' }],
+    saveCheckpoint,
+    onModelPhase: async ({ phase }) => {
+      if (phase === 'completed' && interruptAfterResponse) {
+        throw Object.assign(new Error('process stopped after the response checkpoint'), { code: 'PROCESS_STOPPED' })
+      }
+    },
+    runModel: async ({ modelRequestId }) => {
+      modelCalls += 1
+      modelRequestIds.push(modelRequestId)
+      assert.equal(checkpoint.modelInvocation.status, 'in_flight')
+      assert.equal(modelRequestId, checkpoint.modelInvocation.id)
+      return {
+        content: 'durable answer',
+        toolCalls: [],
+        modelName: 'test-model',
+        providerId: 'test-provider',
+      }
+    },
+  }), /process stopped after the response checkpoint/)
+
+  assert.equal(checkpoint.modelInvocation.status, 'completed')
+  assert.equal(checkpoint.modelInvocation.response.content, 'durable answer')
+  assert.equal(checkpoint.modelInvocation.response.providerId, 'test-provider')
+  assert.match(checkpoint.modelInvocation.id, /^mr_[a-f0-9]{48}$/u)
+  const durableModelRequestId = checkpoint.modelInvocation.id
+  assert.equal(modelCalls, 1)
+
+  interruptAfterResponse = false
+  const resumed = await runToolsLoop({
+    job: { id: 'resume-model-response-job', userId: alice },
+    step: { id: 'resume-model-response-step' },
+    messages: [],
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint,
+    runModel: async () => {
+      modelCalls += 1
+      return { content: 'duplicate answer', toolCalls: [] }
+    },
+  })
+
+  assert.equal(resumed.text, 'durable answer')
+  assert.equal(modelCalls, 1, 'the provider response must be replayed from the checkpoint')
+  assert.deepEqual(modelRequestIds, [durableModelRequestId])
+})
+
+test('resume blocks an in-flight model request whose upstream outcome is unknown', async () => {
+  let checkpoint = null
+  let modelCalls = 0
+  let failResponseCheckpoint = true
+  const saveCheckpoint = async (state, meta = {}) => {
+    if (failResponseCheckpoint && meta.boundary === 'model-response') {
+      throw new Error('checkpoint storage unavailable after provider response')
+    }
+    checkpoint = structuredClone(state)
+    return { state: checkpoint }
+  }
+
+  await assert.rejects(runToolsLoop({
+    job: { id: 'unknown-model-outcome-job', userId: alice },
+    step: { id: 'unknown-model-outcome-step' },
+    messages: [{ role: 'user', content: 'do not bill twice' }],
+    saveCheckpoint,
+    runModel: async () => {
+      modelCalls += 1
+      return { content: 'provider accepted this request', toolCalls: [] }
+    },
+  }), (error) => error?.code === 'CHECKPOINT_FLUSH_FAILED')
+
+  assert.equal(checkpoint.modelInvocation.status, 'in_flight')
+  assert.equal(modelCalls, 1)
+
+  failResponseCheckpoint = false
+  await assert.rejects(runToolsLoop({
+    job: { id: 'unknown-model-outcome-job', userId: alice },
+    step: { id: 'unknown-model-outcome-step' },
+    messages: [],
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint,
+    runModel: async () => {
+      modelCalls += 1
+      return { content: 'duplicate charge', toolCalls: [] }
+    },
+  }), (error) => error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN' && error?.unsafeToReplay === true)
+
+  assert.equal(modelCalls, 1, 'an unknown upstream outcome must not be replayed automatically')
+})
+
+test('a tracked ambiguous transport failure preserves the in-flight invocation for reconciliation', async () => {
+  let checkpoint = null
+  let modelCalls = 0
+  const job = { id: 'transport-unknown-job', userId: alice }
+  const step = { id: 'transport-unknown-step' }
+  const saveCheckpoint = async (state) => {
+    checkpoint = structuredClone(state)
+    return { state: checkpoint }
+  }
+
+  await assert.rejects(runToolsLoop({
+    job,
+    step,
+    messages: [{ role: 'user', content: 'send exactly once' }],
+    saveCheckpoint,
+    runModel: async ({ modelRequestId }) => {
+      modelCalls += 1
+      throw Object.assign(new Error('provider outcome is ambiguous'), {
+        code: 'MODEL_REQUEST_OUTCOME_UNKNOWN',
+        modelRequestId,
+        unsafeToReplay: true,
+        retryable: false,
+      })
+    },
+  }), (error) => error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN')
+
+  assert.equal(modelCalls, 1)
+  assert.equal(checkpoint.modelInvocation.status, 'in_flight')
+  const durableRequestId = checkpoint.modelInvocation.id
+
+  await assert.rejects(runToolsLoop({
+    job,
+    step,
+    messages: [],
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint,
+    runModel: async () => {
+      modelCalls += 1
+      return { content: 'must not be sent', toolCalls: [] }
+    },
+  }), (error) => error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+    && error?.modelRequestId === durableRequestId)
+  assert.equal(modelCalls, 1)
+})
+
+test('resume fails closed before calling the provider when a model invocation checkpoint is malformed', async () => {
+  let modelCalls = 0
+  const malformedInvocation = {
+    version: 2,
+    id: `mr_${'a'.repeat(48)}`,
+    idempotencyKey: `mr_${'b'.repeat(48)}`,
+    fingerprint: 'c'.repeat(64),
+    providerId: null,
+    modelName: null,
+    configRevision: null,
+    iteration: 0,
+    attempt: 1,
+    status: 'in_flight',
+  }
+
+  await assert.rejects(runToolsLoop({
+    job: { id: 'malformed-model-checkpoint-job', userId: alice },
+    step: { id: 'malformed-model-checkpoint-step' },
+    messages: [],
+    loadCheckpoint: async () => ({
+      state: {
+        messages: [{ role: 'user', content: 'do not replay this request' }],
+        iterations: 0,
+        modelInvocation: malformedInvocation,
+      },
+    }),
+    saveCheckpoint: async (state) => ({ state }),
+    runModel: async () => {
+      modelCalls += 1
+      return { content: 'duplicate request', toolCalls: [] }
+    },
+  }), (error) => error?.code === 'MODEL_REQUEST_CONTEXT_DRIFT'
+    && error?.checkpointInvalid === true
+    && error?.unsafeToReplay === true)
+
+  assert.equal(modelCalls, 0)
 })

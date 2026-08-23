@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
+const { trustedInternalLoopPrincipal } = await import('../server/services/loop/internalExecutionPrincipal.js')
+const INTERNAL_APPROVAL_PRINCIPAL = trustedInternalLoopPrincipal()
 
 function spec(name) {
   const value = SERVER_TOOL_SPECS.find((item) => item?.function?.name === name)
@@ -25,6 +27,7 @@ test('run_command: three probe-only batches force execution and block variant pr
   let modelCalls = 0
 
   const result = await runToolsLoop({
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     job: {
       id: 'execution-convergence-probe-job',
       userId: null,
@@ -141,6 +144,7 @@ test('run_command: convergence recognizes repeated installs despite command argu
   let modelCalls = 0
 
   const result = await runToolsLoop({
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     job: {
       id: 'execution-convergence-install-job',
       userId: null,
@@ -229,6 +233,7 @@ test('read-only planning never activates execution convergence', async () => {
   let modelCalls = 0
 
   const result = await runToolsLoop({
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     job: {
       id: 'read-only-convergence-job',
       userId: null,

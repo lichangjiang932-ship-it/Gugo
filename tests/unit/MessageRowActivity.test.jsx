@@ -21,6 +21,61 @@ function setupDom() {
   return dom
 }
 
+test('unknown side-effect block clearly stops automatic retry and links to recovery settings', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const copy = {
+    'chatMessages.sideEffectUnknownTitle': 'Operation outcome unknown; automatic retry stopped',
+    'chatMessages.sideEffectUnknownBody': 'Verify the real outcome in Settings → Operation recovery. It will not run again until you confirm.',
+    'chatMessages.openSideEffectRecovery': 'Open Settings → Operation recovery',
+  }
+  const msg = {
+    id: 'assistant-side-effect-unknown',
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+    meta: {
+      serverTurnId: 'turn-side-effect-unknown',
+      serverRecoveryBlocked: true,
+      serverRecoveryKind: 'side_effect_outcome_unknown',
+      serverConnectionState: 'blocked',
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow msg={msg} rowKey={msg.id} generatingMessageId="" lang="en" t={(key) => copy[key] || key} />
+      </I18nProvider>,
+    ))
+    const card = rootElement.querySelector('[data-testid="side-effect-recovery-blocked"]')
+    assert.ok(card)
+    assert.match(card.textContent, /automatic retry stopped/)
+    assert.match(card.textContent, /It will not run again until you confirm/)
+    assert.equal(card.querySelector('a')?.getAttribute('href'), '#/settings?tab=recovery')
+
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={{
+            ...msg,
+            meta: { ...msg.meta, serverConnectionState: 'reconnecting' },
+          }}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          t={(key) => copy[key] || key}
+        />
+      </I18nProvider>,
+    ))
+    assert.equal(rootElement.querySelector('[data-testid="side-effect-recovery-blocked"]'), null)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('tool readiness is visible without a tool card and yields to the single durable tool call', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
@@ -122,6 +177,456 @@ test('completed assistant turn renders its persisted total elapsed time', async 
     const durationHeader = rootElement.querySelector('[data-testid="task-duration-header"]')
     assert.ok(durationHeader)
     assert.equal(durationHeader.textContent, 'Elapsed 1m 5s')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a sub-second completed turn never renders as zero seconds', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'assistant-sub-second-duration',
+    role: 'assistant',
+    content: 'Fast response.',
+    timestamp: 100_000,
+    meta: {
+      serverTurnId: 'turn-sub-second-duration',
+      latency: 223,
+    },
+  }
+  const t = (key, values = {}) => {
+    if (key === 'chatMessages.elapsed') return `Elapsed ${values.value}`
+    if (key === 'chatMessages.durationLessThanSecond') return '<1s'
+    return key
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          t={t}
+        />
+      </I18nProvider>,
+    ))
+
+    assert.equal(rootElement.querySelector('[data-testid="task-duration-header"]')?.textContent, 'Elapsed <1s')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a preflight failure without timing or file evidence shows neither zero seconds nor a file receipt', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  let manageModelsCount = 0
+  const msg = {
+    id: 'assistant-preflight-failure',
+    role: 'assistant',
+    content: 'Configure a model before sending.',
+    timestamp: Date.now(),
+    meta: {
+      failed: true,
+      executionStarted: false,
+      latency: null,
+      turnCompletedAt: null,
+      serverFailure: { code: 'MODEL_CONFIG_MISSING' },
+      serverTurnId: 'turn-preflight-failure',
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          onManageModels={() => { manageModelsCount += 1 }}
+          t={(key) => key}
+        />
+      </I18nProvider>,
+    ))
+
+    assert.equal(rootElement.querySelector('[data-testid="task-duration-header"]'), null)
+    assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]'), null)
+    assert.doesNotMatch(rootElement.textContent, /null\s*ms|0\s*(?:s|seconds?)/i)
+    assert.ok(rootElement.querySelector('[data-testid="model-setup-error-card"]'))
+    await act(async () => rootElement.querySelector('[data-testid="open-model-settings"]').click())
+    assert.equal(manageModelsCount, 1)
+    assert.match(rootElement.textContent, /Configure a model before sending/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a runtime shutdown handoff says the message was not sent without showing elapsed time', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'assistant-runtime-handoff',
+    role: 'assistant',
+    content: 'The local runtime is restarting. The message was not sent; retry shortly.',
+    timestamp: Date.now(),
+    meta: {
+      failed: true,
+      latency: 0,
+      serverFailure: { code: 'TURN_ENGINE_SHUTTING_DOWN', action: 'retry' },
+      serverTurnId: 'turn-runtime-handoff',
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          t={(key) => key}
+        />
+      </I18nProvider>,
+    ))
+
+    assert.equal(rootElement.querySelector('[data-testid="task-duration-header"]'), null)
+    assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]'), null)
+    assert.equal(rootElement.querySelector('[data-testid="model-setup-error-card"]'), null)
+    assert.match(rootElement.textContent, /message was not sent/i)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a runtime restart action opens diagnostics and cannot resend the message', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'assistant-runtime-configuration',
+    role: 'assistant',
+    content: 'The local runtime is not configured.',
+    timestamp: Date.now(),
+    meta: {
+      failed: true,
+      executionStarted: false,
+      serverFailure: {
+        code: 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
+        action: 'restart_runtime',
+      },
+      serverTurnId: 'turn-runtime-configuration',
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          onRetryModelFailure={() => assert.fail('restart_runtime must not resend')}
+          t={(key) => key}
+        />
+      </I18nProvider>,
+    ))
+
+    assert.ok(rootElement.querySelector('[data-testid="runtime-recovery-error-card"]'))
+    assert.equal(
+      rootElement.querySelector('[data-testid="open-runtime-diagnostics"]')?.getAttribute('href'),
+      '#/settings?tab=about',
+    )
+    assert.equal(rootElement.querySelector('[data-testid="retry-model-request"]'), null)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('an in-flight runtime shutdown is an interruption, not an unsent message or safe resend', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'assistant-runtime-interrupted',
+    role: 'assistant',
+    content: 'The local runtime stopped during execution. Completed progress was preserved.',
+    timestamp: Date.now(),
+    meta: {
+      failed: true,
+      executionStarted: true,
+      latency: 1_200,
+      serverFailure: { code: 'TURN_ENGINE_SHUTDOWN' },
+      serverTurnId: 'turn-runtime-interrupted',
+    },
+  }
+  const t = (key, values = {}) => {
+    if (key === 'chatMessages.elapsed') return `Elapsed ${values.value}`
+    if (key === 'chatMessages.durationSeconds') return `${values.seconds}s`
+    return key
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          onRetryModelFailure={() => assert.fail('an in-flight interruption must not be resent')}
+          t={t}
+        />
+      </I18nProvider>,
+    ))
+
+    assert.ok(rootElement.querySelector('[data-testid="task-duration-header"]'))
+    assert.equal(rootElement.querySelector('[data-testid="retry-model-request"]'), null)
+    assert.doesNotMatch(rootElement.textContent, /message was not sent/i)
+    assert.match(rootElement.textContent, /stopped during execution/i)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('only a model pre-execution failure exposes the guarded resend action', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const retried = []
+  const baseMessage = {
+    id: 'assistant-model-preflight',
+    role: 'assistant',
+    content: 'Configure a model before sending.',
+    timestamp: Date.now(),
+    meta: {
+      failed: true,
+      serverFailure: { code: 'MODEL_CONFIG_MISSING' },
+    },
+  }
+  const renderMessage = async (msg) => {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          onRetryModelFailure={(value) => retried.push(value.id)}
+          t={(key) => key}
+        />
+      </I18nProvider>,
+    ))
+  }
+
+  try {
+    await renderMessage(baseMessage)
+    const retry = rootElement.querySelector('[data-testid="retry-model-request"]')
+    assert.ok(retry)
+    await act(async () => retry.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    assert.deepEqual(retried, [baseMessage.id])
+
+    await renderMessage({
+      ...baseMessage,
+      meta: { ...baseMessage.meta, toolCalls: [{ id: 'call-1', name: 'write_file' }] },
+    })
+    assert.equal(rootElement.querySelector('[data-testid="retry-model-request"]'), null)
+
+    await renderMessage({
+      ...baseMessage,
+      meta: { ...baseMessage.meta, serverFailure: { code: 'TURN_FAILED' } },
+    })
+    assert.equal(rootElement.querySelector('[data-testid="retry-model-request"]'), null)
+
+    for (const meta of [
+      { serverFailure: { code: 'MODEL_TIMEOUT' } },
+      { serverFailure: { code: 'MODEL_AUTH_FAILED' } },
+      { serverFailure: { code: 'MODEL_REQUEST_OUTCOME_UNKNOWN' } },
+      {
+        serverFailure: { code: 'MODEL_CONFIG_MISSING' },
+        serverRecoveryBlocked: true,
+        serverRecoveryKind: 'model_request_outcome_unknown',
+        serverRecoveryModelRequestId: 'mr_unknown',
+      },
+    ]) {
+      await renderMessage({ ...baseMessage, meta: { ...baseMessage.meta, ...meta } })
+      assert.equal(rootElement.querySelector('[data-testid="retry-model-request"]'), null)
+    }
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('runtime model setup failures keep the actionable settings card without exposing resend', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'assistant-model-auth-failure',
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+    meta: {
+      failed: true,
+      latency: 1_250,
+      serverTurnId: 'turn-model-auth-failure',
+      serverFailure: { code: 'MODEL_AUTH_FAILED' },
+    },
+  }
+  const t = (key, values = {}) => {
+    if (key === 'errors.modelConfigurationFailure') return 'Model setup needs attention.'
+    if (key === 'errors.modelAuthenticationFailed') return 'The model service rejected its credentials.'
+    if (key === 'chatMessages.elapsed') return `Elapsed ${values.value}`
+    if (key === 'chatMessages.durationSeconds') return `${values.seconds}s`
+    return key
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          onRetryModelFailure={() => assert.fail('runtime failures must not be resent')}
+          t={t}
+        />
+      </I18nProvider>,
+    ))
+
+    const card = rootElement.querySelector('[data-testid="model-setup-error-card"]')
+    assert.ok(card)
+    assert.match(card.textContent, /Model setup needs attention/)
+    assert.match(card.textContent, /rejected its credentials/)
+    assert.ok(rootElement.querySelector('[data-testid="task-duration-header"]'))
+    assert.equal(rootElement.querySelector('[data-testid="retry-model-request"]'), null)
+    assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]'), null)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('successful assistant text that mentions a model outage is never rewritten as a setup error', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'assistant-model-outage-explanation',
+    role: 'assistant',
+    content: 'A model endpoint can be unavailable during provider maintenance.',
+    timestamp: Date.now(),
+    meta: { type: 'model_reply' },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow msg={msg} rowKey={msg.id} generatingMessageId="" lang="en" t={(key) => key} />
+      </I18nProvider>,
+    ))
+
+    assert.equal(rootElement.querySelector('[data-testid="model-setup-error-card"]'), null)
+    assert.match(rootElement.textContent, /model endpoint can be unavailable/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('an ordinary chat failure does not invent a missing-file receipt', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'assistant-runtime-failure',
+    role: 'assistant',
+    content: 'The model connection was interrupted.',
+    timestamp: Date.now(),
+    meta: {
+      failed: true,
+      latency: 1200,
+      serverFailure: { code: 'TURN_FAILED' },
+      serverTurnId: 'turn-runtime-failure',
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          t={(key) => key}
+        />
+      </I18nProvider>,
+    ))
+
+    assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]'), null)
+    assert.ok(rootElement.querySelector('[data-testid="task-duration-header"]'))
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a failed file task without receipts keeps its missing-file completion state', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'assistant-file-failure',
+    role: 'assistant',
+    content: 'The requested document could not be generated.',
+    timestamp: Date.now(),
+    meta: {
+      failed: true,
+      latency: 1200,
+      artifactType: 'docx',
+      serverFailure: { code: 'ARTIFACT_NOT_CREATED' },
+      serverTurnId: 'turn-file-failure',
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          t={(key) => key === 'chatMessages.replyIncomplete'
+            ? 'No file was generated. Review the error above, then try again.'
+            : key}
+        />
+      </I18nProvider>,
+    ))
+
+    assert.equal(
+      rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent,
+      'No file was generated. Review the error above, then try again.',
+    )
+    assert.doesNotMatch(rootElement.textContent, /local file receipts?/i)
+    assert.ok(rootElement.querySelector('[data-testid="task-duration-header"]'))
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

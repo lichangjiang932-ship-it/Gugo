@@ -70,7 +70,10 @@ export default function usePersistenceHydration(options) {
           snapshot,
           previousSnapshot,
           meta: parsed.meta,
-          skipInitialWrite: !durableNeedsToolsConfigMigration && persistedSnapshotsEqual(snapshot, previousSnapshot),
+          skipInitialWrite: !durableNeedsToolsConfigMigration
+            && !durable.cleanupNeeded
+            && !bootstrap.settings?.cleanupNeeded
+            && persistedSnapshotsEqual(snapshot, previousSnapshot),
         }
       } catch (error) { console.warn('[AppContext] invalid IndexedDB snapshot; trying legacy data:', error) }
     }
@@ -98,7 +101,9 @@ export default function usePersistenceHydration(options) {
       snapshot,
       previousSnapshot,
       meta: fallback?.meta || {},
-      skipInitialWrite: !needsToolsConfigMigration && persistedSnapshotsEqual(snapshot, previousSnapshot),
+      skipInitialWrite: !needsToolsConfigMigration
+        && !fallback?.cleanupNeeded
+        && persistedSnapshotsEqual(snapshot, previousSnapshot),
       unavailable: !durable.ok && !storage,
     }
   }, [lastClearedAtRef, persistToLegacy, tabIdRef, updateLocalMirrorAfterIndexedDbCommit])

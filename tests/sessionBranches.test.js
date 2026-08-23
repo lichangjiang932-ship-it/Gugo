@@ -9,6 +9,12 @@ process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'gugo-session-branches-tests',
 const { getDb } = await import('../server/db.js')
 const { migrateToV59 } = await import('../server/migrations/v59SessionBranches.js')
 const { handleSessionRequest } = await import('../server/routes/sessionRoutes.js')
+const { SQLITE_TURN_PERSISTENCE_ADAPTER } = await import(
+  '../server/adapters/sqliteTurnPersistenceAdapter.js'
+)
+const { createTurnPersistenceAdapterController } = await import(
+  '../server/core/turnPersistenceAdapter.js'
+)
 const {
   deleteSession,
   forkSession,
@@ -20,6 +26,9 @@ const {
   upsertSession,
 } = await import('../server/services/sessionStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+const { activateTestCompactionArchivePort } = await import('./helpers/testCompactionArchivePort.js')
+
+const compactionArchiveController = activateTestCompactionArchivePort({ env: process.env })
 
 migrateToV59(getDb())
 
@@ -43,7 +52,10 @@ async function withRouteServer(engine, fn) {
 }
 
 test.beforeEach(cleanDb)
-test.after(cleanDb)
+test.after(() => {
+  compactionArchiveController.release()
+  cleanDb()
+})
 
 test('v59 adds nullable lineage metadata and clears a deleted parent reference', () => {
   const db = getDb()
@@ -212,48 +224,56 @@ test('fork and branch routes isolate users and reject an active source with 409'
   })
   let active = false
   const engine = { hasActiveSession: () => active }
-
-  await withRouteServer(engine, async (baseUrl) => {
-    const ownerHeaders = {
-      Authorization: `Bearer ${owner.token}`,
-      'Content-Type': 'application/json',
-    }
-    const otherHeaders = { Authorization: `Bearer ${other.token}` }
-    const forked = await fetch(`${baseUrl}/api/sessions/route-branch-source/fork`, {
-      method: 'POST',
-      headers: ownerHeaders,
-      body: JSON.stringify({ label: 'Route alternative' }),
-    })
-    assert.equal(forked.status, 201)
-    const forkedBody = await forked.json()
-    assert.equal(forkedBody.ok, true)
-    assert.equal(forkedBody.session.parentSessionId, 'route-branch-source')
-    assert.equal(forkedBody.totalMessages, 1)
-
-    const branches = await fetch(`${baseUrl}/api/sessions/route-branch-source/branches`, {
-      headers: ownerHeaders,
-    })
-    assert.equal(branches.status, 200)
-    assert.equal((await branches.json()).branches.length, 2)
-
-    const hidden = await fetch(`${baseUrl}/api/sessions/route-branch-source/branches`, {
-      headers: otherHeaders,
-    })
-    assert.equal(hidden.status, 404)
-
-    active = true
-    const blocked = await fetch(`${baseUrl}/api/sessions/route-branch-source/fork`, {
-      method: 'POST',
-      headers: ownerHeaders,
-      body: JSON.stringify({ label: 'Blocked' }),
-    })
-    assert.equal(blocked.status, 409)
-    assert.deepEqual((await blocked.json()).error, {
-      code: 'SESSION_ACTIVE',
-      message: 'session has an active turn',
-    })
-
-    const unauthorized = await fetch(`${baseUrl}/api/sessions/route-branch-source/branches`)
-    assert.equal(unauthorized.status, 401)
+  const persistence = createTurnPersistenceAdapterController(SQLITE_TURN_PERSISTENCE_ADAPTER, {
+    source: 'test.session-branches',
   })
+  persistence.activate()
+
+  try {
+    await withRouteServer(engine, async (baseUrl) => {
+      const ownerHeaders = {
+        Authorization: `Bearer ${owner.token}`,
+        'Content-Type': 'application/json',
+      }
+      const otherHeaders = { Authorization: `Bearer ${other.token}` }
+      const forked = await fetch(`${baseUrl}/api/sessions/route-branch-source/fork`, {
+        method: 'POST',
+        headers: ownerHeaders,
+        body: JSON.stringify({ label: 'Route alternative' }),
+      })
+      assert.equal(forked.status, 201)
+      const forkedBody = await forked.json()
+      assert.equal(forkedBody.ok, true)
+      assert.equal(forkedBody.session.parentSessionId, 'route-branch-source')
+      assert.equal(forkedBody.totalMessages, 1)
+
+      const branches = await fetch(`${baseUrl}/api/sessions/route-branch-source/branches`, {
+        headers: ownerHeaders,
+      })
+      assert.equal(branches.status, 200)
+      assert.equal((await branches.json()).branches.length, 2)
+
+      const hidden = await fetch(`${baseUrl}/api/sessions/route-branch-source/branches`, {
+        headers: otherHeaders,
+      })
+      assert.equal(hidden.status, 404)
+
+      active = true
+      const blocked = await fetch(`${baseUrl}/api/sessions/route-branch-source/fork`, {
+        method: 'POST',
+        headers: ownerHeaders,
+        body: JSON.stringify({ label: 'Blocked' }),
+      })
+      assert.equal(blocked.status, 409)
+      assert.deepEqual((await blocked.json()).error, {
+        code: 'SESSION_ACTIVE',
+        message: 'session has an active turn',
+      })
+
+      const unauthorized = await fetch(`${baseUrl}/api/sessions/route-branch-source/branches`)
+      assert.equal(unauthorized.status, 401)
+    })
+  } finally {
+    persistence.release()
+  }
 })

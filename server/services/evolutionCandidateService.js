@@ -1,11 +1,30 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-import { callBackgroundModelWithTools } from '../adapters/modelProxy.js'
 import { getDb } from '../db.js'
 import {
   buildEvolutionDataset,
   sanitizeEvolutionText,
 } from './evolutionDatasetService.js'
+import {
+  assertEvolutionModelIdentityCurrent,
+  callEvolutionBackgroundModel,
+  resolveEvolutionModelIdentity,
+} from './evolutionModelRuntime.js'
+import {
+  EVOLUTION_CONFIG_ALLOWED_KEYS,
+  canonicalEvolutionConfigPatch,
+} from './evolutionConfigPolicy.js'
+import {
+  assertEvolutionOperationRunnable,
+  attachEvolutionOperationError,
+  blockEvolutionOperation,
+  checkpointEvolutionOperation,
+  claimEvolutionOperation,
+  commitEvolutionOperation,
+  failEvolutionOperation,
+  openEvolutionOperation,
+} from './evolutionOperationService.js'
+import { holdEvolutionOperationLease } from './evolutionOperationLeaseRuntime.js'
 
 const CANDIDATE_KINDS = new Set(['prompt', 'plugin', 'config'])
 const DATASET_FINGERPRINT_RE = /^[a-f0-9]{64}$/
@@ -79,6 +98,12 @@ function normalizeKind(value) {
 
 function normalizeTarget(value, kind) {
   const target = String(value || '').trim()
+  if (kind === 'config' && target !== 'config:runtime') {
+    throw serviceError(
+      'EVOLUTION_CANDIDATE_TARGET_INVALID',
+      'config candidates may only target config:runtime',
+    )
+  }
   const pattern = new RegExp(`^${kind}:[a-z0-9][a-z0-9._/-]{0,127}$`, 'iu')
   if (!pattern.test(target) || target.length > 160) {
     throw serviceError('EVOLUTION_CANDIDATE_TARGET_INVALID', `target must use the ${kind}: namespace`)
@@ -143,7 +168,11 @@ function candidateView(row, { includeContent = false } = {}) {
       curationVersion: row.curation_version,
       sourceRecordIds: parseJsonList(row.source_record_ids_json),
       sourceEvidenceIds: parseJsonList(row.source_evidence_ids_json),
+      generatorProviderId: row.generator_provider_id || null,
       generatorModel: row.generator_model || null,
+      ...(row.generator_config_revision != null
+        ? { generatorConfigRevision: row.generator_config_revision }
+        : {}),
       generatorMode: row.generator_mode,
     },
     contentSha256: row.content_sha256,
@@ -173,6 +202,14 @@ function selectedSourceRecords(dataset, sourceRecordIds) {
 }
 
 function generationMessages({ kind, target, objective, dataset, modelRecords }) {
+  const configInstructions = kind === 'config'
+    ? [
+        'For a config candidate, content must be a JSON object with exactly schemaVersion, mode, and env.',
+        'Use {"schemaVersion":1,"mode":"patch","env":{"ALLOWED_KEY":"value"}}.',
+        `Allowed env keys are: ${Object.keys(EVOLUTION_CONFIG_ALLOWED_KEYS).sort().join(', ')}.`,
+        'Use null only to remove an allowed key. permissionsRequested must be an empty array.',
+      ]
+    : []
   return [
     {
       role: 'system',
@@ -182,6 +219,7 @@ function generationMessages({ kind, target, objective, dataset, modelRecords }) 
         'You have no tools and must not claim to apply, install, activate, approve, test, or deploy anything.',
         'Never include credentials, personal data, local absolute paths, or raw evidence not supplied here.',
         'Minimize permission requests. A plugin permission declaration is review metadata only and grants no capability.',
+        ...configInstructions,
         'Return JSON only with this exact shape:',
         '{"title":"short title","summary":"why this may help","content":"complete proposed text","assumptions":["assumption"],"expectedImpact":["measurable impact"],"permissionsRequested":["exact permission"]}',
       ].join(' '),
@@ -200,21 +238,40 @@ function generationMessages({ kind, target, objective, dataset, modelRecords }) 
   ]
 }
 
-function normalizeModelCandidate(response) {
+function normalizeModelCandidate(response, kind) {
   const parsed = parseJsonObject(response)
   if (!parsed) throw serviceError('EVOLUTION_CANDIDATE_OUTPUT_INVALID', 'candidate model returned invalid JSON', 502)
-  const rawContent = typeof parsed.content === 'string'
+  let rawContent = typeof parsed.content === 'string'
     ? parsed.content
     : parsed.content && typeof parsed.content === 'object'
       ? JSON.stringify(parsed.content, null, 2)
       : ''
+  const permissionsRequested = boundedList(parsed.permissionsRequested, 50, 256)
+  if (kind === 'config') {
+    if (permissionsRequested.length > 0) {
+      throw serviceError(
+        'EVOLUTION_CONFIG_PERMISSION_CHANGE_UNSUPPORTED',
+        'config candidates cannot request permissions',
+        502,
+      )
+    }
+    try {
+      rawContent = canonicalEvolutionConfigPatch(parsed.content)
+    } catch {
+      throw serviceError(
+        'EVOLUTION_CONFIG_CONTENT_INVALID',
+        'config candidate model output violated the runtime config policy',
+        502,
+      )
+    }
+  }
   return {
     title: boundedText(parsed.title, 160, { required: true }),
     summary: boundedText(parsed.summary, 2_000, { required: true }),
     content: boundedText(rawContent, 24_000, { required: true }),
     assumptions: boundedList(parsed.assumptions, 20, 500),
     expectedImpact: boundedList(parsed.expectedImpact, 20, 500),
-    permissionsRequested: boundedList(parsed.permissionsRequested, 50, 256),
+    permissionsRequested,
   }
 }
 
@@ -225,15 +282,21 @@ export async function generateEvolutionCandidate({
   objective: objectiveValue,
   datasetFingerprint: fingerprintValue,
   sourceRecordIds: sourceRecordIdsValue,
+  providerId,
   modelName = null,
+  idempotencyKey,
+  operationId,
   now = Date.now(),
   signal,
-  runModel = ({ messages, userId: owner, modelName: requestedModel, signal: abortSignal }) => (
-    callBackgroundModelWithTools({
+  runModel = ({ messages, userId: owner, providerId: requestedProvider, runtimeProviderId, runtimeEnv, modelName: requestedModel, signal: abortSignal }) => (
+    callEvolutionBackgroundModel({
       messages,
       userId: owner,
+      providerId: requestedProvider,
+      runtimeProviderId,
       modelName: requestedModel,
       signal: abortSignal,
+      runtimeEnv,
     })
   ),
 } = {}) {
@@ -254,63 +317,210 @@ export async function generateEvolutionCandidate({
   if (!Number.isSafeInteger(timestamp) || timestamp < 0) {
     throw serviceError('EVOLUTION_TIMESTAMP_INVALID', 'now must be a non-negative safe integer')
   }
+  const requestedProvider = inputText(
+    providerId,
+    512,
+    'EVOLUTION_CANDIDATE_PROVIDER_INVALID',
+    'providerId',
+    { required: true },
+  )
+  const requestedModel = inputText(
+    modelName,
+    512,
+    'EVOLUTION_CANDIDATE_MODEL_INVALID',
+    'modelName',
+    { required: true },
+  )
+  const modelIdentity = resolveEvolutionModelIdentity({
+    userId: owner,
+    providerId: requestedProvider,
+    modelName: requestedModel,
+  })
+  const durableProvider = modelIdentity.providerId
+  let operation = openEvolutionOperation({
+    userId: owner,
+    kind: 'candidate',
+    idempotencyKey,
+    operationId,
+    request: {
+      kind,
+      target,
+      objective,
+      datasetFingerprint,
+      sourceRecordIds,
+      providerId: durableProvider,
+      modelName: requestedModel,
+      configRevision: modelIdentity.configRevision,
+    },
+    now: timestamp,
+  })
+  if (operation.state === 'completed') {
+    return getEvolutionCandidate({ userId: owner, id: operation.result.id })
+  }
+  assertEvolutionOperationRunnable(operation)
+
   const dataset = buildEvolutionDataset({ userId: owner, limit: 200 })
   if (dataset.datasetFingerprint !== datasetFingerprint) {
     throw serviceError('EVOLUTION_DATASET_STALE', 'curated dataset fingerprint is stale', 409)
   }
   const selected = selectedSourceRecords(dataset, sourceRecordIds)
-  let modelResponse
-  try {
-    modelResponse = await runModel({
-      messages: generationMessages({ kind, target, objective, dataset, modelRecords: selected.modelRecords }),
+  let output = operation.checkpoint?.output || null
+  let resultId = operation.checkpoint?.resultId || null
+  if (!output) {
+    const modelClaim = claimEvolutionOperation({
       userId: owner,
-      modelName: inputText(
-        modelName,
-        512,
-        'EVOLUTION_CANDIDATE_MODEL_INVALID',
-        'modelName',
-      ) || undefined,
+      id: operation.id,
+      stage: 'candidate:model_call',
+    })
+    const modelLease = holdEvolutionOperationLease({
+      userId: owner,
+      id: operation.id,
+      workerToken: modelClaim.workerToken,
+      leaseOwnerId: modelClaim.leaseOwnerId,
+      leaseExpiresAt: modelClaim.leaseExpiresAt,
       signal,
     })
-  } catch (error) {
-    if (error?.name === 'AbortError') throw error
-    throw serviceError('EVOLUTION_CANDIDATE_MODEL_FAILED', 'candidate model generation failed', 502)
+    let modelResponse
+    try {
+      modelResponse = await runModel({
+        messages: generationMessages({ kind, target, objective, dataset, modelRecords: selected.modelRecords }),
+        userId: owner,
+        providerId: durableProvider,
+        runtimeProviderId: modelIdentity.runtimeProviderId,
+        runtimeEnv: modelIdentity.runtimeEnv,
+        configRevision: modelIdentity.configRevision,
+        modelName: requestedModel,
+        signal: modelLease.signal,
+      })
+    } catch (error) {
+      const failure = error?.name === 'AbortError'
+        ? error
+        : serviceError('EVOLUTION_CANDIDATE_MODEL_FAILED', 'candidate model generation failed', 502)
+      try {
+        blockEvolutionOperation({
+          userId: owner,
+          id: operation.id,
+          workerToken: modelClaim.workerToken,
+          leaseOwnerId: modelClaim.leaseOwnerId,
+          error: failure,
+        })
+      } finally {
+        modelLease.stop()
+      }
+      throw attachEvolutionOperationError(failure, operation.id)
+    }
+    try {
+      const actualProvider = String(modelResponse?.providerId || '').trim()
+      const actualModel = String(modelResponse?.modelName || '').trim()
+      if (actualProvider !== durableProvider || actualModel !== requestedModel) {
+        throw serviceError('EVOLUTION_CANDIDATE_MODEL_MISMATCH', 'candidate generation did not use the selected Provider and model', 502)
+      }
+      output = normalizeModelCandidate(modelResponse?.content ?? modelResponse, kind)
+      const currentDataset = buildEvolutionDataset({ userId: owner, limit: 200 })
+      if (currentDataset.datasetFingerprint !== datasetFingerprint) {
+        throw serviceError('EVOLUTION_DATASET_CHANGED', 'curated dataset changed during generation', 409)
+      }
+      assertEvolutionModelIdentityCurrent({ userId: owner, identity: modelIdentity })
+      resultId = randomUUID()
+      operation = checkpointEvolutionOperation({
+        userId: owner,
+        id: operation.id,
+        workerToken: modelClaim.workerToken,
+        leaseOwnerId: modelClaim.leaseOwnerId,
+        stage: 'candidate:model_response_checkpointed',
+        checkpoint: {
+          modelResponseStored: true,
+          resultId,
+          output,
+          progress: { modelResponseStored: true },
+        },
+      })
+    } catch (error) {
+      try {
+        if (error?.code !== 'EVOLUTION_OPERATION_IN_PROGRESS') {
+          failEvolutionOperation({
+            userId: owner,
+            id: operation.id,
+            workerToken: modelClaim.workerToken,
+            leaseOwnerId: modelClaim.leaseOwnerId,
+            error,
+          })
+        }
+      } finally {
+        modelLease.stop()
+      }
+      throw attachEvolutionOperationError(error, operation.id)
+    }
+    modelLease.stop()
   }
-  const output = normalizeModelCandidate(modelResponse?.content ?? modelResponse)
+
   const currentDataset = buildEvolutionDataset({ userId: owner, limit: 200 })
   if (currentDataset.datasetFingerprint !== datasetFingerprint) {
-    throw serviceError('EVOLUTION_DATASET_CHANGED', 'curated dataset changed during generation', 409)
+    throw serviceError('EVOLUTION_DATASET_CHANGED', 'curated dataset changed before candidate persistence', 409)
   }
+  assertEvolutionModelIdentityCurrent({ userId: owner, identity: modelIdentity })
   const sourceEvidenceIds = selected.records.flatMap((record) => record.evidenceIds).sort()
-  const id = randomUUID()
   const contentSha256 = sha256(output.content)
-  getDb().prepare(`
-    INSERT INTO evolution_candidates (
-      id, user_id, kind, target, title, summary, content,
-      assumptions_json, expected_impact_json, permissions_requested_json,
-      dataset_fingerprint, curation_version, source_record_ids_json, source_evidence_ids_json,
-      generator_model, generator_mode, content_sha256, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'background_model_no_tools', ?, ?)
-  `).run(
-    id,
-    owner,
-    kind,
-    target,
-    output.title,
-    output.summary,
-    output.content,
-    JSON.stringify(output.assumptions),
-    JSON.stringify(output.expectedImpact),
-    JSON.stringify(output.permissionsRequested),
-    datasetFingerprint,
-    dataset.curationVersion,
-    JSON.stringify(sourceRecordIds),
-    JSON.stringify(sourceEvidenceIds),
-    boundedText(modelResponse?.modelName, 512) || null,
-    contentSha256,
-    timestamp,
-  )
-  return getEvolutionCandidate({ userId: owner, id })
+  const finalClaim = claimEvolutionOperation({
+    userId: owner,
+    id: operation.id,
+    stage: 'candidate:finalizing',
+  })
+  try {
+    commitEvolutionOperation({
+      userId: owner,
+      id: operation.id,
+      workerToken: finalClaim.workerToken,
+      leaseOwnerId: finalClaim.leaseOwnerId,
+      resultType: 'candidate',
+      resultId,
+      checkpoint: operation.checkpoint,
+      writeResult: (db) => db.prepare(`
+        INSERT INTO evolution_candidates (
+          id, user_id, kind, target, title, summary, content,
+          assumptions_json, expected_impact_json, permissions_requested_json,
+          dataset_fingerprint, curation_version, source_record_ids_json, source_evidence_ids_json,
+          generator_provider_id, generator_model, generator_config_revision, generator_mode, content_sha256, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'background_model_no_tools', ?, ?)
+      `).run(
+        resultId,
+        owner,
+        kind,
+        target,
+        output.title,
+        output.summary,
+        output.content,
+        JSON.stringify(output.assumptions),
+        JSON.stringify(output.expectedImpact),
+        JSON.stringify(output.permissionsRequested),
+        datasetFingerprint,
+        dataset.curationVersion,
+        JSON.stringify(sourceRecordIds),
+        JSON.stringify(sourceEvidenceIds),
+        durableProvider,
+        requestedModel,
+        modelIdentity.configRevision,
+        contentSha256,
+        timestamp,
+      ),
+    })
+  } catch (error) {
+    if (error?.code !== 'EVOLUTION_OPERATION_IN_PROGRESS') {
+      try {
+        failEvolutionOperation({
+          userId: owner,
+          id: operation.id,
+          workerToken: finalClaim.workerToken,
+          leaseOwnerId: finalClaim.leaseOwnerId,
+          error,
+        })
+      } catch {
+        // A fenced completion already exposes the authoritative operation state.
+      }
+    }
+    throw attachEvolutionOperationError(error, operation.id)
+  }
+  return getEvolutionCandidate({ userId: owner, id: resultId })
 }
 
 export function getEvolutionCandidate({ userId, id } = {}) {

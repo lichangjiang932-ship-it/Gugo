@@ -250,7 +250,7 @@ function turnEvidenceMeta(message) {
     ? message.modelContext
     : {}
   const state = context.turnEvidence === true ? String(context.evidenceState || '') : ''
-  if (!['cancelled', 'failed', 'interrupted'].includes(state)) return {}
+  if (!['blocked', 'cancelled', 'failed', 'interrupted'].includes(state)) return {}
 
   const failure = context.error && typeof context.error === 'object' ? context.error : null
   const artifactIds = [...new Set((Array.isArray(context.artifactIds) ? context.artifactIds : [])
@@ -260,6 +260,22 @@ function turnEvidenceMeta(message) {
     ? context.iterations
     : undefined
   const deliveryArtifactIds = optionalContextArtifactIds(context, 'deliveryArtifactIds')
+  const recovery = context.recovery && typeof context.recovery === 'object'
+    && !Array.isArray(context.recovery)
+    ? context.recovery
+    : null
+  const sideEffectUnknown = state === 'blocked'
+    && recovery?.requiresUserVerification === true
+    && ['side_effect_unknown', 'side_effect_outcome_unknown'].includes(recovery?.recoveryKind)
+  const modelRequestUnknown = state === 'blocked'
+    && recovery?.requiresUserVerification === true
+    && recovery?.recoveryKind === 'model_request_outcome_unknown'
+  const recoveryToolCallId = sideEffectUnknown
+    ? String(recovery?.toolCallId || '').trim().slice(0, 200)
+    : ''
+  const recoveryModelRequestId = modelRequestUnknown
+    ? String(recovery?.modelRequestId || '').trim().slice(0, 200)
+    : ''
 
   return {
     ...(state === 'failed'
@@ -270,13 +286,33 @@ function turnEvidenceMeta(message) {
             streaming: false,
             serverConnectionState: 'cancelled',
           }
-        : {
-          interrupted: true,
-          streaming: true,
-          turnCompletedAt: null,
-          latency: null,
-          serverConnectionState: 'interrupted',
-        }),
+        : state === 'interrupted'
+          ? {
+              interrupted: true,
+              streaming: true,
+              turnCompletedAt: null,
+              latency: null,
+              serverConnectionState: 'interrupted',
+            }
+          : {
+              failed: false,
+              paused: false,
+              streaming: false,
+              turnCompletedAt: null,
+              latency: null,
+              serverConnectionState: 'blocked',
+              serverRecoveryBlocked: true,
+              serverRecoveryKind: sideEffectUnknown
+                ? 'side_effect_outcome_unknown'
+                : modelRequestUnknown ? 'model_request_outcome_unknown' : null,
+              serverRecoveryToolCallId: recoveryToolCallId || null,
+              ...(recoveryModelRequestId ? { serverRecoveryModelRequestId: recoveryModelRequestId } : {}),
+              serverRecoveryActionPath: (sideEffectUnknown || modelRequestUnknown)
+                && recovery?.recoveryAction?.kind === 'open_settings'
+                && recovery?.recoveryAction?.path === '/settings?tab=recovery'
+                ? '/settings?tab=recovery'
+                : null,
+            }),
     serverFailure: failure,
     serverPartialText: String(message?.content || ''),
     serverArtifactIds: artifactIds,

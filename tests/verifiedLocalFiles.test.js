@@ -25,6 +25,7 @@ const { TurnEngine } = await import('../server/services/TurnEngine.js')
 const { listMessages, upsertSession } = await import('../server/services/sessionStore.js')
 const { appendTurnEvent, listTurnEvents } = await import('../server/services/turnEventStore.js')
 const { createTurnEvent } = await import('../shared/turnEvents.js')
+const { createTestTurnEnginePersistence } = await import('./helpers/turnEnginePersistence.js')
 const {
   serializeToolResult,
   TRUNCATED_TOOL_RESULT_METADATA_KEY,
@@ -515,6 +516,7 @@ test('TurnEngine persists the same verified receipt in the completed event and a
     content,
   })
   const engine = new TurnEngine({
+    persistence: createTestTurnEnginePersistence(),
     scheduleMemoryExtraction: () => {},
     runLoop: async ({ saveCheckpoint }) => {
       await saveCheckpoint({ messages: checkpointMessages, artifactIds: [], iterations: 1 })
@@ -577,6 +579,7 @@ test('TurnEngine keeps current-turn receipts when a provider reuses a historical
     }),
   ]
   const engine = new TurnEngine({
+    persistence: createTestTurnEnginePersistence(),
     scheduleMemoryExtraction: () => {},
     runLoop: async ({ saveCheckpoint }) => {
       await saveCheckpoint({ messages: checkpointMessages, artifactIds: [], iterations: 1 })
@@ -626,6 +629,7 @@ test('TurnEngine keeps a verified edited file clickable when a later artifact st
     content,
   })
   const engine = new TurnEngine({
+    persistence: createTestTurnEnginePersistence(),
     scheduleMemoryExtraction: () => {},
     runLoop: async ({ saveCheckpoint }) => {
       await saveCheckpoint({ messages: checkpointMessages, artifactIds: ['failed-image'], iterations: 2 })
@@ -680,6 +684,7 @@ test('TurnEngine preserves an unverified successful write as a retained file on 
     }),
   ]
   const engine = new TurnEngine({
+    persistence: createTestTurnEnginePersistence(),
     scheduleMemoryExtraction: () => {},
     runLoop: async ({ saveCheckpoint }) => {
       await saveCheckpoint({ messages: checkpointMessages, artifactIds: [], iterations: 1 })
@@ -777,6 +782,7 @@ test('TurnEngine keeps retained writes distinct from verified files in every rem
       }),
     ]
     const engine = new TurnEngine({
+      persistence: createTestTurnEnginePersistence(),
       scheduleMemoryExtraction: () => {},
       runLoop: async ({ saveCheckpoint }) => {
         await saveCheckpoint({ messages: checkpointMessages, artifactIds: [], iterations: 1 })
@@ -833,6 +839,7 @@ test('TurnEngine persists retained writes when an active turn is cancelled', asy
   let checkpointReady
   const ready = new Promise((resolve) => { checkpointReady = resolve })
   const engine = new TurnEngine({
+    persistence: createTestTurnEnginePersistence(),
     scheduleMemoryExtraction: () => {},
     runLoop: async ({ saveCheckpoint, signal }) => {
       await saveCheckpoint({ messages: checkpointMessages, artifactIds: [], iterations: 1 })
@@ -943,6 +950,9 @@ test('TurnEngine restores checkpoint-only retained files when a restarted worker
       ownerId: 'restarted-cancel-worker',
       isActive: () => false,
       requestCancellation: () => false,
+      claim: () => true,
+      hold: () => () => {},
+      owns: () => true,
     },
   })
   await restartedEngine.cancelTurn({

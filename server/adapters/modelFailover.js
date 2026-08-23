@@ -1,6 +1,29 @@
 import { logWarn } from '../utils/logger.js'
 import { streamWithProviderFallback } from '../utils/modelStreamFailover.js'
 
+export const MODEL_CROSS_PROVIDER_FAILOVER_BLOCKED_CODE = 'MODEL_CROSS_PROVIDER_FAILOVER_BLOCKED'
+
+const CROSS_PROVIDER_BLOCKED_MESSAGE = '当前模型 Provider 暂时不可用；为保护本地优先与隐私边界，未向其它 Provider 发送本次请求。'
+const CROSS_PROVIDER_BLOCKED_HINT = '请检查当前 Provider，或在其高级设置中显式启用“失败时允许切换到其它 Provider”。'
+
+function crossProviderBoundaryError(error, config) {
+  const policy = config?.failoverPolicy
+  const blockedProviderCount = Number(policy?.blockedProviderCount)
+  if (!Number.isInteger(blockedProviderCount) || blockedProviderCount <= 0) return error
+  const boundaryError = new Error(CROSS_PROVIDER_BLOCKED_MESSAGE)
+  boundaryError.code = MODEL_CROSS_PROVIDER_FAILOVER_BLOCKED_CODE
+  boundaryError.type = 'provider_policy_error'
+  boundaryError.statusCode = 503
+  boundaryError.retryable = true
+  boundaryError.hint = CROSS_PROVIDER_BLOCKED_HINT
+  boundaryError.details = Object.freeze({
+    reason: String(policy.reason || 'explicit_opt_in_required'),
+    blockedProviderCount,
+    action: 'enable_cross_provider_failover',
+  })
+  return boundaryError
+}
+
 /**
  * provider 故障转移适配层(单一来源)。
  *
@@ -13,6 +36,7 @@ import { streamWithProviderFallback } from '../utils/modelStreamFailover.js'
 
 export function isProviderFailoverError(error) {
   if (error?.name === 'AbortError') return false
+  if (error?.unsafeToReplay === true || error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN') return false
   // ★ 我们自己造的超时**绝不**触发故障转移。
   // 原来超时被转成 status 504,而 504 >= 500 判定为可转移 —— 于是
   // 「本地模型首 token 慢」不应触发静默切云端。AbortError 那道守卫
@@ -37,7 +61,12 @@ export async function runWithProviderFailover(configs, operation, { signal } = {
     } catch (error) {
       lastError = error
       const hasNext = index + 1 < configs.length
-      if (!hasNext || signal?.aborted || !isProviderFailoverError(error)) throw error
+      if (!hasNext || signal?.aborted || !isProviderFailoverError(error)) {
+        if (!hasNext && !signal?.aborted && isProviderFailoverError(error)) {
+          throw crossProviderBoundaryError(error, config)
+        }
+        throw error
+      }
       logWarn('model.provider_failover', error, {
         from: config.providerId || config.baseUrl,
         to: configs[index + 1].providerId || configs[index + 1].baseUrl,
@@ -65,23 +94,38 @@ export async function* streamWithProviderFailover(configs, createStream, {
   }
   const emitFailover = observe(onFailover)
   const emitRetry = observe(onRetry)
-  yield* streamWithProviderFallback(configs, createStream, {
-    ...options,
-    isFailoverError: isProviderFailoverError,
-    onRetry: ({ attempt, delayMs, error, config }) => {
-      logWarn('model.stream_retry', error, {
-        attempt, delayMs, provider: config.providerId || config.baseUrl, model: config.modelName,
-      })
-      emitRetry({ kind: 'retry', attempt, delayMs, from: config.providerId || config.baseUrl, modelName: config.modelName })
-    },
-    onFailover: ({ error, config, nextConfig }) => {
-      logWarn('model.provider_failover', error, {
-        from: config.providerId || config.baseUrl,
-        to: nextConfig.providerId || nextConfig.baseUrl,
-        model: config.modelName,
-        stream: true,
-      })
-      emitFailover({ kind: 'failover', from: config.providerId || config.baseUrl, to: nextConfig.providerId || nextConfig.baseUrl, modelName: nextConfig.modelName })
-    },
-  })
+  let emitted = false
+  const trackedCreateStream = (config) => (async function* trackStreamOutput() {
+    for await (const event of createStream(config)) {
+      emitted = true
+      yield event
+    }
+  }())
+  try {
+    yield* streamWithProviderFallback(configs, trackedCreateStream, {
+      ...options,
+      isFailoverError: isProviderFailoverError,
+      onRetry: ({ attempt, delayMs, error, config }) => {
+        logWarn('model.stream_retry', error, {
+          attempt, delayMs, provider: config.providerId || config.baseUrl, model: config.modelName,
+        })
+        emitRetry({ kind: 'retry', attempt, delayMs, from: config.providerId || config.baseUrl, modelName: config.modelName })
+      },
+      onFailover: ({ error, config, nextConfig }) => {
+        logWarn('model.provider_failover', error, {
+          from: config.providerId || config.baseUrl,
+          to: nextConfig.providerId || nextConfig.baseUrl,
+          model: config.modelName,
+          stream: true,
+        })
+        emitFailover({ kind: 'failover', from: config.providerId || config.baseUrl, to: nextConfig.providerId || nextConfig.baseUrl, modelName: nextConfig.modelName })
+      },
+    })
+  } catch (error) {
+    const config = configs.length === 1 ? configs[0] : null
+    if (!emitted && !options.signal?.aborted && isProviderFailoverError(error)) {
+      throw crossProviderBoundaryError(error, config)
+    }
+    throw error
+  }
 }

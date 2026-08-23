@@ -4,10 +4,21 @@ import path from 'node:path'
 import test from 'node:test'
 
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-routes-tests', String(process.pid))
+process.env.MODEL_BASE_URL = 'http://127.0.0.1:11434/v1'
+process.env.MODEL_NAME = 'test-model'
 
 const { createAppServer } = await import('../server/appServer.js')
 const { getJobRuntime, JobRuntime, setJobRuntimeForTesting } = await import('../server/services/jobRuntime.js')
+const {
+  recordModelProviderReadiness,
+  upsertModelProvider,
+} = await import('../server/services/modelProviderStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+
+const AGENT_MODEL_ENV = Object.freeze({
+  MODEL_BASE_URL: 'https://models.example.test/v1',
+  MODEL_NAME: 'route-test-model',
+})
 
 // ★ 用 stub planner 替换真 planner。
 //
@@ -25,7 +36,7 @@ test('job routes create, fetch, and cancel jobs', async () => {
   const { token } = issueTestSession()
   const authHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
 
-  const server = createAppServer({ getEnv: () => ({}) })
+  const server = createAppServer({ getEnv: () => AGENT_MODEL_ENV })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
 
@@ -61,7 +72,7 @@ test('job routes create, fetch, and cancel jobs', async () => {
 
 test('job routes persist the selected model for later execution and recovery', async () => {
   const { token } = issueTestSession()
-  const server = createAppServer({ getEnv: () => ({}) })
+  const server = createAppServer({ getEnv: () => AGENT_MODEL_ENV })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
 
@@ -102,10 +113,246 @@ test('job routes reject unauthenticated requests', async () => {
   }
 })
 
+test('job creation rejects missing, unverified and chat-only models before persistence', async () => {
+  const { token, userId } = issueTestSession()
+  const runtime = getJobRuntime()
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+  const before = runtime.listJobs({ userId }).length
+
+  const missingServer = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => missingServer.listen(0, '127.0.0.1', resolve))
+  try {
+    const response = await fetch(`http://127.0.0.1:${missingServer.address().port}/api/jobs`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ prompt: 'must not be created' }),
+    })
+    assert.equal(response.status, 503)
+    const missingError = (await response.json()).error
+    assert.match(missingError.message, /设置.*模型/)
+    assert.deepEqual({ ...missingError, message: '<localized>' }, {
+      code: 'MODEL_CONFIG_MISSING',
+      message: '<localized>',
+      action: 'configure_model',
+      providerId: null,
+      modelName: null,
+      configRevision: null,
+    })
+    assert.equal(Object.hasOwn(missingError, 'details'), false)
+    assert.doesNotMatch(JSON.stringify(missingError), /"missing"|MODEL_BASE_URL|MODEL_NAME/)
+    assert.equal(runtime.listJobs({ userId }).length, before)
+  } finally {
+    await new Promise((resolve) => missingServer.close(resolve))
+  }
+
+  const provider = upsertModelProvider({
+    userId,
+    provider: {
+      key: `job-gate-${Date.now()}`,
+      label: 'Job readiness gate',
+      baseUrl: 'https://models.example.test/v1',
+      models: ['job-gate-model'],
+      defaultModel: 'job-gate-model',
+      enabled: true,
+      isDefault: true,
+    },
+  })
+  const providerServer = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => providerServer.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${providerServer.address().port}/api/jobs`
+  try {
+    const unverified = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ prompt: 'unverified', providerId: provider.id }),
+    })
+    assert.equal(unverified.status, 409)
+    assert.equal((await unverified.json()).error.code, 'MODEL_PROVIDER_UNVERIFIED')
+    assert.equal(runtime.listJobs({ userId }).length, before)
+
+    recordModelProviderReadiness({
+      userId,
+      id: provider.id,
+      readiness: { chat: true, tools: false, agent: false, mode: 'chat_only' },
+    })
+    const chatOnly = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ prompt: 'chat only', providerId: provider.id }),
+    })
+    assert.equal(chatOnly.status, 409)
+    assert.equal((await chatOnly.json()).error.code, 'MODEL_PROVIDER_CHAT_ONLY')
+    assert.equal(runtime.listJobs({ userId }).length, before)
+
+    recordModelProviderReadiness({
+      userId,
+      id: provider.id,
+      readiness: { chat: true, tools: true, agent: true, mode: 'agent' },
+    })
+    const statusResponse = await fetch(
+      `http://127.0.0.1:${providerServer.address().port}/api/model/status`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+    assert.equal(statusResponse.status, 200)
+    const status = await statusResponse.json()
+    const selected = status.models.find((model) => model.name === 'job-gate-model')
+    assert.equal(selected.provider, provider.id)
+    assert.equal(selected.providerKey, provider.key)
+
+    const ready = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        prompt: 'agent ready',
+        providerId: selected.provider,
+        modelName: selected.name,
+      }),
+    })
+    assert.equal(ready.status, 201)
+    const { job } = await ready.json()
+    assert.equal(job.modelName, 'job-gate-model')
+    assert.equal(job.modelProviderId, provider.id)
+    assert.equal(job.modelConfigRevision, provider.configRevision)
+  } finally {
+    await new Promise((resolve) => providerServer.close(resolve))
+  }
+})
+
+test('job creation returns a safe structured error when the planner model rejects authentication', async () => {
+  const { token, userId } = issueTestSession()
+  const previousRuntime = getJobRuntime()
+  const secret = 'sk-planner-secret-must-not-leak'
+  const runtime = new JobRuntime({
+    planner: async () => {
+      throw Object.assign(new Error(`upstream exposed ${secret} at https://private.example.test`), {
+        status: 401,
+      })
+    },
+  })
+  setJobRuntimeForTesting(runtime)
+  const server = createAppServer({ getEnv: () => AGENT_MODEL_ENV })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ prompt: 'planner authentication failure' }),
+    })
+    assert.equal(response.status, 502)
+    const body = await response.json()
+    assert.equal(body.error.code, 'MODEL_AUTH_FAILED')
+    assert.equal(body.error.action, 'test_provider')
+    assert.equal(body.error.modelName, AGENT_MODEL_ENV.MODEL_NAME)
+    assert.doesNotMatch(JSON.stringify(body), new RegExp(secret))
+    assert.doesNotMatch(JSON.stringify(body), /private\.example\.test/)
+    assert.equal(runtime.listJobs({ userId }).length, 0)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+    setJobRuntimeForTesting(previousRuntime)
+  }
+})
+
+test('job creation does not trust a forged model failure error name', async () => {
+  const { token } = issueTestSession()
+  const previousRuntime = getJobRuntime()
+  const secret = 'sk-forged-wrapper-must-not-leak'
+  const runtime = new JobRuntime({
+    planner: async () => {
+      const error = Object.assign(
+        new Error(`internal ${secret} at https://private.example.test`),
+        {
+          name: 'JobModelFailureError',
+          code: 'MODEL_INTERNAL_INVARIANT',
+          action: 'test_provider',
+        },
+      )
+      throw error
+    },
+  })
+  setJobRuntimeForTesting(runtime)
+  const server = createAppServer({ getEnv: () => AGENT_MODEL_ENV })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/api/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ prompt: 'must keep internal planner errors private' }),
+    })
+    const body = await response.text()
+    assert.equal(response.status, 500)
+    assert.doesNotMatch(body, new RegExp(secret))
+    assert.doesNotMatch(body, /private\.example\.test/)
+    assert.doesNotMatch(body, /MODEL_INTERNAL_INVARIANT/)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+    setJobRuntimeForTesting(previousRuntime)
+  }
+})
+
+test('job creation rejects an ambiguous model name and accepts an explicit Provider UUID', async () => {
+  const { token, userId } = issueTestSession()
+  const runtime = getJobRuntime()
+  const before = runtime.listJobs({ userId }).length
+  const modelName = `job-ambiguous-model-${Date.now()}`
+  const providers = ['job-ambiguous-a', 'job-ambiguous-b'].map((key) => upsertModelProvider({
+    userId,
+    provider: {
+      key,
+      label: key,
+      baseUrl: `https://${key}.example.test/v1`,
+      models: [modelName],
+      defaultModel: modelName,
+      enabled: true,
+    },
+  }))
+  for (const provider of providers) {
+    recordModelProviderReadiness({
+      userId,
+      id: provider.id,
+      readiness: { chat: true, tools: true, agent: true, mode: 'agent' },
+    })
+  }
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${server.address().port}/api/jobs`
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+  try {
+    const ambiguous = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ prompt: 'do not choose silently', modelName }),
+    })
+    assert.equal(ambiguous.status, 409)
+    const ambiguousBody = await ambiguous.json()
+    assert.equal(ambiguousBody.error.code, 'MODEL_PROVIDER_AMBIGUOUS')
+    assert.equal(ambiguousBody.error.action, 'choose_agent_provider')
+    assert.equal(ambiguousBody.error.modelName, modelName)
+    assert.equal(runtime.listJobs({ userId }).length, before)
+
+    const explicit = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        prompt: 'use the selected provider',
+        modelName,
+        providerId: providers[1].id,
+      }),
+    })
+    assert.equal(explicit.status, 201)
+    const explicitBody = await explicit.json()
+    assert.equal(explicitBody.job.modelProviderId, providers[1].id)
+    assert.equal(explicitBody.job.modelName, modelName)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
 test('one user cannot fetch another user\'s job', async () => {
   const alice = issueTestSession()
   const bob = issueTestSession()
-  const server = createAppServer({ getEnv: () => ({}) })
+  const server = createAppServer({ getEnv: () => AGENT_MODEL_ENV })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
 
@@ -224,6 +471,112 @@ test('plan approval cannot be bypassed through retry or manual completion routes
     assert.equal(runtime.getJob(job.id, { userId }).status, 'waiting')
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve))
+    setJobRuntimeForTesting(previousRuntime)
+  }
+})
+
+test('job and step retry routes preserve structured model-request recovery conflicts', async () => {
+  const { token } = issueTestSession()
+  const previousRuntime = getJobRuntime()
+  const runtime = new JobRuntime({
+    planner: (prompt) => ({
+      title: prompt,
+      steps: [{ kind: 'execute', title: 'Execute work' }],
+    }),
+  })
+  const recoveryError = (code, overrides = {}) => Object.assign(
+    new Error(code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+      ? 'The upstream request may already have been accepted.'
+      : 'The saved request belongs to a different model configuration.'),
+    {
+      code,
+      requiresUserVerification: code === 'MODEL_REQUEST_OUTCOME_UNKNOWN',
+      recoveryKind: code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+        ? 'model_request_outcome_unknown'
+        : 'model_request_context_drift',
+      modelRequestId: 'mr_route-recovery',
+      stepId: 'step/with spaces',
+      providerId: 'provider-old',
+      modelName: 'model-old',
+      configRevision: 7,
+      targetProviderId: 'provider-new',
+      targetModelName: 'model-new',
+      targetConfigRevision: 8,
+      action: code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+        ? 'verify_model_request'
+        : 'recreate_job',
+      ...overrides,
+    },
+  )
+  runtime.retryJob = () => {
+    throw recoveryError('MODEL_REQUEST_OUTCOME_UNKNOWN')
+  }
+  runtime.retryStep = (_jobId, stepId) => {
+    assert.equal(stepId, 'step/with spaces')
+    throw recoveryError('MODEL_REQUEST_CONTEXT_DRIFT', {
+      modelRequestId: null,
+      requiresUserVerification: false,
+    })
+  }
+  setJobRuntimeForTesting(runtime)
+  const server = createAppServer({ getEnv: () => AGENT_MODEL_ENV })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+
+  try {
+    const requests = [
+      {
+        pathname: '/api/jobs/job-route-recovery/retry',
+        expected: {
+          code: 'MODEL_REQUEST_OUTCOME_UNKNOWN',
+          message: 'The upstream request may already have been accepted.',
+          retryable: false,
+          unsafeToReplay: true,
+          requiresUserVerification: true,
+          recoveryKind: 'model_request_outcome_unknown',
+          modelRequestId: 'mr_route-recovery',
+          stepId: 'step/with spaces',
+          providerId: 'provider-old',
+          modelName: 'model-old',
+          configRevision: 7,
+          targetProviderId: 'provider-new',
+          targetModelName: 'model-new',
+          targetConfigRevision: 8,
+          action: 'verify_model_request',
+        },
+      },
+      {
+        pathname: '/api/jobs/job-route-recovery/steps/step%2Fwith%20spaces/retry',
+        expected: {
+          code: 'MODEL_REQUEST_CONTEXT_DRIFT',
+          message: 'The saved request belongs to a different model configuration.',
+          retryable: false,
+          unsafeToReplay: true,
+          requiresUserVerification: false,
+          recoveryKind: 'model_request_context_drift',
+          modelRequestId: null,
+          stepId: 'step/with spaces',
+          providerId: 'provider-old',
+          modelName: 'model-old',
+          configRevision: 7,
+          targetProviderId: 'provider-new',
+          targetModelName: 'model-new',
+          targetConfigRevision: 8,
+          action: 'recreate_job',
+        },
+      },
+    ]
+
+    for (const { pathname, expected } of requests) {
+      const response = await fetch(`http://127.0.0.1:${port}${pathname}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      assert.equal(response.status, 409)
+      assert.deepEqual(await response.json(), { error: expected })
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
     setJobRuntimeForTesting(previousRuntime)
   }
 })

@@ -133,3 +133,139 @@ test('Streamable HTTP request observes an explicit cancellation signal', async (
     await assert.rejects(pending, (error) => error === reason)
   })
 })
+
+function jsonRpcSuccessFetch(calls = []) {
+  return async (url, init = {}) => {
+    calls.push({ url, init })
+    const message = JSON.parse(init.body || '{}')
+    return new Response(JSON.stringify({
+      jsonrpc: '2.0',
+      id: message.id,
+      result: { ok: true },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+}
+
+test('MCP request rejects metadata and link-local DNS answers before fetch', async () => {
+  const deniedAddresses = [
+    { address: '169.254.169.254', family: 4 },
+    { address: '100.100.100.200', family: 4 },
+    { address: 'fd00:ec2::254', family: 6 },
+  ]
+
+  for (const record of deniedAddresses) {
+    let fetchCalls = 0
+    const transport = new SseTransport({
+      url: 'https://mcp.example.test/rpc',
+      lookup: async () => [record],
+      fetchImpl: async () => {
+        fetchCalls += 1
+        throw new Error('fetch must not run for a forbidden DNS answer')
+      },
+    })
+
+    await assert.rejects(
+      transport.request({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      (error) => error?.code === 'OUTBOUND_ADDRESS_DENIED',
+    )
+    assert.equal(fetchCalls, 0, `${record.address} must be denied before fetch`)
+  }
+})
+
+test('MCP request and notification both pass through the outbound guard', async () => {
+  let fetchCalls = 0
+  const errors = []
+  const transport = new SseTransport({
+    url: 'https://guarded.example.test/rpc',
+    lookup: async () => [{ address: '169.254.169.254', family: 4 }],
+    fetchImpl: async () => {
+      fetchCalls += 1
+      throw new Error('fetch must not run for a forbidden DNS answer')
+    },
+  })
+  transport.onError((error) => errors.push(error))
+
+  await assert.rejects(
+    transport.request({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
+    (error) => error?.code === 'OUTBOUND_ADDRESS_DENIED',
+  )
+  await transport.send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+
+  assert.equal(fetchCalls, 0)
+  assert.deepEqual(errors.map((error) => error.code), [
+    'OUTBOUND_ADDRESS_DENIED',
+    'OUTBOUND_ADDRESS_DENIED',
+  ])
+})
+
+test('MCP permits only literal loopback hosts to opt into local addresses', async () => {
+  const calls = []
+  const fetchImpl = jsonRpcSuccessFetch(calls)
+  const lookup = async (hostname) => [{
+    address: hostname === 'localhost' ? '127.0.0.1' : '203.0.113.10',
+    family: 4,
+  }]
+
+  for (const [index, url] of [
+    'http://localhost:3456/mcp',
+    'http://127.0.0.1:3456/mcp',
+    'http://[::1]:3456/mcp',
+  ].entries()) {
+    const transport = new SseTransport({ url, lookup, fetchImpl })
+    const result = await transport.request({
+      jsonrpc: '2.0',
+      id: index + 10,
+      method: 'tools/list',
+    })
+    assert.deepEqual(result, { ok: true })
+  }
+  assert.equal(calls.length, 3)
+
+  let aliasFetchCalls = 0
+  const aliasedTransport = new SseTransport({
+    url: 'https://loopback-alias.example.test/mcp',
+    lookup: async () => [{ address: '127.0.0.1', family: 4 }],
+    fetchImpl: async () => {
+      aliasFetchCalls += 1
+      throw new Error('fetch must not run for an aliased loopback address')
+    },
+  })
+  await assert.rejects(
+    aliasedTransport.request({ jsonrpc: '2.0', id: 20, method: 'tools/list' }),
+    (error) => error?.code === 'OUTBOUND_ADDRESS_DENIED',
+  )
+  assert.equal(aliasFetchCalls, 0)
+
+  let privateFetchCalls = 0
+  const poisonedLocalhost = new SseTransport({
+    url: 'http://localhost:3456/mcp',
+    lookup: async () => [{ address: '192.168.1.20', family: 4 }],
+    fetchImpl: async () => {
+      privateFetchCalls += 1
+      throw new Error('fetch must not run when localhost resolves outside loopback')
+    },
+  })
+  await assert.rejects(
+    poisonedLocalhost.request({ jsonrpc: '2.0', id: 21, method: 'tools/list' }),
+    (error) => error?.code === 'OUTBOUND_ADDRESS_DENIED',
+  )
+  assert.equal(privateFetchCalls, 0)
+})
+
+test('custom MCP fetch remains usable in offline tests without DNS access', async () => {
+  const calls = []
+  const transport = new SseTransport({
+    url: 'https://offline.invalid/mcp',
+    fetchImpl: jsonRpcSuccessFetch(calls),
+  })
+
+  assert.deepEqual(
+    await transport.request({ jsonrpc: '2.0', id: 30, method: 'tools/list' }),
+    { ok: true },
+  )
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, 'https://offline.invalid/mcp')
+})

@@ -17,6 +17,7 @@ process.env.APP_DATA_DIR = TMP_DIR
 
 const {
   requestApproval,
+  revalidateToolPermission,
   resumePersistedApproval,
   waitForDecision,
   releaseApproval,
@@ -58,6 +59,18 @@ async function waitForPendingRow(userId, { tries = 200 } = {}) {
     await new Promise((r) => setTimeout(r, 10))
   }
   throw new Error('等待 pending_approvals 行超时')
+}
+
+function expectedContextFor(approval) {
+  return {
+    userId: approval.userId,
+    origin: approval.origin,
+    jobId: approval.jobId,
+    stepId: approval.stepId,
+    sessionId: approval.sessionId,
+    toolName: approval.toolName,
+    policyProvenance: approval.policyProvenance,
+  }
 }
 
 test.beforeEach(() => {
@@ -153,14 +166,41 @@ test('per-user read risk override 仅对所属用户免审并返回审计来源'
   assert.equal((await pending).proceed, false)
 })
 
-test('无 userId(内部/系统调用)立即放行且不建行', async () => {
+test('缺失或空 userId 在分类和 hook 预授权入口均 fail closed', async () => {
   const args = { command: 'rm -rf /' }
-  for (const uid of [null, undefined]) {
-    const result = await requestApproval({
-      userId: uid, origin: 'job', toolName: 'bash_exec', args, mode: 'all',
+  for (const uid of [null, undefined, '', '   ']) {
+    for (const request of [
+      { toolName: 'read_file', args: { path: 'safe.txt' } },
+      { toolName: 'bash_exec', args, preAuthorized: true },
+    ]) {
+      const result = await requestApproval({
+        userId: uid,
+        origin: 'job',
+        mode: 'all',
+        ...request,
+      })
+      assert.equal(result.proceed, false)
+      assert.equal(result.code, 'approval_user_identity_missing')
+      assert.equal(result.identityFailure, true)
+      assert.equal(result.systemFailure, true)
+      assert.equal(result.retryable, false)
+    }
+  }
+})
+
+test('缺失或空 userId 在最终执行授权重验入口 fail closed', () => {
+  for (const userId of [null, undefined, '', '   ']) {
+    const result = revalidateToolPermission({
+      userId,
+      origin: 'job',
+      toolName: 'read_file',
+      args: { path: 'safe.txt' },
+      allowAsk: true,
     })
-    assert.equal(result.proceed, true)
-    assert.deepEqual(result.args, args)
+    assert.equal(result.proceed, false)
+    assert.equal(result.code, 'approval_user_identity_missing')
+    assert.equal(result.identityFailure, true)
+    assert.equal(result.retryable, false)
   }
 })
 
@@ -333,11 +373,61 @@ test('restart recovery revalidates an approved mutation against the current plan
   decideApproval({ userId, id: approval.id, decision: 'approve' })
   setApprovalMode({ userId, mode: 'plan' })
 
-  const result = await resumePersistedApproval({ approvalId: approval.id })
+  const result = await resumePersistedApproval({
+    approvalId: approval.id,
+    expectedApprovalContext: expectedContextFor(approval),
+  })
   assert.equal(result.proceed, false)
   assert.equal(result.policyDenied, true)
   assert.equal(result.permissionMode, 'plan')
   assert.match(result.reason, /计划模式/)
+})
+
+test('legacy boolean Hook pre-authorization is rejected without provenance', async () => {
+  const { userId, jobId } = newUser('hook-legacy-boolean')
+  const result = await requestApproval({
+    userId,
+    origin: 'job',
+    jobId,
+    toolName: 'write_file',
+    args: { path: 'legacy.txt', content: 'blocked' },
+    mode: 'all',
+    preAuthorized: true,
+  })
+
+  assert.equal(result.proceed, false)
+  assert.equal(result.code, 'hook_authorization_provenance_missing')
+  assert.equal(result.hookAuthorizationFailure, true)
+  assert.equal(countPendingApprovals({ userId }), 0)
+})
+
+test('已批准的持久审批不能在缺失或空恢复身份时放行', async () => {
+  const { userId, jobId } = newUser('restart-missing-identity')
+  const approval = createPendingApproval({
+    userId,
+    origin: 'job',
+    jobId,
+    toolName: 'write_file',
+    args: { path: 'must-not-resume.txt', content: 'blocked' },
+    risk: 'medium',
+    reason: '修改本地数据',
+  })
+  decideApproval({ userId, id: approval.id, decision: 'approve' })
+
+  for (const invalidUserId of [null, undefined, '', '   ']) {
+    const result = await resumePersistedApproval({
+      approvalId: approval.id,
+      expectedApprovalContext: {
+        ...expectedContextFor(approval),
+        userId: invalidUserId,
+      },
+    })
+    assert.equal(result.proceed, false)
+    assert.equal(result.code, 'approval_user_identity_missing')
+    assert.equal(result.identityFailure, true)
+    assert.equal(result.retryable, false)
+    assert.equal(result.approvalId, approval.id)
+  }
 })
 
 test('真实用户档位依次执行 plan / normal / acceptEdits / bypass 语义', async () => {
@@ -637,7 +727,11 @@ test('waitForDecision 直接调用:小 pollIntervalMs + releaseApproval 唤醒',
   })
   const row = await waitForPendingRow(userId)
 
-  const secondWaiter = waitForDecision({ approvalId: row.id, pollIntervalMs: POLL })
+  const secondWaiter = waitForDecision({
+    approvalId: row.id,
+    pollIntervalMs: POLL,
+    expectedApprovalContext: expectedContextFor(row),
+  })
   decideApproval({ userId, id: row.id, decision: 'approve' })
   releaseApproval(row.id)
 
@@ -713,10 +807,14 @@ test('缺字段的 gate 结果不抛错,默认按用户拒绝处理', () => {
 })
 
 test('★ 审批记录丢失算系统故障,不算用户拒绝', async () => {
-  const { token } = newUser('gate-missing')
+  const { token, userId } = newUser('gate-missing')
   void token
   // 直接等一个不存在的审批 —— 记录丢失应被判为系统故障
-  const decision = await waitForDecision({ approvalId: 'does-not-exist', pollIntervalMs: 20 })
+  const decision = await waitForDecision({
+    approvalId: 'does-not-exist',
+    pollIntervalMs: 20,
+    expectedApprovalContext: { userId },
+  })
   assert.equal(decision.proceed, false)
   assert.equal(decision.systemFailure, true, '记录消失是基础设施问题')
   assert.equal(decision.retryable, true)

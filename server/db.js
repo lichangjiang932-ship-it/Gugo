@@ -6,39 +6,61 @@ import {
   hasColumn,
   runSchemaMigrations,
 } from './migrations/index.js'
+import { preflightExistingSchemaVersion } from './dbSchemaPreflight.js'
+import { validateRuntimeStoragePath } from './utils/runtimeStoragePath.js'
 
 export const DB_SCHEMA_VERSION = LATEST_SCHEMA_VERSION
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
 function getDataDir() {
-  return process.env.APP_DATA_DIR || DEFAULT_DATA_DIR
+  return validateRuntimeStoragePath(process.env.APP_DATA_DIR, { key: 'APP_DATA_DIR' }) || DEFAULT_DATA_DIR
 }
 
 function getDbPath() {
-  return process.env.APP_DB_PATH || path.join(getDataDir(), 'app.db')
+  return validateRuntimeStoragePath(process.env.APP_DB_PATH, { key: 'APP_DB_PATH' })
+    || path.join(getDataDir(), 'app.db')
 }
 
 let _db = null
 
 function ensureDataDir() {
-  const dir = getDataDir()
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  const directories = new Set([
+    getDataDir(),
+    path.dirname(getDbPath()),
+  ])
+  for (const dir of directories) {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  }
 }
 
 export function getDb() {
   if (_db) return _db
   ensureDataDir()
-  _db = new Database(getDbPath())
-  _db.pragma('journal_mode = WAL')
-  _db.pragma('foreign_keys = ON')
-  // ★ #37: 写入并发时遇到 SQLITE_BUSY 自动等待最多 5s 而不是立刻报错
-  _db.pragma('busy_timeout = 5000')
-  // synchronous=NORMAL 配合 WAL 是耐久性/性能折中,符合本应用 (本地工作台) 场景
-  _db.pragma('synchronous = NORMAL')
-  initSchema(_db)
-  runMigrations(_db)
-  return _db
+  const db = new Database(getDbPath())
+  try {
+    // Inspect an existing database before any schema, repair, or migration
+    // write. A database without a meta table is an uninitialized database.
+    preflightExistingSchemaVersion(db, DB_SCHEMA_VERSION)
+    db.pragma('journal_mode = WAL')
+    db.pragma('foreign_keys = ON')
+    // Provider tokens, OAuth material and other encrypted credential envelopes
+    // must not remain in SQLite freelist cells after their owning rows are
+    // deleted. `secure_delete` overwrites deleted cell content before the page is
+    // released; callers that delete credentials additionally checkpoint the WAL.
+    db.pragma('secure_delete = ON')
+    // ★ #37: 写入并发时遇到 SQLITE_BUSY 自动等待最多 5s 而不是立刻报错
+    db.pragma('busy_timeout = 5000')
+    // synchronous=NORMAL 配合 WAL 是耐久性/性能折中,符合本应用 (本地工作台) 场景
+    db.pragma('synchronous = NORMAL')
+    initSchema(db)
+    runMigrations(db)
+    _db = db
+    return _db
+  } catch (error) {
+    try { db.close() } catch { /* Preserve the startup error. */ }
+    throw error
+  }
 }
 
 function ensureUserPasswordColumns(db) {
@@ -100,6 +122,7 @@ function runMigrations(db) {
   ensureUserToolPermissionsTable(db)
   runSchemaMigrations(db, { legacyMigrations: LEGACY_SCHEMA_MIGRATIONS })
   runReasonixMigrations(db)
+  migrateReasonixToV2(db)
 }
 
 function ensureUserToolPermissionsTable(db) {
@@ -165,7 +188,6 @@ function runReasonixMigrations(db) {
         tokens_in INTEGER NOT NULL DEFAULT 0,
         tokens_out INTEGER NOT NULL DEFAULT 0,
         tokens_cached INTEGER NOT NULL DEFAULT 0,
-        cost_credits INTEGER NOT NULL DEFAULT 0,
         turns INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL
       );
@@ -175,6 +197,20 @@ function runReasonixMigrations(db) {
       "INSERT INTO meta (key, value) VALUES ('reasonix_schema_version', '1') ON CONFLICT(key) DO UPDATE SET value = '1'"
     ).run()
   }
+}
+
+function migrateReasonixToV2(db) {
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'reasonix_schema_version'").get()
+  const current = row ? Number(row.value) : 0
+  if (current >= 2) return
+  db.transaction(() => {
+    if (hasColumn(db, 'session_meters', 'cost_credits')) {
+      db.exec('ALTER TABLE session_meters DROP COLUMN cost_credits')
+    }
+    db.prepare(
+      "INSERT INTO meta (key, value) VALUES ('reasonix_schema_version', '2') ON CONFLICT(key) DO UPDATE SET value = '2'"
+    ).run()
+  }).immediate()
 }
 
 /**
@@ -263,7 +299,6 @@ function migrateToV3(db) {
       trace_json TEXT,
       tokens_in INTEGER,
       tokens_out INTEGER,
-      credits INTEGER,
       created_at INTEGER NOT NULL,
       finished_at INTEGER
     );
@@ -1259,7 +1294,6 @@ function initSchema(db) {
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
-      credits INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -1280,18 +1314,6 @@ function initSchema(db) {
       expires_at INTEGER NOT NULL,
       created_at INTEGER NOT NULL
     );
-
-    CREATE TABLE IF NOT EXISTS ledger (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      type TEXT NOT NULL,
-      package_id TEXT,
-      model_name TEXT,
-      credits INTEGER NOT NULL,
-      balance INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id, created_at);
 
     CREATE TABLE IF NOT EXISTS rate_limits (
       key TEXT PRIMARY KEY,
@@ -1617,30 +1639,15 @@ export function migrateFromJson(store) {
   const db = getDb()
   const now = Date.now()
   const insertUser = db.prepare(
-    'INSERT INTO users (id, email, credits, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, credits = excluded.credits'
-  )
-  const insertLedger = db.prepare(
-    'INSERT OR IGNORE INTO ledger (id, user_id, type, package_id, model_name, credits, balance, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO users (id, email, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at'
   )
   db.transaction(() => {
     for (const user of Object.values(store.users || {})) {
       const createdAt = user.createdAt || now
-      insertUser.run(user.id, user.email, user.credits || 0, createdAt, createdAt)
+      insertUser.run(user.id, user.email, createdAt, createdAt)
     }
     for (const [token, userId] of Object.entries(store.sessions || {})) {
       createSession({ token, userId, now, ttlMs: TOKEN_TTL_MS })
-    }
-    for (const entry of store.ledger || []) {
-      insertLedger.run(
-        entry.id,
-        entry.userId,
-        entry.type,
-        entry.packageId || null,
-        entry.modelName || null,
-        entry.credits,
-        entry.balance,
-        entry.createdAt || now,
-      )
     }
   })()
 }

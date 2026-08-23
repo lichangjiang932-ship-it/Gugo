@@ -1,3 +1,11 @@
+import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
+
+export const MODEL_BUDGET_LIMIT_TYPES = Object.freeze({
+  MODEL_CALLS: 'model_calls',
+  MODEL_TOKENS: 'model_tokens',
+})
+export const RETIRED_DOLLAR_BUDGET_ERROR_CODE = 'JOB_BUDGET_DOLLAR_GATE_RETIRED'
+
 /**
  * 任务级工具预算(M3.5)。
  *
@@ -36,7 +44,6 @@ export function resolveJobBudgetDefaults(env = process.env) {
       : 6 * 60 * 60 * 1000,
     maxModelCalls: envLimit(env, 'JOB_MAX_MODEL_CALLS', 2000),
     maxModelTokens: envLimit(env, 'JOB_MAX_MODEL_TOKENS', 0),
-    maxCostUsd: envLimit(env, 'JOB_MAX_COST_USD', 0),
   }
 }
 
@@ -51,27 +58,37 @@ const DEFAULT_MAX_CALLS = DEFAULTS.maxTotalCalls
 // 设 0 = 完全不限时间(只靠调用次数和用户手动取消收敛)。
 const DEFAULT_MAX_WALL_MS = DEFAULTS.maxWallMs
 
-// Model budgets are opt-in cost controls, not normal-work limits. The previous
+// Model budgets are opt-in technical guardrails, not normal-work limits. The previous
 // 100-call / 200k-token defaults stopped long agent runs mid-task even though
 // the tool loop itself intentionally allows 2000 iterations.
 const DEFAULT_MAX_MODEL_CALLS = DEFAULTS.maxModelCalls
 const DEFAULT_MAX_MODEL_TOKENS = DEFAULTS.maxModelTokens
-const DEFAULT_MAX_COST_USD = DEFAULTS.maxCostUsd
 
 // ★ Lens-2:用 WeakMap 而不是 job.__budget,模型/工具碰不到、不能 delete 绕过
 //
 // ⚠ 键必须是**稳定的对象**。jobRuntime 每个 tick 都会 getJobWithChildren(job.id)
 // 拿一个全新的 job 对象,用它当键的话每 tick 都是一份新预算 —— 累积语义完全失效。
-// 所以这里按 job.id 索引,WeakMap 只用于没有 id 的场景。
+// 所以这里按稳定的 (origin, userId, id) 复合作用域索引,WeakMap 只用于没有
+// id 的场景。单独使用 id 会让不同用户的同名任务、或 chat turn 与后台 job
+// 共享计数器，且任意一方终结时会误删另一方的索引。
 const BUDGET_BY_JOB = new WeakMap()
 const BUDGET_BY_ID = new Map()
 
+function scopedBudgetKey(job) {
+  if (!job || typeof job !== 'object') return ''
+  const id = job.id == null ? '' : String(job.id)
+  if (!id) return ''
+  const origin = job.origin == null || job.origin === '' ? 'job' : String(job.origin)
+  const userId = job.userId == null ? '' : String(job.userId)
+  return JSON.stringify([origin, userId, id])
+}
+
 export function attachJobBudget(job, opts) {
   if (!job || typeof job !== 'object') return null
-  const id = job.id ? String(job.id) : ''
-  if (id) {
-    let byId = BUDGET_BY_ID.get(id)
-    if (!byId) { byId = createJobBudget(opts); BUDGET_BY_ID.set(id, byId) }
+  const key = scopedBudgetKey(job)
+  if (key) {
+    let byId = BUDGET_BY_ID.get(key)
+    if (!byId) { byId = createJobBudget(opts); BUDGET_BY_ID.set(key, byId) }
     return byId
   }
   let b = BUDGET_BY_JOB.get(job)
@@ -81,21 +98,55 @@ export function attachJobBudget(job, opts) {
 
 export function getJobBudget(job) {
   if (!job || typeof job !== 'object') return null
-  const id = job.id ? String(job.id) : ''
-  if (id && BUDGET_BY_ID.has(id)) return BUDGET_BY_ID.get(id)
+  const key = scopedBudgetKey(job)
+  if (key && BUDGET_BY_ID.has(key)) return BUDGET_BY_ID.get(key)
   return BUDGET_BY_JOB.get(job) || null
 }
 
-/** job 终结时清掉,避免 BUDGET_BY_ID 无限增长。 */
-export function releaseJobBudget(jobId) {
-  if (jobId) BUDGET_BY_ID.delete(String(jobId))
+/** job 终结时比较并清掉所有者持有的预算,避免旧清理误删同作用域新实例。 */
+export function releaseJobBudget(jobOrId, expectedBudget, scope = {}) {
+  const job = jobOrId && typeof jobOrId === 'object'
+    ? jobOrId
+    : { ...scope, id: jobOrId }
+  const key = scopedBudgetKey(job)
+  if (!key || !expectedBudget || BUDGET_BY_ID.get(key) !== expectedBudget) return false
+  return BUDGET_BY_ID.delete(key)
 }
 
-function modelBudgetError(reason, partialModelResult) {
+function modelBudgetError(reason, partialModelResult, budgetStatus = null) {
   const error = new Error(reason || 'model budget exceeded')
   error.code = 'MODEL_BUDGET_EXCEEDED'
+  if (budgetStatus?.budgetLimitType) error.budgetLimitType = budgetStatus.budgetLimitType
+  if (Array.isArray(budgetStatus?.budgetLimitTypes)) {
+    error.budgetLimitTypes = [...budgetStatus.budgetLimitTypes]
+  }
   if (partialModelResult !== undefined) error.partialModelResult = partialModelResult
   return error
+}
+
+function mustStopForModelBudget(status, allowOverBudget) {
+  return status?.ok === false && !allowOverBudget
+}
+
+/** Account for one real provider request recovered from an in-flight checkpoint. */
+export function recordRecoveredModelResult(budget, result, {
+  allowOverBudget = false,
+} = {}) {
+  // A recovered response proves the provider call already happened. Account
+  // for it even when it crosses a configured limit, then surface the limit as
+  // a terminal error carrying the authoritative partial result.
+  const callStatus = budget?.consumeModelCall?.({ allowOverBudget: true }) || { ok: true }
+  const usageStatus = budget?.trackModelUsage?.(result?.usage, result?.costUsd) || { ok: true }
+  const exceededStatuses = [callStatus, usageStatus].filter((status) => status?.ok === false)
+  const exceeded = exceededStatuses[0]
+  if (exceeded && !allowOverBudget) {
+    throw modelBudgetError(
+      exceeded.reason,
+      result,
+      exceeded,
+    )
+  }
+  return result
 }
 
 /** Account for one real provider request, including context-recovery retries. */
@@ -105,7 +156,9 @@ export async function runWithModelBudget(budget, run, {
 } = {}) {
   if (typeof run !== 'function') throw new Error('run is required')
   const callStatus = budget?.consumeModelCall?.({ allowOverBudget }) || { ok: true }
-  if (!allowOverBudget && !callStatus.ok) throw modelBudgetError(callStatus.reason)
+  if (mustStopForModelBudget(callStatus, allowOverBudget)) {
+    throw modelBudgetError(callStatus.reason, undefined, callStatus)
+  }
   const startedAt = now()
   let result
   try {
@@ -114,26 +167,38 @@ export async function runWithModelBudget(budget, run, {
     budget?.trackModelMs?.(Math.max(0, now() - startedAt))
   }
   const usageStatus = budget?.trackModelUsage?.(result?.usage, result?.costUsd) || { ok: true }
-  if (!allowOverBudget && !usageStatus.ok) {
-    throw modelBudgetError(usageStatus.reason, result)
+  if (mustStopForModelBudget(usageStatus, allowOverBudget)) {
+    throw modelBudgetError(usageStatus.reason, result, usageStatus)
   }
   return result
 }
 
-export function createJobBudget({
-  maxTotalCalls = DEFAULT_MAX_CALLS,
-  maxWallMs = DEFAULT_MAX_WALL_MS,
-  maxModelCalls = DEFAULT_MAX_MODEL_CALLS,
-  maxModelTokens = DEFAULT_MAX_MODEL_TOKENS,
-  maxCostUsd = DEFAULT_MAX_COST_USD,
-  initialUsed = 0,
-  initialElapsedMs = 0,
-  initialModelMs = 0,
-  initialModelCalls = 0,
-  initialModelTokens = 0,
-  initialCostUsd = 0,
-  now = () => Date.now(),
-} = {}) {
+export function createJobBudget(options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('job budget options must be an object')
+  }
+  if (Object.hasOwn(options, 'maxCostUsd')) {
+    const error = new Error(
+      'maxCostUsd is retired; Provider cost estimates are local telemetry and cannot gate BYOK requests',
+    )
+    error.code = RETIRED_DOLLAR_BUDGET_ERROR_CODE
+    error.statusCode = 400
+    throw error
+  }
+  const {
+    maxTotalCalls = DEFAULT_MAX_CALLS,
+    maxWallMs = DEFAULT_MAX_WALL_MS,
+    maxModelCalls = DEFAULT_MAX_MODEL_CALLS,
+    maxModelTokens = DEFAULT_MAX_MODEL_TOKENS,
+    initialUsed = 0,
+    initialElapsedMs = 0,
+    initialModelMs = 0,
+    initialModelCalls = 0,
+    initialModelTokens = 0,
+    initialCostUsd,
+    initialCostEvidenceComplete,
+    now = () => Date.now(),
+  } = options
   const initialWorkingMs = Math.max(0, Number(initialElapsedMs) || 0)
   let used = Math.max(0, Number(initialUsed) || 0)
   // 花在等模型上的时间。从墙钟里扣掉 —— 见 trackModelMs。
@@ -144,17 +209,44 @@ export function createJobBudget({
   const startedAt = now() - initialWorkingMs - modelMs
   let modelCalls = Math.max(0, Number(initialModelCalls) || 0)
   let modelTokens = Math.max(0, Number(initialModelTokens) || 0)
-  let costUsd = Math.max(0, Number(initialCostUsd) || 0)
+  const restoredCostUsd = normalizeOptionalUsageNumber(initialCostUsd)
+  let costUsd = restoredCostUsd ?? 0
+  const hasHistoricalModelUsage = modelCalls > 0 || modelTokens > 0
+  // A fresh budget has complete empty evidence. A restored budget only has
+  // complete evidence when the checkpoint explicitly says so and carries a
+  // valid cumulative value (zero is valid). Older checkpoints predate the
+  // evidence marker, so their historical zero cannot be distinguished from
+  // the old "unknown => 0" fallback and must remain unknown.
+  let costEvidenceComplete = initialCostEvidenceComplete === false
+    ? false
+    : initialCostEvidenceComplete === true
+      ? restoredCostUsd !== null || (!hasHistoricalModelUsage && initialCostUsd === undefined)
+      : !hasHistoricalModelUsage
+        && (initialCostUsd === undefined || restoredCostUsd !== null)
+
+  const exposedCostUsd = () => (costEvidenceComplete ? costUsd : null)
 
   const modelLimitStatus = () => {
+    const exceeded = []
     if (maxModelCalls > 0 && modelCalls > maxModelCalls) {
-      return { ok: false, reason: `model call budget exceeded (${modelCalls}/${maxModelCalls})` }
+      exceeded.push({
+        budgetLimitType: MODEL_BUDGET_LIMIT_TYPES.MODEL_CALLS,
+        reason: `model call budget exceeded (${modelCalls}/${maxModelCalls})`,
+      })
     }
     if (maxModelTokens > 0 && modelTokens > maxModelTokens) {
-      return { ok: false, reason: `model token budget exceeded (${modelTokens}/${maxModelTokens})` }
+      exceeded.push({
+        budgetLimitType: MODEL_BUDGET_LIMIT_TYPES.MODEL_TOKENS,
+        reason: `model token budget exceeded (${modelTokens}/${maxModelTokens})`,
+      })
     }
-    if (maxCostUsd > 0 && costUsd > maxCostUsd) {
-      return { ok: false, reason: `model cost budget exceeded ($${costUsd.toFixed(4)}/$${Number(maxCostUsd).toFixed(2)})` }
+    if (exceeded.length > 0) {
+      return {
+        ok: false,
+        reason: exceeded[0].reason,
+        budgetLimitType: exceeded[0].budgetLimitType,
+        budgetLimitTypes: exceeded.map((item) => item.budgetLimitType),
+      }
     }
     return { ok: true }
   }
@@ -176,13 +268,16 @@ export function createJobBudget({
     },
     consumeModelCall({ allowOverBudget = false } = {}) {
       const current = modelLimitStatus()
-      if (!allowOverBudget && !current.ok) {
+      // `allowOverBudget` permits one deliberate wrap-up beyond call/token limits.
+      if (!current.ok && !allowOverBudget) {
         return { ...current, modelCalls, remaining: Math.max(0, maxModelCalls - modelCalls) }
       }
       if (!allowOverBudget && maxModelCalls > 0 && modelCalls >= maxModelCalls) {
         return {
           ok: false,
           reason: `model call budget exceeded (${modelCalls}/${maxModelCalls})`,
+          budgetLimitType: MODEL_BUDGET_LIMIT_TYPES.MODEL_CALLS,
+          budgetLimitTypes: [MODEL_BUDGET_LIMIT_TYPES.MODEL_CALLS],
           modelCalls,
           remaining: 0,
         }
@@ -190,21 +285,23 @@ export function createJobBudget({
       modelCalls += 1
       return { ...modelLimitStatus(), modelCalls, remaining: Math.max(0, maxModelCalls - modelCalls) }
     },
-    trackModelUsage(usage = {}, reportedCostUsd = 0) {
+    trackModelUsage(usage = {}, reportedCostUsd) {
       const promptTokens = Math.max(0, Number(usage?.promptTokens) || 0)
       const completionTokens = Math.max(0, Number(usage?.completionTokens) || 0)
       // Cached prompt tokens are historical context that the provider reused;
-      // charging the full prompt again on every agent iteration makes a long
-      // tool loop exhaust its token budget even when almost all input was a
-      // cache hit. Cost remains guarded independently by maxCostUsd.
+      // counting the full prompt again on every agent iteration makes a long
+      // tool loop exhaust its token guardrail even when almost all input was a
+      // cache hit. Provider cost remains telemetry only.
       const cacheHitTokens = Math.min(
         promptTokens,
         Math.max(0, Number(usage?.cacheHitTokens) || 0),
       )
       modelTokens += Math.max(0, promptTokens - cacheHitTokens) + completionTokens
-      const nextCost = Number(reportedCostUsd)
-      if (Number.isFinite(nextCost) && nextCost > 0) costUsd += nextCost
-      return { ...modelLimitStatus(), modelTokens, costUsd }
+      const nextCost = normalizeOptionalUsageNumber(reportedCostUsd)
+      if (nextCost === null) costEvidenceComplete = false
+      else costUsd += nextCost
+      const limitStatus = modelLimitStatus()
+      return { ...limitStatus, modelTokens, costUsd: exposedCostUsd() }
     },
     consume(cost = 1) {
       used += cost
@@ -229,8 +326,11 @@ export function createJobBudget({
         maxModelCalls,
         modelTokens,
         maxModelTokens,
-        costUsd,
-        maxCostUsd,
+        costUsd: exposedCostUsd(),
+        costEvidenceComplete,
+        // Legacy checkpoint field. It is always zero because Gugo never gates
+        // BYOK requests on a dollar estimate.
+        maxCostUsd: 0,
       }
     },
   }

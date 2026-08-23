@@ -5,6 +5,10 @@ import {
   listEnabledCronJobs,
   markCronJobRun,
 } from './cronStore.js'
+import {
+  describeModelReadinessFailure,
+  isModelReadinessError,
+} from './modelReadinessService.js'
 
 const MAX_TIMEOUT_MS = 2_147_483_647
 const CRON_SEARCH_LIMIT_MS = 366 * 24 * 60 * 60 * 1000
@@ -406,7 +410,19 @@ export class CronScheduler {
       const result = await this.execute(executionJob)
       return finish('success', null, { result })
     } catch (err) {
-      return finish('error', err?.message || String(err))
+      const message = err?.message || String(err)
+      const readinessFailure = isModelReadinessError(err)
+        ? describeModelReadinessFailure(err)
+        : null
+      const publicMessage = readinessFailure?.error.message || message
+      const error = readinessFailure
+        ? readinessFailure.error
+        : {
+            message,
+            ...(err?.code ? { code: String(err.code) } : {}),
+            ...(err?.action ? { action: String(err.action) } : {}),
+          }
+      return finish('error', publicMessage, { error })
     } finally {
       if (jobLocked) this.runningJobIds.delete(jobId)
       if (heartbeatLocked) this.runningHeartbeatAgents.delete(job.agentId)

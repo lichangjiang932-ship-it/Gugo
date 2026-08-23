@@ -4,7 +4,8 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import WebSocket from 'ws'
 import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
-import { assertSafeOutboundUrl } from './toolProxy.js'
+import { assertSafeOutboundUrl } from '../utils/outboundNetworkGuard.js'
+import { startBrowserOutboundProxy } from './browserOutboundProxy.js'
 
 const sessions = new Map()
 const START_TIMEOUT_MS = 15000
@@ -194,24 +195,31 @@ function isReusableSession(session, { headed = false } = {}) {
     && (!headed || session.headless === false)
 }
 
-function launchProcess(executable, profileDir, { headless = true, signal = null } = {}) {
+function browserLaunchArgs(profileDir, { headless = true, proxyUrl = '' } = {}) {
+  return [
+    ...(headless ? ['--headless=new'] : ['--start-maximized']),
+    '--disable-gpu',
+    '--disable-extensions',
+    '--disable-gpu-shader-disk-cache',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--disable-quic',
+    '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+    '--remote-debugging-port=0',
+    '--remote-allow-origins=*',
+    ...(proxyUrl ? [`--proxy-server=${proxyUrl}`, '--proxy-bypass-list=<-loopback>'] : []),
+    ...(process.env.BROWSER_NO_SANDBOX === '1' ? ['--no-sandbox'] : []),
+    `--user-data-dir=${profileDir}`,
+    'about:blank',
+  ]
+}
+
+function launchProcess(executable, profileDir, { headless = true, proxyUrl = '', signal = null } = {}) {
   throwIfAborted(signal)
   return new Promise((resolve, reject) => {
-    const args = [
-      ...(headless ? ['--headless=new'] : ['--start-maximized']),
-      '--disable-gpu',
-      '--disable-extensions',
-      '--disable-gpu-shader-disk-cache',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-background-networking',
-      '--disable-component-update',
-      '--remote-debugging-port=0',
-      '--remote-allow-origins=*',
-      ...(process.env.BROWSER_NO_SANDBOX === '1' ? ['--no-sandbox'] : []),
-      `--user-data-dir=${profileDir}`,
-      'about:blank',
-    ]
+    const args = browserLaunchArgs(profileDir, { headless, proxyUrl })
     const child = spawn(executable, args, {
       windowsHide: true,
       stdio: ['ignore', 'ignore', 'pipe'],
@@ -257,8 +265,14 @@ async function createSession(userId, { headless = process.env.BROWSER_HEADLESS !
   const profileDir = profileDirectoryForUser(userId)
   let child
   let client
+  let outboundProxy
   try {
-    const launched = await launchProcess(executable, profileDir, { headless, signal })
+    outboundProxy = await startBrowserOutboundProxy({ signal })
+    const launched = await launchProcess(executable, profileDir, {
+      headless,
+      proxyUrl: outboundProxy.url,
+      signal,
+    })
     child = launched.child
     const debuggerBase = launched.websocketUrl
       .replace(/^ws:/, 'http:')
@@ -270,8 +284,11 @@ async function createSession(userId, { headless = process.env.BROWSER_HEADLESS !
     if (!pageTarget) throw new Error('浏览器未创建 Page Target')
     client = new CdpClient(pageTarget.webSocketDebuggerUrl)
     await client.connect({ signal })
-    const session = { userId, executable, profileDir, child, client, targetId: pageTarget.id, sessionId: null, headless, createdAt: Date.now() }
-    child.once('exit', () => sessions.delete(userId))
+    const session = { userId, executable, profileDir, child, client, outboundProxy, targetId: pageTarget.id, sessionId: null, headless, createdAt: Date.now() }
+    child.once('exit', () => {
+      sessions.delete(userId)
+      void outboundProxy.close()
+    })
     await Promise.all([
       client.request('Page.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
       client.request('Runtime.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
@@ -283,6 +300,7 @@ async function createSession(userId, { headless = process.env.BROWSER_HEADLESS !
   } catch (error) {
     try { client?.close() } catch { /* ignore */ }
     try { child?.kill() } catch { /* ignore */ }
+    try { await outboundProxy?.close?.() } catch { /* ignore */ }
     throw error
   }
 }
@@ -593,6 +611,7 @@ export function closeBrowserSession(userId) {
   sessions.delete(userId)
   try { session.client.close() } catch { /* ignore */ }
   try { session.child.kill() } catch { /* ignore */ }
+  void session.outboundProxy?.close?.()
   return true
 }
 
@@ -603,6 +622,7 @@ export function shutdownBrowsers() {
 export const _browserInternals = {
   CdpClient,
   abortableDelay,
+  browserLaunchArgs,
   findBrowserExecutable,
   validateUrl,
   profileDirectoryForUser,

@@ -238,6 +238,7 @@ export async function executeToolWithRetry({
   maxAttempts = 3,
   baseDelayMs = 120,
   delay = abortableDelay,
+  rethrowErrors = false,
 } = {}) {
   const attemptsLimit = isSafeToolRetry(metadata)
     ? Math.max(1, Math.min(3, Math.floor(Number(maxAttempts) || 1)))
@@ -249,6 +250,7 @@ export async function executeToolWithRetry({
       result = normalizeToolResult(await execute({ attempt }))
     } catch (error) {
       if (signal?.aborted || error?.name === 'AbortError') throw error
+      if (rethrowErrors) throw error
       result = normalizeToolError(error)
     }
     if (result.ok === true) return attempt > 1 ? { ...result, attempts: attempt } : result
@@ -547,6 +549,12 @@ function validateSchema(value, schema, path, issues, depth = 0) {
     }
     if (Number.isFinite(schema.maximum) && value > schema.maximum) {
       addSchemaIssue(issues, `${path} 不能大于 ${schema.maximum}`)
+    }
+    if (Number.isFinite(schema.exclusiveMinimum) && value <= schema.exclusiveMinimum) {
+      addSchemaIssue(issues, `${path} 必须大于 ${schema.exclusiveMinimum}`)
+    }
+    if (Number.isFinite(schema.exclusiveMaximum) && value >= schema.exclusiveMaximum) {
+      addSchemaIssue(issues, `${path} 必须小于 ${schema.exclusiveMaximum}`)
     }
   }
 

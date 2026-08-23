@@ -1,8 +1,24 @@
 # Runtime Plugin Contributions
 
-Gugo 的进程内 runtime plugin 通过 `server/plugins/runtimePluginRegistry.js` 注册可撤销的工具、Agent Loop 事件、prompt context、服务和模型 provider。runtime 与构建期可信 UI plugin 共用 `shared/pluginManifest.js` 的不可变 manifest envelope。
+Gugo 的进程内 runtime plugin 通过 `server/plugins/runtimePluginRegistry.js` 注册可撤销的工具、完整 Agent Loop、Agent Loop 事件、prompt context、服务、策略和模型 provider。runtime 与构建期可信 UI plugin 共用 `shared/pluginManifest.js` 的不可变 manifest envelope。
 
 > 安全边界：`registerPlugin()` 是宿主进程内可信代码 API。磁盘 `transformer` 插件由 `runtimePluginControlService.js` 包装，并继续在 `pluginSandbox.js` 中执行；它不能获得 registry context，也不能注入 React/renderer JavaScript。
+
+> 宿主边界：Turn 持久化虽然已经是可整体替换的 `turnPersistenceAdapter`，但它不是 runtime-plugin contribution。宿主必须在恢复 runtime plugin 之前选择一个完整、版本匹配的 adapter；plugin 不能只替换 Session、Event Log 或 transaction 的其中一段，也不能在 TurnEngine 活跃时热切换。当前 runtime plugin contribution 表因此不包含 `storage:*`。这仍是“完全插件化”目标的过渡状态，而不是已完成的用户可分发存储插件体系。
+
+生产服务、Vite 开发宿主和 CLI Headless 现在都通过 `server/adapters/builtinSqliteTurnPersistenceBootstrap.js` 进入 Turn persistence 的 trusted bootstrap。该发行版入口把可信模块的路径校验和完整 adapter contract 校验委托给 `server/core/turnPersistenceBootstrap.js`，但独占内置 SQLite fallback 的惰性加载与 provenance 签发；生产 composition root 不得直接调用通用 selector，也不得直接导入 SQLite adapter。配置自定义 persistence 时，未被选择的 SQLite 模块树不会加载；调用方传入的 fallback 或 factory 也不能覆盖发行版默认。生产服务与 Vite 只读取宿主进程环境或部署根 `.env` 中的 `GUGO_TURN_PERSISTENCE_MODULE` 与可选 `GUGO_TURN_PERSISTENCE_TRUST_ROOT`，并尊重 `GUGO_LOAD_DOTENV=0`；CLI 可能从不可信项目目录启动，因此只接受进程环境中的选择，当前目录 `.env` 不能令 CLI 加载宿主代码。选择器在普通 plugin discovery、数据库 preflight 和 runtime plugin restore 之前解析 canonical 本地文件，并完整校验 adapter contract。显式实现缺失、越出可信根、导入失败或契约不完整时启动失败，禁止静默回退 SQLite；激活后的 persistence 只能重启切换。普通 runtime plugin 状态不参与选择，因此不会形成“读取插件状态需要 persistence、选择 persistence 又需要插件状态”的启动环。
+
+该闭环目前只替换 Turn Session/Event/checkpoint/recovery/SessionAdmin 边界；认证、Provider、插件状态、Hub、附件和其他宿主聚合仍有 SQLite 或本地文件实现。未来的可分发 persistence 包还需要签名信任链、安装事务、版本锁与回滚，不能把这个可信本地模块入口描述成 Marketplace。
+
+## 本地分发源边界
+
+生产服务、Vite 宿主和 CLI Headless 的普通磁盘插件发现通过同步 `DistributionPort` 组合两个离线目录：发行包内置 `plugins/` 标记为 `builtin-directory-readonly`，用户目录固定从权威运行时路径解析器派生为 `APP_DATA_DIR/plugins`，标记为 `managed-user-directory`。发现过程不会创建目录、联网、下载或执行安装脚本；直接调用 `initPlugins({ rootDir })` 的测试与开发入口仍保持原 `local-directory-development` 语义，不会把任意开发目录冒充受保护内置源。
+
+组合顺序与目录枚举顺序无关：候选按 plugin ID 排序，跨源依赖在合并后统一校验。用户目录若声明与内置目录相同的 plugin ID，宿主保留内置项并记录 `PLUGIN_DISTRIBUTION_ID_CONFLICT`，不会按加载时序静默覆盖；两个来源若解析到同一目录，则只扫描一次内置源并记录 `PLUGIN_DISTRIBUTION_ROOT_CONFLICT`。来源、可变性、包验证状态和 install receipt 进入宿主快照及安全 inventory 投影。
+
+这只是 discovery/distribution seam，不是完整包管理器。内置项的 `mutable=false` 表示宿主优先级与分发意图，不等于 publisher 签名；用户目录项仍是 `mutable=true`、`verifiedPackage=false`、`installReceipt=null`。当前没有 Marketplace、下载、更新、卸载、staging、原子安装、崩溃恢复、publisher 签名或信任策略，更不存在平台计费、余额、套餐或订阅。未来只有通过不可变整包校验和安装事务签发 receipt 后，候选才能声明 `verifiedPackage=true`。
+
+持久化 adapter 的 checkpoint/boundary 命令还必须验证宿主签发的执行租约 proof（owner ID + 单调 fencing token）。该 proof 只在 TurnEngine 获取 lease 时捕获，不向 runtime plugin context 暴露；plugin service、event listener 或工具不能伪造它来提交 Turn 终态。
 
 ## Manifest
 
@@ -11,7 +27,12 @@ await registerPlugin({
   id: 'example-runtime',
   name: 'Example runtime plugin',
   version: '1.0.0',
-  requires: [],
+  apiVersion: '1.0.0',
+  hostVersion: '>=0.11.0 <1.0.0',
+  requires: ['example-runtime-base'],
+  dependencyVersions: {
+    'example-runtime-base': '^2.0.0',
+  },
   contributes: [
     'tool:example_echo',
     'event:request',
@@ -19,7 +40,12 @@ await registerPlugin({
     'service:example-cache',
     'service:task-review-guard',
     'service:task-plan-guard',
+    'service:context-compaction-strategy',
+    'service:subagent-provider',
     'model-provider:example-native',
+    'loop:plugin.example-runtime.loop',
+    'policy:plugin.example-runtime.policy',
+    'http-capability:builtin.example-api',
   ],
 }, (context) => {
   // 这里只能注册 contributes 中已声明的目标。
@@ -27,6 +53,8 @@ await registerPlugin({
 ```
 
 共享 manifest 只接受自身 data property：必填的 `id/name/version` 和可选的 `requires/contributes` 都在注册时通过 descriptor 捕获。getter 不执行，prototype 字段不被继承；两个数组必须是稠密的 own string data property 数组。宿主生成冻结快照，后续修改原 manifest 或数组不影响已安装 plugin；非法定义以 `PLUGIN_MANIFEST_DEFINITION_INVALID`、`retryable=false` 失败。
+
+`apiVersion`、`hostVersion` 和 `dependencyVersions` 是执行门禁，不是库存标签。当前 plugin API 为 `1.0.0`；声明的 API 必须与宿主处于同一稳定 major 且不得高于宿主实现，`hostVersion` 与依赖范围使用 manifest 接受的 semver 子集（精确版本、`^`、`~`、比较器交集或 `*`）。磁盘 plugin 在加入 inventory 前检查宿主/API，并在完整扫描后按依赖版本做级联淘汰；进程内 runtime plugin 在任何 setup 代码执行前检查 active dependency 的不可变 manifest version，并在 setup 完成、转为 active 前再次检查。失败分别返回 `PLUGIN_API_VERSION_INCOMPATIBLE`、`PLUGIN_HOST_VERSION_INCOMPATIBLE`、`PLUGIN_DEPENDENCY_UNAVAILABLE` 或 `PLUGIN_DEPENDENCY_VERSION_INCOMPATIBLE`，均为 `retryable=false`。尚未声明这些字段的旧 manifest 继续按 legacy 规则加载；这只是迁移兼容，不代表其具有版本兼容承诺。
 
 `contributes` 是权限上界，不是说明文字：
 
@@ -37,6 +65,9 @@ await registerPlugin({
 | `context.prompts.register({ id, render })` | `prompt:<id>` |
 | `context.services.provide(name)` | `service:<name>` |
 | `context.models.providers.register(kind)` | `model-provider:<normalized-kind>` |
+| `context.loops.register({ id })` | `loop:<id>` |
+| `context.policies.register(adapter, { id })` | `policy:<id>` |
+| `context.http.register({ id })` | `http-capability:<id>` |
 
 声明精确匹配且不支持通配符。插件可按配置只启用声明集合的一部分；但任何未声明注册都会在产生宿主可见副作用前失败，错误为：
 
@@ -55,11 +86,19 @@ setup 返回或 `context.lifecycle.onDispose()` 接收的 effect 数组必须由
 
 对象型 disposer 只接受 own data-property function `dispose` 或 `uninstall`，并在注册时捕获方法；getter、prototype callback 和清理期 method swap 不会成为可执行 cleanup。tool/event/prompt/service/provider 等可见 contribution 的 disposer 会先全部同步启动以立即撤销可见性，再由一个可合并的 cleanup accounting scope 等待异步 completion；安装取消、rollback 和正常卸载复用同一个 revocation Promise。tracker 会标记已由 visible revocation 完整消费的 disposer，后续 `disposeAll()` 不再调用或等待同一 result，因此自定义 cleanup thenable 的 `then()` 与失败聚合都只发生一次。跨 microtask 的自卸载或 shutdown 仍触发 lifecycle deadlock guard，而不会与外层卸载 Promise 成环。disposer 抛出值在 cleanup scope 结束前仅通过 own data-property 投影有界 `message/code`，转换为新的 `retryable=false` Error；可见 contribution 的同步或异步撤销错误也在写入 `revocationErrors` 时使用同一投影。原始 identity、accessor、cause、stack 和其他属性不进入 audit 或 `AggregateError`，非法 code 统一为 `PLUGIN_DISPOSER_FAILED`。
 
-registry constructor 的 `config/registerTool/registerModelProvider/audit` 只从 options 自身的 data property 捕获；getter 不执行，prototype adapter 被忽略，创建后的 method swap 不改变已安装宿主 adapter。非法 constructor adapter 以 `PLUGIN_HOST_ADAPTER_INVALID`、`retryable=false` 在 plugin 安装前拒绝。
+registry constructor 的 `config/registerTool/registerModelProvider/registerRuntimeCapability/isRuntimeCapabilityInUse/isRuntimeCapabilitySlotActive/audit` 只从 options 自身的 data property 捕获；getter 不执行，prototype adapter 被忽略，创建后的 method swap 不改变已安装宿主 adapter。非法 constructor adapter 以 `PLUGIN_HOST_ADAPTER_INVALID`、`retryable=false` 在 plugin 安装前拒绝。
 
 `context.config` 是 registry 创建时生成的深冻结 plain-data 快照，上限为 32 层、8192 节点和 1 MiB UTF-8 文本；不会保留宿主配置引用，accessor、function、特殊 prototype、cycle 和超限值以 `PLUGIN_CONTEXT_CONFIG_INVALID` 拒绝。`context.audit.emit(event, details)` 的 event 必须是最多 128 字符的受限标识，details 是最多 16 层、4096 节点和 256 KiB 的深冻结 detached plain data；非法事件/数据分别以 `PLUGIN_AUDIT_EVENT_INVALID` / `PLUGIN_AUDIT_DATA_INVALID` 拒绝，且不会到达宿主 audit sink。audit envelope 自身也被冻结，sink 异常继续保持 observability fail-open。
 
 所有 runtime plugin plain-data 边界以及 tool schema 中的数组，都从同一批 own descriptors 读取 `length` 和稠密元素；不会通过 `array.length` 普通属性访问执行 Proxy `get`，也不会在 descriptor 快照后再次读取原数组。原数组后续 mutation 不影响 config、参数、结果、stream state、audit 或已注册 schema 快照。
+
+## Agent Loop replacement
+
+可信进程内 plugin 可用 `context.loops.register(adapter, options)` 替换完整 Agent Loop。adapter 必须以 own data property 暴露当前 `contractVersion`、稳定 `id` 和 `run(context)`；manifest 必须精确声明 `loop:<adapter.id>`。当前只允许显式替换 `builtin.agent-loop`，并要求正安全整数 `priority`。`version/revision` 来自显式 options 或 plugin manifest/config revision，`owner` 固定为 plugin ID，`releaseDigest` 只来自 manifest `integrity`。可选 `healthCheck` 在 capability snapshot 解析时执行；失败会阻止 runtime ready，不能静默回退内置 Loop。
+
+应用服务器在同一次启动中先完成 plugin discovery 和持久化 runtime plugin restore，再解析 capability snapshot，最后才把选中的 Loop 交给 lifecycle controller。恢复节点在 lifecycle 中消费这次预恢复结果，不会二次安装。停机顺序固定为 Turn/Job/恢复消费者先停止，随后释放 Loop，最后卸载 runtime plugins。已激活的 plugin Loop 禁止配置热重载或卸载，返回 `PLUGIN_LOOP_CAPABILITY_IN_USE`；停止宿主 Loop 后卸载会原子恢复内置 binding。setup、健康检查或 capability 注册失败均撤销 plugin record 和注册副作用。
+
+第三方 Loop 不获得宿主私有执行权限。`run()` 只接收 detached、冻结的输入数据和独立事件总线；模型调用、工具执行、approval、checkpoint、steering、side-effect ledger、进度/终态 callback 均被移除或 fail closed。其返回值只能贡献有界文本，宿主会丢弃 artifact ID、delivery receipt、paused/interrupted、iteration 和其他终态声明。因此 Loop 替换不能绕过权威 tool pipeline、持久化边界或伪造本地文件回执；在宿主提供可审计 broker 契约前，外部 Loop 也不能直接发起模型或有副作用工具调用。
 
 ## Loop event boundaries
 
@@ -97,13 +136,51 @@ plugin `exec`、result snapshot 和 thrown-value sanitization 全部位于同一
 
 ## Model provider lifecycle
 
-`context.models.providers.register(kind, adapter)` 只接受真实字符串 kind 和 adapter 自身的函数数据属性：必需的 `buildRequest/parseResponse`、可选的 `extractUsage`，以及必须成组出现的 `createStreamState/consumeStreamPayload/finishStream`。完整性校验由 runtime wrapper 自身执行，不依赖可替换的 host registration adapter；getter、setter、prototype 方法、descriptor trap、缺失必需方法和不完整 stream 三件套均在任何 host registration 副作用前以 `PLUGIN_MODEL_PROVIDER_DEFINITION_INVALID`、`retryable=false` 拒绝。`ollama/lmstudio/llamacpp/vllm/anthropic/gemini/openai-compatible` 等宿主 `ENDPOINT_KINDS` 是保留 kind，generic registry 不允许 custom adapter 覆盖；runtime wrapper 也会在遍历 adapter 或调用可替换 host registration 前以 `PLUGIN_MODEL_PROVIDER_KIND_RESERVED`、`retryable=false` 拒绝，避免 build/parse/stream split-brain。generic provider registry 的查询、存在性检查和注销对非字符串 fail closed 为 `null/false`，不会执行对象 coercion；endpoint-kind 注册同样在状态变化前拒绝非字符串。普通非 plugin adapter 的自定义字符串 kind 调用保持兼容。callback 必须同步，Promise 返回值以 `PLUGIN_MODEL_PROVIDER_ASYNC_UNSUPPORTED` 拒绝。
+`context.models.providers.register(kind, adapter, options?)` 只接受真实字符串 kind 和 adapter 自身的函数数据属性：必需的 `buildRequest/parseResponse`、可选的 `extractUsage`，以及必须成组出现的 `createStreamState/consumeStreamPayload/finishStream`。完整性校验由 runtime wrapper 自身执行，不依赖可替换的 host registration adapter；getter、setter、prototype 方法、descriptor trap、缺失必需方法和不完整 stream 三件套均在任何 host registration 副作用前以 `PLUGIN_MODEL_PROVIDER_DEFINITION_INVALID`、`retryable=false` 拒绝。`ollama/lmstudio/llamacpp/vllm/anthropic/gemini/openai-compatible` 等宿主 `ENDPOINT_KINDS` 是受保护的内置 capability：普通 generic registry 不能静默覆盖；runtime plugin 只有在 manifest 精确声明 `model-provider:<kind>`、`options.replaces` 精确指向 `builtin.provider.<kind>`、`priority` 为正安全整数，且权威 runtime capability host 可用时，才能显式替换。缺少显式替换声明或优先级非法分别以 `PLUGIN_MODEL_PROVIDER_REPLACEMENT_REQUIRED`、`PLUGIN_MODEL_PROVIDER_REPLACEMENT_PRIORITY_INVALID` fail closed；卸载后恢复内置 binding。generic provider registry 的查询、存在性检查和注销对非字符串 fail closed 为 `null/false`，不会执行对象 coercion；endpoint-kind 注册同样在状态变化前拒绝非字符串。普通非 plugin adapter 的自定义字符串 kind 调用保持兼容。callback 必须同步，Promise 返回值以 `PLUGIN_MODEL_PROVIDER_ASYNC_UNSUPPORTED` 拒绝。
 
 runtime plugin adapter 的每次 callback 都进入该 plugin 的 in-flight callback accounting，并受既有 self-unregister/shutdown deadlock guard 保护。卸载先撤销 provider kind；进入 `uninstalling` 后，request 或 stream state 中曾捕获的 adapter 快照也不能启动新的 plugin callback，而是以 `PLUGIN_MODEL_PROVIDER_UNAVAILABLE`、`retryable=false` 失败。这意味着卸载前已经构建 request、但尚未执行的 response/stream adapter 不会在 plugin cleanup 后继续运行进程内代码。普通宿主注册的非 plugin adapter 仍保留原有 request lease 行为。
 
 runtime provider callback 的参数会复制为深冻结 plain-data snapshot，结果也必须通过同一数据边界；上限为 32 层、32768 节点和 16 MiB UTF-8 文本。accessor、function、symbol、bigint、特殊 prototype、cycle 和非有限数字均 fail closed，分别使用 `PLUGIN_MODEL_PROVIDER_ARGUMENT_INVALID` 或 `PLUGIN_MODEL_PROVIDER_RESULT_INVALID`。`createStreamState` 的返回值会被复制为 wrapper 私有的 mutable plain-data state，宿主只持有不可伪造的 opaque token。每次 stream callback 都在独立 working clone 上运行，只有 callback、event result 和新 state 全部验证成功后才原子提交；插件保留的原始对象或旧 callback state 引用不能继续修改实际 state。伪造 token 或 capability state 以 `PLUGIN_MODEL_PROVIDER_STREAM_STATE_INVALID` 拒绝；stream payload 和 event result 仍分别是冻结输入与冻结输出。
 
 provider 的 thenable 检查、result snapshot、shape 校验和下一版 stream state 快照都在同一个同步 callback accounting scope 内完成。自定义 thenable 只检查 own `then` descriptor，拒绝时不会调用 `then()` 或通过 `Promise.resolve()` assimilate；只有真正 native Promise 使用内建 `Promise.prototype.then` 消化潜在 rejection。返回 Proxy 的反射和 thenable 代码均不能逃到 callback drain 之后。抛出值仅通过 own data-property 读取有界 `message/code`，再生成新的 `retryable=false` Error；原始 identity、getter、cause、stack 和其他属性不跨边界。非法或缺失 code 使用 `PLUGIN_MODEL_PROVIDER_EXECUTION_FAILED`，detached Error 另带宿主写入的 `pluginId/providerKind/method` provenance。
+
+## Runtime policy adapter
+
+可信进程内 plugin 可用同步 v1 契约替换内置审批分类器：
+
+```js
+context.policies.register({
+  contractVersion: 1,
+  classify({ toolName, args, options }) {
+    if (toolName === 'publish_report') {
+      return { decision: 'ask', risk: 'medium', reason: '发布到外部目标' }
+    }
+    return { decision: 'deny', risk: 'high', reason: '未识别的策略范围' }
+  },
+}, {
+  id: 'plugin.example-runtime.policy',
+  replaces: 'builtin.harness-policy',
+  priority: 100,
+})
+```
+
+manifest 必须精确声明 `policy:<id>`。当前最小替换面只允许显式替换 `builtin.harness-policy`，`priority` 必须是正安全整数；`id/version/revision/replaces` 通过 own data property 捕获，owner 固定为 plugin ID，Release digest 只来自 manifest `integrity`。缺少权威 runtime capability host 时注册以 `PLUGIN_POLICY_HOST_UNAVAILABLE` 失败，不会退化成仅 inventory 可见的占位贡献。setup 完成且 plugin 转为 active 后才切换策略；安装失败原子回滚，卸载恢复内置策略。
+
+adapter 必须以 own data property 暴露 `contractVersion: 1` 和同步 `classify`。输入固定为冻结的 `{ toolName, args, options }`：args、task grants 和 remembered grants 通过有界 plain-data 快照；工具 metadata 只投影风险、并发、幂等、来源等固定字段，`getPath` 等宿主函数能力不跨边界。输出只接受 `{ decision, risk, reason, authorization? }`，其中 decision 词汇封闭为 `allow | ask | deny`，risk 封闭为 `low | medium | high`，authorization 也必须是有界 plain data。
+
+缺失 adapter、抛错、Promise/thenable、非法输入、非法 decision/result 或超过宿主 5000ms 分类预算均统一返回 `deny` 和宿主生成的稳定 `failure.code`；插件错误正文、identity、stack、cause 和 accessor 不进入结果。同步预算只能在 callback 返回后判定并丢弃超时结果，无法抢占可信主进程代码；会阻塞 event loop 的策略必须移出进程内 plugin 信任域。
+
+宿主通过 `acquireRuntimePolicy()` 获得同步 lease。lease 同时暴露冻结 provenance：`id/owner/version/revision/releaseDigest/generation/source`；策略替换、卸载或快照换代后，旧 lease 以 `RUNTIME_POLICY_BINDING_STALE` 拒绝，不执行旧插件 callback。审批与恢复链应持久化并复核 provenance，避免旧批准在策略漂移后继续生效。
+
+## HTTP capability replacement
+
+可信进程内 plugin 可用 `context.http.register({ id, priority, replaces, apiPrefixes, handle })` 注册 API capability。manifest 必须精确声明 `http-capability:<id>`；`id/replaces` 只能使用稳定 capability ID，`priority` 必须是安全整数，`apiPrefixes` 必须是 1–64 个无重复 `/api/` 前缀。`owner` 始终由宿主写成 plugin ID，插件不能伪造。定义只读取 own data property；getter、prototype callback、稀疏数组和 descriptor trap 在宿主路由变化前以 `PLUGIN_HTTP_CAPABILITY_DEFINITION_INVALID`、`retryable=false` 拒绝。
+
+碰撞不会按加载顺序静默取胜。替换必须显式写 `replaces`，目标必须存在，而且替换项的 `priority` 必须严格高于当前目标；否则分别以 `HTTP_CAPABILITY_DUPLICATE`、`HTTP_CAPABILITY_REPLACEMENT_TARGET_MISSING` 或 `HTTP_CAPABILITY_PRIORITY_CONFLICT` 拒绝。推荐替换项沿用目标的稳定 ID，使后续更高优先级替换仍指向同一 capability slot。注册、替换、撤销和恢复均进入 HTTP capability audit；plugin registry 另外记录 `plugin.http_capability_registered`、`plugin.http_capability_unregistered`，未激活安装被取消或失败时只记录 `plugin.http_capability_discarded`。
+
+setup 阶段只暂存声明，兼容性复检通过后才同步提交，因此半安装 plugin 不会临时遮蔽内置路由。任一 capability 激活失败会逆序撤销本次已提交项并恢复原实现。卸载先撤销全部 HTTP capability、恢复被替换项，再等待已经进入 `handle` 的 callback 排空；新请求不会进入正在卸载的 plugin，旧请求仍可完成。生产启动在恢复 runtime plugin 前绑定 app server capability registry，进程关闭则先 drain HTTP 请求再卸载 plugin。
+
+`handle` 的有效调用计入 plugin in-flight callback；抛出值只复制 own data-property 的有界 `message/code`，生成带宿主 `pluginId/capabilityId` provenance 的新 `retryable=false` Error，不传原始 identity、getter、cause、stack 或自定义状态。该接口仍会传入原始 Node `req/res`，因此只属于与宿主同信任域的进程内 runtime plugin；磁盘 transformer 没有 registry context，不能注册或替换 HTTP capability。这一切片使路由/控制面具备显式可审计替换，但不代表用户安装代码已获得主进程执行权限。
 
 ## Lifecycle-safe service invocation and policy guards
 
@@ -138,6 +215,32 @@ service callback 与 result snapshot 位于同一个 provider callback accountin
 
 两个 guard 都只属于可信进程内 runtime plugin。磁盘 transformer 没有 service registry context，不能注册或调用这些 policy seam。
 
+### Context compaction strategy
+
+`service:context-compaction-strategy` 是上下文压缩的受限策略槽。可信进程内 plugin 提供 `{ select(statistics) }`，返回 `{ action: 'default'|'compact', keepMessages? }`：
+
+- `statistics` 只包含冻结的 context window、token 估算、消息总数与角色计数、工具数量、宿主阈值、默认/最大尾部数量；不包含消息正文、工具 schema、user/session ID、模型 callback、数据库或其他宿主能力；
+- `compact` 可要求宿主提前压缩，`keepMessages` 只能取 `1..maxKeepMessages`，因此只能比内置策略更积极；插件不能取消 `force`、消息上限或 token 阈值已经要求的压缩；
+- `default` 接受内置决定且不能附带 `keepMessages`；其他 action、越界值、异常或 5 秒超时均回退内置策略，不阻断当前模型调用；
+- 返回值只影响压缩时机与保留尾部数量，不能开启语义摘要、触发额外模型调用、改写消息、改变 archive 持久化或绕过工具调用链校验；
+- 每次调用都经 lifecycle-aware service invocation；卸载先撤销可见性，后续模型调用立即恢复内置策略，不长期持有 plugin callback。
+
+该 seam 只属于可信进程内 runtime plugin；磁盘 transformer 不能获得 service registry context。
+
+### Subagent provider
+
+`service:subagent-provider` 是子代理执行的受限替换槽。可信进程内 plugin 提供 `{ run(scope) }`，只能返回 `{ decision: 'decline' }`，或 `{ decision: 'handled', status: 'completed'|'paused'|'interrupted'|'failed', text?, reason? }`：
+
+- `scope` 是冻结、有界的 plain data，只含 `runId/resume/type/prompt/description/depth/model/team`。其中 model 只投影名称、Provider ID 与配置 revision；team 只投影 ID、名称、模式、角色、规模和成员序号；
+- provider 不会收到 user ID、父 session/message ID、数据库、工具或 schema、审批状态、AbortSignal、callback、密钥/env、agent ID、skill ID 或 skill 正文，因而不能从该 seam 获取任何宿主能力；
+- `runId` 同时是 durable run ID 与 provider 幂等键。`interrupted` 恢复继续使用同一个 ID，并传 `resume: true`；provider 必须按该键对账，不能把恢复当作新的外部操作；
+- 只有 service 缺席或 provider 明确返回 `decline` 时才进入内置子代理 loop。active provider 抛错、返回非法/非终态结果或 5 秒内结果未知时，会以稳定错误码持久化为 `failed`，绝不静默在本地重跑；
+- provider 返回 `handled` 后，宿主只持久化上述终态及不超过边界的 text/reason，不再调用本地模型。未知副作用的显式恢复仍固定经过内置 ledger 验证，provider 不能覆盖 `needs_verification`；
+- 每次调用前先把 `invoking` 写入 durable trace，完成后再写最终决策。公开 run 的 `provider` provenance 以及 trace 中的 provider 项只包含 `pluginId/service/decision/error`，不保存插件错误正文或任意返回扩展字段；
+- 调用每次都经过 lifecycle-aware `invokePluginService`，不持有 callback。卸载后新 run 立即恢复内置实现；已经完成的 durable run 按既有终态直接返回，不重复调用 provider。
+
+该 seam 目前仍属于与宿主同信任域的进程内 runtime plugin，不代表已实现 OS 级插件隔离。
+
 ## Transformer adapter
 
 已安装的 `transformer` 数据插件启用后只获得一个宿主生成的工具名：
@@ -148,18 +251,76 @@ tool:plugin_<normalized-plugin-id>
 
 宿主 manifest 精确声明该工具；实际 transformer 源码仍由 worker sandbox 执行，输入上限、源码上限、能力白名单、本地 owner 限制和多用户 fail-closed 策略不变。sandbox invocation options 只接受非 Proxy 容器的 own data-property；accessor、inherited field、descriptor trap 和对象数值 coercion 在 worker 创建前以 `PLUGIN_SANDBOX_OPTIONS_INVALID`、`retryable=false` 拒绝。`runTransformer`/`validateTransformer` 模式由宿主固定，调用方不能通过 `validateOnly` 旁路执行；timeout 仅允许 1–60000 ms，worker old-generation memory 仅允许 8–256 MiB。sandbox 只从非 Proxy plugin 定义的 own data-property 读取 `source` 或 `entryPath`；accessor、prototype callback、descriptor trap 和对象 source coercion 在创建 worker 前以 `PLUGIN_SANDBOX_DEFINITION_INVALID`、`retryable=false` 拒绝。inline source 与 entry file 均在 sandbox 层强制 512 KiB UTF-8 上限；entry 必须是 regular file，并通过固定 512 KiB+1 buffer 读取以检测 stat 后增长，超限或非法文件以 `PLUGIN_SANDBOX_SOURCE_INVALID`、`retryable=false` 拒绝。capability 列表通过有界稠密 own descriptor snapshot 过滤，不调用实例覆写的 `filter`、iterator 或 Proxy trap。transformer input 在 worker 创建前复制为最多 32 层、8192 节点和 64 KiB UTF-8 文本的 plain data；getter、capability、cycle、特殊 prototype 及任意层级 Proxy 以 `PLUGIN_SANDBOX_INPUT_INVALID`、`retryable=false` 拒绝，structured clone 不再读取调用方原始对象图。transformer output 在 worker 内按同一上限与 descriptor 规则复制后才跨线程；Promise、自定义 thenable、Proxy、accessor、cycle、特殊 prototype 和超限结果返回 `PLUGIN_SANDBOX_OUTPUT_INVALID`，不会执行 `then()`、completion getter 或对象 coercion。worker thrown value 只投影 own data-property 字符串 `message` 与宿主生成的 output error code，不读取 getter、调用 `toString()` 或暴露原始 identity/stack/cause。VM context 使用无原型 global（`vm.createContext(Object.create(null))`），`globalThis.constructor` 等构造器链停留在 context realm，无法通过 `Function`/动态代码逃逸到 worker realm 读取 `process`/`process.env`/`require`；worker 的模块局部 `require` 与宿主能力对插件不可达，输出边界进一步阻止任何泄漏回传。
 
+### Explicit permission approval
+
+磁盘 transformer 在首次执行前必须得到本机安装 owner 的明确授权。有效权限集合由固定的 `runtime:tool`、manifest `permissions` 以及每项 sandbox capability 对应的 `sandbox:<capability>` 组成；排序和去重后与 plugin ID、版本、Release 源码 SHA-256 及权限契约版本一起生成 `approvalDigest`。任一源码、版本或权限变化都会生成新的摘要，旧授权不能静默扩权。
+
+`enable`、`reload` 和 `run-sandbox` 若没有匹配的持久授权，会返回 HTTP 409 / `PLUGIN_PERMISSION_APPROVAL_REQUIRED`，并在 `error.details.permissionApproval` 中提供有界的 plugin ID、版本、源码摘要、权限清单和 approval digest。renderer 只在设置页内联展示这份清单；用户明确确认后，客户端才用 `X-Gugo-Plugin-Permission-Approval` 请求头重试原动作。错误摘要、不同 plugin 的摘要或陈旧摘要均不能授权。控制端点与 sandbox 端点都要求已登录、loopback 来源且会话属于 `AUTH_MODE=local` 的安装 owner；多用户模式 fail closed。
+
+schema v101 将授权持久化到 `runtime_plugin_permission_grants`；每条 grant 同时绑定 `plugin_id` 与固定本机 installation owner（`owner_id` 外键），读取、匹配和写入只接受当前有效的固定 owner。固定 owner 不可用时，读取视为无授权，写入以 `PLUGIN_PERMISSION_OWNER_UNAVAILABLE` fail closed。v100 grant 不含 owner，升级时不能安全推断授权人；v101 会删除这些模糊 grant，不做归属猜测，相关 Release 必须由当前固定本机 owner 再次明确授权。owner/plugin 双外键通过级联删除限定授权生命周期。启动恢复、stored Release 健康检查和每次动态工具执行都会重新匹配当前 Release 的 owner、源码摘要、规范化权限集合和 approval digest；直接改 SQLite 期望状态或替换磁盘源码不能绕过门禁。已知未通过发布门禁的 active Release 会先被判为不可执行，再尝试回滚到仍健康且具有匹配授权的 previous Release；健康但未授权的 Release 不会借回滚逻辑绕过确认。
+
+普通 `disable` 只停止插件并保留精确授权，便于用户稍后重新启用同一 Release；`POST /api/plugins/runtime/:id/revoke-permissions` 会撤销授权并停用插件。撤销后即使停用清理发生错误，后续工具执行仍因缺少授权 fail closed。reload 的新 Release 指针提交失败时会恢复本进程旧工具槽；同一数据库事务回滚会让旧 Release 指针与既有 grant 原样保留，不会留下失败候选的授权。该授权层不等于 OS sandbox；worker/VM 隔离之外的进程级强隔离仍是独立安全里程碑。
+
 ### Atomic reload
 
-本地 owner 可调用 `POST /api/plugins/runtime/:id/reload` 重载一个已激活的 transformer。宿主先读取受限大小的源码，并在同样受内存和超时限制的 worker/VM 中完成 validate-only 预检；预检只加载源码并确认 `transform` 为函数，不调用 `transform(input)`。
+本地 owner 可调用 `POST /api/plugins/runtime/:id/reload` 重载一个已激活的 transformer。enable/reload 不再修改旧源码对象，而是创建一个新的不可变 Release：Release 绑定随机 `releaseId`、`sha256-...` 源码摘要、源码快照、执行所需的 manifest/capability 快照及校验结果。Release 以 append-only 行写入 SQLite；数据库触发器同时拒绝原地 `UPDATE` 和 `DELETE`，同一 `releaseId` 也不能再次插入。权威状态只保存 `activeReleaseId` / `previousReleaseId` 指针及单调递增的 `releaseRevision`。
 
-预检成功后只原子替换工具闭包持有的源码引用，不注销或重注册工具。已经开始的调用继续使用启动时捕获的旧源码，后续调用使用新源码。读取或预检失败返回 `PLUGIN_RELOAD_VALIDATION_FAILED`（或对应 entry 错误），旧工具与旧源码继续可用；未激活插件返回 `PLUGIN_RUNTIME_NOT_ACTIVE`。enable、disable、reload 和启动恢复仍按 plugin ID 串行化。
+切流前依次执行两道门禁：
+
+1. 在受内存和超时限制的 worker/VM 中 validate-only，确认源码可加载且 `transform` 为函数；
+2. 在独立 sandbox worker 中以 JSON `null` 做一次真实健康调用，同时验证输出可安全序列化。transformer 因而必须安全处理该探针输入。
+
+预检失败返回 `PLUGIN_RELOAD_VALIDATION_FAILED`，健康检查失败返回 `PLUGIN_RELEASE_HEALTH_CHECK_FAILED`；两者都会保留当前权威 Release，失败候选的校验/健康结果仍留在本地发布记录中。通过门禁后，工具槽只原子替换为新 Release；已经开始的调用先捕获并继续使用旧 Release，后续调用使用新 Release，工具无需注销或重注册。权威指针提交同时比较调用方快照中的 `enabled`、`activeReleaseId` 和 `releaseRevision`；另一进程先完成 enable/disable/reload 时，陈旧操作返回 `PLUGIN_RELEASE_STATE_CONFLICT`（HTTP 409）。enable/reload（以及恢复时的 confirm/activate）把 Release 状态 CAS 与 grant 写入或现有 grant 复核放在同一个 SQLite 事务中；CAS 冲突会回滚候选 grant，grant 写入或复核失败也会回滚 Release 状态，陈旧操作不能留下或覆盖授权。reload 会恢复本进程旧工具槽，`lastRollback` 只记录审计信息，绝不把数据库 active 指针覆盖回旧值。其他指针落库失败返回 `PLUGIN_RELEASE_ACTIVATION_FAILED`。未激活插件返回 `PLUGIN_RUNTIME_NOT_ACTIVE`。进程内操作仍按 plugin ID 串行化，revision CAS 提供跨进程冲突门禁。
+
+进程重启时，宿主优先读取 SQLite 中的 active Release 快照，复核源码摘要，并重新执行预检和健康检查；磁盘入口即使已被编辑，也不会绕过显式 reload 自动成为已发布代码。active Release 缺失、损坏或无法恢复时，若 previous Release 仍健康，则以同一 CAS 门禁激活 previous，并只把损坏 active ID 写入 rollback 审计。只有从旧版状态升级、尚无 Release 指针时，启动恢复才从当前磁盘入口创建首个 Release。
 
 ## Read-only inventory
 
-`GET /api/plugins/runtime` 为 renderer 提供版本化的只读清单。端点只接受已登录、loopback 来源且属于本地安装 owner 的请求；多用户模式 fail closed。响应中的 `schemaVersion: 1` 每项包含：
+`GET /api/plugins/runtime` 为 renderer 提供版本化的只读清单。端点只接受已登录、loopback 来源且属于本地安装 owner 的请求；多用户模式 fail closed。响应中的 `schemaVersion: 7` 包含 `plugins`、`effectiveConfigs`、当前有效的 `httpCapabilities` 和有界的进程内 `httpCapabilityAudit`，并设置 `Cache-Control: private, no-store`。有效 HTTP 项只投影 `id/owner/priority/replaces/apiPrefixes/sequence`；审计项只含事件、capability/owner/priority/sequence、时间与替换关系。两者均不包含 match/handler、源码或请求对象，使本地 owner 能核对实际生效的路由和本进程内的注册、替换、撤销、恢复历史。该历史重启后清空，不替代需要跨重启保留的安全审计存储。`plugins` 每项包含：
 
 - 纯 JSON `manifest`（`id/name/version/requires/contributes`）；
 - `source`、`controllable`、`active`、`runtimeState` 和 `installedAt`；
 - transformer 的持久期望状态、生成工具名及脱敏后的最近错误。
+- `activeRelease`、`previousRelease`、`latestRelease`、`releaseCount` 和最近一次 `lastRollback`；Release 身份只含 ID、SHA-256、创建时间和门禁结果。
+- transformer 的 `permissionGrant`，只包含是否需要/是否匹配、当前请求权限与摘要及授权时间；不包含源码、请求头或宿主密钥。
+- transformer 的 `distribution`，只投影来源类型、是否可变、是否为已验证整包及是否存在安装回执；本地目录来源明确标为开发态，不冒充已安装包，也不暴露回执内容。
 
-清单会合并活跃的宿主 runtime plugin、磁盘 transformer 和 SQLite 中遗留的期望状态。registry 的 `listPlugins()` / `getPlugin()` 返回 top-level、`requires` 和 `contributes` 均冻结的 detached 快照，调用方不能改写运行时状态；查询结果数组同样冻结。`getPlugin/hasService/invokeService/unregisterPlugin` 等名称参数只接受真实字符串，不执行对象的 `toString` / `Symbol.toPrimitive`。清单不序列化 setup、tool executor、event listener、service value 或 model adapter，也不会向 renderer 暴露 entry source、绝对路径或任意 JavaScript 加载能力。renderer 的 `listRuntimePluginInventoryApi()` 仅执行该 GET 请求。
+清单会合并活跃的宿主 runtime plugin、磁盘 transformer 和 SQLite 中遗留的期望状态。registry 的 `listPlugins()` / `getPlugin()` 返回 top-level、`requires` 和 `contributes` 均冻结的 detached 快照，调用方不能改写运行时状态；查询结果数组同样冻结。`getPlugin/hasService/invokeService/unregisterPlugin` 等名称参数只接受真实字符串，不执行对象的 `toString` / `Symbol.toPrimitive`。清单不序列化 Release 源码或 manifest 快照，也不序列化 setup、tool executor、event listener、service value 或 model adapter；renderer 看不到 entry source、绝对路径或任意 JavaScript 加载能力。renderer 的 `listRuntimePluginInventoryApi()` 仅执行该 GET 请求。
+
+## Plugin configuration layers
+
+进程启动时会从 user、project 和显式 `runtime.json` 的 `pluginConfig.layers` 读取插件级配置。每层必须声明稳定 `id`、`kind`（`defaults|profile|bundle|installation`）、安全整数 `priority` 与按 plugin ID 分区的 `plugins` 对象；priority 从低到高合并，同 priority 再按 source 和 id 排序，因此结果与文件数组顺序无关。对象递归合并，数组和标量整体替换，插件只能收到自己 ID 下的配置。旧的 `createRuntimePluginRegistry({ config })` 仍作为所有插件共享的最低层 legacy defaults，保持既有 `context.config` 行为。
+
+```json
+{
+  "env": {},
+  "pluginConfig": {
+    "layers": [
+      {
+        "id": "profile-local",
+        "kind": "profile",
+        "priority": 100,
+        "plugins": {
+          "example-plugin": { "endpoint": "http://127.0.0.1:9000" }
+        }
+      },
+      {
+        "id": "installation-local",
+        "kind": "installation",
+        "priority": 300,
+        "plugins": {
+          "example-plugin": { "apiKey": "local-secret" }
+        }
+      }
+    ]
+  }
+}
+```
+
+每个 plugin setup 前，宿主生成深冻结 plain-data 快照并按 manifest `configSchema` 的常用结构约束（组合、type、enum/const、对象 required/properties/additionalProperties、数组 items/长度、字符串长度及数值边界）校验；失败时 setup 不执行，错误只报告路径和规则，不包含配置值。配置文件修改在下次进程启动或插件重新构造后生效。
+
+`effectiveConfigs` 只列出当前进程内已注册 runtime plugin，包含合并后的配置、参与层及最终 JSON Pointer provenance。敏感 key（API key、token、secret、password、credential、authorization/cookie 等）、schema 中 `writeOnly`/`x-secret`/`x-sensitive`/敏感 format 标记的字段，以及 URL 用户凭据和敏感 query 参数会替换为固定 `[REDACTED]`；原始 secret 仍只在服务端 `context.config` 中可见。
+
+单插件详情 `GET /api/plugins/:id` 会返回最多 50 KiB 的入口源码预览，因此使用与 runtime 控制面相同的授权：请求必须来自 loopback，并且会话必须属于 `AUTH_MODE=local` 的安装 owner；multi-user 模式即使用户已登录也返回 `LOCAL_OWNER_ONLY`，错误响应不包含 `entryPreview`。
+
+上述保护假设应用进程独占可信的本地数据目录。能够绕过应用直接修改 SQLite 文件或替换宿主代码的本机主体不在此威胁模型中；Release 目前也没有外部签名、透明日志或硬件/远端信任根。本轮只保证应用 API、服务层和数据库触发器路径中的不可变性与并发一致性。

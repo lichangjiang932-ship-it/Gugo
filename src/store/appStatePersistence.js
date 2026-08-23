@@ -1,5 +1,6 @@
 import { DEFAULT_STORAGE_KEY, sanitizeForPersist } from './persistDegradation.js'
 import { readPersistedPayload } from './stateSync.js'
+import { sanitizeRetiredBrowserAccountFields } from './browserSnapshotSanitizer.js'
 
 export const LEGACY_STATE_STORAGE_KEY = DEFAULT_STORAGE_KEY
 export const SETTINGS_STORAGE_KEY = 'your-model-atelier:settings:v2'
@@ -94,23 +95,45 @@ export function selectLightweightSnapshot(snapshot) {
 function parseStoredPayload(raw, fallbackTimestamp) {
   if (!raw) return null
   try {
-    return readPersistedPayload(raw, fallbackTimestamp)
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+    const sanitized = sanitizeRetiredBrowserAccountFields(parsed)
+    const payload = readPersistedPayload(sanitized.payload, fallbackTimestamp)
+    return {
+      payload,
+      sanitizedPayload: sanitized.changed ? sanitized.payload : null,
+      removedFields: sanitized.removedFields,
+    }
   } catch {
     return null
   }
 }
 
 export function readBootstrapPayloads(storage, fallbackTimestamp = Date.now()) {
-  const safeGetItem = (key) => {
+  const readAndClean = (key) => {
+    let raw
     try {
-      return storage.getItem(key)
+      raw = storage.getItem(key)
     } catch {
       return null
     }
+    const parsed = parseStoredPayload(raw, fallbackTimestamp)
+    if (!parsed) return null
+    if (!parsed.sanitizedPayload) return parsed.payload
+    let cleanupNeeded = false
+    try {
+      storage.setItem(key, JSON.stringify(parsed.sanitizedPayload))
+    } catch {
+      cleanupNeeded = true
+    }
+    return {
+      ...parsed.payload,
+      retiredAccountFieldsRemoved: parsed.removedFields,
+      ...(cleanupNeeded ? { cleanupNeeded: true } : {}),
+    }
   }
   return {
-    settings: parseStoredPayload(safeGetItem(SETTINGS_STORAGE_KEY), fallbackTimestamp),
-    legacy: parseStoredPayload(safeGetItem(LEGACY_STATE_STORAGE_KEY), fallbackTimestamp),
+    settings: readAndClean(SETTINGS_STORAGE_KEY),
+    legacy: readAndClean(LEGACY_STATE_STORAGE_KEY),
     clearedAt: readStateClearEpoch(storage),
   }
 }

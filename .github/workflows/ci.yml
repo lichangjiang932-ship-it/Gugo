@@ -54,6 +54,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Offline agent capability gate
+        env:
+          TEST_CONCURRENCY: 1
+        run: npm run eval:offline
+
       - name: Test
         env:
           TEST_CONCURRENCY: ${{ runner.os == 'Windows' && '2' || '4' }}

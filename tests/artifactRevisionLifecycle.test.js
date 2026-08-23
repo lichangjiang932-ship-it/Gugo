@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import '../scripts/testEnvironment.mjs'
 
 const testToken = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 const testRoot = path.join(os.tmpdir(), `gugo-artifact-revision-${testToken}`)

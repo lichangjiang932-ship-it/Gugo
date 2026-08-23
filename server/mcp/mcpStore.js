@@ -102,6 +102,46 @@ export function listEnabledServers(userId) {
   return db.prepare('SELECT * FROM mcp_servers WHERE user_id = ? AND enabled = 1 ORDER BY name').all(userId).map(row2server)
 }
 
+/**
+ * Secret-free, side-effect-free MCP inventory. This path deliberately avoids
+ * row2server(), so listing capabilities never decrypts or migrates credentials.
+ */
+export function listMcpServerInventory(userId) {
+  if (!userId) return Object.freeze([])
+  const rows = getDb().prepare(`
+    SELECT id, name, transport, enabled, updated_at
+      FROM mcp_servers
+     WHERE user_id = ?
+     ORDER BY id
+  `).all(userId)
+  return Object.freeze(rows.map((row) => Object.freeze({
+    id: String(row.id),
+    name: String(row.name || row.id),
+    transport: String(row.transport || ''),
+    enabled: row.enabled === 1,
+    updatedAt: Number(row.updated_at),
+  })))
+}
+
+/**
+ * Secret-free identities used by Turn replay validation. Keep this query
+ * deliberately narrow so credentials, URLs, commands and arguments are never
+ * read or persisted in an execution-environment snapshot.
+ */
+export function listEnabledMcpServerRevisionIdentities(userId) {
+  if (!userId) return []
+  return getDb().prepare(`
+    SELECT id, transport, updated_at
+      FROM mcp_servers
+     WHERE user_id = ? AND enabled = 1
+     ORDER BY id
+  `).all(userId).map((row) => ({
+    id: String(row.id),
+    transport: String(row.transport),
+    updatedAt: Number(row.updated_at),
+  }))
+}
+
 export function getServer(userId, id) {
   if (!userId || !id) return null
   const db = getDb()
@@ -118,7 +158,7 @@ export function upsertServer({ id, userId, name, transport, command, args, env, 
     if (!url || !/^https?:\/\//.test(url)) throw new Error('HTTP MCP 必须提供 http/https url')
   }
   const db = getDb()
-  const now = Date.now()
+  let now = Date.now()
   const serverId = id || randomUUID()
   const argsJson = JSON.stringify(Array.isArray(args) ? args : [])
   const envJson = sealCredentialObject(env || {}, { purpose: MCP_ENV_PURPOSE })
@@ -126,7 +166,8 @@ export function upsertServer({ id, userId, name, transport, command, args, env, 
   const autoApproveJson = JSON.stringify(Array.isArray(autoApprove) ? autoApprove : [])
   const toolsJson = JSON.stringify(normalizeToolDeclarations(tools))
 
-  const existing = db.prepare('SELECT id FROM mcp_servers WHERE user_id = ? AND id = ?').get(userId, serverId)
+  const existing = db.prepare('SELECT id, updated_at FROM mcp_servers WHERE user_id = ? AND id = ?').get(userId, serverId)
+  if (existing && Number(existing.updated_at) >= now) now = Number(existing.updated_at) + 1
   if (existing) {
     db.prepare(`UPDATE mcp_servers SET name=?, transport=?, command=?, args_json=?, env_json=?, cwd=?, url=?, headers_json=?, enabled=?, auto_approve_json=?, tools_json=?, updated_at=? WHERE id=?`).run(
       name.trim(), transport, command || null, argsJson, envJson, cwd || null, url || null, headersJson, enabled ? 1 : 0, autoApproveJson, toolsJson, now, serverId,

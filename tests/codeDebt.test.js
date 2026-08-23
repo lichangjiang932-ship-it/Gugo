@@ -5,10 +5,14 @@ import path from 'node:path'
 
 const LARGE_FILE_CEILINGS = {
   'src/lib/presentationExport.js': 3630,
-  'server/adapters/modelProxy.js': 1971,
+  'server/adapters/modelProxy.js': 517,
+  'server/plugins/runtimePluginRegistry.js': 1234,
   'src/pages/ChatSplit/index.jsx': 1636,
-  'server/db.js': 1668,
-  'server/services/jobRuntime.js': 1402,
+  'server/db.js': 1653,
+  'server/services/jobRuntime.js': 1161,
+  'server/services/TurnEngine.js': 2404,
+  'server/services/artifactGen.js': 1597,
+  'server/core/compactionArchivePort.js': 958,
 }
 const DEBT_MARKER_CEILING = 168
 const LEGACY_EMBER_CEILING = 106

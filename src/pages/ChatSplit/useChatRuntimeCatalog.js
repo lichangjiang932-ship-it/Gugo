@@ -1,37 +1,30 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { SKILLS } from '../../data.js'
 import { getModelStatus } from '../../lib/modelClient.js'
-import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../lib/modelSelection.js'
+import {
+  readStoredModelSelection,
+  resolveInitialModelSelection,
+  writeStoredModelSelection,
+} from '../../lib/modelSelection.js'
 import { listSkills } from '../../lib/skillClient.js'
 import { listLocalSkills, mergeRuntimeSkills } from '../../lib/localSkills.js'
 import { presentSkillCollection } from '../../lib/skillPresentation.js'
 import { listPromptTemplatesApi, getPromptTemplateContentApi, renderPromptTemplate } from '../../lib/pluginClient.js'
 import { createSlashCommandRegistry, normalizeSlashCommandName } from '../../lib/slashCommandRegistry.js'
 import { CORE_SLASH_COMMANDS, registerCoreSlashCommands } from '../../lib/slashCoreCommands.js'
+import { INITIAL_MODEL_CATALOG_STATE, modelCatalogStateFromStatus, modelOptionsFromStatus } from './chatModelReadiness.js'
+
+export { modelOptionsFromStatus } from './chatModelReadiness.js'
 
 function promptTemplateCommandName(template) {
   return normalizeSlashCommandName(template?.name) || normalizeSlashCommandName(template?.id)
 }
 
-export function modelOptionsFromStatus(status = {}) {
-  if (Array.isArray(status?.models) && status.models.length > 0) return status.models
-  if (!status?.modelName) return []
-  return [{
-    name: status.modelName,
-    multiplier: 1,
-    active: true,
-    contextWindow: status.contextWindow,
-    contextWindowSource: status.contextWindowSource,
-    contextWindowEstimated: status.contextWindowEstimated,
-    contextWindowSourceUrl: status.contextWindowSourceUrl,
-    contextWindowVerifiedAt: status.contextWindowVerifiedAt,
-    maxOutputTokens: status.maxOutputTokens,
-  }]
-}
-
 export default function useChatRuntimeCatalog({ lang, skillConfigs, t }) {
   const [modelOptions, setModelOptions] = useState([])
-  const [selectedModel, setSelectedModel] = useState('')
+  const [selectedModelSelection, setSelectedModelSelection] = useState({ modelName: '', providerId: '' })
+  const [modelCatalogState, setModelCatalogState] = useState(INITIAL_MODEL_CATALOG_STATE)
+  const [modelCatalogRevision, setModelCatalogRevision] = useState(0)
   const [runtimeSkills, setRuntimeSkills] = useState(() => mergeRuntimeSkills(listLocalSkills(), SKILLS))
   const [promptTemplates, setPromptTemplates] = useState([])
   const presentedRuntimeSkills = useMemo(() => presentSkillCollection(runtimeSkills, lang), [runtimeSkills, lang])
@@ -56,30 +49,51 @@ export default function useChatRuntimeCatalog({ lang, skillConfigs, t }) {
     return registry
   }, [lang, presentedRuntimeSkills, promptTemplates, skillConfigs, t])
 
+  const reloadModels = useCallback(() => {
+    setModelCatalogRevision((revision) => revision + 1)
+  }, [])
+
+  const setSelectedModel = useCallback((modelName, providerId = '') => {
+    setSelectedModelSelection({
+      modelName: String(modelName || '').trim(),
+      providerId: String(providerId || '').trim(),
+    })
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     async function loadModels() {
+      setModelCatalogState(INITIAL_MODEL_CATALOG_STATE)
       try {
         const status = await getModelStatus()
         if (cancelled) return
         const models = modelOptionsFromStatus(status)
         setModelOptions(models)
-        setSelectedModel((current) => {
-          const selected = resolveInitialModel(models, current || readStoredModel())
-          writeStoredModel(selected)
+        setModelCatalogState(modelCatalogStateFromStatus(status, models))
+        setSelectedModelSelection((current) => {
+          const selected = resolveInitialModelSelection(
+            models,
+            current.modelName ? current : readStoredModelSelection(),
+          )
+          writeStoredModelSelection(selected)
           return selected
         })
       } catch {
-        if (!cancelled) setModelOptions([])
+        if (!cancelled) {
+          setModelOptions([])
+          setSelectedModelSelection({ modelName: '', providerId: '' })
+          setModelCatalogState({ kind: 'error' })
+        }
       }
     }
     loadModels()
-    window.addEventListener('model-providers:changed', loadModels)
-    return () => {
-      cancelled = true
-      window.removeEventListener('model-providers:changed', loadModels)
-    }
-  }, [])
+    return () => { cancelled = true }
+  }, [modelCatalogRevision])
+
+  useEffect(() => {
+    window.addEventListener('model-providers:changed', reloadModels)
+    return () => window.removeEventListener('model-providers:changed', reloadModels)
+  }, [reloadModels])
 
   useEffect(() => {
     let cancelled = false
@@ -102,7 +116,16 @@ export default function useChatRuntimeCatalog({ lang, skillConfigs, t }) {
     return () => { cancelled = true }
   }, [])
 
-  return { modelOptions, runtimeSkills, selectedModel, setSelectedModel, slashRegistry }
+  return {
+    modelCatalogState,
+    modelOptions,
+    reloadModels,
+    runtimeSkills,
+    selectedModel: selectedModelSelection.modelName,
+    selectedModelProviderId: selectedModelSelection.providerId,
+    setSelectedModel,
+    slashRegistry,
+  }
 }
 
 function registerPromptTemplate(registry, template) {

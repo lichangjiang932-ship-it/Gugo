@@ -14,7 +14,6 @@ test('single-model status keeps resolved context metadata', () => {
     maxOutputTokens: 2_048,
   }), [{
     name: 'local-model',
-    multiplier: 1,
     active: true,
     contextWindow: 8_192,
     contextWindowSource: 'provider_override',

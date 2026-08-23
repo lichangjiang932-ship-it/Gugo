@@ -11,6 +11,7 @@ import { resolveApprovalTimeoutMs } from '../utils/approvalPolicy.js'
 const VALID_ORIGINS = new Set(['job', 'subagent', 'chat'])
 const VALID_RISKS = new Set(['low', 'medium', 'high'])
 const TERMINAL_STATUSES = new Set(['approved', 'denied', 'edited', 'expired', 'cancelled'])
+const MAX_POLICY_PROVENANCE_BYTES = 4_096
 /** decision → 落库 status */
 const DECISION_STATUS = Object.freeze({ approve: 'approved', deny: 'denied', edit: 'edited' })
 
@@ -35,6 +36,23 @@ function stringifyArgs(args) {
   }
 }
 
+function stringifyPolicyProvenance(value) {
+  if (value == null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('policyProvenance must be an object')
+  }
+  let serialized
+  try {
+    serialized = JSON.stringify(value)
+  } catch (cause) {
+    throw new TypeError('policyProvenance must be JSON serializable', { cause })
+  }
+  if (!serialized || Buffer.byteLength(serialized, 'utf8') > MAX_POLICY_PROVENANCE_BYTES) {
+    throw new TypeError('policyProvenance is invalid or too large')
+  }
+  return serialized
+}
+
 function normalizeMetadataSource(source) {
   return source === 'declared' ? 'declared' : 'fallback'
 }
@@ -53,6 +71,7 @@ function mapApproval(row) {
     args: parseJson(row.args_json, {}),
     risk: row.risk,
     metadataSource: normalizeMetadataSource(row.metadata_source),
+    policyProvenance: parseJson(row.policy_provenance_json),
     reason: row.reason || null,
     status: row.status,
     decidedArgs,
@@ -77,6 +96,7 @@ export function createPendingApproval({
   args = {},
   risk = 'medium',
   metadataSource = 'fallback',
+  policyProvenance = null,
   reason = null,
   expiresAt = null,
 } = {}) {
@@ -93,10 +113,12 @@ export function createPendingApproval({
   getDb().prepare(`
     INSERT INTO pending_approvals
       (id, user_id, origin, job_id, step_id, session_id, tool_name, args_json,
-       risk, metadata_source, reason, status, expires_at, created_at, updated_at)
+       risk, metadata_source, policy_provenance_json, reason, status,
+       expires_at, created_at, updated_at)
     VALUES
       (@id, @userId, @origin, @jobId, @stepId, @sessionId, @toolName, @argsJson,
-       @risk, @metadataSource, @reason, 'pending', @expiresAt, @now, @now)
+       @risk, @metadataSource, @policyProvenanceJson, @reason, 'pending',
+       @expiresAt, @now, @now)
   `).run({
     id,
     userId,
@@ -108,6 +130,7 @@ export function createPendingApproval({
     argsJson: stringifyArgs(args),
     risk,
     metadataSource: normalizeMetadataSource(metadataSource),
+    policyProvenanceJson: stringifyPolicyProvenance(policyProvenance),
     reason: reason ? String(reason).slice(0, 500) : null,
     expiresAt: expiry,
     now,

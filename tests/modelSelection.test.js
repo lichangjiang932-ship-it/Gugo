@@ -2,14 +2,19 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  readStoredModelSelection,
   resolveInitialModel,
+  resolveInitialModelSelection,
   resolveSessionModel,
+  resolveSessionModelSelection,
   withSessionModel,
+  withSessionModelSelection,
+  writeStoredModelSelection,
 } from '../src/lib/modelSelection.js'
 
 const MODELS = [
-  { name: 'deepseek-v4-pro', multiplier: 3, active: true },
-  { name: 'deepseek-v4-flash', multiplier: 0.6, active: false },
+  { name: 'deepseek-v4-pro', active: true },
+  { name: 'deepseek-v4-flash', active: false },
 ]
 
 test('keeps a previously selected model when it is still allowed', () => {
@@ -50,4 +55,37 @@ test('session model persistence updates only the selected session', () => {
     sessions[1],
   ])
   assert.equal(withSessionModel(updated, 'pro-chat', 'deepseek-v4-pro'), updated)
+})
+
+test('same-name models preserve their provider identity across selection and session persistence', () => {
+  const duplicateModels = [
+    { name: 'shared-model', provider: 'alpha', active: true },
+    { name: 'shared-model', provider: 'beta', active: false },
+  ]
+  const selected = resolveInitialModelSelection(duplicateModels, {
+    modelName: 'shared-model',
+    providerId: 'beta',
+  })
+  assert.deepEqual(selected, { modelName: 'shared-model', providerId: 'beta' })
+  assert.deepEqual(resolveSessionModelSelection(duplicateModels, {
+    sessionModel: 'shared-model',
+    sessionProviderId: 'beta',
+    selectedModel: 'shared-model',
+    selectedProviderId: 'alpha',
+  }), selected)
+  assert.deepEqual(withSessionModelSelection(
+    [{ id: 'chat', modelName: 'shared-model', modelProviderId: 'alpha', updatedAt: 1 }],
+    'chat',
+    selected,
+    2,
+  ), [{ id: 'chat', modelName: 'shared-model', modelProviderId: 'beta', updatedAt: 2 }])
+
+  const values = new Map()
+  const storage = {
+    getItem: (key) => values.get(key) || null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+  }
+  writeStoredModelSelection(selected, storage)
+  assert.deepEqual(readStoredModelSelection(storage), selected)
 })

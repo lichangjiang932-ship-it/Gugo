@@ -58,6 +58,8 @@ test('isUnsafeIp: ::ffff:<v4 私网> 映射也拒绝', () => {
   assert.strictEqual(isUnsafeIp('::ffff:127.0.0.1'), true)
   assert.strictEqual(isUnsafeIp('::ffff:192.168.1.1'), true)
   assert.strictEqual(isUnsafeIp('::ffff:169.254.169.254'), true)
+  assert.strictEqual(isUnsafeIp('::ffff:7f00:1'), true)
+  assert.strictEqual(isUnsafeIp('0:0:0:0:0:ffff:a9fe:a9fe'), true)
 })
 
 test('isUnsafeIp: 非法字符串拒绝', () => {

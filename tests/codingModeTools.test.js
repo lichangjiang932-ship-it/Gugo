@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { buildToolSpecs, listToolNames, resolveToolsForMode } from '../src/lib/tools/index.js'
-import { listBuiltinSpecs } from '../server/services/toolRegistry.js'
+import { listBuiltinSpecs, resolveSpecsForMode } from '../server/services/toolRegistry.js'
 
 const SERVER_CATALOG = listBuiltinSpecs()
 
@@ -25,7 +25,8 @@ test('shell and git tool schemas accept authorized directory cwd values', () => 
   }
 })
 
-test('plan mode keeps enabled tools visible while the server gate owns execution policy', () => {
+test('plan mode intersects enabled tools with the canonical server policy catalog', () => {
+  const planCatalog = resolveSpecsForMode('plan')
   const enabled = resolveToolsForMode({
     web_search: true,
     read_file: true,
@@ -35,17 +36,13 @@ test('plan mode keeps enabled tools visible while the server gate owns execution
     git_status: true,
     git_diff: true,
     run_project_check: true,
-  }, 'plan')
+  }, 'plan', planCatalog)
   assert.deepEqual(enabled.sort(), [
-    'web_search',
     'read_file',
-    'write_file',
-    'edit_file',
-    'bash_exec',
     'git_status',
     'git_diff',
-    'run_project_check',
   ].sort())
+  assert.deepEqual(resolveToolsForMode({ read_file: true }, 'plan'), [])
 })
 
 test('code mode enables Claude/Codex workspace loop tools', () => {

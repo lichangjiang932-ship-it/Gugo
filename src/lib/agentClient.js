@@ -13,8 +13,30 @@ export async function jsonOk(resp) {
   let data
   try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
   if (!resp.ok || data?.ok === false) {
-    const err = new Error(data?.error || `HTTP ${resp.status}`)
+    const structured = data?.error && typeof data.error === 'object'
+      ? data.error
+      : null
+    const err = new Error(
+      structured?.message
+      || (typeof data?.error === 'string' ? data.error : '')
+      || `HTTP ${resp.status}`,
+    )
     err.status = resp.status
+    for (const field of [
+      'code',
+      'action',
+      'providerId',
+      'modelName',
+      'configRevision',
+      'retryable',
+    ]) {
+      const value = structured && Object.hasOwn(structured, field)
+        ? structured[field]
+        : data?.[field]
+      if (value !== undefined) err[field] = value
+    }
+    if (structured) err.details = structured.details ?? structured
+    else if (data?.details !== undefined) err.details = data.details
     throw err
   }
   return data

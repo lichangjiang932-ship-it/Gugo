@@ -36,8 +36,45 @@ import { migrateToV65 } from './v65EvolutionEvaluations.js'
 import { migrateToV66 } from './v66EvolutionApprovals.js'
 import { migrateToV67 } from './v67EvolutionCanaries.js'
 import { migrateToV68 } from './v68EvolutionCanaryRollback.js'
+import { migrateToV69 } from './v69TurnRecoveryStates.js'
+import { migrateToV70 } from './v70ModelProviderReadiness.js'
+import { migrateToV71 } from './v71EvolutionModelProviders.js'
+import { migrateToV72 } from './v72SubagentModelBindings.js'
+import { migrateToV73 } from './v73EvolutionModelRevisions.js'
+import { migrateToV74 } from './v74RuntimePluginReleases.js'
+import { migrateToV75 } from './v75RuntimePluginReleaseRevision.js'
+import { migrateToV76 } from './v76RuntimePluginReleaseContentIdentity.js'
+import { migrateToV77 } from './v77UserDataClearOperations.js'
+import { migrateToV78 } from './v78RuntimePluginReleaseRetention.js'
+import { migrateToV79 } from './v79SideEffectExecutions.js'
+import { migrateToV80 } from './v80SideEffectRecoveryMetadata.js'
+import { migrateToV81 } from './v81EvolutionPromotions.js'
+import { migrateToV82 } from './v82EvolutionOnlineGrades.js'
+import { migrateToV83 } from './v83EvolutionPromotionOnlineGrades.js'
+import { migrateToV84 } from './v84EvolutionConfigChanges.js'
+import { migrateToV85 } from './v85ModelRequestRecovery.js'
+import { migrateToV86 } from './v86JobModelRequestRecovery.js'
+import { migrateToV87 } from './v87TurnEventFailureRecovery.js'
+import { migrateToV88 } from './v88EvolutionOperations.js'
+import { migrateToV89 } from './v89EvolutionOperationLeases.js'
+import { migrateToV90 } from './v90EvolutionOperationRecoveryChallenge.js'
+import { migrateToV91 } from './v91PendingApprovalPolicyProvenance.js'
+import { migrateToV92 } from './v92HookSideEffectExecutions.js'
+import { migrateToV93 } from './v93TurnExecutionFencing.js'
+import { migrateToV94 } from './v94SessionContentOutbox.js'
+import { migrateToV95 } from './v95RetiredAccountFields.js'
+import { migrateToV96 } from './v96SideEffectRecoveryPlans.js'
+import { migrateToV97 } from './v97CompactionArchiveStorage.js'
+import { migrateToV98 } from './v98ManagedAttachmentUploadLeases.js'
+import { migrateToV99 } from './v99CompactionArchiveGovernanceJournal.js'
+import { migrateToV100 } from './v100RuntimePluginPermissionGrants.js'
+import { migrateToV101 } from './v101RuntimePluginPermissionOwners.js'
+import { migrateToV102 } from './v102FileSnapshotAfterIdentity.js'
+import { migrateToV103 } from './v103RuntimePluginMutationBarrier.js'
+import { migrateToV104 } from './v104RuntimePluginMutationRecoveryReceipts.js'
+import { migrateToV105 } from './v105RuntimePluginMutationBarrierHardening.js'
 
-export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56, migrateToV57, migrateToV58, migrateToV59, migrateToV60, migrateToV61, migrateToV62, migrateToV63, migrateToV64, migrateToV65, migrateToV66, migrateToV67, migrateToV68 }
+export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56, migrateToV57, migrateToV58, migrateToV59, migrateToV60, migrateToV61, migrateToV62, migrateToV63, migrateToV64, migrateToV65, migrateToV66, migrateToV67, migrateToV68, migrateToV69, migrateToV70, migrateToV71, migrateToV72, migrateToV73, migrateToV74, migrateToV75, migrateToV76, migrateToV77, migrateToV78, migrateToV79, migrateToV80, migrateToV81, migrateToV82, migrateToV83, migrateToV84, migrateToV85, migrateToV86, migrateToV87, migrateToV88, migrateToV89, migrateToV90, migrateToV91, migrateToV92, migrateToV93, migrateToV94, migrateToV95, migrateToV96, migrateToV97, migrateToV98, migrateToV99, migrateToV100, migrateToV101, migrateToV102, migrateToV103, migrateToV104, migrateToV105 }
 
 /**
  * V2-V30 stay in db.js for upgrade compatibility. New migrations are registered
@@ -82,9 +119,74 @@ export const schemaMigrations = Object.freeze([
   { version: 66, up: migrateToV66 },
   { version: 67, up: migrateToV67 },
   { version: 68, up: migrateToV68 },
+  { version: 69, up: migrateToV69 },
+  { version: 70, up: migrateToV70 },
+  { version: 71, up: migrateToV71 },
+  { version: 72, up: migrateToV72 },
+  { version: 73, up: migrateToV73 },
+  { version: 74, up: migrateToV74 },
+  { version: 75, up: migrateToV75 },
+  { version: 76, up: migrateToV76 },
+  { version: 77, up: migrateToV77 },
+  { version: 78, up: migrateToV78 },
+  { version: 79, up: migrateToV79 },
+  { version: 80, up: migrateToV80 },
+  { version: 81, up: migrateToV81 },
+  { version: 82, up: migrateToV82 },
+  { version: 83, up: migrateToV83 },
+  { version: 84, up: migrateToV84 },
+  { version: 85, up: migrateToV85 },
+  { version: 86, up: migrateToV86 },
+  { version: 87, up: migrateToV87 },
+  { version: 88, up: migrateToV88 },
+  { version: 89, up: migrateToV89 },
+  { version: 90, up: migrateToV90 },
+  { version: 91, up: migrateToV91 },
+  { version: 92, up: migrateToV92 },
+  { version: 93, up: migrateToV93 },
+  { version: 94, up: migrateToV94 },
+  { version: 95, up: migrateToV95, atomicWithVersion: true },
+  { version: 96, up: migrateToV96 },
+  { version: 97, up: migrateToV97, atomicWithVersion: true },
+  { version: 98, up: migrateToV98 },
+  { version: 99, up: migrateToV99, atomicWithVersion: true },
+  { version: 100, up: migrateToV100 },
+  { version: 101, up: migrateToV101, atomicWithVersion: true },
+  { version: 102, up: migrateToV102, atomicWithVersion: true },
+  { version: 103, up: migrateToV103, atomicWithVersion: true },
+  { version: 104, up: migrateToV104, atomicWithVersion: true },
+  { version: 105, up: migrateToV105, atomicWithVersion: true },
 ])
 
 export const LATEST_SCHEMA_VERSION = schemaMigrations.at(-1)?.version || 30
+
+function schemaVersionError(code, message) {
+  return Object.assign(new Error(message), {
+    code,
+    retryable: false,
+  })
+}
+
+function validatedCurrentSchemaVersion(row) {
+  if (!row) return 0
+  const rawVersion = row.value
+  const version = typeof rawVersion === 'string' && rawVersion.trim() === ''
+    ? Number.NaN
+    : Number(rawVersion)
+  if (!Number.isFinite(version) || !Number.isInteger(version) || version < 0) {
+    throw schemaVersionError(
+      'DB_SCHEMA_VERSION_INVALID',
+      'Database schema_version must be a finite non-negative integer.',
+    )
+  }
+  if (version > LATEST_SCHEMA_VERSION) {
+    throw schemaVersionError(
+      'DB_SCHEMA_VERSION_UNSUPPORTED',
+      `Database schema version ${version} is newer than supported version ${LATEST_SCHEMA_VERSION}.`,
+    )
+  }
+  return version
+}
 
 export function createSchemaMigrationPlan(legacyMigrations = []) {
   const plan = [...legacyMigrations, ...schemaMigrations]
@@ -106,7 +208,7 @@ export function createSchemaMigrationPlan(legacyMigrations = []) {
 export function runSchemaMigrations(db, { legacyMigrations = [] } = {}) {
   const readVersion = () => {
     const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
-    return row ? Number(row.value) : 0
+    return validatedCurrentSchemaVersion(row)
   }
   const writeVersion = (version) => db.prepare(
     'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
@@ -115,10 +217,17 @@ export function runSchemaMigrations(db, { legacyMigrations = [] } = {}) {
   let currentVersion = readVersion()
   for (const migration of createSchemaMigrationPlan(legacyMigrations)) {
     if (currentVersion >= migration.version) continue
-    migration.up(db)
-    // The runner owns version advancement. Legacy migrations may also write the
-    // same value until they are eventually extracted from db.js.
-    writeVersion(migration.version)
+    const applyMigration = () => {
+      migration.up(db)
+      // The runner owns version advancement. Legacy migrations may also write
+      // the same value until they are eventually extracted from db.js.
+      writeVersion(migration.version)
+    }
+    if (migration.atomicWithVersion) {
+      db.transaction(applyMigration).immediate()
+    } else {
+      applyMigration()
+    }
     currentVersion = migration.version
   }
   return currentVersion
@@ -126,4 +235,10 @@ export function runSchemaMigrations(db, { legacyMigrations = [] } = {}) {
 
 export function hasColumn(db, table, column) {
   return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column)
+}
+
+export function hasTable(db, table) {
+  return Boolean(db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get(table))
 }

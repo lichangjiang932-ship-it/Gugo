@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-runtime-tests', String(process.pid))
+process.env.MODEL_BASE_URL = 'http://127.0.0.1:11434/v1'
+process.env.MODEL_NAME = 'test-model'
 
 const {
   JobRuntime,
@@ -12,15 +15,155 @@ const {
 } = await import('../server/services/jobRuntime.js')
 const { getApprovalMode, setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { registerPlugin, unregisterPlugin } = await import('../server/plugins/pluginRegistry.js')
-const { updateJobStep } = await import('../server/services/jobStore.js')
+const { updateJob, updateJobStep } = await import('../server/services/jobStore.js')
+const {
+  recordModelProviderReadiness,
+  upsertModelProvider,
+} = await import('../server/services/modelProviderStore.js')
 const {
   getJobTurnCheckpoint,
   saveJobTurnCheckpoint,
 } = await import('../server/services/jobTurnCheckpointStore.js')
+const {
+  attachJobBudget,
+  getJobBudget,
+  releaseJobBudget,
+} = await import('../server/utils/jobBudget.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const TEST_USER = issueTestSession().userId
 const OTHER_USER = issueTestSession().userId
+
+test('direct runtime creation is gated and explicit retry safely refreshes a changed provider revision', async () => {
+  const isolatedUser = issueTestSession().userId
+  let plannerCalls = 0
+  let executionCalls = 0
+  const runtime = new JobRuntime({
+    planner: (prompt) => {
+      plannerCalls += 1
+      return { title: prompt, steps: [{ kind: 'execute', title: '执行' }] }
+    },
+    executeStep: async () => {
+      executionCalls += 1
+      return { ok: true, output: { text: 'unexpected' } }
+    },
+  })
+
+  await assert.rejects(
+    runtime.createJob('missing model', { userId: isolatedUser, env: {} }),
+    (error) => error?.code === 'MODEL_CONFIG_MISSING',
+  )
+  await assert.rejects(
+    runtime.createPlan({
+      userId: isolatedUser,
+      title: 'missing structured model',
+      steps: [{ kind: 'execute', title: '执行' }],
+      env: {},
+    }),
+    (error) => error?.code === 'MODEL_CONFIG_MISSING',
+  )
+  assert.equal(plannerCalls, 0)
+
+  const provider = upsertModelProvider({
+    userId: isolatedUser,
+    provider: {
+      key: `job-binding-${Date.now()}`,
+      label: 'Job binding provider',
+      baseUrl: 'https://models.example.test/v1',
+      models: ['bound-model'],
+      defaultModel: 'bound-model',
+      enabled: true,
+      isDefault: true,
+    },
+  })
+  recordModelProviderReadiness({
+    userId: isolatedUser,
+    id: provider.id,
+    readiness: { chat: true, tools: true, agent: true, mode: 'agent' },
+  })
+  const job = await runtime.createJob('strict provider binding', {
+    userId: isolatedUser,
+    modelProviderId: provider.id,
+    env: {},
+  })
+  assert.equal(job.modelProviderId, provider.id)
+  assert.equal(job.modelConfigRevision, provider.configRevision)
+
+  const updatedProvider = upsertModelProvider({
+    userId: isolatedUser,
+    provider: {
+      ...provider,
+      baseUrl: 'https://changed.example.test/v1',
+      models: ['bound-model'],
+      defaultModel: 'bound-model',
+    },
+  })
+  assert.equal(await runtime.runOneTick(), true)
+  const failed = runtime.getJob(job.id, { userId: isolatedUser })
+  assert.equal(failed.status, 'failed')
+  assert.equal(executionCalls, 0)
+  assert.equal(failed.events.at(-1)?.payload?.code, 'MODEL_PROVIDER_CONFIG_CHANGED')
+
+  assert.throws(
+    () => runtime.retryJob(job.id, { userId: isolatedUser }),
+    (error) => error?.code === 'MODEL_PROVIDER_UNVERIFIED',
+  )
+  assert.equal(runtime.getJob(job.id, { userId: isolatedUser }).status, 'failed')
+  assert.equal(runtime.getJob(job.id, { userId: isolatedUser }).modelConfigRevision, provider.configRevision)
+
+  recordModelProviderReadiness({
+    userId: isolatedUser,
+    id: updatedProvider.id,
+    readiness: { chat: true, tools: true, agent: true, mode: 'agent' },
+  })
+  const retried = runtime.retryJob(job.id, { userId: isolatedUser })
+  assert.equal(retried.status, 'queued')
+  assert.equal(retried.modelConfigRevision, updatedProvider.configRevision)
+  assert.deepEqual(retried.events.at(-1)?.payload, {
+    previousModelProviderId: provider.id,
+    previousModelConfigRevision: provider.configRevision,
+    modelProviderId: updatedProvider.id,
+    modelConfigRevision: updatedProvider.configRevision,
+  })
+  await runtime.drain()
+  assert.equal(runtime.getJob(job.id, { userId: isolatedUser }).status, 'completed')
+  assert.ok(executionCalls > 0)
+})
+
+test('structured plans persist their exact provider revision', async () => {
+  const isolatedUser = issueTestSession().userId
+  const provider = upsertModelProvider({
+    userId: isolatedUser,
+    provider: {
+      key: `structured-binding-${Date.now()}`,
+      label: 'Structured plan provider',
+      baseUrl: 'https://structured.example.test/v1',
+      models: ['structured-model'],
+      defaultModel: 'structured-model',
+      enabled: true,
+      isDefault: true,
+    },
+  })
+  recordModelProviderReadiness({
+    userId: isolatedUser,
+    id: provider.id,
+    readiness: { chat: true, tools: true, agent: true, mode: 'agent' },
+  })
+  const runtime = new JobRuntime({ planner: stubPlanner })
+  const job = await runtime.createPlan({
+    userId: isolatedUser,
+    title: 'Persist provider snapshot',
+    prompt: 'Run the structured task',
+    steps: [{ kind: 'execute', title: 'Execute' }],
+    modelName: 'structured-model',
+    modelProviderId: provider.id,
+    modelConfigRevision: provider.configRevision,
+    env: {},
+  })
+  assert.equal(job.modelName, 'structured-model')
+  assert.equal(job.modelProviderId, provider.id)
+  assert.equal(job.modelConfigRevision, provider.configRevision)
+})
 
 test('job model selection is passed to planning and survives storage reloads', async () => {
   let plannedWith = null
@@ -375,6 +518,37 @@ test('D6: jobUserCache is evicted once a job reaches a terminal state', async ()
   assert.equal(runtime.jobUserCache.has(job.id), false, 'cache entry removed after completion')
 })
 
+test('terminal cleanup only releases the budget generation held by its tick', async () => {
+  const userId = issueTestSession().userId
+  let originalBudget = null
+  let replacementBudget = null
+  const runtime = new JobRuntime({
+    executeStep: async ({ job }) => {
+      assert.strictEqual(getJobBudget(job), originalBudget)
+      assert.equal(releaseJobBudget(job, originalBudget), true)
+      replacementBudget = attachJobBudget(job, { initialModelCalls: 7 })
+      throw new Error('force the old tick through terminal cleanup')
+    },
+  })
+  const job = await runtime.createPlan({
+    userId,
+    title: 'budget generation cleanup',
+    prompt: 'verify stale cleanup fencing',
+    steps: [{ kind: 'execute', title: 'replace the budget generation' }],
+  })
+  originalBudget = attachJobBudget(job, { initialModelCalls: 1 })
+
+  try {
+    assert.equal(await runtime.runOneTick(), true)
+    assert.equal(runtime.getJob(job.id, { userId }).status, 'failed')
+    assert.ok(replacementBudget)
+    assert.strictEqual(getJobBudget(job), replacementBudget)
+    assert.equal(replacementBudget.snapshot().modelCalls, 7)
+  } finally {
+    releaseJobBudget(job, replacementBudget)
+  }
+})
+
 test('runtime honors cancellation before the next step starts', async () => {
   const executed = []
   const runtime = new JobRuntime({
@@ -574,6 +748,7 @@ test('retryStep keeps durable tool results and only clears the terminal checkpoi
     modelCalls: 0,
     modelTokens: 0,
     costUsd: 0,
+    costEvidenceComplete: true,
   })
   assert.equal(resumed?.state?.iterationWindowStart, checkpoint.state.iterations)
   assert.equal(runtime.getJob(job.id, { userId: TEST_USER }).steps[0].status, 'queued')
@@ -596,13 +771,126 @@ test('retryJob keeps failed-step checkpoints resumable instead of deleting progr
     modelCalls: 0,
     modelTokens: 0,
     costUsd: 0,
+    costEvidenceComplete: true,
   })
   assert.equal(resumed?.state?.iterationWindowStart, checkpoint.state.iterations)
   assert.equal(runtime.getJob(job.id, { userId: TEST_USER }).status, 'queued')
 })
 
+test('retryJob and retryStep reject a provider revision change while a model request is in flight', async () => {
+  const userId = issueTestSession().userId
+  const modelName = `retry-checkpoint-model-${Date.now()}`
+  const provider = upsertModelProvider({
+    userId,
+    provider: {
+      key: `retry-checkpoint-provider-${Date.now()}`,
+      label: 'Retry checkpoint provider',
+      baseUrl: 'https://retry-checkpoint-v1.example.test/v1',
+      models: [modelName],
+      defaultModel: modelName,
+      enabled: true,
+      isDefault: true,
+    },
+  })
+  recordModelProviderReadiness({
+    userId,
+    id: provider.id,
+    readiness: { chat: true, tools: true, agent: true, mode: 'agent' },
+  })
+
+  let modelCalls = 0
+  const runtime = new JobRuntime({
+    planner: (prompt) => ({
+      title: prompt,
+      steps: [{ kind: 'execute', title: 'Durable model request' }],
+    }),
+    executeStep: async () => {
+      modelCalls += 1
+      return { ok: true, output: { text: 'must not run' } }
+    },
+  })
+  const created = await runtime.createJob('preserve the old model request binding', {
+    userId,
+    modelName,
+    modelProviderId: provider.id,
+    env: {},
+  })
+  const step = created.steps.find((item) => item.kind === 'execute') || created.steps[0]
+  updateJobStep(step.id, { status: 'failed', error: 'process stopped after provider accepted request' })
+  updateJob(created.id, {
+    status: 'failed',
+    error: 'checkpoint flush failed',
+    finishedAt: Date.now(),
+  })
+  const modelRequestId = `mr_${'a'.repeat(48)}`
+  saveJobTurnCheckpoint({
+    jobId: created.id,
+    stepId: step.id,
+    userId,
+    state: {
+      messages: [{ role: 'user', content: 'bill this request once' }],
+      iterations: 1,
+      modelInvocation: {
+        version: 2,
+        id: modelRequestId,
+        idempotencyKey: modelRequestId,
+        fingerprint: 'b'.repeat(64),
+        providerId: provider.id,
+        modelName,
+        configRevision: provider.configRevision,
+        iteration: 1,
+        attempt: 1,
+        status: 'in_flight',
+      },
+    },
+  })
+
+  const updatedProvider = upsertModelProvider({
+    userId,
+    provider: {
+      ...provider,
+      baseUrl: 'https://retry-checkpoint-v2.example.test/v1',
+      models: [modelName],
+      defaultModel: modelName,
+    },
+  })
+  recordModelProviderReadiness({
+    userId,
+    id: updatedProvider.id,
+    readiness: { chat: true, tools: true, agent: true, mode: 'agent' },
+  })
+  assert.notEqual(updatedProvider.configRevision, provider.configRevision)
+
+  const beforeJob = runtime.getJob(created.id, { userId })
+  const beforeCheckpoint = getJobTurnCheckpoint({ jobId: created.id, stepId: step.id, userId })
+  const assertBlockedWithoutWrites = (action) => {
+    assert.throws(
+      action,
+      (error) => error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+        && error?.modelRequestId === modelRequestId
+        && error?.configRevision === provider.configRevision
+        && error?.targetConfigRevision === updatedProvider.configRevision,
+    )
+    const afterJob = runtime.getJob(created.id, { userId })
+    assert.equal(afterJob.status, beforeJob.status)
+    assert.equal(afterJob.modelProviderId, beforeJob.modelProviderId)
+    assert.equal(afterJob.modelConfigRevision, beforeJob.modelConfigRevision)
+    assert.equal(afterJob.steps.find((item) => item.id === step.id)?.status, 'failed')
+    assert.equal(afterJob.events.length, beforeJob.events.length)
+    assert.deepEqual(
+      getJobTurnCheckpoint({ jobId: created.id, stepId: step.id, userId }),
+      beforeCheckpoint,
+    )
+    assert.equal(modelCalls, 0)
+  }
+
+  assertBlockedWithoutWrites(() => runtime.retryStep(created.id, step.id, { userId }))
+  assertBlockedWithoutWrites(() => runtime.retryJob(created.id, { userId }))
+})
+
 test('default executor turns generated text into a downloadable artifact', async () => {
   const artifactId = `artifact-${process.pid}-${Date.now()}`
+  let validatedArtifact = null
   const runtime = new JobRuntime({
     // 这个用例断言 step.output.text 等于模型原样返回的内容,
     // 所以不能用带 batch_item 的 stubPlanner —— 批量步骤会往 prompt 里
@@ -624,6 +912,10 @@ test('default executor turns generated text into a downloadable artifact', async
         url: '/api/artifacts/result.docx',
         filename: 'result.docx',
       }),
+      validateGeneratedArtifact: async (input) => {
+        validatedArtifact = input
+        return { ok: true, format: 'docx' }
+      },
     }),
   })
 
@@ -635,6 +927,51 @@ test('default executor turns generated text into a downloadable artifact', async
   assert.equal(loaded.artifacts.length, 1)
   assert.equal(loaded.artifacts[0].filename, 'result.docx')
   assert.equal(loaded.steps[1].output.text, '结果：整理会议纪要并导出')
+  assert.deepEqual(validatedArtifact, {
+    filePath: undefined,
+    filename: 'result.docx',
+    toolName: 'create_docx',
+    artifactType: 'docx',
+  })
+})
+
+test('default finalize executor validates an automatic DOCX before registering it', async () => {
+  const artifactDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-invalid-auto-docx-'))
+  const invalidArtifactPath = path.join(artifactDirectory, 'invalid.docx')
+  fs.writeFileSync(invalidArtifactPath, 'not a DOCX package')
+  const executeStep = createDefaultExecuteStep({
+    enableServerTools: false,
+    artifactDirectory,
+    createDocxImpl: async () => ({
+      id: 'invalid-docx',
+      type: 'docx',
+      title: 'Invalid',
+      filename: 'invalid.docx',
+      fullPath: invalidArtifactPath,
+      url: '/api/artifacts/invalid.docx',
+    }),
+    validateGeneratedArtifact: async () => {
+      throw new Error('DOCX package is invalid')
+    },
+  })
+
+  await assert.rejects(
+    () => executeStep({
+      job: {
+        id: 'job-invalid-auto-docx',
+        userId: TEST_USER,
+        title: 'Invalid document',
+        prompt: '整理会议纪要并导出',
+        artifacts: [],
+        steps: [{ kind: 'execute', output: { text: 'Generated text' } }],
+      },
+      step: { id: 'finalize-invalid-auto-docx', kind: 'finalize' },
+      signal: new AbortController().signal,
+    }),
+    /DOCX package is invalid/,
+  )
+  assert.equal(fs.existsSync(invalidArtifactPath), false)
+  fs.rmSync(artifactDirectory, { recursive: true, force: true })
 })
 
 test('default finalize executor rejects an incomplete final output', async () => {

@@ -23,6 +23,12 @@ import { randomUUID } from 'node:crypto'
 import { assertSafeOutboundUrl, fetchSafe } from '../adapters/toolProxy.js'
 import { writeToolAudit } from '../utils/audit.js'
 import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
+import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
+import {
+  hookAuthorizationArgsDigest,
+  issueHookAuthorizationProvenance,
+} from './hookAuthorizationProvenance.js'
+import { getHookSideEffectExecutor } from './hookSideEffectExecution.js'
 
 const ALLOWED_EVENTS = ['user_prompt_submit', 'pre_tool_use', 'post_tool_use', 'stop', 'pre_compact', 'session_start', 'session_end', 'subagent_stop', 'notification']
 const HOOK_HEADERS_PURPOSE = 'hook-headers'
@@ -30,6 +36,8 @@ const MAX_ARGUMENT_MATCHER_BYTES = 8 * 1024
 const MAX_ARGUMENT_MATCHER_DEPTH = 8
 const MAX_ARGUMENT_MATCHER_KEYS = 128
 const PERMISSION_DECISION_PRIORITY = Object.freeze({ allow: 1, ask: 2, deny: 3 })
+const HOOK_EXECUTION_UNTRUSTED = 'HOOK_EXECUTION_UNTRUSTED'
+const HOOK_DENIED = 'HOOK_DENIED'
 
 function sameExecutable(left, right) {
   const a = path.normalize(left)
@@ -179,6 +187,21 @@ function matchesArgumentMatcher(matcher, args) {
   return matcher == null || matchesArgumentValue(matcher, args)
 }
 
+function normalizeBlockingHookOutcome(outcome) {
+  const value = isPlainObject(outcome) ? outcome : {}
+  if (value.allow === true) return { ...value, ok: true }
+  const intentionalDenial = value.allow === false && !value.error
+  return {
+    ...value,
+    ok: false,
+    allow: false,
+    code: value.code || (intentionalDenial ? HOOK_DENIED : HOOK_EXECUTION_UNTRUSTED),
+    reason: value.reason || (intentionalDenial
+      ? 'blocking hook denied the call'
+      : 'blocking hook did not return a trusted allow decision'),
+  }
+}
+
 export function listHooks({ userId, event = null }) {
   if (!userId) return []
   const db = getDb()
@@ -244,47 +267,67 @@ function runShell({ argv, timeoutMs, cwd }) {
       cwd: cwd || process.cwd(),
       timeout: Math.max(500, Math.min(60000, timeoutMs || 5000)),
       shell: false,
-      // 净化 env: 不传敏感变量
-      env: {
-        PATH: process.env.PATH,
-        SystemRoot: process.env.SystemRoot,
-      },
+      env: sanitizeChildEnv(),
       maxBuffer: 64 * 1024,
     }, (err, stdout, stderr) => {
       if (err) {
-        resolve({ allow: true, error: err.message, stdout, stderr })
+        resolve({ allow: false, error: err.message, reason: 'blocking shell hook execution failed', stdout, stderr })
         return
       }
       // shell hook 可在 stdout 输出 JSON {allow,replacementArgs}
       const trimmed = String(stdout || '').trim()
-      if (!trimmed) return resolve({ allow: true })
+      if (!trimmed) {
+        resolve({ allow: false, error: 'empty hook response', reason: 'blocking shell hook returned no decision' })
+        return
+      }
       try {
         const parsed = JSON.parse(trimmed)
-        if (parsed && typeof parsed === 'object') {
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
           resolve(parsed)
           return
         }
       } catch { /* not json */ }
-      resolve({ allow: true, stdout: trimmed.slice(0, 1024) })
+      resolve({
+        allow: false,
+        error: 'invalid hook response JSON',
+        reason: 'blocking shell hook returned an invalid decision',
+        stdout: trimmed.slice(0, 1024),
+      })
     })
-    child.on('error', (e) => resolve({ allow: true, error: e.message }))
+    child.on('error', (e) => resolve({
+      allow: false,
+      error: e.message,
+      reason: 'blocking shell hook process could not start',
+    }))
   })
 }
 
-async function runHttp({ url, headers, body, timeoutMs }) {
+function hookRequestHeaders(headers, idempotencyKey) {
+  const output = {}
+  for (const [name, value] of Object.entries(headers || {})) {
+    const normalized = name.toLowerCase()
+    if (normalized === 'content-type' || normalized === 'idempotency-key') continue
+    output[name] = value
+  }
+  output['Content-Type'] = 'application/json'
+  output['Idempotency-Key'] = idempotencyKey
+  return output
+}
+
+async function runHttp({ url, headers, body, timeoutMs, idempotencyKey }) {
   let target
   try {
     target = await assertSafeOutboundUrl(url)
   } catch (err) {
-    return { ok: false, error: `ssrf_blocked: ${err?.message || String(err)}` }
+    return { allow: false, error: `ssrf_blocked: ${err?.message || String(err)}`, reason: 'blocking HTTP hook target was rejected' }
   }
-  if (target.protocol !== 'https:') return { ok: false, error: 'http_required_https' }
+  if (target.protocol !== 'https:') return { allow: false, error: 'http_required_https', reason: 'blocking HTTP hook requires HTTPS' }
   try {
     const payload = JSON.stringify(body)
     const resp = await fetchSafe({
       url: target.toString(),
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(headers || {}) },
+      headers: hookRequestHeaders(headers, idempotencyKey),
       body: payload,
       timeoutMs: Math.max(500, Math.min(60000, timeoutMs || 5000)),
       maxRedirects: 3,
@@ -292,32 +335,67 @@ async function runHttp({ url, headers, body, timeoutMs }) {
     })
     const text = String(resp.body || '')
     let data
-    try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
+    try { data = text ? JSON.parse(text) : {} } catch {
+      return { allow: false, error: 'invalid_hook_response_json', reason: 'blocking HTTP hook returned invalid JSON' }
+    }
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return { allow: false, error: 'invalid_hook_response_shape', reason: 'blocking HTTP hook returned an invalid decision' }
+    }
     if (resp.status < 200 || resp.status >= 300) {
-      return { allow: true, error: `HTTP ${resp.status}: ${data?.error || text.slice(0, 200)}` }
+      return {
+        allow: false,
+        error: `HTTP ${resp.status}: ${data?.error || text.slice(0, 200)}`,
+        reason: 'blocking HTTP hook request failed',
+      }
     }
     return data
   } catch (err) {
-    return { ok: false, error: `ssrf_blocked: ${err?.message || String(err)}` }
+    return {
+      allow: false,
+      error: `hook_request_failed: ${err?.message || String(err)}`,
+      reason: 'blocking HTTP hook request failed',
+    }
   }
 }
 
-async function executeOne(hook, payload) {
+async function executeOne(hook, payload, { invocationId } = {}) {
   const start = Date.now()
   let outcome
   try {
-    if (hook.kind === 'shell') {
-      const argv = Array.isArray(hook.command) ? hook.command : safeParseJson(hook.command) || []
-      assertShellCommandAllowed(argv)
-      const fullArgv = [...argv, JSON.stringify(payload)]
-      const cwd = path.resolve(process.env.WORKSPACE_ROOT?.trim() || process.cwd())
-      outcome = await runShell({ argv: fullArgv, timeoutMs: hook.timeoutMs, cwd })
-    } else {
-      outcome = await runHttp({ url: hook.url, headers: hook.headers, body: payload, timeoutMs: hook.timeoutMs })
-    }
+    const executed = await getHookSideEffectExecutor().execute({
+      hook,
+      payload,
+      invocationId,
+      execute: async ({ idempotencyKey }) => {
+        const executionPayload = { ...payload, hookInvocationId: invocationId, idempotencyKey }
+        if (hook.kind === 'shell') {
+          const argv = Array.isArray(hook.command) ? hook.command : safeParseJson(hook.command) || []
+          assertShellCommandAllowed(argv)
+          const fullArgv = [...argv, JSON.stringify(executionPayload)]
+          const cwd = path.resolve(process.env.WORKSPACE_ROOT?.trim() || process.cwd())
+          return await runShell({ argv: fullArgv, timeoutMs: hook.timeoutMs, cwd })
+        }
+        return await runHttp({
+          url: hook.url,
+          headers: hook.headers,
+          body: executionPayload,
+          timeoutMs: hook.timeoutMs,
+          idempotencyKey,
+        })
+      },
+    })
+    outcome = executed.outcome
   } catch (err) {
-    outcome = { allow: true, error: err?.message || String(err) }
+    outcome = {
+      allow: false,
+      code: err?.code || HOOK_EXECUTION_UNTRUSTED,
+      error: err?.message || String(err),
+      reason: err?.requiresUserVerification
+        ? 'Hook 执行结果未知，需要人工核验后才能重试'
+        : 'blocking hook execution failed',
+    }
   }
+  if (hook.blocking) outcome = normalizeBlockingHookOutcome(outcome)
   const duration = Date.now() - start
   // ★ P0:走统一 audit 写入器(与 fsShell/mcp 共享同一条路径)
   writeToolAudit({
@@ -343,15 +421,31 @@ async function executeOne(hook, payload) {
  * 让 hook 替代审批门控（与 Claude Code 的 PreToolUse 语义一致）。
  */
 export async function dispatchHooks(ctx) {
-  if (!ctx?.userId || !ctx?.event) return { allow: true }
+  if (!ctx?.userId || !ctx?.event) {
+    return {
+      allow: false,
+      code: 'hook_subject_missing',
+      reason: 'Hook 调用缺少用户或事件主体，已保守拒绝',
+    }
+  }
   const hooks = listHooks({ userId: ctx.userId, event: ctx.event }).filter((h) => {
     if (!h.enabled) return false
     return matchPattern(h.toolPattern, ctx.tool || '*')
   })
   if (!hooks.length) return { allow: true }
+  const invocationId = String(ctx.hookInvocationId || ctx.requestId || ctx.toolCallId || '').trim()
+  if (!invocationId) {
+    return {
+      allow: false,
+      code: 'hook_invocation_id_missing',
+      reason: 'Hook 调用缺少稳定 invocation ID，已保守拒绝',
+    }
+  }
   let workingArgs = ctx.args
   let permissionDecision = null
   let permissionReason = null
+  let permissionHook = null
+  let permissionArgsDigest = null
   let matchedHook = false
   for (const h of hooks) {
     if (h.argumentMatcherInvalid) {
@@ -367,15 +461,23 @@ export async function dispatchHooks(ctx) {
       tool: ctx.tool || null,
       args: workingArgs,
       userId: ctx.userId,
+      origin: ctx.origin || null,
+      jobId: ctx.jobId || null,
+      stepId: ctx.stepId || null,
       sessionId: ctx.sessionId || null,
       requestId: ctx.requestId || null,
+      toolCallId: ctx.toolCallId || null,
       ...(ctx.payload && typeof ctx.payload === 'object' ? { payload: ctx.payload } : {}),
       timestamp: Date.now(),
     }
     if (h.blocking) {
-      const outcome = await executeOne(h, payload)
-      if (outcome?.allow === false) {
-        return { allow: false, reason: outcome.reason || `hook ${h.id} 拒绝` }
+      const outcome = await executeOne(h, payload, { invocationId })
+      if (outcome?.allow !== true) {
+        return {
+          allow: false,
+          code: outcome?.code || HOOK_EXECUTION_UNTRUSTED,
+          reason: outcome?.reason || `hook ${h.id} 未返回可信放行决定`,
+        }
       }
       if (outcome?.replacementArgs && typeof outcome.replacementArgs === 'object') {
         workingArgs = { ...workingArgs, ...outcome.replacementArgs }
@@ -388,28 +490,68 @@ export async function dispatchHooks(ctx) {
       if (nextPriority >= currentPriority && nextPriority > 0) {
         permissionDecision = nextDecision
         permissionReason = outcome.reason || null
+        permissionHook = h
+        permissionArgsDigest = nextDecision === 'allow'
+          ? hookAuthorizationArgsDigest(workingArgs)
+          : null
       }
     } else {
       // 非阻塞: fire-and-forget
-      executeOne(h, payload).catch((err) => {
+      executeOne(h, payload, { invocationId }).catch((err) => {
         console.warn('[hooks] 非阻塞 hook 执行失败:', h.id, err?.message || err)
       })
     }
   }
   if (!matchedHook) return { allow: true }
+  if (permissionDecision === 'allow'
+    && permissionArgsDigest !== hookAuthorizationArgsDigest(workingArgs)) {
+    permissionDecision = null
+    permissionReason = null
+    permissionHook = null
+  }
   if (permissionDecision === 'deny') {
     return { allow: false, reason: permissionReason || 'hook 拒绝', permissionDecision: 'deny' }
+  }
+  const hookAuthorizationProvenance = permissionDecision === 'allow'
+    ? issueHookAuthorizationProvenance({
+        hook: permissionHook,
+        userId: ctx.userId,
+        origin: ctx.origin,
+        jobId: ctx.jobId,
+        stepId: ctx.stepId,
+        sessionId: ctx.sessionId,
+        requestId: ctx.requestId,
+        toolCallId: ctx.toolCallId,
+        toolName: ctx.tool,
+        args: workingArgs,
+      })
+    : null
+  if (permissionDecision === 'allow' && !hookAuthorizationProvenance) {
+    return {
+      allow: false,
+      code: 'hook_authorization_scope_missing',
+      reason: 'Hook 授权缺少当前调用的最小作用域，已保守拒绝',
+      permissionDecision: 'deny',
+    }
   }
   return {
     allow: true,
     replacementArgs: workingArgs,
     ...(['allow', 'ask'].includes(permissionDecision) ? { permissionDecision, reason: permissionReason } : {}),
+    ...(hookAuthorizationProvenance ? { hookAuthorizationProvenance } : {}),
   }
 }
 
-export async function testHook({ userId, id }) {
+export async function testHook({ userId, id, idempotencyKey }) {
   const hook = getHook(userId, id)
   if (!hook) throw new Error('hook 不存在')
+  const invocationId = String(idempotencyKey || '').trim()
+  if (!invocationId) {
+    throw Object.assign(new Error('Idempotency-Key header is required'), {
+      code: 'HOOK_IDEMPOTENCY_KEY_REQUIRED',
+      statusCode: 400,
+    })
+  }
   const stub = {
     event: hook.event,
     tool: 'test_stub',
@@ -418,7 +560,7 @@ export async function testHook({ userId, id }) {
     timestamp: Date.now(),
     testMode: true,
   }
-  return await executeOne(hook, stub)
+  return await executeOne(hook, stub, { invocationId: `test:${invocationId}` })
 }
 
 export const _hooksInternals = {
@@ -426,4 +568,5 @@ export const _hooksInternals = {
   shellCommandAllowlist,
   matchesArgumentMatcher,
   normalizeArgumentMatcher,
+  hookRequestHeaders,
 }

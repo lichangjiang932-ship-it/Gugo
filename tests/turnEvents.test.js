@@ -4,10 +4,15 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
+  TURN_EVENT_TRANSPORT_VERSION,
   createTurnActivity,
   createTurnEvent,
+  createTurnEventTransportEnvelope,
+  canAdvanceTurnEventCursor,
   parseTurnActivity,
   parseTurnEvent,
+  parseTurnEventTransportEnvelope,
+  parseTurnEventTransportPayload,
 } from '../shared/turnEvents.js'
 import { INLINE_SKILL_DEFINITION_LIMITS } from '../shared/inlineSkillDefinitions.js'
 
@@ -16,6 +21,7 @@ test('turn event protocol accepts known events and rejects protocol drift', () =
     id: 'e1', sessionId: 's1', turnId: 't1', sequence: 0, type: 'turn.started', createdAt: 1,
     payload: {
       model: 'test',
+      approvalMode: 'acceptEdits',
       skillIds: ['local-writer'],
       skillDefinitions: [{
         id: 'local-writer',
@@ -27,9 +33,16 @@ test('turn event protocol accepts known events and rejects protocol drift', () =
     },
   })
   assert.equal(event.type, 'turn.started')
+  assert.equal(event.payload.approvalMode, 'acceptEdits')
   assert.equal(event.payload.skillDefinitions[0].id, 'local-writer')
   assert.throws(() => parseTurnEvent({ ...event, type: 'text' }))
   assert.throws(() => parseTurnEvent({ ...event, sequence: -1 }))
+  assert.throws(() => parseTurnEvent({
+    ...event,
+    payload: { ...event.payload, approvalMode: 'unsafe' },
+  }))
+  assert.equal(canAdvanceTurnEventCursor({ sequence: 2, compactedThrough: 3 }, 0), true)
+  assert.equal(canAdvanceTurnEventCursor({ sequence: 4, compactedThrough: 3 }, 0), false)
 })
 
 test('approval events accept declared metadata sources while remaining compatible with legacy events', () => {
@@ -172,6 +185,61 @@ test('turn interrupted events are strict resumable attempt boundaries', () => {
     ...interrupted,
     id: 'interrupted-drift',
     payload: { ...interrupted.payload, completed: true },
+  }))
+})
+
+test('turn event transport envelope is versioned and decodes legacy SSE payloads explicitly', () => {
+  const event = createTurnEvent({
+    id: 'transport-event-1',
+    sessionId: 'transport-session-1',
+    turnId: 'transport-turn-1',
+    sequence: 0,
+    type: 'turn.started',
+    createdAt: 1,
+  })
+  const envelope = createTurnEventTransportEnvelope(event)
+
+  assert.deepEqual(envelope, {
+    v: TURN_EVENT_TRANSPORT_VERSION,
+    type: 'turn.event',
+    event,
+  })
+  assert.deepEqual(parseTurnEventTransportEnvelope(envelope), envelope)
+  assert.deepEqual(parseTurnEventTransportPayload(envelope), event)
+  assert.deepEqual(parseTurnEventTransportPayload(event), event)
+  assert.throws(() => parseTurnEventTransportPayload({ ...envelope, v: 2 }))
+  assert.throws(() => parseTurnEventTransportEnvelope({ ...envelope, unexpected: true }))
+})
+
+test('turn blocked events are strict manual-repair recovery boundaries', () => {
+  const blocked = createTurnEvent({
+    id: 'blocked-1',
+    sessionId: 's1',
+    turnId: 't1',
+    sequence: 6,
+    type: 'turn.blocked',
+    payload: {
+      code: 'TURN_PERMISSION_CONTEXT_DRIFT',
+      message: 'repair the permission context before retrying',
+      retryable: false,
+      manualRetryable: true,
+      recoveryStatus: 'dead_letter',
+      checkpointSequence: 5,
+      artifactIds: [],
+      iterations: 1,
+    },
+    createdAt: 7,
+  })
+  assert.equal(blocked.payload.manualRetryable, true)
+  assert.throws(() => createTurnEvent({
+    ...blocked,
+    id: 'blocked-auto-retry',
+    payload: { ...blocked.payload, retryable: true },
+  }))
+  assert.throws(() => createTurnEvent({
+    ...blocked,
+    id: 'blocked-not-dead-letter',
+    payload: { ...blocked.payload, recoveryStatus: 'retrying' },
   }))
 })
 
@@ -351,6 +419,7 @@ test('turn event store is append-only, idempotent, ordered, and user isolated', 
     appendTurnEvent,
     listTurnEvents,
     pruneTurnEvents,
+    resolveTurnSession,
     resolveTurnEventRetentionConfig,
   } = await import('../server/services/turnEventStore.js')
   try {
@@ -361,7 +430,47 @@ test('turn event store is append-only, idempotent, ordered, and user isolated', 
     appendTurnEvent({ userId: 'u1', event: createTurnEvent({ id: 'e2', sessionId: 's1', turnId: 't1', sequence: 1, type: 'turn.completed', createdAt: 2 }) })
     assert.deepEqual(listTurnEvents({ userId: 'u1', sessionId: 's1', turnId: 't1' }).map((item) => item.id), ['e1', 'e2'])
     assert.deepEqual(listTurnEvents({ userId: 'u2', sessionId: 's1', turnId: 't1' }), [])
-    assert.throws(() => appendTurnEvent({ userId: 'u1', event: { ...event, id: 'other', type: 'turn.failed' } }), /conflict/)
+    const foundTurnSession = resolveTurnSession({ userId: 'u1', turnId: 't1' })
+    assert.deepEqual(foundTurnSession, { status: 'found', sessionId: 's1' })
+    assert.equal(Object.isFrozen(foundTurnSession), true)
+    assert.deepEqual(resolveTurnSession({ userId: 'u2', turnId: 't1' }), { status: 'not_found' })
+    assert.throws(() => resolveTurnSession({ userId: '', turnId: 't1' }), /user id is required/)
+    assert.throws(() => resolveTurnSession({ userId: 'u1', turnId: '' }), /turn id is required/)
+
+    assert.throws(() => appendTurnEvent({ userId: 'u1', event: { ...event, id: 'other' } }), /conflict/)
+    assert.throws(() => appendTurnEvent({
+      userId: 'u1',
+      event: createTurnEvent({
+        id: 'after-terminal', sessionId: 's1', turnId: 't1', sequence: 2,
+        type: 'assistant.delta', payload: { text: 'stale' }, createdAt: 3,
+      }),
+    }), (error) => error?.code === 'TURN_ALREADY_TERMINAL')
+
+    upsertSession({ id: 'checkpoint-session', userId: 'u1', title: 'Checkpoint replay' })
+    const checkpointTurnId = 'checkpoint-compaction'
+    const appendCheckpointEvent = (sequence, type, payload = {}, checkpointState = null) => appendTurnEvent({
+      userId: 'u1',
+      event: createTurnEvent({
+        id: `checkpoint-${sequence}`,
+        sessionId: 'checkpoint-session',
+        turnId: checkpointTurnId,
+        sequence,
+        type,
+        payload,
+        createdAt: sequence + 10,
+      }),
+      checkpointState,
+    })
+    appendCheckpointEvent(0, 'turn.started')
+    appendCheckpointEvent(1, 'turn.checkpoint', { storage: 'turn_checkpoints', checkpointVersion: 1 }, { iterations: 1 })
+    appendCheckpointEvent(2, 'assistant.delta', { text: 'kept' })
+    appendCheckpointEvent(3, 'turn.checkpoint', { storage: 'turn_checkpoints', checkpointVersion: 1 }, { iterations: 2 })
+    appendCheckpointEvent(4, 'turn.completed', { text: 'done' })
+    const compactedPage = listTurnEvents({
+      userId: 'u1', sessionId: 'checkpoint-session', turnId: checkpointTurnId, after: 0, limit: 1,
+    })
+    assert.equal(compactedPage[0].sequence, 2)
+    assert.equal(compactedPage[0].compactedThrough, 3)
 
     assert.deepEqual(resolveTurnEventRetentionConfig({
       TURN_EVENT_RETENTION_DAYS: '7',
@@ -427,5 +536,34 @@ test('turn event store is append-only, idempotent, ordered, and user isolated', 
     assert.equal(listTurnEvents({ userId: 'u2', sessionId: 'retention-session', turnId: 'recent-2' }).length, 2)
     assert.equal(listTurnEvents({ userId: 'u2', sessionId: 'retention-session', turnId: 'recent-3' }).length, 2)
     assert.equal(listTurnEvents({ userId: 'u2', sessionId: 'retention-session', turnId: 'recent-active' }).length, 1)
-  } finally { closeDb(); process.env.APP_DB_PATH = oldPath; rmSync(dir, { recursive: true, force: true }) }
+
+    upsertSession({ id: 's2', userId: 'u1', title: 'Second turn scope' })
+    appendTurnEvent({
+      userId: 'u1',
+      event: createTurnEvent({
+        id: 'e3', sessionId: 's2', turnId: 't1', sequence: 0,
+        type: 'turn.started', createdAt: 3,
+      }),
+    })
+    assert.deepEqual(resolveTurnSession({ userId: 'u1', turnId: 't1' }), { status: 'ambiguous' })
+
+    upsertSession({ id: 'u2-s1', userId: 'u2', title: 'Other user turn scope' })
+    appendTurnEvent({
+      userId: 'u2',
+      event: createTurnEvent({
+        id: 'u2-e1', sessionId: 'u2-s1', turnId: 't1', sequence: 0,
+        type: 'turn.started', createdAt: 4,
+      }),
+    })
+    assert.deepEqual(
+      resolveTurnSession({ userId: 'u2', turnId: 't1' }),
+      { status: 'found', sessionId: 'u2-s1' },
+    )
+  } finally {
+    closeDb()
+    if (oldPath === undefined) delete process.env.APP_DB_PATH
+    else process.env.APP_DB_PATH = oldPath
+    rmSync(dir, { recursive: true, force: true })
+  }
+  assert.equal(process.env.APP_DB_PATH, oldPath)
 })

@@ -15,11 +15,14 @@
  *   - 仅适合执行明确受控的命令,不替代真正的 OS 级 sandbox(那是 M4)
  *
  * 返回结构与 execFile 兼容:{ stdout, stderr, code, signal, timedOut, killed, truncated }
+ * 可选 controlPipe 会把 fd3 作为独立的原始二进制控制管道，并返回
+ * { control, controlError, controlTruncated, controlTotalBytes }。
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { sanitizeChildEnv } from './sensitiveEnv.js'
 
 const GRACE_MS = 2_000
 const WINDOWS_TREE_HANDLE_DRAIN_MS = 250
@@ -49,11 +52,9 @@ function windowsPowerShellPath() {
     : 'powershell.exe'
 }
 
-function windowsTreeKillScript(pid) {
-  const rootPid = Math.max(1, Math.floor(Number(pid) || 0))
+function windowsTreeKillWorkerScript() {
   return `
 $ErrorActionPreference = 'Stop'
-$rootPid = ${rootPid}
 $nativeSource = @'
 using System;
 using System.Collections.Generic;
@@ -66,6 +67,7 @@ public static class GugoProcessTreeNative {
   private const uint PROCESS_TERMINATE = 0x00000001;
   private const uint SYNCHRONIZE = 0x00100000;
   private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+  private static readonly object ResponseLock = new object();
 
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
   private struct PROCESSENTRY32 {
@@ -182,16 +184,51 @@ public static class GugoProcessTreeNative {
     }
     return false;
   }
+
+  public static void WriteResponse(string requestId, bool succeeded) {
+    lock (ResponseLock) {
+      Console.Out.WriteLine(requestId + "\\t" + (succeeded ? "1" : "0"));
+      Console.Out.Flush();
+    }
+  }
+
+  public static void QueueKill(string requestId, int rootPid, int timeoutMs) {
+    var thread = new Thread(delegate() {
+      bool succeeded = false;
+      try {
+        succeeded = KillTree(rootPid, timeoutMs);
+      } catch {
+        succeeded = false;
+      }
+      WriteResponse(requestId, succeeded);
+    });
+    thread.IsBackground = true;
+    thread.Start();
+  }
 }
 '@
-Add-Type -TypeDefinition $nativeSource
-if ([GugoProcessTreeNative]::KillTree($rootPid, ${WINDOWS_TREE_KILL_INTERNAL_TIMEOUT_MS})) { exit 0 }
-exit 1
+$null = Add-Type -TypeDefinition $nativeSource
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+[Console]::Out.WriteLine("READY" + [char]9 + "1")
+[Console]::Out.Flush()
+while ($true) {
+  $line = [Console]::In.ReadLine()
+  if ($null -eq $line) { break }
+  $parts = $line.Split([char]9)
+  if ($parts.Length -ne 3 -or [string]::IsNullOrWhiteSpace($parts[0])) { continue }
+  $rootPid = 0
+  $timeoutMs = 0
+  if (-not [int]::TryParse($parts[1], [ref]$rootPid) -or -not [int]::TryParse($parts[2], [ref]$timeoutMs) -or $rootPid -le 0) {
+    [GugoProcessTreeNative]::WriteResponse($parts[0], $false)
+    continue
+  }
+  [GugoProcessTreeNative]::QueueKill($parts[0], $rootPid, $timeoutMs)
+}
 `.trim()
 }
 
-function windowsTreeKillArgs(pid) {
-  const encoded = Buffer.from(windowsTreeKillScript(pid), 'utf16le').toString('base64')
+function windowsTreeKillWorkerArgs() {
+  const encoded = Buffer.from(windowsTreeKillWorkerScript(), 'utf16le').toString('base64')
   return [
     '-NoLogo',
     '-NoProfile',
@@ -201,11 +238,356 @@ function windowsTreeKillArgs(pid) {
   ]
 }
 
+function windowsTreeKillWorkerError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+function setProcessAndPipesReferenced(child, referenced) {
+  const method = referenced ? 'ref' : 'unref'
+  child?.[method]?.()
+  child?.stdin?.[method]?.()
+  child?.stdout?.[method]?.()
+  child?.stderr?.[method]?.()
+}
+
+function createWindowsTreeKillWorkerManager({
+  spawnProcess = spawn,
+  workerPath = windowsPowerShellPath(),
+  workerArgs = windowsTreeKillWorkerArgs(),
+  startupTimeoutMs = WINDOWS_TREE_KILL_STARTUP_TIMEOUT_MS,
+  requestTimeoutMs = WINDOWS_TREE_KILL_TIMEOUT_MS,
+} = {}) {
+  let activeWorker = null
+  let generation = 0
+  let nextRequestId = 0
+  let spawnCount = 0
+
+  const failWorker = (worker, error, { terminate = true } = {}) => {
+    if (!worker || worker.failed) return
+    worker.failed = true
+    if (worker.startupTimer) clearTimeout(worker.startupTimer)
+    worker.startupTimer = null
+    if (activeWorker === worker) activeWorker = null
+    for (const pending of worker.pending.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(error)
+    }
+    worker.pending.clear()
+    worker.queue.length = 0
+    setProcessAndPipesReferenced(worker.child, false)
+    if (terminate) {
+      try { worker.child.stdin?.destroy() } catch { /* already closed */ }
+      try { worker.child.kill('SIGKILL') } catch { /* already exited */ }
+    }
+  }
+
+  const flushWorkerQueue = (worker) => {
+    if (!worker?.ready || worker.failed) return
+    while (worker.queue.length > 0) {
+      const requestId = worker.queue.shift()
+      const pending = worker.pending.get(requestId)
+      if (!pending || pending.sent) continue
+      pending.sent = true
+      try {
+        worker.child.stdin.write(
+          `${requestId}\t${pending.pid}\t${WINDOWS_TREE_KILL_INTERNAL_TIMEOUT_MS}\n`,
+          (error) => {
+            if (!error) return
+            failWorker(worker, windowsTreeKillWorkerError(
+              'WINDOWS_TREE_KILL_WORKER_WRITE_FAILED',
+              `Windows 进程树清理 worker 写入失败：${error?.message || String(error)}`,
+            ))
+          },
+        )
+      } catch (error) {
+        failWorker(worker, windowsTreeKillWorkerError(
+          'WINDOWS_TREE_KILL_WORKER_WRITE_FAILED',
+          `Windows 进程树清理 worker 写入失败：${error?.message || String(error)}`,
+        ))
+        return
+      }
+    }
+  }
+
+  const acceptWorkerLine = (worker, rawLine) => {
+    const line = String(rawLine || '').replace(/^\uFEFF/u, '').replace(/\r$/u, '')
+    if (!line) return
+    if (!worker.ready) {
+      if (line !== 'READY\t1') {
+        failWorker(worker, windowsTreeKillWorkerError(
+          'WINDOWS_TREE_KILL_WORKER_PROTOCOL_ERROR',
+          'Windows 进程树清理 worker 启动握手无效',
+        ))
+        return
+      }
+      worker.ready = true
+      if (worker.startupTimer) clearTimeout(worker.startupTimer)
+      worker.startupTimer = null
+      flushWorkerQueue(worker)
+      return
+    }
+
+    const fields = line.split('\t')
+    if (fields.length !== 2 || (fields[1] !== '0' && fields[1] !== '1')) {
+      failWorker(worker, windowsTreeKillWorkerError(
+        'WINDOWS_TREE_KILL_WORKER_PROTOCOL_ERROR',
+        'Windows 进程树清理 worker 返回了无效响应',
+      ))
+      return
+    }
+    const pending = worker.pending.get(fields[0])
+    if (!pending) {
+      failWorker(worker, windowsTreeKillWorkerError(
+        'WINDOWS_TREE_KILL_WORKER_PROTOCOL_ERROR',
+        'Windows 进程树清理 worker 返回了未知请求响应',
+      ))
+      return
+    }
+    clearTimeout(pending.timer)
+    worker.pending.delete(fields[0])
+    pending.resolve(fields[1] === '1')
+    if (worker.pending.size === 0) setProcessAndPipesReferenced(worker.child, false)
+  }
+
+  const spawnWorker = () => {
+    let child
+    try {
+      child = spawnProcess(workerPath, workerArgs, {
+        env: sanitizeChildEnv(),
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'ignore'],
+      })
+    } catch (error) {
+      throw windowsTreeKillWorkerError(
+        'WINDOWS_TREE_KILL_WORKER_START_FAILED',
+        `Windows 进程树清理 worker 启动失败：${error?.message || String(error)}`,
+      )
+    }
+
+    const worker = {
+      child,
+      generation: ++generation,
+      ready: false,
+      failed: false,
+      stdoutBuffer: '',
+      pending: new Map(),
+      queue: [],
+      startupTimer: null,
+    }
+    activeWorker = worker
+    spawnCount += 1
+    setProcessAndPipesReferenced(child, false)
+
+    child.stdout?.setEncoding?.('utf8')
+    child.stdout?.on('data', (chunk) => {
+      if (worker.failed) return
+      worker.stdoutBuffer += String(chunk || '')
+      while (true) {
+        const newlineAt = worker.stdoutBuffer.indexOf('\n')
+        if (newlineAt < 0) break
+        const line = worker.stdoutBuffer.slice(0, newlineAt)
+        worker.stdoutBuffer = worker.stdoutBuffer.slice(newlineAt + 1)
+        acceptWorkerLine(worker, line)
+        if (worker.failed) return
+      }
+    })
+    child.stdin?.on('error', (error) => {
+      failWorker(worker, windowsTreeKillWorkerError(
+        'WINDOWS_TREE_KILL_WORKER_PIPE_FAILED',
+        `Windows 进程树清理 worker 输入管道失败：${error?.message || String(error)}`,
+      ))
+    })
+    child.stdout?.on('error', (error) => {
+      failWorker(worker, windowsTreeKillWorkerError(
+        'WINDOWS_TREE_KILL_WORKER_PIPE_FAILED',
+        `Windows 进程树清理 worker 输出管道失败：${error?.message || String(error)}`,
+      ))
+    })
+    child.once('error', (error) => {
+      failWorker(worker, windowsTreeKillWorkerError(
+        'WINDOWS_TREE_KILL_WORKER_CRASHED',
+        `Windows 进程树清理 worker 异常：${error?.message || String(error)}`,
+      ), { terminate: false })
+    })
+    child.once('close', (code, signal) => {
+      failWorker(worker, windowsTreeKillWorkerError(
+        'WINDOWS_TREE_KILL_WORKER_CRASHED',
+        `Windows 进程树清理 worker 已退出${typeof code === 'number' ? ` (code=${code})` : ''}${signal ? ` (${signal})` : ''}`,
+      ), { terminate: false })
+    })
+
+    if (!child.stdin || !child.stdout) {
+      queueMicrotask(() => failWorker(worker, windowsTreeKillWorkerError(
+        'WINDOWS_TREE_KILL_WORKER_PIPE_FAILED',
+        'Windows 进程树清理 worker 缺少协议管道',
+      )))
+      return worker
+    }
+
+    worker.startupTimer = setTimeout(() => {
+      failWorker(worker, windowsTreeKillWorkerError(
+        'WINDOWS_TREE_KILL_WORKER_START_TIMEOUT',
+        'Windows 进程树清理 worker 启动超时',
+      ))
+    }, startupTimeoutMs)
+    worker.startupTimer.unref?.()
+    return worker
+  }
+
+  const ensureWorker = () => {
+    if (activeWorker && !activeWorker.failed) return activeWorker
+    return spawnWorker()
+  }
+
+  const prewarm = () => {
+    try {
+      ensureWorker()
+      return true
+    } catch {
+      // Prewarming is opportunistic. The real cleanup request still reports
+      // startup failures and uses the bounded taskkill fallback.
+      return false
+    }
+  }
+
+  const request = (rawPid) => {
+    const pid = Math.floor(Number(rawPid) || 0)
+    if (pid <= 0) {
+      return Promise.reject(windowsTreeKillWorkerError(
+        'WINDOWS_TREE_KILL_WORKER_PID_INVALID',
+        'Windows 进程树清理请求的 PID 无效',
+      ))
+    }
+    let worker
+    try {
+      worker = ensureWorker()
+    } catch (error) {
+      return Promise.reject(error)
+    }
+    const requestId = `${worker.generation}:${++nextRequestId}`
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        failWorker(worker, windowsTreeKillWorkerError(
+          'WINDOWS_TREE_KILL_WORKER_REQUEST_TIMEOUT',
+          'Windows 进程树清理 worker 请求超时',
+        ))
+      }, requestTimeoutMs)
+      timer.unref?.()
+      worker.pending.set(requestId, {
+        pid,
+        resolve,
+        reject,
+        timer,
+        sent: false,
+      })
+      if (worker.pending.size === 1) setProcessAndPipesReferenced(worker.child, true)
+      worker.queue.push(requestId)
+      flushWorkerQueue(worker)
+    })
+  }
+
+  const shutdown = () => {
+    if (!activeWorker) return
+    failWorker(activeWorker, windowsTreeKillWorkerError(
+      'WINDOWS_TREE_KILL_WORKER_SHUTDOWN',
+      'Windows 进程树清理 worker 已关闭',
+    ))
+  }
+
+  const snapshot = () => ({
+    active: Boolean(activeWorker && !activeWorker.failed),
+    pid: activeWorker?.child?.pid || null,
+    ready: Boolean(activeWorker?.ready && !activeWorker.failed),
+    pending: activeWorker?.pending?.size || 0,
+    queued: activeWorker?.queue?.length || 0,
+    generation: activeWorker?.generation || generation,
+    spawnCount,
+  })
+
+  return { prewarm, request, shutdown, snapshot }
+}
+
+let windowsTreeKillWorkerManager = null
+
+function getWindowsTreeKillWorkerManager() {
+  if (!windowsTreeKillWorkerManager) {
+    windowsTreeKillWorkerManager = createWindowsTreeKillWorkerManager()
+  }
+  return windowsTreeKillWorkerManager
+}
+
+function runWindowsTaskkillFallback(pid) {
+  return new Promise((resolve) => {
+    let helper = null
+    let settled = false
+    let timer = null
+    const finish = (succeeded) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve(Boolean(succeeded))
+    }
+    try {
+      helper = spawn('taskkill', ['/pid', String(pid), '/t', '/f'], {
+        env: sanitizeChildEnv(),
+        windowsHide: true,
+        stdio: 'ignore',
+      })
+      helper.once('error', () => finish(false))
+      helper.once('close', (code) => finish(code === 0))
+      timer = setTimeout(() => {
+        try { helper?.kill('SIGKILL') } catch { /* helper may already be gone */ }
+        finish(false)
+      }, WINDOWS_TREE_KILL_INTERNAL_TIMEOUT_MS)
+      timer.unref?.()
+    } catch {
+      finish(false)
+    }
+  })
+}
+
+async function killWindowsProcessTree(pid) {
+  try {
+    return await getWindowsTreeKillWorkerManager().request(pid)
+  } catch {
+    return runWindowsTaskkillFallback(pid)
+  }
+}
+
+/**
+ * Terminate one process tree and wait for the platform cleanup proof.
+ *
+ * Windows uses the shared Toolhelp32/TerminateProcess worker and also closes
+ * the direct child handle as a last-resort root-process guarantee. POSIX uses
+ * the detached process group when available.
+ */
+export async function terminateProcessTree({ pid: rawPid, child = null } = {}) {
+  const pid = Math.floor(Number(rawPid) || 0)
+  if (pid <= 0) return false
+  if (process.platform === 'win32') {
+    const treeKillPromise = killWindowsProcessTree(pid)
+    try { child?.kill?.('SIGKILL') } catch { /* process may already be gone */ }
+    return await treeKillPromise === true
+  }
+  try {
+    process.kill(-pid, 'SIGTERM')
+    return true
+  } catch {
+    try {
+      process.kill(pid, 'SIGTERM')
+      return true
+    } catch { return false }
+  }
+}
+
 export function runProcessWithGroup({
   shellPath,
   shellArgs,
   cwd,
   env,
+  inheritEnvKeys = [],
   timeout = 60_000,
   maxBuffer = 1 * 1024 * 1024,
   windowsHide = true,
@@ -214,7 +596,18 @@ export function runProcessWithGroup({
   overflowMode = 'kill',
   fullOutputPath = null,
   onOutput = null,
+  stdinInput = null,
+  onSpawn = null,
+  cleanupWindowsTreeOnExit = false,
+  controlPipe = false,
+  controlMaxBuffer = 256 * 1024,
 }) {
+  const hasControlPipe = controlPipe === true
+  const hasStdinInput = typeof stdinInput === 'string' || Buffer.isBuffer(stdinInput)
+  const requestedControlMaxBuffer = Number(controlMaxBuffer)
+  const normalizedControlMaxBuffer = Number.isFinite(requestedControlMaxBuffer)
+    ? Math.max(0, Math.floor(requestedControlMaxBuffer))
+    : 256 * 1024
   if (signal?.aborted) {
     return Promise.resolve({
       stdout: '',
@@ -226,22 +619,54 @@ export function runProcessWithGroup({
       truncated: false,
       aborted: true,
       totalOutputBytes: 0,
+      ...(hasControlPipe
+        ? {
+            control: Buffer.alloc(0),
+            controlError: null,
+            controlTruncated: false,
+            controlTotalBytes: 0,
+          }
+        : {}),
     })
   }
   return new Promise((resolve) => {
     const isWin = process.platform === 'win32'
     const child = spawn(shellPath, shellArgs, {
       cwd,
-      env,
+      env: sanitizeChildEnv({}, {
+        sourceEnv: env || process.env,
+        inheritKeys: inheritEnvKeys,
+      }),
       windowsHide,
       windowsVerbatimArguments,
       // ★ POSIX:detached=true → 子进程成为新进程组 leader,pgid === child.pid
       detached: !isWin,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: hasControlPipe
+        ? [hasStdinInput ? 'pipe' : 'ignore', 'pipe', 'pipe', 'pipe']
+        : [hasStdinInput ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    })
+
+    if (isWin && cleanupWindowsTreeOnExit) {
+      // Compile the native tree walker while the command is running. Besides
+      // removing cold-start latency from cleanup, this makes the first tree
+      // snapshot happen before short-lived cmd.exe wrappers disappear.
+      getWindowsTreeKillWorkerManager().prewarm()
+    }
+
+    child.stdin?.on('error', () => { /* child may exit before consuming trusted input */ })
+    child.once('spawn', () => {
+      try { onSpawn?.(child) } catch { /* observer must not affect execution */ }
+      if (hasStdinInput) child.stdin?.end(stdinInput)
     })
 
     let stdoutBuf = ''
     let stderrBuf = ''
+    const controlChunks = []
+    let controlBufferedBytes = 0
+    let controlTotalBytes = 0
+    let controlTruncated = false
+    let controlError = null
+    const controlStream = hasControlPipe ? child.stdio?.[3] : null
     const tailMode = overflowMode === 'tail'
     const outputEvents = []
     let bufferedOutputBytes = 0
@@ -257,6 +682,7 @@ export function runProcessWithGroup({
     let finalizing = false
     let windowsTreeKillPromise = null
     let outputLogStream = null
+    let outputLogOwned = false
     let outputLogError = null
     const streamsPausedForLog = new Set()
 
@@ -264,6 +690,7 @@ export function runProcessWithGroup({
       try {
         fs.mkdirSync(path.dirname(fullOutputPath), { recursive: true })
         outputLogStream = fs.createWriteStream(fullOutputPath, { flags: 'wx' })
+        outputLogStream.once('open', () => { outputLogOwned = true })
         outputLogStream.on('drain', () => {
           for (const stream of streamsPausedForLog) stream.resume?.()
           streamsPausedForLog.clear()
@@ -281,7 +708,33 @@ export function runProcessWithGroup({
     const stopBuffering = () => {
       try { child.stdout?.destroy() } catch { /* noop */ }
       try { child.stderr?.destroy() } catch { /* noop */ }
+      if (controlStream && !controlStream.readableEnded && !controlStream.destroyed) {
+        controlTruncated = true
+      }
+      try { controlStream?.destroy() } catch { /* noop */ }
     }
+
+    if (hasControlPipe && !controlStream) {
+      controlError = 'control pipe fd3 is unavailable'
+    }
+    controlStream?.on('error', (error) => {
+      if (!controlError) controlError = error?.message || String(error)
+    })
+    controlStream?.on('data', (chunk) => {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      controlTotalBytes += bytes.length
+      const remaining = normalizedControlMaxBuffer - controlBufferedBytes
+      if (remaining <= 0) {
+        if (bytes.length > 0) controlTruncated = true
+        return
+      }
+      const kept = bytes.length > remaining ? bytes.subarray(0, remaining) : bytes
+      if (kept.length > 0) {
+        controlChunks.push(Buffer.from(kept))
+        controlBufferedBytes += kept.length
+      }
+      if (kept.length < bytes.length) controlTruncated = true
+    })
 
     const trimTailBuffer = () => {
       while (bufferedOutputBytes > maxBuffer && outputEvents.length > 0) {
@@ -345,13 +798,13 @@ export function runProcessWithGroup({
     collect(child.stdout, 'out')
     collect(child.stderr, 'err')
 
-    function killTree(signal) {
+    function killTree(signal, { markKilled = true, stopOutput = true } = {}) {
       if (settled || child.pid == null) return
-      killed = true
+      if (markKilled) killed = true
       // Descendants can inherit the root process' stdout/stderr handles. On
       // Windows that keeps ChildProcess `close` pending even after cmd.exe was
       // killed, so stop reading before terminating the tree.
-      stopBuffering()
+      if (stopOutput) stopBuffering()
       try {
         if (isWin) {
           // `taskkill /T` may still be walking descendants after cmd.exe has
@@ -359,71 +812,16 @@ export function runProcessWithGroup({
           // otherwise callers can observe a cancelled command while a child is
           // still holding the working directory open.
           if (!windowsTreeKillPromise) {
-            windowsTreeKillPromise = new Promise((resolveTreeKill) => {
-              let finished = false
-              let hardStop = null
-              const finish = (succeeded) => {
-                if (finished) return
-                finished = true
-                if (hardStop) clearTimeout(hardStop)
-                resolveTreeKill(Boolean(succeeded))
-              }
-              let killer = null
-              let fallbackActive = false
-              try {
-                // Snapshot descendants before killing the root. taskkill /T
-                // alone races with short-lived cmd.exe wrappers: if the root
-                // exits first, its Node/Python child becomes an orphan and
-                // keeps cwd locked until natural exit. The PowerShell helper
-                // captures the entire PID tree first, then tree-kills and
-                // independently terminates every captured descendant.
-                killer = spawn(windowsPowerShellPath(), windowsTreeKillArgs(child.pid), {
-                  windowsHide: true,
-                  stdio: 'ignore',
-                })
-                // This direct handle is always available to the parent Node
-                // process, even in sandboxes that deny taskkill or WMI. Stop
-                // the shell immediately; the native helper follows creator
-                // PID links to collect and terminate every descendant.
-                try { child.kill('SIGKILL') } catch { /* process may already be gone */ }
-                killer.once('error', () => {
-                  fallbackActive = true
-                  try {
-                    const fallbackKiller = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
-                      windowsHide: true,
-                      stdio: 'ignore',
-                    })
-                    fallbackKiller.once('error', () => finish(false))
-                    fallbackKiller.once('close', (code) => finish(code === 0))
-                  } catch {
-                    try { child.kill('SIGKILL') } catch { /* process may already be gone */ }
-                    finish(false)
-                  }
-                })
-                killer.once('close', (code) => {
-                  if (!fallbackActive) finish(code === 0)
-                })
-              } catch {
-                try { child.kill('SIGKILL') } catch { /* process may already be gone */ }
-                finish(false)
-              }
-              // Never let a broken process-enumeration helper make
-              // cancellation hang indefinitely.
-              if (!finished) {
-                hardStop = setTimeout(() => {
-                  try { killer?.kill('SIGKILL') } catch { /* helper may already be gone */ }
-                  try {
-                    spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
-                      windowsHide: true,
-                      stdio: 'ignore',
-                    }).unref()
-                  } catch { /* fallback unavailable */ }
-                  try { child.kill('SIGKILL') } catch { /* process may already be gone */ }
-                  finish(false)
-                }, WINDOWS_TREE_KILL_TIMEOUT_MS)
-                hardStop.unref?.()
-              }
-            })
+            // The PowerShell process and Add-Type compilation are shared by all
+            // requests. Each cleanup is correlated by request id inside the
+            // worker; a worker crash rejects every in-flight request and this
+            // call then uses the bounded taskkill fallback.
+            windowsTreeKillPromise = killWindowsProcessTree(child.pid)
+            // This direct handle is always available to the parent Node
+            // process, even in sandboxes that deny taskkill or native snapshot
+            // access. The worker independently follows creator PID links to
+            // collect and terminate every descendant.
+            try { child.kill('SIGKILL') } catch { /* process may already be gone */ }
           } else if (signal === 'SIGKILL') {
             try { child.kill('SIGKILL') } catch { /* process may already be gone */ }
           }
@@ -463,14 +861,18 @@ export function runProcessWithGroup({
       if (sigkillTimer) clearTimeout(sigkillTimer)
       if (abortListener) signal?.removeEventListener('abort', abortListener)
       let processTreeCleanupFailed = false
-      if (isWin && killed && windowsTreeKillPromise) {
+      if (isWin && windowsTreeKillPromise) {
         processTreeCleanupFailed = !(await windowsTreeKillPromise)
         // Even after every captured PID is gone, Windows can retain a closing
-        // cwd handle for a few scheduler ticks. Keep a short bounded drain
-        // before exposing cancellation as complete.
-        await new Promise((resolveDrain) => {
-          setTimeout(resolveDrain, WINDOWS_TREE_HANDLE_DRAIN_MS)
-        })
+        // cwd handle for a few scheduler ticks. Cancellation must not return
+        // until that handle has drained. A normal exit has already crossed the
+        // worker's two stable empty snapshots and does not need this extra
+        // cancellation-only fence.
+        if (timedOut || aborted || killed) {
+          await new Promise((resolveDrain) => {
+            setTimeout(resolveDrain, WINDOWS_TREE_HANDLE_DRAIN_MS)
+          })
+        }
       }
       if (outputLogStream && !outputLogStream.destroyed) {
         await new Promise((resolveLog) => {
@@ -497,9 +899,9 @@ export function runProcessWithGroup({
           .join('')
       }
       let persistedFullOutputPath = null
-      if (tailMode && truncated && fullOutputPath && !outputLogError) {
+      if (tailMode && truncated && fullOutputPath && outputLogOwned && !outputLogError) {
         persistedFullOutputPath = fullOutputPath
-      } else if (tailMode && fullOutputPath) {
+      } else if (tailMode && fullOutputPath && outputLogOwned) {
         try { await fs.promises.rm(fullOutputPath, { force: true }) } catch { /* best-effort cleanup */ }
       }
       settled = true
@@ -520,6 +922,14 @@ export function runProcessWithGroup({
         truncated,
         aborted,
         totalOutputBytes,
+        ...(hasControlPipe
+          ? {
+              control: Buffer.concat(controlChunks, controlBufferedBytes),
+              controlError,
+              controlTruncated,
+              controlTotalBytes,
+            }
+          : {}),
         ...(persistedFullOutputPath ? { fullOutputPath: persistedFullOutputPath } : {}),
         ...(outputLogError ? { outputLogError: outputLogError?.message || String(outputLogError) } : {}),
       })
@@ -530,6 +940,33 @@ export function runProcessWithGroup({
       stderrBuf = (stderrBuf || '') + (err?.message || String(err))
       void finalize(null, null)
     })
+    child.on('exit', () => {
+      if (isWin && cleanupWindowsTreeOnExit) {
+        killTree('SIGTERM', { markKilled: false, stopOutput: false })
+      }
+    })
     child.on('close', (code, signal) => { void finalize(code, signal) })
   })
+}
+
+export const _testing = {
+  createWindowsTreeKillWorkerManager,
+  windowsTreeKillWorkerScript,
+  getWindowsTreeKillWorkerSnapshot: () => (
+    windowsTreeKillWorkerManager?.snapshot() || {
+      active: false,
+      pid: null,
+      ready: false,
+      pending: 0,
+      queued: 0,
+      generation: 0,
+      spawnCount: 0,
+    }
+  ),
+  resetWindowsTreeKillWorker: () => {
+    windowsTreeKillWorkerManager?.shutdown()
+    windowsTreeKillWorkerManager = null
+  },
+  prewarmWindowsTreeKillWorker: () => getWindowsTreeKillWorkerManager().prewarm(),
+  requestWindowsTreeKill: (pid) => getWindowsTreeKillWorkerManager().request(pid),
 }

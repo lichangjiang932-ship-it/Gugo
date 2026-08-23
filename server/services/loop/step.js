@@ -5,6 +5,13 @@ function assertRequest(value) {
   return value
 }
 
+const NON_REPLAYABLE_MODEL_ERROR_CODES = new Set([
+  'CHECKPOINT_FLUSH_FAILED',
+  'MODEL_BUDGET_EXCEEDED',
+  'MODEL_REQUEST_CONTEXT_DRIFT',
+  'MODEL_REQUEST_OUTCOME_UNKNOWN',
+])
+
 const MODEL_EVENT_CONTEXT_FIELDS = Object.freeze([
   'userId',
   'sessionId',
@@ -38,7 +45,8 @@ async function prepareRequest(loopEvents, request, context, attempt) {
 async function prepareInvocation({ request, attempt, loopEvents, context, beforeRequest }) {
   const prepared = await prepareRequest(loopEvents, request, context, attempt)
   if (typeof beforeRequest === 'function') {
-    await beforeRequest({ request: prepared, attempt, kind: 'model' })
+    const replacement = await beforeRequest({ request: prepared, attempt, kind: 'model' })
+    if (replacement !== undefined) return assertRequest(replacement)
   }
   return prepared
 }
@@ -68,6 +76,7 @@ export async function runModelStep({
     })
     return await runModel(preparedRequest)
   } catch (error) {
+    if (error?.unsafeToReplay === true || NON_REPLAYABLE_MODEL_ERROR_CODES.has(error?.code)) throw error
     if (!loopEvents || typeof loopEvents.waterfall !== 'function') throw error
     const failedRequest = preparedRequest ?? attemptedRequest
     const decision = await loopEvents.waterfall('request-error', {

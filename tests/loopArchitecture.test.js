@@ -10,10 +10,17 @@ const LOOP_ROOT = path.join(REPO_ROOT, 'server', 'services', 'loop')
 const PUBLIC_LOOP_ENTRY = path.join(LOOP_ROOT, 'index.js')
 const MAX_KERNEL_LINES = 600
 
-const CONSUMERS = [
+const PUBLIC_ENTRY_CONSUMERS = [
+  'server/services/turnEngineHost.js',
+  'server/services/jobPlanningExplorationRuntime.js',
+  'server/services/jobStepExecutionRuntime.js',
+  'server/services/jobTools.js',
+]
+
+const ARCHITECTURE_CONSUMERS = [
   'server/services/TurnEngine.js',
   'server/services/jobRuntime.js',
-  'server/services/jobTools.js',
+  ...PUBLIC_ENTRY_CONSUMERS,
 ]
 
 function sortPaths(left, right) {
@@ -41,7 +48,7 @@ function kernelFiles() {
 function architectureFiles() {
   return [
     ...kernelFiles(),
-    ...CONSUMERS.map((file) => path.join(REPO_ROOT, file)),
+    ...ARCHITECTURE_CONSUMERS.map((file) => path.join(REPO_ROOT, file)),
   ]
 }
 
@@ -261,7 +268,7 @@ test('loop and subagent runtime boundary has no static or dynamic import cycles'
 })
 
 test('loop consumers use the public runToolLoop entry without legacy calls', () => {
-  const violations = CONSUMERS.flatMap((relativeFile) => {
+  const violations = PUBLIC_ENTRY_CONSUMERS.flatMap((relativeFile) => {
     const result = inspectLoopConsumer(path.join(REPO_ROOT, relativeFile))
     const issues = []
     if (!result.importsPublicRunToolLoop) issues.push('does not import runToolLoop from loop/index.js')
@@ -274,4 +281,17 @@ test('loop consumers use the public runToolLoop entry without legacy calls', () 
     return issues.map((issue) => `${relativeFile}: ${issue}`)
   })
   assert.deepEqual(violations, [], 'All runtimes must share the public runToolLoop entry')
+})
+
+test('TurnEngine consumes the loop through its injected host port', () => {
+  const relativeFile = 'server/services/TurnEngine.js'
+  const file = path.join(REPO_ROOT, relativeFile)
+  const source = readFileSync(file, 'utf8')
+  const result = inspectLoopConsumer(file)
+  assert.equal(
+    result.importsPublicRunToolLoop,
+    false,
+    'TurnEngine must not import the concrete loop implementation',
+  )
+  assert.match(source, /this\.deps\.runLoop\s*\(/)
 })

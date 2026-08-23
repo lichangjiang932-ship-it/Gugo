@@ -50,17 +50,17 @@ test('bypass capability block forbids redundant directory authorization prompts'
   assert.doesNotMatch(text, /Approval mode: unattended/)
 })
 
-test('plan capability block keeps mutation schemas visible but describes a policy boundary', () => {
+test('plan capability block explains that restricted schemas are intentionally omitted', () => {
   const text = buildRuntimeCapabilityBlock({
     toolSpecs: [spec('read_file'), spec('write_file'), spec('bash_exec'), spec('run_project_check'), spec('web_search')],
     approvalMode: 'plan',
   })
 
-  assert.match(text, /Plan mode is a policy boundary, not a missing capability/i)
-  assert.match(text, /schemas are present, but plan mode forbids creating or editing files/i)
-  assert.match(text, /command and project-check schemas are present/i)
-  assert.match(text, /local read-only and forbids network requests/i)
-  assert.match(text, /Restricted tools remain visible/i)
+  assert.match(text, /Plan mode intentionally supplies only local read-only tool schemas/i)
+  assert.match(text, /file-mutation, command-execution, network, connector, browser-action, and other side-effect schemas are intentionally omitted/i)
+  assert.match(text, /File changes: unavailable while plan mode is active/i)
+  assert.match(text, /Web: unavailable while plan mode is active because network access is excluded/i)
+  assert.match(text, /Restricted tool schemas are not exposed/i)
   assert.match(text, /switch to acceptEdits or normal/i)
   assert.doesNotMatch(text, /call the tool now/i)
 })

@@ -4,6 +4,7 @@ import { getUiPlugin, registerTrustedUiPlugin } from './uiContributionRegistry.j
 
 const McpServersView = lazy(() => import('../pages/McpServersView.jsx'))
 const ReasonixWorkspace = lazy(() => import('../pages/ReasonixWorkspace.jsx'))
+const SettingsEvolutionPanel = lazy(() => import('../components/settings/SettingsEvolutionPanel.jsx'))
 
 const FIRST_PARTY_UI_MANIFEST = Object.freeze({
   id: 'gugo-first-party',
@@ -13,6 +14,7 @@ const FIRST_PARTY_UI_MANIFEST = Object.freeze({
     'ui:route:mcp-route',
     'ui:route:reasonix-route',
     'ui:account-menu:mcp-account-menu',
+    'ui:settings-section:evolution-settings',
   ]),
 })
 
@@ -43,6 +45,14 @@ export function registerFirstPartyUiContributions() {
       icon: Blocks,
       requiresLogin: true,
       order: 100,
+    },
+    {
+      id: 'evolution-settings',
+      slot: 'settings-section',
+      sectionId: 'evolution',
+      labelKey: 'evolution.title',
+      component: SettingsEvolutionPanel,
+      order: 120,
     },
   ])
 }

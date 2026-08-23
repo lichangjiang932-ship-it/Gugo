@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { sanitizeChildEnv } from './sensitiveEnv.js'
 
 const PYTHON_CONFIG_KEY = 'CODE_EXECUTION_PYTHON'
 const PROBE_TIMEOUT_MS = 4_000
@@ -212,7 +213,7 @@ function discoverPythonCandidates({ env, platform, exists }) {
 function probePythonPip(pythonPath, { env, spawnSyncImpl }) {
   try {
     const result = spawnSyncImpl(pythonPath, ['-m', 'pip', '--version'], {
-      env,
+      env: sanitizeChildEnv({}, { sourceEnv: env }),
       timeout: PROBE_TIMEOUT_MS,
       windowsHide: true,
       stdio: 'ignore',

@@ -8,6 +8,8 @@ import {
   renewJobExecutionLease,
   runWithJobExecutionLease,
 } from './jobExecutionLeaseStore.js'
+import { getJob as getJobRow } from './jobStore.js'
+import { userCancellationError } from '../utils/toolCancellation.js'
 
 function leaseLostError() {
   return Object.assign(new Error('Job execution lease was lost'), {
@@ -19,6 +21,7 @@ function leaseLostError() {
 export function createJobExecutionLeaseCoordinator({
   ownerId = `job-runtime-${process.pid}-${crypto.randomUUID()}`,
   leaseMs = DEFAULT_JOB_EXECUTION_LEASE_MS,
+  readJobState = (jobId) => getJobRow(jobId),
 } = {}) {
   const duration = Math.max(1_000, Number(leaseMs) || DEFAULT_JOB_EXECUTION_LEASE_MS)
   return {
@@ -42,6 +45,11 @@ export function createJobExecutionLeaseCoordinator({
         try {
           if (!renewJobExecutionLease({ jobId, ownerId, leaseMs: duration })) {
             controller?.abort(leaseLostError())
+            return
+          }
+          const job = readJobState(jobId)
+          if (job?.cancelRequested || job?.status === 'cancel_requested') {
+            controller?.abort(userCancellationError('JOB_CANCEL_REQUESTED', 'Cancelled by user'))
           }
         } catch {
           controller?.abort(leaseLostError())

@@ -73,8 +73,7 @@ test('an open completion gate defers completion and applies steering claimed on 
 })
 
 test('a steering checkpoint persists applied ids before acknowledging its lease', async () => {
-  const order = []
-  const checkpoints = []
+  const events = []
 
   const result = await baseRun({
     claimSteering: async () => ({
@@ -83,16 +82,29 @@ test('a steering checkpoint persists applied ids before acknowledging its lease'
     }),
     runModel: async () => ({ content: 'Applied', toolCalls: [] }),
     saveCheckpoint: async (state) => {
-      order.push('save')
-      checkpoints.push(structuredClone(state))
+      events.push({ type: 'save', state: structuredClone(state) })
       return true
     },
-    acknowledgeSteering: async () => order.push('ack'),
+    acknowledgeSteering: async (leaseId) => events.push({ type: 'ack', leaseId }),
   })
 
   assert.equal(result.text, 'Applied')
-  assert.deepEqual(order, ['save', 'save', 'ack'])
-  assert.deepEqual(checkpoints[0].appliedSteeringIds, ['steering-checkpoint-order'])
+  assert.equal(events.filter((event) => event.type === 'ack').length, 1)
+
+  const acknowledgeIndex = events.findIndex((event) => event.type === 'ack')
+  const steeringCheckpointIndex = events.findIndex((event) => (
+    event.type === 'save'
+      && event.state.appliedSteeringIds?.includes('steering-checkpoint-order')
+  ))
+  const inFlightCheckpointIndex = events.findIndex((event) => (
+    event.type === 'save' && event.state.modelInvocation?.status === 'in_flight'
+  ))
+
+  assert.ok(steeringCheckpointIndex >= 0)
+  assert.ok(steeringCheckpointIndex < acknowledgeIndex)
+  assert.ok(inFlightCheckpointIndex >= 0)
+  assert.ok(inFlightCheckpointIndex < acknowledgeIndex)
+  assert.equal(events[acknowledgeIndex].leaseId, 'lease-checkpoint-order')
 })
 
 test('an already-applied steering id is acknowledged without duplicate context injection', async () => {

@@ -32,7 +32,9 @@ export default function ChatComposer({
   contextUsage,
   modelPickerOpen,
   modelOptions,
+  modelReadiness,
   selectedModel,
+  selectedModelProviderId,
   isGenerating,
   onAbort,
   onFileChange,
@@ -40,6 +42,7 @@ export default function ChatComposer({
   onOpenModelPicker,
   onCloseModelPicker,
   onModelChange,
+  onModelRetry,
   onManageModels,
   onOpenAttachment,
   approvalMode,
@@ -254,6 +257,7 @@ export default function ChatComposer({
             fileInputRef={fileInputRef}
             isGenerating={isGenerating}
             modelOptions={modelOptions}
+            modelReadiness={modelReadiness}
             modelPickerOpen={modelPickerOpen}
             onAbort={onAbort}
             onApprovalModeChange={onApprovalModeChange}
@@ -261,11 +265,13 @@ export default function ChatComposer({
             onFileChange={onFileChange}
             onManageModels={onManageModels}
             onModelChange={onModelChange}
+            onModelRetry={onModelRetry}
             onOpenModelPicker={onOpenModelPicker}
             onSend={onSend}
             onToggleContext={onToggleContext}
             sendDisabled={attachmentState.uploading || attachmentState.failed}
             selectedModel={selectedModel}
+            selectedModelProviderId={selectedModelProviderId}
             t={t}
           />
         </div>

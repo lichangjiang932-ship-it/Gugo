@@ -14,6 +14,7 @@ import { writeToolAudit } from '../utils/audit.js'
 import { logWarn } from '../utils/logger.js'
 import { DEFAULT_CLOUD_CONTEXT_WINDOW } from '../utils/endpointProfile.js'
 import { storedMessageSourceId } from './turnMessageContext.js'
+import { resolveRuntimeContextCompactionStrategy } from './contextCompactionStrategy.js'
 
 export const DEFAULT_ACTIVE_CONTEXT_TOKENS = 128_000
 export const MAX_AUTO_COMPACTION_TOKENS = DEFAULT_ACTIVE_CONTEXT_TOKENS
@@ -315,6 +316,16 @@ function chooseTailSize(messages, threshold) {
   return Math.max(1, Math.min(count, nonSystem.length - 1))
 }
 
+function contextRoleCounts(messages = []) {
+  const counts = { system: 0, user: 0, assistant: 0, tool: 0, other: 0 }
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const role = typeof message?.role === 'string' ? message.role : ''
+    if (Object.hasOwn(counts, role)) counts[role] += 1
+    else counts.other += 1
+  }
+  return Object.freeze(counts)
+}
+
 function reductionMessages(evidenceSummaries) {
   return [
     {
@@ -512,15 +523,15 @@ export async function addSemanticCompactionSummary({
   }
 }
 
-function archiveCompaction(result, { userId, sessionId }) {
+async function archiveCompaction(result, { userId, sessionId, compactionArchivePort }) {
   if (!result?.compacted || !userId || !sessionId) return null
   try {
-    return createCompactionArchive({
+    return await createCompactionArchive({
       userId,
       sessionId,
       archivedMessages: result.archivedMessages,
       summaryText: result.summaryText,
-    })
+    }, { compactionArchivePort })
   } catch {
     return null
   }
@@ -630,6 +641,8 @@ export async function compactForModel({
   sessionId = null,
   consumeBudget,
   activeContextTokens,
+  compactionStrategyResolver = resolveRuntimeContextCompactionStrategy,
+  compactionArchivePort,
 } = {}) {
   const threshold = getAutoCompactionThreshold(contextWindow, activeContextTokens)
   const rollingToolResults = applyRollingToolResultBudget(messages, {
@@ -640,11 +653,40 @@ export async function compactForModel({
   const estimatedTokens = estimateContextTokens(preparedMessages, tools)
   const messageEstimatedTokens = estimateContextTokens(preparedMessages, [])
   const overMessageLimit = preparedMessages.length > MAX_OUTBOUND_MESSAGES
+  const nonSystemCount = preparedMessages.filter((message) => message?.role !== 'system').length
+  const adaptiveTail = chooseTailSize(preparedMessages, threshold)
+  const defaultKeepMessages = force && nonSystemCount > 1
+    ? Math.min(adaptiveTail, Math.max(1, Math.floor(nonSystemCount / 2)))
+    : adaptiveTail
+  const hostCompactionRequired = force || overMessageLimit || messageEstimatedTokens >= threshold
+  const configuredActiveContextTokens = Number(activeContextTokens)
+  const activeContextTokenLimit = Number.isFinite(configuredActiveContextTokens)
+    && configuredActiveContextTokens > 0
+    ? Math.floor(configuredActiveContextTokens)
+    : DEFAULT_ACTIVE_CONTEXT_TOKENS
+  const strategy = await compactionStrategyResolver({
+    contextWindow,
+    activeContextTokens: activeContextTokenLimit,
+    threshold,
+    estimatedTokens,
+    messageEstimatedTokens,
+    messageCount: preparedMessages.length,
+    roleCounts: contextRoleCounts(preparedMessages),
+    toolCount: Array.isArray(tools) ? tools.length : 0,
+    overMessageLimit,
+    force,
+    hostCompactionRequired,
+    defaultKeepMessages,
+    // A plugin may compact more aggressively, but it cannot retain more
+    // history than the built-in strategy selected for this safety boundary.
+    maxKeepMessages: defaultKeepMessages,
+    rollingToolResultsCompacted: rollingToolResults.compactedCount,
+  })
   // Tool schemas are a fixed capability surface: compacting conversation
   // history cannot make them smaller. Let a real provider overflow trigger the
   // forced recovery path instead of deleting a fresh, protocol-linked tool
   // batch merely because the selected schema set is large.
-  if (!force && !overMessageLimit && messageEstimatedTokens < threshold) {
+  if (!strategy.shouldCompact) {
     return {
       messages: preparedMessages,
       compacted: false,
@@ -653,14 +695,11 @@ export async function compactForModel({
       postCompactionEstimatedTokens: estimatedTokens,
       threshold,
       rollingToolResultsCompacted: rollingToolResults.compactedCount,
+      runtimeStrategy: strategy.provenance,
     }
   }
 
-  const nonSystemCount = preparedMessages.filter((message) => message?.role !== 'system').length
-  const adaptiveTail = chooseTailSize(preparedMessages, threshold)
-  const initialKeepMessages = force && nonSystemCount > 1
-    ? Math.min(adaptiveTail, Math.max(1, Math.floor(nonSystemCount / 2)))
-    : adaptiveTail
+  const initialKeepMessages = strategy.keepMessages
   const summaryTokenLimit = getCompactionSummaryTokenLimit(contextWindow, activeContextTokens)
   let result = null
   let semanticTelemetry = disabledSemanticTelemetry()
@@ -724,10 +763,15 @@ export async function compactForModel({
       error: buildError || fit?.error || 'context compaction did not converge',
       semanticSummary: semanticTelemetry,
       rollingToolResultsCompacted: rollingToolResults.compactedCount,
+      runtimeStrategy: strategy.provenance,
     }
   }
   const messageBoundary = compactionMessageBoundary(result)
-  const archive = archiveCompaction(result, { userId, sessionId })
+  const archive = await archiveCompaction(result, {
+    userId,
+    sessionId,
+    compactionArchivePort,
+  })
   if (archive) {
     const summaryIndex = result.outboundMessages.indexOf(result.summaryMessage)
     if (summaryIndex >= 0) {
@@ -759,6 +803,7 @@ export async function compactForModel({
     ...messageBoundary,
     semanticSummary: semanticTelemetry,
     rollingToolResultsCompacted: rollingToolResults.compactedCount,
+    runtimeStrategy: strategy.provenance,
   }
 }
 
@@ -887,6 +932,8 @@ export async function callModelWithContextRecovery({
   sessionId = null,
   consumeBudget,
   activeContextTokens,
+  compactionStrategyResolver = resolveRuntimeContextCompactionStrategy,
+  compactionArchivePort,
   ...modelOptions
 } = {}) {
   if (typeof callModel !== 'function') throw new Error('callModel is required')
@@ -907,6 +954,8 @@ export async function callModelWithContextRecovery({
     sessionId,
     consumeBudget,
     activeContextTokens,
+    compactionStrategyResolver,
+    compactionArchivePort,
   })
   const invoke = () => {
     const requestMessages = ephemeralSuffix.length > 0
@@ -937,6 +986,8 @@ export async function callModelWithContextRecovery({
     sessionId,
     consumeBudget,
     activeContextTokens,
+    compactionStrategyResolver,
+    compactionArchivePort,
   })
   // ★ compactForModel 拒绝压缩时会带一个 error 说明原因(工具调用链断了之类),
   // 而原来**每个调用方都把它丢掉** —— 于是「压缩没生效」和「压缩成功了」
@@ -956,12 +1007,14 @@ export async function callModelWithContextRecovery({
     if (!isContextLengthError?.(error)) throw error
   }
 
+  const runtimeStrategy = prepared.runtimeStrategy
   prepared = {
     messages: trimOldestContext(prepared.messages, 0.1),
     compacted: true,
     forced: true,
     trimmed: true,
     threshold: getAutoCompactionThreshold(contextWindow, activeContextTokens),
+    ...(runtimeStrategy ? { runtimeStrategy } : {}),
   }
   try {
     return { response: await invoke(), messages: prepared.messages, recovery: prepared }

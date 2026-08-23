@@ -6,7 +6,7 @@ import { SettingsGroup, SettingsPanel, SettingsRow } from './SettingsPrimitives.
  * 去掉手写体标题 / 装饰框 / 入场动画，改成一行紧凑状态条 + Provider 列表。
  * 用户要填模型时看这里就知道「当前用什么、配了几个」，细节全在列表和编辑器里。
  */
-export default function SettingsModelsPanel({ diagnostics, onChanged, t }) {
+export default function SettingsModelsPanel({ diagnostics, onChanged, onReady, t }) {
   const model = diagnostics?.model
   const configured = Boolean(model?.configured)
   return (
@@ -21,7 +21,7 @@ export default function SettingsModelsPanel({ diagnostics, onChanged, t }) {
         </SettingsRow>
       </SettingsGroup>
       <SettingsGroup title={t('modelProviders.manage')}>
-        <div className="p-3"><ModelProvidersPanel onChanged={onChanged} /></div>
+        <div className="p-3"><ModelProvidersPanel onChanged={onChanged} onReady={onReady} /></div>
       </SettingsGroup>
     </SettingsPanel>
   )

@@ -343,3 +343,77 @@ test('K1: reconnect tool snapshots are diffed and emit tools/change', async () =
   unregisterByOrigin('mcp', `${userId}:${server.id}`, { userId })
   fs.rmSync(tempDir, { recursive: true, force: true })
 })
+
+test('K1: reconnect rotates MCP registration identity even when the schema is unchanged', async () => {
+  const [
+    { _mcpManagerInternals },
+    {
+      getDynamicTool,
+      getDynamicToolSpecRegistrationId,
+      matchesDynamicToolRegistration,
+      unregisterByOrigin,
+    },
+    { buildCurrentRegisteredToolSpec },
+  ] = await Promise.all([
+    import('../server/mcp/mcpManager.js'),
+    import('../server/services/toolRegistry.js'),
+    import('../server/mcp/mcpToolRegistry.js'),
+  ])
+  const userId = 'tool-generation-user'
+  const server = { id: 'tool-generation-server', name: 'Generation Server', enabled: true }
+  const tool = {
+    name: 'lookup',
+    description: 'stable schema',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+  }
+  const first = { tools: [tool] }
+  const second = { tools: [{ ...tool }] }
+  const fullName = 'mcp__Generation_Server__lookup'
+
+  _mcpManagerInternals.synchronizeToolsForConnection(userId, server, null, first)
+  const firstRegistration = getDynamicTool(fullName, { userId })
+  const firstId = firstRegistration.registrationId
+  const firstSpec = firstRegistration.spec
+  assert.equal(getDynamicToolSpecRegistrationId(firstSpec), firstId)
+
+  const changes = _mcpManagerInternals.synchronizeToolsForConnection(userId, server, first, second)
+  assert.deepEqual(changes, { added: [], removed: [], updated: [fullName] })
+  const secondRegistration = getDynamicTool(fullName, { userId })
+  assert.notEqual(secondRegistration.registrationId, firstId)
+  assert.equal(matchesDynamicToolRegistration(fullName, firstId, { userId }), false)
+  assert.equal(getDynamicToolSpecRegistrationId(firstSpec), firstId)
+
+  const rebuilt = buildCurrentRegisteredToolSpec({ userId, server, tool: second.tools[0], connection: second })
+  assert.ok(rebuilt)
+  assert.equal(getDynamicToolSpecRegistrationId(rebuilt), secondRegistration.registrationId)
+
+  unregisterByOrigin('mcp', `${userId}:${server.id}`, { userId })
+})
+
+test('MCP tools that normalize to the same model-facing name fail closed', async () => {
+  const [{ _mcpManagerInternals }, { getDynamicTool, unregisterByOrigin }] = await Promise.all([
+    import('../server/mcp/mcpManager.js'),
+    import('../server/services/toolRegistry.js'),
+  ])
+  const userId = 'tool-name-collision-user'
+  const server = { id: 'tool-name-collision-server', name: 'Collision Server', enabled: true }
+  const connection = {
+    tools: [
+      { name: 'read-file', inputSchema: { type: 'object' } },
+      { name: 'read file', inputSchema: { type: 'object' } },
+    ],
+  }
+  const fullName = 'mcp__Collision_Server__read_file'
+
+  const changes = _mcpManagerInternals.synchronizeToolsForConnection(
+    userId,
+    server,
+    null,
+    connection,
+  )
+  assert.deepEqual(changes, { added: [], removed: [], updated: [] })
+  assert.equal(connection._mcpToolRegistrations.size, 0)
+  assert.equal(getDynamicTool(fullName, { userId }), null)
+
+  unregisterByOrigin('mcp', `${userId}:${server.id}`, { userId })
+})

@@ -22,6 +22,16 @@ const { handleJobRequest } = await import('../server/routes/jobRoutes.js')
 const { resumeJobDirectoryAuthorization } = await import('../src/lib/jobClient.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
+const resolveTestModelBinding = () => ({
+  providerId: null,
+  modelName: 'job-directory-test-model',
+  configRevision: null,
+  env: {
+    MODEL_BASE_URL: 'http://127.0.0.1:11434/v1',
+    MODEL_NAME: 'job-directory-test-model',
+  },
+})
+
 test.after(() => {
   closeDb()
   fs.rmSync(tempDir, { recursive: true, force: true })
@@ -48,6 +58,7 @@ async function createWaitingDirectoryJob() {
       },
       output: { text: '' },
     }),
+    modelBindingResolver: resolveTestModelBinding,
   })
   const created = await runtime.createJob('Process this PDF', { userId })
   assert.equal(await runtime.runOneTick(), true)
@@ -218,7 +229,11 @@ test('resumed Job reuses its checkpoint marker and continues to write the author
       approvalMode: 'off',
       loadCheckpoint: () => getJobTurnCheckpoint({ jobId: job.id, stepId: step.id, userId }),
       saveCheckpoint: (state) => saveJobTurnCheckpoint({ jobId: job.id, stepId: step.id, userId, state }),
-      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      requestToolApproval: async ({ args, toolCallId }) => ({
+        proceed: true,
+        args,
+        approvalId: `job-directory-resume-approval-${toolCallId}`,
+      }),
       runModel: async ({ messages, tools }) => {
         modelCalls += 1
         if (modelCalls === 1) {
@@ -275,6 +290,7 @@ test('resumed Job reuses its checkpoint marker and continues to write the author
   const runtime = new JobRuntime({
     planner: (prompt) => ({ title: 'PDF output', prompt, steps: [{ id: 'execute', title: 'Write PDF', kind: 'execute', status: 'queued' }] }),
     executeStep,
+    modelBindingResolver: resolveTestModelBinding,
   })
   const job = await runtime.createJob('Process a PDF', { userId })
   assert.equal(await runtime.runOneTick(), true)

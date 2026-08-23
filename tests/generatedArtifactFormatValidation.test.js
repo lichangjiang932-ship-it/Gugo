@@ -6,6 +6,8 @@ import test from 'node:test'
 import JSZip from 'jszip'
 import sharp from 'sharp'
 
+import { buildXlsxArtifactBuffer } from '../server/services/xlsxArtifactFormat.js'
+
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-artifact-format-'))
 process.env.ARTIFACT_DIR = path.join(root, 'artifacts')
 process.env.APP_DATA_DIR = path.join(root, 'data')
@@ -124,6 +126,28 @@ async function rewriteOfficeArtifact(artifact, filename, mutate) {
   return output
 }
 
+const XLSX_IMAGE_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEElEQVQImWOQz38NQQxwFgBTqAjXImzcIAAAAABJRU5ErkJggg==',
+  'base64',
+)
+
+async function xlsxArtifactWithImage() {
+  const fullPath = path.join(root, 'xlsx-with-image.xlsx')
+  const bytes = await buildXlsxArtifactBuffer({
+    sheets: [{ name: 'Data', rows: [['A']] }],
+    preparedImages: [{
+      buffer: XLSX_IMAGE_BYTES,
+      extension: 'png',
+      pixelWidth: 3,
+      pixelHeight: 2,
+      targetIndex: 1,
+      anchor: 'B2',
+    }],
+  })
+  fs.writeFileSync(fullPath, bytes)
+  return { fullPath }
+}
+
 function fakePageTreePdf() {
   const chunks = ['%PDF-1.4\n']
   const offsets = [0]
@@ -192,6 +216,149 @@ test('rejects Office packages with missing content types, broken relationship ID
       (error) => error?.code === 'ARTIFACT_FORMAT_STRUCTURE_INVALID',
     )
   }
+})
+
+test('rejects XLSX packages whose worksheet-to-drawing-to-image relationship chain is not closed', async () => {
+  const source = await xlsxArtifactWithImage()
+  await validateGeneratedArtifactFile({
+    filePath: source.fullPath,
+    filename: 'xlsx-with-image.xlsx',
+    toolName: 'create_xlsx',
+    artifactType: 'xlsx',
+  })
+
+  const scenarios = [
+    ['xlsx-broken-drawing-binding.xlsx', 'ARTIFACT_FORMAT_STRUCTURE_INVALID', async (zip) => {
+      const part = zip.file('xl/worksheets/sheet1.xml')
+      zip.file('xl/worksheets/sheet1.xml', (await part.async('string')).replace('r:id="rId1"', 'r:id="missingDrawing"'))
+    }],
+    ['xlsx-broken-image-binding.xlsx', 'ARTIFACT_FORMAT_STRUCTURE_INVALID', async (zip) => {
+      const part = zip.file('xl/drawings/drawing1.xml')
+      zip.file('xl/drawings/drawing1.xml', (await part.async('string')).replace('r:embed="rId1"', 'r:embed="missingImage"'))
+    }],
+    ['xlsx-wrong-image-relationship-type.xlsx', 'ARTIFACT_FORMAT_ACTIVE_CONTENT_FORBIDDEN', async (zip) => {
+      const part = zip.file('xl/drawings/_rels/drawing1.xml.rels')
+      const xml = await part.async('string')
+      zip.file('xl/drawings/_rels/drawing1.xml.rels', xml.replace('/relationships/image"', '/relationships/hyperlink"'))
+    }],
+    ['xlsx-undecodable-embedded-image.xlsx', 'ARTIFACT_FORMAT_IMAGE_INVALID', async (zip) => {
+      zip.file('xl/media/image1.png', Buffer.from('not a decodable PNG image'))
+    }],
+  ]
+
+  for (const [filename, expectedCode, mutate] of scenarios) {
+    const filePath = await rewriteOfficeArtifact(source, filename, mutate)
+    await assert.rejects(
+      validateGeneratedArtifactFile({ filePath, filename, toolName: 'create_xlsx', artifactType: 'xlsx' }),
+      (error) => error?.code === expectedCode,
+      filename,
+    )
+  }
+})
+
+test('rejects Office active content, external relationships, and executable package surfaces', async () => {
+  const source = await createXlsx({ title: 'Safe-Workbook', sheets: [{ name: 'Data', rows: [['A']] }] })
+  const scenarios = [
+    ['external-relationship.xlsx', async (zip) => {
+      zip.file('xl/worksheets/_rels/sheet1.xml.rels', `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdExternal" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://attacker.invalid/" TargetMode="External"/>
+</Relationships>`)
+    }],
+    ['external-link-part.xlsx', async (zip) => {
+      zip.file('xl/externalLinks/externalLink1.xml', '<externalLink/>')
+    }],
+    ['connections-part.xlsx', async (zip) => {
+      zip.file('xl/connections.xml', '<connections/>')
+    }],
+    ['ole-package.xlsx', async (zip) => {
+      zip.file('xl/embeddings/oleObject1.bin', Buffer.from('ole-package'))
+    }],
+    ['vba-project.xlsx', async (zip) => {
+      zip.file('xl/vbaProject.bin', Buffer.from('vba-project'))
+    }],
+    ['activex.xlsx', async (zip) => {
+      zip.file('xl/activeX/activeX1.xml', '<activeX/>')
+    }],
+    ['custom-ui.xlsx', async (zip) => {
+      zip.file('customUI/customUI.xml', '<customUI/>')
+    }],
+    ['web-extension.xlsx', async (zip) => {
+      zip.file('xl/webextensions/webextension1.xml', '<webextension/>')
+    }],
+    ['formula.xlsx', async (zip) => {
+      const part = zip.file('xl/worksheets/sheet1.xml')
+      const xml = await part.async('string')
+      zip.file(
+        'xl/worksheets/sheet1.xml',
+        xml.replace('</c>', '<f>WEBSERVICE(&quot;https://attacker.invalid&quot;)</f></c>'),
+      )
+    }],
+    ['macro-enabled-main.xlsx', async (zip) => {
+      const part = zip.file('[Content_Types].xml')
+      const xml = await part.async('string')
+      zip.file(
+        '[Content_Types].xml',
+        xml.replace(
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml',
+          'application/vnd.ms-excel.sheet.macroEnabled.main+xml',
+        ),
+      )
+    }],
+  ]
+
+  for (const [filename, mutate] of scenarios) {
+    const filePath = await rewriteOfficeArtifact(source, filename, mutate)
+    await assert.rejects(
+      validateGeneratedArtifactFile({
+        filePath,
+        filename,
+        toolName: 'create_xlsx',
+        artifactType: 'xlsx',
+      }),
+      (error) => error?.code === 'ARTIFACT_FORMAT_ACTIVE_CONTENT_FORBIDDEN',
+      filename,
+    )
+  }
+})
+
+test('validates internal PPTX chart workbooks and rejects active content nested inside them', async () => {
+  const chart = await createPptx({
+    title: 'Chart-Deck',
+    generatedAt: '2026-01-01T00:00:00Z',
+    slides: [{
+      title: 'Metrics',
+      layout: 'chart',
+      chart: {
+        type: 'bar',
+        categories: ['A', 'B'],
+        series: [{ name: 'Series', values: [1, 2] }],
+      },
+    }],
+  })
+  const valid = await validateGeneratedArtifactFile({
+    filePath: chart.fullPath,
+    filename: chart.filename,
+    toolName: 'create_pptx',
+    artifactType: 'pptx',
+  })
+  assert.equal(valid.ok, true)
+
+  const poisoned = await rewriteOfficeArtifact(chart, 'nested-vba-chart.pptx', async (zip) => {
+    const name = 'ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx'
+    const workbook = await JSZip.loadAsync(await zip.file(name).async('nodebuffer'))
+    workbook.file('xl/vbaProject.bin', Buffer.from('nested-vba-project'))
+    zip.file(name, await workbook.generateAsync({ type: 'nodebuffer' }))
+  })
+  await assert.rejects(
+    validateGeneratedArtifactFile({
+      filePath: poisoned,
+      filename: 'nested-vba-chart.pptx',
+      toolName: 'create_pptx',
+      artifactType: 'pptx',
+    }),
+    (error) => error?.code === 'ARTIFACT_FORMAT_ACTIVE_CONTENT_FORBIDDEN',
+  )
 })
 
 test('invalid artifact cleanup cannot delete a file outside the managed artifact directory', () => {

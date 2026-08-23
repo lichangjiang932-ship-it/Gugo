@@ -32,6 +32,66 @@ test('shared plugin manifests fail closed for invalid identity, version, depende
   assert.throws(() => normalizePluginManifest({ ...valid, contributes: [''] }), /non-empty strings/)
 })
 
+test('shared plugin manifests snapshot versioned permissions, config, state, integrity, and dependency contracts', () => {
+  const configSchema = {
+    type: 'object',
+    properties: {
+      endpoint: { type: 'string' },
+    },
+    additionalProperties: false,
+  }
+  const normalized = normalizePluginManifest({
+    id: 'contract-plugin',
+    name: 'Contract plugin',
+    version: '2.3.4',
+    apiVersion: '1.0.0',
+    hostVersion: '>=0.11.0 <1.0.0',
+    requires: ['base-plugin'],
+    dependencyVersions: { 'base-plugin': '^2.0.0' },
+    permissions: ['storage.read', 'network:model-provider'],
+    configSchema,
+    stateSchemaVersion: 3,
+    integrity: `sha256-${'a'.repeat(64)}`,
+  })
+
+  configSchema.properties.endpoint.type = 'number'
+  assert.deepEqual(normalized.permissions, ['storage.read', 'network:model-provider'])
+  assert.equal(normalized.configSchema.properties.endpoint.type, 'string')
+  assert.deepEqual(normalized.dependencyVersions, { 'base-plugin': '^2.0.0' })
+  assert.equal(normalized.stateSchemaVersion, 3)
+  assert.equal(Object.isFrozen(normalized.configSchema), true)
+  assert.equal(Object.isFrozen(normalized.configSchema.properties), true)
+  assert.equal(Object.isFrozen(normalized.dependencyVersions), true)
+})
+
+test('shared plugin manifests reject unsafe or inconsistent contract metadata', () => {
+  const valid = { id: 'contract-plugin', name: 'Contract plugin', version: '1.0.0' }
+  assert.throws(() => normalizePluginManifest({ ...valid, apiVersion: 'v1' }), /apiVersion/)
+  assert.throws(() => normalizePluginManifest({ ...valid, hostVersion: 'latest' }), /hostVersion/)
+  assert.throws(() => normalizePluginManifest({ ...valid, permissions: ['File System'] }), /permissions/)
+  assert.throws(() => normalizePluginManifest({ ...valid, stateSchemaVersion: 0 }), /stateSchemaVersion/)
+  assert.throws(() => normalizePluginManifest({ ...valid, integrity: 'sha256-not-a-digest' }), /integrity/)
+  assert.throws(() => normalizePluginManifest({
+    ...valid,
+    dependencyVersions: { undeclared: '^1.0.0' },
+  }), /undeclared dependency/)
+
+  let getterCalls = 0
+  const configSchema = {}
+  Object.defineProperty(configSchema, 'type', {
+    enumerable: true,
+    get() {
+      getterCalls += 1
+      return 'object'
+    },
+  })
+  assert.throws(
+    () => normalizePluginManifest({ ...valid, configSchema }),
+    (error) => error?.code === 'PLUGIN_MANIFEST_DEFINITION_INVALID',
+  )
+  assert.equal(getterCalls, 0)
+})
+
 test('shared plugin manifests reject own accessors without invoking them', () => {
   const fields = ['id', 'name', 'version', 'requires', 'contributes']
   for (const field of fields) {

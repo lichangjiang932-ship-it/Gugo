@@ -1,10 +1,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
+import { executeWindowsShellRequest } from './windowsShellSessionExecutor.js'
+import {
+  canonicalizeWindowsSessionCwd,
+  filterWindowsPersistentEnvironment,
+} from './windowsShellSessionProtocol.js'
 import {
   INTERRUPT_GRACE_MS,
   MARKER_PREFIX,
-  WINDOWS_PROMPT,
   buildShellPayload,
   commandToken,
   hardKillProcessTree,
@@ -19,6 +24,16 @@ const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000
 const PROTOCOL_BUFFER_LIMIT = 64 * 1024
 
 const sessions = new Map()
+
+function sessionClosedError() {
+  const error = new Error('持久 Shell 会话已关闭')
+  error.code = 'SHELL_SESSION_CLOSED'
+  return error
+}
+
+function assertSessionOpen(record) {
+  if (record.closed) throw sessionClosedError()
+}
 
 function sessionKey(userId, rootPath) {
   return JSON.stringify([userId == null ? '__system__' : String(userId), pathKey(rootPath)])
@@ -71,6 +86,31 @@ function outputBuffers(current) {
   }
 }
 
+function abortedBeforeExecutionResult(record) {
+  return {
+    stdout: '',
+    stderr: '',
+    code: null,
+    signal: null,
+    timedOut: false,
+    killed: false,
+    truncated: false,
+    aborted: true,
+    totalOutputBytes: 0,
+    currentCwd: record.currentCwd,
+    sessionRecovered: process.platform === 'win32'
+      ? Boolean(record.recoveryPending)
+      : record.spawnCount > 1,
+  }
+}
+
+function resolveAbortBeforeExecution(record, request) {
+  record.lastUsedAt = Date.now()
+  request.resolve(abortedBeforeExecutionResult(record))
+  scheduleIdle(record)
+  queueMicrotask(() => { void pump(record) })
+}
+
 async function finishLog(current) {
   if (current.logStream && !current.logStream.destroyed) {
     await new Promise((resolve) => {
@@ -86,10 +126,10 @@ async function finishLog(current) {
       current.logStream.end()
     })
   }
-  if (current.truncated && current.fullOutputPath && !current.outputLogError) {
+  if (current.truncated && current.fullOutputPath && current.outputLogOwned && !current.outputLogError) {
     return current.fullOutputPath
   }
-  if (current.fullOutputPath) {
+  if (current.fullOutputPath && current.outputLogOwned) {
     try { await fs.promises.rm(current.fullOutputPath, { force: true }) } catch { /* best-effort */ }
   }
   return null
@@ -129,6 +169,7 @@ async function settleCurrent(record, extra = {}) {
   record.current = null
   record.lastUsedAt = Date.now()
   current.resolve(result)
+  current.resolveSettled?.()
   scheduleIdle(record)
   queueMicrotask(() => { void pump(record) })
 }
@@ -153,9 +194,7 @@ function beginInterrupt(record, reason) {
 function handleStdout(record, chunk) {
   const current = record.current
   if (!current || current.settling) return
-  const text = process.platform === 'win32'
-    ? String(chunk || '').split(WINDOWS_PROMPT).join('')
-    : String(chunk || '')
+  const text = String(chunk || '')
   current.protocolBuffer += text
   while (true) {
     const newlineAt = current.protocolBuffer.indexOf('\n')
@@ -163,12 +202,12 @@ function handleStdout(record, chunk) {
     const rawLine = current.protocolBuffer.slice(0, newlineAt + 1)
     current.protocolBuffer = current.protocolBuffer.slice(newlineAt + 1)
     const line = rawLine.replace(/\r?\n$/u, '')
-    const marker = line.match(/^__GOGO_END__:(-?\d+):(.*)$/u)
-    if (!marker) {
+    const marker = line.match(/^__GOGO_END__:([a-f0-9]+):(-?\d+):(.*)$/u)
+    if (!marker || marker[1] !== current.commandToken) {
       appendOutput(current, 'stdout', rawLine)
       continue
     }
-    const nextCwd = path.resolve(marker[2] || record.currentCwd)
+    const nextCwd = path.resolve(marker[3] || record.currentCwd)
     if (!sameOrInside(record.rootPath, nextCwd)) {
       record.currentCwd = record.rootPath
       hardKillProcessTree(record.child)
@@ -180,7 +219,7 @@ function handleStdout(record, chunk) {
       return
     }
     record.currentCwd = nextCwd
-    void settleCurrent(record, { code: Number(marker[1]), currentCwd: nextCwd })
+    void settleCurrent(record, { code: Number(marker[2]), currentCwd: nextCwd })
     return
   }
   if (current.protocolBuffer.length > PROTOCOL_BUFFER_LIMIT) {
@@ -216,17 +255,17 @@ function handleChildClose(record, child, generation, code, signal) {
 
 function spawnShell(record) {
   return new Promise((resolve, reject) => {
-    const isWin = process.platform === 'win32'
     record.currentCwd = existingDirectory(record.currentCwd, record.rootPath)
     const child = spawn(
-      isWin ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh',
-      isWin ? ['/d', '/q', '/v:on'] : ['-i'],
+      '/bin/sh',
+      ['-i'],
       {
         cwd: record.currentCwd,
-        env: isWin
-          ? { ...record.baseEnv, PROMPT: WINDOWS_PROMPT }
-          : { ...record.baseEnv, ENV: '', PS1: '', PS2: '' },
-        detached: !isWin,
+        // Re-sanitize at the actual process boundary. record.baseEnv is already
+        // a snapshot, but this prevents later session changes from silently
+        // widening what an interactive shell inherits.
+        env: sanitizeChildEnv({ PS1: '', PS2: '' }, { sourceEnv: record.baseEnv }),
+        detached: true,
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       },
@@ -245,26 +284,23 @@ function spawnShell(record) {
       record.spawnCount += 1
       resolve(child)
     }
-    child.once('spawn', () => {
-      if (!isWin) ready()
-    })
-    if (isWin) {
-      const onReadyOutput = (chunk) => {
-        if (!String(chunk || '').includes(WINDOWS_PROMPT)) return
-        child.stdout?.off('data', onReadyOutput)
-        ready()
-      }
-      child.stdout?.on('data', onReadyOutput)
-    }
+    child.once('spawn', ready)
     child.once('error', (error) => {
       if (record.child === child) record.child = null
       if (!spawned) reject(error)
     })
-    child.once('close', (code, signal) => handleChildClose(record, child, generation, code, signal))
+    child.once('close', (code, signal) => {
+      handleChildClose(record, child, generation, code, signal)
+      if (spawned) return
+      const error = new Error(`持久 Shell 启动前已退出${typeof code === 'number' ? ` (code=${code})` : ''}`)
+      error.code = 'SHELL_SESSION_STARTUP_FAILED'
+      reject(error)
+    })
   })
 }
 
 async function ensureShell(record) {
+  assertSessionOpen(record)
   if (record.child?.pid && record.child.exitCode == null) return record.child
   if (!record.spawnPromise) {
     record.spawnPromise = spawnShell(record).finally(() => { record.spawnPromise = null })
@@ -277,6 +313,7 @@ function openLog(current) {
   try {
     fs.mkdirSync(path.dirname(current.fullOutputPath), { recursive: true })
     current.logStream = fs.createWriteStream(current.fullOutputPath, { flags: 'wx' })
+    current.logStream.once('open', () => { current.outputLogOwned = true })
     current.logStream.on('error', (error) => { current.outputLogError = error })
   } catch (error) {
     current.outputLogError = error
@@ -290,23 +327,82 @@ async function pump(record) {
     scheduleIdle(record)
     return
   }
+  if (request.signal?.aborted) {
+    resolveAbortBeforeExecution(record, request)
+    return
+  }
   record.pumping = true
+  record.preparingRequest = request
+  let resolvePumpDone
+  record.pumpDone = new Promise((resolve) => { resolvePumpDone = resolve })
   clearTimeout(record.idleTimer)
   record.idleTimer = null
   try {
+    if (process.platform === 'win32') {
+      let requestCwd
+      try {
+        requestCwd = canonicalizeWindowsSessionCwd(record.rootPath, record.currentCwd)
+      } catch (error) {
+        if (error?.code === 'SHELL_ROOT_IDENTITY_CHANGED') throw error
+        requestCwd = canonicalizeWindowsSessionCwd(record.rootPath, record.rootPath)
+        record.recoveryPending = true
+      }
+      record.currentCwd = requestCwd
+      const prepared = typeof request.beforeExecute === 'function'
+        ? await request.beforeExecute({
+            cwd: record.currentCwd,
+            rootPath: record.rootPath,
+            userId: record.userId,
+            signal: request.preparationSignal,
+          })
+        : null
+      assertSessionOpen(record)
+      if (request.signal?.aborted) {
+        resolveAbortBeforeExecution(record, request)
+        return
+      }
+      const result = await executeWindowsShellRequest(record, request, prepared)
+      record.lastUsedAt = Date.now()
+      request.resolve(result)
+      scheduleIdle(record)
+      return
+    }
     await ensureShell(record)
+    assertSessionOpen(record)
+    if (request.signal?.aborted) {
+      resolveAbortBeforeExecution(record, request)
+      return
+    }
     setChildReferenced(record.child, true)
     const prepared = typeof request.beforeExecute === 'function'
       ? await request.beforeExecute({
           cwd: record.currentCwd,
           rootPath: record.rootPath,
           userId: record.userId,
+          signal: request.preparationSignal,
         })
       : null
+    assertSessionOpen(record)
+    if (request.signal?.aborted) {
+      resolveAbortBeforeExecution(record, request)
+      return
+    }
     await ensureShell(record)
+    assertSessionOpen(record)
+    if (request.signal?.aborted) {
+      resolveAbortBeforeExecution(record, request)
+      return
+    }
+    const ephemeralEnv = prepared?.ephemeralEnv || {}
+    const token = commandToken()
+    const payload = buildShellPayload(request.command, ephemeralEnv, token)
+    assertSessionOpen(record)
+    let resolveSettled
+    const settledPromise = new Promise((resolve) => { resolveSettled = resolve })
     const current = {
       ...request,
       context: prepared?.context,
+      commandToken: token,
       events: [],
       bufferedBytes: 0,
       totalOutputBytes: 0,
@@ -320,7 +416,10 @@ async function pump(record) {
       hardKillTimer: null,
       abortListener: null,
       logStream: null,
+      outputLogOwned: false,
       outputLogError: null,
+      settledPromise,
+      resolveSettled,
     }
     record.current = current
     openLog(current)
@@ -328,10 +427,14 @@ async function pump(record) {
       current.abortListener = () => beginInterrupt(record, 'abort')
       current.signal.addEventListener('abort', current.abortListener, { once: true })
     }
+    if (current.signal?.aborted) {
+      current.aborted = true
+      await settleCurrent(record)
+      return
+    }
     current.timeoutTimer = setTimeout(() => beginInterrupt(record, 'timeout'), current.timeout)
     current.timeoutTimer.unref?.()
-    if (current.signal?.aborted) beginInterrupt(record, 'abort')
-    const payload = buildShellPayload(current.command, prepared?.ephemeralEnv || {}, commandToken())
+    assertSessionOpen(record)
     record.child.stdin.write(payload, 'utf8', (error) => {
       if (!error || record.current !== current || current.settling) return
       appendOutput(current, 'stderr', error?.message || String(error))
@@ -339,9 +442,13 @@ async function pump(record) {
     })
   } catch (error) {
     request.reject(error)
-    queueMicrotask(() => { void pump(record) })
+    if (!record.closed) queueMicrotask(() => { void pump(record) })
   } finally {
+    if (record.preparingRequest === request) record.preparingRequest = null
     record.pumping = false
+    resolvePumpDone?.()
+    record.pumpDone = null
+    if (!record.closed && !record.current) queueMicrotask(() => { void pump(record) })
   }
 }
 
@@ -351,11 +458,18 @@ function scheduleIdle(record) {
   record.idleTimer = setTimeout(() => {
     record.idleTimer = null
     if (record.current || record.queue.length > 0) return
-    sessions.delete(record.key)
     record.closed = true
-    softCloseProcessTree(record.child)
     const child = record.child
-    setTimeout(() => hardKillProcessTree(child), INTERRUPT_GRACE_MS).unref?.()
+    softCloseProcessTree(child)
+    record.closePromise = (async () => {
+      const closedDuringGrace = await waitForChildCloseWithin(child, INTERRUPT_GRACE_MS)
+      if (!closedDuringGrace) {
+        hardKillProcessTree(child)
+        await waitForChildCloseStrict(child)
+      }
+    })().finally(() => {
+      if (sessions.get(record.key) === record) sessions.delete(record.key)
+    })
   }, record.idleTimeoutMs)
   record.idleTimer.unref?.()
 }
@@ -370,22 +484,30 @@ function createRecord({ userId, rootPath, cwd, env, idleTimeoutMs }) {
     throw new Error('持久 Shell cwd 越出授权根')
   }
   const key = sessionKey(userId, canonicalRoot)
+  const baseEnv = sanitizeChildEnv({}, { sourceEnv: env || process.env })
   return {
     key,
     userId,
     rootPath: canonicalRoot,
     currentCwd: canonicalCwd,
-    baseEnv: { ...(env || process.env) },
+    baseEnv,
+    persistentEnv: process.platform === 'win32'
+      ? filterWindowsPersistentEnvironment(baseEnv)
+      : null,
     idleTimeoutMs: Math.max(10, Number(idleTimeoutMs) || DEFAULT_IDLE_TIMEOUT_MS),
     queue: [],
     child: null,
     current: null,
     spawnPromise: null,
+    preparingRequest: null,
+    pumpDone: null,
     idleTimer: null,
     pumping: false,
     closed: false,
+    closePromise: null,
     generation: 0,
     spawnCount: 0,
+    recoveryPending: false,
     lastUsedAt: Date.now(),
   }
 }
@@ -417,7 +539,8 @@ export function runShellSessionCommand({
   try {
     const key = sessionKey(userId, fs.realpathSync(rootPath))
     record = sessions.get(key)
-    if (!record || record.closed) {
+    if (record?.closed) return Promise.reject(sessionClosedError())
+    if (!record) {
       record = createRecord({ userId, rootPath, cwd, env, idleTimeoutMs })
       sessions.set(record.key, record)
     }
@@ -425,12 +548,17 @@ export function runShellSessionCommand({
     return Promise.reject(error)
   }
   return new Promise((resolve, reject) => {
+    const lifecycleAbortController = new AbortController()
     record.queue.push({
       command,
       timeout: Math.max(1, Number(timeout) || 60_000),
       maxBuffer: Math.max(1, Number(maxBuffer) || 1 * 1024 * 1024),
       fullOutputPath,
       signal,
+      lifecycleAbortController,
+      preparationSignal: signal
+        ? AbortSignal.any([signal, lifecycleAbortController.signal])
+        : lifecycleAbortController.signal,
       onOutput,
       beforeExecute,
       resolve,
@@ -449,58 +577,91 @@ export function getShellSessionCwd({ userId = null, rootPath } = {}) {
   return sessions.get(sessionKey(userId, root))?.currentCwd || null
 }
 
-export function closeShellSession({ userId = null, rootPath } = {}) {
+function waitForChildCloseWithin(child, timeoutMs) {
+  if (!child) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (closed) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.removeListener('close', onClose)
+      resolve(closed)
+    }
+    const onClose = () => finish(true)
+    child.once('close', onClose)
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    timer.unref?.()
+  })
+}
+
+function waitForChildCloseStrict(child) {
+  if (!child) return Promise.resolve()
+  return new Promise((resolve) => child.once('close', resolve))
+}
+
+function closeRecord(record) {
+  if (record.closePromise) return record.closePromise
+  record.closed = true
+  clearTimeout(record.idleTimer)
+  const error = sessionClosedError()
+  for (const request of record.queue.splice(0)) {
+    request.lifecycleAbortController?.abort()
+    request.reject(error)
+  }
+  const preparingPumpDone = record.preparingRequest ? record.pumpDone : null
+  record.preparingRequest?.lifecycleAbortController?.abort()
+  record.preparingRequest?.reject(error)
+  const windowsActiveRequest = process.platform === 'win32'
+    && Boolean(record.current?.internalAbortController)
+  const pumpDone = record.pumpDone
+  record.current?.internalAbortController?.abort()
+  if (windowsActiveRequest) {
+    // The Windows executor owns its process-tree cleanup. Its pump promise is
+    // resolved only after runProcessWithGroup and temporary-file cleanup have
+    // both completed, so do not race it with a second untracked taskkill.
+    record.closePromise = Promise.resolve(pumpDone)
+    return record.closePromise
+  }
+  const child = record.child
+  const currentSettled = record.current?.settledPromise
+  record.current?.lifecycleAbortController?.abort()
+  hardKillProcessTree(child)
+  record.closePromise = Promise.all([
+    Promise.resolve(preparingPumpDone || record.pumpDone),
+    waitForChildCloseStrict(child),
+    Promise.resolve(currentSettled),
+  ])
+  return record.closePromise
+}
+
+export async function closeShellSession({ userId = null, rootPath } = {}) {
   if (typeof rootPath !== 'string' || !path.isAbsolute(rootPath)) return false
   let root
   try { root = fs.realpathSync(rootPath) } catch { return false }
   const key = sessionKey(userId, root)
   const record = sessions.get(key)
   if (!record) return false
-  sessions.delete(key)
-  record.closed = true
-  clearTimeout(record.idleTimer)
-  for (const request of record.queue.splice(0)) request.reject(new Error('持久 Shell 会话已关闭'))
-  hardKillProcessTree(record.child)
+  await closeRecord(record)
+  if (sessions.get(key) === record) sessions.delete(key)
   return true
 }
 
-export function closeAllShellSessions() {
-  const closeWaits = []
-  for (const record of sessions.values()) {
-    record.closed = true
-    clearTimeout(record.idleTimer)
-    for (const request of record.queue.splice(0)) request.reject(new Error('持久 Shell 会话已关闭'))
-    if (record.child) {
-      setChildReferenced(record.child, true)
-      const child = record.child
-      closeWaits.push(new Promise((resolve) => {
-        if (child.exitCode != null || child.signalCode != null) {
-          resolve()
-          return
-        }
-        let settled = false
-        let fallback = null
-        const done = () => {
-          if (settled) return
-          settled = true
-          if (fallback) clearTimeout(fallback)
-          resolve()
-        }
-        child.once('close', done)
-        fallback = setTimeout(done, 2_000)
-      }))
-    }
-    hardKillProcessTree(record.child)
+export async function closeAllShellSessions() {
+  const records = [...sessions.values()]
+  await Promise.all(records.map((record) => {
+    setChildReferenced(record.child, true)
+    return closeRecord(record)
+  }))
+  for (const record of records) {
+    if (sessions.get(record.key) === record) sessions.delete(record.key)
   }
-  sessions.clear()
-  return Promise.all(closeWaits)
 }
 
 export const _testing = {
   DEFAULT_IDLE_TIMEOUT_MS,
   INTERRUPT_GRACE_MS,
   MARKER_PREFIX,
-  WINDOWS_PROMPT,
   buildPayload: buildShellPayload,
   getSessionCount: () => sessions.size,
   getSessionSnapshot: () => [...sessions.values()].map((record) => ({

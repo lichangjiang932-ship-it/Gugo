@@ -97,11 +97,17 @@ export async function getEvolutionReplayRunApi(id) {
   return jsonOk(resp)
 }
 
-export async function evaluateEvolutionReplayApi(replayId) {
+export async function evaluateEvolutionReplayApi(replayId, evaluator = {}) {
+  const evaluatorProviderId = String(evaluator?.providerId || '').trim()
+  const evaluatorModelName = String(evaluator?.modelName || '').trim()
   const resp = await fetch('/api/evolution/evaluations', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ replayId }),
+    body: JSON.stringify({
+      replayId,
+      ...(evaluatorProviderId ? { evaluatorProviderId } : {}),
+      ...(evaluatorModelName ? { evaluatorModelName } : {}),
+    }),
   })
   return jsonOk(resp)
 }
@@ -198,5 +204,181 @@ export async function stopEvolutionCanaryApi(id, reason) {
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ reason }),
   })
+  return jsonOk(resp)
+}
+
+export async function getEvolutionOperationApi(id) {
+  const resp = await fetch(`/api/evolution/operations/${encodeURIComponent(String(id || ''))}`, {
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}
+
+export async function resumeEvolutionOperationApi(id) {
+  const resp = await fetch(
+    `/api/evolution/operations/${encodeURIComponent(String(id || ''))}/resume`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: '{}',
+    },
+  )
+  return jsonOk(resp)
+}
+
+export async function recoverEvolutionOperationNotSentApi(id, input) {
+  const resp = await fetch(
+    `/api/evolution/operations/${encodeURIComponent(String(id || ''))}/recover-not-sent`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(input || {}),
+    },
+  )
+  return jsonOk(resp)
+}
+
+export async function runEvolutionConfigReplayApi(candidateId) {
+  const resp = await fetch('/api/evolution/config-replays', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ candidateId }),
+  })
+  return jsonOk(resp)
+}
+
+export async function evaluateEvolutionConfigReplayApi(replayId) {
+  const resp = await fetch('/api/evolution/config-evaluations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ replayId }),
+  })
+  return jsonOk(resp)
+}
+
+export async function getEvolutionConfigApprovalReviewApi(evaluationId) {
+  const resp = await fetch(
+    `/api/evolution/config-approval-reviews/${encodeURIComponent(String(evaluationId || ''))}`,
+    { headers: authHeaders() },
+  )
+  return jsonOk(resp)
+}
+
+export async function decideEvolutionConfigApprovalApi(input) {
+  const resp = await fetch('/api/evolution/config-approvals', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(input || {}),
+  })
+  return jsonOk(resp)
+}
+
+export async function getEvolutionConfigApplyReviewApi(approvalId) {
+  const resp = await fetch(
+    `/api/evolution/config-apply-reviews/${encodeURIComponent(String(approvalId || ''))}`,
+    { headers: authHeaders() },
+  )
+  return jsonOk(resp)
+}
+
+export async function applyEvolutionConfigCandidateApi(input) {
+  const resp = await fetch('/api/evolution/config-changes/apply', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(input || {}),
+  })
+  return jsonOk(resp)
+}
+
+export async function listEvolutionConfigChangesApi({ limit = 50 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  const resp = await fetch(`/api/evolution/config-changes?${query}`, { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function reverseEvolutionConfigChangeApi(id, operation, input) {
+  const resp = await fetch(
+    `/api/evolution/config-changes/${encodeURIComponent(String(id || ''))}/${operation}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(input || {}),
+    },
+  )
+  return jsonOk(resp)
+}
+
+export async function createEvolutionCanaryGraderPolicyApi(id, input) {
+  const resp = await fetch(
+    `/api/evolution/canaries/${encodeURIComponent(String(id || ''))}/online-grader-policy`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(input || {}),
+    },
+  )
+  return jsonOk(resp)
+}
+
+export async function getEvolutionCanaryOnlineGradesApi(id, { limit = 100 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  const resp = await fetch(
+    `/api/evolution/canaries/${encodeURIComponent(String(id || ''))}/online-grades?${query}`,
+    { headers: authHeaders() },
+  )
+  return jsonOk(resp)
+}
+
+export async function runEvolutionCanaryOnlineGradeApi(id, outcomeId) {
+  const resp = await fetch(
+    `/api/evolution/canaries/${encodeURIComponent(String(id || ''))}/online-grades`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ outcomeId }),
+    },
+  )
+  return jsonOk(resp)
+}
+
+export async function getEvolutionPromotionReviewApi(canaryReleaseId) {
+  const resp = await fetch(
+    `/api/evolution/canaries/${encodeURIComponent(String(canaryReleaseId || ''))}/promotion-review`,
+    { headers: authHeaders() },
+  )
+  return jsonOk(resp)
+}
+
+export async function createEvolutionPromotionApi(input) {
+  const resp = await fetch('/api/evolution/promotions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(input || {}),
+  })
+  return jsonOk(resp)
+}
+
+export async function listEvolutionPromotionsApi({ limit = 50 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  const resp = await fetch(`/api/evolution/promotions?${query}`, { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function getEvolutionPromotionApi(id) {
+  const resp = await fetch(`/api/evolution/promotions/${encodeURIComponent(String(id || ''))}`, {
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}
+
+export async function revokeEvolutionPromotionApi(id, reason) {
+  const resp = await fetch(
+    `/api/evolution/promotions/${encodeURIComponent(String(id || ''))}/revoke`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ reason }),
+    },
+  )
   return jsonOk(resp)
 }

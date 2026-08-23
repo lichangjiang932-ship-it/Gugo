@@ -1,3 +1,14 @@
+import { normalizeOptionalUsageNumber } from '../../../shared/modelUsage.js'
+
+function modelPhaseUsage(result) {
+  const usage = result?.usage
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return usage || null
+  const tokenUsage = { ...usage }
+  delete tokenUsage.costUsd
+  const costUsd = normalizeOptionalUsageNumber(result?.costUsd)
+  return costUsd === null ? tokenUsage : { ...tokenUsage, costUsd }
+}
+
 export async function runModelRequest(s) {
   const i = s.iteration
   const { DIRECTORY_REVIEW_GUARD_MARKER, extractTextToolCalls, filterCurrentDynamicToolSpecs, mergeCompactionRecovery, snapshotDynamicToolSpecRegistrations, sourceHandoffViolation } = s.d
@@ -96,7 +107,7 @@ export async function runModelRequest(s) {
               ? ''
               : i.modelResult?.content || '',
             toolCalls: i.modelResult?.toolCalls || [],
-            usage: i.modelResult?.usage || null,
+            usage: modelPhaseUsage(i.modelResult),
             modelName: i.modelResult?.modelName || null,
           })
           const bufferedTextIsSafe = !s.requiresSourceHandoffProtection
@@ -147,7 +158,7 @@ export async function runModelRequest(s) {
                 ? ''
                 : i.modelResult?.content || '',
               toolCalls: i.modelResult?.toolCalls || [],
-              usage: i.modelResult?.usage || null,
+              usage: modelPhaseUsage(i.modelResult),
               modelName: i.modelResult?.modelName || null,
               budgetExceeded: true,
               budgetReason: error?.message || String(error),

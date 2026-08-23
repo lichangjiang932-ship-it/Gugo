@@ -1,3 +1,5 @@
+import { sanitizeRetiredBrowserAccountFields } from './browserSnapshotSanitizer.js'
+
 export const SESSION_SNAPSHOT_DB_NAME = 'your-model-atelier:session-snapshots'
 export const SESSION_SNAPSHOT_DB_VERSION = 1
 export const SESSION_SNAPSHOT_STORE_NAME = 'snapshots'
@@ -134,24 +136,37 @@ async function readRecord(factory) {
   return record || null
 }
 
+async function rewriteSanitizedRecord(factory, record, payload) {
+  const database = await connectionFor(factory)
+  const transaction = database.transaction(SESSION_SNAPSHOT_STORE_NAME, 'readwrite')
+  const request = transaction.objectStore(SESSION_SNAPSHOT_STORE_NAME).put({
+    ...record,
+    key: SESSION_SNAPSHOT_RECORD_KEY,
+    bytes: payloadBytes(payload),
+    payload,
+  })
+  await Promise.all([requestToPromise(request), transactionToPromise(transaction)])
+}
+
 export async function writePersistedSnapshot(payload, options = {}) {
   let factory
   try {
     factory = resolveFactory(options)
     const now = options?.now || Date.now
     const database = await connectionFor(factory)
+    const sanitizedPayload = sanitizeRetiredBrowserAccountFields(payload).payload
     const updatedAt = Number(now()) || Date.now()
-    const bytes = payloadBytes(payload)
+    const bytes = payloadBytes(sanitizedPayload)
     const transaction = database.transaction(SESSION_SNAPSHOT_STORE_NAME, 'readwrite')
     const request = transaction.objectStore(SESSION_SNAPSHOT_STORE_NAME).put({
       key: SESSION_SNAPSHOT_RECORD_KEY,
       schemaVersion: SESSION_SNAPSHOT_DB_VERSION,
       updatedAt,
       bytes,
-      payload,
+      payload: sanitizedPayload,
     })
     await Promise.all([requestToPromise(request), transactionToPromise(transaction)])
-    return { ok: true, status: 'ok', payload, updatedAt, bytes }
+    return { ok: true, status: 'ok', payload: sanitizedPayload, updatedAt, bytes }
   } catch (error) {
     return failure(error, factory)
   }
@@ -162,11 +177,23 @@ export async function readPersistedSnapshot(options = {}) {
   try {
     factory = resolveFactory(options)
     const record = await readRecord(factory)
+    if (!record) return { ok: true, status: 'ok', payload: null, updatedAt: null }
+    const sanitized = sanitizeRetiredBrowserAccountFields(record.payload)
+    let cleanupError = null
+    if (sanitized.changed) {
+      try {
+        await rewriteSanitizedRecord(factory, record, sanitized.payload)
+      } catch (error) {
+        cleanupError = error
+      }
+    }
     return {
       ok: true,
       status: 'ok',
-      payload: record?.payload ?? null,
-      updatedAt: record?.updatedAt ?? null,
+      payload: sanitized.payload ?? null,
+      updatedAt: record.updatedAt ?? null,
+      ...(sanitized.changed ? { retiredAccountFieldsRemoved: sanitized.removedFields } : {}),
+      ...(cleanupError ? { cleanupNeeded: true, cleanupError } : {}),
     }
   } catch (error) {
     return failure(error, factory)

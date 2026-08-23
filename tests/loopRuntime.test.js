@@ -2,6 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { createToolLoop, runToolLoop } from '../server/services/loop/index.js'
+import { trustedInternalLoopPrincipal } from '../server/services/loop/internalExecutionPrincipal.js'
+import {
+  attachJobBudget,
+  releaseJobBudget,
+} from '../server/utils/jobBudget.js'
 
 const ECHO_TOOL_SPEC = {
   type: 'function',
@@ -19,15 +24,87 @@ const ECHO_TOOL_SPEC = {
 
 function baseOptions(overrides = {}) {
   return {
-    job: { id: 'loop-index-test', userId: null, origin: 'chat', prompt: 'Use echo_tool, then answer.' },
+    job: { id: 'loop-index-test', userId: 'loop-runtime-test-user', origin: 'chat', prompt: 'Use echo_tool, then answer.' },
     step: { id: 'loop-index-step', kind: 'chat' },
     messages: [{ role: 'user', content: 'Use echo_tool, then answer.' }],
     toolSpecs: [ECHO_TOOL_SPEC],
     enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({
+      proceed: true,
+      args,
+      approvalId: 'loop-runtime-approved',
+    }),
     maxIters: 3,
     ...overrides,
   }
 }
+
+test('chat loops ignore the shared id cache and restore budget only from their scoped checkpoint', async () => {
+  const sharedTurnId = `loop-chat-budget-isolation-${Date.now()}`
+  const legacyBudgetOwner = { id: sharedTurnId }
+  const legacyCachedBudget = attachJobBudget(legacyBudgetOwner, {
+    initialModelCalls: 40,
+    maxModelCalls: 100,
+  })
+  const runScopedChat = async ({ userId, sessionId, restoredModelCalls }) => {
+    let checkpoint = {
+      messages: [{ role: 'user', content: 'Answer once.' }],
+      toolCalls: [],
+      artifactIds: [],
+      iterations: 0,
+      budget: {
+        used: 0,
+        maxTotalCalls: 80,
+        elapsed: 0,
+        maxWallMs: 60_000,
+        modelMs: 0,
+        modelCalls: restoredModelCalls,
+        maxModelCalls: 100,
+        modelTokens: 0,
+        maxModelTokens: 0,
+        costUsd: 0,
+        // A pre-fix chat checkpoint could inherit the background Job cost
+        // limit while carrying no trustworthy historical rate evidence.
+        maxCostUsd: 1,
+      },
+    }
+    const result = await runToolLoop(baseOptions({
+      job: {
+        id: sharedTurnId,
+        userId,
+        sessionId,
+        origin: 'chat',
+        prompt: 'Answer once.',
+      },
+      step: { id: sharedTurnId, kind: 'chat' },
+      toolSpecs: [],
+      loadCheckpoint: async () => ({ state: checkpoint }),
+      saveCheckpoint: async (state) => {
+        checkpoint = structuredClone(state)
+        return { state: checkpoint }
+      },
+      runModel: async () => ({ content: 'done', toolCalls: [] }),
+    }))
+    return { result, checkpoint }
+  }
+
+  try {
+    const [alice, bob] = await Promise.all([
+      runScopedChat({ userId: 'budget-alice', sessionId: 'session-alice', restoredModelCalls: 2 }),
+      runScopedChat({ userId: 'budget-bob', sessionId: 'session-bob', restoredModelCalls: 7 }),
+    ])
+
+    assert.equal(alice.result.text, 'done')
+    assert.equal(bob.result.text, 'done')
+    assert.equal(alice.checkpoint.budget.modelCalls, 3)
+    assert.equal(bob.checkpoint.budget.modelCalls, 8)
+    assert.equal(alice.checkpoint.budget.maxCostUsd, 0)
+    assert.equal(bob.checkpoint.budget.maxCostUsd, 0)
+    assert.equal(legacyCachedBudget.snapshot().modelCalls, 40)
+  } finally {
+    releaseJobBudget(legacyBudgetOwner, legacyCachedBudget)
+  }
+})
 
 test('loop/index drives a complete extensible tool loop', async () => {
   const observed = []
@@ -125,7 +202,11 @@ test('pre-tool listeners cannot replace host call identity or forge checkpoint s
     },
     requestToolApproval: async (request) => {
       approvals.push(request)
-      return { proceed: true, args: request.args }
+      return {
+        proceed: true,
+        args: request.args,
+        approvalId: 'loop-runtime-host-call-approved',
+      }
     },
     executeTool: async (request) => {
       executions.push(request)
@@ -232,4 +313,93 @@ test('post-tool observes a normalized executor failure exactly once', async () =
   assert.equal(outcomes.length, 1)
   assert.equal(outcomes[0].ok, false)
   assert.match(outcomes[0].error, /executor exploded/)
+})
+
+async function runOwnerlessHarness(approvalPrincipal) {
+  let modelCalls = 0
+  let approvalRequests = 0
+  let executions = 0
+  let observedToolResult = null
+  const result = await runToolLoop(baseOptions({
+    job: { id: 'ownerless-loop-test', userId: null, origin: 'chat', prompt: 'Use echo_tool.' },
+    approvalPrincipal,
+    requestToolApproval: async ({ args }) => {
+      approvalRequests += 1
+      return { proceed: true, args }
+    },
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      const toolMessage = messages.find((message) => message.role === 'tool' && message.name === 'echo_tool')
+      if (toolMessage) {
+        observedToolResult = JSON.parse(toolMessage.content)
+        return { content: 'ownerless complete', toolCalls: [] }
+      }
+      return {
+        content: '',
+        toolCalls: [{
+          id: 'ownerless-echo',
+          type: 'function',
+          function: { name: 'echo_tool', arguments: '{"text":"ownerless"}' },
+        }],
+      }
+    },
+    executeTool: async () => {
+      executions += 1
+      return { ok: true }
+    },
+  }))
+  return { result, modelCalls, approvalRequests, executions, observedToolResult }
+}
+
+test('ownerless loop execution fails closed before an injected approval callback', async () => {
+  for (const approvalPrincipal of [undefined, { kind: 'gugo.trusted-internal-loop-principal' }]) {
+    const outcome = await runOwnerlessHarness(approvalPrincipal)
+    assert.equal(outcome.result.text, 'ownerless complete')
+    assert.equal(outcome.modelCalls, 2)
+    assert.equal(outcome.approvalRequests, 0)
+    assert.equal(outcome.executions, 0)
+    assert.equal(outcome.observedToolResult?.ok, false)
+    assert.equal(outcome.observedToolResult?.code, 'tool_execution_failed')
+    assert.match(outcome.observedToolResult?.error || '', /无法确认工具调用所属用户/)
+  }
+})
+
+test('opaque internal principal explicitly authorizes an ownerless harness', async () => {
+  const outcome = await runOwnerlessHarness(trustedInternalLoopPrincipal())
+  assert.equal(outcome.result.text, 'ownerless complete')
+  assert.equal(outcome.approvalRequests, 0)
+  assert.equal(outcome.executions, 1)
+  assert.equal(outcome.observedToolResult?.ok, true)
+})
+
+test('internal principal cannot bypass approval for a durable user subject', async () => {
+  let approvalRequests = 0
+  let executions = 0
+  let modelCalls = 0
+  await runToolLoop(baseOptions({
+    approvalPrincipal: trustedInternalLoopPrincipal(),
+    requestToolApproval: async () => {
+      approvalRequests += 1
+      return { proceed: false, reason: 'approval denied for test' }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      return modelCalls === 1
+        ? {
+            content: '',
+            toolCalls: [{
+              id: 'owned-echo',
+              type: 'function',
+              function: { name: 'echo_tool', arguments: '{"text":"owned"}' },
+            }],
+          }
+        : { content: 'owned complete', toolCalls: [] }
+    },
+    executeTool: async () => {
+      executions += 1
+      return { ok: true }
+    },
+  }))
+  assert.equal(approvalRequests, 1)
+  assert.equal(executions, 0)
 })

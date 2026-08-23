@@ -2,9 +2,11 @@ import { useEffect, useRef } from 'react'
 import { writeContextUsageVisible, writeDesktopPetVisible, writeWorkbenchOpen } from '../../lib/chatUiPreferences.js'
 import { deriveDesktopPetStatus } from './desktopPetState.js'
 import { getTurnRun, subscribeTurnRuns } from './turnRunRegistry.js'
+import { normalizeDraftAttachments, readSessionDraft } from '../../lib/chatDrafts.js'
 
 export default function useChatSessionLifecycle({
   abortCtrlRef,
+  attachments,
   desktopPetVisible,
   dispatch,
   input,
@@ -24,8 +26,23 @@ export default function useChatSessionLifecycle({
   const abortSessionIdRef = useRef(state.activeSessionId)
   const newDraftVersionRef = useRef(state.newDraftVersion)
   const previousSessionIdRef = useRef(state.activeSessionId)
+  const activeSessionIdRef = useRef(state.activeSessionId)
   const inputRef = useRef(input)
+  const attachmentsRef = useRef(attachments)
   useEffect(() => { inputRef.current = input }, [input])
+  useEffect(() => { attachmentsRef.current = attachments }, [attachments])
+  useEffect(() => { activeSessionIdRef.current = state.activeSessionId }, [state.activeSessionId])
+  useEffect(() => () => {
+    const sessionId = activeSessionIdRef.current
+    const action = sessionId
+      ? { type: 'SET_SESSION_DRAFT', payload: {
+          sessionId,
+          text: inputRef.current,
+          attachments: normalizeDraftAttachments(attachmentsRef.current),
+        } }
+      : { type: 'SET_DRAFT_INPUT', payload: inputRef.current }
+    dispatch(action)
+  }, [dispatch])
   useEffect(() => writeContextUsageVisible(showContextUsage), [showContextUsage])
   useEffect(() => writeWorkbenchOpen(workbenchOpen), [workbenchOpen])
   useEffect(() => writeDesktopPetVisible(desktopPetVisible), [desktopPetVisible])
@@ -43,8 +60,11 @@ export default function useChatSessionLifecycle({
   }, [setAttachments, setInput, setWorkbenchMessage, state.newDraftVersion])
   useEffect(() => {
     if (!state.draftInput) return undefined
-    const timer = window.setTimeout(() => setInput(state.draftInput), 0)
-    dispatch({ type: 'SET_DRAFT_INPUT', payload: '' })
+    const draftInput = state.draftInput
+    const timer = window.setTimeout(() => {
+      setInput(draftInput)
+      dispatch({ type: 'SET_DRAFT_INPUT', payload: '' })
+    }, 0)
     return () => window.clearTimeout(timer)
   }, [dispatch, setInput, state.draftInput])
   useEffect(() => {
@@ -66,15 +86,27 @@ export default function useChatSessionLifecycle({
     if (preserveAttachmentsForSessionRef?.current === nextId) {
       preserveAttachmentsForSessionRef.current = null
     }
-    if (previousId) dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: previousId, text: inputRef.current } })
-    setInput((state.sessionDrafts || {})[nextId] || '')
-    if (!preserveAttachments) setAttachments([])
+    if (previousId) dispatch({ type: 'SET_SESSION_DRAFT', payload: {
+      sessionId: previousId,
+      text: inputRef.current,
+      attachments: normalizeDraftAttachments(attachmentsRef.current),
+    } })
+    const nextDraft = readSessionDraft((state.sessionDrafts || {})[nextId])
+    setInput(nextDraft.text)
+    if (!preserveAttachments) setAttachments(nextDraft.attachments)
     previousSessionIdRef.current = nextId
   }, [dispatch, preserveAttachmentsForSessionRef, setAttachments, setInput, state.activeSessionId, state.sessionDrafts])
   useEffect(() => {
     if (!state.activeSessionId) return undefined
-    const timer = window.setTimeout(() => dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: state.activeSessionId, text: input } }), 250)
+    const timer = window.setTimeout(() => dispatch({
+      type: 'SET_SESSION_DRAFT',
+      payload: {
+        sessionId: state.activeSessionId,
+        text: input,
+        attachments: normalizeDraftAttachments(attachments),
+      },
+    }), 250)
     return () => window.clearTimeout(timer)
-  }, [dispatch, input, state.activeSessionId])
+  }, [attachments, dispatch, input, state.activeSessionId])
   return { abortSessionIdRef, inputRef }
 }

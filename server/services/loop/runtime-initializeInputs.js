@@ -1,11 +1,16 @@
 export async function initializeInputs(s) {
-  const { DEFAULT_MODEL_PHASE_HEARTBEAT_MS, MANAGED_ATTACHMENT_MARKER, MAX_ITERS, SERVER_TOOL_SPECS, STATUS_INQUIRY_PROMPT, allowedArtifactTools, createArtifactReplacementGuard, createLoopEvents, executeServerTool, findAdjacentDeliveredArtifacts, findContinuableArtifactTargets, findExplicitlyReferencedDeliveredArtifacts, isArtifactRevisionRequest, isExplicitCodeSnippetRequest, latestPriorTurnOutcome, parseSkillIdFromPrompt, requestApproval, resolveArtifactDeliveryTargets, resolveArtifactRevisionMode, selectJobToolSpecs } = s.d
+  const { DEFAULT_MODEL_PHASE_HEARTBEAT_MS, MANAGED_ATTACHMENT_MARKER, MAX_ITERS, SERVER_TOOL_SPECS, STATUS_INQUIRY_PROMPT, allowedArtifactTools, createArtifactReplacementGuard, createLoopEvents, executeServerTool, findAdjacentDeliveredArtifacts, findContinuableArtifactTargets, findExplicitlyReferencedDeliveredArtifacts, isArtifactRevisionRequest, isExplicitCodeSnippetRequest, latestPriorTurnOutcome, parseSkillIdFromPrompt, requestApproval, resolveArtifactDeliveryTargets, resolveArtifactRevisionMode, resolveSideEffectExecutionLedger, selectJobToolSpecs } = s.d
   ;({ job: s.job, step: s.step, messages: s.messages, signal: s.signal } = s.context.input)
-  ;({ run: s.runModel, contextWindow: s.contextWindow, onPhase: s.onModelPhase = null, onDelta: s.onModelDelta = null, onReasoningDelta: s.onReasoningDelta = null } = s.context.model)
+  ;({ run: s.runModel, reconcileRequest: s.reconcileModelRequest = null, compactionArchivePort: s.compactionArchivePort = null, contextWindow: s.contextWindow, onPhase: s.onModelPhase = null, onDelta: s.onModelDelta = null, onReasoningDelta: s.onReasoningDelta = null } = s.context.model)
   ;({ specs: s.toolSpecs, fallbackSpecs: s.fallbackToolSpecs, config: s.toolsConfig = null, resolutionDecision: s.toolResolutionDecision = null, onProgress: s.onProgress = null, onCall: s.onToolCall = null, onStarted: s.onToolStarted = null, onCompleted: s.onToolCompleted = null } = s.context.tools)
   s.executeTool = s.context.tools.execute === undefined
       ? executeServerTool
       : s.context.tools.execute
+  s.sideEffectLedger = resolveSideEffectExecutionLedger({
+    configuredLedger: s.context.tools.sideEffectLedger,
+    usesDefaultExecutor: s.context.tools.execute === undefined,
+    getDefaultLedger: s.d.getSideEffectExecutionLedger,
+  })
   s.enableToolHooks = s.context.tools.enableHooks === undefined
       ? true
       : s.context.tools.enableHooks
@@ -15,7 +20,7 @@ export async function initializeInputs(s) {
   s.toolRetryBaseDelayMs = s.context.tools.retryBaseDelayMs === undefined
       ? 120
       : s.context.tools.retryBaseDelayMs
-  ;({ onPending: s.onApprovalPending = null, onResolved: s.onApprovalResolved = null, sessionId: s.approvalSessionId = null, mode: s.approvalMode = null, context: s.approvalContext = null } = s.context.approvals)
+  ;({ onPending: s.onApprovalPending = null, onResolved: s.onApprovalResolved = null, sessionId: s.approvalSessionId = null, mode: s.approvalMode = null, context: s.approvalContext = null, principal: s.approvalPrincipal = null } = s.context.approvals)
   s.approvalOrigin = s.context.approvals.origin === undefined
       ? 'job'
       : s.context.approvals.origin

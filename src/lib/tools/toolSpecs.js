@@ -15,15 +15,19 @@ function sortToolSpecsByName(specs = []) {
   })
 }
 
-export function resolveToolsForMode(toolsConfig = {}, mode = 'chat') {
+export function resolveToolsForMode(toolsConfig = {}, mode = 'chat', catalog = []) {
   const enabled = Object.entries(toolsConfig || {})
     .filter(([, on]) => !!on)
     .map(([name]) => name)
 
-  // Permission modes constrain execution at the server approval gate. Keep
-  // enabled tools visible in plan mode so the model can distinguish a policy
-  // refusal from a missing capability.
-  if (mode === 'plan') return enabled
+  // Plan visibility is server-owned. The public catalog has already applied
+  // approvalPolicy's canonical allowlist, so the client only intersects names
+  // with that response. With no live catalog, fail closed instead of keeping a
+  // second browser allowlist that can drift from the execution boundary.
+  if (mode === 'plan') {
+    const available = new Set(listToolNames(catalog))
+    return enabled.filter((name) => available.has(name))
+  }
 
   if (mode === 'code') {
     return [...new Set([...enabled, ...CODE_MODE_TOOLS])]

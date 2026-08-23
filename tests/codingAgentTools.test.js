@@ -372,6 +372,7 @@ test('docker_exec does not inherit the hidden bash_exec permission', async () =>
 })
 
 test('TurnEngine exposes run_command to the model, executes Python, and feeds the result back', async () => {
+  const ownerId = createPermissionUser('coding-tool-loop-owner')
   fs.writeFileSync(
     path.join(root, 'loop_python.py'),
     [
@@ -388,7 +389,8 @@ test('TurnEngine exposes run_command to the model, executes Python, and feeds th
   const result = await runToolsLoop({
     job: {
       id: 'coding-tool-loop-job',
-      userId: null,
+      userId: ownerId,
+      sessionId: `coding-tool-loop-session-${process.pid}`,
       origin: 'chat',
       prompt: 'Run the Python script to create loop-output.txt, read it back, and report the verified result.',
     },
@@ -397,7 +399,11 @@ test('TurnEngine exposes run_command to the model, executes Python, and feeds th
     toolSpecs: [getBuiltinSpec('run_command'), getBuiltinSpec('read_file')],
     maxIters: 3,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: async ({ args, toolCallId }) => ({
+      proceed: true,
+      args,
+      approvalId: `coding-tool-loop-approval-${toolCallId}`,
+    }),
     runModel: async ({ messages, tools }) => {
       visible.push(...tools.map((item) => item.function.name))
       const toolMessage = messages.find((message) => message.role === 'tool' && message.name === 'run_command')

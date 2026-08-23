@@ -61,7 +61,7 @@ async function call(route, opts) {
   return res
 }
 
-async function setup() {
+async function setup({ useRealModelBinding = false } = {}) {
   process.env.APP_DATA_DIR = tmpDir()
   const dbMod = await import('../server/db.js')
   dbMod.closeDb()
@@ -71,6 +71,13 @@ async function setup() {
   const routeMod = await import('../server/routes/channelRoutes.js')
   dispatcher.configureChannelDispatcherForTests({
     runSubagent: () => new Promise(() => {}),
+    ...(!useRealModelBinding ? {
+      resolveModelBinding: () => ({
+        providerId: 'channel-route-provider',
+        modelName: 'channel-route-model',
+        configRevision: 1,
+      }),
+    } : {}),
   })
   const loginAs = (email) => {
     const issued = authMod.issueEmailCode({ email })
@@ -89,6 +96,74 @@ async function setup() {
     agents: { a, b, c, other },
   }
 }
+
+test('channelRoutes: ambiguous model names return a code and an explicit Provider UUID succeeds', { concurrency: false }, async () => {
+  const { route, token, userId, agents } = await setup({ useRealModelBinding: true })
+  const {
+    recordModelProviderReadiness,
+    upsertModelProvider,
+  } = await import('../server/services/modelProviderStore.js')
+  const modelName = `channel-ambiguous-model-${Date.now()}`
+  const providers = ['channel-ambiguous-a', 'channel-ambiguous-b'].map((key) => upsertModelProvider({
+    userId,
+    provider: {
+      key,
+      label: key,
+      baseUrl: `https://${key}.example.test/v1`,
+      models: [modelName],
+      defaultModel: modelName,
+      enabled: true,
+    },
+  }))
+  for (const provider of providers) {
+    recordModelProviderReadiness({
+      userId,
+      id: provider.id,
+      readiness: { chat: true, tools: true, agent: true, mode: 'agent' },
+    })
+  }
+  const createRes = await call(route, {
+    method: 'POST',
+    url: '/api/channels',
+    token,
+    body: {
+      name: 'Provider identity channel',
+      kind: 'group',
+      agentIds: [agents.a.id],
+      defaultAgentId: agents.a.id,
+    },
+  })
+  const channel = createRes.json().channel
+
+  const ambiguous = await call(route, {
+    method: 'POST',
+    url: `/api/channels/${channel.id}/messages`,
+    token,
+    body: { content: 'do not choose silently', modelName },
+  })
+  assert.equal(ambiguous.statusCode, 409)
+  assert.equal(ambiguous.json().error.code, 'MODEL_PROVIDER_AMBIGUOUS')
+  assert.equal(ambiguous.json().error.action, 'choose_agent_provider')
+  assert.equal(ambiguous.json().error.modelName, modelName)
+  const afterRejected = await call(route, {
+    url: `/api/channels/${channel.id}/messages`,
+    token,
+  })
+  assert.deepEqual(afterRejected.json().messages, [])
+
+  const explicit = await call(route, {
+    method: 'POST',
+    url: `/api/channels/${channel.id}/messages`,
+    token,
+    body: {
+      content: 'use the selected provider',
+      modelName,
+      modelProviderId: providers[1].id,
+    },
+  })
+  assert.equal(explicit.statusCode, 200)
+  assert.equal(explicit.json().jobIds.length, 1)
+})
 
 test('channelRoutes: CRUD routes return 200', { concurrency: false }, async () => {
   const { route, token, agents } = await setup()

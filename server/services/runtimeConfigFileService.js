@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  readRuntimeConfigFile,
+  readRuntimeConfigFileSnapshot,
   resolveRuntimeConfigPaths,
 } from '../utils/runtimeEnv.js'
 
@@ -63,14 +63,12 @@ export function readBrowserRuntimeConfig({ cwd = process.cwd(), env = process.en
     )
   }
 
-  // Reuse the runtime loader's shape, size and env-key validation, then inspect
-  // every remaining metadata branch before returning the original document.
-  // Unknown metadata is preserved, but secret-bearing keys are never exposed.
-  readRuntimeConfigFile(filePath)
-  const content = fs.readFileSync(filePath, 'utf8')
-  assertBrowserSafeConfig(JSON.parse(content))
+  // Validate and parse the exact bytes returned to the browser. Unknown
+  // metadata is preserved, but secret-bearing keys are never exposed.
+  const snapshot = readRuntimeConfigFileSnapshot(filePath)
+  assertBrowserSafeConfig(snapshot.document)
   return {
     filename: path.basename(filePath),
-    content,
+    content: snapshot.content.toString('utf8'),
   }
 }

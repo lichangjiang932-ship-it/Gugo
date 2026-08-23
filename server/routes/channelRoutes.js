@@ -12,6 +12,10 @@ import {
   updateChannel,
 } from '../services/channelStore.js'
 import { dispatchUserMessage } from '../services/channelDispatcher.js'
+import {
+  describeModelReadinessFailure,
+  isModelReadinessError,
+} from '../services/modelReadinessService.js'
 import { createStreamTicket, consumeStreamTicket } from '../utils/streamTicket.js'
 
 function unauthorized(res) {
@@ -195,6 +199,9 @@ export async function handleChannelRequest(req, res) {
             channelId,
             userId,
             text: body.content ?? body.body ?? '',
+            modelName: body.modelName ?? body.model_name ?? null,
+            modelProviderId: body.modelProviderId ?? body.model_provider_id ?? null,
+            modelConfigRevision: body.modelConfigRevision ?? body.model_config_revision ?? null,
           })
           return sendJson(res, 200, { ok: true, messageId: result.messageId, jobIds: result.jobIds })
         }
@@ -203,6 +210,16 @@ export async function handleChannelRequest(req, res) {
 
     return sendJson(res, 404, { ok: false, error: 'not found' })
   } catch (err) {
-    return sendJson(res, statusForError(err), { ok: false, error: err?.message || String(err) })
+    if (isModelReadinessError(err)) {
+      const failure = describeModelReadinessFailure(err)
+      return sendJson(res, failure.statusCode, {
+        ok: false,
+        error: failure.error,
+      })
+    }
+    return sendJson(res, statusForError(err), {
+      ok: false,
+      error: err?.message || String(err),
+    })
   }
 }

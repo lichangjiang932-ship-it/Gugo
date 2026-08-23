@@ -38,6 +38,8 @@ export async function startServerTurn({
   displayContent,
   attachments,
   modelName,
+  modelProviderId,
+  modelMode = 'agent',
   turnId,
   history,
   agentId,
@@ -59,6 +61,8 @@ export async function startServerTurn({
       displayContent,
       attachments: Array.isArray(attachments) ? attachments : [],
       modelName,
+      ...(modelProviderId ? { modelProviderId } : {}),
+      modelMode: modelMode === 'chat_only' ? 'chat_only' : 'agent',
       turnId,
       history,
       agentId: normalizedAgentId,
@@ -120,11 +124,24 @@ export async function steerServerTurn({
   return (await parseResponse(response)).steering
 }
 
-export async function resumeServerTurnRequest({ sessionId, turnId, resolution, signal, fetchImpl = fetch }) {
+export async function resumeServerTurnRequest({
+  sessionId,
+  turnId,
+  resolution,
+  retryFailed = false,
+  retryRecovery = false,
+  signal,
+  fetchImpl = fetch,
+}) {
   const response = await fetchImpl(`/api/turns/${encodeURIComponent(turnId)}/resume`, {
     method: 'POST',
     headers: headers(true),
-    body: JSON.stringify({ sessionId, ...(resolution ? { resolution } : {}) }),
+    body: JSON.stringify({
+      sessionId,
+      ...(resolution ? { resolution } : {}),
+      ...(retryFailed ? { retryFailed: true } : {}),
+      ...(retryRecovery ? { retryRecovery: true } : {}),
+    }),
     signal,
   })
   return (await parseResponse(response)).turn

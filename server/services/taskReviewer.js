@@ -82,11 +82,13 @@ function buildReviewerMessages({ job, step, text, evidence, artifactIds, workerM
 export function createTaskReviewer({
   reviewerModelName = process.env.JOB_REVIEWER_MODEL_NAME,
   requireIndependent = enabled(process.env.JOB_REQUIRE_INDEPENDENT_REVIEWER),
-  runReviewerModel = ({ messages, signal, userId, modelName }) => callBackgroundModel({
+  runReviewerModel = ({ messages, signal, userId, modelName, modelEnv }) => callBackgroundModel({
     messages,
     signal,
-    userId,
+    userId: modelEnv ? null : userId,
+    usageOwnerId: userId,
     modelName,
+    ...(modelEnv ? { env: modelEnv } : {}),
   }),
   fallbackEvaluator = evaluateTaskAcceptance,
 } = {}) {
@@ -133,6 +135,7 @@ export function createTaskReviewer({
         userId: input.job?.userId,
         signal: input.signal,
         modelName: configuredReviewerModel,
+        modelEnv: input.modelEnv || null,
         messages: buildReviewerMessages({
           ...input,
           workerModel,

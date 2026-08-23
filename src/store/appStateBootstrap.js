@@ -17,7 +17,7 @@ export function needsToolsConfigSchemaMigration(saved) {
 
 export function createInitialState() {
   return {
-    user: { name: null, email: null, avatar: null, plan: null, joinedAt: null, totalCalls: 0 },
+    user: { name: null, email: null, avatar: null, joinedAt: null, totalCalls: 0 },
     isLoggedIn: false,
     authMode: 'unknown',
     authReady: false,

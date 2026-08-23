@@ -1,9 +1,25 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-import { callBackgroundModelWithTools, getRuntimeEnv } from '../adapters/modelProxy.js'
+import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 import { getDb } from '../db.js'
 import { getEvolutionCandidate } from './evolutionCandidateService.js'
 import { buildEvolutionDataset, sanitizeEvolutionText } from './evolutionDatasetService.js'
+import {
+  assertEvolutionModelIdentityCurrent,
+  callEvolutionBackgroundModel,
+  resolveEvolutionModelIdentity,
+} from './evolutionModelRuntime.js'
+import {
+  assertEvolutionOperationRunnable,
+  attachEvolutionOperationError,
+  blockEvolutionOperation,
+  checkpointEvolutionOperation,
+  claimEvolutionOperation,
+  commitEvolutionOperation,
+  failEvolutionOperation,
+  openEvolutionOperation,
+} from './evolutionOperationService.js'
+import { holdEvolutionOperationLease } from './evolutionOperationLeaseRuntime.js'
 
 const SHA256_RE = /^[a-f0-9]{64}$/
 const MAX_CASES = 10
@@ -77,7 +93,9 @@ function runView(row, { includeDetails = false } = {}) {
     candidateId: row.candidate_id,
     baselineSha256: row.baseline_sha256,
     candidateSha256: row.candidate_sha256,
+    providerId: row.model_provider_id || null,
     modelName: row.model_name,
+    ...(row.model_config_revision != null ? { configRevision: row.model_config_revision } : {}),
     parameters: { temperature: row.temperature, maxTokens: row.max_tokens },
     isolationMode: row.isolation_mode,
     runFingerprint: row.run_fingerprint,
@@ -87,6 +105,20 @@ function runView(row, { includeDetails = false } = {}) {
       results: parseJson(row.results_json, []),
     } : {}),
   }
+}
+
+export function evolutionReplayFingerprintResults(results = []) {
+  const stripCost = (value) => {
+    if (!value || typeof value !== 'object') return value
+    const result = { ...value }
+    delete result.costUsd
+    return result
+  }
+  return (Array.isArray(results) ? results : []).map((result) => ({
+    ...result,
+    ...(Object.hasOwn(result || {}, 'baseline') ? { baseline: stripCost(result.baseline) } : {}),
+    ...(Object.hasOwn(result || {}, 'candidate') ? { candidate: stripCost(result.candidate) } : {}),
+  }))
 }
 
 function normalizeSuiteCases(casesValue, dataset) {
@@ -213,30 +245,35 @@ function normalizedUsage(value) {
   return usage
 }
 
-async function replayOne({ runModel, userId, modelName, parameters, systemContent, replayCase, signal }) {
+async function replayOne({ runModel, userId, providerId, runtimeProviderId, runtimeEnv, configRevision, modelName, parameters, systemContent, replayCase, signal }) {
   const startedAt = Date.now()
   const response = await runModel({
     messages: replayMessages(systemContent, replayCase),
     userId,
+    providerId,
+    runtimeProviderId,
+    runtimeEnv,
+    configRevision,
     modelName,
     parameters,
     signal,
   })
   const actualModel = String(response?.modelName || '').trim()
-  if (!actualModel || actualModel !== modelName) {
-    throw serviceError('EVOLUTION_REPLAY_MODEL_MISMATCH', 'replay did not use the fixed model', 502)
+  const actualProvider = String(response?.providerId || '').trim()
+  if (actualProvider !== providerId || actualModel !== modelName) {
+    throw serviceError('EVOLUTION_REPLAY_MODEL_MISMATCH', 'replay did not use the fixed Provider and model', 502)
   }
   const raw = String(response?.content ?? response ?? '').trim()
   if (!raw || raw.length > 12_000) {
     throw serviceError('EVOLUTION_REPLAY_OUTPUT_INVALID', 'replay output is empty or too large', 502)
   }
   const usage = normalizedUsage(response?.usage)
-  const cost = Number(response?.costUsd)
+  const cost = normalizeOptionalUsageNumber(response?.costUsd)
   return {
     output: sanitizeEvolutionText(raw),
     durationMs: Math.max(0, Date.now() - startedAt),
     usage,
-    costUsd: usage && Number.isFinite(cost) && cost >= 0 ? cost : null,
+    costUsd: usage && cost !== null ? cost : null,
   }
 }
 
@@ -245,18 +282,23 @@ export async function runEvolutionReplay({
   suiteId,
   candidateId,
   baselineContent,
+  providerId,
   modelName,
   parameters: parametersValue,
+  idempotencyKey,
+  operationId,
   now = Date.now(),
   signal,
-  runModel = ({ messages, userId: owner, modelName: fixedModel, parameters, signal: abortSignal }) => (
-    callBackgroundModelWithTools({
+  runModel = ({ messages, userId: owner, providerId: fixedProvider, runtimeProviderId, runtimeEnv, modelName: fixedModel, parameters, signal: abortSignal }) => (
+    callEvolutionBackgroundModel({
       messages,
       userId: owner,
+      providerId: fixedProvider,
+      runtimeProviderId,
       modelName: fixedModel,
       signal: abortSignal,
-      env: {
-        ...getRuntimeEnv(),
+      runtimeEnv,
+      envOverrides: {
         MODEL_STRICT_SELECTION: '1',
         MODEL_FAILOVER_CROSS_MODEL: '0',
         MODEL_TEMPERATURE: String(parameters.temperature),
@@ -281,49 +323,202 @@ export async function runEvolutionReplay({
     'EVOLUTION_REPLAY_BASELINE_INVALID',
     'baselineContent',
   )
+  const fixedProvider = inputText(providerId, 512, 'EVOLUTION_REPLAY_PROVIDER_INVALID', 'providerId')
   const fixedModel = inputText(modelName, 512, 'EVOLUTION_REPLAY_MODEL_INVALID', 'modelName')
+  const modelIdentity = resolveEvolutionModelIdentity({
+    userId: owner,
+    providerId: fixedProvider,
+    modelName: fixedModel,
+  })
+  const durableProvider = modelIdentity.providerId
   const parameters = replayParameters(parametersValue)
   const createdAt = timestamp(now)
-  const results = []
-  try {
-    for (const replayCase of suite.cases) {
-      const baselineResult = await replayOne({
-        runModel, userId: owner, modelName: fixedModel, parameters,
-        systemContent: baseline, replayCase, signal,
-      })
-      const candidateResult = await replayOne({
-        runModel, userId: owner, modelName: fixedModel, parameters,
-        systemContent: candidate.content, replayCase, signal,
-      })
-      results.push({ caseId: replayCase.id, baseline: baselineResult, candidate: candidateResult })
-    }
-  } catch (error) {
-    if (error?.name === 'AbortError' || error?.code) throw error
-    throw serviceError('EVOLUTION_REPLAY_MODEL_FAILED', 'isolated replay model call failed', 502)
+  let operation = openEvolutionOperation({
+    userId: owner,
+    kind: 'replay',
+    idempotencyKey,
+    operationId,
+    request: {
+      suiteId: suite.id,
+      suiteFingerprint: suite.suiteFingerprint,
+      candidateId: candidate.id,
+      candidateSha256: candidate.contentSha256,
+      baselineContent: baseline,
+      providerId: durableProvider,
+      modelName: fixedModel,
+      configRevision: modelIdentity.configRevision,
+      parameters,
+    },
+    now: createdAt,
+  })
+  if (operation.state === 'completed') {
+    return getEvolutionReplayRun({ userId: owner, id: operation.result.id })
   }
+  assertEvolutionOperationRunnable(operation)
+
+  const storedResults = Array.isArray(operation.checkpoint?.results)
+    ? operation.checkpoint.results
+    : []
+  const results = storedResults.map((result) => ({ ...result }))
+  let resultId = operation.checkpoint?.resultId || randomUUID()
+  for (let caseIndex = 0; caseIndex < suite.cases.length; caseIndex += 1) {
+    const replayCase = suite.cases[caseIndex]
+    let result = results[caseIndex]
+    if (result && result.caseId !== replayCase.id) {
+      throw serviceError('EVOLUTION_REPLAY_CHECKPOINT_INVALID', 'replay checkpoint case identity changed', 409)
+    }
+    if (!result) {
+      result = { caseId: replayCase.id }
+      results[caseIndex] = result
+    }
+
+    for (const side of ['baseline', 'candidate']) {
+      if (result[side]) continue
+      const modelClaim = claimEvolutionOperation({
+        userId: owner,
+        id: operation.id,
+        stage: `replay:case:${caseIndex}:${side}:model_call`,
+      })
+      const modelLease = holdEvolutionOperationLease({
+        userId: owner,
+        id: operation.id,
+        workerToken: modelClaim.workerToken,
+        leaseOwnerId: modelClaim.leaseOwnerId,
+        leaseExpiresAt: modelClaim.leaseExpiresAt,
+        signal,
+      })
+      let sideResult
+      try {
+        sideResult = await replayOne({
+          runModel,
+          userId: owner,
+          providerId: durableProvider,
+          runtimeProviderId: modelIdentity.runtimeProviderId,
+          runtimeEnv: modelIdentity.runtimeEnv,
+          configRevision: modelIdentity.configRevision,
+          modelName: fixedModel,
+          parameters,
+          systemContent: side === 'baseline' ? baseline : candidate.content,
+          replayCase,
+          signal: modelLease.signal,
+        })
+      } catch (error) {
+        const failure = error?.name === 'AbortError' || error?.code
+          ? error
+          : serviceError('EVOLUTION_REPLAY_MODEL_FAILED', 'isolated replay model call failed', 502)
+        try {
+          blockEvolutionOperation({
+            userId: owner,
+            id: operation.id,
+            workerToken: modelClaim.workerToken,
+            leaseOwnerId: modelClaim.leaseOwnerId,
+            error: failure,
+          })
+        } finally {
+          modelLease.stop()
+        }
+        throw attachEvolutionOperationError(failure, operation.id)
+      }
+      try {
+        result[side] = sideResult
+        const nextSide = side === 'baseline' ? 'candidate' : 'baseline'
+        const nextCaseIndex = side === 'baseline' ? caseIndex : caseIndex + 1
+        operation = checkpointEvolutionOperation({
+          userId: owner,
+          id: operation.id,
+          workerToken: modelClaim.workerToken,
+          leaseOwnerId: modelClaim.leaseOwnerId,
+          stage: `replay:case:${caseIndex}:${side}:checkpointed`,
+          checkpoint: {
+            resultId,
+            results,
+            nextCaseIndex,
+            nextSide,
+            progress: {
+              completedCalls: (caseIndex * 2) + (side === 'baseline' ? 1 : 2),
+              totalCalls: suite.cases.length * 2,
+              nextCaseIndex,
+              nextSide,
+            },
+          },
+        })
+      } catch (error) {
+        try {
+          if (error?.code !== 'EVOLUTION_OPERATION_IN_PROGRESS') {
+            failEvolutionOperation({
+              userId: owner,
+              id: operation.id,
+              workerToken: modelClaim.workerToken,
+              leaseOwnerId: modelClaim.leaseOwnerId,
+              error,
+            })
+          }
+        } finally {
+          modelLease.stop()
+        }
+        throw attachEvolutionOperationError(error, operation.id)
+      }
+      modelLease.stop()
+    }
+  }
+
   const baselineSha256 = sha256(baseline)
   const runFingerprint = sha256({
     suiteFingerprint: suite.suiteFingerprint,
     candidateSha256: candidate.contentSha256,
     baselineSha256,
+    providerId: durableProvider,
+    configRevision: modelIdentity.configRevision,
     modelName: fixedModel,
     parameters,
     isolationMode: 'model_no_tools',
-    results,
+    results: evolutionReplayFingerprintResults(results),
   })
-  const id = randomUUID()
-  getDb().prepare(`
-    INSERT INTO evolution_replay_runs (
-      id, user_id, suite_id, candidate_id, baseline_content, baseline_sha256,
-      candidate_sha256, model_name, temperature, max_tokens, isolation_mode,
-      results_json, run_fingerprint, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'model_no_tools', ?, ?, ?)
-  `).run(
-    id, owner, suite.id, candidate.id, baseline, baselineSha256,
-    candidate.contentSha256, fixedModel, parameters.temperature, parameters.maxTokens,
-    JSON.stringify(results), runFingerprint, createdAt,
-  )
-  return getEvolutionReplayRun({ userId: owner, id })
+  const finalClaim = claimEvolutionOperation({
+    userId: owner,
+    id: operation.id,
+    stage: 'replay:finalizing',
+  })
+  try {
+    assertEvolutionModelIdentityCurrent({ userId: owner, identity: modelIdentity })
+    commitEvolutionOperation({
+      userId: owner,
+      id: operation.id,
+      workerToken: finalClaim.workerToken,
+      leaseOwnerId: finalClaim.leaseOwnerId,
+      resultType: 'replay',
+      resultId,
+      checkpoint: operation.checkpoint,
+      writeResult: (db) => db.prepare(`
+        INSERT INTO evolution_replay_runs (
+          id, user_id, suite_id, candidate_id, baseline_content, baseline_sha256,
+          candidate_sha256, model_provider_id, model_name, model_config_revision, temperature, max_tokens, isolation_mode,
+          results_json, run_fingerprint, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'model_no_tools', ?, ?, ?)
+      `).run(
+        resultId, owner, suite.id, candidate.id, baseline, baselineSha256,
+        candidate.contentSha256, durableProvider, fixedModel, modelIdentity.configRevision,
+        parameters.temperature, parameters.maxTokens,
+        JSON.stringify(results), runFingerprint, createdAt,
+      ),
+    })
+  } catch (error) {
+    if (error?.code !== 'EVOLUTION_OPERATION_IN_PROGRESS') {
+      try {
+        failEvolutionOperation({
+          userId: owner,
+          id: operation.id,
+          workerToken: finalClaim.workerToken,
+          leaseOwnerId: finalClaim.leaseOwnerId,
+          error,
+        })
+      } catch {
+        // A fenced completion already exposes the authoritative operation state.
+      }
+    }
+    throw attachEvolutionOperationError(error, operation.id)
+  }
+  return getEvolutionReplayRun({ userId: owner, id: resultId })
 }
 
 export function getEvolutionReplayRun({ userId, id } = {}) {

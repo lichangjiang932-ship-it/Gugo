@@ -76,12 +76,26 @@ export function successfulReadFileInMessages(messages = []) {
 /**
  * 执行单个工具调用 → 落盘 artifact → appendJobArtifact → 返回给模型的简短结果。
  */
-export function buildSubagentRequest(args = {}, inheritedModelName = '', inheritedSkillIds = [], inheritedSkillDefinitions = []) {
+export function buildSubagentRequest(
+  args = {},
+  inheritedModelName = '',
+  inheritedSkillIds = [],
+  inheritedSkillDefinitions = [],
+  inheritedModelProviderId = '',
+  inheritedModelConfigRevision = null,
+) {
   const rawRequest = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
   const request = { ...rawRequest }
   delete request.skillDefinitions
   delete request.skill_definitions
   const modelName = String(request.modelName || request.model_name || inheritedModelName || '').trim()
+  const modelProviderId = String(
+    request.modelProviderId || request.model_provider_id || inheritedModelProviderId || '',
+  ).trim()
+  const rawConfigRevision = request.modelConfigRevision
+    ?? request.model_config_revision
+    ?? inheritedModelConfigRevision
+  const modelConfigRevision = Number(rawConfigRevision)
   const explicitSkillIds = request.skillIds || request.skill_ids
   const skillIds = [...new Set((Array.isArray(explicitSkillIds) ? explicitSkillIds : inheritedSkillIds)
     .map((value) => String(value || '').trim())
@@ -89,6 +103,10 @@ export function buildSubagentRequest(args = {}, inheritedModelName = '', inherit
   return {
     ...request,
     ...(modelName ? { modelName } : {}),
+    ...(modelProviderId ? { modelProviderId } : {}),
+    ...(Number.isInteger(modelConfigRevision) && modelConfigRevision > 0
+      ? { modelConfigRevision }
+      : {}),
     ...(skillIds.length ? { skillIds } : {}),
     ...(Array.isArray(inheritedSkillDefinitions) && inheritedSkillDefinitions.length
       ? { skillDefinitions: inheritedSkillDefinitions }

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { runToolsLoop } from '../server/services/jobTools.js'
+import { trustedInternalLoopPrincipal } from '../server/services/loop/internalExecutionPrincipal.js'
 import { userCancellationError } from '../server/utils/toolCancellation.js'
+
+const INTERNAL_APPROVAL_PRINCIPAL = trustedInternalLoopPrincipal()
 
 function toolModel(name, args) {
   let calls = 0
@@ -24,6 +27,7 @@ function toolModel(name, args) {
 function runWithTool({ signal, command, executeTool }) {
   return runToolsLoop({
     job: { id: `interrupt-${command}`, userId: null, prompt: command },
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     step: { id: `step-${command}`, kind: 'execute' },
     messages: [{ role: 'user', content: command }],
     signal,

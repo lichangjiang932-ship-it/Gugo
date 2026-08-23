@@ -168,13 +168,29 @@ function flattenEffects(value, target, state = null, depth = 0) {
 }
 
 function once(disposer) {
-  let called = false
-  let result
+  let completed = false
+  let completedResult
+  let pending = null
   return () => {
-    if (called) return result
-    called = true
-    result = disposer()
-    return result
+    if (completed) return completedResult
+    if (pending) return pending
+    const result = disposer()
+    if (result === null || (typeof result !== 'object' && typeof result !== 'function')) {
+      completed = true
+      completedResult = result
+      return result
+    }
+    pending = (async () => {
+      try {
+        const settled = await result
+        completed = true
+        completedResult = settled
+        return settled
+      } finally {
+        pending = null
+      }
+    })()
+    return pending
   }
 }
 
@@ -232,15 +248,16 @@ export function createEffectTracker() {
       if (disposed.has(effect)) continue
       try {
         await effect()
+        disposed.add(effect)
       } catch (error) {
         errors.push(error)
-      } finally {
-        disposed.add(effect)
       }
     }
-    effects.length = 0
-    tracked.clear()
-    disposed.clear()
+    if (errors.length === 0) {
+      effects.length = 0
+      tracked.clear()
+      disposed.clear()
+    }
     return errors
   }
 
@@ -248,7 +265,7 @@ export function createEffectTracker() {
     track,
     markDisposed,
     disposeAll,
-    get size() { return effects.length },
+    get size() { return effects.length - disposed.size },
     get closed() { return !accepting },
   })
 }

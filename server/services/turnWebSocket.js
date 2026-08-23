@@ -1,6 +1,12 @@
 import { WebSocketServer } from 'ws'
 import { getSessionByToken } from '../db.js'
-import { listTurnEvents, subscribeTurnEvents, turnEventForClient } from './turnEventStore.js'
+import { describeTurnEngineHostUnavailableError } from './turnEngineHostErrorContract.js'
+import {
+  listTurnEvents,
+  subscribeTurnEvents,
+  TurnEventSequenceGapError,
+  turnEventForClient,
+} from './turnEventStore.js'
 import { subscribeTurnActivities } from './turnActivityBus.js'
 import { decideApprovalRequest } from './approvalDecisionService.js'
 import { logWarn } from '../utils/logger.js'
@@ -8,13 +14,24 @@ import {
   createTurnWebSocketFrame,
   validateTurnWebSocketClientFrame,
 } from '../../shared/turnWebSocketProtocol.js'
+import {
+  TURN_EVENT_TRANSPORT_TYPE,
+  canAdvanceTurnEventCursor,
+  createTurnEventTransportEnvelope,
+} from '../../shared/turnEvents.js'
+import { isHttpServerDraining } from '../core/httpServerDrain.js'
+import { runtimeNotReadyMessage } from '../core/runtimeReadiness.js'
 
 const VALID_DECISIONS = new Set(['approve', 'deny', 'edit'])
 const CROSS_PROCESS_POLL_MS = 1_000
+const TURN_EVENT_PAGE_LIMIT = 2_000
 
 function send(socket, value) {
   if (socket.readyState === socket.OPEN) {
-    socket.send(JSON.stringify(createTurnWebSocketFrame(value.type, value)))
+    const frame = value.type === TURN_EVENT_TRANSPORT_TYPE
+      ? createTurnEventTransportEnvelope(value.event)
+      : createTurnWebSocketFrame(value.type, value)
+    socket.send(JSON.stringify(frame))
   }
 }
 
@@ -53,7 +70,40 @@ export function parseTurnWebSocketClientFrame(raw, { userId, logSink } = {}) {
   return validation
 }
 
-export function pollTurnSubscriptions({
+async function drainTurnSubscription({
+  subscription,
+  userId,
+  deliver,
+  listEvents,
+  isActive = () => subscription.active !== false,
+}) {
+  let events
+  do {
+    if (!isActive()) return
+    try {
+      events = await listEvents({
+        userId,
+        sessionId: subscription.sessionId,
+        turnId: subscription.turnId,
+        after: subscription.cursor,
+        limit: TURN_EVENT_PAGE_LIMIT,
+      })
+    } catch (error) {
+      if (!isActive()) return
+      throw error
+    }
+    if (!isActive()) return
+    if (!Array.isArray(events)) {
+      throw new TypeError('Turn event source must return an array or Promise<array>')
+    }
+    for (const event of events) {
+      if (!isActive()) return
+      deliver(subscription, event)
+    }
+  } while (events.length === TURN_EVENT_PAGE_LIMIT)
+}
+
+export async function pollTurnSubscriptions({
   subscriptions,
   userId,
   deliver,
@@ -63,23 +113,28 @@ export function pollTurnSubscriptions({
     error?.stack || error,
   ),
 }) {
-  for (const subscription of subscriptions.values()) {
+  const snapshot = [...subscriptions.values()]
+  await Promise.all(snapshot.map(async (subscription) => {
     try {
-      const events = listEvents({
-        userId,
-        sessionId: subscription.sessionId,
-        turnId: subscription.turnId,
-        after: subscription.cursor,
-        limit: 2_000,
-      })
-      for (const event of events) deliver(subscription, event)
+      if (typeof subscription.drainDurableEvents === 'function') {
+        await subscription.drainDurableEvents()
+      } else {
+        await drainTurnSubscription({
+          subscription,
+          userId,
+          deliver,
+          listEvents,
+          isActive: () => subscription.active !== false
+            && [...subscriptions.values()].includes(subscription),
+        })
+      }
     } catch (error) {
       onError?.(error, subscription)
     }
-  }
+  }))
 }
 
-export function subscribeTurnSubscription({
+export async function subscribeTurnSubscription({
   subscriptions,
   key,
   userId,
@@ -91,37 +146,87 @@ export function subscribeTurnSubscription({
   subscribe = subscribeTurnEvents,
   subscribeActivities = subscribeTurnActivities,
   listEvents = listTurnEvents,
+  onError = null,
 }) {
   const previous = subscriptions.get(key)
   previous?.unsubscribe()
   subscriptions.delete(key)
   let unsubscribeEvents = () => {}
   let unsubscribeActivities = () => {}
+  let drainPromise = null
   const subscription = {
     sessionId,
     turnId,
     cursor: after,
+    active: true,
+    replaying: true,
+    pending: [],
     unsubscribe: () => {
-      unsubscribeEvents()
-      unsubscribeActivities()
+      if (!subscription.active) return
+      subscription.active = false
+      subscription.pending.length = 0
+      try { unsubscribeEvents() } catch { /* best-effort cleanup */ }
+      try { unsubscribeActivities() } catch { /* best-effort cleanup */ }
     },
   }
+  const isActive = () => subscription.active && subscriptions.get(key) === subscription
+  const drainDurableEvents = () => {
+    if (drainPromise) return drainPromise
+    const currentDrain = drainTurnSubscription({
+      subscription,
+      userId,
+      deliver,
+      listEvents,
+      isActive,
+    })
+    drainPromise = currentDrain
+    currentDrain.then(
+      () => {
+        if (drainPromise === currentDrain) drainPromise = null
+      },
+      () => {
+        if (drainPromise === currentDrain) drainPromise = null
+      },
+    )
+    return currentDrain
+  }
+  subscription.drainDurableEvents = drainDurableEvents
   try {
     // Subscribe before replaying the durable log. The cursor makes the
     // local callback, replay, and cross-process poll idempotent while also
     // closing the old replay/subscribe race window.
     unsubscribeEvents = subscribe(
       { userId, sessionId, turnId },
-      (event) => deliver(subscription, event),
+      (event) => {
+        if (!isActive()) return
+        if (subscription.replaying) {
+          subscription.pending.push(event)
+          return
+        }
+        void drainDurableEvents().then(() => {
+          if (isActive() && event.sequence > subscription.cursor) deliver(subscription, event)
+        }).catch((error) => {
+          if (isActive()) onError?.(error, subscription)
+        })
+      },
     )
     unsubscribeActivities = subscribeActivities(
       { userId, sessionId, turnId },
-      (activity) => deliverActivity(subscription, activity),
+      (activity) => {
+        if (isActive()) deliverActivity(subscription, activity)
+      },
     )
     subscriptions.set(key, subscription)
-    for (const event of listEvents({ userId, sessionId, turnId, after, limit: 2_000 })) {
-      deliver(subscription, event)
+    await drainDurableEvents()
+    while (isActive() && subscription.pending.length > 0) {
+      const pending = subscription.pending.splice(0).sort((a, b) => a.sequence - b.sequence)
+      await drainDurableEvents()
+      for (const event of pending) {
+        if (!isActive()) break
+        if (event.sequence > subscription.cursor) deliver(subscription, event)
+      }
     }
+    subscription.replaying = false
     return subscription
   } catch (error) {
     try { subscription.unsubscribe() } catch { /* best-effort cleanup */ }
@@ -130,12 +235,55 @@ export function subscribeTurnSubscription({
   }
 }
 
-export function attachTurnWebSocketServer(server) {
+export function attachTurnWebSocketServer(server, {
+  isRuntimeReady = () => true,
+  getRuntimeReadinessState = () => (isRuntimeReady() ? 'ready' : 'starting'),
+  listEvents = listTurnEvents,
+} = {}) {
+  if (typeof isRuntimeReady !== 'function') {
+    throw new TypeError('isRuntimeReady must be a function')
+  }
+  if (typeof listEvents !== 'function') {
+    throw new TypeError('listEvents must be a function')
+  }
+  if (typeof getRuntimeReadinessState !== 'function') {
+    throw new TypeError('getRuntimeReadinessState must be a function')
+  }
   const webSocketServer = new WebSocketServer({ noServer: true })
 
   server.on('upgrade', (request, socket, head) => {
+    if (!isRuntimeReady()) {
+      const state = getRuntimeReadinessState()
+      const body = JSON.stringify({
+        ok: false,
+        error: {
+          code: 'RUNTIME_NOT_READY',
+          message: runtimeNotReadyMessage(state),
+        },
+      })
+      const response = (
+        'HTTP/1.1 503 Service Unavailable\r\n'
+        + 'Connection: close\r\n'
+        + 'Content-Type: application/json; charset=utf-8\r\n'
+        + 'Cache-Control: no-store\r\n'
+        + 'Retry-After: 1\r\n'
+        + `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n`
+        + body
+      )
+      try {
+        socket.end(response)
+      } catch {
+        socket.destroy()
+      }
+      return
+    }
     const url = new URL(request.url, 'http://localhost')
     if (url.pathname !== '/api/realtime') return
+    if (isHttpServerDraining(server)) {
+      socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nRetry-After: 1\r\n\r\n')
+      socket.destroy()
+      return
+    }
     const token = tokenFromRequest(request)
     const session = token ? getSessionByToken(token) : null
     if (!session?.user_id) {
@@ -153,14 +301,61 @@ export function attachTurnWebSocketServer(server) {
     const subscriptions = new Map()
     const deliver = (subscription, event) => {
       if (!event || event.sequence <= subscription.cursor) return
+      const expectedSequence = subscription.cursor + 1
+      if (!canAdvanceTurnEventCursor(event, subscription.cursor)) {
+        throw new TurnEventSequenceGapError({
+          userId: request.userId,
+          sessionId: subscription.sessionId,
+          turnId: subscription.turnId,
+          expectedSequence,
+          actualSequence: event.sequence,
+        })
+      }
       subscription.cursor = event.sequence
       send(socket, { type: 'turn.event', event: turnEventForClient(event) })
     }
     const deliverActivity = (_subscription, activity) => {
       if (activity) send(socket, { type: 'turn.activity', activity })
     }
+    const failSubscription = (error, subscription, { fallbackCode, fallbackMessage }) => {
+      const hostUnavailable = describeTurnEngineHostUnavailableError(error)
+      if (hostUnavailable) {
+        try { subscription?.unsubscribe() } catch { /* best-effort cleanup */ }
+        for (const [key, current] of subscriptions) {
+          if (current === subscription) subscriptions.delete(key)
+        }
+      }
+      send(socket, {
+        type: 'error',
+        ...(hostUnavailable?.error || {
+          code: error?.code || fallbackCode,
+          message: error?.message || fallbackMessage,
+        }),
+        sessionId: subscription.sessionId,
+        turnId: subscription.turnId,
+      })
+      try { socket.close(1011, 'Turn subscription failed') } catch { /* already closed */ }
+    }
+    let pollInFlight = false
     const pollSubscriptions = () => {
-      pollTurnSubscriptions({ subscriptions, userId: request.userId, deliver })
+      if (pollInFlight) return
+      pollInFlight = true
+      void pollTurnSubscriptions({
+        subscriptions,
+        userId: request.userId,
+        deliver,
+        listEvents,
+        onError: (error, subscription) => {
+          failSubscription(error, subscription, {
+            fallbackCode: 'TURN_SUBSCRIPTION_POLL_FAILED',
+            fallbackMessage: 'Turn subscription poll failed',
+          })
+        },
+      }).catch((error) => {
+        console.error('[realtime] failed to poll turn subscriptions:', error?.stack || error)
+      }).finally(() => {
+        pollInFlight = false
+      })
     }
     const pollTimer = setInterval(pollSubscriptions, CROSS_PROCESS_POLL_MS)
     pollTimer.unref?.()
@@ -171,7 +366,7 @@ export function attachTurnWebSocketServer(server) {
     }
     send(socket, { type: 'ready' })
 
-    socket.on('message', (raw) => {
+    socket.on('message', async (raw) => {
       const validation = parseTurnWebSocketClientFrame(raw, { userId: request.userId })
       if (!validation.ok) {
         send(socket, {
@@ -198,7 +393,7 @@ export function attachTurnWebSocketServer(server) {
         }
         const key = `${sessionId}\u0000${turnId}`
         try {
-          subscribeTurnSubscription({
+          const subscription = await subscribeTurnSubscription({
             subscriptions,
             key,
             userId: request.userId,
@@ -207,10 +402,24 @@ export function attachTurnWebSocketServer(server) {
             after,
             deliver,
             deliverActivity,
+            listEvents,
+            onError: (error, failedSubscription) => {
+              failSubscription(error, failedSubscription, {
+                fallbackCode: 'TURN_SUBSCRIBE_FAILED',
+                fallbackMessage: 'Turn subscription failed',
+              })
+            },
           })
+          if (!subscription.active || subscriptions.get(key) !== subscription) return
         } catch (error) {
           console.error(`[realtime] failed to subscribe turn ${turnId}:`, error?.stack || error)
-          send(socket, { type: 'error', code: 'TURN_SUBSCRIBE_FAILED', sessionId, turnId })
+          const hostUnavailable = describeTurnEngineHostUnavailableError(error)
+          send(socket, {
+            type: 'error',
+            ...(hostUnavailable?.error || { code: 'TURN_SUBSCRIBE_FAILED' }),
+            sessionId,
+            turnId,
+          })
           try { socket.close(1011, 'Turn subscription failed') } catch { /* already closed */ }
           return
         }

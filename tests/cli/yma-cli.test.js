@@ -1,9 +1,10 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
+import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { cmdRun, parseRunArgs } from '../../bin/yma-cli.js'
@@ -11,10 +12,15 @@ import { runHeadlessTurn } from '../../server/services/headlessTurnRuntime.js'
 
 const CLI = join(process.cwd(), 'bin', 'yma-cli.js')
 
-function runCliProcess(args, { input = '', env = {}, timeoutMs = 30_000 } = {}) {
+function runCliProcess(args, {
+  input = '',
+  env = {},
+  timeoutMs = 30_000,
+  cwd = process.cwd(),
+} = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI, ...args], {
-      cwd: process.cwd(),
+      cwd,
       env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
@@ -73,6 +79,66 @@ function cliE2eEnv({ dataDir, modelPort, homeDir }) {
     HOME: homeDir,
     USERPROFILE: homeDir,
   }
+}
+
+function seedCliProvider({ env, baseUrl, modelName }) {
+  const authModuleUrl = pathToFileURL(join(
+    process.cwd(),
+    'server',
+    'adapters',
+    'authAccount.js',
+  )).href
+  const providerStoreModuleUrl = pathToFileURL(join(
+    process.cwd(),
+    'server',
+    'services',
+    'modelProviderStore.js',
+  )).href
+  const dbModuleUrl = pathToFileURL(join(process.cwd(), 'server', 'db.js')).href
+  const script = `
+    const { bootstrapAuth } = await import(${JSON.stringify(authModuleUrl)})
+    const { upsertModelProvider, recordModelProviderReadiness } = await import(${JSON.stringify(providerStoreModuleUrl)})
+    const { closeDb } = await import(${JSON.stringify(dbModuleUrl)})
+    try {
+      const auth = bootstrapAuth({ env: process.env })
+      const modelName = process.env.GUGO_TEST_PROVIDER_MODEL
+      const provider = upsertModelProvider({
+        userId: auth.user.id,
+        provider: {
+          key: 'cli-persisted-provider',
+          label: 'CLI persisted Provider',
+          baseUrl: process.env.GUGO_TEST_PROVIDER_BASE_URL,
+          apiKey: '',
+          models: [modelName],
+          defaultModel: modelName,
+          enabled: true,
+          isDefault: true,
+        },
+      })
+      recordModelProviderReadiness({
+        userId: auth.user.id,
+        id: provider.id,
+        modelName,
+        expectedConfigRevision: provider.configRevision,
+        readiness: { chat: true, tools: true, agent: true, mode: 'agent' },
+      })
+      process.stdout.write(provider.id)
+    } finally {
+      closeDb()
+    }
+  `
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ...env,
+      GUGO_TEST_PROVIDER_BASE_URL: baseUrl,
+      GUGO_TEST_PROVIDER_MODEL: modelName,
+    },
+  })
+  assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
+  return result.stdout.trim()
 }
 
 function sendModelCompletion(res, content) {
@@ -145,17 +211,61 @@ test('login without --email exits non-zero', () => {
   assert.match(r.stderr, /email/i)
 })
 
-test('run parser supports prompt, model, mode, cwd, session and resume', () => {
+test('run parser supports prompt, model, Provider, mode, cwd, session and resume', () => {
   const parsed = parseRunArgs([
-    'inspect', 'this', '--model', 'local-model', '--mode=acceptEdits',
+    'inspect', 'this', '--model', 'local-model', '--provider', 'provider-1', '--mode=acceptEdits',
     '--cwd', '.', '--session-id', 'session-1',
   ])
   assert.equal(parsed.prompt, 'inspect this')
   assert.equal(parsed.model, 'local-model')
+  assert.equal(parsed.modelProviderId, 'provider-1')
   assert.equal(parsed.mode, 'acceptEdits')
   assert.equal(parsed.sessionId, 'session-1')
+  assert.equal(parseRunArgs(['plain prompt']).mode, 'normal')
   assert.throws(() => parseRunArgs(['prompt', '--resume', 'turn-1']), /cannot be combined/)
-  assert.equal(parseRunArgs(['--resume', 'turn-1']).resumeTurnId, 'turn-1')
+  const resumed = parseRunArgs(['--resume', 'turn-1'])
+  assert.equal(resumed.resumeTurnId, 'turn-1')
+  assert.equal(resumed.mode, null)
+  assert.throws(
+    () => parseRunArgs(['prompt', '--mode', 'unsafe']),
+    (error) => error?.code === 'CLI_MODE_INVALID' && error?.exitCode === 2,
+  )
+  assert.throws(
+    () => parseRunArgs(['--resume', 'turn-1', '--mode', 'bypass']),
+    (error) => error?.code === 'CLI_RESUME_MODE_CONFLICT' && error?.exitCode === 2,
+  )
+  assert.throws(
+    () => parseRunArgs(['--resume', 'turn-1', '--provider', 'provider-1']),
+    (error) => error?.code === 'CLI_RESUME_PROVIDER_CONFLICT' && error?.exitCode === 2,
+  )
+  assert.throws(
+    () => parseRunArgs(['--resume', 'turn-1', '--model', 'local-model']),
+    (error) => error?.code === 'CLI_RESUME_MODEL_CONFLICT' && error?.exitCode === 2,
+  )
+})
+
+test('run parser rejects blank model selections and duplicate single-value options', () => {
+  for (const option of ['model', 'provider']) {
+    assert.throws(
+      () => parseRunArgs(['prompt', `--${option}`, '   ']),
+      (error) => error?.code === 'CLI_OPTION_VALUE_REQUIRED' && error?.exitCode === 2,
+    )
+  }
+
+  const duplicateOptions = [
+    ['model', 'model-a', 'model-b'],
+    ['provider', 'provider-a', 'provider-b'],
+    ['mode', 'normal', 'plan'],
+    ['cwd', '.', '..'],
+    ['session-id', 'session-a', 'session-b'],
+    ['resume', 'turn-a', 'turn-b'],
+  ]
+  for (const [option, first, second] of duplicateOptions) {
+    assert.throws(
+      () => parseRunArgs([`--${option}`, first, `--${option}=${second}`]),
+      (error) => error?.code === 'CLI_OPTION_DUPLICATE' && error?.exitCode === 2,
+    )
+  }
 })
 
 test('run reads a piped prompt and keeps stdout JSONL-only', async () => {
@@ -183,6 +293,162 @@ test('run reads a piped prompt and keeps stdout JSONL-only', async () => {
   assert.deepEqual(JSON.parse(stdoutChunks.join('').trim()), {
     type: 'turn.completed', sequence: 1, payload: { text: 'done' },
   })
+})
+
+test('run --cwd cannot relocate runtime capability bindings into the workspace', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'gugo-cli-runtime-root-'))
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'gugo-cli-workspace-root-'))
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-workspace-home-'))
+  const hostileConfig = JSON.stringify({
+    env: {},
+    capabilityBindings: { loop: 'workspace.missing-loop' },
+  })
+  const env = {
+    APP_DATA_DIR: join(runtimeRoot, 'runtime-data'),
+    APP_DB_PATH: join(runtimeRoot, 'runtime-data', 'app.db'),
+    AUTH_MODE: 'local',
+    GUGO_LOAD_DOTENV: '0',
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+  }
+  try {
+    mkdirSync(join(workspaceRoot, '.gugo'), { recursive: true })
+    writeFileSync(join(workspaceRoot, '.gugo', 'runtime.json'), hostileConfig, 'utf8')
+
+    const workspaceAttempt = await runCliProcess([
+      'run', 'verify workspace isolation', '--cwd', workspaceRoot,
+    ], { cwd: runtimeRoot, env, timeoutMs: 60_000 })
+    assert.notEqual(workspaceAttempt.status, 0)
+    assert.doesNotMatch(workspaceAttempt.stdout, /RUNTIME_CAPABILITY_BINDING_MISSING/)
+    assert.doesNotMatch(workspaceAttempt.stderr, /workspace\.missing-loop/)
+
+    mkdirSync(join(runtimeRoot, '.gugo'), { recursive: true })
+    writeFileSync(join(runtimeRoot, '.gugo', 'runtime.json'), hostileConfig, 'utf8')
+    const runtimeAttempt = await runCliProcess([
+      'run', 'verify runtime binding', '--cwd', workspaceRoot,
+    ], { cwd: runtimeRoot, env, timeoutMs: 60_000 })
+    assert.equal(runtimeAttempt.status, 1)
+    const runtimeError = parseJsonLines(runtimeAttempt.stdout)
+      .find((event) => event.type === 'cli.error')
+    assert.equal(runtimeError?.error?.code, 'RUNTIME_CAPABILITY_BINDING_MISSING')
+    assert.match(runtimeError?.error?.message || '', /workspace\.missing-loop/)
+  } finally {
+    rmSync(runtimeRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    rmSync(workspaceRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    rmSync(homeDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  }
+})
+
+test('real CLI never executes a persistence module selected by project dotenv', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'gugo-cli-dotenv-untrusted-'))
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-dotenv-home-'))
+  const dataDir = join(runtimeRoot, 'runtime-data')
+  const markerPath = join(runtimeRoot, 'persistence-module-executed')
+  try {
+    mkdirSync(join(runtimeRoot, '.gugo'), { recursive: true })
+    writeFileSync(
+      join(runtimeRoot, 'untrusted-persistence.mjs'),
+      `import fs from 'node:fs'\nfs.writeFileSync(${JSON.stringify(markerPath)}, 'executed')\nexport default {}\n`,
+      'utf8',
+    )
+    writeFileSync(
+      join(runtimeRoot, '.env'),
+      'GUGO_TURN_PERSISTENCE_MODULE=untrusted-persistence.mjs\n',
+      'utf8',
+    )
+    writeFileSync(join(runtimeRoot, '.gugo', 'runtime.json'), JSON.stringify({
+      env: {},
+      capabilityBindings: { loop: 'runtime.missing-loop' },
+    }), 'utf8')
+
+    const result = await runCliProcess(['run', 'verify dotenv isolation'], {
+      cwd: runtimeRoot,
+      env: {
+        APP_DATA_DIR: dataDir,
+        APP_DB_PATH: join(dataDir, 'app.db'),
+        AUTH_MODE: 'local',
+        GUGO_LOAD_DOTENV: '1',
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+      },
+      timeoutMs: 60_000,
+    })
+
+    assert.equal(result.status, 1)
+    const cliError = parseJsonLines(result.stdout).find((event) => event.type === 'cli.error')
+    assert.equal(cliError?.error?.code, 'RUNTIME_CAPABILITY_BINDING_MISSING')
+    assert.equal(existsSync(markerPath), false)
+  } finally {
+    rmSync(runtimeRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    rmSync(homeDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  }
+})
+
+test('bundled SQLite persistence authorizes the CLI resume lookup', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'gugo-cli-builtin-persistence-'))
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-builtin-persistence-home-'))
+  const dataDir = join(runtimeRoot, 'runtime-data')
+  try {
+    const result = await runCliProcess(['run', '--resume', 'missing-turn'], {
+      cwd: runtimeRoot,
+      env: {
+        APP_DATA_DIR: dataDir,
+        APP_DB_PATH: join(dataDir, 'app.db'),
+        AUTH_MODE: 'local',
+        GUGO_LOAD_DOTENV: '0',
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+      },
+      timeoutMs: 60_000,
+    })
+
+    assert.equal(result.status, 1, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
+    const cliError = parseJsonLines(result.stdout).find((event) => event.type === 'cli.error')
+    assert.equal(cliError?.error?.code, 'TURN_NOT_FOUND')
+  } finally {
+    rmSync(runtimeRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    rmSync(homeDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  }
+})
+
+test('trusted module re-exporting the built-in adapter keeps its own resume lookup capability', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'gugo-cli-custom-persistence-'))
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-custom-persistence-home-'))
+  const dataDir = join(runtimeRoot, 'runtime-data')
+  const modulePath = join(runtimeRoot, 'custom-persistence.mjs')
+  const sqliteAdapterUrl = new URL(
+    '../../server/adapters/sqliteTurnPersistenceAdapter.js',
+    import.meta.url,
+  ).href
+  try {
+    writeFileSync(
+      modulePath,
+      `export { SQLITE_TURN_PERSISTENCE_ADAPTER as turnPersistenceAdapter } from ${JSON.stringify(sqliteAdapterUrl)}\n`,
+      'utf8',
+    )
+
+    const result = await runCliProcess(['run', '--resume', 'missing-turn'], {
+      cwd: runtimeRoot,
+      env: {
+        APP_DATA_DIR: dataDir,
+        APP_DB_PATH: join(dataDir, 'app.db'),
+        AUTH_MODE: 'local',
+        GUGO_LOAD_DOTENV: '0',
+        GUGO_TURN_PERSISTENCE_MODULE: modulePath,
+        GUGO_TURN_PERSISTENCE_TRUST_ROOT: runtimeRoot,
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+      },
+      timeoutMs: 60_000,
+    })
+
+    assert.equal(result.status, 1, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
+    const cliError = parseJsonLines(result.stdout).find((event) => event.type === 'cli.error')
+    assert.equal(cliError?.error?.code, 'TURN_NOT_FOUND')
+  } finally {
+    rmSync(runtimeRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    rmSync(homeDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  }
 })
 
 test('real CLI subprocess pipes stdin through TurnEngine and emits JSONL', async () => {
@@ -220,15 +486,67 @@ test('real CLI subprocess pipes stdin through TurnEngine and emits JSONL', async
   }
 })
 
-test('real CLI subprocess resumes after the process is killed past a durable checkpoint', async () => {
+test('real CLI persists the selected Provider UUID in turn.started', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'gugo-cli-provider-e2e-data-'))
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-provider-e2e-home-'))
+  const modelName = 'gpt-cli-provider-e2e'
+  const modelServer = createServer((req, res) => {
+    req.resume()
+    req.on('end', () => sendModelCompletion(res, 'persisted Provider completed'))
+  })
+  const modelPort = await listen(modelServer)
+  const env = {
+    ...cliE2eEnv({ dataDir, modelPort, homeDir }),
+    GUGO_LOAD_DOTENV: '0',
+    MODEL_BASE_URL: '',
+    MODEL_NAME: '',
+    MODEL_API_KEY: '',
+    MODEL_PROVIDERS: '',
+  }
+
+  try {
+    const providerId = seedCliProvider({
+      env,
+      baseUrl: `http://127.0.0.1:${modelPort}/v1`,
+      modelName,
+    })
+    const result = await runCliProcess([
+      'run',
+      'use the persisted Provider UUID',
+      '--mode',
+      'plan',
+      '--provider',
+      providerId,
+      '--model',
+      modelName,
+    ], { env })
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`)
+    const events = parseJsonLines(result.stdout)
+    const started = events.find((event) => event.type === 'turn.started')
+    assert.equal(started?.payload?.modelProviderId, providerId)
+    assert.equal(started?.payload?.modelName, modelName)
+    assert.equal(
+      events.find((event) => event.type === 'turn.completed')?.payload?.text,
+      'persisted Provider completed',
+    )
+  } finally {
+    await closeServer(modelServer)
+    rmSync(dataDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    rmSync(homeDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  }
+})
+
+test('real CLI subprocess preserves outcome-unknown safety after a durable in-flight checkpoint', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'gugo-cli-resume-data-'))
   const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-resume-home-'))
   let modelRequests = 0
   let allowCompletion = false
+  let notifyModelRequestStarted = null
   const modelServer = createServer((req, res) => {
     req.resume()
     req.on('end', () => {
       modelRequests += 1
+      notifyModelRequestStarted?.()
       if (!allowCompletion) return
       sendModelCompletion(res, 'resumed from checkpoint')
     })
@@ -285,16 +603,37 @@ test('real CLI subprocess resumes after the process is killed past a durable che
       })
     })
 
+    // A turn can write checkpoints before it crosses the Provider side-effect
+    // boundary. Killing on the first generic checkpoint makes this test race
+    // between a legitimately replayable not-sent request and an in-flight one.
+    // Wait until the Provider has received the request; the runtime guarantees
+    // that its in-flight checkpoint is durable before this can happen.
+    await new Promise((resolve, reject) => {
+      if (modelRequests >= 1) {
+        resolve()
+        return
+      }
+      const timeout = setTimeout(() => {
+        notifyModelRequestStarted = null
+        reject(new Error(`model request timed out after checkpoint\nstdout:\n${firstStdout}\nstderr:\n${firstStderr}`))
+      }, 15_000)
+      notifyModelRequestStarted = () => {
+        clearTimeout(timeout)
+        notifyModelRequestStarted = null
+        resolve()
+      }
+    })
+
     assert.equal(firstChild.kill('SIGKILL'), true)
     const killed = await firstExit
     assert.notEqual(killed.status, 0)
-    assert.equal(parseJsonLines(firstStdout).some((event) => event.type.startsWith('turn.') && ['turn.completed', 'turn.failed', 'turn.cancelled'].includes(event.type)), false)
+    assert.equal(parseJsonLines(firstStdout).some((event) => event.type.startsWith('turn.') && ['turn.completed', 'turn.failed', 'turn.blocked', 'turn.cancelled'].includes(event.type)), false)
     allowCompletion = true
 
     const resumedRun = await runCliProcess([
       'run', '--resume', checkpoint.turnId, '--session-id', checkpoint.sessionId,
     ], { env })
-    assert.equal(resumedRun.status, 0, `stdout:\n${resumedRun.stdout}\nstderr:\n${resumedRun.stderr}`)
+    assert.equal(resumedRun.status, 1, `stdout:\n${resumedRun.stdout}\nstderr:\n${resumedRun.stderr}`)
     const resumedEvents = parseJsonLines(resumedRun.stdout)
     assert.ok(resumedEvents.some((event) => (
       event.turnId === checkpoint.turnId
@@ -302,11 +641,12 @@ test('real CLI subprocess resumes after the process is killed past a durable che
       && event.type === 'model.phase'
       && event.sequence > checkpoint.sequence
     )))
-    assert.equal(
-      resumedEvents.find((event) => event.type === 'turn.completed')?.payload?.text,
-      'resumed from checkpoint',
-    )
-    assert.ok(modelRequests >= 1)
+    const blocked = resumedEvents.find((event) => event.type === 'turn.blocked')
+    assert.equal(blocked?.payload?.code, 'MODEL_REQUEST_OUTCOME_UNKNOWN')
+    assert.equal(blocked?.payload?.requiresUserVerification, true)
+    assert.equal(blocked?.payload?.recoveryKind, 'model_request_outcome_unknown')
+    assert.equal(resumedEvents.some((event) => event.type === 'turn.completed'), false)
+    assert.equal(modelRequests, 1, 'recovery must not issue a second provider request')
   } finally {
     if (firstChild && firstChild.exitCode === null) firstChild.kill('SIGKILL')
     await closeServer(modelServer)
@@ -320,7 +660,10 @@ test('run reports runtime/model failures as stable JSONL and diagnostics', async
   const stderrChunks = []
   const stdout = new Writable({ write(chunk, _encoding, done) { stdoutChunks.push(String(chunk)); done() } })
   const stderr = new Writable({ write(chunk, _encoding, done) { stderrChunks.push(String(chunk)); done() } })
-  const error = Object.assign(new Error('no configured model'), { code: 'MODEL_CONFIG_MISSING' })
+  const error = Object.assign(new Error('no configured model'), {
+    code: 'MODEL_CONFIG_MISSING',
+    action: 'configure_model',
+  })
   const exitCode = await cmdRun(['hello'], {
     stdin: Readable.from([]), stdout, stderr,
     runTurn: async () => { throw error },
@@ -328,7 +671,11 @@ test('run reports runtime/model failures as stable JSONL and diagnostics', async
   assert.equal(exitCode, 1)
   assert.deepEqual(JSON.parse(stdoutChunks.join('').trim()), {
     type: 'cli.error',
-    error: { code: 'MODEL_CONFIG_MISSING', message: 'no configured model' },
+    error: {
+      code: 'MODEL_CONFIG_MISSING',
+      message: 'no configured model',
+      action: 'configure_model',
+    },
   })
   assert.match(stderrChunks.join(''), /MODEL_CONFIG_MISSING/)
 })
@@ -342,7 +689,7 @@ function fakeRuntime({ initialEvents = [], onStart, onRecover } = {}) {
     const event = { id: `event-${events.length}`, sessionId: 'session-1', turnId: 'turn-1', sequence: events.length, type, payload, createdAt: events.length + 1 }
     events.push(event)
     listener(event)
-    if (['turn.completed', 'turn.failed', 'turn.cancelled', 'turn.paused', 'turn.interrupted'].includes(type)) finish()
+    if (['turn.completed', 'turn.failed', 'turn.blocked', 'turn.cancelled', 'turn.paused', 'turn.interrupted'].includes(type)) finish()
     return event
   }
   return {
@@ -362,6 +709,97 @@ function fakeRuntime({ initialEvents = [], onStart, onRecover } = {}) {
     },
   }
 }
+
+test('headless runtime forwards each validated mode as a per-turn permission override', async () => {
+  for (const mode of ['normal', 'acceptEdits', 'plan', 'bypass']) {
+    let startedScope = null
+    const fake = fakeRuntime({
+      onStart: (scope, emit) => {
+        startedScope = scope
+        emit('turn.started', { approvalMode: scope.approvalMode })
+        emit('turn.completed', { text: 'done' })
+      },
+    })
+    const result = await runHeadlessTurn({ prompt: 'run safely', mode }, fake.dependencies)
+    assert.equal(result.status, 'completed')
+    assert.equal(startedScope.approvalMode, mode)
+    assert.equal(startedScope.intentMode, mode === 'plan' ? 'answer' : 'auto')
+  }
+})
+
+test('headless runtime binds a new turn to the explicitly selected model Provider', async () => {
+  let startedScope = null
+  const fake = fakeRuntime({
+    onStart: (scope, emit) => {
+      startedScope = scope
+      emit('turn.started')
+      emit('turn.completed', { text: 'done' })
+    },
+  })
+
+  const result = await runHeadlessTurn({
+    prompt: 'use the selected Provider',
+    model: 'shared-model',
+    modelProviderId: 'provider-1',
+  }, fake.dependencies)
+
+  assert.equal(result.status, 'completed')
+  assert.equal(startedScope.modelName, 'shared-model')
+  assert.equal(startedScope.modelProviderId, 'provider-1')
+})
+
+test('headless runtime fails closed for invalid or resume-time permission overrides', async () => {
+  const fresh = fakeRuntime()
+  await assert.rejects(
+    runHeadlessTurn({ prompt: 'do not run', mode: 'unsafe' }, fresh.dependencies),
+    (error) => error?.code === 'CLI_MODE_INVALID' && error?.exitCode === 2,
+  )
+
+  let recoveryCalls = 0
+  const resumed = fakeRuntime({
+    onRecover: () => { recoveryCalls += 1 },
+  })
+  await assert.rejects(
+    runHeadlessTurn({ resumeTurnId: 'turn-1', mode: 'bypass' }, resumed.dependencies),
+    (error) => error?.code === 'CLI_RESUME_MODE_CONFLICT' && error?.exitCode === 2,
+  )
+  assert.equal(recoveryCalls, 0)
+
+  await assert.rejects(
+    runHeadlessTurn({
+      resumeTurnId: 'turn-1',
+      modelProviderId: 'provider-1',
+    }, resumed.dependencies),
+    (error) => error?.code === 'CLI_RESUME_PROVIDER_CONFLICT' && error?.exitCode === 2,
+  )
+  assert.equal(recoveryCalls, 0)
+
+  await assert.rejects(
+    runHeadlessTurn({
+      resumeTurnId: 'turn-1',
+      model: 'local-model',
+    }, resumed.dependencies),
+    (error) => error?.code === 'CLI_RESUME_MODEL_CONFLICT' && error?.exitCode === 2,
+  )
+  assert.equal(recoveryCalls, 0)
+})
+
+test('headless runtime rejects blank model and Provider selections before starting a turn', async () => {
+  for (const options of [
+    { model: '   ' },
+    { modelProviderId: '\t' },
+  ]) {
+    let startCalls = 0
+    const fake = fakeRuntime({
+      onStart: () => { startCalls += 1 },
+    })
+    await assert.rejects(
+      runHeadlessTurn({ prompt: 'do not start', ...options }, fake.dependencies),
+      (error) => error?.code === 'CLI_OPTION_VALUE_REQUIRED' && error?.exitCode === 2,
+    )
+    assert.equal(startCalls, 0)
+  }
+})
 
 test('headless runtime denies dangerous approval without a TTY', async () => {
   let decision
@@ -399,7 +837,16 @@ test('headless runtime resolves session and recovers an interrupted turn', async
       emit('turn.completed', { text: 'resumed' })
     },
   })
-  fake.dependencies.findResumeSession = async () => 'session-1'
+  fake.dependencies.persistenceAdapter = {
+    id: 'test.cli-resume',
+    eventLog: {
+      resolveTurnSession: async ({ userId, turnId }) => {
+        assert.equal(userId, 'user-1')
+        assert.equal(turnId, 'turn-1')
+        return Object.freeze({ status: 'found', sessionId: 'session-1' })
+      },
+    },
+  }
   const output = []
   const result = await runHeadlessTurn({
     resumeTurnId: 'turn-1',

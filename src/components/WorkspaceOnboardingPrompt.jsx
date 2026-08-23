@@ -52,7 +52,7 @@ export function WorkspaceOnboardingPromptController({
       }
 
       const dismissed = readWorkspaceOnboardingDismissal(storage, identity)
-      if (dismissed || pathname === '/permissions') {
+      if (dismissed || pathname === '/permissions' || pathname === '/settings') {
         promptedIdentitiesRef.current.add(identity)
         setOpen(false)
       }

@@ -6,6 +6,8 @@ import test from 'node:test'
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'gugo-session-pinning-tests', String(process.pid))
 
 const { createAppServer } = await import('../server/appServer.js')
+const { SQLITE_TURN_PERSISTENCE_ADAPTER } = await import('../server/adapters/sqliteTurnPersistenceAdapter.js')
+const { createTurnPersistenceAdapterController } = await import('../server/core/turnPersistenceAdapter.js')
 const { getDb } = await import('../server/db.js')
 const {
   getSession,
@@ -15,6 +17,10 @@ const {
   upsertSession,
 } = await import('../server/services/sessionStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+const persistence = createTurnPersistenceAdapterController(SQLITE_TURN_PERSISTENCE_ADAPTER, {
+  source: 'test.session-pinning',
+})
+persistence.activate()
 
 function cleanDb() {
   const db = getDb()
@@ -37,7 +43,10 @@ async function withServer(fn) {
 }
 
 test.beforeEach(cleanDb)
-test.after(cleanDb)
+test.after(() => {
+  cleanDb()
+  persistence.release()
+})
 
 test('session pinning persists stable order and stays isolated by user', () => {
   const owner = issueTestSession({ email: `pin-owner-${process.pid}@example.com` })

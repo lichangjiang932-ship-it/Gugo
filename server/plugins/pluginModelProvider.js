@@ -8,6 +8,8 @@ const METHODS = Object.freeze([
   'consumeStreamPayload',
   'finishStream',
 ])
+const MODEL_REQUEST_RECONCILER_CONTRACT_VERSION = 1
+const MODEL_REQUEST_RECONCILER_AUTHORITY = 'provider_request_status'
 const DATA_LIMITS = Object.freeze({
   maxDepth: 32,
   maxNodes: 32_768,
@@ -127,7 +129,7 @@ function snapshotStreamState(value) {
   return state
 }
 
-export function snapshotRuntimeModelProvider({ record, kind, adapter, invokeSync }) {
+export function snapshotRuntimeModelProvider({ record, kind, adapter, invokeSync, invokeAsync }) {
   if (!adapter || typeof adapter !== 'object' || Array.isArray(adapter)) {
     throw providerDefinitionError('model provider adapter must be an object')
   }
@@ -156,6 +158,31 @@ export function snapshotRuntimeModelProvider({ record, kind, adapter, invokeSync
     throw providerDefinitionError(
       'model provider streaming adapter must define createStreamState, consumeStreamPayload, and finishStream together',
     )
+  }
+  let requestReconciler = null
+  const reconcilerDefinition = ownValue(adapter, 'requestReconciler')
+  if (reconcilerDefinition !== undefined) {
+    if (!reconcilerDefinition || typeof reconcilerDefinition !== 'object' || Array.isArray(reconcilerDefinition)) {
+      throw providerDefinitionError('model provider adapter.requestReconciler must be an object')
+    }
+    if (ownValue(reconcilerDefinition, 'contractVersion') !== MODEL_REQUEST_RECONCILER_CONTRACT_VERSION) {
+      throw providerDefinitionError(
+        `model provider request reconciler requires contractVersion ${MODEL_REQUEST_RECONCILER_CONTRACT_VERSION}`,
+      )
+    }
+    if (ownValue(reconcilerDefinition, 'authority') !== MODEL_REQUEST_RECONCILER_AUTHORITY) {
+      throw providerDefinitionError(
+        `model provider request reconciler requires authority ${MODEL_REQUEST_RECONCILER_AUTHORITY}`,
+      )
+    }
+    const reconcile = ownValue(reconcilerDefinition, 'reconcile')
+    if (typeof reconcile !== 'function') {
+      throw providerDefinitionError('model provider adapter.requestReconciler.reconcile must be an own function property')
+    }
+    if (typeof invokeAsync !== 'function') {
+      throw providerDefinitionError('model provider request reconciler requires async plugin invocation support')
+    }
+    requestReconciler = { authority: MODEL_REQUEST_RECONCILER_AUTHORITY, reconcile }
   }
 
   const streamStates = new WeakMap()
@@ -223,6 +250,36 @@ export function snapshotRuntimeModelProvider({ record, kind, adapter, invokeSync
           (value) => assertResultShape(snapshotResult(value, method), method),
         )
       },
+    })
+  }
+  if (requestReconciler) {
+    Object.defineProperty(wrapped, 'requestReconciler', {
+      enumerable: true,
+      configurable: false,
+      writable: false,
+      value: Object.freeze({
+        contractVersion: MODEL_REQUEST_RECONCILER_CONTRACT_VERSION,
+        authority: requestReconciler.authority,
+        async reconcile(...args) {
+          assertAvailable('requestReconciler.reconcile')
+          const input = snapshotArguments(args, 'requestReconciler.reconcile')
+          try {
+            return await invokeAsync(
+              record,
+              'model-provider-reconciler',
+              (...values) => requestReconciler.reconcile.apply(reconcilerDefinition, values),
+              input,
+            ).then((value) => snapshotResult(value, 'requestReconciler.reconcile'))
+          } catch (error) {
+            throw isolatedProviderFailure(
+              error,
+              record,
+              kind,
+              'requestReconciler.reconcile',
+            )
+          }
+        },
+      }),
     })
   }
   return Object.freeze(wrapped)

@@ -1,7 +1,11 @@
 import { escapeHtml, stripDangerousMarkup } from './previewSanitizers.js'
 
-const MERMAID_LIBRARY_URL = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js'
-const CHART_LIBRARY_URL = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'
+// Keep generated previews air-gap safe. Vite copies public/sandbox into dist,
+// so these scripts are served by the same local Gugo origin in both browser
+// and packaged desktop builds. Do not replace these with CDN URLs: a preview
+// must never disclose document activity or stop working when offline.
+const MERMAID_LIBRARY_URL = '/sandbox/mermaid.min.js'
+const CHART_LIBRARY_URL = '/sandbox/chart.umd.min.js'
 
 function validatedPreviewNonce(options = {}) {
   const nonce = String(options?.nonce || '').trim()

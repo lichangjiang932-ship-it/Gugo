@@ -5,6 +5,7 @@ import SettingsDataExport from '../components/settings/SettingsDataExport.jsx'
 import SettingsDiagnosticsPanel from '../components/settings/SettingsDiagnosticsPanel.jsx'
 import SettingsFileOutputPanel from '../components/settings/SettingsFileOutputPanel.jsx'
 import SettingsModelsPanel from '../components/settings/SettingsModelsPanel.jsx'
+import SettingsSideEffectRecoveryPanel from '../components/settings/SettingsSideEffectRecoveryPanel.jsx'
 import {
   SettingsAgentPresetsPanel,
   SettingsAppearancePanel,
@@ -17,6 +18,7 @@ import { SettingsGroup, SettingsPanel, SettingsRow } from '../components/setting
 import SettingsWebSearchPanel from '../components/settings/SettingsWebSearchPanel.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { getSystemDiagnostics, testModelEndpoint } from '../lib/modelClient.js'
+import { parseModelRecoveryTarget } from '../lib/modelRequestRecoveryClient.js'
 import { openRuntimeConfigInBrowser } from '../lib/runtimeConfigClient.js'
 import {
   SETTINGS_TAB_ABOUT,
@@ -29,9 +31,11 @@ import {
   SETTINGS_TAB_MODELS,
   SETTINGS_TAB_PERMISSIONS,
   SETTINGS_TAB_PLUGINS,
+  SETTINGS_TAB_RECOVERY,
   SETTINGS_TAB_WEB_SEARCH,
 } from '../lib/settingsNavigation.js'
 import useSettingsNavigation from '../lib/useSettingsNavigation.js'
+import { useLocation } from '../lib/router.jsx'
 import useModalFocusTrap from '../lib/useModalFocusTrap.js'
 import { useAppContext } from '../store/AppContext'
 import { estimatePersistedSnapshotBytes } from '../store/indexedDbPersistence.js'
@@ -62,6 +66,7 @@ const SETTINGS_NAV_GROUPS = [
     items: [
       SETTINGS_TAB_INTEGRATIONS,
       SETTINGS_TAB_DATA,
+      SETTINGS_TAB_RECOVERY,
       SETTINGS_TAB_ABOUT,
     ],
   },
@@ -106,7 +111,8 @@ async function getBrowserStorageEstimate() {
 
 export default function SettingsView() {
   const { state, dispatch } = useAppContext()
-  const { activeSection, navigate, setActiveSection } = useSettingsNavigation()
+  const { activeSection, navigate, returnTo, setActiveSection } = useSettingsNavigation()
+  const location = useLocation()
   const { t, lang, setLang, languages } = useT()
   const contributedSettings = useUiContributions('settings-section')
   const closeButtonRef = useRef(null)
@@ -117,8 +123,31 @@ export default function SettingsView() {
   const [diagnosticsMessage, setDiagnosticsMessage] = useState('')
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [configMessage, setConfigMessage] = useState('')
+  const modelRecoveryTarget = useMemo(
+    () => parseModelRecoveryTarget(location.search, state.activeSessionId),
+    [location.search, state.activeSessionId],
+  )
 
-  const closeSettings = useCallback(() => navigate('/chat'), [navigate])
+  const closeSettings = useCallback(
+    () => navigate(returnTo || '/chat', { replace: true }),
+    [navigate, returnTo],
+  )
+  const openRecoveredTask = useCallback(({ record, resume } = {}) => {
+    if (record?.scopeKind === 'turn'
+      && typeof record.sessionId === 'string'
+      && record.sessionId
+      && typeof record.turnId === 'string'
+      && record.turnId) {
+      dispatch({ type: 'SWITCH_SESSION', payload: record.sessionId })
+      navigate('/chat', {
+        state: resume?.kind === 'turn' ? { manualRecoveryResume: resume } : null,
+      })
+      return
+    }
+    if (record?.scopeKind === 'job' && typeof record.jobId === 'string' && record.jobId) {
+      navigate(`/task?${new URLSearchParams({ job: record.jobId })}`)
+    }
+  }, [dispatch, navigate])
   const refreshStorage = useCallback(() => setStorageTick((value) => value + 1), [])
 
   useModalFocusTrap({
@@ -183,6 +212,7 @@ export default function SettingsView() {
       case SETTINGS_TAB_AGENT_PRESETS: return t('settings.agentPresets')
       case SETTINGS_TAB_INTEGRATIONS: return t('settings.integrations')
       case SETTINGS_TAB_DATA: return t('settings.dataExport')
+      case SETTINGS_TAB_RECOVERY: return t('sideEffectRecovery.navTitle')
       case SETTINGS_TAB_ABOUT: return t('settings.about')
       default: return item
     }
@@ -202,7 +232,12 @@ export default function SettingsView() {
   }, [t])
 
   function renderModels() {
-    return <SettingsModelsPanel diagnostics={diagnostics} onChanged={() => refreshDiagnostics()} t={t} />
+    return <SettingsModelsPanel
+      diagnostics={diagnostics}
+      onChanged={() => refreshDiagnostics()}
+      onReady={returnTo ? closeSettings : undefined}
+      t={t}
+    />
   }
 
   function renderGeneral() {
@@ -282,6 +317,13 @@ export default function SettingsView() {
         return <SettingsIntegrationsPanel navigate={navigate} t={t} />
       case SETTINGS_TAB_DATA:
         return <SettingsDataExport state={state} dispatch={dispatch} storageBytes={storageEstimate.usage} storageQuota={storageEstimate.quota} onStorageChanged={refreshStorage} />
+      case SETTINGS_TAB_RECOVERY:
+        return <SettingsSideEffectRecoveryPanel
+          lang={lang}
+          modelRecoveryTarget={modelRecoveryTarget}
+          onOpenOriginalTask={openRecoveredTask}
+          t={t}
+        />
       case SETTINGS_TAB_ABOUT:
       default:
         return renderAbout()

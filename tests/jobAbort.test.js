@@ -4,12 +4,18 @@ import path from 'node:path'
 import test from 'node:test'
 
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-abort-tests', String(process.pid))
+process.env.MODEL_BASE_URL = 'http://127.0.0.1:11434/v1'
+process.env.MODEL_NAME = 'test-model'
 
 const { abortJob, getJobRuntime, closeJobRuntime } = await import('../server/services/jobRuntime.js')
 const { createAppServer } = await import('../server/appServer.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const TEST_USER = issueTestSession().userId
+const TEST_MODEL_ENV = {
+  MODEL_BASE_URL: 'http://127.0.0.1:11434/v1',
+  MODEL_NAME: 'test-model',
+}
 
 test('abortJob terminates an in-flight job via AbortController signal', async () => {
   // 不能用 new JobRuntime() —— abortJob 走 singleton。用 singleton。
@@ -17,6 +23,10 @@ test('abortJob terminates an in-flight job via AbortController signal', async ()
   // monkey-patch singleton 工厂走我们自己的 executeStep
   const runtime = getJobRuntime()
   runtime.stop() // 停 timer,改成手动 drain
+  runtime.planner = (prompt) => ({
+    title: prompt,
+    steps: [{ kind: 'execute', title: '执行' }],
+  })
   // 替换 executeStep 让它 hang 在 signal 上
   let sawAbort = false
   runtime.executeStep = async ({ signal }) => new Promise((resolve, reject) => {
@@ -77,7 +87,7 @@ test('abortJob returns null for unknown job id and 404 over HTTP', async () => {
 test('POST /api/jobs/:id/abort returns {ok:true} and cancels owner job', async () => {
   closeJobRuntime()
   const { token, userId } = issueTestSession()
-  const server = createAppServer({ getEnv: () => ({}) })
+  const server = createAppServer({ getEnv: () => TEST_MODEL_ENV })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
 

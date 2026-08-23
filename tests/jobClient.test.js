@@ -96,6 +96,81 @@ test('job client uses expected endpoints', async () => {
   })
 })
 
+test('job client preserves structured model readiness errors', async () => {
+  await assert.rejects(
+    createJob('keep this prompt', {
+      fetchImpl: async () => ({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: {
+            code: 'MODEL_PROVIDER_UNVERIFIED',
+            message: 'Test this provider first.',
+            action: 'test_provider',
+            providerId: 'provider-1',
+            modelName: 'model-1',
+            configRevision: 3,
+            details: { checkedAt: null },
+          },
+        }),
+      }),
+    }),
+    (error) => {
+      assert.equal(error.message, 'Test this provider first.')
+      assert.equal(error.statusCode, 409)
+      assert.equal(error.code, 'MODEL_PROVIDER_UNVERIFIED')
+      assert.equal(error.action, 'test_provider')
+      assert.equal(error.providerId, 'provider-1')
+      assert.equal(error.modelName, 'model-1')
+      assert.equal(error.configRevision, 3)
+      assert.deepEqual(error.details, { checkedAt: null })
+      return true
+    },
+  )
+})
+
+test('job client promotes model request recovery metadata onto thrown errors', async () => {
+  await assert.rejects(
+    retryStep('job-1', 'step-1', {
+      fetchImpl: async () => ({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: {
+            code: 'MODEL_REQUEST_OUTCOME_UNKNOWN',
+            message: 'Verify the upstream request before retrying.',
+            action: 'verify_model_request',
+            recoveryKind: 'model_request_outcome_unknown',
+            modelRequestId: 'mr_job_1',
+            stepId: 'step-1',
+            providerId: 'provider-old',
+            modelName: 'model-old',
+            configRevision: 7,
+            targetProviderId: 'provider-new',
+            targetModelName: 'model-new',
+            targetConfigRevision: 8,
+            unsafeToReplay: true,
+            requiresUserVerification: true,
+          },
+        }),
+      }),
+    }),
+    (error) => {
+      assert.equal(error.code, 'MODEL_REQUEST_OUTCOME_UNKNOWN')
+      assert.equal(error.action, 'verify_model_request')
+      assert.equal(error.recoveryKind, 'model_request_outcome_unknown')
+      assert.equal(error.modelRequestId, 'mr_job_1')
+      assert.equal(error.stepId, 'step-1')
+      assert.equal(error.targetProviderId, 'provider-new')
+      assert.equal(error.targetModelName, 'model-new')
+      assert.equal(error.targetConfigRevision, 8)
+      assert.equal(error.unsafeToReplay, true)
+      assert.equal(error.requiresUserVerification, true)
+      return true
+    },
+  )
+})
+
 test('HTML artifact previews use an auth header without exposing the session token in the URL', async () => {
   const previousWindow = globalThis.window
   globalThis.window = { localStorage: null, sessionStorage: null }

@@ -30,13 +30,19 @@ test('composer primary action switches in place from send to stop', async () => 
     'chatComposer.attachment': 'Attach',
     'chatComposer.send': 'Send',
     'chatComposer.stop': 'Stop',
+    'chat.modelPicker.unconfiguredSendBlocked': 'Configure a model first',
   })[key] || key
-  const renderActions = ({ isGenerating = false, sendDisabled = false } = {}) => (
+  const renderActions = ({
+    isGenerating = false,
+    modelReadiness = { kind: 'ready', canSend: true },
+    sendDisabled = false,
+  } = {}) => (
     <ComposerActions
       approvalMode="normal"
       fileInputRef={{ current: null }}
       isGenerating={isGenerating}
-      modelOptions={[]}
+      modelOptions={[{ name: 'local-model' }]}
+      modelReadiness={modelReadiness}
       modelPickerOpen={false}
       onAbort={() => { stops += 1 }}
       onApprovalModeChange={() => {}}
@@ -48,7 +54,7 @@ test('composer primary action switches in place from send to stop', async () => 
       onSend={() => { sends += 1 }}
       sendDisabled={sendDisabled}
       onVoiceClick={() => {}}
-      selectedModel=""
+      selectedModel="local-model"
       t={t}
       voiceLabel="Voice"
       voiceState="idle"
@@ -85,6 +91,15 @@ test('composer primary action switches in place from send to stop', async () => 
     assert.equal(rootElement.querySelector('[data-testid="composer-primary-action"]'), sendButton)
     assert.equal(sendButton.disabled, true)
     assert.equal(rootElement.querySelectorAll('[data-testid="composer-primary-action"]').length, 1)
+
+    await act(async () => root.render(renderActions({
+      modelReadiness: { kind: 'unconfigured', canSend: false },
+    })))
+    assert.equal(sendButton.disabled, false)
+    assert.equal(sendButton.getAttribute('aria-label'), 'Configure a model first')
+    assert.equal(sendButton.getAttribute('title'), 'Configure a model first')
+    await act(async () => sendButton.click())
+    assert.equal(sends, 2)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

@@ -123,6 +123,82 @@ test('/api/show 自动探出真实上下文窗口 —— 用户不用再猜', as
   assert.equal(profile.supportsTools, true)
 })
 
+test('Ollama 原生发现携带 Provider 凭据且自定义 Authorization 优先', async () => {
+  const requests = []
+  const fetchImpl = async (url, init) => {
+    requests.push({ path: new URL(url).pathname, headers: { ...init.headers } })
+    const data = new URL(url).pathname === '/api/tags'
+      ? { models: [{ name: 'secured-model' }] }
+      : { capabilities: ['tools'], model_info: { 'secure.context_length': 8192 } }
+    return { ok: true, status: 200, text: async () => JSON.stringify(data) }
+  }
+
+  const bearer = await discoverOllamaEndpoint({
+    baseUrl: 'http://localhost:11434',
+    modelName: 'secured-model',
+    apiKey: 'saved-api-key',
+    headers: { 'X-Org': 'local-user' },
+    fetchImpl,
+  })
+  assert.equal(bearer.ok, true)
+  assert.ok(requests.length >= 2)
+  for (const request of requests) {
+    assert.equal(request.headers.Authorization, 'Bearer saved-api-key')
+    assert.equal(request.headers['X-Org'], 'local-user')
+  }
+
+  requests.length = 0
+  await listOllamaModels({
+    baseUrl: 'http://localhost:11434',
+    apiKey: 'ignored-api-key',
+    headers: { authorization: 'Basic custom-secret' },
+    fetchImpl,
+  })
+  assert.equal(requests[0].headers.authorization, 'Basic custom-secret')
+  assert.equal(Object.hasOwn(requests[0].headers, 'Authorization'), false)
+})
+
+test('Ollama 原生请求禁止自动跟随到 metadata 地址', async () => {
+  let fetchCalls = 0
+  await assert.rejects(
+    listOllamaModels({
+      baseUrl: 'http://localhost:11434',
+      fetchImpl: async (_url, init) => {
+        fetchCalls += 1
+        assert.equal(init.redirect, 'manual')
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'http://169.254.169.254/latest/meta-data' },
+        })
+      },
+    }),
+    (error) => error?.code === 'OUTBOUND_REDIRECT_CROSS_ORIGIN',
+  )
+  assert.equal(fetchCalls, 1)
+})
+
+test('Ollama 原生请求拒绝跨域重定向且不向新域发送凭据', async () => {
+  const requests = []
+  await assert.rejects(
+    listOllamaModels({
+      baseUrl: 'http://localhost:11434',
+      apiKey: 'local-ollama-secret',
+      fetchImpl: async (url, init) => {
+        requests.push({ url, authorization: init.headers.Authorization })
+        return new Response(null, {
+          status: 307,
+          headers: { location: 'https://other.example/api/tags' },
+        })
+      },
+    }),
+    (error) => error?.code === 'OUTBOUND_REDIRECT_CROSS_ORIGIN',
+  )
+  assert.deepEqual(requests, [{
+    url: 'http://localhost:11434/api/tags',
+    authorization: 'Bearer local-ollama-secret',
+  }])
+})
+
 test('discoverOllamaEndpoint 一次拿到模型列表 + 目标模型能力', async () => {
   const result = await discoverOllamaEndpoint({
     baseUrl: 'http://localhost:11434/v1',

@@ -11,6 +11,7 @@ const composerActionsSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ch
 const lifecycleSource = fs.readFileSync(new URL('../src/pages/ChatSplit/useChatSessionLifecycle.js', import.meta.url), 'utf8')
 const messageListSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatMessages.jsx', import.meta.url), 'utf8')
 const messageRowSource = fs.readFileSync(new URL('../src/pages/ChatSplit/chatMessages/MessageRow.jsx', import.meta.url), 'utf8')
+const serverTurnSource = fs.readFileSync(new URL('../src/pages/ChatSplit/serverTurnFlow.js', import.meta.url), 'utf8')
 const activityTracesSource = fs.readFileSync(new URL('../src/pages/ChatSplit/chatMessages/ActivityTraces.jsx', import.meta.url), 'utf8')
 const activityStreamSource = fs.readFileSync(new URL('../src/pages/ChatSplit/chatMessages/ActivityStream.jsx', import.meta.url), 'utf8')
 const chatViewSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatSplitView.jsx', import.meta.url), 'utf8')
@@ -27,15 +28,20 @@ test('chat composer accepts pasted files and shows managed upload state', () => 
   assert.match(composerSource, /item\.uploadStatus === 'error'/)
 })
 
-test('chat drafts persist while typing and message actions stay copy-only', () => {
+test('chat drafts persist while typing and only safe model failures add a resend action', () => {
   assert.match(lifecycleSource, /SET_SESSION_DRAFT[\s\S]{0,180}text: input/)
-  assert.match(lifecycleSource, /previousId === nextId[\s\S]{0,520}preserveAttachmentsForSessionRef[\s\S]{0,360}if \(!preserveAttachments\) setAttachments\(\[\]\)/)
+  assert.match(lifecycleSource, /attachments: normalizeDraftAttachments\(attachmentsRef\.current\)/)
+  assert.match(lifecycleSource, /const nextDraft = readSessionDraft\(\(state\.sessionDrafts \|\| \{\}\)\[nextId\]\)/)
+  assert.match(lifecycleSource, /if \(!preserveAttachments\) setAttachments\(nextDraft\.attachments\)/)
   assert.match(chatEntrySource, /triggerSendFlow\(typedContent \|\| describeAttachmentPrompt\(currentAttachments\), currentAttachments\)/)
   assert.doesNotMatch(chatSource, /handleEditMessage|editingMessageId|handleRegenerate|handleDeleteMessage/)
   assert.match(messageRowSource, /<CopyButton content=\{msg\.content\}/)
   assert.match(messageRowSource, /copyTextToClipboard\(copyableMessageText\(content\)\)/)
   assert.match(messageRowSource, /chatMessages\.copied/)
   assert.doesNotMatch(messagesSource, /onEditMessage|onRegenerateMessage|onDeleteMessage|<RefreshCw|<Trash2/)
+  assert.match(messageRowSource, /isModelPreExecutionFailure\(msg\) \? onRetryModelFailure : null/)
+  assert.match(messageRowSource, /data-testid="retry-model-request"/)
+  assert.doesNotMatch(messageRowSource, /onRegenerateMessage|onEditMessage|onDeleteMessage/)
 })
 
 test('fresh sessions use a deterministic local title without a competing model request', () => {
@@ -88,7 +94,7 @@ test('local mutation receipts stay visible when managed-artifact acceptance fail
 test('composer uses one stable primary button for send and stop', () => {
   assert.match(composerActionsSource, /<ModelPicker/)
   assert.match(composerActionsSource, /data-testid="context-ring"/)
-  assert.match(composerActionsSource, /const primaryActionLabel = t\(isGenerating \? 'chatComposer\.stop' : 'chatComposer\.send'\)/)
+  assert.match(composerActionsSource, /const primaryActionLabel = isGenerating[\s\S]*?t\('chatComposer\.stop'\)[\s\S]*?t\(readinessMessageKey\)[\s\S]*?t\('chatComposer\.send'\)/)
   assert.match(composerActionsSource, /onClick=\{isGenerating \? onAbort : onSend\}/)
   assert.match(composerActionsSource, /disabled=\{!isGenerating && sendDisabled\}/)
   assert.match(composerActionsSource, /\{isGenerating[\s\S]*?<Square[\s\S]*?<Send/)
@@ -223,4 +229,12 @@ test('completed artifact rows do not revert to streaming source when a later mes
   assert.match(messageRowSource, /artifact-completion-summary/)
   assert.doesNotMatch(messageRowSource, /Server turn completed/)
   assert.match(messageRowSource, /<ArtifactReferenceLinks[\s\S]*?msg=\{msg\}/)
+})
+
+test('model setup failures use one durable in-message card without a duplicate toast', () => {
+  assert.doesNotMatch(serverTurnSource, /toast\.error/)
+  assert.match(messageRowSource, /const modelSetupFailure = msg\.meta\?\.failed === true && isModelSetupFailure\(msg\)/)
+  assert.match(messageRowSource, /modelSetupFailure \? \([\s\S]{0,100}<ModelSetupFailureCard/)
+  assert.match(messageRowSource, /data-testid="model-setup-error-card"/)
+  assert.match(messageRowSource, /onClick=\{onManageModels\}/)
 })

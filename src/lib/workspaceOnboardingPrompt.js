@@ -44,4 +44,5 @@ export function shouldAutoOpenWorkspaceOnboarding({ authenticated, complete, dis
     && complete === false
     && dismissed !== true
     && pathname !== '/permissions'
+    && pathname !== '/settings'
 }

@@ -6,6 +6,7 @@ import test from 'node:test'
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'gugo-turn-execution-lease-tests', String(process.pid))
 
 const { issueTestSession } = await import('./helpers/testAuth.js')
+const { getDb } = await import('../server/db.js')
 const { upsertSession } = await import('../server/services/sessionStore.js')
 const { createTurnEvent } = await import('../shared/turnEvents.js')
 const { appendTurnEvent } = await import('../server/services/turnEventStore.js')
@@ -24,28 +25,79 @@ const {
   enqueueTurnSteering,
 } = await import('../server/services/turnSteeringStore.js')
 
+test('turn execution claim is fenced by a durable session-deletion journal', () => {
+  const { userId } = issueTestSession()
+  const scope = {
+    userId,
+    sessionId: 'turn-session-delete-fence',
+    turnId: 'turn-session-delete-fence-turn',
+  }
+  upsertSession({ id: scope.sessionId, userId, title: 'session delete fence' })
+  const operationId = `turn-session-delete-fence-${Date.now()}`
+  const now = Date.now()
+  const db = getDb()
+  db.prepare(`
+    INSERT INTO user_data_clear_operations
+      (operation_id, owner_id, lease_owner, lease_pid, lease_expires_at,
+       status, operation_kind, session_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'staging', 'session_delete', ?, ?, ?)
+  `).run(operationId, userId, 'test-session-delete', process.pid, now + 60_000, scope.sessionId, now, now)
+  try {
+    assert.throws(
+      () => claimTurnExecutionLease({ ...scope, ownerId: 'worker-a', now, leaseMs: 2_000 }),
+      (error) => error?.code === 'USER_DATA_CLEAR_IN_PROGRESS'
+        && error?.statusCode === 409,
+    )
+    assert.equal(getTurnExecutionLease(scope), null)
+  } finally {
+    db.prepare('DELETE FROM user_data_clear_operations WHERE operation_id = ?').run(operationId)
+  }
+})
+
 test('turn execution lease is exclusive, renewable, cancellable, and recoverable', () => {
   const { userId } = issueTestSession()
   const scope = { userId, sessionId: 'turn-lease-session', turnId: 'turn-lease' }
   upsertSession({ id: scope.sessionId, userId, title: 'lease' })
 
   assert.equal(claimTurnExecutionLease({ ...scope, ownerId: 'worker-a', now: 1_000, leaseMs: 2_000 }), true)
-  assert.equal(getTurnExecutionLease(scope).acceptingSteering, true)
+  const workerALease = getTurnExecutionLease(scope)
+  assert.equal(workerALease.acceptingSteering, true)
   assert.equal(claimTurnExecutionLease({ ...scope, ownerId: 'worker-b', now: 2_000, leaseMs: 2_000 }), false)
   assert.equal(isTurnExecutionLeaseActive(scope, 2_999), true)
   assert.deepEqual(
-    renewTurnExecutionLease({ ...scope, ownerId: 'worker-a', now: 2_000, leaseMs: 2_000 }),
+    renewTurnExecutionLease({
+      ...scope,
+      ownerId: 'worker-a',
+      fencingToken: workerALease.fencingToken,
+      now: 2_000,
+      leaseMs: 2_000,
+    }),
     { renewed: true, cancelRequested: false },
   )
   assert.equal(requestTurnExecutionCancellation({ ...scope, now: 2_500 }), true)
   assert.deepEqual(
-    renewTurnExecutionLease({ ...scope, ownerId: 'worker-a', now: 3_000, leaseMs: 2_000 }),
+    renewTurnExecutionLease({
+      ...scope,
+      ownerId: 'worker-a',
+      fencingToken: workerALease.fencingToken,
+      now: 3_000,
+      leaseMs: 2_000,
+    }),
     { renewed: true, cancelRequested: true },
   )
   assert.equal(claimTurnExecutionLease({ ...scope, ownerId: 'worker-b', now: 5_000, leaseMs: 2_000 }), true)
-  assert.equal(getTurnExecutionLease(scope).cancelRequestedAt, 2_500)
-  assert.equal(releaseTurnExecutionLease({ ...scope, ownerId: 'worker-a' }), false)
-  assert.equal(releaseTurnExecutionLease({ ...scope, ownerId: 'worker-b' }), true)
+  const workerBLease = getTurnExecutionLease(scope)
+  assert.equal(workerBLease.cancelRequestedAt, 2_500)
+  assert.equal(releaseTurnExecutionLease({
+    ...scope,
+    ownerId: 'worker-a',
+    fencingToken: workerALease.fencingToken,
+  }), false)
+  assert.equal(releaseTurnExecutionLease({
+    ...scope,
+    ownerId: 'worker-b',
+    fencingToken: workerBLease.fencingToken,
+  }), true)
   assert.equal(isTurnExecutionLeaseActive(scope, 5_001), false)
 })
 
@@ -79,7 +131,13 @@ test('steering inbox closing is atomic and a replacement owner reopens it', () =
     now: 1_000,
     leaseMs: 1_000,
   }), true)
-  assert.deepEqual(tryCloseTurnSteeringInbox({ ...scope, ownerId: 'worker-a', now: 1_100 }), {
+  const workerALease = getTurnExecutionLease(scope)
+  assert.deepEqual(tryCloseTurnSteeringInbox({
+    ...scope,
+    ownerId: 'worker-a',
+    fencingToken: workerALease.fencingToken,
+    now: 1_100,
+  }), {
     closed: true,
     reason: 'closed',
     pendingCount: 0,
@@ -108,7 +166,8 @@ test('steering inbox closing is atomic and a replacement owner reopens it', () =
     now: 2_200,
     leaseMs: 2_000,
   }), true)
-  assert.equal(getTurnExecutionLease(scope).acceptingSteering, true)
+  const workerBLease = getTurnExecutionLease(scope)
+  assert.equal(workerBLease.acceptingSteering, true)
 
   enqueueTurnSteering({
     ...scope,
@@ -116,7 +175,12 @@ test('steering inbox closing is atomic and a replacement owner reopens it', () =
     clientRequestId: 'replacement-owner',
     now: 2_300,
   })
-  assert.deepEqual(tryCloseTurnSteeringInbox({ ...scope, ownerId: 'worker-b', now: 2_400 }), {
+  assert.deepEqual(tryCloseTurnSteeringInbox({
+    ...scope,
+    ownerId: 'worker-b',
+    fencingToken: workerBLease.fencingToken,
+    now: 2_400,
+  }), {
     closed: false,
     reason: 'pending',
     pendingCount: 1,
@@ -129,5 +193,10 @@ test('steering inbox closing is atomic and a replacement owner reopens it', () =
     leaseId: claimed.leaseId,
     now: 2_500,
   }), 1)
-  assert.equal(tryCloseTurnSteeringInbox({ ...scope, ownerId: 'worker-b', now: 2_600 }).closed, true)
+  assert.equal(tryCloseTurnSteeringInbox({
+    ...scope,
+    ownerId: 'worker-b',
+    fencingToken: workerBLease.fencingToken,
+    now: 2_600,
+  }).closed, true)
 })

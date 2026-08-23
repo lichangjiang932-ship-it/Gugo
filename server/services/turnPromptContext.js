@@ -18,11 +18,20 @@ function normalizeIds(values, limit = 32) {
     .slice(0, limit)
 }
 
+function isPromiseLike(value) {
+  return !!value && (typeof value === 'object' || typeof value === 'function')
+    && typeof value.then === 'function'
+}
+
+function warnStep(label, error, warn = logWarn) {
+  try { warn('turn.prompt', `${label}: ${error?.message || error}`) } catch { /* optional context */ }
+}
+
 function safeStep(label, fallback, work, warn = logWarn) {
   try {
     return work()
   } catch (error) {
-    try { warn('turn.prompt', `${label}: ${error?.message || error}`) } catch { /* optional context */ }
+    warnStep(label, error, warn)
     return fallback
   }
 }
@@ -94,6 +103,7 @@ export function prepareTurnPromptContext({
   sessionId = null,
   recentMessages = [],
   includeRecentTranscript = true,
+  compactionArchivePort,
   query = '',
   canaryAssignment = null,
   env = process.env,
@@ -104,6 +114,7 @@ export function prepareTurnPromptContext({
   const prepareSkillCatalog = dependencies.prepareSkillCatalogForPrompt || prepareSkillCatalogForPrompt
   const prepareMemory = dependencies.prepareMemoryInjectionContext || prepareMemoryInjectionContext
   const renderPluginPrompts = dependencies.renderRuntimePromptBlocks || renderRuntimePromptBlocks
+  const buildSessions = dependencies.buildSessionsBlock || buildSessionsBlock
   const warn = dependencies.logWarn || logWarn
   const readInstructions = dependencies.readWorkspaceInstructions || readWorkspaceInstructions
   const normalizedSkillIds = normalizeIds(skillIds)
@@ -128,7 +139,6 @@ export function prepareTurnPromptContext({
   for (const skill of registeredSkills) preparedById.set(String(skill.id), skill)
   const preparedSkills = normalizedSkillIds.map((id) => preparedById.get(id)).filter(Boolean)
 
-  const blocks = []
   const canaryPrompt = canaryAssignment?.target === 'prompt:workspace-instructions'
     && typeof canaryAssignment?.promptContent === 'string'
     && canaryAssignment.promptContent.trim()
@@ -145,15 +155,13 @@ export function prepareTurnPromptContext({
     skills: preparedSkills,
     catalogSkills: [...catalogSkills, ...preparedSkills],
   }), warn)
-  const sessions = safeStep('session block failed', null, () => buildSessionsBlock({
+  const sessions = safeStep('session block failed', null, () => buildSessions({
     userId,
     sessionId,
     recentMessages,
     includeRecentTranscript,
+    compactionArchivePort,
   }), warn)
-  for (const block of [identity, ishiki, skills, sessions]) {
-    if (block?.text) blocks.push({ role: 'system', content: block.text })
-  }
 
   const tokenCap = Number(env.MEMORY_INJECT_TOKEN_CAP || 800)
   const memory = safeStep('memory context failed', { text: '', memoryIds: [] }, () => prepareMemory({
@@ -162,7 +170,6 @@ export function prepareTurnPromptContext({
     query,
     tokenCap: Number.isFinite(tokenCap) ? tokenCap : 800,
   }), warn)
-  if (memory.text) blocks.push({ role: 'system', content: memory.text })
   const runtimePrompts = safeStep(
     'runtime plugin prompt context failed',
     { blocks: [], errors: [] },
@@ -174,42 +181,58 @@ export function prepareTurnPromptContext({
     }),
     warn,
   )
-  for (const error of runtimePrompts.errors || []) {
-    try {
-      warn(
-        'turn.prompt',
-        `runtime plugin prompt omitted: ${error.pluginId}/${error.id} (${error.code})`,
-      )
-    } catch { /* optional context */ }
-  }
-  for (const block of runtimePrompts.blocks || []) {
-    blocks.push({
-      role: 'system',
-      content: `# Runtime Plugin Context: ${block.id}\nSource: ${block.pluginId}\n\n${block.text}`,
-    })
-  }
-  // Keep the four compiled blocks as one stable prefix. Workspace instructions
-  // may change independently while a task is running, so placing them before
-  // identity would invalidate the provider-side prefix cache for every block.
-  if (instructions?.text) blocks.push({ role: 'system', content: instructions.text })
+  const finalize = (resolvedSessions) => {
+    const blocks = []
+    for (const block of [identity, ishiki, skills, resolvedSessions]) {
+      if (block?.text) blocks.push({ role: 'system', content: block.text })
+    }
+    if (memory.text) blocks.push({ role: 'system', content: memory.text })
+    for (const error of runtimePrompts.errors || []) {
+      try {
+        warn(
+          'turn.prompt',
+          `runtime plugin prompt omitted: ${error.pluginId}/${error.id} (${error.code})`,
+        )
+      } catch { /* optional context */ }
+    }
+    for (const block of runtimePrompts.blocks || []) {
+      blocks.push({
+        role: 'system',
+        content: `# Runtime Plugin Context: ${block.id}\nSource: ${block.pluginId}\n\n${block.text}`,
+      })
+    }
+    // Keep the four compiled blocks as one stable prefix. Workspace instructions
+    // may change independently while a task is running, so placing them before
+    // identity would invalidate the provider-side prefix cache for every block.
+    if (instructions?.text) blocks.push({ role: 'system', content: instructions.text })
 
-  return {
-    messages: blocks,
-    effectiveAgentId,
-    skillIds: preparedSkills.map((skill) => String(skill.id)),
-    memoryIds: memory.memoryIds,
-    pluginPromptBlockIds: (runtimePrompts.blocks || []).map((block) => `${block.pluginId}:${block.id}`),
-    compactionArchiveId: sessions?.sources?.archiveId || null,
-    compactionBoundary: sessions?.sources?.compactionBoundary || null,
-    canaryAssignment: canaryPrompt ? {
-      id: canaryPrompt.id,
-      releaseId: canaryPrompt.releaseId,
-      variant: canaryPrompt.variant,
-      bucket: canaryPrompt.bucket,
-      target: canaryPrompt.target,
-      baselineSha256: canaryPrompt.baselineSha256,
-      candidateSha256: canaryPrompt.candidateSha256,
-      releaseFingerprint: canaryPrompt.releaseFingerprint,
-    } : null,
+    return {
+      messages: blocks,
+      effectiveAgentId,
+      skillIds: preparedSkills.map((skill) => String(skill.id)),
+      memoryIds: memory.memoryIds,
+      pluginPromptBlockIds: (runtimePrompts.blocks || []).map((block) => `${block.pluginId}:${block.id}`),
+      compactionArchiveId: resolvedSessions?.sources?.archiveId || null,
+      compactionBoundary: resolvedSessions?.sources?.compactionBoundary || null,
+      canaryAssignment: canaryPrompt ? {
+        id: canaryPrompt.id,
+        releaseId: canaryPrompt.releaseId,
+        variant: canaryPrompt.variant,
+        bucket: canaryPrompt.bucket,
+        target: canaryPrompt.target,
+        baselineSha256: canaryPrompt.baselineSha256,
+        candidateSha256: canaryPrompt.candidateSha256,
+        releaseFingerprint: canaryPrompt.releaseFingerprint,
+      } : null,
+    }
   }
+
+  if (!isPromiseLike(sessions)) return finalize(sessions)
+  return Promise.resolve(sessions).then(
+    (resolved) => finalize(resolved),
+    (error) => {
+      warnStep('session block failed', error, warn)
+      return finalize(null)
+    },
+  )
 }

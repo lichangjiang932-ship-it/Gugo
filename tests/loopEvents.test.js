@@ -273,6 +273,10 @@ test('request-error receives the prepared request and may claim only one retry',
       phase: 'model-request',
       hostService: { secret: 'must-not-cross-event-boundary' },
     },
+    beforeRequest: ({ request, attempt }) => ({
+      ...request,
+      modelRequestId: `mr_attempt_${attempt}`,
+    }),
     runModel: async (request) => {
       modelRequests.push(request)
       throw modelRequests.length === 1 ? firstError : retryError
@@ -283,7 +287,11 @@ test('request-error receives the prepared request and may claim only one retry',
   assert.deepEqual(errorEvents[0].payload, {
     kind: 'error',
     error: firstError,
-    request: { model: 'original', preparedForAttempt: 1 },
+    request: {
+      model: 'original',
+      preparedForAttempt: 1,
+      modelRequestId: 'mr_attempt_1',
+    },
     attempt: 1,
   })
   assert.deepEqual(errorEvents[0].context, {
@@ -297,13 +305,41 @@ test('request-error receives the prepared request and may claim only one retry',
   assert.equal('request' in errorEvents[0].context, false)
   assert.equal('hostService' in errorEvents[0].context, false)
   assert.deepEqual(modelRequests, [
-    { model: 'original', preparedForAttempt: 1 },
+    { model: 'original', preparedForAttempt: 1, modelRequestId: 'mr_attempt_1' },
     {
       model: 'original',
       preparedForAttempt: 2,
       retryClaimed: true,
+      modelRequestId: 'mr_attempt_2',
     },
   ])
+})
+
+test('a model budget error carrying an authoritative response cannot be claimed for retry', async () => {
+  const events = createLoopEvents()
+  let modelCalls = 0
+  let retryEvents = 0
+  events.on('request-error', () => {
+    retryEvents += 1
+    return { kind: 'retry' }
+  })
+  const response = { content: 'already paid response', toolCalls: [] }
+
+  await assert.rejects(runModelStep({
+    request: { model: 'original' },
+    loopEvents: events,
+    runModel: async () => {
+      modelCalls += 1
+      throw Object.assign(new Error('model token budget exceeded'), {
+        code: 'MODEL_BUDGET_EXCEEDED',
+        partialModelResult: response,
+      })
+    },
+  }), (error) => error?.code === 'MODEL_BUDGET_EXCEEDED'
+    && error?.partialModelResult === response)
+
+  assert.equal(modelCalls, 1)
+  assert.equal(retryEvents, 0)
 })
 
 test('the process hook service is bridged as pre-tool and post-tool consumers', async () => {

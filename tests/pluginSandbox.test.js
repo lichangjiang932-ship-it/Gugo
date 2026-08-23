@@ -10,6 +10,7 @@ import { runTransformer, validateTransformer } from '../server/plugins/pluginSan
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const examplePlugin = {
   id: 'example-transformer-upper',
+  rootDir: path.join(repoRoot, 'plugins/example-transformer-upper'),
   entryPath: path.join(repoRoot, 'plugins/example-transformer-upper/entry.js'),
 }
 
@@ -165,10 +166,41 @@ test('plugin sandbox source is bounded for inline and entryPath definitions', as
     const oversizedEntry = path.join(tempDir, 'entry.js')
     await fs.writeFile(oversizedEntry, `${exactSource}x`, 'utf8')
     await assert.rejects(
-      () => validateTransformer({ plugin: { entryPath: oversizedEntry } }),
+      () => validateTransformer({ plugin: { rootDir: tempDir, entryPath: oversizedEntry } }),
       (error) => error?.code === 'PLUGIN_SANDBOX_SOURCE_INVALID'
         && error?.retryable === false
         && /512 KiB/.test(error?.message || ''),
+    )
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true })
+  }
+})
+
+test('plugin sandbox revalidates entry containment after load', async (t) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'gugo-plugin-scope-'))
+  const pluginDir = path.join(tempDir, 'plugin')
+  const outsideDir = path.join(tempDir, 'outside')
+  await fs.mkdir(pluginDir)
+  await fs.mkdir(outsideDir)
+  const entryPath = path.join(pluginDir, 'entry.js')
+  await fs.writeFile(entryPath, 'function transform(input) { return input }')
+  await fs.writeFile(
+    path.join(outsideDir, 'entry.js'),
+    "function transform() { return 'escaped' }",
+  )
+  await fs.rm(pluginDir, { recursive: true })
+  try {
+    await fs.symlink(outsideDir, pluginDir, process.platform === 'win32' ? 'junction' : 'dir')
+  } catch (error) {
+    await fs.rm(tempDir, { recursive: true, force: true })
+    t.skip(`symlink unavailable: ${error.code}`)
+    return
+  }
+  try {
+    await assert.rejects(
+      () => runTransformer({ plugin: { rootDir: pluginDir, entryPath }, input: null }),
+      (error) => error?.code === 'PLUGIN_ENTRY_SCOPE_INVALID'
+        && error?.retryable === false,
     )
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true })
@@ -274,6 +306,14 @@ test('plugin sandbox vm cannot escape to the worker realm through constructor ch
     assert.equal(result.ok, true)
     assert.equal(result.output, 'undefined')
   }
+})
+
+test('plugin sandbox worker uses the shared sanitized child environment boundary', async () => {
+  const source = await fs.readFile(
+    fileURLToPath(new URL('../server/plugins/pluginSandbox.js', import.meta.url)),
+    'utf8',
+  )
+  assert.match(source, /new Worker\(WORKER_SOURCE, \{[\s\S]*?env: sanitizeChildEnv\(\),[\s\S]*?workerData:/u)
 })
 
 test('plugin sandbox vm keeps standard intrinsics and rejects host realm capability reads', async () => {

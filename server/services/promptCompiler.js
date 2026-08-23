@@ -14,6 +14,7 @@ import {
   INLINE_SKILL_DEFINITION_LIMITS,
   truncateInlineSkillText,
 } from '../../shared/inlineSkillDefinitions.js'
+import { configureInlineSkillPromptPreparer } from './inlineSkillPromptBindingRuntime.js'
 
 const BLOCK_TYPES = ['identity', 'ishiki', 'skills', 'sessions']
 const CACHE_LIMIT = 64
@@ -277,6 +278,8 @@ export function prepareInlineSkillsForPrompt({ skillIds = [], skillDefinitions =
     .slice(0, limits.maxDefinitions)
 }
 
+configureInlineSkillPromptPreparer(prepareInlineSkillsForPrompt)
+
 function normalizeCatalogSkill(skill) {
   const id = truncateInlineSkillText(skill?.id, INLINE_SKILL_DEFINITION_LIMITS.id)
   if (!id) return null
@@ -493,33 +496,56 @@ export function findCompactionArchiveReference(recentMessages) {
   return null
 }
 
-function loadArchive({ userId, sessionId, reference }) {
+function isPromiseLike(value) {
+  return !!value && (typeof value === 'object' || typeof value === 'function')
+    && typeof value.then === 'function'
+}
+
+function acceptArchive({ archive, sessionId, reference }) {
+  if (!archive || (sessionId && archive.sessionId !== sessionId)) return null
+  if (reference.compactCheckpointSource) {
+    const checkpoint = validateCompactCheckpointSource(
+      reference.compactCheckpointSource,
+      archive.archivedMessages,
+    )
+    if (!checkpoint.ok) return null
+  }
+  return { archive, reference }
+}
+
+function loadArchive({ userId, sessionId, reference, compactionArchivePort }) {
   if (!userId || !reference?.id) return null
   try {
-    const archive = getCompactionArchive({ userId, id: reference.id })
-    if (!archive || (sessionId && archive.sessionId !== sessionId)) return null
-    if (reference.compactCheckpointSource) {
-      const checkpoint = validateCompactCheckpointSource(
-        reference.compactCheckpointSource,
-        archive.archivedMessages,
+    const archive = getCompactionArchive(
+      { userId, id: reference.id },
+      { compactionArchivePort },
+    )
+    if (isPromiseLike(archive)) {
+      return Promise.resolve(archive).then(
+        (value) => {
+          try {
+            return acceptArchive({ archive: value, sessionId, reference })
+          } catch {
+            return null
+          }
+        },
+        () => null,
       )
-      if (!checkpoint.ok) return null
     }
-    return { archive, reference }
+    return acceptArchive({ archive, sessionId, reference })
   } catch {
     return null
   }
 }
 
-export function buildSessionsBlock({
+function renderSessionsBlock({
   userId,
   sessionId,
-  recentMessages = [],
-  includeRecentTranscript = true,
-} = {}) {
-  const sourceMessages = Array.isArray(recentMessages) ? recentMessages : []
-  const reference = findCompactionArchiveReference(sourceMessages)
-  const loadedArchive = loadArchive({ userId, sessionId, reference })
+  sourceMessages,
+  includeRecentTranscript,
+  reference,
+  loadedArchive,
+}) {
   const archive = loadedArchive?.archive || null
   // Never discard canonical history unless the referenced archive was loaded
   // for this user and session. A stale/deleted/cross-session id otherwise
@@ -573,6 +599,36 @@ export function buildSessionsBlock({
     }
     return sections.join('\n\n')
   })
+}
+
+export function buildSessionsBlock({
+  userId,
+  sessionId,
+  recentMessages = [],
+  includeRecentTranscript = true,
+  compactionArchivePort,
+} = {}) {
+  const sourceMessages = Array.isArray(recentMessages) ? recentMessages : []
+  const reference = findCompactionArchiveReference(sourceMessages)
+  const loadedArchive = loadArchive({
+    userId,
+    sessionId,
+    reference,
+    compactionArchivePort,
+  })
+  const input = {
+    userId,
+    sessionId,
+    sourceMessages,
+    includeRecentTranscript,
+    reference,
+  }
+  return isPromiseLike(loadedArchive)
+    ? Promise.resolve(loadedArchive).then((resolved) => renderSessionsBlock({
+        ...input,
+        loadedArchive: resolved,
+      }))
+    : renderSessionsBlock({ ...input, loadedArchive })
 }
 
 export function getPromptCompilerStats() {

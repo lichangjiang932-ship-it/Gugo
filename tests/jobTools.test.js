@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import '../scripts/testEnvironment.mjs'
 
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-tools-tests', String(process.pid))
 
@@ -19,8 +20,28 @@ const {
 } = await import('../server/services/jobRuntime.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 const { getDb } = await import('../server/db.js')
+const { buildInitialPlan } = await import('../server/services/jobPlanner.js')
+const { getJobBudget } = await import('../server/utils/jobBudget.js')
+const { activateTestCompactionArchivePort } = await import('./helpers/testCompactionArchivePort.js')
+
+const compactionArchiveController = activateTestCompactionArchivePort({
+  source: 'test.job-tools',
+})
+
+test.after(() => {
+  compactionArchiveController.release()
+})
 
 const TEST_USER = issueTestSession().userId
+const resolveTestModelBinding = () => ({
+  providerId: null,
+  modelName: 'job-tools-test-model',
+  configRevision: null,
+  env: {
+    MODEL_BASE_URL: 'http://127.0.0.1:11434/v1',
+    MODEL_NAME: 'job-tools-test-model',
+  },
+})
 
 test('top-level Agent calls inherit the parent model unless explicitly overridden', () => {
   assert.deepEqual(buildSubagentRequest({ subagent_type: 'explore', prompt: 'inspect' }, 'parent-model'), {
@@ -29,6 +50,14 @@ test('top-level Agent calls inherit the parent model unless explicitly overridde
     modelName: 'parent-model',
   })
   assert.equal(buildSubagentRequest({ modelName: 'child-model' }, 'parent-model').modelName, 'child-model')
+  assert.deepEqual(
+    buildSubagentRequest({}, 'parent-model', [], [], 'provider-1', 7),
+    {
+      modelName: 'parent-model',
+      modelProviderId: 'provider-1',
+      modelConfigRevision: 7,
+    },
+  )
 })
 
 test('Agent calls inherit selected skills while explicit child skills take precedence', () => {
@@ -349,6 +378,64 @@ test('artifact turns use a deterministic safe summary when source rewriting fail
   assert.deepEqual(published, [result.text])
 })
 
+test('model phases include the model proxy top-level cost evidence', async () => {
+  const phases = []
+  const usage = { promptTokens: 11, completionTokens: 3, totalTokens: 14, costUsd: 99 }
+  const result = await runToolsLoop({
+    job: {
+      id: 'model-phase-top-level-cost',
+      userId: TEST_USER,
+      origin: 'chat',
+      prompt: 'Answer once.',
+      userPrompt: 'Answer once.',
+    },
+    step: { id: 'model-phase-top-level-cost', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Answer once.' }],
+    toolSpecs: [],
+    maxIters: 1,
+    runModel: async () => ({
+      content: 'done',
+      toolCalls: [],
+      usage,
+      costUsd: 0.0125,
+    }),
+    onModelPhase: async (event) => phases.push(structuredClone(event)),
+  })
+
+  assert.equal(result.text, 'done')
+  assert.deepEqual(
+    phases.find((event) => event.phase === 'completed')?.usage,
+    { promptTokens: 11, completionTokens: 3, totalTokens: 14, costUsd: 0.0125 },
+  )
+})
+
+test('model phases do not treat embedded usage cost as authoritative', async () => {
+  const phases = []
+  await runToolsLoop({
+    job: {
+      id: 'model-phase-embedded-cost',
+      userId: TEST_USER,
+      origin: 'chat',
+      prompt: 'Answer once.',
+      userPrompt: 'Answer once.',
+    },
+    step: { id: 'model-phase-embedded-cost', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Answer once.' }],
+    toolSpecs: [],
+    maxIters: 1,
+    runModel: async () => ({
+      content: 'done',
+      toolCalls: [],
+      usage: { promptTokens: 5, completionTokens: 1, totalTokens: 6, costUsd: 0 },
+    }),
+    onModelPhase: async (event) => phases.push(structuredClone(event)),
+  })
+
+  const completedUsage = phases.find((event) => event.phase === 'completed')?.usage
+  assert.deepEqual(completedUsage, { promptTokens: 5, completionTokens: 1, totalTokens: 6 })
+  assert.equal(Object.hasOwn(completedUsage, 'costUsd'), false)
+})
+
 test('model budget wrap-up filters source from terminal text, events, and checkpoints', async () => {
   let modelCalls = 0
   const published = []
@@ -470,6 +557,7 @@ test('planning exploration runs three isolated read-only explorers concurrently 
   let activeFirstPasses = 0
   let maxActiveFirstPasses = 0
   const executed = []
+  const planningJobs = []
   const roles = new Set()
   let executionGuardSeen = false
   const exploration = await runPlanningExploration({
@@ -496,8 +584,9 @@ test('planning exploration runs three isolated read-only explorers concurrently 
       }
       return { content: `已探索：${toolResult.content}`, toolCalls: [] }
     },
-    executeTool: async ({ name, args }) => {
+    executeTool: async ({ name, args, job }) => {
       executed.push({ name, args })
+      planningJobs.push(job)
       return { ok: true, matches: ['src/router.js:10'] }
     },
     synthesizeModel: async ({ messages }) => {
@@ -511,6 +600,9 @@ test('planning exploration runs three isolated read-only explorers concurrently 
   assert.equal(executionGuardSeen, false)
   assert.equal(roles.size, 3)
   assert.ok(maxActiveFirstPasses > 1)
+  assert.equal(planningJobs.length, 3)
+  assert.equal(new Set(planningJobs.map((job) => job.id)).size, 3)
+  assert.ok(planningJobs.every((job) => getJobBudget(job) === null))
   assert.deepEqual(executed, Array.from({ length: 3 }, () => ({
     name: 'grep_code',
     args: { pattern: 'refresh', case_sensitive: false, word: false, max_results: 50 },
@@ -885,6 +977,8 @@ test('runToolsLoop 为缺失 id 的调用生成 id,并让结果严格配对', as
 test('jobRuntime end-to-end: model calling create_pptx persists artifact under job.userId', async () => {
   let executeCalls = 0
   const runtime = new JobRuntime({
+    modelBindingResolver: resolveTestModelBinding,
+    planner: buildInitialPlan,
     executeStep: createDefaultExecuteStep({
       runModelWithTools: async ({ messages }) => {
         executeCalls += 1

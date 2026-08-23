@@ -25,6 +25,12 @@ import {
   persistGeneratedArtifact,
 } from './artifactPublishing.js'
 import {
+  getTurnArtifactByIdInTurn,
+} from '../../turnArtifactStore.js'
+import {
+  getArtifactById,
+} from '../../jobStore.js'
+import {
   COMMAND_OUTPUT_TOOL_NAMES,
   LOCAL_ARTIFACT_TOOL_NAMES,
 } from './htmlArtifactInput.js'
@@ -177,6 +183,72 @@ export function resolveLocalArtifactSource(candidate, call, result) {
   return resolveInWorkspace(reported || declared)
 }
 
+export function localArtifactPublicationKey({ call, job, step, candidateIndex = 0, toolCallId = '' } = {}) {
+  const ownerId = String(job?.userId || '').trim()
+  const callId = String(toolCallId || call?.id || '').trim()
+  const jobId = String(job?.id || '').trim()
+  if (!ownerId || !callId || !jobId) return ''
+  const index = Math.max(0, Math.floor(Number(candidateIndex) || 0))
+  if (job?.origin === 'chat') {
+    const sessionId = String(job?.sessionId || '').trim()
+    if (!sessionId) return ''
+    return JSON.stringify(['local-tool-artifact-v1', ownerId, 'turn', sessionId, jobId, callId, index])
+  }
+  const stepId = String(step?.id || '').trim()
+  // Background jobs need a step identity to distinguish repeated call ids.
+  // Without it, fall back to unique publication instead of claiming a stable
+  // key that can alias an artifact produced by a different step.
+  if (!stepId) return ''
+  return JSON.stringify([
+    'local-tool-artifact-v1', ownerId, 'job', jobId, stepId, callId, index,
+  ])
+}
+
+function localArtifactPublicationFailure(error, { candidateIndex, sourcePath }) {
+  const causeCode = String(error?.code || 'UNKNOWN').slice(0, 80)
+  const sourceMissing = ['ENOENT', 'ENOTDIR'].includes(causeCode)
+  return {
+    code: 'artifact_publication_failed',
+    causeCode,
+    candidateIndex,
+    filename: path.basename(String(sourcePath || '')) || null,
+    retryable: !sourceMissing && error?.retryable === true,
+    message: sourceMissing
+      ? 'The local output disappeared before its downloadable copy could be published. Do not rerun the source tool automatically.'
+      : `The local output was created, but the artifact store could not publish it (${causeCode}). Do not rerun the source tool automatically.`,
+  }
+}
+
+function attachLocalArtifactPublicationFailures(artifacts, failures) {
+  Object.defineProperty(artifacts, 'publicationFailures', {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: Object.freeze(failures.map((failure) => Object.freeze({ ...failure }))),
+  })
+  return artifacts
+}
+
+function persistedLocalArtifact({ artifact, job, step }) {
+  const existing = job?.origin === 'chat'
+    ? getTurnArtifactByIdInTurn({
+        id: artifact?.id,
+        userId: job?.userId,
+        sessionId: job?.sessionId,
+        turnId: job?.id,
+      })
+    : getArtifactById(artifact?.id)
+  if (!existing
+    || existing.userId !== job?.userId
+    || existing.id !== artifact?.id
+    || existing.filename !== artifact?.filename
+    || existing.url !== artifact?.url
+    || existing.type !== artifact?.type) return null
+  if (job?.origin !== 'chat'
+    && (existing.jobId !== job?.id || (existing.stepId || null) !== (step?.id || null))) return null
+  return { ...artifact, ...existing }
+}
+
 export function persistLocalToolArtifacts({ call, result, job, step }) {
   if (result?.ok !== true || !LOCAL_ARTIFACT_TOOL_NAMES.has(call?.name)) return []
   const persisted = []
@@ -202,29 +274,49 @@ export function persistLocalToolArtifacts({ call, result, job, step }) {
   return persisted
 }
 
-export async function persistLocalToolArtifactsAsync({ call, result, job, step }) {
-  if (result?.ok !== true || !LOCAL_ARTIFACT_TOOL_NAMES.has(call?.name)) return []
+export async function persistLocalToolArtifactsAsync({ call, result, job, step, toolCallId = '' }) {
+  if (result?.ok !== true || !LOCAL_ARTIFACT_TOOL_NAMES.has(call?.name)) {
+    return attachLocalArtifactPublicationFailures([], [])
+  }
   const persisted = []
+  const publicationFailures = []
   const seen = new Set()
-  for (const candidate of localArtifactCandidates(call, result)) {
+  const candidates = localArtifactCandidates(call, result)
+  for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
+    const candidate = candidates[candidateIndex]
     let artifact = null
+    let sourcePath = ''
     try {
-      const sourcePath = resolveLocalArtifactSource(candidate, call, result)
+      sourcePath = resolveLocalArtifactSource(candidate, call, result)
       const key = process.platform === 'win32' ? sourcePath.toLowerCase() : sourcePath
       if (seen.has(key)) continue
       seen.add(key)
-      artifact = await createLocalFileArtifactAsync({ sourcePath, filename: path.basename(sourcePath) })
-      persistGeneratedArtifact({ artifact, args: { title: artifact.title }, job, step })
-      persisted.push(artifact)
-    } catch {
-      if (artifact?.fullPath) {
+      const publicationKey = localArtifactPublicationKey({ call, job, step, candidateIndex, toolCallId })
+      artifact = await createLocalFileArtifactAsync({
+        sourcePath,
+        filename: path.basename(sourcePath),
+        publicationKey,
+      })
+      try {
+        persistGeneratedArtifact({ artifact, args: { title: artifact.title }, job, step })
+        persisted.push(artifact)
+      } catch (error) {
+        const existing = artifact.idempotentPublication
+          ? persistedLocalArtifact({ artifact, job, step })
+          : null
+        if (!existing) throw error
+        persisted.push(existing)
+      }
+    } catch (error) {
+      if (artifact?.fullPath && !artifact.idempotentPublication) {
         try { await fs.promises.unlink(artifact.fullPath) } catch { /* best-effort orphan cleanup */ }
       }
-      // Preserve the successful source operation if an output disappears
-      // before publication or cannot be copied into the artifact store.
+      publicationFailures.push(localArtifactPublicationFailure(error, { candidateIndex, sourcePath }))
+      // Preserve the successful source operation, but surface publication as a
+      // separate failure so the runtime never claims a downloadable artifact.
     }
   }
-  return persisted
+  return attachLocalArtifactPublicationFailures(persisted, publicationFailures)
 }
 
 export const selectToolSpecs = selectJobToolSpecs

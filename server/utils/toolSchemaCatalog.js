@@ -13,7 +13,16 @@ import { CODING_AGENT_TOOL_SPECS } from '../adapters/codingAgentTools.js'
 import { CODE_SEARCH_TOOL_SPECS } from './codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS } from './applyPatch.js'
 import { AGENTIC_TOOL_SPECS } from './agenticTools.js'
+import { isToolVisibleInPermissionMode } from './approvalPolicy.js'
 import { randomUUID } from 'node:crypto'
+import {
+  getBoundRuntimeTool,
+  getRuntimeCapabilitySnapshot,
+} from '../core/runtimeCapabilityState.js'
+import {
+  attachRuntimePluginBeginRevoke,
+  createRuntimePluginRevokeReceipt,
+} from '../plugins/runtimePluginContributionLifecycle.js'
 
 function specsByName(specs) {
   return Object.fromEntries((Array.isArray(specs) ? specs : [])
@@ -825,7 +834,7 @@ export function registerDynamicTool({ name, origin, source = null, spec, exec = 
   // owner must not remove the newer tool. If this call shadowed an existing
   // registration, unloading restores it exactly.
   let disposed = false
-  return () => {
+  const dispose = () => {
     if (disposed) return false
     disposed = true
     deactivateRegistration(registration)
@@ -837,6 +846,10 @@ export function registerDynamicTool({ name, origin, source = null, spec, exec = 
     if (scope && map.size === 0) userDynamicTools.delete(scope)
     return true
   }
+  return attachRuntimePluginBeginRevoke(dispose, () => {
+    dispose()
+    return createRuntimePluginRevokeReceipt('revoked')
+  })
 }
 
 export function unregisterDynamicTool(name, { userId = null } = {}) {
@@ -898,7 +911,11 @@ export function matchesDynamicToolRegistration(name, expectedRegistrationId, { u
 
 export function getToolMetadata(name, { args = {}, userId = null } = {}) {
   const dynamic = getDynamicTool(name, { userId })
-  if (dynamic?.metadata) return dynamic.metadata
+  const capabilitySnapshot = getRuntimeCapabilitySnapshot()
+  const dynamicIsSelected = !capabilitySnapshot
+    || dynamic?.origin !== 'plugin'
+    || getBoundRuntimeTool(name)?.exec === dynamic.exec
+  if (dynamicIsSelected && dynamic?.metadata) return dynamic.metadata
   const builtin = getBuiltinSpec(name)
   if (!builtin) return normalizeToolRiskMetadata(null, { origin: 'unknown', source: 'fallback' })
 
@@ -944,16 +961,27 @@ export function getToolMetadata(name, { args = {}, userId = null } = {}) {
 }
 
 export function listAllSpecs({ userId = null } = {}) {
-  const out = []
-  for (const [name, spec] of Object.entries(BUILTIN_TOOL_SCHEMA_CATALOG)) {
-    out.push({ origin: 'builtin', source: null, name, tool: spec, metadata: getToolMetadata(name) })
-  }
   const visibleDynamic = new Map(globalDynamicTools)
   const scoped = getDynamicToolMap(userId)
   if (scoped && scoped !== globalDynamicTools) {
     for (const [name, info] of scoped) visibleDynamic.set(name, info)
   }
+  const capabilitySnapshot = getRuntimeCapabilitySnapshot()
+  const selectedPluginNames = new Set()
+  if (capabilitySnapshot) {
+    for (const [name, info] of visibleDynamic) {
+      if (info.origin === 'plugin' && getBoundRuntimeTool(name)?.exec === info.exec) {
+        selectedPluginNames.add(name)
+      }
+    }
+  }
+  const out = []
+  for (const [name, spec] of Object.entries(BUILTIN_TOOL_SCHEMA_CATALOG)) {
+    if (selectedPluginNames.has(name)) continue
+    out.push({ origin: 'builtin', source: null, name, tool: spec, metadata: getToolMetadata(name) })
+  }
   for (const [name, info] of visibleDynamic) {
+    if (capabilitySnapshot && info.origin === 'plugin' && !selectedPluginNames.has(name)) continue
     out.push({ origin: info.origin, source: info.source, name, tool: info.spec, metadata: info.metadata })
   }
   // ★ 缓存: 按 name 稳定排序后再返回。dynamicTools 是 Map,按插入序迭代 ——
@@ -971,13 +999,17 @@ export function listAllSpecs({ userId = null } = {}) {
 /**
  * 按 mode 过滤可用工具：
  *   - chat / undefined  → 所有 builtin + dynamic（前端再按 toolsConfig 勾选过滤）
- *   - plan              → 保持完整目录可见；执行边界由 approval gate 强制
+ *   - plan              → approvalPolicy 允许的本地只读工具；动态工具默认不可见
  *   - code              → builtin 中的 CODE_MODE_TOOLS + 所有 dynamic
  *   - subagent:<type>   → 由 subagentRegistry 给出白名单（这里只看 builtin 列表）
  */
 export function resolveSpecsForMode(mode = 'chat', { subagentWhitelist = null, userId = null } = {}) {
   const all = listAllSpecs({ userId })
-  if (mode === 'plan') return all
+  if (mode === 'plan') {
+    return all.filter((entry) => (
+      entry.origin === 'builtin' && isToolVisibleInPermissionMode(entry.name, 'plan')
+    ))
+  }
   if (mode === 'code') {
     return all.filter((s) => {
       if (s.origin === 'builtin') return CODE_MODE_TOOLS.includes(s.name)

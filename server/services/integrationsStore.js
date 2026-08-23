@@ -964,14 +964,16 @@ async function testVisionAssist({ config, secret, fetchImpl }) {
   const baseUrl = (config?.baseUrl || '').trim().replace(/\/+$/, '')
   const modelName = (config?.modelName || '').trim()
   const apiKey = (secret?.apiKey || '').trim()
-  if (!baseUrl || !modelName || !apiKey) {
-    return { ok: false, message: '缺少 baseUrl / modelName / apiKey' }
+  if (!baseUrl || !modelName) {
+    return { ok: false, message: '缺少 baseUrl / modelName' }
   }
   const url = `${baseUrl}/models`
+  const headers = {}
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`
   const { ok, status, data } = await jsonFetch({
     fetchImpl,
     url,
-    init: { headers: { Authorization: `Bearer ${apiKey}` } },
+    init: { headers },
   })
   if (!ok) return { ok: false, message: `视觉副驾 ${status}: ${data?.error?.message || '鉴权失败'}` }
   const models = Array.isArray(data?.data) ? data.data.map((item) => item.id || item.name) : []

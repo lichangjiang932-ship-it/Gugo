@@ -3,8 +3,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-
-import { logger } from './logger.js'
+import { sanitizeChildEnv } from './sensitiveEnv.js'
 
 const VAULT_VERSION = 1
 const VAULT_MARKER = '__yma_credential_vault'
@@ -27,7 +26,7 @@ $acl.SetAccessRuleProtection($true, $false)
 foreach ($existingRule in @($acl.Access)) {
   [void]$acl.RemoveAccessRuleSpecific($existingRule)
 }
-$rights = [System.Security.AccessControl.FileSystemRights]::Read -bor [System.Security.AccessControl.FileSystemRights]::Write
+$rights = [System.Security.AccessControl.FileSystemRights]::Read -bor [System.Security.AccessControl.FileSystemRights]::Write -bor [System.Security.AccessControl.FileSystemRights]::Delete
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
   $account,
   $rights,
@@ -96,10 +95,9 @@ function windowsPowerShellPath() {
 }
 
 /**
- * Restrict the credential key to the current user without making vault startup
- * depend on host ACL tooling. Windows mode bits do not enforce a private ACL.
- * Build a replacement DACL in memory and commit it once so failures cannot
- * leave the key in an intermediate, more permissive state.
+ * Restrict the credential key to the current user. Windows mode bits do not
+ * enforce a private ACL. Build a replacement DACL in memory and commit it once
+ * so failures cannot leave the key in an intermediate, more permissive state.
  */
 export function hardenCredentialKeyFile(keyPath, {
   platform = process.platform,
@@ -148,11 +146,10 @@ export function hardenCredentialKeyFile(keyPath, {
       WINDOWS_ACL_ENCODED_SCRIPT,
     ], {
       encoding: 'utf8',
-      env: {
-        ...process.env,
+      env: sanitizeChildEnv({
         [WINDOWS_ACL_TARGET_ENV]: target,
         [WINDOWS_ACL_ACCOUNT_ENV]: account,
-      },
+      }, { sourceEnv: env }),
       shell: false,
       windowsHide: true,
     })
@@ -180,6 +177,17 @@ export function hardenCredentialKeyFile(keyPath, {
   }
 }
 
+export function requireSafeCredentialKeyPermissions(permissionResult) {
+  if (permissionResult?.ok) return permissionResult
+  const method = String(permissionResult?.method || 'unknown')
+  const detail = String(permissionResult?.code || 'UNKNOWN')
+  throw vaultError(
+    `Credential encryption key permissions could not be secured (${method}: ${detail}). `
+      + 'Restrict the key file to the current OS user or set CREDENTIAL_ENCRYPTION_KEY to a 32-byte key.',
+    'CREDENTIAL_VAULT_KEY_PERMISSIONS_UNSAFE',
+  )
+}
+
 function loadVaultKey(env = process.env) {
   const configured = String(env.CREDENTIAL_ENCRYPTION_KEY || '').trim()
   if (configured) {
@@ -203,15 +211,7 @@ function loadVaultKey(env = process.env) {
     }
   }
   const permissionResult = hardenCredentialKeyFile(keyPath, { env })
-  if (!permissionResult.ok) {
-    // ACL tooling can be unavailable under managed Windows policies or minimal
-    // service environments. Preserve existing startup behavior, but make the
-    // privacy degradation visible instead of silently claiming a private key.
-    logger.warn(
-      '[credential-vault] unable to enforce private key permissions; continuing for compatibility',
-      permissionResult.code,
-    )
-  }
+  requireSafeCredentialKeyPermissions(permissionResult)
   const key = readKeyFile(keyPath)
   keyCache.set(cacheId, key)
   return key
@@ -314,4 +314,23 @@ export function isCredentialEnvelope(serialized) {
 
 export function credentialKeyPath(env = process.env) {
   return defaultKeyPath(env)
+}
+
+/**
+ * Produce a stable, non-reversible fingerprint for secret-bearing runtime
+ * configuration. The vault key keeps API keys and custom headers from being
+ * exposed through a plain digest while remaining stable across restarts.
+ */
+export function credentialScopedFingerprint(value, {
+  purpose,
+  key,
+  env = process.env,
+} = {}) {
+  const safePurpose = String(purpose || '').trim()
+  if (!safePurpose) throw vaultError('Credential fingerprint purpose is required', 'CREDENTIAL_VAULT_PURPOSE_REQUIRED')
+  const vaultKey = resolveKey(key, env)
+  return crypto.createHmac('sha256', vaultKey)
+    .update(`your-model-atelier:credential-fingerprint:v1:${safePurpose}\0`, 'utf8')
+    .update(String(value ?? ''), 'utf8')
+    .digest('hex')
 }

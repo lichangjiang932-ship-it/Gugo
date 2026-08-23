@@ -20,13 +20,215 @@ import {
 } from './approvalStore.js'
 import { createNotification } from './notificationsStore.js'
 import { getApprovalSettings } from './approvalSettingsStore.js'
-import { classifyToolRisk, resolveApprovalMode, resolveApprovalTimeoutMs } from '../utils/approvalPolicy.js'
-import { getToolMetadata } from './toolRegistry.js'
+import { resolveApprovalMode, resolveApprovalTimeoutMs } from '../utils/approvalPolicy.js'
+import { getDynamicTool, getToolMetadata } from './toolRegistry.js'
+import { getHook } from './hooksService.js'
+import { validateHookAuthorizationProvenance } from './hookAuthorizationProvenance.js'
+import {
+  acquireRuntimePolicy,
+  getActiveRuntimePolicyProvenance,
+} from '../core/runtimePolicyRuntime.js'
 
 /** approvalId → Set<resolve>。同进程决策时立刻唤醒等待者。 */
 const waiters = new Map()
 /** 轮询间隔:兜底用,不是主路径。Windows CI 下 5000ms 足够宽松(AGENTS.md 五)。 */
 const POLL_INTERVAL_MS = 5_000
+const BUILTIN_POLICY_ID = 'builtin.harness-policy'
+const POLICY_PROVENANCE_FIELDS = Object.freeze([
+  'id',
+  'owner',
+  'version',
+  'revision',
+  'releaseDigest',
+  'generation',
+  'source',
+])
+
+function isBuiltinPolicyProvenance(value) {
+  return value?.id === BUILTIN_POLICY_ID && value?.owner === 'builtin'
+}
+
+function samePolicyProvenance(expected, actual) {
+  if (!expected || !actual) return false
+  return POLICY_PROVENANCE_FIELDS.every((field) => (
+    (expected[field] ?? null) === (actual[field] ?? null)
+  ))
+}
+
+function policyProvenanceIsCompatible(expected, actual) {
+  if (expected === undefined) return true
+  // Legacy approvals/checkpoints predate provenance. They may be replayed only
+  // through the builtin policy and are still reclassified below. A plugin
+  // policy must never inherit those ambiguous authorizations.
+  if (expected === null) return isBuiltinPolicyProvenance(actual)
+  return samePolicyProvenance(expected, actual)
+}
+
+function policyDriftResult({ expected = null, actual = null } = {}) {
+  return {
+    proceed: false,
+    reason: '运行时策略已变更，旧的审批或执行快照已失效；请重新发起这次工具调用',
+    code: 'policy_provenance_drift',
+    policyDrift: true,
+    retryable: true,
+    expectedPolicyProvenance: expected,
+    policyProvenance: actual,
+  }
+}
+
+function policyFailureResult(decision, provenance = null) {
+  const failureCode = decision?.failure?.code || 'RUNTIME_POLICY_EXECUTION_FAILED'
+  return {
+    proceed: false,
+    reason: '当前运行时策略无法给出可信决策，已保守拒绝执行',
+    code: 'policy_runtime_unavailable',
+    policyFailure: true,
+    systemFailure: true,
+    retryable: false,
+    policyFailureCode: failureCode,
+    policyProvenance: provenance,
+  }
+}
+
+function hasUserIdentity(userId) {
+  return typeof userId === 'string' && userId.trim().length > 0
+}
+
+function missingUserIdentityResult({ approvalId = null } = {}) {
+  return {
+    proceed: false,
+    reason: '无法确认工具调用所属用户，已保守拒绝执行',
+    code: 'approval_user_identity_missing',
+    identityFailure: true,
+    systemFailure: true,
+    retryable: false,
+    ...(approvalId ? { approvalId } : {}),
+    policyProvenance: getActiveRuntimePolicyProvenance(),
+  }
+}
+
+function hookAuthorizationFailureResult(validation) {
+  return {
+    proceed: false,
+    reason: validation?.reason || 'Hook 授权来源无法验证，已保守拒绝执行',
+    code: validation?.code || 'hook_authorization_provenance_invalid',
+    hookAuthorizationFailure: true,
+    systemFailure: true,
+    retryable: false,
+    policyProvenance: getActiveRuntimePolicyProvenance(),
+  }
+}
+
+export function revalidateHookAuthorization({
+  provenance,
+  userId,
+  origin = 'job',
+  jobId = null,
+  stepId = null,
+  sessionId = null,
+  requestId = null,
+  toolCallId,
+  toolName,
+  args = {},
+  requireLive = true,
+} = {}) {
+  try {
+    const validation = validateHookAuthorizationProvenance({
+      provenance,
+      expected: {
+        userId,
+        origin,
+        jobId,
+        stepId,
+        sessionId,
+        requestId,
+        toolCallId,
+        toolName,
+        args,
+      },
+      resolveHook: getHook,
+      requireLive,
+    })
+    return validation.valid
+      ? { proceed: true, hookAuthorizationProvenance: validation.provenance }
+      : hookAuthorizationFailureResult(validation)
+  } catch {
+    return hookAuthorizationFailureResult({
+      code: 'hook_authorization_verification_failed',
+      reason: 'Hook 授权验证失败，已保守拒绝执行',
+    })
+  }
+}
+
+function approvalContextMismatchResult(approval, expected = null) {
+  return {
+    proceed: false,
+    reason: '持久化审批与当前工具调用不匹配，已保守拒绝执行',
+    code: 'approval_context_mismatch',
+    approvalContextMismatch: true,
+    retryable: false,
+    approvalId: approval?.id || null,
+    policyProvenance: getActiveRuntimePolicyProvenance(),
+    expectedApprovalContext: expected,
+  }
+}
+
+function approvalMatchesExpectedContext(approval, expected) {
+  if (!expected) return true
+  if (!approval) return false
+  for (const field of ['userId', 'origin', 'jobId', 'stepId', 'sessionId', 'toolName']) {
+    if (expected[field] !== undefined
+      && (approval[field] ?? null) !== (expected[field] ?? null)) return false
+  }
+  if (expected.policyProvenance !== undefined) {
+    if (expected.policyProvenance === null) return approval.policyProvenance === null
+    return samePolicyProvenance(expected.policyProvenance, approval.policyProvenance)
+  }
+  return true
+}
+
+function classifyWithActivePolicy({ toolName, args, options }) {
+  const lease = acquireRuntimePolicy()
+  try {
+    const decision = lease.classify({ toolName, args, options })
+    return {
+      decision,
+      policyProvenance: lease.provenance,
+    }
+  } finally {
+    lease.release()
+  }
+}
+
+function plainPolicyData(value) {
+  if (value == null) return value
+  try {
+    return JSON.parse(JSON.stringify(value))
+  } catch {
+    return null
+  }
+}
+
+function resolvePolicyInputs({ userId, toolName, args, settings }) {
+  const dynamicMetadata = getToolMetadata(toolName, { args, userId })
+  const dynamicRegistration = getDynamicTool(toolName, { userId })
+  const isRuntimePlugin = dynamicRegistration?.origin === 'plugin'
+    || dynamicMetadata?.origin === 'plugin'
+  // Persisted name-only rules must never transfer to a newly installed or
+  // shadowing runtime implementation.
+  const riskOverride = isRuntimePlugin
+    ? null
+    : settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
+  const metadata = riskOverride
+    ? {
+        ...(dynamicMetadata || {}),
+        riskClass: riskOverride.riskClass,
+        requiresApproval: riskOverride.riskClass !== 'read',
+        reason: `用户风险覆盖: ${riskOverride.riskClass}`,
+      }
+    : dynamicMetadata
+  return { isRuntimePlugin, riskOverride, metadata }
+}
 
 function notifyWaiters(approvalId) {
   const set = waiters.get(approvalId)
@@ -105,45 +307,70 @@ export function revalidateToolPermission({
   origin = 'job',
   toolName,
   args = {},
+  taskGrants = [],
+  expectedPolicyProvenance = undefined,
+  allowAsk = false,
 } = {}) {
-  if (!userId) return { proceed: true, args }
+  const activeProvenance = getActiveRuntimePolicyProvenance()
+  if (!hasUserIdentity(userId)) return missingUserIdentityResult()
+  if (!policyProvenanceIsCompatible(expectedPolicyProvenance, activeProvenance)) {
+    return policyDriftResult({ expected: expectedPolicyProvenance, actual: activeProvenance })
+  }
 
   try {
     const settings = getApprovalSettings({ userId })
-    const dynamicMetadata = getToolMetadata(toolName, { args, userId })
-    const isRuntimePlugin = dynamicMetadata?.origin === 'plugin'
-    // Stored policies are keyed only by tool name. A newly installed or
-    // shadowing plugin must not inherit another implementation's standing
-    // grant or a persisted risk downgrade.
-    const riskOverride = isRuntimePlugin
-      ? null
-      : settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
-    const metadata = riskOverride
-      ? {
-          ...(dynamicMetadata || {}),
-          riskClass: riskOverride.riskClass,
-          requiresApproval: riskOverride.riskClass !== 'read',
-          reason: `用户风险覆盖: ${riskOverride.riskClass}`,
-        }
-      : dynamicMetadata
-    const verdict = classifyToolRisk(toolName, args, {
-      origin,
-      // This call has already been approved or reached the executing
-      // checkpoint. Revalidation only asks whether the user's current
-      // permission mode still forbids it; it must not reopen or depend on the
-      // deployment-level approval queue (which may legitimately be `off`).
-      mode: 'unattended',
-      permissionMode: settings.mode,
-      rememberedGrants: isRuntimePlugin ? [] : settings.rememberedGrants,
-      metadata,
+    const { isRuntimePlugin, metadata } = resolvePolicyInputs({
+      userId,
+      toolName,
+      args,
+      settings,
     })
-    if (!verdict.denied) return { proceed: true, args, permissionMode: settings.mode }
+    const classified = classifyWithActivePolicy({
+      toolName,
+      args,
+      options: {
+        origin,
+        // The queue mode is intentionally enabled for revalidation. `allowAsk`
+        // decides whether a prior, provenance-matched approval can satisfy an
+        // ask result; an auto-allowed checkpoint must still be allow now.
+        mode: 'unattended',
+        permissionMode: settings.mode,
+        taskGrants,
+        rememberedGrants: isRuntimePlugin ? [] : settings.rememberedGrants,
+        metadata,
+      },
+    })
+    if (!policyProvenanceIsCompatible(expectedPolicyProvenance, classified.policyProvenance)) {
+      return policyDriftResult({
+        expected: expectedPolicyProvenance,
+        actual: classified.policyProvenance,
+      })
+    }
+    if (classified.decision?.failure) {
+      return policyFailureResult(classified.decision, classified.policyProvenance)
+    }
+    if (classified.decision?.decision === 'allow'
+      || (allowAsk && classified.decision?.decision === 'ask')) {
+      return {
+        proceed: true,
+        args,
+        permissionMode: settings.mode,
+        authorization: plainPolicyData(classified.decision.authorization) || null,
+        policyProvenance: classified.policyProvenance,
+      }
+    }
     return {
       proceed: false,
-      reason: verdict.reason,
-      policyDenied: settings.mode === 'plan',
+      reason: classified.decision?.reason || (
+        classified.decision?.decision === 'ask'
+          ? '当前策略要求重新批准这次调用'
+          : '当前策略拒绝这次调用'
+      ),
+      policyDenied: classified.decision?.decision === 'deny',
+      approvalRequired: classified.decision?.decision === 'ask',
       permissionMode: settings.mode,
       suggestedPermissionMode: settings.mode === 'plan' ? 'acceptEdits' : 'normal',
+      policyProvenance: classified.policyProvenance,
     }
   } catch (err) {
     console.error('[approval] 重验当前权限失败,已保守拒绝:', err?.stack || err)
@@ -152,11 +379,21 @@ export function revalidateToolPermission({
       reason: '无法确认当前权限模式,已保守拒绝',
       systemFailure: true,
       retryable: true,
+      policyProvenance: getActiveRuntimePolicyProvenance(),
     }
   }
 }
 
-function terminalDecisionForCurrentMode(approval) {
+function terminalDecisionForCurrentMode(approval, expectedApprovalContext = null) {
+  if (approval && !hasUserIdentity(approval.userId)) {
+    return missingUserIdentityResult({ approvalId: approval.id })
+  }
+  if (expectedApprovalContext && !hasUserIdentity(expectedApprovalContext.userId)) {
+    return missingUserIdentityResult({ approvalId: approval?.id || null })
+  }
+  if (approval && !approvalMatchesExpectedContext(approval, expectedApprovalContext)) {
+    return approvalContextMismatchResult(approval, expectedApprovalContext)
+  }
   const decision = terminalDecision(approval)
   if (!decision?.proceed) return decision
 
@@ -166,9 +403,11 @@ function terminalDecisionForCurrentMode(approval) {
     origin: approval.origin,
     toolName: approval.toolName,
     args,
+    expectedPolicyProvenance: approval.policyProvenance,
+    allowAsk: true,
   })
   return currentPermission.proceed
-    ? decision
+    ? { ...decision, policyProvenance: currentPermission.policyProvenance }
     : { ...currentPermission, approvalId: approval.id }
 }
 
@@ -183,12 +422,15 @@ function terminalDecisionForCurrentMode(approval) {
 export function formatDeniedToolResult(gate) {
   const base = { ok: false, denied: true, error: gate?.reason || '调用未获批准' }
   if (gate?.systemFailure) {
+    const retryable = gate.retryable !== false
     return {
       ...base,
       denied: false, // 不是「被拒绝」,是没走成
       systemFailure: true,
-      retryable: true,
-      error: `${gate.reason || '审批系统暂时不可用'}。这是系统故障,不是用户拒绝 —— 可以稍后重试,不要因此放弃任务或要求用户手动操作。`,
+      retryable,
+      error: retryable
+        ? `${gate.reason || '审批系统暂时不可用'}。这是系统故障,不是用户拒绝 —— 可以稍后重试,不要因此放弃任务或要求用户手动操作。`
+        : `${gate.reason || '授权已失效'}。这是安全校验失败,不是用户拒绝；必须重新发起工具调用获取新的授权。`,
     }
   }
   if (gate?.expired) {
@@ -229,6 +471,7 @@ export function enqueueApprovalRequest({
   args = {},
   risk = 'medium',
   metadataSource = 'fallback',
+  policyProvenance = null,
   reason = null,
   expiresAt = null,
   notificationTitle = null,
@@ -245,6 +488,7 @@ export function enqueueApprovalRequest({
     args,
     risk,
     metadataSource,
+    policyProvenance,
     reason,
     expiresAt,
   })
@@ -292,10 +536,12 @@ export async function requestApproval({
   forceApproval = false,
   forceApprovalReason = null,
   preAuthorized = false,
+  hookAuthorizationProvenance = null,
+  requestId = null,
+  toolCallId = null,
   taskGrants = [],
 } = {}) {
-  // 系统/内部调用(无 userId)不 gate —— 和 fsShellTools.assertToolPermitted 一致的口径
-  if (!userId) return { proceed: true, args }
+  if (!hasUserIdentity(userId)) return missingUserIdentityResult()
 
   const effectiveMode = mode || resolveApprovalMode()
   // 用户档位 + 「总是允许」清单。读失败不阻断,退回最严格的默认(normal/空)。
@@ -305,64 +551,92 @@ export async function requestApproval({
   } catch (err) {
     console.error('[approval] 读取用户档位失败,按默认最严处理:', err?.stack || err)
   }
-  const dynamicMetadata = getToolMetadata(toolName, { args, userId })
-  const isRuntimePlugin = dynamicMetadata?.origin === 'plugin'
-  // Runtime registrations have process-local owner identities, whereas these
-  // persisted policies are name-only. Do not let one plugin inherit another
-  // plugin's grant or risk override after shadowing/restart.
-  const riskOverride = isRuntimePlugin
-    ? null
-    : settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
-  const metadata = riskOverride
-    ? {
-        ...(dynamicMetadata || {}),
-        riskClass: riskOverride.riskClass,
-        requiresApproval: riskOverride.riskClass === 'read' ? false : true,
-        reason: `用户风险覆盖: ${riskOverride.riskClass}`,
-      }
-    : dynamicMetadata
-  let verdict = classifyToolRisk(toolName, args, {
-    origin,
-    mode: effectiveMode,
-    permissionMode: settings.mode,
-    taskGrants,
-    rememberedGrants: isRuntimePlugin ? [] : settings.rememberedGrants,
-    metadata,
+  const { isRuntimePlugin, riskOverride, metadata } = resolvePolicyInputs({
+    userId,
+    toolName,
+    args,
+    settings,
   })
+  const classified = classifyWithActivePolicy({
+    toolName,
+    args,
+    options: {
+      origin,
+      mode: effectiveMode,
+      permissionMode: settings.mode,
+      taskGrants,
+      rememberedGrants: isRuntimePlugin ? [] : settings.rememberedGrants,
+      metadata,
+    },
+  })
+  let verdict = classified.decision
+  const policyProvenance = classified.policyProvenance
+  if (verdict?.failure) return policyFailureResult(verdict, policyProvenance)
   // plan 档位:直接拒,不排队等人 —— 用户要的就是「只看不动」
-  if (verdict.denied) {
+  if (verdict?.decision === 'deny') {
     return {
       proceed: false,
-      reason: verdict.reason,
-      policyDenied: settings.mode === 'plan',
+      reason: verdict.reason || '当前策略拒绝这次调用',
+      policyDenied: true,
       permissionMode: settings.mode,
       suggestedPermissionMode: settings.mode === 'plan' ? 'acceptEdits' : 'normal',
+      policyProvenance,
     }
   }
-  // A trusted pre-tool hook may waive an approval prompt, but it cannot cross
-  // the user's plan/read-only boundary above.
-  if (preAuthorized === true) {
-    return { proceed: true, args, hookAuthorized: true }
+  // Legacy boolean pre-authorization had no Hook identity or call scope and is
+  // intentionally rejected. Only a live, exact-call Hook provenance may waive
+  // an approval prompt, and it still cannot cross the plan boundary above.
+  if (preAuthorized === true && !hookAuthorizationProvenance) {
+    return hookAuthorizationFailureResult({
+      code: 'hook_authorization_provenance_missing',
+      reason: '旧式 Hook 预授权缺少独立来源与调用作用域，已保守拒绝执行',
+    })
+  }
+  if (hookAuthorizationProvenance) {
+    const hookAuthorization = revalidateHookAuthorization({
+      provenance: hookAuthorizationProvenance,
+      userId,
+      origin,
+      jobId,
+      stepId,
+      sessionId,
+      requestId,
+      toolCallId,
+      toolName,
+      args,
+      requireLive: true,
+    })
+    if (!hookAuthorization.proceed) return hookAuthorization
+    return {
+      proceed: true,
+      args,
+      hookAuthorized: true,
+      hookAuthorizationProvenance: hookAuthorization.hookAuthorizationProvenance,
+      policyProvenance,
+    }
   }
   // “全部放行”是用户对审批层的最终选择。Hook 仍可拒绝调用，
   // 但 permissionDecision=ask 不能把 bypass 重新降级为等待审批。
   if (forceApproval === true && settings.mode !== 'bypass') {
     verdict = {
       ...verdict,
-      needsApproval: true,
+      decision: 'ask',
       risk: verdict.risk || 'low',
       reason: String(forceApprovalReason || '').trim() || 'pre_tool_use Hook 要求逐次批准',
     }
   }
-  if (!verdict.needsApproval) {
+  if (verdict?.decision === 'allow') {
     return {
       proceed: true,
       args,
-      authorization: verdict.authorization || (riskOverride
+      authorization: plainPolicyData(verdict.authorization) || (riskOverride
         ? { kind: 'risk_override', toolName, riskClass: riskOverride.riskClass }
         : null),
+      policyProvenance,
     }
   }
+
+  if (verdict?.decision !== 'ask') return policyFailureResult(verdict, policyProvenance)
 
   let approval
   try {
@@ -376,6 +650,7 @@ export async function requestApproval({
       args,
       risk: verdict.risk,
       metadataSource: metadata?.source,
+      policyProvenance,
       reason: verdict.reason,
       expiresAt: Date.now() + resolveApprovalTimeoutMs(),
     })
@@ -388,6 +663,7 @@ export async function requestApproval({
       reason: '审批系统暂时不可用,已保守拒绝',
       systemFailure: true,
       retryable: true,
+      policyProvenance,
     }
   }
 
@@ -403,6 +679,15 @@ export async function requestApproval({
     approvalId: approval.id,
     signal,
     cancelOnAbort: { userId, approvalId: approval.id },
+    expectedApprovalContext: {
+      userId,
+      origin,
+      jobId,
+      stepId,
+      sessionId,
+      toolName,
+      policyProvenance,
+    },
   })
 }
 
@@ -414,6 +699,7 @@ export function waitForDecision({
   signal = null,
   pollIntervalMs = POLL_INTERVAL_MS,
   cancelOnAbort = null,
+  expectedApprovalContext = null,
 } = {}) {
   return new Promise((resolve) => {
     let settled = false
@@ -467,7 +753,7 @@ export function waitForDecision({
         }
         return
       }
-      const decision = terminalDecisionForCurrentMode(approval)
+      const decision = terminalDecisionForCurrentMode(approval, expectedApprovalContext)
       if (decision) settle(decision)
     }
 
@@ -509,7 +795,12 @@ export function waitForDecision({
  * A terminal DB decision is returned immediately; a still-pending record uses
  * the same durable polling/wakeup path without creating a duplicate approval.
  */
-export function resumePersistedApproval({ approvalId, signal = null } = {}) {
+export function resumePersistedApproval({
+  approvalId,
+  signal = null,
+  expectedApprovalContext = null,
+  requireTerminal = false,
+} = {}) {
   if (!approvalId) {
     return Promise.resolve({
       proceed: false,
@@ -518,8 +809,25 @@ export function resumePersistedApproval({ approvalId, signal = null } = {}) {
       retryable: true,
     })
   }
-  const decision = terminalDecisionForCurrentMode(getApprovalById(approvalId))
-  return decision ? Promise.resolve(decision) : waitForDecision({ approvalId, signal })
+  const approval = getApprovalById(approvalId)
+  const decision = terminalDecisionForCurrentMode(
+    approval,
+    expectedApprovalContext,
+  )
+  if (!decision && requireTerminal) {
+    return Promise.resolve({
+      proceed: false,
+      reason: '执行快照引用的审批仍未完成，已保守拒绝恢复执行',
+      code: 'approval_not_terminal',
+      approvalContextMismatch: true,
+      retryable: false,
+      approvalId,
+      policyProvenance: getActiveRuntimePolicyProvenance(),
+    })
+  }
+  return decision
+    ? Promise.resolve(decision)
+    : waitForDecision({ approvalId, signal, expectedApprovalContext })
 }
 
 /** 测试用:清空内存等待者,避免用例间串扰。 */

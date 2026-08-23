@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto'
-import { getDb } from '../db.js'
+import { createHash } from 'node:crypto'
+import { withCompactionArchivePort } from './compactionArchiveRuntime.js'
 
 const COMMAND_EXECUTION_TOOL_NAMES = new Set(['bash_exec', 'run_command'])
 
@@ -577,33 +577,23 @@ export function combineSemanticCompactionSummary({ fallbackSummary = '', semanti
   return `# Compacted Session Context\n\n${sectionOne}\n\n${remaining}`
 }
 
-export function createCompactionArchive({ userId, sessionId, archivedMessages, summaryText }) {
-  const id = `cmp-${randomUUID()}`
-  getDb().prepare(
-    `INSERT INTO compaction_archive (id, user_id, session_id, replaced_message_count, archived_messages_json, summary_text, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    id,
-    userId,
-    sessionId,
-    archivedMessages.length,
-    JSON.stringify(archivedMessages),
-    summaryText,
-    Date.now()
+export function createCompactionArchive(input, { compactionArchivePort } = {}) {
+  return withCompactionArchivePort(
+    compactionArchivePort,
+    (port) => port.create(input),
   )
-  return getCompactionArchive({ userId, id })
 }
 
-export function getCompactionArchive({ userId, id }) {
-  const row = getDb().prepare('SELECT * FROM compaction_archive WHERE user_id = ? AND id = ?').get(userId, id)
-  if (!row) return null
-  return {
-    id: row.id,
-    userId: row.user_id,
-    sessionId: row.session_id,
-    replacedMessageCount: row.replaced_message_count,
-    archivedMessages: JSON.parse(row.archived_messages_json || '[]'),
-    summaryText: row.summary_text,
-    createdAt: row.created_at,
-  }
+export function getCompactionArchive(input, { compactionArchivePort } = {}) {
+  return withCompactionArchivePort(
+    compactionArchivePort,
+    (port) => port.get(input),
+  )
+}
+
+export function cleanupCompactionArchives(input, { compactionArchivePort } = {}) {
+  return withCompactionArchivePort(
+    compactionArchivePort,
+    (port) => port.cleanup(input),
+  )
 }

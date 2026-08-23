@@ -31,6 +31,9 @@ import {
 import {
   attachVisionFeedback,
 } from './visionFeedback.js'
+import {
+  markSideEffectOutcomeKnownFailed,
+} from '../sideEffectExecution.js'
 
 const GENERATED_ARTIFACT_TOOL_NAMES = new Set([
   'generate_image',
@@ -212,6 +215,7 @@ export async function executeGeneratedArtifactTool({
       brand: resolvedArgs.brand,
       slides: pptxSlidesFromArtifactArgs(resolvedArgs),
       images: resolvedArgs._officeImages,
+      userId: job?.userId || null,
     })
     const artifact = await publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
     return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
@@ -222,6 +226,7 @@ export async function executeGeneratedArtifactTool({
       title: resolvedArgs.title,
       paragraphs: docxParagraphsFromArtifactArgs(resolvedArgs),
       images: resolvedArgs._officeImages,
+      userId: job?.userId || null,
     })
     const artifact = await publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
     return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
@@ -232,6 +237,7 @@ export async function executeGeneratedArtifactTool({
       title: resolvedArgs.title,
       sheets: xlsxSheetsFromArtifactArgs(resolvedArgs),
       images: resolvedArgs._officeImages,
+      userId: job?.userId || null,
     })
     const artifact = await publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
     return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
@@ -242,21 +248,33 @@ export async function executeGeneratedArtifactTool({
       title: resolvedArgs.title,
       blocks: pdfBlocksFromArtifactArgs(resolvedArgs),
       images: resolvedArgs._officeImages,
+      userId: job?.userId || null,
     })
     const artifact = await publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
     return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
   }
   if (name === 'create_html_app') {
-    const resolvedArgs = await resolveHtmlArtifactArgs(args, {
-      userId: job?.userId || null,
-      prompt: job?.userPrompt || job?.prompt || '',
-    })
-    const generatedArtifact = createHtmlArtifact({
-      title: resolvedArgs.title,
-      html: resolvedArgs.html,
-      files: resolvedArgs.files,
-      assetIds: resolvedArgs._htmlAssetIds,
-    })
+    let resolvedArgs
+    let generatedArtifact
+    try {
+      resolvedArgs = await resolveHtmlArtifactArgs(args, {
+        userId: job?.userId || null,
+        prompt: job?.userPrompt || job?.prompt || '',
+      })
+      generatedArtifact = createHtmlArtifact({
+        title: resolvedArgs.title,
+        html: resolvedArgs.html,
+        files: resolvedArgs.files,
+        assetIds: resolvedArgs._htmlAssetIds,
+      })
+    } catch (error) {
+      // resolveHtmlArtifactArgs and createHtmlArtifact validate completely
+      // before createHtmlArtifact performs its single file write.
+      throw markSideEffectOutcomeKnownFailed(error, {
+        code: error?.code,
+        retryable: error?.retryable === true,
+      })
+    }
     const artifact = await publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
     return publishedArtifactResult({
       name,

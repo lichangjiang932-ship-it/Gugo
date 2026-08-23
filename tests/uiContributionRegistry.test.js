@@ -59,6 +59,7 @@ test('first-party pages use the shared UI route contribution seam', () => {
     'ui:route:mcp-route',
     'ui:route:reasonix-route',
     'ui:account-menu:mcp-account-menu',
+    'ui:settings-section:evolution-settings',
   ])
   assert.equal(listUiPlugins().some((entry) => entry.id === 'gugo-first-party'), true)
 })
@@ -124,6 +125,65 @@ test('trusted UI plugins bind shared manifests, dependencies, and disposal', () 
   assert.equal(getUiPlugin('test-ui-dependent'), null)
 })
 
+test('trusted UI plugins enforce API, host, and active dependency semver before installation', () => {
+  const countBefore = listUiContributions('conversation-node').length
+  for (const [id, manifestOverrides, expectedCode] of [
+    ['test-ui-incompatible-api', { apiVersion: '2.0.0' }, 'PLUGIN_API_VERSION_INCOMPATIBLE'],
+    ['test-ui-incompatible-host', { hostVersion: '>=2.0.0' }, 'PLUGIN_HOST_VERSION_INCOMPATIBLE'],
+    [
+      'test-ui-missing-versioned-dependency',
+      {
+        requires: ['test-ui-absent'],
+        dependencyVersions: { 'test-ui-absent': '^1.0.0' },
+      },
+      'PLUGIN_DEPENDENCY_UNAVAILABLE',
+    ],
+  ]) {
+    assert.throws(
+      () => registerTrustedUiPlugin({
+        id,
+        name: id,
+        version: '1.0.0',
+        contributes: [`ui:conversation-node:${id}`],
+        ...manifestOverrides,
+      }, [
+        { id, slot: 'conversation-node', component: EmptyContribution },
+      ]),
+      (error) => error?.code === expectedCode && error?.retryable === false,
+    )
+    assert.equal(getUiPlugin(id), null)
+  }
+
+  const disposeBase = registerTrustedUiPlugin({
+    id: 'test-ui-versioned-base',
+    name: 'UI versioned base',
+    version: '2.4.0',
+    contributes: ['ui:conversation-node:versioned-base-node'],
+  }, [
+    { id: 'versioned-base-node', slot: 'conversation-node', component: EmptyContribution },
+  ])
+  try {
+    assert.throws(
+      () => registerTrustedUiPlugin({
+        id: 'test-ui-wrong-dependency-version',
+        name: 'UI wrong dependency version',
+        version: '1.0.0',
+        requires: ['test-ui-versioned-base'],
+        dependencyVersions: { 'test-ui-versioned-base': '^1.0.0' },
+        contributes: ['ui:conversation-node:wrong-version-node'],
+      }, [
+        { id: 'wrong-version-node', slot: 'conversation-node', component: EmptyContribution },
+      ]),
+      (error) => error?.code === 'PLUGIN_DEPENDENCY_VERSION_INCOMPATIBLE'
+        && error?.actualVersion === '2.4.0',
+    )
+    assert.equal(getUiPlugin('test-ui-wrong-dependency-version'), null)
+  } finally {
+    assert.equal(disposeBase(), true)
+  }
+  assert.equal(listUiContributions('conversation-node').length, countBefore)
+})
+
 test('trusted UI plugin registration fails atomically on missing dependencies or manifest drift', () => {
   const countBefore = listUiContributions('conversation-node').length
   assert.throws(
@@ -136,7 +196,8 @@ test('trusted UI plugin registration fails atomically on missing dependencies or
     }, [
       { id: 'node', slot: 'conversation-node', component: EmptyContribution },
     ]),
-    /dependencies are not active: not-installed/,
+    (error) => error?.code === 'PLUGIN_DEPENDENCY_UNAVAILABLE'
+      && error?.dependencyId === 'not-installed',
   )
   assert.throws(
     () => registerTrustedUiPlugin({

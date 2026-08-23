@@ -187,6 +187,8 @@ const path = await import('node:path')
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-continuity-tests', String(process.pid))
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
 const { attachJobBudget } = await import('../server/utils/jobBudget.js')
+const { trustedInternalLoopPrincipal } = await import('../server/services/loop/internalExecutionPrincipal.js')
+const INTERNAL_APPROVAL_PRINCIPAL = trustedInternalLoopPrincipal()
 
 function fakeReadTool() {
   return async () => ({ ok: true, data: '文件内容' })
@@ -217,6 +219,7 @@ test('预算耗尽时必须给出收尾总结,绝不返回空文本', async () =
 
   const result = await runToolsLoop({
     job,
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     step: { id: 'step-budget', kind: 'execute' },
     messages: [{ role: 'user', content: '读一堆文件' }],
     runModel,
@@ -260,6 +263,7 @@ test('模型中途报错 → 保留安全完成证据且不泄露 read_file 正�
 
   const result = await runToolsLoop({
     job,
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     step: { id: 'step-degrade', kind: 'execute' },
     messages: [{ role: 'user', content: '干活' }],
     runModel,
@@ -291,6 +295,7 @@ test('第一轮就报错仍然向上抛 —— 没有任何成果时降级没有
   await assert.rejects(
     () => runToolsLoop({
       job,
+      approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
       step: { id: 'step-fail-fast', kind: 'execute' },
       messages: [{ role: 'user', content: '干活' }],
       runModel: async () => { throw new Error('端点不可达') },
@@ -306,6 +311,7 @@ test('用户主动取消不被降级吞掉 —— AbortError 必须继续上抛'
   await assert.rejects(
     () => runToolsLoop({
       job,
+      approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
       step: { id: 'step-abort', kind: 'execute' },
       messages: [{ role: 'user', content: '干活' }],
       runModel: async () => {
@@ -363,6 +369,7 @@ test('编号步骤要求直接执行，且无工具证据时不能接受模型�
   let observedMessages = []
   const result = await runToolsLoop({
     job: { id: 'job-direct-execution', userId: null, origin: 'chat', prompt: '1. 创建文件\n2. 写入内容\n3. 检查结果' },
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     step: { id: 'step-direct-execution', kind: 'chat' },
     messages: [{ role: 'user', content: '1. 创建文件\n2. 写入内容\n3. 检查结果' }],
     toolSpecs: [],
@@ -391,6 +398,7 @@ test('同一工具低次数失败会收到策略提示并允许后续方案成�
   let advisoryCheckpointed = false
   const result = await runToolsLoop({
     job: { id: 'job-changing-arguments', userId: null, origin: 'chat', prompt: '读取目标文件' },
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     step: { id: 'step-changing-arguments', kind: 'chat' },
     messages: [{ role: 'user', content: '读取目标文件' }],
     toolSpecs: [readFile, listDirectory],
@@ -471,6 +479,7 @@ test('pending 策略提示在 checkpoint 中断后恢复且不会重放已完成
   await assert.rejects(
     runToolsLoop({
       job,
+      approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
       step,
       messages,
       toolSpecs: [readFile, listDirectory],
@@ -526,6 +535,7 @@ test('pending 策略提示在 checkpoint 中断后恢复且不会重放已完成
   let finalCheckpoint = null
   const result = await runToolsLoop({
     job: { ...job },
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     step,
     messages,
     toolSpecs: [readFile, listDirectory],
@@ -589,6 +599,7 @@ test('运行时在第 20 次同工具失败后保留硬上限机器码', async (
   let finalCheckpointCode = null
   const result = await runToolsLoop({
     job,
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     step: { id: 'step-same-tool-hard-limit', kind: 'chat' },
     messages: [{ role: 'user', content: '读取目标文件' }],
     toolSpecs: [readFile],

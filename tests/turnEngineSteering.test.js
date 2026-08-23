@@ -10,6 +10,7 @@ process.env.APPROVAL_MODE = 'off'
 
 const { closeDb, createUser } = await import('../server/db.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
+const { runToolLoop } = await import('../server/services/loop/index.js')
 const { createTurnExecutionLeaseCoordinator } = await import(
   '../server/services/turnExecutionLeaseRuntime.js'
 )
@@ -55,6 +56,7 @@ test('TurnEngine applies live steering once before completing the active model t
     },
   }
   const engine = new TurnEngine({
+    runLoop: runToolLoop,
     executionLeases,
     toolSpecs: [],
     resolveToolSpecs: async () => [],
@@ -90,14 +92,14 @@ test('TurnEngine applies live steering once before completing the active model t
   })
   await firstModelStarted
 
-  const accepted = engine.steerTurn({
+  const accepted = await engine.steerTurn({
     userId,
     sessionId,
     turnId,
     content: steeringContent,
     clientRequestId,
   })
-  const replayed = engine.steerTurn({
+  const replayed = await engine.steerTurn({
     userId,
     sessionId,
     turnId,
@@ -121,7 +123,7 @@ test('TurnEngine applies live steering once before completing the active model t
   releaseSecondModel()
   await engine.waitForTurn({ userId, sessionId, turnId })
 
-  const replayedAfterCompletion = engine.steerTurn({
+  const replayedAfterCompletion = await engine.steerTurn({
     userId,
     sessionId,
     turnId,

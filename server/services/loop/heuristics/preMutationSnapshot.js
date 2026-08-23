@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import {
+  finalizeFileSnapshot,
   recordFileSnapshot,
 } from '../../fileSnapshotStore.js'
 import {
@@ -32,7 +33,7 @@ export async function recordPreMutationSnapshot({ name, args, job, toolCallId })
     return
   }
   try {
-    recordFileSnapshot({
+    return recordFileSnapshot({
       userId: job.userId,
       sessionId: job.sessionId,
       turnId: job.id,
@@ -41,5 +42,25 @@ export async function recordPreMutationSnapshot({ name, args, job, toolCallId })
       filePath: resolved.fullPath,
       beforeContent,
     })
-  } catch { /* snapshot is best-effort */ }
+  } catch { return null /* snapshot is best-effort */ }
+}
+
+export function finalizePreMutationSnapshot({ snapshot, result }) {
+  if (!snapshot || result?.ok !== true) return null
+  const sha256 = String(result?.sha256 || '').trim()
+  const bytes = Number(result?.bytes)
+  if (!/^[a-f0-9]{64}$/u.test(sha256) || !Number.isSafeInteger(bytes) || bytes < 0) return null
+  try {
+    return finalizeFileSnapshot({
+      userId: snapshot.userId,
+      id: snapshot.id,
+      afterExists: true,
+      afterSha256: sha256,
+      afterBytes: bytes,
+    })
+  } catch {
+    // The mutation already succeeded. Keep the snapshot unbound/fail-closed
+    // instead of reporting a false tool failure that could trigger a retry.
+    return null
+  }
 }

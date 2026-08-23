@@ -1,10 +1,55 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import {
+  RUNTIME_CONFIG_RECOVERY_MODE,
+  RUNTIME_CONFIG_RECOVERY_PROTOCOL_VERSION,
+} from '../shared/runtimeConfigRecoveryProtocol.js'
 
 export const DEFAULT_DESKTOP_PORT = 5180
 export const DESKTOP_RUNTIME_RETRY_DELAYS_MS = Object.freeze([250, 500, 1_000])
 
 const sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs))
+
+async function readJsonResponse(response) {
+  if (!response?.ok
+    || !String(response.headers?.get?.('content-type') || '').toLowerCase().includes('application/json')) {
+    return null
+  }
+  try {
+    return await response.json()
+  } catch {
+    return null
+  }
+}
+
+async function probeJson(origin, pathname, { fetchImpl, timeoutMs }) {
+  try {
+    const base = String(origin || '').replace(/\/$/u, '')
+    return readJsonResponse(await fetchImpl(`${base}${pathname}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    }))
+  } catch {
+    return null
+  }
+}
+
+export async function probeDesktopRuntimeMode(origin, {
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 1_500,
+} = {}) {
+  if (typeof fetchImpl !== 'function') return null
+  const runtime = await probeJson(origin, '/api/health', { fetchImpl, timeoutMs })
+  if (runtime?.ok === true) return 'runtime'
+
+  const recovery = await probeJson(origin, '/api/recovery/status', { fetchImpl, timeoutMs })
+  if (recovery?.ok === true
+    && recovery.mode === RUNTIME_CONFIG_RECOVERY_MODE
+    && recovery.protocolVersion === RUNTIME_CONFIG_RECOVERY_PROTOCOL_VERSION
+    && recovery.restartRequired === true) {
+    return 'recovery'
+  }
+  return null
+}
 
 /**
  * electron-updater may briefly replace the installed executable while NSIS is

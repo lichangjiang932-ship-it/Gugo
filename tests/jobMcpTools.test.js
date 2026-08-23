@@ -15,7 +15,10 @@ const {
 } = await import('../server/mcp/mcpManager.js')
 const { runToolsLoop } = await import('../server/services/jobTools.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
-const { getDynamicTool } = await import('../server/services/toolRegistry.js')
+const {
+  getDynamicTool,
+  getDynamicToolSpecRegistrationId,
+} = await import('../server/services/toolRegistry.js')
 
 async function readJson(req) {
   const chunks = []
@@ -96,7 +99,13 @@ test('autonomous jobs receive and execute only the current user MCP tools', asyn
     let { specs, errors } = await listUserToolSpecs(owner)
     assert.deepEqual(errors, [])
     assert.deepEqual(specs.map((spec) => spec.function.name), ['mcp__devtools__inspect_page'])
-    const fallbackMetadata = getDynamicTool('mcp__devtools__inspect_page', { userId: owner }).metadata
+    const fallbackRegistration = getDynamicTool('mcp__devtools__inspect_page', { userId: owner })
+    assert.equal(
+      getDynamicToolSpecRegistrationId(specs[0]),
+      fallbackRegistration.registrationId,
+      'rebuilt MCP schemas must retain the host-only identity of the live registration',
+    )
+    const fallbackMetadata = fallbackRegistration.metadata
     assert.equal(fallbackMetadata.riskClass, 'external')
     assert.equal(fallbackMetadata.riskLevel, 'high')
     assert.equal(fallbackMetadata.requiresApproval, true)

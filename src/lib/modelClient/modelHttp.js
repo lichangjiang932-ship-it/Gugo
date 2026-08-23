@@ -9,7 +9,16 @@ export async function parseProxyResponse(response) {
   }
 
   if (!response.ok || data?.ok === false) {
-    throw new Error(data?.error || `\u672c\u5730\u6a21\u578b\u4ee3\u7406\u8bf7\u6c42\u5931\u8d25\uff1aHTTP ${response.status}`)
+    const payload = data?.error
+    const message = payload && typeof payload === 'object'
+      ? payload.message
+      : payload
+    const error = new Error(message || data?.message || `\u672c\u5730\u6a21\u578b\u4ee3\u7406\u8bf7\u6c42\u5931\u8d25\uff1aHTTP ${response.status}`)
+    const code = payload && typeof payload === 'object' ? payload.code : data?.code
+    if (code) error.code = String(code)
+    error.status = response.status
+    error.payload = data
+    throw error
   }
 
   return data

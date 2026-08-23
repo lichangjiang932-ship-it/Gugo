@@ -9,7 +9,12 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { getDb } from '../db.js'
+import {
+  getActiveSubagentRunPersistencePort,
+  prepareSubagentRunPersistencePort,
+} from '../core/subagentRunPersistencePort.js'
+import { getSideEffectExecutionLedger } from './sideEffectExecutionLedger.js'
+import { buildUserModelEnv } from './modelProviderStore.js'
 import {
   callBackgroundModel,
   callBackgroundModelWithTools,
@@ -30,11 +35,17 @@ import { buildSafetyBlock, prepareInlineSkillsForPrompt } from './promptCompiler
 import { getBuiltinSpec } from './toolRegistry.js'
 import { normalizePromptContextIds, prepareOptionalPromptContext } from './optionalPromptContext.js'
 import { createPartialResultFallback } from './partialResultFallback.js'
+import { resolveSubagentModelBinding } from './subagentModelBindingRuntime.js'
 import {
   approvalCacheKey,
   createSubagentApprovalContext,
   rememberApprovedSubagentCall,
 } from './subagentApprovalContext.js'
+import {
+  SUBAGENT_PROVIDER_TRACE_EVENT,
+  invokeRuntimeSubagentProvider,
+  projectSubagentProviderProvenance,
+} from './subagentProvider.js'
 
 export { createSubagentApprovalContext, rememberApprovedSubagentCall }
 
@@ -53,6 +64,9 @@ const MAX_SUBAGENT_DEPTH = envInt('SUBAGENT_MAX_DEPTH', 3)
 const MAX_SUBAGENTS_PER_BATCH = envInt('SUBAGENT_MAX_PER_BATCH', 8)
 const MAX_TRANSCRIPT_EVENT_CHARS = 12_000
 const SUBAGENT_CHECKPOINT_EVENT = 'runtime_checkpoint'
+const SUBAGENT_RECOVERY_EVENT = 'side_effect_recovery'
+const SUBAGENT_NEEDS_VERIFICATION = 'needs_verification'
+const SUBAGENT_SIDE_EFFECT_RECOVERY_KIND = 'side_effect_outcome_unknown'
 const RESUMABLE_SUBAGENT_STATUSES = new Set(['interrupted'])
 
 /**
@@ -336,6 +350,8 @@ export const SUBAGENT_TYPES = {
 async function executeSubagentTool(toolName, args, {
   userId = null,
   modelName = undefined,
+  modelProviderId = null,
+  modelConfigRevision = null,
   skillIds = [],
   skillDefinitions = [],
   depth = 0,
@@ -347,6 +363,11 @@ async function executeSubagentTool(toolName, args, {
   slotLease = null,
   approveTool = requestApproval,
   runToolLoop = null,
+  sideEffectLedger = null,
+  toolCallId = null,
+  idempotencyKey = null,
+  idempotentResume = false,
+  sideEffectRecoveryPlan = null,
 } = {}) {
   switch (toolName) {
     case 'web_search':
@@ -357,7 +378,14 @@ async function executeSubagentTool(toolName, args, {
     case 'list_directory':
     case 'write_file':
     case 'edit_file':
-      return dispatchFsShellTool(toolName, args, { userId })
+      return dispatchFsShellTool(toolName, args, {
+        userId,
+        signal,
+        toolCallId,
+        idempotencyKey,
+        idempotentResume,
+        sideEffectRecoveryPlan,
+      })
     case 'grep_code':
     case 'find_symbol':
     case 'list_imports':
@@ -386,6 +414,8 @@ async function executeSubagentTool(toolName, args, {
           request: {
             ...request,
             modelName: String(request.modelName || request.model_name || modelName || '').trim() || undefined,
+            ...(modelProviderId ? { modelProviderId } : {}),
+            ...(modelConfigRevision ? { modelConfigRevision } : {}),
             skillIds: inheritedSkillIds,
             ...(inheritedSkillDefinitions.length ? { skillDefinitions: inheritedSkillDefinitions } : {}),
           },
@@ -397,6 +427,7 @@ async function executeSubagentTool(toolName, args, {
           approvalContext,
           approveTool,
           runToolLoop,
+          sideEffectLedger,
         }))
     }
     default:
@@ -417,15 +448,22 @@ async function executeSubagentTool(toolName, args, {
  * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
  * @returns {Promise<Object>} 保留 completed / paused / interrupted / incomplete 等终态的 loop 结果
  */
-async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, runToolLoop = defaultRunToolLoop, onTranscriptEvent = null, loadCheckpoint = null, saveCheckpoint = null }) {
+async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, modelProviderId = null, modelConfigRevision = null, modelRuntimeEnv = null, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, runToolLoop = defaultRunToolLoop, sideEffectLedger = null, onTranscriptEvent = null, loadCheckpoint = null, saveCheckpoint = null }) {
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
+  const effectiveSideEffectLedger = sideEffectLedger
+    || getSideEffectExecutionLedger()
   const selectedModel = String(modelName || '').trim() || undefined
   const partialResultFallback = createPartialResultFallback({
     heading: '探索中断',
     resultLabel: '已经查到的信息',
   })
-  const contextWindow = getModelContextWindow({ userId, modelName: selectedModel })
+  const contextRuntimeEnv = modelRuntimeEnv || buildUserModelEnv({ userId })
+  const contextWindow = getModelContextWindow({
+    modelName: selectedModel,
+    modelProviderId: modelRuntimeEnv ? '' : modelProviderId,
+    env: contextRuntimeEnv,
+  })
   const emitTranscript = (event) => {
     if (typeof onTranscriptEvent !== 'function') return
     onTranscriptEvent({ ...event, at: now() })
@@ -438,8 +476,47 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     userId,
     prompt: messages.findLast?.((message) => message?.role === 'user')?.content || '',
     origin: 'subagent',
+    modelName: selectedModel || null,
+    modelProviderId: modelProviderId || null,
+    modelConfigRevision: modelConfigRevision || null,
   }
   const loopStep = { id: runId || 'subagent-step' }
+  const executeLoopTool = ({
+    name,
+    args,
+    signal: toolSignal,
+    budget: loopBudget,
+    toolCallId,
+    idempotencyKey,
+    idempotentResume,
+    sideEffectRecoveryPlan,
+  }) => executeTool(name, args, {
+    userId,
+    modelName: selectedModel,
+    modelProviderId,
+    modelConfigRevision,
+    skillIds: normalizePromptContextIds(skillIds),
+    skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
+    depth,
+    parentRunId: runId,
+    parentSessionId: sessionId,
+    signal: toolSignal,
+    budget: loopBudget,
+    approvalContext: effectiveApprovalContext,
+    slotLease,
+    approveTool,
+    runToolLoop,
+    sideEffectLedger: effectiveSideEffectLedger,
+    toolCallId,
+    idempotencyKey,
+    idempotentResume,
+    sideEffectRecoveryPlan,
+  })
+  executeLoopTool.supportsIdempotentResume = (callContext) => {
+    const capability = executeTool?.supportsIdempotentResume
+    if (typeof capability === 'function') return capability(callContext) === true
+    return capability === true
+  }
   const result = await runToolLoop({
     job: loopJob,
     step: loopStep,
@@ -453,6 +530,7 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     approvalContext: effectiveApprovalContext,
     approvalOrigin: 'subagent',
     approvalSessionId: sessionId,
+    sideEffectLedger: effectiveSideEffectLedger,
     loadCheckpoint,
     saveCheckpoint,
     enableToolHooks: false,
@@ -467,26 +545,15 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     }),
     runModel: (request) => callModel({
       ...request,
-      userId,
+      userId: modelRuntimeEnv ? null : userId,
+      usageOwnerId: userId,
       modelName: selectedModel,
+      modelProviderId: modelRuntimeEnv ? undefined : (modelProviderId || undefined),
+      ...(modelRuntimeEnv ? { env: modelRuntimeEnv } : {}),
       skillIds: normalizePromptContextIds(skillIds),
       skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
     }),
-    executeTool: ({ name, args, signal: toolSignal, budget: loopBudget }) => executeTool(name, args, {
-      userId,
-      modelName: selectedModel,
-      skillIds: normalizePromptContextIds(skillIds),
-      skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
-      depth,
-      parentRunId: runId,
-      parentSessionId: sessionId,
-      signal: toolSignal,
-      budget: loopBudget,
-      approvalContext: effectiveApprovalContext,
-      slotLease,
-      approveTool,
-      runToolLoop,
-    }),
+    executeTool: executeLoopTool,
     onModelPhase: (event) => {
       if (event.phase === 'started') {
         emitTranscript({ type: 'model_request', iteration: event.iteration, toolCount: tools?.length || 0 })
@@ -544,7 +611,9 @@ function parseTrace(value) {
   if (!value) return []
   try {
     const trace = typeof value === 'string' ? JSON.parse(value) : value
-    return Array.isArray(trace) ? trace : []
+    // Persistence ports deliberately return deeply frozen DTOs. Runtime trace
+    // assembly is mutable, so always detach the top-level event sequence.
+    return Array.isArray(trace) ? [...trace] : []
   } catch {
     return []
   }
@@ -554,12 +623,99 @@ function publicTrace(trace) {
   return parseTrace(trace).filter((event) => event?.type !== SUBAGENT_CHECKPOINT_EVENT)
 }
 
+function providerProvenanceFromTrace(trace) {
+  const event = parseTrace(trace).findLast((item) => item?.type === SUBAGENT_PROVIDER_TRACE_EVENT)
+  return event ? projectSubagentProviderProvenance(event.provider) : null
+}
+
+function appendProviderProvenance(trace, value) {
+  const provider = projectSubagentProviderProvenance(value)
+  trace.push({ type: SUBAGENT_PROVIDER_TRACE_EVENT, provider, at: now() })
+  return provider
+}
+
+function subagentProviderError(code, message, provider = {}) {
+  const error = new Error(message)
+  error.code = code
+  error.retryable = false
+  error.providerProvenance = projectSubagentProviderProvenance({
+    pluginId: provider.pluginId,
+    decision: 'error',
+    error: code,
+  })
+  return error
+}
+
+function boundedRecoveryId(value, maxLength = 500) {
+  const normalized = String(value || '').trim()
+  return normalized ? normalized.slice(0, maxLength) : null
+}
+
+function checkpointExecutingToolCallId(state) {
+  const calls = Array.isArray(state?.toolCalls) ? state.toolCalls : []
+  return boundedRecoveryId(calls.findLast((call) => call?.checkpointStatus === 'executing')?.id)
+}
+
+function sideEffectRecoveryFields(error, { runId, checkpointState } = {}) {
+  if (String(error?.code || '') !== 'SIDE_EFFECT_OUTCOME_UNKNOWN'
+    || error?.unsafeToReplay !== true
+    || error?.requiresUserVerification !== true) return null
+  const toolCallId = boundedRecoveryId(error?.sideEffectExecution?.toolCallId)
+    || checkpointExecutingToolCallId(checkpointState)
+  return Object.freeze({
+    runId: boundedRecoveryId(runId),
+    toolCallId,
+    requiresUserVerification: true,
+    recoveryKind: SUBAGENT_SIDE_EFFECT_RECOVERY_KIND,
+  })
+}
+
+function recoveryFieldsFromTrace(trace) {
+  const event = parseTrace(trace).findLast((item) => item?.type === SUBAGENT_RECOVERY_EVENT)
+  if (!event) return null
+  const runId = boundedRecoveryId(event.runId)
+  const toolCallId = boundedRecoveryId(event.toolCallId)
+  if (!runId || !toolCallId || event.recoveryKind !== SUBAGENT_SIDE_EFFECT_RECOVERY_KIND) return null
+  return {
+    runId,
+    toolCallId,
+    requiresUserVerification: true,
+    recoveryKind: SUBAGENT_SIDE_EFFECT_RECOVERY_KIND,
+  }
+}
+
+executeSubagentTool.supportsIdempotentResume = ({ name, idempotencyKey } = {}) => (
+  name === 'write_file' && Boolean(idempotencyKey)
+)
+
+function sideEffectRecoveryError(fields) {
+  return Object.assign(
+    new Error('Subagent side-effect outcome requires manual verification before explicit resume.'),
+    {
+      name: 'SubagentRecoveryBlockedError',
+      code: 'SUBAGENT_SIDE_EFFECT_NEEDS_VERIFICATION',
+      retryable: false,
+      unsafeToReplay: true,
+      ...fields,
+    },
+  )
+}
+
 function checkpointFromTrace(trace) {
-  return parseTrace(trace).findLast((event) => (
-    event?.type === SUBAGENT_CHECKPOINT_EVENT
-    && event.state
-    && typeof event.state === 'object'
-  ))?.state || null
+  let latestLegacyState = null
+  let sequencedCheckpoint = null
+  for (const event of parseTrace(trace)) {
+    if (event?.type !== SUBAGENT_CHECKPOINT_EVENT
+        || !event.state
+        || typeof event.state !== 'object') continue
+    latestLegacyState = event.state
+    const sequence = event.state.checkpointWriteSequence
+    if (Number.isSafeInteger(sequence) && sequence > 0
+        && (!sequencedCheckpoint || sequence > sequencedCheckpoint.sequence)) {
+      sequencedCheckpoint = { sequence, state: event.state }
+    }
+  }
+  return sequencedCheckpoint?.state || latestLegacyState
 }
 
 function traceWithCheckpoint(trace, state) {
@@ -581,113 +737,156 @@ export function newSubagentRunId() {
   return `subagent-${randomUUID()}`
 }
 
-function toRun(row) {
-  if (!row) return null
-  const trace = publicTrace(row.trace_json)
+function toRun(storedRun) {
+  if (!storedRun) return null
+  const storedTrace = parseTrace(storedRun.trace)
+  const recovery = storedRun.status === SUBAGENT_NEEDS_VERIFICATION
+    ? recoveryFieldsFromTrace(storedTrace)
+    : null
+  const trace = recovery
+    ? [{ type: SUBAGENT_RECOVERY_EVENT, ...recovery }]
+    : publicTrace(storedTrace)
+  const provider = providerProvenanceFromTrace(storedTrace)
   return {
-    id: row.id,
-    userId: row.user_id,
-    parentSessionId: row.parent_session_id,
-    parentMessageId: row.parent_message_id,
-    agentType: row.agent_type,
-    prompt: row.prompt,
-    status: row.status,
-    resultText: row.result_text || '',
+    id: storedRun.id,
+    userId: storedRun.userId,
+    parentSessionId: storedRun.parentSessionId,
+    parentMessageId: storedRun.parentMessageId,
+    agentType: storedRun.agentType,
+    prompt: storedRun.prompt,
+    modelName: storedRun.modelName || null,
+    modelProviderId: storedRun.modelProviderId || null,
+    modelConfigRevision: Number.isInteger(storedRun.modelConfigRevision)
+      ? storedRun.modelConfigRevision
+      : null,
+    status: storedRun.status,
+    resultText: storedRun.resultText || '',
     trace,
+    ...(provider ? { provider } : {}),
     team: trace.find((event) => event?.type === 'team')?.team || null,
     transcript: trace.filter((event) => event?.type === 'transcript'),
-    tokensIn: row.tokens_in,
-    tokensOut: row.tokens_out,
-    createdAt: row.created_at,
-    finishedAt: row.finished_at,
+    tokensIn: storedRun.tokensIn,
+    tokensOut: storedRun.tokensOut,
+    createdAt: storedRun.createdAt,
+    finishedAt: storedRun.finishedAt,
+    ...(recovery || {}),
   }
 }
 
-function insertRun({ id, userId, type, prompt, parentSessionId = null, parentMessageId = null, trace = [] }) {
-  const db = getDb()
-  db.prepare(
-    `INSERT INTO subagent_runs (id, user_id, parent_session_id, parent_message_id, agent_type, prompt, status, trace_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)`
-  ).run(id, userId, parentSessionId, parentMessageId, type, prompt, JSON.stringify(trace), now())
+function resolveRunPersistencePort(port) {
+  return port
+    ? prepareSubagentRunPersistencePort(port)
+    : getActiveSubagentRunPersistencePort()
 }
 
-function getStoredRun({ id, userId }) {
-  return getDb().prepare('SELECT * FROM subagent_runs WHERE user_id = ? AND id = ?').get(userId, id) || null
+async function insertRun(port, { id, userId, type, prompt, parentSessionId = null, parentMessageId = null, modelName = null, modelProviderId = null, modelConfigRevision = null, trace = [] }) {
+  return port.createRun({
+    id,
+    userId,
+    parentSessionId,
+    parentMessageId,
+    agentType: type,
+    prompt,
+    modelName,
+    modelProviderId,
+    modelConfigRevision,
+    trace,
+    createdAt: now(),
+  })
 }
 
-function markRunRunning({ id, userId, trace }) {
-  const changed = getDb().prepare(
-    `UPDATE subagent_runs
-        SET status = 'running', trace_json = ?, finished_at = NULL
-      WHERE id = ? AND user_id = ?`
-  ).run(JSON.stringify(trace), id, userId).changes
-  if (!changed) throw new Error('subagent run not found')
+async function markRunRunning(port, { id, userId, trace }) {
+  return port.markRunning({ id, userId, trace, startedAt: now() })
 }
 
-function saveRunCheckpoint({ id, userId, trace, state }) {
+async function saveRunTrace(port, { id, userId, trace }) {
+  return port.saveRunningTrace({ id, userId, trace })
+}
+
+async function saveRunCheckpoint(port, { id, userId, trace, state }) {
   if (!state || typeof state !== 'object') throw new Error('checkpoint state must be an object')
   const checkpointTrace = traceWithCheckpoint(trace, state)
-  const changed = getDb().prepare(
-    `UPDATE subagent_runs SET trace_json = ? WHERE id = ? AND user_id = ? AND status = 'running'`
-  ).run(JSON.stringify(checkpointTrace), id, userId).changes
-  if (!changed) return null
-  trace.splice(0, trace.length, ...checkpointTrace)
-  return { state }
+  const checkpointWriteSequence = Number(state.checkpointWriteSequence)
+  const saved = await port.saveRunningTrace({
+    id,
+    userId,
+    trace: checkpointTrace,
+    ...(Number.isSafeInteger(checkpointWriteSequence) && checkpointWriteSequence > 0
+      ? { checkpointWriteSequence }
+      : {}),
+  })
+  const persistedTrace = parseTrace(saved?.trace)
+  const persistedState = checkpointFromTrace(persistedTrace) || state
+  trace.splice(0, trace.length, ...persistedTrace)
+  return { state: persistedState }
 }
 
 function makeCheckpointResumable(state) {
   if (!state || typeof state !== 'object') return state || null
   const iterations = Math.max(0, Number(state.iterations) || 0)
+  const previousWriteSequence = Number(state.checkpointWriteSequence)
+  const checkpointWriteSequence = Number.isSafeInteger(previousWriteSequence)
+    && previousWriteSequence > 0
+    ? previousWriteSequence + 1
+    : 1
+  if (!Number.isSafeInteger(checkpointWriteSequence)) {
+    throw Object.assign(new Error('subagent checkpoint write sequence exhausted'), {
+      code: 'SUBAGENT_CHECKPOINT_SEQUENCE_EXHAUSTED',
+    })
+  }
   return {
     ...state,
+    checkpointWriteSequence,
     final: null,
     iterationWindowStart: iterations,
   }
 }
 
-function updateRun({ id, userId, status, resultText = '', trace = [] }) {
-  const db = getDb()
-  db.prepare(
-    `UPDATE subagent_runs SET status = ?, result_text = ?, trace_json = ?, finished_at = ? WHERE id = ? AND user_id = ?`
-  ).run(status, resultText, JSON.stringify(trace), now(), id, userId)
-  return getSubagentRun({ userId, id })
-}
-
-export function getSubagentRun({ userId, id }) {
-  const row = getDb().prepare('SELECT * FROM subagent_runs WHERE user_id = ? AND id = ?').get(userId, id)
-  return toRun(row)
-}
-
-export function recoverInterruptedSubagentRuns({ at = now() } = {}) {
-  const db = getDb()
-  const rows = db.prepare("SELECT id, user_id, trace_json FROM subagent_runs WHERE status = 'running'").all()
-  if (!rows.length) return 0
-  const update = db.prepare(`
-    UPDATE subagent_runs
-       SET status = 'interrupted', result_text = ?, trace_json = ?, finished_at = ?
-     WHERE id = ? AND user_id = ? AND status = 'running'
-  `)
-  const recover = db.transaction(() => {
-    let changed = 0
-    for (const row of rows) {
-      const trace = parseTrace(row.trace_json)
-      trace.push({
-        type: 'interrupted',
-        reason: 'service_restart',
-        resumable: Boolean(checkpointFromTrace(trace)),
-        at,
-      })
-      changed += update.run(
-        '子代理因服务重启而中断；可使用原运行 ID 重试并从 checkpoint 继续。',
-        JSON.stringify(trace),
-        at,
-        row.id,
-        row.user_id,
-      ).changes
-    }
-    return changed
+async function updateRun(port, { id, userId, status, resultText = '', trace = [] }) {
+  const storedRun = await port.finishRun({
+    id,
+    userId,
+    status,
+    resultText,
+    trace,
+    finishedAt: now(),
   })
-  return recover()
+  if (!storedRun) throw new Error('subagent run not found')
+  return toRun(storedRun)
+}
+
+export async function getSubagentRun({ userId, id }, { persistencePort = null } = {}) {
+  const port = resolveRunPersistencePort(persistencePort)
+  return toRun(await port.getRun({ userId, id }))
+}
+
+export async function recoverInterruptedSubagentRuns({
+  at = now(),
+  persistencePort = null,
+} = {}) {
+  const port = resolveRunPersistencePort(persistencePort)
+  const rows = await port.listRunningRuns()
+  if (!rows.length) return 0
+  let changed = 0
+  for (const row of rows) {
+    const trace = parseTrace(row.trace)
+    trace.push({
+      type: 'interrupted',
+      reason: 'service_restart',
+      resumable: Boolean(checkpointFromTrace(trace)),
+      at,
+    })
+    const receipt = await port.interruptRunningRun({
+      id: row.id,
+      userId: row.userId,
+      status: 'interrupted',
+      resultText: '子代理因服务重启而中断；可使用原运行 ID 重试并从 checkpoint 继续。',
+      trace,
+      finishedAt: at,
+    })
+    if (receipt.interrupted) changed += 1
+  }
+  return changed
 }
 
 export function listSubagentTypes() {
@@ -716,7 +915,20 @@ function normalizeSubagentTasks(request = {}) {
       skillDefinitions: request?.skillDefinitions,
     })
     const modelName = String(task?.modelName || task?.model_name || request?.modelName || request?.model_name || '').trim() || undefined
-    return { type, prompt, description, role, agentId, skillIds, skillDefinitions, modelName }
+    const modelProviderId = String(
+      task?.modelProviderId || task?.model_provider_id
+      || request?.modelProviderId || request?.model_provider_id || '',
+    ).trim() || null
+    const rawConfigRevision = task?.modelConfigRevision ?? task?.model_config_revision
+      ?? request?.modelConfigRevision ?? request?.model_config_revision
+    const modelConfigRevision = Number(rawConfigRevision)
+    return {
+      type, prompt, description, role, agentId, skillIds, skillDefinitions, modelName,
+      modelProviderId,
+      modelConfigRevision: Number.isInteger(modelConfigRevision) && modelConfigRevision > 0
+        ? modelConfigRevision
+        : null,
+    }
   })
 }
 
@@ -734,6 +946,10 @@ export async function runSubagentBatch({
   executeTool = undefined,
   preparePromptContext,
   runToolLoop = defaultRunToolLoop,
+  sideEffectLedger = null,
+  persistencePort = null,
+  resolveModelBinding = resolveSubagentModelBinding,
+  invokeSubagentProvider = invokeRuntimeSubagentProvider,
 } = {}) {
   if (!userId) throw new Error('userId is required')
   if (depth >= MAX_SUBAGENT_DEPTH) {
@@ -762,6 +978,8 @@ export async function runSubagentBatch({
     skillIds: task.skillIds,
     skillDefinitions: task.skillDefinitions,
     modelName: task.modelName,
+    modelProviderId: task.modelProviderId,
+    modelConfigRevision: task.modelConfigRevision,
     team: { ...team, role: task.role, memberIndex: tasks.indexOf(task) },
     parentSessionId,
     parentMessageId,
@@ -774,6 +992,10 @@ export async function runSubagentBatch({
     executeTool,
     preparePromptContext,
     runToolLoop,
+    sideEffectLedger,
+    persistencePort,
+    resolveModelBinding,
+    invokeSubagentProvider,
   })))
   const runs = settled.map((result, index) => result.status === 'fulfilled'
     ? {
@@ -784,13 +1006,28 @@ export async function runSubagentBatch({
         status: result.value.status,
         result: result.value.resultText,
       }
-    : {
-        ok: false,
-        type: tasks[index].type,
-        description: tasks[index].description,
-        status: 'failed',
-        error: result.reason?.message || String(result.reason),
-      })
+    : (() => {
+        const recovery = result.reason?.recoveryKind === SUBAGENT_SIDE_EFFECT_RECOVERY_KIND
+          && result.reason?.requiresUserVerification === true
+          ? {
+              runId: boundedRecoveryId(result.reason.runId),
+              toolCallId: boundedRecoveryId(result.reason.toolCallId),
+              requiresUserVerification: true,
+              recoveryKind: SUBAGENT_SIDE_EFFECT_RECOVERY_KIND,
+            }
+          : null
+        return {
+          ok: false,
+          ...(recovery?.runId ? { id: recovery.runId } : {}),
+          type: tasks[index].type,
+          description: tasks[index].description,
+          status: recovery ? SUBAGENT_NEEDS_VERIFICATION : 'failed',
+          error: recovery
+            ? 'Subagent side-effect outcome requires manual verification before explicit resume.'
+            : result.reason?.message || String(result.reason),
+          ...(recovery || {}),
+        }
+      })())
   return {
     ok: runs.some((run) => run.ok),
     parallel: tasks.length > 1,
@@ -831,6 +1068,8 @@ export async function runSubagent({
   parentSessionId = null,
   parentMessageId = null,
   modelName,
+  modelProviderId = null,
+  modelConfigRevision = null,
   signal,
   depth = 0,
   budget = null,
@@ -840,6 +1079,11 @@ export async function runSubagent({
   approveTool = requestApproval,
   preparePromptContext,
   runToolLoop = defaultRunToolLoop,
+  sideEffectLedger = null,
+  persistencePort = null,
+  resolveModelBinding = resolveSubagentModelBinding,
+  invokeSubagentProvider = invokeRuntimeSubagentProvider,
+  resumeBlocked = false,
 } = {}) {
   if (!userId) throw new Error('userId is required')
   if (!prompt || !String(prompt).trim()) throw new Error('prompt is required')
@@ -848,15 +1092,44 @@ export async function runSubagent({
     throw new Error(`subagent depth must be between 0 and ${MAX_SUBAGENT_DEPTH}`)
   }
   const normalizedPrompt = String(prompt).trim()
+  const runPersistence = resolveRunPersistencePort(persistencePort)
 
-  const storedRun = getStoredRun({ id, userId })
+  const storedRun = await runPersistence.getRun({ id, userId })
+  const explicitBlockedResume = storedRun?.status === SUBAGENT_NEEDS_VERIFICATION
+    && resumeBlocked === true
   if (storedRun) {
-    if (storedRun.agent_type !== type || storedRun.prompt !== normalizedPrompt) {
+    if (storedRun.agentType !== type || storedRun.prompt !== normalizedPrompt) {
       throw new Error('subagent run id belongs to a different task')
     }
-    if (!RESUMABLE_SUBAGENT_STATUSES.has(storedRun.status)) {
+    if (!RESUMABLE_SUBAGENT_STATUSES.has(storedRun.status) && !explicitBlockedResume) {
       if (storedRun.status === 'running') throw new Error('subagent run is already running')
       return toRun(storedRun)
+    }
+  }
+
+  // Resumes must only trust the immutable snapshot already stored with the run.
+  // Request fields cannot fill legacy NULL columns, otherwise every retry could
+  // silently choose a different Provider while retaining the same durable id.
+  const requestedModelName = String(storedRun ? (storedRun.modelName || '') : (modelName || '')).trim() || null
+  const requestedProviderId = String(storedRun ? (storedRun.modelProviderId || '') : (modelProviderId || '')).trim() || null
+  const requestedConfigRevision = Number(storedRun ? storedRun.modelConfigRevision : modelConfigRevision)
+  const normalizedConfigRevision = Number.isInteger(requestedConfigRevision) && requestedConfigRevision > 0
+    ? requestedConfigRevision
+    : null
+  const modelBinding = resolveModelBinding({
+    userId,
+    providerId: requestedProviderId || '',
+    modelName: requestedModelName || '',
+    configRevision: normalizedConfigRevision,
+    requirePersistedBinding: Boolean(storedRun),
+  })
+  if (storedRun) {
+    const callerProviderId = String(modelProviderId || '').trim()
+    const callerModelName = String(modelName || '').trim()
+    if ((callerProviderId && callerProviderId !== requestedProviderId)
+      || (callerModelName && callerModelName !== requestedModelName)
+      || (modelConfigRevision != null && Number(modelConfigRevision) !== normalizedConfigRevision)) {
+      throw new Error('subagent run model binding does not match the persisted snapshot')
     }
   }
 
@@ -866,17 +1139,121 @@ export async function runSubagent({
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
 
   const trace = storedRun
-    ? parseTrace(storedRun.trace_json)
+    ? parseTrace(storedRun.trace)
     : [
         { type: 'start', description, at: now() },
         ...(team ? [{ type: 'team', team, at: now() }] : []),
       ]
   if (storedRun) trace.push({ type: 'resume', fromStatus: storedRun.status, at: now() })
   const onTranscriptEvent = (event) => trace.push({ ...event, type: 'transcript', eventType: event.type })
+  let checkpointState = checkpointFromTrace(trace)
+  let ownsRunAttempt = false
+  let terminalWriteStarted = false
 
   try {
-    if (storedRun) markRunRunning({ id, userId, trace })
-    else insertRun({ id, userId, type, prompt: normalizedPrompt, parentSessionId, parentMessageId, trace })
+    if (storedRun) await markRunRunning(runPersistence, { id, userId, trace })
+    else await insertRun(runPersistence, {
+      id,
+      userId,
+      type,
+      prompt: normalizedPrompt,
+      parentSessionId,
+      parentMessageId,
+      modelName: modelBinding.modelName || null,
+      modelProviderId: modelBinding.providerId || null,
+      modelConfigRevision: modelBinding.configRevision || null,
+      trace,
+    })
+    ownsRunAttempt = true
+
+    if (!explicitBlockedResume) {
+      const previousProvider = providerProvenanceFromTrace(trace)
+      appendProviderProvenance(trace, { decision: 'invoking' })
+      await saveRunTrace(runPersistence, { id, userId, trace })
+      let providerResolution
+      try {
+        const initialDescription = storedRun
+          ? parseTrace(storedRun.trace).find((event) => event?.type === 'start')?.description
+          : description
+        const initialTeam = storedRun
+          ? parseTrace(storedRun.trace).find((event) => event?.type === 'team')?.team
+          : team
+        providerResolution = await invokeSubagentProvider({
+          runId: id,
+          resume: Boolean(storedRun),
+          type,
+          prompt: normalizedPrompt,
+          description: initialDescription || '',
+          depth,
+          model: {
+            name: modelBinding.modelName || null,
+            providerId: modelBinding.providerId || null,
+            configRevision: modelBinding.configRevision || null,
+          },
+          team: initialTeam || null,
+        }, {
+          signal,
+          timeoutMs: SUBAGENT_BUDGET.maxWallMs,
+        })
+        const providerDecision = providerResolution?.provenance?.decision
+        const validBuiltin = providerResolution?.kind === 'builtin'
+          && (providerDecision === 'absent' || providerDecision === 'decline')
+        const validHandled = providerResolution?.kind === 'handled'
+          && providerDecision === 'handled'
+          && providerResolution.terminal
+          && typeof providerResolution.terminal === 'object'
+        if (!validBuiltin && !validHandled) {
+          throw subagentProviderError(
+            'SUBAGENT_PROVIDER_RESULT_INVALID',
+            'runtime subagent provider returned an invalid resolution',
+          )
+        }
+        if (storedRun
+          && (previousProvider?.decision === 'handled' || previousProvider?.decision === 'invoking')
+          && providerResolution.kind === 'builtin'
+          && providerDecision === 'absent') {
+          throw subagentProviderError(
+            'SUBAGENT_PROVIDER_UNAVAILABLE',
+            'runtime subagent provider is unavailable for this durable run',
+            previousProvider,
+          )
+        }
+      } catch (error) {
+        appendProviderProvenance(trace, error?.providerProvenance || {
+          decision: 'error',
+          error: error?.code || 'SUBAGENT_PROVIDER_INVOCATION_FAILED',
+        })
+        throw error
+      }
+      appendProviderProvenance(trace, providerResolution?.provenance)
+      if (providerResolution?.kind === 'handled') {
+        const status = providerResolution.terminal.status
+        const reason = providerResolution.terminal.reason
+        const resultText = providerResolution.terminal.text || reason || ''
+        trace.push({
+          type: status === 'completed' ? 'done' : status,
+          ...(reason ? { reason } : {}),
+          at: now(),
+        })
+        void dispatchHooks({
+          userId,
+          event: 'subagent_stop',
+          tool: type,
+          args: { resultText: boundedTranscriptValue(resultText), status },
+          sessionId: parentSessionId || null,
+          requestId: id,
+          hookInvocationId: `subagent:${id}:stop:${status}`,
+        }).catch(() => { /* subagent_stop hook is best-effort */ })
+        terminalWriteStarted = true
+        return await updateRun(runPersistence, {
+          id,
+          userId,
+          status,
+          resultText,
+          trace,
+        })
+      }
+    }
     const { system, tools } = SUBAGENT_TYPES[type]
     const promptContextMessages = prepareOptionalPromptContext({
       preparePromptContext,
@@ -905,12 +1282,11 @@ export async function runSubagent({
       { role: 'user', content: normalizedPrompt },
     ]
 
-    let checkpointState = checkpointFromTrace(trace)
     if (storedRun && checkpointState) {
       checkpointState = makeCheckpointResumable(checkpointState)
       const resumedTrace = traceWithCheckpoint(trace, checkpointState)
       trace.splice(0, trace.length, ...resumedTrace)
-      markRunRunning({ id, userId, trace })
+      await saveRunTrace(runPersistence, { id, userId, trace })
     }
     const loopResult = tools?.length
       ? await subagentToolsLoop({
@@ -918,7 +1294,10 @@ export async function runSubagent({
           tools,
           signal,
           userId,
-          modelName,
+          modelName: modelBinding.modelName || undefined,
+          modelProviderId: modelBinding.providerId || null,
+          modelConfigRevision: modelBinding.configRevision || null,
+          modelRuntimeEnv: modelBinding.env || null,
           skillIds: normalizePromptContextIds(skillIds),
           skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
           sessionId: `subagent:${id}`,
@@ -931,15 +1310,24 @@ export async function runSubagent({
           executeTool,
           approveTool,
           runToolLoop,
+          sideEffectLedger,
           onTranscriptEvent,
           loadCheckpoint: () => checkpointState ? { state: checkpointState } : null,
-          saveCheckpoint: (state) => {
-            const saved = saveRunCheckpoint({ id, userId, trace, state })
-            if (saved) checkpointState = state
+          saveCheckpoint: async (state) => {
+            const saved = await saveRunCheckpoint(runPersistence, { id, userId, trace, state })
+            if (saved?.state) checkpointState = saved.state
             return saved
           },
         })
-      : await callBackgroundModel({ modelName, signal, messages, userId }).then((result) => {
+      : await callBackgroundModel({
+          modelName: modelBinding.modelName || undefined,
+          modelProviderId: modelBinding.env ? undefined : (modelBinding.providerId || undefined),
+          signal,
+          messages,
+          userId: modelBinding.env ? null : userId,
+          usageOwnerId: userId,
+          ...(modelBinding.env ? { env: modelBinding.env } : {}),
+        }).then((result) => {
           onTranscriptEvent({ type: 'model_response', content: boundedTranscriptValue(result), at: now() })
           return { text: result }
         })
@@ -948,7 +1336,7 @@ export async function runSubagent({
     const resultText = String(loopResult?.text || '')
     if (status === 'interrupted' && checkpointState) {
       checkpointState = makeCheckpointResumable(checkpointState)
-      saveRunCheckpoint({ id, userId, trace, state: checkpointState })
+      await saveRunCheckpoint(runPersistence, { id, userId, trace, state: checkpointState })
     }
     trace.push({
       type: status === 'completed' ? 'done' : status,
@@ -961,26 +1349,52 @@ export async function runSubagent({
       tool: type,
       args: { resultText: boundedTranscriptValue(resultText), status },
       sessionId: parentSessionId || null,
+      requestId: id,
+      hookInvocationId: `subagent:${id}:stop:${status}`,
     }).catch(() => { /* subagent_stop hook is best-effort */ })
-    return updateRun({
+    terminalWriteStarted = true
+    return await updateRun(runPersistence, {
       id,
       userId,
       status,
       resultText,
-      trace: status === 'completed' ? publicTrace(trace) : trace,
+      trace,
     })
   } catch (err) {
-    trace.push({ type: 'error', error: err?.message || String(err), at: now() })
-    const status = err?.name === 'AbortError' ? 'interrupted' : 'failed'
+    if (!ownsRunAttempt || terminalWriteStarted) throw err
+    const recovery = sideEffectRecoveryFields(err, { runId: id, checkpointState })
+    const status = recovery
+      ? SUBAGENT_NEEDS_VERIFICATION
+      : err?.name === 'AbortError' ? 'interrupted' : 'failed'
+    trace.push(recovery
+      ? { type: SUBAGENT_RECOVERY_EVENT, ...recovery, at: now() }
+      : { type: 'error', error: err?.message || String(err), at: now() })
+    const publicError = recovery ? sideEffectRecoveryError(recovery) : err
     void dispatchHooks({
       userId,
       event: 'subagent_stop',
       tool: type,
-      args: { error: err?.message || String(err), status },
+      args: recovery
+        ? { status, ...recovery }
+        : { error: err?.message || String(err), status },
       sessionId: parentSessionId || null,
+      requestId: id,
+      hookInvocationId: `subagent:${id}:stop:${status}`,
     }).catch(() => { /* subagent_stop hook is best-effort */ })
-    const run = updateRun({ id, userId, status, resultText: err?.message || String(err), trace })
-    throw Object.assign(err, { run })
+    try {
+      terminalWriteStarted = true
+      await updateRun(runPersistence, { id, userId, status, resultText: publicError.message, trace })
+    } catch (persistenceError) {
+      const aggregate = new AggregateError(
+        [publicError, persistenceError],
+        'Subagent failed and its terminal state could not be persisted',
+        { cause: publicError },
+      )
+      aggregate.code = 'SUBAGENT_TERMINAL_PERSISTENCE_FAILED'
+      aggregate.retryable = false
+      throw aggregate
+    }
+    throw publicError
   } finally {
     slotLease.release()
   }

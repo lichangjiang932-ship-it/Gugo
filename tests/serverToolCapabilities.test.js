@@ -14,6 +14,7 @@ process.env.WORKSPACE_SHARED_TRUSTED = '1'
 const { SERVER_TURN_TOOL_TOGGLE_NAMES } = await import('../src/lib/serverToolConfig.js')
 const { FS_SHELL_TOOL_SPECS } = await import('../server/adapters/fsShellTools.js')
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
+const { trustedInternalLoopPrincipal } = await import('../server/services/loop/internalExecutionPrincipal.js')
 const { createUser, setUserToolPermission } = await import('../server/db.js')
 const {
   getBuiltinSpec,
@@ -125,7 +126,7 @@ test('core execution tools survive the canonical turn catalog when enabled', asy
   }
 })
 
-test('resolveTurnToolSpecs keeps explicitly disabled builtins discoverable after merging tools', async () => {
+test('resolveTurnToolSpecs removes explicitly disabled builtins from model-visible schemas', async () => {
   const resolved = await resolveTurnToolSpecs({
     userId: 'server-tool-capability-test',
     baseSpecs: SERVER_TOOL_SPECS,
@@ -136,9 +137,9 @@ test('resolveTurnToolSpecs keeps explicitly disabled builtins discoverable after
     webSearchReady: true,
   })
   const names = namesOf(resolved)
-  assert.equal(names.includes('list_directory'), true)
-  assert.equal(names.includes('read_file'), true)
-  assert.equal(names.includes('bash_exec'), true)
+  assert.equal(names.includes('list_directory'), false)
+  assert.equal(names.includes('read_file'), false)
+  assert.equal(names.includes('bash_exec'), false)
   assert.equal(names.includes('web_search'), true)
   assert.equal(names.includes('set_deliverables'), true)
 })
@@ -201,9 +202,21 @@ test('a server-only dynamic tool reaches the API and validator with one schema d
   assert.equal(status, 200)
   const apiSpec = JSON.parse(body).specs.find((entry) => entry.name === name)?.tool
   assert.deepEqual(apiSpec, spec)
+
+  status = 0
+  body = ''
+  handleToolSpecsRequest(
+    { method: 'GET', url: '/api/tools/specs?mode=plan', headers: {} },
+    {
+      writeHead(nextStatus) { status = nextStatus },
+      end(chunk) { body += String(chunk || '') },
+    },
+  )
+  assert.equal(status, 200)
+  assert.equal(JSON.parse(body).specs.some((entry) => entry.name === name), false)
 })
 
-test('model-visible schemas remain stable when the authoritative server permission gate disables execution', async () => {
+test('user-disabled tools are removed from model-visible schemas', async () => {
   const userId = 'server-tool-schema-permission-user'
   createUser({ id: userId, email: 'server-tool-schema-permission@example.com' })
   setUserToolPermission({ userId, toolName: 'bash_exec', enabled: false })
@@ -217,12 +230,12 @@ test('model-visible schemas remain stable when the authoritative server permissi
     webSearchReady: false,
   })
 
-  assert.equal(namesOf(resolved).includes('bash_exec'), true)
+  assert.equal(namesOf(resolved).includes('bash_exec'), false)
   assert.equal(namesOf(resolved).includes('run_project_check'), true)
   assert.equal(namesOf(resolved).includes('set_deliverables'), true)
 })
 
-test('writable turns retain read-only verification tools despite legacy client defaults', async () => {
+test('explicit turn switches remove disabled read and write schemas', async () => {
   const specs = await resolveTurnToolSpecs({
     userId: null,
     baseSpecs: SERVER_TOOL_SPECS,
@@ -236,13 +249,13 @@ test('writable turns retain read-only verification tools despite legacy client d
   const names = specs.map((spec) => spec?.function?.name)
 
   assert.ok(names.includes('write_file'))
-  assert.ok(names.includes('read_file'))
-  assert.ok(names.includes('list_directory'))
-  assert.ok(names.includes('edit_file'), 'an explicitly disabled write tool stays discoverable')
+  assert.equal(names.includes('read_file'), false)
+  assert.equal(names.includes('list_directory'), false)
+  assert.equal(names.includes('edit_file'), false)
   assert.ok(names.includes('set_deliverables'))
 })
 
-test('Git mutation turns retain status and diff for preflight and verification', async () => {
+test('explicit turn switches remove disabled Git schemas', async () => {
   const specs = await resolveTurnToolSpecs({
     userId: null,
     baseSpecs: SERVER_TOOL_SPECS,
@@ -254,7 +267,9 @@ test('Git mutation turns retain status and diff for preflight and verification',
     webSearchReady: false,
   })
   const names = namesOf(specs)
-  for (const name of ['git_commit', 'git_status', 'git_diff']) assert.ok(names.includes(name), name)
+  assert.ok(names.includes('git_commit'))
+  assert.equal(names.includes('git_status'), false)
+  assert.equal(names.includes('git_diff'), false)
 })
 
 test('every bash_exec spec tells models to quote Windows absolute paths', () => {
@@ -348,6 +363,7 @@ test('list_directory advertised by the server has a real executor', async () => 
     toolSpecs: [spec],
     maxIters: 2,
     enableToolHooks: false,
+    approvalPrincipal: trustedInternalLoopPrincipal(),
     runModel: async ({ messages }) => {
       const toolMessage = messages.find((message) => message.role === 'tool' && message.name === 'list_directory')
       if (toolMessage) {

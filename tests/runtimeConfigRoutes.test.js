@@ -10,8 +10,15 @@ const previousDataDir = process.env.APP_DATA_DIR
 process.env.APP_DATA_DIR = dataDir
 
 const { createAppServer } = await import('../server/appServer.js')
-const { closeDb } = await import('../server/db.js')
+const { closeDb, getDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+const {
+  activateTestCompactionArchivePort,
+} = await import('./helpers/testCompactionArchivePort.js')
+
+const compactionArchiveController = activateTestCompactionArchivePort({
+  env: { APP_DATA_DIR: dataDir },
+})
 
 const server = createAppServer({
   getEnv: () => ({
@@ -25,6 +32,7 @@ const origin = `http://127.0.0.1:${server.address().port}`
 
 test.after(async () => {
   await new Promise((resolve) => server.close(resolve))
+  compactionArchiveController.release()
   closeDb()
   if (previousDataDir === undefined) delete process.env.APP_DATA_DIR
   else process.env.APP_DATA_DIR = previousDataDir
@@ -35,6 +43,68 @@ test('runtime config endpoint requires authentication', async () => {
   const response = await fetch(`${origin}/api/system/runtime-config`)
   assert.equal(response.status, 401)
   assert.equal((await response.json()).error.code, 'UNAUTHORIZED')
+
+  const preview = await fetch(`${origin}/api/system/user-data/preview`)
+  assert.equal(preview.status, 401)
+  assert.equal((await preview.json()).error.code, 'UNAUTHORIZED')
+})
+
+test('user-data DELETE requires a fresh preview token before any deletion', async () => {
+  const { token, userId } = issueTestSession({ email: 'runtime-config-clear-preview-required@example.com' })
+  const response = await fetch(`${origin}/api/system/user-data`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ confirmation: 'DELETE ALL MY GUGO DATA' }),
+  })
+
+  assert.equal(response.status, 409)
+  assert.equal((await response.json()).error.code, 'USER_DATA_CLEAR_PREVIEW_REQUIRED')
+  assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM users WHERE id = ?').get(userId).count, 1)
+})
+
+test('user-data clear route reports active runtime blockers without deleting data', async () => {
+  const { token, userId } = issueTestSession({ email: 'runtime-config-clear-blocked@example.com' })
+  const now = Date.now()
+  getDb().prepare(`
+    INSERT INTO jobs
+      (id, user_id, title, prompt, status, progress, cancel_requested, created_at, updated_at)
+    VALUES ('runtime-config-active-job', ?, 'Active job', 'prompt', 'running', 10, 0, ?, ?)
+  `).run(userId, now, now)
+
+  const previewResponse = await fetch(`${origin}/api/system/user-data/preview`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  assert.equal(previewResponse.status, 200)
+  assert.equal(previewResponse.headers.get('cache-control'), 'private, no-store')
+  assert.equal(previewResponse.headers.get('pragma'), 'no-cache')
+  const preview = (await previewResponse.json()).preview
+  assert.equal(preview.canClear, false)
+  assert.equal(preview.blockers.job, 1)
+
+  const response = await fetch(`${origin}/api/system/user-data`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      confirmation: 'DELETE ALL MY GUGO DATA',
+      previewToken: preview.token,
+    }),
+  })
+
+  assert.equal(response.status, 409)
+  const body = await response.json()
+  assert.equal(body.error.code, 'USER_DATA_CLEAR_RUNTIME_ACTIVE')
+  assert.equal(body.error.databaseCleared, false)
+  assert.equal(body.error.cleanupPending, false)
+  assert.equal(body.error.blockers.some((entry) => entry.kind === 'job'), true)
+  assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM jobs WHERE id = ?').get('runtime-config-active-job').count, 1)
+  assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM user_data_clear_operations WHERE owner_id = ?').get(userId).count, 0)
+  getDb().prepare('DELETE FROM jobs WHERE id = ?').run('runtime-config-active-job')
 })
 
 test('web settings opens only the fixed non-secret user runtime config', async () => {
@@ -119,7 +189,7 @@ test('runtime config endpoint ignores path query input and supports HEAD', async
   assert.equal(await response.text(), '')
 })
 
-test('runtime config endpoint hides unexpected filesystem and parser details', async () => {
+test('runtime config endpoint reports invalid content without filesystem or parser details', async () => {
   const configPath = path.join(dataDir, 'runtime.json')
   fs.mkdirSync(dataDir, { recursive: true })
   fs.writeFileSync(configPath, '{ invalid json')
@@ -129,10 +199,34 @@ test('runtime config endpoint hides unexpected filesystem and parser details', a
     headers: { Authorization: `Bearer ${token}` },
   })
 
-  assert.equal(response.status, 500)
+  assert.equal(response.status, 422)
   const body = await response.text()
-  assert.equal(JSON.parse(body).error.message, '无法打开运行配置')
+  assert.deepEqual(JSON.parse(body).error, {
+    code: 'RUNTIME_CONFIG_FILE_INVALID',
+    message: '运行配置文件 runtime.json 内容无效，请修正后重试',
+    action: 'EDIT_RUNTIME_CONFIG',
+    filename: 'runtime.json',
+  })
   assert.doesNotMatch(body, new RegExp(configPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'))
+})
+
+test('runtime config endpoint rejects oversized content before reading it', async () => {
+  const configPath = path.join(dataDir, 'runtime.json')
+  fs.mkdirSync(dataDir, { recursive: true })
+  fs.writeFileSync(configPath, Buffer.alloc((64 * 1024) + 1, 0x20))
+  const { token } = issueTestSession({ email: 'runtime-config-oversized@example.com' })
+
+  const response = await fetch(`${origin}/api/system/runtime-config`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+
+  assert.equal(response.status, 413)
+  assert.deepEqual((await response.json()).error, {
+    code: 'RUNTIME_CONFIG_FILE_TOO_LARGE',
+    message: '运行配置文件 runtime.json 超过 64 KiB 限制，请缩小后重试',
+    action: 'EDIT_RUNTIME_CONFIG',
+    filename: 'runtime.json',
+  })
 })
 
 test('multi-user deployments cannot expose the installation runtime config', async () => {

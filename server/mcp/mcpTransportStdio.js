@@ -12,7 +12,8 @@
  * 安全：
  *   - 命令白名单 (mcpManager 校验)
  *   - 不走 shell（shell:false 永远）
- *   - 净化 env（剥 MODEL_API_KEY / APP_SECRET）
+ *   - 净化宿主 env；只向 MCP 进程注入该连接显式配置的 env
+ *   - 即使显式配置也拒绝 NODE_OPTIONS / LD_PRELOAD 等启动时注入变量
  *   - 子进程 stdout 缓冲超过 1MB 强制断开（防止恶意 server 灌爆内存）
  */
 
@@ -25,7 +26,8 @@ const STDOUT_BUFFER_LIMIT = 1024 * 1024 // 1MB
 import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
 
 function sanitizeEnv(extra = {}) {
-  return sanitizeChildEnv(extra)
+  const explicitKeys = extra && typeof extra === 'object' ? Object.keys(extra) : []
+  return sanitizeChildEnv(extra, { allowExtraKeys: explicitKeys })
 }
 
 export class StdioTransport {
@@ -258,7 +260,10 @@ export class StdioTransport {
     if (process.platform === 'win32' && child.pid) {
       setTimeout(() => {
         try {
-          execFile('taskkill', ['/T', '/F', '/PID', String(child.pid)], () => {})
+          execFile('taskkill', ['/T', '/F', '/PID', String(child.pid)], {
+            env: sanitizeChildEnv(),
+            windowsHide: true,
+          }, () => {})
         } catch { /* best effort */ }
       }, 3000)
     }

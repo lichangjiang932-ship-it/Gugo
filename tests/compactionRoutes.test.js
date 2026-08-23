@@ -10,13 +10,28 @@ import { buildCompaction } from '../server/services/compactionService.js'
 import { estimateContextTokens } from '../server/services/contextCompactionRuntime.js'
 
 test('manual compaction resolves and invokes the explicitly selected model', async () => {
+  let bindingRequest = null
   let resolvedWith = null
   let invokedWith = null
   const signal = new AbortController().signal
   const messages = [{ role: 'user', content: 'compact this' }]
+  const lockedEnv = { MODEL_PROVIDERS: 'selected' }
   const context = resolveCompactionModelContext({
     userId: 'user-1',
     modelName: '  long-context-model  ',
+    modelProviderId: 'provider-uuid',
+    modelConfigRevision: 7,
+    env: { SOURCE: 'test' },
+    resolveBinding: (request) => {
+      bindingRequest = request
+      return {
+        modelName: 'long-context-model',
+        providerId: 'provider-uuid',
+        configRevision: 7,
+        source: 'provider',
+        env: lockedEnv,
+      }
+    },
     resolveContextWindow: (request) => {
       resolvedWith = request
       return 256_000
@@ -28,12 +43,28 @@ test('manual compaction resolves and invokes the explicitly selected model', asy
   })
 
   assert.equal(context.modelName, 'long-context-model')
+  assert.equal(context.modelProviderId, 'provider-uuid')
+  assert.equal(context.modelConfigRevision, 7)
   assert.equal(context.contextWindow, 256_000)
-  assert.deepEqual(resolvedWith, { userId: 'user-1', modelName: 'long-context-model' })
+  assert.deepEqual(bindingRequest, {
+    userId: 'user-1',
+    providerId: 'provider-uuid',
+    modelName: 'long-context-model',
+    configRevision: 7,
+    env: { SOURCE: 'test' },
+  })
+  assert.deepEqual(resolvedWith, {
+    userId: null,
+    usageOwnerId: 'user-1',
+    modelName: 'long-context-model',
+    env: lockedEnv,
+  })
   assert.deepEqual(await context.callModel({ messages, signal }), { content: 'summary' })
   assert.deepEqual(invokedWith, {
-    userId: 'user-1',
+    userId: null,
+    usageOwnerId: 'user-1',
     modelName: 'long-context-model',
+    env: lockedEnv,
     messages,
     signal,
   })
@@ -45,6 +76,13 @@ test('manual compaction preserves backend-default model selection when omitted',
   const context = resolveCompactionModelContext({
     userId: 'user-2',
     modelName: '   ',
+    resolveBinding: () => ({
+      modelName: 'default-model',
+      providerId: null,
+      configRevision: null,
+      source: 'environment',
+      env: { MODEL_NAME: 'default-model' },
+    }),
     resolveContextWindow: (request) => {
       resolvedWith = request
       return 128_000
@@ -56,8 +94,13 @@ test('manual compaction preserves backend-default model selection when omitted',
   })
 
   await context.callModel({ messages: [] })
-  assert.deepEqual(resolvedWith, { userId: 'user-2', modelName: undefined })
-  assert.equal(invokedWith.modelName, undefined)
+  assert.deepEqual(resolvedWith, {
+    userId: null,
+    usageOwnerId: 'user-2',
+    modelName: 'default-model',
+    env: { MODEL_NAME: 'default-model' },
+  })
+  assert.equal(invokedWith.modelName, 'default-model')
 })
 
 test('manual compaction bounds and remeasures the final outbound surface', () => {

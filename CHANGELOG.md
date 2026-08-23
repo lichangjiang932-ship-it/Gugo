@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.33] - 2026-08-23
+
 ### Fixed
 
 - Fixed artifact intent denial so explicit “not generating images” phrases (不是让你生成图片 / 并非要生成图片) and existing-image reuse (调用现有图片) no longer unlock generate_image, and mode/view state descriptions (改为摩天轮，图片就竖起来) are no longer treated as image creation requests.
@@ -15,7 +17,6 @@ follow [Semantic Versioning](https://semver.org/).
 - Fixed local path preflight to truncate known file extensions when task text follows a path without a separator, so authorization prompts no longer show a combined bogus path (PATH_NOT_FOUND).
 - Removed the mandatory written justification for switching to “bypass all” approval mode; the existing risk-confirmation dialog is now sufficient, and the mode history records an empty justification.
 
->>>>>>> Stashed changes
 ### Added
 
 - Added a shared immutable plugin manifest envelope for runtime and trusted build-time UI plugins, with exact UI contribution declarations and dependency-aware unload protection.
@@ -700,7 +701,10 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.24...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.33...HEAD
+[0.11.33]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.32...v0.11.33
+[0.11.32]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.31...v0.11.32
+[0.11.31]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.30...v0.11.31
 [0.10.24]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.23...v0.10.24
 [0.10.23]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.22...v0.10.23
 [0.10.22]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.22

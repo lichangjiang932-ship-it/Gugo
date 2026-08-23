@@ -1,9 +1,20 @@
 import { serializeAttachmentReferences } from '../../lib/attachmentClient.js'
 import { buildLocalPathEvidenceInstruction, buildLocalPathToolInstruction, resolveLocalPathToolNames } from '../../lib/localPathPreflight.js'
 import { createBufferedTurnActivityDispatcher, dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
-import { createTurnFailureError } from '../../lib/turnClient/turnEventDispatch.js'
+import {
+  createTurnFailureError,
+  isModelRequestOutcomeUnknownRecoveryKind,
+  isSideEffectOutcomeUnknownRecoveryKind,
+  MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND,
+  SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND,
+} from '../../lib/turnClient/turnEventDispatch.js'
 import { TASK_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
-import { artifactTypeForSkill, buildChatFailureDisplayKey, buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
+import {
+  artifactTypeForSkill,
+  buildChatFailureDisplayKey,
+  buildChatFailureMessage,
+  isPreExecutionFailure,
+} from '../../lib/chatFlowGuards.js'
 import { isServerTurnToolToggle } from '../../lib/serverToolConfig.js'
 import { registerTurnRun, unregisterTurnRun } from './turnRunRegistry.js'
 import { mergeAssistantText, missingAssistantTextSuffix } from '../../lib/assistantTextContinuity.js'
@@ -130,6 +141,32 @@ export function buildServerTurnMessageIds(turnId) {
   return { userId: `${normalized}:user`, assistantId: `${normalized}:assistant` }
 }
 
+export function normalizeServerTurnFailure(error) {
+  if (error?.serverFailure && typeof error.serverFailure === 'object') {
+    return error.serverFailure
+  }
+  const failure = {
+    code: String(error?.code || 'TURN_REQUEST_FAILED').trim() || 'TURN_REQUEST_FAILED',
+    message: String(error?.message || 'Turn request failed').trim() || 'Turn request failed',
+  }
+  for (const field of [
+    'status',
+    'action',
+    'providerId',
+    'modelName',
+    'configRevision',
+    'details',
+    'expectedSequence',
+    'actualSequence',
+    'recovery',
+    'retryable',
+    'retryAfter',
+  ]) {
+    if (error?.[field] !== undefined) failure[field] = error[field]
+  }
+  return failure
+}
+
 function appendArtifact(artifact, artifacts, dispatchMessage) {
   const filename = artifact.filename || 'artifact'
   const type = filename.includes('.') ? filename.split('.').pop().toLowerCase() : 'file'
@@ -150,6 +187,8 @@ export async function runServerChatTurn({
   intentMode,
   localPathAccess,
   modelName,
+  modelProviderId,
+  modelMode = 'agent',
   probeLocalPathAccess,
   requestServerToolApproval,
   resolveToolApprovalForOwner,
@@ -160,7 +199,6 @@ export async function runServerChatTurn({
   taskId,
   taskName,
   t,
-  toast,
   clearToolApprovalForOwner,
   toolsConfig,
   turnId,
@@ -173,6 +211,7 @@ export async function runServerChatTurn({
   const startedAt = Date.now()
   const serverArtifacts = []
   let currentAssistantText = ''
+  let executionStarted = false
   const initialArtifactType = artifactTypeForSkill(skillId)
   const { assistantId: assistantMessageId } = buildServerTurnMessageIds(turnId)
   const messageTarget = { sessionId, messageId: assistantMessageId }
@@ -203,6 +242,7 @@ export async function runServerChatTurn({
         artifactType: initialArtifactType,
         artifactTitle: initialArtifactType ? taskName : undefined,
         streaming: true,
+        executionStarted: false,
         turnStartedAt: startedAt,
         modelActivity: { kind: 'preparing' },
         serverTurnId: turnId,
@@ -236,6 +276,8 @@ export async function runServerChatTurn({
       displayContent,
       attachments: attachmentReferences,
       modelName,
+      modelProviderId,
+      modelMode,
       turnId,
       history: historyMessages,
       agentId,
@@ -245,7 +287,14 @@ export async function runServerChatTurn({
       syncSessionSnapshot: true,
       toolsConfig: buildServerToolsConfig(toolsConfig, localPathAccess, historyMessages),
       signal: controller.signal,
-      onStarted: (turn) => dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverTurnId: turn.turnId, serverLastSequence: -1 }),
+      onStarted: (turn) => {
+        executionStarted = true
+        dispatchMessage('UPDATE_LAST_MESSAGE_META', {
+          executionStarted: true,
+          serverTurnId: turn.turnId,
+          serverLastSequence: -1,
+        })
+      },
       onConnectionState: ({ status, attempt, maxAttempts }) => {
         if (status === 'reconnecting') {
           dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverConnectionState: 'reconnecting', modelActivity: null })
@@ -291,6 +340,47 @@ export async function runServerChatTurn({
       error.name = 'AbortError'
       error.turnCompletedAt = turnEventTimestamp(terminal)
       throw error
+    }
+    if (terminal.type === 'turn.blocked') {
+      dispatchMessage('UPDATE_LAST_MESSAGE_META', {
+        type: 'model_reply',
+        modelName: modelName || 'backend-default',
+        latency: null,
+        turnCompletedAt: null,
+        streaming: false,
+        paused: false,
+        failed: false,
+        serverClarification: null,
+        directoryAuthorizationPending: false,
+        serverResumeResolution: null,
+        serverArtifacts,
+        serverConnectionState: 'blocked',
+        serverRecoveryBlocked: true,
+        serverRecoveryKind: null,
+        serverRecoveryToolCallId: null,
+        serverRecoveryActionPath: null,
+        ...(isSideEffectOutcomeUnknownRecoveryKind(terminal.payload?.recoveryKind) ? {
+          serverRecoveryKind: SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND,
+          serverRecoveryToolCallId: terminal.payload?.toolCallId || null,
+          serverRecoveryActionPath: '/settings?tab=recovery',
+        } : {}),
+        ...(isModelRequestOutcomeUnknownRecoveryKind(terminal.payload?.recoveryKind) ? {
+          serverRecoveryKind: MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND,
+          serverRecoveryModelRequestId: terminal.payload?.modelRequestId || null,
+          serverRecoveryActionPath: '/settings?tab=recovery',
+        } : {}),
+      })
+      dispatch({
+        type: 'UPDATE_TASK',
+        payload: {
+          id: taskId,
+          updates: {
+            status: TASK_STATUS.PENDING,
+            stepLabel: terminal.payload?.message || t('chat.serverTurn.resumeFailed'),
+          },
+        },
+      })
+      return { blocked: true, terminal, recovery: terminal.payload }
     }
     if (terminal.type === 'turn.paused') {
       appendMissingAssistantText(terminal.payload?.text)
@@ -361,28 +451,45 @@ export async function runServerChatTurn({
       })
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.CANCELLED, stepLabel: t('chat.serverTurn.cancelled') } } })
     } else {
-      const message = getVisibleModelErrorMessage(error, t)
+      const serverFailure = normalizeServerTurnFailure(error)
+      const failureView = {
+        role: 'assistant',
+        message: error?.message,
+        meta: {
+          failed: true,
+          executionStarted,
+          serverFailure,
+          serverArtifacts,
+          serverPartialText: error.partialText || '',
+          serverArtifactIds: Array.isArray(error.artifactIds) ? error.artifactIds : [],
+        },
+      }
+      const failedBeforeExecution = executionStarted === false && isPreExecutionFailure(failureView)
       const serverFailureDisplayKey = buildChatFailureDisplayKey(turnId, error)
       dispatch({
         type: 'APPEND_TO_LAST_MESSAGE',
-        payload: buildChatFailureMessage(message),
+        payload: buildChatFailureMessage(failureView, t),
         meta: { serverFailureDisplayKey },
         ...messageTarget,
       })
       dispatchMessage('UPDATE_LAST_MESSAGE_META', {
         streaming: false,
-        latency: Math.max(0, completedAt - startedAt),
-        turnCompletedAt: completedAt,
+        executionStarted,
+        ...(failedBeforeExecution ? {} : {
+          latency: Math.max(0, completedAt - startedAt),
+          turnCompletedAt: completedAt,
+        }),
         failed: true,
-        serverArtifacts,
         serverConnectionState: null,
-        serverFailure: error.serverFailure || null,
+        serverFailure,
         serverFailureDisplayKey,
-        serverPartialText: error.partialText || '',
-        serverArtifactIds: Array.isArray(error.artifactIds) ? error.artifactIds : [],
+        ...(failedBeforeExecution ? {} : {
+          serverArtifacts,
+          serverPartialText: error.partialText || '',
+          serverArtifactIds: Array.isArray(error.artifactIds) ? error.artifactIds : [],
+        }),
       })
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.FAILED, stepLabel: t('chat.serverTurn.failed') } } })
-      toast.error({ title: t('toast.chatSendFailed'), body: message })
     }
     setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
     return { failed: true, error }

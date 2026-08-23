@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { getDb } from '../db.js'
 import { listSessionTurnArtifacts } from './turnArtifactStore.js'
 import { deleteManagedAttachmentsForSession } from './managedAttachmentStore.js'
-import { dispatchHooks } from './hooksService.js'
+import { runGovernedSessionDeletion } from './sessionDeletionGovernanceRuntime.js'
+import { enqueueSessionContentEventInDb } from './sessionContentOutboxStore.js'
 import { extractVerifiedLocalFiles, recoverLegacyVerifiedLocalFiles } from './turnMessageContext.js'
 
 const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
@@ -224,12 +225,14 @@ export function forkSession({
           model_context_json, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
+    const forkedMessages = []
     for (const message of sourceMessages) {
       const messageId = uniqueGeneratedId(db, {
         factory: idFactory,
         table: 'messages',
         used: usedMessageIds,
       })
+      const modelContextJson = forkSafeModelContext(message.model_context_json)
       insertMessage.run(
         messageId,
         forkedSessionId,
@@ -237,11 +240,26 @@ export function forkSession({
         message.role,
         message.content,
         source.title || 'Untitled',
-        forkSafeModelContext(message.model_context_json),
+        modelContextJson,
         message.created_at,
         message.updated_at,
       )
+      forkedMessages.push(messageContentSnapshot({
+        id: messageId,
+        role: message.role,
+        content: message.content,
+        modelContextJson,
+        createdAt: message.created_at,
+        updatedAt: message.updated_at,
+      }))
     }
+    enqueueSessionContentEventInDb(db, {
+      userId,
+      sessionId: forkedSessionId,
+      eventType: 'session.replace',
+      payload: { messages: forkedMessages },
+      createdAt: contentEventTimestamp(timestamp),
+    })
 
     return {
       session: getSession({ userId, sessionId: forkedSessionId }),
@@ -297,7 +315,7 @@ export function getSessionBranches({ userId, sessionId } = {}) {
   }
 }
 
-export function upsertSession({
+function upsertSessionRecord({
   id,
   userId,
   title = 'Untitled',
@@ -305,7 +323,7 @@ export function upsertSession({
   updatedAt = createdAt,
   lastViewedAt = null,
   archivedAt = null,
-}) {
+}, { notifyLifecycle = true } = {}) {
   if (!id) throw new Error('session id is required')
   if (!userId) throw new Error('user id is required')
   const db = getDb()
@@ -326,17 +344,44 @@ export function upsertSession({
       revision = sessions.revision + 1
     WHERE sessions.user_id = excluded.user_id
   `).run(id, id, userId, title, Number.MAX_SAFE_INTEGER, finalCreatedAt, updatedAt, lastViewedAt, archivedAt)
-  if (!row) {
-    // Best-effort lifecycle hook for a newly created chat session.
-    void dispatchHooks({
+  if (!row && notifyLifecycle) notifySessionStarted({ userId, sessionId: id, title })
+  return getSession({ userId, sessionId: id })
+}
+
+export class MessageOwnershipError extends Error {
+  constructor(message = 'message id belongs to another session') {
+    super(message)
+    this.name = 'MessageOwnershipError'
+    this.code = 'MESSAGE_OWNERSHIP_CONFLICT'
+    this.status = 409
+    this.retryable = false
+  }
+}
+
+/** Best-effort notification; aggregate commits call this only after COMMIT. */
+export function notifySessionStarted({ userId, sessionId, title = 'Untitled' } = {}) {
+  if (!userId || !sessionId) return false
+  void import('./hooksService.js')
+    .then(({ dispatchHooks }) => dispatchHooks({
       userId,
       event: 'session_start',
       tool: null,
       args: { title },
-      sessionId: id,
-    }).catch(() => { /* lifecycle hook is best-effort */ })
-  }
-  return getSession({ userId, sessionId: id })
+      sessionId,
+      requestId: sessionId,
+      hookInvocationId: `session:${sessionId}:start`,
+    }))
+    .catch(() => { /* lifecycle hook is best-effort */ })
+  return true
+}
+
+export function upsertSession(input) {
+  return upsertSessionRecord(input)
+}
+
+/** Internal aggregate-store primitive: lifecycle notification is deferred. */
+export function upsertSessionForAtomicCommit(input) {
+  return upsertSessionRecord(input, { notifyLifecycle: false })
 }
 
 function parseModelContext(value) {
@@ -352,6 +397,46 @@ function parseModelContext(value) {
 function serializeModelContext(value) {
   if (!value || typeof value !== 'object') return '{}'
   return JSON.stringify(value)
+}
+
+function contentEventTimestamp(value = Date.now()) {
+  const timestamp = Number(value)
+  return Number.isSafeInteger(timestamp) && timestamp >= 0 ? timestamp : Date.now()
+}
+
+function messageContentSnapshot({
+  id,
+  role,
+  content,
+  modelContext = null,
+  modelContextJson = null,
+  createdAt,
+  updatedAt,
+}) {
+  return {
+    id,
+    role,
+    content: String(content ?? ''),
+    modelContext: modelContextJson == null ? modelContext : parseModelContext(modelContextJson),
+    createdAt,
+    updatedAt,
+  }
+}
+
+function listSessionContentSnapshots(db, { userId, sessionId }) {
+  return db.prepare(`
+    SELECT id, role, content, model_context_json, created_at, updated_at, rowid
+    FROM messages
+    WHERE user_id = ? AND session_id = ?
+    ORDER BY created_at ASC, rowid ASC
+  `).all(userId, sessionId).map((row) => messageContentSnapshot({
+    id: row.id,
+    role: row.role,
+    content: row.content,
+    modelContextJson: row.model_context_json,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }))
 }
 
 function normalizeExpectedRevision(value) {
@@ -482,7 +567,22 @@ export function claimLocalChatSession({ userId, sessionId, authMode, now = Date.
       SET user_id = ?, updated_at = ?
       WHERE token = ? AND user_id = ? AND (id IS NOT NULL OR title IS NOT NULL)
     `).run(userId, now, sessionId, session.user_id)
-    return claimed.changes === 1 ? getSession({ userId, sessionId }) : null
+    if (claimed.changes !== 1) return null
+    enqueueSessionContentEventInDb(db, {
+      userId: session.user_id,
+      sessionId,
+      eventType: 'session.delete',
+      payload: {},
+      createdAt: contentEventTimestamp(now),
+    })
+    enqueueSessionContentEventInDb(db, {
+      userId,
+      sessionId,
+      eventType: 'session.replace',
+      payload: { messages: listSessionContentSnapshots(db, { userId, sessionId }) },
+      createdAt: contentEventTimestamp(now),
+    })
+    return getSession({ userId, sessionId })
   })()
 }
 
@@ -495,6 +595,15 @@ export function getSession({ userId, sessionId }) {
     WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).get(userId, sessionId)
   return mapSession(row)
+}
+
+/**
+ * Check whether a token is already occupied without exposing its owner. This
+ * includes auth-session rows, which must never be converted into chat rows.
+ */
+export function isSessionIdOccupied({ sessionId } = {}) {
+  if (!sessionId) return false
+  return !!getDb().prepare('SELECT 1 FROM sessions WHERE token = ?').get(sessionId)
 }
 
 export function listSessions({ userId, archived = 'false', limit = 100, offset = 0 } = {}) {
@@ -588,7 +697,7 @@ export function upsertMessage({
   if (!session) throw new Error('session not found')
   const serializedContext = serializeModelContext(modelContext)
   db.transaction(() => {
-    db.prepare(`
+    const write = db.prepare(`
       INSERT INTO messages
         (id, session_id, user_id, role, content, session_title, model_context_json, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -610,6 +719,7 @@ export function upsertMessage({
       createdAt,
       updatedAt,
     )
+    if (write.changes !== 1) throw new MessageOwnershipError()
     db.prepare(`
       UPDATE sessions
       SET updated_at = CASE
@@ -618,6 +728,27 @@ export function upsertMessage({
       END
       WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
     `).run(updatedAt, updatedAt, userId, sessionId)
+    const persisted = db.prepare(`
+      SELECT id, role, content, model_context_json, created_at, updated_at
+      FROM messages
+      WHERE user_id = ? AND session_id = ? AND id = ?
+    `).get(userId, sessionId, id)
+    enqueueSessionContentEventInDb(db, {
+      userId,
+      sessionId,
+      eventType: 'message.upsert',
+      payload: {
+        message: messageContentSnapshot({
+          id: persisted.id,
+          role: persisted.role,
+          content: persisted.content,
+          modelContextJson: persisted.model_context_json,
+          createdAt: persisted.created_at,
+          updatedAt: persisted.updated_at,
+        }),
+      },
+      createdAt: contentEventTimestamp(updatedAt),
+    })
   })()
   return {
     id,
@@ -788,6 +919,22 @@ export function replaceSessionMessages({
         message.updatedAt,
       )
     }
+    enqueueSessionContentEventInDb(db, {
+      userId,
+      sessionId,
+      eventType: 'session.replace',
+      payload: {
+        messages: normalized.map((message) => messageContentSnapshot({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          modelContextJson: message.modelContextJson,
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+        })),
+      },
+      createdAt: contentEventTimestamp(now),
+    })
     db.prepare(`
       UPDATE sessions
       SET updated_at = ?, revision = revision + 1
@@ -802,11 +949,11 @@ export function replaceSessionMessages({
   })()
 }
 
-export function deleteSession({ userId, sessionId, expectedRevision } = {}) {
+export function deleteSession({ userId, sessionId, expectedRevision } = {}, governanceDependencies) {
   if (!userId || !sessionId) return null
   const revision = normalizeExpectedRevision(expectedRevision)
   const db = getDb()
-  const result = db.transaction(() => {
+  const validate = () => {
     const session = db.prepare(`
       SELECT token, revision
       FROM sessions
@@ -816,7 +963,15 @@ export function deleteSession({ userId, sessionId, expectedRevision } = {}) {
     if (Number(session.revision) !== revision) {
       throw new SessionRevisionConflictError(session.revision)
     }
-
+    return session
+  }
+  if (validate() === null) return null
+  const result = runGovernedSessionDeletion({
+    db,
+    userId,
+    sessionId,
+    validate,
+    commitDatabaseDeletion() {
     db.prepare(`
       UPDATE memories
       SET source_session_id = NULL, source_message_id = NULL
@@ -830,20 +985,32 @@ export function deleteSession({ userId, sessionId, expectedRevision } = {}) {
     for (const table of ['pending_approvals', 'session_meters', 'compaction_archive']) {
       db.prepare(`DELETE FROM ${table} WHERE user_id = ? AND session_id = ?`).run(userId, sessionId)
     }
+    enqueueSessionContentEventInDb(db, {
+      userId,
+      sessionId,
+      eventType: 'session.delete',
+      payload: {},
+      createdAt: contentEventTimestamp(),
+    })
     const result = db.prepare(`
       DELETE FROM sessions
       WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
     `).run(userId, sessionId)
     return result.changes === 1 ? { deleted: true, previousRevision: revision } : null
-  })()
+    },
+  }, governanceDependencies)
   if (result?.deleted) {
-    void dispatchHooks({
-      userId,
-      event: 'session_end',
-      tool: null,
-      args: {},
-      sessionId,
-    }).catch(() => { /* lifecycle hook is best-effort */ })
+    void import('./hooksService.js')
+      .then(({ dispatchHooks }) => dispatchHooks({
+        userId,
+        event: 'session_end',
+        tool: null,
+        args: {},
+        sessionId,
+        requestId: sessionId,
+        hookInvocationId: `session:${sessionId}:end`,
+      }))
+      .catch(() => { /* lifecycle hook is best-effort */ })
     try {
       deleteManagedAttachmentsForSession({ userId, sessionId })
     } catch (error) {
@@ -863,6 +1030,15 @@ export function deleteMessage({ userId, messageId }) {
       .get(userId, messageId)
     if (!row) return false
     const result = db.prepare('DELETE FROM messages WHERE user_id = ? AND id = ?').run(userId, messageId)
+    if (result.changes > 0) {
+      enqueueSessionContentEventInDb(db, {
+        userId,
+        sessionId: row.session_id,
+        eventType: 'message.delete',
+        payload: { messageId },
+        createdAt: contentEventTimestamp(),
+      })
+    }
     return result.changes > 0
   })()
 }

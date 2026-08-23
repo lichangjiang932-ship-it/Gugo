@@ -254,6 +254,7 @@ test('validateToolCall enforces composed, range, length, pattern, and closed-obj
         properties: {
           mode: { type: 'string', pattern: '^[a-z]+$', minLength: 2, maxLength: 5 },
           count: { type: 'integer', minimum: 1, maximum: 3 },
+          ratio: { type: 'number', exclusiveMinimum: 0, exclusiveMaximum: 1 },
           items: { type: 'array', minItems: 1, maxItems: 2, items: { type: 'string' } },
         },
         required: ['mode'],
@@ -297,6 +298,16 @@ test('validateToolCall enforces composed, range, length, pattern, and closed-obj
   assert.match(lowerBoundsError.issues.join('\n'), /不能小于 1/)
   assert.match(lowerBoundsError.issues.join('\n'), /最多允许 2 项/)
 
+  for (const [ratio, expected] of [[0, /必须大于 0/], [1, /必须小于 1/]]) {
+    const [exclusiveBound] = normalizeToolCalls([{
+      name: 'strict_tool',
+      arguments: JSON.stringify({ mode: 'okay', count: 1, ratio }),
+    }])
+    const exclusiveBoundError = validateToolCall(exclusiveBound, specs)
+    assert.equal(exclusiveBoundError.code, 'tool_arguments_validation_failed')
+    assert.match(exclusiveBoundError.issues.join('\n'), expected)
+  }
+
   const [prototypeKey] = normalizeToolCalls([{
     name: 'strict_tool',
     arguments: '{"mode":"okay","count":1,"constructor":true}',
@@ -308,7 +319,7 @@ test('validateToolCall enforces composed, range, length, pattern, and closed-obj
 
   const [valid] = normalizeToolCalls([{
     name: 'strict_tool',
-    arguments: '{"mode":"okay","items":["a"]}',
+    arguments: '{"mode":"okay","ratio":0.5,"items":["a"]}',
   }])
   assert.equal(validateToolCall(valid, specs), null)
 })

@@ -20,7 +20,7 @@ process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-tests', String(process.pi
 
 function cleanDb() {
   const db = getDb()
-  for (const table of ['ledger', 'sessions', 'login_codes', 'users']) {
+  for (const table of ['sessions', 'login_codes', 'users']) {
     db.prepare(`DELETE FROM ${table}`).run()
   }
   db.prepare("DELETE FROM meta WHERE key = 'local_auth_owner_user_id'").run()
@@ -215,16 +215,22 @@ test('logout revokes the current authentication session', async () => {
   assert.equal(getSessionByToken(token), null)
 })
 
-test('authentication does not overwrite a legacy database balance', () => {
-  const issued = issueEmailCode({ email: 'legacy-balance@example.com', code: '123456' })
+test('authentication preserves custom non-billing user extension columns', () => {
+  const db = getDb()
+  const columns = db.prepare('PRAGMA table_info(users)').all()
+  if (!columns.some((column) => column.name === 'local_profile_tag')) {
+    db.exec('ALTER TABLE users ADD COLUMN local_profile_tag TEXT')
+  }
+
+  const issued = issueEmailCode({ email: 'extended-account@example.com', code: '123456' })
   const first = verifyEmailCode({ email: issued.email, code: issued.devCode })
-  getDb().prepare('UPDATE users SET credits = 321 WHERE id = ?').run(first.user.id)
+  db.prepare('UPDATE users SET local_profile_tag = ? WHERE id = ?').run('keep-local-data', first.user.id)
 
   const nextCode = issueEmailCode({ email: issued.email, code: '654321' })
   const second = verifyEmailCode({ email: nextCode.email, code: nextCode.devCode })
-  const stored = getDb().prepare('SELECT credits FROM users WHERE id = ?').get(first.user.id)
+  const stored = db.prepare('SELECT local_profile_tag FROM users WHERE id = ?').get(first.user.id)
 
-  assert.equal(stored.credits, 321)
+  assert.equal(stored.local_profile_tag, 'keep-local-data')
   assert.equal('credits' in second.user, false)
 })
 

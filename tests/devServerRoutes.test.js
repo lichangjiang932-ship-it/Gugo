@@ -1,151 +1,400 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+import { BUILTIN_HTTP_API_PREFIXES } from '../server/core/builtinHttpCapabilities.js'
+import { runtimeLifecyclePlugin } from '../vite.config.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const VITE_CONFIG_PATH = join(ROOT, 'vite.config.js')
+const VITE_CONFIG_URL = pathToFileURL(VITE_CONFIG_PATH).href
 
-/**
- * dev(vite.config.js)和 prod(server/appServer.js)必须路由同一组 /api 前缀。
- *
- * ★ 这个测试来自一次真实事故:
- *
- * `/api/tools/code/` 只注册在 appServer.js,没注册到 vite 的 fallbackApiPlugin。
- * 后果是 npm run dev 下模型每次调 grep_code / find_symbol / apply_patch
- * 都拿到 HTTP 404 —— **既搜不到代码,也改不了文件**。
- * 模型被逼到只能生成 PPT/文档来"交差",用户看到的是
- * 「执行 33 步、1 步失败、产出一个莫名其妙的 PPT」,
- * 根本想不到根因在构建配置里。这种 bug 靠人眼 review 是发现不了的。
- *
- * 同时漏的还有 /api/tools/agent/、/api/approvals、/api/tool-permissions、/api/desk。
- * 其中 /api/approvals 漏掉会让所有需要审批的工具(写文件/执行命令)直接失败。
- */
-
-/**
- * dev 侧除了 fallbackApiPlugin,还有几个专用插件也在处理路由:
- *   - modelProxyPlugin  → /api/model/*
- *   - authAccountPlugin → /api/auth/*、/api/account/*
- * 这些前缀在 fallbackApiPlugin 里看不到字面量，但确实被处理了，不算漏。
- *
- * ⚠ 注意这里**故意不包含** '/api/tools'。toolProxyPlugin 只兜住
- * search/fetch 这类通用网络工具，不会处理 /api/tools/code、/api/tools/agent。
- * 早期版本把 '/api/tools' 整个加进白名单，结果这个测试对
- * 「/api/tools/code 漏注册」完全免疫 —— 正是它本该拦住的那个事故。
- */
-const DEV_HANDLED_BY_PLUGIN = [
-  '/api/model',
-  '/api/auth',
-  '/api/account',
-  '/api/health',
-  // toolProxy 处理的通用网络工具，逐个点名，不用通配
-  '/api/tools/search',
-  '/api/tools/fetch',
-]
-
-/**
- * 只按**精确字符串**放行的前缀，绝不吞并子路径。
- *
- * '/api/tools' 是 appServer.js 里给 toolProxy 兜底用的裸前缀，
- * dev 侧由 toolProxyPlugin 承担。但它绝不能覆盖 /api/tools/code、
- * /api/tools/agent 这些需要各自 handler 的具体路由 —— 那正是事故本身。
- */
-const DEV_EXACT_PLUGIN_ROUTES = new Set([
-  '/api/tools',
-])
-
-function apiPrefixes(relativePath) {
-  const source = readFileSync(join(ROOT, relativePath), 'utf8').replace(/\r\n/g, '\n')
-  // 抓 '/api/xxx' 或 '/api/xxx/yyy' 形式的字符串字面量,去掉结尾的 /
-  const found = source.match(/'\/api\/[a-z0-9/-]+/g) || []
-  return new Set(found.map((item) => item.slice(1).replace(/\/$/, '')))
+function source() {
+  return readFileSync(VITE_CONFIG_PATH, 'utf8').replace(/\r\n/g, '\n')
 }
 
-/**
- * dev 侧是否覆盖了这个前缀。
- *
- * ★ 规则刻意做得很严：**只认精确匹配**（或专用插件白名单）。
- *
- * 早期版本写过两种"聪明"的宽松匹配，两次都让这个测试对它本该拦住的
- * 事故完全免疫：
- *   1. 把 '/api/tools' 整个加进插件白名单 → /api/tools/code 漏注册也算过。
- *   2. "dev 注册了更长的路径就算覆盖" → dev 里任意一条 /api/tools/xxx
- *      都能替 /api/tools/code 顶包。
- * 宁可偶尔要求手动往白名单加一条，也不要一个永远绿的假测试。
- */
-function devCovers(devPrefixes, prefix) {
-  if (devPrefixes.has(prefix)) return true
-  // 精确白名单：只有列出的这一条本身算覆盖，不吞并它的子路径
-  if (DEV_EXACT_PLUGIN_ROUTES.has(prefix)) return true
-  return DEV_HANDLED_BY_PLUGIN.some((p) => prefix === p || prefix.startsWith(`${p}/`))
+function cleanRuntimeIdentity(env = process.env) {
+  const next = { ...env }
+  for (const key of ['APP_CONFIG_PATH', 'APP_DATA_DIR', 'APP_DB_PATH']) delete next[key]
+  return next
 }
 
-test('★ vite dev server 必须覆盖 appServer 的每一个 /api 前缀', () => {
-  const prod = apiPrefixes('server/appServer.js')
-  const dev = apiPrefixes('vite.config.js')
+function runConfigProbe({ cwd, command, isPreview, env = {} }) {
+  const configEnv = {
+    command,
+    mode: command === 'build' || isPreview ? 'production' : 'development',
+    isPreview,
+  }
+  const probe = [
+    `const module = await import(${JSON.stringify(VITE_CONFIG_URL)})`,
+    `const config = await module.default(${JSON.stringify(configEnv)})`,
+    'process.stdout.write(JSON.stringify(config.plugins.map((plugin) => plugin.name)))',
+  ].join('\n')
+  return spawnSync(process.execPath, ['--input-type=module', '--eval', probe], {
+    cwd,
+    env: { ...cleanRuntimeIdentity(), ...env },
+    encoding: 'utf8',
+    timeout: 120_000,
+  })
+}
 
-  const missing = [...prod].filter((prefix) => !devCovers(dev, prefix)).sort()
+function assertProbeSucceeded(result) {
+  assert.equal(
+    result.status,
+    0,
+    `Vite config probe failed:\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+  )
+}
 
-  assert.deepEqual(
-    missing,
-    [],
-    `以下前缀只在 appServer.js 注册了,dev 模式会 404:\n  ${missing.join('\n  ')}\n`
-    + '把它们加到 vite.config.js 的 fallbackApiPlugin 里。',
+test('vite config has no eager server imports and gates runtime behind non-preview serve', () => {
+  const configSource = source()
+
+  assert.doesNotMatch(
+    configSource,
+    /^import\s+[^\n]+?from\s+['"]\.\/server\//m,
+    'vite.config.js 顶层不得静态导入后端运行时',
+  )
+  assert.match(
+    configSource,
+    /const runsDevelopmentRuntime = command === ['"]serve['"] && !isPreview/,
+  )
+  assert.match(
+    configSource,
+    /await import\(\s*['"]\.\/server\/services\/runtimeConfigStartupService\.js['"]\s*\)/,
+  )
+  assert.match(
+    configSource,
+    /runRuntimeConfigStartupPreflight\(\{\s*cwd: runtimeCwd,\s*env: startupEnv,?\s*\}\)/,
   )
 })
 
-test('几个关键前缀必须在两边都存在(回归哨兵)', () => {
-  const prod = apiPrefixes('server/appServer.js')
-  const dev = apiPrefixes('vite.config.js')
+test('vite dev mounts the same production HTTP capability catalog', () => {
+  const configSource = source()
 
-  // 这些是事故当事人,单独点名守住
+  assert.match(
+    configSource,
+    /import\(['"]\.\/server\/core\/builtinHttpCapabilities\.js['"]\)/,
+  )
+  assert.match(
+    configSource,
+    /registerBuiltinHttpCapabilities:\s*builtinHttpCapabilities\.registerBuiltinHttpCapabilities/,
+  )
+  assert.match(
+    configSource,
+    /registerBuiltinHttpCapabilities\(registry, \{\s*cwd: runtimeCwd,\s*getEnv,?\s*\}\)/,
+  )
+
   for (const prefix of [
-    '/api/tools/code',      // grep_code / find_symbol / list_imports / apply_patch
-    '/api/tools/agent',     // reflect / request_clarification
-    '/api/approvals',       // 工具审批闸口
+    '/api/tools/code',
+    '/api/tools/agent',
+    '/api/approvals',
     '/api/tool-permissions',
     '/api/tools/fs',
     '/api/tools/shell',
   ]) {
-    assert.ok(prod.has(prefix), `appServer.js 应注册 ${prefix}`)
-    assert.ok(dev.has(prefix), `vite.config.js 应注册 ${prefix}（否则 dev 模式 404）`)
+    assert.ok(BUILTIN_HTTP_API_PREFIXES.includes(prefix), `生产 capability catalog 缺少 ${prefix}`)
   }
 })
 
-test('vite dev server mounts the production realtime turn WebSocket', () => {
-  const source = readFileSync(join(ROOT, 'vite.config.js'), 'utf8')
-  assert.match(source, /import\s*\{\s*attachTurnWebSocketServer\s*\}\s*from\s*['"]\.\/server\/services\/turnWebSocket\.js['"]/)
-  assert.match(source, /function turnRealtimePlugin\(\)[\s\S]*?configureServer\(server\)[\s\S]*?attachTurnWebSocketServer\(server\.httpServer\)/)
-  assert.match(source, /plugins:\s*\[[^\]]*turnRealtimePlugin\(\)/)
+test('vite dev mounts realtime WebSocket through deferred runtime imports', () => {
+  const configSource = source()
+
+  assert.match(
+    configSource,
+    /import\(['"]\.\/server\/services\/turnWebSocket\.js['"]\)/,
+  )
+  assert.match(
+    configSource,
+    /import\(['"]\.\/server\/services\/turnEngineHost\.js['"]\)/,
+  )
+  assert.match(
+    configSource,
+    /function turnRealtimePlugin[\s\S]*?attachTurnWebSocketServer\(server\.httpServer,[\s\S]*?getTurnEngine\(\)\.listEvents/,
+  )
 })
 
-test('vite.config.js 真的 import 了这些 handler(不能只写 if 不导入)', () => {
-  const source = readFileSync(join(ROOT, 'vite.config.js'), 'utf8')
-  for (const name of [
-    'handleCodeSearchRequest',
-    'handleAgenticToolRequest',
-    'handleApprovalRequest',
-    'handleToolPermissionsRequest',
-    'handleDeskRequest',
-  ]) {
-    assert.match(source, new RegExp(`import\\s*\\{[^}]*\\b${name}\\b`), `缺少 ${name} 的 import`)
+test('vite dev passes one HostContext into capability preparation and lifecycle', () => {
+  const configSource = source()
+
+  assert.match(
+    configSource,
+    /prepareRuntimeCapabilitySnapshot\(\{\s*cwd: runtimeCwd,\s*env: runtimeEnv,?\s*\}\)/,
+  )
+  assert.match(
+    configSource,
+    /const startup = bootstrap\(\{\s*cwd: runtimeCwd,\s*runtimeEnv,/,
+  )
+  assert.match(configSource, /let shutdownPromise = null/)
+  assert.match(
+    configSource,
+    /\.then\(\(\) => gracefulShutdown\(null, \{ silent: true, exit: false \}\)\)/,
+  )
+  assert.match(
+    configSource,
+    /acquireHostTurnPersistenceCapability:\s*runtimeCapabilityHost\.acquireHostTurnPersistenceCapability/,
+  )
+  assert.match(
+    configSource,
+    /import\(['"]\.\/server\/adapters\/sqliteSubagentRunPersistenceAdapter\.js['"]\)/,
+  )
+  assert.match(
+    configSource,
+    /createSqliteSubagentRunPersistenceAdapter\(\{\s*getDb:\s*database\.getDb,?\s*\}\)/,
+  )
+  assert.match(
+    configSource,
+    /async closeBundle\(\)\s*\{\s*const exitCode = await shutdownRuntime\(\)/,
+  )
+})
+
+function fakeViteServer() {
+  const closeListeners = []
+  return {
+    closeListeners,
+    config: { logger: { error() {} } },
+    httpServer: {
+      once(event, listener) {
+        if (event === 'close') closeListeners.push(listener)
+      },
+    },
+  }
+}
+
+function createLifecyclePluginHarness(overrides = {}) {
+  let releaseCalls = 0
+  const subagentRunPersistenceAdapter = Object.freeze({
+    id: 'test.subagent-run-persistence',
+  })
+  const plugin = runtimeLifecyclePlugin({
+    acquireHostTurnPersistenceCapability: (adapter) => Object.freeze({
+      adapter,
+      release() {
+        releaseCalls += 1
+        return true
+      },
+    }),
+    bootstrap: () => ({ ready: Promise.resolve({ failures: [] }) }),
+    createBoundTurnPersistenceAdapter: (snapshot) => snapshot.persistence,
+    gracefulShutdown: async () => 0,
+    prepareRuntimeCapabilitySnapshot: async () => ({
+      persistence: { id: 'test.persistence' },
+      loop: { id: 'test.loop' },
+    }),
+    runtimeCwd: ROOT,
+    runtimeEnv: Object.freeze({ GUGO_LOAD_DOTENV: '0' }),
+    selectedToolLoopAdapter: (snapshot) => snapshot.loop,
+    subagentRunPersistenceAdapter,
+    turnPersistenceAdapter: Object.freeze({ id: 'test.persistence-input' }),
+    ...overrides,
+  })
+  return {
+    plugin,
+    releaseCalls: () => releaseCalls,
+    subagentRunPersistenceAdapter,
+  }
+}
+
+test('vite passes the explicit Subagent persistence adapter into lifecycle bootstrap', async () => {
+  let bootstrapInput = null
+  const harness = createLifecyclePluginHarness({
+    bootstrap(input) {
+      bootstrapInput = input
+      return { ready: Promise.resolve({ failures: [] }) }
+    },
+  })
+
+  await harness.plugin.configureServer(fakeViteServer())
+  assert.equal(
+    bootstrapInput?.subagentRunPersistenceAdapter,
+    harness.subagentRunPersistenceAdapter,
+  )
+  await harness.plugin.closeBundle()
+  assert.equal(harness.releaseCalls(), 1)
+})
+
+test('vite releases the persistence lease when snapshot preparation fails before lifecycle starts', async () => {
+  const sentinel = new Error('snapshot failed')
+  let shutdownCalls = 0
+  const harness = createLifecyclePluginHarness({
+    prepareRuntimeCapabilitySnapshot: async () => { throw sentinel },
+    gracefulShutdown: async () => {
+      shutdownCalls += 1
+      return 0
+    },
+  })
+
+  await assert.rejects(
+    harness.plugin.configureServer(fakeViteServer()),
+    (error) => error === sentinel,
+  )
+  assert.equal(shutdownCalls, 0)
+  assert.equal(harness.releaseCalls(), 1)
+})
+
+test('vite retains a lease after failed lifecycle stop and releases it on retry', async () => {
+  const startupFailure = new Error('startup failed')
+  let shutdownCalls = 0
+  const harness = createLifecyclePluginHarness({
+    bootstrap: () => ({
+      ready: Promise.resolve({
+        failures: [{
+          capability: { id: 'test.startup', startFailure: 'fail' },
+          error: startupFailure,
+        }],
+      }),
+    }),
+    gracefulShutdown: async () => {
+      shutdownCalls += 1
+      return shutdownCalls === 1 ? 1 : 0
+    },
+  })
+
+  await assert.rejects(
+    harness.plugin.configureServer(fakeViteServer()),
+    (error) => error instanceof AggregateError
+      && error.errors.some((entry) => entry?.code === 'DEV_RUNTIME_STARTUP_CAPABILITY_FAILED')
+      && error.errors.some((entry) => entry?.code === 'DEV_RUNTIME_ROLLBACK_FAILED'),
+  )
+  assert.equal(shutdownCalls, 1)
+  assert.equal(harness.releaseCalls(), 0)
+
+  await harness.plugin.closeBundle()
+  assert.equal(shutdownCalls, 2)
+  assert.equal(harness.releaseCalls(), 1)
+})
+
+test('vite preserves a synchronous shutdown error and keeps the lease retryable', async () => {
+  const startupFailure = new Error('startup failed')
+  const shutdownFailure = new Error('synchronous shutdown failed')
+  let shutdownCalls = 0
+  const harness = createLifecyclePluginHarness({
+    bootstrap: () => ({
+      ready: Promise.resolve({
+        failures: [{
+          capability: { id: 'test.startup', startFailure: 'fail' },
+          error: startupFailure,
+        }],
+      }),
+    }),
+    gracefulShutdown: () => {
+      shutdownCalls += 1
+      if (shutdownCalls === 1) throw shutdownFailure
+      return Promise.resolve(0)
+    },
+  })
+
+  await assert.rejects(
+    harness.plugin.configureServer(fakeViteServer()),
+    (error) => error instanceof AggregateError
+      && error.errors.some((entry) => entry?.code === 'DEV_RUNTIME_STARTUP_CAPABILITY_FAILED')
+      && error.errors.includes(shutdownFailure),
+  )
+  assert.equal(shutdownCalls, 1)
+  assert.equal(harness.releaseCalls(), 0)
+
+  await harness.plugin.closeBundle()
+  assert.equal(shutdownCalls, 2)
+  assert.equal(harness.releaseCalls(), 1)
+})
+
+for (const probeCase of [
+  { name: 'build', command: 'build', isPreview: false },
+  { name: 'preview', command: 'serve', isPreview: true },
+]) {
+  test(`vite ${probeCase.name} does not open the runtime database`, () => {
+    const cwd = mkdtempSync(join(tmpdir(), `gugo-vite-${probeCase.name}-`))
+    const forbiddenDbPath = join(cwd, 'must-not-exist', 'app.db')
+    try {
+      const result = runConfigProbe({
+        cwd,
+        command: probeCase.command,
+        isPreview: probeCase.isPreview,
+        env: {
+          APP_DB_PATH: forbiddenDbPath,
+          GUGO_LOAD_DOTENV: '0',
+          NODE_ENV: 'test',
+        },
+      })
+      assertProbeSucceeded(result)
+      assert.equal(existsSync(forbiddenDbPath), false)
+      assert.equal(existsSync(join(cwd, 'server-data', 'app.db')), false)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+}
+
+test('vite dev preflights relocated storage before loading the backend runtime', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'gugo-vite-dev-'))
+  const relocatedDbPath = join(cwd, 'relocated-data', 'app.db')
+  const defaultDbPath = join(cwd, 'server-data', 'app.db')
+  try {
+    writeFileSync(join(cwd, '.env'), 'APP_DATA_DIR=relocated-data\n', 'utf8')
+    const result = runConfigProbe({
+      cwd,
+      command: 'serve',
+      isPreview: false,
+      env: {
+        GUGO_LOAD_DOTENV: '1',
+        NODE_ENV: 'test',
+      },
+    })
+    assertProbeSucceeded(result)
+    assert.equal(existsSync(relocatedDbPath), true)
+    assert.equal(existsSync(defaultDbPath), false)
+    assert.match(result.stdout, /local-runtime-http-capabilities/)
+    assert.match(result.stdout, /builtin-runtime-lifecycle/)
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test('vite dev ignores dotenv persistence selection when explicitly disabled', () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'gugo-vite-dotenv-disabled-'))
+  const dataDir = join(cwd, 'runtime-data')
+  try {
+    writeFileSync(
+      join(cwd, '.env'),
+      'GUGO_TURN_PERSISTENCE_MODULE=must-not-load.mjs\nAPP_DATA_DIR=dotenv-data\n',
+      'utf8',
+    )
+    const result = runConfigProbe({
+      cwd,
+      command: 'serve',
+      isPreview: false,
+      env: {
+        APP_DATA_DIR: dataDir,
+        GUGO_LOAD_DOTENV: '0',
+        NODE_ENV: 'test',
+      },
+    })
+
+    assertProbeSucceeded(result)
+    assert.equal(existsSync(join(dataDir, 'app.db')), true)
+    assert.equal(existsSync(join(cwd, 'dotenv-data', 'app.db')), false)
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
   }
 })
 
 test('vite dev watcher ignores electron-builder release directories', () => {
-  const source = readFileSync(join(ROOT, 'vite.config.js'), 'utf8')
-  const ignoredBlock = source.match(/watch:\s*\{\s*ignored:\s*\[([\s\S]*?)\]/)?.[1]
+  const configSource = source()
+  const ignoredBlock = configSource.match(/watch:\s*\{\s*ignored:\s*\[([\s\S]*?)\]/)?.[1]
 
   assert.ok(ignoredBlock, 'vite.config.js 应配置 server.watch.ignored')
   const ignoredPatterns = [...ignoredBlock.matchAll(/['"]([^'"]+)['"]/g)]
     .map((match) => match[1])
 
-  assert.ok(
-    ignoredPatterns.includes('**/release/**'),
-    'Vite 应忽略 release/**，避免占用 electron-builder 的 win-unpacked.tmp',
-  )
-  assert.ok(
-    ignoredPatterns.includes('**/release-*/**'),
-    'Vite 应忽略 release-*/** 版本化发布目录',
-  )
+  assert.ok(ignoredPatterns.includes('**/release/**'))
+  assert.ok(ignoredPatterns.includes('**/release-*/**'))
 })

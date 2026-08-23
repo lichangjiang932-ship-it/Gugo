@@ -1,7 +1,11 @@
 import { z } from 'zod'
-import { TurnActivitySchema, TurnEventSchema } from './turnEvents.js'
+import {
+  TURN_EVENT_TRANSPORT_VERSION,
+  TurnActivitySchema,
+  TurnEventTransportEnvelopeSchema,
+} from './turnEvents.js'
 
-export const TURN_WEBSOCKET_PROTOCOL_VERSION = 1
+export const TURN_WEBSOCKET_PROTOCOL_VERSION = TURN_EVENT_TRANSPORT_VERSION
 
 const versionSchema = z.literal(TURN_WEBSOCKET_PROTOCOL_VERSION)
 const targetSchema = {
@@ -49,6 +53,7 @@ const approvalSchema = z.object({
   args: jsonRecordSchema,
   risk: z.enum(['low', 'medium', 'high']),
   metadataSource: z.enum(['declared', 'fallback']),
+  policyProvenance: jsonRecordSchema.nullable().optional(),
   reason: z.string().nullable(),
   status: z.enum(['pending', 'approved', 'denied', 'edited', 'expired', 'cancelled']),
   decidedArgs: jsonRecordSchema.nullable(),
@@ -88,7 +93,7 @@ export const TURN_WEBSOCKET_CLIENT_FRAME_SCHEMA = z.discriminatedUnion('type', [
 export const TURN_WEBSOCKET_SERVER_FRAME_SCHEMA = z.discriminatedUnion('type', [
   z.object({ v: versionSchema, type: z.literal('ready') }).strict(),
   z.object({ v: versionSchema, type: z.literal('subscribed.turn'), ...targetSchema }).strict(),
-  z.object({ v: versionSchema, type: z.literal('turn.event'), event: TurnEventSchema }).strict(),
+  TurnEventTransportEnvelopeSchema,
   z.object({ v: versionSchema, type: z.literal('turn.activity'), activity: TurnActivitySchema }).strict(),
   z.object({
     v: versionSchema,
@@ -101,6 +106,7 @@ export const TURN_WEBSOCKET_SERVER_FRAME_SCHEMA = z.discriminatedUnion('type', [
     type: z.literal('error'),
     code: z.string().min(1).max(160),
     message: z.string().optional(),
+    action: z.enum(['retry', 'restart_runtime']).optional(),
     expectedVersion: z.number().int().positive().optional(),
     receivedVersion: z.union([z.number().int(), z.null()]).optional(),
     sessionId: z.string().optional(),

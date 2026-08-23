@@ -44,7 +44,13 @@ function jsonResponse(body) {
 function grantResponse(path) {
   return jsonResponse({
     ok: true,
-    grant: { path, accessMode: 'read_only', resourceType: 'directory' },
+    grant: {
+      id: `grant:${path}`,
+      path,
+      accessMode: 'read_only',
+      resourceType: 'directory',
+      scope: 'session',
+    },
   })
 }
 
@@ -180,6 +186,7 @@ test('a replacement approval aborts and rejects the old request without acceptin
       path: 'D:\\second',
       accessMode: 'read_only',
       authorizationScope: 'session',
+      grantId: 'grant:D:\\second',
       resourceType: 'directory',
       workspaceConfigTrusted: false,
       workspaceTrustScope: null,

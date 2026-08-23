@@ -12,5 +12,6 @@ test('browser URL validation blocks link-local metadata targets before launch', 
 
 test('browser URL validation blocks loopback and non-http protocols', async () => {
   await assert.rejects(() => _browserInternals.validateUrl('http://127.0.0.1/admin'), /内网|loopback/)
+  await assert.rejects(() => _browserInternals.validateUrl('http://[::ffff:7f00:1]/admin'), /private|loopback/)
   await assert.rejects(() => _browserInternals.validateUrl('file:///etc/passwd'), /http\/https/)
 })

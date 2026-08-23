@@ -668,7 +668,7 @@ function normalizeManagedAttachmentRefs(values) {
     const id = String(value?.id || '').trim()
     if (!id || seen.has(id)) continue
     seen.add(id)
-    refs.push({
+    const ref = {
       id,
       name: String(value?.name || 'attachment').split(/[\\/]/).pop(),
       mimeType: String(value?.mimeType || 'application/octet-stream'),
@@ -676,10 +676,50 @@ function normalizeManagedAttachmentRefs(values) {
       sha256: String(value?.sha256 || ''),
       uri: String(value?.uri || `attachment://${id}`),
       downloadUrl: String(value?.downloadUrl || ''),
-    })
+    }
+    if (typeof value?.status === 'string') ref.status = value.status
+    if (Object.hasOwn(value || {}, 'sessionId')) {
+      ref.sessionId = value.sessionId === null ? null : String(value.sessionId || '')
+    }
+    if (Object.hasOwn(value || {}, 'messageId')) {
+      ref.messageId = value.messageId === null ? null : String(value.messageId || '')
+    }
+    refs.push(ref)
     if (refs.length >= MAX_MANAGED_ATTACHMENTS_PER_MESSAGE) break
   }
   return refs
+}
+
+function hasCompleteAttachmentReceipt(attachment, sessionId) {
+  const id = String(attachment?.id || '')
+  return /^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/.test(id)
+    && typeof attachment?.name === 'string'
+    && attachment.name.length > 0
+    && typeof attachment?.mimeType === 'string'
+    && /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(attachment.mimeType)
+    && Number.isSafeInteger(attachment?.size)
+    && attachment.size >= 0
+    && /^[a-f0-9]{64}$/.test(String(attachment?.sha256 || ''))
+    && attachment?.status === 'ready'
+    && attachment?.sessionId === sessionId
+    && Object.hasOwn(attachment, 'messageId')
+    && attachment.uri === `attachment://${id}`
+    && attachment.downloadUrl === `/api/attachments/${encodeURIComponent(id)}/content`
+}
+
+function frozenExpectedAttachmentReceipts(attachments) {
+  return Object.freeze(attachments.map((attachment) => Object.freeze({
+    id: attachment.id,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+    sha256: attachment.sha256,
+    status: attachment.status,
+    sessionId: attachment.sessionId,
+    messageId: attachment.messageId,
+    uri: attachment.uri,
+    downloadUrl: attachment.downloadUrl,
+  })))
 }
 
 function normalizeAttachmentIds(values, limit = MAX_MANAGED_ATTACHMENTS_PER_MESSAGE) {
@@ -824,12 +864,14 @@ export async function materializeManagedAttachmentMessages(messages, {
       materialized.push({ ...wire })
       continue
     }
-    const inlineRefs = requestedInlineIds === null
+    const selectedInlineRefs = requestedInlineIds === null
       ? refs
       : refs.filter((attachment) => requestedInlineIds.has(attachment.id))
-    const referenceRefs = inlineRefs.length === refs.length
-      ? []
-      : refs.filter((attachment) => !inlineRefs.some((candidate) => candidate.id === attachment.id))
+    const inlineRefs = selectedInlineRefs.filter((attachment) => (
+      hasCompleteAttachmentReceipt(attachment, sessionId)
+    ))
+    const inlineIds = new Set(inlineRefs.map((attachment) => attachment.id))
+    const referenceRefs = refs.filter((attachment) => !inlineIds.has(attachment.id))
     if (inlineRefs.length === 0) {
       materialized.push({
         ...wire,
@@ -844,6 +886,7 @@ export async function materializeManagedAttachmentMessages(messages, {
       userId,
       sessionId,
       attachmentIds: inlineRefs.map((attachment) => attachment.id),
+      expectedAttachments: frozenExpectedAttachmentReceipts(inlineRefs),
       text: contentWithAttachmentReferences(wire.content, referenceRefs),
     })
     materialized.push({

@@ -80,6 +80,7 @@ function createFakeIndexedDB({ openError = null, putError = null } = {}) {
   }
 
   return {
+    records,
     stats,
     open(name, version) {
       stats.opens.push({ name, version })
@@ -137,6 +138,81 @@ test('persisted snapshot APIs atomically round-trip, estimate, and clear the com
   assert.deepEqual(factory.stats.puts[0].payload, payload)
   assert.deepEqual(factory.stats.deletes, [SESSION_SNAPSHOT_RECORD_KEY])
   assert.deepEqual(factory.stats.transactions.map(({ mode }) => mode), ['readwrite', 'readonly', 'readonly', 'readwrite', 'readonly'])
+})
+
+test('IndexedDB writes remove retired account fields without changing sessions or settings', async () => {
+  const factory = createFakeIndexedDB()
+  const result = await writePersistedSnapshot({
+    user: { plan: 'legacy' },
+    isLoggedIn: true,
+    sessions: [{ id: 'safe', messages: [{ id: 'm1', content: 'keep' }] }],
+    toolsConfig: { fetch_url: false },
+    customSetting: { keep: true },
+    __sync: { fields: { user: 10, isLoggedIn: 10, sessions: 10 } },
+  }, { factory, now: () => 10 })
+
+  assert.equal(result.ok, true)
+  assert.equal(Object.hasOwn(result.payload, 'user'), false)
+  assert.equal(Object.hasOwn(result.payload, 'isLoggedIn'), false)
+  assert.equal(Object.hasOwn(result.payload.__sync.fields, 'user'), false)
+  assert.equal(Object.hasOwn(result.payload.__sync.fields, 'isLoggedIn'), false)
+  assert.equal(result.payload.sessions[0].messages[0].content, 'keep')
+  assert.deepEqual(result.payload.toolsConfig, { fetch_url: false })
+  assert.deepEqual(result.payload.customSetting, { keep: true })
+  assert.deepEqual(factory.records.get(SESSION_SNAPSHOT_RECORD_KEY).payload, result.payload)
+})
+
+test('IndexedDB reads rewrite legacy records in place and preserve their timestamp and current data', async () => {
+  const factory = createFakeIndexedDB()
+  await estimatePersistedSnapshotBytes({ factory })
+  factory.records.set(SESSION_SNAPSHOT_RECORD_KEY, {
+    key: SESSION_SNAPSHOT_RECORD_KEY,
+    schemaVersion: SESSION_SNAPSHOT_DB_VERSION,
+    updatedAt: 77,
+    bytes: 1,
+    payload: {
+      user: { plan: 'legacy' },
+      isLoggedIn: true,
+      sessions: [{ id: 'safe', messages: [{ id: 'm1', content: 'keep' }] }],
+      toolsConfig: { fetch_url: false },
+      __sync: { fields: { user: 77, isLoggedIn: 77, sessions: 77 } },
+    },
+  })
+
+  const result = await readPersistedSnapshot({ factory })
+  assert.equal(result.ok, true)
+  assert.equal(result.updatedAt, 77)
+  assert.deepEqual(result.retiredAccountFieldsRemoved.sort(), ['isLoggedIn', 'user'])
+  assert.equal(Object.hasOwn(result.payload, 'user'), false)
+  assert.equal(Object.hasOwn(result.payload, 'isLoggedIn'), false)
+  assert.equal(result.payload.sessions[0].messages[0].content, 'keep')
+  assert.deepEqual(result.payload.toolsConfig, { fetch_url: false })
+
+  const stored = factory.records.get(SESSION_SNAPSHOT_RECORD_KEY)
+  assert.equal(stored.updatedAt, 77)
+  assert.equal(Object.hasOwn(stored.payload, 'user'), false)
+  assert.equal(Object.hasOwn(stored.payload, 'isLoggedIn'), false)
+  assert.equal(stored.payload.sessions[0].messages[0].content, 'keep')
+})
+
+test('IndexedDB read failures never expose retired fields and request a later cleanup write', async () => {
+  const factory = createFakeIndexedDB({ putError: namedError('UnknownError', 'rewrite failed') })
+  await estimatePersistedSnapshotBytes({ factory })
+  factory.records.set(SESSION_SNAPSHOT_RECORD_KEY, {
+    key: SESSION_SNAPSHOT_RECORD_KEY,
+    schemaVersion: SESSION_SNAPSHOT_DB_VERSION,
+    updatedAt: 88,
+    bytes: 1,
+    payload: { user: { plan: 'legacy' }, isLoggedIn: true, sessions: [{ id: 'safe' }] },
+  })
+
+  const result = await readPersistedSnapshot({ factory })
+  assert.equal(result.ok, true)
+  assert.equal(result.cleanupNeeded, true)
+  assert.equal(result.cleanupError?.name, 'UnknownError')
+  assert.equal(Object.hasOwn(result.payload, 'user'), false)
+  assert.equal(Object.hasOwn(result.payload, 'isLoggedIn'), false)
+  assert.deepEqual(result.payload.sessions, [{ id: 'safe' }])
 })
 
 test('StrictMode-style concurrent calls share one IndexedDB open request', async () => {

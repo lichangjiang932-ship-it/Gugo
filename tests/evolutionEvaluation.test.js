@@ -11,14 +11,17 @@ process.env.APP_DB_PATH = path.join(tempDir, 'app.db')
 
 const { closeDb, getDb } = await import('../server/db.js')
 const { handleEvolutionRequest } = await import('../server/routes/evolutionRoutes.js')
+const { evolutionEvaluationDecisionMetrics } = await import('../server/services/evolutionEvaluationService.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 getDb()
+let evaluatorProviderId = 'evaluator-provider'
 let evaluatorModelName = 'independent-evaluator'
-let candidateModel = async () => ({ content: '{}', modelName: 'candidate-model' })
-let replayModel = async () => ({ content: 'output', modelName: 'fixed-worker' })
-let evaluationModel = async () => ({ content: '{}', modelName: evaluatorModelName })
+let candidateModel = async () => ({ content: '{}', providerId: 'candidate-provider', modelName: 'candidate-model' })
+let replayModel = async () => ({ content: 'output', providerId: 'replay-provider', modelName: 'fixed-worker' })
+let evaluationModel = async () => ({ content: '{}', providerId: evaluatorProviderId, modelName: evaluatorModelName })
 const server = http.createServer((req, res) => handleEvolutionRequest(req, res, {
+  evaluatorProviderId,
   evaluatorModelName,
   runCandidateModel: (input) => candidateModel(input),
   runReplayModel: (input) => replayModel(input),
@@ -26,6 +29,18 @@ const server = http.createServer((req, res) => handleEvolutionRequest(req, res, 
 }))
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const origin = `http://127.0.0.1:${server.address().port}`
+
+test('Evaluation identity excludes optional Provider cost telemetry', () => {
+  const metrics = {
+    quality: { improvements: 1, regressions: 0 },
+    safety: { regressions: 0, unknown: 0 },
+    latency: { ratio: 1 },
+    cost: { baselineUsd: 0.01, candidateUsd: 999, decisionRole: 'telemetry_only' },
+  }
+  const projected = evolutionEvaluationDecisionMetrics(metrics)
+  assert.equal(Object.hasOwn(projected, 'cost'), false)
+  assert.equal(metrics.cost.candidateUsd, 999, 'telemetry record remains unchanged')
+})
 
 function headers(token, json = false) {
   return { Authorization: `Bearer ${token}`, ...(json ? { 'Content-Type': 'application/json' } : {}) }
@@ -39,7 +54,11 @@ async function request(token, pathname, { method = 'GET', body } = {}) {
   })
 }
 
-async function createReplay(token, { withUsage = true, permissionsRequested = [] } = {}) {
+async function createReplay(token, {
+  withUsage = true,
+  withCost = withUsage,
+  permissionsRequested = [],
+} = {}) {
   const feedback = await request(token, '/api/evolution/feedback', {
     method: 'POST',
     body: { feedback: 'Verification quality regression' },
@@ -47,6 +66,7 @@ async function createReplay(token, { withUsage = true, permissionsRequested = []
   assert.equal(feedback.status, 201)
   const dataset = (await (await request(token, '/api/evolution/dataset?limit=200')).json()).dataset
   candidateModel = async () => ({
+    providerId: 'candidate-provider',
     modelName: 'candidate-model',
     content: JSON.stringify({
       title: 'Prompt candidate',
@@ -65,6 +85,8 @@ async function createReplay(token, { withUsage = true, permissionsRequested = []
       objective: 'Improve replay result',
       datasetFingerprint: dataset.datasetFingerprint,
       sourceRecordIds: [dataset.records[0].id],
+      providerId: 'candidate-provider',
+      modelName: 'candidate-model',
     },
   })
   assert.equal(candidateResponse.status, 201)
@@ -88,6 +110,7 @@ async function createReplay(token, { withUsage = true, permissionsRequested = []
     calls += 1
     await new Promise((resolve) => setTimeout(resolve, calls % 2 === 1 ? 20 : 2))
     return {
+      providerId: 'replay-provider',
       modelName: 'fixed-worker',
       content: calls % 2 === 1
         ? 'token=baseline-result incomplete answer'
@@ -96,7 +119,7 @@ async function createReplay(token, { withUsage = true, permissionsRequested = []
         usage: calls % 2 === 1
           ? { promptTokens: 100, completionTokens: 20, totalTokens: 120 }
           : { promptTokens: 90, completionTokens: 20, totalTokens: 110 },
-        costUsd: calls % 2 === 1 ? 0.1 : 0.09,
+        ...(withCost ? { costUsd: calls % 2 === 1 ? 0.1 : 0.09 } : {}),
       } : {}),
     }
   }
@@ -106,6 +129,7 @@ async function createReplay(token, { withUsage = true, permissionsRequested = []
       suiteId: suite.id,
       candidateId: candidate.id,
       baselineContent: 'Baseline system instructions',
+      providerId: 'replay-provider',
       modelName: 'fixed-worker',
       parameters: { temperature: 0, maxTokens: 512 },
     },
@@ -123,6 +147,7 @@ function evaluatorResponse(input, {
 } = {}) {
   const payload = JSON.parse(input.messages[1].content)
   return {
+    providerId: evaluatorProviderId,
     modelName: evaluatorModelName,
     content: JSON.stringify({
       verdict: 'fail',
@@ -142,7 +167,7 @@ function evaluatorResponse(input, {
 async function evaluate(token, replayId) {
   return request(token, '/api/evolution/evaluations', {
     method: 'POST',
-    body: { replayId, evaluatorModelName: 'client-must-not-control-this' },
+    body: { replayId, evaluatorProviderId, evaluatorModelName },
   })
 }
 
@@ -167,6 +192,7 @@ test('independent evaluation computes a host verdict from quality, safety, laten
   const evaluation = (await response.json()).evaluation
   assert.equal(evaluation.verdict, 'pass')
   assert.deepEqual(evaluation.evaluator, {
+    providerId: 'evaluator-provider',
     modelName: 'independent-evaluator',
     independent: true,
   })
@@ -181,6 +207,7 @@ test('independent evaluation computes a host verdict from quality, safety, laten
   assert.doesNotMatch(JSON.stringify(evaluation), /evaluator-secret|baseline-result|candidate-result|case-secret/iu)
   assert.match(evaluation.summary, /\[REDACTED\]/)
 
+  assert.equal(captured.providerId, 'evaluator-provider')
   assert.equal(captured.modelName, 'independent-evaluator')
   assert.equal(Object.hasOwn(captured, 'tools'), false)
   const evaluatorInput = JSON.stringify(captured.messages)
@@ -201,16 +228,16 @@ test('independent evaluation computes a host verdict from quality, safety, laten
   assert.equal(approve.status, 404)
 })
 
-test('evaluation is inconclusive without cost evidence and fails on a safety regression', async () => {
+test('evaluation treats missing provider cost as optional and still fails on a safety regression', async () => {
   const session = issueTestSession({ email: 'evaluation-policy@example.com' })
   const { replay } = await createReplay(session.token, { withUsage: false })
   evaluationModel = async (input) => evaluatorResponse(input)
   const incomplete = await evaluate(session.token, replay.id)
   assert.equal(incomplete.status, 201)
   const incompleteEvaluation = (await incomplete.json()).evaluation
-  assert.equal(incompleteEvaluation.verdict, 'inconclusive')
+  assert.equal(incompleteEvaluation.verdict, 'pass')
   assert.equal(incompleteEvaluation.metrics.cost.evidence, 'missing')
-  assert.ok(incompleteEvaluation.issues.includes('cost_evidence_missing'))
+  assert.equal(incompleteEvaluation.issues.includes('cost_evidence_missing'), false)
 
   evaluationModel = async (input) => evaluatorResponse(input, {
     baselineScore: 3,
@@ -228,6 +255,7 @@ test('evaluation is inconclusive without cost evidence and fails on a safety reg
 test('evaluation fails closed when independence or case evidence cannot be proven', async () => {
   const session = issueTestSession({ email: 'evaluation-validation@example.com' })
   const { replay } = await createReplay(session.token)
+  evaluatorProviderId = 'replay-provider'
   evaluatorModelName = 'fixed-worker'
   let calls = 0
   evaluationModel = async (input) => {
@@ -239,11 +267,58 @@ test('evaluation fails closed when independence or case evidence cannot be prove
   assert.equal((await sameModel.json()).error.code, 'EVOLUTION_EVALUATOR_NOT_INDEPENDENT')
   assert.equal(calls, 0)
 
+  evaluatorProviderId = 'different-provider'
+  evaluationModel = async (input) => evaluatorResponse(input)
+  const sameNameDifferentProvider = await evaluate(session.token, replay.id)
+  assert.equal(sameNameDifferentProvider.status, 201)
+  assert.deepEqual((await sameNameDifferentProvider.json()).evaluation.evaluator, {
+    providerId: 'different-provider',
+    modelName: 'fixed-worker',
+    independent: true,
+  })
+
+  evaluatorProviderId = 'evaluator-provider'
   evaluatorModelName = 'independent-evaluator'
   evaluationModel = async (input) => evaluatorResponse(input, { evidence: [] })
   const missingEvidence = await evaluate(session.token, replay.id)
   assert.equal(missingEvidence.status, 502)
   assert.equal((await missingEvidence.json()).error.code, 'EVOLUTION_EVALUATOR_OUTPUT_INVALID')
   const list = await request(session.token, '/api/evolution/evaluations')
-  assert.deepEqual((await list.json()).evaluations, [])
+  assert.equal((await list.json()).evaluations.length, 1)
+
+  const historical = issueTestSession({ email: 'evaluation-historical@example.com' })
+  const { replay: historicalReplay } = await createReplay(historical.token)
+  getDb().prepare('UPDATE evolution_replay_runs SET model_provider_id = NULL WHERE id = ?')
+    .run(historicalReplay.id)
+  calls = 0
+  evaluationModel = async (input) => {
+    calls += 1
+    return evaluatorResponse(input)
+  }
+  const unknownProvider = await evaluate(historical.token, historicalReplay.id)
+  assert.equal(unknownProvider.status, 409)
+  assert.equal((await unknownProvider.json()).error.code, 'EVOLUTION_REPLAY_PROVIDER_UNKNOWN')
+  assert.equal(calls, 0)
+})
+
+test('usage without a measured replay cost remains optional missing evidence instead of measured zero', async () => {
+  const session = issueTestSession({ email: 'evaluation-null-cost@example.com' })
+  const { replay } = await createReplay(session.token, { withUsage: true, withCost: false })
+  assert.ok(replay.results[0].baseline.usage)
+  assert.equal(replay.results[0].baseline.costUsd, null)
+  assert.equal(replay.results[0].candidate.costUsd, null)
+
+  evaluationModel = async (input) => evaluatorResponse(input)
+  const response = await evaluate(session.token, replay.id)
+  assert.equal(response.status, 201)
+  const evaluation = (await response.json()).evaluation
+  assert.equal(evaluation.verdict, 'pass')
+  assert.deepEqual(evaluation.metrics.cost, {
+    baselineUsd: null,
+    candidateUsd: null,
+    ratio: null,
+    evidence: 'missing',
+    decisionRole: 'telemetry_only',
+  })
+  assert.equal(evaluation.issues.includes('cost_evidence_missing'), false)
 })

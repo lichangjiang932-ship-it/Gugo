@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createTurnActivity, createTurnEvent } from '../shared/turnEvents.js'
+import {
+  createTurnActivity,
+  createTurnEvent,
+  createTurnEventTransportEnvelope,
+} from '../shared/turnEvents.js'
 import {
   INLINE_SKILL_DEFINITION_LIMITS,
   unicodeCharacterLength,
@@ -24,8 +28,8 @@ import { createTurnFailureError, normalizeTurnFailurePayload } from '../src/lib/
 import { reduceMessageState } from '../src/store/reducers/messageReducer.js'
 import { mergeServerSessionMessages } from '../src/store/sessionServerSync.js'
 
-function response(body, status = 200) {
-  return { ok: status >= 200 && status < 300, status, json: async () => body }
+function response(body, status = 200, headers) {
+  return { ok: status >= 200 && status < 300, status, headers, json: async () => body }
 }
 
 function sseResponse(events) {
@@ -40,6 +44,31 @@ function sseResponse(events) {
   })
   return { ok: true, status: 200, body, json: async () => ({}) }
 }
+
+test('SSE turn transport negotiates v1 envelopes while retaining legacy payload decoding', async () => {
+  const completed = createTurnEvent({
+    id: 'sse-envelope-done',
+    sessionId: 's-sse-envelope',
+    turnId: 't-sse-envelope',
+    sequence: 0,
+    type: 'turn.completed',
+    createdAt: 1,
+  })
+  let requestedUrl = null
+  const response = sseResponse([createTurnEventTransportEnvelope(completed)])
+  const terminal = await streamServerTurnEvents({
+    sessionId: completed.sessionId,
+    turnId: completed.turnId,
+    fetchImpl: async (url) => {
+      requestedUrl = String(url)
+      return response
+    },
+  })
+
+  assert.equal(terminal.id, completed.id)
+  const requested = new URL(requestedUrl, 'http://localhost')
+  assert.equal(requested.searchParams.get('turnEventVersion'), '1')
+})
 
 class FakeWebSocket {
   static OPEN = 1
@@ -227,7 +256,7 @@ test('WebSocket terminal delivery completes before an immediate close is treated
   })
 })
 
-test('WebSocket protocol errors fail immediately without waiting for acknowledgement timeout', async () => {
+test('WebSocket protocol errors preserve code, message, and recovery action', async () => {
   await withWebSocketAuth(async () => {
     const socket = new FakeWebSocket()
     const stream = streamServerTurnEventsWebSocket({
@@ -238,8 +267,45 @@ test('WebSocket protocol errors fail immediately without waiting for acknowledge
       webSocketFactory: () => socket,
     })
     socket.emit('open')
-    socket.emit('message', { data: JSON.stringify({ type: 'error', code: 'TURN_SUBSCRIBE_FAILED' }) })
-    await assert.rejects(stream, (error) => error.code === 'TURN_SUBSCRIBE_FAILED')
+    socket.emit('message', { data: JSON.stringify({
+      type: 'error',
+      code: 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
+      message: 'turn runtime is not configured',
+      action: 'restart_runtime',
+    }) })
+    await assert.rejects(
+      stream,
+      (error) => error.code === 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED'
+        && error.message === 'turn runtime is not configured'
+        && error.action === 'restart_runtime',
+    )
+    assert.equal(socket.closed, true)
+  })
+})
+
+test('WebSocket retry protocol errors preserve code, message, and recovery action', async () => {
+  await withWebSocketAuth(async () => {
+    const socket = new FakeWebSocket()
+    const stream = streamServerTurnEventsWebSocket({
+      sessionId: 's-retry-protocol-error',
+      turnId: 't-retry-protocol-error',
+      connectTimeoutMs: 100,
+      subscribeTimeoutMs: 60_000,
+      webSocketFactory: () => socket,
+    })
+    socket.emit('open')
+    socket.emit('message', { data: JSON.stringify({
+      type: 'error',
+      code: 'TURN_ENGINE_SHUTTING_DOWN',
+      message: 'turn runtime is restarting; retry shortly',
+      action: 'retry',
+    }) })
+    await assert.rejects(
+      stream,
+      (error) => error.code === 'TURN_ENGINE_SHUTTING_DOWN'
+        && error.message === 'turn runtime is restarting; retry shortly'
+        && error.action === 'retry',
+    )
     assert.equal(socket.closed, true)
   })
 })
@@ -274,6 +340,7 @@ test('startServerTurn sends a canonical explicit tools configuration', async () 
     agentId: ' agent-primary ',
     skillIds: [' skill-review ', 'skill-review', '', 42],
     intentMode: 'execute',
+    modelMode: 'chat_only',
     toolsConfig: {
       enabled: ['write_file', ' read_file ', 'write_file', '', 42],
       disabled: ['bash_exec', 'write_file', 'bash_exec', null],
@@ -292,6 +359,7 @@ test('startServerTurn sends a canonical explicit tools configuration', async () 
   assert.equal(requestBody.agentId, 'agent-primary')
   assert.deepEqual(requestBody.skillIds, ['skill-review'])
   assert.equal(requestBody.intentMode, 'execute')
+  assert.equal(requestBody.modelMode, 'chat_only')
 })
 
 test('startServerTurn sends only selected local skill definitions', async () => {
@@ -530,6 +598,96 @@ test('runServerTurn keeps using SSE after an unacknowledged WebSocket fails', as
   })
 })
 
+test('runServerTurn preserves restart_runtime WebSocket failures without SSE fallback', async () => {
+  await withWebSocketAuth(async () => {
+    const urls = []
+    const fetchImpl = async (url) => {
+      urls.push(String(url))
+      if (url === '/api/turns/run') {
+        return response({
+          turn: { sessionId: 's-ws-restart-runtime', turnId: 't-ws-restart-runtime', status: 'running' },
+        }, 202)
+      }
+      throw new Error(`Unexpected fallback request: ${url}`)
+    }
+
+    await assert.rejects(
+      runServerTurn({
+        sessionId: 's-ws-restart-runtime',
+        content: 'preserve the recovery action',
+        fetchImpl,
+        webSocketConnectTimeoutMs: 100,
+        webSocketSubscribeTimeoutMs: 100,
+        webSocketFactory: () => {
+          const socket = new FakeWebSocket()
+          queueMicrotask(() => {
+            socket.emit('open')
+            socket.emit('message', { data: JSON.stringify({
+              type: 'error',
+              code: 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
+              message: 'turn runtime is not configured',
+              action: 'restart_runtime',
+            }) })
+          })
+          return socket
+        },
+      }),
+      (error) => error?.code === 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED'
+        && error?.message === 'turn runtime is not configured'
+        && error?.action === 'restart_runtime',
+    )
+    assert.deepEqual(urls, ['/api/turns/run'])
+  })
+})
+
+test('runServerTurn keeps the SSE fallback for retry WebSocket failures', async () => {
+  await withWebSocketAuth(async () => {
+    const completed = createTurnEvent({
+      id: 'sse-after-ws-retry',
+      sessionId: 's-ws-retry',
+      turnId: 't-ws-retry',
+      sequence: 0,
+      type: 'turn.completed',
+      createdAt: 1,
+    })
+    let sseCalls = 0
+    const result = await runServerTurn({
+      sessionId: completed.sessionId,
+      content: 'retry through SSE',
+      fetchImpl: async (url) => {
+        if (url === '/api/turns/run') {
+          return response({
+            turn: { sessionId: completed.sessionId, turnId: completed.turnId, status: 'running' },
+          }, 202)
+        }
+        if (String(url).startsWith('/api/turns/stream?')) {
+          sseCalls += 1
+          return sseResponse([completed])
+        }
+        throw new Error(`Unexpected request: ${url}`)
+      },
+      webSocketConnectTimeoutMs: 100,
+      webSocketSubscribeTimeoutMs: 100,
+      webSocketFactory: () => {
+        const socket = new FakeWebSocket()
+        queueMicrotask(() => {
+          socket.emit('open')
+          socket.emit('message', { data: JSON.stringify({
+            type: 'error',
+            code: 'TURN_ENGINE_SHUTTING_DOWN',
+            message: 'turn runtime is restarting; retry shortly',
+            action: 'retry',
+          }) })
+        })
+        return socket
+      },
+    })
+
+    assert.equal(result.terminal.id, completed.id)
+    assert.equal(sseCalls, 1)
+  })
+})
+
 test('runServerTurn resumes from the persisted sequence', async () => {
   const urls = []
   const fetchImpl = async (url) => {
@@ -543,6 +701,213 @@ test('runServerTurn resumes from the persisted sequence', async () => {
   assert.equal(result.lastSequence, 8)
   assert.equal(urls[0], '/api/turns/t1/resume')
   assert.match(urls[1], /^\/api\/turns\/stream\?.*after=7/)
+})
+
+test('startServerTurn preserves structured model readiness error fields', async () => {
+  await assert.rejects(
+    startServerTurn({
+      sessionId: 's-readiness-error',
+      content: 'must preserve the error',
+      fetchImpl: async () => response({
+        error: {
+          code: 'MODEL_PROVIDER_CONFIG_CHANGED',
+          message: 'provider changed',
+          action: 'recreate_job',
+          providerId: 'provider-uuid',
+          modelName: 'bound-model',
+          configRevision: 7,
+          details: { expectedRevision: 7, currentRevision: 8 },
+          retryable: true,
+          retryAfter: 5,
+        },
+      }, 409, {
+        get: (name) => String(name).toLowerCase() === 'retry-after' ? '12' : null,
+      }),
+    }),
+    (error) => error?.status === 409
+      && error?.code === 'MODEL_PROVIDER_CONFIG_CHANGED'
+      && error?.action === 'recreate_job'
+      && error?.providerId === 'provider-uuid'
+      && error?.modelName === 'bound-model'
+      && error?.configRevision === 7
+      && error?.details?.currentRevision === 8
+      && error?.retryable === true
+      && error?.retryAfter === '12',
+  )
+})
+
+test('runServerTurn does not enter recovery polling after an explicit preflight rejection', async () => {
+  for (const code of [
+    'MODEL_CONFIG_MISSING',
+    'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
+    'COMPACTION_ARCHIVE_PORT_NOT_CONFIGURED',
+    'TURN_PERSISTENCE_ENGINE_ALREADY_ACTIVE',
+    'TURN_ENGINE_SHUTTING_DOWN',
+    'TURN_ENGINE_HOST_PENDING_INITIALIZATION_CLEANUP_FAILED',
+    'TURN_ENGINE_HOST_INITIALIZATION_AND_CLEANUP_FAILED',
+    'TURN_ENGINE_HOST_CLEANUP_FAILED',
+  ]) {
+    const urls = []
+    const connectionStates = []
+    await assert.rejects(
+      runServerTurn({
+        sessionId: `session-${code}`,
+        content: 'must not be treated as an ambiguous submission',
+        fetchImpl: async (url) => {
+          urls.push(String(url))
+          assert.equal(url, '/api/turns/run')
+          return response({
+            error: {
+              code,
+              message: 'request rejected before the turn started',
+              action: code === 'MODEL_CONFIG_MISSING' ? 'configure_model' : 'retry',
+            },
+          }, 503)
+        },
+        onConnectionState: (state) => connectionStates.push(state),
+      }),
+      (error) => error?.code === code && error?.status === 503,
+    )
+    assert.deepEqual(urls, ['/api/turns/run'], code)
+    assert.deepEqual(connectionStates, [], code)
+  }
+})
+
+test('runServerTurn accepts an explicit checkpoint-compaction cursor jump', async () => {
+  const seen = []
+  const fetchImpl = async (url) => {
+    if (url === '/api/turns/run') {
+      return response({ turn: { sessionId: 's-compacted', turnId: 't-compacted', status: 'running' } }, 202)
+    }
+    return sseResponse([
+      createTurnEvent({
+        id: 'compacted-terminal', sessionId: 's-compacted', turnId: 't-compacted', sequence: 2,
+        compactedThrough: 3, type: 'turn.completed', payload: { text: 'done' }, createdAt: 3,
+      }),
+    ])
+  }
+  const result = await runServerTurn({
+    sessionId: 's-compacted', content: 'resume compacted history', afterSequence: 0,
+    fetchImpl, onEvent: (event) => seen.push(event.sequence),
+  })
+  assert.equal(result.lastSequence, 2)
+  assert.deepEqual(seen, [2])
+})
+
+test('runServerTurn sends recovery override only for an explicit dead-letter retry', async () => {
+  const bodies = []
+  const completed = createTurnEvent({
+    id: 'retry-recovery-completed', sessionId: 's1', turnId: 'retry-recovery',
+    sequence: 0, type: 'turn.completed', createdAt: 3,
+  })
+  const fetchImpl = async (url, init = {}) => {
+    if (url === '/api/turns/retry-recovery/resume') {
+      bodies.push(JSON.parse(init.body))
+      return response({
+        turn: {
+          sessionId: 's1', turnId: 'retry-recovery', status: 'completed', lastEvent: completed,
+        },
+      }, 202)
+    }
+    throw new Error(`unexpected request: ${url}`)
+  }
+  await runServerTurn({
+    sessionId: 's1', turnId: 'retry-recovery', resume: true, retryRecovery: true, fetchImpl,
+  })
+  assert.deepEqual(bodies, [{ sessionId: 's1', retryRecovery: true }])
+})
+
+test('runServerTurn retries an incomplete turn without sending a new prompt payload', async () => {
+  const bodies = []
+  const completed = createTurnEvent({
+    id: 'retry-failed-completed', sessionId: 'session-retry', turnId: 'turn-retry',
+    sequence: 0, type: 'turn.completed', createdAt: 3,
+  })
+  const fetchImpl = async (url, init = {}) => {
+    assert.equal(url, '/api/turns/turn-retry/resume')
+    bodies.push(JSON.parse(init.body))
+    return response({
+      turn: {
+        sessionId: 'session-retry', turnId: 'turn-retry', status: 'completed', lastEvent: completed,
+      },
+    }, 202)
+  }
+
+  await runServerTurn({
+    sessionId: 'session-retry',
+    turnId: 'turn-retry',
+    resume: true,
+    retryFailed: true,
+    fetchImpl,
+  })
+
+  assert.deepEqual(bodies, [{ sessionId: 'session-retry', retryFailed: true }])
+})
+
+test('runServerTurn stops reconnecting when the server reports a recovery dead letter', async () => {
+  const urls = []
+  const fetchImpl = async (url) => {
+    urls.push(url)
+    if (url === '/api/turns/run') {
+      return response({
+        turn: {
+          sessionId: 's1',
+          turnId: 'dead-letter-turn',
+          status: 'interrupted',
+          recovery: {
+            status: 'dead_letter',
+            attemptCount: 1,
+            retryable: false,
+            nextRetryAt: null,
+            error: {
+              code: 'MODEL_REQUEST_OUTCOME_UNKNOWN',
+              message: 'The provider outcome is unknown; automatic replay was stopped.',
+            },
+          },
+        },
+      }, 202)
+    }
+    throw new Error(`unexpected reconnect: ${url}`)
+  }
+  await assert.rejects(
+    runServerTurn({
+      sessionId: 's1',
+      turnId: 'dead-letter-turn',
+      content: 'do not replay me',
+      fetchImpl,
+    }),
+    (error) => error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+      && error?.retryable === false
+      && error?.recovery?.status === 'dead_letter',
+  )
+  assert.deepEqual(urls, ['/api/turns/run'])
+})
+
+test('runServerTurn fails a persistent event sequence gap instead of reconnecting forever', async () => {
+  const urls = []
+  const skipped = createTurnEvent({
+    id: 'gap-sequence-one', sessionId: 's1', turnId: 'gap-turn',
+    sequence: 1, type: 'assistant.delta', payload: { text: 'missing prefix' }, createdAt: 2,
+  })
+  const fetchImpl = async (url) => {
+    urls.push(String(url))
+    if (url === '/api/turns/run') {
+      return response({ turn: { sessionId: 's1', turnId: 'gap-turn', status: 'running' } }, 202)
+    }
+    if (String(url).startsWith('/api/turns/events?')) return response({ events: [skipped] })
+    if (String(url).startsWith('/api/turns/gap-turn?')) {
+      return response({ turn: { sessionId: 's1', turnId: 'gap-turn', status: 'running' } })
+    }
+    return sseResponse([skipped])
+  }
+
+  await assert.rejects(
+    runServerTurn({ sessionId: 's1', content: 'detect the gap', fetchImpl, reconnectDelayMs: 0 }),
+    (error) => error?.code === 'TURN_EVENT_SEQUENCE_GAP'
+      && error?.expectedSequence === 0
+      && error?.actualSequence === 1,
+  )
+  assert.equal(urls.some((url) => url.endsWith('/resume')), false)
 })
 
 test('runServerTurn exits without polling when resume response is already terminal', async () => {
@@ -759,7 +1124,7 @@ test('runServerTurn consumes a persisted terminal after stream truncation withou
   }
 
   const result = await runServerTurn({
-    sessionId: 's1', content: 'finish the file', fetchImpl, reconnectDelayMs: 0,
+    sessionId: 's1', content: 'finish the file', fetchImpl, reconnectDelayMs: 0, afterSequence: 0,
     onConnectionState: (state) => states.push(state.status),
     onEvent: (event) => seen.push(event.type),
   })
@@ -1314,6 +1679,21 @@ test('terminal events stop streaming while interrupted turns remain visibly resu
     { type: 'turn.paused', payload: { text: '', clarification: { question: 'Need input' } }, expected: 'cancelled', connection: 'paused', streaming: false },
     { type: 'turn.cancelled', payload: { reason: 'user stopped' }, expected: 'cancelled', connection: 'cancelled', streaming: false },
     { type: 'turn.interrupted', payload: { code: 'MODEL_503', message: 'interrupted', retryable: true }, expected: 'cancelled', connection: 'interrupted', streaming: true },
+    {
+      type: 'turn.blocked',
+      payload: {
+        code: 'TURN_PERMISSION_CONTEXT_DRIFT',
+        message: 'repair permissions and retry',
+        retryable: false,
+        manualRetryable: true,
+        recoveryStatus: 'dead_letter',
+        checkpointSequence: 2,
+      },
+      expected: 'cancelled',
+      connection: 'blocked',
+      streaming: false,
+      completedAt: null,
+    },
     { type: 'turn.failed', payload: { code: 'TURN_FAILED', message: 'failed' }, expected: 'error', connection: null, streaming: false },
   ]
 
@@ -1360,9 +1740,18 @@ test('terminal events stop streaming while interrupted turns remain visibly resu
     const meta = state.sessions[0].messages[0].meta
     assert.equal(result.cursorCommitted, true, terminal.type)
     assert.equal(meta.streaming, terminal.streaming, terminal.type)
-    assert.equal(meta.turnCompletedAt, terminal.streaming ? null : index + 1, terminal.type)
+    assert.equal(
+      meta.turnCompletedAt,
+      terminal.completedAt === null || terminal.streaming ? null : index + 1,
+      terminal.type,
+    )
     assert.equal(meta.modelActivity, null, terminal.type)
     assert.equal(meta.serverConnectionState, terminal.connection, terminal.type)
+    if (terminal.type === 'turn.blocked') {
+      assert.equal(meta.serverRecoveryBlocked, true)
+      assert.equal(meta.failed, false)
+      assert.equal(meta.paused, false)
+    }
     if (terminal.type === 'turn.cancelled') {
       assert.ok(Object.hasOwn(meta, 'serverDeliveryArtifactIds'))
       assert.deepEqual(meta.serverDeliveryArtifactIds, [])
@@ -1376,6 +1765,132 @@ test('terminal events stop streaming while interrupted turns remain visibly resu
       terminal.type,
     )
   }
+})
+
+test('side-effect blocked events normalize legacy and canonical recovery kinds for chat state', async () => {
+  for (const recoveryKind of ['side_effect_unknown', 'side_effect_outcome_unknown']) {
+    let state = {
+      activeSessionId: 's',
+      sessions: [{
+        id: 's',
+        messages: [{
+          id: `assistant-${recoveryKind}`,
+          role: 'assistant',
+          content: '',
+          meta: { streaming: true, toolCalls: [] },
+        }],
+      }],
+    }
+    const dispatch = (action) => {
+      const next = reduceMessageState(state, action)
+      if (next) state = next
+    }
+    const turnId = `turn-${recoveryKind}`
+    await dispatchTurnEvent(createTurnEvent({
+      id: `blocked-${recoveryKind}`,
+      sessionId: 's',
+      turnId,
+      sequence: 1,
+      type: 'turn.blocked',
+      payload: {
+        code: 'SIDE_EFFECT_OUTCOME_UNKNOWN',
+        message: 'verify the local outcome',
+        retryable: false,
+        manualRetryable: true,
+        recoveryStatus: 'dead_letter',
+        recoveryKind,
+        toolCallId: 'write-1',
+        recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
+        ...(recoveryKind === 'side_effect_outcome_unknown'
+          ? { turnId, requiresUserVerification: true }
+          : {}),
+      },
+      createdAt: 2,
+    }), {
+      dispatch,
+      taskId: `task-${recoveryKind}`,
+      messageTarget: { sessionId: 's', messageId: `assistant-${recoveryKind}` },
+    })
+
+    const meta = state.sessions[0].messages[0].meta
+    assert.equal(meta.serverRecoveryBlocked, true)
+    assert.equal(meta.serverRecoveryKind, 'side_effect_outcome_unknown')
+    assert.equal(meta.serverRecoveryToolCallId, 'write-1')
+    assert.equal(meta.serverRecoveryActionPath, '/settings?tab=recovery')
+  }
+})
+
+test('later terminal states clear stale side-effect recovery metadata on the same message', async () => {
+  const turnId = 'turn-recovery-transition'
+  let state = {
+    activeSessionId: 's',
+    sessions: [{
+      id: 's',
+      messages: [{
+        id: 'assistant-recovery-transition',
+        role: 'assistant',
+        content: '',
+        meta: { streaming: true, serverTurnId: turnId, toolCalls: [] },
+      }],
+    }],
+  }
+  const dispatch = (action) => {
+    const next = reduceMessageState(state, action)
+    if (next) state = next
+  }
+  const emit = (sequence, type, payload) => dispatchTurnEvent(createTurnEvent({
+    id: `recovery-transition-${sequence}`,
+    sessionId: 's',
+    turnId,
+    sequence,
+    type,
+    payload,
+    createdAt: sequence + 1,
+  }), {
+    dispatch,
+    taskId: 'task-recovery-transition',
+    messageTarget: { sessionId: 's', messageId: 'assistant-recovery-transition' },
+  })
+
+  await emit(1, 'turn.blocked', {
+    code: 'SIDE_EFFECT_OUTCOME_UNKNOWN',
+    message: 'verify the local outcome',
+    retryable: false,
+    manualRetryable: true,
+    recoveryStatus: 'dead_letter',
+    recoveryKind: 'side_effect_outcome_unknown',
+    toolCallId: 'write-1',
+    recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
+    turnId,
+    requiresUserVerification: true,
+  })
+
+  let meta = state.sessions[0].messages[0].meta
+  assert.equal(meta.serverRecoveryBlocked, true)
+  assert.equal(meta.serverRecoveryKind, 'side_effect_outcome_unknown')
+
+  await emit(2, 'turn.blocked', {
+    code: 'TURN_PERMISSION_CONTEXT_DRIFT',
+    message: 'repair permissions and retry',
+    retryable: false,
+    manualRetryable: true,
+    recoveryStatus: 'dead_letter',
+    checkpointSequence: 1,
+  })
+
+  meta = state.sessions[0].messages[0].meta
+  assert.equal(meta.serverRecoveryBlocked, true)
+  assert.equal(meta.serverRecoveryKind, null)
+  assert.equal(meta.serverRecoveryToolCallId, null)
+  assert.equal(meta.serverRecoveryActionPath, null)
+
+  await emit(3, 'turn.completed', { text: 'done', artifactIds: [] })
+
+  meta = state.sessions[0].messages[0].meta
+  assert.equal(meta.serverRecoveryBlocked, false)
+  assert.equal(meta.serverRecoveryKind, null)
+  assert.equal(meta.serverRecoveryToolCallId, null)
+  assert.equal(meta.serverRecoveryActionPath, null)
 })
 
 test('dispatchTurnEvent forwards every local artifact from one completed shell call', async () => {
@@ -1548,6 +2063,10 @@ test('dispatchTurnEvent exposes a paused directory request to the inline authori
   assert.deepEqual(actions[0], {
     type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
+        serverRecoveryBlocked: false,
+        serverRecoveryKind: null,
+        serverRecoveryToolCallId: null,
+        serverRecoveryActionPath: null,
         streaming: false,
         turnCompletedAt: 11,
         modelActivity: null,
@@ -1908,6 +2427,10 @@ test('dispatchTurnEvent atomically maps a recovery attempt to stream reset and c
     type: 'RESET_LAST_MESSAGE_STREAM',
     payload: { attempt: 2, content: 'confirmed', reasoning: 'checked' },
     meta: {
+      serverRecoveryBlocked: false,
+      serverRecoveryKind: null,
+      serverRecoveryToolCallId: null,
+      serverRecoveryActionPath: null,
       interrupted: false,
       failed: false,
       paused: false,
@@ -2414,6 +2937,53 @@ test('server snapshot restores failed, interrupted, and cancelled turn evidence 
   assert.equal(snapshot.messages[2].meta.failed, undefined)
   assert.equal(snapshot.messages[2].meta.interrupted, undefined)
   assert.deepEqual(snapshot.messages[2].meta.serverArtifactIds, ['cancelled-draft'])
+})
+
+test('server snapshot restores only whitelisted side-effect recovery metadata after reload', () => {
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'turn-blocked:assistant',
+      role: 'assistant',
+      content: 'Verify the operation outcome before retrying.',
+      createdAt: 4,
+      modelContext: {
+        turnId: 'turn-blocked',
+        turnEvidence: true,
+        evidenceState: 'blocked',
+        serverLastSequence: 12,
+        turnCompletedAt: 4,
+        latency: 3,
+        error: {
+          code: 'SIDE_EFFECT_OUTCOME_UNKNOWN',
+          message: 'Verify the operation outcome before retrying.',
+          retryable: false,
+        },
+        recovery: {
+          recoveryKind: 'side_effect_unknown',
+          requiresUserVerification: true,
+          toolCallId: 'write-1',
+          recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
+          args: { secret: 'must-not-project' },
+          outcome: { secret: 'must-not-project' },
+        },
+      },
+    }],
+  })
+
+  const meta = snapshot.messages[0].meta
+  assert.equal(meta.serverTurnId, 'turn-blocked')
+  assert.equal(meta.serverLastSequence, 12)
+  assert.equal(meta.streaming, false)
+  assert.equal(meta.turnCompletedAt, null)
+  assert.equal(meta.latency, null)
+  assert.equal(meta.failed, false)
+  assert.equal(meta.serverConnectionState, 'blocked')
+  assert.equal(meta.serverRecoveryBlocked, true)
+  assert.equal(meta.serverRecoveryKind, 'side_effect_outcome_unknown')
+  assert.equal(meta.serverRecoveryToolCallId, 'write-1')
+  assert.equal(meta.serverRecoveryActionPath, '/settings?tab=recovery')
+  assert.doesNotMatch(JSON.stringify(meta), /must-not-project/u)
 })
 
 test('server snapshot restores structured tool failure details', () => {

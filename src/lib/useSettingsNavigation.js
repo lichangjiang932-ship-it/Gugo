@@ -3,6 +3,7 @@ import { useCallback, useMemo } from 'react'
 import { useLocation, useNavigate } from './router.jsx'
 import {
   resolveSettingsNavFromSearch,
+  resolveSettingsReturnToFromSearch,
   resolveSettingsSectionFromSearch,
   settingsPathForSection,
 } from './settingsNavigation.js'
@@ -18,23 +19,25 @@ export default function useSettingsNavigation() {
   )
   const activeSection = resolveSettingsSectionFromSearch(location.search, allowedSections)
   const activeNav = resolveSettingsNavFromSearch(location.search, allowedSections)
+  const returnTo = resolveSettingsReturnToFromSearch(location.search)
 
   const setActiveNav = useCallback((nextNav) => {
     if (nextNav === activeNav) return false
-    navigate(settingsPathForSection(nextNav, allowedSections))
+    navigate(settingsPathForSection(nextNav, allowedSections, { returnTo }), { replace: Boolean(returnTo) })
     return true
-  }, [activeNav, allowedSections, navigate])
+  }, [activeNav, allowedSections, navigate, returnTo])
 
   const setActiveSection = useCallback((nextSection) => {
     if (nextSection === activeSection) return false
-    navigate(settingsPathForSection(nextSection, allowedSections))
+    navigate(settingsPathForSection(nextSection, allowedSections, { returnTo }), { replace: Boolean(returnTo) })
     return true
-  }, [activeSection, allowedSections, navigate])
+  }, [activeSection, allowedSections, navigate, returnTo])
 
   return {
     activeNav,
     activeSection,
     navigate,
+    returnTo,
     setActiveNav,
     setActiveSection,
   }

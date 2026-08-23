@@ -1,3 +1,5 @@
+import { sanitizeRetiredBrowserAccountFields } from './browserSnapshotSanitizer.js'
+
 export const STATE_SYNC_META_KEY = '__sync'
 
 const ARRAY_ENTITY_FIELDS = new Set(['sessions', 'tasks', 'history', 'permissions'])
@@ -89,11 +91,16 @@ function chooseByClock(localValue, remoteValue, localClock, remoteClock, localWr
 export function readPersistedPayload(raw, fallbackTimestamp = 0) {
   const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new TypeError('Persisted app state must be an object')
-  const snapshot = { ...parsed }
+  const sanitized = sanitizeRetiredBrowserAccountFields(parsed)
+  const snapshot = { ...sanitized.payload }
   delete snapshot[STATE_SYNC_META_KEY]
-  const storedMeta = parsed[STATE_SYNC_META_KEY]
+  const storedMeta = sanitized.payload[STATE_SYNC_META_KEY]
   if (storedMeta && typeof storedMeta === 'object') {
-    return { snapshot, meta: normalizeMeta(storedMeta) }
+    return {
+      snapshot,
+      meta: normalizeMeta(storedMeta),
+      ...(sanitized.changed ? { retiredAccountFieldsRemoved: sanitized.removedFields } : {}),
+    }
   }
 
   const clock = normalizeClock(fallbackTimestamp)
@@ -106,7 +113,11 @@ export function readPersistedPayload(raw, fallbackTimestamp = 0) {
       fields[field] = clock
     }
   }
-  return { snapshot, meta: normalizeMeta({ writtenAt: clock, fields, entities }) }
+  return {
+    snapshot,
+    meta: normalizeMeta({ writtenAt: clock, fields, entities }),
+    ...(sanitized.changed ? { retiredAccountFieldsRemoved: sanitized.removedFields } : {}),
+  }
 }
 
 export function buildSyncMetadata(current, previous, previousMeta, { source = '', now = Date.now() } = {}) {

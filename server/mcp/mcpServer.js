@@ -4,6 +4,11 @@ import { authenticateRequest } from '../middleware.js'
 import { checkRateLimit } from '../db.js'
 import { verifyAccessKey } from '../services/mobileAccessKeyStore.js'
 import { buildUserModelEnv } from '../services/modelProviderStore.js'
+import {
+  describeModelReadinessFailure,
+  isModelReadinessError,
+  resolveChatModelRuntimeBinding,
+} from '../services/modelReadinessService.js'
 import { isIntegrationEnabled } from '../services/integrationsStore.js'
 import {
   assertBrowserAppUrlAccess,
@@ -46,7 +51,10 @@ const TOOLS = [
       properties: {
         prompt: { type: 'string' },
         messages: { type: 'array', items: { type: 'object' } },
-        model: { type: 'string' },
+        model: { type: 'string', description: 'Legacy alias for modelName.' },
+        modelName: { type: 'string' },
+        modelProviderId: { type: 'string', description: 'Database Provider UUID.' },
+        modelConfigRevision: { type: 'integer', minimum: 1 },
       },
     },
   },
@@ -193,7 +201,21 @@ async function callTool(userId, name, args = {}) {
       ? args.messages
       : [{ role: 'user', content: String(args.prompt || '').trim() }]
     if (!messages.length || !messages[0]?.content) throw new Error('prompt 或 messages 不能为空')
-    return textResult(await callBackgroundModel({ messages, modelName: args.model, userId }))
+    const modelName = String(args.modelName || args.model || '').trim()
+    const modelProviderId = String(args.modelProviderId || '').trim()
+    const binding = resolveChatModelRuntimeBinding({
+      userId,
+      providerId: modelProviderId,
+      modelName,
+      configRevision: args.modelConfigRevision,
+    })
+    return textResult(await callBackgroundModel({
+      messages,
+      modelName: binding.modelName,
+      userId: binding.env ? null : userId,
+      usageOwnerId: userId,
+      ...(binding.env ? { env: binding.env } : {}),
+    }))
   }
   if (name === 'yma_models') {
     const env = buildUserModelEnv({ userId, env: getRuntimeEnv() })
@@ -261,7 +283,29 @@ async function dispatch(userId, message) {
     try {
       return rpcResult(id, await callTool(userId, name, message.params?.arguments || {}))
     } catch (error) {
-      return rpcResult(id, { content: [{ type: 'text', text: error?.message || String(error) }], isError: true })
+      const rawMessage = error?.message || String(error)
+      const readinessFailure = isModelReadinessError(error)
+        ? describeModelReadinessFailure(error)
+        : null
+      const message = readinessFailure?.error.message || rawMessage
+      const errorData = readinessFailure?.error
+        || (typeof error?.toJSON === 'function'
+          ? error.toJSON()
+          : error?.code
+            ? { code: error.code, message }
+            : null)
+      const structuredContent = errorData
+        ? {
+            ...errorData,
+            statusCode: readinessFailure?.statusCode
+              ?? (Number.isInteger(Number(error?.statusCode)) ? Number(error.statusCode) : null),
+          }
+        : null
+      return rpcResult(id, {
+        content: [{ type: 'text', text: message }],
+        ...(structuredContent ? { structuredContent } : {}),
+        isError: true,
+      })
     }
   }
   if (method.startsWith('notifications/')) return null

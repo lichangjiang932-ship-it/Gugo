@@ -18,6 +18,28 @@ test('persistWithDegradation writes a full snapshot when capacity is available',
   assert.equal(JSON.parse([...stored.values()][0]).sessions[0].messages[0].content, 'hello')
 })
 
+test('localStorage fallback writes strip only retired account fields', () => {
+  const stored = new Map()
+  const result = persistWithDegradation({
+    user: { plan: 'legacy' },
+    isLoggedIn: true,
+    sessions: [{ id: 's1', messages: [{ id: 'm1', content: 'keep' }] }],
+    toolsConfig: { fetch_url: false },
+    customSetting: { keep: true },
+    __sync: { fields: { user: 1, isLoggedIn: 1, sessions: 1 } },
+  }, (key, value) => stored.set(key, value))
+
+  assert.equal(result.ok, true)
+  const saved = JSON.parse([...stored.values()][0])
+  assert.equal(Object.hasOwn(saved, 'user'), false)
+  assert.equal(Object.hasOwn(saved, 'isLoggedIn'), false)
+  assert.equal(Object.hasOwn(saved.__sync.fields, 'user'), false)
+  assert.equal(Object.hasOwn(saved.__sync.fields, 'isLoggedIn'), false)
+  assert.equal(saved.sessions[0].messages[0].content, 'keep')
+  assert.deepEqual(saved.toolsConfig, { fetch_url: false })
+  assert.deepEqual(saved.customSetting, { keep: true })
+})
+
 test('quota fallback only compacts regenerable metadata and keeps every session and message body', () => {
   const stored = new Map()
   let calls = 0

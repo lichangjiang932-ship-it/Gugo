@@ -3,6 +3,7 @@ import { getSessionByToken } from './db.js'
 import { logger } from './utils/logger.js'
 import { resolveClientId } from './utils/loginGuard.js'
 import { createRateLimiter } from './utils/rateLimiter.js'
+import { toPublicRuntimeConfigHttpError } from './utils/runtimeConfigErrors.js'
 import { z } from 'zod'
 
 /* ── CORS ── */
@@ -94,24 +95,46 @@ export function securityHeaders(req, res, next) {
 
 /* ── 错误边界 ── */
 
+function sendBoundaryError(res, error) {
+  const runtimeConfigError = toPublicRuntimeConfigHttpError(error)
+  if (runtimeConfigError) {
+    res.writeHead(runtimeConfigError.statusCode, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    })
+    res.end(JSON.stringify(runtimeConfigError.body))
+    return
+  }
+  res.writeHead(500, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify({
+    error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+  }))
+}
+
+function logBoundaryError(error) {
+  if (toPublicRuntimeConfigHttpError(error)) {
+    logger.warn('[runtime-config] request rejected:', error?.code || 'RUNTIME_CONFIG_INVALID')
+    return
+  }
+  console.error('[ERROR]', error)
+}
+
 export function errorBoundary(req, res, next) {
   try {
     const result = next()
     // 捕获异步 Promise rejection
     if (result && typeof result.catch === 'function') {
       result.catch((err) => {
-        console.error('[ERROR]', err)
+        logBoundaryError(err)
         if (!res.headersSent) {
-          res.writeHead(500, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ error: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error' }))
+          sendBoundaryError(res, err)
         }
       })
     }
   } catch (err) {
-    console.error('[ERROR]', err)
+    logBoundaryError(err)
     if (!res.headersSent) {
-      res.writeHead(500, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error' }))
+      sendBoundaryError(res, err)
     }
   }
 }

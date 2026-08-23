@@ -1,6 +1,10 @@
 import path from 'node:path'
 import { appendJobEvent, updateJob, updateJobStep } from './jobStore.js'
-import { getJobTurnCheckpoint, saveJobTurnCheckpoint } from './jobTurnCheckpointStore.js'
+import {
+  getJobTurnCheckpoint,
+  nextJobCheckpointWriteSequence,
+  saveJobTurnCheckpoint,
+} from './jobTurnCheckpointStore.js'
 import { findAuthorizedDirectoryGrant } from './localFileAccessService.js'
 
 const JOB_DIRECTORY_RESOLUTION_MARKER = '[JOB_DIRECTORY_RESOLUTION:'
@@ -121,12 +125,14 @@ export function resumeJobDirectoryAuthorization({
     userId,
     state: {
       ...checkpoint.state,
+      checkpointWriteSequence: nextJobCheckpointWriteSequence(checkpoint.state),
       messages,
       directoryAuthorizationResolution,
       final: null,
     },
   })
-  if (!savedCheckpoint) {
+  if (!savedCheckpoint
+      || savedCheckpoint.state?.directoryAuthorizationResolution?.awaiting_event_id !== latestSuspension.id) {
     return { resumed: false, error: 'the paused job checkpoint could not be updated', job }
   }
   updateJobStep(stepId, { status: 'queued', error: null, finishedAt: null })

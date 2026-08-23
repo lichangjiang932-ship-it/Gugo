@@ -53,8 +53,28 @@ export function resolvePremiumTheme(seed = '') {
 }
 
 /* ── XML 转义（DOCX/XLSX/theme 注入用） ── */
+function isXml10Character(codePoint) {
+  return codePoint === 0x09
+    || codePoint === 0x0A
+    || codePoint === 0x0D
+    || (codePoint >= 0x20 && codePoint <= 0xD7FF)
+    || (codePoint >= 0xE000 && codePoint <= 0xFFFD)
+    || (codePoint >= 0x10000 && codePoint <= 0x10FFFF)
+}
+
+function sanitizeXml10Text(value) {
+  let output = ''
+  for (const character of String(value)) {
+    output += isXml10Character(character.codePointAt(0)) ? character : '\uFFFD'
+  }
+  return output
+}
+
 export function escapeXml(s = '') {
-  return String(s)
+  return sanitizeXml10Text(s)
+    // XML 1.0 does not permit the remaining C0 controls, isolated UTF-16
+    // surrogates, U+FFFE, or U+FFFF. Replace them instead of emitting a ZIP
+    // whose XML parts cannot be parsed by Office.
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -83,26 +103,42 @@ export function normalizeBullets(slide = {}, { maxChars = BULLET_MAX_CHARS, maxI
  * 返回: Uint8Array (同构友好)
  * 失败时返回原 buffer，绝不抛错（这是 finishing touch，不能因为它把整个 PPT 干废）
  */
-export async function injectEaFont(pptxBytes, eaFont = CJK_FONT) {
+function fontInjectionReceipt(bytes, status, warning) {
+  return Object.freeze({ bytes: toUint8Array(bytes), status, ...(warning ? { warning: String(warning).slice(0, 200) } : {}) })
+}
+
+export async function injectEaFontWithReceipt(pptxBytes, eaFont = CJK_FONT) {
   try {
     // jszip 是同构的，在 Node 和浏览器都能 import
     const JSZip = (await import('jszip')).default
     const zip = await JSZip.loadAsync(pptxBytes)
     const themeFile = zip.file('ppt/theme/theme1.xml')
-    if (!themeFile) return toUint8Array(pptxBytes)
+    if (!themeFile) return fontInjectionReceipt(pptxBytes, 'failed', 'PPTX theme is missing; CJK font injection was skipped.')
     let xml = await themeFile.async('string')
     const eaTag = `<a:ea typeface="${escapeXml(eaFont)}"/>`
+    const blocks = [...xml.matchAll(/<a:(?:major|minor)Font>([\s\S]*?)<\/a:(?:major|minor)Font>/g)]
+    if (blocks.length === 2 && blocks.every((match) => match[1].includes(eaTag))) {
+      return fontInjectionReceipt(pptxBytes, 'alreadyPresent')
+    }
+    const before = xml
     const inject = (inner) =>
       inner.includes('<a:ea')
         ? inner.replace(/<a:ea[^/]*\/>/, eaTag)
         : inner.replace(/(<a:latin[^/]*\/>)/, `$1${eaTag}`)
     xml = xml.replace(/<a:majorFont>([\s\S]*?)<\/a:majorFont>/, (_, inner) => `<a:majorFont>${inject(inner)}</a:majorFont>`)
     xml = xml.replace(/<a:minorFont>([\s\S]*?)<\/a:minorFont>/, (_, inner) => `<a:minorFont>${inject(inner)}</a:minorFont>`)
+    if (xml === before || (xml.split(eaTag).length - 1) < 2) {
+      return fontInjectionReceipt(pptxBytes, 'failed', 'PPTX theme font blocks are incomplete; CJK font injection was skipped.')
+    }
     zip.file('ppt/theme/theme1.xml', xml)
-    return await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+    return fontInjectionReceipt(await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }), 'injected')
   } catch {
-    return toUint8Array(pptxBytes)
+    return fontInjectionReceipt(pptxBytes, 'failed', 'CJK font injection failed; the original presentation was preserved.')
   }
+}
+
+export async function injectEaFont(pptxBytes, eaFont = CJK_FONT) {
+  return (await injectEaFontWithReceipt(pptxBytes, eaFont)).bytes
 }
 
 function toUint8Array(b) {

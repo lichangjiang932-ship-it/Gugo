@@ -32,12 +32,36 @@ function NavigationHarness() {
   return <>
     <output data-testid="page">{navigation.activeNav}</output>
     <output data-testid="section">{navigation.activeSection}</output>
+    <output data-testid="return-to">{navigation.returnTo}</output>
     <button type="button" data-testid="models" onClick={() => navigation.setActiveNav(SETTINGS_TAB_MODELS)}>Models</button>
     <button type="button" data-testid="files" onClick={() => navigation.setActiveNav(SETTINGS_TAB_FILES)}>Files</button>
     <button type="button" data-testid="web-search" onClick={() => navigation.setActiveSection(SETTINGS_TAB_WEB_SEARCH)}>Web search</button>
     <button type="button" data-testid="permissions" onClick={() => navigation.setActiveSection(SETTINGS_TAB_PERMISSIONS)}>Permissions</button>
   </>
 }
+
+test('return-aware settings navigation preserves a safe target and replaces tab history', async () => {
+  const dom = setupDom('#/settings?tab=models&returnTo=%2Ftasks%3Fjob%3Djob-1')
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+
+  try {
+    await act(async () => root.render(<HashRouter><NavigationHarness /></HashRouter>))
+    const initialLength = window.history.length
+    assert.equal(rootElement.querySelector('[data-testid="return-to"]').textContent, '/tasks?job=job-1')
+
+    await act(async () => rootElement.querySelector('[data-testid="web-search"]').click())
+    assert.equal(window.location.hash, '#/settings?tab=web-search&returnTo=%2Ftasks%3Fjob%3Djob-1')
+    assert.equal(window.history.length, initialLength)
+
+    await act(async () => rootElement.querySelector('[data-testid="permissions"]').click())
+    assert.equal(window.location.hash, '#/settings?tab=permissions&returnTo=%2Ftasks%3Fjob%3Djob-1')
+    assert.equal(window.history.length, initialLength)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
 
 async function waitForHash(expected) {
   for (let index = 0; index < 40; index += 1) {

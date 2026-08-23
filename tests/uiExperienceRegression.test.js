@@ -34,6 +34,7 @@ test('settings uses a grouped modal and keeps configuration modules distinct', (
     'AGENT_PRESETS',
     'INTEGRATIONS',
     'DATA',
+    'RECOVERY',
     'ABOUT',
   ]
   const navGroups = settings.match(/const SETTINGS_NAV_GROUPS = \[([\s\S]*?)\n\]/)?.[1] || ''
@@ -50,6 +51,7 @@ test('settings uses a grouped modal and keeps configuration modules distinct', (
     AGENT_PRESETS: /case SETTINGS_TAB_AGENT_PRESETS:\s*return <SettingsAgentPresetsPanel/,
     INTEGRATIONS: /case SETTINGS_TAB_INTEGRATIONS:\s*return <SettingsIntegrationsPanel/,
     DATA: /case SETTINGS_TAB_DATA:\s*return <SettingsDataExport/,
+    RECOVERY: /case SETTINGS_TAB_RECOVERY:\s*return <SettingsSideEffectRecoveryPanel/,
     ABOUT: /case SETTINGS_TAB_ABOUT:\s*default:\s*return renderAbout\(\)/,
   }
   for (const section of expectedSections) {

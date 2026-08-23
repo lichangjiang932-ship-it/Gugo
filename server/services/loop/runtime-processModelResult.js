@@ -1,7 +1,14 @@
 export async function processModelResult(s) {
   const i = s.iteration
-  const { ARTIFACT_DELIVERY_GUARD_MARKER, ARTIFACT_RECOVERY_PHASE_DIAGNOSE, DELIVERABLE_SELECTION_FALLBACK_MARKER, DELIVERABLE_SELECTION_GUARD_MARKER, DIRECTORY_AUTHORIZATION_WAIT_CLAIM, DIRECTORY_RESUME_GUARD_MARKER, EXECUTION_EVIDENCE_GUARD_MARKER, MAX_ARTIFACT_DELIVERY_RETRIES, MAX_DELIVERABLE_SELECTION_RETRIES, MAX_DIRECTORY_RESUME_RETRIES, MAX_EXECUTION_EVIDENCE_RETRIES, MAX_MUTATION_VERIFICATION_RETRIES, MAX_PDF_LAYOUT_VERIFICATION_RETRIES, MAX_SOURCE_HANDOFF_RETRIES, PDF_LAYOUT_VERIFICATION_GUARD_MARKER, PDF_LAYOUT_VERIFICATION_OK, POST_MUTATION_VERIFICATION_GUARD_MARKER, SOURCE_HANDOFF_GUARD_MARKER, buildAssistantToolCallsMessage, buildJobToolIdempotencyKey, commandExecutionToolLabel, hasCommandExecutionTool, normalizeToolCalls, observeToolCalls, requestedPdfSectionLabel, scopeTextToolCallIds, sourceHandoffViolation } = s.d
+  const { ARTIFACT_DELIVERY_GUARD_MARKER, ARTIFACT_RECOVERY_PHASE_DIAGNOSE, DELIVERABLE_SELECTION_FALLBACK_MARKER, DELIVERABLE_SELECTION_GUARD_MARKER, DIRECTORY_AUTHORIZATION_WAIT_CLAIM, DIRECTORY_RESUME_GUARD_MARKER, EXECUTION_EVIDENCE_GUARD_MARKER, MAX_ARTIFACT_DELIVERY_RETRIES, MAX_DELIVERABLE_SELECTION_RETRIES, MAX_DIRECTORY_RESUME_RETRIES, MAX_EXECUTION_EVIDENCE_RETRIES, MAX_MUTATION_VERIFICATION_RETRIES, MAX_PDF_LAYOUT_VERIFICATION_RETRIES, MAX_SOURCE_HANDOFF_RETRIES, PDF_LAYOUT_VERIFICATION_GUARD_MARKER, PDF_LAYOUT_VERIFICATION_OK, POST_MUTATION_VERIFICATION_GUARD_MARKER, SOURCE_HANDOFF_GUARD_MARKER, buildAssistantToolCallsMessage, buildJobToolIdempotencyKey, commandExecutionToolLabel, hasCommandExecutionTool, inspectToolLoopModelResponse, normalizeToolCalls, observeToolCalls, requestedPdfSectionLabel, scopeTextToolCallIds, sourceHandoffViolation } = s.d
   ;({ content: i.content, toolCalls: i.rawToolCalls } = i.modelResult)
+  // The completed response is now owned by this processing stage. The next
+  // checkpoint persists its projected text/tool effects while clearing the
+  // invocation in the same state snapshot. If that checkpoint fails, the
+  // previous durable checkpoint still contains the response and recovery can
+  // replay it without issuing another provider request.
+  s.modelInvocation = null
+  s.restoredModelInvocation = null
   if (!i.rawToolCalls || i.rawToolCalls.length === 0) {
           if (s.hasVerifiedDirectoryResolution && DIRECTORY_AUTHORIZATION_WAIT_CLAIM.test(String(i.content || ''))) {
             const canRetry = s.directoryResumeRetries < MAX_DIRECTORY_RESUME_RETRIES
@@ -312,13 +319,31 @@ export async function processModelResult(s) {
           turnId: s.job?.id || s.step?.id,
           iteration: s.iter,
         })
-  i.modelOutputTruncated = String(i.modelResult?.finishReason || '').toLowerCase() === 'length'
-  s.checkpointCalls = normalizeToolCalls(i.scopedToolCalls, {
+  i.modelOutputInspection = inspectToolLoopModelResponse(i.modelResult)
+  i.modelOutputTruncated = i.modelOutputInspection.truncated
+  const normalizedCheckpointCalls = normalizeToolCalls(i.scopedToolCalls, {
           toolSpecs: s.activeToolSpecs,
-        }).map(s.normalizeArtifactReplacementCall).map((call) => ({
+        }).map(s.normalizeArtifactReplacementCall)
+  // A provider can claim a normal tool-call finish while returning JSON that
+  // only becomes parseable after the harness appends missing structural
+  // closers. That repair is useful for diagnostics, but it is also direct
+  // evidence that the argument batch was incomplete. Fail the complete batch
+  // closed so an earlier, complete-looking sibling call cannot run either.
+  if (!i.modelOutputTruncated && normalizedCheckpointCalls.some((call) => (
+    call.argumentRepair?.kind === 'closed_truncated_json'
+  ))) {
+    i.modelOutputInspection = Object.freeze({
+      truncated: true,
+      reason: 'incomplete_tool_arguments',
+      finishReason: 'truncated',
+    })
+    i.modelOutputTruncated = true
+  }
+  s.checkpointCalls = normalizedCheckpointCalls.map((call) => ({
           ...call,
           dynamicToolRegistrationId: i.dynamicToolRegistrations?.[call.name] || null,
           modelOutputTruncated: i.modelOutputTruncated,
+          modelOutputTruncationReason: i.modelOutputInspection.reason,
           idempotencyKey: buildJobToolIdempotencyKey({
             jobId: s.job?.id,
             stepId: s.step?.id,
@@ -326,6 +351,8 @@ export async function processModelResult(s) {
           }),
           checkpointStatus: 'pending',
           checkpointApprovalId: null,
+          checkpointPolicyProvenance: null,
+          checkpointHookAuthorizationProvenance: null,
         }))
   observeToolCalls(s.progressState, s.checkpointCalls)
   if (typeof s.onToolCall === 'function') {

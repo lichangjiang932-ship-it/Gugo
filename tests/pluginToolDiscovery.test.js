@@ -16,8 +16,9 @@ const {
 const { createDefaultExecuteStep } = await import('../server/services/jobRuntime.js')
 const { upsertSession } = await import('../server/services/sessionStore.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
-const { registerDynamicTool } = await import('../server/services/toolRegistry.js')
+const { getBuiltinSpec, registerDynamicTool } = await import('../server/services/toolRegistry.js')
 const { resolveTurnToolSpecs } = await import('../server/services/turnToolSpecs.js')
+const { createTestTurnEnginePersistence } = await import('./helpers/turnEnginePersistence.js')
 
 const OWNER = 'plugin-discovery-owner'
 const OTHER = 'plugin-discovery-other'
@@ -107,6 +108,58 @@ test('runtime plugins cannot forge tenant scope and their tools disappear on unl
   assert.equal(unloadedNames.has('plugin_scoped_discovery'), false)
 })
 
+test('workspace authorization does not hide runtime plugins while plan mode remains fail-closed', async () => {
+  await installDiscoveryPlugin('workspace-independent-discovery-plugin')
+
+  const normalNames = namesOf(await resolveTurnToolSpecs({
+    userId: OWNER,
+    baseSpecs: [],
+    permissionMode: 'normal',
+    fileAccessStatus: { grants: [] },
+    enabledConnectorTools: [],
+  }))
+  const planNames = namesOf(await resolveTurnToolSpecs({
+    userId: OWNER,
+    baseSpecs: [],
+    permissionMode: 'plan',
+    fileAccessStatus: { grants: [] },
+    enabledConnectorTools: [],
+  }))
+  const disabledNames = namesOf(await resolveTurnToolSpecs({
+    userId: OWNER,
+    baseSpecs: [],
+    permissionMode: 'normal',
+    fileAccessStatus: { grants: [] },
+    toolsConfig: { disabled: ['plugin_global_discovery'] },
+    userToolPermissions: { plugin_scoped_discovery: false },
+    enabledConnectorTools: [],
+  }))
+
+  assert.equal(normalNames.has('plugin_global_discovery'), true)
+  assert.equal(normalNames.has('plugin_scoped_discovery'), true)
+  assert.equal(planNames.has('plugin_global_discovery'), false)
+  assert.equal(planNames.has('plugin_scoped_discovery'), false)
+  assert.equal(disabledNames.has('plugin_global_discovery'), false)
+  assert.equal(disabledNames.has('plugin_scoped_discovery'), false)
+})
+
+test('a same-name dynamic placeholder cannot unlock a builtin workspace schema', async (t) => {
+  const name = 'read_file'
+  const placeholder = toolDefinition(name)
+  const dispose = registerDynamicTool({ ...placeholder, origin: 'test', source: 'collision-probe' })
+  t.after(dispose)
+
+  const names = namesOf(await resolveTurnToolSpecs({
+    userId: OWNER,
+    baseSpecs: [getBuiltinSpec(name)],
+    permissionMode: 'normal',
+    fileAccessStatus: { grants: [] },
+    enabledConnectorTools: [],
+  }))
+
+  assert.equal(names.has(name), false)
+})
+
 test('production turn discovery does not inject unrelated dynamic registry origins', async (t) => {
   const foreign = toolDefinition('foreign_dynamic_probe')
   const dispose = registerDynamicTool({ ...foreign, origin: 'test', source: 'test-only' })
@@ -124,6 +177,7 @@ test('TurnEngine passes visible runtime plugin tools to the real loop input', as
   await installDiscoveryPlugin('turn-engine-discovery-plugin')
   let observed = null
   const engine = new TurnEngine({
+    persistence: createTestTurnEnginePersistence(),
     scheduleMemoryExtraction: () => {},
     runLoop: async ({ toolSpecs }) => {
       observed = namesOf(toolSpecs)

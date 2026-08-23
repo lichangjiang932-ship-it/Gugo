@@ -8,10 +8,21 @@ process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-clarification-tests',
 const { JobRuntime, recoverInterruptedJobs } = await import('../server/services/jobRuntime.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
+const resolveTestModelBinding = () => ({
+  providerId: null,
+  modelName: 'job-clarification-test-model',
+  configRevision: null,
+  env: {
+    MODEL_BASE_URL: 'http://127.0.0.1:11434/v1',
+    MODEL_NAME: 'job-clarification-test-model',
+  },
+})
+
 test('clarification suspends a job and a steering answer resumes the same job', async () => {
   const { userId } = issueTestSession()
   let executions = 0
   const runtime = new JobRuntime({
+    modelBindingResolver: resolveTestModelBinding,
     planner: (prompt) => ({
       title: 'Clarification job',
       prompt,

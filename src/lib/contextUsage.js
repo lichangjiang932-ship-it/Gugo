@@ -27,9 +27,18 @@ export function normalizeContextWindow(value, fallback = DEFAULT_MODEL_CONTEXT_W
     : DEFAULT_MODEL_CONTEXT_WINDOW
 }
 
-export function resolveModelContextWindow(models = [], modelName = '', fallback = DEFAULT_MODEL_CONTEXT_WINDOW) {
+export function resolveModelContextWindow(
+  models = [],
+  modelName = '',
+  fallback = DEFAULT_MODEL_CONTEXT_WINDOW,
+  modelProviderId = '',
+) {
+  const selectedProviderId = String(modelProviderId || '').trim()
   const selected = Array.isArray(models)
-    ? models.find((model) => model?.name === modelName)
+    ? models.find((model) => (
+        model?.name === modelName
+        && (!selectedProviderId || model?.provider === selectedProviderId)
+      ))
     : null
   return normalizeContextWindow(selected?.contextWindow, fallback)
 }

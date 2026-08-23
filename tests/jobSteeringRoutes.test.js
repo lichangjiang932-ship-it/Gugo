@@ -6,12 +6,38 @@ import test from 'node:test'
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-steering-route-tests', `${process.pid}-${Date.now()}`)
 
 const { createAppServer } = await import('../server/appServer.js')
+const {
+  closeJobRuntime,
+  JobRuntime,
+  setJobRuntimeForTesting,
+} = await import('../server/services/jobRuntime.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+
+const TEST_MODEL_ENV = {
+  MODEL_BASE_URL: 'http://127.0.0.1:11434/v1',
+  MODEL_NAME: 'test-model',
+}
+
+const resolveTestModelBinding = () => ({
+  providerId: null,
+  modelName: TEST_MODEL_ENV.MODEL_NAME,
+  configRevision: null,
+  env: TEST_MODEL_ENV,
+})
 
 test('job steering route accepts active jobs and rejects cross-user access', async () => {
   const alice = issueTestSession()
   const bob = issueTestSession()
-  const server = createAppServer({ getEnv: () => ({}) })
+  const runtime = new JobRuntime({
+    planner: (prompt) => ({
+      title: prompt,
+      steps: [{ id: 'execute', title: 'Create report', kind: 'execute' }],
+    }),
+    modelBindingResolver: resolveTestModelBinding,
+  })
+  runtime.stop()
+  setJobRuntimeForTesting(runtime)
+  const server = createAppServer({ getEnv: () => TEST_MODEL_ENV })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
   const aliceHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${alice.token}` }
@@ -43,5 +69,6 @@ test('job steering route accepts active jobs and rejects cross-user access', asy
     assert.equal(denied.status, 404)
   } finally {
     await new Promise((resolve) => server.close(resolve))
+    await closeJobRuntime()
   }
 })

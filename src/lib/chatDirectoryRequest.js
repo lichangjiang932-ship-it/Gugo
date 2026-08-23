@@ -29,6 +29,8 @@ export async function authorizeChatDirectoryRequest({
   const grant = grantResult?.grant
   const grantedPath = String(grant?.path || selectedPath).trim()
   const grantedAccessMode = grant?.accessMode === 'read_write' ? 'read_write' : accessMode
+  const grantId = String(grant?.id || '').trim()
+  if (!grantId) throw new Error('directory grant id is required')
 
   return {
     cancelled: false,
@@ -41,6 +43,7 @@ export async function authorizeChatDirectoryRequest({
       path: grantedPath,
       access_mode: grantedAccessMode,
       authorization_scope: grant?.scope || scope,
+      grant_id: grantId,
       paused_sequence: pausedSequence,
       purpose: String(purpose || '').trim(),
     },

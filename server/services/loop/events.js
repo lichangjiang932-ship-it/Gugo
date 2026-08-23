@@ -1,4 +1,8 @@
 import { LOOP_EVENT_NAMES } from './eventNames.js'
+import {
+  attachRuntimePluginBeginRevoke,
+  createRuntimePluginRevokeReceipt,
+} from '../../plugins/runtimePluginContributionLifecycle.js'
 
 export { LOOP_EVENT_NAMES } from './eventNames.js'
 
@@ -37,7 +41,11 @@ export function createLoopEvents() {
     assertEventName(event)
     assertListener(listener)
     listeners.get(event).add(listener)
-    return () => off(event, listener)
+    const dispose = () => off(event, listener)
+    return attachRuntimePluginBeginRevoke(dispose, () => {
+      dispose()
+      return createRuntimePluginRevokeReceipt('revoked')
+    })
   }
 
   const off = (event, listener) => {

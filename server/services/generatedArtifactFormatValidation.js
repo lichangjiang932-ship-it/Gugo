@@ -4,12 +4,20 @@ import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
 import { JSDOM } from 'jsdom'
 import sharp from 'sharp'
+import {
+  assertSafeOfficeContentType,
+  assertSafeOfficeEntryNames,
+  validateOfficeArtifactSafety,
+} from './officeArtifactSafety.js'
 
 const MAX_FILE_BYTES = 256 * 1024 * 1024
 const MAX_ZIP_ENTRIES = 20_000
 const MAX_ZIP_EXPANDED_BYTES = 512 * 1024 * 1024
 const MAX_XML_BYTES = 32 * 1024 * 1024
 const MAX_IMAGE_PIXELS = 100_000_000
+const MAX_OFFICE_EMBEDDED_IMAGE_TOTAL_PIXELS = 160_000_000
+const MAX_OFFICE_EMBEDDED_WORKBOOKS = 256
+const MAX_OFFICE_EMBEDDED_WORKBOOK_BYTES = 128 * 1024 * 1024
 const MAX_PDF_PAGES = 10_000
 
 const CONTENT_TYPES_NAMESPACE = 'http://schemas.openxmlformats.org/package/2006/content-types'
@@ -41,6 +49,15 @@ const OFFICE_CHILD_CONTENT_TYPE = Object.freeze({
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.slide+xml',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml',
 })
+const OFFICE_DRAWING_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.drawing+xml'
+const SPREADSHEET_DRAWING_NAMESPACES = new Set([
+  'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing',
+  'http://purl.oclc.org/ooxml/drawingml/spreadsheetDrawing',
+])
+const DRAWING_MAIN_NAMESPACES = new Set([
+  'http://schemas.openxmlformats.org/drawingml/2006/main',
+  'http://purl.oclc.org/ooxml/drawingml/main',
+])
 const PDFJS_STANDARD_FONT_DATA_URL = `${path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../../node_modules/pdfjs-dist/standard_fonts',
@@ -386,6 +403,9 @@ function validateContentTypes(entries, document, format) {
     }
     contentTypes.set(name, contentType)
   }
+  for (const contentType of contentTypes.values()) {
+    assertSafeOfficeContentType({ contentType, format, reject: invalid })
+  }
   if (contentTypes.get(OFFICE_MAIN_PART[format]) !== OFFICE_MAIN_CONTENT_TYPE[format]) {
     invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `The ${format.toUpperCase()} main content type is invalid.`)
   }
@@ -409,7 +429,8 @@ function validateRelationships(entries, documents) {
       const id = String(relation.getAttribute('Id') || '').trim()
       const type = String(relation.getAttribute('Type') || '').trim()
       const targetValue = String(relation.getAttribute('Target') || '').trim()
-      const external = String(relation.getAttribute('TargetMode') || '').trim().toLowerCase() === 'external'
+      const targetMode = String(relation.getAttribute('TargetMode') || '').trim().toLowerCase()
+      const external = targetMode === 'external'
       if (!id || !type || !targetValue || relations.has(id)) {
         invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `Relationship part ${name} has an invalid or duplicate relationship.`)
       }
@@ -417,22 +438,99 @@ function validateRelationships(entries, documents) {
       if (!external && (!target || !entries.has(target))) {
         invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `Relationship ${name}#${id} points to a missing package part.`)
       }
-      relations.set(id, { id, type, target, external })
+      relations.set(id, { id, type, target, external, targetMode })
     }
     relationshipSets.set(name, relations)
   }
   return relationshipSets
 }
 
-function officeRelationshipId(element) {
+function officeRelationshipAttribute(element, localName) {
   for (const namespace of OFFICE_RELATIONSHIP_NAMESPACES) {
-    const id = String(element?.getAttributeNS(namespace, 'id') || '').trim()
+    const id = String(element?.getAttributeNS(namespace, localName) || '').trim()
     if (id) return id
   }
   return ''
 }
 
-function requireBoundParts({ nodes, relationships, relationSuffix, contentTypes, contentType, documents, validatePart }) {
+function officeRelationshipId(element) {
+  return officeRelationshipAttribute(element, 'id')
+}
+
+function relationshipPartName(sourcePart) {
+  const directory = path.posix.dirname(sourcePart)
+  return `${directory}/_rels/${path.posix.basename(sourcePart)}.rels`
+}
+
+async function validateXlsxDrawingClosure({
+  worksheet,
+  worksheetName,
+  relationshipSets,
+  contentTypes,
+  documents,
+  entries,
+  validatedImages,
+}) {
+  const root = worksheet?.documentElement
+  const namespace = root?.namespaceURI
+  const drawingNodes = root ? directChildren(root, namespace, 'drawing') : []
+  if (drawingNodes.length > 1) {
+    invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `XLSX worksheet part ${worksheetName} has multiple drawing bindings.`)
+  }
+  if (drawingNodes.length === 0) return
+
+  const worksheetRelationships = relationshipSets.get(relationshipPartName(worksheetName))
+  const drawingId = officeRelationshipId(drawingNodes[0])
+  const drawingRelation = worksheetRelationships?.get(drawingId)
+  if (!drawingId || !drawingRelation || drawingRelation.external
+    || !drawingRelation.type.endsWith('/drawing') || !drawingRelation.target
+    || contentTypes.get(drawingRelation.target) !== OFFICE_DRAWING_CONTENT_TYPE) {
+    invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `XLSX worksheet part ${worksheetName} has an invalid drawing relationship.`)
+  }
+
+  const drawingName = drawingRelation.target
+  const drawing = documents.get(drawingName)
+  const drawingRoot = drawing?.documentElement
+  if (drawingRoot?.localName !== 'wsDr' || !SPREADSHEET_DRAWING_NAMESPACES.has(drawingRoot?.namespaceURI)) {
+    invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `XLSX drawing part ${drawingName} has an invalid root.`)
+  }
+
+  const blips = []
+  for (const drawingNamespace of DRAWING_MAIN_NAMESPACES) {
+    blips.push(...drawing.getElementsByTagNameNS(drawingNamespace, 'blip'))
+  }
+  if (blips.length === 0) {
+    invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `XLSX drawing part ${drawingName} has no embedded image.`)
+  }
+
+  const drawingRelationships = relationshipSets.get(relationshipPartName(drawingName))
+  if (!drawingRelationships) {
+    invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `XLSX drawing part ${drawingName} has no relationship part.`)
+  }
+  for (const blip of blips) {
+    const imageId = officeRelationshipAttribute(blip, 'embed')
+    const imageRelation = drawingRelationships.get(imageId)
+    if (!imageId || !imageRelation || imageRelation.external
+      || !imageRelation.type.endsWith('/image') || !imageRelation.target
+      || !String(contentTypes.get(imageRelation.target) || '').startsWith('image/')) {
+      invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `XLSX drawing part ${drawingName} has an invalid embedded-image relationship.`)
+    }
+    if (!validatedImages.targets.has(imageRelation.target)) {
+      const extension = path.posix.extname(imageRelation.target).slice(1).toLowerCase()
+      if (!['png', 'jpg', 'jpeg', 'webp'].includes(extension)) {
+        invalid('ARTIFACT_FORMAT_IMAGE_INVALID', `XLSX embedded image ${imageRelation.target} uses an unsupported format.`)
+      }
+      const details = await validateImage(entries.get(imageRelation.target), extension)
+      validatedImages.totalPixels += details.width * details.height * details.pages
+      if (validatedImages.totalPixels > MAX_OFFICE_EMBEDDED_IMAGE_TOTAL_PIXELS) {
+        invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'XLSX embedded images exceed the cumulative pixel limit.')
+      }
+      validatedImages.targets.add(imageRelation.target)
+    }
+  }
+}
+
+async function requireBoundParts({ nodes, relationships, relationSuffix, contentTypes, contentType, documents, validatePart }) {
   if (nodes.length === 0) invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', 'The Office document contains no bound content parts.')
   for (const node of nodes) {
     const id = officeRelationshipId(node)
@@ -441,12 +539,13 @@ function requireBoundParts({ nodes, relationships, relationSuffix, contentTypes,
       || !relation.target || contentTypes.get(relation.target) !== contentType) {
       invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', 'An Office content node is not bound to the required package part.')
     }
-    validatePart(documents.get(relation.target), relation.target)
+    await validatePart(documents.get(relation.target), relation.target)
   }
 }
 
-function validateOfficePackage(bytes, format) {
+async function validateOfficePackage(bytes, format) {
   const entries = readOfficeZip(bytes)
+  assertSafeOfficeEntryNames({ entries, format, reject: invalid })
   const required = ['[Content_Types].xml', '_rels/.rels', OFFICE_MAIN_PART[format]]
   for (const name of required) {
     if (!entries.has(name)) invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `The ${format.toUpperCase()} package is missing ${name}.`)
@@ -459,6 +558,14 @@ function validateOfficePackage(bytes, format) {
   }
   const contentTypes = validateContentTypes(entries, documents.get('[Content_Types].xml'), format)
   const relationshipSets = validateRelationships(entries, documents)
+  const embeddedWorkbooks = validateOfficeArtifactSafety({
+    entries,
+    documents,
+    contentTypes,
+    relationshipSets,
+    format,
+    reject: invalid,
+  })
   const rootRelationships = relationshipSets.get('_rels/.rels')
   const officeRelationship = [...(rootRelationships?.values() || [])]
     .find((item) => item.type.endsWith('/officeDocument'))
@@ -488,7 +595,7 @@ function validateOfficePackage(bytes, format) {
     }
     if (format === 'pptx') {
       const nodes = [...main.getElementsByTagNameNS(mainNamespace, 'sldId')]
-      requireBoundParts({
+      await requireBoundParts({
         nodes,
         relationships: mainRelationships,
         relationSuffix: '/slide',
@@ -508,25 +615,47 @@ function validateOfficePackage(bytes, format) {
       })
     } else {
       const nodes = [...main.getElementsByTagNameNS(mainNamespace, 'sheet')]
-      requireBoundParts({
+      const validatedImages = { targets: new Set(), totalPixels: 0 }
+      await requireBoundParts({
         nodes,
         relationships: mainRelationships,
         relationSuffix: '/worksheet',
         contentTypes,
         contentType: OFFICE_CHILD_CONTENT_TYPE.xlsx,
         documents,
-        validatePart(document, name) {
+        async validatePart(document, name) {
           const root = document?.documentElement
           const namespace = root?.namespaceURI
           const sheetData = root ? directChildren(root, namespace, 'sheetData') : []
           const rows = sheetData[0] ? [...sheetData[0].getElementsByTagNameNS(namespace, 'row')] : []
           if (root?.localName !== 'worksheet' || !OFFICE_MAIN_NAMESPACES.xlsx.has(namespace)
             || sheetData.length !== 1 || rows.length === 0) {
-            invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `XLSX worksheet part ${name} has no row data.`)
-          }
-        },
-      })
+              invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `XLSX worksheet part ${name} has no row data.`)
+            }
+            await validateXlsxDrawingClosure({
+              worksheet: document,
+              worksheetName: name,
+              relationshipSets,
+              contentTypes,
+              documents,
+              entries,
+              validatedImages,
+            })
+          },
+        })
     }
+  }
+  if (embeddedWorkbooks.length > MAX_OFFICE_EMBEDDED_WORKBOOKS) {
+    invalid('ARTIFACT_FORMAT_ACTIVE_CONTENT_FORBIDDEN', 'The PPTX package has too many embedded chart workbooks.')
+  }
+  let embeddedWorkbookBytes = 0
+  for (const name of embeddedWorkbooks) {
+    const workbook = entries.get(name)
+    embeddedWorkbookBytes += workbook?.length || 0
+    if (embeddedWorkbookBytes > MAX_OFFICE_EMBEDDED_WORKBOOK_BYTES) {
+      invalid('ARTIFACT_FORMAT_ACTIVE_CONTENT_FORBIDDEN', 'The PPTX embedded chart workbooks are too large.')
+    }
+    await validateOfficePackage(workbook, 'xlsx')
   }
   return { entryCount: entries.size }
 }
@@ -759,6 +888,6 @@ export async function validateGeneratedArtifactFile({ filePath, filename = '', t
     ? await validateImage(bytes, extension)
     : format === 'pdf'
       ? await validatePdf(bytes)
-      : validateOfficePackage(bytes, format)
+      : await validateOfficePackage(bytes, format)
   return { ok: true, format, byteLength: stat.size, ...details }
 }

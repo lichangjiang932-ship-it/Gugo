@@ -7,12 +7,12 @@ import { isRetryableError } from '../server/utils/modelRetry.js'
 /**
  * 一次真实事故里同时暴露的三件事:
  *
- *   1. 用户在 UI 里选了 deepseek-v4-flash(0.6× 计费),
+ *   1. 用户在 UI 里选了 deepseek-v4-flash（上游 Provider 费率为 0.6×），
  *      一个 network error 触发故障转移,而 mimo provider 没有这个模型名,
  *      于是回落到 provider.models[0] = mimo-v2.5 —— 换了**另一个厂商的
- *      另一个模型**跑完并按它的价格扣费。用户看到的是「我选的 flash,
- *      账单却不是 flash」。
- *   2. 同一轮里思考了 167644 字(≈84000 token),全部按输出计费。
+ *      另一个模型**跑完，并由第三方 Provider 按自身费率收费。用户看到的是
+ *      「我选的 flash，上游 Provider 的费用却来自另一个模型」。
+ *   2. 同一轮里思考了 167644 字(≈84000 token)，可能产生大量上游用量。
  *   3. 最后以 network error 收场,前面 30+ 步工具调用的成果全部静默作废。
  */
 
@@ -33,13 +33,18 @@ test('★ 默认不跨模型转移 —— 选了 flash 就绝不会跑成别家�
   assert.deepEqual(models, ['deepseek-v4-flash'], `不该出现别的模型，实际: ${models.join(', ')}`)
 })
 
-test('同名模型在多个 provider 之间转移是安全的,要保留', () => {
+test('同名模型跨 provider 也必须显式授权', () => {
   // 两个 provider 都提供 deepseek-v4-flash(镜像/中转站场景)
   const env = {
     ...ENV,
     MODEL_PROVIDER_MIMO_MODELS: 'deepseek-v4-flash,mimo-v2.5',
   }
-  const configs = resolveModelFailoverConfigs({ modelName: 'deepseek-v4-flash', env })
+  const closed = resolveModelFailoverConfigs({ modelName: 'deepseek-v4-flash', env })
+  assert.equal(closed.length, 1, '同名不等于相同隐私和上游 Provider 成本边界')
+  const configs = resolveModelFailoverConfigs({
+    modelName: 'deepseek-v4-flash',
+    env: { ...env, MODEL_FAILOVER_CROSS_PROVIDER: '1' },
+  })
   assert.equal(configs.length, 2, '同名模型的备用 provider 应保留')
   for (const c of configs) {
     assert.equal(c.modelName, 'deepseek-v4-flash', '转移后模型名必须一致')
@@ -49,7 +54,12 @@ test('同名模型在多个 provider 之间转移是安全的,要保留', () => 
 test('严格粘滞关闭且显式开跨模型开关时才允许跨模型', () => {
   const configs = resolveModelFailoverConfigs({
     modelName: 'deepseek-v4-flash',
-    env: { ...ENV, MODEL_STRICT_SELECTION: '0', MODEL_FAILOVER_CROSS_MODEL: '1' },
+    env: {
+      ...ENV,
+      MODEL_FAILOVER_CROSS_PROVIDER: '1',
+      MODEL_STRICT_SELECTION: '0',
+      MODEL_FAILOVER_CROSS_MODEL: '1',
+    },
   })
   assert.equal(configs.length, 2)
   assert.equal(configs[1].modelName, 'mimo-v2.5')
@@ -63,7 +73,7 @@ test('严格粘滞优先级最高：即使遗留配置允许 failover 也不能�
   assert.deepEqual(configs.map((c) => c.modelName), ['deepseek-v4-flash'])
 })
 
-test('思考失控不触发故障转移 —— 换个 provider 只会再烧一次钱', () => {
+test('思考失控不触发故障转移 —— 换个 Provider 会重复产生上游用量', () => {
   const error = new Error('思考超限')
   error.code = 'REASONING_RUNAWAY'
   assert.equal(isProviderFailoverError(error), false)

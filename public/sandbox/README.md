@@ -1,7 +1,8 @@
 # Sandbox runtime assets
 
-本目录的 JS 文件由 `src/pages/ChatSplit/RightPreviewPane.jsx` 的 React 预览 iframe 通过相对路径
-`/sandbox/<file>` 加载，目的是让预览在 air-gapped / CN 屏蔽 unpkg 的环境下也能跑。
+本目录的 JS 文件由 React、Mermaid 和 Chart 预览 iframe 通过同源路径
+`/sandbox/<file>` 加载，目的是让预览在 air-gapped / CN 屏蔽公共 CDN 的环境下也能运行，
+并避免把文档预览活动泄露给第三方 CDN。
 
 Vite 的 `publicDir` 会把整个 `public/` 直接复制到 `dist/`，所以构建产物里会有 `dist/sandbox/*`，
 线上由同源静态服务提供，CSP `script-src 'self'` 即可放行。
@@ -14,6 +15,11 @@ Vite 的 `publicDir` 会把整个 `public/` 直接复制到 `dist/`，所以构�
 | `react-dom.umd.js` | react-dom 18.3.1 (development) | https://unpkg.com/react-dom@18/umd/react-dom.development.js | 2026-05-30 |
 | `babel.standalone.js` | @babel/standalone 7.29.7 (minified) | https://unpkg.com/@babel/standalone/babel.min.js | 2026-05-30 |
 | `tailwind.js` | tailwindcss play CDN 3.4.17 | https://cdn.tailwindcss.com/3.4.17 | 2026-05-30 |
+| `mermaid.min.js` | mermaid 10.9.5 | https://cdn.jsdelivr.net/npm/mermaid@10.9.5/dist/mermaid.min.js | 2026-08-21 |
+| `chart.umd.min.js` | chart.js 4.4.1 | https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js | 2026-08-21 |
+
+新增的可视化资源由 `tests/sandboxAssets.test.js` 固定 SHA-256；更新版本时必须同步更新哈希，
+防止上游资源被静默替换。来源 URL 只用于维护时人工抓取，应用运行时不会访问这些 URL。
 
 ## 更新方法
 
@@ -23,6 +29,8 @@ curl -fsSL -o react.umd.js          https://unpkg.com/react@18.3.1/umd/react.dev
 curl -fsSL -o react-dom.umd.js      https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js
 curl -fsSL -o babel.standalone.js   https://unpkg.com/@babel/standalone@7.29.7/babel.min.js
 curl -fsSL -o tailwind.js           https://cdn.tailwindcss.com/3.4.17
+curl -fsSL -o mermaid.min.js        https://cdn.jsdelivr.net/npm/mermaid@10.9.5/dist/mermaid.min.js
+curl -fsSL -o chart.umd.min.js      https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js
 ```
 
 然后更新上表的版本号 + 抓取日期，commit。

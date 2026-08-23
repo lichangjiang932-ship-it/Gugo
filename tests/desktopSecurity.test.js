@@ -10,12 +10,20 @@ import {
 import {
   DEFAULT_DESKTOP_PORT,
   ensureDesktopRuntimeConfigFile,
+  probeDesktopRuntimeMode,
   resolveDesktopDataPaths,
   resolveDesktopPluginRoots,
   resolveDesktopPort,
   resolveDesktopRuntimeConfigPath,
   waitForDesktopRuntimeFiles,
 } from '../desktop/runtime.js'
+
+function jsonResponse(body, { status = 200 } = {}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+  })
+}
 
 test('desktop dev URL only accepts loopback HTTP origins', () => {
   assert.equal(resolveDesktopDevUrl('http://127.0.0.1:5175'), 'http://127.0.0.1:5175/')
@@ -146,4 +154,56 @@ test('desktop runtime reports a recoverable ENOENT when installed files stay mis
   )
 
   assert.deepEqual(waited, [25, 50, 100])
+})
+
+test('desktop runtime probe accepts a healthy application without probing recovery', async () => {
+  const calls = []
+  const mode = await probeDesktopRuntimeMode('http://127.0.0.1:5180', {
+    fetchImpl: async (url) => {
+      calls.push(url)
+      return jsonResponse({ ok: true, version: 'test' })
+    },
+  })
+  assert.equal(mode, 'runtime')
+  assert.deepEqual(calls, ['http://127.0.0.1:5180/api/health'])
+})
+
+test('desktop runtime probe recognizes only the versioned recovery contract', async () => {
+  const calls = []
+  const mode = await probeDesktopRuntimeMode('http://127.0.0.1:5180/', {
+    fetchImpl: async (url) => {
+      calls.push(url)
+      if (url.endsWith('/api/health')) return jsonResponse({ ok: false }, { status: 503 })
+      return jsonResponse({
+        ok: true,
+        mode: 'runtime_config_recovery',
+        protocolVersion: 1,
+        restartRequired: true,
+      })
+    },
+  })
+  assert.equal(mode, 'recovery')
+  assert.deepEqual(calls, [
+    'http://127.0.0.1:5180/api/health',
+    'http://127.0.0.1:5180/api/recovery/status',
+  ])
+})
+
+test('desktop runtime probe rejects HTML, forged recovery responses, and network failures', async () => {
+  const rejected = [
+    new Response('<html>SPA fallback</html>', { headers: { 'content-type': 'text/html' } }),
+    jsonResponse({ ok: true, mode: 'runtime_config_recovery', protocolVersion: 2, restartRequired: true }),
+    jsonResponse({ ok: true, mode: 'runtime_config_recovery', protocolVersion: 1, restartRequired: false }),
+  ]
+  for (const recoveryResponse of rejected) {
+    let call = 0
+    assert.equal(await probeDesktopRuntimeMode('http://127.0.0.1:5180', {
+      fetchImpl: async () => (++call === 1
+        ? jsonResponse({ ok: false }, { status: 503 })
+        : recoveryResponse),
+    }), null)
+  }
+  assert.equal(await probeDesktopRuntimeMode('http://127.0.0.1:5180', {
+    fetchImpl: async () => { throw new TypeError('offline') },
+  }), null)
 })

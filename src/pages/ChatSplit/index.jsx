@@ -8,8 +8,13 @@ import {
   fetchServerToolCatalog,
   selectEnabledServerToolSpecs,
 } from '../../lib/serverToolCatalog.js'
-import { readStoredModel, resolveSessionModel, writeStoredModel } from '../../lib/modelSelection.js'
+import {
+  readStoredModelSelection,
+  resolveSessionModelSelection,
+  writeStoredModelSelection,
+} from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
+import { SETTINGS_TAB_MODELS, settingsPathForSection } from '../../lib/settingsNavigation.js'
 import { useActiveAgent } from '../../agents/activeAgentContext.js'
 import { parseSlashCommandInput } from '../../lib/slashCommandRegistry.js'
 import { getSlashActionCopy } from '../../lib/slashCoreCommands.js'
@@ -37,8 +42,22 @@ import useTurnSteering from './useTurnSteering.js'
 import useSlashCommandExecution from './useSlashCommandExecution.js'
 import { cancelTurnRun } from './turnRunRegistry.js'
 import { buildServerTurnResumeMeta, isResumeNudge, resolvePendingDirectorySend } from './pausedTurnResume.js'
+import { modelReadinessMessageKey, resolveChatModelReadiness } from './chatModelReadiness.js'
+import useManualRecoveryRouteResume from './useManualRecoveryRouteResume.js'
+import { buildModelFailureRetryRequest } from './modelFailureRetry.js'
+import { readSessionDraft } from '../../lib/chatDrafts.js'
+import { createChatSessionId } from './chatSessionId.js'
+import {
+  buildStreamResumeState,
+  buildStreamResumeStateFromMessages,
+  getStreamResumeStateForSession,
+  isStreamResumeStateForSession,
+  updateStreamResumeStates,
+  updateStreamResumeStatesFromTurnResult,
+} from './streamResumeState.js'
 
 const EMPTY_MESSAGES = []
+const CHAT_MODEL_SETTINGS_PATH = settingsPathForSection(SETTINGS_TAB_MODELS, [], { returnTo: '/chat' })
 
 export default function ChatSplit() {
   const navigate = useNavigate()
@@ -46,9 +65,12 @@ export default function ChatSplit() {
   const toast = useToast()
   const { t, lang } = useT()
   const { activeAgentId: globalActiveAgentId } = useActiveAgent()
-  const [input, setInput] = useState('')
+  const initialSessionDraft = readSessionDraft((state.sessionDrafts || {})[state.activeSessionId])
+  const [input, setInput] = useState(() => (
+    state.activeSessionId ? initialSessionDraft.text : String(state.draftInput || '')
+  ))
   const [workbenchMessage, setWorkbenchMessage] = useState('')
-  const [attachments, setAttachments] = useState([])
+  const [attachments, setAttachments] = useState(() => initialSessionDraft.attachments)
   const [isGenerating, setIsGenerating] = useState(false)
   const [showContextUsage, setShowContextUsage] = useState(readContextUsageVisible)
   const [workbenchOpen, setWorkbenchOpen] = useState(readWorkbenchOpen)
@@ -58,7 +80,8 @@ export default function ChatSplit() {
   const [showContextPanel, setShowContextPanel] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [contextSystemPrompts, setContextSystemPrompts] = useState({})
-  const [resumeState, setResumeState] = useState(null)
+  const [resumeStates, setResumeStates] = useState({})
+  const [failedTurnRetry, setFailedTurnRetry] = useState(null)
   const abortCtrlRef = useRef(null)
   const preserveAttachmentsForSessionRef = useRef(null)
   const resumingTurnIdsRef = useRef(new Set())
@@ -70,11 +93,21 @@ export default function ChatSplit() {
     return () => clearTimeout(timer)
   }, [workbenchMessage])
 
-  const { modelOptions, runtimeSkills, selectedModel, setSelectedModel, slashRegistry } = useChatRuntimeCatalog({ lang, skillConfigs: state.skillConfigs, t })
+  const {
+    modelCatalogState,
+    modelOptions,
+    reloadModels,
+    runtimeSkills,
+    selectedModel,
+    selectedModelProviderId,
+    setSelectedModel,
+    slashRegistry,
+  } = useChatRuntimeCatalog({ lang, skillConfigs: state.skillConfigs, t })
   const activeSession = state.sessions.find((session) => session.id === state.activeSessionId)
   const activeSessionId = activeSession?.id || null
   const effectiveAgentId = activeSession?.agentId || globalActiveAgentId || null
   const messages = activeSession?.messages ?? EMPTY_MESSAGES
+  const resumeState = getStreamResumeStateForSession(resumeStates, activeSessionId)
   const latestServerAssistant = [...messages].reverse().find((message) => message?.role === 'assistant' && message?.meta?.serverTurnId)
   const serverResumeSignal = [
     activeSessionId || '',
@@ -109,30 +142,69 @@ export default function ChatSplit() {
       ? selectEnabledServerToolSpecs(serverToolCatalog, state.toolsConfig)
       : fallbackContextToolSpecs
   ), [fallbackContextToolSpecs, serverToolCatalog, state.toolsConfig])
-  const effectiveSelectedModel = resolveSessionModel(modelOptions, {
+  const storedModelSelection = readStoredModelSelection()
+  const effectiveModelSelection = resolveSessionModelSelection(modelOptions, {
     sessionModel: activeSession?.modelName,
+    sessionProviderId: activeSession?.modelProviderId,
     selectedModel,
-    storedModel: readStoredModel(),
-  }) || activeSession?.modelName || selectedModel || readStoredModel()
-  const selectedContextWindow = resolveModelContextWindow(modelOptions, effectiveSelectedModel)
+    selectedProviderId: selectedModelProviderId,
+    storedModel: storedModelSelection.modelName,
+    storedProviderId: storedModelSelection.providerId,
+  })
+  const effectiveSelectedModel = effectiveModelSelection.modelName
+  const effectiveSelectedModelProviderId = effectiveModelSelection.providerId
+  const modelReadiness = resolveChatModelReadiness({
+    catalogState: modelCatalogState,
+    modelName: effectiveSelectedModel,
+    modelProviderId: effectiveSelectedModelProviderId,
+    modelOptions,
+  })
+  const selectedContextWindow = resolveModelContextWindow(
+    modelOptions,
+    effectiveSelectedModel,
+    undefined,
+    effectiveSelectedModelProviderId,
+  )
   const approvals = useChatApprovals({ setWorkbenchMessage, toast, t })
   const directory = useDirectoryApproval({ lang, t, toast })
   const { handleVoice, voiceState } = useVoiceRecognition({ dispatch, input, lang, permissions: state.permissions, setInput, setMessage: setWorkbenchMessage, t })
   const { abortSessionIdRef, inputRef } = useChatSessionLifecycle({
-    abortCtrlRef, desktopPetVisible, dispatch, input, isGenerating, messages, preserveAttachmentsForSessionRef, setAttachments, setDesktopPetVisible,
+    abortCtrlRef, attachments, desktopPetVisible, dispatch, input, isGenerating, messages, preserveAttachmentsForSessionRef, setAttachments, setDesktopPetVisible,
     setInput, setIsGenerating, setWorkbenchMessage, showContextUsage, state, toolApproval: approvals.toolApproval,
     workbenchOpen,
   })
+  const showModelUnavailable = (readiness = modelReadiness) => {
+    const messageKey = modelReadinessMessageKey(readiness)
+    if (messageKey) setWorkbenchMessage(t(messageKey))
+    setShowModelPicker(true)
+  }
+  const handleTurnStart = useCallback(({ sessionId }) => {
+    setResumeStates((current) => updateStreamResumeStates(current, sessionId, null))
+  }, [])
+  const handleTurnResult = useCallback(({ sessionId, turnId, result }) => {
+    const nextResumeState = buildStreamResumeState(result, { sessionId, turnId })
+    setResumeStates((current) => updateStreamResumeStates(current, sessionId, nextResumeState))
+  }, [])
   const triggerSendFlow = useChatSendFlow({
     abortCtrlRef, abortSessionIdRef, attachments,
     approvalMode: approvals.approvalSettings?.mode || 'normal',
     changeApprovalMode: approvals.changeApprovalMode,
     directoryApprovalResolveRef: directory.directoryApprovalResolveRef,
-    dispatch, effectiveAgentId, ensureLocalPathAccess: directory.ensureLocalPathAccess, isGenerating, modelOptions,
+    dispatch, effectiveAgentId, ensureLocalPathAccess: directory.ensureLocalPathAccess, isGenerating, modelOptions, modelReadiness,
+    onModelUnavailable: showModelUnavailable, onTurnResult: handleTurnResult, onTurnStart: handleTurnStart,
     probeLocalPathAccess: directory.probeLocalPathAccess, requestServerToolApproval: approvals.requestServerToolApproval,
-    resolveToolApprovalForOwner: approvals.resolveToolApprovalForOwner, runtimeSkills, selectedModel, setContextSystemPrompts,
-    clearToolApprovalForOwner: approvals.clearToolApprovalForOwner, state, t, toast,
+    resolveToolApprovalForOwner: approvals.resolveToolApprovalForOwner, runtimeSkills, selectedModel,
+    selectedModelProviderId, setContextSystemPrompts,
+    clearToolApprovalForOwner: approvals.clearToolApprovalForOwner, state, t,
   })
+  const handleWorkbenchSend = (content) => {
+    if (!modelReadiness.canSend) {
+      showModelUnavailable(modelReadiness)
+      return false
+    }
+    triggerSendFlow(content)
+    return true
+  }
   const showPendingDirectoryGuidance = useCallback((content = '') => {
     const current = stateRef.current
     const session = current.sessions.find((item) => item.id === current.activeSessionId)
@@ -182,27 +254,63 @@ export default function ChatSplit() {
   const steerActiveTurn = useTurnSteering({
     dispatch, inputRef, setInput, setWorkbenchMessage, stateRef, t,
   })
+  const { manualRecoveryResume, onManualRecoveryConsumed } = useManualRecoveryRouteResume()
+  const onFailedTurnRetryConsumed = useCallback((consumed) => {
+    setFailedTurnRetry((current) => (
+      current?.sessionId === consumed?.sessionId && current?.turnId === consumed?.turnId
+        ? null
+        : current
+    ))
+  }, [])
+  const onFailedTurnRetrySettled = useCallback((outcome) => {
+    setResumeStates((current) => updateStreamResumeStatesFromTurnResult(current, outcome))
+  }, [])
   useServerTurnResume({
     abortCtrlRef, dispatch, requestServerToolApproval: approvals.requestServerToolApproval,
     resolveToolApprovalForOwner: approvals.resolveToolApprovalForOwner, resumingTurnIdsRef,
     clearToolApprovalForOwner: approvals.clearToolApprovalForOwner, stateActiveSessionId: state.activeSessionId,
     stateResumeSignal: serverResumeSignal, stateTurnRunActive: isGenerating, stateRef, t,
+    manualRecoveryResume, onManualRecoveryConsumed,
+    failedTurnRetry, onFailedTurnRetryConsumed, onFailedTurnRetrySettled,
   })
+  useEffect(() => {
+    if (!activeSessionId) return
+    const rebuilt = buildStreamResumeStateFromMessages(messages, { sessionId: activeSessionId })
+    const retryPending = rebuilt && (
+      failedTurnRetry?.sessionId === rebuilt.sessionId
+      && failedTurnRetry?.turnId === rebuilt.turnId
+      || resumingTurnIdsRef.current.has(`${rebuilt.sessionId}\u0000${rebuilt.turnId}`)
+    )
+    setResumeStates((current) => updateStreamResumeStates(
+      current,
+      activeSessionId,
+      retryPending ? null : rebuilt,
+    ))
+  }, [activeSessionId, failedTurnRetry, messages])
   const executeSlashEntry = useSlashCommandExecution({
-    changeApprovalMode: approvals.changeApprovalMode, dispatch, modelName: effectiveSelectedModel, navigate, setDesktopPetVisible, setInput,
+    changeApprovalMode: approvals.changeApprovalMode, dispatch, modelName: effectiveSelectedModel,
+    modelConfigRevision: modelReadiness.configRevision,
+    modelProviderId: effectiveSelectedModelProviderId, modelReadiness, navigate, onModelUnavailable: showModelUnavailable,
+    setDesktopPetVisible, setInput,
     setSlashInlinePanel, setWorkbenchMessage, setWorkbenchOpen, setWorkbenchTab, slashRegistry, stateRef, triggerSendFlow,
   })
   const slashQuery = input.match(/^\/([^\s/]*)$/i)?.[1]
   const slashCommands = slashQuery === undefined ? [] : slashRegistry.listCommands({ query: slashQuery })
 
-  const setModelForActiveSession = useCallback((modelName) => {
+  const setModelForActiveSession = (modelName, modelProviderId = '') => {
     const normalized = String(modelName || '').trim()
     if (!normalized) return
-    setSelectedModel(normalized)
-    writeStoredModel(normalized)
-    if (activeSessionId) dispatch({ type: 'SET_SESSION_MODEL', payload: { sessionId: activeSessionId, modelName: normalized } })
-  }, [activeSessionId, dispatch, setSelectedModel])
-  const handleSend = useCallback(async () => {
+    const normalizedProviderId = String(modelProviderId || '').trim()
+    setSelectedModel(normalized, normalizedProviderId)
+    writeStoredModelSelection({ modelName: normalized, providerId: normalizedProviderId })
+    if (activeSessionId) {
+      dispatch({
+        type: 'SET_SESSION_MODEL',
+        payload: { sessionId: activeSessionId, modelName: normalized, modelProviderId: normalizedProviderId || null },
+      })
+    }
+  }
+  const handleSend = async () => {
     const typedContent = input.trim()
     if (!typedContent && attachments.length === 0) return
     if (showPendingDirectoryGuidance(typedContent)) return
@@ -226,16 +334,53 @@ export default function ChatSplit() {
     }
     const parsedSlash = parseSlashCommandInput(typedContent)
     const slashEntry = parsedSlash ? slashRegistry.getCommand(parsedSlash.name) : null
-    if (slashEntry && slashEntry.kind !== 'skill') { setInput(''); executeSlashEntry(slashEntry, parsedSlash.args); return }
+    if (slashEntry && slashEntry.kind !== 'skill') {
+      if (slashEntry.requiresModel && !modelReadiness.canSend) {
+        showModelUnavailable(modelReadiness)
+        return
+      }
+      setInput('')
+      executeSlashEntry(slashEntry, parsedSlash.args)
+      return
+    }
+    if (!modelReadiness.canSend) {
+      showModelUnavailable(modelReadiness)
+      return
+    }
     const currentAttachments = [...attachments]
     setInput('')
     setAttachments([])
-    if (state.activeSessionId) dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: state.activeSessionId, text: '' } })
+    if (state.activeSessionId) dispatch({
+      type: 'SET_SESSION_DRAFT',
+      payload: { sessionId: state.activeSessionId, text: '', attachments: [] },
+    })
     triggerSendFlow(typedContent || describeAttachmentPrompt(currentAttachments), currentAttachments)
-  }, [attachments, directory.directoryApproval.open, dispatch, executeSlashEntry, input, isGenerating, showPendingDirectoryGuidance, slashRegistry, state.activeSessionId, steerActiveTurn, t, triggerSendFlow])
+  }
   const handleAbort = useCallback(() => {
+    if (activeSessionId) {
+      setResumeStates((current) => updateStreamResumeStates(current, activeSessionId, null))
+      setFailedTurnRetry((current) => current?.sessionId === activeSessionId ? null : current)
+    }
     if (!cancelTurnRun(activeSessionId)) abortCtrlRef.current?.abort()
   }, [activeSessionId])
+  const handleRetryModelFailure = (failedMessage) => {
+    if (isGenerating) return false
+    const current = stateRef.current
+    const session = current.sessions.find((item) => item.id === current.activeSessionId)
+    const request = buildModelFailureRetryRequest(session?.messages, failedMessage)
+    if (!request) return false
+    if (!modelReadiness.canSend) {
+      showModelUnavailable(modelReadiness)
+      return false
+    }
+    setShowModelPicker(false)
+    triggerSendFlow(
+      request.content || describeAttachmentPrompt(request.attachments),
+      request.attachments,
+      request.historyLimit,
+    )
+    return true
+  }
   useEffect(() => {
     const handler = (event) => {
       const { choiceId, choiceTitle } = event.detail || {}
@@ -244,10 +389,10 @@ export default function ChatSplit() {
     window.addEventListener('choice-selected', handler)
     return () => window.removeEventListener('choice-selected', handler)
   }, [triggerSendFlow])
-  const handleKeyDown = useCallback((event) => {
+  const handleKeyDown = (event) => {
     if (navigateInputHistory(event)) return
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); handleSend() }
-  }, [handleSend, navigateInputHistory])
+  }
   const handleFileChange = async (event) => {
     const files = Array.from(event.target.files || [])
     event.target.value = ''
@@ -260,7 +405,7 @@ export default function ChatSplit() {
     }
     let targetSessionId = state.activeSessionId
     if (!targetSessionId) {
-      targetSessionId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      targetSessionId = createChatSessionId()
       preserveAttachmentsForSessionRef.current = targetSessionId
       dispatch({
         type: 'NEW_SESSION',
@@ -304,8 +449,8 @@ export default function ChatSplit() {
     dispatch({ type: 'RECEIVE_MESSAGE', payload: t('chatReliability.permissionGranted') })
   }
   const handleManageModels = () => {
-    if (isLoggedInLocally()) { navigate('/settings?tab=models'); return }
-    window.dispatchEvent(new CustomEvent('auth:required', { detail: { path: '/settings?tab=models', message: t('chatReliability.signInForModels') } }))
+    if (isLoggedInLocally()) { navigate(CHAT_MODEL_SETTINGS_PATH); return }
+    window.dispatchEvent(new CustomEvent('auth:required', { detail: { path: CHAT_MODEL_SETTINGS_PATH, message: t('chatReliability.signInForModels') } }))
   }
 
   return (
@@ -314,40 +459,46 @@ export default function ChatSplit() {
       attachments={attachments} contextSystemPrompt={contextSystemPrompts[state.activeSessionId || '__draft__'] || ''}
       contextToolSpecs={contextToolSpecs} contextWindow={selectedContextWindow} desktopPetVisible={desktopPetVisible}
       directoryApproval={directory.directoryApproval} input={input} isGenerating={isGenerating} messages={messages}
-      modelOptions={modelOptions} onAbort={handleAbort} onApprovalModeChange={approvals.changeApprovalMode}
+      modelOptions={modelOptions} modelReadiness={modelReadiness} onAbort={handleAbort} onApprovalModeChange={approvals.changeApprovalMode}
       onAuthorizeDirectoryRequest={handleAuthorizeDirectoryRequest}
       onAuthorizeDirectory={directory.authorizeDirectory} onCloseDesktopPet={() => setDesktopPetVisible(false)}
       onCloseInlinePanel={() => setSlashInlinePanel(null)} onCloseModelPicker={() => setShowModelPicker(false)}
       onActivatePreviewTab={(tabId) => dispatch({ type: 'ACTIVATE_PREVIEW_TAB', payload: tabId })}
       onClosePreviewTab={(tabId) => dispatch({ type: 'CLOSE_PREVIEW_TAB', payload: tabId })}
       onClosePreview={() => setWorkbenchOpen(false)} onCloseWorkbench={() => setWorkbenchOpen(false)}
-      onDirectoryReject={directory.cancelDirectoryApproval} onDismissResume={() => setResumeState(null)}
+      onDirectoryReject={directory.cancelDirectoryApproval} onDismissResume={() => {
+        if (activeSessionId) {
+          setResumeStates((current) => updateStreamResumeStates(current, activeSessionId, null))
+        }
+      }}
       onExpandCompaction={handleExpandCompaction} onFileChange={handleFileChange}
       onGoalsChange={(todos) => persistSlashGoals(dispatch, stateRef.current.activeSessionId, todos, getSlashActionCopy(lang).goals[0])}
       onInlineContext={() => { setSlashInlinePanel(null); setShowContextUsage(true); setShowContextPanel(true) }}
       onInlineTasks={() => { setSlashInlinePanel(null); navigate('/tasks') }} onKeyDown={handleKeyDown}
       onManageMcp={() => { setSlashInlinePanel(null); navigate('/mcp') }} onManageModels={handleManageModels}
-      onModelChange={setModelForActiveSession} onNavigatePermissions={() => navigate('/permissions')}
+      onModelChange={setModelForActiveSession} onModelRetry={reloadModels} onNavigatePermissions={() => navigate('/permissions')}
+      onRetryModelFailure={handleRetryModelFailure}
       onOpenArtifact={(artifact) => { setWorkbenchOpen(true); dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: artifact ? { ...artifact } : null }) }}
       onOpenInPreview={(msg, preview) => { setWorkbenchOpen(true); dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: { messageId: msg.id, content: msg.meta?.artifactSource || msg.content, preview } }) }}
       onOpenModelPicker={() => setShowModelPicker(true)} onPermAllow={handlePermAllow}
       onPermDeny={() => { dispatch({ type: 'SET_PERM_REQUEST', payload: null }); dispatch({ type: 'RECEIVE_MESSAGE', payload: t('chatReliability.permissionDenied') }) }}
       onPreviewMessage={setWorkbenchMessage} onQuoteSelection={(text) => { const quoted = String(text || '').split('\n').map((line) => `> ${line}`).join('\n'); const current = inputRef.current || ''; dispatch({ type: 'SET_DRAFT_INPUT', payload: current ? `${quoted}\n\n${current}` : `${quoted}\n\n` }) }}
       onResume={() => {
-        if (!resumeState) return
-        const prompt = t('chatReliability.continuePrompt')
-        if (showPendingDirectoryGuidance(prompt)) return
-        setResumeState(null)
-        triggerSendFlow(prompt)
+        if (!isStreamResumeStateForSession(resumeState, activeSessionId)) return
+        if (resumeState.code !== 'TURN_INCOMPLETE') return
+        setResumeStates((current) => updateStreamResumeStates(current, activeSessionId, null))
+        setFailedTurnRetry(resumeState)
       }}
       onSend={handleSend} onSlashCommandSelect={executeSlashEntry}
       onSubmitFeedback={(value) => recordChatFeedback(value, stateRef.current.activeSessionId)}
-      onToolApproval={approvals.resolveToolApproval} onVoiceClick={handleVoice} onWorkbenchSend={triggerSendFlow}
+      onToolApproval={approvals.resolveToolApproval} onVoiceClick={handleVoice} onWorkbenchSend={handleWorkbenchSend}
       onWorkbenchTabChange={setWorkbenchTab} onWorkbenchToggle={() => setWorkbenchOpen((open) => !open)}
       previewArtifact={state.previewArtifact} previewTabs={state.previewTabs} previewActiveId={state.previewActiveId}
-      resumeAvailable={!!resumeState}
+      resumeAvailable={isStreamResumeStateForSession(resumeState, activeSessionId)
+        && resumeState.code === 'TURN_INCOMPLETE'}
       runtimeSkillIds={runtimeSkills.filter((skill) => skill.runnable !== false).map((skill) => skill.id)}
-      selectedModel={effectiveSelectedModel} setAttachments={setAttachments} setInput={setInput}
+      selectedModel={effectiveSelectedModel} selectedModelProviderId={effectiveSelectedModelProviderId}
+      setAttachments={setAttachments} setInput={setInput}
       setShowContextPanel={setShowContextPanel} showContextPanel={showContextPanel} showContextUsage={showContextUsage}
       showModelPicker={showModelPicker} slashCommands={slashCommands} slashInlinePanel={slashInlinePanel}
       state={state} t={t} tasks={state.tasks} toolApproval={approvals.toolApproval} voiceState={voiceState}

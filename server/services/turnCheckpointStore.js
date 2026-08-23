@@ -1,4 +1,5 @@
 import { getDb } from '../db.js'
+import { runRuntimePluginCheckpointReferenceWrite } from './runtimePluginLifecycleCoordinator.js'
 
 const CHECKPOINT_VERSION = 1
 
@@ -63,25 +64,27 @@ export function saveTurnCheckpoint({
   if (!ownsSession(db, { userId, sessionId })) return null
   const normalized = { ...state, checkpointVersion: CHECKPOINT_VERSION }
   const timestamp = Number.isFinite(Number(now)) ? Math.max(0, Math.floor(Number(now))) : Date.now()
-  db.prepare(`
-    INSERT INTO turn_checkpoints
-      (user_id, session_id, turn_id, event_sequence, state_json, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(user_id, session_id, turn_id) DO UPDATE SET
-      event_sequence = excluded.event_sequence,
-      state_json = excluded.state_json,
-      updated_at = excluded.updated_at
-    WHERE excluded.event_sequence >= turn_checkpoints.event_sequence
-  `).run(
-    userId,
-    sessionId,
-    turnId,
-    sequence,
-    JSON.stringify(normalized),
-    timestamp,
-    timestamp,
-  )
-  return readTurnCheckpoint(db, { userId, sessionId, turnId })
+  return runRuntimePluginCheckpointReferenceWrite(normalized, () => {
+    db.prepare(`
+      INSERT INTO turn_checkpoints
+        (user_id, session_id, turn_id, event_sequence, state_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, session_id, turn_id) DO UPDATE SET
+        event_sequence = excluded.event_sequence,
+        state_json = excluded.state_json,
+        updated_at = excluded.updated_at
+      WHERE excluded.event_sequence > turn_checkpoints.event_sequence
+    `).run(
+      userId,
+      sessionId,
+      turnId,
+      sequence,
+      JSON.stringify(normalized),
+      timestamp,
+      timestamp,
+    )
+    return readTurnCheckpoint(db, { userId, sessionId, turnId })
+  })
 }
 
 export function deleteTurnCheckpoint({ userId, sessionId, turnId } = {}) {

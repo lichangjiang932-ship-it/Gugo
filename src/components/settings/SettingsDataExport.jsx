@@ -3,6 +3,12 @@ import { AlertTriangle, CheckCircle2, Download, FileJson, HardDrive, MessageSqua
 import { clearPersistedState } from '../../store/AppContext.jsx'
 import { InvalidExportError, SCHEMA_VERSION, parseImport, wrapSessionsExport, wrapSettingsExport } from '../../store/exportSchema.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
+import {
+  clearAuthoritativeUserData,
+  downloadAuthoritativeUserData,
+  previewAuthoritativeUserDataClear,
+  USER_DATA_CLEAR_CONFIRMATION,
+} from '../../lib/runtimeConfigClient.js'
 import { SettingsGroup, SettingsPanel, SettingsRow } from './SettingsPrimitives.jsx'
 
 function formatBytes(bytes) {
@@ -22,11 +28,23 @@ function downloadJson(filename, data) {
   URL.revokeObjectURL(url)
 }
 
-export default function SettingsDataExport({ state, dispatch, storageBytes, storageQuota, onStorageChanged }) {
+export default function SettingsDataExport({
+  state,
+  dispatch,
+  storageBytes,
+  storageQuota,
+  onStorageChanged,
+  downloadFullData = downloadAuthoritativeUserData,
+  clearFullData = clearAuthoritativeUserData,
+  previewFullData = previewAuthoritativeUserDataClear,
+}) {
   const { t } = useT()
   const [message, setMessage] = useState('')
   const [importMode, setImportMode] = useState('merge')
   const [clearing, setClearing] = useState(false)
+  const [fullDataBusy, setFullDataBusy] = useState('')
+  const [fullDataConfirmation, setFullDataConfirmation] = useState('')
+  const [fullDataPreview, setFullDataPreview] = useState(null)
   const inputRef = useRef(null)
 
   const exportSessions = () => {
@@ -98,9 +116,116 @@ export default function SettingsDataExport({ state, dispatch, storageBytes, stor
       setClearing(false)
     }
   }
+  const exportFullLocalData = async () => {
+    setFullDataBusy('export')
+    try {
+      await downloadFullData()
+      setMessage(t('settingsDataExport.fullExportSucceeded'))
+    } catch (error) {
+      setMessage(t('settingsDataExport.fullExportFailed', { reason: error?.message || error }))
+    } finally {
+      setFullDataBusy('')
+    }
+  }
+  const clearFullLocalData = async () => {
+    if (!fullDataPreview?.token || !fullDataPreview.canClear) return
+    if (fullDataConfirmation !== USER_DATA_CLEAR_CONFIRMATION) return
+    if (!confirm(t('settingsDataExport.fullClearConfirm'))) return
+    setFullDataBusy('clear')
+    try {
+      await clearFullData({
+        confirmation: fullDataConfirmation,
+        previewToken: fullDataPreview.token,
+      })
+      setFullDataConfirmation('')
+      setFullDataPreview(null)
+      const browserResult = await clearPersistedState()
+      if (browserResult?.ok) {
+        dispatch({ type: 'CLEAR_ALL_DATA' })
+        setMessage(t('settingsDataExport.fullClearSucceeded'))
+      } else {
+        setMessage(t('settingsDataExport.fullClearBrowserIncomplete', {
+          reason: browserResult?.reason || browserResult?.status || 'unknown',
+        }))
+      }
+      onStorageChanged()
+    } catch (error) {
+      setFullDataPreview(null)
+      setMessage(t('settingsDataExport.fullClearFailed', { reason: error?.message || error }))
+    } finally {
+      setFullDataBusy('')
+    }
+  }
+  const previewFullLocalDataClear = async () => {
+    setFullDataBusy('preview')
+    setFullDataPreview(null)
+    try {
+      const preview = await previewFullData()
+      setFullDataPreview(preview)
+      setMessage(preview.canClear
+        ? t('settingsDataExport.fullClearPreviewReady')
+        : t('settingsDataExport.fullClearPreviewBlocked'))
+    } catch (error) {
+      setMessage(t('settingsDataExport.fullClearPreviewFailed', { reason: error?.message || error }))
+    } finally {
+      setFullDataBusy('')
+    }
+  }
 
   return (
     <SettingsPanel title={t('settingsDataExport.title')} description={t('settingsDataExport.subtitle')}>
+      <SettingsGroup title={t('settingsDataExport.fullLocalData')} description={t('settingsDataExport.fullLocalDataDescription')}>
+        <SettingsRow title={t('settingsDataExport.fullExport')} description={t('settingsDataExport.fullExportDescription')}>
+          <button type="button" onClick={exportFullLocalData} disabled={Boolean(fullDataBusy)} className="settings-action-button settings-action-button-primary" data-testid="full-local-data-export">
+            <Download className="h-3.5 w-3.5" />{t(fullDataBusy === 'export' ? 'settingsDataExport.exporting' : 'settingsDataExport.fullExport')}
+          </button>
+        </SettingsRow>
+        <SettingsRow title={t('settingsDataExport.fullClear')} description={t('settingsDataExport.fullClearDescription')} start>
+          <div className="flex min-w-0 flex-col items-end gap-2">
+            <button
+              type="button"
+              onClick={previewFullLocalDataClear}
+              disabled={Boolean(fullDataBusy)}
+              className="settings-action-button"
+              data-testid="full-local-data-preview"
+            >
+              <HardDrive className="h-3.5 w-3.5" />
+              {t(fullDataBusy === 'preview' ? 'settingsDataExport.previewing' : 'settingsDataExport.fullClearPreview')}
+            </button>
+            {fullDataPreview ? (
+              <p className="settings-inline-status max-w-[420px] text-right" data-testid="full-local-data-preview-summary">
+                {t('settingsDataExport.fullClearPreviewSummary', {
+                  rows: fullDataPreview.databaseRows?.total || 0,
+                  files: fullDataPreview.managedFiles?.removable || 0,
+                  bytes: formatBytes(fullDataPreview.managedFiles?.removableBytes || 0),
+                  blockers: Object.values(fullDataPreview.blockers || {}).reduce((sum, count) => sum + Number(count || 0), 0),
+                })}
+              </p>
+            ) : null}
+            <input
+              className="settings-input w-full min-w-[240px] font-mono"
+              aria-label={t('settingsDataExport.fullClearConfirmationLabel')}
+              placeholder={USER_DATA_CLEAR_CONFIRMATION}
+              value={fullDataConfirmation}
+              onChange={(event) => setFullDataConfirmation(event.target.value)}
+              disabled={Boolean(fullDataBusy)}
+              data-testid="full-local-data-confirmation"
+            />
+            <button
+              type="button"
+              onClick={clearFullLocalData}
+              disabled={Boolean(fullDataBusy)
+                || !fullDataPreview?.token
+                || !fullDataPreview.canClear
+                || fullDataConfirmation !== USER_DATA_CLEAR_CONFIRMATION}
+              className="settings-action-button text-accent-ink"
+              data-testid="full-local-data-clear"
+            >
+              <Trash2 className="h-3.5 w-3.5" />{t(fullDataBusy === 'clear' ? 'settingsDataExport.clearing' : 'settingsDataExport.fullClear')}
+            </button>
+          </div>
+        </SettingsRow>
+      </SettingsGroup>
       <SettingsGroup title={t('settingsDataExport.exportData')}>
         <SettingsRow title={t('settingsDataExport.exportSessions')} description={t('settingsDataExport.exportSessionsDescription')}>
           <button type="button" onClick={exportSessions} className="settings-action-button">

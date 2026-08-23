@@ -59,6 +59,7 @@ export function notifyJobStopHook(job, { status, error = null, stepId = null } =
     args: { jobId: job.id, status, ...(error ? { error } : {}) },
     sessionId: job.id,
     requestId: stepId,
+    hookInvocationId: `job:${job.id}:stop:${stepId || status}`,
   }).catch(() => {})
 }
 

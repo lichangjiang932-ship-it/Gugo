@@ -31,11 +31,11 @@ const CHAT_CONTEXT_TRANSLATIONS = {
 }
 
 const CHAT_MODEL_PICKER_TRANSLATIONS = {
-  zh: { open: '选择模型', title: '选择模型', subtitle: '仅影响当前会话，按模型服务分类显示。', empty: '暂无可用模型', backendDefault: '后端默认模型', defaultGroup: '默认服务', context: '上下文', manage: '管理模型服务…' },
-  en: { open: 'Choose model', title: 'Choose a model', subtitle: 'Applies to this session. Models are grouped by service.', empty: 'No models available', backendDefault: 'Backend default', defaultGroup: 'Default service', context: 'context', manage: 'Manage model services…' },
-  ja: { open: 'モデルを選択', title: 'モデルを選択', subtitle: '現在のセッションにのみ適用され、サービス別に表示されます。', empty: '利用可能なモデルはありません', backendDefault: 'サーバー既定', defaultGroup: '既定のサービス', context: 'コンテキスト', manage: 'モデルサービスを管理…' },
-  ko: { open: '모델 선택', title: '모델 선택', subtitle: '현재 세션에만 적용되며 서비스별로 분류됩니다.', empty: '사용 가능한 모델 없음', backendDefault: '서버 기본값', defaultGroup: '기본 서비스', context: '컨텍스트', manage: '모델 서비스 관리…' },
-  'zh-TW': { open: '選擇模型', title: '選擇模型', subtitle: '僅影響目前會話，依模型服務分類顯示。', empty: '暫無可用模型', backendDefault: '後端預設模型', defaultGroup: '預設服務', context: '上下文', manage: '管理模型服務…' },
+  zh: { open: '选择模型', title: '选择模型', subtitle: '仅影响当前会话，按模型服务分类显示。', empty: '暂无可用模型', backendDefault: '后端默认模型', defaultGroup: '默认服务', context: '上下文', manage: '配置模型服务…', loading: '正在读取模型…', loadingDetail: '正在读取本地模型配置，完成前不会发送消息。', unconfigured: '配置模型', unconfiguredDetail: '尚未完成模型服务配置。文本草稿会保留；返回后请重新添加附件。请先配置服务地址、API Key（本地服务可选）和模型名。', loadError: '模型状态不可用', loadErrorDetail: '无法读取模型服务状态。消息尚未发送，你可以重试或检查模型配置。', configuredEmpty: '没有可用模型', configuredEmptyDetail: '模型服务已响应，但没有返回可执行模型。请检查模型列表或重新检测。', selectRequired: '选择模型', retry: '重新读取', loadingSendBlocked: '正在读取模型配置，消息尚未发送。', unconfiguredSendBlocked: '请先配置模型服务；文本草稿已保留，跨页面后需重新添加附件。', errorSendBlocked: '无法确认模型服务可用，消息尚未发送。', emptySendBlocked: '当前没有可执行模型，消息尚未发送。', selectionSendBlocked: '请先选择一个可执行模型。', readinessAgent: 'Agent 可用', readinessAgentDetail: '已验证文字回复和工具调用，可用于 Agent 任务。', readinessChatOnly: '仅聊天', readinessChatOnlyDetail: '已验证文字回复，但不支持 Agent 所需的工具调用。', readinessUntested: '未测试', readinessUntestedDetail: '尚未验证 Agent 能力；请在模型设置中测试。', readinessUnavailable: '不可用', readinessUnavailableDetail: '最近一次测试未通过；请在模型设置中检查并重试。' },
+  en: { open: 'Choose model', title: 'Choose a model', subtitle: 'Applies to this session. Models are grouped by service.', empty: 'No models available', backendDefault: 'Backend default', defaultGroup: 'Default service', context: 'context', manage: 'Configure model services…', loading: 'Loading models…', loadingDetail: 'Reading the local model configuration. Messages stay unsent until this finishes.', unconfigured: 'Configure a model', unconfiguredDetail: 'Model setup is incomplete. Your text draft is preserved; reattach files after returning. Configure the service URL, API key (optional for local services), and model name.', loadError: 'Model status unavailable', loadErrorDetail: 'The model service status could not be read. Nothing was sent; retry or review the model configuration.', configuredEmpty: 'No usable models', configuredEmptyDetail: 'The model service responded but returned no executable models. Review the model list or run discovery again.', selectRequired: 'Select a model', retry: 'Reload', loadingSendBlocked: 'Model configuration is still loading. Nothing was sent.', unconfiguredSendBlocked: 'Configure a model service first. Your text draft was preserved; attachments must be re-added after leaving this page.', errorSendBlocked: 'Model availability could not be confirmed. Nothing was sent.', emptySendBlocked: 'No executable model is available. Nothing was sent.', selectionSendBlocked: 'Select an executable model first.', readinessAgent: 'Agent ready', readinessAgentDetail: 'Text replies and tool calls are verified for Agent tasks.', readinessChatOnly: 'Chat only', readinessChatOnlyDetail: 'Text replies work, but Agent tool calls are not supported.', readinessUntested: 'Not tested', readinessUntestedDetail: 'Agent capabilities are not verified. Test this model in settings.', readinessUnavailable: 'Unavailable', readinessUnavailableDetail: 'The latest test did not pass. Review the model settings and retry.' },
+  ja: { open: 'モデルを選択', title: 'モデルを選択', subtitle: '現在のセッションにのみ適用され、サービス別に表示されます。', empty: '利用可能なモデルはありません', backendDefault: 'サーバー既定', defaultGroup: '既定のサービス', context: 'コンテキスト', manage: 'モデルサービスを設定…', loading: 'モデルを読み込み中…', loadingDetail: 'ローカルのモデル設定を読み込んでいます。完了するまでメッセージは送信されません。', unconfigured: 'モデルを設定', unconfiguredDetail: 'モデルサービスの設定が完了していません。テキストの下書きは保持されます。戻った後に添付ファイルを再追加してください。サービス URL、API Key（ローカルサービスでは任意）、モデル名を設定してください。', loadError: 'モデル状態を取得できません', loadErrorDetail: 'モデルサービスの状態を読み込めませんでした。メッセージは送信されていません。再試行するか設定を確認してください。', configuredEmpty: '使用できるモデルがありません', configuredEmptyDetail: 'モデルサービスは応答しましたが、実行可能なモデルがありません。モデル一覧を確認するか、再検出してください。', selectRequired: 'モデルを選択', retry: '再読み込み', loadingSendBlocked: 'モデル設定を読み込み中です。メッセージは送信されていません。', unconfiguredSendBlocked: '先にモデルサービスを設定してください。テキストの下書きは保持されますが、ページ移動後は添付ファイルを再追加する必要があります。', errorSendBlocked: 'モデルサービスの利用可否を確認できないため、送信していません。', emptySendBlocked: '実行可能なモデルがないため、送信していません。', selectionSendBlocked: '実行可能なモデルを選択してください。', readinessAgent: 'Agent 対応', readinessAgentDetail: 'テキスト応答とツール呼び出しを確認済みです。', readinessChatOnly: 'チャットのみ', readinessChatOnlyDetail: 'テキスト応答は利用できますが、Agent のツール呼び出しには対応していません。', readinessUntested: '未テスト', readinessUntestedDetail: 'Agent 機能は未確認です。モデル設定でテストしてください。', readinessUnavailable: '利用不可', readinessUnavailableDetail: '直近のテストに合格していません。モデル設定を確認して再試行してください。' },
+  ko: { open: '모델 선택', title: '모델 선택', subtitle: '현재 세션에만 적용되며 서비스별로 분류됩니다.', empty: '사용 가능한 모델 없음', backendDefault: '서버 기본값', defaultGroup: '기본 서비스', context: '컨텍스트', manage: '모델 서비스 설정…', loading: '모델 불러오는 중…', loadingDetail: '로컬 모델 설정을 읽는 중입니다. 완료되기 전에는 메시지를 보내지 않습니다.', unconfigured: '모델 설정', unconfiguredDetail: '모델 서비스 설정이 완료되지 않았습니다. 텍스트 초안은 유지되며 돌아온 뒤 첨부 파일을 다시 추가해야 합니다. 서비스 URL, API Key(로컬 서비스는 선택 사항), 모델 이름을 설정하세요.', loadError: '모델 상태를 확인할 수 없음', loadErrorDetail: '모델 서비스 상태를 읽지 못했습니다. 메시지는 전송되지 않았습니다. 다시 시도하거나 설정을 확인하세요.', configuredEmpty: '사용 가능한 모델 없음', configuredEmptyDetail: '모델 서비스가 응답했지만 실행 가능한 모델을 반환하지 않았습니다. 모델 목록을 확인하거나 다시 검색하세요.', selectRequired: '모델 선택', retry: '다시 불러오기', loadingSendBlocked: '모델 설정을 불러오는 중이며 메시지는 전송되지 않았습니다.', unconfiguredSendBlocked: '먼저 모델 서비스를 설정하세요. 텍스트 초안은 유지되지만 페이지 이동 후 첨부 파일을 다시 추가해야 합니다.', errorSendBlocked: '모델 서비스 사용 가능 여부를 확인할 수 없어 전송하지 않았습니다.', emptySendBlocked: '실행 가능한 모델이 없어 전송하지 않았습니다.', selectionSendBlocked: '실행 가능한 모델을 먼저 선택하세요.', readinessAgent: 'Agent 사용 가능', readinessAgentDetail: '텍스트 응답과 도구 호출이 Agent 작업용으로 확인되었습니다.', readinessChatOnly: '채팅 전용', readinessChatOnlyDetail: '텍스트 응답은 가능하지만 Agent 도구 호출은 지원하지 않습니다.', readinessUntested: '테스트 안 됨', readinessUntestedDetail: 'Agent 기능이 확인되지 않았습니다. 모델 설정에서 테스트하세요.', readinessUnavailable: '사용 불가', readinessUnavailableDetail: '최근 테스트를 통과하지 못했습니다. 모델 설정을 확인하고 다시 시도하세요.' },
+  'zh-TW': { open: '選擇模型', title: '選擇模型', subtitle: '僅影響目前會話，依模型服務分類顯示。', empty: '暫無可用模型', backendDefault: '後端預設模型', defaultGroup: '預設服務', context: '上下文', manage: '設定模型服務…', loading: '正在讀取模型…', loadingDetail: '正在讀取本機模型設定，完成前不會傳送訊息。', unconfigured: '設定模型', unconfiguredDetail: '尚未完成模型服務設定。文字草稿會保留；返回後請重新加入附件。請先設定服務位址、API Key（本機服務可選）和模型名稱。', loadError: '模型狀態無法使用', loadErrorDetail: '無法讀取模型服務狀態。訊息尚未傳送，你可以重試或檢查模型設定。', configuredEmpty: '沒有可用模型', configuredEmptyDetail: '模型服務已回應，但沒有傳回可執行模型。請檢查模型清單或重新偵測。', selectRequired: '選擇模型', retry: '重新讀取', loadingSendBlocked: '正在讀取模型設定，訊息尚未傳送。', unconfiguredSendBlocked: '請先設定模型服務；文字草稿已保留，跨頁面後需重新加入附件。', errorSendBlocked: '無法確認模型服務可用，訊息尚未傳送。', emptySendBlocked: '目前沒有可執行模型，訊息尚未傳送。', selectionSendBlocked: '請先選擇一個可執行模型。', readinessAgent: 'Agent 可用', readinessAgentDetail: '已驗證文字回覆與工具呼叫，可用於 Agent 任務。', readinessChatOnly: '僅限對話', readinessChatOnlyDetail: '文字回覆可用，但不支援 Agent 所需的工具呼叫。', readinessUntested: '尚未測試', readinessUntestedDetail: '尚未驗證 Agent 能力；請在模型設定中測試。', readinessUnavailable: '無法使用', readinessUnavailableDetail: '最近一次測試未通過；請在模型設定中檢查並重試。' },
 }
 
 const WORKBENCH_TRANSLATIONS = {
@@ -63,11 +63,11 @@ const SKILLS_MARKET_TRANSLATIONS = {
 }
 
 const DESKTOP_UPDATE_TRANSLATIONS = {
-  zh: { checking: '正在检查更新', available: '发现新版本，准备下载', downloading: '正在下载更新', ready: '更新已准备好', installing: '正在重启安装', current: '当前已是最新版本', error: '更新遇到问题', restartInstall: '重启并安装', installingHint: '正在保存状态并启动安装程序，请稍候。', retry: '重新检查' },
-  en: { checking: 'Checking for updates', available: 'Update found, preparing download', downloading: 'Downloading update', ready: 'Update ready', installing: 'Restarting to install', current: 'You are up to date', error: 'Update failed', restartInstall: 'Restart and install', installingHint: 'Saving state and starting the installer. Please wait.', retry: 'Check again' },
-  ja: { checking: '更新を確認中', available: '新しいバージョンをダウンロードします', downloading: '更新をダウンロード中', ready: '更新の準備ができました', installing: '再起動してインストール中', current: '最新バージョンです', error: '更新に失敗しました', restartInstall: '再起動してインストール', installingHint: '状態を保存してインストーラーを起動しています。', retry: '再確認' },
-  ko: { checking: '업데이트 확인 중', available: '새 버전을 다운로드합니다', downloading: '업데이트 다운로드 중', ready: '업데이트 준비 완료', installing: '재시작하여 설치 중', current: '최신 버전입니다', error: '업데이트 실패', restartInstall: '재시작 및 설치', installingHint: '상태를 저장하고 설치 프로그램을 시작하고 있습니다.', retry: '다시 확인' },
-  'zh-TW': { checking: '正在檢查更新', available: '發現新版本，準備下載', downloading: '正在下載更新', ready: '更新已準備好', installing: '正在重新啟動安裝', current: '目前已是最新版本', error: '更新遇到問題', restartInstall: '重新啟動並安裝', installingHint: '正在儲存狀態並啟動安裝程式，請稍候。', retry: '重新檢查' },
+  zh: { manual: '更新由你手动控制', manualHint: '启动时不会联网；点击后才会检查并下载更新。', checkNow: '检查并下载更新', checking: '正在检查更新', available: '发现新版本，准备下载', downloading: '正在下载更新', ready: '更新已准备好', installing: '正在重启安装', current: '当前已是最新版本', error: '更新遇到问题', restartInstall: '重启并安装', installingHint: '正在保存状态并启动安装程序，请稍候。', retry: '重新检查' },
+  en: { manual: 'Updates are under your control', manualHint: 'Gugo stays offline at startup. Check and download only when you choose.', checkNow: 'Check and download update', checking: 'Checking for updates', available: 'Update found, preparing download', downloading: 'Downloading update', ready: 'Update ready', installing: 'Restarting to install', current: 'You are up to date', error: 'Update failed', restartInstall: 'Restart and install', installingHint: 'Saving state and starting the installer. Please wait.', retry: 'Check again' },
+  ja: { manual: '更新は手動で管理されます', manualHint: '起動時は通信しません。選択したときだけ確認してダウンロードします。', checkNow: '更新を確認してダウンロード', checking: '更新を確認中', available: '新しいバージョンをダウンロードします', downloading: '更新をダウンロード中', ready: '更新の準備ができました', installing: '再起動してインストール中', current: '最新バージョンです', error: '更新に失敗しました', restartInstall: '再起動してインストール', installingHint: '状態を保存してインストーラーを起動しています。', retry: '再確認' },
+  ko: { manual: '업데이트는 직접 제어합니다', manualHint: '시작할 때는 네트워크에 연결하지 않습니다. 선택한 경우에만 확인하고 다운로드합니다.', checkNow: '업데이트 확인 및 다운로드', checking: '업데이트 확인 중', available: '새 버전을 다운로드합니다', downloading: '업데이트 다운로드 중', ready: '업데이트 준비 완료', installing: '재시작하여 설치 중', current: '최신 버전입니다', error: '업데이트 실패', restartInstall: '재시작 및 설치', installingHint: '상태를 저장하고 설치 프로그램을 시작하고 있습니다.', retry: '다시 확인' },
+  'zh-TW': { manual: '更新由你手動控制', manualHint: '啟動時不會連線；只有點擊後才會檢查並下載更新。', checkNow: '檢查並下載更新', checking: '正在檢查更新', available: '發現新版本，準備下載', downloading: '正在下載更新', ready: '更新已準備好', installing: '正在重新啟動安裝', current: '目前已是最新版本', error: '更新遇到問題', restartInstall: '重新啟動並安裝', installingHint: '正在儲存狀態並啟動安裝程式，請稍候。', retry: '重新檢查' },
 }
 
 const LEFT_RAIL_LOGIN_TRANSLATIONS = {
@@ -172,7 +172,7 @@ const FEATURE_PAGE_TRANSLATIONS = {
       voice: '语音', voiceRequesting: '申请麦克风…', voiceListening: '聆听中 · 点击停止', voiceUnsupported: '当前浏览器不支持语音输入', voiceDenied: '麦克风权限被拒绝，请在浏览器设置中允许', voiceNoSpeech: '没有听到语音，请重试', voiceNetworkError: '语音识别网络不可用', voiceError: '语音输入失败，请重试', voiceStopped: '已停止语音输入',
       openPreviewTitle: '在右侧预览面板打开', openOnRight: '在右侧打开', memoryLoadFailed: '加载失败', memoryUsed: '用了 {count} 条长期记忆', memoryLoading: '加载中…', memoryUnavailable: '这些记忆已不可用',
       reasoning: '思考过程', reasoningActive: '思考中…', toolCallReady: '正在准备运行 {name}…', modelRetrying: '正在重试模型', modelFailover: '已切换模型提供方', characters: '{count} 字', clickExpand: '点击展开', execution: '执行过程', runningSteps: '进行中 · {count} 步', steps: '{count} 步', failedSteps: '{count} 步失败', answerFollows: '↓ 以下是基于上述执行结果给出的答复',
-      contextTitle: 'CONTEXT · 当前会话上下文', provider: '提供商：', backendConfigured: '由后端 .env 统一配置', keyServerOnly: 'API Key 不进入浏览器', copyContent: '复制内容', copy: '复制', editResend: '编辑并重发', edit: '编辑', resendMessage: '重新发送本条', resend: '重发', deleteMessage: '删除本条', delete: '删除', model: '模型：{name}', latency: '延迟：{value} ms', elapsed: '耗时 {value}', regenerate: '重新生成', regenerateHint: '基于上一条用户消息重新生成回复', permissionRequest: '[请求授权] {name}', allowContinue: '允许并继续', deny: '拒绝', refineScope: '细化范围', permissionHandled: '权限请求已在本页处理', emptyTitle: '有什么可以帮你的？', emptyHint: '输入问题，或直接点击下方的示例开始', backToBottom: '回到底部', replyIncomplete: '任务未完成，当前没有可显示的本地文件回执', replyPartiallyCompleted: '任务未完成；已提交的本地文件仍可访问，验证状态以文件标记为准', showSidebar: '显示侧边栏', hideSidebar: '隐藏侧边栏',
+      contextTitle: 'CONTEXT · 当前会话上下文', provider: '提供商：', keyServerOnly: 'API Key 不进入浏览器', copyContent: '复制内容', copy: '复制', editResend: '编辑并重发', edit: '编辑', resendMessage: '重新发送本条', resend: '重发', deleteMessage: '删除本条', delete: '删除', model: '模型：{name}', latency: '延迟：{value} ms', elapsed: '耗时 {value}', regenerate: '重新生成', regenerateHint: '基于上一条用户消息重新生成回复', permissionRequest: '[请求授权] {name}', allowContinue: '允许并继续', deny: '拒绝', refineScope: '细化范围', permissionHandled: '权限请求已在本页处理', emptyTitle: '有什么可以帮你的？', emptyHint: '输入问题，或直接点击下方的示例开始', backToBottom: '回到底部', replyIncomplete: '文件没有生成。请查看上方原因，调整后重试。', replyPartiallyCompleted: '任务未全部完成，但已保存的文件仍可打开；请按文件旁的状态确认结果。', showSidebar: '显示侧边栏', hideSidebar: '隐藏侧边栏',
     },
     history: {
       sessions: '会话', tasks: '任务', done: '[完成]', active: '[进行中]', failed: '[失败]', image: '[图片]', unknownDate: '未知日期', unnamedSession: '未命名会话', messageCount: '{count} 条消息', session: '会话', emptySession: '空会话', eyebrow: 'HISTORY · 你和模型的记录', title: '合作过的事', search: '搜索', unnamed: '未命名', emptyTitle: '还没有记录', emptyHint: '你和模型的对话和任务会出现在这里', startChat: '开始对话',
@@ -190,7 +190,7 @@ const FEATURE_PAGE_TRANSLATIONS = {
       voice: 'Voice', voiceRequesting: 'Requesting microphone…', voiceListening: 'Listening · click to stop', voiceUnsupported: 'Voice input is not supported by this browser', voiceDenied: 'Microphone access was denied. Allow it in browser settings.', voiceNoSpeech: 'No speech detected. Try again.', voiceNetworkError: 'Speech recognition network is unavailable', voiceError: 'Voice input failed. Try again.', voiceStopped: 'Voice input stopped',
       openPreviewTitle: 'Open in the preview panel on the right', openOnRight: 'Open on the right', memoryLoadFailed: 'Failed to load', memoryUsed: 'Used {count} long-term memories', memoryLoading: 'Loading…', memoryUnavailable: 'These memories are no longer available',
       reasoning: 'Reasoning', reasoningActive: 'Thinking…', toolCallReady: 'Preparing to run {name}…', modelRetrying: 'Retrying model', modelFailover: 'Switched model provider', characters: '{count} characters', clickExpand: 'Click to expand', execution: 'Execution', runningSteps: 'Running · {count} steps', steps: '{count} steps', failedSteps: '{count} failed', answerFollows: '↓ The answer below is based on the execution results above',
-      contextTitle: 'CONTEXT · Current conversation', provider: 'Provider:', backendConfigured: 'Configured centrally by the backend .env', keyServerOnly: 'API keys never enter the browser', copyContent: 'Copy content', copy: 'Copy', editResend: 'Edit and resend', edit: 'Edit', resendMessage: 'Resend this message', resend: 'Resend', deleteMessage: 'Delete this message', delete: 'Delete', model: 'Model: {name}', latency: 'Latency: {value} ms', elapsed: 'Elapsed {value}', regenerate: 'Regenerate', regenerateHint: 'Regenerate from the previous user message', permissionRequest: '[Permission request] {name}', allowContinue: 'Allow and continue', deny: 'Deny', refineScope: 'Refine scope', permissionHandled: 'This permission request was handled here', emptyTitle: 'How can I help?', emptyHint: 'Enter a question or choose an example below', backToBottom: 'Back to bottom', replyIncomplete: 'Task not completed; no local file receipts are available', replyPartiallyCompleted: 'Task not completed; committed local files remain accessible with their validation status shown', showSidebar: 'Show sidebar', hideSidebar: 'Hide sidebar',
+      contextTitle: 'CONTEXT · Current conversation', provider: 'Provider:', keyServerOnly: 'API keys never enter the browser', copyContent: 'Copy content', copy: 'Copy', editResend: 'Edit and resend', edit: 'Edit', resendMessage: 'Resend this message', resend: 'Resend', deleteMessage: 'Delete this message', delete: 'Delete', model: 'Model: {name}', latency: 'Latency: {value} ms', elapsed: 'Elapsed {value}', regenerate: 'Regenerate', regenerateHint: 'Regenerate from the previous user message', permissionRequest: '[Permission request] {name}', allowContinue: 'Allow and continue', deny: 'Deny', refineScope: 'Refine scope', permissionHandled: 'This permission request was handled here', emptyTitle: 'How can I help?', emptyHint: 'Enter a question or choose an example below', backToBottom: 'Back to bottom', replyIncomplete: 'No file was generated. Review the error above, then try again.', replyPartiallyCompleted: 'The task did not fully complete, but saved files remain available. Check the status shown beside each file.', showSidebar: 'Show sidebar', hideSidebar: 'Hide sidebar',
     },
     history: {
       sessions: 'Conversations', tasks: 'Tasks', done: '[Done]', active: '[In progress]', failed: '[Failed]', image: '[Image]', unknownDate: 'Unknown date', unnamedSession: 'Untitled conversation', messageCount: '{count} messages', session: 'Conversation', emptySession: 'Empty conversation', eyebrow: 'HISTORY · Your model activity', title: 'Things we worked on', search: 'Search', unnamed: 'Untitled', emptyTitle: 'No history yet', emptyHint: 'Your conversations and tasks will appear here', startChat: 'Start a conversation',
@@ -206,7 +206,7 @@ const FEATURE_PAGE_TRANSLATIONS = {
       copied: 'コピーしました', copyFailed: 'コピーに失敗しました。もう一度お試しください。', toolRunning: '実行中', toolCompleted: '実行済み', toolFailed: '失敗', toolArguments: '引数', toolNoArguments: '（なし）', toolError: 'エラー', toolResult: '結果', toolUnknownError: '不明なエラー', toolEmptyResult: '（空）', toolApplyPatch: 'パッチを適用', toolListDirectory: 'ディレクトリを表示', toolGrepCode: 'コードを検索', toolFindSymbol: 'シンボルを検索', toolCurrentWorkspace: '（現在のワークスペース）', toolUnspecified: '（未指定）', toolFileCount: '{count} ファイル',
       weeklyReport: '今週のプロジェクト週報を書いて', salesExcel: 'この売上データを Excel にして分析して', productPpt: '5枚の製品紹介 PPT を作成して', workPlan: '今日の作業計画を一覧にして',
       voice: '音声', voiceRequesting: 'マイクを要求中…', voiceListening: '聞き取り中 · クリックで停止', voiceUnsupported: 'このブラウザーは音声入力に対応していません', voiceDenied: 'マイクが拒否されました。ブラウザー設定で許可してください。', voiceNoSpeech: '音声を検出できませんでした。', voiceNetworkError: '音声認識ネットワークを利用できません', voiceError: '音声入力に失敗しました。', voiceStopped: '音声入力を停止しました',
-      openPreviewTitle: '右側のプレビューパネルで開く', openOnRight: '右側で開く', memoryLoadFailed: '読み込みに失敗しました', memoryUsed: '長期メモリを {count} 件使用', memoryLoading: '読み込み中…', memoryUnavailable: 'これらのメモリは利用できません', reasoning: '思考過程', reasoningActive: '思考中…', toolCallReady: '{name} を実行する準備中…', modelRetrying: 'モデルを再試行中', modelFailover: 'モデルプロバイダーを切り替えました', characters: '{count} 文字', clickExpand: 'クリックして展開', execution: '実行過程', runningSteps: '実行中 · {count} ステップ', steps: '{count} ステップ', failedSteps: '{count} 件失敗', answerFollows: '↓ 以下は上記の実行結果に基づく回答です', contextTitle: 'CONTEXT · 現在の会話', provider: 'プロバイダー：', backendConfigured: 'バックエンドの .env で一元設定', keyServerOnly: 'API Key はブラウザーに送信されません', copyContent: '内容をコピー', copy: 'コピー', editResend: '編集して再送信', edit: '編集', resendMessage: 'このメッセージを再送信', resend: '再送信', deleteMessage: 'このメッセージを削除', delete: '削除', model: 'モデル：{name}', latency: '遅延：{value} ms', elapsed: '所要時間 {value}', regenerate: '再生成', regenerateHint: '直前のユーザーメッセージから再生成', permissionRequest: '[権限リクエスト] {name}', allowContinue: '許可して続行', deny: '拒否', refineScope: '範囲を調整', permissionHandled: '権限リクエストはこのページで処理済みです', emptyTitle: '何をお手伝いしましょうか？', emptyHint: '質問を入力するか、下の例を選択してください', backToBottom: '一番下へ', replyIncomplete: 'タスクは未完了です。表示できるローカルファイルの記録はありません', replyPartiallyCompleted: 'タスクは未完了ですが、保存済みのローカルファイルにはアクセスでき、検証状態が表示されます', showSidebar: 'サイドバーを表示', hideSidebar: 'サイドバーを非表示',
+      openPreviewTitle: '右側のプレビューパネルで開く', openOnRight: '右側で開く', memoryLoadFailed: '読み込みに失敗しました', memoryUsed: '長期メモリを {count} 件使用', memoryLoading: '読み込み中…', memoryUnavailable: 'これらのメモリは利用できません', reasoning: '思考過程', reasoningActive: '思考中…', toolCallReady: '{name} を実行する準備中…', modelRetrying: 'モデルを再試行中', modelFailover: 'モデルプロバイダーを切り替えました', characters: '{count} 文字', clickExpand: 'クリックして展開', execution: '実行過程', runningSteps: '実行中 · {count} ステップ', steps: '{count} ステップ', failedSteps: '{count} 件失敗', answerFollows: '↓ 以下は上記の実行結果に基づく回答です', contextTitle: 'CONTEXT · 現在の会話', provider: 'プロバイダー：', keyServerOnly: 'API Key はブラウザーに送信されません', copyContent: '内容をコピー', copy: 'コピー', editResend: '編集して再送信', edit: '編集', resendMessage: 'このメッセージを再送信', resend: '再送信', deleteMessage: 'このメッセージを削除', delete: '削除', model: 'モデル：{name}', latency: '遅延：{value} ms', elapsed: '所要時間 {value}', regenerate: '再生成', regenerateHint: '直前のユーザーメッセージから再生成', permissionRequest: '[権限リクエスト] {name}', allowContinue: '許可して続行', deny: '拒否', refineScope: '範囲を調整', permissionHandled: '権限リクエストはこのページで処理済みです', emptyTitle: '何をお手伝いしましょうか？', emptyHint: '質問を入力するか、下の例を選択してください', backToBottom: '一番下へ', replyIncomplete: 'ファイルは生成されませんでした。上のエラーを確認し、修正してから再試行してください。', replyPartiallyCompleted: 'タスクは完了していませんが、保存済みのファイルは開けます。各ファイルの横に表示された状態を確認してください。', showSidebar: 'サイドバーを表示', hideSidebar: 'サイドバーを非表示',
     },
     history: { sessions: '会話', tasks: 'タスク', done: '[完了]', active: '[進行中]', failed: '[失敗]', image: '[画像]', unknownDate: '日付不明', unnamedSession: '無題の会話', messageCount: '{count} 件のメッセージ', session: '会話', emptySession: '空の会話', eyebrow: 'HISTORY · モデルとの記録', title: '一緒に取り組んだこと', search: '検索', unnamed: '無題', emptyTitle: '履歴はまだありません', emptyHint: '会話とタスクがここに表示されます', startChat: '会話を始める' },
     hooks: { eventUserPrompt: 'ユーザーメッセージ送信前', eventPreTool: 'ツール実行前（拒否可能）', eventPostTool: 'ツール実行後（監視）', eventStop: '会話ターン終了時', eventPreCompact: '圧縮前（拒否可能）', eventSessionStart: 'セッション作成', eventSessionEnd: 'セッション削除', eventSubagentStop: 'サブエージェント終了', eventNotification: '非同期通知', confirmDelete: 'この Hook を削除しますか？', subtitle: 'ツール実行の前後にスクリプトや HTTP コールバックを実行し、拒否・引数変更・監査ができます', add: 'Hook を追加', loading: '読み込み中…', empty: 'Hook はまだありません。「追加」から開始してください', disabled: '無効', blocking: 'ブロック', matchTimeout: '一致：{pattern} · タイムアウト {timeout}ms', choose: '左側で Hook を選択するか追加してください', edit: 'Hook を編集', create: '新しい Hook', event: 'トリガーイベント', toolPattern: 'ツール名の一致（glob、例 web_search / mcp__* / *）', argumentMatcher: '引数の一致（JSON）', argumentMatcherHint: '呼び出しにこれらのフィールドと値が含まれる場合のみ実行します。オブジェクトは再帰的な部分一致、配列は完全一致です。', argumentMatcherInvalid: '引数の一致には有効な JSON オブジェクトが必要です', argumentMatcherPlaceholder: '{\n  "path": "reports/final.md"\n}', argumentMatch: '引数', kind: 'Hook の種類', httpCallback: 'HTTP コールバック', shellEnabled: 'Shell（HOOKS_SHELL_ENABLED=1 が必要）', shellArgv: 'Shell argv（空白区切り、先頭が実行コマンド）', enabled: '有効', blockingMode: 'ブロック型（呼び出しを拒否可能）', timeout: 'タイムアウト（ms）', saving: '保存中…', save: '保存', test: 'テスト', delete: '削除' },
@@ -217,7 +217,7 @@ const FEATURE_PAGE_TRANSLATIONS = {
       progressLabel: '진행률', progressPhase: '단계: {phase}', progressSteps: '{completed}/{total}단계', progressCompleted: '{completed}단계 완료', progressTotal: '총 {total}단계', progressIteration: '{iteration}회차', progressFiles: '파일 {count}개', progressChanges: '+{additions} / -{deletions}',
       copied: '복사됨', copyFailed: '복사하지 못했습니다. 다시 시도하세요.', toolRunning: '실행 중', toolCompleted: '실행 완료', toolFailed: '실패', toolArguments: '인수', toolNoArguments: '(없음)', toolError: '오류', toolResult: '결과', toolUnknownError: '알 수 없는 오류', toolEmptyResult: '(비어 있음)', toolApplyPatch: '패치 적용', toolListDirectory: '디렉터리 보기', toolGrepCode: '코드 검색', toolFindSymbol: '기호 찾기', toolCurrentWorkspace: '(현재 작업 공간)', toolUnspecified: '(지정되지 않음)', toolFileCount: '파일 {count}개',
       voice: '음성', voiceRequesting: '마이크 권한 요청 중…', voiceListening: '듣는 중 · 클릭하여 중지', voiceUnsupported: '이 브라우저는 음성 입력을 지원하지 않습니다', voiceDenied: '마이크 권한이 거부되었습니다. 브라우저 설정에서 허용하세요.', voiceNoSpeech: '음성이 감지되지 않았습니다.', voiceNetworkError: '음성 인식 네트워크를 사용할 수 없습니다', voiceError: '음성 입력에 실패했습니다.', voiceStopped: '음성 입력을 중지했습니다',
-      weeklyReport: '이번 주 프로젝트 주간 보고서를 작성해 줘', salesExcel: '이 매출 데이터를 Excel로 만들고 분석해 줘', productPpt: '5장짜리 제품 소개 PPT를 만들어 줘', workPlan: '오늘의 업무 계획을 정리해 줘', openPreviewTitle: '오른쪽 미리보기 패널에서 열기', openOnRight: '오른쪽에서 열기', memoryLoadFailed: '불러오지 못했습니다', memoryUsed: '장기 메모리 {count}개 사용', memoryLoading: '불러오는 중…', memoryUnavailable: '이 메모리는 더 이상 사용할 수 없습니다', reasoning: '사고 과정', reasoningActive: '생각 중…', toolCallReady: '{name} 실행 준비 중…', modelRetrying: '모델 재시도 중', modelFailover: '모델 제공자 전환됨', characters: '{count}자', clickExpand: '클릭하여 펼치기', execution: '실행 과정', runningSteps: '진행 중 · {count}단계', steps: '{count}단계', failedSteps: '{count}단계 실패', answerFollows: '↓ 아래 답변은 위 실행 결과를 바탕으로 작성되었습니다', contextTitle: 'CONTEXT · 현재 대화', provider: '제공자:', backendConfigured: '백엔드 .env에서 통합 설정', keyServerOnly: 'API Key는 브라우저에 전달되지 않습니다', copyContent: '내용 복사', copy: '복사', editResend: '편집 후 다시 보내기', edit: '편집', resendMessage: '이 메시지 다시 보내기', resend: '다시 보내기', deleteMessage: '이 메시지 삭제', delete: '삭제', model: '모델: {name}', latency: '지연: {value} ms', elapsed: '소요 시간 {value}', regenerate: '다시 생성', regenerateHint: '이전 사용자 메시지로 다시 생성', permissionRequest: '[권한 요청] {name}', allowContinue: '허용하고 계속', deny: '거부', refineScope: '범위 조정', permissionHandled: '권한 요청이 이 페이지에서 처리되었습니다', emptyTitle: '무엇을 도와드릴까요?', emptyHint: '질문을 입력하거나 아래 예시를 선택하세요', backToBottom: '맨 아래로', replyIncomplete: '작업이 완료되지 않았으며 표시할 로컬 파일 기록이 없습니다', replyPartiallyCompleted: '작업이 완료되지 않았지만 저장된 로컬 파일에는 계속 접근할 수 있고 검증 상태가 표시됩니다', showSidebar: '사이드바 표시', hideSidebar: '사이드바 숨기기',
+      weeklyReport: '이번 주 프로젝트 주간 보고서를 작성해 줘', salesExcel: '이 매출 데이터를 Excel로 만들고 분석해 줘', productPpt: '5장짜리 제품 소개 PPT를 만들어 줘', workPlan: '오늘의 업무 계획을 정리해 줘', openPreviewTitle: '오른쪽 미리보기 패널에서 열기', openOnRight: '오른쪽에서 열기', memoryLoadFailed: '불러오지 못했습니다', memoryUsed: '장기 메모리 {count}개 사용', memoryLoading: '불러오는 중…', memoryUnavailable: '이 메모리는 더 이상 사용할 수 없습니다', reasoning: '사고 과정', reasoningActive: '생각 중…', toolCallReady: '{name} 실행 준비 중…', modelRetrying: '모델 재시도 중', modelFailover: '모델 제공자 전환됨', characters: '{count}자', clickExpand: '클릭하여 펼치기', execution: '실행 과정', runningSteps: '진행 중 · {count}단계', steps: '{count}단계', failedSteps: '{count}단계 실패', answerFollows: '↓ 아래 답변은 위 실행 결과를 바탕으로 작성되었습니다', contextTitle: 'CONTEXT · 현재 대화', provider: '제공자:', keyServerOnly: 'API Key는 브라우저에 전달되지 않습니다', copyContent: '내용 복사', copy: '복사', editResend: '편집 후 다시 보내기', edit: '편집', resendMessage: '이 메시지 다시 보내기', resend: '다시 보내기', deleteMessage: '이 메시지 삭제', delete: '삭제', model: '모델: {name}', latency: '지연: {value} ms', elapsed: '소요 시간 {value}', regenerate: '다시 생성', regenerateHint: '이전 사용자 메시지로 다시 생성', permissionRequest: '[권한 요청] {name}', allowContinue: '허용하고 계속', deny: '거부', refineScope: '범위 조정', permissionHandled: '권한 요청이 이 페이지에서 처리되었습니다', emptyTitle: '무엇을 도와드릴까요?', emptyHint: '질문을 입력하거나 아래 예시를 선택하세요', backToBottom: '맨 아래로', replyIncomplete: '파일이 생성되지 않았습니다. 위의 오류를 확인하고 수정한 뒤 다시 시도하세요.', replyPartiallyCompleted: '작업이 완료되지는 않았지만 저장된 파일은 열 수 있습니다. 각 파일 옆의 상태를 확인하세요.', showSidebar: '사이드바 표시', hideSidebar: '사이드바 숨기기',
     },
     history: { sessions: '대화', tasks: '작업', done: '[완료]', active: '[진행 중]', failed: '[실패]', image: '[이미지]', unknownDate: '날짜 알 수 없음', unnamedSession: '제목 없는 대화', messageCount: '메시지 {count}개', session: '대화', emptySession: '빈 대화', eyebrow: 'HISTORY · 모델과의 기록', title: '함께 작업한 내용', search: '검색', unnamed: '제목 없음', emptyTitle: '기록이 없습니다', emptyHint: '대화와 작업이 여기에 표시됩니다', startChat: '대화 시작' },
     hooks: { eventUserPrompt: '사용자 메시지 제출 전', eventPreTool: '도구 호출 전(거부 가능)', eventPostTool: '도구 호출 후(관찰)', eventStop: '대화 턴 종료', eventPreCompact: '압축 전(거부 가능)', eventSessionStart: '세션 생성', eventSessionEnd: '세션 삭제', eventSubagentStop: '하위 에이전트 종료', eventNotification: '비동기 알림', confirmDelete: '이 Hook을 삭제할까요?', subtitle: '도구 호출 전후에 사용자 스크립트나 HTTP 콜백을 실행해 거부, 인수 변경, 감사를 할 수 있습니다', add: 'Hook 추가', loading: '불러오는 중…', empty: 'Hook이 없습니다. 추가 버튼으로 시작하세요.', disabled: '비활성화됨', blocking: '차단', matchTimeout: '일치: {pattern} · 제한 시간 {timeout}ms', choose: '왼쪽에서 Hook을 선택하거나 추가하세요', edit: 'Hook 편집', create: '새 Hook', event: '트리거 이벤트', toolPattern: '도구 이름 일치(glob, 예: web_search / mcp__* / *)', argumentMatcher: '인수 일치(JSON)', argumentMatcherHint: '호출에 해당 필드와 값이 포함될 때만 실행합니다. 객체는 재귀 부분 일치, 배열은 완전 일치입니다.', argumentMatcherInvalid: '인수 일치는 유효한 JSON 객체여야 합니다', argumentMatcherPlaceholder: '{\n  "path": "reports/final.md"\n}', argumentMatch: '인수', kind: 'Hook 유형', httpCallback: 'HTTP 콜백', shellEnabled: 'Shell(HOOKS_SHELL_ENABLED=1 필요)', shellArgv: 'Shell argv(공백 구분, 첫 항목은 실행 명령)', enabled: '활성화', blockingMode: '차단형(호출 거부 가능)', timeout: '제한 시간(ms)', saving: '저장 중…', save: '저장', test: '테스트', delete: '삭제' },
@@ -228,23 +228,23 @@ const FEATURE_PAGE_TRANSLATIONS = {
       progressLabel: '進度', progressPhase: '階段：{phase}', progressSteps: '第 {completed}/{total} 步', progressCompleted: '已完成 {completed} 步', progressTotal: '共 {total} 步', progressIteration: '第 {iteration} 輪', progressFiles: '{count} 個檔案', progressChanges: '+{additions} / -{deletions}',
       copied: '已複製', copyFailed: '複製失敗，請重試', toolRunning: '正在執行', toolCompleted: '已執行', toolFailed: '失敗', toolArguments: '參數', toolNoArguments: '（無）', toolError: '錯誤', toolResult: '結果', toolUnknownError: '未知錯誤', toolEmptyResult: '（空）', toolApplyPatch: '套用修補', toolListDirectory: '查看目錄', toolGrepCode: '搜尋程式碼', toolFindSymbol: '尋找符號', toolCurrentWorkspace: '（目前工作區）', toolUnspecified: '（未指定）', toolFileCount: '{count} 個檔案',
       voice: '語音', voiceRequesting: '正在請求麥克風…', voiceListening: '聆聽中 · 點擊停止', voiceUnsupported: '目前瀏覽器不支援語音輸入', voiceDenied: '麥克風權限遭拒，請在瀏覽器設定中允許', voiceNoSpeech: '沒有偵測到語音，請重試', voiceNetworkError: '語音辨識網路無法使用', voiceError: '語音輸入失敗，請重試', voiceStopped: '已停止語音輸入',
-      weeklyReport: '幫我寫一份本週專案週報', salesExcel: '把這段銷售資料生成 Excel 表格並分析', productPpt: '生成一份 5 頁的產品介紹 PPT', workPlan: '幫我列出今天的工作計劃', openPreviewTitle: '在右側預覽面板開啟', openOnRight: '在右側開啟', memoryLoadFailed: '載入失敗', memoryUsed: '使用了 {count} 條長期記憶', memoryLoading: '載入中…', memoryUnavailable: '這些記憶已無法使用', reasoning: '思考過程', reasoningActive: '思考中…', toolCallReady: '正在準備執行 {name}…', modelRetrying: '正在重試模型', modelFailover: '已切換模型提供方', characters: '{count} 字', clickExpand: '點擊展開', execution: '執行過程', runningSteps: '進行中 · {count} 步', steps: '{count} 步', failedSteps: '{count} 步失敗', answerFollows: '↓ 以下是根據上述執行結果提供的答覆', contextTitle: 'CONTEXT · 目前會話上下文', provider: '提供商：', backendConfigured: '由後端 .env 統一設定', keyServerOnly: 'API Key 不進入瀏覽器', copyContent: '複製內容', copy: '複製', editResend: '編輯並重送', edit: '編輯', resendMessage: '重新傳送本條', resend: '重送', deleteMessage: '刪除本條', delete: '刪除', model: '模型：{name}', latency: '延遲：{value} ms', elapsed: '耗時 {value}', regenerate: '重新生成', regenerateHint: '根據上一條使用者訊息重新生成回覆', permissionRequest: '[請求授權] {name}', allowContinue: '允許並繼續', deny: '拒絕', refineScope: '細化範圍', permissionHandled: '權限請求已在本頁處理', emptyTitle: '有什麼可以幫你的？', emptyHint: '輸入問題，或直接點擊下方範例開始', backToBottom: '回到底部', replyIncomplete: '任務未完成，目前沒有可顯示的本機檔案回執', replyPartiallyCompleted: '任務未完成；已提交的本機檔案仍可存取，驗證狀態以檔案標記為準', showSidebar: '顯示側邊欄', hideSidebar: '隱藏側邊欄',
+      weeklyReport: '幫我寫一份本週專案週報', salesExcel: '把這段銷售資料生成 Excel 表格並分析', productPpt: '生成一份 5 頁的產品介紹 PPT', workPlan: '幫我列出今天的工作計劃', openPreviewTitle: '在右側預覽面板開啟', openOnRight: '在右側開啟', memoryLoadFailed: '載入失敗', memoryUsed: '使用了 {count} 條長期記憶', memoryLoading: '載入中…', memoryUnavailable: '這些記憶已無法使用', reasoning: '思考過程', reasoningActive: '思考中…', toolCallReady: '正在準備執行 {name}…', modelRetrying: '正在重試模型', modelFailover: '已切換模型提供方', characters: '{count} 字', clickExpand: '點擊展開', execution: '執行過程', runningSteps: '進行中 · {count} 步', steps: '{count} 步', failedSteps: '{count} 步失敗', answerFollows: '↓ 以下是根據上述執行結果提供的答覆', contextTitle: 'CONTEXT · 目前會話上下文', provider: '提供商：', keyServerOnly: 'API Key 不進入瀏覽器', copyContent: '複製內容', copy: '複製', editResend: '編輯並重送', edit: '編輯', resendMessage: '重新傳送本條', resend: '重送', deleteMessage: '刪除本條', delete: '刪除', model: '模型：{name}', latency: '延遲：{value} ms', elapsed: '耗時 {value}', regenerate: '重新生成', regenerateHint: '根據上一條使用者訊息重新生成回覆', permissionRequest: '[請求授權] {name}', allowContinue: '允許並繼續', deny: '拒絕', refineScope: '細化範圍', permissionHandled: '權限請求已在本頁處理', emptyTitle: '有什麼可以幫你的？', emptyHint: '輸入問題，或直接點擊下方範例開始', backToBottom: '回到底部', replyIncomplete: '檔案沒有產生。請查看上方原因，調整後再試一次。', replyPartiallyCompleted: '任務未全部完成，但已儲存的檔案仍可開啟；請依檔案旁的狀態確認結果。', showSidebar: '顯示側邊欄', hideSidebar: '隱藏側邊欄',
     },
     history: { sessions: '會話', tasks: '任務', done: '[完成]', active: '[進行中]', failed: '[失敗]', image: '[圖片]', unknownDate: '未知日期', unnamedSession: '未命名會話', messageCount: '{count} 條訊息', session: '會話', emptySession: '空會話', eyebrow: 'HISTORY · 你和模型的記錄', title: '合作過的事', search: '搜尋', unnamed: '未命名', emptyTitle: '還沒有記錄', emptyHint: '你和模型的對話與任務會出現在這裡', startChat: '開始對話' },
     hooks: { eventUserPrompt: '使用者訊息提交前', eventPreTool: '工具呼叫前（可拒絕）', eventPostTool: '工具呼叫後（觀察）', eventStop: '一輪對話結束', eventPreCompact: '壓縮前（可拒絕）', eventSessionStart: '會話建立', eventSessionEnd: '會話刪除', eventSubagentStop: '子代理結束', eventNotification: '非同步通知', confirmDelete: '刪除這個 Hook？', subtitle: '在工具呼叫前後掛載自訂腳本或 HTTP 回呼；可拒絕、改寫參數與稽核', add: '新增 Hook', loading: '載入中…', empty: '還沒有 Hook，點「新增」開始', disabled: '已停用', blocking: '阻塞', matchTimeout: '匹配：{pattern} · 逾時 {timeout}ms', choose: '在左側選擇 Hook，或點「新增」', edit: '編輯 Hook', create: '新增 Hook', event: '觸發事件', toolPattern: '工具名稱匹配（glob，例如 web_search / mcp__* / *）', argumentMatcher: '參數匹配（JSON）', argumentMatcherHint: '僅在呼叫參數包含這些欄位和值時觸發；物件採遞迴子集匹配，陣列需完全一致。', argumentMatcherInvalid: '參數匹配必須是有效的 JSON 物件', argumentMatcherPlaceholder: '{\n  "path": "reports/final.md"\n}', argumentMatch: '參數', kind: 'Hook 類型', httpCallback: 'HTTP 回呼', shellEnabled: 'Shell（需 HOOKS_SHELL_ENABLED=1）', shellArgv: 'Shell argv（空格分隔；第一個元素是執行命令）', enabled: '啟用', blockingMode: '阻塞型（可拒絕呼叫）', timeout: '逾時（ms）', saving: '儲存中…', save: '儲存', test: '測試', delete: '刪除' },
   },
 }
 
-Object.assign(FEATURE_PAGE_TRANSLATIONS.zh.chatMessages, { replyPartiallyCompleted: '任务未完成；已提交的本地文件仍可访问，验证状态以文件标记为准' })
-Object.assign(FEATURE_PAGE_TRANSLATIONS.en.chatMessages, { replyPartiallyCompleted: 'Task not completed; committed local files remain accessible with their validation status shown' })
-Object.assign(FEATURE_PAGE_TRANSLATIONS.ja.chatMessages, { replyPartiallyCompleted: 'タスクは未完了ですが、保存済みのローカルファイルにはアクセスでき、検証状態が表示されます' })
-Object.assign(FEATURE_PAGE_TRANSLATIONS.ko.chatMessages, { replyPartiallyCompleted: '작업이 완료되지 않았지만 저장된 로컬 파일에는 계속 접근할 수 있고 검증 상태가 표시됩니다' })
-Object.assign(FEATURE_PAGE_TRANSLATIONS['zh-TW'].chatMessages, { replyPartiallyCompleted: '任務未完成；已提交的本機檔案仍可存取，驗證狀態以檔案標記為準' })
+Object.assign(FEATURE_PAGE_TRANSLATIONS.zh.chatMessages, { replyPartiallyCompleted: '任务未全部完成，但已保存的文件仍可打开；请按文件旁的状态确认结果。' })
+Object.assign(FEATURE_PAGE_TRANSLATIONS.en.chatMessages, { replyPartiallyCompleted: 'The task did not fully complete, but saved files remain available. Check the status shown beside each file.' })
+Object.assign(FEATURE_PAGE_TRANSLATIONS.ja.chatMessages, { replyPartiallyCompleted: 'タスクは完了していませんが、保存済みのファイルは開けます。各ファイルの横に表示された状態を確認してください。' })
+Object.assign(FEATURE_PAGE_TRANSLATIONS.ko.chatMessages, { replyPartiallyCompleted: '작업이 완료되지는 않았지만 저장된 파일은 열 수 있습니다. 각 파일 옆의 상태를 확인하세요.' })
+Object.assign(FEATURE_PAGE_TRANSLATIONS['zh-TW'].chatMessages, { replyPartiallyCompleted: '任務未全部完成，但已儲存的檔案仍可開啟；請依檔案旁的狀態確認結果。' })
 
 Object.assign(FEATURE_PAGE_TRANSLATIONS.zh.chatMessages, {
   preparingTask: '正在准备任务…', waitingForModel: '正在等待模型响应…', draftingResponse: '正在生成回复…', reviewingResults: '正在整理执行结果…', continuingTask: '正在继续处理…', reconnectingTask: '连接中断，正在重连…', cancellingTask: '正在停止任务…', toolLiveOutput: '实时输出', toolLiveOutputHint: '展开查看完整输出',
   artifactReadyGeneric: '任务已完成，最终文件已准备好。', artifactReadySingle: '任务已完成，{type} 文件已准备好：{filename}', artifactReadySingleFile: '任务已完成，最终文件已准备好：{filename}', artifactReadyMultiple: '任务已完成，{count} 个最终文件已准备好：{filenames}',
-  durationMinutesSeconds: '{minutes} 分钟 {seconds} 秒', durationSeconds: '{seconds} 秒',
+  durationLessThanSecond: '少于 1 秒', durationMinutesSeconds: '{minutes} 分钟 {seconds} 秒', durationSeconds: '{seconds} 秒',
   progressPhaseToolCompleted: '工具已完成', progressPhaseBatchCompleted: '本批次已完成', progressPhaseVerify: '验证中', progressPhaseEditing: '编辑中',
   executionSummary: '{completed}/{total}', executionToggle: '{state}执行过程，已完成 {completed}/{total} 步', expand: '展开', collapse: '收起', stepNumber: '第 {number} 步',
   toolEmptyValue: '（空）', toolEditCount: '{count} 个编辑', toolUnknown: '工具',
@@ -254,7 +254,7 @@ Object.assign(FEATURE_PAGE_TRANSLATIONS.zh.chatMessages, {
 Object.assign(FEATURE_PAGE_TRANSLATIONS.en.chatMessages, {
   preparingTask: 'Preparing task…', waitingForModel: 'Waiting for the model…', draftingResponse: 'Drafting response…', reviewingResults: 'Reviewing execution results…', continuingTask: 'Continuing the task…', reconnectingTask: 'Connection lost. Reconnecting…', cancellingTask: 'Stopping task…', toolLiveOutput: 'Live output', toolLiveOutputHint: 'Expand to view full output',
   artifactReadyGeneric: 'Task completed. The final file is ready.', artifactReadySingle: 'Task completed. The {type} file is ready: {filename}', artifactReadySingleFile: 'Task completed. The final file is ready: {filename}', artifactReadyMultiple: 'Task completed. {count} final files are ready: {filenames}',
-  durationMinutesSeconds: '{minutes}m {seconds}s', durationSeconds: '{seconds}s',
+  durationLessThanSecond: '<1s', durationMinutesSeconds: '{minutes}m {seconds}s', durationSeconds: '{seconds}s',
   progressPhaseToolCompleted: 'Tool completed', progressPhaseBatchCompleted: 'Batch completed', progressPhaseVerify: 'Verifying', progressPhaseEditing: 'Editing',
   executionSummary: '{completed}/{total}', executionToggle: '{state} execution, {completed} of {total} steps completed', expand: 'Expand', collapse: 'Collapse', stepNumber: 'Step {number}',
   toolEmptyValue: '(empty)', toolEditCount: '{count} edits', toolUnknown: 'Tool',
@@ -264,7 +264,7 @@ Object.assign(FEATURE_PAGE_TRANSLATIONS.en.chatMessages, {
 Object.assign(FEATURE_PAGE_TRANSLATIONS.ja.chatMessages, {
   preparingTask: 'タスクを準備中…', waitingForModel: 'モデルの応答を待機中…', draftingResponse: '回答を作成中…', reviewingResults: '実行結果を確認中…', continuingTask: 'タスクを続行中…', reconnectingTask: '接続が切れました。再接続中…', cancellingTask: 'タスクを停止中…', toolLiveOutput: 'ライブ出力', toolLiveOutputHint: '展開して出力全体を表示',
   artifactReadyGeneric: 'タスクが完了し、最終ファイルの準備ができました。', artifactReadySingle: 'タスクが完了しました。{type} ファイルの準備ができました：{filename}', artifactReadySingleFile: 'タスクが完了しました。最終ファイルの準備ができました：{filename}', artifactReadyMultiple: 'タスクが完了しました。{count} 件の最終ファイルの準備ができました：{filenames}',
-  durationMinutesSeconds: '{minutes}分{seconds}秒', durationSeconds: '{seconds}秒',
+  durationLessThanSecond: '1秒未満', durationMinutesSeconds: '{minutes}分{seconds}秒', durationSeconds: '{seconds}秒',
   progressPhaseToolCompleted: 'ツール完了', progressPhaseBatchCompleted: 'バッチ完了', progressPhaseVerify: '検証中', progressPhaseEditing: '編集中',
   executionSummary: '{completed}/{total}', executionToggle: '実行過程を{state}、{completed}/{total} ステップ完了', expand: '展開', collapse: '折りたたむ', stepNumber: 'ステップ {number}',
   toolEmptyValue: '（空）', toolEditCount: '{count} 件の編集', toolUnknown: 'ツール',
@@ -274,7 +274,7 @@ Object.assign(FEATURE_PAGE_TRANSLATIONS.ja.chatMessages, {
 Object.assign(FEATURE_PAGE_TRANSLATIONS.ko.chatMessages, {
   preparingTask: '작업 준비 중…', waitingForModel: '모델 응답 대기 중…', draftingResponse: '답변 작성 중…', reviewingResults: '실행 결과 검토 중…', continuingTask: '작업 계속 진행 중…', reconnectingTask: '연결이 끊겼습니다. 다시 연결 중…', cancellingTask: '작업 중지 중…', toolLiveOutput: '실시간 출력', toolLiveOutputHint: '펼쳐서 전체 출력 보기',
   artifactReadyGeneric: '작업이 완료되어 최종 파일이 준비되었습니다.', artifactReadySingle: '작업이 완료되었습니다. {type} 파일이 준비되었습니다: {filename}', artifactReadySingleFile: '작업이 완료되었습니다. 최종 파일이 준비되었습니다: {filename}', artifactReadyMultiple: '작업이 완료되었습니다. 최종 파일 {count}개가 준비되었습니다: {filenames}',
-  durationMinutesSeconds: '{minutes}분 {seconds}초', durationSeconds: '{seconds}초',
+  durationLessThanSecond: '1초 미만', durationMinutesSeconds: '{minutes}분 {seconds}초', durationSeconds: '{seconds}초',
   progressPhaseToolCompleted: '도구 완료', progressPhaseBatchCompleted: '일괄 작업 완료', progressPhaseVerify: '검증 중', progressPhaseEditing: '편집 중',
   executionSummary: '{completed}/{total}', executionToggle: '실행 과정을 {state}, {completed}/{total}단계 완료', expand: '펼치기', collapse: '접기', stepNumber: '{number}단계',
   toolEmptyValue: '(비어 있음)', toolEditCount: '편집 {count}개', toolUnknown: '도구',
@@ -284,12 +284,53 @@ Object.assign(FEATURE_PAGE_TRANSLATIONS.ko.chatMessages, {
 Object.assign(FEATURE_PAGE_TRANSLATIONS['zh-TW'].chatMessages, {
   preparingTask: '正在準備任務…', waitingForModel: '正在等待模型回應…', draftingResponse: '正在產生回覆…', reviewingResults: '正在整理執行結果…', continuingTask: '正在繼續處理…', reconnectingTask: '連線中斷，正在重新連線…', cancellingTask: '正在停止任務…', toolLiveOutput: '即時輸出', toolLiveOutputHint: '展開查看完整輸出',
   artifactReadyGeneric: '任務已完成，最終檔案已準備好。', artifactReadySingle: '任務已完成，{type} 檔案已準備好：{filename}', artifactReadySingleFile: '任務已完成，最終檔案已準備好：{filename}', artifactReadyMultiple: '任務已完成，{count} 個最終檔案已準備好：{filenames}',
-  durationMinutesSeconds: '{minutes} 分鐘 {seconds} 秒', durationSeconds: '{seconds} 秒',
+  durationLessThanSecond: '少於 1 秒', durationMinutesSeconds: '{minutes} 分鐘 {seconds} 秒', durationSeconds: '{seconds} 秒',
   progressPhaseToolCompleted: '工具已完成', progressPhaseBatchCompleted: '本批次已完成', progressPhaseVerify: '驗證中', progressPhaseEditing: '編輯中',
   executionSummary: '{completed}/{total}', executionToggle: '{state}執行過程，已完成 {completed}/{total} 步', expand: '展開', collapse: '收合', stepNumber: '第 {number} 步',
   toolEmptyValue: '（空）', toolEditCount: '{count} 個編輯', toolUnknown: '工具',
   toolWebSearch: '網頁搜尋', toolFetchUrl: '擷取連結', toolCreatePptx: '產生 PPT', toolCreateDocx: '產生 Word', toolCreateXlsx: '產生 Excel', toolCreatePdf: '產生 PDF', toolRenderPdfPages: '轉譯 PDF 頁面', toolCreateReactComponent: 'React 元件', toolCreateMermaid: '流程圖', toolCreateChart: '圖表', toolCreateSvg: 'SVG 圖形', toolCreateHtmlApp: 'HTML 應用', toolAgent: '子代理', toolReadFile: '讀取檔案', toolWriteFile: '寫入檔案', toolEditFile: '編輯檔案', toolMultiEdit: '批次編輯', toolBashExec: '執行命令', toolRunTest: '執行測試', toolDockerExec: '容器命令', toolBackgroundCommand: '背景任務', toolProcessList: '檢查背景任務', toolProcessKill: '停止背景任務', toolGitStatus: 'Git 狀態', toolGitDiff: 'Git 差異', toolRunProjectCheck: '專案檢查', toolManageTodos: '更新計畫', toolRequestDirectory: '請求資料夾權限', toolRequestClarification: '等待確認', toolSetDeliverables: '確認最終交付', toolRewindFiles: '回退檔案', toolListImports: '分析相依性', toolReflect: '檢查進度', toolTodoCount: '{count} 項任務', toolDeliverableCount: '{count} 個最終檔案', toolBackgroundProcesses: '背景程序', toolReviewingProgress: '複核目前結果',
   subagentFallback: '子代理', subagentType: '代理 · {type}', subagentGeneral: '通用', subagentPrompt: '任務說明', subagentResult: '結果',
+})
+
+Object.assign(FEATURE_PAGE_TRANSLATIONS.zh.chatMessages, {
+  sideEffectUnknownTitle: '操作结果不确定，已停止自动重试',
+  sideEffectUnknownBody: '该操作可能已经写入、发送或产生费用。请前往“设置 → 操作恢复”核验真实结果；在你确认前，系统不会自动再次执行。',
+  openSideEffectRecovery: '前往设置 → 操作恢复',
+  modelRequestUnknownTitle: '模型请求结果尚未确认',
+  modelRequestUnknownBody: '为避免重复请求并产生上游 Provider 费用，系统没有自动重试。请先核对上游记录，再在恢复页裁决。',
+  openModelRequestRecovery: '打开模型请求恢复',
+})
+Object.assign(FEATURE_PAGE_TRANSLATIONS.en.chatMessages, {
+  sideEffectUnknownTitle: 'Operation outcome unknown; automatic retry stopped',
+  sideEffectUnknownBody: 'The operation may already have written data, sent a message, or incurred a charge. Verify the real outcome in Settings → Operation recovery. It will not run again until you confirm.',
+  openSideEffectRecovery: 'Open Settings → Operation recovery',
+  modelRequestUnknownTitle: 'Model request outcome is unknown',
+  modelRequestUnknownBody: 'Automatic retry was blocked to avoid a duplicate request and another upstream provider charge. Verify the provider record before deciding.',
+  openModelRequestRecovery: 'Open model request recovery',
+})
+Object.assign(FEATURE_PAGE_TRANSLATIONS.ja.chatMessages, {
+  sideEffectUnknownTitle: '操作結果が不明なため、自動再試行を停止しました',
+  sideEffectUnknownBody: '書き込み、送信、課金がすでに発生している可能性があります。「設定 → 操作の復旧」で実際の結果を確認してください。確認するまで自動的に再実行されません。',
+  openSideEffectRecovery: '設定 → 操作の復旧を開く',
+  modelRequestUnknownTitle: 'モデルリクエストの結果を確認できません',
+  modelRequestUnknownBody: 'リクエストと課金の重複を避けるため、自動再試行を停止しました。判断する前に Provider の記録を確認してください。',
+  openModelRequestRecovery: 'モデルリクエストの復旧を開く',
+})
+Object.assign(FEATURE_PAGE_TRANSLATIONS.ko.chatMessages, {
+  sideEffectUnknownTitle: '작업 결과를 알 수 없어 자동 재시도를 중지했습니다',
+  sideEffectUnknownBody: '쓰기, 전송 또는 과금이 이미 발생했을 수 있습니다. “설정 → 작업 복구”에서 실제 결과를 확인하세요. 확인 전에는 자동으로 다시 실행되지 않습니다.',
+  openSideEffectRecovery: '설정 → 작업 복구 열기',
+  modelRequestUnknownTitle: '모델 요청 결과를 확인할 수 없습니다',
+  modelRequestUnknownBody: '요청 및 과금 중복을 방지하기 위해 자동 재시도를 중지했습니다. 결정하기 전에 Provider 기록을 확인하세요.',
+  openModelRequestRecovery: '모델 요청 복구 열기',
+})
+Object.assign(FEATURE_PAGE_TRANSLATIONS['zh-TW'].chatMessages, {
+  sideEffectUnknownTitle: '操作結果不確定，已停止自動重試',
+  sideEffectUnknownBody: '該操作可能已經寫入、傳送或產生費用。請前往「設定 → 操作恢復」核驗真實結果；在你確認前，系統不會自動再次執行。',
+  openSideEffectRecovery: '前往設定 → 操作恢復',
+  modelRequestUnknownTitle: '模型請求結果尚未確認',
+  modelRequestUnknownBody: '為避免重複請求和重複計費，系統沒有自動重試。請先核對上游記錄，再到恢復頁面作出裁決。',
+  openModelRequestRecovery: '開啟模型請求恢復',
 })
 
 const ACCESS_TRANSLATIONS = {
@@ -824,6 +865,8 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     themeDescription: '选择浅色、纯白、深色或跟随系统。', accentColor: '强调色', accentColorDescription: '用于主要操作和状态提示。', setAccentColor: '设置强调色 {color}', strongAccent: '强色调模式', strongAccentDescription: '仅增强工作台主要控件，不影响输出文件和预览内容。',
     fontSize: '字体大小', fontSizeDescription: '调整工作台正文大小。', sizeSmall: '小', sizeMedium: '中', sizeLarge: '大', density: '界面密度', densityDescription: '控制列表和控件间距。', densityCompact: '紧凑', densityComfortable: '舒适', densityLoose: '宽松', animations: '动画效果', animationsDescription: '启用轻量过渡与状态动画。',
     pluginsDescription: '管理技能插件与 MCP 扩展。', skillPlugins: '技能插件', skillPluginsDescription: '浏览并安装可复用技能包。', managePlugins: '管理插件', mcpExtensions: 'MCP 扩展', mcpExtensionsDescription: '连接外部工具、资源与 prompts。', manageMcp: '管理 MCP', runtimePlugins: '运行时插件', runtimePluginsDescription: '管理本机 transformer 插件的启停与重载（仅本机所有者）。', runtimePluginsLocalOnlyHint: '运行时插件只能由服务宿主机上的本机所有者管理。', pluginActive: '运行中', pluginEnabled: '已启用', pluginInactive: '未启用', pluginEnable: '启用', pluginDisable: '禁用', pluginReload: '重载', pluginLocalOwnerOnly: '仅本机所有者可管理', pluginLoadFailed: '插件清单加载失败', pluginLoading: '正在加载…', pluginNone: '暂无已安装的 transformer 插件', pluginNoneHint: '可在外挂目录中安装 transformer 插件后回到这里启用.',
+    pluginRevokePermissions: '撤销授权', pluginRevokePermissionsHint: '撤销本机保存的权限授权并停用此插件。', pluginPermissionReviewTitle: '需要确认插件权限', pluginPermissionReviewHint: '请仅在信任此插件及其来源时继续。', pluginPermissionVersion: '版本', pluginPermissionSource: '源码指纹', pluginPermissionRequested: '请求的权限', pluginPermissionChangeHint: '插件版本、源码或权限清单发生变化后，现有授权会失效并再次要求确认。', pluginPermissionCancel: '取消', pluginPermissionApprove: '确认并继续',
+    pluginActionFailedTitle: '插件操作未完成', pluginActionFailedHint: '服务端未确认此操作，当前插件状态保持不变。', pluginRevokeFailedTitle: '授权撤销/停止未完成', pluginRevokeFailedHint: '服务端未确认撤销；现有授权与插件运行状态保持不变，请检查后重试。',
     agentPresetsDescription: '管理人物、性格和 Agent 模板。', agentProfiles: 'Agent 配置', agentProfilesDescription: '编辑角色卡、技能和预设模板。', manageAgents: '管理 Agent', visionAssist: '视觉辅助',
     aboutDescription: '查看运行模式、模型连接与系统状态。', runtimeMode: '运行模式', multiUserDescription: '当前使用账户隔离的多用户模式。', localMode: '本地单机', multiUserMode: '多用户', systemDiagnosticsDescription: '刷新状态或主动探测模型端点。', probeEndpoint: '探测端点', modelService: '模型服务', endpointStatus: '端点状态', endpointReady: '端点可用', endpointUnavailable: '端点不可用', endpointUnchecked: '尚未探测', testModel: '测试模型', testModelDescription: '发送一条最小测试请求验证配置。', availableModels: '可用模型', availableModelsDescription: '当前返回 {count} 个模型。', emailLogin: '邮箱登录', smtpService: 'SMTP 服务', smtpConfigured: '已配置', smtpWaiting: '未配置',
   },
@@ -836,6 +879,8 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     themeDescription: 'Choose light, white, dark, or system appearance.', accentColor: 'Accent color', accentColorDescription: 'Used for primary actions and status.', setAccentColor: 'Set accent color {color}', strongAccent: 'Strong accent', strongAccentDescription: 'Only strengthens primary workbench controls; output files and previews stay unchanged.',
     fontSize: 'Font size', fontSizeDescription: 'Adjust workbench body text.', sizeSmall: 'Small', sizeMedium: 'Medium', sizeLarge: 'Large', density: 'Interface density', densityDescription: 'Control spacing in lists and controls.', densityCompact: 'Compact', densityComfortable: 'Comfortable', densityLoose: 'Spacious', animations: 'Animations', animationsDescription: 'Enable lightweight transitions and status motion.',
     pluginsDescription: 'Manage skill plugins and MCP extensions.', skillPlugins: 'Skill plugins', skillPluginsDescription: 'Browse and install reusable skill bundles.', managePlugins: 'Manage plugins', mcpExtensions: 'MCP extensions', mcpExtensionsDescription: 'Connect external tools, resources, and prompts.', manageMcp: 'Manage MCP', runtimePlugins: 'Runtime plugins', runtimePluginsDescription: 'Manage enable, disable, and reload for local transformer plugins (local owner only).', runtimePluginsLocalOnlyHint: 'Runtime plugins can only be managed by the local owner on this machine.', pluginActive: 'Active', pluginEnabled: 'Enabled', pluginInactive: 'Inactive', pluginEnable: 'Enable', pluginDisable: 'Disable', pluginReload: 'Reload', pluginLocalOwnerOnly: 'Local owner only', pluginLoadFailed: 'Failed to load plugin inventory', pluginLoading: 'Loading…', pluginNone: 'No transformer plugins installed', pluginNoneHint: 'Install transformer plugins in the plugin directory, then enable them here.',
+    pluginRevokePermissions: 'Revoke access', pluginRevokePermissionsHint: 'Revoke the permission grant stored on this machine and disable the plugin.', pluginPermissionReviewTitle: 'Review plugin permissions', pluginPermissionReviewHint: 'Continue only if you trust this plugin and its source.', pluginPermissionVersion: 'Version', pluginPermissionSource: 'Source fingerprint', pluginPermissionRequested: 'Requested permissions', pluginPermissionChangeHint: 'A version, source, or permission-list change invalidates the existing grant and requires another review.', pluginPermissionCancel: 'Cancel', pluginPermissionApprove: 'Approve and continue',
+    pluginActionFailedTitle: 'Plugin action not completed', pluginActionFailedHint: 'The server did not confirm this action. The current plugin state is unchanged.', pluginRevokeFailedTitle: 'Access revocation / stop not completed', pluginRevokeFailedHint: 'The server did not confirm revocation. The existing grant and runtime state remain unchanged; check the issue and retry.',
     agentPresetsDescription: 'Manage personas, profiles, and Agent templates.', agentProfiles: 'Agent profiles', agentProfilesDescription: 'Edit character cards, skills, and templates.', manageAgents: 'Manage Agents', visionAssist: 'Vision assistance',
     aboutDescription: 'Review runtime mode, model connectivity, and system status.', runtimeMode: 'Runtime mode', multiUserDescription: 'Account-isolated multi-user mode is active.', localMode: 'Local', multiUserMode: 'Multi-user', systemDiagnosticsDescription: 'Refresh status or probe the model endpoint.', probeEndpoint: 'Probe endpoint', modelService: 'Model service', endpointStatus: 'Endpoint status', endpointReady: 'Endpoint available', endpointUnavailable: 'Endpoint unavailable', endpointUnchecked: 'Not checked', testModel: 'Test model', testModelDescription: 'Send a minimal request to verify the configuration.', availableModels: 'Available models', availableModelsDescription: '{count} models are currently available.', emailLogin: 'Email sign-in', smtpService: 'SMTP service', smtpConfigured: 'Configured', smtpWaiting: 'Not configured',
   },
@@ -848,6 +893,8 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     themeDescription: 'ライト、ホワイト、ダーク、システム連動から選択します。', accentColor: 'アクセント色', accentColorDescription: '主要操作と状態表示に使用します。', setAccentColor: 'アクセント色 {color} を設定', strongAccent: '強いアクセント', strongAccentDescription: 'ワークベンチの主要操作だけを強調し、出力ファイルやプレビューには影響しません。',
     fontSize: '文字サイズ', fontSizeDescription: '本文の大きさを調整します。', sizeSmall: '小', sizeMedium: '中', sizeLarge: '大', density: '表示密度', densityDescription: '一覧とコントロールの間隔を調整します。', densityCompact: 'コンパクト', densityComfortable: '標準', densityLoose: 'ゆったり', animations: 'アニメーション', animationsDescription: '軽い画面遷移と状態アニメーションを有効にします。',
     pluginsDescription: 'スキルプラグインと MCP 拡張を管理します。', skillPlugins: 'スキルプラグイン', skillPluginsDescription: '再利用可能なスキルを参照・インストールします。', managePlugins: 'プラグインを管理', mcpExtensions: 'MCP 拡張', mcpExtensionsDescription: '外部ツール、リソース、prompts を接続します。', manageMcp: 'MCP を管理', runtimePlugins: 'ランタイムプラグイン', runtimePluginsDescription: 'ローカルの transformer プラグインの有効化・無効化・再読み込みを管理します（ローカル所有者のみ）。', runtimePluginsLocalOnlyHint: 'ランタイムプラグインはこのマシンのローカル所有者のみが管理できます。', pluginActive: '実行中', pluginEnabled: '有効', pluginInactive: '未有効', pluginEnable: '有効化', pluginDisable: '無効化', pluginReload: '再読み込み', pluginLocalOwnerOnly: 'ローカル所有者のみ', pluginLoadFailed: 'プラグイン一覧を読み込めませんでした', pluginLoading: '読み込み中…', pluginNone: 'インストール済みの transformer プラグインはありません', pluginNoneHint: 'プラグインディレクトリに transformer プラグインを配置し、ここで有効化してください。',
+    pluginRevokePermissions: '権限を取り消す', pluginRevokePermissionsHint: 'このマシンに保存された権限承認を取り消し、プラグインを無効化します。', pluginPermissionReviewTitle: 'プラグインの権限を確認', pluginPermissionReviewHint: 'このプラグインと入手元を信頼できる場合のみ続行してください。', pluginPermissionVersion: 'バージョン', pluginPermissionSource: 'ソース指紋', pluginPermissionRequested: '要求された権限', pluginPermissionChangeHint: 'バージョン、ソース、または権限一覧が変更されると、現在の承認は無効になり再確認が必要です。', pluginPermissionCancel: 'キャンセル', pluginPermissionApprove: '承認して続行',
+    pluginActionFailedTitle: 'プラグイン操作は完了していません', pluginActionFailedHint: 'サーバーがこの操作を確認できなかったため、現在のプラグイン状態は変わりません。', pluginRevokeFailedTitle: '権限取り消し/停止は完了していません', pluginRevokeFailedHint: 'サーバーが取り消しを確認できなかったため、現在の承認と実行状態は変わりません。確認後に再試行してください。',
     agentPresetsDescription: '人物設定と Agent テンプレートを管理します。', agentProfiles: 'Agent プロファイル', agentProfilesDescription: 'キャラクターカード、スキル、テンプレートを編集します。', manageAgents: 'Agent を管理', visionAssist: '画像支援',
     aboutDescription: '実行モード、モデル接続、システム状態を確認します。', runtimeMode: '実行モード', multiUserDescription: 'アカウント分離のマルチユーザーモードです。', localMode: 'ローカル', multiUserMode: 'マルチユーザー', systemDiagnosticsDescription: '状態更新またはモデルエンドポイントを確認します。', probeEndpoint: 'エンドポイントを確認', modelService: 'モデルサービス', endpointStatus: 'エンドポイント状態', endpointReady: '利用可能', endpointUnavailable: '利用不可', endpointUnchecked: '未確認', testModel: 'モデルをテスト', testModelDescription: '最小リクエストで設定を確認します。', availableModels: '利用可能なモデル', availableModelsDescription: '現在 {count} 件のモデルがあります。', emailLogin: 'メールログイン', smtpService: 'SMTP サービス', smtpConfigured: '設定済み', smtpWaiting: '未設定',
   },
@@ -860,6 +907,8 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     themeDescription: '라이트, 화이트, 다크 또는 시스템 테마를 선택합니다.', accentColor: '강조색', accentColorDescription: '주요 작업과 상태에 사용됩니다.', setAccentColor: '강조색 {color} 설정', strongAccent: '강한 강조색', strongAccentDescription: '워크벤치의 주요 컨트롤만 강조하며 출력 파일과 미리보기에는 영향을 주지 않습니다.',
     fontSize: '글자 크기', fontSizeDescription: '본문 글자 크기를 조절합니다.', sizeSmall: '작게', sizeMedium: '보통', sizeLarge: '크게', density: '화면 밀도', densityDescription: '목록과 컨트롤 간격을 조절합니다.', densityCompact: '좁게', densityComfortable: '보통', densityLoose: '넓게', animations: '애니메이션', animationsDescription: '가벼운 전환과 상태 애니메이션을 사용합니다.',
     pluginsDescription: '스킬 플러그인과 MCP 확장을 관리합니다.', skillPlugins: '스킬 플러그인', skillPluginsDescription: '재사용 가능한 스킬 번들을 설치합니다.', managePlugins: '플러그인 관리', mcpExtensions: 'MCP 확장', mcpExtensionsDescription: '외부 도구, 리소스 및 prompts를 연결합니다.', manageMcp: 'MCP 관리', runtimePlugins: '런타임 플러그인', runtimePluginsDescription: '로컬 transformer 플러그인의 활성화·비활성화·재로드를 관리합니다(로컬 소유자만).', runtimePluginsLocalOnlyHint: '런타임 플러그인은 이 머신의 로컬 소유자만 관리할 수 있습니다.', pluginActive: '실행 중', pluginEnabled: '활성화됨', pluginInactive: '비활성', pluginEnable: '활성화', pluginDisable: '비활성화', pluginReload: '재로드', pluginLocalOwnerOnly: '로컬 소유자만', pluginLoadFailed: '플러그인 목록을 불러오지 못했습니다', pluginLoading: '불러오는 중…', pluginNone: '설치된 transformer 플러그인이 없습니다', pluginNoneHint: '플러그인 디렉터리에 transformer 플러그인을 설치한 뒤 여기에서 활성화하세요.',
+    pluginRevokePermissions: '권한 회수', pluginRevokePermissionsHint: '이 머신에 저장된 권한 승인을 회수하고 플러그인을 비활성화합니다.', pluginPermissionReviewTitle: '플러그인 권한 검토', pluginPermissionReviewHint: '이 플러그인과 소스를 신뢰할 수 있을 때만 계속하세요.', pluginPermissionVersion: '버전', pluginPermissionSource: '소스 지문', pluginPermissionRequested: '요청된 권한', pluginPermissionChangeHint: '버전, 소스 또는 권한 목록이 변경되면 기존 승인이 무효화되고 다시 검토해야 합니다.', pluginPermissionCancel: '취소', pluginPermissionApprove: '승인하고 계속',
+    pluginActionFailedTitle: '플러그인 작업이 완료되지 않았습니다', pluginActionFailedHint: '서버가 이 작업을 확인하지 못했으며 현재 플러그인 상태는 변하지 않습니다.', pluginRevokeFailedTitle: '권한 회수/중지가 완료되지 않았습니다', pluginRevokeFailedHint: '서버가 회수를 확인하지 못했습니다. 기존 승인과 실행 상태는 변하지 않으므로 확인 후 다시 시도하세요.',
     agentPresetsDescription: '페르소나와 Agent 템플릿을 관리합니다.', agentProfiles: 'Agent 프로필', agentProfilesDescription: '캐릭터 카드, 스킬 및 템플릿을 편집합니다.', manageAgents: 'Agent 관리', visionAssist: '비전 지원',
     aboutDescription: '실행 모드, 모델 연결 및 시스템 상태를 확인합니다.', runtimeMode: '실행 모드', multiUserDescription: '계정이 분리된 다중 사용자 모드입니다.', localMode: '로컬', multiUserMode: '다중 사용자', systemDiagnosticsDescription: '상태를 새로 고치거나 모델 엔드포인트를 확인합니다.', probeEndpoint: '엔드포인트 확인', modelService: '모델 서비스', endpointStatus: '엔드포인트 상태', endpointReady: '사용 가능', endpointUnavailable: '사용 불가', endpointUnchecked: '확인 안 함', testModel: '모델 테스트', testModelDescription: '최소 요청으로 설정을 확인합니다.', availableModels: '사용 가능한 모델', availableModelsDescription: '현재 모델 {count}개를 사용할 수 있습니다.', emailLogin: '이메일 로그인', smtpService: 'SMTP 서비스', smtpConfigured: '설정됨', smtpWaiting: '설정 안 됨',
   },
@@ -872,14 +921,154 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     themeDescription: '選擇淺色、純白、深色或跟隨系統。', accentColor: '強調色', accentColorDescription: '用於主要操作與狀態提示。', setAccentColor: '設定強調色 {color}', strongAccent: '強色調模式', strongAccentDescription: '僅增強工作台主要控制項，不影響輸出檔案與預覽內容。',
     fontSize: '字體大小', fontSizeDescription: '調整工作台正文大小。', sizeSmall: '小', sizeMedium: '中', sizeLarge: '大', density: '介面密度', densityDescription: '控制列表和控制項間距。', densityCompact: '緊湊', densityComfortable: '舒適', densityLoose: '寬鬆', animations: '動畫效果', animationsDescription: '啟用輕量轉場與狀態動畫。',
     pluginsDescription: '管理技能插件與 MCP 擴充。', skillPlugins: '技能插件', skillPluginsDescription: '瀏覽並安裝可重複使用的技能包。', managePlugins: '管理插件', mcpExtensions: 'MCP 擴充', mcpExtensionsDescription: '連接外部工具、資源與 prompts。', manageMcp: '管理 MCP', runtimePlugins: '執行時外掛', runtimePluginsDescription: '管理本機 transformer 外掛的啟停與重新載入（僅本機所有者）。', runtimePluginsLocalOnlyHint: '執行時外掛只能由本機所有者管理。', pluginActive: '執行中', pluginEnabled: '已啟用', pluginInactive: '未啟用', pluginEnable: '啟用', pluginDisable: '停用', pluginReload: '重新載入', pluginLocalOwnerOnly: '僅本機所有者可管理', pluginLoadFailed: '外掛清單載入失敗', pluginLoading: '正在載入…', pluginNone: '尚無已安裝的 transformer 外掛', pluginNoneHint: '可在外掛目錄中安裝 transformer 外掛後回到這裡啟用.',
+    pluginRevokePermissions: '撤銷授權', pluginRevokePermissionsHint: '撤銷儲存在本機的權限授權並停用此外掛。', pluginPermissionReviewTitle: '檢視外掛權限', pluginPermissionReviewHint: '只有在你信任此外掛及其來源時才繼續。', pluginPermissionVersion: '版本', pluginPermissionSource: '原始碼指紋', pluginPermissionRequested: '要求的權限', pluginPermissionChangeHint: '外掛版本、原始碼或權限清單變更後，現有授權會失效並再次要求確認。', pluginPermissionCancel: '取消', pluginPermissionApprove: '確認並繼續',
+    pluginActionFailedTitle: '外掛操作未完成', pluginActionFailedHint: '伺服器未確認此操作，目前外掛狀態保持不變。', pluginRevokeFailedTitle: '授權撤銷/停止未完成', pluginRevokeFailedHint: '伺服器未確認撤銷；現有授權與外掛執行狀態保持不變，請檢查後重試。',
     agentPresetsDescription: '管理人物、性格與 Agent 範本。', agentProfiles: 'Agent 設定', agentProfilesDescription: '編輯角色卡、技能與預設範本。', manageAgents: '管理 Agent', visionAssist: '視覺輔助',
     aboutDescription: '查看執行模式、模型連線與系統狀態。', runtimeMode: '執行模式', multiUserDescription: '目前使用帳戶隔離的多使用者模式。', localMode: '本機單機', multiUserMode: '多使用者', systemDiagnosticsDescription: '重新整理狀態或主動探測模型端點。', probeEndpoint: '探測端點', modelService: '模型服務', endpointStatus: '端點狀態', endpointReady: '端點可用', endpointUnavailable: '端點不可用', endpointUnchecked: '尚未探測', testModel: '測試模型', testModelDescription: '傳送最小測試請求驗證設定。', availableModels: '可用模型', availableModelsDescription: '目前回傳 {count} 個模型。', emailLogin: '信箱登入', smtpService: 'SMTP 服務', smtpConfigured: '已設定', smtpWaiting: '未設定',
   },
 }
 
+const LOCAL_PLUGIN_PACKAGE_SETTINGS_TRANSLATIONS = {
+  zh: {
+    localPluginPackages: '本地插件包',
+    localPluginPackagesDescription: '从本机目录安装不可变快照；源码与数据不会上传。',
+    localPluginPackageInstall: '安装本地包',
+    localPluginPackageRefresh: '刷新',
+    localPluginPackageRecoveryRequired: '插件包需要本地恢复',
+    localPluginPackageRecoveryHint: '系统将重新核对磁盘、注册表、运行状态和引用后再解除第 {generation} 代屏障。',
+    localPluginPackageRecoveryInterrupted: '检测到中断的插件包操作',
+    localPluginPackageRecoveryInterruptedHint: '原进程已退出，操作停留在 {phase} 阶段。系统会核对全部本地状态后再解除第 {generation} 代屏障。',
+    localPluginPackageRecover: '安全核对并恢复',
+    localPluginPackageLoadFailed: '本地插件包加载失败',
+    localPluginPackageNone: '尚未安装本地插件包',
+    localPluginPackageNoneHint: '选择含 plugin.json 的本机目录进行安装。',
+    localPluginPackageUpgrade: '升级',
+    localPluginPackageUninstall: '卸载',
+    localPluginPackageUninstallConfirmTitle: '确认卸载插件包',
+    localPluginPackageUninstallConfirmHint: '仅在插件已停用且没有依赖、Release、检查点或引用时才能卸载。',
+    localPluginPackageUninstallConfirm: '确认卸载',
+    localPluginPackageChooseUpgradeSource: '选择升级包目录',
+    localPluginPackageChooseInstallSource: '选择插件包目录',
+    localPluginPackageSourceHint: '目录必须包含合法 manifest；升级包 ID 必须与目标插件一致。',
+    localPluginPackageFiles: '{count} 个文件',
+    localPluginPackageSelectedSource: '已选择本机目录：',
+    localPluginPackageConfirmInstallTitle: '确认安装此插件包',
+    localPluginPackageConfirmUpgradeTitle: '确认使用此目录升级插件',
+    localPluginPackageConfirmInstall: '确认安装',
+    localPluginPackageConfirmUpgrade: '确认升级',
+    localPluginPackageWorking: '正在验证并写入本地插件包…',
+    localPluginPackageActionFailed: '本地插件包操作未完成',
+    localPluginPackageActionFailedHint: '插件包状态保持不变，请检查后重试。',
+    localPluginPackageDependants: '依赖此插件',
+    localPluginPackageSavedRestartRequired: '插件包已安全保存，但运行时尚未刷新；请重启后使用。请勿重复安装。',
+    localPluginPackageInstalled: '本地插件包已安装并刷新。',
+    localPluginPackageUpgraded: '本地插件包已升级并刷新。',
+    localPluginPackageUnchanged: '所选目录与已安装包一致，无需更改。',
+    localPluginPackageUninstalled: '本地插件包已安全卸载并刷新。',
+    localPluginPackageRecovered: '本地插件状态已核对，恢复屏障已安全解除。',
+  },
+  en: {
+    localPluginPackages: 'Local plugin packages',
+    localPluginPackagesDescription: 'Install immutable snapshots from this device. Source and data are never uploaded.',
+    localPluginPackageInstall: 'Install local package',
+    localPluginPackageRefresh: 'Refresh',
+    localPluginPackageRecoveryRequired: 'Local package recovery required',
+    localPluginPackageRecoveryHint: 'Disk, registry, runtime state, and references will be rechecked before generation {generation} is released.',
+    localPluginPackageRecoveryInterrupted: 'Interrupted plugin package operation detected',
+    localPluginPackageRecoveryInterruptedHint: 'The original process exited during {phase}. All local state will be verified before generation {generation} is released.',
+    localPluginPackageRecover: 'Verify and recover',
+    localPluginPackageLoadFailed: 'Could not load local plugin packages',
+    localPluginPackageNone: 'No local plugin packages installed',
+    localPluginPackageNoneHint: 'Choose a local directory containing plugin.json.',
+    localPluginPackageUpgrade: 'Upgrade',
+    localPluginPackageUninstall: 'Uninstall',
+    localPluginPackageUninstallConfirmTitle: 'Confirm package uninstall',
+    localPluginPackageUninstallConfirmHint: 'Uninstall is allowed only when the plugin is inactive and has no dependants, releases, checkpoints, or references.',
+    localPluginPackageUninstallConfirm: 'Confirm uninstall',
+    localPluginPackageChooseUpgradeSource: 'Choose upgrade package directory',
+    localPluginPackageChooseInstallSource: 'Choose plugin package directory',
+    localPluginPackageSourceHint: 'The directory must contain a valid manifest. Upgrade package IDs must match the target plugin.',
+    localPluginPackageFiles: '{count} files',
+    localPluginPackageSelectedSource: 'Selected local directory:',
+    localPluginPackageConfirmInstallTitle: 'Confirm local plugin package install',
+    localPluginPackageConfirmUpgradeTitle: 'Confirm plugin package upgrade',
+    localPluginPackageConfirmInstall: 'Confirm install',
+    localPluginPackageConfirmUpgrade: 'Confirm upgrade',
+    localPluginPackageWorking: 'Verifying and writing the local plugin package…',
+    localPluginPackageActionFailed: 'Local plugin package operation did not complete',
+    localPluginPackageActionFailedHint: 'Package state is unchanged. Review the issue and retry.',
+    localPluginPackageDependants: 'Dependent plugins',
+    localPluginPackageSavedRestartRequired: 'The package was saved safely, but runtime refresh is pending. Restart before use; do not install it again.',
+    localPluginPackageInstalled: 'Local plugin package installed and refreshed.',
+    localPluginPackageUpgraded: 'Local plugin package upgraded and refreshed.',
+    localPluginPackageUnchanged: 'The selected directory matches the installed package; no change was needed.',
+    localPluginPackageUninstalled: 'Local plugin package safely uninstalled and refreshed.',
+    localPluginPackageRecovered: 'Local plugin state was verified and the recovery barrier was safely released.',
+  },
+  ja: {
+    localPluginPackages: 'ローカルプラグインパッケージ',
+    localPluginPackagesDescription: 'この端末のディレクトリから不変スナップショットをインストールします。ソースやデータは送信されません。',
+    localPluginPackageInstall: 'ローカルパッケージを追加', localPluginPackageRefresh: '更新', localPluginPackageRecoveryRequired: 'ローカル復旧が必要です', localPluginPackageRecoveryHint: '世代 {generation} を解除する前にディスク、レジストリ、実行状態、参照を再検証します。', localPluginPackageRecoveryInterrupted: '中断されたプラグイン操作を検出しました', localPluginPackageRecoveryInterruptedHint: '元のプロセスは {phase} 中に終了しました。世代 {generation} を解除する前にローカル状態を再検証します。', localPluginPackageRecover: '検証して復旧',
+    localPluginPackageLoadFailed: 'ローカルプラグインを読み込めません', localPluginPackageNone: 'ローカルプラグインは未インストールです',
+    localPluginPackageNoneHint: 'plugin.json を含むローカルディレクトリを選択してください。', localPluginPackageUpgrade: 'アップグレード', localPluginPackageUninstall: 'アンインストール',
+    localPluginPackageUninstallConfirmTitle: 'アンインストールを確認', localPluginPackageUninstallConfirmHint: '無効で、依存・Release・チェックポイント・参照がない場合のみ削除できます。', localPluginPackageUninstallConfirm: '削除を確定',
+    localPluginPackageChooseUpgradeSource: 'アップグレード元を選択', localPluginPackageChooseInstallSource: 'パッケージディレクトリを選択',
+    localPluginPackageSourceHint: '有効な manifest が必要です。アップグレード ID は対象と一致する必要があります。', localPluginPackageWorking: 'ローカルパッケージを検証して保存中…',
+    localPluginPackageFiles: '{count} ファイル', localPluginPackageSelectedSource: '選択したローカルディレクトリ：',
+    localPluginPackageConfirmInstallTitle: 'プラグインパッケージの追加を確認', localPluginPackageConfirmUpgradeTitle: 'プラグインパッケージのアップグレードを確認',
+    localPluginPackageConfirmInstall: '追加を確定', localPluginPackageConfirmUpgrade: 'アップグレードを確定',
+    localPluginPackageActionFailed: 'パッケージ操作は完了していません', localPluginPackageActionFailedHint: '状態は変更されていません。確認して再試行してください。', localPluginPackageDependants: '依存プラグイン',
+    localPluginPackageSavedRestartRequired: 'パッケージは安全に保存されましたが、実行時更新は保留中です。再インストールせず再起動してください。',
+    localPluginPackageInstalled: 'ローカルパッケージを追加して更新しました。', localPluginPackageUpgraded: 'ローカルパッケージをアップグレードしました。',
+    localPluginPackageUnchanged: 'インストール済みパッケージと同一のため変更はありません。', localPluginPackageUninstalled: 'ローカルパッケージを安全に削除しました。', localPluginPackageRecovered: 'ローカル状態を検証し、復旧バリアを安全に解除しました。',
+  },
+  ko: {
+    localPluginPackages: '로컬 플러그인 패키지',
+    localPluginPackagesDescription: '이 장치의 디렉터리에서 불변 스냅샷을 설치합니다. 소스와 데이터는 업로드되지 않습니다.',
+    localPluginPackageInstall: '로컬 패키지 설치', localPluginPackageRefresh: '새로 고침', localPluginPackageRecoveryRequired: '로컬 패키지 복구 필요', localPluginPackageRecoveryHint: '{generation}세대 장벽을 해제하기 전에 디스크, 레지스트리, 런타임 상태와 참조를 다시 확인합니다.', localPluginPackageRecoveryInterrupted: '중단된 플러그인 패키지 작업 감지', localPluginPackageRecoveryInterruptedHint: '원래 프로세스가 {phase} 단계에서 종료되었습니다. {generation}세대 장벽을 해제하기 전에 로컬 상태를 다시 확인합니다.', localPluginPackageRecover: '확인 후 복구',
+    localPluginPackageLoadFailed: '로컬 플러그인 패키지를 불러오지 못했습니다', localPluginPackageNone: '설치된 로컬 플러그인 패키지가 없습니다',
+    localPluginPackageNoneHint: 'plugin.json이 있는 로컬 디렉터리를 선택하세요.', localPluginPackageUpgrade: '업그레이드', localPluginPackageUninstall: '제거',
+    localPluginPackageUninstallConfirmTitle: '패키지 제거 확인', localPluginPackageUninstallConfirmHint: '비활성 상태이며 종속 항목, Release, 체크포인트, 참조가 없을 때만 제거할 수 있습니다.', localPluginPackageUninstallConfirm: '제거 확인',
+    localPluginPackageChooseUpgradeSource: '업그레이드 디렉터리 선택', localPluginPackageChooseInstallSource: '플러그인 패키지 디렉터리 선택',
+    localPluginPackageSourceHint: '유효한 manifest가 필요하며 업그레이드 ID는 대상과 같아야 합니다.', localPluginPackageWorking: '로컬 플러그인 패키지를 검증하고 저장하는 중…',
+    localPluginPackageFiles: '파일 {count}개', localPluginPackageSelectedSource: '선택한 로컬 디렉터리:',
+    localPluginPackageConfirmInstallTitle: '플러그인 패키지 설치 확인', localPluginPackageConfirmUpgradeTitle: '플러그인 패키지 업그레이드 확인',
+    localPluginPackageConfirmInstall: '설치 확인', localPluginPackageConfirmUpgrade: '업그레이드 확인',
+    localPluginPackageActionFailed: '로컬 플러그인 패키지 작업이 완료되지 않았습니다', localPluginPackageActionFailedHint: '패키지 상태는 바뀌지 않았습니다. 확인 후 다시 시도하세요.', localPluginPackageDependants: '종속 플러그인',
+    localPluginPackageSavedRestartRequired: '패키지는 안전하게 저장되었지만 런타임 새로 고침이 보류 중입니다. 다시 설치하지 말고 재시작하세요.',
+    localPluginPackageInstalled: '로컬 플러그인 패키지를 설치하고 새로 고쳤습니다.', localPluginPackageUpgraded: '로컬 플러그인 패키지를 업그레이드했습니다.',
+    localPluginPackageUnchanged: '설치된 패키지와 같아 변경하지 않았습니다.', localPluginPackageUninstalled: '로컬 플러그인 패키지를 안전하게 제거했습니다.', localPluginPackageRecovered: '로컬 상태를 확인하고 복구 장벽을 안전하게 해제했습니다.',
+  },
+  'zh-TW': {
+    localPluginPackages: '本機外掛套件',
+    localPluginPackagesDescription: '從本機目錄安裝不可變快照；原始碼與資料不會上傳。',
+    localPluginPackageInstall: '安裝本機套件', localPluginPackageRefresh: '重新整理', localPluginPackageRecoveryRequired: '本機套件需要復原', localPluginPackageRecoveryHint: '解除第 {generation} 代屏障前會重新核對磁碟、登錄、執行狀態與引用。', localPluginPackageRecoveryInterrupted: '偵測到中斷的外掛套件操作', localPluginPackageRecoveryInterruptedHint: '原程序已在 {phase} 階段結束。解除第 {generation} 代屏障前會重新核對全部本機狀態。', localPluginPackageRecover: '核對並復原',
+    localPluginPackageLoadFailed: '本機外掛套件載入失敗', localPluginPackageNone: '尚未安裝本機外掛套件',
+    localPluginPackageNoneHint: '選擇含 plugin.json 的本機目錄進行安裝。', localPluginPackageUpgrade: '升級', localPluginPackageUninstall: '解除安裝',
+    localPluginPackageUninstallConfirmTitle: '確認解除安裝', localPluginPackageUninstallConfirmHint: '僅在外掛已停用且沒有依賴、Release、檢查點或引用時才能解除安裝。', localPluginPackageUninstallConfirm: '確認解除安裝',
+    localPluginPackageChooseUpgradeSource: '選擇升級套件目錄', localPluginPackageChooseInstallSource: '選擇外掛套件目錄',
+    localPluginPackageSourceHint: '目錄必須包含合法 manifest；升級套件 ID 必須與目標一致。', localPluginPackageWorking: '正在驗證並寫入本機外掛套件…',
+    localPluginPackageFiles: '{count} 個檔案', localPluginPackageSelectedSource: '已選擇本機目錄：',
+    localPluginPackageConfirmInstallTitle: '確認安裝此外掛套件', localPluginPackageConfirmUpgradeTitle: '確認使用此目錄升級外掛',
+    localPluginPackageConfirmInstall: '確認安裝', localPluginPackageConfirmUpgrade: '確認升級',
+    localPluginPackageActionFailed: '本機外掛套件操作未完成', localPluginPackageActionFailedHint: '套件狀態保持不變，請檢查後重試。', localPluginPackageDependants: '依賴此外掛',
+    localPluginPackageSavedRestartRequired: '套件已安全儲存，但執行時尚未重新整理；請重新啟動後使用，勿重複安裝。',
+    localPluginPackageInstalled: '本機外掛套件已安裝並重新整理。', localPluginPackageUpgraded: '本機外掛套件已升級並重新整理。',
+    localPluginPackageUnchanged: '所選目錄與已安裝套件相同，無需變更。', localPluginPackageUninstalled: '本機外掛套件已安全解除安裝並重新整理。', localPluginPackageRecovered: '本機狀態已核對，復原屏障已安全解除。',
+  },
+}
+
+for (const [locale, copy] of Object.entries(LOCAL_PLUGIN_PACKAGE_SETTINGS_TRANSLATIONS)) {
+  Object.assign(SETTINGS_MODAL_TRANSLATIONS[locale], copy)
+}
+
 const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
   zh: {
     title: '数据 & 导出', subtitle: '导入、导出并管理当前浏览器中的工作台数据。', exportData: '导出数据', exportSessions: '导出会话', exportSessionsDescription: '下载所有本地会话的 JSON 备份。', exportSettings: '导出设置', exportSettingsDescription: '下载不含 API Key 的工作台设置。', clearTemporaryDescription: '移除可安全重新生成的本地临时项。',
+    fullLocalData: '完整本地数据', fullLocalDataDescription: '导出当前账户的本地数据，或清除工作数据；账户身份与登录会话会保留。',
+    fullExport: '导出完整数据', fullExportDescription: '下载包含账户数据库记录和托管文件的 ZIP；登录会话、凭据保险箱密钥及已停用的旧版内部字段不会包含在内。', fullExportSucceeded: '完整本地数据 ZIP 已开始下载。', fullExportFailed: '完整数据导出失败：{reason}', exporting: '正在导出…',
+    fullClear: '清除账户工作数据', fullClearDescription: '永久删除后端的会话、任务、配置及托管文件，并在服务端确认后清除此浏览器状态；账户身份、登录凭据和当前登录会话会保留。此操作不可撤销。', fullClearConfirmationLabel: '输入确认短语', fullClearConfirm: '即将永久清除当前账户的工作数据，但保留账户身份和登录会话。确定继续？', fullClearSucceeded: '后端工作数据和当前浏览器状态已清除；账户与登录会话已保留。', fullClearBrowserIncomplete: '后端工作数据已清除，但浏览器状态未完全清除（{reason}）。请刷新页面并手动清理站点数据。', fullClearFailed: '服务端未确认工作数据已完整清除，当前浏览器数据仍保留：{reason}', clearing: '正在清除…',
+    fullClearPreview: '预览清除影响', previewing: '正在生成预览…', fullClearPreviewSummary: '服务端预览：{rows} 条数据库记录、{files} 个受管文件（{bytes}），运行中阻止项 {blockers} 个。', fullClearPreviewReady: '清除影响已由服务端确认；请核对后输入确认短语。', fullClearPreviewBlocked: '预览已生成，但存在运行中的任务；请先停止后重新预览。', fullClearPreviewFailed: '无法生成清除影响预览：{reason}',
     sessionsExported: '会话数据已导出 (schema v{version})。', settingsExported: '设置已导出 (schema v{version}，不含 API Key)。',
     importData: '导入数据', chooseJson: '选择 JSON 文件', importHint: '支持 schema v{version} 和旧版会话数组，导入前会校验结构。', importMode: '设置导入模式：',
     mergeHint: '合并（保留文件外项目）', replaceHint: '覆盖（以文件为准）', merge: '合并', replace: '覆盖',
@@ -887,10 +1076,14 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
     storageUnavailable: '本地存储不可访问 ({reason})。', temporaryCleared: '已清理 {count} 项本地临时数据。',
     clearConfirm: '确定清除所有本地会话、设置和历史记录？此操作不可撤销。', clearSucceeded: '本地会话和工作台设置已清除。', clearFailed: '清除失败，现有数据仍保留 ({reason})。',
     storageStats: '存储统计', browserStorage: '浏览器站点存储（用量 / 配额）', sessionCount: '会话数量', historyCount: '历史记录',
-    localCleanup: '本地清理', clearTemporary: '清理临时数据', clearAll: '清除本地会话和工作台设置', clearWarning: '清除数据只影响当前浏览器，不会修改后端 .env 模型配置。',
+    localCleanup: '本地清理', clearTemporary: '清理临时数据', clearAll: '清除本地会话和工作台设置', clearWarning: '清除数据只影响当前浏览器，不会删除本地服务器中保存的模型 Provider。',
   },
   en: {
     title: 'Data & Export', subtitle: 'Import, export, and manage workbench data in this browser.', exportData: 'Export data', exportSessions: 'Export conversations', exportSessionsDescription: 'Download a JSON backup of local conversations.', exportSettings: 'Export settings', exportSettingsDescription: 'Download workbench settings without API keys.', clearTemporaryDescription: 'Remove local temporary items that can be regenerated safely.',
+    fullLocalData: 'Complete local data', fullLocalDataDescription: 'Export this account\'s local data or clear its work data. Account identity and login sessions are retained.',
+    fullExport: 'Export complete data', fullExportDescription: 'Download a ZIP containing account database records and managed files. Login sessions, the credential-vault key, and retired legacy internal fields are excluded.', fullExportSucceeded: 'The complete local-data ZIP download has started.', fullExportFailed: 'Complete data export failed: {reason}', exporting: 'Exporting…',
+    fullClear: 'Clear account work data', fullClearDescription: 'Permanently delete backend conversations, jobs, configuration, and managed files, then clear this browser after server confirmation. Account identity, login credentials, and active login sessions are retained. This cannot be undone.', fullClearConfirmationLabel: 'Enter the confirmation phrase', fullClearConfirm: 'This will permanently clear the current account\'s work data while retaining its identity and login sessions. Continue?', fullClearSucceeded: 'Backend work data and this browser\'s state were cleared; the account and login sessions were retained.', fullClearBrowserIncomplete: 'Backend work data was cleared, but browser state could not be fully cleared ({reason}). Refresh and clear this site\'s data manually.', fullClearFailed: 'The server did not confirm that work data was completely cleared. Browser data was retained: {reason}', clearing: 'Clearing…',
+    fullClearPreview: 'Preview clear impact', previewing: 'Preparing preview…', fullClearPreviewSummary: 'Server preview: {rows} database records and {files} managed files ({bytes}); {blockers} active blockers.', fullClearPreviewReady: 'The server confirmed the clear impact. Review it, then enter the confirmation phrase.', fullClearPreviewBlocked: 'The preview is ready, but active work must be stopped before clearing. Refresh the preview afterwards.', fullClearPreviewFailed: 'Could not prepare the clear-impact preview: {reason}',
     sessionsExported: 'Conversation data exported (schema v{version}).', settingsExported: 'Settings exported (schema v{version}; API keys excluded).',
     importData: 'Import data', chooseJson: 'Choose JSON file', importHint: 'Supports schema v{version} and legacy conversation arrays. The structure is validated before import.', importMode: 'Settings import mode:',
     mergeHint: 'Merge (keep settings outside the file)', replaceHint: 'Replace (use the file as the source of truth)', merge: 'merge', replace: 'replace',
@@ -898,10 +1091,14 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
     storageUnavailable: 'Local storage is unavailable ({reason}).', temporaryCleared: 'Cleared {count} local temporary items.',
     clearConfirm: 'Clear all local conversations, settings, and history? This cannot be undone.', clearSucceeded: 'Local conversations and workbench settings were cleared.', clearFailed: 'Clear failed; existing data was retained ({reason}).',
     storageStats: 'Storage statistics', browserStorage: 'Browser site storage (usage / quota)', sessionCount: 'Conversations', historyCount: 'History entries',
-    localCleanup: 'Local cleanup', clearTemporary: 'Clear temporary data', clearAll: 'Clear local conversations and workbench settings', clearWarning: 'Clearing data only affects this browser. It does not change backend .env model settings.',
+    localCleanup: 'Local cleanup', clearTemporary: 'Clear temporary data', clearAll: 'Clear local conversations and workbench settings', clearWarning: 'Clearing data only affects this browser. It does not delete model providers saved on the local server.',
   },
   ja: {
     title: 'データとエクスポート', subtitle: 'このブラウザーのワークベンチデータを管理します。', exportData: 'データをエクスポート', exportSessions: '会話をエクスポート', exportSessionsDescription: 'ローカル会話の JSON バックアップをダウンロードします。', exportSettings: '設定をエクスポート', exportSettingsDescription: 'API キーを含まない設定をダウンロードします。', clearTemporaryDescription: '安全に再生成できる一時データを削除します。',
+    fullLocalData: '完全なローカルデータ', fullLocalDataDescription: '現在のアカウントのローカルデータをエクスポートするか、作業データを削除します。アカウント情報とログインセッションは保持されます。',
+    fullExport: '完全なデータをエクスポート', fullExportDescription: 'アカウントのデータベース記録と管理ファイルを含む ZIP をダウンロードします。ログインセッション、資格情報保管庫の鍵、廃止済みの旧内部フィールドは含まれません。', fullExportSucceeded: '完全なローカルデータ ZIP のダウンロードを開始しました。', fullExportFailed: '完全なデータのエクスポートに失敗しました：{reason}', exporting: 'エクスポート中…',
+    fullClear: 'アカウントの作業データを削除', fullClearDescription: 'バックエンドの会話、ジョブ、設定、管理ファイルを永久に削除し、サーバー確認後にこのブラウザーの状態を消去します。アカウント情報、ログイン資格情報、現在のログインセッションは保持されます。元に戻せません。', fullClearConfirmationLabel: '確認フレーズを入力', fullClearConfirm: 'アカウント情報とログインセッションを保持したまま、現在のアカウントの作業データを永久に削除します。続行しますか？', fullClearSucceeded: 'バックエンドの作業データとこのブラウザーの状態を削除しました。アカウントとログインセッションは保持されています。', fullClearBrowserIncomplete: 'バックエンドの作業データは削除されましたが、ブラウザーの状態を完全に消去できませんでした（{reason}）。再読み込み後、サイトデータを手動で消去してください。', fullClearFailed: 'サーバーが作業データの完全な削除を確認できなかったため、ブラウザーのデータは保持されています：{reason}', clearing: '削除中…',
+    fullClearPreview: '削除の影響を確認', previewing: 'プレビューを作成中…', fullClearPreviewSummary: 'サーバープレビュー：データベース {rows} 件、管理ファイル {files} 個（{bytes}）、実行中のブロック {blockers} 件。', fullClearPreviewReady: 'サーバーが削除範囲を確認しました。内容を確認して確認フレーズを入力してください。', fullClearPreviewBlocked: 'プレビューは作成されましたが、実行中の処理を停止してから再確認してください。', fullClearPreviewFailed: '削除影響のプレビューを作成できませんでした：{reason}',
     sessionsExported: '会話データをエクスポートしました (schema v{version})。', settingsExported: '設定をエクスポートしました (schema v{version}、API Key は含みません)。',
     importData: 'データをインポート', chooseJson: 'JSON ファイルを選択', importHint: 'schema v{version} と旧形式の会話配列に対応し、インポート前に構造を検証します。', importMode: '設定のインポート方法：',
     mergeHint: 'マージ（ファイル外の項目を保持）', replaceHint: '上書き（ファイルを正とする）', merge: 'マージ', replace: '上書き',
@@ -909,10 +1106,14 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
     storageUnavailable: 'ローカルストレージを利用できません ({reason})。', temporaryCleared: 'ローカル一時データを {count} 件削除しました。',
     clearConfirm: 'ローカルの会話、設定、履歴をすべて削除しますか？この操作は元に戻せません。', clearSucceeded: 'ローカルの会話とワークベンチ設定を削除しました。', clearFailed: '削除に失敗しました。既存データは保持されています ({reason})。',
     storageStats: 'ストレージ統計', browserStorage: 'ブラウザーのサイトストレージ（使用量 / 上限）', sessionCount: '会話数', historyCount: '履歴',
-    localCleanup: 'ローカルデータの整理', clearTemporary: '一時データを削除', clearAll: 'ローカルの会話とワークベンチ設定を削除', clearWarning: 'データの削除はこのブラウザーにのみ影響し、バックエンドの .env モデル設定は変更しません。',
+    localCleanup: 'ローカルデータの整理', clearTemporary: '一時データを削除', clearAll: 'ローカルの会話とワークベンチ設定を削除', clearWarning: 'データの削除はこのブラウザーにのみ影響し、ローカルサーバーに保存されたモデル Provider は削除されません。',
   },
   ko: {
     title: '데이터 및 내보내기', subtitle: '이 브라우저의 워크벤치 데이터를 관리합니다.', exportData: '데이터 내보내기', exportSessions: '대화 내보내기', exportSessionsDescription: '로컬 대화 JSON 백업을 다운로드합니다.', exportSettings: '설정 내보내기', exportSettingsDescription: 'API 키를 제외한 워크벤치 설정을 다운로드합니다.', clearTemporaryDescription: '안전하게 다시 만들 수 있는 임시 데이터를 삭제합니다.',
+    fullLocalData: '전체 로컬 데이터', fullLocalDataDescription: '현재 계정의 로컬 데이터를 내보내거나 작업 데이터를 삭제합니다. 계정 정보와 로그인 세션은 유지됩니다.',
+    fullExport: '전체 데이터 내보내기', fullExportDescription: '계정 데이터베이스 기록과 관리 파일이 포함된 ZIP을 다운로드합니다. 로그인 세션, 자격 증명 보관소 키 및 폐기된 이전 내부 필드는 제외됩니다.', fullExportSucceeded: '전체 로컬 데이터 ZIP 다운로드를 시작했습니다.', fullExportFailed: '전체 데이터 내보내기 실패: {reason}', exporting: '내보내는 중…',
+    fullClear: '계정 작업 데이터 삭제', fullClearDescription: '백엔드 대화, 작업, 설정 및 관리 파일을 영구 삭제하고 서버 확인 후 이 브라우저 상태를 삭제합니다. 계정 정보, 로그인 자격 증명 및 현재 로그인 세션은 유지됩니다. 되돌릴 수 없습니다.', fullClearConfirmationLabel: '확인 문구 입력', fullClearConfirm: '계정 정보와 로그인 세션을 유지한 채 현재 계정의 작업 데이터를 영구 삭제합니다. 계속할까요?', fullClearSucceeded: '백엔드 작업 데이터와 이 브라우저 상태를 삭제했으며 계정과 로그인 세션은 유지했습니다.', fullClearBrowserIncomplete: '백엔드 작업 데이터는 삭제되었지만 브라우저 상태를 완전히 삭제하지 못했습니다({reason}). 새로고침한 뒤 사이트 데이터를 직접 삭제하세요.', fullClearFailed: '서버가 작업 데이터의 완전한 삭제를 확인하지 못해 브라우저 데이터를 유지했습니다: {reason}', clearing: '삭제하는 중…',
+    fullClearPreview: '삭제 영향 미리 보기', previewing: '미리 보기 준비 중…', fullClearPreviewSummary: '서버 미리 보기: 데이터베이스 레코드 {rows}개, 관리 파일 {files}개({bytes}), 실행 중 차단 항목 {blockers}개.', fullClearPreviewReady: '서버가 삭제 범위를 확인했습니다. 검토한 뒤 확인 문구를 입력하세요.', fullClearPreviewBlocked: '미리 보기는 준비됐지만 실행 중인 작업을 중지한 뒤 다시 확인해야 합니다.', fullClearPreviewFailed: '삭제 영향 미리 보기를 준비하지 못했습니다: {reason}',
     sessionsExported: '대화 데이터를 내보냈습니다 (schema v{version}).', settingsExported: '설정을 내보냈습니다 (schema v{version}, API Key 제외).',
     importData: '데이터 가져오기', chooseJson: 'JSON 파일 선택', importHint: 'schema v{version} 및 이전 대화 배열을 지원하며 가져오기 전에 구조를 검증합니다.', importMode: '설정 가져오기 모드:',
     mergeHint: '병합(파일에 없는 항목 유지)', replaceHint: '덮어쓰기(파일 기준)', merge: '병합', replace: '덮어쓰기',
@@ -920,10 +1121,14 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
     storageUnavailable: '로컬 저장소를 사용할 수 없습니다 ({reason}).', temporaryCleared: '로컬 임시 데이터 {count}개를 삭제했습니다.',
     clearConfirm: '모든 로컬 대화, 설정 및 기록을 삭제할까요? 이 작업은 되돌릴 수 없습니다.', clearSucceeded: '로컬 대화와 워크벤치 설정을 삭제했습니다.', clearFailed: '삭제하지 못했습니다. 기존 데이터는 유지됩니다 ({reason}).',
     storageStats: '저장소 통계', browserStorage: '브라우저 사이트 저장소(사용량 / 할당량)', sessionCount: '대화 수', historyCount: '기록',
-    localCleanup: '로컬 정리', clearTemporary: '임시 데이터 삭제', clearAll: '로컬 대화 및 워크벤치 설정 삭제', clearWarning: '데이터 삭제는 현재 브라우저에만 적용되며 백엔드 .env 모델 설정은 변경하지 않습니다.',
+    localCleanup: '로컬 정리', clearTemporary: '임시 데이터 삭제', clearAll: '로컬 대화 및 워크벤치 설정 삭제', clearWarning: '데이터 삭제는 현재 브라우저에만 적용되며 로컬 서버에 저장된 모델 Provider는 삭제되지 않습니다.',
   },
   'zh-TW': {
     title: '資料與匯出', subtitle: '匯入、匯出並管理目前瀏覽器中的工作台資料。', exportData: '匯出資料', exportSessions: '匯出對話', exportSessionsDescription: '下載所有本機對話的 JSON 備份。', exportSettings: '匯出設定', exportSettingsDescription: '下載不含 API Key 的工作台設定。', clearTemporaryDescription: '移除可安全重新產生的本機暫存項目。',
+    fullLocalData: '完整本機資料', fullLocalDataDescription: '匯出目前帳戶的本機資料，或清除工作資料；帳戶身分與登入工作階段會保留。',
+    fullExport: '匯出完整資料', fullExportDescription: '下載包含帳戶資料庫記錄與受管檔案的 ZIP；登入工作階段、憑證保險庫金鑰及已停用的舊版內部欄位不會包含在內。', fullExportSucceeded: '完整本機資料 ZIP 已開始下載。', fullExportFailed: '完整資料匯出失敗：{reason}', exporting: '正在匯出…',
+    fullClear: '清除帳戶工作資料', fullClearDescription: '永久刪除後端的對話、任務、設定及受管檔案，並在伺服器確認後清除此瀏覽器狀態；帳戶身分、登入憑證和目前登入工作階段會保留。此操作無法復原。', fullClearConfirmationLabel: '輸入確認短語', fullClearConfirm: '即將永久清除目前帳戶的工作資料，但保留帳戶身分與登入工作階段。確定繼續？', fullClearSucceeded: '後端工作資料與目前瀏覽器狀態已清除；帳戶與登入工作階段已保留。', fullClearBrowserIncomplete: '後端工作資料已清除，但瀏覽器狀態未完全清除（{reason}）。請重新整理頁面並手動清除網站資料。', fullClearFailed: '伺服器未確認工作資料已完整清除，目前瀏覽器資料仍保留：{reason}', clearing: '正在清除…',
+    fullClearPreview: '預覽清除影響', previewing: '正在產生預覽…', fullClearPreviewSummary: '伺服器預覽：{rows} 筆資料庫記錄、{files} 個受管檔案（{bytes}），執行中阻止項目 {blockers} 個。', fullClearPreviewReady: '伺服器已確認清除範圍；請核對後輸入確認短語。', fullClearPreviewBlocked: '預覽已產生，但仍有執行中的工作；請停止後重新預覽。', fullClearPreviewFailed: '無法產生清除影響預覽：{reason}',
     sessionsExported: '對話資料已匯出 (schema v{version})。', settingsExported: '設定已匯出 (schema v{version}，不含 API Key)。',
     importData: '匯入資料', chooseJson: '選擇 JSON 檔案', importHint: '支援 schema v{version} 與舊版對話陣列，匯入前會驗證結構。', importMode: '設定匯入模式：',
     mergeHint: '合併（保留檔案外項目）', replaceHint: '覆寫（以檔案為準）', merge: '合併', replace: '覆寫',
@@ -931,8 +1136,113 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
     storageUnavailable: '本機儲存空間無法存取 ({reason})。', temporaryCleared: '已清理 {count} 項本機暫存資料。',
     clearConfirm: '確定清除所有本機對話、設定與歷史記錄？此操作無法復原。', clearSucceeded: '本機對話與工作台設定已清除。', clearFailed: '清除失敗，現有資料仍保留 ({reason})。',
     storageStats: '儲存統計', browserStorage: '瀏覽器網站儲存空間（用量 / 配額）', sessionCount: '對話數量', historyCount: '歷史記錄',
-    localCleanup: '本機清理', clearTemporary: '清理暫存資料', clearAll: '清除本機對話與工作台設定', clearWarning: '清除資料只影響目前瀏覽器，不會修改後端 .env 模型設定。',
+    localCleanup: '本機清理', clearTemporary: '清理暫存資料', clearAll: '清除本機對話與工作台設定', clearWarning: '清除資料只影響目前瀏覽器，不會刪除本機伺服器中已儲存的模型 Provider。',
   },
+}
+
+const SIDE_EFFECT_RECOVERY_TRANSLATIONS = {
+  zh: {
+    navTitle: '操作恢复', title: '未知操作恢复', subtitle: '核对执行中断后结果不明确的外部写入，并由你记录最终事实。', safetyTitle: '先核验真实结果，再作决定', safetyWarning: '“未知”不等于失败。请先在目标文件、应用或外部服务中核验结果；猜测为失败并重新执行可能造成重复写入、重复发送，或被第三方服务重复收费。这里的决定只记录事实，不会再次执行工具。', pendingTitle: '待核对操作（{count}）', pendingHint: '这里只显示当前登录用户尚未解决的记录。', refresh: '刷新', loading: '正在读取待核对操作…', retry: '重试', empty: '没有待核对的未知操作。', loadFailed: '无法读取待核对操作：{reason}', resolveFailed: '无法保存恢复决定：{reason}', unknownTool: '未知工具', unknownTime: '时间未知', jobContext: '任务 {id}', turnContext: '轮次 {id}', sessionContext: '会话 {id}', scopeContext: '{kind} 操作', recordWarning: '此操作可能已经产生真实副作用。不要仅因界面未收到完成回执就重新执行。', toolCallIdLabel: '工具调用 ID', argsDigestLabel: '参数摘要（SHA-256）', stepIdLabel: '步骤 ID', targetSummaryLabel: '可核验目标', changedPathsLabel: '变更路径', verifiedOutputsLabel: '已验证输出', artifactIdsLabel: '产物 ID', noEvidence: '没有保存可安全展示的目标证据；请使用调用 ID 和参数摘要核对日志或目标系统。', artifactReference: '产物 {id}', receiptReference: '回执 {id}', sha256Reference: 'SHA-256 {digest}', sizeReference: '{size} 字节', decisionLabel: '核验结论', confirmCommitted: '确认已提交', confirmCommittedHint: '已在目标系统中确认写入、发送或其他操作确实完成。', confirmFailed: '确认失败', confirmFailedHint: '已在目标系统中确认没有产生预期副作用。', noteLabel: '审计备注（可选）', notePlaceholder: '记录你在哪里、如何核验了真实结果', verificationRequired: '我已在目标文件、应用或外部服务中核验真实结果，并理解此决定不会重新执行工具。', permanentDecisionWarning: '这是永久性安全记录。提交后该未知项会被关闭，不能在此界面撤销或改成另一结论。', permanentDecisionRequired: '我确认要把工具调用 {toolCallId} 永久记录为“{decision}”，并已核对上方调用 ID 与参数摘要。', noDecisionSelected: '尚未选择结论', submitDecision: '记录最终结论', resolving: '正在记录…', committedRecorded: '已记录为确认已提交。', failedRecorded: '已记录为确认失败。', loadMore: '加载更多', loadingMore: '正在加载…', historyTitle: '人工审计历史（{count}）', historyHint: '这里显示已由用户核验并永久记录的操作结果。', historyLoading: '正在读取审计历史…', historyEmpty: '还没有人工审计记录。', historyLoadFailed: '无法读取审计历史：{reason}', historyCommitted: '已确认提交', historyFailed: '已确认失败', historyNoteLabel: '审计备注', historyNoNote: '未填写备注。',
+  },
+  en: {
+    navTitle: 'Operation recovery', title: 'Unknown operation recovery', subtitle: 'Review external writes whose result became uncertain after an interruption, then record the observed outcome.', safetyTitle: 'Verify the real outcome before deciding', safetyWarning: '“Unknown” does not mean failed. Check the target file, app, or external service first. Guessing failure and rerunning can duplicate writes, messages, or charges. This decision records facts only; it never runs the tool again.', pendingTitle: 'Operations to review ({count})', pendingHint: 'Only unresolved records owned by the signed-in user are shown.', refresh: 'Refresh', loading: 'Loading operations to review…', retry: 'Retry', empty: 'No unknown operations need review.', loadFailed: 'Could not load operations to review: {reason}', resolveFailed: 'Could not save the recovery decision: {reason}', unknownTool: 'Unknown tool', unknownTime: 'Unknown time', jobContext: 'Job {id}', turnContext: 'Turn {id}', sessionContext: 'Session {id}', scopeContext: '{kind} operation', recordWarning: 'This operation may already have caused a real side effect. Do not rerun it only because the interface missed its completion receipt.', toolCallIdLabel: 'Tool call ID', argsDigestLabel: 'Arguments digest (SHA-256)', stepIdLabel: 'Step ID', targetSummaryLabel: 'Verifiable targets', changedPathsLabel: 'Changed paths', verifiedOutputsLabel: 'Verified outputs', artifactIdsLabel: 'Artifact IDs', noEvidence: 'No target evidence was saved in a form that is safe to display. Use the call ID and arguments digest to check logs or the target system.', artifactReference: 'Artifact {id}', receiptReference: 'Receipt {id}', sha256Reference: 'SHA-256 {digest}', sizeReference: '{size} bytes', decisionLabel: 'Verified outcome', confirmCommitted: 'Confirm committed', confirmCommittedHint: 'The target system shows that the write, message, or other operation completed.', confirmFailed: 'Confirm failed', confirmFailedHint: 'The target system shows that the expected side effect did not occur.', noteLabel: 'Audit note (optional)', notePlaceholder: 'Record where and how you verified the real outcome', verificationRequired: 'I verified the real outcome in the target file, app, or external service and understand that this decision will not rerun the tool.', permanentDecisionWarning: 'This is a permanent safety record. Submitting closes this unknown item and it cannot be undone or changed from this screen.', permanentDecisionRequired: 'I confirm that tool call {toolCallId} should be permanently recorded as “{decision}”, after checking the call ID and arguments digest above.', noDecisionSelected: 'No outcome selected', submitDecision: 'Record final outcome', resolving: 'Recording…', committedRecorded: 'Recorded as confirmed committed.', failedRecorded: 'Recorded as confirmed failed.', loadMore: 'Load more', loadingMore: 'Loading…', historyTitle: 'Manual audit history ({count})', historyHint: 'Operations whose outcomes were verified and permanently recorded by a user.', historyLoading: 'Loading audit history…', historyEmpty: 'No manual audit history yet.', historyLoadFailed: 'Could not load audit history: {reason}', historyCommitted: 'Confirmed committed', historyFailed: 'Confirmed failed', historyNoteLabel: 'Audit note', historyNoNote: 'No note was recorded.',
+  },
+  ja: {
+    navTitle: '操作の復旧', title: '不明な操作の復旧', subtitle: '中断後に結果が不明となった外部書き込みを確認し、実際の結果を記録します。', safetyTitle: '判断する前に実際の結果を確認してください', safetyWarning: '「不明」は失敗を意味しません。先に対象ファイル、アプリ、外部サービスで結果を確認してください。失敗と推測して再実行すると、書き込み、送信、課金が重複するおそれがあります。ここでの判断は事実を記録するだけで、ツールは再実行しません。', pendingTitle: '確認待ちの操作（{count}）', pendingHint: 'ログイン中のユーザーが所有する未解決レコードのみ表示します。', refresh: '更新', loading: '確認待ちの操作を読み込み中…', retry: '再試行', empty: '確認が必要な不明操作はありません。', loadFailed: '確認待ちの操作を読み込めませんでした：{reason}', resolveFailed: '復旧判断を保存できませんでした：{reason}', unknownTool: '不明なツール', unknownTime: '時刻不明', jobContext: 'ジョブ {id}', turnContext: 'ターン {id}', sessionContext: 'セッション {id}', scopeContext: '{kind} 操作', recordWarning: 'この操作はすでに実際の副作用を発生させている可能性があります。画面に完了通知が届かなかったという理由だけで再実行しないでください。', toolCallIdLabel: 'ツール呼び出し ID', argsDigestLabel: '引数ダイジェスト（SHA-256）', stepIdLabel: 'ステップ ID', targetSummaryLabel: '確認可能な対象', changedPathsLabel: '変更されたパス', verifiedOutputsLabel: '検証済み出力', artifactIdsLabel: '成果物 ID', noEvidence: '安全に表示できる対象証拠は保存されていません。呼び出し ID と引数ダイジェストでログまたは対象システムを確認してください。', artifactReference: '成果物 {id}', receiptReference: '受領記録 {id}', sha256Reference: 'SHA-256 {digest}', sizeReference: '{size} バイト', decisionLabel: '確認した結果', confirmCommitted: 'コミット済みと確認', confirmCommittedHint: '対象システムで書き込み、送信、その他の操作が完了したことを確認しました。', confirmFailed: '失敗と確認', confirmFailedHint: '対象システムで想定した副作用が発生していないことを確認しました。', noteLabel: '監査メモ（任意）', notePlaceholder: '実際の結果をどこで、どのように確認したかを記録', verificationRequired: '対象ファイル、アプリ、外部サービスで実際の結果を確認し、この判断ではツールが再実行されないことを理解しました。', permanentDecisionWarning: 'これは永続的な安全記録です。送信するとこの不明項目は閉じられ、この画面では取り消しや変更ができません。', permanentDecisionRequired: '上の呼び出し ID と引数ダイジェストを確認し、ツール呼び出し {toolCallId} を「{decision}」として永続的に記録することを確認します。', noDecisionSelected: '結果が未選択です', submitDecision: '最終結果を記録', resolving: '記録中…', committedRecorded: 'コミット済みとして記録しました。', failedRecorded: '失敗として記録しました。', loadMore: 'さらに読み込む', loadingMore: '読み込み中…', historyTitle: '手動監査履歴（{count}）', historyHint: 'ユーザーが結果を確認し、永続的に記録した操作です。', historyLoading: '監査履歴を読み込み中…', historyEmpty: '手動監査履歴はまだありません。', historyLoadFailed: '監査履歴を読み込めませんでした：{reason}', historyCommitted: 'コミット済みを確認', historyFailed: '失敗を確認', historyNoteLabel: '監査メモ', historyNoNote: 'メモはありません。',
+  },
+  ko: {
+    navTitle: '작업 복구', title: '알 수 없는 작업 복구', subtitle: '중단 후 결과가 불확실해진 외부 쓰기를 확인하고 실제 결과를 기록합니다.', safetyTitle: '결정하기 전에 실제 결과를 확인하세요', safetyWarning: '“알 수 없음”은 실패를 뜻하지 않습니다. 먼저 대상 파일, 앱 또는 외부 서비스에서 결과를 확인하세요. 실패로 추측해 다시 실행하면 쓰기, 메시지 또는 과금이 중복될 수 있습니다. 여기서 내리는 결정은 사실만 기록하며 도구를 다시 실행하지 않습니다.', pendingTitle: '확인할 작업({count})', pendingHint: '로그인한 사용자가 소유한 미해결 기록만 표시합니다.', refresh: '새로고침', loading: '확인할 작업을 불러오는 중…', retry: '다시 시도', empty: '확인할 알 수 없는 작업이 없습니다.', loadFailed: '확인할 작업을 불러오지 못했습니다: {reason}', resolveFailed: '복구 결정을 저장하지 못했습니다: {reason}', unknownTool: '알 수 없는 도구', unknownTime: '시간 알 수 없음', jobContext: '작업 {id}', turnContext: '턴 {id}', sessionContext: '세션 {id}', scopeContext: '{kind} 작업', recordWarning: '이 작업은 이미 실제 부작용을 일으켰을 수 있습니다. 화면에서 완료 응답을 받지 못했다는 이유만으로 다시 실행하지 마세요.', toolCallIdLabel: '도구 호출 ID', argsDigestLabel: '인수 다이제스트(SHA-256)', stepIdLabel: '단계 ID', targetSummaryLabel: '확인 가능한 대상', changedPathsLabel: '변경된 경로', verifiedOutputsLabel: '검증된 출력', artifactIdsLabel: '산출물 ID', noEvidence: '안전하게 표시할 수 있는 대상 증거가 저장되지 않았습니다. 호출 ID와 인수 다이제스트로 로그 또는 대상 시스템을 확인하세요.', artifactReference: '산출물 {id}', receiptReference: '영수증 {id}', sha256Reference: 'SHA-256 {digest}', sizeReference: '{size}바이트', decisionLabel: '확인한 결과', confirmCommitted: '커밋 완료로 확인', confirmCommittedHint: '대상 시스템에서 쓰기, 전송 또는 기타 작업이 완료된 것을 확인했습니다.', confirmFailed: '실패로 확인', confirmFailedHint: '대상 시스템에서 예상한 부작용이 발생하지 않았음을 확인했습니다.', noteLabel: '감사 메모(선택 사항)', notePlaceholder: '실제 결과를 어디서 어떻게 확인했는지 기록', verificationRequired: '대상 파일, 앱 또는 외부 서비스에서 실제 결과를 확인했으며 이 결정이 도구를 다시 실행하지 않는다는 점을 이해했습니다.', permanentDecisionWarning: '이 결정은 영구 안전 기록입니다. 제출하면 이 항목이 닫히며 이 화면에서 취소하거나 다른 결과로 바꿀 수 없습니다.', permanentDecisionRequired: '위의 호출 ID와 인수 다이제스트를 확인했으며 도구 호출 {toolCallId}을(를) “{decision}”로 영구 기록하는 데 동의합니다.', noDecisionSelected: '결과를 선택하지 않음', submitDecision: '최종 결과 기록', resolving: '기록 중…', committedRecorded: '커밋 완료로 기록했습니다.', failedRecorded: '실패로 기록했습니다.', loadMore: '더 보기', loadingMore: '불러오는 중…', historyTitle: '수동 감사 기록({count})', historyHint: '사용자가 결과를 확인하고 영구 기록한 작업입니다.', historyLoading: '감사 기록을 불러오는 중…', historyEmpty: '수동 감사 기록이 없습니다.', historyLoadFailed: '감사 기록을 불러오지 못했습니다: {reason}', historyCommitted: '커밋 완료 확인', historyFailed: '실패 확인', historyNoteLabel: '감사 메모', historyNoNote: '기록된 메모가 없습니다.',
+  },
+  'zh-TW': {
+    navTitle: '操作復原', title: '未知操作復原', subtitle: '核對執行中斷後結果不明的外部寫入，並由你記錄最終事實。', safetyTitle: '先核驗真實結果，再作決定', safetyWarning: '「未知」不等於失敗。請先在目標檔案、應用程式或外部服務中核驗結果；猜測為失敗並重新執行可能造成重複寫入、重複傳送或重複扣費。這裡的決定只記錄事實，不會再次執行工具。', pendingTitle: '待核對操作（{count}）', pendingHint: '只會顯示目前登入使用者尚未解決的記錄。', refresh: '重新整理', loading: '正在讀取待核對操作…', retry: '重試', empty: '沒有待核對的未知操作。', loadFailed: '無法讀取待核對操作：{reason}', resolveFailed: '無法儲存復原決定：{reason}', unknownTool: '未知工具', unknownTime: '時間未知', jobContext: '任務 {id}', turnContext: '輪次 {id}', sessionContext: '對話 {id}', scopeContext: '{kind} 操作', recordWarning: '此操作可能已經產生真實副作用。不要只因介面未收到完成回執就重新執行。', toolCallIdLabel: '工具呼叫 ID', argsDigestLabel: '參數摘要（SHA-256）', stepIdLabel: '步驟 ID', targetSummaryLabel: '可核驗目標', changedPathsLabel: '變更路徑', verifiedOutputsLabel: '已驗證輸出', artifactIdsLabel: '產物 ID', noEvidence: '沒有儲存可安全顯示的目標證據；請使用呼叫 ID 與參數摘要核對日誌或目標系統。', artifactReference: '產物 {id}', receiptReference: '回執 {id}', sha256Reference: 'SHA-256 {digest}', sizeReference: '{size} 位元組', decisionLabel: '核驗結論', confirmCommitted: '確認已提交', confirmCommittedHint: '已在目標系統中確認寫入、傳送或其他操作確實完成。', confirmFailed: '確認失敗', confirmFailedHint: '已在目標系統中確認沒有產生預期副作用。', noteLabel: '稽核備註（選填）', notePlaceholder: '記錄你在哪裡、如何核驗真實結果', verificationRequired: '我已在目標檔案、應用程式或外部服務中核驗真實結果，並理解此決定不會重新執行工具。', permanentDecisionWarning: '這是永久性安全記錄。提交後此未知項目會被關閉，無法在這個畫面撤銷或改成其他結論。', permanentDecisionRequired: '我確認要把工具呼叫 {toolCallId} 永久記錄為「{decision}」，並已核對上方呼叫 ID 與參數摘要。', noDecisionSelected: '尚未選擇結論', submitDecision: '記錄最終結論', resolving: '正在記錄…', committedRecorded: '已記錄為確認已提交。', failedRecorded: '已記錄為確認失敗。', loadMore: '載入更多', loadingMore: '正在載入…', historyTitle: '人工稽核記錄（{count}）', historyHint: '顯示已由使用者核驗並永久記錄結果的操作。', historyLoading: '正在讀取稽核記錄…', historyEmpty: '目前沒有人工稽核記錄。', historyLoadFailed: '無法讀取稽核記錄：{reason}', historyCommitted: '已確認提交', historyFailed: '已確認失敗', historyNoteLabel: '稽核備註', historyNoNote: '未填寫備註。',
+  },
+}
+
+const TASK_MODEL_READINESS_TRANSLATIONS = {
+  zh: {
+    title: '任务模型', loading: '检查中', unconfigured: '未配置', untested: '未测试', chatOnly: '仅聊天', agentReady: 'Agent 可用', unavailable: '不可用',
+    loadingDetail: '正在读取本地模型配置，完成前不会创建任务。', unconfiguredDetail: '请先配置服务地址、API Key（本地服务可选）和模型名。', emptyDetail: '模型服务没有返回可执行模型，请检查模型列表或重新检测。', selectionDetail: '当前选择与可用模型不匹配，请重新选择模型。', untestedDetail: '所选模型尚未通过可用性测试，任务不会启动。', chatOnlyDetail: '所选模型能回复文本，但不支持任务所需的工具调用。', agentReadyDetail: '所选模型已通过聊天与工具调用测试，可以运行任务。', unavailableDetail: '当前无法连接所选模型服务，请检查配置并重新测试。', errorDetail: '无法读取模型状态，任务尚未启动。请重试或检查配置。', retry: '重新检查', configure: '配置或更换模型',
+  },
+  en: {
+    title: 'Task model', loading: 'Checking', unconfigured: 'Not configured', untested: 'Not tested', chatOnly: 'Chat only', agentReady: 'Agent ready', unavailable: 'Unavailable',
+    loadingDetail: 'Reading the local model configuration. No task will start until this finishes.', unconfiguredDetail: 'Configure the service URL, API key (optional for local services), and model name first.', emptyDetail: 'The model service returned no executable models. Review the model list or run discovery again.', selectionDetail: 'The current selection does not match an available model. Choose a model again.', untestedDetail: 'The selected model has not passed an availability test, so the task will not start.', chatOnlyDetail: 'The selected model can reply with text but does not support the tool calls required by tasks.', agentReadyDetail: 'The selected model passed chat and tool-call checks and can run tasks.', unavailableDetail: 'The selected model service is currently unreachable. Review the configuration and test it again.', errorDetail: 'Model status could not be read, so no task was started. Retry or review the configuration.', retry: 'Check again', configure: 'Configure or change model',
+  },
+  ja: {
+    title: 'タスク用モデル', loading: '確認中', unconfigured: '未設定', untested: '未テスト', chatOnly: 'チャットのみ', agentReady: 'Agent 利用可能', unavailable: '利用不可',
+    loadingDetail: 'ローカルのモデル設定を読み込んでいます。完了するまでタスクは開始されません。', unconfiguredDetail: 'サービス URL、API Key（ローカルサービスでは任意）、モデル名を設定してください。', emptyDetail: 'モデルサービスに実行可能なモデルがありません。モデル一覧を確認するか再検出してください。', selectionDetail: '現在の選択は利用可能なモデルと一致しません。モデルを選び直してください。', untestedDetail: '選択したモデルは利用可能性テストを完了していないため、タスクは開始されません。', chatOnlyDetail: '選択したモデルはテキスト応答できますが、タスクに必要なツール呼び出しには対応していません。', agentReadyDetail: '選択したモデルはチャットとツール呼び出しのテストを通過し、タスクを実行できます。', unavailableDetail: '選択したモデルサービスに接続できません。設定を確認して再テストしてください。', errorDetail: 'モデル状態を取得できないため、タスクは開始されていません。再試行するか設定を確認してください。', retry: '再確認', configure: 'モデルを設定・変更',
+  },
+  ko: {
+    title: '작업 모델', loading: '확인 중', unconfigured: '설정 안 됨', untested: '테스트 안 됨', chatOnly: '채팅 전용', agentReady: 'Agent 사용 가능', unavailable: '사용 불가',
+    loadingDetail: '로컬 모델 설정을 읽는 중입니다. 완료되기 전에는 작업을 시작하지 않습니다.', unconfiguredDetail: '서비스 URL, API Key(로컬 서비스는 선택 사항), 모델 이름을 먼저 설정하세요.', emptyDetail: '모델 서비스가 실행 가능한 모델을 반환하지 않았습니다. 모델 목록을 확인하거나 다시 검색하세요.', selectionDetail: '현재 선택이 사용 가능한 모델과 일치하지 않습니다. 모델을 다시 선택하세요.', untestedDetail: '선택한 모델이 사용 가능성 테스트를 완료하지 않아 작업을 시작하지 않습니다.', chatOnlyDetail: '선택한 모델은 텍스트 응답은 가능하지만 작업에 필요한 도구 호출을 지원하지 않습니다.', agentReadyDetail: '선택한 모델이 채팅과 도구 호출 테스트를 통과하여 작업을 실행할 수 있습니다.', unavailableDetail: '선택한 모델 서비스에 연결할 수 없습니다. 설정을 확인하고 다시 테스트하세요.', errorDetail: '모델 상태를 읽지 못해 작업을 시작하지 않았습니다. 다시 시도하거나 설정을 확인하세요.', retry: '다시 확인', configure: '모델 설정 또는 변경',
+  },
+  'zh-TW': {
+    title: '任務模型', loading: '檢查中', unconfigured: '未設定', untested: '未測試', chatOnly: '僅聊天', agentReady: 'Agent 可用', unavailable: '無法使用',
+    loadingDetail: '正在讀取本機模型設定，完成前不會建立任務。', unconfiguredDetail: '請先設定服務位址、API Key（本機服務可選）和模型名稱。', emptyDetail: '模型服務沒有傳回可執行模型，請檢查模型清單或重新偵測。', selectionDetail: '目前選擇與可用模型不符，請重新選擇模型。', untestedDetail: '所選模型尚未通過可用性測試，任務不會啟動。', chatOnlyDetail: '所選模型能回覆文字，但不支援任務所需的工具呼叫。', agentReadyDetail: '所選模型已通過聊天與工具呼叫測試，可以執行任務。', unavailableDetail: '目前無法連線所選模型服務，請檢查設定並重新測試。', errorDetail: '無法讀取模型狀態，任務尚未啟動。請重試或檢查設定。', retry: '重新檢查', configure: '設定或更換模型',
+  },
+}
+
+const MODEL_REQUEST_RECOVERY_TRANSLATIONS = {
+  zh: {
+    title: '模型请求恢复', hint: '仅用于处理中断前结果未知的模型请求。请先在模型服务端核对请求 ID，再作出裁决。', loading: '正在读取模型请求…', empty: '当前 Turn 没有待处理的模型请求。', retry: '重新加载', warning: 'Gugo 不收费。错误地选择“未发送”会重复调用用户自配的上游 Provider，可能增加其账户用量；错误地补录响应会污染对话状态。', provider: '逻辑绑定 Provider / 模型', lastProvider: '最后实际出站 Provider / 模型', physicalAttempt: '物理尝试', revision: '版本', requestId: '模型请求 ID', idempotencyKey: '幂等键', notSent: '确认未发送，可安全重试', notSentHint: '仅当上游能权威确认从未接受该请求时选择。', completed: '确认已完成，补录权威响应', completedHint: '提供上游返回的完整响应快照和查询回执。', unknown: '仍无法确认，继续阻塞', unknownHint: '不调用模型，也不解除当前 Turn 的阻塞。', response: '权威响应 JSON', receipt: '查询回执 JSON', note: '审计备注（可选）', verify: '我已使用最后实际 Provider 和请求 ID 核对该请求，并理解此裁决可能触发对用户自配上游的再次调用。', confirm: '再次输入模型请求 ID', submit: '保存裁决', saving: '保存中…', savedBlocked: '已记录“仍未知”，任务继续保持阻塞。', savedReady: '裁决已保存，可以继续原任务。', continue: '继续原任务', continuing: '恢复中…', requestMismatch: '模型请求 ID 与当前阻塞消息不匹配', invalidJson: '{label} 无效', jsonObjectRequired: '{label} 必须是 JSON 对象',
+  },
+  en: {
+    title: 'Model request recovery', hint: 'Use this only for a model request whose outcome became unknown during interruption. Verify the request ID at the provider first.', loading: 'Loading model request…', empty: 'This turn has no pending model request.', retry: 'Reload', warning: 'Gugo does not charge users. Incorrectly choosing “not sent” repeats a call to the user-configured upstream Provider and may increase that account’s usage; injecting an incorrect response corrupts the turn.', provider: 'Logical Provider / model binding', lastProvider: 'Last actual outbound Provider / model', physicalAttempt: 'physical attempt', revision: 'revision', requestId: 'Model request ID', idempotencyKey: 'Idempotency key', notSent: 'Confirmed not sent; safe to retry', notSentHint: 'Choose only when the provider authoritatively confirms it never accepted the request.', completed: 'Confirmed completed; inject response', completedHint: 'Provide the authoritative response snapshot and lookup receipt.', unknown: 'Still unknown; remain blocked', unknownHint: 'No model call is made and the turn stays blocked.', response: 'Authoritative response JSON', receipt: 'Lookup receipt JSON', note: 'Audit note (optional)', verify: 'I verified this request using the last actual Provider and request ID, and understand that this decision may trigger another call to the user-configured upstream.', confirm: 'Re-enter the model request ID', submit: 'Save decision', saving: 'Saving…', savedBlocked: '“Still unknown” was recorded; the turn remains blocked.', savedReady: 'Decision saved. The original task can now continue.', continue: 'Continue original task', continuing: 'Resuming…', requestMismatch: 'The model request ID does not match the blocked message.', invalidJson: '{label} is invalid.', jsonObjectRequired: '{label} must be a JSON object.',
+  },
+  ja: {
+    title: 'モデルリクエストの復旧', hint: '中断時に結果が不明となったモデルリクエストのみを処理します。先に Provider でリクエスト ID を確認してください。', loading: 'モデルリクエストを読み込み中…', empty: 'このターンに処理待ちのモデルリクエストはありません。', retry: '再読み込み', warning: 'Gugo は利用者に課金しません。「未送信」を誤って選択すると、利用者が設定した上流 Provider への呼び出しが重複し、そのアカウントの使用量が増える可能性があります。', provider: '論理 Provider / モデルバインド', lastProvider: '最後の実際の送信先 Provider / モデル', physicalAttempt: '物理試行', revision: 'リビジョン', requestId: 'モデルリクエスト ID', idempotencyKey: '冪等性キー', notSent: '未送信を確認、安全に再試行可能', notSentHint: 'Provider がこのリクエストを受け付けていないと正式に確認できた場合のみ選択してください。', completed: '完了を確認、正式な応答を補記', completedHint: 'Provider が返した完全な応答スナップショットと照会記録を入力してください。', unknown: '引き続き不明、ブロックを維持', unknownHint: 'モデルは呼び出されず、現在のターンはブロックされたままです。', response: '正式な応答 JSON', receipt: '照会記録 JSON', note: '監査メモ（任意）', verify: '最後の実際の Provider とリクエスト ID を使って確認し、この判断により利用者設定の上流が再度呼び出される可能性を理解しました。', confirm: 'モデルリクエスト ID を再入力', submit: '判断を保存', saving: '保存中…', savedBlocked: '「引き続き不明」を記録しました。タスクはブロックされたままです。', savedReady: '判断を保存しました。元のタスクを続行できます。', continue: '元のタスクを続行', continuing: '再開中…', requestMismatch: 'モデルリクエスト ID が現在のブロックメッセージと一致しません。', invalidJson: '{label} が無効です。', jsonObjectRequired: '{label} は JSON オブジェクトである必要があります。',
+  },
+  ko: {
+    title: '모델 요청 복구', hint: '중단 시 결과를 알 수 없게 된 모델 요청에만 사용하세요. 먼저 Provider에서 요청 ID를 확인하세요.', loading: '모델 요청을 불러오는 중…', empty: '이 턴에는 처리 대기 중인 모델 요청이 없습니다.', retry: '다시 불러오기', warning: 'Gugo는 사용자에게 요금을 청구하지 않습니다. “전송되지 않음”을 잘못 선택하면 사용자가 구성한 상위 Provider 호출이 반복되어 해당 계정의 사용량이 늘어날 수 있습니다.', provider: '논리 Provider / 모델 바인딩', lastProvider: '마지막 실제 전송 Provider / 모델', physicalAttempt: '물리 시도', revision: '리비전', requestId: '모델 요청 ID', idempotencyKey: '멱등성 키', notSent: '전송되지 않음을 확인, 안전하게 재시도 가능', notSentHint: 'Provider가 이 요청을 수락하지 않았다고 권위 있게 확인한 경우에만 선택하세요.', completed: '완료 확인, 권위 있는 응답 입력', completedHint: 'Provider가 반환한 전체 응답 스냅샷과 조회 영수증을 입력하세요.', unknown: '여전히 알 수 없음, 차단 유지', unknownHint: '모델을 호출하지 않으며 현재 턴의 차단을 해제하지 않습니다.', response: '권위 있는 응답 JSON', receipt: '조회 영수증 JSON', note: '감사 메모(선택 사항)', verify: '마지막 실제 Provider와 요청 ID로 이 요청을 확인했으며, 이 결정이 사용자 구성 상위를 다시 호출할 수 있음을 이해했습니다.', confirm: '모델 요청 ID 다시 입력', submit: '결정 저장', saving: '저장 중…', savedBlocked: '“여전히 알 수 없음”으로 기록했습니다. 작업은 계속 차단됩니다.', savedReady: '결정을 저장했습니다. 원래 작업을 계속할 수 있습니다.', continue: '원래 작업 계속', continuing: '재개 중…', requestMismatch: '모델 요청 ID가 현재 차단 메시지와 일치하지 않습니다.', invalidJson: '{label}이(가) 유효하지 않습니다.', jsonObjectRequired: '{label}은(는) JSON 객체여야 합니다.',
+  },
+  'zh-TW': {
+    title: '模型請求恢復', hint: '僅用於處理中斷前結果未知的模型請求。請先在模型服務端核對請求 ID，再作出裁決。', loading: '正在讀取模型請求…', empty: '目前 Turn 沒有待處理的模型請求。', retry: '重新載入', warning: 'Gugo 不向使用者收費。錯誤選擇「未傳送」會重複呼叫使用者自訂的上游 Provider，可能增加該帳戶的用量。', provider: '邏輯綁定 Provider / 模型', lastProvider: '最後實際出站 Provider / 模型', physicalAttempt: '物理嘗試', revision: '版本', requestId: '模型請求 ID', idempotencyKey: '冪等鍵', notSent: '確認未傳送，可安全重試', notSentHint: '僅當上游能權威確認從未接受該請求時選擇。', completed: '確認已完成，補錄權威回應', completedHint: '提供上游傳回的完整回應快照和查詢回執。', unknown: '仍無法確認，繼續阻塞', unknownHint: '不呼叫模型，也不解除目前 Turn 的阻塞。', response: '權威回應 JSON', receipt: '查詢回執 JSON', note: '稽核備註（選填）', verify: '我已使用最後實際 Provider 和請求 ID 核對該請求，並理解此裁決可能觸發對使用者自訂上游的再次呼叫。', confirm: '再次輸入模型請求 ID', submit: '儲存裁決', saving: '儲存中…', savedBlocked: '已記錄「仍未知」，任務繼續保持阻塞。', savedReady: '裁決已儲存，可以繼續原任務。', continue: '繼續原任務', continuing: '恢復中…', requestMismatch: '模型請求 ID 與目前阻塞訊息不符', invalidJson: '{label} 無效', jsonObjectRequired: '{label} 必須是 JSON 物件',
+  },
+}
+
+const FEE_CLARITY_TRANSLATIONS = {
+  zh: {
+    chatSideEffect: '该操作可能已经写入、发送，或已由外部服务产生费用。请前往“设置 → 操作恢复”核验真实结果；在你确认前，系统不会自动再次执行。',
+    sideEffectWarning: '“未知”不等于失败。请先在目标文件、应用或外部服务中核验结果；猜测为失败并重新执行可能造成重复写入、重复发送，或由外部服务重复收费。这里的决定只记录事实，不会再次执行工具。',
+    chatModelRequest: '为避免重复请求并产生额外的上游模型供应商费用，系统没有自动重试。请先核对上游记录，再在恢复页裁决。',
+    modelRequestWarning: '错误地选择“未发送”可能产生重复请求和额外的上游模型供应商费用；错误地补录响应会污染对话状态。',
+    modelRequestVerify: '我已在上游服务核对该请求，并理解此裁决可能导致上游模型供应商再次收费。',
+  },
+  en: {
+    chatSideEffect: 'The operation may already have written data, sent a message, or incurred a charge from an external service. Verify the real outcome in Settings → Operation recovery. It will not run again until you confirm.',
+    sideEffectWarning: '“Unknown” does not mean failed. Check the target file, app, or external service first. Guessing failure and rerunning can duplicate writes, messages, or external-service charges. This decision records facts only; it never runs the tool again.',
+    chatModelRequest: 'Automatic retry was blocked to avoid a duplicate request and another charge from the upstream model provider. Verify the provider record before deciding.',
+    modelRequestWarning: 'Incorrectly choosing “not sent” may duplicate the request and cause another charge from the upstream model provider; injecting an incorrect response corrupts the turn.',
+    modelRequestVerify: 'I verified this exact request with the provider and understand that the upstream model provider may charge again.',
+  },
+  ja: {
+    chatSideEffect: '書き込み、送信、または外部サービス側の料金がすでに発生している可能性があります。「設定 → 操作の復旧」で実際の結果を確認してください。確認するまで自動的に再実行されません。',
+    sideEffectWarning: '「不明」は失敗を意味しません。先に対象ファイル、アプリ、外部サービスで結果を確認してください。失敗と推測して再実行すると、書き込み、送信、または外部サービス側の料金が重複するおそれがあります。ここでの判断は事実を記録するだけで、ツールは再実行しません。',
+    chatModelRequest: 'リクエストの重複と上流モデル Provider からの追加請求を避けるため、自動再試行を停止しました。判断する前に Provider の記録を確認してください。',
+    modelRequestWarning: '「未送信」を誤って選択すると、リクエストが重複し、上流モデル Provider から追加請求される可能性があります。誤った応答を補記するとターンの状態が破損します。',
+    modelRequestVerify: 'このリクエストを Provider で確認し、この判断によって上流モデル Provider から再度請求される可能性があることを理解しました。',
+  },
+  ko: {
+    chatSideEffect: '쓰기, 전송 또는 외부 서비스 요금이 이미 발생했을 수 있습니다. “설정 → 작업 복구”에서 실제 결과를 확인하세요. 확인 전에는 자동으로 다시 실행되지 않습니다.',
+    sideEffectWarning: '“알 수 없음”은 실패를 뜻하지 않습니다. 먼저 대상 파일, 앱 또는 외부 서비스에서 결과를 확인하세요. 실패로 추측해 다시 실행하면 쓰기, 메시지 또는 외부 서비스 요금이 중복될 수 있습니다. 여기서 내리는 결정은 사실만 기록하며 도구를 다시 실행하지 않습니다.',
+    chatModelRequest: '요청 중복과 상위 모델 Provider의 추가 요금 발생을 방지하기 위해 자동 재시도를 중지했습니다. 결정하기 전에 Provider 기록을 확인하세요.',
+    modelRequestWarning: '“전송되지 않음”을 잘못 선택하면 요청이 중복되고 상위 모델 Provider의 추가 요금이 발생할 수 있으며, 잘못된 응답을 입력하면 턴 상태가 손상됩니다.',
+    modelRequestVerify: '이 요청을 Provider에서 확인했으며 이 결정으로 상위 모델 Provider의 요금이 다시 발생할 수 있음을 이해했습니다.',
+  },
+  'zh-TW': {
+    chatSideEffect: '該操作可能已經寫入、傳送，或已由外部服務產生費用。請前往「設定 → 操作恢復」核驗真實結果；在你確認前，系統不會自動再次執行。',
+    sideEffectWarning: '「未知」不等於失敗。請先在目標檔案、應用程式或外部服務中核驗結果；猜測為失敗並重新執行可能造成重複寫入、重複傳送，或由外部服務重複收費。這裡的決定只記錄事實，不會再次執行工具。',
+    chatModelRequest: '為避免重複請求並產生額外的上游模型供應商費用，系統沒有自動重試。請先核對上游記錄，再到恢復頁面作出裁決。',
+    modelRequestWarning: '錯誤選擇「未傳送」可能產生重複請求和額外的上游模型供應商費用；錯誤補錄回應會污染對話狀態。',
+    modelRequestVerify: '我已在上游服務核對該請求，並理解此裁決可能導致上游模型供應商再次收費。',
+  },
+}
+
+for (const [language, copy] of Object.entries(FEE_CLARITY_TRANSLATIONS)) {
+  FEATURE_PAGE_TRANSLATIONS[language].chatMessages.sideEffectUnknownBody = copy.chatSideEffect
+  FEATURE_PAGE_TRANSLATIONS[language].chatMessages.modelRequestUnknownBody = copy.chatModelRequest
+  SIDE_EFFECT_RECOVERY_TRANSLATIONS[language].safetyWarning = copy.sideEffectWarning
+  MODEL_REQUEST_RECOVERY_TRANSLATIONS[language].warning = copy.modelRequestWarning
+  MODEL_REQUEST_RECOVERY_TRANSLATIONS[language].verify = copy.modelRequestVerify
 }
 
 const WEB_SEARCH_TRANSLATIONS = {
@@ -981,6 +1291,78 @@ const WEB_SEARCH_MULTI_TRANSLATIONS = {
   },
 }
 
+Object.assign(SIDE_EFFECT_RECOVERY_TRANSLATIONS.zh, { continueOriginalTask: '继续原任务', openOriginalTask: '打开原任务' })
+Object.assign(SIDE_EFFECT_RECOVERY_TRANSLATIONS.en, { continueOriginalTask: 'Continue original task', openOriginalTask: 'Open original task' })
+Object.assign(SIDE_EFFECT_RECOVERY_TRANSLATIONS.ja, { continueOriginalTask: '元のタスクを続行', openOriginalTask: '元のタスクを開く' })
+Object.assign(SIDE_EFFECT_RECOVERY_TRANSLATIONS.ko, { continueOriginalTask: '원래 작업 계속', openOriginalTask: '원래 작업 열기' })
+Object.assign(SIDE_EFFECT_RECOVERY_TRANSLATIONS['zh-TW'], { continueOriginalTask: '繼續原任務', openOriginalTask: '開啟原任務' })
+
+const EVOLUTION_TRANSLATIONS = {
+  zh: {
+    title: '自我进化', subtitle: '在本机查看证据、候选、独立评估、人工审批和可回滚灰度；系统不会静默发布变更。', loading: '正在加载演进记录…', refresh: '刷新', actionFailed: '操作失败',
+    evidence: '证据', evidenceHint: '来自本地反馈与运行记录的只读证据。', emptyEvidence: '还没有可用证据',
+    candidates: '候选变更', candidateHint: '候选始终是惰性提案，未经评估、审批和灰度不会生效。', emptyCandidates: '还没有候选变更', promptBoundary: 'Prompt 候选可进入审批与灰度', unsupportedBoundary: '当前仅可查看和评估，不可发布',
+    evaluations: '独立评估与审批', evaluationHint: '审批前核对候选摘要、评估结论和不可变内容摘要。', emptyEvaluations: '还没有评估结果', verdict: '结论', review: '查看并审批', candidateHash: '候选摘要', notEligible: '不可批准', reason: '审批理由', reasonPlaceholder: '填写明确的审批或拒绝理由', reasonRequired: '请填写审批理由。', approve: '批准', reject: '拒绝', approved: '已记录批准决定。', rejected: '已记录拒绝决定。',
+    canaries: '受控灰度', canaryHint: '仅对指定会话放量；创建时冻结回滚与独立在线评分策略，仍需人工启动。', approval: '已批准决定', selectApproval: '选择批准记录', sessionIds: '会话 ID，逗号分隔', trafficPercent: '候选流量百分比', createCanary: '创建灰度并配置护栏', configureCanaryGuardrails: '补齐灰度护栏', emptyCanaries: '还没有灰度发布', start: '启动', stop: '停止', canaryScopeRequired: '请选择批准记录、会话范围和完整的独立评分模型。', canaryCreateReason: '由本地所有者创建受控灰度', rollbackPolicyReason: '启动前声明自动回滚护栏', onlineGraderPolicyReason: '启动前冻结独立在线质量与安全评分器', onlineGraderProvider: '在线评分 Provider', onlineGraderModel: '在线评分模型', onlineGraderRevision: '评分模型修订标识', onlineEvidence: '在线证据', onlineEvidenceDecision: '在线证据结论', onlineGradePending: '待评分', runOnlineGrade: '执行评分', onlineGradeRecorded: '已记录不可变在线评分。', canaryCreated: '灰度已创建并配置回滚与在线评分策略。', canaryStartReason: '本地所有者明确启动灰度', canaryStopReason: '本地所有者手动停止灰度', canaryStarted: '灰度已启动。', canaryStopped: '灰度已停止。',
+    state: { created: '待启动', active: '运行中', stopped: '已停止', rolled_back: '已自动回滚' },
+  },
+  en: {
+    title: 'Self-evolution', subtitle: 'Review local evidence, candidates, independent evaluations, human approvals, and reversible canaries. Changes are never published silently.', loading: 'Loading evolution records…', refresh: 'Refresh', actionFailed: 'Operation failed',
+    evidence: 'Evidence', evidenceHint: 'Read-only evidence from local feedback and runtime records.', emptyEvidence: 'No evidence yet', candidates: 'Candidates', candidateHint: 'Candidates remain inert until evaluation, approval, and canary release.', emptyCandidates: 'No candidates yet', promptBoundary: 'Prompt candidates can enter approval and canary', unsupportedBoundary: 'View and evaluate only; publishing is not supported',
+    evaluations: 'Independent evaluation and approval', evaluationHint: 'Verify the proposal, verdict, and immutable digests before deciding.', emptyEvaluations: 'No evaluations yet', verdict: 'Verdict', review: 'Review and decide', candidateHash: 'Candidate digest', notEligible: 'Not eligible', reason: 'Decision reason', reasonPlaceholder: 'Enter an explicit approval or rejection reason', reasonRequired: 'Enter a decision reason.', approve: 'Approve', reject: 'Reject', approved: 'Approval recorded.', rejected: 'Rejection recorded.',
+    canaries: 'Controlled canaries', canaryHint: 'Scope traffic to selected sessions and freeze rollback plus independent online grading before manual start.', approval: 'Approved decision', selectApproval: 'Select approval', sessionIds: 'Session IDs, comma-separated', trafficPercent: 'Candidate traffic percent', createCanary: 'Create canary with guardrails', configureCanaryGuardrails: 'Complete canary guardrails', emptyCanaries: 'No canaries yet', start: 'Start', stop: 'Stop', canaryScopeRequired: 'Select an approval, session scope, and complete independent grader identity.', canaryCreateReason: 'Controlled canary created by the local owner', rollbackPolicyReason: 'Declare automatic rollback guardrails before start', onlineGraderPolicyReason: 'Freeze the independent online quality and safety grader before start', onlineGraderProvider: 'Online grader Provider', onlineGraderModel: 'Online grader model', onlineGraderRevision: 'Grader model revision', onlineEvidence: 'Online evidence', onlineEvidenceDecision: 'Online evidence decision', onlineGradePending: 'Pending grade', runOnlineGrade: 'Run grade', onlineGradeRecorded: 'Immutable online grade recorded.', canaryCreated: 'Canary created with rollback and online grader policies.', canaryStartReason: 'Canary explicitly started by the local owner', canaryStopReason: 'Canary manually stopped by the local owner', canaryStarted: 'Canary started.', canaryStopped: 'Canary stopped.', state: { created: 'Ready', active: 'Active', stopped: 'Stopped', rolled_back: 'Rolled back' },
+  },
+  ja: {
+    title: '自己進化', subtitle: 'ローカルの証拠、候補、独立評価、人による承認、ロールバック可能なカナリアを確認します。変更は自動公開されません。', loading: '進化記録を読み込み中…', refresh: '更新', actionFailed: '操作に失敗しました', evidence: '証拠', evidenceHint: 'ローカルのフィードバックと実行記録から得た読み取り専用の証拠です。', emptyEvidence: '証拠はまだありません', candidates: '変更候補', candidateHint: '評価、承認、カナリアを経るまで候補は適用されません。', emptyCandidates: '候補はまだありません', promptBoundary: 'Prompt 候補は承認とカナリアへ進めます', unsupportedBoundary: '表示と評価のみ。現在は公開できません', evaluations: '独立評価と承認', evaluationHint: '判断前に候補、評価結果、不変ダイジェストを確認します。', emptyEvaluations: '評価はまだありません', verdict: '判定', review: '確認して判断', candidateHash: '候補ダイジェスト', notEligible: '承認不可', reason: '判断理由', reasonPlaceholder: '承認または拒否の理由を入力', reasonRequired: '判断理由を入力してください。', approve: '承認', reject: '拒否', approved: '承認を記録しました。', rejected: '拒否を記録しました。', canaries: '制御されたカナリア', canaryHint: '指定セッションだけに配信し、開始前にロールバックと独立オンライン評価を固定します。', approval: '承認済み判断', selectApproval: '承認を選択', sessionIds: 'セッション ID（カンマ区切り）', trafficPercent: '候補トラフィック率', createCanary: 'ガード付きで作成', configureCanaryGuardrails: 'カナリアのガードを補完', emptyCanaries: 'カナリアはまだありません', start: '開始', stop: '停止', canaryScopeRequired: '承認、セッション範囲、独立評価モデルを指定してください。', canaryCreateReason: 'ローカル所有者が制御カナリアを作成', rollbackPolicyReason: '開始前に自動ロールバック条件を宣言', onlineGraderPolicyReason: '開始前に独立した品質・安全性評価を固定', onlineGraderProvider: 'オンライン評価 Provider', onlineGraderModel: 'オンライン評価モデル', onlineGraderRevision: '評価モデルのリビジョン', onlineEvidence: 'オンライン証拠', onlineEvidenceDecision: 'オンライン証拠の判定', onlineGradePending: '未評価', runOnlineGrade: '評価を実行', onlineGradeRecorded: '不変のオンライン評価を記録しました。', canaryCreated: 'カナリア、ロールバック、オンライン評価方針を作成しました。', canaryStartReason: 'ローカル所有者が明示的に開始', canaryStopReason: 'ローカル所有者が手動停止', canaryStarted: 'カナリアを開始しました。', canaryStopped: 'カナリアを停止しました。', state: { created: '開始待ち', active: '実行中', stopped: '停止済み', rolled_back: '自動ロールバック済み' },
+  },
+  ko: {
+    title: '자기 진화', subtitle: '로컬 근거, 후보, 독립 평가, 사람의 승인 및 되돌릴 수 있는 카나리를 검토합니다. 변경 사항은 자동 배포되지 않습니다.', loading: '진화 기록 불러오는 중…', refresh: '새로고침', actionFailed: '작업 실패', evidence: '근거', evidenceHint: '로컬 피드백과 실행 기록에서 수집한 읽기 전용 근거입니다.', emptyEvidence: '근거가 없습니다', candidates: '변경 후보', candidateHint: '평가, 승인 및 카나리 전에는 후보가 적용되지 않습니다.', emptyCandidates: '후보가 없습니다', promptBoundary: 'Prompt 후보는 승인 및 카나리 단계로 진행 가능', unsupportedBoundary: '보기 및 평가만 가능하며 현재 배포할 수 없음', evaluations: '독립 평가 및 승인', evaluationHint: '결정 전에 후보, 평가 결과 및 변경 불가 다이제스트를 확인합니다.', emptyEvaluations: '평가가 없습니다', verdict: '결론', review: '검토 및 결정', candidateHash: '후보 다이제스트', notEligible: '승인 불가', reason: '결정 사유', reasonPlaceholder: '승인 또는 거부 사유 입력', reasonRequired: '결정 사유를 입력하세요.', approve: '승인', reject: '거부', approved: '승인을 기록했습니다.', rejected: '거부를 기록했습니다.', canaries: '제어된 카나리', canaryHint: '선택한 세션에만 적용하고 시작 전에 롤백과 독립 온라인 평가 정책을 고정합니다.', approval: '승인된 결정', selectApproval: '승인 선택', sessionIds: '세션 ID, 쉼표로 구분', trafficPercent: '후보 트래픽 비율', createCanary: '보호 조건과 함께 생성', configureCanaryGuardrails: '카나리 보호 조건 완료', emptyCanaries: '카나리가 없습니다', start: '시작', stop: '중지', canaryScopeRequired: '승인, 세션 범위 및 독립 평가 모델을 입력하세요.', canaryCreateReason: '로컬 소유자가 제어된 카나리 생성', rollbackPolicyReason: '시작 전 자동 롤백 보호 조건 선언', onlineGraderPolicyReason: '시작 전 독립 품질 및 안전 평가기 고정', onlineGraderProvider: '온라인 평가 Provider', onlineGraderModel: '온라인 평가 모델', onlineGraderRevision: '평가 모델 리비전', onlineEvidence: '온라인 근거', onlineEvidenceDecision: '온라인 근거 결론', onlineGradePending: '평가 대기', runOnlineGrade: '평가 실행', onlineGradeRecorded: '변경 불가 온라인 평가를 기록했습니다.', canaryCreated: '카나리, 롤백 및 온라인 평가 정책을 만들었습니다.', canaryStartReason: '로컬 소유자가 명시적으로 시작', canaryStopReason: '로컬 소유자가 수동 중지', canaryStarted: '카나리를 시작했습니다.', canaryStopped: '카나리를 중지했습니다.', state: { created: '시작 대기', active: '실행 중', stopped: '중지됨', rolled_back: '자동 롤백됨' },
+  },
+  'zh-TW': {
+    title: '自我進化', subtitle: '在本機檢視證據、候選、獨立評估、人工核准與可回復灰度；系統不會靜默發佈變更。', loading: '正在載入進化記錄…', refresh: '重新整理', actionFailed: '操作失敗', evidence: '證據', evidenceHint: '來自本機回饋與執行記錄的唯讀證據。', emptyEvidence: '尚無可用證據', candidates: '候選變更', candidateHint: '候選在評估、核准與灰度前不會生效。', emptyCandidates: '尚無候選變更', promptBoundary: 'Prompt 候選可進入核准與灰度', unsupportedBoundary: '目前僅能檢視與評估，不能發佈', evaluations: '獨立評估與核准', evaluationHint: '決定前核對候選、評估結論與不可變內容摘要。', emptyEvaluations: '尚無評估結果', verdict: '結論', review: '檢視並決定', candidateHash: '候選摘要', notEligible: '不可核准', reason: '決定理由', reasonPlaceholder: '填寫明確的核准或拒絕理由', reasonRequired: '請填寫決定理由。', approve: '核准', reject: '拒絕', approved: '已記錄核准決定。', rejected: '已記錄拒絕決定。', canaries: '受控灰度', canaryHint: '僅對指定對話放量；啟動前會凍結回復與獨立線上評分策略。', approval: '已核准決定', selectApproval: '選擇核准記錄', sessionIds: '對話 ID，以逗號分隔', trafficPercent: '候選流量百分比', createCanary: '建立灰度並設定護欄', configureCanaryGuardrails: '補齊灰度護欄', emptyCanaries: '尚無灰度發佈', start: '啟動', stop: '停止', canaryScopeRequired: '請填寫核准記錄、對話範圍與完整的獨立評分模型。', canaryCreateReason: '由本機擁有者建立受控灰度', rollbackPolicyReason: '啟動前宣告自動回復護欄', onlineGraderPolicyReason: '啟動前凍結獨立線上品質與安全評分器', onlineGraderProvider: '線上評分 Provider', onlineGraderModel: '線上評分模型', onlineGraderRevision: '評分模型修訂', onlineEvidence: '線上證據', onlineEvidenceDecision: '線上證據結論', onlineGradePending: '待評分', runOnlineGrade: '執行評分', onlineGradeRecorded: '已記錄不可變線上評分。', canaryCreated: '灰度已建立並設定回復與線上評分策略。', canaryStartReason: '本機擁有者明確啟動灰度', canaryStopReason: '本機擁有者手動停止灰度', canaryStarted: '灰度已啟動。', canaryStopped: '灰度已停止。', state: { created: '待啟動', active: '執行中', stopped: '已停止', rolled_back: '已自動回復' },
+  },
+}
+
+const EVOLUTION_PROMOTION_TRANSLATIONS = {
+  zh: {
+    promotions: '生产推广', promotionHint: '仅当灰度已停止、样本与护栏通过、证据链和本地基线仍一致时，才能将不可变 Prompt 候选用于全部新 Turn。', reviewPromotion: '审核生产推广', promotionGuard: '最新护栏结论', releaseFingerprint: '灰度 Release 指纹', baselineFingerprint: '回滚基线指纹', policyFingerprint: '回滚策略指纹', confirmPromotionFingerprints: '我已核对以上四个完整指纹，并确认对全部新 Turn 启用此不可变候选。', promotionReason: '推广理由', promotionReasonPlaceholder: '填写明确的生产推广理由', promotionConfirmationRequired: '请核对指纹、勾选确认并填写推广理由。', activatePromotion: '激活 100% 推广', promotionActivated: '生产推广已激活；只影响新 Turn。', emptyPromotions: '还没有生产推广', promotionStateActive: '生产生效中', promotionStateRevoked: '已撤销', revokePromotion: '撤销推广', promotionRevokeReason: '本地所有者明确撤销生产推广', promotionRevoked: '推广已撤销；新 Turn 已恢复本地基线，既有 Turn 保持原分配。',
+  },
+  en: {
+    promotions: 'Production promotions', promotionHint: 'An immutable prompt candidate can serve every new turn only after the canary is stopped, evidence and guards pass, provenance remains intact, and the local baseline still matches.', reviewPromotion: 'Review production promotion', promotionGuard: 'Latest guard decision', releaseFingerprint: 'Canary release fingerprint', baselineFingerprint: 'Rollback baseline fingerprint', policyFingerprint: 'Rollback policy fingerprint', confirmPromotionFingerprints: 'I verified all four full fingerprints and confirm enabling this immutable candidate for every new turn.', promotionReason: 'Promotion reason', promotionReasonPlaceholder: 'Enter an explicit production promotion reason', promotionConfirmationRequired: 'Verify the fingerprints, confirm the release, and enter a promotion reason.', activatePromotion: 'Activate 100% promotion', promotionActivated: 'Production promotion activated for new turns.', emptyPromotions: 'No production promotions yet', promotionStateActive: 'Active in production', promotionStateRevoked: 'Revoked', revokePromotion: 'Revoke promotion', promotionRevokeReason: 'Production promotion explicitly revoked by the local owner', promotionRevoked: 'Promotion revoked. New turns use the local baseline; existing turns retain their assignment.',
+  },
+  ja: {
+    promotions: '本番昇格', promotionHint: 'カナリア停止、十分な証拠、ガード通過、来歴とローカル基準の一致を確認した不変 Prompt 候補だけを全ての新規 Turn に適用できます。', reviewPromotion: '本番昇格を確認', promotionGuard: '最新ガード判定', releaseFingerprint: 'カナリア Release 指紋', baselineFingerprint: 'ロールバック基準指紋', policyFingerprint: 'ロールバック方針指紋', confirmPromotionFingerprints: '4つの完全な指紋を照合し、この不変候補を全ての新規 Turn に有効化することを確認します。', promotionReason: '昇格理由', promotionReasonPlaceholder: '明確な本番昇格理由を入力', promotionConfirmationRequired: '指紋を確認し、チェックを入れて昇格理由を入力してください。', activatePromotion: '100% 昇格を有効化', promotionActivated: '新規 Turn 向けの本番昇格を有効化しました。', emptyPromotions: '本番昇格はまだありません', promotionStateActive: '本番で有効', promotionStateRevoked: '取り消し済み', revokePromotion: '昇格を取り消す', promotionRevokeReason: 'ローカル所有者が本番昇格を明示的に取り消し', promotionRevoked: '昇格を取り消しました。新規 Turn はローカル基準を使い、既存 Turn の割り当ては保持されます。',
+  },
+  ko: {
+    promotions: '프로덕션 승격', promotionHint: '카나리 중지, 충분한 근거, 가드 통과, 출처 및 로컬 기준 일치를 확인한 불변 Prompt 후보만 모든 새 Turn에 적용할 수 있습니다.', reviewPromotion: '프로덕션 승격 검토', promotionGuard: '최신 가드 결정', releaseFingerprint: '카나리 Release 지문', baselineFingerprint: '롤백 기준 지문', policyFingerprint: '롤백 정책 지문', confirmPromotionFingerprints: '네 개의 전체 지문을 확인했으며 이 불변 후보를 모든 새 Turn에 활성화하는 데 동의합니다.', promotionReason: '승격 사유', promotionReasonPlaceholder: '명확한 프로덕션 승격 사유 입력', promotionConfirmationRequired: '지문을 확인하고 동의한 뒤 승격 사유를 입력하세요.', activatePromotion: '100% 승격 활성화', promotionActivated: '새 Turn에 대한 프로덕션 승격을 활성화했습니다.', emptyPromotions: '프로덕션 승격이 없습니다', promotionStateActive: '프로덕션 활성', promotionStateRevoked: '취소됨', revokePromotion: '승격 취소', promotionRevokeReason: '로컬 소유자가 프로덕션 승격을 명시적으로 취소', promotionRevoked: '승격을 취소했습니다. 새 Turn은 로컬 기준을 사용하고 기존 Turn의 할당은 유지됩니다.',
+  },
+  'zh-TW': {
+    promotions: '生產推廣', promotionHint: '僅當灰度已停止、樣本與護欄通過、證據鏈和本機基線仍一致時，才能將不可變 Prompt 候選用於全部新 Turn。', reviewPromotion: '審核生產推廣', promotionGuard: '最新護欄結論', releaseFingerprint: '灰度 Release 指紋', baselineFingerprint: '回復基線指紋', policyFingerprint: '回復策略指紋', confirmPromotionFingerprints: '我已核對以上四個完整指紋，並確認對全部新 Turn 啟用此不可變候選。', promotionReason: '推廣理由', promotionReasonPlaceholder: '填寫明確的生產推廣理由', promotionConfirmationRequired: '請核對指紋、勾選確認並填寫推廣理由。', activatePromotion: '啟用 100% 推廣', promotionActivated: '生產推廣已啟用；只影響新 Turn。', emptyPromotions: '尚無生產推廣', promotionStateActive: '生產生效中', promotionStateRevoked: '已撤銷', revokePromotion: '撤銷推廣', promotionRevokeReason: '本機擁有者明確撤銷生產推廣', promotionRevoked: '推廣已撤銷；新 Turn 已恢復本機基線，既有 Turn 保持原分配。',
+  },
+}
+
+for (const locale of Object.keys(EVOLUTION_PROMOTION_TRANSLATIONS)) {
+  Object.assign(EVOLUTION_TRANSLATIONS[locale], EVOLUTION_PROMOTION_TRANSLATIONS[locale])
+}
+
+const EVOLUTION_WORKFLOW_TRANSLATIONS = {
+  zh: {
+    workflow: '发起受控演进', workflowHint: '从本地精选证据生成惰性 Prompt 候选，随后执行隔离回放与独立评估。', prepareWorkflow: '加载精选数据集', datasetFingerprint: '数据集摘要', sourceRecords: '选择证据记录（最多 10 条）', target: '目标，例如 prompt:workspace-instructions', objective: '本次改进目标', candidateProvider: '候选生成 Provider', candidateModel: '候选生成模型', replayProvider: '固定回放 Provider', replayModel: '固定回放模型', evaluatorProvider: '独立评估 Provider', evaluatorModel: '独立评估模型', baselineContent: '当前基线 Prompt', replayCases: '回放用例，每行一条；数量须与已选记录一致', workflowBoundary: '此流程只生成候选和评估，不会自动批准、启用或发布。', runWorkflow: '生成候选并执行评估', runningWorkflow: '正在生成、回放与评估…', workflowDatasetReady: '已加载 {count} 条精选记录。', workflowRequired: '请加载数据集、选择记录并填写全部流程字段。', workflowCaseCount: '请填写 {count} 条回放用例，每行一条。', workflowIndependentModel: '独立评估的 Provider 与模型组合必须不同于回放组合。', workflowCompleted: '受控演进评估完成，结论：{verdict}。',
+  },
+  en: {
+    workflow: 'Start controlled evolution', workflowHint: 'Generate an inert prompt candidate from curated local evidence, then run isolated replay and independent evaluation.', prepareWorkflow: 'Load curated dataset', datasetFingerprint: 'Dataset digest', sourceRecords: 'Select evidence records (up to 10)', target: 'Target, e.g. prompt:workspace-instructions', objective: 'Improvement objective', candidateProvider: 'Candidate generator Provider', candidateModel: 'Candidate generator model', replayProvider: 'Fixed replay Provider', replayModel: 'Fixed replay model', evaluatorProvider: 'Independent evaluator Provider', evaluatorModel: 'Independent evaluator model', baselineContent: 'Current baseline prompt', replayCases: 'One replay case per line; count must match selected records', workflowBoundary: 'This flow only creates a candidate and evaluation. It never approves, enables, or publishes automatically.', runWorkflow: 'Generate candidate and evaluate', runningWorkflow: 'Generating, replaying, and evaluating…', workflowDatasetReady: 'Loaded {count} curated records.', workflowRequired: 'Load a dataset, select records, and complete every workflow field.', workflowCaseCount: 'Enter {count} replay cases, one per line.', workflowIndependentModel: 'The evaluator Provider and model pair must differ from the replay pair.', workflowCompleted: 'Controlled evaluation completed with verdict: {verdict}.',
+  },
+  ja: {
+    workflow: '制御された進化を開始', workflowHint: 'ローカルの選別済み証拠から不活性な Prompt 候補を生成し、隔離リプレイと独立評価を実行します。', prepareWorkflow: '選別済みデータセットを読み込む', datasetFingerprint: 'データセットダイジェスト', sourceRecords: '証拠レコードを選択（最大10件）', target: '対象（例: prompt:workspace-instructions）', objective: '改善目標', candidateProvider: '候補生成 Provider', candidateModel: '候補生成モデル', replayProvider: '固定リプレイ Provider', replayModel: '固定リプレイモデル', evaluatorProvider: '独立評価 Provider', evaluatorModel: '独立評価モデル', baselineContent: '現在のベースライン Prompt', replayCases: '1行につき1件。選択レコード数と一致させてください', workflowBoundary: '候補と評価のみを作成し、自動承認・有効化・公開は行いません。', runWorkflow: '候補を生成して評価', runningWorkflow: '生成・リプレイ・評価中…', workflowDatasetReady: '選別済みレコードを {count} 件読み込みました。', workflowRequired: 'データセットを読み込み、レコードを選択して全項目を入力してください。', workflowCaseCount: 'リプレイ用例を {count} 件、1行ずつ入力してください。', workflowIndependentModel: '独立評価の Provider とモデルの組み合わせはリプレイと異なる必要があります。', workflowCompleted: '制御評価が完了しました。判定: {verdict}。',
+  },
+  ko: {
+    workflow: '제어된 진화 시작', workflowHint: '선별된 로컬 근거에서 비활성 Prompt 후보를 만들고 격리 리플레이와 독립 평가를 실행합니다.', prepareWorkflow: '선별 데이터셋 불러오기', datasetFingerprint: '데이터셋 다이제스트', sourceRecords: '근거 레코드 선택(최대 10개)', target: '대상(예: prompt:workspace-instructions)', objective: '개선 목표', candidateProvider: '후보 생성 Provider', candidateModel: '후보 생성 모델', replayProvider: '고정 리플레이 Provider', replayModel: '고정 리플레이 모델', evaluatorProvider: '독립 평가 Provider', evaluatorModel: '독립 평가 모델', baselineContent: '현재 기준 Prompt', replayCases: '한 줄에 한 사례; 선택한 레코드 수와 같아야 함', workflowBoundary: '후보와 평가만 생성하며 자동 승인, 활성화 또는 배포하지 않습니다.', runWorkflow: '후보 생성 및 평가', runningWorkflow: '생성, 리플레이 및 평가 중…', workflowDatasetReady: '선별 레코드 {count}개를 불러왔습니다.', workflowRequired: '데이터셋을 불러오고 레코드를 선택한 뒤 모든 필드를 입력하세요.', workflowCaseCount: '리플레이 사례 {count}개를 한 줄씩 입력하세요.', workflowIndependentModel: '독립 평가 Provider와 모델 조합은 리플레이 조합과 달라야 합니다.', workflowCompleted: '제어 평가 완료. 결론: {verdict}.',
+  },
+  'zh-TW': {
+    workflow: '發起受控進化', workflowHint: '從本機精選證據產生惰性 Prompt 候選，再執行隔離重播與獨立評估。', prepareWorkflow: '載入精選資料集', datasetFingerprint: '資料集摘要', sourceRecords: '選擇證據記錄（最多 10 筆）', target: '目標，例如 prompt:workspace-instructions', objective: '本次改善目標', candidateProvider: '候選產生 Provider', candidateModel: '候選產生模型', replayProvider: '固定重播 Provider', replayModel: '固定重播模型', evaluatorProvider: '獨立評估 Provider', evaluatorModel: '獨立評估模型', baselineContent: '目前基線 Prompt', replayCases: '每行一個重播案例；數量須與所選記錄一致', workflowBoundary: '此流程只產生候選與評估，不會自動核准、啟用或發佈。', runWorkflow: '產生候選並執行評估', runningWorkflow: '正在產生、重播與評估…', workflowDatasetReady: '已載入 {count} 筆精選記錄。', workflowRequired: '請載入資料集、選擇記錄並填寫全部流程欄位。', workflowCaseCount: '請填寫 {count} 個重播案例，每行一個。', workflowIndependentModel: '獨立評估的 Provider 與模型組合必須不同於重播組合。', workflowCompleted: '受控進化評估完成，結論：{verdict}。',
+  },
+}
+
 export const translations = {
   zh: {
     webSearch: { ...WEB_SEARCH_TRANSLATIONS.zh, ...WEB_SEARCH_MULTI_TRANSLATIONS.zh },
@@ -988,6 +1370,9 @@ export const translations = {
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.zh, ...SKILLS_MARKET_UI_TRANSLATIONS.zh },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.zh,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.zh,
+    sideEffectRecovery: SIDE_EFFECT_RECOVERY_TRANSLATIONS.zh,
+    modelRequestRecovery: MODEL_REQUEST_RECOVERY_TRANSLATIONS.zh,
+    evolution: { ...EVOLUTION_TRANSLATIONS.zh, ...EVOLUTION_WORKFLOW_TRANSLATIONS.zh },
     ...RELIABILITY_VIEW_TRANSLATIONS.zh,
     approvals: APPROVAL_TRANSLATIONS.zh,
     toolApproval: TOOL_APPROVAL_TRANSLATIONS.zh,
@@ -998,16 +1383,21 @@ export const translations = {
     mcp: { ...MCP_TRANSLATIONS.zh, ...MCP_UI_TRANSLATIONS.zh, ...MCP_OAUTH_TRANSLATIONS.zh },
     modelProviders: {
       currentModel: '当前模型', baseUrlLabel: '服务地址', statusConfigured: '已配置，可用', statusWaiting: '未配置', notConfigured: '尚未配置', modelsCount: '已配置 {count} 个模型',
-      title: '自定义模型 Provider', subtitle: '配置 OpenAI 兼容、Anthropic 或 Gemini 原生端点，API Key 仅保存在服务端。', add: '新增', saved: '已保存模型配置。',
-      confirmDelete: '删除这个模型 Provider？', testing: '正在测试端点…', testOk: '端点可用，延迟', default: '默认', test: '测试',
-      empty: '尚未配置自定义 Provider，将继续使用服务端 .env。', editor: '模型 Provider 配置', name: '显示名称', keepSecret: '留空保留原 Key',
-      chooseProvider: '选择模型服务', providerQwen: '阿里云通义千问', providerSiliconFlow: '硅基流动', providerZhipu: '智谱 GLM', custom: '自定义接口', advanced: '高级自定义配置', apiKeyRequired: '请填写所选模型服务的 API Key。', apiKeyPlaceholder: '粘贴 API Key，密钥仅保存在本机服务端', presetFilled: '已按预设自动填入服务地址、模型与上下文窗口，只需粘贴 API Key。', localDetectHint: '请先启动本地模型服务，再点击下方“检测模型”；系统会自动填入已安装模型。',
+      title: '自定义模型 Provider', subtitle: '配置 OpenAI 兼容、Anthropic 或 Gemini 原生端点，API Key 仅保存在服务端。', byokNotice: 'Gugo 不提供付费模型或平台计费。请配置你自己的本地模型或上游 Provider；云端调用费用由该 Provider 直接收取。API Key 会加密保存在当前 Gugo 服务端的凭据保险箱中。', add: '新增', saved: '已保存模型配置。', savedTesting: '模型配置已保存，正在验证默认模型能否用于 Agent…', savedReady: '模型已通过 Agent 就绪测试，正在返回…', savedTestFailed: '模型配置已保存，但未通过 Agent 就绪测试。请根据诊断调整配置后重试。', savedChatOnly: '模型配置已保存，文本回复可用，但不支持 Agent 所需的工具调用。请更换模型或启用工具调用后重试。',
+      confirmDelete: '删除这个模型 Provider？', testing: '正在测试端点…', testOk: '端点可用，延迟', default: '默认', test: '测试', testModel: '测试模型', testTarget: '目标：{model}', edit: '编辑 Provider', delete: '删除 Provider',
+      readinessAgent: 'Agent 可用', readinessChatOnly: '仅支持聊天', readinessUnavailable: '不可用', readinessUntested: '尚未测试', clearApiKey: '删除已保存的 API Key', clearApiKeyHint: '保存后会从本机服务端删除这个 Provider 的现有 API Key。', clearHeaders: '删除全部已保存的 Headers', clearHeadersHint: '保存后会从本机服务端删除这个 Provider 的全部自定义 Headers。', removeSavedHeader: '删除已保存的 Header：{key}', restoreSavedHeader: '撤销删除 Header：{key}',
+      errorConfigMissing: '模型服务尚未配置，请先添加并启用一个模型 Provider。', errorAuth: '模型服务拒绝了凭据，请检查 API Key 和访问权限。', errorNotFound: '找不到模型端点或模型，请检查服务地址和模型名称。', errorTimeout: '连接模型服务超时，请确认服务已启动并适当调整超时设置。', errorRateLimited: '模型服务请求过多，请稍后重试或检查配额。', errorUnavailable: '无法连接模型服务或服务返回异常。请检查服务地址、确认服务已启动，并检查本机网络或代理设置。', errorUnknown: '模型服务操作失败，请检查配置后重试。',
+      empty: '尚未添加模型 Provider。请添加你自己的本地或云端模型；若部署环境预置了默认模型，它会自动出现在模型列表中。', editor: '模型 Provider 配置', name: '显示名称', keepSecret: '留空保留原 Key',
+      chooseProvider: '选择模型服务', providerQwen: '阿里云通义千问', providerSiliconFlow: '硅基流动', providerZhipu: '智谱 GLM', custom: '自定义接口', advanced: '服务地址、模型与高级设置', apiKeyRequired: '请填写 API Key 或有效的自定义 Headers。', apiKeyPlaceholder: '粘贴 API Key，密钥仅保存在本机服务端', presetFilled: '已按预设自动填入服务地址、模型与上下文窗口，只需粘贴 API Key。', localDetectHint: '请先启动本地模型服务，再点击下方“检测模型”；系统会自动填入已安装模型。',
       models: '模型列表（每行或逗号分隔）', defaultModel: '默认模型', headers: '自定义 Headers JSON（可选）', enabled: '启用', makeDefault: '设为默认', save: '保存', navTitle: '模型', navSubtitle: '管理 OpenAI 兼容、Anthropic、Gemini 与本地模型。', localPreset: '本地模型快速配置', optional: '可选', localNoKey: 'Ollama / LM Studio 可留空', discover: '检测模型', detecting: '正在检测…', discovered: '已检测到 {count} 个模型。', noModels: '端点可达，但没有返回模型列表。', manage: '管理模型',
+      headersErrorJson: 'Headers 必须是有效的 JSON。', headersErrorType: 'Headers 必须是 JSON 对象，不能是数组、字符串或 null。', headersErrorName: 'Header 名称无效，请勿包含空格、冒号或换行。', headersErrorValue: 'Header 值不能包含换行。',
       capsTitle: '能力与超时（留空＝自动检测）', capsHint: '本地模型建议留空，系统会按端点类型和探测结果自动判断。',
+      baseUrlErrorRequired: '请输入 Base URL。', baseUrlErrorInvalid: '请输入有效的 http/https 地址。', baseUrlErrorProtocol: 'Base URL 仅支持 http/https。', baseUrlErrorCredentials: 'Base URL 不能包含用户名或密码，请改用 API Key 或自定义 Header。', baseUrlErrorQuery: 'Base URL 不能包含查询参数，请将令牌放入 API Key 或自定义 Header。', baseUrlErrorFragment: 'Base URL 不能包含 # 片段。',
       kind: '端点类型', kindAuto: '自动识别', contextWindow: '上下文窗口（token）',
       supportsTools: '支持工具调用', supportsStreaming: '支持流式输出', supportsVision: '支持图片输入', supportsPdf: '支持原生 PDF', supportsParallelTools: '支持并行工具',
       capAuto: '自动', capYes: '支持', capNo: '不支持',
       firstTokenTimeout: '首个字超时（毫秒）', idleTimeout: '输出中断超时（毫秒）',
+      numericErrorInteger: '{field} 必须是整数。', numericErrorMin: '{field} 不能小于 {min}。', numericErrorMax: '{field} 不能大于 {max}。',
       keepAlive: '模型常驻时长', keepAliveHint: '如 30m。避免每次请求都重新加载权重。',
       failoverEnabled: '失败时允许切换到其它 Provider', failoverHint: '本地模型默认关闭，避免响应变慢时静默切换并产生额外云端调用。',
       effectiveUrl: '实际请求地址', diagnostics: '诊断结果', diagRunning: '正在逐项检查…',
@@ -1070,6 +1460,16 @@ export const translations = {
       language: '语言',
       languageHint: '切换界面显示语言。',
       systemDiagnostics: '系统诊断',
+      agentRuntime: 'Agent 运行时',
+      agentRuntimeStatus: '运行时状态',
+      agentRuntimeReady: '已就绪',
+      agentRuntimeUnavailable: '需要重启',
+      agentRuntimeReadyDescription: 'Turn 持久化和上下文压缩存储均可用。',
+      agentRuntimeUnavailableDescription: 'Turn 宿主配置不完整。请重启本地应用或服务；若问题仍存在，请检查启动日志。',
+      turnPersistence: 'Turn 持久化',
+      compactionArchiveStorage: '上下文压缩归档',
+      hostPortReady: '可用',
+      hostPortUnavailable: '未就绪',
       account: '账户',
       appearance: '外观',
       pet: '宠物', petSubtitle: '自定义独立桌面宠物；Gugo 最小化后仍会显示。', petImage: '宠物图片', petImageHint: '支持最大 4 MB 的透明 PNG、WebP 和 GIF。', petImageError: { invalidType: '请选择 PNG、WebP 或 GIF 图片。', tooLarge: '宠物图片不能超过 4 MB。' }, petChoose: '选择图片', petSize: '宠物大小', petPreview: '自定义桌面宠物预览', petDefault: '当前使用默认宠物', petSaved: '宠物已保存，桌面窗口会自动更新。', petReadFailed: '无法读取这张图片。', petReset: '恢复默认宠物', petResetDone: '已恢复默认宠物。',
@@ -1116,6 +1516,20 @@ export const translations = {
     errors: {
       emptyModelResponse: '模型返回了空回复。请检查本地模型的聊天模板、上下文长度和 OpenAI 兼容接口。',
       emptyModelResponseLength: '模型的输出预算已用尽，但没有生成可见回复。请调大 Max Tokens 或关闭深度思考后重试。',
+      chatFailure: '任务执行遇到问题，尚未完成。请重试；若仍失败，请检查所选模型是否支持当前工具。',
+      runtimeUnavailable: '本地运行时正在启动或重启，消息尚未发出。请稍后重试。',
+      runtimeInterrupted: '本地运行时在任务执行期间停止或重启。本次执行已中断，已完成的进度会保留；请等待运行时就绪后继续。',
+      runtimeAttentionRequired: '本地运行时需要处理。',
+      openRuntimeDiagnostics: '打开运行时诊断',
+      modelConfigurationFailure: '模型服务尚未正确配置。',
+      modelProviderUnverified: '所选模型服务尚未完成可用性测试。',
+      modelProviderChatOnly: '所选模型已通过文本补全测试，但不支持当前 Agent 对话所需的工具调用。',
+      modelProviderChanged: '任务绑定的模型配置已变更或已不可用。',
+      modelAuthenticationFailed: '模型服务拒绝了访问凭证。',
+      modelEndpointNotFound: '找不到所选模型或模型服务地址。',
+      modelEndpointTimeout: '连接模型服务超时。',
+      modelEndpointUnavailable: '当前无法连接模型服务。',
+      modelConfigurationAction: '请前往“设置 → 模型”检查服务地址、API Key 和模型名称，测试连接后选择可用模型。',
       networkFailed: '网络请求失败,请稍后再试。',
       loginRequired: '请先登录账户',
       sessionExpired: '会话已过期,请重新登录。',
@@ -1187,7 +1601,7 @@ export const translations = {
       badge: {
         active: '已启用',
         inactive: '未启用',
-        hint: '视觉辅助副驾需要同时满足两个条件才会被链路使用：在本页配置 vision_assist 凭据（baseUrl / modelName / apiKey），并且在服务端 .env 设置 MODEL_NAMES_VISION（逗号分隔的视觉模型名）。两者缺一不可。',
+        hint: '在本页保存并启用服务地址、模型名和 API Key 后即可使用视觉辅助副驾；本地服务是否需要 Key 取决于该服务。',
       },
     },
     wechat: {
@@ -1481,6 +1895,9 @@ export const translations = {
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.en, ...SKILLS_MARKET_UI_TRANSLATIONS.en },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.en,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.en,
+    sideEffectRecovery: SIDE_EFFECT_RECOVERY_TRANSLATIONS.en,
+    modelRequestRecovery: MODEL_REQUEST_RECOVERY_TRANSLATIONS.en,
+    evolution: { ...EVOLUTION_TRANSLATIONS.en, ...EVOLUTION_WORKFLOW_TRANSLATIONS.en },
     ...RELIABILITY_VIEW_TRANSLATIONS.en,
     approvals: APPROVAL_TRANSLATIONS.en,
     toolApproval: TOOL_APPROVAL_TRANSLATIONS.en,
@@ -1491,16 +1908,21 @@ export const translations = {
     mcp: { ...MCP_TRANSLATIONS.en, ...MCP_UI_TRANSLATIONS.en, ...MCP_OAUTH_TRANSLATIONS.en },
     modelProviders: {
       currentModel: 'Current model', baseUrlLabel: 'Base URL', statusConfigured: 'Configured', statusWaiting: 'Not configured', notConfigured: 'Not set', modelsCount: '{count} models',
-      title: 'Custom model providers', subtitle: 'Configure OpenAI-compatible, native Anthropic, or native Gemini endpoints. API keys stay on the server.', add: 'Add', saved: 'Model provider saved.',
-      confirmDelete: 'Delete this model provider?', testing: 'Testing endpoint…', testOk: 'Endpoint is available, latency', default: 'Default', test: 'Test',
-      empty: 'No custom provider yet. Server environment settings remain active.', editor: 'Model provider settings', name: 'Display name', keepSecret: 'leave blank to keep current key',
-      chooseProvider: 'Choose a model service', providerQwen: 'Alibaba Cloud Qwen', providerSiliconFlow: 'SiliconFlow', providerZhipu: 'Zhipu GLM', custom: 'Custom endpoint', advanced: 'Advanced custom settings', apiKeyRequired: 'Enter the API key for the selected model service.', apiKeyPlaceholder: 'Paste API key; it is stored only by the local server', presetFilled: 'Base URL, models and context window are auto-filled from the preset — just paste your API key.', localDetectHint: 'Start the local model service, then select Detect models below to fill installed models automatically.',
+      title: 'Custom model providers', subtitle: 'Configure OpenAI-compatible, native Anthropic, or native Gemini endpoints. API keys stay on the server.', byokNotice: 'Gugo does not sell model access or bill you. Configure your own local model or upstream provider; any cloud usage charges come directly from that provider. API keys are encrypted in this Gugo server\'s credential vault.', add: 'Add', saved: 'Model provider saved.', savedTesting: 'The model provider is saved. Verifying that its default model is Agent-ready…', savedReady: 'The model passed the Agent readiness test. Returning…', savedTestFailed: 'The model provider is saved, but it did not pass the Agent readiness test. Review the diagnostics and retry.', savedChatOnly: 'The model provider is saved and can reply with text, but it cannot perform the tool calls required by Agent mode. Choose a different model or enable tool calling, then retry.',
+      confirmDelete: 'Delete this model provider?', testing: 'Testing endpoint…', testOk: 'Endpoint is available, latency', default: 'Default', test: 'Test', testModel: 'Model to test', testTarget: 'Target: {model}', edit: 'Edit provider', delete: 'Delete provider',
+      readinessAgent: 'Agent ready', readinessChatOnly: 'Chat only', readinessUnavailable: 'Unavailable', readinessUntested: 'Not tested', clearApiKey: 'Remove saved API key', clearApiKeyHint: 'Saving will remove this provider\'s existing API key from the local server.', clearHeaders: 'Remove all saved Headers', clearHeadersHint: 'Saving will remove all custom Headers for this provider from the local server.', removeSavedHeader: 'Remove saved Header: {key}', restoreSavedHeader: 'Undo Header removal: {key}',
+      errorConfigMissing: 'No model service is configured. Add and enable a model provider first.', errorAuth: 'The model service rejected the credentials. Check the API key and access permissions.', errorNotFound: 'The model endpoint or model was not found. Check the service URL and model name.', errorTimeout: 'The model service timed out. Confirm that it is running and review the timeout settings.', errorRateLimited: 'The model service is rate limited. Retry later or check the quota.', errorUnavailable: 'The model service could not be reached or returned an error. Check the service URL, confirm it is running, and review local network or proxy settings.', errorUnknown: 'The model service operation failed. Review the configuration and retry.',
+      empty: 'No model provider has been added. Add your own local or cloud model; any deployment-provided default appears automatically in the model list.', editor: 'Model provider settings', name: 'Display name', keepSecret: 'leave blank to keep current key',
+      chooseProvider: 'Choose a model service', providerQwen: 'Alibaba Cloud Qwen', providerSiliconFlow: 'SiliconFlow', providerZhipu: 'Zhipu GLM', custom: 'Custom endpoint', advanced: 'Service URL, models, and advanced settings', apiKeyRequired: 'Enter an API key or valid custom Headers.', apiKeyPlaceholder: 'Paste API key; it is stored only by the local server', presetFilled: 'Base URL, models and context window are auto-filled from the preset — just paste your API key.', localDetectHint: 'Start the local model service, then select Detect models below to fill installed models automatically.',
       models: 'Models (one per line or comma-separated)', defaultModel: 'Default model', headers: 'Custom Headers JSON (optional)', enabled: 'Enabled', makeDefault: 'Make default', save: 'Save', navTitle: 'Models', navSubtitle: 'Manage OpenAI-compatible, Anthropic, Gemini, and local models.', localPreset: 'Quick local setup', optional: 'optional', localNoKey: 'Leave blank for Ollama / LM Studio', discover: 'Detect models', detecting: 'Detecting…', discovered: 'Found {count} models.', noModels: 'The endpoint is reachable but returned no models.', manage: 'Manage models',
+      headersErrorJson: 'Headers must be valid JSON.', headersErrorType: 'Headers must be a JSON object, not an array, string, or null.', headersErrorName: 'A Header name is invalid. Do not use spaces, colons, or line breaks.', headersErrorValue: 'Header values cannot contain line breaks.',
       capsTitle: 'Capabilities & timeouts (leave blank to auto-detect)', capsHint: 'Leave blank for local models — values are inferred from the endpoint type and probe results.',
+      baseUrlErrorRequired: 'Enter a Base URL.', baseUrlErrorInvalid: 'Enter a valid http/https address.', baseUrlErrorProtocol: 'Base URL only supports http/https.', baseUrlErrorCredentials: 'Do not put a username or password in the Base URL. Use the API key or a custom header.', baseUrlErrorQuery: 'Do not put query parameters in the Base URL. Put tokens in the API key or a custom header.', baseUrlErrorFragment: 'Do not include a # fragment in the Base URL.',
       kind: 'Endpoint type', kindAuto: 'Auto-detect', contextWindow: 'Context window (tokens)',
       supportsTools: 'Supports tool calls', supportsStreaming: 'Supports streaming', supportsVision: 'Supports image input', supportsPdf: 'Supports native PDF', supportsParallelTools: 'Supports parallel tools',
       capAuto: 'Auto', capYes: 'Yes', capNo: 'No',
       firstTokenTimeout: 'First-token timeout (ms)', idleTimeout: 'Output stall timeout (ms)',
+      numericErrorInteger: '{field} must be an integer.', numericErrorMin: '{field} must be at least {min}.', numericErrorMax: '{field} must not exceed {max}.',
       keepAlive: 'Keep model loaded for', keepAliveHint: 'e.g. 30m. Avoids reloading weights on every request.',
       failoverEnabled: 'Allow failover to another provider', failoverHint: 'Off by default for local models, so a slow response never silently creates an extra cloud request.',
       effectiveUrl: 'Effective request URL', diagnostics: 'Diagnostics', diagRunning: 'Running checks…',
@@ -1563,6 +1985,16 @@ export const translations = {
       language: 'Language',
       languageHint: 'Switch the interface language.',
       systemDiagnostics: 'System diagnostics',
+      agentRuntime: 'Agent runtime',
+      agentRuntimeStatus: 'Runtime status',
+      agentRuntimeReady: 'Ready',
+      agentRuntimeUnavailable: 'Restart required',
+      agentRuntimeReadyDescription: 'Turn persistence and context-compaction storage are available.',
+      agentRuntimeUnavailableDescription: 'The Turn host is not fully configured. Restart the local app or service; if it persists, check the startup logs.',
+      turnPersistence: 'Turn persistence',
+      compactionArchiveStorage: 'Context-compaction archive',
+      hostPortReady: 'Available',
+      hostPortUnavailable: 'Not ready',
       account: 'Account',
       appearance: 'Appearance',
       pet: 'Pet', petSubtitle: 'Customize the independent desktop pet, which remains visible when Gugo is minimized.', petImage: 'Pet image', petImageHint: 'Transparent PNG, WebP, and GIF files up to 4 MB are supported.', petImageError: { invalidType: 'Choose a PNG, WebP, or GIF image.', tooLarge: 'The pet image must be 4 MB or smaller.' }, petChoose: 'Choose image', petSize: 'Pet size', petPreview: 'Custom desktop pet preview', petDefault: 'Using the default pet', petSaved: 'Pet saved. The desktop window will update automatically.', petReadFailed: 'This image could not be read.', petReset: 'Restore default pet', petResetDone: 'The default pet has been restored.',
@@ -1609,6 +2041,20 @@ export const translations = {
     errors: {
       emptyModelResponse: 'The model returned an empty reply. Check the local model chat template, context length, and OpenAI-compatible endpoint.',
       emptyModelResponseLength: 'The output budget was exhausted before a visible reply was produced. Increase Max Tokens or disable deep reasoning and retry.',
+      chatFailure: 'The task ran into a problem and did not finish. Retry; if it still fails, check whether the selected model supports the required tools.',
+      runtimeUnavailable: 'The local runtime is starting or restarting, so the message was not sent. Try again shortly.',
+      runtimeInterrupted: 'The local runtime stopped or restarted while this task was running. The run was interrupted and completed progress was preserved; continue after the runtime is ready.',
+      runtimeAttentionRequired: 'The local runtime needs attention.',
+      openRuntimeDiagnostics: 'Open runtime diagnostics',
+      modelConfigurationFailure: 'The model service is not configured correctly.',
+      modelProviderUnverified: 'The selected model service has not passed an availability test.',
+      modelProviderChatOnly: 'The selected model passed text completion checks but cannot be used by this tool-enabled Agent chat.',
+      modelProviderChanged: 'The model configuration bound to this task changed or is no longer available.',
+      modelAuthenticationFailed: 'The model service rejected the credentials.',
+      modelEndpointNotFound: 'The selected model or model service endpoint could not be found.',
+      modelEndpointTimeout: 'The connection to the model service timed out.',
+      modelEndpointUnavailable: 'The model service is currently unreachable.',
+      modelConfigurationAction: 'Open Settings → Models, check the service URL, API key, and model name, test the connection, then select an available model.',
       networkFailed: 'Network request failed, please try again later.',
       loginRequired: 'Please sign in first',
       sessionExpired: 'Session expired, please sign in again.',
@@ -1680,7 +2126,7 @@ export const translations = {
       badge: {
         active: 'Active',
         inactive: 'Not configured',
-        hint: 'Vision copilot only kicks in when both pieces are in place: configure the vision_assist credentials on this page (baseUrl / modelName / apiKey) AND set MODEL_NAMES_VISION (comma-separated vision model ids) in the server .env. Either alone is not enough.',
+        hint: 'Save and enable the service URL, model name, and API key here to use Vision Assist. Whether a local service requires a key depends on that service.',
       },
     },
     wechat: {
@@ -1974,6 +2420,9 @@ export const translations = {
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.ja, ...SKILLS_MARKET_UI_TRANSLATIONS.ja },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.ja,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.ja,
+    sideEffectRecovery: SIDE_EFFECT_RECOVERY_TRANSLATIONS.ja,
+    modelRequestRecovery: MODEL_REQUEST_RECOVERY_TRANSLATIONS.ja,
+    evolution: { ...EVOLUTION_TRANSLATIONS.ja, ...EVOLUTION_WORKFLOW_TRANSLATIONS.ja },
     ...RELIABILITY_VIEW_TRANSLATIONS.ja,
     approvals: APPROVAL_TRANSLATIONS.ja,
     toolApproval: TOOL_APPROVAL_TRANSLATIONS.ja,
@@ -1984,16 +2433,21 @@ export const translations = {
     mcp: { ...MCP_TRANSLATIONS.ja, ...MCP_UI_TRANSLATIONS.ja, ...MCP_OAUTH_TRANSLATIONS.ja },
     modelProviders: {
       currentModel: '現在のモデル', baseUrlLabel: 'ベース URL', statusConfigured: '設定済み', statusWaiting: '未設定', notConfigured: '未設定', modelsCount: '{count} モデル設定済み',
-      title: 'カスタムモデル Provider', subtitle: 'OpenAI 互換、Anthropic、Gemini のネイティブエンドポイントを設定します。API Key はサーバー内に保存されます。', add: '追加', saved: 'モデル設定を保存しました。',
-      confirmDelete: 'このモデル Provider を削除しますか？', testing: '接続をテスト中…', testOk: '接続成功、遅延', default: '既定', test: 'テスト',
-      empty: 'カスタム Provider は未設定です。サーバーの環境設定を使用します。', editor: 'モデル Provider 設定', name: '表示名', keepSecret: '空欄なら現在の Key を保持',
-      chooseProvider: 'モデルサービスを選択', providerQwen: 'Alibaba Cloud Qwen', providerSiliconFlow: 'SiliconFlow', providerZhipu: 'Zhipu GLM', custom: 'カスタムエンドポイント', advanced: '詳細なカスタム設定', apiKeyRequired: '選択したモデルサービスの API Key を入力してください。', apiKeyPlaceholder: 'API Key を貼り付け（ローカルサーバーのみに保存）', presetFilled: 'プリセットからURL・モデル・コンテキスト長を自動入力しました。APIキーを貼り付けるだけです。', localDetectHint: 'ローカルモデルサービスを起動し、下の「モデルを検出」を選択してください。',
+      title: 'カスタムモデル Provider', subtitle: 'OpenAI 互換、Anthropic、Gemini のネイティブエンドポイントを設定します。API Key はサーバー内に保存されます。', byokNotice: 'Gugo はモデル利用の販売やプラットフォーム課金を行いません。お使いのローカルモデルまたは上流 Provider を設定してください。クラウド利用料金はその Provider から直接請求されます。API Key は現在の Gugo サーバーの資格情報保管庫で暗号化されます。', add: '追加', saved: 'モデル設定を保存しました。', savedTesting: 'モデル設定を保存しました。既定モデルが Agent で利用可能か確認しています…', savedReady: 'Agent の準備確認に合格しました。元の画面に戻ります…', savedTestFailed: 'モデル設定は保存されましたが、Agent の準備確認に合格しませんでした。診断結果を確認して再試行してください。', savedChatOnly: 'モデル設定は保存され、テキスト応答は利用できますが、Agent に必要なツール呼び出しには対応していません。別のモデルを選ぶかツール呼び出しを有効にして再試行してください。',
+      confirmDelete: 'このモデル Provider を削除しますか？', testing: '接続をテスト中…', testOk: '接続成功、遅延', default: '既定', test: 'テスト', testModel: 'テストするモデル', testTarget: '対象：{model}', edit: 'Provider を編集', delete: 'Provider を削除',
+      readinessAgent: 'Agent で利用可能', readinessChatOnly: 'チャットのみ', readinessUnavailable: '利用不可', readinessUntested: '未テスト', clearApiKey: '保存済み API Key を削除', clearApiKeyHint: '保存すると、この Provider の既存 API Key がローカルサーバーから削除されます。', clearHeaders: '保存済み Headers をすべて削除', clearHeadersHint: '保存すると、この Provider のカスタム Headers がすべてローカルサーバーから削除されます。', removeSavedHeader: '保存済み Header を削除：{key}', restoreSavedHeader: 'Header の削除を元に戻す：{key}',
+      errorConfigMissing: 'モデルサービスが未設定です。Provider を追加して有効にしてください。', errorAuth: 'モデルサービスが認証情報を拒否しました。API Key と権限を確認してください。', errorNotFound: 'モデルエンドポイントまたはモデルが見つかりません。サービス URL とモデル名を確認してください。', errorTimeout: 'モデルサービスへの接続がタイムアウトしました。サービスの起動状態とタイムアウト設定を確認してください。', errorRateLimited: 'モデルサービスのレート制限に達しました。後で再試行するか、クォータを確認してください。', errorUnavailable: 'モデルサービスに接続できないか、サービスがエラーを返しました。URL、起動状態、ローカルネットワークまたはプロキシ設定を確認してください。', errorUnknown: 'モデルサービスの操作に失敗しました。設定を確認して再試行してください。',
+      empty: 'モデル Provider はまだ追加されていません。お使いのローカルまたはクラウドモデルを追加してください。デプロイ環境に既定モデルがある場合は、モデル一覧に自動表示されます。', editor: 'モデル Provider 設定', name: '表示名', keepSecret: '空欄なら現在の Key を保持',
+      chooseProvider: 'モデルサービスを選択', providerQwen: 'Alibaba Cloud Qwen', providerSiliconFlow: 'SiliconFlow', providerZhipu: 'Zhipu GLM', custom: 'カスタムエンドポイント', advanced: 'サービス URL・モデル・詳細設定', apiKeyRequired: 'API Key または有効なカスタム Headers を入力してください。', apiKeyPlaceholder: 'API Key を貼り付け（ローカルサーバーのみに保存）', presetFilled: 'プリセットからURL・モデル・コンテキスト長を自動入力しました。APIキーを貼り付けるだけです。', localDetectHint: 'ローカルモデルサービスを起動し、下の「モデルを検出」を選択してください。',
       models: 'モデル一覧（1行またはカンマ区切り）', defaultModel: '既定モデル', headers: 'カスタム Headers JSON（任意）', enabled: '有効', makeDefault: '既定にする', save: '保存', navTitle: 'モデル', navSubtitle: 'OpenAI 互換、Anthropic、Gemini、ローカルモデルを管理します。', localPreset: 'ローカルモデルのクイック設定', optional: '任意', localNoKey: 'Ollama / LM Studio は空欄可', discover: 'モデルを検出', detecting: '検出中…', discovered: '{count} 個のモデルを検出しました。', noModels: '接続できましたがモデル一覧が空です。', manage: 'モデル管理',
+      headersErrorJson: 'Headers は有効な JSON である必要があります。', headersErrorType: 'Headers は配列・文字列・null ではなく JSON オブジェクトである必要があります。', headersErrorName: 'Header 名が無効です。空白、コロン、改行は使用できません。', headersErrorValue: 'Header 値に改行を含めることはできません。',
       capsTitle: '機能とタイムアウト（空欄＝自動検出）', capsHint: 'ローカルモデルは空欄推奨。エンドポイント種別と検出結果から自動判定します。',
+      baseUrlErrorRequired: 'Base URL を入力してください。', baseUrlErrorInvalid: '有効な http/https アドレスを入力してください。', baseUrlErrorProtocol: 'Base URL は http/https のみ対応しています。', baseUrlErrorCredentials: 'Base URL にユーザー名やパスワードを含めず、API Key またはカスタム Header を使用してください。', baseUrlErrorQuery: 'Base URL にクエリパラメータを含めず、トークンは API Key またはカスタム Header に設定してください。', baseUrlErrorFragment: 'Base URL に # フラグメントを含めないでください。',
       kind: 'エンドポイント種別', kindAuto: '自動検出', contextWindow: 'コンテキスト長（token）',
       supportsTools: 'ツール呼び出し対応', supportsStreaming: 'ストリーミング対応', supportsVision: '画像入力対応', supportsPdf: 'ネイティブ PDF 対応', supportsParallelTools: '並列ツール対応',
       capAuto: '自動', capYes: '対応', capNo: '非対応',
       firstTokenTimeout: '最初の 1 文字までのタイムアウト（ms）', idleTimeout: '出力停止のタイムアウト（ms）',
+      numericErrorInteger: '{field} は整数で入力してください。', numericErrorMin: '{field} は {min} 以上にしてください。', numericErrorMax: '{field} は {max} 以下にしてください。',
       keepAlive: 'モデル常駐時間', keepAliveHint: '例: 30m。毎回の重み読み込みを防ぎます。',
       failoverEnabled: '失敗時に他の Provider へ切り替える', failoverHint: 'ローカルモデルは既定でオフ。応答が遅いだけでクラウドへの追加リクエストが発生するのを防ぎます。',
       effectiveUrl: '実際のリクエスト URL', diagnostics: '診断結果', diagRunning: '順に確認中…',
@@ -2056,6 +2510,16 @@ export const translations = {
       language: '言語',
       languageHint: 'インターフェース言語を切り替えます。',
       systemDiagnostics: 'システム診断',
+      agentRuntime: 'Agent ランタイム',
+      agentRuntimeStatus: 'ランタイム状態',
+      agentRuntimeReady: '準備完了',
+      agentRuntimeUnavailable: '再起動が必要',
+      agentRuntimeReadyDescription: 'Turn の永続化とコンテキスト圧縮ストレージを利用できます。',
+      agentRuntimeUnavailableDescription: 'Turn ホストの設定が不完全です。ローカルアプリまたはサービスを再起動し、解消しない場合は起動ログを確認してください。',
+      turnPersistence: 'Turn の永続化',
+      compactionArchiveStorage: 'コンテキスト圧縮アーカイブ',
+      hostPortReady: '利用可能',
+      hostPortUnavailable: '未準備',
       account: 'アカウント',
       appearance: '外観',
       pet: 'ペット', petSubtitle: 'Gugoを最小化しても表示されるデスクトップペットを設定します。', petImage: 'ペット画像', petImageHint: '4 MBまでのPNG、WebP、GIFに対応します。', petImageError: { invalidType: 'PNG、WebP、GIF画像を選択してください。', tooLarge: '画像は4 MB以下にしてください。' }, petChoose: '画像を選択', petSize: 'ペットのサイズ', petPreview: 'ペットのプレビュー', petDefault: '標準ペットを使用中', petSaved: 'ペットを保存しました。', petReadFailed: '画像を読み込めません。', petReset: '標準に戻す', petResetDone: '標準ペットに戻しました。',
@@ -2102,6 +2566,20 @@ export const translations = {
     errors: {
       emptyModelResponse: 'モデルが空の応答を返しました。ローカルモデルのチャットテンプレート、コンテキスト長、OpenAI 互換エンドポイントを確認してください。',
       emptyModelResponseLength: '表示可能な応答を生成する前に出力予算を使い切りました。Max Tokens を増やすか、深い推論を無効にして再試行してください。',
+      chatFailure: 'タスクで問題が発生し、完了しませんでした。再試行し、失敗が続く場合は選択したモデルが必要なツールに対応しているか確認してください。',
+      runtimeUnavailable: 'ローカルランタイムの起動または再起動中のため、メッセージは送信されませんでした。しばらくしてから再試行してください。',
+      runtimeInterrupted: 'タスクの実行中にローカルランタイムが停止または再起動しました。実行は中断されましたが、完了済みの進捗は保持されています。ランタイムの準備後に続行してください。',
+      runtimeAttentionRequired: 'ローカルランタイムの確認が必要です。',
+      openRuntimeDiagnostics: 'ランタイム診断を開く',
+      modelConfigurationFailure: 'モデルサービスが正しく設定されていません。',
+      modelProviderUnverified: '選択したモデルサービスは利用可能性テストを完了していません。',
+      modelProviderChatOnly: '選択したモデルはテキスト補完には応答しますが、ツール対応が必要な現在の Agent チャットでは使用できません。',
+      modelProviderChanged: 'このタスクに紐づくモデル設定が変更されたか、利用できなくなりました。',
+      modelAuthenticationFailed: 'モデルサービスが認証情報を拒否しました。',
+      modelEndpointNotFound: '選択したモデルまたはモデルサービスのエンドポイントが見つかりません。',
+      modelEndpointTimeout: 'モデルサービスへの接続がタイムアウトしました。',
+      modelEndpointUnavailable: '現在モデルサービスに接続できません。',
+      modelConfigurationAction: '「設定 → モデル」でサービス URL、API Key、モデル名を確認し、接続テスト後に利用可能なモデルを選択してください。',
       networkFailed: 'ネットワークリクエストに失敗しました。後でもう一度お試しください。',
       loginRequired: '先にサインインしてください',
       sessionExpired: 'セッションの有効期限が切れました。再度サインインしてください。',
@@ -2173,7 +2651,7 @@ export const translations = {
       badge: {
         active: '有効',
         inactive: '未設定',
-        hint: 'ビジョン副操縦士は、このページで vision_assist の資格情報（baseUrl / modelName / apiKey）を設定し、かつサーバの .env に MODEL_NAMES_VISION（カンマ区切りのビジョンモデル ID）を設定した場合にのみ呼び出されます。どちらか一方では不十分です。',
+        hint: 'このページでサービス URL、モデル名、API キーを保存して有効にすると、Vision Assist を利用できます。ローカルサービスでキーが必要かどうかは、そのサービスの仕様によります。',
       },
     },
     wechat: {
@@ -2467,6 +2945,9 @@ export const translations = {
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.ko, ...SKILLS_MARKET_UI_TRANSLATIONS.ko },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.ko,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.ko,
+    sideEffectRecovery: SIDE_EFFECT_RECOVERY_TRANSLATIONS.ko,
+    modelRequestRecovery: MODEL_REQUEST_RECOVERY_TRANSLATIONS.ko,
+    evolution: { ...EVOLUTION_TRANSLATIONS.ko, ...EVOLUTION_WORKFLOW_TRANSLATIONS.ko },
     ...RELIABILITY_VIEW_TRANSLATIONS.ko,
     approvals: APPROVAL_TRANSLATIONS.ko,
     toolApproval: TOOL_APPROVAL_TRANSLATIONS.ko,
@@ -2477,16 +2958,21 @@ export const translations = {
     mcp: { ...MCP_TRANSLATIONS.ko, ...MCP_UI_TRANSLATIONS.ko, ...MCP_OAUTH_TRANSLATIONS.ko },
     modelProviders: {
       currentModel: '현재 모델', baseUrlLabel: '베이스 URL', statusConfigured: '설정됨', statusWaiting: '설정 안 됨', notConfigured: '설정 안 됨', modelsCount: '모델 {count}개 설정됨',
-      title: '사용자 지정 모델 Provider', subtitle: 'OpenAI 호환, Anthropic 또는 Gemini 네이티브 엔드포인트를 설정합니다. API Key는 서버에만 저장됩니다.', add: '추가', saved: '모델 설정을 저장했습니다.',
-      confirmDelete: '이 모델 Provider를 삭제할까요?', testing: '엔드포인트 테스트 중…', testOk: '엔드포인트 사용 가능, 지연', default: '기본값', test: '테스트',
-      empty: '사용자 지정 Provider가 없습니다. 서버 환경 설정을 계속 사용합니다.', editor: '모델 Provider 설정', name: '표시 이름', keepSecret: '비워 두면 기존 Key 유지',
-      chooseProvider: '모델 서비스 선택', providerQwen: 'Alibaba Cloud Qwen', providerSiliconFlow: 'SiliconFlow', providerZhipu: 'Zhipu GLM', custom: '사용자 지정 엔드포인트', advanced: '고급 사용자 지정 설정', apiKeyRequired: '선택한 모델 서비스의 API Key를 입력하세요.', apiKeyPlaceholder: 'API Key 붙여넣기(로컬 서버에만 저장)', presetFilled: '프리셋에서 URL·모델·컨텍스트 길이를 자동 입력했습니다. API 키만 붙여넣으세요.', localDetectHint: '로컬 모델 서비스를 시작한 뒤 아래의 모델 감지를 선택하세요.',
+      title: '사용자 지정 모델 Provider', subtitle: 'OpenAI 호환, Anthropic 또는 Gemini 네이티브 엔드포인트를 설정합니다. API Key는 서버에만 저장됩니다.', byokNotice: 'Gugo는 모델 이용권을 판매하거나 플랫폼 요금을 청구하지 않습니다. 사용자의 로컬 모델 또는 업스트림 Provider를 설정하세요. 클라우드 사용 요금은 해당 Provider가 직접 청구합니다. API Key는 현재 Gugo 서버의 자격 증명 보관소에 암호화되어 저장됩니다.', add: '추가', saved: '모델 설정을 저장했습니다.', savedTesting: '모델 설정을 저장했습니다. 기본 모델이 Agent에서 사용 가능한지 확인 중입니다…', savedReady: 'Agent 준비 테스트를 통과했습니다. 이전 화면으로 돌아갑니다…', savedTestFailed: '모델 설정은 저장되었지만 Agent 준비 테스트를 통과하지 못했습니다. 진단 결과를 확인하고 다시 시도하세요.', savedChatOnly: '모델 설정은 저장되었고 텍스트 응답은 가능하지만 Agent에 필요한 도구 호출을 지원하지 않습니다. 다른 모델을 선택하거나 도구 호출을 활성화한 후 다시 시도하세요.',
+      confirmDelete: '이 모델 Provider를 삭제할까요?', testing: '엔드포인트 테스트 중…', testOk: '엔드포인트 사용 가능, 지연', default: '기본값', test: '테스트', testModel: '테스트할 모델', testTarget: '대상: {model}', edit: 'Provider 편집', delete: 'Provider 삭제',
+      readinessAgent: 'Agent 사용 가능', readinessChatOnly: '채팅 전용', readinessUnavailable: '사용 불가', readinessUntested: '테스트 안 됨', clearApiKey: '저장된 API Key 삭제', clearApiKeyHint: '저장하면 이 Provider의 기존 API Key가 로컬 서버에서 삭제됩니다.', clearHeaders: '저장된 Headers 모두 삭제', clearHeadersHint: '저장하면 이 Provider의 사용자 지정 Headers가 모두 로컬 서버에서 삭제됩니다.', removeSavedHeader: '저장된 Header 삭제: {key}', restoreSavedHeader: 'Header 삭제 취소: {key}',
+      errorConfigMissing: '모델 서비스가 설정되지 않았습니다. Provider를 추가하고 활성화하세요.', errorAuth: '모델 서비스가 인증 정보를 거부했습니다. API Key와 접근 권한을 확인하세요.', errorNotFound: '모델 엔드포인트 또는 모델을 찾을 수 없습니다. 서비스 URL과 모델 이름을 확인하세요.', errorTimeout: '모델 서비스 연결 시간이 초과되었습니다. 서비스 실행 상태와 시간 제한 설정을 확인하세요.', errorRateLimited: '모델 서비스 요청 한도에 도달했습니다. 나중에 다시 시도하거나 할당량을 확인하세요.', errorUnavailable: '모델 서비스에 연결할 수 없거나 서비스가 오류를 반환했습니다. URL, 실행 상태, 로컬 네트워크 또는 프록시 설정을 확인하세요.', errorUnknown: '모델 서비스 작업에 실패했습니다. 설정을 확인한 뒤 다시 시도하세요.',
+      empty: '추가된 모델 Provider가 없습니다. 사용자의 로컬 또는 클라우드 모델을 추가하세요. 배포 환경에 기본 모델이 있으면 모델 목록에 자동으로 표시됩니다.', editor: '모델 Provider 설정', name: '표시 이름', keepSecret: '비워 두면 기존 Key 유지',
+      chooseProvider: '모델 서비스 선택', providerQwen: 'Alibaba Cloud Qwen', providerSiliconFlow: 'SiliconFlow', providerZhipu: 'Zhipu GLM', custom: '사용자 지정 엔드포인트', advanced: '서비스 URL, 모델 및 고급 설정', apiKeyRequired: 'API Key 또는 유효한 사용자 지정 Headers를 입력하세요.', apiKeyPlaceholder: 'API Key 붙여넣기(로컬 서버에만 저장)', presetFilled: '프리셋에서 URL·모델·컨텍스트 길이를 자동 입력했습니다. API 키만 붙여넣으세요.', localDetectHint: '로컬 모델 서비스를 시작한 뒤 아래의 모델 감지를 선택하세요.',
       models: '모델 목록(줄 또는 쉼표로 구분)', defaultModel: '기본 모델', headers: '사용자 지정 Headers JSON(선택)', enabled: '사용', makeDefault: '기본값으로 설정', save: '저장', navTitle: '모델', navSubtitle: 'OpenAI 호환, Anthropic, Gemini 및 로컬 모델을 관리합니다.', localPreset: '로컬 모델 빠른 설정', optional: '선택', localNoKey: 'Ollama / LM Studio는 비워 둘 수 있음', discover: '모델 감지', detecting: '감지 중…', discovered: '{count}개 모델을 찾았습니다.', noModels: '엔드포인트는 연결되지만 모델 목록이 비어 있습니다.', manage: '모델 관리',
+      headersErrorJson: 'Headers는 유효한 JSON이어야 합니다.', headersErrorType: 'Headers는 배열, 문자열 또는 null이 아닌 JSON 객체여야 합니다.', headersErrorName: 'Header 이름이 잘못되었습니다. 공백, 콜론 또는 줄바꿈을 사용할 수 없습니다.', headersErrorValue: 'Header 값에는 줄바꿈을 포함할 수 없습니다.',
       capsTitle: '기능 및 타임아웃 (비워두면 자동 감지)', capsHint: '로컬 모델은 비워두는 것을 권장합니다. 엔드포인트 유형과 탐지 결과로 자동 판단합니다.',
+      baseUrlErrorRequired: 'Base URL을 입력하세요.', baseUrlErrorInvalid: '유효한 http/https 주소를 입력하세요.', baseUrlErrorProtocol: 'Base URL은 http/https만 지원합니다.', baseUrlErrorCredentials: 'Base URL에 사용자 이름이나 비밀번호를 넣지 말고 API Key 또는 사용자 지정 Header를 사용하세요.', baseUrlErrorQuery: 'Base URL에 쿼리 파라미터를 넣지 말고 토큰은 API Key 또는 사용자 지정 Header에 설정하세요.', baseUrlErrorFragment: 'Base URL에 # 프래그먼트를 포함하지 마세요.',
       kind: '엔드포인트 유형', kindAuto: '자동 감지', contextWindow: '컨텍스트 길이 (token)',
       supportsTools: '도구 호출 지원', supportsStreaming: '스트리밍 지원', supportsVision: '이미지 입력 지원', supportsPdf: '네이티브 PDF 지원', supportsParallelTools: '병렬 도구 지원',
       capAuto: '자동', capYes: '지원', capNo: '미지원',
       firstTokenTimeout: '첫 글자 타임아웃 (ms)', idleTimeout: '출력 중단 타임아웃 (ms)',
+      numericErrorInteger: '{field}은(는) 정수여야 합니다.', numericErrorMin: '{field}은(는) {min} 이상이어야 합니다.', numericErrorMax: '{field}은(는) {max} 이하여야 합니다.',
       keepAlive: '모델 상주 시간', keepAliveHint: '예: 30m. 매 요청마다 가중치를 다시 로드하지 않습니다.',
       failoverEnabled: '실패 시 다른 Provider로 전환 허용', failoverHint: '로컬 모델은 기본으로 꺼져 있습니다. 응답이 느릴 때 조용히 전환되어 추가 클라우드 요청이 생기는 것을 방지합니다.',
       effectiveUrl: '실제 요청 URL', diagnostics: '진단 결과', diagRunning: '항목별 확인 중…',
@@ -2549,6 +3035,16 @@ export const translations = {
       language: '언어',
       languageHint: '인터페이스 언어를 전환합니다.',
       systemDiagnostics: '시스템 진단',
+      agentRuntime: 'Agent 런타임',
+      agentRuntimeStatus: '런타임 상태',
+      agentRuntimeReady: '준비됨',
+      agentRuntimeUnavailable: '재시작 필요',
+      agentRuntimeReadyDescription: 'Turn 영속성과 컨텍스트 압축 저장소를 사용할 수 있습니다.',
+      agentRuntimeUnavailableDescription: 'Turn 호스트 구성이 완전하지 않습니다. 로컬 앱 또는 서비스를 재시작하고, 문제가 계속되면 시작 로그를 확인하세요.',
+      turnPersistence: 'Turn 영속성',
+      compactionArchiveStorage: '컨텍스트 압축 아카이브',
+      hostPortReady: '사용 가능',
+      hostPortUnavailable: '준비되지 않음',
       account: '계정',
       appearance: '모양',
       pet: '펫', petSubtitle: 'Gugo를 최소화해도 표시되는 데스크톱 펫을 설정합니다.', petImage: '펫 이미지', petImageHint: '최대 4MB의 PNG, WebP, GIF를 지원합니다.', petImageError: { invalidType: 'PNG, WebP 또는 GIF 이미지를 선택하세요.', tooLarge: '이미지는 4MB 이하여야 합니다.' }, petChoose: '이미지 선택', petSize: '펫 크기', petPreview: '펫 미리보기', petDefault: '기본 펫 사용 중', petSaved: '펫을 저장했습니다.', petReadFailed: '이미지를 읽을 수 없습니다.', petReset: '기본값 복원', petResetDone: '기본 펫으로 복원했습니다.',
@@ -2595,6 +3091,20 @@ export const translations = {
     errors: {
       emptyModelResponse: '모델이 빈 응답을 반환했습니다. 로컬 모델의 채팅 템플릿, 컨텍스트 길이 및 OpenAI 호환 엔드포인트를 확인하세요.',
       emptyModelResponseLength: '표시할 응답을 만들기 전에 출력 예산을 모두 사용했습니다. Max Tokens를 늘리거나 심층 추론을 끄고 다시 시도하세요.',
+      chatFailure: '작업 중 문제가 발생해 완료되지 않았습니다. 다시 시도하고, 계속 실패하면 선택한 모델이 필요한 도구를 지원하는지 확인하세요.',
+      runtimeUnavailable: '로컬 런타임이 시작 또는 재시작 중이라 메시지가 전송되지 않았습니다. 잠시 후 다시 시도하세요.',
+      runtimeInterrupted: '작업 실행 중 로컬 런타임이 중지되거나 다시 시작되었습니다. 실행은 중단되었지만 완료된 진행 상황은 유지됩니다. 런타임이 준비되면 계속하세요.',
+      runtimeAttentionRequired: '로컬 런타임을 확인해야 합니다.',
+      openRuntimeDiagnostics: '런타임 진단 열기',
+      modelConfigurationFailure: '모델 서비스가 올바르게 설정되지 않았습니다.',
+      modelProviderUnverified: '선택한 모델 서비스가 사용 가능성 테스트를 완료하지 않았습니다.',
+      modelProviderChatOnly: '선택한 모델은 텍스트 응답 테스트를 통과했지만 도구 호출이 필요한 현재 Agent 채팅에서는 사용할 수 없습니다.',
+      modelProviderChanged: '이 작업에 연결된 모델 설정이 변경되었거나 더 이상 사용할 수 없습니다.',
+      modelAuthenticationFailed: '모델 서비스가 인증 정보를 거부했습니다.',
+      modelEndpointNotFound: '선택한 모델 또는 모델 서비스 엔드포인트를 찾을 수 없습니다.',
+      modelEndpointTimeout: '모델 서비스 연결 시간이 초과되었습니다.',
+      modelEndpointUnavailable: '현재 모델 서비스에 연결할 수 없습니다.',
+      modelConfigurationAction: '‘설정 → 모델’에서 서비스 URL, API Key, 모델 이름을 확인하고 연결을 테스트한 다음 사용 가능한 모델을 선택하세요.',
       networkFailed: '네트워크 요청에 실패했습니다. 나중에 다시 시도하세요.',
       loginRequired: '먼저 로그인하세요',
       sessionExpired: '세션이 만료되었습니다. 다시 로그인하세요.',
@@ -2666,7 +3176,7 @@ export const translations = {
       badge: {
         active: '활성화됨',
         inactive: '미설정',
-        hint: '비전 코파일럿은 두 가지가 모두 충족될 때만 호출됩니다: 이 페이지에서 vision_assist 자격 증명(baseUrl / modelName / apiKey)을 설정하고, 서버 .env에 MODEL_NAMES_VISION(쉼표로 구분된 비전 모델 ID)을 설정해야 합니다. 하나만으로는 부족합니다.',
+        hint: '이 페이지에서 서비스 URL, 모델 이름, API 키를 저장하고 활성화하면 Vision Assist를 사용할 수 있습니다. 로컬 서비스의 키 필요 여부는 해당 서비스 설정에 따릅니다.',
       },
     },
     wechat: {
@@ -2960,6 +3470,9 @@ export const translations = {
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS['zh-TW'], ...SKILLS_MARKET_UI_TRANSLATIONS['zh-TW'] },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS['zh-TW'],
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS['zh-TW'],
+    sideEffectRecovery: SIDE_EFFECT_RECOVERY_TRANSLATIONS['zh-TW'],
+    modelRequestRecovery: MODEL_REQUEST_RECOVERY_TRANSLATIONS['zh-TW'],
+    evolution: { ...EVOLUTION_TRANSLATIONS['zh-TW'], ...EVOLUTION_WORKFLOW_TRANSLATIONS['zh-TW'] },
     ...RELIABILITY_VIEW_TRANSLATIONS['zh-TW'],
     approvals: APPROVAL_TRANSLATIONS['zh-TW'],
     toolApproval: TOOL_APPROVAL_TRANSLATIONS['zh-TW'],
@@ -2970,16 +3483,21 @@ export const translations = {
     mcp: { ...MCP_TRANSLATIONS['zh-TW'], ...MCP_UI_TRANSLATIONS['zh-TW'], ...MCP_OAUTH_TRANSLATIONS['zh-TW'] },
     modelProviders: {
       currentModel: '目前模型', baseUrlLabel: '服務位址', statusConfigured: '已設定，可用', statusWaiting: '未設定', notConfigured: '尚未設定', modelsCount: '已設定 {count} 個模型',
-      title: '自訂模型 Provider', subtitle: '設定 OpenAI 相容、Anthropic 或 Gemini 原生端點，API Key 僅保存在伺服器端。', add: '新增', saved: '已儲存模型設定。',
-      confirmDelete: '刪除這個模型 Provider？', testing: '正在測試端點…', testOk: '端點可用，延遲', default: '預設', test: '測試',
-      empty: '尚未設定自訂 Provider，將繼續使用伺服器 .env。', editor: '模型 Provider 設定', name: '顯示名稱', keepSecret: '留空保留原 Key',
-      chooseProvider: '選擇模型服務', providerQwen: '阿里雲通義千問', providerSiliconFlow: '矽基流動', providerZhipu: '智譜 GLM', custom: '自訂接口', advanced: '進階自訂設定', apiKeyRequired: '請填寫所選模型服務的 API Key。', apiKeyPlaceholder: '貼上 API Key，密鑰只保存在本機伺服器', presetFilled: '已按預設自動填入服務地址、模型與上下文窗口，只需貼上 API Key。', localDetectHint: '請先啟動本機模型服務，再點擊下方「偵測模型」。',
+      title: '自訂模型 Provider', subtitle: '設定 OpenAI 相容、Anthropic 或 Gemini 原生端點，API Key 僅保存在伺服器端。', byokNotice: 'Gugo 不販售模型存取權，也不收取平台費用。請設定你自己的本機模型或上游 Provider；雲端使用費用由該 Provider 直接收取。API Key 會加密儲存在目前 Gugo 伺服器的憑證保險庫中。', add: '新增', saved: '已儲存模型設定。', savedTesting: '模型設定已儲存，正在驗證預設模型能否用於 Agent…', savedReady: '模型已通過 Agent 就緒測試，正在返回…', savedTestFailed: '模型設定已儲存，但未通過 Agent 就緒測試。請依診斷結果調整後重試。', savedChatOnly: '模型設定已儲存，文字回覆可用，但不支援 Agent 所需的工具呼叫。請更換模型或啟用工具呼叫後重試。',
+      confirmDelete: '刪除這個模型 Provider？', testing: '正在測試端點…', testOk: '端點可用，延遲', default: '預設', test: '測試', testModel: '測試模型', testTarget: '目標：{model}', edit: '編輯 Provider', delete: '刪除 Provider',
+      readinessAgent: 'Agent 可用', readinessChatOnly: '僅支援對話', readinessUnavailable: '無法使用', readinessUntested: '尚未測試', clearApiKey: '刪除已儲存的 API Key', clearApiKeyHint: '儲存後會從本機伺服器刪除這個 Provider 現有的 API Key。', clearHeaders: '刪除全部已儲存的 Headers', clearHeadersHint: '儲存後會從本機伺服器刪除這個 Provider 的全部自訂 Headers。', removeSavedHeader: '刪除已儲存的 Header：{key}', restoreSavedHeader: '復原刪除 Header：{key}',
+      errorConfigMissing: '模型服務尚未設定，請先新增並啟用模型 Provider。', errorAuth: '模型服務拒絕了憑證，請檢查 API Key 和存取權限。', errorNotFound: '找不到模型端點或模型，請檢查服務位址與模型名稱。', errorTimeout: '連線模型服務逾時，請確認服務已啟動並檢查逾時設定。', errorRateLimited: '模型服務請求過多，請稍後重試或檢查配額。', errorUnavailable: '無法連線模型服務或服務回傳錯誤。請檢查服務位址、確認服務已啟動，並檢查本機網路或代理設定。', errorUnknown: '模型服務操作失敗，請檢查設定後重試。',
+      empty: '尚未新增模型 Provider。請新增你自己的本機或雲端模型；若部署環境預設了模型，它會自動顯示在模型清單中。', editor: '模型 Provider 設定', name: '顯示名稱', keepSecret: '留空保留原 Key',
+      chooseProvider: '選擇模型服務', providerQwen: '阿里雲通義千問', providerSiliconFlow: '矽基流動', providerZhipu: '智譜 GLM', custom: '自訂接口', advanced: '服務位址、模型與進階設定', apiKeyRequired: '請填寫 API Key 或有效的自訂 Headers。', apiKeyPlaceholder: '貼上 API Key，密鑰只保存在本機伺服器', presetFilled: '已按預設自動填入服務地址、模型與上下文窗口，只需貼上 API Key。', localDetectHint: '請先啟動本機模型服務，再點擊下方「偵測模型」。',
       models: '模型清單（每行或逗號分隔）', defaultModel: '預設模型', headers: '自訂 Headers JSON（選填）', enabled: '啟用', makeDefault: '設為預設', save: '儲存', navTitle: '模型', navSubtitle: '管理 OpenAI 相容、Anthropic、Gemini 與本機模型。', localPreset: '本機模型快速設定', optional: '選填', localNoKey: 'Ollama / LM Studio 可留空', discover: '偵測模型', detecting: '偵測中…', discovered: '已偵測到 {count} 個模型。', noModels: '端點可連線，但未回傳模型清單。', manage: '管理模型',
+      headersErrorJson: 'Headers 必須是有效的 JSON。', headersErrorType: 'Headers 必須是 JSON 物件，不能是陣列、字串或 null。', headersErrorName: 'Header 名稱無效，請勿包含空格、冒號或換行。', headersErrorValue: 'Header 值不能包含換行。',
       capsTitle: '能力與逾時（留空＝自動偵測）', capsHint: '本機模型建議留空，系統會依端點類型與偵測結果自動判斷。',
+      baseUrlErrorRequired: '請輸入 Base URL。', baseUrlErrorInvalid: '請輸入有效的 http/https 位址。', baseUrlErrorProtocol: 'Base URL 僅支援 http/https。', baseUrlErrorCredentials: 'Base URL 不可包含使用者名稱或密碼，請改用 API Key 或自訂 Header。', baseUrlErrorQuery: 'Base URL 不可包含查詢參數，請將權杖放入 API Key 或自訂 Header。', baseUrlErrorFragment: 'Base URL 不可包含 # 片段。',
       kind: '端點類型', kindAuto: '自動識別', contextWindow: '上下文長度（token）',
       supportsTools: '支援工具呼叫', supportsStreaming: '支援串流輸出', supportsVision: '支援圖片輸入', supportsPdf: '支援原生 PDF', supportsParallelTools: '支援並行工具',
       capAuto: '自動', capYes: '支援', capNo: '不支援',
       firstTokenTimeout: '第一個字逾時（毫秒）', idleTimeout: '輸出中斷逾時（毫秒）',
+      numericErrorInteger: '{field} 必須是整數。', numericErrorMin: '{field} 不可小於 {min}。', numericErrorMax: '{field} 不可大於 {max}。',
       keepAlive: '模型常駐時間', keepAliveHint: '例如 30m。避免每次請求都重新載入權重。',
       failoverEnabled: '失敗時允許切換到其它 Provider', failoverHint: '本機模型預設關閉，避免回應變慢時靜默切換並產生額外雲端呼叫。',
       effectiveUrl: '實際請求位址', diagnostics: '診斷結果', diagRunning: '正在逐項檢查…',
@@ -3042,6 +3560,16 @@ export const translations = {
       language: '語言',
       languageHint: '切換介面顯示語言。',
       systemDiagnostics: '系統診斷',
+      agentRuntime: 'Agent 執行環境',
+      agentRuntimeStatus: '執行環境狀態',
+      agentRuntimeReady: '已就緒',
+      agentRuntimeUnavailable: '需要重新啟動',
+      agentRuntimeReadyDescription: 'Turn 持久化與上下文壓縮儲存均可使用。',
+      agentRuntimeUnavailableDescription: 'Turn 宿主設定不完整。請重新啟動本機應用程式或服務；若問題仍存在，請檢查啟動日誌。',
+      turnPersistence: 'Turn 持久化',
+      compactionArchiveStorage: '上下文壓縮封存',
+      hostPortReady: '可用',
+      hostPortUnavailable: '尚未就緒',
       account: '帳戶',
       appearance: '外觀',
       pet: '寵物', petSubtitle: '自訂桌面寵物；Gugo 最小化後仍會顯示。', petImage: '寵物圖片', petImageHint: '支援最大 4 MB 的 PNG、WebP 與 GIF。', petImageError: { invalidType: '請選擇 PNG、WebP 或 GIF 圖片。', tooLarge: '寵物圖片不可超過 4 MB。' }, petChoose: '選擇圖片', petSize: '寵物大小', petPreview: '寵物預覽', petDefault: '目前使用預設寵物', petSaved: '寵物已儲存。', petReadFailed: '無法讀取圖片。', petReset: '恢復預設寵物', petResetDone: '已恢復預設寵物。',
@@ -3088,6 +3616,20 @@ export const translations = {
     errors: {
       emptyModelResponse: '模型回傳了空白回覆。請檢查本機模型的聊天範本、上下文長度和 OpenAI 相容端點。',
       emptyModelResponseLength: '模型的輸出預算已用盡，但沒有產生可見回覆。請調高 Max Tokens 或關閉深度思考後重試。',
+      chatFailure: '任務執行遇到問題，尚未完成。請重試；若仍失敗，請檢查所選模型是否支援所需工具。',
+      runtimeUnavailable: '本機執行環境正在啟動或重新啟動，訊息尚未送出。請稍後重試。',
+      runtimeInterrupted: '本機執行環境在任務執行期間停止或重新啟動。本次執行已中斷，已完成的進度會保留；請等待執行環境就緒後繼續。',
+      runtimeAttentionRequired: '本機執行環境需要處理。',
+      openRuntimeDiagnostics: '開啟執行環境診斷',
+      modelConfigurationFailure: '模型服務尚未正確設定。',
+      modelProviderUnverified: '所選模型服務尚未完成可用性測試。',
+      modelProviderChatOnly: '所選模型已通過文字補全測試，但不支援目前 Agent 對話所需的工具呼叫。',
+      modelProviderChanged: '任務綁定的模型設定已變更或無法使用。',
+      modelAuthenticationFailed: '模型服務拒絕了存取憑證。',
+      modelEndpointNotFound: '找不到所選模型或模型服務端點。',
+      modelEndpointTimeout: '連線模型服務逾時。',
+      modelEndpointUnavailable: '目前無法連線模型服務。',
+      modelConfigurationAction: '請前往「設定 → 模型」檢查服務位址、API Key 和模型名稱，測試連線後選擇可用模型。',
       networkFailed: '網路請求失敗，請稍後再試。',
       loginRequired: '請先登入帳戶',
       sessionExpired: '會話已過期，請重新登入。',
@@ -3159,7 +3701,7 @@ export const translations = {
       badge: {
         active: '已啟用',
         inactive: '未啟用',
-        hint: '視覺輔助副駕需要同時滿足兩個條件才會被鏈路使用：在本頁設定 vision_assist 憑證（baseUrl / modelName / apiKey），並且在伺服器 .env 設定 MODEL_NAMES_VISION（逗號分隔的視覺模型名）。兩者缺一不可。',
+        hint: '在本頁儲存並啟用服務位址、模型名稱和 API Key 後即可使用視覺輔助副駕；本機服務是否需要 Key 取決於該服務。',
       },
     },
     wechat: {
@@ -3757,6 +4299,10 @@ const SETTINGS_TOOLS_TRANSLATIONS = {
 
 for (const [language, copy] of Object.entries(SETTINGS_TOOLS_TRANSLATIONS)) {
   translations[language].settingsTools = copy
+}
+
+for (const [language, copy] of Object.entries(TASK_MODEL_READINESS_TRANSLATIONS)) {
+  translations[language].taskCenter.modelReadiness = copy
 }
 
 export function lookup(dict, key) {

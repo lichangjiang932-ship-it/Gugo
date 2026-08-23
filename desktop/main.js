@@ -12,6 +12,7 @@ import {
 } from './security.js'
 import {
   ensureDesktopRuntimeConfigFile,
+  probeDesktopRuntimeMode,
   resolveDesktopDataPaths,
   resolveDesktopPluginRoots,
   resolveDesktopPort,
@@ -31,7 +32,6 @@ const { autoUpdater } = updaterPackage
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const preloadPath = path.join(__dirname, 'preload.cjs')
 const appIconPath = path.join(__dirname, '..', 'build', 'icon.ico')
-const UPDATE_INTERVAL_MS = 15 * 60 * 1000
 
 let mainWindow = null
 let petWindow = null
@@ -155,10 +155,12 @@ function configureDesktopRuntime() {
 
 async function startInProcessBundledServer(origin, startupCause) {
   console.warn('[desktop] child server unavailable; using in-process fallback:', startupCause?.message)
-  const { applyRuntimeConfig } = await import('../server/utils/runtimeEnv.js')
-  applyRuntimeConfig()
-  const { startAppServer } = await import('../server/appServer.js')
-  const server = startAppServer()
+  const { startRuntimeServer } = await import(
+    '../server/services/runtimeServerStartup.js'
+  )
+  const cwd = app.getAppPath()
+  const env = process.env
+  const server = await startRuntimeServer({ cwd, env })
   if (!server) {
     throw new Error('Gugo 应用服务无法启动，请重新安装或修复 Gugo。', { cause: startupCause })
   }
@@ -173,8 +175,7 @@ async function startInProcessBundledServer(origin, startupCause) {
     while (Date.now() < deadline) {
       if (serverError) throw serverError
       try {
-        const response = await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(1_500) })
-        if (response.ok) {
+        if (await probeDesktopRuntimeMode(origin)) {
           server.off('error', rememberServerError)
           return origin
         }
@@ -246,8 +247,7 @@ async function startBundledServer() {
       throw new Error(startupError.trim() || `应用服务启动失败（退出码 ${child.exitCode}）`)
     }
     try {
-      const response = await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(1_500) })
-      if (response.ok) return origin
+      if (await probeDesktopRuntimeMode(origin)) return origin
     } catch { /* server is still starting */ }
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
@@ -522,14 +522,14 @@ function registerDesktopIpc() {
   })
 }
 
-function configureAutoUpdates() {
+function configureDesktopUpdates() {
   if (!app.isPackaged) return
 
   // The built-in downloader discards a stalled differential transfer and then
   // starts the whole installer again. Keep electron-updater for release checks
   // and NSIS installation, while the desktop runtime owns resumable downloads.
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = false
   // Community builds are currently unsigned: keep publisherName absent so the updater
   // uses GitHub HTTPS plus latest.yml SHA-512 integrity checks without a false signer claim.
   autoUpdater.allowPrerelease = false
@@ -556,12 +556,9 @@ function configureAutoUpdates() {
   })
   autoUpdater.on('error', (error) => sendUpdateStatus('error', { message: error?.message || 'update failed' }))
 
-  const check = () => {
-    if (updateReady || desktopUpdateRuntime.downloading) return
-    void desktopUpdateRuntime.checkForUpdates().catch(() => {})
-  }
-  setTimeout(check, 10_000).unref()
-  setInterval(check, UPDATE_INTERVAL_MS).unref()
+  // Local-first default: configuring the updater must not contact a release
+  // server. The only check entry point is the trusted IPC handler above,
+  // invoked after the user explicitly chooses "check and download".
 }
 
 async function launch() {
@@ -569,7 +566,7 @@ async function launch() {
   configurePermissions()
   mainWindow = createMainWindow()
   await mainWindow.loadURL(applicationOrigin)
-  configureAutoUpdates()
+  configureDesktopUpdates()
 }
 
 async function stopBackend() {

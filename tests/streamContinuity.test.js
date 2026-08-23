@@ -211,19 +211,22 @@ test('StreamTruncatedError 可被 instanceof 识别', () => {
   assert.equal(error.partialText, 'abc')
 })
 
-test('★ 有正文时 finish_reason=length 必须透传 —— 否则「被截断」和「说完了」无法区分', async () => {
-  // 这是截图事故的关键:推理模型思考吃光 max_tokens,正文一个字没生成,
-  // 但流「正常结束」了。不透传 finish_reason 的话前端只能猜。
-  const events = await collect(callModelThroughProxyStream({
-    messages: [{ role: 'user', content: 'hi' }],
-    fetchImpl: fakeSseFetch([
-      dataFrame({ ok: true, delta: '正文开头' }),
-      dataFrame({ ok: true, done: true, finishReason: 'length' }),
-    ]),
-  }))
-  const complete = events.find((e) => e.type === 'complete')
-  assert.ok(complete, 'done 帧应产生一个带 finishReason 的事件')
-  assert.equal(complete.finishReason, 'length')
+test('★ 有正文时 finish_reason=length 抛出带 partialText 的截断错误', async () => {
+  await assert.rejects(
+    () => collect(callModelThroughProxyStream({
+      messages: [{ role: 'user', content: 'hi' }],
+      fetchImpl: fakeSseFetch([
+        dataFrame({ ok: true, delta: '正文开头' }),
+        dataFrame({ ok: true, done: true, finishReason: 'length' }),
+      ]),
+    })),
+    (error) => {
+      assert.equal(error.code, 'STREAM_TRUNCATED')
+      assert.equal(error.reason, 'length')
+      assert.equal(error.partialText, '正文开头')
+      return true
+    },
+  )
 })
 
 test('正常结束时 finishReason 是 stop,不误报截断', async () => {

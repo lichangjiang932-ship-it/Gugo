@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   defaultSettingsSection,
+  normalizeSettingsReturnTo,
   SETTINGS_TAB_ABOUT,
   SETTINGS_TAB_AGENT_PRESETS,
   SETTINGS_TAB_APPEARANCE,
@@ -17,12 +18,37 @@ import {
   SETTINGS_TAB_PERMISSIONS,
   SETTINGS_TAB_PET,
   SETTINGS_TAB_PLUGINS,
+  SETTINGS_TAB_RECOVERY,
   SETTINGS_TAB_WEB_SEARCH,
   resolveSettingsNavFromSearch,
+  resolveSettingsReturnToFromSearch,
   resolveSettingsSectionFromSearch,
   settingsPathAfterLogin,
   settingsPathForSection,
 } from '../src/lib/settingsNavigation.js'
+
+test('settings return targets are restricted to chat or a safe task route', () => {
+  assert.equal(normalizeSettingsReturnTo('/chat'), '/chat')
+  assert.equal(normalizeSettingsReturnTo('/task'), '/task')
+  assert.equal(normalizeSettingsReturnTo('/tasks'), '/tasks')
+  assert.equal(normalizeSettingsReturnTo('/task?job=job-1'), '/task?job=job-1')
+  assert.equal(normalizeSettingsReturnTo('/tasks?job=job_1:retry.2'), '/tasks?job=job_1%3Aretry.2')
+  assert.equal(
+    settingsPathForSection(SETTINGS_TAB_MODELS, [], { returnTo: '/task?job=job-1' }),
+    '/settings?tab=models&returnTo=%2Ftask%3Fjob%3Djob-1',
+  )
+  assert.equal(resolveSettingsReturnToFromSearch('?returnTo=%2Fchat'), '/chat')
+  assert.equal(resolveSettingsReturnToFromSearch('?returnTo=%2F%2Fevil.example'), '')
+  assert.equal(resolveSettingsReturnToFromSearch('?returnTo=%2Fchat&returnTo=%2Ftask%3Fjob%3Djob-1'), '')
+
+  for (const value of [
+    'https://evil.example', '//evil.example', '\\evil', '/settings', '/chat?next=https://evil.example',
+    '/task?job=', '/task?job=a&job=b', '/task?job=a&next=b', '/task?job=a/b', '/task?job=a#fragment',
+    ' /chat', '/chat\n',
+  ]) {
+    assert.equal(normalizeSettingsReturnTo(value), '', value)
+  }
+})
 
 test('after login lands on general settings; removed tabs resolve safely', () => {
   assert.equal(settingsPathAfterLogin({ hasPassword: false }), '/settings')
@@ -48,6 +74,7 @@ test('every settings module round-trips through its canonical URL as an independ
     [SETTINGS_TAB_AGENT_PRESETS, '/settings?tab=agent-presets'],
     [SETTINGS_TAB_INTEGRATIONS, '/settings?tab=integrations'],
     [SETTINGS_TAB_DATA, '/settings?tab=data'],
+    [SETTINGS_TAB_RECOVERY, '/settings?tab=recovery'],
     [SETTINGS_TAB_ABOUT, '/settings?tab=about'],
   ]
 

@@ -19,7 +19,7 @@ process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-tests', String(process.pi
 
 function cleanDb() {
   const db = getDb()
-  for (const table of ['pending_approvals', 'notifications', 'hooks', 'ledger', 'sessions', 'login_codes', 'users']) {
+  for (const table of ['pending_approvals', 'notifications', 'hooks', 'sessions', 'login_codes', 'users']) {
     db.prepare(`DELETE FROM ${table}`).run()
   }
 }

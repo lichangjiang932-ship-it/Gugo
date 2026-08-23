@@ -39,6 +39,15 @@ const INTENT_ARTIFACT_USER_ID = 'intent-user'
 const INTENT_ARTIFACT_SESSION_ID = 'artifact-intent-session'
 let intentArtifactScopeReady = false
 
+function approveToolCall({ args, toolCallId }) {
+  assert.ok(toolCallId)
+  return {
+    proceed: true,
+    args,
+    approvalId: `artifact-intent-approval-${toolCallId}`,
+  }
+}
+
 function persistStubTurnArtifact({ turnId, id, filename, type }) {
   if (!intentArtifactScopeReady) {
     getDb().prepare('DELETE FROM turn_artifacts WHERE user_id = ? AND session_id = ?')
@@ -857,7 +866,7 @@ test('workspace HTML targets use filesystem tools without a managed-artifact com
       intentMode: 'execute',
       toolSpecs: SERVER_TOOL_SPECS,
       enableToolHooks: false,
-      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      requestToolApproval: approveToolCall,
       executeTool: async ({ name, args }) => {
         executions.push({ name, args })
         assert.equal(args.path, scenario.path)
@@ -950,7 +959,7 @@ test('a real in-place workspace HTML write does not publish a duplicate artifact
       intentMode: 'execute',
       toolSpecs: SERVER_TOOL_SPECS,
       enableToolHooks: false,
-      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      requestToolApproval: approveToolCall,
       executeTool: async ({ name, args }) => {
         if (name === 'write_file') {
           fs.writeFileSync(targetPath, args.content, 'utf8')
@@ -1044,7 +1053,7 @@ test('a broken local HTML background is withheld and automatically corrected bef
       intentMode: 'execute',
       toolSpecs: SERVER_TOOL_SPECS,
       enableToolHooks: false,
-      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      requestToolApproval: approveToolCall,
       executeTool: async ({ name, args }) => {
         executions.push(name)
         if (name === 'write_file') {
@@ -1124,7 +1133,7 @@ test('a broken local HTML at the maxIters boundary is revalidated and repaired b
       toolSpecs: SERVER_TOOL_SPECS,
       maxIters: 1,
       enableToolHooks: false,
-      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      requestToolApproval: approveToolCall,
       executeTool: async ({ name, args }) => {
         if (name === 'write_file') {
           fs.writeFileSync(targetPath, args.content, 'utf8')
@@ -1218,7 +1227,7 @@ test('a restored successful local HTML checkpoint is revalidated against disk be
       intentMode: 'execute',
       toolSpecs: SERVER_TOOL_SPECS,
       enableToolHooks: false,
-      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      requestToolApproval: approveToolCall,
       executeTool,
       saveCheckpoint: async (state) => { checkpoint = structuredClone(state) },
       runModel: async () => {
@@ -1241,7 +1250,7 @@ test('a restored successful local HTML checkpoint is revalidated against disk be
       intentMode: 'execute',
       toolSpecs: SERVER_TOOL_SPECS,
       enableToolHooks: false,
-      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      requestToolApproval: approveToolCall,
       executeTool,
       loadCheckpoint: async () => ({ state: structuredClone(checkpoint) }),
       saveCheckpoint: async (state) => { checkpoint = structuredClone(state) },
@@ -1285,7 +1294,7 @@ test('a workspace-file request cannot silently fall back to a same-named managed
     intentMode: 'execute',
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async () => {
       executions += 1
       return { ok: true }
@@ -1344,9 +1353,11 @@ async function runRejectedExactWorkspaceMutation({
     intentMode: 'execute',
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async () => {
+    requestToolApproval: async ({ toolCallId }) => {
       approvals += 1
-      return { proceed: true, args: approvalArgs || args }
+      return {
+        ...approveToolCall({ args: approvalArgs || args, toolCallId }),
+      }
     },
     executeTool: async () => {
       executions += 1
@@ -1526,7 +1537,7 @@ test('a command with an exact declared output may update and verify the requeste
     intentMode: 'execute',
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async ({ name, args }) => {
       executed.push(name)
       if (name === 'bash_exec') {
@@ -1894,7 +1905,7 @@ for (const format of [
         intentMode: 'execute',
         toolSpecs: SERVER_TOOL_SPECS,
         enableToolHooks: false,
-        requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+        requestToolApproval: approveToolCall,
         executeTool: async ({ name, args }) => {
           executions.push({ name, args })
           assert.equal(name, format.tool)
@@ -2044,7 +2055,7 @@ test('an exact older filename overrides the adjacent artifact before UI and chec
     messages,
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     onToolCall: async (call) => scheduledCalls.push(JSON.parse(JSON.stringify(call))),
     saveCheckpoint: async (state) => {
       checkpoints.push(JSON.parse(JSON.stringify(state)))
@@ -2181,7 +2192,7 @@ test('a restored pending in-place call keeps normalized args synchronized before
       checkpoints.push(JSON.parse(JSON.stringify(state)))
       return true
     },
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async ({ name, args }) => {
       assert.equal(name, 'create_html_app')
       executionArgs = args
@@ -2269,14 +2280,16 @@ for (const scenario of [
         toolSpecs: SERVER_TOOL_SPECS,
         maxIters: 1,
         enableToolHooks: false,
-        requestToolApproval: async ({ args }) => {
+        requestToolApproval: async ({ args, toolCallId }) => {
           approvalCalls += 1
           assert.equal(args.replace_artifact_id, artifactId)
           return {
-            proceed: true,
-            args: scenario.rewriteApproval
-              ? { ...args, replace_artifact_id: 'unauthorized-approval-target' }
-              : args,
+            ...approveToolCall({
+              args: scenario.rewriteApproval
+                ? { ...args, replace_artifact_id: 'unauthorized-approval-target' }
+                : args,
+              toolCallId,
+            }),
           }
         },
         executeTool: async () => {
@@ -2330,7 +2343,7 @@ test('a terse adjacent webpage critique creates and delivers a new file without 
     messages: adjacentHtmlRevisionMessages(currentPrompt),
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async ({ name, args }) => {
       assert.equal(name, 'create_html_app')
       assert.match(args.html, /font-size:12px/)
@@ -2405,7 +2418,7 @@ test('chat project-check turn does not execute artifact generators from an older
     enableToolHooks: false,
     // Approval semantics are covered separately. This routing test grants the
     // one requested execution so it can assert the selected tool end to end.
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     runModel: async ({ tools }) => {
       modelCalls += 1
       if (modelCalls === 1) {
@@ -2456,7 +2469,7 @@ for (const generatorName of ARTIFACT_GENERATOR_NAMES) {
       toolSpecs: SERVER_TOOL_SPECS,
       maxIters: 1,
       enableToolHooks: false,
-      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      requestToolApproval: approveToolCall,
       runModel: async ({ toolChoice }) => {
         if (toolChoice === 'none' || attempted) return { content: 'The forged call was rejected.', toolCalls: [] }
         attempted = true
@@ -2511,7 +2524,7 @@ for (const stepKind of ['plan', 'verify', 'finalize']) {
       toolSpecs: SERVER_TOOL_SPECS,
       maxIters: 1,
       enableToolHooks: false,
-      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      requestToolApproval: approveToolCall,
       runModel: async ({ tools, toolChoice }) => {
         if (toolChoice === 'none' || attempted) return { content: `${stepKind} complete.`, toolCalls: [] }
         attempted = true
@@ -2593,7 +2606,7 @@ test('verify checkpoint resume rejects pending artifact generators before execut
     enableToolHooks: false,
     loadCheckpoint: async () => ({ state: checkpoint }),
     saveCheckpoint: async () => true,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async () => {
       executorCalls += 1
       return { ok: true, artifactId: 'unexpected-checkpoint-artifact' }
@@ -2694,7 +2707,7 @@ test('an existing-image gallery request completes after the HTML artifact withou
     messages: [{ role: 'user', content: prompt }],
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async ({ name }) => {
       executions.push(name)
       assert.equal(name, 'create_html_app')
@@ -2809,7 +2822,7 @@ for (const scenario of [
       intentMode: 'execute',
       toolSpecs: SERVER_TOOL_SPECS,
       enableToolHooks: false,
-      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      requestToolApproval: approveToolCall,
       executeTool: async ({ name }) => {
         executions.push(name)
         assert.equal(name, scenario.tool)
@@ -2890,7 +2903,7 @@ test('a real webpage and new-image request still blocks completion until both ar
     messages: [{ role: 'user', content: prompt }],
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async ({ name }) => {
       executions.push(name)
       return name === 'create_html_app'
@@ -2983,7 +2996,7 @@ test('text tool protocol from a local model becomes a real webpage artifact call
     skillId: 'webpage',
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     onModelDelta: async ({ text }) => deltas.push(text),
     executeTool: async ({ name, args }) => {
       executions.push({ name, args })
@@ -3046,7 +3059,7 @@ test('webpage delivery retries natural-language fallback until a real artifact e
     skillId: 'webpage',
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     onModelDelta: async ({ text }) => deltas.push(text),
     executeTool: async ({ name, args }) => {
       executions.push({ name, args })
@@ -3126,7 +3139,7 @@ test('webpage delivery rejects handoff prose disguised as HTML and accepts the c
     skillId: 'webpage',
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async ({ name, args }) => {
       executions.push({ name, html: args.html })
       try {
@@ -3204,7 +3217,7 @@ test('webpage slash skill does not require a docx for quarterly report content',
     skillId: 'webpage',
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async ({ name }) => {
       executions.push(name)
       return persistStubTurnArtifact({
@@ -3270,7 +3283,7 @@ test('a multi-file request without a slash skill still requires every requested 
     messages: [{ role: 'user', content: prompt }],
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async ({ name }) => {
       executions.push(name)
       const filename = name === 'create_docx' ? 'summary.docx' : 'summary.xlsx'
@@ -3383,7 +3396,7 @@ test('forced artifact recovery falls back when a compatible provider rejects nam
     toolSpecs: SERVER_TOOL_SPECS,
     maxIters: 5,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async ({ name }) => {
       assert.equal(name, 'create_html_app')
       generatorExecutions += 1
@@ -3474,7 +3487,7 @@ test('tool_choice compatibility fallback remains bounded across checkpoint resum
     toolSpecs: SERVER_TOOL_SPECS,
     maxIters: 1,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     runModel: async ({ toolChoice }) => {
       if (!initialResponseSent) {
         initialResponseSent = true
@@ -3582,7 +3595,7 @@ test('artifact recovery diagnoses a failed generator before forcing it again', a
     toolSpecs: SERVER_TOOL_SPECS,
     maxIters: 8,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     saveCheckpoint: async (state) => {
       checkpoints.push(structuredClone(state))
       return true
@@ -3742,7 +3755,7 @@ test('artifact recovery resumes at a maxIters boundary and succeeds on the fourt
     toolSpecs: SERVER_TOOL_SPECS,
     maxIters: 1,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async ({ name }) => {
       assert.equal(name, 'create_html_app')
       generatorExecutions += 1
@@ -3875,7 +3888,7 @@ test('artifact recovery stops safely after four forced failures at a maxIters bo
     toolSpecs: SERVER_TOOL_SPECS,
     maxIters: 1,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async ({ name }) => {
       assert.equal(name, 'create_html_app')
       generatorExecutions += 1
@@ -3949,7 +3962,7 @@ test('an image artifact cannot satisfy a webpage delivery requirement', async ()
     skillId: 'webpage',
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     onModelDelta: async ({ text }) => deltas.push(text),
     executeTool: async ({ name }) => {
       executions.push(name)
@@ -4022,7 +4035,7 @@ test('text tool protocol ids stay unique across model iterations', async () => {
     messages: [{ role: 'user', content: '搜索两次并总结' }],
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: approveToolCall,
     executeTool: async ({ name, args, toolCallId, idempotencyKey }) => {
       executions.push({ name, args, toolCallId, idempotencyKey })
       return { ok: true, results: [] }

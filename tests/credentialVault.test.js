@@ -15,6 +15,7 @@ const {
   hardenCredentialKeyFile,
   isCredentialEnvelope,
   openCredentialObject,
+  requireSafeCredentialKeyPermissions,
   sealCredentialObject,
 } = await import('../server/utils/credentialVault.js')
 const { closeDb, createUser, getDb } = await import('../server/db.js')
@@ -44,7 +45,12 @@ test('Windows credential key ACL is replaced atomically for only the current use
   const calls = []
   const result = hardenCredentialKeyFile('C:\\Users\\Alice Example\\.credentials.key', {
     platform: 'win32',
-    env: { USERDOMAIN: 'WORKSTATION', USERNAME: 'Alice' },
+    env: {
+      USERDOMAIN: 'WORKSTATION',
+      USERNAME: 'Alice',
+      OPENAI_API_KEY: 'must-not-reach-powershell',
+      NODE_OPTIONS: '--require attacker.js',
+    },
     userInfo: () => ({ username: 'Alice' }),
     spawn(command, args, options) {
       calls.push({ command, args, options })
@@ -61,6 +67,7 @@ test('Windows credential key ACL is replaced atomically for only the current use
   assert.match(script, /\[System\.IO\.File\]::GetAccessControl/)
   assert.match(script, /SetAccessRuleProtection\(\$true, \$false\)/)
   assert.match(script, /RemoveAccessRuleSpecific/)
+  assert.match(script, /FileSystemRights\]::Delete/)
   assert.match(script, /\[System\.IO\.File\]::SetAccessControl\(\$target, \$acl\)/)
   assert.equal((script.match(/::SetAccessControl/g) || []).length, 1)
   assert.doesNotMatch(script, /Alice Example|WORKSTATION\\Alice/)
@@ -69,6 +76,8 @@ test('Windows credential key ACL is replaced atomically for only the current use
   assert.equal(options.windowsHide, true)
   assert.equal(options.env.GUGO_CREDENTIAL_ACL_TARGET, 'C:\\Users\\Alice Example\\.credentials.key')
   assert.equal(options.env.GUGO_CREDENTIAL_ACL_ACCOUNT, 'WORKSTATION\\Alice')
+  assert.equal(options.env.OPENAI_API_KEY, undefined)
+  assert.equal(options.env.NODE_OPTIONS, undefined)
 })
 
 test('Windows credential ACL keeps Unicode and metacharacters inside argument boundaries', () => {
@@ -92,7 +101,7 @@ test('Windows credential ACL keeps Unicode and metacharacters inside argument bo
   assert.doesNotMatch(script, /凭据|域 & admin|用户;name/)
 })
 
-test('atomic Windows ACL failures do not trigger a second mutation or throw during startup hardening', () => {
+test('atomic Windows ACL failures do not trigger a second mutation and fail closed before key use', () => {
   const unavailableCalls = []
   assert.deepEqual(hardenCredentialKeyFile('C:\\vault\\.credentials.key', {
     platform: 'win32',
@@ -127,6 +136,21 @@ test('atomic Windows ACL failures do not trigger a second mutation or throw duri
     code: 'POWERSHELL_ACL_EXIT_5',
   })
   assert.equal(deniedCalls.length, 1)
+
+  assert.throws(
+    () => requireSafeCredentialKeyPermissions({
+      ok: false,
+      method: 'powershell-acl',
+      code: 'POWERSHELL_ACL_EXIT_5',
+    }),
+    (error) => {
+      assert.equal(error.code, 'CREDENTIAL_VAULT_KEY_PERMISSIONS_UNSAFE')
+      assert.equal(error.statusCode, 500)
+      assert.match(error.message, /powershell-acl: POWERSHELL_ACL_EXIT_5/)
+      assert.match(error.message, /CREDENTIAL_ENCRYPTION_KEY/)
+      return true
+    },
+  )
 })
 
 test('non-Windows credential key permissions remain chmod 0600', () => {
@@ -140,6 +164,22 @@ test('non-Windows credential key permissions remain chmod 0600', () => {
     code: null,
   })
   assert.deepEqual(calls, [{ target: '/tmp/.credentials.key', mode: 0o600 }])
+  assert.deepEqual(
+    requireSafeCredentialKeyPermissions({ ok: true, method: 'chmod', code: null }),
+    { ok: true, method: 'chmod', code: null },
+  )
+})
+
+test('explicit CREDENTIAL_ENCRYPTION_KEY does not depend on a writable or securable key file', () => {
+  const sealed = sealCredentialObject({ token: 'env-key-secret' }, {
+    purpose: 'env-key-test',
+    env: {
+      CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 11).toString('base64'),
+      CREDENTIAL_KEY_PATH: path.join(dir, 'missing-parent', '.credentials.key'),
+    },
+  })
+  assert.equal(isCredentialEnvelope(sealed), true)
+  assert.equal(fs.existsSync(path.join(dir, 'missing-parent')), false)
 })
 
 test('AES-GCM envelope round-trips and rejects tampering or purpose swapping', () => {

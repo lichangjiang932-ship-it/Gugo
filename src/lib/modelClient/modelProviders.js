@@ -3,7 +3,10 @@ import { authHeaders, parseProxyResponse } from './modelHttp.js'
 export async function testModelEndpoint({ fetchImpl = fetch } = {}) {
   const response = await fetchImpl('/api/model/test', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authHeaders() || {}),
+    },
     body: JSON.stringify({}),
   })
   return parseProxyResponse(response)
@@ -39,6 +42,8 @@ async function modelProviderRequest(path = '', init = {}, fetchImpl = fetch) {
     // \u90a3\u6b63\u662f\u300c\u8fde\u4e0d\u4e0a\u300d\u65f6\u7528\u6237\u552f\u4e00\u9700\u8981\u770b\u7684\u4e1c\u897f,\u4e0d\u80fd\u56e0\u4e3a\u629b\u5f02\u5e38\u5c31\u4e22\u6389\u3002
     error.payload = data
     error.status = response.status
+    const code = data?.error?.code || data?.code
+    if (code) error.code = String(code)
     throw error
   }
   return data
@@ -56,14 +61,33 @@ export async function deleteModelProvider(id, { fetchImpl = fetch } = {}) {
   return modelProviderRequest(`/${encodeURIComponent(id)}`, { method: 'DELETE' }, fetchImpl)
 }
 
-export async function testModelProvider(id, { fetchImpl = fetch } = {}) {
-  return modelProviderRequest(`/${encodeURIComponent(id)}/test`, { method: 'POST' }, fetchImpl)
+export async function testModelProvider(id, modelName, { fetchImpl = fetch } = {}) {
+  return modelProviderRequest(`/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+    body: JSON.stringify({ modelName: String(modelName || '').trim() }),
+  }, fetchImpl)
 }
 
-export async function discoverModelProvider({ id, baseUrl, apiKey = '', headers = {} }, { fetchImpl = fetch } = {}) {
+export async function discoverModelProvider({
+  id,
+  baseUrl,
+  apiKey = '',
+  headers = {},
+  clearApiKey = false,
+  clearHeaders = false,
+  removeHeaderKeys = [],
+}, { fetchImpl = fetch } = {}) {
   return modelProviderRequest('/discover', {
     method: 'POST',
-    body: JSON.stringify({ id, baseUrl, apiKey, headers }),
+    body: JSON.stringify({
+      id,
+      baseUrl,
+      apiKey,
+      headers,
+      clearApiKey,
+      clearHeaders,
+      removeHeaderKeys,
+    }),
   }, fetchImpl)
 }
 

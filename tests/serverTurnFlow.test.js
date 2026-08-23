@@ -5,6 +5,7 @@ import {
   buildServerToolsConfig,
   buildServerTurnMessageIds,
   collectLocalPathEvidence,
+  normalizeServerTurnFailure,
   turnEventTimestamp,
 } from '../src/pages/ChatSplit/serverTurnFlow.js'
 import { createInitialState } from '../src/store/appStateBootstrap.js'
@@ -14,6 +15,31 @@ test('turn event timestamps prefer the server clock and safely fall back', () =>
   assert.equal(turnEventTimestamp(2_345, 9_999), 2_345)
   assert.equal(turnEventTimestamp({ createdAt: 'invalid' }, 9_999), 9_999)
   assert.equal(turnEventTimestamp(null, 9_999), 9_999)
+})
+
+test('HTTP turn failures retain structured readiness metadata for durable UI state', () => {
+  const error = Object.assign(new Error('runtime is restarting'), {
+    code: 'TURN_ENGINE_SHUTTING_DOWN',
+    status: 503,
+    action: 'retry',
+    details: { phase: 'shutdown' },
+    retryable: true,
+    retryAfter: '8',
+  })
+  assert.deepEqual(normalizeServerTurnFailure(error), {
+    code: 'TURN_ENGINE_SHUTTING_DOWN',
+    message: 'runtime is restarting',
+    status: 503,
+    action: 'retry',
+    details: { phase: 'shutdown' },
+    retryable: true,
+    retryAfter: '8',
+  })
+  const terminalFailure = { code: 'TURN_FAILED', message: 'durable failure', retryable: true }
+  assert.strictEqual(
+    normalizeServerTurnFailure({ serverFailure: terminalFailure }),
+    terminalFailure,
+  )
 })
 
 test('the default turn exposes a complete coding-agent execution loop', () => {

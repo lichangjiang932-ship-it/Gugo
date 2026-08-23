@@ -1,9 +1,17 @@
 import { assertRuntimeStage } from './runtimeContract.js'
+import {
+  createCallSideEffectBoundary,
+  createDynamicRegistrationGuard,
+  createToolAuthorizationContext,
+  createToolAuditLifecycle,
+  executeAuthorizedTool,
+  finalizeToolCallOutcome,
+} from './runtime-toolCallExecution.js'
 
 export async function executeToolCalls(s) {
   assertRuntimeStage(s, 'execute-tool-calls')
   const i = s.iteration
-  const { CHECKPOINT_FLUSH_ERROR_CODE, DYNAMIC_EXECUTION_TOOL_NAMES, FAILURE_RECOVERY_MARKER, FAILURE_RECOVERY_THRESHOLD, TOOL_HOOK_RESULT, VERIFICATION_TOOLS, contradictedCapabilityClarification, createToolAbortScope, executeServerTool, executeToolWithRetry, formatDeniedToolResult, getToolMetadata, isCommandExecutionTool, isFileArtifactTool, isLoopPauseResult, isSubstantiveToolCall, isSuccessfulToolResult, matchesDynamicToolRegistration, normalizeArtifactIdList, normalizeToolError, rememberApprovedSubagentCall, replaceRuntimeCapabilityBlock, restoreFailureRecovery, restoreNamedToolSpecs, resumePersistedApproval, revalidateToolPermission, runPostTool, runPreTool, shouldReflectOnFailure, supportsIdempotentResume, toolNameFromSpec, validateToolCall, writeToolAudit } = s.d
+  const { CHECKPOINT_FLUSH_ERROR_CODE, DYNAMIC_EXECUTION_TOOL_NAMES, SIDE_EFFECT_LEDGER_CONFLICT, SIDE_EFFECT_OUTCOME_UNKNOWN, TOOL_HOOK_RESULT, VERIFICATION_TOOLS, contradictedCapabilityClarification, createSideEffectExecution, createSideEffectScope, createToolAbortScope, createTruncatedToolCallResult, executeServerTool, executeToolWithRetry, formatDeniedToolResult, getToolMetadata, installToolFailureRecovery, isCommandExecutionTool, isFileArtifactTool, isLoopPauseResult, isSuccessfulToolResult, isTrustedInternalLoopPrincipal, matchesDynamicToolRegistration, normalizeArtifactIdList, normalizeToolError, rememberApprovedSubagentCall, replaceRuntimeCapabilityBlock, restoreNamedToolSpecs, resumePersistedApproval, revalidateHookAuthorization, revalidateToolPermission, runPostTool, runPreTool, sideEffectRecoveryBlock, supportsIdempotentResume, toolNameFromSpec, validateToolCall, writeToolAudit } = s.d
   i.pausedByClarification = null
   i.budgetExceededByCompletedModelResponse = s.modelBudgetExceededAfterResponse
   s.modelBudgetExceededAfterResponse = null
@@ -14,63 +22,39 @@ export async function executeToolCalls(s) {
         Object.assign(call, updates)
         await s.persistTurn()
       }
-  i.observeFailureRecovery = (call, result) => {
-        if (isSuccessfulToolResult(result)) {
-          if (isSubstantiveToolCall(call)) {
-            s.failureRecovery = restoreFailureRecovery()
-            s.pendingFailureRecoveryPrompt = false
-          }
-          return
-        }
-        if (!shouldReflectOnFailure(result)) return
-        const tool = String(call?.name || '').trim()
-        if (!tool) return
-        if (s.failureRecovery.tool !== tool) {
-          s.failureRecovery = { tool, count: 0, reflected: false, attempts: [] }
-        }
-        s.failureRecovery.count += 1
-        s.failureRecovery.attempts.push({
-          tool,
-          code: String(result?.code || 'tool_execution_failed').slice(0, 160),
-          message: [
-            String(result?.error || 'Tool execution failed.'),
-            result?.hint ? `Hint: ${String(result.hint)}` : '',
-          ].filter(Boolean).join(' ').slice(0, 800),
-        })
-        s.failureRecovery.attempts = s.failureRecovery.attempts.slice(-FAILURE_RECOVERY_THRESHOLD)
-        if (s.failureRecovery.count >= FAILURE_RECOVERY_THRESHOLD && !s.failureRecovery.reflected) {
-          s.pendingFailureRecoveryPrompt = true
-        }
-      }
-  i.appendFailureRecoveryPrompt = () => {
-        if (!s.pendingFailureRecoveryPrompt || s.failureRecovery.reflected) return false
-        const tried = s.failureRecovery.attempts.map((attempt, index) => (
-          `${index + 1}. ${attempt.tool} failed with ${attempt.code}: ${attempt.message}`
-        ))
-        s.convo.push({
-          role: 'system',
-          content: [
-            FAILURE_RECOVERY_MARKER,
-            `The same tool (${s.failureRecovery.tool}) has failed ${s.failureRecovery.count} consecutive times.`,
-            'Analyze the failure before making another call. Do not repeat the same method or merely vary guessed arguments.',
-            'State internally what was tried, identify the likely cause from the concrete errors below, then choose a materially different strategy or report one specific blocker.',
-            ...(process.platform === 'win32'
-              && isCommandExecutionTool(s.failureRecovery.tool)
-              && s.activeToolSpecs.some((spec) => toolNameFromSpec(spec) === 'write_file')
-              ? [`For long or multiline Python on Windows, the required different strategy is: create a UTF-8 .py file with write_file, run it with ${s.failureRecovery.tool}, then verify the declared final outputs. Do not retry another long python -c command or a Unix-only pipeline.`]
-              : []),
-            ...tried,
-          ].join('\n'),
-        })
-        s.failureRecovery.reflected = true
-        s.pendingFailureRecoveryPrompt = false
-        return true
-      }
+  installToolFailureRecovery(s, i)
   i.executeOne = async (call, { durableExecution = true } = {}) => {
         if (s.signal?.aborted) {
           const error = new Error('Turn cancelled')
           error.name = 'AbortError'
           throw error
+        }
+        if (call.modelOutputTruncated) {
+          const { name, args } = call
+          const result = createTruncatedToolCallResult(call, {
+            reason: call.modelOutputTruncationReason,
+          })
+          const { auditStage, auditOutcomeStatus } = createToolAuditLifecycle({
+            state: s, call, toolName: name, args, writeToolAudit,
+          })
+          auditStage('proposed')
+          auditStage('filtered', {
+            auditResult: result,
+            status: auditOutcomeStatus(result),
+          })
+          // Truncation is an input-integrity failure, not a tool attempt. Keep
+          // the paired result but never enter pre/post hooks, approvals,
+          // side-effect recovery, onToolStarted, or the executor.
+          return {
+            call,
+            executionArgs: args,
+            result,
+            artifactId: null,
+            artifactIds: [],
+            clarification: null,
+            budgetExceeded: null,
+            noProgressReason: null,
+          }
         }
         const preparedCall = await runPreTool({
           loopEvents: s.activeLoopEvents,
@@ -84,36 +68,11 @@ export async function executeToolCalls(s) {
         // recorded only on an untracked clone.
         if (preparedCall !== call) Object.assign(call, preparedCall)
         const { name, args } = call
-        const auditStartedAt = Date.now()
         let auditTerminalStage = null
         let toolExecutionAttempted = false
-        const auditStage = (stage, {
-          auditArgs = args,
-          auditResult = null,
-          status = 'ok',
-        } = {}) => {
-          if (!s.job?.userId) return
-          writeToolAudit({
-            userId: s.job.userId,
-            origin: s.approvalOrigin,
-            toolName: name,
-            callId: call.id,
-            stage,
-            args: auditArgs,
-            result: auditResult,
-            status,
-            durationMs: ['finished', 'filtered', 'denied'].includes(stage)
-              ? Math.max(0, Date.now() - auditStartedAt)
-              : null,
-          })
-        }
-        const auditOutcomeStatus = (value) => {
-          if (value?.ok === true) return 'ok'
-          if (value?.denied === true || value?.policyDenied === true || value?.deniedByUser === true) return 'denied'
-          if (value?.cancelled === true || value?.code === 'cancelled') return 'cancelled'
-          if (value?.code === 'timeout' || value?.timeout === true) return 'timeout'
-          return 'error'
-        }
+        const { auditStage, auditOutcomeStatus } = createToolAuditLifecycle({
+          state: s, call, toolName: name, args, writeToolAudit,
+        })
         auditStage('proposed')
         auditStage('started')
         if (typeof s.onToolStarted === 'function') await s.onToolStarted(call)
@@ -130,38 +89,19 @@ export async function executeToolCalls(s) {
         let clarification = null
         let artifactId = null
         let artifactIds = []
-        const expectedDynamicRegistrationId = String(call.dynamicToolRegistrationId || '').trim() || null
-        const dynamicRegistrationValidationError = (validationArgs = args) => {
-          const metadata = getToolMetadata(name, {
-            args: validationArgs,
-            userId: s.job?.userId || null,
-          })
-          if (expectedDynamicRegistrationId) {
-            if (matchesDynamicToolRegistration(name, expectedDynamicRegistrationId, {
-              userId: s.job?.userId || null,
-            })) return null
-            return {
-              ok: false,
-              code: 'dynamic_tool_registration_changed',
-              error: `The registered implementation for ${name} changed after its schema was shown to the model. The stale call was not executed.`,
-              retryable: false,
-              refreshToolCatalog: true,
-            }
-          }
-          // A checkpoint created before registration identities existed cannot
-          // safely authorize a runtime plugin by name alone.
-          if (metadata.origin === 'plugin') {
-            return {
-              ok: false,
-              code: 'dynamic_tool_registration_unbound',
-              error: `The runtime plugin call for ${name} has no bound registration identity and was not executed.`,
-              retryable: false,
-              refreshToolCatalog: true,
-            }
-          }
-          return null
-        }
+        const {
+          expectedRegistrationId: expectedDynamicRegistrationId,
+          validate: dynamicRegistrationValidationError,
+        } = createDynamicRegistrationGuard({
+          state: s, call, toolName: name, args, getToolMetadata, matchesDynamicToolRegistration,
+        })
         const checkpointExecutionArgs = call.checkpointExecutionArgs ?? args
+        const sideEffectExecution = createCallSideEffectBoundary({
+          state: s, call, toolName: name, getToolMetadata, createSideEffectExecution,
+          createSideEffectScope, sideEffectRecoveryBlock,
+          conflictCode: SIDE_EFFECT_LEDGER_CONFLICT,
+          unknownCode: SIDE_EFFECT_OUTCOME_UNKNOWN,
+        })
         const idempotentResume = call.checkpointStatus === 'executing'
           && supportsIdempotentResume(s.executeTool, {
             name,
@@ -171,12 +111,21 @@ export async function executeToolCalls(s) {
             toolCallId: call.id,
             idempotencyKey: call.idempotencyKey,
           })
+        const {
+          resumedPrepared: resumedPreparedSideEffect,
+          resumedExecuting: resumedExecutingSideEffect = false,
+          result: recoveredLedgerResult,
+        } = sideEffectExecution.recover(checkpointExecutionArgs, {
+          allowIdempotentResume: idempotentResume,
+        })
         const readOnlyResumeValidationError = call.checkpointStatus === 'executing'
           ? s.explicitReadOnlyValidationError(name, checkpointExecutionArgs)
           : null
         const registrationValidationError = dynamicRegistrationValidationError(checkpointExecutionArgs)
         const configuredToolValidationError = s.disabledToolValidationError(name)
-        if (registrationValidationError) {
+        if (recoveredLedgerResult) {
+          result = recoveredLedgerResult
+        } else if (registrationValidationError) {
           result = registrationValidationError
         } else if (configuredToolValidationError) {
           // The schema remains visible by design, but the execution switch is
@@ -185,20 +134,10 @@ export async function executeToolCalls(s) {
           result = configuredToolValidationError
         } else if (readOnlyResumeValidationError) {
           result = readOnlyResumeValidationError
-        } else if (call.modelOutputTruncated) {
-          result = {
-            ok: false,
-            code: 'tool_call_truncated',
-            error: 'The model reached its output-token limit while generating this tool-call batch, so the arguments may be incomplete and were not executed.',
-            retryable: true,
-            hint: 'Generate a fresh complete tool call. Shorten large inline content or split the work into smaller calls when necessary.',
-          }
         } else if (call.checkpointStatus === 'executing'
-          && getToolMetadata(name, {
-            args: checkpointExecutionArgs,
-            userId: s.job?.userId || null,
-          }).isReadOnly !== true
-          && !idempotentResume) {
+          && call.checkpointReadOnly !== true
+          && !idempotentResume
+          && !resumedPreparedSideEffect) {
           // We cannot prove whether a side effect committed before the process
           // stopped. Never replay it automatically: report the uncertainty to
           // the model so it can verify state or ask the user how to proceed.
@@ -338,25 +277,106 @@ export async function executeToolCalls(s) {
                 // A resumed approval already contains the hook-rewritten args,
                 // so the pre hook must not be fired a second time after restart.
                 const resumingApproval = call.checkpointStatus === 'awaiting_approval' && call.checkpointApprovalId
+                // Ownerless harness execution is privileged only by possession
+                // of the in-process opaque capability. Missing identity alone
+                // never grants trust, and serialized input cannot forge it.
+                const {
+                  hasApprovalSubject,
+                  trustedInternalExecution,
+                  checkpointPolicyProvenance,
+                  checkpointHookAuthorizationProvenance,
+                  expectedApprovalContext,
+                } = createToolAuthorizationContext({
+                  state: s, call, toolName: name, isTrustedInternalLoopPrincipal,
+                })
                 let effectiveArgs = args
                 let gate = null
-                let hookAuthorizedCall = false
+                let hookAuthorizationProvenance = null
                 let hookRequiresApproval = false
                 let hookApprovalReason = null
-                if (idempotentResume) {
+                if (idempotentResume || resumedPreparedSideEffect) {
                   effectiveArgs = call.checkpointExecutionArgs ?? effectiveArgs
+                  if (call.checkpointApprovalId) {
+                    gate = await resumePersistedApproval({
+                      approvalId: call.checkpointApprovalId,
+                      signal: s.signal,
+                      requireTerminal: true,
+                      expectedApprovalContext: expectedApprovalContext(),
+                    })
+                    if (gate.proceed) {
+                      const approvedArgs = gate.args ?? effectiveArgs
+                      if (JSON.stringify(approvedArgs) !== JSON.stringify(effectiveArgs)) {
+                        gate = {
+                          proceed: false,
+                          reason: '审批参数与执行快照不一致，已保守拒绝恢复执行',
+                          code: 'approval_context_mismatch',
+                          approvalContextMismatch: true,
+                          retryable: false,
+                          approvalId: call.checkpointApprovalId,
+                          policyProvenance: gate.policyProvenance || null,
+                        }
+                      }
+                    }
+                  } else {
+                    if (trustedInternalExecution) {
+                      gate = { proceed: true, args: effectiveArgs, trustedInternal: true }
+                    } else if (checkpointHookAuthorizationProvenance) {
+                      const restoredHookAuthorization = revalidateHookAuthorization({
+                        provenance: checkpointHookAuthorizationProvenance,
+                        userId: s.job?.userId || null,
+                        origin: s.approvalOrigin,
+                        jobId: s.approvalOrigin === 'chat' ? null : s.job?.id || null,
+                        stepId: s.approvalOrigin === 'chat' ? s.job?.id || null : s.step?.id || null,
+                        sessionId: s.approvalSessionId || null,
+                        requestId: s.step?.id || null,
+                        toolCallId: call.id,
+                        toolName: name,
+                        args: effectiveArgs,
+                        requireLive: false,
+                      })
+                      if (!restoredHookAuthorization.proceed) {
+                        gate = restoredHookAuthorization
+                      } else {
+                        const restoredPolicy = revalidateToolPermission({
+                          userId: s.job?.userId || null,
+                          origin: s.approvalOrigin,
+                          toolName: name,
+                          args: effectiveArgs,
+                          taskGrants: s.job?.sourceType === 'cron' ? s.job.grants : [],
+                          expectedPolicyProvenance: checkpointPolicyProvenance,
+                          allowAsk: true,
+                        })
+                        gate = restoredPolicy.proceed
+                          ? {
+                              ...restoredPolicy,
+                              hookAuthorized: true,
+                              hookAuthorizationProvenance: restoredHookAuthorization.hookAuthorizationProvenance,
+                            }
+                          : restoredPolicy
+                      }
+                    } else {
+                      gate = revalidateToolPermission({
+                        userId: s.job?.userId || null,
+                        origin: s.approvalOrigin,
+                        toolName: name,
+                        args: effectiveArgs,
+                        taskGrants: s.job?.sourceType === 'cron' ? s.job.grants : [],
+                        expectedPolicyProvenance: checkpointPolicyProvenance,
+                        allowAsk: false,
+                      })
+                    }
+                  }
                   gate = {
-                    ...revalidateToolPermission({
-                      userId: s.job?.userId || null,
-                      origin: s.approvalOrigin,
-                      toolName: name,
-                      args: effectiveArgs,
-                    }),
+                    ...gate,
                     approvalId: call.checkpointApprovalId || null,
                     resumedIdempotentExecution: true,
                   }
                 } else if (resumingApproval) {
-                  gate = await resumePersistedApproval({ approvalId: call.checkpointApprovalId, signal: s.signal })
+                  gate = await resumePersistedApproval({
+                    approvalId: call.checkpointApprovalId,
+                    signal: s.signal,
+                    expectedApprovalContext: expectedApprovalContext(),
+                  })
                   effectiveArgs = gate.args ?? effectiveArgs
                 } else {
                   if (s.enableToolHooks && s.job?.userId) {
@@ -374,7 +394,9 @@ export async function executeToolCalls(s) {
                     }
                     // A pre_tool_use hook may authorize the call directly,
                     // bypassing the approval inbox for this invocation.
-                    if (preHook?.permissionDecision === 'allow') hookAuthorizedCall = true
+                    if (preHook?.permissionDecision === 'allow') {
+                      hookAuthorizationProvenance = preHook.hookAuthorizationProvenance || null
+                    }
                     if (preHook?.permissionDecision === 'ask') {
                       hookRequiresApproval = true
                       hookApprovalReason = preHook.reason || null
@@ -389,29 +411,90 @@ export async function executeToolCalls(s) {
                     if (hookValidationError) result = hookValidationError
                   }
                   if (!result) {
-                    gate = await s.requestToolApproval({
+                    gate = trustedInternalExecution
+                      ? { proceed: true, args: effectiveArgs, trustedInternal: true }
+                      : !hasApprovalSubject
+                        ? revalidateToolPermission({
+                            userId: s.job?.userId || null,
+                            origin: s.approvalOrigin,
+                            toolName: name,
+                            args: effectiveArgs,
+                            taskGrants: s.job?.sourceType === 'cron' ? s.job.grants : [],
+                          })
+                        : await s.requestToolApproval({
+                          userId: s.job.userId,
+                          origin: s.approvalOrigin,
+                          jobId: s.approvalOrigin === 'chat' ? null : s.job?.id || null,
+                          stepId: s.approvalOrigin === 'chat' ? s.job?.id || null : s.step?.id || null,
+                          sessionId: s.approvalSessionId,
+                          toolName: name,
+                          args: effectiveArgs,
+                          signal: s.signal,
+                          mode: s.approvalMode,
+                          forceApproval: hookRequiresApproval,
+                          forceApprovalReason: hookApprovalReason,
+                          hookAuthorizationProvenance,
+                          requestId: s.step?.id || null,
+                          toolCallId: call.id,
+                          taskGrants: s.job?.sourceType === 'cron' ? s.job.grants : [],
+                          onPending: async (approval) => {
+                            auditStage('approval_requested', { auditArgs: approval.args ?? effectiveArgs })
+                            await i.markCall(call, {
+                              checkpointStatus: 'awaiting_approval',
+                              checkpointApprovalId: approval.id,
+                              checkpointPolicyProvenance: approval.policyProvenance ?? null,
+                              checkpointHookAuthorizationProvenance: null,
+                              checkpointExecutionArgs: approval.args ?? effectiveArgs,
+                            })
+                            if (typeof s.onApprovalPending === 'function') await s.onApprovalPending(approval)
+                          },
+                        })
+                  }
+                }
+                if (gate?.proceed && !gate.resumedIdempotentExecution && !trustedInternalExecution) {
+                  let verifiedHookAuthorization = false
+                  if (gate.hookAuthorized) {
+                    const finalHookAuthorization = revalidateHookAuthorization({
+                      provenance: gate.hookAuthorizationProvenance,
                       userId: s.job?.userId || null,
                       origin: s.approvalOrigin,
                       jobId: s.approvalOrigin === 'chat' ? null : s.job?.id || null,
                       stepId: s.approvalOrigin === 'chat' ? s.job?.id || null : s.step?.id || null,
-                      sessionId: s.approvalSessionId,
+                      sessionId: s.approvalSessionId || null,
+                      requestId: s.step?.id || null,
+                      toolCallId: call.id,
                       toolName: name,
-                      args: effectiveArgs,
-                      signal: s.signal,
-                      mode: s.approvalMode,
-                      forceApproval: hookRequiresApproval,
-                      forceApprovalReason: hookApprovalReason,
-                      preAuthorized: hookAuthorizedCall,
-                      taskGrants: s.job?.sourceType === 'cron' ? s.job.grants : [],
-                      onPending: async (approval) => {
-                        auditStage('approval_requested', { auditArgs: approval.args ?? effectiveArgs })
-                        await i.markCall(call, {
-                          checkpointStatus: 'awaiting_approval',
-                          checkpointApprovalId: approval.id,
-                        })
-                        if (typeof s.onApprovalPending === 'function') await s.onApprovalPending(approval)
-                      },
+                      args: gate.args ?? effectiveArgs,
+                      requireLive: true,
                     })
+                    if (!finalHookAuthorization.proceed) {
+                      gate = {
+                        ...finalHookAuthorization,
+                        policyProvenance: gate.policyProvenance,
+                      }
+                    } else {
+                      verifiedHookAuthorization = true
+                    }
+                  }
+                  if (gate.proceed) {
+                    const finalPolicy = revalidateToolPermission({
+                      userId: s.job?.userId || null,
+                      origin: s.approvalOrigin,
+                      toolName: name,
+                      args: gate.args ?? effectiveArgs,
+                      taskGrants: s.job?.sourceType === 'cron' ? s.job.grants : [],
+                      expectedPolicyProvenance: Object.hasOwn(gate, 'policyProvenance')
+                        ? gate.policyProvenance
+                        : null,
+                      allowAsk: Boolean(gate.approvalId || verifiedHookAuthorization),
+                    })
+                    gate = finalPolicy.proceed
+                      ? {
+                          ...gate,
+                          authorization: gate.authorization || finalPolicy.authorization || null,
+                          policyProvenance: finalPolicy.policyProvenance,
+                        }
+                      : { ...finalPolicy, approvalId: gate.approvalId || null }
                   }
                 }
                 if (gate && !gate.proceed) {
@@ -446,76 +529,33 @@ export async function executeToolCalls(s) {
                   if (finalValidationError) {
                     result = finalValidationError
                   } else {
-                    rememberApprovedSubagentCall(s.subagentApprovalContext, name, executionArgs, gate)
-                    const executionMetadata = getToolMetadata(name, {
-                      args: executionArgs,
-                      userId: s.job?.userId || null,
-                    })
-                    // Mutating tools ignore lease/transport aborts while a call is in flight,
-                    // but an explicit user stop still reaches cancellable shell/browser work.
-                    const abortScope = createToolAbortScope(s.signal, executionMetadata.interruptBehavior)
-                    if (durableExecution) {
-                      await i.markCall(call, {
-                        checkpointStatus: 'executing',
-                        checkpointApprovalId: gate.approvalId || call.checkpointApprovalId || null,
-                        checkpointExecutionArgs: executionArgs,
-                        idempotencyKey: call.idempotencyKey,
-                      })
-                    }
-                    try {
-                      toolExecutionAttempted = true
-                      let checkpointFailure = null
-                      result = await executeToolWithRetry({
-                        metadata: executionMetadata,
-                        signal: abortScope.signal,
-                        maxAttempts: s.toolRetryMaxAttempts,
-                        baseDelayMs: s.toolRetryBaseDelayMs,
-                        execute: async ({ attempt } = {}) => {
-                          try {
-                            await s.checkpointBarrier.beforeSideEffect({
-                              meta: {
-                                boundary: 'tool-execution',
-                                iteration: s.iter,
-                                attempt: Number(attempt) || 1,
-                                toolName: name,
-                                toolCallId: call.id,
-                              },
-                            })
-                            checkpointFailure = null
-                          } catch (error) {
-                            checkpointFailure = error
-                            throw error
-                          }
-                          return s.executeTool({
-                            name,
-                            args: executionArgs,
-                            job: s.activeArtifactOutputPrompt
-                              ? { ...s.job, userPrompt: s.activeArtifactOutputPrompt }
-                              : s.job,
-                            step: s.step,
-                            signal: abortScope.signal,
-                            budget: s.budget,
-                            skillId: s.explicitSkillId || null,
+                    const execution = await executeAuthorizedTool({
+                      state: s, iteration: i, call, toolName: name, executionArgs, gate,
+                      durableExecution, checkpointPolicyProvenance,
+                      resumedExecutingSideEffect, sideEffectExecution,
+                      expectedDynamicRegistrationId,
+                      finalAuthorizationCheck: gate.hookAuthorized
+                        ? () => revalidateHookAuthorization({
+                            provenance: gate.hookAuthorizationProvenance,
+                            userId: s.job?.userId || null,
+                            origin: s.approvalOrigin,
+                            jobId: s.approvalOrigin === 'chat' ? null : s.job?.id || null,
+                            stepId: s.approvalOrigin === 'chat' ? s.job?.id || null : s.step?.id || null,
+                            sessionId: s.approvalSessionId || null,
+                            requestId: s.step?.id || null,
                             toolCallId: call.id,
-                            idempotencyKey: call.idempotencyKey,
-                            approvalContext: s.subagentApprovalContext,
-                            allowedArtifactTools: s.stepArtifactTools,
-                            requiresLocalArtifactDelivery: s.requiresLocalArtifactDelivery,
-                            dynamicToolRegistrationId: expectedDynamicRegistrationId,
+                            toolName: name,
+                            args: executionArgs,
+                            requireLive: true,
                           })
-                        },
-                      })
-                      if (checkpointFailure) throw checkpointFailure
-                    } finally {
-                      abortScope.dispose()
-                    }
-                    if (gate.authorization && result && typeof result === 'object') {
-                      result = { ...result, approvalAuthorization: gate.authorization }
-                    }
-                    artifactId = result?.artifactId || null
-                    artifactIds = normalizeArtifactIdList(result?.artifactIds)
-                    if (artifactIds.length === 0 && artifactId) artifactIds = [String(artifactId)]
-                    if (isLoopPauseResult(result)) clarification = result.clarification
+                        : null,
+                      dependencies: {
+                        CHECKPOINT_FLUSH_ERROR_CODE, createToolAbortScope, executeToolWithRetry,
+                        getToolMetadata, isLoopPauseResult, isSuccessfulToolResult,
+                        normalizeArtifactIdList, rememberApprovedSubagentCall,
+                      },
+                    })
+                    ;({ result, toolExecutionAttempted, artifactId, artifactIds, clarification } = execution)
                   }
                 }
                 if (gate?.approvalId && !gate.resumedIdempotentExecution && typeof s.onApprovalResolved === 'function') {
@@ -531,50 +571,21 @@ export async function executeToolCalls(s) {
               } catch (err) {
                 if (s.signal?.aborted || err?.name === 'AbortError') throw err
                 if (err?.code === CHECKPOINT_FLUSH_ERROR_CODE) throw err
+                if (err?.unsafeToReplay === true) throw err
                 result = normalizeToolError(err)
               }
             }
           }
         }
 
-        try {
-          await runPostTool({
-            loopEvents: s.activeLoopEvents,
-            call: { ...call, args: executionArgsUsed },
-            result,
-            context: s.loopEventContext({
-              phase: 'post-tool',
-              executed: toolExecutionAttempted,
-            }),
-          })
-        } catch {
-          // The outcome is final. Observer failures must not cause a replay.
-        }
-
-        if (toolExecutionAttempted) {
-          auditStage('finished', {
-            auditArgs: executionArgsUsed,
-            auditResult: result,
-            status: auditOutcomeStatus(result),
-          })
-        } else if (!auditTerminalStage) {
-          auditStage('filtered', {
-            auditArgs: executionArgsUsed,
-            auditResult: result,
-            status: auditOutcomeStatus(result),
-          })
-        }
-
-        return {
-          call,
-          executionArgs: executionArgsUsed,
-          result,
-          artifactId,
-          artifactIds,
-          clarification,
+        return finalizeToolCallOutcome({
+          state: s, call, result, executionArgs: executionArgsUsed,
+          toolExecutionAttempted, auditTerminalStage, auditStage, auditOutcomeStatus,
+          resumedExecutingSideEffect, sideEffectExecution, runPostTool,
+          artifactId, artifactIds, clarification,
           budgetExceeded: outcomeBudgetExceeded,
           noProgressReason: outcomeNoProgressReason,
-        }
+        })
       }
   return { kind: 'next' }
 }

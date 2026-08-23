@@ -2,9 +2,10 @@ import path from 'node:path'
 import { execFile, spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 
+import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
+
 export const INTERRUPT_GRACE_MS = 5_000
 export const MARKER_PREFIX = '__GOGO_END__:'
-export const WINDOWS_PROMPT = '__GUGO_PROMPT__'
 
 export function pathKey(value) {
   const normalized = path.normalize(path.resolve(value))
@@ -18,14 +19,15 @@ export function sameOrInside(rootPath, candidatePath) {
 }
 
 function shellQuote(value) {
-  return `'${String(value).replace(/'/g, `'"'"'`)}'`
+  const escaped = String(value).replaceAll("'", "'\"'\"'")
+  return `'${escaped}'`
 }
 
 export function commandToken() {
   return randomBytes(8).toString('hex')
 }
 
-function buildPosixPayload(command, ephemeralEnv, token) {
+export function buildShellPayload(command, ephemeralEnv, token) {
   const prefix = `__gugo_${token}`
   const lines = []
   const cleanup = [`${prefix}_code`, `${prefix}_cwd`]
@@ -53,53 +55,9 @@ function buildPosixPayload(command, ephemeralEnv, token) {
     index += 1
   }
   lines.push(
-    `printf '\\n${MARKER_PREFIX}%s:%s\\n' "$${prefix}_code" "$${prefix}_cwd"; unset ${cleanup.join(' ')}`,
+    `printf '\\n${MARKER_PREFIX}${token}:%s:%s\\n' "$${prefix}_code" "$${prefix}_cwd"; unset ${cleanup.join(' ')}`,
   )
   return `${lines.join('\n')}\n`
-}
-
-function cmdSafeValue(value) {
-  return String(value).replace(/\r?\n/g, ' ')
-}
-
-function buildWindowsPayload(command, ephemeralEnv, token) {
-  const prefix = `__GUGO_${token.toUpperCase()}`
-  const lines = []
-  const cleanup = [`${prefix}_CODE`, `${prefix}_CWD`]
-  let index = 0
-  for (const [key, value] of Object.entries(ephemeralEnv || {})) {
-    const setName = `${prefix}_SET_${index}`
-    const valueName = `${prefix}_VALUE_${index}`
-    cleanup.push(setName, valueName)
-    lines.push(`set "${setName}=0"`)
-    lines.push(`if defined ${key} set "${setName}=1"`)
-    lines.push(`set "${valueName}=!${key}!"`)
-    lines.push(`set "${key}=${cmdSafeValue(value)}"`)
-    index += 1
-  }
-  // Several cmd.exe builtins preserve the previous ERRORLEVEL. Clear it so a
-  // command after an interrupted child does not inherit that child's failure.
-  lines.push('ver > nul')
-  lines.push(command)
-  lines.push(`set "${prefix}_CODE=!ERRORLEVEL!"`)
-  lines.push(`set "${prefix}_CWD=!CD!"`)
-
-  index = 0
-  for (const key of Object.keys(ephemeralEnv || {})) {
-    const setName = `${prefix}_SET_${index}`
-    const valueName = `${prefix}_VALUE_${index}`
-    lines.push(`if "!${setName}!"=="1" (set "${key}=!${valueName}!") else set "${key}="`)
-    index += 1
-  }
-  const clear = cleanup.map((name) => `set "${name}="`).join(' & ')
-  lines.push(`echo(${MARKER_PREFIX}!${prefix}_CODE!:!${prefix}_CWD!& ${clear}`)
-  return `${lines.join('\r\n')}\r\n`
-}
-
-export function buildShellPayload(command, ephemeralEnv, token) {
-  return process.platform === 'win32'
-    ? buildWindowsPayload(command, ephemeralEnv, token)
-    : buildPosixPayload(command, ephemeralEnv, token)
 }
 
 function powerShellPath() {
@@ -126,7 +84,7 @@ function signalWindowsDescendants(rootPid, force) {
       '-NonInteractive',
       '-Command',
       script,
-    ], { windowsHide: true, stdio: 'ignore' })
+    ], { env: sanitizeChildEnv(), windowsHide: true, stdio: 'ignore' })
     helper.unref()
   } catch { /* best-effort */ }
 }
@@ -134,6 +92,7 @@ function signalWindowsDescendants(rootPid, force) {
 function readPosixProcessTable() {
   return new Promise((resolve) => {
     execFile('ps', ['-eo', 'pid=,ppid='], {
+      env: sanitizeChildEnv(),
       encoding: 'utf8',
       maxBuffer: 2 * 1024 * 1024,
       timeout: 2_000,
@@ -185,6 +144,7 @@ export function hardKillProcessTree(child) {
     if (process.platform === 'win32') {
       try {
         spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+          env: sanitizeChildEnv(),
           windowsHide: true,
           stdio: 'ignore',
         }).unref()
@@ -200,9 +160,13 @@ export function setChildReferenced(child, referenced) {
   if (!child) return
   const method = referenced ? 'ref' : 'unref'
   child[method]?.()
-  child.stdin?.[method]?.()
-  child.stdout?.[method]?.()
-  child.stderr?.[method]?.()
+  const streams = new Set([
+    child.stdin,
+    child.stdout,
+    child.stderr,
+    ...(Array.isArray(child.stdio) ? child.stdio : []),
+  ])
+  for (const stream of streams) stream?.[method]?.()
 }
 
 export function softCloseProcessTree(child) {

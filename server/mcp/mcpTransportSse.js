@@ -19,10 +19,21 @@
  * NB: 本实现不支持服务端主动 server-initiated streams（实测大多数 MCP server 也未实现）。
  */
 
+import { fetchSafeOutbound } from '../utils/outboundNetworkGuard.js'
+
+function isLoopbackUrl(raw) {
+  try {
+    const url = new URL(raw)
+    return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)
+  } catch {
+    return false
+  }
+}
+
 function isLoopbackHttpUrl(raw) {
   try {
     const url = new URL(raw)
-    return url.protocol === 'http:' && ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)
+    return url.protocol === 'http:' && isLoopbackUrl(raw)
   } catch {
     return false
   }
@@ -35,7 +46,16 @@ function mcpRpcError(message) {
 }
 
 export class SseTransport {
-  constructor({ url, headers = {}, getHeaders, label = 'mcp', timeoutMs = 30000 }) {
+  constructor({
+    url,
+    headers = {},
+    getHeaders,
+    label = 'mcp',
+    timeoutMs = 30000,
+    fetchImpl = globalThis.fetch,
+    lookup,
+    resolveDns,
+  }) {
     if (!url || !/^https?:\/\//.test(url)) throw new Error('SSE transport 需要 http/https url')
     if (process.env.NODE_ENV === 'production' && !url.startsWith('https://') && !isLoopbackHttpUrl(url)) {
       throw new Error('生产环境 MCP SSE 必须 https')
@@ -45,6 +65,9 @@ export class SseTransport {
     this.getHeaders = typeof getHeaders === 'function' ? getHeaders : null
     this.label = label
     this.timeoutMs = timeoutMs
+    this.fetchImpl = fetchImpl
+    this.lookup = lookup
+    this.resolveDns = resolveDns ?? (typeof lookup === 'function' || fetchImpl === globalThis.fetch)
     this.closed = false
     this.sessionId = null
     this.notificationHandlers = new Set()
@@ -82,6 +105,15 @@ export class SseTransport {
     }
   }
 
+  _fetch(init) {
+    return fetchSafeOutbound(this.url, init, {
+      fetchImpl: this.fetchImpl,
+      allowLocal: isLoopbackUrl(this.url) ? 'loopback' : false,
+      resolveDns: this.resolveDns,
+      ...(typeof this.lookup === 'function' ? { lookup: this.lookup } : {}),
+    })
+  }
+
   async request(message, { timeoutMs, signal } = {}) {
     if (this.closed) throw new Error(`MCP "${this.label}" 已关闭`)
     if (signal?.aborted) throw signal.reason || new DOMException('MCP request cancelled', 'AbortError')
@@ -90,7 +122,7 @@ export class SseTransport {
     signal?.addEventListener?.('abort', abortFromCaller, { once: true })
     const t = setTimeout(() => ctrl.abort(), timeoutMs || this.timeoutMs)
     try {
-      const resp = await fetch(this.url, {
+      const resp = await this._fetch({
         method: 'POST',
         headers: await this._headers(),
         body: JSON.stringify(message),
@@ -123,7 +155,7 @@ export class SseTransport {
     const ctrl = new AbortController()
     const t = setTimeout(() => ctrl.abort(), this.timeoutMs)
     try {
-      const resp = await fetch(this.url, {
+      const resp = await this._fetch({
         method: 'POST',
         headers: await this._headers(),
         body: JSON.stringify(message),
@@ -181,4 +213,4 @@ export class SseTransport {
   }
 }
 
-export const _sseTransportInternals = { isLoopbackHttpUrl }
+export const _sseTransportInternals = { isLoopbackHttpUrl, isLoopbackUrl }

@@ -1,29 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import path from 'node:path'
-import { callBackgroundModel, callStreamingModelWithTools, getModelContextWindow } from '../adapters/modelProxy.js'
-import { createTurnActivity, createTurnEvent } from '../../shared/turnEvents.js'
-import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
 import { normalizeModelUsage } from '../../shared/modelUsage.js'
-import { runToolLoop } from './loop/index.js'
-import { SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import {
-  claimLocalChatSession,
-  deleteMessage,
-  getPreviousUserMessage,
-  getSession,
-  listMessages,
-  SessionOwnershipError,
-  upsertMessage,
-  upsertSession,
-} from './sessionStore.js'
-import {
-  appendTurnEvent,
-  appendTurnEvents,
-  getLastTurnEvent,
-  listTurnEvents,
-  recordTurnEventWriteFailure,
-} from './turnEventStore.js'
-import { createEventWriteBehind } from './eventWriteBehind.js'
+  getBoundTurnToolSpecs,
+  runBoundTurnLoop,
+} from './turnLoopBindingRuntime.js'
+import { prepareBoundInlineSkillsForPrompt } from './inlineSkillPromptBindingRuntime.js'
 import { publishTurnActivity } from './turnActivityBus.js'
 import { dispatchHooks as dispatchHooksService } from './hooksService.js'
 import { getApprovalMode } from './approvalSettingsStore.js'
@@ -32,284 +13,124 @@ import {
   expandStoredMessages,
   extractRetainedLocalFiles,
   extractVerifiedLocalFiles,
-  materializeManagedAttachmentMessages,
   selectAttachmentIdsForModelRequest,
   selectStoredMessagesAfterCompaction,
 } from './turnMessageContext.js'
-import { prepareTurnPromptContext } from './turnPromptContext.js'
 import {
   recordEvolutionCanaryOutcome,
   resolveEvolutionCanaryAssignment,
 } from './evolutionCanaryService.js'
-import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
 import {
-  applyDirectoryAuthorizationToolsConfig,
   normalizeServerToolsConfig,
-  restoreDirectoryAuthorizationToolSpecs,
   resolveTurnToolSpecs,
 } from './turnToolSpecs.js'
+import { createTurnExecutionToolContextRuntime } from './turnExecutionToolContextRuntime.js'
+import { createTurnCancellationRuntime } from './turnCancellationRuntime.js'
 import { scheduleAutoMemoryExtraction } from './autoMemoryService.js'
+import { listRuntimePluginStates } from './runtimePluginStateStore.js'
 import {
-  bindManagedAttachmentsToMessage,
-  validateManagedAttachmentsForTurn,
-} from './managedAttachmentStore.js'
-import { prepareManagedAttachmentsForModel } from './managedAttachmentContent.js'
+  assertTurnExecutionEnvironmentCompatible,
+  createTurnExecutionEnvironmentSnapshot,
+  TURN_EXECUTION_ENVIRONMENT_MISSING,
+  TURN_MODEL_BINDING_DRIFT,
+  TURN_PERMISSION_CONTEXT_DRIFT,
+  TURN_POLICY_CONTEXT_DRIFT,
+  TURN_RUNTIME_PLUGIN_RELEASE_DRIFT,
+  TURN_RUNTIME_PLUGIN_RELEASE_UNPINNED,
+  TURN_TOOL_CATALOG_DRIFT,
+  TURN_TOOL_IMPLEMENTATION_DRIFT,
+} from './turnExecutionEnvironment.js'
 import {
-  estimateContextTokens,
-  getAutoCompactionThreshold,
-} from './contextCompactionRuntime.js'
-import { createTurnExecutionLeaseCoordinator } from './turnExecutionLeaseRuntime.js'
-import { createTurnRuntimeCore } from './runtimeCore.js'
-import {
-  acknowledgeAppliedTurnSteering,
-  acknowledgeTurnSteering,
-  claimTurnSteering,
-  enqueueTurnSteering,
-  releaseTurnSteeringLease,
-  releaseTurnSteeringLeasesForTurn,
-} from './turnSteeringStore.js'
+  resolveToolImplementationRevisions as resolveCurrentToolImplementationRevisions,
+  TOOL_IMPLEMENTATION_REVISION_UNAVAILABLE,
+} from './toolImplementationRevision.js'
 import { normalizeTurnIntentMode } from '../utils/executionIntent.js'
+import { getActiveRuntimePolicyProvenance } from '../core/runtimeCapabilityState.js'
 import { getLocalFileAccessStatus } from './localFileAccessService.js'
 import { logWarn, newTraceId, withLogContext } from '../utils/logger.js'
+import {
+  checkpointMessagesForTurn,
+  failedRetryAttemptPayload,
+  latestLegacyCheckpoint,
+  normalizeResolutionPath,
+  recoveryAttemptAfterCheckpoint,
+  replayPersistedTurnEvents,
+  storedCheckpointEvent,
+} from './turnRecoveryProjection.js'
+import {
+  createTerminalPersistenceFailure,
+  createTurnEventEmitter,
+  findEventPersistenceFailure,
+  isTerminalTurnEventType,
+  TURN_TERMINAL_PERSISTENCE_FAILURE_CODE,
+} from './turnEventEmitter.js'
+import {
+  deliveryArtifactFields,
+  finalClarificationText,
+  normalizeArtifactIds,
+  normalizeTurnFailure as normalizeFailure,
+  optionalDeliveryArtifactIds,
+  PUBLIC_TURN_INCOMPLETE,
+  PUBLIC_TURN_INTERRUPTED,
+  publicIncompleteText,
+  sameArtifactIds,
+} from './turnTerminalProjection.js'
+import {
+  addTurnModelUsage as addModelUsage,
+  normalizePromptTokenEstimate,
+} from './turnModelUsageProjection.js'
+import {
+  createChatOnlyToolExecutionError,
+  createTurnModelRequestRunner,
+} from './turnModelRequestRuntime.js'
+import {
+  createTurnResolutionRuntime,
+  TurnEngineError,
+} from './turnResolutionRuntime.js'
+import {
+  createTurnStartRuntime,
+  normalizeTurnApprovalMode as normalizeTurnApprovalModeOverride,
+  normalizeTurnIds as normalizeIds,
+  normalizeTurnModelMode as normalizeModelMode,
+  normalizeTurnOptionalId as normalizeOptionalId,
+} from './turnStartRuntime.js'
+import { assembleTurnEnginePersistence } from './turnEnginePersistenceAssembly.js'
+import {
+  missingAttachmentBindingRuntime,
+  missingAttachmentPreparationRuntime,
+  missingAttachmentValidationRuntime,
+} from './turnManagedAttachmentRuntime.js'
 
-const TERMINAL_TYPES = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
-const STREAM_DELTA_TYPES = ['assistant.delta', 'reasoning.delta']
-const TURN_RESOLUTION_MARKER = '[TURN_RESOLUTION:'
-const ATTACHMENT_CONTEXT_HEADROOM_TOKENS = 64
-const PUBLIC_TURN_FAILURE = '任务执行遇到问题，尚未完成。请重试；若仍失败，请检查模型配置和工具调用支持。'
-const PUBLIC_TURN_INTERRUPTED = '模型服务暂时中断。请重试，系统会继续处理尚未完成的任务。'
-const PUBLIC_TURN_INCOMPLETE = '任务尚未完全通过验证。已成功写入的本地修改会保留，并可在文件栏中查看；待验证文件不代表验证通过。请重试以继续完成验证。'
-const PUBLIC_REASONING_RUNAWAY = '模型推理超过安全上限，任务已停止。请重试，或换用更适合执行工具任务的模型。'
-const INTERNAL_TERMINAL_FAILURE_PATTERNS = [
-  /Model call failed\s*:/i,
-  /This reply could not be completed/i,
-  /The requested (?:file|artifact|mutation).*?(?:was not|could not|failed)/i,
-  /ARTIFACT_NOT_CREATED/i,
-  /(?:tool|artifact|model)[_-](?:execution|write|call)?[_-]?failed/i,
-  /(?:^|\n)\s*(?:Error|Exception|TypeError|RangeError|AbortError)\s*:/i,
-  /任务未完全完成[^\n]*(?:保留|保存)/,
-  /(?:已保留|保存当前)[^\n]*(?:残缺|文件|进展|工具结果)/,
-]
-const SUMMABLE_MODEL_USAGE_KEYS = Object.freeze([
-  'cacheHitTokens',
-  'cacheMissTokens',
-  'cacheCreationTokens',
-  'uncachedInputTokens',
+export { TurnEngineError } from './turnResolutionRuntime.js'
+
+const MANUAL_RECOVERY_BLOCK_CODES = new Set([
+  TURN_EXECUTION_ENVIRONMENT_MISSING,
+  TURN_MODEL_BINDING_DRIFT,
+  TURN_PERMISSION_CONTEXT_DRIFT,
+  TURN_POLICY_CONTEXT_DRIFT,
+  TURN_TOOL_CATALOG_DRIFT,
+  TURN_TOOL_IMPLEMENTATION_DRIFT,
+  TURN_RUNTIME_PLUGIN_RELEASE_DRIFT,
+  TURN_RUNTIME_PLUGIN_RELEASE_UNPINNED,
+  TOOL_IMPLEMENTATION_REVISION_UNAVAILABLE,
+  'PLUGIN_RELEASE_CORRUPT',
+  'SIDE_EFFECT_LEDGER_CONFLICT',
+  'SIDE_EFFECT_LEDGER_OUTCOME_INVALID',
+  'SIDE_EFFECT_OUTCOME_UNKNOWN',
+  'MODEL_REQUEST_OUTCOME_UNKNOWN',
+  'MODEL_REQUEST_CONTEXT_DRIFT',
 ])
-
-function modelUsageTotal(usage) {
-  if (Object.hasOwn(usage, 'totalTokens')) return usage.totalTokens
-  return usage.promptTokens + (usage.completionTokens || 0)
+function rejectResumeApprovalModeOverride(value) {
+  if (value === null || value === undefined) return
+  throw new TurnEngineError(
+    'TURN_APPROVAL_MODE_OVERRIDE_FORBIDDEN',
+    'approvalMode cannot be changed while resuming a turn; the persisted turn mode is restored',
+    409,
+  )
 }
 
-function addModelUsage(total, value) {
-  const current = normalizeModelUsage(value)
-  const previous = normalizeModelUsage(total)
-  if (!current) return previous
-
-  const aggregate = {
-    promptTokens: (previous?.promptTokens || 0) + current.promptTokens,
-    completionTokens: (previous?.completionTokens || 0) + (current.completionTokens || 0),
-    totalTokens: (previous ? modelUsageTotal(previous) : 0) + modelUsageTotal(current),
-  }
-  for (const key of SUMMABLE_MODEL_USAGE_KEYS) {
-    if (!Object.hasOwn(previous || {}, key) && !Object.hasOwn(current, key)) continue
-    aggregate[key] = (previous?.[key] || 0) + (current[key] || 0)
-  }
-  if (Object.hasOwn(previous || {}, 'costUsd') || Object.hasOwn(current, 'costUsd')) {
-    aggregate.costUsd = (previous?.costUsd || 0) + (current.costUsd || 0)
-  }
-  return normalizeModelUsage(aggregate)
-}
-
-function normalizePromptTokenEstimate(value) {
-  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null
-}
-
-function inlineMediaProjectionTokens(value, seen = new WeakSet()) {
-  if (typeof value === 'string') {
-    const marker = ';base64,'
-    const markerIndex = value.indexOf(marker)
-    if (markerIndex <= 5 || !value.startsWith('data:')) return 0
-    const mimeType = value.slice(5, markerIndex).toLowerCase()
-    if (!mimeType.startsWith('image/') && mimeType !== 'application/pdf') return 0
-    // Base64 is four characters per three bytes. Keep the attachment byte
-    // budget separate from visual token pricing so a multi-megabyte image is
-    // still downgraded before it is copied into a small-window request.
-    return Math.ceil(Math.max(0, value.length - markerIndex - marker.length) / 4) + 64
-  }
-  if (!value || typeof value !== 'object') return 0
-  if (seen.has(value)) return 0
-  seen.add(value)
-  if (Array.isArray(value)) {
-    return value.reduce((total, item) => total + inlineMediaProjectionTokens(item, seen), 0)
-  }
-  return Object.values(value)
-    .reduce((total, item) => total + inlineMediaProjectionTokens(item, seen), 0)
-}
-
-function replayPersistedTurnEvents(replayEvents, scope) {
-  if (typeof replayEvents !== 'function') return []
-  const events = []
-  let after = -1
-  while (true) {
-    const page = replayEvents({ ...scope, after, limit: 2000 })
-    if (!Array.isArray(page) || page.length === 0) break
-    const fresh = page
-      .filter((event) => Number.isInteger(event?.sequence) && event.sequence > after)
-      .sort((left, right) => left.sequence - right.sequence)
-    if (fresh.length === 0) break
-    events.push(...fresh)
-    const nextAfter = fresh.at(-1).sequence
-    if (nextAfter <= after) break
-    after = nextAfter
-    if (page.length < 2000) break
-  }
-  return events
-}
-
-function confirmedStreamPrefix(events, checkpointSequence) {
-  let assistantText = ''
-  let reasoningText = ''
-  for (const event of events) {
-    if (event.sequence > checkpointSequence) break
-    if (event.type === 'turn.attempt' && event.payload?.resetStreaming) {
-      assistantText = String(event.payload.assistantText || '')
-      reasoningText = String(event.payload.reasoningText || '')
-    } else if (event.type === 'assistant.delta') {
-      assistantText += String(event.payload?.text || '')
-    } else if (event.type === 'reasoning.delta') {
-      reasoningText += String(event.payload?.text || '')
-    }
-  }
-  return { assistantText, reasoningText }
-}
-
-function recoveryAttemptAfterCheckpoint(replayEvents, scope, checkpoint) {
-  const events = replayPersistedTurnEvents(replayEvents, scope)
-  const checkpointSequence = Number.isInteger(checkpoint?.sequence) ? checkpoint.sequence : -1
-  const terminalAfterCheckpoint = events.some((event) => (
-    TERMINAL_TYPES.has(event.type) && event.sequence > checkpointSequence
-  ))
-  if (terminalAfterCheckpoint) return null
-
-  const previousStream = events
-    .filter((event) => STREAM_DELTA_TYPES.includes(event.type) && event.sequence > checkpointSequence)
-    .at(-1)
-  if (!previousStream) return null
-
-  const previousAttempt = events.filter((event) => event.type === 'turn.attempt').at(-1)
-  const previousAttemptNumber = Number(previousAttempt?.payload?.attempt)
-  const prefix = confirmedStreamPrefix(events, checkpointSequence)
-  return {
-    attempt: Number.isInteger(previousAttemptNumber) && previousAttemptNumber > 0
-      ? previousAttemptNumber + 1
-      : 2,
-    reason: checkpoint ? 'checkpoint_resume' : 'turn_resume',
-    resetStreaming: true,
-    checkpointSequence: checkpoint?.sequence ?? null,
-    previousStreamSequence: previousStream.sequence,
-    ...prefix,
-  }
-}
-
-function latestVerifiedLocalFiles(replayEvents, scope) {
-  return replayPersistedTurnEvents(replayEvents, scope)
-    .map((event) => event?.payload?.verifiedLocalFiles)
-    .filter(Array.isArray)
-    .at(-1) || []
-}
-
-function latestRetainedLocalFiles(replayEvents, scope) {
-  return replayPersistedTurnEvents(replayEvents, scope)
-    .map((event) => event?.payload?.retainedLocalFiles)
-    .filter(Array.isArray)
-    .at(-1) || []
-}
-
-function checkpointMessagesForTurn(state, {
-  content = '',
-  fallback = [],
-} = {}) {
-  if (Array.isArray(state?.turnMessages)) return state.turnMessages
-  const messages = Array.isArray(state?.messages) ? state.messages : []
-  if (messages.length === 0) return Array.isArray(fallback) ? fallback : []
-
-  const objective = String(content || '')
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (message?.role !== 'user' || String(message.content || '') !== objective) continue
-    return messages.slice(index + 1)
-  }
-
-  // Lightweight/custom loop adapters may checkpoint only this turn's tool
-  // protocol and omit the user row entirely. In that shape the whole array is
-  // already the current-turn slice. If a user row exists but the active
-  // objective cannot be located (for example after compaction), retain the
-  // last durable slice rather than reclassifying historical tool calls.
-  if (!messages.some((message) => message?.role === 'user')) return messages
-  return Array.isArray(fallback) ? fallback : []
-}
-
-function mergeLocalFileReceipts(...groups) {
-  const receipts = []
-  const seen = new Set()
-  for (const value of groups.flatMap((group) => (Array.isArray(group) ? group : []))) {
-    if (!isRecord(value)) continue
-    const fullPath = String(value.path || '').trim()
-    const id = String(value.id || '').trim()
-    const key = fullPath ? `path:${normalizeResolutionPath(fullPath)}` : (id ? `id:${id}` : '')
-    if (!key || seen.has(key)) continue
-    seen.add(key)
-    receipts.push(value)
-    if (receipts.length >= 64) break
-  }
-  return receipts
-}
-
-function excludeVerifiedLocalFiles(retainedLocalFiles, verifiedLocalFiles) {
-  const verifiedPaths = new Set((Array.isArray(verifiedLocalFiles) ? verifiedLocalFiles : [])
-    .map((file) => normalizeResolutionPath(file?.path))
-    .filter(Boolean))
-  const verifiedIds = new Set((Array.isArray(verifiedLocalFiles) ? verifiedLocalFiles : [])
-    .map((file) => String(file?.id || '').trim())
-    .filter(Boolean))
-  return (Array.isArray(retainedLocalFiles) ? retainedLocalFiles : []).filter((file) => {
-    const fullPath = normalizeResolutionPath(file?.path)
-    const id = String(file?.id || '').trim()
-    return !(fullPath && verifiedPaths.has(fullPath)) && !(id && verifiedIds.has(id))
-  })
-}
-
-function storedCheckpointEvent(checkpoint) {
-  if (!checkpoint?.state || !Number.isInteger(checkpoint.eventSequence)) return null
-  return {
-    sessionId: checkpoint.sessionId,
-    turnId: checkpoint.turnId,
-    sequence: checkpoint.eventSequence,
-    type: 'turn.checkpoint',
-    payload: { state: checkpoint.state },
-    createdAt: checkpoint.updatedAt,
-  }
-}
-
-function latestLegacyCheckpoint(replayEvents, scope) {
-  return replayPersistedTurnEvents(replayEvents, scope)
-    .filter((event) => event.type === 'turn.checkpoint' && isRecord(event.payload?.state))
-    .at(-1) || null
-}
-
-export class TurnEngineError extends Error {
-  constructor(code, message, status = 400) {
-    super(message)
-    this.name = 'TurnEngineError'
-    this.code = code
-    this.status = status
-  }
-}
-
+const ATOMIC_CHECKPOINT_UNSUPPORTED_CODE = 'TURN_ATOMIC_CHECKPOINT_UNSUPPORTED'
+const ATOMIC_CHECKPOINT_COMMIT_MISMATCH_CODE = 'TURN_ATOMIC_CHECKPOINT_COMMIT_MISMATCH'
 function activeKey(userId, sessionId, turnId) {
   return `${userId}\u0000${sessionId}\u0000${turnId}`
 }
@@ -318,184 +139,72 @@ function sessionKey(userId, sessionId) {
   return `${userId}\u0000${sessionId}`
 }
 
-function finalClarificationText(result) {
-  if (result?.text) return String(result.text)
-  const clarification = result?.clarification
-  if (typeof clarification === 'string') return clarification
-  return String(clarification?.question || clarification?.message || '需要你补充信息后才能继续。')
-}
-
 function isRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-function normalizeResolutionPath(value) {
-  const raw = String(value || '').trim()
-  if (!raw) return ''
-  const normalized = path.resolve(raw).replace(/[\\/]+$/, '').replace(/\\/g, '/')
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
-}
+const {
+  applyToCheckpoint: checkpointStateForResolution,
+  hasSufficientDirectoryGrant,
+  normalizeResolution: normalizeTurnResolution,
+  pauseState,
+  publicStatus,
+  validateForPause: validateResolutionForPause,
+} = createTurnResolutionRuntime({ normalizePath: normalizeResolutionPath })
 
-function normalizeTurnResolution(value) {
-  if (!isRecord(value)) {
-    throw new TurnEngineError('TURN_RESOLUTION_INVALID', 'resolution must be a structured object', 400)
-  }
-  const pausedSequence = Number(value.paused_sequence ?? value.pausedSequence)
-  if (!Number.isInteger(pausedSequence) || pausedSequence < 0) {
-    throw new TurnEngineError(
-      'TURN_RESOLUTION_SEQUENCE_REQUIRED',
-      'resolution must include the pending turn.paused sequence',
-      400,
-    )
-  }
-  const type = String(value.type || '').trim()
-  const rawPath = String(value.path || '').trim()
-  const resourceType = String(value.resource_type || value.resourceType || '').trim()
-  const directoryResolution = type === 'directory_authorization'
-    || resourceType === 'directory'
-    || !!rawPath
-  if (directoryResolution) {
-    const accessMode = String(value.access_mode || value.accessMode || '').trim()
-    if (type && type !== 'directory_authorization') {
-      throw new TurnEngineError('TURN_RESOLUTION_INVALID', 'directory resolution type must be directory_authorization', 400)
-    }
-    if (value.approved !== true) {
-      throw new TurnEngineError('TURN_RESOLUTION_NOT_APPROVED', 'directory authorization must be explicitly approved', 400)
-    }
-    if (!rawPath || (!path.win32.isAbsolute(rawPath) && !path.posix.isAbsolute(rawPath))) {
-      throw new TurnEngineError('TURN_RESOLUTION_PATH_REQUIRED', 'directory authorization requires an absolute path', 400)
-    }
-    if (!['read_only', 'read_write'].includes(accessMode)) {
-      throw new TurnEngineError('TURN_RESOLUTION_ACCESS_MODE_INVALID', 'directory authorization requires read_only or read_write access_mode', 400)
-    }
-    return {
-      type: 'directory_authorization',
-      approved: true,
-      path: rawPath,
-      access_mode: accessMode,
-      resource_type: 'directory',
-      paused_sequence: pausedSequence,
-      ...(String(value.purpose || '').trim() ? { purpose: String(value.purpose).trim() } : {}),
-    }
-  }
-  const response = String(value.response ?? value.answer ?? value.content ?? '').trim()
-  if (!response) {
-    throw new TurnEngineError('TURN_RESOLUTION_RESPONSE_REQUIRED', 'clarification resolution requires a response', 400)
-  }
-  return { type: type || 'clarification_response', response, paused_sequence: pausedSequence }
-}
-
-function validateResolutionForPause(resolution, pausedEvent) {
-  if (resolution.paused_sequence !== pausedEvent.sequence) {
-    throw new TurnEngineError(
-      'TURN_RESOLUTION_STALE',
-      'resolution does not match the latest pending pause',
-      409,
-    )
-  }
-  const clarification = pausedEvent.payload?.clarification
-  const requestType = isRecord(clarification)
-    ? String(clarification.request_type || clarification.requestType || '').trim()
-    : ''
-  const directoryRequest = requestType === 'directory'
-  const directoryResolution = resolution.type === 'directory_authorization'
-  if (directoryRequest !== directoryResolution) {
-    throw new TurnEngineError(
-      'TURN_RESOLUTION_TYPE_MISMATCH',
-      'resolution type does not match the pending clarification',
-      409,
-    )
-  }
-  if (!directoryRequest) return
-  const requiredMode = String(
-    clarification.access_mode || clarification.accessMode || 'read_only',
-  ).trim()
-  if (resolution.access_mode !== requiredMode) {
-    throw new TurnEngineError(
-      'TURN_RESOLUTION_ACCESS_MODE_MISMATCH',
-      'directory resolution access mode does not match the pending request',
-      409,
-    )
-  }
-}
-
-function hasSufficientDirectoryGrant(grants, resolution) {
-  const expectedPath = normalizeResolutionPath(resolution.path)
-  return (Array.isArray(grants) ? grants : []).some((grant) => {
-    if (grant?.resourceType !== 'directory') return false
-    if (grant.available === false) return false
-    if (normalizeResolutionPath(grant.path) !== expectedPath) return false
-    return resolution.access_mode !== 'read_write' || grant.accessMode === 'read_write'
-  })
-}
-
-function turnResolutionPrompt(resolution, pausedSequence) {
-  const marker = `${TURN_RESOLUTION_MARKER}${pausedSequence}]`
-  if (resolution.type === 'directory_authorization') {
-    return [
-      marker,
-      'The requested local directory authorization is already persisted and verified.',
-      `Continue the original task using the exact authorized path ${JSON.stringify(resolution.path)} with ${resolution.access_mode} access.`,
-      'Do not call request_directory again for this same path and access mode.',
-      'If a later operation fails, handle the concrete new error instead of treating this verified grant as missing.',
-    ].join(' ')
-  }
-  return [
-    marker,
-    `The user answered the pending clarification: ${JSON.stringify(resolution.response)}.`,
-    'Continue the original task from the durable checkpoint and do not repeat the same clarification request.',
-  ].join(' ')
-}
-
-function checkpointStateForResolution(state, resumeContext) {
-  if (!isRecord(state) || !resumeContext?.resolution) return state || null
-  const marker = `${TURN_RESOLUTION_MARKER}${resumeContext.pausedSequence}]`
-  const messages = Array.isArray(state.messages) ? state.messages.map((message) => ({ ...message })) : []
-  const resolutionRole = resumeContext.resolution.type === 'directory_authorization' ? 'system' : 'user'
-  if (!messages.some((message) => (
-    message?.role === resolutionRole && String(message?.content || '').includes(marker)
-  ))) {
-    messages.push({
-      role: resolutionRole,
-      content: turnResolutionPrompt(resumeContext.resolution, resumeContext.pausedSequence),
-    })
-  }
-  const restored = { ...state, messages }
-  if (isRecord(restored.final) && restored.final.paused === true) delete restored.final
-  return restored
-}
-
-function pauseState(events) {
-  const paused = events.filter((event) => event.type === 'turn.paused').at(-1) || null
-  if (!paused) return { paused: null, resumed: null, pending: false }
-  const resumed = events
-    .filter((event) => event.type === 'turn.resumed' && event.sequence > paused.sequence)
-    .at(-1) || null
-  return { paused, resumed, pending: !resumed }
-}
-
-function publicStatus(lastEvent, running = false) {
-  if (!lastEvent) return 'not_found'
-  if (lastEvent.type === 'turn.paused') return 'paused'
-  if (running) return 'running'
-  if (lastEvent.type === 'turn.completed') return 'completed'
-  if (lastEvent.type === 'turn.cancelled') return 'cancelled'
-  if (lastEvent.type === 'turn.failed') return 'failed'
-  if (lastEvent.type === 'turn.interrupted') return 'interrupted'
-  if (lastEvent.type === 'approval.required') return 'awaiting_approval'
-  return 'paused'
-}
-
-function normalizeIds(values, limit = 32) {
+function normalizePromptContextIds(values, limit = 64) {
   return [...new Set((Array.isArray(values) ? values : [])
-    .map(canonicalizeSkillId)
+    .map((value) => normalizeOptionalId(value))
     .filter(Boolean))]
     .slice(0, limit)
 }
 
-function normalizeOptionalId(value, maxLength = 256) {
-  const normalized = String(value || '').trim()
-  return normalized ? normalized.slice(0, maxLength) : null
+function normalizeCanaryAssignmentSnapshot(value) {
+  if (!isRecord(value)) return null
+  const id = normalizeOptionalId(value.id)
+  const releaseId = normalizeOptionalId(value.releaseId)
+  const variant = String(value.variant || '').trim()
+  if (!id || !releaseId || !['baseline', 'candidate'].includes(variant)) return null
+  return {
+    id,
+    releaseId,
+    variant,
+    decisionReason: normalizeOptionalId(value.decisionReason),
+    target: normalizeOptionalId(value.target),
+  }
+}
+
+function normalizePromptContextSnapshot(value) {
+  if (!isRecord(value)) return null
+  return {
+    version: 1,
+    effectiveAgentId: normalizeOptionalId(value.effectiveAgentId),
+    skillIds: normalizePromptContextIds(value.skillIds, 32),
+    memoryIds: normalizePromptContextIds(value.memoryIds),
+    pluginPromptBlockIds: normalizePromptContextIds(value.pluginPromptBlockIds),
+    canaryAssignment: normalizeCanaryAssignmentSnapshot(value.canaryAssignment),
+  }
+}
+
+function isManualRecoveryBlock(error) {
+  const code = String(error?.code || '').trim()
+  if (code === 'SIDE_EFFECT_OUTCOME_UNKNOWN') {
+    return error?.unsafeToReplay === true
+      && error?.retryable === false
+      && error?.requiresUserVerification === true
+  }
+  return error?.unsafeToReplay === true
+    && error?.retryable === false
+    && MANUAL_RECOVERY_BLOCK_CODES.has(code)
+}
+
+function recoveryCandidateVersion(event) {
+  return [event.sequence, event.type, event.createdAt].join(':')
+}
+
+function normalizePositiveInteger(value) {
+  const normalized = Number(value)
+  return Number.isInteger(normalized) && normalized > 0 ? normalized : null
 }
 
 function abortError(code, message) {
@@ -509,256 +218,333 @@ function isExplicitTurnCancellation(signal, error) {
   return codes.includes('TURN_CANCEL_REQUESTED') || codes.includes('USER_STOPPED')
 }
 
-function normalizeArtifactIds(values) {
-  return [...new Set((Array.isArray(values) ? values : [])
-    .map((value) => String(value || '').trim())
-    .filter(Boolean))]
-}
-
-function sameArtifactIds(left, right) {
-  const normalizedLeft = normalizeArtifactIds(left)
-  const normalizedRight = normalizeArtifactIds(right)
-  return normalizedLeft.length === normalizedRight.length
-    && normalizedLeft.every((id, index) => id === normalizedRight[index])
-}
-
-function optionalDeliveryArtifactIds(value, fallback = undefined) {
-  if (value && typeof value === 'object' && Object.hasOwn(value, 'deliveryArtifactIds')) {
-    return normalizeArtifactIds(value.deliveryArtifactIds)
-  }
-  return fallback
-}
-
-function deliveryArtifactFields(deliveryArtifactIds) {
-  return Array.isArray(deliveryArtifactIds)
-    ? { deliveryArtifactIds: [...deliveryArtifactIds] }
-    : {}
-}
-
-function containsInternalTerminalFailure(value) {
-  return INTERNAL_TERMINAL_FAILURE_PATTERNS.some((pattern) => pattern.test(String(value || '')))
-}
-
-function publicTurnFailureMessage(error, { code = 'TURN_FAILED', fallback = PUBLIC_TURN_FAILURE } = {}) {
-  const normalizedCode = String(error?.code || code || 'TURN_FAILED').trim().toUpperCase()
-  const rawMessage = String(error?.message || error?.reason || '').trim()
-  const status = Number(error?.status ?? error?.statusCode)
-  if (normalizedCode === 'TURN_INCOMPLETE') return PUBLIC_TURN_INCOMPLETE
-  if (normalizedCode === 'REASONING_RUNAWAY') return PUBLIC_REASONING_RUNAWAY
-  if (normalizedCode.includes('TIMEOUT')
-    || normalizedCode.includes('UNAVAILABLE')
-    || normalizedCode.includes('INTERRUPT')
-    || status === 408
-    || status === 425
-    || status === 429
-    || status >= 500) {
-    return PUBLIC_TURN_INTERRUPTED
-  }
-  if (rawMessage
-    && /[\u3400-\u9fff]/u.test(rawMessage)
-    && !containsInternalTerminalFailure(rawMessage)) {
-    return rawMessage
-  }
-  return fallback
-}
-
-function publicIncompleteText(value, fallback = PUBLIC_TURN_INCOMPLETE) {
-  const text = String(value || '').trim()
-  if (!text || containsInternalTerminalFailure(text)) return fallback
-  return text
-}
-
-function normalizeFailure(error, {
-  code = 'TURN_FAILED',
-  message = PUBLIC_TURN_FAILURE,
-  retryable,
-} = {}) {
-  const normalizedCode = String(error?.code || code || 'TURN_FAILED').trim() || 'TURN_FAILED'
-  const normalizedMessage = publicTurnFailureMessage(error, {
-    code: normalizedCode,
-    fallback: String(message || PUBLIC_TURN_FAILURE).trim() || PUBLIC_TURN_FAILURE,
-  })
-  const rawStatus = Number(error?.status ?? error?.statusCode)
-  const status = Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599
-    ? rawStatus
-    : null
-  const inferredRetryable = status !== null
-    ? status === 408 || status === 409 || status === 425 || status === 429 || status >= 500
-    : error?.name === 'AbortError' || /(?:TIMEOUT|TEMPORAR|UNAVAILABLE|INTERRUPT)/i.test(normalizedCode)
-  const failure = {
-    code: normalizedCode,
-    message: normalizedMessage,
-    retryable: typeof error?.retryable === 'boolean'
-      ? error.retryable
-      : (typeof retryable === 'boolean' ? retryable : inferredRetryable),
-  }
-  if (status !== null) failure.status = status
-  const rawHint = String(error?.hint || '').trim()
-  if (rawHint && /[\u3400-\u9fff]/u.test(rawHint) && !containsInternalTerminalFailure(rawHint)) {
-    failure.hint = rawHint
-  } else if (failure.retryable) {
-    failure.hint = '请重试本任务；系统会继续处理尚未完成的步骤。'
-  }
-  const attempts = Number(error?.attempts)
-  if (Number.isInteger(attempts) && attempts > 0) failure.attempts = attempts
-  return failure
-}
-
 function isTemporaryTurnEvidence(message, turnId) {
   return message?.id === `${turnId}:assistant`
     && message?.modelContext?.turnEvidence === true
 }
 
 function lostTurnLease(signal, error = null) {
-  return error?.code === 'TURN_LEASE_LOST' || signal?.reason?.code === 'TURN_LEASE_LOST'
-}
-
-function normalizeAttachmentIds(values) {
-  const normalized = [...new Set((Array.isArray(values) ? values : [])
-    .map((value) => typeof value === 'object' ? value?.id : value)
-    .map((value) => String(value || '').trim())
-    .filter(Boolean))]
-  if (normalized.length > 32) {
-    throw new TurnEngineError('ATTACHMENT_COUNT_EXCEEDED', '单次最多使用 32 个附件', 400)
-  }
-  return normalized
-}
-
-function attachmentTurnError(error) {
-  if (error instanceof TurnEngineError) return error
-  const wrapped = new TurnEngineError(
-    error?.code || 'ATTACHMENT_INVALID',
-    error?.message || '附件不可用',
-    error?.statusCode || 400,
-  )
-  wrapped.cause = error
-  return wrapped
-}
-
-/**
- * I1：turn 链路服务端解析 `/技能前缀`（与 job 链路 resolveJobSkillContext 同规则）。
- * 调用方（前端/移动端/API）不显式传 skillIds 时，从 content 首词解析技能 ID。
- * 只在"确实带 /前缀"时返回，避免把普通文本误当技能。
- */
-function resolveSkillPrefixFromContent(content, skillIds) {
-  const normalized = normalizeIds(skillIds)
-  if (normalized.length) return { skillIds: normalized, content }
-  const match = String(content || '').trim().match(/^\/([a-z0-9_-]+)(?:\s|$)/i)
-  if (!match) return { skillIds: normalized, content }
-  return {
-    skillIds: [match[1].toLowerCase()],
-    content: String(content || '').trim().slice(match[0].length).trim(),
-  }
-}
-
-function importedMessageContext(message, sourceRole) {
-  if (sourceRole === 'assistant' && Array.isArray(message?.tool_calls)) {
-    return { version: 1, toolCalls: message.tool_calls }
-  }
-  if (sourceRole === 'tool' && message?.tool_call_id) {
-    return {
-      version: 1,
-      toolCallId: String(message.tool_call_id),
-      name: message?.name ? String(message.name) : null,
+  const terminalCodes = new Set(['TURN_LEASE_LOST', 'TURN_ENGINE_SHUTDOWN', 'TURN_ALREADY_TERMINAL'])
+  const hasTerminalCode = (candidate) => {
+    const seen = new Set()
+    let current = candidate
+    for (let depth = 0; current && depth < 8 && !seen.has(current); depth += 1) {
+      if (terminalCodes.has(String(current?.code || '').trim().toUpperCase())) return true
+      seen.add(current)
+      current = current?.cause
     }
+    return false
   }
-  return null
+  return hasTerminalCode(error) || hasTerminalCode(signal?.reason)
+}
+
+function retryingTurnEvidenceMessage({
+  existing,
+  userId,
+  sessionId,
+  turnId,
+  event,
+}) {
+  const modelContext = isRecord(existing?.modelContext) ? { ...existing.modelContext } : {}
+  for (const key of ['error', 'recovery', 'turnCompletedAt', 'latency', 'paused', 'clarification']) {
+    delete modelContext[key]
+  }
+  return {
+    id: `${turnId}:assistant`,
+    userId,
+    sessionId,
+    role: 'assistant',
+    content: String(event.payload?.assistantText || ''),
+    modelContext: {
+      ...modelContext,
+      turnId,
+      turnEvidence: true,
+      evidenceState: 'retrying',
+      serverLastSequence: event.sequence,
+    },
+    createdAt: Number.isFinite(Number(existing?.createdAt)) ? Number(existing.createdAt) : event.createdAt,
+    updatedAt: event.createdAt,
+  }
+}
+
+function missingTurnModelRuntime() {
+  const error = new TurnEngineError(
+    'TURN_MODEL_RUNTIME_NOT_CONFIGURED',
+    'TurnEngine requires its host to provide a model runtime',
+    503,
+  )
+  error.retryable = false
+  throw error
+}
+
+function missingTurnPromptRuntime() {
+  const error = new TurnEngineError(
+    'TURN_PROMPT_RUNTIME_NOT_CONFIGURED',
+    'TurnEngine requires its host to provide a prompt runtime',
+    503,
+  )
+  error.retryable = false
+  throw error
 }
 
 export class TurnEngine {
-  constructor({
-    runLoop = runToolLoop,
-    runModel = callStreamingModelWithTools,
+  constructor(options = {}) {
+    const {
+      runLoop = runBoundTurnLoop,
+    runModel = missingTurnModelRuntime,
     executeTool,
-    appendEvent = appendTurnEvent,
-    appendEventBatch = null,
-    eventWriteBehind = null,
-    recordEventWriteFailure = recordTurnEventWriteFailure,
+    eventEmitterFactory = createTurnEventEmitter,
+    modelRequestRunnerFactory = createTurnModelRequestRunner,
+    reconcileModelRequest = null,
     publishActivity = publishTurnActivity,
-    lastEvent = getLastTurnEvent,
-    replayEvents = listTurnEvents,
-    readCheckpoint = null,
-    writeCheckpoint = null,
-    readSession = getSession,
-    claimSession = claimLocalChatSession,
-    writeSession = upsertSession,
-    readMessages = listMessages,
-    readPreviousUserMessage = getPreviousUserMessage,
-    writeMessage = upsertMessage,
-    removeMessage = deleteMessage,
     idFactory = randomUUID,
     now = Date.now,
-    toolSpecs = SERVER_TOOL_SPECS,
+    toolSpecs = getBoundTurnToolSpecs(),
+    directoryAuthorizationToolSpecs = toolSpecs,
     readApprovalMode = getApprovalMode,
-    preparePromptContext = prepareTurnPromptContext,
+    readRuntimePolicyProvenance = getActiveRuntimePolicyProvenance,
+    preparePromptContext = missingTurnPromptRuntime,
+    prepareInlineSkills = prepareBoundInlineSkillsForPrompt,
     resolveCanaryAssignment = resolveEvolutionCanaryAssignment,
     recordCanaryOutcome = recordEvolutionCanaryOutcome,
     resolveToolSpecs = resolveTurnToolSpecs,
     scheduleMemoryExtraction = scheduleAutoMemoryExtraction,
-    runMemoryModel = callBackgroundModel,
-    getContextWindow = getModelContextWindow,
+    runMemoryModel = missingTurnModelRuntime,
+    getContextWindow = () => undefined,
     readFileAccessStatus = getLocalFileAccessStatus,
-    validateAttachments = validateManagedAttachmentsForTurn,
-    bindAttachments = bindManagedAttachmentsToMessage,
-    prepareAttachments = prepareManagedAttachmentsForModel,
-    executionLeases = createTurnExecutionLeaseCoordinator(),
-    runtimeCore = null,
-    enqueueSteering = enqueueTurnSteering,
-    claimSteering = claimTurnSteering,
-    acknowledgeSteering = acknowledgeTurnSteering,
-    acknowledgeAppliedSteering = acknowledgeAppliedTurnSteering,
-    releaseSteering = releaseTurnSteeringLease,
-    releaseStaleSteering = releaseTurnSteeringLeasesForTurn,
+    attachmentRuntime = null,
+    validateAttachments = attachmentRuntime?.validateAttachments
+      || missingAttachmentValidationRuntime,
+    bindAttachments = attachmentRuntime?.bindAttachments
+      || missingAttachmentBindingRuntime,
+    prepareAttachments = attachmentRuntime?.prepareAttachments
+      || missingAttachmentPreparationRuntime,
     dispatchHooks = dispatchHooksService,
-    env = process.env,
-  } = {}) {
-    const runtimeCoreOptions = { executionLeases }
-    if (typeof readCheckpoint === 'function') runtimeCoreOptions.readCheckpoint = readCheckpoint
-    if (typeof writeCheckpoint === 'function') runtimeCoreOptions.writeCheckpoint = writeCheckpoint
-    const sharedRuntimeCore = runtimeCore || createTurnRuntimeCore(runtimeCoreOptions)
-    const defaultBatchAppender = appendEvent === appendTurnEvent
-      ? appendTurnEvents
-      : (entries) => Promise.all(entries.map((entry) => appendEvent(entry)))
-    const batchAppender = typeof appendEventBatch === 'function'
-      ? appendEventBatch
-      : defaultBatchAppender
-    const deferredEventWriter = eventWriteBehind || createEventWriteBehind({
-      writeBatch: batchAppender,
-      writeBatchSync: batchAppender === appendTurnEvents ? appendTurnEvents : null,
-      recordFailure: recordEventWriteFailure,
-    })
+    resolveModelBinding = null,
+    readRuntimePlugins = () => [],
+    readRuntimePluginStates = listRuntimePluginStates,
+    resolveToolImplementationRevisions = resolveCurrentToolImplementationRevisions,
+      env = process.env,
+    } = options
+    const {
+      persistence: persistenceBundle,
+      ports: persistenceDeps,
+    } = assembleTurnEnginePersistence(options)
+    this.persistence = persistenceBundle
     this.deps = {
-      runLoop, runModel, executeTool, appendEvent, publishActivity, lastEvent, replayEvents,
-      readSession, claimSession, writeSession, readMessages, readPreviousUserMessage,
-      writeMessage, idFactory, now, toolSpecs,
-      readApprovalMode, preparePromptContext, resolveCanaryAssignment, recordCanaryOutcome,
+      runLoop, runModel, executeTool, appendEvent: persistenceDeps.appendEvent,
+      publishActivity, lastEvent: persistenceDeps.lastEvent, replayEvents: persistenceDeps.replayEvents,
+      readSession: persistenceDeps.readSession, sessionIdOccupied: persistenceDeps.sessionIdOccupied,
+      claimSession: persistenceDeps.claimSession, writeSession: persistenceDeps.writeSession,
+      readMessages: persistenceDeps.readMessages,
+      readPreviousUserMessage: persistenceDeps.readPreviousUserMessage,
+      writeMessage: persistenceDeps.writeMessage, idFactory, now, toolSpecs, directoryAuthorizationToolSpecs,
+      readApprovalMode, readRuntimePolicyProvenance, preparePromptContext, prepareInlineSkills,
+      resolveCanaryAssignment, recordCanaryOutcome,
       resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
       getContextWindow, readFileAccessStatus, validateAttachments, bindAttachments, prepareAttachments,
-      removeMessage, executionLeases, runtimeCore: sharedRuntimeCore,
-      enqueueSteering, claimSteering, acknowledgeSteering, acknowledgeAppliedSteering,
-      releaseSteering, releaseStaleSteering, dispatchHooks,
-      eventWriteBehind: deferredEventWriter,
+      removeMessage: persistenceDeps.removeMessage,
+      executionLeases: persistenceDeps.executionLeases,
+      runtimeCore: persistenceDeps.runtimeCore,
+      recordEventWriteFailure: persistenceDeps.recordEventWriteFailure,
+      verifyEventCommit: persistenceDeps.verifyEventCommit,
+      recordEmergencyFailure: persistenceDeps.recordEmergencyFailure,
+      readRecoveryState: persistenceDeps.readRecoveryState,
+      writeRecoveryFailure: persistenceDeps.writeRecoveryFailure,
+      clearRecoveryState: persistenceDeps.clearRecoveryState,
+      enqueueSteering: persistenceDeps.enqueueSteering,
+      claimSteering: persistenceDeps.claimSteering,
+      acknowledgeSteering: persistenceDeps.acknowledgeSteering,
+      acknowledgeAppliedSteering: persistenceDeps.acknowledgeAppliedSteering,
+      releaseSteering: persistenceDeps.releaseSteering,
+      releaseStaleSteering: persistenceDeps.releaseStaleSteering,
+      dispatchHooks,
+      resolveModelBinding,
+      readRuntimePlugins, readRuntimePluginStates, resolveToolImplementationRevisions,
+      commitTurnStart: persistenceDeps.commitTurnStart,
+      commitTurnCheckpoint: persistenceDeps.commitTurnCheckpoint,
+      commitTurnBoundary: persistenceDeps.commitTurnBoundary,
+      commitTurnFailedRetry: persistenceDeps.commitTurnFailedRetry,
+      createEventWriteBehind: persistenceDeps.createEventWriteBehind,
+      eventEmitterFactory,
+      modelRequestRunnerFactory,
+      reconcileModelRequest,
+      readPendingModelRequest: persistenceDeps.readPendingModelRequest,
+      readModelRequestResolution: persistenceDeps.readModelRequestResolution,
+      commitPendingModelRequest: persistenceDeps.commitPendingModelRequest,
+      supportsAtomicCheckpointState: persistenceDeps.supportsAtomicCheckpointState === true,
     }
     this.active = new Map()
+    this.scheduling = new Set()
     this.startingSessions = new Map()
+    this.eventWriters = new Set()
+    this.shutdownWriterRetries = new Set()
+    this.shutdownLeaseReleaseRetries = new Set()
+    this.startIdleWaiters = new Set()
+    this.closing = false
+    this.closePromise = null
+    this.executionToolContextRuntime = createTurnExecutionToolContextRuntime({
+      readApprovalMode: (input) => this.deps.readApprovalMode(input),
+      readFileAccessStatus: (input) => this.deps.readFileAccessStatus(input),
+      resolveToolSpecs: (input) => this.deps.resolveToolSpecs(input),
+    })
+    this.startRuntime = createTurnStartRuntime({
+      readSession: this.deps.readSession,
+      sessionIdOccupied: this.deps.sessionIdOccupied,
+      claimLegacySession: (scope) => this.#claimLegacySession(scope),
+      lastEvent: this.deps.lastEvent,
+      resolveModelBinding: (input) => this.#resolveModelBinding(input),
+      now: this.deps.now,
+      writeSession: this.deps.writeSession,
+      readMessages: this.deps.readMessages,
+      writeMessage: this.deps.writeMessage,
+      removeMessage: this.deps.removeMessage,
+      validateAttachments: this.deps.validateAttachments,
+      bindAttachments: this.deps.bindAttachments,
+      createEmitter: (scope) => this.#createEmitter(scope),
+      commitTurnStart: this.deps.commitTurnStart,
+    })
+    this.cancellationRuntime = createTurnCancellationRuntime({
+      readSession: this.deps.readSession,
+      claimLegacySession: (scope) => this.#claimLegacySession(scope),
+      readActiveTurn: ({ userId, sessionId, turnId }) => (
+        this.active.get(activeKey(userId, sessionId, turnId)) || null
+      ),
+      getTurn: (scope) => this.getTurn(scope),
+      requestCancellation: (scope) => this.deps.runtimeCore.lease.requestCancellation(scope),
+      abortActiveTurn: (running, error) => running.controller.abort(error),
+      releaseApproval: (scope) => this.deps.runtimeCore.approval.release(scope),
+      lastEvent: this.deps.lastEvent,
+      acquireLease: (scope) => this.deps.runtimeCore.lease.acquire(scope),
+      closeSteeringInbox: (scope) => this.deps.runtimeCore.lease.closeSteeringInbox(scope),
+      replayEvents: this.deps.replayEvents,
+      loadCheckpoint: (scope) => this.deps.runtimeCore.checkpoint.load(scope),
+      now: this.deps.now,
+      createEmitter: (scope) => this.#createEmitter(scope),
+      commitTurnBoundary: this.deps.commitTurnBoundary,
+      writeMessage: this.deps.writeMessage,
+    })
   }
 
-  getTurn({ userId, sessionId, turnId }) {
+  shutdown() {
+    if (this.closePromise) return this.closePromise
+    this.closing = true
+    const attempt = (async () => {
+      if (this.startingSessions.size > 0) {
+        await new Promise((resolve) => this.startIdleWaiters.add(resolve))
+      }
+      const retryWriters = new Set(this.shutdownWriterRetries)
+      const retryLeaseReleases = new Set(this.shutdownLeaseReleaseRetries)
+      const writers = new Set([...retryWriters, ...this.eventWriters])
+      const active = [...this.active.values()]
+      for (const entry of active) {
+        if (!entry.controller.signal.aborted) {
+          entry.controller.abort(abortError('TURN_ENGINE_SHUTDOWN', 'Turn execution paused for server shutdown'))
+        }
+      }
+      const activeOutcomes = await Promise.allSettled(
+        active.map((entry) => entry.promise).filter(Boolean),
+      )
+      const pendingLeaseReleases = [...retryLeaseReleases]
+      const leaseReleaseOutcomes = await Promise.allSettled(
+        pendingLeaseReleases.map((release) => Promise.resolve().then(release)),
+      )
+      for (let index = 0; index < pendingLeaseReleases.length; index += 1) {
+        const release = pendingLeaseReleases[index]
+        if (leaseReleaseOutcomes[index]?.status === 'fulfilled') {
+          this.shutdownLeaseReleaseRetries.delete(release)
+        } else {
+          this.shutdownLeaseReleaseRetries.add(release)
+        }
+      }
+      for (const writer of this.eventWriters) writers.add(writer)
+      const pendingWriters = [...writers]
+      const writerOutcomes = await Promise.allSettled(pendingWriters.map((writer) => (
+        Promise.resolve().then(() => (
+          retryWriters.has(writer) && typeof writer.flush === 'function'
+            ? writer.flush()
+            : typeof writer.close === 'function' ? writer.close() : writer.flush()
+        ))
+      )))
+      for (let index = 0; index < pendingWriters.length; index += 1) {
+        const writer = pendingWriters[index]
+        if (writerOutcomes[index]?.status === 'fulfilled') {
+          this.eventWriters.delete(writer)
+          this.shutdownWriterRetries.delete(writer)
+        } else {
+          this.shutdownWriterRetries.add(writer)
+        }
+      }
+      const failures = [...new Set(
+        [...activeOutcomes, ...leaseReleaseOutcomes, ...writerOutcomes]
+          .filter((outcome) => outcome.status === 'rejected')
+          .map((outcome) => outcome.reason),
+      )]
+      if (failures.length > 0) {
+        throw new AggregateError(failures, 'Failed to shut down TurnEngine cleanly')
+      }
+    })()
+    this.closePromise = attempt
+    void attempt.then(
+      () => {},
+      () => {
+        if (this.closePromise === attempt) this.closePromise = null
+      },
+    )
+    return attempt
+  }
+
+  async getTurn({ userId, sessionId, turnId }) {
     const key = activeKey(userId, sessionId, turnId)
-    const last = this.deps.lastEvent({ userId, sessionId, turnId })
+    const last = await this.deps.lastEvent({ userId, sessionId, turnId })
     let running = this.active.has(key)
     if (!running) {
-      try { running = !!this.deps.runtimeCore.lease.isActive({ userId, sessionId, turnId }) } catch { /* advisory */ }
+      try { running = !!await this.deps.runtimeCore.lease.isActive({ userId, sessionId, turnId }) } catch { /* advisory */ }
+    }
+    let recovery = null
+    if (last && !isTerminalTurnEventType(last.type)) {
+      try {
+        const state = await this.deps.readRecoveryState({ userId, sessionId, turnId })
+        if (state) {
+          recovery = {
+            status: state.status,
+            attemptCount: state.attemptCount,
+            retryable: state.retryable,
+            manualRetryable: last.type === 'turn.blocked'
+              || MANUAL_RECOVERY_BLOCK_CODES.has(String(state.errorCode || '').trim()),
+            firstFailedAt: state.firstFailedAt,
+            lastFailedAt: state.lastFailedAt,
+            nextRetryAt: state.nextRetryAt,
+            error: {
+              code: state.errorCode || 'TURN_RECOVERY_FAILED',
+              message: state.errorMessage,
+            },
+          }
+        }
+      } catch { /* recovery diagnostics must not hide the durable turn */ }
     }
     return last ? {
       sessionId,
       turnId,
       status: publicStatus(last, running),
       lastEvent: last,
+      ...(recovery ? { recovery } : {}),
     } : null
   }
 
-  steerTurn({
+  async listEvents(scope) {
+    return await this.deps.replayEvents(scope)
+  }
+
+  async getPendingModelRequestRecovery(scope) {
+    return this.deps.readPendingModelRequest(scope)
+  }
+
+  async resolvePendingModelRequest(input) {
+    return this.deps.commitPendingModelRequest(input)
+  }
+
+  async steerTurn({
     userId,
     sessionId,
     turnId,
@@ -767,8 +553,8 @@ export class TurnEngine {
     authMode = null,
   } = {}) {
     if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
-    if (!this.deps.readSession({ userId, sessionId }) && authMode === 'local') {
-      this.#claimLegacySession({ userId, sessionId, authMode })
+    if (!await this.deps.readSession({ userId, sessionId }) && authMode === 'local') {
+      await this.#claimLegacySession({ userId, sessionId, authMode })
     }
     return this.deps.enqueueSteering({
       userId,
@@ -780,15 +566,17 @@ export class TurnEngine {
     })
   }
 
-  hasActiveSession({ userId, sessionId } = {}) {
+  async hasActiveSession({ userId, sessionId } = {}) {
     if (!userId || !sessionId) return false
     if (this.startingSessions.has(sessionKey(userId, sessionId))) return true
     const prefix = `${userId}\u0000${sessionId}\u0000`
     if ([...this.active.keys()].some((key) => key.startsWith(prefix))) return true
-    try { return !!this.deps.runtimeCore.lease.hasActiveSession({ userId, sessionId }) } catch { return false }
+    if ([...this.scheduling].some((key) => key.startsWith(prefix))) return true
+    try { return !!await this.deps.runtimeCore.lease.hasActiveSession({ userId, sessionId }) } catch { return false }
   }
 
   async startTurn(args) {
+    if (this.closing) throw new TurnEngineError('TURN_ENGINE_SHUTTING_DOWN', 'turn engine is shutting down', 503)
     // 一轮 turn 的关联上下文：userId/sessionId/turnId/traceId 沿异步链传递，
     // 期间模型代理、工具循环、压缩恢复等结构化日志都能按 turnId 串起来。
     const { userId, sessionId, turnId } = args || {}
@@ -799,168 +587,167 @@ export class TurnEngine {
     )
   }
 
-  async #startTurnInner({
-    userId,
-    sessionId,
-    turnId = this.deps.idFactory(),
-    content,
-    displayContent = null,
-    modelName = null,
-    history = [],
-    agentId = null,
-    skillIds = [],
-    skillDefinitions = [],
-    toolsConfig = null,
-    intentMode = 'auto',
-    attachments = [],
-    authMode = null,
-  }) {
-    const rawText = String(content || '').trim()
-    const normalizedAttachmentIds = normalizeAttachmentIds(attachments)
-    // I1：调用方未显式传 skillIds 时，服务端解析 `/技能前缀`（对齐 job 链路）。
-    // 模型上下文使用剥离前缀后的正文，展示层保留用户原话。
-    const resolvedSkill = resolveSkillPrefixFromContent(rawText, skillIds)
-    const text = resolvedSkill.content || (normalizedAttachmentIds.length ? '请分析附件内容。' : '')
-    const displayText = String(displayContent ?? rawText ?? '').trim() || text
-    if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
-    if (!sessionId) throw new TurnEngineError('SESSION_REQUIRED', 'sessionId is required')
-    if (!text) throw new TurnEngineError('CONTENT_REQUIRED', 'content is required')
-    const startingKey = sessionKey(userId, sessionId)
+  async #startTurnInner(args = {}) {
+    const startingKey = sessionKey(args.userId, args.sessionId)
     this.startingSessions.set(startingKey, (this.startingSessions.get(startingKey) || 0) + 1)
     try {
-      let session = this.deps.readSession({ userId, sessionId })
-      if (!session && authMode === 'local') {
-        session = this.#claimLegacySession({ userId, sessionId, authMode })
-      }
-      if (!session) {
-        try {
-          session = this.deps.writeSession({
-            id: sessionId,
-            userId,
-            title: displayText.slice(0, 80) || 'Untitled',
-            createdAt: this.deps.now(),
-          })
-        } catch (error) {
-          if (error instanceof SessionOwnershipError || error?.code === 'SESSION_OWNERSHIP_CONFLICT') {
-            throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
-          }
-          const wrapped = new TurnEngineError('SESSION_CREATE_FAILED', 'failed to create session', 500)
-          wrapped.cause = error
-          throw wrapped
-        }
-      }
-      const existing = this.deps.lastEvent({ userId, sessionId, turnId })
-      if (existing) {
-        throw new TurnEngineError('TURN_EXISTS', 'turn already exists; use resume', 409)
-      }
-
-      const createdAt = this.deps.now()
-      const normalizedAgentId = normalizeOptionalId(agentId)
-      const normalizedSkillIds = normalizeIds(resolvedSkill.skillIds)
-      const normalizedSkillDefinitions = prepareInlineSkillsForPrompt({
-        skillIds: normalizedSkillIds,
-        skillDefinitions,
-      })
-      const normalizedToolsConfig = normalizeServerToolsConfig(toolsConfig)
-      const normalizedIntentMode = normalizeTurnIntentMode(intentMode)
-      let managedAttachments = []
-      try {
-        managedAttachments = this.deps.validateAttachments({
-          userId,
-          sessionId,
-          attachmentIds: normalizedAttachmentIds,
-        })
-      } catch (error) {
-        throw attachmentTurnError(error)
-      }
-      const existingMessages = this.deps.readMessages({ userId, sessionId, limit: 1 })
-      const safeHistory = existingMessages.length === 0 && Array.isArray(history) ? history.slice() : []
-      const stagedMessageIds = []
-      safeHistory.forEach((message, index) => {
-        const sourceRole = ['user', 'assistant', 'system', 'tool'].includes(message?.role) ? message.role : null
-        const role = sourceRole === 'tool' && !message?.tool_call_id ? 'system' : sourceRole
-        if (!role || typeof message?.content !== 'string') return
-        const historyMessageId = `${turnId}:history:${index}`
-        this.deps.writeMessage({
-          id: historyMessageId,
-          userId,
-          sessionId,
-          role,
-          modelContext: importedMessageContext(message, sourceRole),
-          content: sourceRole === 'tool' ? `[历史工具结果]\n${message.content}` : message.content,
-          createdAt: createdAt - safeHistory.length + index,
-          updatedAt: createdAt,
-        })
-        stagedMessageIds.push(historyMessageId)
-      })
-      const userMessageId = `${turnId}:user`
-      this.deps.writeMessage({
-        id: userMessageId, userId, sessionId, role: 'user', content: displayText,
-        modelContext: { version: 1, turnId, modelContent: text, attachments: managedAttachments },
-        createdAt, updatedAt: createdAt,
-      })
-      stagedMessageIds.push(userMessageId)
-      const rollbackStagedMessages = () => {
-        for (const messageId of stagedMessageIds.reverse()) {
-          try { this.deps.removeMessage({ userId, messageId }) } catch { /* best-effort compensation */ }
-        }
-      }
-      try {
-        this.deps.bindAttachments({
-          userId,
-          sessionId,
-          messageId: `${turnId}:user`,
-          attachmentIds: normalizedAttachmentIds,
-          now: createdAt,
-        })
-      } catch (error) {
-        rollbackStagedMessages()
-        throw attachmentTurnError(error)
-      }
-      const emitter = this.#createEmitter({ userId, sessionId, turnId, sequence: 0 })
-      try {
-        await emitter('turn.started', {
-          content: text,
-          displayContent: displayText,
-          modelName: modelName || null,
-          agentId: normalizedAgentId,
-          skillIds: normalizedSkillIds,
-          skillDefinitions: normalizedSkillDefinitions,
-          toolsConfig: normalizedToolsConfig,
-          intentMode: normalizedIntentMode,
-          userMessageId,
-          attachments: managedAttachments,
-          importedHistoryCount: safeHistory.length,
-        })
-      } catch (error) {
-        rollbackStagedMessages()
-        throw error
-      }
-      this.#schedule({
-        userId,
-        sessionId,
-        turnId,
-        turnStartedAt: createdAt,
-        content: text,
-        displayContent: displayText,
-        modelName,
-        agentId: normalizedAgentId,
-        skillIds: normalizedSkillIds,
-        skillDefinitions: normalizedSkillDefinitions,
-        toolsConfig: normalizedToolsConfig,
-        intentMode: normalizedIntentMode,
-        emitter,
-      })
-      return this.getTurn({ userId, sessionId, turnId })
+      const initialized = await this.startRuntime.initialize(args)
+      const scheduled = await this.#schedule({ ...initialized.execution, emitter: initialized.emitter })
+      const { userId, sessionId, turnId } = initialized.scope
+      if (!scheduled) await initialized.emitter.close()
+      return await this.getTurn({ userId, sessionId, turnId })
     } finally {
       const remainingStarts = (this.startingSessions.get(startingKey) || 1) - 1
       if (remainingStarts > 0) this.startingSessions.set(startingKey, remainingStarts)
       else this.startingSessions.delete(startingKey)
+      if (this.startingSessions.size === 0 && this.startIdleWaiters.size > 0) {
+        for (const resolve of this.startIdleWaiters) resolve()
+        this.startIdleWaiters.clear()
+      }
     }
   }
 
   async resumeTurn(scope) {
+    if (this.closing) throw new TurnEngineError('TURN_ENGINE_SHUTTING_DOWN', 'turn engine is shutting down', 503)
+    rejectResumeApprovalModeOverride(scope?.approvalMode)
+    if (scope?.retryFailed === true) return this.#retryFailedTurn(scope)
+    const recovery = await this.deps.readRecoveryState(scope)
+    const last = await this.deps.lastEvent(scope)
+    if ((recovery?.status === 'dead_letter' || last?.type === 'turn.blocked')
+      && scope?.retryRecovery !== true) {
+      const error = new TurnEngineError(
+        'TURN_RECOVERY_DEAD_LETTER',
+        recovery?.errorMessage || last?.payload?.message
+          || 'automatic turn recovery stopped; repair the execution environment and retry explicitly',
+        409,
+      )
+      error.recovery = recovery || {
+        status: 'dead_letter',
+        retryable: false,
+        manualRetryable: true,
+        errorCode: last?.payload?.code || 'TURN_RECOVERY_BLOCKED',
+        errorMessage: last?.payload?.message || 'turn recovery is blocked',
+      }
+      throw error
+    }
+    if (scope?.retryRecovery === true) await this.deps.clearRecoveryState(scope)
     const outcome = await this.recoverTurn(scope)
+    if (outcome?.terminal || outcome?.scheduled || outcome?.locallyActive) {
+      await this.deps.clearRecoveryState(scope)
+    }
+    return outcome.turn
+  }
+
+  async #retryFailedTurn({
+    userId,
+    sessionId,
+    turnId,
+    retryRecovery = false,
+    resolution = null,
+    authMode = null,
+  } = {}) {
+    if (retryRecovery === true || resolution !== null) {
+      throw new TurnEngineError(
+        'TURN_FAILED_RETRY_REQUEST_INVALID',
+        'retryFailed cannot be combined with recovery or resolution controls',
+        400,
+      )
+    }
+    if (!await this.deps.readSession({ userId, sessionId }) && authMode === 'local') {
+      await this.#claimLegacySession({ userId, sessionId, authMode })
+    }
+    const scope = { userId, sessionId, turnId }
+    const started = await this.deps.lastEvent({ ...scope, type: 'turn.started' })
+    if (!started) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
+    const last = await this.deps.lastEvent(scope)
+    if (last?.type === 'turn.attempt' && last.payload?.reason === 'failed_retry') {
+      const outcome = await this.recoverTurn({ ...scope, authMode })
+      return outcome.turn
+    }
+    if (last?.type !== 'turn.failed') {
+      const persistedEvents = await replayPersistedTurnEvents(this.deps.replayEvents, scope)
+      const latestFailedRetry = persistedEvents
+        .filter((event) => event.type === 'turn.attempt' && event.payload?.reason === 'failed_retry')
+        .at(-1)
+      const laterFailure = latestFailedRetry && persistedEvents.some((event) => (
+        event.type === 'turn.failed' && event.sequence > latestFailedRetry.sequence
+      ))
+      const retryRequiresExplicitControl = ['turn.blocked', 'turn.interrupted', 'turn.paused']
+        .includes(last?.type)
+      if (latestFailedRetry && !laterFailure && !retryRequiresExplicitControl) {
+        const outcome = await this.recoverTurn({ ...scope, authMode })
+        return outcome.turn
+      }
+      throw new TurnEngineError(
+        'TURN_FAILED_RETRY_CONFLICT',
+        'the Turn is no longer at a failed terminal boundary',
+        409,
+      )
+    }
+    if (last.payload?.error?.retryable !== true) {
+      throw new TurnEngineError(
+        'TURN_FAILED_RETRY_NOT_ALLOWED',
+        'the failed Turn is not explicitly retryable',
+        409,
+      )
+    }
+    if (typeof this.deps.commitTurnFailedRetry !== 'function') {
+      const error = new TurnEngineError(
+        'TURN_FAILED_RETRY_UNSUPPORTED',
+        'the configured Turn persistence adapter does not support atomic failed retries',
+        501,
+      )
+      error.retryable = false
+      throw error
+    }
+    const checkpoint = await this.deps.runtimeCore.checkpoint.load(scope)
+    if (!checkpoint?.state || !Number.isInteger(checkpoint.eventSequence)) {
+      throw new TurnEngineError(
+        'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
+        'a durable Turn checkpoint is required before retrying a failed Turn',
+        409,
+      )
+    }
+    const events = await replayPersistedTurnEvents(this.deps.replayEvents, scope)
+    const attemptPayload = failedRetryAttemptPayload(events, last, checkpoint)
+    if (!attemptPayload) {
+      throw new TurnEngineError(
+        'TURN_FAILED_RETRY_EVENT_INVALID',
+        'failed Turn retry metadata could not be reconstructed',
+        409,
+      )
+    }
+    const existingMessage = (await this.deps.readMessages({
+      userId,
+      sessionId,
+      limit: 500,
+      recent: true,
+    })).find((message) => message?.id === `${turnId}:assistant`) || null
+    const emitter = this.#createEmitter({
+      userId,
+      sessionId,
+      turnId,
+      sequence: last.sequence + 1,
+    })
+    try {
+      await emitter('turn.attempt', attemptPayload, {
+        commitEvent: ({ event }) => this.deps.commitTurnFailedRetry({
+          userId,
+          event,
+          message: retryingTurnEvidenceMessage({
+            existing: existingMessage,
+            userId,
+            sessionId,
+            turnId,
+            event,
+          }),
+        }),
+      })
+    } finally {
+      await emitter.close()
+    }
+    await this.deps.clearRecoveryState(scope)
+    const outcome = await this.recoverTurn({ ...scope, authMode })
     return outcome.turn
   }
 
@@ -969,24 +756,40 @@ export class TurnEngine {
    * from "this process scheduled the turn". The public resume response stays
    * unchanged; this explicit outcome is only used by durable recovery workers.
    */
-  async recoverTurn({ userId, sessionId, turnId, resolution = null, authMode = null }) {
-    if (!this.deps.readSession({ userId, sessionId }) && authMode === 'local') {
-      this.#claimLegacySession({ userId, sessionId, authMode })
+  async recoverTurn({
+    userId,
+    sessionId,
+    turnId,
+    resolution = null,
+    authMode = null,
+    approvalMode: requestedApprovalMode = null,
+  }) {
+    rejectResumeApprovalModeOverride(requestedApprovalMode)
+    if (!await this.deps.readSession({ userId, sessionId }) && authMode === 'local') {
+      await this.#claimLegacySession({ userId, sessionId, authMode })
     }
     const key = activeKey(userId, sessionId, turnId)
-    const started = this.deps.lastEvent({ userId, sessionId, turnId, type: 'turn.started' })
+    const started = await this.deps.lastEvent({ userId, sessionId, turnId, type: 'turn.started' })
     if (!started) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
-    let last = this.deps.lastEvent({ userId, sessionId, turnId })
-    if (TERMINAL_TYPES.has(last?.type)) {
+    let last = await this.deps.lastEvent({ userId, sessionId, turnId })
+    if (isTerminalTurnEventType(last?.type)) {
       return {
-        turn: this.getTurn({ userId, sessionId, turnId }),
+        turn: await this.getTurn({ userId, sessionId, turnId }),
         scheduled: false,
         locallyActive: false,
         terminal: true,
       }
     }
+    const modelBinding = this.#resolveModelBinding({
+      userId,
+      modelName: started.payload.modelName,
+      modelProviderId: normalizeOptionalId(started.payload.modelProviderId),
+      modelConfigRevision: normalizePositiveInteger(started.payload.modelConfigRevision),
+      modelMode: normalizeModelMode(started.payload.modelMode),
+      requirePersistedBinding: true,
+    })
     const scope = { userId, sessionId, turnId }
-    const persistedEvents = replayPersistedTurnEvents(this.deps.replayEvents, scope)
+    const persistedEvents = await replayPersistedTurnEvents(this.deps.replayEvents, scope)
     const pause = pauseState(persistedEvents)
     const normalizedResolution = resolution == null ? null : normalizeTurnResolution(resolution)
     let resumeContext = pause.resumed ? {
@@ -998,7 +801,7 @@ export class TurnEngine {
     if (pause.pending) {
       if (!normalizedResolution) {
         return {
-          turn: { ...this.getTurn(scope), status: 'paused' },
+          turn: { ...await this.getTurn(scope), status: 'paused' },
           scheduled: false,
           locallyActive: false,
           terminal: false,
@@ -1033,20 +836,25 @@ export class TurnEngine {
         turnId,
         sequence: last.sequence + 1,
       })
-      const resumedEvent = await resumeEmitter('turn.resumed', {
-        resolution: normalizedResolution,
-        pausedSequence: pause.paused.sequence,
-      })
+      let resumedEvent
+      try {
+        resumedEvent = await resumeEmitter('turn.resumed', {
+          resolution: normalizedResolution,
+          pausedSequence: pause.paused.sequence,
+        })
+      } finally {
+        await resumeEmitter.close()
+      }
       resumeContext = {
         resolution: normalizedResolution,
         pausedSequence: pause.paused.sequence,
       }
       last = resumedEvent
       if (running?.promise) await running.promise
-      last = this.deps.lastEvent({ userId, sessionId, turnId }) || last
-      if (TERMINAL_TYPES.has(last?.type)) {
+      last = await this.deps.lastEvent({ userId, sessionId, turnId }) || last
+      if (isTerminalTurnEventType(last?.type)) {
         return {
-          turn: this.getTurn(scope),
+          turn: await this.getTurn(scope),
           scheduled: false,
           locallyActive: false,
           terminal: true,
@@ -1054,7 +862,7 @@ export class TurnEngine {
       }
     } else if (running) {
       return {
-        turn: this.getTurn(scope),
+        turn: await this.getTurn(scope),
         scheduled: false,
         locallyActive: true,
         terminal: false,
@@ -1062,27 +870,33 @@ export class TurnEngine {
     }
 
     const emitter = this.#createEmitter({ userId, sessionId, turnId, sequence: last.sequence + 1 })
-    const scheduled = this.#schedule({
+    const scheduled = await this.#schedule({
       userId,
       sessionId,
       turnId,
       turnStartedAt: started.createdAt,
       content: String(started.payload.content || ''),
       displayContent: String(started.payload.displayContent || started.payload.content || ''),
-      modelName: started.payload.modelName || null,
+      modelName: modelBinding.modelName,
+      modelProviderId: modelBinding.modelProviderId,
+      modelConfigRevision: modelBinding.modelConfigRevision,
+      modelRuntimeEnv: modelBinding.env,
+      modelMode: normalizeModelMode(started.payload.modelMode),
       agentId: normalizeOptionalId(started.payload.agentId),
       skillIds: normalizeIds(started.payload.skillIds),
-      skillDefinitions: prepareInlineSkillsForPrompt({
+      skillDefinitions: this.deps.prepareInlineSkills({
         skillIds: normalizeIds(started.payload.skillIds),
         skillDefinitions: started.payload.skillDefinitions,
       }),
       toolsConfig: normalizeServerToolsConfig(started.payload.toolsConfig),
       intentMode: normalizeTurnIntentMode(started.payload.intentMode),
+      approvalMode: normalizeTurnApprovalModeOverride(started.payload.approvalMode),
       resumeContext,
       emitter,
     })
+    if (!scheduled) await emitter.close()
     return {
-      turn: this.getTurn({ userId, sessionId, turnId }),
+      turn: await this.getTurn({ userId, sessionId, turnId }),
       scheduled,
       locallyActive: scheduled || this.active.has(key),
       terminal: false,
@@ -1090,124 +904,16 @@ export class TurnEngine {
   }
 
   async cancelTurn({ userId, sessionId, turnId, authMode = null }) {
-    if (!this.deps.readSession({ userId, sessionId }) && authMode === 'local') {
-      this.#claimLegacySession({ userId, sessionId, authMode })
-    }
-    const key = activeKey(userId, sessionId, turnId)
-    const running = this.active.get(key)
-    const scope = { userId, sessionId, turnId }
-    if (running) {
-      try { this.deps.runtimeCore.lease.requestCancellation(scope) } catch { /* local abort still applies */ }
-      running.controller.abort(abortError('TURN_CANCEL_REQUESTED', 'Cancelled by user'))
-      this.deps.runtimeCore.approval.release(scope)
-      return { ...this.getTurn({ userId, sessionId, turnId }), status: 'cancelling' }
-    }
-    const last = this.deps.lastEvent({ userId, sessionId, turnId })
-    if (!last) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
-    if (TERMINAL_TYPES.has(last.type)) return this.getTurn({ userId, sessionId, turnId })
-    let cancellationRequested = false
-    try { cancellationRequested = this.deps.runtimeCore.lease.requestCancellation(scope) } catch { /* fall through */ }
-    if (cancellationRequested) {
-      this.deps.runtimeCore.approval.release(scope)
-      return { ...this.getTurn({ userId, sessionId, turnId }), status: 'cancelling' }
-    }
-    const replayedEvents = replayPersistedTurnEvents(this.deps.replayEvents, scope)
-    const checkpoint = storedCheckpointEvent(this.deps.runtimeCore.checkpoint.load(scope))
-      || replayedEvents
-        .filter((event) => event.type === 'turn.checkpoint' && isRecord(event.payload?.state))
-        .at(-1)
-      || null
-    const checkpointState = isRecord(checkpoint?.payload?.state) ? checkpoint.payload.state : null
-    const started = replayedEvents.find((event) => event.type === 'turn.started') || null
-    const checkpointMessages = checkpointMessagesForTurn(checkpointState, {
-      content: started?.payload?.content,
-    })
-    const baselineToolCallIds = new Set()
-    const cancelledAt = this.deps.now()
-    const checkpointVerifiedLocalFiles = extractVerifiedLocalFiles(checkpointMessages, {
-      userId,
-      baselineToolCallIds,
-      verifiedAt: cancelledAt,
-    })
-    const verifiedLocalFiles = mergeLocalFileReceipts(
-      checkpointVerifiedLocalFiles,
-      latestVerifiedLocalFiles(this.deps.replayEvents, scope),
-    )
-    const checkpointRetainedLocalFiles = extractRetainedLocalFiles(checkpointMessages, {
-      userId,
-      baselineToolCallIds,
-      retainedAt: cancelledAt,
-    })
-    const retainedLocalFiles = excludeVerifiedLocalFiles(mergeLocalFileReceipts(
-      checkpointRetainedLocalFiles,
-      latestRetainedLocalFiles(this.deps.replayEvents, scope),
-    ), verifiedLocalFiles)
-    const artifactIds = normalizeArtifactIds(checkpointState?.artifactIds)
-    const deliveryArtifactIds = optionalDeliveryArtifactIds(checkpointState, [])
-    const iterations = Math.max(0, Number(checkpointState?.iterations) || 0)
-    const startedAt = started?.createdAt
-    const latestModelUsage = normalizeModelUsage(checkpointState?.latestModelUsage)
-    const turnModelUsage = normalizeModelUsage(checkpointState?.turnModelUsage) || latestModelUsage
-    const latestEstimatedPromptTokens = normalizePromptTokenEstimate(
-      checkpointState?.latestEstimatedPromptTokens,
-    )
-    const emit = this.#createEmitter({ userId, sessionId, turnId, sequence: last.sequence + 1 })
-    await emit('turn.cancelled', {
-      reason: 'Cancelled by user',
-      artifactIds,
-      deliveryArtifactIds,
-      verifiedLocalFiles,
-      retainedLocalFiles,
-      iterations,
-      ...(latestModelUsage ? { usage: latestModelUsage } : {}),
-      ...(turnModelUsage ? { turnModelUsage } : {}),
-      ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-    })
-    try {
-      this.deps.writeMessage({
-        id: `${turnId}:assistant`,
-        userId,
-        sessionId,
-        role: 'assistant',
-        content: 'Cancelled by user',
-        modelContext: {
-          ...buildAssistantModelContext({
-            turnId,
-            checkpointMessages,
-            baselineToolCallIds,
-            userId,
-            verifiedLocalFiles,
-            retainedLocalFiles,
-            artifactIds,
-            deliveryArtifactIds,
-            iterations,
-            compactionRecovery: checkpointState?.recovery || null,
-            usage: latestModelUsage,
-            turnModelUsage,
-            estimatedPromptTokens: latestEstimatedPromptTokens,
-            turnStartedAt: startedAt,
-            turnCompletedAt: cancelledAt,
-          }),
-          turnEvidence: true,
-          evidenceState: 'cancelled',
-        },
-        createdAt: cancelledAt,
-        updatedAt: cancelledAt,
-      })
-    } catch {
-      // The durable terminal event is authoritative; evidence projection is best-effort.
-    }
-    this.deps.runtimeCore.approval.release(scope)
-    return this.getTurn({ userId, sessionId, turnId })
+    return this.cancellationRuntime.cancel({ userId, sessionId, turnId, authMode })
   }
 
   waitForTurn({ userId, sessionId, turnId }) {
     return this.active.get(activeKey(userId, sessionId, turnId))?.promise || Promise.resolve()
   }
 
-  #claimLegacySession({ userId, sessionId, authMode }) {
+  async #claimLegacySession({ userId, sessionId, authMode }) {
     try {
-      return this.deps.claimSession({ userId, sessionId, authMode })
+      return await this.deps.claimSession({ userId, sessionId, authMode })
     } catch (error) {
       const wrapped = new TurnEngineError('SESSION_CLAIM_FAILED', 'failed to claim legacy session', 500)
       wrapped.cause = error
@@ -1216,52 +922,73 @@ export class TurnEngine {
   }
 
   #createEmitter({ userId, sessionId, turnId, sequence }) {
-    let nextSequence = sequence
-    let appendQueue = Promise.resolve()
-    return (type, payload = {}, { beforeAppend, checkpointState = null } = {}) => {
-      const pending = appendQueue.then(async () => {
-        const event = createTurnEvent({
-          id: this.deps.idFactory(), sessionId, turnId, sequence: nextSequence, type,
-          payload, createdAt: this.deps.now(),
-        })
-        await beforeAppend?.(event)
-        let stored
-        if (STREAM_DELTA_TYPES.includes(type) && checkpointState === null) {
-          const queued = this.deps.eventWriteBehind.enqueue({ userId, event, checkpointState })
-          stored = queued?.event || event
-        } else {
-          await this.deps.eventWriteBehind.flush()
-          stored = await this.deps.appendEvent({ userId, event, checkpointState })
-        }
-        nextSequence += 1
-        return stored
-      })
-      // A failed append must reject its own caller without permanently
-      // poisoning the per-turn queue used by later failure/terminal events.
-      appendQueue = pending.catch(() => {})
-      return pending
-    }
+    return this.deps.eventEmitterFactory({
+      userId,
+      sessionId,
+      turnId,
+      sequence,
+      idFactory: this.deps.idFactory,
+      now: this.deps.now,
+      appendEvent: this.deps.appendEvent,
+      verifyEventCommit: this.deps.verifyEventCommit,
+      createEventWriteBehind: this.deps.createEventWriteBehind,
+      recordEventWriteFailure: this.deps.recordEventWriteFailure,
+      recordEmergencyFailure: this.deps.recordEmergencyFailure,
+      createClosedError: () => new TurnEngineError(
+        'TURN_EVENT_EMITTER_CLOSED',
+        'turn event emitter is closed',
+        503,
+      ),
+      onWriterOpen: (writer) => this.eventWriters.add(writer),
+      onWriterClose: (writer) => this.eventWriters.delete(writer),
+    })
   }
 
-  #schedule(context) {
+  async #schedule(context) {
+    if (this.closing) return false
     const key = activeKey(context.userId, context.sessionId, context.turnId)
-    if (this.active.has(key)) return false
+    if (this.active.has(key) || this.scheduling.has(key)) return false
+    this.scheduling.add(key)
     const scope = { userId: context.userId, sessionId: context.sessionId, turnId: context.turnId }
-    const lease = this.deps.runtimeCore.lease.acquire(scope)
-    if (!lease) return false
-    const { controller } = lease
-    const releaseLease = () => lease.release()
-    const entry = { controller, promise: null, releaseLease }
-    this.active.set(key, entry)
-    entry.promise = Promise.resolve()
-      .then(() => this.#execute(context, controller.signal))
-      .finally(() => {
-        try { releaseLease?.() } finally {
-          if (this.active.get(key) === entry) this.active.delete(key)
-        }
-      })
-    entry.promise.catch(() => {})
-    return true
+    try {
+      const lease = await this.deps.runtimeCore.lease.acquire(scope)
+      if (!lease) return false
+      if (this.closing || this.active.has(key)) {
+        await lease.release()
+        return false
+      }
+      const { controller, executionLease = null } = lease
+      const releaseLease = () => lease.release()
+      const entry = { controller, executionLease, promise: null, releaseLease, emitter: context.emitter }
+      this.active.set(key, entry)
+      entry.promise = Promise.resolve()
+        .then(() => this.#execute({ ...context, executionLease }, controller.signal))
+        .finally(async () => {
+          let failure = null
+          let failed = false
+          try {
+            await context.emitter?.close?.()
+          } catch (error) {
+            failure = error
+            failed = true
+          }
+          try {
+            await releaseLease?.()
+            this.shutdownLeaseReleaseRetries.delete(releaseLease)
+          } catch (error) {
+            this.shutdownLeaseReleaseRetries.add(releaseLease)
+            failure = error
+            failed = true
+          } finally {
+            if (this.active.get(key) === entry) this.active.delete(key)
+          }
+          if (failed) throw failure
+        })
+      entry.promise.catch(() => {})
+      return true
+    } finally {
+      this.scheduling.delete(key)
+    }
   }
 
   async #execute({
@@ -1272,52 +999,71 @@ export class TurnEngine {
     content,
     displayContent,
     modelName,
+    modelProviderId,
+    modelConfigRevision,
+    modelRuntimeEnv,
+    modelMode,
     agentId,
     skillIds,
     skillDefinitions,
     toolsConfig,
     intentMode,
+    approvalMode,
     resumeContext,
     emitter,
+    executionLease = null,
   }, signal) {
     if (signal.aborted) {
       if (!lostTurnLease(signal)) {
         const cancelledAt = this.deps.now()
         const cancellationReason = signal.reason?.message || 'Cancelled by user'
+        const cancellationMessage = {
+          id: `${turnId}:assistant`,
+          userId,
+          sessionId,
+          role: 'assistant',
+          content: cancellationReason,
+          modelContext: {
+            ...buildAssistantModelContext({
+              turnId,
+              checkpointMessages: [],
+              baselineToolCallIds: new Set(),
+              userId,
+              verifiedLocalFiles: [],
+              retainedLocalFiles: [],
+              artifactIds: [],
+              deliveryArtifactIds: [],
+              iterations: 0,
+              turnStartedAt,
+              turnCompletedAt: cancelledAt,
+            }),
+            turnEvidence: true,
+            evidenceState: 'cancelled',
+          },
+          createdAt: cancelledAt,
+          updatedAt: cancelledAt,
+        }
+        const atomicTurnBoundary = typeof this.deps.commitTurnBoundary === 'function'
         await emitter('turn.cancelled', {
           reason: cancellationReason,
           verifiedLocalFiles: [],
           retainedLocalFiles: [],
-        })
-        try {
-          this.deps.writeMessage({
-            id: `${turnId}:assistant`,
-            userId,
-            sessionId,
-            role: 'assistant',
-            content: cancellationReason,
-            modelContext: {
-              ...buildAssistantModelContext({
-                turnId,
-                checkpointMessages: [],
-                baselineToolCallIds: new Set(),
+        }, {
+          commitEvent: atomicTurnBoundary
+            ? ({ event }) => this.deps.commitTurnBoundary({
                 userId,
-                verifiedLocalFiles: [],
-                retainedLocalFiles: [],
-                artifactIds: [],
-                deliveryArtifactIds: [],
-                iterations: 0,
-                turnStartedAt,
-                turnCompletedAt: cancelledAt,
-              }),
-              turnEvidence: true,
-              evidenceState: 'cancelled',
-            },
-            createdAt: cancelledAt,
-            updatedAt: cancelledAt,
-          })
-        } catch {
-          // The durable terminal event is authoritative; evidence projection is best-effort.
+                event,
+                message: cancellationMessage,
+                executionLease,
+              })
+            : null,
+        })
+        if (!atomicTurnBoundary) {
+          try {
+            await this.deps.writeMessage(cancellationMessage)
+          } catch {
+            // Legacy injected stores retain the event-authoritative behavior.
+          }
         }
       }
       return
@@ -1326,8 +1072,12 @@ export class TurnEngine {
     const effectiveTurnStartedAt = Number.isFinite(Number(turnStartedAt))
       ? Math.max(0, Number(turnStartedAt))
       : this.deps.now()
-    const checkpoint = storedCheckpointEvent(this.deps.runtimeCore.checkpoint.load(checkpointScope))
-      || latestLegacyCheckpoint(this.deps.replayEvents, checkpointScope)
+    const storedCheckpoint = storedCheckpointEvent(
+      await this.deps.runtimeCore.checkpoint.load(checkpointScope),
+    )
+    const checkpoint = storedCheckpoint
+      || await latestLegacyCheckpoint(this.deps.replayEvents, checkpointScope)
+    let latestCheckpointSequence = Number.isInteger(checkpoint?.sequence) ? checkpoint.sequence : null
     const restoredCheckpointState = checkpointStateForResolution(checkpoint?.payload?.state, resumeContext)
     const steeringOwnerId = normalizeOptionalId(this.deps.runtimeCore.lease.ownerId)
     const steeringScope = { userId, sessionId, turnId, ownerId: steeringOwnerId }
@@ -1335,19 +1085,19 @@ export class TurnEngine {
       const appliedSteeringIds = Array.isArray(checkpoint?.payload?.state?.appliedSteeringIds)
         ? checkpoint.payload.state.appliedSteeringIds
         : []
-      this.deps.acknowledgeAppliedSteering({
+      await this.deps.acknowledgeAppliedSteering({
         ...steeringScope,
         steeringIds: appliedSteeringIds,
         now: this.deps.now(),
       })
-      this.deps.releaseStaleSteering({ ...steeringScope, now: this.deps.now() })
+      await this.deps.releaseStaleSteering({ ...steeringScope, now: this.deps.now() })
     }
-    let pendingRecoveryAttempt = recoveryAttemptAfterCheckpoint(
+    let pendingRecoveryAttempt = await recoveryAttemptAfterCheckpoint(
       this.deps.replayEvents,
       { userId, sessionId, turnId },
       checkpoint,
     )
-    const storedMessages = this.deps.readMessages({ userId, sessionId, limit: 500, recent: true })
+    const storedMessages = (await this.deps.readMessages({ userId, sessionId, limit: 500, recent: true }))
       .filter((message) => !isTemporaryTurnEvidence(message, turnId))
       .filter((message) => !(
         message?.id === `${turnId}:assistant`
@@ -1361,54 +1111,66 @@ export class TurnEngine {
         ? { ...message, content }
         : message)
     const currentUserMessage = storedMessages.find((message) => message.id === `${turnId}:user`)
-    const previousUserPrompt = this.deps.readPreviousUserMessage({
+    const previousUserPrompt = (await this.deps.readPreviousUserMessage({
       userId,
       sessionId,
       messageId: `${turnId}:user`,
-    })?.content || ''
+    }))?.content || ''
     const managedAttachments = Array.isArray(currentUserMessage?.modelContext?.attachments)
       ? currentUserMessage.modelContext.attachments
       : []
-    let canaryAssignment = null
-    try {
-      canaryAssignment = await this.deps.resolveCanaryAssignment({
-        userId,
-        sessionId,
-        turnId,
-        env: this.deps.env,
-        now: this.deps.now(),
-      })
-    } catch (error) {
-      // Canary routing is optional and must fail closed to the baseline prompt.
-      try { logWarn('evolution.canary.resolve', error, { userId, sessionId, turnId }) } catch { /* optional */ }
-    }
+    const restoredPromptContextSnapshot = normalizePromptContextSnapshot(
+      restoredCheckpointState?.promptContextSnapshot,
+    )
+    let canaryAssignment = restoredPromptContextSnapshot?.canaryAssignment || null
     let promptContext = {
       messages: [],
-      effectiveAgentId: agentId,
-      skillIds,
-      memoryIds: [],
-      pluginPromptBlockIds: [],
+      effectiveAgentId: restoredPromptContextSnapshot?.effectiveAgentId || agentId,
+      skillIds: restoredPromptContextSnapshot?.skillIds || skillIds,
+      memoryIds: restoredPromptContextSnapshot?.memoryIds || [],
+      pluginPromptBlockIds: restoredPromptContextSnapshot?.pluginPromptBlockIds || [],
       compactionArchiveId: null,
       compactionBoundary: null,
-      canaryAssignment: null,
+      canaryAssignment,
     }
-    try {
-      promptContext = await this.deps.preparePromptContext({
-        userId,
-        agentId,
-        skillIds,
-        skillDefinitions,
-        sessionId,
-        recentMessages: storedMessages,
-        includeRecentTranscript: false,
-        query: content,
-        canaryAssignment,
-        env: this.deps.env,
-      }) || promptContext
-    } catch {
-      // Optional memory/agent/skill/canary context must never prevent a turn from running.
-      canaryAssignment = null
+    if (!restoredPromptContextSnapshot) {
+      try {
+        canaryAssignment = await this.deps.resolveCanaryAssignment({
+          userId,
+          sessionId,
+          turnId,
+          env: this.deps.env,
+          now: this.deps.now(),
+        })
+      } catch (error) {
+        // Canary routing is optional and must fail closed to the baseline prompt.
+        try { logWarn('evolution.canary.resolve', error, { userId, sessionId, turnId }) } catch { /* optional */ }
+      }
+      try {
+        promptContext = await this.deps.preparePromptContext({
+          userId,
+          agentId,
+          skillIds,
+          skillDefinitions,
+          sessionId,
+          recentMessages: storedMessages,
+          includeRecentTranscript: false,
+          query: content,
+          canaryAssignment,
+          env: this.deps.env,
+        }) || promptContext
+      } catch {
+        // Optional memory/agent/skill/canary context must never prevent a turn from running.
+        canaryAssignment = null
+      }
     }
+    const promptContextSnapshot = restoredPromptContextSnapshot || normalizePromptContextSnapshot({
+      effectiveAgentId: promptContext.effectiveAgentId || agentId,
+      skillIds: promptContext.skillIds,
+      memoryIds: promptContext.memoryIds,
+      pluginPromptBlockIds: promptContext.pluginPromptBlockIds,
+      canaryAssignment: canaryAssignment || promptContext.canaryAssignment,
+    })
     const selectedStoredMessages = selectStoredMessagesAfterCompaction(
       storedMessages,
       promptContext.compactionBoundary,
@@ -1422,69 +1184,40 @@ export class TurnEngine {
       ...(Array.isArray(promptContext.messages) ? promptContext.messages : []),
       ...historyMessages,
     ]
+    const toolResolutionMessages = Array.isArray(restoredCheckpointState?.messages)
+      ? restoredCheckpointState.messages
+      : messages
     const attachmentIdsForFirstModelRequest = selectAttachmentIdsForModelRequest(messages, {
       currentAttachmentIds: managedAttachments.map((attachment) => attachment.id),
       prompt: content,
     })
-    let shouldInlineManagedAttachments = attachmentIdsForFirstModelRequest.length > 0
-    const effectiveToolsConfig = applyDirectoryAuthorizationToolsConfig(
+    const {
+      normalizedModelMode,
+      chatOnlyMode,
+      effectiveToolsConfig,
+      effectiveIntentMode,
+      effectiveSkillIds,
+      activeSkillId,
+      currentApprovalMode,
+      effectiveApprovalMode,
+      resolvedToolSpecs,
+      toolResolutionDecision,
+      modelToolFileAccessStatus,
+    } = await this.executionToolContextRuntime.resolve({
+      userId,
+      content,
+      modelMode,
       toolsConfig,
-      resumeContext?.resolution,
-    )
-    const effectiveIntentMode = resumeContext?.resolution?.type === 'directory_authorization'
-      && resumeContext.resolution.access_mode === 'read_write'
-      ? 'execute'
-      : normalizeTurnIntentMode(intentMode)
-    const preparedSkillIds = normalizeIds(promptContext.skillIds)
-    const effectiveSkillIds = preparedSkillIds.length ? preparedSkillIds : normalizeIds(skillIds)
-    const effectiveApprovalMode = this.deps.readApprovalMode({ userId })
-    let resolvedToolSpecs = this.deps.toolSpecs
-    let toolResolutionDecision = null
-    try {
-      const authorizationAwareBaseSpecs = restoreDirectoryAuthorizationToolSpecs(
-        this.deps.toolSpecs,
-        resumeContext?.resolution,
-        SERVER_TOOL_SPECS,
-      )
-      const resolved = await this.deps.resolveToolSpecs({
-        userId,
-        baseSpecs: authorizationAwareBaseSpecs,
-        toolsConfig: effectiveToolsConfig,
-        permissionMode: effectiveApprovalMode,
-        prompt: content,
-        messages,
-        skillIds: effectiveSkillIds,
-        onDecision: (decision) => { toolResolutionDecision = decision },
-      })
-      if (Array.isArray(resolved)) {
-        resolvedToolSpecs = resolved
-        if (!toolResolutionDecision) {
-          toolResolutionDecision = {
-            version: 1,
-            eligibleToolNames: resolved
-              .map((spec) => String(spec?.function?.name || '').trim())
-              .filter(Boolean)
-              .sort()
-              .slice(0, 256),
-            excludedTools: [],
-            discoveryIssues: [],
-          }
-        }
-      }
-    } catch {
-      // MCP/browser discovery is optional; retain the built-in tool set on failure.
-      toolResolutionDecision = {
-        version: 1,
-        eligibleToolNames: resolvedToolSpecs
-          .map((spec) => String(spec?.function?.name || '').trim())
-          .filter(Boolean)
-          .sort()
-          .slice(0, 256),
-        excludedTools: [],
-        discoveryIssues: [{ source: 'tool_resolution', reason: 'discovery_failed' }],
-      }
-    }
-    const activeSkillId = effectiveSkillIds.at(0) || null
+      intentMode,
+      approvalMode,
+      resumeResolution: resumeContext?.resolution,
+      restoredCheckpointState,
+      promptContextSkillIds: promptContextSnapshot?.skillIds || promptContext.skillIds,
+      fallbackSkillIds: skillIds,
+      toolResolutionMessages,
+      baseToolSpecs: this.deps.toolSpecs,
+      directoryAuthorizationToolSpecs: this.deps.directoryAuthorizationToolSpecs,
+    })
     const baselineToolCallIds = new Set()
     let checkpointMessages = checkpointMessagesForTurn(restoredCheckpointState, { content })
     let checkpointArtifactIds = normalizeArtifactIds(restoredCheckpointState?.artifactIds)
@@ -1497,10 +1230,15 @@ export class TurnEngine {
     let latestEstimatedPromptTokens = normalizePromptTokenEstimate(
       restoredCheckpointState?.latestEstimatedPromptTokens,
     )
-    const recordCanaryTerminal = (terminalState, errorCode = null, completedAt = this.deps.now()) => {
+    const recordCanaryTerminal = async (
+      terminalState,
+      errorCode = null,
+      completedAt = this.deps.now(),
+      evaluationOutput = '',
+    ) => {
       if (!canaryAssignment?.id) return
       try {
-        this.deps.recordCanaryOutcome({
+        await this.deps.recordCanaryOutcome({
           userId,
           sessionId,
           turnId,
@@ -1510,6 +1248,11 @@ export class TurnEngine {
           errorCode,
           effectiveVariant: canaryAssignment.variant,
           decisionReason: canaryAssignment.decisionReason,
+          modelProviderId,
+          modelName,
+          modelConfigRevision,
+          evaluationInput: content,
+          evaluationOutput,
           env: this.deps.env,
           now: completedAt,
         })
@@ -1517,7 +1260,9 @@ export class TurnEngine {
         try { logWarn('evolution.canary.outcome', error, { userId, sessionId, turnId }) } catch { /* optional */ }
       }
     }
-    let streamedAssistantText = String(pendingRecoveryAttempt?.assistantText || '')
+    let streamedAssistantText = String(
+      pendingRecoveryAttempt?.assistantText || restoredCheckpointState?.retryAssistantText || '',
+    )
     const verifiedLocalFilesAt = (verifiedAt = this.deps.now()) => extractVerifiedLocalFiles(
       checkpointMessages,
       { userId, baselineToolCallIds, verifiedAt },
@@ -1532,7 +1277,8 @@ export class TurnEngine {
         retainedAt,
       }).filter((file) => !verifiedIds.has(String(file?.id || '').trim()))
     }
-    const persistTurnEvidence = ({
+    const atomicTurnBoundary = typeof this.deps.commitTurnBoundary === 'function'
+    const createTurnEvidenceMessage = ({
       state,
       text,
       artifactIds,
@@ -1542,18 +1288,37 @@ export class TurnEngine {
       serverLastSequence = null,
       verifiedLocalFiles = null,
       retainedLocalFiles = null,
+      blockedRecovery = null,
+      writtenAt = this.deps.now(),
     }) => {
       const evidenceText = String(text || '').trim() || error?.message || 'Turn execution did not complete.'
       const evidenceArtifacts = normalizeArtifactIds(artifactIds)
       const evidenceIterations = Math.max(0, Number(iterations) || 0)
-      const writtenAt = this.deps.now()
       const evidenceVerifiedLocalFiles = Array.isArray(verifiedLocalFiles)
         ? verifiedLocalFiles
         : verifiedLocalFilesAt(writtenAt)
       const evidenceRetainedLocalFiles = Array.isArray(retainedLocalFiles)
         ? retainedLocalFiles
         : retainedLocalFilesAt(writtenAt, evidenceVerifiedLocalFiles)
-      this.deps.writeMessage({
+      const recoveryKind = state === 'blocked' && blockedRecovery?.requiresUserVerification === true
+        ? String(blockedRecovery.recoveryKind || '').trim()
+        : ''
+      const recoveryToolCallId = recoveryKind === 'side_effect_outcome_unknown'
+        ? normalizeOptionalId(blockedRecovery.toolCallId)
+        : null
+      const recoveryModelRequestId = recoveryKind === 'model_request_outcome_unknown'
+        ? normalizeOptionalId(blockedRecovery.modelRequestId)
+        : null
+      const evidenceRecovery = ['side_effect_outcome_unknown', 'model_request_outcome_unknown'].includes(recoveryKind)
+        ? {
+            recoveryKind,
+            requiresUserVerification: true,
+            ...(recoveryToolCallId ? { toolCallId: recoveryToolCallId } : {}),
+            ...(recoveryModelRequestId ? { modelRequestId: recoveryModelRequestId } : {}),
+            recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
+          }
+        : null
+      return {
         id: `${turnId}:assistant`,
         userId,
         sessionId,
@@ -1570,7 +1335,7 @@ export class TurnEngine {
             artifactIds: evidenceArtifacts,
             deliveryArtifactIds,
             iterations: evidenceIterations,
-            pluginPromptBlockIds: promptContext.pluginPromptBlockIds,
+            pluginPromptBlockIds: promptContextSnapshot?.pluginPromptBlockIds,
             compactionRecovery: checkpointRecovery,
             usage: latestModelUsage,
             turnModelUsage,
@@ -1584,30 +1349,343 @@ export class TurnEngine {
             ? { serverLastSequence }
             : {}),
           ...(error ? { error } : {}),
+          ...(evidenceRecovery ? { recovery: evidenceRecovery } : {}),
         },
         createdAt: writtenAt,
         updatedAt: writtenAt,
+      }
+    }
+    const persistTurnEvidence = async (options) => {
+      const message = createTurnEvidenceMessage(options)
+      await this.deps.writeMessage(message)
+      return message.content
+    }
+    const commitBoundaryEvent = ({ event, message }) => this.deps.commitTurnBoundary({
+      userId,
+      event,
+      message,
+      executionLease,
+    })
+    const evidenceBoundaryOptions = (options, {
+      legacyBeforeAppend = false,
+    } = {}) => {
+      if (atomicTurnBoundary) {
+        return {
+          commitEvent: ({ event }) => commitBoundaryEvent({
+            event,
+            message: createTurnEvidenceMessage({
+              ...options,
+              serverLastSequence: event.sequence,
+            }),
+          }),
+        }
+      }
+      if (legacyBeforeAppend) {
+        return {
+          beforeAppend: (event) => persistTurnEvidence({
+            ...options,
+            serverLastSequence: event.sequence,
+          }),
+        }
+      }
+      return {}
+    }
+    const emitFailedTerminal = async (sourceError) => {
+      const originalError = sourceError
+      const artifactIds = normalizeArtifactIds(originalError?.artifactIds ?? checkpointArtifactIds)
+      const deliveryArtifactIds = optionalDeliveryArtifactIds(originalError, [])
+      const iterations = Math.max(0, Number(originalError?.iterations) || checkpointIterations)
+      const failedAt = this.deps.now()
+      const verifiedLocalFiles = verifiedLocalFilesAt(failedAt)
+      const retainedLocalFiles = retainedLocalFilesAt(failedAt, verifiedLocalFiles)
+      let activeError = findEventPersistenceFailure(sourceError) || sourceError
+
+      // The first turn.failed attempt can itself be the durability barrier that
+      // discovers an earlier deferred delta failure. That barrier performs no
+      // terminal append, so one retry with the persistence failure as the
+      // authoritative cause is safe. A direct append failure has unknown
+      // outcome and must never be retried blindly.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const failure = normalizeFailure(activeError)
+        const partialText = publicIncompleteText(
+          originalError?.partialText || originalError?.text || streamedAssistantText,
+          failure.message,
+        )
+        const evidenceOptions = {
+          state: 'failed',
+          text: partialText,
+          artifactIds,
+          deliveryArtifactIds,
+          iterations,
+          error: failure,
+          verifiedLocalFiles,
+          retainedLocalFiles,
+          writtenAt: failedAt,
+        }
+        try {
+          await emitter('turn.failed', {
+            code: failure.code,
+            message: failure.message,
+            error: failure,
+            partialText,
+            artifactIds,
+            ...deliveryArtifactFields(deliveryArtifactIds),
+            verifiedLocalFiles,
+            retainedLocalFiles,
+            iterations,
+            ...(latestModelUsage ? { usage: latestModelUsage } : {}),
+            ...(turnModelUsage ? { turnModelUsage } : {}),
+            ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
+          }, evidenceBoundaryOptions(evidenceOptions))
+          if (!atomicTurnBoundary) {
+            try {
+              await persistTurnEvidence(evidenceOptions)
+            } catch {
+              // Legacy injected stores retain the event-authoritative behavior.
+            }
+          }
+          await recordCanaryTerminal('failed', failure.code, failedAt, partialText)
+          return
+        } catch (terminalError) {
+          const deferredFailure = findEventPersistenceFailure(terminalError)
+          if (deferredFailure && attempt === 0) {
+            activeError = deferredFailure
+            continue
+          }
+          throw createTerminalPersistenceFailure(terminalError)
+        }
+      }
+    }
+    const emitBlockedRecovery = async (sourceError) => {
+      const failure = normalizeFailure(sourceError, { retryable: false })
+      const sideEffectUnknown = failure.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN'
+        && sourceError?.unsafeToReplay === true
+        && sourceError?.requiresUserVerification === true
+      const modelRequestUnknown = failure.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+        && sourceError?.unsafeToReplay === true
+      const recoveryToolCallId = sideEffectUnknown
+        ? normalizeOptionalId(sourceError?.sideEffectExecution?.toolCallId)
+        : null
+      const recoveryModelRequestId = modelRequestUnknown
+        ? normalizeOptionalId(sourceError?.modelRequestId || sourceError?.modelInvocation?.id)
+        : null
+      const blockedAt = this.deps.now()
+      const verifiedLocalFiles = verifiedLocalFilesAt(blockedAt)
+      const retainedLocalFiles = retainedLocalFilesAt(blockedAt, verifiedLocalFiles)
+      const blockedMessage = sideEffectUnknown
+        ? 'Operation outcome is uncertain. Automatic retry was blocked; verify it in Settings > Operation recovery.'
+        : modelRequestUnknown
+          ? '模型请求在中断前可能已被上游接受。为避免再次请求并产生额外的上游模型供应商费用，系统已阻止自动重试；请在“设置 > 恢复”中核对并裁决该请求。'
+        : failure.message
+      const blockedRecovery = sideEffectUnknown
+        ? {
+            recoveryKind: 'side_effect_outcome_unknown',
+            requiresUserVerification: true,
+            ...(recoveryToolCallId ? { toolCallId: recoveryToolCallId } : {}),
+          }
+        : modelRequestUnknown
+          ? {
+              recoveryKind: 'model_request_outcome_unknown',
+              requiresUserVerification: true,
+              ...(recoveryModelRequestId ? { modelRequestId: recoveryModelRequestId } : {}),
+            }
+          : null
+      const blockedEvidenceOptions = {
+        state: 'blocked',
+        text: blockedMessage,
+        artifactIds: checkpointArtifactIds,
+        deliveryArtifactIds: optionalDeliveryArtifactIds(
+          { deliveryArtifactIds: checkpointDeliveryArtifactIds },
+          [],
+        ),
+        iterations: checkpointIterations,
+        error: { ...failure, message: blockedMessage, retryable: false },
+        verifiedLocalFiles,
+        retainedLocalFiles,
+        blockedRecovery,
+        writtenAt: blockedAt,
+      }
+      const blockedEvent = await emitter('turn.blocked', {
+        code: failure.code,
+        message: blockedMessage,
+        retryable: false,
+        manualRetryable: true,
+        recoveryStatus: 'dead_letter',
+        ...(sideEffectUnknown ? {
+          turnId,
+          requiresUserVerification: true,
+          recoveryKind: 'side_effect_outcome_unknown',
+          ...(recoveryToolCallId ? { toolCallId: recoveryToolCallId } : {}),
+          recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
+        } : {}),
+        ...(modelRequestUnknown ? {
+          turnId,
+          requiresUserVerification: true,
+          recoveryKind: 'model_request_outcome_unknown',
+          ...(recoveryModelRequestId ? { modelRequestId: recoveryModelRequestId } : {}),
+          recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
+        } : {}),
+        checkpointSequence: latestCheckpointSequence,
+        artifactIds: normalizeArtifactIds(checkpointArtifactIds),
+        deliveryArtifactIds: optionalDeliveryArtifactIds(
+          { deliveryArtifactIds: checkpointDeliveryArtifactIds },
+          [],
+        ),
+        verifiedLocalFiles,
+        retainedLocalFiles,
+        iterations: checkpointIterations,
+      }, evidenceBoundaryOptions(blockedEvidenceOptions))
+      if (!atomicTurnBoundary) {
+        try {
+          await persistTurnEvidence({
+            ...blockedEvidenceOptions,
+            serverLastSequence: blockedEvent.sequence,
+          })
+        } catch {
+          // Legacy injected stores retain the event-authoritative behavior.
+        }
+      }
+      await this.deps.writeRecoveryFailure({
+        userId,
+        sessionId,
+        turnId,
+        candidateVersion: recoveryCandidateVersion(blockedEvent),
+        retryable: false,
+        errorCode: failure.code,
+        errorMessage: failure.message,
+        now: blockedEvent.createdAt,
       })
-      return evidenceText
     }
     let contextWindow
     try {
       contextWindow = this.deps.getContextWindow({
-        userId,
+        userId: modelRuntimeEnv ? null : userId,
         modelName: modelName || undefined,
-        env: this.deps.env,
+        modelProviderId: modelRuntimeEnv ? undefined : (modelProviderId || undefined),
+        env: modelRuntimeEnv || this.deps.env,
       })
     } catch {
       // Endpoint metadata is advisory; model execution remains available if discovery fails.
     }
     try {
+      const executionFileAccess = modelToolFileAccessStatus
+        ?? this.deps.readFileAccessStatus({ userId })
+      const executionRuntimePlugins = this.deps.readRuntimePlugins()
+      let executionRuntimePluginStates
+      try {
+        executionRuntimePluginStates = this.deps.readRuntimePluginStates({
+          verifyActiveReleases: true,
+        })
+      } catch (error) {
+        if (restoredCheckpointState
+          && String(error?.code || '').trim() === 'PLUGIN_RELEASE_CORRUPT') {
+          error.retryable = false
+          error.unsafeToReplay = true
+        }
+        throw error
+      }
+      const toolImplementations = this.deps.resolveToolImplementationRevisions({
+        userId,
+        toolSpecs: resolvedToolSpecs,
+      })
+      const runtimePolicyProvenance = this.deps.readRuntimePolicyProvenance()
+      const observedExecutionEnvironment = createTurnExecutionEnvironmentSnapshot({
+        modelName,
+        modelProviderId,
+        modelConfigRevision,
+        modelMode: normalizedModelMode,
+        approvalMode: currentApprovalMode,
+        policy: runtimePolicyProvenance,
+        toolsConfig: effectiveToolsConfig,
+        toolSpecs: resolvedToolSpecs,
+        toolImplementations,
+        fileAccess: executionFileAccess,
+        runtimePlugins: executionRuntimePlugins,
+        runtimePluginStates: executionRuntimePluginStates,
+      })
+      const effectiveExecutionEnvironment = createTurnExecutionEnvironmentSnapshot({
+        modelName,
+        modelProviderId,
+        modelConfigRevision,
+        modelMode: normalizedModelMode,
+        approvalMode: effectiveApprovalMode,
+        policy: runtimePolicyProvenance,
+        toolsConfig: effectiveToolsConfig,
+        toolSpecs: resolvedToolSpecs,
+        toolImplementations,
+        fileAccess: executionFileAccess,
+        runtimePlugins: executionRuntimePlugins,
+        runtimePluginStates: executionRuntimePluginStates,
+      })
+      const restoredExecutionEnvironment = restoredCheckpointState?.executionEnvironment
+      if (restoredCheckpointState) {
+        assertTurnExecutionEnvironmentCompatible(
+          restoredExecutionEnvironment,
+          observedExecutionEnvironment,
+          { directoryAuthorization: resumeContext?.resolution },
+        )
+        assertTurnExecutionEnvironmentCompatible(
+          restoredExecutionEnvironment,
+          effectiveExecutionEnvironment,
+          { directoryAuthorization: resumeContext?.resolution },
+        )
+      }
+      const runTurnModelRequest = this.deps.modelRequestRunnerFactory({
+        runModel: this.deps.runModel,
+        prepareAttachments: this.deps.prepareAttachments,
+        publishActivity: this.deps.publishActivity,
+        emitEvent: emitter,
+        userId,
+        sessionId,
+        turnId,
+        modelName,
+        modelProviderId,
+        modelRuntimeEnv,
+        modelMode: normalizedModelMode,
+        env: this.deps.env,
+        contextWindow,
+        firstRequestAttachmentIds: attachmentIdsForFirstModelRequest,
+        pendingRecoveryAttempt,
+        onRecoveryAttempt: (attempt) => {
+          streamedAssistantText = String(attempt?.assistantText || '')
+        },
+        onPromptTokenEstimate: (value) => {
+          latestEstimatedPromptTokens = normalizePromptTokenEstimate(value)
+        },
+        now: this.deps.now,
+      })
+      if (typeof runTurnModelRequest !== 'function') {
+        throw new TypeError('modelRequestRunnerFactory must return a runModel function')
+      }
+      const reconcileTurnModelRequest = async (invocation) => {
+        const manualResolution = typeof this.deps.readModelRequestResolution === 'function'
+          ? await this.deps.readModelRequestResolution({
+              userId,
+              sessionId,
+              turnId,
+              invocation,
+            })
+          : null
+        if (manualResolution) return manualResolution
+        if (typeof this.deps.reconcileModelRequest !== 'function') return null
+        return this.deps.reconcileModelRequest({
+          invocation,
+          modelName,
+          modelProviderId,
+          modelConfigRevision,
+          env: modelRuntimeEnv || this.deps.env,
+        })
+      }
       const result = await this.deps.runLoop({
         job: {
           id: turnId,
           userId,
           sessionId,
           modelName: String(modelName || '').trim() || null,
-          agentId: promptContext.effectiveAgentId || agentId || null,
+          modelProviderId: normalizeOptionalId(modelProviderId),
+          modelConfigRevision: normalizePositiveInteger(modelConfigRevision),
+          modelMode: normalizedModelMode,
+          agentId: promptContextSnapshot?.effectiveAgentId || promptContext.effectiveAgentId || agentId || null,
           skillIds: effectiveSkillIds,
           skillDefinitions,
           origin: 'chat',
@@ -1631,7 +1709,9 @@ export class TurnEngine {
         fallbackToolSpecs: resolvedToolSpecs,
         toolResolutionDecision,
         skillId: activeSkillId,
-        executeTool: this.deps.executeTool,
+        executeTool: chatOnlyMode
+          ? async () => { throw createChatOnlyToolExecutionError() }
+          : this.deps.executeTool,
         approvalOrigin: 'chat',
         approvalSessionId: sessionId,
         approvalMode: effectiveApprovalMode,
@@ -1657,7 +1737,7 @@ export class TurnEngine {
           : null,
         beforeFinalCompletion: steeringOwnerId
           ? async () => {
-              const decision = this.deps.runtimeCore.lease.closeSteeringInbox({ userId, sessionId, turnId })
+              const decision = await this.deps.runtimeCore.lease.closeSteeringInbox({ userId, sessionId, turnId })
               if (!decision?.closed && decision?.reason !== 'pending') {
                 throw abortError('TURN_LEASE_LOST', 'Turn execution lease was lost before completion')
               }
@@ -1665,13 +1745,28 @@ export class TurnEngine {
             }
           : null,
         loadCheckpoint: async () => restoredCheckpointState || null,
+        reconcileModelRequest: reconcileTurnModelRequest,
         saveCheckpoint: async (state) => {
+          if (!this.deps.supportsAtomicCheckpointState) {
+            const error = new TurnEngineError(
+              ATOMIC_CHECKPOINT_UNSUPPORTED_CODE,
+              'The configured turn event adapter does not support atomic checkpoint state commits.',
+              503,
+            )
+            error.retryable = false
+            error.unsafeToReplay = true
+            throw error
+          }
           checkpointMessages = checkpointMessagesForTurn(state, {
             content,
             fallback: checkpointMessages,
           })
           const checkpointState = {
             ...state,
+            approvalMode: effectiveApprovalMode,
+            modelMode: normalizedModelMode,
+            executionEnvironment: effectiveExecutionEnvironment,
+            promptContextSnapshot,
             turnMessages: checkpointMessages,
             ...(latestModelUsage ? { latestModelUsage } : {}),
             ...(turnModelUsage ? { turnModelUsage } : {}),
@@ -1693,126 +1788,34 @@ export class TurnEngine {
             checkpointVersion: 1,
             iterations: checkpointIterations,
             toolCallCount: Array.isArray(checkpointState?.toolCalls) ? checkpointState.toolCalls.length : 0,
-          }, { checkpointState })
-          let saved = this.deps.runtimeCore.checkpoint.load({ userId, sessionId, turnId })
+          }, {
+            checkpointState,
+            commitEvent: typeof this.deps.commitTurnCheckpoint === 'function'
+                ? ({ event, checkpointState: durableState }) => this.deps.commitTurnCheckpoint({
+                    userId,
+                    event,
+                    checkpointState: durableState,
+                    executionLease,
+                  })
+              : null,
+          })
+          const saved = await this.deps.runtimeCore.checkpoint.load({ userId, sessionId, turnId })
           if (saved?.eventSequence !== checkpointEvent.sequence) {
-            // Custom event-store adapters may not implement the atomic
-            // checkpointState extension. Preserve dependency compatibility
-            // with a post-append upsert fallback.
-            saved = await this.deps.runtimeCore.checkpoint.save(
-              { userId, sessionId, turnId },
-              checkpointState,
-              {
-                eventSequence: checkpointEvent.sequence,
-                now: checkpointEvent.createdAt,
-              },
+            const error = new TurnEngineError(
+              ATOMIC_CHECKPOINT_COMMIT_MISMATCH_CODE,
+              'The turn event adapter acknowledged a checkpoint event without atomically committing its state.',
+              503,
             )
+            error.retryable = false
+            error.unsafeToReplay = true
+            error.eventSequence = checkpointEvent.sequence
+            throw error
           }
           if (!saved?.state) throw new Error('Failed to persist turn checkpoint')
+          latestCheckpointSequence = checkpointEvent.sequence
           return true
         },
-        runModel: async (request) => {
-          if (pendingRecoveryAttempt) {
-            const attempt = pendingRecoveryAttempt
-            pendingRecoveryAttempt = null
-            streamedAssistantText = String(attempt.assistantText || '')
-            await emitter('turn.attempt', attempt)
-          }
-          const inlineAttachmentIds = shouldInlineManagedAttachments
-            ? attachmentIdsForFirstModelRequest
-            : []
-          shouldInlineManagedAttachments = false
-          const materializationOptions = { userId, sessionId }
-          let providerMessages
-          if (inlineAttachmentIds.length > 0) {
-            // Context compaction prices the lightweight stored surface. Build a
-            // reference-only provider projection first so attachment bytes and
-            // extracted text receive only the genuinely remaining request budget.
-            const referenceMessages = await materializeManagedAttachmentMessages(request.messages, {
-              ...materializationOptions,
-              prepareAttachments: this.deps.prepareAttachments,
-              inlineAttachmentIds: [],
-            })
-            const threshold = getAutoCompactionThreshold(
-              contextWindow,
-              this.deps.env?.MODEL_ACTIVE_CONTEXT_TOKENS,
-            )
-            const referenceTokens = estimateContextTokens(referenceMessages, request.tools)
-            const maxAttachmentTokens = Math.max(
-              0,
-              threshold - referenceTokens - ATTACHMENT_CONTEXT_HEADROOM_TOKENS,
-            )
-            providerMessages = maxAttachmentTokens > 0
-              ? await materializeManagedAttachmentMessages(request.messages, {
-                  ...materializationOptions,
-                  prepareAttachments: (attachmentRequest) => this.deps.prepareAttachments({
-                    ...attachmentRequest,
-                    maxAttachmentTokens,
-                  }),
-                  inlineAttachmentIds,
-                })
-              : referenceMessages
-
-            // Re-price text/tool context after expansion and independently
-            // enforce the raw inline-media budget. Visual models do not tokenize
-            // base64 as text, but very large media still must not bypass the
-            // attachment allocation merely because its visual token cost is low.
-            if (
-              inlineMediaProjectionTokens(providerMessages) > maxAttachmentTokens
-              || estimateContextTokens(providerMessages, request.tools) >= threshold
-            ) {
-              providerMessages = referenceMessages
-            }
-            const finalTokens = estimateContextTokens(providerMessages, request.tools)
-            if (finalTokens >= threshold) {
-              const error = new Error(
-                `附件展开后的请求仍超出上下文预算（估算 ${finalTokens} token，阈值 ${threshold} token）。`,
-              )
-              error.code = 'ATTACHMENT_CONTEXT_BUDGET_EXCEEDED'
-              error.status = 413
-              error.retryable = false
-              throw error
-            }
-          } else {
-            providerMessages = await materializeManagedAttachmentMessages(request.messages, {
-              ...materializationOptions,
-              prepareAttachments: this.deps.prepareAttachments,
-              inlineAttachmentIds,
-            })
-          }
-          latestEstimatedPromptTokens = estimateContextTokens(providerMessages, request.tools)
-          const inheritedToolCallReady = request.onToolCallReady
-          return this.deps.runModel({
-            ...request,
-            messages: providerMessages,
-            userId,
-            modelName: modelName || undefined,
-            onToolCallReady: async (call, metadata = {}) => {
-              if (typeof inheritedToolCallReady === 'function') {
-                await inheritedToolCallReady(call, metadata)
-              }
-              const toolName = String(call?.function?.name || call?.name || '').trim()
-              if (!toolName) return
-              await this.deps.publishActivity({
-                userId,
-                activity: createTurnActivity({
-                  sessionId,
-                  turnId,
-                  kind: 'tool_call_ready',
-                  toolName,
-                  modelName: metadata.modelName || null,
-                  createdAt: this.deps.now(),
-                }),
-              })
-            },
-            onFailover: async (payload) => {
-              await emitter('model.failover', payload)
-            },
-            onRetry: async (payload) => {
-              await emitter('model.failover', payload)
-            },
-          })
-        },
+        runModel: runTurnModelRequest,
         onModelPhase: async ({ phase, iteration, usage, modelName: activeModel, error }) => {
           const normalizedUsage = phase === 'completed' ? normalizeModelUsage(usage) : null
           if (normalizedUsage) {
@@ -1888,6 +1891,16 @@ export class TurnEngine {
         const verifiedLocalFiles = verifiedLocalFilesAt(cancelledAt)
         const retainedLocalFiles = retainedLocalFilesAt(cancelledAt, verifiedLocalFiles)
         const artifactIds = normalizeArtifactIds(checkpointArtifactIds)
+        const evidenceOptions = {
+          state: 'cancelled',
+          text: streamedAssistantText || 'Cancelled by user',
+          artifactIds,
+          deliveryArtifactIds: [],
+          iterations: checkpointIterations,
+          verifiedLocalFiles,
+          retainedLocalFiles,
+          writtenAt: cancelledAt,
+        }
         await emitter('turn.cancelled', {
           reason: 'Cancelled by user',
           artifactIds,
@@ -1898,21 +1911,20 @@ export class TurnEngine {
           ...(latestModelUsage ? { usage: latestModelUsage } : {}),
           ...(turnModelUsage ? { turnModelUsage } : {}),
           ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-        })
-        try {
-          persistTurnEvidence({
-            state: 'cancelled',
-            text: streamedAssistantText || 'Cancelled by user',
-            artifactIds,
-            deliveryArtifactIds: [],
-            iterations: checkpointIterations,
-            verifiedLocalFiles,
-            retainedLocalFiles,
-          })
-        } catch {
-          // The durable terminal event is authoritative; evidence projection is best-effort.
+        }, evidenceBoundaryOptions(evidenceOptions))
+        if (!atomicTurnBoundary) {
+          try {
+            await persistTurnEvidence(evidenceOptions)
+          } catch {
+            // Legacy injected stores retain the event-authoritative behavior.
+          }
         }
-        recordCanaryTerminal('cancelled', null, cancelledAt)
+        await recordCanaryTerminal(
+          'cancelled',
+          null,
+          cancelledAt,
+          streamedAssistantText || 'Cancelled by user',
+        )
         return
       }
       if (result?.interrupted) {
@@ -1931,6 +1943,17 @@ export class TurnEngine {
           message: result.reason,
           retryable: true,
         }, { code: 'MODEL_CALL_INTERRUPTED', retryable: true })
+        const evidenceOptions = {
+          state: 'interrupted',
+          text: partialText,
+          artifactIds,
+          deliveryArtifactIds,
+          iterations,
+          error: failure,
+          verifiedLocalFiles,
+          retainedLocalFiles,
+          writtenAt: interruptedAt,
+        }
         await emitter('turn.interrupted', {
           code: String(result.code || 'MODEL_CALL_INTERRUPTED'),
           message: failure.message,
@@ -1944,19 +1967,7 @@ export class TurnEngine {
           ...(latestModelUsage ? { usage: latestModelUsage } : {}),
           ...(turnModelUsage ? { turnModelUsage } : {}),
           ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-        }, {
-          beforeAppend: (interruptedEvent) => persistTurnEvidence({
-            state: 'interrupted',
-            text: partialText,
-            artifactIds,
-            deliveryArtifactIds,
-            iterations,
-            error: failure,
-            serverLastSequence: interruptedEvent.sequence,
-            verifiedLocalFiles,
-            retainedLocalFiles,
-          }),
-        })
+        }, evidenceBoundaryOptions(evidenceOptions, { legacyBeforeAppend: true }))
         return
       }
       if (result?.incomplete) {
@@ -1977,9 +1988,10 @@ export class TurnEngine {
         // only the terminal result is authoritative for partial delivery.
         const deliveryArtifactIds = optionalDeliveryArtifactIds(result, [])
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
-        const verifiedLocalFiles = verifiedLocalFilesAt()
-        const retainedLocalFiles = retainedLocalFilesAt(this.deps.now(), verifiedLocalFiles)
-        persistTurnEvidence({
+        const failedAt = this.deps.now()
+        const verifiedLocalFiles = verifiedLocalFilesAt(failedAt)
+        const retainedLocalFiles = retainedLocalFilesAt(failedAt, verifiedLocalFiles)
+        const evidenceOptions = {
           state: 'failed',
           text: partialText,
           artifactIds,
@@ -1988,7 +2000,9 @@ export class TurnEngine {
           error: failure,
           verifiedLocalFiles,
           retainedLocalFiles,
-        })
+          writtenAt: failedAt,
+        }
+        if (!atomicTurnBoundary) await persistTurnEvidence(evidenceOptions)
         await emitter('turn.failed', {
           code: failure.code,
           message: failure.message,
@@ -2002,8 +2016,8 @@ export class TurnEngine {
           ...(latestModelUsage ? { usage: latestModelUsage } : {}),
           ...(turnModelUsage ? { turnModelUsage } : {}),
           ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-        })
-        recordCanaryTerminal('failed', failure.code)
+        }, evidenceBoundaryOptions(evidenceOptions))
+        await recordCanaryTerminal('failed', failure.code, failedAt, partialText)
         return
       }
       if (result?.paused) {
@@ -2017,6 +2031,39 @@ export class TurnEngine {
         const pausedAt = this.deps.now()
         const verifiedLocalFiles = verifiedLocalFilesAt(pausedAt)
         const retainedLocalFiles = retainedLocalFilesAt(pausedAt, verifiedLocalFiles)
+        const createPausedMessage = (pausedEvent) => ({
+          id: `${turnId}:assistant`,
+          userId,
+          sessionId,
+          role: 'assistant',
+          content: text,
+          modelContext: {
+            ...buildAssistantModelContext({
+              turnId,
+              checkpointMessages,
+              baselineToolCallIds,
+              userId,
+              verifiedLocalFiles,
+              retainedLocalFiles,
+              artifactIds,
+              deliveryArtifactIds,
+              iterations,
+              paused: true,
+              pluginPromptBlockIds: promptContextSnapshot?.pluginPromptBlockIds,
+              compactionArchiveId: result?.recovery?.archiveId || null,
+              compactionRecovery: result?.recovery || checkpointRecovery,
+              usage: latestModelUsage,
+              turnModelUsage,
+              estimatedPromptTokens: latestEstimatedPromptTokens,
+              turnStartedAt: effectiveTurnStartedAt,
+              turnCompletedAt: pausedAt,
+            }),
+            clarification,
+            pausedSequence: pausedEvent.sequence,
+          },
+          createdAt: pausedAt,
+          updatedAt: pausedAt,
+        })
         await emitter('turn.paused', {
           text,
           clarification,
@@ -2028,42 +2075,13 @@ export class TurnEngine {
           ...(latestModelUsage ? { usage: latestModelUsage } : {}),
           ...(turnModelUsage ? { turnModelUsage } : {}),
           ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-        }, {
-          beforeAppend: (pausedEvent) => {
-            this.deps.writeMessage({
-              id: `${turnId}:assistant`,
-              userId,
-              sessionId,
-              role: 'assistant',
-              content: text,
-              modelContext: {
-                ...buildAssistantModelContext({
-                  turnId,
-                  checkpointMessages,
-                  baselineToolCallIds,
-                  userId,
-                  verifiedLocalFiles,
-                  retainedLocalFiles,
-                  artifactIds,
-                  deliveryArtifactIds,
-                  iterations,
-                  paused: true,
-                  pluginPromptBlockIds: promptContext.pluginPromptBlockIds,
-                  compactionArchiveId: result?.recovery?.archiveId || null,
-                  compactionRecovery: result?.recovery || checkpointRecovery,
-                  usage: latestModelUsage,
-                  turnModelUsage,
-                  estimatedPromptTokens: latestEstimatedPromptTokens,
-                  turnStartedAt: effectiveTurnStartedAt,
-                  turnCompletedAt: pausedAt,
-                }),
-                clarification,
-                pausedSequence: pausedEvent.sequence,
-              },
-              createdAt: pausedAt,
-              updatedAt: pausedAt,
-            })
-          },
+        }, atomicTurnBoundary ? {
+          commitEvent: ({ event }) => commitBoundaryEvent({
+            event,
+            message: createPausedMessage(event),
+          }),
+        } : {
+          beforeAppend: async (event) => this.deps.writeMessage(createPausedMessage(event)),
         })
         return
       }
@@ -2073,7 +2091,7 @@ export class TurnEngine {
       const completedAt = this.deps.now()
       const verifiedLocalFiles = verifiedLocalFilesAt(completedAt)
       const retainedLocalFiles = retainedLocalFilesAt(completedAt, verifiedLocalFiles)
-      this.deps.writeMessage({
+      const completedMessage = {
         id: `${turnId}:assistant`, userId, sessionId, role: 'assistant', content: text,
         modelContext: buildAssistantModelContext({
           turnId,
@@ -2085,7 +2103,7 @@ export class TurnEngine {
           artifactIds,
           deliveryArtifactIds,
           iterations: result?.iterations || 0,
-          pluginPromptBlockIds: promptContext.pluginPromptBlockIds,
+          pluginPromptBlockIds: promptContextSnapshot?.pluginPromptBlockIds,
           compactionArchiveId: result?.recovery?.archiveId || null,
           compactionRecovery: result?.recovery || checkpointRecovery,
           usage: latestModelUsage,
@@ -2095,7 +2113,7 @@ export class TurnEngine {
           turnCompletedAt: completedAt,
         }),
         createdAt: completedAt, updatedAt: completedAt,
-      })
+      }
       await emitter('turn.completed', {
         text,
         artifactIds,
@@ -2106,8 +2124,19 @@ export class TurnEngine {
         ...(latestModelUsage ? { usage: latestModelUsage } : {}),
         ...(turnModelUsage ? { turnModelUsage } : {}),
         ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
+      }, {
+        commitEvent: atomicTurnBoundary
+          ? ({ event }) => commitBoundaryEvent({ event, message: completedMessage })
+          : null,
       })
-      recordCanaryTerminal('completed', null, completedAt)
+      if (!atomicTurnBoundary) {
+        try {
+          await this.deps.writeMessage(completedMessage)
+        } catch {
+          // Legacy injected stores retain the event-authoritative behavior.
+        }
+      }
+      await recordCanaryTerminal('completed', null, completedAt, text)
       // Best-effort async notification to external subscribers.
       void this.deps.dispatchHooks?.({
         userId,
@@ -2138,89 +2167,94 @@ export class TurnEngine {
       }
     } catch (error) {
       if (lostTurnLease(signal, error)) return
+      if (isManualRecoveryBlock(error)) {
+        await emitBlockedRecovery(error)
+        return
+      }
+      if (String(error?.code || '').trim().toUpperCase() === TURN_TERMINAL_PERSISTENCE_FAILURE_CODE) {
+        throw error
+      }
+      const deferredPersistenceFailure = findEventPersistenceFailure(error)
+      if (deferredPersistenceFailure) {
+        await emitFailedTerminal(deferredPersistenceFailure)
+        return
+      }
       if (isExplicitTurnCancellation(signal, error)) {
         const cancelledAt = this.deps.now()
         const verifiedLocalFiles = verifiedLocalFilesAt(cancelledAt)
         const retainedLocalFiles = retainedLocalFilesAt(cancelledAt, verifiedLocalFiles)
         const artifactIds = normalizeArtifactIds(checkpointArtifactIds)
-        await emitter('turn.cancelled', {
-          reason: error?.message || 'Cancelled by user',
+        const evidenceOptions = {
+          state: 'cancelled',
+          text: streamedAssistantText || error?.message || 'Cancelled by user',
           artifactIds,
           deliveryArtifactIds: [],
+          iterations: checkpointIterations,
           verifiedLocalFiles,
           retainedLocalFiles,
-          iterations: checkpointIterations,
-          ...(latestModelUsage ? { usage: latestModelUsage } : {}),
-          ...(turnModelUsage ? { turnModelUsage } : {}),
-          ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-        })
+          writtenAt: cancelledAt,
+        }
         try {
-          persistTurnEvidence({
-            state: 'cancelled',
-            text: streamedAssistantText || error?.message || 'Cancelled by user',
+          await emitter('turn.cancelled', {
+            reason: error?.message || 'Cancelled by user',
             artifactIds,
             deliveryArtifactIds: [],
-            iterations: checkpointIterations,
             verifiedLocalFiles,
             retainedLocalFiles,
-          })
-        } catch {
-          // The durable terminal event is authoritative; evidence projection is best-effort.
+            iterations: checkpointIterations,
+            ...(latestModelUsage ? { usage: latestModelUsage } : {}),
+            ...(turnModelUsage ? { turnModelUsage } : {}),
+            ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
+          }, evidenceBoundaryOptions(evidenceOptions))
+        } catch (terminalError) {
+          const deferredFailure = findEventPersistenceFailure(terminalError)
+          if (!deferredFailure) throw terminalError
+          await emitFailedTerminal(deferredFailure)
+          return
         }
-        recordCanaryTerminal('cancelled', null, cancelledAt)
+        if (!atomicTurnBoundary) {
+          try {
+            await persistTurnEvidence(evidenceOptions)
+          } catch {
+            // Legacy injected stores retain the event-authoritative behavior.
+          }
+        }
+        await recordCanaryTerminal('cancelled', null, cancelledAt, evidenceOptions.text)
         return
       }
-      const failure = normalizeFailure(error)
-      const partialText = publicIncompleteText(
-        error?.partialText || error?.text || streamedAssistantText,
-        failure.message,
-      )
-      const artifactIds = normalizeArtifactIds(error?.artifactIds ?? checkpointArtifactIds)
-      const deliveryArtifactIds = optionalDeliveryArtifactIds(error, [])
-      const iterations = Math.max(0, Number(error?.iterations) || checkpointIterations)
-      const failedAt = this.deps.now()
-      const verifiedLocalFiles = verifiedLocalFilesAt(failedAt)
-      const retainedLocalFiles = retainedLocalFilesAt(failedAt, verifiedLocalFiles)
-      try {
-        persistTurnEvidence({
-          state: 'failed',
-          text: partialText,
-          artifactIds,
-          deliveryArtifactIds,
-          iterations,
-          error: failure,
-          verifiedLocalFiles,
-          retainedLocalFiles,
-        })
-      } catch {
-        // The durable event remains the source of truth if message persistence fails.
-      }
-      await emitter('turn.failed', {
-        code: failure.code,
-        message: failure.message,
-        error: failure,
-        partialText,
-        artifactIds,
-        ...deliveryArtifactFields(deliveryArtifactIds),
-        verifiedLocalFiles,
-        retainedLocalFiles,
-        iterations,
-        ...(latestModelUsage ? { usage: latestModelUsage } : {}),
-        ...(turnModelUsage ? { turnModelUsage } : {}),
-        ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-      })
-      recordCanaryTerminal('failed', failure.code, failedAt)
+      await emitFailedTerminal(error)
     }
   }
-}
 
-let singleton = null
-
-export function getTurnEngine() {
-  if (!singleton) singleton = new TurnEngine()
-  return singleton
-}
-
-export function _resetTurnEngine() {
-  singleton = null
+  #resolveModelBinding({
+    userId,
+    modelName,
+    modelProviderId,
+    modelConfigRevision,
+    modelMode,
+    requirePersistedBinding,
+  }) {
+    const fallback = {
+      modelName: String(modelName || '').trim() || null,
+      modelProviderId: normalizeOptionalId(modelProviderId),
+      modelConfigRevision: normalizePositiveInteger(modelConfigRevision),
+      env: null,
+    }
+    if (typeof this.deps.resolveModelBinding !== 'function') return fallback
+    const binding = this.deps.resolveModelBinding({
+      userId,
+      providerId: fallback.modelProviderId || '',
+      modelName: fallback.modelName || '',
+      configRevision: fallback.modelConfigRevision,
+      modelMode: normalizeModelMode(modelMode),
+      env: this.deps.env,
+      requirePersistedBinding,
+    })
+    return {
+      modelName: String(binding?.modelName || '').trim() || null,
+      modelProviderId: normalizeOptionalId(binding?.providerId),
+      modelConfigRevision: normalizePositiveInteger(binding?.configRevision),
+      env: binding?.env && typeof binding.env === 'object' ? binding.env : null,
+    }
+  }
 }

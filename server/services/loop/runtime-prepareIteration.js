@@ -51,6 +51,8 @@ export async function prepareIteration(s) {
           }),
           checkpointStatus: 'pending',
           checkpointApprovalId: null,
+          checkpointPolicyProvenance: null,
+          checkpointHookAuthorizationProvenance: null,
         }))
         observeToolCalls(s.progressState, s.checkpointCalls)
         if (typeof s.onToolCall === 'function') {

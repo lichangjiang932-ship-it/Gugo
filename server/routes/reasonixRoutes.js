@@ -199,10 +199,10 @@ export function deleteTodo({ userId, id }) {
 /* ── effort 设置 ── */
 
 const EFFORT_LEVELS = {
-  low: { maxSteps: 4, reasoningDepth: 1, costRatio: 0.5, label: '低（快）' },
-  medium: { maxSteps: 12, reasoningDepth: 2, costRatio: 1.0, label: '中（平衡）' },
-  high: { maxSteps: 24, reasoningDepth: 3, costRatio: 1.8, label: '高（深思）' },
-  ultra: { maxSteps: 48, reasoningDepth: 4, costRatio: 3.0, label: '极致（最慢最贵）' },
+  low: { maxSteps: 4, reasoningDepth: 1, label: '低（快）' },
+  medium: { maxSteps: 12, reasoningDepth: 2, label: '中（平衡）' },
+  high: { maxSteps: 24, reasoningDepth: 3, label: '高（深思）' },
+  ultra: { maxSteps: 48, reasoningDepth: 4, label: '极致（最深）' },
 }
 
 export function getEffortSetting({ userId }) {

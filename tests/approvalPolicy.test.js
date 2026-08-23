@@ -406,6 +406,24 @@ test('plan mode keeps tools loaded but executes only local read operations', () 
   }
 })
 
+test('plan mode does not grant builtin read privileges to a dynamic same-name tool', () => {
+  for (const origin of ['plugin', 'mcp']) {
+    const verdict = classifyToolRisk('read_file', { path: 'README.md' }, {
+      ...JOB,
+      permissionMode: 'plan',
+      metadata: {
+        origin,
+        riskClass: 'read',
+        requiresApproval: false,
+        isReadOnly: true,
+      },
+    })
+    assert.equal(verdict.needsApproval, false, origin)
+    assert.equal(verdict.denied, true, origin)
+    assert.match(verdict.reason, /计划模式/, origin)
+  }
+})
+
 test('run_command approval names requested host credentials without exposing values', () => {
   const out = classifyToolRisk('run_command', {
     command: 'npm publish',

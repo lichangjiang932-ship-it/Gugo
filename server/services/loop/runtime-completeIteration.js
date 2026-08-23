@@ -131,8 +131,7 @@ export async function completeIteration(s) {
         // 「做到一半就没有后续」最典型的现场。
         //
         // 对齐 maxIters 路径的做法:让模型基于已有信息收个尾。
-        // 收尾调用**不再受已耗尽的预算约束**(不传 consumeBudget)—— 否则预算已经
-        // 超了,收尾调用自己也会被拒,永远拿不到总结,等于没修。
+        // `allowOverBudget` 只放宽调用次数/token，给本轮一次受控收尾机会。
         if (!s.finalText && i.budgetExceededByCompletedModelResponse) {
           s.finalText = '\u5df2\u6267\u884c\u6a21\u578b\u8fd4\u56de\u7684\u6700\u540e\u4e00\u6279\u5de5\u5177\u8c03\u7528\uff0c\u4f46\u6a21\u578b token \u9884\u7b97\u5df2\u7528\u5c3d\u3002\u5df2\u4fdd\u5b58\u68c0\u67e5\u70b9\uff1b\u91cd\u8bd5\u540e\u53ef\u4ece\u5f53\u524d\u8fdb\u5ea6\u7ee7\u7eed\uff0c\u4e0d\u4f1a\u91cd\u590d\u5df2\u5b8c\u6210\u7684\u5de5\u5177\u8c03\u7528\u3002'
         }

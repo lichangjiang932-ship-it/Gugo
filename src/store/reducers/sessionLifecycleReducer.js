@@ -1,4 +1,4 @@
-import { withSessionModel } from '../../lib/modelSelection.js'
+import { withSessionModelSelection } from '../../lib/modelSelection.js'
 
 export function reduceSessionLifecycleState(state, action) {
   switch (action.type) {
@@ -56,6 +56,7 @@ export function reduceSessionLifecycleState(state, action) {
         serverRevision: Number.isInteger(revision) && revision >= 0 ? revision : 0,
         agentId: parent?.agentId || null,
         ...(parent?.modelName ? { modelName: parent.modelName } : {}),
+        ...(parent?.modelProviderId ? { modelProviderId: parent.modelProviderId } : {}),
       }
       const existingIndex = state.sessions.findIndex((session) => session.id === id)
       if (existingIndex >= 0) {
@@ -83,8 +84,12 @@ export function reduceSessionLifecycleState(state, action) {
     }
 
     case 'SET_SESSION_MODEL': {
-      const { sessionId, modelName } = action.payload || {}
-      const sessions = withSessionModel(state.sessions, sessionId, modelName)
+      const { sessionId, modelName, modelProviderId } = action.payload || {}
+      const sessions = withSessionModelSelection(
+        state.sessions,
+        sessionId,
+        { modelName, providerId: modelProviderId },
+      )
       return sessions === state.sessions ? state : { ...state, sessions }
     }
 

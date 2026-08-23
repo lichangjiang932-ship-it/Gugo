@@ -15,6 +15,13 @@ function sendError(res, error) {
     error: {
       code: error?.code || 'FILE_SNAPSHOT_ERROR',
       message: error?.message || '快照操作失败',
+      ...(Number.isInteger(error?.partialCount) ? {
+        details: {
+          partialCount: error.partialCount,
+          partialRewind: Array.isArray(error.partialRewind) ? error.partialRewind : [],
+          ...(error?.recoveryPath ? { recoveryPath: error.recoveryPath } : {}),
+        },
+      } : {}),
     },
   })
 }

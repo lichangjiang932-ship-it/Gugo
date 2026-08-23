@@ -23,6 +23,11 @@ async function setup({ runSubagent } = {}) {
   const ming = agentMod.createAgent({ userId, name: 'Ming' })
   const calls = []
   dispatcher.configureChannelDispatcherForTests({
+    resolveModelBinding: ({ providerId, modelName, configRevision }) => ({
+      providerId: providerId || 'channel-provider',
+      modelName: modelName || 'channel-model',
+      configRevision: configRevision || 7,
+    }),
     runSubagent: (payload) => {
       calls.push(payload)
       return runSubagent ? runSubagent(payload) : new Promise(() => {})
@@ -121,7 +126,39 @@ test('dispatchUserMessage: no mention routes to default agent', { concurrency: f
   const result = await dispatcher.dispatchUserMessage(channel.id, userId, 'hello')
   assert.equal(result.jobIds.length, 1)
   assert.equal(calls[0].parentSessionId, `channel:${channel.id}`)
+  assert.equal(calls[0].modelName, 'channel-model')
+  assert.equal(calls[0].modelProviderId, 'channel-provider')
+  assert.equal(calls[0].modelConfigRevision, 7)
   assert.match(calls[0].prompt, /Ming/)
+})
+
+test('dispatchUserMessage: selected model binding is snapshotted before a queued turn runs', { concurrency: false }, async () => {
+  const releases = []
+  const { userId, agents, store, dispatcher, calls } = await setup({
+    runSubagent: () => new Promise((resolve) => releases.push(resolve)),
+  })
+  const channel = store.createChannel({
+    userId,
+    name: 'Pinned Crew',
+    kind: 'group',
+    agentIds: [agents.hanako.id],
+    defaultAgentId: agents.hanako.id,
+  })
+
+  await dispatcher.dispatchUserMessage({
+    channelId: channel.id,
+    userId,
+    text: 'use the selected model',
+    modelName: 'selected-model',
+    modelProviderId: 'selected-provider',
+    modelConfigRevision: 11,
+  })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].modelName, 'selected-model')
+  assert.equal(calls[0].modelProviderId, 'selected-provider')
+  assert.equal(calls[0].modelConfigRevision, 11)
+  releases[0]({ resultText: '' })
+  await dispatcher.waitForChannelDispatcherIdleForTests({ userId, channelId: channel.id })
 })
 
 test('dispatchUserMessage: no default routes to most recent speaking agent', { concurrency: false }, async () => {

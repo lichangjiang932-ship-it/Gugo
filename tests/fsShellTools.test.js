@@ -259,6 +259,106 @@ test('write_file line stats exclude unchanged prefix and suffix lines', async ()
   assert.deepEqual(result.changes, [{ path: 'rewrite.txt', additions: 1, deletions: 1 }])
 })
 
+test('write_file idempotent resume proves matching content without writing it again', async () => {
+  process.env.WORKSPACE_FS_ENABLED = '1'
+  const target = path.join(workspace, 'resume-match.txt')
+  fs.writeFileSync(target, 'before content', 'utf8')
+  let recoveryPlan = null
+  const initial = await writeFileTool(
+    { path: 'resume-match.txt', content: 'already committed' },
+    { sideEffectRecoveryPlan: { prepare: (plan) => { recoveryPlan = structuredClone(plan) } } },
+  )
+  assert.ok(recoveryPlan)
+  const fixedTime = new Date('2001-02-03T04:05:06.000Z')
+  fs.utimesSync(target, fixedTime, fixedTime)
+  const before = fs.statSync(target)
+
+  const result = await writeFileTool(
+    { path: 'resume-match.txt', content: 'already committed' },
+    { idempotentResume: true, sideEffectRecoveryPlan: { read: () => recoveryPlan } },
+  )
+
+  assert.equal(result.ok, true)
+  assert.equal(result.idempotencyRecovered, true)
+  assert.equal(result.changed, initial.changed)
+  assert.deepEqual(result.changes, initial.changes)
+  assert.deepEqual(result.changedPaths, ['resume-match.txt'])
+  assert.equal(fs.readFileSync(target, 'utf8'), 'already committed')
+  assert.equal(fs.statSync(target).mtimeMs, before.mtimeMs)
+})
+
+test('write_file idempotent resume never overwrites conflicting or missing targets', async () => {
+  process.env.WORKSPACE_FS_ENABLED = '1'
+  const target = path.join(workspace, 'resume-conflict.txt')
+  fs.writeFileSync(target, 'before content', 'utf8')
+  let conflictPlan = null
+  await writeFileTool(
+    { path: 'resume-conflict.txt', content: 'stale intended content' },
+    { sideEffectRecoveryPlan: { prepare: (plan) => { conflictPlan = structuredClone(plan) } } },
+  )
+  fs.writeFileSync(target, 'newer user content', 'utf8')
+  const fixedTime = new Date('2002-03-04T05:06:07.000Z')
+  fs.utimesSync(target, fixedTime, fixedTime)
+  const before = fs.statSync(target)
+
+  const conflict = await writeFileTool(
+    { path: 'resume-conflict.txt', content: 'stale intended content' },
+    { idempotentResume: true, sideEffectRecoveryPlan: { read: () => conflictPlan } },
+  )
+  assert.equal(conflict.ok, false)
+  assert.equal(conflict.code, 'WRITE_FILE_OUTCOME_UNKNOWN')
+  assert.equal(conflict.requiresUserVerification, true)
+  assert.equal(fs.readFileSync(target, 'utf8'), 'newer user content')
+  assert.equal(fs.statSync(target).mtimeMs, before.mtimeMs)
+
+  let missingPlan = null
+  await writeFileTool(
+    { path: 'resume-missing.txt', content: 'must not be created' },
+    { sideEffectRecoveryPlan: { prepare: (plan) => { missingPlan = structuredClone(plan) } } },
+  )
+  fs.unlinkSync(path.join(workspace, 'resume-missing.txt'))
+  const missing = await writeFileTool(
+    { path: 'resume-missing.txt', content: 'must not be created' },
+    { idempotentResume: true, sideEffectRecoveryPlan: { read: () => missingPlan } },
+  )
+  assert.equal(missing.ok, false)
+  assert.equal(missing.code, 'WRITE_FILE_OUTCOME_UNKNOWN')
+  assert.equal(fs.existsSync(path.join(workspace, 'resume-missing.txt')), false)
+
+  fs.writeFileSync(path.join(workspace, 'resume-legacy.txt'), 'matching content', 'utf8')
+  const legacy = await writeFileTool(
+    { path: 'resume-legacy.txt', content: 'matching content' },
+    { idempotentResume: true },
+  )
+  assert.equal(legacy.code, 'WRITE_FILE_OUTCOME_UNKNOWN')
+})
+
+test('write_file idempotent resume does not consume the fresh-write rate limit', async () => {
+  process.env.WORKSPACE_FS_ENABLED = '1'
+  const userId = `write-resume-limit-${process.pid}-${Date.now()}`
+  createNormalUser({ id: userId, email: `${userId}@example.com` })
+  let recoveryPlan = null
+  await writeFileTool(
+    { path: 'resume-rate-limit.txt', content: 'committed', userId },
+    { sideEffectRecoveryPlan: { prepare: (plan) => { recoveryPlan = structuredClone(plan) } } },
+  )
+
+  for (let index = 0; index < 121; index += 1) {
+    const result = await writeFileTool(
+      { path: 'resume-rate-limit.txt', content: 'committed', userId },
+      { idempotentResume: true, sideEffectRecoveryPlan: { read: () => recoveryPlan } },
+    )
+    assert.equal(result.idempotencyRecovered, true)
+  }
+
+  const fresh = await writeFileTool({
+    path: 'resume-rate-limit-fresh.txt',
+    content: 'first real mutation',
+    userId,
+  })
+  assert.equal(fresh.ok, true)
+})
+
 test('edit_file:唯一 old_string 替换成功', async () => {
   process.env.WORKSPACE_FS_ENABLED = '1'
   fs.writeFileSync(path.join(workspace, 'edit.txt'), 'foo bar baz', 'utf8')
@@ -584,19 +684,31 @@ test('bash_exec: approved env_keys inject operational credentials and redact com
   }
 })
 
-test('bash_exec: env_keys rejects missing variables and Gugo service credentials', async () => {
+test('bash_exec: env_keys rejects missing variables, service credentials, and runtime injection', async () => {
   process.env.WORKSPACE_SHELL_ENABLED = '1'
+  const previousOpenAiKey = process.env.OPENAI_API_KEY
+  const previousNodeOptions = process.env.NODE_OPTIONS
+  const previousLdAudit = process.env.LD_AUDIT
   process.env.OPENAI_API_KEY = 'protected-service-value'
+  process.env.NODE_OPTIONS = '--require attacker.js'
+  process.env.LD_AUDIT = '/tmp/attacker.so'
   try {
-    await assert.rejects(
-      () => bashExecTool({ command: 'node -v', env_keys: ['OPENAI_API_KEY'] }),
-      (error) => error?.code === 'SHELL_ENV_KEY_PROTECTED',
-    )
+    for (const key of ['OPENAI_API_KEY', 'NODE_OPTIONS', 'LD_AUDIT']) {
+      await assert.rejects(
+        () => bashExecTool({ command: 'node -v', env_keys: [key] }),
+        (error) => error?.code === 'SHELL_ENV_KEY_PROTECTED',
+      )
+    }
     await assert.rejects(
       () => bashExecTool({ command: 'node -v', env_keys: ['GUGO_ENV_THAT_DOES_NOT_EXIST'] }),
       (error) => error?.code === 'SHELL_ENV_KEY_NOT_FOUND',
     )
   } finally {
-    delete process.env.OPENAI_API_KEY
+    if (previousOpenAiKey == null) delete process.env.OPENAI_API_KEY
+    else process.env.OPENAI_API_KEY = previousOpenAiKey
+    if (previousNodeOptions == null) delete process.env.NODE_OPTIONS
+    else process.env.NODE_OPTIONS = previousNodeOptions
+    if (previousLdAudit == null) delete process.env.LD_AUDIT
+    else process.env.LD_AUDIT = previousLdAudit
   }
 })

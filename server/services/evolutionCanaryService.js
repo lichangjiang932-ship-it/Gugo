@@ -1,11 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto'
 
+import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 import { getDb } from '../db.js'
 import { getEvolutionApprovalDecision } from './evolutionApprovalService.js'
 import { getEvolutionCandidate } from './evolutionCandidateService.js'
 import { sanitizeEvolutionText } from './evolutionDatasetService.js'
 import { getEvolutionEvaluation } from './evolutionEvaluationService.js'
 import { getEvolutionReplayRun } from './evolutionReplayService.js'
+import { recordEvolutionCanaryOutcomeSnapshot } from './evolutionOnlineGraderService.js'
+import {
+  hasActiveEvolutionPromotion,
+  recordEvolutionPromotionOutcome,
+  resolveEvolutionPromotionAssignment,
+} from './evolutionPromotionService.js'
 import {
   assertEvolutionCanaryRollbackPolicyReady,
   evaluateEvolutionCanaryRollback,
@@ -13,7 +20,6 @@ import {
   hasEvolutionCanaryRollback,
   hasEvolutionCanaryRollbackPolicy,
 } from './evolutionRollbackService.js'
-import { getSession } from './sessionStore.js'
 import { readWorkspaceInstructions } from './workspaceInstructions.js'
 
 const SUPPORTED_TARGET = 'prompt:workspace-instructions'
@@ -73,7 +79,18 @@ function trafficPercent(value) {
   return percent
 }
 
-function normalizeSessionIds(userId, value) {
+function resolveSessionReader(explicitReader) {
+  if (typeof explicitReader !== 'function') {
+    throw serviceError(
+      'EVOLUTION_CANARY_SESSION_STORE_UNAVAILABLE',
+      'readSession must be provided by the active Turn persistence host',
+      503,
+    )
+  }
+  return explicitReader
+}
+
+async function normalizeSessionIds(userId, value, { readSession } = {}) {
   if (!Array.isArray(value) || value.length < 1 || value.length > MAX_SESSIONS) {
     throw serviceError('EVOLUTION_CANARY_SESSIONS_INVALID', `sessionIds must contain between 1 and ${MAX_SESSIONS} sessions`)
   }
@@ -81,8 +98,9 @@ function normalizeSessionIds(userId, value) {
   if (ids.some((id) => !id || id.length > 160) || new Set(ids).size !== ids.length) {
     throw serviceError('EVOLUTION_CANARY_SESSIONS_INVALID', 'sessionIds must be unique valid chat sessions')
   }
+  const sessionReader = resolveSessionReader(readSession)
   for (const sessionId of ids) {
-    if (!getSession({ userId, sessionId })) {
+    if (!await sessionReader({ userId, sessionId })) {
       throw serviceError('EVOLUTION_CANARY_SESSION_NOT_FOUND', 'a scoped chat session was not found', 404)
     }
   }
@@ -109,10 +127,29 @@ function normalizeUsage(value) {
   if (!value || typeof value !== 'object') return null
   const result = {}
   for (const key of ['promptTokens', 'completionTokens', 'totalTokens', 'cacheHitTokens', 'cacheMissTokens', 'costUsd']) {
-    const number = Number(value[key])
-    if (Number.isFinite(number) && number >= 0) result[key] = number
+    const number = normalizeOptionalUsageNumber(value[key])
+    if (number !== null) result[key] = number
   }
   return Object.keys(result).length ? result : null
+}
+
+function outcomeSnapshotInput({
+  modelProviderId,
+  modelName,
+  modelRevision,
+  modelConfigRevision,
+  evaluationInput,
+  evaluationOutput,
+}) {
+  const configRevision = modelConfigRevision ?? null
+  return {
+    modelProviderId: modelProviderId || null,
+    modelName: modelName || null,
+    modelRevision: modelRevision || (configRevision ? `config:${configRevision}` : null),
+    modelConfigRevision: configRevision,
+    inputContent: evaluationInput || '',
+    outputContent: evaluationOutput || '',
+  }
 }
 
 function releaseStats(releaseId) {
@@ -144,8 +181,9 @@ function releaseStats(releaseId) {
     target[row.terminal_state] += 1
     target.totalDurationMs += Math.max(0, Number(row.duration_ms) || 0)
     const usage = parseJson(row.usage_json, null)
-    if (usage && Number.isFinite(Number(usage.costUsd))) {
-      target.costUsd += Math.max(0, Number(usage.costUsd))
+    const costUsd = normalizeOptionalUsageNumber(usage?.costUsd)
+    if (costUsd !== null) {
+      target.costUsd += costUsd
       target.costMeasured += 1
     }
   }
@@ -214,6 +252,9 @@ function releaseView(row, { includeDetails = false } = {}) {
       automaticRollback,
     } : {
       rollbackPolicyConfigured: Boolean(automaticRollback.policy),
+      onlineGraderPolicyConfigured: Boolean(getDb().prepare(`
+        SELECT 1 FROM evolution_canary_grader_policies WHERE release_id = ?
+      `).get(row.id)),
       rollback: automaticRollback.rollback,
     }),
     baselineSha256: row.baseline_sha256,
@@ -286,19 +327,20 @@ function assertCurrentBaseline(replay, env) {
   }
 }
 
-export function createEvolutionCanary({
+export async function createEvolutionCanary({
   userId,
   approvalId,
   sessionIds: sessionIdsValue,
   trafficPercent: trafficValue,
   reason: reasonValue,
+  readSession = null,
   env = process.env,
   now = Date.now(),
 } = {}) {
   const owner = ownerId(userId)
   const { approval, candidate, replay, evaluation } = approvedCanaryEvidence(owner, approvalId)
   assertCurrentBaseline(replay, env)
-  const sessionIds = normalizeSessionIds(owner, sessionIdsValue)
+  const sessionIds = await normalizeSessionIds(owner, sessionIdsValue, { readSession })
   const percent = trafficPercent(trafficValue)
   const reason = boundedReason(reasonValue, 'EVOLUTION_CANARY_REASON_INVALID')
   const createdAt = timestamp(now)
@@ -371,6 +413,13 @@ export function startEvolutionCanary({
     releaseFingerprint: row.release_fingerprint,
   })
   assertCurrentBaseline(replay, env)
+  if (hasActiveEvolutionPromotion(owner, row.target)) {
+    throw serviceError(
+      'EVOLUTION_CANARY_PROMOTION_ACTIVE_CONFLICT',
+      'an active production promotion already owns this target',
+      409,
+    )
+  }
   const reason = boundedReason(reasonValue, 'EVOLUTION_CANARY_REASON_INVALID')
   const startedAt = timestamp(now)
   const db = getDb()
@@ -381,11 +430,18 @@ export function startEvolutionCanary({
     if (activeReleaseRows(owner).some((active) => active.target === row.target)) {
       throw serviceError('EVOLUTION_CANARY_ACTIVE_CONFLICT', 'an active canary already owns this target', 409)
     }
+    if (hasActiveEvolutionPromotion(owner, row.target)) {
+      throw serviceError(
+        'EVOLUTION_CANARY_PROMOTION_ACTIVE_CONFLICT',
+        'an active production promotion already owns this target',
+        409,
+      )
+    }
     db.prepare(`
       INSERT INTO evolution_canary_events (id, user_id, release_id, event_type, reason, created_at)
       VALUES (?, ?, ?, 'started', ?, ?)
     `).run(randomUUID(), owner, row.id, reason, startedAt)
-  })()
+  }).immediate()
   return getEvolutionCanary({ userId: owner, id: row.id })
 }
 
@@ -398,10 +454,17 @@ export function stopEvolutionCanary({ userId, id, reason: reasonValue, now = Dat
     throw serviceError('EVOLUTION_CANARY_NOT_ACTIVE', 'canary release is not active', 409)
   }
   const reason = boundedReason(reasonValue, 'EVOLUTION_CANARY_STOP_REASON_INVALID')
-  getDb().prepare(`
-    INSERT INTO evolution_canary_events (id, user_id, release_id, event_type, reason, created_at)
-    VALUES (?, ?, ?, 'stopped', ?, ?)
-  `).run(randomUUID(), owner, row.id, reason, timestamp(now))
+  const stoppedAt = timestamp(now)
+  const db = getDb()
+  db.transaction(() => {
+    if (hasEvolutionCanaryRollback(row.id) || latestEventRow(row.id)?.event_type !== 'started') {
+      throw serviceError('EVOLUTION_CANARY_NOT_ACTIVE', 'canary release is not active', 409)
+    }
+    db.prepare(`
+      INSERT INTO evolution_canary_events (id, user_id, release_id, event_type, reason, created_at)
+      VALUES (?, ?, ?, 'stopped', ?, ?)
+    `).run(randomUUID(), owner, row.id, reason, stoppedAt)
+  }).immediate()
   return getEvolutionCanary({ userId: owner, id: row.id })
 }
 
@@ -441,7 +504,9 @@ export function resolveEvolutionCanaryAssignment({
     ? db.prepare('SELECT * FROM evolution_canary_releases WHERE id = ? AND user_id = ?')
         .get(assignment.release_id, owner)
     : activeReleaseRows(owner).find((row) => parseJson(row.session_ids_json, []).includes(session))
-  if (!release) return null
+  if (!release) {
+    return resolveEvolutionPromotionAssignment({ userId: owner, sessionId: session, turnId: turn, env, now })
+  }
 
   let baselineContent = null
   let observedBaselineSha256 = null
@@ -476,19 +541,36 @@ export function resolveEvolutionCanaryAssignment({
     const candidateSelected = !runtimeBlocker && bucket < release.traffic_percent
     const variant = candidateSelected ? 'candidate' : 'baseline'
     const decisionReason = runtimeBlocker || (candidateSelected ? 'traffic_candidate' : 'traffic_baseline')
-    db.prepare(`
-      INSERT OR IGNORE INTO evolution_canary_assignments (
-        id, user_id, release_id, session_id, turn_id, variant, decision_reason, bucket,
-        baseline_sha256, observed_baseline_sha256, candidate_sha256, assigned_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      randomUUID(), owner, release.id, session, turn, variant, decisionReason, bucket,
-      release.baseline_sha256, observedBaselineSha256, release.candidate_sha256, timestamp(now),
-    )
-    assignment = db.prepare(`
-      SELECT * FROM evolution_canary_assignments
-      WHERE user_id = ? AND session_id = ? AND turn_id = ?
-    `).get(owner, session, turn)
+    const assignedAt = timestamp(now)
+    assignment = db.transaction(() => {
+      const existing = db.prepare(`
+        SELECT * FROM evolution_canary_assignments
+        WHERE user_id = ? AND session_id = ? AND turn_id = ?
+      `).get(owner, session, turn)
+      if (existing) return existing
+
+      const currentRelease = activeReleaseRows(owner).find((row) => (
+        row.id === release.id
+        && row.release_fingerprint === release.release_fingerprint
+        && parseJson(row.session_ids_json, []).includes(session)
+      ))
+      if (!currentRelease) return null
+
+      db.prepare(`
+        INSERT OR IGNORE INTO evolution_canary_assignments (
+          id, user_id, release_id, session_id, turn_id, variant, decision_reason, bucket,
+          baseline_sha256, observed_baseline_sha256, candidate_sha256, assigned_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        randomUUID(), owner, currentRelease.id, session, turn, variant, decisionReason, bucket,
+        currentRelease.baseline_sha256, observedBaselineSha256,
+        currentRelease.candidate_sha256, assignedAt,
+      )
+      return db.prepare(`
+        SELECT * FROM evolution_canary_assignments
+        WHERE user_id = ? AND session_id = ? AND turn_id = ?
+      `).get(owner, session, turn) || null
+    }).immediate()
   }
   if (!assignment || assignment.release_id !== release.id) return null
   const decisionReason = runtimeBlocker || assignment.decision_reason
@@ -525,6 +607,12 @@ export function recordEvolutionCanaryOutcome({
   errorCode = null,
   effectiveVariant: effectiveVariantValue = null,
   decisionReason: decisionReasonValue = null,
+  modelProviderId = null,
+  modelName = null,
+  modelRevision = null,
+  modelConfigRevision = null,
+  evaluationInput = '',
+  evaluationOutput = '',
   env = process.env,
   now = Date.now(),
 } = {}) {
@@ -533,7 +621,24 @@ export function recordEvolutionCanaryOutcome({
     SELECT * FROM evolution_canary_assignments
     WHERE user_id = ? AND session_id = ? AND turn_id = ?
   `).get(owner, String(sessionId || '').trim(), String(turnId || '').trim())
-  if (!assignment) return null
+  if (!assignment) {
+    return recordEvolutionPromotionOutcome({
+      userId: owner,
+      sessionId,
+      turnId,
+      terminalState: stateValue,
+      durationMs,
+      usage,
+      errorCode,
+      modelProviderId,
+      modelName,
+      modelRevision,
+      modelConfigRevision,
+      evaluationInput,
+      evaluationOutput,
+      now,
+    })
+  }
   const terminalState = String(stateValue || '').trim().toLowerCase()
   if (!TERMINAL_STATES.has(terminalState)) {
     throw serviceError('EVOLUTION_CANARY_OUTCOME_INVALID', 'terminalState is invalid')
@@ -577,6 +682,20 @@ export function recordEvolutionCanaryOutcome({
         outcome_id, assignment_id, effective_variant, decision_reason, recorded_at
       ) VALUES (?, ?, ?, ?, ?)
     `).run(outcomeId, assignment.id, effectiveVariant, decisionReason, createdAt)
+    const snapshot = outcomeSnapshotInput({
+      modelProviderId,
+      modelName,
+      modelRevision,
+      modelConfigRevision,
+      evaluationInput,
+      evaluationOutput,
+    })
+    recordEvolutionCanaryOutcomeSnapshot({
+      outcomeId,
+      assignmentId: assignment.id,
+      ...snapshot,
+      now: createdAt,
+    })
     evaluateEvolutionCanaryRollback({
       userId: owner,
       releaseId: assignment.release_id,

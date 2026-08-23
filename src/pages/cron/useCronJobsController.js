@@ -27,11 +27,13 @@ export default function useCronJobsController(t) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
+  const [errAction, setErrAction] = useState('')
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState(DEFAULT_CRON_FORM)
   const agentName = useMemo(() => new Map(agents.map((agent) => [agent.id, agent.name])), [agents])
   const reload = useCallback(async () => {
     setErr('')
+    setErrAction('')
     setLoading(true)
     try {
       const [jobData, agentData, pluginData] = await Promise.all([listCronJobsApi(), listAgentsApi(), listPluginsApi()])
@@ -62,6 +64,7 @@ export default function useCronJobsController(t) {
     event.preventDefault()
     setSaving(true)
     setErr('')
+    setErrAction('')
     try {
       await createCronJobApi({
         agentId: form.agentId || null, title: form.title, kind: form.kind,
@@ -71,7 +74,7 @@ export default function useCronJobsController(t) {
       setShowCreate(false)
       setForm(DEFAULT_CRON_FORM)
       await reload()
-    } catch (error) { setErr(error.message || t('errors.saveFailed')) }
+    } catch (error) { setErr(error.message || t('errors.saveFailed')); setErrAction(error.action || '') }
     finally { setSaving(false) }
   }
   const toggleEnabled = async (job) => {
@@ -79,13 +82,14 @@ export default function useCronJobsController(t) {
     catch (error) { setErr(error.message || t('errors.saveFailed')) }
   }
   const runNow = async (job) => {
+    setErr(''); setErrAction('')
     try { const data = await runCronJobNowApi(job.id); setJobs((current) => current.map((item) => item.id === job.id ? data.job : item)); setActiveCount(data.activeCount || 0) }
-    catch (error) { setErr(error.message || t('cron.runFailed')) }
+    catch (error) { setErr(error.message || t('cron.runFailed')); setErrAction(error.action || '') }
   }
   const remove = async (job) => {
     if (!window.confirm(t('cron.confirmDelete', { title: job.title }))) return
     try { const data = await deleteCronJobApi(job.id); setJobs((current) => current.filter((item) => item.id !== job.id)); setActiveCount(data.activeCount || 0) }
     catch (error) { setErr(error.message || t('errors.deleteFailed')) }
   }
-  return { activeCount, agentName, agents, create, err, form, jobs, loading, openCreate: () => { setForm(DEFAULT_CRON_FORM); setShowCreate(true) }, plugins, reload, remove, runNow, saving, setShowCreate, showCreate, toggleEnabled, updateForm }
+  return { activeCount, agentName, agents, create, err, errAction, form, jobs, loading, openCreate: () => { setForm(DEFAULT_CRON_FORM); setShowCreate(true) }, plugins, reload, remove, runNow, saving, setShowCreate, showCreate, toggleEnabled, updateForm }
 }

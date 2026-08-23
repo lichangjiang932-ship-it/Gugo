@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
+const { trustedInternalLoopPrincipal } = await import('../server/services/loop/internalExecutionPrincipal.js')
+const INTERNAL_APPROVAL_PRINCIPAL = trustedInternalLoopPrincipal()
 
 function spec(name) {
   const value = SERVER_TOOL_SPECS.find((item) => item?.function?.name === name)
@@ -28,6 +30,7 @@ test('a workspace-root relative deletion needs a complete list_directory(".") be
   let checkpoint = null
 
   const result = await runToolsLoop({
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     job: {
       id: 'root-relative-delete-verification-job',
       userId: null,
@@ -116,6 +119,7 @@ async function runLiteralDeletionScenario({
   let checkpoint = null
 
   const result = await runToolsLoop({
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     job: {
       id: `literal-delete-${label}-job`,
       userId: null,
@@ -237,6 +241,7 @@ test('dynamic, wildcard, parent-traversal, and compound deletes stay conservativ
     let modelCalls = 0
     let checkpoint = null
     const result = await runToolsLoop({
+      approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
       job: {
         id: `unsafe-delete-${scenario.label}-job`,
         userId: null,

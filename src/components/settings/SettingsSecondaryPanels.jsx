@@ -11,8 +11,14 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { readDesktopPetPreferences, validateDesktopPetImage, writeDesktopPetPreferences } from '../../lib/desktopPetPreferences.js'
-import { listRuntimePluginInventoryApi, runtimePluginActionApi } from '../../lib/pluginClient.js'
+import {
+  listRuntimePluginInventoryApi,
+  runtimePluginActionApi,
+  runtimePluginPermissionChallenge,
+} from '../../lib/pluginClient.js'
 import IntegrationsPanel from '../IntegrationsPanel.jsx'
+import { LocalPluginPackageManager } from './LocalPluginPackageSettings.jsx'
+import { RuntimePluginList } from './RuntimePluginSettings.jsx'
 import {
   SettingsGroup,
   SettingsPanel,
@@ -215,80 +221,12 @@ export function SettingsPetPanel({ compact = false, t }) {
   return <SettingsPanel title={t('settings.pet')} description={t('settings.petSubtitle')}>{content}</SettingsPanel>
 }
 
-function RuntimePluginList({ plugins, error, busy, onAction, t }) {
-  if (error) {
-    const localOwnerOnly = error?.code === 'LOCAL_OWNER_ONLY'
-    return (
-      <SettingsRow
-        title={localOwnerOnly ? t('settings.pluginLocalOwnerOnly') : t('settings.pluginLoadFailed')}
-        description={localOwnerOnly ? t('settings.runtimePluginsLocalOnlyHint') : String(error?.message || '').slice(0, 200)}
-      />
-    )
-  }
-  if (!plugins) {
-    return <SettingsRow title={t('settings.pluginLoading')} description="" />
-  }
-  if (plugins.length === 0) {
-    return <SettingsRow title={t('settings.pluginNone')} description={t('settings.pluginNoneHint')} />
-  }
-  return plugins.map((plugin) => {
-    const enabled = plugin?.enabled === true
-    const active = plugin?.active === true
-    const controllable = plugin?.controllable === true
-    const statusKey = active
-      ? 'settings.pluginActive'
-      : enabled ? 'settings.pluginEnabled' : 'settings.pluginInactive'
-    const description = [
-      plugin?.version ? `v${plugin.version}` : '',
-      plugin?.toolName ? `tool: ${plugin.toolName}` : '',
-      plugin?.lastError ? String(plugin.lastError).slice(0, 120) : '',
-    ].filter(Boolean).join(' · ')
-    return (
-      <SettingsRow key={String(plugin?.id || '')} title={String(plugin?.name || plugin?.id || '')} description={description}>
-        <span className={`text-xs ${active ? 'text-emerald-600' : 'text-ink-fade'}`}>{t(statusKey)}</span>
-        {controllable && (
-          <span className="flex items-center gap-1.5">
-            {!enabled && (
-              <button
-                type="button"
-                disabled={busy === `${plugin.id}:enable`}
-                onClick={() => onAction(plugin.id, 'enable')}
-                className="settings-action-button"
-              >
-                {t('settings.pluginEnable')}
-              </button>
-            )}
-            {enabled && (
-              <button
-                type="button"
-                disabled={busy === `${plugin.id}:disable`}
-                onClick={() => onAction(plugin.id, 'disable')}
-                className="settings-action-button"
-              >
-                {t('settings.pluginDisable')}
-              </button>
-            )}
-            <button
-              type="button"
-              disabled={busy === `${plugin.id}:reload` || !enabled}
-              onClick={() => onAction(plugin.id, 'reload')}
-              className="settings-action-button"
-              title={t('settings.pluginReload')}
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              {t('settings.pluginReload')}
-            </button>
-          </span>
-        )}
-      </SettingsRow>
-    )
-  })
-}
-
 export function SettingsPluginsPanel({ navigate, t }) {
   const [plugins, setPlugins] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState('')
+  const [permissionChallenge, setPermissionChallenge] = useState(null)
+  const [actionFailure, setActionFailure] = useState(null)
   const load = useCallback(async () => {
     try {
       const data = await listRuntimePluginInventoryApi()
@@ -314,18 +252,39 @@ export function SettingsPluginsPanel({ navigate, t }) {
       })
     return () => { cancelled = true }
   }, [])
-  const act = useCallback(async (id, action) => {
+  const act = useCallback(async (id, action, options = {}) => {
     setBusy(`${id}:${action}`)
+    setPermissionChallenge(null)
+    setActionFailure(null)
     try {
-      await runtimePluginActionApi(id, action)
+      await runtimePluginActionApi(id, action, options)
+      setPermissionChallenge(null)
+      setActionFailure(null)
       setError(null)
       await load()
     } catch (cause) {
-      setError(cause)
+      const challenge = runtimePluginPermissionChallenge(cause, { pluginId: id, action })
+      if (challenge) {
+        setPermissionChallenge(challenge)
+        setActionFailure(null)
+        setError(null)
+      } else {
+        setActionFailure({
+          pluginId: id,
+          action,
+          message: String(cause?.message || '').slice(0, 200),
+        })
+      }
     } finally {
       setBusy('')
     }
   }, [load])
+  const approvePermissions = useCallback(() => {
+    if (!permissionChallenge) return
+    void act(permissionChallenge.pluginId, permissionChallenge.action, {
+      approvalDigest: permissionChallenge.approvalDigest,
+    })
+  }, [act, permissionChallenge])
   return (
     <SettingsPanel title={t('settings.plugins')} description={t('settings.pluginsDescription')}>
       <SettingsGroup>
@@ -342,8 +301,21 @@ export function SettingsPluginsPanel({ navigate, t }) {
           </button>
         </SettingsRow>
       </SettingsGroup>
+      <SettingsGroup>
+        <LocalPluginPackageManager t={t} onPackagesChanged={load} />
+      </SettingsGroup>
       <SettingsGroup title={t('settings.runtimePlugins')} description={t('settings.runtimePluginsDescription')}>
-        <RuntimePluginList plugins={plugins} error={error} busy={busy} onAction={act} t={t} />
+        <RuntimePluginList
+          plugins={plugins}
+          error={error}
+          busy={busy}
+          permissionChallenge={permissionChallenge}
+          actionFailure={actionFailure}
+          onAction={act}
+          onApprove={approvePermissions}
+          onDismissApproval={() => setPermissionChallenge(null)}
+          t={t}
+        />
       </SettingsGroup>
     </SettingsPanel>
   )

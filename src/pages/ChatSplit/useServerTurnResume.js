@@ -1,6 +1,12 @@
 import { useEffect } from 'react'
 import { createBufferedTurnActivityDispatcher, dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
-import { createTurnFailureError } from '../../lib/turnClient/turnEventDispatch.js'
+import {
+  createTurnFailureError,
+  isModelRequestOutcomeUnknownRecoveryKind,
+  isSideEffectOutcomeUnknownRecoveryKind,
+  MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND,
+  SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND,
+} from '../../lib/turnClient/turnEventDispatch.js'
 import { TASK_STATUS } from '../../store/taskStatus.js'
 import { buildChatFailureDisplayKey, buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
 import { isUserStopped, turnEventTimestamp } from './serverTurnFlow.js'
@@ -30,6 +36,55 @@ export function isRecoverableServerMessage(message) {
     || ['interrupted', 'reconnecting', 'cancelling'].includes(connectionState)
 }
 
+function sameNonEmptyId(left, right) {
+  return typeof left === 'string'
+    && left.length > 0
+    && typeof right === 'string'
+    && right.length > 0
+    && left === right
+}
+
+export function matchesManualRecoveryResume(session, message, resume) {
+  return resume?.kind === 'turn'
+    && sameNonEmptyId(resume.sessionId, session?.id)
+    && sameNonEmptyId(resume.turnId, message?.meta?.serverTurnId)
+    && sameNonEmptyId(resume.toolCallId, message?.meta?.serverRecoveryToolCallId)
+    && message?.meta?.serverRecoveryBlocked === true
+    && isSideEffectOutcomeUnknownRecoveryKind(message?.meta?.serverRecoveryKind)
+    && message?.meta?.serverConnectionState === 'blocked'
+}
+
+export function matchesFailedTurnRetryResume(session, message, retry) {
+  return sameNonEmptyId(retry?.sessionId, session?.id)
+    && sameNonEmptyId(retry?.turnId, message?.meta?.serverTurnId)
+    && retry?.code === 'TURN_INCOMPLETE'
+    && message?.meta?.failed === true
+    && message?.meta?.serverFailure?.code === 'TURN_INCOMPLETE'
+}
+
+function serverTurnResumeClaimKey(sessionId, turnId) {
+  return `${String(sessionId || '')}\u0000${String(turnId || '')}`
+}
+
+export function claimServerTurnResume(
+  claims,
+  sessionId,
+  turnId,
+  hasActiveTurn = hasTurnRun,
+) {
+  if (!(claims instanceof Set) || !sameNonEmptyId(sessionId, sessionId) || !sameNonEmptyId(turnId, turnId)) {
+    return false
+  }
+  const key = serverTurnResumeClaimKey(sessionId, turnId)
+  if (claims.has(key) || hasActiveTurn(sessionId, turnId)) return false
+  claims.add(key)
+  return true
+}
+
+function releaseServerTurnResume(claims, sessionId, turnId) {
+  claims.delete(serverTurnResumeClaimKey(sessionId, turnId))
+}
+
 export function shouldKeepResumePending({ resumeResolution, resumeAccepted, stopped }) {
   return Boolean(resumeResolution) && resumeAccepted !== true && stopped !== true
 }
@@ -51,29 +106,51 @@ export default function useServerTurnResume({
   stateTurnRunActive,
   stateRef,
   t,
+  manualRecoveryResume = null,
+  onManualRecoveryConsumed,
+  failedTurnRetry = null,
+  onFailedTurnRetryConsumed,
+  onFailedTurnRetrySettled,
 }) {
   useEffect(() => {
     if (abortCtrlRef.current) return
     const current = stateRef.current
     const session = current.sessions.find((item) => item.id === current.activeSessionId)
-    const message = [...(session?.messages || [])].reverse().find((item) => item.role === 'assistant')
+    const message = manualRecoveryResume?.kind === 'turn'
+      ? [...(session?.messages || [])].reverse().find((item) => (
+          item.role === 'assistant' && item.meta?.serverTurnId === manualRecoveryResume.turnId
+          && item.meta?.serverRecoveryToolCallId === manualRecoveryResume.toolCallId
+        ))
+      : failedTurnRetry?.sessionId === session?.id
+        ? [...(session?.messages || [])].reverse().find((item) => (
+            item.role === 'assistant' && item.meta?.serverTurnId === failedTurnRetry.turnId
+          ))
+      : [...(session?.messages || [])].reverse().find((item) => item.role === 'assistant')
     const turnId = message?.meta?.serverTurnId
-    if (!session?.id || !turnId || !isRecoverableServerMessage(message) || resumingTurnIdsRef.current.has(turnId) || hasTurnRun(session.id, turnId)) return
+    const manualRecovery = matchesManualRecoveryResume(session, message, manualRecoveryResume)
+    const failedRetry = matchesFailedTurnRetryResume(session, message, failedTurnRetry)
+    if (
+      !session?.id
+      || !turnId
+      || (!manualRecovery && !failedRetry && !isRecoverableServerMessage(message))
+      || !claimServerTurnResume(resumingTurnIdsRef.current, session.id, turnId)
+    ) return
 
-    resumingTurnIdsRef.current.add(turnId)
     const controller = new AbortController()
     const owner = { sessionId: session.id, turnId }
     try {
       registerTurnRun({ sessionId: session.id, turnId, controller })
     } catch (error) {
-      resumingTurnIdsRef.current.delete(turnId)
+      releaseServerTurnResume(resumingTurnIdsRef.current, session.id, turnId)
       if (error?.code !== 'SESSION_TURN_ALREADY_RUNNING') console.error('Failed to register resumed turn', error)
       return
     }
     abortCtrlRef.current = controller
+    if (manualRecovery) onManualRecoveryConsumed?.()
+    if (failedRetry) onFailedTurnRetryConsumed?.(failedTurnRetry)
     const taskId = `resume-${turnId}`
     const serverArtifacts = [...(message.meta?.serverArtifacts || [])]
-    const resumeResolution = message.meta?.serverResumeResolution || null
+    const resumeResolution = failedRetry ? null : message.meta?.serverResumeResolution || null
     const messageTarget = { sessionId: session.id, messageId: message.id }
     const dispatchMessage = (type, payload) => dispatch({ type, payload, ...messageTarget })
     const storedStartedAt = message.meta?.turnStartedAt == null
@@ -90,11 +167,23 @@ export default function useServerTurnResume({
     }, { once: true })
     let currentAssistantText = String(message.content || '')
     let resumeAccepted = false
+    let failedRetryResult = null
     dispatchMessage('UPDATE_LAST_MESSAGE_META', {
       turnStartedAt,
       turnCompletedAt: null,
       latency: null,
       streaming: true,
+      serverConnectionState: 'reconnecting',
+      serverRecoveryBlocked: false,
+      serverRecoveryKind: null,
+      serverRecoveryToolCallId: null,
+      serverRecoveryActionPath: null,
+      ...(failedRetry ? {
+        failed: false,
+        serverFailure: null,
+        serverFailureDisplayKey: null,
+        serverPartialText: null,
+      } : {}),
     })
     dispatch({
       type: 'ADD_TASK',
@@ -105,6 +194,8 @@ export default function useServerTurnResume({
       sessionId: session.id,
       turnId,
       resume: true,
+      retryFailed: failedRetry,
+      retryRecovery: manualRecovery,
       resumeResolution,
       afterSequence: serverResumeAfterSequence(message),
       signal: controller.signal,
@@ -152,6 +243,7 @@ export default function useServerTurnResume({
         }
       },
     }).then(({ terminal, sessionSnapshot }) => {
+      if (failedRetry) failedRetryResult = { terminal }
       turnActivityDispatcher.flush()
       if (terminal.type === 'turn.failed') {
         const error = createTurnFailureError(terminal.payload)
@@ -163,6 +255,46 @@ export default function useServerTurnResume({
         error.name = 'AbortError'
         error.turnCompletedAt = turnEventTimestamp(terminal)
         throw error
+      }
+      if (terminal.type === 'turn.blocked') {
+        dispatchMessage('UPDATE_LAST_MESSAGE_META', {
+          turnStartedAt,
+          turnCompletedAt: null,
+          latency: null,
+          streaming: false,
+          paused: false,
+          failed: false,
+          serverArtifacts,
+          serverConnectionState: 'blocked',
+          serverRecoveryBlocked: true,
+          serverRecoveryKind: null,
+          serverRecoveryToolCallId: null,
+          serverRecoveryActionPath: null,
+          ...(isSideEffectOutcomeUnknownRecoveryKind(terminal.payload?.recoveryKind) ? {
+            serverRecoveryKind: SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND,
+            serverRecoveryToolCallId: terminal.payload?.toolCallId || null,
+            serverRecoveryActionPath: '/settings?tab=recovery',
+          } : {}),
+          ...(isModelRequestOutcomeUnknownRecoveryKind(terminal.payload?.recoveryKind) ? {
+            serverRecoveryKind: MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND,
+            serverRecoveryModelRequestId: terminal.payload?.modelRequestId || null,
+            serverRecoveryActionPath: '/settings?tab=recovery',
+          } : {}),
+          serverClarification: null,
+          directoryAuthorizationPending: false,
+          serverResumeResolution: null,
+        })
+        dispatch({
+          type: 'UPDATE_TASK',
+          payload: {
+            id: taskId,
+            updates: {
+              status: TASK_STATUS.PENDING,
+              stepLabel: terminal.payload?.message || t('chat.serverTurn.resumeFailed'),
+            },
+          },
+        })
+        return
       }
       const terminalText = terminalResumeText(currentAssistantText, terminal)
       if (terminalText) dispatchMessage('APPEND_TO_LAST_MESSAGE', terminalText)
@@ -214,6 +346,7 @@ export default function useServerTurnResume({
       }
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.COMPLETED, stepLabel: t('chat.serverTurn.resumed') } } })
     }).catch((error) => {
+      if (failedRetry) failedRetryResult = { failed: true, error }
       turnActivityDispatcher.flush()
       const stopped = isUserStopped(error)
       const completedAt = turnEventTimestamp(error?.turnCompletedAt)
@@ -245,7 +378,7 @@ export default function useServerTurnResume({
         const serverFailureDisplayKey = buildChatFailureDisplayKey(turnId, error)
         dispatch({
           type: 'APPEND_TO_LAST_MESSAGE',
-          payload: buildChatFailureMessage(getVisibleModelErrorMessage(error, t)),
+          payload: buildChatFailureMessage(error, t),
           meta: { serverFailureDisplayKey },
           ...messageTarget,
         })
@@ -281,11 +414,18 @@ export default function useServerTurnResume({
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: stopped ? TASK_STATUS.CANCELLED : TASK_STATUS.FAILED, stepLabel: stopped ? t('chat.serverTurn.cancelled') : t('chat.serverTurn.resumeFailed') } } })
     }).finally(() => {
       turnActivityDispatcher.dispose()
-      resumingTurnIdsRef.current.delete(turnId)
+      releaseServerTurnResume(resumingTurnIdsRef.current, session.id, turnId)
+      if (failedRetry) {
+        onFailedTurnRetrySettled?.({
+          sessionId: session.id,
+          turnId,
+          result: failedRetryResult,
+        })
+      }
       clearToolApprovalForOwner(owner)
       unregisterTurnRun({ sessionId: session.id, turnId, controller })
       if (abortCtrlRef.current === controller) abortCtrlRef.current = null
       setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
     })
-  }, [abortCtrlRef, clearToolApprovalForOwner, dispatch, requestServerToolApproval, resolveToolApprovalForOwner, resumingTurnIdsRef, stateActiveSessionId, stateRef, stateResumeSignal, stateTurnRunActive, t])
+  }, [abortCtrlRef, clearToolApprovalForOwner, dispatch, failedTurnRetry, manualRecoveryResume, onFailedTurnRetryConsumed, onFailedTurnRetrySettled, onManualRecoveryConsumed, requestServerToolApproval, resolveToolApprovalForOwner, resumingTurnIdsRef, stateActiveSessionId, stateRef, stateResumeSignal, stateTurnRunActive, t])
 }

@@ -22,6 +22,14 @@ const {
 const { buildAgentSystemBlock } = await import('../server/services/agentStore.js')
 const { createCompactionArchive } = await import('../server/services/compactionService.js')
 const { MAX_COMPACTION_SUMMARY_CHARS } = await import('../server/services/contextCompactionRuntime.js')
+const { createCompactionArchivePortController } = await import('../server/core/compactionArchivePort.js')
+const { createSqliteFileCompactionArchiveAdapter } = await import('../server/services/sqliteFileCompactionArchiveAdapter.js')
+
+const compactionArchiveController = createCompactionArchivePortController(
+  createSqliteFileCompactionArchiveAdapter({ env: process.env }),
+  { source: 'test.prompt-compiler' },
+)
+compactionArchiveController.activate()
 
 function agent(patch = {}) {
   return {
@@ -516,5 +524,6 @@ test('buildSessionsBlock does not cache a sessionId-only empty block', () => {
 })
 
 test.after(() => {
+  compactionArchiveController.release()
   try { fs.rmSync(process.env.APP_DATA_DIR, { recursive: true, force: true }) } catch { /* best effort */ }
 })

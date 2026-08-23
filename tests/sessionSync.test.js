@@ -10,6 +10,12 @@ process.env.APP_DATA_DIR = tempDir
 
 const { closeDb, getDb } = await import('../server/db.js')
 const { handleSessionRequest } = await import('../server/routes/sessionRoutes.js')
+const { getTurnPersistenceAdapterStatus } = await import('../server/core/turnPersistenceAdapter.js')
+const { SQLITE_TURN_PERSISTENCE_ADAPTER } = await import('../server/adapters/sqliteTurnPersistenceAdapter.js')
+const {
+  prepareSessionAdminPort,
+  SESSION_ADMIN_PORT_CONTRACT_VERSION,
+} = await import('../server/core/sessionAdminPort.js')
 const {
   deleteSession,
   getSession,
@@ -21,6 +27,10 @@ const {
   upsertSession,
 } = await import('../server/services/sessionStore.js')
 const { appendTurnEvent } = await import('../server/services/turnEventStore.js')
+const {
+  createCompactionArchiveRecord,
+  resolveCompactionArchiveStorage,
+} = await import('../server/services/compactionArchiveStore.js')
 const {
   buildAssistantModelContext,
   expandStoredMessages,
@@ -34,8 +44,12 @@ const { normalizeSessionMessagesForServer } = await import('../src/lib/sessionCl
 const { normalizeServerSessionSnapshot } = await import('../src/lib/turnClient.js')
 const { createTurnEvent } = await import('../shared/turnEvents.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+const { activateTestCompactionArchivePort } = await import('./helpers/testCompactionArchivePort.js')
+
+const compactionArchiveController = activateTestCompactionArchivePort({ env: process.env })
 
 test.after(() => {
+  compactionArchiveController.release()
   closeDb()
   fs.rmSync(tempDir, { recursive: true, force: true })
 })
@@ -67,11 +81,443 @@ function makeResponse() {
   }
 }
 
-async function invokeRoute(options, engine = { hasActiveSession: () => false }) {
+async function invokeRoute(
+  options,
+  engine = { hasActiveSession: () => false },
+  sessionAdmin = SQLITE_TURN_PERSISTENCE_ADAPTER.sessionAdmin,
+) {
   const res = makeResponse()
-  await handleSessionRequest(makeRequest(options), res, engine)
+  await handleSessionRequest(makeRequest(options), res, engine, sessionAdmin)
   return res
 }
+
+function createSessionAdminPort(overrides = {}) {
+  const nullable = async () => null
+  return prepareSessionAdminPort({
+    contractVersion: SESSION_ADMIN_PORT_CONTRACT_VERSION,
+    searchMessages: async () => [],
+    listSessions: async () => [],
+    getSessionSnapshot: nullable,
+    getSessionBranches: nullable,
+    forkSession: nullable,
+    replaceSessionMessages: nullable,
+    deleteSession: nullable,
+    archiveSession: nullable,
+    unarchiveSession: nullable,
+    pinSession: nullable,
+    unpinSession: nullable,
+    ...overrides,
+  })
+}
+
+test('unauthorized Session requests do not initialize the persistence adapter', async () => {
+  const before = getTurnPersistenceAdapterStatus()
+  assert.equal(before.configured, false)
+  assert.equal(before.engineBound, false)
+
+  const res = makeResponse()
+  await handleSessionRequest(makeRequest({ url: '/api/sessions' }), res)
+
+  assert.equal(res.statusCode, 401)
+  assert.deepEqual(res.json(), { error: 'Unauthorized' })
+  assert.deepEqual(getTurnPersistenceAdapterStatus(), before)
+})
+
+test('authenticated Session reads do not initialize TurnEngine', async () => {
+  const { token } = issueTestSession({ email: 'session-read-port@example.com' })
+  const before = getTurnPersistenceAdapterStatus()
+  assert.equal(before.engineBound, false)
+  const sessionAdmin = createSessionAdminPort()
+
+  for (const url of [
+    '/api/sessions/search?q=needle',
+    '/api/sessions',
+    '/api/sessions/read-only/snapshot',
+    '/api/sessions/read-only/branches',
+  ]) {
+    const res = makeResponse()
+    await handleSessionRequest(makeRequest({ url, token }), res, null, sessionAdmin)
+    assert.ok([200, 404].includes(res.statusCode), url)
+  }
+
+  const defaultPortResponse = makeResponse()
+  await handleSessionRequest(
+    makeRequest({ url: '/api/sessions', token }),
+    defaultPortResponse,
+  )
+  assert.equal(defaultPortResponse.statusCode, 503)
+  assert.deepEqual(defaultPortResponse.json(), {
+    error: {
+      code: 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
+      message: 'turn runtime is not ready because persistence is not configured',
+      action: 'restart_runtime',
+    },
+  })
+
+  assert.deepEqual(getTurnPersistenceAdapterStatus(), before)
+})
+
+test('Session mutation responses keep the HTTP ok invariant', async () => {
+  const { token } = issueTestSession({ email: 'session-ok-invariant@example.com' })
+  const sessionId = 'session-ok-invariant'
+  const sessionAdmin = createSessionAdminPort({
+    forkSession: async () => ({
+      session: { id: `${sessionId}-fork`, revision: 0 },
+      totalMessages: 0,
+      ok: false,
+    }),
+    replaceSessionMessages: async () => ({ revision: 1, totalMessages: 0, ok: false }),
+    deleteSession: async () => ({ deleted: true, previousRevision: 1, ok: false }),
+  })
+  const engine = { hasActiveSession: async () => false }
+
+  for (const request of [
+    { method: 'POST', url: `/api/sessions/${sessionId}/fork`, body: {} },
+    {
+      method: 'PUT',
+      url: `/api/sessions/${sessionId}/messages`,
+      body: { expectedRevision: 0, messages: [] },
+    },
+    {
+      method: 'DELETE',
+      url: `/api/sessions/${sessionId}`,
+      body: { expectedRevision: 1 },
+    },
+  ]) {
+    const res = makeResponse()
+    await handleSessionRequest(
+      makeRequest({ ...request, token }),
+      res,
+      engine,
+      sessionAdmin,
+    )
+    assert.ok([200, 201].includes(res.statusCode), `${request.method} ${request.url}`)
+    assert.equal(res.json().ok, true, `${request.method} ${request.url}`)
+  }
+})
+
+test('Session mutations fail closed when the TurnEngine host is unavailable', async () => {
+  const { token } = issueTestSession({ email: 'session-host-unavailable@example.com' })
+  const sessionId = 'session-host-unavailable'
+  const mutationCalls = []
+  const sessionAdmin = createSessionAdminPort({
+    forkSession() {
+      mutationCalls.push('forkSession')
+      return null
+    },
+    replaceSessionMessages() {
+      mutationCalls.push('replaceSessionMessages')
+      return null
+    },
+    deleteSession() {
+      mutationCalls.push('deleteSession')
+      return null
+    },
+  })
+  const mutations = [
+    {
+      name: 'fork',
+      request: { method: 'POST', url: `/api/sessions/${sessionId}/fork`, body: {} },
+    },
+    {
+      name: 'replace messages',
+      request: {
+        method: 'PUT',
+        url: `/api/sessions/${sessionId}/messages`,
+        body: { expectedRevision: 0, messages: [] },
+      },
+    },
+    {
+      name: 'delete',
+      request: {
+        method: 'DELETE',
+        url: `/api/sessions/${sessionId}`,
+        body: { expectedRevision: 0 },
+      },
+    },
+  ]
+  const hostFailures = [
+    {
+      code: 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
+      message: 'turn runtime is not ready because persistence is not configured',
+      action: 'restart_runtime',
+      useDefaultHost: true,
+    },
+    {
+      code: 'COMPACTION_ARCHIVE_PORT_NOT_CONFIGURED',
+      message: 'turn runtime is not ready because compaction storage is not configured',
+      action: 'restart_runtime',
+    },
+    {
+      code: 'TURN_PERSISTENCE_ENGINE_ALREADY_ACTIVE',
+      message: 'turn runtime is restarting; retry shortly',
+      action: 'retry',
+    },
+    {
+      code: 'TURN_ENGINE_SHUTTING_DOWN',
+      message: 'turn runtime is restarting; retry shortly',
+      action: 'retry',
+    },
+    {
+      code: 'TURN_ENGINE_SHUTDOWN',
+      message: 'turn runtime is restarting; retry shortly',
+      action: 'retry',
+    },
+    ...[
+      'TURN_ENGINE_HOST_PENDING_INITIALIZATION_CLEANUP_FAILED',
+      'TURN_ENGINE_HOST_INITIALIZATION_AND_CLEANUP_FAILED',
+      'TURN_ENGINE_HOST_CLEANUP_FAILED',
+    ].map((code) => ({
+      code,
+      message: 'turn runtime cleanup is incomplete; retry shortly',
+      action: 'retry',
+    })),
+  ]
+
+  for (const failure of hostFailures) {
+    const engine = failure.useDefaultHost ? null : {
+      hasActiveSession() {
+        throw Object.assign(new Error('internal host detail must not leak'), {
+          code: failure.code,
+        })
+      },
+    }
+    for (const mutation of mutations) {
+      const res = makeResponse()
+      await handleSessionRequest(
+        makeRequest({ ...mutation.request, token }),
+        res,
+        engine,
+        sessionAdmin,
+      )
+
+      assert.equal(res.statusCode, 503, `${failure.code}: ${mutation.name}`)
+      assert.deepEqual(res.json(), {
+        error: {
+          code: failure.code,
+          message: failure.message,
+          action: failure.action,
+        },
+      }, `${failure.code}: ${mutation.name}`)
+      assert.deepEqual(mutationCalls, [], `${failure.code}: ${mutation.name}`)
+    }
+  }
+})
+
+test('Session routes fail closed on malformed backend results', async () => {
+  const { token } = issueTestSession({ email: 'session-invalid-result@example.com' })
+  const sessionAdmin = createSessionAdminPort({
+    listSessions: () => [{ id: 'missing-revision' }],
+    getSessionSnapshot: async () => ({
+      session: { id: 'invalid-snapshot', revision: 0 },
+      revision: 0,
+      totalMessages: 0,
+      complete: true,
+      nextOffset: null,
+      backendSecret: 'must-not-leak',
+    }),
+  })
+  const expectedBody = {
+    error: {
+      code: 'SESSION_ADMIN_RESULT_INVALID',
+      message: 'session persistence backend returned an invalid result',
+    },
+  }
+
+  for (const url of [
+    '/api/sessions',
+    '/api/sessions/invalid-snapshot/snapshot',
+  ]) {
+    const res = makeResponse()
+    await handleSessionRequest(makeRequest({ url, token }), res, null, sessionAdmin)
+    assert.equal(res.statusCode, 500, url)
+    assert.deepEqual(res.json(), expectedBody, url)
+  }
+})
+
+test('Session routes serialize only public fields from valid adapter results', async () => {
+  const { token } = issueTestSession({ email: 'session-public-dto@example.com' })
+  const sessionAdmin = createSessionAdminPort({
+    listSessions: () => [{
+      id: 'public-session',
+      title: 'Visible',
+      revision: 0,
+      backendSecret: 'must-not-leak',
+    }],
+  })
+  const res = makeResponse()
+
+  await handleSessionRequest(makeRequest({ url: '/api/sessions', token }), res, null, sessionAdmin)
+
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(res.json(), {
+    sessions: [{ id: 'public-session', title: 'Visible', revision: 0 }],
+  })
+})
+
+test('Session routes map invalid v2 inputs to 400 without backend invocation', async () => {
+  const { token } = issueTestSession({ email: 'session-invalid-input@example.com' })
+  const calls = []
+  const sessionAdmin = createSessionAdminPort({
+    listSessions() {
+      calls.push('listSessions')
+      return []
+    },
+    deleteSession() {
+      calls.push('deleteSession')
+      return null
+    },
+  })
+  const engine = { hasActiveSession: async () => false }
+
+  for (const request of [
+    { method: 'GET', url: '/api/sessions?limit=0' },
+    { method: 'DELETE', url: '/api/sessions/missing-revision', body: {} },
+  ]) {
+    const res = makeResponse()
+    await handleSessionRequest(
+      makeRequest({ ...request, token }),
+      res,
+      engine,
+      sessionAdmin,
+    )
+    assert.equal(res.statusCode, 400, `${request.method} ${request.url}`)
+    assert.equal(res.json().error.code, 'SESSION_ADMIN_INPUT_INVALID')
+  }
+  assert.deepEqual(calls, [])
+})
+
+test('Session routes preserve request body size errors as 413', async () => {
+  const { token } = issueTestSession({ email: 'session-body-limit@example.com' })
+  let backendCalls = 0
+  const sessionAdmin = createSessionAdminPort({
+    forkSession() {
+      backendCalls += 1
+      return null
+    },
+  })
+  const res = makeResponse()
+
+  await handleSessionRequest(
+    makeRequest({
+      method: 'POST',
+      url: '/api/sessions/body-limit/fork',
+      token,
+      body: { label: 'x'.repeat(70 * 1024) },
+    }),
+    res,
+    { hasActiveSession: async () => false },
+    sessionAdmin,
+  )
+
+  assert.equal(res.statusCode, 413)
+  assert.deepEqual(res.json(), {
+    error: {
+      code: 'REQUEST_BODY_TOO_LARGE',
+      message: 'request body is too large',
+    },
+  })
+  assert.equal(backendCalls, 0)
+})
+
+test('Session routes reject extra path segments without calling the backend', async () => {
+  const { token } = issueTestSession({ email: 'session-route-tail@example.com' })
+  const calls = []
+  const unused = (name) => async () => {
+    calls.push(name)
+    return null
+  }
+  const sessionAdmin = prepareSessionAdminPort({
+    contractVersion: SESSION_ADMIN_PORT_CONTRACT_VERSION,
+    searchMessages: unused('searchMessages'),
+    listSessions: unused('listSessions'),
+    getSessionSnapshot: unused('getSessionSnapshot'),
+    getSessionBranches: unused('getSessionBranches'),
+    forkSession: unused('forkSession'),
+    replaceSessionMessages: unused('replaceSessionMessages'),
+    deleteSession: unused('deleteSession'),
+    archiveSession: unused('archiveSession'),
+    unarchiveSession: unused('unarchiveSession'),
+    pinSession: unused('pinSession'),
+    unpinSession: unused('unpinSession'),
+  })
+  const engine = {
+    hasActiveSession() {
+      calls.push('hasActiveSession')
+      return false
+    },
+  }
+
+  for (const [method, suffix] of [
+    ['GET', 'snapshot'],
+    ['PUT', 'messages'],
+    ['POST', 'archive'],
+    ['POST', 'unarchive'],
+    ['POST', 'pin'],
+    ['POST', 'unpin'],
+  ]) {
+    const res = makeResponse()
+    await handleSessionRequest(
+      makeRequest({ method, url: `/api/sessions/session-tail/${suffix}/extra`, token }),
+      res,
+      engine,
+      sessionAdmin,
+    )
+    assert.equal(res.statusCode, 404, `${method} ${suffix}`)
+    assert.deepEqual(res.json(), { error: 'not found' }, `${method} ${suffix}`)
+  }
+
+  assert.deepEqual(calls, [])
+})
+
+test('session route awaits the selected async admin port without SQLite fallback', async () => {
+  const { token, userId } = issueTestSession({ email: 'session-admin-async@example.com' })
+  const calls = []
+  let releaseList
+  const pendingList = new Promise((resolve) => { releaseList = resolve })
+  const unused = (name, result = null) => async () => {
+    calls.push(name)
+    return result
+  }
+  const sessionAdmin = prepareSessionAdminPort({
+    contractVersion: SESSION_ADMIN_PORT_CONTRACT_VERSION,
+    searchMessages: unused('searchMessages', []),
+    async listSessions(input) {
+      calls.push(['listSessions', input])
+      return pendingList
+    },
+    getSessionSnapshot: unused('getSessionSnapshot'),
+    getSessionBranches: unused('getSessionBranches'),
+    forkSession: unused('forkSession'),
+    replaceSessionMessages: unused('replaceSessionMessages'),
+    deleteSession: unused('deleteSession'),
+    archiveSession: unused('archiveSession'),
+    unarchiveSession: unused('unarchiveSession'),
+    pinSession: unused('pinSession'),
+    unpinSession: unused('unpinSession'),
+  })
+  const res = makeResponse()
+  const handling = handleSessionRequest(
+    makeRequest({ url: '/api/sessions?archived=all&limit=3&offset=2', token }),
+    res,
+    { hasActiveSession: async () => false },
+    sessionAdmin,
+  )
+
+  await Promise.resolve()
+  assert.equal(res.statusCode, 0)
+  releaseList([{ id: 'async-session', title: 'Async backend', revision: 0 }])
+  await handling
+
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(res.json(), {
+    sessions: [{ id: 'async-session', title: 'Async backend', revision: 0 }],
+  })
+  assert.deepEqual(calls, [[
+    'listSessions',
+    { userId, archived: 'all', limit: 3, offset: 2 },
+  ]])
+})
 
 test('session snapshots paginate complete histories without changing revision', { concurrency: false }, async () => {
   const { token, userId } = issueTestSession({ email: 'session-pages@example.com' })
@@ -386,7 +832,10 @@ test('managed attachments stay lightweight in history and materialize only for a
         name: 'diagram.png',
         mimeType: 'image/png',
         size: 12,
-        sha256: 'abc123',
+        sha256: 'a'.repeat(64),
+        status: 'ready',
+        sessionId: 'session-1',
+        messageId: null,
         uri: 'attachment://attachment-1',
         downloadUrl: '/api/attachments/attachment-1/content',
         fullPath: 'must-not-leak',
@@ -401,9 +850,12 @@ test('managed attachments stay lightweight in history and materialize only for a
     name: 'diagram.png',
     mimeType: 'image/png',
     size: 12,
-    sha256: 'abc123',
+    sha256: 'a'.repeat(64),
     uri: 'attachment://attachment-1',
     downloadUrl: '/api/attachments/attachment-1/content',
+    status: 'ready',
+    sessionId: 'session-1',
+    messageId: null,
   }])
   assert.doesNotMatch(JSON.stringify(history), /fullPath|base64,/)
 
@@ -426,6 +878,18 @@ test('managed attachments stay lightweight in history and materialize only for a
     userId: 'user-1',
     sessionId: 'session-1',
     attachmentIds: ['attachment-1'],
+    expectedAttachments: [{
+      id: 'attachment-1',
+      name: 'diagram.png',
+      mimeType: 'image/png',
+      size: 12,
+      sha256: 'a'.repeat(64),
+      status: 'ready',
+      sessionId: 'session-1',
+      messageId: null,
+      uri: 'attachment://attachment-1',
+      downloadUrl: '/api/attachments/attachment-1/content',
+    }],
     text: 'Summarize the diagram.',
   }])
   assert.match(JSON.stringify(providerMessages), /base64,/)
@@ -684,7 +1148,7 @@ test('CAS session deletion cascades strong references and clears weak references
       sessionId,
       turnId: 'delete-turn',
       sequence: 0,
-      type: 'turn.completed',
+      type: 'turn.started',
       payload: {},
       createdAt: 2,
     }),
@@ -701,11 +1165,23 @@ test('CAS session deletion cascades strong references and clears weak references
   `).run(userId, sessionId)
   db.prepare('INSERT INTO session_meters (session_id, user_id, updated_at) VALUES (?, ?, 2)')
     .run(sessionId, userId)
-  db.prepare(`
-    INSERT INTO compaction_archive
-      (id, user_id, session_id, replaced_message_count, archived_messages_json, summary_text, created_at)
-    VALUES ('delete-archive', ?, ?, 1, '[]', 'summary', 2)
-  `).run(userId, sessionId)
+  createCompactionArchiveRecord({
+    id: 'delete-archive',
+    userId,
+    sessionId,
+    archivedMessages: [{ role: 'user', content: 'delete this private archive body' }],
+    summaryText: 'summary',
+    now: 2,
+    db,
+  })
+  const archiveRow = db.prepare('SELECT * FROM compaction_archive WHERE id = ?')
+    .get('delete-archive')
+  const archivePath = resolveCompactionArchiveStorage({
+    userId,
+    id: archiveRow.id,
+    storagePath: archiveRow.storage_path,
+  }).fullPath
+  assert.equal(fs.existsSync(archivePath), true)
   db.prepare(`
     INSERT INTO memories
       (id, user_id, type, title, slug, body, frontmatter_json, pinned,
@@ -724,6 +1200,7 @@ test('CAS session deletion cascades strong references and clears weak references
     previousRevision: revision,
   })
   assert.equal(getSession({ userId, sessionId }), null)
+  assert.equal(fs.existsSync(archivePath), false)
   for (const [table, column, value] of [
     ['messages', 'id', 'delete-message'],
     ['turn_events', 'id', 'delete-event'],

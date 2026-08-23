@@ -13,7 +13,8 @@ Usage:
   gugo session list [--archived true|false|all]
   gugo agent list
   gugo skill list
-  gugo run "<prompt>" [--model <name>] [--mode normal|acceptEdits|plan|bypass]
+  gugo run "<prompt>" [--model <name>] [--provider <id>]
+                     [--mode normal|acceptEdits|plan|bypass]
                      [--cwd <dir>] [--session-id <id>]
   gugo run --resume <turnId> [--session-id <id>] [--cwd <dir>]
   echo "<prompt>" | gugo run [options]
@@ -27,7 +28,7 @@ Auth token is stored at ~/.yma-cli/token (chmod 0600).
 Run emits durable TurnEngine events as one JSON object per stdout line (JSONL).
 `
 
-const RUN_VALUE_FLAGS = new Set(['model', 'mode', 'cwd', 'session-id', 'resume'])
+const RUN_VALUE_FLAGS = new Set(['model', 'provider', 'mode', 'cwd', 'session-id', 'resume'])
 const RUN_MODES = new Set(['normal', 'acceptEdits', 'plan', 'bypass'])
 const MAX_STDIN_PROMPT_BYTES = 1024 * 1024
 
@@ -41,9 +42,19 @@ export class CliUsageError extends Error {
 }
 
 export function parseRunArgs(argv = []) {
-  const options = { prompt: '', model: null, mode: 'normal', cwd: process.cwd(), sessionId: null, resumeTurnId: null }
+  const options = {
+    prompt: '',
+    model: null,
+    modelProviderId: null,
+    mode: 'normal',
+    cwd: process.cwd(),
+    sessionId: null,
+    resumeTurnId: null,
+  }
   const positional = []
   let positionalOnly = false
+  let modeSpecified = false
+  const specifiedValueFlags = new Set()
   for (let i = 0; i < argv.length; i++) {
     const raw = String(argv[i])
     if (!positionalOnly && raw === '--') {
@@ -54,15 +65,24 @@ export function parseRunArgs(argv = []) {
       const equalAt = raw.indexOf('=')
       const key = raw.slice(2, equalAt >= 0 ? equalAt : undefined)
       if (!RUN_VALUE_FLAGS.has(key)) throw new CliUsageError('CLI_OPTION_UNKNOWN', `unknown run option: --${key}`)
+      if (specifiedValueFlags.has(key)) {
+        throw new CliUsageError('CLI_OPTION_DUPLICATE', `--${key} may only be specified once`)
+      }
+      specifiedValueFlags.add(key)
       const value = equalAt >= 0 ? raw.slice(equalAt + 1) : argv[++i]
-      if (value === undefined || value === '' || String(value).startsWith('--')) {
+      const normalizedValue = value === undefined ? '' : String(value).trim()
+      if (!normalizedValue || String(value).startsWith('--')) {
         throw new CliUsageError('CLI_OPTION_VALUE_REQUIRED', `--${key} requires a value`)
       }
-      if (key === 'model') options.model = String(value)
-      if (key === 'mode') options.mode = String(value)
-      if (key === 'cwd') options.cwd = resolve(String(value))
-      if (key === 'session-id') options.sessionId = String(value)
-      if (key === 'resume') options.resumeTurnId = String(value)
+      if (key === 'model') options.model = normalizedValue
+      if (key === 'provider') options.modelProviderId = normalizedValue
+      if (key === 'mode') {
+        options.mode = normalizedValue
+        modeSpecified = true
+      }
+      if (key === 'cwd') options.cwd = resolve(normalizedValue)
+      if (key === 'session-id') options.sessionId = normalizedValue
+      if (key === 'resume') options.resumeTurnId = normalizedValue
       continue
     }
     positional.push(raw)
@@ -74,6 +94,25 @@ export function parseRunArgs(argv = []) {
   if (options.resumeTurnId && options.prompt) {
     throw new CliUsageError('CLI_RESUME_PROMPT_CONFLICT', 'prompt cannot be combined with --resume')
   }
+  if (options.resumeTurnId && modeSpecified) {
+    throw new CliUsageError(
+      'CLI_RESUME_MODE_CONFLICT',
+      '--mode cannot be combined with --resume; the persisted turn permission mode is restored',
+    )
+  }
+  if (options.resumeTurnId && options.modelProviderId) {
+    throw new CliUsageError(
+      'CLI_RESUME_PROVIDER_CONFLICT',
+      '--provider cannot be combined with --resume; the persisted model Provider is restored',
+    )
+  }
+  if (options.resumeTurnId && options.model) {
+    throw new CliUsageError(
+      'CLI_RESUME_MODEL_CONFLICT',
+      '--model cannot be combined with --resume; the persisted model is restored',
+    )
+  }
+  if (options.resumeTurnId && !modeSpecified) options.mode = null
   return options
 }
 
@@ -106,11 +145,45 @@ function createApprovalPrompt(input, diagnostics) {
   }
 }
 
+async function loadBuiltinHeadlessRuntime({
+  runtimeCwd = process.cwd(),
+  env = process.env,
+} = {}) {
+  // Keep the CLI entry free of eager backend imports. Trusted persistence is
+  // selected before preflight can open the distribution's remaining SQLite
+  // stores, and ordinary runtime plugin state cannot influence this choice.
+  // A CLI may be launched inside an untrusted project, so cwd/.env must never
+  // select executable host code. Deployment-owned process env remains explicit.
+  const persistenceEnv = Object.freeze({ ...env })
+  const { resolveBuiltinSqliteTurnPersistenceBootstrap } = await import(
+    '../server/adapters/builtinSqliteTurnPersistenceBootstrap.js'
+  )
+  const persistenceBootstrap = await resolveBuiltinSqliteTurnPersistenceBootstrap({
+    cwd: runtimeCwd,
+    env: persistenceEnv,
+  })
+  const { runRuntimeConfigStartupPreflight } = await import(
+    '../server/services/runtimeConfigStartupService.js'
+  )
+  const { runtimeEnv } = runRuntimeConfigStartupPreflight({ cwd: runtimeCwd, env })
+  const { runBuiltinHeadlessTurn } = await import('../server/adapters/headlessTurnHost.js')
+  return (options) => runBuiltinHeadlessTurn({
+    ...options,
+    runtimeCwd,
+    runtimeEnv,
+    env: runtimeEnv,
+    turnPersistenceAdapter: persistenceBootstrap.adapter,
+    turnPersistenceProvenance: persistenceBootstrap.provenance,
+  })
+}
+
 export async function cmdRun(argv, {
   stdin = process.stdin,
   stdout = process.stdout,
   stderr = process.stderr,
   runTurn = null,
+  runtimeCwd = process.cwd(),
+  env = process.env,
 } = {}) {
   try {
     const options = parseRunArgs(argv)
@@ -119,7 +192,7 @@ export async function cmdRun(argv, {
       options.prompt = await readPromptFromStdin(stdin)
       if (!options.prompt) throw new CliUsageError('PROMPT_REQUIRED', 'prompt is required')
     }
-    const runtime = runTurn || (await import('../server/services/headlessTurnRuntime.js')).runHeadlessTurn
+    const runtime = runTurn || await loadBuiltinHeadlessRuntime({ runtimeCwd, env })
     const interactive = stdin.isTTY === true && stderr.isTTY === true
     const result = await runtime({
       ...options,
@@ -134,7 +207,11 @@ export async function cmdRun(argv, {
   } catch (error) {
     const code = error?.code || 'CLI_RUN_FAILED'
     const message = error?.message || String(error)
-    writeJsonLine(stdout, { type: 'cli.error', error: { code, message } })
+    const action = String(error?.action || '').trim()
+    writeJsonLine(stdout, {
+      type: 'cli.error',
+      error: { code, message, ...(action ? { action } : {}) },
+    })
     stderr.write(`Error [${code}]: ${message}\n`)
     return Number.isInteger(error?.exitCode) ? error.exitCode : 1
   }

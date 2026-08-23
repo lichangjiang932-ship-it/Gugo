@@ -14,6 +14,7 @@ import {
 import {
   MAX_HTML_ARTIFACT_BYTES,
 } from '../../artifactGen.js'
+import { resolveOfficeArtifactImageInputs } from '../../officeArtifactImages.js'
 import {
   MEDIA_TOOL_SPECS,
 } from '../../../adapters/mediaTools.js'
@@ -336,23 +337,7 @@ export async function resolveHtmlArtifactArgs(args = {}, { userId, prompt = '' }
 
 export function resolveOfficeArtifactArgs(args = {}, { userId } = {}) {
   const resolved = { ...args }
-  const images = (Array.isArray(args.images) ? args.images : []).map((entry, index) => {
-    const rawPath = String(entry?.path || '').trim()
-    if (!rawPath) throw new Error(`images[${index}].path is required`)
-    const source = resolveForFileTool(rawPath, { userId })
-    const stat = fs.statSync(source.fullPath)
-    if (!stat.isFile()) throw new Error(`images[${index}].path must reference a file`)
-    return {
-      sourcePath: source.fullPath,
-      alt: entry?.alt,
-      target_index: entry?.target_index,
-      anchor: entry?.anchor,
-      x: entry?.x,
-      y: entry?.y,
-      width: entry?.width,
-      height: entry?.height,
-    }
-  })
+  const images = resolveOfficeArtifactImageInputs(Array.isArray(args.images) ? args.images : [], { userId })
   Object.defineProperty(resolved, '_officeImages', { value: images, enumerable: false })
   return resolved
 }

@@ -8,6 +8,8 @@ import test from 'node:test'
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-session-search-tests', String(process.pid))
 
 const { createAppServer } = await import('../server/appServer.js')
+const { SQLITE_TURN_PERSISTENCE_ADAPTER } = await import('../server/adapters/sqliteTurnPersistenceAdapter.js')
+const { createTurnPersistenceAdapterController } = await import('../server/core/turnPersistenceAdapter.js')
 const { getDb } = await import('../server/db.js')
 const {
   archiveSession,
@@ -17,11 +19,14 @@ const {
 } = await import('../server/services/sessionStore.js')
 const { searchMessages } = await import('../server/services/sessionSearchService.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+const persistence = createTurnPersistenceAdapterController(SQLITE_TURN_PERSISTENCE_ADAPTER, {
+  source: 'test.session-search',
+})
+persistence.activate()
 
 function cleanDb() {
   const db = getDb()
   db.prepare('DELETE FROM messages').run()
-  db.prepare('DELETE FROM ledger').run()
   db.prepare('DELETE FROM sessions').run()
   db.prepare('DELETE FROM login_codes').run()
   db.prepare('DELETE FROM users').run()
@@ -76,6 +81,7 @@ test.beforeEach(() => {
 
 test.after(() => {
   cleanDb()
+  persistence.release()
 })
 
 test('v9 creates messages_fts and indexes existing inserted messages', () => {

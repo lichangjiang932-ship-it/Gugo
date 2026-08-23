@@ -1,4 +1,9 @@
-import { parseTurnActivity, parseTurnEvent } from '../../../shared/turnEvents.js'
+import {
+  TURN_EVENT_TRANSPORT_QUERY_PARAM,
+  TURN_EVENT_TRANSPORT_VERSION,
+  parseTurnActivity,
+  parseTurnEventTransportPayload,
+} from '../../../shared/turnEvents.js'
 import {
   createTurnWebSocketFrame,
   validateTurnWebSocketServerFrame,
@@ -7,7 +12,9 @@ import { getAuthToken } from '../accountClient.js'
 
 // `turn.paused` ends the current client subscription while remaining resumable
 // on the server after the user supplies the requested clarification/permission.
-export const TERMINAL_EVENTS = new Set(['turn.completed', 'turn.paused', 'turn.cancelled', 'turn.failed'])
+export const TERMINAL_EVENTS = new Set([
+  'turn.completed', 'turn.blocked', 'turn.paused', 'turn.cancelled', 'turn.failed',
+])
 export const DEFAULT_RECONNECT_MAX_ATTEMPTS = 8
 export const DEFAULT_RECONNECT_MAX_DELAY_MS = 10_000
 export const DEFAULT_SNAPSHOT_PAGE_SIZE = 500
@@ -30,6 +37,22 @@ export async function parseResponse(response) {
     const error = new Error(body?.error?.message || `Turn request failed: HTTP ${response.status}`)
     error.code = body?.error?.code || 'TURN_REQUEST_FAILED'
     error.status = response.status
+    for (const field of [
+      'action',
+      'providerId',
+      'modelName',
+      'configRevision',
+      'details',
+      'expectedSequence',
+      'actualSequence',
+      'recovery',
+      'retryable',
+      'retryAfter',
+    ]) {
+      if (body?.error?.[field] !== undefined) error[field] = body.error[field]
+    }
+    const retryAfter = response.headers?.get?.('retry-after')
+    if (retryAfter !== undefined && retryAfter !== null) error.retryAfter = retryAfter
     throw error
   }
   return body || {}
@@ -134,7 +157,12 @@ export async function streamServerTurnEvents({
   onActivity,
   fetchImpl = fetch,
 }) {
-  const query = new URLSearchParams({ sessionId, turnId, after: String(after) })
+  const query = new URLSearchParams({
+    sessionId,
+    turnId,
+    after: String(after),
+    [TURN_EVENT_TRANSPORT_QUERY_PARAM]: String(TURN_EVENT_TRANSPORT_VERSION),
+  })
   const response = await fetchImpl(`/api/turns/stream?${query}`, { headers: headers(), signal })
   if (!response.ok) await parseResponse(response)
   const reader = response.body?.getReader?.()
@@ -154,7 +182,7 @@ export async function streamServerTurnEvents({
         continue
       }
       if (frame?.eventType !== 'turn_event') continue
-      const event = parseTurnEvent(JSON.parse(frame.data))
+      const event = parseTurnEventTransportPayload(JSON.parse(frame.data))
       await onEvent?.(event)
       if (TERMINAL_EVENTS.has(event.type)) terminal = event
       else if (event.type === 'turn.interrupted') {
@@ -276,6 +304,7 @@ export function streamServerTurnEventsWebSocket({
       if (frame.type === 'error') {
         const error = new Error(frame.message || 'WebSocket turn subscription failed')
         error.code = String(frame.code || 'TURN_WEBSOCKET_ERROR')
+        error.action = frame.action
         finishAfterPendingEvents(error)
         return
       }
@@ -297,7 +326,7 @@ export function streamServerTurnEventsWebSocket({
       clearSubscribeTimer()
       let event
       try {
-        event = parseTurnEvent(frame.event)
+        event = parseTurnEventTransportPayload(frame)
       } catch (error) {
         finishAfterPendingEvents(error)
         return

@@ -39,13 +39,6 @@ async function refreshBridgeIntegration(integration) {
   }
 }
 
-function parseVisionModelsFromEnv(env = process.env) {
-  return String(env?.MODEL_NAMES_VISION || '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
-}
-
 export async function handleIntegrationsRequest(req, res, { env = process.env, fetchImpl = fetch } = {}) {
   const url = new URL(req.url, 'http://localhost')
   const parts = url.pathname.split('/').filter(Boolean)
@@ -86,19 +79,24 @@ export async function handleIntegrationsRequest(req, res, { env = process.env, f
   const userId = authenticateRequest(req)
   if (!userId) return unauthorized(res)
 
-  // GET /api/integrations/vision_assist/status — 视觉副驾就绪探针
-  // 同时检查：(a) 当前用户已配置 vision_assist 凭据；(b) env.MODEL_NAMES_VISION 非空。
-  // 两个条件必须同时满足才算 configured，便于前端在 IntegrationsPanel 上挂徽章。
+  // GET /api/integrations/vision_assist/status — 视觉副驾就绪探针。
+  // MODEL_NAMES_VISION 描述主模型自身的视觉能力，不是副驾配置。
+  // 副驾只依赖当前用户已保存、启用且完整的本地 BYOK integration。
   if (req.method === 'GET' && parts[2] === 'vision_assist' && parts[3] === 'status') {
     const integration = getIntegrationByProvider({ userId, provider: 'vision_assist' })
-    const models = parseVisionModelsFromEnv(env)
-    const configured = !!integration && models.length > 0
+    const modelName = String(integration?.config?.modelName || '').trim()
+    const configured = !!(
+      integration?.enabled
+      && String(integration.config?.baseUrl || '').trim()
+      && modelName
+    )
     return sendJson(res, 200, {
       ok: true,
       configured,
       hasIntegration: !!integration,
-      hasVisionEnv: models.length > 0,
-      models,
+      enabled: integration?.enabled === true,
+      modelName: modelName || null,
+      models: modelName ? [modelName] : [],
     })
   }
 

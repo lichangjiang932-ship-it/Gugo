@@ -19,6 +19,8 @@ export function installToolHookBridge({
   enabled = true,
   job = null,
   step = null,
+  approvalOrigin = 'job',
+  approvalSessionId = null,
 } = {}) {
   if (!loopEvents || typeof loopEvents.on !== 'function') return () => {}
   if (typeof dispatchHooks !== 'function') throw new TypeError('dispatchHooks must be a function')
@@ -33,8 +35,13 @@ export function installToolHookBridge({
       event: 'pre_tool_use',
       tool: call.name,
       args: call.args,
-      sessionId: job.id || null,
+      origin: approvalOrigin,
+      jobId: approvalOrigin === 'chat' ? null : job.id || null,
+      stepId: approvalOrigin === 'chat' ? job.id || null : step?.id || null,
+      sessionId: approvalSessionId || null,
       requestId: step?.id || null,
+      toolCallId: call.id,
+      hookInvocationId: `loop:${job.id}:${step?.id || '-'}:${call.id}:pre_tool_use`,
     })
     return {
       ...call,
@@ -54,6 +61,8 @@ export function installToolHookBridge({
         args: { input: call.args, output: result },
         sessionId: job.id || null,
         requestId: step?.id || null,
+        toolCallId: call.id,
+        hookInvocationId: `loop:${job.id}:${step?.id || '-'}:${call.id}:post_tool_use`,
       })
     } catch {
       // The tool outcome is already final; observer failures cannot replay it.
@@ -102,32 +111,4 @@ export async function runPostTool({ loopEvents, call, result, context = {} } = {
     value: { call: assertToolCall(call), result },
     context,
   })
-}
-
-/**
- * Small embeddable executor used by tests and alternate loop hosts. The main
- * runtime uses the same pre/post helpers around its approval-aware executor.
- */
-export async function executeToolCall({
-  loopEvents = null,
-  call,
-  executeTool,
-  beforeTool = null,
-  context = {},
-} = {}) {
-  if (typeof executeTool !== 'function') throw new TypeError('executeTool must be a function')
-  const prepared = await runPreTool({ loopEvents, call, context })
-  if (typeof beforeTool === 'function') {
-    await beforeTool({ call: prepared, kind: 'tool' })
-  }
-  let result
-  try {
-    result = await executeTool(prepared)
-  } catch (error) {
-    result = { ok: false, error }
-    await runPostTool({ loopEvents, call: prepared, result, context })
-    throw error
-  }
-  await runPostTool({ loopEvents, call: prepared, result, context })
-  return { call: prepared, result }
 }

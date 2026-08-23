@@ -29,7 +29,7 @@ const dispose = registerTrustedUiPlugin({
 dispose()
 ```
 
-`shared/pluginManifest.js` 是 runtime plugin 与可信 UI plugin 共用的 manifest envelope：`id`、`name`、`version`、`requires`、`contributes`。这些字段只从 manifest 自身的 data property 读取；getter 不执行，prototype 字段不继承，两个数组必须由稠密的 own string data property 组成。注册得到冻结快照，后续修改原 manifest/数组不会改变已安装 plugin；非法定义以 `PLUGIN_MANIFEST_DEFINITION_INVALID`、`retryable=false` 拒绝。UI 声明使用 `ui:<slot>:<id>`，并必须与实际注册项精确一致；缺失依赖、声明漂移、ID/目标冲突时整批均不会生效。活跃依赖存在时，`unregisterUiPlugin(pluginId)` 会拒绝卸载被依赖插件。
+`shared/pluginManifest.js` 是 runtime plugin 与可信 UI plugin 共用的 manifest envelope：`id`、`name`、`version`、`apiVersion`、`hostVersion`、`requires`、`dependencyVersions`、`contributes`。这些字段只从 manifest 自身的 data property 读取；getter 不执行，prototype 字段不继承，两个数组必须由稠密的 own string data property 组成。注册得到冻结快照，后续修改原 manifest/数组不会改变已安装 plugin；非法定义以 `PLUGIN_MANIFEST_DEFINITION_INVALID`、`retryable=false` 拒绝。UI registry 与服务端 registry 共享同一宿主/API 版本常量和 semver 检查器；不兼容的 API、宿主或 active dependency version 在任何 React contribution 可见前以稳定 `PLUGIN_*_INCOMPATIBLE` / `PLUGIN_DEPENDENCY_UNAVAILABLE` 错误拒绝。UI 声明使用 `ui:<slot>:<id>`，并必须与实际注册项精确一致；缺失依赖、声明漂移、ID/目标冲突时整批均不会生效。活跃依赖存在时，`unregisterUiPlugin(pluginId)` 会拒绝卸载被依赖插件。
 
 `registerUiContributions()` 仍是宿主内部与测试使用的低级原子 registry API。新的构建期插件模块应使用 `registerTrustedUiPlugin()`，以免绕过 manifest 与依赖生命周期。两种 API 返回的 disposer 都是幂等的。
 

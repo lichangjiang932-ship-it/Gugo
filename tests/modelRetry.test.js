@@ -155,3 +155,21 @@ test('onRetry 回调抛错不影响重试本身', async () => {
   })
   assert.equal(result, 'ok')
 })
+
+test('结果未知的模型请求绝不自动重试', async () => {
+  const { delays, sleepImpl } = makeSleepSpy()
+  let attempts = 0
+  await assert.rejects(
+    () => withRetry(async () => {
+      attempts += 1
+      throw Object.assign(new Error('upstream may already be processing'), {
+        code: 'MODEL_REQUEST_OUTCOME_UNKNOWN',
+        status: 503,
+        unsafeToReplay: true,
+      })
+    }, { maxAttempts: 3, sleepImpl }),
+    (error) => error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN',
+  )
+  assert.equal(attempts, 1)
+  assert.deepEqual(delays, [])
+})

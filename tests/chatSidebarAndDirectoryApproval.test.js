@@ -39,7 +39,7 @@ test('local paths are authorized before the model call and paused turns resume i
   assert.match(chatPage, /buildServerTurnResumeMeta\(result\.resolution\)/)
   assert.match(chatPage, /showPendingDirectoryGuidance\(typedContent\)/)
   assert.match(pausedResume, /resolvePendingDirectorySend/)
-  assert.match(resume, /resumeResolution = message\.meta\?\.serverResumeResolution \|\| null/)
+  assert.match(resume, /resumeResolution = failedRetry \? null : message\.meta\?\.serverResumeResolution \|\| null/)
   assert.match(resume, /resumeResolution,/)
   assert.match(chatPage, /stateTurnRunActive: isGenerating/)
   assert.match(resume, /stateTurnRunActive/)

@@ -133,13 +133,13 @@ export const NEVER_APPROVE_TOOLS = Object.freeze([
 
 const NEVER = new Set(NEVER_APPROVE_TOOLS)
 
-// Plan mode keeps schemas visible so the model never mistakes a policy
-// restriction for a missing capability, but execution is limited to local,
-// side-effect-free inspection. Network/connector/dynamic tools fail closed
-// even when they describe themselves as read-only.
+// Plan mode exposes only local, side-effect-free inspection tools to the
+// model. Network/connector/dynamic tools fail closed even when they describe
+// themselves as read-only. The same allowlist is also enforced at execution.
 const PLAN_LOCAL_READ_TOOLS = new Set([
   'reflect',
   'request_clarification',
+  'request_directory',
   'manage_todos',
   'read_artifact_source',
   'list_directory',
@@ -157,6 +157,15 @@ const PLAN_LOCAL_READ_TOOLS = new Set([
   'file_hash_manifest',
   'process_list',
 ])
+
+export function isToolVisibleInPermissionMode(toolName, permissionMode = DEFAULT_PERMISSION_MODE) {
+  const name = str(toolName).trim()
+  if (!name) return false
+  const mode = PERMISSION_MODES.includes(permissionMode)
+    ? permissionMode
+    : DEFAULT_PERMISSION_MODE
+  return mode !== 'plan' || PLAN_LOCAL_READ_TOOLS.has(name)
+}
 
 /** 动态工具(MCP / 插件)里带这些词的按写操作处理。 */
 const WRITE_INTENT_RE = /(^|_)(create|update|delete|remove|write|send|post|put|patch|publish|merge|close|comment|reply|invite|archive|move|rename|upload|execute|run|approve|pay|order|schedule)(_|$)/i
@@ -274,6 +283,7 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   const rememberedGrants = Array.isArray(opts.rememberedGrants) ? opts.rememberedGrants : []
   const taskGrants = Array.isArray(opts.taskGrants) ? opts.taskGrants : []
   const safeArgs = args && typeof args === 'object' ? args : {}
+  const metadata = opts.metadata && typeof opts.metadata === 'object' ? opts.metadata : null
   const parameterConfirmationReason = explicitConfirmationReason(name, safeArgs)
   const alwaysConfirm = ALWAYS_CONFIRM_TOOLS.has(name) || !!parameterConfirmationReason
 
@@ -290,12 +300,17 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     }
   }
 
-  // The mode controls whether a loaded tool may execute; it must not be used
-  // as a reason to remove schemas from the model-visible catalog. Plan mode is
-  // deliberately stricter than the generic NEVER_APPROVE list because some
-  // entries there create artifacts or contact the network without prompting.
+  // Plan mode is deliberately stricter than the generic NEVER_APPROVE list
+  // because some entries there create artifacts or contact the network
+  // without prompting. Schema projection uses this same allowlist, while this
+  // execution check remains authoritative for stale or forged calls.
   if (permissionMode === 'plan') {
-    if (PLAN_LOCAL_READ_TOOLS.has(name)) {
+    // Production callers provide authoritative registry metadata. A dynamic
+    // capability must not inherit plan privileges merely by reusing a builtin
+    // read-only name such as read_file. The no-metadata case remains supported
+    // for the small pure-policy API used by legacy callers and unit tests.
+    if (PLAN_LOCAL_READ_TOOLS.has(name)
+      && (!metadata || metadata.origin === 'builtin')) {
       return { needsApproval: false, risk: 'low', reason: null }
     }
     return {
@@ -319,7 +334,6 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     if (SAFE_HTTP_METHODS.has(method)) return { needsApproval: false, risk: 'low', reason: null }
   }
 
-  const metadata = opts.metadata && typeof opts.metadata === 'object' ? opts.metadata : null
   if (metadata) {
     if (!alwaysConfirm && (metadata.requiresApproval === false || metadata.riskClass === 'read')) {
       return { needsApproval: false, risk: 'low', reason: null }

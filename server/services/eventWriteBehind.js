@@ -18,18 +18,92 @@ function errorMessage(error) {
   return String(error?.message || error || 'event write failed').slice(0, 2_000)
 }
 
+function terminalFenceError(error) {
+  const seen = new Set()
+  let current = error
+  for (let depth = 0; current && depth < 8 && !seen.has(current); depth += 1) {
+    if (String(current?.code || '').trim().toUpperCase() === 'TURN_ALREADY_TERMINAL') return current
+    seen.add(current)
+    current = current?.cause
+  }
+  return null
+}
+
+function batchFailureMetadata(batch) {
+  const entries = Array.isArray(batch) ? batch : []
+  const sequences = entries
+    .map((item) => item?.event?.sequence)
+    .filter(Number.isInteger)
+  return {
+    count: entries.length,
+    eventTypes: [...new Set(entries
+      .map((item) => String(item?.event?.type || '').trim())
+      .filter(Boolean))].slice(0, 32),
+    firstSequence: sequences.length > 0 ? Math.min(...sequences) : null,
+    lastSequence: sequences.length > 0 ? Math.max(...sequences) : null,
+  }
+}
+
+/**
+ * A durability barrier failure. The failed batch has already exhausted its
+ * retries and, when configured, has been copied to the write-failure journal.
+ * Callers must treat this as a failed Turn boundary rather than continuing to
+ * a checkpoint or successful terminal event.
+ */
+export class EventWriteBehindError extends Error {
+  constructor({ batch = [], cause = null, attempts = 1, failedAt = Date.now() } = {}) {
+    const metadata = batchFailureMetadata(batch)
+    const causeDetail = cause ? errorMessage(cause) : ''
+    super(`Failed to persist ${metadata.count} turn event(s) after ${attempts} attempt(s)${causeDetail ? `: ${causeDetail}` : ''}`, {
+      ...(cause ? { cause } : {}),
+    })
+    this.name = 'EventWriteBehindError'
+    this.code = 'TURN_EVENT_PERSISTENCE_FAILED'
+    this.status = 503
+    this.retryable = true
+    this.attempts = Math.max(1, Math.floor(Number(attempts) || 1))
+    this.failedAt = Math.max(0, Math.floor(Number(failedAt) || Date.now()))
+    this.failedEventCount = metadata.count
+    this.blockedEventCount = 0
+    this.failedEventTypes = metadata.eventTypes
+    this.firstFailedSequence = metadata.firstSequence
+    this.lastFailedSequence = metadata.lastSequence
+    this.failedEntries = [...(Array.isArray(batch) ? batch : [])]
+  }
+
+  include(batch, { blocked = false } = {}) {
+    const metadata = batchFailureMetadata(batch)
+    this.failedEntries.push(...(Array.isArray(batch) ? batch : []))
+    this.failedEventCount += metadata.count
+    if (blocked) this.blockedEventCount += metadata.count
+    this.failedEventTypes = [...new Set([...this.failedEventTypes, ...metadata.eventTypes])].slice(0, 32)
+    if (metadata.firstSequence !== null) {
+      this.firstFailedSequence = this.firstFailedSequence === null
+        ? metadata.firstSequence
+        : Math.min(this.firstFailedSequence, metadata.firstSequence)
+      this.lastFailedSequence = this.lastFailedSequence === null
+        ? metadata.lastSequence
+        : Math.max(this.lastFailedSequence, metadata.lastSequence)
+    }
+    return this
+  }
+}
+
 /**
  * Bounded write-behind queue for high-frequency, replayable events.
  *
  * enqueue() only accepts an immutable snapshot and never exposes the queued
  * object again. flush() is the durability barrier used before checkpoints,
  * tools, and terminal events. Exhausted background writes are reported through
- * recordFailure without rejecting the producer.
+ * recordFailure and make the next durability barrier reject. A barrier observes
+ * all failures accumulated before it; later writes may then start a new ordered
+ * generation, which lets the caller persist a structured failed terminal event.
  */
 export function createEventWriteBehind({
   writeBatch,
   writeBatchSync = null,
   recordFailure = null,
+  recordEmergencyFailure = null,
   logger = console,
   clone = null,
   maxDelayMs = DEFAULT_EVENT_WRITE_MAX_DELAY_MS,
@@ -55,6 +129,9 @@ export function createEventWriteBehind({
   let timer = null
   let tail = Promise.resolve()
   let closed = false
+  let activeFlush = null
+  let closePromise = null
+  let barrierFailure = null
   const stats = {
     enqueued: 0,
     written: 0,
@@ -75,30 +152,71 @@ export function createEventWriteBehind({
     timer = null
   }
 
-  const reportFailure = async (batch, error) => {
+  const reportFailure = async (batch, error, { attempts = safeMaxAttempts, blocked = false } = {}) => {
     const failedAt = Math.max(0, Math.floor(Number(now()) || Date.now()))
+    const underlyingError = error?.cause || error
     stats.failedEvents += batch.length
     stats.failedBatches += 1
     stats.lastFailureAt = failedAt
-    stats.lastError = errorMessage(error)
+    stats.lastError = errorMessage(underlyingError)
+    if (barrierFailure) {
+      barrierFailure.include(batch, { blocked })
+    } else {
+      barrierFailure = new EventWriteBehindError({
+        batch,
+        cause: underlyingError,
+        attempts: Math.max(1, attempts),
+        failedAt,
+      })
+      if (blocked) barrierFailure.blockedEventCount += batch.length
+    }
     try {
       await recordFailure?.({
         batch,
-        error,
+        error: underlyingError,
         errorMessage: stats.lastError,
-        attempts: safeMaxAttempts,
+        attempts: Math.max(1, attempts),
         failedAt,
+        blocked,
       })
     } catch (recordError) {
       logger?.error?.('[event-write-behind] failed to persist write failure:', errorMessage(recordError))
+      try {
+        await recordEmergencyFailure?.({
+          batch,
+          error: underlyingError,
+          errorMessage: stats.lastError,
+          attempts: Math.max(1, attempts),
+          failedAt,
+          blocked,
+          journalError: recordError,
+        })
+      } catch (emergencyError) {
+        logger?.error?.(
+          '[event-write-behind] failed to persist emergency failure journal:',
+          errorMessage(emergencyError),
+        )
+      }
     }
     logger?.error?.(
-      `[event-write-behind] dropped ${batch.length} event(s) after ${safeMaxAttempts} attempts:`,
+      `[event-write-behind] ${blocked ? 'blocked' : 'failed to persist'} ${batch.length} event(s) after ${Math.max(0, attempts)} attempt(s):`,
       stats.lastError,
     )
+    return barrierFailure
   }
 
   const writeWithRetry = async (batch, writer = writeBatch) => {
+    // Once an earlier ordered batch is missing, later batches in the same
+    // generation must not leapfrog it. The next explicit flush observes and
+    // clears the generation failure before any new generation can be written.
+    if (barrierFailure) {
+      if (terminalFenceError(barrierFailure)) {
+        barrierFailure.include(batch, { blocked: true })
+        return { ok: false, error: barrierFailure, attempts: 0, blocked: true }
+      }
+      const failure = await reportFailure(batch, barrierFailure, { attempts: 0, blocked: true })
+      return { ok: false, error: failure, attempts: 0, blocked: true }
+    }
     let lastError = null
     for (let attempt = 1; attempt <= safeMaxAttempts; attempt += 1) {
       try {
@@ -108,15 +226,31 @@ export function createEventWriteBehind({
         return { ok: true, result, attempts: attempt }
       } catch (error) {
         lastError = error
+        const fence = terminalFenceError(error)
+        if (fence) {
+          const failedAt = Math.max(0, Math.floor(Number(now()) || Date.now()))
+          stats.failedEvents += batch.length
+          stats.failedBatches += 1
+          stats.lastFailureAt = failedAt
+          stats.lastError = errorMessage(fence)
+          barrierFailure = new EventWriteBehindError({
+            batch,
+            cause: fence,
+            attempts: attempt,
+            failedAt,
+          })
+          barrierFailure.retryable = false
+          return { ok: false, error: barrierFailure, attempts: attempt }
+        }
         if (attempt < safeMaxAttempts) stats.retries += 1
       }
     }
-    await reportFailure(batch, lastError)
-    return { ok: false, error: lastError, attempts: safeMaxAttempts }
+    const failure = await reportFailure(batch, lastError)
+    return { ok: false, error: failure, attempts: safeMaxAttempts }
   }
 
-  const queueBatch = (batch) => {
-    const operation = tail.then(() => writeWithRetry(batch))
+  const queueBatch = (batch, writer = writeBatch) => {
+    const operation = tail.then(() => writeWithRetry(batch, writer))
     tail = operation.then(() => undefined, () => undefined)
     return operation
   }
@@ -143,13 +277,55 @@ export function createEventWriteBehind({
     timer?.unref?.()
   }
 
-  const writeOverflowSynchronously = (batch) => {
+  const queueOverflowBatch = (batch) => {
     const writer = typeof writeBatchSync === 'function' ? writeBatchSync : writeBatch
-    // The production writer is better-sqlite3 and therefore completes before
-    // this call returns. Promise-based injected writers still remain ordered by
-    // the returned tail, which keeps tests and alternate stores deterministic.
-    const operation = writeWithRetry(batch, writer)
-    tail = Promise.all([tail, operation]).then(() => undefined, () => undefined)
+    // Even an explicitly synchronous writer goes through the same tail. This
+    // prevents an overflow batch from overtaking a timer-triggered async batch
+    // in alternate stores while still keeping the in-memory pending list bounded.
+    queueBatch(batch, writer).catch(() => {})
+  }
+
+  const runFlush = async () => {
+    clearScheduledFlush()
+    while (pending.length > 0) {
+      drainPending()
+      await tail
+    }
+    await tail
+    if (barrierFailure) {
+      const failure = barrierFailure
+      barrierFailure = null
+      failure.stats = snapshotStats()
+      throw failure
+    }
+    return snapshotStats()
+  }
+
+  const flush = () => {
+    // All callers waiting on the same in-progress durability boundary must
+    // observe the same outcome. In particular, one caller must not consume a
+    // failure while another concurrent caller reports success.
+    if (activeFlush) return activeFlush
+    const operation = runFlush()
+    activeFlush = operation
+    operation.then(
+      () => { if (activeFlush === operation) activeFlush = null },
+      () => { if (activeFlush === operation) activeFlush = null },
+    )
+    return operation
+  }
+
+  const close = () => {
+    if (closePromise) return closePromise
+    closed = true
+    closePromise = (async () => {
+      // If close races an already active flush, await that boundary and then
+      // execute one final boundary. Setting closed first guarantees that the
+      // second boundary cannot miss a concurrent enqueue.
+      if (activeFlush) await activeFlush
+      return flush()
+    })()
+    return closePromise
   }
 
   return Object.freeze({
@@ -161,29 +337,16 @@ export function createEventWriteBehind({
       if (pending.length > safeMaxQueueSize) {
         clearScheduledFlush()
         stats.overflowFlushes += 1
-        writeOverflowSynchronously(takePending())
+        queueOverflowBatch(takePending())
       } else {
         scheduleFlush()
       }
       return queued
     },
 
-    async flush() {
-      clearScheduledFlush()
-      while (pending.length > 0) {
-        drainPending()
-        await tail
-      }
-      await tail
-      return snapshotStats()
-    },
+    flush,
 
-    async close() {
-      if (closed) return snapshotStats()
-      await this.flush()
-      closed = true
-      return snapshotStats()
-    },
+    close,
 
     getStats: snapshotStats,
   })

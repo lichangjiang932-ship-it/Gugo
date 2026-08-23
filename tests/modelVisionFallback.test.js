@@ -31,7 +31,34 @@ process.env.VISION_ASSIST_API_KEY = ''
 process.env.AGENT_INJECT_ENABLED = '0'
 
 const { createAppServer } = await import('../server/appServer.js')
+const {
+  COMPACTION_ARCHIVE_PORT_VERSION,
+  createCompactionArchivePortController,
+} = await import('../server/core/compactionArchivePort.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+
+const compactionArchiveController = createCompactionArchivePortController({
+  apiVersion: COMPACTION_ARCHIVE_PORT_VERSION,
+  id: 'test.model-vision-fallback',
+  create(input) {
+    return {
+      id: input.id || 'test-model-vision-fallback-archive',
+      userId: input.userId,
+      sessionId: input.sessionId,
+      replacedMessageCount: input.archivedMessages.length,
+      archivedMessages: input.archivedMessages,
+      summaryText: input.summaryText,
+      createdAt: 0,
+    }
+  },
+  get() {
+    return null
+  },
+  cleanup() {
+    return { removed: 0 }
+  },
+}, { source: 'test.model-vision-fallback' })
+compactionArchiveController.activate()
 
 test('text-only model receives placeholders instead of a 422 or raw image payload', async () => {
   const { token } = issueTestSession()
@@ -73,5 +100,6 @@ test('text-only model receives placeholders instead of a 422 or raw image payloa
 
 test.after(async () => {
   await new Promise((resolve) => mockModel.close(resolve))
+  compactionArchiveController.release()
   try { fs.rmSync(process.env.APP_DATA_DIR, { recursive: true, force: true }) } catch { /* best effort */ }
 })

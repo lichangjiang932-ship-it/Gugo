@@ -57,6 +57,12 @@ export function fetchWithEnvProxy(input, init = {}, env = process.env) {
   if (globalThis.fetch !== nativeFetch) {
     return globalThis.fetch(input, init)
   }
+  // A caller-provided dispatcher carries a connection-level DNS pin from the
+  // outbound guard. It must win over the environment proxy dispatcher or the
+  // validated address would be resolved again at connect time.
+  if (init?.dispatcher) {
+    return undiciFetch(input, init)
+  }
   if (!shouldUseEnvProxy(input, env)) {
     return nativeFetch(input, init)
   }

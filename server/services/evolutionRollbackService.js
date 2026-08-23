@@ -1,11 +1,22 @@
 import { createHash, randomUUID } from 'node:crypto'
 
+import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 import { getDb } from '../db.js'
 import { sanitizeEvolutionText } from './evolutionDatasetService.js'
 import { readWorkspaceInstructions } from './workspaceInstructions.js'
 
 const POLICY_VERSION = 'canary-rollback-v1'
 const MAX_EVALUATIONS = 200
+const LEGACY_MAXIMUM_COST_RATIO = 10
+const POLICY_FIELDS = new Set([
+  'windowSize',
+  'minimumCandidateOutcomes',
+  'minimumBaselineOutcomes',
+  'maximumCandidateFailureRate',
+  'maximumCandidateCancellationRate',
+  'maximumLatencyRatio',
+])
+const RETIRED_POLICY_FIELDS = new Set(['maximumCostRatio'])
 
 function serviceError(code, message, statusCode = 400) {
   return Object.assign(new Error(message), { code, statusCode })
@@ -77,6 +88,26 @@ function boundedReason(value) {
 }
 
 function normalizePolicy(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw serviceError(
+      'EVOLUTION_CANARY_ROLLBACK_POLICY_INVALID',
+      'policy must be an object',
+    )
+  }
+  const unsupportedField = Object.keys(value)
+    .sort()
+    .find((field) => !POLICY_FIELDS.has(field))
+  if (unsupportedField) {
+    const retired = RETIRED_POLICY_FIELDS.has(unsupportedField)
+    throw serviceError(
+      retired
+        ? 'EVOLUTION_CANARY_ROLLBACK_POLICY_FIELD_RETIRED'
+        : 'EVOLUTION_CANARY_ROLLBACK_POLICY_FIELD_UNSUPPORTED',
+      retired
+        ? `${unsupportedField} is retired; Provider cost telemetry cannot control rollback`
+        : `${unsupportedField} is not a supported rollback policy field`,
+    )
+  }
   const policy = {
     windowSize: boundedInteger(value.windowSize, 'windowSize', 3, 200),
     minimumCandidateOutcomes: boundedInteger(
@@ -104,7 +135,6 @@ function normalizePolicy(value = {}) {
       1,
     ),
     maximumLatencyRatio: boundedNumber(value.maximumLatencyRatio, 'maximumLatencyRatio', 1, 10),
-    maximumCostRatio: boundedNumber(value.maximumCostRatio, 'maximumCostRatio', 1, 10),
   }
   if (policy.minimumCandidateOutcomes > policy.windowSize
     || policy.minimumBaselineOutcomes > policy.windowSize) {
@@ -127,7 +157,6 @@ function policyView(row) {
     maximumCandidateFailureRate: row.maximum_candidate_failure_rate,
     maximumCandidateCancellationRate: row.maximum_candidate_cancellation_rate,
     maximumLatencyRatio: row.maximum_latency_ratio,
-    maximumCostRatio: row.maximum_cost_ratio,
     reason: row.reason,
     baselineSha256: row.baseline_sha256,
     releaseFingerprint: row.release_fingerprint,
@@ -142,6 +171,7 @@ function rollbackView(row) {
     id: row.id,
     policyId: row.policy_id,
     evaluationId: row.evaluation_id,
+    onlineGuardEvaluationId: row.online_guard_evaluation_id || null,
     rollbackBaselineSha256: row.rollback_baseline_sha256,
     releaseFingerprint: row.release_fingerprint,
     baselineStatus: row.baseline_status,
@@ -200,6 +230,11 @@ export function createEvolutionCanaryRollbackPolicy({
   now = Date.now(),
 } = {}) {
   const owner = ownerId(userId)
+  // Validate the complete public policy envelope before looking at lifecycle
+  // state. Retired dollar gates must never be silently ignored or masked by a
+  // later lock/existence error.
+  const policy = normalizePolicy(policyValue)
+  const reason = boundedReason(reasonValue)
   const release = releaseRow(owner, releaseId)
   if (latestLifecycleEvent(release.id)) {
     throw serviceError(
@@ -208,8 +243,6 @@ export function createEvolutionCanaryRollbackPolicy({
       409,
     )
   }
-  const policy = normalizePolicy(policyValue)
-  const reason = boundedReason(reasonValue)
   const fingerprint = sha256({
     version: POLICY_VERSION,
     releaseFingerprint: release.release_fingerprint,
@@ -237,7 +270,9 @@ export function createEvolutionCanaryRollbackPolicy({
       policy.maximumCandidateFailureRate,
       policy.maximumCandidateCancellationRate,
       policy.maximumLatencyRatio,
-      policy.maximumCostRatio,
+      // v68 made this column mandatory. New policies always store a fixed
+      // compatibility sentinel; callers cannot configure a dollar threshold.
+      LEGACY_MAXIMUM_COST_RATIO,
       reason,
       release.baseline_sha256,
       release.release_fingerprint,
@@ -308,8 +343,7 @@ function average(rows, readValue) {
 
 function measuredCost(row) {
   const usage = parseJson(row.usage_json, null)
-  const value = Number(usage?.costUsd)
-  return Number.isFinite(value) && value >= 0 ? value : null
+  return normalizeOptionalUsageNumber(usage?.costUsd)
 }
 
 function sampleRows(releaseId, windowSize) {
@@ -405,12 +439,6 @@ function policyBreaches(metrics, policy) {
       : metrics.latencyRatio > policy.maximum_latency_ratio
     if (latencyBreach) breaches.push('maximum_latency_ratio')
   }
-  if (metrics.evidence.costReady) {
-    const costBreach = metrics.costRatio === null
-      ? metrics.candidate.averageCostUsd > 0 && metrics.baseline.averageCostUsd === 0
-      : metrics.costRatio > policy.maximum_cost_ratio
-    if (costBreach) breaches.push('maximum_cost_ratio')
-  }
   return breaches
 }
 
@@ -423,6 +451,109 @@ function baselineObservation(env, expectedSha256) {
   } catch {
     return { status: 'unavailable', sha256: null }
   }
+}
+
+export function evolutionRollbackDecisionMetrics(metrics = {}) {
+  const stripCost = (value = {}) => {
+    const result = { ...value }
+    delete result.costMeasured
+    delete result.averageCostUsd
+    return result
+  }
+  const root = { ...(metrics || {}) }
+  const candidate = root.candidate || {}
+  const baseline = root.baseline || {}
+  const evidence = root.evidence || {}
+  delete root.costRatio
+  delete root.candidate
+  delete root.baseline
+  delete root.evidence
+  const decisionEvidence = { ...evidence }
+  delete decisionEvidence.costReady
+  return {
+    ...root,
+    candidate: stripCost(candidate),
+    baseline: stripCost(baseline),
+    evidence: decisionEvidence,
+  }
+}
+
+/**
+ * Attach an independent online quality/safety breach to the existing one-shot
+ * rollback ledger. The v68 operational evaluation remains the required parent
+ * record; v82 adds the exact online guard evidence that caused this rollback.
+ */
+export function applyEvolutionCanaryOnlineRollback({
+  userId,
+  releaseId,
+  onlineGuardEvaluationId,
+  triggerFingerprint,
+  breaches,
+  env = process.env,
+  now = Date.now(),
+} = {}) {
+  const owner = ownerId(userId)
+  const release = releaseRow(owner, releaseId)
+  const existing = rollbackRow(release.id)
+  if (existing) return getEvolutionCanaryRollbackState({ userId: owner, releaseId: release.id })
+  const policy = policyRow(release.id)
+  if (!policy) {
+    throw serviceError(
+      'EVOLUTION_CANARY_ROLLBACK_POLICY_REQUIRED',
+      'an immutable automatic rollback policy is required',
+      409,
+    )
+  }
+  const onlineEvaluation = getDb().prepare(`
+    SELECT * FROM evolution_canary_online_guard_evaluations
+    WHERE id = ? AND release_id = ? AND user_id = ? AND decision = 'rollback'
+  `).get(String(onlineGuardEvaluationId || '').trim(), release.id, owner)
+  if (!onlineEvaluation || onlineEvaluation.evaluation_fingerprint !== String(triggerFingerprint || '').trim()) {
+    throw serviceError(
+      'EVOLUTION_CANARY_ONLINE_GUARD_INVALID',
+      'online rollback guard evidence is missing or inconsistent',
+      409,
+    )
+  }
+  const operationalEvaluation = getDb().prepare(`
+    SELECT * FROM evolution_canary_rollback_evaluations
+    WHERE release_id = ? ORDER BY rowid DESC LIMIT 1
+  `).get(release.id)
+  if (!operationalEvaluation) {
+    throw serviceError(
+      'EVOLUTION_CANARY_OPERATIONAL_GUARD_MISSING',
+      'operational guard evidence is required before online rollback',
+      409,
+    )
+  }
+  const normalizedBreaches = [...new Set((Array.isArray(breaches) ? breaches : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))]
+  if (normalizedBreaches.length === 0) {
+    throw serviceError(
+      'EVOLUTION_CANARY_ONLINE_GUARD_INVALID',
+      'online rollback requires at least one quality or safety breach',
+      409,
+    )
+  }
+  const baseline = baselineObservation(env, release.baseline_sha256)
+  const createdAt = timestamp(now)
+  const reason = `Automatic rollback: online_quality_safety:${normalizedBreaches.join(', ')}`
+    .slice(0, 2_000)
+  getDb().prepare(`
+    INSERT OR IGNORE INTO evolution_canary_rollbacks (
+      id, user_id, release_id, policy_id, evaluation_id,
+      rollback_baseline_sha256, release_fingerprint, baseline_status,
+      observed_baseline_sha256, trigger_fingerprint, reason, created_at,
+      online_guard_evaluation_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    randomUUID(), owner, release.id, policy.id, operationalEvaluation.id,
+    release.baseline_sha256, release.release_fingerprint, baseline.status,
+    baseline.sha256, onlineEvaluation.evaluation_fingerprint, reason, createdAt,
+    onlineEvaluation.id,
+  )
+  return getEvolutionCanaryRollbackState({ userId: owner, releaseId: release.id })
 }
 
 export function evaluateEvolutionCanaryRollback({
@@ -445,16 +576,17 @@ export function evaluateEvolutionCanaryRollback({
   const rows = sampleRows(release.id, policy.window_size)
   const metrics = buildMetrics(rows, policy)
   const breaches = policyBreaches(metrics, policy)
+  // Cost evidence is optional BYOK telemetry. It is persisted for local
+  // inspection but never participates in rollback decisions.
   const completeEvidence = metrics.evidence.candidateReady
     && metrics.evidence.baselineReady
-    && metrics.evidence.costReady
   const decision = breaches.length
     ? 'rollback'
     : completeEvidence ? 'continue' : 'insufficient_evidence'
   const evaluationFingerprint = sha256({
     policyFingerprint: policy.policy_fingerprint,
     outcomeId: outcome.id,
-    metrics,
+    metrics: evolutionRollbackDecisionMetrics(metrics),
     breaches,
     decision,
   })

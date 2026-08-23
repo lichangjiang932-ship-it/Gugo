@@ -25,9 +25,36 @@ process.env.MODEL_API_KEY = 'sk-test'
 process.env.MODEL_PROVIDERS = ''
 
 const { createAppServer } = await import('../server/appServer.js')
+const {
+  COMPACTION_ARCHIVE_PORT_VERSION,
+  createCompactionArchivePortController,
+} = await import('../server/core/compactionArchivePort.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 const { createAgent, updateAgent } = await import('../server/services/agentStore.js')
 const { clearPromptCompilerCache } = await import('../server/services/promptCompiler.js')
+
+const compactionArchiveController = createCompactionArchivePortController({
+  apiVersion: COMPACTION_ARCHIVE_PORT_VERSION,
+  id: 'test.model-proxy-compiler',
+  create(input) {
+    return {
+      id: input.id || 'test-model-proxy-compiler-archive',
+      userId: input.userId,
+      sessionId: input.sessionId,
+      replacedMessageCount: input.archivedMessages.length,
+      archivedMessages: input.archivedMessages,
+      summaryText: input.summaryText,
+      createdAt: 0,
+    }
+  },
+  get() {
+    return null
+  },
+  cleanup() {
+    return { removed: 0 }
+  },
+}, { source: 'test.model-proxy-compiler' })
+compactionArchiveController.activate()
 
 async function postModelTest({ baseUrl, token, body }) {
   const response = await fetch(`${baseUrl}/api/model/test`, {
@@ -120,5 +147,6 @@ test('model test rate limits authenticated callers', async () => {
 
 test.after(async () => {
   await new Promise((resolve) => mockModel.close(resolve))
+  compactionArchiveController.release()
   try { fs.rmSync(process.env.APP_DATA_DIR, { recursive: true, force: true }) } catch { /* best effort */ }
 })

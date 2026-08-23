@@ -1,150 +1,48 @@
 import { observeLoopEvent } from './eventIsolation.js'
+import {
+  appendModelProviderAttempt,
+  createModelInvocation,
+  fingerprintModelRequest,
+  reconcileRecoveredModelInvocation,
+  snapshotModelResponse,
+} from './modelInvocationCheckpoint.js'
+import { installArtifactSteeringContract } from './runtime-initializeArtifactSteering.js'
+import { installTerminalCompletion } from './runtime-initializeTerminalCompletion.js'
+
+export function resolveExecutionBudgetOptions(job, restoredBudget) {
+  if (!restoredBudget || typeof restoredBudget !== 'object') return restoredBudget
+  // Historical checkpoints may carry the retired dollar gate. Strip it at
+  // the recovery adapter boundary before constructing the technical
+  // calls/tokens budget; the original checkpoint remains immutable.
+  const executionBudget = { ...restoredBudget }
+  delete executionBudget.maxCostUsd
+  return executionBudget
+}
 
 export async function initializeSteering(s) {
-  const { ARTIFACT_DELIVERY_GUARD_MARKER, ARTIFACT_RECOVERY_DIAGNOSIS_MARKER, ARTIFACT_RECOVERY_FORCE_MARKER, LIVE_ARTIFACT_CONTRACT_MARKER, LIVE_STEERING_GUARD_MARKER, MAX_INSTALL_ATTEMPT_SIGNATURES, MAX_LOCAL_HTML_DELIVERY_RETRIES, VERIFICATION_TOOLS, allowedArtifactTools, attachJobBudget, callModelWithContextRecovery, createJobBudget, createModelPhaseHeartbeat, createSubagentApprovalContext, createToolLoopGuard, getJobBudget, hasCommandExecutionTool, hasMutationExecutionIntent, installAttemptSignature, isCommandExecutionTool, isContextLengthError, isFileArtifactTool, isForcedToolChoiceCompatibilityError, isProbeLikeCall, parseSkillIdFromPrompt, replaceRuntimeCapabilityBlock, requestedArtifactOutputDirective, resolveArtifactDeliveryTargets, runModelStep, runWithModelBudget, shouldRequirePdfLayoutVerification, stripEphemeralToolMediaMessages, toolNameFromSpec } = s.d
-  s.steeringArtifactTerms = new Map([
-      ['create_html_app', '(?:网页|网站|页面|HTML(?:\\s*(?:文件|页面))?|web(?:site|page)|site)'],
-      ['create_pptx', '(?:PPTX?|幻灯片|演示文稿|PowerPoint|slide(?:\\s*deck)?)'],
-      ['create_docx', '(?:DOCX?|Word(?:\\s*document)?|文档|报告文件)'],
-      ['create_xlsx', '(?:XLSX?|Excel|电子表格|工作簿|spreadsheet|workbook)'],
-      ['create_pdf', '(?:PDF(?:\\s*(?:文件|文档))?)'],
-      ['generate_image', '(?:图片|图像|插图|海报|image|picture)'],
-    ])
-  s.cancelledArtifactToolsFromSteering = (value) => {
-      const text = String(value || '')
-      const cancelled = new Set()
-      for (const [toolName, term] of s.steeringArtifactTerms) {
-        const explicitCancellation = new RegExp([
-          `(?:不要|不再|停止|别|不用|不需要)(?:再|继续)?\\s*(?:生成|创建|制作|输出|导出|交付|调用)\\s*(?:(?:任何|新的?|一张|一个|一份)\\s*)*${term}`,
-          `(?:取消|放弃|去掉|删除|无需|不必|不再需要)\\s*(?:生成|创建|制作|输出|导出|交付)?\\s*(?:(?:任何|新的?|一张|一个|一份)\\s*)*${term}`,
-          `不要\\s*(?:(?:任何|新的?|一张|一个|一份)\\s*)*${term}(?:文件|产物)?(?:了|啦)?(?=[，,。；;！!？?\\s]|$)`,
-          `${term}\\s*(?:不要|无需|不必|不再)\\s*(?:生成|创建|制作|输出|导出|交付)`,
-          `(?:do\\s+not|don't|no\\s+longer|stop|cancel)\\s+(?:create|generate|make|export|deliver|produce)\\s+(?:a\\s+|an\\s+|any\\s+|new\\s+)?${term}`,
-        ].join('|'), 'i')
-        if (explicitCancellation.test(text)) cancelled.add(toolName)
-      }
-      return cancelled
-    }
-  s.steeringDefinesExclusiveArtifactContract = (value, detectedTools) => {
-      if (!(detectedTools instanceof Set) || detectedTools.size === 0) return false
-      const text = String(value || '')
-      return /(?:只|仅)(?:需|需要|要|生成|创建|制作|输出|导出|交付|保留|使用|用)|(?:改为|换成|替换为)\s*(?:只|仅)?|\bonly\b|\binstead\b/i.test(text)
-    }
-  s.refreshArtifactContractFromSteering = (value) => {
-      const text = String(value || '').trim()
-      if (!text) return false
-
-      const steeringSkillId = parseSkillIdFromPrompt(text)
-      const detectedTools = new Set(
-        [...allowedArtifactTools(text, {
-          ...s.artifactIntentOptions,
-          skillId: steeringSkillId || undefined,
-        })].filter((name) => s.artifactToolSpecCatalog.has(name)),
-      )
-      const cancelledTools = s.cancelledArtifactToolsFromSteering(text)
-      const exclusive = s.steeringDefinesExclusiveArtifactContract(text, detectedTools)
-      if (!exclusive && detectedTools.size === 0 && cancelledTools.size === 0) return false
-
-      const previousAuthorizedTools = new Set(s.authorizedArtifactTools)
-      const previousRequiredTools = new Set(s.expectedArtifactTools)
-      const nextAuthorizedTools = exclusive
-        ? detectedTools
-        : new Set([...s.authorizedArtifactTools, ...detectedTools])
-      const nextRequiredTools = exclusive
-        ? detectedTools
-        : new Set([...s.expectedArtifactTools, ...detectedTools])
-      for (const name of cancelledTools) {
-        nextAuthorizedTools.delete(name)
-        nextRequiredTools.delete(name)
-      }
-      const changed = previousAuthorizedTools.size !== nextAuthorizedTools.size
-        || [...previousAuthorizedTools].some((name) => !nextAuthorizedTools.has(name))
-        || previousRequiredTools.size !== nextRequiredTools.size
-        || [...previousRequiredTools].some((name) => !nextRequiredTools.has(name))
-      if (!changed) {
-        s.activeArtifactContractText = text
-        return false
-      }
-
-      s.authorizedArtifactTools.clear()
-      s.expectedArtifactTools.clear()
-      for (const name of nextAuthorizedTools) s.authorizedArtifactTools.add(name)
-      for (const name of nextRequiredTools) {
-        if (s.artifactDeliveryStep && nextAuthorizedTools.has(name)) s.expectedArtifactTools.add(name)
-      }
-      s.activeArtifactContractText = text
-      s.requiresPersistedArtifact = s.expectedArtifactTools.size > 0 && s.artifactDeliveryStep
-      s.pdfLayoutDeliveryEligible = s.expectedArtifactTools.size === 0
-        || s.expectedArtifactTools.has('create_pdf')
-      s.requiresSourceHandoffProtection = !s.codeSnippetRequested && (
-        s.directExecutionRequested || s.requiresPersistedArtifact || s.revisesAdjacentArtifact
-      )
-      s.requiresLocalArtifactDelivery = ['workspace_file', 'mixed'].includes(
-        resolveArtifactDeliveryTargets(text, s.artifactIntentOptions).target,
-      ) || s.artifactRevisionMode === 'replace_original'
-        || Boolean(String(s.outputDirectoryContext.defaultOutputDirectory || '').trim())
-
-      // Steering changes which artifact calls are authorized and which outputs
-      // must be delivered; it must not mutate the model-visible chat catalog.
-      // Background jobs keep their narrower artifact contract.
-      if (s.job?.origin !== 'chat') {
-        const activeByName = new Map(
-          s.activeToolSpecs
-            .filter((spec) => !isFileArtifactTool(spec?.function?.name)
-              || s.authorizedArtifactTools.has(spec.function.name))
-            .map((spec) => [spec?.function?.name, spec]),
-        )
-        if (s.artifactDeliveryStep) {
-          for (const name of s.authorizedArtifactTools) {
-            const spec = s.artifactToolSpecCatalog.get(name)
-            if (spec) activeByName.set(name, spec)
-          }
-        }
-        s.activeToolSpecs = [...activeByName.values()].filter(Boolean)
-        if (s.hasManagedAttachments) {
-          s.activeToolSpecs = s.activeToolSpecs.filter((spec) => spec?.function?.name !== 'request_directory')
-        }
-      }
-      s.availableVerificationToolNames = s.activeToolSpecs
-        .map(toolNameFromSpec)
-        .filter((name) => VERIFICATION_TOOLS.has(name) || isCommandExecutionTool(name))
-      s.requiresPdfLayoutVerification = s.mutationExecutionRequested
-        && s.pdfLayoutDeliveryEligible
-        && shouldRequirePdfLayoutVerification(text)
-        && hasCommandExecutionTool(s.activeToolSpecs)
-
-      s.artifactDeliveryRetries = 0
-      s.clearArtifactRecovery()
-      s.recomputeDeliveredArtifactTools()
-      s.invalidateDeliverableSelection()
-      s.convo = s.convo.filter((message) => {
-        if (message?.role !== 'system') return true
-        const content = String(message?.content || '')
-        return !content.includes(ARTIFACT_DELIVERY_GUARD_MARKER)
-          && !content.includes(ARTIFACT_RECOVERY_DIAGNOSIS_MARKER)
-          && !content.includes(ARTIFACT_RECOVERY_FORCE_MARKER)
-          && !content.includes(LIVE_ARTIFACT_CONTRACT_MARKER)
-      })
-      s.convo = replaceRuntimeCapabilityBlock(s.convo, {
-        toolSpecs: s.activeToolSpecs,
-        approvalMode: s.approvalMode,
-        ...s.outputDirectoryContext,
-      })
-      const removed = [...previousAuthorizedTools].filter((name) => !s.authorizedArtifactTools.has(name))
-      const added = [...s.expectedArtifactTools].filter((name) => !previousRequiredTools.has(name))
-      s.convo.push({
-        role: 'system',
-        content: [
-          LIVE_ARTIFACT_CONTRACT_MARKER,
-          'The latest live user direction has updated the relevant parts of the file-delivery contract.',
-          `Required artifact generators now: ${[...s.expectedArtifactTools].join(', ') || '(none)'}.`,
-          removed.length > 0 ? `Cancelled artifact generators: ${removed.join(', ')}. Do not call or deliver them.` : '',
-          added.length > 0 ? `Newly required artifact generators: ${added.join(', ')}.` : '',
-          'Use only the currently exposed tools. Earlier recovery prompts for cancelled generators are obsolete.',
-        ].filter(Boolean).join(' '),
-      })
-      return true
-    }
+  const {
+    LIVE_STEERING_GUARD_MARKER,
+    MAX_INSTALL_ATTEMPT_SIGNATURES,
+    attachJobBudget,
+    callModelWithContextRecovery,
+    createJobBudget,
+    createModelPhaseHeartbeat,
+    createSubagentApprovalContext,
+    createToolLoopGuard,
+    getJobBudget,
+    hasMutationExecutionIntent,
+    installAttemptSignature,
+    isContextLengthError,
+    isForcedToolChoiceCompatibilityError,
+    isProbeLikeCall,
+    recordRecoveredModelResult,
+    requestedArtifactOutputDirective,
+    runModelStep,
+    runWithModelBudget,
+    stripEphemeralToolMediaMessages,
+  } = s.d
+  installArtifactSteeringContract(s)
+  installTerminalCompletion(s)
   s.appendSteeringMessages = (messages = []) => {
       if (!messages.length) return 0
       // 用户干预改变了上下文,跨干预的重复调用不算死循环。
@@ -174,113 +72,6 @@ export async function initializeSteering(s) {
       }
       return messages.length
     }
-  s.finishIncomplete = async ({ text, reason, steeringLeaseId = null }) => {
-      const safePartialResult = s.partialResultFallback.apply({
-        text,
-        incomplete: true,
-        reason,
-      })
-      s.finalText = s.protectTerminalText(safePartialResult.text, { incomplete: true })
-      const completion = await s.steeringController.prepareCompletion({
-        text: s.finalText,
-        leaseId: steeringLeaseId,
-        incomplete: true,
-        reason,
-      })
-      if (!completion.closed) return { deferredForSteering: true }
-      s.suppressTerminalArtifacts()
-      if (!completion.prepared) s.convo.push({ role: 'assistant', content: s.finalText })
-      try {
-        await s.persistTurn({
-          final: {
-            text: s.finalText,
-            iterations: s.iter + 1,
-            incomplete: true,
-            reason,
-          },
-        })
-        s.finalCheckpointPersisted = true
-        if (!completion.prepared) await s.steeringController.acknowledge(steeringLeaseId)
-      } catch (error) {
-        await s.steeringController.release(steeringLeaseId)
-        throw error
-      }
-      return s.emitTurnStopping({
-        text: s.finalText,
-        artifactIds: s.artifactIds,
-        ...s.deliverySelectionFields(),
-        iterations: s.iter + 1,
-        incomplete: true,
-        reason,
-        recovery: s.recovery,
-      })
-    }
-  s.handleLocalHtmlDeliveryFailure = async ({
-      failure,
-      content = '',
-      steeringLeaseId = null,
-    }) => {
-      if (!failure) {
-        s.localHtmlDeliveryRetries = 0
-        return { scheduled: false, result: null }
-      }
-      if (s.localHtmlDeliveryRetries >= MAX_LOCAL_HTML_DELIVERY_RETRIES) {
-        return {
-          scheduled: false,
-          result: await s.finishIncomplete({
-            text: '网页文件尚未通过资源完整性验证，因此没有作为已完成文件显示或交付。请重试以继续自动修复。',
-            reason: 'local_html_delivery_validation_failed',
-            steeringLeaseId,
-          }),
-        }
-      }
-      s.localHtmlDeliveryRetries += 1
-      s.appendLocalHtmlDeliveryRepairPrompt(failure, content)
-      // A normal correction uses one model round to write, one to read back,
-      // and one to make the completion claim. Keep the extension bounded by the
-      // four validation retries while allowing that complete repair sequence.
-      if (s.iter + 1 >= s.maxIters) s.maxIters = s.iter + 3
-      await s.persistTurn()
-      await s.steeringController.acknowledge(steeringLeaseId)
-      return { scheduled: true, result: null }
-    }
-  s.finishTerminalResult = async (result, {
-      steeringLeaseId = null,
-      finalMetadata = {},
-      appendTextToConversation = true,
-    } = {}) => {
-      result = s.partialResultFallback.apply(result)
-      const terminalIsIncomplete = result?.incomplete === true
-        || result?.paused === true
-        || result?.interrupted === true
-        || result?.budgetExceeded === true
-        || result?.noProgress === true
-      const text = s.protectTerminalText(result?.text, { incomplete: terminalIsIncomplete })
-      const completion = await s.steeringController.prepareCompletion({
-        text,
-        leaseId: steeringLeaseId,
-        incomplete: result?.incomplete === true,
-        reason: result?.reason || null,
-      })
-      if (!completion.closed) return null
-      if (result?.incomplete === true || result?.paused === true || result?.interrupted === true) {
-        s.suppressTerminalArtifacts()
-      }
-      if (!completion.prepared && text && appendTextToConversation) {
-        s.convo.push({ role: 'assistant', content: text })
-      }
-      await s.persistTurn({
-        final: {
-          text,
-          iterations: Math.max(1, Number(result?.iterations) || s.iter + 1),
-          incomplete: result?.incomplete === true,
-          reason: result?.reason || null,
-          ...finalMetadata,
-        },
-      })
-      s.finalCheckpointPersisted = Boolean(text.trim())
-      return s.emitTurnStopping({ ...result, text, ...s.deliverySelectionFields() })
-    }
   s.restoredBudget = s.restoredState?.budget && typeof s.restoredState.budget === 'object'
       ? {
           maxTotalCalls: s.restoredState.budget.maxTotalCalls,
@@ -294,11 +85,20 @@ export async function initializeSteering(s) {
           initialModelCalls: s.restoredState.budget.modelCalls,
           initialModelTokens: s.restoredState.budget.modelTokens,
           initialCostUsd: s.restoredState.budget.costUsd,
+          initialCostEvidenceComplete: s.restoredState.budget.costEvidenceComplete,
         }
       : undefined
-  s.budget = s.runtimeBudget || (s.job
-      ? (getJobBudget(s.job) || attachJobBudget(s.job, s.restoredBudget))
-      : createJobBudget(s.restoredBudget))
+  // Chat turns are caller-scoped (user/session/turn) while the legacy shared
+  // budget cache is keyed by job.id alone. Reusing that cache would let equal
+  // caller-provided turn ids share counters across tenants and would also make
+  // recovery depend on whether the process restarted. A chat execution always
+  // rebuilds from its durable checkpoint; server-generated background jobs keep
+  // their shared in-process budget across scheduler ticks.
+  const usesSharedJobBudget = s.job && s.job.origin !== 'chat'
+  const executionBudgetOptions = resolveExecutionBudgetOptions(s.job, s.restoredBudget)
+  s.budget = s.runtimeBudget || (usesSharedJobBudget
+      ? (getJobBudget(s.job) || attachJobBudget(s.job, executionBudgetOptions))
+      : createJobBudget(executionBudgetOptions))
   s.callTrackedModel = async ({
       messages: modelMessages,
       tools: modelTools = [],
@@ -307,9 +107,32 @@ export async function initializeSteering(s) {
       allowOverBudget = false,
       onTextDelta,
       onReasoningDelta: handleReasoningDelta,
+      requestSignal = s.signal,
+      assertRequestActive = null,
     }) => {
+      if (assertRequestActive !== null && typeof assertRequestActive !== 'function') {
+        throw new TypeError('assertRequestActive must be a function or null')
+      }
+      const requestFenceFailures = new Set()
+      const assertActive = () => {
+        if (!assertRequestActive) return
+        try {
+          const result = assertRequestActive()
+          if (result && typeof result.then === 'function') {
+            throw new TypeError('assertRequestActive must be synchronous')
+          }
+        } catch (error) {
+          // Keep the exact revocation value so nested model/provider catches can
+          // distinguish it from an upstream failure and must not persist a
+          // misleading failed/not-sent outcome for a request the host revoked.
+          requestFenceFailures.add(error)
+          throw error
+        }
+      }
+      assertActive()
       if (typeof s.onModelPhase === 'function') {
         await s.onModelPhase({ phase: 'started', iteration: s.iter })
+        assertActive()
       }
       const heartbeat = createModelPhaseHeartbeat({
         onPhase: s.onModelPhase,
@@ -319,28 +142,268 @@ export async function initializeSteering(s) {
       const ephemeralMessages = s.pendingEphemeralToolMessages.splice(0)
       let forcedToolChoiceCompatibilityFallbackUsed = false
       try {
+        assertActive()
         const request = await callModelWithContextRecovery({
           messages: modelMessages,
           ephemeralMessages,
           tools: modelTools,
           callModel: async (modelRequest) => {
             await heartbeat.beginRequest()
-            const invoke = (requestPayload) => runModelStep({
-              request: requestPayload,
-              loopEvents: s.activeLoopEvents,
-              context: s.loopEventContext({ phase: 'model-request' }),
-              beforeRequest: ({ attempt }) => s.checkpointBarrier.beforeSideEffect({
-                meta: { boundary: 'model-request', iteration: s.iter, attempt },
-              }),
-              runModel: (preparedRequest) => runWithModelBudget(
-                s.budget,
-                () => s.runModel(preparedRequest),
-                { allowOverBudget },
-              ),
-            })
+            const invoke = (requestPayload) => {
+              let preparedInvocation = null
+              return runModelStep({
+                request: requestPayload,
+                loopEvents: s.activeLoopEvents,
+                context: s.loopEventContext({ phase: 'model-request' }),
+                beforeRequest: async ({ request: preparedRequest, attempt }) => {
+                  assertActive()
+                  const fingerprint = fingerprintModelRequest(preparedRequest, {
+                    jobId: s.job?.id,
+                    stepId: s.step?.id,
+                    iteration: s.iter,
+                    modelName: s.job?.modelName,
+                    modelProviderId: s.job?.modelProviderId,
+                    modelConfigRevision: s.job?.modelConfigRevision,
+                    attachmentIds: Array.isArray(s.job?.managedAttachments)
+                      ? s.job.managedAttachments.map((attachment) => attachment?.id)
+                      : [],
+                  })
+                  let recoveredNextAttempt = null
+                  if (s.restoredModelInvocation) {
+                    const resolution = await reconcileRecoveredModelInvocation(s.restoredModelInvocation, {
+                      fingerprint,
+                      iteration: s.iter,
+                      modelName: s.job?.modelName,
+                      modelProviderId: s.job?.modelProviderId,
+                      modelConfigRevision: s.job?.modelConfigRevision,
+                      reconcileRequest: s.reconcileModelRequest,
+                    })
+                    assertActive()
+                    s.restoredModelInvocation = null
+                    s.modelInvocation = resolution.invocation || null
+                    let recoveredBudgetError = null
+                    if (resolution.kind === 'replay'
+                      && resolution.invocation?.usageApplied === false) {
+                      try {
+                        recordRecoveredModelResult(s.budget, resolution.response, { allowOverBudget })
+                      } catch (error) {
+                        recoveredBudgetError = error
+                      }
+                      s.modelInvocation = {
+                        ...resolution.invocation,
+                        usageApplied: true,
+                      }
+                    }
+                    if (resolution.checkpointRequired) {
+                      assertActive()
+                      await s.checkpointBarrier.flush({
+                        meta: {
+                          boundary: 'model-request-reconciled',
+                          iteration: s.iter,
+                          attempt: resolution.invocation.attempt,
+                          modelRequestId: resolution.invocation.id,
+                          outcome: resolution.invocation.status,
+                          },
+                        })
+                      assertActive()
+                    }
+                    if (resolution.kind === 'replay') {
+                      preparedInvocation = {
+                        cached: true,
+                        ...resolution,
+                        ...(recoveredBudgetError ? { budgetError: recoveredBudgetError } : {}),
+                      }
+                      return { ...preparedRequest, modelRequestId: resolution.invocation.id }
+                    }
+                    recoveredNextAttempt = resolution.nextAttempt || null
+                  }
+                  assertActive()
+                  const invocation = createModelInvocation({
+                    fingerprint,
+                    jobId: s.job?.id,
+                    stepId: s.step?.id,
+                    iteration: s.iter,
+                    attempt: recoveredNextAttempt || attempt,
+                    modelName: s.job?.modelName,
+                    modelProviderId: s.job?.modelProviderId,
+                    modelConfigRevision: s.job?.modelConfigRevision,
+                  })
+                  s.modelInvocation = invocation
+                  preparedInvocation = { cached: false, invocation }
+                  assertActive()
+                  await s.checkpointBarrier.beforeSideEffect({
+                    meta: {
+                      boundary: 'model-request',
+                      iteration: s.iter,
+                      attempt,
+                      modelRequestId: invocation.id,
+                    },
+                  })
+                  assertActive()
+                  return {
+                    ...preparedRequest,
+                    modelRequestId: invocation.id,
+                    onProviderAttempt: async (providerAttempt) => {
+                      assertActive()
+                      if (s.modelInvocation?.id !== invocation.id
+                        || s.modelInvocation?.status !== 'in_flight') {
+                        const error = new Error('physical Provider attempt lost its model invocation fence')
+                        error.code = 'MODEL_PROVIDER_ATTEMPT_CONFLICT'
+                        error.retryable = false
+                        error.unsafeToReplay = true
+                        throw error
+                      }
+                      s.modelInvocation = appendModelProviderAttempt(
+                        s.modelInvocation,
+                        providerAttempt,
+                      )
+                      assertActive()
+                      await s.checkpointBarrier.beforeSideEffect({
+                        meta: {
+                          boundary: 'model-provider-attempt',
+                          iteration: s.iter,
+                          attempt: invocation.attempt,
+                          modelRequestId: invocation.id,
+                          physicalAttempt: providerAttempt.sequence,
+                          providerAttempt: providerAttempt.providerAttempt,
+                          failoverIndex: providerAttempt.failoverIndex,
+                          providerId: providerAttempt.providerId,
+                          modelName: providerAttempt.modelName,
+                        },
+                      })
+                      assertActive()
+                    },
+                  }
+                },
+                runModel: async (preparedRequest) => {
+                  assertActive()
+                  if (preparedInvocation?.cached) {
+                    if (preparedInvocation.budgetError) throw preparedInvocation.budgetError
+                    return preparedInvocation.response
+                  }
+                  const invocation = preparedInvocation?.invocation
+                  try {
+                    const response = await runWithModelBudget(
+                      s.budget,
+                      () => {
+                        assertActive()
+                        return s.runModel(preparedRequest)
+                      },
+                      { allowOverBudget },
+                    )
+                    assertActive()
+                    const checkpointedInvocation = s.modelInvocation?.id === invocation.id
+                      ? s.modelInvocation
+                      : invocation
+                    s.modelInvocation = {
+                      ...checkpointedInvocation,
+                      status: 'completed',
+                      response: snapshotModelResponse(response),
+                      usageApplied: true,
+                    }
+                    assertActive()
+                    await s.checkpointBarrier.flush({
+                      meta: {
+                        boundary: 'model-response',
+                        iteration: s.iter,
+                        attempt: invocation.attempt,
+                        modelRequestId: invocation.id,
+                      },
+                    })
+                    assertActive()
+                    return response
+                  } catch (error) {
+                    if (requestFenceFailures.has(error)) throw error
+                    // Revocation wins over a simultaneous provider failure. The
+                    // exact fence error is propagated and no outcome checkpoint
+                    // is written after ownership of this request is lost.
+                    assertActive()
+                    if (error?.partialModelResult) {
+                      assertActive()
+                      const checkpointedInvocation = s.modelInvocation?.id === invocation.id
+                        ? s.modelInvocation
+                        : invocation
+                      s.modelInvocation = {
+                        ...checkpointedInvocation,
+                        status: 'completed',
+                        response: snapshotModelResponse(error.partialModelResult),
+                        usageApplied: true,
+                      }
+                      assertActive()
+                      await s.checkpointBarrier.flush({
+                        meta: {
+                          boundary: 'model-response',
+                          iteration: s.iter,
+                          attempt: invocation.attempt,
+                          modelRequestId: invocation.id,
+                        },
+                      })
+                      assertActive()
+                      throw error
+                    }
+                    if (error?.code === 'CHECKPOINT_FLUSH_FAILED') {
+                      error.unsafeToReplay = true
+                      throw error
+                    }
+                    if (error?.modelRequestOutcome === 'not_sent') {
+                      assertActive()
+                      const checkpointedInvocation = s.modelInvocation?.id === invocation.id
+                        ? s.modelInvocation
+                        : invocation
+                      s.modelInvocation = {
+                        ...checkpointedInvocation,
+                        status: 'not_sent',
+                      }
+                      assertActive()
+                      await s.checkpointBarrier.flush({
+                        meta: {
+                          boundary: 'model-request-not-sent',
+                          iteration: s.iter,
+                          attempt: invocation.attempt,
+                          modelRequestId: invocation.id,
+                        },
+                      })
+                      assertActive()
+                      throw error
+                    }
+                    if (error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+                      || error?.unsafeToReplay === true) {
+                      // Preserve the durable in-flight invocation. Rewriting it
+                      // as failed would authorize an explicit retry even though
+                      // the provider may already be processing the same request.
+                      throw error
+                    }
+                    const checkpointedInvocation = s.modelInvocation?.id === invocation.id
+                      ? s.modelInvocation
+                      : invocation
+                    assertActive()
+                    s.modelInvocation = {
+                      ...checkpointedInvocation,
+                      status: 'failed',
+                      errorCode: String(error?.code || 'MODEL_CALL_FAILED'),
+                    }
+                    assertActive()
+                    await s.checkpointBarrier.flush({
+                      meta: {
+                        boundary: 'model-request-failed',
+                        iteration: s.iter,
+                        attempt: invocation.attempt,
+                        modelRequestId: invocation.id,
+                      },
+                    })
+                    assertActive()
+                    throw error
+                  }
+                },
+              })
+            }
             try {
-              return await invoke(modelRequest)
+              const response = await invoke(modelRequest)
+              assertActive()
+              return response
             } catch (error) {
+              if (requestFenceFailures.has(error)) throw error
+              assertActive()
               const forcedChoice = modelRequest?.toolChoice
               if (forcedToolChoiceCompatibilityFallbackUsed
                 || !forcedChoice
@@ -357,16 +420,21 @@ export async function initializeSteering(s) {
               forcedToolChoiceCompatibilityFallbackUsed = true
               const compatibleRequest = { ...modelRequest }
               delete compatibleRequest.toolChoice
+              assertActive()
               await heartbeat.beginRequest()
-              return invoke(compatibleRequest)
+              assertActive()
+              const response = await invoke(compatibleRequest)
+              assertActive()
+              return response
             }
           },
           isContextLengthError,
           contextWindow: s.contextWindow,
           semanticSummary: s.semanticSummary,
-          signal: s.signal,
+          signal: requestSignal,
           userId: s.job?.userId || null,
           sessionId: s.recoverySessionId,
+          compactionArchivePort: s.compactionArchivePort,
           ...(typeof consumeBudget === 'function' ? { consumeBudget } : {}),
           ...(toolChoice !== undefined ? { toolChoice } : {}),
           onTextDelta: async (text, metadata = {}) => {
@@ -380,7 +448,9 @@ export async function initializeSteering(s) {
             }
           },
         })
+        assertActive()
         if (request.recovery?.compacted === true) {
+          assertActive()
           await observeLoopEvent({
             loopEvents: s.activeLoopEvents,
             event: 'compaction',
@@ -390,7 +460,9 @@ export async function initializeSteering(s) {
             },
             context: s.loopEventContext({ phase: 'context-compaction' }),
           })
+          assertActive()
         }
+        assertActive()
         return {
           ...request,
           messages: stripEphemeralToolMediaMessages(request.messages),

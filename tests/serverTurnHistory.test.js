@@ -72,3 +72,16 @@ test('server turn history uses an explicit tool message without duplicating it',
   assert.deepEqual(serialized.map((message) => message.role), ['assistant', 'tool'])
   assert.equal(serialized[1].content, 'explicit result')
 })
+
+test('server turn history excludes failed UI placeholders and configuration errors', () => {
+  const serialized = serializeServerTurnHistory([
+    { role: 'user', content: 'first request' },
+    { role: 'assistant', content: '模型服务尚未正确配置', meta: { failed: true } },
+    { role: 'assistant', content: 'valid reply' },
+    { role: 'tool', tool_call_id: 'failed-tool', content: 'failed result', meta: { failed: true } },
+  ])
+  assert.deepEqual(serialized, [
+    { role: 'user', content: 'first request' },
+    { role: 'assistant', content: 'valid reply' },
+  ])
+})

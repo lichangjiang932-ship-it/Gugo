@@ -1,53 +1,67 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
-import { types as nodeTypes } from 'node:util'
-
+import { assertPluginCompatibility } from '../../shared/pluginCompatibility.js'
+import { validatePolicyAdapter } from '../core/policyAdapter.js'
+import {
+  BUILTIN_TOOL_LOOP_ADAPTER_ID,
+  TOOL_LOOP_ADAPTER_CONTRACT_VERSION_V3,
+  prepareToolLoopAdapter,
+} from '../core/toolLoopAdapter.js'
 import { LOOP_EVENT_NAMES } from '../services/loop/eventNames.js'
 import { CONNECTOR_TOOL_NAMES } from '../services/connectorTools.js'
+import { assertHostManagedArtifactToolNotReplaced } from '../services/artifactHarnessBoundary.js'
 import { ENDPOINT_KINDS } from '../utils/endpointProfile.js'
-import {
-  getBuiltinSpec,
-  registerDynamicTool,
-} from '../utils/toolSchemaCatalog.js'
+import { getBuiltinSpec } from '../utils/toolSchemaCatalog.js'
 import { createPluginContext } from './pluginContext.js'
+import { createPluginConfigResolver } from './pluginConfig.js'
 import {
-  snapshotPluginAuditEntry,
-  snapshotPluginContextConfig,
-} from './pluginContextData.js'
-import { snapshotContributionDefinition } from './pluginContributionDefinition.js'
+  PLUGIN_API_VERSION,
+  PLUGIN_HOST_VERSION,
+  POLICY_ADAPTER_CONTRACT_VERSION,
+} from './pluginHostContract.js'
+import { snapshotPluginAuditEntry } from './pluginContextData.js'
+import {
+  snapshotContributionDefinition,
+  snapshotOptionalContributionDefinition,
+} from './pluginContributionDefinition.js'
 import { createRuntimePluginEventListener } from './pluginEventInvocation.js'
 import { snapshotRuntimeModelProvider } from './pluginModelProvider.js'
+import { snapshotRuntimePluginHttpCapability } from './pluginHttpCapability.js'
 import {
   createRuntimePluginPromptRenderer,
   snapshotRuntimePluginPromptScope,
 } from './pluginPromptInvocation.js'
-import { createRuntimePluginService } from './pluginServiceInvocation.js'
 import { createRuntimePluginToolExecutor } from './pluginToolInvocation.js'
-import { registerModelProviderAdapter } from '../adapters/modelProviderRegistry.js'
 import {
   createEffectTracker,
-  isolatePluginDisposerError,
-  isolatePluginSetupError,
   normalizeRuntimePluginManifest,
 } from './pluginLifecycle.js'
+import {
+  listRuntimePluginEffectiveConfigs,
+  listRuntimePluginInventory,
+  snapshotRuntimePlugin,
+} from './runtimePluginInventory.js'
+import {
+  compatibilityRuntimeCapabilityHost,
+  snapshotRuntimePluginHostOptions,
+} from './runtimePluginHostOptions.js'
+import { createHandledRejectedPromise } from './runtimePluginAsyncBoundary.js'
+import { createRuntimePluginCallbackRuntime } from './runtimePluginCallbackRuntime.js'
+import { createRuntimePluginConfigReloadController } from './runtimePluginConfigReloadController.js'
+import { createRuntimePluginContributionCoordinator } from './runtimePluginContributionCoordinator.js'
+import { assertNoRuntimePluginDependents } from './runtimePluginDependencyGuard.js'
+import { createRuntimePluginEventBindings } from './runtimePluginEventBindings.js'
+import { createRuntimePluginServiceRegistry } from './runtimePluginServiceRegistry.js'
+import { snapshotPluginToolSpec } from './runtimePluginToolSpec.js'
 
 const LOOP_EVENT_NAME_SET = new Set(LOOP_EVENT_NAMES)
 const CONNECTOR_TOOL_NAME_SET = new Set(CONNECTOR_TOOL_NAMES)
-const MAX_PLUGIN_SCHEMA_DEPTH = 32
-const MAX_PLUGIN_SCHEMA_NODES = 8_192
-const MAX_PLUGIN_SCHEMA_BYTES = 512 * 1024
-const PLUGIN_TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/
 const PLUGIN_MODEL_PROVIDER_KIND_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
+const PLUGIN_CAPABILITY_ID_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/
+const BUILTIN_POLICY_CAPABILITY_ID = 'builtin.harness-policy'
 const RESERVED_MODEL_PROVIDER_KIND_SET = new Set(ENDPOINT_KINDS)
 const PLUGIN_PROMPT_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const MAX_PLUGIN_PROMPT_BLOCKS = 16
 const MAX_PLUGIN_PROMPT_TOTAL_BYTES = 64 * 1024
-const PLUGIN_SERVICE_CONSUMER_STATES = new Set([
-  'installing',
-  'active',
-  'cancelling',
-  'failed',
-  'uninstalling',
-])
+const MAX_CONFIG_RELOAD_AUDIT_EVENTS = 256
 const PLUGIN_TOOL_RISK_METADATA = Object.freeze({
   riskClass: 'external',
   category: 'external',
@@ -64,164 +78,8 @@ const PLUGIN_TOOL_RISK_METADATA = Object.freeze({
   reason: 'Runtime plugin tools require explicit host approval.',
 })
 
-function snapshotPluginToolSpec(input) {
-  const seen = new WeakSet()
-  let nodes = 0
-  let bytes = 0
-
-  const clone = (value, depth) => {
-    nodes += 1
-    if (nodes > MAX_PLUGIN_SCHEMA_NODES) throw new TypeError('plugin tool schema is too large')
-    if (depth > MAX_PLUGIN_SCHEMA_DEPTH) throw new TypeError('plugin tool schema is too deep')
-    if (value === null || typeof value === 'boolean') return value
-    if (typeof value === 'number') {
-      if (!Number.isFinite(value)) throw new TypeError('plugin tool schema numbers must be finite')
-      return value
-    }
-    if (typeof value === 'string') {
-      bytes += Buffer.byteLength(value, 'utf8')
-      if (bytes > MAX_PLUGIN_SCHEMA_BYTES) throw new TypeError('plugin tool schema is too large')
-      return value
-    }
-    if (!value || typeof value !== 'object') {
-      throw new TypeError('plugin tool schema must contain JSON values only')
-    }
-    if (seen.has(value)) throw new TypeError('plugin tool schema must not contain cycles')
-    seen.add(value)
-    try {
-      if (Array.isArray(value)) {
-        const descriptors = Object.getOwnPropertyDescriptors(value)
-        const lengthDescriptor = descriptors.length
-        if (!lengthDescriptor
-          || !Object.hasOwn(lengthDescriptor, 'value')
-          || !Number.isSafeInteger(lengthDescriptor.value)
-          || lengthDescriptor.value < 0) {
-          throw new TypeError('plugin tool schema arrays must expose an own data length')
-        }
-        const out = []
-        for (let index = 0; index < lengthDescriptor.value; index += 1) {
-          const descriptor = descriptors[index]
-          if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
-            throw new TypeError('plugin tool schema arrays must be dense data arrays')
-          }
-          out.push(clone(descriptor.value, depth + 1))
-        }
-        return Object.freeze(out)
-      }
-      const prototype = Object.getPrototypeOf(value)
-      if (prototype !== Object.prototype && prototype !== null) {
-        throw new TypeError('plugin tool schema objects must be plain JSON objects')
-      }
-      const descriptors = Object.getOwnPropertyDescriptors(value)
-      const out = Object.create(null)
-      for (const key of Reflect.ownKeys(descriptors)) {
-        if (typeof key !== 'string') throw new TypeError('plugin tool schema keys must be strings')
-        const descriptor = descriptors[key]
-        if (!Object.hasOwn(descriptor, 'value')) {
-          throw new TypeError('plugin tool schema getters and setters are not allowed')
-        }
-        bytes += Buffer.byteLength(key, 'utf8')
-        if (bytes > MAX_PLUGIN_SCHEMA_BYTES) throw new TypeError('plugin tool schema is too large')
-        Object.defineProperty(out, key, {
-          value: clone(descriptor.value, depth + 1),
-          enumerable: true,
-          configurable: false,
-          writable: false,
-        })
-      }
-      return Object.freeze(out)
-    } finally {
-      seen.delete(value)
-    }
-  }
-
-  const snapshot = clone(input, 0)
-  if (!snapshot
-    || typeof snapshot !== 'object'
-    || Array.isArray(snapshot)
-    || !Object.hasOwn(snapshot, 'type')
-    || snapshot.type !== 'function'
-    || !Object.hasOwn(snapshot, 'function')
-    || !snapshot.function
-    || typeof snapshot.function !== 'object'
-    || Array.isArray(snapshot.function)
-    || !Object.hasOwn(snapshot.function, 'name')
-    || typeof snapshot.function.name !== 'string'
-    || !Object.hasOwn(snapshot.function, 'parameters')
-    || !snapshot.function.parameters
-    || typeof snapshot.function.parameters !== 'object'
-    || Array.isArray(snapshot.function.parameters)) {
-    throw new TypeError('plugin tool spec must be a function schema with object parameters')
-  }
-  if (!PLUGIN_TOOL_NAME_RE.test(snapshot.function.name)) {
-    throw new TypeError('plugin tool name must match [A-Za-z0-9_-]{1,64}')
-  }
-  if (!Object.hasOwn(snapshot.function.parameters, 'type')
-    || snapshot.function.parameters.type !== 'object') {
-    throw new TypeError('plugin tool parameters.type must be object')
-  }
-  return snapshot
-}
-
-function loopEventBusError(method) {
-  const error = new TypeError(`loop event bus.${method} must be an own function property`)
-  error.code = 'PLUGIN_LOOP_EVENT_BUS_INVALID'
-  error.retryable = false
-  return error
-}
-
 function trimmedString(value) {
   return typeof value === 'string' ? value.trim() : ''
-}
-
-function pluginAsyncResultKind(result) {
-  if (!result || (typeof result !== 'object' && typeof result !== 'function')) return null
-  if (nodeTypes.isPromise(result)) return 'promise'
-  const descriptor = Object.getOwnPropertyDescriptor(result, 'then')
-  if (!descriptor) return null
-  if (!Object.hasOwn(descriptor, 'value')) return 'thenable'
-  return typeof descriptor.value === 'function' ? 'thenable' : null
-}
-
-function suppressNativePromiseRejection(promise) {
-  try {
-    Promise.prototype.then.call(promise, undefined, () => {})
-  } catch {
-    // Async plugin results are rejected regardless of rejection-handler attachment.
-  }
-}
-
-function assertLoopCleanupSynchronous(result) {
-  const asyncResultKind = nodeTypes.isProxy(result) ? 'thenable' : pluginAsyncResultKind(result)
-  if (!asyncResultKind) return
-  if (asyncResultKind === 'promise') suppressNativePromiseRejection(result)
-  const error = new TypeError('loop event cleanup must be synchronous')
-  error.code = 'PLUGIN_LOOP_EVENT_CLEANUP_ASYNC_UNSUPPORTED'
-  error.retryable = false
-  throw error
-}
-
-function snapshotLoopEventBus(events) {
-  if (!events || (typeof events !== 'object' && typeof events !== 'function')) {
-    throw loopEventBusError('on')
-  }
-  const methods = {}
-  for (const method of ['on', 'off']) {
-    let descriptor
-    try {
-      descriptor = Object.getOwnPropertyDescriptor(events, method)
-    } catch {
-      throw loopEventBusError(method)
-    }
-    if (!descriptor
-      || !Object.hasOwn(descriptor, 'value')
-      || typeof descriptor.value !== 'function') {
-      throw loopEventBusError(method)
-    }
-    const callback = descriptor.value
-    methods[method] = (...args) => callback.call(events, ...args)
-  }
-  return Object.freeze(methods)
 }
 
 function reservedToolOwner(name) {
@@ -232,187 +90,98 @@ function reservedToolOwner(name) {
   return null
 }
 
-function pluginSnapshot(record) {
-  if (!record) return null
-  return Object.freeze({
-    ...record.manifest,
-    requires: Object.freeze([...record.manifest.requires]),
-    contributes: Object.freeze([...record.manifest.contributes]),
-    state: record.state,
-    installedAt: record.installedAt,
-  })
-}
-
-function hostAdapterError(field, expected) {
-  const error = new TypeError(`runtime plugin host option ${field} must be an own ${expected} property`)
-  error.code = 'PLUGIN_HOST_ADAPTER_INVALID'
-  error.retryable = false
-  return error
-}
-
-function ownHostOption(options, field, fallback) {
-  let descriptor
-  try {
-    descriptor = Object.getOwnPropertyDescriptor(options, field)
-  } catch {
-    throw hostAdapterError(field, 'data')
-  }
-  if (!descriptor) return fallback
-  if (!Object.hasOwn(descriptor, 'value')) throw hostAdapterError(field, 'data')
-  return descriptor.value === undefined ? fallback : descriptor.value
-}
-
-function snapshotHostOptions(options) {
-  if (!options || typeof options !== 'object' || Array.isArray(options)) {
-    throw hostAdapterError('options', 'object data')
-  }
-  const snapshot = {
-    config: ownHostOption(options, 'config', {}),
-    registerTool: ownHostOption(options, 'registerTool', registerDynamicTool),
-    registerModelProvider: ownHostOption(
-      options,
-      'registerModelProvider',
-      registerModelProviderAdapter,
-    ),
-    audit: ownHostOption(options, 'audit', null),
-  }
-  for (const field of ['registerTool', 'registerModelProvider']) {
-    if (typeof snapshot[field] !== 'function') throw hostAdapterError(field, 'function data')
-  }
-  if (snapshot.audit !== null && typeof snapshot.audit !== 'function') {
-    throw hostAdapterError('audit', 'function data')
-  }
-  return Object.freeze(snapshot)
-}
-
 export function createRuntimePluginRegistry(options = {}) {
   const {
     config,
+    configLayers,
+    configLayerSources,
     registerTool,
     registerModelProvider,
+    registerRuntimeCapability,
+    isRuntimeCapabilityInUse,
+    isRuntimeCapabilitySlotActive,
+    registerHttpCapability,
     audit,
-  } = snapshotHostOptions(options)
-  const pluginConfig = snapshotPluginContextConfig(config)
+  } = snapshotRuntimePluginHostOptions(options)
+  const supportsRuntimeCapabilityReplacement = (
+    registerRuntimeCapability !== compatibilityRuntimeCapabilityHost
+  )
+
+  const assertRecordCanDeactivate = (record) => {
+    for (const check of record.deactivationChecks) check()
+  }
+  let activePluginConfigResolver = createPluginConfigResolver({
+    legacyConfig: config,
+    layers: configLayers,
+    layerSources: configLayerSources,
+  })
   const plugins = new Map()
-  const services = new Map()
   const promptContributions = new Map()
-  const loopBindings = new Set()
-  const callbackScope = new AsyncLocalStorage()
-  const cleanupScope = new AsyncLocalStorage()
-  const setupScope = new AsyncLocalStorage()
+  const stagingRecords = new Set()
+  const configReloads = new Set()
+  const configReloadAudit = []
+  const registryToken = Object.freeze({})
+  const {
+    activeCallbackInvocation,
+    callbackDrainDeadlockError,
+    disposePluginEffects,
+    invokePluginCallback,
+    invokePluginCallbackSync,
+    invokePluginCleanup,
+    invokePluginSetup,
+    waitForCallbacksToDrain,
+  } = createRuntimePluginCallbackRuntime(registryToken)
   let installSequence = 0
   let promptSequence = 0
+  let configLayerSourcesSealed = false
   let shuttingDown = false
   let shutdownPromise = null
 
-  const finishCallback = (record) => {
-    record.activeCallbacks -= 1
-    if (record.activeCallbacks !== 0) return
-    for (const resolve of record.callbackDrainWaiters) resolve()
-    record.callbackDrainWaiters.clear()
-  }
+  const {
+    activateContribution: activateEventContribution,
+    bindLoopEvents,
+    createContributionHandle: createEventContributionHandle,
+    detachAllBindings: detachLoopEventBindings,
+  } = createRuntimePluginEventBindings({
+    listActiveContributions: () => {
+      const contributions = []
+      for (const record of plugins.values()) {
+        if (record.state !== 'active') continue
+        contributions.push(...record.eventContributions)
+      }
+      return contributions
+    },
+  })
 
-  const waitForCallbacksToDrain = (record) => {
-    if (record.activeCallbacks === 0) return Promise.resolve()
-    return new Promise((resolve) => record.callbackDrainWaiters.add(resolve))
-  }
-
-  const invokePluginCallback = async (record, kind, callback, args) => {
-    record.activeCallbacks += 1
-    const invocation = { record, kind, active: true }
-    try {
-      return await callbackScope.run(invocation, () => callback(...args))
-    } finally {
-      invocation.active = false
-      finishCallback(record)
+  const initializeConfigLayerSources = (nextLayerSources) => {
+    if (configLayerSourcesSealed) {
+      const error = new Error(
+        'runtime plugin configuration sources cannot change after plugin installation begins',
+      )
+      error.code = 'PLUGIN_CONFIG_INITIALIZATION_TOO_LATE'
+      error.retryable = false
+      throw error
     }
-  }
-
-  const invokePluginCallbackSync = (record, kind, callback, args, options = {}) => {
-    record.activeCallbacks += 1
-    const invocation = { record, kind, active: true }
-    const complete = typeof options.complete === 'function' ? options.complete : (value) => value
-    const isolateError = typeof options.isolateError === 'function' ? options.isolateError : null
-    try {
-      return callbackScope.run(invocation, () => {
-        try {
-          const result = callback(...args)
-          const asyncResultKind = pluginAsyncResultKind(result)
-          if (asyncResultKind) {
-            if (asyncResultKind === 'promise') suppressNativePromiseRejection(result)
-            const isPrompt = kind === 'prompt'
-            const error = new TypeError(isPrompt
-              ? 'plugin prompt render must be synchronous'
-              : 'plugin model provider callbacks must be synchronous')
-            error.code = isPrompt
-              ? 'PLUGIN_PROMPT_ASYNC_UNSUPPORTED'
-              : 'PLUGIN_MODEL_PROVIDER_ASYNC_UNSUPPORTED'
-            error.retryable = false
-            throw error
-          }
-          return complete(result)
-        } catch (error) {
-          throw isolateError ? isolateError(error) : error
-        }
-      })
-    } finally {
-      invocation.active = false
-      finishCallback(record)
-    }
-  }
-
-  const callbackDrainDeadlockError = (operation, record) => {
-    const error = new Error(operation === 'unregister'
-      ? `plugin callback cannot unregister its own plugin before returning because that would deadlock callback drain: ${record.manifest.id}`
-      : `plugin callback cannot shut down the runtime plugin registry before returning because that would deadlock callback drain: ${record.manifest.id}`)
-    error.code = operation === 'unregister'
-      ? 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK'
-      : 'PLUGIN_CALLBACK_SHUTDOWN_DEADLOCK'
-    error.retryable = false
-    return error
-  }
-
-  const activeCallbackInvocation = () => {
-    const callbackInvocation = callbackScope.getStore()
-    if (callbackInvocation?.active === true) return callbackInvocation
-    const cleanupInvocation = cleanupScope.getStore()
-    if (cleanupInvocation?.active === true) return cleanupInvocation
-    const setupInvocation = setupScope.getStore()
-    return setupInvocation?.active === true ? setupInvocation : null
-  }
-
-  const disposePluginEffects = async (record) => {
-    const invocation = { record, kind: 'dispose', active: true }
-    try {
-      return await cleanupScope.run(invocation, async () => {
-        const errors = await record.effects.disposeAll()
-        return errors.map((error) => isolatePluginDisposerError(error, record.manifest.id))
-      })
-    } finally {
-      invocation.active = false
-    }
-  }
-
-  const invokePluginSetup = async (record, setup, context) => {
-    const invocation = { record, kind: 'setup', active: true }
-    try {
-      return await setupScope.run(invocation, async () => {
-        try {
-          const setupEffects = await setup(context)
-          if (setupEffects != null) record.effects.track(setupEffects)
-        } catch (error) {
-          throw isolatePluginSetupError(error, record.manifest.id)
-        }
-      })
-    } finally {
-      invocation.active = false
-    }
+    activePluginConfigResolver = activePluginConfigResolver.withLayerSources(nextLayerSources)
+    return true
   }
 
   const assertPluginWritable = (record) => {
-    if (record.state !== 'installing' && record.state !== 'active') {
+    if (!['installing', 'staging', 'active'].includes(record.state)) {
       throw new Error(`plugin lifecycle is closed: ${record.manifest.id}`)
     }
+  }
+
+  const registerConfigHealthCheck = (record, check) => {
+    assertPluginWritable(record)
+    if (typeof check !== 'function') {
+      const error = new TypeError('plugin config health check must be a function')
+      error.code = 'PLUGIN_CONFIG_HEALTH_CHECK_INVALID'
+      error.retryable = false
+      throw error
+    }
+    record.configHealthChecks.add(check)
+    return record.effects.track(() => record.configHealthChecks.delete(check))
   }
 
   const assertContributionDeclared = (record, declaration) => {
@@ -432,109 +201,14 @@ export function createRuntimePluginRegistry(options = {}) {
     }
   }
 
-  const trackVisibleEffect = (record, effect) => {
-    let tracked = null
-    const visibleEffect = () => {
-      record.visibleEffects.delete(tracked)
-      return effect()
-    }
-    tracked = record.effects.track(visibleEffect)
-    record.visibleEffects.add(tracked)
-    return tracked
-  }
-
-  const revokeVisibleEffects = (record) => {
-    if (record.revocationPromise) return record.revocationPromise
-    const invocation = { record, kind: 'revoke', active: true }
-    const revocation = cleanupScope.run(invocation, async () => {
-      const pending = []
-      for (const dispose of [...record.visibleEffects].reverse()) {
-        try {
-          pending.push({ dispose, result: dispose() })
-        } catch (error) {
-          record.revocationErrors.push(isolatePluginDisposerError(error, record.manifest.id))
-          record.effects.markDisposed(dispose)
-        }
-      }
-      record.visibleEffects.clear()
-      for (const { dispose, result } of pending) {
-        try {
-          await result
-        } catch (error) {
-          record.revocationErrors.push(isolatePluginDisposerError(error, record.manifest.id))
-        } finally {
-          record.effects.markDisposed(dispose)
-        }
-      }
-    })
-    record.revocationPromise = revocation.finally(() => {
-      invocation.active = false
-    })
-    return record.revocationPromise
-  }
-
-  const detachBinding = (binding) => {
-    if (!loopBindings.delete(binding)) return false
-    for (const dispose of [...binding.attachments.values()].reverse()) {
-      try { assertLoopCleanupSynchronous(dispose()) } catch { /* best-effort per-loop cleanup */ }
-    }
-    binding.attachments.clear()
-    return true
-  }
-
-  const rollbackUntrackedAttachment = (binding, contribution, error) => {
-    try {
-      assertLoopCleanupSynchronous(
-        binding.events.off(contribution.event, contribution.listener),
-      )
-    } catch (rollbackError) {
-      throw new AggregateError(
-        [error, rollbackError],
-        `loop event attachment compensation failed: ${contribution.pluginId}/${contribution.event}`,
-        { cause: rollbackError },
-      )
-    }
-    throw error
-  }
-
-  const attachContribution = (binding, contribution) => {
-    if (binding.attachments.has(contribution)) return
-    let dispose
-    try {
-      dispose = binding.events.on(contribution.event, contribution.listener)
-    } catch (error) {
-      rollbackUntrackedAttachment(binding, contribution, error)
-    }
-    if (typeof dispose !== 'function') {
-      rollbackUntrackedAttachment(
-        binding,
-        contribution,
-        new TypeError('loop event registration must return a disposer'),
-      )
-    }
-    binding.attachments.set(contribution, dispose)
-  }
-
-  const detachContribution = (contribution) => {
-    const errors = []
-    for (const binding of loopBindings) {
-      const dispose = binding.attachments.get(contribution)
-      if (!dispose) continue
-      binding.attachments.delete(contribution)
-      try {
-        assertLoopCleanupSynchronous(dispose())
-      } catch (error) {
-        errors.push(error)
-      }
-    }
-    if (errors.length === 1) throw errors[0]
-    if (errors.length > 1) {
-      throw new AggregateError(
-        errors,
-        `plugin event contribution detach failed: ${contribution.pluginId}/${contribution.event}`,
-      )
-    }
-  }
+  const {
+    activateManagedContributions,
+    beginManagedContributionDeactivation,
+    collectManagedDeactivationErrors,
+    createManagedContribution,
+    retireManagedContributions,
+    revokeVisibleEffects,
+  } = createRuntimePluginContributionCoordinator({ invokePluginCleanup })
 
   const registerEventContribution = (record, event, listener) => {
     assertPluginWritable(record)
@@ -556,126 +230,35 @@ export function createRuntimePluginRegistry(options = {}) {
       }),
     }
     record.eventContributions.add(contribution)
-    try {
-      for (const binding of loopBindings) attachContribution(binding, contribution)
-    } catch (error) {
-      let rollbackError = null
-      try {
-        detachContribution(contribution)
-      } catch (caught) {
-        rollbackError = caught
-      }
-      record.eventContributions.delete(contribution)
-      if (rollbackError) {
-        throw new AggregateError(
-          [error, rollbackError],
-          `plugin event registration rollback failed: ${record.manifest.id}/${event}`,
-          { cause: error },
-        )
-      }
-      throw error
-    }
-    return trackVisibleEffect(record, () => {
-      record.eventContributions.delete(contribution)
-      detachContribution(contribution)
+    const disposeAttachments = createEventContributionHandle(contribution)
+    const attachmentParts = () => [
+      { id: `event:${event}:bindings`, handle: disposeAttachments },
+    ]
+    return createManagedContribution(record, {
+      activate() {
+        return activateEventContribution(contribution)
+      },
+      parts: attachmentParts,
+      activationFailureParts: attachmentParts,
+      onDispose: () => record.eventContributions.delete(contribution),
     })
   }
 
-  const provideService = (record, name, value) => {
-    assertPluginWritable(record)
-    const normalizedName = trimmedString(name)
-    if (!normalizedName) throw new TypeError('plugin service name is required')
-    assertContributionDeclared(record, `service:${normalizedName}`)
-    if (services.has(normalizedName)) {
-      throw new Error(`plugin service already provided: ${normalizedName}`)
-    }
-    const contribution = {
-      pluginId: record.manifest.id,
-      record,
-      service: createRuntimePluginService({
-        record,
-        name: normalizedName,
-        value,
-        invoke: invokePluginCallback,
-      }),
-    }
-    services.set(normalizedName, contribution)
-    return trackVisibleEffect(record, () => {
-      if (services.get(normalizedName) !== contribution) return false
-      return services.delete(normalizedName)
-    })
-  }
-
-  const invokeService = async (name, method, args = []) => {
-    const normalizedName = trimmedString(name)
-    const normalizedMethod = trimmedString(method)
-    const contribution = services.get(normalizedName)
-    if (!contribution || contribution.record.state !== 'active') {
-      return Object.freeze({ found: false, pluginId: null, value: undefined })
-    }
-    const value = await contribution.service.invoke(normalizedMethod, args)
-    return Object.freeze({
-      found: true,
-      pluginId: contribution.pluginId,
-      value,
-    })
-  }
-
-  const serviceConsumerError = (record, code, message) => {
-    const error = new Error(message)
-    error.code = code
-    error.retryable = false
-    error.pluginId = record.manifest.id
-    return error
-  }
-
-  const assertServiceConsumerAvailable = (record) => {
-    if (plugins.get(record.manifest.id) === record
-      && PLUGIN_SERVICE_CONSUMER_STATES.has(record.state)) return
-    throw serviceConsumerError(
-      record,
-      'PLUGIN_SERVICE_CONSUMER_INACTIVE',
-      `plugin service consumer is no longer active: ${record.manifest.id}`,
-    )
-  }
-
-  const serviceForConsumer = (record, name) => {
-    assertServiceConsumerAvailable(record)
-    const normalizedName = trimmedString(name)
-    const contribution = services.get(normalizedName)
-    if (!contribution || contribution.record.state !== 'active') {
-      return { normalizedName, contribution: null }
-    }
-    if (contribution.record !== record
-      && !record.manifest.requires.includes(contribution.pluginId)) {
-      const error = serviceConsumerError(
-        record,
-        'PLUGIN_SERVICE_DEPENDENCY_UNDECLARED',
-        `plugin service provider is not declared as a dependency: ${record.manifest.id}/${contribution.pluginId}`,
-      )
-      error.serviceName = normalizedName
-      error.providerPluginId = contribution.pluginId
-      throw error
-    }
-    return { normalizedName, contribution }
-  }
-
-  const invokeServiceForConsumer = async (record, name, method, args = []) => {
-    const { normalizedName, contribution } = serviceForConsumer(record, name)
-    if (!contribution) {
-      return Object.freeze({ found: false, pluginId: null, value: undefined })
-    }
-    return invokeService(normalizedName, method, args)
-  }
-
-  const hasServiceForConsumer = (record, name) => {
-    try {
-      return serviceForConsumer(record, name).contribution !== null
-    } catch (error) {
-      if (error?.code === 'PLUGIN_SERVICE_DEPENDENCY_UNDECLARED') return false
-      throw error
-    }
-  }
+  const {
+    hasService,
+    hasServiceForConsumer,
+    invokeService,
+    invokeServiceForConsumer,
+    provideService,
+  } = createRuntimePluginServiceRegistry({
+    assertContributionDeclared,
+    assertPluginWritable,
+    createManagedContribution,
+    invokePluginCallback,
+    isConsumerRecordCurrent: (record) => (
+      plugins.get(record.manifest.id) === record || stagingRecords.has(record)
+    ),
+  })
 
   const registerPromptContribution = (record, definition) => {
     assertPluginWritable(record)
@@ -689,7 +272,8 @@ export function createRuntimePluginRegistry(options = {}) {
       throw new TypeError('plugin prompt id must match [a-z0-9][a-z0-9._-]{0,63}')
     }
     assertContributionDeclared(record, `prompt:${id}`)
-    if (promptContributions.has(id)) {
+    const existing = promptContributions.get(id)
+    if (existing && !(record.deferVisibility && existing.pluginId === record.manifest.id)) {
       throw new Error(`plugin prompt already registered: ${id}`)
     }
     const render = snapshot.render
@@ -708,10 +292,16 @@ export function createRuntimePluginRegistry(options = {}) {
       }),
       sequence: ++promptSequence,
     }
-    promptContributions.set(id, contribution)
-    return trackVisibleEffect(record, () => {
-      if (promptContributions.get(id) !== contribution) return false
-      return promptContributions.delete(id)
+    return createManagedContribution(record, {
+      activate() {
+        if (promptContributions.has(id)) throw new Error(`plugin prompt already registered: ${id}`)
+        promptContributions.set(id, contribution)
+        return contribution
+      },
+      deactivate() {
+        if (promptContributions.get(id) !== contribution) return false
+        return promptContributions.delete(id)
+      },
     })
   }
 
@@ -776,6 +366,11 @@ export function createRuntimePluginRegistry(options = {}) {
       ['name', 'spec', 'exec'],
     )
     const name = trimmedString(snapshot.name)
+    const capabilityOptions = snapshotOptionalContributionDefinition(
+      definition,
+      'plugin tool definition',
+      ['id', 'version', 'revision', 'priority', 'replaces'],
+    )
     const spec = snapshotPluginToolSpec(snapshot.spec)
     const specName = trimmedString(spec.function.name)
     if (!name || name !== specName) {
@@ -783,14 +378,42 @@ export function createRuntimePluginRegistry(options = {}) {
     }
     assertContributionDeclared(record, `tool:${name}`)
     const reservedOwner = reservedToolOwner(name)
-    if (reservedOwner) {
+    const builtinCapabilityId = getBuiltinSpec(name) ? `builtin.tool.${name.toLowerCase()}` : null
+    const replaces = capabilityOptions.replaces == null
+      ? null
+      : trimmedString(capabilityOptions.replaces)
+    if (reservedOwner && !builtinCapabilityId) {
       throw new Error(`plugin tool cannot shadow ${reservedOwner} tool: ${name}`)
+    }
+    assertHostManagedArtifactToolNotReplaced(name, builtinCapabilityId)
+    if (builtinCapabilityId && !supportsRuntimeCapabilityReplacement) {
+      throw new Error(`plugin tool cannot shadow builtin tool: ${name}`)
+    }
+    if (builtinCapabilityId && replaces !== builtinCapabilityId) {
+      const error = new Error(
+        `plugin tool cannot shadow builtin tool: ${name}; declare replaces: ${builtinCapabilityId}`,
+      )
+      error.code = 'PLUGIN_TOOL_REPLACEMENT_REQUIRED'
+      error.retryable = false
+      throw error
+    }
+    if (!builtinCapabilityId && replaces) {
+      const error = new Error(`plugin tool cannot replace a non-builtin capability: ${name}`)
+      error.code = 'PLUGIN_TOOL_REPLACEMENT_INVALID'
+      error.retryable = false
+      throw error
+    }
+    if (replaces && (!Number.isSafeInteger(capabilityOptions.priority) || capabilityOptions.priority <= 0)) {
+      const error = new Error('plugin tool replacement priority must be a positive integer')
+      error.code = 'PLUGIN_TOOL_REPLACEMENT_PRIORITY_INVALID'
+      error.retryable = false
+      throw error
     }
     const pluginExec = snapshot.exec
     if (typeof pluginExec !== 'function') {
       throw new TypeError('plugin tool exec must be a function')
     }
-    const dispose = registerTool({
+    const registration = {
       name,
       spec,
       exec: createRuntimePluginToolExecutor({
@@ -808,23 +431,104 @@ export function createRuntimePluginRegistry(options = {}) {
       origin: 'plugin',
       source: record.manifest.id,
       metadata: PLUGIN_TOOL_RISK_METADATA,
-    })
-    if (typeof dispose !== 'function') {
-      throw new TypeError('tool registration must return a disposer')
     }
-    return trackVisibleEffect(record, dispose)
+    const capabilityId = capabilityOptions.id === undefined
+      ? `plugin.${record.manifest.id}.tool.${name.toLowerCase()}`
+      : trimmedString(capabilityOptions.id)
+    if (!PLUGIN_CAPABILITY_ID_RE.test(capabilityId)) {
+      throw new TypeError('plugin tool capability id is invalid')
+    }
+    const capabilityDefinition = Object.freeze({
+      id: capabilityId,
+      type: 'tool',
+      slot: name,
+      owner: record.manifest.id,
+      version: capabilityOptions.version === undefined
+        ? record.manifest.version
+        : capabilityOptions.version,
+      revision: capabilityOptions.revision === undefined
+        ? record.configRevision
+        : capabilityOptions.revision,
+      priority: capabilityOptions.priority === undefined ? 10 : capabilityOptions.priority,
+      replaces,
+      ...(record.manifest.integrity ? { releaseDigest: record.manifest.integrity } : {}),
+      implementation: Object.freeze(registration),
+      healthCheck: () => true,
+    })
+    return createManagedContribution(record, {
+      activate() {
+        const disposers = []
+        try {
+          const disposeCapability = registerRuntimeCapability(capabilityDefinition)
+          if (typeof disposeCapability !== 'function') {
+            throw new TypeError('runtime capability registration must return a disposer')
+          }
+          disposers.push(disposeCapability)
+          const disposeTool = registerTool(registration)
+          if (typeof disposeTool !== 'function') {
+            throw new TypeError('tool registration must return a disposer')
+          }
+          disposers.push(disposeTool)
+        } catch (error) {
+          for (const dispose of disposers.reverse()) {
+            try { dispose() } catch { /* preserve the activation failure */ }
+          }
+          throw error
+        }
+        return Object.freeze({
+          capability: disposers[0],
+          tool: disposers[1],
+        })
+      },
+      parts: (handles) => [
+        { id: `tool:${name}:capability`, handle: handles.capability },
+        { id: `tool:${name}:implementation`, handle: handles.tool },
+      ],
+    })
   }
 
-  const registerModelProviderContribution = (record, kind, adapter) => {
+  const registerModelProviderContribution = (record, kind, adapter, options = undefined) => {
     assertPluginWritable(record)
     const normalizedKind = trimmedString(kind).toLowerCase()
     if (!PLUGIN_MODEL_PROVIDER_KIND_RE.test(normalizedKind)) {
       throw new TypeError('model provider kind must match [a-z0-9][a-z0-9_-]{0,63}')
     }
     assertContributionDeclared(record, `model-provider:${normalizedKind}`)
-    if (RESERVED_MODEL_PROVIDER_KIND_SET.has(normalizedKind)) {
+    if (RESERVED_MODEL_PROVIDER_KIND_SET.has(normalizedKind)
+      && !supportsRuntimeCapabilityReplacement) {
       const error = new TypeError(`runtime plugin cannot replace built-in model provider kind: ${normalizedKind}`)
       error.code = 'PLUGIN_MODEL_PROVIDER_KIND_RESERVED'
+      error.retryable = false
+      throw error
+    }
+    const capabilityOptions = options === undefined
+      ? Object.freeze({})
+      : snapshotOptionalContributionDefinition(
+          options,
+          'plugin model provider options',
+          ['id', 'version', 'revision', 'priority', 'replaces'],
+        )
+    const builtinCapabilityId = RESERVED_MODEL_PROVIDER_KIND_SET.has(normalizedKind)
+      ? `builtin.provider.${normalizedKind}`
+      : null
+    const replaces = capabilityOptions.replaces == null
+      ? null
+      : trimmedString(capabilityOptions.replaces)
+    if (builtinCapabilityId && replaces !== builtinCapabilityId) {
+      const error = new TypeError(`model provider replacement must declare replaces: ${builtinCapabilityId}`)
+      error.code = 'PLUGIN_MODEL_PROVIDER_REPLACEMENT_REQUIRED'
+      error.retryable = false
+      throw error
+    }
+    if (!builtinCapabilityId && replaces) {
+      const error = new TypeError(`model provider cannot replace a non-builtin capability: ${normalizedKind}`)
+      error.code = 'PLUGIN_MODEL_PROVIDER_REPLACEMENT_INVALID'
+      error.retryable = false
+      throw error
+    }
+    if (replaces && (!Number.isSafeInteger(capabilityOptions.priority) || capabilityOptions.priority <= 0)) {
+      const error = new TypeError('model provider replacement priority must be a positive integer')
+      error.code = 'PLUGIN_MODEL_PROVIDER_REPLACEMENT_PRIORITY_INVALID'
       error.retryable = false
       throw error
     }
@@ -833,13 +537,435 @@ export function createRuntimePluginRegistry(options = {}) {
       kind: normalizedKind,
       adapter,
       invokeSync: invokePluginCallbackSync,
+      invokeAsync: invokePluginCallback,
     })
-    const dispose = registerModelProvider(normalizedKind, wrappedAdapter)
-    if (typeof dispose !== 'function') {
-      throw new TypeError('model provider registration must return a disposer')
+    const capabilityId = capabilityOptions.id === undefined
+      ? `plugin.${record.manifest.id}.provider.${normalizedKind}`
+      : trimmedString(capabilityOptions.id)
+    if (!PLUGIN_CAPABILITY_ID_RE.test(capabilityId)) {
+      throw new TypeError('plugin model provider capability id is invalid')
     }
-    return trackVisibleEffect(record, dispose)
+    const capabilityDefinition = Object.freeze({
+      id: capabilityId,
+      type: 'provider',
+      slot: normalizedKind,
+      owner: record.manifest.id,
+      version: capabilityOptions.version === undefined
+        ? record.manifest.version
+        : capabilityOptions.version,
+      revision: capabilityOptions.revision === undefined
+        ? record.configRevision
+        : capabilityOptions.revision,
+      priority: capabilityOptions.priority === undefined ? 10 : capabilityOptions.priority,
+      replaces,
+      ...(record.manifest.integrity ? { releaseDigest: record.manifest.integrity } : {}),
+      implementation: wrappedAdapter,
+      healthCheck: () => true,
+    })
+    return createManagedContribution(record, {
+      activate() {
+        const disposers = []
+        try {
+          const disposeCapability = registerRuntimeCapability(capabilityDefinition)
+          if (typeof disposeCapability !== 'function') {
+            throw new TypeError('runtime capability registration must return a disposer')
+          }
+          disposers.push(disposeCapability)
+          const disposeProvider = registerModelProvider(normalizedKind, wrappedAdapter, {
+            allowBuiltinReplacement: Boolean(builtinCapabilityId),
+          })
+          if (typeof disposeProvider !== 'function') {
+            throw new TypeError('model provider registration must return a disposer')
+          }
+          disposers.push(disposeProvider)
+        } catch (error) {
+          for (const dispose of disposers.reverse()) {
+            try { dispose() } catch { /* preserve the activation failure */ }
+          }
+          throw error
+        }
+        return Object.freeze({
+          capability: disposers[0],
+          provider: disposers[1],
+        })
+      },
+      parts: (handles) => [
+        { id: `provider:${normalizedKind}:capability`, handle: handles.capability },
+        { id: `provider:${normalizedKind}:implementation`, handle: handles.provider },
+      ],
+    })
   }
+
+  const registerLoopContribution = (record, adapter, options = undefined) => {
+    assertPluginWritable(record)
+    if (!supportsRuntimeCapabilityReplacement) {
+      const error = new Error('runtime plugin loop host is unavailable')
+      error.code = 'PLUGIN_LOOP_HOST_UNAVAILABLE'
+      error.retryable = false
+      throw error
+    }
+    const capturedAdapter = prepareToolLoopAdapter(adapter)
+    const capabilityOptions = options === undefined
+      ? Object.freeze({})
+      : snapshotOptionalContributionDefinition(
+          options,
+          'plugin loop options',
+          ['version', 'revision', 'priority', 'replaces', 'healthCheck'],
+        )
+    const capabilityId = capturedAdapter.id
+    assertContributionDeclared(record, `loop:${capabilityId}`)
+    const replaces = capabilityOptions.replaces == null
+      ? null
+      : trimmedString(capabilityOptions.replaces)
+    if (replaces !== BUILTIN_TOOL_LOOP_ADAPTER_ID) {
+      const error = new TypeError(
+        `plugin loop replacement must declare replaces: ${BUILTIN_TOOL_LOOP_ADAPTER_ID}`,
+      )
+      error.code = 'PLUGIN_LOOP_REPLACEMENT_REQUIRED'
+      error.retryable = false
+      throw error
+    }
+    const priority = capabilityOptions.priority === undefined ? 10 : capabilityOptions.priority
+    if (!Number.isSafeInteger(priority) || priority <= 0) {
+      const error = new TypeError('plugin loop replacement priority must be a positive integer')
+      error.code = 'PLUGIN_LOOP_REPLACEMENT_PRIORITY_INVALID'
+      error.retryable = false
+      throw error
+    }
+    const pluginHealthCheck = capabilityOptions.healthCheck
+    if (pluginHealthCheck !== undefined && typeof pluginHealthCheck !== 'function') {
+      const error = new TypeError('plugin loop healthCheck must be a function')
+      error.code = 'PLUGIN_LOOP_HEALTH_CHECK_INVALID'
+      error.retryable = false
+      throw error
+    }
+    const wrappedAdapter = prepareToolLoopAdapter(Object.freeze({
+      id: capturedAdapter.id,
+      contractVersion: capturedAdapter.contractVersion,
+      ...(capturedAdapter.contractVersion === TOOL_LOOP_ADAPTER_CONTRACT_VERSION_V3
+        ? { hostCapabilities: capturedAdapter.hostCapabilities }
+        : {}),
+      run(context) {
+        if (record.state !== 'active') {
+          const error = new Error(`plugin loop is unavailable: ${record.manifest.id}`)
+          error.code = 'PLUGIN_LOOP_UNAVAILABLE'
+          error.retryable = false
+          throw error
+        }
+        return invokePluginCallback(record, 'loop', capturedAdapter.run, [context])
+      },
+    }))
+    const capabilityDefinition = Object.freeze({
+      id: capabilityId,
+      type: 'loop',
+      owner: record.manifest.id,
+      version: capabilityOptions.version === undefined
+        ? record.manifest.version
+        : capabilityOptions.version,
+      revision: capabilityOptions.revision === undefined
+        ? record.configRevision
+        : capabilityOptions.revision,
+      priority,
+      replaces,
+      ...(record.manifest.integrity ? { releaseDigest: record.manifest.integrity } : {}),
+      implementation: wrappedAdapter,
+      healthCheck: async () => {
+        if (record.state !== 'active') return { ok: false, code: 'PLUGIN_LOOP_UNAVAILABLE' }
+        if (!pluginHealthCheck) return true
+        return invokePluginCallback(record, 'loop-health-check', pluginHealthCheck, [])
+      },
+    })
+    const assertNotInUse = () => {
+      if (!isRuntimeCapabilityInUse(capabilityDefinition)) return true
+      const error = new Error(`plugin loop is active and must be stopped before unload: ${capabilityId}`)
+      error.code = 'PLUGIN_LOOP_CAPABILITY_IN_USE'
+      error.statusCode = 409
+      error.retryable = true
+      throw error
+    }
+    const assertSlotInactive = () => {
+      if (!isRuntimeCapabilitySlotActive(capabilityDefinition)) return true
+      const error = new Error(
+        `runtime Loop must be stopped before installing a replacement: ${capabilityId}`,
+      )
+      error.code = 'PLUGIN_LOOP_CAPABILITY_IN_USE'
+      error.statusCode = 409
+      error.retryable = true
+      throw error
+    }
+    assertSlotInactive()
+    record.deactivationChecks.add(assertNotInUse)
+    try {
+      return createManagedContribution(record, {
+        activate() {
+          assertSlotInactive()
+          const dispose = registerRuntimeCapability(capabilityDefinition)
+          if (typeof dispose !== 'function') {
+            const error = new TypeError('runtime loop capability registration must return a disposer')
+            error.code = 'PLUGIN_LOOP_HOST_INVALID'
+            error.retryable = false
+            throw error
+          }
+          emitAudit('plugin.loop_registered', {
+            pluginId: record.manifest.id,
+            capabilityId,
+            contractVersion: capturedAdapter.contractVersion,
+            revision: capabilityDefinition.revision,
+            version: capabilityDefinition.version,
+          })
+          return dispose
+        },
+        deactivate(dispose) {
+          const removed = dispose()
+          emitAudit('plugin.loop_unregistered', {
+            pluginId: record.manifest.id,
+            capabilityId,
+            restoredCapabilityId: BUILTIN_TOOL_LOOP_ADAPTER_ID,
+          })
+          return removed
+        },
+        onDispose: () => record.deactivationChecks.delete(assertNotInUse),
+        activateImmediately: record.state === 'active' && !record.deferVisibility,
+      })
+    } catch (error) {
+      record.deactivationChecks.delete(assertNotInUse)
+      throw error
+    }
+  }
+
+  const registerPolicyContribution = (record, adapter, options = undefined) => {
+    assertPluginWritable(record)
+    if (!supportsRuntimeCapabilityReplacement) {
+      const error = new Error('runtime plugin policy host is unavailable')
+      error.code = 'PLUGIN_POLICY_HOST_UNAVAILABLE'
+      error.retryable = false
+      throw error
+    }
+    const capturedAdapter = validatePolicyAdapter(adapter)
+    const capabilityOptions = options === undefined
+      ? Object.freeze({})
+      : snapshotOptionalContributionDefinition(
+          options,
+          'plugin policy options',
+          ['id', 'version', 'revision', 'priority', 'replaces'],
+        )
+    const capabilityId = capabilityOptions.id === undefined
+      ? `plugin.${record.manifest.id}.policy`
+      : trimmedString(capabilityOptions.id)
+    if (!PLUGIN_CAPABILITY_ID_RE.test(capabilityId)) {
+      const error = new TypeError('plugin policy capability id is invalid')
+      error.code = 'PLUGIN_POLICY_ID_INVALID'
+      error.retryable = false
+      throw error
+    }
+    assertContributionDeclared(record, `policy:${capabilityId}`)
+    const replaces = capabilityOptions.replaces == null
+      ? null
+      : trimmedString(capabilityOptions.replaces)
+    if (replaces !== BUILTIN_POLICY_CAPABILITY_ID) {
+      const error = new TypeError(
+        `plugin policy replacement must declare replaces: ${BUILTIN_POLICY_CAPABILITY_ID}`,
+      )
+      error.code = 'PLUGIN_POLICY_REPLACEMENT_REQUIRED'
+      error.retryable = false
+      throw error
+    }
+    const priority = capabilityOptions.priority === undefined ? 10 : capabilityOptions.priority
+    if (!Number.isSafeInteger(priority) || priority <= 0) {
+      const error = new TypeError('plugin policy replacement priority must be a positive integer')
+      error.code = 'PLUGIN_POLICY_REPLACEMENT_PRIORITY_INVALID'
+      error.retryable = false
+      throw error
+    }
+    const wrappedAdapter = validatePolicyAdapter(Object.freeze({
+      contractVersion: POLICY_ADAPTER_CONTRACT_VERSION,
+      classify(request) {
+        if (record.state !== 'active') {
+          const error = new Error(`plugin policy is unavailable: ${record.manifest.id}`)
+          error.code = 'PLUGIN_POLICY_UNAVAILABLE'
+          error.retryable = false
+          throw error
+        }
+        return invokePluginCallbackSync(
+          record,
+          'policy',
+          capturedAdapter.classify,
+          [request],
+        )
+      },
+    }))
+    const capabilityDefinition = Object.freeze({
+      id: capabilityId,
+      type: 'policy',
+      owner: record.manifest.id,
+      version: capabilityOptions.version === undefined
+        ? record.manifest.version
+        : capabilityOptions.version,
+      revision: capabilityOptions.revision === undefined
+        ? record.configRevision
+        : capabilityOptions.revision,
+      priority,
+      replaces,
+      ...(record.manifest.integrity ? { releaseDigest: record.manifest.integrity } : {}),
+      implementation: wrappedAdapter,
+      healthCheck: () => true,
+    })
+    return createManagedContribution(record, {
+      activate() {
+        const dispose = registerRuntimeCapability(capabilityDefinition)
+        if (typeof dispose !== 'function') {
+          const error = new TypeError('runtime policy capability registration must return a disposer')
+          error.code = 'PLUGIN_POLICY_HOST_INVALID'
+          error.retryable = false
+          throw error
+        }
+        emitAudit('plugin.policy_registered', {
+          pluginId: record.manifest.id,
+          capabilityId,
+          contractVersion: POLICY_ADAPTER_CONTRACT_VERSION,
+          revision: capabilityDefinition.revision,
+          version: capabilityDefinition.version,
+        })
+        return dispose
+      },
+      deactivate(dispose) {
+        const removed = dispose()
+        emitAudit('plugin.policy_unregistered', {
+          pluginId: record.manifest.id,
+          capabilityId,
+          restoredCapabilityId: BUILTIN_POLICY_CAPABILITY_ID,
+        })
+        return removed
+      },
+      activateImmediately: record.state === 'active' && !record.deferVisibility,
+    })
+  }
+
+  const emitConfigReloadAudit = (event, details = {}) => {
+    const entry = Object.freeze({ event, at: new Date().toISOString(), ...details })
+    configReloadAudit.push(entry)
+    if (configReloadAudit.length > MAX_CONFIG_RELOAD_AUDIT_EVENTS) configReloadAudit.shift()
+    emitAudit(event, details)
+  }
+
+  const registerHttpCapabilityContribution = (record, definition) => {
+    assertPluginWritable(record)
+    const snapshot = snapshotRuntimePluginHttpCapability({
+      record,
+      definition,
+      invoke: invokePluginCallback,
+    })
+    assertContributionDeclared(record, `http-capability:${snapshot.id}`)
+    const contribution = {
+      definition: snapshot,
+    }
+    record.httpCapabilities.add(contribution)
+    return createManagedContribution(record, {
+      activate() {
+        const dispose = registerHttpCapability(contribution.definition)
+        if (typeof dispose !== 'function') {
+          const error = new TypeError('HTTP capability registration must return a disposer')
+          error.code = 'PLUGIN_HTTP_CAPABILITY_HOST_INVALID'
+          error.retryable = false
+          throw error
+        }
+        emitAudit('plugin.http_capability_registered', {
+          pluginId: record.manifest.id,
+          capabilityId: snapshot.id,
+          priority: snapshot.priority,
+          replaces: snapshot.replaces || null,
+        })
+        return dispose
+      },
+      deactivate(dispose) {
+        const removed = dispose()
+        emitAudit('plugin.http_capability_unregistered', {
+          pluginId: record.manifest.id,
+          capabilityId: snapshot.id,
+          restoredCapabilityId: snapshot.replaces || null,
+        })
+        return removed
+      },
+      activateImmediately: record.state === 'active' && !record.deferVisibility,
+      onDispose(wasActive) {
+        record.httpCapabilities.delete(contribution)
+        if (wasActive) return
+        emitAudit('plugin.http_capability_discarded', {
+        pluginId: record.manifest.id,
+        capabilityId: snapshot.id,
+        restoredCapabilityId: snapshot.replaces || null,
+      })
+      },
+    })
+  }
+
+  const assertManifestCompatible = (manifest) => assertPluginCompatibility(manifest, {
+    hostVersion: PLUGIN_HOST_VERSION,
+    apiVersion: PLUGIN_API_VERSION,
+    resolveDependencyVersion: (id) => {
+      const dependency = plugins.get(id)
+      return dependency?.state === 'active' ? dependency.manifest.version : null
+    },
+  })
+
+  const createPluginRecord = ({
+    manifest,
+    setup,
+    configResolver,
+    configResolution,
+    configRevision,
+    state,
+    deferVisibility,
+    installedAt = null,
+  }) => ({
+    manifest,
+    setup,
+    configResolver,
+    configResolution,
+    configRevision,
+    state,
+    deferVisibility,
+    cancelRequested: false,
+    installedAt,
+    sequence: ++installSequence,
+    effects: createEffectTracker(),
+    managedContributions: [],
+    deactivationChecks: new Set(),
+    configHealthChecks: new Set(),
+    eventContributions: new Set(),
+    httpCapabilities: new Set(),
+    visibleEffects: new Set(),
+    revocationErrors: [],
+    revocationPromise: null,
+    activeCallbacks: 0,
+    callbackDrainWaiters: new Set(),
+  })
+
+  const createContextForRecord = (record) => createPluginContext({
+    manifest: record.manifest,
+    config: record.configResolution.config,
+    track: record.effects.track,
+    registerConfigHealthCheck: (check) => registerConfigHealthCheck(record, check),
+    registerTool: (definition) => registerToolContribution(record, definition),
+    registerEvent: (event, listener) => registerEventContribution(record, event, listener),
+    registerModelProvider: (kind, adapter, options) => (
+      registerModelProviderContribution(record, kind, adapter, options)
+    ),
+    registerLoop: (adapter, options) => registerLoopContribution(record, adapter, options),
+    registerPolicy: (adapter, options) => registerPolicyContribution(record, adapter, options),
+    registerHttpCapability: (definition) => registerHttpCapabilityContribution(record, definition),
+    registerPrompt: (definition) => registerPromptContribution(record, definition),
+    provideService: (name, value) => provideService(record, name, value),
+    invokeService: (name, method, args) => invokeServiceForConsumer(record, name, method, args),
+    hasService: (name) => hasServiceForConsumer(record, name),
+    emitAudit: (event, details) => {
+      const entry = snapshotPluginAuditEntry(event, details)
+      emitAudit(entry.event, {
+        pluginId: record.manifest.id,
+        details: entry.details,
+      })
+    },
+  })
 
   const registerPlugin = async (manifest, setup) => {
     if (shuttingDown) {
@@ -850,50 +976,26 @@ export function createRuntimePluginRegistry(options = {}) {
     const normalized = normalizeRuntimePluginManifest(manifest)
     if (typeof setup !== 'function') throw new TypeError('plugin setup must be a function')
     if (plugins.has(normalized.id)) throw new Error(`plugin already registered: ${normalized.id}`)
-    const missing = normalized.requires.filter((id) => plugins.get(id)?.state !== 'active')
-    if (missing.length > 0) {
-      throw new Error(`plugin dependencies are not active: ${missing.join(', ')}`)
-    }
+    assertManifestCompatible(normalized)
+    configLayerSourcesSealed = true
+    const configResolution = activePluginConfigResolver.resolve(normalized.id, normalized.configSchema)
 
-    const record = {
+    const record = createPluginRecord({
       manifest: normalized,
+      setup,
+      configResolver: activePluginConfigResolver,
+      configResolution,
+      configRevision: 1,
       state: 'installing',
-      cancelRequested: false,
-      installedAt: null,
-      sequence: ++installSequence,
-      effects: createEffectTracker(),
-      eventContributions: new Set(),
-      visibleEffects: new Set(),
-      revocationErrors: [],
-      revocationPromise: null,
-      activeCallbacks: 0,
-      callbackDrainWaiters: new Set(),
-    }
+      deferVisibility: false,
+    })
     record.installSettled = new Promise((resolve) => {
       record.resolveInstallSettled = resolve
     })
     plugins.set(normalized.id, record)
     emitAudit('plugin.installing', { pluginId: normalized.id, version: normalized.version })
 
-    const context = createPluginContext({
-      manifest: normalized,
-      config: pluginConfig,
-      track: record.effects.track,
-      registerTool: (definition) => registerToolContribution(record, definition),
-      registerEvent: (event, listener) => registerEventContribution(record, event, listener),
-      registerModelProvider: (kind, adapter) => registerModelProviderContribution(record, kind, adapter),
-      registerPrompt: (definition) => registerPromptContribution(record, definition),
-      provideService: (name, value) => provideService(record, name, value),
-      invokeService: (name, method, args) => invokeServiceForConsumer(record, name, method, args),
-      hasService: (name) => hasServiceForConsumer(record, name),
-      emitAudit: (event, details) => {
-        const entry = snapshotPluginAuditEntry(event, details)
-        emitAudit(entry.event, {
-          pluginId: normalized.id,
-          details: entry.details,
-        })
-      },
-    })
+    const context = createContextForRecord(record)
 
     try {
       await invokePluginSetup(record, setup, context)
@@ -902,24 +1004,25 @@ export function createRuntimePluginRegistry(options = {}) {
         cancelled.code = 'PLUGIN_INSTALL_CANCELLED'
         throw cancelled
       }
-      const missingAfterSetup = normalized.requires
-        .filter((id) => plugins.get(id)?.state !== 'active')
-      if (missingAfterSetup.length > 0) {
-        throw new Error(`plugin dependencies changed during setup: ${missingAfterSetup.join(', ')}`)
-      }
+      assertManifestCompatible(normalized)
       record.state = 'active'
+      await activateManagedContributions(record)
       record.installedAt = new Date().toISOString()
       emitAudit('plugin.installed', { pluginId: normalized.id, version: normalized.version })
-      return pluginSnapshot(record)
+      return snapshotRuntimePlugin(record)
     } catch (error) {
       record.state = 'failed'
       await revokeVisibleEffects(record)
-      const rollbackErrors = [
-        ...record.revocationErrors,
-        ...await disposePluginEffects(record),
-      ]
+      const rollbackErrors = [...record.revocationErrors]
+      if (record.managedContributions.length === 0) {
+        rollbackErrors.push(...await disposePluginEffects(record))
+      }
       record.revocationErrors.length = 0
-      plugins.delete(normalized.id)
+      if (rollbackErrors.length === 0 && record.managedContributions.length === 0) {
+        plugins.delete(normalized.id)
+      } else {
+        record.state = 'rollback_failed'
+      }
       emitAudit('plugin.install_failed', {
         pluginId: normalized.id,
         error: error?.message || String(error),
@@ -938,13 +1041,58 @@ export function createRuntimePluginRegistry(options = {}) {
     }
   }
 
-  const unregisterPlugin = async (id) => {
+  const {
+    discardStagedRecord,
+    reloadPluginConfig: reloadPluginConfigUnchecked,
+  } = createRuntimePluginConfigReloadController({
+    activeCallbackInvocation,
+    activateManagedContributions,
+    assertManifestCompatible,
+    assertRecordCanDeactivate,
+    beginManagedContributionDeactivation,
+    collectManagedDeactivationErrors,
+    configReloads,
+    createContextForRecord,
+    createPluginRecord,
+    disposePluginEffects,
+    emitConfigReloadAudit,
+    getActivePluginConfigResolver: () => activePluginConfigResolver,
+    invokePluginCallback,
+    invokePluginSetup,
+    isShuttingDown: () => shuttingDown,
+    plugins,
+    retireManagedContributions,
+    revokeVisibleEffects,
+    setActivePluginConfigResolver: (resolver) => {
+      activePluginConfigResolver = resolver
+    },
+    stagingRecords,
+    waitForCallbacksToDrain,
+  })
+
+  const reloadPluginConfig = (id, options) => {
     const normalizedId = trimmedString(id)
-    const record = plugins.get(normalizedId)
-    if (!record) return false
     const invocation = activeCallbackInvocation()
-    if (invocation?.record === record) {
-      throw callbackDrainDeadlockError('unregister', record)
+    if (invocation) {
+      return createHandledRejectedPromise(
+        callbackDrainDeadlockError('reload', invocation, normalizedId, registryToken),
+      )
+    }
+    return reloadPluginConfigUnchecked(id, options)
+  }
+
+  const unregisterPluginUnchecked = async (normalizedId) => {
+    let record = plugins.get(normalizedId)
+    if (!record) return false
+    const pendingReloads = [...configReloads]
+      .filter((entry) => entry.pluginId === normalizedId)
+      .map((entry) => entry.promise)
+    if (pendingReloads.length > 0) {
+      await Promise.allSettled(pendingReloads)
+      const current = plugins.get(normalizedId)
+      if (!current) return true
+      if (current !== record) return unregisterPluginUnchecked(normalizedId)
+      record = current
     }
     if (record.state === 'cancelling') {
       await record.cancelPromise
@@ -964,72 +1112,90 @@ export function createRuntimePluginRegistry(options = {}) {
       await record.installSettled
       return !plugins.has(normalizedId)
     }
-    if (record.state === 'uninstalling') return record.uninstallPromise
-    const dependents = [...plugins.values()]
-      .filter((candidate) => (
-        candidate !== record
-        && candidate.manifest.requires.includes(normalizedId)
-      ))
-      .map((candidate) => candidate.manifest.id)
-    if (dependents.length > 0) {
-      throw new Error(`plugin is required by active plugins: ${dependents.join(', ')}`)
-    }
+    if (record.state === 'uninstalling' && record.uninstallPromise) return record.uninstallPromise
+    assertNoRuntimePluginDependents(plugins, record, normalizedId)
+    assertRecordCanDeactivate(record)
     record.state = 'uninstalling'
     emitAudit('plugin.uninstalling', { pluginId: normalizedId })
     record.uninstallPromise = (async () => {
       await revokeVisibleEffects(record)
+      if (record.revocationErrors.length > 0 || record.managedContributions.length > 0) {
+        const errors = [...record.revocationErrors]
+        record.revocationErrors.length = 0
+        const states = record.managedContributions.map((contribution) => contribution.snapshot().state)
+        record.state = states.every((state) => state === 'revoked')
+          ? 'inactive_cleanup_failed'
+          : 'visibility_indeterminate'
+        const failure = errors.length > 0
+          ? new AggregateError(errors, `plugin uninstall failed: ${normalizedId}`)
+          : new Error(`plugin uninstall visibility was not fully revoked: ${normalizedId}`)
+        failure.code = 'PLUGIN_UNINSTALL_INCOMPLETE'
+        failure.retryable = true
+        emitAudit('plugin.uninstall_failed', {
+          pluginId: normalizedId,
+          state: record.state,
+          errors: errors.map((item) => item?.message || String(item)),
+        })
+        throw failure
+      }
       await waitForCallbacksToDrain(record)
-      const errors = [
-        ...record.revocationErrors,
-        ...await disposePluginEffects(record),
-      ]
+      const errors = await disposePluginEffects(record)
       record.revocationErrors.length = 0
-      plugins.delete(normalizedId)
-      emitAudit('plugin.uninstalled', {
-        pluginId: normalizedId,
-        errors: errors.map((item) => item?.message || String(item)),
-      })
       if (errors.length > 0) {
+        record.state = 'inactive_cleanup_failed'
+        emitAudit('plugin.uninstall_failed', {
+          pluginId: normalizedId,
+          state: record.state,
+          errors: errors.map((item) => item?.message || String(item)),
+        })
         throw new AggregateError(errors, `plugin uninstall failed: ${normalizedId}`)
       }
+      plugins.delete(normalizedId)
+      emitAudit('plugin.uninstalled', { pluginId: normalizedId, errors: [] })
       return true
-    })()
+    })().finally(() => {
+      if (plugins.get(normalizedId) === record) record.uninstallPromise = null
+    })
     return record.uninstallPromise
   }
 
-  const bindLoopEvents = (events) => {
-    const binding = { events: snapshotLoopEventBus(events), attachments: new Map() }
-    try {
-      for (const record of plugins.values()) {
-        if (record.state !== 'active') continue
-        for (const contribution of record.eventContributions) {
-          attachContribution(binding, contribution)
-        }
-      }
-      loopBindings.add(binding)
-    } catch (error) {
-      for (const dispose of [...binding.attachments.values()].reverse()) {
-        try { assertLoopCleanupSynchronous(dispose()) } catch { /* preserve original bind error */ }
-      }
-      throw error
+  const unregisterPlugin = (id) => {
+    const normalizedId = trimmedString(id)
+    const invocation = activeCallbackInvocation()
+    if (invocation) {
+      return createHandledRejectedPromise(
+        callbackDrainDeadlockError('unregister', invocation, normalizedId, registryToken),
+      )
     }
-    let disposed = false
-    return () => {
-      if (disposed) return false
-      disposed = true
-      return detachBinding(binding)
-    }
+    return unregisterPluginUnchecked(normalizedId)
   }
 
   const shutdown = () => {
     const invocation = activeCallbackInvocation()
     if (invocation) {
-      return Promise.reject(callbackDrainDeadlockError('shutdown', invocation.record))
+      return createHandledRejectedPromise(
+        callbackDrainDeadlockError('shutdown', invocation, '', registryToken),
+      )
     }
     if (shutdownPromise) return shutdownPromise
     shuttingDown = true
     shutdownPromise = (async () => {
       const errors = []
+      const pendingReloads = [...configReloads].map((entry) => entry.promise)
+      if (pendingReloads.length > 0) await Promise.allSettled(pendingReloads)
+      const staged = [...stagingRecords].sort((a, b) => b.sequence - a.sequence)
+      for (const record of staged) {
+        const outcome = await discardStagedRecord(record)
+        if (!outcome.removed) {
+          const cleanupErrors = outcome.errors.length > 0
+            ? outcome.errors
+            : [new Error(`staged runtime plugin cleanup remains incomplete: ${record.manifest.id}`)]
+          errors.push(new AggregateError(
+            cleanupErrors,
+            `staged runtime plugin cleanup failed: ${record.manifest.id}`,
+          ))
+        }
+      }
       const ordered = [...plugins.values()].sort((a, b) => b.sequence - a.sequence)
       for (const record of ordered) {
         try {
@@ -1038,7 +1204,7 @@ export function createRuntimePluginRegistry(options = {}) {
           errors.push(error)
         }
       }
-      for (const binding of [...loopBindings]) detachBinding(binding)
+      detachLoopEventBindings()
       if (errors.length > 0) throw new AggregateError(errors, 'runtime plugin shutdown failed')
     })().finally(() => {
       shuttingDown = false
@@ -1048,15 +1214,19 @@ export function createRuntimePluginRegistry(options = {}) {
   }
 
   return Object.freeze({
+    initializeConfigLayerSources,
     registerPlugin,
     unregisterPlugin,
+    reloadPluginConfig,
     bindLoopEvents,
-    listPlugins: () => Object.freeze([...plugins.values()].map(pluginSnapshot)),
-    getPlugin: (id) => pluginSnapshot(plugins.get(trimmedString(id))),
-    hasService: (name) => {
-      const contribution = services.get(trimmedString(name))
-      return contribution?.record?.state === 'active'
-    },
+    listPlugins: () => listRuntimePluginInventory([
+      ...plugins.values(),
+      ...stagingRecords,
+    ]),
+    getPlugin: (id) => snapshotRuntimePlugin(plugins.get(trimmedString(id))),
+    listEffectiveConfigs: () => listRuntimePluginEffectiveConfigs(plugins.values()),
+    listConfigReloadAudit: () => Object.freeze([...configReloadAudit]),
+    hasService,
     invokeService,
     renderPromptBlocks,
     shutdown,

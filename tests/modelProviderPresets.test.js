@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
-import { CLOUD_PRESETS, LOCAL_PRESETS, formatContextTokens } from '../src/components/modelProviders/providerConfig.js'
+import {
+  CLOUD_PRESETS, LOCAL_PRESETS, formatContextTokens, resolveProviderDefaultModel,
+} from '../src/components/modelProviders/providerConfig.js'
 import { getOfficialModelProfile } from '../shared/modelCapabilityCatalog.js'
 
 const source = fs.readFileSync(new URL('../src/components/modelProviders/providerConfig.js', import.meta.url), 'utf8')
@@ -62,4 +64,10 @@ test('formatContextTokens renders compact sizes', () => {
   assert.equal(formatContextTokens(''), '')
   assert.equal(formatContextTokens(0), '')
   assert.equal(formatContextTokens(undefined), '')
+})
+
+test('a stale default model falls back to the first model in the current list', () => {
+  assert.equal(resolveProviderDefaultModel(['replacement-model'], 'removed-model'), 'replacement-model')
+  assert.equal(resolveProviderDefaultModel(['kept-model', 'other-model'], 'kept-model'), 'kept-model')
+  assert.equal(resolveProviderDefaultModel([], 'removed-model'), '')
 })

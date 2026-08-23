@@ -767,11 +767,13 @@ test('a read-only PDF verifier does not downgrade the surrounding creation workf
   }
 })
 
-test('tool switches do not prune the stable catalog in answer or execute mode', () => {
+test('tool switches prune disabled schemas while preserving the remaining stable catalog', () => {
+  const disabled = ['create_docx', 'bash_exec', 'browser_click', 'slack_send_message', 'read_file']
   const configured = applyServerToolsConfig(SPECS, {
     enabled: ['read_file'],
-    disabled: ['create_docx', 'bash_exec', 'browser_click', 'slack_send_message', 'read_file'],
+    disabled,
   })
+  const catalogs = []
   for (const { prompt, intentMode } of [
     { prompt: 'Implement the whole workflow.', intentMode: 'execute' },
     { prompt: 'Explain the whole workflow.', intentMode: 'answer' },
@@ -782,10 +784,15 @@ test('tool switches do not prune the stable catalog in answer or execute mode', 
       specs: configured,
       metadataResolver,
     }))
-    for (const name of ['create_docx', 'bash_exec', 'browser_click', 'slack_send_message', 'read_file']) {
+    catalogs.push(selected)
+    for (const name of disabled) {
+      assert.equal(selected.includes(name), false, `${intentMode}: ${name}`)
+    }
+    for (const name of ['write_file', 'request_clarification', 'request_directory', 'web_search']) {
       assert.ok(selected.includes(name), `${intentMode}: ${name}`)
     }
   }
+  assert.deepEqual(catalogs[1], catalogs[0])
 })
 
 test('answer-mode diagnostics do not report any registered tool as an intent exclusion', () => {
@@ -804,7 +811,7 @@ test('answer-mode diagnostics do not report any registered tool as an intent exc
   assert.deepEqual(decision?.excludedTools, [])
 })
 
-test('answer-mode recovery tools stay visible when their execution switches are disabled', () => {
+test('answer-mode recovery tools are removed when their execution switches are disabled', () => {
   const configured = applyServerToolsConfig(SPECS, {
     enabled: ['request_clarification', 'request_directory'],
     disabled: ['request_clarification', 'request_directory'],
@@ -814,8 +821,10 @@ test('answer-mode recovery tools stay visible when their execution switches are 
     specs: configured,
     metadataResolver,
   }))
-  assert.ok(selected.includes('request_clarification'))
-  assert.ok(selected.includes('request_directory'))
+  assert.equal(selected.includes('request_clarification'), false)
+  assert.equal(selected.includes('request_directory'), false)
+  assert.ok(selected.includes('manage_todos'))
+  assert.ok(selected.includes('write_file'))
 })
 
 test('equivalent route classes keep deterministic schema order for provider caching', () => {

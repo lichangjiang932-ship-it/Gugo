@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { getDefaultOutputDirectory, resolveAuthorizedLocalPath } from './localFileAccessService.js'
@@ -21,6 +22,70 @@ function deliveryError(code, message, cause = null) {
   error.retryable = false
   if (cause) error.cause = cause
   return error
+}
+
+function revisionConflict(message, cause = null) {
+  return deliveryError('ARTIFACT_DELIVERY_REVISION_CONFLICT', message, cause)
+}
+
+function bufferIdentity(content) {
+  const value = Buffer.isBuffer(content) ? content : Buffer.from(content)
+  return {
+    digest: crypto.createHash('sha256').update(value).digest('hex'),
+    size: value.length,
+  }
+}
+
+function fileIdentity(filePath) {
+  let descriptor
+  try {
+    const linkStat = fs.lstatSync(filePath)
+    if (linkStat.isSymbolicLink()) {
+      throw deliveryError('ARTIFACT_DELIVERY_SYMLINK_BLOCKED', 'refusing to use a symbolic-link delivery target')
+    }
+    if (!linkStat.isFile()) throw revisionConflict('the recorded delivery target is not a regular file')
+    descriptor = fs.openSync(filePath, 'r')
+    const before = fs.fstatSync(descriptor)
+    const hash = crypto.createHash('sha256')
+    const chunk = Buffer.allocUnsafe(256 * 1024)
+    let size = 0
+    while (true) {
+      const read = fs.readSync(descriptor, chunk, 0, chunk.length, null)
+      if (read === 0) break
+      hash.update(chunk.subarray(0, read))
+      size += read
+    }
+    const after = fs.fstatSync(descriptor)
+    if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+      throw revisionConflict('the delivery target changed while its identity was being verified')
+    }
+    return { digest: hash.digest('hex'), size }
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw revisionConflict('the recorded delivery target no longer exists', error)
+    throw error
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor)
+  }
+}
+
+function sameIdentity(left, right) {
+  return Boolean(left && right)
+    && left.digest === right.digest
+    && left.size === right.size
+}
+
+function snapshotDeliveryIdentity(snapshot) {
+  const digest = String(snapshot?.deliveryDigest || '').toLowerCase()
+  const size = Number(snapshot?.deliverySize)
+  const generation = Number(snapshot?.deliveryGeneration)
+  if (!/^[a-f0-9]{64}$/.test(digest)
+    || !Number.isSafeInteger(size)
+    || size < 0
+    || !Number.isSafeInteger(generation)
+    || generation < 1) {
+    throw revisionConflict('the recorded delivery predates revision-safe content tracking')
+  }
+  return { digest, size, generation }
 }
 
 function copyNewDeliveryFile(sourcePath, directory, filename, content = null) {
@@ -54,38 +119,69 @@ function copyNewDeliveryFile(sourcePath, directory, filename, content = null) {
   )
 }
 
-function replaceDeliveryFile(target, { sourcePath = '', content = null } = {}) {
+function replaceDeliveryFile(target, { sourcePath = '', content = null, expectedIdentity } = {}) {
   const suffix = `${process.pid}-${Math.random().toString(16).slice(2)}`
   const temporary = `${target}.gugo-${suffix}.tmp`
   const backup = `${target}.gugo-${suffix}.bak`
-  let backedUp = false
+  let movedToBackup = false
+  let installed = false
   try {
     if (content == null) {
       fs.copyFileSync(sourcePath, temporary, fs.constants.COPYFILE_EXCL)
     } else {
       fs.writeFileSync(temporary, content, { flag: 'wx' })
     }
-    if (fs.existsSync(target)) {
-      fs.renameSync(target, backup)
-      backedUp = true
+    const replacementIdentity = fileIdentity(temporary)
+    if (!sameIdentity(fileIdentity(target), expectedIdentity)) {
+      throw revisionConflict('the delivered artifact was changed outside this revision')
     }
-    fs.renameSync(temporary, target)
-    if (backedUp) fs.rmSync(backup, { force: true })
+    try {
+      fs.renameSync(target, backup)
+      movedToBackup = true
+    } catch (error) {
+      if (error?.code === 'ENOENT') throw revisionConflict('the recorded delivery target no longer exists', error)
+      throw error
+    }
+    if (!sameIdentity(fileIdentity(backup), expectedIdentity)) {
+      throw revisionConflict('the delivered artifact changed before the revision could be installed')
+    }
+    try {
+      // The temporary and target live in the same directory. A hard-link
+      // install is atomic and fails if another writer created the target.
+      fs.linkSync(temporary, target)
+      installed = true
+    } catch (error) {
+      if (error?.code === 'EEXIST') {
+        throw revisionConflict('another writer changed the delivery target during revision', error)
+      }
+      throw error
+    }
+    try { fs.rmSync(temporary, { force: true }) } catch { /* target already owns the complete inode */ }
+    if (!sameIdentity(fileIdentity(target), replacementIdentity)) {
+      throw revisionConflict('the revised delivery was changed before it could be committed')
+    }
+    try { fs.rmSync(backup, { force: true }) } catch { /* keep a recoverable stale backup */ }
+    return replacementIdentity
   } catch (error) {
     try { fs.rmSync(temporary, { force: true }) } catch { /* best-effort cleanup */ }
-    try {
-      if (backedUp) {
-        fs.rmSync(target, { force: true })
-        fs.renameSync(backup, target)
-      }
-    } catch { /* keep the backup for manual recovery */ }
+    if (movedToBackup && !installed) {
+      try {
+        // Never delete or replace a path that appeared after the backup move.
+        // Linking fails closed with EEXIST and leaves both versions recoverable.
+        fs.linkSync(backup, target)
+        fs.rmSync(backup, { force: true })
+      } catch { /* current target wins; keep the backup for manual recovery */ }
+    }
     throw error
   }
 }
 
 function assertSafeRevisionPath({ snapshot, directory, filename, userId }) {
   const candidate = String(snapshot?.deliveryPath || '').trim()
-  if (!candidate || !path.isAbsolute(candidate)) return null
+  // A managed-only artifact has never had a local delivery to overwrite. Its
+  // first later delivery may safely allocate a new no-clobber pathname.
+  if (!candidate) return null
+  if (!path.isAbsolute(candidate)) throw revisionConflict('the recorded delivery path is invalid')
   if (path.extname(candidate).toLowerCase() !== path.extname(filename).toLowerCase()) {
     throw deliveryError('ARTIFACT_DELIVERY_FORMAT_MISMATCH', 'recorded artifact delivery format does not match')
   }
@@ -179,10 +275,13 @@ export function syncGeneratedArtifactToOutputDirectory({
     : path.resolve(rawRequestedDirectory)
   fs.mkdirSync(requestedDirectory, { recursive: true })
   const directory = fs.realpathSync(requestedDirectory)
-  const snapshot = artifact?.replaced === true ? readArtifactSourceSnapshot(artifactId) : null
+  const priorSnapshot = readArtifactSourceSnapshot(artifactId)
+  const snapshot = artifact?.replaced === true ? priorSnapshot : null
   let deliveryPath = artifact?.replaced === true
     ? assertSafeRevisionPath({ snapshot, directory, filename, userId })
     : null
+  const expectedIdentity = deliveryPath ? snapshotDeliveryIdentity(snapshot) : null
+  let deliveredIdentity
 
   if (deliveryPath) {
     let sameFile = samePath(sourcePath, deliveryPath)
@@ -194,17 +293,30 @@ export function syncGeneratedArtifactToOutputDirectory({
     if (sameFile && standaloneContent != null) {
       throw deliveryError('ARTIFACT_DELIVERY_SOURCE_CONFLICT', 'standalone HTML delivery cannot overwrite its managed source')
     }
+    if (sameFile && !sameIdentity(fileIdentity(deliveryPath), expectedIdentity)) {
+      throw revisionConflict('the delivered artifact was changed outside this revision')
+    }
     if (!sameFile && standaloneContent != null) {
-      replaceDeliveryFile(deliveryPath, { content: standaloneContent })
+      deliveredIdentity = replaceDeliveryFile(deliveryPath, { content: standaloneContent, expectedIdentity })
     } else if (!sameFile) {
-      replaceDeliveryFile(deliveryPath, { sourcePath })
+      deliveredIdentity = replaceDeliveryFile(deliveryPath, { sourcePath, expectedIdentity })
+    } else {
+      deliveredIdentity = expectedIdentity
     }
   } else {
     deliveryPath = copyNewDeliveryFile(sourcePath, directory, filename, standaloneContent)
+    const intendedIdentity = standaloneContent == null ? fileIdentity(sourcePath) : bufferIdentity(standaloneContent)
+    deliveredIdentity = fileIdentity(deliveryPath)
+    if (!sameIdentity(deliveredIdentity, intendedIdentity)) {
+      throw revisionConflict('the new delivery target changed before it could be recorded')
+    }
   }
   const deliveryRoot = snapshot?.deliveryRoot && isInsideDirectory(snapshot.deliveryRoot, deliveryPath)
     ? snapshot.deliveryRoot
     : directory
+  if (!sameIdentity(fileIdentity(deliveryPath), deliveredIdentity)) {
+    throw revisionConflict('the delivery target changed before its metadata could be committed')
+  }
   try {
     writeArtifactSourceSnapshot({
       artifactId,
@@ -212,25 +324,30 @@ export function syncGeneratedArtifactToOutputDirectory({
       args,
       deliveryPath,
       deliveryRoot,
+      deliveryDigest: deliveredIdentity.digest,
+      deliverySize: deliveredIdentity.size,
+      expectedDeliveryGeneration: priorSnapshot?.deliveryGeneration ?? 0,
     })
   } catch (error) {
+    if (artifact?.replaced === true && error?.code === 'artifact_source_snapshot_conflict') {
+      throw revisionConflict('another revision committed newer delivery metadata', error)
+    }
     // The generated file is already delivered. Source-history metadata is
     // best-effort and must not turn a completed file write into a duplicate.
     return {
       path: deliveryPath,
       localPath: deliveryPath,
       outputPath: deliveryPath,
-      size: fs.statSync(deliveryPath).size,
+      size: deliveredIdentity.size,
       deliveryMetadataPersisted: false,
       deliveryWarning: error?.message || 'delivery metadata could not be persisted',
     }
   }
-  const stat = fs.statSync(deliveryPath)
   return {
     path: deliveryPath,
     localPath: deliveryPath,
     outputPath: deliveryPath,
-    size: stat.size,
+    size: deliveredIdentity.size,
     deliveryMetadataPersisted: true,
   }
 }

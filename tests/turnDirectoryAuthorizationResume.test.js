@@ -14,7 +14,8 @@ process.env.APP_DATA_DIR = tempDir
 const { closeDb, createUser } = await import('../server/db.js')
 const { handleTurnEventRequest } = await import('../server/routes/turnEventRoutes.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
-const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
+const { runToolLoop } = await import('../server/services/loop/index.js')
+const { getApprovalMode, setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { grantLocalPath } = await import('../server/services/localFileAccessService.js')
 const { SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
 const {
@@ -26,6 +27,7 @@ const { listMessages, upsertSession } = await import('../server/services/session
 const { listTurnEvents } = await import('../server/services/turnEventStore.js')
 const { resumeServerTurnRequest } = await import('../src/lib/turnClient/turnRequests.js')
 const { normalizeServerSessionSnapshot } = await import('../src/lib/turnClient/sessionSnapshot.js')
+const { createTestTurnEnginePersistence } = await import('./helpers/turnEnginePersistence.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const userId = 'turn-directory-resume-user'
@@ -101,7 +103,11 @@ test('non-directory resolution cannot restore local execution tools', () => {
   }
 })
 
-test('directory authorization restores code tools missing from the pre-authorization base specs', async () => {
+test('directory authorization restores code tools missing from the pre-authorization base specs', async (t) => {
+  const previousApprovalMode = getApprovalMode({ userId })
+  t.after(() => {
+    setApprovalMode({ userId, mode: previousApprovalMode })
+  })
   setApprovalMode({ userId, mode: 'bypass' })
   let modelCalls = 0
   const executed = []
@@ -109,11 +115,14 @@ test('directory authorization restores code tools missing from the pre-authoriza
   let resolutionMarker = ''
 
   const engine = new TurnEngine({
+    persistence: createTestTurnEnginePersistence(),
+    runLoop: runToolLoop,
     scheduleMemoryExtraction: () => {},
-    readApprovalMode: () => 'off',
+    readApprovalMode: () => 'bypass',
     toolSpecs: SERVER_TOOL_SPECS.filter((spec) => (
       !['bash_exec', 'write_file', 'edit_file'].includes(spec?.function?.name)
     )),
+    directoryAuthorizationToolSpecs: SERVER_TOOL_SPECS,
     resolveToolSpecs: async ({ baseSpecs, toolsConfig }) => applyServerToolsConfig(
       baseSpecs.filter((spec) => (
         [
@@ -249,7 +258,7 @@ test('directory authorization restores code tools missing from the pre-authoriza
   assert.equal(paused.payload.clarification.access_mode, 'read_write')
   assert.equal(paused.payload.clarification.suggested_path, authorizedDir)
   assert.equal(pausedEvents.some((event) => event.type === 'turn.completed'), false)
-  assert.equal(engine.getTurn({ userId, sessionId, turnId }).status, 'paused')
+  assert.equal((await engine.getTurn({ userId, sessionId, turnId })).status, 'paused')
 
   const persistedPausedMessage = listMessages({ userId, sessionId, limit: 100 })
     .find((message) => message.id === `${turnId}:assistant`)
@@ -267,6 +276,8 @@ test('directory authorization restores code tools missing from the pre-authoriza
     approved: true,
     path: grant.path,
     access_mode: 'read_write',
+    authorization_scope: grant.scope,
+    grant_id: grant.id,
     paused_sequence: hydratedPausedSequence,
     purpose: 'Generate a verified preview by running local code.',
   }
@@ -287,7 +298,9 @@ test('directory authorization restores code tools missing from the pre-authoriza
   assert.equal(
     finalEvents.at(-1).type,
     'turn.completed',
-    `unexpected terminal event: ${JSON.stringify(finalEvents.at(-1))}`,
+    `unexpected terminal event: ${JSON.stringify(finalEvents.at(-1))}; `
+      + `modelCalls=${modelCalls}; observedToolNames=${JSON.stringify(observedToolNames)}; `
+      + `executed=${JSON.stringify(executed)}`,
   )
   assert.equal(finalEvents.at(-1).payload.text, '代码已执行并验证完成。')
   assert.deepEqual(executed.map(({ name }) => name), ['request_directory', 'bash_exec', 'run_project_check'])
@@ -310,6 +323,8 @@ test('client and HTTP route preserve the directory resolution on same-turn resum
     approved: true,
     path: authorizedDir,
     access_mode: 'read_write',
+    authorization_scope: 'session',
+    grant_id: 'client-directory-grant',
     paused_sequence: 7,
     purpose: 'Continue code execution.',
   }

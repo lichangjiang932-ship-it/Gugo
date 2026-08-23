@@ -45,8 +45,43 @@ function createCheckpointRuntime({
   })
 }
 
-function createLeaseRuntime(coordinator, mapScope = identity) {
+function createLeaseRuntime(coordinator, mapScope = identity, { asyncAcquire = false } = {}) {
   const normalizeScope = (scope) => mapScope(scope)
+  const normalizeProof = (value) => {
+    const ownerId = typeof value?.ownerId === 'string' ? value.ownerId.trim() : ''
+    const fencingToken = Number(value?.fencingToken)
+    if (!ownerId || !Number.isSafeInteger(fencingToken) || fencingToken <= 0) return null
+    return Object.freeze({ ownerId, fencingToken })
+  }
+  const snapshotProof = (scope) => {
+    if (typeof coordinator?.proof !== 'function') return null
+    return normalizeProof(coordinator.proof(normalizeScope(scope)))
+  }
+  const snapshotProofAsync = async (scope) => {
+    if (typeof coordinator?.proof !== 'function') return null
+    return normalizeProof(await coordinator.proof(normalizeScope(scope)))
+  }
+  const acquiredLease = (controller, executionLease, releaseLease) => {
+    let released = false
+    let releasePromise = null
+    return {
+      controller,
+      executionLease,
+      async release() {
+        if (released) return false
+        if (releasePromise) return await releasePromise
+        const attempt = Promise.resolve().then(() => releaseLease?.())
+        releasePromise = attempt
+        try {
+          const result = await attempt
+          released = true
+          return result
+        } finally {
+          if (releasePromise === attempt) releasePromise = null
+        }
+      },
+    }
+  }
   return Object.freeze({
     ownerId: coordinator?.ownerId || null,
     claim(scope) {
@@ -60,17 +95,30 @@ function createLeaseRuntime(coordinator, mapScope = identity) {
         : () => {}
     },
     acquire(scope, controller = new AbortController()) {
+      if (asyncAcquire) {
+        return (async () => {
+          if (!await this.claim(scope)) return null
+          const executionLease = await snapshotProofAsync(scope)
+          const releaseLease = await this.hold(scope, controller)
+          return acquiredLease(controller, executionLease, releaseLease)
+        })()
+      }
       if (!this.claim(scope)) return null
+      const executionLease = snapshotProof(scope)
       const releaseLease = this.hold(scope, controller)
       let released = false
       return {
         controller,
+        executionLease,
         release() {
           if (released) return
           released = true
           releaseLease?.()
         },
       }
+    },
+    proof(scope) {
+      return snapshotProof(scope)
     },
     isActive(scope) {
       return typeof coordinator?.isActive === 'function'
@@ -111,10 +159,11 @@ export function createRuntimeCore({
   executionLeases,
   mapLeaseScope = identity,
   releaseApprovals = null,
+  asyncLease = false,
 } = {}) {
   return Object.freeze({
     checkpoint: createCheckpointRuntime(checkpoint),
-    lease: createLeaseRuntime(executionLeases, mapLeaseScope),
+    lease: createLeaseRuntime(executionLeases, mapLeaseScope, { asyncAcquire: asyncLease }),
     approval: Object.freeze({
       release(scope) {
         return typeof releaseApprovals === 'function' ? releaseApprovals(scope) : 0
@@ -158,6 +207,7 @@ export function createTurnRuntimeCore({
       clear: clearCheckpoint,
     },
     executionLeases,
+    asyncLease: true,
     releaseApprovals,
   })
 }

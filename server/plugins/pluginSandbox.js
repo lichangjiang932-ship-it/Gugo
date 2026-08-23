@@ -1,9 +1,11 @@
-import fs from 'node:fs/promises'
 import { Worker } from 'node:worker_threads'
 import { performance } from 'node:perf_hooks'
 import { types as nodeTypes } from 'node:util'
 import { PLUGIN_CAPABILITIES } from './pluginManifest.js'
 import { snapshotPluginData } from './pluginServiceData.js'
+import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
+import { readPluginEntryFile } from './pluginEntryFile.js'
+import { verifyPluginEntryIntegrity } from './pluginIntegrity.js'
 
 const DEFAULT_TIMEOUT_MS = 5000
 const DEFAULT_MEMORY_LIMIT_MB = 32
@@ -199,32 +201,22 @@ function validateInlineSource(source) {
   return source
 }
 
-async function boundedFileSource(entryPath) {
-  const handle = await fs.open(entryPath, 'r')
+async function boundedFileSource({ rootDir, entryPath, integrity }) {
   try {
-    const stat = await handle.stat()
-    if (!stat.isFile()) throw sandboxSourceError('entryPath must reference a regular file')
-    if (stat.size > MAX_TRANSFORMER_SOURCE_BYTES) {
+    const { bytes } = await readPluginEntryFile({
+      rootDir,
+      entryPath,
+      maxBytes: MAX_TRANSFORMER_SOURCE_BYTES,
+    })
+    verifyPluginEntryIntegrity({ integrity, bytes })
+    return bytes.toString('utf8')
+  } catch (error) {
+    if (String(error?.code || '').startsWith('PLUGIN_INTEGRITY_')) throw error
+    if (error?.code === 'PLUGIN_ENTRY_TOO_LARGE') {
       throw sandboxSourceError('source exceeds 512 KiB')
     }
-    const buffer = Buffer.allocUnsafe(MAX_TRANSFORMER_SOURCE_BYTES + 1)
-    let offset = 0
-    while (offset < buffer.length) {
-      const { bytesRead } = await handle.read(
-        buffer,
-        offset,
-        buffer.length - offset,
-        offset,
-      )
-      if (bytesRead === 0) break
-      offset += bytesRead
-    }
-    if (offset > MAX_TRANSFORMER_SOURCE_BYTES) {
-      throw sandboxSourceError('source exceeds 512 KiB')
-    }
-    return buffer.subarray(0, offset).toString('utf8')
-  } finally {
-    await handle.close()
+    if (String(error?.code || '').startsWith('PLUGIN_ENTRY_')) throw error
+    throw sandboxSourceError('entryPath could not be read')
   }
 }
 
@@ -241,7 +233,15 @@ async function transformerSource(plugin) {
   if (typeof entryPath !== 'string' || !entryPath) {
     throw sandboxDefinitionError('plugin.entryPath')
   }
-  return await boundedFileSource(entryPath)
+  const rootDir = ownDefinitionValue(plugin, 'rootDir')
+  if (typeof rootDir !== 'string' || !rootDir) {
+    throw sandboxDefinitionError('plugin.rootDir')
+  }
+  const integrity = ownDefinitionValue(plugin, 'integrity')
+  if (integrity !== undefined && typeof integrity !== 'string') {
+    throw sandboxDefinitionError('plugin.integrity')
+  }
+  return await boundedFileSource({ rootDir, entryPath, integrity })
 }
 
 function sanitizeCapabilities(capabilities) {
@@ -349,6 +349,7 @@ async function runTransformerWorker(options, validateOnly) {
     let terminatingForTimeout = false
     const worker = new Worker(WORKER_SOURCE, {
       eval: true,
+      env: sanitizeChildEnv(),
       workerData: { source, input: isolatedInput, capabilities: allowedCapabilities, validateOnly },
       resourceLimits: { maxOldGenerationSizeMb: memoryLimitMb },
     })

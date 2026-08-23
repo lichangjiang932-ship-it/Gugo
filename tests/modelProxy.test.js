@@ -4,14 +4,20 @@ import { EventEmitter } from 'node:events'
 
 import {
   buildOpenAICompatibleRequest,
+  buildModelProviderRequest,
+  callBackgroundModel,
+  callBackgroundModelWithTools,
   callStreamingModelWithTools,
+  createBoundBackgroundModelCaller,
   extractUsage,
+  fetchModelOutbound,
   formatProxyError,
   getModelContextWindow,
   getModelStatus,
   getSystemDiagnostics,
   getToolMaxRounds,
   getUsageStats,
+  handleModelProxyRequest,
   isLocalModelEndpoint,
   loadModelConfig,
   normalizeOpenAICompatibleUrl,
@@ -19,11 +25,54 @@ import {
   recordUsage,
   resetUsageStats,
   resolveModelConfigForModel,
+  resolveModelFailoverConfigs,
+  shouldScheduleStreamAutoMemory,
   stripEmbeddedReasoning,
   supportsStreamUsage,
   streamOpenAICompatible,
 } from '../server/adapters/modelProxy.js'
 import { bindSseClientDisconnect } from '../server/adapters/sseLifecycle.js'
+
+function createJsonResponseRecorder() {
+  return {
+    statusCode: null,
+    headers: null,
+    body: '',
+    writeHead(statusCode, headers) {
+      this.statusCode = statusCode
+      this.headers = headers
+    },
+    end(body = '') {
+      this.body = String(body)
+    },
+  }
+}
+
+test('legacy model chat and test endpoints reject anonymous requests before reading the body', async () => {
+  for (const url of ['/api/model/chat', '/api/model/test']) {
+    let bodyRead = false
+    const req = {
+      method: 'POST',
+      url,
+      headers: {},
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            bodyRead = true
+            throw new Error('anonymous request body must not be read')
+          },
+        }
+      },
+    }
+    const res = createJsonResponseRecorder()
+
+    await handleModelProxyRequest(req, res)
+
+    assert.equal(res.statusCode, 401, url)
+    assert.deepEqual(JSON.parse(res.body), { ok: false, error: 'Unauthorized' })
+    assert.equal(bodyRead, false, url)
+  }
+})
 
 function streamedResponse(chunks, contentType = 'text/event-stream') {
   const encoder = new TextEncoder()
@@ -35,6 +84,280 @@ function streamedResponse(chunks, contentType = 'text/event-stream') {
   })
   return new Response(body, { status: 200, headers: { 'content-type': contentType } })
 }
+
+test('provider requests carry an authoritative stable request identity', () => {
+  const request = buildModelProviderRequest({
+    config: {
+      baseUrl: 'https://example.test/v1',
+      modelName: 'test-model',
+      headers: {
+        'X-Client-Request-ID': 'forged-client-id',
+        'idempotency-key': 'forged-idempotency-key',
+        'X-Custom': 'preserved',
+      },
+    },
+    messages: [{ role: 'user', content: 'ping' }],
+    modelRequestId: 'mr_0123456789abcdef',
+  })
+
+  assert.equal(request.init.headers['X-Client-Request-Id'], 'mr_0123456789abcdef')
+  assert.equal(request.init.headers['Idempotency-Key'], 'mr_0123456789abcdef')
+  assert.equal(request.init.headers['X-Custom'], 'preserved')
+  assert.equal(Object.keys(request.init.headers).filter((name) => (
+    name.toLowerCase() === 'x-client-request-id'
+  )).length, 1)
+  assert.equal(Object.keys(request.init.headers).filter((name) => (
+    name.toLowerCase() === 'idempotency-key'
+  )).length, 1)
+
+  assert.throws(() => buildModelProviderRequest({
+    config: { baseUrl: 'https://example.test/v1', modelName: 'test-model' },
+    messages: [{ role: 'user', content: 'ping' }],
+    modelRequestId: 'invalid\r\nheader',
+  }), (error) => error?.code === 'MODEL_REQUEST_ID_INVALID' && error?.retryable === false)
+})
+
+test('background provider retry keeps the checkpointed request identity', async () => {
+  const requests = []
+  const response = await callBackgroundModelWithTools({
+    messages: [{ role: 'user', content: 'retry once' }],
+    tools: [],
+    modelRequestId: 'mr_retry_identity',
+    env: {
+      MODEL_BASE_URL: 'https://example.test/v1',
+      MODEL_NAME: 'test-model',
+    },
+    fetchImpl: async (_url, init) => {
+      requests.push(init.headers)
+      if (requests.length === 1) {
+        throw Object.assign(new TypeError('fetch failed'), {
+          cause: Object.assign(new Error('connection refused before send'), { code: 'ECONNREFUSED' }),
+        })
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'done' }, finish_reason: 'stop' }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    },
+  })
+
+  assert.equal(response.content, 'done')
+  assert.equal(requests.length, 2)
+  assert.deepEqual(requests.map((headers) => ({
+    clientRequestId: headers['X-Client-Request-Id'],
+    idempotencyKey: headers['Idempotency-Key'],
+  })), [
+    { clientRequestId: 'mr_retry_identity', idempotencyKey: 'mr_retry_identity' },
+    { clientRequestId: 'mr_retry_identity', idempotencyKey: 'mr_retry_identity' },
+  ])
+})
+
+test('background tool response preserves an upstream output-limit finish reason', async () => {
+  const response = await callBackgroundModelWithTools({
+    messages: [{ role: 'user', content: 'read the file' }],
+    tools: [{
+      type: 'function',
+      function: { name: 'read_file', parameters: { type: 'object' } },
+    }],
+    env: {
+      MODEL_BASE_URL: 'https://example.test/v1',
+      MODEL_NAME: 'test-model',
+    },
+    fetchImpl: async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: null,
+          tool_calls: [{
+            id: 'partial-read',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"path":"READ' },
+          }],
+        },
+        finish_reason: 'length',
+      }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+  })
+
+  assert.equal(response.finishReason, 'length')
+  assert.equal(response.toolCalls.length, 1)
+  assert.equal(response.toolCalls[0].function.arguments, '{"path":"READ')
+})
+
+test('tracked background response-body failure is unknown and never retried or failed over', async () => {
+  const urls = []
+  await assert.rejects(
+    () => callBackgroundModelWithTools({
+      messages: [{ role: 'user', content: 'do not duplicate this request' }],
+      tools: [],
+      modelRequestId: 'mr_body_read_failure',
+      env: {
+        MODEL_NAME: 'shared-model',
+        MODEL_PROVIDERS: 'primary,backup',
+        MODEL_PROVIDER_PRIMARY_BASE_URL: 'https://primary.example/v1',
+        MODEL_PROVIDER_PRIMARY_MODELS: 'shared-model',
+        MODEL_PROVIDER_BACKUP_BASE_URL: 'https://backup.example/v1',
+        MODEL_PROVIDER_BACKUP_MODELS: 'shared-model',
+        MODEL_FAILOVER_CROSS_PROVIDER: '1',
+      },
+      fetchImpl: async (url) => {
+        urls.push(url)
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
+          text: async () => {
+            throw Object.assign(new Error('response body reset'), { code: 'ECONNRESET' })
+          },
+        }
+      },
+    }),
+    (error) => error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+      && error?.unsafeToReplay === true
+      && error?.modelRequestId === 'mr_body_read_failure',
+  )
+  assert.deepEqual(urls, ['https://primary.example/v1/chat/completions'])
+})
+
+test('tracked stream failure after the first token is unknown and never retried or failed over', async () => {
+  const encoder = new TextEncoder()
+  const urls = []
+  const deltas = []
+  await assert.rejects(
+    () => callStreamingModelWithTools({
+      messages: [{ role: 'user', content: 'stream once' }],
+      tools: [],
+      modelRequestId: 'mr_stream_after_first_token',
+      env: {
+        MODEL_NAME: 'shared-model',
+        MODEL_PROVIDERS: 'primary,backup',
+        MODEL_PROVIDER_PRIMARY_BASE_URL: 'https://primary.example/v1',
+        MODEL_PROVIDER_PRIMARY_MODELS: 'shared-model',
+        MODEL_PROVIDER_BACKUP_BASE_URL: 'https://backup.example/v1',
+        MODEL_PROVIDER_BACKUP_MODELS: 'shared-model',
+        MODEL_FAILOVER_CROSS_PROVIDER: '1',
+      },
+      onTextDelta: async (delta) => deltas.push(delta),
+      fetchImpl: async (url) => {
+        urls.push(url)
+        let reads = 0
+        const body = new ReadableStream({
+          pull(controller) {
+            reads += 1
+            if (reads > 1) {
+              controller.error(Object.assign(new Error('stream reset'), { code: 'ECONNRESET' }))
+              return
+            }
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'))
+          },
+        })
+        return new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        })
+      },
+    }),
+    (error) => error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+      && error?.unsafeToReplay === true
+      && error?.modelRequestId === 'mr_stream_after_first_token',
+  )
+  assert.deepEqual(deltas, ['partial'])
+  assert.deepEqual(urls, ['https://primary.example/v1/chat/completions'])
+})
+
+test('safe pre-send failover preserves the Provider that produced a tracked stream result', async () => {
+  const urls = []
+  const response = await callStreamingModelWithTools({
+    messages: [{ role: 'user', content: 'use a reachable provider' }],
+    tools: [],
+    modelRequestId: 'mr_provider_identity_after_failover',
+    env: {
+      MODEL_NAME: 'shared-model',
+      MODEL_PROVIDERS: 'primary,backup',
+      MODEL_PROVIDER_PRIMARY_BASE_URL: 'https://primary.example/v1',
+      MODEL_PROVIDER_PRIMARY_MODELS: 'shared-model',
+      MODEL_PROVIDER_BACKUP_BASE_URL: 'https://backup.example/v1',
+      MODEL_PROVIDER_BACKUP_MODELS: 'shared-model',
+      MODEL_FAILOVER_CROSS_PROVIDER: '1',
+    },
+    fetchImpl: async (url) => {
+      urls.push(url)
+      if (url.startsWith('https://primary.example/')) {
+        throw Object.assign(new TypeError('fetch failed'), {
+          cause: Object.assign(new Error('connection refused before send'), { code: 'ECONNREFUSED' }),
+        })
+      }
+      return streamedResponse([
+        'data: {"choices":[{"delta":{"content":"backup result"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ])
+    },
+  })
+
+  assert.equal(response.content, 'backup result')
+  assert.equal(response.providerId, 'backup')
+  assert.equal(urls.at(-1), 'https://backup.example/v1/chat/completions')
+  assert.ok(urls.slice(0, -1).every((url) => url === 'https://primary.example/v1/chat/completions'))
+})
+
+test('follow-up background work stays bound to the Provider that produced the parent result', async () => {
+  let received = null
+  const runtimeEnv = {
+    MODEL_PROVIDERS: 'alpha,beta',
+    MODEL_PROVIDER_ALPHA_BASE_URL: 'https://alpha.example/v1',
+    MODEL_PROVIDER_ALPHA_MODELS: 'shared-model',
+    MODEL_PROVIDER_BETA_BASE_URL: 'https://beta.example/v1',
+    MODEL_PROVIDER_BETA_MODELS: 'shared-model',
+    MODEL_PROVIDER_BETA_API_KEY: 'beta-secret',
+  }
+  const callModel = createBoundBackgroundModelCaller({
+    env: runtimeEnv,
+    modelName: 'shared-model',
+    providerId: 'beta',
+    usageOwnerId: 'owner-1',
+    callModel: async (options) => {
+      received = options
+      return 'memory result'
+    },
+  })
+  const messages = [{ role: 'user', content: 'extract durable facts' }]
+
+  assert.equal(await callModel({ messages }), 'memory result')
+  assert.equal(received.userId, null)
+  assert.equal(received.usageOwnerId, 'owner-1')
+  assert.equal(received.modelName, 'shared-model')
+  assert.equal(received.modelProviderId, 'beta')
+  assert.deepEqual(received.messages, messages)
+  assert.deepEqual(received.env, runtimeEnv)
+  assert.notEqual(received.env, runtimeEnv)
+})
+
+test('bound background work rejects incomplete model identity', () => {
+  assert.throws(
+    () => createBoundBackgroundModelCaller({ env: {}, modelName: 'model-only' }),
+    /resolved modelName and providerId/u,
+  )
+})
+
+test('partial or interrupted streams never schedule durable auto-memory extraction', () => {
+  const completed = {
+    streamCompleted: true,
+    clientGone: false,
+    streamHadToolCalls: false,
+    assistantText: 'A complete answer.',
+    userId: 'user-1',
+    sessionId: 'session-1',
+  }
+  assert.equal(shouldScheduleStreamAutoMemory(completed), true)
+  for (const unsafe of [
+    { streamCompleted: false },
+    { clientGone: true },
+    { streamHadToolCalls: true },
+    { assistantText: '' },
+    { userId: '' },
+    { sessionId: '' },
+  ]) {
+    assert.equal(shouldScheduleStreamAutoMemory({ ...completed, ...unsafe }), false, JSON.stringify(unsafe))
+  }
+})
 
 async function collectCompatibleStream(chunks, contentType) {
   const events = []
@@ -285,6 +608,86 @@ test('chat tool-loop streaming forwards deltas and returns canonical tool calls'
   assert.equal(result.usage.totalTokens, 15)
 })
 
+test('local proxy tool-loop calls preserve token usage and honor explicit upstream rates', async () => {
+  const usagePayload = { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 }
+  const env = {
+    MODEL_BASE_URL: 'http://127.0.0.1:11434/v1',
+    MODEL_NAME: 'same-model',
+    MODEL_USD_RATES: JSON.stringify({
+      'same-model': { input: 100, output: 200 },
+    }),
+  }
+  const nonStreaming = await callBackgroundModelWithTools({
+    messages: [{ role: 'user', content: 'local' }],
+    tools: [],
+    env,
+    fetchImpl: async () => new Response(JSON.stringify({
+      choices: [{ message: { content: 'local response' }, finish_reason: 'stop' }],
+      usage: usagePayload,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+  })
+  const streaming = await callStreamingModelWithTools({
+    messages: [{ role: 'user', content: 'local stream' }],
+    tools: [],
+    env: { ...env, MODEL_BASE_URL: 'http://model-host.lan:11434/v1' },
+    fetchImpl: async () => streamedResponse([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: 'local stream response' } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: usagePayload })}\n\n`,
+      'data: [DONE]\n\n',
+    ]),
+  })
+
+  for (const result of [nonStreaming, streaming]) {
+    assert.equal(result.costUsd, 0.0018)
+    assert.deepEqual(result.usage, {
+      promptTokens: 12,
+      completionTokens: 3,
+      totalTokens: 15,
+      cacheHitTokens: 0,
+      cacheMissTokens: 12,
+    })
+  }
+})
+
+test('local tool-loop calls without a matching rate report measured zero upstream cost', async () => {
+  const result = await callBackgroundModelWithTools({
+    messages: [{ role: 'user', content: 'local' }],
+    tools: [],
+    env: {
+      MODEL_BASE_URL: 'http://127.0.0.1:11434/v1',
+      MODEL_NAME: 'local-model',
+    },
+    fetchImpl: async () => new Response(JSON.stringify({
+      choices: [{ message: { content: 'local response' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+  })
+
+  assert.equal(result.costUsd, 0)
+  assert.equal(result.usage.totalTokens, 15)
+})
+
+test('remote same-name tool-loop calls retain their configured upstream rate', async () => {
+  const result = await callBackgroundModelWithTools({
+    messages: [{ role: 'user', content: 'remote' }],
+    tools: [],
+    env: {
+      MODEL_BASE_URL: 'https://api.example.test/v1',
+      MODEL_NAME: 'same-model',
+      MODEL_USD_RATES: JSON.stringify({
+        'same-model': { input: 2, output: 4 },
+      }),
+    },
+    fetchImpl: async () => new Response(JSON.stringify({
+      choices: [{ message: { content: 'remote response' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1_000_000, completion_tokens: 500_000, total_tokens: 1_500_000 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+  })
+
+  assert.equal(result.costUsd, 4)
+  assert.equal(result.usage.totalTokens, 1_500_000)
+})
+
 test('chat tool-loop removes screenshot base64 before calling a text-only model', async () => {
   let requestBody = null
   const result = await callStreamingModelWithTools({
@@ -422,6 +825,66 @@ test('loads model config from backend environment and reports missing fields', (
   assert.equal(local.apiKey, '')
 })
 
+test('unconfigured model calls share a structured redacted error protocol', async () => {
+  const calls = [
+    () => callBackgroundModel({ messages: [{ role: 'user', content: 'hello' }], env: {} }),
+    () => callBackgroundModelWithTools({ messages: [{ role: 'user', content: 'hello' }], tools: [], env: {} }),
+    () => callStreamingModelWithTools({ messages: [{ role: 'user', content: 'hello' }], tools: [], env: {} }),
+  ]
+
+  for (const call of calls) {
+    await assert.rejects(call, (error) => {
+      assert.equal(error.code, 'MODEL_CONFIG_MISSING')
+      assert.equal(error.statusCode, 503)
+      assert.match(error.message, /模型服务尚未配置/)
+      assert.doesNotMatch(error.message, /MODEL_[A-Z_]+|\.env/u)
+      assert.deepEqual(error.diagnostics.missingFields, ['MODEL_BASE_URL', 'MODEL_NAME'])
+      assert.equal(JSON.stringify(error).includes('MODEL_BASE_URL'), false)
+      return true
+    })
+  }
+
+  const status = getModelStatus({})
+  assert.equal(status.configured, false)
+  assert.equal(status.code, 'MODEL_CONFIG_MISSING')
+  assert.equal(Object.hasOwn(status, 'missing'), false)
+  assert.doesNotMatch(JSON.stringify(status), /MODEL_BASE_URL|MODEL_NAME|\.env/u)
+
+  const diagnostics = await getSystemDiagnostics({ env: {}, checkEndpoint: true })
+  assert.equal(diagnostics.endpoint.code, 'MODEL_CONFIG_MISSING')
+  assert.doesNotMatch(JSON.stringify(diagnostics), /MODEL_BASE_URL|MODEL_NAME|\.env/u)
+})
+
+test('upstream model errors are redacted before retry, failover, logging, or client delivery', async () => {
+  const apiKey = 'sk-upstream-echo-secret'
+  const headerSecret = 'custom-upstream-header-secret'
+  await assert.rejects(
+    () => callBackgroundModel({
+      messages: [{ role: 'user', content: 'hello' }],
+      env: {
+        MODEL_BASE_URL: 'https://api.example.test/v1',
+        MODEL_NAME: 'test-model',
+        MODEL_API_KEY: apiKey,
+        MODEL_HEADERS: JSON.stringify({ 'X-Custom-Auth': headerSecret }),
+      },
+      fetchImpl: async () => new Response(JSON.stringify({
+        error: {
+          code: apiKey,
+          type: headerSecret,
+          message: `rejected ${apiKey} and ${headerSecret}`,
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    }),
+    (error) => {
+      const serialized = JSON.stringify({ message: error.message, code: error.code, type: error.type })
+      assert.equal(serialized.includes(apiKey), false)
+      assert.equal(serialized.includes(headerSecret), false)
+      assert.match(error.message, /\[REDACTED\]/)
+      return true
+    },
+  )
+})
+
 test('loads a backend model catalog without exposing API keys', () => {
   const status = getModelStatus({
     MODEL_BASE_URL: 'https://api.example.com/v1',
@@ -436,6 +899,113 @@ test('loads a backend model catalog without exposing API keys', () => {
     { name: 'gpt-pro', active: false, contextWindow: 128_000, contextWindowSource: 'cloud_default', contextWindowEstimated: true },
   ])
   assert.equal(JSON.stringify(status).includes('sk-test'), false)
+})
+
+test('model status masks URL userinfo, query secrets, and fragments', () => {
+  const status = getModelStatus({
+    MODEL_BASE_URL: 'https://model-user:model-password@api.example.com/v1?api_key=query-secret#private-fragment',
+    MODEL_NAME: 'gpt-test',
+  })
+
+  assert.equal(status.baseUrlMasked, 'https://api.example.com/v1')
+  const serialized = JSON.stringify(status)
+  for (const secret of ['model-user', 'model-password', 'query-secret', 'private-fragment']) {
+    assert.equal(serialized.includes(secret), false)
+  }
+  assert.equal(serialized.includes('api_key'), false)
+})
+
+test('model outbound DNS rejects link-local and metadata addresses before fetch', async (t) => {
+  const deniedAddresses = [
+    { address: '169.254.169.254', family: 4 },
+    { address: '100.100.100.200', family: 4 },
+    { address: 'fd00:ec2::254', family: 6 },
+  ]
+
+  for (const record of deniedAddresses) {
+    await t.test(record.address, async () => {
+      let fetchCalls = 0
+      await assert.rejects(
+        () => fetchModelOutbound(
+          'http://localhost:11434/v1/chat/completions',
+          { method: 'POST' },
+          {
+            config: { baseUrl: 'http://localhost:11434/v1' },
+            lookup: async () => [record],
+            fetchImpl: async () => {
+              fetchCalls += 1
+              return new Response('{}', { status: 200 })
+            },
+          },
+        ),
+        (error) => error?.code === 'OUTBOUND_ADDRESS_DENIED',
+      )
+      assert.equal(fetchCalls, 0)
+    })
+  }
+})
+
+test('model outbound allows loopback Ollama and LM Studio endpoints', async (t) => {
+  const cases = [
+    {
+      name: 'Ollama IPv4 loopback',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      requestUrl: 'http://127.0.0.1:11434/v1/chat/completions',
+      lookup: undefined,
+    },
+    {
+      name: 'LM Studio localhost resolving to loopback',
+      baseUrl: 'http://localhost:1234/v1',
+      requestUrl: 'http://localhost:1234/v1/chat/completions',
+      lookup: async () => [{ address: '127.0.0.1', family: 4 }],
+    },
+  ]
+
+  for (const entry of cases) {
+    await t.test(entry.name, async () => {
+      let fetchCalls = 0
+      const response = await fetchModelOutbound(
+        entry.requestUrl,
+        { method: 'POST' },
+        {
+          config: { baseUrl: entry.baseUrl },
+          ...(entry.lookup ? { lookup: entry.lookup } : {}),
+          fetchImpl: async (url) => {
+            fetchCalls += 1
+            assert.equal(url, entry.requestUrl)
+            return new Response('{"ok":true}', { status: 200 })
+          },
+        },
+      )
+
+      assert.equal(response.status, 200)
+      assert.equal(fetchCalls, 1)
+    })
+  }
+})
+
+test('custom model fetch remains fully offline without a DNS lookup injection', async () => {
+  let fetchCalls = 0
+  const result = await callBackgroundModel({
+    messages: [{ role: 'user', content: 'ping' }],
+    env: {
+      MODEL_BASE_URL: 'https://offline-model.invalid/v1',
+      MODEL_NAME: 'offline-test',
+    },
+    fetchImpl: async (url) => {
+      fetchCalls += 1
+      assert.equal(url, 'https://offline-model.invalid/v1/chat/completions')
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'offline pong' } }],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    },
+  })
+
+  assert.equal(result, 'offline pong')
+  assert.equal(fetchCalls, 1)
 })
 
 test('loads a multi-provider model catalog', () => {
@@ -521,6 +1091,36 @@ test('resolves selected models to their provider endpoint and API key', () => {
   })
 })
 
+test('same-name models retain explicit provider identity and never silently fail over', () => {
+  const env = {
+    MODEL_PROVIDERS: 'alpha,beta',
+    MODEL_PROVIDER_ALPHA_BASE_URL: 'https://alpha.example/v1',
+    MODEL_PROVIDER_ALPHA_API_KEY: 'alpha-key',
+    MODEL_PROVIDER_ALPHA_MODELS: 'shared-model',
+    MODEL_PROVIDER_BETA_BASE_URL: 'https://beta.example/v1',
+    MODEL_PROVIDER_BETA_API_KEY: 'beta-key',
+    MODEL_PROVIDER_BETA_MODELS: 'shared-model',
+    MODEL_NAME: 'shared-model',
+  }
+
+  assert.deepEqual(getModelStatus(env).models.map(({ name, provider, active }) => ({ name, provider, active })), [
+    { name: 'shared-model', provider: 'alpha', active: true },
+    { name: 'shared-model', provider: 'beta', active: false },
+  ])
+  assert.equal(resolveModelConfigForModel({
+    modelName: 'shared-model',
+    providerId: 'beta',
+    env,
+  }).baseUrl, 'https://beta.example/v1')
+  assert.deepEqual(resolveModelFailoverConfigs({
+    modelName: 'shared-model',
+    providerId: 'beta',
+    env,
+  }).map(({ providerId, baseUrl }) => ({ providerId, baseUrl })), [
+    { providerId: 'beta', baseUrl: 'https://beta.example/v1' },
+  ])
+})
+
 test('resolves context windows from exact model metadata before provider fallbacks', () => {
   const env = {
     MODEL_PROVIDERS: 'local,cloud,tuned',
@@ -572,6 +1172,13 @@ test('model status resolves an independent context window for every model', () =
 })
 
 test('system diagnostics summarize model and mail without secrets', async () => {
+  const runtime = Object.freeze({
+    turnHost: Object.freeze({
+      ready: true,
+      persistenceConfigured: true,
+      compactionArchiveConfigured: true,
+    }),
+  })
   const diagnostics = await getSystemDiagnostics({
     env: {
       MODEL_BASE_URL: 'https://api.example.com/v1',
@@ -585,6 +1192,7 @@ test('system diagnostics summarize model and mail without secrets', async () => 
       MAIL_PASSWORD: 'mail-secret',
       MAIL_DEFAULT_SENDER: 'mail@example.com',
     },
+    readRuntimeDiagnostics: () => runtime,
   })
 
   assert.equal(diagnostics.ok, true)
@@ -594,9 +1202,20 @@ test('system diagnostics summarize model and mail without secrets', async () => 
   assert.equal(diagnostics.mail.configured, true)
   assert.equal(diagnostics.mail.server, 'smtp.qq.com')
   assert.equal(diagnostics.endpoint.checked, false)
+  assert.deepEqual(Object.keys(diagnostics.runtime.turnHost).sort(), [
+    'compactionArchiveConfigured',
+    'persistenceConfigured',
+    'ready',
+  ])
+  assert.equal(diagnostics.runtime, runtime)
+  assert.equal(diagnostics.runtime.turnHost.ready, true)
+  assert.equal(diagnostics.runtime.turnHost.persistenceConfigured, true)
+  assert.equal(diagnostics.runtime.turnHost.compactionArchiveConfigured, true)
   const json = JSON.stringify(diagnostics)
   assert.equal(json.includes('sk-secret-value'), false)
   assert.equal(json.includes('mail-secret'), false)
+  assert.equal(json.includes('adapterId'), false)
+  assert.equal(json.includes('portId'), false)
 })
 
 test('system diagnostics can probe a models endpoint safely', async () => {
@@ -621,6 +1240,15 @@ test('system diagnostics can probe a models endpoint safely', async () => {
   assert.equal(diagnostics.endpoint.ok, true)
   assert.deepEqual(diagnostics.endpoint.remoteModels, ['gpt-fast', 'gpt-pro'])
   assert.equal(JSON.stringify(diagnostics).includes('sk-secret-value'), false)
+  assert.deepEqual(diagnostics.runtime, {
+    turnHost: {
+      ready: false,
+      persistenceConfigured: false,
+      compactionArchiveConfigured: false,
+    },
+  })
+  assert.equal(Object.isFrozen(diagnostics.runtime), true)
+  assert.equal(Object.isFrozen(diagnostics.runtime.turnHost), true)
 })
 
 test('returns backend model status without exposing API key', () => {
@@ -764,6 +1392,42 @@ test('usage 聚合算出缓存命中率,无数据时为 null 而不是 0%', () =
   // recordUsage(null) 不该污染统计
   recordUsage('m1', null)
   assert.equal(getUsageStats().requests, 2)
+  resetUsageStats()
+})
+
+test('model usage diagnostics are isolated by owner and never expose the internal bucket', async () => {
+  resetUsageStats()
+  const usage = (promptTokens) => ({
+    promptTokens,
+    completionTokens: 1,
+    cacheHitTokens: 0,
+    cacheMissTokens: promptTokens,
+  })
+  recordUsage('alice-model', usage(11), { ownerId: 'alice' })
+  recordUsage('bob-model', usage(22), { ownerId: 'bob' })
+  recordUsage('internal-model', usage(33))
+
+  const env = {
+    MODEL_BASE_URL: 'https://api.example.test/v1',
+    MODEL_NAME: 'diagnostic-model',
+  }
+  const alice = await getSystemDiagnostics({ env, userId: 'alice' })
+  const bob = await getSystemDiagnostics({ env, userId: 'bob' })
+
+  assert.equal(alice.cache.upstream.requests, 1)
+  assert.equal(alice.cache.upstream.promptTokens, 11)
+  assert.deepEqual(Object.keys(alice.cache.upstream.byModel), ['alice-model'])
+  assert.equal(JSON.stringify(alice.cache.upstream).includes('bob-model'), false)
+  assert.equal(JSON.stringify(alice.cache.upstream).includes('internal-model'), false)
+
+  assert.equal(bob.cache.upstream.requests, 1)
+  assert.equal(bob.cache.upstream.promptTokens, 22)
+  assert.deepEqual(Object.keys(bob.cache.upstream.byModel), ['bob-model'])
+  assert.equal(getUsageStats().promptTokens, 33)
+
+  resetUsageStats({ ownerId: 'alice' })
+  assert.equal(getUsageStats({ ownerId: 'alice' }).requests, 0)
+  assert.equal(getUsageStats({ ownerId: 'bob' }).requests, 1)
   resetUsageStats()
 })
 

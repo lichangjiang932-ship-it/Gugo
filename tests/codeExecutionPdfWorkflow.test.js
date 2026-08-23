@@ -16,7 +16,10 @@ const { buildServerToolsConfig } = await import('../src/pages/ChatSplit/serverTu
 const { dispatchFsShellTool } = await import('../server/adapters/fsShellTools.js')
 const { closeDb } = await import('../server/db.js')
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
+const { trustedInternalLoopPrincipal } = await import('../server/services/loop/internalExecutionPrincipal.js')
 const { resolveTurnToolSpecs } = await import('../server/services/turnToolSpecs.js')
+
+const INTERNAL_APPROVAL_PRINCIPAL = trustedInternalLoopPrincipal()
 
 function toolSpec(name) {
   const spec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === name)
@@ -78,6 +81,7 @@ test('absolute PDF edit and PNG generation reject a fake blocker, execute code, 
   let modelCalls = 0
 
   const result = await runToolsLoop({
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     job: {
       id: 'absolute-pdf-to-png-code-execution',
       userId: null,
@@ -237,6 +241,7 @@ test('PDF layout work preserves an explicit Task 1 target and cannot finish befo
   let sawLayoutGuard = false
 
   const result = await runToolsLoop({
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
     job: {
       id: 'task1-layout-verification-contract',
       userId: null,

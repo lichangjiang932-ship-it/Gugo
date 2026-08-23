@@ -65,6 +65,29 @@ test('runtime core exposes one checkpoint, lease, and approval lifecycle', () =>
   assert.deepEqual(calls.at(-1), ['release-approvals', 'resource-1'])
 })
 
+test('runtime core snapshots and freezes the execution fencing proof at acquire time', () => {
+  const mutableProof = { ownerId: 'runtime-owner', fencingToken: 7 }
+  const core = createRuntimeCore({
+    checkpoint: {},
+    executionLeases: {
+      ownerId: 'runtime-owner',
+      claim: () => true,
+      proof: () => mutableProof,
+      hold: () => () => {},
+    },
+  })
+
+  const lease = core.lease.acquire({ id: 'resource-1' })
+  assert.deepEqual(lease.executionLease, { ownerId: 'runtime-owner', fencingToken: 7 })
+  assert.equal(Object.isFrozen(lease.executionLease), true)
+  mutableProof.fencingToken = 8
+  assert.equal(lease.executionLease.fencingToken, 7)
+  assert.deepEqual(core.lease.proof({ id: 'resource-1' }), {
+    ownerId: 'runtime-owner',
+    fencingToken: 8,
+  })
+})
+
 test('job runtime core maps logical scopes to job lease ids', () => {
   const calls = []
   const core = createJobRuntimeCore({
@@ -122,4 +145,37 @@ test('turn runtime core preserves the full turn scope and checkpoint sequence', 
   const saved = core.checkpoint.save(scope, { messages: [] }, { eventSequence: 3, now: 123 })
   assert.deepEqual(saved, { ...scope, state: { messages: [] }, eventSequence: 3, now: 123 })
   assert.deepEqual(core.checkpoint.load(scope), saved)
+})
+
+test('turn runtime core coalesces a release attempt and retries after failure', async () => {
+  const releaseFailure = new Error('lease release failed')
+  let releaseCalls = 0
+  const core = createTurnRuntimeCore({
+    executionLeases: {
+      claim: async () => true,
+      proof: async () => ({ ownerId: 'runtime-owner', fencingToken: 9 }),
+      hold: async () => async () => {
+        releaseCalls += 1
+        if (releaseCalls === 1) throw releaseFailure
+        return true
+      },
+    },
+  })
+
+  const lease = await core.lease.acquire({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    turnId: 'turn-1',
+  })
+  const firstRelease = lease.release()
+  const concurrentRelease = lease.release()
+  await assert.rejects(
+    Promise.all([firstRelease, concurrentRelease]),
+    (error) => error === releaseFailure,
+  )
+  assert.equal(releaseCalls, 1)
+  assert.equal(await lease.release(), true)
+  assert.equal(releaseCalls, 2)
+  assert.equal(await lease.release(), false)
+  assert.equal(releaseCalls, 2)
 })

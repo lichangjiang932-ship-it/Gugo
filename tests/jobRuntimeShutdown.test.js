@@ -16,6 +16,16 @@ const { createJobRuntimeScheduler } = await import('../server/services/jobRuntim
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const TEST_USER = issueTestSession().userId
+const TEST_MODEL_BINDING = Object.freeze({
+  providerId: null,
+  modelName: 'shutdown-test-model',
+  configRevision: null,
+  env: Object.freeze({
+    MODEL_BASE_URL: 'http://127.0.0.1:11434/v1',
+    MODEL_NAME: 'shutdown-test-model',
+  }),
+})
+const resolveTestModelBinding = () => TEST_MODEL_BINDING
 
 async function waitFor(predicate, { timeoutMs = 2000 } = {}) {
   const deadline = Date.now() + timeoutMs
@@ -41,6 +51,7 @@ test('shutdown waits for an in-flight job step and rejects later ticks', async (
       await new Promise((resolve) => { releaseStep = resolve })
       return { ok: true, output: { text: 'done' } }
     },
+    modelBindingResolver: resolveTestModelBinding,
   })
   const job = await runtime.createJob('graceful shutdown', { userId: TEST_USER })
   runtime.start()
@@ -132,6 +143,7 @@ test('process shutdown drains the active job before unloading runtime plugins', 
       order.push('job:end')
       return { ok: true, output: { text: 'done' } }
     },
+    modelBindingResolver: resolveTestModelBinding,
   })
   setJobRuntimeForTesting(runtime)
   await runtime.createJob('lifecycle ordering', { userId: TEST_USER })

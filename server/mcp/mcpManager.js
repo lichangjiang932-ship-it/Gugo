@@ -35,10 +35,12 @@ import {
   createMcpRecoveringError,
 } from './mcpConnectionSupervisor.js'
 import {
+  buildCurrentRegisteredToolSpec,
   buildRegisteredToolSpec,
   onMcpEvent,
   onMcpToolsChange,
-  safeMcpName as safeName,
+  resolveCurrentMcpToolOwner,
+  resolveOwnedMcpToolName,
   synchronizeToolsForConnection,
   unregisterAllMcpToolsForUser,
   unregisterToolsForServer,
@@ -244,19 +246,48 @@ export async function listUserToolSpecs(userId, { connect = true } = {}) {
     : { connected: 0, errors: [] }
   const map = getUserMap(userId)
   const specsByName = new Map()
+  const collisions = new Set()
+  const discoveryErrors = [...(connectionResult.errors || [])]
   for (const server of listEnabledServers(userId)) {
     const conn = map.get(server.id)
     const state = connectionSupervisor.getState(userId, server.id)
     if (!conn || (!conn.transport?.isAlive?.() && state?.status !== 'reconnecting')) continue
     for (const tool of conn.tools || []) {
-      const spec = buildRegisteredToolSpec(server, tool)
-      specsByName.set(spec.function.name, spec)
+      const candidate = buildRegisteredToolSpec(server, tool)
+      const name = candidate.function.name
+      const spec = buildCurrentRegisteredToolSpec({ userId, server, tool, connection: conn })
+      if (!spec) {
+        discoveryErrors.push({
+          serverId: server.id,
+          name: server.name,
+          toolName: name,
+          code: 'MCP_TOOL_REGISTRATION_MISMATCH',
+          error: `MCP tool ${name} is not bound to the current connection registration`,
+          retryable: true,
+        })
+        continue
+      }
+      if (collisions.has(name)) continue
+      if (specsByName.has(name)) {
+        specsByName.delete(name)
+        collisions.add(name)
+        discoveryErrors.push({
+          serverId: server.id,
+          name: server.name,
+          toolName: name,
+          code: 'MCP_TOOL_NAME_COLLISION',
+          error: `Multiple MCP tools normalize to ${name}; the ambiguous capability was hidden`,
+          retryable: false,
+        })
+        continue
+      }
+      specsByName.set(name, spec)
     }
   }
   const specs = [...specsByName.values()].sort((a, b) => (
     a.function.name < b.function.name ? -1 : a.function.name > b.function.name ? 1 : 0
   ))
-  return { specs, errors: connectionResult.errors || [] }
+  return { specs, errors: discoveryErrors }
 }
 
 function stateErrorForConnection(userId, serverId) {
@@ -283,25 +314,85 @@ async function connectionForOperation(userId, server) {
   return touchConnection(connection)
 }
 
-/**
- * 解析工具名 mcp__<server>__<tool>，找到对应连接，发 tools/call。
- */
-export async function callTool({ userId, fullToolName, args, idempotencyKey, toolCallId, signal }) {
-  const m = fullToolName.match(/^mcp__([a-zA-Z0-9_]+)__(.+)$/)
-  if (!m) throw new Error(`非 MCP 工具名: ${fullToolName}`)
-  const wantedServerSafeName = m[1]
-  const innerTool = m[2]
+function mcpRoutingError(code, message, { retryable = false } = {}) {
+  const error = new Error(message)
+  error.code = code
+  error.retryable = retryable
+  return error
+}
 
-  // 找 server (按 safeName 匹配)
-  const servers = listEnabledServers(userId)
-  const server = servers.find((s) => safeName(s.name) === wantedServerSafeName)
-  if (!server) throw new Error(`未配置的 MCP server: ${wantedServerSafeName}`)
+function assertUnambiguousConnectedTool(userId, fullToolName, expectedServerId) {
+  const map = getUserMap(userId)
+  const matches = []
+  for (const server of listEnabledServers(userId)) {
+    const connection = map.get(server.id)
+    for (const tool of connection?.tools || []) {
+      if (buildRegisteredToolSpec(server, tool).function.name === fullToolName) {
+        matches.push({ serverId: server.id, originalName: tool.name })
+      }
+    }
+  }
+  if (matches.length !== 1 || matches[0].serverId !== expectedServerId) {
+    throw mcpRoutingError(
+      'MCP_TOOL_NAME_COLLISION',
+      `MCP tool name ${fullToolName} is ambiguous across the current connection catalog`,
+    )
+  }
+}
+
+/** Resolve through the current tenant-scoped registration, never safe-name lookup. */
+export async function callTool({
+  userId,
+  fullToolName,
+  args,
+  idempotencyKey,
+  toolCallId,
+  dynamicToolRegistrationId = null,
+  signal,
+}) {
+  if (!/^mcp__[a-zA-Z0-9_]+__.+$/.test(String(fullToolName || ''))) {
+    throw mcpRoutingError('MCP_TOOL_NAME_INVALID', `非 MCP 工具名: ${fullToolName}`)
+  }
+  const owner = resolveCurrentMcpToolOwner(userId, fullToolName)
+  if (!owner) {
+    throw mcpRoutingError(
+      'MCP_TOOL_REGISTRATION_UNAVAILABLE',
+      `MCP tool ${fullToolName} has no current tenant-scoped registration`,
+      { retryable: true },
+    )
+  }
+  const expectedRegistrationId = String(dynamicToolRegistrationId || '').trim() || null
+  if (expectedRegistrationId && owner.registrationId !== expectedRegistrationId) {
+    throw mcpRoutingError(
+      'dynamic_tool_registration_changed',
+      `The MCP registration for ${fullToolName} changed before execution`,
+    )
+  }
+  assertUnambiguousConnectedTool(userId, fullToolName, owner.serverId)
+  const server = getServer(userId, owner.serverId)
+  if (!server?.enabled) {
+    throw mcpRoutingError('MCP_SERVER_UNAVAILABLE', `MCP server ${owner.serverId} is not enabled`)
+  }
   const conn = await connectionForOperation(userId, server)
   if (!conn) throw new Error(`MCP server "${server.name}" 未启用`)
-
-  // 找原始 tool 名（恢复 safeName 前的名字）
-  const realTool = conn.tools.find((t) => safeName(t.name) === innerTool || t.name === innerTool)
-  const toolName = realTool?.name || innerTool
+  const currentOwner = resolveCurrentMcpToolOwner(userId, fullToolName)
+  if (!currentOwner
+    || currentOwner.serverId !== owner.serverId
+    || currentOwner.registrationId !== owner.registrationId) {
+    throw mcpRoutingError(
+      'dynamic_tool_registration_changed',
+      `The MCP registration for ${fullToolName} changed while preparing execution`,
+    )
+  }
+  assertUnambiguousConnectedTool(userId, fullToolName, owner.serverId)
+  const toolName = resolveOwnedMcpToolName(conn, fullToolName, owner.registrationId)
+  if (!toolName) {
+    throw mcpRoutingError(
+      'MCP_TOOL_REGISTRATION_MISMATCH',
+      `MCP tool ${fullToolName} is not owned by the current server connection`,
+      { retryable: true },
+    )
+  }
 
   const started = Date.now()
   let status = 'ok'

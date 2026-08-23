@@ -15,7 +15,14 @@ test('chat directory authorization binds the grant to the exact paused event', a
   }, {
     grantPath: async (input) => {
       calls.push(input)
-      return { grant: { path: 'D:\\output', accessMode: 'read_write' } }
+      return {
+        grant: {
+          id: 'directory-grant-session',
+          path: 'D:\\output',
+          accessMode: 'read_write',
+          scope: 'session',
+        },
+      }
     },
   })
 
@@ -27,6 +34,7 @@ test('chat directory authorization binds the grant to the exact paused event', a
     path: 'D:\\output',
     access_mode: 'read_write',
     authorization_scope: 'session',
+    grant_id: 'directory-grant-session',
     paused_sequence: 7,
     purpose: 'Create the requested files',
   })
@@ -43,11 +51,12 @@ test('chat directory authorization forwards an explicit persistent scope', async
   }, {
     grantPath: async (input) => {
       calls.push(input)
-      return { grant: { ...input, resourceType: 'directory' } }
+      return { grant: { id: 'directory-grant-persistent', ...input, resourceType: 'directory' } }
     },
   })
   assert.equal(calls[0].scope, 'persistent')
   assert.equal(result.resolution.authorization_scope, 'persistent')
+  assert.equal(result.resolution.grant_id, 'directory-grant-persistent')
 })
 
 test('chat directory authorization rejects a decision without a paused sequence', async () => {

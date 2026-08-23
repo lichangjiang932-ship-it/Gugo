@@ -20,7 +20,7 @@ export default function useCrossTabStateSync(options) {
     publishChange, refreshAuth, skipPersistSnapshotRef, stateRef, syncMetaRef, tabIdRef, writeLoopRef,
   } = options
 
-  function applyRemotePayload(payload, fallbackTimestamp = Date.now()) {
+  function applyRemotePayload(payload, fallbackTimestamp = Date.now(), { forceConvergence = false } = {}) {
     let remote
     try { remote = readPersistedPayload(payload, fallbackTimestamp) } catch { return }
     if (remote.meta.source && remote.meta.source === tabIdRef.current) return
@@ -30,7 +30,9 @@ export default function useCrossTabStateSync(options) {
     const normalizedRemote = completeSnapshot(remote.snapshot)
     const merged = mergePersistedSnapshots(currentSnapshot, syncMetaRef.current, normalizedRemote, remote.meta, { preserveLocalFields: ['activeSessionId'] })
     const stateChanged = !persistedSnapshotsEqual(currentSnapshot, merged.snapshot)
-    const needsConvergenceWrite = !persistedSnapshotsEqual(normalizedRemote, merged.snapshot, ['activeSessionId'])
+    const needsConvergenceWrite = forceConvergence
+      || !!remote.retiredAccountFieldsRemoved
+      || !persistedSnapshotsEqual(normalizedRemote, merged.snapshot, ['activeSessionId'])
     lastSnapshotRef.current = merged.snapshot
     syncMetaRef.current = merged.meta
     if (stateChanged) {
@@ -114,7 +116,13 @@ export default function useCrossTabStateSync(options) {
       const signal = readStateSyncSignal(event.newValue)
       if (!signal || signal.source === tabIdRef.current) return
       if (signal.type === 'cleared') { void applyExternalClear(signal.writtenAt); return }
-      void readPersistedSnapshot().then((remote) => { if (remote.ok && remote.payload) applyRemotePayload(remote.payload, remote.updatedAt || signal.writtenAt) })
+      void readPersistedSnapshot().then((remote) => {
+        if (remote.ok && remote.payload) {
+          applyRemotePayload(remote.payload, remote.updatedAt || signal.writtenAt, {
+            forceConvergence: !!remote.cleanupNeeded,
+          })
+        }
+      })
     }
     window.addEventListener('storage', onStorage)
     return () => { window.removeEventListener('storage', onStorage); channel?.close(); if (channelRef.current === channel) channelRef.current = null }

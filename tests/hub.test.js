@@ -44,7 +44,25 @@ test('runHubMigrations 幂等且创建 hub_jobs 表', () => {
   const cols = rows.map((r) => r.name).sort()
   assert.deepEqual(
     cols,
-    ['consumed_at', 'created_at', 'id', 'last_error', 'last_run_at', 'name', 'payload', 'status', 'updated_at'].sort()
+    [
+      'attempt_count',
+      'available_at',
+      'consumed_at',
+      'created_at',
+      'dead_lettered_at',
+      'heartbeat_at',
+      'id',
+      'last_error',
+      'last_run_at',
+      'lease_expires_at',
+      'lease_owner',
+      'lease_token',
+      'max_attempts',
+      'name',
+      'payload',
+      'status',
+      'updated_at',
+    ].sort()
   )
   const versionRow = db.prepare("SELECT value FROM meta WHERE key = 'hub_schema_version'").get()
   assert.equal(Number(versionRow.value), HUB_SCHEMA_VERSION)
@@ -66,14 +84,22 @@ test('enqueue + claimNextPending + markDone 端到端', () => {
   assert.ok(claimed.lastRunAt >= job.createdAt)
   assert.equal(claimed.consumedAt, claimed.lastRunAt)
 
-  const done = markDone(job.id, { lastError: 'echo:hi' })
+  const done = markDone(job.id, {
+    ownerId: claimed.leaseOwner,
+    leaseToken: claimed.leaseToken,
+    lastError: 'echo:hi',
+  })
   assert.equal(done.status, 'done')
   assert.equal(done.lastError, 'echo:hi')
 
   const failedJob = enqueueJob({ name: 'echo', payload: { text: 'x' } })
   const claimedFailure = claimNextPending()
   assert.equal(claimedFailure.id, failedJob.id)
-  const failed = markFailed(failedJob.id, 'boom')
+  const failed = markFailed(failedJob.id, {
+    ownerId: claimedFailure.leaseOwner,
+    leaseToken: claimedFailure.leaseToken,
+    errorMessage: 'boom',
+  })
   assert.equal(failed.status, 'failed')
   assert.equal(failed.lastError, 'boom')
 
@@ -103,14 +129,22 @@ test('持久消费标记阻止 running、done 和 failed 行再次领取', () =>
   assert.ok(claimed.consumedAt)
   assert.equal(claimNextPending(), null)
 
-  const done = markDone(running.id)
+  const done = markDone(running.id, {
+    ownerId: claimed.leaseOwner,
+    leaseToken: claimed.leaseToken,
+  })
   assert.equal(done.status, 'done')
   assert.equal(done.consumedAt, claimed.consumedAt)
   assert.equal(claimNextPending(), null)
 
   const failed = enqueueJob({ name: 'echo', payload: { text: 'failed' } })
-  assert.equal(claimNextPending().id, failed.id)
-  assert.equal(markFailed(failed.id, 'expected').status, 'failed')
+  const claimedFailure = claimNextPending()
+  assert.equal(claimedFailure.id, failed.id)
+  assert.equal(markFailed(failed.id, {
+    ownerId: claimedFailure.leaseOwner,
+    leaseToken: claimedFailure.leaseToken,
+    errorMessage: 'expected',
+  }).status, 'failed')
   assert.equal(claimNextPending(), null)
 })
 

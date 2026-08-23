@@ -7,11 +7,28 @@ process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-hooks-service-tests', Str
 
 const {
   _hooksInternals,
-  dispatchHooks,
-  testHook,
+  dispatchHooks: dispatchHooksRaw,
+  testHook: testHookRaw,
   upsertHook,
 } = await import('../server/services/hooksService.js')
 const { closeDb, getDb } = await import('../server/db.js')
+
+let hookInvocationSequence = 0
+function dispatchHooks(ctx) {
+  hookInvocationSequence += 1
+  return dispatchHooksRaw({
+    hookInvocationId: ctx?.hookInvocationId || `hooks-service-test-${hookInvocationSequence}`,
+    ...ctx,
+  })
+}
+
+function testHook(input) {
+  hookInvocationSequence += 1
+  return testHookRaw({
+    idempotencyKey: input?.idempotencyKey || `hooks-service-test-${hookInvocationSequence}`,
+    ...input,
+  })
+}
 
 function shellJsonHook(outcome) {
   return [process.execPath, '-e', `process.stdout.write(${JSON.stringify(JSON.stringify(outcome))})`]
@@ -19,6 +36,77 @@ function shellJsonHook(outcome) {
 
 test.after(() => {
   closeDb()
+})
+
+test('testHook requires an explicit idempotency key', async () => {
+  const hook = upsertHook({
+    userId: 'u_hooks_test_idempotency_required',
+    event: 'pre_tool_use',
+    toolPattern: '*',
+    kind: 'http',
+    url: 'https://example.com/hook',
+    enabled: true,
+    blocking: true,
+    timeoutMs: 500,
+  })
+  await assert.rejects(
+    testHookRaw({ userId: 'u_hooks_test_idempotency_required', id: hook.id }),
+    (error) => error?.code === 'HOOK_IDEMPOTENCY_KEY_REQUIRED' && error?.statusCode === 400,
+  )
+})
+
+test('HTTP Hook idempotency headers cannot be overridden by stored headers', () => {
+  const headers = _hooksInternals.hookRequestHeaders({
+    'idempotency-key': 'attacker-lower',
+    'Idempotency-Key': 'attacker-title',
+    'content-type': 'text/plain',
+    'X-Hook': 'kept',
+  }, 'trusted-key')
+  assert.deepEqual(headers, {
+    'X-Hook': 'kept',
+    'Content-Type': 'application/json',
+    'Idempotency-Key': 'trusted-key',
+  })
+})
+
+test('shell Hook payload carries the durable idempotency key and invocation ID', async () => {
+  const previousEnabled = process.env.HOOKS_SHELL_ENABLED
+  const previousAllowed = process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+  process.env.HOOKS_SHELL_ENABLED = '1'
+  process.env.HOOKS_SHELL_ALLOWED_COMMANDS = process.execPath
+  try {
+    const hook = upsertHook({
+      userId: 'u_hooks_shell_idempotency_payload',
+      event: 'pre_tool_use',
+      toolPattern: '*',
+      kind: 'shell',
+      command: [
+        process.execPath,
+        '-e',
+        'const p=JSON.parse(process.argv.at(-1));process.stdout.write(JSON.stringify({allow:true,receivedIdempotencyKey:p.idempotencyKey,receivedInvocationId:p.hookInvocationId}))',
+      ],
+      enabled: true,
+      blocking: true,
+      timeoutMs: 5000,
+    })
+    const outcome = await testHook({
+      userId: 'u_hooks_shell_idempotency_payload',
+      id: hook.id,
+      idempotencyKey: 'operator-retry-key',
+    })
+    const row = getDb().prepare(`
+      SELECT idempotency_key FROM side_effect_executions
+      WHERE owner_id = ? AND effect_kind = 'hook'
+      ORDER BY created_at DESC LIMIT 1
+    `).get('u_hooks_shell_idempotency_payload')
+    assert.equal(outcome.receivedIdempotencyKey, row.idempotency_key)
+    assert.equal(outcome.receivedInvocationId, 'test:operator-retry-key')
+  } finally {
+    if (previousEnabled == null) delete process.env.HOOKS_SHELL_ENABLED
+    else process.env.HOOKS_SHELL_ENABLED = previousEnabled
+    if (previousAllowed == null) delete process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+    else process.env.HOOKS_SHELL_ALLOWED_COMMANDS = previousAllowed
+  }
 })
 
 test('runHttp blocks SSRF target (127.0.0.1)', async () => {
@@ -57,7 +145,7 @@ test('runHttp requires https for outbound hook URLs', async () => {
   assert.equal(outcome.error, 'http_required_https')
 })
 
-test('dispatchHooks does not throw when a blocking http hook is SSRF-blocked', async () => {
+test('dispatchHooks fails closed when a blocking http hook is SSRF-blocked', async () => {
   upsertHook({
     userId: 'u_hooks_dispatch',
     event: 'pre_tool_use',
@@ -77,7 +165,8 @@ test('dispatchHooks does not throw when a blocking http hook is SSRF-blocked', a
     args: { ok: true },
   })
 
-  assert.equal(result.allow, true)
+  assert.equal(result.allow, false)
+  assert.equal(result.code, 'HOOK_EXECUTION_UNTRUSTED')
 })
 
 test('shell hooks require an explicit executable allowlist', () => {
@@ -137,9 +226,16 @@ test('pre_tool_use hook permissionDecision=allow is forwarded and skips approval
       event: 'pre_tool_use',
       tool: 'write_file',
       args: { path: 'x.txt' },
+      origin: 'job',
+      jobId: 'job-hooks-decision',
+      stepId: 'step-hooks-decision',
+      sessionId: 'session-hooks-decision',
+      requestId: 'request-hooks-decision',
+      toolCallId: 'call-hooks-decision',
     })
     assert.equal(result.allow, true)
     assert.equal(result.permissionDecision, 'allow')
+    assert.equal(result.hookAuthorizationProvenance?.toolCallId, 'call-hooks-decision')
   } finally {
     if (previousEnabled == null) delete process.env.HOOKS_SHELL_ENABLED
     else process.env.HOOKS_SHELL_ENABLED = previousEnabled
@@ -380,5 +476,154 @@ test('invalid persisted argument matcher fails closed', async () => {
     else process.env.HOOKS_SHELL_ENABLED = previousEnabled
     if (previousAllowed == null) delete process.env.HOOKS_SHELL_ALLOWED_COMMANDS
     else process.env.HOOKS_SHELL_ALLOWED_COMMANDS = previousAllowed
+  }
+})
+
+test('a later argument rewrite invalidates an earlier Hook allow decision', async () => {
+  const previousEnabled = process.env.HOOKS_SHELL_ENABLED
+  const previousAllowed = process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+  process.env.HOOKS_SHELL_ENABLED = '1'
+  process.env.HOOKS_SHELL_ALLOWED_COMMANDS = process.execPath
+  try {
+    const allow = upsertHook({
+      userId: 'u_hooks_allow_then_rewrite',
+      event: 'pre_tool_use',
+      toolPattern: 'write_file',
+      kind: 'shell',
+      command: shellJsonHook({ allow: true, permissionDecision: 'allow' }),
+      enabled: true,
+      blocking: true,
+      timeoutMs: 5000,
+    })
+    const rewrite = upsertHook({
+      userId: 'u_hooks_allow_then_rewrite',
+      event: 'pre_tool_use',
+      toolPattern: 'write_file',
+      kind: 'shell',
+      command: shellJsonHook({ allow: true, replacementArgs: { path: 'rewritten.txt' } }),
+      enabled: true,
+      blocking: true,
+      timeoutMs: 5000,
+    })
+    getDb().prepare('UPDATE hooks SET created_at = ? WHERE id = ?').run(1, allow.id)
+    getDb().prepare('UPDATE hooks SET created_at = ? WHERE id = ?').run(2, rewrite.id)
+
+    const result = await dispatchHooks({
+      userId: 'u_hooks_allow_then_rewrite',
+      event: 'pre_tool_use',
+      tool: 'write_file',
+      args: { path: 'original.txt', content: 'x' },
+      origin: 'job',
+      jobId: 'job-allow-then-rewrite',
+      stepId: 'step-allow-then-rewrite',
+      requestId: 'request-allow-then-rewrite',
+      toolCallId: 'call-allow-then-rewrite',
+    })
+
+    assert.equal(result.allow, true)
+    assert.deepEqual(result.replacementArgs, { path: 'rewritten.txt', content: 'x' })
+    assert.equal(result.permissionDecision, undefined)
+    assert.equal(result.hookAuthorizationProvenance, undefined)
+  } finally {
+    if (previousEnabled == null) delete process.env.HOOKS_SHELL_ENABLED
+    else process.env.HOOKS_SHELL_ENABLED = previousEnabled
+    if (previousAllowed == null) delete process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+    else process.env.HOOKS_SHELL_ALLOWED_COMMANDS = previousAllowed
+  }
+})
+
+test('blocking shell hooks fail closed on exit failure, timeout, and invalid JSON', async () => {
+  const previousEnabled = process.env.HOOKS_SHELL_ENABLED
+  const previousAllowed = process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+  process.env.HOOKS_SHELL_ENABLED = '1'
+  process.env.HOOKS_SHELL_ALLOWED_COMMANDS = process.execPath
+  try {
+    const cases = [
+      {
+        userId: 'u_hooks_shell_exit_failure',
+        command: [process.execPath, '-e', 'process.exit(7)'],
+        timeoutMs: 5000,
+      },
+      {
+        userId: 'u_hooks_shell_invalid_json',
+        command: [process.execPath, '-e', 'process.stdout.write("not-json")'],
+        timeoutMs: 5000,
+      },
+      {
+        userId: 'u_hooks_shell_timeout',
+        command: [process.execPath, '-e', 'setTimeout(() => {}, 2000)'],
+        timeoutMs: 500,
+      },
+    ]
+    for (const item of cases) {
+      upsertHook({
+        userId: item.userId,
+        event: 'pre_tool_use',
+        toolPattern: 'write_file',
+        kind: 'shell',
+        command: item.command,
+        enabled: true,
+        blocking: true,
+        timeoutMs: item.timeoutMs,
+      })
+      const result = await dispatchHooks({
+        userId: item.userId,
+        event: 'pre_tool_use',
+        tool: 'write_file',
+        args: { path: 'blocked.txt', content: 'x' },
+      })
+      assert.equal(result.allow, false, item.userId)
+      assert.equal(result.code, 'HOOK_EXECUTION_UNTRUSTED', item.userId)
+    }
+  } finally {
+    if (previousEnabled == null) delete process.env.HOOKS_SHELL_ENABLED
+    else process.env.HOOKS_SHELL_ENABLED = previousEnabled
+    if (previousAllowed == null) delete process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+    else process.env.HOOKS_SHELL_ALLOWED_COMMANDS = previousAllowed
+  }
+})
+
+test('shell hooks do not inherit model provider or generic API credentials', async () => {
+  const previousEnabled = process.env.HOOKS_SHELL_ENABLED
+  const previousAllowed = process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+  const previousModelKey = process.env.MODEL_API_KEY
+  const previousOpenAiKey = process.env.OPENAI_API_KEY
+  const previousCustomKey = process.env.HOOK_TEST_VENDOR_API_KEY
+  process.env.HOOKS_SHELL_ENABLED = '1'
+  process.env.HOOKS_SHELL_ALLOWED_COMMANDS = process.execPath
+  process.env.MODEL_API_KEY = 'model-secret-must-not-leak'
+  process.env.OPENAI_API_KEY = 'openai-secret-must-not-leak'
+  process.env.HOOK_TEST_VENDOR_API_KEY = 'generic-secret-must-not-leak'
+  try {
+    const hook = upsertHook({
+      userId: 'u_hooks_sanitized_env',
+      event: 'pre_tool_use',
+      toolPattern: '*',
+      kind: 'shell',
+      command: [
+        process.execPath,
+        '-e',
+        'process.stdout.write(JSON.stringify({ allow: true, model: process.env.MODEL_API_KEY ?? null, openai: process.env.OPENAI_API_KEY ?? null, generic: process.env.HOOK_TEST_VENDOR_API_KEY ?? null }))',
+      ],
+      enabled: true,
+      blocking: true,
+      timeoutMs: 5000,
+    })
+    const outcome = await testHook({ userId: 'u_hooks_sanitized_env', id: hook.id })
+    assert.equal(outcome.allow, true)
+    assert.equal(outcome.model, null)
+    assert.equal(outcome.openai, null)
+    assert.equal(outcome.generic, null)
+  } finally {
+    if (previousEnabled == null) delete process.env.HOOKS_SHELL_ENABLED
+    else process.env.HOOKS_SHELL_ENABLED = previousEnabled
+    if (previousAllowed == null) delete process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+    else process.env.HOOKS_SHELL_ALLOWED_COMMANDS = previousAllowed
+    if (previousModelKey == null) delete process.env.MODEL_API_KEY
+    else process.env.MODEL_API_KEY = previousModelKey
+    if (previousOpenAiKey == null) delete process.env.OPENAI_API_KEY
+    else process.env.OPENAI_API_KEY = previousOpenAiKey
+    if (previousCustomKey == null) delete process.env.HOOK_TEST_VENDOR_API_KEY
+    else process.env.HOOK_TEST_VENDOR_API_KEY = previousCustomKey
   }
 })

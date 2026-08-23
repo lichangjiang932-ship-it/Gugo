@@ -62,6 +62,7 @@ import {
 import {
   normalizeToolError,
 } from '../../../utils/toolCallHarness.js'
+import { getBoundRuntimeTool } from '../../../core/runtimeCapabilityState.js'
 import {
   getDynamicTool,
 } from '../../../utils/toolSchemaCatalog.js'
@@ -94,6 +95,7 @@ import {
   PDF_TOOL_NAMES,
 } from './htmlArtifactInput.js'
 import {
+  finalizePreMutationSnapshot,
   recordPreMutationSnapshot,
 } from './preMutationSnapshot.js'
 import {
@@ -113,6 +115,8 @@ export async function executeServerTool({
   requiresLocalArtifactDelivery = false,
   toolCallId,
   idempotencyKey,
+  idempotentResume = false,
+  sideEffectRecoveryPlan = null,
   dynamicToolRegistrationId = null,
 }) {
   const publishLiveOutput = (delta) => {
@@ -141,6 +145,66 @@ export async function executeServerTool({
       retryable: false,
     }
   }
+  const registeredTool = getDynamicTool(name, { userId: job?.userId || null })
+  if (dynamicToolRegistrationId
+    && registeredTool?.registrationId !== dynamicToolRegistrationId) {
+    return {
+      ok: false,
+      code: 'runtime_tool_binding_changed',
+      error: `The capability binding for ${name} changed before execution. The stale call was not executed.`,
+      retryable: false,
+      refreshToolCatalog: true,
+    }
+  }
+  // Artifact lifecycle authority never crosses the runtime-tool replacement
+  // seam. Even a stale or manually injected plugin binding cannot mint a
+  // successful artifact receipt without the host generator, validator,
+  // persistence store, publication path, and delivery policy completing.
+  if (isGeneratedArtifactTool(name)) {
+    return executeGeneratedArtifactTool({
+      name,
+      args,
+      job,
+      step,
+      signal,
+      requiresLocalArtifactDelivery,
+    })
+  }
+  const boundTool = getBoundRuntimeTool(name)
+  if (typeof boundTool?.exec === 'function') {
+    if (registeredTool?.exec !== boundTool.exec) {
+      return {
+        ok: false,
+        code: 'runtime_tool_binding_changed',
+        error: `The capability binding for ${name} changed before execution. The stale call was not executed.`,
+        retryable: false,
+        refreshToolCatalog: true,
+      }
+    }
+    try {
+      const result = await boundTool.exec(args || {}, {
+        name,
+        userId: job?.userId || null,
+        job,
+        step,
+        signal,
+        budget,
+        skillId,
+        approvalContext,
+        toolCallId,
+        idempotencyKey,
+        origin: boundTool.origin,
+        source: boundTool.source,
+      })
+      if (result && typeof result === 'object' && !Array.isArray(result)) {
+        return Object.hasOwn(result, 'ok') ? result : { ok: true, ...result }
+      }
+      return { ok: true, result }
+    } catch (err) {
+      if (signal?.aborted || err?.name === 'AbortError') throw err
+      return normalizeToolError(err, { fallbackCode: 'plugin_tool_failed' })
+    }
+  }
   if (name === 'bash_background') {
     try {
       const process = startBackgroundProcess({
@@ -166,8 +230,26 @@ export async function executeServerTool({
   }
   if (name === 'process_kill') {
     try {
-      const process = killBackgroundProcess({ userId: job?.userId || null, id: args?.process_id })
+      const process = await killBackgroundProcess({ userId: job?.userId || null, id: args?.process_id })
       if (!process) return { ok: false, code: 'PROCESS_NOT_FOUND', error: '后台进程不存在', retryable: false }
+      if (process.status === 'orphaned') {
+        return {
+          ok: false,
+          code: 'PROCESS_CONTROL_LOST',
+          error: '后台进程由先前的服务实例启动，当前实例无法证明或控制其进程句柄；未伪报为已终止。',
+          retryable: false,
+          process,
+        }
+      }
+      if (process.status !== 'killed') {
+        return {
+          ok: false,
+          code: 'PROCESS_NOT_RUNNING',
+          error: `后台进程当前状态为 ${process.status}，没有执行终止操作。`,
+          retryable: false,
+          process,
+        }
+      }
       return { ok: true, process }
     } catch (err) {
       return normalizeToolError(err, { fallbackCode: 'process_kill_failed' })
@@ -200,7 +282,14 @@ export async function executeServerTool({
         files: result.rewound.map((entry) => ({ path: entry.snapshot.filePath, action: entry.action })),
       }
     } catch (err) {
-      return normalizeToolError(err, { fallbackCode: 'rewind_files_failed' })
+      return {
+        ...normalizeToolError(err, { fallbackCode: 'rewind_files_failed' }),
+        ...(Number.isInteger(err?.partialCount) ? {
+          partialCount: err.partialCount,
+          partialRewind: Array.isArray(err.partialRewind) ? err.partialRewind : [],
+        } : {}),
+        ...(err?.recoveryPath ? { recoveryPath: err.recoveryPath } : {}),
+      }
     }
   }
   if (name === 'web_search') {
@@ -246,16 +335,6 @@ export async function executeServerTool({
       return normalizeToolError(error, { fallbackCode: 'artifact_source_read_failed' })
     }
   }
-  if (isGeneratedArtifactTool(name)) {
-    return executeGeneratedArtifactTool({
-      name,
-      args,
-      job,
-      step,
-      signal,
-      requiresLocalArtifactDelivery,
-    })
-  }
   if (name === 'fetch_url') {
     try {
       return await fetchAndExtract({ url: args?.url })
@@ -267,14 +346,23 @@ export async function executeServerTool({
   // 任意 fsShellTools 抛错(包括 env 未启用 / 路径越界)都返回 {ok:false,error}.
   if (FS_SHELL_TOOL_NAMES.has(name)) {
     try {
-      await recordPreMutationSnapshot({ name, args, job, toolCallId })
-      return await dispatchFsShellTool(name, args || {}, {
+      // A resumed write_file call is a read-only state proof. Capturing a new
+      // "before" image here would incorrectly snapshot the already-written
+      // content and could make a later rewind preserve the mutation.
+      const snapshot = !idempotentResume
+        ? await recordPreMutationSnapshot({ name, args, job, toolCallId })
+        : null
+      const result = await dispatchFsShellTool(name, args || {}, {
         userId: job?.userId || null,
         signal,
         toolCallId,
         idempotencyKey,
+        idempotentResume,
+        sideEffectRecoveryPlan,
         onOutput: publishLiveOutput,
       })
+      finalizePreMutationSnapshot({ snapshot, result })
+      return result
     } catch (err) {
       return {
         ...normalizeToolError(err, { fallbackCode: 'fs_tool_failed' }),
@@ -371,6 +459,8 @@ export async function executeServerTool({
           job?.modelName,
           inheritedJobSkillIds(job, skillId),
           job?.skillDefinitions,
+          job?.modelProviderId,
+          job?.modelConfigRevision,
         ),
         depth: -1,
         parentSessionId: job?.id || null,
@@ -447,6 +537,7 @@ export async function executeServerTool({
         args: args || {},
         toolCallId,
         idempotencyKey,
+        dynamicToolRegistrationId,
         signal,
       })
       if (result && typeof result === 'object' && !Array.isArray(result)) {
@@ -458,17 +549,7 @@ export async function executeServerTool({
       return normalizeToolError(err, { fallbackCode: 'mcp_tool_failed' })
     }
   }
-  const dynamicTool = getDynamicTool(name, { userId: job?.userId || null })
-  if (dynamicToolRegistrationId
-    && dynamicTool?.registrationId !== dynamicToolRegistrationId) {
-    return {
-      ok: false,
-      code: 'dynamic_tool_registration_changed',
-      error: `The registered implementation for ${name} changed before execution. The stale call was not executed.`,
-      retryable: false,
-      refreshToolCatalog: true,
-    }
-  }
+  const dynamicTool = registeredTool
   if (typeof dynamicTool?.exec === 'function') {
     try {
       const result = await dynamicTool.exec(args || {}, {
@@ -498,5 +579,8 @@ export async function executeServerTool({
 }
 
 executeServerTool.supportsIdempotentResume = ({ name, idempotencyKey } = {}) => (
-  Boolean(idempotencyKey) && CONNECTOR_WRITE_TOOL_NAMES.includes(name)
+  Boolean(idempotencyKey) && (
+    name === 'write_file'
+    || CONNECTOR_WRITE_TOOL_NAMES.includes(name)
+  )
 )

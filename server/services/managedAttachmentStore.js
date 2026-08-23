@@ -2,6 +2,17 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { getDb } from '../db.js'
+import {
+  assertUserDataMutationAllowed,
+  userDataClearInProgress,
+} from './userDataClearGuard.js'
+import {
+  acquireManagedAttachmentUploadLease,
+  finalizeManagedAttachmentUploadLease,
+  holdManagedAttachmentUploadLease,
+  managedAttachmentUploadLeaseDuration,
+  releaseManagedAttachmentUploadLease,
+} from './managedAttachmentUploadLease.js'
 
 const DEFAULT_MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 const DEFAULT_USER_QUOTA_BYTES = 2 * 1024 * 1024 * 1024
@@ -127,7 +138,7 @@ function configuredUserQuotaBytes(env = process.env) {
 function configuredMaxPerTurn(env = process.env) {
   const parsed = Number(env.ATTACHMENT_MAX_PER_TURN)
   if (!Number.isSafeInteger(parsed) || parsed < 1) return MAX_ATTACHMENT_COUNT_PER_TURN
-  return Math.min(parsed, 256)
+  return Math.min(parsed, MAX_ATTACHMENT_COUNT_PER_TURN)
 }
 
 function configuredDuration(env, key, fallback) {
@@ -222,6 +233,17 @@ function mapAttachment(row) {
   }
 }
 
+function deleteCorruptAttachmentMetadata(db, userId, id) {
+  db.transaction(() => {
+    assertUserDataMutationAllowed(
+      db,
+      userId,
+      'Attachment metadata cannot be repaired while local data is being cleared',
+    )
+    db.prepare('DELETE FROM managed_attachments WHERE id = ? AND user_id = ?').run(id, userId)
+  })()
+}
+
 async function writeChunk(file, chunk) {
   let offset = 0
   while (offset < chunk.length) {
@@ -242,6 +264,7 @@ export async function createManagedAttachment({
   now = Date.now(),
   id = crypto.randomUUID(),
   env = process.env,
+  onUploadLeaseAcquired = null,
 } = {}) {
   if (!userId) throw attachmentError('userId 必填', 401, 'UNAUTHORIZED')
   if (!source || typeof source[Symbol.asyncIterator] !== 'function') {
@@ -253,6 +276,7 @@ export async function createManagedAttachment({
   let safeSessionId = String(sessionId || '').trim().slice(0, 512) || null
   const safeMessageId = String(messageId || '').trim().slice(0, 512) || null
   const db = getDb()
+  assertUserDataMutationAllowed(db, userId, 'Attachments cannot change while local data is being cleared')
   cleanupManagedAttachments({ userId, now, env })
   if (safeSessionId) {
     const session = db.prepare(`
@@ -312,14 +336,27 @@ export async function createManagedAttachment({
   const bucketDir = path.join(root, userBucket(userId))
   const finalPath = path.join(root, ...relativePath.split('/'))
   const temporaryPath = `${finalPath}.uploading`
-  fs.mkdirSync(bucketDir, { recursive: true, mode: 0o700 })
+  const uploadLease = acquireManagedAttachmentUploadLease({
+    db,
+    uploadId: safeId,
+    userId,
+    leaseMs: managedAttachmentUploadLeaseDuration(env.ATTACHMENT_UPLOAD_LEASE_MS),
+  })
+  const leaseHold = holdManagedAttachmentUploadLease({ db, lease: uploadLease })
 
   let file = null
   let total = 0
+  let finalPublished = false
+  let metadataCommitted = false
   const hash = crypto.createHash('sha256')
   try {
+    if (typeof onUploadLeaseAcquired === 'function') {
+      await onUploadLeaseAcquired({ uploadId: safeId, userId })
+    }
+    fs.mkdirSync(bucketDir, { recursive: true, mode: 0o700 })
     file = await fs.promises.open(temporaryPath, 'wx', 0o600)
     for await (const value of source) {
+      leaseHold.assertActive()
       const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
       total += chunk.length
       if (total > maxBytes) {
@@ -327,6 +364,7 @@ export async function createManagedAttachment({
       }
       hash.update(chunk)
       await writeChunk(file, chunk)
+      leaseHold.assertActive()
     }
     if (total === 0) throw attachmentError('附件内容不能为空', 400, 'ATTACHMENT_EMPTY')
     await file.sync()
@@ -337,10 +375,14 @@ export async function createManagedAttachment({
     const descriptor = fs.openSync(temporaryPath, 'r')
     try { fs.readSync(descriptor, prefix, 0, prefix.length, 0) } finally { fs.closeSync(descriptor) }
     const finalMimeType = resolvedMimeType(claimedMimeType, prefix, safeName)
+    leaseHold.assertActive()
     await fs.promises.rename(temporaryPath, finalPath)
-    try {
-      const digest = hash.digest('hex')
-      db.transaction(() => {
+    finalPublished = true
+    const digest = hash.digest('hex')
+    finalizeManagedAttachmentUploadLease({
+      db,
+      lease: uploadLease,
+      commit() {
         db.prepare(`
           INSERT INTO managed_attachments
             (id, user_id, session_id, message_id, original_name, mime_type, size_bytes,
@@ -357,25 +399,30 @@ export async function createManagedAttachment({
         if (usedBytes > userQuotaBytes) {
           throw attachmentError('附件总配额不足，请删除不再需要的附件后重试', 413, 'ATTACHMENT_USER_QUOTA_EXCEEDED')
         }
-      })()
-    } catch (error) {
-      try { fs.unlinkSync(finalPath) } catch { /* best effort */ }
-      throw error
-    }
+      },
+    })
+    metadataCommitted = true
     return getManagedAttachment({ userId, id: safeId })
   } catch (error) {
     if (file) {
       try { await file.close() } catch { /* best effort */ }
     }
     try { await fs.promises.unlink(temporaryPath) } catch { /* best effort */ }
+    if (finalPublished && !metadataCommitted) {
+      try { await fs.promises.unlink(finalPath) } catch { /* best effort */ }
+    }
     throw error
+  } finally {
+    leaseHold.stop()
+    try { releaseManagedAttachmentUploadLease({ db, lease: uploadLease }) } catch { /* best effort */ }
   }
 }
 
 export function getManagedAttachment({ userId, id, env = process.env } = {}) {
   if (!userId) return null
   const safeId = normalizeAttachmentId(id)
-  const row = getDb().prepare(
+  const db = getDb()
+  const row = db.prepare(
     'SELECT * FROM managed_attachments WHERE id = ? AND user_id = ?',
   ).get(safeId, userId)
   if (!row) return null
@@ -383,11 +430,11 @@ export function getManagedAttachment({ userId, id, env = process.env } = {}) {
   try {
     fullPath = rowPath(row, env)
   } catch {
-    getDb().prepare('DELETE FROM managed_attachments WHERE id = ? AND user_id = ?').run(safeId, userId)
+    deleteCorruptAttachmentMetadata(db, userId, safeId)
     throw attachmentError('附件存储记录损坏，已自动清理', 410, 'ATTACHMENT_STORAGE_INVALID')
   }
   if (!fs.existsSync(fullPath)) {
-    getDb().prepare('DELETE FROM managed_attachments WHERE id = ? AND user_id = ?').run(safeId, userId)
+    deleteCorruptAttachmentMetadata(db, userId, safeId)
     throw attachmentError('附件内容不存在', 410, 'ATTACHMENT_CONTENT_MISSING')
   }
   return { ...mapAttachment(row), fullPath }
@@ -439,14 +486,16 @@ export function validateManagedAttachmentsForTurn({ userId, sessionId, attachmen
 }
 
 export function bindManagedAttachmentsToMessage({ userId, sessionId, messageId, attachmentIds, now = Date.now() } = {}) {
+  const db = getDb()
+  assertUserDataMutationAllowed(db, userId, 'Attachments cannot change while local data is being cleared')
   const attachments = validateManagedAttachmentsForTurn({ userId, sessionId, attachmentIds })
   if (!attachments.length) return []
   const message = getDb().prepare(
     'SELECT id FROM messages WHERE id = ? AND user_id = ? AND session_id = ?',
   ).get(messageId, userId, sessionId)
   if (!message) throw attachmentError('消息不存在或无权访问', 404, 'ATTACHMENT_MESSAGE_NOT_FOUND')
-  const db = getDb()
   db.transaction(() => {
+    assertUserDataMutationAllowed(db, userId, 'Attachments cannot change while local data is being cleared')
     for (const attachment of attachments) {
       const row = db.prepare(
         'SELECT message_id FROM managed_attachments WHERE id = ? AND user_id = ?',
@@ -468,6 +517,10 @@ export function bindManagedAttachmentsToMessage({ userId, sessionId, messageId, 
 function deleteAttachmentRows(rows, { env = process.env } = {}) {
   const candidates = Array.isArray(rows) ? rows.filter(Boolean) : []
   if (!candidates.length) return 0
+  const db = getDb()
+  for (const ownerId of new Set(candidates.map((row) => row.user_id))) {
+    assertUserDataMutationAllowed(db, ownerId, 'Attachments cannot change while local data is being cleared')
+  }
   const quarantined = []
   try {
     for (const row of candidates) {
@@ -478,10 +531,12 @@ function deleteAttachmentRows(rows, { env = process.env } = {}) {
       fs.renameSync(fullPath, tombstone)
       quarantined.push({ fullPath, tombstone })
     }
-    const db = getDb()
     const remove = db.prepare('DELETE FROM managed_attachments WHERE id = ? AND user_id = ?')
     let removed = 0
     db.transaction(() => {
+      for (const ownerId of new Set(candidates.map((row) => row.user_id))) {
+        assertUserDataMutationAllowed(db, ownerId, 'Attachments cannot change while local data is being cleared')
+      }
       for (const row of candidates) removed += remove.run(row.id, row.user_id).changes
     })()
     for (const item of quarantined) safeUnlink(item.tombstone)
@@ -505,13 +560,20 @@ export function cleanupManagedAttachments({
   maxRows = 5_000,
 } = {}) {
   const db = getDb()
+  if (userId && userDataClearInProgress(db, userId)) {
+    return { removedRows: 0, removedFiles: 0, skippedForUserDataClear: true }
+  }
+  const lockedOwners = new Set(db.prepare(`
+    SELECT owner_id FROM user_data_clear_operations
+  `).all().map((row) => row.owner_id))
   const pendingTtlMs = configuredDuration(env, 'ATTACHMENT_PENDING_TTL_MS', DEFAULT_PENDING_TTL_MS)
   const staleUploadMs = configuredDuration(env, 'ATTACHMENT_STALE_UPLOAD_MS', DEFAULT_STALE_UPLOAD_MS)
   const orphanGraceMs = configuredDuration(env, 'ATTACHMENT_ORPHAN_GRACE_MS', DEFAULT_ORPHAN_GRACE_MS)
   const boundedLimit = Math.min(50_000, Math.max(1, Number(maxRows) || 5_000))
-  const rows = userId
+  const rows = (userId
     ? db.prepare('SELECT * FROM managed_attachments WHERE user_id = ? LIMIT ?').all(userId, boundedLimit)
-    : db.prepare('SELECT * FROM managed_attachments LIMIT ?').all(boundedLimit)
+    : db.prepare('SELECT * FROM managed_attachments LIMIT ?').all(boundedLimit))
+    .filter((row) => !lockedOwners.has(row.user_id))
   const sessionExists = db.prepare(`
     SELECT 1 FROM sessions
     WHERE token = ? AND user_id = ? AND (id IS NOT NULL OR title IS NOT NULL)
@@ -548,8 +610,10 @@ export function cleanupManagedAttachments({
     : (() => {
         try { return fs.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name) } catch { return [] }
       })()
+  const lockedBuckets = new Set([...lockedOwners].map(userBucket))
   let removedFiles = 0
   for (const bucketName of bucketNames) {
+    if (lockedBuckets.has(bucketName)) continue
     const bucketDir = path.resolve(root, bucketName)
     const relativeBucket = path.relative(root, bucketDir)
     if (!relativeBucket || relativeBucket.startsWith('..') || path.isAbsolute(relativeBucket)) continue
@@ -580,6 +644,7 @@ export function cleanupManagedAttachments({
 
 export function deleteManagedAttachmentsForSession({ userId, sessionId, env = process.env } = {}) {
   if (!userId || !sessionId) return 0
+  assertUserDataMutationAllowed(getDb(), userId, 'Attachments cannot change while local data is being cleared')
   const rows = getDb().prepare(
     'SELECT * FROM managed_attachments WHERE user_id = ? AND session_id = ?',
   ).all(userId, String(sessionId))
@@ -588,6 +653,7 @@ export function deleteManagedAttachmentsForSession({ userId, sessionId, env = pr
 
 export function deleteManagedAttachmentsForUser({ userId, env = process.env } = {}) {
   if (!userId) return 0
+  assertUserDataMutationAllowed(getDb(), userId, 'Attachments cannot change while local data is being cleared')
   const rows = getDb().prepare(
     'SELECT * FROM managed_attachments WHERE user_id = ?',
   ).all(userId)
@@ -603,6 +669,7 @@ export function deleteManagedAttachmentsForUser({ userId, env = process.env } = 
 
 export function deleteManagedAttachment({ userId, id, env = process.env } = {}) {
   if (!userId) return false
+  assertUserDataMutationAllowed(getDb(), userId, 'Attachments cannot change while local data is being cleared')
   const safeId = normalizeAttachmentId(id)
   const row = getDb().prepare(
     'SELECT * FROM managed_attachments WHERE id = ? AND user_id = ?',

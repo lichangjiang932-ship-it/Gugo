@@ -16,11 +16,30 @@ import {
   streamServerTurnEventsWebSocket,
   waitForReconnect,
 } from './turnTransport.js'
-import { parseTurnEvent } from '../../../shared/turnEvents.js'
+import { canAdvanceTurnEventCursor, parseTurnEvent } from '../../../shared/turnEvents.js'
 
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 15_000
 const DEFAULT_CANCEL_RETRY_DELAY_MS = 750
 const DEFAULT_CANCEL_RETRY_MAX_DELAY_MS = 5_000
+
+const DEFINITELY_REJECTED_INITIAL_REQUEST_CODES = new Set([
+  'RUNTIME_NOT_READY',
+  'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
+  'COMPACTION_ARCHIVE_PORT_NOT_CONFIGURED',
+  'TURN_PERSISTENCE_ENGINE_ALREADY_ACTIVE',
+  'TURN_ENGINE_SHUTTING_DOWN',
+  'TURN_ENGINE_SHUTDOWN',
+  'TURN_ENGINE_HOST_PENDING_INITIALIZATION_CLEANUP_FAILED',
+  'TURN_ENGINE_HOST_INITIALIZATION_AND_CLEANUP_FAILED',
+  'TURN_ENGINE_HOST_CLEANUP_FAILED',
+  'MODEL_CONFIG_MISSING',
+  'MODEL_PROVIDER_UNVERIFIED',
+  'MODEL_PROVIDER_CHAT_ONLY',
+  'MODEL_PROVIDER_UNAVAILABLE',
+  'MODEL_PROVIDER_CONFIG_CHANGED',
+  'MODEL_PROVIDER_BINDING_MISSING',
+  'MODEL_PROVIDER_AMBIGUOUS',
+])
 
 function finiteDelay(value, fallback) {
   const numeric = Number(value)
@@ -38,6 +57,9 @@ function hasTurnIdentity(turn) {
 }
 
 function isAmbiguousInitialRequestError(error) {
+  if (DEFINITELY_REJECTED_INITIAL_REQUEST_CODES.has(String(error?.code || '').trim())) {
+    return false
+  }
   const status = Number(error?.status)
   if (!Number.isInteger(status)) return true
   return status >= 500 || [408, 409, 425, 429].includes(status)
@@ -47,12 +69,50 @@ function confirmsExistingTurn(error) {
   return Number(error?.status) === 409 && error?.code === 'TURN_EXISTS'
 }
 
+function requiresRuntimeRestart(error) {
+  return String(error?.action || '').trim() === 'restart_runtime'
+}
+
+function recoveryDeadLetterError(turn) {
+  const recovery = turn?.recovery
+  if (recovery?.status !== 'dead_letter') return null
+  const error = new Error(
+    recovery.error?.message || 'Automatic turn recovery stopped after repeated failures',
+  )
+  error.code = recovery.error?.code || 'TURN_RECOVERY_DEAD_LETTER'
+  error.retryable = false
+  error.recovery = recovery
+  return error
+}
+
+function isRecoveryDeadLetterError(error) {
+  return error?.code === 'TURN_RECOVERY_DEAD_LETTER'
+    || error?.recovery?.status === 'dead_letter'
+    || error?.retryable === false && error?.recovery
+}
+
+function turnEventSequenceGapError({ turnId, expectedSequence, actualSequence }) {
+  const error = new Error(`Turn ${turnId} event sequence gap: expected ${expectedSequence}, received ${actualSequence}`)
+  error.name = 'TurnEventSequenceGapError'
+  error.code = 'TURN_EVENT_SEQUENCE_GAP'
+  error.retryable = true
+  error.expectedSequence = expectedSequence
+  error.actualSequence = actualSequence
+  return error
+}
+
+function isTurnEventSequenceGapError(error) {
+  return error?.code === 'TURN_EVENT_SEQUENCE_GAP'
+}
+
 export async function runServerTurn({
   sessionId,
   content,
   displayContent,
   attachments,
   modelName,
+  modelProviderId,
+  modelMode = 'agent',
   history,
   agentId,
   skillIds,
@@ -62,6 +122,8 @@ export async function runServerTurn({
   turnId,
   resume = false,
   resumeResolution = null,
+  retryFailed = false,
+  retryRecovery = false,
   afterSequence = -1,
   signal,
   onStarted,
@@ -110,8 +172,16 @@ export async function runServerTurn({
     // SSE reconnects, WebSocket delivery, and replay may overlap. Advance the
     // durable cursor only after the consumer acknowledges an event.
     if (event.sequence <= after) return false
+    const expectedSequence = after + 1
+    if (!canAdvanceTurnEventCursor(event, after)) {
+      throw turnEventSequenceGapError({
+        turnId: activeTurnId,
+        expectedSequence,
+        actualSequence: event.sequence,
+      })
+    }
     await onEvent?.(event)
-    after = Math.max(after, event.sequence)
+    after = event.sequence
     // Any newly acknowledged event proves that the previous wake made
     // progress. A later disconnect may therefore issue one fresh wake.
     resumeWakeRequested = false
@@ -125,6 +195,8 @@ export async function runServerTurn({
   }
 
   const acceptTerminalFromTurn = async (turn) => {
+    const recoveryError = recoveryDeadLetterError(turn)
+    if (recoveryError) throw recoveryError
     if (!TERMINAL_EVENTS.has(turn?.lastEvent?.type)) return false
     const event = parseTurnEvent(turn.lastEvent)
     await deliverEvent(event)
@@ -186,6 +258,7 @@ export async function runServerTurn({
         if (TERMINAL_EVENTS.has(event.type) && event.sequence <= after) terminal = event
       }
     } catch (error) {
+      if (isRecoveryDeadLetterError(error)) throw error
       if (!(cancelRequested && error?.name === 'AbortError')) cause = error
     }
     if (terminal) return { cause, delivered, turn }
@@ -201,6 +274,22 @@ export async function runServerTurn({
       if (!(cancelRequested && error?.name === 'AbortError')) cause = error
     }
     return { cause, delivered, turn }
+  }
+
+  const acceptTerminalWithReplay = async (turn) => {
+    try {
+      return await acceptTerminalFromTurn(turn)
+    } catch (error) {
+      if (!isTurnEventSequenceGapError(error)) throw error
+      let cause = error
+      while (!terminal) {
+        const observed = await observePersistedTurn(cause)
+        if (terminal) return true
+        if (observed.delivered === 0) throw observed.cause || cause
+        cause = observed.cause || cause
+      }
+      return true
+    }
   }
 
   const tryAcknowledgeCancellation = async ({ acceptTerminal = true } = {}) => {
@@ -220,7 +309,7 @@ export async function runServerTurn({
         confirmed: true,
         attempt: cancelAttempts,
       })
-      if (acceptTerminal) await acceptTerminalFromTurn(turn)
+      if (acceptTerminal) await acceptTerminalWithReplay(turn)
       return { turn, error: null }
     } catch (error) {
       await notifyConnectionState({
@@ -243,7 +332,7 @@ export async function runServerTurn({
         fetchImpl,
       }))
       resumeWakeRequested = true
-      await acceptTerminalFromTurn(resumed)
+      await acceptTerminalWithReplay(resumed)
       return cause
     } catch (error) {
       if (cancelRequested && error?.name === 'AbortError') return cause
@@ -259,6 +348,8 @@ export async function runServerTurn({
           sessionId,
           turnId: requestedTurnId,
           resolution: resumeResolution,
+          retryFailed,
+          retryRecovery,
           signal: requestSignal,
           fetchImpl,
         })
@@ -268,6 +359,8 @@ export async function runServerTurn({
           displayContent,
           attachments,
           modelName,
+          modelProviderId,
+          modelMode,
           turnId: requestedTurnId,
           history,
           agentId,
@@ -333,6 +426,9 @@ export async function runServerTurn({
       // over through replay/query instead of creating a second logical turn.
       reconnectAttempts = 1
       const observed = await observePersistedTurn(initialOutcome.error)
+      if (observed.delivered === 0 && isTurnEventSequenceGapError(observed.cause)) {
+        throw observed.cause
+      }
       initialTurnConfirmed = Boolean(
         terminal || observed.turn || observed.delivered > 0 || confirmsExistingTurn(initialOutcome.error),
       )
@@ -360,7 +456,7 @@ export async function runServerTurn({
 
     activeTurnId = String(turn?.turnId || requestedTurnId)
     await onStarted?.(turn)
-    await acceptTerminalFromTurn(turn)
+    await acceptTerminalWithReplay(turn)
 
     while (!terminal) {
       if (cancelRequested && !cancelAcknowledged) {
@@ -391,6 +487,9 @@ export async function runServerTurn({
       if (recoveryMode) {
         const observed = await observePersistedTurn()
         if (terminal) continue
+        if (observed.delivered === 0 && isTurnEventSequenceGapError(observed.cause)) {
+          throw observed.cause
+        }
         if (observed.turn || observed.delivered > 0) initialTurnConfirmed = true
 
         if (!cancelRequested && !initialTurnConfirmed) {
@@ -398,7 +497,7 @@ export async function runServerTurn({
             const retriedTurn = await withRequestSignal(issueInitialRequest)
             if (!hasTurnIdentity(retriedTurn)) throw incompleteInitialTurnError(requestedTurnId)
             initialTurnConfirmed = true
-            await acceptTerminalFromTurn(retriedTurn)
+            await acceptTerminalWithReplay(retriedTurn)
           } catch (error) {
             if (cancelRequested && error?.name === 'AbortError') continue
             if (confirmsExistingTurn(error)) initialTurnConfirmed = true
@@ -410,6 +509,7 @@ export async function runServerTurn({
 
         if (!cancelRequested && initialTurnConfirmed && observed.turn?.status === 'interrupted') {
           observed.cause = await tryWakeTurn(observed.cause)
+          if (isRecoveryDeadLetterError(observed.cause)) throw observed.cause
           if (terminal) continue
         }
         await notifyConnectionState({
@@ -465,6 +565,7 @@ export async function runServerTurn({
             }))
           } catch (webSocketError) {
             if (cancelRequested && webSocketError?.name === 'AbortError') throw webSocketError
+            if (requiresRuntimeRestart(webSocketError)) throw webSocketError
             webSocketDisabled = true
           }
         }
@@ -477,10 +578,15 @@ export async function runServerTurn({
         }
       } catch (error) {
         if (cancelRequested && error?.name === 'AbortError') continue
+        if (requiresRuntimeRestart(error)) throw error
         const observed = await observePersistedTurn(error)
         if (terminal) continue
+        if (observed.delivered === 0 && isTurnEventSequenceGapError(observed.cause)) {
+          throw observed.cause
+        }
         let reconnectCause = observed.cause || error
         reconnectCause = await tryWakeTurn(reconnectCause)
+        if (isRecoveryDeadLetterError(reconnectCause)) throw reconnectCause
         if (terminal) continue
         reconnectAttempts += 1
         recoveryMode = reconnectAttempts >= maxAttempts

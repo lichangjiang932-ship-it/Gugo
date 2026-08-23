@@ -167,7 +167,10 @@ export function normalizeCompatibleModelStreamPayload(data, state = createCompat
       frame.toolCallDeltas.push(toolDelta(delta.function_call, 0, choice.message ? 'replace' : 'append'))
       state.sawToolCall = true
     }
-    if (choice.finish_reason) frame.finishReason = normalizedFinishReason(choice.finish_reason, state.sawToolCall)
+    if (choice.finish_reason) {
+      frame.finishReason = normalizedFinishReason(choice.finish_reason, state.sawToolCall)
+      frame.terminal = true
+    }
   } else if (!eventType.startsWith('response.')) {
     frame.text = extractModelContentText(data?.message?.content)
       || extractModelContentText(data?.content)

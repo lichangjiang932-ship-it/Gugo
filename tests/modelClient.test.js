@@ -4,10 +4,13 @@ import assert from 'node:assert/strict'
 import {
   callModelThroughProxy,
   callModelThroughProxyStream,
+  discoverModelProvider,
   getModelStatus,
   getSystemDiagnostics,
   testModelEndpoint,
+  testModelProvider,
 } from '../src/lib/modelClient.js'
+import { setAuthToken } from '../src/lib/accountClient.js'
 
 test('getModelStatus reads backend model status', async () => {
   const fetchImpl = async (url) => {
@@ -22,8 +25,38 @@ test('getModelStatus reads backend model status', async () => {
   assert.deepEqual(result, { ok: true, configured: true, modelName: 'gpt-test' })
 })
 
-test('testModelEndpoint posts no endpoint configuration to local proxy', async () => {
+test('model client preserves structured backend error details', async () => {
+  const fetchImpl = async () => new Response(JSON.stringify({
+    ok: false,
+    error: { code: 'MODEL_CONFIG_MISSING', message: '模型服务尚未配置' },
+  }), {
+    status: 503,
+    headers: { 'Content-Type': 'application/json' },
+  })
+
+  await assert.rejects(
+    () => getModelStatus({ fetchImpl }),
+    (error) => {
+      assert.equal(error.message, '模型服务尚未配置')
+      assert.equal(error.code, 'MODEL_CONFIG_MISSING')
+      assert.equal(error.status, 503)
+      assert.equal(error.payload.error.message, '模型服务尚未配置')
+      return true
+    },
+  )
+})
+
+test('testModelEndpoint posts no endpoint configuration and includes local auth', async () => {
   const calls = []
+  const originalWindow = globalThis.window
+  const values = new Map()
+  const storage = {
+    getItem: (key) => values.get(key) || null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key),
+  }
+  globalThis.window = { localStorage: storage, sessionStorage: storage }
+  setAuthToken('model-test-token')
   const fetchImpl = async (url, init) => {
     calls.push({ url, init })
     return new Response(JSON.stringify({ ok: true, latency: 12, reply: 'pong' }), {
@@ -32,12 +65,68 @@ test('testModelEndpoint posts no endpoint configuration to local proxy', async (
     })
   }
 
-  const result = await testModelEndpoint({ fetchImpl })
+  try {
+    const result = await testModelEndpoint({ fetchImpl })
 
-  assert.deepEqual(result, { ok: true, latency: 12, reply: 'pong' })
-  assert.equal(calls[0].url, '/api/model/test')
-  assert.equal(calls[0].init.method, 'POST')
-  assert.deepEqual(JSON.parse(calls[0].init.body), {})
+    assert.deepEqual(result, { ok: true, latency: 12, reply: 'pong' })
+    assert.equal(calls[0].url, '/api/model/test')
+    assert.equal(calls[0].init.method, 'POST')
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer model-test-token')
+    assert.deepEqual(JSON.parse(calls[0].init.body), {})
+  } finally {
+    setAuthToken('')
+    if (originalWindow === undefined) delete globalThis.window
+    else globalThis.window = originalWindow
+  }
+})
+
+test('provider test client sends the explicit target model', async () => {
+  let request = null
+  const result = await testModelProvider('provider/id', '  model-b  ', {
+    fetchImpl: async (url, init) => {
+      request = { url, init }
+      return new Response(JSON.stringify({ ok: true, modelName: 'model-b' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    },
+  })
+
+  assert.deepEqual(result, { ok: true, modelName: 'model-b' })
+  assert.equal(request.url, '/api/model/providers/provider%2Fid/test')
+  assert.equal(request.init.method, 'POST')
+  assert.deepEqual(JSON.parse(request.init.body), { modelName: 'model-b' })
+})
+
+test('provider discovery client forwards saved Header removal intent', async () => {
+  let request = null
+  const result = await discoverModelProvider({
+    id: 'provider-id',
+    baseUrl: 'http://127.0.0.1:1234/v1',
+    headers: { 'X-New-Auth': 'replacement' },
+    removeHeaderKeys: ['X-Saved-Auth', 'x-stale-header'],
+  }, {
+    fetchImpl: async (url, init) => {
+      request = { url, init }
+      return new Response(JSON.stringify({ ok: true, models: ['local-model'] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    },
+  })
+
+  assert.deepEqual(result, { ok: true, models: ['local-model'] })
+  assert.equal(request.url, '/api/model/providers/discover')
+  assert.equal(request.init.method, 'POST')
+  assert.deepEqual(JSON.parse(request.init.body), {
+    id: 'provider-id',
+    baseUrl: 'http://127.0.0.1:1234/v1',
+    apiKey: '',
+    headers: { 'X-New-Auth': 'replacement' },
+    clearApiKey: false,
+    clearHeaders: false,
+    removeHeaderKeys: ['X-Saved-Auth', 'x-stale-header'],
+  })
 })
 
 test('getSystemDiagnostics reads safe backend diagnostics with optional endpoint check', async () => {
@@ -67,6 +156,7 @@ test('callModelThroughProxy returns the model reply from the local proxy', async
   const reply = await callModelThroughProxy({
     messages: [{ role: 'user', content: 'hello' }],
     modelName: 'gpt-pro',
+    modelProviderId: 'provider-uuid',
     fetchImpl: (url, init) => {
       calls.push({ url, init })
       return fetchImpl(url, init)
@@ -79,6 +169,7 @@ test('callModelThroughProxy returns the model reply from the local proxy', async
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     messages: [{ role: 'user', content: 'hello' }],
     modelName: 'gpt-pro',
+    modelProviderId: 'provider-uuid',
   })
 })
 

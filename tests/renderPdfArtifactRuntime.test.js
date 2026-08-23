@@ -129,11 +129,32 @@ test('render_pdf_pages rolls back a later invalid page and retries without dupli
 
   let imageWrites = 0
   let retryObserved = false
+  const managedPngDescriptors = new Map()
+  const originalOpenSync = fs.openSync
+  const originalCloseSync = fs.closeSync
   const originalWriteFileSync = fs.writeFileSync
+  fs.openSync = (target, flags, mode) => {
+    const descriptor = originalOpenSync(target, flags, mode)
+    const filename = String(target)
+    const isManagedPngStaging = path.dirname(filename) === artifactDirectory
+      && path.extname(filename).toLowerCase() === '.tmp'
+      && path.basename(filename).toLowerCase().includes('.png.')
+    managedPngDescriptors.set(descriptor, isManagedPngStaging)
+    return descriptor
+  }
+  fs.closeSync = (descriptor) => {
+    try {
+      return originalCloseSync(descriptor)
+    } finally {
+      managedPngDescriptors.delete(descriptor)
+    }
+  }
   fs.writeFileSync = (target, content, options) => {
     const filename = String(target)
-    const isManagedPng = path.dirname(filename) === artifactDirectory
-      && path.extname(filename).toLowerCase() === '.png'
+    const isManagedPng = typeof target === 'number'
+      ? managedPngDescriptors.get(target) === true
+      : path.dirname(filename) === artifactDirectory
+        && path.extname(filename).toLowerCase() === '.png'
     if (isManagedPng) {
       imageWrites += 1
       if (imageWrites === 2) {
@@ -215,6 +236,8 @@ test('render_pdf_pages rolls back a later invalid page and retries without dupli
 
     assert.equal(result.artifactIds.length, 2)
   } finally {
+    fs.openSync = originalOpenSync
+    fs.closeSync = originalCloseSync
     fs.writeFileSync = originalWriteFileSync
   }
 

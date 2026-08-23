@@ -18,6 +18,7 @@
  */
 
 import { isLocalEndpoint } from '../utils/endpointProfile.js'
+import { fetchSafeOutbound } from '../utils/outboundNetworkGuard.js'
 
 /**
  * 把任意形态的 Ollama Base URL 归一成 origin。
@@ -36,16 +37,41 @@ export function ollamaOrigin(baseUrl = '') {
   }
 }
 
-async function fetchJson(url, { fetchImpl = fetch, timeoutMs = 30_000, method = 'GET', body = null } = {}) {
+function buildRequestHeaders(headers = {}, apiKey = '') {
+  const next = { ...(headers || {}) }
+  const hasAuthorization = Object.keys(next)
+    .some((name) => name.toLowerCase() === 'authorization')
+  const secret = String(apiKey || '').trim()
+  if (secret && !hasAuthorization) next.Authorization = `Bearer ${secret}`
+  return next
+}
+
+async function fetchJson(url, {
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 30_000,
+  method = 'GET',
+  body = null,
+  headers = {},
+  apiKey = '',
+} = {}) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const init = { method, signal: controller.signal }
+    const requestHeaders = buildRequestHeaders(headers, apiKey)
+    const init = { method, signal: controller.signal, headers: requestHeaders }
     if (body) {
-      init.headers = { 'Content-Type': 'application/json' }
+      if (!Object.keys(requestHeaders).some((name) => name.toLowerCase() === 'content-type')) {
+        requestHeaders['Content-Type'] = 'application/json'
+      }
       init.body = JSON.stringify(body)
     }
-    const response = await fetchImpl(url, init)
+    const response = await fetchSafeOutbound(url, init, {
+      fetchImpl,
+      allowLocal: isLocalEndpoint(url),
+      // Production resolves and pins the target. Explicit test transports stay
+      // hermetic while still exercising URL and redirect validation.
+      resolveDns: fetchImpl === globalThis.fetch,
+    })
     const text = await response.text()
     let data = null
     try { data = text ? JSON.parse(text) : null } catch { data = null }
@@ -68,10 +94,21 @@ async function fetchJson(url, { fetchImpl = fetch, timeoutMs = 30_000, method = 
  *
  * @returns {Promise<Array<{name:string, size:number|null, family:string|null, parameterSize:string|null, quantization:string|null}>>}
  */
-export async function listOllamaModels({ baseUrl, fetchImpl = fetch, timeoutMs = 30_000 } = {}) {
+export async function listOllamaModels({
+  baseUrl,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 30_000,
+  headers = {},
+  apiKey = '',
+} = {}) {
   const origin = ollamaOrigin(baseUrl)
   if (!origin) return []
-  const data = await fetchJson(`${origin}/api/tags`, { fetchImpl, timeoutMs })
+  const data = await fetchJson(`${origin}/api/tags`, {
+    fetchImpl,
+    timeoutMs,
+    headers,
+    apiKey,
+  })
   const models = Array.isArray(data?.models) ? data.models : []
   return models.map((model) => ({
     name: model?.name || model?.model || '',
@@ -128,7 +165,14 @@ export function extractSupportsVision(showResponse) {
  *
  * @returns {Promise<{contextWindow:number|null, supportsTools:boolean|null, supportsVision:boolean|null}>}
  */
-export async function probeOllamaModel({ baseUrl, modelName, fetchImpl = fetch, timeoutMs = 30_000 } = {}) {
+export async function probeOllamaModel({
+  baseUrl,
+  modelName,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 30_000,
+  headers = {},
+  apiKey = '',
+} = {}) {
   const origin = ollamaOrigin(baseUrl)
   const name = String(modelName || '').trim()
   if (!origin || !name) return { contextWindow: null, supportsTools: null, supportsVision: null }
@@ -137,6 +181,8 @@ export async function probeOllamaModel({ baseUrl, modelName, fetchImpl = fetch, 
     timeoutMs,
     method: 'POST',
     body: { model: name },
+    headers,
+    apiKey,
   })
   return {
     contextWindow: extractContextLength(data),
@@ -164,10 +210,23 @@ export function looksLikeOllama(baseUrl = '') {
  * 一次性把 Ollama 端点探明白:有哪些模型 + 目标模型的真实能力。
  * 失败不抛 —— 这是「锦上添花」的探测,拿不到就回落到推断值。
  */
-export async function discoverOllamaEndpoint({ baseUrl, modelName, fetchImpl = fetch, timeoutMs = 30_000 } = {}) {
+export async function discoverOllamaEndpoint({
+  baseUrl,
+  modelName,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = 30_000,
+  headers = {},
+  apiKey = '',
+} = {}) {
   const result = { ok: false, models: [], modelProfiles: {}, profile: null, error: null }
   try {
-    result.models = await listOllamaModels({ baseUrl, fetchImpl, timeoutMs })
+    result.models = await listOllamaModels({
+      baseUrl,
+      fetchImpl,
+      timeoutMs,
+      headers,
+      apiKey,
+    })
     result.ok = true
   } catch (error) {
     result.error = error?.message || String(error)
@@ -189,7 +248,14 @@ export async function discoverOllamaEndpoint({ baseUrl, modelName, fetchImpl = f
         cursor += 1
         const name = names[index]
         try {
-          const profile = await probeOllamaModel({ baseUrl, modelName: name, fetchImpl, timeoutMs })
+          const profile = await probeOllamaModel({
+            baseUrl,
+            modelName: name,
+            fetchImpl,
+            timeoutMs,
+            headers,
+            apiKey,
+          })
           probed[index] = [name, profile]
         } catch {
           probed[index] = [name, null]

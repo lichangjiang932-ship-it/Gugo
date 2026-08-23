@@ -48,23 +48,32 @@ export function parseRemoteModelCatalog(data) {
 }
 
 export function buildVisibleModelCatalog({ names = [], defaultModel = '', providerModelEntries = [], resolveProfile }) {
-  const uniqueNames = [...new Set(names.length ? names : [defaultModel].filter(Boolean))]
-  const providerByModel = new Map()
-  for (const entry of providerModelEntries) {
-    if (!providerByModel.has(entry.name)) {
-      providerByModel.set(entry.name, {
-        id: entry.provider,
-        label: String(entry.providerLabel || '').trim(),
-      })
+  const fallbackEntries = [...new Set(names.length ? names : [defaultModel].filter(Boolean))]
+    .map((name) => ({ name }))
+  const sourceEntries = providerModelEntries.length ? providerModelEntries : fallbackEntries
+  const seen = new Set()
+  let activeAssigned = false
+  return sourceEntries.filter((entry) => {
+    const name = String(entry?.name || '').trim()
+    if (!name) return false
+    const provider = String(entry?.provider || '').trim()
+    const key = `${provider}\u0000${name}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  }).map((entry) => {
+    const name = String(entry.name).trim()
+    const provider = {
+      id: String(entry.provider || '').trim(),
+      label: String(entry.providerLabel || '').trim(),
     }
-  }
-  return uniqueNames.map((name) => {
-    const profile = resolveProfile(name)
-    const provider = providerByModel.get(name)
+    const profile = resolveProfile(name, provider.id)
+    const active = !activeAssigned && name === defaultModel
+    if (active) activeAssigned = true
     return {
       name,
-      active: name === defaultModel,
-      ...(provider ? { provider: provider.id } : {}),
+      active,
+      ...(provider.id ? { provider: provider.id } : {}),
       ...(provider?.label ? { providerLabel: provider.label } : {}),
       contextWindow: profile.contextWindow,
       contextWindowSource: profile.contextWindowSource,

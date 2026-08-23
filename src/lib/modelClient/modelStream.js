@@ -52,8 +52,8 @@ function readWithIdleTimeout(reader, timeoutMs) {
   })
 }
 
-export async function* callModelThroughProxyStream({ messages, modelName, agentId, sessionId, fetchImpl = fetch, signal, tools, toolChoice, idleTimeoutMs = CLIENT_IDLE_TIMEOUT_MS, maxTokensBoost = 0 }) {
-  const body = { messages, modelName, agentId, sessionId, stream: true }
+export async function* callModelThroughProxyStream({ messages, modelName, modelProviderId, agentId, sessionId, fetchImpl = fetch, signal, tools, toolChoice, idleTimeoutMs = CLIENT_IDLE_TIMEOUT_MS, maxTokensBoost = 0 }) {
+  const body = { messages, modelName, modelProviderId, agentId, sessionId, stream: true }
   if (Array.isArray(tools) && tools.length > 0) {
     body.tools = tools
     if (toolChoice) body.tool_choice = toolChoice
@@ -141,6 +141,12 @@ export async function* callModelThroughProxyStream({ messages, modelName, agentI
         }
         if (chunk.done) {
           sawDone = true
+          if (chunk.finishReason === 'length' && partialText.trim()) {
+            throw new StreamTruncatedError(
+              'The model response reached its output limit before completion.',
+              { partialText, reason: 'length' },
+            )
+          }
           if (!sawUsableOutput) {
             const outputBudgetEnded = chunk.finishReason === 'length'
             const error = new Error(

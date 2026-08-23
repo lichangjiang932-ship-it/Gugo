@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash, randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
 
 import { DB_SCHEMA_VERSION } from '../server/db.js'
@@ -10,6 +11,9 @@ import {
   schemaMigrations,
 } from '../server/migrations/index.js'
 import { migrateToV49 } from '../server/migrations/v49HookArgumentMatcher.js'
+import { migrateToV43 } from '../server/migrations/v43TurnExecutionLeases.js'
+import { migrateToV44 } from '../server/migrations/v44TurnSteering.js'
+import { migrateToV46 } from '../server/migrations/v46FileSnapshots.js'
 import { migrateToV50 } from '../server/migrations/v50DefaultExecutionPermissions.js'
 import { migrateToV51 } from '../server/migrations/v51TurnCheckpoints.js'
 import { migrateToV52 } from '../server/migrations/v52DefaultOutputDirectory.js'
@@ -28,6 +32,237 @@ import { migrateToV65 } from '../server/migrations/v65EvolutionEvaluations.js'
 import { migrateToV66 } from '../server/migrations/v66EvolutionApprovals.js'
 import { migrateToV67 } from '../server/migrations/v67EvolutionCanaries.js'
 import { migrateToV68 } from '../server/migrations/v68EvolutionCanaryRollback.js'
+import { migrateToV69 } from '../server/migrations/v69TurnRecoveryStates.js'
+import { migrateToV70 } from '../server/migrations/v70ModelProviderReadiness.js'
+import { migrateToV71 } from '../server/migrations/v71EvolutionModelProviders.js'
+import { migrateToV72 } from '../server/migrations/v72SubagentModelBindings.js'
+import { migrateToV73 } from '../server/migrations/v73EvolutionModelRevisions.js'
+import { migrateToV74 } from '../server/migrations/v74RuntimePluginReleases.js'
+import { migrateToV75 } from '../server/migrations/v75RuntimePluginReleaseRevision.js'
+import { migrateToV76 } from '../server/migrations/v76RuntimePluginReleaseContentIdentity.js'
+import { migrateToV77 } from '../server/migrations/v77UserDataClearOperations.js'
+import { migrateToV78 } from '../server/migrations/v78RuntimePluginReleaseRetention.js'
+import { migrateToV79 } from '../server/migrations/v79SideEffectExecutions.js'
+import { migrateToV80 } from '../server/migrations/v80SideEffectRecoveryMetadata.js'
+import { migrateToV81 } from '../server/migrations/v81EvolutionPromotions.js'
+import { migrateToV82 } from '../server/migrations/v82EvolutionOnlineGrades.js'
+import { migrateToV83 } from '../server/migrations/v83EvolutionPromotionOnlineGrades.js'
+import { migrateToV84 } from '../server/migrations/v84EvolutionConfigChanges.js'
+import { migrateToV88 } from '../server/migrations/v88EvolutionOperations.js'
+import { migrateToV89 } from '../server/migrations/v89EvolutionOperationLeases.js'
+import { migrateToV90 } from '../server/migrations/v90EvolutionOperationRecoveryChallenge.js'
+import { migrateToV91 } from '../server/migrations/v91PendingApprovalPolicyProvenance.js'
+import { migrateToV92 } from '../server/migrations/v92HookSideEffectExecutions.js'
+import { migrateToV93 } from '../server/migrations/v93TurnExecutionFencing.js'
+import { migrateToV94 } from '../server/migrations/v94SessionContentOutbox.js'
+import { migrateToV95 } from '../server/migrations/v95RetiredAccountFields.js'
+import { migrateToV96 } from '../server/migrations/v96SideEffectRecoveryPlans.js'
+import { migrateToV97 } from '../server/migrations/v97CompactionArchiveStorage.js'
+import { migrateToV98 } from '../server/migrations/v98ManagedAttachmentUploadLeases.js'
+import { migrateToV99 } from '../server/migrations/v99CompactionArchiveGovernanceJournal.js'
+import { migrateToV100 } from '../server/migrations/v100RuntimePluginPermissionGrants.js'
+import { migrateToV101 } from '../server/migrations/v101RuntimePluginPermissionOwners.js'
+import { migrateToV102 } from '../server/migrations/v102FileSnapshotAfterIdentity.js'
+import { migrateToV103 } from '../server/migrations/v103RuntimePluginMutationBarrier.js'
+import { migrateToV104 } from '../server/migrations/v104RuntimePluginMutationRecoveryReceipts.js'
+
+function createRuntimePluginMutationBarrierPrerequisites(db, {
+  includePermissionGrants = true,
+} = {}) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS runtime_plugin_states (plugin_id TEXT PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS runtime_plugin_releases (
+      release_id TEXT PRIMARY KEY,
+      plugin_id TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS runtime_plugin_release_pins (
+      plugin_id TEXT NOT NULL,
+      release_id TEXT NOT NULL,
+      reference_kind TEXT NOT NULL,
+      reference_id TEXT NOT NULL,
+      PRIMARY KEY (plugin_id, release_id, reference_kind, reference_id)
+    );
+    CREATE TABLE IF NOT EXISTS turn_checkpoints (
+      turn_id TEXT PRIMARY KEY,
+      state_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS job_turn_checkpoints (
+      step_id TEXT PRIMARY KEY,
+      state_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS turn_events (
+      id TEXT PRIMARY KEY,
+      payload_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS event_write_failures (
+      id INTEGER PRIMARY KEY,
+      checkpoint_state_json TEXT
+    );
+  `)
+  if (includePermissionGrants) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS runtime_plugin_permission_grants (
+        plugin_id TEXT PRIMARY KEY
+      );
+    `)
+  }
+}
+
+test('v103 persists a fail-closed plugin mutation barrier across identity and checkpoint writes', () => {
+  const db = new Database(':memory:')
+  try {
+    createRuntimePluginMutationBarrierPrerequisites(db)
+    migrateToV103(db)
+    migrateToV103(db)
+
+    db.prepare(`
+      INSERT INTO runtime_plugin_mutation_barrier_generations (plugin_id, last_generation)
+      VALUES ('sample-plugin', 1)
+    `).run()
+    db.prepare(`
+      INSERT INTO runtime_plugin_mutation_barriers (
+        plugin_id, token, generation, operation, phase, owner_pid,
+        store_revision, created_at, heartbeat_at, recovery_required
+      ) VALUES ('sample-plugin', 'token-000000000001', 1, 'uninstall',
+        'guarding', 1, NULL, 1, 1, 0)
+    `).run()
+
+    for (const statement of [
+      "INSERT INTO runtime_plugin_states (plugin_id) VALUES ('sample-plugin')",
+      "INSERT INTO runtime_plugin_releases (release_id, plugin_id) VALUES ('release-a', 'sample-plugin')",
+      "INSERT INTO runtime_plugin_release_pins (plugin_id, release_id, reference_kind, reference_id) VALUES ('sample-plugin', 'release-a', 'manual', 'ref-a')",
+      "INSERT INTO runtime_plugin_permission_grants (plugin_id) VALUES ('sample-plugin')",
+    ]) {
+      assert.throws(
+        () => db.prepare(statement).run(),
+        /runtime plugin mutation blocked by package lifecycle barrier/u,
+        statement,
+      )
+    }
+
+    const runtimeReference = JSON.stringify({
+      executionEnvironment: {
+        runtimePlugins: [{ id: 'sample-plugin', releaseId: 'release-a' }],
+        unpinnedPluginIds: [],
+      },
+    })
+    const unpinnedReference = JSON.stringify({
+      executionEnvironment: {
+        runtimePlugins: [],
+        unpinnedPluginIds: ['sample-plugin'],
+      },
+    })
+    for (const [statement, id, payload] of [
+      ['INSERT INTO turn_checkpoints (turn_id, state_json) VALUES (?, ?)', 'turn-a', runtimeReference],
+      ['INSERT INTO job_turn_checkpoints (step_id, state_json) VALUES (?, ?)', 'step-a', unpinnedReference],
+      ['INSERT INTO turn_events (id, payload_json) VALUES (?, ?)', 'event-a', runtimeReference],
+      ['INSERT INTO event_write_failures (id, checkpoint_state_json) VALUES (?, ?)', 1, unpinnedReference],
+    ]) {
+      assert.throws(
+        () => db.prepare(statement).run(id, payload),
+        /runtime plugin mutation blocked by package lifecycle barrier/u,
+        statement,
+      )
+    }
+
+    assert.equal(
+      db.prepare("INSERT INTO runtime_plugin_states (plugin_id) VALUES ('other-plugin')").run().changes,
+      1,
+    )
+    assert.equal(
+      db.prepare('INSERT INTO turn_checkpoints (turn_id, state_json) VALUES (?, ?)')
+        .run('turn-other', JSON.stringify({
+          executionEnvironment: {
+            runtimePlugins: [{ id: 'other-plugin' }],
+            unpinnedPluginIds: [],
+          },
+        })).changes,
+      1,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v104 persists immutable plugin mutation recovery receipts', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV104(db)
+    migrateToV104(db)
+    const receipt = {
+      receiptId: 'recovery-receipt-0001',
+      pluginId: 'sample-plugin',
+      generation: 1,
+      tokenFingerprint: `sha256-${'a'.repeat(64)}`,
+      storeRevision: `sha256-${'b'.repeat(64)}`,
+      evidence: JSON.stringify({ packageAbsent: true, runtimeInactive: true }),
+    }
+    assert.equal(db.prepare(`
+      INSERT INTO runtime_plugin_mutation_recovery_receipts (
+        receipt_id, plugin_id, generation, operation, token_fingerprint,
+        barrier_store_revision, observed_store_revision, evidence_json, verified_at
+      ) VALUES (?, ?, ?, 'uninstall', ?, NULL, ?, ?, 100)
+    `).run(
+      receipt.receiptId,
+      receipt.pluginId,
+      receipt.generation,
+      receipt.tokenFingerprint,
+      receipt.storeRevision,
+      receipt.evidence,
+    ).changes, 1)
+    assert.throws(
+      () => db.prepare(`
+        UPDATE runtime_plugin_mutation_recovery_receipts SET verified_at = 101
+        WHERE receipt_id = ?
+      `).run(receipt.receiptId),
+      /recovery receipts are append-only/u,
+    )
+    assert.throws(
+      () => db.prepare(`
+        DELETE FROM runtime_plugin_mutation_recovery_receipts WHERE receipt_id = ?
+      `).run(receipt.receiptId),
+      /recovery receipts are append-only/u,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v102 adds nullable post-write identities and keeps legacy snapshots unbound', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec('CREATE TABLE users (id TEXT PRIMARY KEY); INSERT INTO users VALUES (\'owner-v102\');')
+    migrateToV46(db)
+    db.prepare(`
+      INSERT INTO file_snapshots (
+        id, user_id, session_id, turn_id, tool_call_id, tool_name,
+        file_path, before_path, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run('legacy-v102', 'owner-v102', 'session', 'turn', 'call', 'edit_file', 'file.txt', null, 1)
+
+    migrateToV102(db)
+    migrateToV102(db)
+
+    const columns = db.prepare('PRAGMA table_info(file_snapshots)').all().map((row) => row.name)
+    for (const column of ['after_exists', 'after_sha256', 'after_bytes', 'finalized_at']) {
+      assert.equal(columns.includes(column), true, column)
+    }
+    assert.deepEqual(
+      db.prepare(`
+        SELECT after_exists, after_sha256, after_bytes, finalized_at
+        FROM file_snapshots WHERE id = 'legacy-v102'
+      `).get(),
+      { after_exists: null, after_sha256: null, after_bytes: null, finalized_at: null },
+    )
+    assert.throws(
+      () => db.prepare('UPDATE file_snapshots SET after_sha256 = ? WHERE id = ?')
+        .run('not-a-digest', 'legacy-v102'),
+      /CHECK constraint failed/u,
+    )
+  } finally {
+    db.close()
+  }
+})
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -40,9 +275,1678 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 68)
+  assert.equal(LATEST_SCHEMA_VERSION, 105)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v95 removes only retired account fields and preserves local runtime data', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        credits INTEGER NOT NULL DEFAULT 0,
+        mfa_secret TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE sessions (
+        token TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE
+      );
+      CREATE TABLE ledger (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        package_id TEXT,
+        model_name TEXT,
+        credits INTEGER NOT NULL,
+        balance INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_ledger_user ON ledger(user_id, created_at);
+      CREATE TABLE session_meters (
+        session_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tokens_in INTEGER NOT NULL DEFAULT 0,
+        cost_credits INTEGER NOT NULL DEFAULT 0,
+        turns INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX idx_session_meters_user ON session_meters(user_id);
+      CREATE TABLE subagent_runs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        model_name TEXT,
+        credits INTEGER,
+        status TEXT NOT NULL
+      );
+      CREATE INDEX idx_subagent_runs_user ON subagent_runs(user_id);
+      CREATE TABLE side_effect_executions (
+        owner_id TEXT NOT NULL,
+        scope_key TEXT NOT NULL,
+        tool_call_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        outcome_json TEXT,
+        PRIMARY KEY (owner_id, scope_key, tool_call_id)
+      );
+      CREATE INDEX idx_side_effect_status ON side_effect_executions(owner_id, status);
+      INSERT INTO users VALUES ('owner-v95', 'owner-v95@example.com', 900, 'local-mfa', 1, 2);
+      INSERT INTO sessions VALUES ('session-v95', 'owner-v95');
+      INSERT INTO ledger VALUES ('ledger-v95', 'owner-v95', 'usage', NULL, 'local-model', 10, 900, 1);
+      INSERT INTO session_meters VALUES ('meter-v95', 'owner-v95', 42, 17, 3);
+      INSERT INTO subagent_runs VALUES ('run-v95', 'owner-v95', 'local-model', 8, 'completed');
+      INSERT INTO side_effect_executions
+        VALUES ('owner-v95', 'turn:v95', 'call-v95', 'committed', '{"ok":true}');
+    `)
+    const sideEffectRows = db.prepare(
+      'SELECT * FROM side_effect_executions ORDER BY owner_id, scope_key, tool_call_id',
+    ).all()
+    const sideEffectSchema = db.prepare(`
+      SELECT type, name, tbl_name, sql FROM sqlite_schema
+      WHERE tbl_name = 'side_effect_executions'
+      ORDER BY type, name
+    `).all()
+
+    migrateToV95(db)
+    migrateToV95(db)
+
+    assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ledger'").get(), undefined)
+    assert.equal(db.prepare('PRAGMA table_info(users)').all().some((row) => row.name === 'credits'), false)
+    assert.equal(db.prepare('PRAGMA table_info(session_meters)').all().some((row) => row.name === 'cost_credits'), false)
+    assert.equal(db.prepare('PRAGMA table_info(subagent_runs)').all().some((row) => row.name === 'credits'), false)
+    assert.deepEqual(
+      db.prepare('SELECT id, email, mfa_secret, created_at, updated_at FROM users').get(),
+      {
+        id: 'owner-v95',
+        email: 'owner-v95@example.com',
+        mfa_secret: 'local-mfa',
+        created_at: 1,
+        updated_at: 2,
+      },
+    )
+    assert.deepEqual(db.prepare('SELECT * FROM sessions').get(), {
+      token: 'session-v95',
+      user_id: 'owner-v95',
+    })
+    assert.deepEqual(db.prepare('SELECT * FROM session_meters').get(), {
+      session_id: 'meter-v95',
+      user_id: 'owner-v95',
+      tokens_in: 42,
+      turns: 3,
+    })
+    assert.deepEqual(db.prepare('SELECT * FROM subagent_runs').get(), {
+      id: 'run-v95',
+      user_id: 'owner-v95',
+      model_name: 'local-model',
+      status: 'completed',
+    })
+    assert.equal(Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_session_meters_user'").get()), true)
+    assert.equal(Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_subagent_runs_user'").get()), true)
+    assert.deepEqual(
+      db.prepare('SELECT * FROM side_effect_executions ORDER BY owner_id, scope_key, tool_call_id').all(),
+      sideEffectRows,
+    )
+    assert.deepEqual(db.prepare(`
+      SELECT type, name, tbl_name, sql FROM sqlite_schema
+      WHERE tbl_name = 'side_effect_executions'
+      ORDER BY type, name
+    `).all(), sideEffectSchema)
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
+  } finally {
+    db.close()
+  }
+})
+
+test('v95 rolls back every schema change and version write when a retired column is still referenced', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '94');
+      CREATE TABLE users (id TEXT PRIMARY KEY, credits INTEGER NOT NULL DEFAULT 0, keep TEXT);
+      CREATE TABLE ledger (id TEXT PRIMARY KEY, keep TEXT);
+      CREATE TABLE session_meters (
+        session_id TEXT PRIMARY KEY,
+        cost_credits INTEGER NOT NULL DEFAULT 0,
+        tokens_in INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX block_cost_credit_drop ON session_meters(cost_credits);
+      CREATE TABLE subagent_runs (id TEXT PRIMARY KEY, credits INTEGER, status TEXT);
+      INSERT INTO users VALUES ('owner', 5, 'user-data');
+      INSERT INTO ledger VALUES ('ledger', 'ledger-data');
+      INSERT INTO session_meters VALUES ('meter', 6, 7);
+      INSERT INTO subagent_runs VALUES ('run', 8, 'complete');
+    `)
+    createRuntimePluginMutationBarrierPrerequisites(db, { includePermissionGrants: false })
+
+    assert.throws(() => runSchemaMigrations(db), /cost_credits|error in index/u)
+    assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '94')
+    assert.equal(Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ledger'").get()), true)
+    assert.equal(db.prepare('PRAGMA table_info(users)').all().some((row) => row.name === 'credits'), true)
+    assert.equal(db.prepare('PRAGMA table_info(session_meters)').all().some((row) => row.name === 'cost_credits'), true)
+    assert.equal(db.prepare('PRAGMA table_info(subagent_runs)').all().some((row) => row.name === 'credits'), true)
+    assert.deepEqual(db.prepare('SELECT * FROM users').get(), { id: 'owner', credits: 5, keep: 'user-data' })
+    assert.deepEqual(db.prepare('SELECT * FROM ledger').get(), { id: 'ledger', keep: 'ledger-data' })
+
+    db.exec('DROP INDEX block_cost_credit_drop')
+    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      String(LATEST_SCHEMA_VERSION),
+    )
+    assert.deepEqual(db.prepare('SELECT * FROM ledger').get(), { id: 'ledger', keep: 'ledger-data' })
+  } finally {
+    db.close()
+  }
+})
+
+test('v95 refuses an extended historical ledger instead of deleting plugin-owned data', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '94');
+      CREATE TABLE users (id TEXT PRIMARY KEY, credits INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE ledger (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        package_id TEXT,
+        model_name TEXT,
+        credits INTEGER NOT NULL,
+        balance INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        plugin_payload TEXT
+      );
+      CREATE INDEX idx_ledger_user ON ledger(user_id, created_at);
+      CREATE TABLE session_meters (
+        session_id TEXT PRIMARY KEY,
+        cost_credits INTEGER NOT NULL DEFAULT 0,
+        tokens_in INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE subagent_runs (id TEXT PRIMARY KEY, credits INTEGER, status TEXT);
+      INSERT INTO users VALUES ('owner', 11);
+      INSERT INTO ledger VALUES ('entry', 'owner', 'usage', NULL, 'model', 2, 9, 1, 'keep-me');
+      INSERT INTO session_meters VALUES ('meter', 3, 4);
+      INSERT INTO subagent_runs VALUES ('run', 5, 'complete');
+    `)
+
+    assert.throws(
+      () => runSchemaMigrations(db),
+      (error) => error?.code === 'DB_MIGRATION_AMBIGUOUS_RETIRED_LEDGER',
+    )
+    assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '94')
+    assert.equal(db.prepare('SELECT plugin_payload FROM ledger').get().plugin_payload, 'keep-me')
+    assert.equal(db.prepare('PRAGMA table_info(users)').all().some((row) => row.name === 'credits'), true)
+    assert.equal(db.prepare('PRAGMA table_info(session_meters)').all().some((row) => row.name === 'cost_credits'), true)
+    assert.equal(db.prepare('PRAGMA table_info(subagent_runs)').all().some((row) => row.name === 'credits'), true)
+  } finally {
+    db.close()
+  }
+})
+
+test('v95 refuses external ledger dependencies before cascading or breaking plugin schema', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '94');
+      CREATE TABLE users (id TEXT PRIMARY KEY, credits INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE ledger (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        package_id TEXT,
+        model_name TEXT,
+        credits INTEGER NOT NULL,
+        balance INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_ledger_user ON ledger(user_id, created_at);
+      CREATE TABLE session_meters (
+        session_id TEXT PRIMARY KEY,
+        cost_credits INTEGER NOT NULL DEFAULT 0,
+        tokens_in INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE subagent_runs (id TEXT PRIMARY KEY, credits INTEGER, status TEXT);
+      CREATE TABLE plugin_ledger_refs (
+        id TEXT PRIMARY KEY,
+        ledger_id TEXT REFERENCES ledger(id) ON DELETE CASCADE,
+        payload TEXT NOT NULL
+      );
+      CREATE TABLE plugin_events (ledger_id TEXT NOT NULL);
+      CREATE VIEW plugin_ledger_view AS SELECT id, balance FROM ledger;
+      CREATE TRIGGER plugin_ledger_trigger AFTER INSERT ON plugin_events BEGIN
+        UPDATE ledger SET balance = balance WHERE id = NEW.ledger_id;
+      END;
+      INSERT INTO users VALUES ('owner', 11);
+      INSERT INTO ledger VALUES ('entry', 'owner', 'usage', NULL, 'model', 2, 9, 1);
+      INSERT INTO session_meters VALUES ('meter', 3, 4);
+      INSERT INTO subagent_runs VALUES ('run', 5, 'complete');
+      INSERT INTO plugin_ledger_refs VALUES ('plugin-row', 'entry', 'keep-me');
+    `)
+
+    assert.throws(
+      () => runSchemaMigrations(db),
+      (error) => {
+        if (error?.code !== 'DB_MIGRATION_EXTERNAL_LEDGER_DEPENDENCY') return false
+        const identities = new Set(error.dependencies?.map((item) => `${item.type}:${item.name}`))
+        return identities.has('foreign_key:plugin_ledger_refs')
+          && identities.has('view:plugin_ledger_view')
+          && identities.has('trigger:plugin_ledger_trigger')
+      },
+    )
+    assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '94')
+    assert.equal(db.prepare('SELECT payload FROM plugin_ledger_refs').get().payload, 'keep-me')
+    assert.equal(db.prepare('SELECT balance FROM plugin_ledger_view').get().balance, 9)
+    assert.equal(Boolean(db.prepare("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = 'plugin_ledger_trigger'").get()), true)
+    assert.equal(db.prepare('PRAGMA table_info(users)').all().some((row) => row.name === 'credits'), true)
+  } finally {
+    db.close()
+  }
+})
+
+test('v95 schema changes and version advancement roll back together when the version write fails', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '94');
+      CREATE TRIGGER block_v95_schema_version BEFORE UPDATE OF value ON meta
+      WHEN OLD.key = 'schema_version' AND NEW.value = '95'
+      BEGIN
+        SELECT RAISE(ABORT, 'blocked schema version');
+      END;
+      CREATE TABLE users (id TEXT PRIMARY KEY, credits INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE ledger (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        package_id TEXT,
+        model_name TEXT,
+        credits INTEGER NOT NULL,
+        balance INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_ledger_user ON ledger(user_id, created_at);
+      CREATE TABLE session_meters (
+        session_id TEXT PRIMARY KEY,
+        cost_credits INTEGER NOT NULL DEFAULT 0,
+        tokens_in INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE subagent_runs (id TEXT PRIMARY KEY, credits INTEGER, status TEXT);
+      INSERT INTO users VALUES ('owner', 11);
+      INSERT INTO ledger VALUES ('entry', 'owner', 'usage', NULL, 'model', 2, 9, 1);
+      INSERT INTO session_meters VALUES ('meter', 3, 4);
+      INSERT INTO subagent_runs VALUES ('run', 5, 'complete');
+    `)
+
+    assert.throws(() => runSchemaMigrations(db), /blocked schema version/u)
+    assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '94')
+    assert.equal(db.prepare('SELECT balance FROM ledger').get().balance, 9)
+    assert.equal(db.prepare('PRAGMA table_info(users)').all().some((row) => row.name === 'credits'), true)
+    assert.equal(db.prepare('PRAGMA table_info(session_meters)').all().some((row) => row.name === 'cost_credits'), true)
+    assert.equal(db.prepare('PRAGMA table_info(subagent_runs)').all().some((row) => row.name === 'credits'), true)
+  } finally {
+    db.close()
+  }
+})
+
+test('v94 creates an idempotent durable outbox without a session foreign key', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      INSERT INTO users (id) VALUES ('owner-v94');
+    `)
+    migrateToV94(db)
+    migrateToV94(db)
+    const foreignKeys = db.prepare('PRAGMA foreign_key_list(session_content_outbox)').all()
+    assert.deepEqual(foreignKeys.map((row) => row.table), ['users'])
+    assert.throws(() => db.prepare(`
+      INSERT INTO session_content_outbox (
+        event_id, user_id, session_id, event_type, payload_json, event_fingerprint,
+        available_at, created_at, updated_at
+      ) VALUES (?, ?, ?, 'unsupported', '{}', ?, 1, 1, 1)
+    `).run('event-v94', 'owner-v94', 'deleted-session', 'a'.repeat(64)))
+  } finally {
+    db.close()
+  }
+})
+
+test('v93 backfills durable turn execution fencing tokens idempotently', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      CREATE TABLE sessions (
+        token TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE
+      );
+      INSERT INTO users (id) VALUES ('owner-v93');
+      INSERT INTO sessions (token, user_id) VALUES ('session-v93', 'owner-v93');
+    `)
+    migrateToV43(db)
+    migrateToV44(db)
+    db.prepare(`
+      INSERT INTO turn_execution_leases (
+        user_id, session_id, turn_id, owner_id, acquired_at, expires_at,
+        cancel_requested_at, accepting_steering
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, 1)
+    `).run('owner-v93', 'session-v93', 'turn-v93', 'worker-v93', 100, 200)
+
+    migrateToV93(db)
+    migrateToV93(db)
+
+    assert.deepEqual(
+      db.prepare(`
+        SELECT fencing_token
+        FROM turn_execution_leases
+        WHERE user_id = ? AND session_id = ? AND turn_id = ?
+      `).get('owner-v93', 'session-v93', 'turn-v93'),
+      { fencing_token: 1 },
+    )
+    assert.deepEqual(
+      db.prepare(`
+        SELECT fencing_token
+        FROM turn_execution_fences
+        WHERE user_id = ? AND session_id = ? AND turn_id = ?
+      `).get('owner-v93', 'session-v93', 'turn-v93'),
+      { fencing_token: 1 },
+    )
+
+    db.prepare(`
+      DELETE FROM turn_execution_leases
+      WHERE user_id = ? AND session_id = ? AND turn_id = ?
+    `).run('owner-v93', 'session-v93', 'turn-v93')
+    assert.deepEqual(
+      db.prepare(`
+        SELECT fencing_token
+        FROM turn_execution_fences
+        WHERE user_id = ? AND session_id = ? AND turn_id = ?
+      `).get('owner-v93', 'session-v93', 'turn-v93'),
+      { fencing_token: 1 },
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v92 extends the shared side-effect ledger for request-scoped Hooks without rewriting identities', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV79(db)
+    db.prepare(`INSERT INTO side_effect_executions (
+      owner_id, scope_kind, scope_key, session_id, turn_id, job_id, step_id,
+      tool_call_id, idempotency_key, tool_name, args_digest, status,
+      created_at, updated_at, prepared_at
+    ) VALUES (?, 'job', ?, NULL, NULL, ?, ?, ?, ?, ?, ?, 'prepared', 1, 1, 1)`)
+      .run('owner-v92', '["job","job-v92","step-v92"]', 'job-v92', 'step-v92',
+        'call-v92', 'idem-v92', 'write_file', 'a'.repeat(64))
+
+    migrateToV92(db)
+    migrateToV92(db)
+
+    const columns = new Set(db.prepare('PRAGMA table_info(side_effect_executions)').all().map((row) => row.name))
+    assert.equal(columns.has('request_id'), true)
+    assert.equal(columns.has('effect_kind'), true)
+    assert.deepEqual(
+      db.prepare('SELECT tool_call_id, idempotency_key, effect_kind, request_id FROM side_effect_executions').get(),
+      { tool_call_id: 'call-v92', idempotency_key: 'idem-v92', effect_kind: 'tool', request_id: null },
+    )
+    db.prepare(`INSERT INTO side_effect_executions (
+      owner_id, scope_kind, scope_key, request_id, effect_kind, tool_call_id,
+      idempotency_key, tool_name, args_digest, status, created_at, updated_at, prepared_at
+    ) VALUES (?, 'request', ?, ?, 'hook', ?, ?, ?, ?, 'prepared', 2, 2, 2)`)
+      .run('owner-v92', '["request","request-v92"]', 'request-v92', 'hook-call-v92',
+        'hook-idem-v92', 'hook:pre_tool_use:http', 'b'.repeat(64))
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS count FROM side_effect_executions WHERE effect_kind = 'hook'").get().count,
+      1,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v88 persists fenced, idempotent evolution operations with user cleanup', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec("CREATE TABLE users (id TEXT PRIMARY KEY); INSERT INTO users VALUES ('user-1');")
+    migrateToV88(db)
+    migrateToV88(db)
+    const requestFingerprint = 'a'.repeat(64)
+    db.prepare(`
+      INSERT INTO evolution_operations (
+        id, user_id, kind, idempotency_key, request_fingerprint, request_json,
+        state, stage, checkpoint_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 'prepared', '{}', ?, ?)
+    `).run('operation-1', 'user-1', 'replay', 'retry-key', requestFingerprint, '{}', 1, 1)
+    assert.throws(() => db.prepare(`
+      INSERT INTO evolution_operations (
+        id, user_id, kind, idempotency_key, request_fingerprint, request_json,
+        state, stage, checkpoint_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 'prepared', '{}', ?, ?)
+    `).run('operation-2', 'user-1', 'replay', 'retry-key', requestFingerprint, '{}', 2, 2),
+    /UNIQUE constraint failed/)
+    assert.throws(() => db.prepare(`
+      INSERT INTO evolution_operations (
+        id, user_id, kind, idempotency_key, request_fingerprint, request_json,
+        state, stage, checkpoint_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'running', 'model_call', '{}', ?, ?)
+    `).run('operation-unfenced', 'user-1', 'candidate', 'unfenced', requestFingerprint, '{}', 2, 2),
+    /CHECK constraint failed/)
+    db.prepare("DELETE FROM users WHERE id = 'user-1'").run()
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM evolution_operations').get().count, 0)
+  } finally {
+    db.close()
+  }
+})
+
+test('v89 adds durable leases and treats legacy running operations as expired', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec("CREATE TABLE users (id TEXT PRIMARY KEY); INSERT INTO users VALUES ('user-1');")
+    migrateToV88(db)
+    const requestFingerprint = 'b'.repeat(64)
+    db.prepare(`
+      INSERT INTO evolution_operations (
+        id, user_id, kind, idempotency_key, request_fingerprint, request_json,
+        state, stage, checkpoint_json, worker_token, created_at, updated_at
+      ) VALUES (?, ?, 'candidate', ?, ?, '{}', 'running', 'model_call', '{}', ?, 10, 9999999999999)
+    `).run('legacy-running', 'user-1', 'legacy-running-key', requestFingerprint, 'legacy-token')
+
+    migrateToV89(db)
+    migrateToV89(db)
+    const row = db.prepare(`
+      SELECT lease_owner_id, lease_expires_at
+      FROM evolution_operations WHERE id = 'legacy-running'
+    `).get()
+    assert.equal(row.lease_owner_id, 'legacy:legacy-token')
+    assert.equal(row.lease_expires_at, 0)
+    assert.throws(() => db.prepare(`
+      UPDATE evolution_operations
+      SET state = 'pending', worker_token = NULL
+      WHERE id = 'legacy-running'
+    `).run(), /invalid evolution operation lease state/)
+  } finally {
+    db.close()
+  }
+})
+
+test('v90 backfills one durable recovery challenge and enforces its state invariant', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec("CREATE TABLE users (id TEXT PRIMARY KEY); INSERT INTO users VALUES ('user-1');")
+    migrateToV88(db)
+    migrateToV89(db)
+    const requestFingerprint = 'c'.repeat(64)
+    const insert = db.prepare(`
+      INSERT INTO evolution_operations (
+        id, user_id, kind, idempotency_key, request_fingerprint, request_json,
+        state, stage, checkpoint_json, created_at, updated_at
+      ) VALUES (?, 'user-1', 'candidate', ?, ?, '{}', ?, ?, '{}', 10, 20)
+    `)
+    insert.run(
+      'legacy-blocked',
+      'legacy-blocked-key',
+      requestFingerprint,
+      'blocked',
+      'model_outcome_unknown',
+    )
+    insert.run('legacy-pending', 'legacy-pending-key', requestFingerprint, 'pending', 'prepared')
+
+    migrateToV90(db)
+    const first = db.prepare(`
+      SELECT recovery_challenge, recovery_revision
+      FROM evolution_operations WHERE id = 'legacy-blocked'
+    `).get()
+    assert.match(first.recovery_challenge, /^[0-9a-f-]{36}$/u)
+    assert.equal(first.recovery_revision, 1)
+
+    migrateToV90(db)
+    const repeated = db.prepare(`
+      SELECT recovery_challenge, recovery_revision
+      FROM evolution_operations WHERE id = 'legacy-blocked'
+    `).get()
+    assert.deepEqual(repeated, first)
+    assert.deepEqual(
+      db.prepare(`
+        SELECT recovery_challenge, recovery_revision
+        FROM evolution_operations WHERE id = 'legacy-pending'
+      `).get(),
+      { recovery_challenge: null, recovery_revision: 0 },
+    )
+    assert.throws(() => db.prepare(`
+      UPDATE evolution_operations SET recovery_challenge = ? WHERE id = 'legacy-pending'
+    `).run(randomUUID()), /invalid evolution operation recovery state/)
+    assert.throws(() => db.prepare(`
+      UPDATE evolution_operations SET recovery_challenge = NULL WHERE id = 'legacy-blocked'
+    `).run(), /invalid evolution operation recovery state/)
+  } finally {
+    db.close()
+  }
+})
+
+test('v84 persists deterministic config reviews and one immutable apply/reversal chain', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_candidates (id TEXT PRIMARY KEY);
+      INSERT INTO users (id) VALUES ('user-1');
+      INSERT INTO evolution_candidates (id) VALUES ('candidate-1');
+    `)
+    migrateToV84(db)
+    migrateToV84(db)
+    for (const table of [
+      'evolution_config_replays',
+      'evolution_config_evaluations',
+      'evolution_config_approval_decisions',
+      'evolution_config_change_events',
+    ]) {
+      assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table))
+    }
+    const digest = (character) => character.repeat(64)
+    db.prepare(`
+      INSERT INTO evolution_config_replays (
+        id, user_id, candidate_id, baseline_document_json, proposed_document_json,
+        baseline_document_sha256, proposed_document_sha256,
+        baseline_effective_sha256, proposed_effective_sha256,
+        isolation_mode, report_json, run_fingerprint, created_at
+      ) VALUES ('replay-1', 'user-1', 'candidate-1', '{}', '{}', ?, ?, ?, ?,
+        'config_parse_no_side_effects', '{}', ?, 1)
+    `).run(digest('a'), digest('b'), digest('c'), digest('d'), digest('e'))
+    db.prepare(`
+      INSERT INTO evolution_config_evaluations (
+        id, user_id, replay_id, candidate_id, policy_version, verdict, summary,
+        issues_json, metrics_json, evaluation_fingerprint, created_at
+      ) VALUES ('evaluation-1', 'user-1', 'replay-1', 'candidate-1', 'v1', 'pass',
+        'accepted', '[]', '{}', ?, 2)
+    `).run(digest('f'))
+    db.prepare(`
+      INSERT INTO evolution_config_approval_decisions (
+        id, user_id, evaluation_id, replay_id, candidate_id, decision, reason,
+        candidate_sha256, replay_fingerprint, evaluation_fingerprint,
+        baseline_document_sha256, proposed_document_sha256, review_snapshot_json,
+        approver_mode, decision_fingerprint, created_at
+      ) VALUES ('approval-1', 'user-1', 'evaluation-1', 'replay-1', 'candidate-1',
+        'approved', 'reviewed', ?, ?, ?, ?, ?, '{}', 'local_owner_loopback', ?, 3)
+    `).run(digest('g'), digest('e'), digest('f'), digest('a'), digest('b'), digest('h'))
+    const insertEvent = db.prepare(`
+      INSERT INTO evolution_config_change_events (
+        id, user_id, approval_id, candidate_id, root_apply_id, operation,
+        before_document_json, after_document_json,
+        before_document_sha256, after_document_sha256, expected_current_sha256,
+        reason, confirmation_sha256, event_fingerprint, created_at
+      ) VALUES (?, 'user-1', 'approval-1', 'candidate-1', ?, ?, '{}', '{}', ?, ?, ?,
+        'reviewed', ?, ?, ?)
+    `)
+    insertEvent.run('apply-1', null, 'apply', digest('a'), digest('b'), digest('a'), digest('i'), digest('j'), 4)
+    assert.throws(
+      () => insertEvent.run('apply-2', null, 'apply', digest('a'), digest('b'), digest('a'), digest('i'), digest('k'), 5),
+      /UNIQUE constraint failed/,
+    )
+    insertEvent.run('rollback-1', 'apply-1', 'rollback', digest('b'), digest('a'), digest('b'), digest('l'), digest('m'), 6)
+    assert.throws(
+      () => insertEvent.run('revoke-1', 'apply-1', 'revoke', digest('b'), digest('a'), digest('b'), digest('n'), digest('o'), 7),
+      /UNIQUE constraint failed/,
+    )
+    assert.throws(
+      () => insertEvent.run('bad-1', null, 'publish', digest('a'), digest('b'), digest('a'), digest('p'), digest('q'), 8),
+      /CHECK constraint failed/,
+    )
+    db.prepare("DELETE FROM users WHERE id = 'user-1'").run()
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM evolution_config_replays').get().count, 0)
+  } finally {
+    db.close()
+  }
+})
+
+test('v83 opts production monitoring out by default and persists promotion grading provenance', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_canary_releases (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_canary_assignments (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_canary_outcomes (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_promotion_assignments (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_promotion_outcomes (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_promotions (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_canary_rollbacks (id TEXT PRIMARY KEY);
+    `)
+    migrateToV82(db)
+    migrateToV83(db)
+    migrateToV83(db)
+
+    const policyColumn = db.prepare(`
+      SELECT * FROM pragma_table_info('evolution_canary_grader_policies')
+      WHERE name = 'production_monitoring_enabled'
+    `).get()
+    assert.equal(policyColumn.notnull, 1)
+    assert.equal(String(policyColumn.dflt_value), '0')
+    for (const table of [
+      'evolution_promotion_outcome_snapshots',
+      'evolution_promotion_online_grades',
+      'evolution_promotion_online_guard_evaluations',
+      'evolution_promotion_rollbacks',
+    ]) {
+      assert.ok(
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table),
+        table,
+      )
+    }
+  } finally {
+    db.close()
+  }
+})
+
+test('v82 persists immutable online grader policy, per-outcome evidence, and guard provenance', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_canary_releases (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_canary_assignments (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_canary_outcomes (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_canary_rollback_evaluations (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_canary_rollback_policies (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_promotions (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_canary_rollbacks (
+        id TEXT PRIMARY KEY,
+        evaluation_id TEXT REFERENCES evolution_canary_rollback_evaluations(id)
+      );
+    `)
+    migrateToV82(db)
+    migrateToV82(db)
+    for (const table of [
+      'evolution_canary_grader_policies',
+      'evolution_canary_outcome_snapshots',
+      'evolution_canary_online_grades',
+      'evolution_canary_online_guard_evaluations',
+    ]) {
+      assert.equal(
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)?.[1],
+        1,
+        table,
+      )
+    }
+    const rollbackColumns = new Set(
+      db.prepare('PRAGMA table_info(evolution_canary_rollbacks)').all().map((column) => column.name),
+    )
+    assert.equal(rollbackColumns.has('online_guard_evaluation_id'), true)
+    const promotionColumns = new Set(
+      db.prepare('PRAGMA table_info(evolution_promotions)').all().map((column) => column.name),
+    )
+    assert.equal(promotionColumns.has('online_grader_policy_fingerprint'), true)
+    assert.equal(promotionColumns.has('online_guard_evaluation_fingerprint'), true)
+  } finally {
+    db.close()
+  }
+})
+
+test('v81 persists immutable production promotions, active pointers, assignments, and outcomes', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV81(db)
+    migrateToV81(db)
+    for (const table of [
+      'evolution_promotions',
+      'evolution_promotion_events',
+      'evolution_active_promotions',
+      'evolution_promotion_assignments',
+      'evolution_promotion_outcomes',
+    ]) {
+      assert.ok(
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table),
+        table,
+      )
+    }
+    const promotionColumns = new Set(
+      db.prepare('PRAGMA table_info(evolution_promotions)').all().map((column) => column.name),
+    )
+    for (const column of [
+      'candidate_content',
+      'rollback_policy_fingerprint',
+      'promotion_fingerprint',
+    ]) assert.equal(promotionColumns.has(column), true, column)
+    const assignmentColumns = new Set(
+      db.prepare('PRAGMA table_info(evolution_promotion_assignments)').all()
+        .map((column) => column.name),
+    )
+    assert.equal(assignmentColumns.has('prompt_content'), true)
+    assert.equal(assignmentColumns.has('promotion_fingerprint'), true)
+  } finally {
+    db.close()
+  }
+})
+
+test('v80 separates recovery intent and operator audit from replay outcomes', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV79(db)
+    migrateToV80(db)
+    migrateToV80(db)
+    const columns = new Set(db.prepare('PRAGMA table_info(side_effect_executions)').all()
+      .map((column) => column.name))
+    assert.equal(columns.has('intent_json'), true)
+    assert.equal(columns.has('audit_json'), true)
+  } finally {
+    db.close()
+  }
+})
+
+test('v96 adds nullable recovery plans without rewriting existing side-effect rows', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV79(db)
+    migrateToV92(db)
+    const insert = db.prepare(`INSERT INTO side_effect_executions (
+      owner_id, scope_kind, scope_key, job_id, step_id, tool_call_id,
+      idempotency_key, tool_name, args_digest, status, outcome_json,
+      created_at, updated_at, prepared_at, executing_at, finished_at
+    ) VALUES (?, 'job', ?, ?, ?, ?, ?, 'write_file', ?, ?, ?, ?, ?, ?, ?, ?)`)
+    const insertRows = db.transaction(() => {
+      for (let index = 0; index < 239; index += 1) {
+        const timestamp = index + 1
+        const terminal = index % 2 === 0
+        insert.run(
+          `owner-${index % 3}`,
+          `job:${index}`,
+          `job-${index}`,
+          `step-${index}`,
+          `call-${index}`,
+          `key-${index}`,
+          String(index).padStart(64, '0'),
+          terminal ? 'committed' : 'executing',
+          terminal ? JSON.stringify({ ok: true, index }) : null,
+          timestamp,
+          timestamp,
+          timestamp,
+          terminal ? timestamp : timestamp,
+          terminal ? timestamp : null,
+        )
+      }
+    })
+    insertRows()
+    const before = db.prepare(`SELECT owner_id, scope_key, tool_call_id, status, outcome_json
+      FROM side_effect_executions ORDER BY scope_key`).all()
+
+    migrateToV96(db)
+    migrateToV96(db)
+
+    const columns = db.prepare('PRAGMA table_info(side_effect_executions)').all()
+      .filter((column) => column.name === 'recovery_json')
+    assert.equal(columns.length, 1)
+    assert.equal(columns[0].notnull, 0)
+    assert.deepEqual(
+      db.prepare(`SELECT owner_id, scope_key, tool_call_id, status, outcome_json
+        FROM side_effect_executions ORDER BY scope_key`).all(),
+      before,
+    )
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS count FROM side_effect_executions WHERE recovery_json IS NULL').get().count,
+      239,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v97 adds nullable file metadata without rewriting legacy compaction archives', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE compaction_archive (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        replaced_message_count INTEGER NOT NULL,
+        archived_messages_json TEXT NOT NULL,
+        summary_text TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      INSERT INTO compaction_archive VALUES (
+        'legacy-archive', 'owner-a', 'session-a', 1,
+        '[{"role":"user","content":"legacy body"}]', 'summary', 7
+      );
+    `)
+
+    migrateToV97(db)
+    migrateToV97(db)
+
+    const columns = new Set(db.prepare('PRAGMA table_info(compaction_archive)').all()
+      .map((column) => column.name))
+    for (const column of ['storage_path', 'size_bytes', 'sha256']) {
+      assert.equal(columns.has(column), true, column)
+    }
+    assert.deepEqual(db.prepare(`
+      SELECT archived_messages_json, storage_path, size_bytes, sha256
+      FROM compaction_archive WHERE id = 'legacy-archive'
+    `).get(), {
+      archived_messages_json: '[{"role":"user","content":"legacy body"}]',
+      storage_path: null,
+      size_bytes: null,
+      sha256: null,
+    })
+    const insertFileBacked = db.prepare(`
+      INSERT INTO compaction_archive (
+        id, user_id, session_id, replaced_message_count,
+        archived_messages_json, summary_text, created_at, storage_path
+      ) VALUES (?, ?, ?, 0, '[]', '', 8, 'v1/shared.json')
+    `)
+    insertFileBacked.run('first-file', 'owner-b', 'session-b')
+    assert.throws(
+      () => insertFileBacked.run('second-file', 'owner-c', 'session-c'),
+      /UNIQUE constraint failed/u,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v98 creates idempotent user-owned managed attachment upload leases', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      INSERT INTO users (id) VALUES ('upload-owner');
+    `)
+
+    migrateToV98(db)
+    migrateToV98(db)
+
+    assert.deepEqual(
+      db.prepare('PRAGMA table_info(managed_attachment_upload_leases)').all()
+        .map((column) => column.name),
+      [
+        'upload_id',
+        'user_id',
+        'lease_owner',
+        'lease_pid',
+        'lease_expires_at',
+        'created_at',
+        'updated_at',
+      ],
+    )
+    assert.deepEqual(
+      db.prepare('PRAGMA foreign_key_list(managed_attachment_upload_leases)').all()
+        .map((foreignKey) => ({ table: foreignKey.table, from: foreignKey.from, onDelete: foreignKey.on_delete })),
+      [{ table: 'users', from: 'user_id', onDelete: 'CASCADE' }],
+    )
+    assert.ok(db.prepare(`
+      SELECT 1 FROM sqlite_master
+      WHERE type = 'index' AND name = 'idx_managed_attachment_upload_leases_user'
+    `).get())
+
+    db.prepare(`
+      INSERT INTO managed_attachment_upload_leases
+        (upload_id, user_id, lease_owner, lease_pid, lease_expires_at, created_at, updated_at)
+      VALUES ('upload-v98', 'upload-owner', 'worker-v98', 123, 300, 100, 100)
+    `).run()
+    assert.throws(() => db.prepare(`
+      INSERT INTO managed_attachment_upload_leases
+        (upload_id, user_id, lease_owner, lease_pid, lease_expires_at, created_at, updated_at)
+      VALUES ('bad-pid-v98', 'upload-owner', 'worker-v98', 0, 300, 100, 100)
+    `).run(), /CHECK constraint failed/u)
+    db.prepare("DELETE FROM users WHERE id = 'upload-owner'").run()
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS count FROM managed_attachment_upload_leases').get().count,
+      0,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v99 extends legacy user-data clear journals with constrained compaction governance metadata', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV77(db)
+    db.prepare(`INSERT INTO user_data_clear_operations (
+      operation_id, owner_id, lease_owner, lease_pid, lease_expires_at,
+      status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run('legacy-clear', 'legacy-owner', 'legacy-lease', 123, 1_000, 'staging', 10, 10)
+
+    migrateToV99(db)
+    migrateToV99(db)
+
+    assert.deepEqual(
+      db.prepare('PRAGMA table_info(user_data_clear_operations)').all()
+        .map((column) => column.name),
+      [
+        'operation_id',
+        'owner_id',
+        'lease_owner',
+        'lease_pid',
+        'lease_expires_at',
+        'status',
+        'created_at',
+        'updated_at',
+        'operation_kind',
+        'session_id',
+        'compaction_port_id',
+        'compaction_governance_version',
+        'compaction_digest',
+        'compaction_stage_token',
+      ],
+    )
+    assert.deepEqual(db.prepare(`
+      SELECT operation_kind, session_id, compaction_port_id,
+        compaction_governance_version, compaction_digest, compaction_stage_token
+      FROM user_data_clear_operations WHERE operation_id = 'legacy-clear'
+    `).get(), {
+      operation_kind: 'user_clear',
+      session_id: null,
+      compaction_port_id: null,
+      compaction_governance_version: null,
+      compaction_digest: null,
+      compaction_stage_token: null,
+    })
+    assert.ok(db.prepare(`
+      SELECT 1 FROM sqlite_master
+      WHERE type = 'index' AND name = 'idx_user_data_clear_operations_status'
+    `).get())
+
+    const insert = db.prepare(`INSERT INTO user_data_clear_operations (
+      operation_id, owner_id, lease_owner, lease_pid, lease_expires_at,
+      status, created_at, updated_at, operation_kind, session_id,
+      compaction_port_id, compaction_governance_version,
+      compaction_digest, compaction_stage_token
+    ) VALUES (
+      @operationId, @ownerId, 'lease-v99', 456, 2_000,
+      'staging', 20, 20, @operationKind, @sessionId,
+      @portId, @governanceVersion, @digest, @stageToken
+    )`)
+    let sequence = 0
+    const values = (overrides = {}) => {
+      sequence += 1
+      return {
+        operationId: `operation-v99-${sequence}`,
+        ownerId: `owner-v99-${sequence}`,
+        operationKind: 'user_clear',
+        sessionId: null,
+        portId: null,
+        governanceVersion: null,
+        digest: null,
+        stageToken: null,
+        ...overrides,
+      }
+    }
+    const digest = 'a'.repeat(64)
+    insert.run(values({
+      operationKind: 'session_delete',
+      sessionId: 'session-v99',
+      portId: 'builtin.sqlite-file',
+      governanceVersion: 1,
+      digest,
+      stageToken: 'stage-v99',
+    }))
+
+    for (const invalid of [
+      { operationKind: 'unknown' },
+      { operationKind: 'user_clear', sessionId: 'session-v99' },
+      { operationKind: 'session_delete', sessionId: null },
+      { operationKind: 'session_delete', sessionId: ' session-v99 ' },
+      { governanceVersion: 0 },
+      { governanceVersion: 1.5 },
+      { digest: 'a'.repeat(63) },
+      { digest: 'A'.repeat(64) },
+      { digest: `${'a'.repeat(63)}g` },
+      { portId: ' ' },
+      { stageToken: ' stage-v99 ' },
+    ]) {
+      assert.throws(() => insert.run(values(invalid)), /CHECK constraint failed/u)
+    }
+  } finally {
+    db.close()
+  }
+})
+
+test('v100 persists exact runtime plugin permission grants with strict ownership cleanup', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    migrateToV60(db)
+    migrateToV100(db)
+    migrateToV100(db)
+    db.prepare(`
+      INSERT INTO runtime_plugin_states (plugin_id, enabled, updated_at)
+      VALUES ('permission-test', 0, 1)
+    `).run()
+
+    const approvalDigest = `sha256-${'a'.repeat(64)}`
+    const sourceDigest = `sha256-${'b'.repeat(64)}`
+    db.prepare(`
+      INSERT INTO runtime_plugin_permission_grants (
+        plugin_id, approval_digest, source_digest, permissions_json, granted_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run('permission-test', approvalDigest, sourceDigest, '["runtime:tool"]', 10, 10)
+    assert.deepEqual(db.prepare(`
+      SELECT plugin_id, approval_digest, source_digest, permissions_json, granted_at, updated_at
+      FROM runtime_plugin_permission_grants
+    `).get(), {
+      plugin_id: 'permission-test',
+      approval_digest: approvalDigest,
+      source_digest: sourceDigest,
+      permissions_json: '["runtime:tool"]',
+      granted_at: 10,
+      updated_at: 10,
+    })
+    assert.ok(db.prepare(`
+      SELECT 1 FROM sqlite_master
+      WHERE type = 'index' AND name = 'idx_runtime_plugin_permission_grants_updated'
+    `).get())
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_list(runtime_plugin_permission_grants)').all()
+      .map(({ table, from, to, on_delete: onDelete }) => ({ table, from, to, onDelete })), [{
+      table: 'runtime_plugin_states',
+      from: 'plugin_id',
+      to: 'plugin_id',
+      onDelete: 'CASCADE',
+    }])
+
+    for (const invalid of [
+      { column: 'approval_digest', value: `sha256-${'a'.repeat(63)}` },
+      { column: 'approval_digest', value: `sha256-${'A'.repeat(64)}` },
+      { column: 'source_digest', value: `sha256-${'g'.repeat(64)}` },
+      { column: 'granted_at', value: -1 },
+      { column: 'updated_at', value: 9 },
+    ]) {
+      assert.throws(
+        () => db.prepare(`UPDATE runtime_plugin_permission_grants SET ${invalid.column} = ?`).run(invalid.value),
+        /CHECK constraint failed/u,
+      )
+    }
+
+    db.prepare("DELETE FROM runtime_plugin_states WHERE plugin_id = 'permission-test'").run()
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM runtime_plugin_permission_grants').get().count, 0)
+  } finally {
+    db.close()
+  }
+})
+
+test('v101 binds runtime plugin grants to an owner and drops ambiguous v100 consent', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `)
+    migrateToV60(db)
+    migrateToV100(db)
+    db.prepare(`
+      INSERT INTO runtime_plugin_states (plugin_id, enabled, updated_at)
+      VALUES ('permission-owner-test', 0, 1)
+    `).run()
+    db.prepare(`
+      INSERT INTO runtime_plugin_permission_grants (
+        plugin_id, approval_digest, source_digest, permissions_json, granted_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      'permission-owner-test',
+      `sha256-${'a'.repeat(64)}`,
+      `sha256-${'b'.repeat(64)}`,
+      '["runtime:tool"]',
+      10,
+      10,
+    )
+
+    migrateToV101(db)
+
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM runtime_plugin_permission_grants').get().count, 0)
+    assert.equal(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'runtime_plugin_permission_grants_v100'").get(),
+      undefined,
+    )
+    assert.deepEqual(
+      db.prepare('PRAGMA foreign_key_list(runtime_plugin_permission_grants)').all()
+        .map(({ table, from, to, on_delete: onDelete }) => ({ table, from, to, onDelete }))
+        .sort((left, right) => left.from.localeCompare(right.from)),
+      [
+        { table: 'users', from: 'owner_id', to: 'id', onDelete: 'CASCADE' },
+        { table: 'runtime_plugin_states', from: 'plugin_id', to: 'plugin_id', onDelete: 'CASCADE' },
+      ],
+    )
+    for (const indexName of [
+      'idx_runtime_plugin_permission_grants_owner',
+      'idx_runtime_plugin_permission_grants_updated',
+    ]) {
+      assert.ok(db.prepare(`
+        SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?
+      `).get(indexName), indexName)
+    }
+
+    db.prepare(`
+      INSERT INTO users (id, email, created_at, updated_at)
+      VALUES ('owner-v101', 'owner-v101@example.test', 1, 1)
+    `).run()
+    const insertGrant = db.prepare(`
+      INSERT INTO runtime_plugin_permission_grants (
+        plugin_id, owner_id, approval_digest, source_digest,
+        permissions_json, granted_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `)
+    assert.throws(
+      () => insertGrant.run(
+        'permission-owner-test',
+        'missing-owner',
+        `sha256-${'c'.repeat(64)}`,
+        `sha256-${'d'.repeat(64)}`,
+        '["runtime:tool"]',
+        20,
+        20,
+      ),
+      /FOREIGN KEY constraint failed/u,
+    )
+
+    insertGrant.run(
+      'permission-owner-test',
+      'owner-v101',
+      `sha256-${'c'.repeat(64)}`,
+      `sha256-${'d'.repeat(64)}`,
+      '["runtime:tool","sandbox:fs"]',
+      20,
+      20,
+    )
+    migrateToV101(db)
+    assert.deepEqual(db.prepare(`
+      SELECT plugin_id, owner_id, permissions_json, granted_at, updated_at
+      FROM runtime_plugin_permission_grants
+    `).get(), {
+      plugin_id: 'permission-owner-test',
+      owner_id: 'owner-v101',
+      permissions_json: '["runtime:tool","sandbox:fs"]',
+      granted_at: 20,
+      updated_at: 20,
+    })
+
+    for (const permissionsJson of [
+      'not-json',
+      '{}',
+      '[]',
+      JSON.stringify(Array.from({ length: 65 }, (_, index) => `permission:${index}`)),
+      '[1]',
+      '["Runtime:tool"]',
+      '[" leading-space"]',
+      `["${'a'.repeat(129)}"]`,
+    ]) {
+      assert.throws(
+        () => db.prepare(`
+          UPDATE runtime_plugin_permission_grants SET permissions_json = ?
+          WHERE plugin_id = 'permission-owner-test'
+        `).run(permissionsJson),
+        /(CHECK constraint failed|invalid runtime plugin permission identifier|malformed JSON)/u,
+        permissionsJson,
+      )
+    }
+
+    db.prepare("DELETE FROM users WHERE id = 'owner-v101'").run()
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM runtime_plugin_permission_grants').get().count, 0)
+  } finally {
+    db.close()
+  }
+})
+
+test('v79 persists scoped side-effect execution identities and guarded states', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV79(db)
+    migrateToV79(db)
+    const columns = new Set(db.prepare('PRAGMA table_info(side_effect_executions)').all()
+      .map((column) => column.name))
+    for (const column of [
+      'owner_id', 'scope_kind', 'scope_key', 'session_id', 'turn_id', 'job_id', 'step_id',
+      'tool_call_id', 'idempotency_key', 'tool_name', 'args_digest', 'status', 'outcome_json',
+    ]) assert.equal(columns.has(column), true, column)
+
+    db.prepare(`INSERT INTO side_effect_executions (
+      owner_id, scope_kind, scope_key, job_id, step_id, tool_call_id,
+      idempotency_key, tool_name, args_digest, status,
+      created_at, updated_at, prepared_at
+    ) VALUES (?, 'job', ?, ?, ?, ?, ?, ?, ?, 'prepared', 1, 1, 1)`)
+      .run('owner-a', 'job:one', 'job-a', 'step-a', 'call-a', 'key-a', 'bash_exec', 'digest-a')
+    assert.throws(
+      () => db.prepare("UPDATE side_effect_executions SET status = 'complete' WHERE tool_call_id = 'call-a'").run(),
+      /CHECK constraint failed/,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v74-v75 persist immutable runtime plugin releases and revisioned authoritative pointers', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV60(db)
+    migrateToV74(db)
+    migrateToV74(db)
+    migrateToV75(db)
+    migrateToV75(db)
+
+    const stateColumns = new Set(db.prepare('PRAGMA table_info(runtime_plugin_states)').all().map((row) => row.name))
+    for (const column of [
+      'active_release_id',
+      'previous_release_id',
+      'release_revision',
+      'last_rollback_status',
+      'last_rollback_from_release_id',
+      'last_rollback_to_release_id',
+      'last_rollback_reason',
+      'last_rollback_at',
+    ]) assert.equal(stateColumns.has(column), true, column)
+
+    db.prepare(`INSERT INTO runtime_plugin_releases (
+      release_id, plugin_id, source_digest, source_text, plugin_snapshot_json,
+      validation_status, health_status, created_at
+    ) VALUES (?, ?, ?, ?, ?, 'passed', 'passed', ?)`)
+      .run('rel-test', 'test-transformer', `sha256-${'a'.repeat(64)}`, 'source', '{"id":"test-transformer"}', 10)
+
+    assert.throws(
+      () => db.prepare('UPDATE runtime_plugin_releases SET source_text = ? WHERE release_id = ?')
+        .run('mutated', 'rel-test'),
+      /immutable/,
+    )
+    assert.throws(
+      () => db.prepare('DELETE FROM runtime_plugin_releases WHERE release_id = ?').run('rel-test'),
+      /immutable/,
+    )
+    assert.throws(
+      () => db.prepare(`INSERT INTO runtime_plugin_releases (
+        release_id, plugin_id, source_digest, source_text, plugin_snapshot_json,
+        validation_status, health_status, created_at
+      ) VALUES (?, ?, ?, ?, ?, 'passed', 'passed', ?)`)
+        .run('rel-test', 'test-transformer', `sha256-${'a'.repeat(64)}`, 'source', '{"id":"test-transformer"}', 12),
+      /UNIQUE constraint failed/,
+    )
+    assert.throws(
+      () => db.prepare(`INSERT INTO runtime_plugin_releases (
+        release_id, plugin_id, source_digest, source_text, plugin_snapshot_json,
+        validation_status, health_status, created_at
+      ) VALUES ('rel-invalid', 'test-transformer', ?, 'source', '{}', 'passed', 'unknown', 11)`)
+        .run(`sha256-${'b'.repeat(64)}`),
+      /CHECK constraint failed/,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v76 backfills complete release identities without trusting damaged legacy capabilities', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV60(db)
+    migrateToV74(db)
+    migrateToV75(db)
+    const source = "function transform(input) { return input }"
+    const sourceDigest = `sha256-${createHash('sha256').update(source).digest('hex')}`
+    const snapshot = {
+      id: 'test-transformer',
+      name: 'Test Transformer',
+      version: '1.0.0',
+      type: 'transformer',
+      description: '',
+      requires: [],
+      contributes: [],
+      capabilities: [],
+    }
+    const insert = db.prepare(`INSERT INTO runtime_plugin_releases (
+      release_id, plugin_id, source_digest, source_text, plugin_snapshot_json,
+      validation_status, health_status, created_at
+    ) VALUES (?, 'test-transformer', ?, ?, ?, 'passed', 'passed', ?)`)
+    insert.run('rel-valid-legacy', sourceDigest, source, JSON.stringify(snapshot), 10)
+    insert.run(
+      'rel-damaged-capabilities',
+      sourceDigest,
+      source,
+      JSON.stringify({ ...snapshot, capabilities: ['fetch'] }),
+      11,
+    )
+
+    migrateToV76(db)
+    migrateToV76(db)
+
+    const columns = new Set(db.prepare('PRAGMA table_info(runtime_plugin_releases)').all()
+      .map((column) => column.name))
+    assert.equal(columns.has('release_content_digest'), true)
+    assert.equal(columns.has('digest_version'), true)
+    assert.match(
+      db.prepare('SELECT release_content_digest FROM runtime_plugin_releases WHERE release_id = ?')
+        .get('rel-valid-legacy').release_content_digest,
+      /^sha256-[a-f0-9]{64}$/,
+    )
+    assert.deepEqual(
+      db.prepare(`SELECT release_content_digest, digest_version
+        FROM runtime_plugin_releases WHERE release_id = ?`).get('rel-damaged-capabilities'),
+      { release_content_digest: null, digest_version: 0 },
+    )
+    assert.throws(
+      () => db.prepare('UPDATE runtime_plugin_releases SET source_text = ? WHERE release_id = ?')
+        .run('mutated', 'rel-valid-legacy'),
+      /immutable/,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v77 persists one leased recoverable user-data clear operation per owner', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV77(db)
+    migrateToV77(db)
+    const columns = new Set(db.prepare('PRAGMA table_info(user_data_clear_operations)').all()
+      .map((column) => column.name))
+    for (const column of [
+      'operation_id',
+      'owner_id',
+      'lease_owner',
+      'lease_pid',
+      'lease_expires_at',
+      'status',
+      'created_at',
+      'updated_at',
+    ]) assert.equal(columns.has(column), true, column)
+
+    db.prepare(`INSERT INTO user_data_clear_operations (
+      operation_id, owner_id, lease_owner, lease_pid, lease_expires_at,
+      status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run('operation-a', 'owner-a', 'lease-a', 123, 1_000, 'staging', 10, 10)
+    assert.throws(
+      () => db.prepare(`INSERT INTO user_data_clear_operations (
+        operation_id, owner_id, lease_owner, lease_pid, lease_expires_at,
+        status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run('operation-b', 'owner-a', 'lease-b', 456, 2_000, 'staging', 20, 20),
+      /UNIQUE constraint failed/,
+    )
+    assert.throws(
+      () => db.prepare(`INSERT INTO user_data_clear_operations (
+        operation_id, owner_id, lease_owner, lease_pid, lease_expires_at,
+        status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run('operation-c', 'owner-c', 'lease-c', 789, 3_000, 'unknown', 30, 30),
+      /CHECK constraint failed/,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v78 permits only guarded deletion of unreferenced runtime plugin releases', () => {
+  const db = new Database(':memory:')
+  db.pragma('foreign_keys = ON')
+  try {
+    migrateToV60(db)
+    migrateToV74(db)
+    migrateToV75(db)
+    migrateToV76(db)
+    migrateToV78(db)
+    migrateToV78(db)
+
+    const source = 'function transform(input) { return input }'
+    const digest = `sha256-${createHash('sha256').update(source).digest('hex')}`
+    const snapshot = JSON.stringify({
+      id: 'retention-transformer',
+      name: 'Retention Transformer',
+      version: '1.0.0',
+      type: 'transformer',
+      description: '',
+      requires: [],
+      contributes: [],
+      capabilities: [],
+    })
+    const insertRelease = db.prepare(`
+      INSERT INTO runtime_plugin_releases (
+        release_id, plugin_id, source_digest, source_text, plugin_snapshot_json,
+        validation_status, health_status, created_at
+      ) VALUES (?, 'retention-transformer', ?, ?, ?, 'passed', 'passed', ?)
+    `)
+    db.exec('DROP TRIGGER trg_runtime_plugin_releases_immutable')
+    insertRelease.run('rel-retained', digest, source, snapshot, 10)
+    insertRelease.run('rel-collectible', digest, source, snapshot, 20)
+    migrateToV76(db)
+    migrateToV78(db)
+
+    db.prepare(`
+      INSERT INTO runtime_plugin_states (
+        plugin_id, enabled, updated_at, active_release_id, release_revision
+      ) VALUES ('retention-transformer', 1, 10, 'rel-retained', 1)
+    `).run()
+    assert.throws(
+      () => db.prepare('DELETE FROM runtime_plugin_releases WHERE release_id = ?')
+        .run('rel-collectible'),
+      /immutable/,
+    )
+
+    db.prepare(`
+      INSERT INTO runtime_plugin_release_gc_runs (
+        run_id, status, policy_json, started_at
+      ) VALUES ('gc-migration-test', 'running', '{}', 30)
+    `).run()
+    const guard = db.prepare(`
+      INSERT INTO runtime_plugin_release_gc_delete_guards (release_id, run_id, created_at)
+      VALUES (?, 'gc-migration-test', 30)
+    `)
+    guard.run('rel-retained')
+    assert.throws(
+      () => db.prepare('DELETE FROM runtime_plugin_releases WHERE release_id = ?')
+        .run('rel-retained'),
+      /authoritative/,
+    )
+    guard.run('rel-collectible')
+    assert.equal(
+      db.prepare('DELETE FROM runtime_plugin_releases WHERE release_id = ?')
+        .run('rel-collectible').changes,
+      1,
+    )
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS count FROM runtime_plugin_release_gc_delete_guards').get().count,
+      1,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v73 persists evolution Provider config revisions without inventing legacy snapshots', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE evolution_candidates (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_replay_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_evaluations (id TEXT PRIMARY KEY);
+      INSERT INTO evolution_candidates (id) VALUES ('candidate-legacy');
+      INSERT INTO evolution_replay_runs (id) VALUES ('replay-legacy');
+      INSERT INTO evolution_evaluations (id) VALUES ('evaluation-legacy');
+    `)
+    migrateToV73(db)
+    migrateToV73(db)
+    assert.deepEqual(db.prepare(`SELECT
+      (SELECT generator_config_revision FROM evolution_candidates WHERE id = 'candidate-legacy') AS candidate_revision,
+      (SELECT model_config_revision FROM evolution_replay_runs WHERE id = 'replay-legacy') AS replay_revision,
+      (SELECT evaluator_config_revision FROM evolution_evaluations WHERE id = 'evaluation-legacy') AS evaluator_revision`).get(), {
+      candidate_revision: null,
+      replay_revision: null,
+      evaluator_revision: null,
+    })
+  } finally {
+    db.close()
+  }
+})
+
+test('v72 persists immutable subagent model binding snapshots', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE subagent_runs (id TEXT PRIMARY KEY);
+      INSERT INTO subagent_runs (id) VALUES ('legacy-run');
+    `)
+    migrateToV72(db)
+    migrateToV72(db)
+
+    db.prepare(`UPDATE subagent_runs
+      SET model_name = ?, model_provider_id = ?, model_config_revision = ?
+      WHERE id = ?`).run('pinned-model', 'provider-1', 4, 'legacy-run')
+    assert.deepEqual(
+      db.prepare(`SELECT model_name, model_provider_id, model_config_revision
+        FROM subagent_runs WHERE id = ?`).get('legacy-run'),
+      {
+        model_name: 'pinned-model',
+        model_provider_id: 'provider-1',
+        model_config_revision: 4,
+      },
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v71 preserves composite evolution model identities while leaving legacy Provider IDs unknown', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE evolution_candidates (id TEXT PRIMARY KEY, generator_model TEXT);
+      CREATE TABLE evolution_replay_runs (id TEXT PRIMARY KEY, model_name TEXT NOT NULL);
+      CREATE TABLE evolution_evaluations (id TEXT PRIMARY KEY, evaluator_model TEXT NOT NULL);
+      INSERT INTO evolution_candidates (id, generator_model) VALUES ('candidate-legacy', 'shared-model');
+      INSERT INTO evolution_replay_runs (id, model_name) VALUES ('replay-legacy', 'shared-model');
+      INSERT INTO evolution_evaluations (id, evaluator_model) VALUES ('evaluation-legacy', 'shared-model');
+    `)
+    migrateToV71(db)
+    migrateToV71(db)
+
+    assert.deepEqual(
+      db.prepare(`SELECT generator_provider_id FROM evolution_candidates
+        WHERE id = 'candidate-legacy'`).get(),
+      { generator_provider_id: null },
+    )
+    assert.deepEqual(
+      db.prepare(`SELECT model_provider_id FROM evolution_replay_runs
+        WHERE id = 'replay-legacy'`).get(),
+      { model_provider_id: null },
+    )
+    assert.deepEqual(
+      db.prepare(`SELECT evaluator_provider_id FROM evolution_evaluations
+        WHERE id = 'evaluation-legacy'`).get(),
+      { evaluator_provider_id: null },
+    )
+
+    db.prepare('UPDATE evolution_candidates SET generator_provider_id = ? WHERE id = ?')
+      .run('provider-a', 'candidate-legacy')
+    db.prepare('UPDATE evolution_replay_runs SET model_provider_id = ? WHERE id = ?')
+      .run('provider-b', 'replay-legacy')
+    db.prepare('UPDATE evolution_evaluations SET evaluator_provider_id = ? WHERE id = ?')
+      .run('provider-c', 'evaluation-legacy')
+    assert.deepEqual(
+      db.prepare(`SELECT
+        (SELECT generator_provider_id FROM evolution_candidates WHERE id = 'candidate-legacy') AS candidate_provider,
+        (SELECT model_provider_id FROM evolution_replay_runs WHERE id = 'replay-legacy') AS replay_provider,
+        (SELECT evaluator_provider_id FROM evolution_evaluations WHERE id = 'evaluation-legacy') AS evaluator_provider`).get(),
+      {
+        candidate_provider: 'provider-a',
+        replay_provider: 'provider-b',
+        evaluator_provider: 'provider-c',
+      },
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v70 persists provider readiness revisions and job model bindings', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE model_providers (id TEXT PRIMARY KEY);
+      CREATE TABLE jobs (id TEXT PRIMARY KEY);
+      INSERT INTO model_providers (id) VALUES ('provider-1');
+      INSERT INTO jobs (id) VALUES ('job-1');
+    `)
+    migrateToV70(db)
+    migrateToV70(db)
+
+    const providerColumns = db.prepare('PRAGMA table_info(model_providers)').all()
+      .map((column) => column.name)
+    const jobColumns = db.prepare('PRAGMA table_info(jobs)').all()
+      .map((column) => column.name)
+    assert.ok(providerColumns.includes('config_revision'))
+    assert.ok(providerColumns.includes('readiness_json'))
+    assert.ok(jobColumns.includes('model_provider_id'))
+    assert.ok(jobColumns.includes('model_config_revision'))
+    assert.deepEqual(
+      db.prepare('SELECT config_revision, readiness_json FROM model_providers WHERE id = ?').get('provider-1'),
+      { config_revision: 1, readiness_json: null },
+    )
+
+    db.prepare(`UPDATE jobs
+      SET model_provider_id = ?, model_config_revision = ?
+      WHERE id = ?`).run('provider-1', 1, 'job-1')
+    assert.deepEqual(
+      db.prepare('SELECT model_provider_id, model_config_revision FROM jobs WHERE id = ?').get('job-1'),
+      { model_provider_id: 'provider-1', model_config_revision: 1 },
+    )
+    db.prepare('DELETE FROM model_providers WHERE id = ?').run('provider-1')
+    assert.deepEqual(
+      db.prepare('SELECT model_provider_id, model_config_revision FROM jobs WHERE id = ?').get('job-1'),
+      { model_provider_id: null, model_config_revision: 1 },
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v69 persists bounded turn recovery retries and dead letters', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV69(db)
+    migrateToV69(db)
+    db.prepare(`
+      INSERT INTO turn_recovery_states (
+        user_id, session_id, turn_id, candidate_version, status,
+        attempt_count, retryable, first_failed_at, last_failed_at,
+        next_retry_at, error_code, error_message
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'user-1', 'session-1', 'turn-1', '1:turn.started:1', 'retrying',
+      1, 1, 10, 10, 510, 'TEMPORARY', 'temporary failure',
+    )
+    const row = db.prepare('SELECT * FROM turn_recovery_states WHERE turn_id = ?').get('turn-1')
+    assert.equal(row.status, 'retrying')
+    assert.equal(row.next_retry_at, 510)
+    assert.ok(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_turn_recovery_states_due'").get(),
+    )
+    assert.throws(
+      () => db.prepare('UPDATE turn_recovery_states SET status = ? WHERE turn_id = ?').run('unknown', 'turn-1'),
+      /CHECK constraint failed/,
+    )
+  } finally {
+    db.close()
+  }
 })
 
 test('v68 persists immutable rollback policy, evaluations, and one rollback', () => {
@@ -840,6 +2744,73 @@ test('schema migration registry rejects gaps and duplicate versions', () => {
   )
 })
 
+test('v91 adds nullable policy provenance without rewriting legacy approvals', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE pending_approvals (id TEXT PRIMARY KEY);
+      INSERT INTO pending_approvals (id) VALUES ('legacy-approval');
+    `)
+    migrateToV91(db)
+    migrateToV91(db)
+
+    const columns = db.prepare('PRAGMA table_info(pending_approvals)').all()
+    assert.equal(columns.filter((item) => item.name === 'policy_provenance_json').length, 1)
+    assert.equal(
+      db.prepare('SELECT policy_provenance_json FROM pending_approvals WHERE id = ?')
+        .get('legacy-approval').policy_provenance_json,
+      null,
+    )
+    db.prepare('UPDATE pending_approvals SET policy_provenance_json = ? WHERE id = ?')
+      .run('{"id":"builtin.harness-policy","generation":1}', 'legacy-approval')
+    assert.match(
+      db.prepare('SELECT policy_provenance_json FROM pending_approvals WHERE id = ?')
+        .get('legacy-approval').policy_provenance_json,
+      /builtin\.harness-policy/u,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('schema migration runner rejects invalid and future versions before migration writes', () => {
+  const cases = [
+    { value: -1, code: 'DB_SCHEMA_VERSION_INVALID' },
+    { value: 1.5, code: 'DB_SCHEMA_VERSION_INVALID' },
+    { value: 'not-a-version', code: 'DB_SCHEMA_VERSION_INVALID' },
+    { value: '', code: 'DB_SCHEMA_VERSION_INVALID' },
+    { value: 'Infinity', code: 'DB_SCHEMA_VERSION_INVALID' },
+    { value: LATEST_SCHEMA_VERSION + 1, code: 'DB_SCHEMA_VERSION_UNSUPPORTED' },
+  ]
+
+  for (const entry of cases) {
+    const db = new Database(':memory:')
+    try {
+      db.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE migration_sentinel (value TEXT NOT NULL);
+        INSERT INTO migration_sentinel (value) VALUES ('unchanged');
+      `)
+      db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)')
+        .run('schema_version', String(entry.value))
+      assert.throws(
+        () => runSchemaMigrations(db),
+        (error) => error?.code === entry.code && error?.retryable === false,
+      )
+      assert.equal(
+        db.prepare("SELECT value FROM migration_sentinel").get().value,
+        'unchanged',
+      )
+      assert.equal(
+        db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+        String(entry.value),
+      )
+    } finally {
+      db.close()
+    }
+  }
+})
+
 test('schema migration registry upgrades a v30 database through every registered migration', () => {
   const db = new Database(':memory:')
   try {
@@ -889,10 +2860,27 @@ test('schema migration registry upgrades a v30 database through every registered
       'connector_idempotency',
       'web_search_configs',
       'managed_attachments',
+      'managed_attachment_upload_leases',
       'turn_execution_leases',
+      'turn_execution_fences',
       'turn_checkpoints',
+      'turn_recovery_states',
+      'job_turn_checkpoints',
+      'job_model_request_recovery_resolutions',
       'permission_mode_events',
       'runtime_plugin_states',
+      'runtime_plugin_releases',
+      'runtime_plugin_permission_grants',
+      'evolution_promotions',
+      'evolution_promotion_events',
+      'evolution_active_promotions',
+      'evolution_promotion_assignments',
+      'evolution_promotion_outcomes',
+      'evolution_promotion_outcome_snapshots',
+      'evolution_promotion_online_grades',
+      'evolution_promotion_online_guard_evaluations',
+      'evolution_promotion_rollbacks',
+      'evolution_operations',
     ]) {
       assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table), table)
     }

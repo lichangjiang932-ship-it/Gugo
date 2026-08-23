@@ -124,12 +124,47 @@ test('completed, unauthenticated, and permissions deep-link states do not show a
   }
 })
 
-test('dismissal keys are user-scoped without exposing the email and auto-open excludes permissions', () => {
+test('dismissal keys are user-scoped without exposing the email and auto-open respects configuration deep links', () => {
   const aliceKey = workspaceOnboardingDismissalKey('alice@example.com')
   const bobKey = workspaceOnboardingDismissalKey('bob@example.com')
   assert.notEqual(aliceKey, bobKey)
   assert.equal(aliceKey.includes('alice@example.com'), false)
   assert.equal(shouldAutoOpenWorkspaceOnboarding({ authenticated: true, complete: false, dismissed: false, pathname: '/chat' }), true)
   assert.equal(shouldAutoOpenWorkspaceOnboarding({ authenticated: true, complete: false, dismissed: false, pathname: '/permissions' }), false)
+  assert.equal(shouldAutoOpenWorkspaceOnboarding({ authenticated: true, complete: false, dismissed: false, pathname: '/settings' }), false)
   assert.equal(shouldAutoOpenWorkspaceOnboarding({ authenticated: false, complete: false, dismissed: false, pathname: '/chat' }), false)
+})
+
+test('settings deep links keep the workspace guide as a non-competing reminder', async () => {
+  const dom = setupDom('#/settings?tab=models')
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+
+  try {
+    await renderPrompt(root, { pathname: '/settings' })
+    assert.equal(rootElement.querySelector('[role="dialog"]'), null)
+    assert.ok(rootElement.querySelector('[data-testid="workspace-onboarding-reminder"]'))
+    assert.equal(window.location.hash, '#/settings?tab=models')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('navigating to settings closes an already-open workspace guide', async () => {
+  const dom = setupDom('#/chat')
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+
+  try {
+    await renderPrompt(root, { pathname: '/chat' })
+    assert.ok(rootElement.querySelector('[role="dialog"]'))
+
+    await renderPrompt(root, { pathname: '/settings' })
+    assert.equal(rootElement.querySelector('[role="dialog"]'), null)
+    assert.ok(rootElement.querySelector('[data-testid="workspace-onboarding-reminder"]'))
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
 })

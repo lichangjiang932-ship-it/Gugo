@@ -9,15 +9,19 @@ import {
   getMessageDepth,
   listMessages,
 } from './channelStore.js'
+import { resolveAgentModelRuntimeBinding } from './modelReadinessService.js'
 import { newSubagentRunId, runSubagent } from './subagentRuntime.js'
 
 const MAX_AGENT_CHAIN_DEPTH = 3
 
-let runtime = { runSubagent }
+let runtime = { runSubagent, resolveModelBinding: resolveAgentModelRuntimeBinding }
 const channelTurnQueues = new Map()
 
 export function configureChannelDispatcherForTests(nextRuntime = {}) {
-  runtime = { runSubagent: nextRuntime.runSubagent || runSubagent }
+  runtime = {
+    runSubagent: nextRuntime.runSubagent || runSubagent,
+    resolveModelBinding: nextRuntime.resolveModelBinding || resolveAgentModelRuntimeBinding,
+  }
   channelTurnQueues.clear()
 }
 
@@ -126,7 +130,35 @@ function mergeQueuedTranscript(snapshot, currentMessages) {
   return transcript.slice(-10)
 }
 
-function runAgentTurn({ userId, channelId, targetAgent, sourceMessage, cleanedText, fromAgentId = null }) {
+function resolveChannelModelBinding({
+  userId,
+  modelName = null,
+  modelProviderId = null,
+  modelConfigRevision = null,
+}) {
+  const binding = runtime.resolveModelBinding({
+    userId,
+    providerId: String(modelProviderId || '').trim(),
+    modelName: String(modelName || '').trim(),
+    configRevision: modelConfigRevision,
+    requirePersistedBinding: false,
+  })
+  return {
+    modelName: binding.modelName || null,
+    modelProviderId: binding.providerId || null,
+    modelConfigRevision: binding.configRevision || null,
+  }
+}
+
+function runAgentTurn({
+  userId,
+  channelId,
+  targetAgent,
+  sourceMessage,
+  cleanedText,
+  fromAgentId = null,
+  modelBinding,
+}) {
   if (!getChannel({ userId, channelId })) return null
   const id = newSubagentRunId()
   const queuedTranscript = listMessages({ userId, channelId, limit: 10 })
@@ -154,6 +186,9 @@ function runAgentTurn({ userId, channelId, targetAgent, sourceMessage, cleanedTe
       description: `channel:${channel.name} -> ${currentTarget.name}`,
       parentSessionId: `channel:${channelId}`,
       parentMessageId: sourceMessage.id,
+      modelName: modelBinding.modelName,
+      modelProviderId: modelBinding.modelProviderId,
+      modelConfigRevision: modelBinding.modelConfigRevision,
     })
     const resultText = String(run?.resultText || run?.result_text || '').trim()
     if (!resultText) return
@@ -175,13 +210,24 @@ function runAgentTurn({ userId, channelId, targetAgent, sourceMessage, cleanedTe
       fromAgentId: currentTarget.id,
       text: resultText,
       parentMessageId: agentMessage.id,
+      modelName: run?.modelName || modelBinding.modelName,
+      modelProviderId: run?.modelProviderId || modelBinding.modelProviderId,
+      modelConfigRevision: run?.modelConfigRevision ?? modelBinding.modelConfigRevision,
     })
   })
   return id
 }
 
 export async function dispatchUserMessage(channelIdOrArgs, userIdArg, textArg, optsArg = {}) {
-  const { channelId, userId, text, now = Date.now() } = normalizeUserArgs(channelIdOrArgs, userIdArg, textArg, optsArg)
+  const {
+    channelId,
+    userId,
+    text,
+    now = Date.now(),
+    modelName = null,
+    modelProviderId = null,
+    modelConfigRevision = null,
+  } = normalizeUserArgs(channelIdOrArgs, userIdArg, textArg, optsArg)
   if (!channelId || !userId) throw new Error('channelId + userId required')
   const channel = getChannel({ userId, channelId })
   if (!channel) {
@@ -190,6 +236,19 @@ export async function dispatchUserMessage(channelIdOrArgs, userIdArg, textArg, o
     throw err
   }
   const parsed = parseMentions(text, channel.agents || [])
+  let targets = resolveTargetsForUser({ channel, mentions: parsed.mentions })
+  if (targets.length === 0 && parsed.mentions.length === 0) {
+    const recent = getLatestAgentMessage({ userId, channelId })
+    const members = memberMap(channel)
+    if (recent?.senderId && members.has(recent.senderId)) targets = [members.get(recent.senderId)]
+  }
+
+  const modelBinding = targets.length > 0
+    ? resolveChannelModelBinding({ userId, modelName, modelProviderId, modelConfigRevision })
+    : null
+
+  // Reject an invalid or ambiguous model selection before recording a user
+  // message that can never be dispatched to its intended Agent.
   const message = appendMessage({
     userId,
     channelId,
@@ -200,13 +259,6 @@ export async function dispatchUserMessage(channelIdOrArgs, userIdArg, textArg, o
     now,
   })
 
-  let targets = resolveTargetsForUser({ channel, mentions: parsed.mentions })
-  if (targets.length === 0 && parsed.mentions.length === 0) {
-    const recent = getLatestAgentMessage({ userId, channelId })
-    const members = memberMap(channel)
-    if (recent?.senderId && members.has(recent.senderId)) targets = [members.get(recent.senderId)]
-  }
-
   const jobIds = targets
     .map((targetAgent) => runAgentTurn({
       userId,
@@ -214,6 +266,7 @@ export async function dispatchUserMessage(channelIdOrArgs, userIdArg, textArg, o
       targetAgent,
       sourceMessage: message,
       cleanedText: parsed.cleanedText,
+      modelBinding,
     }))
     .filter(Boolean)
 
@@ -252,6 +305,13 @@ export async function dispatchAgentMessage(channelIdOrArgs, fromAgentIdArg, text
     return { jobIds: [], mentions: parsed.mentions, rejected: 'max_depth' }
   }
 
+  const modelBinding = resolveChannelModelBinding({
+    userId,
+    modelName: args.modelName,
+    modelProviderId: args.modelProviderId,
+    modelConfigRevision: args.modelConfigRevision,
+  })
+
   const jobIds = targets
     .map((targetAgent) => runAgentTurn({
       userId,
@@ -260,6 +320,7 @@ export async function dispatchAgentMessage(channelIdOrArgs, fromAgentIdArg, text
       sourceMessage,
       cleanedText: parsed.cleanedText,
       fromAgentId,
+      modelBinding,
     }))
     .filter(Boolean)
 

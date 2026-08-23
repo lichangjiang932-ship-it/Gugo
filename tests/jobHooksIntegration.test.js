@@ -20,6 +20,16 @@ const { releaseApproval } = await import('../server/services/approvalGate.js')
 const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
+const resolveTestModelBinding = () => ({
+  providerId: null,
+  modelName: 'job-hooks-test-model',
+  configRevision: null,
+  env: {
+    MODEL_BASE_URL: 'http://127.0.0.1:11434/v1',
+    MODEL_NAME: 'job-hooks-test-model',
+  },
+})
+
 function shellJsonHook(value) {
   return [process.execPath, '-e', `process.stdout.write(JSON.stringify(${JSON.stringify(value)}))`]
 }
@@ -236,10 +246,12 @@ test('job prompt lifecycle hook can rewrite or reject a queued autonomous job', 
   })
   const executedJobs = []
   const rewriteRuntime = new JobRuntime({
+    planner: (prompt) => ({ title: prompt, steps: [{ id: 'execute', title: prompt, kind: 'execute' }] }),
     executeStep: async ({ job }) => {
       executedJobs.push({ id: job.id, prompt: job.prompt })
       return { ok: true, output: { text: 'ok' } }
     },
+    modelBindingResolver: resolveTestModelBinding,
   })
   const rewritten = await rewriteRuntime.createJob('original prompt', { userId: rewriteUser })
   await rewriteRuntime.drain()
@@ -263,10 +275,12 @@ test('job prompt lifecycle hook can rewrite or reject a queued autonomous job', 
   })
   let deniedExecutions = 0
   const denyRuntime = new JobRuntime({
+    planner: (prompt) => ({ title: prompt, steps: [{ id: 'execute', title: prompt, kind: 'execute' }] }),
     executeStep: async () => {
       deniedExecutions += 1
       return { ok: true }
     },
+    modelBindingResolver: resolveTestModelBinding,
   })
   const deniedJob = await denyRuntime.createJob('deny this prompt', { userId: denyUser })
   await denyRuntime.drain()

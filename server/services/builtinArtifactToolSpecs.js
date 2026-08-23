@@ -1,3 +1,5 @@
+import { XLSX_LIMITS } from './xlsxArtifactContract.js'
+
 /**
  * Canonical model-facing schemas for managed artifacts.
  * Both the public tool catalog and the server turn runtime consume this map.
@@ -25,7 +27,12 @@ const OFFICE_IMAGES_PROPERTY = Object.freeze({
       path: { type: 'string', minLength: 1, description: 'Existing workspace/local file path or attachment:// URI.' },
       alt: { type: 'string', maxLength: 500 },
       target_index: { type: 'integer', minimum: 1 },
-      anchor: { type: 'string', pattern: '^[A-Za-z]{1,3}[1-9][0-9]{0,6}$' },
+      anchor: {
+        type: 'string',
+        maxLength: 10,
+        pattern: '^[A-Za-z]{1,3}[1-9][0-9]{0,6}$',
+        description: 'Optional Excel cell anchor within A1:XFD1048576.',
+      },
       x: { type: 'number', minimum: 0 },
       y: { type: 'number', minimum: 0 },
       width: { type: 'number', exclusiveMinimum: 0 },
@@ -104,24 +111,31 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
           replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
           slides: {
             type: 'array',
+            minItems: 1,
+            maxItems: 100,
             items: {
               type: 'object',
               properties: {
                 title: { type: 'string' },
                 layout: { type: 'string', enum: ['cover', 'section', 'kpi', 'chart', 'statement', 'split', 'process', 'quote', 'bullets', 'end'] },
                 eyebrow: { type: 'string' },
-                bullets: { type: 'array', items: { type: 'string' } },
+                bullets: {
+                  type: 'array',
+                  maxItems: 5,
+                  items: { type: 'string', maxLength: 60 },
+                },
                 body: { type: 'string' },
                 subtitle: { type: 'string' },
                 kpi: {
                   type: 'array',
+                  maxItems: 4,
                   items: {
                     type: 'object',
                     properties: {
-                      value: { type: 'string' },
-                      label: { type: 'string' },
-                      unit: { type: 'string' },
-                      delta: { type: 'string' },
+                      value: { type: 'string', maxLength: 120 },
+                      label: { type: 'string', maxLength: 200 },
+                      unit: { type: 'string', maxLength: 80 },
+                      delta: { type: 'string', maxLength: 120 },
                     },
                     required: ['value'],
                   },
@@ -129,15 +143,26 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
                 chart: {
                   type: 'object',
                   properties: {
-                    type: { type: 'string', enum: ['bar', 'line', 'pie'] },
-                    categories: { type: 'array', items: { type: 'string' } },
+                    type: { type: 'string', enum: ['bar', 'bar-stacked', 'line', 'pie'] },
+                    categories: {
+                      type: 'array',
+                      maxItems: 200,
+                      items: { type: 'string', maxLength: 200 },
+                    },
                     series: {
                       type: 'array',
+                      minItems: 1,
+                      maxItems: 20,
                       items: {
                         type: 'object',
                         properties: {
-                          name: { type: 'string' },
-                          values: { type: 'array', items: { type: 'number' } },
+                          name: { type: 'string', maxLength: 200 },
+                          values: {
+                            type: 'array',
+                            minItems: 1,
+                            maxItems: 200,
+                            items: { type: 'number' },
+                          },
                         },
                         required: ['values'],
                       },
@@ -203,11 +228,35 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
           title: { type: 'string' },
           sheets: {
             type: 'array',
+            minItems: 1,
+            maxItems: XLSX_LIMITS.maxSheets,
             items: {
               type: 'object',
+              additionalProperties: false,
               properties: {
-                name: { type: 'string' },
-                rows: { type: 'array', items: { type: 'array', items: {} } },
+                name: {
+                  type: 'string',
+                  minLength: 1,
+                  maxLength: 31,
+                  pattern: '^[^:\\\\/?*\\[\\]\\u0000-\\u001F\\u007F]+$',
+                },
+                rows: {
+                  type: 'array',
+                  minItems: 1,
+                  maxItems: XLSX_LIMITS.maxRowsPerSheet,
+                  items: {
+                    type: 'array',
+                    maxItems: XLSX_LIMITS.maxColumnsPerRow,
+                    items: {
+                      oneOf: [
+                        { type: 'string', maxLength: XLSX_LIMITS.maxCellTextCharacters },
+                        { type: 'number' },
+                        { type: 'boolean' },
+                        { type: 'null' },
+                      ],
+                    },
+                  },
+                },
               },
               required: ['name', 'rows'],
             },

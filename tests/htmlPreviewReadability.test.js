@@ -79,6 +79,10 @@ test('trusted Mermaid and Chart previews nonce only their generated scripts', ()
   for (const marker of ['chart-library', 'chart-init']) {
     assert.match(chart, new RegExp(`<script nonce="visualPreviewNonce123\\+\\/=" data-yma-preview-script="${marker}"`))
   }
+  assert.match(mermaid, /src="\/sandbox\/mermaid\.min\.js"/)
+  assert.match(chart, /src="\/sandbox\/chart\.umd\.min\.js"/)
+  assert.doesNotMatch(mermaid, /https?:\/\//i)
+  assert.doesNotMatch(chart, /https?:\/\//i)
 
   const spoofed = buildHtmlDocument(
     '<script data-yma-preview-script="mermaid-init">alert(1)</script>',

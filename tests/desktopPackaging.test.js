@@ -83,6 +83,11 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.match(main, /desktopUpdateRuntime\.checkForUpdates\(\)/)
   assert.match(main, /autoUpdater\.autoDownload\s*=\s*false/)
   assert.doesNotMatch(main, /autoUpdater\.autoDownload\s*=\s*true/)
+  assert.match(main, /autoUpdater\.autoInstallOnAppQuit\s*=\s*false/)
+  assert.doesNotMatch(main, /autoUpdater\.autoInstallOnAppQuit\s*=\s*true/)
+  assert.equal((main.match(/desktopUpdateRuntime\.checkForUpdates\(\)/g) || []).length, 1)
+  assert.doesNotMatch(main, /UPDATE_INTERVAL_MS|setTimeout\(check|setInterval\(check/)
+  assert.match(main, /Local-first default:[\s\S]*explicitly chooses "check and download"/)
   assert.doesNotMatch(main, /autoUpdater\.on\('download-progress'/)
   assert.match(main, /autoUpdater\.allowPrerelease\s*=\s*false/)
   assert.match(main, /autoUpdater\.allowDowngrade\s*=\s*false/)
@@ -98,6 +103,11 @@ test('desktop ASAR verifier normalizes package paths and covers the backend entr
   assert.equal(resolveAsarPath(path.join('release', 'win-unpacked')), path.resolve('release', 'win-unpacked', 'resources', 'app.asar'))
   assert.deepEqual(REQUIRED_DESKTOP_ASAR_FILES, [
     'server/start.js',
+    'server/adapters/builtinSqliteTurnPersistenceBootstrap.js',
+    'server/adapters/sqliteTurnPersistenceAdapter.js',
+    'server/core/turnPersistenceBootstrap.js',
+    'server/services/runtimeServerStartup.js',
+    'shared/runtimeConfigRecoveryProtocol.js',
     'src/lib/officeExport/documentExport.js',
     'src/lib/officeExport/officeCommon.js',
     'src/lib/officeExport/spreadsheetExport.js',
@@ -472,4 +482,20 @@ test('desktop update notice is the primary message directly above the account ca
   assert.ok(accountButton > updateNotice)
   assert.match(card, /data-desktop-update-notice="primary"/)
   assert.match(card, /border-accent\/35 bg-accent\/10/)
+  assert.match(card, /status: 'manual'/)
+  assert.match(card, /desktopUpdate\.checkNow/)
+})
+
+test('desktop child and in-process startup share the versioned recovery probe', () => {
+  const main = read('desktop/main.js')
+  const fallbackStart = main.indexOf('async function startInProcessBundledServer')
+  const childStart = main.indexOf('async function startBundledServer')
+  const fallback = main.slice(fallbackStart, childStart)
+  const child = main.slice(childStart, main.indexOf('async function resolveApplicationUrl', childStart))
+
+  assert.match(fallback, /runtimeServerStartup\.js/)
+  assert.match(fallback, /await startRuntimeServer\(\{ cwd, env \}\)/)
+  assert.match(fallback, /probeDesktopRuntimeMode\(origin\)/)
+  assert.match(child, /probeDesktopRuntimeMode\(origin\)/)
+  assert.doesNotMatch(fallback, /startAppServer|runRuntimeConfigStartupPreflight/)
 })

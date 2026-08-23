@@ -55,16 +55,40 @@ function migrateAccountsFromJson(store) {
   })()
 }
 
+function writeMigrationFlagAtomic(migratedFlag) {
+  const tempPath = `${migratedFlag}.${process.pid}.${crypto.randomUUID()}.tmp`
+  fs.writeFileSync(tempPath, JSON.stringify({ migratedAt: Date.now() }), {
+    encoding: 'utf8',
+    flag: 'wx',
+    mode: 0o600,
+  })
+  try {
+    fs.renameSync(tempPath, migratedFlag)
+  } catch (error) {
+    if (!fs.existsSync(migratedFlag)) throw error
+  } finally {
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
+  }
+}
+
+function retireLegacyStore(storePath) {
+  fs.unlinkSync(storePath)
+}
+
 function maybeMigrateLegacy() {
   const storePath = getStorePath()
   const migratedFlag = path.join(getDataDir(), '.migrated')
-  if (!fs.existsSync(storePath) || fs.existsSync(migratedFlag)) return
+  if (!fs.existsSync(storePath)) return
   try {
+    if (fs.existsSync(migratedFlag)) {
+      retireLegacyStore(storePath)
+      return
+    }
     const raw = fs.readFileSync(storePath, 'utf8')
     const store = JSON.parse(raw)
     migrateAccountsFromJson(store)
-    fs.writeFileSync(migratedFlag, JSON.stringify({ migratedAt: Date.now() }))
-    // 保留原文件作为备份，不改名
+    writeMigrationFlagAtomic(migratedFlag)
+    retireLegacyStore(storePath)
     if (process.env.NODE_ENV !== 'production') logger.info('[authAccount] Migrated legacy accounts to SQLite')
   } catch (e) {
     // D4: 迁移失败属于需要排障的信号,生产也要 log(原来仅 dev warn)。

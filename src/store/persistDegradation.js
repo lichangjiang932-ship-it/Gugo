@@ -2,6 +2,8 @@
 // (jsx 文件 node 默认 loader 不认识).
 // 调用方需要传入 STORAGE_KEY 和 setItem,默认 STORAGE_KEY 与 AppContext 保持一致.
 
+import { sanitizeRetiredBrowserAccountFields } from './browserSnapshotSanitizer.js'
+
 export const DEFAULT_STORAGE_KEY = 'your-model-atelier:state:v1'
 
 // ★ #35 敏感字段黑名单:任何对象层级里出现这些 key 名,序列化前替换为 '[REDACTED]'
@@ -91,7 +93,7 @@ export function compactSnapshotMetadata(snapshot) {
 
 export function persistWithDegradation(snapshot, setItem, storageKey = DEFAULT_STORAGE_KEY) {
   // ★ #35: 入口先做一遍敏感字段 redact
-  let payload = sanitizeForPersist(snapshot)
+  let payload = sanitizeForPersist(sanitizeRetiredBrowserAccountFields(snapshot).payload)
   try {
     setItem(storageKey, JSON.stringify(payload))
     return { ok: true, level: 'full' }

@@ -2,9 +2,13 @@ export function createPluginContext({
   manifest,
   config,
   track,
+  registerConfigHealthCheck,
   registerTool,
   registerEvent,
   registerModelProvider,
+  registerLoop,
+  registerPolicy,
+  registerHttpCapability,
   registerPrompt,
   provideService,
   invokeService,
@@ -17,6 +21,9 @@ export function createPluginContext({
     lifecycle: Object.freeze({
       onDispose(effect) {
         return track(effect)
+      },
+      onConfigHealthCheck(check) {
+        return registerConfigHealthCheck(check)
       },
     }),
     tools: Object.freeze({
@@ -31,10 +38,25 @@ export function createPluginContext({
     }),
     models: Object.freeze({
       providers: Object.freeze({
-        register(kind, adapter) {
-          return registerModelProvider(kind, adapter)
+        register(kind, adapter, options) {
+          return registerModelProvider(kind, adapter, options)
         },
       }),
+    }),
+    loops: Object.freeze({
+      register(adapter, options) {
+        return registerLoop(adapter, options)
+      },
+    }),
+    policies: Object.freeze({
+      register(adapter, options) {
+        return registerPolicy(adapter, options)
+      },
+    }),
+    http: Object.freeze({
+      register(definition) {
+        return registerHttpCapability(definition)
+      },
     }),
     prompts: Object.freeze({
       register(definition) {

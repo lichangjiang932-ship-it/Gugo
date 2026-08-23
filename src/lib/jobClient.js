@@ -24,13 +24,48 @@ async function readJsonResponse(responsePromise) {
     } catch {
       payload = null
     }
-    throw new Error(payload?.error || `request failed: ${response.status}`)
+    const structured = payload?.error && typeof payload.error === 'object'
+      ? payload.error
+      : null
+    const message = structured?.message
+      || (typeof payload?.error === 'string' ? payload.error : '')
+      || `request failed: ${response.status}`
+    const error = new Error(message)
+    error.statusCode = Number(response.status) || 0
+    error.code = String(structured?.code || payload?.code || '').trim() || undefined
+    error.action = String(structured?.action || '').trim() || undefined
+    error.providerId = structured?.providerId ?? null
+    error.modelName = structured?.modelName ?? null
+    error.configRevision = structured?.configRevision ?? null
+    for (const field of [
+      'recoveryKind',
+      'modelRequestId',
+      'stepId',
+      'targetProviderId',
+      'targetModelName',
+      'targetConfigRevision',
+      'unsafeToReplay',
+      'requiresUserVerification',
+    ]) {
+      const value = structured && Object.hasOwn(structured, field)
+        ? structured[field]
+        : payload?.[field]
+      if (value !== undefined) error[field] = value
+    }
+    error.details = structured?.details ?? structured ?? payload
+    throw error
   }
   return response.json()
 }
 
-export function createJob(prompt, { fetchImpl = fetch, requirePlanApproval = false, modelName } = {}) {
+export function createJob(prompt, {
+  fetchImpl = fetch,
+  requirePlanApproval = false,
+  modelName,
+  providerId,
+} = {}) {
   const selectedModel = String(modelName || '').trim()
+  const selectedProvider = String(providerId || '').trim()
   return readJsonResponse(fetchImpl('/api/jobs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -38,6 +73,7 @@ export function createJob(prompt, { fetchImpl = fetch, requirePlanApproval = fal
       prompt,
       ...(requirePlanApproval === true ? { requirePlanApproval: true } : {}),
       ...(selectedModel ? { modelName: selectedModel } : {}),
+      ...(selectedProvider ? { providerId: selectedProvider } : {}),
     }),
   }))
 }

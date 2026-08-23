@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -17,6 +18,8 @@ function writePlugin(dirName, manifest, source) {
 }
 
 const INITIAL_TRANSFORMER_SOURCE = "function transform(input) { return typeof input === 'string' ? input.toUpperCase() : input }"
+const INTEGRITY_TRANSFORMER_SOURCE = "function transform(input) { return 'verified:' + input }"
+const INTEGRITY_TRANSFORMER_DIGEST = createHash('sha256').update(INTEGRITY_TRANSFORMER_SOURCE).digest('hex')
 
 writePlugin('test-transformer', {
   id: 'test-transformer',
@@ -34,32 +37,70 @@ writePlugin('test-prompt', {
   entry: 'prompt.md',
 }, 'Test prompt')
 
+writePlugin('integrity-transformer', {
+  id: 'integrity-transformer',
+  name: 'Integrity Transformer',
+  version: '1.0.0',
+  type: 'transformer',
+  entry: 'entry.js',
+  integrity: `sha256-${INTEGRITY_TRANSFORMER_DIGEST}`,
+}, INTEGRITY_TRANSFORMER_SOURCE)
+
 const { bootstrapAuth } = await import('../server/adapters/authAccount.js')
-const { closeDb, getDb } = await import('../server/db.js')
+const { closeDb, createUser, getDb } = await import('../server/db.js')
+const { migrateToV75 } = await import('../server/migrations/v75RuntimePluginReleaseRevision.js')
 const {
   _resetForTests,
   _resetRuntimePluginsForTests,
+  bindRuntimePluginHttpCapabilities,
+  getPlugin,
+  getRuntimePlugin,
   initPlugins,
   registerPlugin,
+  unregisterPlugin,
 } = await import('../server/plugins/pluginRegistry.js')
+const {
+  buildRuntimePluginPermissionRequest,
+} = await import('../server/plugins/runtimePluginPermissions.js')
+const { createHttpCapabilityRegistry } = await import('../server/core/httpCapabilityRegistry.js')
 const { handlePluginRequest } = await import('../server/routes/pluginRoutes.js')
 const {
   restoreEnabledRuntimePlugins,
   runtimeTransformerToolName,
 } = await import('../server/services/runtimePluginControlService.js')
 const {
+  getRuntimePluginPermissionGrant,
+  grantRuntimePluginPermissions,
+  revokeRuntimePluginPermissionGrant,
+} = await import('../server/services/runtimePluginPermissionGrantStore.js')
+const {
+  activateRuntimePluginRelease,
+  countRuntimePluginReleases,
+  createRuntimePluginRelease,
+  getLatestRuntimePluginRelease,
+  getRuntimePluginRelease,
   getRuntimePluginState,
   listRuntimePluginStates,
   recordRuntimePluginError,
+  recordRuntimePluginRollback,
   setRuntimePluginState,
 } = await import('../server/services/runtimePluginStateStore.js')
 const { getDynamicTool } = await import('../server/utils/toolSchemaCatalog.js')
 
-function createReq({ url, token = '', method = 'GET', remoteAddress = '127.0.0.1' }) {
+function createReq({
+  url,
+  token = '',
+  method = 'GET',
+  remoteAddress = '127.0.0.1',
+  headers = {},
+}) {
   return {
     method,
     url,
-    headers: token ? { authorization: `Bearer ${token}` } : {},
+    headers: {
+      ...headers,
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
     socket: { remoteAddress },
   }
 }
@@ -68,6 +109,8 @@ function createRes() {
   return {
     statusCode: 200,
     body: '',
+    headers: {},
+    setHeader(name, value) { this.headers[String(name).toLowerCase()] = value },
     writeHead(statusCode) { this.statusCode = statusCode },
     end(chunk = '') { this.body += chunk },
   }
@@ -79,22 +122,108 @@ async function requestRuntime({
   method = 'GET',
   remoteAddress = '127.0.0.1',
   env = { AUTH_MODE: 'local' },
+  headers = {},
+  autoApprove = true,
 } = {}) {
-  const res = createRes()
-  await handlePluginRequest(createReq({ url, token, method, remoteAddress }), res, { env })
-  return { status: res.statusCode, body: JSON.parse(res.body) }
+  const request = async (requestHeaders) => {
+    const res = createRes()
+    await handlePluginRequest(createReq({
+      url,
+      token,
+      method,
+      remoteAddress,
+      headers: requestHeaders,
+    }), res, { env })
+    return { status: res.statusCode, body: JSON.parse(res.body), headers: res.headers }
+  }
+
+  const response = await request(headers)
+  const approval = response.body?.error?.details?.permissionApproval
+  if (autoApprove
+    && response.status === 409
+    && response.body?.error?.code === 'PLUGIN_PERMISSION_APPROVAL_REQUIRED'
+    && approval?.approvalDigest) {
+    return request({
+      ...headers,
+      'x-gugo-plugin-permission-approval': approval.approvalDigest,
+    })
+  }
+  return response
+}
+
+function sourceDigest(source) {
+  return `sha256-${createHash('sha256').update(source).digest('hex')}`
+}
+
+function grantPermissionForPlugin(pluginId) {
+  localOwner()
+  const plugin = getPlugin(pluginId)
+  assert.ok(plugin, `plugin ${pluginId} must be loaded before granting permissions`)
+  const source = fs.readFileSync(plugin.entryPath)
+  return grantRuntimePluginPermissions({
+    request: buildRuntimePluginPermissionRequest({
+      plugin,
+      sourceDigest: sourceDigest(source),
+    }),
+  })
+}
+
+function grantPermissionForRelease(pluginId, releaseId) {
+  localOwner()
+  const release = getRuntimePluginRelease(pluginId, releaseId)
+  return grantRuntimePluginPermissions({
+    request: buildRuntimePluginPermissionRequest({
+      plugin: JSON.parse(release.pluginSnapshotJson),
+      sourceDigest: release.sourceDigest,
+    }),
+  })
 }
 
 function localOwner() {
   return bootstrapAuth({ env: { AUTH_MODE: 'local' } })
 }
 
+function installReleaseUpdateProtection(db) {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_runtime_plugin_releases_immutable
+      BEFORE UPDATE ON runtime_plugin_releases
+      BEGIN
+        SELECT RAISE(ABORT, 'runtime plugin releases are immutable');
+      END;
+  `)
+}
+
+function tamperReleaseCapabilities(releaseId, capabilities = ['log']) {
+  const db = getDb()
+  const row = db.prepare(`
+    SELECT plugin_snapshot_json
+    FROM runtime_plugin_releases
+    WHERE release_id = ?
+  `).get(releaseId)
+  const snapshot = JSON.parse(row.plugin_snapshot_json)
+  snapshot.capabilities = capabilities
+  db.exec('DROP TRIGGER IF EXISTS trg_runtime_plugin_releases_immutable')
+  try {
+    db.prepare(`
+      UPDATE runtime_plugin_releases
+      SET plugin_snapshot_json = ?
+      WHERE release_id = ?
+    `).run(JSON.stringify(snapshot), releaseId)
+  } finally {
+    installReleaseUpdateProtection(db)
+  }
+}
+
 test.beforeEach(async () => {
   await _resetRuntimePluginsForTests()
   _resetForTests()
   fs.writeFileSync(path.join(pluginRoot, 'test-transformer', 'entry.js'), INITIAL_TRANSFORMER_SOURCE)
+  fs.writeFileSync(path.join(pluginRoot, 'integrity-transformer', 'entry.js'), INTEGRITY_TRANSFORMER_SOURCE)
   const db = getDb()
+  db.exec('DROP TRIGGER IF EXISTS trg_runtime_plugin_releases_immutable_delete')
   db.prepare('DELETE FROM runtime_plugin_states').run()
+  db.prepare('DELETE FROM runtime_plugin_releases').run()
+  migrateToV75(db)
   db.prepare('DELETE FROM sessions').run()
   db.prepare('DELETE FROM login_codes').run()
   db.prepare('DELETE FROM users').run()
@@ -125,12 +254,20 @@ test('runtime plugin state store persists, updates, lists, and validates states'
     enabled: true,
     lastError: 'first failure',
     updatedAt: 10,
+    activeReleaseId: null,
+    previousReleaseId: null,
+    releaseRevision: 0,
+    lastRollback: null,
   })
   assert.deepEqual(getRuntimePluginState('test-transformer'), {
     pluginId: 'test-transformer',
     enabled: true,
     lastError: 'first failure',
     updatedAt: 10,
+    activeReleaseId: null,
+    previousReleaseId: null,
+    releaseRevision: 0,
+    lastRollback: null,
   })
 
   const updated = recordRuntimePluginError({
@@ -198,12 +335,22 @@ test('local installation owner can list runtime transformer inventory', async ()
   const response = await requestRuntime({ token: owner.token })
   assert.equal(response.status, 200)
   assert.equal(response.body.ok, true)
-  assert.equal(response.body.schemaVersion, 1)
-  assert.deepEqual(response.body.plugins.map((plugin) => plugin.id), ['test-transformer'])
-  const transformer = response.body.plugins[0]
+  assert.equal(response.body.schemaVersion, 7)
+  assert.deepEqual(response.body.effectiveConfigs, [])
+  assert.equal(response.headers['cache-control'], 'private, no-store')
+  assert.deepEqual(response.body.httpCapabilities, [])
+  assert.deepEqual(response.body.httpCapabilityAudit, [])
+  assert.deepEqual(response.body.plugins.map((plugin) => plugin.id), ['integrity-transformer', 'test-transformer'])
+  const transformer = response.body.plugins.find((plugin) => plugin.id === 'test-transformer')
   const toolName = runtimeTransformerToolName('test-transformer')
   assert.equal(transformer.active, false)
-  assert.equal(transformer.source, 'installed-transformer')
+  assert.equal(transformer.source, 'local-directory-development')
+  assert.deepEqual(transformer.distribution, {
+    sourceKind: 'local-directory-development',
+    mutable: true,
+    verifiedPackage: false,
+    hasInstallReceipt: false,
+  })
   assert.equal(transformer.controllable, true)
   assert.deepEqual(transformer.manifest, {
     id: 'test-transformer',
@@ -252,10 +399,207 @@ test('runtime inventory serializes host plugins as manifest-only JSON', async ()
     toolName: null,
     lastError: null,
     updatedAt: null,
+    activeRelease: null,
+    previousRelease: null,
+    latestRelease: null,
+    releaseCount: 0,
+    lastRollback: null,
+    permissionGrant: null,
   })
   assert.match(observer.installedAt, /^\d{4}-\d{2}-\d{2}T/)
   assert.equal(JSON.stringify(response.body).includes('DO_NOT_SERIALIZE'), false)
   assert.doesNotThrow(() => structuredClone(response.body))
+})
+
+test('runtime enable requires exact local-owner permission approval before activation', async () => {
+  const owner = localOwner()
+  const challenged = await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+    autoApprove: false,
+  })
+
+  assert.equal(challenged.status, 409)
+  assert.equal(challenged.body.error.code, 'PLUGIN_PERMISSION_APPROVAL_REQUIRED')
+  const approval = challenged.body.error.details.permissionApproval
+  assert.equal(approval.pluginId, 'test-transformer')
+  assert.equal(approval.pluginVersion, '1.0.0')
+  assert.deepEqual(approval.permissions, ['runtime:tool'])
+  assert.match(approval.sourceDigest, /^sha256-[a-f0-9]{64}$/)
+  assert.match(approval.approvalDigest, /^sha256-[a-f0-9]{64}$/)
+  assert.equal(getRuntimePluginPermissionGrant('test-transformer'), null)
+  assert.equal(getDynamicTool(runtimeTransformerToolName('test-transformer')), null)
+  assert.equal(getRuntimePluginState('test-transformer').enabled, false)
+
+  const wrongDigest = await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+    headers: { 'x-gugo-plugin-permission-approval': `sha256-${'0'.repeat(64)}` },
+    autoApprove: false,
+  })
+  assert.equal(wrongDigest.status, 409)
+  assert.equal(wrongDigest.body.error.code, 'PLUGIN_PERMISSION_APPROVAL_REQUIRED')
+  assert.equal(
+    wrongDigest.body.error.details.permissionApproval.approvalDigest,
+    approval.approvalDigest,
+  )
+  assert.equal(getRuntimePluginPermissionGrant('test-transformer'), null)
+  assert.equal(getRuntimePluginState('test-transformer').enabled, false)
+
+  const approved = await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+    headers: { 'x-gugo-plugin-permission-approval': approval.approvalDigest },
+    autoApprove: false,
+  })
+  assert.equal(approved.status, 200)
+  assert.equal(approved.body.plugin.active, true)
+  const grant = getRuntimePluginPermissionGrant('test-transformer')
+  assert.equal(grant.approvalDigest, approval.approvalDigest)
+  assert.equal(grant.sourceDigest, approval.sourceDigest)
+  assert.deepEqual(grant.permissions, ['runtime:tool'])
+})
+
+test('runtime permission grants are bound to the fixed local installation owner', () => {
+  setRuntimePluginState({ pluginId: 'test-transformer', enabled: false })
+  const originalOwner = localOwner()
+  const grant = grantPermissionForPlugin('test-transformer')
+  assert.equal(grant.ownerId, originalOwner.user.id)
+  assert.ok(getRuntimePluginPermissionGrant('test-transformer'))
+
+  createUser({
+    id: 'replacement-local-owner',
+    email: 'replacement-local-owner@example.com',
+  })
+  getDb().prepare(`
+    UPDATE meta SET value = ? WHERE key = 'local_auth_owner_user_id'
+  `).run('replacement-local-owner')
+
+  assert.equal(getRuntimePluginPermissionGrant('test-transformer'), null)
+  assert.equal(
+    grantPermissionForPlugin('test-transformer').ownerId,
+    'replacement-local-owner',
+  )
+})
+
+test('installation-scoped revocation prevents a dormant prior-owner grant from returning', () => {
+  setRuntimePluginState({ pluginId: 'test-transformer', enabled: false })
+  const originalOwner = localOwner()
+  grantPermissionForPlugin('test-transformer')
+
+  createUser({
+    id: 'replacement-local-owner',
+    email: 'replacement-local-owner@example.com',
+  })
+  const setOwner = getDb().prepare(`
+    UPDATE meta SET value = ? WHERE key = 'local_auth_owner_user_id'
+  `)
+  setOwner.run('replacement-local-owner')
+  assert.equal(getRuntimePluginPermissionGrant('test-transformer'), null)
+
+  assert.equal(revokeRuntimePluginPermissionGrant('test-transformer'), true)
+  setOwner.run(originalOwner.user.id)
+  assert.equal(getRuntimePluginPermissionGrant('test-transformer'), null)
+})
+
+test('runtime permission grant store replaces changed consent and supports explicit revocation', () => {
+  setRuntimePluginState({ pluginId: 'test-transformer', enabled: false })
+  const initial = grantPermissionForPlugin('test-transformer')
+  const replacementRequest = buildRuntimePluginPermissionRequest({
+    plugin: { ...getPlugin('test-transformer'), permissions: ['network:loopback'] },
+    sourceDigest: initial.sourceDigest,
+  })
+  const replacement = grantRuntimePluginPermissions({
+    request: replacementRequest,
+    now: initial.updatedAt + 1,
+  })
+
+  assert.notEqual(replacement.approvalDigest, initial.approvalDigest)
+  assert.deepEqual(replacement.permissions, ['network:loopback', 'runtime:tool'])
+  assert.equal(replacement.grantedAt, initial.updatedAt + 1)
+  assert.equal(revokeRuntimePluginPermissionGrant('test-transformer'), true)
+  assert.equal(revokeRuntimePluginPermissionGrant('test-transformer'), false)
+  assert.equal(getRuntimePluginPermissionGrant('test-transformer'), null)
+})
+
+test('runtime inventory exposes the effective HTTP capability owner and priority', async () => {
+  const capabilities = createHttpCapabilityRegistry()
+  capabilities.register({
+    id: 'builtin.test.inventory',
+    owner: 'builtin',
+    priority: 100,
+    apiPrefixes: ['/api/test/inventory'],
+    match: (req) => req.url?.startsWith('/api/test/inventory'),
+    handle: () => 'builtin',
+  })
+  const unbind = bindRuntimePluginHttpCapabilities(capabilities)
+  try {
+    await registerPlugin({
+      id: 'host-http-inventory',
+      name: 'Host HTTP Inventory',
+      version: '1.0.0',
+      contributes: ['http-capability:builtin.test.inventory'],
+    }, (context) => context.http.register({
+      id: 'builtin.test.inventory',
+      priority: 200,
+      replaces: 'builtin.test.inventory',
+      apiPrefixes: ['/api/test/inventory'],
+      handle: () => 'plugin',
+    }))
+
+    const owner = localOwner()
+    const response = await requestRuntime({ token: owner.token })
+    assert.equal(response.status, 200)
+    assert.equal(response.body.schemaVersion, 7)
+    const capability = response.body.httpCapabilities
+      .find((entry) => entry.id === 'builtin.test.inventory')
+    assert.deepEqual(capability, {
+      id: 'builtin.test.inventory',
+      owner: 'host-http-inventory',
+      priority: 200,
+      replaces: 'builtin.test.inventory',
+      apiPrefixes: ['/api/test/inventory'],
+      sequence: 2,
+    })
+    assert.ok(response.body.httpCapabilityAudit.some((entry) => (
+      entry.event === 'http_capability.replaced'
+      && entry.capabilityId === 'builtin.test.inventory'
+      && entry.owner === 'host-http-inventory'
+      && entry.priority === 200
+      && entry.replacedCapabilityId === 'builtin.test.inventory'
+      && entry.replacedOwner === 'builtin'
+    )))
+    assert.equal(JSON.stringify(response.body).includes('handle'), false)
+  } finally {
+    await unregisterPlugin('host-http-inventory')
+    unbind()
+  }
+})
+
+test('transformer control endpoint cannot disable a host runtime plugin', async () => {
+  await registerPlugin({
+    id: 'host-control-boundary',
+    name: 'Host Control Boundary',
+    version: '1.0.0',
+    requires: [],
+    contributes: [],
+  }, () => {})
+  const owner = localOwner()
+  const response = await requestRuntime({
+    url: '/api/plugins/runtime/host-control-boundary/disable',
+    token: owner.token,
+    method: 'POST',
+  })
+  assert.equal(response.status, 400)
+  assert.equal(response.body.error.code, 'PLUGIN_RUNTIME_TYPE_UNSUPPORTED')
+  const inventory = await requestRuntime({ token: owner.token })
+  assert.equal(
+    inventory.body.plugins.find((plugin) => plugin.id === 'host-control-boundary')?.active,
+    true,
+  )
 })
 
 test('runtime inventory retains unavailable persisted states without inventing a manifest', async () => {
@@ -288,6 +632,19 @@ test('enabling a transformer exposes a sandboxed tool and disabling removes it',
   assert.equal(enabled.status, 200)
   assert.equal(enabled.body.plugin.enabled, true)
   assert.equal(enabled.body.plugin.active, true)
+  assert.match(enabled.body.plugin.activeRelease.id, /^rel-/)
+  assert.match(enabled.body.plugin.activeRelease.sourceDigest, /^sha256-[a-f0-9]{64}$/)
+  assert.match(enabled.body.plugin.activeRelease.contentDigest, /^sha256-[a-f0-9]{64}$/)
+  assert.equal(enabled.body.plugin.activeRelease.digestVersion, 1)
+  assert.equal(enabled.body.plugin.activeRelease.validationStatus, 'passed')
+  assert.equal(enabled.body.plugin.activeRelease.healthStatus, 'passed')
+  assert.deepEqual(enabled.body.plugin.latestRelease, enabled.body.plugin.activeRelease)
+  assert.equal(enabled.body.plugin.previousRelease, null)
+  assert.equal(enabled.body.plugin.releaseCount, 1)
+  const [strictState] = listRuntimePluginStates({ verifyActiveReleases: true })
+  assert.equal(strictState.activeReleaseId, enabled.body.plugin.activeRelease.id)
+  assert.equal(strictState.activeReleaseContentDigest, enabled.body.plugin.activeRelease.contentDigest)
+  assert.equal(strictState.activeReleaseDigestVersion, 1)
 
   const toolName = runtimeTransformerToolName('test-transformer')
   assert.deepEqual(enabled.body.plugin.manifest.contributes, [`tool:${toolName}`])
@@ -297,6 +654,7 @@ test('enabling a transformer exposes a sandboxed tool and disabling removes it',
   assert.equal(result.ok, true)
   assert.equal(result.output, 'HELLO')
   assert.ok(result.durationMs > 0)
+  const permissionBeforeDisable = getRuntimePluginPermissionGrant('test-transformer')
 
   const disabled = await requestRuntime({
     url: '/api/plugins/runtime/test-transformer/disable',
@@ -308,6 +666,65 @@ test('enabling a transformer exposes a sandboxed tool and disabling removes it',
   assert.equal(disabled.body.plugin.active, false)
   assert.equal(getDynamicTool(toolName), null)
   assert.equal(getRuntimePluginState('test-transformer').enabled, false)
+  assert.deepEqual(
+    getRuntimePluginPermissionGrant('test-transformer'),
+    permissionBeforeDisable,
+  )
+  assert.equal((await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+    autoApprove: false,
+  })).status, 200)
+})
+
+test('active runtime tools fail closed when their persisted permission grant is revoked', async () => {
+  const owner = localOwner()
+  assert.equal((await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })).status, 200)
+  const tool = getDynamicTool(runtimeTransformerToolName('test-transformer'))
+
+  assert.equal(revokeRuntimePluginPermissionGrant('test-transformer'), true)
+  await assert.rejects(
+    () => tool.exec({ input: 'must-not-run' }),
+    (error) => error?.code === 'PLUGIN_PERMISSION_APPROVAL_REQUIRED'
+      && /需要本机所有者明确授权/u.test(error.message),
+  )
+  assert.equal(getRuntimePlugin('test-transformer').state, 'active')
+})
+
+test('revoking runtime permissions disables the plugin and requires fresh approval', async () => {
+  const owner = localOwner()
+  const enabled = await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })
+  assert.equal(enabled.status, 200)
+  assert.ok(getRuntimePluginPermissionGrant('test-transformer'))
+
+  const revoked = await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/revoke-permissions',
+    token: owner.token,
+    method: 'POST',
+  })
+  assert.equal(revoked.status, 200)
+  assert.equal(revoked.body.plugin.enabled, false)
+  assert.equal(revoked.body.plugin.active, false)
+  assert.equal(getRuntimePluginPermissionGrant('test-transformer'), null)
+  assert.equal(getDynamicTool(runtimeTransformerToolName('test-transformer')), null)
+
+  const challenged = await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+    autoApprove: false,
+  })
+  assert.equal(challenged.status, 409)
+  assert.equal(challenged.body.error.code, 'PLUGIN_PERMISSION_APPROVAL_REQUIRED')
 })
 
 test('reload atomically switches validated transformer source and preserves the tool registration', async () => {
@@ -319,6 +736,7 @@ test('reload atomically switches validated transformer source and preserves the 
   })
   const toolName = runtimeTransformerToolName('test-transformer')
   const originalTool = getDynamicTool(toolName)
+  const initialReleaseId = getRuntimePluginState('test-transformer').activeReleaseId
 
   fs.writeFileSync(
     path.join(pluginRoot, 'test-transformer', 'entry.js'),
@@ -331,6 +749,9 @@ test('reload atomically switches validated transformer source and preserves the 
   })
   assert.equal(reloaded.status, 200)
   assert.equal(reloaded.body.plugin.active, true)
+  assert.notEqual(reloaded.body.plugin.activeRelease.id, initialReleaseId)
+  assert.equal(reloaded.body.plugin.previousRelease.id, initialReleaseId)
+  assert.equal(reloaded.body.plugin.releaseCount, 2)
   assert.equal(getDynamicTool(toolName), originalTool)
   assert.equal((await originalTool.exec({ input: 'HELLO' })).output, 'hello')
 
@@ -345,6 +766,220 @@ test('reload atomically switches validated transformer source and preserves the 
   assert.equal(getDynamicTool(toolName), originalTool)
   assert.equal((await originalTool.exec({ input: 'STILL-OLD' })).output, 'still-old')
   assert.match(getRuntimePluginState('test-transformer').lastError, /PLUGIN_RELOAD_VALIDATION_FAILED/)
+  assert.equal(getRuntimePluginState('test-transformer').activeReleaseId, reloaded.body.plugin.activeRelease.id)
+  assert.equal(countRuntimePluginReleases('test-transformer'), 3)
+  assert.equal(getLatestRuntimePluginRelease('test-transformer').validationStatus, 'failed')
+})
+
+test('reload health-checks an actual invocation before cutover and keeps the active release on failure', async () => {
+  const owner = localOwner()
+  await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })
+  const before = getRuntimePluginState('test-transformer')
+  const tool = getDynamicTool(runtimeTransformerToolName('test-transformer'))
+  fs.writeFileSync(path.join(pluginRoot, 'test-transformer', 'entry.js'), `
+    function transform(input) {
+      if (input === null) throw new Error('health probe failed')
+      return 'candidate:' + input
+    }
+  `)
+
+  const rejected = await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/reload',
+    token: owner.token,
+    method: 'POST',
+  })
+  assert.equal(rejected.status, 400)
+  assert.equal(rejected.body.error.code, 'PLUGIN_RELEASE_HEALTH_CHECK_FAILED')
+  assert.equal(getRuntimePluginState('test-transformer').activeReleaseId, before.activeReleaseId)
+  assert.equal((await tool.exec({ input: 'still-old' })).output, 'STILL-OLD')
+  assert.equal(countRuntimePluginReleases('test-transformer'), 2)
+  const failed = getLatestRuntimePluginRelease('test-transformer')
+  assert.equal(failed.validationStatus, 'passed')
+  assert.equal(failed.healthStatus, 'failed')
+  assert.match(failed.failure, /PLUGIN_RELEASE_HEALTH_CHECK_FAILED/)
+})
+
+test('reload automatically rolls back runtime and authoritative state when post-cutover activation fails', async () => {
+  const owner = localOwner()
+  await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })
+  const before = getRuntimePluginState('test-transformer')
+  const permissionBefore = getRuntimePluginPermissionGrant('test-transformer')
+  const tool = getDynamicTool(runtimeTransformerToolName('test-transformer'))
+  fs.writeFileSync(
+    path.join(pluginRoot, 'test-transformer', 'entry.js'),
+    "function transform(input) { return 'candidate:' + input }",
+  )
+  const db = getDb()
+  db.exec(`
+    CREATE TEMP TRIGGER fail_runtime_release_activation
+    BEFORE UPDATE OF active_release_id ON runtime_plugin_states
+    WHEN NEW.plugin_id = 'test-transformer'
+      AND NEW.active_release_id <> OLD.active_release_id
+    BEGIN
+      SELECT RAISE(ABORT, 'forced activation failure');
+    END;
+  `)
+  let rejected
+  try {
+    rejected = await requestRuntime({
+      url: '/api/plugins/runtime/test-transformer/reload',
+      token: owner.token,
+      method: 'POST',
+    })
+  } finally {
+    db.exec('DROP TRIGGER IF EXISTS fail_runtime_release_activation')
+  }
+
+  assert.equal(rejected.status, 500)
+  assert.equal(rejected.body.error.code, 'PLUGIN_RELEASE_ACTIVATION_FAILED')
+  const after = getRuntimePluginState('test-transformer')
+  assert.equal(after.activeReleaseId, before.activeReleaseId)
+  assert.equal(after.lastRollback.status, 'succeeded')
+  assert.equal(after.lastRollback.toReleaseId, before.activeReleaseId)
+  assert.notEqual(after.lastRollback.fromReleaseId, before.activeReleaseId)
+  assert.equal((await tool.exec({ input: 'still-old' })).output, 'STILL-OLD')
+  const permissionAfter = getRuntimePluginPermissionGrant('test-transformer')
+  assert.equal(permissionAfter.approvalDigest, permissionBefore.approvalDigest)
+  assert.equal(permissionAfter.sourceDigest, permissionBefore.sourceDigest)
+  assert.deepEqual(permissionAfter.permissions, permissionBefore.permissions)
+
+  const inventory = await requestRuntime({ token: owner.token })
+  const transformer = inventory.body.plugins.find((entry) => entry.id === 'test-transformer')
+  assert.equal(transformer.activeRelease.id, before.activeReleaseId)
+  assert.equal(transformer.latestRelease.id, after.lastRollback.fromReleaseId)
+  assert.deepEqual(transformer.lastRollback, after.lastRollback)
+})
+
+test('reload preserves the local release and authoritative pointer on a cross-process CAS conflict', async () => {
+  const owner = localOwner()
+  await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })
+  const before = getRuntimePluginState('test-transformer')
+  const permissionBefore = getRuntimePluginPermissionGrant('test-transformer')
+  const tool = getDynamicTool(runtimeTransformerToolName('test-transformer'))
+  fs.writeFileSync(
+    path.join(pluginRoot, 'test-transformer', 'entry.js'),
+    "function transform(input) { return 'candidate:' + input }",
+  )
+  const db = getDb()
+  db.exec(`
+    CREATE TEMP TRIGGER bump_runtime_release_revision
+    AFTER INSERT ON runtime_plugin_releases
+    WHEN NEW.plugin_id = 'test-transformer'
+    BEGIN
+      UPDATE runtime_plugin_states
+      SET release_revision = release_revision + 1
+      WHERE plugin_id = NEW.plugin_id;
+    END;
+  `)
+  let rejected
+  try {
+    rejected = await requestRuntime({
+      url: '/api/plugins/runtime/test-transformer/reload',
+      token: owner.token,
+      method: 'POST',
+    })
+  } finally {
+    db.exec('DROP TRIGGER IF EXISTS bump_runtime_release_revision')
+  }
+
+  assert.equal(rejected.status, 409)
+  assert.equal(rejected.body.error.code, 'PLUGIN_RELEASE_STATE_CONFLICT')
+  const after = getRuntimePluginState('test-transformer')
+  assert.equal(after.activeReleaseId, before.activeReleaseId)
+  assert.equal(after.releaseRevision, before.releaseRevision + 1)
+  assert.equal((await tool.exec({ input: 'still-old' })).output, 'STILL-OLD')
+  const permissionAfter = getRuntimePluginPermissionGrant('test-transformer')
+  assert.equal(permissionAfter.approvalDigest, permissionBefore.approvalDigest)
+  assert.equal(permissionAfter.sourceDigest, permissionBefore.sourceDigest)
+  assert.deepEqual(permissionAfter.permissions, permissionBefore.permissions)
+})
+
+test('integrity is rechecked on enable and reload without replacing the last verified source', async () => {
+  const owner = localOwner()
+  const entryPath = path.join(pluginRoot, 'integrity-transformer', 'entry.js')
+  const toolName = runtimeTransformerToolName('integrity-transformer')
+
+  fs.writeFileSync(entryPath, "function transform(input) { return 'tampered:' + input }")
+  const rejectedEnable = await requestRuntime({
+    url: '/api/plugins/runtime/integrity-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })
+  assert.equal(rejectedEnable.status, 400)
+  assert.equal(rejectedEnable.body.error.code, 'PLUGIN_INTEGRITY_MISMATCH')
+  assert.equal(getDynamicTool(toolName), null)
+  assert.match(getRuntimePluginState('integrity-transformer').lastError, /PLUGIN_INTEGRITY_MISMATCH/)
+
+  fs.writeFileSync(entryPath, INTEGRITY_TRANSFORMER_SOURCE)
+  const enabled = await requestRuntime({
+    url: '/api/plugins/runtime/integrity-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })
+  assert.equal(enabled.status, 200)
+  const verifiedTool = getDynamicTool(toolName)
+  assert.equal((await verifiedTool.exec({ input: 'before' })).output, 'verified:before')
+
+  fs.writeFileSync(entryPath, "function transform(input) { return 'tampered:' + input }")
+  const rejectedReload = await requestRuntime({
+    url: '/api/plugins/runtime/integrity-transformer/reload',
+    token: owner.token,
+    method: 'POST',
+  })
+  assert.equal(rejectedReload.status, 400)
+  assert.equal(rejectedReload.body.error.code, 'PLUGIN_INTEGRITY_MISMATCH')
+  assert.equal(getDynamicTool(toolName), verifiedTool)
+  assert.equal((await verifiedTool.exec({ input: 'after' })).output, 'verified:after')
+})
+
+test('reload rejects a plugin directory replaced by a junction and keeps the active release', async (t) => {
+  const owner = localOwner()
+  assert.equal((await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })).status, 200)
+  const tool = getDynamicTool(runtimeTransformerToolName('test-transformer'))
+  const pluginDir = path.join(pluginRoot, 'test-transformer')
+  const parkedDir = path.join(pluginRoot, 'test-transformer-parked')
+  const outsideDir = path.join(tempDir, 'outside-transformer')
+  fs.mkdirSync(outsideDir)
+  fs.writeFileSync(path.join(outsideDir, 'entry.js'), "function transform() { return 'escaped' }")
+  fs.renameSync(pluginDir, parkedDir)
+  try {
+    fs.symlinkSync(outsideDir, pluginDir, process.platform === 'win32' ? 'junction' : 'dir')
+  } catch (error) {
+    fs.renameSync(parkedDir, pluginDir)
+    fs.rmSync(outsideDir, { recursive: true, force: true })
+    t.skip(`symlink unavailable: ${error.code}`)
+    return
+  }
+  try {
+    const rejected = await requestRuntime({
+      url: '/api/plugins/runtime/test-transformer/reload',
+      token: owner.token,
+      method: 'POST',
+    })
+    assert.equal(rejected.status, 400)
+    assert.equal(rejected.body.error.code, 'PLUGIN_ENTRY_SCOPE_INVALID')
+    assert.equal((await tool.exec({ input: 'safe' })).output, 'SAFE')
+  } finally {
+    fs.rmSync(pluginDir, { recursive: true, force: true })
+    fs.renameSync(parkedDir, pluginDir)
+    fs.rmSync(outsideDir, { recursive: true, force: true })
+  }
 })
 
 test('reload isolates in-flight calls on the old source while new calls use the replacement', async () => {
@@ -394,6 +1029,25 @@ test('reload rejects inactive transformers without changing desired state', asyn
   assert.equal(getRuntimePluginState('test-transformer'), null)
 })
 
+test('startup restore fails closed until the exact plugin source is preauthorized', async () => {
+  setRuntimePluginState({ pluginId: 'test-transformer', enabled: true })
+
+  const denied = await restoreEnabledRuntimePlugins()
+  assert.equal(denied.length, 1)
+  assert.equal(denied[0].pluginId, 'test-transformer')
+  assert.equal(denied[0].ok, false)
+  assert.equal(denied[0].error.code, 'PLUGIN_PERMISSION_APPROVAL_REQUIRED')
+  assert.equal(denied[0].error.permissionApproval.pluginId, 'test-transformer')
+  assert.equal(countRuntimePluginReleases('test-transformer'), 0)
+  assert.equal(getDynamicTool(runtimeTransformerToolName('test-transformer')), null)
+
+  grantPermissionForPlugin('test-transformer')
+  assert.deepEqual(await restoreEnabledRuntimePlugins(), [
+    { pluginId: 'test-transformer', ok: true },
+  ])
+  assert.ok(getDynamicTool(runtimeTransformerToolName('test-transformer')))
+})
+
 test('enabled transformer state restores from SQLite after runtime registry reset', async () => {
   const owner = localOwner()
   await requestRuntime({
@@ -402,7 +1056,17 @@ test('enabled transformer state restores from SQLite after runtime registry rese
     method: 'POST',
   })
   const toolName = runtimeTransformerToolName('test-transformer')
+  const persistedState = getRuntimePluginState('test-transformer')
+  const persistedReleaseId = persistedState.activeReleaseId
+  fs.writeFileSync(
+    path.join(pluginRoot, 'test-transformer', 'entry.js'),
+    "function transform(input) { return 'unpublished-disk-change:' + input }",
+  )
   await _resetRuntimePluginsForTests()
+  recordRuntimePluginError({
+    pluginId: 'test-transformer',
+    error: 'STALE_RESTORE_ERROR: injected before idempotent restore',
+  })
   assert.equal(getDynamicTool(toolName), null)
 
   assert.deepEqual(await restoreEnabledRuntimePlugins(), [
@@ -413,6 +1077,242 @@ test('enabled transformer state restores from SQLite after runtime registry rese
   const result = await restored.exec({ input: 'restored' })
   assert.equal(result.ok, true)
   assert.equal(result.output, 'RESTORED')
+  const firstRestoreState = getRuntimePluginState('test-transformer')
+  assert.equal(firstRestoreState.activeReleaseId, persistedReleaseId)
+  assert.equal(firstRestoreState.releaseRevision, persistedState.releaseRevision)
+  assert.equal(firstRestoreState.lastError, null)
+
+  assert.deepEqual(await restoreEnabledRuntimePlugins(), [
+    { pluginId: 'test-transformer', ok: true },
+  ])
+  assert.equal(
+    getRuntimePluginState('test-transformer').releaseRevision,
+    persistedState.releaseRevision,
+  )
+})
+
+test('startup restore activates enabled runtime plugin dependencies before consumers', async () => {
+  const dynamicPluginIds = ['a-consumer', 'z-provider']
+  writePlugin('z-provider', {
+    id: 'z-provider',
+    name: 'Z Provider',
+    version: '1.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+  }, "function transform(input) { return 'provider:' + input }")
+  writePlugin('a-consumer', {
+    id: 'a-consumer',
+    name: 'A Consumer',
+    version: '1.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+    requires: ['z-provider'],
+    dependencyVersions: { 'z-provider': '^1.0.0' },
+  }, "function transform(input) { return 'consumer:' + input }")
+
+  await _resetRuntimePluginsForTests()
+  _resetForTests()
+  const loaded = initPlugins({ rootDir: pluginRoot, silent: true })
+  assert.equal(loaded.errors.length, 0)
+  try {
+    setRuntimePluginState({ pluginId: 'a-consumer', enabled: true, now: 10 })
+    setRuntimePluginState({ pluginId: 'z-provider', enabled: true, now: 11 })
+    grantPermissionForPlugin('a-consumer')
+    grantPermissionForPlugin('z-provider')
+
+    assert.deepEqual(await restoreEnabledRuntimePlugins(), [
+      { pluginId: 'z-provider', ok: true },
+      { pluginId: 'a-consumer', ok: true },
+    ])
+    assert.ok(getDynamicTool(runtimeTransformerToolName('z-provider')))
+    assert.ok(getDynamicTool(runtimeTransformerToolName('a-consumer')))
+  } finally {
+    await _resetRuntimePluginsForTests()
+    for (const pluginId of dynamicPluginIds) {
+      fs.rmSync(path.join(pluginRoot, pluginId), { recursive: true, force: true })
+    }
+    _resetForTests()
+    assert.equal(initPlugins({ rootDir: pluginRoot, silent: true }).errors.length, 0)
+  }
+})
+
+test('release content identity rejects capability corruption during load and startup restore', async () => {
+  const owner = localOwner()
+  await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })
+  const state = getRuntimePluginState('test-transformer')
+  const toolName = runtimeTransformerToolName('test-transformer')
+  await _resetRuntimePluginsForTests()
+
+  tamperReleaseCapabilities(state.activeReleaseId)
+
+  assert.throws(
+    () => getRuntimePluginRelease('test-transformer', state.activeReleaseId),
+    (error) => error?.code === 'PLUGIN_RELEASE_CORRUPT'
+      && /完整内容摘要不匹配/.test(error.message),
+  )
+  assert.throws(
+    () => listRuntimePluginStates({ verifyActiveReleases: true }),
+    (error) => error?.code === 'PLUGIN_RELEASE_CORRUPT',
+  )
+  const restored = await restoreEnabledRuntimePlugins()
+  assert.deepEqual(restored.map(({ pluginId, ok }) => ({ pluginId, ok })), [
+    { pluginId: 'test-transformer', ok: false },
+  ])
+  assert.match(getRuntimePluginState('test-transformer').lastError, /PLUGIN_RELEASE_CORRUPT/)
+  assert.equal(getDynamicTool(toolName), null)
+})
+
+test('authoritative release switch rejects a same-id row with corrupted capabilities', async () => {
+  const owner = localOwner()
+  await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })
+  const before = getRuntimePluginState('test-transformer')
+  const active = getRuntimePluginRelease('test-transformer', before.activeReleaseId)
+  const candidateId = 'rel-capability-corrupt-candidate'
+  createRuntimePluginRelease({
+    pluginId: active.pluginId,
+    releaseId: candidateId,
+    sourceDigest: active.sourceDigest,
+    source: active.source,
+    pluginSnapshotJson: active.pluginSnapshotJson,
+    validationStatus: 'passed',
+    healthStatus: 'passed',
+    now: active.createdAt + 1,
+  })
+  tamperReleaseCapabilities(candidateId)
+
+  assert.throws(
+    () => activateRuntimePluginRelease({
+      pluginId: 'test-transformer',
+      releaseId: candidateId,
+      previousReleaseId: before.activeReleaseId,
+      expectedActiveReleaseId: before.activeReleaseId,
+      expectedReleaseRevision: before.releaseRevision,
+    }),
+    (error) => error?.code === 'PLUGIN_RELEASE_CORRUPT',
+  )
+  const after = getRuntimePluginState('test-transformer')
+  assert.equal(after.activeReleaseId, before.activeReleaseId)
+  assert.equal(after.releaseRevision, before.releaseRevision)
+})
+
+test('release state rejects missing and cross-plugin rollback references atomically', async () => {
+  const owner = localOwner()
+  await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })
+  const before = getRuntimePluginState('test-transformer')
+  const active = getRuntimePluginRelease('test-transformer', before.activeReleaseId)
+  const otherReleaseId = 'rel-other-plugin-reference'
+  createRuntimePluginRelease({
+    pluginId: 'other-transformer',
+    releaseId: otherReleaseId,
+    sourceDigest: active.sourceDigest,
+    source: active.source,
+    pluginSnapshotJson: JSON.stringify({
+      ...JSON.parse(active.pluginSnapshotJson),
+      id: 'other-transformer',
+      name: 'Other Transformer',
+    }),
+    validationStatus: 'passed',
+    healthStatus: 'passed',
+    now: active.createdAt + 1,
+  })
+
+  for (const previousReleaseId of ['rel-missing-previous', otherReleaseId]) {
+    assert.throws(
+      () => activateRuntimePluginRelease({
+        pluginId: 'test-transformer',
+        releaseId: before.activeReleaseId,
+        previousReleaseId,
+        expectedActiveReleaseId: before.activeReleaseId,
+        expectedReleaseRevision: before.releaseRevision,
+      }),
+      (error) => error?.code === 'PLUGIN_RELEASE_REFERENCE_INVALID'
+        && /previousReleaseId/.test(error.message),
+    )
+    assert.deepEqual(getRuntimePluginState('test-transformer'), before)
+  }
+
+  for (const fromReleaseId of ['rel-missing-rollback-from', otherReleaseId]) {
+    assert.throws(
+      () => recordRuntimePluginRollback({
+        pluginId: 'test-transformer',
+        fromReleaseId,
+        toReleaseId: before.activeReleaseId,
+        status: 'failed',
+        reason: 'reference validation test',
+      }),
+      (error) => error?.code === 'PLUGIN_RELEASE_REFERENCE_INVALID'
+        && /fromReleaseId/.test(error.message),
+    )
+    assert.deepEqual(getRuntimePluginState('test-transformer'), before)
+  }
+})
+
+test('startup restore falls back to a healthy previous release when the active release is unhealthy', async () => {
+  const owner = localOwner()
+  await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })
+  const previousReleaseId = getRuntimePluginState('test-transformer').activeReleaseId
+  fs.writeFileSync(
+    path.join(pluginRoot, 'test-transformer', 'entry.js'),
+    "function transform(input) { return 'new:' + input }",
+  )
+  await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/reload',
+    token: owner.token,
+    method: 'POST',
+  })
+  await _resetRuntimePluginsForTests()
+
+  const previousRelease = getRuntimePluginRelease('test-transformer', previousReleaseId)
+  const unhealthyReleaseId = 'rel-unhealthy-active'
+  createRuntimePluginRelease({
+    pluginId: previousRelease.pluginId,
+    releaseId: unhealthyReleaseId,
+    sourceDigest: previousRelease.sourceDigest,
+    source: previousRelease.source,
+    pluginSnapshotJson: previousRelease.pluginSnapshotJson,
+    validationStatus: 'failed',
+    healthStatus: 'not_run',
+    failure: 'injected unhealthy release',
+    now: previousRelease.createdAt + 1,
+  })
+  getDb().prepare(`
+    UPDATE runtime_plugin_states
+    SET active_release_id = ?, previous_release_id = ?, release_revision = release_revision + 1
+    WHERE plugin_id = ?
+  `).run(unhealthyReleaseId, previousReleaseId, 'test-transformer')
+  grantPermissionForRelease('test-transformer', previousReleaseId)
+
+  assert.deepEqual(await restoreEnabledRuntimePlugins(), [{
+    pluginId: 'test-transformer',
+    ok: true,
+    attemptedReleaseId: unhealthyReleaseId,
+    restoredReleaseId: previousReleaseId,
+    rolledBack: true,
+  }])
+  const state = getRuntimePluginState('test-transformer')
+  assert.equal(state.activeReleaseId, previousReleaseId)
+  assert.equal(state.previousReleaseId, null)
+  assert.equal(state.lastRollback.status, 'succeeded')
+  assert.equal(state.lastRollback.fromReleaseId, unhealthyReleaseId)
+  assert.equal(state.lastRollback.toReleaseId, previousReleaseId)
+  const tool = getDynamicTool(runtimeTransformerToolName('test-transformer'))
+  assert.equal((await tool.exec({ input: 'restored' })).output, 'RESTORED')
 })
 
 test('startup restore cannot overwrite a newer queued disable request', async () => {
@@ -454,9 +1354,345 @@ test('startup restore keeps process-global plugin tools disabled in multi-user m
   assert.equal(getDynamicTool(runtimeTransformerToolName('test-transformer')), null)
 })
 
+test('dependent plugins make disable atomic and disabled providers block startup restore', async () => {
+  const providerId = 'z-disable-provider'
+  const consumerId = 'a-disable-consumer'
+  const dynamicPluginIds = [consumerId, providerId]
+  writePlugin(providerId, {
+    id: providerId,
+    name: 'Disable Provider',
+    version: '1.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+  }, "function transform(input) { return 'provider:' + input }")
+  writePlugin(consumerId, {
+    id: consumerId,
+    name: 'Disable Consumer',
+    version: '1.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+    requires: [providerId],
+  }, "function transform(input) { return 'consumer:' + input }")
+
+  await _resetRuntimePluginsForTests()
+  _resetForTests()
+  assert.equal(initPlugins({ rootDir: pluginRoot, silent: true }).errors.length, 0)
+  try {
+    const owner = localOwner()
+    for (const pluginId of [providerId, consumerId]) {
+      assert.equal((await requestRuntime({
+        url: `/api/plugins/runtime/${pluginId}/enable`,
+        token: owner.token,
+        method: 'POST',
+      })).status, 200)
+    }
+    const consumerBefore = getRuntimePluginState(consumerId)
+    const rejected = await requestRuntime({
+      url: `/api/plugins/runtime/${providerId}/disable`,
+      token: owner.token,
+      method: 'POST',
+    })
+    assert.equal(rejected.status, 409)
+    assert.equal(rejected.body.error.code, 'PLUGIN_DEPENDENTS_ACTIVE')
+    assert.equal(getRuntimePluginState(providerId).enabled, true)
+    assert.equal(getRuntimePlugin(providerId).state, 'active')
+    assert.equal(getRuntimePlugin(consumerId).state, 'active')
+
+    await _resetRuntimePluginsForTests()
+    setRuntimePluginState({ pluginId: providerId, enabled: false })
+    const restored = await restoreEnabledRuntimePlugins()
+    assert.equal(restored.length, 1)
+    assert.equal(restored[0].pluginId, consumerId)
+    assert.equal(restored[0].ok, false)
+    assert.equal(restored[0].error.code, 'PLUGIN_DEPENDENCY_DISABLED')
+    assert.equal(restored[0].error.dependencyId, providerId)
+    assert.equal(getRuntimePluginState(consumerId).activeReleaseId, consumerBefore.activeReleaseId)
+    assert.equal(getRuntimePluginState(consumerId).releaseRevision, consumerBefore.releaseRevision)
+    assert.equal(getDynamicTool(runtimeTransformerToolName(consumerId)), null)
+  } finally {
+    await _resetRuntimePluginsForTests()
+    for (const pluginId of dynamicPluginIds) {
+      fs.rmSync(path.join(pluginRoot, pluginId), { recursive: true, force: true })
+    }
+    _resetForTests()
+    assert.equal(initPlugins({ rootDir: pluginRoot, silent: true }).errors.length, 0)
+  }
+})
+
+test('startup restore orders by persisted release dependencies when the disk manifest changed', async () => {
+  const providerId = 'z-release-provider'
+  const consumerId = 'a-release-consumer'
+  const dynamicPluginIds = [consumerId, providerId]
+  writePlugin(providerId, {
+    id: providerId,
+    name: 'Release Provider',
+    version: '1.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+  }, "function transform(input) { return 'provider:' + input }")
+  writePlugin(consumerId, {
+    id: consumerId,
+    name: 'Release Consumer',
+    version: '1.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+    requires: [providerId],
+    dependencyVersions: { [providerId]: '^1.0.0' },
+  }, "function transform(input) { return 'consumer:' + input }")
+
+  await _resetRuntimePluginsForTests()
+  _resetForTests()
+  assert.equal(initPlugins({ rootDir: pluginRoot, silent: true }).errors.length, 0)
+  try {
+    const owner = localOwner()
+    for (const pluginId of [providerId, consumerId]) {
+      assert.equal((await requestRuntime({
+        url: `/api/plugins/runtime/${pluginId}/enable`,
+        token: owner.token,
+        method: 'POST',
+      })).status, 200)
+    }
+    const revisions = new Map(dynamicPluginIds.map((pluginId) => [
+      pluginId,
+      getRuntimePluginState(pluginId).releaseRevision,
+    ]))
+
+    await _resetRuntimePluginsForTests()
+    writePlugin(consumerId, {
+      id: consumerId,
+      name: 'Release Consumer',
+      version: '1.0.0',
+      type: 'transformer',
+      entry: 'entry.js',
+    }, "function transform(input) { return 'unpublished:' + input }")
+    _resetForTests()
+    assert.equal(initPlugins({ rootDir: pluginRoot, silent: true }).errors.length, 0)
+
+    assert.deepEqual(await restoreEnabledRuntimePlugins(), [
+      { pluginId: providerId, ok: true },
+      { pluginId: consumerId, ok: true },
+    ])
+    for (const pluginId of dynamicPluginIds) {
+      assert.equal(getRuntimePluginState(pluginId).releaseRevision, revisions.get(pluginId))
+      assert.ok(getDynamicTool(runtimeTransformerToolName(pluginId)))
+    }
+  } finally {
+    await _resetRuntimePluginsForTests()
+    for (const pluginId of dynamicPluginIds) {
+      fs.rmSync(path.join(pluginRoot, pluginId), { recursive: true, force: true })
+    }
+    _resetForTests()
+    assert.equal(initPlugins({ rootDir: pluginRoot, silent: true }).errors.length, 0)
+  }
+})
+
+test('startup restore validates dependencies for the selected release candidate only', async () => {
+  const providerId = 'z-previous-only-provider'
+  const consumerId = 'a-candidate-specific-consumer'
+  const dynamicPluginIds = [consumerId, providerId]
+  writePlugin(providerId, {
+    id: providerId,
+    name: 'Previous Only Provider',
+    version: '1.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+  }, "function transform(input) { return 'provider:' + input }")
+  writePlugin(consumerId, {
+    id: consumerId,
+    name: 'Candidate Specific Consumer',
+    version: '1.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+    requires: [providerId],
+    dependencyVersions: { [providerId]: '^1.0.0' },
+  }, "function transform(input) { return 'previous:' + input }")
+
+  await _resetRuntimePluginsForTests()
+  _resetForTests()
+  assert.equal(initPlugins({ rootDir: pluginRoot, silent: true }).errors.length, 0)
+  try {
+    const owner = localOwner()
+    for (const pluginId of [providerId, consumerId]) {
+      assert.equal((await requestRuntime({
+        url: `/api/plugins/runtime/${pluginId}/enable`,
+        token: owner.token,
+        method: 'POST',
+      })).status, 200)
+    }
+    const previousReleaseId = getRuntimePluginState(consumerId).activeReleaseId
+
+    writePlugin(consumerId, {
+      id: consumerId,
+      name: 'Candidate Specific Consumer',
+      version: '1.1.0',
+      type: 'transformer',
+      entry: 'entry.js',
+    }, "function transform(input) { return 'active:' + input }")
+    _resetForTests()
+    assert.equal(initPlugins({ rootDir: pluginRoot, silent: true }).errors.length, 0)
+    assert.equal((await requestRuntime({
+      url: `/api/plugins/runtime/${consumerId}/reload`,
+      token: owner.token,
+      method: 'POST',
+    })).status, 200)
+
+    const publishedState = getRuntimePluginState(consumerId)
+    const activeReleaseId = publishedState.activeReleaseId
+    assert.notEqual(activeReleaseId, previousReleaseId)
+    assert.equal(publishedState.previousReleaseId, previousReleaseId)
+
+    await _resetRuntimePluginsForTests()
+    setRuntimePluginState({ pluginId: providerId, enabled: false })
+    assert.deepEqual(await restoreEnabledRuntimePlugins(), [
+      { pluginId: consumerId, ok: true },
+    ])
+    assert.equal(getRuntimePlugin(providerId), null)
+    assert.equal(getRuntimePluginState(consumerId).activeReleaseId, activeReleaseId)
+    assert.equal(getRuntimePluginState(consumerId).releaseRevision, publishedState.releaseRevision)
+    assert.equal(
+      (await getDynamicTool(runtimeTransformerToolName(consumerId)).exec({ input: 'healthy' })).output,
+      'active:healthy',
+    )
+
+    await _resetRuntimePluginsForTests()
+    setRuntimePluginState({ pluginId: providerId, enabled: true })
+    const previousRelease = getRuntimePluginRelease(consumerId, previousReleaseId)
+    const unhealthyReleaseId = 'rel-candidate-specific-unhealthy'
+    createRuntimePluginRelease({
+      pluginId: consumerId,
+      releaseId: unhealthyReleaseId,
+      sourceDigest: previousRelease.sourceDigest,
+      source: previousRelease.source,
+      pluginSnapshotJson: previousRelease.pluginSnapshotJson,
+      validationStatus: 'failed',
+      healthStatus: 'not_run',
+      failure: 'injected candidate-specific failure',
+      now: previousRelease.createdAt + 1,
+    })
+    getDb().prepare(`
+      UPDATE runtime_plugin_states
+      SET active_release_id = ?, previous_release_id = ?, release_revision = release_revision + 1
+      WHERE plugin_id = ?
+    `).run(unhealthyReleaseId, previousReleaseId, consumerId)
+    grantPermissionForRelease(consumerId, previousReleaseId)
+
+    assert.deepEqual(await restoreEnabledRuntimePlugins(), [
+      { pluginId: providerId, ok: true },
+      {
+        pluginId: consumerId,
+        ok: true,
+        attemptedReleaseId: unhealthyReleaseId,
+        restoredReleaseId: previousReleaseId,
+        rolledBack: true,
+      },
+    ])
+    assert.equal(getRuntimePluginState(consumerId).activeReleaseId, previousReleaseId)
+    assert.equal(
+      (await getDynamicTool(runtimeTransformerToolName(consumerId)).exec({ input: 'rollback' })).output,
+      'previous:rollback',
+    )
+  } finally {
+    await _resetRuntimePluginsForTests()
+    for (const pluginId of dynamicPluginIds) {
+      fs.rmSync(path.join(pluginRoot, pluginId), { recursive: true, force: true })
+    }
+    _resetForTests()
+    assert.equal(initPlugins({ rootDir: pluginRoot, silent: true }).errors.length, 0)
+  }
+})
+
+test('provider restore failure short-circuits consumers with a structured dependency receipt', async () => {
+  const providerId = 'z-failing-provider'
+  const consumerId = 'a-blocked-consumer'
+  const dynamicPluginIds = [consumerId, providerId]
+  writePlugin(providerId, {
+    id: providerId,
+    name: 'Failing Provider',
+    version: '1.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+  }, "function transform() { throw new Error('injected provider failure') }")
+  writePlugin(consumerId, {
+    id: consumerId,
+    name: 'Blocked Consumer',
+    version: '1.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+    requires: [providerId],
+  }, "function transform(input) { return 'must-not-run:' + input }")
+
+  await _resetRuntimePluginsForTests()
+  _resetForTests()
+  assert.equal(initPlugins({ rootDir: pluginRoot, silent: true }).errors.length, 0)
+  try {
+    setRuntimePluginState({ pluginId: consumerId, enabled: true })
+    setRuntimePluginState({ pluginId: providerId, enabled: true })
+    grantPermissionForPlugin(consumerId)
+    grantPermissionForPlugin(providerId)
+    const results = await restoreEnabledRuntimePlugins()
+
+    assert.equal(results[0].pluginId, providerId)
+    assert.equal(results[0].ok, false)
+    assert.equal(results[0].error.code, 'PLUGIN_RELEASE_HEALTH_CHECK_FAILED')
+    assert.deepEqual(results[1], {
+      pluginId: consumerId,
+      ok: false,
+      error: {
+        code: 'PLUGIN_DEPENDENCY_RESTORE_FAILED',
+        message: `插件依赖恢复失败：${consumerId} requires ${providerId}`,
+        retryable: false,
+        dependencyId: providerId,
+        blockedBy: [providerId],
+        attemptedReleaseId: null,
+        restoredReleaseId: null,
+      },
+    })
+    assert.equal(countRuntimePluginReleases(consumerId), 0)
+    assert.equal(getRuntimePluginState(consumerId).activeReleaseId, null)
+    assert.equal(getDynamicTool(runtimeTransformerToolName(consumerId)), null)
+  } finally {
+    await _resetRuntimePluginsForTests()
+    for (const pluginId of dynamicPluginIds) {
+      fs.rmSync(path.join(pluginRoot, pluginId), { recursive: true, force: true })
+    }
+    _resetForTests()
+    assert.equal(initPlugins({ rootDir: pluginRoot, silent: true }).errors.length, 0)
+  }
+})
+
+test('startup restore rejects a same-id host runtime without unregistering it or moving release state', async () => {
+  const owner = localOwner()
+  assert.equal((await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })).status, 200)
+  const before = getRuntimePluginState('test-transformer')
+  await _resetRuntimePluginsForTests()
+  await registerPlugin({
+    id: 'test-transformer',
+    name: 'External Same ID Host',
+    version: '9.0.0',
+    requires: [],
+    contributes: [],
+  }, () => {})
+
+  const results = await restoreEnabledRuntimePlugins()
+  assert.equal(results.length, 1)
+  assert.equal(results[0].pluginId, 'test-transformer')
+  assert.equal(results[0].ok, false)
+  assert.equal(results[0].error.code, 'PLUGIN_RUNTIME_STATE_CONFLICT')
+  assert.equal(getRuntimePlugin('test-transformer').version, '9.0.0')
+  assert.equal(getRuntimePlugin('test-transformer').state, 'active')
+  assert.equal(getRuntimePluginState('test-transformer').activeReleaseId, before.activeReleaseId)
+  assert.equal(getRuntimePluginState('test-transformer').releaseRevision, before.releaseRevision)
+  assert.equal(await unregisterPlugin('test-transformer'), true)
+})
+
 test('restore isolates missing plugins, records the error, and continues', async () => {
   setRuntimePluginState({ pluginId: 'missing-transformer', enabled: true, now: 20 })
   setRuntimePluginState({ pluginId: 'test-transformer', enabled: true, now: 21 })
+  grantPermissionForPlugin('test-transformer')
 
   const results = await restoreEnabledRuntimePlugins()
   assert.deepEqual(results.map(({ pluginId, ok }) => ({ pluginId, ok })), [

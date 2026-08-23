@@ -46,7 +46,9 @@ export async function handleHooksRequest(req, res) {
       const id = idMatch[1]
       const isTest = !!idMatch[2]
       if (isTest && req.method === 'POST') {
-        const result = await testHook({ userId, id })
+        const header = req.headers['idempotency-key']
+        const idempotencyKey = Array.isArray(header) ? header[0] : header
+        const result = await testHook({ userId, id, idempotencyKey })
         return sendJson(res, 200, { ok: true, result })
       }
       if (req.method === 'PATCH') {

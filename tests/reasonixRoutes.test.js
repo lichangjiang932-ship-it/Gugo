@@ -110,6 +110,9 @@ test('effort: default medium + switch levels', async () => {
     assert.equal(def.effort, 'medium')
     assert.equal(def.maxSteps, 12)
     assert.ok(def.presets.high)
+    assert.equal(def.presets.ultra.label, '极致（最深）')
+    assert.equal('costRatio' in def, false)
+    for (const preset of Object.values(def.presets)) assert.equal('costRatio' in preset, false)
 
     const high = rxMod.setEffortSetting({ userId, effort: 'high' })
     assert.equal(high.effort, 'high')

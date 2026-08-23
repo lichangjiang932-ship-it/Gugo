@@ -14,16 +14,24 @@
 import { JSDOM } from 'jsdom'
 import https from 'node:https'
 import http from 'node:http'
-import dns from 'node:dns/promises'
 import net from 'node:net'
+import { randomUUID } from 'node:crypto'
 import { URL as NodeURL } from 'node:url'
 import { readJson } from '../utils.js'
 import { getPublicAccount } from './authAccount.js'
 import { getSessionByToken } from '../db.js'
 import { dispatchHooks } from '../services/hooksService.js'
-import { requestApproval } from '../services/approvalGate.js'
+import {
+  requestApproval,
+  revalidateHookAuthorization,
+  revalidateToolPermission,
+} from '../services/approvalGate.js'
 import { searchWeb } from '../services/webSearchService.js'
 import { resolveClientId } from '../utils/loginGuard.js'
+import {
+  assertSafeOutboundUrl as assertUnifiedOutboundUrl,
+  isUnsafeIp as isUnifiedUnsafeIp,
+} from '../utils/outboundNetworkGuard.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 const SEARCH_TIMEOUT_MS = 12000
@@ -53,74 +61,29 @@ function cacheSet(key, value) {
   }
 }
 
-/* ── SSRF 防护:解析目标域名,拒绝任何指向私有 / loopback / link-local / 多播的 IP ── */
-
-// IPv4 私有/特殊段 (RFC 1918 / 6890 等)
-function isPrivateV4(ip) {
-  // 形如 a.b.c.d
-  const m = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
-  if (!m) return false
-  const a = +m[1], b = +m[2]
-  if (a === 10) return true                       // 10.0.0.0/8
-  if (a === 127) return true                      // 127.0.0.0/8 loopback
-  if (a === 169 && b === 254) return true         // 169.254.0.0/16 link-local (含 AWS metadata 169.254.169.254)
-  if (a === 172 && b >= 16 && b <= 31) return true// 172.16.0.0/12
-  if (a === 192 && b === 168) return true         // 192.168.0.0/16
-  if (a === 0) return true                        // 0.0.0.0/8
-  if (a >= 224) return true                       // 多播/保留 224+
-  if (a === 100 && b >= 64 && b <= 127) return true // 100.64.0.0/10 CGNAT
-  return false
-}
-
-// IPv6 危险段:::1 / fe80::/10 link-local / fc00::/7 unique-local / ::ffff:<v4-private> mapped
-function isPrivateV6(ip) {
-  const lower = ip.toLowerCase()
-  if (lower === '::' || lower === '::1') return true
-  if (/^fe[89ab][0-9a-f]:/.test(lower)) return true   // fe80::/10
-  if (/^f[cd][0-9a-f]{2}:/.test(lower)) return true   // fc00::/7
-  if (/^ff[0-9a-f]{2}:/.test(lower)) return true      // ff00::/8 多播
-  // ::ffff:a.b.c.d 形式映射 IPv4
-  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
-  if (mapped && isPrivateV4(mapped[1])) return true
-  return false
-}
-
 export function isUnsafeIp(ip) {
-  if (net.isIPv4(ip)) return isPrivateV4(ip)
-  if (net.isIPv6(ip)) return isPrivateV6(ip)
-  return true // 解析不出来认为不安全
+  return isUnifiedUnsafeIp(ip)
 }
 
 export async function assertSafeOutboundUrl(rawUrl) {
-  let target
-  try { target = new NodeURL(rawUrl) } catch { throw new Error('url 无效') }
-  if (!['http:', 'https:'].includes(target.protocol)) throw new Error('仅支持 http/https')
-  // URL.hostname 对 IPv6 会保留方括号,要剥掉再交给 net.isIP / dns.lookup
-  let host = target.hostname
-  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1)
-  // 主机名形如 IP 时直接判
-  if (net.isIP(host)) {
-    if (isUnsafeIp(host)) throw new Error('禁止访问内网 / loopback 地址')
-    target.lockedIp = host
-    return target
-  }
-  // 域名:解析所有 A/AAAA,任何一个落在内网都拒绝 (防 DNS rebinding 把外网域名解析到内网)
-  let records
   try {
-    records = await dns.lookup(host, { all: true, verbatim: true })
-  } catch {
-    throw new Error('DNS 解析失败')
+    return await assertUnifiedOutboundUrl(rawUrl)
+  } catch (error) {
+    const message = {
+      OUTBOUND_URL_INVALID: 'url 无效',
+      OUTBOUND_PROTOCOL_DENIED: '仅支持 http/https',
+      OUTBOUND_CREDENTIALS_DENIED: 'URL 不允许携带用户名或密码',
+      OUTBOUND_METADATA_DENIED: '禁止访问云元数据地址',
+      OUTBOUND_HOST_INVALID: '目标主机无效',
+      OUTBOUND_DNS_FAILED: 'DNS 解析失败',
+      OUTBOUND_DNS_EMPTY: 'DNS 无解析结果',
+      OUTBOUND_ADDRESS_DENIED: '禁止访问内网 / loopback 地址',
+    }[error?.code] || error?.message || '出站 URL 被拒绝'
+    const wrapped = new Error(message, { cause: error })
+    wrapped.code = error?.code || 'OUTBOUND_DENIED'
+    wrapped.retryable = false
+    throw wrapped
   }
-  if (!records?.length) throw new Error('DNS 无解析结果')
-  for (const r of records) {
-    if (isUnsafeIp(r.address)) {
-      throw new Error(`目标域名解析到内网地址 ${r.address}`)
-    }
-  }
-  // ★ C-P2.2: 把已审核的第一条解析结果回填给调用方,fetchSafe 直接复用,
-  //   不再独立 dns.lookup 一次(消除审核与使用 IP 不一致的 rebinding 窗口)。
-  target.lockedIp = records[0]?.address || null
-  return target
 }
 
 function sendJson(res, status, body) {
@@ -529,6 +492,11 @@ export async function handleToolProxyRequest(req, res) {
     let result
     let toolName
     let toolArgs = body
+    let hookToolCallId = null
+    const requestIdHeader = req.headers?.['idempotency-key']
+    const hookRequestId = String(
+      (Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader) || randomUUID(),
+    ).trim()
     if (url.startsWith('/api/tools/search')) {
       toolName = 'web_search'
     } else if (url.startsWith('/api/tools/fetch')) {
@@ -542,7 +510,31 @@ export async function handleToolProxyRequest(req, res) {
     const session = getSessionByToken(token)
     const userId = session?.user_id
     if (userId) {
-      const pre = await dispatchHooks({ userId, event: 'pre_tool_use', tool: toolName, args: toolArgs })
+      const toolCallId = randomUUID()
+      hookToolCallId = toolCallId
+      const hookScope = {
+        userId,
+        origin: 'chat',
+        jobId: null,
+        stepId: null,
+        sessionId: null,
+        requestId: toolCallId,
+        toolCallId,
+        toolName,
+      }
+      const pre = await dispatchHooks({
+        userId,
+        event: 'pre_tool_use',
+        tool: toolName,
+        args: toolArgs,
+        origin: hookScope.origin,
+        jobId: hookScope.jobId,
+        stepId: hookScope.stepId,
+        sessionId: hookScope.sessionId,
+        requestId: hookScope.requestId,
+        toolCallId: hookScope.toolCallId,
+        hookInvocationId: `${hookRequestId}:pre_tool_use`,
+      })
       if (!pre.allow) {
         sendJson(res, 403, { ok: false, error: pre.reason || 'hook 拒绝该工具调用' })
         return
@@ -550,35 +542,70 @@ export async function handleToolProxyRequest(req, res) {
       if (pre.replacementArgs && typeof pre.replacementArgs === 'object') {
         toolArgs = pre.replacementArgs
       }
-      if (pre.permissionDecision === 'ask') {
-        const abortController = new AbortController()
-        const abort = () => abortController.abort()
-        const abortOnClose = () => {
-          if (!res.writableEnded) abort()
-        }
-        req.once('aborted', abort)
-        res.once('close', abortOnClose)
-        let gate
-        try {
-          gate = await requestApproval({
-            userId,
-            origin: 'chat',
-            toolName,
-            args: toolArgs,
-            signal: abortController.signal,
-            forceApproval: true,
-            forceApprovalReason: pre.reason,
+      const abortController = new AbortController()
+      const abort = () => abortController.abort()
+      const abortOnClose = () => {
+        if (!res.writableEnded) abort()
+      }
+      if (typeof req.once === 'function') req.once('aborted', abort)
+      if (typeof res.once === 'function') res.once('close', abortOnClose)
+      let gate
+      try {
+        gate = await requestApproval({
+          userId,
+          origin: 'chat',
+          toolName,
+          args: toolArgs,
+          signal: abortController.signal,
+          forceApproval: pre.permissionDecision === 'ask',
+          forceApprovalReason: pre.reason,
+          hookAuthorizationProvenance: pre.hookAuthorizationProvenance || null,
+          requestId: hookScope.requestId,
+          toolCallId: hookScope.toolCallId,
+        })
+      } finally {
+        if (typeof req.off === 'function') req.off('aborted', abort)
+        if (typeof res.off === 'function') res.off('close', abortOnClose)
+      }
+      if (abortController.signal.aborted || res.destroyed) return
+      if (!gate.proceed) {
+        sendJson(res, 403, { ok: false, error: gate.reason || '该工具调用未获批准' })
+        return
+      }
+      toolArgs = gate.args ?? toolArgs
+
+      let verifiedHookAuthorization = false
+      if (gate.hookAuthorized) {
+        const finalHookAuthorization = revalidateHookAuthorization({
+          provenance: gate.hookAuthorizationProvenance,
+          ...hookScope,
+          args: toolArgs,
+          requireLive: true,
+        })
+        if (!finalHookAuthorization.proceed) {
+          sendJson(res, 403, {
+            ok: false,
+            error: finalHookAuthorization.reason || 'Hook 授权已失效',
           })
-        } finally {
-          req.off('aborted', abort)
-          res.off('close', abortOnClose)
-        }
-        if (abortController.signal.aborted || res.destroyed) return
-        if (!gate.proceed) {
-          sendJson(res, 403, { ok: false, error: gate.reason || '该工具调用未获批准' })
           return
         }
-        toolArgs = gate.args ?? toolArgs
+        verifiedHookAuthorization = true
+      }
+
+      // `await requestApproval()` is a scheduling boundary. Re-check the exact
+      // policy identity immediately before the outbound effect so a hot swap
+      // or uninstall cannot consume an authorization from the old binding.
+      const finalPolicy = revalidateToolPermission({
+        userId,
+        origin: 'chat',
+        toolName,
+        args: toolArgs,
+        expectedPolicyProvenance: gate.policyProvenance,
+        allowAsk: Boolean(gate.approvalId || verifiedHookAuthorization),
+      })
+      if (!finalPolicy.proceed) {
+        sendJson(res, 403, { ok: false, error: finalPolicy.reason || '当前策略拒绝该工具调用' })
+        return
       }
     }
 
@@ -594,7 +621,15 @@ export async function handleToolProxyRequest(req, res) {
 
     // post_tool_use hook (非阻塞观察)
     if (userId) {
-      dispatchHooks({ userId, event: 'post_tool_use', tool: toolName, args: { input: toolArgs, output: result } }).catch((err) => {
+      dispatchHooks({
+        userId,
+        event: 'post_tool_use',
+        tool: toolName,
+        args: { input: toolArgs, output: result },
+        requestId: hookToolCallId,
+        toolCallId: hookToolCallId,
+        hookInvocationId: `${hookRequestId}:post_tool_use`,
+      }).catch((err) => {
         console.warn('[hooks] post_tool_use hook 失败:', err?.message || err)
       })
     }

@@ -5,13 +5,15 @@
 > 本地/内网可用的 Web + Windows 桌面 AI 工作台 — Agent · Skill · Memory · Tool · Subagent · Job
 > 默认本机单用户免登录，可通过浏览器或桌面应用使用；模型 API 由使用者自行配置。
 
+Gugo 是开源 BYOK（Bring Your Own Key）项目：不内置支付、充值、余额、套餐、订阅或按量收费系统。模型及连接器可能产生的费用由用户自行选择的上游 Provider 直接收取；Gugo 只可在用户显式启用时，依据用户填写的费率做本地只读估算，默认关闭。估算结果绝不影响模型调用、权限、限流、自我进化、晋升或回滚。
+
 <p align="center">
   <img src="https://img.shields.io/badge/React-19-6366f1?logo=react" alt="React 19" />
   <img src="https://img.shields.io/badge/Node.js-20-10b981?logo=node.js" alt="Node 20" />
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
   <a href="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml"><img src="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/release-v0.10.24-blue" alt="v0.10.24" />
+  <img src="https://img.shields.io/badge/release-v0.11.33-blue" alt="v0.11.33" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
 
@@ -34,7 +36,7 @@ Windows 安装包与自动更新元数据见 [GitHub Releases](https://github.co
 | MCP | stdio + SSE | 是 | 是 |
 | 子代理 | 独立上下文 + 工具白名单 | 是 | 是 |
 | Skill 系统 | 内置 + 可导入 + 内置 SQLite 系统库 | 是 | 是 |
-| 独立 Hub | 已实现（`HUB_ENABLED=1`） | 是 | 无 |
+| 独立 Hub | 队列运行骨架（`HUB_ENABLED=1`，当前仅内置 `echo` 验证任务） | 是 | 无 |
 | 跨平台 Bridge | 飞书 / 微信 / Telegram 等（v0.10） | Telegram/飞书/微信/QQ | 无 |
 | 审批门控 | 服务端 pause/resume + 收件箱 + 单次调用批准/拒绝/改参数 | 无 | 权限提示 |
 
@@ -105,7 +107,8 @@ Windows 安装包与自动更新元数据见 [GitHub Releases](https://github.co
 浏览器 (React SPA)
    │
    ├── /api/* ──→ Node.js HTTP Server（零框架）
-   │      ├── adapters/modelProxy.js      ─ OpenAI 兼容代理 + SSE 流
+   │      ├── adapters/modelProxy.js      ─ 模型配置、聊天 HTTP 编排与兼容门面
+   │      ├── adapters/modelStreamingTransport.js ─ Provider 流、超时与增量协议适配
    │      ├── adapters/authAccount.js     ─ 鉴权 / 密码 / 验证码
    │      ├── services/jobRuntime.js      ─ 后台作业编排
    │      ├── services/subagentRuntime.js ─ 独立上下文子代理
@@ -190,7 +193,7 @@ Browser 工具需要 Node.js 20 或更高版本，以及已安装的 Edge/Chrome
 
 MCP OAuth 的 pending state 加密持久化并原子单次消费，服务重启不会中断 10 分钟内的授权。反向代理部署必须设置 `APP_PUBLIC_URL`；默认不会采信 `Host` 或 `X-Forwarded-*` 来生成回调地址，只有代理已清除外部伪造头时才可设置 `TRUST_PROXY=1`。自定义 bridge webhook 必须用时间戳参与 HMAC 签名，并会拒绝超过 5 分钟的请求与重复投递；请求头和签名格式见 [配置说明](docs/CONFIGURATION.md)。
 
-连接器 token、模型 API key 与自定义模型请求头使用 AES-256-GCM 加密后再写入数据库。默认会在数据库旁原子生成权限受限的 `.credentials.key`；生产环境可用 `CREDENTIAL_ENCRYPTION_KEY` 注入 32 字节主密钥，或用 `CREDENTIAL_KEY_PATH` 指定密钥文件。请把数据库和密钥分开备份；密钥丢失后密文无法恢复。旧版本的 JSON/base64 凭据会在首次读取时自动迁移为密文。
+连接器 token、模型 API key 与自定义模型请求头使用 AES-256-GCM 加密后再写入数据库。默认会在数据库旁原子生成权限受限的 `.credentials.key`；如果系统无法把该文件限制为仅当前 OS 用户可访问，凭据读写会拒绝继续并提示 `CREDENTIAL_VAULT_KEY_PERMISSIONS_UNSAFE`，不会在弱权限下使用密钥。此时请修复文件 ACL/权限，或通过 `CREDENTIAL_ENCRYPTION_KEY` 注入 32 字节主密钥；也可用 `CREDENTIAL_KEY_PATH` 指定密钥文件。请把数据库和密钥分开备份；密钥丢失后密文无法恢复。旧版本的 JSON/base64 凭据会在首次读取时自动迁移为密文。
 
 对外 MCP Server 位于 `http://<服务器地址>:5175/mcp`。先在「手机入口 / LAN Access Keys」创建 `ymak_...` 密钥，再作为 `Authorization: Bearer <key>` 使用。Claude Desktop、Cursor 和兼容 JSON 导入的客户端可配置：
 
@@ -282,12 +285,12 @@ npm test         # 全量自动化测试
 Gugo/
 ├── server/                # Node.js HTTP 服务与 SQLite 数据层
 │   ├── appServer.js       # HTTP 入口
-│   ├── db.js              # SQLite schema 与版本迁移
+│   ├── db.js              # SQLite bootstrap 与 v2-v30 兼容迁移
 │   ├── middleware.js      # 安全头 / CORS / CSP
 │   ├── adapters/          # 模型、鉴权、浏览器与工具适配器
 │   ├── routes/            # HTTP API 路由
 │   ├── services/          # Job、子代理、记忆、调度与集成服务
-│   ├── migrations/        # 独立版本的数据库迁移
+│   ├── migrations/        # v31+ 独立迁移与版本注册表
 │   ├── utils/             # 路径、网络与安全通用工具
 │   └── mcp/               # MCP 客户端与服务端
 ├── shared/                # 前后端共享的事件契约
@@ -301,6 +304,7 @@ Gugo/
 ├── tests/                 # 自动化测试
 ├── docs/
 │   ├── CONFIGURATION.md   # 配置参考
+│   ├── KERNEL_BOUNDARY.md # 极简内核边界与完成标准
 │   ├── OPERATION_GUIDE.md # 部署与运维
 │   └── SCHEDULING.md      # Cron / 调度说明
 └── .github/workflows/

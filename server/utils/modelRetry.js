@@ -33,6 +33,10 @@ export const DEFAULT_MAX_DELAY_MS = 8_000
 
 export function isRetryableError(err) {
   if (!err) return false
+  // A stable request header is not proof of provider-side idempotency. Once a
+  // tracked request may have been accepted, reconciliation must decide what
+  // happened before another physical request is allowed.
+  if (err.unsafeToReplay === true || err.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN') return false
   // 用户/上层主动取消,绝不重试
   if (err.name === 'AbortError') return false
   // ★ 我们自己的超时不重试。
@@ -45,7 +49,7 @@ export function isRetryableError(err) {
   // 所以不会再走进下面的 RETRYABLE_STATUS 分支。这里显式再挡一道,
   // 防止将来有人给它加回 status。
   if (err.code === 'MODEL_TIMEOUT') return false
-  // 思考失控:重试只会再烧一次钱,问题不在网络层
+  // 思考失控：重试只会重复产生上游 Provider 用量，问题不在网络层。
   if (err.code === 'REASONING_RUNAWAY') return false
   if (Number.isFinite(err.status) && RETRYABLE_STATUS.has(err.status)) return true
   // ★ ECONNREFUSED 对本地端点无意义 —— 服务根本没起,退避 3 次它也不会

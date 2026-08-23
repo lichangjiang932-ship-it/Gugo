@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 
 import {
@@ -8,6 +9,10 @@ import {
   unregisterPlugin,
 } from '../server/plugins/pluginRegistry.js'
 import { createRuntimePluginRegistry } from '../server/plugins/runtimePluginRegistry.js'
+import {
+  attachRuntimePluginBeginRevoke,
+  createRuntimePluginRevokeReceipt,
+} from '../server/plugins/runtimePluginContributionLifecycle.js'
 import { createLoopEvents } from '../server/services/loop/events.js'
 import { executeServerTool } from '../server/services/loop/heuristics/toolExecutor.js'
 import { runToolLoop } from '../server/services/loop/index.js'
@@ -88,6 +93,7 @@ test('runtime registry host options reject accessors without invoking them', () 
     config: {},
     registerTool: () => () => {},
     registerModelProvider: () => () => {},
+    registerHttpCapability: () => () => {},
     audit: () => {},
   }
   for (const field of Object.keys(values)) {
@@ -123,6 +129,65 @@ test('runtime registry host options ignore prototype adapters', async () => {
   assert.equal(await registry.unregisterPlugin('prototype-host-options'), true)
 })
 
+test('runtime plugins fail compatibility checks before setup executes', async () => {
+  const registry = createRuntimePluginRegistry()
+  let setupCalls = 0
+  for (const [id, overrides, expectedCode] of [
+    ['incompatible-api', { apiVersion: '2.0.0' }, 'PLUGIN_API_VERSION_INCOMPATIBLE'],
+    ['incompatible-host', { hostVersion: '>=2.0.0' }, 'PLUGIN_HOST_VERSION_INCOMPATIBLE'],
+    [
+      'missing-versioned-dependency',
+      { requires: ['absent-plugin'], dependencyVersions: { 'absent-plugin': '^1.0.0' } },
+      'PLUGIN_DEPENDENCY_UNAVAILABLE',
+    ],
+  ]) {
+    await assert.rejects(
+      registry.registerPlugin(manifest(id, overrides), () => {
+        setupCalls += 1
+      }),
+      (error) => error?.code === expectedCode && error?.retryable === false,
+    )
+    assert.equal(registry.getPlugin(id), null)
+  }
+  assert.equal(setupCalls, 0)
+})
+
+test('runtime dependency semver is enforced against the active immutable manifest', async () => {
+  const registry = createRuntimePluginRegistry()
+  await registry.registerPlugin(manifest('versioned-base', {
+    version: '2.4.1',
+    contributes: [],
+  }), () => {})
+
+  let rejectedSetupCalls = 0
+  await assert.rejects(
+    registry.registerPlugin(manifest('wrong-version-consumer', {
+      requires: ['versioned-base'],
+      dependencyVersions: { 'versioned-base': '^1.0.0' },
+      contributes: [],
+    }), () => {
+      rejectedSetupCalls += 1
+    }),
+    (error) => error?.code === 'PLUGIN_DEPENDENCY_VERSION_INCOMPATIBLE'
+      && error?.dependencyId === 'versioned-base'
+      && error?.actualVersion === '2.4.1',
+  )
+  assert.equal(rejectedSetupCalls, 0)
+
+  const installed = await registry.registerPlugin(manifest('compatible-consumer', {
+    apiVersion: '1.0.0',
+    hostVersion: '>=0.11.0 <1.0.0',
+    requires: ['versioned-base'],
+    dependencyVersions: { 'versioned-base': '^2.0.0' },
+    contributes: [],
+  }), () => {})
+  assert.equal(installed.state, 'active')
+  assert.equal(installed.apiVersion, '1.0.0')
+  assert.equal(installed.hostVersion, '>=0.11.0 <1.0.0')
+  assert.deepEqual(installed.dependencyVersions, { 'versioned-base': '^2.0.0' })
+  assert.equal(Object.isFrozen(installed.dependencyVersions), true)
+})
+
 test('runtime registry host adapters are constructor-time descriptor snapshots', async () => {
   const calls = {
     tool: 0,
@@ -138,12 +203,12 @@ test('runtime registry host adapters are constructor-time descriptor snapshots',
     registerTool(definition) {
       calls.tool += 1
       assert.equal(definition.name, 'plugin_echo')
-      return () => { calls.toolDispose += 1 }
+      return v2Disposer(() => { calls.toolDispose += 1 })
     },
     registerModelProvider(kind) {
       calls.provider += 1
       assert.equal(kind, 'host-snapshot')
-      return () => { calls.providerDispose += 1 }
+      return v2Disposer(() => { calls.providerDispose += 1 })
     },
     audit() {
       calls.audit += 1
@@ -262,7 +327,7 @@ test('runtime model providers cannot replace reserved kinds through custom host 
   const registry = createRuntimePluginRegistry({
     registerModelProvider() {
       hostRegistrationCalls += 1
-      return () => {}
+      return v2Disposer(() => {})
     },
   })
 
@@ -287,7 +352,7 @@ test('runtime provider thenable rejection never assimilates plugin code', async 
   const registry = createRuntimePluginRegistry({
     registerModelProvider(_kind, adapter) {
       wrappedAdapter = adapter
-      return () => {}
+      return v2Disposer(() => {})
     },
   })
   await registry.registerPlugin(manifest('provider-thenable-boundary', {
@@ -1272,11 +1337,12 @@ test('setup failure rolls back active event and tool side effects before rejecti
   unbind()
 })
 
-test('event registration rollback detaches every binding despite disposer failures', async () => {
+test('event registration rollback retains failed bindings until a later exact-handle retry succeeds', async () => {
   const registry = createRuntimePluginRegistry()
-  const createBus = ({ attachFails = false, disposeFails = false } = {}) => {
+  const createBus = ({ attachFails = false, disposeFailures = 0 } = {}) => {
     const listeners = new Set()
     let disposeCalls = 0
+    let remainingDisposeFailures = disposeFailures
     return {
       listeners,
       get disposeCalls() { return disposeCalls },
@@ -1287,7 +1353,10 @@ test('event registration rollback detaches every binding despite disposer failur
           return () => {
             disposeCalls += 1
             listeners.delete(listener)
-            if (disposeFails) throw new Error('loop binding dispose failed')
+            if (remainingDisposeFailures > 0) {
+              remainingDisposeFailures -= 1
+              throw new Error('loop binding dispose failed')
+            }
           }
         },
         off(event, listener) {
@@ -1296,7 +1365,7 @@ test('event registration rollback detaches every binding despite disposer failur
       },
     }
   }
-  const first = createBus({ disposeFails: true })
+  const first = createBus({ disposeFailures: 1 })
   const second = createBus()
   const failing = createBus({ attachFails: true })
   const unbind = [
@@ -1310,9 +1379,8 @@ test('event registration rollback detaches every binding despite disposer failur
       registry.registerPlugin(manifest('event-registration-rollback'), (ctx) => {
         ctx.events.on('request', () => undefined)
       }),
-      (error) => error?.code === 'PLUGIN_SETUP_FAILED'
-        && error?.retryable === false
-        && /event registration rollback failed/.test(error?.message || ''),
+      (error) => error instanceof AggregateError
+        && /plugin setup failed: event-registration-rollback/.test(error?.message || ''),
     )
     assert.equal(first.listeners.size, 0)
     assert.equal(second.listeners.size, 0)
@@ -1320,6 +1388,11 @@ test('event registration rollback detaches every binding despite disposer failur
     assert.equal(first.disposeCalls, 1)
     assert.equal(second.disposeCalls, 1)
     assert.equal(failing.disposeCalls, 0)
+    assert.equal(registry.getPlugin('event-registration-rollback')?.state, 'rollback_failed')
+
+    assert.equal(await registry.unregisterPlugin('event-registration-rollback'), true)
+    assert.equal(first.disposeCalls, 2)
+    assert.equal(second.disposeCalls, 1)
     assert.equal(registry.getPlugin('event-registration-rollback'), null)
   } finally {
     for (const dispose of unbind.reverse()) dispose()
@@ -1399,7 +1472,7 @@ test('loop event cleanup rejects async and Proxy completions without assimilatio
         registry.unregisterPlugin(pluginId),
         (error) => error instanceof AggregateError
           && error.errors.length === 1
-          && error.errors[0]?.code === 'PLUGIN_LOOP_EVENT_CLEANUP_ASYNC_UNSUPPORTED'
+          && error.errors[0]?.code === 'PLUGIN_REVOKE_VISIBILITY_INDETERMINATE'
           && error.errors[0]?.retryable === false,
       )
       await Promise.resolve()
@@ -1407,11 +1480,106 @@ test('loop event cleanup rejects async and Proxy completions without assimilatio
       assert.equal(listeners.size, 0)
       assert.equal(thenCalls, 0)
       assert.equal(descriptorCalls, 0)
-      assert.equal(registry.getPlugin(pluginId), null)
+      assert.equal(registry.getPlugin(pluginId)?.state, 'visibility_indeterminate')
     } finally {
       unbind()
     }
   }
+})
+
+test('loop event cleanup retains its attachment handle until a later retry confirms removal', async () => {
+  const registry = createRuntimePluginRegistry()
+  const listeners = new Set()
+  let cleanupCalls = 0
+  const unbind = registry.bindLoopEvents({
+    on(event, listener) {
+      listeners.add(listener)
+      return () => {
+        cleanupCalls += 1
+        if (cleanupCalls === 1) return Promise.resolve(false)
+        return listeners.delete(listener)
+      }
+    },
+    off(event, listener) {
+      return listeners.delete(listener)
+    },
+  })
+  await registry.registerPlugin(manifest('event-cleanup-retry'), (ctx) => {
+    ctx.events.on('request', () => undefined)
+  })
+
+  await assert.rejects(
+    registry.unregisterPlugin('event-cleanup-retry'),
+    (error) => error?.code === 'PLUGIN_UNINSTALL_INCOMPLETE',
+  )
+  assert.equal(cleanupCalls, 1)
+  assert.equal(listeners.size, 1)
+  assert.equal(registry.getPlugin('event-cleanup-retry')?.state, 'visibility_indeterminate')
+
+  assert.equal(await registry.unregisterPlugin('event-cleanup-retry'), true)
+  assert.equal(cleanupCalls, 2)
+  assert.equal(listeners.size, 0)
+  assert.equal(registry.getPlugin('event-cleanup-retry'), null)
+  assert.equal(unbind(), true)
+})
+
+test('loop event cleanup consumes per-binding v2 receipts and retries only retained bindings', async () => {
+  const registry = createRuntimePluginRegistry()
+  const createBus = ({ retainOnce = false } = {}) => {
+    const listeners = new Set()
+    let beginCalls = 0
+    let directCalls = 0
+    return {
+      listeners,
+      get beginCalls() { return beginCalls },
+      get directCalls() { return directCalls },
+      events: {
+        on(event, listener) {
+          listeners.add(listener)
+          const dispose = () => {
+            directCalls += 1
+            throw new Error('v2 event attachment must use beginRevoke')
+          }
+          return v2Disposer(dispose, () => {
+            beginCalls += 1
+            if (retainOnce && beginCalls === 1) {
+              return createRuntimePluginRevokeReceipt('retained', Promise.resolve(true))
+            }
+            listeners.delete(listener)
+            return createRuntimePluginRevokeReceipt('revoked', Promise.resolve(true))
+          })
+        },
+        off(event, listener) {
+          return listeners.delete(listener)
+        },
+      },
+    }
+  }
+  const revoked = createBus()
+  const retained = createBus({ retainOnce: true })
+  const unbindRevoked = registry.bindLoopEvents(revoked.events)
+  const unbindRetained = registry.bindLoopEvents(retained.events)
+  await registry.registerPlugin(manifest('event-v2-multi-binding'), (ctx) => {
+    ctx.events.on('request', () => undefined)
+  })
+
+  await assert.rejects(
+    registry.unregisterPlugin('event-v2-multi-binding'),
+    (error) => error?.code === 'PLUGIN_UNINSTALL_INCOMPLETE',
+  )
+  assert.equal(revoked.beginCalls, 1)
+  assert.equal(revoked.directCalls, 0)
+  assert.equal(revoked.listeners.size, 0)
+  assert.equal(retained.beginCalls, 1)
+  assert.equal(retained.directCalls, 0)
+  assert.equal(retained.listeners.size, 1)
+
+  assert.equal(await registry.unregisterPlugin('event-v2-multi-binding'), true)
+  assert.equal(revoked.beginCalls, 1)
+  assert.equal(retained.beginCalls, 2)
+  assert.equal(retained.listeners.size, 0)
+  assert.equal(unbindRevoked(), true)
+  assert.equal(unbindRetained(), true)
 })
 
 test('runtime tool and prompt definitions reject accessors without invoking them', async () => {
@@ -2544,6 +2712,7 @@ test('public Agent Loop binds active runtime plugin events for each run', async 
 })
 
 test('public Agent Loop executes a plugin tool once and feeds its result back to the model', async () => {
+  const jobId = `plugin-tool-loop-job-${randomUUID()}`
   let executions = 0
   let modelCalls = 0
   await registerPlugin(manifest('loop-tool-plugin'), (ctx) => {
@@ -2557,7 +2726,7 @@ test('public Agent Loop executes a plugin tool once and feeds its result back to
         assert.equal(Object.isFrozen(executionContext), true)
         assert.equal(executionContext.name, 'plugin_echo')
         assert.equal(executionContext.userId, 'plugin-loop-user')
-        assert.equal(executionContext.jobId, 'plugin-tool-loop-job')
+        assert.equal(executionContext.jobId, jobId)
         assert.equal(executionContext.stepId, 'plugin-tool-loop-step')
         assert.equal(executionContext.toolCallId, 'plugin-echo-call')
         assert.equal(executionContext.origin, 'plugin')
@@ -2574,7 +2743,7 @@ test('public Agent Loop executes a plugin tool once and feeds its result back to
 
   const result = await runToolLoop({
     job: {
-      id: 'plugin-tool-loop-job',
+      id: jobId,
       userId: 'plugin-loop-user',
       origin: 'chat',
       prompt: 'Use plugin_echo and report the result.',
@@ -2584,7 +2753,11 @@ test('public Agent Loop executes a plugin tool once and feeds its result back to
     toolSpecs: [getDynamicTool('plugin_echo').spec],
     enableToolHooks: false,
     maxIters: 3,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: async ({ args }) => ({
+      proceed: true,
+      args,
+      approvalId: 'plugin-loop-tool-approved',
+    }),
     runModel: async ({ messages }) => {
       modelCalls += 1
       if (modelCalls === 1) {
@@ -3330,6 +3503,10 @@ test('plugin schemas are immutable host snapshots and cyclic schemas fail closed
 
 test('plugin call stays bound to the schema owner across shadow and restore races', async () => {
   const runRace = async ({ name, visibleOwner, changeOwner }) => {
+    // This race exercises the legacy dynamic-registration compatibility layer.
+    // The production registry has an authoritative capability host and rejects
+    // same-slot plugin conflicts before they can shadow one another.
+    const registry = createRuntimePluginRegistry()
     const pluginStem = name.replaceAll('_', '-')
     let visibleExecutions = 0
     let changedExecutions = 0
@@ -3341,7 +3518,7 @@ test('plugin call stays bound to the schema owner across shadow and restore race
         parameters: { type: 'object', properties: {}, additionalProperties: false },
       },
     }
-    await registerPlugin(manifest(`${visibleOwner}-plugin`), (ctx) => {
+    await registry.registerPlugin(manifest(`${visibleOwner}-plugin`), (ctx) => {
       ctx.tools.register({
         name,
         spec,
@@ -3349,7 +3526,7 @@ test('plugin call stays bound to the schema owner across shadow and restore race
       })
     })
     if (changeOwner === 'restore') {
-      await registerPlugin(manifest(`${pluginStem}-shadow-plugin`), (ctx) => {
+      await registry.registerPlugin(manifest(`${pluginStem}-shadow-plugin`), (ctx) => {
         ctx.tools.register({
           name,
           spec,
@@ -3392,7 +3569,7 @@ test('plugin call stays bound to the schema owner across shadow and restore race
     })
     await modelStarted
     if (changeOwner === 'shadow') {
-      await registerPlugin(manifest(`${pluginStem}-changed-plugin`), (ctx) => {
+      await registry.registerPlugin(manifest(`${pluginStem}-changed-plugin`), (ctx) => {
         ctx.tools.register({
           name,
           spec,
@@ -3400,7 +3577,7 @@ test('plugin call stays bound to the schema owner across shadow and restore race
         })
       })
     } else {
-      assert.equal(await unregisterPlugin(`${pluginStem}-shadow-plugin`), true)
+      assert.equal(await registry.unregisterPlugin(`${pluginStem}-shadow-plugin`), true)
     }
     releaseModel()
     await running
@@ -3408,6 +3585,7 @@ test('plugin call stays bound to the schema owner across shadow and restore race
     assert.equal(changedExecutions, 0)
     assert.match(JSON.stringify(observedMessages), /dynamic_tool_registration_changed/)
     assert.equal(observedToolNames.includes(name), false)
+    await registry.shutdown()
   }
 
   await runRace({
@@ -3415,7 +3593,6 @@ test('plugin call stays bound to the schema owner across shadow and restore race
     visibleOwner: 'registration-shadow-base',
     changeOwner: 'shadow',
   })
-  await _resetRuntimePluginsForTests()
   await runRace({
     name: 'plugin_registration_restore_race',
     visibleOwner: 'registration-restore-base',
@@ -3770,7 +3947,7 @@ test('async visible contribution revocation cannot await self-unregister', async
   let selfUnregisterError = null
   registry = createRuntimePluginRegistry({
     registerTool() {
-      return async () => {
+      const dispose = async () => {
         await Promise.resolve()
         try {
           await registry.unregisterPlugin('visible-revocation-self-unregister')
@@ -3778,6 +3955,10 @@ test('async visible contribution revocation cannot await self-unregister', async
           selfUnregisterError = error
         }
       }
+      return v2Disposer(dispose, () => createRuntimePluginRevokeReceipt(
+        'revoked',
+        dispose(),
+      ))
     },
   })
   await registry.registerPlugin(manifest('visible-revocation-self-unregister', {
@@ -3804,21 +3985,23 @@ test('async visible contribution revocation cannot await self-unregister', async
 
 test('visible contribution async completion is consumed and aggregated once', async () => {
   let disposerCalls = 0
-  let thenCalls = 0
+  let cleanupExecutors = 0
   const thrown = Object.assign(new Error('visible async revocation failed'), {
     code: 'PLUGIN_VISIBLE_ASYNC_REVOCATION_FAILURE',
   })
   const registry = createRuntimePluginRegistry({
     registerTool() {
-      return () => {
+      const dispose = () => {
         disposerCalls += 1
-        return {
-          then(resolve, reject) {
-            thenCalls += 1
-            reject(thrown)
-          },
-        }
       }
+      return v2Disposer(dispose, () => {
+        dispose()
+        const cleanup = new Promise((_resolve, reject) => {
+          cleanupExecutors += 1
+          reject(thrown)
+        })
+        return createRuntimePluginRevokeReceipt('revoked', cleanup)
+      })
     },
   })
   await registry.registerPlugin(manifest('visible-revocation-completion-once', {
@@ -3838,12 +4021,15 @@ test('visible contribution async completion is consumed and aggregated once', as
     registry.unregisterPlugin('visible-revocation-completion-once'),
     (error) => error instanceof AggregateError
       && error.errors.length === 1
-      && error.errors[0]?.code === 'PLUGIN_VISIBLE_ASYNC_REVOCATION_FAILURE'
+      && error.errors[0]?.code === 'PLUGIN_REVOKE_CLEANUP_FAILED'
       && error.errors[0]?.retryable === false,
   )
   assert.equal(disposerCalls, 1)
-  assert.equal(thenCalls, 1)
-  assert.equal(registry.getPlugin('visible-revocation-completion-once'), null)
+  assert.equal(cleanupExecutors, 1)
+  assert.equal(
+    registry.getPlugin('visible-revocation-completion-once')?.state,
+    'inactive_cleanup_failed',
+  )
 })
 
 test('visible contribution revocation errors are detached before aggregation', async () => {
@@ -3862,7 +4048,11 @@ test('visible contribution revocation errors are detached before aggregation', a
   })
   const registry = createRuntimePluginRegistry({
     registerTool() {
-      return () => { throw thrown }
+      const dispose = () => {}
+      return v2Disposer(dispose, () => createRuntimePluginRevokeReceipt(
+        'retained',
+        new Promise((_resolve, reject) => reject(thrown)),
+      ))
     },
   })
   await registry.registerPlugin(manifest('visible-revocation-error-boundary', {
@@ -3885,9 +4075,12 @@ test('visible contribution revocation errors are detached before aggregation', a
       assert.equal(error.errors.length, 1)
       const detached = error.errors[0]
       assert.notEqual(detached, thrown)
-      assert.equal(detached?.code, 'PLUGIN_VISIBLE_REVOCATION_FAILURE')
+      assert.equal(detached?.code, 'PLUGIN_REVOKE_CLEANUP_FAILED')
       assert.equal(detached?.retryable, false)
-      assert.equal(detached?.message, 'plugin disposer failed: visible-revocation-error-boundary')
+      assert.equal(
+        detached?.message,
+        'plugin contribution cleanup failed: tool:visible_revocation_error:implementation',
+      )
       assert.equal(detached?.pluginId, 'visible-revocation-error-boundary')
       assert.equal(detached?.phase, 'dispose')
       assert.equal(Object.hasOwn(detached, 'cause'), false)
@@ -3895,7 +4088,10 @@ test('visible contribution revocation errors are detached before aggregation', a
     },
   )
   assert.equal(messageGetterCalls, 0)
-  assert.equal(registry.getPlugin('visible-revocation-error-boundary'), null)
+  assert.equal(
+    registry.getPlugin('visible-revocation-error-boundary')?.state,
+    'visibility_indeterminate',
+  )
 })
 
 test('plugin disposer thrown values are detached before cleanup accounting ends', async () => {
@@ -3949,5 +4145,672 @@ test('plugin disposer thrown values are detached before cleanup accounting ends'
   const attempted = await settleWithin(unregisterAttempt)
   assert.equal(attempted.value, undefined)
   assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
-  assert.equal(registry.getPlugin('disposer-error-boundary'), null)
+  assert.equal(registry.getPlugin('disposer-error-boundary')?.state, 'inactive_cleanup_failed')
+})
+
+test('failed plugin disposer remains tracked until a later uninstall retry succeeds', async () => {
+  const registry = createRuntimePluginRegistry()
+  let disposerCalls = 0
+  await registry.registerPlugin(manifest('disposer-retry-boundary'), (ctx) => {
+    ctx.lifecycle.onDispose(() => {
+      disposerCalls += 1
+      if (disposerCalls === 1) throw new Error('first cleanup attempt failed')
+    })
+  })
+
+  await assert.rejects(
+    registry.unregisterPlugin('disposer-retry-boundary'),
+    (error) => error instanceof AggregateError
+      && error.errors.length === 1
+      && error.errors[0]?.pluginId === 'disposer-retry-boundary',
+  )
+  assert.equal(disposerCalls, 1)
+  assert.equal(registry.getPlugin('disposer-retry-boundary')?.state, 'inactive_cleanup_failed')
+
+  assert.equal(await registry.unregisterPlugin('disposer-retry-boundary'), true)
+  assert.equal(disposerCalls, 2)
+  assert.equal(registry.getPlugin('disposer-retry-boundary'), null)
+})
+
+test('config reload setup and old disposer self-unregister attempts fail fast across record generations', async () => {
+  const registry = createRuntimePluginRegistry({
+    configLayers: [{
+      id: 'host-default',
+      kind: 'defaults',
+      priority: 0,
+      plugins: { 'reload-self-unregister': { revision: 1 } },
+    }],
+  })
+  const setupErrors = []
+  const disposerErrors = []
+  let setupRevision = 0
+  const setup = async (ctx) => {
+    const revision = ++setupRevision
+    if (revision > 1) {
+      try {
+        await registry.unregisterPlugin('reload-self-unregister')
+      } catch (error) {
+        setupErrors.push(error)
+      }
+    }
+    ctx.lifecycle.onDispose(async () => {
+      try {
+        await registry.unregisterPlugin('reload-self-unregister')
+      } catch (error) {
+        disposerErrors.push(error)
+      }
+    })
+  }
+  await registry.registerPlugin(manifest('reload-self-unregister', {
+    contributes: [],
+  }), setup)
+
+  const reloaded = await settleWithin(registry.reloadPluginConfig('reload-self-unregister', {
+    expectedRevision: 1,
+    configLayerSources: [{
+      source: 'user_config',
+      layers: [{
+        id: 'user-installation',
+        kind: 'installation',
+        priority: 100,
+        plugins: { 'reload-self-unregister': { revision: 2 } },
+      }],
+    }],
+  }))
+  assert.equal(reloaded.configRevision, 2)
+  assert.equal(setupErrors.length, 1)
+  assert.equal(setupErrors[0]?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(disposerErrors.length, 1)
+  assert.equal(disposerErrors[0]?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
+  assert.equal(registry.getPlugin('reload-self-unregister')?.configRevision, 2)
+  await registry.shutdown()
+  assert.equal(disposerErrors.length, 2)
+})
+
+test('cross-plugin callback unload and reload cycles fail fast instead of forming wait graphs', async () => {
+  const registry = createRuntimePluginRegistry()
+  const installPeer = async (id, peerId) => {
+    await registry.registerPlugin(manifest(id, {
+      contributes: [`service:${id}-lifecycle`],
+    }), (ctx) => {
+      ctx.services.provide(`${id}-lifecycle`, {
+        unregisterPeer: () => registry.unregisterPlugin(peerId),
+        reloadPeer: () => registry.reloadPluginConfig(peerId, {
+          expectedRevision: 1,
+          configLayerSources: [],
+        }),
+      })
+    })
+  }
+  await installPeer('wait-graph-a', 'wait-graph-b')
+  await installPeer('wait-graph-b', 'wait-graph-a')
+
+  const unloadResults = await Promise.allSettled([
+    settleWithin(registry.invokeService('wait-graph-a-lifecycle', 'unregisterPeer')),
+    settleWithin(registry.invokeService('wait-graph-b-lifecycle', 'unregisterPeer')),
+  ])
+  assert.deepEqual(
+    unloadResults.map((result) => result.status === 'rejected' ? result.reason?.code : null),
+    ['PLUGIN_CALLBACK_UNREGISTER_DEADLOCK', 'PLUGIN_CALLBACK_UNREGISTER_DEADLOCK'],
+  )
+  assert.equal(registry.getPlugin('wait-graph-a')?.state, 'active')
+  assert.equal(registry.getPlugin('wait-graph-b')?.state, 'active')
+
+  const reloadResults = await Promise.allSettled([
+    settleWithin(registry.invokeService('wait-graph-a-lifecycle', 'reloadPeer')),
+    settleWithin(registry.invokeService('wait-graph-b-lifecycle', 'reloadPeer')),
+  ])
+  assert.deepEqual(
+    reloadResults.map((result) => result.status === 'rejected' ? result.reason?.code : null),
+    ['PLUGIN_CONFIG_RELOAD_CALLBACK_DEADLOCK', 'PLUGIN_CONFIG_RELOAD_CALLBACK_DEADLOCK'],
+  )
+  assert.equal(registry.getPlugin('wait-graph-a')?.configRevision, 1)
+  assert.equal(registry.getPlugin('wait-graph-b')?.configRevision, 1)
+  await registry.shutdown()
+})
+
+test('lifecycle guards span registry instances during setup and cleanup', async () => {
+  const registryA = createRuntimePluginRegistry()
+  const registryB = createRuntimePluginRegistry()
+  const setupErrors = []
+  const cleanupErrors = []
+  let arrivals = 0
+  let releaseSetups
+  const setupGate = new Promise((resolve) => { releaseSetups = resolve })
+  const install = (registry, peerRegistry, id, peerId) => registry.registerPlugin(manifest(id, {
+    contributes: [],
+  }), async (ctx) => {
+    ctx.lifecycle.onDispose(async () => {
+      try {
+        await peerRegistry.unregisterPlugin(peerId)
+      } catch (error) {
+        cleanupErrors.push(error)
+      }
+    })
+    arrivals += 1
+    if (arrivals === 2) releaseSetups()
+    await setupGate
+    try {
+      await peerRegistry.unregisterPlugin(peerId)
+    } catch (error) {
+      setupErrors.push(error)
+    }
+  })
+
+  await Promise.all([
+    install(registryA, registryB, 'cross-registry-setup-a', 'cross-registry-setup-b'),
+    install(registryB, registryA, 'cross-registry-setup-b', 'cross-registry-setup-a'),
+  ])
+  assert.deepEqual(setupErrors.map((error) => error?.code), [
+    'PLUGIN_CALLBACK_UNREGISTER_DEADLOCK',
+    'PLUGIN_CALLBACK_UNREGISTER_DEADLOCK',
+  ])
+  assert.equal(setupErrors.every((error) => error?.phase === 'setup'), true)
+  assert.equal(setupErrors.every((error) => error?.crossRegistry === true), true)
+  assert.equal(registryA.getPlugin('cross-registry-setup-a')?.state, 'active')
+  assert.equal(registryB.getPlugin('cross-registry-setup-b')?.state, 'active')
+
+  assert.deepEqual(await Promise.all([
+    settleWithin(registryA.unregisterPlugin('cross-registry-setup-a')),
+    settleWithin(registryB.unregisterPlugin('cross-registry-setup-b')),
+  ]), [true, true])
+  assert.deepEqual(cleanupErrors.map((error) => error?.code), [
+    'PLUGIN_CALLBACK_UNREGISTER_DEADLOCK',
+    'PLUGIN_CALLBACK_UNREGISTER_DEADLOCK',
+  ])
+  assert.equal(cleanupErrors.every((error) => error?.phase === 'dispose'), true)
+  assert.equal(cleanupErrors.every((error) => error?.crossRegistry === true), true)
+})
+
+test('cross-registry service callbacks reject mutual unload and reload wait graphs', async () => {
+  const registryA = createRuntimePluginRegistry()
+  const registryB = createRuntimePluginRegistry()
+  const install = (registry, peerRegistry, id, peerId) => registry.registerPlugin(manifest(id, {
+    contributes: [`service:${id}-lifecycle`],
+  }), (ctx) => {
+    ctx.services.provide(`${id}-lifecycle`, {
+      unregisterPeer: () => peerRegistry.unregisterPlugin(peerId),
+      reloadPeer: () => peerRegistry.reloadPluginConfig(peerId, {
+        expectedRevision: 1,
+        configLayerSources: [],
+      }),
+    })
+  })
+  await install(registryA, registryB, 'cross-registry-service-a', 'cross-registry-service-b')
+  await install(registryB, registryA, 'cross-registry-service-b', 'cross-registry-service-a')
+
+  const unloads = await Promise.allSettled([
+    settleWithin(registryA.invokeService('cross-registry-service-a-lifecycle', 'unregisterPeer')),
+    settleWithin(registryB.invokeService('cross-registry-service-b-lifecycle', 'unregisterPeer')),
+  ])
+  assert.deepEqual(unloads.map((result) => result.status === 'rejected' ? result.reason?.code : null), [
+    'PLUGIN_CALLBACK_UNREGISTER_DEADLOCK',
+    'PLUGIN_CALLBACK_UNREGISTER_DEADLOCK',
+  ])
+
+  const reloads = await Promise.allSettled([
+    settleWithin(registryA.invokeService('cross-registry-service-a-lifecycle', 'reloadPeer')),
+    settleWithin(registryB.invokeService('cross-registry-service-b-lifecycle', 'reloadPeer')),
+  ])
+  assert.deepEqual(reloads.map((result) => result.status === 'rejected' ? result.reason?.code : null), [
+    'PLUGIN_CONFIG_RELOAD_CALLBACK_DEADLOCK',
+    'PLUGIN_CONFIG_RELOAD_CALLBACK_DEADLOCK',
+  ])
+  assert.equal(registryA.getPlugin('cross-registry-service-a')?.configRevision, 1)
+  assert.equal(registryB.getPlugin('cross-registry-service-b')?.configRevision, 1)
+  await Promise.all([registryA.shutdown(), registryB.shutdown()])
+})
+
+test('nested cross-registry lifecycle errors identify the innermost plugin frame', async () => {
+  const outerRegistry = createRuntimePluginRegistry()
+  const innerRegistry = createRuntimePluginRegistry()
+  let observedError = null
+  await outerRegistry.registerPlugin(manifest('outer-registry-source', {
+    contributes: ['service:install-inner-registry-plugin'],
+  }), (ctx) => {
+    ctx.services.provide('install-inner-registry-plugin', {
+      run: async () => {
+        await innerRegistry.registerPlugin(manifest('inner-registry-source', {
+          contributes: [],
+        }), async () => {
+          try {
+            await outerRegistry.unregisterPlugin('outer-registry-source')
+          } catch (error) {
+            observedError = error
+          }
+        })
+        return { ok: true }
+      },
+    })
+  })
+
+  assert.deepEqual(await outerRegistry.invokeService('install-inner-registry-plugin', 'run'), {
+    found: true,
+    pluginId: 'outer-registry-source',
+    value: { ok: true },
+  })
+  assert.equal(observedError?.code, 'PLUGIN_CALLBACK_UNREGISTER_DEADLOCK')
+  assert.equal(observedError?.pluginId, 'inner-registry-source')
+  assert.equal(observedError?.targetPluginId, 'outer-registry-source')
+  assert.equal(observedError?.phase, 'setup')
+  assert.equal(observedError?.crossRegistry, true)
+  await Promise.all([outerRegistry.shutdown(), innerRegistry.shutdown()])
+})
+
+test('shared lifecycle scope does not block an unrelated asynchronous chain', async () => {
+  const callbackRegistry = createRuntimePluginRegistry()
+  const unrelatedRegistry = createRuntimePluginRegistry()
+  let markEntered
+  let releaseCallback
+  const entered = new Promise((resolve) => { markEntered = resolve })
+  const callbackGate = new Promise((resolve) => { releaseCallback = resolve })
+  await callbackRegistry.registerPlugin(manifest('held-callback-plugin', {
+    contributes: ['service:held-callback'],
+  }), (ctx) => {
+    ctx.services.provide('held-callback', {
+      run: async () => {
+        markEntered()
+        await callbackGate
+        return { ok: true }
+      },
+    })
+  })
+  await unrelatedRegistry.registerPlugin(manifest('unrelated-plugin', {
+    contributes: [],
+  }), () => {})
+
+  const callback = callbackRegistry.invokeService('held-callback', 'run')
+  await entered
+  assert.equal(await unrelatedRegistry.unregisterPlugin('unrelated-plugin'), true)
+  releaseCallback()
+  assert.deepEqual(await callback, {
+    found: true,
+    pluginId: 'held-callback-plugin',
+    value: { ok: true },
+  })
+  await callbackRegistry.shutdown()
+})
+
+test('discarded lifecycle guard rejections are prehandled without changing callback results', async () => {
+  const registry = createRuntimePluginRegistry()
+  const unhandled = []
+  const onUnhandled = (error) => unhandled.push(error)
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    await registry.registerPlugin(manifest('discarded-lifecycle-guard', {
+      contributes: [
+        'prompt:discarded-lifecycle-guard',
+        'service:discarded-lifecycle-guard',
+      ],
+    }), (ctx) => {
+      const discardLifecycleCalls = () => {
+        void registry.unregisterPlugin('discarded-lifecycle-guard')
+        void registry.reloadPluginConfig('discarded-lifecycle-guard', {
+          expectedRevision: 1,
+          configLayerSources: [],
+        })
+        void registry.shutdown()
+      }
+      ctx.prompts.register({
+        id: 'discarded-lifecycle-guard',
+        render: () => {
+          discardLifecycleCalls()
+          return 'prompt completed'
+        },
+      })
+      ctx.services.provide('discarded-lifecycle-guard', {
+        run: async () => {
+          discardLifecycleCalls()
+          return { ok: true }
+        },
+      })
+    })
+
+    assert.deepEqual(registry.renderPromptBlocks(), {
+      blocks: [{
+        id: 'discarded-lifecycle-guard',
+        pluginId: 'discarded-lifecycle-guard',
+        text: 'prompt completed',
+      }],
+      errors: [],
+    })
+    assert.deepEqual(await registry.invokeService('discarded-lifecycle-guard', 'run'), {
+      found: true,
+      pluginId: 'discarded-lifecycle-guard',
+      value: { ok: true },
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(unhandled, [])
+    assert.equal(registry.getPlugin('discarded-lifecycle-guard')?.state, 'active')
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+    await registry.shutdown()
+  }
+})
+
+const CROSS_REGISTRY_LIFECYCLE_CASES = Object.freeze([
+  Object.freeze({ label: 'U/U', left: 'unregister', right: 'unregister' }),
+  Object.freeze({ label: 'R/R', left: 'reload', right: 'reload' }),
+  Object.freeze({ label: 'U/R', left: 'unregister', right: 'reload' }),
+])
+
+function createLifecycleBarrier() {
+  let arrivals = 0
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  return async () => {
+    arrivals += 1
+    if (arrivals === 2) release()
+    await gate
+  }
+}
+
+function v2Disposer(dispose, beginRevoke = null) {
+  return attachRuntimePluginBeginRevoke(dispose, beginRevoke || (() => {
+    dispose()
+    return createRuntimePluginRevokeReceipt('revoked')
+  }))
+}
+
+function guardedReloadOptions() {
+  return {
+    expectedRevision: 1,
+    configLayerSources: [],
+  }
+}
+
+function committedReloadOptions(pluginId) {
+  return {
+    expectedRevision: 1,
+    configLayerSources: [{
+      source: 'user_config',
+      layers: [{
+        id: `matrix-revision-${pluginId}`,
+        kind: 'installation',
+        priority: 100,
+        plugins: { [pluginId]: { revision: 2 } },
+      }],
+    }],
+  }
+}
+
+function createConfiguredLifecycleRegistry(pluginId) {
+  return createRuntimePluginRegistry({
+    configLayers: [{
+      id: `matrix-default-${pluginId}`,
+      kind: 'defaults',
+      priority: 0,
+      plugins: { [pluginId]: { revision: 1 } },
+    }],
+  })
+}
+
+async function captureLifecycleGuard({
+  errors,
+  operation,
+  sourceId,
+  targetId,
+  targetRegistry,
+}) {
+  try {
+    if (operation === 'unregister') {
+      await targetRegistry.unregisterPlugin(targetId)
+    } else {
+      await targetRegistry.reloadPluginConfig(targetId, guardedReloadOptions())
+    }
+    errors.set(sourceId, null)
+  } catch (error) {
+    errors.set(sourceId, error)
+  }
+}
+
+function assertLifecycleGuardMatrix({
+  errors,
+  label,
+  leftId,
+  leftOperation,
+  phase,
+  rightId,
+  rightOperation,
+}) {
+  for (const [sourceId, targetId, operation] of [
+    [leftId, rightId, leftOperation],
+    [rightId, leftId, rightOperation],
+  ]) {
+    const error = errors.get(sourceId)
+    assert.ok(error, `${label}: ${sourceId} must receive a lifecycle guard rejection`)
+    assert.equal(
+      error.code,
+      operation === 'reload'
+        ? 'PLUGIN_CONFIG_RELOAD_CALLBACK_DEADLOCK'
+        : 'PLUGIN_CALLBACK_UNREGISTER_DEADLOCK',
+      label,
+    )
+    assert.equal(error.retryable, false, label)
+    assert.equal(error.pluginId, sourceId, label)
+    assert.equal(error.phase, phase, label)
+    assert.equal(error.operation, operation, label)
+    assert.equal(error.crossRegistry, true, label)
+    assert.equal(error.targetPluginId, targetId, label)
+    assert.equal(error.statusCode, operation === 'reload' ? 409 : undefined, label)
+  }
+}
+
+async function runInitialSetupLifecycleMatrix(entry, suffix) {
+  const leftId = `mx-is-${suffix}-a`
+  const rightId = `mx-is-${suffix}-b`
+  const leftRegistry = createRuntimePluginRegistry()
+  const rightRegistry = createRuntimePluginRegistry()
+  const errors = new Map()
+  const arrive = createLifecycleBarrier()
+  const setup = (sourceId, targetId, targetRegistry, operation) => async () => {
+    await arrive()
+    await captureLifecycleGuard({ errors, operation, sourceId, targetId, targetRegistry })
+  }
+
+  await settleWithin(Promise.all([
+    leftRegistry.registerPlugin(
+      manifest(leftId, { contributes: [] }),
+      setup(leftId, rightId, rightRegistry, entry.left),
+    ),
+    rightRegistry.registerPlugin(
+      manifest(rightId, { contributes: [] }),
+      setup(rightId, leftId, leftRegistry, entry.right),
+    ),
+  ]), 2_000)
+  assertLifecycleGuardMatrix({
+    errors,
+    label: `initial setup ${entry.label}`,
+    leftId,
+    leftOperation: entry.left,
+    phase: 'setup',
+    rightId,
+    rightOperation: entry.right,
+  })
+  assert.equal(leftRegistry.getPlugin(leftId)?.state, 'active')
+  assert.equal(rightRegistry.getPlugin(rightId)?.state, 'active')
+  await settleWithin(Promise.all([leftRegistry.shutdown(), rightRegistry.shutdown()]), 2_000)
+}
+
+async function runCandidateSetupLifecycleMatrix(entry, suffix) {
+  const leftId = `mx-cs-${suffix}-a`
+  const rightId = `mx-cs-${suffix}-b`
+  const leftRegistry = createConfiguredLifecycleRegistry(leftId)
+  const rightRegistry = createConfiguredLifecycleRegistry(rightId)
+  const generations = new Map()
+  const errors = new Map()
+  const arrive = createLifecycleBarrier()
+  const setup = (sourceId, targetId, targetRegistry, operation) => async () => {
+    const generation = (generations.get(sourceId) || 0) + 1
+    generations.set(sourceId, generation)
+    if (generation !== 2) return
+    await arrive()
+    await captureLifecycleGuard({ errors, operation, sourceId, targetId, targetRegistry })
+  }
+
+  await leftRegistry.registerPlugin(
+    manifest(leftId, { contributes: [] }),
+    setup(leftId, rightId, rightRegistry, entry.left),
+  )
+  await rightRegistry.registerPlugin(
+    manifest(rightId, { contributes: [] }),
+    setup(rightId, leftId, leftRegistry, entry.right),
+  )
+  const revisions = await settleWithin(Promise.all([
+    leftRegistry.reloadPluginConfig(leftId, committedReloadOptions(leftId)),
+    rightRegistry.reloadPluginConfig(rightId, committedReloadOptions(rightId)),
+  ]), 2_000)
+  assert.deepEqual(revisions.map((item) => item.configRevision), [2, 2])
+  assertLifecycleGuardMatrix({
+    errors,
+    label: `candidate setup ${entry.label}`,
+    leftId,
+    leftOperation: entry.left,
+    phase: 'setup',
+    rightId,
+    rightOperation: entry.right,
+  })
+  await settleWithin(Promise.all([leftRegistry.shutdown(), rightRegistry.shutdown()]), 2_000)
+}
+
+async function runCallbackLifecycleMatrix(entry, suffix) {
+  const leftId = `mx-cb-${suffix}-a`
+  const rightId = `mx-cb-${suffix}-b`
+  const leftService = `${leftId}-service`
+  const rightService = `${rightId}-service`
+  const leftRegistry = createRuntimePluginRegistry()
+  const rightRegistry = createRuntimePluginRegistry()
+  const errors = new Map()
+  const arrive = createLifecycleBarrier()
+  const setup = (sourceId, targetId, targetRegistry, operation, serviceName) => (ctx) => {
+    ctx.services.provide(serviceName, {
+      run: async () => {
+        await arrive()
+        await captureLifecycleGuard({ errors, operation, sourceId, targetId, targetRegistry })
+        return { guarded: true }
+      },
+    })
+  }
+
+  await leftRegistry.registerPlugin(
+    manifest(leftId, { contributes: [`service:${leftService}`] }),
+    setup(leftId, rightId, rightRegistry, entry.left, leftService),
+  )
+  await rightRegistry.registerPlugin(
+    manifest(rightId, { contributes: [`service:${rightService}`] }),
+    setup(rightId, leftId, leftRegistry, entry.right, rightService),
+  )
+  const results = await settleWithin(Promise.all([
+    leftRegistry.invokeService(leftService, 'run'),
+    rightRegistry.invokeService(rightService, 'run'),
+  ]), 2_000)
+  assert.deepEqual(results.map((item) => item.value), [{ guarded: true }, { guarded: true }])
+  assertLifecycleGuardMatrix({
+    errors,
+    label: `callback ${entry.label}`,
+    leftId,
+    leftOperation: entry.left,
+    phase: 'service',
+    rightId,
+    rightOperation: entry.right,
+  })
+  await settleWithin(Promise.all([leftRegistry.shutdown(), rightRegistry.shutdown()]), 2_000)
+}
+
+async function runUnloadCleanupLifecycleMatrix(entry, suffix) {
+  const leftId = `mx-uc-${suffix}-a`
+  const rightId = `mx-uc-${suffix}-b`
+  const leftRegistry = createRuntimePluginRegistry()
+  const rightRegistry = createRuntimePluginRegistry()
+  const errors = new Map()
+  const arrive = createLifecycleBarrier()
+  const setup = (sourceId, targetId, targetRegistry, operation) => (ctx) => {
+    ctx.lifecycle.onDispose(async () => {
+      await arrive()
+      await captureLifecycleGuard({ errors, operation, sourceId, targetId, targetRegistry })
+    })
+  }
+
+  await leftRegistry.registerPlugin(
+    manifest(leftId, { contributes: [] }),
+    setup(leftId, rightId, rightRegistry, entry.left),
+  )
+  await rightRegistry.registerPlugin(
+    manifest(rightId, { contributes: [] }),
+    setup(rightId, leftId, leftRegistry, entry.right),
+  )
+  assert.deepEqual(await settleWithin(Promise.all([
+    leftRegistry.unregisterPlugin(leftId),
+    rightRegistry.unregisterPlugin(rightId),
+  ]), 2_000), [true, true])
+  assertLifecycleGuardMatrix({
+    errors,
+    label: `unload cleanup ${entry.label}`,
+    leftId,
+    leftOperation: entry.left,
+    phase: 'dispose',
+    rightId,
+    rightOperation: entry.right,
+  })
+}
+
+async function runReloadCleanupLifecycleMatrix(entry, suffix) {
+  const leftId = `mx-rc-${suffix}-a`
+  const rightId = `mx-rc-${suffix}-b`
+  const leftRegistry = createConfiguredLifecycleRegistry(leftId)
+  const rightRegistry = createConfiguredLifecycleRegistry(rightId)
+  const generations = new Map()
+  const errors = new Map()
+  const arrive = createLifecycleBarrier()
+  const setup = (sourceId, targetId, targetRegistry, operation) => (ctx) => {
+    const generation = (generations.get(sourceId) || 0) + 1
+    generations.set(sourceId, generation)
+    if (generation !== 1) return
+    ctx.lifecycle.onDispose(async () => {
+      await arrive()
+      await captureLifecycleGuard({ errors, operation, sourceId, targetId, targetRegistry })
+    })
+  }
+
+  await leftRegistry.registerPlugin(
+    manifest(leftId, { contributes: [] }),
+    setup(leftId, rightId, rightRegistry, entry.left),
+  )
+  await rightRegistry.registerPlugin(
+    manifest(rightId, { contributes: [] }),
+    setup(rightId, leftId, leftRegistry, entry.right),
+  )
+  const revisions = await settleWithin(Promise.all([
+    leftRegistry.reloadPluginConfig(leftId, committedReloadOptions(leftId)),
+    rightRegistry.reloadPluginConfig(rightId, committedReloadOptions(rightId)),
+  ]), 2_000)
+  assert.deepEqual(revisions.map((item) => item.configRevision), [2, 2])
+  assertLifecycleGuardMatrix({
+    errors,
+    label: `reload cleanup ${entry.label}`,
+    leftId,
+    leftOperation: entry.left,
+    phase: 'dispose',
+    rightId,
+    rightOperation: entry.right,
+  })
+  await settleWithin(Promise.all([leftRegistry.shutdown(), rightRegistry.shutdown()]), 2_000)
+}
+
+test('cross-registry lifecycle wait-graph matrix fails fast with stable attribution', async (t) => {
+  const stages = [
+    ['initial setup', runInitialSetupLifecycleMatrix],
+    ['candidate setup', runCandidateSetupLifecycleMatrix],
+    ['callback', runCallbackLifecycleMatrix],
+    ['unload cleanup', runUnloadCleanupLifecycleMatrix],
+    ['reload cleanup', runReloadCleanupLifecycleMatrix],
+  ]
+  for (const [stage, runStage] of stages) {
+    for (const [index, entry] of CROSS_REGISTRY_LIFECYCLE_CASES.entries()) {
+      await t.test(`${stage} ${entry.label}`, async () => {
+        await runStage(entry, `${index + 1}`)
+      })
+    }
+  }
 })

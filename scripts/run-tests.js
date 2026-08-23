@@ -4,13 +4,58 @@ import { availableParallelism, tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
+import {
+  OFFLINE_EVAL_OPTIONS_ENV,
+  OfflineEvalUsageError,
+  assertOfflineEvalInvocation,
+  offlineEvalFailureMessages,
+  offlineEvalReportFailed,
+  parseOfflineEvalArgs,
+  readOfflineEvalReport,
+  resolveOfflineEvalOptions,
+  writeOfflineEvalJson,
+} from './offlineEvalCli.js'
+import { sanitizeChildEnv } from '../server/utils/sensitiveEnv.js'
+
 const rawArgs = process.argv.slice(2)
+let testArgs
+let offlineEvalMode
+let offlineEvalOptions
+try {
+  const parsed = parseOfflineEvalArgs(rawArgs)
+  testArgs = parsed.remainingArgs
+  offlineEvalMode = assertOfflineEvalInvocation(testArgs, parsed.options)
+  offlineEvalOptions = resolveOfflineEvalOptions(parsed.options)
+} catch (error) {
+  if (!(error instanceof OfflineEvalUsageError)) throw error
+  console.error(`[run-tests] ${error.message}`)
+  process.exit(error.exitCode)
+}
+
 const testDataRoot = mkdtempSync(join(tmpdir(), 'yma-test-run-'))
-const testEnv = { ...process.env, YMA_TEST_DATA_ROOT: testDataRoot }
-const testSetupArgs = ['--import', './scripts/testEnvironment.mjs']
-const coverageMode = rawArgs.includes('--coverage')
-const selectors = rawArgs.filter((arg) => !arg.startsWith('-'))
-const nodeArgs = rawArgs.filter((arg) => arg.startsWith('-') && arg !== '--run' && arg !== '--coverage')
+const inheritedTestEnv = offlineEvalMode
+  ? sanitizeChildEnv({}, { sourceEnv: process.env })
+  : { ...process.env }
+const testEnv = { ...inheritedTestEnv, YMA_TEST_DATA_ROOT: testDataRoot }
+const offlineEvalReportPath = offlineEvalMode
+  ? join(testDataRoot, 'offline-eval-report.json')
+  : null
+if (offlineEvalMode) {
+  testEnv.YMA_OFFLINE_EVAL_NETWORK_GUARD = '1'
+  testEnv[OFFLINE_EVAL_OPTIONS_ENV] = JSON.stringify({
+    suiteIds: offlineEvalOptions.suiteIds,
+    baselinePath: offlineEvalOptions.baselinePath,
+    reportPath: offlineEvalReportPath,
+  })
+}
+const testSetupArgs = [
+  '--import',
+  './scripts/testEnvironment.mjs',
+  ...(offlineEvalMode ? ['--import', './scripts/offlineEvalNetworkGuard.mjs'] : []),
+]
+const coverageMode = testArgs.includes('--coverage')
+const selectors = testArgs.filter((arg) => !arg.startsWith('-'))
+const nodeArgs = testArgs.filter((arg) => arg.startsWith('-') && arg !== '--run' && arg !== '--coverage')
 const configuredConcurrency = Number(process.env.TEST_CONCURRENCY)
 const defaultConcurrency = Math.max(1, Math.min(4, availableParallelism()))
 const testConcurrency = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
@@ -47,11 +92,14 @@ function walk(dir) {
 }
 
 function allTestFiles() {
-  return walk('tests').sort()
+  return walk('tests')
+    .filter((file) => normalize(file) !== normalize('tests/offlineCapabilityEval.test.js'))
+    .sort()
 }
 
 function resolveSelector(selector) {
   if (selector === 'i18n') return ['tests/i18n.test.js']
+  if (selector === 'offline-eval') return ['tests/offlineCapabilityEval.test.js']
   if (selector.startsWith('tests/')) return [selector]
   if (selector.endsWith('.test.js') || selector.endsWith('.test.jsx')) {
     return [`tests/${selector}`]
@@ -147,6 +195,24 @@ for (const file of isolatedFiles) {
     )
   }
   if (!passed) failed = true
+}
+
+if (offlineEvalMode) {
+  try {
+    const report = readOfflineEvalReport(offlineEvalReportPath)
+    if (offlineEvalOptions.jsonPath) {
+      writeOfflineEvalJson(offlineEvalOptions.jsonPath, report)
+    }
+    if (offlineEvalReportFailed(report)) {
+      for (const message of offlineEvalFailureMessages(report)) {
+        console.error(`[run-tests] offline eval ${message}`)
+      }
+      failed = true
+    }
+  } catch (error) {
+    console.error(`[run-tests] ${error?.message || error}`)
+    failed = true
+  }
 }
 
 rmSync(testDataRoot, { recursive: true, force: true })

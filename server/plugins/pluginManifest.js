@@ -1,3 +1,5 @@
+import { normalizePluginManifest } from '../../shared/pluginManifest.js'
+
 /**
  * server/plugins/pluginManifest.js
  *
@@ -11,6 +13,14 @@
  *   type        string  必填  枚举见 PLUGIN_TYPES
  *   entry       string  必填  相对 plugin 根目录的入口文件路径，禁止 .. / 绝对路径
  *   capabilities string[] 可选 v0.5 沙箱能力白名单
+ *   apiVersion  string  可选 插件 API semver
+ *   hostVersion string  可选 宿主兼容 semver range
+ *   requires/contributes string[] 可选 与 runtime plugin 共用的依赖/贡献声明
+ *   dependencyVersions object 可选 dependency id → semver range
+ *   permissions string[] 可选 capability 权限声明（不等于授权）
+ *   configSchema object 可选 有界 JSON Schema
+ *   stateSchemaVersion integer 可选 插件持久状态 schema 版本
+ *   integrity string 可选 sha256 完整性摘要
  *   description string  可选  ≤ 2000
  *   author      string  可选  ≤ 200
  *   license     string  可选  ≤ 80
@@ -43,6 +53,7 @@ function isNonEmptyStr(v, max) { return isStr(v) && v.length > 0 && v.length <= 
  */
 export function validateManifest(json) {
   const errors = []
+  let envelope = null
   if (!json || typeof json !== 'object' || Array.isArray(json)) {
     return { ok: false, errors: ['manifest must be a plain object'], manifest: null }
   }
@@ -101,12 +112,16 @@ export function validateManifest(json) {
     }
   }
 
+  try {
+    envelope = normalizePluginManifest(m)
+  } catch (error) {
+    errors.push(`manifest envelope: ${error?.message || String(error)}`)
+  }
+
   if (errors.length) return { ok: false, errors, manifest: null }
 
   const manifest = {
-    id: m.id,
-    name: m.name,
-    version: m.version,
+    ...envelope,
     type: m.type,
     entry: m.entry,
     description: m.description ?? '',

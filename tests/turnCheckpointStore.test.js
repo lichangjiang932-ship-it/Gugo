@@ -87,6 +87,57 @@ test('a stale writer cannot replace a newer checkpoint', () => {
   assert.equal(checkpoint.updatedAt, 300)
 })
 
+test('an equal-sequence writer cannot replace conflicting checkpoint state', () => {
+  saveTurnCheckpoint({
+    userId: 'checkpoint-user',
+    sessionId: 'checkpoint-session',
+    turnId: 'turn-equal-conflict',
+    eventSequence: 9,
+    state: { marker: 'committed' },
+    now: 500,
+  })
+  const checkpoint = saveTurnCheckpoint({
+    userId: 'checkpoint-user',
+    sessionId: 'checkpoint-session',
+    turnId: 'turn-equal-conflict',
+    eventSequence: 9,
+    state: { marker: 'conflicting' },
+    now: 600,
+  })
+
+  assert.equal(checkpoint.eventSequence, 9)
+  assert.equal(checkpoint.state.marker, 'committed')
+  assert.equal(checkpoint.updatedAt, 500)
+})
+
+test('an equivalent equal-sequence checkpoint retry is idempotent', () => {
+  const first = saveTurnCheckpoint({
+    userId: 'checkpoint-user',
+    sessionId: 'checkpoint-session',
+    turnId: 'turn-equal-idempotent',
+    eventSequence: 9,
+    state: {
+      marker: 'committed',
+      nested: { alpha: 1, beta: 2 },
+    },
+    now: 700,
+  })
+  const retried = saveTurnCheckpoint({
+    userId: 'checkpoint-user',
+    sessionId: 'checkpoint-session',
+    turnId: 'turn-equal-idempotent',
+    eventSequence: 9,
+    state: {
+      nested: { beta: 2, alpha: 1 },
+      marker: 'committed',
+    },
+    now: 800,
+  })
+
+  assert.deepEqual(retried.state, first.state)
+  assert.equal(retried.updatedAt, first.updatedAt)
+})
+
 test('checkpoint deletion is scoped to the owning user and turn', () => {
   saveTurnCheckpoint({
     userId: 'checkpoint-user',
@@ -108,11 +159,23 @@ test('checkpoint deletion is scoped to the owning user and turn', () => {
 })
 
 test('checkpoint event and mutable state commit atomically', () => {
+  appendTurnEvent({
+    userId: 'checkpoint-user',
+    event: createTurnEvent({
+      id: 'atomic-started-event',
+      sessionId: 'checkpoint-session',
+      turnId: 'turn-atomic',
+      sequence: 0,
+      type: 'turn.started',
+      payload: {},
+      createdAt: 499,
+    }),
+  })
   const event = createTurnEvent({
     id: 'atomic-checkpoint-event',
     sessionId: 'checkpoint-session',
     turnId: 'turn-atomic',
-    sequence: 0,
+    sequence: 1,
     type: 'turn.checkpoint',
     payload: {
       storage: 'turn_checkpoints',
@@ -131,7 +194,7 @@ test('checkpoint event and mutable state commit atomically', () => {
     userId: 'checkpoint-user',
     sessionId: 'checkpoint-session',
     turnId: 'turn-atomic',
-  }), [])
+  }).map((item) => item.type), ['turn.started'])
   assert.equal(getTurnCheckpoint({
     userId: 'checkpoint-user',
     sessionId: 'checkpoint-session',
@@ -147,7 +210,7 @@ test('checkpoint event and mutable state commit atomically', () => {
     userId: 'checkpoint-user',
     sessionId: 'checkpoint-session',
     turnId: 'turn-atomic',
-  }).length, 1)
+  }).length, 2)
   assert.equal(getTurnCheckpoint({
     userId: 'checkpoint-user',
     sessionId: 'checkpoint-session',
@@ -162,6 +225,19 @@ test('checkpoint event and state have no externally visible intermediate state',
   const observer = new Database(databasePath, { readonly: true })
   const scope = ['checkpoint-user', 'checkpoint-session', 'turn-isolation']
   const duringTransaction = []
+
+  appendTurnEvent({
+    userId: scope[0],
+    event: createTurnEvent({
+      id: 'isolation-started-event',
+      sessionId: scope[1],
+      turnId: scope[2],
+      sequence: 0,
+      type: 'turn.started',
+      payload: {},
+      createdAt: 599,
+    }),
+  })
 
   try {
     writer.function('observe_checkpoint_pair', (stage) => {
@@ -199,7 +275,7 @@ test('checkpoint event and state have no externally visible intermediate state',
         id: 'isolation-checkpoint-event',
         sessionId: scope[1],
         turnId: scope[2],
-        sequence: 0,
+        sequence: 1,
         type: 'turn.checkpoint',
         payload: {
           storage: 'turn_checkpoints',
@@ -213,8 +289,8 @@ test('checkpoint event and state have no externally visible intermediate state',
     })
 
     assert.deepEqual(duringTransaction, [
-      { stage: 'after-event-insert', events: 0, checkpoints: 0 },
-      { stage: 'after-checkpoint-insert', events: 0, checkpoints: 0 },
+      { stage: 'after-event-insert', events: 1, checkpoints: 0 },
+      { stage: 'after-checkpoint-insert', events: 1, checkpoints: 0 },
     ])
     assert.deepEqual({
       events: observer.prepare(`
@@ -225,7 +301,7 @@ test('checkpoint event and state have no externally visible intermediate state',
         SELECT COUNT(*) AS count FROM turn_checkpoints
          WHERE user_id = ? AND session_id = ? AND turn_id = ?
       `).get(...scope).count,
-    }, { events: 1, checkpoints: 1 })
+    }, { events: 2, checkpoints: 1 })
   } finally {
     writer.exec(`
       DROP TRIGGER IF EXISTS observe_checkpoint_pair_after_event_insert;

@@ -1,14 +1,14 @@
 import { getAuthToken } from '../accountClient.js'
 import { parseProxyResponse } from './modelHttp.js'
 
-export async function callModelThroughProxy({ messages, modelName, agentId, fetchImpl = fetch }) {
+export async function callModelThroughProxy({ messages, modelName, modelProviderId, agentId, fetchImpl = fetch }) {
   const response = await fetchImpl('/api/model/chat', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${getAuthToken()}`,
     },
-    body: JSON.stringify({ messages, modelName, agentId }),
+    body: JSON.stringify({ messages, modelName, modelProviderId, agentId }),
   })
   const data = await parseProxyResponse(response)
   if (!data?.reply) throw new Error('\u6a21\u578b\u8fd4\u56de\u4e3a\u7a7a\u3002')
@@ -20,7 +20,7 @@ export async function callModelThroughProxy({ messages, modelName, agentId, fetc
  * \u5931\u8d25/\u7a7a\u8fd4\u56de\u65f6\u8fd4\u56de null,\u8ba9\u8c03\u7528\u65b9 fallback \u5230\u622a\u65ad\u3002
  * \u4e0d\u8ba1\u5165\u7528\u6237\u53d1\u8d77\u7684\u5de5\u5177\u8c03\u7528\u7edf\u8ba1\uff08\u672c\u671f\u524d\u7aef\u53ea\u8d1f\u8d23\u8c03\u7528\uff09\u3002
  */
-export async function summarizeSessionTitle({ firstUserContent, modelName, fetchImpl = fetch, signal }) {
+export async function summarizeSessionTitle({ firstUserContent, modelName, modelProviderId, fetchImpl = fetch, signal }) {
   const text = String(firstUserContent || '').trim()
   if (!text) return null
   // \u5185\u5bb9\u5df2\u7ecf\u5f88\u77ed\u5c31\u4e0d\u7528 AI \u4e86
@@ -41,6 +41,7 @@ export async function summarizeSessionTitle({ firstUserContent, modelName, fetch
           { role: 'user', content: text.slice(0, 600) },
         ],
         modelName,
+        modelProviderId,
       purpose: 'title', // \u7ed9\u540e\u7aef\u4e00\u4e2a\u6807\u8bb0\uff0c\u4fbf\u4e8e\u533a\u5206\u6807\u9898\u6458\u8981\u4e0e\u666e\u901a\u5bf9\u8bdd
       }),
       signal,

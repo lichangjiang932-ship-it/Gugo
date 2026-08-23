@@ -4,9 +4,13 @@ import { CONNECTOR_TOOL_NAMES } from './connectorTools.js'
 import { listEnabledIntegrationToolNames } from './integrationsStore.js'
 import {
   getBuiltinSpec,
+  getDynamicToolSpecRegistrationId,
   inheritDynamicToolSpecRegistration,
   listAllSpecs,
+  matchesDynamicToolRegistration,
 } from './toolRegistry.js'
+import { getUserToolPermissions } from '../db.js'
+import { isToolVisibleInPermissionMode } from '../utils/approvalPolicy.js'
 
 function normalizeNames(values, limit = 256) {
   return [...new Set((Array.isArray(values) ? values : []).map(String).map((name) => name.trim()).filter(Boolean))]
@@ -74,6 +78,124 @@ const PROVIDER_ALIASES = new Map([
 
 function toolName(spec) {
   return String(spec?.function?.name || '')
+}
+
+// When no workspace/local-path authority is active, the model receives only
+// controls that can ask for that authority or safely manage the current turn.
+// Everything else is restored from the real persisted access state below.
+const WORKSPACE_INDEPENDENT_CONTROL_TOOLS = new Set([
+  'manage_todos',
+  'read_artifact_source',
+  'reflect',
+  'request_clarification',
+  'request_directory',
+  'set_deliverables',
+  'sleep_until',
+])
+const WORKSPACE_INDEPENDENT_CONNECTOR_TOOLS = new Set(CONNECTOR_TOOL_NAMES)
+const DIRECTORY_READ_TOOLS = new Set([
+  'list_directory', 'grep_code', 'find_symbol', 'list_imports',
+])
+const FILE_READ_TOOLS = new Set([
+  'read_file', 'image_info', 'media_probe', 'pdf_info', 'pdf_text',
+  'archive_list', 'file_hash_manifest',
+])
+const FILE_WRITE_TOOLS = new Set([
+  'write_file', 'edit_file', 'multi_edit', 'apply_patch', 'patch_file',
+  'file_download', 'image_transform', 'pdf_transform', 'archive_create',
+  'archive_extract', 'batch_rename', 'rewind_files',
+])
+const SHELL_TOOLS = new Set([
+  'bash_exec', 'run_command', 'run_project_check', 'run_test', 'docker_exec',
+  'bash_background', 'process_list', 'process_kill', 'media_transform',
+])
+const GIT_READ_TOOLS = new Set(['git_status', 'git_diff'])
+const GIT_WRITE_TOOLS = new Set(['git_commit', 'git_push', 'git_rollback', 'git_write'])
+
+function workspaceToolCapabilities(status) {
+  if (status === undefined) return null
+  const value = status && typeof status === 'object' ? status : {}
+  const grants = (Array.isArray(value.grants) ? value.grants : []).filter((grant) => grant?.available !== false)
+  const directoryGrants = grants.filter((grant) => grant?.resourceType === 'directory')
+  const writableGrants = grants.filter((grant) => grant?.accessMode === 'read_write')
+  const writableDirectoryGrants = directoryGrants.filter((grant) => grant?.accessMode === 'read_write')
+  const trustStates = [value.workspace?.trust, ...(Array.isArray(value.trustedWorkspaces) ? value.trustedWorkspaces : [])]
+    .filter((entry) => entry && typeof entry === 'object')
+  const workspaceTrusted = value.workspace?.sharedTrusted === true || value.workspace?.trust?.trusted === true
+  const workspaceEffective = workspaceTrusted ? value.workspace?.trust?.effective || {} : {}
+  const bypass = value.bypassEnabled === true
+  const allFiles = value.allFilesEnabled === true
+  const localExecution = value.runtime?.localCodeExecutionEnabled === true
+  const globalGit = trustStates.some((entry) => entry?.global?.git === true)
+  const globalGitMutation = trustStates.some((entry) => entry?.global?.gitMutation === true)
+  const trustedGit = trustStates.some((entry) => entry?.trusted === true && entry?.effective?.git === true)
+  const trustedGitMutation = trustStates.some((entry) => entry?.trusted === true && entry?.effective?.gitMutation === true)
+  const fileRead = bypass || allFiles || grants.length > 0 || workspaceEffective.fileSystem === true
+  const directoryRead = bypass || allFiles || directoryGrants.length > 0 || workspaceEffective.fileSystem === true
+  const fileWrite = bypass || allFiles || writableGrants.length > 0 || workspaceEffective.fileSystemWrite === true
+  const shell = localExecution && (
+    bypass || writableDirectoryGrants.length > 0 || workspaceEffective.shell === true
+  )
+  const git = (bypass && globalGit) || trustedGit
+  const gitWrite = (bypass && globalGitMutation) || trustedGitMutation
+  return {
+    authorized: fileRead || directoryRead || fileWrite || shell || git || gitWrite,
+    fileRead,
+    directoryRead,
+    fileWrite,
+    shell,
+    git,
+    gitWrite,
+  }
+}
+
+function dynamicToolSpecRegistrationState(spec, { userId = null } = {}) {
+  const registrationId = getDynamicToolSpecRegistrationId(spec)
+  if (!registrationId) return { bound: false, current: false }
+  return {
+    bound: true,
+    current: matchesDynamicToolRegistration(toolName(spec), registrationId, { userId }),
+  }
+}
+
+function workspaceToolVisible(spec, capabilities, {
+  userId = null,
+  permissionMode = 'normal',
+} = {}) {
+  const name = toolName(spec)
+  if (!capabilities) return true
+  // A dynamic provider that deliberately replaces a local tool inherits that
+  // tool's workspace boundary. Checking the local slots first prevents a
+  // plugin named read_file/bash_exec/git_status from acquiring broader
+  // authority merely because it owns a current dynamic registration.
+  if (DIRECTORY_READ_TOOLS.has(name)) return capabilities.directoryRead
+  if (FILE_READ_TOOLS.has(name)) return capabilities.fileRead
+  if (FILE_WRITE_TOOLS.has(name)) return capabilities.fileWrite
+  if (SHELL_TOOLS.has(name)) return capabilities.shell
+  if (GIT_READ_TOOLS.has(name)) return capabilities.git
+  if (GIT_WRITE_TOOLS.has(name)) return capabilities.gitWrite
+  // Non-local dynamic capability providers and connected apps own their own
+  // capability and approval boundaries; workspace grants are unrelated.
+  const dynamicState = dynamicToolSpecRegistrationState(spec, { userId })
+  if (dynamicState.current || WORKSPACE_INDEPENDENT_CONNECTOR_TOOLS.has(name)) return true
+  if (!capabilities.authorized) {
+    // Plan mode without a workspace grant has exactly one useful capability:
+    // ask the user to authorize a directory. Keeping any other schema visible
+    // would imply access the runtime does not have.
+    if (permissionMode === 'plan') return name === 'request_directory'
+    return WORKSPACE_INDEPENDENT_CONTROL_TOOLS.has(name)
+  }
+  return true
+}
+
+function userToolOverrides(userId, provided) {
+  if (provided && typeof provided === 'object' && !Array.isArray(provided)) return provided
+  if (!userId) return {}
+  try {
+    return getUserToolPermissions(userId)
+  } catch {
+    return {}
+  }
 }
 
 function connectorProvider(name) {
@@ -289,17 +411,64 @@ export function applyServerToolsConfig(specs, toolsConfig) {
   const current = (Array.isArray(specs) ? specs : []).filter((spec) => (
     Boolean(String(spec?.function?.name || '').trim())
   ))
-  // Tool switches are execution policy, not schema discovery. Referencing the
-  // normalized value here keeps malformed/legacy inputs harmless while every
-  // registered schema remains model-visible on refresh and resume.
-  if (toolsConfig && typeof toolsConfig === 'object') normalizeServerToolsConfig(toolsConfig)
-  return current
+  const { disabled } = normalizeServerToolsConfig(toolsConfig)
+  const disabledNames = new Set(disabled)
+  return current.filter((spec) => !disabledNames.has(toolName(spec)))
+}
+
+export function projectToolSpecsForPermissionMode(specs, permissionMode = 'normal') {
+  return (Array.isArray(specs) ? specs : []).filter((spec) => (
+    !(permissionMode === 'plan' && getDynamicToolSpecRegistrationId(spec))
+      && isToolVisibleInPermissionMode(toolName(spec), permissionMode)
+  ))
+}
+
+export function projectToolSpecsForRuntimePolicy(specs, {
+  userId = null,
+  toolsConfig = null,
+  permissionMode = 'normal',
+  fileAccessStatus = undefined,
+  userToolPermissions = undefined,
+  onExcluded = null,
+} = {}) {
+  const disabledByTurn = new Set(normalizeServerToolsConfig(toolsConfig).disabled)
+  const overrides = userToolOverrides(userId, userToolPermissions)
+  const capabilities = workspaceToolCapabilities(fileAccessStatus)
+  return (Array.isArray(specs) ? specs : []).filter((spec) => {
+    const name = toolName(spec)
+    const dynamicState = dynamicToolSpecRegistrationState(spec, { userId })
+    let reason = null
+    let stage = 'availability'
+    if (!name) reason = 'invalid_schema'
+    else if (disabledByTurn.has(name)) reason = 'tool_disabled'
+    else if (overrides[name] === false) reason = 'user_tool_disabled'
+    else if (dynamicState.bound && !dynamicState.current) {
+      reason = 'dynamic_tool_registration_stale'
+      stage = 'permission'
+    } else if (permissionMode === 'plan' && dynamicState.current) {
+      reason = 'permission_mode_plan_dynamic_tool'
+      stage = 'permission'
+    } else if (!isToolVisibleInPermissionMode(name, permissionMode)) {
+      reason = 'permission_mode_plan'
+      stage = 'permission'
+    } else if (!workspaceToolVisible(spec, capabilities, { userId, permissionMode })) {
+      reason = capabilities?.authorized ? 'workspace_capability_unavailable' : 'workspace_authorization_required'
+      stage = 'permission'
+    }
+    if (!reason) return true
+    if (typeof onExcluded === 'function') onExcluded({ name, reason, stage })
+    return false
+  })
 }
 
 export async function resolveTurnToolSpecs({
   userId,
   baseSpecs = [],
   enabledConnectorTools,
+  toolsConfig = null,
+  permissionMode = 'normal',
+  fileAccessStatus = undefined,
+  userToolPermissions = undefined,
   prompt = '',
   messages = [],
   skillIds = [],
@@ -364,12 +533,15 @@ export async function resolveTurnToolSpecs({
     }
     return true
   })
-  // Discovery is intentionally independent from intent, approval mode,
-  // sandbox authorization and per-tool execution switches. Those controls are
-  // enforced when a concrete call is attempted. Keeping the schema catalog
-  // stable prevents short follow-ups, refresh/resume and plan mode from
-  // fabricating a "tool unavailable this round" state.
-  const resolvedSpecs = readySpecs
+  const visibleSpecs = projectToolSpecsForRuntimePolicy(readySpecs, {
+    userId,
+    toolsConfig,
+    permissionMode,
+    fileAccessStatus,
+    userToolPermissions,
+    onExcluded: ({ name, reason, stage }) => exclude(name, reason, stage),
+  })
+  const resolvedSpecs = visibleSpecs
     .map(canonicalizeToolSpec)
     .sort((left, right) => String(left?.function?.name || '').localeCompare(String(right?.function?.name || ''), 'en'))
   const resolvedNames = new Set(resolvedSpecs.map(toolName))

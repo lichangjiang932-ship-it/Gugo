@@ -41,6 +41,8 @@ test('graceful shutdown waits for runtime plugin disposal before resolving', asy
     },
   }
   const shutdown = gracefulShutdown(server, { silent: true, exit: false })
+  const repeatedShutdown = gracefulShutdown(server, { silent: true, exit: false })
+  assert.strictEqual(repeatedShutdown, shutdown)
   await new Promise((resolve) => setImmediate(resolve))
   assert.deepEqual(order, ['http:closed', 'dispose:start'])
   assert.equal(getDynamicTool('shutdown_probe'), null)

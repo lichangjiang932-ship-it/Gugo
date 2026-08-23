@@ -69,6 +69,7 @@ export default function ChatSplitView({
   input,
   isGenerating,
   messages,
+  modelReadiness,
   modelOptions,
   onAbort,
   onApprovalModeChange,
@@ -90,6 +91,7 @@ export default function ChatSplitView({
   onManageMcp,
   onManageModels,
   onModelChange,
+  onModelRetry,
   onNavigatePermissions,
   onOpenArtifact,
   onOpenInPreview,
@@ -98,6 +100,7 @@ export default function ChatSplitView({
   onPermDeny,
   onPreviewMessage,
   onQuoteSelection,
+  onRetryModelFailure,
   onResume,
   onSend,
   onSubmitFeedback,
@@ -109,6 +112,7 @@ export default function ChatSplitView({
   resumeAvailable,
   runtimeSkillIds,
   selectedModel,
+  selectedModelProviderId,
   setAttachments,
   setInput,
   setShowContextPanel,
@@ -177,7 +181,9 @@ export default function ChatSplitView({
           onPermDeny={onPermDeny}
           onAuthorizeDirectoryRequest={onAuthorizeDirectoryRequest}
           onNavigatePermissions={onNavigatePermissions}
+          onManageModels={onManageModels}
           onQuoteSelection={onQuoteSelection}
+          onRetryModelFailure={onRetryModelFailure}
           onPromptSelect={setInput}
           onOpenArtifact={onOpenArtifact}
           onOpenInPreview={onOpenInPreview}
@@ -250,7 +256,9 @@ export default function ChatSplitView({
           contextUsage={contextUsage}
           modelPickerOpen={showModelPicker}
           modelOptions={modelOptions}
+          modelReadiness={modelReadiness}
           selectedModel={selectedModel}
+          selectedModelProviderId={selectedModelProviderId}
           isGenerating={isGenerating}
           onAbort={onAbort}
           onFileChange={onFileChange}
@@ -258,6 +266,7 @@ export default function ChatSplitView({
           onOpenModelPicker={onOpenModelPicker}
           onCloseModelPicker={onCloseModelPicker}
           onModelChange={onModelChange}
+          onModelRetry={onModelRetry}
           onManageModels={onManageModels}
           onOpenAttachment={onOpenArtifact}
           approvalMode={approvalMode}

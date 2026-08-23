@@ -7,8 +7,9 @@ import {
   runWithProviderFailover,
   streamWithProviderFailover,
 } from '../server/adapters/modelProxy.js'
+import { modelRequestOutcomeUnknown } from '../server/adapters/modelRequestOutcome.js'
 
-test('provider candidates keep the selected provider first and add alternatives', () => {
+test('unbound provider selection fails closed across providers by default', () => {
   const env = {
     MODEL_NAME: 'primary-model',
     MODEL_PROVIDERS: 'primary,backup',
@@ -23,8 +24,24 @@ test('provider candidates keep the selected provider first and add alternatives'
     MODEL_PROVIDER_BACKUP_MODELS: 'primary-model',
   }
   const configs = resolveModelFailoverConfigs({ env })
-  assert.deepEqual(configs.map((config) => config.providerId), ['primary', 'backup'])
-  assert.deepEqual(configs.map((config) => config.modelName), ['primary-model', 'primary-model'])
+  assert.deepEqual(configs.map((config) => config.providerId), ['primary'])
+  assert.deepEqual(configs.map((config) => config.modelName), ['primary-model'])
+  assert.deepEqual(configs[0].failoverPolicy, {
+    blockedProviderCount: 1,
+    reason: 'explicit_opt_in_required',
+  })
+
+  const opened = resolveModelFailoverConfigs({
+    env: { ...env, MODEL_FAILOVER_CROSS_PROVIDER: '1' },
+  })
+  assert.deepEqual(opened.map((config) => config.providerId), ['primary', 'backup'])
+
+  const explicitlyBound = resolveModelFailoverConfigs({
+    modelName: 'primary-model',
+    providerId: 'backup',
+    env: { ...env, MODEL_FAILOVER_CROSS_PROVIDER: '1' },
+  })
+  assert.deepEqual(explicitlyBound.map((config) => config.providerId), ['backup'])
 })
 
 test('★ 备用 provider 没有同名模型时被剔除 —— 不能静默换模型并按它计费', () => {
@@ -43,9 +60,99 @@ test('★ 备用 provider 没有同名模型时被剔除 —— 不能静默换�
 
   // 显式开启后才允许跨模型
   const opened = resolveModelFailoverConfigs({
-    env: { ...env, MODEL_STRICT_SELECTION: '0', MODEL_FAILOVER_CROSS_MODEL: '1' },
+    env: {
+      ...env,
+      MODEL_FAILOVER_CROSS_PROVIDER: '1',
+      MODEL_STRICT_SELECTION: '0',
+      MODEL_FAILOVER_CROSS_MODEL: '1',
+    },
   })
   assert.deepEqual(opened.map((config) => config.modelName), ['primary-model', 'backup-model'])
+})
+
+test('provider-level opt-in enables cross-provider failover and explicit false overrides global opt-in', () => {
+  const env = {
+    MODEL_NAME: 'shared-model',
+    MODEL_PROVIDERS: 'primary,backup',
+    MODEL_PROVIDER_PRIMARY_BASE_URL: 'https://primary.example/v1',
+    MODEL_PROVIDER_PRIMARY_MODELS: 'shared-model',
+    MODEL_PROVIDER_BACKUP_BASE_URL: 'https://backup.example/v1',
+    MODEL_PROVIDER_BACKUP_MODELS: 'shared-model',
+  }
+  const providerOptIn = resolveModelFailoverConfigs({
+    env: {
+      ...env,
+      MODEL_PROVIDER_PRIMARY_PROFILE: JSON.stringify({ failoverEnabled: true }),
+    },
+  })
+  assert.deepEqual(providerOptIn.map((config) => config.providerId), ['primary', 'backup'])
+
+  const providerOptOut = resolveModelFailoverConfigs({
+    env: {
+      ...env,
+      MODEL_FAILOVER_CROSS_PROVIDER: '1',
+      MODEL_PROVIDER_PRIMARY_PROFILE: JSON.stringify({ failoverEnabled: false }),
+    },
+  })
+  assert.deepEqual(providerOptOut.map((config) => config.providerId), ['primary'])
+  assert.equal(providerOptOut[0].failoverPolicy.reason, 'primary_provider_disabled')
+})
+
+test('blocked cross-provider fallback returns actionable redacted diagnostics', async () => {
+  const secret = 'sk-must-not-leak'
+  const configs = resolveModelFailoverConfigs({
+    env: {
+      MODEL_NAME: 'shared-model',
+      MODEL_PROVIDERS: 'primary,backup',
+      MODEL_PROVIDER_PRIMARY_BASE_URL: 'https://primary.example/v1',
+      MODEL_PROVIDER_PRIMARY_API_KEY: secret,
+      MODEL_PROVIDER_PRIMARY_MODELS: 'shared-model',
+      MODEL_PROVIDER_BACKUP_BASE_URL: 'https://backup.example/v1',
+      MODEL_PROVIDER_BACKUP_API_KEY: 'backup-secret',
+      MODEL_PROVIDER_BACKUP_MODELS: 'shared-model',
+    },
+  })
+  let calls = 0
+  await assert.rejects(
+    () => runWithProviderFailover(configs, async () => {
+      calls += 1
+      throw Object.assign(new Error(`upstream echoed ${secret}`), { status: 503 })
+    }),
+    (error) => {
+      assert.equal(error?.code, 'MODEL_CROSS_PROVIDER_FAILOVER_BLOCKED')
+      assert.equal(error?.retryable, true)
+      assert.match(error?.hint || '', /Provider/u)
+      assert.deepEqual(error?.details, {
+        reason: 'explicit_opt_in_required',
+        blockedProviderCount: 1,
+        action: 'enable_cross_provider_failover',
+      })
+      assert.doesNotMatch(JSON.stringify(error), /sk-must-not-leak|backup-secret/u)
+      assert.doesNotMatch(error.message, /primary\.example|backup\.example/u)
+      return true
+    },
+  )
+  assert.equal(calls, 1)
+})
+
+test('blocked stream fallback is structured only before output starts', async () => {
+  const configs = [{
+    providerId: 'primary',
+    failoverPolicy: { blockedProviderCount: 1, reason: 'explicit_opt_in_required' },
+  }]
+  await assert.rejects(async () => {
+    for await (const item of streamWithProviderFailover(configs, async function* failBeforeOutput() {
+      yield* []
+      throw Object.assign(new Error('down'), { status: 503 })
+    }, { maxAttemptsPerProvider: 1 })) void item
+  }, (error) => error?.code === 'MODEL_CROSS_PROVIDER_FAILOVER_BLOCKED')
+
+  await assert.rejects(async () => {
+    for await (const item of streamWithProviderFailover(configs, async function* failAfterOutput() {
+      yield 'partial'
+      throw Object.assign(new Error('late failure'), { status: 503 })
+    }, { maxAttemptsPerProvider: 1 })) void item
+  }, (error) => error?.message === 'late failure' && !error?.details)
 })
 
 test('provider failover changes provider for recoverable failures', async () => {
@@ -76,6 +183,48 @@ test('provider failover does not hide authentication or request errors', async (
     throw Object.assign(new Error('bad request'), { status: 400 })
   }), /bad request/)
   assert.equal(calls, 1)
+})
+
+test('an ambiguous tracked request is neither retried nor sent to another provider', async () => {
+  const attempts = []
+  const ambiguous = () => modelRequestOutcomeUnknown(
+    Object.assign(new Error('upstream unavailable after accepting the request'), { status: 503 }),
+    {
+      modelRequestId: 'mr_ambiguous-request',
+      phase: 'response',
+      responseReceived: true,
+    },
+  )
+  assert.equal(isProviderFailoverError(ambiguous()), false)
+
+  await assert.rejects(
+    () => runWithProviderFailover([
+      { providerId: 'primary' },
+      { providerId: 'backup' },
+    ], async (config) => {
+      attempts.push(config.providerId)
+      throw ambiguous()
+    }),
+    (error) => error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+      && error?.unsafeToReplay === true,
+  )
+  assert.deepEqual(attempts, ['primary'])
+
+  const streamAttempts = []
+  await assert.rejects(async () => {
+    for await (const item of streamWithProviderFailover([
+      { providerId: 'primary' },
+      { providerId: 'backup' },
+    ], async function* ambiguousStream(config) {
+      streamAttempts.push(config.providerId)
+      yield* []
+      throw ambiguous()
+    }, {
+      maxAttemptsPerProvider: 3,
+      retrySleepImpl: async () => {},
+    })) void item
+  }, (error) => error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN')
+  assert.deepEqual(streamAttempts, ['primary'])
 })
 
 test('stream failover only switches before the first emitted event', async () => {

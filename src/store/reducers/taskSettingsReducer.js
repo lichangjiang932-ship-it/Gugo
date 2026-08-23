@@ -1,6 +1,7 @@
 import { normalizeThemeMode } from '../../lib/themeMode.js'
 import { createInitialState } from '../appStateBootstrap.js'
 import { TASK_STATUS } from '../taskStatus.js'
+import { writeSessionDraft } from '../../lib/chatDrafts.js'
 import {
   activatePreviewTab,
   createPreviewTabState,
@@ -196,12 +197,12 @@ export function reduceTaskSettingsState(state, action) {
     }
 
     case 'SET_SESSION_DRAFT': {
-      // payload: { sessionId, text }
-      const { sessionId, text } = action.payload || {}
+      // payload: { sessionId, text?, attachments? }
+      const { sessionId } = action.payload || {}
       if (!sessionId) return state
       const drafts = { ...(state.sessionDrafts || {}) }
-      const t = text ?? ''
-      if (t) drafts[sessionId] = t
+      const nextDraft = writeSessionDraft(drafts[sessionId], action.payload)
+      if (nextDraft) drafts[sessionId] = nextDraft
       else delete drafts[sessionId]
       return { ...state, sessionDrafts: drafts }
     }

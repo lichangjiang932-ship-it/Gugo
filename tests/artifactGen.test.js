@@ -10,6 +10,7 @@ import path from 'node:path'
 import JSZip from 'jszip'
 import { PDFDocument, PDFName } from 'pdf-lib'
 import sharp from 'sharp'
+import '../scripts/testEnvironment.mjs'
 
 // 用临时目录,跑完清理
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-test-'))
@@ -18,6 +19,8 @@ process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-artifact-tests', String(p
 
 const { createAppServer } = await import('../server/appServer.js')
 const { buildArtifactFilename, createHtmlArtifact, createPptx, createDocx, createPdf, createXlsx, getArtifactDir, validateHtmlArtifactSource } = await import('../server/services/artifactGen.js')
+const { resolveOfficeArtifactImageInputs } = await import('../server/services/officeArtifactImages.js')
+const { setAllFilesAccess } = await import('../server/services/localFileAccessService.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 async function loadPptxZip(result) {
@@ -62,6 +65,22 @@ test('createPptx 真实生成可解析的 OOXML pptx', async () => {
   // JSZip 能解析,且含 ppt/presentation.xml
   const zip = await JSZip.loadAsync(fs.readFileSync(full))
   assert.ok(zip.file('ppt/presentation.xml'), 'pptx 应含 ppt/presentation.xml')
+})
+
+test('createPptx 暴露可复现时间与安全的 CJK 字体注入回执', async () => {
+  const generatedAt = '2024-05-06T07:08:09.000Z'
+  const result = await createPptx({
+    title: '可观测回执',
+    generatedAt,
+    slides: [{ title: '封面', layout: 'cover' }],
+  })
+
+  assert.equal(result.generatedAt, generatedAt)
+  assert.deepEqual(result.fontInjection, {
+    status: 'injected',
+    font: 'Microsoft YaHei',
+  })
+  assert.equal(JSON.stringify(result.fontInjection).includes('ppt/theme'), false)
 })
 
 test('cover/section 为所有 premium theme 渲染受控 gradient 装饰', async () => {
@@ -192,9 +211,17 @@ test('createPdf 把授权图片嵌入为真实 PDF image XObject', async () => {
     },
   }).png().toFile(sourcePath)
 
+  const { userId } = issueTestSession()
+  setAllFilesAccess({ userId, enabled: true, confirmation: 'ALLOW_ALL_LOCAL_FILES' })
+  const images = resolveOfficeArtifactImageInputs(
+    [{ path: sourcePath, alt: '实际蓝色图片' }],
+    { userId },
+  )
+
   const result = await createPdf({
     title: '原图转 PDF',
-    images: [{ sourcePath, alt: '实际蓝色图片' }],
+    images,
+    userId,
   })
   const bytes = fs.readFileSync(result.fullPath)
   const document = await PDFDocument.load(bytes, { updateMetadata: false })
@@ -242,8 +269,24 @@ test('createXlsx 真实生成 SpreadsheetML', async () => {
 test('createXlsx 全空 sheets 报错', async () => {
   await assert.rejects(
     () => createXlsx({ sheets: [{ name: 's', rows: [] }] }),
-    /非空 sheet/,
+    /sheets\[0\]\.rows must contain at least one row/,
   )
+})
+
+test('createXlsx snapshots worksheet input before asynchronous image preparation', async () => {
+  const sheets = [{ name: 'Original', rows: [['001']] }]
+  const pending = createXlsx({ title: 'Snapshot', sheets })
+  sheets[0].name = 'Mutated'
+  sheets[0].rows[0][0] = '999'
+
+  const result = await pending
+  const zip = await JSZip.loadAsync(fs.readFileSync(result.fullPath))
+  const workbook = await zip.file('xl/workbook.xml').async('string')
+  const worksheet = await zip.file('xl/worksheets/sheet1.xml').async('string')
+  assert.match(workbook, /name="Original"/)
+  assert.doesNotMatch(workbook, /Mutated/)
+  assert.match(worksheet, />001<\/t>/)
+  assert.doesNotMatch(worksheet, />999<\/t>/)
 })
 
 test('artifact 文件名格式安全(只含字母数字-.)', async () => {

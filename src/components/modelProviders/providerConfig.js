@@ -1,3 +1,5 @@
+import { parseOptionalModelProviderInteger } from '../../../shared/modelProviderNumericConfig.js'
+
 const CAPS = {
   tools: { supportsTools: '1', supportsStreaming: '1', supportsVision: '1', supportsPdf: '0' },
   toolsVision: { supportsTools: '1', supportsStreaming: '1', supportsVision: '1', supportsPdf: '1' },
@@ -30,13 +32,78 @@ export const CLOUD_PRESETS = Object.freeze([
 export const PROVIDER_PRESETS = Object.freeze([...CLOUD_PRESETS, ...LOCAL_PRESETS])
 export const KIND_OPTIONS = ['', 'ollama', 'lmstudio', 'llamacpp', 'vllm', 'anthropic', 'gemini', 'openai-compatible']
 export const TRIBOOL_VALUES = ['', '1', '0']
+const PROVIDER_KEY_RE = /^[a-z][a-z0-9_-]{0,39}$/
 
 export function emptyProvider() {
   return {
     id: '', key: '', label: '', baseUrl: '', apiKey: '', modelsText: '', defaultModel: '', presetId: '',
     headersText: '', enabled: true, isDefault: false, kind: '', contextWindow: '', supportsTools: '',
     supportsStreaming: '', supportsVision: '', supportsPdf: '', firstTokenTimeoutMs: '', idleTimeoutMs: '',
-    failoverEnabled: '', keepAlive: '', modelProfiles: {},
+    failoverEnabled: '', keepAlive: '', modelProfiles: {}, clearApiKey: false, savedHeaderKeys: [],
+    removedHeaderKeys: [], clearHeaders: false,
+  }
+}
+
+export function providerKeyError(value) {
+  const key = String(value || '').trim()
+  if (!key) return 'required'
+  return PROVIDER_KEY_RE.test(key) ? '' : 'invalid'
+}
+
+export function providerLabelError(value) {
+  return String(value || '').trim() ? '' : 'required'
+}
+
+export function providerModelsError(value) {
+  const models = Array.isArray(value) ? value : String(value || '').split(/[\n,]/)
+  return models.some((model) => String(model || '').trim()) ? '' : 'required'
+}
+
+export function providerHeadersError(value) {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return 'json'
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'type'
+  for (const [rawName, rawValue] of Object.entries(parsed)) {
+    const name = String(rawName || '').trim()
+    if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) return 'name'
+    let headerValue
+    try {
+      headerValue = String(rawValue ?? '')
+    } catch {
+      return 'value'
+    }
+    if (/[\r\n]/.test(headerValue)) return 'value'
+  }
+  return ''
+}
+
+export function providerHasCredentials(provider) {
+  const source = provider && typeof provider === 'object' ? provider : {}
+  if (String(source.apiKey || '').trim()) return true
+  if (source.hasApiKey === true && source.clearApiKey !== true) return true
+  const removedHeaders = new Set((Array.isArray(source.removedHeaderKeys) ? source.removedHeaderKeys : [])
+    .map((key) => String(key || '').trim().toLowerCase()).filter(Boolean))
+  if (source.clearHeaders !== true && Array.isArray(source.savedHeaderKeys)
+    && source.savedHeaderKeys.some((key) => {
+      const normalized = String(key || '').trim().toLowerCase()
+      return normalized && !removedHeaders.has(normalized)
+    })) return true
+  const text = String(source.headersText || '').trim()
+  if (!text) return false
+  try {
+    const parsed = JSON.parse(text)
+    return !!(parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      && Object.entries(parsed).some(([key, value]) => (
+        String(key || '').trim() && String(value ?? '').trim()
+      )))
+  } catch {
+    return false
   }
 }
 
@@ -45,11 +112,70 @@ export function selectToTribool(value) {
   return value === '1'
 }
 
-export function numberOrNull(value) {
-  const text = String(value ?? '').trim()
-  if (!text) return null
-  const num = Number(text)
-  return Number.isFinite(num) && num > 0 ? Math.floor(num) : null
+export function providerNumericFieldError(value, field) {
+  const result = parseOptionalModelProviderInteger(value, field)
+  return result.valid ? null : result
+}
+
+export function numberOrNull(value, field) {
+  const result = parseOptionalModelProviderInteger(value, field)
+  if (!result.valid) {
+    throw Object.assign(new TypeError(`Invalid model Provider numeric field: ${field}`), {
+      code: 'MODEL_PROVIDER_NUMERIC_FIELD_INVALID',
+      field,
+      reason: result.reason,
+      min: result.min,
+      max: result.max,
+    })
+  }
+  return result.value
+}
+
+export function normalizeEditorModelProfiles(value) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  return Object.fromEntries(Object.entries(input).flatMap(([model, rawProfile]) => {
+    if (!rawProfile || typeof rawProfile !== 'object' || Array.isArray(rawProfile)) return []
+    const profile = { ...rawProfile }
+    for (const field of ['contextWindow', 'maxOutputTokens']) {
+      if (!Object.hasOwn(profile, field)) continue
+      const parsed = parseOptionalModelProviderInteger(profile[field], field)
+      if (!parsed.valid) {
+        throw Object.assign(new TypeError(`Invalid model Provider numeric field: modelProfiles.${model}.${field}`), {
+          code: 'MODEL_PROVIDER_NUMERIC_FIELD_INVALID',
+          field: `modelProfiles.${model}.${field}`,
+          reason: parsed.reason,
+          min: parsed.min,
+          max: parsed.max,
+        })
+      }
+      if (parsed.empty) delete profile[field]
+      else profile[field] = parsed.value
+    }
+    return Object.keys(profile).length ? [[model, profile]] : []
+  }))
+}
+
+export function resolveProviderDefaultModel(models, requestedModel) {
+  const available = Array.isArray(models) ? models : []
+  return available.includes(requestedModel) ? requestedModel : (available[0] || '')
+}
+
+export function providerBaseUrlError(value) {
+  const input = String(value || '').trim()
+  if (!input) return 'required'
+  let url
+  try {
+    url = new URL(input)
+  } catch {
+    return 'invalid'
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) return 'protocol'
+  const schemeEnd = input.indexOf('://')
+  const authority = schemeEnd < 0 ? '' : input.slice(schemeEnd + 3).split(/[/?#]/, 1)[0]
+  if (url.username || url.password || authority.includes('@')) return 'credentials'
+  if (input.includes('?') || url.search) return 'query'
+  if (input.includes('#') || url.hash) return 'fragment'
+  return ''
 }
 
 export function mergeDiscoveredModelProfiles(existing, discovered, models = []) {
@@ -72,14 +198,17 @@ function triboolToSelect(value) {
 }
 
 export function toEditor(provider) {
-  const matchedPreset = PROVIDER_PRESETS.find((preset) => preset.baseUrl === provider.baseUrl)
+  const source = provider && typeof provider === 'object' ? provider : {}
+  const { headers, ...safeProvider } = source
+  const matchedPreset = PROVIDER_PRESETS.find((preset) => preset.baseUrl === source.baseUrl)
   return {
-    ...provider, presetId: matchedPreset?.id || 'custom', apiKey: '', modelsText: (provider.models || []).join('\n'),
-    headersText: '', kind: provider.kind || '', contextWindow: provider.contextWindow ?? '',
-    supportsTools: triboolToSelect(provider.supportsTools), supportsStreaming: triboolToSelect(provider.supportsStreaming),
-    supportsVision: triboolToSelect(provider.supportsVision), supportsPdf: triboolToSelect(provider.supportsPdf),
-    firstTokenTimeoutMs: provider.firstTokenTimeoutMs ?? '', idleTimeoutMs: provider.idleTimeoutMs ?? '',
-    failoverEnabled: triboolToSelect(provider.failoverEnabled), keepAlive: provider.keepAlive || '',
+    ...safeProvider, presetId: matchedPreset?.id || 'custom', apiKey: '', clearApiKey: false, modelsText: (source.models || []).join('\n'),
+    headersText: '', savedHeaderKeys: Object.keys(headers && typeof headers === 'object' && !Array.isArray(headers) ? headers : {}),
+    removedHeaderKeys: [], clearHeaders: false, kind: source.kind || '', contextWindow: source.contextWindow ?? '',
+    supportsTools: triboolToSelect(source.supportsTools), supportsStreaming: triboolToSelect(source.supportsStreaming),
+    supportsVision: triboolToSelect(source.supportsVision), supportsPdf: triboolToSelect(source.supportsPdf),
+    firstTokenTimeoutMs: source.firstTokenTimeoutMs ?? '', idleTimeoutMs: source.idleTimeoutMs ?? '',
+    failoverEnabled: triboolToSelect(source.failoverEnabled), keepAlive: source.keepAlive || '',
   }
 }
 

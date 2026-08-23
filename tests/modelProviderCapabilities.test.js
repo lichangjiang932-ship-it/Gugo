@@ -78,7 +78,15 @@ test('只改一个字段时,其它能力配置不被抹掉', () => {
   // 只改 label,完全不提交能力字段
   const updated = upsertModelProvider({
     userId,
-    provider: { id: created.id, key: 'p1', label: 'P1 改名', baseUrl: 'http://127.0.0.1:1234/v1', models: ['m1'], defaultModel: 'm1' },
+    provider: {
+      id: created.id,
+      configRevision: created.configRevision,
+      key: 'p1',
+      label: 'P1 改名',
+      baseUrl: 'http://127.0.0.1:1234/v1',
+      models: ['m1'],
+      defaultModel: 'm1',
+    },
   })
   assert.equal(updated.label, 'P1 改名')
   assert.equal(updated.contextWindow, 8192, '未提交的字段不该被清空')

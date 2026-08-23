@@ -12,11 +12,14 @@ process.env.APP_DB_PATH = path.join(tempDir, 'app.db')
 
 const { closeDb, getDb } = await import('../server/db.js')
 const { handleEvolutionRequest } = await import('../server/routes/evolutionRoutes.js')
+const { buildEvolutionDataset } = await import('../server/services/evolutionDatasetService.js')
+const { generateEvolutionCandidate } = await import('../server/services/evolutionCandidateService.js')
 const { appendEvolutionFeedback } = await import('../server/services/evolutionEvidenceStore.js')
+const { upsertModelProvider } = await import('../server/services/modelProviderStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 getDb()
-let modelCall = async () => ({ content: '{}', modelName: 'test-model' })
+let modelCall = async () => ({ content: '{}', providerId: 'candidate-provider', modelName: 'test-model' })
 const server = http.createServer((req, res) => handleEvolutionRequest(req, res, {
   runCandidateModel: (input) => modelCall(input),
 }))
@@ -59,6 +62,8 @@ async function generate(token, dataset, overrides = {}) {
     objective: 'Improve failures without requesting broader permissions',
     datasetFingerprint: dataset.datasetFingerprint,
     sourceRecordIds: [dataset.records[0].id],
+    providerId: 'candidate-provider',
+    modelName: 'model-v2',
     ...overrides,
   })
 }
@@ -82,6 +87,7 @@ test('candidate generation uses only curated records and stores an inert immutab
   modelCall = async (input) => {
     captured = input
     return {
+      providerId: 'candidate-provider',
       modelName: 'provider/model-v1',
       content: JSON.stringify({
         title: 'Safer retry for owner@example.com',
@@ -109,6 +115,7 @@ test('candidate generation uses only curated records and stores an inert immutab
   assert.equal(candidate.provenance.curationVersion, dataset.curationVersion)
   assert.deepEqual(candidate.provenance.sourceRecordIds, [dataset.records[0].id])
   assert.deepEqual(candidate.provenance.sourceEvidenceIds, [source.id])
+  assert.equal(candidate.provenance.generatorProviderId, 'candidate-provider')
   assert.equal(candidate.provenance.generatorModel, 'provider/model-v1')
   assert.equal(candidate.provenance.generatorMode, 'background_model_no_tools')
   assert.deepEqual(candidate.permissionsRequested, ['tool:read_file'])
@@ -118,6 +125,8 @@ test('candidate generation uses only curated records and stores an inert immutab
   assert.equal(candidate.contentSha256, createHash('sha256').update(candidate.content).digest('hex'))
 
   assert.equal(Object.hasOwn(captured, 'tools'), false)
+  assert.equal(captured.providerId, 'candidate-provider')
+  assert.equal(captured.modelName, 'provider/model-v1')
   const modelInput = JSON.stringify(captured.messages)
   assert.doesNotMatch(modelInput, /source-secret|source@example|objective-secret|planner@example|C:\\Users|BOB_PRIVATE/iu)
   assert.match(modelInput, /\[REDACTED\]/)
@@ -159,6 +168,7 @@ test('candidate generation fails closed for stale, missing, changing, or invalid
   modelCall = async () => {
     calls += 1
     return {
+      providerId: 'candidate-provider',
       modelName: 'model-v2',
       content: JSON.stringify({
         title: 'Candidate',
@@ -189,6 +199,7 @@ test('candidate generation fails closed for stale, missing, changing, or invalid
     calls += 1
     appendEvolutionFeedback({ userId, feedback: 'new evidence during generation' })
     return {
+      providerId: 'candidate-provider',
       modelName: 'model-v2',
       content: JSON.stringify({ title: 'Candidate', summary: 'Summary', content: 'Content' }),
     }
@@ -203,10 +214,19 @@ test('candidate generation fails closed for stale, missing, changing, or invalid
   assert.deepEqual((await listAfterChange.json()).candidates, [])
 
   dataset = await getDataset(session.token)
-  modelCall = async () => ({ modelName: 'model-v2', content: 'not json' })
+  modelCall = async () => ({ providerId: 'candidate-provider', modelName: 'model-v2', content: 'not json' })
   const invalidOutput = await generate(session.token, dataset)
   assert.equal(invalidOutput.status, 502)
   assert.equal((await invalidOutput.json()).error.code, 'EVOLUTION_CANDIDATE_OUTPUT_INVALID')
+
+  modelCall = async () => ({
+    providerId: 'different-provider',
+    modelName: 'model-v2',
+    content: JSON.stringify({ title: 'Candidate', summary: 'Summary', content: 'Content' }),
+  })
+  const providerDrift = await generate(session.token, dataset)
+  assert.equal(providerDrift.status, 502)
+  assert.equal((await providerDrift.json()).error.code, 'EVOLUTION_CANDIDATE_MODEL_MISMATCH')
 
   const invalidTarget = await generate(session.token, dataset, { target: 'prompt:wrong-kind' })
   assert.equal(invalidTarget.status, 400)
@@ -217,4 +237,139 @@ test('candidate generation fails closed for stale, missing, changing, or invalid
   })
   assert.equal(invalidLimit.status, 400)
   assert.equal((await invalidLimit.json()).error.code, 'EVOLUTION_CANDIDATE_LIMIT_INVALID')
+})
+
+test('config candidate generation rejects model-supplied endpoints, credentials, and permissions without persistence', async () => {
+  const session = issueTestSession({ email: 'candidate-config-policy@example.com' })
+  await createFeedback(session.token, 'Keep background execution bounded and locally controlled')
+  const dataset = await getDataset(session.token)
+  const before = getDb().prepare(`
+    SELECT COUNT(*) AS count FROM evolution_candidates WHERE user_id = ?
+  `).get(session.userId).count
+
+  const invalidOutputs = [
+    {
+      title: 'Replace endpoint',
+      summary: 'Attempts to redirect model traffic',
+      content: {
+        schemaVersion: 1,
+        mode: 'patch',
+        env: { MODEL_BASE_URL: 'https://example.invalid/v1' },
+      },
+      permissionsRequested: [],
+    },
+    {
+      title: 'Store credential',
+      summary: 'Attempts to persist a secret',
+      content: {
+        schemaVersion: 1,
+        mode: 'patch',
+        env: { MODEL_API_KEY: 'model-supplied-secret' },
+      },
+      permissionsRequested: [],
+    },
+    {
+      title: 'Request capability',
+      summary: 'Attempts to broaden permissions',
+      content: {
+        schemaVersion: 1,
+        mode: 'patch',
+        env: { MODEL_TEMPERATURE: 0.2 },
+      },
+      permissionsRequested: ['network:https://example.invalid'],
+    },
+  ]
+
+  for (const output of invalidOutputs) {
+    modelCall = async () => ({
+      providerId: 'candidate-provider',
+      modelName: 'model-v2',
+      content: JSON.stringify(output),
+    })
+    const response = await generate(session.token, dataset, {
+      kind: 'config',
+      target: 'config:runtime',
+    })
+    assert.equal(response.status, 502)
+    assert.match(
+      (await response.json()).error.code,
+      /^EVOLUTION_CONFIG_(?:CONTENT_INVALID|PERMISSION_CHANGE_UNSUPPORTED)$/u,
+    )
+  }
+
+  const after = getDb().prepare(`
+    SELECT COUNT(*) AS count FROM evolution_candidates WHERE user_id = ?
+  `).get(session.userId).count
+  assert.equal(after, before)
+})
+
+test('database Provider UUID is translated to its runtime key for the real model proxy', async (t) => {
+  const session = issueTestSession({ email: 'candidate-real-proxy@example.com' })
+  let upstreamRequest = null
+  const upstream = http.createServer(async (req, res) => {
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    upstreamRequest = {
+      url: req.url,
+      authorization: req.headers.authorization,
+      body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      choices: [{
+        message: {
+          role: 'assistant',
+          content: JSON.stringify({
+            title: 'Real proxy candidate',
+            summary: 'Generated through the production model adapter',
+            content: 'Keep evolution Provider identity stable.',
+            assumptions: [],
+            expectedImpact: ['Preserve auditable provenance'],
+            permissionsRequested: [],
+          }),
+        },
+        finish_reason: 'stop',
+      }],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    }))
+  })
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => upstream.close(resolve)))
+
+  const provider = upsertModelProvider({
+    userId: session.userId,
+    provider: {
+      key: 'evolution-runtime-key',
+      label: 'Evolution runtime integration',
+      baseUrl: `http://127.0.0.1:${upstream.address().port}/v1`,
+      apiKey: 'integration-secret',
+      models: ['evolution-real-model'],
+      defaultModel: 'evolution-real-model',
+      enabled: true,
+      isDefault: true,
+      kind: 'openai-compatible',
+    },
+  })
+  appendEvolutionFeedback({
+    userId: session.userId,
+    feedback: 'Candidate generation should keep Provider provenance stable',
+  })
+  const dataset = buildEvolutionDataset({ userId: session.userId, limit: 200 })
+  const candidate = await generateEvolutionCandidate({
+    userId: session.userId,
+    kind: 'prompt',
+    target: 'prompt:real-proxy-provider-identity',
+    objective: 'Verify the production Provider identity boundary',
+    datasetFingerprint: dataset.datasetFingerprint,
+    sourceRecordIds: [dataset.records[0].id],
+    providerId: provider.id,
+    modelName: 'evolution-real-model',
+  })
+
+  assert.equal(upstreamRequest.url, '/v1/chat/completions')
+  assert.equal(upstreamRequest.authorization, 'Bearer integration-secret')
+  assert.equal(upstreamRequest.body.model, 'evolution-real-model')
+  assert.equal(candidate.provenance.generatorProviderId, provider.id)
+  assert.notEqual(candidate.provenance.generatorProviderId, provider.key)
+  assert.equal(candidate.provenance.generatorModel, 'evolution-real-model')
 })

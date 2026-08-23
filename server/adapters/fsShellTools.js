@@ -128,7 +128,7 @@ function normalizeShellEnvKeys(value) {
       throw error
     }
     if (isProtectedExecutionEnvKey(key)) {
-      const error = badReq(`环境变量 ${key} 属于 Gugo 服务凭据，禁止注入工作区命令`, 403)
+      const error = badReq(`环境变量 ${key} 属于 Gugo 服务凭据或运行时注入变量，禁止注入工作区命令`, 403)
       error.code = 'SHELL_ENV_KEY_PROTECTED'
       throw error
     }
@@ -465,13 +465,13 @@ function lineChangeStats(previous, next) {
 
 export async function writeFileTool(
   { path: rawPath, content, userId = null },
-  { permissionToolName = 'write_file' } = {},
+  {
+    permissionToolName = 'write_file',
+    idempotentResume = false,
+    sideEffectRecoveryPlan = null,
+  } = {},
 ) {
   assertToolPermitted(userId, effectivePermissionToolName(permissionToolName, 'write_file'))
-  // ★ M3.5:写类限流
-  if (userId && !writeLimiter.tryConsume(userId, 'write')) {
-    throw badReq('写文件限流:超过 120 次/分钟', 429)
-  }
   if (typeof content !== 'string') throw badReq('content 必须是字符串')
   const bytes = Buffer.byteLength(content, 'utf8')
   if (bytes > MAX_FILE_BYTES) {
@@ -479,16 +479,118 @@ export async function writeFileTool(
   }
   const resolved = resolveForFileTool(rawPath, { userId, write: true, allowMissing: true })
   const full = resolved.fullPath
+  const expectedSha256 = createHash('sha256').update(content, 'utf8').digest('hex')
   let previousContent = null
   let previousContentKnown = false
+  let observedBefore = { known: false }
   try {
     if (fs.existsSync(full) && fs.statSync(full).isFile()) {
-      previousContent = fs.readFileSync(full, 'utf8')
+      const previousBytes = fs.readFileSync(full)
+      previousContent = previousBytes.toString('utf8')
+      observedBefore = {
+        known: true,
+        exists: true,
+        type: 'file',
+        bytes: previousBytes.byteLength,
+        sha256: createHash('sha256').update(previousBytes).digest('hex'),
+      }
+    } else if (fs.existsSync(full)) {
+      const stat = fs.statSync(full)
+      observedBefore = {
+        known: true,
+        exists: true,
+        type: stat.isDirectory() ? 'directory' : 'other',
+      }
+    } else {
+      observedBefore = { known: true, exists: false }
     }
     previousContentKnown = true
   } catch {
     // Progress metadata must not turn a permitted write into a failure. If the
     // previous state is unreadable, omit line counts and keep the real write.
+  }
+  const changed = !previousContentKnown || previousContent !== content
+  const changes = previousContentKnown ? [{
+    path: resolved.displayPath,
+    ...(previousContent == null
+      ? { additions: contentLineCount(content), deletions: 0 }
+      : lineChangeStats(previousContent, content)),
+  }] : []
+  const outcome = {
+    ok: true,
+    path: resolved.displayPath,
+    scope: resolved.source,
+    bytes,
+    sha256: expectedSha256,
+    changed,
+    changedPaths: changed ? [resolved.displayPath] : [],
+    changes,
+  }
+  const unknownRecoveryResult = (observed = observedBefore) => ({
+    ok: false,
+    code: 'WRITE_FILE_OUTCOME_UNKNOWN',
+    error: 'The service restarted after write_file crossed its mutation boundary, but the current target cannot prove the persisted write outcome. It was not written again.',
+    retryable: false,
+    requiresUserVerification: true,
+    path: resolved.displayPath,
+    scope: resolved.source,
+    expectedSha256,
+    ...(observed?.known && observed?.exists && observed?.type === 'file' && observed?.sha256
+      ? { observedSha256: observed.sha256 }
+      : {}),
+  })
+  if (idempotentResume === true) {
+    if (!sideEffectRecoveryPlan || typeof sideEffectRecoveryPlan.read !== 'function') {
+      return unknownRecoveryResult()
+    }
+    const plan = await sideEffectRecoveryPlan.read()
+    const plannedPath = String(plan?.target?.fullPath || '')
+    const sameTarget = process.platform === 'win32'
+      ? path.normalize(plannedPath).toLowerCase() === path.normalize(full).toLowerCase()
+      : path.normalize(plannedPath) === path.normalize(full)
+    const validPlan = plan?.version === 1
+      && plan?.kind === 'local-file-write'
+      && sameTarget
+      && plan?.after?.exists === true
+      && plan?.after?.type === 'file'
+      && Number(plan?.after?.bytes) === bytes
+      && plan?.after?.sha256 === expectedSha256
+      && plan?.outcome
+      && typeof plan.outcome === 'object'
+      && plan.outcome.sha256 === expectedSha256
+    if (validPlan
+      && observedBefore.known === true
+      && observedBefore.exists === true
+      && observedBefore.type === 'file'
+      && observedBefore.bytes === bytes
+      && observedBefore.sha256 === expectedSha256) {
+      return { ...plan.outcome, idempotencyRecovered: true }
+    }
+    return unknownRecoveryResult()
+  }
+  if (sideEffectRecoveryPlan && typeof sideEffectRecoveryPlan.prepare === 'function') {
+    await sideEffectRecoveryPlan.prepare({
+      version: 1,
+      kind: 'local-file-write',
+      target: {
+        fullPath: full,
+        displayPath: resolved.displayPath,
+        scope: resolved.source,
+      },
+      before: observedBefore,
+      after: {
+        exists: true,
+        type: 'file',
+        bytes,
+        sha256: expectedSha256,
+      },
+      outcome,
+    })
+  }
+  // Resume mode only proves the current state and never performs a second
+  // mutation, so it must not consume or be blocked by the fresh-write quota.
+  if (userId && !writeLimiter.tryConsume(userId, 'write')) {
+    throw badReq('写文件限流:超过 120 次/分钟', 429)
   }
   try {
     fs.mkdirSync(path.dirname(full), { recursive: true })
@@ -500,14 +602,7 @@ export async function writeFileTool(
   if (resolved.source === 'workspace') {
     try { checkWorkspaceSize(getWorkspaceRoot()) } catch { /* 巡检失败不影响写入 */ }
   }
-  const changed = !previousContentKnown || previousContent !== content
-  const changes = previousContentKnown ? [{
-    path: resolved.displayPath,
-    ...(previousContent == null
-      ? { additions: contentLineCount(content), deletions: 0 }
-      : lineChangeStats(previousContent, content)),
-  }] : []
-  return { ok: true, path: resolved.displayPath, scope: resolved.source, bytes, changed, changes }
+  return outcome
 }
 
 /* ── edit_file (字符串精确替换) ────────────────────────────── */
@@ -564,11 +659,14 @@ export async function editFileTool({
   } catch (error) {
     throw mapWriteError(error, full)
   }
+  const nextBytes = Buffer.from(next, 'utf8')
   return {
     ok: true,
     path: resolved.displayPath,
     scope: resolved.source,
     replacedCount,
+    bytes: nextBytes.byteLength,
+    sha256: createHash('sha256').update(nextBytes).digest('hex'),
     deltaBytes: Buffer.byteLength(next, 'utf8') - Buffer.byteLength(orig, 'utf8'),
     changes: [{ path: resolved.displayPath, ...lineChangeStats(orig, next) }],
   }
@@ -921,6 +1019,7 @@ export async function bashExecTool({
       shellArgs,
       cwd,
       env: buildCodeExecutionEnv(sanitizeChildEnv({}, { inheritKeys: inheritedEnvKeys })),
+      inheritEnvKeys: inheritedEnvKeys,
       timeout,
       maxBuffer: SHELL_MAX_OUTPUT,
       windowsHide: true,
@@ -1145,12 +1244,18 @@ export async function handleFsShellRequest(req, res) {
 
 // 给 jobTools/jobRuntime 共用:统一 dispatcher,直接函数调用,不经 HTTP.
 // userId 可选(内部 job/subagent 传进来),有则落 audit
-export async function dispatchFsShellTool(name, args, { userId = null, signal = null, onOutput = null } = {}) {
+export async function dispatchFsShellTool(name, args, {
+  userId = null,
+  signal = null,
+  onOutput = null,
+  idempotentResume = false,
+  sideEffectRecoveryPlan = null,
+} = {}) {
   const argsWithUser = userId ? { ...args, userId } : args
   switch (name) {
     case 'list_directory': return listDirectoryTool(argsWithUser)
     case 'read_file': return readFileTool(argsWithUser)
-    case 'write_file': return writeFileTool(argsWithUser)
+    case 'write_file': return writeFileTool(argsWithUser, { idempotentResume, sideEffectRecoveryPlan })
     case 'edit_file': return editFileTool(argsWithUser)
     case 'bash_exec': return bashExecTool({ ...argsWithUser, signal, onOutput })
     default: throw new Error(`unknown fsShell tool: ${name}`)

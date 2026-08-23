@@ -1,4 +1,4 @@
-// ★ T3: vision_assist /status 探针 —— 401 / 双条件 configured / 仅 env / 仅 integration
+// ★ T3: vision_assist /status 探针 —— 401 / 本地 BYOK 配置 / 启停状态
 import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
@@ -28,7 +28,7 @@ test('GET /api/integrations/vision_assist/status rejects unauthenticated request
   })
 })
 
-test('GET /api/integrations/vision_assist/status returns configured=true when both env and integration are present', async () => {
+test('GET /api/integrations/vision_assist/status uses the saved BYOK model without an env whitelist', async () => {
   const { token, userId } = issueTestSession()
   upsertIntegration({
     userId,
@@ -39,7 +39,7 @@ test('GET /api/integrations/vision_assist/status returns configured=true when bo
     secret: { apiKey: 'sk-vision-1' },
   })
 
-  await withServer(() => ({ MODEL_NAMES_VISION: 'gpt-4o,gemini-pro' }), async (baseUrl) => {
+  await withServer(() => ({}), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/integrations/vision_assist/status`, {
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -48,12 +48,37 @@ test('GET /api/integrations/vision_assist/status returns configured=true when bo
     assert.equal(body.ok, true)
     assert.equal(body.configured, true)
     assert.equal(body.hasIntegration, true)
-    assert.equal(body.hasVisionEnv, true)
-    assert.deepEqual(body.models, ['gpt-4o', 'gemini-pro'])
+    assert.equal(body.enabled, true)
+    assert.equal(body.modelName, 'gpt-4o-vision')
+    assert.deepEqual(body.models, ['gpt-4o-vision'])
+    assert.equal('hasVisionEnv' in body, false)
   })
 })
 
-test('GET /api/integrations/vision_assist/status returns configured=false when only env is set (no integration)', async () => {
+test('GET /api/integrations/vision_assist/status accepts a keyless local endpoint', async () => {
+  const { token, userId } = issueTestSession()
+  upsertIntegration({
+    userId,
+    provider: 'vision_assist',
+    name: 'Local Vision Copilot',
+    enabled: true,
+    config: { baseUrl: 'http://127.0.0.1:11434/v1', modelName: 'llava' },
+    secret: {},
+  })
+
+  await withServer(() => ({}), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/integrations/vision_assist/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.configured, true)
+    assert.equal(body.enabled, true)
+    assert.equal(body.modelName, 'llava')
+  })
+})
+
+test('GET /api/integrations/vision_assist/status does not treat a main-model vision whitelist as an assistant', async () => {
   const { token } = issueTestSession()
 
   await withServer(() => ({ MODEL_NAMES_VISION: 'gpt-4o' }), async (baseUrl) => {
@@ -64,18 +89,19 @@ test('GET /api/integrations/vision_assist/status returns configured=false when o
     const body = await res.json()
     assert.equal(body.configured, false)
     assert.equal(body.hasIntegration, false)
-    assert.equal(body.hasVisionEnv, true)
-    assert.deepEqual(body.models, ['gpt-4o'])
+    assert.equal(body.enabled, false)
+    assert.equal(body.modelName, null)
+    assert.deepEqual(body.models, [])
   })
 })
 
-test('GET /api/integrations/vision_assist/status returns configured=false when only integration is set (no env)', async () => {
+test('GET /api/integrations/vision_assist/status reports a disabled saved integration as unavailable', async () => {
   const { token, userId } = issueTestSession()
   upsertIntegration({
     userId,
     provider: 'vision_assist',
     name: 'Vision Copilot Solo',
-    enabled: true,
+    enabled: false,
     config: { baseUrl: 'http://vision.example.com', modelName: 'gpt-4o-vision' },
     secret: { apiKey: 'sk-vision-2' },
   })
@@ -88,7 +114,8 @@ test('GET /api/integrations/vision_assist/status returns configured=false when o
     const body = await res.json()
     assert.equal(body.configured, false)
     assert.equal(body.hasIntegration, true)
-    assert.equal(body.hasVisionEnv, false)
-    assert.deepEqual(body.models, [])
+    assert.equal(body.enabled, false)
+    assert.equal(body.modelName, 'gpt-4o-vision')
+    assert.deepEqual(body.models, ['gpt-4o-vision'])
   })
 })

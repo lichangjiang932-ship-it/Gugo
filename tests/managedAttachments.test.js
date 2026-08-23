@@ -9,13 +9,20 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-managed-attachments-
 process.env.APP_DATA_DIR = tempDir
 
 const { createAppServer } = await import('../server/appServer.js')
+const { createSqliteFileManagedAttachmentRuntimeAdapter } = await import('../server/adapters/sqliteFileManagedAttachmentRuntimeAdapter.js')
+const { prepareManagedAttachmentRuntimePort } = await import('../server/core/managedAttachmentRuntimePort.js')
 const { closeDb, getDb } = await import('../server/db.js')
 const { readFileTool } = await import('../server/adapters/fsShellTools.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
 const { listMessages, upsertSession } = await import('../server/services/sessionStore.js')
 const { uploadChatAttachment } = await import('../src/lib/attachmentClient.js')
 const { getClipboardFiles } = await import('../src/lib/chatAttachmentFiles.js')
+const { createTestTurnEnginePersistence } = await import('./helpers/turnEnginePersistence.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+
+const attachmentRuntime = prepareManagedAttachmentRuntimePort(
+  createSqliteFileManagedAttachmentRuntimeAdapter(),
+)
 
 const server = createAppServer({ getEnv: () => ({ AUTH_MODE: 'multi_user' }) })
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -237,6 +244,8 @@ test('TurnEngine binds attachment to the user message and injects recoverable mo
   let loopRequest = null
   let providerRequest = null
   const engine = new TurnEngine({
+    persistence: createTestTurnEnginePersistence({ attachmentRuntime }),
+    attachmentRuntime,
     preparePromptContext: async () => ({ messages: [], effectiveAgentId: null, skillIds: [], memoryIds: [] }),
     resolveToolSpecs: async ({ baseSpecs }) => baseSpecs,
     runLoop: async (request) => {
@@ -282,7 +291,11 @@ test('TurnEngine binds attachment to the user message and injects recoverable mo
 test('TurnEngine rejects an attachment owned by another user', async () => {
   assert.ok(uploaded)
   upsertSession({ id: 'managed-attachment-bob-session', userId: bob.userId, title: 'Bob' })
-  const engine = new TurnEngine({ runLoop: async () => ({ text: 'must not run' }) })
+  const engine = new TurnEngine({
+    persistence: createTestTurnEnginePersistence({ attachmentRuntime }),
+    attachmentRuntime,
+    runLoop: async () => ({ text: 'must not run' }),
+  })
   await assert.rejects(
     engine.startTurn({
       userId: bob.userId,
@@ -315,6 +328,8 @@ test('Office attachment is extracted and injected into a turn without local path
   let providerRequest = null
   const turnId = 'managed-office-turn'
   const engine = new TurnEngine({
+    persistence: createTestTurnEnginePersistence({ attachmentRuntime }),
+    attachmentRuntime,
     preparePromptContext: async () => ({ messages: [], effectiveAgentId: null, skillIds: [], memoryIds: [] }),
     resolveToolSpecs: async ({ baseSpecs }) => baseSpecs,
     runLoop: async (request) => {

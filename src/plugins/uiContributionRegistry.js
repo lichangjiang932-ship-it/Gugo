@@ -1,4 +1,9 @@
 import { Component as ReactComponent, Fragment, createElement, useSyncExternalStore } from 'react'
+import {
+  assertPluginCompatibility,
+  PLUGIN_API_VERSION,
+  PLUGIN_HOST_VERSION,
+} from '../../shared/pluginCompatibility.js'
 import { normalizePluginManifest } from '../../shared/pluginManifest.js'
 import { notifyUiContributionListeners } from './uiContributionNotifications.js'
 
@@ -232,10 +237,14 @@ export function registerTrustedUiPlugin(manifest, inputs) {
   if (uiPlugins.has(normalizedManifest.id)) {
     throw new Error(`UI plugin already registered: ${normalizedManifest.id}`)
   }
-  const missing = normalizedManifest.requires.filter((id) => uiPlugins.get(id)?.state !== 'active')
-  if (missing.length > 0) {
-    throw new Error(`UI plugin dependencies are not active: ${missing.join(', ')}`)
-  }
+  assertPluginCompatibility(normalizedManifest, {
+    hostVersion: PLUGIN_HOST_VERSION,
+    apiVersion: PLUGIN_API_VERSION,
+    resolveDependencyVersion: (id) => {
+      const dependency = uiPlugins.get(id)
+      return dependency?.state === 'active' ? dependency.manifest.version : null
+    },
+  })
   const normalizedContributions = normalizeContributionInputs(normalizedManifest.id, inputs)
   const actualDeclarations = normalizedContributions.map((contribution) => (
     `ui:${contribution.slot}:${contribution.id}`

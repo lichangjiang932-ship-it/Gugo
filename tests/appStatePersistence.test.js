@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   TOOLS_CONFIG_SCHEMA_VERSION,
+  completeSnapshot,
   createInitialState,
   needsToolsConfigSchemaMigration,
   normalizePersistedFields,
@@ -39,6 +40,25 @@ test('new installs enable every app permission and tool toggle by default', () =
   assert.equal(state.permissions.every((permission) => permission.enabled === true), true)
   assert.equal(Object.values(state.toolsConfig).every((enabled) => enabled === true), true)
   assert.equal(state.inputHistoryNavigationEnabled, true)
+})
+
+test('legacy account and subscription fields never re-enter persisted app state', () => {
+  const legacy = {
+    user: { email: 'legacy@example.test', plan: 'pro' },
+    isLoggedIn: true,
+    theme: 'dark',
+  }
+  const normalized = normalizePersistedFields(legacy)
+  assert.equal(Object.hasOwn(normalized, 'user'), false)
+  assert.equal(Object.hasOwn(normalized, 'isLoggedIn'), false)
+
+  const selected = selectPersistedSnapshot(legacy)
+  assert.equal(Object.hasOwn(selected, 'user'), false)
+  assert.equal(Object.hasOwn(selected, 'isLoggedIn'), false)
+
+  const completed = completeSnapshot(legacy)
+  assert.equal(Object.hasOwn(completed, 'user'), false)
+  assert.equal(Object.hasOwn(completed, 'isLoggedIn'), false)
 })
 
 test('input history navigation opt-out persists while invalid values use the enabled default', () => {
@@ -300,6 +320,76 @@ test('bootstrap reads new settings and a legacy full snapshot independently', ()
   const result = readBootstrapPayloads(storage, 123)
   assert.equal(result.settings.snapshot.theme, 'dark')
   assert.equal(result.legacy.snapshot.sessions[0].id, 'legacy')
+})
+
+test('bootstrap physically removes retired account fields without changing local sessions or settings', () => {
+  const settingsPayload = {
+    user: { email: 'old@example.test', plan: 'pro' },
+    isLoggedIn: true,
+    theme: 'dark',
+    toolsConfig: { fetch_url: false },
+    customSetting: { keep: true },
+    __sync: {
+      version: 1,
+      source: 'old-tab',
+      writtenAt: 50,
+      fields: { user: 50, isLoggedIn: 50, theme: 50 },
+      entities: { user: { old: 50 }, toolsConfig: { fetch_url: 50 } },
+      tombstones: { isLoggedIn: { old: 40 } },
+    },
+  }
+  const legacyPayload = {
+    user: { plan: 'legacy' },
+    isLoggedIn: false,
+    sessions: [{ id: 'keep-session', messages: [{ id: 'm1', content: 'keep-message' }] }],
+    modelConfig: { baseUrl: 'http://localhost:11434', model: 'local-model' },
+  }
+  const storage = createStorage([
+    [SETTINGS_STORAGE_KEY, JSON.stringify(settingsPayload)],
+    [LEGACY_STATE_STORAGE_KEY, JSON.stringify(legacyPayload)],
+  ])
+
+  const result = readBootstrapPayloads(storage, 50)
+  assert.deepEqual(result.settings.retiredAccountFieldsRemoved.sort(), ['isLoggedIn', 'user'])
+  assert.equal(Object.hasOwn(result.settings.snapshot, 'user'), false)
+  assert.equal(Object.hasOwn(result.settings.snapshot, 'isLoggedIn'), false)
+  assert.equal(Object.hasOwn(result.settings.meta.fields, 'user'), false)
+  assert.equal(Object.hasOwn(result.settings.meta.fields, 'isLoggedIn'), false)
+  assert.deepEqual(result.settings.snapshot.toolsConfig, { fetch_url: false })
+  assert.deepEqual(result.settings.snapshot.customSetting, { keep: true })
+  assert.equal(result.legacy.snapshot.sessions[0].messages[0].content, 'keep-message')
+  assert.equal(result.legacy.snapshot.modelConfig.model, 'local-model')
+
+  const cleanedSettings = JSON.parse(storage.values.get(SETTINGS_STORAGE_KEY))
+  const cleanedLegacy = JSON.parse(storage.values.get(LEGACY_STATE_STORAGE_KEY))
+  for (const cleaned of [cleanedSettings, cleanedLegacy]) {
+    assert.equal(Object.hasOwn(cleaned, 'user'), false)
+    assert.equal(Object.hasOwn(cleaned, 'isLoggedIn'), false)
+  }
+  assert.equal(Object.hasOwn(cleanedSettings.__sync.fields, 'user'), false)
+  assert.equal(Object.hasOwn(cleanedSettings.__sync.fields, 'isLoggedIn'), false)
+  assert.equal(cleanedLegacy.sessions[0].messages[0].content, 'keep-message')
+  assert.equal(cleanedLegacy.modelConfig.baseUrl, 'http://localhost:11434')
+})
+
+test('blocked localStorage rewrites still expose a clean snapshot and request a later cleanup write', () => {
+  const raw = JSON.stringify({
+    user: { plan: 'legacy' },
+    isLoggedIn: true,
+    sessions: [{ id: 'safe' }],
+    theme: 'dark',
+  })
+  const storage = {
+    getItem(key) { return key === LEGACY_STATE_STORAGE_KEY ? raw : null },
+    setItem() { throw Object.assign(new Error('blocked'), { name: 'SecurityError' }) },
+  }
+
+  const result = readBootstrapPayloads(storage, 10)
+  assert.equal(result.legacy.cleanupNeeded, true)
+  assert.equal(Object.hasOwn(result.legacy.snapshot, 'user'), false)
+  assert.equal(Object.hasOwn(result.legacy.snapshot, 'isLoggedIn'), false)
+  assert.deepEqual(result.legacy.snapshot.sessions, [{ id: 'safe' }])
+  assert.equal(result.legacy.snapshot.theme, 'dark')
 })
 
 test('writing settings never places session content in localStorage', () => {

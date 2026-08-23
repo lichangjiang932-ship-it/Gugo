@@ -58,7 +58,7 @@ export function buildCoreSlashCommands(_t, lang = 'en') {
     command('init', copy, async (_args, ctx = {}) => {
       await ctx.triggerSendFlow?.(copy.prompts.init)
       return copy.notices.init
-    }),
+    }, { requiresModel: true }),
     command('compact', copy, async (_args, ctx = {}) => {
       const session = currentSession(ctx)
       if (!session || (session.messages || []).length <= 8) return copy.notices.compactEmpty

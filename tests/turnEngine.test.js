@@ -12,9 +12,17 @@ const { decideApproval } = await import('../server/services/approvalStore.js')
 const { releaseApproval } = await import('../server/services/approvalGate.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
+const { TURN_ENGINE_FLAT_PERSISTENCE_OPTIONS } = await import('../server/services/turnEnginePersistenceBundle.js')
+const { createTurnExecutionEnvironmentSnapshot } = await import('../server/services/turnExecutionEnvironment.js')
+const { SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
 const { resolveChatCapabilityMode } = await import('../server/services/chatToolSelection.js')
 const { createTurnExecutionLeaseCoordinator } = await import('../server/services/turnExecutionLeaseRuntime.js')
-const { listMessages, upsertMessage, upsertSession } = await import('../server/services/sessionStore.js')
+const { resolveAgentModelRuntimeBinding } = await import('../server/services/modelReadinessService.js')
+const {
+  recordModelProviderReadiness,
+  upsertModelProvider,
+} = await import('../server/services/modelProviderStore.js')
+const { getMessage, getSession, listMessages, upsertMessage, upsertSession } = await import('../server/services/sessionStore.js')
 const {
   buildCompaction,
   createCompactionArchive,
@@ -25,29 +33,485 @@ const { prepareTurnPromptContext } = await import('../server/services/turnPrompt
 const { appendTurnEvent, appendTurnEvents, listTurnEvents } = await import('../server/services/turnEventStore.js')
 const { createEventWriteBehind } = await import('../server/services/eventWriteBehind.js')
 const { getTurnCheckpoint } = await import('../server/services/turnCheckpointStore.js')
+const { getTurnRecoveryState } = await import('../server/services/turnRecoveryStateStore.js')
 const { createTurnEvent } = await import('../shared/turnEvents.js')
 const {
   INLINE_SKILL_DEFINITION_LIMITS,
   unicodeCharacterLength,
   utf8ByteLength,
 } = await import('../shared/inlineSkillDefinitions.js')
+const { createTestTurnEnginePersistence } = await import('./helpers/turnEnginePersistence.js')
+const { activateTestCompactionArchivePort } = await import('./helpers/testCompactionArchivePort.js')
+
+const compactionArchiveController = activateTestCompactionArchivePort({
+  source: 'test.turn-engine',
+})
 
 const userId = 'turn-engine-user'
 createUser({ id: userId, email: 'turn-engine@example.com' })
 upsertSession({ id: 'turn-engine-session', userId, title: 'Turn engine' })
 
 test.after(() => {
+  compactionArchiveController.release()
   closeDb()
   fs.rmSync(tempDir, { recursive: true, force: true })
+})
+
+test('TurnEngine exposes only structured recovery metadata for unknown side effects', async () => {
+  const turnId = `turn-side-effect-unknown-${Date.now()}`
+  const toolCallId = `${turnId}-write`
+  let loopCalls = 0
+  const engine = createTestEngine({
+    runLoop: async () => {
+      loopCalls += 1
+      throw Object.assign(new Error('internal side-effect detail'), {
+        code: 'SIDE_EFFECT_OUTCOME_UNKNOWN',
+        retryable: false,
+        unsafeToReplay: true,
+        requiresUserVerification: true,
+        sideEffectExecution: {
+          ownerId: 'private-owner',
+          toolCallId,
+          args: { content: 'private-args' },
+          outcome: { receipt: 'private-outcome' },
+          note: 'private-note',
+        },
+      })
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'perform one durable operation',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const blocked = events(turnId).at(-1)
+  assert.equal(blocked.type, 'turn.blocked')
+  assert.equal(blocked.payload.turnId, turnId)
+  assert.equal(blocked.payload.toolCallId, toolCallId)
+  assert.equal(blocked.payload.requiresUserVerification, true)
+  assert.equal(blocked.payload.recoveryKind, 'side_effect_outcome_unknown')
+  assert.equal(blocked.payload.retryable, false)
+  assert.equal(events(turnId).some((event) => event.type === 'turn.failed'), false)
+  assert.doesNotMatch(
+    JSON.stringify(blocked.payload),
+    /private-owner|private-args|private-outcome|private-note|sideEffectExecution/u,
+  )
+  const blockedEvidence = listMessages({ userId, sessionId: 'turn-engine-session', limit: 500 })
+    .find((message) => message.id === `${turnId}:assistant`)
+  assert.equal(blockedEvidence?.modelContext?.turnEvidence, true)
+  assert.equal(blockedEvidence?.modelContext?.evidenceState, 'blocked')
+  assert.equal(blockedEvidence?.modelContext?.serverLastSequence, blocked.sequence)
+  assert.deepEqual(blockedEvidence?.modelContext?.recovery, {
+    recoveryKind: 'side_effect_outcome_unknown',
+    requiresUserVerification: true,
+    toolCallId,
+    recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
+  })
+  assert.doesNotMatch(
+    JSON.stringify(blockedEvidence?.modelContext),
+    /private-owner|private-args|private-outcome|private-note|sideEffectExecution/u,
+  )
+  await assert.rejects(
+    engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId }),
+    (error) => error?.code === 'TURN_RECOVERY_DEAD_LETTER',
+  )
+  assert.equal(loopCalls, 1)
+})
+
+test('TurnEngine does not reopen an ordinary failed turn for blocked-recovery retry', async () => {
+  const turnId = `turn-ordinary-failed-${Date.now()}`
+  let loopCalls = 0
+  const engine = createTestEngine({
+    runLoop: async () => {
+      loopCalls += 1
+      throw new Error('ordinary turn failure')
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'fail normally',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  assert.equal(events(turnId).at(-1)?.type, 'turn.failed')
+
+  const terminal = await engine.resumeTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    retryRecovery: true,
+  })
+  assert.equal(terminal.status, 'failed')
+  assert.equal(loopCalls, 1)
+})
+
+test('TurnEngine rejects failed retry mixed with recovery or resolution controls', async () => {
+  const engine = createTestEngine()
+  const base = {
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId: 'turn-failed-retry-invalid-controls',
+    retryFailed: true,
+  }
+  await assert.rejects(
+    engine.resumeTurn({ ...base, retryRecovery: true }),
+    (error) => error?.code === 'TURN_FAILED_RETRY_REQUEST_INVALID' && error?.status === 400,
+  )
+  await assert.rejects(
+    engine.resumeTurn({ ...base, resolution: { type: 'approval', decision: 'allow' } }),
+    (error) => error?.code === 'TURN_FAILED_RETRY_REQUEST_INVALID' && error?.status === 400,
+  )
 })
 
 function events(turnId, requestedUser = userId) {
   return listTurnEvents({ requestedUser, userId: requestedUser, sessionId: 'turn-engine-session', turnId, limit: 2000 })
 }
 
-function createTestEngine(options = {}) {
-  return new TurnEngine({ scheduleMemoryExtraction: () => {}, ...options })
+function appendLegacyTurnEvent({ userId: eventUserId, event }) {
+  getDb().prepare(`
+    INSERT INTO turn_events
+      (id, user_id, session_id, turn_id, sequence, type, payload_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    event.id,
+    eventUserId,
+    event.sessionId,
+    event.turnId,
+    event.sequence,
+    event.type,
+    JSON.stringify(event.payload),
+    event.createdAt,
+  )
+  return event
 }
+
+function createTestEngine(options = {}, { legacyPersistence = false } = {}) {
+  const usesLegacyPersistence = legacyPersistence
+    || Object.hasOwn(options, 'persistence')
+    || TURN_ENGINE_FLAT_PERSISTENCE_OPTIONS.some((key) => Object.hasOwn(options, key))
+  return new TurnEngine({
+    scheduleMemoryExtraction: () => {},
+    ...(usesLegacyPersistence ? {} : { persistence: createTestTurnEnginePersistence() }),
+    ...options,
+  })
+}
+
+const checkpointReadToolSpec = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'read_file')
+const CHECKPOINT_TOOL_IMPLEMENTATIONS = Object.freeze({
+  version: 1,
+  builtinRevision: `sha256-${'a'.repeat(64)}`,
+  connectorRevision: null,
+  mcpTools: [],
+})
+const CHECKPOINT_POLICY_PROVENANCE = Object.freeze({
+  id: 'builtin.harness-policy',
+  owner: 'builtin',
+  version: '0.11.31',
+  revision: 1,
+  releaseDigest: null,
+  source: 'registry_default',
+})
+
+function checkpointEnvironment({
+  modelName = null,
+  toolSpecs = [],
+  toolImplementations = CHECKPOINT_TOOL_IMPLEMENTATIONS,
+  fileAccess = { grants: [] },
+} = {}) {
+  return createTurnExecutionEnvironmentSnapshot({
+    modelName,
+    approvalMode: 'normal',
+    policy: CHECKPOINT_POLICY_PROVENANCE,
+    toolsConfig: { enabled: [], disabled: [] },
+    toolSpecs,
+    toolImplementations,
+    fileAccess,
+    runtimePlugins: [],
+    runtimePluginStates: [],
+  })
+}
+
+function checkpointEnvironmentEngineOptions(toolSpecs = [], fileAccess = { grants: [] }) {
+  return {
+    toolSpecs,
+    readApprovalMode: () => 'normal',
+    readRuntimePolicyProvenance: () => CHECKPOINT_POLICY_PROVENANCE,
+    readFileAccessStatus: () => fileAccess,
+    readRuntimePlugins: () => [],
+    readRuntimePluginStates: () => [],
+    resolveToolSpecs: async () => toolSpecs,
+    resolveToolImplementationRevisions: () => CHECKPOINT_TOOL_IMPLEMENTATIONS,
+  }
+}
+
+function readOnlyDirectoryAccessStatus(id, rootPath = tempDir) {
+  return {
+    projectDirectory: rootPath,
+    defaultOutputDirectory: rootPath,
+    grants: [{
+      id,
+      path: rootPath,
+      resourceType: 'directory',
+      accessMode: 'read_only',
+      scope: 'session',
+      available: true,
+    }],
+    workspace: { enabled: false },
+    runtime: { localCodeExecutionEnabled: false },
+  }
+}
+
+test('TurnEngine rejects an ambiguous model name and accepts an explicit Provider UUID', async () => {
+  const modelName = `turn-ambiguous-model-${Date.now()}`
+  const providers = ['turn-ambiguous-a', 'turn-ambiguous-b'].map((key) => upsertModelProvider({
+    userId,
+    provider: {
+      key,
+      label: key,
+      baseUrl: `https://${key}.example.test/v1`,
+      models: [modelName],
+      defaultModel: modelName,
+      enabled: true,
+    },
+  }))
+  for (const provider of providers) {
+    recordModelProviderReadiness({
+      userId,
+      id: provider.id,
+      readiness: { chat: true, tools: true, agent: true, mode: 'agent' },
+    })
+  }
+  const engine = createTestEngine({
+    resolveModelBinding: resolveAgentModelRuntimeBinding,
+    runLoop: async () => ({ text: 'explicit UUID accepted', artifactIds: [], iterations: 0 }),
+  })
+
+  await assert.rejects(
+    engine.startTurn({
+      userId,
+      sessionId: 'turn-engine-session',
+      turnId: 'turn-ambiguous-provider',
+      content: 'do not choose a provider silently',
+      modelName,
+    }),
+    (error) => error?.code === 'MODEL_PROVIDER_AMBIGUOUS'
+      && error?.statusCode === 409
+      && error?.modelName === modelName,
+  )
+  assert.deepEqual(events('turn-ambiguous-provider'), [])
+  assert.equal(
+    listMessages({ userId, sessionId: 'turn-engine-session' })
+      .some((message) => message.id?.startsWith('turn-ambiguous-provider:')),
+    false,
+  )
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId: 'turn-explicit-provider-uuid',
+    content: 'use the selected provider',
+    modelName,
+    modelProviderId: providers[1].id,
+  })
+  await engine.waitForTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId: 'turn-explicit-provider-uuid',
+  })
+  const started = events('turn-explicit-provider-uuid').find((event) => event.type === 'turn.started')
+  assert.equal(started.payload.modelProviderId, providers[1].id)
+  assert.equal(started.payload.modelName, modelName)
+})
+
+test('TurnEngine persists chat-only mode and never exposes tools to the loop', async () => {
+  const turnId = `turn-chat-only-${Date.now()}`
+  const bindingCalls = []
+  let loopOptions = null
+  let modelRequest = null
+  let toolResolutionCalls = 0
+  const engine = createTestEngine({
+    toolSpecs: [checkpointReadToolSpec],
+    resolveModelBinding: (options) => {
+      bindingCalls.push(options)
+      return {
+        providerId: 'chat-only-provider',
+        modelName: 'chat-only-model',
+        configRevision: 7,
+        env: { MODEL_NAME: 'chat-only-model' },
+      }
+    },
+    resolveToolSpecs: async () => {
+      toolResolutionCalls += 1
+      return [checkpointReadToolSpec]
+    },
+    runModel: async (request) => {
+      modelRequest = request
+      return { content: 'chat response', toolCalls: [], finishReason: 'stop' }
+    },
+    runLoop: async (options) => {
+      loopOptions = options
+      await options.runModel({
+        messages: [{ role: 'user', content: 'answer without tools' }],
+        tools: [checkpointReadToolSpec],
+        toolChoice: 'auto',
+      })
+      await assert.rejects(
+        options.executeTool({ name: 'read_file', arguments: '{}' }),
+        (error) => error?.code === 'CHAT_ONLY_TOOL_EXECUTION_FORBIDDEN'
+          && error?.unsafeToReplay === true,
+      )
+      return { text: 'chat response', artifactIds: [], iterations: 0 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'answer without tools',
+    modelName: 'chat-only-model',
+    modelProviderId: 'chat-only-provider',
+    modelMode: 'chat_only',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const started = events(turnId).find((event) => event.type === 'turn.started')
+  assert.equal(started?.payload.modelMode, 'chat_only')
+  assert.equal(bindingCalls[0]?.modelMode, 'chat_only')
+  assert.equal(toolResolutionCalls, 0)
+  assert.deepEqual(loopOptions?.toolSpecs, [])
+  assert.deepEqual(loopOptions?.fallbackToolSpecs, [])
+  assert.deepEqual(loopOptions?.toolsConfig, { enabled: [], disabled: [] })
+  assert.equal(loopOptions?.intentMode, 'answer')
+  assert.equal(loopOptions?.job?.modelMode, 'chat_only')
+  assert.deepEqual(modelRequest?.tools, [])
+  assert.equal(modelRequest?.toolChoice, 'none')
+})
+
+test('TurnEngine restores persisted chat-only mode without remounting tools', async () => {
+  const turnId = `turn-chat-only-resume-${Date.now()}`
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:0`,
+      sessionId: 'turn-engine-session',
+      turnId,
+      sequence: 0,
+      type: 'turn.started',
+      payload: {
+        content: 'resume without tools',
+        modelName: 'chat-only-model',
+        modelProviderId: 'chat-only-provider',
+        modelConfigRevision: 7,
+        modelMode: 'chat_only',
+      },
+      createdAt: Date.now(),
+    }),
+  })
+  const bindingCalls = []
+  let loopOptions = null
+  const engine = createTestEngine({
+    toolSpecs: [checkpointReadToolSpec],
+    resolveModelBinding: (options) => {
+      bindingCalls.push(options)
+      return {
+        providerId: 'chat-only-provider',
+        modelName: 'chat-only-model',
+        configRevision: 7,
+        env: { MODEL_NAME: 'chat-only-model' },
+      }
+    },
+    resolveToolSpecs: async () => {
+      throw new Error('chat-only recovery must not resolve tools')
+    },
+    runLoop: async (options) => {
+      loopOptions = options
+      return { text: 'resumed chat response', artifactIds: [], iterations: 0 }
+    },
+  })
+
+  await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  assert.equal(bindingCalls[0]?.modelMode, 'chat_only')
+  assert.equal(bindingCalls[0]?.requirePersistedBinding, true)
+  assert.deepEqual(loopOptions?.toolSpecs, [])
+  assert.deepEqual(loopOptions?.fallbackToolSpecs, [])
+  assert.equal(events(turnId).at(-1)?.type, 'turn.completed')
+})
+
+test('TurnEngine exposes recovery diagnostics and requires an explicit dead-letter retry', async () => {
+  const scope = { userId, sessionId: 'turn-engine-session', turnId: 'turn-recovery-dead-letter' }
+  const lastEvent = createTurnEvent({
+    id: 'turn-recovery-dead-letter:0',
+    sessionId: scope.sessionId,
+    turnId: scope.turnId,
+    sequence: 0,
+    type: 'turn.started',
+    payload: { content: 'recover me' },
+    createdAt: 1,
+  })
+  let recoveryState = {
+    ...scope,
+    candidateVersion: '0:turn.started:1',
+    status: 'dead_letter',
+    attemptCount: 5,
+    retryable: true,
+    manualRetryable: false,
+    firstFailedAt: 10,
+    lastFailedAt: 20,
+    nextRetryAt: null,
+    errorCode: 'UPSTREAM_DOWN',
+    errorMessage: 'provider remained unavailable',
+  }
+  let recoveries = 0
+  let clears = 0
+  const engine = createTestEngine({
+    lastEvent: () => lastEvent,
+    readRecoveryState: () => recoveryState,
+    clearRecoveryState: () => {
+      clears += 1
+      recoveryState = null
+      return true
+    },
+  })
+  engine.recoverTurn = async () => {
+    recoveries += 1
+    return {
+      turn: { sessionId: scope.sessionId, turnId: scope.turnId, status: 'running' },
+      scheduled: true,
+      locallyActive: true,
+      terminal: false,
+    }
+  }
+
+  assert.deepEqual((await engine.getTurn(scope)).recovery, {
+    status: 'dead_letter',
+    attemptCount: 5,
+    retryable: true,
+    manualRetryable: false,
+    firstFailedAt: 10,
+    lastFailedAt: 20,
+    nextRetryAt: null,
+    error: { code: 'UPSTREAM_DOWN', message: 'provider remained unavailable' },
+  })
+  await assert.rejects(
+    engine.resumeTurn(scope),
+    (error) => error?.code === 'TURN_RECOVERY_DEAD_LETTER' && error?.status === 409,
+  )
+  assert.equal(recoveries, 0)
+
+  const turn = await engine.resumeTurn({ ...scope, retryRecovery: true })
+  assert.equal(turn.status, 'running')
+  assert.equal(recoveries, 1)
+  assert.ok(clears >= 1)
+})
 
 test('TurnEngine injects a resolved prompt canary and records its terminal outcome', async () => {
   const turnId = 'turn-prompt-canary'
@@ -66,7 +530,14 @@ test('TurnEngine injects a resolved prompt canary and records its terminal outco
     releaseFingerprint: 'c'.repeat(64),
     promptContent: 'Scoped candidate workspace instructions.',
   }
+  const modelProviderId = '11111111-1111-4111-8111-111111111111'
   const engine = createTestEngine({
+    resolveModelBinding: () => ({
+      providerId: modelProviderId,
+      modelName: 'canary-model',
+      configRevision: 7,
+      env: null,
+    }),
     resolveCanaryAssignment(input) {
       assert.equal(input.userId, userId)
       assert.equal(input.sessionId, 'turn-engine-session')
@@ -102,13 +573,195 @@ test('TurnEngine injects a resolved prompt canary and records its terminal outco
     sessionId: 'turn-engine-session',
     turnId,
     content: 'Run the scoped canary.',
+    modelProviderId,
+    modelName: 'canary-model',
   })
   await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
 
   assert.equal(outcomes.length, 1)
   assert.equal(outcomes[0].terminalState, 'completed')
   assert.equal(outcomes[0].turnId, turnId)
+  assert.equal(outcomes[0].modelProviderId, modelProviderId)
+  assert.equal(outcomes[0].modelName, 'canary-model')
+  assert.equal(outcomes[0].modelConfigRevision, 7)
+  assert.equal(outcomes[0].evaluationInput, 'Run the scoped canary.')
+  assert.equal(outcomes[0].evaluationOutput, 'Canary completed.')
   assert.equal(events(turnId).at(-1).type, 'turn.completed')
+})
+
+test('TurnEngine contains asynchronous canary outcome recorder failures', async () => {
+  const turnId = 'turn-prompt-canary-recorder-rejection'
+  let recorderCalls = 0
+  const engine = createTestEngine({
+    resolveCanaryAssignment: () => ({
+      id: 'canary-assignment-recorder-rejection',
+      releaseId: 'canary-release-recorder-rejection',
+      variant: 'candidate',
+      decisionReason: 'traffic_candidate',
+      target: 'prompt:workspace-instructions',
+      promptContent: 'Scoped candidate workspace instructions.',
+    }),
+    preparePromptContext: ({ canaryAssignment }) => ({
+      messages: [{ role: 'system', content: canaryAssignment.promptContent }],
+      canaryAssignment,
+    }),
+    recordCanaryOutcome: async () => {
+      recorderCalls += 1
+      await Promise.resolve()
+      throw new Error('injected asynchronous canary recorder failure')
+    },
+    runLoop: async () => ({ text: 'Completed despite telemetry failure.', artifactIds: [], iterations: 1 }),
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Contain the canary recorder rejection.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  assert.equal(recorderCalls, 1)
+  assert.equal(events(turnId).at(-1).type, 'turn.completed')
+})
+
+test('TurnEngine freezes prompt and canary attribution across checkpoint recovery', async () => {
+  const turnId = 'turn-prompt-canary-checkpoint-recovery'
+  const content = 'Resume the frozen candidate prompt.'
+  const candidatePrompt = 'Frozen candidate workspace instructions.'
+  const baselinePrompt = 'New baseline instructions that must not replace the checkpoint.'
+  const candidateAssignment = {
+    id: 'canary-assignment-frozen',
+    releaseId: 'canary-release-frozen',
+    variant: 'candidate',
+    decisionReason: 'traffic_candidate',
+    target: 'prompt:workspace-instructions',
+    promptContent: candidatePrompt,
+  }
+  const frozenMessages = [
+    { role: 'system', content: candidatePrompt },
+    { role: 'user', content },
+  ]
+  let initialResolverCalls = 0
+  const firstEngine = createTestEngine({
+    ...checkpointEnvironmentEngineOptions(),
+    resolveCanaryAssignment: () => {
+      initialResolverCalls += 1
+      return candidateAssignment
+    },
+    preparePromptContext: ({ canaryAssignment }) => {
+      assert.equal(canaryAssignment, candidateAssignment)
+      return {
+        messages: [{ role: 'system', content: candidatePrompt }],
+        effectiveAgentId: 'agent-frozen',
+        skillIds: ['skill-frozen'],
+        memoryIds: ['memory-frozen'],
+        pluginPromptBlockIds: ['plugin-frozen:prompt-frozen'],
+        canaryAssignment,
+      }
+    },
+    runLoop: async ({ saveCheckpoint }) => {
+      await saveCheckpoint({
+        messages: frozenMessages,
+        toolCalls: [],
+        artifactIds: [],
+        iterations: 1,
+      })
+      return {
+        interrupted: true,
+        code: 'MODEL_HTTP_503',
+        reason: 'simulate a process restart after the durable checkpoint',
+        artifactIds: [],
+        iterations: 1,
+      }
+    },
+  })
+
+  await firstEngine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content,
+  })
+  await firstEngine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  assert.equal(initialResolverCalls, 1)
+  assert.equal(events(turnId).at(-1)?.type, 'turn.interrupted')
+
+  const checkpoint = getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })
+  assert.deepEqual(checkpoint?.state?.promptContextSnapshot, {
+    version: 1,
+    effectiveAgentId: 'agent-frozen',
+    skillIds: ['skill-frozen'],
+    memoryIds: ['memory-frozen'],
+    pluginPromptBlockIds: ['plugin-frozen:prompt-frozen'],
+    canaryAssignment: {
+      id: candidateAssignment.id,
+      releaseId: candidateAssignment.releaseId,
+      variant: 'candidate',
+      decisionReason: 'traffic_candidate',
+      target: candidateAssignment.target,
+    },
+  })
+
+  let recoveryResolverCalls = 0
+  let recoveryPromptCalls = 0
+  let modelMessages = null
+  let toolResolutionMessages = null
+  const outcomes = []
+  const recoveryEngine = createTestEngine({
+    ...checkpointEnvironmentEngineOptions(),
+    resolveCanaryAssignment: () => {
+      recoveryResolverCalls += 1
+      return {
+        ...candidateAssignment,
+        id: 'canary-assignment-new-baseline',
+        releaseId: 'canary-release-new-baseline',
+        variant: 'baseline',
+        decisionReason: 'traffic_baseline',
+        promptContent: baselinePrompt,
+      }
+    },
+    preparePromptContext: () => {
+      recoveryPromptCalls += 1
+      return {
+        messages: [{ role: 'system', content: baselinePrompt }],
+        effectiveAgentId: 'agent-new-baseline',
+        skillIds: ['skill-new-baseline'],
+        memoryIds: [],
+        pluginPromptBlockIds: [],
+      }
+    },
+    resolveToolSpecs: async (request) => {
+      toolResolutionMessages = request.messages
+      return []
+    },
+    runModel: async (request) => {
+      modelMessages = request.messages
+      return { content: 'Recovered with the frozen candidate.', toolCalls: [] }
+    },
+    recordCanaryOutcome: (outcome) => outcomes.push(outcome),
+  })
+
+  await recoveryEngine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await recoveryEngine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  assert.equal(recoveryResolverCalls, 0)
+  assert.equal(recoveryPromptCalls, 0)
+  assert.equal(toolResolutionMessages.some(({ content: text }) => text === candidatePrompt), true)
+  assert.equal(toolResolutionMessages.some(({ content: text }) => text === baselinePrompt), false)
+  assert.equal(modelMessages.some(({ content: text }) => text === candidatePrompt), true)
+  assert.equal(modelMessages.some(({ content: text }) => text === baselinePrompt), false)
+  assert.equal(outcomes.length, 1)
+  assert.equal(outcomes[0].effectiveVariant, 'candidate')
+  assert.equal(outcomes[0].decisionReason, 'traffic_candidate')
+  assert.equal(events(turnId).at(-1)?.type, 'turn.completed')
+  const assistant = listMessages({ userId, sessionId: 'turn-engine-session', limit: 500 })
+    .find((message) => message.id === `${turnId}:assistant`)
+  assert.deepEqual(assistant?.modelContext?.pluginPromptBlockIds, ['plugin-frozen:prompt-frozen'])
 })
 
 test('TurnEngine flushes deferred deltas before tools, checkpoints, and terminal events', async () => {
@@ -149,7 +802,7 @@ test('TurnEngine flushes deferred deltas before tools, checkpoints, and terminal
   assert.ok(types.indexOf('turn.checkpoint') < types.indexOf('turn.completed'))
 })
 
-test('TurnEngine completes when deferred delta persistence exhausts its retries', async () => {
+test('TurnEngine fails closed when deferred delta persistence exhausts its retries', async () => {
   const turnId = 'turn-write-behind-failure'
   let attempts = 0
   let failures = 0
@@ -175,7 +828,157 @@ test('TurnEngine completes when deferred delta persistence exhausts its retries'
 
   assert.equal(attempts, 3)
   assert.equal(failures, 1)
-  assert.equal(events(turnId).at(-1).type, 'turn.completed')
+  const turnEvents = events(turnId)
+  const failed = turnEvents.at(-1)
+  assert.equal(turnEvents.some(({ type }) => type === 'turn.completed'), false)
+  assert.equal(failed.type, 'turn.failed')
+  assert.equal(failed.payload.code, 'TURN_EVENT_PERSISTENCE_FAILED')
+  assert.equal(failed.payload.error.retryable, true)
+  assert.deepEqual(failed.payload.error.persistence, {
+    failedEventCount: 1,
+    blockedEventCount: 0,
+    failedEventTypes: ['assistant.delta'],
+    firstFailedSequence: 1,
+    lastFailedSequence: 1,
+    failedAt: failed.payload.error.persistence.failedAt,
+  })
+  assert.equal(Number.isInteger(failed.payload.error.persistence.failedAt), true)
+  assert.match(failed.payload.message, /任务事件无法可靠保存/)
+  assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId })).status, 'failed')
+})
+
+test('TurnEngine never appends a contradictory failure after a terminal append has an unknown outcome', async () => {
+  const turnId = 'turn-terminal-append-unknown'
+  const journals = []
+  const engine = createTestEngine({
+    appendEvent: async (entry) => {
+      const stored = appendTurnEvent(entry)
+      if (entry.event.type === 'turn.completed') throw new Error('completion acknowledgement lost')
+      return stored
+    },
+    recordEventWriteFailure: (entry) => { journals.push(entry) },
+    runLoop: async () => ({ text: 'durable completion', artifactIds: [], iterations: 1 }),
+  })
+
+  await engine.startTurn({ userId, sessionId: 'turn-engine-session', turnId, content: 'complete once' })
+  await assert.rejects(
+    engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId }),
+    (error) => error?.code === 'TURN_TERMINAL_PERSISTENCE_FAILED'
+      && error?.terminalEventType === 'turn.completed',
+  )
+
+  const turnEvents = events(turnId)
+  assert.equal(turnEvents.filter(({ type }) => type === 'turn.completed').length, 1)
+  assert.equal(turnEvents.some(({ type }) => type === 'turn.failed'), false)
+  assert.equal(listMessages({ userId, sessionId: 'turn-engine-session', limit: 500 })
+    .some((message) => message.id === `${turnId}:assistant`), false)
+  assert.equal(journals.length, 1)
+  assert.equal(journals[0].batch[0].event.type, 'turn.completed')
+  assert.equal(journals[0].attempts, 1)
+})
+
+test('TurnEngine keeps a durable completion authoritative when its message projection fails', async () => {
+  const turnId = 'turn-completion-message-projection-failure'
+  const engine = createTestEngine({
+    writeMessage: (message) => {
+      if (message.id === `${turnId}:assistant`) throw new Error('assistant projection unavailable')
+      return upsertMessage(message)
+    },
+    runLoop: async () => ({ text: 'durable event response', artifactIds: [], iterations: 1 }),
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Complete even if the message projection fails.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const turnEvents = events(turnId)
+  assert.equal(turnEvents.at(-1)?.type, 'turn.completed')
+  assert.equal(turnEvents.at(-1)?.payload.text, 'durable event response')
+  assert.equal(turnEvents.some(({ type }) => type === 'turn.failed'), false)
+  assert.equal(listMessages({ userId, sessionId: 'turn-engine-session', limit: 500 })
+    .some((message) => message.id === `${turnId}:assistant`), false)
+})
+
+test('TurnEngine journals a direct non-terminal append failure and emits a structured failed terminal', async () => {
+  const turnId = 'turn-direct-event-append-failure'
+  const journals = []
+  const engine = createTestEngine({
+    appendEvent: async (entry) => {
+      if (entry.event.type === 'tool.started') throw new Error('tool event store unavailable')
+      return appendTurnEvent(entry)
+    },
+    recordEventWriteFailure: (entry) => { journals.push(entry) },
+    runLoop: async ({ onToolStarted }) => {
+      await onToolStarted({ id: 'tool-direct-failure', name: 'read_file', args: { path: 'README.md' } })
+      return { text: 'unreachable', artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Fail a direct event append.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const failed = events(turnId).at(-1)
+  assert.equal(failed.type, 'turn.failed')
+  assert.equal(failed.payload.code, 'TURN_EVENT_PERSISTENCE_FAILED')
+  assert.deepEqual(failed.payload.error.persistence.failedEventTypes, ['tool.started'])
+  assert.equal(failed.payload.error.persistence.failedEventCount, 1)
+  assert.equal(journals.length, 1)
+  assert.equal(journals[0].batch[0].event.type, 'tool.started')
+  assert.equal(journals[0].batch[0].event.sequence, failed.sequence)
+})
+
+test('TurnEngine isolates deferred event queues across concurrent turns', async () => {
+  const failedTurnId = 'turn-isolated-writer-failure'
+  const healthyTurnId = 'turn-isolated-writer-healthy'
+  const engine = createTestEngine({
+    eventWriteBehindFactory: () => createEventWriteBehind({
+      writeBatch(entries) {
+        if (entries.some(({ event }) => event.turnId === failedTurnId)) {
+          throw new Error('isolated event store failure')
+        }
+        return appendTurnEvents(entries)
+      },
+      logger: { error() {} },
+      maxDelayMs: 10_000,
+      maxAttempts: 1,
+    }),
+    runLoop: async ({ job, onModelDelta }) => {
+      await onModelDelta({ text: job.id, iteration: 0, modelName: 'test' })
+      return { text: `${job.id} complete`, artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await Promise.all([
+    engine.startTurn({
+      userId,
+      sessionId: 'turn-engine-session',
+      turnId: failedTurnId,
+      content: 'fail only this event queue',
+    }),
+    engine.startTurn({
+      userId,
+      sessionId: 'turn-engine-session',
+      turnId: healthyTurnId,
+      content: 'keep this event queue healthy',
+    }),
+  ])
+  await Promise.all([
+    engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: failedTurnId }),
+    engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: healthyTurnId }),
+  ])
+
+  assert.equal(events(failedTurnId).at(-1)?.type, 'turn.failed')
+  assert.equal(events(healthyTurnId).at(-1)?.type, 'turn.completed')
+  assert.equal(events(healthyTurnId).some(({ type }) => type === 'assistant.delta'), true)
 })
 
 test('TurnEngine emits every artifact produced by one completed local tool call', async () => {
@@ -211,9 +1014,9 @@ test('TurnEngine emits every artifact produced by one completed local tool call'
   assert.equal(completed.payload.artifactId, 'local-pdf-1')
 })
 
-test('TurnEngine persists latest context usage and cumulative turn usage separately', async () => {
+test('TurnEngine persists latest context usage and only aggregates complete cost evidence', async () => {
   const turnId = 'turn-latest-model-usage'
-  const firstUsage = { promptTokens: 120, completionTokens: 20, totalTokens: 140 }
+  const firstUsage = { promptTokens: 120, completionTokens: 20, totalTokens: 140, costUsd: 0.01 }
   const latestUsage = { promptTokens: 360, completionTokens: 40, totalTokens: 400 }
   const turnModelUsage = { promptTokens: 480, completionTokens: 60, totalTokens: 540 }
   const engine = createTestEngine({
@@ -262,6 +1065,369 @@ test('TurnEngine persists latest context usage and cumulative turn usage separat
     assistant.modelContext.latency,
     assistant.modelContext.turnCompletedAt - assistant.modelContext.turnStartedAt,
   )
+})
+
+test('TurnEngine keeps total cost unknown when an earlier round lacks cost evidence', async () => {
+  const turnId = 'turn-model-usage-unknown-first'
+  const firstUsage = { promptTokens: 40, completionTokens: 4, totalTokens: 44 }
+  const latestUsage = { promptTokens: 80, completionTokens: 8, totalTokens: 88, costUsd: 0.02 }
+  const engine = createTestEngine({
+    runLoop: async ({ onModelPhase }) => {
+      await onModelPhase({ phase: 'completed', iteration: 1, usage: firstUsage })
+      await onModelPhase({ phase: 'completed', iteration: 2, usage: latestUsage })
+      return { text: 'Unknown cost preserved.', artifactIds: [], iterations: 2 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Keep incomplete cost evidence unknown.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const completed = events(turnId).find((event) => event.type === 'turn.completed')
+  assert.deepEqual(completed.payload.usage, latestUsage)
+  assert.deepEqual(completed.payload.turnModelUsage, {
+    promptTokens: 120,
+    completionTokens: 12,
+    totalTokens: 132,
+  })
+  assert.equal(Object.hasOwn(completed.payload.turnModelUsage, 'costUsd'), false)
+})
+
+test('TurnEngine aggregates explicit zero-cost rounds as measured evidence', async () => {
+  const turnId = 'turn-model-usage-measured-zero'
+  const engine = createTestEngine({
+    runLoop: async ({ onModelPhase }) => {
+      await onModelPhase({
+        phase: 'completed',
+        iteration: 1,
+        usage: { promptTokens: 10, completionTokens: 2, totalTokens: 12, costUsd: 0 },
+      })
+      await onModelPhase({
+        phase: 'completed',
+        iteration: 2,
+        usage: { promptTokens: 20, completionTokens: 3, totalTokens: 23, costUsd: 0.01 },
+      })
+      return { text: 'Measured zero retained.', artifactIds: [], iterations: 2 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Aggregate measured costs.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const completed = events(turnId).find((event) => event.type === 'turn.completed')
+  assert.deepEqual(completed.payload.turnModelUsage, {
+    promptTokens: 30,
+    completionTokens: 5,
+    totalTokens: 35,
+    costUsd: 0.01,
+  })
+})
+
+test('TurnEngine blocks permission drift, preserves its checkpoint, and succeeds after explicit repaired retry', async () => {
+  const turnId = 'turn-execution-environment-drift'
+  let approvalMode = 'normal'
+  let loopCalls = 0
+  const toolSpecs = [{
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: 'Read one file',
+      parameters: { type: 'object', properties: { path: { type: 'string' } } },
+    },
+  }]
+  const engine = createTestEngine({
+    readApprovalMode: () => approvalMode,
+    readFileAccessStatus: () => ({
+      projectDirectory: 'D:/workspace',
+      defaultOutputDirectory: 'D:/workspace/output',
+      grants: [],
+      workspace: { enabled: false },
+      runtime: { localCodeExecutionEnabled: true },
+    }),
+    readRuntimePlugins: () => [],
+    readRuntimePluginStates: () => [],
+    resolveToolSpecs: async () => toolSpecs,
+    runLoop: async ({ saveCheckpoint }) => {
+      loopCalls += 1
+      await saveCheckpoint({ messages: [], artifactIds: [], iterations: 1 })
+      if (loopCalls > 1) {
+        return { text: 'recovered after permission repair', artifactIds: [], iterations: 2 }
+      }
+      return {
+        interrupted: true,
+        code: 'MODEL_HTTP_503',
+        reason: 'pause for recovery verification',
+        artifactIds: [],
+        iterations: 1,
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Persist the exact execution environment.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  const checkpoint = getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })
+  assert.match(checkpoint.state.executionEnvironment.fingerprint, /^[a-f0-9]{64}$/u)
+  assert.equal(checkpoint.state.executionEnvironment.approvalMode, 'normal')
+
+  approvalMode = 'bypass'
+  await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const blocked = events(turnId).at(-1)
+  assert.equal(blocked.type, 'turn.blocked')
+  assert.equal(blocked.payload.code, 'TURN_PERMISSION_CONTEXT_DRIFT')
+  assert.equal(blocked.payload.retryable, false)
+  assert.equal(blocked.payload.manualRetryable, true)
+  assert.equal(events(turnId).some((event) => event.type === 'turn.failed'), false)
+  assert.equal(getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })?.eventSequence, checkpoint.eventSequence)
+  assert.equal(getTurnRecoveryState({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })?.status, 'dead_letter')
+  assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId })).status, 'blocked')
+  assert.equal(loopCalls, 1, 'drift must be rejected before the shared loop can execute again')
+
+  await assert.rejects(
+    engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId }),
+    (error) => error?.code === 'TURN_RECOVERY_DEAD_LETTER' && error?.status === 409,
+  )
+  approvalMode = 'normal'
+  await engine.resumeTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    retryRecovery: true,
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  assert.equal(events(turnId).at(-1)?.type, 'turn.completed')
+  assert.equal(loopCalls, 2)
+  assert.equal(getTurnRecoveryState({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  }), null)
+})
+
+test('TurnEngine blocks recovery before the loop when runtime policy provenance drifts', async () => {
+  const turnId = 'turn-runtime-policy-drift'
+  let policy = {
+    id: 'builtin.harness-policy',
+    owner: 'builtin',
+    version: '0.11.31',
+    revision: 1,
+    releaseDigest: null,
+    generation: 1,
+    source: 'registry_default',
+  }
+  let loopCalls = 0
+  const engine = createTestEngine({
+    ...checkpointEnvironmentEngineOptions(),
+    readRuntimePolicyProvenance: () => policy,
+    runLoop: async ({ saveCheckpoint }) => {
+      loopCalls += 1
+      await saveCheckpoint({ messages: [], artifactIds: [], iterations: 1 })
+      if (loopCalls > 1) {
+        return { text: 'Recovered under the same policy binding.', artifactIds: [], iterations: 2 }
+      }
+      return {
+        interrupted: true,
+        code: 'MODEL_HTTP_503',
+        reason: 'pause before policy recovery verification',
+        artifactIds: [],
+        iterations: 1,
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Persist the active Harness policy.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  const checkpoint = getTurnCheckpoint({ userId, sessionId: 'turn-engine-session', turnId })
+  assert.equal(checkpoint.state.executionEnvironment.policy.revision, 1)
+
+  policy = { ...policy, revision: 2, generation: 2 }
+  await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const blocked = events(turnId).at(-1)
+  assert.equal(blocked.type, 'turn.blocked')
+  assert.equal(blocked.payload.code, 'TURN_POLICY_CONTEXT_DRIFT')
+  assert.equal(blocked.payload.retryable, false)
+  assert.equal(loopCalls, 1)
+  assert.equal(getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })?.eventSequence, checkpoint.eventSequence)
+
+  policy = { ...policy, revision: 1, generation: 3 }
+  await engine.resumeTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    retryRecovery: true,
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  assert.equal(events(turnId).at(-1)?.type, 'turn.completed')
+  assert.equal(loopCalls, 2)
+})
+
+test('TurnEngine dead-letters recovery when tool implementation revision drifts', async () => {
+  const turnId = 'turn-tool-implementation-drift'
+  let toolImplementations = CHECKPOINT_TOOL_IMPLEMENTATIONS
+  let loopCalls = 0
+  const toolSpecs = [checkpointReadToolSpec]
+  const engine = createTestEngine({
+    ...checkpointEnvironmentEngineOptions(toolSpecs),
+    resolveToolImplementationRevisions: () => toolImplementations,
+    runLoop: async ({ saveCheckpoint }) => {
+      loopCalls += 1
+      await saveCheckpoint({ messages: [], artifactIds: [], iterations: 1 })
+      return {
+        interrupted: true,
+        code: 'MODEL_HTTP_503',
+        reason: 'pause before implementation drift verification',
+        artifactIds: [],
+        iterations: 1,
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Pin the executable tool implementation.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  const checkpoint = getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })
+  assert.ok(checkpoint)
+
+  toolImplementations = {
+    ...CHECKPOINT_TOOL_IMPLEMENTATIONS,
+    builtinRevision: `sha256-${'b'.repeat(64)}`,
+  }
+  await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const blocked = events(turnId).at(-1)
+  assert.equal(blocked.type, 'turn.blocked')
+  assert.equal(blocked.payload.code, 'TURN_TOOL_IMPLEMENTATION_DRIFT')
+  assert.equal(blocked.payload.retryable, false)
+  assert.equal(blocked.payload.manualRetryable, true)
+  assert.equal(loopCalls, 1, 'implementation drift must be rejected before replay executes')
+  assert.equal(getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })?.eventSequence, checkpoint.eventSequence)
+  assert.equal(getTurnRecoveryState({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })?.status, 'dead_letter')
+})
+
+test('TurnEngine verifies active runtime plugin releases and blocks a corrupt release before recovery executes', async () => {
+  const turnId = 'turn-corrupt-runtime-plugin-release'
+  let releaseCorrupt = false
+  let loopCalls = 0
+  const stateReadOptions = []
+  const engine = createTestEngine({
+    ...checkpointEnvironmentEngineOptions(),
+    readRuntimePluginStates: (options) => {
+      stateReadOptions.push(options)
+      if (releaseCorrupt) {
+        const error = new Error('active runtime plugin release content digest does not match')
+        error.code = 'PLUGIN_RELEASE_CORRUPT'
+        error.statusCode = 500
+        throw error
+      }
+      return []
+    },
+    runLoop: async ({ saveCheckpoint }) => {
+      loopCalls += 1
+      await saveCheckpoint({ messages: [], artifactIds: [], iterations: 1 })
+      return {
+        interrupted: true,
+        code: 'MODEL_HTTP_503',
+        reason: 'pause before recovery integrity verification',
+        artifactIds: [],
+        iterations: 1,
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Verify the active plugin release before replaying this turn.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  const checkpoint = getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })
+  assert.ok(checkpoint)
+  assert.equal(loopCalls, 1)
+
+  releaseCorrupt = true
+  await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const blocked = events(turnId).at(-1)
+  assert.equal(blocked.type, 'turn.blocked')
+  assert.equal(blocked.payload.code, 'PLUGIN_RELEASE_CORRUPT')
+  assert.equal(blocked.payload.retryable, false)
+  assert.equal(blocked.payload.manualRetryable, true)
+  assert.equal(loopCalls, 1, 'corrupt releases must be rejected before recovery enters the loop')
+  assert.equal(getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })?.eventSequence, checkpoint.eventSequence)
+  assert.equal(getTurnRecoveryState({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })?.status, 'dead_letter')
+  assert.deepEqual(stateReadOptions, [
+    { verifyActiveReleases: true },
+    { verifyActiveReleases: true },
+  ])
 })
 
 test('TurnEngine persists the final server request estimate when provider usage is absent', async () => {
@@ -450,6 +1616,68 @@ test('TurnEngine keeps repeated checkpoints linear in the event log', async () =
   assert.equal(JSON.parse(rows[0].state_json).iterations, checkpointCount)
 })
 
+test('TurnEngine rejects a custom event adapter without atomic checkpoint capability before writing a checkpoint event', async () => {
+  const turnId = 'turn-non-atomic-checkpoint-adapter'
+  let postCheckpointSideEffects = 0
+  const engine = createTestEngine({
+    appendEvent: (entry) => appendTurnEvent(entry),
+    runLoop: async ({ saveCheckpoint }) => {
+      await saveCheckpoint({ messages: [], artifactIds: [], iterations: 1 })
+      postCheckpointSideEffects += 1
+      return { text: 'must not complete', artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Do not create a half-committed recovery point.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const turnEvents = events(turnId)
+  assert.equal(postCheckpointSideEffects, 0)
+  assert.equal(turnEvents.some(({ type }) => type === 'turn.checkpoint'), false)
+  assert.equal(turnEvents.some(({ type }) => type === 'turn.completed'), false)
+  assert.equal(turnEvents.at(-1)?.type, 'turn.failed')
+  assert.equal(turnEvents.at(-1)?.payload?.code, 'TURN_ATOMIC_CHECKPOINT_UNSUPPORTED')
+})
+
+test('TurnEngine rejects an event adapter that drops checkpoint state before post-checkpoint side effects', async () => {
+  const turnId = 'turn-broken-atomic-checkpoint-adapter'
+  let postCheckpointSideEffects = 0
+  const engine = createTestEngine({
+    supportsAtomicCheckpointState: true,
+    appendEvent: ({ userId: eventUserId, event }) => appendTurnEvent({ userId: eventUserId, event }),
+    runLoop: async ({ saveCheckpoint }) => {
+      await saveCheckpoint({ messages: [], artifactIds: [], iterations: 1 })
+      postCheckpointSideEffects += 1
+      return { text: 'must not complete', artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Detect a false atomic checkpoint capability claim.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const turnEvents = events(turnId)
+  assert.equal(postCheckpointSideEffects, 0)
+  assert.equal(turnEvents.some(({ type }) => type === 'turn.completed'), false)
+  assert.equal(turnEvents.some(({ type }) => type === 'turn.checkpoint'), false)
+  assert.equal(turnEvents.at(-1)?.type, 'turn.failed')
+  assert.equal(turnEvents.at(-1)?.payload?.code, 'TURN_EVENT_PERSISTENCE_FAILED')
+  assert.equal(getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  }), null)
+})
+
 test('TurnEngine rejects more than 32 attachments instead of silently dropping files', async () => {
   const engine = createTestEngine({ runLoop: async () => ({ text: 'must not run' }) })
   await assert.rejects(
@@ -595,15 +1823,15 @@ test('TurnEngine reports a session active while startTurn is awaiting turn.start
     content: 'keep the session reserved',
   })
   await observed
-  assert.equal(engine.hasActiveSession({ userId, sessionId }), true)
-  assert.equal(engine.hasActiveSession({ userId: 'another-user', sessionId }), false)
+  assert.equal(await engine.hasActiveSession({ userId, sessionId }), true)
+  assert.equal(await engine.hasActiveSession({ userId: 'another-user', sessionId }), false)
 
   releaseStarted()
   await starting
-  assert.equal(engine.hasActiveSession({ userId, sessionId }), true)
+  assert.equal(await engine.hasActiveSession({ userId, sessionId }), true)
   releaseLoop({ text: 'done', artifactIds: [], iterations: 0 })
   await engine.waitForTurn({ userId, sessionId, turnId: 'turn-active-window' })
-  assert.equal(engine.hasActiveSession({ userId, sessionId }), false)
+  assert.equal(await engine.hasActiveSession({ userId, sessionId }), false)
 })
 
 test('TurnEngine releases the starting-session reservation when turn.started persistence fails', async () => {
@@ -618,7 +1846,36 @@ test('TurnEngine releases the starting-session reservation when turn.started per
     engine.startTurn({ userId, sessionId, turnId: 'turn-start-failure', content: 'start' }),
     /event store unavailable/,
   )
-  assert.equal(engine.hasActiveSession({ userId, sessionId }), false)
+  assert.equal(await engine.hasActiveSession({ userId, sessionId }), false)
+})
+
+test('TurnEngine model-readiness rejection leaves no session, message, or event state', async () => {
+  const sessionId = 'turn-engine-model-readiness-failure'
+  const turnId = 'turn-model-readiness-failure'
+  let loopCalls = 0
+  const readinessError = Object.assign(new Error('模型 Provider 尚未测试'), {
+    code: 'MODEL_PROVIDER_UNVERIFIED',
+    statusCode: 409,
+    action: 'test_provider',
+  })
+  const engine = createTestEngine({
+    resolveModelBinding: () => { throw readinessError },
+    runLoop: async () => {
+      loopCalls += 1
+      return { text: 'must not run' }
+    },
+  })
+
+  await assert.rejects(
+    engine.startTurn({ userId, sessionId, turnId, content: '这条消息不应产生空会话' }),
+    (error) => error === readinessError,
+  )
+
+  assert.equal(getSession({ userId, sessionId }), null)
+  assert.deepEqual(listMessages({ userId, sessionId, limit: 100 }), [])
+  assert.deepEqual(listTurnEvents({ requestedUser: userId, userId, sessionId, turnId, limit: 100 }), [])
+  assert.equal(await engine.hasActiveSession({ userId, sessionId }), false)
+  assert.equal(loopCalls, 0)
 })
 
 test('TurnEngine rolls back staged messages when attachment binding fails', async () => {
@@ -630,7 +1887,7 @@ test('TurnEngine rolls back staged messages when attachment binding fails', asyn
       throw Object.assign(new Error('attachment binding failed'), { code: 'ATTACHMENT_BIND_FAILED' })
     },
     runLoop: async () => ({ text: 'must not run' }),
-  })
+  }, { legacyPersistence: true })
 
   await assert.rejects(
     engine.startTurn({
@@ -731,7 +1988,7 @@ test('TurnEngine schedules automatic memory extraction after completion without 
   })
   await engine.waitForTurn({ userId, sessionId, turnId })
 
-  assert.equal(engine.getTurn({ userId, sessionId, turnId }).status, 'completed')
+  assert.equal((await engine.getTurn({ userId, sessionId, turnId })).status, 'completed')
   assert.equal(scheduled.userId, userId)
   assert.equal(scheduled.sessionId, sessionId)
   assert.equal(scheduled.agentId, 'resolved-agent')
@@ -750,7 +2007,7 @@ test('TurnEngine owns a text turn and persists the final assistant message', asy
   })
   await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-text' })
 
-  assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-text' }).status, 'completed')
+  assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-text' })).status, 'completed')
   assert.deepEqual(events('turn-text').map((event) => event.type), [
     'turn.started', 'model.phase', 'model.phase', 'model.phase', 'assistant.delta', 'turn.checkpoint', 'turn.completed',
   ])
@@ -849,6 +2106,234 @@ test('TurnEngine reads the user approval mode once and shares it with discovery 
   assert.equal(loopOptions.job.origin, 'chat')
 })
 
+test('TurnEngine host projects custom resolver schemas before model and loop access in plan mode', async () => {
+  const turnId = `turn-plan-host-projection-${Date.now()}`
+  const resolverSpecs = ['read_file', 'write_file', 'bash_exec'].map((name) => ({
+    type: 'function',
+    function: { name, parameters: { type: 'object' } },
+  }))
+  let loopOptions = null
+  let modelRequest = null
+  const engine = createTestEngine({
+    toolSpecs: resolverSpecs,
+    readFileAccessStatus: () => ({
+      projectDirectory: tempDir,
+      defaultOutputDirectory: tempDir,
+      grants: [{
+        id: 'turn-plan-read-grant',
+        path: tempDir,
+        resourceType: 'directory',
+        accessMode: 'read_only',
+        scope: 'session',
+        available: true,
+      }],
+      workspace: { enabled: false },
+      runtime: { localCodeExecutionEnabled: false },
+    }),
+    resolveToolSpecs: async () => resolverSpecs,
+    runModel: async (request) => {
+      modelRequest = request
+      return { content: '只读检查完成。', toolCalls: [], modelName: 'stub' }
+    },
+    runLoop: async (options) => {
+      loopOptions = options
+      await options.runModel({ messages: options.messages, tools: options.toolSpecs })
+      return { text: '只读检查完成。', artifactIds: [], iterations: 0 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: '只规划，不修改',
+    approvalMode: 'plan',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const namesOf = (specs) => specs.map((spec) => spec?.function?.name)
+  assert.deepEqual(namesOf(loopOptions.toolSpecs), ['read_file'])
+  assert.deepEqual(namesOf(loopOptions.fallbackToolSpecs), ['read_file'])
+  assert.deepEqual(namesOf(modelRequest.tools), ['read_file'])
+  for (const name of ['write_file', 'bash_exec']) {
+    assert.ok(loopOptions.toolResolutionDecision.excludedTools.some((entry) => (
+      entry.name === name
+        && entry.stage === 'permission'
+        && entry.reason === 'permission_mode_plan'
+    )))
+  }
+})
+
+test('TurnEngine exposes only request_directory in unauthorized plan mode', async () => {
+  const turnId = `turn-unauthorized-workspace-projection-${Date.now()}`
+  const resolverSpecs = [
+    'request_directory',
+    'reflect',
+    'set_deliverables',
+    'read_file',
+    'write_file',
+    'bash_exec',
+  ].map((name) => ({
+    type: 'function',
+    function: { name, parameters: { type: 'object' } },
+  }))
+  let loopOptions = null
+  let modelRequest = null
+  const engine = createTestEngine({
+    toolSpecs: resolverSpecs,
+    readFileAccessStatus: () => ({ grants: [] }),
+    resolveToolSpecs: async () => resolverSpecs,
+    runModel: async (request) => {
+      modelRequest = request
+      return { content: '请先授权工作区。', toolCalls: [], modelName: 'stub' }
+    },
+    runLoop: async (options) => {
+      loopOptions = options
+      await options.runModel({ messages: options.messages, tools: options.toolSpecs })
+      return { text: '请先授权工作区。', artifactIds: [], iterations: 0 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: '读取并修改项目文件',
+    approvalMode: 'plan',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const namesOf = (specs) => specs.map((spec) => spec?.function?.name)
+  assert.deepEqual(namesOf(loopOptions.toolSpecs), ['request_directory'])
+  assert.deepEqual(namesOf(loopOptions.fallbackToolSpecs), ['request_directory'])
+  assert.deepEqual(namesOf(modelRequest.tools), ['request_directory'])
+})
+
+test('TurnEngine applies and persists each validated per-turn approval mode', async () => {
+  for (const mode of ['normal', 'acceptEdits', 'plan', 'bypass']) {
+    const turnId = `turn-runtime-approval-override-${mode}`
+    let toolRequest = null
+    let loopOptions = null
+    const engine = createTestEngine({
+      readApprovalMode: () => mode === 'normal' ? 'bypass' : 'normal',
+      resolveToolSpecs: async (request) => {
+        toolRequest = request
+        return []
+      },
+      runLoop: async (options) => {
+        loopOptions = options
+        await options.saveCheckpoint({ messages: [], artifactIds: [], iterations: 1 })
+        return { text: 'override applied', artifactIds: [], iterations: 1 }
+      },
+    })
+
+    await engine.startTurn({
+      userId,
+      sessionId: 'turn-engine-session',
+      turnId,
+      content: 'use only this turn permission mode',
+      approvalMode: mode,
+    })
+    await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+    const started = events(turnId).find((event) => event.type === 'turn.started')
+    assert.equal(started?.payload?.approvalMode, mode)
+    assert.equal(toolRequest?.permissionMode, mode)
+    assert.equal(loopOptions?.approvalMode, mode)
+    assert.equal(getTurnCheckpoint({
+      userId,
+      sessionId: 'turn-engine-session',
+      turnId,
+    })?.state?.approvalMode, mode)
+  }
+})
+
+test('TurnEngine rejects invalid per-turn approval modes before persisting the turn', async () => {
+  const invalidModes = ['unsafe', '', ' bypass ', 1, true, {}]
+  const engine = createTestEngine({
+    runLoop: async () => {
+      assert.fail('invalid approval mode must not execute the loop')
+    },
+  })
+
+  for (const [index, approvalMode] of invalidModes.entries()) {
+    const turnId = `turn-invalid-approval-mode-${index}`
+    await assert.rejects(
+      engine.startTurn({
+        userId,
+        sessionId: 'turn-engine-session',
+        turnId,
+        content: 'reject invalid mode',
+        approvalMode,
+      }),
+      (error) => error?.code === 'TURN_APPROVAL_MODE_INVALID' && error?.status === 400,
+    )
+    assert.deepEqual(events(turnId), [])
+    assert.equal(
+      listMessages({ userId, sessionId: 'turn-engine-session', limit: 500 })
+        .some((message) => message.id === `${turnId}:user`),
+      false,
+    )
+  }
+})
+
+test('TurnEngine restores a persisted per-turn approval mode and forbids resume-time replacement', async () => {
+  const turnId = 'turn-persisted-approval-mode-resume'
+  let configuredMode = 'normal'
+  const observedModes = []
+  const engine = createTestEngine({
+    readApprovalMode: () => configuredMode,
+    resolveToolSpecs: async (request) => request.baseSpecs,
+    runLoop: async (options) => {
+      observedModes.push(options.approvalMode)
+      if (observedModes.length === 1) {
+        await options.saveCheckpoint({ messages: [], artifactIds: [], iterations: 1 })
+        return {
+          interrupted: true,
+          code: 'MODEL_HTTP_503',
+          reason: 'resume from the persisted checkpoint',
+          artifactIds: [],
+          iterations: 1,
+        }
+      }
+      return { text: 'resumed with the original permission', artifactIds: [], iterations: 2 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'pin bypass to this turn',
+    approvalMode: 'bypass',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  assert.equal(events(turnId).at(-1)?.type, 'turn.interrupted')
+  assert.equal(getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })?.state?.approvalMode, 'bypass')
+
+  configuredMode = 'plan'
+  await assert.rejects(
+    engine.resumeTurn({
+      userId,
+      sessionId: 'turn-engine-session',
+      turnId,
+      approvalMode: 'plan',
+    }),
+    (error) => error?.code === 'TURN_APPROVAL_MODE_OVERRIDE_FORBIDDEN'
+      && error?.status === 409,
+  )
+  assert.deepEqual(observedModes, ['bypass'])
+
+  await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  assert.deepEqual(observedModes, ['bypass', 'bypass'])
+  assert.equal(events(turnId).at(-1)?.type, 'turn.completed')
+})
+
 test('TurnEngine keeps schemas stable while projecting stored bypass capabilities', async (t) => {
   setApprovalMode({ userId, mode: 'bypass' })
   t.after(() => {
@@ -896,12 +2381,14 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   let toolRequest = null
   let loopOptions = null
   let contextWindowRequest = null
+  let modelRequest = null
   const baseSpecs = [
     { type: 'function', function: { name: 'read_file', parameters: { type: 'object' } } },
     { type: 'function', function: { name: 'bash_exec', parameters: { type: 'object' } } },
   ]
   const engine = createTestEngine({
     toolSpecs: baseSpecs,
+    readFileAccessStatus: () => readOnlyDirectoryAccessStatus('turn-context-read-grant'),
     preparePromptContext: async (request) => {
       promptRequest = request
       return {
@@ -923,8 +2410,13 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
       contextWindowRequest = request
       return 8192
     },
+    runModel: async (request) => {
+      modelRequest = request
+      return { content: '', toolCalls: [] }
+    },
     runLoop: async (options) => {
       loopOptions = options
+      await options.runModel({ messages: options.messages, tools: [] })
       return { text: 'context applied', artifactIds: [], iterations: 0 }
     },
   })
@@ -935,6 +2427,7 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
     turnId: 'turn-context',
     content: 'use memory and review skill',
     modelName: 'context-model',
+    modelProviderId: ' provider-local ',
     agentId: ' agent-input ',
     skillIds: [' skill-review ', 'skill-review'],
     skillDefinitions: [{
@@ -950,6 +2443,7 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-context' })
 
   const started = events('turn-context').find((event) => event.type === 'turn.started')
+  assert.equal(started.payload.modelProviderId, 'provider-local')
   assert.equal(started.payload.agentId, 'agent-input')
   assert.deepEqual(started.payload.skillIds, ['skill-review'])
   assert.equal(started.payload.skillDefinitions[0].id, 'skill-review')
@@ -977,6 +2471,7 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   assert.equal(loopOptions.skillId, 'skill-review')
   assert.equal(loopOptions.job.agentId, 'agent-resolved')
   assert.equal(loopOptions.job.modelName, 'context-model')
+  assert.equal(loopOptions.job.modelProviderId, 'provider-local')
   assert.deepEqual(loopOptions.job.skillIds, ['skill-review'])
   assert.equal(loopOptions.job.skillDefinitions[0].id, 'skill-review')
   assert.match(loopOptions.job.skillDefinitions[0].systemPrompt, /gugo-skill-quality:v1/)
@@ -984,6 +2479,8 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   assert.equal(loopOptions.intentMode, 'execute')
   assert.equal(contextWindowRequest.userId, userId)
   assert.equal(contextWindowRequest.modelName, 'context-model')
+  assert.equal(contextWindowRequest.modelProviderId, 'provider-local')
+  assert.equal(modelRequest.modelProviderId, 'provider-local')
   const assistant = listMessages({ userId, sessionId: 'turn-engine-session' })
     .find((message) => message.id === 'turn-context:assistant')
   assert.deepEqual(
@@ -1182,10 +2679,13 @@ test('TurnEngine resumes a paused directory request on the same turn after a ver
   const pausedEvents = events(turnId)
   assert.equal(pausedEvents.at(-1).type, 'turn.paused')
   assert.equal(pausedEvents.some((event) => event.type === 'turn.completed'), false)
-  assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId }).status, 'paused')
+  assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId })).status, 'paused')
   assert.equal(memoryExtractions, 0)
-  const pausedMessage = listMessages({ userId, sessionId: 'turn-engine-session', limit: 100 })
-    .find((message) => message.id === `${turnId}:assistant`)
+  const pausedMessage = getMessage({
+    userId,
+    sessionId: 'turn-engine-session',
+    messageId: `${turnId}:assistant`,
+  })
   assert.equal(pausedMessage?.modelContext?.paused, true)
   assert.deepEqual(pausedMessage?.modelContext?.clarification, clarification)
   assert.equal(pausedMessage?.modelContext?.pausedSequence, pausedEvents.at(-1).sequence)
@@ -1203,6 +2703,8 @@ test('TurnEngine resumes a paused directory request on the same turn after a ver
     approved: true,
     path: tempDir,
     access_mode: 'read_write',
+    authorization_scope: 'session',
+    grant_id: 'turn-directory-resolution-grant',
     paused_sequence: pausedEvents.at(-1).sequence,
   }
   await assert.rejects(
@@ -1238,7 +2740,14 @@ test('TurnEngine resumes a paused directory request on the same turn after a ver
   )
   assert.equal(events(turnId).some((event) => event.type === 'turn.resumed'), false)
 
-  grants = [{ path: tempDir, resourceType: 'directory', accessMode: 'read_write', available: true }]
+  grants = [{
+    id: resolution.grant_id,
+    path: tempDir,
+    resourceType: 'directory',
+    accessMode: 'read_write',
+    scope: resolution.authorization_scope,
+    available: true,
+  }]
   await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId, resolution })
   await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
 
@@ -1259,8 +2768,11 @@ test('TurnEngine resumes a paused directory request on the same turn after a ver
   assert.equal(turnEvents.at(-1).type, 'turn.completed')
   assert.equal(turnEvents.filter((event) => event.type === 'turn.paused').length, 1)
   assert.equal(memoryExtractions, 1)
-  const completedMessage = listMessages({ userId, sessionId: 'turn-engine-session', limit: 100 })
-    .find((message) => message.id === `${turnId}:assistant`)
+  const completedMessage = getMessage({
+    userId,
+    sessionId: 'turn-engine-session',
+    messageId: `${turnId}:assistant`,
+  })
   assert.equal(completedMessage?.modelContext?.paused, false)
   assert.equal(completedMessage?.modelContext?.clarification, undefined)
 })
@@ -1299,7 +2811,7 @@ test('TurnEngine never publishes turn.paused when the paused assistant message c
   assert.equal(failed.type, 'turn.failed')
   assert.equal(failed.payload.message, '任务执行遇到问题，尚未完成。请重试；若仍失败，请检查模型配置和工具调用支持。')
   assert.doesNotMatch(failed.payload.message, /paused message write failed/)
-  assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId }).status, 'failed')
+  assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId })).status, 'failed')
 })
 
 test('TurnEngine injects an ordinary clarification answer once when resuming', async () => {
@@ -1406,11 +2918,141 @@ test('TurnEngine restores a persisted inline skill into prompt preparation after
   assert.equal(loopOptions.intentMode, 'answer')
 })
 
-test('TurnEngine resets only the unconfirmed streaming suffix before a recovered model call', async () => {
-  const turnId = 'turn-stream-recovery'
-  const persist = (sequence, type, payload = {}) => appendTurnEvent({
+test('TurnEngine blocks legacy checkpoints without a v4 snapshot and explicit retry remains blocked', async () => {
+  const turnId = 'turn-legacy-checkpoint-environment-missing'
+  appendTurnEvent({
     userId,
     event: createTurnEvent({
+      id: `${turnId}:start`,
+      sessionId: 'turn-engine-session',
+      turnId,
+      sequence: 0,
+      type: 'turn.started',
+      payload: { content: 'Do not adopt the current runtime.' },
+      createdAt: 1,
+    }),
+  })
+  appendLegacyTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:checkpoint`,
+      sessionId: 'turn-engine-session',
+      turnId,
+      sequence: 1,
+      type: 'turn.checkpoint',
+      payload: { state: { messages: [], artifactIds: [], iterations: 1 } },
+      createdAt: 2,
+    }),
+  })
+  let loopCalls = 0
+  const engine = createTestEngine({
+    readFileAccessStatus: () => ({ grants: [] }),
+    readRuntimePlugins: () => [],
+    readRuntimePluginStates: () => [],
+    runLoop: async () => {
+      loopCalls += 1
+      return { text: 'unsafe', artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  assert.equal(loopCalls, 0)
+  const firstBlocked = events(turnId).at(-1)
+  assert.equal(firstBlocked.type, 'turn.blocked')
+  assert.equal(firstBlocked.payload.code, 'TURN_EXECUTION_ENVIRONMENT_MISSING')
+  assert.equal(firstBlocked.payload.retryable, false)
+  assert.equal(events(turnId).some((event) => event.type === 'turn.failed'), false)
+  const retainedCheckpoint = events(turnId).find((event) => event.type === 'turn.checkpoint')
+  assert.equal(retainedCheckpoint?.sequence, 1)
+  assert.equal(getTurnRecoveryState({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })?.status, 'dead_letter')
+
+  await engine.resumeTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    retryRecovery: true,
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  const blockedEvents = events(turnId).filter((event) => event.type === 'turn.blocked')
+  assert.equal(blockedEvents.length, 2)
+  assert.equal(blockedEvents.at(-1).payload.code, 'TURN_EXECUTION_ENVIRONMENT_MISSING')
+  assert.equal(loopCalls, 0)
+  assert.equal(
+    events(turnId).filter((event) => event.type === 'turn.checkpoint').length,
+    1,
+  )
+  assert.equal(
+    events(turnId).find((event) => event.type === 'turn.checkpoint')?.sequence,
+    retainedCheckpoint.sequence,
+  )
+})
+
+test('TurnEngine blocks when checkpoint approval mode disagrees with its execution snapshot', async () => {
+  const turnId = 'turn-checkpoint-approval-mode-mismatch'
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:start`,
+      sessionId: 'turn-engine-session',
+      turnId,
+      sequence: 0,
+      type: 'turn.started',
+      payload: { content: 'Do not trust a conflicting checkpoint permission.' },
+      createdAt: 1,
+    }),
+  })
+  appendLegacyTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:checkpoint`,
+      sessionId: 'turn-engine-session',
+      turnId,
+      sequence: 1,
+      type: 'turn.checkpoint',
+      payload: {
+        state: {
+          messages: [],
+          artifactIds: [],
+          iterations: 1,
+          approvalMode: 'bypass',
+          executionEnvironment: checkpointEnvironment(),
+        },
+      },
+      createdAt: 2,
+    }),
+  })
+  let loopCalls = 0
+  const engine = createTestEngine({
+    ...checkpointEnvironmentEngineOptions(),
+    runLoop: async () => {
+      loopCalls += 1
+      return { text: 'unsafe', artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  assert.equal(loopCalls, 0)
+  const blocked = events(turnId).at(-1)
+  assert.equal(blocked.type, 'turn.blocked')
+  assert.equal(blocked.payload.code, 'TURN_PERMISSION_CONTEXT_DRIFT')
+  assert.equal(blocked.payload.retryable, false)
+  assert.equal(events(turnId).some((event) => event.type === 'turn.failed'), false)
+})
+
+test('TurnEngine resets only the unconfirmed streaming suffix before a recovered model call', async () => {
+  const turnId = 'turn-stream-recovery'
+  const persist = (sequence, type, payload = {}) => {
+    const entry = {
+      userId,
+      event: createTurnEvent({
       id: `${turnId}-${sequence}`,
       sessionId: 'turn-engine-session',
       turnId,
@@ -1418,17 +3060,28 @@ test('TurnEngine resets only the unconfirmed streaming suffix before a recovered
       type,
       payload,
       createdAt: sequence + 1,
-    }),
-  })
+      }),
+    }
+    return type === 'turn.checkpoint'
+      ? appendLegacyTurnEvent(entry)
+      : appendTurnEvent(entry)
+  }
   persist(0, 'turn.started', { content: 'resume interrupted output' })
   persist(1, 'assistant.delta', { text: 'confirmed answer' })
   persist(2, 'reasoning.delta', { text: 'confirmed reasoning' })
-  persist(3, 'turn.checkpoint', { state: { messages: [] } })
+  persist(3, 'turn.checkpoint', {
+    state: {
+      messages: [],
+      approvalMode: 'normal',
+      executionEnvironment: checkpointEnvironment(),
+    },
+  })
   persist(4, 'assistant.delta', { text: ' stale half sentence' })
   persist(5, 'reasoning.delta', { text: ' stale reasoning' })
 
   let eventAtModelCall = null
   const engine = createTestEngine({
+    ...checkpointEnvironmentEngineOptions(),
     runLoop: async (options) => {
       await options.runModel({ messages: [] })
       return { text: 'fresh answer', artifactIds: [], iterations: 1 }
@@ -1461,9 +3114,18 @@ test('TurnEngine leaves checkpoint-confirmed streaming text intact on resume', a
   for (const [sequence, type, payload] of [
     [0, 'turn.started', { content: 'continue after checkpoint' }],
     [1, 'assistant.delta', { text: 'confirmed' }],
-    [2, 'turn.checkpoint', { state: { messages: [] } }],
+    [2, 'turn.checkpoint', {
+      state: {
+        messages: [],
+        approvalMode: 'normal',
+        executionEnvironment: checkpointEnvironment(),
+      },
+    }],
   ]) {
-    appendTurnEvent({
+    const appendFixtureEvent = type === 'turn.checkpoint'
+      ? appendLegacyTurnEvent
+      : appendTurnEvent
+    appendFixtureEvent({
       userId,
       event: createTurnEvent({
         id: `${turnId}-${sequence}`,
@@ -1477,6 +3139,7 @@ test('TurnEngine leaves checkpoint-confirmed streaming text intact on resume', a
     })
   }
   const engine = createTestEngine({
+    ...checkpointEnvironmentEngineOptions(),
     runLoop: async (options) => {
       await options.runModel({ messages: [] })
       return { text: 'continued', artifactIds: [], iterations: 1 }
@@ -1697,9 +3360,12 @@ test('TurnEngine preserves completed tools across a retryable model interruption
   assert.match(interrupted.payload.text, /read_file：路径：README\.md/)
   assert.doesNotMatch(interrupted.payload.text, /durable README content/)
   assert.equal(interruptedEvents.some((event) => event.type === 'turn.completed'), false)
-  assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId }).status, 'interrupted')
-  const interruptedEvidence = listMessages({ userId, sessionId: 'turn-engine-session', limit: 100 })
-    .find((message) => message.id === `${turnId}:assistant`)
+  assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId })).status, 'interrupted')
+  const interruptedEvidence = getMessage({
+    userId,
+    sessionId: 'turn-engine-session',
+    messageId: `${turnId}:assistant`,
+  })
   assert.equal(interruptedEvidence?.modelContext?.turnEvidence, true)
   assert.equal(interruptedEvidence?.modelContext?.evidenceState, 'interrupted')
   assert.equal(interruptedEvidence?.modelContext?.serverLastSequence, interrupted.sequence)
@@ -1733,13 +3399,16 @@ test('TurnEngine preserves completed tools across a retryable model interruption
     false,
   )
   assert.equal(events(turnId).at(-1).type, 'turn.completed')
-  assert.equal(
-    listMessages({ userId, sessionId: 'turn-engine-session', limit: 100 })
-      .find((message) => message.id === `${turnId}:assistant`)?.content,
-    'Recovered from the durable tool result.',
-  )
-  const completedAssistant = listMessages({ userId, sessionId: 'turn-engine-session', limit: 100 })
-    .find((message) => message.id === `${turnId}:assistant`)
+  assert.equal(getMessage({
+    userId,
+    sessionId: 'turn-engine-session',
+    messageId: `${turnId}:assistant`,
+  })?.content, 'Recovered from the durable tool result.')
+  const completedAssistant = getMessage({
+    userId,
+    sessionId: 'turn-engine-session',
+    messageId: `${turnId}:assistant`,
+  })
   assert.notEqual(completedAssistant?.modelContext?.turnEvidence, true)
   assert.equal(completedAssistant?.modelContext?.toolTrace?.length, 2)
 })
@@ -1793,7 +3462,7 @@ test('TurnEngine pauses at approval and resumes after the persisted decision', a
 
   assert.deepEqual(executions, [
     { name: 'write_file', args: editedArgs },
-    { name: 'read_file', args: { path: 'safe-note.txt', offset: 0, limit: 0 } },
+    { name: 'read_file', args: { path: 'safe-note.txt' } },
   ])
   const turnEvents = events('turn-approval')
   assert.deepEqual(
@@ -1804,7 +3473,7 @@ test('TurnEngine pauses at approval and resumes after the persisted decision', a
     turnEvents.find((event) => event.type === 'tool.completed' && event.payload.name === 'write_file')?.payload.args,
     editedArgs,
   )
-  assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-approval' }).status, 'completed')
+  assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-approval' })).status, 'completed')
 })
 
 test('TurnEngine aborts an active model request with an explicit cancelled event', async () => {
@@ -1862,6 +3531,81 @@ test('TurnEngine keeps turn.cancelled durable when cancelled evidence message pe
     .some((message) => message.id === `${turnId}:assistant`), false)
 })
 
+test('TurnEngine requests cancellation when recovery wins the inactive-turn execution fence', async () => {
+  const turnId = 'turn-cancel-recovery-race'
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:started`, sessionId: 'turn-engine-session', turnId, sequence: 0,
+      type: 'turn.started', payload: { content: 'recover me' }, createdAt: 1,
+    }),
+  })
+  let cancellationRequests = 0
+  let acquireCalls = 0
+  const engine = createTestEngine({
+    runtimeCore: {
+      checkpoint: { load: () => null, save: () => null, clear: () => 0 },
+      lease: {
+        isActive: () => true,
+        requestCancellation: () => {
+          cancellationRequests += 1
+          return cancellationRequests === 2
+        },
+        acquire: () => {
+          acquireCalls += 1
+          return null
+        },
+        closeSteeringInbox: () => null,
+      },
+      approval: { release: () => 0 },
+    },
+  })
+
+  const turn = await engine.cancelTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  assert.equal(turn.status, 'cancelling')
+  assert.equal(acquireCalls, 1)
+  assert.equal(cancellationRequests, 2)
+  assert.deepEqual(events(turnId).map(({ type }) => type), ['turn.started'])
+})
+
+test('TurnEngine reports deferred event loss instead of masking it as cancellation', async () => {
+  const turnId = 'turn-cancel-after-event-loss'
+  let ready
+  const deltaQueued = new Promise((resolve) => { ready = resolve })
+  const writer = createEventWriteBehind({
+    writeBatch() { throw new Error('delta persistence failed') },
+    logger: { error() {} },
+    maxDelayMs: 10_000,
+    maxAttempts: 1,
+  })
+  const engine = createTestEngine({
+    eventWriteBehind: writer,
+    runLoop: async ({ onModelDelta, signal }) => {
+      await onModelDelta({ text: 'not durable', iteration: 0, modelName: 'test' })
+      ready()
+      await new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+      return { text: 'unreachable' }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Cancel after the stream write is queued.',
+  })
+  await deltaQueued
+  await engine.cancelTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const turnEvents = events(turnId)
+  assert.equal(turnEvents.some(({ type }) => type === 'turn.cancelled'), false)
+  assert.equal(turnEvents.at(-1)?.type, 'turn.failed')
+  assert.equal(turnEvents.at(-1)?.payload.code, 'TURN_EVENT_PERSISTENCE_FAILED')
+})
+
 test('TurnEngine does not persist a cancelled message when terminal event append fails', async () => {
   const turnId = 'turn-cancel-event-append-failure'
   appendTurnEvent({
@@ -1880,6 +3624,8 @@ test('TurnEngine does not persist a cancelled message when terminal event append
   const engine = createTestEngine({
     executionLeases: {
       ownerId: 'cancel-event-failure-worker',
+      claim: () => true,
+      hold: () => () => {},
       isActive: () => false,
       requestCancellation: () => false,
     },
@@ -1958,8 +3704,11 @@ test('TurnEngine treats an internal AbortError as a structured failure and persi
   assert.equal(failed.payload.partialText, 'Partial response')
   assert.deepEqual(failed.payload.artifactIds, ['artifact-timeout'])
   assert.equal(failed.payload.iterations, 2)
-  const evidence = listMessages({ userId, sessionId: 'turn-engine-session', limit: 100 })
-    .find((message) => message.id === `${turnId}:assistant`)
+  const evidence = getMessage({
+    userId,
+    sessionId: 'turn-engine-session',
+    messageId: `${turnId}:assistant`,
+  })
   assert.equal(evidence?.content, 'Partial response')
   assert.equal(evidence?.modelContext?.turnEvidence, true)
   assert.equal(evidence?.modelContext?.error?.code, 'MODEL_FIRST_TOKEN_TIMEOUT')
@@ -1998,11 +3747,92 @@ test('TurnEngine maps an incomplete loop result to failure instead of completion
   assert.equal(failed.payload.partialText, '任务尚未完全通过验证。已成功写入的本地修改会保留，并可在文件栏中查看；待验证文件不代表验证通过。请重试以继续完成验证。')
   assert.doesNotMatch(failed.payload.partialText, /requested mutation could not be verified/i)
   assert.deepEqual(failed.payload.artifactIds, ['artifact-unverified'])
-  assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId }).status, 'failed')
-  const evidence = listMessages({ userId, sessionId: 'turn-engine-session', limit: 100 })
-    .find((message) => message.id === `${turnId}:assistant`)
+  assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId })).status, 'failed')
+  const evidence = getMessage({
+    userId,
+    sessionId: 'turn-engine-session',
+    messageId: `${turnId}:assistant`,
+  })
   assert.equal(evidence?.modelContext?.evidenceState, 'failed')
   assert.equal(evidence?.content, '任务尚未完全通过验证。已成功写入的本地修改会保留，并可在文件栏中查看；待验证文件不代表验证通过。请重试以继续完成验证。')
+})
+
+test('TurnEngine coalesces concurrent failed-turn retries on the original Turn', async () => {
+  const turnId = 'turn-incomplete-concurrent-retry'
+  let loopCalls = 0
+  let releaseRetry
+  const retryGate = new Promise((resolve) => { releaseRetry = resolve })
+  const engine = createTestEngine({
+    runLoop: async ({ saveCheckpoint }) => {
+      loopCalls += 1
+      if (loopCalls === 1) {
+        await saveCheckpoint({
+          messages: [],
+          artifactIds: ['artifact-retained-across-retry'],
+          iterations: 1,
+        })
+        return {
+          text: 'The first attempt needs another pass.',
+          artifactIds: ['artifact-retained-across-retry'],
+          iterations: 1,
+          incomplete: true,
+          reason: 'verification_pending',
+        }
+      }
+      await retryGate
+      return {
+        text: 'The original Turn is now complete.',
+        artifactIds: ['artifact-retained-across-retry'],
+        iterations: 2,
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Finish this without creating another user message.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  assert.equal(events(turnId).at(-1)?.type, 'turn.failed')
+  const messagesBeforeRetry = listMessages({
+    userId,
+    sessionId: 'turn-engine-session',
+    limit: 500,
+  })
+  const userMessageIdsBeforeRetry = messagesBeforeRetry
+    .filter((message) => message.role === 'user')
+    .map((message) => message.id)
+
+  const retryScope = {
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    retryFailed: true,
+  }
+  const resumed = await Promise.all([
+    engine.resumeTurn(retryScope),
+    engine.resumeTurn(retryScope),
+  ])
+  assert.deepEqual(resumed.map((turn) => turn.turnId), [turnId, turnId])
+
+  releaseRetry()
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const turnEvents = events(turnId)
+  assert.equal(turnEvents.filter((event) => event.type === 'turn.started').length, 1)
+  assert.equal(turnEvents.filter((event) => (
+    event.type === 'turn.attempt' && event.payload?.reason === 'failed_retry'
+  )).length, 1)
+  assert.equal(turnEvents.at(-1)?.type, 'turn.completed')
+  assert.equal(loopCalls, 2)
+  const userMessageIdsAfterRetry = listMessages({
+    userId,
+    sessionId: 'turn-engine-session',
+    limit: 500,
+  }).filter((message) => message.role === 'user').map((message) => message.id)
+  assert.deepEqual(userMessageIdsAfterRetry, userMessageIdsBeforeRetry)
 })
 
 test('TurnEngine preserves approval metadata source in the durable approval event', async () => {
@@ -2072,6 +3902,7 @@ test('TurnEngine lease prevents duplicate resume and carries cancellation across
 })
 
 test('TurnEngine resumes a durable completed tool call without executing it twice', async () => {
+  const fileAccess = readOnlyDirectoryAccessStatus('turn-resume-read-grant')
   appendTurnEvent({
     userId,
     event: createTurnEvent({
@@ -2079,13 +3910,19 @@ test('TurnEngine resumes a durable completed tool call without executing it twic
       type: 'turn.started', payload: { content: '继续', modelName: 'stub' }, createdAt: 1,
     }),
   })
-  appendTurnEvent({
+  appendLegacyTurnEvent({
     userId,
     event: createTurnEvent({
       id: 'resume-checkpoint', sessionId: 'turn-engine-session', turnId: 'turn-resume', sequence: 1,
       type: 'turn.checkpoint', createdAt: 2,
       payload: {
         state: {
+          approvalMode: 'normal',
+          executionEnvironment: checkpointEnvironment({
+            modelName: 'stub',
+            toolSpecs: [checkpointReadToolSpec],
+            fileAccess,
+          }),
           messages: [
             { role: 'user', content: '读取 README' },
             { role: 'assistant', content: '', tool_calls: [{ id: 'durable-read', type: 'function', function: { name: 'read_file', arguments: '{"path":"README.md"}' } }] },
@@ -2104,6 +3941,7 @@ test('TurnEngine resumes a durable completed tool call without executing it twic
   })
   let executions = 0
   const engine = createTestEngine({
+    ...checkpointEnvironmentEngineOptions([checkpointReadToolSpec], fileAccess),
     runModel: async () => ({
       content: '从断点完成。',
       toolCalls: [],
@@ -2126,12 +3964,13 @@ test('TurnEngine resumes a durable completed tool call without executing it twic
     completionTokens: 50,
     totalTokens: 490,
   })
-  assert.equal(engine.getTurn({ userId: 'another-user', sessionId: 'turn-engine-session', turnId: 'turn-resume' }), null)
+  assert.equal(await engine.getTurn({ userId: 'another-user', sessionId: 'turn-engine-session', turnId: 'turn-resume' }), null)
 })
 
 test('TurnEngine resumes a compacted checkpoint and completes a legal tool round', async () => {
   const sessionId = 'turn-engine-session'
   const turnId = 'turn-resume-compacted-tool-loop'
+  const fileAccess = readOnlyDirectoryAccessStatus('turn-resume-compacted-read-grant')
   const canonicalMessages = [
     { role: 'user', content: 'Read the earlier proof.' },
     {
@@ -2186,6 +4025,12 @@ test('TurnEngine resumes a compacted checkpoint and completes a legal tool round
       type: 'turn.checkpoint', payload: { storage: 'turn_checkpoints', checkpointVersion: 1 }, createdAt: 2,
     }),
     checkpointState: {
+      approvalMode: 'normal',
+      executionEnvironment: checkpointEnvironment({
+        modelName: 'stub',
+        toolSpecs: [checkpointReadToolSpec],
+        fileAccess,
+      }),
       messages: checkpointMessages,
       toolCalls: [],
       artifactIds: [],
@@ -2201,6 +4046,7 @@ test('TurnEngine resumes a compacted checkpoint and completes a legal tool round
   let executions = 0
   const modelRequests = []
   const engine = createTestEngine({
+    ...checkpointEnvironmentEngineOptions([checkpointReadToolSpec], fileAccess),
     runModel: async ({ messages } = {}) => {
       modelCalls += 1
       modelRequests.push(messages)
@@ -2241,7 +4087,7 @@ test('TurnEngine creates a missing owned session but cannot claim another user s
   })
   await engine.startTurn({ userId, sessionId: 'created-by-engine', turnId: 'turn-created-session', content: 'create' })
   await engine.waitForTurn({ userId, sessionId: 'created-by-engine', turnId: 'turn-created-session' })
-  assert.equal(engine.getTurn({ userId, sessionId: 'created-by-engine', turnId: 'turn-created-session' }).status, 'completed')
+  assert.equal((await engine.getTurn({ userId, sessionId: 'created-by-engine', turnId: 'turn-created-session' })).status, 'completed')
   await assert.rejects(
     engine.startTurn({ userId, sessionId: 'owned-by-other', turnId: 'turn-cross-user', content: 'claim' }),
     /session not found/,
@@ -2265,7 +4111,14 @@ test('TurnEngine claims one legacy local chat and all session-scoped records ato
   appendTurnEvent({
     userId: legacyUserId,
     event: createTurnEvent({
-      id: 'legacy-event', sessionId, turnId: 'legacy-complete-turn', sequence: 0,
+      id: 'legacy-started-event', sessionId, turnId: 'legacy-complete-turn', sequence: 0,
+      type: 'turn.started', payload: {}, createdAt: 1,
+    }),
+  })
+  appendTurnEvent({
+    userId: legacyUserId,
+    event: createTurnEvent({
+      id: 'legacy-event', sessionId, turnId: 'legacy-complete-turn', sequence: 1,
       type: 'turn.completed', payload: {}, createdAt: 2,
     }),
   })
@@ -2330,7 +4183,7 @@ test('TurnEngine claims one legacy local chat and all session-scoped records ato
   }
   assert.equal(db.prepare('SELECT user_id FROM session_meters WHERE session_id = ?').get(sessionId).user_id, userId)
   assert.equal(db.prepare('SELECT status FROM pending_approvals WHERE id = ?').get('legacy-approval').status, 'cancelled')
-  assert.equal(engine.getTurn({ userId, sessionId, turnId: 'turn-local-claim' }).status, 'completed')
+  assert.equal((await engine.getTurn({ userId, sessionId, turnId: 'turn-local-claim' })).status, 'completed')
 })
 
 test('TurnEngine never claims another user chat in multi-user mode', async () => {
@@ -2382,7 +4235,7 @@ test('TurnEngine claims a legacy local session before resuming an unfinished tur
   })
   await engine.resumeTurn({ userId, sessionId, turnId, authMode: 'local' })
   await engine.waitForTurn({ userId, sessionId, turnId })
-  assert.equal(engine.getTurn({ userId, sessionId, turnId }).status, 'completed')
+  assert.equal((await engine.getTurn({ userId, sessionId, turnId })).status, 'completed')
   assert.equal(db.prepare('SELECT user_id FROM sessions WHERE token = ?').get(sessionId).user_id, userId)
 })
 

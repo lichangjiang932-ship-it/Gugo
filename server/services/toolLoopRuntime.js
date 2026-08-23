@@ -7,11 +7,14 @@
 import {
   attachVisionFeedback,
   resolveVisionFeedbackMaxBytes,
+  SERVER_TOOL_SPECS,
   visionFeedbackMime,
 } from './toolLoopHeuristics.js'
+import { configureTurnToolSpecs } from './turnLoopBindingRuntime.js'
+
+configureTurnToolSpecs(SERVER_TOOL_SPECS)
 
 export {
-  SERVER_TOOL_SPECS,
   buildJobToolIdempotencyKey,
   buildSubagentRequest,
   inheritedJobSkillIds,
@@ -20,6 +23,8 @@ export {
   selectJobToolSpecs,
   selectToolSpecs,
 } from './toolLoopHeuristics.js'
+
+export { SERVER_TOOL_SPECS }
 
 export { runToolLoop, runToolsLoop } from './loop/index.js'
 

@@ -5,9 +5,14 @@ import { buildServerToolsConfig } from '../src/pages/ChatSplit/serverTurnFlow.js
 import { createInitialState } from '../src/store/appStateBootstrap.js'
 import { applyServerToolsConfig } from '../server/services/turnToolSpecs.js'
 import { parseModelProviderResponse } from '../server/adapters/modelProviderResponse.js'
+import { createLoopEvents } from '../server/services/loop/events.js'
 
-const { runToolsLoop, SERVER_TOOL_SPECS, selectJobToolSpecs } = await import('../server/services/jobTools.js')
-const { registerDynamicTool, unregisterDynamicTool } = await import('../server/services/toolRegistry.js')
+const {
+  runToolsLoop: runToolsLoopRuntime,
+  SERVER_TOOL_SPECS,
+  selectJobToolSpecs,
+} = await import('../server/services/jobTools.js')
+const { getDynamicTool, registerDynamicTool, unregisterDynamicTool } = await import('../server/services/toolRegistry.js')
 const { createJobBudget } = await import('../server/utils/jobBudget.js')
 const { createUser, getDb } = await import('../server/db.js')
 const { upsertSession } = await import('../server/services/sessionStore.js')
@@ -17,6 +22,24 @@ const {
   isLocalMutationCall,
   isVerificationCall,
 } = await import('../server/services/toolLoopHeuristics.js')
+
+const TEST_USER_ID = 'tool-loop-execution-regression-user'
+
+function runToolsLoop(options = {}) {
+  const job = options.job || {}
+  return runToolsLoopRuntime({
+    requestToolApproval: async ({ args }) => ({
+      proceed: true,
+      args,
+      approvalId: 'tool-loop-regression-approved',
+    }),
+    ...options,
+    job: {
+      ...job,
+      userId: job.userId || TEST_USER_ID,
+    },
+  })
+}
 
 test('output-truncated tool calls are paired but never executed and are regenerated', async () => {
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
@@ -78,6 +101,95 @@ test('output-truncated tool calls are paired but never executed and are regenera
   assert.equal(result.text, 'README.md was read successfully.')
 })
 
+test('transport-truncated batch rejects every complete-looking tool call', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  let executions = 0
+  let started = 0
+  let preHooks = 0
+  let postHooks = 0
+  const outcomes = []
+  const loopEvents = createLoopEvents()
+  loopEvents.on('pre-tool', () => { preHooks += 1 })
+  loopEvents.on('post-tool', () => { postHooks += 1 })
+  await runToolsLoop({
+    job: { id: 'job-transport-truncated', origin: 'chat', prompt: 'Read both files.' },
+    step: { id: 'step-transport-truncated', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Read both files.' }],
+    toolSpecs: [readFile],
+    maxIters: 1,
+    enableToolHooks: false,
+    loopEvents,
+    onToolStarted: async () => { started += 1 },
+    onToolCompleted: async (outcome) => outcomes.push(outcome.result),
+    runModel: async () => ({
+      content: '',
+      finishReason: 'truncated',
+      toolCalls: ['a.txt', 'b.txt'].map((path, index) => ({
+        id: `transport-truncated-${index}`,
+        type: 'function',
+        function: { name: 'read_file', arguments: JSON.stringify({ path }) },
+      })),
+    }),
+    executeTool: async () => {
+      executions += 1
+      return { ok: true }
+    },
+  })
+
+  assert.equal(executions, 0)
+  assert.equal(started, 0)
+  assert.equal(preHooks, 0)
+  assert.equal(postHooks, 0)
+  assert.deepEqual(outcomes.map((outcome) => outcome.code), [
+    'tool_call_truncated',
+    'tool_call_truncated',
+  ])
+  assert.ok(outcomes.every((outcome) => outcome.recoveryAction === 'regenerate_tool_call'))
+})
+
+test('structurally incomplete arguments reject every call in the same batch', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  let executions = 0
+  const outcomes = []
+
+  await runToolsLoop({
+    job: { id: 'job-incomplete-argument-batch', origin: 'chat', prompt: 'Read both files.' },
+    step: { id: 'step-incomplete-argument-batch', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Read both files.' }],
+    toolSpecs: [readFile],
+    maxIters: 1,
+    enableToolHooks: false,
+    onToolCompleted: async (outcome) => outcomes.push(outcome.result),
+    runModel: async () => ({
+      content: '',
+      finishReason: 'tool_calls',
+      toolCalls: [{
+        id: 'complete-looking-sibling',
+        type: 'function',
+        function: { name: 'read_file', arguments: JSON.stringify({ path: 'safe.txt' }) },
+      }, {
+        id: 'structurally-incomplete-call',
+        type: 'function',
+        function: { name: 'read_file', arguments: '{"path":"truncated.txt"' },
+      }],
+    }),
+    executeTool: async () => {
+      executions += 1
+      return { ok: true }
+    },
+  })
+
+  assert.equal(executions, 0)
+  assert.deepEqual(outcomes.map((outcome) => outcome.code), [
+    'tool_call_truncated',
+    'tool_call_truncated',
+  ])
+  assert.ok(outcomes.every((outcome) => (
+    outcome.truncationReason === 'incomplete_tool_arguments'
+      && outcome.recoveryAction === 'regenerate_tool_call'
+  )))
+})
+
 test('non-stream Responses max-output truncation never executes a valid-looking write call', async () => {
   const writeFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'write_file')
   let executions = 0
@@ -125,7 +237,6 @@ test('executes tool calls returned by the model response that crosses the token 
   const runtimeBudget = createJobBudget({
     maxModelCalls: 5,
     maxModelTokens: 5,
-    maxCostUsd: 10,
   })
   let modelCalls = 0
   let executed = false
@@ -167,6 +278,66 @@ test('executes tool calls returned by the model response that crosses the token 
   assert.equal(modelCalls, 1, 'the exhausted budget must block every later provider request')
   assert.equal(result.budgetExceeded, true)
   assert.equal(result.incomplete, true)
+})
+
+test('provider cost estimate remains telemetry and never blocks normal BYOK completion', async () => {
+  const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
+  const runtimeBudget = createJobBudget({
+    maxModelCalls: 5,
+    maxModelTokens: 10_000,
+  })
+  let modelCalls = 0
+  let executed = false
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-provider-cost-telemetry',
+      userId: null,
+      origin: 'job',
+      prompt: 'Inspect local state and summarize it.',
+    },
+    step: { id: 'step-provider-cost-telemetry', kind: 'execute' },
+    messages: [{ role: 'user', content: 'Inspect local state and summarize it.' }],
+    intentMode: 'execute',
+    toolSpecs: [bashExec],
+    runtimeBudget,
+    maxIters: 3,
+    enableToolHooks: false,
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'provider-cost-telemetry-command',
+            type: 'function',
+            function: { name: 'bash_exec', arguments: JSON.stringify({ command: 'echo ok' }) },
+          }],
+          usage: { promptTokens: 4, completionTokens: 4 },
+          costUsd: 0.01,
+        }
+      }
+      return {
+        content: 'Local inspection completed successfully.',
+        toolCalls: [],
+        usage: { promptTokens: 4, completionTokens: 4 },
+        costUsd: 0.02,
+      }
+    },
+    executeTool: async ({ name }) => {
+      assert.equal(name, 'bash_exec')
+      executed = true
+      return { ok: true, exitCode: 0, stdout: 'ok' }
+    },
+  })
+
+  assert.equal(executed, true)
+  assert.equal(modelCalls, 2, 'cost telemetry must not block the normal post-tool completion')
+  assert.notEqual(result.budgetExceeded, true)
+  assert.notEqual(result.incomplete, true)
+  assert.match(result.text, /Local inspection completed successfully/u)
+  assert.equal(runtimeBudget.snapshot().costUsd, 0.03)
+  assert.equal(runtimeBudget.snapshot().maxCostUsd, 0)
 })
 
 test('execution reasoning runaway stops without an automatic model retry and persists a visible final', async () => {
@@ -1902,6 +2073,7 @@ test('an explicit read-only constraint revalidates approval-edited arguments', a
         proceed: true,
         args: { command: 'node -e "require(\'fs\').writeFileSync(\'forbidden.txt\',\'x\')"' },
         edited: true,
+        approvalId: 'read-only-edited-approval',
       }
     },
     runModel: async ({ messages }) => {
@@ -2127,7 +2299,11 @@ test('a continuation turn remounts execution tools, preserves the canonical file
     requestToolApproval: async (request) => {
       approvalRequests.push(request)
       assert.equal(request.mode, 'bypass')
-      return { proceed: true, args: request.args }
+      return {
+        proceed: true,
+        args: request.args,
+        approvalId: 'continuation-bypass-approval',
+      }
     },
     runModel: async ({ tools, messages }) => {
       modelCalls += 1
@@ -2991,7 +3167,11 @@ test('already-authorized read-write directory refreshes the active tool schema w
     fallbackToolSpecs: authorizedTurnCatalog,
     maxIters: 6,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: async ({ args }) => ({
+      proceed: true,
+      args,
+      approvalId: 'authorized-directory-approval',
+    }),
     runModel: async ({ tools, messages }) => {
       modelCalls += 1
       const names = tools.map((item) => item?.function?.name).filter(Boolean).sort()
@@ -3591,7 +3771,11 @@ test('tool loop retries transient read failures but never replays an external wr
     toolSpecs: [externalSpec],
     enableToolHooks: false,
     toolRetryBaseDelayMs: 0,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: async ({ args }) => ({
+      proceed: true,
+      args,
+      approvalId: 'external-retry-approval',
+    }),
     runModel: async () => {
       externalModelCalls += 1
       return externalModelCalls === 1
@@ -3619,9 +3803,10 @@ test('concurrency-safe metadata cannot make an external write replay after a cra
       },
     },
   }
-  registerDynamicTool({
+  const disposeExternalTool = registerDynamicTool({
     name: toolName,
     origin: 'mcp',
+    userId: TEST_USER_ID,
     spec: externalSpec,
     metadata: {
       riskClass: 'external',
@@ -3631,7 +3816,8 @@ test('concurrency-safe metadata cannot make an external write replay after a cra
       interruptBehavior: 'block',
     },
   })
-  t.after(() => unregisterDynamicTool(toolName))
+  t.after(disposeExternalTool)
+  const boundExternalSpec = getDynamicTool(toolName, { userId: TEST_USER_ID }).spec
 
   let checkpoint = null
   let active = 0
@@ -3659,14 +3845,18 @@ test('concurrency-safe metadata cannot make an external write replay after a cra
       step: { id: 'external-crash-step', kind: 'chat' },
       messages: [{ role: 'user', content: 'send both externally' }],
       intentMode: 'execute',
-      toolSpecs: [externalSpec],
+      toolSpecs: [boundExternalSpec],
       maxIters: 3,
       enableToolHooks: false,
       saveCheckpoint: async (state) => {
         checkpoint = structuredClone(state)
         return true
       },
-      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      requestToolApproval: async ({ args }) => ({
+        proceed: true,
+        args,
+        approvalId: 'external-crash-approval',
+      }),
       runModel: async () => ({
         content: '',
         toolCalls: [
@@ -3688,7 +3878,7 @@ test('concurrency-safe metadata cannot make an external write replay after a cra
     step: { id: 'external-crash-step', kind: 'chat' },
     messages: [{ role: 'user', content: 'send both externally' }],
     intentMode: 'execute',
-    toolSpecs: [externalSpec],
+    toolSpecs: [boundExternalSpec],
     maxIters: 3,
     enableToolHooks: false,
     loadCheckpoint: async () => checkpoint,
@@ -3696,7 +3886,11 @@ test('concurrency-safe metadata cannot make an external write replay after a cra
       checkpoint = structuredClone(state)
       return true
     },
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: async ({ args }) => ({
+      proceed: true,
+      args,
+      approvalId: 'external-crash-resume-approval',
+    }),
     runModel: async () => ({ content: 'The external writes were reconciled.', toolCalls: [] }),
     executeTool: executeExternalWrite,
   })
@@ -3787,9 +3981,10 @@ test('a successful MCP mutation satisfies execution evidence without repeating t
       },
     },
   }
-  registerDynamicTool({
+  const disposeMcpTool = registerDynamicTool({
     name: toolName,
     origin: 'mcp',
+    userId: TEST_USER_ID,
     spec: externalSpec,
     metadata: {
       riskClass: 'external',
@@ -3798,7 +3993,8 @@ test('a successful MCP mutation satisfies execution evidence without repeating t
       isIdempotent: false,
     },
   })
-  t.after(() => unregisterDynamicTool(toolName))
+  t.after(disposeMcpTool)
+  const boundExternalSpec = getDynamicTool(toolName, { userId: TEST_USER_ID }).spec
 
   let modelCalls = 0
   let externalWrites = 0
@@ -3807,10 +4003,14 @@ test('a successful MCP mutation satisfies execution evidence without repeating t
     step: { id: 'mcp-mutation-step', kind: 'chat' },
     messages: [{ role: 'user', content: 'Create a Jira issue for the release blocker.' }],
     intentMode: 'execute',
-    toolSpecs: [externalSpec],
+    toolSpecs: [boundExternalSpec],
     maxIters: 5,
     enableToolHooks: false,
-    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    requestToolApproval: async ({ args }) => ({
+      proceed: true,
+      args,
+      approvalId: 'mcp-mutation-approval',
+    }),
     runModel: async ({ messages }) => {
       modelCalls += 1
       if (modelCalls === 1 || messages.some((message) => (

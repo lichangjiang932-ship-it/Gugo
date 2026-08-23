@@ -69,6 +69,7 @@ export function serializeServerTurnHistory(messages = []) {
 
   const explicitResults = new Map()
   messages.forEach((message, index) => {
+    if (message?.meta?.failed === true) return
     if (message?.role !== 'tool' || !message?.tool_call_id) return
     const id = String(message.tool_call_id)
     const queue = explicitResults.get(id) || []
@@ -79,6 +80,7 @@ export function serializeServerTurnHistory(messages = []) {
   const consumedToolIndexes = new Set()
   const serialized = []
   messages.forEach((message, messageIndex) => {
+    if (message?.meta?.failed === true) return
     const role = ['user', 'assistant', 'system', 'tool'].includes(message?.role) ? message.role : null
     if (!role) return
     if (role === 'tool') {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,7 +16,7 @@ process.env.SERVER_HOST = '127.0.0.1'
 
 const { createAppServer } = await import('../server/appServer.js')
 const { closeDb } = await import('../server/db.js')
-const { recordFileSnapshot } = await import('../server/services/fileSnapshotStore.js')
+const { finalizeFileSnapshot, recordFileSnapshot } = await import('../server/services/fileSnapshotStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const server = createAppServer({ getEnv: () => process.env })
@@ -47,7 +48,7 @@ test('list and rewind return owner-scoped results', async () => {
   const { token, userId } = issueTestSession({ email: 'snap-route@example.com' })
   const filePath = path.join(tempDir, 'route-file.txt')
   fs.writeFileSync(filePath, 'before', 'utf8')
-  recordFileSnapshot({
+  const snapshot = recordFileSnapshot({
     userId,
     sessionId: 'route-session',
     turnId: 'route-turn',
@@ -66,6 +67,13 @@ test('list and rewind return owner-scoped results', async () => {
   assert.equal(listed.snapshots[0].toolCallId, 'route-call-1')
 
   fs.writeFileSync(filePath, 'after', 'utf8')
+  finalizeFileSnapshot({
+    userId,
+    id: snapshot.id,
+    afterExists: true,
+    afterSha256: createHash('sha256').update('after').digest('hex'),
+    afterBytes: Buffer.byteLength('after'),
+  })
   const rewind = await fetch(`${origin}/api/snapshots/rewind`, {
     method: 'POST',
     headers: headers(token),
@@ -76,4 +84,42 @@ test('list and rewind return owner-scoped results', async () => {
   assert.equal(result.found, true)
   assert.equal(result.count, 1)
   assert.equal(fs.readFileSync(filePath, 'utf8'), 'before')
+})
+
+test('rewind route returns 409 and preserves a later user edit', async () => {
+  const { token, userId } = issueTestSession({ email: 'snap-route-conflict@example.com' })
+  const filePath = path.join(tempDir, 'route-conflict.txt')
+  fs.writeFileSync(filePath, 'before', 'utf8')
+  const snapshot = recordFileSnapshot({
+    userId,
+    sessionId: 'route-conflict-session',
+    turnId: 'route-conflict-turn',
+    toolCallId: 'route-conflict-call',
+    toolName: 'edit_file',
+    filePath,
+    beforeContent: 'before',
+  })
+  fs.writeFileSync(filePath, 'tool-output', 'utf8')
+  finalizeFileSnapshot({
+    userId,
+    id: snapshot.id,
+    afterExists: true,
+    afterSha256: createHash('sha256').update('tool-output').digest('hex'),
+    afterBytes: Buffer.byteLength('tool-output'),
+  })
+  fs.writeFileSync(filePath, 'user-output', 'utf8')
+
+  const response = await fetch(`${origin}/api/snapshots/rewind`, {
+    method: 'POST',
+    headers: headers(token),
+    body: JSON.stringify({
+      sessionId: 'route-conflict-session',
+      turnId: 'route-conflict-turn',
+      toolCallId: 'route-conflict-call',
+    }),
+  })
+  assert.equal(response.status, 409)
+  const body = await response.json()
+  assert.equal(body.error.code, 'FILE_SNAPSHOT_CONFLICT')
+  assert.equal(fs.readFileSync(filePath, 'utf8'), 'user-output')
 })

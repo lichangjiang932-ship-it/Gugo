@@ -159,7 +159,10 @@ function streamLocalFile(res, fullPath, range) {
   return stream
 }
 
-export async function handleLocalFileAccessRequest(req, res) {
+export async function handleLocalFileAccessRequest(req, res, {
+  cwd = process.cwd(),
+  env = process.env,
+} = {}) {
   const url = new URL(req.url, 'http://localhost')
   const localPreviewPrefix = '/api/local-files/previews/'
   const localPreviewResource = ['GET', 'HEAD'].includes(req.method)
@@ -331,7 +334,7 @@ export async function handleLocalFileAccessRequest(req, res) {
       return sendJson(res, 200, {
         ok: true,
         ...getLocalFileAccessStatus({ userId }),
-        onboarding: getWorkspaceOnboardingStatus({ userId }),
+        onboarding: getWorkspaceOnboardingStatus({ userId, cwd, env }),
       })
     }
 
@@ -352,6 +355,8 @@ export async function handleLocalFileAccessRequest(req, res) {
           approvalMode: body.approvalMode,
           confirmation: body.confirmation,
           bypassConfirmation: body.bypassConfirmation,
+          cwd,
+          env,
         }),
       })
     }

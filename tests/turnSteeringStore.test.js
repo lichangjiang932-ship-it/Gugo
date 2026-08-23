@@ -14,7 +14,7 @@ const { createTurnEvent } = await import('../shared/turnEvents.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 const { listMessages, upsertSession } = await import('../server/services/sessionStore.js')
 const { appendTurnEvent } = await import('../server/services/turnEventStore.js')
-const { claimTurnExecutionLease, tryCloseTurnSteeringInbox } = await import(
+const { claimTurnExecutionLease, getTurnExecutionLease, tryCloseTurnSteeringInbox } = await import(
   '../server/services/turnExecutionLeaseStore.js'
 )
 const {
@@ -49,7 +49,10 @@ function createRunningTurn({
     }),
   })
   assert.equal(claimTurnExecutionLease({ userId, sessionId, turnId, ownerId, now, leaseMs }), true)
-  return { userId, sessionId, turnId, ownerId }
+  const lease = getTurnExecutionLease({ userId, sessionId, turnId })
+  assert.equal(lease?.ownerId, ownerId)
+  assert.equal(Number.isSafeInteger(lease?.fencingToken), true)
+  return { userId, sessionId, turnId, ownerId, fencingToken: lease.fencingToken }
 }
 
 test('enqueue is idempotent and atomically persists the canonical steering message', () => {

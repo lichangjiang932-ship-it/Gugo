@@ -9,6 +9,7 @@ import {
   markConvergedMetadata,
   mergePersistedSnapshots,
   persistedSnapshotsEqual,
+  readPersistedPayload,
 } from '../src/store/stateSync.js'
 
 function session(id, content, updatedAt) {
@@ -54,6 +55,28 @@ test('state sync preserves tab-local selection and converges after one union wri
   const second = mergePersistedSnapshots(right, rightMeta, first.snapshot, convergenceMeta, { preserveLocalFields: ['activeSessionId'] })
   assert.equal(second.snapshot.activeSessionId, 'right')
   assert.equal(persistedSnapshotsEqual(first.snapshot, second.snapshot, ['activeSessionId']), true)
+})
+
+test('cross-tab payload parsing reports retired account fields while preserving current data', () => {
+  const parsed = readPersistedPayload({
+    user: { plan: 'legacy' },
+    isLoggedIn: true,
+    sessions: [session('safe', 'keep', 1)],
+    toolsConfig: { fetch_url: false },
+    __sync: {
+      writtenAt: 20,
+      fields: { user: 20, isLoggedIn: 20 },
+      entities: { sessions: { safe: 20 } },
+    },
+  })
+
+  assert.deepEqual(parsed.retiredAccountFieldsRemoved.sort(), ['isLoggedIn', 'user'])
+  assert.equal(Object.hasOwn(parsed.snapshot, 'user'), false)
+  assert.equal(Object.hasOwn(parsed.snapshot, 'isLoggedIn'), false)
+  assert.equal(Object.hasOwn(parsed.meta.fields, 'user'), false)
+  assert.equal(Object.hasOwn(parsed.meta.fields, 'isLoggedIn'), false)
+  assert.equal(parsed.snapshot.sessions[0].messages[0].content, 'keep')
+  assert.deepEqual(parsed.snapshot.toolsConfig, { fetch_url: false })
 })
 
 test('cross-tab normalization migrates legacy execution defaults without overriding newer explicit disables', () => {

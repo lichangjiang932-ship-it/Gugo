@@ -32,6 +32,8 @@ test('pure reasoning keeps a compact status and never exposes raw text', () => {
   })
   assert.match(markup, /role="status"/)
   assert.match(markup, /data-testid="live-elapsed"/)
+  assert.match(markup, /&lt;1s/)
+  assert.doesNotMatch(markup, />0s</)
   assert.match(markup, /reasoning through the next step/)
   assert.doesNotMatch(markup, /secret chain of thought/)
 })

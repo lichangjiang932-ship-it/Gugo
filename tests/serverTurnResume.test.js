@@ -2,7 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  claimServerTurnResume,
   isRecoverableServerMessage,
+  matchesFailedTurnRetryResume,
+  matchesManualRecoveryResume,
   reduceResumedAssistantText,
   serverResumeAfterSequence,
   shouldKeepResumePending,
@@ -54,6 +57,127 @@ test('reconnecting, interrupted, and cancelling server messages remain resumable
     assert.equal(isRecoverableServerMessage({ meta: { streaming: false, serverConnectionState } }), true)
   }
   assert.equal(isRecoverableServerMessage({ meta: { streaming: false, serverConnectionState: null } }), false)
+})
+
+test('failed-turn retry signals match only the original session and turn', () => {
+  const retry = { sessionId: 'session-1', turnId: 'turn-1', code: 'TURN_INCOMPLETE' }
+  const message = {
+    role: 'assistant',
+    meta: {
+      failed: true,
+      serverTurnId: 'turn-1',
+      serverFailure: { code: 'TURN_INCOMPLETE' },
+    },
+  }
+
+  assert.equal(matchesFailedTurnRetryResume({ id: 'session-1' }, message, retry), true)
+  assert.equal(matchesFailedTurnRetryResume({ id: 'session-2' }, message, retry), false)
+  assert.equal(matchesFailedTurnRetryResume({ id: 'session-1' }, {
+    ...message,
+    meta: { ...message.meta, serverTurnId: 'turn-2' },
+  }, retry), false)
+})
+
+test('failed-turn retry claim is single-flight per session and turn', () => {
+  const claims = new Set()
+  const noActiveRun = () => false
+
+  assert.equal(claimServerTurnResume(claims, 'session-1', 'turn-1', noActiveRun), true)
+  assert.equal(claimServerTurnResume(claims, 'session-1', 'turn-1', noActiveRun), false)
+  assert.equal(claimServerTurnResume(claims, 'session-2', 'turn-1', noActiveRun), true)
+})
+
+test('manual side-effect recovery accepts legacy and canonical recovery kinds', () => {
+  const session = { id: 'session-1' }
+  const resume = { kind: 'turn', sessionId: 'session-1', turnId: 'turn-1', toolCallId: 'call-1' }
+  for (const serverRecoveryKind of ['side_effect_unknown', 'side_effect_outcome_unknown']) {
+    assert.equal(matchesManualRecoveryResume(session, {
+      meta: {
+        serverTurnId: 'turn-1',
+        serverRecoveryToolCallId: 'call-1',
+        serverRecoveryBlocked: true,
+        serverRecoveryKind,
+        serverConnectionState: 'blocked',
+      },
+    }, resume), true, serverRecoveryKind)
+  }
+  assert.equal(matchesManualRecoveryResume(session, {
+    meta: {
+      serverTurnId: 'turn-1',
+      serverRecoveryToolCallId: 'call-1',
+      serverRecoveryBlocked: true,
+      serverRecoveryKind: 'different_recovery',
+      serverConnectionState: 'blocked',
+    },
+  }, resume), false)
+  assert.equal(matchesManualRecoveryResume(session, {
+    meta: {
+      serverTurnId: 'turn-1',
+      serverRecoveryToolCallId: 'call-1',
+      serverRecoveryBlocked: false,
+      serverRecoveryKind: 'side_effect_outcome_unknown',
+      serverConnectionState: 'blocked',
+    },
+  }, resume), false)
+  assert.equal(matchesManualRecoveryResume(session, {
+    meta: {
+      serverTurnId: 'turn-1',
+      serverRecoveryToolCallId: 'call-1',
+      serverRecoveryBlocked: true,
+      serverRecoveryKind: null,
+      serverConnectionState: 'blocked',
+    },
+  }, resume), false)
+  assert.equal(matchesManualRecoveryResume(session, {
+    meta: {
+      serverTurnId: 'turn-1',
+      serverRecoveryToolCallId: 'call-1',
+      serverRecoveryBlocked: true,
+      serverRecoveryKind: 'side_effect_outcome_unknown',
+      serverConnectionState: 'reconnecting',
+    },
+  }, resume), false)
+  assert.equal(matchesManualRecoveryResume({ id: 'session-other' }, {
+    meta: {
+      serverTurnId: 'turn-1',
+      serverRecoveryToolCallId: 'call-1',
+      serverRecoveryBlocked: true,
+      serverRecoveryKind: 'side_effect_outcome_unknown',
+    },
+  }, resume), false)
+  assert.equal(matchesManualRecoveryResume(session, {
+    meta: {
+      serverTurnId: 'turn-other',
+      serverRecoveryToolCallId: 'call-1',
+      serverRecoveryBlocked: true,
+      serverRecoveryKind: 'side_effect_outcome_unknown',
+    },
+  }, resume), false)
+  assert.equal(matchesManualRecoveryResume({ id: 1 }, {
+    meta: {
+      serverTurnId: 'turn-1',
+      serverRecoveryToolCallId: 'call-1',
+      serverRecoveryBlocked: true,
+      serverRecoveryKind: 'side_effect_outcome_unknown',
+    },
+  }, { ...resume, sessionId: '1' }), false)
+  assert.equal(matchesManualRecoveryResume(session, {
+    meta: {
+      serverTurnId: 'turn-1',
+      serverRecoveryToolCallId: 'call-other',
+      serverRecoveryBlocked: true,
+      serverRecoveryKind: 'side_effect_outcome_unknown',
+      serverConnectionState: 'blocked',
+    },
+  }, resume), false)
+  assert.equal(matchesManualRecoveryResume(session, {
+    meta: {
+      serverTurnId: 'turn-1',
+      serverRecoveryBlocked: true,
+      serverRecoveryKind: 'side_effect_outcome_unknown',
+      serverConnectionState: 'blocked',
+    },
+  }, resume), false)
 })
 
 test('an interrupted server snapshot remains automatically resumable after refresh', () => {
