@@ -229,12 +229,19 @@ export default function RightWorkbench({
     event.preventDefault()
   }
 
-  const submitSideChat = (event) => {
+  const submitSideChat = async (event) => {
     event.preventDefault()
-    const content = sideInput.trim()
+    const inputSnapshot = sideInput
+    const content = inputSnapshot.trim()
     if (!content || isGenerating) return
-    const accepted = onSendMessage?.(content)
-    if (accepted !== false) setSideInput('')
+    try {
+      const accepted = await onSendMessage?.(content)
+      if (accepted === true) {
+        setSideInput((current) => current === inputSnapshot ? '' : current)
+      }
+    } catch {
+      // Keep the draft intact. The parent surface owns the actionable error.
+    }
   }
 
   const navigateBrowser = (event) => {

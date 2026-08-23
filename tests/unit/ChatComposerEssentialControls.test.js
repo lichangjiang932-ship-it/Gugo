@@ -33,6 +33,7 @@ test('chat composer keeps keyboard history without rendering shortcut hints in t
     /inputHistoryNavigation|historyHint|sendHint|<kbd|↑\s*\/?\s*↓|查看历史|Enter\s*(?:发送|Send)/i,
   )
   assert.match(chatComposerSource, /handleKeyDown\(e\)/)
+  assert.match(chatPageSource, /if \(isChatCompositionEvent\(event\)\) return/)
   assert.match(chatPageSource, /if \(navigateInputHistory\(event\)\) return/)
-  assert.match(chatPageSource, /event\.key === 'Enter' && !event\.shiftKey/)
+  assert.match(chatPageSource, /if \(shouldSubmitChatKey\(event\)\)/)
 })

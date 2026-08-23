@@ -18,6 +18,8 @@ function setupDom() {
   globalThis.PointerEvent = dom.window.MouseEvent
   globalThis.localStorage = dom.window.localStorage
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  dom.window.HTMLElement.prototype.attachEvent = () => {}
+  dom.window.HTMLElement.prototype.detachEvent = () => {}
   Object.defineProperty(globalThis, 'navigator', {
     configurable: true,
     value: dom.window.navigator,
@@ -32,6 +34,39 @@ function pointerEvent(dom, type, values) {
     Object.defineProperty(event, key, { configurable: true, value })
   }
   return event
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, reject, resolve }
+}
+
+async function enterSideChatMessage(dom, rootElement, value) {
+  const textarea = rootElement.querySelector('textarea')
+  assert.ok(textarea)
+  const reactPropsKey = Object.keys(textarea).find((key) => key.startsWith('__reactProps$'))
+  const onChange = reactPropsKey ? textarea[reactPropsKey]?.onChange : null
+  assert.equal(typeof onChange, 'function')
+  await act(async () => {
+    onChange({ target: { value } })
+    await Promise.resolve()
+  })
+  assert.equal(textarea.value, value)
+  return textarea
+}
+
+async function submitSideChat(dom, rootElement) {
+  const form = rootElement.querySelector('textarea')?.closest('form')
+  assert.ok(form)
+  await act(async () => {
+    form.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+  })
 }
 
 test('right workbench renders compact tabs, persists width, and opens generated files', async () => {
@@ -589,6 +624,120 @@ test('right workbench keeps only the latest receipt for the same normalized POSI
     assert.match(links[0].getAttribute('href'), /posix-latest-receipt/)
     assert.doesNotMatch(links[0].getAttribute('href'), /posix-first-receipt/)
     assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '1')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('right workbench keeps side chat input pending and clears it only after send acceptance', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const send = deferred()
+  const sent = []
+
+  try {
+    await act(async () => root.render(
+      <RightWorkbench
+        messages={[]}
+        activeTab="chat"
+        onTabChange={() => {}}
+        onClose={() => {}}
+        onOpenArtifact={() => {}}
+        onSendMessage={(content) => {
+          sent.push(content)
+          return send.promise
+        }}
+        isGenerating={false}
+      />,
+    ))
+
+    const textarea = await enterSideChatMessage(dom, rootElement, 'keep until accepted')
+    await submitSideChat(dom, rootElement)
+    assert.deepEqual(sent, ['keep until accepted'])
+    assert.equal(textarea.value, 'keep until accepted')
+
+    await act(async () => {
+      send.resolve(true)
+      await send.promise
+    })
+    assert.equal(textarea.value, '')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('right workbench preserves side chat input when send resolves false', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const send = deferred()
+  const sent = []
+
+  try {
+    await act(async () => root.render(
+      <RightWorkbench
+        messages={[]}
+        activeTab="chat"
+        onTabChange={() => {}}
+        onClose={() => {}}
+        onOpenArtifact={() => {}}
+        onSendMessage={(content) => {
+          sent.push(content)
+          return send.promise
+        }}
+        isGenerating={false}
+      />,
+    ))
+
+    const textarea = await enterSideChatMessage(dom, rootElement, 'keep after rejection')
+    await submitSideChat(dom, rootElement)
+    assert.deepEqual(sent, ['keep after rejection'])
+    await act(async () => {
+      send.resolve(false)
+      await send.promise
+    })
+    assert.equal(textarea.value, 'keep after rejection')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('right workbench preserves side chat input when send rejects', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const send = deferred()
+  const sent = []
+  send.promise.catch(() => {})
+
+  try {
+    await act(async () => root.render(
+      <RightWorkbench
+        messages={[]}
+        activeTab="chat"
+        onTabChange={() => {}}
+        onClose={() => {}}
+        onOpenArtifact={() => {}}
+        onSendMessage={(content) => {
+          sent.push(content)
+          return send.promise
+        }}
+        isGenerating={false}
+      />,
+    ))
+
+    const textarea = await enterSideChatMessage(dom, rootElement, 'keep after error')
+    await submitSideChat(dom, rootElement)
+    assert.deepEqual(sent, ['keep after error'])
+    await act(async () => {
+      send.reject(new Error('send failed'))
+      try { await send.promise } catch { /* expected rejection */ }
+    })
+    assert.equal(textarea.value, 'keep after error')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

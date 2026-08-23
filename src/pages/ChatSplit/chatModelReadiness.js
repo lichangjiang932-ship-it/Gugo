@@ -110,6 +110,7 @@ export function modelReadinessMessageKey(readiness = {}) {
     case 'provider-unverified': return 'errors.modelProviderUnverified'
     case 'provider-chat-only': return readiness.canSend === false ? 'errors.modelProviderChatOnly' : ''
     case 'provider-unavailable': return 'errors.modelEndpointUnavailable'
+    case 'provider-changed': return 'errors.modelProviderChanged'
     default: return ''
   }
 }

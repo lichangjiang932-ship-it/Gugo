@@ -33,7 +33,10 @@ test('chat drafts persist while typing and only safe model failures add a resend
   assert.match(lifecycleSource, /attachments: normalizeDraftAttachments\(attachmentsRef\.current\)/)
   assert.match(lifecycleSource, /const nextDraft = readSessionDraft\(\(state\.sessionDrafts \|\| \{\}\)\[nextId\]\)/)
   assert.match(lifecycleSource, /if \(!preserveAttachments\) setAttachments\(nextDraft\.attachments\)/)
-  assert.match(chatEntrySource, /triggerSendFlow\(typedContent \|\| describeAttachmentPrompt\(currentAttachments\), currentAttachments\)/)
+  assert.match(
+    chatEntrySource,
+    /await triggerSendFlow\([\s\S]{0,120}typedContent \|\| describeAttachmentPrompt\(currentAttachments\),[\s\S]{0,80}currentAttachments,[\s\S]{0,120}\(\{ sessionId: acceptedSessionId \}/,
+  )
   assert.doesNotMatch(chatSource, /handleEditMessage|editingMessageId|handleRegenerate|handleDeleteMessage/)
   assert.match(messageRowSource, /<CopyButton content=\{msg\.content\}/)
   assert.match(messageRowSource, /copyTextToClipboard\(copyableMessageText\(content\)\)/)

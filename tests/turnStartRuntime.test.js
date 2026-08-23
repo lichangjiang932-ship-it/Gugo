@@ -119,6 +119,173 @@ test('turn start leaves no durable state when model readiness fails', async () =
   assert.equal(emitterFactory.emitters.length, 0)
 })
 
+for (const [label, code] of [
+  ['stale model configuration revision', 'MODEL_CONFIG_REVISION_STALE'],
+  ['unconfigured model provider', 'MODEL_PROVIDER_NOT_CONFIGURED'],
+  ['model provider drift', 'TURN_MODEL_BINDING_DRIFT'],
+]) {
+  test(`local legacy turn start leaves ownership and outbox untouched for ${label}`, async () => {
+    const calls = []
+    const preflightError = Object.assign(new Error(label), { code })
+    const { ports, emitterFactory } = createPorts({
+      calls,
+      ports: {
+        readSession: async () => {
+          calls.push('session:read')
+          return null
+        },
+        sessionIdOccupied: async () => {
+          calls.push('session:occupied')
+          return true
+        },
+        claimLegacySession: async () => {
+          calls.push('session:claim')
+          return { id: 'session-1', userId: 'user-1' }
+        },
+        lastEvent: async () => {
+          calls.push('event:read')
+          return null
+        },
+        resolveModelBinding: async () => {
+          calls.push('model:resolve')
+          throw preflightError
+        },
+        writeSession: async () => calls.push('session:write'),
+        writeMessage: async () => calls.push('message:write'),
+        bindAttachments: async () => calls.push('attachments:bind'),
+        commitTurnStart: async () => calls.push('aggregate:commit'),
+      },
+    })
+
+    await assert.rejects(
+      createTurnStartRuntime(ports).initialize({ ...BASE_INPUT, authMode: 'local' }),
+      preflightError,
+    )
+    assert.deepEqual(calls, [
+      'session:read',
+      'session:occupied',
+      'model:resolve',
+    ])
+    assert.equal(emitterFactory.emitters.length, 0)
+  })
+}
+
+test('local occupied session is claimed only after model preflight and remains fail-closed', async () => {
+  const calls = []
+  const { ports, emitterFactory } = createPorts({
+    calls,
+    ports: {
+      readSession: async () => {
+        calls.push('session:read')
+        return null
+      },
+      sessionIdOccupied: async () => {
+        calls.push('session:occupied')
+        return true
+      },
+      resolveModelBinding: async () => {
+        calls.push('model:resolve')
+        return {
+          modelName: 'model-1',
+          modelProviderId: 'provider-1',
+          modelConfigRevision: 7,
+          env: { MODEL_NAME: 'model-1' },
+        }
+      },
+      claimLegacySession: async () => {
+        calls.push('session:claim')
+        return null
+      },
+      lastEvent: async () => {
+        calls.push('event:read')
+        return null
+      },
+      writeSession: async () => calls.push('session:write'),
+      writeMessage: async () => calls.push('message:write'),
+      commitTurnStart: async () => calls.push('aggregate:commit'),
+    },
+  })
+
+  await assert.rejects(
+    createTurnStartRuntime(ports).initialize({ ...BASE_INPUT, authMode: 'local' }),
+    (error) => error?.code === 'SESSION_NOT_FOUND' && error?.status === 404,
+  )
+  assert.deepEqual(calls, [
+    'session:read',
+    'session:occupied',
+    'model:resolve',
+    'session:claim',
+  ])
+  assert.equal(emitterFactory.emitters.length, 0)
+})
+
+test('local legacy session claim completes before turn event lookup and persistence', async () => {
+  const calls = []
+  const claimedSession = { id: 'session-1', userId: 'user-1' }
+  const { ports } = createPorts({
+    calls,
+    ports: {
+      readSession: async () => {
+        calls.push('session:read')
+        return claimedSession
+      },
+      sessionIdOccupied: async () => {
+        calls.push('session:occupied')
+        return true
+      },
+      resolveModelBinding: async () => {
+        calls.push('model:resolve')
+        return {
+          modelName: 'model-1',
+          modelProviderId: 'provider-1',
+          modelConfigRevision: 7,
+          env: { MODEL_NAME: 'model-1' },
+        }
+      },
+      claimLegacySession: async () => {
+        calls.push('session:claim')
+        return claimedSession
+      },
+      lastEvent: async () => {
+        calls.push('event:read')
+        return null
+      },
+      readMessages: async () => {
+        calls.push('messages:read')
+        return []
+      },
+      commitTurnStart: async () => calls.push('aggregate:commit'),
+    },
+  })
+  let firstRead = true
+  ports.readSession = async () => {
+    calls.push('session:read')
+    if (firstRead) {
+      firstRead = false
+      return null
+    }
+    return claimedSession
+  }
+
+  const result = await createTurnStartRuntime(ports).initialize({
+    ...BASE_INPUT,
+    authMode: 'local',
+  })
+
+  assert.deepEqual(calls, [
+    'session:read',
+    'session:occupied',
+    'model:resolve',
+    'session:claim',
+    'event:read',
+    'messages:read',
+    'emit:turn.started',
+    'aggregate:commit',
+    'session:read',
+  ])
+  await result.emitter.close()
+})
+
 test('turn start commits the complete atomic aggregate before returning execution context', async () => {
   const calls = []
   let session = null

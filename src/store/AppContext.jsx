@@ -181,7 +181,7 @@ export function AppProvider({ children }) {
   }, [hydrated, state.user, state.isLoggedIn, state.sessions, state.activeSessionId, state.tasks, state.history, state.permissions, state.theme, state.accentColor, state.strongAccent, state.fontSize, state.density, state.animationsEnabled, state.inputHistoryNavigationEnabled, state.skillConfigs, state.toolsConfigSchemaVersion, state.toolsConfig, state.agentMode, state.sessionDrafts])
 
   return (
-    <AppContext.Provider value={{ state, dispatch: contextDispatch }}>
+    <AppContext.Provider value={{ state, dispatch: contextDispatch, refreshAuth }}>
       {hydrated && state.authReady ? children : null}
     </AppContext.Provider>
   )

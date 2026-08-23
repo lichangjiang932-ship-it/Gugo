@@ -5,11 +5,7 @@ import {
   TOOL_LOOP_ADAPTER_CONTRACT_VERSION_V3,
   prepareToolLoopAdapter,
 } from '../core/toolLoopAdapter.js'
-import { LOOP_EVENT_NAMES } from '../services/loop/eventNames.js'
-import { CONNECTOR_TOOL_NAMES } from '../services/connectorTools.js'
-import { assertHostManagedArtifactToolNotReplaced } from '../services/artifactHarnessBoundary.js'
 import { ENDPOINT_KINDS } from '../utils/endpointProfile.js'
-import { getBuiltinSpec } from '../utils/toolSchemaCatalog.js'
 import { createPluginContext } from './pluginContext.js'
 import { createPluginConfigResolver } from './pluginConfig.js'
 import {
@@ -18,18 +14,9 @@ import {
   POLICY_ADAPTER_CONTRACT_VERSION,
 } from './pluginHostContract.js'
 import { snapshotPluginAuditEntry } from './pluginContextData.js'
-import {
-  snapshotContributionDefinition,
-  snapshotOptionalContributionDefinition,
-} from './pluginContributionDefinition.js'
-import { createRuntimePluginEventListener } from './pluginEventInvocation.js'
+import { snapshotOptionalContributionDefinition } from './pluginContributionDefinition.js'
 import { snapshotRuntimeModelProvider } from './pluginModelProvider.js'
 import { snapshotRuntimePluginHttpCapability } from './pluginHttpCapability.js'
-import {
-  createRuntimePluginPromptRenderer,
-  snapshotRuntimePluginPromptScope,
-} from './pluginPromptInvocation.js'
-import { createRuntimePluginToolExecutor } from './pluginToolInvocation.js'
 import {
   createEffectTracker,
   normalizeRuntimePluginManifest,
@@ -48,46 +35,19 @@ import { createRuntimePluginCallbackRuntime } from './runtimePluginCallbackRunti
 import { createRuntimePluginConfigReloadController } from './runtimePluginConfigReloadController.js'
 import { createRuntimePluginContributionCoordinator } from './runtimePluginContributionCoordinator.js'
 import { assertNoRuntimePluginDependents } from './runtimePluginDependencyGuard.js'
-import { createRuntimePluginEventBindings } from './runtimePluginEventBindings.js'
+import { createRuntimePluginEventRegistry } from './runtimePluginEventRegistry.js'
 import { createRuntimePluginServiceRegistry } from './runtimePluginServiceRegistry.js'
-import { snapshotPluginToolSpec } from './runtimePluginToolSpec.js'
+import { createRuntimePluginPromptRegistry } from './runtimePluginPromptRegistry.js'
+import { createRuntimePluginToolRegistry } from './runtimePluginToolRegistry.js'
 
-const LOOP_EVENT_NAME_SET = new Set(LOOP_EVENT_NAMES)
-const CONNECTOR_TOOL_NAME_SET = new Set(CONNECTOR_TOOL_NAMES)
 const PLUGIN_MODEL_PROVIDER_KIND_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const PLUGIN_CAPABILITY_ID_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/
 const BUILTIN_POLICY_CAPABILITY_ID = 'builtin.harness-policy'
 const RESERVED_MODEL_PROVIDER_KIND_SET = new Set(ENDPOINT_KINDS)
-const PLUGIN_PROMPT_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
-const MAX_PLUGIN_PROMPT_BLOCKS = 16
-const MAX_PLUGIN_PROMPT_TOTAL_BYTES = 64 * 1024
 const MAX_CONFIG_RELOAD_AUDIT_EVENTS = 256
-const PLUGIN_TOOL_RISK_METADATA = Object.freeze({
-  riskClass: 'external',
-  category: 'external',
-  riskLevel: 'high',
-  requiredApproval: true,
-  requiresApproval: true,
-  isReadOnly: false,
-  readOnly: false,
-  isConcurrencySafe: false,
-  isIdempotent: false,
-  interruptBehavior: 'block',
-  isDestructive: true,
-  source: 'fallback',
-  reason: 'Runtime plugin tools require explicit host approval.',
-})
 
 function trimmedString(value) {
   return typeof value === 'string' ? value.trim() : ''
-}
-
-function reservedToolOwner(name) {
-  if (getBuiltinSpec(name)) return 'builtin'
-  if (CONNECTOR_TOOL_NAME_SET.has(name)) return 'connector'
-  if (name.startsWith('mcp__')) return 'MCP'
-  if (name.startsWith('browser_')) return 'browser'
-  return null
 }
 
 export function createRuntimePluginRegistry(options = {}) {
@@ -116,7 +76,6 @@ export function createRuntimePluginRegistry(options = {}) {
     layerSources: configLayerSources,
   })
   const plugins = new Map()
-  const promptContributions = new Map()
   const stagingRecords = new Set()
   const configReloads = new Set()
   const configReloadAudit = []
@@ -132,26 +91,9 @@ export function createRuntimePluginRegistry(options = {}) {
     waitForCallbacksToDrain,
   } = createRuntimePluginCallbackRuntime(registryToken)
   let installSequence = 0
-  let promptSequence = 0
   let configLayerSourcesSealed = false
   let shuttingDown = false
   let shutdownPromise = null
-
-  const {
-    activateContribution: activateEventContribution,
-    bindLoopEvents,
-    createContributionHandle: createEventContributionHandle,
-    detachAllBindings: detachLoopEventBindings,
-  } = createRuntimePluginEventBindings({
-    listActiveContributions: () => {
-      const contributions = []
-      for (const record of plugins.values()) {
-        if (record.state !== 'active') continue
-        contributions.push(...record.eventContributions)
-      }
-      return contributions
-    },
-  })
 
   const initializeConfigLayerSources = (nextLayerSources) => {
     if (configLayerSourcesSealed) {
@@ -210,39 +152,39 @@ export function createRuntimePluginRegistry(options = {}) {
     revokeVisibleEffects,
   } = createRuntimePluginContributionCoordinator({ invokePluginCleanup })
 
-  const registerEventContribution = (record, event, listener) => {
-    assertPluginWritable(record)
-    if (!LOOP_EVENT_NAME_SET.has(event)) {
-      throw new TypeError(`Unknown loop event: ${typeof event === 'string' ? event : '(invalid)'}`)
-    }
-    if (typeof listener !== 'function') {
-      throw new TypeError('plugin event listener must be a function')
-    }
-    assertContributionDeclared(record, `event:${event}`)
-    const contribution = {
-      pluginId: record.manifest.id,
-      event,
-      listener: createRuntimePluginEventListener({
-        record,
-        event,
-        listener,
-        invoke: invokePluginCallback,
-      }),
-    }
-    record.eventContributions.add(contribution)
-    const disposeAttachments = createEventContributionHandle(contribution)
-    const attachmentParts = () => [
-      { id: `event:${event}:bindings`, handle: disposeAttachments },
-    ]
-    return createManagedContribution(record, {
-      activate() {
-        return activateEventContribution(contribution)
-      },
-      parts: attachmentParts,
-      activationFailureParts: attachmentParts,
-      onDispose: () => record.eventContributions.delete(contribution),
-    })
-  }
+  const {
+    registerEventContribution,
+    bindLoopEvents,
+    detachLoopEventBindings,
+  } = createRuntimePluginEventRegistry({
+    listActiveRecords: () => plugins.values(),
+    assertPluginWritable,
+    assertContributionDeclared,
+    createManagedContribution,
+    invokePluginCallback,
+    emitAudit,
+  })
+
+  const {
+    registerPromptContribution,
+    renderPromptBlocks,
+  } = createRuntimePluginPromptRegistry({
+    assertPluginWritable,
+    assertContributionDeclared,
+    createManagedContribution,
+    invokePluginCallbackSync,
+    emitAudit,
+  })
+
+  const { registerToolContribution } = createRuntimePluginToolRegistry({
+    assertPluginWritable,
+    assertContributionDeclared,
+    createManagedContribution,
+    invokePluginCallback,
+    registerTool,
+    registerRuntimeCapability,
+    supportsRuntimeCapabilityReplacement,
+  })
 
   const {
     hasService,
@@ -259,233 +201,6 @@ export function createRuntimePluginRegistry(options = {}) {
       plugins.get(record.manifest.id) === record || stagingRecords.has(record)
     ),
   })
-
-  const registerPromptContribution = (record, definition) => {
-    assertPluginWritable(record)
-    const snapshot = snapshotContributionDefinition(
-      definition,
-      'plugin prompt definition',
-      ['id', 'render'],
-    )
-    const id = trimmedString(snapshot.id)
-    if (!PLUGIN_PROMPT_ID_RE.test(id)) {
-      throw new TypeError('plugin prompt id must match [a-z0-9][a-z0-9._-]{0,63}')
-    }
-    assertContributionDeclared(record, `prompt:${id}`)
-    const existing = promptContributions.get(id)
-    if (existing && !(record.deferVisibility && existing.pluginId === record.manifest.id)) {
-      throw new Error(`plugin prompt already registered: ${id}`)
-    }
-    const render = snapshot.render
-    if (typeof render !== 'function') {
-      throw new TypeError('plugin prompt render must be a function')
-    }
-    const contribution = {
-      id,
-      pluginId: record.manifest.id,
-      record,
-      render: createRuntimePluginPromptRenderer({
-        record,
-        id,
-        render,
-        invokeSync: invokePluginCallbackSync,
-      }),
-      sequence: ++promptSequence,
-    }
-    return createManagedContribution(record, {
-      activate() {
-        if (promptContributions.has(id)) throw new Error(`plugin prompt already registered: ${id}`)
-        promptContributions.set(id, contribution)
-        return contribution
-      },
-      deactivate() {
-        if (promptContributions.get(id) !== contribution) return false
-        return promptContributions.delete(id)
-      },
-    })
-  }
-
-  const promptRenderError = (code, message) => {
-    const error = new TypeError(message)
-    error.code = code
-    error.retryable = false
-    return error
-  }
-
-  const renderPromptBlocks = (input = {}) => {
-    const scope = snapshotRuntimePluginPromptScope(input)
-    const blocks = []
-    const errors = []
-    let totalBytes = 0
-    const ordered = [...promptContributions.values()].sort((a, b) => a.sequence - b.sequence)
-    for (const contribution of ordered) {
-      if (contribution.record.state !== 'active') continue
-      try {
-        if (blocks.length >= MAX_PLUGIN_PROMPT_BLOCKS) {
-          throw promptRenderError(
-            'PLUGIN_PROMPT_BLOCK_LIMIT',
-            `runtime prompt block limit exceeded at ${contribution.id}`,
-          )
-        }
-        const rendered = contribution.render(scope)
-        if (rendered == null) continue
-        if (totalBytes + rendered.bytes > MAX_PLUGIN_PROMPT_TOTAL_BYTES) {
-          throw promptRenderError('PLUGIN_PROMPT_TOTAL_TOO_LARGE', 'runtime prompt blocks exceed 64 KiB')
-        }
-        totalBytes += rendered.bytes
-        blocks.push(Object.freeze({
-          id: contribution.id,
-          pluginId: contribution.pluginId,
-          text: rendered.text,
-        }))
-      } catch (error) {
-        const code = String(error?.code || 'PLUGIN_PROMPT_RENDER_FAILED').slice(0, 80)
-        errors.push(Object.freeze({
-          id: contribution.id,
-          pluginId: contribution.pluginId,
-          code,
-        }))
-        emitAudit('plugin.prompt_failed', {
-          pluginId: contribution.pluginId,
-          promptId: contribution.id,
-          code,
-        })
-      }
-    }
-    return Object.freeze({
-      blocks: Object.freeze(blocks),
-      errors: Object.freeze(errors),
-    })
-  }
-
-  const registerToolContribution = (record, definition) => {
-    assertPluginWritable(record)
-    const snapshot = snapshotContributionDefinition(
-      definition,
-      'plugin tool definition',
-      ['name', 'spec', 'exec'],
-    )
-    const name = trimmedString(snapshot.name)
-    const capabilityOptions = snapshotOptionalContributionDefinition(
-      definition,
-      'plugin tool definition',
-      ['id', 'version', 'revision', 'priority', 'replaces'],
-    )
-    const spec = snapshotPluginToolSpec(snapshot.spec)
-    const specName = trimmedString(spec.function.name)
-    if (!name || name !== specName) {
-      throw new TypeError('plugin tool name must match spec.function.name')
-    }
-    assertContributionDeclared(record, `tool:${name}`)
-    const reservedOwner = reservedToolOwner(name)
-    const builtinCapabilityId = getBuiltinSpec(name) ? `builtin.tool.${name.toLowerCase()}` : null
-    const replaces = capabilityOptions.replaces == null
-      ? null
-      : trimmedString(capabilityOptions.replaces)
-    if (reservedOwner && !builtinCapabilityId) {
-      throw new Error(`plugin tool cannot shadow ${reservedOwner} tool: ${name}`)
-    }
-    assertHostManagedArtifactToolNotReplaced(name, builtinCapabilityId)
-    if (builtinCapabilityId && !supportsRuntimeCapabilityReplacement) {
-      throw new Error(`plugin tool cannot shadow builtin tool: ${name}`)
-    }
-    if (builtinCapabilityId && replaces !== builtinCapabilityId) {
-      const error = new Error(
-        `plugin tool cannot shadow builtin tool: ${name}; declare replaces: ${builtinCapabilityId}`,
-      )
-      error.code = 'PLUGIN_TOOL_REPLACEMENT_REQUIRED'
-      error.retryable = false
-      throw error
-    }
-    if (!builtinCapabilityId && replaces) {
-      const error = new Error(`plugin tool cannot replace a non-builtin capability: ${name}`)
-      error.code = 'PLUGIN_TOOL_REPLACEMENT_INVALID'
-      error.retryable = false
-      throw error
-    }
-    if (replaces && (!Number.isSafeInteger(capabilityOptions.priority) || capabilityOptions.priority <= 0)) {
-      const error = new Error('plugin tool replacement priority must be a positive integer')
-      error.code = 'PLUGIN_TOOL_REPLACEMENT_PRIORITY_INVALID'
-      error.retryable = false
-      throw error
-    }
-    const pluginExec = snapshot.exec
-    if (typeof pluginExec !== 'function') {
-      throw new TypeError('plugin tool exec must be a function')
-    }
-    const registration = {
-      name,
-      spec,
-      exec: createRuntimePluginToolExecutor({
-        record,
-        name,
-        exec: pluginExec,
-        invoke: invokePluginCallback,
-      }),
-      // Runtime plugins are process-level host contributions. A plugin has no
-      // authenticated request identity here, so accepting a caller-supplied
-      // userId would let it forge tenant scope. User-scoped tools must be
-      // registered by an authenticated host integration instead.
-      userId: null,
-      // Trust labels belong to the host, never to plugin-controlled input.
-      origin: 'plugin',
-      source: record.manifest.id,
-      metadata: PLUGIN_TOOL_RISK_METADATA,
-    }
-    const capabilityId = capabilityOptions.id === undefined
-      ? `plugin.${record.manifest.id}.tool.${name.toLowerCase()}`
-      : trimmedString(capabilityOptions.id)
-    if (!PLUGIN_CAPABILITY_ID_RE.test(capabilityId)) {
-      throw new TypeError('plugin tool capability id is invalid')
-    }
-    const capabilityDefinition = Object.freeze({
-      id: capabilityId,
-      type: 'tool',
-      slot: name,
-      owner: record.manifest.id,
-      version: capabilityOptions.version === undefined
-        ? record.manifest.version
-        : capabilityOptions.version,
-      revision: capabilityOptions.revision === undefined
-        ? record.configRevision
-        : capabilityOptions.revision,
-      priority: capabilityOptions.priority === undefined ? 10 : capabilityOptions.priority,
-      replaces,
-      ...(record.manifest.integrity ? { releaseDigest: record.manifest.integrity } : {}),
-      implementation: Object.freeze(registration),
-      healthCheck: () => true,
-    })
-    return createManagedContribution(record, {
-      activate() {
-        const disposers = []
-        try {
-          const disposeCapability = registerRuntimeCapability(capabilityDefinition)
-          if (typeof disposeCapability !== 'function') {
-            throw new TypeError('runtime capability registration must return a disposer')
-          }
-          disposers.push(disposeCapability)
-          const disposeTool = registerTool(registration)
-          if (typeof disposeTool !== 'function') {
-            throw new TypeError('tool registration must return a disposer')
-          }
-          disposers.push(disposeTool)
-        } catch (error) {
-          for (const dispose of disposers.reverse()) {
-            try { dispose() } catch { /* preserve the activation failure */ }
-          }
-          throw error
-        }
-        return Object.freeze({
-          capability: disposers[0],
-          tool: disposers[1],
-        })
-      },
-      parts: (handles) => [
-        { id: `tool:${name}:capability`, handle: handles.capability },
-        { id: `tool:${name}:implementation`, handle: handles.tool },
-      ],
-    })
-  }
 
   const registerModelProviderContribution = (record, kind, adapter, options = undefined) => {
     assertPluginWritable(record)
@@ -562,37 +277,37 @@ export function createRuntimePluginRegistry(options = {}) {
       implementation: wrappedAdapter,
       healthCheck: () => true,
     })
+    let activationFailureHandles = null
+    const lifecycleParts = (handles) => [
+      ...(typeof handles?.capability === 'function'
+        ? [{ id: `provider:${normalizedKind}:capability`, handle: handles.capability }]
+        : []),
+      ...(typeof handles?.provider === 'function'
+        ? [{ id: `provider:${normalizedKind}:implementation`, handle: handles.provider }]
+        : []),
+    ]
     return createManagedContribution(record, {
       activate() {
-        const disposers = []
-        try {
-          const disposeCapability = registerRuntimeCapability(capabilityDefinition)
-          if (typeof disposeCapability !== 'function') {
-            throw new TypeError('runtime capability registration must return a disposer')
-          }
-          disposers.push(disposeCapability)
-          const disposeProvider = registerModelProvider(normalizedKind, wrappedAdapter, {
-            allowBuiltinReplacement: Boolean(builtinCapabilityId),
-          })
-          if (typeof disposeProvider !== 'function') {
-            throw new TypeError('model provider registration must return a disposer')
-          }
-          disposers.push(disposeProvider)
-        } catch (error) {
-          for (const dispose of disposers.reverse()) {
-            try { dispose() } catch { /* preserve the activation failure */ }
-          }
-          throw error
+        const handles = { capability: null, provider: null }
+        activationFailureHandles = handles
+        handles.capability = registerRuntimeCapability(capabilityDefinition)
+        if (typeof handles.capability !== 'function') {
+          throw new TypeError('runtime capability registration must return a disposer')
         }
-        return Object.freeze({
-          capability: disposers[0],
-          provider: disposers[1],
+        handles.provider = registerModelProvider(normalizedKind, wrappedAdapter, {
+          allowBuiltinReplacement: Boolean(builtinCapabilityId),
         })
+        if (typeof handles.provider !== 'function') {
+          throw new TypeError('model provider registration must return a disposer')
+        }
+        activationFailureHandles = null
+        return Object.freeze(handles)
       },
-      parts: (handles) => [
-        { id: `provider:${normalizedKind}:capability`, handle: handles.capability },
-        { id: `provider:${normalizedKind}:implementation`, handle: handles.provider },
-      ],
+      parts: lifecycleParts,
+      // Keep a successful first-stage capability registration under the
+      // managed V2 lifecycle when provider implementation registration fails.
+      // Retained or indeterminate visibility can then be retried on uninstall.
+      activationFailureParts: () => lifecycleParts(activationFailureHandles),
     })
   }
 
@@ -1204,7 +919,11 @@ export function createRuntimePluginRegistry(options = {}) {
           errors.push(error)
         }
       }
-      detachLoopEventBindings()
+      try {
+        await detachLoopEventBindings()
+      } catch (error) {
+        errors.push(error)
+      }
       if (errors.length > 0) throw new AggregateError(errors, 'runtime plugin shutdown failed')
     })().finally(() => {
       shuttingDown = false

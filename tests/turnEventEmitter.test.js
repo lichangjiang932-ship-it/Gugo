@@ -5,6 +5,7 @@ import {
   createTurnEventEmitter,
   findEventPersistenceFailure,
 } from '../server/services/turnEventEmitter.js'
+import { EventWriteBehindError } from '../server/services/eventWriteBehind.js'
 
 function emitterScope(overrides = {}) {
   let nextId = 0
@@ -73,6 +74,120 @@ test('turn event emitter flushes deferred deltas before durable lifecycle events
     emit('turn.progress', { phase: 'late' }),
     (error) => error?.code === 'TURN_EVENT_EMITTER_CLOSED',
   )
+})
+
+test('turn event emitter rejects legacy non-throwing durability failures and reuses the missing sequence', async () => {
+  const durable = []
+  const pending = []
+  let failedEvents = 0
+  const writer = {
+    enqueue(entry) {
+      pending.push(entry)
+      return entry
+    },
+    async flush() {
+      if (pending.length > 0) {
+        failedEvents += pending.splice(0).length
+      }
+      return { failedEvents, failedBatches: failedEvents > 0 ? 1 : 0, lastError: 'legacy write failed' }
+    },
+    getStats() {
+      return { failedEvents, failedBatches: failedEvents > 0 ? 1 : 0 }
+    },
+  }
+  const emit = createTurnEventEmitter(emitterScope({
+    createEventWriteBehind: () => writer,
+    appendEvent: async (entry) => {
+      durable.push(entry.event)
+      return entry.event
+    },
+  }))
+
+  await emit('assistant.delta', { text: 'not durable' })
+  const failure = await emit('turn.completed', { text: 'must not complete' }).catch((error) => error)
+  assert.equal(failure.code, 'TURN_EVENT_PERSISTENCE_FAILED')
+  assert.equal(failure.firstFailedSequence, 3)
+  assert.deepEqual(durable, [])
+
+  const failed = await emit('turn.failed', {
+    code: failure.code,
+    message: failure.message,
+  })
+  assert.equal(failed.sequence, 3)
+  assert.equal(failed.type, 'turn.failed')
+  assert.deepEqual(durable.map((event) => event.type), ['turn.failed'])
+})
+
+test('turn event emitter reuses the missing sequence from a wrapped durability failure', async () => {
+  const durable = []
+  const pending = []
+  let failNextFlush = true
+  const writer = {
+    enqueue(entry) {
+      pending.push(entry)
+      return entry
+    },
+    async flush() {
+      if (!failNextFlush) return { failedEvents: 0, failedBatches: 0 }
+      failNextFlush = false
+      const failure = new EventWriteBehindError({
+        batch: pending.splice(0),
+        cause: new Error('wrapped storage failure'),
+        attempts: 1,
+        failedAt: 1_000,
+      })
+      throw new Error('adapter boundary failed', { cause: failure })
+    },
+  }
+  const emit = createTurnEventEmitter(emitterScope({
+    createEventWriteBehind: () => writer,
+    appendEvent: async ({ event }) => {
+      durable.push(event)
+      return event
+    },
+  }))
+
+  await emit('assistant.delta', { text: 'not durable' })
+  const failure = await emit('turn.completed', { text: 'must not complete' }).catch((error) => error)
+  assert.equal(findEventPersistenceFailure(failure)?.firstFailedSequence, 3)
+
+  const failed = await emit('turn.failed', { code: failure.code, message: failure.message })
+  assert.equal(failed.sequence, 3)
+  assert.deepEqual(durable.map((event) => event.type), ['turn.failed'])
+})
+
+test('turn event emitter normalizes a custom writer rejection and keeps the log contiguous', async () => {
+  const durable = []
+  const pending = []
+  let failNextFlush = true
+  const writer = {
+    enqueue(entry) {
+      pending.push(entry)
+      return entry
+    },
+    async flush() {
+      if (!failNextFlush) return { ok: true }
+      failNextFlush = false
+      pending.splice(0)
+      throw new Error('custom writer lost deferred batch')
+    },
+  }
+  const emit = createTurnEventEmitter(emitterScope({
+    createEventWriteBehind: () => writer,
+    appendEvent: async ({ event }) => {
+      durable.push(event)
+      return event
+    },
+  }))
+
+  await emit('assistant.delta', { text: 'not durable' })
+  const failure = await emit('turn.completed', { text: 'must not complete' }).catch((error) => error)
+  assert.equal(failure.code, 'TURN_EVENT_PERSISTENCE_FAILED')
+  assert.equal(failure.firstFailedSequence, 3)
+
+  const failed = await emit('turn.failed', { code: failure.code, message: failure.message })
+  assert.equal(failed.sequence, 3)
+  assert.deepEqual(durable.map((event) => event.type), ['turn.failed'])
 })
 
 test('turn event emitter journals direct failures and distinguishes unknown terminal outcomes', async () => {

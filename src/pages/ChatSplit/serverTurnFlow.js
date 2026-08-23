@@ -186,9 +186,11 @@ export async function runServerChatTurn({
   historyMessages,
   intentMode,
   localPathAccess,
+  modelConfigRevision,
   modelName,
   modelProviderId,
   modelMode = 'agent',
+  onTurnAccepted,
   probeLocalPathAccess,
   requestServerToolApproval,
   resolveToolApprovalForOwner,
@@ -212,6 +214,9 @@ export async function runServerChatTurn({
   const serverArtifacts = []
   let currentAssistantText = ''
   let executionStarted = false
+  let uiCommitted = false
+  const pendingTurnEvents = []
+  const pendingTurnActivities = []
   const initialArtifactType = artifactTypeForSkill(skillId)
   const { assistantId: assistantMessageId } = buildServerTurnMessageIds(turnId)
   const messageTarget = { sessionId, messageId: assistantMessageId }
@@ -227,29 +232,54 @@ export async function runServerChatTurn({
     turnActivityDispatcher.flush()
     resolveToolApprovalForOwner(owner, { approved: false })
   }, { once: true })
-  dispatch({
-    type: 'ADD_TASK',
-    payload: { id: taskId, name: taskName, detail: content, status: TASK_STATUS.RUNNING, step: 1, stepLabel: t('chat.serverTurn.submit'), perms: skill?.perms || [] },
-  })
-  dispatch({
-    type: 'RECEIVE_MESSAGE',
-    payload: {
-      id: assistantMessageId,
-      sessionId,
-      content: '',
-      meta: {
-        skillId,
-        artifactType: initialArtifactType,
-        artifactTitle: initialArtifactType ? taskName : undefined,
-        streaming: true,
-        executionStarted: false,
-        turnStartedAt: startedAt,
-        modelActivity: { kind: 'preparing' },
-        serverTurnId: turnId,
-        serverLastSequence: -1,
+  const commitTurnUi = (turn) => {
+    if (uiCommitted) return
+    uiCommitted = true
+    onTurnAccepted?.(turn)
+    setContextSystemPrompts((current) => ({ ...current, [sessionId || '__draft__']: '' }))
+    dispatch({
+      type: 'ADD_TASK',
+      payload: { id: taskId, name: taskName, detail: content, status: TASK_STATUS.RUNNING, step: 1, stepLabel: t('chat.serverTurn.submit'), perms: skill?.perms || [] },
+    })
+    dispatch({
+      type: 'RECEIVE_MESSAGE',
+      payload: {
+        id: assistantMessageId,
+        sessionId,
+        content: '',
+        meta: {
+          skillId,
+          artifactType: initialArtifactType,
+          artifactTitle: initialArtifactType ? taskName : undefined,
+          streaming: true,
+          executionStarted: false,
+          turnStartedAt: startedAt,
+          modelActivity: { kind: 'preparing' },
+          serverTurnId: turnId,
+          serverLastSequence: -1,
+        },
       },
-    },
-  })
+    })
+  }
+  const handleTurnEvent = async (event) => {
+    if (event.type === 'turn.attempt' && event.payload?.resetStreaming) {
+      currentAssistantText = String(event.payload?.assistantText || '')
+    }
+    else if (event.type === 'assistant.delta' && event.payload?.text) {
+      currentAssistantText += String(event.payload.text)
+    }
+    const dispatchResult = await dispatchTurnEvent(event, {
+      dispatch,
+      taskId,
+      messageTarget,
+      flushToolOutput: turnActivityDispatcher.flush,
+      onApproval: (request) => requestServerToolApproval(request, owner),
+      onArtifact: (artifact) => appendArtifact(artifact, serverArtifacts, dispatchMessage),
+    })
+    if (!dispatchResult?.cursorCommitted) {
+      dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverLastSequence: event.sequence })
+    }
+  }
   try {
     const localPathInstruction = buildLocalPathToolInstruction(
       localPathAccess.paths,
@@ -268,13 +298,12 @@ export async function runServerChatTurn({
       localPathEvidenceInstruction,
       serializeServerTurnContent(userPrompt || content, t),
     ].filter(Boolean).join('\n\n')
-    setContextSystemPrompts((current) => ({ ...current, [sessionId || '__draft__']: '' }))
-
     const { terminal, sessionSnapshot } = await runServerTurn({
       sessionId,
       content: serverContent,
       displayContent,
       attachments: attachmentReferences,
+      modelConfigRevision,
       modelName,
       modelProviderId,
       modelMode,
@@ -287,15 +316,19 @@ export async function runServerChatTurn({
       syncSessionSnapshot: true,
       toolsConfig: buildServerToolsConfig(toolsConfig, localPathAccess, historyMessages),
       signal: controller.signal,
-      onStarted: (turn) => {
+      onStarted: async (turn) => {
+        commitTurnUi(turn)
         executionStarted = true
         dispatchMessage('UPDATE_LAST_MESSAGE_META', {
           executionStarted: true,
           serverTurnId: turn.turnId,
           serverLastSequence: -1,
         })
+        for (const activity of pendingTurnActivities.splice(0)) turnActivityDispatcher.onActivity(activity)
+        for (const event of pendingTurnEvents.splice(0)) await handleTurnEvent(event)
       },
       onConnectionState: ({ status, attempt, maxAttempts }) => {
+        if (!uiCommitted) return
         if (status === 'reconnecting') {
           dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverConnectionState: 'reconnecting', modelActivity: null })
           dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: t('chat.serverTurn.reconnecting', { attempt, max: maxAttempts }) } } })
@@ -307,25 +340,13 @@ export async function runServerChatTurn({
           dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: t('taskCenter.statuses.cancel_requested') } } })
         }
       },
-      onActivity: turnActivityDispatcher.onActivity,
+      onActivity: (activity) => {
+        if (!uiCommitted) pendingTurnActivities.push(activity)
+        else turnActivityDispatcher.onActivity(activity)
+      },
       onEvent: async (event) => {
-        if (event.type === 'turn.attempt' && event.payload?.resetStreaming) {
-          currentAssistantText = String(event.payload?.assistantText || '')
-        }
-        else if (event.type === 'assistant.delta' && event.payload?.text) {
-          currentAssistantText += String(event.payload.text)
-        }
-        const dispatchResult = await dispatchTurnEvent(event, {
-          dispatch,
-          taskId,
-          messageTarget,
-          flushToolOutput: turnActivityDispatcher.flush,
-          onApproval: (request) => requestServerToolApproval(request, owner),
-          onArtifact: (artifact) => appendArtifact(artifact, serverArtifacts, dispatchMessage),
-        })
-        if (!dispatchResult?.cursorCommitted) {
-          dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverLastSequence: event.sequence })
-        }
+        if (!uiCommitted) pendingTurnEvents.push(event)
+        else await handleTurnEvent(event)
       },
     })
     turnActivityDispatcher.flush()
@@ -438,6 +459,7 @@ export async function runServerChatTurn({
     }
   } catch (error) {
     turnActivityDispatcher.flush()
+    if (!uiCommitted) return { failed: true, error, rejectedBeforeStart: true }
     const completedAt = turnEventTimestamp(error?.turnCompletedAt)
     if (isUserStopped(error)) {
       dispatchMessage('APPEND_TO_LAST_MESSAGE', `\n\n${t('chat.serverTurn.stoppedMarker')}`)

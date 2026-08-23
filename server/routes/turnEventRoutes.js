@@ -362,6 +362,7 @@ export async function handleTurnEventRequest(
         displayContent: body.displayContent,
         modelName: body.modelName || null,
         modelProviderId: body.modelProviderId || null,
+        modelConfigRevision: body.modelConfigRevision ?? null,
         modelMode: body.modelMode,
         history: body.history,
         agentId: body.agentId || null,

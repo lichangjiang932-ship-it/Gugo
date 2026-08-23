@@ -90,6 +90,63 @@ function unverifiedCommitError(event, verification) {
   })
 }
 
+function failureCount(value) {
+  const parsed = Number(value?.failedEvents)
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+}
+
+function failureSignal(value) {
+  if (!value || typeof value !== 'object') return null
+  const failedEvents = failureCount(value)
+  const parsedBatches = Number(value.failedBatches)
+  const failedBatches = Number.isInteger(parsedBatches) && parsedBatches >= 0
+    ? parsedBatches
+    : null
+  if (failedEvents === null && failedBatches === null) return null
+  return {
+    hasFailure: (failedEvents || 0) > 0 || (failedBatches || 0) > 0,
+    key: JSON.stringify([
+      failedEvents,
+      failedBatches,
+      value.lastFailureAt ?? null,
+      String(value.lastError || ''),
+    ]),
+  }
+}
+
+function writerStats(writer) {
+  try {
+    return typeof writer?.getStats === 'function' ? writer.getStats() : null
+  } catch {
+    return null
+  }
+}
+
+function reportedBarrierFailure(result, fallbackBatch, now) {
+  const explicitBatch = Array.isArray(result?.failedEntries)
+    ? result.failedEntries
+    : Array.isArray(result?.batch) ? result.batch : null
+  const batch = explicitBatch?.length ? explicitBatch : fallbackBatch
+  const cause = result?.error instanceof Error
+    ? result.error
+    : new Error(String(result?.lastError || 'event writer reported a failed durability barrier'))
+  const existing = findEventPersistenceFailure(cause)
+  if (existing) {
+    if (existing.firstFailedSequence === null
+      && batch.length > 0
+      && typeof existing.include === 'function') {
+      existing.include(batch)
+    }
+    return existing
+  }
+  return new EventWriteBehindError({
+    batch,
+    cause,
+    attempts: Math.max(1, Math.floor(Number(result?.attempts) || 1)),
+    failedAt: now(),
+  })
+}
+
 /**
  * Ordered Session Log writer for one Turn.
  *
@@ -129,6 +186,7 @@ export function createTurnEventEmitter({
   let appendQueue = Promise.resolve()
   let closed = false
   let closePromise = null
+  let deferredSinceBarrier = []
   const eventWriteBehind = createEventWriteBehind()
   if (!eventWriteBehind
     || typeof eventWriteBehind.enqueue !== 'function'
@@ -136,20 +194,94 @@ export function createTurnEventEmitter({
     throw new TypeError('eventWriteBehindFactory must return an event write-behind queue')
   }
   onWriterOpen?.(eventWriteBehind)
+  let observedFailureSignal = failureSignal(writerStats(eventWriteBehind))
+
+  const journalReportedFailure = async (failure) => {
+    const batch = Array.isArray(failure?.failedEntries) ? failure.failedEntries : []
+    const failedAt = Number.isInteger(failure?.failedAt) ? failure.failedAt : now()
+    let journalError = null
+    try {
+      await recordEventWriteFailure?.({
+        batch,
+        error: failure?.cause || failure,
+        errorMessage: String(failure?.message || failure || 'event append failed').slice(0, 2_000),
+        attempts: Math.max(1, Math.floor(Number(failure?.attempts) || 1)),
+        failedAt,
+      })
+    } catch (error) {
+      journalError = error
+      try {
+        warn?.('turn.event.failure_journal', error, { userId, sessionId, turnId })
+      } catch { /* diagnostic journal remains best-effort */ }
+    }
+    if (!journalError) return
+    try {
+      await recordEmergencyFailure?.({
+        batch,
+        error: failure?.cause || failure,
+        errorMessage: String(failure?.message || failure || 'event append failed').slice(0, 2_000),
+        attempts: Math.max(1, Math.floor(Number(failure?.attempts) || 1)),
+        failedAt,
+        journalError,
+      })
+    } catch (error) {
+      try {
+        warn?.('turn.event.emergency_failure_journal', error, { userId, sessionId, turnId })
+      } catch { /* no further durable fallback is available */ }
+    }
+  }
 
   const drainWriter = async (method = 'flush') => {
     try {
-      return await eventWriteBehind[method]()
+      const result = await eventWriteBehind[method]()
+      const resultSignal = failureSignal(result)
+      const statsSignal = failureSignal(writerStats(eventWriteBehind))
+      // A writer that exposes getStats() owns the canonical counter shape.
+      // Mixing its reduced snapshot with a richer flush result (for example a
+      // lastError field) would make the same historical failure look new at
+      // every later barrier.
+      const currentFailureSignal = statsSignal || resultSignal
+      const failureAdvanced = currentFailureSignal?.hasFailure === true
+        && currentFailureSignal.key !== observedFailureSignal?.key
+      observedFailureSignal = currentFailureSignal || observedFailureSignal
+      const deferredBatch = deferredSinceBarrier
+      deferredSinceBarrier = []
+      if (result?.ok === false || failureAdvanced) {
+        const failure = reportedBarrierFailure(result, deferredBatch, now)
+        await journalReportedFailure(failure)
+        throw failure
+      }
+      return result
     } catch (error) {
-      const firstFailedSequence = Number(error?.firstFailedSequence)
-      if (String(error?.code || '').trim().toUpperCase() === TURN_EVENT_PERSISTENCE_FAILURE_CODE
+      observedFailureSignal = failureSignal(writerStats(eventWriteBehind)) || observedFailureSignal
+      const deferredBatch = deferredSinceBarrier
+      deferredSinceBarrier = []
+      let persistenceFailure = findEventPersistenceFailure(error)
+      if (!persistenceFailure) {
+        // Custom writer implementations are allowed at this seam and do not
+        // necessarily throw EventWriteBehindError themselves. Normalize every
+        // rejected durability barrier so callers cannot continue with a raw
+        // error, skip the missing sequence, and append a contradictory later
+        // terminal event.
+        persistenceFailure = reportedBarrierFailure({ error }, deferredBatch, now)
+        await journalReportedFailure(persistenceFailure)
+      }
+      if (persistenceFailure
+        && persistenceFailure.firstFailedSequence === null
+        && deferredBatch.length > 0
+        && typeof persistenceFailure.include === 'function') {
+        persistenceFailure.include(deferredBatch)
+      }
+      const sequenceFailure = persistenceFailure
+      const firstFailedSequence = Number(sequenceFailure?.firstFailedSequence)
+      if (String(sequenceFailure?.code || '').trim().toUpperCase() === TURN_EVENT_PERSISTENCE_FAILURE_CODE
         && Number.isInteger(firstFailedSequence)
         && firstFailedSequence >= 0) {
         // The queued event was never durable. Reuse its sequence for the
         // structured failed terminal so the log remains contiguous.
         nextSequence = Math.min(nextSequence, firstFailedSequence)
       }
-      throw error
+      throw persistenceFailure
     }
   }
 
@@ -178,7 +310,9 @@ export function createTurnEventEmitter({
       await beforeAppend?.(event)
       let stored
       if (DEFERRED_EVENT_TYPES.has(type) && checkpointState === null && !commitEvent) {
-        const queued = eventWriteBehind.enqueue({ userId, event, checkpointState })
+        const entry = { userId, event, checkpointState }
+        const queued = eventWriteBehind.enqueue(entry)
+        deferredSinceBarrier.push(queued?.event ? queued : entry)
         stored = queued?.event || event
       } else {
         await drainWriter('flush')

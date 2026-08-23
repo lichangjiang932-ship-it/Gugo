@@ -50,6 +50,7 @@ export default function useChatRuntimeCatalog({ lang, skillConfigs, t }) {
   }, [lang, presentedRuntimeSkills, promptTemplates, skillConfigs, t])
 
   const reloadModels = useCallback(() => {
+    setModelCatalogState(INITIAL_MODEL_CATALOG_STATE)
     setModelCatalogRevision((revision) => revision + 1)
   }, [])
 
@@ -71,6 +72,10 @@ export default function useChatRuntimeCatalog({ lang, skillConfigs, t }) {
         setModelOptions(models)
         setModelCatalogState(modelCatalogStateFromStatus(status, models))
         setSelectedModelSelection((current) => {
+          if (current.modelName && !models.some((model) => (
+            String(model?.name || '').trim() === current.modelName
+            && (!current.providerId || String(model?.provider || '').trim() === current.providerId)
+          ))) return current
           const selected = resolveInitialModelSelection(
             models,
             current.modelName ? current : readStoredModelSelection(),

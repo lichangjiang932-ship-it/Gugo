@@ -32,11 +32,23 @@ export function normalizeSkillDefinitions(skillDefinitions, skillIds = []) {
     .slice(0, limits.maxDefinitions)
 }
 
+function normalizeModelConfigRevision(value) {
+  if (value === null || value === undefined) return null
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    const error = new Error('modelConfigRevision must be a positive safe integer')
+    error.code = 'MODEL_CONFIG_REVISION_INVALID'
+    error.status = 400
+    throw error
+  }
+  return value
+}
+
 export async function startServerTurn({
   sessionId,
   content,
   displayContent,
   attachments,
+  modelConfigRevision,
   modelName,
   modelProviderId,
   modelMode = 'agent',
@@ -52,6 +64,7 @@ export async function startServerTurn({
 }) {
   const normalizedAgentId = typeof agentId === 'string' ? agentId.trim() || null : null
   const normalizedSkillIds = normalizeContextIds(skillIds)
+  const normalizedModelConfigRevision = normalizeModelConfigRevision(modelConfigRevision)
   const response = await fetchImpl('/api/turns/run', {
     method: 'POST',
     headers: headers(true),
@@ -62,6 +75,9 @@ export async function startServerTurn({
       attachments: Array.isArray(attachments) ? attachments : [],
       modelName,
       ...(modelProviderId ? { modelProviderId } : {}),
+      ...(normalizedModelConfigRevision === null
+        ? {}
+        : { modelConfigRevision: normalizedModelConfigRevision }),
       modelMode: modelMode === 'chat_only' ? 'chat_only' : 'agent',
       turnId,
       history,

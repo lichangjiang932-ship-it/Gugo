@@ -76,6 +76,13 @@ export default function ModelPicker({
     error: 'chat.modelPicker.loadErrorDetail',
     empty: 'chat.modelPicker.configuredEmptyDetail',
   }[readiness.kind]
+  const stateTitleKey = {
+    loading: 'chat.modelPicker.loading',
+    unconfigured: 'chat.modelPicker.unconfigured',
+    error: 'chat.modelPicker.loadError',
+    empty: 'chat.modelPicker.configuredEmpty',
+  }[readiness.kind]
+  const showStateManagementAction = ['unconfigured', 'error', 'empty'].includes(readiness.kind)
 
   useEffect(() => {
     if (!open) return undefined
@@ -176,17 +183,38 @@ export default function ModelPicker({
             className="max-h-72 overflow-y-auto p-1.5"
           >
             {catalogUnavailable ? (
-              <div className="px-3 py-4 text-center text-xs text-ink-fade" data-testid={`model-picker-state-${readiness.kind}`}>
-                <p>{t(stateMessageKey || 'chat.modelPicker.empty')}</p>
-                {(readiness.kind === 'error' || readiness.kind === 'empty') && (
-                  <button
-                    type="button"
-                    onClick={onRetry}
-                    className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-control border border-ink-fade/50 px-3 font-medium text-ink-soft hover:border-ink-fade hover:text-ink"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-                    {t('chat.modelPicker.retry')}
-                  </button>
+              <div
+                className="m-1.5 rounded-card border border-amber-400/50 bg-amber-50/70 px-3 py-3 text-xs text-ink"
+                data-testid={`model-picker-state-${readiness.kind}`}
+                data-model-readiness-kind={readiness.kind}
+                {...(readiness.kind === 'loading' ? { role: 'status' } : { role: 'alert' })}
+              >
+                <strong className="block text-sm">{t(stateTitleKey || 'chat.modelPicker.empty')}</strong>
+                <p className="mt-1 leading-5 text-ink-soft">{t(stateMessageKey || 'chat.modelPicker.empty')}</p>
+                {showStateManagementAction && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      data-testid="model-picker-manage"
+                      onClick={() => {
+                        onClose?.()
+                        onManage?.()
+                      }}
+                      className="inline-flex h-8 items-center rounded-control border border-amber-600/30 bg-paper px-3 font-semibold text-amber-800 transition-colors hover:border-amber-600/50 hover:bg-amber-500/10"
+                    >
+                      {t('chat.modelPicker.manage')}
+                    </button>
+                    {(readiness.kind === 'error' || readiness.kind === 'empty') && (
+                      <button
+                        type="button"
+                        onClick={onRetry}
+                        className="inline-flex h-8 items-center gap-1.5 rounded-control border border-ink-fade/50 bg-paper px-3 font-medium text-ink-soft hover:border-ink-fade hover:text-ink"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                        {t('chat.modelPicker.retry')}
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             ) : modelOptions.length === 0 ? (
@@ -250,17 +278,19 @@ export default function ModelPicker({
               )
             })}
           </div>
-          <button
-            type="button"
-            data-testid="model-picker-manage"
-            onClick={() => {
-              onClose?.()
-              onManage?.()
-            }}
-            className="w-full border-t border-ink-fade/30 px-3 py-2.5 text-left text-xs text-ink-soft hover:bg-ink-ghost hover:text-ink"
-          >
-            {t('chat.modelPicker.manage')}
-          </button>
+          {!showStateManagementAction && (
+            <button
+              type="button"
+              data-testid="model-picker-manage"
+              onClick={() => {
+                onClose?.()
+                onManage?.()
+              }}
+              className="w-full border-t border-ink-fade/30 px-3 py-2.5 text-left text-xs text-ink-soft hover:bg-ink-ghost hover:text-ink"
+            >
+              {t('chat.modelPicker.manage')}
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -95,7 +95,7 @@ target kernel:
 | `server/adapters/modelProxy.js` | Small background/streaming model facade and legacy HTTP compatibility shell; endpoint, diagnostics, identity/outcome, request building/preparation, transport, error presentation, and SSE/non-stream response coordination are extracted | Treat remaining work as compatibility-boundary debt; do not move Provider or response policy back into it |
 | `server/services/artifactGen.js` | Artifact generation compatibility facade; storage, delivery, PPTX/DOCX/XLSX encoding, shared prepared-image validation, and atomic generated-file publication are extracted, while local-file publication plus HTML/PDF orchestration stay here | Continue splitting HTML/PDF generation and local-file publication without moving authorization, validation, persistence, publication, or final receipts out of the host |
 | `server/services/jobRuntime.js` | Job planning, recovery, policy, scheduling, and loop hosting | Keep extracting independent services and capability providers |
-| `server/plugins/runtimePluginRegistry.js` | Inventory, installation, capability wiring, config, and release control; contribution activation, rollback, revocation, and retirement are delegated to `runtimePluginContributionCoordinator.js` | Finish splitting inventory/loading from activation/execution and keep contribution transactions behind the coordinator |
+| `server/plugins/runtimePluginRegistry.js` | Inventory, installation, capability wiring, config, and release control; contribution transactions plus Prompt, Tool, and Loop-hook hosting are delegated to dedicated coordinators/registries | Finish splitting inventory/loading from activation/execution, add a separate read-only versioned Agent Event consumer seam, and keep contribution transactions behind the coordinator |
 | `server/db.js` | Database bootstrap and legacy compatibility | Keep migrations separate; move large-text facts behind a storage adapter |
 | Managed attachment HTTP/governance, artifacts, verified-file projections, and data governance | Turn validation and model materialization now cross `ManagedAttachmentRuntimePort v1`; routes, upload/deletion governance, and the atomic SQLite turn-start binding still assume host-owned identities or file layouts | Move the remaining aggregate operations behind backend-neutral governance/storage capabilities without weakening ownership checks or splitting the existing atomic turn-start commit |
 
@@ -132,6 +132,19 @@ above that threshold is transition debt, not permission to add another concern.
   are rejected before publication.
 - SSE, WebSocket, audit, and plugins consume normalized Agent Events; they must
   not invent a second lifecycle vocabulary for the same fact.
+- Runtime plugin Prompt, Tool, and process-local Loop-hook contributions are
+  hosted by `runtimePluginPromptRegistry.js`, `runtimePluginToolRegistry.js`,
+  and `runtimePluginEventRegistry.js`. Despite its compatibility name, the
+  latter hosts mutable interception/observer hooks such as `request`,
+  `pre-tool`, and `post-tool`; these are not the normalized Agent Events in
+  `shared/turnEvents.js`. The top-level registry composes these hosts but must
+  not regain their validation, ordering, binding, execution, or revocation
+  logic. A plugin-facing Agent Event stream must be a separate, read-only,
+  versioned adapter over the shared vocabulary.
+- `runtimePluginContributionCoordinator.js` is the sole transaction owner for
+  contribution activation, rollback, revocation, and retirement. Leaf
+  registries must never decide plugin record state or discard retained or
+  indeterminate revocation handles.
 - Replacement adapters are complete and versioned. Missing methods fail closed;
   the host never fills a partial third-party implementation with built-ins.
 - The version-6 persistence adapter requires the complete Session, Event

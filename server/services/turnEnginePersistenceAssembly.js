@@ -99,14 +99,41 @@ function createWriterFactory({
   eventWriteBehindFactory,
   recordEmergencyFailure,
 }) {
-  if (typeof eventWriteBehindFactory === 'function') return eventWriteBehindFactory
-  if (eventWriteBehind) return () => eventWriteBehind
-  const defaultBatchAppender = ports.appendEvent === appendTurnEvent
-    ? appendTurnEvents
-    : (entries) => Promise.all(entries.map((entry) => ports.appendEvent(entry)))
+  if (eventWriteBehind !== null && eventWriteBehind !== undefined) {
+    const error = new TypeError(
+      'eventWriteBehind instances cannot be shared across Turns; provide eventWriteBehindFactory',
+    )
+    error.code = 'TURN_EVENT_WRITER_INSTANCE_UNSUPPORTED'
+    error.retryable = false
+    throw error
+  }
+  if (typeof eventWriteBehindFactory === 'function') {
+    const issuedWriters = new WeakSet()
+    return () => {
+      const writer = eventWriteBehindFactory()
+      if ((typeof writer === 'object' && writer !== null) || typeof writer === 'function') {
+        if (issuedWriters.has(writer)) {
+          const error = new Error('eventWriteBehindFactory must return a fresh writer for every Turn')
+          error.code = 'TURN_EVENT_WRITER_REUSED'
+          error.retryable = false
+          throw error
+        }
+        issuedWriters.add(writer)
+      }
+      return writer
+    }
+  }
   const batchAppender = typeof ports.appendEventBatch === 'function'
     ? ports.appendEventBatch
-    : defaultBatchAppender
+    : ports.appendEvent === appendTurnEvent ? appendTurnEvents : null
+  if (!batchAppender) {
+    const error = new TypeError(
+      'custom Turn event persistence requires an atomic appendEventBatch implementation',
+    )
+    error.code = 'TURN_EVENT_BATCH_APPENDER_REQUIRED'
+    error.retryable = false
+    throw error
+  }
   return () => createEventWriteBehind({
     writeBatch: batchAppender,
     writeBatchSync: batchAppender === appendTurnEvents ? appendTurnEvents : null,

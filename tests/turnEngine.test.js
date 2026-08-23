@@ -195,9 +195,19 @@ function createTestEngine(options = {}, { legacyPersistence = false } = {}) {
   const usesLegacyPersistence = legacyPersistence
     || Object.hasOwn(options, 'persistence')
     || TURN_ENGINE_FLAT_PERSISTENCE_OPTIONS.some((key) => Object.hasOwn(options, key))
+  const needsAtomicBatchFixture = Object.hasOwn(options, 'appendEvent')
+    && !Object.hasOwn(options, 'appendEventBatch')
+    && !Object.hasOwn(options, 'eventWriteBehindFactory')
   return new TurnEngine({
     scheduleMemoryExtraction: () => {},
     ...(usesLegacyPersistence ? {} : { persistence: createTestTurnEnginePersistence() }),
+    ...(needsAtomicBatchFixture ? {
+      eventWriteBehindFactory: () => createEventWriteBehind({
+        writeBatch: appendTurnEvents,
+        writeBatchSync: appendTurnEvents,
+        maxDelayMs: 10_000,
+      }),
+    } : {}),
     ...options,
   })
 }
@@ -776,7 +786,7 @@ test('TurnEngine flushes deferred deltas before tools, checkpoints, and terminal
     maxDelayMs: 10_000,
   })
   const engine = createTestEngine({
-    eventWriteBehind: writer,
+    eventWriteBehindFactory: () => writer,
     runLoop: async ({ onModelDelta, onReasoningDelta, onToolStarted, saveCheckpoint }) => {
       await onModelDelta({ text: 'answer', iteration: 0, modelName: 'test' })
       await onReasoningDelta({ text: 'thought', iteration: 0, modelName: 'test' })
@@ -816,7 +826,7 @@ test('TurnEngine fails closed when deferred delta persistence exhausts its retri
     maxDelayMs: 10_000,
   })
   const engine = createTestEngine({
-    eventWriteBehind: writer,
+    eventWriteBehindFactory: () => writer,
     runLoop: async ({ onModelDelta }) => {
       await onModelDelta({ text: 'recoverable stream', iteration: 0, modelName: 'test' })
       return { text: 'durable completion', artifactIds: [], iterations: 0 }
@@ -844,6 +854,49 @@ test('TurnEngine fails closed when deferred delta persistence exhausts its retri
   })
   assert.equal(Number.isInteger(failed.payload.error.persistence.failedAt), true)
   assert.match(failed.payload.message, /任务事件无法可靠保存/)
+  assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId })).status, 'failed')
+})
+
+test('TurnEngine fails closed when a legacy writer reports failure without rejecting flush', async () => {
+  const turnId = 'turn-legacy-write-behind-failure'
+  const pending = []
+  let failedEvents = 0
+  const writer = {
+    enqueue(entry) {
+      pending.push(entry)
+      return entry
+    },
+    async flush() {
+      if (pending.length > 0) failedEvents += pending.splice(0).length
+      return {
+        failedEvents,
+        failedBatches: failedEvents > 0 ? 1 : 0,
+        lastError: 'legacy writer exhausted retries',
+      }
+    },
+    async close() {
+      return this.flush()
+    },
+    getStats() {
+      return { failedEvents, failedBatches: failedEvents > 0 ? 1 : 0 }
+    },
+  }
+  const engine = createTestEngine({
+    eventWriteBehindFactory: () => writer,
+    runLoop: async ({ onModelDelta }) => {
+      await onModelDelta({ text: 'not durable', iteration: 0, modelName: 'test' })
+      return { text: 'must not complete', artifactIds: [], iterations: 0 }
+    },
+  })
+
+  await engine.startTurn({ userId, sessionId: 'turn-engine-session', turnId, content: 'fail closed' })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const turnEvents = events(turnId)
+  assert.equal(turnEvents.some(({ type }) => type === 'turn.completed'), false)
+  assert.deepEqual(turnEvents.map(({ type }) => type), ['turn.started', 'turn.failed'])
+  assert.equal(turnEvents.at(-1)?.payload?.code, 'TURN_EVENT_PERSISTENCE_FAILED')
+  assert.equal(turnEvents.at(-1)?.payload?.error?.persistence?.firstFailedSequence, 1)
   assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId })).status, 'failed')
 })
 
@@ -875,6 +928,38 @@ test('TurnEngine never appends a contradictory failure after a terminal append h
   assert.equal(journals.length, 1)
   assert.equal(journals[0].batch[0].event.type, 'turn.completed')
   assert.equal(journals[0].attempts, 1)
+})
+
+test('TurnEngine never retries a failed terminal whose append acknowledgement was lost', async () => {
+  const turnId = 'turn-failed-terminal-unknown'
+  let failedTerminalAttempts = 0
+  const engine = createTestEngine({
+    appendEvent: async (entry) => {
+      if (entry.event.type === 'turn.failed') failedTerminalAttempts += 1
+      const stored = appendTurnEvent(entry)
+      if (entry.event.type === 'turn.failed') {
+        throw Object.assign(new Error('failed terminal acknowledgement lost'), {
+          code: 'TURN_EVENT_PERSISTENCE_FAILED',
+          firstFailedSequence: entry.event.sequence,
+        })
+      }
+      return stored
+    },
+    recordEventWriteFailure: () => {},
+    runLoop: async () => {
+      throw Object.assign(new Error('injected loop failure'), { code: 'INJECTED_LOOP_FAILURE' })
+    },
+  })
+
+  await engine.startTurn({ userId, sessionId: 'turn-engine-session', turnId, content: 'fail once' })
+  await assert.rejects(
+    engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId }),
+    (error) => error?.code === 'TURN_TERMINAL_PERSISTENCE_FAILED'
+      && error?.terminalEventType === 'turn.failed',
+  )
+
+  assert.equal(failedTerminalAttempts, 1)
+  assert.equal(events(turnId).filter(({ type }) => type === 'turn.failed').length, 1)
 })
 
 test('TurnEngine keeps a durable completion authoritative when its message projection fails', async () => {
@@ -3579,7 +3664,7 @@ test('TurnEngine reports deferred event loss instead of masking it as cancellati
     maxAttempts: 1,
   })
   const engine = createTestEngine({
-    eventWriteBehind: writer,
+    eventWriteBehindFactory: () => writer,
     runLoop: async ({ onModelDelta, signal }) => {
       await onModelDelta({ text: 'not durable', iteration: 0, modelName: 'test' })
       ready()

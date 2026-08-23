@@ -996,6 +996,41 @@ test('runServerTurn takes over a known turn when the initial resume response bod
   assert.equal(urls.some((url) => url.startsWith('/api/turns/t-initial-resume?')), true)
 })
 
+test('runServerTurn does not acknowledge an ambiguous start until the server proves the turn exists', async () => {
+  let runCalls = 0
+  let startedCalls = 0
+  const completed = createTurnEvent({
+    id: 'ambiguous-proof-completed', sessionId: 's-ambiguous-proof', turnId: 't-ambiguous-proof',
+    sequence: 0, type: 'turn.completed', payload: { text: 'confirmed' }, createdAt: 2,
+  })
+  const fetchImpl = async (url) => {
+    if (url === '/api/turns/run') {
+      runCalls += 1
+      if (runCalls === 1) throw new TypeError('initial response was lost')
+      assert.equal(startedCalls, 0, 'an unproven recovery must not emit a client ACK')
+      return response({
+        turn: { sessionId: 's-ambiguous-proof', turnId: 't-ambiguous-proof', status: 'running' },
+      }, 202)
+    }
+    if (String(url).startsWith('/api/turns/events?')) return response({ events: [] })
+    if (String(url).startsWith('/api/turns/t-ambiguous-proof?')) {
+      return response({ error: { code: 'TURN_NOT_FOUND', message: 'turn not found' } }, 404)
+    }
+    if (String(url).startsWith('/api/turns/stream?')) return sseResponse([completed])
+    assert.fail(`unexpected ambiguous recovery request: ${url}`)
+  }
+
+  const result = await runServerTurn({
+    sessionId: 's-ambiguous-proof', turnId: 't-ambiguous-proof', content: 'prove it',
+    fetchImpl, reconnectMaxAttempts: 1, reconnectDelayMs: 0, recoveryPollIntervalMs: 0,
+    onStarted: () => { startedCalls += 1 },
+  })
+
+  assert.equal(result.terminal.id, completed.id)
+  assert.equal(runCalls, 2)
+  assert.equal(startedCalls, 1)
+})
+
 test('runServerTurn waits for a terminal cancellation event after the stop is acknowledged', async () => {
   const urls = []
   const controller = new AbortController()

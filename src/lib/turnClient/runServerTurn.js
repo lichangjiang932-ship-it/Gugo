@@ -33,6 +33,9 @@ const DEFINITELY_REJECTED_INITIAL_REQUEST_CODES = new Set([
   'TURN_ENGINE_HOST_INITIALIZATION_AND_CLEANUP_FAILED',
   'TURN_ENGINE_HOST_CLEANUP_FAILED',
   'MODEL_CONFIG_MISSING',
+  'MODEL_PROVIDER_NOT_FOUND',
+  'MODEL_PROVIDER_DISABLED',
+  'MODEL_PROVIDER_MODEL_INVALID',
   'MODEL_PROVIDER_UNVERIFIED',
   'MODEL_PROVIDER_CHAT_ONLY',
   'MODEL_PROVIDER_UNAVAILABLE',
@@ -110,6 +113,7 @@ export async function runServerTurn({
   content,
   displayContent,
   attachments,
+  modelConfigRevision,
   modelName,
   modelProviderId,
   modelMode = 'agent',
@@ -155,6 +159,7 @@ export async function runServerTurn({
   let recoveryMode = false
   let webSocketDisabled = false
   let initialTurnConfirmed
+  let startedNotified = false
   let resumeWakeRequested = false
   let activeRequestController = null
   let activeWaitController = null
@@ -192,6 +197,22 @@ export async function runServerTurn({
     // Transient activity is best-effort UI state. It never advances the
     // durable replay cursor and is intentionally absent from reconnects.
     await onActivity?.(activity)
+  }
+
+  const acknowledgeStartedTurn = async (turn = null) => {
+    initialTurnConfirmed = true
+    if (startedNotified) return false
+    const acknowledgedTurn = hasTurnIdentity(turn)
+      ? turn
+      : {
+          sessionId,
+          turnId: activeTurnId,
+          status: terminal ? 'completed' : 'running',
+        }
+    activeTurnId = String(acknowledgedTurn.turnId || activeTurnId)
+    startedNotified = true
+    await onStarted?.(acknowledgedTurn)
+    return true
   }
 
   const acceptTerminalFromTurn = async (turn) => {
@@ -358,6 +379,7 @@ export async function runServerTurn({
           content,
           displayContent,
           attachments,
+          modelConfigRevision,
           modelName,
           modelProviderId,
           modelMode,
@@ -436,7 +458,7 @@ export async function runServerTurn({
       turn = observed.turn || {
         sessionId,
         turnId: requestedTurnId,
-        status: terminal ? 'completed' : 'recovering',
+        status: terminal ? 'completed' : initialTurnConfirmed ? 'running' : 'recovering',
       }
       if (!terminal) {
         await notifyConnectionState({
@@ -455,16 +477,22 @@ export async function runServerTurn({
     }
 
     activeTurnId = String(turn?.turnId || requestedTurnId)
-    await onStarted?.(turn)
-    await acceptTerminalWithReplay(turn)
+    if (initialTurnConfirmed) {
+      await acknowledgeStartedTurn(turn)
+      await acceptTerminalWithReplay(turn)
+    }
 
     while (!terminal) {
       if (cancelRequested && !cancelAcknowledged) {
         const cancellation = await tryAcknowledgeCancellation()
         let cancelCause = cancellation.error
+        if (cancellation.turn) await acknowledgeStartedTurn(cancellation.turn)
         if (terminal) continue
         if (!cancelAcknowledged) {
           const observed = await observePersistedTurn(cancelCause)
+          if (terminal || observed.turn || observed.delivered > 0) {
+            await acknowledgeStartedTurn(observed.turn)
+          }
           if (terminal) continue
           cancelCause = observed.cause || cancelCause
           const delayMs = reconnectDelayForAttempt(
@@ -486,21 +514,22 @@ export async function runServerTurn({
 
       if (recoveryMode) {
         const observed = await observePersistedTurn()
+        if (terminal || observed.turn || observed.delivered > 0) {
+          await acknowledgeStartedTurn(observed.turn)
+        }
         if (terminal) continue
         if (observed.delivered === 0 && isTurnEventSequenceGapError(observed.cause)) {
           throw observed.cause
         }
-        if (observed.turn || observed.delivered > 0) initialTurnConfirmed = true
-
         if (!cancelRequested && !initialTurnConfirmed) {
           try {
             const retriedTurn = await withRequestSignal(issueInitialRequest)
             if (!hasTurnIdentity(retriedTurn)) throw incompleteInitialTurnError(requestedTurnId)
-            initialTurnConfirmed = true
+            await acknowledgeStartedTurn(retriedTurn)
             await acceptTerminalWithReplay(retriedTurn)
           } catch (error) {
             if (cancelRequested && error?.name === 'AbortError') continue
-            if (confirmsExistingTurn(error)) initialTurnConfirmed = true
+            if (confirmsExistingTurn(error)) await acknowledgeStartedTurn()
             else if (!isAmbiguousInitialRequestError(error)) throw error
             observed.cause = error
           }
@@ -580,6 +609,9 @@ export async function runServerTurn({
         if (cancelRequested && error?.name === 'AbortError') continue
         if (requiresRuntimeRestart(error)) throw error
         const observed = await observePersistedTurn(error)
+        if (terminal || observed.turn || observed.delivered > 0) {
+          await acknowledgeStartedTurn(observed.turn)
+        }
         if (terminal) continue
         if (observed.delivered === 0 && isTurnEventSequenceGapError(observed.cause)) {
           throw observed.cause

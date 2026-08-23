@@ -207,11 +207,13 @@ export function createRuntimePluginConfigReloadController({
 
         if (activationFailure) {
           candidate.state = 'failed'
-          oldRecord.state = 'active'
+          oldRecord.state = 'restoring'
           try {
             await activateManagedContributions(oldRecord)
+            oldRecord.state = 'active'
           } catch (error) {
             restoreFailure = error
+            oldRecord.state = 'visibility_indeterminate'
           }
         } else {
           const retirementErrors = retireManagedContributions(oldDeactivation)

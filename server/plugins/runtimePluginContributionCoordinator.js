@@ -81,10 +81,13 @@ export function createRuntimePluginContributionCoordinator({ invokePluginCleanup
         } catch (error) {
           if (typeof activationFailureParts === 'function') {
             try {
-              contribution.lifecycle = createRuntimePluginContributionLifecycle(
-                activationFailureParts(contribution.hostValue),
-              )
-              contribution.active = true
+              const recoveryParts = activationFailureParts(contribution.hostValue)
+              if (recoveryParts.length > 0) {
+                contribution.lifecycle = createRuntimePluginContributionLifecycle(recoveryParts)
+                contribution.active = true
+              } else {
+                removeContribution(contribution)
+              }
             } catch (recoveryError) {
               removeContribution(contribution)
               throw new AggregateError(
@@ -224,7 +227,19 @@ export function createRuntimePluginContributionCoordinator({ invokePluginCleanup
     const activated = []
     try {
       for (const contribution of record.managedContributions) {
-        if (contribution.disposed || contribution.active) continue
+        if (contribution.disposed) continue
+        if (contribution.active) {
+          const state = contribution.snapshot().state
+          if (state !== 'active') {
+            const error = new Error(
+              `plugin contribution cannot be treated as active from ${state}: ${record.manifest.id}`,
+            )
+            error.code = 'PLUGIN_CONTRIBUTION_RESTORE_UNSAFE'
+            error.retryable = true
+            throw error
+          }
+          continue
+        }
         contribution.activate()
         activated.push(contribution)
       }

@@ -133,11 +133,51 @@ test('model picker exposes an actionable unconfigured state without inventing a 
     const trigger = rootElement.querySelector('[data-testid="model-picker-trigger"]')
     assert.doesNotMatch(trigger.textContent, /backend default/i)
     await act(async () => trigger.click())
-    assert.ok(rootElement.querySelector('[data-testid="model-picker-state-unconfigured"]'))
+    const configurationCard = rootElement.querySelector('[data-testid="model-picker-state-unconfigured"]')
+    assert.ok(configurationCard)
+    assert.equal(configurationCard.getAttribute('role'), 'alert')
+    assert.equal(rootElement.querySelectorAll('[data-testid="model-picker-manage"]').length, 1)
     const manage = rootElement.querySelector('[data-testid="model-picker-manage"]')
     assert.ok(manage)
     await act(async () => manage.click())
     assert.equal(managed, 1)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('model picker exposes retry for an authoritative catalog failure', async () => {
+  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+    url: 'http://localhost/',
+  })
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.HTMLElement = dom.window.HTMLElement
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  let retries = 0
+
+  try {
+    await act(async () => root.render(React.createElement(ModelPicker, {
+      open: true,
+      modelOptions: [],
+      modelReadiness: { kind: 'error', canSend: false, authoritative: true },
+      selectedModel: '',
+      onClose: () => {},
+      onManage: () => {},
+      onRetry: () => { retries += 1 },
+    })))
+
+    const errorCard = rootElement.querySelector('[data-testid="model-picker-state-error"]')
+    assert.ok(errorCard)
+    const retry = [...errorCard.querySelectorAll('button')]
+      .find((button) => button !== rootElement.querySelector('[data-testid="model-picker-manage"]'))
+    assert.ok(retry)
+    await act(async () => retry.click())
+    assert.equal(retries, 1)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

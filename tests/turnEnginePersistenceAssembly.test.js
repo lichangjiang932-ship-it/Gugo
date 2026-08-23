@@ -93,18 +93,22 @@ test('flat assembly wires only supplied checkpoint functions into the derived ru
   assert.deepEqual(calls, [{ turnId: 'turn-1', sequence: 4, state: { messages: [] } }])
 })
 
-test('writer selection prefers a factory, then a shared writer, then isolated default writers', async () => {
+test('writer selection requires a fresh writer factory and otherwise creates isolated default writers', async () => {
   const factoryWriter = Object.freeze({ id: 'factory-writer' })
   const sharedWriter = Object.freeze({ id: 'shared-writer' })
   const factoryAssembly = assembleTurnEnginePersistence({
-    eventWriteBehind: sharedWriter,
     eventWriteBehindFactory: () => factoryWriter,
   })
   assert.equal(factoryAssembly.ports.createEventWriteBehind(), factoryWriter)
 
-  const sharedAssembly = assembleTurnEnginePersistence({ eventWriteBehind: sharedWriter })
-  assert.equal(sharedAssembly.ports.createEventWriteBehind(), sharedWriter)
-  assert.equal(sharedAssembly.ports.createEventWriteBehind(), sharedWriter)
+  assert.throws(
+    () => assembleTurnEnginePersistence({ eventWriteBehind: sharedWriter }),
+    (error) => error?.code === 'TURN_EVENT_WRITER_INSTANCE_UNSUPPORTED',
+  )
+  assert.throws(
+    () => factoryAssembly.ports.createEventWriteBehind(),
+    (error) => error?.code === 'TURN_EVENT_WRITER_REUSED',
+  )
 
   const batches = []
   const defaultAssembly = assembleTurnEnginePersistence({
@@ -123,19 +127,12 @@ test('writer selection prefers a factory, then a shared writer, then isolated de
   await second.close()
 })
 
-test('default writer falls back to the selected single-event appender without reordering', async () => {
-  const appended = []
-  const assembled = assembleTurnEnginePersistence({
-    appendEvent: async (entry) => { appended.push(entry.id) },
-  })
-  const writer = assembled.ports.createEventWriteBehind()
-  writer.enqueue({ id: 'first' })
-  writer.enqueue({ id: 'second' })
-
-  await writer.close()
-
-  assert.deepEqual(appended, ['first', 'second'])
-  assert.equal(assembled.ports.supportsAtomicCheckpointState, false)
+test('custom single-event persistence without an atomic batch appender fails closed', () => {
+  assert.throws(
+    () => assembleTurnEnginePersistence({ appendEvent: async () => {} }),
+    (error) => error?.code === 'TURN_EVENT_BATCH_APPENDER_REQUIRED'
+      && error.retryable === false,
+  )
 })
 
 function importSpecifiers(source) {

@@ -58,6 +58,30 @@ test('managed activation rolls back earlier host contributions in reverse order'
   assert.equal(plugin.effects.size, 0)
 })
 
+test('empty activation recovery preserves the original registration error', async () => {
+  const plugin = record('empty-activation-recovery')
+  const coordinator = createRuntimePluginContributionCoordinator({
+    invokePluginCleanup: async (_record, _phase, cleanup) => cleanup(),
+  })
+  const original = Object.assign(new Error('replacement declaration required'), {
+    code: 'RUNTIME_CAPABILITY_REPLACEMENT_REQUIRED',
+  })
+
+  coordinator.createManagedContribution(plugin, {
+    activate() { throw original },
+    deactivate() {},
+    activationFailureParts: () => [],
+  })
+
+  await assert.rejects(
+    coordinator.activateManagedContributions(plugin),
+    (error) => error === original,
+  )
+  assert.equal(plugin.managedContributions.length, 0)
+  assert.equal(plugin.visibleEffects.size, 0)
+  assert.equal(plugin.effects.size, 0)
+})
+
 test('concurrent visible-effect revocation shares one host cleanup transaction', async () => {
   let releaseCleanup
   const gate = new Promise((resolve) => { releaseCleanup = resolve })

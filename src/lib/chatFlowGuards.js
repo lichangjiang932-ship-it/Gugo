@@ -9,6 +9,9 @@ const SKILL_ARTIFACT_TYPES = {
 
 const MODEL_SETUP_FAILURE_CODES = new Set([
   'MODEL_CONFIG_MISSING',
+  'MODEL_PROVIDER_NOT_FOUND',
+  'MODEL_PROVIDER_DISABLED',
+  'MODEL_PROVIDER_MODEL_INVALID',
   'MODEL_PROVIDER_UNVERIFIED',
   'MODEL_PROVIDER_CHAT_ONLY',
   'MODEL_PROVIDER_UNAVAILABLE',
@@ -51,6 +54,9 @@ const RUNTIME_INTERRUPTION_FAILURE_CODES = new Set([
 // received the request.
 const MODEL_PRE_EXECUTION_FAILURE_CODES = new Set([
   'MODEL_CONFIG_MISSING',
+  'MODEL_PROVIDER_NOT_FOUND',
+  'MODEL_PROVIDER_DISABLED',
+  'MODEL_PROVIDER_MODEL_INVALID',
   'MODEL_PROVIDER_UNVERIFIED',
   'MODEL_PROVIDER_CHAT_ONLY',
   'MODEL_PROVIDER_UNAVAILABLE',
@@ -238,6 +244,8 @@ export function isPreExecutionFailure(value) {
 
 function visibleModelFailureKey(value) {
   const code = failureCode(value)
+  if (code === 'MODEL_PROVIDER_NOT_FOUND' || code === 'MODEL_PROVIDER_MODEL_INVALID') return 'errors.modelEndpointNotFound'
+  if (code === 'MODEL_PROVIDER_DISABLED') return 'errors.modelProviderChanged'
   if (code === 'MODEL_PROVIDER_UNVERIFIED') return 'errors.modelProviderUnverified'
   if (code === 'MODEL_PROVIDER_CHAT_ONLY' || code === 'MODEL_TOOLS_UNSUPPORTED') return 'errors.modelProviderChatOnly'
   if (code === 'MODEL_PROVIDER_CONFIG_CHANGED' || code === 'MODEL_PROVIDER_BINDING_MISSING') return 'errors.modelProviderChanged'

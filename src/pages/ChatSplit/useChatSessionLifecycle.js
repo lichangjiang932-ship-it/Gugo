@@ -108,5 +108,5 @@ export default function useChatSessionLifecycle({
     }), 250)
     return () => window.clearTimeout(timer)
   }, [attachments, dispatch, input, state.activeSessionId])
-  return { abortSessionIdRef, inputRef }
+  return { abortSessionIdRef, attachmentsRef, inputRef }
 }

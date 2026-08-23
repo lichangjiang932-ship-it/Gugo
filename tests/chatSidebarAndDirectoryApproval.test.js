@@ -31,7 +31,7 @@ test('local paths are authorized before the model call and paused turns resume i
   const pausedResume = read('../src/pages/ChatSplit/pausedTurnResume.js')
   const messageRow = read('../src/pages/ChatSplit/chatMessages/MessageRow.jsx')
   const preflight = chat.indexOf('await ensureLocalPathAccess(content)')
-  const serverCall = chat.indexOf('await runServerChatTurn({', preflight)
+  const serverCall = chat.indexOf('await runChatTurn({', preflight)
 
   assert.ok(preflight > 0)
   assert.ok(serverCall > preflight)

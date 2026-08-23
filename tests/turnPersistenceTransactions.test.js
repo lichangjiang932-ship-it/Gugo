@@ -29,6 +29,7 @@ const {
 } = await import('../server/services/sqliteTurnPersistenceTransactions.js')
 const {
   appendTurnEvent,
+  appendTurnEvents,
   appendTurnEventsInTransaction,
   listTurnEvents,
 } = await import('../server/services/turnEventStore.js')
@@ -435,6 +436,7 @@ test('TurnEngine routes a completed boundary through the aggregate transaction',
       if (entry?.event?.type === 'turn.completed') directBoundaryAppends += 1
       return appendTurnEvent(entry)
     },
+    appendEventBatch: appendTurnEvents,
     writeMessage: (message) => {
       if (message.id === `${turnId}:assistant`) directEvidenceWrites += 1
       return upsertMessage(message)

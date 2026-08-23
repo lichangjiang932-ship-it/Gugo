@@ -24,6 +24,18 @@ export function normalizeTurnApprovalMode(value) {
   return value
 }
 
+export function normalizeTurnModelConfigRevision(value) {
+  if (value === null || value === undefined) return null
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TurnEngineError(
+      'MODEL_CONFIG_REVISION_INVALID',
+      'modelConfigRevision must be a positive safe integer',
+      400,
+    )
+  }
+  return value
+}
+
 export function normalizeTurnIds(values, limit = 32) {
   return [...new Set((Array.isArray(values) ? values : [])
     .map(canonicalizeSkillId)
@@ -142,6 +154,7 @@ export function createTurnStartRuntime({
       displayContent = null,
       modelName = null,
       modelProviderId = null,
+      modelConfigRevision = null,
       modelMode = 'agent',
       history = [],
       agentId = null,
@@ -162,17 +175,18 @@ export function createTurnStartRuntime({
       if (!sessionId) throw new TurnEngineError('SESSION_REQUIRED', 'sessionId is required')
       if (!text) throw new TurnEngineError('CONTENT_REQUIRED', 'content is required')
       const normalizedApprovalMode = normalizeTurnApprovalMode(approvalMode)
+      const normalizedModelConfigRevision = normalizeTurnModelConfigRevision(modelConfigRevision)
 
       let session = await ports.readSession({ userId, sessionId })
-      if (!session && authMode === 'local') {
-        session = await ports.claimLegacySession({ userId, sessionId, authMode })
-      }
-      if (!session && await ports.sessionIdOccupied({ sessionId })) {
+      const occupied = !session && await ports.sessionIdOccupied({ sessionId })
+      if (!session && occupied && authMode !== 'local') {
         throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
       }
-      const existing = await ports.lastEvent({ userId, sessionId, turnId })
-      if (existing) {
-        throw new TurnEngineError('TURN_EXISTS', 'turn already exists; use resume', 409)
+      if (!occupied) {
+        const existing = await ports.lastEvent({ userId, sessionId, turnId })
+        if (existing) {
+          throw new TurnEngineError('TURN_EXISTS', 'turn already exists; use resume', 409)
+        }
       }
 
       // Readiness is resolved before any durable session/message/event state is
@@ -184,10 +198,24 @@ export function createTurnStartRuntime({
         userId,
         modelName,
         modelProviderId: normalizedModelProviderId,
-        modelConfigRevision: null,
+        modelConfigRevision: normalizedModelConfigRevision,
         modelMode: normalizedModelMode,
         requirePersistedBinding: false,
       })
+      // A local-auth caller may still own a chat created under its legacy user
+      // identity. Claiming it rewrites ownership and enqueues content outbox
+      // events, so it must happen only after the model binding preflight has
+      // accepted this Turn. The earlier occupancy read remains side-effect free.
+      if (!session && occupied) {
+        session = await ports.claimLegacySession({ userId, sessionId, authMode })
+        if (!session) {
+          throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
+        }
+        const existing = await ports.lastEvent({ userId, sessionId, turnId })
+        if (existing) {
+          throw new TurnEngineError('TURN_EXISTS', 'turn already exists; use resume', 409)
+        }
+      }
       const createdAt = ports.now()
       const pendingSession = !session ? {
         id: sessionId,

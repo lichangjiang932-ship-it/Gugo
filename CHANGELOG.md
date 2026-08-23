@@ -6,6 +6,27 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.38] - 2026-08-24
+
+### Added
+
+- Added a local-first BYOK model setup path for endpoint URLs, model names, optional API keys, custom headers, and provider-backed model discovery without introducing platform billing or paid feature gates.
+- Added actionable model-readiness guidance in chat and the model picker so an unconfigured runtime leads users directly to settings instead of emitting backend environment-variable diagnostics.
+
+### Changed
+
+- Moved model readiness ahead of chat mutation: an unconfigured or stale provider no longer creates a session, message, or turn, clears the draft, starts an elapsed-time counter, or reports a misleading zero-second completion.
+- Made the server authoritative for provider deletion, disabling, switching, and configuration drift, with expired local credentials refreshed only for safe read-only preflight requests.
+- Split runtime plugin tool, prompt, and event contribution registries into focused leaf components while retaining capability ownership until failed activation cleanup can be retried.
+
+### Fixed
+
+- Preserved drafts and attachments until the server acknowledges a turn, retained attachments added during the request, avoided deleting same-ID attachments whose content changed, and isolated acknowledgements from later conversation switches.
+- Prevented automatic replay of turn-creation POST requests after authentication failures while allowing safe model-readiness recovery.
+- Persisted turn events through atomic event batches so checkpoints and externally visible events cannot diverge after partial writes.
+- Corrected plugin activation rollback, exact event revocation, and retryable cleanup-debt handling so successfully revoked contributions are not reported as failed by stale cleanup errors.
+- Prevented IME composition Enter events from sending a message prematurely.
+
 ## [0.11.37] - 2026-08-24
 
 ### Fixed
@@ -727,7 +748,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.37...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.38...HEAD
+[0.11.38]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.37...v0.11.38
 [0.11.37]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.36...v0.11.37
 [0.11.36]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.35...v0.11.36
 [0.11.35]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.34...v0.11.35

@@ -73,6 +73,13 @@ function errorMetadata(error) {
   }
 }
 
+function eventFailureCode(error) {
+  const code = errorField(error, 'code')
+  return typeof code === 'string' && ERROR_CODE_RE.test(code)
+    ? code
+    : 'PLUGIN_EVENT_LISTENER_FAILED'
+}
+
 function snapshotEventData(value, { code, label, freeze }) {
   return snapshotPluginData(value, {
     code,
@@ -182,31 +189,44 @@ function callbackArguments(event, args) {
   }
 }
 
-export function createRuntimePluginEventListener({ record, event, listener, invoke }) {
+export function createRuntimePluginEventListener({ record, event, listener, invoke, onFailure = null }) {
   const identity = Object.freeze({ pluginId: record.manifest.id, event })
   const observerOnly = OBSERVER_EVENTS.has(event)
 
   return async (...args) => {
     if (record.state !== 'active') return undefined
-    return invoke(record, 'event', async (...hostArgs) => {
-      let input
+    try {
+      return await invoke(record, 'event', async (...hostArgs) => {
+        let input
+        try {
+          input = callbackArguments(event, hostArgs)
+        } catch (error) {
+          throw isolatedEventFailure(error, identity, 'PLUGIN_EVENT_ARGUMENT_INVALID')
+        }
+        try {
+          const returned = await listener(...input.input)
+          if (observerOnly || returned === undefined) return undefined
+          const result = snapshotEventData(returned, {
+            code: 'PLUGIN_EVENT_RESULT_INVALID',
+            label: `plugin event ${event} result`,
+            freeze: false,
+          })
+          return input.restore(result)
+        } catch (error) {
+          throw isolatedEventFailure(error, identity)
+        }
+      }, args)
+    } catch (error) {
       try {
-        input = callbackArguments(event, hostArgs)
-      } catch (error) {
-        throw isolatedEventFailure(error, identity, 'PLUGIN_EVENT_ARGUMENT_INVALID')
+        onFailure?.(Object.freeze({
+          pluginId: identity.pluginId,
+          event: identity.event,
+          code: eventFailureCode(error),
+        }))
+      } catch {
+        // Observability must never replace the isolated plugin failure.
       }
-      try {
-        const returned = await listener(...input.input)
-        if (observerOnly || returned === undefined) return undefined
-        const result = snapshotEventData(returned, {
-          code: 'PLUGIN_EVENT_RESULT_INVALID',
-          label: `plugin event ${event} result`,
-          freeze: false,
-        })
-        return input.restore(result)
-      } catch (error) {
-        throw isolatedEventFailure(error, identity)
-      }
-    }, args)
+      throw error
+    }
   }
 }

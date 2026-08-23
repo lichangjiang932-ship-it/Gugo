@@ -1448,7 +1448,9 @@ export class TurnEngine {
           return
         } catch (terminalError) {
           const deferredFailure = findEventPersistenceFailure(terminalError)
-          if (deferredFailure && attempt === 0) {
+          const terminalOutcomeUnknown = String(terminalError?.code || '').trim().toUpperCase()
+            === TURN_TERMINAL_PERSISTENCE_FAILURE_CODE
+          if (deferredFailure && !terminalOutcomeUnknown && attempt === 0) {
             activeError = deferredFailure
             continue
           }

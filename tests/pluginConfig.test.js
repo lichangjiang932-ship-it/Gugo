@@ -770,6 +770,7 @@ test('config cutover never publishes a candidate when async old cleanup rejects'
     (error) => error?.code === 'PLUGIN_CONFIG_ROLLBACK_FAILED',
   )
   assert.equal(registry.getPlugin('rejecting-cleanup-config').configRevision, 1)
+  assert.equal(registry.getPlugin('rejecting-cleanup-config').state, 'visibility_indeterminate')
   assert.deepEqual([...activeRegistrations].map((entry) => entry.value), ['old'])
   assert.equal(oldDisposeAttempts, 1)
   await registry.shutdown()

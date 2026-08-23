@@ -5,7 +5,9 @@ import { act, useCallback, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import useChatSessionLifecycle from '../../src/pages/ChatSplit/useChatSessionLifecycle.js'
+import { applyAcceptedChatDraft } from '../../src/pages/ChatSplit/chatAcceptedDraft.js'
 import { readSessionDraft } from '../../src/lib/chatDrafts.js'
+import { reduceSessionLifecycleState } from '../../src/store/reducers/sessionLifecycleReducer.js'
 import { reduceTaskSettingsState } from '../../src/store/reducers/taskSettingsReducer.js'
 
 function setupDom() {
@@ -182,6 +184,89 @@ function DraftRouteHarness() {
   </div>
 }
 
+function FirstSessionAcceptanceHarness() {
+  const abortCtrlRef = useRef(null)
+  const preserveAttachmentsForSessionRef = useRef(null)
+  const sendSnapshotRef = useRef(null)
+  const [state, setState] = useState({
+    activeSessionId: null,
+    draftInput: '',
+    newDraftVersion: 0,
+    sessionDrafts: {},
+    sessions: [],
+    tasks: [],
+  })
+  const [input, setInput] = useState('message being sent')
+  const [attachments, setAttachments] = useState([
+    { id: 'sent-attachment', name: 'sent.txt', uploadStatus: 'ready' },
+  ])
+  const [isGenerating, setIsGenerating] = useState(false)
+  const dispatch = useCallback((action) => {
+    setState((current) => (
+      reduceSessionLifecycleState(current, action)
+      || reduceTaskSettingsState(current, action)
+      || current
+    ))
+  }, [])
+  const { attachmentsRef, inputRef } = useChatSessionLifecycle({
+    abortCtrlRef,
+    attachments,
+    desktopPetVisible: false,
+    dispatch,
+    input,
+    isGenerating,
+    messages: [],
+    preserveAttachmentsForSessionRef,
+    setAttachments,
+    setDesktopPetVisible: () => {},
+    setIsGenerating,
+    setInput,
+    setWorkbenchMessage: () => {},
+    showContextUsage: false,
+    state,
+    toolApproval: null,
+    workbenchOpen: false,
+  })
+
+  return <div>
+    <textarea aria-label="accepted draft" value={input} onChange={(event) => setInput(event.target.value)} />
+    <output
+      data-active-session-id={state.activeSessionId || ''}
+      data-attachment-ids={attachments.map((item) => item.id).join(',')}
+    />
+    <button type="button" onClick={() => {
+      sendSnapshotRef.current = {
+        draftSessionId: state.activeSessionId,
+        inputSnapshot: inputRef.current,
+        sentAttachments: [...attachmentsRef.current],
+      }
+    }}>Start send</button>
+    <button type="button" onClick={() => {
+      setInput('next unsent message')
+      setAttachments((current) => [
+        ...current,
+        { id: 'next-attachment', name: 'next.txt', uploadStatus: 'ready' },
+      ])
+    }}>Edit while pending</button>
+    <button type="button" onClick={() => {
+      const snapshot = sendSnapshotRef.current
+      applyAcceptedChatDraft({
+        acceptedSessionId: 'accepted-session',
+        activeSessionId: state.activeSessionId,
+        attachments: attachmentsRef.current,
+        dispatch,
+        draftSessionId: snapshot.draftSessionId,
+        input: inputRef.current,
+        inputSnapshot: snapshot.inputSnapshot,
+        sentAttachments: snapshot.sentAttachments,
+        setAttachments,
+        setInput,
+      })
+      dispatch({ type: 'NEW_SESSION', payload: { id: 'accepted-session', title: 'Accepted' } })
+    }}>Accept send</button>
+  </div>
+}
+
 test('switching sessions clears ready and in-progress attachment drafts', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
@@ -249,4 +334,84 @@ test('ready attachment draft survives the model-settings route round trip withou
     await act(async () => root.unmount())
     dom.window.close()
   }
+})
+
+test('first-session ACK preserves text and only new attachments added while the send is pending', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+
+  try {
+    await act(async () => root.render(<FirstSessionAcceptanceHarness />))
+    const button = (label) => [...rootElement.querySelectorAll('button')]
+      .find((item) => item.textContent === label)
+
+    await act(async () => button('Start send').click())
+    await act(async () => button('Edit while pending').click())
+    await act(async () => button('Accept send').click())
+
+    assert.equal(rootElement.querySelector('textarea').value, 'next unsent message')
+    assert.equal(rootElement.querySelector('output').dataset.activeSessionId, 'accepted-session')
+    assert.equal(
+      rootElement.querySelector('output').dataset.attachmentIds,
+      'next-attachment',
+    )
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('ACK never removes a same-id attachment whose durable content changed after send', () => {
+  const sent = {
+    id: 'changed-after-send',
+    name: 'before.txt',
+    mimeType: 'text/plain',
+    sha256: 'before-sha',
+    size: 6,
+    uploadStatus: 'ready',
+  }
+  const current = [{ ...sent, name: 'after.txt', sha256: 'after-sha' }]
+  const attachmentUpdates = []
+  const dispatched = []
+
+  const result = applyAcceptedChatDraft({
+    activeSessionId: 'session-a',
+    attachments: current,
+    dispatch: (action) => dispatched.push(action),
+    draftSessionId: 'session-a',
+    input: 'edited after send',
+    inputSnapshot: 'sent text',
+    sentAttachments: [sent],
+    setAttachments: (value) => attachmentUpdates.push(value),
+  })
+
+  assert.equal(result.attachmentsAccepted, false)
+  assert.equal(result.attachmentsUnchanged, false)
+  assert.deepEqual(attachmentUpdates, [])
+  assert.deepEqual(dispatched, [])
+})
+
+test('ACK does not mutate the draft after the user switches sessions', () => {
+  const attachmentUpdates = []
+  const inputUpdates = []
+  const dispatched = []
+  const sent = { id: 'session-a-attachment', name: 'a.txt', uploadStatus: 'ready' }
+
+  const result = applyAcceptedChatDraft({
+    activeSessionId: 'session-b',
+    attachments: [sent],
+    dispatch: (action) => dispatched.push(action),
+    draftSessionId: 'session-a',
+    input: 'sent text',
+    inputSnapshot: 'sent text',
+    sentAttachments: [sent],
+    setAttachments: (value) => attachmentUpdates.push(value),
+    setInput: (value) => inputUpdates.push(value),
+  })
+
+  assert.equal(result.originStillActive, false)
+  assert.deepEqual(attachmentUpdates, [])
+  assert.deepEqual(inputUpdates, [])
+  assert.deepEqual(dispatched, [])
 })

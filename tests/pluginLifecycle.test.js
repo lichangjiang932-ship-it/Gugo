@@ -312,6 +312,44 @@ test('runtime model-provider definitions fail before custom host registration', 
   assert.equal(getterCalls, 0)
 })
 
+test('model-provider activation keeps first-stage capability ownership when provider registration fails', async () => {
+  let activeCapabilities = 0
+  let directDisposeCalls = 0
+  let beginRevokeCalls = 0
+  const registry = createRuntimePluginRegistry({
+    registerRuntimeCapability() {
+      activeCapabilities += 1
+      return v2Disposer(() => {
+        directDisposeCalls += 1
+        throw new Error('direct capability compensation failed')
+      }, () => {
+        beginRevokeCalls += 1
+        activeCapabilities -= 1
+        return createRuntimePluginRevokeReceipt('revoked', Promise.resolve(true))
+      })
+    },
+    registerModelProvider() {
+      throw new Error('provider registration failed')
+    },
+  })
+
+  await assert.rejects(
+    registry.registerPlugin(manifest('provider-owned-compensation', {
+      contributes: ['model-provider:owned-compensation'],
+    }), (ctx) => {
+      ctx.models.providers.register('owned-compensation', {
+        buildRequest() { return {} },
+        parseResponse() { return {} },
+      })
+    }),
+    /provider registration failed/,
+  )
+  assert.equal(directDisposeCalls, 0)
+  assert.equal(beginRevokeCalls, 1)
+  assert.equal(activeCapabilities, 0)
+  assert.equal(registry.getPlugin('provider-owned-compensation'), null)
+})
+
 test('runtime model providers cannot replace reserved kinds through custom host adapters', async () => {
   let hostRegistrationCalls = 0
   let descriptorCalls = 0
@@ -344,6 +382,59 @@ test('runtime model providers cannot replace reserved kinds through custom host 
   assert.equal(hostRegistrationCalls, 0)
   assert.equal(descriptorCalls, 0)
   assert.equal(registry.getPlugin('provider-reserved-kind'), null)
+})
+
+test('model provider activation failure retains capability ownership until exact cleanup succeeds', async () => {
+  const pluginId = 'provider-activation-rollback'
+  const capabilityId = `plugin.${pluginId}.provider.rollback-provider`
+  const activeCapabilities = new Set()
+  let directDisposeCalls = 0
+  let beginRevokeCalls = 0
+  const registry = createRuntimePluginRegistry({
+    registerRuntimeCapability(definition) {
+      activeCapabilities.add(definition.id)
+      return v2Disposer(
+        () => {
+          directDisposeCalls += 1
+          throw new Error('direct cleanup cannot prove capability visibility')
+        },
+        () => {
+          beginRevokeCalls += 1
+          if (beginRevokeCalls === 1) {
+            return createRuntimePluginRevokeReceipt('retained')
+          }
+          activeCapabilities.delete(definition.id)
+          return createRuntimePluginRevokeReceipt('revoked')
+        },
+      )
+    },
+    registerModelProvider() {
+      throw new Error('provider implementation registration rejected')
+    },
+  })
+
+  await assert.rejects(
+    registry.registerPlugin(manifest(pluginId, {
+      contributes: ['model-provider:rollback-provider'],
+    }), (ctx) => {
+      ctx.models.providers.register('rollback-provider', {
+        buildRequest() { return {} },
+        parseResponse() { return {} },
+      })
+    }),
+    (error) => error instanceof AggregateError
+      && /plugin setup failed: provider-activation-rollback/.test(error?.message || ''),
+  )
+  assert.deepEqual([...activeCapabilities], [capabilityId])
+  assert.equal(directDisposeCalls, 0)
+  assert.equal(beginRevokeCalls, 1)
+  assert.equal(registry.getPlugin(pluginId)?.state, 'rollback_failed')
+
+  assert.equal(await registry.unregisterPlugin(pluginId), true)
+  assert.equal(activeCapabilities.size, 0)
+  assert.equal(directDisposeCalls, 0)
+  assert.equal(beginRevokeCalls, 2)
+  assert.equal(registry.getPlugin(pluginId), null)
 })
 
 test('runtime provider thenable rejection never assimilates plugin code', async () => {
@@ -1242,7 +1333,15 @@ test('runtime event completion traversal remains inside callback accounting', as
 })
 
 test('runtime event thrown values are detached and observer results are discarded', async () => {
-  const registry = createRuntimePluginRegistry()
+  const audit = []
+  const registry = createRuntimePluginRegistry({
+    audit(entry) {
+      audit.push(entry)
+      if (entry.event === 'plugin.event_failed') {
+        throw new Error('audit sink failed')
+      }
+    },
+  })
   const events = createLoopEvents()
   const unbind = registry.bindLoopEvents(events)
   let unregisterAttempt = null
@@ -1298,6 +1397,16 @@ test('runtime event thrown values are detached and observer results are discarde
     },
   )
   assert.equal(messageGetterCalls, 0)
+  assert.deepEqual(
+    audit.filter((entry) => entry.event === 'plugin.event_failed'),
+    [{
+      event: 'plugin.event_failed',
+      pluginId: 'event-error-accounting-plugin',
+      loopEvent: 'request',
+      code: 'PLUGIN_CUSTOM_EVENT_FAILURE',
+    }],
+  )
+  assert.equal(Object.isFrozen(audit.find((entry) => entry.event === 'plugin.event_failed')), true)
   const attempted = await settleWithin(unregisterAttempt)
   assert.equal(attempted.value, undefined)
   assert.equal(attempted.error?.code, 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK')
@@ -1580,6 +1689,41 @@ test('loop event cleanup consumes per-binding v2 receipts and retries only retai
   assert.equal(retained.listeners.size, 0)
   assert.equal(unbindRevoked(), true)
   assert.equal(unbindRetained(), true)
+})
+
+test('loop event unbind clears a stale retained cleanup error after exact-handle revocation succeeds', async () => {
+  const registry = createRuntimePluginRegistry()
+  const listeners = new Set()
+  let beginCalls = 0
+  const unbind = registry.bindLoopEvents({
+    on(event, listener) {
+      listeners.add(listener)
+      return v2Disposer(() => false, () => {
+        beginCalls += 1
+        if (beginCalls === 1) {
+          return createRuntimePluginRevokeReceipt(
+            'retained',
+            Promise.reject(new Error('first retained cleanup failed')),
+          )
+        }
+        listeners.delete(listener)
+        return createRuntimePluginRevokeReceipt('revoked', Promise.resolve(true))
+      })
+    },
+    off(event, listener) {
+      return listeners.delete(listener)
+    },
+  })
+  await registry.registerPlugin(manifest('event-unbind-cleanup-retry'), (ctx) => {
+    ctx.events.on('request', () => undefined)
+  })
+
+  assert.equal(unbind(), false)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(unbind(), true)
+  assert.equal(beginCalls, 2)
+  assert.equal(listeners.size, 0)
+  assert.equal(await registry.unregisterPlugin('event-unbind-cleanup-retry'), true)
 })
 
 test('runtime tool and prompt definitions reject accessors without invoking them', async () => {
