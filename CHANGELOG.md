@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.37] - 2026-08-24
+
+### Fixed
+
+- Updated the checkpoint performance guard to seed the required `turn.started` event and compare the Harness barrier with the direct atomic persistence path, preserving fail-closed event sequencing while restoring the release gate.
+
 ## [0.11.36] - 2026-08-24
 
 ### Fixed
@@ -721,7 +727,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.36...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.37...HEAD
+[0.11.37]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.36...v0.11.37
 [0.11.36]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.35...v0.11.36
 [0.11.35]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.34...v0.11.35
 [0.11.34]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.33...v0.11.34

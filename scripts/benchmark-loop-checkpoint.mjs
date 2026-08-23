@@ -53,7 +53,6 @@ try {
   const dbModule = await import('../server/db.js')
   const { upsertSession } = await import('../server/services/sessionStore.js')
   const { appendTurnEvent } = await import('../server/services/turnEventStore.js')
-  const { saveTurnCheckpoint } = await import('../server/services/turnCheckpointStore.js')
   const { createTurnEvent } = await import('../shared/turnEvents.js')
   const { createUser, getDb } = dbModule
   closeDb = dbModule.closeDb
@@ -78,9 +77,17 @@ try {
       { role: 'user', content: 'Persist this state before the side effect.' },
       { role: 'assistant', content: 'Checkpoint acknowledged.' },
     ],
-    iterations: sequence + 1,
+    iterations: sequence,
     toolCalls: [{ id: `call-${sequence}`, name: 'benchmark_tool' }],
-    budget: { used: sequence + 1, maxTotalCalls: 10_000 },
+    budget: { used: sequence, maxTotalCalls: 10_000 },
+  })
+  const startedEvent = ({ mode, round, turnId }) => createTurnEvent({
+    id: `benchmark-${mode}-${round}-started`,
+    sessionId,
+    turnId,
+    sequence: 0,
+    type: 'turn.started',
+    createdAt: benchmarkStartedAt,
   })
   const checkpointEvent = ({ mode, round, turnId, sequence }) => createTurnEvent({
     id: `benchmark-${mode}-${round}-${sequence}`,
@@ -91,14 +98,18 @@ try {
     payload: {
       storage: 'turn_checkpoints',
       checkpointVersion: 1,
-      iterations: sequence + 1,
+      iterations: sequence,
       toolCallCount: 1,
     },
-    createdAt: benchmarkStartedAt + sequence + 1,
+    createdAt: benchmarkStartedAt + sequence,
   })
 
   const runAtomic = async (count, round) => {
     const turnId = `benchmark-atomic-${round}`
+    appendTurnEvent({
+      userId,
+      event: startedEvent({ mode: 'atomic', round, turnId }),
+    })
     const barrier = createCheckpointBarrier({
       stateFactory: ({ sequence }) => checkpointState(sequence),
       saveCheckpoint: (state, meta) => appendTurnEvent({
@@ -108,58 +119,58 @@ try {
       }),
     })
     const startedAt = performance.now()
-    for (let sequence = 0; sequence < count; sequence += 1) {
+    for (let sequence = 1; sequence <= count; sequence += 1) {
       await barrier.flush({ meta: { sequence } })
     }
     return performance.now() - startedAt
   }
 
-  const runSeparate = async (count, round) => {
-    const turnId = `benchmark-separate-${round}`
+  const runDirect = async (count, round) => {
+    const turnId = `benchmark-direct-${round}`
+    appendTurnEvent({
+      userId,
+      event: startedEvent({ mode: 'direct', round, turnId }),
+    })
     const startedAt = performance.now()
-    for (let sequence = 0; sequence < count; sequence += 1) {
-      const event = checkpointEvent({ mode: 'separate', round, turnId, sequence })
-      appendTurnEvent({ userId, event })
-      saveTurnCheckpoint({
+    for (let sequence = 1; sequence <= count; sequence += 1) {
+      const event = checkpointEvent({ mode: 'direct', round, turnId, sequence })
+      appendTurnEvent({
         userId,
-        sessionId,
-        turnId,
-        eventSequence: sequence,
-        state: checkpointState(sequence),
-        now: event.createdAt,
+        event,
+        checkpointState: checkpointState(sequence),
       })
     }
     return performance.now() - startedAt
   }
 
-  await runSeparate(warmupIterations, 'warmup')
+  await runDirect(warmupIterations, 'warmup')
   await runAtomic(warmupIterations, 'warmup')
 
   const atomicDurations = []
-  const separateDurations = []
+  const directDurations = []
   for (let round = 0; round < rounds; round += 1) {
     if (round % 2 === 0) {
-      separateDurations.push(await runSeparate(iterations, round))
+      directDurations.push(await runDirect(iterations, round))
       atomicDurations.push(await runAtomic(iterations, round))
     } else {
       atomicDurations.push(await runAtomic(iterations, round))
-      separateDurations.push(await runSeparate(iterations, round))
+      directDurations.push(await runDirect(iterations, round))
     }
   }
 
   const atomicMedianMs = median(atomicDurations)
-  const separateMedianMs = median(separateDurations)
-  const slowdownRatio = atomicMedianMs / separateMedianMs
+  const directMedianMs = median(directDurations)
+  const slowdownRatio = atomicMedianMs / directMedianMs
   const latestAtomic = getDb().prepare(`
     SELECT event_sequence AS sequence FROM turn_checkpoints
      WHERE user_id = ? AND session_id = ? AND turn_id = ?
   `).get(userId, sessionId, `benchmark-atomic-${rounds - 1}`)
-  const latestSeparate = getDb().prepare(`
+  const latestDirect = getDb().prepare(`
     SELECT event_sequence AS sequence FROM turn_checkpoints
      WHERE user_id = ? AND session_id = ? AND turn_id = ?
-  `).get(userId, sessionId, `benchmark-separate-${rounds - 1}`)
-  assert.equal(latestAtomic?.sequence, iterations - 1)
-  assert.equal(latestSeparate?.sequence, iterations - 1)
+  `).get(userId, sessionId, `benchmark-direct-${rounds - 1}`)
+  assert.equal(latestAtomic?.sequence, iterations)
+  assert.equal(latestDirect?.sequence, iterations)
 
   assert.ok(
     slowdownRatio <= maxSlowdownRatio,
@@ -169,11 +180,11 @@ try {
   process.stdout.write([
     'Loop checkpoint benchmark (median)',
     `  workload: ${iterations} checkpoints x ${rounds} rounds`,
-    `  separate event + checkpoint: ${separateMedianMs.toFixed(2)} ms, `
-      + `${opsPerSecond(iterations, separateMedianMs).toFixed(0)} ops/s`,
+    `  direct atomic transaction: ${directMedianMs.toFixed(2)} ms, `
+      + `${opsPerSecond(iterations, directMedianMs).toFixed(0)} ops/s`,
     `  atomic barrier + transaction: ${atomicMedianMs.toFixed(2)} ms, `
       + `${opsPerSecond(iterations, atomicMedianMs).toFixed(0)} ops/s`,
-    `  atomic/separate ratio: ${slowdownRatio.toFixed(2)}x `
+    `  atomic/direct ratio: ${slowdownRatio.toFixed(2)}x `
       + `(non-flaky ceiling: ${maxSlowdownRatio.toFixed(2)}x)`,
     '  result: PASS',
     '',
