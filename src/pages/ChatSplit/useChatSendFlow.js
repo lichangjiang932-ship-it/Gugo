@@ -37,6 +37,7 @@ export default function useChatSendFlow({
   onModelCatalogChanged,
   onModelUnavailable,
   onSendRejected,
+  onSendBlocked,
   onTurnStart,
   onTurnResult,
   onWorkspaceUnavailable,
@@ -56,7 +57,18 @@ export default function useChatSendFlow({
 }) {
   const sendInFlightRef = useRef(false)
   return useCallback(async (content, explicitAttachments = null, historyLimit = null, onAccepted = null) => {
-    if (isGenerating || directoryApprovalResolveRef.current || sendInFlightRef.current) return false
+    if (isGenerating) {
+      onSendBlocked?.('turn-running')
+      return false
+    }
+    if (directoryApprovalResolveRef.current) {
+      onSendBlocked?.('directory-approval')
+      return false
+    }
+    if (sendInFlightRef.current) {
+      onSendBlocked?.('send-pending')
+      return false
+    }
     sendInFlightRef.current = true
     try {
     if (!isLoggedInLocally()) {
@@ -134,7 +146,10 @@ export default function useChatSendFlow({
         ...(workspacePath ? { workspacePath } : {}),
       }
     }
-    if (hasTurnRun(sessionId)) return false
+    if (hasTurnRun(sessionId)) {
+      onSendBlocked?.('turn-running')
+      return false
+    }
     const sourceMessages = historyLimit == null ? activeSession.messages || [] : (activeSession.messages || []).slice(0, historyLimit)
     const historyMessages = serializeServerTurnHistory(sourceMessages)
     const turnId = crypto.randomUUID?.() ?? `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -269,7 +284,7 @@ export default function useChatSendFlow({
   }, [
     abortCtrlRef, abortSessionIdRef, activateWorkspaceForTurn, attachments, approvalMode, changeApprovalMode,
     directoryApprovalResolveRef, dispatch, draftWorkspacePath, effectiveAgentId,
-    ensureLocalPathAccess, isGenerating, modelOptions, modelReadiness, onAuthenticationRequired, onModelCatalogChanged, onModelUnavailable, onSendRejected, onTurnResult, onTurnStart, onWorkspaceUnavailable, preflightModelSelection, probeLocalPathAccess, requestServerToolApproval,
+    ensureLocalPathAccess, isGenerating, modelOptions, modelReadiness, onAuthenticationRequired, onModelCatalogChanged, onModelUnavailable, onSendBlocked, onSendRejected, onTurnResult, onTurnStart, onWorkspaceUnavailable, preflightModelSelection, probeLocalPathAccess, requestServerToolApproval,
     refreshAuth, resolveToolApprovalForOwner, runChatTurn, runtimeSkills, selectedModel, selectedModelProviderId,
     setContextSystemPrompts, clearToolApprovalForOwner,
     state.activeSessionId, state.agentMode, state.draftSessionId, state.sessions, state.skillConfigs, state.toolsConfig, t,

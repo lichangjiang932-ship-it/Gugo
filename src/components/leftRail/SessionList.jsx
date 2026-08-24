@@ -112,7 +112,7 @@ export default function SessionList({
         aria-keyshortcuts="Shift+F10"
         className="flex min-w-0 flex-1 items-center rounded-lg py-1 pl-2 pr-8 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"
       >
-        <span className={`block truncate text-[12px] leading-4 ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{session.title}</span>
+        <span className={`block truncate text-[13px] leading-[18px] ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{session.title}</span>
       </button>
       <button
         type="button"
@@ -179,7 +179,7 @@ export default function SessionList({
           data-project-toggle={project.path}
         >
           <Folder className="h-4 w-4 shrink-0 text-ink-fade" aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-[12px] font-medium leading-4 text-ink" title={project.path}>{project.name}</span>
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-[18px] text-ink" title={project.path}>{project.name}</span>
         </button>
         <button
           type="button"
@@ -202,14 +202,14 @@ export default function SessionList({
 
   return <div className="space-y-3">
     <section aria-label={t('chatMessages.workspaceProjects')}>
-      <div className="mb-1 px-1.5 text-xs font-medium leading-4 tracking-[0.01em] text-ink-fade">
+      <div className="mb-1 px-1.5 text-[13px] font-medium leading-[18px] tracking-[0.01em] text-ink-fade">
         {t('chatMessages.workspaceProjects')}
       </div>
       {projectSections}
     </section>
     <section aria-label={t('chatMessages.workspaceRecent')}>
       <div className="mb-1 flex h-6 items-center px-1.5">
-        <span className="min-w-0 flex-1 text-xs font-medium leading-4 tracking-[0.01em] text-ink-fade">
+        <span className="min-w-0 flex-1 text-[13px] font-medium leading-[18px] tracking-[0.01em] text-ink-fade">
           {t('chatMessages.workspaceRecent')}
         </span>
         <button type="button" onClick={() => { onMenuClose(); onSearch?.() }} title={t('nav.searchPlaceholder')} aria-label={t('nav.searchPlaceholder')} className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-fade hover:bg-ink/[0.04] hover:text-ink-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30">
@@ -218,7 +218,7 @@ export default function SessionList({
       </div>
       {orderedSessions.length
         ? <div>{orderedSessions.map((session, index) => renderSession(session, index))}</div>
-        : <div className="px-2 py-1 text-[12px] leading-4 text-ink-fade">{t('nav.emptyTitle')}</div>}
+        : <div className="px-2 py-1 text-[13px] leading-[18px] text-ink-fade">{t('nav.emptyTitle')}</div>}
     </section>
   </div>
 }

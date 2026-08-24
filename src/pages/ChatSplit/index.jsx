@@ -126,6 +126,14 @@ export default function ChatSplit() {
         : String(error?.message || t('errors.chatFailure')),
     })
   }, [t, toast])
+  const showSendBlocked = useCallback((reason) => {
+    const key = reason === 'directory-approval'
+      ? 'chatSteering.directoryAuthorizationRequired'
+      : reason === 'send-pending'
+        ? 'chatSteering.sendPending'
+        : 'chatSteering.turnRunning'
+    setWorkbenchMessage(t(key))
+  }, [t])
   const triggerSendFlow = useChatSendFlow({
     abortCtrlRef, abortSessionIdRef, activateWorkspaceForTurn, attachments,
     approvalMode: approvals.approvalSettings?.mode || 'normal',
@@ -134,7 +142,7 @@ export default function ChatSplit() {
     draftWorkspacePath,
     dispatch, effectiveAgentId, ensureLocalPathAccess: directory.ensureLocalPathAccess, isGenerating, modelOptions, modelReadiness,
     onAuthenticationRequired: showAuthenticationRequired, onModelCatalogChanged: reloadModels,
-    onModelUnavailable: showModelUnavailable, onSendRejected: showSendRejected,
+    onModelUnavailable: showModelUnavailable, onSendBlocked: showSendBlocked, onSendRejected: showSendRejected,
     onTurnResult: handleTurnResult, onTurnStart: handleTurnStart,
     onWorkspaceUnavailable: (error) => toast.error({
       title: t('chatMessages.workspaceSelectionFailed'),

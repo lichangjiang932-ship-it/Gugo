@@ -12,8 +12,11 @@ export async function testModelEndpoint({ fetchImpl = fetch } = {}) {
   return parseProxyResponse(response)
 }
 
-export async function getModelStatus({ fetchImpl = fetch } = {}) {
-  const response = await fetchImpl('/api/model/status', { headers: authHeaders() })
+export async function getModelStatus({ fetchImpl = fetch, signal } = {}) {
+  const response = await fetchImpl('/api/model/status', {
+    headers: authHeaders(),
+    ...(signal ? { signal } : {}),
+  })
   return parseProxyResponse(response)
 }
 

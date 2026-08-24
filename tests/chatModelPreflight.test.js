@@ -31,3 +31,31 @@ test('model preflight keeps non-401 transport failures in the model error path',
     })
   }
 })
+
+test('model preflight bounds the status request so a hung check cannot lock chat sending', async () => {
+  let receivedSignal = null
+  // AbortSignal.timeout() intentionally uses an unref'ed timer in Node. Keep
+  // the test process alive long enough to observe the browser-equivalent abort.
+  const keepAlive = setTimeout(() => {}, 100)
+  let result
+  try {
+    result = await preflightChatModelSelection({
+      timeoutMs: 25,
+      getStatus: async ({ signal } = {}) => {
+        receivedSignal = signal
+        return new Promise((resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        })
+      },
+    })
+  } finally {
+    clearTimeout(keepAlive)
+  }
+
+  assert.ok(receivedSignal)
+  assert.equal(receivedSignal.aborted, true)
+  assert.deepEqual(result, {
+    ok: false,
+    readiness: { kind: 'error', canSend: false, modelName: '', authoritative: true },
+  })
+})

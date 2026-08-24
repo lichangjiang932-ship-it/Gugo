@@ -15,10 +15,14 @@ export async function preflightChatModelSelection({
   modelProviderId = '',
   modelConfigRevision = null,
   getStatus = getModelStatus,
+  timeoutMs = 10_000,
 } = {}) {
   let status
   try {
-    status = await getStatus()
+    const signal = typeof AbortSignal?.timeout === 'function' && Number(timeoutMs) > 0
+      ? AbortSignal.timeout(Number(timeoutMs))
+      : undefined
+    status = await getStatus({ signal })
   } catch (error) {
     // A 401 here is emitted by Gugo's own authenticated status endpoint.
     // Provider authentication failures are represented inside the returned

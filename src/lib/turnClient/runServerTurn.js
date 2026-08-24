@@ -19,6 +19,7 @@ import {
 import { canAdvanceTurnEventCursor, parseTurnEvent } from '../../../shared/turnEvents.js'
 
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 15_000
+const DEFAULT_UNCONFIRMED_RECOVERY_MAX_ATTEMPTS = 3
 const DEFAULT_CANCEL_RETRY_DELAY_MS = 750
 const DEFAULT_CANCEL_RETRY_MAX_DELAY_MS = 5_000
 
@@ -70,6 +71,16 @@ function isAmbiguousInitialRequestError(error) {
 
 function confirmsExistingTurn(error) {
   return Number(error?.status) === 409 && error?.code === 'TURN_EXISTS'
+}
+
+function unconfirmedInitialTurnError(turnId, attempts, cause) {
+  const error = new Error(`The server did not confirm starting this task after ${attempts} attempts. Please send it again.`)
+  error.code = 'TURN_REQUEST_UNCONFIRMED'
+  error.retryable = true
+  error.turnId = turnId
+  error.attempts = attempts
+  if (cause) error.cause = cause
+  return error
 }
 
 function requiresRuntimeRestart(error) {
@@ -138,6 +149,7 @@ export async function runServerTurn({
   reconnectMaxDelayMs = DEFAULT_RECONNECT_MAX_DELAY_MS,
   reconnectMaxAttempts = DEFAULT_RECONNECT_MAX_ATTEMPTS,
   recoveryPollIntervalMs = DEFAULT_RECOVERY_POLL_INTERVAL_MS,
+  unconfirmedRecoveryMaxAttempts = DEFAULT_UNCONFIRMED_RECOVERY_MAX_ATTEMPTS,
   cancelRetryDelayMs = DEFAULT_CANCEL_RETRY_DELAY_MS,
   cancelRetryMaxDelayMs = DEFAULT_CANCEL_RETRY_MAX_DELAY_MS,
   onConnectionState,
@@ -150,6 +162,10 @@ export async function runServerTurn({
   const requestedTurnId = turnId || globalThis.crypto?.randomUUID?.() || `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`
   const maxAttempts = Math.max(1, Number(reconnectMaxAttempts) || DEFAULT_RECONNECT_MAX_ATTEMPTS)
   const recoveryDelay = finiteDelay(recoveryPollIntervalMs, DEFAULT_RECOVERY_POLL_INTERVAL_MS)
+  const maxUnconfirmedAttempts = Math.max(
+    1,
+    Number(unconfirmedRecoveryMaxAttempts) || DEFAULT_UNCONFIRMED_RECOVERY_MAX_ATTEMPTS,
+  )
   let activeTurnId = requestedTurnId
   let after = Number.isInteger(afterSequence) ? afterSequence : -1
   let terminal = null
@@ -160,6 +176,7 @@ export async function runServerTurn({
   let recoveryMode = false
   let webSocketDisabled = false
   let initialTurnConfirmed
+  let unconfirmedAttempts = 0
   let startedNotified = false
   let resumeWakeRequested = false
   let activeRequestController = null
@@ -444,6 +461,7 @@ export async function runServerTurn({
     let turn = initialOutcome.turn
     if (initialOutcome.kind === 'failed') {
       if (!isAmbiguousInitialRequestError(initialOutcome.error)) throw initialOutcome.error
+      unconfirmedAttempts = 1
 
       // The POST may have reached the server even when its response body was
       // cut off. The client already knows the durable turn id, so first take
@@ -457,6 +475,9 @@ export async function runServerTurn({
         terminal || observed.turn || observed.delivered > 0 || confirmsExistingTurn(initialOutcome.error),
       )
       recoveryMode = !initialTurnConfirmed
+      if (recoveryMode && unconfirmedAttempts >= maxUnconfirmedAttempts) {
+        throw unconfirmedInitialTurnError(requestedTurnId, unconfirmedAttempts, observed.cause || initialOutcome.error)
+      }
       turn = observed.turn || {
         sessionId,
         turnId: requestedTurnId,
@@ -533,9 +554,13 @@ export async function runServerTurn({
             if (cancelRequested && error?.name === 'AbortError') continue
             if (confirmsExistingTurn(error)) await acknowledgeStartedTurn()
             else if (!isAmbiguousInitialRequestError(error)) throw error
+            else unconfirmedAttempts += 1
             observed.cause = error
           }
           if (terminal) continue
+          if (!initialTurnConfirmed && unconfirmedAttempts >= maxUnconfirmedAttempts) {
+            throw unconfirmedInitialTurnError(activeTurnId, unconfirmedAttempts, observed.cause)
+          }
         }
 
         if (!cancelRequested && initialTurnConfirmed && observed.turn?.status === 'interrupted') {

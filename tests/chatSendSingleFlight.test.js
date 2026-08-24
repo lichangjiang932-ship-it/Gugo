@@ -253,6 +253,62 @@ test('a normal draft becomes a sidebar session only after the first Turn is acce
   }
 })
 
+test('a persisted TURN_INCOMPLETE recovery card does not block a new message', async () => {
+  const dom = setupDom()
+  const actions = []
+  const root = createRoot(document.getElementById('root'))
+  let triggerSend = null
+  let turnCalls = 0
+  setAuthToken('local-test-token')
+
+  try {
+    await act(async () => {
+      root.render(createElement(Harness, {
+        dispatch: (action) => actions.push(action),
+        onReady: (value) => { triggerSend = value },
+        state: {
+          activeSessionId: 'session-incomplete',
+          agentMode: 'chat',
+          sessions: [{
+            id: 'session-incomplete',
+            title: 'Interrupted task',
+            modelName: 'model-a',
+            modelProviderId: 'provider-a',
+            messages: [{
+              id: 'assistant-incomplete',
+              role: 'assistant',
+              content: 'partial output',
+              meta: {
+                failed: true,
+                streaming: false,
+                serverTurnId: 'old-turn',
+                serverFailure: { code: 'TURN_INCOMPLETE', retryable: true },
+              },
+            }],
+          }],
+          skillConfigs: {},
+          toolsConfig: {},
+        },
+        runChatTurn: async ({ onTurnAccepted }) => {
+          turnCalls += 1
+          onTurnAccepted?.({ turnId: 'new-turn' })
+          return { completed: true }
+        },
+      }))
+    })
+
+    let accepted
+    await act(async () => { accepted = await triggerSend('start a new message') })
+    assert.equal(accepted, true)
+    assert.equal(turnCalls, 1)
+    assert.equal(actions.filter((action) => action.type === 'SEND_MESSAGE').length, 1)
+  } finally {
+    setAuthToken('')
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('a project draft stays out of the sidebar until ACK and commits its workspace with the first message', async () => {
   const dom = setupDom()
   const actions = []

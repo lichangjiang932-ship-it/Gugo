@@ -13,12 +13,16 @@ function wrapStatement(statement) {
   }
 }
 
-function createNodeSqliteDatabase(DatabaseSync) {
+export function createNodeSqliteDatabase(DatabaseSync) {
   return class NodeSqliteDatabase {
     constructor(filename, options = {}) {
       this.database = new DatabaseSync(filename, options)
       this.savepointId = 0
       this.transactionDepth = 0
+    }
+
+    get inTransaction() {
+      return this.transactionDepth > 0
     }
 
     prepare(sql) {

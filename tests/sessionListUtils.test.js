@@ -27,7 +27,9 @@ test('session history is one continuous newest-first list', () => {
 
 test('session rows stay compact while workspace sessions can render under project groups', () => {
   assert.match(sessionListSource, /orderedSessions\.map\(\(session, index\) => renderSession\(session, index\)\)/)
-  assert.match(sessionListSource, /block truncate text-\[12px\] leading-4/)
+  assert.match(sessionListSource, /block truncate text-\[13px\] leading-\[18px\]/)
+  assert.match(sessionListSource, /truncate text-\[13px\] font-medium leading-\[18px\] text-ink/)
+  assert.equal((sessionListSource.match(/flex h-8 items-/g) || []).length, 2)
   assert.equal((sessionListSource.match(/\{session\.title\}/g) || []).length, 1)
   assert.doesNotMatch(
     sessionListSource,

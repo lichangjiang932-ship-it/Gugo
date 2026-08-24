@@ -1046,6 +1046,35 @@ test('runServerTurn does not acknowledge an ambiguous start until the server pro
   assert.equal(startedCalls, 1)
 })
 
+test('runServerTurn stops an unconfirmed initial recovery after a finite retry budget', async () => {
+  let runCalls = 0
+  const fetchImpl = async (url) => {
+    if (url === '/api/turns/run') {
+      runCalls += 1
+      throw new TypeError('connection closed before acknowledgement')
+    }
+    if (String(url).startsWith('/api/turns/events?')) return response({ events: [] })
+    if (String(url).startsWith('/api/turns/t-unconfirmed?')) {
+      return response({ error: { code: 'TURN_NOT_FOUND', message: 'turn not found' } }, 404)
+    }
+    assert.fail(`unexpected unconfirmed recovery request: ${url}`)
+  }
+
+  await assert.rejects(
+    runServerTurn({
+      sessionId: 's-unconfirmed', turnId: 't-unconfirmed', content: 'send once',
+      fetchImpl, recoveryPollIntervalMs: 0, unconfirmedRecoveryMaxAttempts: 3,
+    }),
+    (error) => {
+      assert.equal(error.code, 'TURN_REQUEST_UNCONFIRMED')
+      assert.equal(error.retryable, true)
+      assert.equal(error.attempts, 3)
+      return true
+    },
+  )
+  assert.equal(runCalls, 3)
+})
+
 test('runServerTurn waits for a terminal cancellation event after the stop is acknowledged', async () => {
   const urls = []
   const controller = new AbortController()
