@@ -126,14 +126,8 @@ export default function ChatSplit() {
         : String(error?.message || t('errors.chatFailure')),
     })
   }, [t, toast])
-  const showSendBlocked = useCallback((reason) => {
-    const key = reason === 'directory-approval'
-      ? 'chatSteering.directoryAuthorizationRequired'
-      : reason === 'send-pending'
-        ? 'chatSteering.sendPending'
-        : 'chatSteering.turnRunning'
-    setWorkbenchMessage(t(key))
-  }, [t])
+  const showSendBlocked = useCallback((reason) => setWorkbenchMessage(t(reason === 'directory-approval' ? 'chatSteering.directoryAuthorizationRequired'
+    : reason === 'send-pending' ? 'chatSteering.sendPending' : 'chatSteering.turnRunning')), [t])
   const triggerSendFlow = useChatSendFlow({
     abortCtrlRef, abortSessionIdRef, activateWorkspaceForTurn, attachments,
     approvalMode: approvals.approvalSettings?.mode || 'normal',
