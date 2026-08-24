@@ -142,7 +142,10 @@ test('a failed retry republishes continue-generation only for the retried sessio
 })
 
 test('the continue-generation button signals a failed turn retry instead of sending a new prompt', () => {
-  const source = readFileSync(new URL('../src/pages/ChatSplit/useChatTurnRecovery.js', import.meta.url), 'utf8')
+  const source = readFileSync(
+    new URL('../src/pages/ChatSplit/useChatTurnRecovery.js', import.meta.url),
+    'utf8',
+  ).replace(/\r\n/g, '\n')
   const start = source.indexOf('const handleResume = useCallback(() => {')
   const end = source.indexOf('\n\n  return', start)
   assert.ok(start >= 0 && end > start)
