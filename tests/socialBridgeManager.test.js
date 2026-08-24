@@ -168,8 +168,10 @@ test('unknown inbound contacts are parked before agent or vision work, then allo
      ORDER BY message.created_at ASC
   `).all(integration.id)
   assert.equal(messagesAfterAllow.length, 2)
-  assert.match(messagesAfterAllow[0].content, /please run this/)
-  assert.match(messagesAfterAllow[0].content, /approved image/)
+  const deliveredUserMessage = messagesAfterAllow.find((message) => message.sender_kind === 'user')
+  assert.ok(deliveredUserMessage, 'the approved inbound message must be persisted')
+  assert.match(deliveredUserMessage.content, /please run this/)
+  assert.match(deliveredUserMessage.content, /approved image/)
 
   const second = await manager.receiveExternalMessage({
     integrationId: integration.id,

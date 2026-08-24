@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.43] - 2026-08-25
+
+### Fixed
+
+- Made the social-bridge release test deterministic when user and Agent messages share the same millisecond timestamp.
+
 ## [0.11.42] - 2026-08-25
 
 ### Fixed
