@@ -2,7 +2,7 @@
 import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { availableParallelism, tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 
 import {
   OFFLINE_EVAL_OPTIONS_ENV,
@@ -63,6 +63,7 @@ const testConcurrency = Number.isFinite(configuredConcurrency) && configuredConc
   : defaultConcurrency
 const DEFAULT_BATCH_TIMEOUT_MS = 20 * 60_000
 const DEFAULT_ISOLATED_TIMEOUT_MS = 3 * 60_000
+const PROCESS_TREE_KILL_GRACE_MS = 5_000
 
 function positiveIntegerEnv(name, fallback) {
   const parsed = Number(process.env[name])
@@ -163,6 +164,107 @@ function reportProcessError(result, label, timeoutMs) {
   }
 }
 
+function timeoutError(timeoutMs) {
+  const error = new Error(`Test process exceeded ${timeoutMs}ms`)
+  error.code = 'ETIMEDOUT'
+  return error
+}
+
+function killProcessTree(child, signal = 'SIGTERM') {
+  if (!child?.pid) return
+  if (process.platform === 'win32') {
+    // child_process timeout only signals the direct process. node:test workers
+    // (and tools started by a test) can keep inherited handles open forever on
+    // Windows, which in turn makes spawnSync wait forever after its timeout.
+    // taskkill is the supported way to terminate the complete descendant tree.
+    try {
+      const killer = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      killer.on('error', () => {
+        try { child.kill('SIGKILL') } catch { /* process already exited */ }
+      })
+      killer.unref()
+    } catch {
+      try { child.kill('SIGKILL') } catch { /* process already exited */ }
+    }
+    return
+  }
+
+  try {
+    process.kill(-child.pid, signal)
+  } catch {
+    try { child.kill(signal) } catch { /* process already exited */ }
+  }
+}
+
+function runTestProcess(args, { captureOutput = false, timeoutMs }) {
+  return new Promise((resolve) => {
+    const stdout = []
+    const stderr = []
+    let settled = false
+    let timedOut = false
+    let timeoutHandle = null
+    let forceResolveHandle = null
+    let child
+
+    const finish = (status, signal, error = null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutHandle)
+      clearTimeout(forceResolveHandle)
+      resolve({
+        status,
+        signal,
+        error,
+        stdout: captureOutput ? Buffer.concat(stdout) : null,
+        stderr: captureOutput ? Buffer.concat(stderr) : null,
+      })
+    }
+
+    try {
+      child = spawn(process.execPath, args, {
+        stdio: captureOutput ? ['inherit', 'pipe', 'pipe'] : 'inherit',
+        env: testEnv,
+        windowsHide: true,
+        // A dedicated process group lets POSIX runners terminate workers and
+        // tool subprocesses along with the direct node:test process.
+        detached: process.platform !== 'win32',
+      })
+    } catch (error) {
+      finish(null, null, error)
+      return
+    }
+
+    if (captureOutput) {
+      child.stdout?.on('data', (chunk) => stdout.push(Buffer.from(chunk)))
+      child.stderr?.on('data', (chunk) => stderr.push(Buffer.from(chunk)))
+    }
+
+    child.once('error', (error) => finish(null, null, error))
+    child.once('close', (status, signal) => {
+      finish(status, signal, timedOut ? timeoutError(timeoutMs) : null)
+    })
+
+    timeoutHandle = setTimeout(() => {
+      timedOut = true
+      const error = timeoutError(timeoutMs)
+      killProcessTree(child)
+      forceResolveHandle = setTimeout(() => {
+        // Never let a broken runner or inherited Windows handle hold the CI
+        // harness open after the bounded tree-kill attempt.
+        killProcessTree(child, 'SIGKILL')
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+        child.stdin?.destroy()
+        child.unref()
+        finish(null, null, error)
+      }, PROCESS_TREE_KILL_GRACE_MS)
+    }, timeoutMs)
+  })
+}
+
 let failed = false
 
 if (batchFiles.length) {
@@ -172,17 +274,14 @@ if (batchFiles.length) {
     const label = `batch ${index + 1}/${batches.length} (${batch.length} files)`
     const startedAt = Date.now()
     console.log(`[run-tests] starting ${label}; timeout=${batchTimeoutMs}ms`)
-    const result = spawnSync(process.execPath, [
+    const result = await runTestProcess([
       ...testSetupArgs,
       '--test',
       ...coverageArgs,
       ...batchNodeArgs,
       ...batch,
     ], {
-      stdio: 'inherit',
-      env: testEnv,
-      timeout: batchTimeoutMs,
-      killSignal: 'SIGTERM',
+      timeoutMs: batchTimeoutMs,
     })
     reportProcessError(result, label, batchTimeoutMs)
     console.log(`[run-tests] finished ${label} in ${Date.now() - startedAt}ms; status=${result.status ?? 'none'}`)
@@ -220,16 +319,14 @@ for (const file of isolatedFiles) {
       : []
     const label = `isolated test ${file} (attempt ${attempt}/3)`
     console.log(`[run-tests] starting ${label}; timeout=${isolatedTimeoutMs}ms`)
-    const result = spawnSync(process.execPath, [
+    const result = await runTestProcess([
       ...testSetupArgs,
       ...loaderArgs,
       ...nodeArgs,
       file,
     ], {
-      stdio: ['inherit', 'pipe', 'pipe'],
-      env: testEnv,
-      timeout: isolatedTimeoutMs,
-      killSignal: 'SIGTERM',
+      captureOutput: true,
+      timeoutMs: isolatedTimeoutMs,
     })
     forwardCapturedOutput(result)
     reportProcessError(result, label, isolatedTimeoutMs)

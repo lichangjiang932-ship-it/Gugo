@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.46] - 2026-08-25
+
+### Fixed
+
+- Made Windows test timeouts terminate the complete descendant process tree so CI and Release jobs cannot remain stuck behind inherited worker handles.
+
 ## [0.11.45] - 2026-08-25
 
 ### Fixed
