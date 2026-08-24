@@ -6,6 +6,17 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.42] - 2026-08-25
+
+### Fixed
+
+- Restored desktop chat sending when the initial Turn acknowledgement is lost, bounded recovery retries, and released blocked send state with an actionable error.
+- Synchronized the desktop package and plugin host versions so the packaged backend starts reliably.
+
+### Changed
+
+- Increased project and history text size in the left rail for more comfortable reading.
+
 ## [0.11.40] - 2026-08-24
 
 ### Added
