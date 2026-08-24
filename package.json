@@ -1,7 +1,7 @@
 {
   "name": "gugo",
   "private": true,
-  "version": "0.11.43",
+  "version": "0.11.44",
   "description": "Self-hosted AI workspace for browser and Windows desktop with agents, tools, memory, jobs, and MCP.",
   "author": "lichangjiang932-ship-it",
   "license": "MIT",

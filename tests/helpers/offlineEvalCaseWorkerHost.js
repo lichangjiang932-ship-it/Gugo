@@ -6,7 +6,8 @@ import {
 
 const WORKER_ENTRY = new URL('./offlineEvalCaseWorker.mjs', import.meta.url)
 const WORKER_RESULT_KIND = 'gugo.offline-eval-case-result'
-const WORKER_HARD_TIMEOUT_GRACE_MS = 1_500
+const MIN_WORKER_HARD_TIMEOUT_GRACE_MS = 1_500
+const MAX_WORKER_HARD_TIMEOUT_GRACE_MS = 4_000
 const WORKER_SHUTDOWN_GRACE_MS = 1_000
 
 function failedOutcome(suite, evalCase, diagnostic, durationMs) {
@@ -27,7 +28,12 @@ function caseTimeoutMs(evalCase) {
 }
 
 export function offlineEvalCaseWorkerDeadlineMs(evalCase) {
-  return caseTimeoutMs(evalCase) + WORKER_HARD_TIMEOUT_GRACE_MS
+  const timeoutMs = caseTimeoutMs(evalCase)
+  const startupGraceMs = Math.min(
+    MAX_WORKER_HARD_TIMEOUT_GRACE_MS,
+    Math.max(MIN_WORKER_HARD_TIMEOUT_GRACE_MS, Math.ceil(timeoutMs * 0.8)),
+  )
+  return timeoutMs + startupGraceMs
 }
 
 function validWorkerResult(message, suite, evalCase) {

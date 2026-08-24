@@ -6,8 +6,15 @@ import test from 'node:test'
 import { pathToFileURL } from 'node:url'
 
 import {
+  offlineEvalCaseWorkerDeadlineMs,
   runOfflineEvalCaseInWorker,
 } from './helpers/offlineEvalCaseWorkerHost.js'
+
+test('offline eval worker deadlines preserve short fixtures and bound cold-start grace', () => {
+  assert.equal(offlineEvalCaseWorkerDeadlineMs({ timeoutMs: 20 }), 1_520)
+  assert.equal(offlineEvalCaseWorkerDeadlineMs({}), 9_000)
+  assert.equal(offlineEvalCaseWorkerDeadlineMs({ timeoutMs: 20_000 }), 24_000)
+})
 
 function fixtureSource(harnessUrl, markerPath) {
   return `

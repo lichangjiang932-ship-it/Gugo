@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.44] - 2026-08-25
+
+### Fixed
+
+- Kept offline Agent execution limits strict while giving isolated workers enough bounded cold-start time on Windows CI.
+
 ## [0.11.43] - 2026-08-25
 
 ### Fixed
