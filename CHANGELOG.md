@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.45] - 2026-08-25
+
+### Fixed
+
+- Prevented Windows CI and release validation from hanging indefinitely by running tests in bounded batches with explicit per-process timeouts and progress reporting.
+
 ## [0.11.44] - 2026-08-25
 
 ### Fixed

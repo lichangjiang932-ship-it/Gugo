@@ -61,6 +61,16 @@ const defaultConcurrency = Math.max(1, Math.min(4, availableParallelism()))
 const testConcurrency = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
   ? Math.floor(configuredConcurrency)
   : defaultConcurrency
+const DEFAULT_BATCH_TIMEOUT_MS = 20 * 60_000
+const DEFAULT_ISOLATED_TIMEOUT_MS = 3 * 60_000
+
+function positiveIntegerEnv(name, fallback) {
+  const parsed = Number(process.env[name])
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const batchTimeoutMs = positiveIntegerEnv('TEST_BATCH_TIMEOUT_MS', DEFAULT_BATCH_TIMEOUT_MS)
+const isolatedTimeoutMs = positiveIntegerEnv('TEST_ISOLATED_TIMEOUT_MS', DEFAULT_ISOLATED_TIMEOUT_MS)
 const batchNodeArgs = nodeArgs.some((arg) => arg.startsWith('--test-concurrency'))
   ? nodeArgs
   : [`--test-concurrency=${testConcurrency}`, ...nodeArgs]
@@ -130,21 +140,55 @@ function requiresNativeTransform(file) {
 
 const batchFiles = files.filter((file) => !requiresNativeTransform(file))
 const isolatedFiles = files.filter(requiresNativeTransform)
+const defaultBatchSize = process.platform === 'win32'
+  ? 100
+  : Math.max(1, batchFiles.length)
+const batchSize = positiveIntegerEnv('TEST_BATCH_SIZE', defaultBatchSize)
+
+function chunkFiles(source, size) {
+  const chunks = []
+  for (let index = 0; index < source.length; index += size) {
+    chunks.push(source.slice(index, index + size))
+  }
+  return chunks
+}
+
+function reportProcessError(result, label, timeoutMs) {
+  if (result.error?.code === 'ETIMEDOUT') {
+    console.error(`[run-tests] ${label} exceeded ${timeoutMs}ms and was terminated`)
+    return
+  }
+  if (result.error) {
+    console.error(`[run-tests] ${label} failed to start: ${result.error.message}`)
+  }
+}
 
 let failed = false
 
 if (batchFiles.length) {
-  const result = spawnSync(process.execPath, [
-    ...testSetupArgs,
-    '--test',
-    ...coverageArgs,
-    ...batchNodeArgs,
-    ...batchFiles,
-  ], {
-    stdio: 'inherit',
-    env: testEnv,
-  })
-  if ((result.status ?? 1) !== 0) failed = true
+  const batches = chunkFiles(batchFiles, batchSize)
+  for (let index = 0; index < batches.length; index += 1) {
+    const batch = batches[index]
+    const label = `batch ${index + 1}/${batches.length} (${batch.length} files)`
+    const startedAt = Date.now()
+    console.log(`[run-tests] starting ${label}; timeout=${batchTimeoutMs}ms`)
+    const result = spawnSync(process.execPath, [
+      ...testSetupArgs,
+      '--test',
+      ...coverageArgs,
+      ...batchNodeArgs,
+      ...batch,
+    ], {
+      stdio: 'inherit',
+      env: testEnv,
+      timeout: batchTimeoutMs,
+      killSignal: 'SIGTERM',
+    })
+    reportProcessError(result, label, batchTimeoutMs)
+    console.log(`[run-tests] finished ${label} in ${Date.now() - startedAt}ms; status=${result.status ?? 'none'}`)
+    if ((result.status ?? 1) !== 0) failed = true
+    if (result.error?.code === 'ETIMEDOUT') break
+  }
 }
 
 function isWindowsNativeCrash(result) {
@@ -174,6 +218,8 @@ for (const file of isolatedFiles) {
     const loaderArgs = file.endsWith('.jsx')
       ? ['--import', './scripts/jsxRegister.mjs']
       : []
+    const label = `isolated test ${file} (attempt ${attempt}/3)`
+    console.log(`[run-tests] starting ${label}; timeout=${isolatedTimeoutMs}ms`)
     const result = spawnSync(process.execPath, [
       ...testSetupArgs,
       ...loaderArgs,
@@ -182,13 +228,17 @@ for (const file of isolatedFiles) {
     ], {
       stdio: ['inherit', 'pipe', 'pipe'],
       env: testEnv,
+      timeout: isolatedTimeoutMs,
+      killSignal: 'SIGTERM',
     })
     forwardCapturedOutput(result)
+    reportProcessError(result, label, isolatedTimeoutMs)
 
     if (result.status === 0) {
       passed = true
       break
     }
+    if (result.error?.code === 'ETIMEDOUT') break
     if (hasTapFailure(result) || !isWindowsNativeCrash(result) || attempt === 3) break
     console.warn(
       `[run-tests] native transform crashed for ${file}; retrying (${attempt + 1}/3)`,
