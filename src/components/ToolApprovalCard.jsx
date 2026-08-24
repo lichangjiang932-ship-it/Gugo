@@ -3,8 +3,8 @@ import { AlertTriangle, Check, CheckCheck, ChevronDown, ChevronRight, Terminal, 
 import { useT } from '../i18n/I18nProvider.jsx'
 
 const RISK_TONE = {
-  high: { border: 'border-red-500/50', bg: 'bg-red-500/5', text: 'text-red-600', dot: 'bg-red-500' },
-  medium: { border: 'border-amber-500/50', bg: 'bg-amber-500/5', text: 'text-amber-600', dot: 'bg-amber-500' },
+  high: { border: 'border-danger/50', bg: 'bg-danger/5', text: 'text-danger', dot: 'bg-danger' },
+  medium: { border: 'border-warning/50', bg: 'bg-warning/5', text: 'text-warning', dot: 'bg-warning' },
   low: { border: 'border-ink-fade/50', bg: 'bg-paper-2', text: 'text-ink-fade', dot: 'bg-ink-fade' },
 }
 
@@ -61,8 +61,8 @@ function DiffPreview({ changes }) {
                 <div
                   key={li}
                   className={
-                    line.startsWith('+') ? 'text-emerald-700 bg-emerald-500/10'
-                      : line.startsWith('-') ? 'text-red-700 bg-red-500/10'
+                    line.startsWith('+') ? 'text-success bg-success/10'
+                      : line.startsWith('-') ? 'text-danger bg-danger/10'
                         : 'text-ink-soft'
                   }
                 >
@@ -178,7 +178,7 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
               type="button"
               disabled={busy}
               onClick={() => onDecide?.({ approved: true, remember: true })}
-              className="h-8 px-3 border border-emerald-500/60 rounded-md text-sm text-emerald-700 hover:bg-emerald-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              className="h-8 px-3 border border-success/60 rounded-md text-sm text-success hover:bg-success/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
               <CheckCheck className="w-3.5 h-3.5" />
               {t('toolApproval.alwaysAllow')}

@@ -10,7 +10,7 @@ export default function ProviderDiagnostics({ diagnostics, onClose, t }) {
       <button type="button" onClick={onClose} className="ml-auto p-0.5 text-ink-fade hover:text-ink"><X className="w-3.5 h-3.5" /></button>
     </div>
     {(diagnostics.steps || []).map((step) => <div key={step.name} className="flex items-start gap-2 text-xs">
-      <span className={step.ok ? 'text-emerald-700' : step.advisory ? 'text-amber-600' : 'text-rose-700'}>{step.ok ? '✓' : step.advisory ? '!' : '✕'}</span>
+      <span className={step.ok ? 'text-success' : step.advisory ? 'text-warning' : 'text-danger'}>{step.ok ? '✓' : step.advisory ? '!' : '✕'}</span>
       <div className="flex-1 min-w-0">
         <div className="text-ink-soft">{step.label}{step.latency ? <span className="text-ink-fade"> · {step.latency} ms</span> : null}{!step.ok && step.advisory ? <span className="text-ink-fade"> · {t('modelProviders.diagAdvisory')}</span> : null}</div>
         {!step.ok && (step.error || step.hint) && <div className="text-ink-fade mt-0.5 break-words">{step.hint || step.error}</div>}

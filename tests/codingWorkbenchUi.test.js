@@ -57,6 +57,8 @@ test('unused phone, hooks, cron, and global-shortcut routes are not exposed', ()
   assert.doesNotMatch(app, /path="\/(?:mobile-keys|hooks|cron)"/)
   assert.doesNotMatch(settings, /path: '\/(?:mobile-keys|hooks|cron)'/)
   assert.doesNotMatch(settings, /function renderShortcuts/)
+  assert.equal(fs.existsSync(new URL('../src/pages/HooksView.jsx', import.meta.url)), false)
+  assert.equal(fs.existsSync(new URL('../src/pages/CronJobsPage.jsx', import.meta.url)), false)
 })
 
 test('the root route opens chat directly without the removed 3D cover', () => {

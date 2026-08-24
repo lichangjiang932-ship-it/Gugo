@@ -44,6 +44,16 @@ export function emptyProvider() {
   }
 }
 
+export function nextCustomProviderKey(providers = []) {
+  const usedKeys = new Set((Array.isArray(providers) ? providers : [])
+    .map((provider) => String(provider?.key || '').trim().toLowerCase())
+    .filter(Boolean))
+  if (!usedKeys.has('custom')) return 'custom'
+  let suffix = 2
+  while (usedKeys.has(`custom-${suffix}`)) suffix += 1
+  return `custom-${suffix}`
+}
+
 export function providerKeyError(value) {
   const key = String(value || '').trim()
   if (!key) return 'required'

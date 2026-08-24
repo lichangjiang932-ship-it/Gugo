@@ -1,5 +1,5 @@
 export async function initializeCompletion(s) {
-  const { ARTIFACT_RECOVERY_PHASE_DIAGNOSE, ARTIFACT_RECOVERY_PHASE_FORCE, AVAILABLE_TOOL_CAPABILITIES_MARKER, FALSE_SUCCESS_STATUS, FILE_WRITE_TOOL_NAMES, INCOMPLETE_STATUS, LOCAL_HTML_DELIVERY_GUARD_MARKER, MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS, PDF_LAYOUT_EXECUTION_CONTRACT_MARKER, PROJECT_SCOPE_TARGET, VERIFIED_DIRECTORY_RESOLUTION, buildPdfLayoutExecutionContract, getProjectDirectory, isCommandExecutionTool, isFileArtifactTool, normalizeMutationTarget, path, restoreExecutionConvergence, shellTargetWithCwd, targetsMatch, toolNameFromSpec, validateLocalHtmlDelivery } = s.d
+  const { ARTIFACT_RECOVERY_PHASE_DIAGNOSE, ARTIFACT_RECOVERY_PHASE_FORCE, AVAILABLE_TOOL_CAPABILITIES_MARKER, FALSE_SUCCESS_STATUS, FILE_WRITE_TOOL_NAMES, INCOMPLETE_STATUS, LOCAL_HTML_DELIVERY_GUARD_MARKER, MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS, PDF_LAYOUT_EXECUTION_CONTRACT_MARKER, PROJECT_SCOPE_TARGET, VERIFIED_DIRECTORY_RESOLUTION, buildPdfLayoutExecutionContract, getProjectDirectory, hasSuccessfulLocalPreflightRead, isCommandExecutionTool, isFileArtifactTool, normalizeMutationTarget, path, restoreExecutionConvergence, shellTargetWithCwd, targetsMatch, toolNameFromSpec, validateLocalHtmlDelivery } = s.d
   s.artifactDeliveryRetries = Math.max(0, Number(s.restoredState?.completionGuards?.artifactDeliveryRetries) || 0)
   s.forcedArtifactToolName = s.expectedArtifactTools.has(
       String(s.restoredState?.completionGuards?.forcedArtifactToolName || '').trim(),
@@ -57,6 +57,7 @@ export async function initializeCompletion(s) {
   s.executionEvidenceObserved = Boolean(s.restoredState?.completionGuards?.executionEvidenceObserved)
       || s.deliveredArtifactTools.size > 0
       || s.inheritedArtifactEvidence
+      || (!s.mutationExecutionRequested && hasSuccessfulLocalPreflightRead(s.job?.prompt))
   s.mutationExecutionObserved = Boolean(s.restoredState?.completionGuards?.mutationExecutionObserved)
       || s.deliveredArtifactTools.size > 0
       || s.inheritedArtifactEvidence

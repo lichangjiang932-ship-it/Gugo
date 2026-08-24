@@ -360,6 +360,7 @@ export async function handleTurnEventRequest(
         turnId: body.turnId || undefined,
         content: body.content,
         displayContent: body.displayContent,
+        workspacePath: body.workspacePath,
         modelName: body.modelName || null,
         modelProviderId: body.modelProviderId || null,
         modelConfigRevision: body.modelConfigRevision ?? null,

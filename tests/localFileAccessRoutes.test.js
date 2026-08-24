@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { createServer } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -66,6 +67,7 @@ const previousGitEnabled = process.env.WORKSPACE_GIT_ENABLED
 process.env.WORKSPACE_GIT_ENABLED = '1'
 
 const { createAppServer } = await import('../server/appServer.js')
+const { handleLocalFileAccessRequest } = await import('../server/routes/localFileAccessRoutes.js')
 const { closeDb, getDb } = await import('../server/db.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { getSessionSnapshot, upsertMessage, upsertSession } = await import('../server/services/sessionStore.js')
@@ -89,6 +91,21 @@ test.after(async () => {
 
 function headers(token) {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+}
+
+async function withNativePickerRoute(nativeDirectoryPicker, callback) {
+  const routeServer = createServer((req, res) => {
+    void handleLocalFileAccessRequest(req, res, {
+      env: { SystemRoot: 'C:\\Windows' },
+      nativeDirectoryPicker,
+    })
+  })
+  await new Promise((resolve) => routeServer.listen(0, '127.0.0.1', resolve))
+  try {
+    await callback(`http://127.0.0.1:${routeServer.address().port}`)
+  } finally {
+    await new Promise((resolve) => routeServer.close(resolve))
+  }
 }
 
 async function withEnvironment(overrides, callback) {
@@ -116,6 +133,91 @@ test('local file access routes require authentication', async () => {
   const { token } = issueTestSession({ email: 'local-route-query-auth@example.com' })
   const queryTokenResponse = await fetch(`${origin}/api/local-files?token=${encodeURIComponent(token)}`)
   assert.equal(queryTokenResponse.status, 401)
+})
+
+test('native directory picker route requires auth and preserves selected, canceled, and unsupported states', async () => {
+  const calls = []
+  const alice = issueTestSession({ email: 'native-directory-picker-route@example.com' })
+  await withNativePickerRoute(async (input, options) => {
+    calls.push({ input, options })
+    if (input.defaultPath.endsWith('selected')) {
+      return { supported: true, canceled: false, path: 'C:\\Workspace\\selected' }
+    }
+    if (input.defaultPath.endsWith('cancel')) {
+      return { supported: true, canceled: true, path: '' }
+    }
+    return { supported: false, canceled: false, path: '' }
+  }, async (pickerOrigin) => {
+    const unauthorized = await fetch(`${pickerOrigin}/api/local-files/select-directory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultPath: 'C:\\Workspace\\selected' }),
+    })
+    assert.equal(unauthorized.status, 401)
+    assert.equal((await unauthorized.json()).error.code, 'UNAUTHORIZED')
+    assert.equal(calls.length, 0)
+
+    for (const expected of [
+      { defaultPath: 'C:\\Workspace\\selected', supported: true, canceled: false, path: 'C:\\Workspace\\selected' },
+      { defaultPath: 'C:\\Workspace\\cancel', supported: true, canceled: true, path: '' },
+      { defaultPath: 'C:\\Workspace\\unsupported', supported: false, canceled: false, path: '' },
+    ]) {
+      const response = await fetch(`${pickerOrigin}/api/local-files/select-directory`, {
+        method: 'POST',
+        headers: headers(alice.token),
+        body: JSON.stringify({ defaultPath: expected.defaultPath }),
+      })
+      assert.equal(response.status, 200)
+      assert.deepEqual(await response.json(), {
+        ok: true,
+        supported: expected.supported,
+        canceled: expected.canceled,
+        path: expected.path,
+      })
+    }
+  })
+
+  assert.deepEqual(calls.map(({ input }) => input), [
+    { defaultPath: 'C:\\Workspace\\selected' },
+    { defaultPath: 'C:\\Workspace\\cancel' },
+    { defaultPath: 'C:\\Workspace\\unsupported' },
+  ])
+  assert.equal(calls.every(({ options }) => options.env.SystemRoot === 'C:\\Windows'), true)
+})
+
+test('managed project route creates only a canonical, authorized default workspace path', async () => {
+  const alice = issueTestSession({ email: 'local-route-managed-project@example.com' })
+  setApprovalMode({ userId: alice.userId, mode: 'normal' })
+  const response = await fetch(`${origin}/api/local-files/projects`, {
+    method: 'POST',
+    headers: headers(alice.token),
+    body: JSON.stringify({ name: '..\\..\\CON:* Route project' }),
+  })
+  assert.equal(response.status, 201)
+  const body = await response.json()
+  assert.deepEqual(Object.keys(body.project), ['path'])
+  assert.equal(path.isAbsolute(body.project.path), true)
+  assert.equal(body.project.path, fs.realpathSync(body.project.path))
+  assert.equal(fs.statSync(body.project.path).isDirectory(), true)
+  const relative = path.relative(fs.realpathSync(tempDir), body.project.path)
+  assert.equal(relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative), false)
+  assert.doesNotMatch(path.basename(body.project.path), /[<>:"/\\|?*]/)
+  assert.equal(
+    getDb().prepare('SELECT COUNT(*) AS count FROM local_file_grants WHERE user_id = ?').get(alice.userId).count,
+    1,
+  )
+  assert.equal(
+    getDb().prepare('SELECT COUNT(*) AS count FROM workspace_trust WHERE user_id = ?').get(alice.userId).count,
+    1,
+  )
+
+  const invalid = await fetch(`${origin}/api/local-files/projects`, {
+    method: 'POST',
+    headers: headers(alice.token),
+    body: JSON.stringify({ name: '   ' }),
+  })
+  assert.equal(invalid.status, 400)
+  assert.equal((await invalid.json()).error.code, 'PROJECT_NAME_REQUIRED')
 })
 
 test('directory and workspace trust routes preserve session scope without database persistence', async () => {

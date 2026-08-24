@@ -12,6 +12,7 @@ process.env.APP_DATA_DIR = tempDir
 process.env.ARTIFACT_DIR = path.join(tempDir, 'artifacts')
 process.env.YMA_TEST_DATA_ROOT = tempDir
 process.env.YMA_TEST_DEFAULT_OUTPUT_DIR = path.join(tempDir, 'output')
+fs.mkdirSync(process.env.YMA_TEST_DEFAULT_OUTPUT_DIR, { recursive: true })
 
 const { closeDb, createUser } = await import('../server/db.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
@@ -27,7 +28,18 @@ const {
   localArtifactPublicationKey,
   persistLocalToolArtifactsAsync,
 } = await import('../server/services/loop/heuristics/toolSelection.js')
-const { createLocalFileArtifactAsync } = await import('../server/services/artifactGen.js')
+const {
+  clearArtifactValidatedMutationTargets,
+  powerShellVerificationTargets,
+} = await import('../server/services/loop/heuristics/mutationVerification.js')
+const {
+  createDocx,
+  createImageArtifact,
+  createLocalFileArtifactAsync,
+  createPdf,
+  createPptx,
+  createXlsx,
+} = await import('../server/services/artifactGen.js')
 const { getSideEffectExecutionLedger } = await import('../server/services/sideEffectExecutionLedger.js')
 const {
   isLocalMutationCall,
@@ -423,8 +435,8 @@ test('local tool artifact publication is idempotent across committed-ledger chec
 })
 
 test('concurrent local publication reuses one artifact and stays isolated across users', async () => {
-  const sourcePath = path.join(tempDir, 'parallel-local-output.pdf')
-  fs.writeFileSync(sourcePath, '%PDF-1.4\nparallel-output')
+  const sourcePath = path.join(tempDir, 'parallel-local-output.bin')
+  fs.writeFileSync(sourcePath, 'parallel-output')
   const call = { id: 'parallel-local-call', name: 'bash_exec', args: { cwd: tempDir } }
   const result = {
     ok: true,
@@ -722,8 +734,8 @@ test('stable publication fails closed when marker filesystem lacks atomic hard l
 })
 
 test('stable publication falls back to exclusive copy when the artifact filesystem rejects hard links', async () => {
-  const sourcePath = path.join(tempDir, 'hard-link-fallback.pdf')
-  fs.writeFileSync(sourcePath, '%PDF-1.4\nfallback')
+  const sourcePath = path.join(tempDir, 'hard-link-fallback.bin')
+  fs.writeFileSync(sourcePath, 'fallback')
   const call = { id: 'hard-link-fallback-call', name: 'bash_exec', args: { cwd: tempDir } }
   const result = {
     ok: true,
@@ -751,7 +763,7 @@ test('stable publication falls back to exclusive copy when the artifact filesyst
     assert.deepEqual(artifacts.publicationFailures, [])
     assert.equal(
       fs.readFileSync(path.join(process.env.ARTIFACT_DIR, artifacts[0].filename), 'utf8'),
-      '%PDF-1.4\nfallback',
+      'fallback',
     )
     assert.deepEqual(
       fs.readdirSync(process.env.ARTIFACT_DIR).filter((name) => /^\.publish-.*\.(?:lock|tmp)$/.test(name)),
@@ -1189,6 +1201,7 @@ test('local artifact publication failures remain observable without changing sou
   assert.deepEqual(artifacts, [])
   assert.deepEqual(artifacts.publicationFailures, [{
     code: 'artifact_publication_failed',
+    phase: 'publication',
     causeCode: 'ENOENT',
     candidateIndex: 0,
     filename: 'output-removed-before-publication.pdf',
@@ -1614,6 +1627,125 @@ test('PowerShell verification classification rejects mixed read and write script
   assert.equal(isLocalMutationCall(mixed), true)
   assert.equal(isReadOnlyPowerShellVerificationCall(aliasMutation), false)
   assert.equal(isLocalMutationCall(aliasMutation), true)
+})
+
+test('generic PowerShell metadata and unbound hashes cannot verify a mutation', () => {
+  const target = path.join(tempDir, 'binary-output.docx')
+  for (const command of [
+    `powershell -NoProfile -Command "Get-Item -LiteralPath '${target}'"`,
+    `powershell -NoProfile -Command "(Get-FileHash -LiteralPath '${target}' -Algorithm SHA256).Hash"`,
+    `powershell -NoProfile -Command "Get-Content -LiteralPath '${target}' -Raw"`,
+  ]) {
+    assert.deepEqual(
+      [...powerShellVerificationTargets({ name: 'bash_exec', args: { command } }, {
+        ok: true,
+        exitCode: 0,
+        stdout: 'attacker-controlled-or-unbound-output',
+      })],
+      [],
+    )
+  }
+  const textTarget = path.join(tempDir, 'text-output.txt')
+  assert.deepEqual([...powerShellVerificationTargets({
+    name: 'bash_exec',
+    args: { command: `powershell -NoProfile -Command "Get-Content -LiteralPath '${textTarget}' -Raw"` },
+  }, { ok: true, exitCode: 0, path: textTarget, stdout: 'verified text' })], [
+    textTarget.replaceAll('\\', '/'),
+  ])
+})
+
+test('binary structure receipts require digest, path, user, session, and turn binding', () => {
+  const sourcePath = path.join(tempDir, 'bound-output.pdf')
+  const artifactPath = path.join(process.env.ARTIFACT_DIR, 'bound-output.pdf')
+  const binding = { userId: 'artifact-user', sessionId: 'artifact-session', turnId: 'bound-turn' }
+  const receipt = {
+    artifactId: 'bound-artifact',
+    verified: true,
+    verifier: 'bounded_structure_parser',
+    verifierVersion: 1,
+    format: 'pdf',
+    byteLength: 128,
+    sha256: 'a'.repeat(64),
+    path: sourcePath,
+    sourcePath,
+    artifactPath,
+    ...binding,
+  }
+
+  for (const invalid of [
+    { ...receipt, sha256: null },
+    { ...receipt, userId: 'other-user' },
+    { ...receipt, sessionId: 'other-session' },
+    { ...receipt, turnId: 'other-turn' },
+    { ...receipt, sourcePath: 'relative.pdf' },
+    { ...receipt, artifactPath: 'relative.pdf' },
+  ]) {
+    const pending = new Set([sourcePath])
+    assert.equal(clearArtifactValidatedMutationTargets(pending, [invalid], binding), false)
+    assert.deepEqual([...pending], [sourcePath])
+  }
+
+  const pending = new Set([sourcePath])
+  assert.equal(clearArtifactValidatedMutationTargets(pending, [receipt], binding), true)
+  assert.deepEqual([...pending], [])
+})
+
+test('DOCX PPTX XLSX PDF and image publications emit exact turn-bound digest receipts', async () => {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  )
+  const generated = [
+    await createDocx({ title: 'Receipt DOCX', paragraphs: [{ text: 'verified' }] }),
+    await createPptx({ title: 'Receipt PPTX', slides: [{ title: 'Verified', bullets: ['body'] }] }),
+    await createXlsx({ title: 'Receipt XLSX', sheets: [{ name: 'Data', rows: [['verified']] }] }),
+    await createPdf({ title: 'Receipt PDF', blocks: [{ type: 'paragraph', text: 'verified' }] }),
+    createImageArtifact({ title: 'Receipt PNG', buffer: png, mimeType: 'image/png' }),
+  ]
+
+  for (const [index, generatedArtifact] of generated.entries()) {
+    const sourcePath = path.join(tempDir, `receipt-source-${index}${path.extname(generatedArtifact.filename)}`)
+    fs.copyFileSync(generatedArtifact.fullPath, sourcePath)
+    const turnId = `binary-receipt-turn-${index}`
+    const call = {
+      id: `binary-receipt-call-${index}`,
+      name: 'bash_exec',
+      args: { cwd: tempDir, expected_outputs: [sourcePath] },
+    }
+    const artifacts = await persistLocalToolArtifactsAsync({
+      call,
+      result: {
+        ok: true,
+        cwd: tempDir,
+        verifiedOutputs: [{
+          path: sourcePath,
+          declaredPath: sourcePath,
+          scope: 'grant',
+          type: 'file',
+        }],
+      },
+      job: {
+        id: turnId,
+        origin: 'chat',
+        userId: 'artifact-user',
+        sessionId: 'artifact-session',
+      },
+      step: null,
+      toolCallId: call.id,
+    })
+    assert.equal(artifacts.length, 1, generatedArtifact.filename)
+    assert.equal(artifacts.verificationReceipts.length, 1, generatedArtifact.filename)
+    const receipt = artifacts.verificationReceipts[0]
+    const managedBytes = fs.readFileSync(receipt.artifactPath)
+    assert.equal(receipt.sha256, crypto.createHash('sha256').update(managedBytes).digest('hex'))
+    assert.equal(receipt.byteLength, managedBytes.byteLength)
+    assert.equal(receipt.userId, 'artifact-user')
+    assert.equal(receipt.sessionId, 'artifact-session')
+    assert.equal(receipt.turnId, turnId)
+    assert.equal(receipt.toolCallId, call.id)
+    assert.equal(path.isAbsolute(receipt.sourcePath), true)
+    assert.equal(path.isAbsolute(receipt.artifactPath), true)
+  }
 })
 
 test('creating another artifact after selection invalidates it and requires reconfirmation', async () => {

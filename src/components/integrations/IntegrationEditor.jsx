@@ -1,7 +1,7 @@
-import { createPortal } from 'react-dom'
 import { ChevronDown, Circle, TestTube2, X } from 'lucide-react'
 import IntegrationToggle from './IntegrationToggle.jsx'
 import { normalizeFields, SECRET_SENTINEL } from './integrationFormUtils.js'
+import Modal from '../Modal.jsx'
 
 function Field({ field, form, onChange, t }) {
   const value = field.location === 'secret' ? form.secret?.[field.key] || '' : form.config?.[field.key] || ''
@@ -18,7 +18,7 @@ function WechatQrCard({ qr, state, onRefresh, t }) {
     {qr?.qrcodeUrl && <div className="flex flex-col sm:flex-row items-center gap-3">
       <div className="relative w-40 h-40 shrink-0"><img src={qr.qrcodeUrl} alt="WeChat QR code" className={`w-40 h-40 rounded-md border border-ink-fade/30 bg-white ${['expired', 'timeout', 'error'].includes(state.phase) ? 'opacity-40 grayscale' : ''}`} />{['expired', 'timeout', 'error'].includes(state.phase) && <button type="button" onClick={onRefresh} className="absolute inset-0 m-auto h-9 w-28 rounded-md bg-ink text-paper text-xs hover:bg-ink-soft self-center">{t('wechat.qr.refresh')}</button>}</div>
       <div className="flex flex-col gap-2 min-w-0">
-        {state.phase === 'ready' && <span className="inline-flex items-center gap-1.5 self-start h-6 px-2 rounded-full bg-paper-2 text-xs text-ink-soft font-mono"><Circle className="w-2 h-2 fill-emerald-500 text-emerald-500" />{t('wechat.qr.expiresIn', { seconds: state.secondsLeft })}</span>}
+        {state.phase === 'ready' && <span className="inline-flex items-center gap-1.5 self-start h-6 px-2 rounded-full bg-paper-2 text-xs text-ink-soft font-mono"><Circle className="w-2 h-2 fill-emerald-500 text-success" />{t('wechat.qr.expiresIn', { seconds: state.secondsLeft })}</span>}
         {state.statusText && !['expired', 'timeout', 'error'].includes(state.phase) && <span className="text-xs text-ink-soft leading-relaxed">{state.statusText}</span>}
         {['expired', 'timeout', 'error'].includes(state.phase) && state.errorText && <span className="text-xs text-danger leading-relaxed">{state.errorText}</span>}
         <span className="text-xs text-ink-fade leading-relaxed">{t('access.wechatHint')}</span>
@@ -31,9 +31,9 @@ export default function IntegrationEditor({ form, meta, saving, testingId, testM
   const fields = normalizeFields(meta)
   const requiredFields = fields.filter((field) => !field.optional)
   const optionalFields = fields.filter((field) => field.optional)
-  return createPortal(<div className="fixed inset-0 z-[80] bg-ink/35 flex items-center justify-center p-4">
-    <form onSubmit={onSave} className="w-full max-w-lg max-h-[88vh] overflow-y-auto rounded-md border border-ink bg-paper shadow-xl p-5 flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-3"><div><h2 className="font-display text-xl text-ink">{meta?.label || form.provider}</h2><div className="font-mono text-[10px] text-ink-fade">{form.provider}</div></div><button type="button" onClick={onClose} className="p-1 rounded hover:bg-paper-2 text-ink-fade hover:text-ink"><X className="w-4 h-4" /></button></div>
+  return <Modal onClose={onClose} closeOnBackdrop={false} ariaLabelledby="integration-editor-title" className="max-w-lg border-ink">
+    <form onSubmit={onSave} className="max-h-[88vh] overflow-y-auto p-5 flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-3"><div><h2 id="integration-editor-title" className="font-display text-xl text-ink">{meta?.label || form.provider}</h2><div className="font-mono text-[10px] text-ink-fade">{form.provider}</div></div><button type="button" onClick={onClose} className="p-1 rounded hover:bg-paper-2 text-ink-fade hover:text-ink"><X className="w-4 h-4" /></button></div>
       <label className="flex flex-col gap-1.5"><span className="text-xs text-ink-fade">{t('integrations.name')}</span><input value={form.name} onChange={(event) => onChange('name', event.target.value)} className="h-10 px-3 rounded-md border border-ink-fade/40 bg-paper text-sm outline-none focus:border-focus" /></label>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">{requiredFields.map((field) => <Field key={`${field.location}.${field.key}`} field={field} form={form} onChange={onChange} t={t} />)}</div>
       {!!optionalFields.length && <details className="rounded-md border border-ink-fade/30 px-3 py-2 group"><summary className="cursor-pointer text-sm text-ink-soft select-none list-none flex items-center gap-1.5"><ChevronDown className="w-3.5 h-3.5 transition-transform group-open:rotate-180" />{t('integrations.advancedOptions')}</summary><div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">{optionalFields.map((field) => <Field key={`${field.location}.${field.key}`} field={field} form={form} onChange={onChange} t={t} />)}</div></details>}
@@ -45,5 +45,5 @@ export default function IntegrationEditor({ form, meta, saving, testingId, testM
         <div className="flex gap-2"><button type="button" onClick={onClose} className="h-9 px-4 rounded-md border border-ink-fade/40 text-sm text-ink-soft hover:bg-paper-2">{t('integrations.cancel')}</button><button disabled={saving || !form.name.trim()} className="h-9 px-4 rounded-md bg-accent text-accent-contrast text-sm hover:bg-accent/90 disabled:opacity-50">{form.enabled ? `${t('integrations.save')} & ${t('integrations.enabled')}` : t('integrations.save')}</button></div>
       </div>
     </form>
-  </div>, document.body)
+  </Modal>
 }

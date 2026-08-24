@@ -1,13 +1,12 @@
-import { isValidElement, memo, useState } from 'react'
-import { Check, Copy } from 'lucide-react'
+import { memo, useState } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
 import FullscreenMediaModal from './FullscreenMediaModal.jsx'
-import { useT } from '../i18n/I18nProvider.jsx'
 import { findArtifactReferenceByHref, findArtifactReferenceByLocalPath, normalizeArtifactLocalPath, remarkArtifactReferences, remarkLocalPathLinks } from '../lib/artifactReferences.js'
-import { copyTextToClipboard } from '../lib/clipboard.js'
+import { CodeBlock, SelectableFileLink } from './markdown/MarkdownControls.jsx'
+import { nodeText } from './markdown/markdownUtils.js'
 
 /**
  * MarkdownRenderer —— 安全渲染 Markdown + 代码高亮
@@ -17,7 +16,7 @@ import { copyTextToClipboard } from '../lib/clipboard.js'
  * 2. rehype-sanitize 清洗危险 HTML（XSS 防护，schema 见 sanitizeSchema）
  * 3. rehype-highlight 给代码块加语法高亮 className
  *
- * 样式依赖 highlight.js 的主题 CSS，在 index.html 或全局 CSS 中引入即可。
+ * highlight.js 只负责生成 token class，主题色由 index.css 的语义变量提供。
  */
 
 const sanitizeSchema = {
@@ -49,32 +48,12 @@ function markdownUrlTransform(value) {
   return isLocalPathHref(value) ? value : defaultUrlTransform(value)
 }
 
-function nodeText(node) {
-  if (typeof node === 'string' || typeof node === 'number') return String(node)
-  if (Array.isArray(node)) return node.map(nodeText).join('')
-  if (isValidElement(node)) return nodeText(node.props.children)
-  return ''
-}
-
 function isManagedArtifactHref(href = '') {
   try {
     return new URL(String(href || ''), 'http://artifact.local').pathname.startsWith('/api/artifacts/')
   } catch {
     return String(href || '').startsWith('/api/artifacts/')
   }
-}
-
-function selectedTextIntersects(element) {
-  const selection = element?.ownerDocument?.defaultView?.getSelection?.()
-  if (!selection || selection.isCollapsed || selection.rangeCount < 1) return false
-  for (let index = 0; index < selection.rangeCount; index += 1) {
-    try {
-      if (selection.getRangeAt(index).intersectsNode(element)) return true
-    } catch {
-      // A stale selection range can disappear while React handles the click.
-    }
-  }
-  return false
 }
 
 function referenceLocalPath(reference) {
@@ -87,115 +66,11 @@ function referenceLocalPath(reference) {
   return candidates.find((value) => normalizeArtifactLocalPath(value)) || ''
 }
 
-function SelectableFileLink({
-  anchorProps,
-  children,
-  href,
-  localPath,
-  onLinkClick,
-}) {
-  const { t } = useT()
-  const [copyState, setCopyState] = useState('idle')
-  const copyPath = async (event) => {
-    event.preventDefault()
-    event.stopPropagation()
-    try {
-      await copyTextToClipboard(localPath)
-      setCopyState('copied')
-    } catch {
-      setCopyState('error')
-    }
-    window.setTimeout(() => setCopyState('idle'), 1600)
-  }
-
-  return (
-    <span className="chat-inline-file-reference">
-      <a
-        {...anchorProps}
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        data-testid="inline-artifact-link"
-        className="chat-output-file-name font-semibold decoration-current/45 underline-offset-4 hover:decoration-current"
-        onClick={(event) => {
-          if (selectedTextIntersects(event.currentTarget)) {
-            event.preventDefault()
-            return
-          }
-          if (onLinkClick?.(href, event)) event.preventDefault()
-        }}
-      >
-        {children}
-      </a>
-      {localPath && (
-        <button
-          type="button"
-          data-testid="copy-local-path"
-          className="chat-inline-path-copy"
-          aria-label={copyState === 'copied' ? t('chatMessages.copied') : t('chatMessages.copyContent')}
-          title={copyState === 'copied' ? t('chatMessages.copied') : localPath}
-          onClick={copyPath}
-        >
-          {copyState === 'copied'
-            ? <Check className="h-3 w-3 text-emerald-600" />
-            : <Copy className="h-3 w-3" />}
-        </button>
-      )}
-    </span>
-  )
-}
-
-function CodeBlock({ children, streaming = false }) {
-  const { t } = useT()
-  const [copyState, setCopyState] = useState('idle')
-  const child = Array.isArray(children) ? children[0] : children
-  const className = isValidElement(child) ? child.props.className || '' : ''
-  const language = className.match(/language-([\w-]+)/)?.[1] || 'text'
-  const source = nodeText(child).replace(/\n$/, '')
-
-  const copy = async () => {
-    try {
-      await copyTextToClipboard(source)
-      setCopyState('copied')
-    } catch {
-      setCopyState('error')
-    }
-    window.setTimeout(() => setCopyState('idle'), 1600)
-  }
-
-  const copyLabel = copyState === 'copied'
-    ? t('chatMessages.copied')
-    : copyState === 'error'
-      ? t('chatMessages.copyFailed')
-      : t('chatMessages.copy')
-
-  return (
-    <div className="chat-code-block not-prose my-3 overflow-hidden rounded-card border border-neutral-200 bg-neutral-50 shadow-sm">
-      <div className="flex h-7 items-center justify-between border-b border-ink/10 px-2.5">
-        <span className="font-mono text-xs uppercase tracking-[0.16em] text-ink-fade">{language}</span>
-        {!streaming && (
-          <button
-            type="button"
-            onClick={copy}
-            className={`inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-xs transition-colors hover:bg-paper hover:text-ink ${copyState === 'error' ? 'text-rose-700' : 'text-ink-fade'}`}
-            aria-label={copyState === 'idle' ? t('chatMessages.copyContent') : copyLabel}
-            aria-live="polite"
-          >
-            {copyState === 'copied' ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
-            {copyLabel}
-          </button>
-        )}
-      </div>
-      <pre className="m-0 overflow-x-auto p-3 text-[12px] leading-5">{children}</pre>
-    </div>
-  )
-}
-
 function MarkdownRenderer({ artifactReferences = [], children, className = '', onLinkClick, streaming = false }) {
   const [fullscreen, setFullscreen] = useState(null)
 
   return (
-    <div className={`chat-markdown prose prose-sm max-w-none leading-[1.75] ${className}`}>
+    <div className={`chat-markdown prose prose-sm max-w-none leading-[1.75] ${streaming ? 'chat-markdown-streaming' : ''} ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, [remarkArtifactReferences, { references: artifactReferences }], remarkLocalPathLinks]}
         urlTransform={markdownUrlTransform}
@@ -261,7 +136,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
                 {...(isLocalPath ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
                 data-testid={isLocalPath ? 'inline-local-path-link' : undefined}
                 className={isLocalPath
-                    ? 'inline-flex rounded-control border border-neutral-200 bg-neutral-100 px-1.5 py-0.5 font-medium text-[0.88em] text-neutral-700 no-underline hover:border-blue-300 hover:text-blue-600'
+                    ? 'inline-flex rounded-control border border-ink/10 bg-paper-2 px-1.5 py-0.5 font-medium text-[0.88em] text-ink-soft no-underline hover:border-accent/40 hover:text-accent-ink'
                     : anchorProps.className}
                 onClick={(event) => {
                   if (isLocalPath) event.preventDefault()
@@ -278,7 +153,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
           code: ({ className, children, ...props }) => {
             if (!className) {
               return (
-                <code className="rounded-control border border-neutral-200 bg-neutral-100 px-1.5 py-0.5 text-[0.86em] font-medium text-neutral-700" {...props}>
+                <code className="rounded-control border border-ink/10 bg-paper-2 px-1.5 py-0.5 text-[0.86em] font-medium text-ink-soft" {...props}>
                   {children}
                 </code>
               )
@@ -295,13 +170,13 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
               {...props}
               src={src}
               alt={alt || ''}
-              className="cursor-zoom-in rounded border border-ink-fade/30 max-w-full h-auto"
+              className="h-auto max-w-full cursor-zoom-in rounded-control border border-ink-fade/30"
               onClick={() => src && setFullscreen({ src, alt: alt || '' })}
             />
           ),
           // 引用块
           blockquote: ({ children, ...props }) => (
-            <blockquote className="my-3 rounded-r-control border-l-2 border-neutral-300 bg-neutral-50 py-2 pl-3.5 pr-3 text-ink-soft" {...props}>
+            <blockquote className="my-3 rounded-r-control border-l-2 border-ink/15 bg-paper-2/60 py-2 pl-3.5 pr-3 text-ink-soft" {...props}>
               {children}
             </blockquote>
           ),

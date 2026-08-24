@@ -8,12 +8,21 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
 import { ToolCallTrace } from '../../src/pages/ChatSplit/chatMessages/ActivityTraces.jsx'
 
-function renderTrace(calls) {
-  return renderToStaticMarkup(
-    <I18nProvider>
-      <ToolCallTrace calls={calls} />
-    </I18nProvider>,
-  )
+function renderTrace(calls, language = 'en') {
+  const previousWindow = globalThis.window
+  const hadWindow = Object.hasOwn(globalThis, 'window')
+  const storage = { getItem: (key) => key === 'lang' ? language : null }
+  globalThis.window = { localStorage: storage }
+  try {
+    return renderToStaticMarkup(
+      <I18nProvider>
+        <ToolCallTrace calls={calls} />
+      </I18nProvider>,
+    )
+  } finally {
+    if (hadWindow) globalThis.window = previousWindow
+    else delete globalThis.window
+  }
 }
 
 test('ToolCallTrace renders one lightweight accessible timeline without a visible title', () => {
@@ -70,6 +79,7 @@ test('ToolCallTrace keeps the latest four steps visible and can reveal older his
   globalThis.SVGElement = dom.window.SVGElement
   globalThis.MouseEvent = dom.window.MouseEvent
   globalThis.localStorage = dom.window.localStorage
+  dom.window.localStorage.setItem('lang', 'en')
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   dom.window.matchMedia = () => ({
     matches: false,
@@ -134,6 +144,7 @@ test('ToolCallTrace defaults command details closed and preserves an explicit se
   globalThis.SVGElement = dom.window.SVGElement
   globalThis.MouseEvent = dom.window.MouseEvent
   globalThis.localStorage = dom.window.localStorage
+  dom.window.localStorage.setItem('lang', 'en')
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   dom.window.matchMedia = () => ({
     matches: false,

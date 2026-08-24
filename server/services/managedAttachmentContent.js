@@ -235,6 +235,49 @@ async function extractWorkbookText(buffer) {
   return bounded(parts.join('\n\n'))
 }
 
+const OFFICE_MIME_TYPES = Object.freeze({
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xlsm': 'application/vnd.ms-excel.sheet.macroEnabled.12',
+  '.odt': 'application/vnd.oasis.opendocument.text',
+  '.odp': 'application/vnd.oasis.opendocument.presentation',
+  '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
+})
+
+/** Extract bounded text from an in-memory Office file without attachment DB access. */
+export async function extractOfficeBufferContent({ buffer, filename = '', maxChars = MAX_EXTRACTED_CHARS } = {}) {
+  const extension = path.extname(String(filename || '')).toLowerCase()
+  const mimeType = OFFICE_MIME_TYPES[extension] || 'application/octet-stream'
+  if (!Buffer.isBuffer(buffer) || !Object.hasOwn(OFFICE_MIME_TYPES, extension)) {
+    return {
+      text: '',
+      mimeType,
+      extractionStatus: 'unsupported',
+      requiresVision: false,
+    }
+  }
+  try {
+    const text = ['.xlsx', '.xlsm', '.ods'].includes(extension)
+      ? await extractWorkbookText(buffer)
+      : await extractOpenXmlText(buffer, extension)
+    return {
+      text: bounded(text, maxChars),
+      mimeType,
+      extractionStatus: text ? 'text' : 'no_text',
+      requiresVision: !text && ['.docx', '.pptx', '.odt', '.odp'].includes(extension),
+    }
+  } catch (error) {
+    return {
+      text: '',
+      mimeType,
+      extractionStatus: 'invalid',
+      requiresVision: false,
+      extractionErrorCode: String(error?.code || 'OFFICE_EXTRACTION_FAILED').slice(0, 120),
+    }
+  }
+}
+
 function isTextAttachment(attachment) {
   return attachment.mimeType.startsWith('text/') ||
     /(?:json|xml|yaml|javascript|typescript|sql|rtf)/i.test(attachment.mimeType) ||
@@ -262,10 +305,15 @@ export async function extractManagedAttachmentContent({ userId, id, maxChars = M
     text = extracted.text
     extractionStatus = extracted.extractionStatus
     requiresVision = extracted.requiresVision
-  } else if (['.xlsx', '.xls', '.xlsm', '.xlsb', '.ods'].includes(extension) && !truncated) {
-    try { text = await extractWorkbookText(buffer) } catch { text = '' }
-  } else if (['.docx', '.pptx', '.odt', '.odp'].includes(extension) && !truncated) {
-    try { text = await extractOpenXmlText(buffer, extension) } catch { text = '' }
+  } else if (Object.hasOwn(OFFICE_MIME_TYPES, extension) && !truncated) {
+    const extracted = await extractOfficeBufferContent({
+      buffer,
+      filename: attachment.name,
+      maxChars,
+    })
+    text = extracted.text
+    extractionStatus = extracted.extractionStatus
+    requiresVision = extracted.requiresVision
   }
   if (text) {
     return {

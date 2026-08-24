@@ -8,6 +8,7 @@ export default function InlineDirectoryBrowser({
   onCancel,
   t,
   browseDirectories = browseLocalDirectoriesApi,
+  neutral = false,
 }) {
   const [directory, setDirectory] = useState(null)
   const [path, setPath] = useState(String(initialPath || ''))
@@ -39,7 +40,7 @@ export default function InlineDirectoryBrowser({
   }, [initialPath, openDirectory])
 
   return (
-    <div className="mt-2 rounded-md border border-sky-500/25 bg-paper p-2.5" data-testid="inline-directory-browser">
+    <div className={`mt-2 rounded-md border bg-paper p-2.5 ${neutral ? 'border-ink/10' : 'border-accent/25'}`} data-testid="inline-directory-browser">
       <div className="flex flex-col gap-2 sm:flex-row">
         <input
           value={path}
@@ -48,7 +49,7 @@ export default function InlineDirectoryBrowser({
             if (event.key === 'Enter' && path.trim() && !loading) void openDirectory(path)
           }}
           aria-label={t('taskSteering.directoryBrowserPath')}
-          className="h-9 min-w-0 flex-1 rounded-md border border-ink/15 bg-paper px-3 font-mono text-xs text-ink outline-none focus:border-sky-600"
+          className={`h-9 min-w-0 flex-1 rounded-md border border-ink/15 bg-paper px-3 font-mono text-xs text-ink outline-none ${neutral ? 'focus:border-ink/35' : 'focus:border-accent/50'}`}
         />
         <button
           type="button"
@@ -99,10 +100,10 @@ export default function InlineDirectoryBrowser({
             key={entry.path}
             type="button"
             onClick={() => void openDirectory(entry.path)}
-            className="flex w-full items-center gap-2 border-b border-ink/5 px-3 py-2 text-left text-xs text-ink-soft last:border-b-0 hover:bg-sky-500/5 hover:text-ink"
+            className={`flex w-full items-center gap-2 border-b border-ink/5 px-3 py-2 text-left text-xs text-ink-soft last:border-b-0 hover:text-ink ${neutral ? 'hover:bg-ink/[0.025]' : 'hover:bg-accent/5'}`}
             role="listitem"
           >
-            <Folder className="h-3.5 w-3.5 shrink-0 text-sky-700" />
+            <Folder className={`h-3.5 w-3.5 shrink-0 ${neutral ? 'text-ink-fade' : 'text-accent-ink'}`} />
             <span className="truncate">{entry.name}</span>
           </button>
         ))}
@@ -128,7 +129,7 @@ export default function InlineDirectoryBrowser({
           type="button"
           onClick={() => onSelect?.(directory?.currentPath || path.trim())}
           disabled={loading || !directory?.currentPath}
-          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-sky-700 px-3 text-xs text-white disabled:opacity-50"
+          className={`inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs disabled:opacity-50 ${neutral ? 'bg-ink text-paper hover:bg-ink-soft' : 'bg-accent text-white'}`}
         >
           <Check className="h-3.5 w-3.5" />
           {t('taskSteering.directoryBrowserSelectCurrent')}

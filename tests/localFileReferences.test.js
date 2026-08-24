@@ -56,6 +56,7 @@ test('verified local write becomes a clickable inline preview reference', () => 
   assert.equal(reference.previewArtifact.content, source)
   assert.equal(reference.previewArtifact.preview.type, 'html')
   assert.equal(reference.previewArtifact.preview.filename, 'qa-second-revision-test.html')
+  assert.deepEqual(reference.changeStats, { additions: 1, deletions: 1 })
   assert.equal(verifiedLocalFileOpenPayload(reference), reference.previewArtifact)
 })
 
@@ -278,6 +279,88 @@ test('persisted receipts open the authenticated real-file URL without embedding 
     size: 12_345,
     summary: '12345 bytes',
   })
+})
+
+test('structured change stats aggregate per path and deduplicate restored tool calls by id', () => {
+  const secondPath = 'D:\\workspace\\second-output.js'
+  const mutation = (id, name, changes) => ({
+    id,
+    ...call(name, { path: target }, { ok: true, path: target, changes }),
+  })
+  const repeatedEdit = mutation('edit-target', 'edit_file', [
+    { path: target, additions: 3, deletions: 2 },
+  ])
+  const toolCalls = [
+    mutation('write-both', 'write_file', [
+      { path: target, additions: 2, deletions: 1 },
+      { path: secondPath, additions: 4, deletions: 0 },
+    ]),
+    repeatedEdit,
+    { ...repeatedEdit },
+    mutation('edit-target-again', 'edit_file', [
+      { path: target, additions: 3, deletions: 2 },
+    ]),
+  ]
+  const receipts = [{
+    id: 'first-receipt',
+    path: target,
+    filename: 'qa-second-revision-test.html',
+  }, {
+    id: 'second-receipt',
+    path: secondPath,
+    filename: 'second-output.js',
+  }]
+
+  const references = buildVerifiedLocalFileReferences({
+    toolCalls,
+    verifiedLocalFiles: receipts,
+    turnId: 'change-stats-turn',
+  })
+  const byPath = new Map(references.map((reference) => [reference.path, reference]))
+  assert.deepEqual(byPath.get(target).changeStats, { additions: 8, deletions: 5 })
+  assert.deepEqual(byPath.get(secondPath).changeStats, { additions: 4, deletions: 0 })
+
+  const [retained] = buildRetainedLocalFileReferences({
+    toolCalls,
+    retainedLocalFiles: [receipts[0]],
+    turnId: 'change-stats-turn',
+  })
+  assert.deepEqual(retained.changeStats, { additions: 8, deletions: 5 })
+})
+
+test('invalid, failed, and dry-run change data never produces change stats', () => {
+  const invalidJsonCall = {
+    id: 'invalid-json',
+    name: 'edit_file',
+    arguments: JSON.stringify({ path: target }),
+    result: '{not-json',
+    status: 'success',
+  }
+  const invalidChanges = [
+    { id: 'failed', status: 'error', args: {}, result: { ok: true, path: target, changes: [{ path: target, additions: 1, deletions: 1 }] } },
+    { id: 'dry-run', args: { path: target, dry_run: true }, result: { ok: true, path: target, changes: [{ path: target, additions: 1, deletions: 1 }] } },
+    { id: 'negative', args: {}, result: { ok: true, path: target, changes: [{ path: target, additions: -1, deletions: 0 }] } },
+    { id: 'fractional', args: {}, result: { ok: true, path: target, changes: [{ path: target, additions: 1, deletions: 0.5 }] } },
+    { id: 'string-count', args: {}, result: { ok: true, path: target, changes: [{ path: target, additions: '1', deletions: 0 }] } },
+    { id: 'missing-count', args: {}, result: { ok: true, path: target, changes: [{ path: target, additions: 1 }] } },
+    { id: 'missing-path', args: {}, result: { ok: true, path: target, changes: [{ additions: 1, deletions: 0 }] } },
+    { id: 'missing-changes', args: {}, result: { ok: true, path: target } },
+  ].map(({ id, status = 'success', args, result }) => ({
+    id,
+    ...call('edit_file', args, result, status),
+  }))
+
+  const [reference] = buildVerifiedLocalFileReferences({
+    toolCalls: [invalidJsonCall, ...invalidChanges],
+    verifiedLocalFiles: [{
+      id: 'invalid-stats-receipt',
+      path: target,
+      filename: 'qa-second-revision-test.html',
+    }],
+    turnId: 'invalid-stats-turn',
+  })
+
+  assert.equal(Object.hasOwn(reference, 'changeStats'), false)
 })
 
 test('retained mutation receipts stay previewable without claiming verification', () => {

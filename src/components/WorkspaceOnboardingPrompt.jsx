@@ -12,6 +12,7 @@ import {
   writeWorkspaceOnboardingDismissal,
 } from '../lib/workspaceOnboardingPrompt.js'
 import { useAppContext } from '../store/AppContext.jsx'
+import Modal from './Modal.jsx'
 
 function browserStorage() {
   if (typeof window === 'undefined') return null
@@ -87,10 +88,15 @@ export function WorkspaceOnboardingPromptController({
   return (
     <>
       {open && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-ink/35 p-4 backdrop-blur-sm" data-testid="workspace-onboarding-prompt-backdrop">
-          <section id="workspace-onboarding-prompt-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-onboarding-prompt-title" className="w-full max-w-lg overflow-hidden rounded-xl border border-ink/25 bg-paper shadow-2xl">
+        <Modal
+          onClose={defer}
+          ariaLabelledby="workspace-onboarding-prompt-title"
+          testId="workspace-onboarding-prompt-backdrop"
+          dialogProps={{ id: 'workspace-onboarding-prompt-dialog' }}
+          className="max-w-lg overflow-hidden border-ink/25"
+        >
             <div className="flex items-start gap-3 border-b border-dashed border-ink-fade/40 px-5 py-4">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-800"><FolderOpen className="h-5 w-5" /></div>
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-warning/10 text-warning"><FolderOpen className="h-5 w-5" /></div>
               <div className="min-w-0 flex-1">
                 <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-ink-fade">{t('permissionsDashboard.onboardingPromptEyebrow')}</div>
                 <h2 id="workspace-onboarding-prompt-title" className="mt-1 font-semibold text-2xl text-ink">{t('permissionsDashboard.onboardingPromptTitle')}</h2>
@@ -99,7 +105,7 @@ export function WorkspaceOnboardingPromptController({
             </div>
             <div className="space-y-3 px-5 py-4">
               <p className="text-sm leading-6 text-ink-soft">{t('permissionsDashboard.onboardingPromptBody')}</p>
-              <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-50/70 px-3 py-2.5 text-xs leading-5 text-amber-900">
+              <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/70 px-3 py-2.5 text-xs leading-5 text-warning">
                 <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{t('permissionsDashboard.onboardingPromptSafety')}</span>
               </div>
@@ -108,8 +114,7 @@ export function WorkspaceOnboardingPromptController({
               <button type="button" onClick={defer} className="h-9 rounded-md border border-ink-fade/60 px-4 text-sm text-ink-soft transition-colors hover:bg-paper-2">{t('permissionsDashboard.onboardingPromptLater')}</button>
               <button type="button" onClick={openGuide} className="flex h-9 items-center justify-center gap-1.5 rounded-md bg-accent px-4 text-sm text-accent-contrast transition-colors hover:bg-accent/90">{t('permissionsDashboard.onboardingPromptOpen')}<ArrowRight className="h-4 w-4" /></button>
             </div>
-          </section>
-        </div>
+        </Modal>
       )}
       {!open && (
         <button
@@ -120,9 +125,9 @@ export function WorkspaceOnboardingPromptController({
           aria-controls="workspace-onboarding-prompt-dialog"
           aria-expanded="false"
           aria-haspopup="dialog"
-          className="workspace-onboarding-reminder fixed right-[4.25rem] top-[max(1rem,env(safe-area-inset-top))] z-40 flex max-w-[min(24rem,calc(100vw-5.25rem))] items-center gap-2 rounded-full border border-amber-500/35 bg-paper/95 px-3.5 py-2 text-left text-xs text-ink-soft shadow-lg backdrop-blur transition-colors hover:border-amber-500/60 hover:bg-amber-50"
+          className="workspace-onboarding-reminder fixed right-[4.25rem] top-[max(1rem,env(safe-area-inset-top))] z-40 flex max-w-[min(24rem,calc(100vw-5.25rem))] items-center gap-2 rounded-full border border-warning/35 bg-paper/95 px-3.5 py-2 text-left text-xs text-ink-soft shadow-lg backdrop-blur transition-colors hover:border-warning/60 hover:bg-warning/5"
         >
-          <ShieldAlert className="h-4 w-4 shrink-0 text-amber-700" />
+          <ShieldAlert className="h-4 w-4 shrink-0 text-warning" />
           <span className="truncate">{t('permissionsDashboard.onboardingPromptReminder')}</span>
           <span className="shrink-0 font-medium text-accent-ink">{t('permissionsDashboard.onboardingPromptReminderAction')}</span>
         </button>

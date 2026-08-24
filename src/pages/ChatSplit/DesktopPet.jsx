@@ -31,17 +31,17 @@ const STATUS_ROW = {
 const STATUS_DOT_CLASS = {
   idle: 'bg-ink-fade',
   thinking: 'bg-cyan',
-  tool: 'bg-amber-500',
-  completed: 'bg-emerald-500',
-  failed: 'bg-red-500',
+  tool: 'bg-warning',
+  completed: 'bg-success',
+  failed: 'bg-danger',
 }
 
 const STATUS_ACCENT_CLASS = {
   idle: 'text-ink-fade',
   thinking: 'text-cyan',
-  tool: 'text-amber-500',
-  completed: 'text-emerald-500',
-  failed: 'text-red-500',
+  tool: 'text-warning',
+  completed: 'text-success',
+  failed: 'text-danger',
 }
 
 const FRAME_INTERVAL_MS = 110

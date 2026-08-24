@@ -5,6 +5,7 @@ import { useAppContext } from '../store/AppContext'
 import { listCommands, fuzzySearch } from '../lib/commandRegistry.js'
 import { getRecentCommands, recordCommandUse } from '../lib/commandHistory.js'
 import { useT } from '../i18n/I18nProvider.jsx'
+import Modal from './Modal.jsx'
 
 function KindIcon({ kind }) {
   if (kind === 'skill') return <Sparkles className="w-3.5 h-3.5" />
@@ -113,14 +114,13 @@ export default function CommandPalette() {
   if (!open) return message ? <div className="sr-only" aria-live="polite">{message}</div> : null
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh] bg-black/40 backdrop-blur-sm"
-      onClick={() => setOpen(false)}
+    <Modal
+      onClose={() => setOpen(false)}
+      initialFocusRef={inputRef}
+      ariaLabel={t('slash.menuLabel')}
+      overlayClassName="items-start pt-[15vh] bg-black/40"
+      className="max-w-[600px] mx-4 overflow-hidden"
     >
-      <div
-        className="w-full max-w-[600px] mx-4 bg-paper border border-ink/15 rounded-lg shadow-2xl overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
         <div className="flex items-center gap-2 px-4 py-3 border-b border-ink/10">
           <Search className="w-4 h-4 text-ink-fade shrink-0" />
           <input
@@ -150,8 +150,8 @@ export default function CommandPalette() {
                 }`}
               >
                 <span className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
-                  cmd.kind === 'skill' ? 'bg-amber-50 text-amber-700'
-                    : cmd.kind === 'mcp' ? 'bg-emerald-50 text-emerald-700'
+                  cmd.kind === 'skill' ? 'bg-warning/5 text-warning'
+                    : cmd.kind === 'mcp' ? 'bg-success/5 text-success'
                     : 'bg-paper-2 text-ink-fade'
                 }`}
                 >
@@ -175,7 +175,6 @@ export default function CommandPalette() {
           <span><kbd className="font-mono">Enter</kbd> {t('slash.select')}</span>
           <span className="ml-auto">{filtered.length} / {allCommands.length}</span>
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

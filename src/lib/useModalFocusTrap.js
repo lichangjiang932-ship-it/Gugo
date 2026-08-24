@@ -101,7 +101,7 @@ export default function useModalFocusTrap({
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
         const nestedDialog = event.target?.closest?.('[data-modal-layer="nested"][role="dialog"]')
-        if (nestedDialog && dialog.contains(nestedDialog)) return
+        if (nestedDialog && nestedDialog !== dialog && dialog.contains(nestedDialog)) return
         event.preventDefault()
         event.stopPropagation()
         onClose()

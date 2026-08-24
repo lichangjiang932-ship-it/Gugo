@@ -12,6 +12,7 @@ export default function useChatSessionLifecycle({
   input,
   isGenerating,
   messages,
+  onSessionChange,
   preserveAttachmentsForSessionRef,
   setAttachments,
   setDesktopPetVisible,
@@ -81,6 +82,7 @@ export default function useChatSessionLifecycle({
     const previousId = previousSessionIdRef.current
     const nextId = state.activeSessionId
     if (previousId === nextId) return
+    onSessionChange?.({ previousId, nextId })
     const preserveAttachments = previousId == null
       && preserveAttachmentsForSessionRef?.current === nextId
     if (preserveAttachmentsForSessionRef?.current === nextId) {
@@ -95,7 +97,7 @@ export default function useChatSessionLifecycle({
     setInput(nextDraft.text)
     if (!preserveAttachments) setAttachments(nextDraft.attachments)
     previousSessionIdRef.current = nextId
-  }, [dispatch, preserveAttachmentsForSessionRef, setAttachments, setInput, state.activeSessionId, state.sessionDrafts])
+  }, [dispatch, onSessionChange, preserveAttachmentsForSessionRef, setAttachments, setInput, state.activeSessionId, state.sessionDrafts])
   useEffect(() => {
     if (!state.activeSessionId) return undefined
     const timer = window.setTimeout(() => dispatch({

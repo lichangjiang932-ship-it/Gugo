@@ -6,6 +6,26 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.40] - 2026-08-24
+
+### Added
+
+- Added native project-folder selection and project-scoped conversation entry points while preserving the default workspace for ordinary chats.
+- Added compact, inspectable execution traces for reasoning, tool calls, file operations, and retained local outputs.
+
+### Changed
+
+- Refined the main chat, timeline, model picker, context usage panel, settings, and MCP surfaces with a denser Codex-inspired layout and softer spacing.
+- Delayed normal and project conversation creation until the first message is accepted, and collapsed execution details automatically after completion.
+- Simplified BYOK model configuration and aligned model capability metadata, including the MiMo 1M context window.
+
+### Fixed
+
+- Fixed project creation, model configuration persistence, local file links, project workspace isolation, and resumable turn state recovery.
+- Fixed completed Office and other binary deliverables being rejected because they could not be read back as plain text.
+- Replaced generic incomplete-task loops with terminal results that identify the exact blocked tool, step, error code, reason, and recovery action.
+- Added an opt-in, bounded self-evolution workflow that automatically derives improvements from local evidence, verifies them independently, and stops or rolls back on failed gates.
+
 ## [0.11.39] - 2026-08-24
 
 ### Added

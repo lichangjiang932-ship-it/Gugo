@@ -9,10 +9,10 @@ function compactTokens(value) {
 
 function UsageRow({ color, label, value }) {
   return (
-    <div className="flex items-center gap-2.5 py-1.5">
-      <span className={`h-3 w-3 shrink-0 rounded-[3px] ${color}`} aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate text-sm text-ink-soft">{label}</span>
-      <span className="shrink-0 font-mono text-sm text-ink">~{compactTokens(value)}</span>
+    <div className="flex items-center gap-2 py-0.5" data-testid="context-usage-row">
+      <span className={`h-2 w-2 shrink-0 rounded-full ${color}`} aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate text-xs leading-4 text-ink-soft">{label}</span>
+      <span className="shrink-0 font-mono text-xs leading-4 text-ink">~{compactTokens(value)}</span>
     </div>
   )
 }
@@ -28,41 +28,58 @@ export default function ContextUsagePanel({
   const usedTokens = measuredPromptTokens
     ?? serverEstimatedPromptTokens
     ?? Number(contextUsage.estimatedTokens || 0)
+  const contextWindowAuthoritative = contextUsage.contextWindowAuthoritative !== false
   const windowTokens = Number(contextUsage.contextWindow || contextWindow)
-  const percent = Math.min(100, Math.max(0, Math.round((usedTokens / Math.max(1, windowTokens)) * 100)))
+  const percent = contextWindowAuthoritative
+    ? Math.min(100, Math.max(0, Math.round((usedTokens / Math.max(1, windowTokens)) * 100)))
+    : 0
   const toolTokens = Number(contextUsage.toolSpecTokens || 0) + Number(contextUsage.toolCallTokens || 0)
   const conversationTokens = Number(contextUsage.messageTokens || 0) + Number(contextUsage.attachmentTokens || 0)
   const cumulativeTokens = normalizeOptionalTokenCount(contextUsage.cumulativeTokens)
 
   return (
     <div
-      className="w-full rounded-2xl border border-ink/10 bg-paper px-4 py-4 text-ink-soft shadow-[0_16px_48px_rgb(var(--color-ink-rgb)/0.16)]"
+      className="w-full rounded-xl border border-ink/10 bg-paper px-3 py-2.5 text-ink-soft shadow-[0_10px_30px_rgb(var(--color-ink-rgb)/0.13)]"
+      data-density="compact"
       data-testid="context-usage-panel"
       role="dialog"
       aria-label={t('chat.contextUsage.currentContext')}
     >
-      <div className="flex items-baseline justify-between gap-4">
-        <div className="text-base text-ink-soft">
-          {t('chat.contextUsage.currentContext')} <strong className="ml-1 font-semibold text-ink">{percent}%</strong>
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="text-[13px] leading-5 text-ink-soft">
+          {t('chat.contextUsage.currentContext')}{contextWindowAuthoritative && (
+            <strong className="ml-1 font-semibold text-ink">{percent}%</strong>
+          )}
         </div>
-        <div className="shrink-0 font-mono text-base font-semibold text-ink">{hasMeasuredPromptTokens ? '' : '~'}{compactTokens(usedTokens)} / {compactTokens(windowTokens)}</div>
+        <div className="shrink-0 font-mono text-[13px] font-semibold leading-5 text-ink">
+          {hasMeasuredPromptTokens ? '' : '~'}{compactTokens(usedTokens)}
+          {contextWindowAuthoritative && <> / {compactTokens(windowTokens)}</>}
+        </div>
       </div>
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-ink/10" aria-hidden="true">
-        <div
-          className={`h-full rounded-full transition-[width,background-color] ${percent >= 80 ? 'bg-red-500' : percent >= 60 ? 'bg-amber-500' : 'bg-blue-500'}`}
-          style={{ width: `${percent}%` }}
-        />
-      </div>
-      <div className="mt-3 border-t border-ink/10 pt-2">
+      {contextWindowAuthoritative && (
+        <div className="mt-2 h-1 overflow-hidden rounded-full bg-ink/10" aria-hidden="true">
+          <div
+            className={`h-full rounded-full transition-[width,background-color] ${percent >= 80 ? 'bg-danger' : percent >= 60 ? 'bg-warning' : 'bg-running'}`}
+            style={{ width: `${percent}%` }}
+          />
+        </div>
+      )}
+      <div className="mt-2 border-t border-ink/10 pt-1.5">
         {(hasMeasuredPromptTokens || serverEstimatedPromptTokens !== null) && (
-          <p className="pb-1 text-xs leading-4 text-ink-fade">{t('chat.contextUsage.estimateNotice')}</p>
+          <p
+            className="truncate pb-1 text-[11px] leading-[1.35] text-ink-fade"
+            data-testid="context-estimate-notice"
+            title={t('chat.contextUsage.estimateNotice')}
+          >
+            {t('chat.contextUsage.estimateNotice')}
+          </p>
         )}
-        <UsageRow color="bg-slate-400" label={t('chat.contextUsage.systemPrompt')} value={contextUsage.systemTokens} />
-        <UsageRow color="bg-violet-500" label={t('chat.contextUsage.tools')} value={toolTokens} />
-        <UsageRow color="bg-blue-500" label={t('chat.contextUsage.messagePayload')} value={conversationTokens} />
+        <UsageRow color="bg-ink/35" label={t('chat.contextUsage.systemPrompt')} value={contextUsage.systemTokens} />
+        <UsageRow color="bg-accent" label={t('chat.contextUsage.tools')} value={toolTokens} />
+        <UsageRow color="bg-ink/60" label={t('chat.contextUsage.messagePayload')} value={conversationTokens} />
       </div>
       {cumulativeTokens !== null && (
-        <div className="mt-2 flex items-center justify-between gap-4 border-t border-ink/10 pt-3 text-sm">
+        <div className="mt-1.5 flex items-center justify-between gap-3 border-t border-ink/10 pt-2 text-xs leading-4">
           <span className="text-ink-soft">{t('chat.contextUsage.cumulativeUsage')}</span>
           <span className="shrink-0 font-mono font-semibold text-ink">{compactTokens(cumulativeTokens)}</span>
         </div>

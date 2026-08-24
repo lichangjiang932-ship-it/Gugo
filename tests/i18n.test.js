@@ -50,6 +50,29 @@ test('input history navigation setting copy exists in all five languages', () =>
   }
 })
 
+test('execution activity copy exists in all five languages', () => {
+  const keys = [
+    'toolCallLabel', 'toolCalls', 'expandToolDetails', 'collapseToolDetails', 'toolCopyDetail',
+    'toolStandingRule', 'toolStandingRuleScope', 'toolRetry', 'toolLiveOutputReplayNote',
+    'activityReasoning', 'activityModelConnecting', 'activityWaitingFirstOutput', 'activityModelPaused',
+    'activityModelRetrying', 'activityModelWorking', 'activityReceivingOutput', 'activityWorkingPhase',
+    'activityProcessing', 'executionToolCount',
+  ]
+  const toolCounts = {
+    zh: '{count} 个工具',
+    en: '{count} tools',
+    ja: 'ツール {count} 個',
+    ko: '도구 {count}개',
+    'zh-TW': '{count} 個工具',
+  }
+  for (const [language, expectedToolCount] of Object.entries(toolCounts)) {
+    for (const key of keys) {
+      assert.ok(translations[language]?.chatMessages?.[key], `${language}.chatMessages.${key}`)
+    }
+    assert.equal(translations[language].chatMessages.executionToolCount, expectedToolCount)
+  }
+})
+
 test('external and model-provider fee warnings are explicit in all five languages', () => {
   const markers = {
     zh: { external: '外部服务', provider: '上游模型供应商' },
@@ -67,17 +90,9 @@ test('external and model-provider fee warnings are explicit in all five language
   }
 })
 
-test('model provider settings state the BYOK and no-platform-billing boundary in all five languages', () => {
-  const markers = {
-    zh: ['Gugo 不提供付费模型或平台计费', '上游 Provider', 'Gugo 服务端'],
-    en: ['does not sell model access or bill you', 'upstream provider', 'Gugo server'],
-    ja: ['プラットフォーム課金を行いません', '上流 Provider', 'Gugo サーバー'],
-    ko: ['플랫폼 요금을 청구하지 않습니다', '업스트림 Provider', 'Gugo 서버'],
-    'zh-TW': ['不收取平台費用', '上游 Provider', 'Gugo 伺服器'],
-  }
-  for (const [language, expected] of Object.entries(markers)) {
-    const notice = translations[language]?.modelProviders?.byokNotice || ''
-    for (const marker of expected) assert.ok(notice.includes(marker), `${language}: ${marker}`)
+test('model provider settings omit the removed billing notice in all five languages', () => {
+  for (const language of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+    assert.equal(Object.hasOwn(translations[language]?.modelProviders || {}, 'byokNotice'), false, language)
   }
 })
 

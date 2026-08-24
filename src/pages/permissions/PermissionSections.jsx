@@ -1,10 +1,13 @@
 import { motion } from 'framer-motion'
 import { useState } from 'react'
-import { Bell, CheckCircle2, FolderOpen, Mic, ShieldAlert, ShieldCheck, Terminal } from 'lucide-react'
+import { Bell, CheckCircle2, FolderOpen, Mic, ShieldAlert, Terminal } from 'lucide-react'
 import RiskOverridesPanel from '../../components/RiskOverridesPanel.jsx'
 import InlineDirectoryBrowser from '../../components/InlineDirectoryBrowser.jsx'
 import { GATEABLE_TOOLS } from '../../lib/toolPermissionClient'
+import { PermSwitch, SectionTitle } from './PermissionSectionPrimitives.jsx'
 import { PERMISSION_ITEMS, STATE_COLOR, STATE_DOT, STATE_KEY, TOOL_ICONS } from './permissionViewConfig.js'
+
+export { WorkspaceTrustSection } from './WorkspaceTrustSection.jsx'
 
 export function PermissionStats({ controller, t }) {
   const stats = [
@@ -50,10 +53,10 @@ export function WorkspaceOnboardingSection({ controller, t }) {
     <>
       <SectionTitle eyebrow="QUICK START" title={t('permissionsDashboard.onboardingTitle')} />
       <form onSubmit={submit} className="mb-6 overflow-hidden rounded-md border border-ink/30" data-testid="workspace-onboarding">
-        <div className={`flex items-start gap-3 border-b border-dashed px-4 py-3 ${onboarding?.complete ? 'border-emerald-500/30 bg-emerald-50/50' : 'border-amber-500/40 bg-amber-50/60'}`}>
+        <div className={`flex items-start gap-3 border-b border-dashed px-4 py-3 ${onboarding?.complete ? 'border-success/30 bg-success/50' : 'border-warning/40 bg-warning/60'}`}>
           {onboarding?.complete
-            ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
-            : <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />}
+            ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+            : <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" />}
           <div>
             <div className="text-sm text-ink">{t(onboarding?.complete ? 'permissionsDashboard.onboardingComplete' : 'permissionsDashboard.onboardingRiskTitle')}</div>
             <div className="mt-1 text-xs leading-relaxed text-ink-soft">{t('permissionsDashboard.onboardingRiskHint')}</div>
@@ -107,7 +110,7 @@ export function WorkspaceOnboardingSection({ controller, t }) {
                     <span className="min-w-0">
                       <span className="block font-mono text-[10px] text-ink">{code}</span>
                       <span className="block text-xs text-ink-fade">{t(`permissionsDashboard.onboardingFeature${name[0].toUpperCase()}${name.slice(1)}`)}</span>
-                      {state?.locked && <span className="block text-[10px] text-amber-700">{t('permissionsDashboard.onboardingManaged', { source: state.source })}</span>}
+                      {state?.locked && <span className="block text-[10px] text-warning">{t('permissionsDashboard.onboardingManaged', { source: state.source })}</span>}
                     </span>
                   </label>
                 )
@@ -123,7 +126,7 @@ export function WorkspaceOnboardingSection({ controller, t }) {
           </div>
 
           {approvalMode === 'bypass' && (
-            <label className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-50 px-3 py-2 text-xs text-red-800">
+            <label className="flex items-start gap-2 rounded-md border border-danger/40 bg-danger/5 px-3 py-2 text-xs text-danger">
               <input type="checkbox" checked={bypassConfirmed} onChange={(event) => setBypassConfirmed(event.target.checked)} className="mt-0.5" />
               <span>{t('permissionsDashboard.onboardingBypassConfirm')}</span>
             </label>
@@ -147,7 +150,7 @@ export function WorkspaceOnboardingSection({ controller, t }) {
 
 export function WorkbenchPolicySection({ appState, dispatch, t }) {
   return (
-    <><SectionTitle eyebrow="WORKBENCH" title={t('permissionsDashboard.policyTitle')} /><p className="mb-2 text-xs text-ink-fade">{t('permissionsDashboard.policyHint')}</p><div className="mb-6 overflow-hidden rounded-md border border-ink/30">{(appState.permissions || []).map((permission, index) => { const Icon = permission.id === 'mic' ? Mic : Bell; return <div key={permission.id} className={`flex items-center gap-3 px-4 py-3 ${index < appState.permissions.length - 1 ? 'border-b border-dashed border-ink-fade/40' : ''}`}><div className="flex h-8 w-8 items-center justify-center rounded-md border border-ink-fade/60 bg-paper-2"><Icon className="h-4 w-4 text-ink-soft" /></div><div className="min-w-0 flex-1"><div className="text-sm text-ink">{permission.name}</div><div className="text-xs text-ink-fade">{permission.scope}</div></div><span className={`text-xs ${permission.enabled ? 'text-emerald-600' : 'text-ink-fade'}`}>{permission.enabled ? t('permissionsDashboard.policyAllowed') : t('permissionsDashboard.policyBlocked')}</span><PermSwitch on={permission.enabled} onToggle={() => dispatch({ type: 'TOGGLE_PERM', payload: permission.id })} label={`${permission.enabled ? t('permissionsDashboard.disable') : t('permissionsDashboard.enable')} ${permission.name}`} /></div> })}</div><RiskOverridesPanel /></>
+    <><SectionTitle eyebrow="WORKBENCH" title={t('permissionsDashboard.policyTitle')} /><p className="mb-2 text-xs text-ink-fade">{t('permissionsDashboard.policyHint')}</p><div className="mb-6 overflow-hidden rounded-md border border-ink/30">{(appState.permissions || []).map((permission, index) => { const Icon = permission.id === 'mic' ? Mic : Bell; return <div key={permission.id} className={`flex items-center gap-3 px-4 py-3 ${index < appState.permissions.length - 1 ? 'border-b border-dashed border-ink-fade/40' : ''}`}><div className="flex h-8 w-8 items-center justify-center rounded-md border border-ink-fade/60 bg-paper-2"><Icon className="h-4 w-4 text-ink-soft" /></div><div className="min-w-0 flex-1"><div className="text-sm text-ink">{permission.name}</div><div className="text-xs text-ink-fade">{permission.scope}</div></div><span className={`text-xs ${permission.enabled ? 'text-success' : 'text-ink-fade'}`}>{permission.enabled ? t('permissionsDashboard.policyAllowed') : t('permissionsDashboard.policyBlocked')}</span><PermSwitch on={permission.enabled} onToggle={() => dispatch({ type: 'TOGGLE_PERM', payload: permission.id })} label={`${permission.enabled ? t('permissionsDashboard.disable') : t('permissionsDashboard.enable')} ${permission.name}`} /></div> })}</div><RiskOverridesPanel /></>
   )
 }
 
@@ -207,15 +210,15 @@ export function CodeExecutionStatusSection({ controller, t }) {
           {rows.map((row) => (
             <div key={row.id} className="rounded-md border border-ink-fade/40 bg-paper-2 px-3 py-2">
               <div className="font-mono text-[9px] uppercase tracking-wider text-ink-fade">{row.label}</div>
-              <div className={`mt-1 flex items-center gap-1.5 text-sm ${row.enabled ? 'text-emerald-700' : 'text-ink-soft'}`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${row.enabled ? 'bg-emerald-500' : 'bg-ink-fade'}`} />
+              <div className={`mt-1 flex items-center gap-1.5 text-sm ${row.enabled ? 'text-success' : 'text-ink-soft'}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${row.enabled ? 'bg-success' : 'bg-ink-fade'}`} />
                 {row.value}
               </div>
             </div>
           ))}
         </div>
-        <div className={`flex items-start gap-3 px-4 py-3 ${ready ? 'text-emerald-700' : 'text-ink-soft'}`}>
-          <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border ${ready ? 'border-emerald-500/40 bg-emerald-50' : 'border-ink-fade/50 bg-paper-2'}`}>
+        <div className={`flex items-start gap-3 px-4 py-3 ${ready ? 'text-success' : 'text-ink-soft'}`}>
+          <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border ${ready ? 'border-success/40 bg-success/5' : 'border-ink-fade/50 bg-paper-2'}`}>
             <Terminal className="h-4 w-4" />
           </div>
           <div>
@@ -225,58 +228,6 @@ export function CodeExecutionStatusSection({ controller, t }) {
         </div>
       </div>
     </>
-  )
-}
-
-export function WorkspaceTrustSection({ controller, t }) {
-  const grants = (controller.localFiles?.grants || []).filter((grant) => grant.resourceType === 'directory')
-  return (
-    <><SectionTitle eyebrow="WORKSPACE TRUST" title={t('localFiles.workspaceTrustManage')} /><p className="mb-2 text-xs text-ink-fade">{t('localFiles.workspaceTrustManageHint')}</p>{controller.localFileError && <div className="mb-3 rounded-md border border-dashed border-accent/60 px-4 py-2.5 text-sm text-accent-ink">{controller.localFileError}</div>}<div className="mb-6 overflow-hidden rounded-md border border-ink/30">{grants.length === 0 ? <div className="px-4 py-5 text-sm text-ink-fade">{t('localFiles.workspaceTrustEmpty')}</div> : grants.map((grant, index) => <WorkspaceTrustRow key={grant.id} controller={controller} grant={grant} last={index === grants.length - 1} t={t} />)}</div></>
-  )
-}
-
-function WorkspaceTrustRow({ controller, grant, last, t }) {
-  const trust = (controller.localFiles?.trustedWorkspaces || []).find((item) => String(item.rootPath || '').toLowerCase() === String(grant.path || '').toLowerCase())
-  const trusted = !!trust?.trusted
-  const trustPath = trusted ? trust?.trustRootPath || grant.path : grant.path
-  const trustScope = trusted
-    ? (trust?.trustScope === 'session' ? 'session' : 'persistent')
-    : (grant.scope === 'session' ? 'session' : 'persistent')
-  const busy = controller.trustBusyPath === trustPath
-  return (
-    <div className={`flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center ${!last ? 'border-b border-dashed border-ink-fade/40' : ''}`}>
-      <div className="flex min-w-0 flex-1 items-start gap-3">
-        <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border ${trusted ? 'border-emerald-500/40 bg-emerald-50 text-emerald-700' : 'border-ink-fade/50 bg-paper-2 text-ink-fade'}`}>
-          <ShieldCheck className="h-4 w-4" />
-        </div>
-        <div className="min-w-0">
-          <div className="truncate font-mono text-xs text-ink" title={grant.path}>{grant.path}</div>
-          <div className="mt-1 text-xs text-ink-fade">
-            {trusted ? t('localFiles.workspaceTrusted') : t('localFiles.workspaceTrustOff')}
-            {` · ${grant.scope === 'session' ? 'session' : 'persistent'}`}
-            {trust?.inherited ? ` · inherited from ${trust.trustRootPath}` : ''}
-            {trusted && trust?.config?.present === false ? ` · ${t('localFiles.workspaceConfigMissing')}` : ''}
-            {trusted && trust?.config?.valid === false ? ` · ${trust.config.error?.message || t('localFiles.workspaceConfigInvalid')}` : ''}
-            {!trusted && trust?.config?.blocked ? ' · workspace config blocked' : ''}
-          </div>
-          {trust?.effective && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {Object.entries(trust.effective).map(([name, enabled]) => (
-                <span key={name} className={`rounded border px-1.5 py-0.5 font-mono text-[9px] ${enabled ? 'border-emerald-500/30 text-emerald-700' : 'border-ink-fade/40 text-ink-fade line-through'}`}>{name}</span>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-      <button
-        type="button"
-        onClick={() => controller.changeWorkspaceTrust(trustPath, !trusted, trustScope)}
-        disabled={busy || !grant.available}
-        className={`h-8 shrink-0 rounded-md border px-3 text-xs transition-colors disabled:opacity-50 ${trusted ? 'border-ink-fade/60 text-ink-soft hover:text-ink' : 'border-emerald-600/40 text-emerald-700 hover:bg-emerald-50'}`}
-      >
-        {busy ? t('localFiles.workspaceTrustWorking') : trusted ? t('localFiles.workspaceUntrustAction') : t('localFiles.workspaceTrustAction')}
-      </button>
-    </div>
   )
 }
 
@@ -290,12 +241,4 @@ export function BrowserPermissionSection({ controller, t }) {
   return (
     <><SectionTitle eyebrow="BROWSER" title={t('permissionsDashboard.title')} /><div className="overflow-hidden rounded-md border border-ink/30">{PERMISSION_ITEMS.map((item, index) => { const result = controller.results[item.id] || { state: 'unknown' }; const state = result.state || 'unknown'; const Icon = item.icon; const showRequest = item.requestable && ['prompt', 'denied'].includes(state); return <div key={item.id} className={`grid grid-cols-[40px_1.4fr_1fr_1fr_90px] items-center gap-3 px-4 py-3 ${index < PERMISSION_ITEMS.length - 1 ? 'border-b border-dashed border-ink-fade/40' : ''}`}><div className="flex h-7 w-7 items-center justify-center rounded-md border border-ink-fade/60 bg-paper"><Icon className="h-3.5 w-3.5 text-ink-soft" /></div><div className="flex flex-col leading-tight"><span className="text-sm text-ink">{t(`permissionsDashboard.${item.nameKey}`)}</span><span className="font-mono text-[9px] uppercase tracking-wider text-ink-fade">{item.id}</span></div><div className="flex flex-col leading-tight"><span className="text-sm text-ink-soft">{t(`permissionsDashboard.${item.scopeKey}`)}</span>{result.detail && <span className="font-mono text-[10px] text-ink-fade">{result.detail}</span>}</div><span className={`flex items-center gap-1.5 text-sm ${STATE_COLOR[state] || STATE_COLOR.unknown}`}><span className={`inline-block h-1.5 w-1.5 rounded-full ${STATE_DOT[state] || STATE_DOT.unknown}`} />{t(`permissionsDashboard.${STATE_KEY[state] || 'stateUnknown'}`)}</span><div>{showRequest && <button onClick={() => controller.requestPermission(item.id)} className="h-7 rounded-md border border-ink-fade/60 px-2.5 text-xs text-ink transition-colors hover:border-accent hover:text-accent-ink">{t('permissionsDashboard.request')}</button>}</div></div> })}</div></>
   )
-}
-
-function SectionTitle({ eyebrow, title }) {
-  return <div className="mb-2 flex items-baseline gap-2"><span className="font-mono text-[9px] uppercase tracking-[0.22em] text-ink-fade">{eyebrow}</span><span className="font-semibold text-base text-ink-soft">{title}</span></div>
-}
-
-function PermSwitch({ on, onToggle, label }) {
-  return <button onClick={onToggle} aria-label={label} className={`relative h-[22px] w-[38px] rounded-full border transition-all duration-200 ${on ? 'border-accent bg-accent' : 'border-ink-fade bg-paper'}`}><motion.div className={`absolute top-[2px] h-4 w-4 rounded-full ${on ? 'left-[18px] bg-paper' : 'left-[2px] bg-ink-fade'}`} layout transition={{ type: 'spring', stiffness: 500, damping: 30 }} /></button>
 }

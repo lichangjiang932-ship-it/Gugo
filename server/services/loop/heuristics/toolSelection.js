@@ -9,6 +9,10 @@ import {
   createLocalFileArtifact,
   createLocalFileArtifactAsync,
 } from '../../artifactGen.js'
+import {
+  validateGeneratedArtifactFile,
+} from '../../generatedArtifactFormatValidation.js'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import {
   getBuiltinSpec,
@@ -207,26 +211,77 @@ export function localArtifactPublicationKey({ call, job, step, candidateIndex = 
 function localArtifactPublicationFailure(error, { candidateIndex, sourcePath }) {
   const causeCode = String(error?.code || 'UNKNOWN').slice(0, 80)
   const sourceMissing = ['ENOENT', 'ENOTDIR'].includes(causeCode)
+    || ['ENOENT', 'ENOTDIR'].includes(String(error?.cause?.code || ''))
+  const validationFailed = error?.artifactValidationFailure === true
+    || /^ARTIFACT_FORMAT_/.test(causeCode)
   return {
-    code: 'artifact_publication_failed',
+    code: validationFailed ? 'artifact_validation_failed' : 'artifact_publication_failed',
+    phase: validationFailed ? 'validation' : 'publication',
     causeCode,
     candidateIndex,
     filename: path.basename(String(sourcePath || '')) || null,
-    retryable: !sourceMissing && error?.retryable === true,
-    message: sourceMissing
+    retryable: validationFailed || (!sourceMissing && error?.retryable === true),
+    message: validationFailed
+      ? `The local output was created, but ${path.basename(String(sourcePath || '')) || 'the file'} failed bounded structure validation (${causeCode}). Regenerate that exact output with the producing tool before delivery.`
+      : sourceMissing
       ? 'The local output disappeared before its downloadable copy could be published. Do not rerun the source tool automatically.'
       : `The local output was created, but the artifact store could not publish it (${causeCode}). Do not rerun the source tool automatically.`,
   }
 }
 
-function attachLocalArtifactPublicationFailures(artifacts, failures) {
+function attachLocalArtifactMetadata(artifacts, failures, verificationReceipts = []) {
   Object.defineProperty(artifacts, 'publicationFailures', {
     configurable: false,
     enumerable: false,
     writable: false,
     value: Object.freeze(failures.map((failure) => Object.freeze({ ...failure }))),
   })
+  Object.defineProperty(artifacts, 'verificationReceipts', {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: Object.freeze(verificationReceipts.map((receipt) => Object.freeze({ ...receipt }))),
+  })
   return artifacts
+}
+
+const STRUCTURALLY_VERIFIABLE_LOCAL_EXTENSIONS = new Set([
+  '.docx',
+  '.pptx',
+  '.xlsx',
+  '.pdf',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp',
+])
+
+function localArtifactValidationType(filename) {
+  const extension = path.extname(String(filename || '')).toLowerCase()
+  if (!STRUCTURALLY_VERIFIABLE_LOCAL_EXTENSIONS.has(extension)) return ''
+  if (['.png', '.jpg', '.jpeg', '.webp'].includes(extension)) return 'image'
+  return extension.slice(1)
+}
+
+async function validateLocalArtifactFile(filePath, filename) {
+  const artifactType = localArtifactValidationType(filename)
+  if (!artifactType) return null
+  const validation = await validateGeneratedArtifactFile({
+    filePath,
+    filename,
+    artifactType,
+  })
+  const digest = createHash('sha256')
+  const stream = fs.createReadStream(filePath)
+  for await (const chunk of stream) digest.update(chunk)
+  return {
+    verified: true,
+    format: validation.format,
+    byteLength: validation.byteLength,
+    sha256: digest.digest('hex'),
+    verifier: 'bounded_structure_parser',
+    verifierVersion: 1,
+  }
 }
 
 function persistedLocalArtifact({ artifact, job, step }) {
@@ -276,10 +331,11 @@ export function persistLocalToolArtifacts({ call, result, job, step }) {
 
 export async function persistLocalToolArtifactsAsync({ call, result, job, step, toolCallId = '' }) {
   if (result?.ok !== true || !LOCAL_ARTIFACT_TOOL_NAMES.has(call?.name)) {
-    return attachLocalArtifactPublicationFailures([], [])
+    return attachLocalArtifactMetadata([], [], [])
   }
   const persisted = []
   const publicationFailures = []
+  const verificationReceipts = []
   const seen = new Set()
   const candidates = localArtifactCandidates(call, result)
   for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
@@ -291,12 +347,30 @@ export async function persistLocalToolArtifactsAsync({ call, result, job, step, 
       const key = process.platform === 'win32' ? sourcePath.toLowerCase() : sourcePath
       if (seen.has(key)) continue
       seen.add(key)
+      const sourceFilename = path.basename(sourcePath)
+      let validation = null
+      try {
+        validation = await validateLocalArtifactFile(sourcePath, sourceFilename)
+      } catch (error) {
+        // Stable publication replay is allowed after a transient source has
+        // been cleaned up. In that case validate the owned managed copy below;
+        // every other format/read failure remains fail-closed.
+        if (!['ENOENT', 'ENOTDIR'].includes(String(error?.cause?.code || error?.code || ''))) {
+          throw error
+        }
+      }
       const publicationKey = localArtifactPublicationKey({ call, job, step, candidateIndex, toolCallId })
       artifact = await createLocalFileArtifactAsync({
         sourcePath,
-        filename: path.basename(sourcePath),
+        filename: sourceFilename,
         publicationKey,
       })
+      if (localArtifactValidationType(sourceFilename)) {
+        // Validate the managed bytes as well as the command output. This binds
+        // the completion receipt to the exact copy exposed by the artifact
+        // store instead of trusting a filename or a text read of binary data.
+        validation = await validateLocalArtifactFile(artifact.fullPath, artifact.filename)
+      }
       try {
         persistGeneratedArtifact({ artifact, args: { title: artifact.title }, job, step })
         persisted.push(artifact)
@@ -307,6 +381,24 @@ export async function persistLocalToolArtifactsAsync({ call, result, job, step, 
         if (!existing) throw error
         persisted.push(existing)
       }
+      if (validation) {
+        verificationReceipts.push({
+          artifactId: artifact.id,
+          filename: artifact.filename,
+          path: String(candidate?.path || '').trim() || sourcePath,
+          declaredPath: String(candidate?.declaredPath || '').trim() || null,
+          sourcePath,
+          artifactPath: artifact.fullPath,
+          userId: String(job?.userId || '').trim(),
+          sessionId: job?.origin === 'chat' ? String(job?.sessionId || '').trim() : null,
+          turnId: job?.origin === 'chat' ? String(job?.id || '').trim() : null,
+          jobId: String(job?.id || '').trim(),
+          stepId: String(step?.id || '').trim() || null,
+          toolCallId: String(toolCallId || call?.id || '').trim(),
+          candidateIndex,
+          ...validation,
+        })
+      }
     } catch (error) {
       if (artifact?.fullPath && !artifact.idempotentPublication) {
         try { await fs.promises.unlink(artifact.fullPath) } catch { /* best-effort orphan cleanup */ }
@@ -316,7 +408,7 @@ export async function persistLocalToolArtifactsAsync({ call, result, job, step, 
       // separate failure so the runtime never claims a downloadable artifact.
     }
   }
-  return attachLocalArtifactPublicationFailures(persisted, publicationFailures)
+  return attachLocalArtifactMetadata(persisted, publicationFailures, verificationReceipts)
 }
 
 export const selectToolSpecs = selectJobToolSpecs

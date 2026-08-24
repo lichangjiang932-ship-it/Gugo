@@ -171,7 +171,7 @@ export default function SettingsModelRequestRecoveryCard({ onOpenOriginalTask, t
         <p className="px-4 py-6 text-center text-xs text-ink-fade" role="status">{copy.loading}</p>
       ) : error && !recovery ? (
         <div className="px-4 py-5 text-xs" role="alert">
-          <p className="flex items-start gap-2 text-red-700"><XCircle className="h-4 w-4" />{error}</p>
+          <p className="flex items-start gap-2 text-danger"><XCircle className="h-4 w-4" />{error}</p>
           <button type="button" className="settings-action-button mt-3" onClick={() => void load()}>
             <RefreshCw className="h-3.5 w-3.5" />{copy.retry}
           </button>
@@ -180,8 +180,8 @@ export default function SettingsModelRequestRecoveryCard({ onOpenOriginalTask, t
         <p className="px-4 py-6 text-center text-xs text-ink-fade">{copy.empty}</p>
       ) : (
         <div className="grid gap-4 px-4 py-4" data-testid="model-request-recovery-card">
-          <div className="flex items-start gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-xs leading-5">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+          <div className="flex items-start gap-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-3 text-xs leading-5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
             <span>{copy.warning}</span>
           </div>
           <dl className="grid gap-2 text-xs sm:grid-cols-2">
@@ -225,8 +225,8 @@ export default function SettingsModelRequestRecoveryCard({ onOpenOriginalTask, t
               <div className="flex justify-end"><button type="button" className="settings-action-button settings-action-button-primary" disabled={!canSubmit} onClick={() => void submit()}>{saving ? copy.saving : copy.submit}</button></div>
             </>
           ) : null}
-          {notice ? <p className="flex items-start gap-2 text-xs text-emerald-700" role="status"><CheckCircle2 className="h-4 w-4" />{notice}</p> : null}
-          {error && recovery ? <p className="flex items-start gap-2 text-xs text-red-700" role="alert"><XCircle className="h-4 w-4" />{error}</p> : null}
+          {notice ? <p className="flex items-start gap-2 text-xs text-success" role="status"><CheckCircle2 className="h-4 w-4" />{notice}</p> : null}
+          {error && recovery ? <p className="flex items-start gap-2 text-xs text-danger" role="alert"><XCircle className="h-4 w-4" />{error}</p> : null}
           {ready ? <div className="flex justify-end"><button type="button" className="settings-action-button settings-action-button-primary" disabled={continuing} onClick={() => void resume()}>{continuing ? copy.continuing : copy.continue}</button></div> : null}
         </div>
       )}

@@ -37,22 +37,22 @@ export default function ThemeWrapper({ children }) {
     }
   }, [state.theme])
 
-  /* accent color + strong mode → CSS vars (--accent-h/s/l/--accent) */
+  /* Accent color → CSS vars (--accent-h/s/l/--accent). */
   useEffect(() => {
     const hex = state.accentColor || ACCENT_DEFAULT_HEX
-    const strong = !!state.strongAccent
     const rgb = hexToRgb(hex)
     // Accent controls follow user preference; semantic status and focus tokens do not.
     document.documentElement.style.setProperty('--color-accent-rgb', rgb)
     // Keep the authored/export compatibility channel until those non-UI domains migrate.
     document.documentElement.style.setProperty('--color-ember-rgb', rgb)
 
-    const { vars, className } = applyAccent({ hex, strong })
+    const { vars } = applyAccent({ hex })
     for (const [key, value] of Object.entries(vars)) {
       document.documentElement.style.setProperty(key, value)
     }
-    document.documentElement.classList.toggle('theme-accent-strong', !!className)
-  }, [state.accentColor, state.strongAccent])
+    // Clear the retired class during hot reloads and upgrades from old state.
+    document.documentElement.classList.remove('theme-accent-strong')
+  }, [state.accentColor])
 
   /* font size scale */
   useEffect(() => {

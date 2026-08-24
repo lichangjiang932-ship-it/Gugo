@@ -40,6 +40,28 @@ test('auto mode recognizes concise Chinese and English work orders', () => {
   }
 })
 
+test('explicit file inspection orders require execution while how-to questions remain answers', () => {
+  for (const text of [
+    '请读取 package.json 并告诉我 test 脚本。',
+    '打开 README.md，检查安装步骤。',
+    '把 src/App.jsx 打开看一下。',
+    '请查看这个仓库的 git 状态。',
+    'Read package.json and report the test script.',
+    'Could you inspect src/App.jsx for the error?',
+  ]) {
+    assert.equal(shouldRequireExecution({ text }), true, text)
+  }
+
+  for (const text of [
+    '如何读取 package.json？',
+    'Can you explain how to read package.json?',
+    '不要读取 package.json，只解释 JSON 格式。',
+    'The app reads package.json at startup.',
+  ]) {
+    assert.equal(shouldRequireExecution({ text }), false, text)
+  }
+})
+
 test('explicit read-only boundaries distinguish whole-turn constraints from scoped source preservation', () => {
   for (const text of [
     '只分析这个项目，不要修改任何文件。',

@@ -90,7 +90,7 @@ test('OAuth one-click opens the provider, polls the durable session, and connect
         />,
       )
     })
-    const oauthButton = [...rootElement.querySelectorAll('button')]
+    const oauthButton = [...dom.window.document.querySelectorAll('button')]
       .find((button) => button.textContent.includes('access.oauthConnect'))
     await act(async () => {
       oauthButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))

@@ -2,23 +2,14 @@ import {
   Check,
   ImagePlus,
   Mic,
-  Package,
-  Plug,
   RotateCcw,
   Shield,
   ShieldCheck,
   Users,
 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { readDesktopPetPreferences, validateDesktopPetImage, writeDesktopPetPreferences } from '../../lib/desktopPetPreferences.js'
-import {
-  listRuntimePluginInventoryApi,
-  runtimePluginActionApi,
-  runtimePluginPermissionChallenge,
-} from '../../lib/pluginClient.js'
 import IntegrationsPanel from '../IntegrationsPanel.jsx'
-import { LocalPluginPackageManager } from './LocalPluginPackageSettings.jsx'
-import { RuntimePluginList } from './RuntimePluginSettings.jsx'
 import {
   SettingsGroup,
   SettingsPanel,
@@ -26,6 +17,8 @@ import {
   SettingsSegmented,
   SettingsToggle,
 } from './SettingsPrimitives.jsx'
+
+export { SettingsPluginsPanel } from './SettingsPluginsPanel.jsx'
 
 const ACCENT_COLORS = ['#E86A3C', '#D94A64', '#B45DE5', '#7459E8', '#3D6FE0', '#2E8FA3', '#23A68B', '#A5C97A', '#D4A4FF', '#D59B32']
 
@@ -49,7 +42,7 @@ export function SettingsPermissionsPanel({ navigate, t, state, enabledPermCount 
           return (
             <SettingsRow key={permission.id} title={permission.name} description={permission.code}>
               <Icon className="h-3.5 w-3.5 text-ink-fade" aria-hidden="true" />
-              <span className={permission.enabled ? 'text-xs text-emerald-600' : 'text-xs text-ink-fade'}>
+              <span className={permission.enabled ? 'text-xs text-success' : 'text-xs text-ink-fade'}>
                 {t(permission.enabled ? 'settings.policyAllowed' : 'settings.policyBlocked')}
               </span>
             </SettingsRow>
@@ -93,13 +86,6 @@ export function SettingsAppearancePanel({ t, state, dispatch }) {
               </button>
             ))}
           </div>
-        </SettingsRow>
-        <SettingsRow title={t('settings.strongAccent')} description={t('settings.strongAccentDescription')}>
-          <SettingsToggle
-            checked={Boolean(state.strongAccent)}
-            label={t('settings.strongAccent')}
-            onChange={(value) => dispatch({ type: 'SET_STRONG_ACCENT', payload: value })}
-          />
         </SettingsRow>
       </SettingsGroup>
       <SettingsGroup>
@@ -219,106 +205,6 @@ export function SettingsPetPanel({ compact = false, t }) {
 
   if (compact) return content
   return <SettingsPanel title={t('settings.pet')} description={t('settings.petSubtitle')}>{content}</SettingsPanel>
-}
-
-export function SettingsPluginsPanel({ navigate, t }) {
-  const [plugins, setPlugins] = useState(null)
-  const [error, setError] = useState(null)
-  const [busy, setBusy] = useState('')
-  const [permissionChallenge, setPermissionChallenge] = useState(null)
-  const [actionFailure, setActionFailure] = useState(null)
-  const load = useCallback(async () => {
-    try {
-      const data = await listRuntimePluginInventoryApi()
-      setPlugins(Array.isArray(data?.plugins) ? data.plugins : [])
-      setError(null)
-    } catch (cause) {
-      setPlugins([])
-      setError(cause)
-    }
-  }, [])
-  useEffect(() => {
-    let cancelled = false
-    listRuntimePluginInventoryApi()
-      .then((data) => {
-        if (cancelled) return
-        setPlugins(Array.isArray(data?.plugins) ? data.plugins : [])
-        setError(null)
-      })
-      .catch((cause) => {
-        if (cancelled) return
-        setPlugins([])
-        setError(cause)
-      })
-    return () => { cancelled = true }
-  }, [])
-  const act = useCallback(async (id, action, options = {}) => {
-    setBusy(`${id}:${action}`)
-    setPermissionChallenge(null)
-    setActionFailure(null)
-    try {
-      await runtimePluginActionApi(id, action, options)
-      setPermissionChallenge(null)
-      setActionFailure(null)
-      setError(null)
-      await load()
-    } catch (cause) {
-      const challenge = runtimePluginPermissionChallenge(cause, { pluginId: id, action })
-      if (challenge) {
-        setPermissionChallenge(challenge)
-        setActionFailure(null)
-        setError(null)
-      } else {
-        setActionFailure({
-          pluginId: id,
-          action,
-          message: String(cause?.message || '').slice(0, 200),
-        })
-      }
-    } finally {
-      setBusy('')
-    }
-  }, [load])
-  const approvePermissions = useCallback(() => {
-    if (!permissionChallenge) return
-    void act(permissionChallenge.pluginId, permissionChallenge.action, {
-      approvalDigest: permissionChallenge.approvalDigest,
-    })
-  }, [act, permissionChallenge])
-  return (
-    <SettingsPanel title={t('settings.plugins')} description={t('settings.pluginsDescription')}>
-      <SettingsGroup>
-        <SettingsRow title={t('settings.skillPlugins')} description={t('settings.skillPluginsDescription')}>
-          <button type="button" onClick={() => navigate('/skills')} className="settings-action-button">
-            <Package className="h-3.5 w-3.5" />
-            {t('settings.managePlugins')}
-          </button>
-        </SettingsRow>
-        <SettingsRow title={t('settings.mcpExtensions')} description={t('settings.mcpExtensionsDescription')}>
-          <button type="button" onClick={() => navigate('/mcp')} className="settings-action-button">
-            <Plug className="h-3.5 w-3.5" />
-            {t('settings.manageMcp')}
-          </button>
-        </SettingsRow>
-      </SettingsGroup>
-      <SettingsGroup>
-        <LocalPluginPackageManager t={t} onPackagesChanged={load} />
-      </SettingsGroup>
-      <SettingsGroup title={t('settings.runtimePlugins')} description={t('settings.runtimePluginsDescription')}>
-        <RuntimePluginList
-          plugins={plugins}
-          error={error}
-          busy={busy}
-          permissionChallenge={permissionChallenge}
-          actionFailure={actionFailure}
-          onAction={act}
-          onApprove={approvePermissions}
-          onDismissApproval={() => setPermissionChallenge(null)}
-          t={t}
-        />
-      </SettingsGroup>
-    </SettingsPanel>
-  )
 }
 
 export function SettingsAgentPresetsPanel({ navigate, t }) {

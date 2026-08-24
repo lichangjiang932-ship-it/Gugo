@@ -342,6 +342,15 @@ function optionalBoolean(value) {
   return typeof value === 'boolean' ? value : null
 }
 
+function statusErrorCode(value, label) {
+  const liveCode = normalizedId(value?.error?.code, { label })
+  const persistedCode = normalizedId(value?.errorCode, { label })
+  if (liveCode && persistedCode && liveCode !== persistedCode) {
+    throw projectionError(`${label} does not match its persisted value`)
+  }
+  return persistedCode || liveCode
+}
+
 function workspaceConfigProjection(value) {
   if (value == null) return null
   if (typeof value !== 'object' || Array.isArray(value)) {
@@ -355,7 +364,7 @@ function workspaceConfigProjection(value) {
     path: normalizedId(value.path, { label: 'workspace config path' }),
     sourceRoot: normalizedId(value.sourceRoot, { label: 'workspace config source root' }),
     permissions: value.permissions == null ? null : capabilityProjection(value.permissions),
-    errorCode: normalizedId(value.error?.code, { label: 'workspace config error code' }),
+    errorCode: statusErrorCode(value, 'workspace config error code'),
   }
 }
 
@@ -376,7 +385,7 @@ function workspaceTrustProjection(value) {
     config: workspaceConfigProjection(value.config),
     global: capabilityProjection(value.global),
     effective: capabilityProjection(value.effective),
-    errorCode: normalizedId(value.error?.code, { label: 'workspace trust error code' }),
+    errorCode: statusErrorCode(value, 'workspace trust error code'),
   }
 }
 

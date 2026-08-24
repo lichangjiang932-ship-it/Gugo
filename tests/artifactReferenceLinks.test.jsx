@@ -137,6 +137,51 @@ test('generated file names follow the answer tone and open the right-pane payloa
   }
 })
 
+test('local file references show only trusted structured change badges', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const reference = {
+    id: 'local-file:change-badge',
+    identity: 'local-file-change-badge',
+    filename: 'updated-page.html',
+    path: 'D:\\workspace\\updated-page.html',
+    url: '/api/local-files/verified/change-badge?turnId=change-badge-turn',
+    verifiedLocalFile: true,
+    changeStats: { additions: 12, deletions: 3 },
+  }
+
+  try {
+    await act(async () => root.render(
+      <ArtifactReferenceLinks
+        msg={{ id: 'change-badge-message', content: 'The update is ready.' }}
+        verifiedLocalFileReferences={[reference]}
+      />,
+    ))
+    const additions = rootElement.querySelector('[data-testid="artifact-change-additions"]')
+    const deletions = rootElement.querySelector('[data-testid="artifact-change-deletions"]')
+    assert.equal(additions?.textContent, '+12')
+    assert.equal(deletions?.textContent, '-3')
+    assert.match(additions?.className || '', /text-success/)
+    assert.match(deletions?.className || '', /text-danger/)
+
+    await act(async () => root.render(
+      <ArtifactReferenceLinks
+        msg={{ id: 'invalid-change-badge-message', content: 'The update is ready.' }}
+        verifiedLocalFileReferences={[{
+          ...reference,
+          changeStats: { additions: '12', deletions: 3 },
+        }]}
+      />,
+    ))
+    assert.equal(rootElement.querySelector('[data-testid="artifact-change-additions"]'), null)
+    assert.equal(rootElement.querySelector('[data-testid="artifact-change-deletions"]'), null)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('explicit empty delivery suppresses an artifactSource preview card below the message', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')

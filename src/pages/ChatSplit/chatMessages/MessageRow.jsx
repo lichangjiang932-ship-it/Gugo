@@ -1,67 +1,47 @@
-import { motion } from 'framer-motion'
-import { useEffect, useId, useRef, useState } from 'react'
-import { AlertTriangle, Check, ChevronDown, ChevronUp, Copy, FileText, RotateCcw } from 'lucide-react'
-import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import CompactionPill from '../../../components/CompactionPill.jsx'
-import ChoicePicker from '../../../components/ChoicePicker.jsx'
-import { hasChoices, stripChoices } from '../../../lib/choices.js'
-import { buildMessageTimeline } from '../../../lib/messageTimeline.js'
 import { shouldCollapseArtifactPreview } from '../../../lib/artifactPreview.js'
-import { artifactHasInlineReference, artifactReferenceOpenPayload, buildMessageArtifactPreview, buildServerArtifactReferences, findArtifactReferenceByHref, findArtifactReferenceByLocalPath, resolveDeliveryArtifacts } from '../../../lib/artifactReferences.js'
+import {
+  artifactHasInlineReference,
+  buildMessageArtifactPreview,
+  buildServerArtifactReferences,
+  resolveDeliveryArtifacts,
+} from '../../../lib/artifactReferences.js'
 import {
   buildRetainedLocalFileReferences,
   buildVerifiedLocalFileReferences,
-  localFileOpenPayload,
   mergeArtifactReferences,
 } from '../../../lib/localFileReferences.js'
-import { formatMessageDateTime, formatMessageTime } from '../../../lib/messageTime.js'
-import { copyTextToClipboard } from '../../../lib/clipboard.js'
-import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
-import { ToolCallTrace } from './ActivityTraces.jsx'
-import ActivityStream from './ActivityStream.jsx'
-import { buildCollapsedUserMessagePreview, copyableMessageText, shouldCollapseUserMessage, splitUserSkillCommand } from './messageContent.js'
-import DirectoryRequestCard from '../../taskRun/DirectoryRequestCard.jsx'
+import { splitUserSkillCommand } from './messageContent.js'
 import { buildAttachmentPreviewArtifact } from '../../../lib/attachmentPreview.js'
 import {
   artifactTypeForSkill,
-  getVisibleModelErrorMessage,
   isModelPreExecutionFailure,
-  isModelSetupFailure,
   isPreExecutionFailure,
-  isRuntimeUnavailableFailure,
 } from '../../../lib/chatFlowGuards.js'
 import { UiContributionSlot } from '../../../plugins/uiContributionRegistry.js'
 import {
   isModelRequestOutcomeUnknownRecoveryKind,
   isSideEffectOutcomeUnknownRecoveryKind,
 } from '../../../lib/turnClient/turnEventDispatch.js'
-
-function stableTimelineSegments(content, toolCalls) {
-  let previousToolKey = 'start'
-  let toolStepOffset = 0
-  return buildMessageTimeline(content, toolCalls).map((segment, index) => {
-    if (segment.kind === 'tools') {
-      const firstCall = segment.calls?.[0]
-      const stepOffset = toolStepOffset
-      toolStepOffset += segment.calls?.length || 0
-      previousToolKey = String(firstCall?.id || `offset-${firstCall?.textOffset ?? index}`)
-      return { ...segment, key: `tools:${previousToolKey}`, stepOffset }
-    }
-    return { ...segment, key: `text-after:${previousToolKey}` }
-  })
-}
+import AssistantAnswer from './messageRow/AssistantAnswer.jsx'
+import CollapsedArtifactContent from './messageRow/CollapsedArtifactContent.jsx'
+import { SideEffectRecoveryCard } from './messageRow/FailureCards.jsx'
+import { AssistantMeta, UserMeta } from './messageRow/MetaActions.jsx'
+import { InlineDirectoryRequestCard, UserBubble } from './messageRow/UserBubble.jsx'
 
 export default function MessageRow({
   msg,
   rowKey,
   turnIndex,
   generatingMessageId,
+  isLatestUserMessage = false,
   lang,
   onExpandCompaction,
   onAuthorizeDirectoryRequest,
   onOpenArtifact,
   onOpenInPreview,
   onManageModels,
+  onEditMessage,
   onRetryModelFailure,
   t,
 }) {
@@ -75,18 +55,9 @@ export default function MessageRow({
     serverClarification?.access_mode || serverClarification?.accessMode || '',
   ].join(':')
   const resolvedDeliveryArtifacts = resolveDeliveryArtifacts(msg.meta)
-  // Only server-confirmed final deliverables may become previewable UI. Legacy
-  // artifactSource metadata can still help render a selected file, but it must
-  // never create a clickable synthetic file by itself.
   const isCurrentStreamingMessage = msg.meta?.streaming === true
     || (msg.meta?.streaming == null && msg.id === generatingMessageId)
-  // A new turn must not make completed artifact messages look "streaming" again.
-  // Their collapsed source/link presentation is part of the message itself, not
-  // global chat generation state.
   const isMessageComplete = !isCurrentStreamingMessage
-  // Managed artifacts remain final-delivery only. Local file receipts describe
-  // committed filesystem state, so terminal failure/suspension must not hide
-  // them. Their verified/retained flags remain independent from task acceptance.
   const isSuspendedTurn = msg.meta?.interrupted === true || msg.meta?.paused === true
   const canPresentManagedDeliverables = isMessageComplete
     && msg.meta?.failed !== true
@@ -122,13 +93,9 @@ export default function MessageRow({
         turnId: msg.meta?.serverTurnId,
       })
     : []
-  const localFileReferences = [
-    ...verifiedLocalFileReferences,
-    ...retainedLocalFileReferences,
-  ]
+  const localFileReferences = [...verifiedLocalFileReferences, ...retainedLocalFileReferences]
   const expectsFileReceipt = Boolean(
-    String(msg.meta?.artifactType || '').trim()
-      || artifactTypeForSkill(msg.meta?.skillId),
+    String(msg.meta?.artifactType || '').trim() || artifactTypeForSkill(msg.meta?.skillId),
   )
   const artifactReferences = mergeArtifactReferences({
     serverReferences: serverArtifactReferences,
@@ -138,10 +105,13 @@ export default function MessageRow({
   const hasInlineArtifactReference = artifactReferences.some((reference) => (
     artifactHasInlineReference(msg.content, reference, artifactReferences)
   ))
-  const collapseArtifact = isMessageComplete && showArtifactPreview && !hasInlineArtifactReference && shouldCollapseArtifactPreview(artifactPreview, {
-    content: msg.content,
-    artifactSource: msg.meta?.artifactSource,
-  })
+  const collapseArtifact = isMessageComplete
+    && showArtifactPreview
+    && !hasInlineArtifactReference
+    && shouldCollapseArtifactPreview(artifactPreview, {
+      content: msg.content,
+      artifactSource: msg.meta?.artifactSource,
+    })
   const userSkillCommand = msg.role === 'user' ? splitUserSkillCommand(msg.content) : null
   const openArtifact = onOpenArtifact || ((artifact) => {
     if (artifact?.preview) onOpenInPreview?.(msg, artifact.preview)
@@ -156,20 +126,18 @@ export default function MessageRow({
     && msg.meta?.serverConnectionState === 'blocked'
 
   return (
-    <motion.div
+    <div
       key={rowKey}
       id={msg.id ? `message-${msg.id}` : undefined}
       data-chat-turn-index={msg.role === 'user' ? turnIndex : undefined}
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
-      className={`group/message flex w-full py-1 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+      data-message-role={msg.role}
+      className={`group/message flex w-full py-0.5 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
     >
       <div className={collapseArtifact
-        ? 'w-full max-w-[840px]'
+        ? 'w-full max-w-[780px]'
         : msg.role === 'assistant'
-          ? 'chat-assistant-message w-full max-w-[840px] text-[15px] leading-[1.6]'
-          : 'flex max-w-[min(720px,86%)] flex-col items-end'}>
+          ? 'chat-assistant-message w-full max-w-[780px] text-[15px] leading-[1.65]'
+          : 'flex max-w-[min(620px,72%)] flex-col items-end'}>
         {msg.role === 'assistant' ? (
           collapseArtifact ? (
             <CollapsedArtifactContent
@@ -183,7 +151,7 @@ export default function MessageRow({
               verifiedLocalFileReferences={verifiedLocalFileReferences}
             />
           ) : (
-            <AssistantContent
+            <AssistantAnswer
               artifactPreview={artifactPreview}
               artifactReferences={artifactReferences}
               canPresentDeliverables={canPresentDeliverables}
@@ -193,7 +161,6 @@ export default function MessageRow({
               msg={msg}
               onManageModels={onManageModels}
               onOpenArtifact={openArtifact}
-              onOpenInPreview={onOpenInPreview}
               showArtifactPreview={showArtifactPreview}
               t={t}
               retainedLocalFileReferences={retainedLocalFileReferences}
@@ -201,7 +168,7 @@ export default function MessageRow({
             />
           )
         ) : (
-          <UserContent
+          <UserBubble
             attachments={msg.attachments}
             command={userSkillCommand}
             content={msg.content}
@@ -213,11 +180,7 @@ export default function MessageRow({
           />
         )}
         {showSideEffectRecoveryCard || showModelRequestRecoveryCard ? (
-          <SideEffectRecoveryCard
-            modelRequest={showModelRequestRecoveryCard}
-            msg={msg}
-            t={t}
-          />
+          <SideEffectRecoveryCard modelRequest={showModelRequestRecoveryCard} msg={msg} t={t} />
         ) : null}
         {msg.role === 'assistant' && isDirectoryRequest && (
           <InlineDirectoryRequestCard
@@ -228,7 +191,7 @@ export default function MessageRow({
           />
         )}
         {msg.role === 'user' && (
-          <UserMeta lang={lang} msg={msg} t={t} />
+          <UserMeta lang={lang} msg={msg} onEditMessage={isLatestUserMessage ? onEditMessage : null} t={t} />
         )}
         {msg.role === 'assistant' && (
           <AssistantMeta
@@ -265,536 +228,6 @@ export default function MessageRow({
           </div>
         )}
       </div>
-    </motion.div>
-  )
-}
-
-function SideEffectRecoveryCard({ modelRequest = false, msg, t }) {
-  const recoveryQuery = new URLSearchParams({
-    tab: 'recovery',
-    turnId: String(msg?.meta?.serverTurnId || ''),
-    modelRequestId: String(msg?.meta?.serverRecoveryModelRequestId || ''),
-  })
-  return (
-    <section
-      className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm"
-      data-testid={modelRequest ? 'model-request-recovery-blocked' : 'side-effect-recovery-blocked'}
-      role="alert"
-    >
-      <div className="flex items-start gap-3">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
-        <div className="min-w-0">
-          <strong className="block text-ink">
-            {t(modelRequest ? 'chatMessages.modelRequestUnknownTitle' : 'chatMessages.sideEffectUnknownTitle')}
-          </strong>
-          <p className="mt-1 text-xs leading-5 text-ink-soft">
-            {t(modelRequest ? 'chatMessages.modelRequestUnknownBody' : 'chatMessages.sideEffectUnknownBody')}
-          </p>
-          <a
-            className="mt-3 inline-flex min-h-8 items-center rounded-control border border-amber-600/30 bg-paper px-3 text-xs font-semibold text-amber-800 transition-colors hover:border-amber-600/50 hover:bg-amber-500/10"
-            href={modelRequest ? `#/settings?${recoveryQuery}` : '#/settings?tab=recovery'}
-          >
-            {t(modelRequest ? 'chatMessages.openModelRequestRecovery' : 'chatMessages.openSideEffectRecovery')}
-          </a>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function AssistantContent({ artifactPreview, artifactReferences, canPresentDeliverables, deliveryArtifacts, isCurrentStreamingMessage, isMessageComplete, msg, onManageModels, onOpenArtifact, retainedLocalFileReferences, showArtifactPreview, t, verifiedLocalFileReferences }) {
-  const inlineFileReferences = artifactReferences
-  const openInlineArtifact = (href) => {
-    // 先按产物 URL 匹配,再按本地路径(含 file:/// 与 D:\ 形式)匹配,
-    // 让输出文字里的文件路径能一键打开预览。
-    const reference = findArtifactReferenceByHref(inlineFileReferences, href)
-      || findArtifactReferenceByLocalPath(inlineFileReferences, href)
-    if (!reference) return false
-    onOpenArtifact?.(
-      localFileOpenPayload(reference)
-        || artifactReferenceOpenPayload(reference, msg.id),
-    )
-    return true
-  }
-  const openToolArtifact = (reference) => {
-    const payload = artifactReferenceOpenPayload(reference, msg.id)
-    if (!payload) return false
-    onOpenArtifact?.(payload)
-    return true
-  }
-  const timeline = stableTimelineSegments(stripChoices(msg.content), msg.meta?.toolCalls)
-  const presentation = assistantTimelinePresentation(timeline)
-  const hasExecution = isCurrentStreamingMessage || presentation.execution.length > 0
-  const preExecutionFailure = isPreExecutionFailure(msg)
-  const modelSetupFailure = msg.meta?.failed === true && isModelSetupFailure(msg)
-  const runtimeRestartRequired = msg.meta?.failed === true
-    && msg.meta?.serverFailure?.action === 'restart_runtime'
-    && isRuntimeUnavailableFailure(msg)
-  return (
-    <>
-      <div data-quotable="true">
-        {!preExecutionFailure && (hasExecution || msg.meta?.serverTurnId || msg.meta?.type === 'model_reply') && (
-          <ExecutionDisclosure
-            key={isCurrentStreamingMessage ? 'execution-running' : 'execution-complete'}
-            hasExecution={hasExecution}
-            msg={msg}
-            running={isCurrentStreamingMessage}
-            t={t}
-          >
-            <TimelineSegments
-              artifacts={inlineFileReferences}
-              onLinkClick={openInlineArtifact}
-              onOpenArtifact={openToolArtifact}
-              segments={presentation.execution}
-              streaming={isCurrentStreamingMessage}
-            />
-            {isCurrentStreamingMessage && <ActivityStream msg={msg} />}
-          </ExecutionDisclosure>
-        )}
-        {runtimeRestartRequired ? (
-          <RuntimeRecoveryCard msg={msg} t={t} />
-        ) : modelSetupFailure ? (
-          <ModelSetupFailureCard msg={msg} onManageModels={onManageModels} t={t} />
-        ) : presentation.answer && (
-          <MarkdownRenderer
-            artifactReferences={inlineFileReferences}
-            streaming={isCurrentStreamingMessage}
-            onLinkClick={openInlineArtifact}
-          >
-            {presentation.answer}
-          </MarkdownRenderer>
-        )}
-      </div>
-      {hasChoices(msg.content) && isMessageComplete && (
-        <ChoicePicker
-          text={msg.content}
-          onChoose={(id, title) => window.dispatchEvent(new CustomEvent('choice-selected', {
-            detail: { messageId: msg.id, choiceId: id, choiceTitle: title },
-          }))}
-        />
-      )}
-      {canPresentDeliverables && (showArtifactPreview || resolveDeliveryArtifacts(msg.meta).length > 0 || verifiedLocalFileReferences.length > 0 || retainedLocalFileReferences.length > 0) && (
-        <ArtifactReferenceLinks
-          deliveryArtifacts={deliveryArtifacts}
-          msg={msg}
-          preview={artifactPreview}
-          onOpen={onOpenArtifact}
-          referenceContent={presentation.answer}
-          retainedLocalFileReferences={retainedLocalFileReferences}
-          verifiedLocalFileReferences={verifiedLocalFileReferences}
-        />
-      )}
-    </>
-  )
-}
-
-function ModelSetupFailureCard({ msg, onManageModels, t }) {
-  const actionCopy = String(t('errors.modelConfigurationAction') || '').trim()
-  const content = String(stripChoices(msg.content) || '').trim()
-  const title = String(t('errors.modelConfigurationFailure') || '').trim()
-  const fallbackDetail = String(getVisibleModelErrorMessage(msg, t) || '').trim()
-  const rawDetail = content || fallbackDetail
-  const detail = actionCopy ? rawDetail.replace(actionCopy, '').trim() : rawDetail
-  return (
-    <section
-      className="rounded-card border border-amber-400/50 bg-amber-50/70 p-4 text-sm text-ink"
-      data-testid="model-setup-error-card"
-      role="alert"
-    >
-      <div className="flex items-start gap-3">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
-        <div className="min-w-0 flex-1">
-          <strong className="block">{title}</strong>
-          {detail && detail !== title && (
-            <div className="mt-1 text-xs leading-5 text-ink-soft">{detail}</div>
-          )}
-          <button
-            type="button"
-            className="mt-3 inline-flex min-h-8 items-center rounded-control border border-amber-600/30 bg-paper px-3 text-xs font-semibold text-amber-800 transition-colors hover:border-amber-600/50 hover:bg-amber-500/10"
-            data-testid="open-model-settings"
-            onClick={onManageModels}
-          >
-            {t('modelProviders.manage')}
-          </button>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function RuntimeRecoveryCard({ msg, t }) {
-  return (
-    <section
-      className="rounded-card border border-amber-400/50 bg-amber-50/70 p-4 text-sm text-ink"
-      data-testid="runtime-recovery-error-card"
-      role="alert"
-    >
-      <div className="flex items-start gap-3">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" aria-hidden="true" />
-        <div className="min-w-0 flex-1">
-          <strong className="block">{t('errors.runtimeAttentionRequired')}</strong>
-          <div className="mt-1 text-xs leading-5 text-ink-soft">{getVisibleModelErrorMessage(msg, t)}</div>
-          <a
-            className="mt-3 inline-flex min-h-8 items-center rounded-control border border-amber-600/30 bg-paper px-3 text-xs font-semibold text-amber-800 transition-colors hover:border-amber-600/50 hover:bg-amber-500/10"
-            data-testid="open-runtime-diagnostics"
-            href="#/settings?tab=about"
-          >
-            {t('errors.openRuntimeDiagnostics')}
-          </a>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function assistantTimelinePresentation(timeline) {
-  const normalized = Array.isArray(timeline) ? timeline : []
-  const hasTools = normalized.some((segment) => segment.kind === 'tools')
-  if (!hasTools) {
-    return {
-      execution: [],
-      answer: normalized.filter((segment) => segment.kind === 'text').map((segment) => segment.text).join(''),
-    }
-  }
-  const lastToolIndex = normalized.findLastIndex((segment) => segment.kind === 'tools')
-  const finalTextIndex = normalized.findLastIndex((segment, index) => (
-    index > lastToolIndex
-    && segment.kind === 'text'
-    && String(segment.text || '').trim()
-  ))
-  if (finalTextIndex < 0) return { execution: normalized, answer: '' }
-  return {
-    execution: normalized.filter((_, index) => index !== finalTextIndex),
-    answer: normalized[finalTextIndex].text,
-  }
-}
-
-function TimelineSegments({ artifacts, onLinkClick, onOpenArtifact, segments, streaming }) {
-  return segments.map((segment, index) => segment.kind === 'tools' ? (
-    <ToolCallTrace
-      key={segment.key}
-      calls={segment.calls}
-      stepOffset={segment.stepOffset}
-      artifacts={artifacts}
-      onOpenArtifact={onOpenArtifact}
-    />
-  ) : (
-    <MarkdownRenderer
-      key={segment.key}
-      artifactReferences={artifacts}
-      streaming={streaming && index === segments.length - 1}
-      onLinkClick={onLinkClick}
-    >
-      {segment.text}
-    </MarkdownRenderer>
-  ))
-}
-
-function finiteOptionalNumber(value) {
-  if (value === undefined || value === null || value === '') return null
-  const numeric = Number(value)
-  return Number.isFinite(numeric) ? numeric : null
-}
-
-function ExecutionDisclosure({ children, hasExecution, msg, running, t }) {
-  const [expanded, setExpanded] = useState(running)
-  const contentId = useId()
-  const [fallbackStartedAt] = useState(() => Date.now())
-  const storedLatency = finiteOptionalNumber(msg.meta?.latency)
-  const storedStartedAt = finiteOptionalNumber(msg.meta?.turnStartedAt)
-  const storedCompletedAt = finiteOptionalNumber(msg.meta?.turnCompletedAt)
-  const hasStoredLatency = storedLatency !== null
-  const hasStoredInterval = storedStartedAt !== null && storedCompletedAt !== null
-  const hasElapsedTime = msg.meta?.executionStarted !== false
-    && !isPreExecutionFailure(msg)
-    && (running || hasStoredLatency || hasStoredInterval)
-  const derivedLatency = hasStoredInterval
-    ? Math.max(0, storedCompletedAt - storedStartedAt)
-    : null
-  const elapsedMs = !running
-    ? hasStoredLatency ? Math.max(0, storedLatency) : derivedLatency ?? 0
-    : null
-  const startedAt = storedStartedAt ?? finiteOptionalNumber(msg.timestamp) ?? fallbackStartedAt
-  const elapsed = useElapsedMilliseconds({ elapsedMs, running, startedAt })
-  const elapsedLabel = hasElapsedTime ? t('chatMessages.elapsed', { value: formatTaskDuration(elapsed, t) }) : ''
-  const label = elapsedLabel ? `${t('chatMessages.execution')} · ${elapsedLabel}` : t('chatMessages.execution')
-
-  if (!hasExecution) {
-    return elapsedLabel
-      ? <div className="chat-task-duration" data-testid="task-duration-header">{elapsedLabel}</div>
-      : null
-  }
-
-  return (
-    <section className="chat-execution-disclosure" data-running={running || undefined}>
-      <button
-        type="button"
-        className="chat-execution-toggle"
-        data-testid="execution-toggle"
-        aria-controls={contentId}
-        aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
-      >
-        <span data-testid="task-duration-header">{label}</span>
-        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
-      </button>
-      {expanded && <div id={contentId} className="chat-execution-content" data-testid="execution-content">{children}</div>}
-    </section>
-  )
-}
-
-function useElapsedMilliseconds({ elapsedMs, running, startedAt }) {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (!running || elapsedMs !== null) return undefined
-    const timer = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [elapsedMs, running])
-  return elapsedMs !== null ? elapsedMs : Math.max(0, now - startedAt)
-}
-
-function formatTaskDuration(milliseconds, t) {
-  const normalizedMilliseconds = Math.max(0, Number(milliseconds) || 0)
-  if (normalizedMilliseconds < 1000) return t('chatMessages.durationLessThanSecond')
-  const totalSeconds = Math.floor(normalizedMilliseconds / 1000)
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  return minutes > 0
-    ? t('chatMessages.durationMinutesSeconds', { minutes, seconds })
-    : t('chatMessages.durationSeconds', { seconds })
-}
-
-const ARTIFACT_TYPE_LABELS = Object.freeze({
-  docx: 'Word',
-  html: 'HTML',
-  html_multi: 'HTML',
-  json: 'JSON',
-  markdown: 'Markdown',
-  mermaid: 'Mermaid',
-  pdf: 'PDF',
-  pptx: 'PowerPoint',
-  react: 'React',
-  svg: 'SVG',
-  text: 'Text',
-  xlsx: 'Excel',
-})
-
-function artifactTypeLabel(reference) {
-  const type = String(reference?.type || '').trim().toLowerCase()
-  if (!type || type === 'file') return ''
-  return ARTIFACT_TYPE_LABELS[type] || type.toUpperCase()
-}
-
-function collapsedArtifactSummary(artifactReferences, t) {
-  const references = Array.isArray(artifactReferences) ? artifactReferences : []
-  if (references.length === 0) return t('chatMessages.artifactReadyGeneric')
-  if (references.length === 1) {
-    const [reference] = references
-    const type = artifactTypeLabel(reference)
-    if (!type) return t('chatMessages.artifactReadySingleFile', { filename: reference.filename })
-    return t('chatMessages.artifactReadySingle', {
-      filename: reference.filename,
-      type,
-    })
-  }
-  return t('chatMessages.artifactReadyMultiple', {
-    count: references.length,
-    filenames: references.map((reference) => reference.filename).join(', '),
-  })
-}
-
-function CollapsedArtifactContent({ artifactPreview, artifactReferences, deliveryArtifacts, msg, onOpenArtifact, retainedLocalFileReferences, t, verifiedLocalFileReferences }) {
-  const openToolArtifact = (reference) => {
-    const payload = artifactReferenceOpenPayload(reference, msg.id)
-    if (!payload) return false
-    onOpenArtifact?.(payload)
-    return true
-  }
-  return (
-    <>
-      <div className="chat-assistant-message text-[15px] leading-7" data-quotable="true">
-        <ExecutionDisclosure
-          hasExecution={Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0}
-          msg={msg}
-          running={false}
-          t={t}
-        >
-          {Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
-            <ToolCallTrace calls={msg.meta.toolCalls} artifacts={artifactReferences} onOpenArtifact={openToolArtifact} />
-          )}
-        </ExecutionDisclosure>
-        <p data-testid="artifact-completion-summary">{collapsedArtifactSummary(artifactReferences, t)}</p>
-      </div>
-      <ArtifactReferenceLinks
-        deliveryArtifacts={deliveryArtifacts}
-        msg={msg}
-        preview={artifactPreview}
-        onOpen={onOpenArtifact}
-        retainedLocalFileReferences={retainedLocalFileReferences}
-        verifiedLocalFileReferences={verifiedLocalFileReferences}
-      />
-    </>
-  )
-}
-
-function UserContent({ attachments, command, content, onOpenAttachment, t }) {
-  const files = Array.isArray(attachments) ? attachments : []
-  const displayContent = String(command?.command ? command.body : content || '')
-  const collapsible = shouldCollapseUserMessage(displayContent)
-  const [expanded, setExpanded] = useState(false)
-  const contentId = useId()
-  const collapsed = collapsible && !expanded
-  const toggleLabel = t(expanded ? 'chatMessages.collapse' : 'chatMessages.expand')
-  const visibleContent = collapsed
-    ? buildCollapsedUserMessagePreview(displayContent)
-    : displayContent
-
-  return (
-    <div data-testid="user-message-bubble" className={`chat-user-message max-w-full text-[14px] leading-[1.6] ${command?.command ? 'chat-user-skill-message' : ''}`}>
-      {command?.command && <span data-testid="sent-skill-command" className="mb-1.5 inline-flex h-6 items-center rounded-control bg-ink/5 px-2 font-mono text-xs font-medium leading-5 text-ink-soft">{command.command}</span>}
-      {displayContent && (
-        <div className={command?.command ? 'text-ink' : ''}>
-          <span
-            id={contentId}
-            data-testid="user-message-content"
-            className="block whitespace-pre-wrap break-words"
-          >
-            {visibleContent}{collapsed && <span aria-hidden="true">{'\u2026'}</span>}
-          </span>
-          {collapsible && (
-            <button
-              type="button"
-              data-testid="user-message-collapse-toggle"
-              aria-controls={contentId}
-              aria-expanded={expanded}
-              aria-label={toggleLabel}
-              title={toggleLabel}
-              onClick={() => setExpanded((value) => !value)}
-              className="mt-1 inline-flex min-h-7 items-center gap-1 rounded-control px-1.5 text-xs font-medium text-ink-soft transition-colors hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/45"
-            >
-              {expanded
-                ? <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
-                : <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />}
-              {toggleLabel}
-            </button>
-          )}
-        </div>
-      )}
-      {files.length > 0 && <div className={`${displayContent || command?.command ? 'mt-2' : ''} flex flex-wrap gap-1.5`} data-testid="user-message-attachments">
-        {files.map((file) => <button key={file.id} type="button" onClick={() => onOpenAttachment?.(file)} className="inline-flex max-w-full items-center gap-1.5 rounded-control border border-ink/10 bg-paper px-2 py-1 text-xs text-ink-soft transition-colors hover:border-accent/40 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/45">
-          <FileText className="h-3.5 w-3.5 shrink-0 text-ink-fade" />
-          <span className="truncate">{file.name}</span>
-        </button>)}
-      </div>}
     </div>
-  )
-}
-
-function InlineDirectoryRequestCard({ msg, onAuthorize, t }) {
-  const [busy, setBusy] = useState('')
-  const [error, setError] = useState('')
-  const request = msg.meta?.serverClarification || {}
-  const pending = msg.meta?.directoryAuthorizationPending === true
-
-  const authorize = async (decision) => {
-    if (pending || busy || typeof onAuthorize !== 'function') return
-    setBusy('grant')
-    setError('')
-    try {
-      await onAuthorize({ message: msg, ...decision })
-    } catch (reason) {
-      setError(reason?.message || t('taskSteering.directoryGrantFailed'))
-    } finally {
-      setBusy('')
-    }
-  }
-
-  return (
-    <DirectoryRequestCard
-      request={request}
-      busy={pending ? 'grant' : busy}
-      error={error || msg.meta?.directoryAuthorizationError || ''}
-      onAuthorize={authorize}
-      t={t}
-    />
-  )
-}
-
-function UserMeta({ lang, msg, t }) {
-  return (
-    <div className="mt-1 flex min-h-5 items-center justify-end gap-3 text-xs leading-5 text-ink-fade tabular-nums">
-      <span data-testid="user-message-time" className="chat-message-meta pointer-events-none opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100" title={formatMessageDateTime(msg.timestamp, lang)}>{formatMessageTime(msg.timestamp, lang)}</span>
-      {!msg.meta?.streaming && (
-        <div className="chat-message-actions pointer-events-none flex items-center gap-3 opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100">
-          <CopyButton content={msg.content} t={t} />
-        </div>
-      )}
-    </div>
-  )
-}
-
-function AssistantMeta({ isCurrentStreamingMessage, lang, msg, onRetryModelFailure, showArtifactPreview, t }) {
-  const latency = finiteOptionalNumber(msg.meta?.latency)
-  return (
-    <div className={`${showArtifactPreview ? 'mt-2 px-2' : 'mt-1'} flex flex-wrap items-center gap-2 text-xs text-ink-fade/85 tabular-nums`}>
-      <div data-testid="assistant-message-meta" className="chat-message-meta pointer-events-none flex items-center gap-2 opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100">
-        <span title={formatMessageDateTime(msg.timestamp, lang)}>{formatMessageTime(msg.timestamp, lang)}</span>
-        {msg.meta?.type === 'model_reply' && <span>{t('chatMessages.model', { name: msg.meta.modelName })}</span>}
-        {msg.meta?.type === 'model_reply' && latency !== null && <span>{t('chatMessages.latency', { value: latency })}</span>}
-      </div>
-      <div className="flex-1" />
-      {!isCurrentStreamingMessage && (
-        <div data-testid="assistant-message-actions" className="chat-message-actions pointer-events-none ml-auto flex items-center gap-2 opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100">
-          {typeof onRetryModelFailure === 'function' && (
-            <button
-              type="button"
-              onClick={() => onRetryModelFailure(msg)}
-              className="inline-flex items-center gap-1 text-ink-fade transition-colors hover:text-ink"
-              title={t('chatMessages.resendMessage')}
-              data-testid="retry-model-request"
-            >
-              <RotateCcw className="h-3 w-3" aria-hidden="true" />{t('chatMessages.resend')}
-            </button>
-          )}
-          <CopyButton content={msg.content} t={t} />
-        </div>
-      )}
-    </div>
-  )
-}
-
-function CopyButton({ content, t }) {
-  const [copyState, setCopyState] = useState('idle')
-  const resetTimerRef = useRef(null)
-
-  useEffect(() => () => window.clearTimeout(resetTimerRef.current), [])
-
-  const copy = async () => {
-    try {
-      await copyTextToClipboard(copyableMessageText(content))
-      setCopyState('copied')
-    } catch {
-      setCopyState('error')
-    }
-    window.clearTimeout(resetTimerRef.current)
-    resetTimerRef.current = window.setTimeout(() => setCopyState('idle'), 1600)
-  }
-
-  const label = copyState === 'copied'
-    ? t('chatMessages.copied')
-    : copyState === 'error'
-      ? t('chatMessages.copyFailed')
-      : t('chatMessages.copy')
-
-  return (
-    <button
-      type="button"
-      onClick={copy}
-      className={`inline-flex items-center gap-1 transition-colors hover:text-ink ${copyState === 'error' ? 'text-rose-700' : 'text-ink-fade'}`}
-      title={copyState === 'idle' ? t('chatMessages.copyContent') : label}
-      aria-live="polite"
-    >
-      {copyState === 'copied' ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}{label}
-    </button>
   )
 }

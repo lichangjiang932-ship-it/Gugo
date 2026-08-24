@@ -6,6 +6,11 @@ import { archiveSessionRemote, forkSessionRemote, pinSessionRemote, unarchiveSes
 import { getAuthToken } from '../lib/accountClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
+import {
+  CHAT_PROJECTS_CHANGED_EVENT,
+  CHAT_PROJECTS_STORAGE_KEY,
+  readStoredChatProjects,
+} from '../lib/chatWorkspaceSelection.js'
 import BrandMark from './BrandMark.jsx'
 import AccountArea from './leftRail/AccountArea.jsx'
 import LoginModal from './leftRail/LoginModal.jsx'
@@ -33,6 +38,7 @@ export default function LeftRail() {
   const [collapsedPreference, setCollapsedPreference] = useState(initialCollapsed)
   const [narrowViewport, setNarrowViewport] = useState(initialNarrowViewport)
   const [mobileExpanded, setMobileExpanded] = useState(false)
+  const [storedProjects, setStoredProjects] = useState(readStoredChatProjects)
   const collapsed = narrowViewport ? !mobileExpanded : collapsedPreference
   const railWidthClass = collapsed
     ? 'w-[60px] max-w-full px-2 py-2.5'
@@ -52,6 +58,20 @@ export default function LeftRail() {
     return () => media.removeEventListener?.('change', onChange)
   }, [])
 
+  useEffect(() => {
+    const refreshProjects = (event) => {
+      if (event?.type === 'storage' && event.key !== CHAT_PROJECTS_STORAGE_KEY) return
+      const projects = event?.detail?.projects
+      setStoredProjects(Array.isArray(projects) ? projects : readStoredChatProjects())
+    }
+    window.addEventListener(CHAT_PROJECTS_CHANGED_EVENT, refreshProjects)
+    window.addEventListener('storage', refreshProjects)
+    return () => {
+      window.removeEventListener(CHAT_PROJECTS_CHANGED_EVENT, refreshProjects)
+      window.removeEventListener('storage', refreshProjects)
+    }
+  }, [])
+
   const closeMobileRail = () => { if (narrowViewport) setMobileExpanded(false) }
   const setRailCollapsed = (next) => {
     controller.closeSessionMenu()
@@ -61,6 +81,15 @@ export default function LeftRail() {
     try { window.localStorage?.setItem(COLLAPSED_KEY, next ? '1' : '0') } catch { /* storage is optional */ }
   }
   const handleNewChat = () => { controller.closeSessionMenu(); closeMobileRail(); dispatch({ type: 'START_NEW_DRAFT' }); navigate('/chat') }
+  const handleNewChatInProject = (project) => {
+    controller.closeSessionMenu()
+    closeMobileRail()
+    dispatch({
+      type: 'START_NEW_DRAFT',
+      payload: { workspacePath: project.path },
+    })
+    navigate('/chat')
+  }
   const handleSearch = () => { controller.closeSessionMenu(); closeMobileRail(); window.dispatchEvent(new CustomEvent('session-search:open')) }
   const handleOpenSession = (sessionId) => { controller.closeSessionMenu(); closeMobileRail(); dispatch({ type: 'SWITCH_SESSION', payload: sessionId }); navigate('/chat') }
   const handleDelete = (session) => {
@@ -128,7 +157,7 @@ export default function LeftRail() {
         {collapsed && navButton(Search, t('nav.searchPlaceholder'), handleSearch)}
       </div>
 
-      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onSearch={handleSearch} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>}
+      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} storedProjects={storedProjects} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onNewInProject={handleNewChatInProject} onSearch={handleSearch} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>}
       {collapsed && <div className="min-h-0 flex-1" />}
       <AccountArea compact={collapsed} accountMenuOpen={controller.accountMenuOpen} accountMenuRef={controller.accountMenuRef} user={state.user} pendingApprovals={controller.pendingApprovals} onToggle={() => { controller.closeSessionMenu(); controller.setAccountMenuOpen((open) => !open) }} onNavigate={(item) => { closeMobileRail(); controller.navigateItem(item) }} t={t} />
     </aside>

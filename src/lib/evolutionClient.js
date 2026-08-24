@@ -207,6 +207,26 @@ export async function stopEvolutionCanaryApi(id, reason) {
   return jsonOk(resp)
 }
 
+export async function getEvolutionAutoConfigApi() {
+  const resp = await fetch('/api/evolution/auto-config', { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function saveEvolutionAutoConfigApi(input) {
+  const resp = await fetch('/api/evolution/auto-config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(input || {}),
+  })
+  return jsonOk(resp)
+}
+
+export async function listEvolutionAutoRunsApi({ limit = 20 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  const resp = await fetch(`/api/evolution/auto-runs?${query}`, { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
 export async function getEvolutionOperationApi(id) {
   const resp = await fetch(`/api/evolution/operations/${encodeURIComponent(String(id || ''))}`, {
     headers: authHeaders(),

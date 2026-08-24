@@ -34,7 +34,7 @@ test('client truncation with real partial text enables resume for the originatin
 test('durable TURN_INCOMPLETE output enables resume without treating transport recovery as a new send', () => {
   assert.deepEqual(buildStreamResumeState({
     failed: true,
-    error: { code: 'TURN_INCOMPLETE', partialText: 'saved server output' },
+    error: { code: 'TURN_INCOMPLETE', partialText: 'saved server output', retryable: true },
   }, { sessionId: 'session-a', turnId: 'turn-a' }), {
     sessionId: 'session-a',
     turnId: 'turn-a',
@@ -46,6 +46,11 @@ test('durable TURN_INCOMPLETE output enables resume without treating transport r
   assert.equal(buildStreamResumeState({
     failed: true,
     error: { code: 'TURN_STREAM_TRUNCATED', partialText: 'recoverable transport output' },
+  }, { sessionId: 'session-a', turnId: 'turn-a' }), null)
+
+  assert.equal(buildStreamResumeState({
+    failed: true,
+    error: { code: 'TURN_INCOMPLETE', partialText: 'deterministic blocker', retryable: false },
   }, { sessionId: 'session-a', turnId: 'turn-a' }), null)
 })
 
@@ -95,11 +100,11 @@ test('a persisted TURN_INCOMPLETE assistant message rebuilds the original turn r
 test('resume state updates are isolated per session', () => {
   const stateA = buildStreamResumeState({
     failed: true,
-    error: { code: 'TURN_INCOMPLETE', partialText: 'answer a' },
+    error: { code: 'TURN_INCOMPLETE', partialText: 'answer a', retryable: true },
   }, { sessionId: 'session-a', turnId: 'turn-a' })
   const stateB = buildStreamResumeState({
     failed: true,
-    error: { code: 'TURN_INCOMPLETE', partialText: 'answer b' },
+    error: { code: 'TURN_INCOMPLETE', partialText: 'answer b', retryable: true },
   }, { sessionId: 'session-b', turnId: 'turn-b' })
 
   let states = updateStreamResumeStates({}, 'session-a', stateA)
@@ -113,7 +118,7 @@ test('resume state updates are isolated per session', () => {
 test('a failed retry republishes continue-generation only for the retried session', () => {
   const untouched = buildStreamResumeState({
     failed: true,
-    error: { code: 'TURN_INCOMPLETE', partialText: 'answer b' },
+    error: { code: 'TURN_INCOMPLETE', partialText: 'answer b', retryable: true },
   }, { sessionId: 'session-b', turnId: 'turn-b' })
   let states = updateStreamResumeStates({}, 'session-b', untouched)
 
@@ -122,7 +127,7 @@ test('a failed retry republishes continue-generation only for the retried sessio
     turnId: 'turn-a',
     result: {
       failed: true,
-      error: { code: 'TURN_INCOMPLETE', partialText: 'retry partial' },
+      error: { code: 'TURN_INCOMPLETE', partialText: 'retry partial', retryable: true },
     },
   })
 
@@ -137,9 +142,9 @@ test('a failed retry republishes continue-generation only for the retried sessio
 })
 
 test('the continue-generation button signals a failed turn retry instead of sending a new prompt', () => {
-  const source = readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
-  const start = source.indexOf('onResume={() => {')
-  const end = source.indexOf('\n      onSend=', start)
+  const source = readFileSync(new URL('../src/pages/ChatSplit/useChatTurnRecovery.js', import.meta.url), 'utf8')
+  const start = source.indexOf('const handleResume = useCallback(() => {')
+  const end = source.indexOf('\n\n  return', start)
   assert.ok(start >= 0 && end > start)
   const handler = source.slice(start, end)
 

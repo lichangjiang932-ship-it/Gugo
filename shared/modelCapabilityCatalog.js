@@ -16,6 +16,7 @@ const openAiSource = 'https://platform.openai.com/docs/models/gpt-5.6-sol'
 const anthropicSource = 'https://platform.claude.com/docs/en/about-claude/models/overview.md'
 const geminiSource = 'https://ai.google.dev/gemini-api/docs/models'
 const deepseekSource = 'https://api-docs.deepseek.com/quick_start/pricing/'
+const mimoSource = 'https://platform.xiaomimimo.com/'
 const openRouterSource = 'https://openrouter.ai/api/v1/models'
 const qwenSource = 'https://help.aliyun.com/zh/model-studio/getting-started/models'
 const siliconFlowSource = 'https://docs.siliconflow.cn/cn/userguide/models'
@@ -41,6 +42,9 @@ export const OFFICIAL_MODEL_CAPABILITY_CATALOG = Object.freeze({
   'deepseek-v4-flash': verifiedProfile({ provider: 'deepseek', contextWindow: 1_000_000, maxOutputTokens: 384_000, sourceUrl: deepseekSource }),
   'deepseek-v4-flash-0731': verifiedProfile({ provider: 'deepseek', contextWindow: 1_000_000, maxOutputTokens: 384_000, sourceUrl: deepseekSource }),
   'deepseek-v4-pro': verifiedProfile({ provider: 'deepseek', contextWindow: 1_000_000, maxOutputTokens: 384_000, sourceUrl: deepseekSource }),
+
+  'mimo-v2.5': verifiedProfile({ provider: 'mimo', contextWindow: 1_000_000, sourceUrl: mimoSource }),
+  'mimo-v2.5-pro': verifiedProfile({ provider: 'mimo', contextWindow: 1_000_000, sourceUrl: mimoSource }),
 
   'openai/gpt-5.6-sol': verifiedProfile({ provider: 'openrouter', contextWindow: 1_050_000, maxOutputTokens: 128_000, sourceUrl: openRouterSource }),
   'anthropic/claude-opus-4.8': verifiedProfile({ provider: 'openrouter', contextWindow: 1_000_000, maxOutputTokens: 128_000, sourceUrl: openRouterSource }),

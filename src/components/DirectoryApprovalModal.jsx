@@ -39,14 +39,14 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
       data-testid="directory-approval-modal"
     >
       <section
-        className="w-full overflow-hidden rounded-md border border-sky-600/25 bg-paper"
+        className="w-full overflow-hidden rounded-md border border-accent/25 bg-paper"
         data-testid="directory-approval-card"
         role="region"
         aria-busy={!!busy}
         aria-labelledby="directory-approval-title"
       >
-        <div className="flex items-start gap-3 border-b border-ink/10 bg-sky-500/5 px-4 py-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-sky-500/10 text-sky-700">
+        <div className="flex items-start gap-3 border-b border-ink/10 bg-accent/5 px-4 py-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent-ink">
             <ShieldCheck className="h-4 w-4" />
           </div>
           <div className="min-w-0 flex-1">
@@ -81,7 +81,7 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
               }}
               disabled={!!busy}
               placeholder={t('taskSteering.directoryPathPlaceholder')}
-              className="h-10 w-full rounded-md border border-ink/15 bg-paper px-3 font-mono text-xs text-ink outline-none transition-colors focus:border-sky-600 disabled:opacity-60"
+              className="h-10 w-full rounded-md border border-ink/15 bg-paper px-3 font-mono text-xs text-ink outline-none transition-colors focus:border-accent/50 disabled:opacity-60"
               autoFocus
             />
           </div>
@@ -119,7 +119,7 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
           </div>
 
           {error && (
-            <p className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-700 sm:col-span-2" role="alert">
+            <p className="rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger sm:col-span-2" role="alert">
               {error}
             </p>
           )}
@@ -167,7 +167,7 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
             onClick={() => setBrowserOpen((current) => !current)}
             disabled={!!busy}
             data-testid="directory-approval-picker"
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-sky-600/40 px-4 text-sm text-sky-800 transition-colors hover:bg-sky-500/5 disabled:opacity-50"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-accent/40 px-4 text-sm text-accent-ink transition-colors hover:bg-accent/5 disabled:opacity-50"
           >
             <FolderOpen className="h-4 w-4" />
             {t('taskSteering.chooseDirectory')}

@@ -5,6 +5,7 @@ import {
   DEFAULT_MODEL_CONTEXT_WINDOW,
   estimateClientContextUsage,
   estimateTextTokens,
+  isAuthoritativeContextWindow,
   normalizeContextWindow,
   normalizeOptionalTokenCount,
   resolveModelContextWindow,
@@ -186,6 +187,20 @@ test('context window normalization is conservative for invalid model metadata', 
   assert.equal(normalizeContextWindow(32_768.9), 32_768)
   assert.equal(normalizeContextWindow(-1), DEFAULT_MODEL_CONTEXT_WINDOW)
   assert.equal(normalizeContextWindow(undefined, 0), DEFAULT_MODEL_CONTEXT_WINDOW)
+})
+
+test('context window authority rejects defaults and accepts explicit model metadata', () => {
+  assert.equal(isAuthoritativeContextWindow({
+    contextWindow: 128_000,
+    contextWindowSource: 'cloud_default',
+    contextWindowEstimated: true,
+  }), false)
+  assert.equal(isAuthoritativeContextWindow({
+    contextWindow: 999_997,
+    contextWindowSource: 'provider_override',
+    contextWindowEstimated: false,
+  }), true)
+  assert.equal(isAuthoritativeContextWindow({ contextWindow: 32_768 }), false)
 })
 
 test('selected model context window follows model switches and falls back conservatively', () => {

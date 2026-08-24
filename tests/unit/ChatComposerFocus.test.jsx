@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { JSDOM } from 'jsdom'
-import { act } from 'react'
+import { act, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import ChatComposer from '../../src/pages/ChatSplit/ChatComposer.jsx'
@@ -65,11 +65,11 @@ test('composer whitespace focuses the textarea while controls keep their own cli
     assert.ok(textarea.placeholder.trim())
     assert.equal(textarea.getAttribute('aria-label'), textarea.placeholder)
     assert.equal(surface.classList.contains('cursor-text'), false)
-    for (const className of ['border-neutral-200', 'hover:border-neutral-300', 'focus-within:border-blue-400/60']) {
+    for (const className of ['chat-composer-surface', 'min-h-[108px]', 'rounded-[22px]', 'border']) {
       assert.ok(surface.classList.contains(className), `composer surface is missing ${className}`)
     }
-    assert.ok(surface.classList.contains('shadow-sm'))
-    assert.ok(surface.classList.contains('focus-within:shadow-md'))
+    assert.equal(surface.classList.contains('focus-within:-translate-y-px'), false)
+    assert.equal(surface.classList.contains('focus-within:border-blue-400/60'), false)
     assert.ok(textarea.classList.contains('cursor-text'))
     assert.ok(textarea.parentElement.classList.contains('cursor-text'))
     assert.ok(textarea.classList.contains('placeholder:text-ink-soft'))
@@ -93,6 +93,72 @@ test('composer whitespace focuses the textarea while controls keep their own cli
     await act(async () => sendButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.equal(sends, 1)
     assert.notEqual(document.activeElement, textarea)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('composer places compact project selection outside the input upper-left and hides it after selection', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const selectedPaths = []
+
+  function Harness() {
+    const [selectedWorkspacePath, setSelectedWorkspacePath] = useState('')
+    return (
+      <ChatComposer
+        input=""
+        setInput={() => {}}
+        onSend={() => {}}
+        attachments={[]}
+        setAttachments={() => {}}
+        modelPickerOpen={false}
+        modelOptions={[]}
+        selectedModel="local-model"
+        isGenerating={false}
+        onAbort={() => {}}
+        onFileChange={() => {}}
+        onOpenModelPicker={() => {}}
+        onCloseModelPicker={() => {}}
+        onModelChange={() => {}}
+        onManageModels={() => {}}
+        approvalMode="normal"
+        onApprovalModeChange={() => {}}
+        handleKeyDown={() => {}}
+        recentWorkspaces={[{ path: 'D:\\Work\\alpha', name: 'Alpha', usedAt: 1 }]}
+        selectedWorkspacePath={selectedWorkspacePath}
+        showWorkspacePicker={!selectedWorkspacePath}
+        onSelectWorkspace={async (path) => {
+          selectedPaths.push(path)
+          setSelectedWorkspacePath(path)
+          return { path }
+        }}
+      />
+    )
+  }
+
+  try {
+    await act(async () => root.render(<Harness />))
+    const strip = rootElement.querySelector('[data-testid="chat-composer-project-strip"]')
+    const surface = rootElement.querySelector('[data-testid="chat-composer-surface"]')
+    assert.ok(strip)
+    assert.equal(strip.parentElement, surface.parentElement)
+    assert.equal(strip.nextElementSibling, surface)
+    assert.equal(surface.contains(strip), false)
+
+    await act(async () => strip.querySelector('[data-testid="workspace-project-trigger"]').click())
+    const option = strip.querySelector('[data-testid="workspace-project-option"]')
+    assert.ok(option)
+    await act(async () => {
+      option.click()
+      await Promise.resolve()
+    })
+
+    assert.deepEqual(selectedPaths, ['D:\\Work\\alpha'])
+    assert.equal(rootElement.querySelector('[data-testid="chat-composer-project-strip"]'), null)
+    assert.ok(rootElement.querySelector('[data-testid="chat-composer-surface"]'))
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

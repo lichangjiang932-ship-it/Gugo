@@ -179,6 +179,40 @@ test('context panel and model circle fall back to estimates when measured usage 
   }
 })
 
+test('estimated model windows never appear as exact capacity in the composer or panel', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const contextUsage = {
+    actualPromptTokens: null,
+    estimatedTokens: 22917,
+    contextWindow: 128000,
+    contextWindowAuthoritative: false,
+    systemTokens: 100,
+    messageTokens: 200,
+    toolCallTokens: 0,
+    attachmentTokens: 0,
+    toolSpecTokens: 0,
+  }
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <ComposerHarness contextUsage={contextUsage} />
+      </I18nProvider>,
+    ))
+    const ring = rootElement.querySelector('[data-testid="context-ring"]')
+    assert.equal(ring?.getAttribute('aria-label'), '~22,917 tokens')
+    assert.doesNotMatch(ring?.getAttribute('aria-label') || '', /128,000|%/)
+
+    await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.match(rootElement.textContent, /~22\.9K/)
+    assert.doesNotMatch(rootElement.textContent, /128K|%/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('server request estimate wins over uncompressed client history without pretending to be measured', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
@@ -230,7 +264,18 @@ test('model context circle toggles the usage popover and closes it with Escape',
     assert.equal(rootElement.querySelector('[data-testid="context-usage-popover"]'), null)
 
     await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.ok(rootElement.querySelector('[data-testid="context-usage-popover"]'))
+    const popover = rootElement.querySelector('[data-testid="context-usage-popover"]')
+    assert.ok(popover)
+    assert.match(popover.className, /w-\[min\(19rem,calc\(100vw-1rem\)\)\]/)
+    const panel = rootElement.querySelector('[data-testid="context-usage-panel"]')
+    assert.equal(panel?.getAttribute('data-density'), 'compact')
+    assert.match(panel?.className || '', /py-2\.5/)
+    const estimateNotice = rootElement.querySelector('[data-testid="context-estimate-notice"]')
+    assert.match(estimateNotice?.className || '', /truncate/)
+    assert.equal(estimateNotice?.getAttribute('title'), estimateNotice?.textContent)
+    const usageRows = [...rootElement.querySelectorAll('[data-testid="context-usage-row"]')]
+    assert.equal(usageRows.length, 3)
+    assert.equal(usageRows.every((row) => row.className.includes('py-0.5')), true)
     assert.equal(ring.getAttribute('aria-expanded'), 'true')
 
     await act(async () => dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))

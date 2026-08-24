@@ -7,7 +7,8 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { Plus, Trash2, MonitorSmartphone, Copy, Check, X } from 'lucide-react'
-import LeftRail from '../components/LeftRail'
+import AppLayout from '../components/AppLayout.jsx'
+import Modal from '../components/Modal.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {
   listMobileKeysApi,
@@ -99,8 +100,7 @@ export default function MobileKeysView() {
   }
 
   return (
-    <div className="h-screen flex bg-paper overflow-hidden">
-      <LeftRail />
+    <AppLayout className="h-screen flex bg-paper overflow-hidden">
       <div className="flex-1 flex flex-col min-w-0">
         <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
           <MonitorSmartphone className="w-5 h-5 text-accent-ink" />
@@ -122,7 +122,7 @@ export default function MobileKeysView() {
 
         <div className="flex-1 overflow-auto p-6">
           {loading && <div className="text-sm text-ink-fade">{t('mobile.loading') || '加载中…'}</div>}
-          {err && <div className="text-sm text-rose-700 mb-3">{err}</div>}
+          {err && <div className="text-sm text-danger mb-3">{err}</div>}
 
           {!loading && keys.length === 0 && (
             <div className="text-center text-sm text-ink-fade py-20">
@@ -148,7 +148,7 @@ export default function MobileKeysView() {
                   <button
                     type="button"
                     onClick={() => onRevoke(k.id)}
-                    className="h-8 px-2 rounded-md border border-ink/10 hover:bg-rose-50 text-rose-700 text-xs flex items-center gap-1"
+                    className="h-8 px-2 rounded-md border border-ink/10 hover:bg-danger/5 text-danger text-xs flex items-center gap-1"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     {t('mobile.revoke') || '撤销'}
@@ -161,10 +161,9 @@ export default function MobileKeysView() {
 
         {/* 创建对话框 */}
         {showCreate && (
-          <div className="fixed inset-0 bg-ink/40 flex items-center justify-center z-50">
-            <div className="bg-paper rounded-md border border-ink/10 p-5 w-[420px] max-w-[90vw] flex flex-col gap-3">
+          <Modal onClose={() => setShowCreate(false)} closeOnBackdrop={false} ariaLabelledby="mobile-key-create-title" className="w-[420px] max-w-[90vw] p-5 flex flex-col gap-3">
               <div className="flex items-center gap-2">
-                <div className="text-base font-semibold text-ink flex-1">
+                <div id="mobile-key-create-title" className="text-base font-semibold text-ink flex-1">
                   {t('mobile.createTitle') || '新建 access key'}
                 </div>
                 <button type="button" onClick={() => setShowCreate(false)} className="text-ink-fade hover:text-ink">
@@ -210,16 +209,14 @@ export default function MobileKeysView() {
                   {creating ? (t('mobile.creating') || '创建中…') : (t('mobile.create') || '创建')}
                 </button>
               </div>
-            </div>
-          </div>
+          </Modal>
         )}
 
         {/* show-once 显示明文 key */}
         {revealed && (
-          <div className="fixed inset-0 bg-ink/40 flex items-center justify-center z-50">
-            <div className="bg-paper rounded-md border border-accent/40 p-5 w-[520px] max-w-[90vw] flex flex-col gap-3">
+          <Modal onClose={() => setRevealed(null)} closeOnBackdrop={false} ariaLabelledby="mobile-key-reveal-title" className="w-[520px] max-w-[90vw] border-accent/40 p-5 flex flex-col gap-3">
               <div className="flex items-center gap-2">
-                <div className="text-base font-semibold text-ink flex-1">
+                <div id="mobile-key-reveal-title" className="text-base font-semibold text-ink flex-1">
                   {t('mobile.revealTitle') || '只显示一次，请立即复制'}
                 </div>
                 <button type="button" onClick={() => setRevealed(null)} className="text-ink-fade hover:text-ink">
@@ -238,7 +235,7 @@ export default function MobileKeysView() {
                   onClick={copyRaw}
                   className="h-8 px-3 rounded-md border border-ink/10 text-xs text-ink-soft hover:bg-paper-2 flex items-center gap-1"
                 >
-                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copied ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
                   {copied ? (t('mobile.copied') || '已复制') : (t('mobile.copy') || '复制')}
                 </button>
                 <button
@@ -252,10 +249,9 @@ export default function MobileKeysView() {
               <div className="text-xs text-ink-fade pt-1 border-t border-ink/5">
                 {t('mobile.howTo') || '使用方法：手机浏览器打开'} <span className="font-mono">/mobile.html</span> {t('mobile.thenPaste') || '，粘贴此 key 即可登录。'}
               </div>
-            </div>
-          </div>
+          </Modal>
         )}
       </div>
-    </div>
+    </AppLayout>
   )
 }

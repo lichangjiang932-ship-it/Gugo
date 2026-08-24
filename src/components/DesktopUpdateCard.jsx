@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Download, RefreshCw, RotateCw } from 'lucide-react'
+import { Download, RefreshCw, RotateCw, X } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider.jsx'
 
 function formatBytes(value) {
@@ -11,6 +11,7 @@ function formatBytes(value) {
 
 export default function DesktopUpdateCard({ compact = false }) {
   const { t } = useT()
+  const [dismissed, setDismissed] = useState(false)
   const [update, setUpdate] = useState(() => (
     window.gugoDesktop?.isDesktop ? { status: 'manual' } : null
   ))
@@ -32,7 +33,7 @@ export default function DesktopUpdateCard({ compact = false }) {
     }
   }, [])
 
-  if (!window.gugoDesktop?.isDesktop || !update) return null
+  if (!window.gugoDesktop?.isDesktop || !update || dismissed) return null
   const requestUpdateCheck = async () => {
     const desktop = window.gugoDesktop
     if (typeof desktop?.checkForUpdates !== 'function') return
@@ -78,12 +79,21 @@ export default function DesktopUpdateCard({ compact = false }) {
 
   return (
     <section
-      className={`mb-2 rounded-xl border p-3 shadow-sm ${passive ? 'border-ink/10 bg-paper-2' : 'border-accent/35 bg-accent/10 ring-1 ring-accent/10'}`}
+      className={`relative mb-2 rounded-xl border p-3 shadow-sm ${passive ? 'border-ink/10 bg-paper-2' : 'border-accent/35 bg-accent/10 ring-1 ring-accent/10'}`}
       aria-live="polite"
       aria-atomic="true"
       data-desktop-update-notice="primary"
     >
-      <div className="flex items-start gap-2.5">
+      <button
+        type="button"
+        onClick={() => setDismissed(true)}
+        aria-label={t('desktopUpdate.dismiss')}
+        title={t('desktopUpdate.dismiss')}
+        className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-md text-ink-fade transition-colors hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/45"
+      >
+        <X className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+      <div className="flex items-start gap-2.5 pr-6">
         <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${passive ? 'bg-ink/5 text-ink-soft' : 'bg-accent text-accent-contrast shadow-sm'}`}>
           {ready || installing ? <RotateCw className={`h-3.5 w-3.5 ${installing ? 'animate-spin' : ''}`} /> : <Download className="h-3.5 w-3.5" />}
         </span>

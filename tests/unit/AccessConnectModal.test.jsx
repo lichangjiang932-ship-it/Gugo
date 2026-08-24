@@ -70,12 +70,12 @@ async function renderModal(dom, onConnected, options = {}) {
       />,
     )
   })
-  return { root, rootElement }
+  return { root }
 }
 
-async function submit(dom, rootElement) {
+async function submit(dom) {
   await act(async () => {
-    rootElement.querySelector('form').dispatchEvent(new dom.window.Event('submit', {
+    dom.window.document.querySelector('form').dispatchEvent(new dom.window.Event('submit', {
       bubbles: true,
       cancelable: true,
     }))
@@ -108,9 +108,9 @@ test('只有明确探测成功才启用连接', async () => {
       return jsonResponse({ ok: true, integration: { ...integration, enabled: true } })
     }
 
-    const { root, rootElement } = await renderModal(dom, (value) => connected.push(value))
+    const { root } = await renderModal(dom, (value) => connected.push(value))
     try {
-      await submit(dom, rootElement)
+      await submit(dom)
 
       const savedBody = JSON.parse(requests[0].init.body)
       assert.equal(savedBody.enabled, false)
@@ -124,7 +124,7 @@ test('只有明确探测成功才启用连接', async () => {
       } else {
         assert.equal(requests.length, 2)
         assert.equal(connected.length, 0)
-        assert.match(rootElement.textContent, probeResult.message ? /invalid token/ : /连接失败/)
+        assert.match(dom.window.document.body.textContent, probeResult.message ? /invalid token/ : /连接失败/)
       }
     } finally {
       await act(async () => root.unmount())
@@ -195,21 +195,21 @@ test('manual credentials map provider fields without exposing secrets in config'
 
 test('QQ Mail form allows local MAIL_* fallback and shows secure placeholders', async () => {
   const dom = setupDom()
-  const { root, rootElement } = await renderModal(dom, () => {}, {
+  const { root } = await renderModal(dom, () => {}, {
     connector: { provider: 'qq_mail', label: 'QQ Mail', hintKey: 'access.qqMailHint' },
     integration: null,
   })
 
   try {
-    const inputs = Array.from(rootElement.querySelectorAll('input'))
+    const inputs = Array.from(dom.window.document.querySelectorAll('input'))
     assert.equal(inputs.every((input) => input.value === ''), true)
     const placeholders = inputs.map((input) => input.placeholder)
     assert.ok(placeholders.includes('smtp.qq.com'))
     assert.ok(placeholders.includes('465'))
     assert.ok(placeholders.includes('imap.qq.com'))
     assert.ok(placeholders.includes('993'))
-    assert.equal(rootElement.querySelectorAll('input[type="password"]').length, 1)
-    assert.match(rootElement.textContent, /access\.qqMailPasswordHint/)
+    assert.equal(dom.window.document.querySelectorAll('input[type="password"]').length, 1)
+    assert.match(dom.window.document.body.textContent, /access\.qqMailPasswordHint/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -228,19 +228,19 @@ test('OAuth 未配置时展示如何启用 OAuth 的折叠引导', async () => {
       error: 'OAuth is not configured on this server',
     })
   }
-  const { root, rootElement } = await renderModal(dom, () => {}, {
+  const { root } = await renderModal(dom, () => {}, {
     connector: { provider: 'notion', label: 'Notion', hintKey: 'access.notionHint', oauth: true },
   })
 
   try {
-    const oauthButton = rootElement.querySelector('form button[type="button"]')
+    const oauthButton = dom.window.document.querySelector('form button[type="button"]')
     assert.ok(oauthButton, 'OAuth 按钮应渲染')
     await act(async () => {
       oauthButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     assert.ok(requests.some((url) => url.includes('/api/integrations/oauth/start')))
-    const help = rootElement.querySelector('[data-testid="oauth-help"]')
+    const help = dom.window.document.querySelector('[data-testid="oauth-help"]')
     assert.ok(help, 'OAUTH_NOT_CONFIGURED 时应渲染配置引导')
     assert.match(help.textContent, /oauthHelpToggle/)
     assert.match(help.textContent, /oauthHelpBody/)

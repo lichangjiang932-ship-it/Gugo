@@ -13,6 +13,7 @@ export function ArtifactReferenceLinks({
   retainedLocalFileReferences = [],
   verifiedLocalFileReferences = [],
 }) {
+  const { t } = useT()
   const source = String(msg?.meta?.artifactSource || msg?.content || '')
   const serverReferences = buildServerArtifactReferences({
     artifacts: Array.isArray(deliveryArtifacts)
@@ -42,24 +43,44 @@ export function ArtifactReferenceLinks({
     onOpen(artifact)
   }
 
+  const trustedChangeStats = (reference) => {
+    const additions = reference?.changeStats?.additions
+    const deletions = reference?.changeStats?.deletions
+    return Number.isSafeInteger(additions)
+      && additions >= 0
+      && Number.isSafeInteger(deletions)
+      && deletions >= 0
+      ? { additions, deletions }
+      : null
+  }
+
   return (
     <div className="mt-3 flex flex-wrap gap-2" data-testid="artifact-reference-links" data-artifact-surface="delivery-links">
-      {references.map((reference) => (
-        <a
-          key={reference.identity || reference.id || reference.url || reference.filename}
-          href={withDownloadToken(reference.url)}
-          target="_blank"
-          rel="noopener noreferrer"
-          data-testid="artifact-open-card"
-          onClick={(event) => openReference(event, reference)}
-          className="inline-flex max-w-full items-center gap-2 rounded-control border border-ink-fade/30 bg-paper px-2.5 py-1.5 text-left text-sm font-medium text-ink transition-colors hover:border-ink-fade/60 hover:bg-ink-ghost"
-          title={reference.filename}
-        >
-          <FileText className="h-4 w-4 shrink-0 text-ink-fade" />
-          <span className="chat-output-file-name truncate">{reference.filename}</span>
-          <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70" />
-        </a>
-      ))}
+      {references.map((reference) => {
+        const changeStats = trustedChangeStats(reference)
+        return (
+          <a
+            key={reference.identity || reference.id || reference.url || reference.filename}
+            href={withDownloadToken(reference.url)}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="artifact-open-card"
+            onClick={(event) => openReference(event, reference)}
+            className="inline-flex max-w-full items-center gap-2 rounded-control border border-ink-fade/30 bg-paper px-2.5 py-1.5 text-left text-sm font-medium text-ink transition-colors hover:border-ink-fade/60 hover:bg-ink-ghost"
+            title={reference.filename}
+          >
+            <FileText className="h-4 w-4 shrink-0 text-ink-fade" />
+            <span className="chat-output-file-name truncate">{reference.filename}</span>
+            {changeStats ? (
+              <span className="inline-flex shrink-0 items-center gap-1 font-mono text-xs" aria-label={t('chatMessages.progressChanges', changeStats)}>
+                <span className="text-success" data-testid="artifact-change-additions">+{changeStats.additions}</span>
+                <span className="text-danger" data-testid="artifact-change-deletions">-{changeStats.deletions}</span>
+              </span>
+            ) : null}
+            <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70" />
+          </a>
+        )
+      })}
     </div>
   )
 }

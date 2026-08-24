@@ -6,7 +6,12 @@ const read = (path) => fs.readFileSync(new URL(path, import.meta.url), 'utf8')
 
 test('first-party evolution workbench is a replaceable settings contribution', () => {
   const registry = read('../src/plugins/firstPartyUiContributions.js')
-  const panel = read('../src/components/settings/SettingsEvolutionPanel.jsx')
+  const panel = [
+    '../src/components/settings/SettingsEvolutionPanel.jsx',
+    '../src/components/settings/evolutionPanel/useEvolutionSnapshot.js',
+    '../src/components/settings/evolutionPanel/useEvolutionCanary.js',
+    '../src/components/settings/evolutionPanel/useEvolutionPromotion.js',
+  ].map(read).join('\n')
   assert.match(registry, /ui:settings-section:evolution-settings/)
   assert.match(registry, /slot: 'settings-section'/)
   assert.match(registry, /sectionId: 'evolution'/)

@@ -73,6 +73,18 @@ test('input history navigation opt-out persists while invalid values use the ena
   assert.equal(selectPersistedSnapshot(createInitialState()).inputHistoryNavigationEnabled, true)
 })
 
+test('retired strong accent state is ignored by defaults, imports, and persistence', () => {
+  const initial = createInitialState()
+  assert.equal(Object.hasOwn(initial, 'strongAccent'), false)
+  assert.equal(Object.hasOwn(normalizePersistedFields({ strongAccent: true }), 'strongAccent'), false)
+  assert.equal(Object.hasOwn(selectPersistedSnapshot({ ...initial, strongAccent: true }), 'strongAccent'), false)
+  const imported = reduceTaskSettingsState(initial, {
+    type: 'IMPORT_SETTINGS',
+    payload: { settings: { strongAccent: true }, mode: 'merge' },
+  })
+  assert.equal(Object.hasOwn(imported, 'strongAccent'), false)
+})
+
 test('current persisted permission opt-outs remain explicit', () => {
   const normalized = normalizePersistedFields({
     permissions: [
@@ -99,7 +111,6 @@ test('lightweight local snapshot excludes sessions and other large state', () =>
     permissions: undefined,
     theme: 'dark',
     accentColor: undefined,
-    strongAccent: undefined,
     fontSize: undefined,
     density: undefined,
     animationsEnabled: undefined,
@@ -322,10 +333,11 @@ test('bootstrap reads new settings and a legacy full snapshot independently', ()
   assert.equal(result.legacy.snapshot.sessions[0].id, 'legacy')
 })
 
-test('bootstrap physically removes retired account fields without changing local sessions or settings', () => {
+test('bootstrap physically removes retired browser fields without changing active settings', () => {
   const settingsPayload = {
     user: { email: 'old@example.test', plan: 'pro' },
     isLoggedIn: true,
+    strongAccent: true,
     theme: 'dark',
     toolsConfig: { fetch_url: false },
     customSetting: { keep: true },
@@ -333,7 +345,7 @@ test('bootstrap physically removes retired account fields without changing local
       version: 1,
       source: 'old-tab',
       writtenAt: 50,
-      fields: { user: 50, isLoggedIn: 50, theme: 50 },
+      fields: { user: 50, isLoggedIn: 50, strongAccent: 50, theme: 50 },
       entities: { user: { old: 50 }, toolsConfig: { fetch_url: 50 } },
       tombstones: { isLoggedIn: { old: 40 } },
     },
@@ -350,9 +362,10 @@ test('bootstrap physically removes retired account fields without changing local
   ])
 
   const result = readBootstrapPayloads(storage, 50)
-  assert.deepEqual(result.settings.retiredAccountFieldsRemoved.sort(), ['isLoggedIn', 'user'])
+  assert.deepEqual(result.settings.retiredAccountFieldsRemoved.sort(), ['isLoggedIn', 'strongAccent', 'user'])
   assert.equal(Object.hasOwn(result.settings.snapshot, 'user'), false)
   assert.equal(Object.hasOwn(result.settings.snapshot, 'isLoggedIn'), false)
+  assert.equal(Object.hasOwn(result.settings.snapshot, 'strongAccent'), false)
   assert.equal(Object.hasOwn(result.settings.meta.fields, 'user'), false)
   assert.equal(Object.hasOwn(result.settings.meta.fields, 'isLoggedIn'), false)
   assert.deepEqual(result.settings.snapshot.toolsConfig, { fetch_url: false })
@@ -365,9 +378,11 @@ test('bootstrap physically removes retired account fields without changing local
   for (const cleaned of [cleanedSettings, cleanedLegacy]) {
     assert.equal(Object.hasOwn(cleaned, 'user'), false)
     assert.equal(Object.hasOwn(cleaned, 'isLoggedIn'), false)
+    assert.equal(Object.hasOwn(cleaned, 'strongAccent'), false)
   }
   assert.equal(Object.hasOwn(cleanedSettings.__sync.fields, 'user'), false)
   assert.equal(Object.hasOwn(cleanedSettings.__sync.fields, 'isLoggedIn'), false)
+  assert.equal(Object.hasOwn(cleanedSettings.__sync.fields, 'strongAccent'), false)
   assert.equal(cleanedLegacy.sessions[0].messages[0].content, 'keep-message')
   assert.equal(cleanedLegacy.modelConfig.baseUrl, 'http://localhost:11434')
 })

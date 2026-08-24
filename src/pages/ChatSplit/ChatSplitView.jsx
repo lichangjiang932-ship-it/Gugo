@@ -1,60 +1,16 @@
-import { PanelRightClose, PanelRightOpen } from 'lucide-react'
-import LeftRail from '../../components/LeftRail'
+import { Folder, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import AppLayout from '../../components/AppLayout.jsx'
 import DirectoryApprovalModal from '../../components/DirectoryApprovalModal.jsx'
 import ToolApprovalCard from '../../components/ToolApprovalCard.jsx'
+import PermissionRequestCard from './chatMessages/PermissionRequestCard.jsx'
 import ChatComposer from './ChatComposer'
 import ChatMessages from './ChatMessages'
 import DesktopPet from './DesktopPet.jsx'
-import RightPreviewPane from './RightPreviewPane'
-import RightWorkbench from './RightWorkbench'
+import ChatRightPanels from './chatSplitView/ChatRightPanels.jsx'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
 import { estimateClientContextUsage, sumSessionModelUsage } from '../../lib/contextUsage.js'
 
-export function ChatRightPanels({
-  workbenchOpen,
-  messages,
-  attachments,
-  workbenchTab,
-  onWorkbenchTabChange,
-  onCloseWorkbench,
-  onOpenArtifact,
-  onWorkbenchSend,
-  isGenerating,
-  workbenchMessage,
-  previewArtifact,
-  previewTabs,
-  previewActiveId,
-  onActivatePreviewTab,
-  onClosePreviewTab,
-  onClosePreview,
-  onPreviewMessage,
-}) {
-  if (!workbenchOpen) return null
-  if (previewArtifact) {
-    return <RightPreviewPane
-      artifact={previewArtifact}
-      previewTabs={previewTabs}
-      activePreviewId={previewActiveId}
-      onActivateTab={onActivatePreviewTab}
-      onCloseTab={onClosePreviewTab}
-      onClose={onClosePreview}
-      onMessage={onPreviewMessage}
-    />
-  }
-  return (
-    <RightWorkbench
-      messages={messages}
-      attachments={attachments}
-      activeTab={workbenchTab}
-      onTabChange={onWorkbenchTabChange}
-      onClose={onCloseWorkbench}
-      onOpenArtifact={onOpenArtifact}
-      onSendMessage={onWorkbenchSend}
-      isGenerating={isGenerating}
-      statusMessage={workbenchMessage}
-    />
-  )
-}
+export { ChatRightPanels }
 
 export default function ChatSplitView({
   activeSession,
@@ -64,8 +20,10 @@ export default function ChatSplitView({
   contextSystemPrompt,
   contextToolSpecs,
   contextWindow,
+  contextWindowAuthoritative,
   desktopPetVisible,
   directoryApproval,
+  editingMessageId,
   input,
   isGenerating,
   messages,
@@ -73,8 +31,10 @@ export default function ChatSplitView({
   modelOptions,
   onAbort,
   onApprovalModeChange,
+  onClearWorkspace,
   onAuthorizeDirectoryRequest,
   onAuthorizeDirectory,
+  onCancelMessageEdit,
   onCloseDesktopPet,
   onCloseInlinePanel,
   onCloseModelPicker,
@@ -82,6 +42,7 @@ export default function ChatSplitView({
   onCloseWorkbench,
   onDirectoryReject,
   onDismissResume,
+  onEditMessage,
   onExpandCompaction,
   onFileChange,
   onGoalsChange,
@@ -101,6 +62,7 @@ export default function ChatSplitView({
   onPreviewMessage,
   onQuoteSelection,
   onRetryModelFailure,
+  onSelectWorkspace,
   onResume,
   onSend,
   onSubmitFeedback,
@@ -113,6 +75,7 @@ export default function ChatSplitView({
   runtimeSkillIds,
   selectedModel,
   selectedModelProviderId,
+  selectedWorkspacePath,
   setAttachments,
   setInput,
   setShowContextPanel,
@@ -132,6 +95,9 @@ export default function ChatSplitView({
   previewActiveId,
   onActivatePreviewTab,
   onClosePreviewTab,
+  recentWorkspaces,
+  workspaceBusy,
+  workspaceError,
 }) {
   const latestAssistantMessage = [...messages].reverse()
     .find((message) => message?.role === 'assistant')
@@ -149,19 +115,26 @@ export default function ChatSplitView({
       serverEstimatedPromptTokens,
     }),
     cumulativeTokens: sumSessionModelUsage(messages),
+    contextWindowAuthoritative,
   }
   const toggleContextPanel = () => setShowContextPanel((current) => !current)
 
   return (
-    <div className="flex h-screen min-w-0 overflow-hidden bg-paper">
-      <LeftRail />
-
-      <div className="flex min-w-0 flex-[1_1_640px] flex-col overflow-hidden">
-        <div className="flex h-12 shrink-0 items-center justify-end border-b border-ink/10 px-3">
+    <AppLayout className="flex h-screen min-w-0 overflow-hidden bg-paper">
+      <div className="chat-main-pane flex min-w-0 flex-[1_1_640px] flex-col overflow-hidden">
+        <header className="chat-session-header flex h-12 shrink-0 items-center gap-3 px-4 backdrop-blur-sm">
+          <Folder className="h-4 w-4 shrink-0 text-ink-fade" aria-hidden="true" />
+          <h1
+            className="min-w-0 flex-1 truncate text-[14px] font-semibold tracking-[-0.01em] text-ink"
+            data-testid="chat-session-title"
+            title={activeSession?.title || t('nav.newChat')}
+          >
+            {activeSession?.title || t('nav.newChat')}
+          </h1>
           <button
             type="button"
             onClick={onWorkbenchToggle}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-fade transition-colors hover:bg-paper-2 hover:text-ink"
+            className="chat-chrome-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:text-ink"
             title={t(workbenchOpen ? 'workbench.hide' : 'workbench.show')}
             aria-label={t(workbenchOpen ? 'workbench.hide' : 'workbench.show')}
             aria-controls="right-workbench"
@@ -170,17 +143,14 @@ export default function ChatSplitView({
           >
             {workbenchOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
           </button>
-        </div>
+        </header>
         <ChatMessages
           key={activeSessionId || '__draft__'}
           messages={messages}
-          state={state}
           workbenchMessage={workbenchMessage}
           isGenerating={isGenerating}
-          onPermAllow={onPermAllow}
-          onPermDeny={onPermDeny}
+          onEditMessage={onEditMessage}
           onAuthorizeDirectoryRequest={onAuthorizeDirectoryRequest}
-          onNavigatePermissions={onNavigatePermissions}
           onManageModels={onManageModels}
           onQuoteSelection={onQuoteSelection}
           onRetryModelFailure={onRetryModelFailure}
@@ -220,9 +190,18 @@ export default function ChatSplitView({
             onReject={onDirectoryReject}
           />
         )}
-
-        {toolApproval.open && (
-          <div className="mx-auto w-full min-w-0 max-w-[min(872px,calc(100vw-360px))] px-4 pb-2">
+        {(state.permRequest || toolApproval.open) && (
+          <div
+            className="mx-auto flex w-full min-w-0 max-w-[min(780px,calc(100vw-320px))] flex-col gap-2 px-4 pb-2"
+            data-testid="chat-approval-dock"
+          >
+            <PermissionRequestCard
+              request={state.permRequest}
+              onAllow={onPermAllow}
+              onDeny={onPermDeny}
+              onNavigate={onNavigatePermissions}
+              t={t}
+            />
             <ToolApprovalCard
               open={toolApproval.open}
               request={toolApproval.request}
@@ -231,10 +210,9 @@ export default function ChatSplitView({
             />
           </div>
         )}
-
         {resumeAvailable && !isGenerating && (
-          <div className="mx-auto w-full min-w-0 max-w-[min(872px,calc(100vw-360px))] px-4 pb-1.5">
-            <div className="flex items-center gap-2 text-xs border border-amber-500/40 bg-amber-500/5 rounded-md px-3 py-2">
+          <div className="mx-auto w-full min-w-0 max-w-[min(780px,calc(100vw-320px))] px-4 pb-1.5">
+            <div className="flex items-center gap-2 rounded-md border border-ink/10 border-l-2 border-l-warning/55 bg-paper-2/45 px-3 py-2 text-xs">
               <span className="flex-1 text-ink-soft">{t('toast.chatResumeHint')}</span>
               <button type="button" onClick={onResume} className="h-7 px-3 rounded-md bg-accent text-accent-contrast">
                 {t('toast.chatResumeButton')}
@@ -248,6 +226,7 @@ export default function ChatSplitView({
 
         <ChatComposer
           input={input}
+          editingMessageId={editingMessageId}
           setInput={setInput}
           onSend={onSend}
           attachments={attachments}
@@ -261,6 +240,7 @@ export default function ChatSplitView({
           selectedModelProviderId={selectedModelProviderId}
           isGenerating={isGenerating}
           onAbort={onAbort}
+          onCancelMessageEdit={onCancelMessageEdit}
           onFileChange={onFileChange}
           onToggleContext={toggleContextPanel}
           onOpenModelPicker={onOpenModelPicker}
@@ -275,6 +255,13 @@ export default function ChatSplitView({
           skillIds={runtimeSkillIds}
           slashCommands={slashCommands}
           onSlashCommandSelect={onSlashCommandSelect}
+          onClearWorkspace={onClearWorkspace}
+          onSelectWorkspace={onSelectWorkspace}
+          recentWorkspaces={recentWorkspaces}
+          selectedWorkspacePath={selectedWorkspacePath}
+          showWorkspacePicker={messages.length === 0 && !String(selectedWorkspacePath || '').trim()}
+          workspaceBusy={workspaceBusy}
+          workspaceError={workspaceError}
         />
       </div>
 
@@ -308,6 +295,6 @@ export default function ChatSplitView({
         />
       )}
 
-    </div>
+    </AppLayout>
   )
 }

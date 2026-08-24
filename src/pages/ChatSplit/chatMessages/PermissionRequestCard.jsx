@@ -1,36 +1,39 @@
-import { AnimatePresence, motion } from 'framer-motion'
-import { LayoutList } from 'lucide-react'
+import { AlertTriangle, LayoutList } from 'lucide-react'
 
 export default function PermissionRequestCard({ request, onAllow, onDeny, onNavigate, t }) {
+  if (!request) return null
+
   return (
-    <AnimatePresence>
-      {request && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.96 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.96 }}
-          className="ml-10 rounded-card border border-accent bg-accent-soft p-4 shadow-sm animate-pulse-ember"
-        >
-          <div className="mb-3 flex items-center justify-between">
-            <span className="font-mono text-xs tracking-wider text-accent-ink">{t('chatMessages.permissionRequest', { name: request.skillName })}</span>
+    <section
+      className="rounded-control border border-ink/10 border-l-2 border-l-warning bg-paper px-3 py-2.5"
+      data-testid="permission-approval-card"
+      role="region"
+    >
+      <div className="flex items-start gap-2.5">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-sm text-ink">{t('chatMessages.permissionRequest', { name: request.skillName })}</span>
+            <span className="flex items-center gap-1 font-mono text-xs text-ink-fade">
+              <LayoutList className="h-3.5 w-3.5" />
+              {t('chatMessages.permissionHandled')}
+            </span>
           </div>
-          <div className="mb-4 flex flex-col gap-1.5">
-            {request.perms.map((permission, index) => (
-              <div key={`${permission.name}-${index}`} className="flex items-center gap-2 text-sm text-ink-soft">
-                <span className="font-mono text-ink-fade">·</span>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-soft">
+            {(request.perms || []).map((permission, index) => (
+              <span key={`${permission.name}-${index}`}>
+                <span className="text-warning" aria-hidden="true">●</span>{' '}
                 {permission.name} · {permission.detail}
-              </div>
+              </span>
             ))}
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={onAllow} className="h-9 rounded-control bg-accent px-4 font-semibold text-sm text-accent-contrast transition-colors hover:bg-accent/90">{t('chatMessages.allowContinue')}</button>
-            <button onClick={onDeny} className="h-9 rounded-control border border-ink/70 px-4 font-semibold text-sm transition-colors hover:bg-paper-2">{t('chatMessages.deny')}</button>
-            <button onClick={onNavigate} className="h-9 rounded-control border border-dashed border-ink-fade/60 px-4 font-semibold text-sm transition-colors hover:border-ink-fade">{t('chatMessages.refineScope')}</button>
-            <div className="flex-1" />
-            <span className="flex items-center gap-1 text-xs text-ink-soft"><LayoutList className="h-3.5 w-3.5" />{t('chatMessages.permissionHandled')}</span>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+        <button type="button" onClick={onNavigate} className="h-8 rounded-control px-3 text-xs text-ink-soft transition-colors hover:bg-ink/[0.045] hover:text-ink">{t('chatMessages.refineScope')}</button>
+        <button type="button" onClick={onDeny} className="h-8 rounded-control border border-ink/15 px-3 text-xs text-ink-soft transition-colors hover:border-ink/25 hover:text-ink">{t('chatMessages.deny')}</button>
+        <button type="button" onClick={onAllow} className="h-8 rounded-control bg-accent px-3 text-xs font-semibold text-accent-contrast transition-colors hover:bg-accent/90">{t('chatMessages.allowContinue')}</button>
+      </div>
+    </section>
   )
 }

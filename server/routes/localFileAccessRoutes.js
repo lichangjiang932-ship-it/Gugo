@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import { authenticateRequest } from '../middleware.js'
 import {
   browseLocalDirectories,
+  createManagedProjectDirectory,
   getLocalFileAccessStatus,
   grantLocalPath,
   resolveAuthorizedLocalPath,
@@ -26,6 +27,7 @@ import {
   revokeLocalHtmlPreviewSession,
 } from '../services/localHtmlPreviewService.js'
 import { htmlPreviewRemoteImageOrigins } from '../services/htmlPreviewRemoteImagePolicy.js'
+import { selectNativeDirectory } from '../services/nativeDirectoryPickerService.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 
@@ -162,6 +164,7 @@ function streamLocalFile(res, fullPath, range) {
 export async function handleLocalFileAccessRequest(req, res, {
   cwd = process.cwd(),
   env = process.env,
+  nativeDirectoryPicker = selectNativeDirectory,
 } = {}) {
   const url = new URL(req.url, 'http://localhost')
   const localPreviewPrefix = '/api/local-files/previews/'
@@ -423,6 +426,27 @@ export async function handleLocalFileAccessRequest(req, res, {
       const body = await readJson(req)
       const directory = browseLocalDirectories({ userId, rawPath: body.path })
       return sendJson(res, 200, { ok: true, directory })
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/local-files/select-directory') {
+      if (!isLoopbackRequest(req)) {
+        return sendJson(res, 403, {
+          ok: false,
+          error: { code: 'LOCAL_ONLY', message: '系统目录选择器只能从运行服务的本机使用' },
+        })
+      }
+      const body = await readJson(req)
+      const selection = await nativeDirectoryPicker(
+        { defaultPath: body.defaultPath },
+        { env },
+      )
+      return sendJson(res, 200, { ok: true, ...selection })
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/local-files/projects') {
+      const body = await readJson(req)
+      const project = createManagedProjectDirectory({ userId, name: body.name })
+      return sendJson(res, 201, { ok: true, project })
     }
 
     if (req.method === 'POST' && url.pathname === '/api/local-files/default-output-directory') {

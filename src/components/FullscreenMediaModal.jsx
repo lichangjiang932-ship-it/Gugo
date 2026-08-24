@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X } from 'lucide-react'
+import Modal from './Modal.jsx'
 
 /**
  * FullscreenMediaModal —— 全屏媒体查看器
  *
  * 特性：
- * - 黑底 fixed modal，z-50
+ * - 黑底 portal modal，统一 overlay/modal 层级
  * - 鼠标滚轮缩放（scale 0.25-5），按住拖拽平移
  * - 键盘：Esc 关闭、+/- 缩放、0 重置、← → 切换（需传 list）
  * - 右上角 X 按钮
@@ -147,26 +148,29 @@ export default function FullscreenMediaModal({
 
   return (
     <AnimatePresence>
-      <motion.div
-        key="fullscreen-media-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={alt || '全屏媒体查看器'}
-        className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center select-none touch-none overflow-hidden"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.18, ease: 'easeOut' }}
-        onWheel={onWheel}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onClick={(e) => {
-          // 点击空白处关闭（不在图片上）
-          if (e.target === e.currentTarget) onClose?.()
-        }}
+      <Modal
+        onClose={onClose}
+        ariaLabel={alt || '全屏媒体查看器'}
+        overlayClassName="bg-black/95 p-0 select-none touch-none overflow-hidden"
+        className="h-full max-w-none overflow-hidden rounded-none border-0 bg-transparent shadow-none"
       >
+        <motion.div
+          key="fullscreen-media-modal"
+          className="absolute inset-0 flex items-center justify-center"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+          onWheel={onWheel}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+          onClick={(e) => {
+            // 点击空白处关闭（不在图片上）
+            if (e.target === e.currentTarget) onClose?.()
+          }}
+        >
         {/* 关闭按钮 */}
         <button
           type="button"
@@ -234,7 +238,8 @@ export default function FullscreenMediaModal({
             transition: isDragging ? 'none' : 'transform 0.06s linear',
           }}
         />
-      </motion.div>
+        </motion.div>
+      </Modal>
     </AnimatePresence>
   )
 }

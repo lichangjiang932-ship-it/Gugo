@@ -5,6 +5,7 @@ import { useAppContext } from '../store/AppContext.jsx'
 import { getAuthToken } from '../lib/accountClient.js'
 import { searchSessionMessages } from '../lib/sessionClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
+import Modal from './Modal.jsx'
 
 function messageText(content) {
   if (typeof content === 'string') return content
@@ -170,11 +171,13 @@ export default function SessionSearchModal() {
   }
 
   return (
-    <div className="fixed inset-0 z-[70] bg-ink/35 flex items-start justify-center px-4 pt-[12vh]" onMouseDown={() => setOpen(false)}>
-      <div
-        className="w-full max-w-2xl bg-paper border border-ink rounded-md shadow-xl overflow-hidden"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
+    <Modal
+      onClose={() => setOpen(false)}
+      initialFocusRef={inputRef}
+      ariaLabel={t('sessionSearch.placeholder')}
+      overlayClassName="items-start px-4 pt-[12vh]"
+      className="max-w-2xl border-ink overflow-hidden"
+    >
         <div className="h-12 px-4 border-b border-ink-fade/30 flex items-center gap-3">
           <Search className="w-4 h-4 text-ink-fade" />
           <input
@@ -238,7 +241,6 @@ export default function SessionSearchModal() {
             {t('sessionSearch.localFallback')} · {error}
           </div>
         )}
-      </div>
-    </div>
+    </Modal>
   )
 }

@@ -113,7 +113,7 @@ test('tool readiness is visible without a tool card and yields to the single dur
 
     const readiness = rootElement.querySelector('[data-testid="model-activity"]')
     assert.ok(readiness)
-    assert.match(readiness.textContent, /Preparing bash_exec/)
+    assert.match(readiness.textContent, /正在准备运行 bash_exec/)
     assert.equal(rootElement.querySelectorAll('.chat-run-timeline').length, 0)
     assert.equal(rootElement.querySelector('.animate-pulse'), null)
 
@@ -139,7 +139,7 @@ test('tool readiness is visible without a tool card and yields to the single dur
   }
 })
 
-test('completed assistant turn renders its persisted total elapsed time', async () => {
+test('completed plain assistant turn does not place elapsed chrome before the answer', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -174,16 +174,15 @@ test('completed assistant turn renders its persisted total elapsed time', async 
       </I18nProvider>,
     ))
 
-    const durationHeader = rootElement.querySelector('[data-testid="task-duration-header"]')
-    assert.ok(durationHeader)
-    assert.equal(durationHeader.textContent, 'Elapsed 1m 5s')
+    assert.equal(rootElement.querySelector('[data-testid="task-duration-header"]'), null)
+    assert.match(rootElement.textContent, /The task is complete/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
   }
 })
 
-test('a sub-second completed turn never renders as zero seconds', async () => {
+test('a sub-second plain turn also keeps timing out of the answer body', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -216,7 +215,8 @@ test('a sub-second completed turn never renders as zero seconds', async () => {
       </I18nProvider>,
     ))
 
-    assert.equal(rootElement.querySelector('[data-testid="task-duration-header"]')?.textContent, 'Elapsed <1s')
+    assert.equal(rootElement.querySelector('[data-testid="task-duration-header"]'), null)
+    assert.match(rootElement.textContent, /Fast response/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -393,7 +393,7 @@ test('an in-flight runtime shutdown is an interruption, not an unsent message or
       </I18nProvider>,
     ))
 
-    assert.ok(rootElement.querySelector('[data-testid="task-duration-header"]'))
+    assert.equal(rootElement.querySelector('[data-testid="task-duration-header"]'), null)
     assert.equal(rootElement.querySelector('[data-testid="retry-model-request"]'), null)
     assert.doesNotMatch(rootElement.textContent, /message was not sent/i)
     assert.match(rootElement.textContent, /stopped during execution/i)
@@ -514,7 +514,7 @@ test('runtime model setup failures keep the actionable settings card without exp
     assert.ok(card)
     assert.match(card.textContent, /Model setup needs attention/)
     assert.match(card.textContent, /rejected its credentials/)
-    assert.ok(rootElement.querySelector('[data-testid="task-duration-header"]'))
+    assert.equal(rootElement.querySelector('[data-testid="task-duration-header"]'), null)
     assert.equal(rootElement.querySelector('[data-testid="retry-model-request"]'), null)
     assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]'), null)
   } finally {
@@ -581,7 +581,7 @@ test('an ordinary chat failure does not invent a missing-file receipt', async ()
     ))
 
     assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]'), null)
-    assert.ok(rootElement.querySelector('[data-testid="task-duration-header"]'))
+    assert.equal(rootElement.querySelector('[data-testid="task-duration-header"]'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -626,7 +626,7 @@ test('a failed file task without receipts keeps its missing-file completion stat
       'No file was generated. Review the error above, then try again.',
     )
     assert.doesNotMatch(rootElement.textContent, /local file receipts?/i)
-    assert.ok(rootElement.querySelector('[data-testid="task-duration-header"]'))
+    assert.equal(rootElement.querySelector('[data-testid="task-duration-header"]'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -959,6 +959,144 @@ test('a failed turn hides managed artifacts but exposes independently verified l
     assert.equal(cards.length, 1)
     assert.match(cards[0].textContent, /gallery\.html/)
     assert.doesNotMatch(cards[0].textContent, /delivered-html/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('reasoning-only completion uses a thought label without exposing private reasoning', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const startedAt = Date.now() - 1500
+  const msg = {
+    id: 'assistant-reasoning-only',
+    role: 'assistant',
+    content: 'Safe final answer.',
+    timestamp: startedAt,
+    meta: {
+      streaming: false,
+      latency: 1500,
+      reasoning: 'private chain-of-thought must stay hidden',
+    },
+  }
+  const t = (key, values = {}) => {
+    if (key === 'chatMessages.execution') return 'Execution'
+    if (key === 'chatMessages.reasoningActive') return 'Thinking'
+    if (key === 'chatMessages.reasoningCompleted') return 'Thought'
+    if (key === 'chatMessages.durationSeconds') return `${values.seconds}s`
+    if (key === 'chatMessages.durationLessThanSecond') return '<1s'
+    return key
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          t={t}
+        />
+      </I18nProvider>,
+    ))
+
+    const executionToggle = rootElement.querySelector('[data-testid="execution-toggle"]')
+    assert.match(executionToggle?.textContent || '', /Thought · 1s/)
+    assert.doesNotMatch(executionToggle?.textContent || '', /Execution/)
+    await act(async () => executionToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.doesNotMatch(rootElement.textContent, /private chain-of-thought/)
+    assert.match(rootElement.textContent, /Safe final answer/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('execution disclosure auto-collapses after completion and preserves later manual expansion', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const startedAt = Date.now() - 2400
+  const baseMessage = {
+    id: 'assistant-stable-execution',
+    role: 'assistant',
+    content: 'Working on it.',
+    timestamp: startedAt,
+    meta: {
+      streaming: true,
+      turnStartedAt: startedAt,
+      toolCalls: [{
+        id: 'stable-tool',
+        name: 'read_file',
+        arguments: JSON.stringify({ path: 'README.md' }),
+        status: 'running',
+        textOffset: 0,
+      }],
+    },
+  }
+  const t = (key, values = {}) => {
+    if (key === 'chatMessages.execution') return 'Execution'
+    if (key === 'chatMessages.durationSeconds') return `${values.seconds}s`
+    if (key === 'chatMessages.durationLessThanSecond') return '<1s'
+    if (key === 'chatMessages.executionToolCount') return `${values.count} tools`
+    return key
+  }
+  const renderMessage = (msg, generatingMessageId) => act(async () => root.render(
+    <I18nProvider>
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId={generatingMessageId}
+        lang="en"
+        t={t}
+      />
+    </I18nProvider>,
+  ))
+
+  try {
+    await renderMessage(baseMessage, baseMessage.id)
+    const runningToggle = rootElement.querySelector('[data-testid="execution-toggle"]')
+    const runningContent = rootElement.querySelector('[data-testid="execution-content"]')
+    assert.equal(runningToggle?.getAttribute('aria-expanded'), 'true')
+    assert.ok(runningContent)
+
+    await renderMessage({
+      ...baseMessage,
+      meta: {
+        ...baseMessage.meta,
+        streaming: false,
+        latency: 2400,
+        toolCalls: [{ ...baseMessage.meta.toolCalls[0], status: 'success', result: '{}' }],
+      },
+    }, '')
+
+    const completedToggle = rootElement.querySelector('[data-testid="execution-toggle"]')
+    assert.equal(completedToggle, runningToggle)
+    assert.equal(completedToggle?.getAttribute('aria-expanded'), 'false')
+    assert.equal(rootElement.querySelector('[data-testid="execution-content"]'), null)
+    assert.match(completedToggle?.textContent || '', /Execution · 2s · 1 tools/)
+    assert.match(rootElement.querySelector('.chat-assistant-answer')?.textContent || '', /Working on it/)
+
+    await act(async () => completedToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    const manuallyExpandedContent = rootElement.querySelector('[data-testid="execution-content"]')
+    assert.equal(completedToggle.getAttribute('aria-expanded'), 'true')
+    assert.ok(manuallyExpandedContent)
+
+    await renderMessage({
+      ...baseMessage,
+      content: 'Working on it. Final answer.',
+      meta: {
+        ...baseMessage.meta,
+        streaming: false,
+        latency: 2400,
+        toolCalls: [{ ...baseMessage.meta.toolCalls[0], status: 'success', result: '{}' }],
+      },
+    }, '')
+    assert.equal(rootElement.querySelector('[data-testid="execution-toggle"]')?.getAttribute('aria-expanded'), 'true')
+    assert.equal(rootElement.querySelector('[data-testid="execution-content"]'), manuallyExpandedContent)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

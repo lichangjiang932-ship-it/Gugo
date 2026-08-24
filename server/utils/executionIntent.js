@@ -11,6 +11,9 @@ const NEGATED_MUTATION_CLAUSE = /(?:(?:\b(?:do\s+not|don't|never|without|no\s+ne
 const NEGATED_ROUTING_MUTATION_CLAUSE = /(?:\u4e0d\u8981|\u65e0\u9700|\u4e0d\u5fc5|\u4e0d\u5f97|\u7981\u6b62)[^,.;\uff0c\u3002\uff1b\r\n]{0,120}?(?:\u6dfb\u52a0|\u589e\u52a0|\u8865\u4e0a|(?:\u6309\u9700)?\u6302\u8f7d|\u5206\u914d)[^,.;\uff0c\u3002\uff1b\r\n]{0,120}/giu
 const NEGATED_REWIND_MUTATION_CLAUSE = /(?:(?:\b(?:do\s+not|don't|never|without|must\s+not)\b)|(?:\u4e0d\u8981|\u65e0\u9700|\u4e0d\u5fc5|\u4e0d\u5f97|\u7981\u6b62))(?:\.(?=[a-z0-9]{1,12}\b)|[^,.;\uff0c\u3002\uff1b\r\n]){0,120}?(?:\b(?:revert|undo|rollback|restore)\b|(?:\u56de\u6eda|\u64a4\u9500|\u6062\u590d\u539f\u72b6|\u8fd8\u539f))(?:\.(?=[a-z0-9]{1,12}\b)|[^,.;\uff0c\u3002\uff1b\r\n]){0,120}/giu
 const FILE_TARGET_REFERENCE = /(?:^|[\s"'`(])(?:[a-z]:[\\/]|\.\.?[\\/]|\/)?(?:[\p{L}\p{N}_@%+.,()[\]{} -]+[\\/])*[\p{L}\p{N}_@%+.,()[\]{} -]+\.[a-z0-9]{1,12}(?=$|[\s"'`),;:，。；：！？])/iu
+const INSPECTION_TARGET_REFERENCE = /\b(?:files?|folders?|director(?:y|ies)|repos?|repositories|workspaces?|projects?|codebases?|source\s+trees?|working\s+trees?|logs?)\b|(?:文件|文件夹|目录|仓库|工作区|项目|代码库|源码|日志)/i
+const DIRECT_INSPECTION_ORDER = /(?:^|[,.!?;，。！？；]\s*)(?:(?:please|directly|now|first|then|just|only|can\s+you|could\s+you|would\s+you|help\s+(?:me\s+)?|请|先|现在|直接|只|仅|帮我|替我|麻烦(?:你)?|你能|你可以|能否|可以)[\s,，]*){0,4}(?:read|open|inspect|examine|check|review|view|list|search|scan|look\s+(?:at|through)|读取|读一下|打开|查看|看一下|检查|排查|审查|浏览|列出|搜索)(?=$|[\s,，。！？；:：]|[\p{Script=Han}])/iu
+const OBJECT_FIRST_INSPECTION_ORDER = /(?:^|[,.!?;，。！？；]\s*)(?:(?:请|先|现在|直接|只|仅|帮我|替我|麻烦(?:你)?)[\s,，]*)*(?:把|将)[^。！？!?\n]{1,120}?(?:读取|读一下|打开|查看|看一下|检查|排查|审查|浏览|列出)/iu
 // 纯文本交付物对象:「生成一份周报/写一段文案」是文字产出,不写文件。
 // 生成/创建/写 类动词 + 这些对象 + 没有文件路径时,不该按「文件修改任务」
 // 要求工具执行证据 —— 否则纯文本任务永远以 execution_evidence_missing 收尾。
@@ -72,6 +75,14 @@ function hasDelegatedLocalFileRequirements(text) {
     || (numberedItems.length >= 1 && /(?:\u5982\u4e0b|\u4ee5\u4e0b)/i.test(lead[0]))
 }
 
+function hasDirectInspectionExecutionIntent(text) {
+  const prompt = String(text || '').trim()
+  if (!prompt || (!FILE_TARGET_REFERENCE.test(prompt) && !INSPECTION_TARGET_REFERENCE.test(prompt))) {
+    return false
+  }
+  return DIRECT_INSPECTION_ORDER.test(prompt) || OBJECT_FIRST_INSPECTION_ORDER.test(prompt)
+}
+
 export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) {
   const mode = normalizeTurnIntentMode(intentMode)
   if (mode === 'execute') return true
@@ -103,6 +114,7 @@ export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) 
   const laterClause = firstBoundary >= 0 ? actionablePrompt.slice(firstBoundary + 1).trim() : ''
   const hasLaterExecutionOrder = Boolean(laterClause) && (
     IMPERATIVE_EXECUTION_INTENT.test(laterClause)
+    || hasDirectInspectionExecutionIntent(laterClause)
     || OBJECT_FIRST_EXECUTION_INTENT.test(laterClause)
     || OBJECT_TRANSFORMATION_EXECUTION_INTENT.test(laterClause)
     || OBJECT_TAIL_EXECUTION_INTENT.test(laterClause)
@@ -113,6 +125,7 @@ export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) 
   const hasFollowUpExecution = FOLLOW_UP_EXECUTION.test(actionablePrompt) || hasLaterExecutionOrder
   if (EXPLANATION_ONLY_LEAD.test(actionablePrompt) && !hasFollowUpExecution) return false
   if (hasActionableNumberedSteps(actionablePrompt)) return true
+  if (hasDirectInspectionExecutionIntent(actionablePrompt)) return true
   if (DIRECT_EXECUTION_INTENT.test(actionablePrompt)) return true
   if (EXTERNAL_ACTION_ORDER.test(actionablePrompt)) return true
   if ((MUTATION_EXECUTION_INTENT.test(actionablePrompt)

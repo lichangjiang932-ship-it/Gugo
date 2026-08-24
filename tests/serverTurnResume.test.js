@@ -66,7 +66,7 @@ test('failed-turn retry signals match only the original session and turn', () =>
     meta: {
       failed: true,
       serverTurnId: 'turn-1',
-      serverFailure: { code: 'TURN_INCOMPLETE' },
+      serverFailure: { code: 'TURN_INCOMPLETE', retryable: true },
     },
   }
 
@@ -75,6 +75,10 @@ test('failed-turn retry signals match only the original session and turn', () =>
   assert.equal(matchesFailedTurnRetryResume({ id: 'session-1' }, {
     ...message,
     meta: { ...message.meta, serverTurnId: 'turn-2' },
+  }, retry), false)
+  assert.equal(matchesFailedTurnRetryResume({ id: 'session-1' }, {
+    ...message,
+    meta: { ...message.meta, serverFailure: { code: 'TURN_INCOMPLETE', retryable: false } },
   }, retry), false)
 })
 

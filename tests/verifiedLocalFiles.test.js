@@ -12,6 +12,7 @@ const savedEnv = {
   WORKSPACE_ROOT: process.env.WORKSPACE_ROOT,
   WORKSPACE_FS_ENABLED: process.env.WORKSPACE_FS_ENABLED,
   WORKSPACE_SHARED_TRUSTED: process.env.WORKSPACE_SHARED_TRUSTED,
+  YMA_TEST_DEFAULT_OUTPUT_DIR: process.env.YMA_TEST_DEFAULT_OUTPUT_DIR,
 }
 fs.mkdirSync(workspace, { recursive: true })
 fs.mkdirSync(outside, { recursive: true })
@@ -19,6 +20,7 @@ process.env.APP_DB_PATH = path.join(tempRoot, 'verified-local-files.db')
 process.env.WORKSPACE_ROOT = workspace
 process.env.WORKSPACE_FS_ENABLED = '1'
 process.env.WORKSPACE_SHARED_TRUSTED = '1'
+process.env.YMA_TEST_DEFAULT_OUTPUT_DIR = workspace
 
 const { closeDb, createUser } = await import('../server/db.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')

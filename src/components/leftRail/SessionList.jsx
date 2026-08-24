@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, ChevronDown, GitFork, MoreHorizontal, Pin, PinOff, Search, X } from 'lucide-react'
-import { sortSessions } from './sessionListUtils.js'
+import { Archive, ArchiveRestore, Folder, GitFork, MoreHorizontal, Pin, PinOff, Search, SquarePen, X } from 'lucide-react'
+import { groupSessionsByProject } from './sessionListUtils.js'
 
 const CONTEXT_MENU_WIDTH = 176
 const CONTEXT_MENU_HEIGHT = 160
@@ -35,19 +35,24 @@ export default function SessionList({
   onMenuOpen,
   onMenuToggle,
   onMenuClose,
+  onNewInProject,
   onSearch,
   onOpen,
   onFork,
   onPinToggle,
   onArchiveToggle,
   onDelete,
+  storedProjects = [],
   t,
 }) {
   const menuRef = useRef(null)
   const menuOriginRef = useRef(null)
   const [contextMenu, setContextMenu] = useState(null)
-  const [expanded, setExpanded] = useState(true)
-  const orderedSessions = useMemo(() => sortSessions(sessions), [sessions])
+  const [collapsedProjectKeys, setCollapsedProjectKeys] = useState(() => new Set())
+  const { projects, ungrouped: orderedSessions } = useMemo(
+    () => groupSessionsByProject(sessions, storedProjects),
+    [sessions, storedProjects],
+  )
 
   useEffect(() => {
     if (openMenuId == null) return undefined
@@ -81,7 +86,7 @@ export default function SessionList({
     const menuId = `session-actions-${session.id}`
     return <div
       key={session.id ?? index}
-      className={`group relative flex min-h-10 items-stretch rounded-control transition-colors ${isActive ? 'bg-ink/[0.055]' : 'hover:bg-ink/[0.04]'}`}
+      className={`group relative flex h-8 items-stretch rounded-lg transition-colors ${isActive ? 'bg-ink/[0.06]' : 'hover:bg-ink/[0.04]'}`}
       onContextMenu={(event) => {
         if (menuRef.current?.contains(event.target)) return
         event.preventDefault()
@@ -105,9 +110,9 @@ export default function SessionList({
         }}
         aria-current={isActive ? 'page' : undefined}
         aria-keyshortcuts="Shift+F10"
-        className="min-w-0 flex-1 rounded-control py-2.5 pl-2.5 pr-8 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30"
+        className="flex min-w-0 flex-1 items-center rounded-lg py-1 pl-2 pr-8 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"
       >
-        <span className={`block truncate text-[13px] leading-[18px] ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{session.title}</span>
+        <span className={`block truncate text-[12px] leading-4 ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{session.title}</span>
       </button>
       <button
         type="button"
@@ -123,7 +128,7 @@ export default function SessionList({
         aria-haspopup="menu"
         aria-expanded={isMenuOpen}
         aria-controls={isMenuOpen ? menuId : undefined}
-        className={`absolute right-1.5 top-1.5 rounded-control p-1 text-ink-fade transition-opacity hover:bg-paper hover:text-ink focus:opacity-100 focus:outline-none ${isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+        className={`absolute right-1 top-1 rounded-md p-1 text-ink-fade transition-opacity hover:bg-paper hover:text-ink focus:opacity-100 focus:outline-none ${isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
       >
         <MoreHorizontal className="h-4 w-4" />
       </button>
@@ -154,16 +159,66 @@ export default function SessionList({
     </div>
   }
 
-  return <section aria-label={t('nav.history')}>
-    <div className="mb-1 flex h-7 items-center gap-0.5">
-      <button type="button" onClick={() => { onMenuClose(); setExpanded((value) => !value) }} aria-expanded={expanded} className="flex h-7 min-w-0 flex-1 items-center gap-1 rounded-control px-1.5 text-xs font-medium text-ink-fade hover:bg-ink/[0.035] hover:text-ink-soft">
-        <ChevronDown className={`h-[18px] w-[18px] transition-transform ${expanded ? '' : '-rotate-90'}`} />
-        <span className="flex-1 text-left">{t('nav.history')}</span>
-      </button>
-      <button type="button" onClick={() => { onMenuClose(); onSearch?.() }} title={t('nav.searchPlaceholder')} aria-label={t('nav.searchPlaceholder')} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-ink-fade hover:bg-ink/[0.035] hover:text-ink-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30">
-        <Search className="h-[18px] w-[18px]" />
-      </button>
-    </div>
-    {expanded && (orderedSessions.length ? <div className="flex flex-col gap-0.5">{orderedSessions.map((session, index) => renderSession(session, index))}</div> : <div className="px-3 py-8 text-center"><p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p><p className="mt-1 text-xs leading-5 text-ink-fade">{t('nav.emptyHint')}</p></div>)}
-  </section>
+  const projectSections = projects.map((project) => {
+    const isCollapsed = collapsedProjectKeys.has(project.key)
+    return <section key={project.key} aria-label={project.name} data-session-project={project.path} className="mb-0.5">
+      <div className="group/project flex h-8 items-center rounded-lg transition-colors hover:bg-ink/[0.035]">
+        <button
+          type="button"
+          onClick={() => {
+            onMenuClose()
+            setCollapsedProjectKeys((current) => {
+              const next = new Set(current)
+              if (next.has(project.key)) next.delete(project.key)
+              else next.add(project.key)
+              return next
+            })
+          }}
+          aria-expanded={!isCollapsed}
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-1.5 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"
+          data-project-toggle={project.path}
+        >
+          <Folder className="h-4 w-4 shrink-0 text-ink-fade" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate text-[12px] font-medium leading-4 text-ink" title={project.path}>{project.name}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => { onMenuClose(); onNewInProject?.(project) }}
+          title={t('nav.newChatInProject', { project: project.name })}
+          aria-label={t('nav.newChatInProject', { project: project.name })}
+          className="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-fade opacity-0 transition-opacity hover:bg-paper hover:text-ink focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 group-hover/project:opacity-100"
+          data-new-project-chat={project.path}
+        >
+          <SquarePen className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      </div>
+      {!isCollapsed && project.sessions.length > 0 && (
+        <div className="ml-5" data-project-sessions={project.path}>
+          {project.sessions.map((session, index) => renderSession(session, index))}
+        </div>
+      )}
+    </section>
+  })
+
+  return <div className="space-y-3">
+    <section aria-label={t('chatMessages.workspaceProjects')}>
+      <div className="mb-1 px-1.5 text-xs font-medium leading-4 tracking-[0.01em] text-ink-fade">
+        {t('chatMessages.workspaceProjects')}
+      </div>
+      {projectSections}
+    </section>
+    <section aria-label={t('chatMessages.workspaceRecent')}>
+      <div className="mb-1 flex h-6 items-center px-1.5">
+        <span className="min-w-0 flex-1 text-xs font-medium leading-4 tracking-[0.01em] text-ink-fade">
+          {t('chatMessages.workspaceRecent')}
+        </span>
+        <button type="button" onClick={() => { onMenuClose(); onSearch?.() }} title={t('nav.searchPlaceholder')} aria-label={t('nav.searchPlaceholder')} className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-fade hover:bg-ink/[0.04] hover:text-ink-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30">
+          <Search className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {orderedSessions.length
+        ? <div>{orderedSessions.map((session, index) => renderSession(session, index))}</div>
+        : <div className="px-2 py-1 text-[12px] leading-4 text-ink-fade">{t('nav.emptyTitle')}</div>}
+    </section>
+  </div>
 }

@@ -145,6 +145,65 @@ function mutationEvidence(toolCalls = []) {
   return mutations
 }
 
+function validChangeStats(result) {
+  if (!Array.isArray(result?.changes)) return []
+  const changes = []
+  for (const change of result.changes) {
+    if (!change || typeof change !== 'object' || Array.isArray(change)) continue
+    const normalized = absolutePath(change.path)
+    const additions = change.additions
+    const deletions = change.deletions
+    if (!normalized
+      || !Number.isSafeInteger(additions)
+      || additions < 0
+      || !Number.isSafeInteger(deletions)
+      || deletions < 0) continue
+    changes.push({
+      key: normalized.key,
+      additions,
+      deletions,
+    })
+  }
+  return changes
+}
+
+/**
+ * Aggregate only executor-reported line counts. The same persisted tool call
+ * can be restored more than once, so stable call ids are counted once. Calls
+ * without ids remain distinct because identical inputs can be real separate
+ * edits. No counts are inferred from changed paths, file bodies, or prose.
+ */
+function mutationChangeStats(toolCalls = []) {
+  const uniqueCalls = new Map()
+  const calls = Array.isArray(toolCalls) ? toolCalls : []
+  calls.forEach((call, index) => {
+    const name = callName(call)
+    const result = callResult(call)
+    if (!MUTATION_TOOL_NAMES.has(name) || !result || !callSucceeded(call, result)) return
+    const args = callArguments(call)
+    if (args.dry_run === true
+      || args.dryRun === true
+      || result.dry_run === true
+      || result.dryRun === true) return
+    const changes = validChangeStats(result)
+    if (changes.length === 0) return
+    const id = callId(call)
+    uniqueCalls.set(id ? `id:${id}` : `index:${index}`, changes)
+  })
+
+  const statsByPath = new Map()
+  for (const changes of uniqueCalls.values()) {
+    for (const change of changes) {
+      const current = statsByPath.get(change.key) || { additions: 0, deletions: 0 }
+      const additions = current.additions + change.additions
+      const deletions = current.deletions + change.deletions
+      if (!Number.isSafeInteger(additions) || !Number.isSafeInteger(deletions)) continue
+      statsByPath.set(change.key, { additions, deletions })
+    }
+  }
+  return statsByPath
+}
+
 function fileHref(path) {
   const key = normalizeVerifiedLocalFilePath(path)
   return `/__local-file-reference__/${encodeURIComponent(key)}`
@@ -237,6 +296,7 @@ export function removeVerifiedLocalFilesFromRetained(
 }
 
 function referencesFromReceipts(receipts, {
+  changeStats = new Map(),
   kind = 'verified',
   messageId = '',
   mutations = new Map(),
@@ -258,6 +318,7 @@ function referencesFromReceipts(receipts, {
     const type = normalizeArtifactReferenceType({ filename })
     const identity = `${buildArtifactReferenceIdentity({ filename, messageId, type })}:${key}`
     const mutation = mutations.get(key)
+    const stats = changeStats.get(key)
     references.push({
       id: `local-file:${id}`,
       identity,
@@ -274,6 +335,7 @@ function referencesFromReceipts(receipts, {
       ...(mutation?.relatedArtifactIds?.length > 0
         ? { relatedArtifactIds: mutation.relatedArtifactIds }
         : {}),
+      ...(stats ? { changeStats: { ...stats } } : {}),
       previewArtifact: {
         messageId: String(messageId || ''),
         artifactIdentity: identity,
@@ -311,8 +373,14 @@ export function buildVerifiedLocalFileReferences({
 } = {}) {
   const calls = Array.isArray(toolCalls) ? toolCalls : []
   const mutations = mutationEvidence(calls)
+  const changeStats = mutationChangeStats(calls)
   if (Array.isArray(verifiedLocalFiles)) {
-    return referencesFromReceipts(verifiedLocalFiles, { messageId, mutations, turnId })
+    return referencesFromReceipts(verifiedLocalFiles, {
+      changeStats,
+      messageId,
+      mutations,
+      turnId,
+    })
   }
 
   const reads = new Map()
@@ -346,6 +414,7 @@ export function buildVerifiedLocalFileReferences({
     // different directories never reuse the same workbench tab.
     const identity = `${buildArtifactReferenceIdentity({ filename, messageId, type })}:${key}`
     const preview = previewForFile({ content, filename, path })
+    const stats = changeStats.get(key)
     references.push({
       id: `local-file:${key}`,
       identity,
@@ -360,6 +429,7 @@ export function buildVerifiedLocalFileReferences({
       ...(mutation.relatedArtifactIds.length > 0
         ? { relatedArtifactIds: mutation.relatedArtifactIds }
         : {}),
+      ...(stats ? { changeStats: { ...stats } } : {}),
       previewArtifact: {
         messageId: String(messageId || ''),
         artifactIdentity: identity,
@@ -384,10 +454,12 @@ export function buildRetainedLocalFileReferences({
   turnId = '',
 } = {}) {
   if (!Array.isArray(retainedLocalFiles)) return []
+  const calls = Array.isArray(toolCalls) ? toolCalls : []
   return referencesFromReceipts(retainedLocalFiles, {
+    changeStats: mutationChangeStats(calls),
     kind: 'retained',
     messageId,
-    mutations: mutationEvidence(toolCalls),
+    mutations: mutationEvidence(calls),
     turnId,
   })
 }

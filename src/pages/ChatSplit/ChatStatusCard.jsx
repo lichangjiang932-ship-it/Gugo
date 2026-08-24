@@ -55,7 +55,7 @@ export default function ChatStatusCard({
           <span className="font-mono">~{usage.estimatedTokens.toLocaleString()} / {usage.contextWindow.toLocaleString()} · {usage.percent}%</span>
         </div>
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ink/[0.08]">
-          <div className={`h-full rounded-full ${usage.percent >= 80 ? 'bg-red-500' : usage.percent >= 60 ? 'bg-amber-500' : 'bg-ink/55'}`} style={{ width: `${Math.max(2, usage.percent)}%` }} />
+          <div className={`h-full rounded-full ${usage.percent >= 80 ? 'bg-danger' : usage.percent >= 60 ? 'bg-warning' : 'bg-ink/55'}`} style={{ width: `${Math.max(2, usage.percent)}%` }} />
         </div>
       </button>
 

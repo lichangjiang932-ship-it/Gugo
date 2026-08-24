@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from '../lib/router.jsx'
 import { ChevronDown, MessageSquarePlus, Plus, Send, Settings } from 'lucide-react'
-import LeftRail from '../components/LeftRail'
+import AppLayout from '../components/AppLayout.jsx'
 import MentionsAutocomplete from '../components/MentionsAutocomplete.jsx'
 import { applyMention, getMentionQuery } from '../components/mentionsAutocompleteLogic.js'
 import { useT } from '../i18n/I18nProvider.jsx'
@@ -106,14 +106,13 @@ export default function ChannelsPage() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-paper text-ink">
-      <LeftRail />
+    <AppLayout className="flex h-screen overflow-hidden bg-paper text-ink">
       <aside className="flex w-[300px] flex-col gap-4 overflow-y-auto border-r border-dashed border-ink-fade/50 bg-paper p-4">
         <div className="flex items-center justify-between gap-2">
           <div><h1 className="font-display text-2xl text-ink">{t('channels.title')}</h1><p className="mt-0.5 text-xs text-ink-fade">{t('channels.subtitle')}</p></div>
           <button type="button" onClick={() => setShowCreate(true)} title={t('channels.newChannel')} className="flex h-9 w-9 items-center justify-center rounded-md border border-ink-fade/40 hover:bg-paper-2"><Plus className="h-4 w-4" /></button>
         </div>
-        {error && <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+        {error && <div className="rounded-md border border-danger/30 bg-danger/5 px-3 py-2 text-sm text-danger">{error}</div>}
         <div className="flex flex-col gap-4">
           <ChannelListGroup title={t('channels.group')} channels={grouped.group} activeId={activeId} onSelect={selectChannel} />
           <ChannelListGroup title={t('channels.dm')} channels={grouped.dm} activeId={activeId} onSelect={selectChannel} />
@@ -136,7 +135,7 @@ export default function ChannelsPage() {
         ) : <EmptyChannel onCreate={() => setShowCreate(true)} t={t} />}
       </main>
       {showCreate && <CreateChannelPanel agents={agents} t={t} onClose={() => setShowCreate(false)} onCreated={(channel) => { setChannels((current) => [channel, ...current]); setMessages([]); setActiveId(channel.id); setShowCreate(false) }} />}
-    </div>
+    </AppLayout>
   )
 }
 

@@ -11,7 +11,7 @@ function PermissionApprovalCard({ challenge, busy, onApprove, onDismiss, t }) {
       role="alert"
     >
       <div className="flex items-start gap-3">
-        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
+        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <h4 className="font-medium text-ink">{t('settings.pluginPermissionReviewTitle')}</h4>
           <p className="mt-1 text-xs leading-5 text-ink-fade">
@@ -63,11 +63,11 @@ function PluginActionFailure({ failure, t }) {
   const revokeFailed = failure.action === 'revoke-permissions'
   return (
     <div
-      className="mx-4 my-3 rounded-xl border border-red-500/30 bg-paper p-4 text-sm"
+      className="mx-4 my-3 rounded-xl border border-danger/30 bg-paper p-4 text-sm"
       data-testid={`runtime-plugin-action-failure-${failure.pluginId}`}
       role="alert"
     >
-      <h4 className="font-medium text-red-700">
+      <h4 className="font-medium text-danger">
         {t(revokeFailed ? 'settings.pluginRevokeFailedTitle' : 'settings.pluginActionFailedTitle')}
       </h4>
       <p className="mt-1 text-xs leading-5 text-ink-fade">
@@ -126,7 +126,7 @@ export function RuntimePluginList({
     return (
       <Fragment key={String(plugin?.id || '')}>
         <SettingsRow title={String(plugin?.name || plugin?.id || '')} description={description}>
-          <span className={`text-xs ${active ? 'text-emerald-600' : 'text-ink-fade'}`}>{t(statusKey)}</span>
+          <span className={`text-xs ${active ? 'text-success' : 'text-ink-fade'}`}>{t(statusKey)}</span>
           {controllable && (
             <span className="flex flex-wrap items-center justify-end gap-1.5">
               {!enabled && (

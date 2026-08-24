@@ -1,19 +1,23 @@
 import crypto from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
 import path from 'node:path'
 import { getDb } from '../db.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { isApprovalBypassEnabled } from './approvalSettingsStore.js'
-import { getWorkspaceTrustStatus } from './workspaceTrustService.js'
+import { getWorkspaceTrustStatus, setWorkspaceTrust } from './workspaceTrustService.js'
 import { resolveManagedAttachmentPath } from './managedAttachmentStore.js'
 
 const MAX_GRANTS = 64
 const MAX_DIRECTORY_BROWSER_ENTRIES = 500
+const MAX_MANAGED_PROJECT_NAME_LENGTH = 80
+const MANAGED_PROJECTS_DIRECTORY = 'Gugo Projects'
 export const LOCAL_FILE_GRANT_SCOPES = Object.freeze({
   PERSISTENT: 'persistent',
   SESSION: 'session',
 })
 const sessionGrantsByUser = new Map()
+const turnProjectDirectoryContext = new AsyncLocalStorage()
 
 function isLoopbackHost(value) {
   const host = String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '')
@@ -44,6 +48,10 @@ function workspaceRoot() {
   return path.resolve(process.env.WORKSPACE_ROOT?.trim() || process.cwd())
 }
 
+function appDataRoot() {
+  return path.resolve(process.env.APP_DATA_DIR?.trim() || path.join(process.cwd(), 'server-data'))
+}
+
 function stripPairedOuterQuotes(value) {
   let normalized = String(value || '').trim()
   while (normalized.length >= 2) {
@@ -56,14 +64,23 @@ function stripPairedOuterQuotes(value) {
 }
 
 export function getProjectDirectory({ userId } = {}) {
+  const scoped = turnProjectDirectoryContext.getStore()
+  if (scoped?.projectDirectory && (!userId || scoped.userId === userId)) {
+    return scoped.projectDirectory
+  }
   if (userId) {
     try {
-      const grant = [...getGrantRows(userId)].reverse().find((row) => (
+      const grant = [...getGrantRows(userId)]
+        .sort((left, right) => (
+          (Number(right.updated_at) || 0) - (Number(left.updated_at) || 0)
+          || (Number(right.created_at) || 0) - (Number(left.created_at) || 0)
+        ))
+        .find((row) => (
         row.resource_type === 'directory'
         && row.access_mode === 'read_write'
         && fs.existsSync(row.root_path)
         && getWorkspaceTrustStatus({ userId, rootPath: row.root_path }).trusted
-      ))
+        ))
       if (grant) return grant.root_path
     } catch {
       // Fall back to the deployment workspace below.
@@ -203,9 +220,181 @@ function isolatedTestOutputDirectory() {
 }
 
 export function getDefaultOutputDirectory({ userId } = {}) {
+  const scoped = turnProjectDirectoryContext.getStore()
+  if (scoped?.defaultOutputDirectory && (!userId || scoped.userId === userId)) {
+    return scoped.defaultOutputDirectory
+  }
   return configuredOutputDirectory(userId)
     || isolatedTestOutputDirectory()
     || getProjectDirectory({ userId })
+}
+
+function managedProjectFolderName(value) {
+  const normalized = String(value || '')
+    .normalize('NFKC')
+    .replace(/[\p{Cc}<>:"/\\|?*]/gu, ' ')
+    .replace(/\s+/g, '-')
+    .replace(/^[. -]+|[. -]+$/g, '')
+    .slice(0, 48)
+  if (!normalized) return 'project'
+  return /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(normalized)
+    ? `project-${normalized}`
+    : normalized
+}
+
+function managedProjectUserKey(userId) {
+  return crypto.createHash('sha256').update(String(userId)).digest('hex').slice(0, 16)
+}
+
+/**
+ * Create an app-managed workspace when the user names a project without
+ * choosing an existing source folder. Every directory is a unique leaf under
+ * a user-isolated root, then receives the same persistent grant and trust
+ * records as an explicitly selected workspace.
+ */
+export function createManagedProjectDirectory({ userId, name, now = Date.now() } = {}) {
+  if (!userId) throw serviceError('userId 必填', 400, 'USER_REQUIRED')
+  const projectName = String(name || '').trim()
+  if (!projectName) throw serviceError('项目名称必填', 400, 'PROJECT_NAME_REQUIRED')
+  if (projectName.length > MAX_MANAGED_PROJECT_NAME_LENGTH) {
+    throw serviceError(
+      `项目名称最多 ${MAX_MANAGED_PROJECT_NAME_LENGTH} 个字符`,
+      400,
+      'PROJECT_NAME_TOO_LONG',
+    )
+  }
+
+  const outputRoot = configuredOutputDirectory(userId) || appDataRoot()
+  const managedRoot = path.resolve(
+    outputRoot,
+    MANAGED_PROJECTS_DIRECTORY,
+    managedProjectUserKey(userId),
+  )
+  try {
+    fs.mkdirSync(managedRoot, { recursive: true })
+  } catch (cause) {
+    throw serviceError(
+      `无法创建默认项目目录（${cause?.code || 'CREATE_FAILED'}）`,
+      403,
+      'MANAGED_PROJECT_ROOT_CREATE_FAILED',
+    )
+  }
+
+  const canonicalRoot = realPath(managedRoot)
+  const rootStat = fs.statSync(canonicalRoot)
+  if (!rootStat.isDirectory()) {
+    throw serviceError('默认项目路径必须是目录', 400, 'MANAGED_PROJECT_ROOT_NOT_DIRECTORY')
+  }
+  assertPathWritable(canonicalRoot, rootStat)
+
+  let projectPath = ''
+  for (let attempt = 0; attempt < 8 && !projectPath; attempt += 1) {
+    const suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 8)
+    const candidate = path.join(canonicalRoot, `${managedProjectFolderName(projectName)}-${suffix}`)
+    try {
+      fs.mkdirSync(candidate)
+      projectPath = realPath(candidate)
+    } catch (cause) {
+      if (cause?.code !== 'EEXIST') {
+        throw serviceError(
+          `无法创建项目目录（${cause?.code || 'CREATE_FAILED'}）`,
+          403,
+          'MANAGED_PROJECT_DIRECTORY_CREATE_FAILED',
+        )
+      }
+    }
+  }
+  if (!projectPath) {
+    throw serviceError('无法生成唯一项目目录', 409, 'MANAGED_PROJECT_DIRECTORY_CONFLICT')
+  }
+
+  grantLocalPath({
+    userId,
+    rootPath: canonicalRoot,
+    accessMode: 'read_write',
+    scope: LOCAL_FILE_GRANT_SCOPES.PERSISTENT,
+    now,
+  })
+  setWorkspaceTrust({
+    userId,
+    rootPath: canonicalRoot,
+    trusted: true,
+    confirmation: 'TRUST_WORKSPACE_CONFIG',
+    scope: LOCAL_FILE_GRANT_SCOPES.PERSISTENT,
+    now,
+  })
+
+  return { path: projectPath }
+}
+
+/**
+ * Bind relative paths and output-directory prompt context to one Turn. The
+ * AsyncLocalStorage boundary prevents concurrent sessions for the same user
+ * from changing each other's effective project directory.
+ */
+export function withTurnProjectDirectory({
+  userId,
+  projectDirectory,
+  defaultOutputDirectory = projectDirectory,
+} = {}, operation) {
+  if (typeof operation !== 'function') throw new TypeError('operation is required')
+  const normalizedProjectDirectory = String(projectDirectory || '').trim()
+  if (!normalizedProjectDirectory) return operation()
+  return turnProjectDirectoryContext.run(Object.freeze({
+    userId: userId || null,
+    projectDirectory: path.normalize(normalizedProjectDirectory),
+    defaultOutputDirectory: path.normalize(
+      String(defaultOutputDirectory || normalizedProjectDirectory).trim(),
+    ),
+  }), operation)
+}
+
+/**
+ * Resolve the effective directory before any Turn state is persisted. An
+ * explicitly selected project must still be writable, authorized and trusted
+ * at send time; an empty selection is pinned to the configured default (or
+ * deployment workspace) so later grant activity cannot move the running Turn.
+ */
+export function resolveTurnProjectDirectory({ userId, workspacePath = '' } = {}) {
+  if (!userId) throw serviceError('userId 必填', 400, 'USER_REQUIRED')
+  const selectedPath = stripPairedOuterQuotes(workspacePath)
+  const requestedPath = selectedPath
+    || configuredOutputDirectory(userId)
+    || isolatedTestOutputDirectory()
+    || workspaceRoot()
+  if (!path.isAbsolute(requestedPath)) {
+    throw serviceError('项目目录必须使用绝对路径', 400, 'TURN_WORKSPACE_PATH_ABSOLUTE_REQUIRED')
+  }
+  let canonicalPath
+  try {
+    canonicalPath = realPath(path.resolve(requestedPath))
+  } catch {
+    throw serviceError('项目目录不存在或无法访问', 404, 'TURN_WORKSPACE_PATH_NOT_FOUND')
+  }
+  const stat = fs.statSync(canonicalPath)
+  if (!stat.isDirectory()) {
+    throw serviceError('项目路径必须是文件夹', 400, 'TURN_WORKSPACE_PATH_NOT_DIRECTORY')
+  }
+  if (selectedPath) {
+    const grant = findAuthorizedDirectoryGrant({
+      userId,
+      rawPath: canonicalPath,
+      accessMode: 'read_write',
+    })
+    if (!grant) {
+      throw serviceError('所选项目目录尚未获得读写授权', 403, 'TURN_WORKSPACE_NOT_AUTHORIZED')
+    }
+    const trust = getWorkspaceTrustStatus({ userId, rootPath: canonicalPath })
+    if (!trust.trusted) {
+      throw serviceError('所选项目目录尚未设为可信工作区', 403, 'TURN_WORKSPACE_NOT_TRUSTED')
+    }
+    assertPathWritable(canonicalPath, stat)
+  }
+  return {
+    workspacePath: selectedPath ? canonicalPath : null,
+    projectDirectory: canonicalPath,
+    defaultOutputDirectory: canonicalPath,
+  }
 }
 
 export function resolveDirectoryRequestPath({ userId, rawPath = '' } = {}) {

@@ -26,9 +26,9 @@ export default function StoragePersistenceNotice() {
   const body = t(`storageNotice.${messageKey}Body`)
 
   return (
-    <div className="fixed left-1/2 top-4 z-[70] w-[min(680px,calc(100vw-2rem))] -translate-x-1/2 rounded-md border border-amber-500/50 bg-paper px-4 py-3 shadow-xl" role="alert">
+    <div className="toast-layer fixed left-1/2 top-4 w-[min(680px,calc(100vw-2rem))] -translate-x-1/2 rounded-md border border-warning/50 bg-paper px-4 py-3 shadow-xl" role="alert">
       <div className="flex items-start gap-3">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-ink">{title}</p>
           <p className="mt-0.5 text-xs leading-relaxed text-ink-soft">{body}</p>

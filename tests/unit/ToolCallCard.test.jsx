@@ -8,8 +8,21 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import ToolCallCard from '../../src/components/ToolCallCard.jsx'
 import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
 
+function renderInLanguage(node, language = 'en') {
+  const previousWindow = globalThis.window
+  const hadWindow = Object.hasOwn(globalThis, 'window')
+  const storage = { getItem: (key) => key === 'lang' ? language : null }
+  globalThis.window = { localStorage: storage }
+  try {
+    return renderToStaticMarkup(node)
+  } finally {
+    if (hadWindow) globalThis.window = previousWindow
+    else delete globalThis.window
+  }
+}
+
 function renderToolCall(name, args) {
-  return renderToStaticMarkup(
+  return renderInLanguage(
     <I18nProvider>
       <ToolCallCard call={{ name, arguments: JSON.stringify(args), status: 'running' }} stepNumber={1} />
     </I18nProvider>,
@@ -32,7 +45,7 @@ test('planning and permission tools show human summaries instead of raw JSON', (
   const directoryMarkup = renderToolCall('request_directory', {
     path: 'D:\\work\\report', access_mode: 'read_write', purpose: '保存最终文件',
   })
-  assert.match(directoryMarkup, /request_directory/)
+  assert.match(directoryMarkup, /Request folder access/)
   assert.match(directoryMarkup, /D:\\work\\report/)
 
   const deliveryMarkup = renderToolCall('set_deliverables', { artifact_ids: ['pdf-1'] })
@@ -48,28 +61,30 @@ test('running tools expose a live elapsed clock', () => {
   assert.doesNotMatch(markup, />0s</)
 })
 
-test('PDF generation uses the tool name and a readable title summary', () => {
+test('PDF generation uses a human action label and a readable title summary', () => {
   const markup = renderToolCall('create_pdf', { title: 'Quarterly report' })
-  assert.match(markup, /create_pdf/)
+  assert.match(markup, /Create PDF/)
   assert.match(markup, /Quarterly report/)
 })
 
-test('execution rows show a compact tool-call label with concrete paths and commands', () => {
+test('execution rows show a compact human action with concrete paths and commands', () => {
   const readMarkup = renderToolCall('read_file', { path: 'D:\\work\\report.txt' })
   const commandMarkup = renderToolCall('run_command', { command: 'npm test' })
   assert.match(readMarkup, /D:\\work\\report\.txt/)
   assert.match(commandMarkup, /npm test/)
-  assert.match(readMarkup, />Tool call<\/span>[\s\S]*?>read_file<\/span>/)
-  assert.match(commandMarkup, />Tool call<\/span>[\s\S]*?>run_command<\/span>/)
-  assert.doesNotMatch(readMarkup, /title="Read file"/)
-  assert.doesNotMatch(commandMarkup, /title="Run command"/)
+  assert.match(readMarkup, />Read file<\/span>/)
+  assert.match(commandMarkup, />Run command<\/span>/)
+  assert.doesNotMatch(readMarkup, /Tool call/)
+  assert.doesNotMatch(commandMarkup, /Tool call/)
+  assert.doesNotMatch(readMarkup, /read_file/)
+  assert.doesNotMatch(commandMarkup, /run_command/)
 })
 
 test('only an exactly associated persisted file makes a path summary interactive', () => {
   const artifact = { id: 'script-1', toolCallId: 'call-1', filename: 'inspect_pdf.py', url: '/api/artifacts/script-1' }
   const otherArtifact = { id: 'report-1', toolCallId: 'call-1', filename: 'report.pdf', url: '/api/artifacts/report-1' }
   const handler = () => {}
-  const render = (name, args, props = {}) => renderToStaticMarkup(
+  const render = (name, args, props = {}) => renderInLanguage(
     <I18nProvider>
       <ToolCallCard
         call={{ id: 'call-1', name, arguments: JSON.stringify(args), status: 'success' }}
@@ -123,6 +138,7 @@ test('clicking a managed file summary returns the exact artifact and call', asyn
   globalThis.SVGElement = dom.window.SVGElement
   globalThis.MouseEvent = dom.window.MouseEvent
   globalThis.localStorage = dom.window.localStorage
+  dom.window.localStorage.setItem('lang', 'en')
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -175,6 +191,7 @@ test('command artifacts open by their persisted filenames without turning the co
   globalThis.SVGElement = dom.window.SVGElement
   globalThis.MouseEvent = dom.window.MouseEvent
   globalThis.localStorage = dom.window.localStorage
+  dom.window.localStorage.setItem('lang', 'en')
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -219,6 +236,7 @@ test('failed command keeps arguments and result in one expanded card whose copy 
   globalThis.SVGElement = dom.window.SVGElement
   globalThis.MouseEvent = dom.window.MouseEvent
   globalThis.localStorage = dom.window.localStorage
+  dom.window.localStorage.setItem('lang', 'en')
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -253,6 +271,7 @@ test('failed command keeps arguments and result in one expanded card whose copy 
 
     const detailCard = rootElement.querySelector('[data-testid="tool-step-details"]')
     assert.ok(detailCard)
+    assert.match(detailCard.querySelector('.chat-tool-raw-name')?.textContent || '', /bash_exec/)
     assert.equal(rootElement.querySelectorAll('details').length, 0)
     assert.match(detailCard.textContent, /Arguments/)
     assert.match(detailCard.textContent, /Error/)
@@ -279,7 +298,7 @@ test('failed command keeps arguments and result in one expanded card whose copy 
 })
 
 test('running commands default closed and reveal arguments and live output only when expanded', () => {
-  const defaultMarkup = renderToStaticMarkup(
+  const defaultMarkup = renderInLanguage(
     <I18nProvider>
       <ToolCallCard call={{
         name: 'bash_exec',
@@ -296,7 +315,7 @@ test('running commands default closed and reveal arguments and live output only 
   assert.doesNotMatch(defaultMarkup, /42 tests passed/)
   assert.doesNotMatch(defaultMarkup, /tool-output-replay-note/)
 
-  const expandedMarkup = renderToStaticMarkup(
+  const expandedMarkup = renderInLanguage(
     <I18nProvider>
       <ToolCallCard call={{
         name: 'bash_exec',

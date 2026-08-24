@@ -3,6 +3,7 @@ import { useT } from '../../i18n/I18nProvider.jsx'
 import SlashCommandMenu from './SlashCommandMenu.jsx'
 import ComposerActions from './chatComposer/ComposerActions.jsx'
 import ComposerAttachments from './chatComposer/ComposerAttachments.jsx'
+import WorkspaceProjectPicker from './chatMessages/WorkspaceProjectPicker.jsx'
 import {
   Paperclip,
 } from 'lucide-react'
@@ -24,6 +25,7 @@ function splitLeadingSkillCommand(value, skillIds = []) {
 
 export default function ChatComposer({
   input,
+  editingMessageId,
   setInput,
   onSend,
   attachments,
@@ -37,6 +39,7 @@ export default function ChatComposer({
   selectedModelProviderId,
   isGenerating,
   onAbort,
+  onCancelMessageEdit,
   onFileChange,
   onToggleContext,
   onOpenModelPicker,
@@ -51,6 +54,13 @@ export default function ChatComposer({
   skillIds = [],
   slashCommands = [],
   onSlashCommandSelect,
+  onClearWorkspace,
+  onSelectWorkspace,
+  recentWorkspaces = [],
+  selectedWorkspacePath = '',
+  showWorkspacePicker = false,
+  workspaceBusy = false,
+  workspaceError = '',
 }) {
   const { t } = useT()
   const textareaRef = useRef(null)
@@ -134,7 +144,7 @@ export default function ChatComposer({
 
   return (
     <div
-      className="chat-composer relative bg-paper/95 px-4 pb-3 pt-2 backdrop-blur-sm sm:px-6 sm:pb-4"
+      className="chat-composer relative px-4 pb-3 pt-2 backdrop-blur-sm sm:px-6 sm:pb-4"
       onDragEnter={(e) => {
         if (!isFileDrag(e)) return
         e.preventDefault()
@@ -167,7 +177,7 @@ export default function ChatComposer({
           </span>
         </div>
       )}
-      <div ref={composerSurfaceRef} className="relative mx-auto w-full max-w-[840px]">
+      <div ref={composerSurfaceRef} className="relative mx-auto w-full max-w-[780px]">
         {slashMenuOpen && (
           <SlashCommandMenu
             items={slashCommands}
@@ -180,13 +190,41 @@ export default function ChatComposer({
             }}
           />
         )}
+        {editingMessageId && (
+          <div
+            className="chat-message-edit-banner mb-2 flex items-center gap-3 px-1 text-xs text-ink-soft"
+            data-testid="message-edit-banner"
+          >
+            <span className="min-w-0 flex-1 truncate">{t('chatMessages.editResend')}</span>
+            <button
+              type="button"
+              onClick={onCancelMessageEdit}
+              className="chat-chrome-button rounded-control px-2 py-1 text-ink-fade hover:text-ink"
+            >
+              {t('common.cancel')}
+            </button>
+          </div>
+        )}
+        {showWorkspacePicker && (
+          <div className="chat-composer-project-strip" data-testid="chat-composer-project-strip">
+            <WorkspaceProjectPicker
+              onClearWorkspace={onClearWorkspace}
+              onSelectWorkspace={onSelectWorkspace}
+              recentWorkspaces={recentWorkspaces}
+              selectedWorkspacePath={selectedWorkspacePath}
+              t={t}
+              workspaceBusy={workspaceBusy}
+              workspaceError={workspaceError}
+            />
+          </div>
+        )}
         <div
           data-testid="chat-composer-surface"
           onClick={(event) => {
             if (event.defaultPrevented || event.target?.closest?.(COMPOSER_INTERACTIVE_SELECTOR)) return
             textareaRef.current?.focus()
           }}
-          className="flex min-h-[96px] flex-col justify-between rounded-card border border-neutral-200 bg-paper px-3.5 py-2.5 shadow-sm transition-[border-color,background-color,box-shadow,transform] hover:border-neutral-300 hover:bg-neutral-50 focus-within:-translate-y-px focus-within:border-blue-400/60 focus-within:bg-paper focus-within:shadow-md"
+          className="chat-composer-surface flex min-h-[108px] flex-col justify-between rounded-[22px] border bg-paper px-3.5 py-3"
         >
           <ComposerAttachments
             attachments={attachments}
@@ -246,7 +284,7 @@ export default function ChatComposer({
               }}
               placeholder={t('chatComposer.placeholder')}
               aria-label={t('chatComposer.placeholder')}
-              className="w-full min-w-0 flex-1 cursor-text resize-none overflow-y-auto bg-transparent text-sm leading-6 text-ink outline-none placeholder:text-ink-soft max-h-48"
+              className="chat-composer-input w-full min-w-0 flex-1 cursor-text resize-none overflow-y-auto bg-transparent text-sm leading-6 text-ink outline-none placeholder:text-ink-soft max-h-48"
               rows={1}
             />
           </div>
@@ -254,6 +292,7 @@ export default function ChatComposer({
             approvalMode={approvalMode}
             contextPanelOpen={contextPanelOpen}
             contextUsage={contextUsage}
+            hasDraftText={Boolean(String(input || '').trim())}
             fileInputRef={fileInputRef}
             isGenerating={isGenerating}
             modelOptions={modelOptions}

@@ -159,14 +159,18 @@ test('model option readiness exposes only stable per-model capability states', (
 
 test('chat send guards model readiness before clearing drafts or creating session state', () => {
   const page = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const sendActions = fs.readFileSync(new URL('../src/pages/ChatSplit/chatSendActions.js', import.meta.url), 'utf8')
   const flow = fs.readFileSync(new URL('../src/pages/ChatSplit/useChatSendFlow.js', import.meta.url), 'utf8')
   const workbench = fs.readFileSync(new URL('../src/pages/ChatSplit/RightWorkbench.jsx', import.meta.url), 'utf8')
   const acceptedDraft = fs.readFileSync(new URL('../src/pages/ChatSplit/chatAcceptedDraft.js', import.meta.url), 'utf8')
-  const outerGuard = page.indexOf('if (!modelReadiness.canSend)')
-  const acceptedCallback = page.indexOf('applyAcceptedChatDraft({', outerGuard)
+  const outerGuard = sendActions.indexOf('if (!modelReadiness.canSend)')
+  const acceptedCallback = sendActions.indexOf('applyAcceptedChatDraft({', outerGuard)
   const executorGuard = flow.indexOf('if (!modelIsExecutable)')
-  const createSession = flow.indexOf("dispatch({ type: 'NEW_SESSION'", executorGuard)
-  const sendMessage = flow.indexOf("dispatch({ type: 'SEND_MESSAGE'", executorGuard)
+  const guardedFlow = flow.slice(executorGuard)
+  const createSessionOffset = guardedFlow.search(/dispatch\(\s*\{\s*type:\s*['"]NEW_SESSION['"]/)
+  const sendMessageOffset = guardedFlow.search(/dispatch\(\s*\{\s*type:\s*['"]SEND_MESSAGE['"]/)
+  const createSession = createSessionOffset < 0 ? -1 : executorGuard + createSessionOffset
+  const sendMessage = sendMessageOffset < 0 ? -1 : executorGuard + sendMessageOffset
 
   assert.ok(outerGuard >= 0 && acceptedCallback > outerGuard)
   assert.match(acceptedDraft, /if \(textUnchanged\) setInput\?\.\(''\)/)
@@ -174,7 +178,7 @@ test('chat send guards model readiness before clearing drafts or creating sessio
   assert.match(acceptedDraft, /subtractAcceptedAttachments\(attachments, sentAttachments\)/)
   assert.ok(executorGuard >= 0 && createSession > executorGuard)
   assert.ok(sendMessage > executorGuard)
-  assert.match(page, /const handleWorkbenchSend = async \(content\) => \{[\s\S]*if \(!modelReadiness\.canSend\)[\s\S]*return false/)
+  assert.match(sendActions, /const handleWorkbenchSend = async \(content\) => \{[\s\S]*if \(!modelReadiness\.canSend\)[\s\S]*return false/)
   assert.match(page, /onWorkbenchSend=\{handleWorkbenchSend\}/)
   assert.match(workbench, /const accepted = await onSendMessage\?\.\(content\)[\s\S]*if \(accepted === true\)/)
   assert.match(flow, /const modelMode = preflight\.selection\.modelMode/)

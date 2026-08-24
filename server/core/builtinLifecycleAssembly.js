@@ -23,6 +23,10 @@ import {
   startEvolutionOnlineGraderRuntime,
 } from '../services/evolutionOnlineGraderRuntime.js'
 import {
+  closeEvolutionAutoLoopRuntime,
+  startEvolutionAutoLoopRuntime,
+} from '../services/evolutionAutoLoopRuntime.js'
+import {
   closeEvolutionOperationSweeperRuntime,
   startEvolutionOperationSweeperRuntime,
 } from '../services/evolutionOperationSweeperRuntime.js'
@@ -76,6 +80,7 @@ export const BUILTIN_LIFECYCLE_CAPABILITY_IDS = Object.freeze({
   jobs: 'builtin.resource.jobs',
   evolutionOperationSweeper: 'builtin.resource.evolution-operation-sweeper',
   evolutionOnlineGrader: 'builtin.resource.evolution-online-grader',
+  evolutionAutoLoop: 'builtin.resource.evolution-auto-loop',
   turnEngine: 'builtin.resource.turn-engine',
   turnRecovery: 'builtin.resource.turn-recovery',
   cron: 'builtin.resource.cron',
@@ -113,6 +118,8 @@ const DEFAULT_ADAPTERS = Object.freeze({
   closeEvolutionOperationSweeperRuntime,
   startEvolutionOnlineGraderRuntime,
   closeEvolutionOnlineGraderRuntime,
+  startEvolutionAutoLoopRuntime,
+  closeEvolutionAutoLoopRuntime,
   closeTurnEngine,
   startTurnRecoveryRuntime,
   closeTurnRecoveryRuntime,
@@ -439,7 +446,14 @@ export function createBuiltinLifecycleCapabilities({
       stopFailure: 'fail',
       errorLabel: 'evolution online grader lifecycle',
     }),
-    definition(ids.turnEngine, ids.evolutionOnlineGrader, {
+    definition(ids.evolutionAutoLoop, ids.evolutionOnlineGrader, {
+      start: () => adapters.startEvolutionAutoLoopRuntime({ env: runtimeEnv }),
+      stop: () => adapters.closeEvolutionAutoLoopRuntime(),
+      stopTimeoutMs: 120_000,
+      stopFailure: 'fail',
+      errorLabel: 'automatic evolution loop lifecycle',
+    }),
+    definition(ids.turnEngine, ids.evolutionAutoLoop, {
       stop: () => adapters.closeTurnEngine(),
       stopFailure: 'fail',
       errorLabel: 'turn engine shutdown',

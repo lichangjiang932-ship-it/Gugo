@@ -1,5 +1,5 @@
-import { Globe, Plug, Plus } from 'lucide-react'
-import LeftRail from '../components/LeftRail'
+import { Plus } from 'lucide-react'
+import AppLayout from '../components/AppLayout.jsx'
 import McpExternalConnectPanel from '../components/McpExternalConnectPanel.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { MCP_SERVER_PRESETS } from '../lib/mcpPresets.js'
@@ -14,27 +14,43 @@ export default function McpServersView() {
   const externalEndpoint = `${window.location.origin}/mcp`
 
   return (
-    <div className="flex h-screen overflow-hidden bg-paper">
-      <LeftRail />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-3 border-b border-ink/10 px-6 py-4">
-          <Plug className="h-5 w-5 text-accent-ink" />
-          <div className="flex-1"><div className="text-base font-semibold text-ink">{t('mcp.title')}</div><div className="text-xs text-ink-fade">{t('mcp.subtitle')}</div></div>
-          <label className="inline-flex h-8 items-center gap-1.5 rounded-md border border-accent/30 px-2 text-xs text-accent-ink hover:bg-accent/10">
-            <Globe className="h-3.5 w-3.5" />
-            <select value={controller.presetChoice} onChange={(event) => controller.choosePreset(event.target.value)} className="max-w-40 bg-transparent outline-none" aria-label={t('mcp.choosePreset')}>
-              <option value="">{t('mcp.choosePreset')}</option>
-              {MCP_SERVER_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
-            </select>
-          </label>
-          <button type="button" onClick={() => { controller.setEditing(formFromServer(emptyServer())); controller.setFieldErrors({}) }} className="flex h-8 items-center gap-1 rounded-md bg-accent px-3 text-xs text-accent-contrast hover:bg-accent/90"><Plus className="h-3.5 w-3.5" />{t('mcp.addServer')}</button>
+    <AppLayout className="flex h-screen overflow-hidden bg-paper">
+      <main className="min-w-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[1180px] px-6 py-7 lg:px-9 lg:py-8">
+          <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h1 className="text-[21px] font-semibold leading-tight tracking-[-0.025em] text-ink">{t('mcp.title')}</h1>
+              <p className="mt-1 text-xs leading-5 text-ink-fade">{t('mcp.subtitle')}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={controller.presetChoice}
+                onChange={(event) => controller.choosePreset(event.target.value)}
+                className="h-9 max-w-52 rounded-lg border border-ink/10 bg-paper px-3 text-xs text-ink-soft outline-none transition-colors hover:bg-paper-2/40 focus:border-focus/55"
+                aria-label={t('mcp.choosePreset')}
+              >
+                <option value="">{t('mcp.choosePreset')}</option>
+                {MCP_SERVER_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+              </select>
+              <button
+                type="button"
+                onClick={() => { controller.setEditing(formFromServer(emptyServer())); controller.setFieldErrors({}) }}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-ink bg-ink px-3 text-xs font-medium text-paper transition-colors hover:bg-ink/90"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {t('mcp.addServer')}
+              </button>
+            </div>
+          </header>
+
+          <div className="grid min-h-[430px] grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+            <McpServerList controller={controller} t={t} />
+            <McpServerEditor controller={controller} t={t} />
+          </div>
+
+          <McpExternalConnectPanel endpoint={externalEndpoint} />
         </div>
-        <McpExternalConnectPanel endpoint={externalEndpoint} />
-        <div className="flex min-h-0 flex-1">
-          <McpServerList controller={controller} t={t} />
-          <div className="flex-1 overflow-auto"><McpServerEditor controller={controller} t={t} /></div>
-        </div>
-      </div>
-    </div>
+      </main>
+    </AppLayout>
   )
 }

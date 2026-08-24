@@ -87,7 +87,7 @@ export default function EditablePlanCard({ plan, disabled = false, onApprove, t 
               disabled={disabled || steps.length <= 1}
               onClick={() => setSteps((current) => current.filter((_, itemIndex) => itemIndex !== index))}
               aria-label={t('taskSteering.deleteStep')}
-              className="w-8 h-8 inline-flex items-center justify-center rounded border border-red-500/20 text-red-500 disabled:opacity-30"
+              className="w-8 h-8 inline-flex items-center justify-center rounded border border-danger/20 text-danger disabled:opacity-30"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>

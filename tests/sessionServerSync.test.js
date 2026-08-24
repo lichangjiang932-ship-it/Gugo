@@ -42,6 +42,12 @@ function testReducer(state, action) {
       messages: session.messages.filter((message) => message.id !== action.payload),
     }))
   }
+  if (action.type === 'TRUNCATE_MESSAGES') {
+    return replaceSession(state, activeId, (session) => ({
+      ...session,
+      messages: session.messages.slice(0, Math.max(0, Number(action.payload) || 0)),
+    }))
+  }
   if (action.type === 'COMPRESS_CURRENT_SESSION') {
     return replaceSession(state, activeId, (session) => ({
       ...session,
@@ -107,6 +113,7 @@ test('session mutation classification and target resolution cover every destruct
     'DELETE_SESSION',
     'CLEAR_CURRENT_SESSION',
     'DELETE_MESSAGE',
+    'TRUNCATE_MESSAGES',
     'COMPRESS_CURRENT_SESSION',
     'COMPACT_SESSION',
     'EXPAND_COMPACTED',
@@ -134,7 +141,23 @@ test('projectSessionMutation derives exact replacement messages without mutating
 
   assert.equal(plan.kind, 'replace')
   assert.equal(plan.expectedRevision, 1)
+  assert.deepEqual(plan.sourceMessages.map((message) => message.id), ['m1', 'm2'])
   assert.deepEqual(plan.messages.map((message) => message.id), ['m2'])
+  assert.deepEqual(state.sessions[0].messages.map((message) => message.id), ['m1', 'm2'])
+})
+
+test('projectSessionMutation synchronizes an exact transcript truncation', () => {
+  const state = createState()
+  const plan = projectSessionMutation({
+    state,
+    sessionId: 's1',
+    action: { type: 'TRUNCATE_MESSAGES', payload: 1 },
+    reduceState: testReducer,
+  })
+
+  assert.equal(plan.kind, 'replace')
+  assert.equal(plan.expectedRevision, 1)
+  assert.deepEqual(plan.messages.map((message) => message.id), ['m1'])
   assert.deepEqual(state.sessions[0].messages.map((message) => message.id), ['m1', 'm2'])
 })
 
@@ -883,6 +906,204 @@ test('failed server-backed mutation preserves local state', async () => {
   assert.equal(result, false)
   assert.deepEqual(state, original)
   assert.deepEqual(failures, ['SESSION_REVISION_CONFLICT'])
+})
+
+test('conflicting replacement never retries against a newer transcript', async () => {
+  let state = createState()
+  const requests = []
+  const failures = []
+  let snapshotRequests = 0
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    replaceMessages: async (request) => {
+      requests.push(request)
+      const error = new Error('stale revision')
+      error.code = 'SESSION_REVISION_CONFLICT'
+      error.details = { currentRevision: 8 }
+      throw error
+    },
+    deleteSession: async () => ({ ok: true }),
+    fetchSessionSnapshot: async () => {
+      snapshotRequests += 1
+      return {
+        complete: true,
+        revision: 8,
+        messages: [
+          { id: 'm1', role: 'user', content: 'one' },
+          { id: 'm2', role: 'assistant', content: 'two from server' },
+          { id: 'm3', role: 'user', content: 'newer server turn' },
+        ],
+      }
+    },
+    onError: (error) => failures.push(error.code),
+  })
+
+  assert.equal(await dispatch({ type: 'TRUNCATE_MESSAGES', payload: 1 }), false)
+  assert.equal(requests.length, 1)
+  assert.equal(snapshotRequests, 1)
+  assert.equal(requests[0].expectedRevision, 1)
+  assert.deepEqual(requests[0].messages.map((message) => message.id), ['m1'])
+  assert.equal(state.sessions[0].serverRevision, 8)
+  assert.deepEqual(state.sessions[0].messages.map((message) => message.id), ['m1', 'm2', 'm3'])
+  assert.deepEqual(failures, ['SESSION_REVISION_CONFLICT'])
+})
+
+test('a committed replacement survives an invalid-result response after snapshot confirmation', async () => {
+  let state = createState()
+  const requests = []
+  const failures = []
+  let snapshotRequests = 0
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    replaceMessages: async (request) => {
+      requests.push(request)
+      const error = new Error('backend result contract rejected a committed write')
+      error.code = 'SESSION_ADMIN_RESULT_INVALID'
+      throw error
+    },
+    deleteSession: async () => ({ ok: true }),
+    fetchSessionSnapshot: async () => {
+      snapshotRequests += 1
+      return { complete: true, revision: 5, messages: [] }
+    },
+    onError: (error) => failures.push(error.code),
+  })
+
+  assert.equal(await dispatch({ type: 'CLEAR_CURRENT_SESSION' }), true)
+  assert.equal(requests.length, 1)
+  assert.equal(snapshotRequests, 1)
+  assert.equal(state.sessions[0].serverRevision, 5)
+  assert.deepEqual(state.sessions[0].messages, [])
+  assert.deepEqual(failures, [])
+})
+
+test('a committed replacement survives a conflict response and preserves canonical snapshot data', async () => {
+  let state = createState()
+  const requests = []
+  const failures = []
+  let snapshotRequests = 0
+  const canonicalMessage = {
+    id: 'm1',
+    role: 'user',
+    content: 'one',
+    createdAt: '2026-08-24T08:00:00.000Z',
+    serverSequence: 41,
+  }
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    replaceMessages: async (request) => {
+      requests.push(request)
+      const error = new Error('response raced with the committed write')
+      error.code = 'SESSION_REVISION_CONFLICT'
+      throw error
+    },
+    deleteSession: async () => ({ ok: true }),
+    fetchSessionSnapshot: async () => {
+      snapshotRequests += 1
+      return { complete: true, revision: 6, messages: [canonicalMessage] }
+    },
+    onError: (error) => failures.push(error.code),
+  })
+
+  assert.equal(await dispatch({ type: 'TRUNCATE_MESSAGES', payload: 1 }), true)
+  assert.equal(requests.length, 1)
+  assert.equal(snapshotRequests, 1)
+  assert.equal(state.sessions[0].serverRevision, 6)
+  assert.deepEqual(state.sessions[0].messages, [canonicalMessage])
+  assert.deepEqual(failures, [])
+})
+
+test('a 500 response retries once from the canonical snapshot when the source transcript is unchanged', async () => {
+  let state = createState()
+  const requests = []
+  const failures = []
+  let snapshotRequests = 0
+  const canonicalMessages = [
+    { id: 'm1', role: 'user', content: 'one', timestamp: 100, serverSequence: 10 },
+    { id: 'm2', role: 'assistant', content: 'two', timestamp: 200, serverSequence: 11 },
+  ]
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    replaceMessages: async (request) => {
+      requests.push(request)
+      if (requests.length === 1) {
+        const error = new Error('unknown server outcome')
+        error.code = 'SESSION_REQUEST_FAILED'
+        error.status = 500
+        throw error
+      }
+      return { revision: 8 }
+    },
+    deleteSession: async () => ({ ok: true }),
+    fetchSessionSnapshot: async () => {
+      snapshotRequests += 1
+      return { complete: true, revision: 7, messages: canonicalMessages }
+    },
+    onError: (error) => failures.push(error.code),
+  })
+
+  assert.equal(await dispatch({ type: 'TRUNCATE_MESSAGES', payload: 1 }), true)
+  assert.equal(snapshotRequests, 1)
+  assert.equal(requests.length, 2)
+  assert.equal(requests[0].expectedRevision, 1)
+  assert.equal(requests[1].expectedRevision, 7)
+  assert.deepEqual(requests[1].messages, [canonicalMessages[0]])
+  assert.equal(state.sessions[0].serverRevision, 8)
+  assert.deepEqual(state.sessions[0].messages, [canonicalMessages[0]])
+  assert.deepEqual(failures, [])
+})
+
+test('a failed safe retry does not fetch a second snapshot', async () => {
+  let state = createState()
+  const requests = []
+  const failures = []
+  let snapshotRequests = 0
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    replaceMessages: async (request) => {
+      requests.push(request)
+      const error = new Error(requests.length === 1 ? 'stale revision' : 'changed during retry')
+      error.code = 'SESSION_REVISION_CONFLICT'
+      error.status = 409
+      throw error
+    },
+    deleteSession: async () => ({ ok: true }),
+    fetchSessionSnapshot: async () => {
+      snapshotRequests += 1
+      return {
+        complete: true,
+        revision: 2,
+        messages: [
+          { id: 'm1', role: 'user', content: 'one' },
+          { id: 'm2', role: 'assistant', content: 'two' },
+        ],
+      }
+    },
+    onError: (error) => failures.push(error.message),
+  })
+
+  assert.equal(await dispatch({ type: 'TRUNCATE_MESSAGES', payload: 1 }), false)
+  assert.equal(requests.length, 2)
+  assert.equal(snapshotRequests, 1)
+  assert.equal(requests[1].expectedRevision, 2)
+  assert.equal(state.sessions[0].serverRevision, 2)
+  assert.deepEqual(state.sessions[0].messages.map((message) => message.id), ['m1', 'm2'])
+  assert.deepEqual(failures, ['changed during retry'])
 })
 
 test('local-only sessions retain immediate reducer behavior', () => {

@@ -126,6 +126,44 @@ test('turn execution environment snapshot is deterministic across input ordering
   assert.equal(Object.isFrozen(compatible.toolCatalog[0].spec.function.parameters.properties.path), true)
 })
 
+test('persisted workspace failure codes remain self-verifiable during recovery', () => {
+  const unavailableTrust = {
+    ...workspaceTrust({ rootPath: 'E:/missing-workspace' }),
+    trusted: false,
+    available: false,
+    trustRootPath: null,
+    trustScope: null,
+    config: {
+      ...workspaceTrust({ rootPath: 'E:/missing-workspace' }).config,
+      valid: false,
+      loaded: false,
+      error: { code: 'WORKSPACE_CONFIG_INVALID' },
+    },
+    error: { code: 'WORKSPACE_PATH_NOT_FOUND' },
+  }
+  const expected = snapshot({
+    fileAccess: {
+      projectDirectory: 'E:/workspace',
+      defaultOutputDirectory: 'E:/workspace',
+      grants: [],
+      workspace: { enabled: false },
+      trustedWorkspaces: [unavailableTrust],
+      runtime: { localCodeExecutionEnabled: true },
+    },
+  })
+
+  assert.equal(
+    expected.fileAccess.trustedWorkspaces[0].errorCode,
+    'WORKSPACE_PATH_NOT_FOUND',
+  )
+  assert.equal(
+    expected.fileAccess.trustedWorkspaces[0].config.errorCode,
+    'WORKSPACE_CONFIG_INVALID',
+  )
+  assert.deepEqual(normalizeTurnExecutionEnvironmentSnapshot(expected), expected)
+  assert.doesNotThrow(() => assertTurnExecutionEnvironmentCompatible(expected, expected))
+})
+
 test('chat-only mode is pinned into the model execution fingerprint', () => {
   const agent = snapshot({
     modelMode: 'agent',

@@ -62,6 +62,9 @@ export async function initializeConversation(s) {
           {
             toolName: String(entry?.toolName || '').trim(),
             verified: entry?.verified === true,
+            ...(entry?.validation && typeof entry.validation === 'object'
+              ? { validation: { ...entry.validation } }
+              : {}),
           },
         ])
         .filter(([artifactId, entry]) => s.artifactIds.includes(artifactId) && entry.toolName),
@@ -171,6 +174,9 @@ export async function initializeConversation(s) {
           const next = {
             toolName: String(provenance.toolName),
             verified: provenance.verified === true,
+            ...(provenance.validation && typeof provenance.validation === 'object'
+              ? { validation: { ...provenance.validation } }
+              : {}),
           }
           s.artifactProvenance.set(id, next)
           if (previous?.verified === true

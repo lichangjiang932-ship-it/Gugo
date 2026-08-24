@@ -5,7 +5,7 @@
  * 在主内容区顶部渲染一条窄横幅提醒用户该页面尚未完善。
  *
  * - preview: bg-paper-2 / text-ink-soft（中性灰）
- * - wip:     bg-amber-50  / text-amber-900（醒目黄）
+ * - wip:     bg-warning/5  / text-warning（醒目黄）
  *
  * 不打断布局：纯展示型，不拦截事件。
  */
@@ -24,11 +24,11 @@ export default function PreviewBanner() {
   const body = isWip ? t('routeReadiness.wipBanner') : t('routeReadiness.previewBanner')
 
   const wrapClass = isWip
-    ? 'sticky top-0 z-30 w-full border-b border-amber-300/60 bg-amber-50 text-amber-900'
+    ? 'sticky top-0 z-30 w-full border-b border-warning/60 bg-warning/5 text-warning'
     : 'sticky top-0 z-30 w-full border-b border-ink-fade/40 bg-paper-2 text-ink-soft'
 
   const badgeClass = isWip
-    ? 'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider bg-amber-200/80 text-amber-900'
+    ? 'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider bg-warning/80 text-warning'
     : 'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider bg-paper border border-ink-fade/50 text-ink-fade'
 
   return (

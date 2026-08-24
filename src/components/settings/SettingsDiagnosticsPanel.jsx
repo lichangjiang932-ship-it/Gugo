@@ -2,7 +2,7 @@ import { RefreshCw, Server } from 'lucide-react'
 import { SettingsGroup, SettingsPanel, SettingsRow } from './SettingsPrimitives.jsx'
 
 function StatusDot({ ok }) {
-  const color = ok === true ? 'bg-emerald-500' : ok === false ? 'bg-red-500' : 'bg-ink-fade'
+  const color = ok === true ? 'bg-success' : ok === false ? 'bg-danger' : 'bg-ink-fade'
   return <span className={`h-2 w-2 rounded-full ${color}`} aria-hidden="true" />
 }
 

@@ -1,6 +1,6 @@
 import { useLocation, useSearchParams, useNavigate } from '../lib/router.jsx'
 import { LayoutList } from 'lucide-react'
-import LeftRail from '../components/LeftRail'
+import AppLayout from '../components/AppLayout.jsx'
 import TaskArtifactPreview from './TaskArtifactPreview.jsx'
 import { useToast } from '../components/Toast.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
@@ -50,8 +50,7 @@ export default function TaskRunPanel() {
     : null
 
   return (
-    <div className="h-screen flex bg-paper overflow-hidden">
-      <LeftRail />
+    <AppLayout className="h-screen flex bg-paper overflow-hidden">
       <main className="flex-1 min-w-0 flex flex-col">
         <TaskRunHeader
           prompt={controller.prompt}
@@ -90,7 +89,7 @@ export default function TaskRunPanel() {
         </section>
       </main>
       {controller.selectedArtifact && <TaskArtifactPreview key={controller.selectedArtifact.id} artifact={controller.selectedArtifact} onClose={() => controller.setSelectedArtifact(null)} />}
-    </div>
+    </AppLayout>
   )
 }
 

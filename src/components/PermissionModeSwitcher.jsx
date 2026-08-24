@@ -4,9 +4,9 @@ import { useT } from '../i18n/I18nProvider.jsx'
 
 const MODES = [
   { id: 'normal', icon: ShieldCheck, tone: 'text-ink-soft' },
-  { id: 'acceptEdits', icon: Zap, tone: 'text-amber-600' },
+  { id: 'acceptEdits', icon: Zap, tone: 'text-warning' },
   { id: 'plan', icon: Eye, tone: 'text-cyan' },
-  { id: 'bypass', icon: ShieldAlert, tone: 'text-red-600' },
+  { id: 'bypass', icon: ShieldAlert, tone: 'text-danger' },
 ]
 
 /**

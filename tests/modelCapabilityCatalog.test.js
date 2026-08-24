@@ -19,6 +19,8 @@ const EXPECTED_MODELS = {
   'gemini-3.1-pro-preview': [1_048_576, 65_536],
   'deepseek-v4-flash': [1_000_000, 384_000],
   'deepseek-v4-pro': [1_000_000, 384_000],
+  'mimo-v2.5': [1_000_000, undefined],
+  'mimo-v2.5-pro': [1_000_000, undefined],
   'glm-5': [204_800, 128_000],
 }
 
@@ -44,7 +46,10 @@ test('every cloud preset has exact-model context metadata instead of a provider-
     assert.equal(profile.source, 'official-catalog')
     assert.match(profile.sourceUrl, /^https:\/\//)
   }
-  assert.equal(Object.keys(OFFICIAL_MODEL_CAPABILITY_CATALOG).length, presetModels.length)
+  assert.ok(
+    Object.keys(OFFICIAL_MODEL_CAPABILITY_CATALOG).length >= presetModels.length,
+    'the verified catalog may also include exact models configured outside UI presets',
+  )
 })
 
 test('official model catalog never guesses aliases, prefixes, or unverified dated IDs', () => {
@@ -52,6 +57,7 @@ test('official model catalog never guesses aliases, prefixes, or unverified date
     'gpt-5.6-sol-latest',
     'gemini-3.1-pro',
     'deepseek-v4-flash-9999',
+    'mimo-v2.5-latest',
     'glm-5-unknown',
     'kimi-k4',
     '',

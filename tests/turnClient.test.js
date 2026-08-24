@@ -598,6 +598,21 @@ test('runServerTurn keeps using SSE after an unacknowledged WebSocket fails', as
   })
 })
 
+test('startServerTurn sends the selected workspace path only on the initial Turn request', async () => {
+  let requestBody = null
+  await startServerTurn({
+    sessionId: 's-workspace',
+    content: 'inspect project',
+    workspacePath: '  C:\\Work\\Project  ',
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body)
+      return response({ turn: { sessionId: 's-workspace', turnId: 't-workspace' } }, 202)
+    },
+  })
+
+  assert.equal(requestBody.workspacePath, 'C:\\Work\\Project')
+})
+
 test('runServerTurn preserves restart_runtime WebSocket failures without SSE fallback', async () => {
   await withWebSocketAuth(async () => {
     const urls = []

@@ -8,7 +8,7 @@ export default function IntegrationList({ integrations, providersById, testingId
     const meta = providersById[integration.provider]
     const Icon = providerIcon(integration.provider)
     const lastTest = getLastTest(integration)
-    const statusTone = lastTest?.ok === true ? 'text-emerald-700' : lastTest?.ok === false ? 'text-red-700' : 'text-ink-fade'
+    const statusTone = lastTest?.ok === true ? 'text-success' : lastTest?.ok === false ? 'text-danger' : 'text-ink-fade'
     const StatusIcon = lastTest?.ok === true ? Check : lastTest?.ok === false ? X : Circle
     return <div key={integration.id} className="p-3 border border-ink-fade/30 rounded-md flex flex-col md:flex-row md:items-center gap-3">
       <div className="flex items-center gap-3 min-w-0 md:w-64"><span className="w-9 h-9 rounded-md border border-ink-fade/40 flex items-center justify-center shrink-0 bg-paper-2"><Icon className="w-4 h-4 text-ink-soft" /></span><span className="min-w-0"><span className="block text-sm text-ink truncate">{integration.name || meta?.label || integration.provider}</span><span className="inline-flex mt-1 h-5 px-1.5 rounded border border-ink-fade/40 bg-paper-2 font-mono text-[10px] text-ink-fade items-center">{meta?.label || integration.provider}</span></span></div>

@@ -53,14 +53,14 @@ test('authenticated incomplete onboarding opens without replacing a deep link an
 
   try {
     await renderPrompt(root, { navigate: (path) => navigations.push(path) })
-    assert.ok(rootElement.querySelector('[role="dialog"]'))
+    assert.ok(document.querySelector('[role="dialog"]'))
     assert.equal(window.location.hash, '#/task?job=deep-link')
     assert.deepEqual(navigations, [])
 
-    const later = [...rootElement.querySelectorAll('button')]
+    const later = [...document.querySelectorAll('button')]
       .find((button) => button.textContent === 'permissionsDashboard.onboardingPromptLater')
     await act(async () => later.click())
-    assert.equal(rootElement.querySelector('[role="dialog"]'), null)
+    assert.equal(document.querySelector('[role="dialog"]'), null)
     const reminder = rootElement.querySelector('[data-testid="workspace-onboarding-reminder"]')
     assert.ok(reminder)
     assert.equal(reminder.dataset.placement, 'top-safe')
@@ -80,8 +80,8 @@ test('authenticated incomplete onboarding opens without replacing a deep link an
     assert.equal(rootElement.querySelector('[role="dialog"]'), null)
 
     await act(async () => rootElement.querySelector('[data-testid="workspace-onboarding-reminder"]').click())
-    assert.ok(rootElement.querySelector('[role="dialog"]'))
-    const openGuide = [...rootElement.querySelectorAll('button')]
+    assert.ok(document.querySelector('[role="dialog"]'))
+    const openGuide = [...document.querySelectorAll('button')]
       .find((button) => button.textContent.includes('permissionsDashboard.onboardingPromptOpen'))
     await act(async () => openGuide.click())
     assert.deepEqual(navigations, ['/permissions?focus=onboarding'])
@@ -142,7 +142,7 @@ test('settings deep links keep the workspace guide as a non-competing reminder',
 
   try {
     await renderPrompt(root, { pathname: '/settings' })
-    assert.equal(rootElement.querySelector('[role="dialog"]'), null)
+    assert.equal(document.querySelector('[role="dialog"]'), null)
     assert.ok(rootElement.querySelector('[data-testid="workspace-onboarding-reminder"]'))
     assert.equal(window.location.hash, '#/settings?tab=models')
   } finally {
@@ -158,7 +158,7 @@ test('navigating to settings closes an already-open workspace guide', async () =
 
   try {
     await renderPrompt(root, { pathname: '/chat' })
-    assert.ok(rootElement.querySelector('[role="dialog"]'))
+    assert.ok(document.querySelector('[role="dialog"]'))
 
     await renderPrompt(root, { pathname: '/settings' })
     assert.equal(rootElement.querySelector('[role="dialog"]'), null)

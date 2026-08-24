@@ -215,6 +215,20 @@ test('官方目录只补精确模型，并低于实时画像与用户逐模型�
   assert.equal(live.maxOutputTokens, 96_000)
 })
 
+test('MiMo v2.5 使用官方 1M 上下文窗口而不是云端默认估算', () => {
+  for (const modelName of ['mimo-v2.5', 'mimo-v2.5-pro']) {
+    const profile = resolveEndpointProfile({
+      baseUrl: 'https://api.xiaomimimo.com/v1',
+      modelName,
+      env: {},
+    })
+    assert.equal(profile.contextWindow, 1_000_000)
+    assert.equal(profile.contextWindowSource, 'official_catalog')
+    assert.equal(profile.contextWindowEstimated, false)
+    assert.match(profile.contextWindowSourceUrl, /xiaomimimo\.com/)
+  }
+})
+
 test('未知云模型继续保守回退，并明确标为估算值', () => {
   const unknown = resolveEndpointProfile({
     baseUrl: 'https://api.example.com/v1',

@@ -1,22 +1,37 @@
 import { useState } from 'react'
-import { ChevronDown, Loader2 } from 'lucide-react'
+import { Check, ChevronDown, Loader2 } from 'lucide-react'
 import ToolCallCard from '../../../components/ToolCallCard.jsx'
 import SubagentCard from '../../../components/SubagentCard.jsx'
 import LiveElapsed from '../../../components/LiveElapsed.jsx'
+import { useT } from '../../../i18n/I18nProvider.jsx'
 import { UiContributionRenderer, useUiContributions } from '../../../plugins/uiContributionRegistry.js'
 
-// Execution traces (reasoning status / tool timeline) use English technical
-// labels regardless of UI language: they are technical facts.
-
-export function ReasoningTrace({ text = '', streaming = false, label = '', testId }) {
+export function ReasoningTrace({ text = '', streaming = false, completed = false, label = '', testId }) {
+  const { t } = useT()
   // Providers can stream very large private reasoning payloads. Rendering that
   // payload makes the answer harder to follow and can freeze long chats. Keep
-  // only a compact live status; verified tool activity remains visible below.
-  if (!streaming) return null
-  return <div className="chat-thinking-line" role="status" aria-live="polite" data-testid={testId} data-has-reasoning={Boolean(text)}><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /><span>{label || 'Thinking…'}</span><LiveElapsed className="chat-thinking-elapsed" /></div>
+  // a compact status after completion without exposing private chain-of-thought.
+  if (!streaming && !completed) return null
+  return (
+    <div
+      className="chat-thinking-line"
+      role={streaming ? 'status' : undefined}
+      aria-live={streaming ? 'polite' : undefined}
+      data-state={streaming ? 'running' : 'complete'}
+      data-testid={testId}
+      data-has-reasoning={Boolean(text)}
+    >
+      {streaming
+        ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+        : <Check className="h-3.5 w-3.5" aria-hidden="true" />}
+      <span>{label || (streaming ? t('chatMessages.reasoningActive') : t('chatMessages.reasoningCompleted'))}</span>
+      {streaming && <LiveElapsed className="chat-thinking-elapsed" />}
+    </div>
+  )
 }
 
 export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOpenArtifact }) {
+  const { t } = useT()
   const normalizedCalls = Array.isArray(calls) ? calls : []
   const contributedToolViews = useUiContributions('tool-view')
   const [showAll, setShowAll] = useState(false)
@@ -49,7 +64,7 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
     <section
       className="chat-run-timeline"
       data-status={running ? 'running' : failed ? 'error' : cancelled ? 'cancelled' : 'success'}
-      aria-label={`${normalizedCalls.length} tool calls`}
+      aria-label={t('chatMessages.toolCalls', { count: normalizedCalls.length })}
       aria-busy={running}
     >
       {hiddenCount > 0 && (
@@ -60,8 +75,8 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
           aria-expanded={showAll}
         >
           <ChevronDown className={`h-3.5 w-3.5 ${showAll ? 'rotate-180' : ''}`} aria-hidden="true" />
-          <span>{showAll ? 'Collapse' : 'Expand'}</span>
-          <span>{`${showAll ? normalizedCalls.length : hiddenCount} tool calls`}</span>
+          <span>{showAll ? t('chatMessages.collapse') : t('chatMessages.expand')}</span>
+          <span>{t('chatMessages.toolCalls', { count: showAll ? normalizedCalls.length : hiddenCount })}</span>
         </button>
       )}
       {/* Static document flow (no transform animations): expanding argument or

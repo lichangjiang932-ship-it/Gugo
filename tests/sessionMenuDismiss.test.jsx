@@ -27,7 +27,7 @@ function setupDom() {
   return dom
 }
 
-function MenuHarness({ calls, sourceSessions = sessions }) {
+function MenuHarness({ calls, sourceSessions = sessions, storedProjects = [] }) {
   const [openMenuId, setOpenMenuId] = useState('session-one')
   return <>
     <SessionList
@@ -37,11 +37,13 @@ function MenuHarness({ calls, sourceSessions = sessions }) {
       onMenuOpen={setOpenMenuId}
       onMenuToggle={(id) => setOpenMenuId((current) => current === id ? null : id)}
       onMenuClose={() => setOpenMenuId(null)}
+      onNewInProject={(project) => calls.newInProject?.push(project)}
       onSearch={() => calls.searched?.push('search')}
       onOpen={(id) => calls.opened.push(id)}
       onPinToggle={(session) => calls.pinned?.push(session.id)}
       onArchiveToggle={(session) => calls.archived.push(session.id)}
       onDelete={(session) => calls.deleted.push(session.id)}
+      storedProjects={storedProjects}
       t={(key) => key}
     />
     <button type="button" data-testid="outside">Outside</button>
@@ -95,7 +97,7 @@ test('session menu closes on an outside pointer without swallowing menu item cli
   }
 })
 
-test('session history keeps one compact title-only list without project groups or metadata', async () => {
+test('recent sessions stay in one compact title-only list without metadata', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -108,10 +110,11 @@ test('session history keeps one compact title-only list without project groups o
 
   try {
     await act(async () => root.render(<MenuHarness calls={calls} sourceSessions={datedSessions} />))
-    const historyToggle = findButton(rootElement, 'nav.history')
+    const recentSection = rootElement.querySelector('section[aria-label="chatMessages.workspaceRecent"]')
     const sessionButtons = rootElement.querySelectorAll('[data-session-open]')
 
-    assert.equal(historyToggle.textContent.trim(), 'nav.history')
+    assert.ok(recentSection)
+    assert.match(recentSection.textContent, /chatMessages\.workspaceRecent/)
     assert.equal(sessionButtons[0].textContent.trim(), 'Session one')
     assert.equal(sessionButtons[1].textContent.trim(), 'Session two')
     assert.doesNotMatch(rootElement.textContent, /Gugo|此刻|分钟/)
@@ -123,7 +126,56 @@ test('session history keeps one compact title-only list without project groups o
   }
 })
 
-test('history search sits beside the title and opens without collapsing the list', async () => {
+test('project sessions render under their project with an explicit inherited-workspace new-chat action', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const calls = { opened: [], pinned: [], archived: [], deleted: [], newInProject: [] }
+  const path = 'D:\\Projects\\gugo'
+
+  try {
+    await act(async () => root.render(<MenuHarness
+      calls={calls}
+      sourceSessions={[
+        { ...sessions[0], workspacePath: path, updatedAt: 20 },
+        { ...sessions[1], updatedAt: 10 },
+      ]}
+      storedProjects={[{ path, name: 'Gugo workspace', usedAt: 20 }]}
+    />))
+
+    const project = rootElement.querySelector('[data-session-project]')
+    const projectSessions = rootElement.querySelector('[data-project-sessions]')
+    const projectToggle = rootElement.querySelector('[data-project-toggle]')
+    const newChat = rootElement.querySelector('[data-new-project-chat]')
+    assert.ok(project)
+    assert.match(project.textContent, /Gugo workspace/)
+    assert.match(projectSessions.textContent, /Session one/)
+    assert.doesNotMatch(projectSessions.textContent, /Session two/)
+    assert.match(rootElement.querySelector('section[aria-label="chatMessages.workspaceRecent"]').textContent, /Session two/)
+
+    assert.equal(projectToggle.getAttribute('aria-expanded'), 'true')
+    await act(async () => projectToggle.click())
+    assert.equal(projectToggle.getAttribute('aria-expanded'), 'false')
+    assert.equal(rootElement.querySelector('[data-project-sessions]'), null)
+    await act(async () => projectToggle.click())
+    assert.equal(projectToggle.getAttribute('aria-expanded'), 'true')
+    assert.match(rootElement.querySelector('[data-project-sessions]').textContent, /Session one/)
+
+    await act(async () => newChat.click())
+    assert.deepEqual(calls.newInProject, [{
+      key: 'd:\\projects\\gugo',
+      path,
+      name: 'Gugo workspace',
+      sessions: [{ ...sessions[0], workspacePath: path, updatedAt: 20 }],
+      usedAt: 20,
+    }])
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('recent search sits beside the title and opens without changing the list', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -131,15 +183,15 @@ test('history search sits beside the title and opens without collapsing the list
 
   try {
     await act(async () => root.render(<MenuHarness calls={calls} />))
-    const historyToggle = findButton(rootElement, 'nav.history')
+    const recentSection = rootElement.querySelector('section[aria-label="chatMessages.workspaceRecent"]')
+    const recentTitle = [...recentSection.querySelectorAll('span')]
+      .find((element) => element.textContent.includes('chatMessages.workspaceRecent'))
     const searchButton = rootElement.querySelector('button[aria-label="nav.searchPlaceholder"]')
     assert.ok(searchButton)
-    assert.equal(historyToggle.parentElement, searchButton.parentElement)
-    assert.equal(historyToggle.getAttribute('aria-expanded'), 'true')
+    assert.equal(recentTitle.parentElement, searchButton.parentElement)
 
     await act(async () => searchButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.deepEqual(calls.searched, ['search'])
-    assert.equal(historyToggle.getAttribute('aria-expanded'), 'true')
     assert.equal(rootElement.querySelectorAll('[data-session-open]').length, 2)
     assert.equal(findButton(rootElement, 'nav.archiveSession'), undefined)
   } finally {

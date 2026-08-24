@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BookOpen, Plus } from 'lucide-react'
-import LeftRail from '../components/LeftRail'
+import AppLayout from '../components/AppLayout.jsx'
 import { useActiveAgent } from '../agents/activeAgentContext.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { deleteMemoryApi, listMemoriesApi, upsertMemoryApi } from '../lib/memoryClient.js'
@@ -48,9 +48,28 @@ export default function MemoryView() {
     if (!id || !window.confirm(t('memory.confirmDelete'))) return
     try { await deleteMemoryApi(id); if (editing?.id === id) setEditing(null); await reload() } catch (caught) { setError(caught.message || t('memory.deleteFailed')) }
   }
-  return <div className="flex h-screen overflow-hidden bg-paper"><LeftRail /><div className="flex min-w-0 flex-1 flex-col">
-    <div className="flex items-center gap-3 border-b border-ink/10 px-6 py-4"><BookOpen className="h-5 w-5 text-accent-ink" /><div className="flex-1"><div className="text-base font-semibold text-ink">{t('memory.title')}</div><div className="text-xs text-ink-fade">{t('memory.subtitle')}</div></div><button type="button" onClick={handleNew} className="flex h-8 items-center gap-1 rounded-md bg-accent px-3 text-xs text-accent-contrast hover:bg-accent/90"><Plus className="h-3.5 w-3.5" />{t('memory.add')}</button></div>
-    <MemoryFilters agents={agents} filterAgent={filterAgent} filterType={filterType} onAgentChange={setFilterAgent} onQueryChange={setQuery} onTypeChange={setFilterType} query={query} t={t} types={types} />
-    <div className="flex min-h-0 flex-1"><MemoryList agentNameById={agentNameById} editingId={editing?.id} error={error} items={filtered} loading={loading} onEdit={setEditing} t={t} /><div className="flex-1 overflow-auto"><MemoryEditor activeAgentId={activeAgentId} agents={agents} editing={editing} onChange={setEditing} onClose={() => setEditing(null)} onDelete={handleDelete} onSave={handleSave} saving={saving} t={t} types={types} /></div></div>
-  </div></div>
+  return (
+    <AppLayout className="flex h-screen overflow-hidden bg-paper">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center gap-3 border-b border-ink/10 px-6 py-4">
+          <BookOpen className="h-5 w-5 text-accent-ink" />
+          <div className="flex-1">
+            <div className="text-base font-semibold text-ink">{t('memory.title')}</div>
+            <div className="text-xs text-ink-fade">{t('memory.subtitle')}</div>
+          </div>
+          <button type="button" onClick={handleNew} className="flex h-8 items-center gap-1 rounded-md bg-accent px-3 text-xs text-accent-contrast hover:bg-accent/90">
+            <Plus className="h-3.5 w-3.5" />
+            {t('memory.add')}
+          </button>
+        </div>
+        <MemoryFilters agents={agents} filterAgent={filterAgent} filterType={filterType} onAgentChange={setFilterAgent} onQueryChange={setQuery} onTypeChange={setFilterType} query={query} t={t} types={types} />
+        <div className="flex min-h-0 flex-1">
+          <MemoryList agentNameById={agentNameById} editingId={editing?.id} error={error} items={filtered} loading={loading} onEdit={setEditing} t={t} />
+          <div className="flex-1 overflow-auto">
+            <MemoryEditor activeAgentId={activeAgentId} agents={agents} editing={editing} onChange={setEditing} onClose={() => setEditing(null)} onDelete={handleDelete} onSave={handleSave} saving={saving} t={t} types={types} />
+          </div>
+        </div>
+      </div>
+    </AppLayout>
+  )
 }

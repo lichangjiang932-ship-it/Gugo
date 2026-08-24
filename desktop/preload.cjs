@@ -9,6 +9,12 @@ contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
   isDesktop: true,
   platform: process.platform,
   writeClipboardText: (value) => ipcRenderer.invoke('desktop:write-clipboard-text', String(value ?? '')),
+  openDirectory: ({ defaultPath = '' } = {}) => ipcRenderer.invoke('desktop:select-directory', {
+    defaultPath: String(defaultPath ?? ''),
+  }),
+  selectDirectory: ({ defaultPath = '' } = {}) => ipcRenderer.invoke('desktop:select-directory', {
+    defaultPath: String(defaultPath ?? ''),
+  }),
   getVersion: () => ipcRenderer.invoke('desktop:get-version'),
   openConfigFile: () => ipcRenderer.invoke('desktop:open-config-file'),
   checkForUpdates: () => ipcRenderer.invoke('desktop:check-for-updates'),

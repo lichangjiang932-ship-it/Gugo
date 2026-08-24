@@ -123,7 +123,7 @@ function FileNode({ file, depth, onClick, onDelete, active }) {
       <span className="truncate flex-1" onClick={onClick}>{file.name}</span>
       <button
         onClick={(e) => { e.stopPropagation(); onDelete() }}
-        className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50/40 text-ink-fade hover:text-red-500 transition-all"
+        className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-danger/40 text-ink-fade hover:text-danger transition-all"
       >
         <Trash2 className="w-3 h-3" />
       </button>

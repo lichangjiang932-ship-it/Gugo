@@ -21,7 +21,9 @@ function setupDom() {
 }
 
 function Harness({
+  activateWorkspaceForTurn,
   dispatch,
+  draftWorkspacePath = '',
   onAuthenticationRequired,
   onModelCatalogChanged = () => {},
   onModelUnavailable = () => {},
@@ -42,11 +44,13 @@ function Harness({
     onTurnAccepted?.({ turnId: 'turn-a' })
     return { completed: true }
   },
+  state: stateOverride,
 }) {
   const abortCtrlRef = useRef(null)
   const abortSessionIdRef = useRef(null)
   const directoryApprovalResolveRef = useRef(null)
   const triggerSend = useChatSendFlow({
+    activateWorkspaceForTurn,
     abortCtrlRef,
     abortSessionIdRef,
     attachments: [],
@@ -55,6 +59,7 @@ function Harness({
     clearToolApprovalForOwner: () => {},
     directoryApprovalResolveRef,
     dispatch,
+    draftWorkspacePath,
     effectiveAgentId: null,
     ensureLocalPathAccess: async () => ({ proceed: true, paths: [] }),
     isGenerating: false,
@@ -75,7 +80,7 @@ function Harness({
     setContextSystemPrompts: () => {},
     preflightModelSelection,
     runChatTurn,
-    state: {
+    state: stateOverride || {
       activeSessionId: 'session-a',
       agentMode: 'chat',
       sessions: [{
@@ -188,6 +193,175 @@ test('chat send flow blocks an unconfigured model before any session, message, t
     assert.deepEqual(actions, [])
     assert.deepEqual(turnStarts, [])
     assert.deepEqual(unavailable, [{ kind: 'unconfigured', canSend: false }])
+  } finally {
+    setAuthToken('')
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a normal draft becomes a sidebar session only after the first Turn is accepted', async () => {
+  const dom = setupDom()
+  const actions = []
+  const root = createRoot(document.getElementById('root'))
+  let triggerSend = null
+  let acceptTurn = null
+  let finishTurn = null
+  setAuthToken('local-test-token')
+
+  try {
+    await act(async () => {
+      root.render(createElement(Harness, {
+        dispatch: (action) => actions.push(action),
+        onReady: (value) => { triggerSend = value },
+        state: {
+          activeSessionId: null,
+          agentMode: 'chat',
+          sessions: [],
+          skillConfigs: {},
+          toolsConfig: {},
+        },
+        runChatTurn: ({ onTurnAccepted }) => new Promise((resolve) => {
+          acceptTurn = () => onTurnAccepted?.({ turnId: 'turn-draft' })
+          finishTurn = () => resolve({ completed: true })
+        }),
+      }))
+    })
+
+    let sendPromise
+    await act(async () => { sendPromise = triggerSend('first accepted message') })
+    assert.deepEqual(actions, [], 'opening and submitting a draft must not create a session before ACK')
+
+    await act(async () => { acceptTurn() })
+    assert.equal(actions[0].type, 'NEW_SESSION')
+    assert.equal(actions[1].type, 'SET_SESSION_MODEL')
+    assert.equal(actions[2].type, 'SEND_MESSAGE')
+    assert.equal(actions[0].payload.id, actions[2].payload.sessionId)
+    assert.equal(Object.hasOwn(actions[0].payload, 'workspacePath'), false)
+
+    let accepted
+    await act(async () => {
+      finishTurn()
+      accepted = await sendPromise
+    })
+    assert.equal(accepted, true)
+    assert.equal(actions.filter((action) => action.type === 'NEW_SESSION').length, 1)
+  } finally {
+    setAuthToken('')
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a project draft stays out of the sidebar until ACK and commits its workspace with the first message', async () => {
+  const dom = setupDom()
+  const actions = []
+  const activations = []
+  const turnRequests = []
+  const root = createRoot(document.getElementById('root'))
+  let triggerSend = null
+  let acceptTurn = null
+  let finishTurn = null
+  setAuthToken('local-test-token')
+
+  try {
+    await act(async () => {
+      root.render(createElement(Harness, {
+        activateWorkspaceForTurn: async (path) => {
+          activations.push(path)
+          return { path }
+        },
+        dispatch: (action) => actions.push(action),
+        draftWorkspacePath: ' D:\\Projects\\gugo ',
+        onReady: (value) => { triggerSend = value },
+        state: {
+          activeSessionId: null,
+          agentMode: 'chat',
+          sessions: [],
+          skillConfigs: {},
+          toolsConfig: {},
+        },
+        runChatTurn: (request) => new Promise((resolve) => {
+          turnRequests.push(request)
+          acceptTurn = () => request.onTurnAccepted?.({ turnId: 'turn-project-draft' })
+          finishTurn = () => resolve({ completed: true })
+        }),
+      }))
+    })
+
+    let sendPromise
+    await act(async () => { sendPromise = triggerSend('first project message') })
+    assert.deepEqual(activations, ['D:\\Projects\\gugo'])
+    assert.equal(turnRequests[0].workspacePath, 'D:\\Projects\\gugo')
+    assert.deepEqual(actions, [], 'project selection must remain draft-only before ACK')
+
+    await act(async () => { acceptTurn() })
+    const created = actions.find((action) => action.type === 'NEW_SESSION')
+    const sent = actions.find((action) => action.type === 'SEND_MESSAGE')
+    assert.ok(created)
+    assert.equal(created.payload.workspacePath, 'D:\\Projects\\gugo')
+    assert.equal(created.payload.id, sent.payload.sessionId)
+
+    let accepted
+    await act(async () => {
+      finishTurn()
+      accepted = await sendPromise
+    })
+    assert.equal(accepted, true)
+    assert.equal(actions.filter((action) => action.type === 'NEW_SESSION').length, 1)
+  } finally {
+    setAuthToken('')
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('an attachment draft reuses its hidden upload session id only when the first Turn is accepted', async () => {
+  const dom = setupDom()
+  const actions = []
+  const turnRequests = []
+  const root = createRoot(document.getElementById('root'))
+  let triggerSend = null
+  let acceptTurn = null
+  let finishTurn = null
+  setAuthToken('local-test-token')
+
+  try {
+    await act(async () => {
+      root.render(createElement(Harness, {
+        dispatch: (action) => actions.push(action),
+        onReady: (value) => { triggerSend = value },
+        state: {
+          activeSessionId: null,
+          agentMode: 'chat',
+          draftSessionId: 'attachment-draft-session',
+          sessions: [],
+          skillConfigs: {},
+          toolsConfig: {},
+        },
+        runChatTurn: (request) => new Promise((resolve) => {
+          turnRequests.push(request)
+          acceptTurn = () => request.onTurnAccepted?.({ turnId: 'turn-attachment-draft' })
+          finishTurn = () => resolve({ completed: true })
+        }),
+      }))
+    })
+
+    let sendPromise
+    await act(async () => { sendPromise = triggerSend('message with uploaded attachment') })
+    assert.equal(turnRequests[0].sessionId, 'attachment-draft-session')
+    assert.deepEqual(actions, [])
+
+    await act(async () => { acceptTurn() })
+    const created = actions.find((action) => action.type === 'NEW_SESSION')
+    const sent = actions.find((action) => action.type === 'SEND_MESSAGE')
+    assert.equal(created.payload.id, 'attachment-draft-session')
+    assert.equal(sent.payload.sessionId, 'attachment-draft-session')
+
+    await act(async () => {
+      finishTurn()
+      assert.equal(await sendPromise, true)
+    })
   } finally {
     setAuthToken('')
     await act(async () => root.unmount())

@@ -47,6 +47,11 @@ test('desktop updates stay idle until the user explicitly checks and downloads',
 
     await act(async () => statusListener?.({ status: 'downloading', transferred: 10, total: 100 }))
     assert.match(rootElement.textContent, /正在下载更新/)
+
+    const dismissButton = rootElement.querySelector('button[aria-label="隐藏更新提示"]')
+    assert.ok(dismissButton)
+    await act(async () => dismissButton.click())
+    assert.equal(rootElement.querySelector('[data-desktop-update-notice]'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

@@ -1,11 +1,16 @@
 import { withSessionModelSelection } from '../../lib/modelSelection.js'
 
+const normalizeWorkspacePath = (value) => String(value || '').trim()
+
 export function reduceSessionLifecycleState(state, action) {
   switch (action.type) {
     case 'NEW_SESSION': {
       const title = action.payload?.title ?? action.payload ?? `\u65b0\u4f1a\u8bdd ${new Date().toLocaleTimeString()}`
       const agentId = typeof action.payload === 'object' && action.payload ? (action.payload.agentId || null) : null
       const requestedId = typeof action.payload === 'object' && action.payload ? action.payload.id : null
+      const workspacePath = typeof action.payload === 'object' && action.payload
+        ? normalizeWorkspacePath(action.payload.workspacePath)
+        : ''
       const id = requestedId || crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
       const now = Date.now()
       const newSession = {
@@ -16,20 +21,39 @@ export function reduceSessionLifecycleState(state, action) {
         updatedAt: now,
         pinnedAt: null,
         agentId, // \u9636\u6bb5 6：session sticky agent。null \u8868\u793a\u8ddf\u968f\u5168\u5c40 active agent
+        ...(workspacePath ? { workspacePath } : {}),
       }
       return {
         ...state,
         sessions: [newSession, ...state.sessions],
         activeSessionId: id,
+        draftSessionId: null,
+        draftWorkspacePath: '',
       }
     }
 
     case 'START_NEW_DRAFT': {
+      const workspacePath = normalizeWorkspacePath(action.payload?.workspacePath)
       return {
         ...state,
         activeSessionId: null,
+        draftSessionId: null,
+        draftWorkspacePath: workspacePath,
         newDraftVersion: state.newDraftVersion + 1,
       }
+    }
+
+    case 'SET_DRAFT_WORKSPACE': {
+      return {
+        ...state,
+        draftWorkspacePath: normalizeWorkspacePath(action.payload?.workspacePath ?? action.payload),
+      }
+    }
+
+    case 'SET_DRAFT_SESSION_ID': {
+      if (state.activeSessionId) return state
+      const draftSessionId = String(action.payload?.sessionId ?? action.payload ?? '').trim() || null
+      return { ...state, draftSessionId }
     }
 
     case 'ADD_SERVER_FORK': {
@@ -55,6 +79,7 @@ export function reduceSessionLifecycleState(state, action) {
         forkedAt: metadata.forkedAt ?? null,
         serverRevision: Number.isInteger(revision) && revision >= 0 ? revision : 0,
         agentId: parent?.agentId || null,
+        ...(parent?.workspacePath ? { workspacePath: parent.workspacePath } : {}),
         ...(parent?.modelName ? { modelName: parent.modelName } : {}),
         ...(parent?.modelProviderId ? { modelProviderId: parent.modelProviderId } : {}),
       }
@@ -80,6 +105,22 @@ export function reduceSessionLifecycleState(state, action) {
         sessions: state.sessions.map((s) =>
           s.id === sessionId ? { ...s, agentId: agentId || null, updatedAt: Date.now() } : s,
         ),
+      }
+    }
+
+    case 'SET_SESSION_WORKSPACE': {
+      const { sessionId } = action.payload || {}
+      if (!sessionId) return state
+      const workspacePath = normalizeWorkspacePath(action.payload?.workspacePath)
+      return {
+        ...state,
+        sessions: state.sessions.map((session) => {
+          if (session.id !== sessionId) return session
+          if (workspacePath) return { ...session, workspacePath, updatedAt: Date.now() }
+          const next = { ...session, updatedAt: Date.now() }
+          delete next.workspacePath
+          return next
+        }),
       }
     }
 

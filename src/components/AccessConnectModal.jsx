@@ -12,6 +12,7 @@ import {
 import { createPoller } from '../lib/wechatQrPoller.js'
 import { openOAuthAuthorizationWindow } from '../lib/oauthPopup.js'
 import { manualIntegrationValues } from '../lib/accessManualCredentials.js'
+import Modal from './Modal.jsx'
 
 const EMPTY = Object.freeze({
   workspace: '', account: '', token: '', appId: '', appSecret: '', botUsername: '',
@@ -178,8 +179,7 @@ export default function AccessConnectModal({ connector, integration, onClose, on
   const passwordPlaceholder = integration ? t('access.secretKept') : ''
 
   return (
-    <div className="fixed inset-0 z-50 bg-ink/30 backdrop-blur-sm flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={`${connector.label} ${t('access.connect')}`}>
-      <div className="w-full max-w-md rounded-xl border border-ink-fade/40 bg-paper shadow-2xl">
+    <Modal onClose={onClose} closeOnBackdrop={false} ariaLabel={`${connector.label} ${t('access.connect')}`} overlayClassName="bg-ink/30" className="max-w-md border-ink-fade/40">
         <div className="flex items-start justify-between gap-3 p-5 border-b border-dashed border-ink-fade/40">
           <div>
             <h2 className="font-semibold text-2xl text-ink">{connector.label}</h2>
@@ -192,7 +192,7 @@ export default function AccessConnectModal({ connector, integration, onClose, on
           <div className="p-6 flex flex-col items-center gap-4">
             {qr?.qrcodeUrl ? <img src={qr.qrcodeUrl} alt="WeChat QR code" className="w-56 h-56 rounded-lg border border-ink-fade/30 bg-white" /> : <div className="w-56 h-56 rounded-lg bg-paper-2 flex items-center justify-center"><QrCode className="w-16 h-16 text-ink-fade" /></div>}
             <div className="text-sm text-ink-soft flex items-center gap-2">{busy && <LoaderCircle className="w-4 h-4 animate-spin" />}{qrStatus || t('access.qrLoading')}</div>
-            {message && <p className="text-sm text-red-600 text-center">{message}</p>}
+            {message && <p className="text-sm text-danger text-center">{message}</p>}
           </div>
         ) : (
           <form onSubmit={save} className="p-5 flex flex-col gap-4">
@@ -215,7 +215,7 @@ export default function AccessConnectModal({ connector, integration, onClose, on
               </>
             )}
             {oauthHelp && (
-              <details className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900" data-testid="oauth-help">
+              <details className="rounded-md border border-warning/20 bg-warning/5 p-3 text-xs leading-5 text-warning" data-testid="oauth-help">
                 <summary className="cursor-pointer font-medium">{t('access.oauthHelpToggle')}</summary>
                 <p className="mt-2">{t('access.oauthHelpBody')}</p>
                 <a href="https://github.com/lichangjiang932-ship-it/Gugo/blob/main/docs/CONFIGURATION.md" target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 underline">{t('access.oauthHelpDoc')}<ExternalLink className="w-3 h-3" /></a>
@@ -253,15 +253,14 @@ export default function AccessConnectModal({ connector, integration, onClose, on
             {connector.provider === 'qq' && <TextField type="password" label={t('access.appSecret')} value={form.appSecret} onChange={(value) => set('appSecret', value)} placeholder={passwordPlaceholder} required={!integration} />}
             {connector.provider === 'qq' && <TextField type="password" label={t('access.botTokenOptional')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} />}
             {connector.setupUrl && <a href={connector.setupUrl} target="_blank" rel="noreferrer" className="text-xs text-accent-ink hover:underline inline-flex items-center gap-1">{t('access.openSetup')}<ExternalLink className="w-3 h-3" /></a>}
-            {message && <p className="text-sm text-red-600">{message}</p>}
+            {message && <p className="text-sm text-danger">{message}</p>}
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" onClick={onClose} className="h-9 px-4 rounded-md border border-ink-fade/50 text-sm">{t('access.cancel')}</button>
               <button type="submit" disabled={busy} className="h-9 px-4 rounded-md bg-ink text-paper text-sm flex items-center gap-2 disabled:opacity-50">{busy && <LoaderCircle className="w-4 h-4 animate-spin" />}{t('access.saveAndTest')}</button>
             </div>
           </form>
         )}
-      </div>
-    </div>
+    </Modal>
   )
 }
 

@@ -62,6 +62,28 @@ export function buildRepresentativeReadCalls(content, turnId) {
   return calls
 }
 
+/**
+ * The chat client may perform an authorized read-only filesystem call before
+ * the tool loop starts and append its structured result to the model prompt.
+ * Count only successful, content-bearing preflight records as read execution
+ * evidence. This deliberately does not imply mutation evidence.
+ */
+export function hasSuccessfulLocalPreflightRead(content) {
+  const text = String(content || '')
+  const directoryPattern = /Path:\s*([^\r\n]+)\r?\nTool:\s*list_directory\r?\nSucceeded:\s*yes\r?\n(\{[^\r\n]+\})/giu
+  for (const match of text.matchAll(directoryPattern)) {
+    try {
+      const listing = JSON.parse(match[2])
+      if (listing?.ok === true && Array.isArray(listing.entries)) return true
+    } catch {
+      // Ignore malformed or user-authored lookalikes.
+    }
+  }
+
+  const readPattern = /Path:\s*[^\r\n]+\r?\nTool:\s*read_file\r?\n(?:(?!\r?\nPath:)[\s\S]){0,1200}?Access succeeded:\s*yes\r?\n(?:(?!\r?\nPath:)[\s\S]){0,1200}?Content extracted:\s*yes(?:\r?\n|$)/giu
+  return readPattern.test(text)
+}
+
 export function successfulReadFileInMessages(messages = []) {
   return messages.some((message) => {
     if (message?.role !== 'tool' || message?.name !== 'read_file') return false

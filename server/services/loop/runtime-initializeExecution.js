@@ -255,6 +255,7 @@ export async function initializeExecution(s) {
             artifactId,
             toolName: provenance.toolName,
             verified: provenance.verified === true,
+            ...(provenance.validation ? { validation: provenance.validation } : {}),
           })),
           deliveredArtifactTools: [...s.deliveredArtifactTools],
           deliverableSelectionRetries: s.deliverableSelectionRetries,

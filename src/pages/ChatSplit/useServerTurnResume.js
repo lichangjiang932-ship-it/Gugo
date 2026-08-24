@@ -60,6 +60,7 @@ export function matchesFailedTurnRetryResume(session, message, retry) {
     && retry?.code === 'TURN_INCOMPLETE'
     && message?.meta?.failed === true
     && message?.meta?.serverFailure?.code === 'TURN_INCOMPLETE'
+    && message.meta.serverFailure.retryable === true
 }
 
 function serverTurnResumeClaimKey(sessionId, turnId) {

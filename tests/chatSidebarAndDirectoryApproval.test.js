@@ -22,9 +22,25 @@ test('directory authorization renders an inline card before the chat composer', 
   assert.doesNotMatch(chat, /ApplyPatchApprovalModal/)
 })
 
+test('skill and tool approvals share one compact dock above the composer', () => {
+  const chat = read('../src/pages/ChatSplit/ChatSplitView.jsx')
+  const messages = read('../src/pages/ChatSplit/ChatMessages.jsx')
+  const permission = read('../src/pages/ChatSplit/chatMessages/PermissionRequestCard.jsx')
+
+  assert.match(chat, /data-testid="chat-approval-dock"/)
+  assert.match(chat, /<PermissionRequestCard/)
+  assert.match(chat, /<ToolApprovalCard/)
+  assert.ok(chat.indexOf('data-testid="chat-approval-dock"') < chat.indexOf('<ChatComposer'))
+  assert.doesNotMatch(messages, /PermissionRequestCard|permRequest/)
+  assert.match(permission, /data-testid="permission-approval-card"/)
+  assert.match(permission, /border-l-warning/)
+  assert.doesNotMatch(permission, /AnimatePresence|motion\.|animate-pulse/)
+})
+
 test('local paths are authorized before the model call and paused turns resume inline', () => {
   const chat = read('../src/pages/ChatSplit/useChatSendFlow.js')
-  const chatPage = read('../src/pages/ChatSplit/index.jsx')
+  const chatSendActions = read('../src/pages/ChatSplit/chatSendActions.js')
+  const chatTurnRecovery = read('../src/pages/ChatSplit/useChatTurnRecovery.js')
   const directoryApproval = read('../src/pages/ChatSplit/useDirectoryApproval.js')
   const serverTurn = read('../src/pages/ChatSplit/serverTurnFlow.js')
   const resume = read('../src/pages/ChatSplit/useServerTurnResume.js')
@@ -35,16 +51,16 @@ test('local paths are authorized before the model call and paused turns resume i
 
   assert.ok(preflight > 0)
   assert.ok(serverCall > preflight)
-  assert.match(chatPage, /authorizeChatDirectoryRequest\(\{/)
-  assert.match(chatPage, /buildServerTurnResumeMeta\(result\.resolution\)/)
-  assert.match(chatPage, /showPendingDirectoryGuidance\(typedContent\)/)
+  assert.match(chatTurnRecovery, /authorizeChatDirectoryRequest\(\{/)
+  assert.match(chatTurnRecovery, /buildServerTurnResumeMeta\(result\.resolution\)/)
+  assert.match(chatSendActions, /showPendingDirectoryGuidance\(typedContent\)/)
   assert.match(pausedResume, /resolvePendingDirectorySend/)
   assert.match(resume, /resumeResolution = failedRetry \? null : message\.meta\?\.serverResumeResolution \|\| null/)
   assert.match(resume, /resumeResolution,/)
-  assert.match(chatPage, /stateTurnRunActive: isGenerating/)
+  assert.match(chatTurnRecovery, /stateTurnRunActive: isGenerating/)
   assert.match(resume, /stateTurnRunActive/)
   assert.match(messageRow, /serverClarification\?\.request_type \|\| serverClarification\?\.requestType/)
-  assert.match(messageRow, /<DirectoryRequestCard/)
+  assert.match(messageRow, /<InlineDirectoryRequestCard/)
   assert.match(serverTurn, /buildLocalPathToolInstruction\([\s\S]{0,160}localPathAccess\.paths,[\s\S]{0,160}localPathAccess\.accessMode,[\s\S]{0,160}localPathAccess\.resources,[\s\S]{0,80}\)/)
   assert.match(directoryApproval, /settleDirectoryApprovalRequest\([\s\S]*\{ approved: false \}/)
   assert.match(directoryApproval, /directoryApprovalRequestRef\.current === requestRecord/)
@@ -58,16 +74,20 @@ test('local paths are authorized before the model call and paused turns resume i
 test('right workbench toggle leaves the navigation rail mounted', () => {
   const chat = readSourceTree('../src/pages/ChatSplit/')
   const view = read('../src/pages/ChatSplit/ChatSplitView.jsx')
+  const rightPanels = read('../src/pages/ChatSplit/chatSplitView/ChatRightPanels.jsx')
+  const layout = read('../src/components/AppLayout.jsx')
   const shortcuts = read('../src/components/GlobalShortcuts.jsx')
 
   assert.match(chat, /const \[workbenchOpen, setWorkbenchOpen\] = useState\(readWorkbenchOpen\)/)
-  assert.match(view, /<LeftRail \/>/)
-  assert.doesNotMatch(view, /\{workbenchOpen && <LeftRail \/>\}/)
+  assert.match(view, /<AppLayout/)
+  assert.match(layout, /<LeftRail \/>/)
+  assert.doesNotMatch(layout, /\{workbenchOpen && <LeftRail \/>\}/)
   assert.match(view, /data-testid="workbench-toggle"/)
   assert.match(view, /aria-controls="right-workbench"/)
   assert.match(view, /aria-expanded=\{workbenchOpen\}/)
-  assert.match(view, /<RightWorkbench/)
-  assert.match(view, /if \(!workbenchOpen\) return null[\s\S]*if \(previewArtifact\)/)
+  assert.match(view, /<ChatRightPanels/)
+  assert.match(rightPanels, /<RightWorkbench/)
+  assert.match(rightPanels, /if \(!workbenchOpen\) return null[\s\S]*if \(previewArtifact\)/)
   assert.match(chat, /onClosePreview=\{\(\) => setWorkbenchOpen\(false\)\}/)
   assert.match(chat, /onOpenArtifact=\{\(artifact\) => \{ setWorkbenchOpen\(true\); dispatch\(\{ type: 'OPEN_PREVIEW_ARTIFACT'/)
   assert.doesNotMatch(shortcuts, /CLOSE_PREVIEW_ARTIFACT/)
@@ -81,10 +101,10 @@ test('narrow chat layout lets the conversation and workbench shrink without hori
 
   assert.match(view, /flex min-w-0 flex-\[1_1_640px\] flex-col overflow-hidden/)
   assert.equal(
-    (view.match(/max-w-\[min\(872px,calc\(100vw-360px\)\)\]/g) || []).length,
+    (view.match(/max-w-\[min\(780px,calc\(100vw-320px\)\)\]/g) || []).length,
     2,
   )
-  assert.doesNotMatch(view, /max-w-\[872px\]/)
+  assert.doesNotMatch(view, /max-w-\[780px\]/)
   assert.match(workbench, /h-full min-w-0 max-w-\[calc\(100vw-60px\)\] shrink flex-col overflow-hidden/)
   assert.doesNotMatch(workbench, /h-full shrink-0 flex-col/)
   assert.match(rail, /NARROW_RAIL_QUERY = '\(max-width: 959px\)'/)
@@ -93,6 +113,7 @@ test('narrow chat layout lets the conversation and workbench shrink without hori
 
 test('right workbench exposes files, side chat, browser, and terminal tools', () => {
   const workbench = read('../src/pages/ChatSplit/RightWorkbench.jsx')
+    + readSourceTree('../src/pages/ChatSplit/rightWorkbench/')
 
   assert.match(workbench, /files: Files/)
   assert.match(workbench, /chat: MessageSquare/)

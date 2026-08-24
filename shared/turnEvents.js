@@ -141,6 +141,8 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     }).strict().optional(),
     intentMode: z.enum(['auto', 'answer', 'execute']).optional(),
     approvalMode: z.enum(['normal', 'acceptEdits', 'plan', 'bypass']).optional(),
+    workspacePath: nullableText,
+    projectDirectory: nullableText,
     userMessageId: z.string().optional(),
     attachments: z.array(managedAttachmentSchema).optional(),
     importedHistoryCount: z.number().int().nonnegative().optional(),

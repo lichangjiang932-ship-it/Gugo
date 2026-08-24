@@ -33,15 +33,17 @@ const { closeDb, createUser, getDb } = await import('../server/db.js')
 const {
   browseLocalDirectories,
   clearSessionLocalFileGrants,
+  createManagedProjectDirectory,
   findAuthorizedDirectoryGrant,
   getLocalFileAccessStatus,
   grantLocalPath,
   resolveDirectoryRequestPath,
+  resolveTurnProjectDirectory,
   revokeLocalPath,
   setAllFilesAccess,
   setDefaultOutputDirectory,
 } = await import('../server/services/localFileAccessService.js')
-const { setWorkspaceTrust } = await import('../server/services/workspaceTrustService.js')
+const { getWorkspaceTrustStatus, setWorkspaceTrust } = await import('../server/services/workspaceTrustService.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { bashExecTool, editFileTool, listDirectoryTool, readFileTool, writeFileTool } = await import('../server/adapters/fsShellTools.js')
 const { dispatchGitTool } = await import('../server/adapters/gitWorkbench.js')
@@ -58,6 +60,9 @@ createUser({ id: 'file-grant-user', email: 'file-grant@example.com' })
 createUser({ id: 'all-files-grant-user', email: 'all-files-grant@example.com' })
 createUser({ id: 'default-output-user', email: 'default-output@example.com' })
 createUser({ id: 'session-grant-user', email: 'session-grant@example.com' })
+createUser({ id: 'managed-project-user', email: 'managed-project@example.com' })
+createUser({ id: 'managed-project-other-user', email: 'managed-project-other@example.com' })
+createUser({ id: 'managed-project-configured-user', email: 'managed-project-configured@example.com' })
 
 for (const userId of [
   'local-user-a',
@@ -71,6 +76,9 @@ for (const userId of [
   'all-files-grant-user',
   'default-output-user',
   'session-grant-user',
+  'managed-project-user',
+  'managed-project-other-user',
+  'managed-project-configured-user',
 ]) {
   setApprovalMode({ userId, mode: 'normal' })
 }
@@ -180,6 +188,64 @@ test('default output directory strips paired quotes, creates missing folders, an
     rawPath: `'${missingDirectory}'`,
   })
   assert.equal(browsed.currentPath, canonicalDirectory)
+})
+
+test('managed projects create unique user-isolated, writable and trusted Turn workspaces', () => {
+  const previousAppDataDir = process.env.APP_DATA_DIR
+  const managedDataRoot = path.join(tempDir, 'managed-project-data')
+  process.env.APP_DATA_DIR = managedDataRoot
+  try {
+    const first = createManagedProjectDirectory({
+      userId: 'managed-project-user',
+      name: '..\\..\\CON:* 产品官网',
+    })
+    const second = createManagedProjectDirectory({
+      userId: 'managed-project-user',
+      name: '..\\..\\CON:* 产品官网',
+    })
+
+    assert.equal(path.isAbsolute(first.path), true)
+    assert.equal(fs.realpathSync(first.path), first.path)
+    assert.equal(fs.statSync(first.path).isDirectory(), true)
+    assert.notEqual(first.path, second.path)
+    const relative = path.relative(fs.realpathSync(managedDataRoot), first.path)
+    assert.equal(relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative), false)
+    assert.doesNotMatch(path.basename(first.path), /[<>:"/\\|?*]/)
+
+    const trust = getWorkspaceTrustStatus({
+      userId: 'managed-project-user',
+      rootPath: first.path,
+    })
+    assert.equal(trust.trusted, true)
+    assert.equal(trust.trustScope, 'persistent')
+    assert.equal(resolveTurnProjectDirectory({
+      userId: 'managed-project-user',
+      workspacePath: first.path,
+    }).projectDirectory, first.path)
+    assert.throws(
+      () => resolveTurnProjectDirectory({
+        userId: 'managed-project-other-user',
+        workspacePath: first.path,
+      }),
+      (error) => error?.code === 'TURN_WORKSPACE_NOT_AUTHORIZED',
+    )
+
+    const configuredRoot = path.join(tempDir, 'configured-project-output')
+    setDefaultOutputDirectory({
+      userId: 'managed-project-configured-user',
+      rootPath: configuredRoot,
+    })
+    const configured = createManagedProjectDirectory({
+      userId: 'managed-project-configured-user',
+      name: 'Configured project',
+    })
+    const configuredRelative = path.relative(fs.realpathSync(configuredRoot), configured.path)
+    assert.equal(configuredRelative.startsWith(`..${path.sep}`) || path.isAbsolute(configuredRelative), false)
+    assert.match(configuredRelative, /^Gugo Projects[\\/]/)
+  } finally {
+    if (previousAppDataDir === undefined) delete process.env.APP_DATA_DIR
+    else process.env.APP_DATA_DIR = previousAppDataDir
+  }
 })
 
 test('directory input recognizes quoted Windows drive and UNC absolute paths', {

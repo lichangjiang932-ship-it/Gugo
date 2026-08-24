@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useNavigate } from '../lib/router.jsx'
-import LeftRail from '../components/LeftRail'
+import AppLayout from '../components/AppLayout.jsx'
 import { useAppContext } from '../store/AppContext'
 import { useToast } from '../components/Toast.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
@@ -32,8 +32,7 @@ export default function SkillsMarket() {
   })
 
   return (
-    <div className="h-screen flex bg-paper overflow-hidden">
-      <LeftRail />
+    <AppLayout className="h-screen flex bg-paper overflow-hidden">
       <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
         <div className="mx-auto w-full max-w-[1480px]">
           <SkillsToolbar
@@ -50,7 +49,7 @@ export default function SkillsMarket() {
           openCustomModal={market.openCustomModal}
           t={t}
           />
-          {market.catalogFallback && <div role="status" className="mb-5 rounded-xl border border-amber-300/70 bg-amber-50/70 px-4 py-3 text-sm text-amber-900" data-testid="skills-catalog-fallback">{t('skillsMarket.builtInFallback')}</div>}
+          {market.catalogFallback && <div role="status" className="mb-5 rounded-xl border border-warning/70 bg-warning/70 px-4 py-3 text-sm text-warning" data-testid="skills-catalog-fallback">{t('skillsMarket.builtInFallback')}</div>}
           <SkillsGrid skills={market.filteredSkills} onSelect={market.setSelectedSkill} onDelete={market.deleteCustomSkill} t={t} />
         </div>
       </main>
@@ -59,6 +58,6 @@ export default function SkillsMarket() {
       <ImportSkillModal market={market} t={t} />
       <GithubSkillModal market={market} t={t} />
       <PluginSkillModal market={market} t={t} />
-    </div>
+    </AppLayout>
   )
 }

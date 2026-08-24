@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 
-import { pinnedTimestampOf, sortSessions, timestampOf } from '../src/components/leftRail/sessionListUtils.js'
+import {
+  groupSessionsByProject,
+  pinnedTimestampOf,
+  sortSessions,
+  timestampOf,
+} from '../src/components/leftRail/sessionListUtils.js'
 
 const sessionListSource = fs.readFileSync(
   new URL('../src/components/leftRail/SessionList.jsx', import.meta.url),
@@ -20,14 +25,36 @@ test('session history is one continuous newest-first list', () => {
   assert.deepEqual(sortSessions([]), [])
 })
 
-test('session history stays a single-line list without project groups or time subtitles', () => {
+test('session rows stay compact while workspace sessions can render under project groups', () => {
   assert.match(sessionListSource, /orderedSessions\.map\(\(session, index\) => renderSession\(session, index\)\)/)
-  assert.match(sessionListSource, /block truncate text-\[13px\] leading-\[18px\]/)
+  assert.match(sessionListSource, /block truncate text-\[12px\] leading-4/)
   assert.equal((sessionListSource.match(/\{session\.title\}/g) || []).length, 1)
   assert.doesNotMatch(
     sessionListSource,
-    /groupSessions|groupedSessions|formatRelative|relativeTime|session\.(?:project|projectName|updatedAt|createdAt)|data-session-(?:project|time)/,
+    /formatRelative|relativeTime|data-session-time/,
   )
+  assert.match(sessionListSource, /data-session-project/)
+  assert.match(sessionListSource, /data-project-toggle/)
+  assert.match(sessionListSource, /data-new-project-chat/)
+  assert.match(sessionListSource, /chatMessages\.workspaceProjects/)
+  assert.match(sessionListSource, /chatMessages\.workspaceRecent/)
+  assert.doesNotMatch(sessionListSource, /setExpanded|nav\.history/)
+})
+
+test('workspace sessions group by normalized path while plain sessions remain in history', () => {
+  const grouped = groupSessionsByProject([
+    { id: 'plain', title: 'Plain', updatedAt: 40 },
+    { id: 'older', workspacePath: 'D:\\Work\\alpha', updatedAt: 10 },
+    { id: 'newer', workspacePath: 'd:\\work\\alpha\\', updatedAt: 30 },
+  ], [
+    { path: 'D:\\Work\\alpha', name: 'Alpha custom', usedAt: 20 },
+    { path: '/work/empty', name: 'Empty project', usedAt: 5 },
+  ])
+
+  assert.deepEqual(grouped.ungrouped.map(({ id }) => id), ['plain'])
+  assert.deepEqual(grouped.projects.map(({ name }) => name), ['Alpha custom', 'Empty project'])
+  assert.deepEqual(grouped.projects[0].sessions.map(({ id }) => id), ['newer', 'older'])
+  assert.deepEqual(grouped.projects[1].sessions, [])
 })
 
 test('timestampOf accepts message timestamps and rejects invalid values', () => {

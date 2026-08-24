@@ -19,6 +19,7 @@ import { hasTurnRun } from './turnRunRegistry.js'
 import { preflightChatModelSelection } from './chatModelPreflight.js'
 
 export default function useChatSendFlow({
+  activateWorkspaceForTurn,
   abortCtrlRef,
   abortSessionIdRef,
   attachments,
@@ -26,6 +27,7 @@ export default function useChatSendFlow({
   changeApprovalMode,
   directoryApprovalResolveRef,
   dispatch,
+  draftWorkspacePath = '',
   effectiveAgentId,
   ensureLocalPathAccess,
   isGenerating,
@@ -37,6 +39,7 @@ export default function useChatSendFlow({
   onSendRejected,
   onTurnStart,
   onTurnResult,
+  onWorkspaceUnavailable,
   probeLocalPathAccess,
   refreshAuth,
   requestServerToolApproval,
@@ -60,8 +63,10 @@ export default function useChatSendFlow({
       onAuthenticationRequired?.()
       return false
     }
-    let sessionId = state.activeSessionId
+    let sessionId = state.activeSessionId || String(state.draftSessionId || '').trim() || null
     let activeSession = state.sessions.find((session) => session.id === sessionId)
+    const storedWorkspacePath = String(activeSession?.workspacePath || '').trim()
+    let workspacePath = storedWorkspacePath || (!activeSession ? String(draftWorkspacePath || '').trim() : '')
     const storedSelection = readStoredModelSelection()
     const modelSelection = resolveSessionModelSelection(modelOptions, {
       sessionModel: activeSession?.modelName,
@@ -120,8 +125,14 @@ export default function useChatSendFlow({
     const modelConfigRevision = preflight.selection.modelConfigRevision
     const modelMode = preflight.selection.modelMode
     if (!activeSession) {
-      sessionId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-      activeSession = { id: sessionId, title: t('chatReliability.newConversation'), messages: [], agentId: effectiveAgentId || null }
+      sessionId ||= crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      activeSession = {
+        id: sessionId,
+        title: t('chatReliability.newConversation'),
+        messages: [],
+        agentId: effectiveAgentId || null,
+        ...(workspacePath ? { workspacePath } : {}),
+      }
     }
     if (hasTurnRun(sessionId)) return false
     const sourceMessages = historyLimit == null ? activeSession.messages || [] : (activeSession.messages || []).slice(0, historyLimit)
@@ -146,6 +157,16 @@ export default function useChatSendFlow({
       dispatch,
     })
     if (!modeTransition.proceed) return false
+    if (workspacePath && typeof activateWorkspaceForTurn === 'function') {
+      try {
+        const activated = await activateWorkspaceForTurn(workspacePath)
+        workspacePath = String(activated?.path || workspacePath).trim()
+        activeSession = { ...activeSession, workspacePath }
+      } catch (error) {
+        onWorkspaceUnavailable?.(error, { path: workspacePath })
+        return false
+      }
+    }
     const localPathAccess = await ensureLocalPathAccess(content)
     if (!localPathAccess.proceed) return false
     const effectiveAgentMode = planExecutionConfirmation?.agentMode || state.agentMode
@@ -160,7 +181,17 @@ export default function useChatSendFlow({
       onAccepted?.({ sessionId })
       if (!state.activeSessionId) {
         abortSessionIdRef.current = sessionId
-        dispatch({ type: 'NEW_SESSION', payload: { id: sessionId, title: activeSession.title, agentId: effectiveAgentId || null } })
+        dispatch({
+          type: 'NEW_SESSION',
+          payload: {
+            id: sessionId,
+            title: activeSession.title,
+            agentId: effectiveAgentId || null,
+            ...(workspacePath ? { workspacePath } : {}),
+          },
+        })
+      } else if (workspacePath && storedWorkspacePath !== workspacePath) {
+        dispatch({ type: 'SET_SESSION_WORKSPACE', payload: { sessionId, workspacePath } })
       }
       if (modelName && (
         activeSession.modelName !== modelName
@@ -205,6 +236,7 @@ export default function useChatSendFlow({
       toolsConfig: state.toolsConfig,
       turnId,
       userPrompt: parsedSkill.skillId && skill ? parsedSkill.userPrompt : content,
+      workspacePath,
     })
     if (turnResult?.rejectedBeforeStart) {
       if (isModelSetupFailure(turnResult.error)) {
@@ -235,11 +267,11 @@ export default function useChatSendFlow({
       sendInFlightRef.current = false
     }
   }, [
-    abortCtrlRef, abortSessionIdRef, attachments, approvalMode, changeApprovalMode,
-    directoryApprovalResolveRef, dispatch, effectiveAgentId,
-    ensureLocalPathAccess, isGenerating, modelOptions, modelReadiness, onAuthenticationRequired, onModelCatalogChanged, onModelUnavailable, onSendRejected, onTurnResult, onTurnStart, preflightModelSelection, probeLocalPathAccess, requestServerToolApproval,
+    abortCtrlRef, abortSessionIdRef, activateWorkspaceForTurn, attachments, approvalMode, changeApprovalMode,
+    directoryApprovalResolveRef, dispatch, draftWorkspacePath, effectiveAgentId,
+    ensureLocalPathAccess, isGenerating, modelOptions, modelReadiness, onAuthenticationRequired, onModelCatalogChanged, onModelUnavailable, onSendRejected, onTurnResult, onTurnStart, onWorkspaceUnavailable, preflightModelSelection, probeLocalPathAccess, requestServerToolApproval,
     refreshAuth, resolveToolApprovalForOwner, runChatTurn, runtimeSkills, selectedModel, selectedModelProviderId,
     setContextSystemPrompts, clearToolApprovalForOwner,
-    state.activeSessionId, state.agentMode, state.sessions, state.skillConfigs, state.toolsConfig, t,
+    state.activeSessionId, state.agentMode, state.draftSessionId, state.sessions, state.skillConfigs, state.toolsConfig, t,
   ])
 }

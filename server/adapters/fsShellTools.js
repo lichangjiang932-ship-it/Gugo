@@ -49,8 +49,10 @@ import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
 import { runShellSessionCommand } from '../services/shellSessionStore.js'
 import {
   extractManagedAttachmentContent,
+  extractOfficeBufferContent,
   extractPdfBufferContent,
 } from '../services/managedAttachmentContent.js'
+import { validateGeneratedArtifactFile } from '../services/generatedArtifactFormatValidation.js'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024 // 5 MB read/write upper bound
 const SHELL_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
@@ -327,12 +329,35 @@ export async function readFileTool({ path: rawPath, offset = 0, limit = 0, userI
     throw badReq(`文件过大(${stat.size} 字节,上限 ${MAX_FILE_BYTES})`, 413)
   }
   const buffer = fs.readFileSync(full)
-  const isPdf = path.extname(full).toLowerCase() === '.pdf'
+  const extension = path.extname(full).toLowerCase()
+  const isPdf = extension === '.pdf'
     || buffer.subarray(0, 5).toString('ascii') === '%PDF-'
-  const extracted = isPdf ? extractPdfBufferContent(buffer) : null
+  const isOffice = ['.docx', '.pptx', '.xlsx'].includes(extension)
+  const extracted = isPdf
+    ? extractPdfBufferContent(buffer)
+    : isOffice
+      ? await extractOfficeBufferContent({ buffer, filename: path.basename(full) })
+      : null
+  let formatValidated = null
+  let formatValidationCode = null
+  if (isOffice) {
+    try {
+      await validateGeneratedArtifactFile({
+        filePath: full,
+        filename: path.basename(full),
+        artifactType: extension.slice(1),
+      })
+      formatValidated = true
+    } catch (error) {
+      formatValidated = false
+      formatValidationCode = String(error?.code || 'ARTIFACT_FORMAT_INVALID').slice(0, 120)
+    }
+  }
   const all = isPdf
     ? extracted.text || '[PDF 文件未提取到可读文本；文件可能是扫描件或使用了压缩/自定义字体。]'
-    : buffer.toString('utf8')
+    : isOffice
+      ? extracted.text || '[Office 文件未提取到可读文本，或文件结构无效。]'
+      : buffer.toString('utf8')
   const lines = all.split('\n')
   const o = Math.max(0, Math.floor(Number(offset) || 0))
   const l = Math.max(0, Math.floor(Number(limit) || 0))
@@ -342,10 +367,14 @@ export async function readFileTool({ path: rawPath, offset = 0, limit = 0, userI
     path: resolved.displayPath,
     scope: resolved.source,
     size: stat.size,
-    ...(isPdf ? {
+    ...((isPdf || isOffice) ? {
       mimeType: extracted.mimeType,
       extractionStatus: extracted.extractionStatus,
       requiresVision: extracted.requiresVision,
+    } : {}),
+    ...(isOffice ? {
+      formatValidated,
+      ...(formatValidationCode ? { formatValidationCode } : {}),
     } : {}),
     totalLines: lines.length,
     offset: o,

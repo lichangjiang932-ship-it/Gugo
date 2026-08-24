@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client'
 
 import ModelPicker from '../../src/pages/ChatSplit/ModelPicker.jsx'
 
-test('model picker opens above the composer and switches from a vertical model list', async () => {
+function installDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
     url: 'http://localhost/',
   })
@@ -15,283 +15,213 @@ test('model picker opens above the composer and switches from a vertical model l
   globalThis.HTMLElement = dom.window.HTMLElement
   globalThis.KeyboardEvent = dom.window.KeyboardEvent
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  return dom
+}
 
-  const selectedValues = []
-  const rootElement = dom.window.document.getElementById('root')
+function verifiedModel(name, provider, providerLabel = '', mode = 'agent') {
+  return {
+    name,
+    provider,
+    providerKey: provider,
+    providerLabel,
+    configRevision: 1,
+    readiness: {
+      configRevision: 1,
+      mode,
+      chat: mode !== 'unavailable',
+      tools: mode === 'agent',
+      agent: mode === 'agent',
+    },
+  }
+}
+
+async function flushFocus() {
+  await act(async () => new Promise((resolve) => window.setTimeout(resolve, 0)))
+}
+
+test('model picker opens a current-model row before the complete provider catalog', async () => {
+  const dom = installDom()
+  const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
+  const selectedValues = []
+  const modelOptions = [
+    verifiedModel('alpha', 'deepseek', 'DeepSeek'),
+    { name: 'preview', provider: 'deepseek', providerLabel: 'DeepSeek' },
+    verifiedModel('beta', 'local-lab', 'Local Lab', 'chat_only'),
+  ]
 
   function Harness() {
     const [open, setOpen] = useState(false)
-    const [selected, setSelected] = useState('alpha')
+    const [selection, setSelection] = useState({ name: 'alpha', provider: 'deepseek' })
     return React.createElement(ModelPicker, {
       open,
-      selectedModel: selected,
-      modelOptions: [
-        { name: 'alpha', provider: 'primary', providerLabel: 'Primary Cloud', contextWindow: 1_000_000 },
-        { name: 'beta', provider: 'local-lab', providerLabel: 'Local Lab', contextWindow: 200_000, contextWindowEstimated: true },
-      ],
+      modelOptions,
+      selectedModel: selection.name,
+      selectedModelProviderId: selection.provider,
       onOpen: () => setOpen(true),
       onClose: () => setOpen(false),
-      onSelect: (name) => {
-        selectedValues.push(name)
-        setSelected(name)
+      onSelect: (name, provider) => {
+        selectedValues.push([name, provider])
+        setSelection({ name, provider })
       },
       onManage: () => {},
-    })
-  }
-
-  await act(async () => root.render(React.createElement(Harness)))
-  const trigger = rootElement.querySelector('[data-testid="model-picker-trigger"]')
-  assert.equal(trigger.textContent.trim(), 'alpha')
-
-  await act(async () => trigger.click())
-  const panel = rootElement.querySelector('[data-testid="model-picker-panel"]')
-  const listbox = rootElement.querySelector('[role="listbox"]')
-  const options = [...rootElement.querySelectorAll('[data-testid="model-picker-option"]')]
-  const groups = [...rootElement.querySelectorAll('[data-testid="model-picker-group"]')]
-  assert.ok(panel)
-  assert.ok(listbox)
-  assert.equal(options.length, 2)
-  assert.equal(groups.length, 2)
-  assert.match(groups[0].textContent, /Primary Cloud/)
-  assert.match(groups[1].textContent, /Local Lab/)
-  assert.deepEqual(options.map((option) => option.textContent.includes('alpha') ? 'alpha' : 'beta'), ['alpha', 'beta'])
-  assert.match(options[0].textContent, /1M/)
-  assert.match(options[1].textContent, /~200K/)
-
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0))
-  })
-  assert.equal(dom.window.document.activeElement, options[0])
-
-  await act(async () => {
-    listbox.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
-  })
-  assert.equal(dom.window.document.activeElement, options[1])
-
-  await act(async () => {
-    listbox.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
-  })
-  assert.equal(dom.window.document.activeElement, options[0])
-
-  await act(async () => {
-    listbox.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'End', bubbles: true }))
-  })
-  assert.equal(dom.window.document.activeElement, options[1])
-
-  await act(async () => {
-    dom.window.document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-  })
-  assert.equal(rootElement.querySelector('[data-testid="model-picker-panel"]'), null)
-  assert.equal(dom.window.document.activeElement, trigger)
-
-  await act(async () => {
-    trigger.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-  })
-  assert.ok(rootElement.querySelector('[data-testid="model-picker-panel"]'))
-
-  const reopenedOptions = [...rootElement.querySelectorAll('[data-testid="model-picker-option"]')]
-  await act(async () => reopenedOptions[1].click())
-  assert.deepEqual(selectedValues, ['beta'])
-  assert.equal(rootElement.querySelector('[data-testid="model-picker-panel"]'), null)
-  assert.equal(rootElement.querySelector('[data-testid="model-picker-trigger"]').textContent.trim(), 'beta')
-
-  await act(async () => root.unmount())
-  dom.window.close()
-})
-
-test('model picker exposes an actionable unconfigured state without inventing a backend default', async () => {
-  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
-    url: 'http://localhost/',
-  })
-  globalThis.window = dom.window
-  globalThis.document = dom.window.document
-  globalThis.HTMLElement = dom.window.HTMLElement
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true
-
-  const rootElement = dom.window.document.getElementById('root')
-  const root = createRoot(rootElement)
-  let managed = 0
-
-  function Harness() {
-    const [open, setOpen] = useState(false)
-    return React.createElement(ModelPicker, {
-      open,
-      modelOptions: [],
-      modelReadiness: { kind: 'unconfigured', canSend: false },
-      selectedModel: '',
-      onOpen: () => setOpen(true),
-      onClose: () => setOpen(false),
-      onManage: () => { managed += 1 },
     })
   }
 
   try {
     await act(async () => root.render(React.createElement(Harness)))
     const trigger = rootElement.querySelector('[data-testid="model-picker-trigger"]')
-    assert.doesNotMatch(trigger.textContent, /backend default/i)
+    assert.equal(trigger.textContent.trim(), 'DeepSeek/alpha')
+
     await act(async () => trigger.click())
-    const configurationCard = rootElement.querySelector('[data-testid="model-picker-state-unconfigured"]')
-    assert.ok(configurationCard)
-    assert.equal(configurationCard.getAttribute('role'), 'alert')
-    assert.equal(rootElement.querySelectorAll('[data-testid="model-picker-manage"]').length, 1)
-    const manage = rootElement.querySelector('[data-testid="model-picker-manage"]')
-    assert.ok(manage)
-    await act(async () => manage.click())
-    assert.equal(managed, 1)
-  } finally {
-    await act(async () => root.unmount())
-    dom.window.close()
-  }
-})
+    await flushFocus()
+    const panel = rootElement.querySelector('[data-testid="model-picker-panel"]')
+    const modelRow = rootElement.querySelector('[data-testid="model-picker-model-row"]')
+    assert.equal(panel.dataset.modelPickerView, 'settings')
+    assert.match(modelRow.textContent, /模型/)
+    assert.match(modelRow.textContent, /DeepSeek\/alpha/)
+    assert.equal(document.activeElement, modelRow)
+    assert.equal(rootElement.querySelector('[role="listbox"]'), null)
+    assert.equal(rootElement.querySelector('[data-testid="model-picker-option"]'), null)
 
-test('model picker exposes retry for an authoritative catalog failure', async () => {
-  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
-    url: 'http://localhost/',
-  })
-  globalThis.window = dom.window
-  globalThis.document = dom.window.document
-  globalThis.HTMLElement = dom.window.HTMLElement
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+    await act(async () => modelRow.click())
+    await flushFocus()
+    const listbox = rootElement.querySelector('[role="listbox"]')
+    const groups = [...rootElement.querySelectorAll('[data-testid="model-picker-group"]')]
+    const options = [...rootElement.querySelectorAll('[data-testid="model-picker-option"]')]
+    assert.equal(panel.dataset.modelPickerView, 'catalog')
+    assert.deepEqual(groups.map((group) => group.firstElementChild.textContent.trim()), ['DeepSeek', 'Local Lab'])
+    assert.deepEqual(options.map((option) => option.textContent.trim()), ['alpha', 'preview', 'beta'])
+    assert.equal(document.activeElement, options[0])
+    assert.equal(options[0].getAttribute('aria-selected'), 'true')
+    assert.ok(options[0].classList.contains('bg-ink/[0.06]'))
 
-  const rootElement = dom.window.document.getElementById('root')
-  const root = createRoot(rootElement)
-  let retries = 0
-
-  try {
-    await act(async () => root.render(React.createElement(ModelPicker, {
-      open: true,
-      modelOptions: [],
-      modelReadiness: { kind: 'error', canSend: false, authoritative: true },
-      selectedModel: '',
-      onClose: () => {},
-      onManage: () => {},
-      onRetry: () => { retries += 1 },
-    })))
-
-    const errorCard = rootElement.querySelector('[data-testid="model-picker-state-error"]')
-    assert.ok(errorCard)
-    const retry = [...errorCard.querySelectorAll('button')]
-      .find((button) => button !== rootElement.querySelector('[data-testid="model-picker-manage"]'))
-    assert.ok(retry)
-    await act(async () => retry.click())
-    assert.equal(retries, 1)
-  } finally {
-    await act(async () => root.unmount())
-    dom.window.close()
-  }
-})
-
-test('model picker keeps the full catalog selectable when the current Provider is unverified or unavailable', async () => {
-  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
-    url: 'http://localhost/',
-  })
-  globalThis.window = dom.window
-  globalThis.document = dom.window.document
-  globalThis.HTMLElement = dom.window.HTMLElement
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true
-
-  const rootElement = dom.window.document.getElementById('root')
-  const root = createRoot(rootElement)
-  const selectedValues = []
-  const renderPicker = (kind) => React.createElement(ModelPicker, {
-    open: true,
-    modelOptions: [
-      { name: 'offline-model', provider: 'offline-provider', providerLabel: 'Offline Provider' },
-      { name: 'healthy-model', provider: 'healthy-provider', providerLabel: 'Healthy Provider' },
-    ],
-    modelReadiness: { kind, canSend: false },
-    selectedModel: 'offline-model',
-    selectedModelProviderId: 'offline-provider',
-    onClose: () => {},
-    onSelect: (name, provider) => selectedValues.push([name, provider]),
-    onManage: () => {},
-  })
-
-  try {
-    for (const kind of ['provider-unverified', 'provider-unavailable']) {
-      await act(async () => root.render(renderPicker(kind)))
-      assert.equal(rootElement.querySelector(`[data-testid="model-picker-state-${kind}"]`), null)
-      const visibleOptions = [...rootElement.querySelectorAll('[data-testid="model-picker-option"]')]
-      assert.equal(visibleOptions.length, 2)
-      assert.match(visibleOptions[0].textContent, /offline-model/)
-      assert.match(visibleOptions[1].textContent, /healthy-model/)
+    for (const testId of ['model-picker-search', 'model-picker-agent-only', 'model-picker-more', 'model-picker-manage', 'model-picker-readiness']) {
+      assert.equal(rootElement.querySelector(`[data-testid="${testId}"]`), null)
     }
+    assert.doesNotMatch(listbox.textContent, /1M|Agent 可用|未测试|更多模型/)
 
-    const options = [...rootElement.querySelectorAll('[data-testid="model-picker-option"]')]
-    await act(async () => options[1].click())
-    assert.deepEqual(selectedValues, [['healthy-model', 'healthy-provider']])
+    await act(async () => {
+      listbox.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    })
+    assert.equal(document.activeElement, options[1])
+    await act(async () => options[2].click())
+    assert.deepEqual(selectedValues, [['beta', 'local-lab']])
+    assert.equal(rootElement.querySelector('[data-testid="model-picker-panel"]'), null)
+    assert.equal(rootElement.querySelector('[data-testid="model-picker-trigger"]').textContent.trim(), 'Local Lab/beta')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
   }
 })
 
-test('model picker shows per-model readiness and disables only a verified unavailable model', async () => {
-  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
-    url: 'http://localhost/',
-  })
-  globalThis.window = dom.window
-  globalThis.document = dom.window.document
-  globalThis.HTMLElement = dom.window.HTMLElement
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true
-
-  const rootElement = dom.window.document.getElementById('root')
+test('model picker preserves provider order and shows every model without legacy disclosures', async () => {
+  const dom = installDom()
+  const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
-  const selectedValues = []
-  let managed = 0
-  const provider = {
-    provider: 'provider-id',
-    providerKey: 'provider-key',
-    providerLabel: 'Local Provider',
-    configRevision: 12,
-  }
-  const receipt = (readiness) => ({ configRevision: 12, ...readiness })
+  const modelOptions = [
+    verifiedModel('first', 'provider-a', 'Provider A'),
+    { name: 'untested', provider: 'provider-a', providerLabel: 'Provider A' },
+    verifiedModel('selected', 'provider-b', 'Provider B'),
+    verifiedModel('offline', 'provider-b', 'Provider B', 'unavailable'),
+  ]
 
   try {
     await act(async () => root.render(React.createElement(ModelPicker, {
       open: true,
-      selectedModel: 'agent-model',
-      selectedModelProviderId: 'provider-id',
-      modelReadiness: { kind: 'ready', canSend: true },
-      modelOptions: [
-        { ...provider, name: 'agent-model', readiness: receipt({ mode: 'agent', chat: true, tools: true, agent: true }) },
-        { ...provider, name: 'chat-model', readiness: receipt({ mode: 'chat_only', chat: true, tools: false, agent: false }) },
-        { ...provider, name: 'untested-model', readiness: null },
-        {
-          ...provider,
-          name: 'offline-model',
-          readiness: receipt({
-            mode: 'unavailable', chat: false, tools: false, agent: false,
-            error: 'internal upstream error: sk-secret-must-not-render',
-          }),
-        },
-      ],
+      modelOptions,
+      selectedModel: 'selected',
+      selectedModelProviderId: 'provider-b',
       onClose: () => {},
-      onSelect: (name, providerId) => selectedValues.push([name, providerId]),
-      onManage: () => { managed += 1 },
+      onSelect: () => {},
+      onManage: () => {},
     })))
-
+    await act(async () => rootElement.querySelector('[data-testid="model-picker-model-row"]').click())
+    const groups = [...rootElement.querySelectorAll('[data-testid="model-picker-group"]')]
     const options = [...rootElement.querySelectorAll('[data-testid="model-picker-option"]')]
-    assert.deepEqual(options.map((option) => option.dataset.readinessKind), [
-      'agent-ready', 'chat-only', 'untested', 'unavailable',
-    ])
-    assert.equal(rootElement.querySelectorAll('[data-testid="model-picker-readiness"]').length, 4)
-    assert.equal(options[0].disabled, false)
+    assert.deepEqual(groups.map((group) => group.firstElementChild.textContent.trim()), ['Provider A', 'Provider B'])
+    assert.deepEqual(options.map((option) => option.dataset.modelName), ['first', 'untested', 'selected', 'offline'])
     assert.equal(options[1].disabled, false)
-    assert.equal(options[2].disabled, false)
     assert.equal(options[3].disabled, true)
-    assert.doesNotMatch(rootElement.textContent, /sk-secret|internal upstream error/i)
+    assert.equal(rootElement.querySelector('[data-testid="model-picker-group-toggle"]'), null)
+    assert.equal(rootElement.querySelector('[data-testid="model-picker-more"]'), null)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
 
-    await act(async () => options[3].click())
-    assert.deepEqual(selectedValues, [])
-    await act(async () => options[1].click())
-    assert.deepEqual(selectedValues, [['chat-model', 'provider-id']])
+test('model picker keeps unavailable catalog states compact and actionable', async () => {
+  const dom = installDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  let managed = 0
+  let retried = 0
 
+  function Harness({ kind }) {
+    const [open, setOpen] = useState(true)
+    return React.createElement(ModelPicker, {
+      open,
+      modelOptions: [],
+      modelReadiness: { kind, canSend: false },
+      selectedModel: '',
+      onClose: () => setOpen(false),
+      onManage: () => { managed += 1 },
+      onRetry: () => { retried += 1 },
+    })
+  }
+
+  try {
+    await act(async () => root.render(React.createElement(Harness, { kind: 'error' })))
+    const state = rootElement.querySelector('[data-testid="model-picker-state-error"]')
+    assert.ok(state)
+    assert.equal(state.querySelector('p'), null)
+    assert.equal(rootElement.querySelector('[data-testid="model-picker-model-row"]'), null)
+    const retry = state.querySelector('[aria-label="重新读取"]')
+    await act(async () => retry.click())
+    assert.equal(retried, 1)
     await act(async () => rootElement.querySelector('[data-testid="model-picker-manage"]').click())
     assert.equal(managed, 1)
+    assert.equal(rootElement.querySelector('[data-testid="model-picker-panel"]'), null)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('Escape and outside pointer close the picker and restore trigger focus', async () => {
+  const dom = installDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+
+  function Harness() {
+    const [open, setOpen] = useState(false)
+    return React.createElement(ModelPicker, {
+      open,
+      modelOptions: [verifiedModel('alpha', 'primary', 'Primary')],
+      selectedModel: 'alpha',
+      selectedModelProviderId: 'primary',
+      onOpen: () => setOpen(true),
+      onClose: () => setOpen(false),
+      onSelect: () => {},
+      onManage: () => {},
+    })
+  }
+
+  try {
+    await act(async () => root.render(React.createElement(Harness)))
+    const trigger = rootElement.querySelector('[data-testid="model-picker-trigger"]')
+    await act(async () => trigger.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+    await flushFocus()
+    assert.ok(rootElement.querySelector('[data-testid="model-picker-model-row"]'))
+    await act(async () => document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    await flushFocus()
+    assert.equal(rootElement.querySelector('[data-testid="model-picker-panel"]'), null)
+    assert.equal(document.activeElement, trigger)
+
+    await act(async () => trigger.click())
+    await act(async () => document.body.dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true })))
+    assert.equal(rootElement.querySelector('[data-testid="model-picker-panel"]'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

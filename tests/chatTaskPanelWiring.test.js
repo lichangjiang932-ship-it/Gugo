@@ -16,10 +16,11 @@ test('chat split keeps task details out of the main chat surface', () => {
 test('chat keeps a real abort action without exposing the task strip', () => {
   const chatSource = readSourceTree('../src/pages/ChatSplit/')
   const chatEntrySource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const recoverySource = fs.readFileSync(new URL('../src/pages/ChatSplit/useChatTurnRecovery.js', import.meta.url), 'utf8')
   const viewSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatSplitView.jsx', import.meta.url), 'utf8')
   const detailSource = fs.readFileSync(new URL('../src/pages/TaskRunPanel.jsx', import.meta.url), 'utf8')
 
-  assert.match(chatEntrySource, /cancelTurnRun\(activeSessionId\)/)
+  assert.match(recoverySource, /cancelTurnRun\(activeSessionId\)/)
   assert.match(chatEntrySource, /onAbort=\{handleAbort\}/)
   assert.match(viewSource, /onAbort=\{onAbort\}/)
   assert.doesNotMatch(chatSource, /onAbortTask=\{handleAbortTask\}/)

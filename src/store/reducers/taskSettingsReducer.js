@@ -90,10 +90,6 @@ export function reduceTaskSettingsState(state, action) {
       return { ...state, accentColor: action.payload }
     }
 
-    case 'SET_STRONG_ACCENT': {
-      return { ...state, strongAccent: !!action.payload }
-    }
-
     case 'SET_FONT_SIZE': {
       return { ...state, fontSize: action.payload }
     }
@@ -166,7 +162,6 @@ export function reduceTaskSettingsState(state, action) {
       }
       if (typeof p.theme === 'string') next.theme = normalizeThemeMode(p.theme)
       if (typeof p.animationsEnabled === 'boolean') next.animationsEnabled = p.animationsEnabled
-      if (typeof p.strongAccent === 'boolean') next.strongAccent = p.strongAccent
       if (typeof p.inputHistoryNavigationEnabled === 'boolean') next.inputHistoryNavigationEnabled = p.inputHistoryNavigationEnabled
       if (Array.isArray(p.permissions)) {
         const incomingMap = new Map(p.permissions.map((perm) => [perm.id, !!perm.enabled]))

@@ -58,7 +58,7 @@ export function ToastProvider({ children }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="fixed top-20 right-4 z-40 flex w-[min(360px,calc(100vw-2rem))] flex-col gap-2 pointer-events-none" aria-live="polite" aria-relevant="additions">
+      <div className="toast-layer fixed top-20 right-4 flex w-[min(360px,calc(100vw-2rem))] flex-col gap-2 pointer-events-none" aria-live="polite" aria-relevant="additions">
         {toasts.map((toast) => (
           <ToastItem key={toast.id} toast={toast} onClose={() => removeToast(toast.id)} />
         ))}
@@ -71,11 +71,11 @@ function ToastItem({ toast, onClose }) {
   const Icon = ICONS[toast.type] || Info
   const tone =
     toast.type === 'success'
-      ? 'border-emerald-500/40 text-emerald-700'
+      ? 'border-success/40 text-success'
       : toast.type === 'warn'
-      ? 'border-amber-500/50 text-amber-700'
+      ? 'border-warning/50 text-warning'
       : toast.type === 'error'
-      ? 'border-red-500/45 text-red-700'
+      ? 'border-danger/45 text-danger'
       : 'border-cyan/40 text-cyan'
   return (
     <div className={`pointer-events-auto rounded-md border bg-paper shadow-lg px-3 py-2.5 flex items-start gap-2 ${tone}`}>

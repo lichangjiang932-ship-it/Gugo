@@ -86,13 +86,13 @@ const SEMANTIC_ICON_RULES = [
 ]
 
 const ICON_TONE_CLASSES = Object.freeze({
-  amber: 'bg-amber-500/10 text-amber-600 ring-amber-500/15',
-  blue: 'bg-blue-500/10 text-blue-600 ring-blue-500/15',
-  cyan: 'bg-cyan-500/10 text-cyan-600 ring-cyan-500/15',
-  emerald: 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/15',
-  indigo: 'bg-indigo-500/10 text-indigo-600 ring-indigo-500/15',
-  rose: 'bg-rose-500/10 text-rose-600 ring-rose-500/15',
-  violet: 'bg-violet-500/10 text-violet-600 ring-violet-500/15',
+  amber: 'bg-warning/10 text-warning ring-warning/15',
+  blue: 'bg-accent/10 text-accent-ink ring-accent/15',
+  cyan: 'bg-accent/10 text-accent-ink ring-accent/15',
+  emerald: 'bg-success/10 text-success ring-success/15',
+  indigo: 'bg-accent/10 text-accent-ink ring-accent/15',
+  rose: 'bg-danger/10 text-danger ring-danger/15',
+  violet: 'bg-accent/10 text-accent-ink ring-accent/15',
   neutral: 'bg-ink/[0.06] text-ink-soft ring-ink/10',
 })
 

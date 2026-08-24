@@ -24,7 +24,7 @@ export default function PersonaManifestEditor({ value, onChange, t }) {
             defaultValue={manifest.capabilityIds.join('\n')}
             onChange={(event) => update({ capabilityIds: splitPersonaManifestIds(event.target.value) })}
             rows={4}
-            className="w-full px-3 py-2 border border-ink/15 rounded bg-canvas text-ink text-sm font-mono"
+            className="w-full px-3 py-2 border border-ink/15 rounded bg-paper text-ink text-sm font-mono"
             placeholder={t('agents.capabilitiesPlaceholder')}
           />
         </div>
@@ -34,7 +34,7 @@ export default function PersonaManifestEditor({ value, onChange, t }) {
             defaultValue={manifest.recommendedConnectorIds.join('\n')}
             onChange={(event) => update({ recommendedConnectorIds: splitPersonaManifestIds(event.target.value) })}
             rows={4}
-            className="w-full px-3 py-2 border border-ink/15 rounded bg-canvas text-ink text-sm font-mono"
+            className="w-full px-3 py-2 border border-ink/15 rounded bg-paper text-ink text-sm font-mono"
             placeholder={t('agents.connectorsPlaceholder')}
           />
         </div>
@@ -44,7 +44,7 @@ export default function PersonaManifestEditor({ value, onChange, t }) {
         <select
           value={manifest.defaultPermissionMode}
           onChange={(event) => update({ defaultPermissionMode: event.target.value })}
-          className="w-full px-3 py-2 border border-ink/15 rounded bg-canvas text-ink text-sm"
+          className="w-full px-3 py-2 border border-ink/15 rounded bg-paper text-ink text-sm"
         >
           <option value="normal">{t('agents.permissionNormal')}</option>
           <option value="acceptEdits">{t('agents.permissionAcceptEdits')}</option>

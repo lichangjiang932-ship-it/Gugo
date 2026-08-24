@@ -134,6 +134,8 @@ function decisionView(row, { includeSnapshot = false } = {}) {
     },
     rollbackTarget: parseJson(row.rollback_target_json, {}),
     approverMode: row.approver_mode,
+    decisionOrigin: row.decision_origin || 'human_review',
+    automationRunId: row.automation_run_id || null,
     decisionFingerprint: row.decision_fingerprint,
     createdAt: row.created_at,
     ...(includeSnapshot ? { reviewSnapshot: parseJson(row.review_snapshot_json, {}) } : {}),
@@ -196,14 +198,32 @@ export function decideEvolutionApproval({
   decision: decisionValue,
   reason: reasonValue,
   confirmations: confirmationValue,
+  decisionOrigin = 'human_review',
+  automationRunId = null,
   now = Date.now(),
 } = {}) {
   const owner = ownerId(userId)
   const decision = normalizedDecision(decisionValue)
   const reason = requiredReason(reasonValue)
   const linked = linkedReview({ userId: owner, evaluationId })
+  const origin = decisionOrigin === 'automatic_policy' ? 'automatic_policy' : 'human_review'
+  const automaticRunId = origin === 'automatic_policy' ? String(automationRunId || '').trim() : null
+  if (origin === 'automatic_policy') {
+    const automationRun = automaticRunId && getDb().prepare(`
+      SELECT 1 FROM evolution_auto_runs
+      WHERE id = ? AND user_id = ? AND state = 'running'
+    `).get(automaticRunId, owner)
+    if (!automationRun || decision !== 'approved'
+      || linked.candidate.target !== 'prompt:workspace-instructions') {
+      throw serviceError(
+        'EVOLUTION_AUTOMATIC_APPROVAL_INVALID',
+        'automatic approval requires an active workspace-prompt automation run',
+        409,
+      )
+    }
+  }
   if (existingDecision(owner, linked.evaluation.id)) {
-    throw serviceError('EVOLUTION_APPROVAL_ALREADY_DECIDED', 'evaluation already has an immutable human decision', 409)
+    throw serviceError('EVOLUTION_APPROVAL_ALREADY_DECIDED', 'evaluation already has an immutable decision', 409)
   }
   if (decision === 'approved' && !linked.eligibility.canApprove) {
     const code = linked.eligibility.issues.includes('permission_change_unsupported')
@@ -272,6 +292,8 @@ export function decideEvolutionApproval({
     rollbackTarget: linked.rollbackTarget,
     reviewSnapshot,
     approverMode: 'local_owner_loopback',
+    decisionOrigin: origin,
+    automationRunId: automaticRunId,
     createdAt,
   })
   try {
@@ -280,8 +302,8 @@ export function decideEvolutionApproval({
         id, user_id, evaluation_id, replay_id, candidate_id, decision, reason,
         candidate_sha256, replay_fingerprint, evaluation_fingerprint,
         rollback_baseline_sha256, rollback_target_json, review_snapshot_json,
-        approver_mode, decision_fingerprint, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local_owner_loopback', ?, ?)
+        approver_mode, decision_origin, automation_run_id, decision_fingerprint, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local_owner_loopback', ?, ?, ?, ?)
     `).run(
       id,
       owner,
@@ -296,16 +318,43 @@ export function decideEvolutionApproval({
       confirmations.rollbackBaselineSha256,
       JSON.stringify(linked.rollbackTarget),
       JSON.stringify(reviewSnapshot),
+      origin,
+      automaticRunId,
       decisionFingerprint,
       createdAt,
     )
   } catch (error) {
     if (/UNIQUE constraint failed/iu.test(String(error?.message || ''))) {
-      throw serviceError('EVOLUTION_APPROVAL_ALREADY_DECIDED', 'evaluation already has an immutable human decision', 409)
+      throw serviceError('EVOLUTION_APPROVAL_ALREADY_DECIDED', 'evaluation already has an immutable decision', 409)
     }
     throw error
   }
   return getEvolutionApprovalDecision({ userId: owner, id })
+}
+
+export function decideEvolutionAutomaticApproval({
+  userId,
+  evaluationId,
+  automationRunId,
+  now = Date.now(),
+} = {}) {
+  const owner = ownerId(userId)
+  const linked = linkedReview({ userId: owner, evaluationId })
+  const existing = existingDecision(owner, linked.evaluation.id)
+  if (existing?.decisionOrigin === 'automatic_policy'
+    && existing.automationRunId === String(automationRunId || '').trim()) {
+    return existing
+  }
+  return decideEvolutionApproval({
+    userId: owner,
+    evaluationId: linked.evaluation.id,
+    decision: 'approved',
+    reason: 'Automatically approved by the explicitly enabled workspace-prompt policy after independent replay validation.',
+    confirmations: linked.confirmations,
+    decisionOrigin: 'automatic_policy',
+    automationRunId,
+    now,
+  })
 }
 
 export function getEvolutionApprovalDecision({ userId, id } = {}) {

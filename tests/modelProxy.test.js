@@ -1049,8 +1049,26 @@ test('loads a multi-provider model catalog', () => {
       contextWindowVerifiedAt: '2026-08-15',
       maxOutputTokens: 384_000,
     },
-    { name: 'mimo-v2.5', active: false, provider: 'mimo', contextWindow: 128_000, contextWindowSource: 'cloud_default', contextWindowEstimated: true },
-    { name: 'mimo-v2.5-pro', active: false, provider: 'mimo', contextWindow: 128_000, contextWindowSource: 'cloud_default', contextWindowEstimated: true },
+    {
+      name: 'mimo-v2.5',
+      active: false,
+      provider: 'mimo',
+      contextWindow: 1_000_000,
+      contextWindowSource: 'official_catalog',
+      contextWindowEstimated: false,
+      contextWindowSourceUrl: 'https://platform.xiaomimimo.com/',
+      contextWindowVerifiedAt: '2026-08-15',
+    },
+    {
+      name: 'mimo-v2.5-pro',
+      active: false,
+      provider: 'mimo',
+      contextWindow: 1_000_000,
+      contextWindowSource: 'official_catalog',
+      contextWindowEstimated: false,
+      contextWindowSourceUrl: 'https://platform.xiaomimimo.com/',
+      contextWindowVerifiedAt: '2026-08-15',
+    },
   ])
   assert.equal(JSON.stringify(status).includes('sk-deepseek'), false)
   assert.equal(JSON.stringify(status).includes('sk-mimo'), false)

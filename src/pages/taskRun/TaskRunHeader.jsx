@@ -2,11 +2,11 @@ import { describeTaskModelReadiness } from './taskModelReadiness.js'
 
 const MODEL_READINESS_TONE = Object.freeze({
   loading: 'border-ink-fade/40 bg-paper-2 text-ink-soft',
-  unconfigured: 'border-amber-400/60 bg-amber-50 text-amber-900',
-  untested: 'border-amber-400/60 bg-amber-50 text-amber-900',
-  'chat-only': 'border-amber-400/60 bg-amber-50 text-amber-900',
-  'agent-ready': 'border-emerald-400/60 bg-emerald-50 text-emerald-900',
-  unavailable: 'border-rose-400/60 bg-rose-50 text-rose-900',
+  unconfigured: 'border-warning/60 bg-warning/5 text-warning',
+  untested: 'border-warning/60 bg-warning/5 text-warning',
+  'chat-only': 'border-warning/60 bg-warning/5 text-warning',
+  'agent-ready': 'border-success/60 bg-success/5 text-success',
+  unavailable: 'border-danger/60 bg-danger/5 text-danger',
 })
 
 export default function TaskRunHeader({
@@ -53,7 +53,7 @@ export default function TaskRunHeader({
         </button>
       </div>
       {error && (
-        <div className="mt-2 flex items-center gap-2 text-xs text-red-600" role="alert">
+        <div className="mt-2 flex items-center gap-2 text-xs text-danger" role="alert">
           <span>{error}</span>
           {errorAction === 'configure_model' && (
             <button type="button" onClick={onConfigureModels} className="shrink-0 font-medium underline underline-offset-2">

@@ -1,16 +1,15 @@
 import { X } from 'lucide-react'
+import Modal from '../../components/Modal.jsx'
 
 export default function ImportSkillModal({ market, t }) {
   const { preview, error, busy } = market.importState
   if (!preview && !error) return null
   return (
-    <div className="fixed inset-0 bg-ink/40 flex items-center justify-center z-50 p-4" onClick={market.closeImport}>
-      <div role="dialog" aria-modal="true" className="bg-paper border border-ink rounded-md p-6 w-full max-w-lg flex flex-col gap-4" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between"><h2 className="font-semibold text-xl text-ink">{t('skillsMarket.importPack')}</h2><button type="button" onClick={market.closeImport} className="text-ink-fade hover:text-ink" aria-label={t('skillsMarket.close')}><X className="w-4 h-4" /></button></div>
+    <Modal onClose={market.closeImport} ariaLabelledby="import-skill-modal-title" className="max-w-lg p-6 flex flex-col gap-4">
+        <div className="flex items-center justify-between"><h2 id="import-skill-modal-title" className="font-semibold text-xl text-ink">{t('skillsMarket.importPack')}</h2><button type="button" onClick={market.closeImport} className="text-ink-fade hover:text-ink" aria-label={t('skillsMarket.close')}><X className="w-4 h-4" /></button></div>
         {error ? <div className="p-3 border border-danger/35 bg-danger/5 rounded-md text-sm text-danger">{error}</div> : <Preview preview={preview} t={t} />}
-        <div className="flex gap-2 justify-end"><button type="button" onClick={market.closeImport} className="h-9 px-4 border border-ink/40 rounded-md font-semibold text-sm text-ink-soft hover:border-ink">{t('skillsMarket.cancel')}</button>{!error && <button type="button" onClick={market.confirmImport} disabled={busy} className="h-9 px-4 bg-accent text-accent-contrast rounded-md font-semibold text-sm hover:bg-accent/90 disabled:opacity-40">{busy ? t('skillsMarket.importing') : t('skillsMarket.confirmImport')}</button>}</div>
-      </div>
-    </div>
+        <div className="flex gap-2 justify-end"><button type="button" onClick={market.closeImport} className="btn-ghost">{t('skillsMarket.cancel')}</button>{!error && <button type="button" onClick={market.confirmImport} disabled={busy} className="btn-primary">{busy ? t('skillsMarket.importing') : t('skillsMarket.confirmImport')}</button>}</div>
+    </Modal>
   )
 }
 

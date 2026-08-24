@@ -118,6 +118,7 @@ export function createTurnStartRuntime({
   claimLegacySession,
   lastEvent,
   resolveModelBinding,
+  resolveProjectDirectory = null,
   now,
   writeSession,
   readMessages,
@@ -134,6 +135,9 @@ export function createTurnStartRuntime({
     claimLegacySession: requirePort('claimLegacySession', claimLegacySession),
     lastEvent: requirePort('lastEvent', lastEvent),
     resolveModelBinding: requirePort('resolveModelBinding', resolveModelBinding),
+    resolveProjectDirectory: typeof resolveProjectDirectory === 'function'
+      ? resolveProjectDirectory
+      : () => ({ workspacePath: null, projectDirectory: null, defaultOutputDirectory: null }),
     now: requirePort('now', now),
     writeSession: requirePort('writeSession', writeSession),
     readMessages: requirePort('readMessages', readMessages),
@@ -152,6 +156,7 @@ export function createTurnStartRuntime({
       turnId,
       content,
       displayContent = null,
+      workspacePath = '',
       modelName = null,
       modelProviderId = null,
       modelConfigRevision = null,
@@ -202,6 +207,12 @@ export function createTurnStartRuntime({
         modelMode: normalizedModelMode,
         requirePersistedBinding: false,
       })
+      const turnDirectory = await ports.resolveProjectDirectory({ userId, workspacePath }) || {}
+      const normalizedWorkspacePath = String(turnDirectory.workspacePath || '').trim() || null
+      const projectDirectory = String(turnDirectory.projectDirectory || '').trim() || null
+      const defaultOutputDirectory = String(
+        turnDirectory.defaultOutputDirectory || projectDirectory || '',
+      ).trim() || null
       // A local-auth caller may still own a chat created under its legacy user
       // identity. Claiming it rewrites ownership and enqueues content outbox
       // events, so it must happen only after the model binding preflight has
@@ -324,6 +335,10 @@ export function createTurnStartRuntime({
           toolsConfig: normalizedToolsConfig,
           intentMode: normalizedIntentMode,
           ...(normalizedApprovalMode ? { approvalMode: normalizedApprovalMode } : {}),
+          ...(projectDirectory ? {
+            workspacePath: normalizedWorkspacePath,
+            projectDirectory,
+          } : {}),
           userMessageId,
           attachments: managedAttachments,
           importedHistoryCount: safeHistory.length,
@@ -382,6 +397,8 @@ export function createTurnStartRuntime({
           toolsConfig: normalizedToolsConfig,
           intentMode: normalizedIntentMode,
           approvalMode: normalizedApprovalMode,
+          projectDirectory,
+          defaultOutputDirectory,
         },
       }
     },

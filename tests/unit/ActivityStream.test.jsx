@@ -5,12 +5,21 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
 import ActivityStream from '../../src/pages/ChatSplit/chatMessages/ActivityStream.jsx'
 
-function render(msg) {
-  return renderToStaticMarkup(
-    <I18nProvider>
-      <ActivityStream msg={msg} />
-    </I18nProvider>,
-  )
+function render(msg, language = 'en') {
+  const previousWindow = globalThis.window
+  const hadWindow = Object.hasOwn(globalThis, 'window')
+  const storage = { getItem: (key) => key === 'lang' ? language : null }
+  globalThis.window = { localStorage: storage }
+  try {
+    return renderToStaticMarkup(
+      <I18nProvider>
+        <ActivityStream msg={msg} />
+      </I18nProvider>,
+    )
+  } finally {
+    if (hadWindow) globalThis.window = previousWindow
+    else delete globalThis.window
+  }
 }
 
 test('readiness shows the tool being prepared without creating a tool trace', () => {
@@ -36,6 +45,17 @@ test('pure reasoning keeps a compact status and never exposes raw text', () => {
   assert.doesNotMatch(markup, />0s</)
   assert.match(markup, /reasoning through the next step/)
   assert.doesNotMatch(markup, /secret chain of thought/)
+})
+
+test('completed reasoning keeps a compact safe summary without exposing raw text', () => {
+  const markup = render({
+    content: 'Final answer.',
+    meta: { streaming: false, reasoning: 'private reasoning payload' },
+  })
+  assert.match(markup, /data-state="complete"/)
+  assert.match(markup, /Thought through/)
+  assert.doesNotMatch(markup, /private reasoning payload/)
+  assert.doesNotMatch(markup, /data-testid="live-elapsed"/)
 })
 
 test('model heartbeat phases explain cold start and temporary stream idle', () => {
@@ -83,7 +103,7 @@ test('provider fallback renders a retry/switch notice line', () => {
     meta: { streaming: true, modelFallback: { kind: 'failover', from: 'primary', to: 'backup', modelName: 'm1' } },
   })
   assert.match(failover, /data-testid="model-fallback"/)
-  assert.match(failover, /Switched provider/)
+  assert.match(failover, /Switched model provider/)
   assert.match(failover, /backup/)
 
   const retry = render({
@@ -112,4 +132,18 @@ test('reconnection status overrides a stale running tool state', () => {
   })
   assert.match(markup, /data-testid="model-activity"/)
   assert.match(markup, /Reconnecting/)
+})
+
+test('activity status follows all five supported UI languages', () => {
+  const expected = {
+    zh: '模型正在思考下一步…',
+    en: 'Model is reasoning through the next step…',
+    ja: 'モデルが次のステップを検討中…',
+    ko: '모델이 다음 단계를 검토하는 중…',
+    'zh-TW': '模型正在思考下一步…',
+  }
+  for (const [language, copy] of Object.entries(expected)) {
+    const markup = render({ meta: { streaming: true, modelActivity: { kind: 'reasoning' } } }, language)
+    assert.match(markup, new RegExp(copy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), language)
+  }
 })

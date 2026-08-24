@@ -8,44 +8,9 @@ import ProviderList from './modelProviders/ProviderList.jsx'
 import { formatProviderError } from './modelProviders/providerError.js'
 import {
   emptyProvider, findConfiguredPresetProvider, mergeDiscoveredModelProfiles, normalizeEditorModelProfiles, numberOrNull,
-  providerBaseUrlError, providerHasCredentials, providerHeadersError, providerKeyError, providerLabelError, providerModelsError,
-  providerNumericFieldError, PROVIDER_PRESETS, resolveProviderDefaultModel, selectToTribool, toEditor,
+  providerBaseUrlError, PROVIDER_PRESETS, resolveProviderDefaultModel, selectToTribool, toEditor,
 } from './modelProviders/providerConfig.js'
-
-function requiredFieldError(label, t) {
-  const template = String(t('modelProviders.baseUrlErrorRequired'))
-  return template.includes('Base URL') ? template.replaceAll('Base URL', label) : `${label}: ${template}`
-}
-
-function providerKeyErrorMessage(code, t) {
-  if (!code) return ''
-  if (code === 'required') return requiredFieldError('Provider ID', t)
-  return 'Provider ID · a-z first · a-z / 0-9 / _ / - · 1–40'
-}
-
-function numericFieldErrorMessage(error, label, t) {
-  if (!error) return ''
-  if (error.reason === 'min') return t('modelProviders.numericErrorMin', { field: label, min: error.min })
-  if (error.reason === 'max' || error.reason === 'safeInteger') {
-    return t('modelProviders.numericErrorMax', { field: label, max: error.max })
-  }
-  return t('modelProviders.numericErrorInteger', { field: label })
-}
-
-function readinessFromTestResult(result, modelName) {
-  return result?.readiness
-    || result?.provider?.modelReadiness?.[modelName]
-    || (result?.provider?.defaultModel === modelName ? result?.provider?.readiness : null)
-    || result?.capabilities
-    || null
-}
-
-function isAgentReady(readiness) {
-  return readiness?.mode === 'agent'
-    && readiness.chat === true
-    && readiness.tools === true
-    && readiness.agent === true
-}
+import { buildProviderValidation, isAgentReady, readinessFromTestResult } from './modelProviders/providerPanelValidation.js'
 
 export default function ModelProvidersPanel({ onChanged, onReady }) {
   const { t } = useT()
@@ -62,40 +27,10 @@ export default function ModelProvidersPanel({ onChanged, onReady }) {
     setDetecting(false)
     setEditing(next)
   }, [])
-  const selectedPreset = editing ? PROVIDER_PRESETS.find((preset) => preset.id === editing.presetId) : null
-  const isLocalPreset = selectedPreset?.local === true
-  const keyErrorCode = editing ? providerKeyError(editing.key) : ''
-  const labelErrorCode = editing ? providerLabelError(editing.label) : ''
-  const baseUrlErrorCode = editing ? providerBaseUrlError(editing.baseUrl) : ''
-  const modelsErrorCode = editing ? providerModelsError(editing.modelsText) : ''
-  const headersErrorCode = editing ? providerHeadersError(editing.headersText) : ''
-  const keyError = providerKeyErrorMessage(keyErrorCode, t)
-  const labelError = labelErrorCode ? requiredFieldError(t('modelProviders.name'), t) : ''
-  const baseUrlError = baseUrlErrorCode ? t(`modelProviders.baseUrlError${baseUrlErrorCode[0].toUpperCase()}${baseUrlErrorCode.slice(1)}`) : ''
-  const modelsError = modelsErrorCode ? requiredFieldError(t('modelProviders.models'), t) : ''
-  const headersError = headersErrorCode ? t(`modelProviders.headersError${headersErrorCode[0].toUpperCase()}${headersErrorCode.slice(1)}`) : ''
-  const contextWindowError = editing
-    ? numericFieldErrorMessage(providerNumericFieldError(editing.contextWindow, 'contextWindow'), t('modelProviders.contextWindow'), t)
-    : ''
-  const firstTokenTimeoutError = editing
-    ? numericFieldErrorMessage(providerNumericFieldError(editing.firstTokenTimeoutMs, 'firstTokenTimeoutMs'), t('modelProviders.firstTokenTimeout'), t)
-    : ''
-  const idleTimeoutError = editing
-    ? numericFieldErrorMessage(providerNumericFieldError(editing.idleTimeoutMs, 'idleTimeoutMs'), t('modelProviders.idleTimeout'), t)
-    : ''
-  const modelContextErrors = editing ? Object.fromEntries(
-    [...new Set(String(editing.modelsText || '').split(/[\n,]/).map((model) => model.trim()).filter(Boolean))]
-      .flatMap((model) => {
-        const error = providerNumericFieldError(editing.modelProfiles?.[model]?.contextWindow, 'contextWindow')
-        const message = numericFieldErrorMessage(error, `${model} · ${t('modelProviders.contextWindow')}`, t)
-        return message ? [[model, message]] : []
-      }),
-  ) : {}
-  const numericValidationError = contextWindowError || firstTokenTimeoutError || idleTimeoutError
-    || Object.values(modelContextErrors)[0] || ''
-  const hasCredentials = providerHasCredentials(editing)
-  const canSave = Boolean(editing && !keyErrorCode && !labelErrorCode && !baseUrlErrorCode && !modelsErrorCode && !headersErrorCode && !numericValidationError
-    && (isLocalPreset || editing?.presetId === 'custom' || hasCredentials))
+  const {
+    baseUrlError, canSave, contextWindowError, firstTokenTimeoutError, hasCredentials,
+    headersError, idleTimeoutError, keyError, labelError, modelContextErrors, modelsError, numericValidationError,
+  } = buildProviderValidation(editing, t)
 
   const notifyChanged = () => {
     onChanged?.()
@@ -163,64 +98,56 @@ export default function ModelProvidersPanel({ onChanged, onReady }) {
       // best-effort list refresh so other model consumers never retain a stale
       // catalog merely because the follow-up GET failed.
       notifyChanged()
-      if (typeof onReady === 'function') {
-        const savedProvider = saved?.provider || null
-        const providerId = savedProvider?.id || editing.id || existingPresetProvider?.id || ''
-        const testedModel = savedProvider?.defaultModel || defaultModel
-        setMessage(t('modelProviders.savedTesting'))
-        setDiagnostics({ providerId, modelName: testedModel, running: true, steps: [], profile: null })
-        try {
-          if (!providerId || !testedModel) throw new Error(t('modelProviders.savedTestFailed'))
-          const data = await testModelProvider(providerId, testedModel)
-          const readiness = readinessFromTestResult(data, testedModel)
-          setDiagnostics({
-            providerId,
-            modelName: data.modelName || testedModel,
-            running: false,
-            ok: data.ok,
-            steps: data.steps || [],
-            profile: data.profile || null,
-          })
-          notifyChanged()
-          try {
-            await reload()
-          } catch {
-            // The test response is authoritative; a list refresh failure must
-            // not turn a persisted readiness receipt back into "untested".
-          }
-          if (isAgentReady(readiness)) {
-            setMessage(t('modelProviders.savedReady'))
-            onReady({
-              provider: data.provider || savedProvider,
-              modelName: data.modelName || testedModel,
-              readiness,
-            })
-          } else {
-            setMessage(t(readiness?.mode === 'chat_only'
-              ? 'modelProviders.savedChatOnly'
-              : 'modelProviders.savedTestFailed'))
-          }
-        } catch (error) {
-          setDiagnostics({
-            providerId,
-            modelName: testedModel,
-            running: false,
-            ok: false,
-            steps: error?.payload?.steps || [],
-            profile: error?.payload?.profile || null,
-            error: formatProviderError(error, t),
-          })
-          notifyChanged()
-          try { await reload() } catch { /* keep the saved provider and diagnostics visible */ }
-          setMessage(`${t('modelProviders.savedTestFailed')} ${formatProviderError(error, t)}`)
-        }
-        return
-      }
+      const savedProvider = saved?.provider || null
+      const providerId = savedProvider?.id || editing.id || existingPresetProvider?.id || ''
+      const testedModel = savedProvider?.defaultModel || defaultModel
+      setMessage(t('modelProviders.savedTesting'))
       try {
-        await reload()
-        setMessage(t('modelProviders.saved'))
+        if (!providerId || !testedModel) throw new Error(t('modelProviders.savedTestFailed'))
+        const data = await testModelProvider(providerId, testedModel)
+        const readiness = readinessFromTestResult(data, testedModel)
+        const nextDiagnostics = {
+          providerId,
+          modelName: data.modelName || testedModel,
+          running: false,
+          ok: data.ok,
+          steps: data.steps || [],
+          profile: data.profile || null,
+        }
+        notifyChanged()
+        try {
+          await reload()
+        } catch {
+          // The test response is authoritative; a list refresh failure must
+          // not turn a persisted readiness receipt back into "untested".
+        }
+        if (isAgentReady(readiness)) {
+          setDiagnostics(null)
+          setMessage(t('modelProviders.savedReady'))
+          onReady?.({
+            provider: data.provider || savedProvider,
+            modelName: data.modelName || testedModel,
+            readiness,
+          })
+        } else {
+          setDiagnostics(nextDiagnostics)
+          setMessage(t(readiness?.mode === 'chat_only'
+            ? 'modelProviders.savedChatOnly'
+            : 'modelProviders.savedTestFailed'))
+        }
       } catch (error) {
-        setMessage(`${t('modelProviders.saved')} ${formatProviderError(error, t)}`)
+        setDiagnostics({
+          providerId,
+          modelName: testedModel,
+          running: false,
+          ok: false,
+          steps: error?.payload?.steps || [],
+          profile: error?.payload?.profile || null,
+          error: formatProviderError(error, t),
+        })
+        notifyChanged()
+        try { await reload() } catch { /* keep the saved provider and diagnostics visible */ }
+        setMessage(`${t('modelProviders.savedTestFailed')} ${formatProviderError(error, t)}`)
       }
     } catch (error) { setMessage(formatProviderError(error, t)) } finally { setBusy(false) }
   }
@@ -316,13 +243,13 @@ export default function ModelProvidersPanel({ onChanged, onReady }) {
     <div className="flex items-start gap-3">
       <Server className="w-4 h-4 text-accent-ink mt-0.5" />
       <div className="flex-1"><div className="text-sm font-semibold text-ink">{t('modelProviders.title')}</div><div className="text-xs text-ink-fade mt-0.5">{t('modelProviders.subtitle')}</div></div>
-      <button type="button" onClick={() => updateEditing({ ...emptyProvider(), presetId: 'custom' })} className="h-8 px-3 bg-ink text-paper rounded-md text-xs flex items-center gap-1"><Plus className="w-3.5 h-3.5" />{t('modelProviders.add')}</button>
+      <button type="button" onClick={() => updateEditing(emptyProvider())} className="h-8 px-3 bg-ink text-paper rounded-md text-xs flex items-center gap-1"><Plus className="w-3.5 h-3.5" />{t('modelProviders.add')}</button>
     </div>
-    <div data-testid="model-provider-byok-notice" className="rounded-md border border-accent-ink/20 bg-accent-ink/5 px-3 py-2 text-xs leading-relaxed text-ink-soft">{t('modelProviders.byokNotice')}</div>
     <ProviderList providers={providers} busy={busy} onTest={test} onEdit={(provider) => updateEditing(toEditor(provider))} onRemove={remove} t={t} />
     {message && <div className="text-xs text-ink-soft border border-ink/10 rounded-md p-2">{message}</div>}
     <ProviderDiagnostics diagnostics={diagnostics} onClose={() => setDiagnostics(null)} t={t} />
     {editing && <ProviderEditor
+      key={`${editing.id || 'new'}:${editing.presetId || 'picker'}`}
       editing={editing} setEditing={updateEditing} providers={providers} busy={busy} detecting={detecting} canSave={canSave}
       hasCredentials={hasCredentials}
       keyError={keyError} labelError={labelError} baseUrlError={baseUrlError} modelsError={modelsError} headersError={headersError}

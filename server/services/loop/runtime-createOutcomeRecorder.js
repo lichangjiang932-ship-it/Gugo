@@ -3,7 +3,7 @@ import { assertRuntimeStage } from './runtimeContract.js'
 export async function createOutcomeRecorder(s) {
   assertRuntimeStage(s, 'create-outcome-recorder')
   const i = s.iteration
-  const { AVAILABLE_TOOL_CAPABILITIES_MARKER, COMMAND_EXECUTION_TOOL_NAMES, DYNAMIC_EXECUTION_TOOL_RECOVERY_MARKER, DYNAMIC_MUTATION_TOOL_NAMES, PATCH_WRITE_TOOL_NAMES, PROJECT_SCOPE_TARGET, SCHEDULED_WAIT_INTENT, VERIFICATION_TOOLS, buildToolResultMessageBundle, clearVerifiedDeletionTargets, clearVerifiedMutationTargets, extractMutationTargets, hasCommandExecutionTool, installAttemptSignature, isCommandExecutionTool, isExplorationOnlyCall, isFileArtifactTool, isLocalMutationCall, isMutationExecutionCall, isProductiveExecutionOutcome, isSubstantiveToolCall, isSuccessfulPdfLayoutVerification, isSuccessfulToolResult, isVerificationCall, looksLikeDeletionCommand, normalizeArtifactIdList, normalizeMutationTarget, normalizeToolResult, persistLocalToolArtifactsAsync, progressChangesFor, recordToolProgress, replaceRuntimeCapabilityBlock, shouldRequirePdfLayoutVerification, staticDeletionTargets, targetsMatch, toolNameFromSpec } = s.d
+  const { AVAILABLE_TOOL_CAPABILITIES_MARKER, COMMAND_EXECUTION_TOOL_NAMES, DYNAMIC_EXECUTION_TOOL_RECOVERY_MARKER, DYNAMIC_MUTATION_TOOL_NAMES, PATCH_WRITE_TOOL_NAMES, PROJECT_SCOPE_TARGET, SCHEDULED_WAIT_INTENT, VERIFICATION_TOOLS, buildToolResultMessageBundle, clearArtifactValidatedMutationTargets, clearVerifiedDeletionTargets, clearVerifiedMutationTargets, extractMutationTargets, hasCommandExecutionTool, installAttemptSignature, isCommandExecutionTool, isExplorationOnlyCall, isFileArtifactTool, isLocalMutationCall, isMutationExecutionCall, isProductiveExecutionOutcome, isSubstantiveToolCall, isSuccessfulPdfLayoutVerification, isSuccessfulToolResult, isVerificationCall, looksLikeDeletionCommand, normalizeArtifactIdList, normalizeMutationTarget, normalizeToolResult, persistLocalToolArtifactsAsync, progressChangesFor, recordToolProgress, replaceRuntimeCapabilityBlock, shouldRequirePdfLayoutVerification, staticDeletionTargets, targetsMatch, toolNameFromSpec } = s.d
   i.recordOutcome = async (outcome) => {
         outcome.result = normalizeToolResult(outcome.result)
         const succeeded = isSuccessfulToolResult(outcome.result)
@@ -24,6 +24,10 @@ export async function createOutcomeRecorder(s) {
           const publicationFailures = Array.isArray(localArtifacts.publicationFailures)
             ? localArtifacts.publicationFailures
             : []
+          const artifactValidationReceipts = Array.isArray(localArtifacts.verificationReceipts)
+            ? localArtifacts.verificationReceipts
+            : []
+          outcome.artifactValidationReceipts = artifactValidationReceipts
           if (localArtifacts.length > 0) {
             outcome.artifactId = localArtifacts[0].id
             outcome.artifactIds = localArtifacts.map((artifact) => artifact.id)
@@ -34,20 +38,33 @@ export async function createOutcomeRecorder(s) {
               filename: localArtifacts[0].filename,
               url: localArtifacts[0].url,
               artifacts: outcome.artifacts,
+              ...(artifactValidationReceipts.length > 0 ? {
+                artifactValidation: {
+                  ok: true,
+                  receipts: artifactValidationReceipts,
+                },
+              } : {}),
             }
           }
           if (publicationFailures.length > 0) {
+            const validationOnly = publicationFailures.every(
+              (failure) => failure.code === 'artifact_validation_failed',
+            )
             outcome.result = {
               ...outcome.result,
               artifactPublication: {
                 ok: false,
-                code: 'artifact_publication_failed',
+                code: validationOnly ? 'artifact_validation_failed' : 'artifact_publication_failed',
                 status: localArtifacts.length > 0 ? 'partial' : 'failed',
                 retryable: publicationFailures.some((failure) => failure.retryable === true),
-                message: localArtifacts.length > 0
-                  ? 'Some local outputs could not be added to the managed artifact store.'
-                  : 'The local output was created, but no downloadable artifact could be published.',
-                guidance: 'Do not rerun the source tool automatically; verify its real side effects first.',
+                message: validationOnly
+                  ? 'The local output was created, but its binary structure is invalid.'
+                  : localArtifacts.length > 0
+                    ? 'Some local outputs could not be added to the managed artifact store.'
+                    : 'The local output was created, but no downloadable artifact could be published.',
+                guidance: validationOnly
+                  ? 'Regenerate the exact invalid output with a new producing tool call before delivery.'
+                  : 'Do not rerun the source tool automatically; verify its real side effects first.',
                 failures: publicationFailures,
               },
             }
@@ -190,6 +207,24 @@ export async function createOutcomeRecorder(s) {
               s.auxiliaryMutationTargets.add(pending)
             }
           }
+          const artifactValidatedMutation = clearArtifactValidatedMutationTargets(
+            s.pendingMutationTargets,
+            outcome.artifactValidationReceipts,
+            {
+              userId: s.job?.userId,
+              sessionId: s.job?.sessionId,
+              turnId: s.job?.id,
+              jobId: s.job?.id,
+              stepId: s.step?.id,
+            },
+          )
+          if (artifactValidatedMutation) {
+            s.loopGuard.markProgress?.()
+            if (s.recoveredMutationVerificationPending && !s.hasPendingMutationVerification()) {
+              s.verifiedRecoveredMutationObserved = true
+              s.recoveredMutationVerificationPending = false
+            }
+          }
           s.localHtmlDeliveryValidationPending = s.localHtmlDeliveryTargets.size > 0
           s.mutationVerificationRetries = 0
         } else if (succeeded && s.hasPendingMutationVerification() && isVerificationCall(executedCall)) {
@@ -242,15 +277,29 @@ export async function createOutcomeRecorder(s) {
         const artifactOutcomeVerified = succeeded
           && requiredArtifactDeliverySatisfied
           && isFileArtifactTool(outcome.call?.name)
+        const validatedArtifactIds = new Set(
+          (Array.isArray(outcome.artifactValidationReceipts)
+            ? outcome.artifactValidationReceipts
+            : [])
+            .filter((receipt) => receipt?.verified === true)
+            .map((receipt) => String(receipt.artifactId || '').trim())
+            .filter(Boolean),
+        )
         if (Array.isArray(outcome.artifactIds)) {
-          s.recordArtifactIds(outcome.artifactIds, {
-            toolName: outcome.call?.name,
-            verified: artifactOutcomeVerified,
-          })
+          for (const artifactId of outcome.artifactIds) {
+            const receipt = (outcome.artifactValidationReceipts || [])
+              .find((candidate) => candidate?.artifactId === artifactId)
+            s.recordArtifactIds([artifactId], {
+              toolName: outcome.call?.name,
+              verified: artifactOutcomeVerified || validatedArtifactIds.has(artifactId),
+              validation: receipt || null,
+            })
+          }
         } else if (outcome.artifactId) {
           s.recordArtifactIds([outcome.artifactId], {
             toolName: outcome.call?.name,
-            verified: artifactOutcomeVerified,
+            verified: artifactOutcomeVerified || validatedArtifactIds.has(outcome.artifactId),
+            validation: (outcome.artifactValidationReceipts || [])[0] || null,
           })
         }
         s.recomputeDeliveredArtifactTools()

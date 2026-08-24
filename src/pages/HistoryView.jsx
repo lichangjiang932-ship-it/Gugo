@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from '../lib/router.jsx'
 import { Search, MessageSquare, LayoutList } from 'lucide-react'
-import LeftRail from '../components/LeftRail'
+import AppLayout from '../components/AppLayout.jsx'
 import { useAppContext } from '../store/AppContext'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from '../components/Toast.jsx'
@@ -126,9 +126,7 @@ export default function HistoryView() {
   }
 
   return (
-    <div className="h-screen flex bg-paper overflow-hidden">
-      <LeftRail />
-
+    <AppLayout className="h-screen flex bg-paper overflow-hidden">
       <div className="flex-1 overflow-y-auto px-5 py-6 sm:px-8">
         {/* Header */}
         <div className="mx-auto mb-5 flex max-w-5xl flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -198,6 +196,6 @@ export default function HistoryView() {
           t={t}
         />
       </div>
-    </div>
+    </AppLayout>
   )
 }

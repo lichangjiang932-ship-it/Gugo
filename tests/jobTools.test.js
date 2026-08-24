@@ -788,6 +788,65 @@ test('chat directory listing request does not trigger representative project rea
   assert.equal(executeCalls, 0)
 })
 
+test('chat file read accepts content-bearing preflight evidence without repeating the read', async () => {
+  let executeCalls = 0
+  const result = await runToolsLoop({
+    job: {
+      id: 'file-read-preflight-turn',
+      userId: TEST_USER,
+      origin: 'chat',
+      sessionId: 'file-read-preflight-session',
+      prompt: [
+        '[VERIFIED LOCAL FILESYSTEM ACCESS]',
+        'Path: D:\\demo\\package.json',
+        'Tool: read_file',
+        'Access succeeded: yes',
+        'MIME type: application/json',
+        'Content extracted: yes',
+        'Extracted file text:',
+        '{"scripts":{"test":"node --test"}}',
+      ].join('\n'),
+      userPrompt: 'Read D:\\demo\\package.json and report the test script',
+    },
+    step: { id: 'file-read-preflight-turn', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Read D:\\demo\\package.json and report the test script' }],
+    runModel: async () => ({ content: 'The test script is `node --test`.', toolCalls: [] }),
+    executeTool: async () => {
+      executeCalls += 1
+      return { ok: true }
+    },
+  })
+
+  assert.equal(result.text, 'The test script is `node --test`.')
+  assert.equal(executeCalls, 0)
+})
+
+test('successful directory preflight does not satisfy a real modification request', async () => {
+  const listing = JSON.stringify({
+    ok: true,
+    path: 'D:\\demo',
+    entries: [{ name: 'app.js', type: 'file' }],
+  })
+  const result = await runToolsLoop({
+    job: {
+      id: 'directory-list-is-not-mutation-evidence',
+      userId: TEST_USER,
+      origin: 'chat',
+      sessionId: 'directory-list-is-not-mutation-evidence',
+      prompt: `Path: D:\\demo\nTool: list_directory\nSucceeded: yes\n${listing}`,
+      userPrompt: '修复 D:\\demo\\app.js 的错误',
+    },
+    step: { id: 'directory-list-is-not-mutation-evidence', kind: 'chat' },
+    messages: [{ role: 'user', content: '修复 D:\\demo\\app.js 的错误' }],
+    toolSpecs: [],
+    maxIters: 1,
+    runModel: async () => ({ content: '修改已经完成。', toolCalls: [] }),
+  })
+
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'execution_evidence_missing')
+})
+
 test('runToolsLoop does not carry artifact intent over from older user history', async () => {
   let visibleNames = []
   await runToolsLoop({

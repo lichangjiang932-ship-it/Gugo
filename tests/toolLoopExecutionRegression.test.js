@@ -604,6 +604,59 @@ test('direct execution cannot finish as prose before any substantive tool succee
   assert.match(correction, /\[EXECUTION EVIDENCE REQUIRED\]/)
 })
 
+test('an explicit single-file read cannot finish with a zero-tool promise', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  const observedRequests = []
+  let modelCalls = 0
+  let toolCalls = 0
+  const prompt = '请读取 package.json 并告诉我 test 脚本。'
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-explicit-file-read-evidence',
+      userId: null,
+      origin: 'chat',
+      prompt,
+    },
+    step: { id: 'step-explicit-file-read-evidence', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    toolSpecs: [readFile],
+    maxIters: 4,
+    enableToolHooks: false,
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      observedRequests.push(structuredClone(messages))
+      if (modelCalls === 1) {
+        return { content: '我会先打开 package.json，然后再告诉你结果。', toolCalls: [] }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'read-package-json',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: 'package.json' }) },
+          }],
+        }
+      }
+      return { content: '已读取 package.json，test 脚本为 node scripts/run-tests.js。', toolCalls: [] }
+    },
+    executeTool: async ({ name }) => {
+      toolCalls += 1
+      assert.equal(name, 'read_file')
+      return { ok: true, path: 'package.json', content: '{"scripts":{"test":"node scripts/run-tests.js"}}' }
+    },
+  })
+
+  assert.equal(modelCalls, 3)
+  assert.equal(toolCalls, 1)
+  assert.equal(result.text, '已读取 package.json，test 脚本为 node scripts/run-tests.js。')
+  const correction = observedRequests[1]
+    .filter((item) => item.role === 'system')
+    .map((item) => item.content)
+    .join('\n')
+  assert.match(correction, /\[EXECUTION EVIDENCE REQUIRED\]/)
+})
+
 test('a local mutation retry may finish when strict target checks prove the requested state already exists', async () => {
   const names = ['write_file', 'edit_file', 'read_file', 'grep_code']
   const specs = names.map((name) => SERVER_TOOL_SPECS.find((item) => item?.function?.name === name))

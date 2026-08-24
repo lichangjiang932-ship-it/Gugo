@@ -79,15 +79,27 @@ test('timeline previews, selects, highlights, and appends conversation turns', a
 
   try {
     let markers = rootElement.querySelectorAll('[data-testid="chat-timeline-marker"]')
+    const markerList = rootElement.querySelector('.chat-mini-timeline-list')
     assert.equal(markers.length, 2)
     assert.equal(rootElement.querySelector('.chat-mini-timeline-list > span[aria-hidden="true"]'), null)
-    assert.ok(markers[0].querySelector('span[aria-hidden="true"]'))
+    assert.ok(markerList.classList.contains('w-8'))
+    assert.ok(markerList.classList.contains('gap-0.5'))
+    const activeStroke = markers[0].querySelector('span[aria-hidden="true"]')
+    const idleStroke = markers[1].querySelector('span[aria-hidden="true"]')
+    assert.ok(activeStroke.classList.contains('h-[3px]'))
+    assert.ok(activeStroke.classList.contains('w-4'))
+    assert.ok(idleStroke.classList.contains('w-2.5'))
+    assert.ok(activeStroke.classList.contains('bg-ink/80'))
+    assert.ok(idleStroke.classList.contains('bg-ink/25'))
+    assert.ok(!activeStroke.classList.contains('bg-accent'))
     assert.equal(markers[0].getAttribute('aria-current'), 'step')
 
     await act(async () => {
       markers[1].dispatchEvent(new dom.window.MouseEvent('mouseover', { bubbles: true }))
     })
-    assert.match(rootElement.querySelector('[data-testid="chat-timeline-preview"]').textContent, /Add a moving background/)
+    const preview = rootElement.querySelector('[data-testid="chat-timeline-preview"]')
+    assert.match(preview.textContent, /Add a moving background/)
+    assert.doesNotMatch(preview.textContent, /Turn\s+2/)
 
     await act(async () => markers[1].click())
     assert.deepEqual(selected, [2])

@@ -13,7 +13,7 @@ export default function SettingsModelsPanel({ diagnostics, onChanged, onReady, t
     <SettingsPanel title={t('modelProviders.navTitle')} description={t('modelProviders.navSubtitle')}>
       <SettingsGroup>
         <SettingsRow title={t('modelProviders.currentModel')} description={t(configured ? 'modelProviders.statusConfigured' : 'modelProviders.statusWaiting')}>
-          <span className={`h-2 w-2 rounded-full ${configured ? 'bg-emerald-500' : 'bg-ink-fade'}`} aria-hidden="true" />
+          <span className={`h-2 w-2 rounded-full ${configured ? 'bg-success' : 'bg-ink-fade'}`} aria-hidden="true" />
           <code className="settings-link-value">{model?.modelName || t('modelProviders.notConfigured')}</code>
         </SettingsRow>
         <SettingsRow title={t('modelProviders.baseUrlLabel')}>

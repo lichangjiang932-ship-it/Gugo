@@ -1,6 +1,7 @@
 import { X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import LeftRail from '../components/LeftRail'
+import AppLayout from '../components/AppLayout.jsx'
+import Modal from '../components/Modal.jsx'
 import SettingsDataExport from '../components/settings/SettingsDataExport.jsx'
 import SettingsDiagnosticsPanel from '../components/settings/SettingsDiagnosticsPanel.jsx'
 import SettingsFileOutputPanel from '../components/settings/SettingsFileOutputPanel.jsx'
@@ -36,78 +37,11 @@ import {
 } from '../lib/settingsNavigation.js'
 import useSettingsNavigation from '../lib/useSettingsNavigation.js'
 import { useLocation } from '../lib/router.jsx'
-import useModalFocusTrap from '../lib/useModalFocusTrap.js'
 import { useAppContext } from '../store/AppContext'
-import { estimatePersistedSnapshotBytes } from '../store/indexedDbPersistence.js'
 import { UiContributionRenderer, useUiContributions } from '../plugins/uiContributionRegistry.js'
+import SettingsDialogNavigation from './settingsView/SettingsDialogNavigation.jsx'
+import { getBrowserStorageEstimate, getLocalStorageBytes } from './settingsView/storageEstimate.js'
 import './SettingsView.css'
-
-const SETTINGS_NAV_GROUPS = [
-  {
-    labelKey: 'settings.navGroups.general',
-    items: [
-      SETTINGS_TAB_GENERAL,
-      SETTINGS_TAB_MODELS,
-      SETTINGS_TAB_APPEARANCE,
-      SETTINGS_TAB_LANGUAGE,
-    ],
-  },
-  {
-    labelKey: 'settings.navGroups.capabilities',
-    items: [
-      SETTINGS_TAB_PLUGINS,
-      SETTINGS_TAB_WEB_SEARCH,
-      SETTINGS_TAB_PERMISSIONS,
-      SETTINGS_TAB_AGENT_PRESETS,
-    ],
-  },
-  {
-    labelKey: 'settings.navGroups.system',
-    items: [
-      SETTINGS_TAB_INTEGRATIONS,
-      SETTINGS_TAB_DATA,
-      SETTINGS_TAB_RECOVERY,
-      SETTINGS_TAB_ABOUT,
-    ],
-  },
-]
-
-function getLocalStorageBytes() {
-  if (typeof window === 'undefined') return 0
-  let total = 0
-  try {
-    for (const key of Object.keys(window.localStorage)) {
-      const value = window.localStorage.getItem(key) || ''
-      total += key.length + value.length
-    }
-  } catch (error) {
-    console.warn('[SettingsView] localStorage unavailable:', error?.name || error)
-    return 0
-  }
-  return total * 2
-}
-
-async function getBrowserStorageEstimate() {
-  const localStorageBytes = getLocalStorageBytes()
-  try {
-    if (typeof navigator !== 'undefined' && navigator.storage?.estimate) {
-      const estimate = await navigator.storage.estimate()
-      if (Number.isFinite(estimate?.usage)) {
-        return {
-          usage: estimate.usage,
-          quota: Number.isFinite(estimate.quota) ? estimate.quota : null,
-        }
-      }
-    }
-  } catch {
-    // Fall back to application-owned storage below.
-  }
-  const indexedDb = await estimatePersistedSnapshotBytes()
-  return {
-    usage: localStorageBytes + (indexedDb.ok ? indexedDb.bytes : 0),
-    quota: null,
-  }
-}
 
 export default function SettingsView() {
   const { state, dispatch } = useAppContext()
@@ -116,7 +50,6 @@ export default function SettingsView() {
   const { t, lang, setLang, languages } = useT()
   const contributedSettings = useUiContributions('settings-section')
   const closeButtonRef = useRef(null)
-  const dialogRef = useRef(null)
   const [storageTick, setStorageTick] = useState(0)
   const [storageEstimate, setStorageEstimate] = useState(() => ({ usage: getLocalStorageBytes(), quota: null }))
   const [diagnostics, setDiagnostics] = useState(null)
@@ -149,13 +82,6 @@ export default function SettingsView() {
     }
   }, [dispatch, navigate])
   const refreshStorage = useCallback(() => setStorageTick((value) => value + 1), [])
-
-  useModalFocusTrap({
-    dialogRef,
-    initialFocusRef: closeButtonRef,
-    onClose: closeSettings,
-    restoreFocusSelector: '[data-settings-focus-return]',
-  })
 
   useEffect(() => {
     let active = true
@@ -199,24 +125,6 @@ export default function SettingsView() {
     () => state.permissions.filter((permission) => permission.enabled).length,
     [state.permissions],
   )
-
-  const navLabel = (item) => {
-    switch (item) {
-      case SETTINGS_TAB_GENERAL: return t('settings.general')
-      case SETTINGS_TAB_MODELS: return t('modelProviders.navTitle')
-      case SETTINGS_TAB_APPEARANCE: return t('settings.appearance')
-      case SETTINGS_TAB_LANGUAGE: return t('settings.language')
-      case SETTINGS_TAB_PLUGINS: return t('settings.plugins')
-      case SETTINGS_TAB_WEB_SEARCH: return t('webSearch.title')
-      case SETTINGS_TAB_PERMISSIONS: return t('nav.permissions')
-      case SETTINGS_TAB_AGENT_PRESETS: return t('settings.agentPresets')
-      case SETTINGS_TAB_INTEGRATIONS: return t('settings.integrations')
-      case SETTINGS_TAB_DATA: return t('settings.dataExport')
-      case SETTINGS_TAB_RECOVERY: return t('sideEffectRecovery.navTitle')
-      case SETTINGS_TAB_ABOUT: return t('settings.about')
-      default: return item
-    }
-  }
 
   const openConfigFile = useCallback(async () => {
     const desktopOpen = globalThis.window?.gugoDesktop?.openConfigFile
@@ -332,63 +240,23 @@ export default function SettingsView() {
 
   return (
     <div className="settings-page h-screen flex overflow-hidden">
-      <div className="settings-page-background flex min-w-0 flex-1" aria-hidden="true" inert={true}>
-        <LeftRail />
+      <AppLayout className="settings-page-background flex min-w-0 flex-1" aria-hidden="true" inert={true}>
         <div className="min-w-0 flex-1 bg-paper-2/25" />
-      </div>
-      <div className="settings-page-backdrop" onMouseDown={(event) => {
-        if (event.target === event.currentTarget) closeSettings()
-      }}>
-        <div
-          ref={dialogRef}
-          className="settings-dialog"
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('settings.sectionTitle')}
-          tabIndex={-1}
-          onMouseDown={(event) => event.stopPropagation()}
-        >
-          <aside className="settings-dialog-nav">
-            <div className="settings-dialog-brand">{t('settings.sectionTitle')}</div>
-            <nav className="settings-nav-groups" aria-label={t('settings.sectionTitle')}>
-              {SETTINGS_NAV_GROUPS.map((group) => (
-                <section className="settings-nav-group" key={group.labelKey}>
-                  <h2 className="settings-nav-group-label">{t(group.labelKey)}</h2>
-                  <div className="settings-nav-group-items">
-                    {group.items.map((item) => (
-                      <button
-                        key={item}
-                        type="button"
-                        aria-current={activeSection === item ? 'page' : undefined}
-                        onClick={() => setActiveSection(item)}
-                        className="settings-nav-item"
-                      >
-                        {navLabel(item)}
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              ))}
-              {contributedSettings.length > 0 && (
-                <section className="settings-nav-group" data-ui-contribution-slot="settings-section">
-                  <h2 className="settings-nav-group-label">{t('settings.plugins')}</h2>
-                  <div className="settings-nav-group-items">
-                    {contributedSettings.map((contribution) => (
-                      <button
-                        key={contribution.key}
-                        type="button"
-                        aria-current={activeSection === contribution.sectionId ? 'page' : undefined}
-                        onClick={() => setActiveSection(contribution.sectionId)}
-                        className="settings-nav-item"
-                      >
-                        {contribution.labelKey ? t(contribution.labelKey) : contribution.label}
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              )}
-            </nav>
-          </aside>
+      </AppLayout>
+      <Modal
+        onClose={closeSettings}
+        ariaLabel={t('settings.sectionTitle')}
+        initialFocusRef={closeButtonRef}
+        restoreFocusSelector="[data-settings-focus-return]"
+        overlayClassName="settings-page-backdrop"
+        className="settings-dialog"
+      >
+          <SettingsDialogNavigation
+            activeSection={activeSection}
+            contributedSettings={contributedSettings}
+            setActiveSection={setActiveSection}
+            t={t}
+          />
           <main className="settings-dialog-main">
             <header className="settings-dialog-toolbar">
               {configMessage ? <span className="settings-dialog-status" role="status">{configMessage}</span> : null}
@@ -407,8 +275,7 @@ export default function SettingsView() {
             </header>
             <div className="settings-dialog-content">{renderActive()}</div>
           </main>
-        </div>
-      </div>
+      </Modal>
     </div>
   )
 }

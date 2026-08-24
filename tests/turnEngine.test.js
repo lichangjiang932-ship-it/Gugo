@@ -3078,6 +3078,121 @@ test('TurnEngine blocks legacy checkpoints without a v4 snapshot and explicit re
   )
 })
 
+test('TurnEngine resumes after a final bookkeeping tool when workspace failure codes are persisted', async () => {
+  const turnId = 'turn-resume-workspace-status-error-code'
+  const unavailableTrust = {
+    rootPath: 'E:/missing-workspace',
+    trusted: false,
+    available: false,
+    trustRootPath: null,
+    trustScope: null,
+    inherited: false,
+    trustedAt: null,
+    updatedAt: null,
+    config: {
+      present: null,
+      valid: false,
+      loaded: false,
+      blocked: false,
+      path: null,
+      sourceRoot: null,
+      permissions: null,
+      error: { code: 'WORKSPACE_CONFIG_INVALID' },
+    },
+    global: {},
+    effective: {},
+    error: { code: 'WORKSPACE_PATH_NOT_FOUND' },
+  }
+  const fileAccess = {
+    projectDirectory: tempDir,
+    defaultOutputDirectory: tempDir,
+    grants: [],
+    workspace: { enabled: false },
+    trustedWorkspaces: [unavailableTrust],
+    runtime: { localCodeExecutionEnabled: false },
+  }
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:start`,
+      sessionId: 'turn-engine-session',
+      turnId,
+      sequence: 0,
+      type: 'turn.started',
+      payload: { content: 'Finish the project after the final progress review.' },
+      createdAt: 1,
+    }),
+  })
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:checkpoint`,
+      sessionId: 'turn-engine-session',
+      turnId,
+      sequence: 1,
+      type: 'turn.checkpoint',
+      payload: { storage: 'turn_checkpoints', checkpointVersion: 1 },
+      createdAt: 2,
+    }),
+    checkpointState: {
+      approvalMode: 'normal',
+      executionEnvironment: checkpointEnvironment({ fileAccess }),
+      messages: [
+        { role: 'user', content: 'Finish the project after the final progress review.' },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'final-reflect',
+            type: 'function',
+            function: {
+              name: 'reflect',
+              arguments: '{"observation":"implementation complete","next_step":"done"}',
+            },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'final-reflect',
+          name: 'reflect',
+          content: '{"ok":true,"accepted":true}',
+        },
+      ],
+      toolCalls: [{
+        id: 'final-reflect',
+        name: 'reflect',
+        args: { observation: 'implementation complete', next_step: 'done' },
+        checkpointStatus: 'completed',
+        checkpointResult: { ok: true, accepted: true },
+      }],
+      artifactIds: [],
+      iterations: 1,
+    },
+  })
+
+  let restoredCheckpoint = null
+  const engine = createTestEngine({
+    ...checkpointEnvironmentEngineOptions([], fileAccess),
+    runLoop: async (options) => {
+      restoredCheckpoint = await options.loadCheckpoint()
+      return { text: 'Recovered and completed.', artifactIds: [], iterations: 2 }
+    },
+  })
+
+  await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  assert.equal(restoredCheckpoint?.toolCalls?.at(-1)?.name, 'reflect')
+  assert.equal(events(turnId).at(-1)?.type, 'turn.completed')
+  assert.equal(
+    events(turnId).some((event) => (
+      event.type === 'turn.blocked'
+      && event.payload?.code === 'TURN_EXECUTION_ENVIRONMENT_MISSING'
+    )),
+    false,
+  )
+})
+
 test('TurnEngine blocks when checkpoint approval mode disagrees with its execution snapshot', async () => {
   const turnId = 'turn-checkpoint-approval-mode-mismatch'
   appendTurnEvent({

@@ -46,7 +46,11 @@ import {
 } from './toolImplementationRevision.js'
 import { normalizeTurnIntentMode } from '../utils/executionIntent.js'
 import { getActiveRuntimePolicyProvenance } from '../core/runtimeCapabilityState.js'
-import { getLocalFileAccessStatus } from './localFileAccessService.js'
+import {
+  getLocalFileAccessStatus,
+  resolveTurnProjectDirectory,
+  withTurnProjectDirectory,
+} from './localFileAccessService.js'
 import { logWarn, newTraceId, withLogContext } from '../utils/logger.js'
 import {
   checkpointMessagesForTurn,
@@ -312,6 +316,8 @@ export class TurnEngine {
     runMemoryModel = missingTurnModelRuntime,
     getContextWindow = () => undefined,
     readFileAccessStatus = getLocalFileAccessStatus,
+    resolveProjectDirectory = resolveTurnProjectDirectory,
+    runWithProjectDirectory = withTurnProjectDirectory,
     attachmentRuntime = null,
     validateAttachments = attachmentRuntime?.validateAttachments
       || missingAttachmentValidationRuntime,
@@ -342,7 +348,8 @@ export class TurnEngine {
       readApprovalMode, readRuntimePolicyProvenance, preparePromptContext, prepareInlineSkills,
       resolveCanaryAssignment, recordCanaryOutcome,
       resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
-      getContextWindow, readFileAccessStatus, validateAttachments, bindAttachments, prepareAttachments,
+      getContextWindow, readFileAccessStatus, resolveProjectDirectory, runWithProjectDirectory,
+      validateAttachments, bindAttachments, prepareAttachments,
       removeMessage: persistenceDeps.removeMessage,
       executionLeases: persistenceDeps.executionLeases,
       runtimeCore: persistenceDeps.runtimeCore,
@@ -394,6 +401,7 @@ export class TurnEngine {
       claimLegacySession: (scope) => this.#claimLegacySession(scope),
       lastEvent: this.deps.lastEvent,
       resolveModelBinding: (input) => this.#resolveModelBinding(input),
+      resolveProjectDirectory: (input) => this.deps.resolveProjectDirectory(input),
       now: this.deps.now,
       writeSession: this.deps.writeSession,
       readMessages: this.deps.readMessages,
@@ -870,6 +878,15 @@ export class TurnEngine {
     }
 
     const emitter = this.#createEmitter({ userId, sessionId, turnId, sequence: last.sequence + 1 })
+    const persistedWorkspacePath = String(started.payload.workspacePath || '').trim() || null
+    const persistedProjectDirectory = String(started.payload.projectDirectory || '').trim() || null
+    const recoveredDirectory = persistedWorkspacePath
+      ? await this.deps.resolveProjectDirectory({ userId, workspacePath: persistedWorkspacePath })
+      : {
+          workspacePath: null,
+          projectDirectory: persistedProjectDirectory,
+          defaultOutputDirectory: persistedProjectDirectory,
+        }
     const scheduled = await this.#schedule({
       userId,
       sessionId,
@@ -891,6 +908,10 @@ export class TurnEngine {
       toolsConfig: normalizeServerToolsConfig(started.payload.toolsConfig),
       intentMode: normalizeTurnIntentMode(started.payload.intentMode),
       approvalMode: normalizeTurnApprovalModeOverride(started.payload.approvalMode),
+      projectDirectory: recoveredDirectory?.projectDirectory || null,
+      defaultOutputDirectory: recoveredDirectory?.defaultOutputDirectory
+        || recoveredDirectory?.projectDirectory
+        || null,
       resumeContext,
       emitter,
     })
@@ -962,7 +983,11 @@ export class TurnEngine {
       const entry = { controller, executionLease, promise: null, releaseLease, emitter: context.emitter }
       this.active.set(key, entry)
       entry.promise = Promise.resolve()
-        .then(() => this.#execute({ ...context, executionLease }, controller.signal))
+        .then(() => this.deps.runWithProjectDirectory({
+          userId: context.userId,
+          projectDirectory: context.projectDirectory,
+          defaultOutputDirectory: context.defaultOutputDirectory,
+        }, () => this.#execute({ ...context, executionLease }, controller.signal)))
         .finally(async () => {
           let failure = null
           let failed = false

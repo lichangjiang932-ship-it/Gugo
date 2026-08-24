@@ -27,11 +27,11 @@ function NativeConnectors({ connectors, controller, t }) {
         const busy = controller.busyProvider === connector.provider
         return (
           <ConnectorCard key={connector.provider} connector={connector} connected={isConnected} description={t(connector.descriptionKey)} t={t}>
-            {integration?.lastTest?.message && <p className={`mt-3 text-xs ${integration.lastTest.ok ? 'text-green-700' : 'text-red-600'}`}>{integration.lastTest.message}</p>}
+            {integration?.lastTest?.message && <p className={`mt-3 text-xs ${integration.lastTest.ok ? 'text-success' : 'text-danger'}`}>{integration.lastTest.message}</p>}
             <div className="mt-4 flex items-center justify-end gap-2 border-t border-dashed border-ink-fade/30 pt-3">
               {isConnected ? <>
                 {!isBrowser && <button type="button" onClick={() => controller.setActiveConnector(connector)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-ink-fade/40 px-3 text-xs text-ink-soft hover:bg-paper-2" aria-label={`${t('access.configure')} ${connector.label}`}><Settings2 className="h-3.5 w-3.5" />{t('access.configure')}</button>}
-                {!isBrowser && <button type="button" onClick={() => controller.disconnect(connector)} disabled={busy} className="h-8 rounded-md px-2 text-ink-fade hover:bg-red-50 hover:text-red-600" aria-label={`${t('access.disconnect')} ${connector.label}`}><Unplug className="h-3.5 w-3.5" /></button>}
+                {!isBrowser && <button type="button" onClick={() => controller.disconnect(connector)} disabled={busy} className="h-8 rounded-md px-2 text-ink-fade hover:bg-danger/5 hover:text-danger" aria-label={`${t('access.disconnect')} ${connector.label}`}><Unplug className="h-3.5 w-3.5" /></button>}
                 <Toggle enabled={enabled} disabled={busy} onClick={() => controller.toggle(connector)} label={`${connector.label} ${enabled ? t('access.enabled') : t('access.disabled')}`} />
               </> : <button type="button" onClick={() => controller.setActiveConnector(connector)} className="h-8 rounded-md bg-ink px-4 text-xs text-paper hover:bg-ink-soft" aria-label={`${t('access.connect')} ${connector.label}`}>{t('access.connect')}</button>}
             </div>
@@ -67,7 +67,7 @@ function WebConnectors({ connectors, controller, t }) {
             <div className="mt-4 flex items-center justify-end gap-2 border-t border-dashed border-ink-fade/30 pt-3">
               {connected ? <>
                 <button type="button" onClick={() => controller.launchWebApp(connector)} disabled={busy || !enabled} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-ink-fade/40 px-3 text-xs text-ink-soft hover:bg-paper-2 disabled:opacity-40" aria-label={`${t('access.open')} ${connector.label}`} data-testid={`use-${connector.provider}`}>{busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : t('access.open')}</button>
-                <button type="button" onClick={() => controller.disconnect(connector)} disabled={busy} className="h-8 rounded-md px-2 text-ink-fade hover:bg-red-50 hover:text-red-600 disabled:opacity-40" aria-label={`${t('access.disconnect')} ${connector.label}`}><Unplug className="h-3.5 w-3.5" /></button>
+                <button type="button" onClick={() => controller.disconnect(connector)} disabled={busy} className="h-8 rounded-md px-2 text-ink-fade hover:bg-danger/5 hover:text-danger disabled:opacity-40" aria-label={`${t('access.disconnect')} ${connector.label}`}><Unplug className="h-3.5 w-3.5" /></button>
                 <Toggle enabled={enabled} disabled={busy} onClick={() => controller.toggle(connector)} label={`${connector.label} ${enabled ? t('access.enabled') : t('access.disabled')}`} />
               </> : <button type="button" onClick={() => controller.connectWeb(connector)} disabled={busy} className="inline-flex h-8 min-w-20 items-center justify-center gap-1.5 rounded-md bg-ink px-4 text-xs text-paper hover:bg-ink-soft disabled:opacity-50" aria-label={`${t('access.connect')} ${connector.label}`} data-testid={`connect-${connector.provider}`}>{busy && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}{busy ? t('access.connecting') : t('access.connect')}</button>}
             </div>
@@ -81,7 +81,7 @@ function WebConnectors({ connectors, controller, t }) {
 function ConnectorCard({ children, connected, connector, description, persistent = false, t }) {
   return (
     <article className="rounded-xl border border-ink-fade/35 bg-paper p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md" data-testid={`connector-${connector.provider}`}>
-      <div className="flex items-start gap-3"><ConnectorBrandIcon connector={connector} /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-ink">{connector.label}</h3><ConnectorCapabilityBadge capabilityLevel={connector.capabilityLevel} t={t} /><ConnectionMethodBadge method={connector.connectionMethod} t={t} />{connected && <span className="inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[10px] text-green-700"><CheckCircle2 className="h-3 w-3" />{t(persistent ? 'access.persistentConnected' : 'access.connected')}</span>}</div><p className="mt-1 text-xs leading-5 text-ink-soft">{description}</p></div></div>
+      <div className="flex items-start gap-3"><ConnectorBrandIcon connector={connector} /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-ink">{connector.label}</h3><ConnectorCapabilityBadge capabilityLevel={connector.capabilityLevel} t={t} /><ConnectionMethodBadge method={connector.connectionMethod} t={t} />{connected && <span className="inline-flex items-center gap-1 rounded-full border border-success/20 bg-success/5 px-2 py-0.5 text-[10px] text-success"><CheckCircle2 className="h-3 w-3" />{t(persistent ? 'access.persistentConnected' : 'access.connected')}</span>}</div><p className="mt-1 text-xs leading-5 text-ink-soft">{description}</p></div></div>
       {children}
     </article>
   )

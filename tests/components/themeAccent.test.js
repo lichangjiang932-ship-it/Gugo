@@ -51,9 +51,9 @@ test('hexToHsl 非法值返回 null', () => {
   assert.equal(hexToHsl(null), null)
 })
 
-test('applyAccent({ hex: ember, strong:false }) → vars + 空 className', () => {
-  const res = applyAccent({ hex: '#E86A3C', strong: false })
-  assert.equal(res.className, '')
+test('applyAccent({ hex: ember }) → stable accent vars', () => {
+  const res = applyAccent({ hex: '#E86A3C' })
+  assert.equal(Object.hasOwn(res, 'className'), false)
   assert.ok(res.vars['--accent-h'])
   assert.ok(res.vars['--accent-s'].endsWith('%'))
   assert.ok(res.vars['--accent-l'].endsWith('%'))
@@ -73,19 +73,13 @@ test('accent controls choose a WCAG AA foreground for every selectable color', (
   assert.equal(accentContrastRgb('invalid'), accentContrastRgb('#E86A3C'))
 })
 
-test('applyAccent({ strong:true }) → className theme-accent-strong + 更深/更艳', () => {
-  const base = applyAccent({ hex: '#E86A3C', strong: false })
-  const strong = applyAccent({ hex: '#E86A3C', strong: true })
-  assert.equal(strong.className, 'theme-accent-strong')
-  // strong 模式: l 降一档,s 升一档
-  const baseL = parseInt(base.vars['--accent-l'], 10)
-  const strongL = parseInt(strong.vars['--accent-l'], 10)
-  const baseS = parseInt(base.vars['--accent-s'], 10)
-  const strongS = parseInt(strong.vars['--accent-s'], 10)
-  assert.ok(strongL <= baseL, `strong L should be ≤ base L, got ${strongL} vs ${baseL}`)
-  assert.ok(strongS >= baseS, `strong S should be ≥ base S, got ${strongS} vs ${baseS}`)
-  assert.equal(strong.vars['--workbench-accent'], strong.vars['--accent'])
-  assert.equal(strong.vars['--workbench-accent-h'], strong.vars['--accent-h'])
+test('retired strong option no longer changes accent output', () => {
+  const base = applyAccent({ hex: '#E86A3C' })
+  const legacy = applyAccent({ hex: '#E86A3C', strong: true })
+  assert.deepEqual(legacy, base)
+  assert.equal(Object.hasOwn(legacy, 'className'), false)
+  assert.equal(legacy.vars['--workbench-accent'], legacy.vars['--accent'])
+  assert.equal(legacy.vars['--workbench-accent-h'], legacy.vars['--accent-h'])
 })
 
 test('artifact and document surfaces use neutral tokens outside the workbench accent domain', () => {
@@ -97,25 +91,21 @@ test('artifact and document surfaces use neutral tokens outside the workbench ac
   assert.match(css, /--color-accent-ink-rgb:\s*var\(--artifact-accent-rgb\)/)
   assert.match(css, /--color-ember-rgb:\s*var\(--artifact-accent-rgb\)/)
   assert.match(css, /--accent:\s*var\(--artifact-accent\)/)
-  assert.doesNotMatch(css, /\.theme-accent-strong\s+\[data-artifact-surface\]/)
-  assert.doesNotMatch(css, /\.theme-accent-strong\s+\.chat-output-file-name/)
+  assert.doesNotMatch(css, /\.theme-accent-strong/)
   assert.doesNotMatch(css, /(?:^|\r?\n)\s*\[data-artifact-surface\][^{}]*\{[^{}]*!important/m)
-  assert.match(css, /\.theme-accent-strong a\.primary:not\(\[data-artifact-surface\]\):not\(\[data-artifact-surface\] \*\)/)
-  assert.match(css, /\.theme-accent-strong button\.primary:not\(\[data-artifact-surface\]\):not\(\[data-artifact-surface\] \*\)/)
-  assert.match(css, /color:\s*var\(--accent\)\s*!important/)
 })
 
 test('applyAccent({}) 缺省回退到 ember 默认色', () => {
   const res = applyAccent({})
   const h = Number(res.vars['--accent-h'])
   assert.ok(h >= 10 && h <= 35, `default ember hue, got ${h}`)
-  assert.equal(res.className, '')
+  assert.equal(Object.hasOwn(res, 'className'), false)
 })
 
 test('applyAccent 接受四个预设色,h 都落在 0..360', () => {
   const presets = ['#E86A3C', '#2E8FA3', '#A5C97A', '#D4A4FF']
   for (const hex of presets) {
-    const res = applyAccent({ hex, strong: false })
+    const res = applyAccent({ hex })
     const h = Number(res.vars['--accent-h'])
     assert.ok(h >= 0 && h <= 360, `hue range for ${hex}: ${h}`)
   }

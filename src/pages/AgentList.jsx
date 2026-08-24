@@ -1,5 +1,5 @@
 import { Package, Plus, Sparkles, Upload } from 'lucide-react'
-import LeftRail from '../components/LeftRail'
+import AppLayout from '../components/AppLayout.jsx'
 import { useActiveAgent } from '../agents/activeAgentContext.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import AgentEditorModal from './agents/AgentEditorModal.jsx'
@@ -13,8 +13,7 @@ export default function AgentList() {
   const controller = useAgentListController({ lang, refreshActiveAgent, t })
 
   return (
-    <div className="flex h-screen bg-canvas">
-      <LeftRail />
+    <AppLayout className="flex h-screen bg-paper">
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl px-8 py-10">
           <header className="mb-8 flex items-end justify-between border-b border-ink/10 pb-6">
@@ -25,9 +24,9 @@ export default function AgentList() {
             <HeaderButton onClick={controller.openTemplates} icon={<Sparkles size={14} />} label={t('agents.fromTemplate')} />
             <HeaderButton onClick={controller.importZip} icon={<Package size={14} />} label={t('agents.importZip')} />
             <HeaderButton onClick={controller.importMarkdown} icon={<Upload size={14} />} label={t('agents.import')} />
-            <button onClick={controller.openNew} className="inline-flex items-center gap-2 rounded-md bg-ink px-4 py-2 text-sm text-canvas hover:opacity-90"><Plus size={16} />{t('agents.newAgent')}</button>
+            <button onClick={controller.openNew} className="inline-flex items-center gap-2 rounded-md bg-ink px-4 py-2 text-sm text-paper hover:opacity-90"><Plus size={16} />{t('agents.newAgent')}</button>
           </header>
-          {controller.err && <div className="mb-4 rounded border border-red-400/30 bg-red-50/40 px-4 py-3 text-sm text-red-700">{controller.err}</div>}
+          {controller.err && <div className="mb-4 rounded border border-danger/30 bg-danger/40 px-4 py-3 text-sm text-danger">{controller.err}</div>}
           <AgentRows
             agents={controller.agents}
             loading={controller.loading}
@@ -67,7 +66,7 @@ export default function AgentList() {
           )}
         </div>
       </main>
-    </div>
+    </AppLayout>
   )
 }
 

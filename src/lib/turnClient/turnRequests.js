@@ -48,6 +48,7 @@ export async function startServerTurn({
   content,
   displayContent,
   attachments,
+  workspacePath,
   modelConfigRevision,
   modelName,
   modelProviderId,
@@ -65,6 +66,9 @@ export async function startServerTurn({
   const normalizedAgentId = typeof agentId === 'string' ? agentId.trim() || null : null
   const normalizedSkillIds = normalizeContextIds(skillIds)
   const normalizedModelConfigRevision = normalizeModelConfigRevision(modelConfigRevision)
+  const normalizedWorkspacePath = typeof workspacePath === 'string'
+    ? workspacePath.trim() || null
+    : null
   const response = await fetchImpl('/api/turns/run', {
     method: 'POST',
     headers: headers(true),
@@ -73,6 +77,7 @@ export async function startServerTurn({
       content,
       displayContent,
       attachments: Array.isArray(attachments) ? attachments : [],
+      ...(normalizedWorkspacePath ? { workspacePath: normalizedWorkspacePath } : {}),
       modelName,
       ...(modelProviderId ? { modelProviderId } : {}),
       ...(normalizedModelConfigRevision === null

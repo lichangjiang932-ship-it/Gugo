@@ -486,6 +486,24 @@ test('desktop update notice is the primary message directly above the account ca
   assert.match(card, /desktopUpdate\.checkNow/)
 })
 
+test('desktop project picker exposes only a trusted single-directory dialog', () => {
+  const main = read('desktop/main.js')
+  const preload = read('desktop/preload.cjs')
+  const handlerStart = main.indexOf("ipcMain.handle('desktop:select-directory'")
+  const handlerEnd = main.indexOf("ipcMain.handle('desktop:get-version'", handlerStart)
+  const handler = main.slice(handlerStart, handlerEnd)
+
+  assert.ok(handlerStart >= 0 && handlerEnd > handlerStart)
+  assert.match(preload, /openDirectory:\s*\(\{ defaultPath = '' \} = \{\}\) => ipcRenderer\.invoke\('desktop:select-directory'/)
+  assert.match(preload, /selectDirectory:\s*\(\{ defaultPath = '' \} = \{\}\) => ipcRenderer\.invoke\('desktop:select-directory'/)
+  assert.match(handler, /assertTrustedIpc\(event\)/)
+  assert.match(handler, /event\.sender !== mainWindow\.webContents/)
+  assert.match(handler, /dialog\.showOpenDialog\(mainWindow/)
+  assert.match(handler, /properties:\s*\['openDirectory'/)
+  assert.doesNotMatch(handler, /openFile|multiSelections/)
+  assert.match(handler, /result\.canceled/)
+})
+
 test('desktop child and in-process startup share the versioned recovery probe', () => {
   const main = read('desktop/main.js')
   const fallbackStart = main.indexOf('async function startInProcessBundledServer')

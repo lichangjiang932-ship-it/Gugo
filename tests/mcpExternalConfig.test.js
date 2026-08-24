@@ -67,3 +67,20 @@ test('MCP server manager exposes presets, live catalog, and key-value configurat
   assert.equal(maxDepth, 1)
   assert.doesNotMatch(source, /href="\/mobile-keys"/)
 })
+
+test('MCP manager follows the quiet settings surface hierarchy', () => {
+  const view = fs.readFileSync(new URL('../src/pages/McpServersView.jsx', import.meta.url), 'utf8')
+  const editor = fs.readFileSync(new URL('../src/pages/mcp/McpServerEditor.jsx', import.meta.url), 'utf8')
+  const serverList = fs.readFileSync(new URL('../src/pages/mcp/McpServerList.jsx', import.meta.url), 'utf8')
+  const external = fs.readFileSync(new URL('../src/components/McpExternalConnectPanel.jsx', import.meta.url), 'utf8')
+  const combined = `${view}\n${editor}\n${serverList}\n${external}`
+
+  assert.match(view, /max-w-\[1180px\]/)
+  assert.match(view, /lg:grid-cols-\[320px_minmax\(0,1fr\)\]/)
+  assert.match(editor, /rounded-lg border border-ink\/10 bg-paper/)
+  assert.match(serverList, /rounded-lg border border-ink\/10 bg-paper/)
+  assert.match(external, /rounded-lg border border-ink\/10 bg-paper/)
+  assert.match(combined, /border border-ink bg-ink/)
+  assert.doesNotMatch(combined, /(?:bg|text|border)-accent/)
+  assert.doesNotMatch(combined, /(?:rose|emerald|amber)-/)
+})

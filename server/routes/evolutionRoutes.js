@@ -44,6 +44,11 @@ import {
   setEvolutionEvidenceExcluded,
 } from '../services/evolutionDatasetService.js'
 import {
+  configureEvolutionAutoLoop,
+  getEvolutionAutoConfig,
+  listEvolutionAutoRuns,
+} from '../services/evolutionAutoLoopService.js'
+import {
   appendEvolutionFeedback,
   listEvolutionEvidence,
 } from '../services/evolutionEvidenceStore.js'
@@ -164,6 +169,7 @@ export async function handleEvolutionRequest(req, res, {
   const operationResumeMatch = url.pathname.match(/^\/api\/evolution\/operations\/([^/]+)\/resume$/u)
   const operationMatch = url.pathname.match(/^\/api\/evolution\/operations\/([^/]+)$/u)
   const localOwnerPath = url.pathname.startsWith('/api/evolution/config-')
+    || (url.pathname === '/api/evolution/auto-config' && req.method === 'PUT')
     || url.pathname === '/api/evolution/approvals'
     || url.pathname === '/api/evolution/canaries'
     || Boolean(approvalReviewMatch)
@@ -180,6 +186,34 @@ export async function handleEvolutionRequest(req, res, {
     || Boolean(promotionMatch)
   if (localOwnerPath && !authorizeLocalOwner(req, res, userId, env)) return
   try {
+    if (url.pathname === '/api/evolution/auto-config') {
+      if (req.method === 'GET') {
+        return sendJson(res, 200, {
+          ok: true,
+          config: getEvolutionAutoConfig({ userId }),
+        })
+      }
+      if (req.method !== 'PUT') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET 或 PUT'))
+      }
+      const body = await readJson(req, { maxBytes: 32 * 1024 })
+      const config = await configureEvolutionAutoLoop({
+        userId,
+        input: body,
+        readSession: readCanarySession,
+      })
+      return sendJson(res, 200, { ok: true, config })
+    }
+    if (url.pathname === '/api/evolution/auto-runs') {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        schemaVersion: 1,
+        runs: listEvolutionAutoRuns({ userId, limit: url.searchParams.get('limit') }),
+      })
+    }
     if (url.pathname === '/api/evolution/operations') {
       if (req.method !== 'GET') {
         return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))

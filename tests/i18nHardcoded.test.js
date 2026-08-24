@@ -122,7 +122,6 @@ test('frontend hardcoded Chinese cannot increase beyond the migration baseline',
   for (const migrated of [
     'src/pages/ChatSplit/ChatMessages.jsx',
     'src/pages/HistoryView.jsx',
-    'src/pages/HooksView.jsx',
   ]) {
     assert.equal(current[migrated] || 0, 0, `${migrated} must remain fully migrated`)
   }

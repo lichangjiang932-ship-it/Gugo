@@ -4,6 +4,7 @@ const SERVER_MUTATION_TYPES = new Set([
   'DELETE_SESSION',
   'CLEAR_CURRENT_SESSION',
   'DELETE_MESSAGE',
+  'TRUNCATE_MESSAGES',
   'COMPRESS_CURRENT_SESSION',
   'COMPACT_SESSION',
   'EXPAND_COMPACTED',
@@ -12,6 +13,7 @@ const SERVER_MUTATION_TYPES = new Set([
 const ACTIVE_SESSION_MUTATION_TYPES = new Set([
   'CLEAR_CURRENT_SESSION',
   'DELETE_MESSAGE',
+  'TRUNCATE_MESSAGES',
   'COMPRESS_CURRENT_SESSION',
 ])
 
@@ -58,6 +60,31 @@ function sameArtifactCollection(left, right) {
   const rightIds = normalizedArtifactIds(right)
   return leftIds.length === rightIds.length
     && leftIds.every((id, index) => id === rightIds[index])
+}
+
+function normalizedMessageContent(value) {
+  if (typeof value === 'string') return value
+  if (value == null) return ''
+  try { return JSON.stringify(value) } catch { return String(value) }
+}
+
+function sameSessionTranscript(serverMessages, projectedMessages) {
+  if (!Array.isArray(serverMessages) || !Array.isArray(projectedMessages)) return false
+  if (serverMessages.length !== projectedMessages.length) return false
+  return serverMessages.every((serverMessage, index) => {
+    const projectedMessage = projectedMessages[index]
+    return String(serverMessage?.id || '') === String(projectedMessage?.id || '')
+      && String(serverMessage?.role || '') === String(projectedMessage?.role || '')
+      && normalizedMessageContent(serverMessage?.content)
+        === normalizedMessageContent(projectedMessage?.content)
+  })
+}
+
+function canConfirmReplacementAfterError(error) {
+  return error?.status === 409
+    || error?.status === 500
+    || error?.code === 'SESSION_REVISION_CONFLICT'
+    || error?.code === 'SESSION_ADMIN_RESULT_INVALID'
 }
 
 export function mergeServerSessionMessages(localMessages, serverMessages) {
@@ -250,6 +277,7 @@ export function projectSessionMutation({ state, action, sessionId, reduceState }
     kind: 'replace',
     sessionId,
     expectedRevision: session.serverRevision,
+    sourceMessages: session.messages,
     messages: projectedSession.messages,
   }
 }
@@ -270,6 +298,21 @@ export function createSessionMutationDispatcher({
   const snapshotRequests = new Map()
   const hydratedRevisions = new Map()
 
+  const applyCompleteSessionSnapshot = (sessionId, snapshot) => {
+    if (snapshot?.complete !== true || !Array.isArray(snapshot.messages) || !Number.isInteger(snapshot.revision)) {
+      const error = new Error('Server returned an invalid complete session snapshot')
+      error.code = 'INVALID_SESSION_SNAPSHOT'
+      throw error
+    }
+    if (snapshot.messages.length === 0) hydratedRevisions.set(sessionId, snapshot.revision)
+    else hydratedRevisions.delete(sessionId)
+    applyServerAction({
+      type: 'APPLY_SERVER_SESSION_SNAPSHOT',
+      payload: { sessionId, snapshot },
+    })
+    return snapshot
+  }
+
   const hydrateSessionSnapshot = (session, action) => {
     if (typeof fetchSessionSnapshot !== 'function' || !canFetchSessionSnapshot()) return undefined
     const sessionId = session?.id
@@ -282,17 +325,7 @@ export function createSessionMutationDispatcher({
     const operation = Promise.resolve()
       .then(() => fetchSessionSnapshot({ sessionId }))
       .then((snapshot) => {
-        if (snapshot?.complete !== true || !Array.isArray(snapshot.messages) || !Number.isInteger(snapshot.revision)) {
-          const error = new Error('Server returned an invalid complete session snapshot')
-          error.code = 'INVALID_SESSION_SNAPSHOT'
-          throw error
-        }
-        if (snapshot.messages.length === 0) hydratedRevisions.set(sessionId, snapshot.revision)
-        else hydratedRevisions.delete(sessionId)
-        applyServerAction({
-          type: 'APPLY_SERVER_SESSION_SNAPSHOT',
-          payload: { sessionId, snapshot },
-        })
+        applyCompleteSessionSnapshot(sessionId, snapshot)
         return true
       })
       .catch((error) => {
@@ -375,16 +408,62 @@ export function createSessionMutationDispatcher({
           return true
         }
 
-        const result = await replaceMessages({
-          sessionId: plan.sessionId,
-          expectedRevision: plan.expectedRevision,
-          messages: plan.messages,
-        })
+        let committedMessages = plan.messages
+        let result
+        try {
+          result = await replaceMessages({
+            sessionId: plan.sessionId,
+            expectedRevision: plan.expectedRevision,
+            messages: plan.messages,
+          })
+        } catch (error) {
+          const canConfirmCommit = canConfirmReplacementAfterError(error)
+            && typeof fetchSessionSnapshot === 'function'
+            && canFetchSessionSnapshot()
+          if (!canConfirmCommit) throw error
+
+          const snapshot = await fetchSessionSnapshot({ sessionId })
+          applyCompleteSessionSnapshot(sessionId, snapshot)
+          if (sameSessionTranscript(snapshot.messages, plan.messages)) return true
+
+          // Replaying a destructive action against a genuinely newer transcript
+          // can erase messages written by another tab. Retry only when the full
+          // snapshot proves that the source transcript itself is unchanged, and
+          // derive the retry payload from that canonical snapshot rather than
+          // from the stale local projection.
+          const sourceIsStillCurrent = snapshot.revision >= plan.expectedRevision
+            && sameSessionTranscript(snapshot.messages, plan.sourceMessages)
+          if (!sourceIsStillCurrent) throw error
+
+          const currentState = getState()
+          const retryState = {
+            ...currentState,
+            sessions: (currentState?.sessions || []).map((session) => (
+              session.id === sessionId
+                ? { ...session, messages: snapshot.messages, serverRevision: snapshot.revision }
+                : session
+            )),
+          }
+          const retryPlan = projectSessionMutation({
+            state: retryState,
+            action,
+            sessionId,
+            reduceState,
+          })
+          if (!retryPlan || retryPlan.kind !== 'replace') throw error
+
+          committedMessages = retryPlan.messages
+          result = await replaceMessages({
+            sessionId: retryPlan.sessionId,
+            expectedRevision: retryPlan.expectedRevision,
+            messages: retryPlan.messages,
+          })
+        }
         applyServerAction({
           type: 'APPLY_SERVER_SESSION_MESSAGES',
           payload: {
             sessionId: plan.sessionId,
-            messages: plan.messages,
+            messages: committedMessages,
             revision: result.revision,
           },
         })

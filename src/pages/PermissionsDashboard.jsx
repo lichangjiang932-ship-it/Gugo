@@ -1,5 +1,5 @@
 import { RefreshCw } from 'lucide-react'
-import LeftRail from '../components/LeftRail'
+import AppLayout from '../components/AppLayout.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useAppContext } from '../store/AppContext'
 import {
@@ -18,8 +18,7 @@ export default function PermissionsDashboard() {
   const { state: appState, dispatch } = useAppContext()
   const controller = usePermissionsDashboard(t)
   return (
-    <div className="flex h-screen overflow-hidden bg-paper">
-      <LeftRail />
+    <AppLayout className="flex h-screen overflow-hidden bg-paper">
       <div className="flex-1 overflow-y-auto p-8">
         <div className="mb-6 flex items-end justify-between">
           <div><span className="font-mono text-[9px] uppercase tracking-[0.22em] text-ink-fade">PERMISSIONS</span><h1 className="mt-1.5 font-semibold text-[28px] text-ink">{t('permissionsDashboard.title')}</h1><p className="mt-1 font-semibold text-base text-ink-soft">{t('permissionsDashboard.subtitle')}</p></div>
@@ -33,6 +32,6 @@ export default function PermissionsDashboard() {
         <ToolGateSection controller={controller} t={t} />
         <BrowserPermissionSection controller={controller} t={t} />
       </div>
-    </div>
+    </AppLayout>
   )
 }

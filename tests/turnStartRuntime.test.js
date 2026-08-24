@@ -119,6 +119,58 @@ test('turn start leaves no durable state when model readiness fails', async () =
   assert.equal(emitterFactory.emitters.length, 0)
 })
 
+test('turn start validates and persists its effective project directory before durable writes', async () => {
+  let aggregate = null
+  const { ports } = createPorts({
+    ports: {
+      resolveProjectDirectory: async ({ userId, workspacePath }) => {
+        assert.equal(userId, 'user-1')
+        assert.equal(workspacePath, 'C:\\Selected')
+        return {
+          workspacePath: 'C:\\Canonical',
+          projectDirectory: 'C:\\Canonical',
+          defaultOutputDirectory: 'C:\\Canonical',
+        }
+      },
+      commitTurnStart: async (command) => { aggregate = command },
+    },
+  })
+
+  const result = await createTurnStartRuntime(ports).initialize({
+    ...BASE_INPUT,
+    workspacePath: 'C:\\Selected',
+  })
+
+  assert.equal(aggregate.event.payload.workspacePath, 'C:\\Canonical')
+  assert.equal(aggregate.event.payload.projectDirectory, 'C:\\Canonical')
+  assert.equal(result.execution.projectDirectory, 'C:\\Canonical')
+  assert.equal(result.execution.defaultOutputDirectory, 'C:\\Canonical')
+  await result.emitter.close()
+})
+
+test('turn start leaves no durable state when workspace validation fails', async () => {
+  let durableWrites = 0
+  const workspaceError = Object.assign(new Error('workspace authorization expired'), {
+    code: 'TURN_WORKSPACE_NOT_AUTHORIZED',
+    statusCode: 403,
+  })
+  const { ports, emitterFactory } = createPorts({
+    ports: {
+      resolveProjectDirectory: async () => { throw workspaceError },
+      writeSession: async () => { durableWrites += 1 },
+      writeMessage: async () => { durableWrites += 1 },
+      commitTurnStart: async () => { durableWrites += 1 },
+    },
+  })
+
+  await assert.rejects(
+    createTurnStartRuntime(ports).initialize({ ...BASE_INPUT, workspacePath: 'C:\\Denied' }),
+    workspaceError,
+  )
+  assert.equal(durableWrites, 0)
+  assert.equal(emitterFactory.emitters.length, 0)
+})
+
 for (const [label, code] of [
   ['stale model configuration revision', 'MODEL_CONFIG_REVISION_STALE'],
   ['unconfigured model provider', 'MODEL_PROVIDER_NOT_CONFIGURED'],

@@ -52,14 +52,26 @@ export default {
       fontFamily: {
         hand: ['"Caveat"', '"Kalam"', 'cursive'],
         print: ['"Architects Daughter"', '"Kalam"', 'cursive'],
-        mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+        mono: ['var(--font-mono)'],
         display: ['"Cormorant Garamond"', 'Georgia', 'serif'],
         sans: ['"Inter"', '"PingFang SC"', '"Microsoft YaHei"', '"Helvetica Neue"', 'Arial', 'sans-serif'],
+      },
+      fontSize: {
+        page: 'var(--type-page)',
+        section: 'var(--type-section)',
+        body: 'var(--type-body)',
+        ui: 'var(--type-ui)',
+        meta: 'var(--type-meta)',
       },
       borderRadius: {
         card: 'var(--radius-card)',
         control: 'var(--radius-control)',
         pill: 'var(--radius-pill)',
+      },
+      zIndex: {
+        overlay: '40',
+        modal: '50',
+        toast: '60',
       },
     },
   },

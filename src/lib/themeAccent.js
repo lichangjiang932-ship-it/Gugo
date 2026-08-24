@@ -1,6 +1,6 @@
-// 纯函数:把 hex 强调色 + strong 标志转成可直接喷到 :root 的 CSS 变量集合 + className.
+// 纯函数:把 hex 强调色转成可直接喷到 :root 的 CSS 变量集合.
 // ThemeWrapper 用它来落 --accent-h / --accent-s / --accent-l / --accent,
-// 并据 strong 决定是否给 documentElement 加 .theme-accent-strong.
+// 颜色强度保持一致,不再提供额外的强色调模式.
 
 function clampByte(n) {
   if (Number.isNaN(n)) return 0
@@ -81,16 +81,14 @@ export function accentContrastRgb(hex) {
 }
 
 /**
- * applyAccent({ hex, strong }) → { vars, className }
+ * applyAccent({ hex }) → { vars }
  *   vars: 形如 { '--accent-h': '21', '--accent-s': '79%', '--accent-l': '57%', '--accent': 'hsl(...)' }
- *   className: 'theme-accent-strong' | ''
- * 调用方负责把 vars 喷到 documentElement.style,把 className toggle 到 classList.
+ * 调用方负责把 vars 喷到 documentElement.style.
  */
-export function applyAccent({ hex, strong } = {}) {
+export function applyAccent({ hex } = {}) {
   const hsl = hexToHsl(hex) || hexToHsl(DEFAULT_HEX)
-  // strong 模式把亮度压一档、饱和度顶一档,让色块更"扎眼".
-  const finalS = strong ? Math.min(100, hsl.s + 8) : hsl.s
-  const finalL = strong ? Math.max(0, hsl.l - 6) : hsl.l
+  const finalS = hsl.s
+  const finalL = hsl.l
   const vars = {
     '--workbench-accent-h': String(hsl.h),
     '--workbench-accent-s': `${finalS}%`,
@@ -102,10 +100,7 @@ export function applyAccent({ hex, strong } = {}) {
     '--accent': `hsl(${hsl.h} ${finalS}% ${finalL}%)`,
     '--color-accent-contrast-rgb': accentContrastRgb(hex),
   }
-  return {
-    vars,
-    className: strong ? 'theme-accent-strong' : '',
-  }
+  return { vars }
 }
 
 export const ACCENT_DEFAULT_HEX = DEFAULT_HEX

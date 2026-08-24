@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, Trash2, Pin, PinOff, NotebookPen, Loader2 } from 'lucide-react'
-import LeftRail from '../components/LeftRail'
+import AppLayout from '../components/AppLayout.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {
   listDeskNotesApi,
@@ -129,8 +129,7 @@ export default function DeskView() {
   }
 
   return (
-    <div className="h-screen flex bg-paper overflow-hidden">
-      <LeftRail />
+    <AppLayout className="h-screen flex bg-paper overflow-hidden">
       <div className="flex-1 flex flex-col min-w-0">
         <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
           <NotebookPen className="w-5 h-5 text-accent-ink" />
@@ -154,7 +153,7 @@ export default function DeskView() {
         <div className="flex-1 flex min-h-0">
           <div className="w-[320px] border-r border-ink/10 overflow-auto">
             {loading && <div className="p-4 text-sm text-ink-fade">{t('desk.loading') || '加载中…'}</div>}
-            {err && <div className="p-4 text-sm text-rose-700">{err}</div>}
+            {err && <div className="p-4 text-sm text-danger">{err}</div>}
             {!loading && notes.length === 0 && (
               <div className="p-6 text-center text-sm text-ink-fade">
                 {t('desk.empty') || '还没有便笺，点「新建」开始'}
@@ -207,7 +206,7 @@ export default function DeskView() {
                   <button
                     type="button"
                     onClick={() => onDelete(active.id)}
-                    className="h-8 px-2 rounded-md border border-ink/10 hover:bg-rose-50 text-rose-700 text-xs flex items-center gap-1"
+                    className="h-8 px-2 rounded-md border border-ink/10 hover:bg-danger/5 text-danger text-xs flex items-center gap-1"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     {t('desk.delete') || '删除'}
@@ -227,6 +226,6 @@ export default function DeskView() {
           </div>
         </div>
       </div>
-    </div>
+    </AppLayout>
   )
 }

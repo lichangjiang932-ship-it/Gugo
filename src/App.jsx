@@ -30,7 +30,7 @@ const AccessView = lazy(() => import('./pages/AccessView'))
 function Fallback() {
   const { t } = useT()
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center gap-4 text-stone-400" role="status" aria-label={t('memory.loading')}>
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4 text-ink-fade" role="status" aria-label={t('memory.loading')}>
       <div className="w-8 h-8 rounded-full border-2 border-accent/30 border-t-accent animate-spin" />
       <span className="text-sm tracking-wide">{t('memory.loading')}</span>
     </div>
@@ -48,7 +48,7 @@ function ContributedRoute({ contribution }) {
     <UiContributionRenderer
       contribution={contribution}
       context={contribution.componentProps || {}}
-      fallback={<div role="alert" className="p-6 text-sm text-red-600">{t('errors.unknown')}</div>}
+      fallback={<div role="alert" className="p-6 text-sm text-danger">{t('errors.unknown')}</div>}
     />
   )
   return contribution.requiresAuth ? <RequireAuth>{content}</RequireAuth> : content

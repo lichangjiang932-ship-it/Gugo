@@ -433,6 +433,25 @@ function registerDesktopIpc() {
     clipboard.writeText(String(value ?? ''))
     return { copied: true }
   })
+  ipcMain.handle('desktop:select-directory', async (event, payload = {}) => {
+    assertTrustedIpc(event)
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+      throw new Error('desktop directory picker is only available to the main window')
+    }
+    const requestedDefaultPath = String(payload?.defaultPath || '').trim().slice(0, 2048)
+    const defaultPath = requestedDefaultPath && path.isAbsolute(requestedDefaultPath)
+      ? path.normalize(requestedDefaultPath)
+      : null
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择项目根目录',
+      ...(defaultPath ? { defaultPath } : {}),
+      properties: ['openDirectory', 'createDirectory', 'promptToCreate', 'dontAddToRecent'],
+    })
+    const selectedPath = result.canceled ? '' : String(result.filePaths?.[0] || '').trim()
+    return selectedPath
+      ? { canceled: false, path: path.normalize(selectedPath) }
+      : { canceled: true, path: '' }
+  })
   ipcMain.handle('desktop:get-version', (event) => {
     assertTrustedIpc(event)
     return app.getVersion()

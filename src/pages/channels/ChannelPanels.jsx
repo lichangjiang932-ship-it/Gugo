@@ -8,6 +8,7 @@ import {
   updateChannelApi,
 } from '../../lib/channelClient.js'
 import { agentLabel } from './channelViewUtils.js'
+import Modal from '../../components/Modal.jsx'
 
 export function ChannelListGroup({ title, channels, activeId, onSelect }) {
   if (!channels.length) return null
@@ -81,16 +82,16 @@ export function CreateChannelPanel({ agents, onClose, onCreated, t }) {
     } finally { setSaving(false) }
   }
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/35 p-4">
-      <form onSubmit={submit} className="flex w-full max-w-md flex-col gap-4 rounded-md border border-ink bg-paper p-5 shadow-xl">
-        <div className="flex items-center justify-between"><h2 className="font-display text-xl text-ink">{t('channels.newChannel')}</h2><button type="button" onClick={onClose} className="rounded p-1 text-ink-fade hover:bg-paper-2 hover:text-ink"><X className="h-4 w-4" /></button></div>
+    <Modal onClose={onClose} closeOnBackdrop={false} ariaLabelledby="create-channel-title" className="max-w-md border-ink">
+      <form onSubmit={submit} className="flex flex-col gap-4 p-5">
+        <div className="flex items-center justify-between"><h2 id="create-channel-title" className="font-display text-xl text-ink">{t('channels.newChannel')}</h2><button type="button" onClick={onClose} className="rounded p-1 text-ink-fade hover:bg-paper-2 hover:text-ink"><X className="h-4 w-4" /></button></div>
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder={t('channels.name')} className="h-10 rounded-md border border-ink-fade/40 bg-paper px-3 text-sm outline-none focus:border-focus" />
         <div className="grid grid-cols-2 gap-1 rounded-md border border-ink-fade/40 p-1">{['group', 'dm'].map((item) => <button key={item} type="button" onClick={() => { setKind(item); setSelected([]); setDefaultAgentId('') }} className={`h-8 rounded text-sm ${kind === item ? 'bg-paper-2 text-ink' : 'text-ink-fade hover:bg-paper-2/60'}`}>{t(`channels.${item}`)}</button>)}</div>
         <div className="flex max-h-56 flex-col gap-1 overflow-y-auto">{agents.map((agent) => { const checked = selected.includes(agent.id); const disabled = kind === 'dm' && !checked && selected.length >= 1; return <label key={agent.id} className={`flex items-center gap-2 rounded-md px-2 py-2 ${disabled ? 'opacity-45' : 'hover:bg-paper-2'}`}><input type="checkbox" disabled={disabled} checked={checked} onChange={() => toggle(agent.id)} /><span className="text-sm text-ink-soft">{agentLabel(agent)}</span></label> })}</div>
         <select value={defaultAgentId} onChange={(event) => setDefaultAgentId(event.target.value)} className="h-9 rounded-md border border-ink-fade/40 bg-paper px-3 text-sm"><option value="">{t('channels.defaultAgent')}</option>{selected.map((id) => <option key={id} value={id}>{agentLabel(agents.find((item) => item.id === id))}</option>)}</select>
-        <button disabled={saving || !name.trim() || selected.length === 0} className="h-10 rounded-md bg-accent text-sm text-accent-contrast hover:bg-accent/90 disabled:opacity-50">{saving ? t('common.saving') : t('channels.create')}</button>
+        <button disabled={saving || !name.trim() || selected.length === 0} className="btn-primary h-10">{saving ? t('common.saving') : t('channels.create')}</button>
       </form>
-    </div>
+    </Modal>
   )
 }
 

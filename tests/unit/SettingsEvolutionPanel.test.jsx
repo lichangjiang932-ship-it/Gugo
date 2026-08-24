@@ -4,6 +4,10 @@ import { JSDOM } from 'jsdom'
 
 import SettingsEvolutionPanel from '../../src/components/settings/SettingsEvolutionPanel.jsx'
 import { buildEvolutionDecisionInput } from '../../src/components/settings/evolutionDecision.js'
+import {
+  buildAutopilotEnabledPayload,
+  resolveAutopilotModels,
+} from '../../src/components/settings/evolutionPanel/useEvolutionAutopilot.js'
 import { translations } from '../../src/i18n/translations.js'
 
 let act
@@ -103,6 +107,8 @@ test('evolution settings loads every local control-plane stage and exposes hones
   const requests = []
   globalThis.fetch = async (url, init = {}) => {
     requests.push({ url: String(url), init })
+    if (String(url) === '/api/evolution/auto-config') return json({ ok: true, config: null })
+    if (String(url).startsWith('/api/evolution/auto-runs')) return json({ ok: true, runs: [] })
     if (String(url).startsWith('/api/evolution/evidence')) return json({ ok: true, evidence: [{ id: 'e-1', source: 'feedback', signal: 'clear errors' }] })
     if (String(url).startsWith('/api/evolution/candidates')) return json({ ok: true, candidates: [
       { id: 'c-1', kind: 'prompt', title: 'Prompt change', summary: 'safer output' },
@@ -126,7 +132,9 @@ test('evolution settings loads every local control-plane stage and exposes hones
       root.render(<SettingsEvolutionPanel t={t} />)
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
-    assert.equal(requests.length, 7)
+    assert.equal(requests.length, 9)
+    assert.match(rootElement.textContent, /evolution\.autopilot/)
+    assert.equal(rootElement.querySelector('.evolution-advanced').open, false)
     assert.match(rootElement.textContent, /evolution\.workflow/)
     assert.match(rootElement.textContent, /evolution\.prepareWorkflow/)
     assert.ok(rootElement.querySelector('[aria-label="evolution.candidateProvider"]'))
@@ -149,6 +157,34 @@ test('evolution settings loads every local control-plane stage and exposes hones
   }
 })
 
+test('evolution autopilot builds a one-click config without exposing session ids', () => {
+  const models = resolveAutopilotModels([
+    { id: 'primary', models: ['main-model'] },
+    { id: 'reviewer', models: ['judge-model'] },
+  ])
+  const input = buildAutopilotEnabledPayload(null, models)
+  assert.equal(input.enabled, true)
+  assert.equal(input.target, 'prompt:workspace-instructions')
+  assert.deepEqual(input.generator, { providerId: 'primary', modelName: 'main-model' })
+  assert.deepEqual(input.replay, { providerId: 'primary', modelName: 'main-model' })
+  assert.deepEqual(input.evaluator, { providerId: 'reviewer', modelName: 'judge-model' })
+  assert.equal('sessionIds' in input, false)
+})
+
+test('automatic evolution requires an independent provider/model identity', () => {
+  assert.equal(resolveAutopilotModels([
+    { id: 'only', models: ['same-model'] },
+  ]), null)
+  assert.deepEqual(resolveAutopilotModels([
+    { id: 'one', models: ['shared'] },
+    { id: 'two', models: ['shared'] },
+  ]), {
+    generator: { providerId: 'one', modelName: 'shared' },
+    replay: { providerId: 'one', modelName: 'shared' },
+    evaluator: { providerId: 'two', modelName: 'shared' },
+  })
+})
+
 test('controlled evolution submits the complete dataset-to-evaluation workflow without approving, enabling, or publishing', async () => {
   const originalFetch = globalThis.fetch
   const dom = setupDom()
@@ -158,6 +194,8 @@ test('controlled evolution submits the complete dataset-to-evaluation workflow w
     const request = { url: String(url), init }
     requests.push(request)
     const method = init.method || 'GET'
+    if (request.url === '/api/evolution/auto-config') return json({ ok: true, config: null })
+    if (request.url.startsWith('/api/evolution/auto-runs')) return json({ ok: true, runs: [] })
     if (request.url === '/api/evolution/dataset?limit=200') {
       return json({
         ok: true,
@@ -620,5 +658,9 @@ test('evolution workbench copy is complete in every supported language', () => {
     assert.equal(typeof translations[language].evolution.promotions, 'string')
     assert.equal(typeof translations[language].evolution.confirmPromotionFingerprints, 'string')
     assert.equal(typeof translations[language].evolution.revokePromotion, 'string')
+    assert.equal(typeof translations[language].evolution.autopilot, 'string')
+    assert.equal(typeof translations[language].evolution.autopilotMissingModels, 'string')
+    assert.equal(typeof translations[language].evolution.autoState.failed, 'string')
+    assert.equal(typeof translations[language].evolution.advancedAudit, 'string')
   }
 })

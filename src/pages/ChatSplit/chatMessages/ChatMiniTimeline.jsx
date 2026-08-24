@@ -44,7 +44,7 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
     >
       <div
         ref={markerListRef}
-        className="chat-mini-timeline-list relative flex max-h-[min(52vh,28rem)] w-7 flex-col items-center gap-1.5 overflow-y-auto py-2"
+        className="chat-mini-timeline-list relative flex max-h-[min(42vh,18rem)] w-8 flex-col items-center gap-0.5 overflow-y-auto py-1.5"
       >
         {turns.map((turn) => {
           const active = turn.messageIndex === activeTurnIndex
@@ -59,7 +59,7 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
               type="button"
               aria-current={active ? 'step' : undefined}
               aria-label={label}
-              className="chat-mini-timeline-marker group relative z-10 flex h-3 w-7 shrink-0 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/45"
+              className="chat-mini-timeline-marker group relative z-10 flex h-3.5 w-8 shrink-0 items-center justify-start rounded-control pl-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink/35 focus-visible:ring-offset-1 focus-visible:ring-offset-paper"
               data-turn-index={turn.messageIndex}
               data-testid="chat-timeline-marker"
               onClick={() => onSelectTurn(turn.messageIndex)}
@@ -70,7 +70,7 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
             >
               <span
                 aria-hidden="true"
-                className={`block h-0.5 rounded-pill transition-[width,background-color] duration-150 ${active ? 'w-4 bg-accent' : 'w-2 bg-ink-fade/55 group-hover:w-3.5 group-hover:bg-ink-soft'}`}
+                className={`block h-[3px] rounded-pill transition-[width,background-color,transform] duration-200 ease-out motion-reduce:transition-none ${active ? 'w-4 bg-ink/80' : 'w-2.5 bg-ink/25 group-hover:w-4 group-hover:bg-ink/65 group-hover:translate-x-0.5 group-focus-visible:w-4 group-focus-visible:bg-ink/70'}`}
               />
             </button>
           )
@@ -78,14 +78,11 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
       </div>
       {preview && (
         <div
-          className="pointer-events-none absolute left-8 w-56 -translate-y-1/2 rounded-card border border-ink/10 bg-paper px-3 py-2 text-left shadow-sm"
+          className="pointer-events-none absolute left-7 w-52 -translate-y-1/2 rounded-control border border-ink/10 bg-paper/95 px-2.5 py-2 text-left shadow-sm backdrop-blur-sm"
           style={{ top: preview.top }}
           data-testid="chat-timeline-preview"
         >
-          <div className="mb-0.5 text-xs font-medium text-ink-fade">
-            {t('chatTimeline.turn')} {preview.number}
-          </div>
-          <div className="line-clamp-3 text-xs leading-5 text-ink-soft">{preview.summary}</div>
+          <div className="line-clamp-3 text-ui leading-5 text-ink-soft">{preview.summary}</div>
         </div>
       )}
     </nav>

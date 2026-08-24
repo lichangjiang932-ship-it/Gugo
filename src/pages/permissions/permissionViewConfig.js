@@ -8,8 +8,8 @@ export const PERMISSION_ITEMS = [
   { id: 'camera', icon: Camera, nameKey: 'itemCameraName', scopeKey: 'itemCameraScope', requestable: true },
 ]
 
-export const STATE_COLOR = { granted: 'text-emerald-600', denied: 'text-red-600', prompt: 'text-amber-600', unsupported: 'text-ink-fade', unknown: 'text-ink-fade' }
-export const STATE_DOT = { granted: 'bg-emerald-500', denied: 'bg-red-500', prompt: 'bg-amber-500', unsupported: 'bg-ink-fade', unknown: 'bg-ink-fade' }
+export const STATE_COLOR = { granted: 'text-success', denied: 'text-danger', prompt: 'text-warning', unsupported: 'text-ink-fade', unknown: 'text-ink-fade' }
+export const STATE_DOT = { granted: 'bg-success', denied: 'bg-danger', prompt: 'bg-warning', unsupported: 'bg-ink-fade', unknown: 'bg-ink-fade' }
 export const STATE_KEY = { granted: 'stateGranted', denied: 'stateDenied', prompt: 'statePrompt', unsupported: 'stateUnsupported', unknown: 'stateUnknown' }
 export const TOOL_ICONS = { bash_exec: Terminal, write_file: FilePen, edit_file: FileText }
 

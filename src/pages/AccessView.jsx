@@ -1,5 +1,5 @@
 import { LoaderCircle, Search } from 'lucide-react'
-import LeftRail from '../components/LeftRail.jsx'
+import AppLayout from '../components/AppLayout.jsx'
 import AccessConnectModal from '../components/AccessConnectModal.jsx'
 import { ACCESS_CAPABILITY_LEVELS } from '../lib/accessCatalog.js'
 import { useT } from '../i18n/I18nProvider.jsx'
@@ -27,8 +27,7 @@ export default function AccessView() {
   const { catalogCounts } = controller
 
   return (
-    <div className="flex h-screen overflow-hidden bg-paper">
-      <LeftRail />
+    <AppLayout className="flex h-screen overflow-hidden bg-paper">
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl px-6 py-8 md:px-10">
           <header className="mb-7 flex flex-col justify-between gap-4 md:flex-row md:items-end">
@@ -62,11 +61,11 @@ export default function AccessView() {
             </div>
             <CapabilityLegend t={t} />
           </div>
-          {controller.error && <div className="mb-5 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700">{controller.error}</div>}
+          {controller.error && <div className="mb-5 rounded-lg border border-danger/30 bg-danger/5 p-3 text-sm text-danger">{controller.error}</div>}
           {controller.loading ? <div className="flex h-52 items-center justify-center"><LoaderCircle className="h-6 w-6 animate-spin text-running" /></div> : <AccessConnectorGrid controller={controller} t={t} />}
         </div>
       </main>
       {controller.activeConnector && <AccessConnectModal connector={controller.activeConnector} integration={controller.byProvider[controller.activeConnector.provider]} onClose={() => controller.setActiveConnector(null)} onConnected={controller.connected} t={t} />}
-    </div>
+    </AppLayout>
   )
 }

@@ -15,6 +15,7 @@ import { readWorkspaceInstructions } from './workspaceInstructions.js'
 
 const SUPPORTED_TARGET = 'prompt:workspace-instructions'
 const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled'])
+const AUTOMATIC_PROMOTION_RUN_STATES = new Set(['canary_active', 'validated'])
 const MAX_LIMIT = 100
 
 function serviceError(code, message, statusCode = 400) {
@@ -111,6 +112,38 @@ function latestGuardEvaluation(releaseId) {
     SELECT * FROM evolution_canary_rollback_evaluations
     WHERE release_id = ? ORDER BY rowid DESC LIMIT 1
   `).get(releaseId) || null
+}
+
+function automaticPromotionRun(owner, automationRunId, evidence) {
+  const runId = String(automationRunId || '').trim()
+  const run = runId && getDb().prepare(`
+    SELECT run.*, config.enabled AS config_enabled,
+      config.target AS config_target, config.config_revision AS current_config_revision
+    FROM evolution_auto_runs AS run
+    JOIN evolution_auto_configs AS config ON config.user_id = run.user_id
+    WHERE run.id = ? AND run.user_id = ?
+  `).get(runId, owner)
+  if (!run
+    || !AUTOMATIC_PROMOTION_RUN_STATES.has(run.state)
+    || run.config_enabled !== 1
+    || run.current_config_revision !== run.config_revision
+    || run.config_target !== SUPPORTED_TARGET
+    || run.candidate_id !== evidence.candidate.id
+    || run.replay_id !== evidence.replay.id
+    || run.evaluation_id !== evidence.evaluation.id
+    || run.approval_id !== evidence.approval.id
+    || run.canary_id !== evidence.release.id
+    || run.promotion_id
+    || evidence.approval.decisionOrigin !== 'automatic_policy'
+    || evidence.approval.automationRunId !== runId
+    || evidence.onlineEvidence.policy.productionMonitoringEnabled !== true) {
+    throw serviceError(
+      'EVOLUTION_AUTOMATIC_PROMOTION_INVALID',
+      'automatic promotion requires an enabled, unchanged workspace-prompt run with production monitoring',
+      409,
+    )
+  }
+  return run
 }
 
 function policyValue(row) {
@@ -301,7 +334,7 @@ function confirmationView(evidence) {
 }
 
 function promotionFingerprint(input) {
-  return sha256({
+  const fingerprint = {
     canaryReleaseFingerprint: input.canaryReleaseFingerprint,
     rollbackPolicyFingerprint: input.rollbackPolicyFingerprint,
     approvalFingerprint: input.approvalFingerprint,
@@ -312,7 +345,12 @@ function promotionFingerprint(input) {
     target: input.target,
     baselineSha256: input.baselineSha256,
     candidateSha256: input.candidateSha256,
-  })
+  }
+  if (input.decisionOrigin === 'automatic_policy') {
+    fingerprint.decisionOrigin = input.decisionOrigin
+    fingerprint.automationRunId = input.automationRunId
+  }
+  return sha256(fingerprint)
 }
 
 function hasValidPromotionSnapshot(promotion) {
@@ -329,6 +367,8 @@ function hasValidPromotionSnapshot(promotion) {
       target: promotion.target,
       baselineSha256: promotion.baseline_sha256,
       candidateSha256: promotion.candidate_sha256,
+      decisionOrigin: promotion.decision_origin,
+      automationRunId: promotion.automation_run_id,
     }) === promotion.promotion_fingerprint
 }
 
@@ -372,12 +412,64 @@ function promotionView(row) {
     replayFingerprint: row.replay_fingerprint,
     evaluationFingerprint: row.evaluation_fingerprint,
     promotionFingerprint: row.promotion_fingerprint,
+    decisionOrigin: row.decision_origin || 'human_review',
+    automationRunId: row.automation_run_id || null,
     state: active ? 'active' : 'revoked',
     stateReason: event?.reason || row.promotion_reason,
     stateChangedAt: event?.created_at || row.created_at,
     stats: promotionStats(row.id),
     createdAt: row.created_at,
   }
+}
+
+function automaticPromotionPolicyCurrent(promotion) {
+  if (promotion?.decision_origin !== 'automatic_policy' || !promotion.automation_run_id) return true
+  const row = getDb().prepare(`
+    SELECT run.state, run.promotion_id, run.config_revision,
+      config.enabled, config.config_revision AS current_config_revision
+    FROM evolution_auto_runs AS run
+    JOIN evolution_auto_configs AS config ON config.user_id = run.user_id
+    WHERE run.id = ? AND run.user_id = ?
+  `).get(promotion.automation_run_id, promotion.user_id)
+  return Boolean(row)
+    && row.state === 'promoted'
+    && row.promotion_id === promotion.id
+    && row.enabled === 1
+    && row.current_config_revision === row.config_revision
+}
+
+function rollbackAutomaticPromotionSnapshot({ promotion, reason, code, now }) {
+  if (promotion?.decision_origin !== 'automatic_policy' || !promotion.automation_run_id) return false
+  const rolledBackAt = timestamp(now)
+  const message = boundedReason(reason, 'EVOLUTION_PROMOTION_REVOKE_REASON_INVALID')
+  const db = getDb()
+  return db.transaction(() => {
+    const removed = db.prepare(`
+      DELETE FROM evolution_active_promotions
+      WHERE user_id = ? AND target = ? AND promotion_id = ?
+    `).run(promotion.user_id, promotion.target, promotion.id)
+    if (removed.changes !== 1) return false
+    db.prepare(`
+      INSERT INTO evolution_promotion_events (
+        id, user_id, promotion_id, event_type, reason, created_at
+      ) VALUES (?, ?, ?, 'revoked', ?, ?)
+    `).run(randomUUID(), promotion.user_id, promotion.id, message, rolledBackAt)
+    db.prepare(`
+      UPDATE evolution_auto_runs
+      SET state = 'rolled_back', stage = 'production_snapshot_rollback',
+        error_code = ?, error_message = ?, updated_at = ?, finished_at = ?
+      WHERE id = ? AND user_id = ? AND promotion_id = ? AND state = 'promoted'
+    `).run(
+      String(code || 'EVOLUTION_AUTOMATIC_PROMOTION_SNAPSHOT_DRIFT').slice(0, 160),
+      message,
+      rolledBackAt,
+      rolledBackAt,
+      promotion.automation_run_id,
+      promotion.user_id,
+      promotion.id,
+    )
+    return true
+  }).immediate()
 }
 
 export function buildEvolutionPromotionReview({ userId, canaryReleaseId, env = process.env } = {}) {
@@ -403,16 +495,22 @@ export function buildEvolutionPromotionReview({ userId, canaryReleaseId, env = p
   }
 }
 
-export function createEvolutionPromotion({
+function createEvolutionPromotionWithOrigin({
   userId,
   canaryReleaseId,
   reason: reasonValue,
   confirmations,
+  decisionOrigin = 'human_review',
+  automationRunId = null,
   env = process.env,
   now = Date.now(),
 } = {}) {
   const owner = ownerId(userId)
   const reason = boundedReason(reasonValue)
+  const origin = decisionOrigin === 'automatic_policy' ? 'automatic_policy' : 'human_review'
+  const automaticRunId = origin === 'automatic_policy'
+    ? String(automationRunId || '').trim()
+    : null
   const createdAt = timestamp(now)
   const id = randomUUID()
   const db = getDb()
@@ -421,6 +519,16 @@ export function createEvolutionPromotion({
       const evidence = assertPromotionEvidence(owner, canaryReleaseId, env)
       const expectedConfirmations = confirmationView(evidence)
       assertConfirmations(confirmations, expectedConfirmations)
+      const automationRun = origin === 'automatic_policy'
+        ? automaticPromotionRun(owner, automaticRunId, evidence)
+        : null
+      if (origin === 'human_review' && evidence.approval.decisionOrigin !== 'human_review') {
+        throw serviceError(
+          'EVOLUTION_PROMOTION_APPROVAL_ORIGIN_MISMATCH',
+          'an automatic approval can only be promoted by its automatic policy run',
+          409,
+        )
+      }
       const activeCanary = db.prepare(`
         SELECT canary.id FROM evolution_canary_releases AS canary
         WHERE canary.user_id = ? AND canary.target = ?
@@ -458,6 +566,8 @@ export function createEvolutionPromotion({
         target: evidence.release.target,
         baselineSha256: evidence.release.baseline_sha256,
         candidateSha256: evidence.release.candidate_sha256,
+        decisionOrigin: origin,
+        automationRunId: automaticRunId,
       }
       const fingerprint = promotionFingerprint(fingerprintInput)
       db.prepare(`
@@ -467,8 +577,8 @@ export function createEvolutionPromotion({
           candidate_content, canary_release_fingerprint, rollback_policy_fingerprint,
           approval_fingerprint, replay_fingerprint, evaluation_fingerprint,
           promotion_fingerprint, created_at, online_grader_policy_fingerprint,
-          online_guard_evaluation_fingerprint
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          online_guard_evaluation_fingerprint, decision_origin, automation_run_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         owner,
@@ -491,6 +601,8 @@ export function createEvolutionPromotion({
         createdAt,
         fingerprintInput.onlineGraderPolicyFingerprint,
         fingerprintInput.onlineGuardEvaluationFingerprint,
+        origin,
+        automaticRunId,
       )
       db.prepare(`
         INSERT INTO evolution_promotion_events (
@@ -501,6 +613,22 @@ export function createEvolutionPromotion({
         INSERT INTO evolution_active_promotions (user_id, target, promotion_id, activated_at)
         VALUES (?, ?, ?, ?)
       `).run(owner, evidence.release.target, id, createdAt)
+      if (automationRun) {
+        const promoted = db.prepare(`
+          UPDATE evolution_auto_runs
+          SET state = 'promoted', stage = 'production_promoted', promotion_id = ?,
+            updated_at = ?, finished_at = ?
+          WHERE id = ? AND user_id = ? AND promotion_id IS NULL
+            AND state IN ('canary_active', 'validated')
+        `).run(id, createdAt, createdAt, automationRun.id, owner)
+        if (promoted.changes !== 1) {
+          throw serviceError(
+            'EVOLUTION_AUTOMATIC_PROMOTION_FENCE_LOST',
+            'automatic promotion run changed before activation',
+            409,
+          )
+        }
+      }
     }).immediate()
   } catch (error) {
     if (/UNIQUE constraint failed/iu.test(String(error?.message || ''))) {
@@ -513,6 +641,65 @@ export function createEvolutionPromotion({
     throw error
   }
   return getEvolutionPromotion({ userId: owner, id })
+}
+
+export function createEvolutionPromotion(input = {}) {
+  return createEvolutionPromotionWithOrigin({
+    ...input,
+    decisionOrigin: 'human_review',
+    automationRunId: null,
+  })
+}
+
+export function createEvolutionAutomaticPromotion({
+  userId,
+  automationRunId,
+  env = process.env,
+  now = Date.now(),
+} = {}) {
+  const owner = ownerId(userId)
+  const runId = String(automationRunId || '').trim()
+  const existing = runId && getDb().prepare(`
+    SELECT id FROM evolution_promotions
+    WHERE user_id = ? AND automation_run_id = ?
+  `).get(owner, runId)
+  if (existing) return getEvolutionPromotion({ userId: owner, id: existing.id })
+  const run = runId && getDb().prepare(`
+    SELECT canary_id FROM evolution_auto_runs WHERE id = ? AND user_id = ?
+  `).get(runId, owner)
+  if (!run?.canary_id) {
+    throw serviceError(
+      'EVOLUTION_AUTOMATIC_PROMOTION_INVALID',
+      'automatic promotion requires a canary-linked automation run',
+      409,
+    )
+  }
+  const review = buildEvolutionPromotionReview({
+    userId: owner,
+    canaryReleaseId: run.canary_id,
+    env,
+  })
+  try {
+    return createEvolutionPromotionWithOrigin({
+      userId: owner,
+      canaryReleaseId: run.canary_id,
+      reason: 'Automatically promoted by the explicitly enabled workspace-prompt policy after both canary guards passed.',
+      confirmations: review.confirmations,
+      decisionOrigin: 'automatic_policy',
+      automationRunId: runId,
+      env,
+      now,
+    })
+  } catch (error) {
+    if (error?.code === 'EVOLUTION_PROMOTION_ALREADY_EXISTS') {
+      const concurrent = getDb().prepare(`
+        SELECT id FROM evolution_promotions
+        WHERE user_id = ? AND automation_run_id = ?
+      `).get(owner, runId)
+      if (concurrent) return getEvolutionPromotion({ userId: owner, id: concurrent.id })
+    }
+    throw error
+  }
 }
 
 export function revokeEvolutionPromotion({ userId, id, reason: reasonValue, now = Date.now() } = {}) {
@@ -534,6 +721,14 @@ export function revokeEvolutionPromotion({ userId, id, reason: reasonValue, now 
         id, user_id, promotion_id, event_type, reason, created_at
       ) VALUES (?, ?, ?, 'revoked', ?, ?)
     `).run(randomUUID(), owner, row.id, reason, revokedAt)
+    if (row.decision_origin === 'automatic_policy' && row.automation_run_id) {
+      db.prepare(`
+        UPDATE evolution_auto_runs
+        SET state = 'stopped', stage = 'production_revoked',
+          error_code = NULL, error_message = ?, updated_at = ?, finished_at = ?
+        WHERE id = ? AND user_id = ? AND promotion_id = ? AND state = 'promoted'
+      `).run(reason, revokedAt, revokedAt, row.automation_run_id, owner, row.id)
+    }
   }).immediate()
   return getEvolutionPromotion({ userId: owner, id: row.id })
 }
@@ -581,9 +776,36 @@ export function resolveEvolutionPromotionAssignment({
       JOIN evolution_promotions AS promotion ON promotion.id = active.promotion_id
       WHERE active.user_id = ? AND active.target = ?
     `).get(owner, SUPPORTED_TARGET)
-    if (!hasValidPromotionSnapshot(observedPromotion)) return null
+    if (!hasValidPromotionSnapshot(observedPromotion)) {
+      rollbackAutomaticPromotionSnapshot({
+        promotion: observedPromotion,
+        reason: 'Automatic production rollback: immutable promotion fingerprint drift was detected.',
+        code: 'EVOLUTION_AUTOMATIC_PROMOTION_FINGERPRINT_DRIFT',
+        now,
+      })
+      return null
+    }
+    if (!automaticPromotionPolicyCurrent(observedPromotion)) {
+      rollbackAutomaticPromotionSnapshot({
+        promotion: observedPromotion,
+        reason: 'Automatic production rollback: the enabled automation policy changed or was disabled.',
+        code: 'EVOLUTION_AUTOMATIC_PROMOTION_POLICY_DRIFT',
+        now,
+      })
+      return null
+    }
     let observedBaselineSha256 = null
     try { observedBaselineSha256 = sha256(currentWorkspaceInstructions(env)) } catch { /* diagnostic only */ }
+    if (observedPromotion.decision_origin === 'automatic_policy'
+      && observedBaselineSha256 !== observedPromotion.baseline_sha256) {
+      rollbackAutomaticPromotionSnapshot({
+        promotion: observedPromotion,
+        reason: 'Automatic production rollback: workspace instruction baseline drift was detected.',
+        code: 'EVOLUTION_AUTOMATIC_PROMOTION_BASELINE_DRIFT',
+        now,
+      })
+      return null
+    }
     const assignedAt = timestamp(now)
     assignment = db.transaction(() => {
       const existing = db.prepare(`

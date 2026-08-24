@@ -12,15 +12,16 @@ test('FullscreenMediaModal component exists and exports default', () => {
   assert.match(source, /export default function FullscreenMediaModal/)
 })
 
-test('FullscreenMediaModal uses framer-motion fade + black backdrop + z-50', () => {
+test('FullscreenMediaModal uses the shared portal modal with a framer-motion fade and black backdrop', () => {
   const source = fs.readFileSync(componentPath, 'utf8')
   assert.match(source, /from 'framer-motion'/)
+  assert.match(source, /import Modal from '\.\/Modal\.jsx'/)
+  assert.match(source, /<Modal/)
   assert.match(source, /motion\.div/)
   assert.match(source, /initial=\{\{ opacity: 0 \}\}/)
   assert.match(source, /animate=\{\{ opacity: 1 \}\}/)
-  assert.match(source, /z-50/)
   assert.match(source, /bg-black/)
-  assert.match(source, /fixed inset-0/)
+  assert.doesNotMatch(source, /fixed inset-0/)
 })
 
 test('FullscreenMediaModal supports wheel zoom, drag pan, keyboard shortcuts', () => {

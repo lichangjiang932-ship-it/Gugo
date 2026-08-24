@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { RefreshCw, ShieldAlert, Check, X, Pencil, Terminal, FilePen, FileText, Globe, MousePointerClick } from 'lucide-react'
-import LeftRail from '../components/LeftRail'
+import AppLayout from '../components/AppLayout.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { decideApproval, fetchApprovals, subscribeToApprovalEvents } from '../lib/approvalClient'
 
 const RISK_TONE = {
-  high: { dot: 'bg-red-500', text: 'text-red-600', border: 'border-red-500/40' },
-  medium: { dot: 'bg-amber-500', text: 'text-amber-600', border: 'border-amber-500/40' },
+  high: { dot: 'bg-danger', text: 'text-danger', border: 'border-danger/40' },
+  medium: { dot: 'bg-warning', text: 'text-warning', border: 'border-warning/40' },
   low: { dot: 'bg-ink-fade', text: 'text-ink-fade', border: 'border-ink-fade/40' },
 }
 
@@ -99,7 +99,7 @@ export function ApprovalCard({ approval, onDecide, busy, t }) {
             className="w-full font-mono text-xs p-2.5 border border-ink/30 rounded bg-paper text-ink resize-y"
           />
           {jsonError && (
-            <p className="font-semibold text-sm text-red-600 mt-1">{jsonError}</p>
+            <p className="font-semibold text-sm text-danger mt-1">{jsonError}</p>
           )}
         </div>
       ) : (
@@ -114,7 +114,7 @@ export function ApprovalCard({ approval, onDecide, busy, t }) {
             <button
               onClick={submitEdit}
               disabled={busy}
-              className="h-8 px-3 border border-emerald-500/60 rounded-md font-semibold text-sm text-emerald-700 hover:bg-emerald-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              className="h-8 px-3 border border-success/60 rounded-md font-semibold text-sm text-success hover:bg-success/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
               <Check className="w-3.5 h-3.5" />
               {t('approvals.inbox.approveEdited')}
@@ -132,7 +132,7 @@ export function ApprovalCard({ approval, onDecide, busy, t }) {
             <button
               onClick={() => onDecide(approval.id, 'approve')}
               disabled={busy}
-              className="h-8 px-3 border border-emerald-500/60 rounded-md font-semibold text-sm text-emerald-700 hover:bg-emerald-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              className="h-8 px-3 border border-success/60 rounded-md font-semibold text-sm text-success hover:bg-success/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
               <Check className="w-3.5 h-3.5" />
               {t('approvals.inbox.approve')}
@@ -140,7 +140,7 @@ export function ApprovalCard({ approval, onDecide, busy, t }) {
             <button
               onClick={() => onDecide(approval.id, 'deny')}
               disabled={busy}
-              className="h-8 px-3 border border-red-500/60 rounded-md font-semibold text-sm text-red-600 hover:bg-red-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              className="h-8 px-3 border border-danger/60 rounded-md font-semibold text-sm text-danger hover:bg-danger/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
               <X className="w-3.5 h-3.5" />
               {t('approvals.inbox.deny')}
@@ -222,8 +222,7 @@ export default function ApprovalsInbox() {
   }), [approvals])
 
   return (
-    <div className="h-screen flex bg-paper overflow-hidden">
-      <LeftRail />
+    <AppLayout className="h-screen flex bg-paper overflow-hidden">
 
       <div className="flex-1 p-8 overflow-y-auto">
         <div className="flex items-end justify-between mb-6">
@@ -248,7 +247,7 @@ export default function ApprovalsInbox() {
             <div className="font-semibold text-[26px] text-ink mt-1.5">{counts.total}</div>
           </div>
           <div className="p-3.5 border border-ink/30 rounded-md bg-paper">
-            <span className="font-mono text-[9px] tracking-wider text-red-600">{t('approvals.inbox.statHighRisk')}</span>
+            <span className="font-mono text-[9px] tracking-wider text-danger">{t('approvals.inbox.statHighRisk')}</span>
             <div className="font-semibold text-[26px] text-ink mt-1.5">{counts.high}</div>
           </div>
         </div>
@@ -279,6 +278,6 @@ export default function ApprovalsInbox() {
           </div>
         )}
       </div>
-    </div>
+    </AppLayout>
   )
 }

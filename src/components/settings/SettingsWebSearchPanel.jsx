@@ -184,7 +184,7 @@ export default function SettingsWebSearchPanel({ t }) {
               {connections.length > 1 ? <div className="mt-3 flex items-center gap-1 border-t border-[#e8e6e0] pt-2.5" data-testid="web-search-connection-actions">
                 <button type="button" disabled={index === 0} onClick={() => moveConnection(item.id, -1)} aria-label={t('webSearch.moveUp')} className="rounded-md p-1.5 text-[#77746d] hover:bg-white disabled:opacity-25"><ArrowUp className="h-3.5 w-3.5" /></button>
                 <button type="button" disabled={index === connections.length - 1} onClick={() => moveConnection(item.id, 1)} aria-label={t('webSearch.moveDown')} className="rounded-md p-1.5 text-[#77746d] hover:bg-white disabled:opacity-25"><ArrowDown className="h-3.5 w-3.5" /></button>
-                <button type="button" onClick={() => removeConnection(item.id)} aria-label={t('webSearch.removeApi')} className="ml-auto rounded p-1 text-red-500 hover:bg-red-50"><Trash2 className="h-3.5 w-3.5" /></button>
+                <button type="button" onClick={() => removeConnection(item.id)} aria-label={t('webSearch.removeApi')} className="ml-auto rounded p-1 text-danger hover:bg-danger/5"><Trash2 className="h-3.5 w-3.5" /></button>
               </div> : null}
             </div>
           })}

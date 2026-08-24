@@ -205,6 +205,7 @@ export async function runServerChatTurn({
   toolsConfig,
   turnId,
   userPrompt,
+  workspacePath,
 }) {
   const controller = new AbortController()
   const owner = { sessionId, turnId }
@@ -303,6 +304,7 @@ export async function runServerChatTurn({
       content: serverContent,
       displayContent,
       attachments: attachmentReferences,
+      workspacePath,
       modelConfigRevision,
       modelName,
       modelProviderId,

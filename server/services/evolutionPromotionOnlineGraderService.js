@@ -324,6 +324,10 @@ function buildPromotionOnlineGuard({ promotion, policy, rollbackPolicy, baseline
     },
   }
   const breaches = []
+  if (promotion.decision_origin === 'automatic_policy'
+    && candidate.some((row) => row.execution_status === 'failed')) {
+    breaches.push('grader_execution_failed')
+  }
   if (completeEvidence && candidateAverage < policy.minimum_quality_score) {
     breaches.push('minimum_quality_score')
   }
@@ -414,6 +418,22 @@ function applyAutomaticRollback({ userId, promotion, evaluation, now }) {
       id, user_id, promotion_id, event_type, reason, created_at
     ) VALUES (?, ?, ?, 'revoked', ?, ?)
   `).run(randomUUID(), userId, promotion.id, reason, timestamp(now))
+  if (promotion.decision_origin === 'automatic_policy' && promotion.automation_run_id) {
+    getDb().prepare(`
+      UPDATE evolution_auto_runs
+      SET state = 'rolled_back', stage = 'production_guard_rollback',
+        error_code = 'EVOLUTION_AUTOMATIC_PROMOTION_GUARD_ROLLBACK',
+        error_message = ?, updated_at = ?, finished_at = ?
+      WHERE id = ? AND user_id = ? AND promotion_id = ? AND state = 'promoted'
+    `).run(
+      reason,
+      timestamp(now),
+      timestamp(now),
+      promotion.automation_run_id,
+      userId,
+      promotion.id,
+    )
+  }
   return getDb().prepare(`
     SELECT * FROM evolution_promotion_rollbacks WHERE promotion_id = ?
   `).get(promotion.id)

@@ -1,3 +1,4 @@
+import path from 'node:path'
 import {
   isCommandExecutionTool,
 } from './capabilityChecks.js'
@@ -15,7 +16,12 @@ import {
 
 export function readResultCanVerifyMutation(result) {
   const extractionStatus = String(result?.extractionStatus || '').trim().toLowerCase()
-  if (extractionStatus) return extractionStatus === 'text'
+  if (extractionStatus) {
+    const target = String(result?.path || '').trim().toLowerCase()
+    const officeResult = /\.(?:docx|pptx|xlsx)$/u.test(target)
+      || /openxmlformats-officedocument/u.test(String(result?.mimeType || '').toLowerCase())
+    return extractionStatus === 'text' && (!officeResult || result?.formatValidated === true)
+  }
   return true
 }
 
@@ -51,10 +57,20 @@ export function powerShellVerificationTargets(call, result) {
   if (!isReadOnlyPowerShellVerificationCall(call)) return new Set()
   const script = powerShellCommandScript(call)
   const targets = new Set()
+  if (!/\b(?:Get-Content|Select-String)\b/i.test(script)) return targets
   addVerificationTarget(targets, result?.path)
-  const pathArgument = /\b(?:Get-Content|Get-FileHash|Get-Item|Select-String)\b[^\r\n;|]{0,240}?(?:-(?:Literal)?Path\s+)(?:"([^"]+)"|'([^']+)'|([^\s;|)]+))/gi
+  // Existence/metadata and an unbound digest do not prove that the bytes are
+  // the bytes produced by this turn. Binary outputs are cleared only by the
+  // host-issued, identity-bound structure-validation receipt below.
+  const pathArgument = /\b(?:Get-Content|Select-String)\b[^\r\n;|]{0,240}?(?:-(?:Literal)?Path\s+)(?:"([^"]+)"|'([^']+)'|([^\s;|)]+))/gi
   for (const match of script.matchAll(pathArgument)) {
     addVerificationTarget(targets, match[1] || match[2] || match[3])
+  }
+  const structuralBinaryExtensions = new Set([
+    '.docx', '.pptx', '.xlsx', '.pdf', '.png', '.jpg', '.jpeg', '.webp',
+  ])
+  for (const target of [...targets]) {
+    if (structuralBinaryExtensions.has(path.posix.extname(target.toLowerCase()))) targets.delete(target)
   }
   return targets
 }
@@ -135,6 +151,57 @@ export function clearTargetsMatchingEvidence(pendingTargets, evidenceTargets) {
     }
   }
   return cleared
+}
+
+const STRUCTURAL_ARTIFACT_FORMATS = new Set([
+  'docx',
+  'pptx',
+  'xlsx',
+  'pdf',
+  'image',
+])
+
+/**
+ * Clear only the concrete file targets covered by host-issued binary artifact
+ * validation receipts. The workspace sentinel and deletion targets are
+ * intentionally out of scope: publishing one valid file cannot verify an
+ * unrelated mutation or an entire project.
+ */
+export function clearArtifactValidatedMutationTargets(pendingTargets, receipts, binding = {}) {
+  if (!pendingTargets.size || !Array.isArray(receipts) || receipts.length === 0) return false
+  const expectedUserId = String(binding.userId || '').trim()
+  const expectedSessionId = String(binding.sessionId || '').trim()
+  const expectedTurnId = String(binding.turnId || '').trim()
+  const expectedJobId = String(binding.jobId || '').trim()
+  const expectedStepId = String(binding.stepId || '').trim()
+  const chatBinding = Boolean(expectedSessionId || expectedTurnId)
+  if (!expectedUserId
+    || (chatBinding && (!expectedSessionId || !expectedTurnId))
+    || (!chatBinding && !expectedJobId)) return false
+  const evidence = new Set()
+  for (const receipt of receipts) {
+    if (!receipt || typeof receipt !== 'object'
+      || receipt.verified !== true
+      || receipt.verifier !== 'bounded_structure_parser'
+      || receipt.verifierVersion !== 1
+      || !String(receipt.artifactId || '').trim()
+      || String(receipt.userId || '').trim() !== expectedUserId
+      || (chatBinding && String(receipt.sessionId || '').trim() !== expectedSessionId)
+      || (chatBinding && String(receipt.turnId || '').trim() !== expectedTurnId)
+      || (!chatBinding && String(receipt.jobId || '').trim() !== expectedJobId)
+      || (!chatBinding && expectedStepId && String(receipt.stepId || '').trim() !== expectedStepId)
+      || !STRUCTURAL_ARTIFACT_FORMATS.has(String(receipt.format || '').trim().toLowerCase())
+      || !/^[a-f0-9]{64}$/u.test(String(receipt.sha256 || ''))
+      || !Number.isSafeInteger(receipt.byteLength)
+      || receipt.byteLength <= 0) continue
+    const sourcePath = String(receipt.sourcePath || '').trim()
+    const artifactPath = String(receipt.artifactPath || '').trim()
+    if (!sourcePath || !artifactPath || !path.isAbsolute(sourcePath) || !path.isAbsolute(artifactPath)) continue
+    addVerificationTarget(evidence, receipt.path)
+    addVerificationTarget(evidence, receipt.declaredPath)
+    addVerificationTarget(evidence, sourcePath)
+  }
+  return clearExplicitTargetsMatchingEvidence(pendingTargets, evidence)
 }
 
 export function clearVerifiedMutationTargets(pendingTargets, call, result) {

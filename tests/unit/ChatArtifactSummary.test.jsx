@@ -59,7 +59,6 @@ test('tool artifact renders final explanation and file card together', async () 
         selectedModel="test-model"
         onExampleClick={() => {}}
         onEditMessage={() => {}}
-        onRegenerateMessage={() => {}}
         onDeleteMessage={() => {}}
         onPermAllow={() => {}}
         onPermDeny={() => {}}
@@ -93,7 +92,6 @@ test('generation only hides actions for the streaming assistant and completed me
   const callbacks = {
     onExampleClick: () => {},
     onEditMessage: () => {},
-    onRegenerateMessage: () => {},
     onDeleteMessage: () => {},
     onPermAllow: () => {},
     onPermDeny: () => {},
@@ -157,7 +155,8 @@ test('generation only hides actions for the streaming assistant and completed me
     assert.ok(streamingCodeBlock)
     assert.equal(streamingCodeBlock.getElementsByTagName('button').length, 0)
     assert.equal(rootElement.querySelector('[data-testid="artifact-open-card"]'), null)
-    const activeCopyButtons = rootElement.querySelectorAll('.chat-message-actions button')
+    const activeCopyButtons = rootElement.querySelectorAll('[data-testid="copy-message"]')
+    assert.equal(activeCopyButtons.length, 2)
     await act(async () => {
       activeCopyButtons[0].click()
       activeCopyButtons[1].click()

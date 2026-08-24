@@ -152,7 +152,7 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
     assert.equal(rootElement.querySelector('[data-skill-id="codex-obscure-runtime"]'), null)
 
     await click(dom, act, skillCards[0].querySelector('[data-skill-open]'))
-    const curatedDialog = rootElement.querySelector('[role="dialog"]')
+    const curatedDialog = dom.window.document.querySelector('[role="dialog"]')
     assert.ok(curatedDialog)
     assert.match(curatedDialog.textContent, /Superpowers/)
     assert.match(curatedDialog.textContent, /Jesse Vincent/)
@@ -173,7 +173,7 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
     assert.doesNotMatch(blockedSkill.textContent, /当前环境无法直接运行/)
     await click(dom, act, blockedSkill.querySelector('[data-skill-open]'))
 
-    const detailDialog = rootElement.querySelector('[role="dialog"]')
+    const detailDialog = dom.window.document.querySelector('[role="dialog"]')
     assert.ok(detailDialog)
     assert.match(detailDialog.textContent, /需要额外运行资源/)
     assert.doesNotMatch(detailDialog.textContent, /当前环境已满足运行要求/)
@@ -199,16 +199,16 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
     assert.ok(customButton)
     await click(dom, act, customButton)
 
-    const idInput = rootElement.querySelector('input[placeholder="my-skill"]')
-    const nameInput = rootElement.querySelector('input[placeholder="我的技能"]')
-    const promptInput = rootElement.querySelector('textarea[placeholder^="说明模型应如何工作"]')
+    const idInput = dom.window.document.querySelector('input[placeholder="my-skill"]')
+    const nameInput = dom.window.document.querySelector('input[placeholder="我的技能"]')
+    const promptInput = dom.window.document.querySelector('textarea[placeholder^="说明模型应如何工作"]')
     assert.ok(idInput && nameInput && promptInput)
 
     await enterValue(dom, act, idInput, 'quality-guard')
     await enterValue(dom, act, nameInput, '质量守卫')
     await enterValue(dom, act, promptInput, '先检查事实与风险，再输出可执行结论。')
 
-    const createButton = [...rootElement.querySelectorAll('button')]
+    const createButton = [...dom.window.document.querySelectorAll('button')]
       .find((button) => button.textContent.trim() === '创建')
     assert.ok(createButton)
     assert.equal(createButton.disabled, false)

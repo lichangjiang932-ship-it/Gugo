@@ -1,6 +1,7 @@
 import { getAuthToken } from './accountClient.js'
 
 const LOCAL_FILE_REQUEST_TIMEOUT_MS = 30_000
+const NATIVE_DIRECTORY_PICKER_TIMEOUT_MS = 10 * 60_000
 
 function authHeaders(json = false) {
   const token = getAuthToken?.()
@@ -100,6 +101,30 @@ export async function browseLocalDirectoriesApi(path = '', options = {}) {
     headers: authHeaders(true),
     body: JSON.stringify({ path }),
   }, options))
+}
+
+export async function selectLocalDirectoryApi(defaultPath = '', options = {}) {
+  return parse(await fetchWithTimeout('/api/local-files/select-directory', {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ defaultPath: String(defaultPath || '').trim() }),
+  }, {
+    ...options,
+    timeoutMs: options.timeoutMs ?? NATIVE_DIRECTORY_PICKER_TIMEOUT_MS,
+  }))
+}
+
+export async function createManagedProjectDirectoryApi(name, options = {}) {
+  try {
+    return await parse(await fetchWithTimeout('/api/local-files/projects', {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({ name }),
+    }, options))
+  } catch (error) {
+    if (error?.status === 405) error.code = 'PROJECT_CREATION_RESTART_REQUIRED'
+    throw error
+  }
 }
 
 export async function setDefaultOutputDirectoryApi(path, options = {}) {
