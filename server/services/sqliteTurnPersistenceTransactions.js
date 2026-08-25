@@ -457,6 +457,55 @@ export function createSqliteTurnPersistenceTransactions({
       publishEvents(committed.insertedEvents)
       return committed.stored[0]
     },
+
+    async commitTurnFailedRetryRejection({ userId, failureEvent, message } = {}) {
+      assertEventScope({ userId, event: failureEvent, type: 'turn.failed' })
+      assertMessageScope(message, { userId, sessionId: failureEvent.sessionId })
+      const rejection = message.modelContext?.failedRetryRejection
+      if (message.id !== `${failureEvent.turnId}:assistant`
+        || message.role !== 'assistant'
+        || message.modelContext?.turnEvidence !== true
+        || message.modelContext?.evidenceState !== 'failed'
+        || message.modelContext?.serverLastSequence !== failureEvent.sequence
+        || message.modelContext?.error?.retryable !== false
+        || rejection?.failureSequence !== failureEvent.sequence
+        || rejection?.code !== message.modelContext?.error?.code) {
+        throw persistenceError(
+          'TURN_FAILED_RETRY_REJECTION_PROJECTION_INVALID',
+          'failed Turn retry rejection projection does not match the terminal failure',
+        )
+      }
+
+      const db = openDatabase()
+      db.transaction(() => {
+        const latest = db.prepare(`SELECT id, sequence, type, payload_json FROM turn_events
+          WHERE user_id = ? AND session_id = ? AND turn_id = ?
+          ORDER BY sequence DESC LIMIT 1`).get(
+          userId,
+          failureEvent.sessionId,
+          failureEvent.turnId,
+        )
+        if (!latest
+          || latest.id !== failureEvent.id
+          || latest.sequence !== failureEvent.sequence
+          || latest.type !== 'turn.failed') {
+          throw persistenceError(
+            'TURN_FAILED_RETRY_REJECTION_CONFLICT',
+            'the Turn is no longer at the failed terminal being rejected',
+          )
+        }
+        const failure = parseJsonRecord(latest.payload_json)
+        if (failure?.error?.retryable !== true) {
+          throw persistenceError(
+            'TURN_FAILED_RETRY_REJECTION_CONFLICT',
+            'the terminal failure is no longer eligible for failed retry rejection',
+          )
+        }
+        writeMessage(message)
+        assertExistingMessage(readMessage, message, { ignoreCreatedAt: true })
+      }).immediate()
+      return message
+    },
   })
 }
 

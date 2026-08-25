@@ -62,6 +62,7 @@ export async function initializeConversation(s) {
           {
             toolName: String(entry?.toolName || '').trim(),
             verified: entry?.verified === true,
+            ...(entry?.artifactType ? { artifactType: String(entry.artifactType).trim().toLowerCase() } : {}),
             ...(entry?.validation && typeof entry.validation === 'object'
               ? { validation: { ...entry.validation } }
               : {}),
@@ -174,13 +175,18 @@ export async function initializeConversation(s) {
           const next = {
             toolName: String(provenance.toolName),
             verified: provenance.verified === true,
+            ...(provenance.artifactType
+              ? { artifactType: String(provenance.artifactType).trim().toLowerCase() }
+              : {}),
             ...(provenance.validation && typeof provenance.validation === 'object'
               ? { validation: { ...provenance.validation } }
               : {}),
           }
           s.artifactProvenance.set(id, next)
           if (previous?.verified === true
-            && (next.verified !== true || previous.toolName !== next.toolName)
+            && (next.verified !== true
+              || previous.toolName !== next.toolName
+              || previous.artifactType !== next.artifactType)
             && s.deliveryArtifactIds.includes(id)) {
             selectedArtifactInvalidated = true
           }
@@ -246,22 +252,27 @@ export async function initializeConversation(s) {
       if (s.requiresPersistedArtifact) {
         const ineligibleArtifactIds = requested.filter((id) => {
           const provenance = s.artifactProvenance.get(id)
-          return !provenance?.verified
-            || !isFileArtifactTool(provenance.toolName)
-            || !s.authorizedArtifactTools.has(provenance.toolName)
+          const verifiedAuthorizedGenerator = provenance?.verified === true
+            && isFileArtifactTool(provenance.toolName)
+            && s.authorizedArtifactTools.has(provenance.toolName)
+          const verifiedEquivalentOutput = provenance?.verified === true
+            && s.artifactContractToolsForProvenance(provenance).size > 0
+          return !verifiedAuthorizedGenerator && !verifiedEquivalentOutput
         })
         if (ineligibleArtifactIds.length > 0) {
           return {
             ok: false,
             code: 'deliverable_artifact_provenance_mismatch',
-            error: 'Final deliverables must come from a successfully completed file artifact tool. Intermediate files cannot be selected.',
+            error: 'Final deliverables must come from a verified generator or a structurally verified declared command output of the requested type. Intermediate files cannot be selected.',
             invalidArtifactIds: ineligibleArtifactIds,
             retryable: true,
-            hint: 'Call the requested create_* tool successfully, then select only its verified artifact IDs.',
+            hint: 'Select only verified artifact IDs that satisfy the requested output type.',
           }
         }
         const missingSelectedTools = [...s.expectedArtifactTools].filter((toolName) => (
-          !requested.some((id) => s.artifactProvenance.get(id)?.toolName === toolName)
+          !requested.some((id) => (
+            s.artifactContractToolsForProvenance(s.artifactProvenance.get(id)).has(toolName)
+          ))
         ))
         if (missingSelectedTools.length > 0) {
           return {
@@ -270,7 +281,7 @@ export async function initializeConversation(s) {
             error: `Every requested file type must be selected. Missing verified deliverables from: ${missingSelectedTools.join(', ')}.`,
             missingTools: missingSelectedTools,
             retryable: true,
-            hint: 'Include the verified artifact ID produced by every requested create_* tool.',
+            hint: 'Include one verified artifact ID for every requested output type.',
           }
         }
       }

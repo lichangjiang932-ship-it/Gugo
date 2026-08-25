@@ -228,14 +228,18 @@ export async function completeIteration(s) {
           incomplete: true,
           noProgress: true,
           code: i.noProgressCode || 'tool_no_progress',
+          retryable: i.noProgressFailure?.retryable === true,
+          ...(i.noProgressFailure?.hint ? { hint: i.noProgressFailure.hint } : {}),
           reason: i.noProgressReason,
           recovery: s.recovery,
         }, {
           steeringLeaseId: i.steeringLeaseId,
           finalMetadata: {
-            noProgress: true,
-            code: i.noProgressCode || 'tool_no_progress',
-          },
+              noProgress: true,
+              code: i.noProgressCode || 'tool_no_progress',
+              retryable: i.noProgressFailure?.retryable === true,
+              ...(i.noProgressFailure?.hint ? { hint: i.noProgressFailure.hint } : {}),
+            },
         })
         if (!terminal) return { kind: 'continue' }
         return { kind: 'return', value: terminal }

@@ -54,6 +54,26 @@ test('durable TURN_INCOMPLETE output enables resume without treating transport r
   }, { sessionId: 'session-a', turnId: 'turn-a' }), null)
 })
 
+test('an explicitly non-retryable failure never publishes continue-generation state', () => {
+  for (const code of ['STREAM_TRUNCATED', 'EMPTY_MODEL_RESPONSE_LENGTH', 'TURN_INCOMPLETE']) {
+    assert.equal(buildStreamResumeState({
+      failed: true,
+      error: { code, partialText: 'durable partial output', retryable: false },
+    }, { sessionId: 'session-a', turnId: 'turn-a' }), null, code)
+  }
+
+  assert.deepEqual(buildStreamResumeState({
+    failed: true,
+    error: { code: 'STREAM_TRUNCATED', partialText: 'transport partial output' },
+  }, { sessionId: 'session-a', turnId: 'turn-a' }), {
+    sessionId: 'session-a',
+    turnId: 'turn-a',
+    code: 'STREAM_TRUNCATED',
+    reason: null,
+    partialText: 'transport partial output',
+  })
+})
+
 test('success, user cancellation, and empty truncation output clear resume state', () => {
   assert.equal(buildStreamResumeState({ terminal: { type: 'turn.completed' } }, { sessionId: 'session-a' }), null)
   assert.equal(buildStreamResumeState({
@@ -95,6 +115,39 @@ test('a persisted TURN_INCOMPLETE assistant message rebuilds the original turn r
     reason: 'length',
     partialText: 'durable partial answer',
   })
+})
+
+test('a persisted failed-retry checkpoint rejection stays closed after refresh', () => {
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'turn-sealed-refresh:assistant',
+      role: 'assistant',
+      content: 'durable partial answer',
+      createdAt: 2,
+      modelContext: {
+        turnId: 'turn-sealed-refresh',
+        turnEvidence: true,
+        evidenceState: 'failed',
+        serverLastSequence: 7,
+        error: {
+          code: 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
+          message: '恢复所需的执行检查点不存在或已失效。',
+          retryable: false,
+        },
+        failedRetryRejection: {
+          code: 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
+          failureSequence: 7,
+        },
+      },
+    }],
+  })
+
+  assert.equal(
+    buildStreamResumeStateFromMessages(snapshot.messages, { sessionId: 'session-sealed-refresh' }),
+    null,
+  )
+  assert.equal(snapshot.messages[0]?.meta?.serverFailure?.retryable, false)
 })
 
 test('resume state updates are isolated per session', () => {
@@ -139,6 +192,30 @@ test('a failed retry republishes continue-generation only for the retried sessio
     partialText: 'retry partial',
   })
   assert.deepEqual(getStreamResumeStateForSession(states, 'session-b'), untouched)
+})
+
+test('a rejected stale retry clears the previous continue-generation state', () => {
+  const previous = buildStreamResumeState({
+    failed: true,
+    error: { code: 'TURN_INCOMPLETE', partialText: 'old partial', retryable: true },
+  }, { sessionId: 'session-a', turnId: 'turn-a' })
+  const states = updateStreamResumeStatesFromTurnResult(
+    updateStreamResumeStates({}, 'session-a', previous),
+    {
+      sessionId: 'session-a',
+      turnId: 'turn-a',
+      result: {
+        failed: true,
+        error: {
+          code: 'TURN_FAILED_RETRY_NOT_ALLOWED',
+          partialText: 'old partial',
+          retryable: false,
+        },
+      },
+    },
+  )
+
+  assert.equal(getStreamResumeStateForSession(states, 'session-a'), null)
 })
 
 test('the continue-generation button signals a failed turn retry instead of sending a new prompt', () => {

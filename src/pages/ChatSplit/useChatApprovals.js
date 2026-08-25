@@ -7,10 +7,19 @@ import {
 } from '../../lib/approvalClient.js'
 import { createApprovalEpochGuard, createApprovalOwnerGuard } from './approvalOwnerGuard.js'
 
+function approvalPresentationClosedError() {
+  const error = new Error('Approval view closed before a decision was submitted.')
+  error.name = 'AbortError'
+  error.code = 'APPROVAL_PRESENTATION_CLOSED'
+  error.localTurnConsumerAbort = true
+  return error
+}
+
 export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
   const [toolApproval, setToolApproval] = useState({ open: false, request: null, busy: false })
   const [approvalSettings, setApprovalSettings] = useState({ mode: 'normal', rememberedTools: [] })
   const toolApprovalResolveRef = useRef(null)
+  const activeApprovalRef = useRef(null)
   const mountedRef = useRef(true)
   const ownerGuardRef = useRef(createApprovalOwnerGuard())
   const epochGuardRef = useRef(createApprovalEpochGuard())
@@ -35,14 +44,18 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
     return true
   }, [setWorkbenchMessage])
 
-  const requestServerToolApproval = useCallback((request, owner) => {
-    // A background turn may ask for approval after its chat page was closed.
-    // Deny that tool safely instead of leaving the entire turn waiting forever.
-    if (!mountedRef.current) return decideApprovalApi(request.id, 'deny', null, { remember: false })
-    return new Promise((resolve, reject) => {
-      const previousResolve = toolApprovalResolveRef.current
+  const presentServerToolApproval = useCallback((request, owner) => {
+    // Closing the chat page is not a user denial. Keep the persisted approval
+    // pending so the same turn can surface it again when the page reconnects.
+    // The local event dispatcher must still be released deterministically;
+    // resolving here would falsely claim a decision, while leaving the Promise
+    // pending would keep the session registered as running forever.
+    if (!mountedRef.current) return Promise.reject(approvalPresentationClosedError())
+    let approvalPromise
+    let rejectApproval
+    approvalPromise = new Promise((resolve, reject) => {
+      rejectApproval = reject
       epochGuardRef.current.advance()
-      previousResolve?.({ approved: false })
       ownerGuardRef.current.claim(owner)
       toolApprovalResolveRef.current = async (decision) => {
         try {
@@ -50,11 +63,34 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
           resolve()
         } catch (error) {
           reject(error)
+        } finally {
+          if (activeApprovalRef.current?.promise === approvalPromise) activeApprovalRef.current = null
         }
       }
       setToolApproval({ open: true, request, busy: false })
     })
+    activeApprovalRef.current = {
+      id: request.id,
+      promise: approvalPromise,
+      reject: rejectApproval,
+    }
+    return approvalPromise
   }, [])
+
+  const requestServerToolApproval = useCallback((request, owner) => {
+    // approval.required is durable and may be delivered again after an SSE
+    // reconnect. Reusing the in-flight promise is essential: replacing it used
+    // to submit `deny` for an approval the user had never rejected.
+    const active = activeApprovalRef.current
+    if (active?.id === request.id) return active.promise
+    if (active) {
+      return active.promise.then(
+        () => presentServerToolApproval(request, owner),
+        () => presentServerToolApproval(request, owner),
+      )
+    }
+    return presentServerToolApproval(request, owner)
+  }, [presentServerToolApproval])
 
   const resolveToolApprovalForOwner = useCallback((owner, decision) => {
     if (!ownerGuardRef.current.matches(owner)) return false
@@ -65,7 +101,10 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
   const clearToolApprovalForOwner = useCallback((owner) => {
     if (!ownerGuardRef.current.release(owner)) return false
     epochGuardRef.current.advance()
+    const active = activeApprovalRef.current
     toolApprovalResolveRef.current = null
+    activeApprovalRef.current = null
+    active?.reject?.(approvalPresentationClosedError())
     setToolApproval({ open: false, request: null, busy: false })
     return true
   }, [])
@@ -77,9 +116,13 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
     return () => {
       mountedRef.current = false
       epochGuard.advance()
-      toolApprovalResolveRef.current?.({ approved: false })
+      const active = activeApprovalRef.current
       toolApprovalResolveRef.current = null
+      activeApprovalRef.current = null
       ownerGuard.clear()
+      // Reject only the local waiter. Never translate view teardown into a
+      // persisted deny decision; reconnecting can replay the pending approval.
+      active?.reject?.(approvalPresentationClosedError())
     }
   }, [])
 

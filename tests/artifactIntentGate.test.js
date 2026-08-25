@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import test from 'node:test'
+import { PDFDocument } from 'pdf-lib'
 import {
   allowedArtifactTools,
   detectArtifactIntent,
@@ -39,6 +40,19 @@ const INTENT_ARTIFACT_USER_ID = 'intent-user'
 const INTENT_ARTIFACT_SESSION_ID = 'artifact-intent-session'
 let intentArtifactScopeReady = false
 
+function ensureIntentArtifactScope() {
+  if (intentArtifactScopeReady) return
+  getDb().prepare('DELETE FROM turn_artifacts WHERE user_id = ? AND session_id = ?')
+    .run(INTENT_ARTIFACT_USER_ID, INTENT_ARTIFACT_SESSION_ID)
+  createUser({ id: INTENT_ARTIFACT_USER_ID, email: 'artifact-intent@example.com' })
+  upsertSession({
+    id: INTENT_ARTIFACT_SESSION_ID,
+    userId: INTENT_ARTIFACT_USER_ID,
+    title: 'Artifact intent tests',
+  })
+  intentArtifactScopeReady = true
+}
+
 function approveToolCall({ args, toolCallId }) {
   assert.ok(toolCallId)
   return {
@@ -49,17 +63,7 @@ function approveToolCall({ args, toolCallId }) {
 }
 
 function persistStubTurnArtifact({ turnId, id, filename, type }) {
-  if (!intentArtifactScopeReady) {
-    getDb().prepare('DELETE FROM turn_artifacts WHERE user_id = ? AND session_id = ?')
-      .run(INTENT_ARTIFACT_USER_ID, INTENT_ARTIFACT_SESSION_ID)
-    createUser({ id: INTENT_ARTIFACT_USER_ID, email: 'artifact-intent@example.com' })
-    upsertSession({
-      id: INTENT_ARTIFACT_SESSION_ID,
-      userId: INTENT_ARTIFACT_USER_ID,
-      title: 'Artifact intent tests',
-    })
-    intentArtifactScopeReady = true
-  }
+  ensureIntentArtifactScope()
   const url = `/api/artifacts/${filename}`
   appendTurnArtifact({
     id,
@@ -1590,6 +1594,145 @@ test('a command with an exact declared output may update and verify the requeste
   assert.equal(result.incomplete, undefined)
   assert.equal(result.text, '已修改并验证原文件。')
   assert.deepEqual(result.artifactIds, [])
+})
+
+test('a structurally verified declared shell PDF satisfies delivery without calling create_pdf', async () => {
+  ensureIntentArtifactScope()
+  const turnId = `verified-shell-pdf-${randomUUID()}`
+  const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-verified-shell-pdf-'))
+  const outputPath = path.join(outputDirectory, '8.25作业.pdf')
+  const prompt = `请执行代码生成 PDF 文件 ${outputPath}，完成后把 PDF 作为最终交付物。`
+  let modelCalls = 0
+  let shellArtifactId = ''
+  const executed = []
+
+  try {
+    const result = await runToolsLoop({
+      job: {
+        id: turnId,
+        userId: INTENT_ARTIFACT_USER_ID,
+        sessionId: INTENT_ARTIFACT_SESSION_ID,
+        origin: 'chat',
+        prompt,
+        userPrompt: prompt,
+      },
+      step: { id: `${turnId}-step`, kind: 'chat' },
+      messages: [{ role: 'user', content: prompt }],
+      intentMode: 'execute',
+      toolSpecs: ['bash_exec', 'create_pdf', 'set_deliverables'].map((name) => (
+        SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === name)
+      )).filter(Boolean),
+      maxIters: 6,
+      enableToolHooks: false,
+      requestToolApproval: approveToolCall,
+      executeTool: async ({ name, args }) => {
+        executed.push(name)
+        assert.equal(name, 'bash_exec')
+        if (String(args.command).includes('verify_pdf_layout.py')) {
+          return {
+            ok: true,
+            exitCode: 0,
+            stdout: 'PDF_LAYOUT_VERIFICATION_OK\n',
+            stderr: '',
+            changedPaths: [],
+          }
+        }
+        assert.deepEqual(args.expected_outputs, [outputPath])
+        const document = await PDFDocument.create()
+        document.addPage([595, 842])
+        const bytes = Buffer.from(await document.save())
+        fs.writeFileSync(outputPath, bytes)
+        return {
+          ok: true,
+          exitCode: 0,
+          stdout: 'generated and verified',
+          stderr: '',
+          cwd: outputDirectory,
+          changedPaths: [outputPath],
+          verifiedOutputs: [{
+            path: outputPath,
+            declaredPath: outputPath,
+            scope: 'grant',
+            status: 'created',
+            type: 'file',
+            size: bytes.length,
+          }],
+          unverifiedOutputs: [],
+        }
+      },
+      runModel: async ({ messages }) => {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: `${turnId}-shell`,
+              function: {
+                name: 'bash_exec',
+                arguments: JSON.stringify({
+                  command: 'python generate_pdf.py',
+                  cwd: outputDirectory,
+                  expected_outputs: [outputPath],
+                }),
+              },
+            }],
+          }
+        }
+        if (modelCalls === 2) {
+          const shellResult = JSON.parse(messages.findLast((message) => message.role === 'tool').content)
+          assert.equal(shellResult.ok, true)
+          assert.equal(shellResult.artifactValidation.ok, true)
+          assert.equal(shellResult.artifactValidation.receipts[0].format, 'pdf')
+          assert.match(shellResult.artifactValidation.receipts[0].sha256, /^[a-f0-9]{64}$/)
+          shellArtifactId = shellResult.artifactId
+          assert.ok(shellArtifactId)
+          return {
+            content: '',
+            toolCalls: [{
+              id: `${turnId}-verify-layout`,
+              function: {
+                name: 'bash_exec',
+                arguments: JSON.stringify({
+                  command: 'python verify_pdf_layout.py',
+                  cwd: outputDirectory,
+                }),
+              },
+            }],
+          }
+        }
+        if (modelCalls === 3) {
+          const verification = JSON.parse(messages.findLast((message) => message.role === 'tool').content)
+          assert.match(verification.stdout, /PDF_LAYOUT_VERIFICATION_OK/)
+          return {
+            content: '',
+            toolCalls: [{
+              id: `${turnId}-deliver`,
+              function: {
+                name: 'set_deliverables',
+                arguments: JSON.stringify({ artifact_ids: [shellArtifactId] }),
+              },
+            }],
+          }
+        }
+        if (modelCalls === 4) return { content: 'PDF 已生成并验证。', toolCalls: [] }
+        throw new Error(`unexpected model call: ${modelCalls}`)
+      },
+    })
+
+    assert.deepEqual(executed, ['bash_exec', 'bash_exec'])
+    assert.equal(modelCalls, 4)
+    assert.deepEqual(result.artifactIds, [shellArtifactId])
+    assert.equal(result.incomplete, undefined)
+    const artifacts = listTurnArtifacts({
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      turnId,
+    })
+    assert.equal(artifacts.length, 1)
+    assert.equal(artifacts[0].type, 'pdf')
+  } finally {
+    fs.rmSync(outputDirectory, { recursive: true, force: true })
+  }
 })
 
 function deliveredHtmlTurn({ prefix, artifactId, filename }) {

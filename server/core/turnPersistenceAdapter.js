@@ -35,6 +35,7 @@ const TRANSACTION_FUNCTIONS = Object.freeze([
 ])
 const OPTIONAL_TRANSACTION_FUNCTIONS = Object.freeze([
   'commitTurnFailedRetry',
+  'commitTurnFailedRetryRejection',
 ])
 const EXECUTION_FUNCTIONS = Object.freeze([
   'claimTurnExecutionLease',

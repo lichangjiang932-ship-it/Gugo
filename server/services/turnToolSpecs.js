@@ -136,6 +136,13 @@ function workspaceToolCapabilities(status) {
   const shell = localExecution && (
     bypass || writableDirectoryGrants.length > 0 || workspaceEffective.shell === true
   )
+  // A file grant (for example an explicitly selected source PDF) does not
+  // authorize command execution in its parent directory. It does, however,
+  // make command execution requestable: the model must retain the command
+  // schema so it can request the missing read-write directory and then pass
+  // the normal per-call approval gate. Hiding the schema made normal mode look
+  // less capable than bypass and prompted models to tell users to change modes.
+  const shellRequestable = localExecution && (fileRead || directoryRead || fileWrite)
   const git = (bypass && globalGit) || trustedGit
   const gitWrite = (bypass && globalGitMutation) || trustedGitMutation
   return {
@@ -144,6 +151,7 @@ function workspaceToolCapabilities(status) {
     directoryRead,
     fileWrite,
     shell,
+    shellRequestable,
     git,
     gitWrite,
   }
@@ -171,7 +179,7 @@ function workspaceToolVisible(spec, capabilities, {
   if (DIRECTORY_READ_TOOLS.has(name)) return capabilities.directoryRead
   if (FILE_READ_TOOLS.has(name)) return capabilities.fileRead
   if (FILE_WRITE_TOOLS.has(name)) return capabilities.fileWrite
-  if (SHELL_TOOLS.has(name)) return capabilities.shell
+  if (SHELL_TOOLS.has(name)) return capabilities.shell || capabilities.shellRequestable
   if (GIT_READ_TOOLS.has(name)) return capabilities.git
   if (GIT_WRITE_TOOLS.has(name)) return capabilities.gitWrite
   // Non-local dynamic capability providers and connected apps own their own

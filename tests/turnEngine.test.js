@@ -3957,19 +3957,83 @@ test('TurnEngine maps an incomplete loop result to failure instead of completion
   assert.equal(evidence?.content, '任务尚未完全通过验证。已成功写入的本地修改会保留，并可在文件栏中查看；待验证文件不代表验证通过。请重试以继续完成验证。')
 })
 
+test('TurnEngine preserves deterministic no-progress failures and forbids failed retry', async () => {
+  const turnId = 'turn-non-retryable-repeat-window'
+  const hint = '请停止交替重复读取，改用已有结果完成验证。'
+  const engine = createTestEngine({
+    runLoop: async ({ saveCheckpoint }) => {
+      await saveCheckpoint({
+        messages: [],
+        artifactIds: [],
+        iterations: 7,
+        final: {
+          text: '工具调用重复，任务未完成。',
+          iterations: 7,
+          incomplete: true,
+          noProgress: true,
+          code: 'repeated_tool_call_window',
+          retryable: false,
+          hint,
+        },
+      })
+      return {
+        text: '工具调用重复，任务未完成。',
+        artifactIds: [],
+        iterations: 7,
+        incomplete: true,
+        noProgress: true,
+        code: 'repeated_tool_call_window',
+        retryable: false,
+        hint,
+        reason: '同一工具调用反复出现，未取得实质进展',
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: '完成工具任务。',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const failed = events(turnId).at(-1)
+  assert.equal(failed.type, 'turn.failed')
+  assert.equal(failed.payload.code, 'repeated_tool_call_window')
+  assert.equal(failed.payload.error.retryable, false)
+  assert.equal(failed.payload.error.hint, hint)
+  assert.match(failed.payload.message, /未取得实质进展/)
+  await assert.rejects(
+    engine.resumeTurn({
+      userId,
+      sessionId: 'turn-engine-session',
+      turnId,
+      retryFailed: true,
+    }),
+    (error) => error?.code === 'TURN_FAILED_RETRY_NOT_ALLOWED',
+  )
+})
+
 test('TurnEngine coalesces concurrent failed-turn retries on the original Turn', async () => {
   const turnId = 'turn-incomplete-concurrent-retry'
   let loopCalls = 0
   let releaseRetry
   const retryGate = new Promise((resolve) => { releaseRetry = resolve })
   const engine = createTestEngine({
-    runLoop: async ({ saveCheckpoint }) => {
+    runLoop: async ({ loadCheckpoint, saveCheckpoint }) => {
       loopCalls += 1
       if (loopCalls === 1) {
         await saveCheckpoint({
           messages: [],
           artifactIds: ['artifact-retained-across-retry'],
           iterations: 1,
+          final: {
+            text: 'The first attempt needs another pass.',
+            iterations: 1,
+            incomplete: true,
+            reason: 'verification_pending',
+          },
         })
         return {
           text: 'The first attempt needs another pass.',
@@ -3979,6 +4043,9 @@ test('TurnEngine coalesces concurrent failed-turn retries on the original Turn',
           reason: 'verification_pending',
         }
       }
+      const resumedCheckpoint = await loadCheckpoint()
+      assert.equal(resumedCheckpoint.final, null)
+      assert.deepEqual(resumedCheckpoint.artifactIds, ['artifact-retained-across-retry'])
       await retryGate
       return {
         text: 'The original Turn is now complete.',
@@ -4033,6 +4100,131 @@ test('TurnEngine coalesces concurrent failed-turn retries on the original Turn',
     limit: 500,
   }).filter((message) => message.role === 'user').map((message) => message.id)
   assert.deepEqual(userMessageIdsAfterRetry, userMessageIdsBeforeRetry)
+})
+
+test('TurnEngine allows one checkpoint retry and closes a repeatedly incomplete turn', async () => {
+  const turnId = 'turn-incomplete-retry-limit'
+  let loopCalls = 0
+  const engine = createTestEngine({
+    runLoop: async ({ saveCheckpoint }) => {
+      loopCalls += 1
+      if (loopCalls === 1) {
+        await saveCheckpoint({
+          messages: [],
+          artifactIds: ['retained-output'],
+          iterations: 1,
+          final: {
+            text: '第一次执行仍需验证。',
+            iterations: 1,
+            incomplete: true,
+          },
+        })
+      }
+      return {
+        text: loopCalls === 1 ? '第一次执行仍需验证。' : '续写后仍缺少最终验证。',
+        artifactIds: ['retained-output'],
+        iterations: loopCalls,
+        incomplete: true,
+        reason: '最终验证仍未完成',
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: '完成并验证任务。',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  assert.equal(events(turnId).at(-1)?.payload?.error?.retryable, true)
+
+  await engine.resumeTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    retryFailed: true,
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const repeatedFailure = events(turnId).at(-1)
+  assert.equal(repeatedFailure.type, 'turn.failed')
+  assert.equal(repeatedFailure.payload.code, 'TURN_INCOMPLETE')
+  assert.equal(repeatedFailure.payload.error.retryable, false)
+  assert.match(repeatedFailure.payload.error.hint, /已执行一次断点续写/)
+  assert.equal(loopCalls, 2)
+  await assert.rejects(
+    engine.resumeTurn({
+      userId,
+      sessionId: 'turn-engine-session',
+      turnId,
+      retryFailed: true,
+    }),
+    (error) => error?.code === 'TURN_FAILED_RETRY_LIMIT_REACHED' && error?.retryable === false,
+  )
+})
+
+test('TurnEngine permanently seals a failed retry when its checkpoint is missing', async () => {
+  const turnId = 'turn-incomplete-missing-retry-checkpoint'
+  let loopCalls = 0
+  const engine = createTestEngine({
+    runLoop: async () => {
+      loopCalls += 1
+      return {
+        text: '任务产生了部分结果，但没有可验证的恢复检查点。',
+        artifactIds: [],
+        iterations: 1,
+        incomplete: true,
+        reason: 'checkpoint_missing',
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: '完成任务并验证结果。',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const failure = events(turnId).at(-1)
+  const eventCount = events(turnId).length
+  assert.equal(failure.type, 'turn.failed')
+  assert.equal(failure.payload.error.retryable, true)
+  assert.equal(getTurnCheckpoint({ userId, sessionId: 'turn-engine-session', turnId }), null)
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(
+      engine.resumeTurn({
+        userId,
+        sessionId: 'turn-engine-session',
+        turnId,
+        retryFailed: true,
+      }),
+      (error) => error?.code === 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED'
+        && error?.retryable === false
+        && /检查点不存在或已失效/.test(error?.message || ''),
+    )
+  }
+
+  const sealedEvidence = getMessage({
+    userId,
+    sessionId: 'turn-engine-session',
+    messageId: `${turnId}:assistant`,
+  })
+  assert.equal(sealedEvidence?.modelContext?.turnEvidence, true)
+  assert.equal(sealedEvidence?.modelContext?.evidenceState, 'failed')
+  assert.equal(sealedEvidence?.modelContext?.serverLastSequence, failure.sequence)
+  assert.equal(sealedEvidence?.modelContext?.error?.code, 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED')
+  assert.equal(sealedEvidence?.modelContext?.error?.retryable, false)
+  assert.deepEqual(sealedEvidence?.modelContext?.failedRetryRejection, {
+    code: 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
+    failureSequence: failure.sequence,
+  })
+  assert.equal(events(turnId).length, eventCount)
+  assert.equal(events(turnId).at(-1)?.id, failure.id)
+  assert.equal(loopCalls, 1)
 })
 
 test('TurnEngine preserves approval metadata source in the durable approval event', async () => {

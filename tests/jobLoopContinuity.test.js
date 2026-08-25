@@ -638,3 +638,53 @@ test('运行时在第 20 次同工具失败后保留硬上限机器码', async (
   assert.equal(result.code, 'tool_no_progress_hard_limit')
   assert.equal(finalCheckpointCode, 'tool_no_progress_hard_limit')
 })
+
+test('运行时保留滚动窗口重复调用的不可重试证据', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  let modelRounds = 0
+  let finalCheckpoint = null
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-repeat-window-terminal',
+      userId: null,
+      origin: 'chat',
+      prompt: '读取目标并完成任务',
+    },
+    approvalPrincipal: INTERNAL_APPROVAL_PRINCIPAL,
+    step: { id: 'step-repeat-window-terminal', kind: 'chat' },
+    messages: [{ role: 'user', content: '读取目标并完成任务' }],
+    toolSpecs: [readFile],
+    maxIters: 20,
+    enableToolHooks: false,
+    saveCheckpoint: async (checkpoint) => {
+      if (checkpoint.final) finalCheckpoint = JSON.parse(JSON.stringify(checkpoint.final))
+      return true
+    },
+    runModel: async () => {
+      modelRounds += 1
+      const repeated = modelRounds % 2 === 1
+      return {
+        content: '',
+        toolCalls: [{
+          id: `repeat-window-${modelRounds}`,
+          type: 'function',
+          function: {
+            name: 'read_file',
+            arguments: JSON.stringify({
+              path: repeated ? 'same.txt' : `other-${modelRounds}.txt`,
+            }),
+          },
+        }],
+      }
+    },
+    executeTool: async ({ args }) => ({ ok: true, content: `content:${args.path}` }),
+  })
+
+  assert.equal(result.noProgress, true)
+  assert.equal(result.code, 'repeated_tool_call_window')
+  assert.equal(result.retryable, false)
+  assert.match(result.hint, /停止交替重复读取/)
+  assert.equal(finalCheckpoint.code, 'repeated_tool_call_window')
+  assert.equal(finalCheckpoint.retryable, false)
+  assert.equal(finalCheckpoint.hint, result.hint)
+})

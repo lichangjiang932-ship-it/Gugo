@@ -49,6 +49,41 @@ test('chat failure copy never exposes internal artifact errors or incomplete-fil
   assert.doesNotMatch(text, /Model call failed|requested file|create_html_app|任务未完全完成|已保留生成的文件/i)
 })
 
+test('deterministic loop failures show their sanitized reason instead of a generic retry nudge', () => {
+  const detail = '同一工具调用在最近 8 次调用中已重复 3 次，未取得实质进展'
+  const failure = {
+    role: 'assistant',
+    message: detail,
+    meta: {
+      failed: true,
+      serverFailure: {
+        code: 'repeated_tool_call_window',
+        message: detail,
+        retryable: false,
+      },
+    },
+  }
+
+  assert.equal(buildChatFailureMessage(failure, t), `\n\n${detail}`)
+  assert.equal(getVisibleModelErrorMessage(failure, t), detail)
+
+  const unknown = {
+    ...failure,
+    meta: {
+      ...failure.meta,
+      serverFailure: { code: 'UNKNOWN_INTERNAL_FAILURE', message: detail, retryable: false },
+    },
+  }
+  assert.equal(getVisibleModelErrorMessage(unknown, t), COPY['errors.chatFailure'])
+
+  const exhausted = {
+    message: '本任务已经执行过一次断点续写但仍未完成。请调整条件后发送新消息。',
+    code: 'TURN_FAILED_RETRY_LIMIT_REACHED',
+    retryable: false,
+  }
+  assert.match(getVisibleModelErrorMessage(exhausted, t), /执行过一次断点续写/)
+})
+
 test('failure display keys collapse the same turn and failure code', () => {
   assert.equal(
     buildChatFailureDisplayKey('turn-1', { serverFailure: { code: 'ARTIFACT_NOT_CREATED' } }),

@@ -22,7 +22,8 @@ export function buildStreamResumeState(result, { sessionId = null, turnId = null
   const partialText = String(error.partialText || '')
   const normalizedSessionId = nonEmptyString(sessionId)
   const normalizedTurnId = nonEmptyString(turnId || error.turnId || result?.turnId)
-  const explicitlyResumable = code !== 'TURN_INCOMPLETE' || error.retryable === true
+  const explicitlyResumable = error.retryable !== false
+    && (code !== 'TURN_INCOMPLETE' || error.retryable === true)
   if (
     !normalizedSessionId
     || !normalizedTurnId

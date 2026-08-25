@@ -18,6 +18,7 @@ export async function executeToolCalls(s) {
   i.budgetExceeded = i.budgetExceededByCompletedModelResponse
   i.noProgressReason = null
   i.noProgressCode = null
+  i.noProgressFailure = null
   i.markCall = async (call, updates) => {
         Object.assign(call, updates)
         await s.persistTurn()

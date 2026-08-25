@@ -1,5 +1,5 @@
 export async function initializeCompletion(s) {
-  const { ARTIFACT_RECOVERY_PHASE_DIAGNOSE, ARTIFACT_RECOVERY_PHASE_FORCE, AVAILABLE_TOOL_CAPABILITIES_MARKER, FALSE_SUCCESS_STATUS, FILE_WRITE_TOOL_NAMES, INCOMPLETE_STATUS, LOCAL_HTML_DELIVERY_GUARD_MARKER, MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS, PDF_LAYOUT_EXECUTION_CONTRACT_MARKER, PROJECT_SCOPE_TARGET, VERIFIED_DIRECTORY_RESOLUTION, buildPdfLayoutExecutionContract, getProjectDirectory, hasSuccessfulLocalPreflightRead, isCommandExecutionTool, isFileArtifactTool, normalizeMutationTarget, path, restoreExecutionConvergence, shellTargetWithCwd, targetsMatch, toolNameFromSpec, validateLocalHtmlDelivery } = s.d
+  const { ARTIFACT_RECOVERY_PHASE_DIAGNOSE, ARTIFACT_RECOVERY_PHASE_FORCE, AVAILABLE_TOOL_CAPABILITIES_MARKER, FALSE_SUCCESS_STATUS, FILE_WRITE_TOOL_NAMES, GENERATED_ARTIFACT_TYPE, INCOMPLETE_STATUS, LOCAL_HTML_DELIVERY_GUARD_MARKER, MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS, PDF_LAYOUT_EXECUTION_CONTRACT_MARKER, PROJECT_SCOPE_TARGET, VERIFIED_DIRECTORY_RESOLUTION, buildPdfLayoutExecutionContract, getProjectDirectory, hasSuccessfulLocalPreflightRead, isCommandExecutionTool, isFileArtifactTool, normalizeMutationTarget, path, restoreExecutionConvergence, shellTargetWithCwd, targetsMatch, toolNameFromSpec, validateLocalHtmlDelivery } = s.d
   s.artifactDeliveryRetries = Math.max(0, Number(s.restoredState?.completionGuards?.artifactDeliveryRetries) || 0)
   s.forcedArtifactToolName = s.expectedArtifactTools.has(
       String(s.restoredState?.completionGuards?.forcedArtifactToolName || '').trim(),
@@ -36,13 +36,34 @@ export async function initializeCompletion(s) {
       Math.floor(Number(s.restoredState?.completionGuards?.artifactRecoveryIterationLimit) || 0),
     )
   s.deliveredArtifactTools = new Set()
+  s.artifactContractToolsForProvenance = (provenance) => {
+      const covered = new Set()
+      if (!provenance || provenance.verified !== true) return covered
+      const sourceTool = String(provenance.toolName || '').trim()
+      if (s.expectedArtifactTools.has(sourceTool)) covered.add(sourceTool)
+
+      const validation = provenance.validation
+      const artifactType = String(provenance.artifactType || '').trim().toLowerCase()
+      const declaredCommandOutput = isCommandExecutionTool(sourceTool)
+        && validation?.verified === true
+        && validation?.verifier === 'bounded_structure_parser'
+        && /^[a-f0-9]{64}$/i.test(String(validation?.sha256 || ''))
+        && Boolean(String(validation?.declaredPath || '').trim())
+      if (!declaredCommandOutput || !artifactType) return covered
+
+      for (const expectedTool of s.expectedArtifactTools) {
+        if (GENERATED_ARTIFACT_TYPE[expectedTool] === artifactType) covered.add(expectedTool)
+      }
+      return covered
+    }
   s.recomputeDeliveredArtifactTools = () => {
       s.deliveredArtifactTools.clear()
       for (const [artifactId, provenance] of s.artifactProvenance) {
         if (!s.artifactIds.includes(artifactId)
-          || provenance?.verified !== true
-          || !s.expectedArtifactTools.has(provenance.toolName)) continue
-        s.deliveredArtifactTools.add(provenance.toolName)
+          || provenance?.verified !== true) continue
+        for (const toolName of s.artifactContractToolsForProvenance(provenance)) {
+          s.deliveredArtifactTools.add(toolName)
+        }
       }
     }
   s.recomputeDeliveredArtifactTools()
@@ -378,12 +399,8 @@ export async function initializeCompletion(s) {
       })
     }
   s.missingArtifactTools = () => {
-      const currentlyVerifiedTools = new Set(
-        [...s.artifactProvenance.entries()]
-          .filter(([artifactId, provenance]) => s.artifactIds.includes(artifactId) && provenance?.verified === true)
-          .map(([, provenance]) => provenance.toolName),
-      )
-      return [...s.expectedArtifactTools].filter((name) => !currentlyVerifiedTools.has(name))
+      s.recomputeDeliveredArtifactTools()
+      return [...s.expectedArtifactTools].filter((name) => !s.deliveredArtifactTools.has(name))
     }
   s.hasRequiredArtifacts = () => !s.requiresPersistedArtifact || s.missingArtifactTools().length === 0
   s.hasRequiredExecutionEvidence = () => !s.requiresExecutionEvidence
@@ -411,13 +428,14 @@ export async function initializeCompletion(s) {
       const candidates = s.artifactIds.filter((artifactId) => {
         const provenance = s.artifactProvenance.get(artifactId)
         return provenance?.verified === true
-          && s.expectedArtifactTools.has(provenance.toolName)
-          && isFileArtifactTool(provenance.toolName)
-          && s.authorizedArtifactTools.has(provenance.toolName)
+          && s.artifactContractToolsForProvenance(provenance).size > 0
       })
-      const coveredTools = new Set(
-        candidates.map((artifactId) => s.artifactProvenance.get(artifactId)?.toolName).filter(Boolean),
-      )
+      const coveredTools = new Set()
+      for (const artifactId of candidates) {
+        for (const toolName of s.artifactContractToolsForProvenance(s.artifactProvenance.get(artifactId))) {
+          coveredTools.add(toolName)
+        }
+      }
       return [...s.expectedArtifactTools].every((name) => coveredTools.has(name))
         ? candidates
         : []

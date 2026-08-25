@@ -23,6 +23,7 @@ export const TURN_ENGINE_FLAT_PERSISTENCE_OPTIONS = Object.freeze([
   'commitTurnCheckpoint',
   'commitTurnBoundary',
   'commitTurnFailedRetry',
+  'commitTurnFailedRetryRejection',
   'readSession',
   'sessionIdOccupied',
   'claimSession',
@@ -238,10 +239,16 @@ export function createTurnEnginePersistenceBundle(adapter, {
     'transactions',
     'commitTurnFailedRetry',
   )
+  const commitTurnFailedRetryRejection = optionalSectionFunction(
+    adapter,
+    'transactions',
+    'commitTurnFailedRetryRejection',
+  )
   const transactions = Object.freeze({
     ...baseTransactions,
     commitTurnStart,
     ...(commitTurnFailedRetry ? { commitTurnFailedRetry } : {}),
+    ...(commitTurnFailedRetryRejection ? { commitTurnFailedRetryRejection } : {}),
   })
   const execution = snapshotSection(adapter, 'execution')
   const steering = snapshotSection(adapter, 'steering')

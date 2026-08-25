@@ -1349,6 +1349,62 @@ test('runServerTurn may wake the turn again after a recovered stream later disco
   assert.equal(streamCalls, 3)
 })
 
+test('runServerTurn does not reconnect after the approval presentation is closed', async () => {
+  const approval = createTurnEvent({
+    id: 'approval-view-closed',
+    sessionId: 's1',
+    turnId: 'approval-view-closed',
+    sequence: 0,
+    type: 'approval.required',
+    payload: { approvalId: 'approval-1', toolName: 'bash_exec', args: { command: 'python fill.py' } },
+    createdAt: 1,
+  })
+  let streamCalls = 0
+  let replayCalls = 0
+  let resumeCalls = 0
+  let deliveries = 0
+  const fetchImpl = async (url) => {
+    const requestedUrl = String(url)
+    if (requestedUrl === '/api/turns/run') {
+      return response({ turn: { sessionId: 's1', turnId: approval.turnId, status: 'running' } }, 202)
+    }
+    if (requestedUrl.startsWith('/api/turns/events?')) {
+      replayCalls += 1
+      return response({ events: [approval] })
+    }
+    if (requestedUrl.includes('/resume')) {
+      resumeCalls += 1
+      return response({ turn: { sessionId: 's1', turnId: approval.turnId, status: 'running' } }, 202)
+    }
+    streamCalls += 1
+    return sseResponse([approval])
+  }
+  const closed = new Error('approval view closed')
+  closed.name = 'AbortError'
+  closed.code = 'APPROVAL_PRESENTATION_CLOSED'
+  closed.localTurnConsumerAbort = true
+
+  await assert.rejects(
+    runServerTurn({
+      sessionId: 's1',
+      content: 'fill the PDF',
+      fetchImpl,
+      reconnectDelayMs: 0,
+      recoveryPollIntervalMs: 0,
+      onEvent: async () => {
+        deliveries += 1
+        throw closed
+      },
+    }),
+    (error) => error === closed,
+  )
+
+  assert.equal(deliveries, 1)
+  assert.equal(streamCalls, 1)
+  assert.equal(replayCalls, 0)
+  assert.equal(resumeCalls, 0)
+})
+
 test('runServerTurn advances its cursor only after onEvent succeeds', async () => {
   const replayUrls = []
   let firstDelivery = true

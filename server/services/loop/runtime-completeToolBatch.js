@@ -157,6 +157,7 @@ export async function completeToolBatch(s) {
           } else if (outcomes.some(({ result }) => result?.ok === true)) {
             i.noProgressReason = null
             i.noProgressCode = null
+            i.noProgressFailure = null
           }
           i.callIndex = segmentEnd
         } else {

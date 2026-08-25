@@ -7,6 +7,7 @@ import ToolApprovalCard from '../../src/components/ToolApprovalCard.jsx'
 import PermissionModeSwitcher from '../../src/components/PermissionModeSwitcher.jsx'
 import { ApprovalCard } from '../../src/pages/ApprovalsInbox.jsx'
 import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
+import useChatApprovals from '../../src/pages/ChatSplit/useChatApprovals.js'
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
@@ -32,6 +33,49 @@ async function renderInto(dom, node) {
   return {
     html: () => dom.window.document.getElementById('root').innerHTML,
     cleanup: async () => { await act(async () => root.unmount()) },
+  }
+}
+
+function jsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+async function renderChatApprovalsHook(dom) {
+  const root = createRoot(dom.window.document.getElementById('root'))
+  let latest
+  function Harness() {
+    latest = useChatApprovals({
+      setWorkbenchMessage: () => {},
+      toast: { info: () => {}, error: () => {} },
+      t: (key) => key,
+    })
+    return null
+  }
+  await act(async () => { root.render(<Harness />) })
+  return { root, latest: () => latest }
+}
+
+function installApprovalFetchRecorder({ decideStatus = 200 } = {}) {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), init })
+    if (String(url) === '/api/approvals/settings') {
+      return jsonResponse({ mode: 'normal', rememberedTools: [], rememberedGrants: [] })
+    }
+    if (String(url).endsWith('/decide') && decideStatus !== 200) {
+      return jsonResponse({ error: { code: 'APPROVAL_DECISION_FAILED', message: 'approval service unavailable' } }, decideStatus)
+    }
+    return jsonResponse({ ok: true })
+  }
+  return {
+    decisions: () => requests
+      .filter((request) => request.url.endsWith('/decide'))
+      .map((request) => JSON.parse(String(request.init.body || '{}'))),
+    restore: () => { globalThis.fetch = originalFetch },
   }
 }
 
@@ -221,4 +265,179 @@ test('PermissionModeSwitcher tolerates an unknown mode', async () => {
   const view = await renderInto(dom, <PermissionModeSwitcher mode="unknown" onChange={() => {}} />)
   assert.ok(view.html().length > 0)
   await view.cleanup()
+})
+
+test('replayed approval.required reuses one pending decision without submitting deny', async () => {
+  const dom = setupDom()
+  const recorder = installApprovalFetchRecorder()
+  const view = await renderChatApprovalsHook(dom)
+  const request = { id: 'approval-replayed', name: 'bash_exec', args: { command: 'python fill.py' } }
+  const owner = { sessionId: 'session-1', turnId: 'turn-1' }
+  try {
+    let first
+    let replay
+    await act(async () => {
+      first = view.latest().requestServerToolApproval(request, owner)
+      replay = view.latest().requestServerToolApproval(request, owner)
+    })
+    assert.equal(replay, first)
+    assert.deepEqual(recorder.decisions(), [])
+
+    await act(async () => {
+      view.latest().resolveToolApproval({ approved: true })
+      await Promise.all([first, replay])
+    })
+    assert.deepEqual(recorder.decisions(), [{ decision: 'approve' }])
+  } finally {
+    await act(async () => view.root.unmount())
+    recorder.restore()
+    dom.window.close()
+  }
+})
+
+test('unmounting a pending chat approval does not fabricate a user denial', async () => {
+  const dom = setupDom()
+  const recorder = installApprovalFetchRecorder()
+  const view = await renderChatApprovalsHook(dom)
+  try {
+    let pending
+    await act(async () => {
+      pending = view.latest().requestServerToolApproval(
+        { id: 'approval-unmount', name: 'run_test', args: { command: 'npm test' } },
+        { sessionId: 'session-2', turnId: 'turn-2' },
+      )
+    })
+    const settled = pending.then(
+      () => ({ resolved: true }),
+      (error) => ({ error }),
+    )
+    await act(async () => view.root.unmount())
+    const outcome = await settled
+    assert.equal(outcome.resolved, undefined)
+    assert.equal(outcome.error?.name, 'AbortError')
+    assert.equal(outcome.error?.code, 'APPROVAL_PRESENTATION_CLOSED')
+    assert.deepEqual(recorder.decisions(), [])
+  } finally {
+    recorder.restore()
+    dom.window.close()
+  }
+})
+
+test('a failed approval POST rejects and releases the request without fabricating deny', async () => {
+  const dom = setupDom()
+  const recorder = installApprovalFetchRecorder({ decideStatus: 503 })
+  const view = await renderChatApprovalsHook(dom)
+  const request = { id: 'approval-post-failure', name: 'bash_exec', args: { command: 'python fill.py' } }
+  const owner = { sessionId: 'session-post-failure', turnId: 'turn-post-failure' }
+  try {
+    let pending
+    await act(async () => {
+      pending = view.latest().requestServerToolApproval(request, owner)
+    })
+    const settled = pending.then(
+      () => ({ resolved: true }),
+      (error) => ({ error }),
+    )
+    await act(async () => {
+      assert.equal(view.latest().resolveToolApproval({ approved: true }), true)
+      await settled
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+    const outcome = await settled
+    assert.equal(outcome.resolved, undefined)
+    assert.equal(outcome.error?.code, 'APPROVAL_DECISION_FAILED')
+    assert.equal(outcome.error?.status, 503)
+    assert.deepEqual(recorder.decisions(), [{ decision: 'approve' }])
+    assert.equal(view.latest().toolApproval.open, false)
+
+    // A replay can own a fresh waiter after the failed POST. The stale Promise
+    // must not keep the session locked or swallow the durable approval event.
+    let replay
+    await act(async () => {
+      replay = view.latest().requestServerToolApproval(request, owner)
+    })
+    assert.notEqual(replay, pending)
+    assert.equal(view.latest().toolApproval.request.id, request.id)
+    const replaySettled = replay.catch((error) => error)
+    await act(async () => view.root.unmount())
+    assert.equal((await replaySettled).code, 'APPROVAL_PRESENTATION_CLOSED')
+    assert.deepEqual(recorder.decisions(), [{ decision: 'approve' }])
+  } finally {
+    recorder.restore()
+    dom.window.close()
+  }
+})
+
+test('owner cleanup settles a pending approval locally without submitting deny', async () => {
+  const dom = setupDom()
+  const recorder = installApprovalFetchRecorder()
+  const view = await renderChatApprovalsHook(dom)
+  const owner = { sessionId: 'session-owner-clear', turnId: 'turn-owner-clear' }
+  try {
+    let pending
+    await act(async () => {
+      pending = view.latest().requestServerToolApproval(
+        { id: 'approval-owner-clear', name: 'write_file', args: { path: 'result.txt' } },
+        owner,
+      )
+    })
+    const settled = pending.catch((error) => error)
+    await act(async () => {
+      assert.equal(view.latest().clearToolApprovalForOwner(owner), true)
+      await settled
+    })
+    const error = await settled
+    assert.equal(error.name, 'AbortError')
+    assert.equal(error.code, 'APPROVAL_PRESENTATION_CLOSED')
+    assert.equal(view.latest().toolApproval.open, false)
+    assert.deepEqual(recorder.decisions(), [])
+  } finally {
+    await act(async () => view.root.unmount())
+    recorder.restore()
+    dom.window.close()
+  }
+})
+
+test('different chat approvals wait in order and never deny the active request', async () => {
+  const dom = setupDom()
+  const recorder = installApprovalFetchRecorder()
+  const view = await renderChatApprovalsHook(dom)
+  const owner = { sessionId: 'session-3', turnId: 'turn-3' }
+  try {
+    let first
+    let second
+    await act(async () => {
+      first = view.latest().requestServerToolApproval(
+        { id: 'approval-first', name: 'bash_exec', args: { command: 'python write.py' } },
+        owner,
+      )
+      second = view.latest().requestServerToolApproval(
+        { id: 'approval-second', name: 'run_test', args: { command: 'python verify.py' } },
+        owner,
+      )
+    })
+    assert.equal(view.latest().toolApproval.request.id, 'approval-first')
+    assert.deepEqual(recorder.decisions(), [])
+
+    await act(async () => {
+      view.latest().resolveToolApproval({ approved: true })
+      await first
+      await Promise.resolve()
+    })
+    assert.equal(view.latest().toolApproval.request.id, 'approval-second')
+    assert.deepEqual(recorder.decisions(), [{ decision: 'approve' }])
+
+    await act(async () => {
+      view.latest().resolveToolApproval({ approved: true })
+      await second
+    })
+    assert.deepEqual(recorder.decisions(), [
+      { decision: 'approve' },
+      { decision: 'approve' },
+    ])
+  } finally {
+    await act(async () => view.root.unmount())
+    recorder.restore()
+    dom.window.close()
+  }
 })

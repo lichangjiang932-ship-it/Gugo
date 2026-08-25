@@ -45,7 +45,14 @@ const {
 } = await import('../server/services/localFileAccessService.js')
 const { getWorkspaceTrustStatus, setWorkspaceTrust } = await import('../server/services/workspaceTrustService.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
-const { bashExecTool, editFileTool, listDirectoryTool, readFileTool, writeFileTool } = await import('../server/adapters/fsShellTools.js')
+const {
+  bashExecTool,
+  editFileTool,
+  listDirectoryTool,
+  readFileTool,
+  resolveForShellCwd,
+  writeFileTool,
+} = await import('../server/adapters/fsShellTools.js')
 const { dispatchGitTool } = await import('../server/adapters/gitWorkbench.js')
 const { applyPatchTool } = await import('../server/utils/applyPatch.js')
 
@@ -58,6 +65,9 @@ createUser({ id: 'workspace-user-b', email: 'workspace-b@example.com' })
 createUser({ id: 'grant-lookup-user', email: 'grant-lookup@example.com' })
 createUser({ id: 'file-grant-user', email: 'file-grant@example.com' })
 createUser({ id: 'all-files-grant-user', email: 'all-files-grant@example.com' })
+createUser({ id: 'all-files-persistent-shell-user', email: 'all-files-persistent-shell@example.com' })
+createUser({ id: 'all-files-readonly-shell-user', email: 'all-files-readonly-shell@example.com' })
+createUser({ id: 'all-files-no-shell-user', email: 'all-files-no-shell@example.com' })
 createUser({ id: 'default-output-user', email: 'default-output@example.com' })
 createUser({ id: 'session-grant-user', email: 'session-grant@example.com' })
 createUser({ id: 'managed-project-user', email: 'managed-project@example.com' })
@@ -74,6 +84,9 @@ for (const userId of [
   'grant-lookup-user',
   'file-grant-user',
   'all-files-grant-user',
+  'all-files-persistent-shell-user',
+  'all-files-readonly-shell-user',
+  'all-files-no-shell-user',
   'default-output-user',
   'session-grant-user',
   'managed-project-user',
@@ -502,6 +515,53 @@ test('authorized local directories run project checks while the Git workspace is
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
     }
+  }
+})
+
+test('all-files access never masks or replaces explicit shell directory authority', () => {
+  const sessionUserId = 'all-files-grant-user'
+  const persistentUserId = 'all-files-persistent-shell-user'
+  const readOnlyUserId = 'all-files-readonly-shell-user'
+  const noGrantUserId = 'all-files-no-shell-user'
+  for (const userId of [persistentUserId, readOnlyUserId, noGrantUserId]) {
+    setAllFilesAccess({ userId, enabled: true, confirmation: 'ALLOW_ALL_LOCAL_FILES' })
+  }
+
+  const sessionGrant = grantLocalPath({
+    userId: sessionUserId,
+    rootPath: grantLookupDir,
+    accessMode: 'read_write',
+    scope: 'session',
+  })
+  assert.equal(sessionGrant.scope, 'session')
+  const sessionResolved = resolveForShellCwd(grantLookupDir, { userId: sessionUserId })
+  assert.equal(sessionResolved.source, 'grant')
+  assert.equal(sessionResolved.grantId, sessionGrant.id)
+
+  const persistentGrant = grantLocalPath({
+    userId: persistentUserId,
+    rootPath: grantLookupDir,
+    accessMode: 'read_write',
+  })
+  const persistentResolved = resolveForShellCwd(grantLookupDir, { userId: persistentUserId })
+  assert.equal(persistentResolved.source, 'grant')
+  assert.equal(persistentResolved.grantId, persistentGrant.id)
+
+  grantLocalPath({
+    userId: readOnlyUserId,
+    rootPath: grantLookupDir,
+    accessMode: 'read_only',
+  })
+
+  for (const [userId, target] of [
+    [sessionUserId, outsideDir],
+    [readOnlyUserId, grantLookupDir],
+    [noGrantUserId, grantLookupDir],
+  ]) {
+    assert.throws(
+      () => resolveForShellCwd(target, { userId }),
+      (error) => error?.code === 'PATH_NOT_AUTHORIZED',
+    )
   }
 })
 

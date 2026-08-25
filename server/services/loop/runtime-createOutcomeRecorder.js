@@ -10,10 +10,15 @@ export async function createOutcomeRecorder(s) {
         const executedCall = outcome.executionArgs === outcome.call?.args
           ? outcome.call
           : { ...outcome.call, args: outcome.executionArgs }
+        const hasDeclaredVerifiedCommandOutput = isCommandExecutionTool(executedCall?.name)
+          && Array.isArray(outcome.result?.verifiedOutputs)
+          && outcome.result.verifiedOutputs.some((output) => (
+            output?.type === 'file' && Boolean(String(output?.declaredPath || '').trim())
+          ))
         if (succeeded
           && !outcome.artifactId
-          && s.localArtifactPublicationAllowed
-          && !s.requiresPersistedArtifact) {
+          && (s.localArtifactPublicationAllowed
+            || (s.requiresPersistedArtifact && hasDeclaredVerifiedCommandOutput))) {
           const localArtifacts = await persistLocalToolArtifactsAsync({
             call: executedCall,
             result: outcome.result,
@@ -285,13 +290,20 @@ export async function createOutcomeRecorder(s) {
             .map((receipt) => String(receipt.artifactId || '').trim())
             .filter(Boolean),
         )
+        const artifactMetadataById = new Map(
+          (Array.isArray(outcome.artifacts) ? outcome.artifacts : [])
+            .map((artifact) => [String(artifact?.id || '').trim(), artifact])
+            .filter(([artifactId]) => artifactId),
+        )
         if (Array.isArray(outcome.artifactIds)) {
           for (const artifactId of outcome.artifactIds) {
             const receipt = (outcome.artifactValidationReceipts || [])
               .find((candidate) => candidate?.artifactId === artifactId)
+            const artifactMetadata = artifactMetadataById.get(String(artifactId))
             s.recordArtifactIds([artifactId], {
               toolName: outcome.call?.name,
               verified: artifactOutcomeVerified || validatedArtifactIds.has(artifactId),
+              artifactType: artifactMetadata?.type,
               validation: receipt || null,
             })
           }
@@ -299,6 +311,7 @@ export async function createOutcomeRecorder(s) {
           s.recordArtifactIds([outcome.artifactId], {
             toolName: outcome.call?.name,
             verified: artifactOutcomeVerified || validatedArtifactIds.has(outcome.artifactId),
+            artifactType: artifactMetadataById.get(String(outcome.artifactId))?.type,
             validation: (outcome.artifactValidationReceipts || [])[0] || null,
           })
         }
@@ -310,14 +323,19 @@ export async function createOutcomeRecorder(s) {
               ? [outcome.artifactId]
               : [],
         )
-        if (artifactOutcomeVerified
-          && verifiedArtifactIds.length > 0
-          && s.expectedArtifactTools.has(outcome.call?.name)) {
+        const verifiedContractTools = new Set()
+        for (const artifactId of verifiedArtifactIds) {
+          for (const toolName of s.artifactContractToolsForProvenance(
+            s.artifactProvenance.get(artifactId),
+          )) verifiedContractTools.add(toolName)
+        }
+        if (verifiedArtifactIds.length > 0
+          && verifiedContractTools.size > 0) {
           // A forced generator remains mandatory across malformed calls, tool
           // errors, and provider responses that merely echo the requested call.
           // Release it only after that exact generator returns a verified,
           // deliverable artifact; the next round may then select deliverables.
-          if (s.forcedArtifactToolName === outcome.call.name) s.clearArtifactRecovery()
+          if (verifiedContractTools.has(s.forcedArtifactToolName)) s.clearArtifactRecovery()
         }
         if (executedCall?.name === 'read_file' && succeeded) {
           s.hasSuccessfulRepresentativeRead = true
@@ -389,15 +407,22 @@ export async function createOutcomeRecorder(s) {
           ? { ok: true }
           : s.loopGuard.afterCall?.(executedCall, outcome.result) || { ok: true }
         if (!i.noProgressReason) {
-          i.noProgressReason = outcome.noProgressReason
-            || (!toolProgress.ok ? toolProgress.reason : null)
-            || (!progress.ok ? progress.reason : null)
+          const noProgressDecision = outcome.noProgressReason
+            ? { reason: outcome.noProgressReason, result: outcome.result }
+            : !toolProgress.ok
+              ? toolProgress
+              : !progress.ok
+                ? progress
+                : null
+          i.noProgressReason = noProgressDecision?.reason || null
           if (i.noProgressReason) {
-            i.noProgressCode = outcome.noProgressReason
-              ? outcome.result?.code || 'tool_no_progress'
-              : !toolProgress.ok
-                ? toolProgress.result?.code || 'tool_no_progress'
-                : progress.result?.code || 'tool_no_progress'
+            const noProgressResult = noProgressDecision?.result || {}
+            i.noProgressCode = noProgressResult.code || 'tool_no_progress'
+            i.noProgressFailure = {
+              code: i.noProgressCode,
+              retryable: noProgressResult.retryable === true,
+              ...(noProgressResult.hint ? { hint: String(noProgressResult.hint) } : {}),
+            }
           }
         }
         if (!i.budgetExceeded && outcome.budgetExceeded) i.budgetExceeded = outcome.budgetExceeded

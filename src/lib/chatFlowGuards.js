@@ -48,6 +48,20 @@ const RUNTIME_INTERRUPTION_FAILURE_CODES = new Set([
   'TURN_ENGINE_SHUTDOWN',
 ])
 
+// These failures are produced by deterministic loop guards after execution
+// has already started. Their server-side messages are deliberately sanitized
+// and explain why the agent stopped, so replacing them with a generic model
+// error would hide the only actionable diagnosis from the user.
+const PUBLIC_STRUCTURED_EXECUTION_FAILURE_CODES = new Set([
+  'REASONING_RUNAWAY',
+  'REPEATED_TOOL_CALL',
+  'REPEATED_TOOL_CALL_WINDOW',
+  'TURN_FAILED_RETRY_LIMIT_REACHED',
+  'TURN_INCOMPLETE',
+  'TOOL_ERROR_STREAK',
+  'TOOL_NO_PROGRESS_HARD_LIMIT',
+])
+
 // These errors are raised before an adapter is allowed to contact a provider.
 // Network, timeout, authentication, HTTP, and upstream errors are intentionally
 // excluded: absence of visible output does not prove that the provider never
@@ -276,6 +290,25 @@ function publicFailureDetail(message, t) {
   return translated(t, 'errors.chatFailure')
 }
 
+function structuredExecutionFailureDetail(value) {
+  const code = failureCode(value)
+  if (!PUBLIC_STRUCTURED_EXECUTION_FAILURE_CODES.has(code)) return ''
+  const structuredFailure = value?.meta?.serverFailure
+    || value?.serverFailure
+    || value?.error
+    || value?.payload?.error
+    || value
+  if (structuredFailure?.retryable !== false) return ''
+  const detail = failureMessage(value).trim()
+  if (
+    !detail
+    || detail.length > 500
+    || !/[\u3400-\u9fff]/u.test(detail)
+    || INTERNAL_FAILURE_PATTERNS.some((pattern) => pattern.test(detail))
+  ) return ''
+  return detail
+}
+
 export function artifactTypeForSkill(skillId) {
   return SKILL_ARTIFACT_TYPES[canonicalizeSkillId(skillId)] || undefined
 }
@@ -305,5 +338,7 @@ export function getVisibleModelErrorMessage(error, t) {
     return translated(t, hasStartedExecution(error) ? 'errors.runtimeInterrupted' : 'errors.runtimeUnavailable')
   }
   if (isModelSetupFailure(error)) return translated(t, visibleModelFailureKey(error))
+  const structuredExecutionFailure = structuredExecutionFailureDetail(error)
+  if (structuredExecutionFailure) return structuredExecutionFailure
   return publicFailureDetail(failureMessage(error), t)
 }

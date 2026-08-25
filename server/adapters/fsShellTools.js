@@ -211,6 +211,10 @@ export function resolveForShellCwd(rawPath, { userId = null } = {}) {
     rawPath: requestedPath,
     write: true,
     allowWorkspace: true,
+    // The all-files file browser grant is intentionally not Shell authority.
+    // When it is enabled alongside an explicit read_write directory grant,
+    // prefer the explicit grant instead of masking it as source=all_files.
+    allowAllFiles: false,
   })
   const rootPath = resolved.rootPath || getWorkspaceRoot()
   if (resolved.source === 'workspace') {
@@ -946,6 +950,9 @@ function assertShellCommandPathsAuthorized(command, { userId, expectedTargets })
         write: declaredOutput,
         allowMissing: declaredOutput,
         allowWorkspace: true,
+        // Shell path reach must remain bounded by an explicit directory grant
+        // (or the separate approval-bypass mode), never by all-files access.
+        allowAllFiles: false,
       })
     } catch (cause) {
       const error = badReq(`命令引用了未授权路径：${rawPath}`, 403)

@@ -102,6 +102,53 @@ test('unauthorized plan mode exposes only the directory authorization entry poin
   assert.deepEqual(namesOf(resolved), ['request_directory'])
 })
 
+test('normal mode keeps shell requestable after an exact file grant', async () => {
+  const resolved = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: BASE_SPECS,
+    permissionMode: 'normal',
+    fileAccessStatus: {
+      grants: [{
+        id: 'source-pdf',
+        path: 'D:\\IELTS\\answer-sheet.pdf',
+        resourceType: 'file',
+        accessMode: 'read_write',
+        available: true,
+      }],
+      runtime: { localCodeExecutionEnabled: true },
+    },
+    enabledConnectorTools: [],
+    prompt: 'Use Python to fill the selected PDF and render PNG previews.',
+  })
+
+  const names = namesOf(resolved)
+  assert.ok(names.includes('request_directory'))
+  assert.ok(names.includes('bash_exec'))
+  assert.ok(names.includes('write_file'))
+})
+
+test('exact file access never exposes shell when local execution is disabled', async () => {
+  const resolved = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: BASE_SPECS,
+    permissionMode: 'normal',
+    fileAccessStatus: {
+      grants: [{
+        id: 'source-pdf',
+        path: 'D:\\IELTS\\answer-sheet.pdf',
+        resourceType: 'file',
+        accessMode: 'read_write',
+        available: true,
+      }],
+      runtime: { localCodeExecutionEnabled: false },
+    },
+    enabledConnectorTools: [],
+    prompt: 'Use Python to fill the selected PDF.',
+  })
+
+  assert.equal(namesOf(resolved).includes('bash_exec'), false)
+})
+
 test('execution switches delete disabled schemas from the model-visible catalog', async () => {
   let decision = null
   const resolved = await resolveTurnToolSpecs({

@@ -87,6 +87,11 @@ function requiresRuntimeRestart(error) {
   return String(error?.action || '').trim() === 'restart_runtime'
 }
 
+function isApprovalPresentationClosed(error) {
+  return error?.localTurnConsumerAbort === true
+    && error?.code === 'APPROVAL_PRESENTATION_CLOSED'
+}
+
 function recoveryDeadLetterError(turn) {
   const recovery = turn?.recovery
   if (recovery?.status !== 'dead_letter') return null
@@ -298,6 +303,7 @@ export async function runServerTurn({
       }
     } catch (error) {
       if (isRecoveryDeadLetterError(error)) throw error
+      if (isApprovalPresentationClosed(error)) throw error
       if (!(cancelRequested && error?.name === 'AbortError')) cause = error
     }
     if (terminal) return { cause, delivered, turn }
@@ -310,6 +316,7 @@ export async function runServerTurn({
       }))
       await acceptTerminalFromTurn(turn)
     } catch (error) {
+      if (isApprovalPresentationClosed(error)) throw error
       if (!(cancelRequested && error?.name === 'AbortError')) cause = error
     }
     return { cause, delivered, turn }
@@ -621,6 +628,7 @@ export async function runServerTurn({
             }))
           } catch (webSocketError) {
             if (cancelRequested && webSocketError?.name === 'AbortError') throw webSocketError
+            if (isApprovalPresentationClosed(webSocketError)) throw webSocketError
             if (requiresRuntimeRestart(webSocketError)) throw webSocketError
             webSocketDisabled = true
           }
@@ -634,6 +642,7 @@ export async function runServerTurn({
         }
       } catch (error) {
         if (cancelRequested && error?.name === 'AbortError') continue
+        if (isApprovalPresentationClosed(error)) throw error
         if (requiresRuntimeRestart(error)) throw error
         const observed = await observePersistedTurn(error)
         if (terminal || observed.turn || observed.delivered > 0) {

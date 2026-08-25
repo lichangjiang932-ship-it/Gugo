@@ -740,6 +740,7 @@ export function resolveAuthorizedLocalPath({
   write = false,
   allowMissing = false,
   allowWorkspace = process.env.WORKSPACE_FS_ENABLED === '1',
+  allowAllFiles = true,
 }) {
   const raw = typeof rawPath === 'string' ? rawPath.trim() : ''
   if (!raw) throw serviceError('path 必填', 400, 'PATH_REQUIRED')
@@ -809,7 +810,7 @@ export function resolveAuthorizedLocalPath({
     err.requiredAccessMode = write ? 'read_write' : 'read_only'
     throw err
   }
-  if (getSettingsRow(userId)?.all_files_enabled) {
+  if (allowAllFiles && getSettingsRow(userId)?.all_files_enabled) {
     return {
       fullPath: target.fullPath,
       displayPath: target.fullPath,

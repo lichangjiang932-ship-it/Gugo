@@ -80,6 +80,10 @@ export function buildRuntimeCapabilityBlock({
     '- Planning: keep multi-step execution visible with manage_todos and update statuses as work progresses.')
   add(lines, names.has('request_directory') && approvalMode !== 'bypass',
     '- Authorization: if a required local path is not authorized, call request_directory with the needed read or read/write access instead of asking the user to edit environment files.')
+  add(lines, approvalMode !== 'bypass' && hasAny(names, [
+    'bash_exec', 'run_command', 'run_project_check', 'run_test', 'docker_exec',
+  ]),
+    '- Interactive approval: command and write calls may pause for an inline user decision. Wait for that decision and continue the same task. Never ask the user to switch to bypass/allow-all merely because approval or directory authorization is required.')
 
   if (defaultOutputDirectory) {
     lines.push(
