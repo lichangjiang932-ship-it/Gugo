@@ -37,11 +37,11 @@ export default function ThemeWrapper({ children }) {
     }
   }, [state.theme])
 
-  /* Accent color → CSS vars (--accent-h/s/l/--accent). */
+  /* Fixed brand accent → CSS vars (--accent-h/s/l/--accent). */
   useEffect(() => {
-    const hex = state.accentColor || ACCENT_DEFAULT_HEX
+    const hex = ACCENT_DEFAULT_HEX
     const rgb = hexToRgb(hex)
-    // Accent controls follow user preference; semantic status and focus tokens do not.
+    // Accent controls follow brand identity; semantic status and focus tokens do not.
     document.documentElement.style.setProperty('--color-accent-rgb', rgb)
     // Keep the authored/export compatibility channel until those non-UI domains migrate.
     document.documentElement.style.setProperty('--color-ember-rgb', rgb)
@@ -52,7 +52,7 @@ export default function ThemeWrapper({ children }) {
     }
     // Clear the retired class during hot reloads and upgrades from old state.
     document.documentElement.classList.remove('theme-accent-strong')
-  }, [state.accentColor])
+  }, [])
 
   /* font size scale */
   useEffect(() => {

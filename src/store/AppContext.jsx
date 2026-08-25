@@ -178,7 +178,7 @@ export function AppProvider({ children }) {
     }, 250)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, state.user, state.isLoggedIn, state.sessions, state.activeSessionId, state.tasks, state.history, state.permissions, state.theme, state.accentColor, state.fontSize, state.density, state.animationsEnabled, state.inputHistoryNavigationEnabled, state.skillConfigs, state.toolsConfigSchemaVersion, state.toolsConfig, state.agentMode, state.sessionDrafts])
+  }, [hydrated, state.user, state.isLoggedIn, state.sessions, state.activeSessionId, state.tasks, state.history, state.permissions, state.theme, state.fontSize, state.density, state.animationsEnabled, state.inputHistoryNavigationEnabled, state.skillConfigs, state.toolsConfigSchemaVersion, state.toolsConfig, state.agentMode, state.sessionDrafts])
 
   return (
     <AppContext.Provider value={{ state, dispatch: contextDispatch, refreshAuth }}>

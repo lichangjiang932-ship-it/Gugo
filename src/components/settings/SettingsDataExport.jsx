@@ -53,7 +53,7 @@ export default function SettingsDataExport({
   }
   const exportSettings = () => {
     downloadJson(`settings-${Date.now()}.json`, wrapSettingsExport({
-      theme: state.theme, accentColor: state.accentColor, fontSize: state.fontSize, density: state.density,
+      theme: state.theme, fontSize: state.fontSize, density: state.density,
       animationsEnabled: state.animationsEnabled, permissions: state.permissions, skillConfigs: state.skillConfigs,
       inputHistoryNavigationEnabled: state.inputHistoryNavigationEnabled !== false,
     }))

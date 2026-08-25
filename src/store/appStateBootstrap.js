@@ -33,7 +33,6 @@ export function createInitialState() {
     permRequest: null,
     choiceRequest: null,
     theme: 'white',
-    accentColor: '#E86A3C',
     fontSize: 'medium',
     density: 'comfortable',
     animationsEnabled: true,

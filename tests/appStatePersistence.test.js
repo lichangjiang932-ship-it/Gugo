@@ -110,7 +110,6 @@ test('lightweight local snapshot excludes sessions and other large state', () =>
     activeSessionId: undefined,
     permissions: undefined,
     theme: 'dark',
-    accentColor: undefined,
     fontSize: undefined,
     density: undefined,
     animationsEnabled: undefined,
