@@ -421,6 +421,7 @@ export async function callStreamingModelWithTools({
   })
   let activeConfig = candidates[0] || null
   let content = ''
+  let reasoningText = ''
   let reasoningChars = 0
   let toolCalls = []
   let usage = null
@@ -457,6 +458,7 @@ export async function callStreamingModelWithTools({
       }
     } else if (event?.type === 'reasoning' && event.delta) {
       const delta = String(event.delta)
+      reasoningText += delta
       reasoningChars += delta.length
       if (typeof onReasoningDelta === 'function') {
         await onReasoningDelta(delta, { modelName: activeConfig.modelName })
@@ -504,6 +506,9 @@ export async function callStreamingModelWithTools({
     ...(costUsd !== null ? { costUsd } : {}),
     streamed: true,
     reasoningChars,
+    // Retained chain-of-thought for the current turn. Outbound replay stays
+    // gated behind MODEL_REASONING_RETENTION in the request preparation layer.
+    ...(reasoningText ? { reasoning: reasoningText } : {}),
   }
 }
 

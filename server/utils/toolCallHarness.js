@@ -642,10 +642,13 @@ export function validateToolCall(call, toolSpecs = [], { allowUnknown = false } 
   return null
 }
 
-export function buildAssistantToolCallsMessage(calls, content = '') {
+export function buildAssistantToolCallsMessage(calls, content = '', { reasoning = '' } = {}) {
   return {
     role: 'assistant',
     content: content || null,
+    // Internal chain-of-thought retention (Codex-style). Stripped from every
+    // outbound provider request unless MODEL_REASONING_RETENTION is enabled.
+    ...(typeof reasoning === 'string' && reasoning.trim() ? { reasoning_content: reasoning } : {}),
     tool_calls: calls.map((call) => ({
       id: call.id,
       type: 'function',

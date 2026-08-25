@@ -363,7 +363,9 @@ export async function processModelResult(s) {
   i.checkpointContent = s.requiresSourceHandoffProtection && sourceHandoffViolation(i.content)
           ? ''
           : i.content
-  s.convo.push(buildAssistantToolCallsMessage(i.toolCalls, i.checkpointContent))
+  s.convo.push(buildAssistantToolCallsMessage(i.toolCalls, i.checkpointContent, {
+    reasoning: typeof i.modelResult?.reasoning === 'string' ? i.modelResult.reasoning : '',
+  }))
   try {
           // The model response and steering text become durable atomically from
           // the engine's perspective; only then may the steering lease be ACKed.

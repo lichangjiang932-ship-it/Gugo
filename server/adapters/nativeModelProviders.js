@@ -3,7 +3,7 @@ import {
   getBoundRuntimeProvider,
   getBoundRuntimeProviderProvenance,
 } from '../core/runtimeCapabilityState.js'
-import { prepareOutboundMessages } from './outboundMessagePipeline.js'
+import { prepareOutboundMessages, retainReasoningForEnv } from './outboundMessagePipeline.js'
 import {
   getModelProviderAdapter,
   hasModelProviderAdapter,
@@ -328,6 +328,7 @@ export function buildNativeProviderRequest(args = {}) {
     providerKind: args.profile?.kind,
     providerId: args.config?.providerId,
     ephemeralContext: args.ephemeralContext,
+    retainReasoning: retainReasoningForEnv(args.env),
   })
   if (messages.length === 0) throw new Error('消息不能为空。')
   const prepared = { ...args, messages }
