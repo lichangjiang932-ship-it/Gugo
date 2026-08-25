@@ -6,7 +6,7 @@ import { findWebConnectorsForUrl, getWebConnector, isWebConnectorProvider } from
 test('access catalog separates native connectors from popular Browser apps', () => {
   assert.equal(NATIVE_ACCESS.length, 22)
   assert.ok(WEB_ACCESS.length >= 10)
-  assert.equal(MCP_ACCESS.length, 5)
+  assert.equal(MCP_ACCESS.length, 10)
   assert.equal(ACCESS_CATALOG.length, NATIVE_ACCESS.length + MCP_ACCESS.length + WEB_ACCESS.length)
   assert.ok(WEB_ACCESS.every((item) => /^https:\/\//.test(item.webUrl)))
   assert.equal(new Set(ACCESS_CATALOG.map((item) => item.provider)).size, ACCESS_CATALOG.length)
@@ -37,7 +37,7 @@ test('access catalog exposes an honest capability level for every entry', () => 
 })
 
 test('access catalog reports APIs, MCP servers, bridges, and browser fallbacks separately', () => {
-  assert.deepEqual(getAccessCatalogCounts(), { api: 17, mcp: 5, bridges: 4, shortcuts: 10 })
+  assert.deepEqual(getAccessCatalogCounts(), { api: 17, mcp: 10, bridges: 4, shortcuts: 10 })
 })
 
 test('access catalog searches aliases and exposes a shared trusted provider lookup', () => {
