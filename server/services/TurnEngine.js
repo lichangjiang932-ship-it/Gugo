@@ -22,6 +22,7 @@ import {
 } from './evolutionCanaryService.js'
 import { createTurnExecutionToolContextRuntime } from './turnExecutionToolContextRuntime.js'
 import { createTurnCancellationRuntime } from './turnCancellationRuntime.js'
+import { createTurnCanaryOutcomeRuntime } from './turnCanaryOutcomeRuntime.js'
 import { scheduleAutoMemoryExtraction } from './autoMemoryService.js'
 import { listRuntimePluginStates } from './runtimePluginStateStore.js'
 import {
@@ -394,6 +395,10 @@ export class TurnEngine {
       commitTurnBoundary: this.deps.commitTurnBoundary,
       writeMessage: this.deps.writeMessage,
     })
+    this.canaryOutcomeRuntime = createTurnCanaryOutcomeRuntime({ deps: {
+      recordCanaryOutcome: (input) => this.deps.recordCanaryOutcome(input),
+      env: this.deps.env,
+    } })
   }
 
   shutdown() {
@@ -978,36 +983,31 @@ export class TurnEngine {
     let latestEstimatedPromptTokens = normalizePromptTokenEstimate(
       restoredCheckpointState?.latestEstimatedPromptTokens,
     )
-    const recordCanaryTerminal = async (
+    // Evolution telemetry stays host-owned: recording is optional and must
+    // never fail the turn. Live run context binds at call time because usage
+    // counters and the canary assignment mutate during execution.
+    const recordCanaryTerminal = (
       terminalState,
       errorCode = null,
       completedAt = this.deps.now(),
       evaluationOutput = '',
-    ) => {
-      if (!canaryAssignment?.id) return
-      try {
-        await this.deps.recordCanaryOutcome({
-          userId,
-          sessionId,
-          turnId,
-          terminalState,
-          durationMs: Math.max(0, completedAt - effectiveTurnStartedAt),
-          usage: turnModelUsage || latestModelUsage,
-          errorCode,
-          effectiveVariant: canaryAssignment.variant,
-          decisionReason: canaryAssignment.decisionReason,
-          modelProviderId,
-          modelName,
-          modelConfigRevision,
-          evaluationInput: content,
-          evaluationOutput,
-          env: this.deps.env,
-          now: completedAt,
-        })
-      } catch (error) {
-        try { logWarn('evolution.canary.outcome', error, { userId, sessionId, turnId }) } catch { /* optional */ }
-      }
-    }
+    ) => this.canaryOutcomeRuntime({
+      canaryAssignment,
+      userId,
+      sessionId,
+      turnId,
+      effectiveTurnStartedAt,
+      turnModelUsage,
+      latestModelUsage,
+      modelProviderId,
+      modelName,
+      modelConfigRevision,
+      evaluationInput: content,
+      terminalState,
+      errorCode,
+      completedAt,
+      evaluationOutput,
+    })
     let streamedAssistantText = String(
       pendingRecoveryAttempt?.assistantText || restoredCheckpointState?.retryAssistantText || '',
     )
