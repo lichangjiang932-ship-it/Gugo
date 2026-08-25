@@ -89,7 +89,6 @@ test('artifact and document surfaces use neutral tokens outside the workbench ac
   assert.match(css, /--color-accent-rgb:\s*var\(--artifact-accent-rgb\)/)
   assert.match(css, /--color-accent-contrast-rgb:\s*var\(--color-paper-rgb\)/)
   assert.match(css, /--color-accent-ink-rgb:\s*var\(--artifact-accent-rgb\)/)
-  assert.match(css, /--color-ember-rgb:\s*var\(--artifact-accent-rgb\)/)
   assert.match(css, /--accent:\s*var\(--artifact-accent\)/)
   assert.doesNotMatch(css, /\.theme-accent-strong/)
   assert.doesNotMatch(css, /(?:^|\r?\n)\s*\[data-artifact-surface\][^{}]*\{[^{}]*!important/m)

@@ -43,8 +43,6 @@ export default function ThemeWrapper({ children }) {
     const rgb = hexToRgb(hex)
     // Accent controls follow brand identity; semantic status and focus tokens do not.
     document.documentElement.style.setProperty('--color-accent-rgb', rgb)
-    // Keep the authored/export compatibility channel until those non-UI domains migrate.
-    document.documentElement.style.setProperty('--color-ember-rgb', rgb)
 
     const { vars } = applyAccent({ hex })
     for (const [key, value] of Object.entries(vars)) {
