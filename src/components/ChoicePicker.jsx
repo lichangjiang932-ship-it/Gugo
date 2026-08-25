@@ -51,7 +51,7 @@ export default function ChoicePicker({ text, onChoose, disabled }) {
           >
             <span className="font-medium block">{opt.title}</span>
             {opt.summary && (
-              <span className="text-[10px] text-ink-fade mt-0.5 block leading-tight">{opt.summary}</span>
+              <span className="text-xs text-ink-fade mt-0.5 block leading-tight">{opt.summary}</span>
             )}
           </button>
         ))}

@@ -67,7 +67,7 @@ export default function ContextUsagePanel({
       <div className="mt-2 border-t border-ink/10 pt-1.5">
         {(hasMeasuredPromptTokens || serverEstimatedPromptTokens !== null) && (
           <p
-            className="truncate pb-1 text-[11px] leading-[1.35] text-ink-fade"
+            className="truncate pb-1 text-xs leading-[1.35] text-ink-fade"
             data-testid="context-estimate-notice"
             title={t('chat.contextUsage.estimateNotice')}
           >

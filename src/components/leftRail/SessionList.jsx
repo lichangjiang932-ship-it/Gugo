@@ -135,7 +135,7 @@ export default function SessionList({
           {(() => {
             const relative = formatSessionRelativeTime(session.updatedAt)
             return relative ? (
-              <span className="mt-0.5 block truncate text-[11px] leading-[14px] text-ink-fade/90 tabular-nums">{relative}</span>
+              <span className="mt-0.5 block truncate text-[11px] leading-[14px] text-ink-fade/90 tabular-nums" data-compact-numeric-badge>{relative}</span>
             ) : null
           })()}
         </span>
