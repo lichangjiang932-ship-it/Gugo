@@ -94,6 +94,21 @@ OLLAMA_KEEP_ALIVE=30m
 - 删除模型 Provider 会安全覆写当前 SQLite 记录并截断 WAL；仍被任务、子代理或演进记录引用时会拒绝删除。历史备份、卷快照和已导出的归档不属于当前数据库，需由管理员单独清理。
 - 本机仅自己使用时必须保留 `AUTH_MODE=local` 与 `SERVER_HOST=127.0.0.1`。要从局域网或公网访问，必须先改为 `AUTH_MODE=multi_user` 并配置 SMTP，再修改监听地址，同时配置防火墙；公网还必须使用 HTTPS 和可信反向代理。
 
+### 纯本地模式（Local-only mode）
+
+Gugo 默认没有任何被动出网链路。所有会访问外部网络的通道都列在下面，逐项确认后即可保证“数据不出本机”：
+
+| 通道 | 状态 | 完全离线的做法 |
+|---|---|---|
+| 模型 Provider 调用 | 唯一必需的出网（用户自配 Key） | 用本地 Ollama / LM Studio（`http://127.0.0.1:11434/v1`）替代云端 Provider |
+| Hub 队列进程 | `HUB_ENABLED=1` 才启动，默认关闭 | 保持默认（不设该变量即离线） |
+| 对外 MCP Server 端点 `/mcp` | 默认开启（仅监听同地址） | 设 `MCP_SERVER_ENABLED=0` 关闭 |
+| 桌面自动更新 | 仅用户显式点击“检查更新”才访问 release 服务器，无后台轮询 | 不点即可；也可用 `GUGO_UPDATE_BASE_URL` 指向私有源 |
+| Browser 工具 / `fetch_url` / Web 搜索 | 按需调用，不存在被动外联 | 不触发相关工具即可 |
+| SMTP 邮件验证码 | 仅 `AUTH_MODE=multi_user` 需要 | 本机单用户模式完全用不到 |
+
+会话、记忆、审批记录、凭据密钥全部保存在本机 SQLite 与加密文件中；卸载或迁移只需备份 `APP_DATA_DIR`。
+
 ### 常用配置
 
 | 配置 | 默认/建议 | 用途 |
