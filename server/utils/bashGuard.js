@@ -17,6 +17,9 @@
  *   - 命中 → throw,带可读理由,记审计(由 caller 写 denied)
  *   - 不解析 shell AST(代价过大),用保守的字面 + 正则匹配
  *   - 误杀宁可严,正常 dev 命令不会触发(rm -rf node_modules 是允许的,只挡根目录类绝对路径)
+ *   - 2026-08 增补覆盖:base64 编码执行、下载中转管道、PowerShell iwr|irm|iex 与
+ *     -enc、eval 包裹远程下载、/dev/tcp 反向连接、nc -e。仍是字面正则,
+ *     变量拼接等间接绕过依旧不设防——本文件不是沙箱。
  */
 
 const FORK_BOMB_RE = /:\(\)\s*\{[^}]*:\|:[^}]*\}[^}]*:/  // :(){:|:&};:
@@ -37,6 +40,22 @@ const DYNAMIC_PATH_RE = /(?:~[\\/]|%[^%\r\n]+%[\\/]|\$env:[A-Za-z_][A-Za-z0-9_]*
 const PARENT_PATH_RE = /(?:^|[\\/\s"'=,(])\.\.(?:[\\/\s"'),;]|$)/
 const UNQUOTED_WINDOWS_PAREN_PATH_RE = /(?:^|[\s=,(])((?:[A-Za-z]:[\\/]|\\\\)[^\s"'<>|;&,]*\([^()\s"'<>|;&,]*\)(?=[^\s"'<>|;&,)])[^\s"'<>|;&,]*)/i
 
+// ---- 2026-08 增补:常见绕过形态(C-P1.3 仍是护栏而非沙箱) ----
+// base64 解码结果直接管道进解释器(cat x.b64 | base64 -d | sh)
+const BASE64_DECODE_PIPE_RE = /\bbase64\s+(?:-{1,2}[a-zA-Z]*d[a-zA-Z]*|--decode)\b[^|;&]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|fish|dash|ksh|python3?|node|perl|ruby|powershell|pwsh)\b/
+// 下载管道隔一段再执行(curl url | base64 -d | bash);终点必须是解释器才算高危
+const DOWNLOAD_PIPE_INTERP_RE = /\b(?:curl|wget)\b[^|;&]*\|\s*[^|;&]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|fish|dash|ksh|python3?|node|perl|ruby|iex)\b/i
+// PowerShell 下载并执行经典形态(iwr url | iex / irm url | iex)
+const PS_DOWNLOAD_IEX_RE = /\b(?:iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|;&]*\|\s*(?:iex|invoke-expression)\b/i
+// powershell -enc / -EncodedCommand(整段编码指令,无法预检内容)
+const PS_ENCODED_COMMAND_RE = /\bpowershell(?:\.exe)?\b[^;&|]*\s-(?:enc(?:odedcommand)?|ec)\b/i
+// eval "$(curl/wget ...)":把远程脚本包进当前 shell 执行
+const EVAL_REMOTE_DOWNLOAD_RE = /\beval\s*"?\s*\$\([^)]*(?:curl|wget|iwr|irm)\b/i
+// /dev/tcp、/dev/udp 反向连接(bash 内建,黑名单外唯一出口)
+const DEV_SOCKET_RE = /[\\/]dev\/(?:tcp|udp)[\\/]/
+// nc -e 直接反弹 shell
+const NC_EXEC_RE = /\bnc(?:at)?\b[^;&|]*\s-e\b/
+
 const RULES = [
   { re: FORK_BOMB_RE, reason: 'fork bomb' },
   { re: RM_ROOT_RE, reason: '递归删除系统/家目录' },
@@ -48,6 +67,13 @@ const RULES = [
   { re: CHMOD_777_ROOT_RE, reason: '递归 chmod 777 系统目录' },
   { re: SSH_KEY_EXFIL_RE, reason: '读取 SSH/AWS/GPG 私钥' },
   { re: ENV_EXFIL_RE, reason: '导出 env 到外部(可能泄露密钥)' },
+  { re: BASE64_DECODE_PIPE_RE, reason: 'base64 解码后管道进解释器(编码执行)' },
+  { re: DOWNLOAD_PIPE_INTERP_RE, reason: '下载经中转管道进入解释器(供应链风险)' },
+  { re: PS_DOWNLOAD_IEX_RE, reason: 'PowerShell 下载即执行(iwr/irm | iex)' },
+  { re: PS_ENCODED_COMMAND_RE, reason: 'powershell 编码指令(-enc)被禁' },
+  { re: EVAL_REMOTE_DOWNLOAD_RE, reason: 'eval 包裹远程下载脚本' },
+  { re: DEV_SOCKET_RE, reason: '/dev/tcp 或 /dev/udp 反向连接' },
+  { re: NC_EXEC_RE, reason: 'nc -e 反弹 shell' },
 ]
 
 const SIMPLE_READ_COMMANDS = new Set([
