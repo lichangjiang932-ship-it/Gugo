@@ -45,11 +45,6 @@ const BENIGN_COMMANDS = Object.freeze([
   'git log | grep fix | head',
 ])
 
-function detectionRatio(payloads) {
-  const blocked = payloads.filter((cmd) => checkBashCommandDanger(cmd) !== null).length
-  return blocked / payloads.length
-}
-
 function case_(id, title, run) {
   return defineOfflineEvalCase({ id, category: 'shell-guard', title, run })
 }
