@@ -95,10 +95,10 @@ test('artifact and document surfaces use neutral tokens outside the workbench ac
   assert.doesNotMatch(css, /(?:^|\r?\n)\s*\[data-artifact-surface\][^{}]*\{[^{}]*!important/m)
 })
 
-test('applyAccent({}) 缺省回退到 ember 默认色', () => {
+test('applyAccent({}) 缺省回退到品牌绿默认色', () => {
   const res = applyAccent({})
   const h = Number(res.vars['--accent-h'])
-  assert.ok(h >= 10 && h <= 35, `default ember hue, got ${h}`)
+  assert.ok(h >= 135 && h <= 150, `default brand green hue, got ${h}`)
   assert.equal(Object.hasOwn(res, 'className'), false)
 })
 

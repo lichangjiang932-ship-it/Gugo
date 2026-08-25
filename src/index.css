@@ -14,8 +14,8 @@ html[data-theme="light"] {
   --color-ink-ghost: #6B7280;
   --color-skel: #E5E7EB;
   --color-skel-2: #D1D5DB;
-  --color-accent: #E86A3C;
-  --color-accent-ink: #B54708;
+  --color-accent: #16A34A;
+  --color-accent-ink: #166534;
   --color-danger: #B42318;
   --color-warning: #8A4B08;
   --color-running: #0369A1;
@@ -23,9 +23,9 @@ html[data-theme="light"] {
   --color-focus: #2563EB;
   /* Legacy authored/export compatibility; UI classes use semantic tokens. */
   --color-ember: var(--color-accent);
-  --color-ember-soft: rgba(232, 106, 60, 0.18);
-  --color-ember-line: rgba(232, 106, 60, 0.55);
-  --color-ember-glow: rgba(232, 106, 60, 0.10);
+  --color-ember-soft: rgba(22, 163, 74, 0.18);
+  --color-ember-line: rgba(22, 163, 74, 0.55);
+  --color-ember-glow: rgba(22, 163, 74, 0.10);
   --color-cyan: #2E8FA3;
   --color-cyan-soft: rgba(46, 143, 163, 0.14);
 
@@ -39,8 +39,8 @@ html[data-theme="light"] {
   --color-ink-ghost-rgb: 107 114 128;
   --color-skel-rgb: 229 231 235;
   --color-skel-2-rgb: 209 213 219;
-  --color-accent-rgb: 232 106 60;
-  --color-accent-ink-rgb: 181 71 8;
+  --color-accent-rgb: 22 163 74;
+  --color-accent-ink-rgb: 22 101 52;
   --color-danger-rgb: 180 35 24;
   --color-warning-rgb: 138 75 8;
   --color-running-rgb: 3 105 161;
@@ -82,13 +82,13 @@ html[data-theme="light"] {
   --radius-pill: 999px;
 
   /* Accent color tokens (动态写入 by ThemeWrapper / applyAccent) */
-  --workbench-accent-h: 21;
-  --workbench-accent-s: 79%;
-  --workbench-accent-l: 57%;
+  --workbench-accent-h: 142;
+  --workbench-accent-s: 76%;
+  --workbench-accent-l: 36%;
   --workbench-accent: hsl(var(--workbench-accent-h) var(--workbench-accent-s) var(--workbench-accent-l));
-  --accent-h: 21;
-  --accent-s: 79%;
-  --accent-l: 57%;
+  --accent-h: 142;
+  --accent-s: 76%;
+  --accent-l: 36%;
   --accent: hsl(var(--accent-h) var(--accent-s) var(--accent-l));
 }
 
@@ -112,8 +112,8 @@ html[data-theme="dark"] {
   --color-ink-ghost: #828B9C;
   --color-skel: #3F3F46;
   --color-skel-2: #52525B;
-  --color-accent: #E86A3C;
-  --color-accent-ink: #FF9B77;
+  --color-accent: #16A34A;
+  --color-accent-ink: #6EE7B7;
   --color-danger: #FF8A80;
   --color-warning: #FBBF24;
   --color-running: #7DD3FC;
@@ -121,9 +121,9 @@ html[data-theme="dark"] {
   --color-focus: #60A5FA;
   /* Legacy authored/export compatibility; UI classes use semantic tokens. */
   --color-ember: var(--color-accent);
-  --color-ember-soft: rgba(232, 106, 60, 0.18);
-  --color-ember-line: rgba(232, 106, 60, 0.55);
-  --color-ember-glow: rgba(232, 106, 60, 0.10);
+  --color-ember-soft: rgba(22, 163, 74, 0.18);
+  --color-ember-line: rgba(22, 163, 74, 0.55);
+  --color-ember-glow: rgba(22, 163, 74, 0.10);
   --color-cyan: #2E8FA3;
   --color-cyan-soft: rgba(46, 143, 163, 0.14);
 
@@ -136,8 +136,8 @@ html[data-theme="dark"] {
   --color-ink-ghost-rgb: 130 139 156;
   --color-skel-rgb: 63 63 70;
   --color-skel-2-rgb: 82 82 91;
-  --color-accent-rgb: 232 106 60;
-  --color-accent-ink-rgb: 255 155 119;
+  --color-accent-rgb: 22 163 74;
+  --color-accent-ink-rgb: 110 231 183;
   --color-danger-rgb: 255 138 128;
   --color-warning-rgb: 251 191 36;
   --color-running-rgb: 125 211 252;
@@ -183,8 +183,8 @@ html[data-theme="white"] {
   --color-ink-ghost: #6B7280;
   --color-skel: #E5E7EB;
   --color-skel-2: #D1D5DB;
-  --color-accent: #E86A3C;
-  --color-accent-ink: #B54708;
+  --color-accent: #16A34A;
+  --color-accent-ink: #166534;
   --color-danger: #B42318;
   --color-warning: #8A4B08;
   --color-running: #0369A1;
@@ -192,9 +192,9 @@ html[data-theme="white"] {
   --color-focus: #2563EB;
   /* Legacy authored/export compatibility; UI classes use semantic tokens. */
   --color-ember: var(--color-accent);
-  --color-ember-soft: rgba(232, 106, 60, 0.14);
-  --color-ember-line: rgba(232, 106, 60, 0.48);
-  --color-ember-glow: rgba(232, 106, 60, 0.08);
+  --color-ember-soft: rgba(22, 163, 74, 0.14);
+  --color-ember-line: rgba(22, 163, 74, 0.48);
+  --color-ember-glow: rgba(22, 163, 74, 0.08);
   --color-cyan: #247F91;
   --color-cyan-soft: rgba(36, 127, 145, 0.12);
 
@@ -207,8 +207,8 @@ html[data-theme="white"] {
   --color-ink-ghost-rgb: 107 114 128;
   --color-skel-rgb: 229 231 235;
   --color-skel-2-rgb: 209 213 219;
-  --color-accent-rgb: 232 106 60;
-  --color-accent-ink-rgb: 181 71 8;
+  --color-accent-rgb: 22 163 74;
+  --color-accent-ink-rgb: 22 101 52;
   --color-danger-rgb: 180 35 24;
   --color-warning-rgb: 138 75 8;
   --color-running-rgb: 3 105 161;
@@ -666,9 +666,9 @@ html[data-animations="false"] *::after {
 }
 
 .chat-markdown {
-  color: rgb(var(--color-ink-rgb) / 0.86);
-  font-size: var(--type-body);
-  line-height: 1.65;
+  color: rgb(var(--color-ink-rgb) / 0.88);
+  font-size: 14.5px;
+  line-height: 1.78;
   overflow-wrap: anywhere;
 }
 
@@ -699,7 +699,7 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
   }
 }
 
-.chat-markdown p { margin: 0.55rem 0; }
+.chat-markdown p { margin: 0 0 1.5rem; }
 .chat-markdown h1,
 .chat-markdown h2,
 .chat-markdown h3,
@@ -709,21 +709,24 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
   letter-spacing: -0.018em;
   line-height: 1.3;
 }
-.chat-markdown h1 { margin: 1.15rem 0 0.5rem; font-size: 1.35rem; }
-.chat-markdown h2 { margin: 1rem 0 0.45rem; font-size: 1.15rem; }
-.chat-markdown h3 { margin: 0.85rem 0 0.4rem; font-size: 1rem; }
+.chat-markdown h1 { margin: 2rem 0 0.75rem; font-size: 1.35rem; }
+.chat-markdown h2 { margin: 1.75rem 0 0.65rem; font-size: 1.15rem; }
+.chat-markdown h3 { margin: 1.5rem 0 0.55rem; font-size: 1rem; }
 .chat-markdown ul,
-.chat-markdown ol { margin: 0.45rem 0; padding-left: 1.3rem; }
-.chat-markdown li { margin: 0.28rem 0; padding-left: 0.1rem; }
+.chat-markdown ol { margin: 0 0 1.5rem; padding-left: 1.3rem; }
+.chat-markdown li { margin: 0.35rem 0; padding-left: 0.1rem; }
 .chat-markdown li::marker { color: rgb(var(--color-ink-rgb) / 0.58); }
 .chat-markdown a {
   color: var(--color-ink);
-  text-decoration-color: rgb(var(--color-ember-rgb) / 0.55);
+  text-decoration-color: rgb(var(--color-accent-rgb) / 0.55);
   text-underline-offset: 3px;
 }
-.chat-markdown a:hover { color: var(--color-ember); }
+.chat-markdown a:hover { color: var(--color-accent); }
 .chat-markdown strong { color: var(--color-ink); font-weight: 650; }
-.chat-markdown hr { margin: 1rem 0; border-color: rgb(var(--color-ink-rgb) / 0.12); }
+.chat-markdown hr { margin: 1.5rem 0; border-color: rgb(var(--color-ink-rgb) / 0.12); }
+
+/* 最后一段不留底部大空隙，由消息间距统一控制 */
+.chat-markdown > p:last-child { margin-bottom: 0; }
 
 .chat-activity-panel {
   margin-bottom: 0.65rem;
@@ -1263,7 +1266,43 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
 .chat-run-timeline {
   position: relative;
   margin: 0.05rem 0 0.55rem;
+  padding-left: 0.7rem;
   color: rgb(var(--color-ink-soft-rgb));
+}
+
+/* timeline 短线锚点：每个工具组左侧一枚独立短线，不连线、不贯穿。
+   运行中转蓝色呼吸；失败红；完成/取消保持中性灰。 */
+.chat-run-timeline::before {
+  content: "";
+  position: absolute;
+  top: 0.45rem;
+  left: 0;
+  width: 2px;
+  height: 1.1rem;
+  border-radius: 1px;
+  background: rgb(var(--color-ink-rgb) / 0.18);
+}
+
+.chat-run-timeline[data-status="running"]::before {
+  background: rgb(var(--color-running-rgb));
+  animation: chat-anchor-breathe 2s ease-in-out infinite;
+}
+
+.chat-run-timeline[data-status="error"]::before {
+  background: rgb(var(--color-danger-rgb));
+}
+
+@keyframes chat-anchor-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+html[data-animations="false"] .chat-run-timeline::before {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-run-timeline::before { animation: none !important; }
 }
 
 .chat-timeline-history {
@@ -1271,7 +1310,7 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
   align-items: center;
   gap: 0.28rem;
   min-height: 1.7rem;
-  margin: 0 0 0.15rem 1.12rem;
+  margin: 0 0 0.15rem 0.42rem;
   padding: 0 0.25rem;
   color: rgb(var(--color-ink-fade-rgb));
   font-size: var(--type-meta);
@@ -1306,6 +1345,12 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
   position: relative;
   display: block;
   padding: 0.16rem 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.chat-run-timeline .chat-tool-step:hover {
+  background: transparent;
 }
 
 .chat-run-timeline .chat-tool-step::before {
@@ -1376,15 +1421,17 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
 .chat-run-timeline .chat-tool-label {
   flex: none;
   color: rgb(var(--color-ink-rgb));
-  font-size: var(--type-ui);
-  font-weight: 500;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
 }
 
 .chat-run-timeline .chat-tool-summary {
   min-width: 0;
   overflow: hidden;
   color: rgb(var(--color-ink-fade-rgb));
-  font-size: var(--type-ui);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
