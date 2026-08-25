@@ -6,6 +6,16 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.47] - 2026-08-25
+
+### Fixed
+
+- Stopped failed-turn continuation from looping when a checkpoint is missing or a retry cannot make progress; terminal failures now remain terminal and explain the real blocker.
+- Restored normal-permission execution after inline approvals, including writable directory grants and Shell/file operations that previously worked only in bypass mode.
+- Recovered ordinary desktop chat sending when a saved default output directory has been removed or disconnected by migrating to a writable Gugo default workspace; explicitly selected missing projects still fail clearly.
+- Accepted verified PDF and other binary outputs produced by Shell as completed deliverables instead of incorrectly requiring a second generator call.
+- Switched desktop development startup to Vite's native config loader to prevent `Vite module runner has been closed` failures.
+
 ## [0.11.46] - 2026-08-25
 
 ### Fixed
