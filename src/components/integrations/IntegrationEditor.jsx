@@ -18,7 +18,7 @@ function WechatQrCard({ qr, state, onRefresh, t }) {
     {qr?.qrcodeUrl && <div className="flex flex-col sm:flex-row items-center gap-3">
       <div className="relative w-40 h-40 shrink-0"><img src={qr.qrcodeUrl} alt="WeChat QR code" className={`w-40 h-40 rounded-md border border-ink-fade/30 bg-white ${['expired', 'timeout', 'error'].includes(state.phase) ? 'opacity-40 grayscale' : ''}`} />{['expired', 'timeout', 'error'].includes(state.phase) && <button type="button" onClick={onRefresh} className="absolute inset-0 m-auto h-9 w-28 rounded-md bg-ink text-paper text-xs hover:bg-ink-soft self-center">{t('wechat.qr.refresh')}</button>}</div>
       <div className="flex flex-col gap-2 min-w-0">
-        {state.phase === 'ready' && <span className="inline-flex items-center gap-1.5 self-start h-6 px-2 rounded-full bg-paper-2 text-xs text-ink-soft font-mono"><Circle className="w-2 h-2 fill-emerald-500 text-success" />{t('wechat.qr.expiresIn', { seconds: state.secondsLeft })}</span>}
+        {state.phase === 'ready' && <span className="inline-flex items-center gap-1.5 self-start h-6 px-2 rounded-full bg-paper-2 text-xs text-ink-soft font-mono"><Circle className="w-2 h-2 fill-current text-success" />{t('wechat.qr.expiresIn', { seconds: state.secondsLeft })}</span>}
         {state.statusText && !['expired', 'timeout', 'error'].includes(state.phase) && <span className="text-xs text-ink-soft leading-relaxed">{state.statusText}</span>}
         {['expired', 'timeout', 'error'].includes(state.phase) && state.errorText && <span className="text-xs text-danger leading-relaxed">{state.errorText}</span>}
         <span className="text-xs text-ink-fade leading-relaxed">{t('access.wechatHint')}</span>
