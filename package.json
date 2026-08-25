@@ -31,7 +31,7 @@
     "yma-cli": "./bin/yma-cli.js"
   },
   "scripts": {
-    "dev": "vite --configLoader runner",
+    "dev": "vite --configLoader native",
     "build": "vite build --configLoader runner",
     "audit:prod": "node scripts/audit-production.mjs",
     "lint": "eslint .",

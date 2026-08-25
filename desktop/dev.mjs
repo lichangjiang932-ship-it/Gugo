@@ -62,7 +62,7 @@ process.once('SIGTERM', stopAll)
 process.once('exit', stopAll)
 
 try {
-  const vite = start(process.execPath, [viteEntry, '--configLoader', 'runner'])
+  const vite = start(process.execPath, [viteEntry, '--configLoader', 'native'])
   await Promise.race([
     waitForServer(devUrl),
     new Promise((_, reject) => vite.once('error', reject)),
