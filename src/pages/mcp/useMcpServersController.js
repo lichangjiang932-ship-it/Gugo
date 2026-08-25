@@ -100,6 +100,16 @@ export default function useMcpServersController(t) {
     if (preset) selectServer(preset)
     window.setTimeout(() => setPresetChoice(''), 0)
   }
+  const importParsedServers = async (parsedServers) => {
+    const errors = []
+    let imported = 0
+    for (const server of parsedServers) {
+      try { await upsertMcpServerApi(server); imported += 1 }
+      catch (error) { errors.push(`${server.name || '?'}: ${error.message}`) }
+    }
+    await reload()
+    return { imported, errors }
+  }
   const startOAuth = async () => {
     if (!editing?.id) return
     const popup = globalThis.open('', 'gugo-mcp-oauth', 'popup,width=640,height=760')
@@ -132,7 +142,8 @@ export default function useMcpServersController(t) {
   }
 
   return {
-    catalog, choosePreset, connect, disconnect, disconnectOAuth, editing, err, fieldErrors, loading, notice,
+    catalog, choosePreset, connect, disconnect, disconnectOAuth, editing, err, fieldErrors,
+    importParsedServers, loading, notice,
     oauthBusy, presetChoice, remove, save, saving, selectServer, servers, setEditing, setFieldErrors, startOAuth,
     test, testResult,
   }
