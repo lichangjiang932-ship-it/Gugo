@@ -12,6 +12,7 @@ const MAX_GRANTS = 64
 const MAX_DIRECTORY_BROWSER_ENTRIES = 500
 const MAX_MANAGED_PROJECT_NAME_LENGTH = 80
 const MANAGED_PROJECTS_DIRECTORY = 'Gugo Projects'
+const DEFAULT_MANAGED_PROJECT_DIRECTORY = 'Default'
 export const LOCAL_FILE_GRANT_SCOPES = Object.freeze({
   PERSISTENT: 'persistent',
   SESSION: 'session',
@@ -246,6 +247,86 @@ function managedProjectUserKey(userId) {
   return crypto.createHash('sha256').update(String(userId)).digest('hex').slice(0, 16)
 }
 
+function ensureFallbackDefaultProjectDirectory({
+  userId,
+  unavailableConfiguredPath = '',
+  now = Date.now(),
+} = {}) {
+  const candidates = [
+    workspaceRoot(),
+    path.resolve(
+      appDataRoot(),
+      MANAGED_PROJECTS_DIRECTORY,
+      managedProjectUserKey(userId),
+      DEFAULT_MANAGED_PROJECT_DIRECTORY,
+    ),
+  ]
+  let lastCause = null
+
+  for (const candidate of candidates) {
+    try {
+      fs.mkdirSync(candidate, { recursive: true })
+      const canonicalProject = realPath(candidate)
+      const projectStat = fs.statSync(canonicalProject)
+      if (!projectStat.isDirectory()) throw new Error('fallback path is not a directory')
+      assertPathWritable(canonicalProject, projectStat)
+
+      // setDefaultOutputDirectory granted the old path when it was saved. It
+      // is now unusable, so migrate that exact stale record before adding the
+      // fallback. This also prevents a full 64-entry grant list from blocking
+      // an ordinary chat solely because its former default disappeared.
+      const staleGrant = unavailableConfiguredPath
+        ? getPersistentGrantRows(userId).find((row) => (
+            samePath(row.root_path, unavailableConfiguredPath)
+            && !fs.existsSync(row.root_path)
+          ))
+        : null
+      if (staleGrant && !samePath(staleGrant.root_path, canonicalProject)) {
+        getDb().prepare('DELETE FROM local_file_grants WHERE id = ? AND user_id = ?')
+          .run(staleGrant.id, userId)
+      }
+
+      // The fallback is created by Gugo and isolated to this local user. Give
+      // normal permission mode the same workspace authority as an explicitly
+      // created Gugo project; individual commands still use the inline gate.
+      grantLocalPath({
+        userId,
+        rootPath: canonicalProject,
+        accessMode: 'read_write',
+        scope: LOCAL_FILE_GRANT_SCOPES.PERSISTENT,
+        now,
+      })
+      setWorkspaceTrust({
+        userId,
+        rootPath: canonicalProject,
+        trusted: true,
+        confirmation: 'TRUST_WORKSPACE_CONFIG',
+        scope: LOCAL_FILE_GRANT_SCOPES.PERSISTENT,
+        now,
+      })
+      getDb().prepare(`
+        INSERT INTO local_file_access_settings
+          (user_id, all_files_enabled, default_output_directory, updated_at)
+        VALUES (?, 0, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          default_output_directory = excluded.default_output_directory,
+          updated_at = excluded.updated_at
+      `).run(userId, canonicalProject, now)
+      return canonicalProject
+    } catch (cause) {
+      lastCause = cause
+    }
+  }
+
+  const error = serviceError(
+    '历史默认目录已失效，且无法创建可写的 Gugo 默认项目目录',
+    403,
+    'DEFAULT_PROJECT_DIRECTORY_CREATE_FAILED',
+  )
+  error.cause = lastCause
+  throw error
+}
+
 /**
  * Create an app-managed workspace when the user names a project without
  * choosing an existing source folder. Every directory is a unique leaf under
@@ -358,8 +439,9 @@ export function withTurnProjectDirectory({
 export function resolveTurnProjectDirectory({ userId, workspacePath = '' } = {}) {
   if (!userId) throw serviceError('userId 必填', 400, 'USER_REQUIRED')
   const selectedPath = stripPairedOuterQuotes(workspacePath)
-  const requestedPath = selectedPath
-    || configuredOutputDirectory(userId)
+  const configuredPath = configuredOutputDirectory(userId)
+  let requestedPath = selectedPath
+    || configuredPath
     || isolatedTestOutputDirectory()
     || workspaceRoot()
   if (!path.isAbsolute(requestedPath)) {
@@ -369,11 +451,28 @@ export function resolveTurnProjectDirectory({ userId, workspacePath = '' } = {})
   try {
     canonicalPath = realPath(path.resolve(requestedPath))
   } catch {
-    throw serviceError('项目目录不存在或无法访问', 404, 'TURN_WORKSPACE_PATH_NOT_FOUND')
+    if (selectedPath || !configuredPath) {
+      throw serviceError('项目目录不存在或无法访问', 404, 'TURN_WORKSPACE_PATH_NOT_FOUND')
+    }
+    // A saved default may point to a removed folder or a disconnected drive.
+    // That stale preference must not prevent an ordinary chat from starting.
+    requestedPath = ensureFallbackDefaultProjectDirectory({
+      userId,
+      unavailableConfiguredPath: configuredPath,
+    })
+    canonicalPath = realPath(requestedPath)
   }
-  const stat = fs.statSync(canonicalPath)
+  let stat = fs.statSync(canonicalPath)
   if (!stat.isDirectory()) {
-    throw serviceError('项目路径必须是文件夹', 400, 'TURN_WORKSPACE_PATH_NOT_DIRECTORY')
+    if (selectedPath || !configuredPath) {
+      throw serviceError('项目路径必须是文件夹', 400, 'TURN_WORKSPACE_PATH_NOT_DIRECTORY')
+    }
+    requestedPath = ensureFallbackDefaultProjectDirectory({
+      userId,
+      unavailableConfiguredPath: configuredPath,
+    })
+    canonicalPath = realPath(requestedPath)
+    stat = fs.statSync(canonicalPath)
   }
   if (selectedPath) {
     const grant = findAuthorizedDirectoryGrant({

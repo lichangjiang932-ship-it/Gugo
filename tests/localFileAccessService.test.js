@@ -69,6 +69,7 @@ createUser({ id: 'all-files-persistent-shell-user', email: 'all-files-persistent
 createUser({ id: 'all-files-readonly-shell-user', email: 'all-files-readonly-shell@example.com' })
 createUser({ id: 'all-files-no-shell-user', email: 'all-files-no-shell@example.com' })
 createUser({ id: 'default-output-user', email: 'default-output@example.com' })
+createUser({ id: 'stale-default-output-user', email: 'stale-default-output@example.com' })
 createUser({ id: 'session-grant-user', email: 'session-grant@example.com' })
 createUser({ id: 'managed-project-user', email: 'managed-project@example.com' })
 createUser({ id: 'managed-project-other-user', email: 'managed-project-other@example.com' })
@@ -88,6 +89,7 @@ for (const userId of [
   'all-files-readonly-shell-user',
   'all-files-no-shell-user',
   'default-output-user',
+  'stale-default-output-user',
   'session-grant-user',
   'managed-project-user',
   'managed-project-other-user',
@@ -201,6 +203,49 @@ test('default output directory strips paired quotes, creates missing folders, an
     rawPath: `'${missingDirectory}'`,
   })
   assert.equal(browsed.currentPath, canonicalDirectory)
+})
+
+test('an unavailable saved default falls back to a managed project without weakening explicit selection', () => {
+  const userId = 'stale-default-output-user'
+  const staleDirectory = path.join(tempDir, 'stale-default-output')
+  const managedDataRoot = path.join(tempDir, 'managed-default-fallback')
+  const visibleWorkspaceRoot = path.join(tempDir, 'visible-default-workspace')
+  const previousAppDataDir = process.env.APP_DATA_DIR
+  const previousWorkspaceRoot = process.env.WORKSPACE_ROOT
+  process.env.APP_DATA_DIR = managedDataRoot
+  process.env.WORKSPACE_ROOT = visibleWorkspaceRoot
+  try {
+    setDefaultOutputDirectory({ userId, rootPath: staleDirectory })
+    fs.rmSync(staleDirectory, { recursive: true, force: true })
+
+    const resolved = resolveTurnProjectDirectory({ userId })
+    assert.equal(resolved.workspacePath, null)
+    assert.equal(resolved.projectDirectory, fs.realpathSync(visibleWorkspaceRoot))
+    assert.equal(fs.statSync(resolved.projectDirectory).isDirectory(), true)
+    assert.equal(
+      getLocalFileAccessStatus({ userId }).defaultOutputDirectory,
+      resolved.projectDirectory,
+    )
+    assert.equal(findAuthorizedDirectoryGrant({
+      userId,
+      rawPath: path.join(resolved.projectDirectory, 'answer.txt'),
+      accessMode: 'read_write',
+    })?.accessMode, 'read_write')
+    assert.equal(getWorkspaceTrustStatus({
+      userId,
+      rootPath: resolved.projectDirectory,
+    }).trusted, true)
+
+    assert.throws(
+      () => resolveTurnProjectDirectory({ userId, workspacePath: staleDirectory }),
+      (error) => error?.code === 'TURN_WORKSPACE_PATH_NOT_FOUND',
+    )
+  } finally {
+    if (previousAppDataDir === undefined) delete process.env.APP_DATA_DIR
+    else process.env.APP_DATA_DIR = previousAppDataDir
+    if (previousWorkspaceRoot === undefined) delete process.env.WORKSPACE_ROOT
+    else process.env.WORKSPACE_ROOT = previousWorkspaceRoot
+  }
 })
 
 test('managed projects create unique user-isolated, writable and trusted Turn workspaces', () => {
