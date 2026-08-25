@@ -29,14 +29,14 @@ const RM_NO_PRESERVE_RE = /\brm\s[^|;&]*--no-preserve-root\b/
 const DD_DEVICE_RE = /\bdd\s+[^|;&]*of=\/dev\/(sd[a-z]|nvme|hd[a-z]|mmcblk)/
 const MKFS_RE = /\bmkfs(\.\w+)?\s+\/dev\//
 const FORMAT_RE = /\bformat\s+[a-z]:/i
-const CURL_PIPE_SH_RE = /\b(curl|wget)\s[^|;&]*\|\s*(sh|bash|zsh|fish|python|node|ruby|perl)\b/
+const CURL_PIPE_SH_RE = /\b(curl|wget)\s[^|;&]*\|\s*(sudo\s+)?(sh|bash|zsh|fish|python3?|node|ruby|perl)\b/
 const CHMOD_777_ROOT_RE = /\bchmod\s+-R\s+777\s+(\/|~|\$HOME|\/etc|\/usr|\/var)/
 // SSH/AWS 私钥外泄:id_xxx 后面不能跟字母数字也不能跟 .pub(避免贪婪回溯让 id_rsa.pub 也命中)
 const SSH_KEY_EXFIL_RE = /\b(cat|less|more|head|tail|xxd|base64|od)\s[^|;&]*(\.ssh\/id_[a-z0-9]+(?![a-z0-9.])|\.aws\/credentials|\.gnupg\/[a-z]*sec|\.docker\/config\.json)/
 // env exfil:只拦"导到文件"或"管道到出口命令"，不拦 env | grep 这种本地过滤
 const ENV_EXFIL_RE = /\b(env|printenv|set)\s*(>|>>|\|\s*(curl|wget|nc|ncat|socat|ssh|scp|rsync|bash|sh|zsh|python|node|ruby|perl|telnet))/
 const WINDOWS_DEVICE_PATH_RE = /(?:^|[\s"'=,(])\\\\(?:[.?]\\|globalroot\\)/i
-const DYNAMIC_PATH_RE = /(?:~[\\/]|%[^%\r\n]+%[\\/]|\$env:[A-Za-z_][A-Za-z0-9_]*[\\/]|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?[\\/])/i
+const DYNAMIC_PATH_RE = /(?:~[\\/]|~[A-Za-z0-9_-]+[\\/]|%[^%\r\n]+%[\\/]|\$env:[A-Za-z_][A-Za-z0-9_]*[\\/]|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?[\\/])/i
 const PARENT_PATH_RE = /(?:^|[\\/\s"'=,(])\.\.(?:[\\/\s"'),;]|$)/
 const UNQUOTED_WINDOWS_PAREN_PATH_RE = /(?:^|[\s=,(])((?:[A-Za-z]:[\\/]|\\\\)[^\s"'<>|;&,]*\([^()\s"'<>|;&,]*\)(?=[^\s"'<>|;&,)])[^\s"'<>|;&,]*)/i
 
