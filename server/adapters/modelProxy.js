@@ -57,6 +57,7 @@ export {
   resolveModelFailoverConfigs,
 } from './modelProviderConfig.js'
 export { isProviderFailoverError, runWithProviderFailover, streamWithProviderFailover } from './modelFailover.js'
+import { canonicalStreamToolCalls } from './modelStreamToolCalls.js'
 export { shouldScheduleStreamAutoMemory, streamOpenAICompatible } from './modelProxyResponseCoordinator.js'
 export {
   getModelContextWindow,
@@ -352,34 +353,6 @@ export async function callBackgroundModelWithTools({
   }, { signal })
 }
 
-function canonicalStreamToolCalls(toolCalls = []) {
-  return (Array.isArray(toolCalls) ? toolCalls : []).map((call) => {
-    const fn = call?.function && typeof call.function === 'object' ? call.function : {}
-    const rawArguments = fn.arguments ?? call?.arguments ?? '{}'
-    let argumentsText
-    if (typeof rawArguments === 'string') argumentsText = rawArguments
-    else {
-      try { argumentsText = JSON.stringify(rawArguments ?? {}) } catch { argumentsText = '{}' }
-    }
-    return {
-      ...(call?.id ? { id: call.id } : {}),
-      type: call?.type || 'function',
-      function: {
-        name: String(fn.name || call?.name || ''),
-        arguments: argumentsText,
-      },
-    }
-  })
-}
-
-/**
- * Chat tool-loop model call with the same stable result shape as
- * callBackgroundModelWithTools, but backed by the provider streaming adapter.
- *
- * Text and reasoning are delivered while the provider is still generating;
- * the canonical tool_calls batch is retained until the stream finishes so the
- * durable tool-loop checkpoint remains identical to the non-streaming path.
- */
 export async function callStreamingModelWithTools({
   messages,
   tools,
