@@ -16,6 +16,23 @@ function contextMenuPosition(event) {
   }
 }
 
+let relativeTimeFormatter = null
+function formatSessionRelativeTime(timestamp) {
+  if (!Number.isFinite(timestamp)) return ''
+  try {
+    relativeTimeFormatter ||= new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+    const diffMinutes = Math.round((timestamp - Date.now()) / 60000)
+    if (Math.abs(diffMinutes) < 60) return relativeTimeFormatter.format(diffMinutes, 'minute')
+    const diffHours = Math.round((timestamp - Date.now()) / 3600000)
+    if (Math.abs(diffHours) < 24) return relativeTimeFormatter.format(diffHours, 'hour')
+    const diffDays = Math.round((timestamp - Date.now()) / 86400000)
+    if (Math.abs(diffDays) < 30) return relativeTimeFormatter.format(diffDays, 'day')
+    return relativeTimeFormatter.format(Math.round(diffDays / 30), 'month')
+  } catch {
+    return ''
+  }
+}
+
 function moveMenuFocus(event) {
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
   const items = [...event.currentTarget.querySelectorAll('[role="menuitem"]:not(:disabled)')]
@@ -86,7 +103,7 @@ export default function SessionList({
     const menuId = `session-actions-${session.id}`
     return <div
       key={session.id ?? index}
-      className={`group relative flex h-8 items-stretch rounded-lg transition-colors ${isActive ? 'bg-ink/[0.06]' : 'hover:bg-ink/[0.04]'}`}
+      className={`group relative flex min-h-[2.75rem] items-stretch rounded-lg transition-colors ${isActive ? 'bg-ink/[0.055]' : 'hover:bg-ink/[0.035]'}`}
       onContextMenu={(event) => {
         if (menuRef.current?.contains(event.target)) return
         event.preventDefault()
@@ -96,6 +113,7 @@ export default function SessionList({
         onMenuOpen(session.id)
       }}
     >
+      {isActive && <span aria-hidden="true" className="absolute left-0 top-1/2 h-4 w-[2.5px] -translate-y-1/2 rounded-full bg-accent" />}
       <button
         type="button"
         data-session-open
@@ -110,9 +128,17 @@ export default function SessionList({
         }}
         aria-current={isActive ? 'page' : undefined}
         aria-keyshortcuts="Shift+F10"
-        className="flex min-w-0 flex-1 items-center rounded-lg py-1 pl-2 pr-8 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"
+        className="flex min-w-0 flex-1 items-center rounded-lg py-1.5 pl-2.5 pr-8 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"
       >
-        <span className={`block truncate text-[13px] leading-[18px] ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{session.title}</span>
+        <span className="min-w-0 flex-1">
+          <span className={`block truncate text-[13px] leading-[18px] ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{session.title}</span>
+          {(() => {
+            const relative = formatSessionRelativeTime(session.updatedAt)
+            return relative ? (
+              <span className="mt-0.5 block truncate text-[11px] leading-[14px] text-ink-fade/90 tabular-nums">{relative}</span>
+            ) : null
+          })()}
+        </span>
       </button>
       <button
         type="button"
@@ -128,7 +154,7 @@ export default function SessionList({
         aria-haspopup="menu"
         aria-expanded={isMenuOpen}
         aria-controls={isMenuOpen ? menuId : undefined}
-        className={`absolute right-1 top-1 rounded-md p-1 text-ink-fade transition-opacity hover:bg-paper hover:text-ink focus:opacity-100 focus:outline-none ${isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+        className={`absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1 text-ink-fade transition-opacity hover:bg-paper hover:text-ink focus:opacity-100 focus:outline-none ${isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
       >
         <MoreHorizontal className="h-4 w-4" />
       </button>

@@ -73,7 +73,7 @@ export default function SettingsDialogNavigation({
       <nav className="settings-nav-groups" aria-label={t('settings.sectionTitle')}>
         {SETTINGS_NAV_GROUPS.map((group) => (
           <section className="settings-nav-group" key={group.labelKey}>
-            <h2 className="settings-nav-group-label">{t(group.labelKey)}</h2>
+            {/* Group labels removed by design (v4.1): flat list, groups separated by spacing only. */}
             <div className="settings-nav-group-items">
               {group.items.map((item) => (
                 <button
@@ -91,7 +91,6 @@ export default function SettingsDialogNavigation({
         ))}
         {contributedSettings.length > 0 && (
           <section className="settings-nav-group" data-ui-contribution-slot="settings-section">
-            <h2 className="settings-nav-group-label">{t('settings.plugins')}</h2>
             <div className="settings-nav-group-items">
               {contributedSettings.map((contribution) => (
                 <button

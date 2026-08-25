@@ -910,8 +910,7 @@ const STORAGE_NOTICE_TRANSLATIONS = {
 }
 
 const SETTINGS_MODAL_TRANSLATIONS = {
-  zh: {
-    navGroups: { general: '通用', capabilities: '能力', system: '系统' },
+  zh: {
     general: '通用设置', generalDescription: '管理本机输出位置与桌面体验。', plugins: '插件', agentPresets: 'Agent 预设', about: '关于',
     diagnosticsChecking: '正在探测模型端点…', diagnosticsChecked: '端点探测完成。', diagnosticsRefreshed: '诊断状态已刷新。', modelTesting: '正在发送测试消息…', modelTestSucceeded: '测试成功，延迟 {latency} ms。',
     configFileWebFallback: 'Web 版无法直接打开本机配置文件。', configFileOpened: '已打开配置文件。', configFileOpenFailed: '无法打开配置文件。', openConfigFile: '打开配置文件', close: '关闭设置',
@@ -924,8 +923,7 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     agentPresetsDescription: '管理人物、性格和 Agent 模板。', agentProfiles: 'Agent 配置', agentProfilesDescription: '编辑角色卡、技能和预设模板。', manageAgents: '管理 Agent', visionAssist: '视觉辅助',
     aboutDescription: '查看运行模式、模型连接与系统状态。', runtimeMode: '运行模式', multiUserDescription: '当前使用账户隔离的多用户模式。', localMode: '本地单机', multiUserMode: '多用户', systemDiagnosticsDescription: '刷新状态或主动探测模型端点。', probeEndpoint: '探测端点', modelService: '模型服务', endpointStatus: '端点状态', endpointReady: '端点可用', endpointUnavailable: '端点不可用', endpointUnchecked: '尚未探测', testModel: '测试模型', testModelDescription: '发送一条最小测试请求验证配置。', availableModels: '可用模型', availableModelsDescription: '当前返回 {count} 个模型。', emailLogin: '邮箱登录', smtpService: 'SMTP 服务', smtpConfigured: '已配置', smtpWaiting: '未配置',
   },
-  en: {
-    navGroups: { general: 'General', capabilities: 'Capabilities', system: 'System' },
+  en: {
     general: 'General', generalDescription: 'Manage local output and desktop preferences.', plugins: 'Plugins', agentPresets: 'Agent presets', about: 'About',
     diagnosticsChecking: 'Checking the model endpoint…', diagnosticsChecked: 'Endpoint check completed.', diagnosticsRefreshed: 'Diagnostics refreshed.', modelTesting: 'Sending a test message…', modelTestSucceeded: 'Test succeeded in {latency} ms.',
     configFileWebFallback: 'The web app cannot open local configuration files.', configFileOpened: 'Configuration file opened.', configFileOpenFailed: 'Could not open the configuration file.', openConfigFile: 'Open config file', close: 'Close settings',
@@ -938,8 +936,7 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     agentPresetsDescription: 'Manage personas, profiles, and Agent templates.', agentProfiles: 'Agent profiles', agentProfilesDescription: 'Edit character cards, skills, and templates.', manageAgents: 'Manage Agents', visionAssist: 'Vision assistance',
     aboutDescription: 'Review runtime mode, model connectivity, and system status.', runtimeMode: 'Runtime mode', multiUserDescription: 'Account-isolated multi-user mode is active.', localMode: 'Local', multiUserMode: 'Multi-user', systemDiagnosticsDescription: 'Refresh status or probe the model endpoint.', probeEndpoint: 'Probe endpoint', modelService: 'Model service', endpointStatus: 'Endpoint status', endpointReady: 'Endpoint available', endpointUnavailable: 'Endpoint unavailable', endpointUnchecked: 'Not checked', testModel: 'Test model', testModelDescription: 'Send a minimal request to verify the configuration.', availableModels: 'Available models', availableModelsDescription: '{count} models are currently available.', emailLogin: 'Email sign-in', smtpService: 'SMTP service', smtpConfigured: 'Configured', smtpWaiting: 'Not configured',
   },
-  ja: {
-    navGroups: { general: '一般', capabilities: '機能', system: 'システム' },
+  ja: {
     general: '一般設定', generalDescription: 'ローカル出力先とデスクトップ設定を管理します。', plugins: 'プラグイン', agentPresets: 'Agent プリセット', about: 'このアプリについて',
     diagnosticsChecking: 'モデルエンドポイントを確認中…', diagnosticsChecked: 'エンドポイント確認が完了しました。', diagnosticsRefreshed: '診断状態を更新しました。', modelTesting: 'テストメッセージを送信中…', modelTestSucceeded: 'テスト成功（{latency} ms）。',
     configFileWebFallback: 'Web 版ではローカル設定ファイルを直接開けません。', configFileOpened: '設定ファイルを開きました。', configFileOpenFailed: '設定ファイルを開けませんでした。', openConfigFile: '設定ファイルを開く', close: '設定を閉じる',
@@ -952,8 +949,7 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     agentPresetsDescription: '人物設定と Agent テンプレートを管理します。', agentProfiles: 'Agent プロファイル', agentProfilesDescription: 'キャラクターカード、スキル、テンプレートを編集します。', manageAgents: 'Agent を管理', visionAssist: '画像支援',
     aboutDescription: '実行モード、モデル接続、システム状態を確認します。', runtimeMode: '実行モード', multiUserDescription: 'アカウント分離のマルチユーザーモードです。', localMode: 'ローカル', multiUserMode: 'マルチユーザー', systemDiagnosticsDescription: '状態更新またはモデルエンドポイントを確認します。', probeEndpoint: 'エンドポイントを確認', modelService: 'モデルサービス', endpointStatus: 'エンドポイント状態', endpointReady: '利用可能', endpointUnavailable: '利用不可', endpointUnchecked: '未確認', testModel: 'モデルをテスト', testModelDescription: '最小リクエストで設定を確認します。', availableModels: '利用可能なモデル', availableModelsDescription: '現在 {count} 件のモデルがあります。', emailLogin: 'メールログイン', smtpService: 'SMTP サービス', smtpConfigured: '設定済み', smtpWaiting: '未設定',
   },
-  ko: {
-    navGroups: { general: '일반', capabilities: '기능', system: '시스템' },
+  ko: {
     general: '일반 설정', generalDescription: '로컬 출력 위치와 데스크톱 환경을 관리합니다.', plugins: '플러그인', agentPresets: 'Agent 프리셋', about: '정보',
     diagnosticsChecking: '모델 엔드포인트 확인 중…', diagnosticsChecked: '엔드포인트 확인 완료.', diagnosticsRefreshed: '진단 상태를 새로 고쳤습니다.', modelTesting: '테스트 메시지 전송 중…', modelTestSucceeded: '테스트 성공, {latency} ms.',
     configFileWebFallback: '웹 앱에서는 로컬 설정 파일을 열 수 없습니다.', configFileOpened: '설정 파일을 열었습니다.', configFileOpenFailed: '설정 파일을 열 수 없습니다.', openConfigFile: '설정 파일 열기', close: '설정 닫기',
@@ -966,8 +962,7 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     agentPresetsDescription: '페르소나와 Agent 템플릿을 관리합니다.', agentProfiles: 'Agent 프로필', agentProfilesDescription: '캐릭터 카드, 스킬 및 템플릿을 편집합니다.', manageAgents: 'Agent 관리', visionAssist: '비전 지원',
     aboutDescription: '실행 모드, 모델 연결 및 시스템 상태를 확인합니다.', runtimeMode: '실행 모드', multiUserDescription: '계정이 분리된 다중 사용자 모드입니다.', localMode: '로컬', multiUserMode: '다중 사용자', systemDiagnosticsDescription: '상태를 새로 고치거나 모델 엔드포인트를 확인합니다.', probeEndpoint: '엔드포인트 확인', modelService: '모델 서비스', endpointStatus: '엔드포인트 상태', endpointReady: '사용 가능', endpointUnavailable: '사용 불가', endpointUnchecked: '확인 안 함', testModel: '모델 테스트', testModelDescription: '최소 요청으로 설정을 확인합니다.', availableModels: '사용 가능한 모델', availableModelsDescription: '현재 모델 {count}개를 사용할 수 있습니다.', emailLogin: '이메일 로그인', smtpService: 'SMTP 서비스', smtpConfigured: '설정됨', smtpWaiting: '설정 안 됨',
   },
-  'zh-TW': {
-    navGroups: { general: '通用', capabilities: '能力', system: '系統' },
+  'zh-TW': {
     general: '通用設定', generalDescription: '管理本機輸出位置與桌面體驗。', plugins: '插件', agentPresets: 'Agent 預設', about: '關於',
     diagnosticsChecking: '正在探測模型端點…', diagnosticsChecked: '端點探測完成。', diagnosticsRefreshed: '診斷狀態已重新整理。', modelTesting: '正在傳送測試訊息…', modelTestSucceeded: '測試成功，延遲 {latency} ms。',
     configFileWebFallback: 'Web 版無法直接開啟本機設定檔。', configFileOpened: '已開啟設定檔。', configFileOpenFailed: '無法開啟設定檔。', openConfigFile: '開啟設定檔', close: '關閉設定',

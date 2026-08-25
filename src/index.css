@@ -483,6 +483,15 @@ html[data-animations="false"] *::after {
   padding: 0.1rem 0;
 }
 
+/* 留白粒度：用户消息开启新回合，回合间大留白（≈32px 节奏），回合内紧凑 */
+[data-message-role="user"]:not(:first-child) {
+  margin-top: 1.75rem;
+}
+
+[data-message-role="assistant"] + [data-message-role="user"] {
+  margin-top: 2rem;
+}
+
 .chat-assistant-message:hover .chat-markdown {
   color: var(--color-ink);
 }
@@ -606,9 +615,10 @@ html[data-animations="false"] *::after {
 }
 
 .chat-composer-surface:focus-within {
-  border-color: rgb(var(--color-ink-rgb) / 0.15);
+  border-color: rgb(var(--color-accent-rgb) / 0.55);
   background: rgb(var(--color-paper-rgb));
   box-shadow:
+    0 0 0 3px rgb(var(--color-accent-rgb) / 0.08),
     0 14px 38px rgb(var(--color-ink-rgb) / 0.095),
     0 1px 3px rgb(var(--color-ink-rgb) / 0.045);
 }

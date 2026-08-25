@@ -25,16 +25,16 @@ test('session history is one continuous newest-first list', () => {
   assert.deepEqual(sortSessions([]), [])
 })
 
-test('session rows stay compact while workspace sessions can render under project groups', () => {
+test('session rows are two-line editorial entries while workspace sessions can render under project groups', () => {
   assert.match(sessionListSource, /orderedSessions\.map\(\(session, index\) => renderSession\(session, index\)\)/)
+  // Two-line entry: 13px title + 11px relative-time subtitle.
   assert.match(sessionListSource, /block truncate text-\[13px\] leading-\[18px\]/)
-  assert.match(sessionListSource, /truncate text-\[13px\] font-medium leading-\[18px\] text-ink/)
-  assert.equal((sessionListSource.match(/flex h-8 items-/g) || []).length, 2)
+  assert.match(sessionListSource, /text-\[11px\] leading-\[14px\] text-ink-fade/)
+  assert.match(sessionListSource, /formatSessionRelativeTime\(session\.updatedAt\)/)
+  // Rows grow to fit both lines; active session gets a brand-green anchor bar.
+  assert.match(sessionListSource, /min-h-\[2\.75rem\] items-stretch/)
+  assert.match(sessionListSource, /h-4 w-\[2\.5px\][^"']*bg-accent/)
   assert.equal((sessionListSource.match(/\{session\.title\}/g) || []).length, 1)
-  assert.doesNotMatch(
-    sessionListSource,
-    /formatRelative|relativeTime|data-session-time/,
-  )
   assert.match(sessionListSource, /data-session-project/)
   assert.match(sessionListSource, /data-project-toggle/)
   assert.match(sessionListSource, /data-new-project-chat/)
