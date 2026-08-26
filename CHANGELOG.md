@@ -6,6 +6,31 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.48] - 2026-08-26
+
+### Added
+
+- Shell network-egress policy tier (P2 sandbox ladder step 1) with deny mode and tool-audit logging.
+- DEBT.md architecture-debt registry with evidence, exit criteria, and verification per item.
+- Offline eval suites: shell-guard red-team and compaction-fidelity.
+- Expanded MCP preset baseline (GitHub, Brave Search, Slack, PostgreSQL, Puppeteer) and official skill presets.
+- shared/turnEvidenceText to strip legacy server-side dirty data persisted by older builds.
+
+### Changed
+
+- Closed DEBT-I18N-001: assistant content carries only model output; server-side failure/cancel/block text uses stable codes with client-side i18n (5 languages).
+- turn.blocked stepLabel now renders from recoveryKind via localized chatMessages keys instead of server-embedded text.
+- mediaModelService outbound routes through fetchSafeOutbound with response throttling and base64 pre-check.
+- runtimeStoragePath blocks Windows reserved device names (NUL/CON/COM1..., trailing dots/spaces, ADS, drive-relative paths).
+- Narrow-port runtime extractions: turnResumeRuntime, turnCanaryOutcomeRuntime, canonicalStreamToolCalls.
+
+### Fixed
+
+- normalizeTurnFailure CJK-sniff bug that silently dropped non-Chinese hints.
+- artifactDownloadPreview test cleanup EPERM on Windows (best-effort removal).
+- Restored callStreamingModelWithTools JSDoc dropped during extraction.
+- UI readability 12px gate; web-search panel hardcoded hex migrated to design tokens.
+
 ## [0.11.47] - 2026-08-25
 
 ### Fixed
