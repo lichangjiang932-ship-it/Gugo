@@ -221,6 +221,7 @@ test('turn blocked events are strict manual-repair recovery boundaries', () => {
     payload: {
       code: 'TURN_PERMISSION_CONTEXT_DRIFT',
       message: 'repair the permission context before retrying',
+      partialText: 'I completed the safe inspection before recovery was blocked.',
       retryable: false,
       manualRetryable: true,
       recoveryStatus: 'dead_letter',
@@ -231,6 +232,7 @@ test('turn blocked events are strict manual-repair recovery boundaries', () => {
     createdAt: 7,
   })
   assert.equal(blocked.payload.manualRetryable, true)
+  assert.equal(blocked.payload.partialText, 'I completed the safe inspection before recovery was blocked.')
   assert.throws(() => createTurnEvent({
     ...blocked,
     id: 'blocked-auto-retry',

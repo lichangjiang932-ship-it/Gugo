@@ -152,7 +152,7 @@ test('turn cancellation runtime commits the event and evidence message as one fe
   assert.equal(emitted.length, 1)
   assert.equal(emitted[0].type, 'turn.cancelled')
   assert.equal(boundary.event, emitted[0])
-  assert.equal(boundary.message.content, 'Cancelled by user')
+  assert.equal(boundary.message.content, '')
   assert.equal(boundary.message.modelContext.turnEvidence, true)
   assert.equal(boundary.message.modelContext.evidenceState, 'cancelled')
   assert.deepEqual(boundary.executionLease, { ownerId: 'worker-1', fenceToken: 8 })

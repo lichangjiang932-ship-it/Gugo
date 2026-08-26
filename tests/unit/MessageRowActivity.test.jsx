@@ -5,6 +5,8 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
+import { translateKey } from '../../src/i18n/translations.js'
+import { normalizeServerSessionSnapshot } from '../../src/lib/turnClient.js'
 import MessageRow from '../../src/pages/ChatSplit/chatMessages/MessageRow.jsx'
 
 function setupDom() {
@@ -20,6 +22,215 @@ function setupDom() {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   return dom
 }
+
+test('failed snapshot messages derive localized copy without replacing durable partial text', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const serverMessage = '任务尚未完全通过验证。请重试以继续完成验证。'
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'turn-incomplete:assistant',
+      role: 'assistant',
+      // Legacy servers persisted their localized fallback in assistant
+      // content. It remains durable, but must not be rendered as model text.
+      content: serverMessage,
+      createdAt: 1,
+      modelContext: {
+        turnId: 'turn-incomplete',
+        turnEvidence: true,
+        evidenceState: 'failed',
+        error: {
+          code: 'TURN_INCOMPLETE',
+          message: serverMessage,
+          retryable: true,
+        },
+      },
+    }],
+  })
+  const failedMessage = snapshot.messages[0]
+  const copy = {
+    en: {
+      failed: translateKey('errors.chatFailure', 'en'),
+      incomplete: translateKey('errors.turnIncomplete', 'en'),
+    },
+    ja: {
+      failed: translateKey('errors.chatFailure', 'ja'),
+      incomplete: translateKey('errors.turnIncomplete', 'ja'),
+    },
+  }
+  const renderMessage = (msg, lang) => act(async () => root.render(
+    <I18nProvider>
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang={lang}
+        t={(key) => translateKey(key, lang)}
+      />
+    </I18nProvider>,
+  ))
+
+  try {
+    assert.equal(failedMessage.content, serverMessage)
+    assert.equal(failedMessage.meta.serverPartialText, '')
+    assert.equal(failedMessage.meta.serverFailure.code, 'TURN_INCOMPLETE')
+
+    await renderMessage(failedMessage, 'en')
+    assert.equal(rootElement.querySelector('.chat-assistant-answer')?.textContent, copy.en.incomplete)
+    assert.doesNotMatch(rootElement.textContent, new RegExp(serverMessage))
+    assert.equal(failedMessage.content, serverMessage)
+
+    const genericFailure = {
+      ...failedMessage,
+      id: 'turn-failed:assistant',
+      meta: {
+        ...failedMessage.meta,
+        serverFailure: {
+          code: 'TURN_FAILED',
+          message: 'internal server failure detail',
+          retryable: false,
+        },
+      },
+    }
+    await renderMessage(genericFailure, 'en')
+    assert.equal(rootElement.querySelector('.chat-assistant-answer')?.textContent, copy.en.failed)
+    assert.doesNotMatch(rootElement.textContent, /internal server failure detail/)
+
+    await renderMessage(failedMessage, 'ja')
+    assert.equal(rootElement.querySelector('.chat-assistant-answer')?.textContent, copy.ja.incomplete)
+    assert.doesNotMatch(rootElement.textContent, new RegExp(serverMessage))
+    assert.equal(failedMessage.content, serverMessage)
+
+    const partialText = 'Verified partial result from the model.'
+    await renderMessage({
+      ...failedMessage,
+      content: `${partialText}\n\n${copy.en.incomplete}`,
+      meta: { ...failedMessage.meta, serverPartialText: partialText },
+    }, 'ja')
+    assert.equal(rootElement.querySelector('.chat-assistant-answer')?.textContent, partialText)
+    assert.doesNotMatch(rootElement.textContent, new RegExp(copy.en.incomplete))
+    assert.doesNotMatch(rootElement.textContent, new RegExp(copy.ja.incomplete))
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('legacy interrupted, cancelled, and recovery-blocked snapshots never render server fallback prose as assistant text', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const interruptedFallback = '任务中断：后续模型请求未能继续，任务尚未完成。请重试以继续。\n\n已经完成的部分：\n- read_file：路径：README.md'
+  const blockedFallback = '模型请求可能已被上游接受，系统已阻止自动重试。'
+  const cancelledFallback = 'Cancelled by user'
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'legacy-interrupted:assistant',
+      role: 'assistant',
+      content: interruptedFallback,
+      createdAt: 1,
+      modelContext: {
+        turnId: 'legacy-interrupted',
+        turnEvidence: true,
+        evidenceState: 'interrupted',
+        error: {
+          code: 'MODEL_CALL_INTERRUPTED',
+          message: '任务执行遇到问题，尚未完成。请重试。',
+          retryable: true,
+        },
+      },
+    }, {
+      id: 'legacy-blocked:assistant',
+      role: 'assistant',
+      content: blockedFallback,
+      createdAt: 2,
+      modelContext: {
+        turnId: 'legacy-blocked',
+        turnEvidence: true,
+        evidenceState: 'blocked',
+        error: { code: 'MODEL_REQUEST_OUTCOME_UNKNOWN', message: blockedFallback, retryable: false },
+        recovery: {
+          recoveryKind: 'model_request_outcome_unknown',
+          requiresUserVerification: true,
+          modelRequestId: 'mr_legacy',
+          recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
+        },
+      },
+    }, {
+      id: 'legacy-cancelled:assistant',
+      role: 'assistant',
+      content: cancelledFallback,
+      createdAt: 3,
+      modelContext: {
+        turnId: 'legacy-cancelled',
+        turnEvidence: true,
+        evidenceState: 'cancelled',
+      },
+    }],
+  })
+  const renderMessage = (msg, lang = 'en') => act(async () => root.render(
+    <I18nProvider>
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang={lang}
+        t={(key) => translateKey(key, lang)}
+      />
+    </I18nProvider>,
+  ))
+
+  try {
+    const interrupted = snapshot.messages[0]
+    assert.equal(interrupted.meta.serverPartialText, '')
+    await renderMessage(interrupted, 'en')
+    assert.doesNotMatch(rootElement.textContent, new RegExp(interruptedFallback))
+    assert.equal(
+      rootElement.querySelector('.chat-assistant-answer')?.textContent,
+      translateKey('errors.runtimeInterrupted', 'en'),
+    )
+    await renderMessage(interrupted, 'ja')
+    assert.equal(
+      rootElement.querySelector('.chat-assistant-answer')?.textContent,
+      translateKey('errors.runtimeInterrupted', 'ja'),
+    )
+
+    const blocked = snapshot.messages[1]
+    assert.equal(blocked.meta.serverPartialText, '')
+    await renderMessage(blocked)
+    assert.doesNotMatch(rootElement.textContent, new RegExp(blockedFallback))
+    assert.ok(rootElement.querySelector('[data-testid="model-request-recovery-blocked"]'))
+
+    const cancelled = snapshot.messages[2]
+    assert.equal(cancelled.content, cancelledFallback)
+    assert.equal(cancelled.meta.serverPartialText, '')
+    await renderMessage(cancelled, 'en')
+    assert.equal(
+      rootElement.querySelector('.chat-assistant-answer')?.textContent,
+      translateKey('chat.serverTurn.cancelled', 'en'),
+    )
+    assert.doesNotMatch(rootElement.textContent, new RegExp(cancelledFallback))
+
+    await renderMessage(cancelled, 'ja')
+    assert.equal(
+      rootElement.querySelector('.chat-assistant-answer')?.textContent,
+      translateKey('chat.serverTurn.cancelled', 'ja'),
+    )
+
+    const partialText = 'The model saved a verified partial draft.'
+    await renderMessage({
+      ...cancelled,
+      meta: { ...cancelled.meta, serverPartialText: partialText },
+    }, 'ja')
+    assert.equal(rootElement.querySelector('.chat-assistant-answer')?.textContent, partialText)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
 
 test('unknown side-effect block clearly stops automatic retry and links to recovery settings', async () => {
   const dom = setupDom()

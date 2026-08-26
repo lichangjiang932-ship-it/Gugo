@@ -6,10 +6,56 @@ import path from 'node:path'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
 
+import { validateRuntimeStoragePath } from '../server/utils/runtimeStoragePath.js'
 import { resolveRuntimeStartupEnvironment } from '../server/utils/runtimeEnv.js'
 
 const dbModuleUrl = pathToFileURL(path.resolve('server/db.js')).href
 const invalidLiterals = ['undefined', 'null', 'NaN', '[object Object]']
+const windowsReservedDeviceNames = [
+  'CON',
+  'PRN',
+  'AUX',
+  'NUL',
+  ...Array.from({ length: 9 }, (_, index) => `COM${index + 1}`),
+  ...Array.from({ length: 9 }, (_, index) => `LPT${index + 1}`),
+]
+
+test('runtime storage paths reject Win32 reserved device names in every segment', () => {
+  const invalidPaths = [
+    ...windowsReservedDeviceNames,
+    'nul.db',
+    'C:\\runtime\\COM1\\app.db',
+    'relative/PRN.txt',
+    'C:\\runtime\\AUX...   ',
+    'C:LPT9.log',
+  ]
+
+  for (const value of invalidPaths) {
+    assert.throws(
+      () => validateRuntimeStoragePath(value, { key: 'APP_DB_PATH', platform: 'win32' }),
+      (error) => error?.code === 'RUNTIME_STORAGE_PATH_INVALID'
+        && error.retryable === false
+        && error.key === 'APP_DB_PATH',
+      value,
+    )
+  }
+})
+
+test('runtime storage paths preserve normal Windows paths and non-Windows device-like names', () => {
+  const normalWindowsPaths = [
+    'C:\\runtime\\app.db',
+    'C:\\runtime\\COM10\\app.db',
+    'C:\\runtime\\NUL-safe.db',
+    'C:\\runtime\\CONSOLE\\app.db',
+  ]
+  for (const value of normalWindowsPaths) {
+    assert.equal(validateRuntimeStoragePath(value, { platform: 'win32' }), value)
+  }
+
+  for (const value of ['/tmp/NUL', '/tmp/nul.db', '/tmp/COM1']) {
+    assert.equal(validateRuntimeStoragePath(value, { platform: 'linux' }), value)
+  }
+})
 
 test('runtime startup rejects coerced storage path literals before resolving them under cwd', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-invalid-runtime-storage-'))
@@ -40,13 +86,16 @@ test('runtime startup rejects coerced storage path literals before resolving the
   }
 })
 
-test('direct database bootstrap rejects coerced path literals without creating SQLite sidecars', () => {
+test('direct database bootstrap rejects unsafe path literals without creating SQLite sidecars', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-invalid-db-path-'))
   try {
+    const invalidDbPaths = process.platform === 'win32'
+      ? [...invalidLiterals, 'NUL', 'nul.db', 'COM1']
+      : invalidLiterals
     const script = `
       import { getDb } from ${JSON.stringify(dbModuleUrl)};
       const results = [];
-      for (const value of ${JSON.stringify(invalidLiterals)}) {
+      for (const value of ${JSON.stringify(invalidDbPaths)}) {
         process.env.APP_DB_PATH = value;
         try {
           getDb();
@@ -71,7 +120,7 @@ test('direct database bootstrap rejects coerced path literals without creating S
 
     assert.equal(result.error, undefined, result.error?.message)
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
-    assert.deepEqual(JSON.parse(result.stdout), invalidLiterals.map((value) => ({
+    assert.deepEqual(JSON.parse(result.stdout), invalidDbPaths.map((value) => ({
       value,
       code: 'RUNTIME_STORAGE_PATH_INVALID',
       key: 'APP_DB_PATH',
@@ -81,6 +130,7 @@ test('direct database bootstrap rejects coerced path literals without creating S
         assert.equal(fs.existsSync(path.join(cwd, `${value}${suffix}`)), false)
       }
     }
+    assert.deepEqual(fs.readdirSync(cwd), [])
     assert.equal(fs.existsSync(path.join(cwd, 'data')), false)
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true })

@@ -118,10 +118,10 @@ export function normalizeTurnFailure(error, {
   }
   if (status !== null) failure.status = status
   const rawHint = String(error?.hint || '').trim()
-  if (rawHint && /[\u3400-\u9fff]/u.test(rawHint) && !containsInternalTerminalFailure(rawHint)) {
+  if (rawHint && !containsInternalTerminalFailure(rawHint)) {
     failure.hint = rawHint
   } else if (failure.retryable) {
-    failure.hint = '请重试本任务；系统会继续处理尚未完成的步骤。'
+    failure.hint = 'Retry this task; the system will continue the unfinished steps.'
   }
   const attempts = Number(error?.attempts)
   if (Number.isInteger(attempts) && attempts > 0) failure.attempts = attempts

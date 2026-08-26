@@ -263,6 +263,11 @@ test('Session mutations fail closed when the TurnEngine host is unavailable', as
       message: 'turn runtime is restarting; retry shortly',
       action: 'retry',
     },
+    {
+      code: 'TURN_SESSION_ACTIVITY_CHECK_FAILED',
+      message: 'turn activity could not be verified; retry shortly',
+      action: 'retry',
+    },
     ...[
       'TURN_ENGINE_HOST_PENDING_INITIALIZATION_CLEANUP_FAILED',
       'TURN_ENGINE_HOST_INITIALIZATION_AND_CLEANUP_FAILED',
@@ -682,6 +687,81 @@ test('stored system rows are not replayed beside freshly compiled system blocks'
   assert.deepEqual(expanded.map((message) => message.role), ['user', 'assistant'])
   assert.doesNotMatch(JSON.stringify(expanded), /STALE_IDENTITY_AND_UI_STATE_MUST_NOT_REPLAY|spinner/)
   assert.match(JSON.stringify(expanded), /Keep this user request/)
+})
+
+test('terminal fallback errors do not replay as assistant-authored model context', () => {
+  const terminalRows = [
+    ['failed', 'Provider request failed.', 'Provider request failed.'],
+    [
+      'interrupted',
+      '任务中断：后续模型请求未能继续，任务尚未完成。请重试以继续。\n\n已经完成的部分：\n- read_file：路径：README.md',
+      'The runtime stopped before completion.',
+    ],
+    ['blocked', 'Approval is required.', 'Approval is required.'],
+  ].map(([state, content, message]) => ({
+    id: `legacy-${state}`,
+    role: 'assistant',
+    content,
+    modelContext: {
+      turnEvidence: true,
+      evidenceState: state,
+      error: { code: `${state.toUpperCase()}_ERROR`, message },
+    },
+  }))
+  terminalRows.push({
+    id: 'legacy-cancelled',
+    role: 'assistant',
+    content: 'Cancelled by user',
+    modelContext: { turnEvidence: true, evidenceState: 'cancelled' },
+  })
+  terminalRows.push({
+    id: 'failed-with-real-partial-output',
+    role: 'assistant',
+    content: 'A real partial model answer.',
+    modelContext: {
+      turnEvidence: true,
+      evidenceState: 'failed',
+      error: { code: 'STREAM_FAILED', message: 'The stream ended unexpectedly.' },
+    },
+  })
+  terminalRows.push({
+    id: 'cancelled-with-real-partial-output',
+    role: 'assistant',
+    content: 'A real partial model answer before cancellation.',
+    modelContext: { turnEvidence: true, evidenceState: 'cancelled' },
+  })
+  terminalRows.push({
+    id: 'interrupted-with-status-like-real-partial-output',
+    role: 'assistant',
+    content: '任务中断：这是模型对用户所给标题的真实分析内容。',
+    modelContext: {
+      turnEvidence: true,
+      evidenceState: 'interrupted',
+      error: { code: 'STREAM_FAILED', message: 'The stream ended unexpectedly.' },
+    },
+  })
+
+  const expanded = expandStoredMessages(terminalRows)
+  const assistantRows = expanded.filter((message) => message.role === 'assistant')
+  assert.deepEqual(
+    assistantRows.map((message) => message.content),
+    [
+      '',
+      '',
+      '',
+      '',
+      'A real partial model answer.',
+      'A real partial model answer before cancellation.',
+      '任务中断：这是模型对用户所给标题的真实分析内容。',
+    ],
+  )
+
+  const priorOutcomes = expanded.filter((message) => (
+    message.role === 'system' && message.content.startsWith('[PRIOR TURN OUTCOME]')
+  ))
+  assert.equal(priorOutcomes.length, 5)
+  assert.match(priorOutcomes[2].content, /"state":"blocked"/)
+  assert.match(priorOutcomes[2].content, /BLOCKED_ERROR/)
 })
 
 test('successful artifact calls retain a lightweight reference instead of 70k HTML source', () => {

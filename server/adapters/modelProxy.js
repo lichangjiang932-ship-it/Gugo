@@ -353,6 +353,14 @@ export async function callBackgroundModelWithTools({
   }, { signal })
 }
 
+/**
+ * Chat tool-loop model call with the same stable result shape as
+ * callBackgroundModelWithTools, but backed by the provider streaming adapter.
+ *
+ * Text and reasoning are delivered while the provider is still generating;
+ * the canonical tool_calls batch is retained until the stream finishes so the
+ * durable tool-loop checkpoint remains identical to the non-streaming path.
+ */
 export async function callStreamingModelWithTools({
   messages,
   tools,

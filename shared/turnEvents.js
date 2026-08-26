@@ -244,6 +244,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   'turn.blocked': z.object({
     code: z.string().min(1),
     message: z.string().min(1),
+    partialText: z.string().optional(),
     retryable: z.literal(false),
     manualRetryable: z.literal(true),
     recoveryStatus: z.literal('dead_letter'),

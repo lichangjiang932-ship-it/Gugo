@@ -72,3 +72,21 @@ test('legacy ember naming and tiny UI text can only shrink', () => {
   assert.ok(legacyEmber <= LEGACY_EMBER_CEILING, `${legacyEmber} legacy ember tokens exceeds ${LEGACY_EMBER_CEILING}`)
   assert.ok(tinyText <= TINY_TEXT_CEILING, `${tinyText} tiny text declarations exceeds ${TINY_TEXT_CEILING}`)
 })
+
+test('engineering debt has a canonical, actionable register', () => {
+  const source = readFileSync('docs/DEBT.md', 'utf8')
+  const matches = [...source.matchAll(/^## (DEBT-[A-Z]+-\d{3})\b/gm)]
+  const ids = matches.map((match) => match[1])
+
+  assert.ok(ids.length >= 6, 'register must cover the known cross-cutting debt areas')
+  assert.equal(new Set(ids).size, ids.length, 'debt identifiers must be unique')
+
+  for (let index = 0; index < matches.length; index += 1) {
+    const start = matches[index].index
+    const end = matches[index + 1]?.index ?? source.indexOf('\n## Maintenance rules')
+    const section = source.slice(start, end >= 0 ? end : undefined)
+    for (const field of ['Status', 'Priority', 'Evidence / reproduction', 'Exit criteria', 'Verification']) {
+      assert.match(section, new RegExp(`\\*\\*${field}:?\\*\\*`), `${ids[index]} is missing ${field}`)
+    }
+  }
+})

@@ -291,7 +291,11 @@ export default function useServerTurnResume({
             id: taskId,
             updates: {
               status: TASK_STATUS.PENDING,
-              stepLabel: terminal.payload?.message || t('chat.serverTurn.resumeFailed'),
+              stepLabel: terminal.payload?.recoveryKind === MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND
+                ? t('chatMessages.modelRequestUnknownTitle')
+                : terminal.payload?.recoveryKind === SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND
+                  ? t('chatMessages.sideEffectUnknownTitle')
+                  : t('chat.serverTurn.resumeFailed'),
             },
           },
         })

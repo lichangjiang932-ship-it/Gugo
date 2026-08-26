@@ -5,6 +5,7 @@ import {
   FileSpreadsheet, File, ChevronRight, ChevronDown,
   Trash2, RefreshCw, Search, X
 } from 'lucide-react'
+import { useT } from '../i18n/I18nProvider.jsx'
 
 const FILE_ICONS = {
   '.js': FileCode, '.jsx': FileCode, '.ts': FileCode, '.tsx': FileCode,
@@ -50,6 +51,7 @@ function buildTree(files) {
 }
 
 function TreeNode({ node, depth = 0, onFileClick, onFileDelete, activeFile, expanded, toggleExpand }) {
+  const { t } = useT()
   const isExpanded = expanded[node.name]
   const hasChildren = Object.keys(node.children).length > 0
   const hasFiles = node.files.length > 0
@@ -72,6 +74,7 @@ function TreeNode({ node, depth = 0, onFileClick, onFileDelete, activeFile, expa
       {hasChildren && (
         <button
           onClick={() => toggleExpand(node.name)}
+          aria-label={t(isExpanded ? 'foundation.collapseFolder' : 'foundation.expandFolder', { name: node.name })}
           className="w-full flex items-center gap-1.5 py-1 px-2 rounded-lg text-xs text-ink-soft hover:bg-paper-2/40 hover:text-ink transition-colors"
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
         >
@@ -111,6 +114,7 @@ function renderFileIcon(name, color) {
 }
 
 function FileNode({ file, depth, onClick, onDelete, active }) {
+  const { t } = useT()
   const color = getFileColor(file.name)
   return (
     <div
@@ -123,6 +127,7 @@ function FileNode({ file, depth, onClick, onDelete, active }) {
       <span className="truncate flex-1" onClick={onClick}>{file.name}</span>
       <button
         onClick={(e) => { e.stopPropagation(); onDelete() }}
+        aria-label={t('foundation.deleteFile', { name: file.name })}
         className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-danger/40 text-ink-fade hover:text-danger transition-all"
       >
         <Trash2 className="w-3 h-3" />
@@ -134,6 +139,7 @@ function FileNode({ file, depth, onClick, onDelete, active }) {
 export default function FileExplorer({ files, onFileClick, onFileDelete, onRefresh }) {
   const [expanded, setExpanded] = useState({ src: true, components: true })
   const [searchQuery, setSearchQuery] = useState('')
+  const { t } = useT()
 
   const filteredFiles = useMemo(() => {
     if (!searchQuery.trim()) return files
@@ -147,8 +153,8 @@ export default function FileExplorer({ files, onFileClick, onFileDelete, onRefre
     <div className="w-[220px] h-full border-r border-ink-fade/15 bg-paper-2/20 flex flex-col shrink-0">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-ink-fade/10">
-        <span className="section-label">EXPLORER</span>
-        <button onClick={onRefresh} className="p-1 rounded-md hover:bg-paper-2/50 text-ink-fade hover:text-ink transition-colors">
+        <span className="section-label">{t('foundation.fileExplorer')}</span>
+        <button aria-label={t('foundation.refreshFiles')} onClick={onRefresh} className="p-1 rounded-md hover:bg-paper-2/50 text-ink-fade hover:text-ink transition-colors">
           <RefreshCw className="w-3 h-3" />
         </button>
       </div>
@@ -159,11 +165,11 @@ export default function FileExplorer({ files, onFileClick, onFileDelete, onRefre
         <input
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="搜索文件…"
+          placeholder={t('foundation.searchFiles')}
           className="w-full h-7 pl-7 pr-6 border border-ink-fade/15 rounded-lg bg-paper/60 text-xs text-ink outline-none focus:border-focus/40 transition-all placeholder:text-ink-fade/40"
         />
         {searchQuery && (
-          <button onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-ink-fade hover:text-ink">
+          <button aria-label={t('foundation.clearFileSearch')} onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-ink-fade hover:text-ink">
             <X className="w-3 h-3" />
           </button>
         )}
@@ -182,14 +188,14 @@ export default function FileExplorer({ files, onFileClick, onFileDelete, onRefre
         ) : (
           <div className="py-8 text-center">
             <Folder className="w-8 h-8 text-ink-fade/20 mx-auto mb-2" />
-            <p className="text-xs text-ink-fade/50">{searchQuery ? '无匹配文件' : '暂无文件'}</p>
+            <p className="text-xs text-ink-fade/50">{t(searchQuery ? 'foundation.noMatchingFiles' : 'foundation.noFiles')}</p>
           </div>
         )}
       </div>
 
       {/* Footer */}
       <div className="px-3 py-2 border-t border-ink-fade/10 text-[10px] text-ink-fade/40 font-mono">
-        {files.length} files
+        {t('foundation.fileCount', { count: files.length })}
       </div>
     </div>
   )

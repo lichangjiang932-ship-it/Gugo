@@ -259,5 +259,11 @@ test('oversized offline HTML downloads return a stable 413 while managed preview
 
 test.after(() => {
   closeDb()
-  fs.rmSync(tempDir, { recursive: true, force: true })
+  // Windows can keep a transient handle on freshly written media assets
+  // (AV scan/indexer), making the temp-dir sweep throw EPERM long after the
+  // assertions passed. Leftover temp files are OS-managed garbage, so a
+  // failed sweep must not fail the suite.
+  try {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  } catch { /* best effort */ }
 })

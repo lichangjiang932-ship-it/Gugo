@@ -200,6 +200,7 @@ export async function runModelRequest(s) {
               text: !s.hasRequiredArtifacts()
                 ? s.missingArtifactBlockerText()
                 : wrapUpText || '模型预算已用尽，任务尚未完成。请重试以继续。',
+              ...(wrapUpText ? { partialText: wrapUpText } : {}),
               artifactIds: s.artifactIds,
               iterations: s.iter + 1,
               incomplete: true,

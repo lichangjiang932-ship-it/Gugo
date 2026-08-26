@@ -47,7 +47,7 @@ test('FullscreenMediaModal renders close X button', () => {
   const source = fs.readFileSync(componentPath, 'utf8')
   assert.match(source, /from 'lucide-react'/)
   assert.match(source, /\bX\b/)
-  assert.match(source, /aria-label="关闭全屏查看器"/)
+  assert.match(source, /aria-label=\{t\('foundation\.closeFullscreen'\)\}/)
 })
 
 test('FullscreenMediaModal accepts list/index for prev/next navigation', () => {

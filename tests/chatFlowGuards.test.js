@@ -16,6 +16,12 @@ import { translations } from '../src/i18n/translations.js'
 
 const COPY = {
   'errors.chatFailure': '任务执行遇到问题，尚未完成。',
+  'errors.turnReasoningRunaway': '模型推理超过安全上限。',
+  'errors.turnRepeatedToolCall': '工具调用重复且没有进展。',
+  'errors.turnRetryLimitReached': '恢复后仍未完成。',
+  'errors.turnIncomplete': '任务尚未完全通过验证。',
+  'errors.turnToolErrorStreak': '多个工具调用连续失败。',
+  'errors.turnNoProgress': '任务长时间没有新进展。',
   'errors.runtimeUnavailable': '本地运行时正在启动或重启，消息尚未发出。请稍后重试。',
   'errors.runtimeInterrupted': '本地运行时在任务执行期间停止或重启。本次执行已中断，已完成的进度会保留；请等待运行时就绪后继续。',
   'errors.modelConfigurationFailure': '模型服务尚未正确配置。',
@@ -49,7 +55,7 @@ test('chat failure copy never exposes internal artifact errors or incomplete-fil
   assert.doesNotMatch(text, /Model call failed|requested file|create_html_app|任务未完全完成|已保留生成的文件/i)
 })
 
-test('deterministic loop failures show their sanitized reason instead of a generic retry nudge', () => {
+test('deterministic loop failures use localized code mappings instead of server copy', () => {
   const detail = '同一工具调用在最近 8 次调用中已重复 3 次，未取得实质进展'
   const failure = {
     role: 'assistant',
@@ -64,8 +70,9 @@ test('deterministic loop failures show their sanitized reason instead of a gener
     },
   }
 
-  assert.equal(buildChatFailureMessage(failure, t), `\n\n${detail}`)
-  assert.equal(getVisibleModelErrorMessage(failure, t), detail)
+  assert.equal(buildChatFailureMessage(failure, t), `\n\n${COPY['errors.turnRepeatedToolCall']}`)
+  assert.equal(getVisibleModelErrorMessage(failure, t), COPY['errors.turnRepeatedToolCall'])
+  assert.doesNotMatch(buildChatFailureMessage(failure, t), new RegExp(detail))
 
   const unknown = {
     ...failure,
@@ -81,7 +88,22 @@ test('deterministic loop failures show their sanitized reason instead of a gener
     code: 'TURN_FAILED_RETRY_LIMIT_REACHED',
     retryable: false,
   }
-  assert.match(getVisibleModelErrorMessage(exhausted, t), /执行过一次断点续写/)
+  assert.equal(getVisibleModelErrorMessage(exhausted, t), COPY['errors.turnRetryLimitReached'])
+
+  const mappings = new Map([
+    ['REASONING_RUNAWAY', 'errors.turnReasoningRunaway'],
+    ['REPEATED_TOOL_CALL', 'errors.turnRepeatedToolCall'],
+    ['TURN_INCOMPLETE', 'errors.turnIncomplete'],
+    ['TOOL_ERROR_STREAK', 'errors.turnToolErrorStreak'],
+    ['TOOL_NO_PROGRESS_HARD_LIMIT', 'errors.turnNoProgress'],
+  ])
+  for (const [code, key] of mappings) {
+    assert.equal(getVisibleModelErrorMessage({
+      code,
+      message: `服务端诊断：${code}`,
+      retryable: code === 'TURN_INCOMPLETE',
+    }, t), COPY[key], code)
+  }
 })
 
 test('failure display keys collapse the same turn and failure code', () => {
@@ -329,6 +351,12 @@ test('only local readiness failures without execution evidence are safe to resen
 test('model failure copy is present in every supported language', () => {
   const keys = [
     'chatFailure',
+    'turnReasoningRunaway',
+    'turnRepeatedToolCall',
+    'turnRetryLimitReached',
+    'turnIncomplete',
+    'turnToolErrorStreak',
+    'turnNoProgress',
     'runtimeUnavailable',
     'runtimeInterrupted',
     'modelConfigurationFailure',

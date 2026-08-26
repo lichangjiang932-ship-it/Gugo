@@ -1648,6 +1648,12 @@ export const translations = {
       emptyModelResponse: '模型返回了空回复。请检查本地模型的聊天模板、上下文长度和 OpenAI 兼容接口。',
       emptyModelResponseLength: '模型的输出预算已用尽，但没有生成可见回复。请调大 Max Tokens 或关闭深度思考后重试。',
       chatFailure: '任务执行遇到问题，尚未完成。请重试；若仍失败，请检查所选模型是否支持当前工具。',
+      turnReasoningRunaway: '模型推理超过安全上限，任务已停止。请重试，或换用更适合工具任务的模型。',
+      turnRepeatedToolCall: '同一工具调用被重复执行，但没有取得新进展。请调整任务条件或改用其他处理方式。',
+      turnRetryLimitReached: '任务在恢复后仍未完成。请调整任务条件，然后发送一条新消息继续。',
+      turnIncomplete: '任务尚未完全通过验证。已完成的本地修改会保留；请重试以继续验证。',
+      turnToolErrorStreak: '多个工具调用连续失败，任务已停止。请检查输入条件或改用其他工具后重试。',
+      turnNoProgress: '任务因长时间没有取得新进展而停止。请调整条件或换一种处理方式。',
       runtimeUnavailable: '本地运行时正在启动或重启，消息尚未发出。请稍后重试。',
       runtimeInterrupted: '本地运行时在任务执行期间停止或重启。本次执行已中断，已完成的进度会保留；请等待运行时就绪后继续。',
       runtimeAttentionRequired: '本地运行时需要处理。',
@@ -2174,6 +2180,12 @@ export const translations = {
       emptyModelResponse: 'The model returned an empty reply. Check the local model chat template, context length, and OpenAI-compatible endpoint.',
       emptyModelResponseLength: 'The output budget was exhausted before a visible reply was produced. Increase Max Tokens or disable deep reasoning and retry.',
       chatFailure: 'The task ran into a problem and did not finish. Retry; if it still fails, check whether the selected model supports the required tools.',
+      turnReasoningRunaway: 'The model exceeded the safe reasoning limit, so the task stopped. Retry or use a model better suited to tool-based tasks.',
+      turnRepeatedToolCall: 'The same tool call was repeated without making new progress. Adjust the task conditions or use a different approach.',
+      turnRetryLimitReached: 'The task still did not finish after recovery. Adjust the task conditions, then send a new message to continue.',
+      turnIncomplete: 'The task could not be fully verified. Completed local changes were preserved; retry to continue verification.',
+      turnToolErrorStreak: 'Several tool calls failed in succession, so the task stopped. Check the inputs or use a different tool before retrying.',
+      turnNoProgress: 'The task stopped after making no new progress for too long. Adjust the conditions or use a different approach.',
       runtimeUnavailable: 'The local runtime is starting or restarting, so the message was not sent. Try again shortly.',
       runtimeInterrupted: 'The local runtime stopped or restarted while this task was running. The run was interrupted and completed progress was preserved; continue after the runtime is ready.',
       runtimeAttentionRequired: 'The local runtime needs attention.',
@@ -2700,6 +2712,12 @@ export const translations = {
       emptyModelResponse: 'モデルが空の応答を返しました。ローカルモデルのチャットテンプレート、コンテキスト長、OpenAI 互換エンドポイントを確認してください。',
       emptyModelResponseLength: '表示可能な応答を生成する前に出力予算を使い切りました。Max Tokens を増やすか、深い推論を無効にして再試行してください。',
       chatFailure: 'タスクで問題が発生し、完了しませんでした。再試行し、失敗が続く場合は選択したモデルが必要なツールに対応しているか確認してください。',
+      turnReasoningRunaway: 'モデルの推論が安全上限を超えたため、タスクを停止しました。再試行するか、ツールタスクに適したモデルを使用してください。',
+      turnRepeatedToolCall: '同じツール呼び出しが繰り返されましたが、新しい進展はありませんでした。条件を調整するか、別の方法を使用してください。',
+      turnRetryLimitReached: '復旧後もタスクを完了できませんでした。条件を調整してから、新しいメッセージで続行してください。',
+      turnIncomplete: 'タスクを完全には検証できませんでした。完了済みのローカル変更は保持されています。再試行して検証を続けてください。',
+      turnToolErrorStreak: '複数のツール呼び出しが連続して失敗したため、タスクを停止しました。入力を確認するか、別のツールで再試行してください。',
+      turnNoProgress: '新しい進展がない状態が続いたため、タスクを停止しました。条件を調整するか、別の方法を使用してください。',
       runtimeUnavailable: 'ローカルランタイムの起動または再起動中のため、メッセージは送信されませんでした。しばらくしてから再試行してください。',
       runtimeInterrupted: 'タスクの実行中にローカルランタイムが停止または再起動しました。実行は中断されましたが、完了済みの進捗は保持されています。ランタイムの準備後に続行してください。',
       runtimeAttentionRequired: 'ローカルランタイムの確認が必要です。',
@@ -3226,6 +3244,12 @@ export const translations = {
       emptyModelResponse: '모델이 빈 응답을 반환했습니다. 로컬 모델의 채팅 템플릿, 컨텍스트 길이 및 OpenAI 호환 엔드포인트를 확인하세요.',
       emptyModelResponseLength: '표시할 응답을 만들기 전에 출력 예산을 모두 사용했습니다. Max Tokens를 늘리거나 심층 추론을 끄고 다시 시도하세요.',
       chatFailure: '작업 중 문제가 발생해 완료되지 않았습니다. 다시 시도하고, 계속 실패하면 선택한 모델이 필요한 도구를 지원하는지 확인하세요.',
+      turnReasoningRunaway: '모델 추론이 안전 한도를 초과하여 작업을 중지했습니다. 다시 시도하거나 도구 작업에 더 적합한 모델을 사용하세요.',
+      turnRepeatedToolCall: '같은 도구 호출이 반복되었지만 새로운 진전이 없었습니다. 작업 조건을 조정하거나 다른 방법을 사용하세요.',
+      turnRetryLimitReached: '복구 후에도 작업을 완료하지 못했습니다. 작업 조건을 조정한 뒤 새 메시지로 계속하세요.',
+      turnIncomplete: '작업을 완전히 검증하지 못했습니다. 완료된 로컬 변경 사항은 유지됩니다. 다시 시도하여 검증을 계속하세요.',
+      turnToolErrorStreak: '여러 도구 호출이 연속으로 실패하여 작업을 중지했습니다. 입력을 확인하거나 다른 도구로 다시 시도하세요.',
+      turnNoProgress: '새로운 진전이 없는 상태가 오래 지속되어 작업을 중지했습니다. 조건을 조정하거나 다른 방법을 사용하세요.',
       runtimeUnavailable: '로컬 런타임이 시작 또는 재시작 중이라 메시지가 전송되지 않았습니다. 잠시 후 다시 시도하세요.',
       runtimeInterrupted: '작업 실행 중 로컬 런타임이 중지되거나 다시 시작되었습니다. 실행은 중단되었지만 완료된 진행 상황은 유지됩니다. 런타임이 준비되면 계속하세요.',
       runtimeAttentionRequired: '로컬 런타임을 확인해야 합니다.',
@@ -3752,6 +3776,12 @@ export const translations = {
       emptyModelResponse: '模型回傳了空白回覆。請檢查本機模型的聊天範本、上下文長度和 OpenAI 相容端點。',
       emptyModelResponseLength: '模型的輸出預算已用盡，但沒有產生可見回覆。請調高 Max Tokens 或關閉深度思考後重試。',
       chatFailure: '任務執行遇到問題，尚未完成。請重試；若仍失敗，請檢查所選模型是否支援所需工具。',
+      turnReasoningRunaway: '模型推理超過安全上限，任務已停止。請重試，或改用更適合工具任務的模型。',
+      turnRepeatedToolCall: '相同工具呼叫被重複執行，但沒有取得新進展。請調整任務條件或改用其他處理方式。',
+      turnRetryLimitReached: '任務在復原後仍未完成。請調整任務條件，再傳送一則新訊息繼續。',
+      turnIncomplete: '任務尚未完全通過驗證。已完成的本機變更會保留；請重試以繼續驗證。',
+      turnToolErrorStreak: '多個工具呼叫連續失敗，任務已停止。請檢查輸入條件或改用其他工具後重試。',
+      turnNoProgress: '任務因長時間沒有取得新進展而停止。請調整條件或換一種處理方式。',
       runtimeUnavailable: '本機執行環境正在啟動或重新啟動，訊息尚未送出。請稍後重試。',
       runtimeInterrupted: '本機執行環境在任務執行期間停止或重新啟動。本次執行已中斷，已完成的進度會保留；請等待執行環境就緒後繼續。',
       runtimeAttentionRequired: '本機執行環境需要處理。',
@@ -4430,6 +4460,28 @@ const SETTINGS_TOOLS_TRANSLATIONS = {
       file_hash_manifest: { name: '檔案雜湊與查重', desc: '以串流方式計算 SHA-256 清單並找出內容完全相同的檔案。' },
     },
   },
+}
+
+const FOUNDATION_COMPONENT_TRANSLATIONS = {
+  zh: {
+    choicePrompt: '请选择一个选项：', fileExplorer: '文件', refreshFiles: '刷新文件', searchFiles: '搜索文件…', clearFileSearch: '清除文件搜索', noMatchingFiles: '无匹配文件', noFiles: '暂无文件', fileCount: '{count} 个文件', expandFolder: '展开文件夹 {name}', collapseFolder: '收起文件夹 {name}', deleteFile: '删除文件 {name}', fullscreenMedia: '全屏媒体查看器', closeFullscreen: '关闭全屏查看器', closeFullscreenTitle: '关闭 (Esc)', previousMedia: '上一项媒体', previousMediaTitle: '上一项 (←)', nextMedia: '下一项媒体', nextMediaTitle: '下一项 (→)',
+  },
+  en: {
+    choicePrompt: 'Choose an option:', fileExplorer: 'FILES', refreshFiles: 'Refresh files', searchFiles: 'Search files…', clearFileSearch: 'Clear file search', noMatchingFiles: 'No matching files', noFiles: 'No files yet', fileCount: '{count} files', expandFolder: 'Expand folder {name}', collapseFolder: 'Collapse folder {name}', deleteFile: 'Delete file {name}', fullscreenMedia: 'Fullscreen media viewer', closeFullscreen: 'Close fullscreen viewer', closeFullscreenTitle: 'Close (Esc)', previousMedia: 'Previous media item', previousMediaTitle: 'Previous (←)', nextMedia: 'Next media item', nextMediaTitle: 'Next (→)',
+  },
+  ja: {
+    choicePrompt: '選択してください：', fileExplorer: 'ファイル', refreshFiles: 'ファイルを更新', searchFiles: 'ファイルを検索…', clearFileSearch: 'ファイル検索をクリア', noMatchingFiles: '一致するファイルはありません', noFiles: 'ファイルはありません', fileCount: '{count} 件のファイル', expandFolder: 'フォルダー {name} を展開', collapseFolder: 'フォルダー {name} を折りたたむ', deleteFile: 'ファイル {name} を削除', fullscreenMedia: '全画面メディアビューアー', closeFullscreen: '全画面ビューアーを閉じる', closeFullscreenTitle: '閉じる (Esc)', previousMedia: '前のメディア', previousMediaTitle: '前へ (←)', nextMedia: '次のメディア', nextMediaTitle: '次へ (→)',
+  },
+  ko: {
+    choicePrompt: '옵션을 선택하세요:', fileExplorer: '파일', refreshFiles: '파일 새로고침', searchFiles: '파일 검색…', clearFileSearch: '파일 검색 지우기', noMatchingFiles: '일치하는 파일 없음', noFiles: '파일 없음', fileCount: '파일 {count}개', expandFolder: '{name} 폴더 펼치기', collapseFolder: '{name} 폴더 접기', deleteFile: '{name} 파일 삭제', fullscreenMedia: '전체 화면 미디어 뷰어', closeFullscreen: '전체 화면 뷰어 닫기', closeFullscreenTitle: '닫기 (Esc)', previousMedia: '이전 미디어', previousMediaTitle: '이전 (←)', nextMedia: '다음 미디어', nextMediaTitle: '다음 (→)',
+  },
+  'zh-TW': {
+    choicePrompt: '請選擇一個選項：', fileExplorer: '檔案', refreshFiles: '重新整理檔案', searchFiles: '搜尋檔案…', clearFileSearch: '清除檔案搜尋', noMatchingFiles: '沒有符合的檔案', noFiles: '暫無檔案', fileCount: '{count} 個檔案', expandFolder: '展開資料夾 {name}', collapseFolder: '收合資料夾 {name}', deleteFile: '刪除檔案 {name}', fullscreenMedia: '全螢幕媒體檢視器', closeFullscreen: '關閉全螢幕檢視器', closeFullscreenTitle: '關閉 (Esc)', previousMedia: '上一個媒體項目', previousMediaTitle: '上一個 (←)', nextMedia: '下一個媒體項目', nextMediaTitle: '下一個 (→)',
+  },
+}
+
+for (const [language, copy] of Object.entries(FOUNDATION_COMPONENT_TRANSLATIONS)) {
+  translations[language].foundation = copy
 }
 
 for (const [language, copy] of Object.entries(SETTINGS_TOOLS_TRANSLATIONS)) {

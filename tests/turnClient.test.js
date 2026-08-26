@@ -3035,6 +3035,22 @@ test('server snapshot restores failed, interrupted, and cancelled turn evidence 
         serverLastSequence: 11,
         artifactIds: ['cancelled-draft'],
       },
+    }, {
+      id: 'turn-legacy-interrupted:assistant',
+      role: 'assistant',
+      content: '任务中断：后续模型请求未能继续，任务尚未完成。请重试以继续。\n\n已经完成的部分：\n- read_file：路径：README.md',
+      createdAt: 4,
+      modelContext: {
+        turnId: 'turn-legacy-interrupted',
+        turnEvidence: true,
+        evidenceState: 'interrupted',
+        serverLastSequence: 13,
+        error: {
+          code: 'MODEL_CALL_INTERRUPTED',
+          message: '任务执行遇到问题，尚未完成。请重试；若仍失败，请检查模型配置和工具调用支持。',
+          retryable: true,
+        },
+      },
     }],
   })
 
@@ -3062,6 +3078,7 @@ test('server snapshot restores failed, interrupted, and cancelled turn evidence 
   assert.equal(snapshot.messages[1].meta.latency, null)
   assert.equal(snapshot.messages[1].meta.serverLastSequence, 9)
   assert.equal(snapshot.messages[1].meta.failed, undefined)
+  assert.equal(snapshot.messages[1].meta.serverPartialText, 'Partial analysis')
   assert.deepEqual(snapshot.messages[1].meta.serverArtifactIds, ['report-1'])
   assert.equal(snapshot.messages[1].meta.serverFailure.code, 'MODEL_CALL_INTERRUPTED')
   assert.equal(snapshot.messages[2].meta.cancelled, true)
@@ -3071,7 +3088,11 @@ test('server snapshot restores failed, interrupted, and cancelled turn evidence 
   assert.equal(snapshot.messages[2].meta.serverLastSequence, 11)
   assert.equal(snapshot.messages[2].meta.failed, undefined)
   assert.equal(snapshot.messages[2].meta.interrupted, undefined)
+  assert.equal(snapshot.messages[2].meta.serverPartialText, 'Stopped after saving the draft.')
   assert.deepEqual(snapshot.messages[2].meta.serverArtifactIds, ['cancelled-draft'])
+  assert.equal(snapshot.messages[3].meta.interrupted, true)
+  assert.equal(snapshot.messages[3].meta.serverPartialText, '')
+  assert.equal(snapshot.messages[3].meta.serverFailure.code, 'MODEL_CALL_INTERRUPTED')
 })
 
 test('server snapshot restores only whitelisted side-effect recovery metadata after reload', () => {
@@ -3118,6 +3139,7 @@ test('server snapshot restores only whitelisted side-effect recovery metadata af
   assert.equal(meta.serverRecoveryKind, 'side_effect_outcome_unknown')
   assert.equal(meta.serverRecoveryToolCallId, 'write-1')
   assert.equal(meta.serverRecoveryActionPath, '/settings?tab=recovery')
+  assert.equal(meta.serverPartialText, '')
   assert.doesNotMatch(JSON.stringify(meta), /must-not-project/u)
 })
 
