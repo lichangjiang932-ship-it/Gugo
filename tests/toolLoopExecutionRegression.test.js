@@ -1619,7 +1619,7 @@ test('a first-turn visual edit exposes write tools and rejects a false missing-t
   assert.equal(result.text, '已原位修改并回读验证 gallery.html。')
   assert.equal(result.incomplete, undefined)
   assert.deepEqual(executed, ['read_file', 'write_file', 'read_file'])
-  assert.equal(modelCalls, 6)
+  assert.equal(modelCalls, process.platform === 'win32' ? 6 : 5)
   const reviewRequests = modelRequestMessages.filter((request) => request.some((message) => (
     message.role === 'system'
       && String(message.content).includes('[FINAL ANSWER EVIDENCE REVIEW REQUIRED]')
@@ -1950,7 +1950,7 @@ test('a behavioral revision rejects a post-read missing-tool claim and rewrites 
   assert.equal(result.text, '已让所有图片在旋转时始终面向镜头，并回读验证。')
   assert.equal(result.incomplete, undefined)
   assert.deepEqual(executed, ['read_file', 'write_file', 'read_file'])
-  assert.equal(modelCalls, 6)
+  assert.equal(modelCalls, process.platform === 'win32' ? 6 : 5)
   const reviewRequests = modelRequestMessages.filter((request) => request.some((message) => (
     message.role === 'system'
       && String(message.content).includes('[FINAL ANSWER EVIDENCE REVIEW REQUIRED]')
@@ -2068,7 +2068,7 @@ test('a capability challenge after a false refusal rechecks tools and completes 
   assert.equal(result.text, '已直接修改并回读验证 gallery.html。')
   assert.equal(result.incomplete, undefined)
   assert.deepEqual(executed, ['write_file', 'read_file'])
-  assert.equal(modelCalls, 5)
+  assert.equal(modelCalls, process.platform === 'win32' ? 5 : 4)
   const reviewRequests = modelRequestMessages.filter((request) => request.some((message) => (
     message.role === 'system'
       && String(message.content).includes('[FINAL ANSWER EVIDENCE REVIEW REQUIRED]')
@@ -3502,7 +3502,7 @@ test('directory discovery through cmd can precede a write and read-back without 
   })
 
   assert.deepEqual(executed, ['bash_exec', 'write_file', 'read_file'])
-  assert.equal(modelCalls, 5)
+  assert.equal(modelCalls, process.platform === 'win32' ? 5 : 4)
   const reviewRequests = modelRequestMessages.filter((request) => request.some((message) => (
     message.role === 'system'
       && String(message.content).includes('[FINAL ANSWER EVIDENCE REVIEW REQUIRED]')

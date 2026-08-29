@@ -277,8 +277,8 @@ function processOutcome(result) {
   let status = 'failed'
   if (result.error?.code === 'ETIMEDOUT') status = 'timeout'
   else if (result.error) status = 'start-error'
+  else if (isRetryableNativeCrash(result)) status = 'native-crash'
   else if (result.signal) status = 'signaled'
-  else if (isWindowsNativeCrash(result)) status = 'native-crash'
 
   return [
     `status=${status}`,
@@ -338,10 +338,14 @@ if (batchFiles.length) {
   }
 }
 
-function isWindowsNativeCrash(result) {
+function isRetryableNativeCrash(result) {
   return result.status === 3221225477
     || result.status === -1073741819
     || result.signal === 'SIGSEGV'
+    || (result.signal === 'SIGABRT' && (
+      /FATAL ERROR:[^\r\n]*(?:Allocation failed - process out of memory|JavaScript heap out of memory)/iu
+        .test(capturedOutput(result))
+    ))
 }
 
 function hasTapFailure(result) {
@@ -396,7 +400,7 @@ for (const file of isolatedFiles) {
     }
     lastFailureSummary = reportFailedProcess(result, label)
     if (result.error?.code === 'ETIMEDOUT') break
-    if (hasTapFailure(result) || !isWindowsNativeCrash(result) || attempt === 3) break
+    if (hasTapFailure(result) || !isRetryableNativeCrash(result) || attempt === 3) break
     console.warn(
       `[run-tests] native transform crashed for ${file}; retrying (${attempt + 1}/3)`,
     )

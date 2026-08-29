@@ -78,6 +78,35 @@ function fakeCoverageSpawnPreload({ thresholdFailure = false } = {}) {
   `
 }
 
+function fakeTransientV8OomPreload() {
+  return `
+    import childProcess from 'node:child_process'
+    import { EventEmitter } from 'node:events'
+    import { syncBuiltinESMExports } from 'node:module'
+    import { PassThrough } from 'node:stream'
+    let attempts = 0
+    childProcess.spawn = () => {
+      attempts += 1
+      const child = new EventEmitter()
+      child.stdout = new PassThrough()
+      child.stderr = new PassThrough()
+      child.stdin = null
+      queueMicrotask(() => {
+        child.stdout.end('TAP version 13\\n')
+        if (attempts === 1) {
+          child.stderr.end('FATAL ERROR: RegExpCompiler Allocation failed - process out of memory\\n')
+          child.emit('close', null, 'SIGABRT')
+          return
+        }
+        child.stderr.end()
+        child.emit('close', 0, null)
+      })
+      return child
+    }
+    syncBuiltinESMExports()
+  `
+}
+
 function runRunner(args, { preloadSource = null, env = childEnv(), timeout = 10_000 } = {}) {
   return spawnSync(process.execPath, [
     ...(preloadSource ? ['--import', dataImport(preloadSource)] : []),
@@ -193,6 +222,10 @@ test('test runner reports signal and start-error outcomes with complete process 
       expected: /status=signaled; exitCode=none; signal=SIGTERM; errorCode=none/u,
     },
     {
+      preloadSource: fakeSpawnPreload({ signal: 'SIGABRT' }),
+      expected: /status=signaled; exitCode=none; signal=SIGABRT; errorCode=none/u,
+    },
+    {
       preloadSource: fakeSpawnPreload({ errorCode: 'ENOENT' }),
       expected: /status=start-error; exitCode=none; signal=none; errorCode=ENOENT/u,
     },
@@ -204,6 +237,7 @@ test('test runner reports signal and start-error outcomes with complete process 
     assert.match(output, expected)
     assert.match(output, /isolated test tests[\\/]unit[\\/]ManualRecoveryRouteState\.test\.jsx \(attempt 1\/3\)/u)
     assert.match(output, /final result: FAIL \(1 final failure\(s\)\)/u)
+    assert.doesNotMatch(output, /native transform crashed .* retrying/u)
     assert.equal((output.match(/^\[run-tests\] - isolated test/gmu) || []).length, 1)
   }
 })
@@ -220,6 +254,23 @@ test('third native-transform crash is visible and only its final attempt enters 
   assert.match(output, /attempt 3\/3\); status=native-crash; exitCode=3221225477/u)
   assert.match(output, /final result: FAIL \(1 final failure\(s\)\)/u)
   assert.equal((output.match(/^\[run-tests\] - isolated test/gmu) || []).length, 1)
+})
+
+test('a V8 out-of-memory SIGABRT retries an isolated native transform and can recover', () => {
+  const result = runRunner([ISOLATED_PROBE], {
+    preloadSource: fakeTransientV8OomPreload(),
+  })
+  const output = combinedOutput(result)
+
+  assert.equal(result.status, 0)
+  assert.match(
+    output,
+    /attempt 1\/3\); status=native-crash; exitCode=none; signal=SIGABRT; errorCode=none/u,
+  )
+  assert.equal((output.match(/native transform crashed .* retrying/gmu) || []).length, 1)
+  assert.match(output, /starting isolated test .* \(attempt 2\/3\)/u)
+  assert.match(output, /final result: PASS \(1 test file\(s\)\)/u)
+  assert.doesNotMatch(output, /final result: FAIL/u)
 })
 
 test('test runner prints a clear final success result', () => {
