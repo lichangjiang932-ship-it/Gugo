@@ -46,7 +46,7 @@ test('explicit read-only metadata is preserved', () => {
 
 test('every builtin spec carries a complete explicit risk declaration', () => {
   const names = listBuiltinNames()
-  assert.equal(names.length, 55)
+  assert.equal(names.length, 58)
   for (const name of names) {
     const spec = getBuiltinSpec(name)
     assert.ok(spec?.metadata, `${name} metadata`)
@@ -56,6 +56,34 @@ test('every builtin spec carries a complete explicit risk declaration', () => {
     assert.equal(typeof spec.metadata.isConcurrencySafe, 'boolean', `${name} concurrency`)
     assert.equal(getToolMetadata(name).source, 'declared', `${name} source`)
   }
+})
+
+test('run_code is approval-gated, exclusive, cancellable, and non-resumable', () => {
+  const metadata = getToolMetadata('run_code')
+  assert.equal(metadata.riskClass, 'exec')
+  assert.equal(metadata.riskLevel, 'high')
+  assert.equal(metadata.requiredApproval, true)
+  assert.equal(metadata.requiresApproval, true)
+  assert.equal(metadata.isReadOnly, false)
+  assert.equal(metadata.isConcurrencySafe, false)
+  assert.equal(metadata.executionMode, 'exclusive')
+  assert.equal(metadata.interruptBehavior, 'cancel')
+  assert.equal(metadata.isIdempotent, false)
+  assert.equal(metadata.isDestructive, false)
+})
+
+test('codex_models is external, approval-gated, exclusive, and cancellable', () => {
+  const metadata = getToolMetadata('codex_models')
+  assert.equal(metadata.riskClass, 'external')
+  assert.equal(metadata.riskLevel, 'high')
+  assert.equal(metadata.requiredApproval, true)
+  assert.equal(metadata.requiresApproval, true)
+  assert.equal(metadata.isReadOnly, false)
+  assert.equal(metadata.isConcurrencySafe, false)
+  assert.equal(metadata.executionMode, 'exclusive')
+  assert.equal(metadata.interruptBehavior, 'cancel')
+  assert.equal(metadata.isIdempotent, true)
+  assert.equal(metadata.isDestructive, false)
 })
 
 test('requiredApproval alias is normalized without breaking legacy consumers', () => {

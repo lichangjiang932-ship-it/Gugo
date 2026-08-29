@@ -137,6 +137,7 @@ test('tool defaults migrate to the complete execution loop while current explici
   assert.equal(needsToolsConfigSchemaMigration({ toolsConfig: { bash_exec: false, run_project_check: false } }), true)
   const legacy = normalizePersistedFields({ toolsConfig: { bash_exec: false, run_project_check: false } })
   assert.equal(legacy.toolsConfig.bash_exec, true)
+  assert.equal(legacy.toolsConfig.run_code, true)
   assert.equal(legacy.toolsConfig.run_project_check, true)
   for (const id of ['image_info', 'image_transform', 'media_probe', 'media_transform', 'pdf_info', 'pdf_text', 'pdf_transform', 'archive_list', 'archive_create', 'archive_extract', 'batch_rename', 'file_hash_manifest']) {
     assert.equal(legacy.toolsConfig[id], true)
@@ -278,6 +279,13 @@ test('tool defaults migrate to the complete execution loop while current explici
   assert.equal(explicit.toolsConfig.archive_list, false)
   assert.equal(explicit.toolsConfig.create_pdf, false)
   assert.equal(explicit.toolsConfigSchemaVersion, TOOLS_CONFIG_SCHEMA_VERSION)
+
+  const v11 = normalizePersistedFields({
+    toolsConfigSchemaVersion: 11,
+    toolsConfig: { run_code: false, bash_exec: false },
+  })
+  assert.equal(v11.toolsConfig.run_code, true)
+  assert.equal(v11.toolsConfig.bash_exec, false)
 })
 
 test('server-backed persistence keeps one redacted active-turn stub for crash recovery', () => {

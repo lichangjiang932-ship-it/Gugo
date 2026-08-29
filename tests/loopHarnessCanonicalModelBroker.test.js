@@ -20,6 +20,7 @@ import {
   prepareToolsLoopRuntime,
   usePreparedToolsLoopRuntime as accessPreparedToolsLoopRuntime,
 } from '../server/services/loop/runtime.js'
+import { collectFinalAnswerToolEvidence } from '../server/services/loop/finalAnswerEvidenceReview.js'
 
 function hasCode(code) {
   return (error) => error?.code === code && error?.retryable === false
@@ -27,7 +28,9 @@ function hasCode(code) {
 
 function modelContext({
   checkpoints = [],
+  contextWindow,
   loadCheckpoint,
+  messages = [{ role: 'user', content: 'Answer once.' }],
   runModel,
   saveCheckpoint,
 } = {}) {
@@ -43,7 +46,8 @@ function modelContext({
       modelConfigRevision: 3,
     },
     step: { id: 'canonical-harness-turn', kind: 'chat' },
-    messages: [{ role: 'user', content: 'Answer once.' }],
+    messages,
+    contextWindow,
     toolSpecs: [{
       type: 'function',
       function: {
@@ -318,21 +322,152 @@ test('canonical terminal boundary returns host-selected deliverables, never adap
 
 test('canonical terminal boundary filters source handoff before the final checkpoint', async () => {
   const checkpoints = []
-  const prepared = await prepareToolsLoopRuntime(modelContext({ checkpoints }))
+  const unsafeProviderText = 'Copy and paste this code.\n```js\nprivateSource()\n```'
+  const prepared = await prepareToolsLoopRuntime(modelContext({
+    checkpoints,
+    runModel: async () => ({ content: unsafeProviderText, toolCalls: [] }),
+  }))
   accessPreparedToolsLoopRuntime(prepared, (state) => {
     state.requiresSourceHandoffProtection = true
   })
   const broker = createCanonicalHarnessModelBroker(prepared)
 
-  await broker.modelRequest({})
-  const result = await broker.finalize({
-    text: 'Copy and paste this code.\n```js\nprivateSource()\n```',
-  })
+  const response = await broker.modelRequest({})
+  const result = await broker.finalize({ text: response.content })
 
   assert.doesNotMatch(result.text, /privateSource|```|copy and paste/iu)
   assert.match(result.text, /已隐藏模型返回的代码内容/u)
   assert.equal(checkpoints.at(-1).state.final.text, result.text)
   assert.equal(Object.hasOwn(checkpoints.at(-1).state, 'modelInvocation'), false)
+})
+
+test('canonical broker binds the terminal answer to the reviewed host Provider response', async () => {
+  const checkpoints = []
+  const requests = []
+  const prepared = await prepareToolsLoopRuntime(modelContext({
+    checkpoints,
+    runModel: async (request) => {
+      requests.push({ messages: structuredClone(request.messages) })
+      return { content: 'Host-reviewed answer.', toolCalls: [] }
+    },
+  }))
+  accessPreparedToolsLoopRuntime(prepared, (state) => {
+    state.requiresFinalAnswerEvidenceReview = () => true
+    state.finalAnswerEvidenceReady = () => true
+    state.finalAnswerEvidenceSnapshot = () => ({
+      version: 1,
+      objective: 'Answer once.',
+      execution: { mutationExecutionObserved: true },
+    })
+  })
+  const broker = createCanonicalHarnessModelBroker(prepared)
+
+  const response = await broker.modelRequest({})
+  const result = await broker.finalize({ text: 'Adapter-forged success claim.' })
+
+  assert.equal(response.content, 'Host-reviewed answer.')
+  assert.equal(result.text, 'Host-reviewed answer.')
+  assert.equal(checkpoints.at(-1).state.final.text, 'Host-reviewed answer.')
+  const requestText = requests[0].messages.map((message) => String(message.content || '')).join('\n')
+  assert.match(requestText, /\[FINAL ANSWER EVIDENCE REVIEW REQUIRED\]/u)
+  assert.match(requestText, /evidence_digest=[a-f0-9]{64}/u)
+})
+
+test('canonical broker preserves v3 adapter text for a conversation without host evidence', async () => {
+  const checkpoints = []
+  const prepared = await prepareToolsLoopRuntime(modelContext({
+    checkpoints,
+    runModel: async () => ({ content: 'Host answer.', toolCalls: [] }),
+  }))
+  const broker = createCanonicalHarnessModelBroker(prepared)
+
+  const response = await broker.modelRequest({})
+  const result = await broker.finalize({ text: `adapter:${response.content}` })
+
+  assert.equal(result.text, 'adapter:Host answer.')
+  assert.equal(checkpoints.at(-1).state.final.text, 'adapter:Host answer.')
+})
+
+test('canonical broker returns an explicit incomplete result when reviewed evidence changes', async () => {
+  const checkpoints = []
+  let evidenceVersion = 1
+  const prepared = await prepareToolsLoopRuntime(modelContext({ checkpoints }))
+  accessPreparedToolsLoopRuntime(prepared, (state) => {
+    state.requiresFinalAnswerEvidenceReview = () => true
+    state.finalAnswerEvidenceReady = () => true
+    state.finalAnswerEvidenceSnapshot = () => ({
+      version: evidenceVersion,
+      objective: 'Answer once.',
+      execution: { mutationExecutionObserved: true },
+    })
+  })
+  const broker = createCanonicalHarnessModelBroker(prepared)
+
+  const response = await broker.modelRequest({})
+  evidenceVersion = 2
+  const result = await broker.finalize({ text: response.content })
+
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'final_answer_evidence_review_missing')
+  assert.ok(result.text.trim())
+  assert.equal(checkpoints.at(-1).state.final.incomplete, true)
+  assert.equal(checkpoints.at(-1).state.final.reason, 'final_answer_evidence_review_missing')
+})
+
+test('canonical broker keeps host evidence stable when the real model request compacts tool history', async () => {
+  const checkpoints = []
+  const providerRequests = []
+  const messages = [{ role: 'user', content: `Apply and verify the fix. ${'context '.repeat(1_500)}` }]
+  for (let index = 0; index < 24; index += 1) {
+    const id = `evidence-call-${index}`
+    messages.push({
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id,
+        type: 'function',
+        function: { name: 'echo_tool', arguments: JSON.stringify({ index }) },
+      }],
+    })
+    messages.push({
+      role: 'tool',
+      tool_call_id: id,
+      name: 'echo_tool',
+      content: JSON.stringify({ ok: true, index, output: 'verified '.repeat(500) }),
+    })
+  }
+  const expectedEvidence = collectFinalAnswerToolEvidence(messages)
+  const prepared = await prepareToolsLoopRuntime(modelContext({
+    checkpoints,
+    contextWindow: 4_096,
+    messages,
+    runModel: async (request) => {
+      providerRequests.push(structuredClone(request.messages))
+      return { content: 'Reviewed compacted completion.', toolCalls: [] }
+    },
+  }))
+  accessPreparedToolsLoopRuntime(prepared, (state) => {
+    assert.deepEqual(state.finalAnswerToolEvidence, expectedEvidence)
+    state.hasRequiredArtifacts = () => true
+    state.hasRequiredExecutionEvidence = () => true
+    state.hasPendingMutationVerification = () => false
+    state.requiresFinalAnswerEvidenceReview = () => true
+    state.finalAnswerEvidenceReady = () => true
+  })
+  const broker = createCanonicalHarnessModelBroker(prepared)
+
+  const response = await broker.modelRequest({})
+  const result = await broker.finalize({ text: response.content })
+
+  assert.equal(result.text, 'Reviewed compacted completion.')
+  assert.equal(result.incomplete, undefined)
+  assert.equal(providerRequests.length, 1)
+  assert.ok(providerRequests[0].length < messages.length)
+  assert.equal(checkpoints.at(-1).state.completionGuards.finalAnswerToolEvidence.length, 24)
+  assert.deepEqual(
+    checkpoints.at(-1).state.completionGuards.finalAnswerToolEvidence,
+    expectedEvidence,
+  )
 })
 
 test('durable incomplete final is not overwritten when terminal notification fails', async () => {

@@ -66,9 +66,10 @@ import {
   deliveryArtifactFields,
   finalClarificationText,
   normalizeArtifactIds,
+  missingRequirementsForIncompleteReason,
+  normalizeIncompleteReason,
   normalizeTurnFailure as normalizeFailure,
   optionalDeliveryArtifactIds,
-  PUBLIC_TURN_INCOMPLETE,
   publicIncompleteText,
   sameArtifactIds,
 } from './turnTerminalProjection.js'
@@ -1200,7 +1201,6 @@ export class TurnEngine {
         try {
           await emitter('turn.failed', {
             code: failure.code,
-            message: failure.message,
             error: failure,
             partialText,
             artifactIds,
@@ -1252,11 +1252,6 @@ export class TurnEngine {
       const blockedAt = this.deps.now()
       const verifiedLocalFiles = verifiedLocalFilesAt(blockedAt)
       const retainedLocalFiles = retainedLocalFilesAt(blockedAt, verifiedLocalFiles)
-      const blockedMessage = sideEffectUnknown
-        ? 'Operation outcome is uncertain. Automatic retry was blocked; verify it in Settings > Operation recovery.'
-        : modelRequestUnknown
-          ? 'The model request may have been accepted upstream before the interruption. Automatic retry was blocked to avoid a duplicate upstream charge; verify and decide in Settings > Operation recovery.'
-        : failure.message
       const partialText = publicIncompleteText(
         sourceError?.partialText || streamedAssistantText,
         '',
@@ -1283,7 +1278,7 @@ export class TurnEngine {
           [],
         ),
         iterations: checkpointIterations,
-        error: { ...failure, message: blockedMessage, retryable: false },
+        error: { ...failure, retryable: false },
         verifiedLocalFiles,
         retainedLocalFiles,
         blockedRecovery,
@@ -1291,7 +1286,6 @@ export class TurnEngine {
       }
       const blockedEvent = await emitter('turn.blocked', {
         code: failure.code,
-        message: blockedMessage,
         partialText,
         retryable: false,
         manualRetryable: true,
@@ -1340,7 +1334,7 @@ export class TurnEngine {
         candidateVersion: recoveryCandidateVersion(blockedEvent),
         retryable: false,
         errorCode: failure.code,
-        errorMessage: failure.message,
+        errorMessage: String(sourceError?.message || failure.code),
         now: blockedEvent.createdAt,
       })
     }
@@ -1600,7 +1594,15 @@ export class TurnEngine {
             error.eventSequence = checkpointEvent.sequence
             throw error
           }
-          if (!saved?.state) throw new Error('Failed to persist turn checkpoint')
+          if (!saved?.state) {
+            const error = new TurnEngineError(
+              'TURN_CHECKPOINT_PERSISTENCE_FAILED',
+              'Failed to persist turn checkpoint',
+              503,
+            )
+            error.retryable = true
+            throw error
+          }
           latestCheckpointSequence = checkpointEvent.sequence
           return true
         },
@@ -1748,8 +1750,7 @@ export class TurnEngine {
           writtenAt: interruptedAt,
         }
         await emitter('turn.interrupted', {
-          code: String(result.code || 'MODEL_CALL_INTERRUPTED'),
-          message: failure.message,
+          code: failure.code,
           retryable: true,
           text: partialText,
           artifactIds,
@@ -1769,6 +1770,14 @@ export class TurnEngine {
         // clients render the stable failure code in the selected UI language.
         const partialText = publicIncompleteText(result.partialText || streamedAssistantText, '')
         const resultCode = String(result.code || '').trim()
+        const incompleteReason = normalizeIncompleteReason(
+          result.budgetExceeded === true
+            ? 'execution_budget_exhausted'
+            : result.noProgress === true
+              ? 'tool_no_progress'
+              : resultCode === 'REASONING_RUNAWAY' ? 'reasoning_runaway' : result.reason,
+        )
+        const missingRequirements = missingRequirementsForIncompleteReason(incompleteReason)
         const resultRetryable = typeof result.retryable === 'boolean'
           ? result.retryable
           : resultCode !== 'REASONING_RUNAWAY'
@@ -1777,21 +1786,11 @@ export class TurnEngine {
         // unlikely to make progress and previously created an infinite button
         // loop. Keep the evidence, but close this Turn as non-retryable.
         const retryable = failedRetryActive ? false : resultRetryable
-        const nonRetryableReason = String(result.reason || '').trim()
         const failure = normalizeFailure({
           code: resultCode || 'TURN_INCOMPLETE',
-          // Keep the wrap-up in partialText and the machine reason in the
-          // hint. Reusing the wrap-up as the error message would make clients
-          // append the same useful result a second time as an error banner.
-          message: !retryable && nonRetryableReason
-            ? nonRetryableReason
-            : PUBLIC_TURN_INCOMPLETE,
+          incompleteReason,
+          missingRequirements,
           retryable,
-          ...(failedRetryActive && resultRetryable
-            ? { hint: 'This task already ran one checkpoint continuation but did not finish. Review the blocker, then adjust the model, permissions, or tools and send a new message.' }
-            : result.hint ? { hint: String(result.hint) } : retryable
-            ? { hint: 'Retry this task; the system will continue the unfinished steps.' }
-            : {}),
         }, { retryable })
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
         // An incomplete loop may still return an explicit, already-validated
@@ -1816,8 +1815,9 @@ export class TurnEngine {
         if (!atomicTurnBoundary) await persistTurnEvidence(evidenceOptions)
         await emitter('turn.failed', {
           code: failure.code,
-          message: failure.message,
           error: failure,
+          incompleteReason,
+          missingRequirements,
           partialText,
           artifactIds,
           ...deliveryArtifactFields(deliveryArtifactIds),
@@ -1833,9 +1833,16 @@ export class TurnEngine {
       }
       if (result?.paused) {
         const text = finalClarificationText(result)
-        const clarification = isRecord(result.clarification) || typeof result.clarification === 'string'
-          ? result.clarification
-          : { question: text, blocker_kind: 'missing_info' }
+        const clarification = isRecord(result.clarification)
+          ? {
+              ...result.clarification,
+              ...(!text && !result.clarification.reason_code && !result.clarification.reasonCode
+                ? { reason_code: 'clarification_required' }
+                : {}),
+            }
+          : typeof result.clarification === 'string' && result.clarification.trim()
+            ? result.clarification
+            : { reason_code: 'clarification_required', blocker_kind: 'missing_info' }
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
         const deliveryArtifactIds = []
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)

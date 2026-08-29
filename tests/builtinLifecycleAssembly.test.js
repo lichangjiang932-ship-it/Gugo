@@ -57,6 +57,10 @@ function createNoopLifecycleAdapters() {
     initializeRuntimePluginConfig: noop,
     initPlugins: noop,
     restoreEnabledRuntimePlugins: () => [],
+    startCodexAppServerRuntime: noop,
+    closeCodexAppServerRuntime: noop,
+    startLspRuntime: noop,
+    closeLspRuntime: noop,
     initCodexPluginSkills: noop,
     setVisionAssistResolver: noop,
     getEnabledIntegrationCredentials: () => null,
@@ -135,6 +139,7 @@ test('background runtime activation rolls back when Cron cannot start', async ()
 
 test('builtin lifecycle assembly preserves legacy startup and shutdown ordering', async () => {
   const events = []
+  const runtimeEnv = Object.freeze({ RUNTIME_MARKER: 'exact-snapshot' })
   let visionResolver = null
   const adapters = {
     closeDb: () => { events.push('stop:database') },
@@ -160,6 +165,19 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
       events.push('start:runtime-plugin-restore')
       return Promise.resolve([])
     },
+    startCodexAppServerRuntime: ({ cwd, env, signal }) => {
+      assert.equal(cwd, 'test-runtime-root')
+      assert.equal(env.RUNTIME_MARKER, 'exact-snapshot')
+      assert.equal(signal instanceof AbortSignal, true)
+    },
+    closeCodexAppServerRuntime: ({ signal }) => {
+      assert.equal(signal instanceof AbortSignal, true)
+    },
+    startLspRuntime: ({ env }) => {
+      assert.strictEqual(env, runtimeEnv)
+      events.push('start:lsp')
+    },
+    closeLspRuntime: () => { events.push('stop:lsp') },
     initCodexPluginSkills: () => { events.push('start:codex-plugin-skills') },
     setVisionAssistResolver: (resolver) => {
       events.push('start:vision-assist')
@@ -200,13 +218,13 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
     },
     subagentRunPersistenceAdapter: TEST_SUBAGENT_RUN_PERSISTENCE_PORT,
     cwd: 'test-runtime-root',
-    runtimeEnv: Object.freeze({ RUNTIME_MARKER: 'exact-snapshot' }),
+    runtimeEnv,
   })
   const registry = createLifecycleCapabilityRegistry()
   registry.registerAll(definitions)
   const graph = createLifecycleCapabilityGraph({ registry })
 
-  await graph.startAll().ready
+  const started = await graph.startAll().ready
   assert.deepEqual(events, [
     'start:managed-attachments',
     'start:session-deletion-recovery',
@@ -222,6 +240,7 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
     'start:social-list:social',
     'start:social:alpha',
     'start:social:beta',
+    'start:lsp',
     'start:evolution-operation-sweeper',
     'start:evolution-online-grader',
     'start:turn-recovery',
@@ -235,7 +254,7 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
 
   const stopped = await graph.stopAll()
   assert.equal(stopped.exitCode, 0)
-  assert.deepEqual(events.slice(-13), [
+  assert.deepEqual(events.slice(-14), [
     'stop:cron',
     'stop:turn-recovery',
     'stop:turn-engine',
@@ -243,6 +262,7 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
     'stop:jobs',
     'stop:shell-sessions',
     'stop:evolution-operation-sweeper',
+    'stop:lsp',
     'stop:runtime-plugins',
     'stop:social',
     'stop:browsers',
@@ -252,6 +272,7 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
   ])
 
   const ids = BUILTIN_LIFECYCLE_CAPABILITY_IDS
+  assert.ok(started.order.indexOf(ids.runtimePlugins) < started.order.indexOf(ids.lsp))
   assert.ok(stopped.order.indexOf(ids.turnEngine) < stopped.order.indexOf(ids.jobs))
   assert.ok(stopped.order.indexOf(ids.turnEngine) < stopped.order.indexOf(ids.evolutionOnlineGrader))
   assert.ok(stopped.order.indexOf(ids.evolutionOnlineGrader) < stopped.order.indexOf(ids.jobs))
@@ -260,6 +281,7 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
   assert.ok(stopped.order.indexOf(ids.jobs) < stopped.order.indexOf(ids.evolutionOperationSweeper))
   assert.ok(stopped.order.indexOf(ids.evolutionOperationSweeper) < stopped.order.indexOf(ids.runtimePlugins))
   assert.ok(stopped.order.indexOf(ids.jobs) < stopped.order.indexOf(ids.runtimePlugins))
+  assert.ok(stopped.order.indexOf(ids.lsp) < stopped.order.indexOf(ids.runtimePlugins))
   assert.ok(stopped.order.indexOf(ids.runtimePlugins) < stopped.order.indexOf(ids.socialBridges))
   assert.ok(stopped.order.indexOf(ids.managedAttachments) < stopped.order.indexOf(ids.database))
   assert.equal(registry.get(ids.turnEngine).stopFailure, 'fail')
@@ -268,13 +290,77 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
   assert.equal(registry.get(ids.evolutionOnlineGrader).stopTimeoutMs, 120_000)
   assert.equal(registry.get(ids.evolutionOperationSweeper).hasStop, true)
   assert.equal(registry.get(ids.runtimePlugins).stopFailure, 'fail')
+  assert.deepEqual(registry.get(ids.lsp).dependsOn, [ids.runtimePlugins])
+  assert.equal(registry.get(ids.lsp).hasStop, true)
+  assert.equal(registry.get(ids.mcp).stopTimeoutMs, 20_000)
   assert.equal(registry.get(ids.subagentRecovery).hasStop, false)
+  assert.deepEqual(registry.get(ids.codexAppServer).dependsOn, [ids.runtimePluginRestore])
+  assert.deepEqual(registry.get(ids.codexPluginSkills).dependsOn, [ids.runtimePluginRestore])
+  assert.equal(
+    registry.list().some((entry) => entry.dependsOn.includes(ids.codexAppServer)),
+    false,
+  )
+  assert.equal(registry.get(ids.codexAppServer).startTimeoutMs, 65_000)
+  assert.equal(registry.get(ids.codexAppServer).stopTimeoutMs, 30_000)
   assert.equal(
     resolveLifecycleShutdownTimeoutMs({ capabilities: registry.list() }),
     15_000 + definitions
       .filter((entry) => typeof entry.stop === 'function')
       .reduce((total, entry) => total + entry.stopTimeoutMs, 0),
   )
+})
+
+test('optional Codex app-server failure does not block the main startup graph', async () => {
+  const events = []
+  const adapters = {
+    ...createNoopLifecycleAdapters(),
+    startCodexAppServerRuntime: () => {
+      events.push('codex:failed')
+      throw new Error('optional Codex host unavailable')
+    },
+    initCodexPluginSkills: () => { events.push('codex-plugin-skills:started') },
+    setVisionAssistResolver: () => { events.push('vision:started') },
+    listEnabledIntegrationCredentials: () => {
+      events.push('social:started')
+      return []
+    },
+    startEvolutionOperationSweeperRuntime: () => { events.push('native-runtime:started') },
+    startTurnRecoveryRuntime: () => { events.push('turn-recovery:started') },
+  }
+  const definitions = createBuiltinLifecycleCapabilities({
+    adapters,
+    turnPersistenceAdapter: SQLITE_TURN_PERSISTENCE_ADAPTER,
+    subagentRunPersistenceAdapter: TEST_SUBAGENT_RUN_PERSISTENCE_PORT,
+  })
+  const registry = createLifecycleCapabilityRegistry()
+  registry.registerAll(definitions)
+  const graph = createLifecycleCapabilityGraph({ registry })
+
+  const started = await graph.startAll().ready
+  assert.deepEqual(started.failures.map((entry) => entry.capability.id), [
+    BUILTIN_LIFECYCLE_CAPABILITY_IDS.codexAppServer,
+  ])
+  assert.deepEqual(new Set(events), new Set([
+    'codex:failed',
+    'codex-plugin-skills:started',
+    'vision:started',
+    'social:started',
+    'native-runtime:started',
+    'turn-recovery:started',
+  ]))
+  const protectedCapabilities = new Set([
+    BUILTIN_LIFECYCLE_CAPABILITY_IDS.codexPluginSkills,
+    BUILTIN_LIFECYCLE_CAPABILITY_IDS.visionAssist,
+    BUILTIN_LIFECYCLE_CAPABILITY_IDS.socialBridges,
+    BUILTIN_LIFECYCLE_CAPABILITY_IDS.runtimePlugins,
+    BUILTIN_LIFECYCLE_CAPABILITY_IDS.turnEngine,
+    BUILTIN_LIFECYCLE_CAPABILITY_IDS.turnRecovery,
+  ])
+  assert.equal(
+    started.skipped.some((entry) => protectedCapabilities.has(entry.capability.id)),
+    false,
+  )
+  assert.equal((await graph.stopAll()).exitCode, 0)
 })
 
 test('builtin lifecycle fails closed before materialization when session deletion recovery fails', async () => {
@@ -537,6 +623,10 @@ test('shutdown timeout shares the in-flight stop and permits retry only after it
 })
 
 test('lifecycle runtime releases host adapters after their graph capabilities are replaced', async () => {
+  let builtinLspStarts = 0
+  let builtinLspStops = 0
+  let replacementLspStarts = 0
+  let replacementLspStops = 0
   const replacements = () => [{
     id: 'test.turn-persistence-replacement',
     owner: 'test',
@@ -551,16 +641,32 @@ test('lifecycle runtime releases host adapters after their graph capabilities ar
     replaces: BUILTIN_LIFECYCLE_CAPABILITY_IDS.toolLoop,
     start: () => {},
     stop: () => {},
+  }, {
+    id: 'test.lsp-replacement',
+    owner: 'test',
+    priority: 100,
+    replaces: BUILTIN_LIFECYCLE_CAPABILITY_IDS.lsp,
+    start: () => { replacementLspStarts += 1 },
+    stop: () => { replacementLspStops += 1 },
   }]
 
   for (let run = 0; run < 2; run += 1) {
     const runtime = createLifecycleRuntime({
       silent: true,
-      adapters: createNoopLifecycleAdapters(),
+      adapters: {
+        ...createNoopLifecycleAdapters(),
+        startLspRuntime: () => { builtinLspStarts += 1 },
+        closeLspRuntime: () => { builtinLspStops += 1 },
+      },
       capabilities: replacements(),
       turnPersistenceAdapter: SQLITE_TURN_PERSISTENCE_ADAPTER,
       subagentRunPersistenceAdapter: TEST_SUBAGENT_RUN_PERSISTENCE_PORT,
     })
+    assert.equal(runtime.registry.get(BUILTIN_LIFECYCLE_CAPABILITY_IDS.lsp).id, 'test.lsp-replacement')
+    assert.deepEqual(
+      runtime.registry.get(BUILTIN_LIFECYCLE_CAPABILITY_IDS.lsp).dependsOn,
+      [BUILTIN_LIFECYCLE_CAPABILITY_IDS.runtimePlugins],
+    )
     await runtime.start().ready
     assert.equal(getToolLoopAdapterStatus().configured, true)
     assert.equal(getTurnPersistenceAdapterStatus().configured, true)
@@ -569,6 +675,10 @@ test('lifecycle runtime releases host adapters after their graph capabilities ar
     assert.equal(getToolLoopAdapterStatus().configured, false)
     assert.equal(getTurnPersistenceAdapterStatus().configured, false)
   }
+  assert.equal(builtinLspStarts, 0)
+  assert.equal(builtinLspStops, 0)
+  assert.equal(replacementLspStarts, 2)
+  assert.equal(replacementLspStops, 2)
 })
 
 test('fatal replacement stop preserves host controllers until the unresolved branch retries', async () => {
@@ -753,6 +863,8 @@ test('pre-bootstrap inspection does not consume custom default runtime options',
     initializeRuntimePluginConfig: noop,
     initPlugins: noop,
     restoreEnabledRuntimePlugins: () => [],
+    startCodexAppServerRuntime: noop,
+    closeCodexAppServerRuntime: noop,
     initCodexPluginSkills: noop,
     setVisionAssistResolver: noop,
     getEnabledIntegrationCredentials: () => null,

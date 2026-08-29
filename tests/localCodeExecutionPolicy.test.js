@@ -25,8 +25,10 @@ delete process.env.LOCAL_CODE_EXECUTION_ENABLED
 const { closeDb, createUser } = await import('../server/db.js')
 const { bashExecTool } = await import('../server/adapters/fsShellTools.js')
 const {
+  getLocalFileAccessStatus,
   grantLocalPath,
   isLocalCodeExecutionEnabled,
+  isRunCodeExecutionEnabled,
   setAllFilesAccess,
 } = await import('../server/services/localFileAccessService.js')
 const { getWorkspaceTrustStatus } = await import('../server/services/workspaceTrustService.js')
@@ -67,6 +69,31 @@ test('local code execution defaults only to local auth on a loopback bind and ho
     SERVER_HOST: '127.0.0.1',
     LOCAL_CODE_EXECUTION_ENABLED: '0',
   }), false)
+})
+
+test('run_code status uses the same shell-or-local policy as its execution boundary', () => {
+  const previousLocalCode = process.env.LOCAL_CODE_EXECUTION_ENABLED
+  const previousWorkspaceShell = process.env.WORKSPACE_SHELL_ENABLED
+  try {
+    process.env.LOCAL_CODE_EXECUTION_ENABLED = '0'
+    process.env.WORKSPACE_SHELL_ENABLED = '1'
+    assert.equal(isRunCodeExecutionEnabled(process.env), true)
+    const status = getLocalFileAccessStatus({ userId: 'local-code-write' })
+    assert.equal(status.runtime.localCodeExecutionEnabled, false)
+    assert.equal(status.runtime.runCodeExecutionEnabled, true)
+
+    process.env.WORKSPACE_SHELL_ENABLED = '0'
+    assert.equal(isRunCodeExecutionEnabled(process.env), false)
+    assert.equal(
+      getLocalFileAccessStatus({ userId: 'local-code-write' }).runtime.runCodeExecutionEnabled,
+      false,
+    )
+  } finally {
+    if (previousLocalCode === undefined) delete process.env.LOCAL_CODE_EXECUTION_ENABLED
+    else process.env.LOCAL_CODE_EXECUTION_ENABLED = previousLocalCode
+    if (previousWorkspaceShell === undefined) delete process.env.WORKSPACE_SHELL_ENABLED
+    else process.env.WORKSPACE_SHELL_ENABLED = previousWorkspaceShell
+  }
 })
 
 test('a local read-write directory grant runs shell without workspace trust or the shared shell switch', async () => {

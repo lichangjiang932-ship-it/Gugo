@@ -550,6 +550,90 @@ test('runServerTurn starts once, consumes SSE events, and stops at terminal', as
   assert.equal(urls.some((url) => String(url).startsWith('/api/turns/events?')), false)
 })
 
+test('runServerTurn synchronizes the authoritative session snapshot after an incomplete failure', async () => {
+  const urls = []
+  const failed = createTurnEvent({
+    id: 'failed-terminal',
+    sessionId: 's-incomplete-snapshot',
+    turnId: 't-incomplete-snapshot',
+    sequence: 0,
+    type: 'turn.failed',
+    payload: {
+      code: 'TURN_INCOMPLETE',
+      message: 'Task incomplete.',
+      error: {
+        code: 'TURN_INCOMPLETE',
+        message: 'Task incomplete.',
+        retryable: true,
+      },
+    },
+    createdAt: 5,
+  })
+  const fetchImpl = async (url) => {
+    urls.push(String(url))
+    if (url === '/api/turns/run') {
+      return response({
+        turn: {
+          sessionId: failed.sessionId,
+          turnId: failed.turnId,
+          status: 'running',
+        },
+      }, 202)
+    }
+    if (String(url).startsWith('/api/turns/stream?')) return sseResponse([failed])
+    if (String(url).startsWith('/api/sessions/s-incomplete-snapshot/snapshot?')) {
+      return response({
+        snapshot: {
+          session: { id: failed.sessionId },
+          revision: 9,
+          totalMessages: 1,
+          offset: 0,
+          nextOffset: null,
+          complete: true,
+          messages: [{
+            id: `${failed.turnId}:assistant`,
+            role: 'assistant',
+            content: 'partial result',
+            createdAt: 5,
+            modelContext: {
+              turnId: failed.turnId,
+              turnEvidence: true,
+              evidenceState: 'failed',
+              error: {
+                code: 'TURN_INCOMPLETE',
+                incompleteReason: 'post_mutation_verification_missing',
+                missingRequirements: ['mutation_readback', 'diff_or_project_check'],
+              },
+            },
+          }],
+        },
+      })
+    }
+    throw new Error(`Unexpected URL: ${url}`)
+  }
+
+  const result = await runServerTurn({
+    sessionId: failed.sessionId,
+    content: 'finish the task',
+    fetchImpl,
+    syncSessionSnapshot: true,
+  })
+
+  assert.equal(result.terminal.type, 'turn.failed')
+  assert.equal(
+    result.sessionSnapshot.messages[0].meta.serverFailure.incompleteReason,
+    'post_mutation_verification_missing',
+  )
+  assert.deepEqual(
+    result.sessionSnapshot.messages[0].meta.serverFailure.missingRequirements,
+    ['mutation_readback', 'diff_or_project_check'],
+  )
+  assert.equal(
+    urls.some((url) => url.startsWith('/api/sessions/s-incomplete-snapshot/snapshot?')),
+    true,
+  )
+})
+
 test('runServerTurn keeps using SSE after an unacknowledged WebSocket fails', async () => {
   await withWebSocketAuth(async () => {
     const sockets = []
@@ -891,9 +975,18 @@ test('runServerTurn stops reconnecting when the server reports a recovery dead l
       content: 'do not replay me',
       fetchImpl,
     }),
-    (error) => error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
-      && error?.retryable === false
-      && error?.recovery?.status === 'dead_letter',
+    (error) => {
+      assert.equal(error?.code, 'MODEL_REQUEST_OUTCOME_UNKNOWN')
+      assert.equal(error?.retryable, false)
+      assert.equal(error?.recovery?.status, 'dead_letter')
+      assert.equal(error?.serverFailure?.incompleteReason, 'recovery_attempts_exhausted')
+      assert.deepEqual(error?.serverFailure?.missingRequirements, [
+        'operation_outcome_verification',
+        'explicit_recovery_retry',
+      ])
+      assert.equal(error?.serverFailure?.attempts, 1)
+      return true
+    },
   )
   assert.deepEqual(urls, ['/api/turns/run'])
 })
@@ -2249,6 +2342,9 @@ test('turn failure payloads retain recovery evidence and dispatch it without app
     error: {
       code: 'MODEL_TIMEOUT', message: 'provider timed out', status: 504,
       retryable: true, hint: 'check the endpoint', attempts: 2,
+      manualRetryable: true,
+      incompleteReason: 'post_mutation_verification_missing',
+      missingRequirements: ['mutation_readback', 'diff_or_project_check'],
     },
     partialText: 'durable partial output',
     artifactIds: ['a1', 'a1', 'a2'],
@@ -2258,6 +2354,9 @@ test('turn failure payloads retain recovery evidence and dispatch it without app
     error: {
       code: 'MODEL_TIMEOUT', message: 'provider timed out', status: 504,
       retryable: true, hint: 'check the endpoint', attempts: 2,
+      manualRetryable: true,
+      incompleteReason: 'post_mutation_verification_missing',
+      missingRequirements: ['mutation_readback', 'diff_or_project_check'],
     },
     partialText: 'durable partial output',
     artifactIds: ['a1', 'a2'],
@@ -2266,6 +2365,7 @@ test('turn failure payloads retain recovery evidence and dispatch it without app
   const error = createTurnFailureError(payload)
   assert.equal(error.status, 504)
   assert.equal(error.retryable, true)
+  assert.equal(error.manualRetryable, true)
   assert.deepEqual(error.artifactIds, ['a1', 'a2'])
 
   const actions = []
@@ -2282,6 +2382,38 @@ test('turn failure payloads retain recovery evidence and dispatch it without app
   assert.equal(meta.serverPartialText, 'durable partial output')
   assert.deepEqual(meta.serverArtifactIds, ['a1', 'a2'])
   assert.equal(meta.failed, true)
+})
+
+test('blocked snapshots infer manual retry support without overwriting an explicit value', () => {
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'blocked-inferred:assistant',
+      role: 'assistant',
+      content: '',
+      createdAt: 1,
+      modelContext: {
+        turnId: 'blocked-inferred',
+        turnEvidence: true,
+        evidenceState: 'blocked',
+        error: { code: 'TURN_RECOVERY_BLOCKED', retryable: false },
+      },
+    }, {
+      id: 'blocked-explicit:assistant',
+      role: 'assistant',
+      content: '',
+      createdAt: 2,
+      modelContext: {
+        turnId: 'blocked-explicit',
+        turnEvidence: true,
+        evidenceState: 'blocked',
+        error: { code: 'TURN_RECOVERY_BLOCKED', retryable: false, manualRetryable: false },
+      },
+    }],
+  })
+
+  assert.equal(snapshot.messages[0].meta.serverFailure.manualRetryable, true)
+  assert.equal(snapshot.messages[1].meta.serverFailure.manualRetryable, false)
 })
 
 test('retained local files survive terminal dispatch, snapshot restore, and authoritative session merge', async () => {

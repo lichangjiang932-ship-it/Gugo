@@ -1,6 +1,7 @@
 import { modelProviderResponseEvents } from './modelNonStreaming.js'
 import {
   extractModelContentText,
+  normalizeCompatibleFinishReason,
   normalizeCompatibleToolCall,
   stringifyToolArguments,
 } from './modelProviderResponse.js'
@@ -53,13 +54,30 @@ export async function* readModelSseLines(reader, { onFirstByte, onChunk } = {}) 
 
 export function decodeModelStreamLine(line) {
   const trimmed = String(line || '').trim()
-  if (!trimmed || trimmed.startsWith(':') || trimmed.startsWith('event:')) return null
-  const payload = trimmed.startsWith('data:') ? trimmed.slice(5).trimStart() : trimmed
+  if (!trimmed || trimmed.startsWith(':')) return null
+
+  const dataField = /^data(?::(.*))?$/is.exec(trimmed)
+  if (!dataField && (
+    /^(?:event|id|retry)(?::|$)/i.test(trimmed)
+    || /^[a-z][a-z0-9_-]*:/i.test(trimmed)
+  )) return null
+  const payload = dataField ? String(dataField[1] || '').trimStart() : trimmed
+  if (!payload) return null
   if (payload === '[DONE]') return { done: true, data: null }
   try {
-    return { done: false, data: JSON.parse(payload) }
+    const data = JSON.parse(payload)
+    if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).length === 0) {
+      throw new TypeError('model stream frame must be a non-empty object')
+    }
+    return { done: false, data }
   } catch {
-    return null
+    const error = new Error('模型流包含无法解析的 JSON 数据帧。')
+    error.code = 'MODEL_STREAM_MALFORMED_FRAME'
+    error.type = 'provider_error'
+    error.fromUpstream = true
+    error.retryable = false
+    error.modelRequestOutcome = 'failed'
+    throw error
   }
 }
 
@@ -94,17 +112,6 @@ function toolDelta(call, index, argumentsMode = 'append') {
     arguments: normalized.function.arguments,
     argumentsMode,
   }
-}
-
-function normalizedFinishReason(value, sawToolCall = false) {
-  const raw = String(value || '').trim()
-  const normalized = raw.toLowerCase()
-  // A provider can hit its output limit after emitting the beginning of a
-  // tool call. Preserve that stronger signal so truncated arguments are not
-  // mistaken for a complete executable call.
-  if (['length', 'max_tokens', 'max_output_tokens'].includes(normalized)) return 'length'
-  if (sawToolCall || normalized === 'function_call' || normalized === 'tool_calls') return 'tool_calls'
-  return raw || 'stop'
 }
 
 export function normalizeCompatibleModelStreamPayload(data, state = createCompatibleModelStreamState()) {
@@ -144,8 +151,8 @@ export function normalizeCompatibleModelStreamPayload(data, state = createCompat
   }
   if (eventType === 'response.completed' || eventType === 'response.failed' || eventType === 'response.incomplete') {
     frame.terminal = true
-    frame.finishReason = normalizedFinishReason(
-      data.response?.incomplete_details?.reason || data.response?.status,
+    frame.finishReason = normalizeCompatibleFinishReason(
+      data.response?.incomplete_details?.reason || data.response?.status || eventType.slice('response.'.length),
       state.sawToolCall,
     )
   }
@@ -168,7 +175,7 @@ export function normalizeCompatibleModelStreamPayload(data, state = createCompat
       state.sawToolCall = true
     }
     if (choice.finish_reason) {
-      frame.finishReason = normalizedFinishReason(choice.finish_reason, state.sawToolCall)
+      frame.finishReason = normalizeCompatibleFinishReason(choice.finish_reason, state.sawToolCall)
       frame.terminal = true
     }
   } else if (!eventType.startsWith('response.')) {
@@ -196,7 +203,7 @@ export function normalizeCompatibleModelStreamPayload(data, state = createCompat
     }
     if (data.done === true) {
       frame.terminal = true
-      frame.finishReason = normalizedFinishReason(data.done_reason || data.stop_reason, state.sawToolCall)
+      frame.finishReason = normalizeCompatibleFinishReason(data.done_reason || data.stop_reason, state.sawToolCall)
     }
   }
 

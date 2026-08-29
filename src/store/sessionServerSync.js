@@ -36,17 +36,30 @@ export function isServerBackedSession(session) {
   return Number.isInteger(session?.serverRevision)
 }
 
+function hasIncompleteTaskDiagnosticGap(message) {
+  const failure = message?.meta?.serverFailure
+  if (!failure || typeof failure !== 'object' || Array.isArray(failure)) return false
+  if (String(failure.code || '').trim().toUpperCase() !== 'TURN_INCOMPLETE') return false
+  return !String(failure.incompleteReason || '').trim()
+    || !Array.isArray(failure.missingRequirements)
+}
+
 export function needsServerTranscriptHydration(session) {
+  const messages = Array.isArray(session?.messages) ? session.messages : []
+  // Older browser records may predate serverRevision while the same session
+  // already exists in the durable store. A generic TURN_INCOMPLETE card is a
+  // narrow, safe reason to probe that exact session id for richer diagnostics.
+  if (messages.some(hasIncompleteTaskDiagnosticGap)) return true
   if (!isServerBackedSession(session)) return false
-  const messages = Array.isArray(session.messages) ? session.messages : []
-  return messages.length === 0 || messages.every((message) => (
-    message?.meta?.pendingServerSync === true || message?.meta?.streaming === true
-  ))
+  return messages.length === 0
+    || messages.every((message) => (
+      message?.meta?.pendingServerSync === true || message?.meta?.streaming === true
+    ))
 }
 
 export function needsServerSessionSnapshot(session, hydratedRevision) {
   return needsServerTranscriptHydration(session)
-    && hydratedRevision !== session.serverRevision
+    && (!isServerBackedSession(session) || hydratedRevision !== session.serverRevision)
 }
 
 function normalizedArtifactIds(artifacts) {
@@ -152,6 +165,17 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
         merged.meta.serverAuthoritative = !recoveryStub
         if (recoveryStub) merged.meta.serverRecoveryStub = true
         else delete merged.meta.serverRecoveryStub
+        // The persisted terminal projection is authoritative unless a later
+        // live event has already advanced this Turn. In particular, an older
+        // local TURN_INCOMPLETE object must not erase structured diagnostics
+        // recovered by the server from the scoped checkpoint.
+        if (!localHasNewerTurnState && !recoveryStub) {
+          if (Object.hasOwn(serverMeta, 'serverFailure')) {
+            merged.meta.serverFailure = serverMeta.serverFailure
+          } else {
+            delete merged.meta.serverFailure
+          }
+        }
         // A completed snapshot is the source of truth for persisted files.
         // Keep local artifacts only when an older server response does not
         // expose the field at all; an explicit server list must replace an
@@ -316,15 +340,31 @@ export function createSessionMutationDispatcher({
   const hydrateSessionSnapshot = (session, action) => {
     if (typeof fetchSessionSnapshot !== 'function' || !canFetchSessionSnapshot()) return undefined
     const sessionId = session?.id
-    const revision = session?.serverRevision
+    const revision = isServerBackedSession(session) ? session.serverRevision : null
     if (!needsServerSessionSnapshot(session, hydratedRevisions.get(sessionId))) return undefined
 
     const pending = snapshotRequests.get(sessionId)
-    if (pending?.revision === revision) return pending.promise
+    if (pending && (pending.revision === revision || pending.revision === null || revision === null)) {
+      return pending.promise
+    }
 
     const operation = Promise.resolve()
-      .then(() => fetchSessionSnapshot({ sessionId }))
-      .then((snapshot) => {
+      .then(async () => {
+        if (!isServerBackedSession(session)) {
+          if (typeof resolveSessionMetadata !== 'function') return false
+          const metadata = await resolveSessionMetadata({ sessionId })
+          if (!metadata) return false
+          if (!Number.isInteger(metadata.revision)) {
+            const error = new Error('Session metadata is missing a valid revision')
+            error.code = 'INVALID_SESSION_REVISION'
+            throw error
+          }
+          applyServerAction({
+            type: 'APPLY_SERVER_SESSION_METADATA',
+            payload: { sessionId, session: metadata },
+          })
+        }
+        const snapshot = await fetchSessionSnapshot({ sessionId })
         applyCompleteSessionSnapshot(sessionId, snapshot)
         return true
       })

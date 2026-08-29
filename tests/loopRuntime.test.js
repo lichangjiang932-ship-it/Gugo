@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import { createToolLoop, runToolLoop } from '../server/services/loop/index.js'
 import { trustedInternalLoopPrincipal } from '../server/services/loop/internalExecutionPrincipal.js'
+import { processModelResult } from '../server/services/loop/runtime-processModelResult.js'
 import {
   attachJobBudget,
   releaseJobBudget,
@@ -21,6 +22,53 @@ const ECHO_TOOL_SPEC = {
     },
   },
 }
+
+test('a stale final-answer evidence review exits with a stable code and no server-localized text', async () => {
+  let incompleteInput = null
+  const state = {
+    iteration: {
+      modelResult: { content: 'Unsupported completion claim.', toolCalls: [] },
+      finalAnswerEvidenceReviewDigest: 'stale-evidence-digest',
+      steeringLeaseId: null,
+    },
+    d: {
+      ARTIFACT_RECOVERY_PHASE_DIAGNOSE: 'diagnose',
+      DIRECTORY_AUTHORIZATION_WAIT_CLAIM: /never-match/u,
+    },
+    modelInvocation: { id: 'model-call' },
+    restoredModelInvocation: { id: 'restored-model-call' },
+    hasVerifiedDirectoryResolution: false,
+    hasRequiredArtifacts: () => true,
+    hasRequiredExecutionEvidence: () => true,
+    hasPendingMutationVerification: () => false,
+    validateLocalHtmlDeliveries: async () => null,
+    requiresPdfLayoutVerification: false,
+    needsDeliverableSelection: () => false,
+    requiresFinalAnswerEvidenceReview: () => true,
+    hasCurrentFinalAnswerEvidenceReview: () => false,
+    prepareFinalAnswerEvidenceReview: () => false,
+    finishIncomplete: async (input) => {
+      incompleteInput = input
+      return { incomplete: true, reason: input.reason, text: input.text }
+    },
+  }
+
+  const result = await processModelResult(state)
+
+  assert.deepEqual(incompleteInput, {
+    text: '',
+    reason: 'final_answer_evidence_review_missing',
+    steeringLeaseId: null,
+  })
+  assert.deepEqual(result, {
+    kind: 'return',
+    value: {
+      incomplete: true,
+      reason: 'final_answer_evidence_review_missing',
+      text: '',
+    },
+  })
+})
 
 function baseOptions(overrides = {}) {
   return {
@@ -179,6 +227,54 @@ test('loop/index drives a complete extensible tool loop', async () => {
   assert.ok(observed.indexOf('execute:after') > observed.indexOf('checkpoint:tool-execution'))
   assert.ok(observed.includes('post-tool:after'))
   assert.equal(observed.at(-1), 'turn-stopping:done')
+})
+
+test('iteration exhaustion is persisted and returned as an explicit incomplete outcome', async () => {
+  let checkpoint = null
+  const result = await runToolLoop(baseOptions({
+    maxIters: 1,
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return true
+    },
+    runModel: async ({ toolChoice }) => {
+      if (toolChoice === 'none') {
+        return { content: 'The tool ran, but no normal completion round remained.', toolCalls: [] }
+      }
+      return {
+        content: '',
+        toolCalls: [{
+          id: 'iteration-limit-echo',
+          type: 'function',
+          function: { name: 'echo_tool', arguments: '{"text":"done"}' },
+        }],
+      }
+    },
+    executeTool: async () => ({ ok: true, echoed: 'done' }),
+  }))
+
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'iteration_limit_reached')
+  assert.equal(checkpoint?.final?.incomplete, true)
+  assert.equal(checkpoint?.final?.reason, 'iteration_limit_reached')
+})
+
+test('an empty primary response and empty wrap-up retain a specific incomplete diagnosis', async () => {
+  let checkpoint = null
+  const result = await runToolLoop(baseOptions({
+    toolSpecs: [],
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return true
+    },
+    runModel: async () => ({ content: '', toolCalls: [] }),
+  }))
+
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'empty_model_response')
+  assert.match(result.text, /模型未返回可显示内容/)
+  assert.equal(checkpoint?.final?.incomplete, true)
+  assert.equal(checkpoint?.final?.reason, 'empty_model_response')
 })
 
 test('pre-tool listeners cannot replace host call identity or forge checkpoint state', async () => {

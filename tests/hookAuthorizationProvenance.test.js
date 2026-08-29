@@ -12,8 +12,18 @@ const {
   dispatchHooks,
   upsertHook,
 } = await import('../server/services/hooksService.js')
-const { revalidateHookAuthorization } = await import('../server/services/approvalGate.js')
+const {
+  releaseApproval,
+  requestApproval,
+  revalidateHookAuthorization,
+} = await import('../server/services/approvalGate.js')
+const {
+  decideApproval,
+  listPendingApprovals,
+} = await import('../server/services/approvalStore.js')
+const { createJob } = await import('../server/services/jobStore.js')
 const { closeDb } = await import('../server/db.js')
+const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const previousShellEnabled = process.env.HOOKS_SHELL_ENABLED
 const previousAllowedCommands = process.env.HOOKS_SHELL_ALLOWED_COMMANDS
@@ -72,6 +82,15 @@ async function issueAuthorization() {
   assert.equal(result.permissionDecision, 'allow')
   assert.ok(result.hookAuthorizationProvenance)
   return result.hookAuthorizationProvenance
+}
+
+async function waitForPendingApproval(userId, { tries = 200 } = {}) {
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    const [approval] = listPendingApprovals({ userId, status: 'pending' })
+    if (approval) return approval
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error('timed out waiting for pending approval')
 }
 
 test.after(() => {
@@ -137,6 +156,72 @@ test('live Hook authorization is exact-call scoped and serialized copies are che
   })
   assert.equal(changedArgs.proceed, false)
   assert.equal(changedArgs.code, 'hook_authorization_args_mismatch')
+})
+
+test('live Hook allow cannot bypass run_code per-call human approval', async () => {
+  const session = issueTestSession({
+    email: `hook-run-code-${process.pid}@example.com`,
+  })
+  const jobId = `hook-run-code-job-${process.pid}`
+  const stepId = `hook-run-code-step-${process.pid}`
+  const requestId = `hook-run-code-request-${process.pid}`
+  const toolCallId = `hook-run-code-call-${process.pid}`
+  const codeArgs = Object.freeze({
+    code: 'return 6 * 7',
+    description: 'Calculate an answer in the isolated code-mode worker',
+  })
+  createJob({
+    id: jobId,
+    userId: session.userId,
+    title: 'Hook run_code approval regression',
+    prompt: 'test',
+  })
+  const hook = upsertHook(hookInput({
+    userId: session.userId,
+    toolPattern: 'run_code',
+  }))
+  const preHook = await dispatchHooks({
+    userId: session.userId,
+    origin: 'job',
+    jobId,
+    stepId,
+    sessionId: null,
+    requestId,
+    toolCallId,
+    event: 'pre_tool_use',
+    tool: 'run_code',
+    args: codeArgs,
+    hookInvocationId: nextHookInvocationId('hook-run-code-issue'),
+  })
+  assert.equal(preHook.allow, true)
+  assert.equal(preHook.permissionDecision, 'allow')
+  assert.ok(preHook.hookAuthorizationProvenance)
+
+  const pending = requestApproval({
+    userId: session.userId,
+    origin: 'job',
+    jobId,
+    stepId,
+    sessionId: null,
+    requestId,
+    toolCallId,
+    toolName: 'run_code',
+    args: codeArgs,
+    mode: 'unattended',
+    hookAuthorizationProvenance: preHook.hookAuthorizationProvenance,
+  })
+  const approval = await waitForPendingApproval(session.userId)
+  assert.equal(approval.toolName, 'run_code')
+  assert.equal(approval.risk, 'high')
+  assert.deepEqual(approval.args, codeArgs)
+
+  decideApproval({ userId: session.userId, id: approval.id, decision: 'approve' })
+  releaseApproval(approval.id)
+  const result = await pending
+  assert.equal(result.proceed, true)
+  assert.equal(result.approvalId, approval.id)
+  assert.notEqual(result.hookAuthorized, true)
+  deleteHook(session.userId, hook.id)
 })
 
 test('checkpoint Hook authorization fails after disable, configuration drift, or deletion', async () => {

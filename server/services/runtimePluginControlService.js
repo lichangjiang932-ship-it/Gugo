@@ -8,12 +8,20 @@ import {
 import { resolveAuthMode } from '../adapters/authAccount.js'
 import {
   getPlugin,
+  getPluginDefinition,
   getRuntimePlugin,
   listDistributedPlugins,
   listRuntimePlugins,
-  registerPlugin,
+  registerPluginDefinition,
   unregisterPlugin,
 } from '../plugins/pluginRegistry.js'
+import {
+  createDistributedPluginDefinition,
+  distributedPluginFromDefinition,
+  releasePluginSnapshotFromDefinition,
+  runtimeManifestFromPluginDefinition,
+  runtimeTransformerToolName,
+} from '../plugins/pluginDefinition.js'
 import { verifyPluginEntryIntegrity } from '../plugins/pluginIntegrity.js'
 import { readPluginEntryFile } from '../plugins/pluginEntryFile.js'
 import { planRuntimePluginRestore } from '../plugins/runtimePluginRestorePlanner.js'
@@ -26,6 +34,7 @@ import { runTransformer, validateTransformer } from '../plugins/pluginSandbox.js
 import {
   getRuntimePluginPermissionGrant,
   grantRuntimePluginPermissions,
+  hasRuntimePluginPermissionGrant,
   revokeRuntimePluginPermissionGrant,
   runtimePluginPermissionGrantMatches,
 } from './runtimePluginPermissionGrantStore.js'
@@ -115,22 +124,17 @@ function isRollbackEligibleRestoreError(error) {
   return ROLLBACK_ELIGIBLE_RESTORE_ERRORS.has(error?.code)
 }
 
-export function runtimeTransformerToolName(pluginId) {
-  const normalized = String(pluginId || '').trim().replaceAll('-', '_')
-  const base = `plugin_${normalized}`
-  if (base.length <= 64) return base
-  const suffix = createHash('sha256').update(String(pluginId)).digest('hex').slice(0, 8)
-  return `${base.slice(0, 55)}_${suffix}`
-}
+export { runtimeTransformerToolName }
 
 export async function runRuntimePluginSandbox(
   pluginId,
   input,
   { permissionApproval = null } = {},
 ) {
-  const plugin = requireTransformerPlugin(pluginId)
+  const definition = requireTransformerPluginDefinition(pluginId)
+  const plugin = distributedPluginFromDefinition(definition)
   const source = await readTransformerSource(plugin)
-  const candidate = newReleaseCandidate(plugin, source)
+  const candidate = newReleaseCandidate(definition, source)
   const permissionRequest = permissionRequestForRelease(candidate)
   const shouldPersistPermissionGrant = authorizePermissionRequest(
     permissionRequest,
@@ -198,51 +202,6 @@ async function readTransformerSource(plugin) {
   }
 }
 
-function transformerRuntimeManifest(plugin, toolName) {
-  return {
-    id: plugin.id,
-    name: plugin.name,
-    version: plugin.version,
-    requires: [...(plugin.requires || [])],
-    contributes: [...new Set([
-      ...(plugin.contributes || []),
-      `tool:${toolName}`,
-    ])],
-    ...(plugin.apiVersion === undefined ? {} : { apiVersion: plugin.apiVersion }),
-    ...(plugin.hostVersion === undefined ? {} : { hostVersion: plugin.hostVersion }),
-    ...(plugin.dependencyVersions === undefined ? {} : { dependencyVersions: plugin.dependencyVersions }),
-    ...(plugin.permissions === undefined ? {} : { permissions: plugin.permissions }),
-    ...(plugin.configSchema === undefined ? {} : { configSchema: plugin.configSchema }),
-    ...(plugin.stateSchemaVersion === undefined ? {} : { stateSchemaVersion: plugin.stateSchemaVersion }),
-    ...(plugin.integrity === undefined ? {} : { integrity: plugin.integrity }),
-  }
-}
-
-function releasePluginSnapshot(plugin) {
-  return {
-    id: plugin.id,
-    name: plugin.name,
-    version: plugin.version,
-    type: 'transformer',
-    ...(plugin.entry === undefined ? {} : { entry: plugin.entry }),
-    description: plugin.description || '',
-    author: plugin.author || '',
-    license: plugin.license || '',
-    tags: [...(plugin.tags || [])],
-    requires: [...(plugin.requires || [])],
-    contributes: [...(plugin.contributes || [])],
-    capabilities: [...(plugin.capabilities || [])],
-    ...(plugin.apiVersion === undefined ? {} : { apiVersion: plugin.apiVersion }),
-    ...(plugin.hostVersion === undefined ? {} : { hostVersion: plugin.hostVersion }),
-    ...(plugin.dependencyVersions === undefined ? {} : { dependencyVersions: plugin.dependencyVersions }),
-    ...(plugin.permissions === undefined ? {} : { permissions: plugin.permissions }),
-    ...(plugin.configSchema === undefined ? {} : { configSchema: plugin.configSchema }),
-    ...(plugin.stateSchemaVersion === undefined ? {} : { stateSchemaVersion: plugin.stateSchemaVersion }),
-    ...(plugin.integrity === undefined ? {} : { integrity: plugin.integrity }),
-    ...(plugin.distribution === undefined ? {} : { distribution: plugin.distribution }),
-  }
-}
-
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
   for (const child of Object.values(value)) deepFreeze(child)
@@ -285,14 +244,15 @@ function assertStoredPermissionGrant(release) {
   return request
 }
 
-function newReleaseCandidate(plugin, source) {
+function newReleaseCandidate(definition, source) {
+  const plugin = distributedPluginFromDefinition(definition)
   const createdAt = Date.now()
   return {
     releaseId: `rel-${createdAt.toString(36)}-${randomUUID()}`,
     pluginId: plugin.id,
     sourceDigest: releaseDigest(source),
     source,
-    plugin: releasePluginSnapshot(plugin),
+    plugin: releasePluginSnapshotFromDefinition(definition),
     createdAt,
   }
 }
@@ -345,12 +305,13 @@ async function transformerHealthResult({ source, plugin }) {
   }
 }
 
-async function prepareTransformerRelease(plugin, {
+async function prepareTransformerRelease(definition, {
   validationErrorCode,
   permissionApproval = null,
 }) {
+  const plugin = distributedPluginFromDefinition(definition)
   const source = await readTransformerSource(plugin)
-  const candidate = newReleaseCandidate(plugin, source)
+  const candidate = newReleaseCandidate(definition, source)
   const permissionRequest = permissionRequestForRelease(candidate)
   const shouldPersistPermissionGrant = authorizePermissionRequest(
     permissionRequest,
@@ -442,13 +403,14 @@ function assertReleaseDependenciesAvailable(plugin) {
   })
 }
 
-function requireTransformerPlugin(pluginId) {
-  const plugin = getPlugin(pluginId)
-  if (!plugin) throw serviceError('PLUGIN_NOT_FOUND', '插件不存在', 404)
+function requireTransformerPluginDefinition(pluginId) {
+  const definition = getPluginDefinition(pluginId)
+  if (!definition) throw serviceError('PLUGIN_NOT_FOUND', '插件不存在', 404)
+  const plugin = distributedPluginFromDefinition(definition)
   if (plugin.type !== 'transformer') {
     throw serviceError('PLUGIN_RUNTIME_TYPE_UNSUPPORTED', '仅 transformer 插件支持运行时启停', 400)
   }
-  return plugin
+  return definition
 }
 
 async function installTransformerRelease(release) {
@@ -463,11 +425,12 @@ async function installTransformerRelease(release) {
     throw runtimeStateConflict('同 ID runtime 不属于目标 transformer Release')
   }
 
+  const definition = createDistributedPluginDefinition(plugin)
   const toolName = runtimeTransformerToolName(plugin.id)
   const slot = Object.seal({ release, ownershipToken: Symbol(plugin.id) })
   activeTransformerSlots.set(plugin.id, slot)
   try {
-    const runtime = await registerPlugin(transformerRuntimeManifest(plugin, toolName), (context) => {
+    const runtime = await registerPluginDefinition(definition, (context) => {
       context.lifecycle.onDispose(() => {
         if (activeTransformerSlots.get(plugin.id) === slot) activeTransformerSlots.delete(plugin.id)
       })
@@ -509,12 +472,15 @@ function runtimeManifestView({ plugin, runtime }) {
     }
   }
   if (plugin?.type !== 'transformer') return null
+  const definition = getPluginDefinition(plugin.id)
+  if (!definition) return null
+  const manifest = runtimeManifestFromPluginDefinition(definition)
   return {
-    id: plugin.id,
-    name: plugin.name,
-    version: plugin.version,
-    requires: [],
-    contributes: [`tool:${runtimeTransformerToolName(plugin.id)}`],
+    id: manifest.id,
+    name: manifest.name,
+    version: manifest.version,
+    requires: [...manifest.requires],
+    contributes: [...manifest.contributes],
   }
 }
 
@@ -540,53 +506,71 @@ function storedRelease(pluginId, releaseId) {
 function inventoryEntry(plugin, state, runtimeValue = null) {
   const id = plugin?.id || state?.pluginId || runtimeValue?.id
   const runtime = runtimeValue || getRuntimePlugin(id)
-  const isTransformer = plugin?.type === 'transformer'
-  const distribution = plugin?.distribution || null
-  const processOnly = !plugin && !!runtime
-  const slotRelease = activeTransformerSlots.get(id)?.release || null
-  const activeRelease = slotRelease || storedRelease(id, state?.activeReleaseId)
-  const previousRelease = storedRelease(id, state?.previousReleaseId)
-  const latestRelease = plugin || state ? getLatestRuntimePluginRelease(id) : null
+  const ownedSlot = activeTransformerSlots.get(id) || null
+  const slotRelease = ownedSlot?.release || null
+  const ownsTransformerRuntime = ownedSlot !== null
+  const hostRuntime = Boolean(runtime && !ownsTransformerRuntime)
+  const currentTransformer = plugin?.type === 'transformer' ? plugin : null
+  const transformer = ownsTransformerRuntime
+    ? slotRelease.plugin
+    : hostRuntime ? null : currentTransformer
+  const isTransformer = Boolean(transformer)
+  const distribution = transformer?.distribution || null
+  const activeRelease = hostRuntime
+    ? null
+    : slotRelease || storedRelease(id, state?.activeReleaseId)
+  const previousRelease = hostRuntime
+    ? null
+    : storedRelease(id, state?.previousReleaseId)
+  const latestRelease = hostRuntime
+    ? null
+    : transformer || state ? getLatestRuntimePluginRelease(id) : null
   const permissionRelease = activeRelease || latestRelease
   const permissionRequest = permissionRelease
     ? permissionRequestForRelease(permissionRelease)
     : null
+  const storedPermissionGrant = getRuntimePluginPermissionGrant(id)
+  const permissionGrantPresent = hasRuntimePluginPermissionGrant(id)
   const requestedPermissions = permissionRequest?.permissions
-    || (isTransformer ? listRuntimeTransformerPermissions(plugin) : Object.freeze([]))
-  const permissionGrant = isTransformer
-    ? getRuntimePluginPermissionGrant(id)
-    : null
+    || storedPermissionGrant?.permissions
+    || (isTransformer ? listRuntimeTransformerPermissions(transformer) : Object.freeze([]))
+  const exposePermissionGrant = isTransformer || Boolean(storedPermissionGrant && !hostRuntime)
   return {
     id,
-    name: plugin?.name || runtime?.name || state?.pluginId || id,
-    version: plugin?.version || runtime?.version || null,
-    type: plugin?.type || (runtime ? 'runtime' : null),
+    name: runtime?.name || transformer?.name || state?.pluginId || id,
+    version: runtime?.version || transformer?.version || null,
+    type: isTransformer ? 'transformer' : (runtime ? 'runtime' : null),
     source: isTransformer
       ? distribution?.sourceKind || 'unknown-plugin-source'
-      : processOnly ? 'host-runtime' : 'persisted-state',
-    available: !!plugin || !!runtime,
+      : hostRuntime ? 'host-runtime' : 'persisted-state',
+    available: Boolean(transformer || runtime),
     controllable: isTransformer,
-    enabled: processOnly ? runtime?.state === 'active' : state?.enabled === true,
+    canRevokePermissions: permissionGrantPresent,
+    enabled: hostRuntime ? runtime?.state === 'active' : state?.enabled === true,
     active: runtime?.state === 'active',
     runtimeState: runtime?.state || 'inactive',
     installedAt: runtime?.installedAt || null,
-    manifest: runtimeManifestView({ plugin, runtime }),
-    toolName: isTransformer ? runtimeTransformerToolName(plugin.id) : null,
-    lastError: state?.lastError || null,
-    updatedAt: state?.updatedAt || null,
+    manifest: runtimeManifestView({ plugin: transformer, runtime }),
+    toolName: isTransformer ? runtimeTransformerToolName(id) : null,
+    lastError: hostRuntime ? null : state?.lastError || null,
+    updatedAt: hostRuntime ? null : state?.updatedAt || null,
     activeRelease: releaseIdentity(activeRelease),
     previousRelease: releaseIdentity(previousRelease),
     latestRelease: releaseIdentity(latestRelease),
-    releaseCount: plugin || state ? countRuntimePluginReleases(id) : 0,
-    lastRollback: state?.lastRollback || null,
-    permissionGrant: isTransformer
+    releaseCount: hostRuntime ? 0 : plugin || state ? countRuntimePluginReleases(id) : 0,
+    lastRollback: hostRuntime ? null : state?.lastRollback || null,
+    permissionGrant: exposePermissionGrant
       ? {
           required: true,
-          granted: Boolean(permissionRequest && runtimePluginPermissionGrantMatches(permissionRequest)),
+          granted: Boolean(
+            permissionRequest && runtimePluginPermissionGrantMatches(permissionRequest),
+          ),
           permissions: [...requestedPermissions],
-          approvalDigest: permissionRequest?.approvalDigest || null,
-          grantedAt: permissionGrant?.grantedAt || null,
-          updatedAt: permissionGrant?.updatedAt || null,
+          approvalDigest: permissionRequest?.approvalDigest
+            || storedPermissionGrant?.approvalDigest
+            || null,
+          grantedAt: storedPermissionGrant?.grantedAt || null,
+          updatedAt: storedPermissionGrant?.updatedAt || null,
         }
       : null,
     ...(distribution
@@ -637,7 +621,8 @@ async function removeFailedInitialActivation(installation) {
 export function enableRuntimePlugin(pluginId, { permissionApproval = null } = {}) {
   const id = String(pluginId || '').trim()
   return serializePluginOperation(id, async () => {
-    const plugin = requireTransformerPlugin(id)
+    const definition = requireTransformerPluginDefinition(id)
+    const plugin = distributedPluginFromDefinition(definition)
     const expectedState = getRuntimePluginState(id)
       || setRuntimePluginState({ pluginId: id, enabled: false })
     try {
@@ -677,7 +662,7 @@ export function enableRuntimePlugin(pluginId, { permissionApproval = null } = {}
       if (existing) throw runtimeStateConflict()
 
       assertReleaseDependenciesAvailable(plugin)
-      const prepared = await prepareTransformerRelease(plugin, {
+      const prepared = await prepareTransformerRelease(definition, {
         validationErrorCode: 'PLUGIN_ACTIVATION_VALIDATION_FAILED',
         permissionApproval,
       })
@@ -714,7 +699,8 @@ export function enableRuntimePlugin(pluginId, { permissionApproval = null } = {}
 export function reloadRuntimePlugin(pluginId, { permissionApproval = null } = {}) {
   const id = String(pluginId || '').trim()
   return serializePluginOperation(id, async () => {
-    const plugin = requireTransformerPlugin(id)
+    const definition = requireTransformerPluginDefinition(id)
+    const plugin = distributedPluginFromDefinition(definition)
     const runtime = getRuntimePlugin(id)
     const slot = activeTransformerSlots.get(id)
     if (runtime?.state !== 'active' || !slot?.release) {
@@ -729,7 +715,7 @@ export function reloadRuntimePlugin(pluginId, { permissionApproval = null } = {}
     const previous = slot.release
     let prepared
     try {
-      prepared = await prepareTransformerRelease(plugin, {
+      prepared = await prepareTransformerRelease(definition, {
         validationErrorCode: 'PLUGIN_RELOAD_VALIDATION_FAILED',
         permissionApproval,
       })
@@ -783,10 +769,17 @@ async function disableRuntimePluginOperation(id, { revokePermissions = false } =
     const plugin = getPlugin(id)
     const currentState = getRuntimePluginState(id)
     const runtime = getRuntimePlugin(id)
-    if (plugin && plugin.type !== 'transformer') {
+    const ownsTransformerRuntime = activeTransformerSlots.has(id)
+    const permissionGrantPresent = revokePermissions
+      ? hasRuntimePluginPermissionGrant(id)
+      : false
+    if (revokePermissions && !permissionGrantPresent) {
+      throw serviceError('PLUGIN_PERMISSION_GRANT_NOT_FOUND', '插件没有可撤销的运行时授权', 404)
+    }
+    if (!revokePermissions && !ownsTransformerRuntime && plugin && plugin.type !== 'transformer') {
       throw serviceError('PLUGIN_RUNTIME_TYPE_UNSUPPORTED', '仅 transformer 插件支持运行时启停', 400)
     }
-    if (runtime && !activeTransformerSlots.has(id)) {
+    if (!revokePermissions && runtime && !ownsTransformerRuntime) {
       throw serviceError('PLUGIN_RUNTIME_TYPE_UNSUPPORTED', '宿主 runtime 插件不可通过该端点停用', 400)
     }
     if (!plugin && !currentState && !runtime) throw serviceError('PLUGIN_NOT_FOUND', '插件不存在', 404)
@@ -797,7 +790,7 @@ async function disableRuntimePluginOperation(id, { revokePermissions = false } =
       : expectedState
     if (revokePermissions) revokeRuntimePluginPermissionGrant(id)
     try {
-      if (runtime) await unregisterPlugin(id)
+      if (runtime && ownsTransformerRuntime) await unregisterPlugin(id)
       const state = deactivateRuntimePluginRelease({
         pluginId: id,
         expectedActiveReleaseId: expectedState.activeReleaseId,
@@ -854,6 +847,7 @@ async function installAndPersistRelease({
   expectedState,
   permissionRequest = permissionRequestForRelease(release),
   persistPermissionGrant = false,
+  rollbackReceipt = null,
 }) {
   const installation = await installTransformerRelease(release)
   try {
@@ -875,6 +869,7 @@ async function installAndPersistRelease({
           expectedEnabled: expectedState.enabled,
           permissionRequest,
           persistPermissionGrant,
+          rollbackReceipt,
         })
   } catch (error) {
     await removeFailedInitialActivation(installation)
@@ -882,11 +877,12 @@ async function installAndPersistRelease({
   }
 }
 
-async function restoreOneRuntimePlugin(plugin, state, assertDependencies) {
+async function restoreOneRuntimePlugin(definition, state, assertDependencies) {
+  const plugin = distributedPluginFromDefinition(definition)
   if (!state.activeReleaseId) {
     assertDependencies(plugin)
     assertReleaseDependenciesAvailable(plugin)
-    const prepared = await prepareTransformerRelease(plugin, {
+    const prepared = await prepareTransformerRelease(definition, {
       validationErrorCode: 'PLUGIN_ACTIVATION_VALIDATION_FAILED',
     })
     await installAndPersistRelease({
@@ -929,13 +925,12 @@ async function restoreOneRuntimePlugin(plugin, state, assertDependencies) {
       release: previous,
       previousReleaseId: null,
       expectedState: state,
-    })
-    recordRuntimePluginRollback({
-      pluginId: plugin.id,
-      fromReleaseId: state.activeReleaseId,
-      toReleaseId: previous.releaseId,
-      status: 'succeeded',
-      reason: safeErrorSummary(activeError),
+      rollbackReceipt: {
+        fromReleaseId: state.activeReleaseId,
+        toReleaseId: previous.releaseId,
+        status: 'succeeded',
+        reason: safeErrorSummary(activeError),
+      },
     })
     return Object.freeze({
       attemptedReleaseId: state.activeReleaseId,
@@ -946,27 +941,14 @@ async function restoreOneRuntimePlugin(plugin, state, assertDependencies) {
 }
 
 function resolveRestoreDependencyManifest(pluginId, state) {
-  const releaseIds = [...new Set([
-    state?.activeReleaseId,
-    state?.previousReleaseId,
-  ].filter(Boolean))]
-  if (releaseIds.length === 0) return getPlugin(pluginId)
+  const activeReleaseId = state?.activeReleaseId
+  if (!activeReleaseId) return getPlugin(pluginId)
 
-  const requires = new Set()
-  let resolvedReleases = 0
-  let firstError = null
-  for (const releaseId of releaseIds) {
-    try {
-      const release = hydrateStoredRelease(getRuntimePluginRelease(pluginId, releaseId))
-      if (!release) throw serviceError('PLUGIN_RELEASE_NOT_FOUND', '插件 Release 不存在', 500)
-      resolvedReleases += 1
-      for (const dependencyId of release.plugin.requires || []) requires.add(dependencyId)
-    } catch (error) {
-      if (!firstError) firstError = error
-    }
-  }
-  if (resolvedReleases === 0 && firstError) throw firstError
-  return { requires: [...requires] }
+  const activeRelease = hydrateStoredRelease(
+    getRuntimePluginRelease(pluginId, activeReleaseId),
+  )
+  if (!activeRelease) throw serviceError('PLUGIN_RELEASE_NOT_FOUND', '插件 Release 不存在', 500)
+  return activeRelease.plugin
 }
 
 function restoreDependencyError(code, message, details = {}) {
@@ -1057,8 +1039,8 @@ export async function restoreEnabledRuntimePlugins({ env = process.env } = {}) {
       const restored = await serializePluginOperation(entry.pluginId, async () => {
         const currentState = getRuntimePluginState(entry.pluginId)
         if (!currentState?.enabled) return null
-        const plugin = requireTransformerPlugin(entry.pluginId)
-        return restoreOneRuntimePlugin(plugin, currentState, (candidate) => {
+        const definition = requireTransformerPluginDefinition(entry.pluginId)
+        return restoreOneRuntimePlugin(definition, currentState, (candidate) => {
           assertCandidateDependencies({
             plugin: candidate,
             consumerId: entry.pluginId,

@@ -432,7 +432,13 @@ export function appendTurnEventsInTransaction(entries = [], db, {
           state: checkpointState,
           now: value.createdAt,
         }, db)
-        if (!checkpoint?.state) throw new Error('Failed to persist turn checkpoint')
+        if (!checkpoint?.state) {
+          const error = new Error('Failed to persist turn checkpoint')
+          error.code = 'TURN_CHECKPOINT_PERSISTENCE_FAILED'
+          error.status = 503
+          error.retryable = true
+          throw error
+        }
       }
       if (value.type === 'turn.checkpoint') {
         deleteOlderCheckpoints.run(userId, value.sessionId, value.turnId, value.sequence)

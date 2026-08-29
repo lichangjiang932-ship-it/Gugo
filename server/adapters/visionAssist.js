@@ -12,6 +12,9 @@
  * 不让整条对话挂掉 —— 让主模型在缺图情况下尽量回答。
  */
 
+import { isLocalEndpoint } from '../utils/endpointProfile.js'
+import { fetchSafeOutbound } from '../utils/outboundNetworkGuard.js'
+
 const DEFAULT_PROMPT = '请用一段简洁的中文描述这张图片，包括主体、场景、文字、配色和明显细节，便于纯文本模型理解。'
 
 let userResolver = null
@@ -77,7 +80,7 @@ function extractImageParts(message) {
   return message.content.filter(isImagePart)
 }
 
-async function describeOneImage({ imagePart, config, secret, fetchImpl, language }) {
+async function describeOneImage({ imagePart, config, secret, fetchImpl, lookup, language }) {
   const url = `${config.baseUrl}/chat/completions`
   const prompt = language === 'en'
     ? 'Describe this image in a concise English paragraph, including main subject, scene, text, colors and notable details, so a text-only model can understand it.'
@@ -95,7 +98,8 @@ async function describeOneImage({ imagePart, config, secret, fetchImpl, language
     const headers = { 'Content-Type': 'application/json' }
     const apiKey = String(secret?.apiKey || '').trim()
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`
-    const response = await fetchImpl(url, {
+    const resolveDns = typeof lookup === 'function' || fetchImpl === globalThis.fetch
+    const response = await fetchSafeOutbound(url, {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -110,6 +114,11 @@ async function describeOneImage({ imagePart, config, secret, fetchImpl, language
         ],
       }),
       signal: controller.signal,
+    }, {
+      fetchImpl,
+      allowLocal: isLocalEndpoint(config.baseUrl),
+      resolveDns,
+      ...(typeof lookup === 'function' ? { lookup } : {}),
     })
     const text = await response.text()
     let data = null
@@ -138,6 +147,8 @@ export async function describeImageAttachments({
   userId = null,
   env = process.env,
   fetchImpl = fetch,
+  lookup,
+  resolveAttachment,
 } = {}) {
   const assistConfig = resolveVisionAssistConfig({ userId, env })
   if (!assistConfig) return []
@@ -147,13 +158,30 @@ export async function describeImageAttachments({
   let processed = 0
   for (const attachment of attachments) {
     if (processed >= maxImages) break
-    const url = attachment?.url || attachment?.imageUrl || attachment?.image_url?.url
+    let resolved = attachment
+    if (!attachment?.url && typeof resolveAttachment === 'function') {
+      try {
+        resolved = await resolveAttachment(attachment)
+      } catch (error) {
+        results.push({
+          index: processed,
+          ok: false,
+          description: '',
+          error: error?.message || 'attachment resolution failed',
+          source: 'platform-reference',
+        })
+        processed += 1
+        continue
+      }
+    }
+    const url = resolved?.url || resolved?.imageUrl || resolved?.image_url?.url
     if (!url) continue
     const result = await describeOneImage({
       imagePart: { type: 'image_url', image_url: { url } },
       config: assistConfig.config,
       secret: assistConfig.secret,
       fetchImpl,
+      lookup,
       language,
     })
     results.push({
@@ -161,7 +189,7 @@ export async function describeImageAttachments({
       ok: result.ok,
       description: result.description || '',
       error: result.message || '',
-      source: url,
+      source: String(url).startsWith('data:') ? 'inline-data' : url,
     })
     processed += 1
   }
@@ -173,6 +201,7 @@ export async function attachVisionDescriptions({
   userId = null,
   env = process.env,
   fetchImpl = fetch,
+  lookup,
 } = {}) {
   const assistConfig = resolveVisionAssistConfig({ userId, env })
   if (!assistConfig) {
@@ -209,6 +238,7 @@ export async function attachVisionDescriptions({
         config: assistConfig.config,
         secret: assistConfig.secret,
         fetchImpl,
+        lookup,
         language,
       })
       if (result.ok) {

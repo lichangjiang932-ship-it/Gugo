@@ -144,7 +144,12 @@ const isolatedFiles = files.filter(requiresNativeTransform)
 const defaultBatchSize = process.platform === 'win32'
   ? 100
   : Math.max(1, batchFiles.length)
-const batchSize = positiveIntegerEnv('TEST_BATCH_SIZE', defaultBatchSize)
+// Node evaluates coverage thresholds per process. Keep the normal Windows
+// batching, but give coverage one complete test process so the gate represents
+// the entire selected suite rather than an arbitrary 100-file slice.
+const batchSize = coverageMode
+  ? Math.max(1, batchFiles.length)
+  : positiveIntegerEnv('TEST_BATCH_SIZE', defaultBatchSize)
 
 function chunkFiles(source, size) {
   const chunks = []
@@ -266,6 +271,39 @@ function runTestProcess(args, { captureOutput = false, timeoutMs }) {
 }
 
 let failed = false
+const failureSummaries = []
+
+function processOutcome(result) {
+  let status = 'failed'
+  if (result.error?.code === 'ETIMEDOUT') status = 'timeout'
+  else if (result.error) status = 'start-error'
+  else if (result.signal) status = 'signaled'
+  else if (isWindowsNativeCrash(result)) status = 'native-crash'
+
+  return [
+    `status=${status}`,
+    `exitCode=${result.status ?? 'none'}`,
+    `signal=${result.signal || 'none'}`,
+    `errorCode=${result.error?.code || 'none'}`,
+  ].join('; ')
+}
+
+function reportFailedProcess(result, label) {
+  const summary = `${label}; ${processOutcome(result)}`
+  console.error(`[run-tests] failed ${summary}`)
+  return summary
+}
+
+function rememberFailure(summary) {
+  if (summary && !failureSummaries.includes(summary)) failureSummaries.push(summary)
+}
+
+function reportCoverageFailure(result) {
+  const details = coverageThresholdFailures(result).join('; ')
+  const summary = `coverage gate; status=failed; ${details || 'threshold was not met'}`
+  console.error(`[run-tests] failed ${summary}`)
+  return summary
+}
 
 if (batchFiles.length) {
   const batches = chunkFiles(batchFiles, batchSize)
@@ -281,11 +319,21 @@ if (batchFiles.length) {
       ...batchNodeArgs,
       ...batch,
     ], {
+      captureOutput: coverageMode,
       timeoutMs: batchTimeoutMs,
     })
+    if (coverageMode) forwardCapturedOutput(result)
     reportProcessError(result, label, batchTimeoutMs)
     console.log(`[run-tests] finished ${label} in ${Date.now() - startedAt}ms; status=${result.status ?? 'none'}`)
-    if ((result.status ?? 1) !== 0) failed = true
+    if ((result.status ?? 1) !== 0) {
+      failed = true
+      const coverageOnlyFailure = coverageMode
+        && !hasTapFailure(result)
+        && coverageThresholdFailures(result).length > 0
+      rememberFailure(coverageOnlyFailure
+        ? reportCoverageFailure(result)
+        : reportFailedProcess(result, label))
+    }
     if (result.error?.code === 'ETIMEDOUT') break
   }
 }
@@ -297,13 +345,23 @@ function isWindowsNativeCrash(result) {
 }
 
 function hasTapFailure(result) {
-  const output = [result.stdout, result.stderr]
-    .filter(Boolean)
-    .map((chunk) => chunk.toString('utf8'))
-    .join('\n')
+  const output = capturedOutput(result)
 
   return /^\s*not ok\b/m.test(output)
     || /^\s*# fail\s+[1-9]\d*\s*$/m.test(output)
+}
+
+function capturedOutput(result) {
+  return [result.stdout, result.stderr]
+    .filter(Boolean)
+    .map((chunk) => chunk.toString('utf8'))
+    .join('\n')
+}
+
+function coverageThresholdFailures(result) {
+  return [...capturedOutput(result).matchAll(
+    /^# Error: ([^\r\n]* coverage does not meet threshold of [^\r\n]+)\.?$/gmu,
+  )].map((match) => match[1])
 }
 
 function forwardCapturedOutput(result) {
@@ -313,6 +371,7 @@ function forwardCapturedOutput(result) {
 
 for (const file of isolatedFiles) {
   let passed = false
+  let lastFailureSummary = null
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const loaderArgs = file.endsWith('.jsx')
       ? ['--import', './scripts/jsxRegister.mjs']
@@ -335,13 +394,17 @@ for (const file of isolatedFiles) {
       passed = true
       break
     }
+    lastFailureSummary = reportFailedProcess(result, label)
     if (result.error?.code === 'ETIMEDOUT') break
     if (hasTapFailure(result) || !isWindowsNativeCrash(result) || attempt === 3) break
     console.warn(
       `[run-tests] native transform crashed for ${file}; retrying (${attempt + 1}/3)`,
     )
   }
-  if (!passed) failed = true
+  if (!passed) {
+    failed = true
+    rememberFailure(lastFailureSummary || `isolated test ${file}; status=failed; exitCode=unknown`)
+  }
 }
 
 if (offlineEvalMode) {
@@ -353,13 +416,23 @@ if (offlineEvalMode) {
     if (offlineEvalReportFailed(report)) {
       for (const message of offlineEvalFailureMessages(report)) {
         console.error(`[run-tests] offline eval ${message}`)
+        rememberFailure(`offline eval; status=failed; ${message}`)
       }
       failed = true
     }
   } catch (error) {
-    console.error(`[run-tests] ${error?.message || error}`)
+    const message = error?.message || String(error)
+    console.error(`[run-tests] ${message}`)
+    rememberFailure(`offline eval; status=failed; ${message}`)
     failed = true
   }
+}
+
+if (failed) {
+  console.error(`[run-tests] final result: FAIL (${failureSummaries.length} final failure(s))`)
+  for (const summary of failureSummaries) console.error(`[run-tests] - ${summary}`)
+} else {
+  console.log(`[run-tests] final result: PASS (${files.length} test file(s))`)
 }
 
 rmSync(testDataRoot, { recursive: true, force: true })

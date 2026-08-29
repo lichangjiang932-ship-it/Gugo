@@ -62,6 +62,9 @@ export function SettingsPluginsPanel({ navigate, t }) {
           action,
           message: String(cause?.message || '').slice(0, 200),
         })
+        if (action === 'revoke-permissions') {
+          await load()
+        }
       }
     } finally {
       setBusy('')

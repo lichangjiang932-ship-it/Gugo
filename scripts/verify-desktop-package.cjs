@@ -7,6 +7,7 @@ const REQUIRED_DESKTOP_ASAR_FILES = Object.freeze([
   'server/adapters/builtinSqliteTurnPersistenceBootstrap.js',
   'server/adapters/sqliteTurnPersistenceAdapter.js',
   'server/core/turnPersistenceBootstrap.js',
+  'server/services/desktopParentGuard.js',
   'server/services/runtimeServerStartup.js',
   'shared/runtimeConfigRecoveryProtocol.js',
   'src/lib/officeExport/documentExport.js',

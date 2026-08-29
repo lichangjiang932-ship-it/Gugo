@@ -28,6 +28,101 @@ const VALID_STAGES = new Set(TOOL_AUDIT_STAGES)
 const VALID_STATUSES = new Set(['ok', 'error', 'denied', 'timeout', 'truncated', 'cancelled'])
 const REDACTED = '[REDACTED]'
 const MAX_RESULT_PREVIEW_CHARS = 500
+const RUN_CODE_TOOL_NAME = 'run_code'
+const CODEX_MODELS_TOOL_NAME = 'codex_models'
+const SHA256_RE = /^[a-f0-9]{64}$/iu
+
+function runCodeAuditArgsSummary(args) {
+  const value = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+  const description = typeof value.description === 'string'
+    ? value.description.slice(0, 1024)
+    : ''
+  if (typeof value.code === 'string') {
+    return {
+      description,
+      codeBytes: Buffer.byteLength(value.code, 'utf8'),
+      codeSha256: createHash('sha256').update(value.code).digest('hex'),
+    }
+  }
+
+  // Direct/internal run_code callers may already provide the canonical
+  // summary. Preserve it rather than hashing an absent code field as empty.
+  const codeBytes = Number.isSafeInteger(value.codeBytes) && value.codeBytes >= 0
+    ? value.codeBytes
+    : 0
+  const suppliedDigest = String(value.codeSha256 || '').trim()
+  return {
+    description,
+    codeBytes,
+    codeSha256: SHA256_RE.test(suppliedDigest)
+      ? suppliedDigest.toLowerCase()
+      : createHash('sha256').update('').digest('hex'),
+  }
+}
+
+function runCodeAuditResultSummary(result) {
+  if (result == null) return null
+  if (typeof result !== 'object' || Array.isArray(result)) {
+    return { resultType: Array.isArray(result) ? 'array' : typeof result }
+  }
+
+  const summary = {}
+  for (const key of [
+    'ok', 'retryable', 'denied', 'policyDenied', 'cancelled', 'timedOut', 'truncated',
+  ]) {
+    if (typeof result[key] === 'boolean') summary[key] = result[key]
+  }
+  for (const key of ['code', 'grantSource', 'grantKind']) {
+    if (typeof result[key] === 'string' && result[key].trim()) {
+      summary[key] = result[key].trim().slice(0, 128)
+    }
+  }
+  if (Array.isArray(result.logs)) summary.logCount = result.logs.length
+  if (Object.hasOwn(result, 'value')) {
+    summary.valueType = result.value === null
+      ? 'null'
+      : Array.isArray(result.value) ? 'array' : typeof result.value
+  }
+  if (Object.hasOwn(result, 'error')) summary.errorPresent = result.error != null
+  return Object.keys(summary).length > 0 ? summary : { resultType: 'object' }
+}
+
+function codexModelsAuditArgsSummary(args) {
+  const value = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+  return {
+    limit: Number.isSafeInteger(value.limit) ? value.limit : undefined,
+    includeHidden: value.include_hidden === true,
+    hasCursor: typeof value.cursor === 'string' && value.cursor.length > 0,
+  }
+}
+
+function codexModelsAuditResultSummary(result) {
+  const value = result && typeof result === 'object' && !Array.isArray(result) ? result : {}
+  return {
+    ok: value.ok === true,
+    ...(typeof value.code === 'string' ? { code: value.code.slice(0, 128) } : {}),
+    modelCount: Array.isArray(value.models) ? value.models.length : undefined,
+    hasNextCursor: typeof value.next_cursor === 'string' && value.next_cursor.length > 0,
+    ...(value.cancelled === true ? { cancelled: true } : {}),
+    ...(value.retryable === true ? { retryable: true } : {}),
+  }
+}
+
+/**
+ * Apply tool-specific audit minimization at the final persistence boundary.
+ * Source code, opaque cursors, and external catalog contents are intentionally
+ * excluded while other tools retain the existing representation unchanged.
+ */
+export function sanitizeToolAuditPayload({ toolName, args, result } = {}) {
+  const name = String(toolName || '').trim()
+  if (name === RUN_CODE_TOOL_NAME) {
+    return { args: runCodeAuditArgsSummary(args), result: runCodeAuditResultSummary(result) }
+  }
+  if (name === CODEX_MODELS_TOOL_NAME) {
+    return { args: codexModelsAuditArgsSummary(args), result: codexModelsAuditResultSummary(result) }
+  }
+  return { args, result }
+}
 
 function sensitiveAuditKey(key) {
   const normalized = String(key || '').toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -129,6 +224,7 @@ export function writeToolAudit({
   if (!VALID_STATUSES.has(status)) status = 'error'
   const normalizedStage = VALID_STAGES.has(stage) ? stage : null
   try {
+    const auditPayload = sanitizeToolAuditPayload({ toolName, args, result })
     return getDb()
       .prepare(
         `INSERT INTO tool_audit (
@@ -143,9 +239,9 @@ export function writeToolAudit({
         serverId ? String(serverId) : null,
         callId ? String(callId) : null,
         normalizedStage,
-        hashArgs(args),
-        serializeSanitizedAuditArgs(args),
-        auditResultPreview(result),
+        hashArgs(auditPayload.args),
+        serializeSanitizedAuditArgs(auditPayload.args),
+        auditResultPreview(auditPayload.result),
         status,
         durationMs == null ? null : Number(durationMs),
         Number(createdAt) || Date.now(),

@@ -208,6 +208,58 @@ test('resume never replays a side-effecting call left in executing state', async
   )
 })
 
+test('resume never replays run_code left in executing state', async () => {
+  let checkpoint = {
+    messages: [
+      { role: 'user', content: 'compute once' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'run-code-uncertain',
+          type: 'function',
+          function: { name: 'run_code', arguments: '{"code":"return 42"}' },
+        }],
+      },
+    ],
+    toolCalls: [call('run-code-uncertain', 'run_code', { code: 'return 42' }, 'executing')],
+    artifactIds: [],
+    iterations: 0,
+  }
+  let executeCount = 0
+  let toolResult = null
+  const savedStates = []
+
+  const result = await runToolsLoop({
+    job: { id: 'resume-run-code-job', userId: alice },
+    step: { id: 'resume-run-code-step' },
+    messages: [],
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      savedStates.push(checkpoint)
+      return { state: checkpoint }
+    },
+    executeTool: async () => {
+      executeCount += 1
+      return { ok: true, value: 42 }
+    },
+    runModel: async ({ messages }) => {
+      toolResult = JSON.parse(messages.find((message) => message.role === 'tool').content)
+      return { content: 'The prior code execution outcome must be verified.', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.text, 'The prior code execution outcome must be verified.')
+  assert.equal(executeCount, 0)
+  assert.equal(toolResult.code, 'tool_execution_outcome_unknown')
+  assert.equal(toolResult.requiresUserVerification, true)
+  assert.equal(
+    savedStates.some((state) => state.toolCalls?.[0]?.checkpointStatus === 'completed'),
+    true,
+  )
+})
+
 test('an explicitly idempotent executor safely resumes an executing call with the same key and args', async () => {
   const expectedKey = 'job:idempotent-job:step:idempotent-step:tool:write-retry'
   const idempotentUser = issueTestSession({

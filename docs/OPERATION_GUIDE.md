@@ -102,6 +102,7 @@ Gugo 默认没有任何被动出网链路。所有会访问外部网络的通道
 |---|---|---|
 | 模型 Provider 调用 | 唯一必需的出网（用户自配 Key） | 用本地 Ollama / LM Studio（`http://127.0.0.1:11434/v1`）替代云端 Provider |
 | Hub 队列进程 | `HUB_ENABLED=1` 才启动，默认关闭 | 保持默认（不设该变量即离线） |
+| Codex app-server 桥接 | `CODEX_APP_SERVER_ENABLED=1` 才启动外部 OpenAI Codex CLI 子进程；握手后仅按逐次审批开放固定 `model/list` 的 `codex_models` 工具，该 CLI 可能按自身配置联网 | 保持该变量未设置或设为 `0` |
 | 对外 MCP Server 端点 `/mcp` | 默认开启（仅监听同地址） | 设 `MCP_SERVER_ENABLED=0` 关闭 |
 | 桌面自动更新 | 仅用户显式点击“检查更新”才访问 release 服务器，无后台轮询 | 不点即可；也可用 `GUGO_UPDATE_BASE_URL` 指向私有源 |
 | Browser 工具 / `fetch_url` / Web 搜索 | 按需调用，不存在被动外联 | 不触发相关工具即可 |
@@ -124,6 +125,7 @@ Gugo 默认没有任何被动出网链路。所有会访问外部网络的通道
 | `WORKSPACE_FS_ENABLED` | `0` | 开启工作区文件工具 |
 | `WORKSPACE_SHELL_ENABLED` | `0` | 开启共享 `WORKSPACE_ROOT` 的 Shell；等同授予服务器进程权限 |
 | `LOCAL_CODE_EXECUTION_ENABLED` | 本机回环模式为 `1`，其余为 `0` | 控制用户已授权 `read_write` 目录中的代码执行；显式 `0` 可关闭 |
+| `CODEX_APP_SERVER_ENABLED` | `0` | 仅精确值 `1` 启动外部 OpenAI Codex CLI `app-server` 子进程；就绪后逐次审批的 `codex_models` 可发出固定 `model/list`，该 CLI 可能按自身配置联网 |
 | `WORKSPACE_GIT_ENABLED` | `0` | 开启 Git 读取工具 |
 | `WORKSPACE_GIT_MUTATION_ENABLED` | `0` | 允许 Git 写操作 |
 | `GUGO_FFMPEG_PATH` | 自动探测 | `ffmpeg` 可执行文件绝对路径 |
@@ -404,6 +406,7 @@ docker compose logs app
 - 只有反向代理已经清除客户端伪造的转发头时才设置 `TRUST_PROXY=1`。
 - 生产环境建议使用 `APPROVAL_MODE=all`；`off` 会关闭审批队列并保守拒绝未被用户档位或常驻规则授权的危险操作。不要在普通桌面或公网服务上选择用户 `bypass` 档位。
 - 保持 `MCP_STDIO_ENABLED=0`、`HOOKS_SHELL_ENABLED=0`，除非明确需要并配置了最小命令白名单。
+- 不需要语言服务器时不要配置 `LSP_STDIO_PROVIDERS`。LSP 协议工具是只读的，但 server 二进制仍与 Gugo 本机账户同权限；只允许审核过的绝对可执行文件与固定参数，不能把通用 shell 或包执行器加入 allowlist。
 - 不要在普通桌面或公网服务上设置 `BROWSER_NO_SANDBOX=1`。
 - 自定义 Webhook 必须配置签名 Secret，并使用带时间戳的 HMAC；OAuth 回调必须使用固定公网 Origin。详见 [CONFIGURATION.md](./CONFIGURATION.md)。
 - 定期更新依赖并运行测试；任何升级、迁移或清理前先完成备份演练。

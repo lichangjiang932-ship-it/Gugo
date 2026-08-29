@@ -16,6 +16,7 @@ import { selectToolSpecs, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import { listUserToolSpecs } from '../mcp/mcpManager.js'
 import { listRegisteredBrowserToolSpecs } from './browserTools.js'
 import { listAllSpecs } from './toolRegistry.js'
+import { projectToolSpecsForRuntimePolicy } from './turnToolSpecs.js'
 import { allowedArtifactTools, isExplicitCodeSnippetRequest } from './artifactIntent.js'
 import { ensureSafetySystemMessages } from './promptCompiler.js'
 import { injectJobPromptContext, resolveJobSkillContext } from './jobPromptContext.js'
@@ -159,10 +160,18 @@ export function createDefaultExecuteStep({
         .filter((spec) => spec?.function?.name)
         .map((spec) => [spec.function.name, spec]),
     ).values()]
+    // Background jobs do not carry TurnEngine's file-access snapshot, but they
+    // must still honor the same deployment and per-user capability policy
+    // before a schema reaches the model. With no snapshot, workspace tools keep
+    // their existing Job behavior while run_code uses the authoritative runtime
+    // trust predicate and every explicit user tool override remains enforced.
+    const policyVisibleJobToolSpecs = projectToolSpecsForRuntimePolicy(visibleJobToolSpecs, {
+      userId: job.userId,
+    })
     const jobToolSpecs = selectToolSpecs({
       prompt: job.prompt,
       skillId,
-      specs: visibleJobToolSpecs,
+      specs: policyVisibleJobToolSpecs,
       userId: job.userId,
     })
     let outputDirectoryContext = {}

@@ -11,7 +11,7 @@ function modelPhaseUsage(result) {
 
 export async function runModelRequest(s) {
   const i = s.iteration
-  const { DIRECTORY_REVIEW_GUARD_MARKER, extractTextToolCalls, filterCurrentDynamicToolSpecs, mergeCompactionRecovery, snapshotDynamicToolSpecRegistrations, sourceHandoffViolation } = s.d
+  const { DIRECTORY_REVIEW_GUARD_MARKER, extractTextToolCalls, filterCurrentDynamicToolSpecs, getToolMetadata, mergeCompactionRecovery, snapshotDynamicToolSpecRegistrations, sourceHandoffViolation, toolNameFromSpec } = s.d
   {
           const claimed = await s.steeringController.claimFresh(s.appliedSteeringIds)
           if (claimed.messages.length > 0) {
@@ -21,10 +21,27 @@ export async function runModelRequest(s) {
         }
   i.modelResult = undefined
   i.responseTextPublished = false
+  i.finalAnswerEvidenceReviewDigest = s.hasCurrentFinalAnswerEvidenceReview()
+    ? s.currentFinalAnswerEvidenceDigest()
+    : null
+  const hasCurrentAnswerReview = () => !s.requiresFinalAnswerEvidenceReview()
+    || s.hasCurrentFinalAnswerEvidenceReview(i.finalAnswerEvidenceReviewDigest)
   // An active loop may outlive a runtime plugin. Never show a stale schema on
   // a later model round after its executor was revoked or replaced.
   s.activeToolSpecs = filterCurrentDynamicToolSpecs(s.activeToolSpecs, {
     userId: s.job?.userId || null,
+  })
+  const modelMayRequestMutation = s.activeToolSpecs.some((spec) => {
+    const name = toolNameFromSpec(spec)
+    if (!name) return false
+    if (name === 'set_deliverables') return false
+    try {
+      return getToolMetadata(name, { userId: s.job?.userId || null }).isReadOnly !== true
+    } catch {
+      // Unknown/dynamic schemas are external-risk by default. Buffer their
+      // text until the complete response proves that no tool call will run.
+      return true
+    }
   })
   // Capture before the provider call starts. Runtime plugins can be replaced
   // while the model is thinking; any returned call stays bound to the schema
@@ -58,6 +75,21 @@ export async function runModelRequest(s) {
               // remain live, and safe narration is published before tools run.
               if (s.requiresSourceHandoffProtection) return
               if (!s.hasRequiredArtifacts() && !s.codeSnippetRequested) return
+              // A first execution round can stream a completion claim before
+              // the provider reveals toolCalls at the end of the same response.
+              // Keep that text private until concrete execution evidence exists;
+              // otherwise a later write followed by an incomplete terminal would
+              // leave the earlier "completed" claim visible in the transcript.
+              // Pure chat remains live because it does not require execution
+              // evidence.
+              if (s.requiresExecutionEvidence && !s.hasRequiredExecutionEvidence()) return
+              if (modelMayRequestMutation) return
+              // A completion claim produced before the host evidence review is
+              // not authoritative. Keep it private until processModelResult has
+              // either scheduled the review round or accepted a digest-bound
+              // answer, otherwise a later incomplete result can coexist in the
+              // UI with an earlier streamed "completed" fragment.
+              if (!hasCurrentAnswerReview()) return
               streamedText = true
               i.responseTextPublished = true
               if (typeof s.onModelDelta === 'function') {
@@ -103,7 +135,9 @@ export async function runModelRequest(s) {
           if (typeof s.onModelPhase === 'function') await s.onModelPhase({
             phase: 'completed',
             iteration: s.iter,
-            content: s.requiresSourceHandoffProtection && sourceHandoffViolation(i.modelResult?.content)
+            content: returnedToolCalls.length > 0
+              || !hasCurrentAnswerReview()
+              || (s.requiresSourceHandoffProtection && sourceHandoffViolation(i.modelResult?.content))
               ? ''
               : i.modelResult?.content || '',
             toolCalls: i.modelResult?.toolCalls || [],
@@ -117,8 +151,11 @@ export async function runModelRequest(s) {
             : s.hasRequiredExecutionEvidence()
           if (!streamedText
             && i.modelResult?.content
+            && returnedToolCalls.length === 0
             && bufferedTextIsSafe
             && (s.requiresSourceHandoffProtection ? protectedTextHasEvidence : s.hasRequiredArtifacts())
+            && (!s.requiresExecutionEvidence || s.hasRequiredExecutionEvidence())
+            && hasCurrentAnswerReview()
             && typeof s.onModelDelta === 'function') {
             await s.onModelDelta({
               text: i.modelResult.content,
@@ -154,7 +191,9 @@ export async function runModelRequest(s) {
             if (typeof s.onModelPhase === 'function') await s.onModelPhase({
               phase: 'completed',
               iteration: s.iter,
-              content: s.requiresSourceHandoffProtection && sourceHandoffViolation(i.modelResult?.content)
+              content: recoverableToolCalls.length > 0
+                || !hasCurrentAnswerReview()
+                || (s.requiresSourceHandoffProtection && sourceHandoffViolation(i.modelResult?.content))
                 ? ''
                 : i.modelResult?.content || '',
               toolCalls: i.modelResult?.toolCalls || [],

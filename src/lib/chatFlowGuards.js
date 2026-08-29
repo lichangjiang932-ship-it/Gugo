@@ -29,6 +29,7 @@ const MODEL_SETUP_FAILURE_CODES = new Set([
   'MODEL_REQUIRED',
   'MODEL_MISMATCH',
   'MODEL_TOOLS_UNSUPPORTED',
+  'MODEL_FIRST_TOKEN_TIMEOUT',
   'MODEL_TIMEOUT',
   'MODEL_UPSTREAM_ERROR',
 ])
@@ -55,10 +56,37 @@ const STRUCTURED_EXECUTION_FAILURE_KEYS = new Map([
   ['REASONING_RUNAWAY', 'errors.turnReasoningRunaway'],
   ['REPEATED_TOOL_CALL', 'errors.turnRepeatedToolCall'],
   ['REPEATED_TOOL_CALL_WINDOW', 'errors.turnRepeatedToolCall'],
+  ['MODEL_CALL_INTERRUPTED', 'errors.turnModelInterrupted'],
+  ['TURN_INTERRUPTED', 'errors.turnModelInterrupted'],
+  ['TURN_MODEL_RUNTIME_NOT_CONFIGURED', 'errors.turnRuntimeCapabilityMissing'],
+  ['TURN_PROMPT_RUNTIME_NOT_CONFIGURED', 'errors.turnRuntimeCapabilityMissing'],
+  ['TURN_ATOMIC_CHECKPOINT_UNSUPPORTED', 'errors.turnCheckpointFailure'],
+  ['TURN_ATOMIC_CHECKPOINT_COMMIT_MISMATCH', 'errors.turnCheckpointFailure'],
+  ['TURN_CHECKPOINT_IDENTITY_CONFLICT', 'errors.turnCheckpointFailure'],
+  ['TURN_CHECKPOINT_PERSISTENCE_FAILED', 'errors.turnCheckpointFailure'],
+  ['TURN_EVENT_PERSISTENCE_FAILED', 'errors.turnPersistenceFailure'],
+  ['TURN_TERMINAL_PERSISTENCE_FAILED', 'errors.turnPersistenceFailure'],
   ['TURN_FAILED_RETRY_LIMIT_REACHED', 'errors.turnRetryLimitReached'],
   ['TURN_INCOMPLETE', 'errors.turnIncomplete'],
   ['TOOL_ERROR_STREAK', 'errors.turnToolErrorStreak'],
   ['TOOL_NO_PROGRESS_HARD_LIMIT', 'errors.turnNoProgress'],
+  ['TURN_EXECUTION_ENVIRONMENT_MISSING', 'errors.turnExecutionContextChanged'],
+  ['TURN_MODEL_BINDING_DRIFT', 'errors.turnExecutionContextChanged'],
+  ['TURN_PERMISSION_CONTEXT_DRIFT', 'errors.turnExecutionContextChanged'],
+  ['TURN_POLICY_CONTEXT_DRIFT', 'errors.turnExecutionContextChanged'],
+  ['TURN_TOOL_CATALOG_DRIFT', 'errors.turnExecutionContextChanged'],
+  ['TURN_TOOL_IMPLEMENTATION_DRIFT', 'errors.turnExecutionContextChanged'],
+  ['TURN_RUNTIME_PLUGIN_RELEASE_DRIFT', 'errors.turnExecutionContextChanged'],
+  ['TURN_RUNTIME_PLUGIN_RELEASE_UNPINNED', 'errors.turnExecutionContextChanged'],
+  ['TOOL_IMPLEMENTATION_REVISION_UNAVAILABLE', 'errors.turnExecutionContextChanged'],
+  ['PLUGIN_RELEASE_CORRUPT', 'errors.turnExecutionContextChanged'],
+  ['MODEL_REQUEST_CONTEXT_DRIFT', 'errors.turnExecutionContextChanged'],
+  ['SIDE_EFFECT_LEDGER_CONFLICT', 'errors.turnRecoveryBlocked'],
+  ['SIDE_EFFECT_LEDGER_OUTCOME_INVALID', 'errors.turnRecoveryBlocked'],
+  ['SIDE_EFFECT_OUTCOME_UNKNOWN', 'errors.turnRecoveryBlocked'],
+  ['MODEL_REQUEST_OUTCOME_UNKNOWN', 'errors.turnRecoveryBlocked'],
+  ['TURN_RECOVERY_BLOCKED', 'errors.turnRecoveryBlocked'],
+  ['TURN_RECOVERY_DEAD_LETTER', 'errors.turnRecoveryBlocked'],
 ])
 
 // These errors are raised before an adapter is allowed to contact a provider.
@@ -104,6 +132,20 @@ const INTERNAL_FAILURE_PATTERNS = [
 
 function translated(t, key) {
   return typeof t === 'function' ? String(t(key) || key) : key
+}
+
+export function getVisibleTurnClarification(clarification, t) {
+  const text = typeof clarification === 'string'
+    ? clarification.trim()
+    : String(clarification?.question || clarification?.message || '').trim()
+  if (text) return text
+  const reasonCode = String(
+    clarification?.reason_code || clarification?.reasonCode || 'clarification_required',
+  ).trim().toLowerCase()
+  if (reasonCode === 'clarification_required') {
+    return translated(t, 'errors.clarificationRequired')
+  }
+  return translated(t, 'errors.clarificationRequired')
 }
 
 function directFailureCode(value) {
@@ -171,7 +213,7 @@ function failureMessage(value) {
 
 export function isModelSetupFailure(value) {
   const code = failureCode(value)
-  if (code) return MODEL_SETUP_FAILURE_CODES.has(code)
+  if (code) return MODEL_SETUP_FAILURE_CODES.has(code) || /^MODEL_HTTP_\d{3}$/u.test(code)
   return MODEL_SETUP_MESSAGE_PATTERNS.some((pattern) => pattern.test(failureMessage(value)))
 }
 
@@ -257,6 +299,11 @@ export function isPreExecutionFailure(value) {
 
 function visibleModelFailureKey(value) {
   const code = failureCode(value)
+  const httpStatus = /^MODEL_HTTP_(\d{3})$/u.exec(code)?.[1]
+  if (httpStatus === '401' || httpStatus === '403') return 'errors.modelAuthenticationFailed'
+  if (httpStatus === '404') return 'errors.modelEndpointNotFound'
+  if (httpStatus === '408' || httpStatus === '504') return 'errors.modelEndpointTimeout'
+  if (httpStatus) return 'errors.modelEndpointUnavailable'
   if (code === 'MODEL_PROVIDER_NOT_FOUND' || code === 'MODEL_PROVIDER_MODEL_INVALID') return 'errors.modelEndpointNotFound'
   if (code === 'MODEL_PROVIDER_DISABLED') return 'errors.modelProviderChanged'
   if (code === 'MODEL_PROVIDER_UNVERIFIED') return 'errors.modelProviderUnverified'
@@ -265,7 +312,9 @@ function visibleModelFailureKey(value) {
   if (code === 'MODEL_PROVIDER_AMBIGUOUS') return 'errors.modelConfigurationFailure'
   if (code === 'MODEL_AUTH_FAILED') return 'errors.modelAuthenticationFailed'
   if (code === 'MODEL_ENDPOINT_NOT_FOUND' || code === 'MODEL_NOT_FOUND') return 'errors.modelEndpointNotFound'
-  if (code === 'MODEL_ENDPOINT_TIMEOUT' || code === 'MODEL_TIMEOUT') return 'errors.modelEndpointTimeout'
+  if (code === 'MODEL_ENDPOINT_TIMEOUT'
+    || code === 'MODEL_FIRST_TOKEN_TIMEOUT'
+    || code === 'MODEL_TIMEOUT') return 'errors.modelEndpointTimeout'
   if ([
     'MODEL_PROVIDER_UNAVAILABLE',
     'MODEL_ENDPOINT_UNREACHABLE',
@@ -318,6 +367,16 @@ export function buildChatFailureDisplayKey(turnId, error) {
 export function getVisibleModelErrorMessage(error, t) {
   if (error?.code === 'EMPTY_MODEL_RESPONSE_LENGTH') return t('errors.emptyModelResponseLength')
   if (error?.code === 'EMPTY_MODEL_RESPONSE') return t('errors.emptyModelResponse')
+  // A turn can be marked `interrupted` for either a model interruption or a
+  // local-runtime shutdown. Prefer the durable cause code before interpreting
+  // the generic lifecycle flag, otherwise MODEL_CALL_INTERRUPTED is presented
+  // as an unrelated local-runtime restart.
+  const structuredExecutionFailure = structuredExecutionFailureDetail(error, t)
+  if (structuredExecutionFailure) return structuredExecutionFailure
+  // Provider failures can terminate a turn through the interrupted lifecycle
+  // path. Preserve the stable provider cause before interpreting the generic
+  // lifecycle flag as a local-runtime restart.
+  if (isModelSetupFailure(error)) return translated(t, visibleModelFailureKey(error))
   if (error?.meta?.interrupted === true || error?.interrupted === true) {
     return translated(t, 'errors.runtimeInterrupted')
   }
@@ -325,8 +384,5 @@ export function getVisibleModelErrorMessage(error, t) {
   if (isRuntimeUnavailableFailure(error)) {
     return translated(t, hasStartedExecution(error) ? 'errors.runtimeInterrupted' : 'errors.runtimeUnavailable')
   }
-  if (isModelSetupFailure(error)) return translated(t, visibleModelFailureKey(error))
-  const structuredExecutionFailure = structuredExecutionFailureDetail(error, t)
-  if (structuredExecutionFailure) return structuredExecutionFailure
   return publicFailureDetail(failureMessage(error), t)
 }

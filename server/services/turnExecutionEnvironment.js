@@ -409,7 +409,9 @@ function grantProjection(grant) {
   }
 }
 
-function fileAccessProjection(fileAccess) {
+function fileAccessProjection(fileAccess, {
+  includeRunCodeExecutionEnabled = true,
+} = {}) {
   if (fileAccess != null && (typeof fileAccess !== 'object' || Array.isArray(fileAccess))) {
     throw projectionError('fileAccess must be an object')
   }
@@ -427,6 +429,14 @@ function fileAccessProjection(fileAccess) {
   const trustedWorkspaces = normalizeArray(fileAccess?.trustedWorkspaces, 'trusted workspaces')
     .map(workspaceTrustProjection)
     .sort((left, right) => stableJson(left).localeCompare(stableJson(right), 'en'))
+  const runtime = {
+    platform: normalizedId(fileAccess?.runtime?.platform, { label: 'runtime platform' }),
+    hostFileSystem: fileAccess?.runtime?.hostFileSystem === true,
+    localCodeExecutionEnabled: fileAccess?.runtime?.localCodeExecutionEnabled === true,
+    ...(includeRunCodeExecutionEnabled
+      ? { runCodeExecutionEnabled: fileAccess?.runtime?.runCodeExecutionEnabled === true }
+      : {}),
+  }
   return {
     allFilesEnabled: fileAccess?.allFilesEnabled === true,
     bypassEnabled: fileAccess?.bypassEnabled === true,
@@ -441,11 +451,7 @@ function fileAccessProjection(fileAccess) {
       trust: workspaceTrustProjection(fileAccess?.workspace?.trust),
     },
     trustedWorkspaces,
-    runtime: {
-      platform: normalizedId(fileAccess?.runtime?.platform, { label: 'runtime platform' }),
-      hostFileSystem: fileAccess?.runtime?.hostFileSystem === true,
-      localCodeExecutionEnabled: fileAccess?.runtime?.localCodeExecutionEnabled === true,
-    },
+    runtime,
   }
 }
 
@@ -616,12 +622,24 @@ export function normalizeTurnExecutionEnvironmentSnapshot(value) {
       !SHA256_HEX.test(String(value.components?.[name] || ''))
     ))) return null
     if (typeof value.approvalMode !== 'string') return null
+    const storedRuntime = value.fileAccess?.runtime
+    const includesRunCodeExecutionEnabled = Boolean(
+      storedRuntime
+      && typeof storedRuntime === 'object'
+      && !Array.isArray(storedRuntime)
+      && Object.hasOwn(storedRuntime, 'runCodeExecutionEnabled'),
+    )
     const normalized = buildSnapshot({
       model: modelProjection(value.model),
       approvalMode: normalizedId(value.approvalMode, { required: true, label: 'approval mode' }),
       policy: policyProjection(value.policy),
       toolsConfig: normalizeToolsConfig(value.toolsConfig),
-      fileAccess: fileAccessProjection(value.fileAccess),
+      // Version 4 snapshots written before run_code became model-visible do
+      // not contain this field. Rebuild those with their original shape so
+      // their persisted component and root fingerprints remain verifiable.
+      fileAccess: fileAccessProjection(value.fileAccess, {
+        includeRunCodeExecutionEnabled: includesRunCodeExecutionEnabled,
+      }),
       toolCatalog: storedToolCatalogProjection(value.toolCatalog),
       toolImplementations: toolImplementationProjection(value.toolImplementations),
       runtimePlugins: storedRuntimePluginProjection(value.runtimePlugins),
@@ -699,6 +717,7 @@ function trustTargetsDirectory(trust, resolution) {
 }
 
 function fileAccessMatchesDirectoryUpgrade(expected, current, resolution) {
+  current = fileAccessWithLegacyRunCodeProjection(expected, current)
   const resolutionPath = normalizedPath(resolution.path)
   if (!resolutionPath) return false
   const {
@@ -749,6 +768,19 @@ function fileAccessMatchesDirectoryUpgrade(expected, current, resolution) {
   return expectedTargetTrust.length > 0
     ? stableJson(expectedTargetTrust) === stableJson(currentTargetTrust)
     : currentTargetTrust.length <= 1
+}
+
+function fileAccessWithLegacyRunCodeProjection(expected, current) {
+  if (Object.hasOwn(expected?.runtime || {}, 'runCodeExecutionEnabled')) return current
+  if (!Object.hasOwn(current?.runtime || {}, 'runCodeExecutionEnabled')) return current
+  const runtime = { ...current.runtime }
+  delete runtime.runCodeExecutionEnabled
+  return { ...current, runtime }
+}
+
+function fileAccessMatchesLegacyRunCodeProjection(expected, current) {
+  if (Object.hasOwn(expected?.runtime || {}, 'runCodeExecutionEnabled')) return false
+  return stableJson(expected) === stableJson(fileAccessWithLegacyRunCodeProjection(expected, current))
 }
 
 function normalizeDirectoryAuthorization(value) {
@@ -829,6 +861,7 @@ export function assertTurnExecutionEnvironmentCompatible(expectedValue, currentV
     throw driftError(TURN_PERMISSION_CONTEXT_DRIFT, expected, current)
   }
   if (expected.components.fileAccess !== current.components.fileAccess
+    && !fileAccessMatchesLegacyRunCodeProjection(expected.fileAccess, current.fileAccess)
     && (!resolution || !fileAccessMatchesDirectoryUpgrade(
       expected.fileAccess,
       current.fileAccess,

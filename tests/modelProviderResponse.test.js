@@ -3,9 +3,12 @@ import assert from 'node:assert/strict'
 
 import {
   extractUsage,
+  isProviderFailoverError,
   parseModelProviderResponse,
   parseOpenAICompatibleResponse,
 } from '../server/adapters/modelProxy.js'
+import { modelRequestOutcomeUnknown } from '../server/adapters/modelRequestOutcome.js'
+import { isRetryableError } from '../server/utils/modelRetry.js'
 
 test('parseModelProviderResponse removes complete embedded think blocks from compatible responses', () => {
   const parsed = parseModelProviderResponse({
@@ -184,4 +187,49 @@ test('Responses JSON preserves max-output truncation when function calls are pre
   assert.equal(parsed.toolCalls.length, 1)
   assert.equal(parsed.toolCalls[0].function.name, 'write_file')
   assert.equal(parsed.finishReason, 'length')
+})
+
+test('compatible JSON responses reject safety and unknown finish reasons', () => {
+  for (const finishReason of ['content_filter', 'future_finish_reason']) {
+    assert.throws(
+      () => parseModelProviderResponse({
+        choices: [{
+          message: {
+            content: '',
+            tool_calls: [{
+              id: 'unsafe',
+              type: 'function',
+              function: { name: 'write_file', arguments: '{"path":"unsafe.txt"}' },
+            }],
+          },
+          finish_reason: finishReason,
+        }],
+      }),
+      (error) => error?.code === 'MODEL_PROVIDER_STOP_REASON_ERROR'
+        && error?.stopReason === finishReason
+        && error?.fromUpstream === true,
+      finishReason,
+    )
+  }
+})
+
+test('explicit provider stop failures cannot retry, fail over, or become outcome-unknown', () => {
+  let providerError
+  try {
+    parseModelProviderResponse({
+      choices: [{ message: { content: 'blocked' }, finish_reason: 'content_filter' }],
+    })
+  } catch (error) {
+    providerError = error
+  }
+
+  assert.equal(providerError?.code, 'MODEL_PROVIDER_STOP_REASON_ERROR')
+  assert.equal(isRetryableError(providerError), false)
+  assert.equal(isProviderFailoverError(providerError), false)
+  assert.equal(modelRequestOutcomeUnknown(providerError, {
+    modelRequestId: 'mr_explicit_provider_failure',
+    phase: 'response',
+    responseReceived: true,
+    requestStarted: true,
+  }), providerError)
 })

@@ -16,6 +16,7 @@ const BASE_SPECS = [
   'write_file',
   'apply_patch',
   'bash_exec',
+  'run_code',
   'git_status',
   'web_search',
   'fetch_url',
@@ -124,6 +125,7 @@ test('normal mode keeps shell requestable after an exact file grant', async () =
   const names = namesOf(resolved)
   assert.ok(names.includes('request_directory'))
   assert.ok(names.includes('bash_exec'))
+  assert.ok(names.includes('run_code'))
   assert.ok(names.includes('write_file'))
 })
 
@@ -147,6 +149,97 @@ test('exact file access never exposes shell when local execution is disabled', a
   })
 
   assert.equal(namesOf(resolved).includes('bash_exec'), false)
+  assert.equal(namesOf(resolved).includes('run_code'), false)
+})
+
+test('run_code visibility follows code-execution trust instead of directory grants', async () => {
+  const enabledWithoutPaths = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: BASE_SPECS,
+    permissionMode: 'normal',
+    fileAccessStatus: {
+      grants: [],
+      runtime: { localCodeExecutionEnabled: true },
+    },
+    enabledConnectorTools: [],
+    prompt: 'Calculate a bounded JSON transformation with JavaScript.',
+  })
+  assert.equal(namesOf(enabledWithoutPaths).includes('run_code'), true)
+
+  let disabledDecision = null
+  const disabledWithUnrelatedGrant = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: BASE_SPECS,
+    permissionMode: 'normal',
+    fileAccessStatus: {
+      grants: [{
+        id: 'read-only-source',
+        path: 'D:\\data\\source.txt',
+        resourceType: 'file',
+        accessMode: 'read_only',
+        available: true,
+      }],
+      runtime: { localCodeExecutionEnabled: false },
+    },
+    enabledConnectorTools: [],
+    prompt: 'Calculate a bounded JSON transformation with JavaScript.',
+    onDecision: (value) => { disabledDecision = value },
+  })
+  assert.equal(namesOf(disabledWithUnrelatedGrant).includes('run_code'), false)
+  assert.deepEqual(
+    disabledDecision?.excludedTools.find((entry) => entry.name === 'run_code'),
+    { name: 'run_code', stage: 'permission', reason: 'local_code_execution_disabled' },
+  )
+
+  const userDisabled = await resolveTurnToolSpecs({
+    userId: 'run-code-disabled-user',
+    baseSpecs: BASE_SPECS,
+    permissionMode: 'normal',
+    fileAccessStatus: {
+      grants: [],
+      runtime: { localCodeExecutionEnabled: true },
+    },
+    userToolPermissions: { run_code: false },
+    enabledConnectorTools: [],
+    prompt: 'Calculate with JavaScript.',
+  })
+  assert.equal(namesOf(userDisabled).includes('run_code'), false)
+})
+
+test('run_code visibility consumes the authoritative shell-or-local runtime projection', async () => {
+  const shellOnly = await resolveTurnToolSpecs({
+    userId: 'run-code-shell-only-user',
+    baseSpecs: BASE_SPECS,
+    permissionMode: 'normal',
+    fileAccessStatus: {
+      grants: [],
+      runtime: {
+        localCodeExecutionEnabled: false,
+        runCodeExecutionEnabled: true,
+      },
+    },
+    userToolPermissions: { run_code: true },
+    enabledConnectorTools: [],
+    prompt: 'Calculate a bounded JSON transformation with JavaScript.',
+  })
+  assert.equal(namesOf(shellOnly).includes('run_code'), true)
+
+  const disabled = await resolveTurnToolSpecs({
+    userId: 'run-code-disabled-runtime-user',
+    baseSpecs: BASE_SPECS,
+    permissionMode: 'normal',
+    fileAccessStatus: {
+      grants: [],
+      runtime: {
+        localCodeExecutionEnabled: true,
+        runCodeExecutionEnabled: false,
+      },
+    },
+    userToolPermissions: { run_code: true },
+    enabledConnectorTools: [],
+    prompt: 'Calculate with JavaScript.',
+  })
+  assert.equal(namesOf(disabled).includes('run_code'), false)
 })
 
 test('execution switches delete disabled schemas from the model-visible catalog', async () => {

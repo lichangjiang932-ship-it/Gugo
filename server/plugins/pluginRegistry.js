@@ -12,6 +12,12 @@ import {
   localDirectoryPluginDistributionPort,
 } from './pluginDistribution.js'
 import {
+  createDistributedPluginDefinition,
+  createHostPluginDefinition,
+  distributedPluginFromDefinition,
+  runtimeManifestFromPluginDefinition,
+} from './pluginDefinition.js'
+import {
   builtinManagedPluginDistributionPort,
   resolveManagedUserPluginRoot,
 } from './pluginDistributionSources.js'
@@ -34,8 +40,7 @@ import {
   configureContextCompactionStrategyServiceInvoker,
 } from '../services/contextCompactionStrategy.js'
 
-let CURRENT = []
-let CURRENT_DISTRIBUTION = new Map()
+let CURRENT_DEFINITIONS = new Map()
 let LAST_ERRORS = []
 let INITIALIZED = false
 let PLUGIN_DISCOVERY_SOURCE = null
@@ -306,21 +311,28 @@ function buildPluginDiscoveryState(source) {
     cwd: source.cwd,
     env: source.env,
   })
-  const plugins = distribution.candidates.map((candidate) => Object.freeze({
-    ...candidate.plugin,
-  }))
-  const distributionByPluginId = new Map(distribution.candidates.map((candidate) => [
-    candidate.plugin.id,
-    Object.freeze({
-      sourceKind: candidate.sourceKind,
-      mutable: candidate.mutable,
-      verifiedPackage: candidate.verifiedPackage,
-      installReceipt: candidate.installReceipt,
-    }),
-  ]))
+  const definitions = distribution.candidates.map((candidate) => (
+    createDistributedPluginDefinition(candidate.plugin, {
+      distribution: {
+        sourceKind: candidate.sourceKind,
+        mutable: candidate.mutable,
+        verifiedPackage: candidate.verifiedPackage,
+        installReceipt: candidate.installReceipt,
+      },
+    })
+  ))
+  const pluginIds = new Set()
+  for (const definition of definitions) {
+    if (pluginIds.has(definition.manifest.id)) {
+      const error = new TypeError(`duplicate plugin id: ${definition.manifest.id}`)
+      error.code = 'PLUGIN_DISTRIBUTION_ID_CONFLICT'
+      error.retryable = false
+      throw error
+    }
+    pluginIds.add(definition.manifest.id)
+  }
   return Object.freeze({
-    plugins: Object.freeze(plugins),
-    distributionByPluginId,
+    definitions: Object.freeze(definitions),
     errors: distribution.errors,
     protectedPluginIds: distribution.protectedPluginIds,
     protectedPluginIdentityComplete: distribution.protectedPluginIdentityComplete,
@@ -328,8 +340,10 @@ function buildPluginDiscoveryState(source) {
 }
 
 function commitPluginDiscoveryState(source, state) {
-  CURRENT = state.plugins
-  CURRENT_DISTRIBUTION = state.distributionByPluginId
+  CURRENT_DEFINITIONS = new Map(state.definitions.map((definition) => [
+    definition.manifest.id,
+    definition,
+  ]))
   LAST_ERRORS = state.errors
   PROTECTED_PLUGIN_IDS = state.protectedPluginIds
   PROTECTED_PLUGIN_IDENTITY_COMPLETE = state.protectedPluginIdentityComplete
@@ -337,16 +351,17 @@ function commitPluginDiscoveryState(source, state) {
   PLUGIN_DISCOVERY_REVISION += 1
   INITIALIZED = true
   if (!source.silent) {
-    logger.info(`[plugins] loaded ${state.plugins.length} plugin(s) from ${source.rootDir}`)
+    logger.info(`[plugins] loaded ${state.definitions.length} plugin(s) from ${source.rootDir}`)
     for (const error of state.errors) console.warn(`[plugins] skip ${error.dir}: ${error.message}`)
   }
-  const distributedPlugins = CURRENT.map((plugin) => Object.freeze({
-    ...plugin,
-    distribution: CURRENT_DISTRIBUTION.get(plugin.id) || null,
+  const plugins = state.definitions.map(distributedPluginFromDefinition)
+  const distributedPlugins = state.definitions.map((definition) => Object.freeze({
+    ...distributedPluginFromDefinition(definition),
+    distribution: definition.distribution,
   }))
   return Object.freeze({
     revision: PLUGIN_DISCOVERY_REVISION,
-    plugins: CURRENT.slice(),
+    plugins: [...plugins],
     // Host-only provenance captured in the same committed revision. Mutation
     // services use this instead of racing a second global-registry read.
     distributedPlugins: Object.freeze(distributedPlugins),
@@ -393,26 +408,37 @@ export function getPluginDiscoverySourceSnapshot() {
  * @param {{ type?: string }} [opts]
  */
 export function listPlugins({ type } = {}) {
-  const out = type ? CURRENT.filter((p) => p.type === type) : CURRENT
-  return out.map((p) => ({ ...p }))
+  const definitions = [...CURRENT_DEFINITIONS.values()]
+  const out = type
+    ? definitions.filter((definition) => definition.plugin.type === type)
+    : definitions
+  return out.map((definition) => ({ ...distributedPluginFromDefinition(definition) }))
 }
 
 /** Host-only view that keeps DistributionPort provenance out of the public plugin shape. */
 export function listDistributedPlugins({ type } = {}) {
-  const out = type ? CURRENT.filter((plugin) => plugin.type === type) : CURRENT
-  return out.map((plugin) => ({
-    ...plugin,
-    distribution: CURRENT_DISTRIBUTION.get(plugin.id) || null,
+  const definitions = [...CURRENT_DEFINITIONS.values()]
+  const out = type
+    ? definitions.filter((definition) => definition.plugin.type === type)
+    : definitions
+  return out.map((definition) => ({
+    ...distributedPluginFromDefinition(definition),
+    distribution: definition.distribution,
   }))
+}
+
+/** Host-only canonical definition used to bridge a distributed package into runtime activation. */
+export function getPluginDefinition(id) {
+  if (!id) return null
+  return CURRENT_DEFINITIONS.get(id) || null
 }
 
 /**
  * @param {string} id
  */
 export function getPlugin(id) {
-  if (!id) return null
-  const hit = CURRENT.find((p) => p.id === id)
-  return hit ? { ...hit } : null
+  const definition = getPluginDefinition(id)
+  return definition ? { ...distributedPluginFromDefinition(definition) } : null
 }
 
 export function getLoadErrors() {
@@ -424,7 +450,14 @@ export function isInitialized() {
 }
 
 /** Install a process-local runtime plugin with reversible side effects. */
-export function registerPlugin(manifest, setup) {
+export async function registerPlugin(manifest, setup) {
+  const definition = createHostPluginDefinition(manifest)
+  return registerPluginDefinition(definition, setup)
+}
+
+/** Activate one canonical plugin definition through the shared runtime lifecycle. */
+export async function registerPluginDefinition(definition, setup) {
+  const manifest = runtimeManifestFromPluginDefinition(definition)
   ensureRuntimePluginConfigInitialized()
   return RUNTIME.registerPlugin(manifest, setup)
 }
@@ -483,8 +516,7 @@ export function shutdownRuntimePlugins() {
 
 // 仅供测试使用：重置内部状态
 export function _resetForTests() {
-  CURRENT = []
-  CURRENT_DISTRIBUTION = new Map()
+  CURRENT_DEFINITIONS = new Map()
   LAST_ERRORS = []
   INITIALIZED = false
   PLUGIN_DISCOVERY_SOURCE = null

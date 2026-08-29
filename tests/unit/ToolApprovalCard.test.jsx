@@ -140,6 +140,29 @@ test('run_command approval shows env key names and never offers a standing rule'
   await view.cleanup()
 })
 
+test('run_code approval shows the description and code but never a standing-rule action', async () => {
+  const dom = setupDom()
+  const view = await renderInto(dom, (
+    <ToolApprovalCard
+      open
+      busy={false}
+      onDecide={() => {}}
+      request={{
+        name: 'run_code',
+        args: { code: 'return 42', description: 'Calculate an answer' },
+        risk: 'high',
+        reason: 'Execute model-authored code',
+      }}
+    />
+  ))
+  const html = view.html()
+  assert.match(html, /run_code/u)
+  assert.match(html, /Calculate an answer/u)
+  assert.match(html, /return 42/u)
+  assert.doesNotMatch(html, /总是允许|Always allow/iu)
+  await view.cleanup()
+})
+
 test('ToolApprovalCard renders an apply_patch diff preview', async () => {
   const dom = setupDom()
   const view = await renderInto(dom, (

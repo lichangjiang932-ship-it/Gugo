@@ -5,7 +5,7 @@ import { Agent } from 'undici'
 export { maskOutboundUrl } from './urlDisplay.js'
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
-const METADATA_IPV4 = new Set(['100.100.100.200'])
+const METADATA_IPV4 = new Set(['100.100.100.200', '169.254.169.254'])
 const METADATA_IPV6 = new Set(['fd00:ec2::254'])
 const METADATA_HOST_RE = /^(?:metadata|metadata\.google\.internal)$/i
 
@@ -26,11 +26,17 @@ function ipv4Parts(ip) {
 function isPrivateV4(ip) {
   const parts = ipv4Parts(ip)
   if (!parts) return false
-  const [first, second] = parts
+  const [first, second, third] = parts
   return first === 10 || first === 127 || (first === 169 && second === 254)
     || (first === 172 && second >= 16 && second <= 31)
     || (first === 192 && second === 168) || first === 0 || first >= 224
     || (first === 100 && second >= 64 && second <= 127)
+    // IANA special-purpose ranges that are not globally reachable targets.
+    || (first === 192 && second === 0 && (third === 0 || third === 2))
+    || (first === 192 && second === 88 && third === 99)
+    || (first === 198 && (second === 18 || second === 19))
+    || (first === 198 && second === 51 && third === 100)
+    || (first === 203 && second === 0 && third === 113)
 }
 
 function mappedIpv4Address(ip) {
@@ -51,9 +57,20 @@ function mappedIpv4Address(ip) {
 }
 
 function isPrivateV6(ip) {
-  const lower = ip.toLowerCase()
+  let lower = ip.toLowerCase()
+  try {
+    lower = new URL(`http://[${lower.replace(/^\[|\]$/g, '')}]/`)
+      .hostname
+      .replace(/^\[|\]$/g, '')
+      .toLowerCase()
+  } catch { /* net.isIPv6 already validates callers */ }
   if (lower === '::' || lower === '::1') return true
-  if (/^fe[89ab][0-9a-f]:/.test(lower) || /^f[cd][0-9a-f]{2}:/.test(lower) || /^ff[0-9a-f]{2}:/.test(lower)) return true
+  if (/^fe[89a-f][0-9a-f]:/.test(lower) || /^f[cd][0-9a-f]{2}:/.test(lower) || /^ff[0-9a-f]{2}:/.test(lower)) return true
+  if (/^100:(?:0:){0,3}:/.test(lower) || lower === '100::') return true
+  if (/^64:ff9b:1:/.test(lower)) return true
+  if (/^2001:(?:1[0-9a-f]|2[0-9a-f]):/.test(lower)) return true
+  if (lower === '2001:2::' || /^2001:2:(?:0:|:)/.test(lower)) return true
+  if (/^2001:db8:/.test(lower) || /^5f00:/.test(lower)) return true
   const mapped = mappedIpv4Address(lower)
   return !!(mapped && isPrivateV4(mapped))
 }
@@ -99,7 +116,7 @@ function assertAddressAllowed(address, { allowLocal = false } = {}) {
   if (allowLocal === 'loopback' && isLoopbackIp(address)) return
   if (allowLocal === true && isAllowedLocalIp(address)) return
   const kind = METADATA_IPV4.has(address) || METADATA_IPV6.has(String(address).toLowerCase())
-    ? 'cloud metadata'
+    ? 'cloud metadata (private)'
     : 'private, loopback, link-local, or reserved'
   throw outboundError(`Outbound target resolves to a forbidden ${kind} address`, 'OUTBOUND_ADDRESS_DENIED')
 }
@@ -196,13 +213,30 @@ export async function fetchSafeOutbound(rawUrl, init = {}, {
       if (dispatcher?.close) void dispatcher.close().catch(() => {})
     }
 
-    const location = REDIRECT_STATUSES.has(response?.status) ? redirectLocation(response) : ''
+    let location = ''
+    if (REDIRECT_STATUSES.has(response?.status)) {
+      try { location = redirectLocation(response) }
+      catch {
+        await cancelResponseBody(response)
+        throw outboundError('Outbound redirect Location is invalid', 'OUTBOUND_REDIRECT_INVALID')
+      }
+    }
     if (!location) return response
+    let next
+    try {
+      next = new URL(location, target)
+    } catch {
+      await cancelResponseBody(response)
+      throw outboundError('Outbound redirect Location is invalid', 'OUTBOUND_REDIRECT_INVALID')
+    }
+    if (!['http:', 'https:'].includes(next.protocol)) {
+      await cancelResponseBody(response)
+      throw outboundError('Outbound redirect Location is invalid', 'OUTBOUND_REDIRECT_INVALID')
+    }
     if (redirectCount >= maxRedirects) {
       await cancelResponseBody(response)
       throw outboundError('Outbound redirect limit exceeded', 'OUTBOUND_REDIRECT_LIMIT')
     }
-    const next = new URL(location, target)
     if (target.protocol === 'https:' && next.protocol !== 'https:') {
       await cancelResponseBody(response)
       throw outboundError('HTTPS outbound redirects cannot downgrade to HTTP', 'OUTBOUND_REDIRECT_DOWNGRADE')

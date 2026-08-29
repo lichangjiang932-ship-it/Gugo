@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
 
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-server-tool-capabilities', String(process.pid))
 const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-server-tool-workspace-'))
@@ -29,6 +30,9 @@ const { BUILTIN_TOOL_SCHEMA_CATALOG } = await import('../server/utils/toolSchema
 const { normalizeToolCalls, validateToolCall } = await import('../server/utils/toolCallHarness.js')
 const { CONNECTOR_TOOL_NAMES } = await import('../server/services/connectorTools.js')
 const { resolveTurnToolSpecs } = await import('../server/services/turnToolSpecs.js')
+const { grantLocalPath } = await import('../server/services/localFileAccessService.js')
+const { closeLspRuntime, startLspRuntime } = await import('../server/services/lspRuntime.js')
+const { executeServerTool } = await import('../server/services/toolLoopHeuristics.js')
 
 const CLIENT_ONLY_PREVIEW_TOOLS = [
   'create_react_component',
@@ -94,6 +98,7 @@ test('core execution tools survive the canonical turn catalog when enabled', asy
     'apply_patch',
     'patch_file',
     'bash_exec',
+    'run_code',
     'run_command',
     'run_test',
     'docker_exec',
@@ -150,11 +155,19 @@ test('registry, API resolution, and TurnEngine retain the canonical schema objec
     const name = spec.function.name
     assert.equal(spec, BUILTIN_TOOL_SCHEMA_CATALOG[name], `${name} catalog identity`)
     assert.equal(getBuiltinSpec(name), spec, `${name} registry identity`)
-    assert.equal(
-      apiEntries.find((entry) => entry.name === name)?.tool,
-      spec,
-      `${name} API identity`,
-    )
+    if (name === 'lsp' || name === 'codex_models') {
+      assert.equal(
+        apiEntries.find((entry) => entry.name === name),
+        undefined,
+        'optional runtime capability stays hidden until its provider is ready',
+      )
+    } else {
+      assert.equal(
+        apiEntries.find((entry) => entry.name === name)?.tool,
+        spec,
+        `${name} API identity`,
+      )
+    }
     assert.equal(
       SERVER_TOOL_SPECS.find((candidate) => candidate?.function?.name === name),
       spec,
@@ -384,4 +397,122 @@ test('list_directory advertised by the server has a real executor', async () => 
   assert.equal(result.text, 'directory listed')
   assert.equal(toolResult?.ok, true)
   assert.ok(toolResult.entries.some((item) => item.name === 'visible.txt'))
+})
+
+test('lsp advertised by the server has a real executor that forwards user authorization and AbortSignal', async () => {
+  const lspWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-server-lsp-executor-'))
+  const sourceFile = path.join(lspWorkspace, 'source.js')
+  const userId = `server-lsp-executor-${process.pid}-${Date.now()}`
+  const ungrantedUserId = `${userId}-ungranted`
+  const controller = new AbortController()
+  const calls = []
+  fs.writeFileSync(sourceFile, 'const value = 1\n', 'utf8')
+  createUser({ id: userId, email: `${userId}@example.com` })
+  createUser({ id: ungrantedUserId, email: `${ungrantedUserId}@example.com` })
+  grantLocalPath({ userId, rootPath: lspWorkspace, accessMode: 'read_only' })
+
+  const command = fs.realpathSync.native(process.execPath)
+  await closeLspRuntime()
+  try {
+    const status = await startLspRuntime({
+      env: {
+        LSP_STDIO_COMMAND_ALLOWLIST: JSON.stringify([command]),
+        LSP_STDIO_PROVIDERS: JSON.stringify([{
+          id: 'server-executor-test',
+          command,
+          extensionToLanguage: { '.js': 'javascript' },
+        }]),
+      },
+      createProvider: async (config) => ({
+        id: config.id,
+        extensionToLanguage: config.extensionToLanguage,
+        async query(request, signal) {
+          calls.push({ request, signal })
+          return {
+            kind: 'locations',
+            resolvedWorkspaceUri: pathToFileURL(lspWorkspace).href,
+            locations: [{
+              uri: pathToFileURL(sourceFile).href,
+              range: {
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 5 },
+              },
+            }],
+          }
+        },
+        async close() {},
+      }),
+    })
+    assert.equal(status.enabled, true)
+
+    const args = {
+      operation: 'goToDefinition',
+      file: sourceFile,
+      line: 1,
+      character: 1,
+      workspace_root: lspWorkspace,
+    }
+    const denied = await executeServerTool({
+      name: 'lsp',
+      args,
+      job: { userId: ungrantedUserId },
+      signal: controller.signal,
+    })
+    assert.equal(denied.ok, false)
+    assert.equal(denied.code, 'PATH_NOT_AUTHORIZED')
+    assert.equal(calls.length, 0)
+
+    const result = await executeServerTool({
+      name: 'lsp',
+      args,
+      job: { userId },
+      signal: controller.signal,
+    })
+    assert.equal(result.ok, true, JSON.stringify(result))
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].signal, controller.signal)
+    assert.equal(calls[0].request.filePath, fs.realpathSync(sourceFile))
+    assert.equal(calls[0].request.workspaceRoot, fs.realpathSync(lspWorkspace))
+    assert.deepEqual(calls[0].request.position, { line: 0, character: 0 })
+
+    const spec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'lsp')
+    let loopToolResult = null
+    const loopResult = await runToolsLoop({
+      job: { id: 'lsp-tool-loop-job', userId, prompt: 'find the definition' },
+      step: { id: 'lsp-tool-loop-step', kind: 'chat' },
+      messages: [{ role: 'user', content: 'find the definition' }],
+      signal: controller.signal,
+      toolSpecs: [spec],
+      maxIters: 2,
+      enableToolHooks: false,
+      approvalPrincipal: trustedInternalLoopPrincipal(),
+      runModel: async ({ messages }) => {
+        const toolMessage = messages.find((message) => (
+          message.role === 'tool' && message.name === 'lsp'
+        ))
+        if (toolMessage) {
+          loopToolResult = JSON.parse(toolMessage.content)
+          return { content: 'definition resolved', toolCalls: [] }
+        }
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'lsp-loop-call',
+            type: 'function',
+            function: { name: 'lsp', arguments: JSON.stringify(args) },
+          }],
+        }
+      },
+    })
+
+    assert.equal(loopResult.text, 'definition resolved')
+    assert.equal(loopToolResult?.ok, true)
+    assert.ok(Array.isArray(loopToolResult?.locations))
+    assert.equal(loopToolResult.locations.length, 1)
+    assert.equal(calls.length, 2)
+    assert.equal(calls[1].signal, controller.signal)
+  } finally {
+    await closeLspRuntime()
+    fs.rmSync(lspWorkspace, { recursive: true, force: true })
+  }
 })

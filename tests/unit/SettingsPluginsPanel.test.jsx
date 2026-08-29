@@ -38,7 +38,7 @@ const labels = {
   'settings.pluginActionFailedTitle': '插件操作未完成',
   'settings.pluginActionFailedHint': '当前状态保持不变',
   'settings.pluginRevokeFailedTitle': '授权撤销/停止未完成',
-  'settings.pluginRevokeFailedHint': '现有授权与插件运行状态保持不变',
+  'settings.pluginRevokeFailedHint': '撤权/停止可能仅部分完成，已刷新当前状态',
 }
 
 const t = (key) => labels[key] || key
@@ -75,6 +75,7 @@ function inventoryPlugin({ enabled, granted }) {
     name: 'Demo Transformer',
     version: '2.0.0',
     controllable: true,
+    canRevokePermissions: granted,
     enabled,
     active: enabled,
     permissionGrant: {
@@ -114,7 +115,7 @@ test('runtime plugin permission challenge stays inline and retries only after ex
   globalThis.fetch = async (url, init = {}) => {
     calls.push({ url: String(url), init })
     if (!init.method) {
-      return response({ ok: true, schemaVersion: 7, plugins: [inventoryPlugin({ enabled, granted })] })
+      return response({ ok: true, schemaVersion: 8, plugins: [inventoryPlugin({ enabled, granted })] })
     }
     if (String(url).endsWith('/enable')) {
       if (init.headers?.['X-Gugo-Plugin-Permission-Approval'] !== approvalDigest) {
@@ -153,6 +154,7 @@ test('runtime plugin permission challenge stays inline and retries only after ex
     if (String(url).endsWith('/revoke-permissions')) {
       revokeAttempts += 1
       if (revokeAttempts === 1) {
+        granted = false
         return response({
           ok: false,
           error: {
@@ -211,16 +213,70 @@ test('runtime plugin permission challenge stays inline and retries only after ex
     const failureCard = rootElement.querySelector('[data-testid="runtime-plugin-action-failure-demo-transformer"]')
     assert.ok(failureCard)
     assert.match(failureCard.textContent, /授权撤销\/停止未完成/)
-    assert.match(failureCard.textContent, /现有授权与插件运行状态保持不变/)
+    assert.match(failureCard.textContent, /撤权\/停止可能仅部分完成/)
+    assert.match(failureCard.textContent, /已刷新当前状态/)
     assert.match(failureCard.textContent, /revocation failed upstream/)
     assert.match(rootElement.textContent, /Demo Transformer/)
     assert.match(rootElement.textContent, /运行中/)
-    assert.equal(calls.filter((call) => !call.init.method).length, inventoryReadsBeforeRevoke)
-    assert.ok(button(rootElement, '撤销授权'))
-
-    await click(dom, button(rootElement, '撤销授权'))
+    assert.equal(calls.filter((call) => !call.init.method).length, inventoryReadsBeforeRevoke + 1)
     assert.ok(calls.some((call) => call.url.endsWith('/demo-transformer/revoke-permissions')))
-    assert.equal(rootElement.querySelector('[data-testid^="runtime-plugin-action-failure-"]'), null)
+    assert.doesNotMatch(rootElement.textContent, /撤销授权/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('a persisted grant stays revocable when the plugin is no longer controllable', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  let revoked = false
+  globalThis.fetch = async (url, init = {}) => {
+    if (!init.method) {
+      return response({
+        ok: true,
+        schemaVersion: 8,
+        plugins: [{
+          id: 'stale-transformer',
+          name: 'Stale Transformer',
+          controllable: false,
+          canRevokePermissions: !revoked,
+          enabled: false,
+          active: false,
+          permissionGrant: null,
+        }],
+      })
+    }
+    assert.match(String(url), /\/stale-transformer\/revoke-permissions$/)
+    revoked = true
+    return response({
+      ok: true,
+      plugin: {
+        id: 'stale-transformer',
+        name: 'Stale Transformer',
+        controllable: false,
+        canRevokePermissions: false,
+        enabled: false,
+        active: false,
+        permissionGrant: null,
+      },
+    })
+  }
+
+  try {
+    await act(async () => {
+      root.render(<SettingsPluginsPanel navigate={() => {}} t={t} />)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    const actionLabels = [...rootElement.querySelectorAll('button')]
+      .map((item) => item.textContent.trim())
+    assert.equal(actionLabels.includes('启用'), false)
+    assert.equal(actionLabels.includes('重载'), false)
+    await click(dom, button(rootElement, '撤销授权'))
+    assert.equal(revoked, true)
     assert.doesNotMatch(rootElement.textContent, /撤销授权/)
   } finally {
     await act(async () => root.unmount())

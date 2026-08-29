@@ -156,13 +156,16 @@ function deliveredArtifactMessages({ prefix, tool, artifactId, filename, type })
 test('code task cannot even see file-artifact tools', () => {
   const specs = selectJobToolSpecs({ prompt: '修复量化交易平台页面刷新时数据丢失的 bug' })
   const names = nameOf(specs)
+  const catalogNames = nameOf(SERVER_TOOL_SPECS)
   assert.ok(!names.includes('create_pptx'), 'create_pptx 必须对代码任务不可见')
   assert.ok(!names.includes('create_docx'))
   assert.ok(!names.includes('create_xlsx'))
   assert.ok(!names.includes('create_html_app'))
+  assert.ok(catalogNames.includes('lsp'), 'lsp 必须保留在静态工具目录')
+  assert.equal(names.includes('lsp'), false, '未配置 provider 时 lsp 必须失败关闭')
   // 非文件类工具一个都不能被误伤
-  const nonArtifact = nameOf(SERVER_TOOL_SPECS).filter((n) => (
-    !isFileArtifactTool(n) && n !== 'set_deliverables'
+  const nonArtifact = catalogNames.filter((n) => (
+    !isFileArtifactTool(n) && n !== 'set_deliverables' && n !== 'lsp'
   ))
   for (const n of nonArtifact) assert.ok(names.includes(n), `${n} 被误过滤`)
 })
@@ -929,7 +932,7 @@ test('workspace HTML targets use filesystem tools without a managed-artifact com
       },
     })
 
-    assert.equal(modelCalls, 3, scenario.label)
+    assert.equal(modelCalls, 4, scenario.label)
     assert.deepEqual(executions.map(({ name }) => name), ['write_file', 'read_file'], scenario.label)
     assert.deepEqual(result.artifactIds, [], scenario.label)
     assert.equal(result.text, '已按要求修改指定文件并完成验证。', scenario.label)
@@ -1018,7 +1021,7 @@ test('a real in-place workspace HTML write does not publish a duplicate artifact
       },
     })
 
-    assert.equal(modelCalls, 3)
+    assert.equal(modelCalls, 4)
     assert.equal(fs.readFileSync(targetPath, 'utf8'), '<!doctype html><title>after</title>')
     assert.deepEqual(result.artifactIds, [])
     assert.deepEqual(listTurnArtifacts({ userId, sessionId, turnId }), [])
@@ -1101,7 +1104,7 @@ test('a broken local HTML background is withheld and automatically corrected bef
     })
 
     assert.equal(recoveryObserved, true)
-    assert.equal(modelCalls, 6)
+    assert.equal(modelCalls, 7)
     assert.deepEqual(executions, ['write_file', 'read_file', 'write_file', 'read_file'])
     assert.equal(result.incomplete, undefined)
     assert.equal(result.text, '网页及其背景图已完成并验证。')
@@ -1173,7 +1176,7 @@ test('a broken local HTML at the maxIters boundary is revalidated and repaired b
       },
     })
 
-    assert.equal(modelCalls, 3)
+    assert.equal(modelCalls, 4)
     assert.equal(recoveryObserved, true)
     assert.equal(result.incomplete, undefined)
     assert.equal(fs.readFileSync(targetPath, 'utf8'), correctedHtml)
@@ -1270,7 +1273,7 @@ test('a restored successful local HTML checkpoint is revalidated against disk be
       },
     })
 
-    assert.equal(resumedCalls, 2)
+    assert.equal(resumedCalls, 3)
     assert.equal(recoveryObserved, true)
     assert.equal(resumed.incomplete, undefined)
     assert.equal(resumed.text, '恢复后已重新验证并交付。')
@@ -1590,7 +1593,7 @@ test('a command with an exact declared output may update and verify the requeste
   })
 
   assert.deepEqual(executed, ['bash_exec', 'read_file'])
-  assert.equal(modelCalls, 3)
+  assert.equal(modelCalls, 4)
   assert.equal(result.incomplete, undefined)
   assert.equal(result.text, '已修改并验证原文件。')
   assert.deepEqual(result.artifactIds, [])

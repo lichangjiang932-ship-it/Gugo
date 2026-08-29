@@ -8,7 +8,12 @@ import {
   SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND,
 } from '../../lib/turnClient/turnEventDispatch.js'
 import { TASK_STATUS } from '../../store/taskStatus.js'
-import { buildChatFailureDisplayKey, buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
+import {
+  buildChatFailureDisplayKey,
+  buildChatFailureMessage,
+  getVisibleModelErrorMessage,
+  getVisibleTurnClarification,
+} from '../../lib/chatFlowGuards.js'
 import { isUserStopped, turnEventTimestamp } from './serverTurnFlow.js'
 import { hasTurnRun, registerTurnRun, unregisterTurnRun } from './turnRunRegistry.js'
 import { mergeAssistantText, missingAssistantTextSuffix } from '../../lib/assistantTextContinuity.js'
@@ -26,8 +31,12 @@ export function reduceResumedAssistantText(currentText, event) {
   return String(currentText || '')
 }
 
-export function terminalResumeText(currentText, terminal) {
-  return missingAssistantTextSuffix(currentText, terminal?.payload?.text || '')
+export function terminalResumeText(currentText, terminal, t) {
+  const terminalText = terminal?.payload?.text
+    || (terminal?.type === 'turn.paused'
+      ? getVisibleTurnClarification(terminal.payload?.clarification, t)
+      : '')
+  return missingAssistantTextSuffix(currentText, terminalText)
 }
 
 export function isRecoverableServerMessage(message) {
@@ -249,6 +258,7 @@ export default function useServerTurnResume({
       if (terminal.type === 'turn.failed') {
         const error = createTurnFailureError(terminal.payload)
         error.turnCompletedAt = turnEventTimestamp(terminal)
+        error.sessionSnapshot = sessionSnapshot
         throw error
       }
       if (terminal.type === 'turn.cancelled') {
@@ -301,7 +311,7 @@ export default function useServerTurnResume({
         })
         return
       }
-      const terminalText = terminalResumeText(currentAssistantText, terminal)
+      const terminalText = terminalResumeText(currentAssistantText, terminal, t)
       if (terminalText) dispatchMessage('APPEND_TO_LAST_MESSAGE', terminalText)
       const completedAt = turnEventTimestamp(terminal)
       const timingMeta = {
@@ -326,7 +336,7 @@ export default function useServerTurnResume({
             id: taskId,
             updates: {
               status: TASK_STATUS.PENDING,
-              stepLabel: terminal.payload?.clarification?.question || t('chat.serverTurn.resumeDetail'),
+              stepLabel: getVisibleTurnClarification(terminal.payload?.clarification, t),
             },
           },
         })
@@ -354,6 +364,18 @@ export default function useServerTurnResume({
       if (failedRetry) failedRetryResult = { failed: true, error }
       turnActivityDispatcher.flush()
       const stopped = isUserStopped(error)
+      const recoveryDeadLetter = error?.recovery?.status === 'dead_letter'
+      const durableFailure = error?.serverFailure
+        || message.meta?.serverFailure
+        || (recoveryDeadLetter
+          ? {
+              code: String(error?.code || 'TURN_RECOVERY_DEAD_LETTER'),
+              retryable: false,
+              manualRetryable: true,
+              incompleteReason: 'recovery_attempts_exhausted',
+              missingRequirements: ['execution_environment_repair', 'explicit_recovery_retry'],
+            }
+          : null)
       const completedAt = turnEventTimestamp(error?.turnCompletedAt)
       const timingMeta = {
         turnStartedAt,
@@ -397,8 +419,9 @@ export default function useServerTurnResume({
           directoryAuthorizationError: null,
           serverResumeResolution: null,
           serverArtifacts,
-          serverConnectionState: null,
-          serverFailure: error.serverFailure || null,
+          serverConnectionState: recoveryDeadLetter ? 'blocked' : null,
+          serverRecoveryBlocked: recoveryDeadLetter,
+          serverFailure: durableFailure,
           serverFailureDisplayKey,
           serverPartialText: error.partialText || '',
           serverArtifactIds: Array.isArray(error.artifactIds) ? error.artifactIds : [],
@@ -417,6 +440,12 @@ export default function useServerTurnResume({
         })
       }
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: stopped ? TASK_STATUS.CANCELLED : TASK_STATUS.FAILED, stepLabel: stopped ? t('chat.serverTurn.cancelled') : t('chat.serverTurn.resumeFailed') } } })
+      if (!stopped && error.sessionSnapshot) {
+        dispatch({
+          type: 'APPLY_SERVER_SESSION_SNAPSHOT',
+          payload: { sessionId: session.id, snapshot: error.sessionSnapshot },
+        })
+      }
     }).finally(() => {
       turnActivityDispatcher.dispose()
       releaseServerTurnResume(resumingTurnIdsRef.current, session.id, turnId)

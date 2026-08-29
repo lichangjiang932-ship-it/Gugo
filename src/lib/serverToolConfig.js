@@ -19,6 +19,7 @@ export const SERVER_TURN_TOOL_TOGGLE_NAMES = Object.freeze([
   'apply_patch',
   'patch_file',
   'bash_exec',
+  'run_code',
   'run_command',
   'run_test',
   'docker_exec',

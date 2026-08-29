@@ -227,3 +227,242 @@ test('MCP OAuth dynamically registers a client when no Client ID is configured',
     'SELECT COUNT(*) AS count FROM mcp_oauth_pending_authorizations WHERE server_id = ?',
   ).get(server.id).count, 0)
 })
+
+test('remote MCP metadata cannot grant OAuth access to a loopback token endpoint', async () => {
+  const userId = 'oauth-remote-local-policy'
+  createUser({ id: userId, email: `${userId}@example.com` })
+  const server = upsertServer({
+    userId,
+    name: 'Remote metadata policy MCP',
+    transport: 'http',
+    url: 'https://remote-policy.example.test/mcp',
+    headers: {},
+    enabled: true,
+    autoApprove: [],
+  })
+  let loopbackFetches = 0
+  const fetchImpl = async (url) => {
+    const href = String(url)
+    if (href === 'https://remote-policy.example.test/.well-known/oauth-protected-resource/mcp') {
+      return jsonResponse({
+        resource: server.url,
+        authorization_endpoint: 'https://auth.example.test/authorize',
+        token_endpoint: 'http://127.0.0.1:7777/token',
+      })
+    }
+    if (href === 'http://127.0.0.1:7777/token') loopbackFetches += 1
+    return jsonResponse({}, 404)
+  }
+  const lookup = async () => [{ address: '93.184.216.34', family: 4 }]
+  const started = await beginMcpOAuth({
+    userId,
+    serverId: server.id,
+    redirectUri: 'http://127.0.0.1:5175/api/mcp/oauth/callback',
+    config: { clientId: 'remote-client', clientSecret: 'remote-secret' },
+    fetchImpl,
+    lookup,
+  })
+
+  await assert.rejects(
+    () => completeMcpOAuth({ state: started.state, code: 'secret-code', fetchImpl, lookup }),
+    (error) => error?.code === 'OUTBOUND_ADDRESS_DENIED',
+  )
+  assert.equal(loopbackFetches, 0)
+})
+
+test('an explicitly configured local MCP keeps local OAuth endpoints usable', async () => {
+  const userId = 'oauth-explicit-local'
+  createUser({ id: userId, email: `${userId}@example.com` })
+  const server = upsertServer({
+    userId,
+    name: 'Local OAuth MCP',
+    transport: 'http',
+    url: 'http://127.0.0.1:6111/mcp',
+    headers: {},
+    enabled: true,
+    autoApprove: [],
+  })
+  let tokenFetches = 0
+  const fetchImpl = async (url) => {
+    const href = String(url)
+    if (href === 'http://127.0.0.1:6111/.well-known/oauth-protected-resource/mcp') {
+      return jsonResponse({
+        resource: server.url,
+        authorization_endpoint: 'http://127.0.0.1:6111/authorize',
+        token_endpoint: 'http://127.0.0.1:6111/token',
+      })
+    }
+    if (href === 'http://127.0.0.1:6111/token') {
+      tokenFetches += 1
+      return jsonResponse({ access_token: 'local-access', token_type: 'Bearer', expires_in: 3600 })
+    }
+    return jsonResponse({}, 404)
+  }
+  const started = await beginMcpOAuth({
+    userId,
+    serverId: server.id,
+    redirectUri: 'http://127.0.0.1:5175/api/mcp/oauth/callback',
+    config: { clientId: 'local-client' },
+    fetchImpl,
+  })
+
+  const completed = await completeMcpOAuth({
+    state: started.state,
+    code: 'local-code',
+    fetchImpl,
+  })
+  assert.equal(completed.serverId, server.id)
+  assert.equal(tokenFetches, 1)
+})
+
+test('OAuth token DNS is checked before credentials are sent', async () => {
+  const userId = 'oauth-private-dns'
+  createUser({ id: userId, email: `${userId}@example.com` })
+  const server = upsertServer({
+    userId,
+    name: 'Poisoned token DNS MCP',
+    transport: 'http',
+    url: 'https://dns-policy.example.test/mcp',
+    headers: {},
+    enabled: true,
+    autoApprove: [],
+  })
+  let tokenFetches = 0
+  const fetchImpl = async (url) => {
+    const href = String(url)
+    if (href === 'https://dns-policy.example.test/.well-known/oauth-protected-resource/mcp') {
+      return jsonResponse({
+        resource: server.url,
+        authorization_endpoint: 'https://auth.example.test/authorize',
+        token_endpoint: 'https://poisoned-token.example.test/token',
+      })
+    }
+    if (href === 'https://poisoned-token.example.test/token') tokenFetches += 1
+    return jsonResponse({}, 404)
+  }
+  const lookup = async (hostname) => [{
+    address: hostname === 'poisoned-token.example.test' ? '192.168.1.25' : '93.184.216.34',
+    family: 4,
+  }]
+  const started = await beginMcpOAuth({
+    userId,
+    serverId: server.id,
+    redirectUri: 'http://127.0.0.1:5175/api/mcp/oauth/callback',
+    config: { clientId: 'dns-client', clientSecret: 'dns-secret' },
+    fetchImpl,
+    lookup,
+  })
+
+  await assert.rejects(
+    () => completeMcpOAuth({ state: started.state, code: 'dns-code', fetchImpl, lookup }),
+    (error) => error?.code === 'OUTBOUND_ADDRESS_DENIED',
+  )
+  assert.equal(tokenFetches, 0)
+})
+
+test('OAuth token redirects cannot leak secrets across origins', async () => {
+  const userId = 'oauth-cross-origin-redirect'
+  createUser({ id: userId, email: `${userId}@example.com` })
+  const server = upsertServer({
+    userId,
+    name: 'Redirect policy MCP',
+    transport: 'http',
+    url: 'https://redirect-policy.example.test/mcp',
+    headers: {},
+    enabled: true,
+    autoApprove: [],
+  })
+  const requests = []
+  const fetchImpl = async (url, options = {}) => {
+    const href = String(url)
+    requests.push({ url: href, options })
+    if (href === 'https://redirect-policy.example.test/.well-known/oauth-protected-resource/mcp') {
+      return jsonResponse({
+        resource: server.url,
+        authorization_endpoint: 'https://auth.example.test/authorize',
+        token_endpoint: 'https://redirect-auth.example.test/token',
+      })
+    }
+    if (href === 'https://redirect-auth.example.test/token') {
+      return new Response(null, {
+        status: 307,
+        headers: { location: 'https://credential-thief.example.test/token' },
+      })
+    }
+    throw new Error(`request must not reach ${href}`)
+  }
+  const lookup = async () => [{ address: '93.184.216.34', family: 4 }]
+  const started = await beginMcpOAuth({
+    userId,
+    serverId: server.id,
+    redirectUri: 'http://127.0.0.1:5175/api/mcp/oauth/callback',
+    config: { clientId: 'redirect-client', clientSecret: 'redirect-secret' },
+    fetchImpl,
+    lookup,
+  })
+
+  await assert.rejects(
+    () => completeMcpOAuth({ state: started.state, code: 'redirect-code', fetchImpl, lookup }),
+    (error) => error?.code === 'OUTBOUND_REDIRECT_CROSS_ORIGIN',
+  )
+  const tokenRequest = requests.find(({ url }) => url === 'https://redirect-auth.example.test/token')
+  assert.match(tokenRequest.options.headers.Authorization, /^Basic /)
+  assert.equal(new URLSearchParams(tokenRequest.options.body).get('code'), 'redirect-code')
+  assert.equal(requests.some(({ url }) => url.includes('credential-thief.example.test')), false)
+})
+
+test('OAuth token redirects re-check DNS and stop rebinding before a second fetch', async () => {
+  const userId = 'oauth-dns-rebinding'
+  createUser({ id: userId, email: `${userId}@example.com` })
+  const server = upsertServer({
+    userId,
+    name: 'Rebinding policy MCP',
+    transport: 'http',
+    url: 'https://rebind-policy.example.test/mcp',
+    headers: {},
+    enabled: true,
+    autoApprove: [],
+  })
+  let tokenFetches = 0
+  let tokenLookups = 0
+  const fetchImpl = async (url) => {
+    const href = String(url)
+    if (href === 'https://rebind-policy.example.test/.well-known/oauth-protected-resource/mcp') {
+      return jsonResponse({
+        resource: server.url,
+        authorization_endpoint: 'https://auth.example.test/authorize',
+        token_endpoint: 'https://rebind-auth.example.test/token',
+      })
+    }
+    if (href === 'https://rebind-auth.example.test/token') {
+      tokenFetches += 1
+      return new Response(null, { status: 307, headers: { location: '/token-next' } })
+    }
+    throw new Error(`request must not reach ${href}`)
+  }
+  const lookup = async (hostname) => {
+    if (hostname === 'rebind-auth.example.test') {
+      tokenLookups += 1
+      return [{
+        address: tokenLookups === 1 ? '93.184.216.34' : '169.254.169.254',
+        family: 4,
+      }]
+    }
+    return [{ address: '93.184.216.34', family: 4 }]
+  }
+  const started = await beginMcpOAuth({
+    userId,
+    serverId: server.id,
+    redirectUri: 'http://127.0.0.1:5175/api/mcp/oauth/callback',
+    config: { clientId: 'rebind-client', clientSecret: 'rebind-secret' },
+    fetchImpl,
+    lookup,
+  })
+
+  await assert.rejects(
+    () => completeMcpOAuth({ state: started.state, code: 'rebind-code', fetchImpl, lookup }),
+    (error) => error?.code === 'OUTBOUND_ADDRESS_DENIED',
+  )
+  assert.equal(tokenLookups, 2)
+  assert.equal(tokenFetches, 1)
+})

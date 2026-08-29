@@ -1,4 +1,9 @@
 const LEGACY_RUNTIME_STATUS_PATTERNS = Object.freeze([
+  /^任务未全部完成，但已保存的文件仍可打开；请按文件旁的状态确认结果。$/u,
+  /^任務未全部完成，但已儲存的檔案仍可開啟；請依檔案旁的狀態確認結果。$/u,
+  /^The task is incomplete, but saved files can still be opened\. Check the status (?:beside|next to) each file to confirm the result\.$/iu,
+  /^タスクは完了していませんが、保存済みのファイルは開けます。各ファイルの横に表示された状態を確認してください。$/u,
+  /^작업이 완료되지는 않았지만 저장된 파일은 열 수 있습니다\. 각 파일 옆의 상태를 확인하세요\.$/u,
   /^任务中断\s*[：:]\s*后续模型请求未能继续[，,]任务尚未完成。请重试以继续。(?:\s*已经完成的部分\s*[：:][\s\S]*)?$/u,
   /^模型预算已用尽[，,]任务尚未完成。请重试以继续。(?:\s*已经完成的部分\s*[：:][\s\S]*)?$/u,
   /^任务执行被中断[，,]尚未完成/u,

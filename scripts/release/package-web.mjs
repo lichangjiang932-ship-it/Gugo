@@ -13,7 +13,9 @@ export const WEB_RELEASE_ENTRIES = Object.freeze([
   'THIRD_PARTY_NOTICES.md',
   'package.json',
   'package-lock.json',
+  'bin',
   'dist',
+  'docs/CLI.md',
   'server',
   'shared',
   'seed',
@@ -47,6 +49,17 @@ and the locked production dependency manifest required to run Gugo.
 2. Install production dependencies: \`npm ci --omit=dev\`
 3. Start Gugo: \`npm run serve\`
 4. Open the URL printed by the server (default: http://127.0.0.1:5175).
+
+## CLI
+
+The archive also includes the Gugo CLI. Run it directly from the unpacked
+release directory:
+
+    node bin/yma-cli.js --version
+    node bin/yma-cli.js --help
+
+See \`docs/CLI.md\` for authentication, service commands, headless Agent runs,
+output formats, and exit codes.
 
 Runtime data is created outside the release files according to \`APP_DATA_DIR\`
 and \`APP_DB_PATH\`. Do not put credentials into this archive.

@@ -86,6 +86,8 @@ import {
   executeGeneratedArtifactTool,
   isGeneratedArtifactTool,
 } from './generatedArtifactExecutor.js'
+import { executeLocalCodeCapabilityTool } from './localCodeCapabilityExecutor.js'
+import { CODEX_MODELS_TOOL_NAME, dispatchCodexAppServerTool } from '../../codexAppServerTool.js'
 import {
   BATCH_FILE_TOOL_NAMES,
   CODING_AGENT_TOOL_NAMES,
@@ -422,6 +424,17 @@ export async function executeServerTool({
     } catch (err) {
       return { ok: false, error: err?.message || String(err) }
     }
+  }
+  if (name === 'lsp' || name === 'run_code') {
+    return executeLocalCodeCapabilityTool({
+      name, args, userId: job?.userId || null, signal, toolCallId,
+    })
+  }
+  if (name === CODEX_MODELS_TOOL_NAME) {
+    return dispatchCodexAppServerTool(name, args || {}, {
+      userId: job?.userId || null,
+      signal,
+    })
   }
   if (name === 'apply_patch') {
     try {

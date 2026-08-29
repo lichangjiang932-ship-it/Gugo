@@ -106,6 +106,7 @@ test('desktop ASAR verifier normalizes package paths and covers the backend entr
     'server/adapters/builtinSqliteTurnPersistenceBootstrap.js',
     'server/adapters/sqliteTurnPersistenceAdapter.js',
     'server/core/turnPersistenceBootstrap.js',
+    'server/services/desktopParentGuard.js',
     'server/services/runtimeServerStartup.js',
     'shared/runtimeConfigRecoveryProtocol.js',
     'src/lib/officeExport/documentExport.js',
@@ -139,7 +140,7 @@ test('desktop media sidecars are staged, packaged, and documented', () => {
   assert.match(packageJson.scripts['desktop:package'], /^npm run desktop:media-sidecars && electron-builder/)
   assert.match(packageJson.scripts['desktop:package'], /&& npm run desktop:smoke-package$/)
   assert.match(packageJson.scripts['desktop:smoke-package'], /smoke-test-desktop-package\.mjs/)
-  assert.match(packageJson.scripts['desktop:publish'], /npm run desktop:media-sidecars && electron-builder/)
+  assert.match(packageJson.scripts['desktop:publish'], /block-direct-desktop-publish\.mjs/)
   assert.equal(packageJson.devDependencies['@electron/asar'], '3.4.1')
   assert.equal(packageJson.devDependencies['@ffmpeg-installer/ffmpeg'], '1.1.0')
   assert.equal(packageJson.devDependencies['@ffprobe-installer/ffprobe'], '2.1.2')
@@ -338,6 +339,26 @@ test('desktop shuts down the in-process fallback server before quitting', () => 
   assert.match(stop, /const server = backendServer/)
   assert.match(stop, /gracefulShutdown\(server, \{ exit: false \}\)/)
   assert.match(main, /if \(allowQuit \|\| \(!backendProcess && !backendServer\)\) return/)
+})
+
+test('desktop child is bound to the Electron parent by a Node IPC channel', () => {
+  const main = read('desktop/main.js')
+  const start = read('server/start.js')
+  const guard = read('server/services/desktopParentGuard.js')
+
+  assert.match(main, /GUGO_DESKTOP_PARENT_GUARD:\s*'ipc-v1'/)
+  assert.match(main, /stdio:\s*\['ignore', 'pipe', 'pipe', 'ipc'\]/)
+  assert.match(main, /BACKEND_DISCONNECT_TIMEOUT_MS\s*=\s*16_000/)
+  assert.match(main, /child\.disconnect\(\)/)
+  assert.match(main, /terminateProcessTree\(\{ pid: child\.pid, child \}\)/)
+  assert.match(start, /bindDesktopParentGuard/)
+  assert.match(start, /gracefulShutdown\(server, \{ exit: false \}\)/)
+  assert.ok(
+    start.indexOf('bindDesktopParentGuard') < start.indexOf('await startRuntimeServer'),
+    'the disconnect listener must be bound before backend startup begins',
+  )
+  assert.match(guard, /processTarget\.once\('disconnect', onDisconnect\)/)
+  assert.match(guard, /processTarget\.connected === false/)
 })
 
 test('desktop pet uses an independent transparent always-on-top window', () => {

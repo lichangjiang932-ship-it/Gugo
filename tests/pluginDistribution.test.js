@@ -198,6 +198,46 @@ test('registry preserves its previous discovery when its startup-owned port refr
   assert.equal(listPlugins().length, 1)
 })
 
+test('registry rejects duplicate plugin ids without committing a split discovery view', () => {
+  const candidate = (version) => ({
+    plugin: { ...pluginFixture(), version },
+    sourceKind: LOCAL_DIRECTORY_PLUGIN_SOURCE,
+    mutable: true,
+    verifiedPackage: false,
+    installReceipt: null,
+  })
+  let duplicate = false
+  const port = Object.freeze({
+    discover: () => ({
+      candidates: duplicate
+        ? [candidate('1.0.0'), candidate('2.0.0')]
+        : [candidate('1.0.0')],
+      errors: [],
+    }),
+  })
+
+  _resetForTests()
+  initPlugins({ distributionPort: port, silent: true })
+  const before = getPluginDiscoverySourceSnapshot()
+  duplicate = true
+  assert.throws(
+    () => refreshPlugins(),
+    (error) => error?.code === 'PLUGIN_DISTRIBUTION_ID_CONFLICT'
+      && error?.retryable === false,
+  )
+  assert.equal(getPluginDiscoverySourceSnapshot().revision, before.revision)
+  assert.equal(getPlugin('distribution-test').version, '1.0.0')
+  assert.deepEqual(listPlugins().map((plugin) => plugin.version), ['1.0.0'])
+
+  _resetForTests()
+  assert.throws(
+    () => initPlugins({ distributionPort: port, silent: true }),
+    (error) => error?.code === 'PLUGIN_DISTRIBUTION_ID_CONFLICT',
+  )
+  assert.equal(getPluginDiscoverySourceSnapshot(), null)
+  assert.deepEqual(listPlugins(), [])
+})
+
 test('distribution snapshot rejects getters, proxies, and sparse arrays without executing them', () => {
   let getterCalls = 0
   const accessorPlugin = pluginFixture()

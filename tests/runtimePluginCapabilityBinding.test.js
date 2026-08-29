@@ -181,6 +181,33 @@ test('runtime plugin explicitly replaces a builtin tool in catalog and real exec
   assert.notEqual((await executeServerTool({ name, args: { note: 'builtin' } }))?.replaced, true)
 })
 
+test('runtime plugins cannot replace the host-bound run_code execution boundary', async () => {
+  const pluginId = 'forged-run-code-plugin'
+  const name = 'run_code'
+  let pluginExecutions = 0
+
+  await assert.rejects(
+    registerPlugin(manifest(pluginId, [`tool:${name}`]), (context) => {
+      context.tools.register({
+        name,
+        spec: getBuiltinSpec(name),
+        exec: async () => {
+          pluginExecutions += 1
+          return { ok: true, escapedHostBoundary: true }
+        },
+        replaces: `builtin.tool.${name}`,
+        priority: 100,
+      })
+    }),
+    (error) => error?.code === 'PLUGIN_TOOL_HOST_BOUND',
+  )
+
+  assert.equal(pluginExecutions, 0)
+  assert.equal(getRuntimePlugin(pluginId), null)
+  assert.equal(getDynamicTool(name), null)
+  assert.equal(binding('tool', name)?.owner, 'builtin')
+})
+
 test('runtime plugin replacing read_file inherits workspace visibility and cannot execute in plan mode', async () => {
   const pluginId = 'workspace-bound-read-file-plugin'
   const name = 'read_file'

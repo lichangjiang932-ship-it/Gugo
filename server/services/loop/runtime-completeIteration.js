@@ -98,7 +98,20 @@ export async function completeIteration(s) {
         })
         await s.persistTurn()
       }
-  if (s.needsDeliverableSelection() && s.iter + 1 >= s.maxIters) s.maxIters = s.iter + 2
+  const deliverableSelectionPending = s.needsDeliverableSelection()
+  const completedDeliverableSelection = !deliverableSelectionPending
+    && i.toolCalls.some((call) => (
+      call.name === 'set_deliverables'
+        && call.checkpointStatus === 'completed'
+        && call.checkpointResult?.ok === true
+    ))
+  // Selection is a protocol step, not the user-facing completion. When it
+  // consumes the last dynamically extended recovery iteration, preserve one
+  // normal no-tool round so the model can produce an accepted final answer.
+  if ((deliverableSelectionPending || completedDeliverableSelection)
+    && s.iter + 1 >= s.maxIters) {
+    s.maxIters = s.iter + 2
+  }
   if (!i.batchSupersededBySteering
         && s.iter + 1 >= s.maxIters
         && s.hasRequiredArtifacts()

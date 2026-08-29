@@ -10,6 +10,8 @@ import {
   consumeMcpOAuthPendingAuthorization,
   saveMcpOAuthPendingAuthorization,
 } from './mcpOAuthPendingStore.js'
+import { isLocalEndpoint } from '../utils/endpointProfile.js'
+import { fetchSafeOutbound } from '../utils/outboundNetworkGuard.js'
 
 const PENDING_TTL_MS = 10 * 60 * 1000
 const TOKEN_REFRESH_LEEWAY_MS = 60 * 1000
@@ -51,11 +53,27 @@ function wellKnownUrl(base, name) {
   return `${url.origin}/.well-known/${name}${path}`
 }
 
-async function fetchJson(url, options = {}, fetchImpl = fetch) {
+function fetchOAuthOutbound(url, init, { fetchImpl = fetch, lookup, allowLocal = false } = {}) {
+  // Real transports resolve and pin every destination. Explicit test transports
+  // remain hermetic unless they inject a lookup, while URL/IP/redirect policy is
+  // still enforced by the central guard.
+  const resolveDns = typeof lookup === 'function' || fetchImpl === globalThis.fetch
+  return fetchSafeOutbound(url, init, {
+    fetchImpl,
+    allowLocal,
+    resolveDns,
+    ...(typeof lookup === 'function' ? { lookup } : {}),
+  })
+}
+
+async function fetchJson(url, options = {}, network = {}) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 15000)
   try {
-    const response = await fetchImpl(url, { ...options, signal: controller.signal })
+    const response = await fetchOAuthOutbound(url, {
+      ...options,
+      signal: controller.signal,
+    }, network)
     const text = await response.text()
     let data = null
     try { data = text ? JSON.parse(text) : {} } catch { /* non-JSON metadata is unusable */ }
@@ -70,7 +88,7 @@ function resourceMetadataFromChallenge(header) {
   return match?.[1] || match?.[2] || ''
 }
 
-async function discoverProtectedResource(serverUrl, fetchImpl) {
+async function discoverProtectedResource(serverUrl, network) {
   const candidates = [
     wellKnownUrl(serverUrl, 'oauth-protected-resource'),
     `${new URL(serverUrl).origin}/.well-known/oauth-protected-resource`,
@@ -79,26 +97,26 @@ async function discoverProtectedResource(serverUrl, fetchImpl) {
     try {
       const { response, data } = await fetchJson(candidate, {
         headers: { Accept: 'application/json' },
-      }, fetchImpl)
+      }, network)
       if (response.ok && data) return { metadata: data, metadataUrl: candidate }
     } catch { /* try the next discovery form */ }
   }
   try {
-    const response = await fetchImpl(serverUrl, {
+    const response = await fetchOAuthOutbound(serverUrl, {
       method: 'GET',
       headers: { Accept: 'application/json, text/event-stream' },
-    })
+    }, network)
     const metadataUrl = resourceMetadataFromChallenge(response.headers.get('www-authenticate'))
     if (metadataUrl) {
       const safeUrl = assertSafeOAuthUrl(metadataUrl, 'Protected resource metadata')
-      const discovered = await fetchJson(safeUrl, { headers: { Accept: 'application/json' } }, fetchImpl)
+      const discovered = await fetchJson(safeUrl, { headers: { Accept: 'application/json' } }, network)
       if (discovered.response.ok && discovered.data) return { metadata: discovered.data, metadataUrl: safeUrl }
     }
   } catch { /* caller reports a useful discovery error below */ }
   return { metadata: {}, metadataUrl: '' }
 }
 
-async function discoverAuthorizationServer(issuer, fetchImpl) {
+async function discoverAuthorizationServer(issuer, network) {
   const candidates = [
     wellKnownUrl(issuer, 'oauth-authorization-server'),
     wellKnownUrl(issuer, 'openid-configuration'),
@@ -107,14 +125,14 @@ async function discoverAuthorizationServer(issuer, fetchImpl) {
     try {
       const { response, data } = await fetchJson(candidate, {
         headers: { Accept: 'application/json' },
-      }, fetchImpl)
+      }, network)
       if (response.ok && data?.authorization_endpoint && data?.token_endpoint) return data
     } catch { /* try the next metadata endpoint */ }
   }
   return {}
 }
 
-async function registerClient({ registrationEndpoint, redirectUri, scopes, fetchImpl }) {
+async function registerClient({ registrationEndpoint, redirectUri, scopes, fetchImpl, lookup, allowLocal }) {
   const { response, data } = await fetchJson(assertSafeOAuthUrl(registrationEndpoint, 'Registration'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -126,7 +144,7 @@ async function registerClient({ registrationEndpoint, redirectUri, scopes, fetch
       token_endpoint_auth_method: 'none',
       ...(scopes.length ? { scope: scopes.join(' ') } : {}),
     }),
-  }, fetchImpl)
+  }, { fetchImpl, lookup, allowLocal })
   if (!response.ok || !data?.client_id) {
     throw oauthError(
       data?.error_description || data?.error || `Dynamic client registration failed (HTTP ${response.status})`,
@@ -148,7 +166,7 @@ function tokenRequestHeaders(credentials, metadata) {
   return headers
 }
 
-async function requestToken({ metadata, credentials, params, fetchImpl = fetch }) {
+async function requestToken({ metadata, credentials, params, fetchImpl = fetch, lookup, allowLocal = false }) {
   const body = new URLSearchParams(params)
   if (credentials.clientSecret && metadata.tokenAuthMethod === 'client_secret_post') {
     body.set('client_id', metadata.clientId)
@@ -160,7 +178,7 @@ async function requestToken({ metadata, credentials, params, fetchImpl = fetch }
     method: 'POST',
     headers: tokenRequestHeaders(credentials, metadata),
     body,
-  }, fetchImpl)
+  }, { fetchImpl, lookup, allowLocal })
   if (!response.ok || !data?.access_token) {
     throw oauthError(
       data?.error_description || data?.error || `Token request failed (HTTP ${response.status})`,
@@ -182,6 +200,7 @@ export async function beginMcpOAuth({
   redirectUri,
   config = {},
   fetchImpl = fetch,
+  lookup,
 }) {
   const server = getServer(userId, serverId)
   if (!server || !['http', 'sse'].includes(server.transport)) {
@@ -190,10 +209,14 @@ export async function beginMcpOAuth({
   const safeServerUrl = assertSafeOAuthUrl(server.url, 'MCP server')
   const safeRedirectUri = assertSafeOAuthUrl(redirectUri, 'OAuth callback')
   const current = getMcpOAuthCredential(userId, serverId)
-  const protectedResource = await discoverProtectedResource(safeServerUrl, fetchImpl)
+  // Local-network access is a capability of the user-configured root server,
+  // never something remote discovery metadata may grant to itself.
+  const allowLocal = isLocalEndpoint(safeServerUrl)
+  const network = { fetchImpl, lookup, allowLocal }
+  const protectedResource = await discoverProtectedResource(safeServerUrl, network)
   const resourceMetadata = protectedResource.metadata || {}
   const issuer = resourceMetadata.authorization_servers?.[0] || resourceMetadata.issuer || ''
-  const authorizationServer = issuer ? await discoverAuthorizationServer(issuer, fetchImpl) : {}
+  const authorizationServer = issuer ? await discoverAuthorizationServer(issuer, network) : {}
   const authorizationEndpoint = assertSafeOAuthUrl(
     config.authorizationEndpoint || authorizationServer.authorization_endpoint || resourceMetadata.authorization_endpoint,
     'Authorization',
@@ -221,7 +244,14 @@ export async function beginMcpOAuth({
         'MCP_OAUTH_CLIENT_REQUIRED',
       )
     }
-    const registered = await registerClient({ registrationEndpoint, redirectUri: safeRedirectUri, scopes, fetchImpl })
+    const registered = await registerClient({
+      registrationEndpoint,
+      redirectUri: safeRedirectUri,
+      scopes,
+      fetchImpl,
+      lookup,
+      allowLocal,
+    })
     clientId = registered.clientId
     clientSecret = registered.clientSecret
     tokenAuthMethod = registered.tokenAuthMethod
@@ -240,6 +270,7 @@ export async function beginMcpOAuth({
     clientId,
     scopes,
     tokenAuthMethod,
+    allowLocal,
   }
   const credentials = {
     ...(current?.credentials || {}),
@@ -274,7 +305,7 @@ export async function beginMcpOAuth({
   return { authorizationUrl: authorizationUrl.toString(), state, expiresAt }
 }
 
-export async function completeMcpOAuth({ state, code, error, errorDescription, fetchImpl = fetch }) {
+export async function completeMcpOAuth({ state, code, error, errorDescription, fetchImpl = fetch, lookup }) {
   const pending = consumeMcpOAuthPendingAuthorization(String(state || ''))
   if (!pending) throw oauthError('OAuth state is invalid or expired', 'MCP_OAUTH_STATE_INVALID')
   if (error) throw oauthError(errorDescription || error, 'MCP_OAUTH_DENIED')
@@ -290,6 +321,8 @@ export async function completeMcpOAuth({ state, code, error, errorDescription, f
       resource: pending.metadata.resource,
     },
     fetchImpl,
+    lookup,
+    allowLocal: pending.metadata.allowLocal === true,
   })
   const expiresAt = tokenExpiry(token)
   const credentials = {
@@ -316,7 +349,7 @@ export async function completeMcpOAuth({ state, code, error, errorDescription, f
   }
 }
 
-async function refreshAccessToken(userId, serverId, record, fetchImpl) {
+async function refreshAccessToken(userId, serverId, record, { fetchImpl, lookup }) {
   if (!record.credentials?.refreshToken) {
     throw oauthError('MCP OAuth session expired. Connect it again.', 'MCP_OAUTH_REAUTHORIZE', 401)
   }
@@ -330,6 +363,8 @@ async function refreshAccessToken(userId, serverId, record, fetchImpl) {
       ...(record.metadata.scopes?.length ? { scope: record.metadata.scopes.join(' ') } : {}),
     },
     fetchImpl,
+    lookup,
+    allowLocal: record.metadata.allowLocal === true,
   })
   const updated = upsertMcpOAuthCredential({
     userId,
@@ -349,14 +384,14 @@ async function refreshAccessToken(userId, serverId, record, fetchImpl) {
   return updated
 }
 
-export async function getMcpOAuthHeaders(userId, serverId, { fetchImpl = fetch } = {}) {
+export async function getMcpOAuthHeaders(userId, serverId, { fetchImpl = fetch, lookup } = {}) {
   let record = getMcpOAuthCredential(userId, serverId)
   if (!record) return {}
   const expired = record.expiresAt && record.expiresAt <= Date.now() + TOKEN_REFRESH_LEEWAY_MS
   if (!record.credentials?.accessToken || expired) {
     const key = `${userId}:${serverId}`
     if (!refreshPromises.has(key)) {
-      refreshPromises.set(key, refreshAccessToken(userId, serverId, record, fetchImpl).finally(() => {
+      refreshPromises.set(key, refreshAccessToken(userId, serverId, record, { fetchImpl, lookup }).finally(() => {
         refreshPromises.delete(key)
       }))
     }

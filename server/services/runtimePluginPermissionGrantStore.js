@@ -91,6 +91,20 @@ export function getRuntimePluginPermissionGrant(pluginId) {
   return getRuntimePluginPermissionGrantFromDb(getDb(), pluginId)
 }
 
+export function hasRuntimePluginPermissionGrantFromDb(db, pluginId) {
+  if (!db || typeof db.prepare !== 'function') throw new TypeError('db is required')
+  const id = normalizePluginId(pluginId)
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM runtime_plugin_permission_grants
+    WHERE plugin_id = ?
+  `).get(id))
+}
+
+export function hasRuntimePluginPermissionGrant(pluginId) {
+  return hasRuntimePluginPermissionGrantFromDb(getDb(), pluginId)
+}
+
 function normalizedPermissionRequest(request) {
   const id = normalizePluginId(request?.pluginId)
   const approvalDigest = normalizeDigest(request?.approvalDigest, 'approvalDigest')

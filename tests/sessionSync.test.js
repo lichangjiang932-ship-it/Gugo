@@ -27,6 +27,7 @@ const {
   upsertSession,
 } = await import('../server/services/sessionStore.js')
 const { appendTurnEvent } = await import('../server/services/turnEventStore.js')
+const { saveTurnCheckpoint } = await import('../server/services/turnCheckpointStore.js')
 const {
   createCompactionArchiveRecord,
   resolveCompactionArchiveStorage,
@@ -562,6 +563,315 @@ test('session snapshots paginate complete histories without changing revision', 
   assert.equal(secondSnapshot.complete, true)
   assert.equal(secondSnapshot.nextOffset, null)
   assert.equal(secondSnapshot.revision, firstSnapshot.revision)
+})
+
+test('legacy TURN_INCOMPLETE messages recover only their scoped checkpoint reason', { concurrency: false }, () => {
+  const { userId } = issueTestSession({ email: 'legacy-incomplete-scope@example.com' })
+  const { userId: otherUserId } = issueTestSession({ email: 'legacy-incomplete-scope-other@example.com' })
+  const turnId = 'shared-legacy-incomplete-turn'
+  const targetSessionId = 'legacy-incomplete-target'
+  const sameUserOtherSessionId = 'legacy-incomplete-same-user-other-session'
+  const otherUserSessionId = 'legacy-incomplete-other-user-session'
+  const isolatedSessionId = 'legacy-incomplete-isolated'
+  for (const [ownerId, sessionId] of [
+    [userId, targetSessionId],
+    [userId, sameUserOtherSessionId],
+    [otherUserId, otherUserSessionId],
+    [userId, isolatedSessionId],
+  ]) {
+    upsertSession({ id: sessionId, userId: ownerId, title: sessionId, createdAt: 1, updatedAt: 1 })
+  }
+  const legacyContext = {
+    version: 1,
+    turnId,
+    turnEvidence: true,
+    evidenceState: 'failed',
+    error: { code: 'TURN_INCOMPLETE', message: 'Task incomplete.', retryable: true },
+  }
+  upsertMessage({
+    id: 'legacy-incomplete-target:assistant',
+    userId,
+    sessionId: targetSessionId,
+    role: 'assistant',
+    content: '',
+    modelContext: legacyContext,
+    createdAt: 2,
+    updatedAt: 2,
+  })
+  upsertMessage({
+    id: 'legacy-incomplete-isolated:assistant',
+    userId,
+    sessionId: isolatedSessionId,
+    role: 'assistant',
+    content: '',
+    modelContext: legacyContext,
+    createdAt: 2,
+    updatedAt: 2,
+  })
+  saveTurnCheckpoint({
+    userId,
+    sessionId: sameUserOtherSessionId,
+    turnId,
+    eventSequence: 1,
+    state: { final: { incomplete: true, reason: 'artifact_delivery_not_converged' } },
+    now: 3,
+  })
+  saveTurnCheckpoint({
+    userId: otherUserId,
+    sessionId: otherUserSessionId,
+    turnId,
+    eventSequence: 1,
+    state: { final: { incomplete: true, reason: 'deliverable_selection_missing' } },
+    now: 3,
+  })
+  saveTurnCheckpoint({
+    userId,
+    sessionId: targetSessionId,
+    turnId,
+    eventSequence: 1,
+    state: {
+      final: {
+        incomplete: true,
+        reason: 'post_mutation_verification_missing',
+        budgetExceeded: false,
+        noProgress: false,
+      },
+    },
+    now: 4,
+  })
+
+  const recovered = getSessionSnapshot({ userId, sessionId: targetSessionId }).messages[0].modelContext.error
+  assert.equal(recovered.incompleteReason, 'post_mutation_verification_missing')
+  assert.deepEqual(recovered.missingRequirements, ['mutation_readback', 'diff_or_project_check'])
+
+  const isolated = getSessionSnapshot({ userId, sessionId: isolatedSessionId }).messages[0].modelContext.error
+  assert.equal(Object.hasOwn(isolated, 'incompleteReason'), false)
+  assert.equal(Object.hasOwn(isolated, 'missingRequirements'), false)
+})
+
+test('legacy TURN_INCOMPLETE recovery rejects unknown reasons and non-boolean flags', { concurrency: false }, () => {
+  const { userId } = issueTestSession({ email: 'legacy-incomplete-unknown@example.com' })
+  const sessionId = 'legacy-incomplete-unknown'
+  const turnId = 'legacy-incomplete-unknown-turn'
+  upsertSession({ id: sessionId, userId, title: sessionId, createdAt: 1, updatedAt: 1 })
+  upsertMessage({
+    id: 'legacy-incomplete-unknown:assistant',
+    userId,
+    sessionId,
+    role: 'assistant',
+    content: '',
+    modelContext: {
+      version: 1,
+      turnId,
+      turnEvidence: true,
+      evidenceState: 'failed',
+      error: { code: 'TURN_INCOMPLETE', retryable: true },
+    },
+    createdAt: 2,
+    updatedAt: 2,
+  })
+  saveTurnCheckpoint({
+    userId,
+    sessionId,
+    turnId,
+    eventSequence: 1,
+    state: {
+      final: {
+        incomplete: true,
+        reason: 'private_internal_reason',
+        budgetExceeded: 'true',
+        noProgress: 1,
+      },
+    },
+    now: 3,
+  })
+
+  const failure = getSessionSnapshot({ userId, sessionId }).messages[0].modelContext.error
+  assert.equal(failure.incompleteReason, 'private_internal_reason')
+  assert.deepEqual(failure.missingRequirements, [])
+  assert.equal(Object.hasOwn(failure, 'budgetExceeded'), false)
+  assert.equal(Object.hasOwn(failure, 'noProgress'), false)
+})
+
+test('legacy TURN_INCOMPLETE recovery never overwrites existing structured fields', { concurrency: false }, () => {
+  const { userId } = issueTestSession({ email: 'legacy-incomplete-preserve@example.com' })
+  const sessionId = 'legacy-incomplete-preserve'
+  const turnId = 'legacy-incomplete-preserve-turn'
+  const expected = {
+    incompleteReason: 'deliverable_selection_missing',
+    missingRequirements: ['deliverable_selection'],
+    budgetExceeded: false,
+    noProgress: true,
+  }
+  upsertSession({ id: sessionId, userId, title: sessionId, createdAt: 1, updatedAt: 1 })
+  upsertMessage({
+    id: 'legacy-incomplete-preserve:assistant',
+    userId,
+    sessionId,
+    role: 'assistant',
+    content: '',
+    modelContext: {
+      version: 1,
+      turnId,
+      turnEvidence: true,
+      evidenceState: 'failed',
+      error: { code: 'TURN_INCOMPLETE', retryable: true, ...expected },
+    },
+    createdAt: 2,
+    updatedAt: 2,
+  })
+  saveTurnCheckpoint({
+    userId,
+    sessionId,
+    turnId,
+    eventSequence: 1,
+    state: {
+      final: {
+        incomplete: true,
+        reason: 'artifact_delivery_not_converged',
+        budgetExceeded: true,
+        noProgress: false,
+      },
+    },
+    now: 3,
+  })
+
+  const failure = getSessionSnapshot({ userId, sessionId }).messages[0].modelContext.error
+  assert.deepEqual({
+    incompleteReason: failure.incompleteReason,
+    missingRequirements: failure.missingRequirements,
+    budgetExceeded: failure.budgetExceeded,
+    noProgress: failure.noProgress,
+  }, expected)
+})
+
+test('session snapshots recover legacy incomplete diagnostics from scoped checkpoints without rewriting history', { concurrency: false }, () => {
+  const { userId } = issueTestSession({ email: 'session-legacy-incomplete@example.com' })
+  const sessionId = 'session-legacy-incomplete'
+  upsertSession({ id: sessionId, userId, title: 'Legacy incomplete', createdAt: 1, updatedAt: 1 })
+
+  const legacyFailure = {
+    code: 'TURN_INCOMPLETE',
+    message: '任务尚未完全通过验证。',
+    retryable: true,
+  }
+  for (const [turnId, failure] of [
+    ['legacy-mutation-verification', legacyFailure],
+    ['legacy-budget', legacyFailure],
+    ['legacy-no-progress', legacyFailure],
+    ['current-structured-diagnostic', {
+      ...legacyFailure,
+      incompleteReason: 'execution_evidence_missing',
+      missingRequirements: ['execution_evidence'],
+    }],
+  ]) {
+    upsertMessage({
+      id: `${turnId}:assistant`,
+      userId,
+      sessionId,
+      role: 'assistant',
+      content: '',
+      modelContext: {
+        turnId,
+        turnEvidence: true,
+        evidenceState: 'failed',
+        error: failure,
+      },
+      createdAt: 2,
+      updatedAt: 2,
+    })
+  }
+
+  for (const [turnId, final] of [
+    ['legacy-mutation-verification', {
+      incomplete: true,
+      reason: 'post_mutation_verification_missing',
+    }],
+    ['legacy-budget', { incomplete: true, budgetExceeded: true }],
+    ['legacy-no-progress', { incomplete: true, noProgress: true }],
+    ['current-structured-diagnostic', {
+      incomplete: true,
+      reason: 'post_mutation_verification_missing',
+    }],
+  ]) {
+    saveTurnCheckpoint({
+      userId,
+      sessionId,
+      turnId,
+      eventSequence: 1,
+      state: { messages: [], artifactIds: [], final },
+      now: 3,
+    })
+  }
+
+  const snapshot = getSessionSnapshot({ userId, sessionId })
+  const failures = new Map(snapshot.messages.map((message) => [
+    message.modelContext.turnId,
+    message.modelContext.error,
+  ]))
+  assert.deepEqual(failures.get('legacy-mutation-verification'), {
+    ...legacyFailure,
+    incompleteReason: 'post_mutation_verification_missing',
+    missingRequirements: ['mutation_readback', 'diff_or_project_check'],
+  })
+  assert.deepEqual(failures.get('legacy-budget'), {
+    ...legacyFailure,
+    incompleteReason: 'execution_budget_exhausted',
+    missingRequirements: ['remaining_task_steps'],
+  })
+  assert.deepEqual(failures.get('legacy-no-progress'), {
+    ...legacyFailure,
+    incompleteReason: 'tool_no_progress',
+    missingRequirements: ['progress_after_last_checkpoint'],
+  })
+  assert.deepEqual(failures.get('current-structured-diagnostic'), {
+    ...legacyFailure,
+    incompleteReason: 'execution_evidence_missing',
+    missingRequirements: ['execution_evidence'],
+  })
+
+  const stored = new Map(listMessages({ userId, sessionId }).map((message) => [
+    message.modelContext.turnId,
+    message.modelContext.error,
+  ]))
+  assert.equal(stored.get('legacy-mutation-verification').incompleteReason, undefined)
+  assert.equal(stored.get('legacy-mutation-verification').missingRequirements, undefined)
+})
+
+test('legacy incomplete checkpoint recovery stays within the requested session', { concurrency: false }, () => {
+  const { userId } = issueTestSession({ email: 'session-legacy-incomplete-scope@example.com' })
+  const sessionId = 'session-legacy-incomplete-scope'
+  const otherSessionId = 'session-legacy-incomplete-other'
+  const turnId = 'shared-legacy-turn-id'
+  upsertSession({ id: sessionId, userId, title: 'Target session' })
+  upsertSession({ id: otherSessionId, userId, title: 'Other session' })
+  upsertMessage({
+    id: `${sessionId}:assistant`,
+    userId,
+    sessionId,
+    role: 'assistant',
+    content: '',
+    modelContext: {
+      turnId,
+      turnEvidence: true,
+      evidenceState: 'failed',
+      error: { code: 'TURN_INCOMPLETE', message: 'Incomplete.' },
+    },
+  })
+  saveTurnCheckpoint({
+    userId,
+    sessionId: otherSessionId,
+    turnId,
+    eventSequence: 1,
+    state: {
+      messages: [],
+      final: { incomplete: true, reason: 'post_mutation_verification_missing' },
+    },
+  })
+
+  const message = getSessionSnapshot({ userId, sessionId }).messages[0]
+  assert.equal(message.modelContext.error.incompleteReason, undefined)
+  assert.equal(message.modelContext.error.missingRequirements, undefined)
 })
 
 test('CAS replacement preserves stored model context and rejects a stale revision', { concurrency: false }, () => {

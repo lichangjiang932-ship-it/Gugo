@@ -12,11 +12,13 @@ Gugo 的进程内 runtime plugin 通过 `server/plugins/runtimePluginRegistry.js
 
 ## 本地分发源边界
 
-生产服务、Vite 宿主和 CLI Headless 的普通磁盘插件发现通过同步 `DistributionPort` 组合两个离线目录：发行包内置 `plugins/` 标记为 `builtin-directory-readonly`，用户目录固定从权威运行时路径解析器派生为 `APP_DATA_DIR/plugins`，标记为 `managed-user-directory`。发现过程不会创建目录、联网、下载或执行安装脚本；直接调用 `initPlugins({ rootDir })` 的测试与开发入口仍保持原 `local-directory-development` 语义，不会把任意开发目录冒充受保护内置源。
+生产服务、Vite 宿主和 CLI Headless 的普通磁盘插件发现通过同步 `DistributionPort` 组合两个离线来源：发行包内置 `plugins/` 标记为 `builtin-directory-readonly`，用户目录固定从权威运行时路径解析器派生为 `APP_DATA_DIR/plugins`，标记为 `managed-user-directory`。该端口不会联网、下载或执行安装脚本；managed 来源只接收本地包存储恢复并校验后的候选。直接调用 `initPlugins({ rootDir })` 的测试与开发入口仍保持原 `local-directory-development` 语义，不会把任意开发目录冒充受保护内置源。
 
 组合顺序与目录枚举顺序无关：候选按 plugin ID 排序，跨源依赖在合并后统一校验。用户目录若声明与内置目录相同的 plugin ID，宿主保留内置项并记录 `PLUGIN_DISTRIBUTION_ID_CONFLICT`，不会按加载时序静默覆盖；两个来源若解析到同一目录，则只扫描一次内置源并记录 `PLUGIN_DISTRIBUTION_ROOT_CONFLICT`。来源、可变性、包验证状态和 install receipt 进入宿主快照及安全 inventory 投影。
 
-这只是 discovery/distribution seam，不是完整包管理器。内置项的 `mutable=false` 表示宿主优先级与分发意图，不等于 publisher 签名；用户目录项仍是 `mutable=true`、`verifiedPackage=false`、`installReceipt=null`。当前没有 Marketplace、下载、更新、卸载、staging、原子安装、崩溃恢复、publisher 签名或信任策略，更不存在平台计费、余额、套餐或订阅。未来只有通过不可变整包校验和安装事务签发 receipt 后，候选才能声明 `verifiedPackage=true`。
+managed 来源已经具备离线本地包管理闭环。`localPluginPackageStore` 对源目录生成不可变快照和 SHA-256 整包摘要，以 store revision 做 compare-and-swap，并在跨进程独占锁内完成 staging 校验、持久事务日志、备份和 rename 提交；安装、显式替换与卸载共用这条事务路径。安装回执记录 plugin/version、摘要、文件数、总字节数和安装时间；发现、列举和变更前都会在同一锁内恢复遗留事务，回滚未提交操作、保留已提交结果并清理日志，同时重新核对回执与磁盘内容，损坏时 fail closed。包卸载要求 runtime 已停用且处于 `inactive`；此前的 runtime 卸载会先撤销贡献可见性并等待已接受的 callback 排空。包服务再以共享生命周期屏障覆盖安全门禁、磁盘事务和 discovery refresh，阻止并发重新启用；活跃依赖、Release/pin/checkpoint 引用或无法确认的状态都会阻止删除。
+
+因此 managed 候选现在是 `mutable=false`、`verifiedPackage=true` 并携带 `installReceipt`；这里的 verified 只表示“与宿主本地安装回执和内容摘要一致”，不表示 publisher 身份可信。内置项的 `mutable=false` 也只表示宿主优先级与分发意图，仍是 `verifiedPackage=false`、`installReceipt=null`。当前依然没有 Marketplace、联网下载/远程更新通道、publisher 签名与信任链，也没有对外发布的公共兼容规范；更不存在平台计费、余额、套餐或订阅。不能把本地回执或可信目录描述成生态级来源认证。
 
 持久化 adapter 的 checkpoint/boundary 命令还必须验证宿主签发的执行租约 proof（owner ID + 单调 fencing token）。该 proof 只在 TurnEngine 获取 lease 时捕获，不向 runtime plugin context 暴露；plugin service、event listener 或工具不能伪造它来提交 Turn 终态。
 
@@ -271,7 +273,7 @@ tool:plugin_<normalized-plugin-id>
 
 schema v101 将授权持久化到 `runtime_plugin_permission_grants`；每条 grant 同时绑定 `plugin_id` 与固定本机 installation owner（`owner_id` 外键），读取、匹配和写入只接受当前有效的固定 owner。固定 owner 不可用时，读取视为无授权，写入以 `PLUGIN_PERMISSION_OWNER_UNAVAILABLE` fail closed。v100 grant 不含 owner，升级时不能安全推断授权人；v101 会删除这些模糊 grant，不做归属猜测，相关 Release 必须由当前固定本机 owner 再次明确授权。owner/plugin 双外键通过级联删除限定授权生命周期。启动恢复、stored Release 健康检查和每次动态工具执行都会重新匹配当前 Release 的 owner、源码摘要、规范化权限集合和 approval digest；直接改 SQLite 期望状态或替换磁盘源码不能绕过门禁。已知未通过发布门禁的 active Release 会先被判为不可执行，再尝试回滚到仍健康且具有匹配授权的 previous Release；健康但未授权的 Release 不会借回滚逻辑绕过确认。
 
-普通 `disable` 只停止插件并保留精确授权，便于用户稍后重新启用同一 Release；`POST /api/plugins/runtime/:id/revoke-permissions` 会撤销授权并停用插件。撤销后即使停用清理发生错误，后续工具执行仍因缺少授权 fail closed。reload 的新 Release 指针提交失败时会恢复本进程旧工具槽；同一数据库事务回滚会让旧 Release 指针与既有 grant 原样保留，不会留下失败候选的授权。该授权层不等于 OS sandbox；worker/VM 隔离之外的进程级强隔离仍是独立安全里程碑。
+普通 `disable` 只停止 transformer 并保留精确授权，便于用户稍后重新启用同一 Release；`POST /api/plugins/runtime/:id/revoke-permissions` 会按安装级 plugin ID 删除授权，并停用该 transformer 的持久期望状态。只有当前运行实例确实由 transformer 控制面持有时才会注销该实例；同 ID 的宿主 runtime 不属于该控制面，撤权不会停止或注销它。撤销后即使 transformer 停用清理发生错误，后续 transformer 工具执行仍因缺少授权 fail closed。reload 的新 Release 指针提交失败时会恢复本进程旧工具槽；同一数据库事务回滚会让旧 Release 指针与既有 grant 原样保留，不会留下失败候选的授权。该授权层不等于 OS sandbox；worker/VM 隔离之外的进程级强隔离仍是独立安全里程碑。
 
 ### Atomic reload
 
@@ -288,16 +290,16 @@ schema v101 将授权持久化到 `runtime_plugin_permission_grants`；每条 gr
 
 ## Read-only inventory
 
-`GET /api/plugins/runtime` 为 renderer 提供版本化的只读清单。端点只接受已登录、loopback 来源且属于本地安装 owner 的请求；多用户模式 fail closed。响应中的 `schemaVersion: 7` 包含 `plugins`、`effectiveConfigs`、当前有效的 `httpCapabilities` 和有界的进程内 `httpCapabilityAudit`，并设置 `Cache-Control: private, no-store`。有效 HTTP 项只投影 `id/owner/priority/replaces/apiPrefixes/sequence`；审计项只含事件、capability/owner/priority/sequence、时间与替换关系。两者均不包含 match/handler、源码或请求对象，使本地 owner 能核对实际生效的路由和本进程内的注册、替换、撤销、恢复历史。该历史重启后清空，不替代需要跨重启保留的安全审计存储。`plugins` 每项包含：
+`GET /api/plugins/runtime` 为 renderer 提供版本化的只读清单。端点只接受已登录、loopback 来源且属于本地安装 owner 的请求；多用户模式 fail closed。响应中的 `schemaVersion: 8` 包含 `plugins`、`effectiveConfigs`、当前有效的 `httpCapabilities` 和有界的进程内 `httpCapabilityAudit`，并设置 `Cache-Control: private, no-store`。有效 HTTP 项只投影 `id/owner/priority/replaces/apiPrefixes/sequence`；审计项只含事件、capability/owner/priority/sequence、时间与替换关系。两者均不包含 match/handler、源码或请求对象，使本地 owner 能核对实际生效的路由和本进程内的注册、替换、撤销、恢复历史。该历史重启后清空，不替代需要跨重启保留的安全审计存储。`plugins` 每项包含：
 
 - 纯 JSON `manifest`（`id/name/version/requires/contributes`）；
 - `source`、`controllable`、`active`、`runtimeState` 和 `installedAt`；
 - transformer 的持久期望状态、生成工具名及脱敏后的最近错误。
 - `activeRelease`、`previousRelease`、`latestRelease`、`releaseCount` 和最近一次 `lastRollback`；Release 身份只含 ID、SHA-256、创建时间和门禁结果。
-- transformer 的 `permissionGrant`，只包含是否需要/是否匹配、当前请求权限与摘要及授权时间；不包含源码、请求头或宿主密钥。
+- transformer 的 `permissionGrant`，只包含是否需要/是否匹配、当前请求权限与摘要及授权时间；`canRevokePermissions` 独立表示该 ID 是否仍有持久授权可撤销，因此磁盘定义删除、改类型或被同 ID 宿主 runtime 占用后仍不会丢失撤权入口；不包含源码、请求头或宿主密钥。
 - transformer 的 `distribution`，只投影来源类型、是否可变、是否为已验证整包及是否存在安装回执；本地目录来源明确标为开发态，不冒充已安装包，也不暴露回执内容。
 
-清单会合并活跃的宿主 runtime plugin、磁盘 transformer 和 SQLite 中遗留的期望状态。registry 的 `listPlugins()` / `getPlugin()` 返回 top-level、`requires` 和 `contributes` 均冻结的 detached 快照，调用方不能改写运行时状态；查询结果数组同样冻结。`getPlugin/hasService/invokeService/unregisterPlugin` 等名称参数只接受真实字符串，不执行对象的 `toString` / `Symbol.toPrimitive`。清单不序列化 Release 源码或 manifest 快照，也不序列化 setup、tool executor、event listener、service value 或 model adapter；renderer 看不到 entry source、绝对路径或任意 JavaScript 加载能力。renderer 的 `listRuntimePluginInventoryApi()` 仅执行该 GET 请求。
+清单会合并活跃的宿主 runtime plugin、磁盘 transformer 和 SQLite 中遗留的期望状态。registry 的 `listPlugins()` / `getPlugin()` 返回 detached 的顶层浅拷贝；调用方可以改动返回对象或结果数组本身，但不会因此改写 registry 内部定义，共享的 `requires` 和 `contributes` 快照仍为冻结数据。`getPlugin/hasService/invokeService/unregisterPlugin` 等名称参数只接受真实字符串，不执行对象的 `toString` / `Symbol.toPrimitive`。清单不序列化 Release 源码或 manifest 快照，也不序列化 setup、tool executor、event listener、service value 或 model adapter；renderer 看不到 entry source、绝对路径或任意 JavaScript 加载能力。renderer 的 `listRuntimePluginInventoryApi()` 仅执行该 GET 请求。
 
 ## Plugin configuration layers
 

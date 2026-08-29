@@ -36,6 +36,7 @@ function crossProviderBoundaryError(error, config) {
 
 export function isProviderFailoverError(error) {
   if (error?.name === 'AbortError') return false
+  if (error?.retryable === false || error?.modelRequestOutcome === 'failed') return false
   if (error?.unsafeToReplay === true || error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN') return false
   // ★ 我们自己造的超时**绝不**触发故障转移。
   // 原来超时被转成 status 504,而 504 >= 500 判定为可转移 —— 于是

@@ -682,7 +682,7 @@ export async function handlePluginRequest(req, res, {
       res.setHeader?.('Cache-Control', 'private, no-store')
       return sendJson(res, 200, {
         ok: true,
-        schemaVersion: 7,
+        schemaVersion: 8,
         plugins: listRuntimePluginInventory(),
         effectiveConfigs: listRuntimePluginEffectiveConfigs(),
         configReloadAudit: listRuntimePluginConfigReloadAudit(),

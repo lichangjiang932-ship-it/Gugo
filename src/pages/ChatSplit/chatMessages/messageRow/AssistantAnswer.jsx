@@ -10,6 +10,7 @@ import {
 import { localFileOpenPayload } from '../../../../lib/localFileReferences.js'
 import {
   getVisibleModelErrorMessage,
+  getVisibleTurnClarification,
   isPreExecutionFailure,
 } from '../../../../lib/chatFlowGuards.js'
 import { ArtifactReferenceLinks } from '../ArtifactCards.jsx'
@@ -63,6 +64,10 @@ export default function AssistantAnswer({
     || msg.meta?.cancelled === true
     || (msg.meta?.serverRecoveryBlocked === true
       && msg.meta?.serverConnectionState === 'blocked')
+  const recoveryBlocked = msg.meta?.serverRecoveryBlocked === true
+    && msg.meta?.serverConnectionState === 'blocked'
+  const genericRecoveryBlocked = recoveryBlocked
+    && !String(msg.meta?.serverRecoveryKind || '').trim()
   const hasStructuredFailure = hasStructuredOutcome
     && msg.meta?.serverFailure
     && typeof msg.meta.serverFailure === 'object'
@@ -81,9 +86,12 @@ export default function AssistantAnswer({
   // Derive missing presentation copy at render time so reloads and language
   // changes never treat server-localized error prose as assistant output.
   const visibleAnswer = presentation.answer
+    || (msg.meta?.paused === true
+      ? getVisibleTurnClarification(msg.meta?.serverClarification, t)
+      : '')
     || (msg.meta?.cancelled === true
       ? t('chat.serverTurn.cancelled')
-      : (msg.meta?.failed === true || msg.meta?.interrupted === true) && hasStructuredFailure
+      : (msg.meta?.failed === true || msg.meta?.interrupted === true || genericRecoveryBlocked) && hasStructuredFailure
         ? getVisibleModelErrorMessage(msg, t)
         : '')
 

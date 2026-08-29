@@ -193,8 +193,28 @@ v82 在上述确定性 operational guard 之外增加独立的逐 Outcome 在线
 ```bash
 npm run eval:offline
 npm run eval:offline -- --eval-suite capability
+npm run eval:offline -- --eval-suite code-mode --eval-suite final-answer-evidence
 npm run eval:offline -- --eval-json artifacts/offline-eval-latest.json
 npm run eval:offline -- --eval-baseline path/to/read-only-baseline.json
 ```
 
 Suite 从 `tests/offline-evals/*.eval.js` 自动发现。Baseline 只读比较：case 回归、删除或整 suite 缺失都会让门禁失败；runner 不提供自动覆盖 baseline 的路径。生成报告默认不进入 Git，诊断在写盘前经过结构化凭据脱敏和完整 schema/summary 校验。
+
+任务级 suite 同时覆盖代表性用户目标、可交付结果和失败边界，并记录可比较的评分/计数 metric；不能用单一函数 happy-path 或已有单测的机械复制替代。当前套件包括：
+
+| Suite | 任务级门禁 |
+|---|---|
+| `capability` | Agent 工具循环、审批、恢复和收敛 |
+| `compaction-fidelity` / `compaction-port` | 上下文压缩保真与异步端口边界 |
+| `plugin-revocation` | 插件权限撤销 |
+| `reasoning-retention` | 推理上下文保留 |
+| `shell-guard` | Shell 攻击召回率与误报率 |
+| `subagent-provider` | 子代理 Provider 边界 |
+| `code-mode` | 结构化计算任务、无环境权限与资源收敛 |
+| `final-answer-evidence` | 完成/未完成交付物与终答证据一致性 |
+| `outbound-network` | DNS pin、SSRF 拒绝与逐跳重定向复核 |
+| `lsp` | 代码导航路由、坏响应拒绝与后续恢复 |
+| `native-model-providers` | Anthropic/Gemini 工具轮协议转换与拒绝语义 |
+| `codex-app-server` | 显式 opt-in、握手就绪与可执行文件信任边界 |
+
+`tests/offlineEvalCapabilityCoverage.test.js` 使用同一套目录自动发现结果，并要求它与全部 suite 的覆盖契约注册表精确一致。每份契约的最少任务场景不得低于 3 个，同时固定核心类别以及“场景 ID + 类别”覆盖信号；删除核心场景、改空类别、降低场景数，或新增 `.eval.js` 却忘记登记契约，都会在普通单测阶段 fail closed。完整 `npm run eval:offline` 仍是 case 执行、隔离网络与 baseline 回归的最终门禁。

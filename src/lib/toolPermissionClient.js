@@ -3,6 +3,12 @@ import { getAuthToken } from './accountClient.js'
 // 可被 gate 的真实后端工具(与服务端 GATEABLE_TOOLS 对齐)。
 export const GATEABLE_TOOLS = [
   { id: 'bash_exec', name: '命令执行', code: 'SHELL', scope: 'workspace shell' },
+  {
+    id: 'run_code',
+    nameKey: 'permissionsDashboard.toolRunCodeName',
+    code: 'CODE',
+    scopeKey: 'permissionsDashboard.toolRunCodeScope',
+  },
   { id: 'write_file', name: '文件写入', code: 'WRITE', scope: 'workspace 写文件' },
   { id: 'edit_file', name: '文件编辑', code: 'EDIT', scope: 'workspace 改文件' },
 ]

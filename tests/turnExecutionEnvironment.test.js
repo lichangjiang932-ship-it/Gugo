@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { getBuiltinSpec } from '../server/services/toolRegistry.js'
 
@@ -115,6 +116,26 @@ function snapshot(overrides = {}) {
   })
 }
 
+function stableFingerprint(value) {
+  const canonical = (entry) => {
+    if (Array.isArray(entry)) return entry.map(canonical)
+    if (!entry || typeof entry !== 'object') return entry
+    return Object.fromEntries(Object.keys(entry).sort().map((key) => [key, canonical(entry[key])]))
+  }
+  return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex')
+}
+
+function asLegacyRunCodeSnapshot(value) {
+  const legacy = structuredClone(value)
+  delete legacy.fileAccess.runtime.runCodeExecutionEnabled
+  legacy.components.fileAccess = stableFingerprint(legacy.fileAccess)
+  legacy.fingerprint = stableFingerprint({
+    version: legacy.version,
+    components: legacy.components,
+  })
+  return legacy
+}
+
 test('turn execution environment snapshot is deterministic across input ordering', () => {
   const left = snapshot({ toolsConfig: { enabled: ['write_file', 'read_file'], disabled: [] } })
   const right = snapshot({ toolsConfig: { enabled: ['read_file', 'write_file'], disabled: [] } })
@@ -124,6 +145,72 @@ test('turn execution environment snapshot is deterministic across input ordering
   assert.notEqual(compatible, right)
   assert.equal(Object.isFrozen(compatible), true)
   assert.equal(Object.isFrozen(compatible.toolCatalog[0].spec.function.parameters.properties.path), true)
+})
+
+test('run_code deployment capability is pinned into the execution environment fingerprint', () => {
+  const enabled = snapshot({
+    fileAccess: {
+      runtime: {
+        localCodeExecutionEnabled: false,
+        runCodeExecutionEnabled: true,
+      },
+    },
+  })
+  const disabled = snapshot({
+    fileAccess: {
+      runtime: {
+        localCodeExecutionEnabled: false,
+        runCodeExecutionEnabled: false,
+      },
+    },
+  })
+
+  assert.equal(enabled.fileAccess.runtime.runCodeExecutionEnabled, true)
+  assert.equal(disabled.fileAccess.runtime.runCodeExecutionEnabled, false)
+  assert.notEqual(enabled.components.fileAccess, disabled.components.fileAccess)
+  assert.notEqual(enabled.fingerprint, disabled.fingerprint)
+  assert.throws(
+    () => assertTurnExecutionEnvironmentCompatible(enabled, disabled),
+    (error) => error?.code === TURN_PERMISSION_CONTEXT_DRIFT,
+  )
+})
+
+test('legacy version 4 snapshots without run_code capability remain recoverable', () => {
+  const current = snapshot({
+    fileAccess: {
+      runtime: {
+        localCodeExecutionEnabled: true,
+        runCodeExecutionEnabled: true,
+      },
+    },
+  })
+  const legacy = asLegacyRunCodeSnapshot(current)
+
+  assert.equal(Object.hasOwn(legacy.fileAccess.runtime, 'runCodeExecutionEnabled'), false)
+  const normalized = normalizeTurnExecutionEnvironmentSnapshot(legacy)
+  assert.ok(normalized)
+  assert.equal(Object.hasOwn(normalized.fileAccess.runtime, 'runCodeExecutionEnabled'), false)
+  assert.equal(
+    assertTurnExecutionEnvironmentCompatible(legacy, current).fingerprint,
+    current.fingerprint,
+  )
+
+  const unrelatedPermissionDrift = snapshot({
+    fileAccess: {
+      runtime: {
+        localCodeExecutionEnabled: false,
+        runCodeExecutionEnabled: true,
+      },
+    },
+  })
+  assert.throws(
+    () => assertTurnExecutionEnvironmentCompatible(legacy, unrelatedPermissionDrift),
+    (error) => error?.code === TURN_PERMISSION_CONTEXT_DRIFT,
+  )
+
+  const tamperedCurrent = structuredClone(current)
+  delete tamperedCurrent.fileAccess.runtime.runCodeExecutionEnabled
+  assert.equal(normalizeTurnExecutionEnvironmentSnapshot(tamperedCurrent), null)
 })
 
 test('persisted workspace failure codes remain self-verifiable during recovery', () => {
@@ -513,6 +600,13 @@ test('directory upgrade is bound to the exact pause, grant, path, mode and scope
   })
   assert.equal(
     assertTurnExecutionEnvironmentCompatible(expected, current, {
+      directoryAuthorization: resolution,
+    }).fingerprint,
+    current.fingerprint,
+  )
+  const legacyExpected = asLegacyRunCodeSnapshot(expected)
+  assert.equal(
+    assertTurnExecutionEnvironmentCompatible(legacyExpected, current, {
       directoryAuthorization: resolution,
     }).fingerprint,
     current.fingerprint,

@@ -113,6 +113,8 @@ export function createRateLimiter({
  */
 
 export const bashLimiter = createRateLimiter({ capacity: 30, refillPerMin: 30, burstCap: 8 })
+export const codeModeLimiter = createRateLimiter({ capacity: 30, refillPerMin: 30, burstCap: 8 })
+export const codexAppServerLimiter = createRateLimiter({ capacity: 12, refillPerMin: 12, burstCap: 3 })
 export const patchLimiter = createRateLimiter({ capacity: 60, refillPerMin: 60, burstCap: 15 })
 export const writeLimiter = createRateLimiter({ capacity: 120, refillPerMin: 120, burstCap: 30 })
 
@@ -120,12 +122,16 @@ export const writeLimiter = createRateLimiter({ capacity: 120, refillPerMin: 120
 //   避免 import 多次时 timer 泄露 / 阻塞 process.exit
 if (process.env.NODE_ENV !== 'test' && !process.env.VITEST && !process.env.NODE_TEST_CONTEXT) {
   bashLimiter.startSweep()
+  codeModeLimiter.startSweep()
+  codexAppServerLimiter.startSweep()
   patchLimiter.startSweep()
   writeLimiter.startSweep()
 }
 
 export function stopAllSweeps() {
   bashLimiter.stopSweep()
+  codeModeLimiter.stopSweep()
+  codexAppServerLimiter.stopSweep()
   patchLimiter.stopSweep()
   writeLimiter.stopSweep()
 }

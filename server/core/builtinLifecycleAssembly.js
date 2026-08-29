@@ -40,6 +40,11 @@ import {
 } from '../services/sessionContentMaterializerRuntime.js'
 import { socialBridgeManager } from '../services/socialBridgeManager.js'
 import { recoverInterruptedSubagentRuns } from '../services/subagentRuntime.js'
+import {
+  closeCodexAppServerRuntime,
+  startCodexAppServerRuntime,
+} from '../services/codexAppServerRuntime.js'
+import { closeLspRuntime, startLspRuntime } from '../services/lspRuntime.js'
 import { resolveAgentModelRuntimeBinding } from '../services/modelReadinessService.js'
 import { configureSubagentModelBindingResolver } from '../services/subagentModelBindingRuntime.js'
 import { closeTurnEngine } from '../services/turnEngineHost.js'
@@ -72,10 +77,12 @@ export const BUILTIN_LIFECYCLE_CAPABILITY_IDS = Object.freeze({
   systemSkills: 'builtin.startup.system-skills',
   pluginDiscovery: 'builtin.startup.plugin-discovery',
   runtimePluginRestore: 'builtin.startup.runtime-plugin-restore',
+  codexAppServer: 'builtin.resource.codex-app-server',
   codexPluginSkills: 'builtin.startup.codex-plugin-skills',
   visionAssist: 'builtin.startup.vision-assist',
   socialBridges: 'builtin.resource.social-bridges',
   runtimePlugins: 'builtin.resource.runtime-plugins',
+  lsp: 'builtin.resource.lsp',
   shellSessions: 'builtin.resource.shell-sessions',
   jobs: 'builtin.resource.jobs',
   evolutionOperationSweeper: 'builtin.resource.evolution-operation-sweeper',
@@ -105,6 +112,10 @@ const DEFAULT_ADAPTERS = Object.freeze({
   initializeRuntimePluginConfig,
   initPlugins,
   restoreEnabledRuntimePlugins,
+  startCodexAppServerRuntime,
+  closeCodexAppServerRuntime,
+  startLspRuntime,
+  closeLspRuntime,
   initCodexPluginSkills,
   setVisionAssistResolver,
   getEnabledIntegrationCredentials,
@@ -191,7 +202,7 @@ function definition(id, dependsOn, hooks = {}) {
     owner: 'builtin',
     priority: 0,
     dependsOn: Object.freeze(dependsOn ? [dependsOn] : []),
-    startTimeoutMs: 10_000,
+    startTimeoutMs: hooks.startTimeoutMs || 10_000,
     stopTimeoutMs: hooks.stopTimeoutMs || 10_000,
     startFailure: hooks.startFailure || 'ignore',
     stopFailure: hooks.stopFailure || 'ignore',
@@ -334,6 +345,11 @@ export function createBuiltinLifecycleCapabilities({
       stopFailure: 'fail',
       errorLabel: 'session content materializer lifecycle',
     }),
+    definition(ids.lsp, ids.runtimePlugins, {
+      start: () => adapters.startLspRuntime({ env: runtimeEnv }),
+      stop: () => adapters.closeLspRuntime(),
+      errorLabel: 'LSP runtime lifecycle',
+    }),
     definition(ids.toolLoop, ids.runtimePlugins, {
       start: () => {
         releaseSubagentModelBindingResolver = adapters.configureSubagentModelBindingResolver(
@@ -361,6 +377,7 @@ export function createBuiltinLifecycleCapabilities({
     }),
     definition(ids.mcp, ids.sessionContentMaterializer, {
       stop: () => adapters.shutdownMcpAll(),
+      stopTimeoutMs: 20_000,
       errorLabel: 'MCP shutdown',
     }),
     definition(ids.browser, ids.mcp, {
@@ -401,6 +418,15 @@ export function createBuiltinLifecycleCapabilities({
       start: () => restoreRuntimePlugins(adapters),
       startFailure: 'fail',
       errorLabel: 'runtime plugin restore',
+    }),
+    definition(ids.codexAppServer, ids.runtimePluginRestore, {
+      start: ({ signal }) => adapters.startCodexAppServerRuntime({ env: runtimeEnv, cwd, signal }),
+      stop: ({ signal }) => adapters.closeCodexAppServerRuntime({ signal }),
+      startTimeoutMs: 65_000,
+      stopTimeoutMs: 30_000,
+      startFailure: 'ignore',
+      stopFailure: 'ignore',
+      errorLabel: 'Codex app-server lifecycle',
     }),
     definition(ids.codexPluginSkills, ids.runtimePluginRestore, {
       start: () => adapters.initCodexPluginSkills(),

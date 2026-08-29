@@ -57,6 +57,143 @@ test('native stream preserves max-token truncation after a partial tool call', (
   assert.equal(events[0].finishReason, 'length')
 })
 
+test('native provider safety and unknown stop reasons fail closed', () => {
+  const cases = [
+    {
+      kind: 'anthropic',
+      reason: 'refusal',
+      data: { content: [{ type: 'text', text: 'blocked' }], stop_reason: 'refusal' },
+    },
+    {
+      kind: 'anthropic',
+      reason: 'sensitive',
+      data: { content: [{ type: 'text', text: 'blocked' }], stop_reason: 'sensitive' },
+    },
+    {
+      kind: 'anthropic',
+      reason: 'future_stop_reason',
+      data: { content: [{ type: 'text', text: 'partial' }], stop_reason: 'future_stop_reason' },
+    },
+    {
+      kind: 'anthropic',
+      reason: 'pause_turn',
+      data: { content: [{ type: 'text', text: 'paused' }], stop_reason: 'pause_turn' },
+    },
+    {
+      kind: 'gemini',
+      reason: 'MALFORMED_FUNCTION_CALL',
+      data: {
+        candidates: [{
+          content: { parts: [{ functionCall: { name: 'write_file', args: { path: 'unsafe.txt' } } }] },
+          finishReason: 'MALFORMED_FUNCTION_CALL',
+        }],
+      },
+    },
+    {
+      kind: 'gemini',
+      reason: 'SAFETY',
+      data: { promptFeedback: { blockReason: 'SAFETY' } },
+    },
+    {
+      kind: 'gemini',
+      reason: 'SAFETY',
+      data: {
+        promptFeedback: { blockReason: 'SAFETY' },
+        candidates: [{ content: { parts: [{ text: 'must not win' }] }, finishReason: 'STOP' }],
+      },
+    },
+  ]
+
+  for (const { kind, reason, data } of cases) {
+    assert.throws(
+      () => parseModelProviderResponse(data, { kind }),
+      (error) => {
+        assert.equal(error?.code, 'MODEL_PROVIDER_STOP_REASON_ERROR')
+        assert.equal(error?.providerKind, kind)
+        assert.equal(error?.stopReason, reason)
+        assert.equal(error?.fromUpstream, true)
+        assert.equal(error?.retryable, false)
+        assert.equal(error?.modelRequestOutcome, 'failed')
+        return true
+      },
+      `${kind}:${reason}`,
+    )
+  }
+})
+
+test('Anthropic tool blocks require the matching tool_use stop reason', () => {
+  const response = {
+    content: [{ type: 'tool_use', id: 'toolu_mismatch', name: 'write_file', input: { path: 'unsafe.txt' } }],
+    stop_reason: 'end_turn',
+  }
+  assert.throws(
+    () => parseModelProviderResponse(response, { kind: 'anthropic' }),
+    (error) => error?.code === 'MODEL_PROVIDER_STOP_REASON_ERROR'
+      && error?.providerKind === 'anthropic'
+      && error?.stopReason === 'end_turn',
+  )
+
+  const state = createNativeProviderStreamState('anthropic')
+  consumeNativeProviderStreamPayload({
+    type: 'content_block_start',
+    index: 0,
+    content_block: { type: 'tool_use', id: 'toolu_mismatch', name: 'write_file' },
+  }, state)
+  assert.throws(
+    () => consumeNativeProviderStreamPayload({
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn' },
+    }, state),
+    (error) => error?.code === 'MODEL_PROVIDER_STOP_REASON_ERROR'
+      && error?.stopReason === 'end_turn',
+  )
+})
+
+test('Anthropic refusal after complete-looking tool input never emits a canonical tool batch', async () => {
+  const frames = [
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'unsafe', name: 'write_file' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"unsafe.txt"}' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'refusal' } },
+    { type: 'message_stop' },
+  ]
+  const events = []
+
+  await assert.rejects(
+    async () => {
+      for await (const event of streamOpenAICompatible({
+        config: { baseUrl: 'https://api.anthropic.com', apiKey: 'x', modelName: 'claude-sonnet-4-5' },
+        messages: [{ role: 'user', content: 'write it' }],
+        tools: [TOOL],
+        fetchImpl: async () => new Response(
+          frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(''),
+          { status: 200 },
+        ),
+        env: {},
+      })) events.push(event)
+    },
+    (error) => error?.code === 'MODEL_PROVIDER_STOP_REASON_ERROR'
+      && error?.stopReason === 'refusal',
+  )
+
+  assert.equal(events.some((event) => event.type === 'tool_calls'), false)
+})
+
+test('native done marker without a provider finish reason fails closed', async () => {
+  await assert.rejects(
+    async () => {
+      for await (const event of streamOpenAICompatible({
+        config: { baseUrl: 'https://api.anthropic.com', apiKey: 'x', modelName: 'claude-sonnet-4-5' },
+        messages: [{ role: 'user', content: 'hi' }],
+        fetchImpl: async () => new Response('data: {"type":"message_start","message":{}}\n\ndata: [DONE]\n\n', { status: 200 }),
+        env: {},
+      })) { void event }
+    },
+    (error) => error?.code === 'MODEL_PROVIDER_STOP_REASON_ERROR'
+      && error?.stopReason === 'missing',
+  )
+})
+
 test('Anthropic 原生请求转换 system、PDF 与工具 schema', () => {
   const config = {
     baseUrl: 'https://api.anthropic.com',

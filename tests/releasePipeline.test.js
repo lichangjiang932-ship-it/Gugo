@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -11,7 +12,7 @@ const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'u
 function createReleaseFixture(t) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-release-fixture-'))
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
-  const directories = new Set(['dist', 'server', 'shared', 'seed', 'plugins', 'resources/licenses'])
+  const directories = new Set(['bin', 'dist', 'server', 'shared', 'seed', 'plugins', 'resources/licenses'])
   for (const entry of WEB_RELEASE_ENTRIES) {
     const target = path.join(rootDir, entry)
     if (directories.has(entry)) {
@@ -22,7 +23,19 @@ function createReleaseFixture(t) {
       fs.writeFileSync(target, entry)
     }
   }
-  fs.writeFileSync(path.join(rootDir, 'package.json'), JSON.stringify({ name: 'gugo', version: '1.2.3' }))
+  fs.writeFileSync(path.join(rootDir, 'package.json'), JSON.stringify({
+    name: 'gugo',
+    version: '1.2.3',
+    type: 'module',
+    bin: { gugo: './bin/yma-cli.js' },
+  }))
+  fs.writeFileSync(path.join(rootDir, 'bin', 'yma-cli.js'), `#!/usr/bin/env node
+import fs from 'node:fs'
+const metadata = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+if (process.argv.includes('--version')) process.stdout.write(\`\${metadata.version}\\n\`)
+else if (process.argv.includes('--help')) process.stdout.write('Usage: gugo fixture\\n  gugo run\\n')
+else process.exitCode = 2
+`)
   fs.writeFileSync(path.join(rootDir, 'dist', 'index.html'), '<!doctype html>')
   fs.writeFileSync(path.join(rootDir, 'server', 'start.js'), '')
   fs.writeFileSync(path.join(rootDir, 'resources', 'licenses', 'LGPL-3.0.txt'), 'LGPL fixture')
@@ -40,6 +53,16 @@ test('Web release staging contains a complete runnable distribution and is repea
   }
   assert.match(readFrom(first.stageDir, 'README-WEB.md'), /npm ci --omit=dev/)
   assert.match(readFrom(first.stageDir, 'README-WEB.md'), /npm run serve/)
+  assert.match(readFrom(first.stageDir, 'README-WEB.md'), /node bin\/yma-cli\.js --version/)
+  assert.match(readFrom(first.stageDir, 'README-WEB.md'), /node bin\/yma-cli\.js --help/)
+  assert.equal(fs.existsSync(path.join(first.stageDir, 'bin', 'yma-cli.js')), true)
+  assert.equal(fs.existsSync(path.join(first.stageDir, 'docs', 'CLI.md')), true)
+  assert.equal(execFileSync(process.execPath, [path.join(first.stageDir, 'bin', 'yma-cli.js'), '--version'], {
+    encoding: 'utf8',
+  }).trim(), '1.2.3')
+  assert.match(execFileSync(process.execPath, [path.join(first.stageDir, 'bin', 'yma-cli.js'), '--help'], {
+    encoding: 'utf8',
+  }), /^Usage:.*gugo run/ms)
   assert.equal(fs.existsSync(path.join(first.stageDir, 'resources', 'licenses', 'LGPL-3.0.txt')), true)
 
   fs.writeFileSync(path.join(first.stageDir, 'stale.txt'), 'stale')
@@ -56,7 +79,7 @@ test('Web release staging refuses a build without dist/index.html', (t) => {
   )
 })
 
-test('Release workflow is gated by reusable CI and reruns update existing releases', () => {
+test('Release workflow is gated by reusable CI and never overwrites a published release', () => {
   const ci = read('.github/workflows/ci.yml')
   const release = read('.github/workflows/release.yml')
   assert.match(ci, /workflow_call:/)
@@ -71,15 +94,39 @@ test('Release workflow is gated by reusable CI and reruns update existing releas
   assert.match(release, /npm run desktop:check/)
   assert.match(release, /scripts\/release\/package-web\.mjs/)
   assert.match(release, /scripts\/release\/verify-web-release\.ps1/)
-  assert.match(release, /gh release view/)
+  assert.match(release, /gh release view[^\n]*--json isDraft/)
+  assert.match(release, /Published GitHub Release[^\n]*already exists and is immutable/)
   assert.match(release, /gh release upload[^\n]*--clobber/)
-  assert.match(release, /gh release create/)
+  assert.match(release, /gh release create[^\n]*--draft/)
+  assert.match(release, /gh release edit[^\n]*--draft=false/)
+  assert.ok(
+    release.indexOf('if (-not $existingRelease.isDraft)') < release.indexOf('gh release upload'),
+    'only an unpublished draft may replace partially uploaded assets',
+  )
   const verification = read('scripts/release/verify-web-release.ps1')
   assert.match(verification, /THIRD_PARTY_NOTICES\.md/)
+  assert.match(verification, /bin\/yma-cli\.js/)
+  assert.match(verification, /docs\/CLI\.md/)
+  assert.match(verification, /'--version'/)
+  assert.match(verification, /'--help'/)
+  assert.match(verification, /CLI reported version/)
+  assert.match(verification, /CLI --help output is incomplete/)
   assert.match(verification, /resources\/licenses\/LGPL-3\.0\.txt/)
   assert.match(verification, /RedirectStandardOutput/)
   assert.match(verification, /RedirectStandardError/)
   assert.match(verification, /Read-ServerDiagnostics/)
+})
+
+test('CI workflow pins checkout and Node setup actions to immutable commits', () => {
+  const ci = read('.github/workflows/ci.yml')
+  const checkoutRefs = [...ci.matchAll(/actions\/checkout@([^\s#]+)/g)].map((match) => match[1])
+  const setupNodeRefs = [...ci.matchAll(/actions\/setup-node@([^\s#]+)/g)].map((match) => match[1])
+
+  assert.ok(checkoutRefs.length > 0, 'CI must use actions/checkout')
+  assert.ok(setupNodeRefs.length > 0, 'CI must use actions/setup-node')
+  assert.deepEqual(new Set(checkoutRefs), new Set(['11d5960a326750d5838078e36cf38b85af677262']))
+  assert.deepEqual(new Set(setupNodeRefs), new Set(['49933ea5288caeca8642d1e84afbd3f7d6820020']))
+  assert.doesNotMatch(ci, /actions\/(?:checkout|setup-node)@v4\b/)
 })
 
 test('Release secret scanning cannot pass without scanning an explicit checkout ref', () => {

@@ -75,6 +75,23 @@ Startup hooks are invoked in topological order and their bounded results are exp
 
 Failures are isolated so remaining cleanup still runs. A failed stop yields exit code `1` only for `stopFailure: 'fail'`. HTTP, SSE, and WebSocket draining always precedes capability shutdown.
 
+The optional `builtin.resource.lsp` capability starts after
+`builtin.resource.runtime-plugins`. Missing, invalid, or conflicting provider
+configuration completes in a disabled state and publishes no model-facing
+`lsp` schema. Shutdown calls `closeLspRuntime()`, cancels in-flight queries, and
+reaps their process trees before the runtime-plugin owner is released. LSP
+providers are host-configured process resources, not ordinary runtime plugins.
+
+The optional `builtin.resource.codex-app-server` capability is disabled unless
+`CODEX_APP_SERVER_ENABLED` is explicitly `1`. Merely installing or configuring
+Codex CLI does not trigger discovery or process creation. Opting in launches an
+external OpenAI Codex CLI `app-server` child process, which may access the
+network according to its own login and configuration. Once ready, the Agent
+Loop may consume only the bounded `codex_models` capability: it sends the fixed
+`model/list` method after per-call approval and returns a sanitized projection.
+No arbitrary JSON-RPC pass-through is exposed. Native Gugo code tools remain
+available when this capability is disabled or unavailable.
+
 Read-only inspection before `bootstrap()` and shutdown of a process that never
 bootstrapped use inert host-adapter controllers. They build the same capability
 inventory and run process cleanup hooks without selecting or activating

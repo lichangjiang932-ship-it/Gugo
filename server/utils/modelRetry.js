@@ -33,6 +33,7 @@ export const DEFAULT_MAX_DELAY_MS = 8_000
 
 export function isRetryableError(err) {
   if (!err) return false
+  if (err.retryable === false || err.modelRequestOutcome === 'failed') return false
   // A stable request header is not proof of provider-side idempotency. Once a
   // tracked request may have been accepted, reconciliation must decide what
   // happened before another physical request is allowed.

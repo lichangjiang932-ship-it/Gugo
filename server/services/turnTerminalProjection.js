@@ -1,13 +1,37 @@
 import {
   TURN_EVENT_PERSISTENCE_FAILURE_CODE,
-  TURN_TERMINAL_PERSISTENCE_FAILURE_CODE,
 } from './turnEventEmitter.js'
+import { normalizePublicFailureCode } from '../../shared/turnEventProjection.js'
 
-const PUBLIC_TURN_FAILURE = '任务执行遇到问题，尚未完成。请重试；若仍失败，请检查模型配置和工具调用支持。'
-export const PUBLIC_TURN_INTERRUPTED = '模型服务暂时中断。请重试，系统会继续处理尚未完成的任务。'
-export const PUBLIC_TURN_INCOMPLETE = '任务尚未完全通过验证。已成功写入的本地修改会保留，并可在文件栏中查看；待验证文件不代表验证通过。请重试以继续完成验证。'
-const PUBLIC_EVENT_PERSISTENCE_FAILURE = '任务事件无法可靠保存，已停止执行且不会标记为完成。请重试；已经产生的本地修改可能仍然保留。'
-const PUBLIC_REASONING_RUNAWAY = '模型推理超过安全上限，任务已停止。请重试，或换用更适合执行工具任务的模型。'
+const INCOMPLETE_REASON_REQUIREMENTS = Object.freeze({
+  artifact_delivery_not_converged: ['deliverable_artifact'],
+  deliverable_selection_missing: ['deliverable_selection'],
+  directory_resume_not_converged: ['authorized_directory'],
+  empty_model_response: ['model_response'],
+  execution_evidence_missing: ['execution_evidence'],
+  final_answer_evidence_review_missing: ['final_answer_consistency_review'],
+  iteration_limit_reached: ['remaining_task_steps'],
+  local_html_delivery_validation_failed: ['html_resource_validation'],
+  pdf_layout_verification_missing: ['pdf_layout_validation'],
+  post_mutation_verification_missing: ['mutation_readback', 'diff_or_project_check'],
+  reasoning_runaway: ['bounded_model_response'],
+  tool_no_progress: ['progress_after_last_checkpoint'],
+})
+
+export function normalizeIncompleteReason(value, fallback = 'turn_incomplete') {
+  const reason = String(value || '').trim().toLowerCase()
+  if (Object.hasOwn(INCOMPLETE_REASON_REQUIREMENTS, reason)) return reason
+  if (/^(?:model|tool)_[a-z0-9_]*(?:budget|limit)[a-z0-9_]*$/u.test(reason)) return 'execution_budget_exhausted'
+  if (/^[a-z][a-z0-9_]{1,95}$/u.test(reason)) return reason
+  return fallback
+}
+
+export function missingRequirementsForIncompleteReason(value) {
+  const reason = normalizeIncompleteReason(value)
+  if (reason === 'execution_budget_exhausted') return ['remaining_task_steps']
+  if (reason.includes('no_progress')) return ['progress_after_last_checkpoint']
+  return [...(INCOMPLETE_REASON_REQUIREMENTS[reason] || [])]
+}
 
 const INTERNAL_TERMINAL_FAILURE_PATTERNS = [
   /Model call failed\s*:/i,
@@ -24,40 +48,11 @@ function containsInternalTerminalFailure(value) {
   return INTERNAL_TERMINAL_FAILURE_PATTERNS.some((pattern) => pattern.test(String(value || '')))
 }
 
-function publicTurnFailureMessage(error, { code = 'TURN_FAILED', fallback = PUBLIC_TURN_FAILURE } = {}) {
-  const normalizedCode = String(error?.code || code || 'TURN_FAILED').trim().toUpperCase()
-  const rawMessage = String(error?.message || error?.reason || '').trim()
-  const status = Number(error?.status ?? error?.statusCode)
-  if ([
-    TURN_EVENT_PERSISTENCE_FAILURE_CODE,
-    TURN_TERMINAL_PERSISTENCE_FAILURE_CODE,
-  ].includes(normalizedCode)) {
-    return PUBLIC_EVENT_PERSISTENCE_FAILURE
-  }
-  if (normalizedCode === 'TURN_INCOMPLETE') return PUBLIC_TURN_INCOMPLETE
-  if (normalizedCode === 'REASONING_RUNAWAY') return PUBLIC_REASONING_RUNAWAY
-  if (normalizedCode.includes('TIMEOUT')
-    || normalizedCode.includes('UNAVAILABLE')
-    || normalizedCode.includes('INTERRUPT')
-    || status === 408
-    || status === 425
-    || status === 429
-    || status >= 500) {
-    return PUBLIC_TURN_INTERRUPTED
-  }
-  if (rawMessage
-    && /[\u3400-\u9fff]/u.test(rawMessage)
-    && !containsInternalTerminalFailure(rawMessage)) {
-    return rawMessage
-  }
-  return fallback
-}
-
 export function finalClarificationText(result) {
   if (result?.text) return String(result.text)
   const clarification = result?.clarification
   if (typeof clarification === 'string') return clarification
-  return String(clarification?.question || clarification?.message || '需要你补充信息后才能继续。')
+  return String(clarification?.question || clarification?.message || '')
 }
 
 export function normalizeArtifactIds(values) {
@@ -86,7 +81,7 @@ export function deliveryArtifactFields(deliveryArtifactIds) {
     : {}
 }
 
-export function publicIncompleteText(value, fallback = PUBLIC_TURN_INCOMPLETE) {
+export function publicIncompleteText(value, fallback = '') {
   const text = String(value || '').trim()
   if (!text || containsInternalTerminalFailure(text)) return fallback
   return text
@@ -94,14 +89,9 @@ export function publicIncompleteText(value, fallback = PUBLIC_TURN_INCOMPLETE) {
 
 export function normalizeTurnFailure(error, {
   code = 'TURN_FAILED',
-  message = PUBLIC_TURN_FAILURE,
   retryable,
 } = {}) {
-  const normalizedCode = String(error?.code || code || 'TURN_FAILED').trim() || 'TURN_FAILED'
-  const normalizedMessage = publicTurnFailureMessage(error, {
-    code: normalizedCode,
-    fallback: String(message || PUBLIC_TURN_FAILURE).trim() || PUBLIC_TURN_FAILURE,
-  })
+  const normalizedCode = normalizePublicFailureCode(error?.code, code)
   const rawStatus = Number(error?.status ?? error?.statusCode)
   const status = Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599
     ? rawStatus
@@ -111,18 +101,25 @@ export function normalizeTurnFailure(error, {
     : error?.name === 'AbortError' || /(?:TIMEOUT|TEMPORAR|UNAVAILABLE|INTERRUPT)/i.test(normalizedCode)
   const failure = {
     code: normalizedCode,
-    message: normalizedMessage,
     retryable: typeof error?.retryable === 'boolean'
       ? error.retryable
       : (typeof retryable === 'boolean' ? retryable : inferredRetryable),
   }
-  if (status !== null) failure.status = status
-  const rawHint = String(error?.hint || '').trim()
-  if (rawHint && !containsInternalTerminalFailure(rawHint)) {
-    failure.hint = rawHint
-  } else if (failure.retryable) {
-    failure.hint = 'Retry this task; the system will continue the unfinished steps.'
+  if (typeof error?.manualRetryable === 'boolean') {
+    failure.manualRetryable = error.manualRetryable
   }
+  const incompleteReason = error?.incompleteReason
+    ? normalizeIncompleteReason(error.incompleteReason)
+    : ''
+  if (incompleteReason) failure.incompleteReason = incompleteReason
+  const explicitMissingRequirements = Array.isArray(error?.missingRequirements)
+    ? [...new Set(error.missingRequirements.map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
+    : []
+  const missingRequirements = explicitMissingRequirements.length > 0
+    ? explicitMissingRequirements
+    : (incompleteReason ? missingRequirementsForIncompleteReason(incompleteReason) : [])
+  if (missingRequirements.length > 0) failure.missingRequirements = missingRequirements
+  if (status !== null) failure.status = status
   const attempts = Number(error?.attempts)
   if (Number.isInteger(attempts) && attempts > 0) failure.attempts = attempts
   if (normalizedCode === TURN_EVENT_PERSISTENCE_FAILURE_CODE) {

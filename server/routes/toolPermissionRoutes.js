@@ -17,7 +17,7 @@ function sendJson(res, status, body) {
 }
 
 // 可被 gate 的真实后端工具(仅这些允许写覆盖,防止前端塞任意名字)。
-export const GATEABLE_TOOLS = ['bash_exec', 'write_file', 'edit_file']
+export const GATEABLE_TOOLS = ['bash_exec', 'run_code', 'write_file', 'edit_file']
 
 export async function handleToolPermissionsRequest(req, res) {
   const userId = authenticateRequest(req)

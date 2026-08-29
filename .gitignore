@@ -80,14 +80,15 @@ server-data/
 /undefined-wal
 /undefined-shm
 
-# Root-level certificate/private-key material and generated backup archives.
-/*.pem
-/*.key
-/*.p12
-/*.pfx
-/*.crt
-/*.cer
-/*.der
+# Certificate/private-key material and generated backup archives.
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+/SHA256SUMS.txt
 /*.bak
 /*.backup
 /*.zip

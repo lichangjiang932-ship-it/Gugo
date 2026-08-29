@@ -216,6 +216,97 @@ test('server snapshots retain local tool offsets when canonical text is unchange
   assert.deepEqual(merged.meta.toolCalls, [{ id: 'call-same', textOffset: 4 }])
 })
 
+test('authoritative failure snapshots replace stale local incomplete diagnostics', () => {
+  const recoveredFailure = {
+    code: 'TURN_INCOMPLETE',
+    retryable: false,
+    incompleteReason: 'post_mutation_verification_missing',
+    missingRequirements: ['mutation_readback', 'diff_or_project_check'],
+  }
+  const [merged] = mergeServerSessionMessages([{
+    id: 'turn-incomplete:assistant',
+    role: 'assistant',
+    content: 'partial result',
+    meta: {
+      serverTurnId: 'turn-incomplete',
+      serverLastSequence: 8,
+      failed: true,
+      serverFailure: { code: 'TURN_INCOMPLETE', retryable: false },
+    },
+  }], [{
+    id: 'turn-incomplete:assistant',
+    role: 'assistant',
+    content: 'partial result',
+    meta: {
+      serverTurnId: 'turn-incomplete',
+      serverLastSequence: 8,
+      serverAuthoritative: true,
+      failed: true,
+      serverFailure: recoveredFailure,
+    },
+  }])
+
+  assert.deepEqual(merged.meta.serverFailure, recoveredFailure)
+})
+
+test('a stale failure snapshot cannot overwrite a newer live terminal diagnosis', () => {
+  const liveFailure = {
+    code: 'TURN_INCOMPLETE',
+    incompleteReason: 'pdf_layout_verification_missing',
+    missingRequirements: ['pdf_layout_validation'],
+  }
+  const [merged] = mergeServerSessionMessages([{
+    id: 'turn-newer-failure:assistant',
+    role: 'assistant',
+    content: 'newer live result',
+    meta: {
+      serverTurnId: 'turn-newer-failure',
+      serverLastSequence: 10,
+      failed: true,
+      serverFailure: liveFailure,
+    },
+  }], [{
+    id: 'turn-newer-failure:assistant',
+    role: 'assistant',
+    content: 'older persisted result',
+    meta: {
+      serverTurnId: 'turn-newer-failure',
+      serverLastSequence: 9,
+      serverAuthoritative: true,
+      failed: true,
+      serverFailure: { code: 'TURN_INCOMPLETE' },
+    },
+  }])
+
+  assert.deepEqual(merged.meta.serverFailure, liveFailure)
+})
+
+test('an authoritative completion clears a stale local failure', () => {
+  const [merged] = mergeServerSessionMessages([{
+    id: 'turn-now-complete:assistant',
+    role: 'assistant',
+    content: 'done',
+    meta: {
+      serverTurnId: 'turn-now-complete',
+      serverLastSequence: 3,
+      failed: true,
+      serverFailure: { code: 'TURN_INCOMPLETE' },
+    },
+  }], [{
+    id: 'turn-now-complete:assistant',
+    role: 'assistant',
+    content: 'done',
+    meta: {
+      serverTurnId: 'turn-now-complete',
+      serverLastSequence: 4,
+      serverAuthoritative: true,
+      streaming: false,
+    },
+  }])
+
+  assert.equal(Object.hasOwn(merged.meta, 'serverFailure'), false)
+})
+
 test('an older snapshot cannot roll a newer live tool result back to running', () => {
   const [merged] = mergeServerSessionMessages([{
     id: 'assistant-tool-race',
@@ -728,6 +819,279 @@ test('a server session containing only an active-turn stub still requires transc
   assert.equal(needsServerSessionSnapshot(session, null), true)
   assert.equal(needsServerSessionSnapshot(session, 7), false)
   assert.equal(needsServerTranscriptHydration({ ...session, messages: [{ id: 'history', role: 'user' }] }), false)
+})
+
+test('an incomplete local terminal record without structured diagnostics requires hydration', () => {
+  const legacyFailure = {
+    id: 'turn-incomplete:assistant',
+    role: 'assistant',
+    content: 'Saved files remain available.',
+    meta: {
+      failed: true,
+      serverFailure: { code: 'TURN_INCOMPLETE', retryable: false },
+    },
+  }
+  const session = {
+    id: 's1',
+    serverRevision: 7,
+    messages: [
+      { id: 'turn-incomplete:user', role: 'user', content: 'finish the task' },
+      legacyFailure,
+    ],
+  }
+
+  assert.equal(needsServerTranscriptHydration(session), true)
+  assert.equal(needsServerSessionSnapshot(session, null), true)
+  assert.equal(needsServerSessionSnapshot(session, 7), false)
+
+  const withReasonOnly = {
+    ...session,
+    messages: [session.messages[0], {
+      ...legacyFailure,
+      meta: {
+        ...legacyFailure.meta,
+        serverFailure: {
+          ...legacyFailure.meta.serverFailure,
+          incompleteReason: 'private_internal_reason',
+        },
+      },
+    }],
+  }
+  assert.equal(needsServerTranscriptHydration(withReasonOnly), true)
+
+  const completeDiagnostics = {
+    ...withReasonOnly,
+    messages: [withReasonOnly.messages[0], {
+      ...withReasonOnly.messages[1],
+      meta: {
+        ...withReasonOnly.messages[1].meta,
+        serverFailure: {
+          ...withReasonOnly.messages[1].meta.serverFailure,
+          missingRequirements: [],
+        },
+      },
+    }],
+  }
+  assert.equal(needsServerTranscriptHydration(completeDiagnostics), false)
+  assert.equal(needsServerTranscriptHydration(undefined), false)
+})
+
+test('selecting a historical incomplete session replaces legacy fallback diagnostics from the server', async () => {
+  let state = {
+    activeSessionId: null,
+    sessions: [{
+      id: 's1',
+      serverRevision: 7,
+      messages: [{
+        id: 'turn-incomplete:assistant',
+        role: 'assistant',
+        content: 'Saved files remain available.',
+        meta: {
+          failed: true,
+          serverFailure: { code: 'TURN_INCOMPLETE', retryable: false },
+        },
+      }],
+    }],
+  }
+  const authoritativeFailure = {
+    code: 'TURN_INCOMPLETE',
+    retryable: false,
+    incompleteReason: 'post_mutation_verification_missing',
+    missingRequirements: ['mutation_readback', 'diff_or_project_check'],
+  }
+  let snapshotRequests = 0
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    fetchSessionSnapshot: async () => {
+      snapshotRequests += 1
+      return {
+        complete: true,
+        revision: 7,
+        messages: [{
+          id: 'turn-incomplete:assistant',
+          role: 'assistant',
+          content: 'Saved files remain available.',
+          meta: { failed: true, serverFailure: authoritativeFailure },
+        }],
+      }
+    },
+    replaceMessages: async () => ({ revision: 8 }),
+    deleteSession: async () => ({ ok: true }),
+  })
+
+  assert.equal(await dispatch({ type: 'SWITCH_SESSION', payload: 's1' }), true)
+  assert.equal(snapshotRequests, 1)
+  assert.equal(state.activeSessionId, 's1')
+  assert.deepEqual(state.sessions[0].messages[0].meta.serverFailure, authoritativeFailure)
+
+  assert.equal(dispatch({ type: 'SWITCH_SESSION', payload: 's1' }), undefined)
+  assert.equal(snapshotRequests, 1)
+})
+
+test('a legacy incomplete local session is claimed by its matching server session before hydration', async () => {
+  let state = {
+    activeSessionId: null,
+    sessions: [{
+      id: 'legacy-s1',
+      messages: [{
+        id: 'turn-incomplete:assistant',
+        role: 'assistant',
+        content: 'Saved files remain available.',
+        meta: {
+          failed: true,
+          serverFailure: { code: 'TURN_INCOMPLETE', retryable: false },
+        },
+      }],
+    }],
+  }
+  const authoritativeFailure = {
+    code: 'TURN_INCOMPLETE',
+    retryable: false,
+    incompleteReason: 'post_mutation_verification_missing',
+    missingRequirements: ['mutation_readback', 'diff_or_project_check'],
+  }
+  let metadataRequests = 0
+  let snapshotRequests = 0
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    resolveSessionMetadata: async ({ sessionId }) => {
+      metadataRequests += 1
+      assert.equal(sessionId, 'legacy-s1')
+      return { id: sessionId, revision: 7 }
+    },
+    fetchSessionSnapshot: async ({ sessionId }) => {
+      snapshotRequests += 1
+      assert.equal(sessionId, 'legacy-s1')
+      return {
+        complete: true,
+        revision: 7,
+        messages: [{
+          id: 'turn-incomplete:assistant',
+          role: 'assistant',
+          content: 'Saved files remain available.',
+          meta: { failed: true, serverFailure: authoritativeFailure },
+        }],
+      }
+    },
+    replaceMessages: async () => ({ revision: 8 }),
+    deleteSession: async () => ({ ok: true }),
+  })
+
+  assert.equal(await dispatch({ type: 'SWITCH_SESSION', payload: 'legacy-s1' }), true)
+  assert.equal(metadataRequests, 1)
+  assert.equal(snapshotRequests, 1)
+  assert.equal(state.activeSessionId, 'legacy-s1')
+  assert.equal(state.sessions[0].serverRevision, 7)
+  assert.deepEqual(state.sessions[0].messages[0].meta.serverFailure, authoritativeFailure)
+
+  assert.equal(dispatch({ type: 'SWITCH_SESSION', payload: 'legacy-s1' }), undefined)
+  assert.equal(metadataRequests, 1)
+  assert.equal(snapshotRequests, 1)
+})
+
+test('a legacy incomplete local session remains unchanged when the server has no matching id', async () => {
+  const legacyMessage = {
+    id: 'local-only:assistant',
+    role: 'assistant',
+    content: 'Saved files remain available.',
+    meta: {
+      failed: true,
+      serverFailure: { code: 'TURN_INCOMPLETE', retryable: false },
+    },
+  }
+  let state = {
+    activeSessionId: null,
+    sessions: [{ id: 'local-only', messages: [legacyMessage] }],
+  }
+  let metadataRequests = 0
+  let snapshotRequests = 0
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    resolveSessionMetadata: async () => { metadataRequests += 1; return null },
+    fetchSessionSnapshot: async () => { snapshotRequests += 1; return null },
+    replaceMessages: async () => ({ revision: 1 }),
+    deleteSession: async () => ({ ok: true }),
+  })
+
+  assert.equal(await dispatch({ type: 'SWITCH_SESSION', payload: 'local-only' }), false)
+  assert.equal(metadataRequests, 1)
+  assert.equal(snapshotRequests, 0)
+  assert.equal(state.activeSessionId, 'local-only')
+  assert.equal(Object.hasOwn(state.sessions[0], 'serverRevision'), false)
+  assert.deepEqual(state.sessions[0].messages, [legacyMessage])
+})
+
+test('concurrent legacy incomplete hydration shares one metadata probe and one snapshot request', async () => {
+  let state = {
+    activeSessionId: null,
+    sessions: [{
+      id: 'legacy-shared',
+      messages: [{
+        id: 'legacy-shared:assistant',
+        role: 'assistant',
+        content: 'Saved files remain available.',
+        meta: {
+          failed: true,
+          serverFailure: { code: 'TURN_INCOMPLETE', retryable: false },
+        },
+      }],
+    }],
+  }
+  let finishMetadata
+  const pendingMetadata = new Promise((resolve) => { finishMetadata = resolve })
+  let metadataRequests = 0
+  let snapshotRequests = 0
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    resolveSessionMetadata: async () => { metadataRequests += 1; return pendingMetadata },
+    fetchSessionSnapshot: async () => {
+      snapshotRequests += 1
+      return {
+        complete: true,
+        revision: 4,
+        messages: [{
+          id: 'legacy-shared:assistant',
+          role: 'assistant',
+          content: 'Saved files remain available.',
+          meta: {
+            failed: true,
+            serverFailure: {
+              code: 'TURN_INCOMPLETE',
+              incompleteReason: 'post_mutation_verification_missing',
+              missingRequirements: ['mutation_readback'],
+            },
+          },
+        }],
+      }
+    },
+    replaceMessages: async () => ({ revision: 5 }),
+    deleteSession: async () => ({ ok: true }),
+  })
+
+  const first = dispatch({ type: 'SWITCH_SESSION', payload: 'legacy-shared' })
+  const second = dispatch({ type: 'SWITCH_SESSION', payload: 'legacy-shared' })
+  assert.equal(first, second)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(metadataRequests, 1)
+  assert.equal(snapshotRequests, 0)
+
+  finishMetadata({ id: 'legacy-shared', revision: 4 })
+  assert.deepEqual(await Promise.all([first, second]), [true, true])
+  assert.equal(metadataRequests, 1)
+  assert.equal(snapshotRequests, 1)
+  assert.equal(state.sessions[0].serverRevision, 4)
 })
 
 test('selecting an empty server-backed session hydrates its transcript once per revision', async () => {

@@ -130,6 +130,31 @@ test('新用户默认使用 normal，命令和文件写入批准后才继续', a
   assert.equal(countPendingApprovals({ userId }), 0)
 })
 
+test('run_code remains a one-time decision in bypass mode', async () => {
+  const { userId, jobId } = newUser('run-code-bypass', { permissionMode: 'bypass' })
+  setRiskOverride({ userId, toolName: 'run_code', riskClass: 'read' })
+  const args = { code: 'return 42', description: 'Calculate an answer' }
+  const pending = requestApproval({
+    userId,
+    origin: 'job',
+    jobId,
+    toolName: 'run_code',
+    args,
+    mode: 'unattended',
+  })
+
+  const row = await waitForPendingRow(userId)
+  assert.equal(row.toolName, 'run_code')
+  assert.equal(row.risk, 'high')
+  decideApproval({ userId, id: row.id, decision: 'approve' })
+  releaseApproval(row.id)
+
+  const result = await pending
+  assert.equal(result.proceed, true)
+  assert.deepEqual(result.args, args)
+  assert.equal(countPendingApprovals({ userId }), 0)
+})
+
 test('standing rule 直通时返回命中的目标作用域用于审计', async () => {
   const { userId, jobId } = newUser('standing-audit')
   rememberTool({ userId, toolName: 'publish_report', args: { channelId: 'C-ops', text: 'first' } })
@@ -785,6 +810,25 @@ test('计划模式拒绝返回稳定策略码且不伪装成工具缺失', () =>
   assert.equal(out.policyDenied, true)
   assert.match(out.error, /工具存在/)
   assert.doesNotMatch(out.error, /工具不存在|本轮不可用/)
+})
+
+test('缺少逐次审批返回稳定码且不伪装成用户拒绝', () => {
+  const out = formatDeniedToolResult({
+    proceed: false,
+    reason: 'run_code 必须由用户逐次批准后才能执行',
+    approvalRequired: true,
+    permissionMode: 'normal',
+  })
+
+  assert.equal(out.ok, false)
+  assert.equal(out.denied, false)
+  assert.equal(out.code, 'approval_required')
+  assert.equal(out.approvalRequired, true)
+  assert.equal(out.retryable, true)
+  assert.equal(out.deniedByUser, undefined)
+  assert.match(out.error, /重新发起/)
+  assert.match(out.error, /逐次审批/)
+  assert.doesNotMatch(out.error, /换一个方案/)
 })
 
 test('超时与取消各有独立措辞,不与用户拒绝混淆', () => {

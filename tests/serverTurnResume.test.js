@@ -50,6 +50,15 @@ test('resume terminal fallback appends only the missing completed suffix', () =>
   assert.equal(terminalResumeText('partial', terminal), ' and complete answer')
   assert.equal(terminalResumeText('partial and complete answer', terminal), '')
   assert.equal(terminalResumeText('', terminal), 'partial and complete answer')
+
+  const paused = {
+    type: 'turn.paused',
+    payload: { text: '', clarification: { reason_code: 'clarification_required' } },
+  }
+  assert.equal(
+    terminalResumeText('', paused, (key) => key === 'errors.clarificationRequired' ? 'Need more information.' : key),
+    'Need more information.',
+  )
 })
 
 test('reconnecting, interrupted, and cancelling server messages remain resumable across views', () => {

@@ -138,7 +138,12 @@ test('unknown inbound contacts are parked before agent or vision work, then allo
     externalUserId: 'untrusted-user',
     senderName: 'Unknown sender',
     text: 'please run this',
-    attachments: [{ type: 'image', url: 'https://example.test/untrusted.png', mimeType: 'image/png' }],
+    attachments: [{
+      type: 'image',
+      url: 'https://api.telegram.org/file/bot123:test/photos/untrusted.png',
+      platformRef: 'telegram-untrusted-image',
+      mimeType: 'image/png',
+    }],
   })
 
   assert.equal(parked.parked, true)
@@ -154,6 +159,9 @@ test('unknown inbound contacts are parked before agent or vision work, then allo
   const row = db.prepare('SELECT * FROM bridge_parked_messages WHERE id = ?').get(parked.parkingId)
   assert.equal(row.status, 'parked')
   assert.equal(row.user_id, userId)
+  assert.equal(row.payload_json.includes('123:test'), false, 'parked payload must not persist Telegram bot tokens')
+  assert.equal(JSON.parse(row.payload_json).attachments[0].url, null)
+  assert.equal(JSON.parse(row.payload_json).attachments[0].platformRef, 'telegram-untrusted-image')
 
   const delivered = await manager.allowAndDeliver({ userId, parkingId: parked.parkingId })
   assert.equal(delivered.ok, true)

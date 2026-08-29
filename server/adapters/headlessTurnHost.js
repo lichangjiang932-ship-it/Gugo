@@ -153,6 +153,7 @@ export async function runBuiltinHeadlessTurn(options = {}, dependencies = {}) {
     }
     result = await runHeadlessTurn({
       ...options,
+      signal: options.signal ?? null,
       cwd: workspaceCwd,
       workspaceCwd,
       runtimeCwd,

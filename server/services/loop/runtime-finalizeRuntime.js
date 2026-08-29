@@ -68,6 +68,14 @@ export function protectTerminalCandidate(s, text, { incomplete = false } = {}) {
 
 export async function finalizeRuntime(s) {
   const { mergeCompactionRecovery, writeToolAudit } = s.d
+  // A normal no-tool response can be accepted on the final dynamically
+  // extended recovery iteration. In that case processModelResult has already
+  // persisted the final checkpoint, so the iteration counter alone must not
+  // turn a completed, verified delivery back into an incomplete result.
+  const acceptedFinalPersisted = s.finalCheckpointPersisted === true
+    && Boolean(String(s.finalText || '').trim())
+  const iterationLimitReached = s.iter >= s.maxIters && !acceptedFinalPersisted
+  let emptyModelResponse = false
   if (!s.finalText) {
     try {
       const wrapUpRequest = await s.callTrackedModel({
@@ -98,12 +106,30 @@ export async function finalizeRuntime(s) {
       s.finalText = ''
     }
     if (!s.finalText) {
-      s.finalText = `已达到 ${s.maxIters} 轮工具调用上限，任务尚未完成。请重试以继续。`
+      emptyModelResponse = !iterationLimitReached
+      s.finalText = iterationLimitReached
+        ? `已达到 ${s.maxIters} 轮工具调用上限，任务尚未完成。请重试以继续。`
+        : '模型未返回可显示内容，本次任务未完成。请重试，或检查当前模型配置。'
     }
   }
   const blocked = await finishUnsatisfiedTerminalGate(s)
   if (blocked) return blocked
   s.finalText = protectTerminalCandidate(s, s.finalText, { incomplete: true })
+  if (iterationLimitReached) {
+    // Every allowed iteration ended with another tool batch. The wrap-up text
+    // is useful partial output, but it is not a normal no-tool completion
+    // claim and must not be projected as `turn.completed` by the host.
+    return s.finishIncomplete({
+      text: s.finalText,
+      reason: 'iteration_limit_reached',
+    })
+  }
+  if (emptyModelResponse) {
+    return s.finishIncomplete({
+      text: s.finalText,
+      reason: 'empty_model_response',
+    })
+  }
   if (!s.finalCheckpointPersisted) {
     await s.persistTurn({ final: { text: s.finalText, iterations: Math.min(s.iter + 1, s.maxIters) } })
   }

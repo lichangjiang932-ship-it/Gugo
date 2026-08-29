@@ -765,6 +765,17 @@ test('turn event stream closes an interrupted attempt while keeping it resumable
   )
   const frames = await stream.text()
   assert.match(frames, /"type":"turn.interrupted"/)
+  assert.match(frames, /"code":"MODEL_HTTP_503"/)
+  assert.doesNotMatch(frames, /upstream unavailable/)
+  assert.doesNotMatch(frames, /"message":/)
+
+  const replay = await fetch(
+    `${origin}/api/turns/events?sessionId=${sessionId}&turnId=${turnId}&after=0`,
+    { headers: auth(user.token) },
+  )
+  const replayedInterrupted = (await replay.json()).events.at(-1)
+  assert.equal(replayedInterrupted.payload.code, 'MODEL_HTTP_503')
+  assert.equal(Object.hasOwn(replayedInterrupted.payload, 'message'), false)
 
   const status = await fetch(
     `${origin}/api/turns/${turnId}?sessionId=${sessionId}`,

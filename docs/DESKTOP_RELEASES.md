@@ -21,9 +21,24 @@ The binaries remain ignored build artifacts. Keep the exact upstream version, do
 ## Publish an update
 
 1. Update `package.json` and `package-lock.json` to the same semantic version.
-2. Commit and push the change.
-3. Create and push the matching tag, such as `v0.10.1`.
+2. Merge the fully verified release commit into `main`.
+3. Configure the required signing secret and publisher variable described below.
+4. Create the matching tag from the merged `main` history, such as `v0.10.1`, and push it.
 
-The Release workflow builds on Windows and publishes the installer, block map, and `latest.yml` to GitHub Releases. Installed apps check shortly after startup and every 15 minutes, download a newer release in the background, and ask before restarting to install it.
+The Release workflow builds on Windows and publishes the installer, block map, `latest.yml`, browser archive, and `SHA256SUMS.txt` to GitHub Releases. Installed apps remain local-first: they check and download only after the user explicitly chooses that action, and ask again before restarting to install it.
 
-For public distribution, configure the `WINDOWS_CSC_LINK` and `WINDOWS_CSC_KEY_PASSWORD` GitHub secrets with a Windows code-signing certificate. Unsigned local builds work, but Windows SmartScreen may warn users.
+Configure the `WINDOWS_CSC_LINK` and `WINDOWS_CSC_KEY_PASSWORD` GitHub secrets with a timestamp-capable Windows code-signing certificate, then set the non-secret repository variable `WINDOWS_PUBLISHER_NAME` to that certificate's exact publisher/common name before creating a production tag. The Release workflow uses `desktop:package:signed`, which enables electron-builder's `forceCodeSigning` mode. It then requires valid, timestamped Authenticode signatures from the same certificate on both the installer and packaged `Gugo.exe`, requires the signer to match `WINDOWS_PUBLISHER_NAME`, and verifies that packaged `app-update.yml` contains the same publisher name used by electron-updater. Unsigned local builds still work through `desktop:package`, but cannot pass the production Release workflow.
+
+`npm run desktop:publish` intentionally exits with an error so a local command cannot bypass CI, signing verification, checksums, or provenance. The workflow rejects tags whose commit is not reachable from `origin/main`, and serializes runs for the same tag so tag-push and manual dispatch cannot race while updating draft assets. This project's workflow treats a published GitHub Release as immutable: rerunning the workflow may resume and replace assets only while that release is still a draft. Once published, the workflow will not rebuild or overwrite the same tag.
+
+Each workflow run also publishes GitHub build provenance for the browser archive, installer, block map, updater metadata, and checksum manifest. A downloaded release can be checked independently:
+
+```powershell
+$version = (gh release view --json tagName --jq '.tagName').TrimStart('v')
+$installer = ".\Gugo-Setup-$version-x64.exe"
+Get-FileHash -Algorithm SHA256 -LiteralPath $installer
+Get-AuthenticodeSignature -LiteralPath $installer | Format-List Status,SignerCertificate
+gh attestation verify $installer --repo lichangjiang932-ship-it/Gugo
+```
+
+Compare the first command with the matching line in `SHA256SUMS.txt`. Set `$version` explicitly when verifying a release other than the latest one.

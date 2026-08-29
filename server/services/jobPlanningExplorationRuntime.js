@@ -11,7 +11,7 @@ import { createJobBudget } from '../utils/jobBudget.js'
 import { buildUserModelEnv } from './modelProviderStore.js'
 
 const PLANNING_READ_ONLY_TOOLS = new Set([
-  'read_file', 'grep_code', 'find_symbol', 'list_imports', 'git_status', 'git_diff',
+  'read_file', 'grep_code', 'find_symbol', 'list_imports', 'lsp', 'git_status', 'git_diff',
 ])
 const PLANNING_EXPLORER_ROLES = Object.freeze([
   { id: 'code-map', label: 'Code and dependency mapper', instructions: 'Map the relevant files, symbols, dependencies, and existing implementation patterns. Prefer direct repository evidence.' },

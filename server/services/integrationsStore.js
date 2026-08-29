@@ -16,6 +16,8 @@ import crypto from 'node:crypto'
 import { getDb } from '../db.js'
 import { WEB_CONNECTOR_CATALOG } from '../../shared/webConnectorCatalog.js'
 import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
+import { isLocalEndpoint } from '../utils/endpointProfile.js'
+import { fetchSafeOutbound } from '../utils/outboundNetworkGuard.js'
 import { testMailCredentials, testQqMailCredentials } from './mailProtocolClient.js'
 
 const INTEGRATION_SECRET_PURPOSE = 'integration-secret'
@@ -566,13 +568,14 @@ export async function testProviderCredentials({
   fetchImpl = fetch,
   env = process.env,
   mailClient,
+  lookup,
 }) {
   const meta = PROVIDER_REGISTRY[provider]
   if (!meta) throw badRequest(`unknown provider: ${provider}`)
-  return meta.test({ config, secret, fetchImpl, env, mailClient })
+  return meta.test({ config, secret, fetchImpl, env, mailClient, lookup })
 }
 
-export async function testIntegration({ userId, id, fetchImpl = fetch, env = process.env, mailClient }) {
+export async function testIntegration({ userId, id, fetchImpl = fetch, env = process.env, mailClient, lookup }) {
   const integration = getIntegration({ userId, id })
   if (!integration) throw notFound('integration not found')
   const meta = PROVIDER_REGISTRY[integration.provider]
@@ -588,6 +591,7 @@ export async function testIntegration({ userId, id, fetchImpl = fetch, env = pro
       fetchImpl,
       env,
       mailClient,
+      lookup,
     })
   } catch (err) {
     result = { ok: false, message: err?.message || '未知错误' }
@@ -601,11 +605,20 @@ export async function testIntegration({ userId, id, fetchImpl = fetch, env = pro
 
 // ============ provider 测试器（最小成本探测，绝不发推送） ============
 
-async function jsonFetch({ fetchImpl, url, init = {}, timeoutMs = 8000 }) {
+async function jsonFetch({ fetchImpl = fetch, url, init = {}, timeoutMs = 8000, lookup }) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const response = await fetchImpl(url, { ...init, signal: controller.signal })
+    const resolveDns = typeof lookup === 'function' || fetchImpl === globalThis.fetch
+    const response = await fetchSafeOutbound(url, {
+      ...init,
+      signal: controller.signal,
+    }, {
+      fetchImpl,
+      allowLocal: isLocalEndpoint(url),
+      resolveDns,
+      ...(typeof lookup === 'function' ? { lookup } : {}),
+    })
     const text = await response.text()
     let data = null
     try { data = text ? JSON.parse(text) : null } catch { data = text }
@@ -960,7 +973,7 @@ async function testWebhook({ config, fetchImpl }) {
   }
 }
 
-async function testVisionAssist({ config, secret, fetchImpl }) {
+async function testVisionAssist({ config, secret, fetchImpl, lookup }) {
   const baseUrl = (config?.baseUrl || '').trim().replace(/\/+$/, '')
   const modelName = (config?.modelName || '').trim()
   const apiKey = (secret?.apiKey || '').trim()
@@ -974,6 +987,7 @@ async function testVisionAssist({ config, secret, fetchImpl }) {
     fetchImpl,
     url,
     init: { headers },
+    lookup,
   })
   if (!ok) return { ok: false, message: `视觉副驾 ${status}: ${data?.error?.message || '鉴权失败'}` }
   const models = Array.isArray(data?.data) ? data.data.map((item) => item.id || item.name) : []

@@ -1264,9 +1264,20 @@ test('system diagnostics can probe a models endpoint safely', async () => {
       persistenceConfigured: false,
       compactionArchiveConfigured: false,
     },
+    codexHost: {
+      enabled: false,
+      configured: false,
+      discovered: false,
+      signatureValid: false,
+      version: null,
+      ready: false,
+      failureStage: null,
+      reasonCode: 'CODEX_APP_SERVER_NOT_STARTED',
+    },
   })
   assert.equal(Object.isFrozen(diagnostics.runtime), true)
   assert.equal(Object.isFrozen(diagnostics.runtime.turnHost), true)
+  assert.equal(Object.isFrozen(diagnostics.runtime.codexHost), true)
 })
 
 test('returns backend model status without exposing API key', () => {

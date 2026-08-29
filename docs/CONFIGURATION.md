@@ -44,6 +44,20 @@ Hub 当前读取以下运行参数：
 
 无效值会回退到对应默认值。关闭等待超时后，Hub 会中止当前执行，并等待最后一份租约证明失效后再关闭数据库，避免已失去所有权的处理器提交终态。
 
+## 可选 Codex app-server 互操作
+
+Codex app-server 桥接默认关闭。只有把 `CODEX_APP_SERVER_ENABLED` 去除首尾空白后的值显式设为 `1`，Gugo 才会发现、校验并启动外部 OpenAI Codex CLI 的 `app-server` 子进程；未设置、`0` 或其他值都保持禁用。安装了 Codex CLI、设置 `GUGO_CODEX_CLI_PATH` / `CODEX_CLI_PATH`，或能够从 `PATH` 找到它，均不会自行启用桥接。
+
+```dotenv
+CODEX_APP_SERVER_ENABLED=1
+# GUGO_CODEX_CLI_PATH=C:\Users\you\AppData\Local\OpenAI\Codex\bin\codex.exe
+# CODEX_APP_SERVER_HANDSHAKE_TIMEOUT_MS=15000
+```
+
+启用并完成握手后，Agent Loop 才会看到 `codex_models` 工具。该工具只发送固定的 `model/list` 请求，参数限定为分页游标、1–50 的数量与是否包含隐藏模型；返回值会经过字段白名单裁剪。Gugo 不开放任意 app-server JSON-RPC，也不把 account、config、thread、turn、command 等方法交给模型。每次调用仍需用户逐次批准，且受用户工具开关、独立限流和工具审计约束。
+
+启用后会增加一个外部子进程与相应资源、协议和供应链边界。`model/list` 也可能让 Codex CLI 根据自身登录态和配置访问网络；Gugo 不把此桥接视为离线能力，也不代替 Codex CLI 自身的隐私与网络配置。要求完全本地或离线运行时，不要设置该开关（或设为 `0`）。桥接关闭、未就绪或启动失败时 `codex_models` 不会进入模型工具清单，也不会影响 Gugo 原生代码工具。
+
 ## 认证模式与模型凭据
 
 ### 默认本机模式：`AUTH_MODE=local`
@@ -133,6 +147,41 @@ GUGO_FFPROBE_PATH=/opt/ffmpeg/bin/ffprobe
 ```
 
 Windows 也可使用 `C:\Tools\ffmpeg\bin\ffmpeg.exe` 类型的绝对路径。修改后重启服务，并分别执行 `ffmpeg -version` 与 `ffprobe -version` 验证二进制可用。`media_transform` 的剪辑、转码、提取音频、抽帧、变速、GIF、字幕烧录、拼接、音量调整和 `denoise_audio` 降噪都使用这套二进制。桌面安装包的构建方法见 [DESKTOP_RELEASES.md](./DESKTOP_RELEASES.md#media-sidecars)。
+
+## 可选的只读 LSP 导航
+
+Gugo 可以把经过授权的本地源码交给 stdio Language Server，向主工具循环、Job planning 和子代理提供 `goToDefinition`、`findReferences`、`goToImplementation` 与 `hover`。该能力默认关闭；未配置 provider、配置无效或扩展冲突时，`lsp` 不会出现在模型工具列表中。
+
+启用时必须同时设置 provider 数组和精确命令白名单。每个命令都必须是已存在的绝对普通文件；启动时会解析真实路径并与白名单精确比较。以下是 Linux 示例：
+
+```dotenv
+LSP_STDIO_COMMAND_ALLOWLIST=["/usr/local/bin/typescript-language-server"]
+LSP_STDIO_PROVIDERS=[{"id":"typescript","command":"/usr/local/bin/typescript-language-server","args":["--stdio"],"extensions":{".js":"javascript",".jsx":"javascriptreact",".ts":"typescript",".tsx":"typescriptreact"},"timeout_ms":20000}]
+```
+
+Windows 不能依赖 `.cmd` 或 PowerShell shim，因为子进程固定使用 `shell: false`。可以把原生 `node.exe` 加入白名单，并把语言服务器的绝对 JavaScript 入口作为第一个参数：
+
+```dotenv
+LSP_STDIO_COMMAND_ALLOWLIST=["C:\\Program Files\\nodejs\\node.exe"]
+LSP_STDIO_PROVIDERS=[{"id":"typescript","command":"C:\\Program Files\\nodejs\\node.exe","args":["C:\\Tools\\typescript-language-server\\lib\\cli.mjs","--stdio"],"extensions":{".js":"javascript",".ts":"typescript"},"timeout_ms":20000}]
+```
+
+Provider 还可指定绝对目录 `cwd` 和小型字符串 `env` 对象。已知敏感宿主环境变量会被剥离，`NODE_OPTIONS`、`PYTHONPATH`、`LD_*` 等运行时注入键始终拒绝；但 provider `env` 是会直接交给子进程的明文部署配置，确有需要时才使用，不要把秘密写入可共享的 `.gugo/runtime.json`。每次查询都使用独立子进程，取消、超时、关闭或协议错误会回收整个进程树。除 `workspace/configuration` 与 `workspace/workspaceFolders` 外，语言服务器主动发起的请求一律以 JSON-RPC `-32601` 拒绝，Gugo 不会通过 LSP 协议接受 `workspace/applyEdit`、`workspace/executeCommand` 等写操作。
+
+这条“只读”边界只约束 Gugo 暴露和响应的 LSP 方法，并不是进程沙箱。`shell: false`、命令白名单和协议拒绝都不能阻止受信任二进制直接调用操作系统文件或网络 API；语言服务器仍以 Gugo 的操作系统账户权限运行。只允许审核过的固定二进制和参数，不可信 server 应放进独立容器或低权限账户，通用 shell 与包执行器（如 `cmd.exe`、PowerShell、`sh`、`bash`、`npx`）不应进入白名单。
+
+源文件、workspace root 和语言服务器返回的每个 `file:` URI 都会重新经过本地文件授权；workspace 外或未授权的位置会被过滤。模型坐标是 1-based UTF-16，协议坐标会转换为 0-based UTF-16。单 provider 最多同时处理 4 个查询，最多 8 个 provider，因此宿主理论上最多同时创建 32 个查询子进程。单文档最大 2 MiB，协议 header 最大 8 KiB、单消息最大 1 MiB，查询超时默认 20 秒且只允许 1–120 秒；provider 最多接收 500 个原始位置，工具最终最多返回 100 个位置且完整 JSON 不超过 16 KB。
+
+每个 JSON 配置字符串最大 64 KiB；allowlist 最多 16 项；单 provider 最多 32 个参数、16 个 env 项和 32 个扩展映射，参数与 env 各自的总量最多 8 KiB。启动只校验配置、真实路径、白名单和扩展注册，不会预先启动语言服务器握手；修改配置后必须重启，二进制执行权限或协议兼容错误会在第一次查询时报告。若通过分层 `runtime.json` 配置，数组本身必须双重编码成标量字符串：
+
+```json
+{
+  "env": {
+    "LSP_STDIO_COMMAND_ALLOWLIST": "[\"/usr/local/bin/typescript-language-server\"]",
+    "LSP_STDIO_PROVIDERS": "[{\"id\":\"typescript\",\"command\":\"/usr/local/bin/typescript-language-server\",\"args\":[\"--stdio\"],\"extensions\":{\".ts\":\"typescript\"}}]"
+  }
+}
+```
 
 ## 专用文件处理与产物通道
 

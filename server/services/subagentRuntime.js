@@ -25,6 +25,7 @@ import { fetchAndExtract } from '../adapters/toolProxy.js'
 import { searchWeb } from './webSearchService.js'
 import { dispatchFsShellTool } from '../adapters/fsShellTools.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
+import { LSP_TOOL_SPECS, dispatchLspTool } from '../utils/lspTool.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool } from '../utils/agenticTools.js'
 import { MEMORY_TOOL_SPECS, dispatchMemoryTool } from '../utils/memoryTools.js'
@@ -46,6 +47,8 @@ import {
   invokeRuntimeSubagentProvider,
   projectSubagentProviderProvenance,
 } from './subagentProvider.js'
+import { hasConfiguredLspProvider } from './lspRuntime.js'
+import { SUBAGENT_MAX_PER_BATCH } from './subagentBatchConfig.js'
 
 export { createSubagentApprovalContext, rememberApprovedSubagentCall }
 
@@ -59,9 +62,6 @@ const MAX_CONCURRENT_PER_USER = envInt('SUBAGENT_MAX_CONCURRENT', 8)
 // ★ 2 → 3。深度 2 意味着「主任务 → 子代理 → 孙代理」就到顶了,
 // 复杂任务里子代理想再拆一层就被拒。3 层仍然远离失控。
 const MAX_SUBAGENT_DEPTH = envInt('SUBAGENT_MAX_DEPTH', 3)
-// ★ 3 → 8。一次只能并行 3 个子任务,对「同时看 6 个模块」这类
-// 请求会被硬拆成两批,慢一倍。
-const MAX_SUBAGENTS_PER_BATCH = envInt('SUBAGENT_MAX_PER_BATCH', 8)
 const MAX_TRANSCRIPT_EVENT_CHARS = 12_000
 const SUBAGENT_CHECKPOINT_EVENT = 'runtime_checkpoint'
 const SUBAGENT_RECOVERY_EVENT = 'side_effect_recovery'
@@ -274,6 +274,7 @@ const READONLY_TOOL_SPECS = [
   },
   // ★ M1:代码搜索三件套(全只读,适合 explore/plan)
   ...CODE_SEARCH_TOOL_SPECS,
+  ...LSP_TOOL_SPECS,
   // ★ M3:反思 / 请求澄清(纯思维型,无副作用)
   ...AGENTIC_TOOL_SPECS,
   // ★ 长期记忆:探索到的项目背景值得跨会话留下来
@@ -390,6 +391,8 @@ async function executeSubagentTool(toolName, args, {
     case 'find_symbol':
     case 'list_imports':
       return dispatchCodeSearchTool(toolName, args, { userId })
+    case 'lsp':
+      return dispatchLspTool(args, { userId, signal })
     case 'apply_patch':
       return dispatchApplyPatchTool(toolName, args, { userId })
     case 'remember':
@@ -897,8 +900,8 @@ function normalizeSubagentTasks(request = {}) {
   const rawTasks = Array.isArray(request?.tasks) && request.tasks.length
     ? request.tasks
     : [request]
-  if (rawTasks.length > MAX_SUBAGENTS_PER_BATCH) {
-    throw new Error(`a subagent batch may contain at most ${MAX_SUBAGENTS_PER_BATCH} tasks`)
+  if (rawTasks.length > SUBAGENT_MAX_PER_BATCH) {
+    throw new Error(`a subagent batch may contain at most ${SUBAGENT_MAX_PER_BATCH} tasks`)
   }
   return rawTasks.map((task, index) => {
     const type = String(task?.subagent_type || task?.type || 'general').trim()
@@ -1255,6 +1258,9 @@ export async function runSubagent({
       }
     }
     const { system, tools } = SUBAGENT_TYPES[type]
+    const effectiveTools = tools.filter((spec) => (
+      spec?.function?.name !== 'lsp' || hasConfiguredLspProvider()
+    ))
     const promptContextMessages = prepareOptionalPromptContext({
       preparePromptContext,
       input: {
@@ -1272,7 +1278,7 @@ export async function runSubagent({
       {
         role: 'system',
         content: type === 'general'
-          ? `${system}\nYou may call Agent with up to ${MAX_SUBAGENTS_PER_BATCH} independent tasks to run them in parallel. Nested delegation is bounded to ${MAX_SUBAGENT_DEPTH} levels.`
+          ? `${system}\nYou may call Agent with up to ${SUBAGENT_MAX_PER_BATCH} independent tasks to run them in parallel. Nested delegation is bounded to ${MAX_SUBAGENT_DEPTH} levels.`
           : system,
       },
       ...(team ? [{
@@ -1288,10 +1294,10 @@ export async function runSubagent({
       trace.splice(0, trace.length, ...resumedTrace)
       await saveRunTrace(runPersistence, { id, userId, trace })
     }
-    const loopResult = tools?.length
+    const loopResult = effectiveTools.length
       ? await subagentToolsLoop({
           messages,
-          tools,
+          tools: effectiveTools,
           signal,
           userId,
           modelName: modelBinding.modelName || undefined,
@@ -1407,7 +1413,7 @@ export const _testing = {
   executeSubagentTool,
   normalizeSubagentTasks,
   MAX_SUBAGENT_DEPTH,
-  MAX_SUBAGENTS_PER_BATCH,
+  MAX_SUBAGENTS_PER_BATCH: SUBAGENT_MAX_PER_BATCH,
   MAX_CONCURRENT_PER_USER,
   createSlotLease,
   withYieldedSlot,

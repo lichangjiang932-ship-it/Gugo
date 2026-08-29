@@ -8,6 +8,7 @@ import { PermSwitch, SectionTitle } from './PermissionSectionPrimitives.jsx'
 import { PERMISSION_ITEMS, STATE_COLOR, STATE_DOT, STATE_KEY, TOOL_ICONS } from './permissionViewConfig.js'
 
 export { WorkspaceTrustSection } from './WorkspaceTrustSection.jsx'
+export { CodeExecutionStatusSection } from './CodeExecutionStatusSection.jsx'
 
 export function PermissionStats({ controller, t }) {
   const stats = [
@@ -154,86 +155,28 @@ export function WorkbenchPolicySection({ appState, dispatch, t }) {
   )
 }
 
-export function CodeExecutionStatusSection({ controller, t }) {
-  const statusLoaded = controller.localFiles != null
-  const runtimeEnabled = controller.localFiles?.runtime?.localCodeExecutionEnabled
-  const runtimeKnown = typeof runtimeEnabled === 'boolean'
-  const toolEnabled = controller.isToolEnabled('bash_exec')
-  const writableDirectories = (controller.localFiles?.grants || []).filter((grant) => (
-    grant.resourceType === 'directory'
-    && grant.accessMode === 'read_write'
-    && grant.available !== false
-  ))
-  const ready = runtimeEnabled === true && toolEnabled && writableDirectories.length > 0
-  const statusKey = !statusLoaded
-    ? 'codeExecutionChecking'
-    : !runtimeKnown
-      ? 'codeExecutionRuntimeUnknown'
-    : runtimeEnabled !== true
-      ? 'codeExecutionRuntimeBlocked'
-      : !toolEnabled
-        ? 'codeExecutionToolBlocked'
-        : writableDirectories.length === 0
-          ? 'codeExecutionNeedsWritableDirectory'
-          : 'codeExecutionReady'
-  const rows = [
-    {
-      id: 'runtime',
-      label: t('localFiles.codeExecutionRuntime'),
-      value: !statusLoaded
-        ? t('localFiles.codeExecutionLoading')
-        : !runtimeKnown
-          ? t('localFiles.codeExecutionUnknown')
-        : t(runtimeEnabled ? 'localFiles.codeExecutionEnabled' : 'localFiles.codeExecutionDisabled'),
-      enabled: runtimeEnabled === true,
-    },
-    {
-      id: 'tool',
-      label: t('localFiles.codeExecutionToolGate'),
-      value: t(toolEnabled ? 'localFiles.codeExecutionEnabled' : 'localFiles.codeExecutionDisabled'),
-      enabled: toolEnabled,
-    },
-    {
-      id: 'directories',
-      label: t('localFiles.codeExecutionWritableDirectories'),
-      value: String(writableDirectories.length),
-      enabled: writableDirectories.length > 0,
-    },
-  ]
-
-  return (
-    <>
-      <SectionTitle eyebrow="CODE EXECUTION" title={t('localFiles.codeExecutionTitle')} />
-      <p className="mb-2 text-xs text-ink-fade">{t('localFiles.codeExecutionHint')}</p>
-      <div className="mb-6 overflow-hidden rounded-md border border-ink/30" data-testid="code-execution-status">
-        <div className="grid gap-3 border-b border-dashed border-ink-fade/40 px-4 py-3 sm:grid-cols-3">
-          {rows.map((row) => (
-            <div key={row.id} className="rounded-md border border-ink-fade/40 bg-paper-2 px-3 py-2">
-              <div className="font-mono text-[9px] uppercase tracking-wider text-ink-fade">{row.label}</div>
-              <div className={`mt-1 flex items-center gap-1.5 text-sm ${row.enabled ? 'text-success' : 'text-ink-soft'}`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${row.enabled ? 'bg-success' : 'bg-ink-fade'}`} />
-                {row.value}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className={`flex items-start gap-3 px-4 py-3 ${ready ? 'text-success' : 'text-ink-soft'}`}>
-          <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border ${ready ? 'border-success/40 bg-success/5' : 'border-ink-fade/50 bg-paper-2'}`}>
-            <Terminal className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="text-sm">{t(`localFiles.${statusKey}`, { count: writableDirectories.length })}</div>
-            <div className="mt-1 font-mono text-[10px] text-ink-fade">bash_exec</div>
-          </div>
-        </div>
-      </div>
-    </>
-  )
-}
-
 export function ToolGateSection({ controller, t }) {
   return (
-    <><SectionTitle eyebrow="TOOLS" title={t('permissionsDashboard.serverEnforced')} />{controller.toolError && <div className="mb-4 rounded-md border border-dashed border-accent/60 px-4 py-2.5 text-sm text-accent-ink">{controller.toolError}</div>}<div className="mb-6 overflow-hidden rounded-md border border-ink/30">{GATEABLE_TOOLS.map((tool, index) => { const Icon = TOOL_ICONS[tool.id] || Terminal; const enabled = controller.isToolEnabled(tool.id); return <div key={tool.id} className={`grid grid-cols-[40px_1.4fr_1fr_80px] items-center gap-3 px-4 py-3 ${index < GATEABLE_TOOLS.length - 1 ? 'border-b border-dashed border-ink-fade/40' : ''}`} style={{ opacity: enabled ? 1 : 0.55 }}><div className="flex h-7 w-7 items-center justify-center rounded-md border border-ink-fade/60 bg-paper"><Icon className="h-3.5 w-3.5 text-ink-soft" /></div><div className="flex flex-col leading-tight"><span className="text-sm text-ink">{tool.name}</span><span className="font-mono text-[9px] tracking-wider text-ink-fade">{tool.id}</span></div><span className="text-sm text-ink-soft">{tool.scope}</span><PermSwitch on={enabled} onToggle={() => controller.toggleTool(tool.id)} label={`${enabled ? t('permissionsDashboard.disable') : t('permissionsDashboard.enable')} ${tool.name}`} /></div> })}</div></>
+    <>
+      <SectionTitle eyebrow="TOOLS" title={t('permissionsDashboard.serverEnforced')} />
+      {controller.toolError && <div className="mb-4 rounded-md border border-dashed border-accent/60 px-4 py-2.5 text-sm text-accent-ink">{controller.toolError}</div>}
+      <div className="mb-6 overflow-hidden rounded-md border border-ink/30">
+        {GATEABLE_TOOLS.map((tool, index) => {
+          const Icon = TOOL_ICONS[tool.id] || Terminal
+          const enabled = controller.isToolEnabled(tool.id)
+          const name = tool.nameKey ? t(tool.nameKey) : tool.name
+          const scope = tool.scopeKey ? t(tool.scopeKey) : tool.scope
+          return (
+            <div key={tool.id} className={`grid grid-cols-[40px_1.4fr_1fr_80px] items-center gap-3 px-4 py-3 ${index < GATEABLE_TOOLS.length - 1 ? 'border-b border-dashed border-ink-fade/40' : ''}`} style={{ opacity: enabled ? 1 : 0.55 }}>
+              <div className="flex h-7 w-7 items-center justify-center rounded-md border border-ink-fade/60 bg-paper"><Icon className="h-3.5 w-3.5 text-ink-soft" /></div>
+              <div className="flex flex-col leading-tight"><span className="text-sm text-ink">{name}</span><span className="font-mono text-[9px] tracking-wider text-ink-fade">{tool.id}</span></div>
+              <span className="text-sm text-ink-soft">{scope}</span>
+              <PermSwitch on={enabled} onToggle={() => controller.toggleTool(tool.id)} label={`${enabled ? t('permissionsDashboard.disable') : t('permissionsDashboard.enable')} ${name}`} />
+            </div>
+          )
+        })}
+      </div>
+    </>
   )
 }
 

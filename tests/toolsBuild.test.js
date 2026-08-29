@@ -34,9 +34,11 @@ test('every built-in executor and model-facing spec has a matching counterpart',
 
 test('code-search and agent-support executors are exposed with their canonical arguments', () => {
   const expectedRequired = {
+    run_code: ['code'],
     grep_code: ['pattern'],
     find_symbol: ['name'],
     list_imports: ['file'],
+    lsp: ['operation', 'file', 'line', 'character'],
     reflect: ['observation', 'next_step'],
     request_clarification: ['question'],
     remember: ['type', 'title', 'body'],
@@ -47,6 +49,8 @@ test('code-search and agent-support executors are exposed with their canonical a
   for (const spec of specs) {
     assert.deepEqual(spec.function.parameters.required, expectedRequired[spec.function.name])
   }
+  const runCode = specs.find((spec) => spec.function.name === 'run_code')
+  assert.deepEqual(Object.keys(runCode.function.parameters.properties).sort(), ['code', 'description'])
 })
 
 test('TASK_STATUS 是 frozen', () => {

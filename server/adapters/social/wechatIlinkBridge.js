@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { fetchSafeOutbound } from '../../utils/outboundNetworkGuard.js'
 
 const DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com'
 const LONG_POLL_MS = 40_000
@@ -35,6 +36,18 @@ function headers(token) {
   }
 }
 
+function fetchIlinkOutbound(url, init = {}, { fetchImpl = fetch, lookup } = {}) {
+  const resolveDns = typeof lookup === 'function' || fetchImpl === globalThis.fetch
+  return fetchSafeOutbound(url, init, {
+    fetchImpl,
+    // The endpoint can come from an upstream QR response. That response must
+    // never grant the bridge access to the host's local network.
+    allowLocal: false,
+    resolveDns,
+    ...(typeof lookup === 'function' ? { lookup } : {}),
+  })
+}
+
 function extractText(items = []) {
   for (const item of items) {
     if (item?.type === ITEM_TEXT && item.text_item?.text != null) return clean(item.text_item.text)
@@ -66,7 +79,7 @@ function normalizeInbound(msg = {}) {
   }
 }
 
-export function createWechatIlinkBridgeAdapter({ integration, onMessage, fetchImpl = fetch } = {}) {
+export function createWechatIlinkBridgeAdapter({ integration, onMessage, fetchImpl = fetch, lookup } = {}) {
   const token = botToken(integration)
   if (!token) throw new Error('WeChat bot token is required')
   const baseUrl = clean(integration?.config?.baseUrl) || DEFAULT_BASE_URL
@@ -82,12 +95,12 @@ export function createWechatIlinkBridgeAdapter({ integration, onMessage, fetchIm
     const onAbort = () => child.abort()
     controller.signal.addEventListener('abort', onAbort, { once: true })
     try {
-      const response = await fetchImpl(`${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`, {
+      const response = await fetchIlinkOutbound(`${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`, {
         method: 'POST',
         headers: headers(token),
         body: JSON.stringify(body),
         signal: child.signal,
-      })
+      }, { fetchImpl, lookup })
       const data = await response.json().catch(() => null)
       if (!response.ok || (data?.ret != null && data.ret !== 0)) {
         throw new Error(data?.errmsg || data?.message || `WeChat HTTP ${response.status}`)
@@ -155,12 +168,12 @@ export function createWechatIlinkBridgeAdapter({ integration, onMessage, fetchIm
   }
 }
 
-export async function getWechatIlinkQrcode({ fetchImpl = fetch } = {}) {
+export async function getWechatIlinkQrcode({ fetchImpl = fetch, lookup } = {}) {
   let response
   try {
-    response = await fetchImpl(`${DEFAULT_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3`, {
+    response = await fetchIlinkOutbound(`${DEFAULT_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3`, {
       headers: { 'iLink-App-ClientVersion': '1' },
-    })
+    }, { fetchImpl, lookup })
   } catch (error) {
     throw ilinkUnavailable(error)
   }
@@ -172,13 +185,13 @@ export async function getWechatIlinkQrcode({ fetchImpl = fetch } = {}) {
   }
 }
 
-export async function pollWechatIlinkQrcode({ qrcodeId, fetchImpl = fetch } = {}) {
+export async function pollWechatIlinkQrcode({ qrcodeId, fetchImpl = fetch, lookup } = {}) {
   if (!qrcodeId) throw new Error('qrcodeId is required')
   let response
   try {
-    response = await fetchImpl(`${DEFAULT_BASE_URL}/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcodeId)}`, {
+    response = await fetchIlinkOutbound(`${DEFAULT_BASE_URL}/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcodeId)}`, {
       headers: { 'iLink-App-ClientVersion': '1' },
-    })
+    }, { fetchImpl, lookup })
   } catch (error) {
     throw ilinkUnavailable(error)
   }
@@ -197,3 +210,5 @@ export async function pollWechatIlinkQrcode({ qrcodeId, fetchImpl = fetch } = {}
   if (data.status === 'expired') return { status: 'expired' }
   return { status: 'waiting' }
 }
+
+export const _wechatIlinkInternals = Object.freeze({ fetchIlinkOutbound })

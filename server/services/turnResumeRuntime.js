@@ -31,6 +31,40 @@ function normalizePositiveInteger(value) {
   return Number.isInteger(normalized) && normalized > 0 ? normalized : null
 }
 
+export const DEFAULT_MODEL_INTERRUPTION_MAX_ATTEMPTS = 12
+
+export function resolveModelInterruptionMaxAttempts(env = process.env) {
+  const parsed = Math.floor(Number(env?.TURN_MODEL_INTERRUPTION_MAX_ATTEMPTS))
+  return Number.isFinite(parsed) && parsed >= 1 ? parsed : DEFAULT_MODEL_INTERRUPTION_MAX_ATTEMPTS
+}
+
+export function modelInterruptionRecoveryState(events = [], maxAttempts = DEFAULT_MODEL_INTERRUPTION_MAX_ATTEMPTS) {
+  const limit = Math.max(1, Math.floor(Number(maxAttempts)) || DEFAULT_MODEL_INTERRUPTION_MAX_ATTEMPTS)
+  let attempts = 0
+  let latest = null
+  for (const event of [...events]
+    .filter((item) => Number.isInteger(item?.sequence))
+    .sort((left, right) => left.sequence - right.sequence)) {
+    if (event.type === 'turn.interrupted') {
+      attempts += 1
+      latest = event
+      continue
+    }
+    const madeProgress = (event.type === 'assistant.delta' && String(event.payload?.text || '').length > 0)
+      || event.type === 'tool.completed'
+    if (madeProgress && latest && event.sequence > latest.sequence) {
+      attempts = 0
+      latest = null
+    }
+  }
+  return {
+    attempts,
+    limit,
+    exhausted: attempts >= limit,
+    causeCode: String(latest?.payload?.code || 'MODEL_CALL_INTERRUPTED').trim().toUpperCase(),
+  }
+}
+
 const {
   hasSufficientDirectoryGrant,
   normalizeResolution: normalizeTurnResolution,
@@ -95,6 +129,21 @@ export function createTurnResumeRuntime({
     })
     const scope = { userId, sessionId, turnId }
     const persistedEvents = await replayPersistedTurnEvents(deps.replayEvents, scope)
+    const interruptionRecovery = modelInterruptionRecoveryState(
+      persistedEvents,
+      resolveModelInterruptionMaxAttempts(deps.env),
+    )
+    if (interruptionRecovery.exhausted) {
+      const error = new TurnEngineError(
+        'TURN_MODEL_RECOVERY_EXHAUSTED',
+        `model recovery stopped after ${interruptionRecovery.attempts} interruptions without durable progress`,
+        409,
+      )
+      error.retryable = false
+      error.attempts = interruptionRecovery.attempts
+      error.causeCode = interruptionRecovery.causeCode
+      throw error
+    }
     const latestFailedRetry = persistedEvents
       .filter((event) => event.type === 'turn.attempt' && event.payload?.reason === 'failed_retry')
       .at(-1)

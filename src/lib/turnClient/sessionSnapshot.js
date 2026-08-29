@@ -264,7 +264,11 @@ function turnEvidenceMeta(message) {
   const state = context.turnEvidence === true ? String(context.evidenceState || '') : ''
   if (!['blocked', 'cancelled', 'failed', 'interrupted'].includes(state)) return {}
 
-  const failure = context.error && typeof context.error === 'object' ? context.error : null
+  const persistedFailure = context.error && typeof context.error === 'object' ? context.error : null
+  const failure = persistedFailure && state === 'blocked'
+    && typeof persistedFailure.manualRetryable !== 'boolean'
+    ? { ...persistedFailure, manualRetryable: true }
+    : persistedFailure
   const artifactIds = [...new Set((Array.isArray(context.artifactIds) ? context.artifactIds : [])
     .map((id) => String(id || '').trim())
     .filter(Boolean))]

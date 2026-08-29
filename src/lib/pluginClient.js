@@ -222,13 +222,14 @@ export async function listRuntimePluginInventoryApi() {
     !inventory
     || typeof inventory !== 'object'
     || Array.isArray(inventory)
-    || inventory.schemaVersion !== 7
+    || inventory.schemaVersion !== 8
     || !Array.isArray(inventory.plugins)
     || inventory.plugins.some((plugin) => (
       !plugin
       || typeof plugin !== 'object'
       || Array.isArray(plugin)
       || !/^[a-z0-9][a-z0-9-]*$/i.test(String(plugin.id || ''))
+      || typeof plugin.canRevokePermissions !== 'boolean'
     ))
   ) {
     throw new TypeError('unsupported runtime plugin inventory response')
