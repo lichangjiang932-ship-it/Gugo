@@ -166,6 +166,29 @@ test('requires quotes for obvious Windows absolute paths containing parentheses'
   ), null)
 })
 
+test('allows literal Windows 8.3 paths without weakening dynamic path rejection', () => {
+  for (const command of [
+    'Get-Item C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\result.txt',
+    'Get-Item "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\result.txt"',
+  ]) {
+    assert.equal(checkShellPathSyntax(command, { platform: 'win32' }), null, command)
+  }
+
+  for (const command of [
+    'Get-Item ~\\secret.txt',
+    'Get-Item "~alice\\secret.txt"',
+    'Get-Item %TEMP%\\secret.txt',
+    'Get-Item $env:TEMP\\secret.txt',
+    'Get-Item ${HOME}\\secret.txt',
+  ]) {
+    assert.match(
+      checkShellPathSyntax(command, { platform: 'win32' })?.reason || '',
+      /环境变量|主目录/,
+      command,
+    )
+  }
+})
+
 test('extracts complete quoted Windows paths with terminal parentheses and embedded apostrophes', () => {
   const parenthesized = 'D:\\destok\\your-model-atelier(1)'
   assert.deepEqual(

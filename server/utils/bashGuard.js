@@ -36,7 +36,11 @@ const SSH_KEY_EXFIL_RE = /\b(cat|less|more|head|tail|xxd|base64|od)\s[^|;&]*(\.s
 // env exfil:只拦"导到文件"或"管道到出口命令"，不拦 env | grep 这种本地过滤
 const ENV_EXFIL_RE = /\b(env|printenv|set)\s*(>|>>|\|\s*(curl|wget|nc|ncat|socat|ssh|scp|rsync|bash|sh|zsh|python|node|ruby|perl|telnet))/
 const WINDOWS_DEVICE_PATH_RE = /(?:^|[\s"'=,(])\\\\(?:[.?]\\|globalroot\\)/i
-const DYNAMIC_PATH_RE = /(?:~[\\/]|~[A-Za-z0-9_-]+[\\/]|%[^%\r\n]+%[\\/]|\$env:[A-Za-z_][A-Za-z0-9_]*[\\/]|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?[\\/])/i
+// A tilde expands a home directory only when it starts a shell token. Without
+// that boundary, valid Windows 8.3 path segments such as RUNNER~1 are mistaken
+// for `~user` expansion before literal absolute-path authorization can run.
+const HOME_EXPANSION_RE = /(?:^|[\s"'=,(;|&<>])~(?:[\\/]|[A-Za-z0-9_-]+[\\/])/i
+const DYNAMIC_PATH_RE = /(?:%[^%\r\n]+%[\\/]|\$env:[A-Za-z_][A-Za-z0-9_]*[\\/]|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?[\\/])/i
 const PARENT_PATH_RE = /(?:^|[\\/\s"'=,(])\.\.(?:[\\/\s"'),;]|$)/
 const UNQUOTED_WINDOWS_PAREN_PATH_RE = /(?:^|[\s=,(])((?:[A-Za-z]:[\\/]|\\\\)[^\s"'<>|;&,]*\([^()\s"'<>|;&,]*\)(?=[^\s"'<>|;&,)])[^\s"'<>|;&,]*)/i
 
@@ -198,7 +202,9 @@ export function extractAbsoluteShellPaths(command, { platform = process.platform
 export function checkShellPathSyntax(command, { platform = process.platform } = {}) {
   if (typeof command !== 'string' || !command.trim()) return null
   if (WINDOWS_DEVICE_PATH_RE.test(command)) return { reason: '不允许访问 Windows 设备路径' }
-  if (DYNAMIC_PATH_RE.test(command)) return { reason: '路径必须使用可预检的字面量，不能使用环境变量或主目录展开' }
+  if (HOME_EXPANSION_RE.test(command) || DYNAMIC_PATH_RE.test(command)) {
+    return { reason: '路径必须使用可预检的字面量，不能使用环境变量或主目录展开' }
+  }
   if (PARENT_PATH_RE.test(command)) return { reason: '命令路径不能包含父目录跳转（..）' }
   if (platform === 'win32') {
     const unquoted = command.replace(/"[^"\r\n]*"|'[^'\r\n]*'/g, (value) => ' '.repeat(value.length))

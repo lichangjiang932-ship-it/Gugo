@@ -268,8 +268,8 @@ test('subagent LSP dispatch preserves user authorization and the AbortSignal', a
   assert.equal(observations[0].signal, controller.signal)
   assert.deepEqual(observations[0].request, {
     operation: 'hover',
-    filePath: fs.realpathSync.native(sourceFile),
-    workspaceRoot: fs.realpathSync.native(workspace),
+    filePath: fs.realpathSync(sourceFile),
+    workspaceRoot: fs.realpathSync(workspace),
     position: { line: 0, character: 6 },
     languageId: 'typescript',
   })
