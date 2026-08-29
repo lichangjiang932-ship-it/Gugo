@@ -109,6 +109,7 @@ export function RuntimePluginList({
     const active = plugin?.active === true
     const controllable = plugin?.controllable === true
     const hasPermissionGrant = Boolean(plugin?.permissionGrant?.grantedAt)
+    const canRevokePermissions = plugin?.canRevokePermissions === true || hasPermissionGrant
     const statusKey = active
       ? 'settings.pluginActive'
       : enabled ? 'settings.pluginEnabled' : 'settings.pluginInactive'
@@ -127,9 +128,9 @@ export function RuntimePluginList({
       <Fragment key={String(plugin?.id || '')}>
         <SettingsRow title={String(plugin?.name || plugin?.id || '')} description={description}>
           <span className={`text-xs ${active ? 'text-success' : 'text-ink-fade'}`}>{t(statusKey)}</span>
-          {controllable && (
+          {(controllable || canRevokePermissions) && (
             <span className="flex flex-wrap items-center justify-end gap-1.5">
-              {!enabled && (
+              {controllable && !enabled && (
                 <button
                   type="button"
                   disabled={Boolean(busy)}
@@ -139,7 +140,7 @@ export function RuntimePluginList({
                   {t('settings.pluginEnable')}
                 </button>
               )}
-              {enabled && (
+              {controllable && enabled && (
                 <button
                   type="button"
                   disabled={Boolean(busy)}
@@ -149,17 +150,19 @@ export function RuntimePluginList({
                   {t('settings.pluginDisable')}
                 </button>
               )}
-              <button
-                type="button"
-                disabled={Boolean(busy) || !enabled}
-                onClick={() => onAction(plugin.id, 'reload')}
-                className="settings-action-button"
-                title={t('settings.pluginReload')}
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                {t('settings.pluginReload')}
-              </button>
-              {hasPermissionGrant && (
+              {controllable && (
+                <button
+                  type="button"
+                  disabled={Boolean(busy) || !enabled}
+                  onClick={() => onAction(plugin.id, 'reload')}
+                  className="settings-action-button"
+                  title={t('settings.pluginReload')}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  {t('settings.pluginReload')}
+                </button>
+              )}
+              {canRevokePermissions && (
                 <button
                   type="button"
                   disabled={Boolean(busy)}

@@ -153,9 +153,10 @@ test('runtime plugin client reads the versioned inventory without loading plugin
     request = { url, init }
     return new Response(JSON.stringify({
       ok: true,
-      schemaVersion: 7,
+      schemaVersion: 8,
       plugins: [{
         id: 'host-observer',
+        canRevokePermissions: false,
         manifest: {
           id: 'host-observer',
           name: 'Host Observer',
@@ -175,7 +176,8 @@ test('runtime plugin client reads the versioned inventory without loading plugin
     assert.equal(request.url, '/api/plugins/runtime')
     assert.deepEqual(request.init.headers, {})
     assert.equal(request.init.method, undefined)
-    assert.equal(inventory.schemaVersion, 7)
+    assert.equal(inventory.schemaVersion, 8)
+    assert.equal(inventory.plugins[0].canRevokePermissions, false)
     assert.deepEqual(inventory.plugins[0].manifest.contributes, ['event:request'])
   } finally {
     globalThis.fetch = originalFetch
@@ -185,9 +187,11 @@ test('runtime plugin client reads the versioned inventory without loading plugin
 test('runtime plugin client rejects incompatible or malformed inventory instead of showing it as empty', async () => {
   const originalFetch = globalThis.fetch
   const responses = [
-    { ok: true, schemaVersion: 6, plugins: [] },
-    { ok: true, schemaVersion: 7 },
-    { ok: true, schemaVersion: 7, plugins: [{ id: '../outside' }] },
+    { ok: true, schemaVersion: 7, plugins: [] },
+    { ok: true, schemaVersion: 8 },
+    { ok: true, schemaVersion: 8, plugins: [{ id: '../outside', canRevokePermissions: false }] },
+    { ok: true, schemaVersion: 8, plugins: [{ id: 'missing-revoke-capability' }] },
+    { ok: true, schemaVersion: 8, plugins: [{ id: 'invalid-revoke-capability', canRevokePermissions: 'yes' }] },
   ]
   globalThis.fetch = async () => new Response(JSON.stringify(responses.shift()), {
     status: 200,
@@ -195,9 +199,12 @@ test('runtime plugin client rejects incompatible or malformed inventory instead 
   })
 
   try {
-    await assert.rejects(listRuntimePluginInventoryApi(), /unsupported runtime plugin inventory response/)
-    await assert.rejects(listRuntimePluginInventoryApi(), /unsupported runtime plugin inventory response/)
-    await assert.rejects(listRuntimePluginInventoryApi(), /unsupported runtime plugin inventory response/)
+    while (responses.length > 0) {
+      await assert.rejects(
+        listRuntimePluginInventoryApi(),
+        /unsupported runtime plugin inventory response/,
+      )
+    }
   } finally {
     globalThis.fetch = originalFetch
   }

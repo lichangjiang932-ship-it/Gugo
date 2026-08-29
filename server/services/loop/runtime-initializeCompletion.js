@@ -1,5 +1,5 @@
 export async function initializeCompletion(s) {
-  const { ARTIFACT_RECOVERY_PHASE_DIAGNOSE, ARTIFACT_RECOVERY_PHASE_FORCE, AVAILABLE_TOOL_CAPABILITIES_MARKER, FALSE_SUCCESS_STATUS, FILE_WRITE_TOOL_NAMES, GENERATED_ARTIFACT_TYPE, INCOMPLETE_STATUS, LOCAL_HTML_DELIVERY_GUARD_MARKER, MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS, PDF_LAYOUT_EXECUTION_CONTRACT_MARKER, PROJECT_SCOPE_TARGET, VERIFIED_DIRECTORY_RESOLUTION, buildPdfLayoutExecutionContract, getProjectDirectory, hasSuccessfulLocalPreflightRead, isCommandExecutionTool, isFileArtifactTool, normalizeMutationTarget, path, restoreExecutionConvergence, shellTargetWithCwd, targetsMatch, toolNameFromSpec, validateLocalHtmlDelivery } = s.d
+  const { ARTIFACT_RECOVERY_PHASE_DIAGNOSE, ARTIFACT_RECOVERY_PHASE_FORCE, AVAILABLE_TOOL_CAPABILITIES_MARKER, FALSE_SUCCESS_STATUS, FILE_WRITE_TOOL_NAMES, GENERATED_ARTIFACT_TYPE, INCOMPLETE_STATUS, LOCAL_HTML_DELIVERY_GUARD_MARKER, MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS, PDF_LAYOUT_EXECUTION_CONTRACT_MARKER, PROJECT_SCOPE_TARGET, VERIFIED_DIRECTORY_RESOLUTION, buildFinalAnswerEvidenceReviewPrompt, buildFinalAnswerEvidenceSnapshot, buildPdfLayoutExecutionContract, collectFinalAnswerToolEvidence, finalAnswerEvidenceDigest, getProjectDirectory, hasSuccessfulLocalPreflightRead, isCommandExecutionTool, isFileArtifactTool, normalizeFinalAnswerToolEvidence, normalizeMutationTarget, path, restoreExecutionConvergence, shellTargetWithCwd, targetsMatch, toolNameFromSpec, validateLocalHtmlDelivery } = s.d
   s.artifactDeliveryRetries = Math.max(0, Number(s.restoredState?.completionGuards?.artifactDeliveryRetries) || 0)
   s.forcedArtifactToolName = s.expectedArtifactTools.has(
       String(s.restoredState?.completionGuards?.forcedArtifactToolName || '').trim(),
@@ -458,5 +458,65 @@ export async function initializeCompletion(s) {
         ? `文件工具连续纠错后仍未成功生成所需文件（${missing.join(', ')}）。已成功提交到本地的文件仍会保留并显示其验证状态；未通过验证的受管理产物不会标记为最终交付。请重试本任务或切换到支持工具调用的模型。`
         : '所需文件尚未通过完整性验证。已成功提交到本地的文件仍会保留并显示其验证状态；未通过验证的受管理产物不会标记为最终交付。'
     }
+  const restoredAnswerReview = s.restoredState?.completionGuards?.finalAnswerEvidenceReview
+  const restoredToolEvidence = s.restoredState?.completionGuards?.finalAnswerToolEvidence
+  s.finalAnswerToolEvidence = Array.isArray(restoredToolEvidence)
+    ? normalizeFinalAnswerToolEvidence(restoredToolEvidence)
+    : collectFinalAnswerToolEvidence(s.convo)
+  s.finalAnswerEvidenceReview = /^[a-f0-9]{64}$/i.test(String(restoredAnswerReview?.digest || ''))
+    ? {
+        digest: String(restoredAnswerReview.digest),
+        iteration: Math.max(0, Number(restoredAnswerReview.iteration) || 0),
+      }
+    : null
+  s.requiresFinalAnswerEvidenceReview = () => s.mutationExecutionObserved === true
+    || (s.hasCurrentDeliverableSelection() && s.deliveryArtifactIds.length > 0)
+  s.finalAnswerEvidenceSnapshot = () => buildFinalAnswerEvidenceSnapshot({
+    objective: s.artifactAuthorizationText || s.job?.prompt || '',
+    requiredArtifactTools: [...s.expectedArtifactTools],
+    artifacts: s.artifactIds.map((id) => {
+      const provenance = s.artifactProvenance.get(id)
+      return {
+        id,
+        tool: provenance?.toolName,
+        type: provenance?.artifactType,
+        verified: provenance?.verified === true,
+      }
+    }),
+    selectedArtifactIds: s.hasCurrentDeliverableSelection() ? s.deliveryArtifactIds : [],
+    mutationExecutionObserved: s.mutationExecutionObserved,
+    executionEvidenceObserved: s.executionEvidenceObserved,
+    postMutationVerificationPassed: s.mutationExecutionObserved && !s.hasPendingMutationVerification(),
+    pdfLayoutVerificationPassed: !s.requiresPdfLayoutVerification || s.pdfLayoutVerificationObserved,
+    localHtmlValidationPassed: !s.localHtmlDeliveryValidationPending,
+    toolEvidence: s.finalAnswerToolEvidence,
+  })
+  s.currentFinalAnswerEvidenceDigest = () => finalAnswerEvidenceDigest(
+    s.finalAnswerEvidenceSnapshot(),
+  )
+  s.finalAnswerEvidenceReady = () => s.requiresFinalAnswerEvidenceReview()
+    && s.hasRequiredArtifacts()
+    && s.hasRequiredExecutionEvidence()
+    && !s.hasPendingMutationVerification()
+    && (!s.requiresPdfLayoutVerification || s.pdfLayoutVerificationObserved)
+    && !s.localHtmlDeliveryValidationPending
+    && !s.needsDeliverableSelection()
+  s.hasCurrentFinalAnswerEvidenceReview = (requestDigest = null) => {
+    if (!s.finalAnswerEvidenceReady()) return false
+    const digest = s.currentFinalAnswerEvidenceDigest()
+    return s.finalAnswerEvidenceReview?.digest === digest
+      && (requestDigest === null || requestDigest === digest)
+  }
+  s.prepareFinalAnswerEvidenceReview = () => {
+    if (!s.finalAnswerEvidenceReady() || s.hasCurrentFinalAnswerEvidenceReview()) return false
+    const snapshot = s.finalAnswerEvidenceSnapshot()
+    const digest = finalAnswerEvidenceDigest(snapshot)
+    s.finalAnswerEvidenceReview = { digest, iteration: s.iter }
+    s.convo.push({
+      role: 'system',
+      content: buildFinalAnswerEvidenceReviewPrompt(snapshot, digest),
+    })
+    return true
+  }
   return { kind: 'next' }
 }

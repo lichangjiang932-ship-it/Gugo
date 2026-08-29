@@ -8,10 +8,7 @@ import path from 'node:path'
 // and a new source file starts with a zero allowance.
 const BASELINE = {
   'src/App.jsx': 8,
-  'src/components/ChoicePicker.jsx': 7,
   'src/components/ErrorBoundary.jsx': 73,
-  'src/components/FileExplorer.jsx': 13,
-  'src/components/FullscreenMediaModal.jsx': 28,
   'src/components/GlobalShortcuts.jsx': 13,
   'src/components/IntegrationsPanel.jsx': 26,
   'src/components/LeftRail.jsx': 346,
@@ -120,6 +117,9 @@ test('frontend hardcoded Chinese cannot increase beyond the migration baseline',
   assert.deepEqual(regressions, [], `Move new UI copy into translations.js:\n${regressions.join('\n')}`)
 
   for (const migrated of [
+    'src/components/ChoicePicker.jsx',
+    'src/components/FileExplorer.jsx',
+    'src/components/FullscreenMediaModal.jsx',
     'src/pages/ChatSplit/ChatMessages.jsx',
     'src/pages/HistoryView.jsx',
   ]) {

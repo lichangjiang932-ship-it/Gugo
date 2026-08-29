@@ -10,6 +10,7 @@ const RISK_TONE = {
 
 const TOOL_ICON = {
   bash_exec: Terminal,
+  run_code: Terminal,
   run_command: Terminal,
   run_test: Terminal,
   docker_exec: Terminal,
@@ -26,10 +27,16 @@ const TOOL_ICON = {
 }
 
 const SHELL_TOOL_NAMES = new Set(['bash_exec', 'run_command', 'run_test', 'docker_exec'])
+const ONE_TIME_APPROVAL_TOOL_NAMES = new Set([...SHELL_TOOL_NAMES, 'run_code'])
 
 /** bash_exec 的命令、write_file 的路径 —— 一眼能看懂的主参数 */
 function headline(name, args) {
   if (!args || typeof args !== 'object') return ''
+  if (name === 'run_code') {
+    const description = String(args.description || '').trim()
+    const code = String(args.code || '')
+    return [description, code].filter(Boolean).join('\n')
+  }
   if (SHELL_TOOL_NAMES.has(name)) {
     const command = Array.isArray(args.command) ? args.command.join(' ') : args.command
     const envKeys = Array.isArray(args.env_keys) && args.env_keys.length > 0
@@ -108,7 +115,7 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
   const tone = RISK_TONE[risk] || RISK_TONE.low
   const Icon = TOOL_ICON[name] || AlertTriangle
   const main = headline(name, args)
-  const canRemember = !SHELL_TOOL_NAMES.has(name)
+  const canRemember = !ONE_TIME_APPROVAL_TOOL_NAMES.has(name)
 
   return (
     <div className={`rounded-md border ${tone.border} ${tone.bg} p-3.5`} data-testid="tool-approval-card">

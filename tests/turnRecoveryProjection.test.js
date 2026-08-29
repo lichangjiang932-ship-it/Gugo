@@ -75,6 +75,26 @@ test('checkpoint projection isolates the current turn and keeps protocol-only ch
   assert.deepEqual(checkpointMessagesForTurn(state, { content: 'missing', fallback }), fallback)
 })
 
+test('checkpoint projection rematch survives whitespace drift between event and snapshot', () => {
+  const fallback = [{ role: 'assistant', content: 'fallback' }]
+  const state = {
+    messages: [
+      { role: 'user', content: 'older question' },
+      { role: 'assistant', content: 'old answer' },
+      // snapshot stored the user text with line breaks / extra spaces that the
+      // turn.started payload does not carry
+      { role: 'user', content: 'current  \n question' },
+      { role: 'assistant', content: 'new answer' },
+    ],
+  }
+  assert.deepEqual(
+    checkpointMessagesForTurn(state, { content: 'current\nquestion', fallback }),
+    state.messages.slice(3),
+  )
+  // a genuinely different objective still falls back instead of guessing
+  assert.deepEqual(checkpointMessagesForTurn(state, { content: 'unrelated', fallback }), fallback)
+})
+
 test('local file projections retain the latest durable lists and remove verified duplicates', async () => {
   const firstPath = path.resolve('tmp', 'first.txt')
   const secondPath = path.resolve('tmp', 'second.txt')

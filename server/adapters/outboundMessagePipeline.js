@@ -21,6 +21,19 @@ const INTERNAL_KEYS = new Set([
   'usage',
 ])
 
+/**
+ * Chain-of-thought replay gate (Codex-style retained reasoning).
+ *
+ * Off by default: some reasoning providers reject `reasoning_content` in the
+ * input sequence, so replay stays opt-in per deployment via
+ * MODEL_REASONING_RETENTION=1. When enabled, assistant turns inside a tool
+ * loop carry their captured chain-of-thought back to the provider, which
+ * measurably improves multi-step task convergence.
+ */
+export function retainReasoningForEnv(env = process.env) {
+  return String(env?.MODEL_REASONING_RETENTION || '').trim() === '1'
+}
+
 function cloneValue(value) {
   if (Array.isArray(value)) return value.map(cloneValue)
   if (!value || typeof value !== 'object') return value
@@ -82,12 +95,22 @@ function sanitizeToolCalls(toolCalls = []) {
   })
 }
 
-function sanitizeMessage(message, providerKeys) {
+function sanitizeMessage(message, providerKeys, { retainReasoning = false } = {}) {
   const clean = {
     role: message.role,
     ...(Object.hasOwn(message, 'content') ? { content: cloneValue(message.content) } : {}),
     ...(typeof message.name === 'string' ? { name: message.name } : {}),
     ...(typeof message.tool_call_id === 'string' ? { tool_call_id: message.tool_call_id } : {}),
+    // Opt-in chain-of-thought replay (MODEL_REASONING_RETENTION=1). Only the
+    // assistant's own retained reasoning travels back, and only to the same
+    // request pipeline that produced it; every other consumer keeps the
+    // historical strip-everything behavior.
+    ...(retainReasoning
+      && message.role === 'assistant'
+      && typeof message.reasoning_content === 'string'
+      && message.reasoning_content.trim()
+      ? { reasoning_content: message.reasoning_content }
+      : {}),
   }
   if (Array.isArray(message.tool_calls)) clean.tool_calls = sanitizeToolCalls(message.tool_calls)
   return { ...clean, ...activeSidecar(message, providerKeys) }
@@ -144,11 +167,12 @@ export function prepareOutboundMessages({
   providerKind = '',
   providerId = '',
   ephemeralContext = '',
+  retainReasoning = false,
 } = {}) {
   const providerKeys = activeProviderKeys({ profile, providerKind, providerId })
   const sanitized = removeOrphanToolResults((Array.isArray(messages) ? messages : [])
     .filter((message) => message && typeof message === 'object' && !isDisplayOnly(message))
-    .map((message) => sanitizeMessage(message, providerKeys)))
+    .map((message) => sanitizeMessage(message, providerKeys, { retainReasoning })))
   const withContext = appendEphemeralContext(sanitized, ephemeralContext)
   const visionSafe = profile?.supportsVision === true
     ? withContext
@@ -161,4 +185,5 @@ export const _testing = Object.freeze({
   appendEphemeralContext,
   isDisplayOnly,
   removeOrphanToolResults,
+  sanitizeMessage,
 })

@@ -63,7 +63,11 @@ export function useT() {
       lang: DEFAULT_LANGUAGE,
       setLang: () => {},
       languages: SUPPORTED_LANGUAGES,
-      t: (key) => translateKey(key, DEFAULT_LANGUAGE),
+      t: (key, vars) => {
+        const raw = translateKey(key, DEFAULT_LANGUAGE)
+        if (!vars || typeof raw !== 'string') return raw
+        return raw.replace(/\{(\w+)\}/g, (_, name) => (name in vars ? String(vars[name]) : `{${name}}`))
+      },
     }
   }
   return ctx

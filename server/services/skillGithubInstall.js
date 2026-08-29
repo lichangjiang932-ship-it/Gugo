@@ -1,6 +1,7 @@
 import path from 'node:path'
 
 import { fetchWithEnvProxy } from '../adapters/proxyFetch.js'
+import { fetchSafeOutbound } from '../utils/outboundNetworkGuard.js'
 import { SKILL_PACK_LIMITS } from './skillImport.js'
 
 const FETCH_TIMEOUT_MS = 15_000
@@ -137,6 +138,7 @@ async function readBoundedResponse(response, maxBytes) {
 async function fetchBytes(url, {
   fetchImpl = fetchWithEnvProxy,
   env = process.env,
+  lookup,
   maxBytes = SKILL_PACK_LIMITS.maxFileBytes,
   deadlineAt = 0,
   accept,
@@ -146,11 +148,19 @@ async function fetchBytes(url, {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), Math.min(FETCH_TIMEOUT_MS, remaining))
   try {
-    const response = await fetchImpl(url, {
+    const resolveDns = typeof lookup === 'function'
+      || fetchImpl === fetchWithEnvProxy
+      || fetchImpl === globalThis.fetch
+    const response = await fetchSafeOutbound(url, {
       headers: requestHeaders({ env, accept }),
-      redirect: 'error',
       signal: controller.signal,
-    }, env)
+    }, {
+      fetchImpl: (input, init) => fetchImpl(input, init, env),
+      allowLocal: false,
+      resolveDns,
+      maxRedirects: 0,
+      ...(typeof lookup === 'function' ? { lookup } : {}),
+    })
     if (!response.ok) return { ok: false, status: response.status }
     const contentLength = Number(response.headers?.get?.('content-length') || 0)
     if (Number.isFinite(contentLength) && contentLength > maxBytes) {
@@ -432,10 +442,11 @@ function addSourceToManifest(skillJson, source) {
 export async function fetchSkillPackFromGithub(parsed, {
   fetchImpl = fetchWithEnvProxy,
   env = process.env,
+  lookup,
 } = {}) {
   if (!parsed) return { ok: false, reason: '无效的 GitHub URL' }
   const deadlineAt = Date.now() + IMPORT_TIMEOUT_MS
-  const options = { fetchImpl, env, deadlineAt }
+  const options = { fetchImpl, env, deadlineAt, ...(typeof lookup === 'function' ? { lookup } : {}) }
   const resolved = await resolveRevision(parsed, options)
   const pinned = { ...parsed, branch: resolved.revision }
 
@@ -514,13 +525,14 @@ export async function installSkillFromGithubUrl({
   listExistingIdsFn,
   fetchImpl = fetchWithEnvProxy,
   env = process.env,
+  lookup,
 }) {
   if (!userId) return { ok: false, reason: '请先登录后再导入技能' }
   if (typeof installFn !== 'function') return { ok: false, reason: '技能安装器不可用' }
   const parsed = parseGithubSkillUrl(url)
   if (!parsed) return { ok: false, reason: '只支持安全的 https://github.com/owner/repo[...] URL' }
 
-  const fetched = await fetchSkillPackFromGithub(parsed, { fetchImpl, env })
+  const fetched = await fetchSkillPackFromGithub(parsed, { fetchImpl, env, lookup })
   if (!fetched.ok) return { ok: false, reason: fetched.reason }
   const existingIds = typeof listExistingIdsFn === 'function' ? listExistingIdsFn({ userId }) : []
   const installed = installFn({ files: fetched.files, existingIds, userId })

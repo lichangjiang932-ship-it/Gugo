@@ -4,6 +4,7 @@ import {
   createAppServer,
   enforceLocalAuthExposurePolicy,
   getLocalAuthExposurePolicy,
+  healthCheckFull,
   isLoopbackBindAddress,
   RUNTIME_KERNEL_REVISION,
   resolveEffectiveExposureAddress,
@@ -104,4 +105,125 @@ test('GET /api/health/full requires authentication', async () => {
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }
+})
+
+function createCapturedResponse() {
+  return {
+    statusCode: null,
+    headers: null,
+    body: '',
+    writeHead(statusCode, headers) {
+      this.statusCode = statusCode
+      this.headers = headers
+    },
+    end(body) {
+      this.body = body
+    },
+  }
+}
+
+test('full health diagnoses the authenticated user Agent binding instead of only process env', () => {
+  const request = { userId: 'local-owner' }
+  const response = createCapturedResponse()
+  const calls = []
+
+  healthCheckFull(
+    request,
+    response,
+    () => ({}),
+    ({ userId, env }) => {
+      calls.push({ userId, env })
+      return {
+        ...env,
+        MODEL_BASE_URL: 'https://api.example.com/v1',
+        MODEL_API_KEY: 'secret-for-test-only',
+        MODEL_NAME: 'user-ready-model',
+      }
+    },
+    ({ userId, env }) => {
+      calls.push({ binding: true, userId, env })
+      return { modelName: 'user-ready-model' }
+    },
+  )
+
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.headers['Content-Type'], 'application/json')
+  assert.deepEqual(calls, [
+    { userId: 'local-owner', env: {} },
+    { binding: true, userId: 'local-owner', env: {} },
+  ])
+  const body = JSON.parse(response.body)
+  assert.equal(body.ok, true)
+  assert.equal(body.db.ok, true)
+  assert.equal(body.model.configured, true)
+  assert.equal(body.model.agentReady, true)
+  assert.equal(body.model.readinessCode, null)
+  assert.equal(body.model.code, null)
+  assert.equal(body.model.action, null)
+  assert.equal(body.model.modelName, 'user-ready-model')
+  assert.equal(JSON.stringify(body).includes('secret-for-test-only'), false)
+})
+
+test('full health returns stable remediation fields without leaking missing env names', () => {
+  const response = createCapturedResponse()
+  healthCheckFull(
+    { userId: 'unconfigured-user' },
+    response,
+    () => ({}),
+    () => ({}),
+    () => {
+      throw Object.assign(new Error('internal localized message'), {
+        code: 'MODEL_CONFIG_MISSING',
+        details: { missing: ['MODEL_API_KEY', 'MODEL_BASE_URL', 'MODEL_NAME'] },
+      })
+    },
+  )
+
+  assert.equal(response.statusCode, 503)
+  const body = JSON.parse(response.body)
+  assert.equal(body.ok, false)
+  assert.deepEqual(body.model, {
+    configured: false,
+    agentReady: false,
+    readinessCode: 'MODEL_CONFIG_MISSING',
+    code: 'MODEL_CONFIG_MISSING',
+    action: 'configure_model',
+    modelName: null,
+    toolMaxRounds: 0,
+  })
+  assert.equal(body.model.missing, undefined)
+  assert.doesNotMatch(response.body, /MODEL_(?:API_KEY|BASE_URL|NAME)/)
+  assert.doesNotMatch(response.body, /[\u3400-\u9fff]/u)
+})
+
+test('full health distinguishes configured Providers that are not Agent-ready', () => {
+  const response = createCapturedResponse()
+  healthCheckFull(
+    { userId: 'unavailable-user' },
+    response,
+    () => ({}),
+    () => ({
+      MODEL_BASE_URL: 'https://api.example.com/v1',
+      MODEL_API_KEY: 'unavailable-secret',
+      MODEL_NAME: 'unavailable-model',
+    }),
+    () => {
+      throw Object.assign(new Error('must not reach the response'), {
+        code: 'MODEL_PROVIDER_UNAVAILABLE',
+        modelName: 'unavailable-model',
+      })
+    },
+  )
+
+  assert.equal(response.statusCode, 503)
+  const body = JSON.parse(response.body)
+  assert.equal(body.ok, false)
+  assert.equal(body.model.configured, true)
+  assert.equal(body.model.agentReady, false)
+  assert.equal(body.model.readinessCode, 'MODEL_PROVIDER_UNAVAILABLE')
+  assert.equal(body.model.code, 'MODEL_PROVIDER_UNAVAILABLE')
+  assert.equal(body.model.action, 'test_provider')
+  assert.equal(body.model.modelName, 'unavailable-model')
+  assert.doesNotMatch(response.body, /unavailable-secret|must not reach the response/)
+  assert.doesNotMatch(response.body, /[\u3400-\u9fff]/u)
 })

@@ -6,7 +6,7 @@ import { _browserInternals } from '../server/adapters/browserAutomation.js'
 test('browser URL validation blocks link-local metadata targets before launch', async () => {
   await assert.rejects(
     () => _browserInternals.validateUrl('http://169.254.169.254/latest/meta-data/'),
-    /内网|loopback/,
+    (error) => error?.code === 'OUTBOUND_ADDRESS_DENIED',
   )
 })
 

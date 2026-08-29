@@ -196,6 +196,19 @@ export function createCanonicalHarnessModelBroker(prepared) {
   let requestAbortScope = null
   let abortPromise = null
   let responseCheckpointPending = false
+  let committedResponseText = null
+  let committedAnswerReviewDigest = null
+  let preRequestDeliveryState = null
+
+  const restorePreRequestDeliveryState = () => {
+    if (!preRequestDeliveryState) return
+    runtimeState.deliveryArtifactIds = [...preRequestDeliveryState.deliveryArtifactIds]
+    runtimeState.deliveryArtifactSelectionArtifactIds = [
+      ...preRequestDeliveryState.deliveryArtifactSelectionArtifactIds,
+    ]
+    runtimeState.deliveryArtifactSelectionExplicit = preRequestDeliveryState.deliveryArtifactSelectionExplicit
+    runtimeState.deliverableSelectionRetries = preRequestDeliveryState.deliverableSelectionRetries
+  }
 
   const modelRequest = async (request) => {
     assertEmptyRequest(request)
@@ -233,6 +246,26 @@ export function createCanonicalHarnessModelBroker(prepared) {
     activeRequestToken = requestToken
     requestAbortScope = abortScope
     pendingRequest = (async () => {
+      // Canonical adapters receive one host-owned model response. Resolve a
+      // safe deliverable fallback before that request so the final answer can
+      // review the exact selection that will be returned to the user.
+      if (runtimeState.needsDeliverableSelection?.()) {
+        const deliveryState = {
+          deliveryArtifactIds: [...runtimeState.deliveryArtifactIds],
+          deliveryArtifactSelectionArtifactIds: [
+            ...runtimeState.deliveryArtifactSelectionArtifactIds,
+          ],
+          deliveryArtifactSelectionExplicit: runtimeState.deliveryArtifactSelectionExplicit,
+          deliverableSelectionRetries: runtimeState.deliverableSelectionRetries,
+        }
+        if (runtimeState.applySafeDeliverableFallback?.()) {
+          preRequestDeliveryState = deliveryState
+        }
+      }
+      runtimeState.prepareFinalAnswerEvidenceReview?.()
+      const answerReviewDigest = runtimeState.hasCurrentFinalAnswerEvidenceReview?.()
+        ? runtimeState.currentFinalAnswerEvidenceDigest()
+        : null
       const tracked = await runtimeState.callTrackedModel({
         messages: runtimeState.convo,
         tools: [],
@@ -258,7 +291,10 @@ export function createCanonicalHarnessModelBroker(prepared) {
         responseCheckpointPending = false
       }
       assertRequestActive()
-      return publicModelResult(tracked.response)
+      const response = publicModelResult(tracked.response)
+      committedResponseText = response.content
+      committedAnswerReviewDigest = answerReviewDigest
+      return response
     })()
 
     try {
@@ -300,7 +336,7 @@ export function createCanonicalHarnessModelBroker(prepared) {
         'Canonical Harness model response must commit before finalization',
       )
     }
-    const text = ownText(result)
+    const adapterText = ownText(result)
     const previousPhase = phase
     const previousModelInvocation = runtimeState.modelInvocation
     const previousRestoredModelInvocation = runtimeState.restoredModelInvocation
@@ -332,7 +368,33 @@ export function createCanonicalHarnessModelBroker(prepared) {
         return publicFinalResult(blocked)
       }
 
-      const protectedText = protectTerminalCandidate(runtimeState, text)
+      if (runtimeState.requiresFinalAnswerEvidenceReview()
+        && (!committedAnswerReviewDigest
+          || !runtimeState.hasCurrentFinalAnswerEvidenceReview(committedAnswerReviewDigest))) {
+        const incomplete = await runtimeState.finishIncomplete({
+          text: '',
+          reason: 'final_answer_evidence_review_missing',
+        })
+        if (incomplete?.deferredForSteering === true) {
+          throw brokerError(
+            CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.LIFECYCLE_INVALID,
+            'Canonical Harness finalization was deferred by the host',
+          )
+        }
+        finalCheckpointPersisted = runtimeState.finalCheckpointPersisted === true
+        phase = 'finalized'
+        return publicFinalResult(incomplete)
+      }
+
+      // Contract v3 keeps its historical conversational projection: an
+      // adapter may compose the broker response when there is no host evidence
+      // contract to protect. Once execution or deliverable evidence exists,
+      // only the digest-bound Provider response may become terminal; adapter
+      // text has not itself passed that review and cannot strengthen claims.
+      const terminalCandidate = runtimeState.requiresFinalAnswerEvidenceReview()
+        ? committedResponseText
+        : adapterText
+      const protectedText = protectTerminalCandidate(runtimeState, terminalCandidate)
       const emptyModelResponse = !protectedText.trim()
       const terminalText = emptyModelResponse
         ? protectTerminalCandidate(runtimeState, EMPTY_MODEL_RESPONSE_TEXT, { incomplete: true })
@@ -396,10 +458,14 @@ export function createCanonicalHarnessModelBroker(prepared) {
         runtimeState.finalLocalHtmlDeliveryFailure = previousFinalLocalHtmlDeliveryFailure
         runtimeState.localHtmlDeliveryRetries = previousLocalHtmlDeliveryRetries
         runtimeState.localHtmlDeliveryValidationPending = previousLocalHtmlDeliveryValidationPending
-        runtimeState.deliveryArtifactIds = previousDeliveryArtifactIds
-        runtimeState.deliveryArtifactSelectionArtifactIds = previousDeliveryArtifactSelectionArtifactIds
-        runtimeState.deliveryArtifactSelectionExplicit = previousDeliveryArtifactSelectionExplicit
-        runtimeState.deliverableSelectionRetries = previousDeliverableSelectionRetries
+        if (preRequestDeliveryState) {
+          restorePreRequestDeliveryState()
+        } else {
+          runtimeState.deliveryArtifactIds = previousDeliveryArtifactIds
+          runtimeState.deliveryArtifactSelectionArtifactIds = previousDeliveryArtifactSelectionArtifactIds
+          runtimeState.deliveryArtifactSelectionExplicit = previousDeliveryArtifactSelectionExplicit
+          runtimeState.deliverableSelectionRetries = previousDeliverableSelectionRetries
+        }
         phase = previousPhase
       } else {
         // A host terminal result is authoritative once its final checkpoint is
@@ -436,6 +502,7 @@ export function createCanonicalHarnessModelBroker(prepared) {
         )
       }
       requestAbortScope?.dispose()
+      restorePreRequestDeliveryState()
       await runtimeState.persistTurn({ boundary: 'harness-adapter-aborted' })
       phase = 'aborted'
       if (!pendingRequestSettled && repairLateResponseCheckpoint) {

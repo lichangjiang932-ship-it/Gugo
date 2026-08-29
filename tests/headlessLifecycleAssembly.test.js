@@ -46,6 +46,11 @@ test('headless lifecycle starts only local durability/plugin services and stops 
       return [{ ok: true, pluginId: 'test-plugin' }]
     },
     shutdownRuntimePlugins: () => { events.push('stop:runtime-plugins') },
+    startLspRuntime: (options) => {
+      assert.strictEqual(options.env, runtimeEnv)
+      events.push('start:lsp')
+    },
+    closeLspRuntime: () => { events.push('stop:lsp') },
     closeTurnEngine: () => { events.push('stop:turn-engine') },
     warn: (message) => { events.push(`warn:${message}`) },
   }
@@ -81,12 +86,14 @@ test('headless lifecycle starts only local durability/plugin services and stops 
     'start:plugin-config',
     'start:plugin-discovery',
     'start:runtime-plugins',
+    'start:lsp',
   ])
 
   const stopped = await graph.stopAll()
   assert.equal(stopped.exitCode, 0)
-  assert.deepEqual(events.slice(-6), [
+  assert.deepEqual(events.slice(-7), [
     'stop:turn-engine',
+    'stop:lsp',
     'stop:runtime-plugins',
     'stop:materializer',
     'stop:compaction-archive',
@@ -125,6 +132,8 @@ test('headless runtime plugin restore remains fail-soft per plugin but lifecycle
         error: 'health check failed',
       }],
       shutdownRuntimePlugins: () => {},
+      startLspRuntime: () => {},
+      closeLspRuntime: () => {},
       closeTurnEngine: () => {},
       warn: (message) => warnings.push(message),
     },
@@ -165,6 +174,8 @@ test('headless lifecycle fails closed before materialization when session deleti
       initPlugins: () => { events.push('start:plugin-discovery') },
       restoreEnabledRuntimePlugins: () => [],
       shutdownRuntimePlugins: () => { events.push('stop:runtime-plugins') },
+      startLspRuntime: () => { events.push('start:lsp') },
+      closeLspRuntime: () => { events.push('stop:lsp') },
       closeTurnEngine: () => { events.push('stop:turn-engine') },
       warn: () => {},
     },

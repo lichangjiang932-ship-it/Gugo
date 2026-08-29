@@ -24,6 +24,7 @@ test('HTTP turn failures retain structured readiness metadata for durable UI sta
     action: 'retry',
     details: { phase: 'shutdown' },
     retryable: true,
+    manualRetryable: true,
     retryAfter: '8',
   })
   assert.deepEqual(normalizeServerTurnFailure(error), {
@@ -33,6 +34,7 @@ test('HTTP turn failures retain structured readiness metadata for durable UI sta
     action: 'retry',
     details: { phase: 'shutdown' },
     retryable: true,
+    manualRetryable: true,
     retryAfter: '8',
   })
   const terminalFailure = { code: 'TURN_FAILED', message: 'durable failure', retryable: true }
@@ -52,6 +54,7 @@ test('the default turn exposes a complete coding-agent execution loop', () => {
     'edit_file',
     'apply_patch',
     'bash_exec',
+    'run_code',
     'run_test',
     'docker_exec',
     'file_download',
@@ -71,6 +74,7 @@ test('the default turn exposes a complete coding-agent execution loop', () => {
   }
   assert.deepEqual(resolved.disabled, [])
   assert.ok(buildServerToolsConfig({ bash_exec: false }).disabled.includes('bash_exec'))
+  assert.ok(buildServerToolsConfig({ run_code: false }).disabled.includes('run_code'))
   assert.ok(buildServerToolsConfig({ run_project_check: false }).disabled.includes('run_project_check'))
 })
 

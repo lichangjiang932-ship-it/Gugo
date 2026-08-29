@@ -234,6 +234,7 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 | `WORKSPACE_FS_ENABLED` | 否 | 工作区文件工具开关；在「本地文件」显式授权的路径不受此开关限制 | `0` |
 | `WORKSPACE_SHELL_ENABLED` | 否 | 共享 `WORKSPACE_ROOT` 的 Shell 工具开关 | `0` |
 | `LOCAL_CODE_EXECUTION_ENABLED` | 否 | 用户授权 `read_write` 目录的代码执行开关；本机回环模式默认开启，远程/多人默认关闭 | 自动 |
+| `CODEX_APP_SERVER_ENABLED` | 否 | 仅精确值 `1` 启动外部 OpenAI Codex CLI `app-server` 子进程；该 CLI 可能按自身配置联网 | `0` |
 | `WORKSPACE_GIT_ENABLED` | 否 | Git 工具开关 | `0` |
 | `WORKSPACE_ROOT` | 否 | 工作区根目录 | `process.cwd()` |
 | `WORKSPACE_SHARED_TRUSTED` | 否 | 单机可信环境跳过逐用户工作区信任 | `0` |

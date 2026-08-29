@@ -105,6 +105,8 @@ test('TurnEngine exposes only structured recovery metadata for unknown side effe
   assert.equal(blockedEvidence?.modelContext?.turnEvidence, true)
   assert.equal(blockedEvidence?.modelContext?.evidenceState, 'blocked')
   assert.equal(blockedEvidence?.modelContext?.serverLastSequence, blocked.sequence)
+  assert.equal(blockedEvidence?.content, '')
+  assert.equal(blocked.payload.partialText, '')
   assert.deepEqual(blockedEvidence?.modelContext?.recovery, {
     recoveryKind: 'side_effect_outcome_unknown',
     requiresUserVerification: true,
@@ -853,7 +855,8 @@ test('TurnEngine fails closed when deferred delta persistence exhausts its retri
     failedAt: failed.payload.error.persistence.failedAt,
   })
   assert.equal(Number.isInteger(failed.payload.error.persistence.failedAt), true)
-  assert.match(failed.payload.message, /任务事件无法可靠保存/)
+  assert.equal(Object.hasOwn(failed.payload, 'message'), false)
+  assert.equal(Object.hasOwn(failed.payload.error, 'message'), false)
   assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId })).status, 'failed')
 })
 
@@ -1919,6 +1922,27 @@ test('TurnEngine reports a session active while startTurn is awaiting turn.start
   assert.equal(await engine.hasActiveSession({ userId, sessionId }), false)
 })
 
+test('TurnEngine fails closed when durable session activity cannot be checked', async () => {
+  const leaseFailure = new Error('lease backend unavailable')
+  const engine = createTestEngine({
+    runtimeCore: {
+      checkpoint: { load: () => null, save: () => null, clear: () => 0 },
+      lease: {
+        hasActiveSession: () => { throw leaseFailure },
+      },
+      approval: { release: () => 0 },
+    },
+  })
+
+  await assert.rejects(
+    engine.hasActiveSession({ userId, sessionId: 'turn-engine-session' }),
+    (error) => error?.code === 'TURN_SESSION_ACTIVITY_CHECK_FAILED'
+      && error?.status === 503
+      && error?.message === 'failed to verify whether the session has an active turn'
+      && error?.cause === leaseFailure,
+  )
+})
+
 test('TurnEngine releases the starting-session reservation when turn.started persistence fails', async () => {
   const sessionId = 'turn-engine-start-failure'
   upsertSession({ id: sessionId, userId, title: 'Start failure' })
@@ -2894,9 +2918,40 @@ test('TurnEngine never publishes turn.paused when the paused assistant message c
   assert.equal(turnEvents.some((event) => event.type === 'turn.completed'), false)
   const failed = turnEvents.at(-1)
   assert.equal(failed.type, 'turn.failed')
-  assert.equal(failed.payload.message, '任务执行遇到问题，尚未完成。请重试；若仍失败，请检查模型配置和工具调用支持。')
-  assert.doesNotMatch(failed.payload.message, /paused message write failed/)
+  assert.equal(Object.hasOwn(failed.payload, 'message'), false)
+  assert.equal(Object.hasOwn(failed.payload.error, 'message'), false)
   assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId })).status, 'failed')
+})
+
+test('TurnEngine projects a missing clarification as a stable reason code without server copy', async () => {
+  const turnId = 'turn-code-only-clarification'
+  const engine = createTestEngine({
+    runLoop: async () => ({ paused: true, artifactIds: [], iterations: 1 }),
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Pause without a model-authored question.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const paused = events(turnId).at(-1)
+  assert.equal(paused.type, 'turn.paused')
+  assert.equal(paused.payload.text, '')
+  assert.deepEqual(paused.payload.clarification, {
+    reason_code: 'clarification_required',
+    blocker_kind: 'missing_info',
+  })
+  assert.equal(JSON.stringify(paused.payload).includes('需要你补充信息'), false)
+  const message = getMessage({
+    userId,
+    sessionId: 'turn-engine-session',
+    messageId: `${turnId}:assistant`,
+  })
+  assert.equal(message.content, '')
+  assert.equal(message.modelContext.clarification.reason_code, 'clarification_required')
 })
 
 test('TurnEngine injects an ordinary clarification answer once when resuming', async () => {
@@ -3553,12 +3608,9 @@ test('TurnEngine preserves completed tools across a retryable model interruption
   const interrupted = interruptedEvents.at(-1)
   assert.equal(interrupted.type, 'turn.interrupted')
   assert.equal(interrupted.payload.code, 'MODEL_HTTP_503')
-  assert.equal(interrupted.payload.message, '任务执行遇到问题，尚未完成。请重试；若仍失败，请检查模型配置和工具调用支持。')
-  assert.doesNotMatch(interrupted.payload.message, /model provider returned HTTP 503/)
+  assert.equal(Object.hasOwn(interrupted.payload, 'message'), false)
   assert.equal(interrupted.payload.retryable, true)
-  assert.match(interrupted.payload.text, /任务中断/)
-  assert.match(interrupted.payload.text, /read_file：路径：README\.md/)
-  assert.doesNotMatch(interrupted.payload.text, /durable README content/)
+  assert.equal(interrupted.payload.text, '')
   assert.equal(interruptedEvents.some((event) => event.type === 'turn.completed'), false)
   assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId })).status, 'interrupted')
   const interruptedEvidence = getMessage({
@@ -3569,8 +3621,7 @@ test('TurnEngine preserves completed tools across a retryable model interruption
   assert.equal(interruptedEvidence?.modelContext?.turnEvidence, true)
   assert.equal(interruptedEvidence?.modelContext?.evidenceState, 'interrupted')
   assert.equal(interruptedEvidence?.modelContext?.serverLastSequence, interrupted.sequence)
-  assert.equal(interruptedEvidence?.content, interrupted.payload.text)
-  assert.doesNotMatch(interruptedEvidence?.content || '', /durable README content/)
+  assert.equal(interruptedEvidence?.content, '')
   const interruptedCheckpoint = getTurnCheckpoint({
     userId,
     sessionId: 'turn-engine-session',
@@ -3696,6 +3747,11 @@ test('TurnEngine aborts an active model request with an explicit cancelled event
   assert.equal(cancelled.type, 'turn.cancelled')
   assert.deepEqual(cancelled.payload.artifactIds, [])
   assert.deepEqual(cancelled.payload.deliveryArtifactIds, [])
+  assert.equal(getMessage({
+    userId,
+    sessionId: 'turn-engine-session',
+    messageId: 'turn-cancel:assistant',
+  })?.content, '')
 })
 
 test('TurnEngine keeps turn.cancelled durable when cancelled evidence message persistence fails', async () => {
@@ -3941,10 +3997,14 @@ test('TurnEngine maps an incomplete loop result to failure instead of completion
   assert.equal(failed.type, 'turn.failed')
   assert.equal(turnEvents.some((event) => event.type === 'turn.completed'), false)
   assert.equal(failed.payload.code, 'TURN_INCOMPLETE')
+  assert.equal(failed.payload.incompleteReason, 'post_mutation_verification_missing')
+  assert.deepEqual(failed.payload.missingRequirements, ['mutation_readback', 'diff_or_project_check'])
+  assert.equal(failed.payload.error.incompleteReason, 'post_mutation_verification_missing')
+  assert.deepEqual(failed.payload.error.missingRequirements, ['mutation_readback', 'diff_or_project_check'])
   assert.equal(failed.payload.error.retryable, true)
-  assert.equal(failed.payload.message, '任务尚未完全通过验证。已成功写入的本地修改会保留，并可在文件栏中查看；待验证文件不代表验证通过。请重试以继续完成验证。')
-  assert.doesNotMatch(failed.payload.message, /Turn did not complete/)
-  assert.equal(failed.payload.partialText, '任务尚未完全通过验证。已成功写入的本地修改会保留，并可在文件栏中查看；待验证文件不代表验证通过。请重试以继续完成验证。')
+  assert.equal(Object.hasOwn(failed.payload, 'message'), false)
+  assert.equal(Object.hasOwn(failed.payload.error, 'message'), false)
+  assert.equal(failed.payload.partialText, '')
   assert.doesNotMatch(failed.payload.partialText, /requested mutation could not be verified/i)
   assert.deepEqual(failed.payload.artifactIds, ['artifact-unverified'])
   assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId })).status, 'failed')
@@ -3954,7 +4014,39 @@ test('TurnEngine maps an incomplete loop result to failure instead of completion
     messageId: `${turnId}:assistant`,
   })
   assert.equal(evidence?.modelContext?.evidenceState, 'failed')
-  assert.equal(evidence?.content, '任务尚未完全通过验证。已成功写入的本地修改会保留，并可在文件栏中查看；待验证文件不代表验证通过。请重试以继续完成验证。')
+  assert.equal(evidence?.modelContext?.error?.incompleteReason, 'post_mutation_verification_missing')
+  assert.deepEqual(evidence?.modelContext?.error?.missingRequirements, ['mutation_readback', 'diff_or_project_check'])
+  assert.equal(evidence?.content, '')
+})
+
+test('TurnEngine projects reasoning runaway with a stable reason and concrete missing requirement', async () => {
+  const turnId = 'turn-reasoning-runaway-incomplete'
+  const engine = createTestEngine({
+    runLoop: async () => ({
+      text: '模型推理超过安全上限，任务已停止。',
+      iterations: 1,
+      incomplete: true,
+      code: 'REASONING_RUNAWAY',
+      reason: 'internal provider-specific reasoning limit detail',
+    }),
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Complete the task without exceeding the safe reasoning limit.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const failed = events(turnId).at(-1)
+  assert.equal(failed.type, 'turn.failed')
+  assert.equal(failed.payload.code, 'REASONING_RUNAWAY')
+  assert.equal(failed.payload.incompleteReason, 'reasoning_runaway')
+  assert.deepEqual(failed.payload.missingRequirements, ['bounded_model_response'])
+  assert.equal(failed.payload.error.incompleteReason, 'reasoning_runaway')
+  assert.deepEqual(failed.payload.error.missingRequirements, ['bounded_model_response'])
+  assert.equal(failed.payload.error.retryable, false)
 })
 
 test('TurnEngine preserves deterministic no-progress failures and forbids failed retry', async () => {
@@ -4000,10 +4092,10 @@ test('TurnEngine preserves deterministic no-progress failures and forbids failed
 
   const failed = events(turnId).at(-1)
   assert.equal(failed.type, 'turn.failed')
-  assert.equal(failed.payload.code, 'repeated_tool_call_window')
+  assert.equal(failed.payload.code, 'REPEATED_TOOL_CALL_WINDOW')
   assert.equal(failed.payload.error.retryable, false)
-  assert.equal(failed.payload.error.hint, hint)
-  assert.match(failed.payload.message, /未取得实质进展/)
+  assert.equal(Object.hasOwn(failed.payload.error, 'hint'), false)
+  assert.equal(Object.hasOwn(failed.payload, 'message'), false)
   await assert.rejects(
     engine.resumeTurn({
       userId,
@@ -4151,7 +4243,7 @@ test('TurnEngine allows one checkpoint retry and closes a repeatedly incomplete 
   assert.equal(repeatedFailure.type, 'turn.failed')
   assert.equal(repeatedFailure.payload.code, 'TURN_INCOMPLETE')
   assert.equal(repeatedFailure.payload.error.retryable, false)
-  assert.match(repeatedFailure.payload.error.hint, /已执行一次断点续写/)
+  assert.equal(Object.hasOwn(repeatedFailure.payload.error, 'hint'), false)
   assert.equal(loopCalls, 2)
   await assert.rejects(
     engine.resumeTurn({

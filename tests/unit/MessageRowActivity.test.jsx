@@ -5,6 +5,8 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
+import { translateKey } from '../../src/i18n/translations.js'
+import { normalizeServerSessionSnapshot } from '../../src/lib/turnClient.js'
 import MessageRow from '../../src/pages/ChatSplit/chatMessages/MessageRow.jsx'
 
 function setupDom() {
@@ -20,6 +22,214 @@ function setupDom() {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   return dom
 }
+
+test('failed snapshot messages derive localized copy without replacing durable partial text', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const serverMessage = '任务未全部完成，但已保存的文件仍可打开；请按文件旁的状态确认结果。'
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'turn-incomplete:assistant',
+      role: 'assistant',
+      // Legacy servers persisted their localized fallback in assistant
+      // content. It remains durable, but must not be rendered as model text.
+      content: serverMessage,
+      createdAt: 1,
+      modelContext: {
+        turnId: 'turn-incomplete',
+        turnEvidence: true,
+        evidenceState: 'failed',
+        error: {
+          code: 'TURN_INCOMPLETE',
+          retryable: true,
+        },
+      },
+    }],
+  })
+  const failedMessage = snapshot.messages[0]
+  const copy = {
+    en: {
+      failed: translateKey('errors.chatFailure', 'en'),
+      incomplete: translateKey('errors.turnIncomplete', 'en'),
+    },
+    ja: {
+      failed: translateKey('errors.chatFailure', 'ja'),
+      incomplete: translateKey('errors.turnIncomplete', 'ja'),
+    },
+  }
+  const renderMessage = (msg, lang) => act(async () => root.render(
+    <I18nProvider>
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang={lang}
+        t={(key) => translateKey(key, lang)}
+      />
+    </I18nProvider>,
+  ))
+
+  try {
+    assert.equal(failedMessage.content, serverMessage)
+    assert.equal(failedMessage.meta.serverPartialText, '')
+    assert.equal(failedMessage.meta.serverFailure.code, 'TURN_INCOMPLETE')
+
+    await renderMessage(failedMessage, 'en')
+    assert.equal(rootElement.querySelector('.chat-assistant-answer')?.textContent, copy.en.incomplete)
+    assert.doesNotMatch(rootElement.textContent, new RegExp(serverMessage))
+    assert.equal(failedMessage.content, serverMessage)
+
+    const genericFailure = {
+      ...failedMessage,
+      id: 'turn-failed:assistant',
+      meta: {
+        ...failedMessage.meta,
+        serverFailure: {
+          code: 'TURN_FAILED',
+          message: 'internal server failure detail',
+          retryable: false,
+        },
+      },
+    }
+    await renderMessage(genericFailure, 'en')
+    assert.equal(rootElement.querySelector('.chat-assistant-answer')?.textContent, copy.en.failed)
+    assert.doesNotMatch(rootElement.textContent, /internal server failure detail/)
+
+    await renderMessage(failedMessage, 'ja')
+    assert.equal(rootElement.querySelector('.chat-assistant-answer')?.textContent, copy.ja.incomplete)
+    assert.doesNotMatch(rootElement.textContent, new RegExp(serverMessage))
+    assert.equal(failedMessage.content, serverMessage)
+
+    const partialText = 'Verified partial result from the model.'
+    await renderMessage({
+      ...failedMessage,
+      content: `${partialText}\n\n${copy.en.incomplete}`,
+      meta: { ...failedMessage.meta, serverPartialText: partialText },
+    }, 'ja')
+    assert.equal(rootElement.querySelector('.chat-assistant-answer')?.textContent, partialText)
+    assert.doesNotMatch(rootElement.textContent, new RegExp(copy.en.incomplete))
+    assert.doesNotMatch(rootElement.textContent, new RegExp(copy.ja.incomplete))
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('legacy interrupted, cancelled, and recovery-blocked snapshots never render server fallback prose as assistant text', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const interruptedFallback = '任务中断：后续模型请求未能继续，任务尚未完成。请重试以继续。\n\n已经完成的部分：\n- read_file：路径：README.md'
+  const blockedFallback = '模型请求可能已被上游接受，系统已阻止自动重试。'
+  const cancelledFallback = 'Cancelled by user'
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'legacy-interrupted:assistant',
+      role: 'assistant',
+      content: interruptedFallback,
+      createdAt: 1,
+      modelContext: {
+        turnId: 'legacy-interrupted',
+        turnEvidence: true,
+        evidenceState: 'interrupted',
+        error: {
+          code: 'MODEL_CALL_INTERRUPTED',
+          message: '任务执行遇到问题，尚未完成。请重试。',
+          retryable: true,
+        },
+      },
+    }, {
+      id: 'legacy-blocked:assistant',
+      role: 'assistant',
+      content: blockedFallback,
+      createdAt: 2,
+      modelContext: {
+        turnId: 'legacy-blocked',
+        turnEvidence: true,
+        evidenceState: 'blocked',
+        error: { code: 'MODEL_REQUEST_OUTCOME_UNKNOWN', message: blockedFallback, retryable: false },
+        recovery: {
+          recoveryKind: 'model_request_outcome_unknown',
+          requiresUserVerification: true,
+          modelRequestId: 'mr_legacy',
+          recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
+        },
+      },
+    }, {
+      id: 'legacy-cancelled:assistant',
+      role: 'assistant',
+      content: cancelledFallback,
+      createdAt: 3,
+      modelContext: {
+        turnId: 'legacy-cancelled',
+        turnEvidence: true,
+        evidenceState: 'cancelled',
+      },
+    }],
+  })
+  const renderMessage = (msg, lang = 'en') => act(async () => root.render(
+    <I18nProvider>
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang={lang}
+        t={(key) => translateKey(key, lang)}
+      />
+    </I18nProvider>,
+  ))
+
+  try {
+    const interrupted = snapshot.messages[0]
+    assert.equal(interrupted.meta.serverPartialText, '')
+    await renderMessage(interrupted, 'en')
+    assert.doesNotMatch(rootElement.textContent, new RegExp(interruptedFallback))
+    assert.equal(
+      rootElement.querySelector('.chat-assistant-answer')?.textContent,
+      translateKey('errors.turnModelInterrupted', 'en'),
+    )
+    await renderMessage(interrupted, 'ja')
+    assert.equal(
+      rootElement.querySelector('.chat-assistant-answer')?.textContent,
+      translateKey('errors.turnModelInterrupted', 'ja'),
+    )
+
+    const blocked = snapshot.messages[1]
+    assert.equal(blocked.meta.serverPartialText, '')
+    await renderMessage(blocked)
+    assert.doesNotMatch(rootElement.textContent, new RegExp(blockedFallback))
+    assert.ok(rootElement.querySelector('[data-testid="model-request-recovery-blocked"]'))
+
+    const cancelled = snapshot.messages[2]
+    assert.equal(cancelled.content, cancelledFallback)
+    assert.equal(cancelled.meta.serverPartialText, '')
+    await renderMessage(cancelled, 'en')
+    assert.equal(
+      rootElement.querySelector('.chat-assistant-answer')?.textContent,
+      translateKey('chat.serverTurn.cancelled', 'en'),
+    )
+    assert.doesNotMatch(rootElement.textContent, new RegExp(cancelledFallback))
+
+    await renderMessage(cancelled, 'ja')
+    assert.equal(
+      rootElement.querySelector('.chat-assistant-answer')?.textContent,
+      translateKey('chat.serverTurn.cancelled', 'ja'),
+    )
+
+    const partialText = 'The model saved a verified partial draft.'
+    await renderMessage({
+      ...cancelled,
+      meta: { ...cancelled.meta, serverPartialText: partialText },
+    }, 'ja')
+    assert.equal(rootElement.querySelector('.chat-assistant-answer')?.textContent, partialText)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
 
 test('unknown side-effect block clearly stops automatic retry and links to recovery settings', async () => {
   const dom = setupDom()
@@ -614,19 +824,138 @@ test('a failed file task without receipts keeps its missing-file completion stat
           rowKey={msg.id}
           generatingMessageId=""
           lang="en"
-          t={(key) => key === 'chatMessages.replyIncomplete'
-            ? 'No file was generated. Review the error above, then try again.'
-            : key}
+          t={(key) => ({
+            'chatMessages.incompleteTitle': 'Task incomplete',
+            'chatMessages.incompleteReasonLabel': 'Why:',
+            'chatMessages.incompleteMissingLabel': 'Still needed:',
+            'chatMessages.incompleteNextStepLabel': 'Next:',
+            'chatMessages.incompleteReasonFallback': 'No detailed terminal reason was retained.',
+            'chatMessages.incompleteRequirementArtifact': 'a validated final file',
+            'chatMessages.incompleteNextAdjust': 'Review the missing requirements and continue.',
+            'chatMessages.incompleteListSeparator': '; ',
+          }[key] || key)}
         />
       </I18nProvider>,
     ))
 
     assert.equal(
       rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent,
-      'No file was generated. Review the error above, then try again.',
+      'Task incomplete',
     )
+    assert.match(rootElement.querySelector('[data-testid="incomplete-task-reason"]')?.textContent || '', /No detailed terminal reason was retained/)
+    assert.match(rootElement.querySelector('[data-testid="incomplete-task-missing"]')?.textContent || '', /validated final file/)
+    assert.match(rootElement.querySelector('[data-testid="incomplete-task-next-step"]')?.textContent || '', /Review the missing requirements/)
     assert.doesNotMatch(rootElement.textContent, /local file receipts?/i)
     assert.equal(rootElement.querySelector('[data-testid="task-duration-header"]'), null)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('ordinary recovery blocks render a localized cause instead of an empty terminal reply', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'assistant-context-drift',
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+    meta: {
+      serverTurnId: 'turn-context-drift',
+      serverRecoveryBlocked: true,
+      serverConnectionState: 'blocked',
+      serverFailure: {
+        code: 'TURN_PERMISSION_CONTEXT_DRIFT',
+        retryable: false,
+      },
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          t={(key) => key === 'errors.turnExecutionContextChanged'
+            ? 'The saved execution context changed; verify it before continuing.'
+            : key}
+        />
+      </I18nProvider>,
+    ))
+
+    assert.equal(
+      rootElement.querySelector('.chat-assistant-answer')?.textContent,
+      'The saved execution context changed; verify it before continuing.',
+    )
+    assert.equal(rootElement.querySelector('[data-testid="side-effect-recovery-blocked"]'), null)
+    assert.equal(rootElement.querySelector('[data-testid="model-request-recovery-blocked"]'), null)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a live model reply exposes structured incomplete diagnostics even without file receipts', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'assistant-live-incomplete',
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+    meta: {
+      type: 'model_reply',
+      failed: true,
+      serverTurnId: 'turn-live-incomplete',
+      serverFailure: {
+        code: 'TURN_INCOMPLETE',
+        incompleteReason: 'execution_budget_exhausted',
+        missingRequirements: ['remaining_task_steps'],
+        retryable: true,
+      },
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          t={(key) => ({
+            'chatMessages.incompleteTitle': 'Task incomplete',
+            'chatMessages.incompleteReasonLabel': 'Why:',
+            'chatMessages.incompleteMissingLabel': 'Still needed:',
+            'chatMessages.incompleteNextStepLabel': 'Next:',
+            'chatMessages.incompleteReasonBudget': 'The execution budget was exhausted.',
+            'chatMessages.incompleteRequirementRemainingSteps': 'unfinished task steps',
+            'chatMessages.incompleteNextRetry': 'Continue from the checkpoint.',
+            'chatMessages.incompleteListSeparator': '; ',
+          }[key] || key)}
+        />
+      </I18nProvider>,
+    ))
+
+    assert.equal(
+      rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent,
+      'Task incomplete',
+    )
+    assert.match(
+      rootElement.querySelector('[data-testid="incomplete-task-reason"]')?.textContent || '',
+      /execution budget was exhausted/i,
+    )
+    assert.match(
+      rootElement.querySelector('[data-testid="incomplete-task-missing"]')?.textContent || '',
+      /unfinished task steps/i,
+    )
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -878,6 +1207,12 @@ test('an interrupted resumable turn keeps committed local receipts visible', asy
       streaming: true,
       interrupted: true,
       serverTurnId: 'turn-interrupted-delivery',
+      serverFailure: {
+        code: 'TURN_INTERRUPTED',
+        incompleteReason: 'model_call_interrupted',
+        missingRequirements: ['task_completion'],
+        retryable: true,
+      },
       retainedLocalFiles: [{
         id: 'retained-report',
         path: 'D:\\work\\retained-report.pdf',
@@ -904,6 +1239,76 @@ test('an interrupted resumable turn keeps committed local receipts visible', asy
     const receipt = rootElement.querySelector('[data-testid="artifact-open-card"]')
     assert.ok(receipt)
     assert.match(receipt.textContent, /retained-report\.pdf/)
+    assert.ok(rootElement.querySelector('[data-testid="reply-completion-state"]'))
+    assert.ok(rootElement.querySelector('[data-testid="incomplete-task-reason"]'))
+    assert.ok(rootElement.querySelector('[data-testid="incomplete-task-missing"]'))
+    assert.ok(rootElement.querySelector('[data-testid="incomplete-task-next-step"]'))
+    assert.ok(rootElement.querySelector('[data-testid="incomplete-task-file-state"]'))
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('blocked and generic model failures with local receipts show structured incomplete state', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const cases = [{
+    id: 'assistant-blocked-receipt',
+    meta: {
+      failed: false,
+      serverTurnId: 'turn-blocked-receipt',
+      serverConnectionState: 'blocked',
+      serverFailure: { code: 'TURN_RECOVERY_BLOCKED', manualRetryable: true },
+      retainedLocalFiles: [{
+        id: 'blocked-file',
+        path: 'D:\\work\\blocked.html',
+        filename: 'blocked.html',
+      }],
+    },
+  }, {
+    id: 'assistant-generic-failed-receipt',
+    meta: {
+      type: 'model_reply',
+      failed: true,
+      serverTurnId: 'turn-generic-failed-receipt',
+      serverFailure: { code: 'TURN_FAILED', retryable: false },
+      verifiedLocalFiles: [{
+        id: 'failed-file',
+        path: 'D:\\work\\failed.html',
+        filename: 'failed.html',
+      }],
+    },
+  }]
+
+  try {
+    for (const entry of cases) {
+      const msg = {
+        id: entry.id,
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        meta: entry.meta,
+      }
+      await act(async () => root.render(
+        <I18nProvider>
+          <MessageRow
+            msg={msg}
+            rowKey={msg.id}
+            generatingMessageId=""
+            lang="en"
+            t={(key) => key}
+          />
+        </I18nProvider>,
+      ))
+
+      assert.ok(rootElement.querySelector('[data-testid="reply-completion-state"]'), entry.id)
+      assert.ok(rootElement.querySelector('[data-testid="incomplete-task-reason"]'), entry.id)
+      assert.ok(rootElement.querySelector('[data-testid="incomplete-task-missing"]'), entry.id)
+      assert.ok(rootElement.querySelector('[data-testid="incomplete-task-next-step"]'), entry.id)
+      assert.ok(rootElement.querySelector('[data-testid="incomplete-task-file-state"]'), entry.id)
+    }
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -922,6 +1327,12 @@ test('a failed turn hides managed artifacts but exposes independently verified l
     meta: {
       failed: true,
       serverTurnId: 'turn-partial-delivery',
+      serverFailure: {
+        code: 'TURN_INCOMPLETE',
+        incompleteReason: 'post_mutation_verification_missing',
+        missingRequirements: ['mutation_readback', 'diff_or_project_check'],
+        retryable: true,
+      },
       serverArtifacts: [{
         id: 'delivered-html',
         filename: 'gallery.html',
@@ -945,15 +1356,28 @@ test('a failed turn hides managed artifacts but exposes independently verified l
           rowKey={msg.id}
           generatingMessageId=""
           lang="en"
-          t={(key) => key === 'chatMessages.replyPartiallyCompleted'
-            ? 'Artifact validation failed, but verified edits were retained'
-            : key}
+          t={(key, values = {}) => ({
+            'chatMessages.incompleteTitle': 'Task incomplete',
+            'chatMessages.incompleteReasonLabel': 'Why:',
+            'chatMessages.incompleteMissingLabel': 'Still needed:',
+            'chatMessages.incompleteNextStepLabel': 'Next:',
+            'chatMessages.incompleteReasonMutationVerification': 'Changes were written but acceptance checks did not finish.',
+            'chatMessages.incompleteRequirementReadback': 'modified-file read-back',
+            'chatMessages.incompleteRequirementProjectCheck': 'diff or project checks',
+            'chatMessages.incompleteNextRetry': 'Continue from the checkpoint.',
+            'chatMessages.incompleteVerifiedFiles': `${values.count} verified file`,
+            'chatMessages.incompleteListSeparator': '; ',
+          }[key] || key)}
         />
       </I18nProvider>,
     ))
 
     const completionState = rootElement.querySelector('[data-testid="reply-completion-state"]')
-    assert.equal(completionState?.textContent, 'Artifact validation failed, but verified edits were retained')
+    assert.equal(completionState?.textContent, 'Task incomplete')
+    assert.match(rootElement.querySelector('[data-testid="incomplete-task-reason"]')?.textContent || '', /acceptance checks did not finish/)
+    assert.match(rootElement.querySelector('[data-testid="incomplete-task-missing"]')?.textContent || '', /modified-file read-back.*diff or project checks/)
+    assert.match(rootElement.querySelector('[data-testid="incomplete-task-next-step"]')?.textContent || '', /Continue from the checkpoint/)
+    assert.match(rootElement.querySelector('[data-testid="incomplete-task-file-state"]')?.textContent || '', /1 verified file/)
     assert.doesNotMatch(completionState?.parentElement?.className || '', /border|dashed/)
     const cards = [...rootElement.querySelectorAll('[data-testid="artifact-open-card"]')]
     assert.equal(cards.length, 1)

@@ -9,6 +9,7 @@ import {
 } from './integrationsStore.js'
 import { getOAuthAccessToken } from './integrationOAuthService.js'
 import { fetchConnectorJson } from './connectorHttp.js'
+import { fetchSafeOutbound } from '../utils/outboundNetworkGuard.js'
 import {
   allowQqMailEnvCredentials,
   listImapMessages,
@@ -498,11 +499,17 @@ function driveFileId(value) {
   return id
 }
 
-async function apiText(url, init, fetchImpl, maxChars = 500_000) {
+async function apiText(url, init, fetchImpl, maxChars = 500_000, lookup) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 15_000)
   try {
-    const response = await fetchImpl(url, { ...init, signal: controller.signal })
+    const resolveDns = typeof lookup === 'function' || fetchImpl === globalThis.fetch
+    const response = await fetchSafeOutbound(url, { ...init, signal: controller.signal }, {
+      fetchImpl,
+      allowLocal: false,
+      resolveDns,
+      ...(typeof lookup === 'function' ? { lookup } : {}),
+    })
     if (!response.ok) {
       const text = await response.text()
       let message = `HTTP ${response.status}`
@@ -543,7 +550,7 @@ const DRIVE_EXPORT_TYPES = Object.freeze({
   'application/vnd.google-apps.presentation': 'text/plain',
 })
 
-export async function getGoogleDriveFile({ userId, fileId, fetchImpl = fetch, env = process.env }) {
+export async function getGoogleDriveFile({ userId, fileId, fetchImpl = fetch, env = process.env, lookup }) {
   const token = await getOAuthAccessToken({ userId, provider: 'google_drive', fetchImpl, env })
   const id = driveFileId(fileId)
   const headers = driveHeaders(token)
@@ -556,11 +563,11 @@ export async function getGoogleDriveFile({ userId, fileId, fetchImpl = fetch, en
   const exportType = DRIVE_EXPORT_TYPES[file.mimeType]
   if (exportType) {
     const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/export?mimeType=${encodeURIComponent(exportType)}`
-    return { file, ...(await apiText(url, { headers }, fetchImpl)) }
+    return { file, ...(await apiText(url, { headers }, fetchImpl, 500_000, lookup)) }
   }
   if (file.mimeType.startsWith('text/') || /(?:json|xml|javascript|csv)/i.test(file.mimeType)) {
     const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}?alt=media`
-    return { file, ...(await apiText(url, { headers }, fetchImpl)) }
+    return { file, ...(await apiText(url, { headers }, fetchImpl, 500_000, lookup)) }
   }
   return { file, content: '', truncated: false, binary: true }
 }

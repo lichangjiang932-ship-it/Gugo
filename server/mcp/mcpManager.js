@@ -132,7 +132,7 @@ async function startConnection(userId, server) {
     await transport.request(buildInitializeRequest(), { timeoutMs: 20000 })
     await transport.send(buildInitializedNotification())
   } catch (err) {
-    transport.stop()
+    await transport.stop()
     throw new Error(`MCP initialize failed: ${err.message}`, { cause: err })
   }
 
@@ -522,10 +522,16 @@ export function sweepIdleConnections({ now = Date.now(), timeoutMs = idleTimeout
   return expired.length
 }
 
-export function shutdownAll() {
+export async function shutdownAll() {
   if (idleSweepTimer) {
     clearInterval(idleSweepTimer)
     idleSweepTimer = null
+  }
+  const transports = []
+  for (const map of userConnections.values()) {
+    for (const conn of map.values()) {
+      if (conn?.transport) transports.push(conn.transport)
+    }
   }
   connectionSupervisor.shutdown()
   for (const [userId, map] of userConnections) {
@@ -535,6 +541,7 @@ export function shutdownAll() {
     map.clear()
   }
   userConnections.clear()
+  await Promise.allSettled(transports.map((transport) => Promise.resolve(transport.stop())))
 }
 
 export const _mcpManagerInternals = Object.freeze({

@@ -8,6 +8,7 @@ import {
   upsertIntegration,
 } from './integrationsStore.js'
 import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
+import { fetchSafeOutbound } from '../utils/outboundNetworkGuard.js'
 
 const SESSION_TTL_MS = 10 * 60 * 1000
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1000
@@ -246,12 +247,35 @@ export function getOAuthConnectionStatus({ userId, id, now = Date.now() } = {}) 
   return sessionView(row, integration)
 }
 
-async function fetchJson(fetchImpl, url, init) {
+async function fetchJson(fetchImpl, url, init, { lookup } = {}) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 10000)
   try {
-    const response = await fetchImpl(url, { ...init, signal: controller.signal })
-    const text = await response.text()
+    const resolveDns = typeof lookup === 'function' || fetchImpl === globalThis.fetch
+    let response
+    let text
+    try {
+      response = await fetchSafeOutbound(url, {
+        ...init,
+        signal: controller.signal,
+      }, {
+        fetchImpl,
+        allowLocal: false,
+        resolveDns,
+        ...(typeof lookup === 'function' ? { lookup } : {}),
+      })
+      text = await response.text()
+    } catch (error) {
+      const wrapped = oauthError(
+        error?.name === 'AbortError'
+          ? 'OAuth token request timed out'
+          : 'OAuth token request was blocked or unavailable',
+        502,
+        'OAUTH_TOKEN_EXCHANGE_FAILED',
+      )
+      wrapped.cause = error
+      throw wrapped
+    }
     let data
     try {
       data = text ? JSON.parse(text) : {}
@@ -271,7 +295,7 @@ async function fetchJson(fetchImpl, url, init) {
   }
 }
 
-async function exchangeCode({ provider, code, row, settings, fetchImpl }) {
+async function exchangeCode({ provider, code, row, settings, fetchImpl, lookup }) {
   if (provider === 'notion') {
     const authorization = Buffer.from(`${settings.clientId}:${settings.clientSecret}`).toString('base64')
     return fetchJson(fetchImpl, settings.tokenUrl, {
@@ -286,7 +310,7 @@ async function exchangeCode({ provider, code, row, settings, fetchImpl }) {
         code,
         redirect_uri: row.redirect_uri,
       }),
-    })
+    }, { lookup })
   }
 
   const body = new URLSearchParams({
@@ -301,7 +325,7 @@ async function exchangeCode({ provider, code, row, settings, fetchImpl }) {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
-  })
+  }, { lookup })
 }
 
 function connectorCredentials({ provider, tokenData, existing, now = Date.now() }) {
@@ -342,6 +366,7 @@ export async function getOAuthAccessToken({
   provider,
   env = process.env,
   fetchImpl = fetch,
+  lookup,
   now = Date.now(),
 } = {}) {
   const credentials = getEnabledIntegrationCredentials({ userId, provider })
@@ -366,7 +391,7 @@ export async function getOAuthAccessToken({
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
-  })
+  }, { lookup })
   const refreshed = String(tokenData?.access_token || '').trim()
   if (!refreshed) throw oauthError('OAuth refresh response did not include an access token', 502, 'OAUTH_TOKEN_MISSING')
   const secret = { token: refreshed }
@@ -394,6 +419,7 @@ export async function completeOAuthConnection({
   providerError = '',
   env = process.env,
   fetchImpl = fetch,
+  lookup,
   now = Date.now(),
 } = {}) {
   const settings = providerSettings(provider, env)
@@ -425,7 +451,14 @@ export async function completeOAuthConnection({
   }
 
   try {
-    const tokenData = await exchangeCode({ provider, code: String(code), row, settings, fetchImpl })
+    const tokenData = await exchangeCode({
+      provider,
+      code: String(code),
+      row,
+      settings,
+      fetchImpl,
+      lookup,
+    })
     const existing = row.integration_id
       ? getIntegration({ userId: row.user_id, id: row.integration_id })
       : getIntegrationByProvider({ userId: row.user_id, provider })
@@ -435,6 +468,7 @@ export async function completeOAuthConnection({
       config: credentials.config,
       secret: credentials.secret,
       fetchImpl,
+      lookup,
     })
     if (validation?.ok !== true) {
       throw oauthError(

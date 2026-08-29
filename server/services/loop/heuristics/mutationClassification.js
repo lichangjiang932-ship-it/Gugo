@@ -80,7 +80,11 @@ export function windowsCmdScript(call) {
   if (!isCommandExecutionTool(call)) return ''
   const command = String(call?.args?.command || '').trim()
   const wrapped = command.match(/^cmd(?:\.exe)?\s+(?:(?:\/[dqs])\s+)*\/c\s+([\s\S]+)$/i)
-  if (!wrapped) return ''
+  // `bash_exec` is backed by the native Windows shell on Windows, where a
+  // model commonly emits the built-in `dir` directly instead of wrapping it
+  // in `cmd /c`. Recognize only that inspection command here; the parser below
+  // still rejects redirects to files, expansion and mutating compounds.
+  if (!wrapped) return /^dir(?:\s|$)/i.test(command) ? command : ''
   let script = String(wrapped[1] || '').trim()
   if ((script.startsWith('"') && script.endsWith('"'))
     || (script.startsWith("'") && script.endsWith("'"))) {

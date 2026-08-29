@@ -11,6 +11,7 @@ const TOOL_IDS = Object.freeze([
   'apply_patch',
   'patch_file',
   'bash_exec',
+  'run_code',
   'run_command',
   'run_test',
   'docker_exec',

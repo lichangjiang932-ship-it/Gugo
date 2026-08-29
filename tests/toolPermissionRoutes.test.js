@@ -42,6 +42,7 @@ test('tool-permissions GET returns empty overrides by default, POST persists', a
     const initial = await (await fetch(`http://127.0.0.1:${port}/api/tool-permissions`, { headers })).json()
     assert.deepEqual(initial.permissions, {})
     assert.ok(initial.gateable.includes('bash_exec'))
+    assert.ok(initial.gateable.includes('run_code'))
 
     const post = await fetch(`http://127.0.0.1:${port}/api/tool-permissions`, {
       method: 'POST',
@@ -51,6 +52,15 @@ test('tool-permissions GET returns empty overrides by default, POST persists', a
     assert.equal(post.status, 200)
     const body = await post.json()
     assert.equal(body.permissions.bash_exec, false)
+
+    const runCodePost = await fetch(`http://127.0.0.1:${port}/api/tool-permissions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ toolName: 'run_code', enabled: false }),
+    })
+    assert.equal(runCodePost.status, 200)
+    const runCodeBody = await runCodePost.json()
+    assert.equal(runCodeBody.permissions.run_code, false)
   })
 })
 

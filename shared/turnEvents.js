@@ -60,6 +60,13 @@ const toolFailureSchema = z.object({
   attempts: z.number().int().positive().optional(),
 }).strict()
 const turnFailureSchema = toolFailureSchema.extend({
+  // New terminal projections are code-only. `message` and `hint` remain
+  // optional solely so clients can replay events written by older runtimes.
+  message: z.string().min(1).optional(),
+  hint: z.string().optional(),
+  manualRetryable: z.boolean().optional(),
+  incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
+  missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
   persistence: z.object({
     failedEventCount: z.number().int().nonnegative(),
     blockedEventCount: z.number().int().nonnegative(),
@@ -229,7 +236,8 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   }).strict(),
   'turn.interrupted': z.object({
     code: z.string().min(1),
-    message: z.string().min(1),
+    // Legacy runtimes included localized copy here. New runtimes send code.
+    message: z.string().min(1).optional(),
     retryable: z.boolean(),
     text: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
@@ -243,7 +251,9 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   }).strict(),
   'turn.blocked': z.object({
     code: z.string().min(1),
-    message: z.string().min(1),
+    // Kept for backwards-compatible event replay only.
+    message: z.string().min(1).optional(),
+    partialText: z.string().optional(),
     retryable: z.literal(false),
     manualRetryable: z.literal(true),
     recoveryStatus: z.literal('dead_letter'),
@@ -342,6 +352,9 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     paused: z.boolean().optional(), clarification: z.unknown().nullable().optional(), interrupted: z.boolean().optional(),
   }).strict(),
   'turn.cancelled': z.object({
+    // `reason` is retained for persisted legacy events. Public projections
+    // replace server-authored copy with the stable cancellation code.
+    code: z.string().optional(),
     reason: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
@@ -357,6 +370,8 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     code: z.string().optional(),
     message: z.string().optional(),
     error: turnFailureSchema.optional(),
+    incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
+    missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
     partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),

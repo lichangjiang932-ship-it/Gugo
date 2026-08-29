@@ -1,5 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import '../server/services/loop/index.js'
 import { issueTestSession } from './helpers/testAuth.js'
 import {
@@ -21,6 +25,17 @@ import {
 import { resolveAgentModelRuntimeBinding } from '../server/services/modelReadinessService.js'
 import { resolveUnknownSideEffect } from '../server/services/sideEffectRecoveryService.js'
 import { revalidateToolPermission } from '../server/services/approvalGate.js'
+import { grantLocalPath } from '../server/services/localFileAccessService.js'
+import {
+  closeLspRuntime,
+  startLspRuntime,
+} from '../server/services/lspRuntime.js'
+import {
+  DEFAULT_SUBAGENT_MAX_PER_BATCH,
+  SUBAGENT_MAX_PER_BATCH,
+  resolveSubagentMaxPerBatch,
+} from '../server/services/subagentBatchConfig.js'
+import { BUILTIN_TOOL_SCHEMA_CATALOG } from '../server/utils/toolSchemaCatalog.js'
 
 const previousCredentialEncryptionKey = process.env.CREDENTIAL_ENCRYPTION_KEY
 process.env.CREDENTIAL_ENCRYPTION_KEY = Buffer.alloc(32, 23).toString('base64')
@@ -98,6 +113,175 @@ test('SUBAGENT_TYPES have system prompts and tool specs', () => {
     assert.ok(Array.isArray(type.tools), `${id} should have tools array`)
     assert.ok(type.tools.length > 0, `${id} should have at least one tool`)
   }
+})
+
+test('Agent schema and runtime share the configured subagent batch limit', () => {
+  assert.equal(DEFAULT_SUBAGENT_MAX_PER_BATCH, 8)
+  assert.equal(resolveSubagentMaxPerBatch({}), 8)
+  assert.equal(resolveSubagentMaxPerBatch({ SUBAGENT_MAX_PER_BATCH: '5.9' }), 5)
+  assert.equal(resolveSubagentMaxPerBatch({ SUBAGENT_MAX_PER_BATCH: 'invalid' }), 8)
+
+  const agentSpec = BUILTIN_TOOL_SCHEMA_CATALOG.Agent.function
+  assert.equal(agentSpec.parameters.properties.tasks.maxItems, SUBAGENT_MAX_PER_BATCH)
+  assert.match(agentSpec.description, new RegExp(`up to ${SUBAGENT_MAX_PER_BATCH} independent tasks`))
+  assert.equal(_testing.MAX_SUBAGENTS_PER_BATCH, SUBAGENT_MAX_PER_BATCH)
+
+  const tasks = Array.from({ length: SUBAGENT_MAX_PER_BATCH }, (_, index) => ({
+    subagent_type: 'general',
+    prompt: `task ${index + 1}`,
+  }))
+  assert.equal(_testing.normalizeSubagentTasks({ tasks }).length, SUBAGENT_MAX_PER_BATCH)
+  assert.throws(
+    () => _testing.normalizeSubagentTasks({
+      tasks: [...tasks, { subagent_type: 'general', prompt: 'one too many' }],
+    }),
+    new RegExp(`at most ${SUBAGENT_MAX_PER_BATCH} tasks`),
+  )
+})
+
+test('SUBAGENT_MAX_PER_BATCH overrides both the Agent schema and runtime boundary', () => {
+  const catalogUrl = new URL('../server/utils/toolSchemaCatalog.js', import.meta.url).href
+  const runtimeUrl = new URL('../server/services/subagentRuntime.js', import.meta.url).href
+  const source = `
+    const [{ BUILTIN_TOOL_SCHEMA_CATALOG }, { _testing }] = await Promise.all([
+      import(${JSON.stringify(catalogUrl)}),
+      import(${JSON.stringify(runtimeUrl)}),
+    ]);
+    let rejection = null;
+    try {
+      _testing.normalizeSubagentTasks({
+        tasks: Array.from({ length: 6 }, (_, index) => ({
+          subagent_type: 'general',
+          prompt: String(index),
+        })),
+      });
+    } catch (error) {
+      rejection = error.message;
+    }
+    const agentSpec = BUILTIN_TOOL_SCHEMA_CATALOG.Agent.function;
+    process.stdout.write(JSON.stringify({
+      maxItems: agentSpec.parameters.properties.tasks.maxItems,
+      description: agentSpec.description,
+      runtimeLimit: _testing.MAX_SUBAGENTS_PER_BATCH,
+      rejection,
+    }));
+  `
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', source], {
+    cwd: process.cwd(),
+    env: { ...process.env, SUBAGENT_MAX_PER_BATCH: '5' },
+    encoding: 'utf8',
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout), {
+    maxItems: 5,
+    description: 'Delegate focused work to isolated sub-agents. Pass one task, or up to 5 independent tasks to run them in parallel. Returns final summaries only.',
+    runtimeLimit: 5,
+    rejection: 'a subagent batch may contain at most 5 tasks',
+  })
+})
+
+test('unconfigured LSP is omitted from the subagent model tool set', async (t) => {
+  await closeLspRuntime()
+  t.after(() => closeLspRuntime())
+  let toolNames = null
+  const result = await runSubagent({
+    id: `subagent-no-lsp-${Date.now()}-${Math.random()}`,
+    userId,
+    type: 'explore',
+    prompt: 'inspect without a configured language server',
+    runToolLoop: async ({ toolSpecs }) => {
+      toolNames = toolSpecs.map((spec) => spec?.function?.name).filter(Boolean)
+      return { text: 'done without LSP', terminal: true }
+    },
+  })
+
+  assert.ok(SUBAGENT_TYPES.explore.tools.some((spec) => spec?.function?.name === 'lsp'))
+  assert.ok(Array.isArray(toolNames))
+  assert.equal(toolNames.includes('lsp'), false)
+  assert.equal(result.status, 'completed')
+})
+
+test('subagent LSP dispatch preserves user authorization and the AbortSignal', async (t) => {
+  await closeLspRuntime()
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-subagent-lsp-'))
+  const workspace = path.join(root, 'workspace')
+  const sourceFile = path.join(workspace, 'source.ts')
+  fs.mkdirSync(workspace)
+  fs.writeFileSync(sourceFile, 'const answer = 42\n', 'utf8')
+  t.after(async () => {
+    await closeLspRuntime()
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+
+  const owner = issueTestSession({
+    email: `subagent-lsp-owner-${Date.now()}-${Math.random()}@example.com`,
+  })
+  const stranger = issueTestSession({
+    email: `subagent-lsp-stranger-${Date.now()}-${Math.random()}@example.com`,
+  })
+  grantLocalPath({ userId: owner.userId, rootPath: workspace, accessMode: 'read_only' })
+
+  const allowedCommand = fs.realpathSync.native(process.execPath)
+  const observations = []
+  const status = await startLspRuntime({
+    env: {
+      LSP_STDIO_COMMAND_ALLOWLIST: JSON.stringify([allowedCommand]),
+      LSP_STDIO_PROVIDERS: JSON.stringify([{
+        id: 'subagent-typescript',
+        command: allowedCommand,
+        args: [],
+        env: {},
+        extensionToLanguage: { '.ts': 'typescript' },
+      }]),
+    },
+    createProvider: async (config) => ({
+      id: config.id,
+      extensionToLanguage: config.extensionToLanguage,
+      async query(request, signal) {
+        observations.push({ request, signal })
+        return {
+          kind: 'hover',
+          hover: { contents: 'const answer: 42' },
+        }
+      },
+      async close() {},
+    }),
+  })
+  assert.equal(status.enabled, true)
+
+  const controller = new AbortController()
+  const args = {
+    operation: 'hover',
+    file: sourceFile,
+    line: 1,
+    character: 7,
+    workspace_root: workspace,
+  }
+  const result = await _testing.executeSubagentTool('lsp', args, {
+    userId: owner.userId,
+    signal: controller.signal,
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.hover.contents, 'const answer: 42')
+  assert.equal(observations.length, 1)
+  assert.equal(observations[0].signal, controller.signal)
+  assert.deepEqual(observations[0].request, {
+    operation: 'hover',
+    filePath: fs.realpathSync(sourceFile),
+    workspaceRoot: fs.realpathSync(workspace),
+    position: { line: 0, character: 6 },
+    languageId: 'typescript',
+  })
+
+  await assert.rejects(
+    _testing.executeSubagentTool('lsp', args, {
+      userId: stranger.userId,
+      signal: controller.signal,
+    }),
+    (error) => error?.code === 'PATH_NOT_AUTHORIZED',
+  )
+  assert.equal(observations.length, 1)
 })
 
 test('subagent model calls consume the shared hard budget and still return a wrap-up', async () => {
@@ -287,19 +471,23 @@ test('runSubagent requires userId and prompt', async () => {
 })
 
 test('runSubagent creates a DB record', async () => {
+  const prompt = `subagent-db-record-${process.pid}-${Date.now()}`
   // Mock the model call by overriding — for now just test DB insertion
   // This test runs without a real model call, so it will throw on model connection.
   // We verify the DB record was created before the error happens.
   try {
-    await runSubagent({ userId, type: 'general', prompt: '测试任务，不需要真实执行' })
+    await runSubagent({ userId, type: 'general', prompt })
   } catch {
     // Expected — no model configured in test env
   }
-  // Check that records exist for this user
+  // Query the exact run created above: other test files share this test user
+  // and may persist subagent records concurrently in a batched run.
   const db = (await import('../server/db.js')).getDb()
-  const rows = db.prepare('SELECT * FROM subagent_runs WHERE user_id = ?').all(userId)
-  assert.ok(rows.length >= 1, 'at least 1 subagent run should be recorded')
-  assert.equal(rows[0].agent_type, 'general')
+  const row = db.prepare(
+    'SELECT * FROM subagent_runs WHERE user_id = ? AND prompt = ?',
+  ).get(userId, prompt)
+  assert.ok(row, 'the requested subagent run should be recorded')
+  assert.equal(row.agent_type, 'general')
 })
 
 test('subagent injects optional skill and memory context and degrades when preparation fails', async () => {

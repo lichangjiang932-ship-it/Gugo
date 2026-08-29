@@ -86,10 +86,6 @@ export function reduceTaskSettingsState(state, action) {
       return { ...state, theme: normalizeThemeMode(action.payload) }
     }
 
-    case 'SET_ACCENT': {
-      return { ...state, accentColor: action.payload }
-    }
-
     case 'SET_FONT_SIZE': {
       return { ...state, fontSize: action.payload }
     }
@@ -156,7 +152,7 @@ export function reduceTaskSettingsState(state, action) {
       const p = hasMode ? (raw.settings || {}) : raw
       const mode = hasMode && raw.mode === 'replace' ? 'replace' : 'merge'
       const next = { ...state }
-      const stringFields = ['accentColor', 'fontSize', 'density']
+      const stringFields = ['fontSize', 'density']
       for (const k of stringFields) {
         if (typeof p[k] === 'string') next[k] = p[k]
       }

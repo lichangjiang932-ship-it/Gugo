@@ -90,6 +90,44 @@ test('DNS answers are rejected before fetch and URL userinfo is forbidden', asyn
   )
 })
 
+test('benchmark, documentation, site-local, and other non-public ranges are denied', async () => {
+  const forbiddenAddresses = [
+    '192.0.0.8',
+    '192.0.2.10',
+    '192.88.99.1',
+    '198.18.0.1',
+    '198.19.255.254',
+    '198.51.100.20',
+    '203.0.113.30',
+    '100::1',
+    '64:ff9b:1::1',
+    '2001:2::1',
+    '2001:db8::1',
+    '5f00::1',
+    'fec0::1',
+    'feff::1',
+    '::ffff:198.18.0.1',
+  ]
+
+  for (const address of forbiddenAddresses) {
+    await assert.rejects(
+      assertSafeOutboundUrl(`http://${address.includes(':') ? `[${address}]` : address}/`),
+      (error) => error?.code === 'OUTBOUND_ADDRESS_DENIED',
+      address,
+    )
+    await assert.rejects(
+      assertSafeOutboundUrl('https://models.example/v1', {
+        lookup: async () => lookupResult(address),
+      }),
+      (error) => error?.code === 'OUTBOUND_ADDRESS_DENIED',
+      `DNS answer ${address}`,
+    )
+  }
+
+  await assert.doesNotReject(assertSafeOutboundUrl('https://[2606:4700:4700::1111]/'))
+  await assert.doesNotReject(assertSafeOutboundUrl('https://198.20.0.1/'))
+})
+
 test('approved DNS address is pinned for the connection and remains usable for streamed bodies', async () => {
   await withLoopbackServer((req, res) => {
     assert.equal(req.headers.host?.startsWith('model.local:'), true)
@@ -159,4 +197,32 @@ test('cross-origin redirects and HTTPS downgrades are rejected explicitly', asyn
     }),
     (error) => error?.code === 'OUTBOUND_REDIRECT_DOWNGRADE',
   )
+})
+
+test('invalid redirect Location cancels the response body before raising a stable error', async () => {
+  for (const location of ['http://[', 'file:///etc/passwd']) {
+    let bodyCancelled = false
+    const response = {
+      status: 302,
+      headers: { get: () => location },
+      body: {
+        async cancel() {
+          bodyCancelled = true
+        },
+      },
+    }
+
+    await assert.rejects(
+      fetchSafeOutbound('https://models.example/v1', {}, {
+        lookup: async () => lookupResult('93.184.216.34'),
+        maxRedirects: 0,
+        dispatcherFactory: () => ({ close: async () => {} }),
+        fetchImpl: async () => response,
+      }),
+      (error) => {
+        assert.equal(bodyCancelled, true)
+        return error?.code === 'OUTBOUND_REDIRECT_INVALID'
+      },
+    )
+  }
 })

@@ -5,6 +5,7 @@ import { fetchToolPermissions, setToolPermission, GATEABLE_TOOLS } from '../src/
 test('GATEABLE_TOOLS lists the real backend tools', () => {
   const ids = GATEABLE_TOOLS.map((t) => t.id)
   assert.ok(ids.includes('bash_exec'))
+  assert.ok(ids.includes('run_code'))
   assert.ok(ids.includes('write_file'))
   assert.ok(ids.includes('edit_file'))
 })

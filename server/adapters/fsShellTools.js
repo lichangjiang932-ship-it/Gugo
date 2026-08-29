@@ -37,6 +37,7 @@ import {
   extractAbsoluteShellPaths,
 } from '../utils/bashGuard.js'
 import { checkWorkspaceSize } from '../utils/workspaceSize.js'
+import { checkShellNetworkPolicy } from '../utils/shellPolicy.js'
 import { isToolPermittedForUser } from '../db.js'
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
@@ -990,6 +991,13 @@ export async function bashExecTool({
   if (danger) {
     if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: { command }, status: 'denied' })
     throw badReq(`命令被安全策略拦截:${danger.reason}`, 403)
+  }
+
+  // ★ P2 沙箱阶梯:GUGO_SHELL_NETWORK_MODE=deny 时拦截出网命令(默认 allow,行为不变)
+  const networkDenial = checkShellNetworkPolicy(command)
+  if (networkDenial) {
+    if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: { command }, status: 'denied' })
+    throw badReq(`命令被网络策略拦截:${networkDenial.reason}`, 403)
   }
 
   // ★ M3.5:单用户限流(防模型失控狂打)

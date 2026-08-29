@@ -181,19 +181,29 @@ export async function initializeExecution(s) {
     )
   if (s.restoredFinalIsInterrupted || s.restoredFinalIsTerminal) s.suppressTerminalArtifacts()
   s.restoredLocalHtmlDeliveryFailure = null
-  if (s.restoredState?.final?.text != null
+  const restoredFinalHasReusableText = s.restoredState?.final?.text != null
       && String(s.restoredState.final.text).trim()
       && !s.restoredFinalIsInterrupted
       && (!s.requiresSourceHandoffProtection || !sourceHandoffViolation(s.restoredState.final.text))
+  // Restoring local HTML starts with validation pending because the file may
+  // have changed after the checkpoint was persisted. Revalidate it before the
+  // final-answer evidence gate: that gate also requires HTML validation, so
+  // checking it first would make the disk revalidation branch unreachable.
+  if (restoredFinalHasReusableText && !s.restoredFinalIsTerminal) {
+    s.restoredLocalHtmlDeliveryFailure = await s.validateLocalHtmlDeliveries()
+  }
+  if (restoredFinalHasReusableText
       && (s.restoredFinalIsTerminal || (
          s.hasRequiredArtifacts()
          && s.hasRequiredExecutionEvidence()
          && !s.hasPendingMutationVerification()
          && (!s.requiresPdfLayoutVerification || s.pdfLayoutVerificationObserved)
+         && !s.needsDeliverableSelection()
+         && (
+           !s.requiresFinalAnswerEvidenceReview()
+           || s.hasCurrentFinalAnswerEvidenceReview()
+         )
        ))) {
-      if (!s.restoredFinalIsTerminal) {
-        s.restoredLocalHtmlDeliveryFailure = await s.validateLocalHtmlDeliveries()
-      }
       if (!s.restoredLocalHtmlDeliveryFailure) {
         const restoredClarification = s.protectClarification(s.restoredState.final.clarification)
         return { kind: 'return', value: s.emitTurnStopping({
@@ -282,6 +292,10 @@ export async function initializeExecution(s) {
           pdfLayoutVerificationObserved: s.pdfLayoutVerificationObserved,
           pdfLayoutVerificationRetries: s.pdfLayoutVerificationRetries,
           executionConvergence: serializeExecutionConvergence(s.executionConvergence),
+          finalAnswerToolEvidence: s.finalAnswerToolEvidence,
+          ...(s.finalAnswerEvidenceReview
+            ? { finalAnswerEvidenceReview: { ...s.finalAnswerEvidenceReview } }
+            : {}),
         },
       final,
     }

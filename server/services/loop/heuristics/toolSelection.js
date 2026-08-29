@@ -38,6 +38,7 @@ import {
   COMMAND_OUTPUT_TOOL_NAMES,
   LOCAL_ARTIFACT_TOOL_NAMES,
 } from './htmlArtifactInput.js'
+import { hasConfiguredLspProvider } from '../../lspRuntime.js'
 
 /**
  * TurnEngine consumes the exact same static schemas exposed by toolRegistry.
@@ -74,7 +75,8 @@ export function selectJobToolSpecs({
   // it. Restore the canonical schema for chat turns before capability routing;
   // answer mode will still remove it as a mutating control, and non-chat jobs
   // remain unable to claim turn-owned artifacts.
-  const sourceSpecs = Array.isArray(specs) ? specs : []
+  const sourceSpecs = (Array.isArray(specs) ? specs : [])
+    .filter((spec) => spec?.function?.name !== 'lsp' || hasConfiguredLspProvider())
   const deliveryControlSpec = origin === 'chat' ? getBuiltinSpec('set_deliverables') : null
   const routedSpecs = deliveryControlSpec
     && !sourceSpecs.some((spec) => spec?.function?.name === 'set_deliverables')

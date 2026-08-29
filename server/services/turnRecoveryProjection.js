@@ -123,6 +123,10 @@ export async function latestRetainedLocalFiles(replayEvents, scope) {
     .at(-1) || []
 }
 
+function normalizeMessageContent(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ')
+}
+
 export function checkpointMessagesForTurn(state, {
   content = '',
   fallback = [],
@@ -132,10 +136,24 @@ export function checkpointMessagesForTurn(state, {
   if (messages.length === 0) return Array.isArray(fallback) ? fallback : []
 
   const objective = String(content || '')
+  // Exact match first — cheapest and unambiguous when the snapshot preserved
+  // the original user text verbatim.
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (message?.role !== 'user' || String(message.content || '') !== objective) continue
     return messages.slice(index + 1)
+  }
+  // Normalized rematch: display transforms or whitespace drift between the
+  // turn-start event and the checkpointed model context used to send recovery
+  // to the empty fallback and silently drop the assistant partials.
+  const normalizedObjective = normalizeMessageContent(objective)
+  if (normalizedObjective) {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message?.role !== 'user') continue
+      if (normalizeMessageContent(message.content) !== normalizedObjective) continue
+      return messages.slice(index + 1)
+    }
   }
 
   if (!messages.some((message) => message?.role === 'user')) return messages

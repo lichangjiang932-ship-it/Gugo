@@ -38,7 +38,11 @@ import {
   initPlugins,
   initializeRuntimePluginConfig,
 } from './plugins/pluginRegistry.js'
-import { getRuntimeEnv, getModelStatus } from './adapters/modelProxy.js'
+import {
+  getRuntimeEnv,
+  getModelStatus,
+  MODEL_CONFIG_MISSING_CODE,
+} from './adapters/modelProxy.js'
 import { resolveAuthMode } from './adapters/authAccount.js'
 import { isLocalHtmlPreviewTicketActive } from './services/localHtmlPreviewService.js'
 import { runRuntimeConfigStartupPreflight } from './services/runtimeConfigStartupService.js'
@@ -47,6 +51,11 @@ import { recoverPendingSessionDeletion } from './services/sessionDeletionGoverna
 import { attachTurnWebSocketServer } from './services/turnWebSocket.js'
 import { getTurnEngine } from './services/turnEngineHost.js'
 import { createSqliteFileCompactionArchiveAdapter } from './services/sqliteFileCompactionArchiveAdapter.js'
+import { buildUserModelEnv } from './services/modelProviderStore.js'
+import {
+  describeModelReadinessFailure,
+  resolveAgentModelRuntimeBinding,
+} from './services/modelReadinessService.js'
 import { RUNTIME_CAPABILITIES, RUNTIME_KERNEL_REVISION } from '../shared/runtimeCapabilities.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -123,13 +132,46 @@ function readVersion() {
   return cachedVersion
 }
 
-export function healthCheckFull(req, res, getEnv = getRuntimeEnv) {
+export function healthCheckFull(
+  req,
+  res,
+  getEnv = getRuntimeEnv,
+  buildModelEnv = buildUserModelEnv,
+  resolveModelBinding = resolveAgentModelRuntimeBinding,
+  projectReadinessFailure = describeModelReadinessFailure,
+) {
   // 鉴权版保留完整子系统细节,供运维排障使用.
   // 任何子系统未就绪 → 503,但响应体仍是 JSON,方便运维和探针解析.
   const env = (() => { try { return getEnv() } catch { return process.env } })()
   const db = getDbStatus()
-  const model = getModelStatus(env)
-  const overallOk = db.ok && model.configured
+  // /api/health/full is authenticated and therefore must diagnose the same
+  // user-scoped Provider environment used by real model requests. Looking at
+  // process env alone makes `gugo doctor` report an unusable model even when
+  // the authenticated user has a ready BYOK Provider stored in SQLite.
+  const userId = String(req?.userId || '').trim()
+  const modelEnv = userId ? buildModelEnv({ userId, env }) : env
+  const modelStatus = getModelStatus(modelEnv)
+  let modelBinding = null
+  let readinessFailure = null
+  try {
+    modelBinding = resolveModelBinding({ userId, env })
+  } catch (error) {
+    readinessFailure = projectReadinessFailure(error)?.error || null
+  }
+
+  const configured = !!modelStatus.configured
+  const agentReady = !!modelBinding
+  const readinessCode = agentReady
+    ? null
+    : configured
+      ? readinessFailure?.code || 'MODEL_READINESS_FAILED'
+      : MODEL_CONFIG_MISSING_CODE
+  const action = agentReady
+    ? null
+    : configured
+      ? readinessFailure?.action || 'configure_model'
+      : 'configure_model'
+  const overallOk = db.ok && agentReady
   const status = overallOk ? 200 : 503
   res.writeHead(status, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({
@@ -141,10 +183,16 @@ export function healthCheckFull(req, res, getEnv = getRuntimeEnv) {
     time: Date.now(),
     db,
     model: {
-      configured: !!model.configured,
-      missing: Array.isArray(model.missing) ? model.missing : [],
-      modelName: model.modelName || null,
-      toolMaxRounds: model.toolMaxRounds,
+      configured,
+      agentReady,
+      readinessCode,
+      code: readinessCode,
+      action,
+      modelName: modelBinding?.modelName
+        || readinessFailure?.modelName
+        || modelStatus.modelName
+        || null,
+      toolMaxRounds: modelStatus.toolMaxRounds,
     },
   }))
 }

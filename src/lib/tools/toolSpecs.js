@@ -1,4 +1,4 @@
-const CODE_MODE_TOOLS = ['list_directory', 'read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check', 'manage_todos', 'Agent']
+const CODE_MODE_TOOLS = ['run_code', 'list_directory', 'read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check', 'manage_todos', 'Agent']
 
 function unwrapToolSpec(entry) {
   const spec = entry?.tool || entry

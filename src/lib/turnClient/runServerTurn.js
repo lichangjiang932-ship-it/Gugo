@@ -95,12 +95,30 @@ function isApprovalPresentationClosed(error) {
 function recoveryDeadLetterError(turn) {
   const recovery = turn?.recovery
   if (recovery?.status !== 'dead_letter') return null
+  const causeCode = String(
+    recovery.error?.code || recovery.errorCode || 'TURN_RECOVERY_DEAD_LETTER',
+  ).trim().toUpperCase() || 'TURN_RECOVERY_DEAD_LETTER'
+  const attemptCount = Number(recovery.attemptCount)
+  const missingRequirements = ['MODEL_REQUEST_OUTCOME_UNKNOWN', 'SIDE_EFFECT_OUTCOME_UNKNOWN']
+    .includes(causeCode)
+    ? ['operation_outcome_verification', 'explicit_recovery_retry']
+    : causeCode.startsWith('MODEL_')
+      ? ['model_service_available', 'explicit_recovery_retry']
+      : ['execution_environment_repair', 'explicit_recovery_retry']
   const error = new Error(
     recovery.error?.message || 'Automatic turn recovery stopped after repeated failures',
   )
-  error.code = recovery.error?.code || 'TURN_RECOVERY_DEAD_LETTER'
+  error.code = causeCode
   error.retryable = false
   error.recovery = recovery
+  error.serverFailure = {
+    code: causeCode,
+    retryable: false,
+    manualRetryable: recovery.manualRetryable !== false,
+    incompleteReason: 'recovery_attempts_exhausted',
+    missingRequirements,
+    ...(Number.isInteger(attemptCount) && attemptCount > 0 ? { attempts: attemptCount } : {}),
+  }
   return error
 }
 
@@ -676,7 +694,7 @@ export async function runServerTurn({
     }
 
     let sessionSnapshot = null
-    if (syncSessionSnapshot && terminal?.type === 'turn.completed') {
+    if (syncSessionSnapshot && TERMINAL_EVENTS.has(terminal?.type)) {
       try {
         sessionSnapshot = await fetchServerSessionSnapshot({ sessionId, fetchImpl })
       } catch {

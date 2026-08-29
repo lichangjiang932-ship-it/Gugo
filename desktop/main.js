@@ -32,6 +32,7 @@ const { autoUpdater } = updaterPackage
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const preloadPath = path.join(__dirname, 'preload.cjs')
 const appIconPath = path.join(__dirname, '..', 'build', 'icon.ico')
+const BACKEND_DISCONNECT_TIMEOUT_MS = 16_000
 
 let mainWindow = null
 let petWindow = null
@@ -211,9 +212,13 @@ async function startBundledServer() {
   }
   const child = spawn(process.execPath, [entry], {
     cwd: appPath,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: '1',
+      GUGO_DESKTOP_PARENT_GUARD: 'ipc-v1',
+    },
     windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   })
   backendProcess = child
   let startupError = ''
@@ -549,8 +554,9 @@ function configureDesktopUpdates() {
   // and NSIS installation, while the desktop runtime owns resumable downloads.
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
-  // Community builds are currently unsigned: keep publisherName absent so the updater
-  // uses GitHub HTTPS plus latest.yml SHA-512 integrity checks without a false signer claim.
+  // Production packages derive publisherName from their signing certificate so
+  // electron-updater verifies the installer signer. Unsigned local packages keep
+  // relying on release HTTPS plus latest.yml SHA-512 integrity checks.
   autoUpdater.allowPrerelease = false
   autoUpdater.allowDowngrade = false
   try {
@@ -595,12 +601,24 @@ async function stopBackend() {
   backendServer = null
 
   if (child && child.exitCode === null) {
-    child.kill('SIGTERM')
+    let disconnected = false
+    if (child.connected && typeof child.disconnect === 'function') {
+      try {
+        child.disconnect()
+        disconnected = true
+      } catch { /* the child may have exited between the state check and disconnect */ }
+    }
+    if (!disconnected && child.exitCode === null) child.kill('SIGTERM')
     await Promise.race([
       once(child, 'exit').catch(() => {}),
-      new Promise((resolve) => setTimeout(resolve, 5_000)),
+      // The backend parent guard owns a 15s graceful-shutdown budget.
+      new Promise((resolve) => setTimeout(resolve, BACKEND_DISCONNECT_TIMEOUT_MS)),
     ])
-    if (child.exitCode === null) child.kill('SIGKILL')
+    if (child.exitCode === null) {
+      const { terminateProcessTree } = await import('../server/utils/processGroup.js')
+      const treeStopped = await terminateProcessTree({ pid: child.pid, child })
+      if (!treeStopped && child.exitCode === null) child.kill('SIGKILL')
+    }
   }
 
   if (server) {

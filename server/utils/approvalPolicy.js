@@ -50,6 +50,8 @@ const RISK_ORDER = Object.freeze({ low: 0, medium: 1, high: 2 })
 export const APPROVAL_REQUIRED_TOOLS = Object.freeze({
   // 文件系统 / shell:已有静态开关,但那是 per 工具名,这里补 per 调用
   bash_exec: 'high',
+  run_code: 'high',
+  codex_models: 'high',
   run_command: 'high',
   run_project_check: 'high',
   run_test: 'high',
@@ -102,6 +104,7 @@ export const NEVER_APPROVE_TOOLS = Object.freeze([
   'grep_code',
   'find_symbol',
   'list_imports',
+  'lsp',
   'git_status',
   'git_diff',
   'image_info',
@@ -147,6 +150,7 @@ const PLAN_LOCAL_READ_TOOLS = new Set([
   'grep_code',
   'find_symbol',
   'list_imports',
+  'lsp',
   'git_status',
   'git_diff',
   'image_info',
@@ -172,6 +176,11 @@ const WRITE_INTENT_RE = /(^|_)(create|update|delete|remove|write|send|post|put|p
 
 const SAFE_HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 const SHELL_TOOLS = new Set(['bash_exec', 'run_command', 'run_project_check', 'run_test', 'docker_exec'])
+const NON_REMEMBERABLE_TOOLS = new Set([...SHELL_TOOLS, 'run_code', 'codex_models'])
+// Model-authored source is a distinct trust decision on every invocation.
+// Unlike ordinary high-risk tools, neither bypass mode nor a persisted task
+// grant may turn this into standing authority.
+const MANDATORY_PER_CALL_APPROVAL_TOOLS = new Set(['run_code', 'codex_models'])
 const TARGET_KEYS = Object.freeze([
   'to', 'recipient', 'recipientEmail', 'email', 'channelId', 'channel', 'conversationId',
   'repository', 'repo', 'owner', 'url', 'path', 'target', 'resourceId', 'id',
@@ -212,8 +221,14 @@ function normalizedTarget(args = {}) {
 export function buildRememberedGrant(toolName, args = {}) {
   const name = str(toolName).trim()
   if (!name) throw new Error('toolName is required')
-  if (SHELL_TOOLS.has(name)) throw new Error('Shell tools cannot be remembered; approve each execution explicitly')
+  if (NON_REMEMBERABLE_TOOLS.has(name)) {
+    throw new Error('Shell tools cannot be remembered; model-authored code also cannot be remembered; approve each execution explicitly')
+  }
   return { toolName: name, commandPrefix: normalizedTarget(args) }
+}
+
+export function requiresPerCallApproval(toolName) {
+  return MANDATORY_PER_CALL_APPROVAL_TOOLS.has(str(toolName).trim())
 }
 
 export function matchesRememberedGrant(toolName, args = {}, grants = []) {
@@ -223,7 +238,7 @@ export function matchesRememberedGrant(toolName, args = {}, grants = []) {
 export function findRememberedGrant(toolName, args = {}, grants = []) {
   const name = str(toolName).trim()
   if (!name || !Array.isArray(grants)) return null
-  if (SHELL_TOOLS.has(name)) return null
+  if (NON_REMEMBERABLE_TOOLS.has(name)) return null
   const expected = buildRememberedGrant(name, args).commandPrefix
   return grants.find((grant) => grant?.toolName === name && grant?.commandPrefix === expected) || null
 }
@@ -285,7 +300,9 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   const safeArgs = args && typeof args === 'object' ? args : {}
   const metadata = opts.metadata && typeof opts.metadata === 'object' ? opts.metadata : null
   const parameterConfirmationReason = explicitConfirmationReason(name, safeArgs)
-  const alwaysConfirm = ALWAYS_CONFIRM_TOOLS.has(name) || !!parameterConfirmationReason
+  const alwaysConfirm = requiresPerCallApproval(name)
+    || ALWAYS_CONFIRM_TOOLS.has(name)
+    || !!parameterConfirmationReason
 
   // ★ 空工具名不能当成「安全」放行 —— 那是 fail-open。
   // 归一化漏了(比如上游 wire 形状没被解开)时 name 会是空串,
@@ -386,6 +403,24 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     reason = '打开外部应用'
   } else if (name === 'qq_mail_send') {
     reason = '发送外部邮件'
+  }
+
+  if (requiresPerCallApproval(name)) {
+    risk = higher(risk, 'high')
+    reason = reason || (name === 'run_code'
+      ? '执行模型生成的受限代码，每次调用都需要明确批准'
+      : '查询外部 Codex app-server 模型目录，每次调用都需要明确批准')
+    if (mode === 'off') {
+      return {
+        needsApproval: false,
+        denied: true,
+        risk,
+        reason: name === 'run_code'
+          ? '审批队列已关闭，run_code 必须逐次批准，因此已保守拒绝。请开启审批后重试。'
+          : '审批队列已关闭，codex_models 必须逐次批准，因此已保守拒绝。请开启审批后重试。',
+      }
+    }
+    return { needsApproval: true, risk, reason }
   }
 
   // Cron/task grants are narrower than remembered or global policies and win

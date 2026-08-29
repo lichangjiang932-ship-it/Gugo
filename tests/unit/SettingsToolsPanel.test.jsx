@@ -20,6 +20,7 @@ const EXPECTED_TOOL_IDS = [
   'apply_patch',
   'patch_file',
   'bash_exec',
+  'run_code',
   'run_command',
   'run_test',
   'docker_exec',
@@ -67,7 +68,7 @@ test('code execution settings describe the local runtime honestly and keep the t
   try {
     await act(async () => root.render(
       <SettingsToolsPanel
-        state={{ toolsConfig: { bash_exec: true, archive_create: false } }}
+        state={{ toolsConfig: { bash_exec: true, run_code: true, archive_create: false } }}
         dispatch={(action) => actions.push(action)}
         t={(key) => translateKey(key, 'zh')}
       />,
@@ -76,6 +77,7 @@ test('code execution settings describe the local runtime honestly and keep the t
     assert.match(rootElement.textContent, /执行代码与命令/)
     assert.match(rootElement.textContent, /Python、Node、PowerShell/)
     assert.match(rootElement.textContent, /已授权的读写目录/)
+    assert.match(rootElement.textContent, /受限代码计算/)
     assert.doesNotMatch(rootElement.textContent, /服务端还需显式启用/)
     assert.equal(rootElement.querySelectorAll('button[data-tool-id]').length, EXPECTED_TOOL_IDS.length)
     for (const id of EXPECTED_TOOL_IDS) {
@@ -105,6 +107,7 @@ test('code execution settings describe the local runtime honestly and keep the t
 test('PDF generator settings labels exist in every supported language', () => {
   for (const language of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
     assert.notEqual(translateKey('settingsTools.tools.create_pdf.name', language), 'settingsTools.tools.create_pdf.name')
+    assert.notEqual(translateKey('settingsTools.tools.run_code.name', language), 'settingsTools.tools.run_code.name')
     assert.notEqual(translateKey('chatMessages.toolCreatePdf', language), 'chatMessages.toolCreatePdf')
   }
 })

@@ -8,9 +8,14 @@ import {
   resolveDeliveryArtifacts,
 } from '../../../../lib/artifactReferences.js'
 import { localFileOpenPayload } from '../../../../lib/localFileReferences.js'
-import { isPreExecutionFailure } from '../../../../lib/chatFlowGuards.js'
+import {
+  getVisibleModelErrorMessage,
+  getVisibleTurnClarification,
+  isPreExecutionFailure,
+} from '../../../../lib/chatFlowGuards.js'
 import { ArtifactReferenceLinks } from '../ArtifactCards.jsx'
 import ActivityStream from '../ActivityStream.jsx'
+import TaskProgressTable from './TaskProgressTable.jsx'
 import {
   ExecutionDisclosure,
   TimelineSegments,
@@ -54,13 +59,41 @@ export default function AssistantAnswer({
     onOpenArtifact?.(payload)
     return true
   }
-  const timeline = stableTimelineSegments(stripChoices(msg.content), msg.meta?.toolCalls)
+  const hasStructuredOutcome = msg.meta?.failed === true
+    || msg.meta?.interrupted === true
+    || msg.meta?.cancelled === true
+    || (msg.meta?.serverRecoveryBlocked === true
+      && msg.meta?.serverConnectionState === 'blocked')
+  const recoveryBlocked = msg.meta?.serverRecoveryBlocked === true
+    && msg.meta?.serverConnectionState === 'blocked'
+  const genericRecoveryBlocked = recoveryBlocked
+    && !String(msg.meta?.serverRecoveryKind || '').trim()
+  const hasStructuredFailure = hasStructuredOutcome
+    && msg.meta?.serverFailure
+    && typeof msg.meta.serverFailure === 'object'
+  const authoredContent = hasStructuredOutcome && typeof msg.meta?.serverPartialText === 'string'
+    ? msg.meta.serverPartialText
+    : msg.content
+  const timeline = stableTimelineSegments(stripChoices(authoredContent), msg.meta?.toolCalls)
   const presentation = assistantTimelinePresentation(timeline)
   const hasExecution = isCurrentStreamingMessage || presentation.execution.length > 0
   const hasReasoningSummary = Boolean(String(msg.meta?.reasoning || '').trim())
   const hasProcessSummary = hasExecution || hasReasoningSummary
   const preExecutionFailure = isPreExecutionFailure(msg)
   const { modelSetupFailure, runtimeRestartRequired } = failurePresentation(msg)
+  // serverPartialText is authoritative model-authored output for structured
+  // failed, interrupted, cancelled, and recovery-blocked turns.
+  // Derive missing presentation copy at render time so reloads and language
+  // changes never treat server-localized error prose as assistant output.
+  const visibleAnswer = presentation.answer
+    || (msg.meta?.paused === true
+      ? getVisibleTurnClarification(msg.meta?.serverClarification, t)
+      : '')
+    || (msg.meta?.cancelled === true
+      ? t('chat.serverTurn.cancelled')
+      : (msg.meta?.failed === true || msg.meta?.interrupted === true || genericRecoveryBlocked) && hasStructuredFailure
+        ? getVisibleModelErrorMessage(msg, t)
+        : '')
 
   return (
     <>
@@ -80,20 +113,21 @@ export default function AssistantAnswer({
               streaming={isCurrentStreamingMessage}
             />
             {(isCurrentStreamingMessage || hasReasoningSummary) && <ActivityStream msg={msg} />}
+            {isCurrentStreamingMessage && <TaskProgressTable progress={msg.meta?.progress} />}
           </ExecutionDisclosure>
         )}
         {runtimeRestartRequired ? (
           <RuntimeRecoveryCard msg={msg} t={t} />
         ) : modelSetupFailure ? (
           <ModelSetupFailureCard msg={msg} onManageModels={onManageModels} t={t} />
-        ) : presentation.answer && (
+        ) : visibleAnswer && (
           <div className="chat-assistant-answer">
             <MarkdownRenderer
               artifactReferences={inlineFileReferences}
               streaming={isCurrentStreamingMessage}
               onLinkClick={openInlineArtifact}
             >
-              {presentation.answer}
+              {visibleAnswer}
             </MarkdownRenderer>
           </div>
         )}

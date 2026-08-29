@@ -96,7 +96,7 @@ function optionalRetainedLocalFiles(payload) {
 }
 
 export function normalizeTurnFailurePayload(payload = {}, {
-  fallbackCode = 'TURN_FAILED', fallbackMessage = 'Server turn failed',
+  fallbackCode = 'TURN_FAILED',
 } = {}) {
   const nested = payload?.error && typeof payload.error === 'object' ? payload.error : {}
   const status = optionalInteger(nested.status ?? nested.statusCode ?? payload.status ?? payload.statusCode, 100, 599)
@@ -104,14 +104,26 @@ export function normalizeTurnFailurePayload(payload = {}, {
   const retryable = typeof nested.retryable === 'boolean'
     ? nested.retryable
     : (typeof payload.retryable === 'boolean' ? payload.retryable : undefined)
+  const manualRetryable = typeof nested.manualRetryable === 'boolean'
+    ? nested.manualRetryable
+    : (typeof payload.manualRetryable === 'boolean' ? payload.manualRetryable : undefined)
+  const legacyMessage = String(nested.message || payload.message || payload.reason || '').trim()
   const error = {
     code: String(nested.code || payload.code || fallbackCode).trim() || fallbackCode,
-    message: String(nested.message || payload.message || payload.reason || fallbackMessage).trim() || fallbackMessage,
+    ...(legacyMessage ? { message: legacyMessage } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(retryable !== undefined ? { retryable } : {}),
+    ...(manualRetryable !== undefined ? { manualRetryable } : {}),
     ...((nested.hint || payload.hint) ? { hint: String(nested.hint || payload.hint) } : {}),
     ...(attempts !== undefined ? { attempts } : {}),
   }
+  const incompleteReason = String(nested.incompleteReason || payload.incompleteReason || '').trim()
+  if (incompleteReason) error.incompleteReason = incompleteReason
+  const missingRequirements = [...new Set((Array.isArray(nested.missingRequirements)
+    ? nested.missingRequirements
+    : Array.isArray(payload.missingRequirements) ? payload.missingRequirements : [])
+    .map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
+  if (missingRequirements.length > 0) error.missingRequirements = missingRequirements
   const iterations = optionalInteger(payload.iterations, 0)
   const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
   const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
@@ -136,7 +148,12 @@ export function normalizeTurnFailurePayload(payload = {}, {
 
 export function createTurnFailureError(payload, options) {
   const failure = normalizeTurnFailurePayload(payload, options)
-  return Object.assign(new Error(failure.error.message), failure.error, failure, { serverFailure: failure.error })
+  return Object.assign(
+    new Error(failure.error.message || failure.error.code),
+    failure.error,
+    failure,
+    { serverFailure: failure.error },
+  )
 }
 
 function dispatchToolOutput(activity, { dispatch, messageTarget } = {}) {
@@ -532,9 +549,6 @@ export async function dispatchTurnEvent(event, {
       fallbackCode: event.type === 'turn.interrupted'
         ? 'TURN_INTERRUPTED'
         : blocked ? 'TURN_RECOVERY_BLOCKED' : 'TURN_FAILED',
-      fallbackMessage: event.type === 'turn.interrupted'
-        ? 'Turn interrupted'
-        : blocked ? 'Turn recovery is blocked until its execution environment is repaired' : 'Server turn failed',
     })
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',

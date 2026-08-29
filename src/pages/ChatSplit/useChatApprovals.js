@@ -37,10 +37,7 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
     }
     Promise.resolve(resolve?.(decision)).catch((error) => {
       setWorkbenchMessage(error?.message || 'Approval failed.')
-    }).finally(() => {
-      if (typeof window !== 'undefined') window.setTimeout(close, 0)
-      else close()
-    })
+    }).finally(close)
     return true
   }, [setWorkbenchMessage])
 

@@ -1,5 +1,6 @@
 import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
+import { modelAuthoredTurnEvidenceText } from '../../../shared/turnEvidenceText.js'
 import { removeVerifiedLocalFilesFromRetained } from '../localFileReferences.js'
 import { DEFAULT_SNAPSHOT_PAGE_SIZE, DEFAULT_SNAPSHOT_REVISION_ATTEMPTS, headers, parseResponse } from './turnTransport.js'
 
@@ -245,6 +246,17 @@ function optionalContextRetainedLocalFiles(context) {
   return optionalContextLocalFileReceipts(context, 'retainedLocalFiles', 'retainedAt')
 }
 
+function modelAuthoredEvidenceText(message, failure, state) {
+  // Older servers persisted their localized fallback error as assistant
+  // content when no model text existed. Keep that durable row intact, but do
+  // not reclassify the fallback as model-authored partial output on reload.
+  return modelAuthoredTurnEvidenceText({
+    content: message?.content,
+    failureMessage: failure?.message,
+    state,
+  })
+}
+
 function turnEvidenceMeta(message) {
   const context = message?.modelContext && typeof message.modelContext === 'object'
     ? message.modelContext
@@ -252,7 +264,11 @@ function turnEvidenceMeta(message) {
   const state = context.turnEvidence === true ? String(context.evidenceState || '') : ''
   if (!['blocked', 'cancelled', 'failed', 'interrupted'].includes(state)) return {}
 
-  const failure = context.error && typeof context.error === 'object' ? context.error : null
+  const persistedFailure = context.error && typeof context.error === 'object' ? context.error : null
+  const failure = persistedFailure && state === 'blocked'
+    && typeof persistedFailure.manualRetryable !== 'boolean'
+    ? { ...persistedFailure, manualRetryable: true }
+    : persistedFailure
   const artifactIds = [...new Set((Array.isArray(context.artifactIds) ? context.artifactIds : [])
     .map((id) => String(id || '').trim())
     .filter(Boolean))]
@@ -314,7 +330,7 @@ function turnEvidenceMeta(message) {
                 : null,
             }),
     serverFailure: failure,
-    serverPartialText: String(message?.content || ''),
+    serverPartialText: modelAuthoredEvidenceText(message, failure, state),
     serverArtifactIds: artifactIds,
     ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
     ...(iterations !== undefined ? { serverIterations: iterations } : {}),

@@ -1,5 +1,14 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,7 +16,14 @@ import { Readable, Writable } from 'node:stream'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { cmdRun, parseRunArgs } from '../../bin/yma-cli.js'
+import {
+  CLI_VERSION,
+  cmdRun,
+  createRunShutdownController,
+  parseRunArgs,
+  resolveRunTimeoutMs,
+  resolveServerUrl,
+} from '../../bin/yma-cli.js'
 import { runHeadlessTurn } from '../../server/services/headlessTurnRuntime.js'
 
 const CLI = join(process.cwd(), 'bin', 'yma-cli.js')
@@ -170,12 +186,20 @@ function run(args, env = {}) {
   }
 }
 
+function readStoredTokens(homeDir) {
+  const dir = join(homeDir, '.yma-cli', 'tokens')
+  return readdirSync(dir).map((name) => JSON.parse(readFileSync(join(dir, name), 'utf8')))
+}
+
 test('--help prints usage and exits 0', () => {
   const r = run(['--help'])
   assert.equal(r.status, 0)
   assert.ok(r.stdout.length > 0)
   assert.match(r.stdout, /yma-cli/)
   assert.match(r.stdout, /session list/)
+  assert.match(r.stdout, /session search/)
+  assert.match(r.stdout, /session show/)
+  assert.match(r.stdout, /model list/)
   assert.match(r.stdout, /agent list/)
   assert.match(r.stdout, /skill list/)
   assert.match(r.stdout, /gugo run/)
@@ -187,16 +211,467 @@ test('no args prints help', () => {
   assert.match(r.stdout, /Usage:/)
 })
 
-test('session list without token exits non-zero with login hint', () => {
-  const r = run(['session', 'list'])
-  assert.notEqual(r.status, 0)
-  assert.match(r.stderr, /login/i)
+test('--version prints the package version', () => {
+  const r = run(['--version'])
+  assert.equal(r.status, 0)
+  assert.equal(r.stderr, '')
+  assert.equal(r.stdout.trim(), CLI_VERSION)
 })
 
-test('agent list without token exits non-zero', () => {
-  const r = run(['agent', 'list'])
-  assert.notEqual(r.status, 0)
-  assert.match(r.stderr, /login/i)
+test('server URL resolver supports explicit URLs and IPv6 hosts', () => {
+  assert.equal(
+    resolveServerUrl({ GUGO_SERVER_URL: 'https://gugo.example.test/base/?ignored=1#ignored' }),
+    'https://gugo.example.test/base',
+  )
+  assert.equal(resolveServerUrl({ SERVER_HOST: '::1', SERVER_PORT: '5175' }), 'http://[::1]:5175')
+  assert.throws(
+    () => resolveServerUrl({ GUGO_SERVER_URL: 'file:///tmp/gugo' }),
+    (error) => error?.code === 'CLI_SERVER_URL_INVALID' && error?.exitCode === 2,
+  )
+  assert.throws(
+    () => resolveServerUrl({ GUGO_SERVER_URL: 'https://user:secret@gugo.example.test' }),
+    (error) => error?.code === 'CLI_SERVER_URL_INVALID' && error?.exitCode === 2,
+  )
+})
+
+test('run shutdown controller aborts once, then forces exit and removes listeners', () => {
+  const target = new EventEmitter()
+  const diagnostics = []
+  const forced = []
+  const shutdown = createRunShutdownController({
+    target,
+    diagnostics: { write: (value) => diagnostics.push(String(value)) },
+    timeoutMs: 60_000,
+    forceExit: (exitCode) => forced.push(exitCode),
+  })
+
+  target.emit('SIGINT')
+  assert.equal(shutdown.signal.aborted, true)
+  assert.equal(shutdown.signal.reason?.code, 'CLI_INTERRUPTED')
+  assert.equal(shutdown.exitCode, 130)
+  assert.equal(target.exitCode, 130)
+  assert.deepEqual(forced, [])
+  assert.equal(diagnostics.length, 1)
+
+  target.emit('SIGINT')
+  assert.deepEqual(forced, [130])
+  shutdown.dispose()
+  shutdown.dispose()
+  assert.equal(target.listenerCount('SIGINT'), 0)
+  assert.equal(target.listenerCount('SIGTERM'), 0)
+})
+
+test('run shutdown controller bounds graceful cancellation time', async () => {
+  const target = new EventEmitter()
+  const forced = []
+  const shutdown = createRunShutdownController({
+    target,
+    diagnostics: { write: () => {} },
+    timeoutMs: 5,
+    forceExit: (exitCode) => forced.push(exitCode),
+  })
+
+  target.emit('SIGTERM')
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(forced, [143])
+  shutdown.dispose()
+})
+
+test('local API command bootstraps a token and persists it before listing agents', async () => {
+  const requests = []
+  const server = createServer((req, res) => {
+    requests.push({ url: req.url, authorization: req.headers.authorization || '' })
+    res.setHeader('Content-Type', 'application/json')
+    if (req.url === '/api/auth/bootstrap') {
+      res.end(JSON.stringify({
+        ok: true,
+        mode: 'local',
+        authenticated: true,
+        token: 'local-owner-token',
+        user: { id: 'local-owner' },
+      }))
+      return
+    }
+    if (req.url === '/api/agents' && req.headers.authorization === 'Bearer local-owner-token') {
+      res.end(JSON.stringify([{ id: 'agent-1', name: 'Local agent' }]))
+      return
+    }
+    res.writeHead(401)
+    res.end(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'missing token' } }))
+  })
+  const port = await listen(server)
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-local-auth-'))
+  try {
+    const result = await runCliProcess(['agent', 'list'], {
+      env: {
+        GUGO_SERVER_URL: `http://127.0.0.1:${port}`,
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+      },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), [{ id: 'agent-1', name: 'Local agent' }])
+    assert.deepEqual(requests.map((request) => request.url), ['/api/auth/bootstrap', '/api/agents'])
+    assert.deepEqual(readStoredTokens(homeDir), [{
+      version: 1,
+      serverUrl: `http://127.0.0.1:${port}`,
+      token: 'local-owner-token',
+    }])
+  } finally {
+    await closeServer(server)
+    rmSync(homeDir, { recursive: true, force: true })
+  }
+})
+
+test('multi-user bootstrap without a session fails with stable AUTH_REQUIRED', async () => {
+  let requestCount = 0
+  const server = createServer((_req, res) => {
+    requestCount += 1
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, mode: 'multi_user', authenticated: false }))
+  })
+  const port = await listen(server)
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-multi-auth-'))
+  try {
+    const result = await runCliProcess(['session', 'list'], {
+      env: {
+        GUGO_SERVER_URL: `http://127.0.0.1:${port}`,
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+      },
+    })
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /AUTH_REQUIRED/)
+    assert.match(result.stderr, /gugo login/)
+    assert.equal(requestCount, 1)
+  } finally {
+    await closeServer(server)
+    rmSync(homeDir, { recursive: true, force: true })
+  }
+})
+
+test('session list, search, and show expose authenticated pagination APIs', async () => {
+  const requests = []
+  const server = createServer((req, res) => {
+    requests.push({ url: req.url, authorization: req.headers.authorization || '' })
+    res.setHeader('Content-Type', 'application/json')
+    if (req.url === '/api/auth/bootstrap') {
+      res.end(JSON.stringify({
+        ok: true,
+        mode: 'local',
+        authenticated: true,
+        token: 'session-cli-token',
+        user: { id: 'local-owner' },
+      }))
+      return
+    }
+    if (req.headers.authorization !== 'Bearer session-cli-token') {
+      res.writeHead(401)
+      res.end(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'missing token' } }))
+      return
+    }
+    const url = new URL(req.url, 'http://localhost')
+    if (url.pathname === '/api/sessions') {
+      res.end(JSON.stringify({ sessions: [{ id: 'session/one', title: 'First' }] }))
+      return
+    }
+    if (url.pathname === '/api/sessions/search') {
+      res.end(JSON.stringify({ results: [{ sessionId: 'session/one', snippet: 'alpha beta' }] }))
+      return
+    }
+    if (url.pathname === '/api/sessions/session%2Fone/snapshot') {
+      res.end(JSON.stringify({ snapshot: { session: { id: 'session/one' }, messages: [] } }))
+      return
+    }
+    res.writeHead(404)
+    res.end(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'not found' } }))
+  })
+  const port = await listen(server)
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-sessions-'))
+  const env = {
+    GUGO_SERVER_URL: `http://127.0.0.1:${port}`,
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+  }
+  try {
+    const listed = await runCliProcess([
+      'session', 'list', '--archived=all', '--limit', '25', '--offset=5',
+    ], { env })
+    const searched = await runCliProcess([
+      'session', 'search', '--query', 'alpha beta', '--session-id', 'session/one',
+      '--limit=10', '--offset', '2',
+    ], { env })
+    const shown = await runCliProcess([
+      'session', 'show', 'session/one', '--limit', '50', '--offset=3',
+    ], { env })
+
+    assert.equal(listed.status, 0, listed.stderr)
+    assert.equal(searched.status, 0, searched.stderr)
+    assert.equal(shown.status, 0, shown.stderr)
+    assert.equal(JSON.parse(listed.stdout).sessions[0].id, 'session/one')
+    assert.equal(JSON.parse(searched.stdout).results[0].snippet, 'alpha beta')
+    assert.equal(JSON.parse(shown.stdout).snapshot.session.id, 'session/one')
+
+    const apiRequests = requests.filter(({ url }) => url !== '/api/auth/bootstrap')
+    assert.equal(apiRequests.length, 3)
+    for (const request of apiRequests) {
+      assert.equal(request.authorization, 'Bearer session-cli-token')
+    }
+    const listUrl = new URL(apiRequests[0].url, 'http://localhost')
+    assert.equal(listUrl.pathname, '/api/sessions')
+    assert.deepEqual(Object.fromEntries(listUrl.searchParams), {
+      archived: 'all', limit: '25', offset: '5',
+    })
+    const searchUrl = new URL(apiRequests[1].url, 'http://localhost')
+    assert.equal(searchUrl.pathname, '/api/sessions/search')
+    assert.deepEqual(Object.fromEntries(searchUrl.searchParams), {
+      q: 'alpha beta', limit: '10', offset: '2', sessionId: 'session/one',
+    })
+    const showUrl = new URL(apiRequests[2].url, 'http://localhost')
+    assert.equal(showUrl.pathname, '/api/sessions/session%2Fone/snapshot')
+    assert.deepEqual(Object.fromEntries(showUrl.searchParams), { limit: '50', offset: '3' })
+  } finally {
+    await closeServer(server)
+    rmSync(homeDir, { recursive: true, force: true })
+  }
+})
+
+test('model list returns a filtered machine-readable catalog without provider secrets', async () => {
+  const requests = []
+  const server = createServer((req, res) => {
+    requests.push({ url: req.url, authorization: req.headers.authorization || '' })
+    res.setHeader('Content-Type', 'application/json')
+    if (req.url === '/api/auth/bootstrap') {
+      res.end(JSON.stringify({
+        ok: true,
+        mode: 'local',
+        authenticated: true,
+        token: 'model-list-token',
+        user: { id: 'local-owner' },
+      }))
+      return
+    }
+    if (req.url === '/api/model/providers' && req.headers.authorization === 'Bearer model-list-token') {
+      res.end(JSON.stringify({
+        ok: true,
+        providers: [{
+          id: 'provider-1',
+          key: 'custom-openai',
+          label: 'Primary Models',
+          baseUrl: 'https://secret-endpoint.example.test/v1',
+          apiKey: 'must-not-be-exposed',
+          headers: { Authorization: 'must-not-be-exposed' },
+          enabled: true,
+          isDefault: true,
+          models: ['alpha-large', 'beta-small'],
+          defaultModel: 'alpha-large',
+          modelReadiness: { 'alpha-large': { chat: true, tools: true } },
+          modelProfiles: { 'alpha-large': { contextWindow: 128000 } },
+        }, {
+          id: 'provider-2',
+          key: 'local',
+          label: 'Local Models',
+          enabled: false,
+          models: ['alpha-local'],
+          defaultModel: 'alpha-local',
+        }],
+      }))
+      return
+    }
+    res.writeHead(401)
+    res.end(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'missing token' } }))
+  })
+  const port = await listen(server)
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-model-list-'))
+  try {
+    const result = await runCliProcess([
+      'model', 'list', '--provider=provider-1', '--search', 'ALPHA',
+    ], {
+      env: {
+        GUGO_SERVER_URL: `http://127.0.0.1:${port}`,
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+      },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(JSON.parse(result.stdout), {
+      models: [{
+        name: 'alpha-large',
+        providerId: 'provider-1',
+        providerKey: 'custom-openai',
+        providerLabel: 'Primary Models',
+        enabled: true,
+        isProviderDefault: true,
+        isDefault: true,
+        readiness: { chat: true, tools: true },
+        profile: { contextWindow: 128000 },
+      }],
+    })
+    assert.doesNotMatch(result.stdout, /must-not-be-exposed|secret-endpoint/)
+    assert.deepEqual(requests.map(({ url }) => url), [
+      '/api/auth/bootstrap',
+      '/api/model/providers',
+    ])
+  } finally {
+    await closeServer(server)
+    rmSync(homeDir, { recursive: true, force: true })
+  }
+})
+
+test('a 401 refreshes local authentication once and retries the API request once', async () => {
+  let bootstrapRequests = 0
+  let agentRequests = 0
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'application/json')
+    if (req.url === '/api/auth/bootstrap') {
+      bootstrapRequests += 1
+      const initial = bootstrapRequests === 1
+      assert.equal(req.headers.authorization || '', initial ? '' : 'Bearer expired-token')
+      res.end(JSON.stringify({
+        ok: true,
+        mode: 'local',
+        authenticated: true,
+        token: initial ? 'expired-token' : 'refreshed-token',
+        user: { id: 'local-owner' },
+      }))
+      return
+    }
+    agentRequests += 1
+    if (req.headers.authorization === 'Bearer refreshed-token') {
+      res.end(JSON.stringify([{ id: 'agent-after-refresh' }]))
+      return
+    }
+    res.writeHead(401)
+    res.end(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'expired token' } }))
+  })
+  const port = await listen(server)
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-refresh-auth-'))
+  try {
+    const result = await runCliProcess(['agent', 'list'], {
+      env: {
+        GUGO_SERVER_URL: `http://127.0.0.1:${port}`,
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+      },
+    })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(bootstrapRequests, 2)
+    assert.equal(agentRequests, 2)
+    assert.equal(readStoredTokens(homeDir)[0].token, 'refreshed-token')
+  } finally {
+    await closeServer(server)
+    rmSync(homeDir, { recursive: true, force: true })
+  }
+})
+
+test('tokens are isolated by normalized server URL and never cross two explicit servers', async () => {
+  const makeServer = (token) => {
+    const requests = []
+    const server = createServer((req, res) => {
+      requests.push({ url: req.url, authorization: req.headers.authorization || '' })
+      res.setHeader('Content-Type', 'application/json')
+      if (req.url === '/api/auth/bootstrap') {
+        res.end(JSON.stringify({
+          ok: true,
+          mode: 'local',
+          authenticated: true,
+          token,
+          user: { id: token },
+        }))
+        return
+      }
+      if (req.url === '/api/agents' && req.headers.authorization === `Bearer ${token}`) {
+        res.end(JSON.stringify([{ id: token }]))
+        return
+      }
+      res.writeHead(401)
+      res.end(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'wrong token' } }))
+    })
+    return { server, requests }
+  }
+  const first = makeServer('token-for-first')
+  const second = makeServer('token-for-second')
+  const firstPort = await listen(first.server)
+  const secondPort = await listen(second.server)
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-origin-scope-'))
+  mkdirSync(join(homeDir, '.yma-cli'), { recursive: true })
+  writeFileSync(join(homeDir, '.yma-cli', 'token'), 'legacy-token-must-not-leak')
+  const envFor = (port) => ({
+    GUGO_SERVER_URL: `http://127.0.0.1:${port}/`,
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+  })
+  try {
+    const firstRun = await runCliProcess(['agent', 'list'], { env: envFor(firstPort) })
+    const secondRun = await runCliProcess(['agent', 'list'], { env: envFor(secondPort) })
+    const firstAgain = await runCliProcess(['agent', 'list'], { env: envFor(firstPort) })
+    assert.equal(firstRun.status, 0, firstRun.stderr)
+    assert.equal(secondRun.status, 0, secondRun.stderr)
+    assert.equal(firstAgain.status, 0, firstAgain.stderr)
+    assert.equal(
+      [...first.requests, ...second.requests]
+        .some(({ authorization }) => authorization.includes('legacy-token-must-not-leak')),
+      false,
+    )
+    assert.equal(second.requests.some(({ authorization }) => authorization.includes('token-for-first')), false)
+    assert.deepEqual(second.requests.map(({ authorization }) => authorization), [
+      '',
+      'Bearer token-for-second',
+    ])
+    assert.deepEqual(first.requests.map(({ url }) => url), [
+      '/api/auth/bootstrap',
+      '/api/agents',
+      '/api/agents',
+    ])
+    assert.deepEqual(
+      readStoredTokens(homeDir).map(({ token }) => token).sort(),
+      ['token-for-first', 'token-for-second'],
+    )
+  } finally {
+    await closeServer(first.server)
+    await closeServer(second.server)
+    rmSync(homeDir, { recursive: true, force: true })
+  }
+})
+
+test('legacy token never migrates to a custom loopback server scope', async () => {
+  let bootstrapRequests = 0
+  const server = createServer((req, res) => {
+    res.setHeader('Content-Type', 'application/json')
+    if (req.url === '/api/auth/bootstrap') {
+      bootstrapRequests += 1
+      res.end(JSON.stringify({ ok: true, mode: 'multi_user', authenticated: false }))
+      return
+    }
+    if (req.url === '/api/agents' && req.headers.authorization === 'Bearer legacy-local-token') {
+      res.end(JSON.stringify([{ id: 'legacy-authorized' }]))
+      return
+    }
+    res.writeHead(401)
+    res.end(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'wrong token' } }))
+  })
+  const port = await listen(server)
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-legacy-local-'))
+  mkdirSync(join(homeDir, '.yma-cli'), { recursive: true })
+  writeFileSync(join(homeDir, '.yma-cli', 'token'), 'legacy-local-token')
+  try {
+    const result = await runCliProcess(['agent', 'list'], {
+      env: {
+        GUGO_SERVER_URL: '',
+        SERVER_HOST: '127.0.0.1',
+        SERVER_PORT: String(port),
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+      },
+    })
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /AUTH_REQUIRED/)
+    assert.equal(bootstrapRequests, 1)
+    assert.equal(existsSync(join(homeDir, '.yma-cli', 'tokens')), false)
+  } finally {
+    await closeServer(server)
+    rmSync(homeDir, { recursive: true, force: true })
+  }
 })
 
 test('unknown command exits non-zero', () => {
@@ -211,17 +686,187 @@ test('login without --email exits non-zero', () => {
   assert.match(r.stderr, /email/i)
 })
 
+test('non-run commands reject unknown, duplicate, and extra arguments with exit 2', () => {
+  for (const args of [
+    ['agent', 'list', '--typo', 'value'],
+    ['login', '--email=a@example.test', '--email', 'b@example.test'],
+    ['status', 'extra'],
+    ['session', 'list', '--archived=maybe'],
+    ['session', 'list', '--limit=0'],
+    ['session', 'search'],
+    ['session', 'search', '--query=needle', '--limit=101'],
+    ['session', 'search', '--query=needle', '--offset=-1'],
+    ['session', 'show'],
+    ['session', 'show', 'one', 'two'],
+    ['session', 'show', 'one', '--limit=2001'],
+    ['model', 'list', '--provider'],
+    ['model', 'list', '--search=x', '--search=y'],
+  ]) {
+    const result = run(args)
+    assert.equal(result.status, 2, `${args.join(' ')}\n${result.stderr}`)
+    assert.match(
+      result.stderr,
+      /CLI_(?:OPTION_UNKNOWN|OPTION_DUPLICATE|OPTION_VALUE_REQUIRED|ARGUMENT_UNEXPECTED|ARCHIVED_INVALID|LIMIT_INVALID|OFFSET_INVALID|SESSION_ID_REQUIRED)/,
+    )
+  }
+})
+
+test('status reports public health and doctor preserves degraded full diagnostics', async () => {
+  const requests = []
+  const server = createServer((req, res) => {
+    requests.push({ url: req.url, authorization: req.headers.authorization || '' })
+    if (req.url === '/api/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, version: 'test-version', db: { ok: true } }))
+      return
+    }
+    if (req.url === '/api/auth/bootstrap') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        ok: true,
+        mode: 'local',
+        authenticated: true,
+        token: 'doctor-token',
+        user: { id: 'local-owner' },
+      }))
+      return
+    }
+    if (req.url === '/api/health/full' && req.headers.authorization === 'Bearer doctor-token') {
+      res.writeHead(503, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        ok: false,
+        version: 'test-version',
+        db: { ok: true },
+        model: {
+          configured: false,
+          agentReady: false,
+          readinessCode: 'MODEL_CONFIG_MISSING',
+          code: 'MODEL_CONFIG_MISSING',
+          action: 'configure_model',
+          modelName: null,
+          toolMaxRounds: 32,
+        },
+      }))
+      return
+    }
+    res.writeHead(401, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'missing token' } }))
+  })
+  const port = await listen(server)
+  const homeDir = mkdtempSync(join(tmpdir(), 'gugo-cli-doctor-'))
+  const env = {
+    GUGO_SERVER_URL: `http://127.0.0.1:${port}`,
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+  }
+  try {
+    const status = await runCliProcess(['status'], { env })
+    assert.equal(status.status, 0, status.stderr)
+    assert.equal(JSON.parse(status.stdout).ok, true)
+
+    const doctor = await runCliProcess(['doctor'], { env })
+    assert.equal(doctor.status, 1, doctor.stderr)
+    assert.deepEqual(JSON.parse(doctor.stdout), {
+      ok: false,
+      version: 'test-version',
+      db: { ok: true },
+      model: {
+        configured: false,
+        agentReady: false,
+        readinessCode: 'MODEL_CONFIG_MISSING',
+        code: 'MODEL_CONFIG_MISSING',
+        action: 'configure_model',
+        modelName: null,
+        toolMaxRounds: 32,
+      },
+    })
+    assert.equal(doctor.stderr, '')
+    assert.deepEqual(requests.map((request) => request.url), [
+      '/api/health',
+      '/api/auth/bootstrap',
+      '/api/health/full',
+    ])
+  } finally {
+    await closeServer(server)
+    rmSync(homeDir, { recursive: true, force: true })
+  }
+})
+
+test('equals-form flags reach the server and nested API errors stay readable', async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(400, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      error: { code: 'EMAIL_INVALID', message: 'email address is invalid' },
+    }))
+  })
+  const port = await listen(server)
+  try {
+    const result = await runCliProcess(['login', '--email=invalid@example.test'], {
+      env: { GUGO_SERVER_URL: `http://127.0.0.1:${port}` },
+    })
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /EMAIL_INVALID/)
+    assert.match(result.stderr, /email address is invalid/)
+    assert.doesNotMatch(result.stderr, /\[object Object\]/)
+  } finally {
+    await closeServer(server)
+  }
+})
+
+test('API requests fail with a stable timeout error', async () => {
+  const server = createServer(() => {})
+  const port = await listen(server)
+  try {
+    const result = await runCliProcess(['status'], {
+      env: {
+        GUGO_SERVER_URL: `http://127.0.0.1:${port}`,
+        GUGO_CLI_HTTP_TIMEOUT_MS: '25',
+      },
+    })
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /REQUEST_TIMEOUT/)
+  } finally {
+    server.closeAllConnections?.()
+    await closeServer(server)
+  }
+})
+
+test('API timeout covers a response body that stalls after headers', async () => {
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.flushHeaders()
+  })
+  const port = await listen(server)
+  try {
+    const result = await runCliProcess(['status'], {
+      env: {
+        GUGO_SERVER_URL: `http://127.0.0.1:${port}`,
+        GUGO_CLI_HTTP_TIMEOUT_MS: '25',
+      },
+    })
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /REQUEST_TIMEOUT/)
+  } finally {
+    server.closeAllConnections?.()
+    await closeServer(server)
+  }
+})
+
 test('run parser supports prompt, model, Provider, mode, cwd, session and resume', () => {
   const parsed = parseRunArgs([
     'inspect', 'this', '--model', 'local-model', '--provider', 'provider-1', '--mode=acceptEdits',
-    '--cwd', '.', '--session-id', 'session-1',
+    '--cwd', '.', '--session-id', 'session-1', '--timeout=2500', '--output=text',
   ])
   assert.equal(parsed.prompt, 'inspect this')
   assert.equal(parsed.model, 'local-model')
   assert.equal(parsed.modelProviderId, 'provider-1')
   assert.equal(parsed.mode, 'acceptEdits')
   assert.equal(parsed.sessionId, 'session-1')
+  assert.equal(parsed.timeoutMs, 2500)
+  assert.equal(parsed.outputFormat, 'text')
   assert.equal(parseRunArgs(['plain prompt']).mode, 'normal')
+  assert.equal(parseRunArgs(['plain prompt']).outputFormat, 'jsonl')
+  assert.equal(parseRunArgs(['--', '--output', 'text']).prompt, '--output text')
   assert.throws(() => parseRunArgs(['prompt', '--resume', 'turn-1']), /cannot be combined/)
   const resumed = parseRunArgs(['--resume', 'turn-1'])
   assert.equal(resumed.resumeTurnId, 'turn-1')
@@ -242,6 +887,22 @@ test('run parser supports prompt, model, Provider, mode, cwd, session and resume
     () => parseRunArgs(['--resume', 'turn-1', '--model', 'local-model']),
     (error) => error?.code === 'CLI_RESUME_MODEL_CONFLICT' && error?.exitCode === 2,
   )
+  assert.throws(
+    () => parseRunArgs(['prompt', '--output', 'yaml']),
+    (error) => error?.code === 'CLI_OUTPUT_INVALID' && error?.exitCode === 2,
+  )
+})
+
+test('run timeout resolves CLI precedence and rejects unsafe timer values', () => {
+  assert.equal(resolveRunTimeoutMs(null, {}), 0)
+  assert.equal(resolveRunTimeoutMs(null, { GUGO_CLI_RUN_TIMEOUT_MS: '9000' }), 9000)
+  assert.equal(resolveRunTimeoutMs('250', { GUGO_CLI_RUN_TIMEOUT_MS: '9000' }), 250)
+  for (const value of ['0', '-1', '1.5', 'abc', '2147483648']) {
+    assert.throws(
+      () => resolveRunTimeoutMs(value, {}),
+      (error) => error?.code === 'CLI_RUN_TIMEOUT_INVALID' && error?.exitCode === 2,
+    )
+  }
 })
 
 test('run parser rejects blank model selections and duplicate single-value options', () => {
@@ -259,6 +920,8 @@ test('run parser rejects blank model selections and duplicate single-value optio
     ['cwd', '.', '..'],
     ['session-id', 'session-a', 'session-b'],
     ['resume', 'turn-a', 'turn-b'],
+    ['timeout', '100', '200'],
+    ['output', 'jsonl', 'text'],
   ]
   for (const [option, first, second] of duplicateOptions) {
     assert.throws(
@@ -274,11 +937,13 @@ test('run reads a piped prompt and keeps stdout JSONL-only', async () => {
   const stderrChunks = []
   const stdout = new Writable({ write(chunk, _encoding, done) { stdoutChunks.push(String(chunk)); done() } })
   const stderr = new Writable({ write(chunk, _encoding, done) { stderrChunks.push(String(chunk)); done() } })
+  const controller = new AbortController()
   let request
   const exitCode = await cmdRun(['--mode', 'plan'], {
     stdin,
     stdout,
     stderr,
+    signal: controller.signal,
     runTurn: async (options) => {
       request = options
       options.onEvent({ type: 'turn.completed', sequence: 1, payload: { text: 'done' } })
@@ -289,10 +954,166 @@ test('run reads a piped prompt and keeps stdout JSONL-only', async () => {
   assert.equal(request.prompt, 'prompt from pipe')
   assert.equal(request.mode, 'plan')
   assert.equal(request.interactive, false)
+  assert.equal(request.signal, controller.signal)
   assert.equal(stderrChunks.join(''), '')
   assert.deepEqual(JSON.parse(stdoutChunks.join('').trim()), {
     type: 'turn.completed', sequence: 1, payload: { text: 'done' },
   })
+})
+
+test('run combines a positional instruction with piped context without dropping either', async () => {
+  let request
+  const stdout = new Writable({ write(_chunk, _encoding, done) { done() } })
+  const stderr = new Writable({ write(_chunk, _encoding, done) { done() } })
+  const exitCode = await cmdRun(['review this diff', '--mode=plan'], {
+    stdin: Readable.from(['diff --git a/file b/file\n+changed\n']),
+    stdout,
+    stderr,
+    runTurn: async (options) => {
+      request = options
+      return { status: 'completed', exitCode: 0 }
+    },
+  })
+
+  assert.equal(exitCode, 0)
+  assert.equal(request.prompt, 'review this diff\n\ndiff --git a/file b/file\n+changed')
+})
+
+test('run rejects piped content with --resume instead of silently discarding it', async () => {
+  const stdoutChunks = []
+  const stderrChunks = []
+  let invoked = false
+  const exitCode = await cmdRun(['--resume', 'turn-1'], {
+    stdin: Readable.from(['unexpected new prompt']),
+    stdout: new Writable({
+      write(chunk, _encoding, done) { stdoutChunks.push(String(chunk)); done() },
+    }),
+    stderr: new Writable({
+      write(chunk, _encoding, done) { stderrChunks.push(String(chunk)); done() },
+    }),
+    runTurn: async () => {
+      invoked = true
+      return { status: 'completed', exitCode: 0 }
+    },
+  })
+
+  assert.equal(exitCode, 2)
+  assert.equal(invoked, false)
+  assert.equal(JSON.parse(stdoutChunks.join('')).error.code, 'CLI_RESUME_PROMPT_CONFLICT')
+  assert.match(stderrChunks.join(''), /CLI_RESUME_PROMPT_CONFLICT/)
+})
+
+test('run applies the stdin size limit even when a positional prompt is present', async () => {
+  const stdoutChunks = []
+  let invoked = false
+  const exitCode = await cmdRun(['review'], {
+    stdin: Readable.from(['x'.repeat((1024 * 1024) + 1)]),
+    stdout: new Writable({
+      write(chunk, _encoding, done) { stdoutChunks.push(String(chunk)); done() },
+    }),
+    stderr: new Writable({ write(_chunk, _encoding, done) { done() } }),
+    runTurn: async () => {
+      invoked = true
+      return { status: 'completed', exitCode: 0 }
+    },
+  })
+
+  assert.equal(exitCode, 2)
+  assert.equal(invoked, false)
+  assert.equal(JSON.parse(stdoutChunks.join('')).error.code, 'CLI_STDIN_TOO_LARGE')
+})
+
+test('run timeout cancels through the shared signal and exits 124 after cleanup', async () => {
+  const stdoutChunks = []
+  const stderrChunks = []
+  let receivedExitCode = null
+  let cleanedUp = false
+  const exitCode = await cmdRun(['slow turn', '--timeout=10'], {
+    stdin: Object.assign(Readable.from([]), { isTTY: true }),
+    stdout: new Writable({
+      write(chunk, _encoding, done) { stdoutChunks.push(String(chunk)); done() },
+    }),
+    stderr: new Writable({
+      write(chunk, _encoding, done) { stderrChunks.push(String(chunk)); done() },
+    }),
+    runTurn: async (options) => {
+      assert.equal('timeoutMs' in options, false)
+      await new Promise((resolve) => {
+        options.signal.addEventListener('abort', () => {
+          receivedExitCode = options.signal.reason?.exitCode
+          options.onEvent({ type: 'turn.cancelled', payload: { reason: 'deadline' } })
+          setImmediate(() => {
+            cleanedUp = true
+            resolve()
+          })
+        }, { once: true })
+      })
+      return { status: 'cancelled', exitCode: 1 }
+    },
+  })
+
+  assert.equal(exitCode, 124)
+  assert.equal(receivedExitCode, 124)
+  assert.equal(cleanedUp, true)
+  const events = parseJsonLines(stdoutChunks.join(''))
+  assert.equal(events.at(-1).type, 'cli.error')
+  assert.equal(events.at(-1).error.code, 'CLI_RUN_TIMEOUT')
+  assert.match(stderrChunks.join(''), /CLI_RUN_TIMEOUT/)
+})
+
+test('run text output commits only the final successful body and ignores remote HTTP credentials', async () => {
+  const stdoutChunks = []
+  const stderrChunks = []
+  const stdout = new Writable({ write(chunk, _encoding, done) { stdoutChunks.push(String(chunk)); done() } })
+  const stderr = new Writable({ write(chunk, _encoding, done) { stderrChunks.push(String(chunk)); done() } })
+  let request
+  const exitCode = await cmdRun(['inspect safely', '--output=text'], {
+    stdin: Readable.from([]),
+    stdout,
+    stderr,
+    env: { GUGO_SERVER_URL: 'https://remote.example.test/base' },
+    runTurn: async (options) => {
+      request = options
+      options.onEvent({ type: 'turn.started', payload: { content: 'must stay hidden' } })
+      options.onEvent({ type: 'turn.interrupted', payload: { message: 'old replay state' } })
+      options.onToken('must-not-be-persisted')
+      options.onEvent({ type: 'turn.completed', payload: { text: 'final\nbody' } })
+      return { status: 'completed', exitCode: 0 }
+    },
+  })
+
+  assert.equal(exitCode, 0)
+  assert.equal(request.token, '')
+  assert.equal('outputFormat' in request, false)
+  assert.equal(stdoutChunks.join(''), 'final\nbody\n')
+  assert.equal(stderrChunks.join(''), '')
+})
+
+test('run text errors leave stdout empty while JSONL remains the default', async () => {
+  const invoke = async (args) => {
+    const stdoutChunks = []
+    const stderrChunks = []
+    const stdout = new Writable({ write(chunk, _encoding, done) { stdoutChunks.push(String(chunk)); done() } })
+    const stderr = new Writable({ write(chunk, _encoding, done) { stderrChunks.push(String(chunk)); done() } })
+    const exitCode = await cmdRun(args, {
+      stdin: Readable.from([]),
+      stdout,
+      stderr,
+      runTurn: async () => {
+        throw Object.assign(new Error('model unavailable'), { code: 'MODEL_UNAVAILABLE' })
+      },
+    })
+    return { exitCode, stdout: stdoutChunks.join(''), stderr: stderrChunks.join('') }
+  }
+
+  const text = await invoke(['hello', '--output', 'text'])
+  assert.equal(text.exitCode, 1)
+  assert.equal(text.stdout, '')
+  assert.match(text.stderr, /MODEL_UNAVAILABLE/)
+
+  const jsonl = await invoke(['hello'])
+  assert.equal(jsonl.exitCode, 1)
+  assert.equal(JSON.parse(jsonl.stdout).error.code, 'MODEL_UNAVAILABLE')
 })
 
 test('run --cwd cannot relocate runtime capability bindings into the workspace', async () => {

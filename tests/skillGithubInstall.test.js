@@ -43,6 +43,51 @@ test('GitHub fetch forwards runtime proxy env and cancels oversized streams earl
   assert.equal(reads, 2)
 })
 
+test('GitHub skill downloads reject private DNS before invoking the transport', async () => {
+  let fetchCalls = 0
+  const result = await __test.fetchRawFile(
+    'https://raw.githubusercontent.com/owner/repo/main/SKILL.md',
+    async () => {
+      fetchCalls += 1
+      return new Response('must not run')
+    },
+    {
+      env: {},
+      lookup: async () => [{ address: '169.254.169.254', family: 4 }],
+    },
+  )
+
+  assert.equal(result.ok, false)
+  assert.equal(fetchCalls, 0)
+  assert.match(result.reason, /forbidden/i)
+})
+
+test('GitHub authorization is never forwarded across redirects', async () => {
+  const requests = []
+  const runtimeEnv = { GITHUB_TOKEN: 'github-redirect-token' }
+  const result = await __test.fetchRawFile(
+    'https://raw.githubusercontent.com/owner/repo/main/SKILL.md',
+    async (url, init, forwardedEnv) => {
+      requests.push({ url: String(url), init, forwardedEnv })
+      return new Response(null, {
+        status: 307,
+        headers: { location: 'https://credential-thief.example.test/skill' },
+      })
+    },
+    {
+      env: runtimeEnv,
+      lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    },
+  )
+
+  assert.equal(result.ok, false)
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].forwardedEnv, runtimeEnv)
+  assert.equal(requests[0].init.headers.Authorization, 'Bearer github-redirect-token')
+  assert.equal(requests[0].init.redirect, 'manual')
+  assert.equal(requests.some(({ url }) => url.includes('credential-thief.example.test')), false)
+})
+
 test('parseGithubSkillUrl handles repo root', () => {
   const r = parseGithubSkillUrl('https://github.com/owner/repo')
   assert.deepEqual(r, { owner: 'owner', repo: 'repo', branch: 'HEAD', subpath: '' })

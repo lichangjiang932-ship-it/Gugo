@@ -11,8 +11,11 @@ import { FS_SHELL_TOOL_SPECS } from '../adapters/fsShellTools.js'
 import { GIT_TOOL_SPECS } from '../adapters/gitWorkbench.js'
 import { CODING_AGENT_TOOL_SPECS } from '../adapters/codingAgentTools.js'
 import { CODE_SEARCH_TOOL_SPECS } from './codeSearch.js'
+import { LSP_TOOL_SPECS } from './lspTool.js'
 import { APPLY_PATCH_TOOL_SPECS } from './applyPatch.js'
 import { AGENTIC_TOOL_SPECS } from './agenticTools.js'
+import { RUN_CODE_TOOL_SPECS } from '../services/runCodeRuntime.js'
+import { CODEX_APP_SERVER_TOOL_SPECS, CODEX_MODELS_TOOL_NAME } from '../services/codexAppServerTool.js'
 import { isToolVisibleInPermissionMode } from './approvalPolicy.js'
 import { randomUUID } from 'node:crypto'
 import {
@@ -23,7 +26,9 @@ import {
   attachRuntimePluginBeginRevoke,
   createRuntimePluginRevokeReceipt,
 } from '../plugins/runtimePluginContributionLifecycle.js'
-
+import { hasConfiguredLspProvider } from '../services/lspRuntime.js'
+import { SUBAGENT_MAX_PER_BATCH } from '../services/subagentBatchConfig.js'
+import { isCodexAppServerModelCatalogAvailable } from '../services/codexAppServerRuntime.js'
 function specsByName(specs) {
   return Object.fromEntries((Array.isArray(specs) ? specs : [])
     .map((spec) => [String(spec?.function?.name || '').trim(), spec])
@@ -247,7 +252,7 @@ export const BUILTIN_TOOL_SCHEMA_CATALOG = {
     type: 'function',
     function: {
       name: 'Agent',
-      description: 'Delegate focused work to isolated sub-agents. Pass one task, or up to 3 independent tasks to run them in parallel. Returns final summaries only.',
+      description: `Delegate focused work to isolated sub-agents. Pass one task, or up to ${SUBAGENT_MAX_PER_BATCH} independent tasks to run them in parallel. Returns final summaries only.`,
       parameters: {
         type: 'object',
         properties: {
@@ -257,7 +262,7 @@ export const BUILTIN_TOOL_SCHEMA_CATALOG = {
           tasks: {
             type: 'array',
             minItems: 1,
-            maxItems: 3,
+            maxItems: SUBAGENT_MAX_PER_BATCH,
             items: {
               type: 'object',
               properties: {
@@ -510,8 +515,11 @@ export const BUILTIN_TOOL_SCHEMA_CATALOG = {
   ...specsByName(GIT_TOOL_SPECS),
   ...specsByName(CODING_AGENT_TOOL_SPECS),
   ...specsByName(CODE_SEARCH_TOOL_SPECS),
+  ...specsByName(LSP_TOOL_SPECS),
   ...specsByName(APPLY_PATCH_TOOL_SPECS),
   ...specsByName(AGENTIC_TOOL_SPECS),
+  ...specsByName(RUN_CODE_TOOL_SPECS),
+  ...specsByName(CODEX_APP_SERVER_TOOL_SPECS),
   ...specsByName(MEMORY_TOOL_SPECS),
 }
 
@@ -547,6 +555,8 @@ const BUILTIN_TOOL_METADATA = Object.freeze({
   write_file: builtinMetadata('write_local', false),
   edit_file: builtinMetadata('write_local', false),
   bash_exec: builtinMetadata('exec', false),
+  run_code: builtinMetadata('exec', false, { interruptBehavior: 'cancel', isDestructive: false, isIdempotent: false }),
+  [CODEX_MODELS_TOOL_NAME]: builtinMetadata('external', false, { interruptBehavior: 'cancel', isDestructive: false, isIdempotent: true }),
   git_status: builtinMetadata('read', true),
   git_diff: builtinMetadata('read', true),
   run_project_check: builtinMetadata('exec', false),
@@ -570,6 +580,7 @@ const BUILTIN_TOOL_METADATA = Object.freeze({
   grep_code: builtinMetadata('read', true),
   find_symbol: builtinMetadata('read', true),
   list_imports: builtinMetadata('read', true),
+  lsp: builtinMetadata('read', true),
   apply_patch: builtinMetadata('write_local', false),
   reflect: builtinMetadata('read', false),
   request_clarification: builtinMetadata('read', false),
@@ -628,6 +639,7 @@ const READ_ONLY_MODE_TOOLS = new Set([
   'grep_code',
   'find_symbol',
   'list_imports',
+  'lsp',
   'git_status',
   'git_diff',
   'image_info',
@@ -650,6 +662,7 @@ const BUILTIN_CONCURRENCY_SAFE_TOOLS = new Set([
   'grep_code',
   'find_symbol',
   'list_imports',
+  'lsp',
   'git_status',
   'git_diff',
   'image_info',
@@ -678,6 +691,7 @@ const BUILTIN_WRITE_LOCAL_TOOLS = new Set([
 ])
 const BUILTIN_EXEC_TOOLS = new Set([
   'bash_exec',
+  'run_code',
   'run_command',
   'run_project_check',
   'media_transform',
@@ -687,6 +701,7 @@ const BUILTIN_EXEC_TOOLS = new Set([
   'process_kill',
 ])
 const CODE_MODE_TOOLS = [
+  'run_code',
   'read_file',
   'write_file',
   'edit_file',
@@ -695,6 +710,7 @@ const CODE_MODE_TOOLS = [
   'grep_code',
   'find_symbol',
   'list_imports',
+  'lsp',
   'bash_exec',
   'run_command',
   'git_status',
@@ -977,6 +993,8 @@ export function listAllSpecs({ userId = null } = {}) {
   }
   const out = []
   for (const [name, spec] of Object.entries(BUILTIN_TOOL_SCHEMA_CATALOG)) {
+    if (name === 'lsp' && !hasConfiguredLspProvider()) continue
+    if (name === CODEX_MODELS_TOOL_NAME && !isCodexAppServerModelCatalogAvailable()) continue
     if (selectedPluginNames.has(name)) continue
     out.push({ origin: 'builtin', source: null, name, tool: spec, metadata: getToolMetadata(name) })
   }

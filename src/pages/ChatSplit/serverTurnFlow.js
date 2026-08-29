@@ -13,6 +13,7 @@ import {
   artifactTypeForSkill,
   buildChatFailureDisplayKey,
   buildChatFailureMessage,
+  getVisibleTurnClarification,
   isPreExecutionFailure,
 } from '../../lib/chatFlowGuards.js'
 import { isServerTurnToolToggle } from '../../lib/serverToolConfig.js'
@@ -160,6 +161,7 @@ export function normalizeServerTurnFailure(error) {
     'actualSequence',
     'recovery',
     'retryable',
+    'manualRetryable',
     'retryAfter',
   ]) {
     if (error?.[field] !== undefined) failure[field] = error[field]
@@ -355,6 +357,7 @@ export async function runServerChatTurn({
     if (terminal.type === 'turn.failed') {
       const error = createTurnFailureError(terminal.payload)
       error.turnCompletedAt = turnEventTimestamp(terminal)
+      error.sessionSnapshot = sessionSnapshot
       appendMissingAssistantText(error.partialText)
       throw error
     }
@@ -399,14 +402,19 @@ export async function runServerChatTurn({
           id: taskId,
           updates: {
             status: TASK_STATUS.PENDING,
-            stepLabel: terminal.payload?.message || t('chat.serverTurn.resumeFailed'),
+            stepLabel: terminal.payload?.recoveryKind === MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND
+              ? t('chatMessages.modelRequestUnknownTitle')
+              : terminal.payload?.recoveryKind === SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND
+                ? t('chatMessages.sideEffectUnknownTitle')
+                : t('chat.serverTurn.resumeFailed'),
           },
         },
       })
       return { blocked: true, terminal, recovery: terminal.payload }
     }
     if (terminal.type === 'turn.paused') {
-      appendMissingAssistantText(terminal.payload?.text)
+      const clarificationText = getVisibleTurnClarification(terminal.payload?.clarification, t)
+      appendMissingAssistantText(terminal.payload?.text || clarificationText)
       const completedAt = turnEventTimestamp(terminal)
       dispatchMessage('UPDATE_LAST_MESSAGE_META', {
         type: 'model_reply',
@@ -425,7 +433,7 @@ export async function runServerChatTurn({
           id: taskId,
           updates: {
             status: TASK_STATUS.PENDING,
-            stepLabel: terminal.payload?.clarification?.question || t('chat.serverTurn.resumeDetail'),
+            stepLabel: clarificationText || t('chat.serverTurn.resumeDetail'),
           },
         },
       })
@@ -514,6 +522,12 @@ export async function runServerChatTurn({
         }),
       })
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.FAILED, stepLabel: t('chat.serverTurn.failed') } } })
+      if (error.sessionSnapshot) {
+        dispatch({
+          type: 'APPLY_SERVER_SESSION_SNAPSHOT',
+          payload: { sessionId, snapshot: error.sessionSnapshot },
+        })
+      }
     }
     setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
     return { failed: true, error }

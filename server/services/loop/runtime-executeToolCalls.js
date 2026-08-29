@@ -11,7 +11,7 @@ import {
 export async function executeToolCalls(s) {
   assertRuntimeStage(s, 'execute-tool-calls')
   const i = s.iteration
-  const { CHECKPOINT_FLUSH_ERROR_CODE, DYNAMIC_EXECUTION_TOOL_NAMES, SIDE_EFFECT_LEDGER_CONFLICT, SIDE_EFFECT_OUTCOME_UNKNOWN, TOOL_HOOK_RESULT, VERIFICATION_TOOLS, contradictedCapabilityClarification, createSideEffectExecution, createSideEffectScope, createToolAbortScope, createTruncatedToolCallResult, executeServerTool, executeToolWithRetry, formatDeniedToolResult, getToolMetadata, installToolFailureRecovery, isCommandExecutionTool, isFileArtifactTool, isLoopPauseResult, isSuccessfulToolResult, isTrustedInternalLoopPrincipal, matchesDynamicToolRegistration, normalizeArtifactIdList, normalizeToolError, rememberApprovedSubagentCall, replaceRuntimeCapabilityBlock, restoreNamedToolSpecs, resumePersistedApproval, revalidateHookAuthorization, revalidateToolPermission, runPostTool, runPreTool, sideEffectRecoveryBlock, supportsIdempotentResume, toolNameFromSpec, validateToolCall, writeToolAudit } = s.d
+  const { CHECKPOINT_FLUSH_ERROR_CODE, DYNAMIC_EXECUTION_TOOL_NAMES, SIDE_EFFECT_LEDGER_CONFLICT, SIDE_EFFECT_OUTCOME_UNKNOWN, TOOL_HOOK_RESULT, VERIFICATION_TOOLS, contradictedCapabilityClarification, createSideEffectExecution, createSideEffectScope, createToolAbortScope, createTruncatedToolCallResult, executeServerTool, executeToolWithRetry, formatDeniedToolResult, getToolMetadata, installToolFailureRecovery, isCommandExecutionTool, isFileArtifactTool, isLoopPauseResult, isSuccessfulToolResult, isTrustedInternalLoopPrincipal, matchesDynamicToolRegistration, normalizeArtifactIdList, normalizeToolError, rememberApprovedSubagentCall, replaceRuntimeCapabilityBlock, requiresPerCallApproval, restoreNamedToolSpecs, resumePersistedApproval, revalidateHookAuthorization, revalidateToolPermission, runPostTool, runPreTool, sideEffectRecoveryBlock, supportsIdempotentResume, toolNameFromSpec, validateToolCall, writeToolAudit } = s.d
   i.pausedByClarification = null
   i.budgetExceededByCompletedModelResponse = s.modelBudgetExceededAfterResponse
   s.modelBudgetExceededAfterResponse = null
@@ -345,7 +345,7 @@ export async function executeToolCalls(s) {
                           args: effectiveArgs,
                           taskGrants: s.job?.sourceType === 'cron' ? s.job.grants : [],
                           expectedPolicyProvenance: checkpointPolicyProvenance,
-                          allowAsk: true,
+                          allowAsk: !requiresPerCallApproval(name),
                         })
                         gate = restoredPolicy.proceed
                           ? {
@@ -487,7 +487,10 @@ export async function executeToolCalls(s) {
                       expectedPolicyProvenance: Object.hasOwn(gate, 'policyProvenance')
                         ? gate.policyProvenance
                         : null,
-                      allowAsk: Boolean(gate.approvalId || verifiedHookAuthorization),
+                      allowAsk: Boolean(
+                        gate.approvalId
+                        || (verifiedHookAuthorization && !requiresPerCallApproval(name)),
+                      ),
                     })
                     gate = finalPolicy.proceed
                       ? {

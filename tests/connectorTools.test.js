@@ -5,12 +5,15 @@ import test from 'node:test'
 
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-connector-tools-tests', String(process.pid))
 
+const PUBLIC_DNS = async () => [{ address: '93.184.216.34', family: 4 }]
+
 import {
   CONNECTOR_TOOL_NAMES,
   CONNECTOR_WRITE_TOOL_NAMES,
   executeConnectorTool,
   registerConnectorTools,
 } from '../server/services/connectorTools.js'
+import { getGoogleDriveFile } from '../server/services/connectorService.js'
 import { listAllSpecs, unregisterByOrigin } from '../server/services/toolRegistry.js'
 import { listProviderRegistry, upsertIntegration } from '../server/services/integrationsStore.js'
 import { issueTestSession } from './helpers/testAuth.js'
@@ -254,6 +257,82 @@ test('Google Drive tools search and export text with a read-only token', async (
   assert.equal(requests.every((request) => request.init.headers.Authorization === 'Bearer drive-read-token'), true)
   assert.match(new URL(requests[0].url).searchParams.get('q'), /name contains/)
   assert.match(requests.at(-1).url, /mimeType=text%2Fplain/)
+})
+
+test('Google Drive bearer downloads reject private DNS before sending the file request', async () => {
+  const { userId } = issueTestSession({ email: 'connector-drive-private-dns@example.com' })
+  upsertIntegration({
+    userId,
+    provider: 'google_drive',
+    name: 'Google Drive',
+    enabled: true,
+    config: {},
+    secret: { token: 'drive-private-dns-token' },
+  })
+  const requests = []
+  const fetchImpl = async (url) => {
+    requests.push(String(url))
+    return new Response(JSON.stringify({
+      id: 'file_12345',
+      name: 'Plan',
+      mimeType: 'application/vnd.google-apps.document',
+    }), { status: 200 })
+  }
+
+  await assert.rejects(
+    getGoogleDriveFile({
+      userId,
+      fileId: 'file_12345',
+      fetchImpl,
+      env: {},
+      lookup: async () => [{ address: '192.168.1.50', family: 4 }],
+    }),
+    (error) => error?.code === 'OUTBOUND_ADDRESS_DENIED',
+  )
+  assert.equal(requests.length, 1, 'only the metadata request may use the injected transport')
+  assert.match(requests[0], /fields=/)
+})
+
+test('Google Drive bearer tokens are not forwarded across download redirects', async () => {
+  const { userId } = issueTestSession({ email: 'connector-drive-redirect@example.com' })
+  upsertIntegration({
+    userId,
+    provider: 'google_drive',
+    name: 'Google Drive',
+    enabled: true,
+    config: {},
+    secret: { token: 'drive-redirect-token' },
+  })
+  const requests = []
+  const fetchImpl = async (url, init = {}) => {
+    const value = String(url)
+    requests.push({ url: value, init })
+    if (value.includes('/export?')) {
+      return new Response(null, {
+        status: 307,
+        headers: { location: 'https://credential-thief.example.test/drive' },
+      })
+    }
+    return new Response(JSON.stringify({
+      id: 'file_12345',
+      name: 'Plan',
+      mimeType: 'application/vnd.google-apps.document',
+    }), { status: 200 })
+  }
+
+  await assert.rejects(
+    getGoogleDriveFile({
+      userId,
+      fileId: 'file_12345',
+      fetchImpl,
+      env: {},
+      lookup: PUBLIC_DNS,
+    }),
+    (error) => error?.code === 'OUTBOUND_REDIRECT_CROSS_ORIGIN',
+  )
+  assert.equal(requests.length, 2)
+  assert.equal(requests[1].init.headers.Authorization, 'Bearer drive-redirect-token')
+  assert.equal(requests.some(({ url }) => url.includes('credential-thief.example.test')), false)
 })
 
 test('native connector write tools call provider APIs and remain user scoped', async () => {

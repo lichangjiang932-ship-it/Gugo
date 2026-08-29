@@ -172,7 +172,7 @@ test('chat supporting panels preserve a readable transcript on narrow screens', 
   assert.match(styles, /\.chat-preview-toolbar,\s*\.chat-preview-toolbar-actions\s*\{\s*flex-wrap: wrap;/)
 })
 
-test('skills open details before use and appearance offers a broader accent palette', () => {
+test('skills open details before use and appearance no longer offers an accent palette', () => {
   const skills = read('../src/pages/SkillsMarket.jsx')
   const skillsState = read('../src/pages/skillsMarket/useSkillsMarket.js')
   const skillDetail = read('../src/pages/skillsMarket/SkillDetailModal.jsx')
@@ -189,10 +189,10 @@ test('skills open details before use and appearance offers a broader accent pale
   assert.doesNotMatch(skillGrid, /data-skill-action="details"/)
   assert.doesNotMatch(skillGrid, /skill\.categoryLabel|skill\.compatibility|skill\.pluginName|skill\.perms/)
 
-  const palette = settings.match(/const ACCENT_COLORS = \[([^\]]+)\]/)?.[1] || ''
-  assert.ok((palette.match(/#[0-9A-Fa-f]{6}/g) || []).length >= 8)
-  assert.match(settings, /flex max-w-\[260px\] flex-wrap justify-end gap-2/)
-  assert.match(settings, /<SettingsRow title=\{t\('settings\.accentColor'\)\}/)
+  // Accent color picker was removed: brand accent is fixed, users no longer choose it.
+  assert.doesNotMatch(settings, /ACCENT_COLORS/)
+  assert.doesNotMatch(settings, /SET_ACCENT/)
+  assert.doesNotMatch(settings, /accentColor/)
 })
 
 test('skills and connections keep compact responsive surfaces across browser and desktop', () => {

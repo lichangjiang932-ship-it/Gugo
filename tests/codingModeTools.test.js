@@ -47,7 +47,10 @@ test('plan mode intersects enabled tools with the canonical server policy catalo
 
 test('code mode enables Claude/Codex workspace loop tools', () => {
   const enabled = resolveToolsForMode({}, 'code')
-  for (const name of ['read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check']) {
+  for (const name of ['run_code', 'read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check']) {
     assert.ok(enabled.includes(name), `${name} should be available in code mode`)
   }
+
+  const serverCodeNames = resolveSpecsForMode('code').map((entry) => entry.name)
+  assert.ok(serverCodeNames.includes('run_code'))
 })

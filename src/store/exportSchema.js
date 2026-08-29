@@ -106,7 +106,7 @@ export function parseImport(raw) {
       throw new InvalidExportError('settings payload 必须为对象')
     }
     // 字段类型软校验,缺失允许 (老导出没全字段)
-    const stringFields = ['theme', 'accentColor', 'fontSize', 'density']
+    const stringFields = ['theme', 'fontSize', 'density']
     for (const k of stringFields) {
       if (k in p && typeof p[k] !== 'string') {
         throw new InvalidExportError(`settings.${k} 必须为字符串`)

@@ -1,5 +1,4 @@
 import {
-  Check,
   ImagePlus,
   Mic,
   RotateCcw,
@@ -19,8 +18,6 @@ import {
 } from './SettingsPrimitives.jsx'
 
 export { SettingsPluginsPanel } from './SettingsPluginsPanel.jsx'
-
-const ACCENT_COLORS = ['#E86A3C', '#D94A64', '#B45DE5', '#7459E8', '#3D6FE0', '#2E8FA3', '#23A68B', '#A5C97A', '#D4A4FF', '#D59B32']
 
 export function SettingsPermissionsPanel({ navigate, t, state, enabledPermCount }) {
   return (
@@ -70,22 +67,6 @@ export function SettingsAppearancePanel({ t, state, dispatch }) {
             options={themeOptions}
             onChange={(value) => dispatch({ type: 'SET_THEME', payload: value })}
           />
-        </SettingsRow>
-        <SettingsRow title={t('settings.accentColor')} description={t('settings.accentColorDescription')} align="start">
-          <div className="flex max-w-[260px] flex-wrap justify-end gap-2">
-            {ACCENT_COLORS.map((color) => (
-              <button
-                key={color}
-                type="button"
-                onClick={() => dispatch({ type: 'SET_ACCENT', payload: color })}
-                className="relative h-6 w-6 rounded-full"
-                style={{ background: color, border: state.accentColor === color ? '2px solid var(--color-ink)' : '1px solid rgb(var(--color-ink-rgb) / 0.16)' }}
-                aria-label={t('settings.setAccentColor', { color })}
-              >
-                {state.accentColor === color ? <Check className="absolute inset-0 m-auto h-3.5 w-3.5 text-accent-contrast" /> : null}
-              </button>
-            ))}
-          </div>
         </SettingsRow>
       </SettingsGroup>
       <SettingsGroup>

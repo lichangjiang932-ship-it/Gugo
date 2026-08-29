@@ -56,6 +56,12 @@ if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'package-lock.json'))) 
 if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'THIRD_PARTY_NOTICES.md'))) {
   throw 'The Web release does not contain THIRD_PARTY_NOTICES.md'
 }
+if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'bin/yma-cli.js'))) {
+  throw 'The Web release does not contain bin/yma-cli.js'
+}
+if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'docs/CLI.md'))) {
+  throw 'The Web release does not contain docs/CLI.md'
+}
 if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'resources/licenses/LGPL-3.0.txt'))) {
   throw 'The Web release does not contain resources/licenses/LGPL-3.0.txt'
 }
@@ -65,6 +71,18 @@ try {
   $locationPushed = $true
   npm ci --omit=dev
   if ($LASTEXITCODE -ne 0) { throw 'Production dependency installation failed' }
+
+  $cliVersion = (& node 'bin/yma-cli.js' '--version' 2>&1 | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0) { throw 'The Web release CLI --version command failed' }
+  if ($cliVersion -ne $version) {
+    throw "The Web release CLI reported version '$cliVersion' instead of '$version'"
+  }
+
+  $cliHelp = (& node 'bin/yma-cli.js' '--help' 2>&1 | Out-String)
+  if ($LASTEXITCODE -ne 0) { throw 'The Web release CLI --help command failed' }
+  if ($cliHelp -notmatch '(?m)^Usage:' -or $cliHelp -notmatch 'gugo run') {
+    throw 'The Web release CLI --help output is incomplete'
+  }
 
   $env:SERVER_HOST = '127.0.0.1'
   $env:SERVER_PORT = "$port"

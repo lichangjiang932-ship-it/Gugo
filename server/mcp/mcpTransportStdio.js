@@ -17,10 +17,13 @@
  *   - 子进程 stdout 缓冲超过 1MB 强制断开（防止恶意 server 灌爆内存）
  */
 
-import { spawn, execFile } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { Buffer } from 'node:buffer'
+import { terminateProcessTree } from '../utils/processGroup.js'
 
 const STDOUT_BUFFER_LIMIT = 1024 * 1024 // 1MB
+const WINDOWS_FORCE_KILL_DELAY_MS = 3_000
+const STOP_WAIT_MS = 18_000
 
 // ★ P0:与 fsShellTools / gitWorkbench 共用统一规则(覆盖所有 *_API_KEY / *_TOKEN / *_SECRET / *_PASSWORD)
 import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
@@ -30,8 +33,20 @@ function sanitizeEnv(extra = {}) {
   return sanitizeChildEnv(extra, { allowExtraKeys: explicitKeys })
 }
 
+function hasChildExited(child) {
+  return child?.exitCode != null || child?.signalCode != null
+}
+
 export class StdioTransport {
-  constructor({ command, args = [], cwd = process.cwd(), env = {}, label = 'mcp' }) {
+  constructor(
+    { command, args = [], cwd = process.cwd(), env = {}, label = 'mcp' },
+    {
+      platform = process.platform,
+      terminateProcessTreeFn = terminateProcessTree,
+      forceKillDelayMs = WINDOWS_FORCE_KILL_DELAY_MS,
+      stopWaitMs = STOP_WAIT_MS,
+    } = {},
+  ) {
     this.command = command
     this.args = Array.isArray(args) ? args : []
     this.cwd = cwd
@@ -50,6 +65,12 @@ export class StdioTransport {
     this.intentionalStop = false
     this.closeEmitted = false
     this.exitEmitted = false
+    this.platform = platform
+    this.terminateProcessTreeFn = terminateProcessTreeFn
+    this.forceKillDelayMs = forceKillDelayMs
+    this.stopWaitMs = stopWaitMs
+    this.forceKillTimer = null
+    this.stopPromise = null
   }
 
   start() {
@@ -73,6 +94,7 @@ export class StdioTransport {
       this._rejectAll(err)
     })
     this.child.on('exit', (code, signal) => {
+      this._clearForceKillTimer()
       this.closed = true
       const reason = new Error(`MCP server "${this.label}" 已退出 (code=${code}, signal=${signal})`)
       this._rejectAll(reason)
@@ -81,6 +103,7 @@ export class StdioTransport {
       if (!this.intentionalStop) this._emitError(reason)
     })
     this.child.on('close', (code, signal) => {
+      this._clearForceKillTimer()
       this.closed = true
       const reason = new Error(`MCP server "${this.label}" 已关闭 (code=${code}, signal=${signal})`)
       this._emitClose({ code, signal, reason, intentional: this.intentionalStop })
@@ -99,16 +122,17 @@ export class StdioTransport {
   _handleStdout(chunk) {
     this.buffer += chunk
     this.bufferBytes += Buffer.byteLength(chunk)
-    if (this.bufferBytes > STDOUT_BUFFER_LIMIT) {
-      const err = new Error(`MCP server "${this.label}" stdout 超过 ${STDOUT_BUFFER_LIMIT} 字节, 强制断开`)
-      this._emitError(err)
-      this.stop()
-      return
-    }
+    let consumedLine = false
     let idx
     while ((idx = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, idx).trim()
+      const rawLine = this.buffer.slice(0, idx)
       this.buffer = this.buffer.slice(idx + 1)
+      consumedLine = true
+      if (Buffer.byteLength(rawLine) > STDOUT_BUFFER_LIMIT) {
+        this._stopForStdoutLimit()
+        return
+      }
+      const line = rawLine.trim()
       if (!line) continue
       let msg
       try {
@@ -119,6 +143,14 @@ export class StdioTransport {
       }
       this._dispatch(msg)
     }
+    if (consumedLine) this.bufferBytes = Buffer.byteLength(this.buffer)
+    if (this.bufferBytes > STDOUT_BUFFER_LIMIT) this._stopForStdoutLimit()
+  }
+
+  _stopForStdoutLimit() {
+    const err = new Error(`MCP server "${this.label}" stdout 超过 ${STDOUT_BUFFER_LIMIT} 字节, 强制断开`)
+    this._emitError(err)
+    this.stop()
   }
 
   _dispatch(msg) {
@@ -248,26 +280,64 @@ export class StdioTransport {
   }
 
   /**
-   * 优雅关闭。Windows 上 SIGTERM 对某些进程无效 → 3s 后 taskkill。
+   * 优雅关闭。Windows 上 SIGTERM 对某些进程无效 → 3s 后清理整个进程树。
    */
   stop() {
-    if (!this.child || this.closed) return
+    if (this.stopPromise) return this.stopPromise
+    if (!this.child || this.closed) return Promise.resolve(hasChildExited(this.child))
     this.intentionalStop = true
     this.closed = true
     const child = this.child
+    this.stopPromise = this._waitForChildExit(child)
     try { child.stdin.end() } catch { /* ignore */ }
     try { child.kill() } catch { /* ignore */ }
-    if (process.platform === 'win32' && child.pid) {
-      setTimeout(() => {
-        try {
-          execFile('taskkill', ['/T', '/F', '/PID', String(child.pid)], {
-            env: sanitizeChildEnv(),
-            windowsHide: true,
-          }, () => {})
-        } catch { /* best effort */ }
-      }, 3000)
-    }
+    this._scheduleForceKill(child)
     this._rejectAll(new Error(`MCP "${this.label}" 主动关闭`))
+    return this.stopPromise
+  }
+
+  _clearForceKillTimer() {
+    if (!this.forceKillTimer) return
+    clearTimeout(this.forceKillTimer)
+    this.forceKillTimer = null
+  }
+
+  _scheduleForceKill(child) {
+    if (this.platform !== 'win32' || !Number.isInteger(child?.pid) || child.pid <= 0) return
+    const pid = child.pid
+    const timer = setTimeout(() => {
+      if (this.forceKillTimer !== timer) return
+      this.forceKillTimer = null
+      if (this.child !== child || hasChildExited(child)) return
+      try {
+        void Promise.resolve(this.terminateProcessTreeFn({ pid, child })).catch(() => {})
+      } catch { /* best effort */ }
+    }, this.forceKillDelayMs)
+    timer.unref?.()
+    this.forceKillTimer = timer
+  }
+
+  _waitForChildExit(child) {
+    if (hasChildExited(child)) return Promise.resolve(true)
+    if (typeof child?.once !== 'function') return Promise.resolve(false)
+    return new Promise((resolve) => {
+      let settled = false
+      let waitTimer = null
+      const finish = (exited) => {
+        if (settled) return
+        settled = true
+        if (waitTimer) clearTimeout(waitTimer)
+        child.off?.('exit', onExit)
+        child.off?.('close', onExit)
+        if (exited) this._clearForceKillTimer()
+        resolve(Boolean(exited))
+      }
+      const onExit = () => finish(true)
+      child.once('exit', onExit)
+      child.once('close', onExit)
+      waitTimer = setTimeout(() => finish(hasChildExited(child)), this.stopWaitMs)
+      waitTimer.unref?.()
+    })
   }
 
   isAlive() {

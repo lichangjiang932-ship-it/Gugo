@@ -160,6 +160,113 @@ test('model status exposes Provider UUID, config revision, and revision-bound re
   assert.equal(untested.readiness, null)
 })
 
+test('full health uses the authenticated user Provider without leaking it across users', async () => {
+  const owner = issueTestSession({ email: 'doctor-provider-owner@example.com' })
+  const outsider = issueTestSession({ email: 'doctor-provider-outsider@example.com' })
+  const modelName = 'mimo-v2.5'
+  const provider = upsertModelProvider({
+    userId: owner.userId,
+    provider: {
+      key: 'doctor-provider',
+      label: 'Doctor Provider',
+      baseUrl: 'https://api.example.test/v1',
+      apiKey: 'doctor-provider-secret',
+      models: [modelName],
+      defaultModel: modelName,
+      enabled: true,
+      isDefault: true,
+      kind: 'openai-compatible',
+    },
+  })
+  recordModelProviderReadiness({
+    userId: owner.userId,
+    id: provider.id,
+    modelName,
+    expectedConfigRevision: provider.configRevision,
+    readiness: { chat: true, tools: true, agent: true, mode: 'agent' },
+  })
+
+  const origin = new URL(baseUrl).origin
+  const [ownerResponse, outsiderResponse] = await Promise.all([
+    fetch(`${origin}/api/health/full`, { headers: headers(owner.token) }),
+    fetch(`${origin}/api/health/full`, { headers: headers(outsider.token) }),
+  ])
+  const [ownerBody, outsiderBody] = await Promise.all([
+    ownerResponse.json(),
+    outsiderResponse.json(),
+  ])
+
+  assert.equal(ownerResponse.status, 200)
+  assert.equal(ownerBody.ok, true)
+  assert.equal(ownerBody.model.configured, true)
+  assert.equal(ownerBody.model.agentReady, true)
+  assert.equal(ownerBody.model.readinessCode, null)
+  assert.equal(ownerBody.model.code, null)
+  assert.equal(ownerBody.model.action, null)
+  assert.equal(ownerBody.model.modelName, modelName)
+  assert.equal(JSON.stringify(ownerBody).includes('doctor-provider-secret'), false)
+
+  assert.equal(outsiderResponse.status, 503)
+  assert.equal(outsiderBody.ok, false)
+  assert.equal(outsiderBody.model.configured, false)
+  assert.equal(outsiderBody.model.agentReady, false)
+  assert.equal(outsiderBody.model.readinessCode, 'MODEL_CONFIG_MISSING')
+  assert.equal(outsiderBody.model.code, 'MODEL_CONFIG_MISSING')
+  assert.equal(outsiderBody.model.action, 'configure_model')
+  assert.equal(outsiderBody.model.modelName, null)
+  assert.equal(outsiderBody.model.missing, undefined)
+  assert.doesNotMatch(JSON.stringify(outsiderBody), /MODEL_(?:API_KEY|BASE_URL|NAME)/)
+  assert.doesNotMatch(JSON.stringify(outsiderBody), /[\u3400-\u9fff]/u)
+})
+
+test('full health rejects a configured default Provider that is not Agent-ready', async () => {
+  const session = issueTestSession({ email: 'doctor-provider-unavailable@example.com' })
+  const modelName = 'doctor-unavailable-model'
+  const provider = upsertModelProvider({
+    userId: session.userId,
+    provider: {
+      key: 'doctor-unavailable-provider',
+      label: 'Doctor unavailable Provider',
+      baseUrl: 'https://unavailable.example.test/v1',
+      apiKey: 'doctor-unavailable-secret',
+      models: [modelName],
+      defaultModel: modelName,
+      enabled: true,
+      isDefault: true,
+      kind: 'openai-compatible',
+    },
+  })
+  recordModelProviderReadiness({
+    userId: session.userId,
+    id: provider.id,
+    modelName,
+    expectedConfigRevision: provider.configRevision,
+    readiness: {
+      chat: false,
+      tools: false,
+      agent: false,
+      mode: 'unavailable',
+      errorCode: 'UPSTREAM_UNAVAILABLE',
+    },
+  })
+
+  const response = await fetch(`${new URL(baseUrl).origin}/api/health/full`, {
+    headers: headers(session.token),
+  })
+  const body = await response.json()
+
+  assert.equal(response.status, 503)
+  assert.equal(body.ok, false)
+  assert.equal(body.model.configured, true)
+  assert.equal(body.model.agentReady, false)
+  assert.equal(body.model.readinessCode, 'MODEL_PROVIDER_UNAVAILABLE')
+  assert.equal(body.model.code, 'MODEL_PROVIDER_UNAVAILABLE')
+  assert.equal(body.model.action, 'test_provider')
+  assert.equal(body.model.modelName, modelName)
+  assert.doesNotMatch(JSON.stringify(body), /doctor-unavailable-secret|UPSTREAM_UNAVAILABLE/)
+  assert.doesNotMatch(JSON.stringify(body), /[\u3400-\u9fff]/u)
+})
+
 test('legacy model chat binds a same-named model to the selected Provider UUID', async () => {
   const hits = { primary: 0, selected: 0 }
   const createUpstream = (name) => http.createServer(async (req, res) => {

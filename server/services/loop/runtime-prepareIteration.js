@@ -62,5 +62,8 @@ export async function prepareIteration(s) {
         s.convo.push(buildAssistantToolCallsMessage(s.checkpointCalls, ''))
         await s.persistTurn()
       }
+  if (!s.checkpointCalls?.length && s.prepareFinalAnswerEvidenceReview()) {
+    await s.persistTurn({ boundary: 'final-answer-evidence-review' })
+  }
   return { kind: 'next' }
 }

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { normalizeModelUsage } from '../../shared/modelUsage.js'
+import { modelAuthoredTurnEvidenceText } from '../../shared/turnEvidenceText.js'
 import { TRUNCATED_TOOL_RESULT_METADATA_KEY } from '../utils/toolCallHarness.js'
 import { resolveAuthorizedLocalPath } from './localFileAccessService.js'
 
@@ -773,6 +774,19 @@ function textContent(value) {
     .join('\n')
 }
 
+function storedModelAuthoredContent(message, context) {
+  const content = String(context?.modelContent ?? message?.content ?? '')
+
+  const state = context?.turnEvidence === true ? String(context.evidenceState || '').trim() : ''
+  if (!['blocked', 'cancelled', 'failed', 'interrupted'].includes(state)) return content
+
+  const failureValue = context?.error
+  const failureMessage = typeof failureValue === 'object' && failureValue !== null
+    ? String(failureValue.message || failureValue.error || '').trim()
+    : String(failureValue || '').trim()
+  return modelAuthoredTurnEvidenceText({ content, failureMessage, state })
+}
+
 function storedMessageToWire(message) {
   // System blocks are rebuilt by promptCompiler for every request. Replaying a
   // stored/imported system row would duplicate stale identity, skill, runtime,
@@ -785,7 +799,7 @@ function storedMessageToWire(message) {
     : null
   const wire = {
     role: message.role,
-    content: String(context?.modelContent ?? message.content ?? ''),
+    content: storedModelAuthoredContent(message, context),
   }
   const managedAttachments = message.role === 'user'
     ? normalizeManagedAttachmentRefs(context?.attachments)
@@ -806,7 +820,7 @@ function priorTurnOutcomeWire(message) {
     ? message.modelContext
     : null
   const state = context?.turnEvidence === true ? String(context.evidenceState || '').trim() : ''
-  if (!['failed', 'interrupted'].includes(state)) return null
+  if (!['blocked', 'failed', 'interrupted'].includes(state)) return null
   const errorValue = context?.error
   const error = errorValue && typeof errorValue === 'object'
     ? {

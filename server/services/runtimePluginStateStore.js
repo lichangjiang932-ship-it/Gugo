@@ -431,6 +431,7 @@ export function activateRuntimePluginRelease({
   expectedEnabled = true,
   permissionRequest = null,
   persistPermissionGrant = false,
+  rollbackReceipt = null,
   now = Date.now(),
 }) {
   const id = normalizePluginId(pluginId)
@@ -440,11 +441,33 @@ export function activateRuntimePluginRelease({
   const expectedRevision = normalizeRevision(expectedReleaseRevision, 'expectedReleaseRevision')
   if (typeof expectedEnabled !== 'boolean') throw new TypeError('expectedEnabled must be boolean')
   const timestamp = normalizeTimestamp(now)
+  let receipt = null
+  if (rollbackReceipt != null) {
+    if (!rollbackReceipt || typeof rollbackReceipt !== 'object') {
+      throw new TypeError('rollbackReceipt must be an object')
+    }
+    const fromId = normalizeReleaseId(rollbackReceipt.fromReleaseId, { nullable: true })
+    const toId = normalizeReleaseId(rollbackReceipt.toReleaseId)
+    if (toId !== activeId) throw new TypeError('rollbackReceipt.toReleaseId must equal releaseId')
+    const status = String(rollbackReceipt.status || '')
+    if (!['succeeded', 'failed'].includes(status)) {
+      throw new TypeError('rollback status must be succeeded or failed')
+    }
+    receipt = {
+      fromId,
+      toId,
+      status,
+      summary: normalizeError(rollbackReceipt.reason),
+    }
+  }
   const db = getDb()
   db.transaction(() => {
     requireReadyRelease(db, id, activeId)
     if (previousId) {
       requireReleaseReference(db, id, previousId, 'previousReleaseId')
+    }
+    if (receipt?.fromId) {
+      requireReleaseReference(db, id, receipt.fromId, 'rollbackReceipt.fromReleaseId')
     }
     const changed = db.prepare(`
       UPDATE runtime_plugin_states SET
@@ -470,6 +493,33 @@ export function activateRuntimePluginRelease({
     )
     if (changed.changes !== 1) throw releaseStateConflict()
     commitPermissionGrant(db, { permissionRequest, persistPermissionGrant, now: timestamp })
+    if (receipt) {
+      const audited = db.prepare(`
+        UPDATE runtime_plugin_states SET
+          last_error = ?,
+          updated_at = ?,
+          last_rollback_status = ?,
+          last_rollback_from_release_id = ?,
+          last_rollback_to_release_id = ?,
+          last_rollback_reason = ?,
+          last_rollback_at = ?
+        WHERE plugin_id = ?
+          AND active_release_id = ?
+          AND release_revision = ?
+      `).run(
+        receipt.summary,
+        timestamp,
+        receipt.status,
+        receipt.fromId,
+        receipt.toId,
+        receipt.summary,
+        timestamp,
+        id,
+        activeId,
+        expectedRevision + 1,
+      )
+      if (audited.changes !== 1) throw releaseStateConflict()
+    }
   })()
   return getRuntimePluginState(id)
 }

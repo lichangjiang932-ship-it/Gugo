@@ -181,6 +181,9 @@ export function isSuccessfulPdfLayoutVerification(call, result) {
   const command = String(call?.args?.command || '')
   if (command.includes(PDF_LAYOUT_VERIFICATION_OK)) return false
   const output = `${String(result?.stdout || '')}\n${String(result?.stderr || '')}`
-  if (!new RegExp(`(?:^|\\r?\\n)${PDF_LAYOUT_VERIFICATION_OK}(?:\\r?\\n|$)`).test(output)) return false
+  const resultMarker = new RegExp(
+    `(?:^|\\r?\\n)(?:RESULT:\\s*)?${PDF_LAYOUT_VERIFICATION_OK}(?:\\r?\\n|$)`,
+  )
+  if (!resultMarker.test(output)) return false
   return PDF_LAYOUT_VALIDATOR_COMMAND.test(command) || isReadOnlyPythonVerificationCall(call)
 }

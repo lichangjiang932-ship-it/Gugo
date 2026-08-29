@@ -6,6 +6,7 @@ import {
   buildChatFailureDisplayKey,
   buildChatFailureMessage,
   getVisibleModelErrorMessage,
+  getVisibleTurnClarification,
   isModelPreExecutionFailure,
   isModelSetupFailure,
   isPreExecutionFailure,
@@ -16,6 +17,19 @@ import { translations } from '../src/i18n/translations.js'
 
 const COPY = {
   'errors.chatFailure': '任务执行遇到问题，尚未完成。',
+  'errors.turnReasoningRunaway': '模型推理超过安全上限。',
+  'errors.turnRepeatedToolCall': '工具调用重复且没有进展。',
+  'errors.turnRetryLimitReached': '恢复后仍未完成。',
+  'errors.turnIncomplete': '任务尚未完全通过验证。',
+  'errors.turnToolErrorStreak': '多个工具调用连续失败。',
+  'errors.turnNoProgress': '任务长时间没有新进展。',
+  'errors.turnModelInterrupted': '模型服务在任务执行期间中断。',
+  'errors.turnPersistenceFailure': '任务事件无法可靠保存。',
+  'errors.turnRuntimeCapabilityMissing': '任务运行环境缺少模型或提示词执行能力。',
+  'errors.turnCheckpointFailure': '任务检查点无法可靠保存。',
+  'errors.turnExecutionContextChanged': '保存的执行环境与当前配置不一致。',
+  'errors.turnRecoveryBlocked': '自动恢复已停止，需先核对实际结果。',
+  'errors.clarificationRequired': '需要你补充信息后才能继续。',
   'errors.runtimeUnavailable': '本地运行时正在启动或重启，消息尚未发出。请稍后重试。',
   'errors.runtimeInterrupted': '本地运行时在任务执行期间停止或重启。本次执行已中断，已完成的进度会保留；请等待运行时就绪后继续。',
   'errors.modelConfigurationFailure': '模型服务尚未正确配置。',
@@ -49,7 +63,7 @@ test('chat failure copy never exposes internal artifact errors or incomplete-fil
   assert.doesNotMatch(text, /Model call failed|requested file|create_html_app|任务未完全完成|已保留生成的文件/i)
 })
 
-test('deterministic loop failures show their sanitized reason instead of a generic retry nudge', () => {
+test('deterministic loop failures use localized code mappings instead of server copy', () => {
   const detail = '同一工具调用在最近 8 次调用中已重复 3 次，未取得实质进展'
   const failure = {
     role: 'assistant',
@@ -64,8 +78,9 @@ test('deterministic loop failures show their sanitized reason instead of a gener
     },
   }
 
-  assert.equal(buildChatFailureMessage(failure, t), `\n\n${detail}`)
-  assert.equal(getVisibleModelErrorMessage(failure, t), detail)
+  assert.equal(buildChatFailureMessage(failure, t), `\n\n${COPY['errors.turnRepeatedToolCall']}`)
+  assert.equal(getVisibleModelErrorMessage(failure, t), COPY['errors.turnRepeatedToolCall'])
+  assert.doesNotMatch(buildChatFailureMessage(failure, t), new RegExp(detail))
 
   const unknown = {
     ...failure,
@@ -81,7 +96,64 @@ test('deterministic loop failures show their sanitized reason instead of a gener
     code: 'TURN_FAILED_RETRY_LIMIT_REACHED',
     retryable: false,
   }
-  assert.match(getVisibleModelErrorMessage(exhausted, t), /执行过一次断点续写/)
+  assert.equal(getVisibleModelErrorMessage(exhausted, t), COPY['errors.turnRetryLimitReached'])
+
+  const mappings = new Map([
+    ['REASONING_RUNAWAY', 'errors.turnReasoningRunaway'],
+    ['REPEATED_TOOL_CALL', 'errors.turnRepeatedToolCall'],
+    ['MODEL_CALL_INTERRUPTED', 'errors.turnModelInterrupted'],
+    ['TURN_EVENT_PERSISTENCE_FAILED', 'errors.turnPersistenceFailure'],
+    ['TURN_TERMINAL_PERSISTENCE_FAILED', 'errors.turnPersistenceFailure'],
+    ['TURN_MODEL_RUNTIME_NOT_CONFIGURED', 'errors.turnRuntimeCapabilityMissing'],
+    ['TURN_PROMPT_RUNTIME_NOT_CONFIGURED', 'errors.turnRuntimeCapabilityMissing'],
+    ['TURN_ATOMIC_CHECKPOINT_UNSUPPORTED', 'errors.turnCheckpointFailure'],
+    ['TURN_ATOMIC_CHECKPOINT_COMMIT_MISMATCH', 'errors.turnCheckpointFailure'],
+    ['TURN_CHECKPOINT_PERSISTENCE_FAILED', 'errors.turnCheckpointFailure'],
+    ['TURN_PERMISSION_CONTEXT_DRIFT', 'errors.turnExecutionContextChanged'],
+    ['PLUGIN_RELEASE_CORRUPT', 'errors.turnExecutionContextChanged'],
+    ['SIDE_EFFECT_LEDGER_CONFLICT', 'errors.turnRecoveryBlocked'],
+    ['TURN_INCOMPLETE', 'errors.turnIncomplete'],
+    ['TOOL_ERROR_STREAK', 'errors.turnToolErrorStreak'],
+    ['TOOL_NO_PROGRESS_HARD_LIMIT', 'errors.turnNoProgress'],
+  ])
+  for (const [code, key] of mappings) {
+    assert.equal(getVisibleModelErrorMessage({
+      code,
+      message: `服务端诊断：${code}`,
+      retryable: code === 'TURN_INCOMPLETE',
+    }, t), COPY[key], code)
+  }
+
+  assert.equal(getVisibleModelErrorMessage({
+    meta: {
+      interrupted: true,
+      serverFailure: { code: 'MODEL_CALL_INTERRUPTED' },
+    },
+  }, t), COPY['errors.turnModelInterrupted'])
+})
+
+test('provider HTTP and first-token timeout codes retain actionable model causes', () => {
+  const mappings = new Map([
+    ['MODEL_HTTP_401', 'errors.modelAuthenticationFailed'],
+    ['MODEL_HTTP_403', 'errors.modelAuthenticationFailed'],
+    ['MODEL_HTTP_404', 'errors.modelEndpointNotFound'],
+    ['MODEL_HTTP_408', 'errors.modelEndpointTimeout'],
+    ['MODEL_HTTP_503', 'errors.modelEndpointUnavailable'],
+    ['MODEL_HTTP_504', 'errors.modelEndpointTimeout'],
+    ['MODEL_FIRST_TOKEN_TIMEOUT', 'errors.modelEndpointTimeout'],
+  ])
+  for (const [code, key] of mappings) {
+    const error = { code, message: `internal diagnostic for ${code}` }
+    assert.equal(isModelSetupFailure(error), true, code)
+    assert.equal(getVisibleModelErrorMessage(error, t), COPY[key], code)
+  }
+
+  assert.equal(getVisibleModelErrorMessage({
+    meta: {
+      interrupted: true,
+      serverFailure: { code: 'MODEL_HTTP_503', retryable: true },
+    },
+  }, t), COPY['errors.modelEndpointUnavailable'])
 })
 
 test('failure display keys collapse the same turn and failure code', () => {
@@ -92,6 +164,17 @@ test('failure display keys collapse the same turn and failure code', () => {
   assert.equal(
     buildChatFailureDisplayKey('turn-1', { code: 'ARTIFACT_NOT_CREATED' }),
     'turn-1:ARTIFACT_NOT_CREATED',
+  )
+})
+
+test('code-only clarification fallbacks are localized while legacy questions remain compatible', () => {
+  assert.equal(
+    getVisibleTurnClarification({ reason_code: 'clarification_required' }, t),
+    COPY['errors.clarificationRequired'],
+  )
+  assert.equal(
+    getVisibleTurnClarification({ question: 'Which output format?' }, t),
+    'Which output format?',
   )
 })
 
@@ -329,6 +412,19 @@ test('only local readiness failures without execution evidence are safe to resen
 test('model failure copy is present in every supported language', () => {
   const keys = [
     'chatFailure',
+    'turnReasoningRunaway',
+    'turnRepeatedToolCall',
+    'turnRetryLimitReached',
+    'turnIncomplete',
+    'turnToolErrorStreak',
+    'turnNoProgress',
+    'turnModelInterrupted',
+    'turnPersistenceFailure',
+    'turnRuntimeCapabilityMissing',
+    'turnCheckpointFailure',
+    'turnExecutionContextChanged',
+    'turnRecoveryBlocked',
+    'clarificationRequired',
     'runtimeUnavailable',
     'runtimeInterrupted',
     'modelConfigurationFailure',

@@ -4,6 +4,7 @@ import {
   inspectToolLoopModelResponse,
 } from '../../core/toolLoopAdapter.js'
 import { isLoopPauseResult } from '../../utils/agenticTools.js'
+import { requiresPerCallApproval } from '../../utils/approvalPolicy.js'
 import {
   filterCurrentDynamicToolSpecs,
   getToolMetadata,
@@ -59,6 +60,14 @@ import { processModelResult } from './runtime-processModelResult.js'
 import { finalizeRuntime } from './runtime-finalizeRuntime.js'
 import { assertRuntimeDependencies } from './runtimeContract.js'
 import { isTrustedInternalLoopPrincipal } from './internalExecutionPrincipal.js'
+import {
+  appendFinalAnswerToolEvidence,
+  buildFinalAnswerEvidenceReviewPrompt,
+  buildFinalAnswerEvidenceSnapshot,
+  collectFinalAnswerToolEvidence,
+  finalAnswerEvidenceDigest,
+  normalizeFinalAnswerToolEvidence,
+} from './finalAnswerEvidenceReview.js'
 import {
   createSideEffectScope,
   getSideEffectExecutionLedger,
@@ -190,7 +199,11 @@ const runtimeDependencies = {
   VERIFIED_DIRECTORY_RESOLUTION,
   allowedArtifactTools,
   attachJobBudget,
+  appendFinalAnswerToolEvidence,
   buildAssistantToolCallsMessage,
+  buildFinalAnswerEvidenceReviewPrompt,
+  buildFinalAnswerEvidenceSnapshot,
+  collectFinalAnswerToolEvidence,
   buildJobToolIdempotencyKey,
   buildPdfLayoutExecutionContract,
   buildRepresentativeReadCalls,
@@ -226,6 +239,7 @@ const runtimeDependencies = {
   extractMutationTargets,
   extractTextToolCalls,
   filterCurrentDynamicToolSpecs,
+  finalAnswerEvidenceDigest,
   findAdjacentDeliveredArtifacts,
   findContinuableArtifactTargets,
   findExplicitlyReferencedDeliveredArtifacts,
@@ -270,6 +284,7 @@ const runtimeDependencies = {
   mapWithConcurrency,
   mergeCompactionRecovery,
   normalizeArtifactIdList,
+  normalizeFinalAnswerToolEvidence,
   normalizeCompactionRecovery,
   normalizeMutationTarget,
   normalizeToolCalls,
@@ -285,6 +300,7 @@ const runtimeDependencies = {
   recordRecoveredModelResult,
   rememberApprovedSubagentCall,
   replaceRuntimeCapabilityBlock,
+  requiresPerCallApproval,
   requestApproval,
   requestedArtifactOutputDirective,
   requestedPdfSectionLabel,

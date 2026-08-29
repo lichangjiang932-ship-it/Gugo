@@ -242,7 +242,12 @@ test('checkpoint and current approval modes keep their distinct precedence', asy
 })
 
 test('resolver failure records discovery loss and still applies the host projection', async () => {
-  const baseToolSpecs = [spec('read_file'), spec('write_file'), spec('request_directory')]
+  const baseToolSpecs = [
+    spec('read_file'),
+    spec('write_file'),
+    spec('request_directory'),
+    spec('lsp'),
+  ]
   const runtime = createTurnExecutionToolContextRuntime({
     readApprovalMode: () => 'plan',
     readFileAccessStatus: writableFileAccess,
@@ -263,5 +268,10 @@ test('resolver failure records discovery loss and still applies the host project
     entry.name === 'write_file'
       && entry.stage === 'permission'
       && entry.reason === 'permission_mode_plan'
+  )))
+  assert.ok(context.toolResolutionDecision.excludedTools.some((entry) => (
+    entry.name === 'lsp'
+      && entry.stage === 'availability'
+      && entry.reason === 'lsp_not_configured'
   )))
 })

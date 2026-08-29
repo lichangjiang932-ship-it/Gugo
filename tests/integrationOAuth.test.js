@@ -393,6 +393,112 @@ test('failed Google Drive refresh preserves the last stored token pair', async (
   assert.equal(preserved.secret.expiresAt, '1000')
 })
 
+test('OAuth refresh refuses cloud metadata DNS before sending refresh credentials', async () => {
+  const userId = issueTestSession({ email: 'oauth-refresh-metadata@example.com' }).userId
+  upsertIntegration({
+    userId,
+    provider: 'google_drive',
+    name: 'Google Drive',
+    enabled: true,
+    config: { authSource: 'oauth' },
+    secret: {
+      token: 'expired-access-token',
+      refreshToken: 'metadata-protected-refresh-token',
+      expiresAt: '1000',
+    },
+  })
+  let fetchCalls = 0
+  await assert.rejects(
+    getOAuthAccessToken({
+      userId,
+      provider: 'google_drive',
+      env: ENV,
+      now: 2000,
+      lookup: async () => [{ address: '169.254.169.254', family: 4 }],
+      fetchImpl: async () => {
+        fetchCalls += 1
+        return jsonResponse({ access_token: 'must-not-be-returned' })
+      },
+    }),
+    (error) => error?.code === 'OAUTH_TOKEN_EXCHANGE_FAILED'
+      && error?.cause?.code === 'OUTBOUND_ADDRESS_DENIED',
+  )
+  assert.equal(fetchCalls, 0)
+})
+
+test('OAuth authorization-code secrets are not forwarded across a 307 redirect', async () => {
+  const userId = issueTestSession({ email: 'oauth-code-cross-origin@example.com' }).userId
+  const started = startOAuthConnection({ userId, provider: 'github', env: ENV })
+  const requests = []
+  const completed = await completeOAuthConnection({
+    provider: 'github',
+    state: authState(started),
+    code: 'redirect-protected-code',
+    env: ENV,
+    lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+    fetchImpl: async (url, init = {}) => {
+      requests.push({ url: String(url), init })
+      return new Response(null, {
+        status: 307,
+        headers: { location: 'https://credential-thief.example.test/oauth' },
+      })
+    },
+  })
+
+  assert.equal(completed.status, 'failed')
+  assert.equal(completed.error, 'OAuth token request was blocked or unavailable')
+  assert.equal(requests.length, 1)
+  assert.equal(requests[0].url, 'https://github.com/login/oauth/access_token')
+  assert.equal(requests[0].init.redirect, 'manual')
+  assert.match(String(requests[0].init.body), /code=redirect-protected-code/)
+  assert.equal(requests.some(({ url }) => url.includes('credential-thief.example.test')), false)
+})
+
+test('OAuth refresh revalidates DNS after a same-origin redirect', async () => {
+  const userId = issueTestSession({ email: 'oauth-refresh-rebinding@example.com' }).userId
+  upsertIntegration({
+    userId,
+    provider: 'google_drive',
+    name: 'Google Drive',
+    enabled: true,
+    config: { authSource: 'oauth' },
+    secret: {
+      token: 'expired-rebinding-token',
+      refreshToken: 'rebinding-protected-refresh-token',
+      expiresAt: '1000',
+    },
+  })
+  let lookupCalls = 0
+  const requests = []
+  await assert.rejects(
+    getOAuthAccessToken({
+      userId,
+      provider: 'google_drive',
+      env: ENV,
+      now: 2000,
+      lookup: async () => {
+        lookupCalls += 1
+        return [{
+          address: lookupCalls === 1 ? '93.184.216.34' : '10.23.45.67',
+          family: 4,
+        }]
+      },
+      fetchImpl: async (url, init = {}) => {
+        requests.push({ url: String(url), init })
+        return new Response(null, {
+          status: 307,
+          headers: { location: '/token/continued' },
+        })
+      },
+    }),
+    (error) => error?.code === 'OAUTH_TOKEN_EXCHANGE_FAILED'
+      && error?.cause?.code === 'OUTBOUND_ADDRESS_DENIED',
+  )
+  assert.equal(lookupCalls, 2)
+  assert.equal(requests.length, 1)
+  assert.match(String(requests[0].init.body), /refresh_token=rebinding-protected-refresh-token/)
+})
+
 test('OAuth routes require auth, expose start/status, and report missing server config', async () => {
   const { token } = issueTestSession({ email: 'oauth-routes@example.com' })
   await withServer(() => ENV, async (base) => {

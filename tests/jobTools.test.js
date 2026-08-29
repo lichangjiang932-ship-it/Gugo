@@ -535,7 +535,10 @@ test('max-iteration wrap-up filters source from terminal text, events, and check
 
   assert.equal(modelCalls, 2)
   assert.deepEqual(result.artifactIds, ['max-iteration-docx-artifact'])
-  assert.equal(result.text, '任务尚未通过最终验收。已提交到本地的文件仍会保留并显示其验证状态；未通过验证的受管理产物不会作为最终交付。请重试以继续。')
+  assert.equal(
+    result.text,
+    '任务尚未通过最终验收。已提交到本地的文件仍会保留并显示其验证状态；未通过验证的受管理产物不会作为最终交付。请重试以继续。\n\n已经完成的部分：\n- create_docx：文件：迭代上限文档.docx',
+  )
   assert.equal(result.text.includes('<!doctype html>'), false)
   assert.equal(result.text.includes('请自行保存并运行'), false)
   assert.equal(phases.some((event) => String(event.content || '').includes('copy me')), false)
@@ -549,6 +552,7 @@ test('planning exploration runs three isolated read-only explorers concurrently 
   const planningNames = selectPlanningToolSpecs('修复项目刷新').map((spec) => spec.function.name)
   assert.ok(planningNames.includes('grep_code'))
   assert.ok(planningNames.includes('read_file'))
+  assert.equal(planningNames.includes('lsp'), false)
   assert.equal(planningNames.includes('write_file'), false)
   assert.equal(planningNames.includes('bash_exec'), false)
   assert.equal(planningNames.some((name) => name.startsWith('browser_')), false)

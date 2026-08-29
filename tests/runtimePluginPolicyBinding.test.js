@@ -1,17 +1,37 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 
-import {
+const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-runtime-plugin-policy-'))
+process.env.APP_DATA_DIR = TMP_DIR
+process.env.GUGO_LOAD_DOTENV = '0'
+
+const {
   acquireRuntimePolicy,
   getActiveRuntimePolicyProvenance,
   listEffectiveRuntimeCapabilityBindings,
   prepareRuntimeCapabilitySnapshot,
-} from '../server/core/runtimeCapabilityHost.js'
-import {
+} = await import('../server/core/runtimeCapabilityHost.js')
+const {
   getRuntimePlugin,
   registerPlugin,
   unregisterPlugin,
-} from '../server/plugins/pluginRegistry.js'
+} = await import('../server/plugins/pluginRegistry.js')
+const {
+  releaseApproval,
+  requestApproval,
+  revalidateToolPermission,
+} = await import('../server/services/approvalGate.js')
+const {
+  decideApproval,
+  listPendingApprovals,
+} = await import('../server/services/approvalStore.js')
+const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
+const { createJob } = await import('../server/services/jobStore.js')
+const { closeDb } = await import('../server/db.js')
+const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const BUILTIN_POLICY_ID = 'builtin.harness-policy'
 const POLICY_DIGEST = `sha256-${'c'.repeat(64)}`
@@ -48,13 +68,27 @@ function policyBinding() {
     .find((entry) => entry.binding === 'policy:policy') || null
 }
 
+async function waitForPendingApproval(userId, { tries = 200 } = {}) {
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    const [approval] = listPendingApprovals({ userId, status: 'pending' })
+    if (approval) return approval
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error('timed out waiting for pending approval')
+}
+
 test.before(async () => {
   await prepareRuntimeCapabilitySnapshot({
     env: {
-      APP_DATA_DIR: 'Z:\\gugo-runtime-plugin-policy-missing',
+      APP_DATA_DIR: TMP_DIR,
       GUGO_LOAD_DOTENV: '0',
     },
   })
+})
+
+test.after(() => {
+  closeDb()
+  fs.rmSync(TMP_DIR, { recursive: true, force: true })
 })
 
 test('runtime plugin policy replaces executable classification, exposes provenance, and restores builtin', async () => {
@@ -118,6 +152,78 @@ test('runtime plugin policy replaces executable classification, exposes provenan
     args: { path: 'README.md' },
     options: { origin: 'job' },
   }).decision, 'allow')
+})
+
+test('runtime policy allow cannot waive run_code per-call human approval', async () => {
+  const pluginId = 'run-code-allow-policy-plugin'
+  const session = issueTestSession({
+    email: `runtime-policy-run-code-${process.pid}@example.com`,
+  })
+  const jobId = `runtime-policy-run-code-job-${process.pid}`
+  const args = { code: 'return 6 * 7', description: 'Calculate an answer' }
+  createJob({ id: jobId, userId: session.userId, title: 'run_code policy guard', prompt: 'test' })
+  setApprovalMode({ userId: session.userId, mode: 'bypass' })
+
+  await registerPlugin(manifest(pluginId, [`policy:${policyId(pluginId)}`]), (context) => {
+    registerPolicy(context, pluginId, () => ({
+      decision: 'allow',
+      risk: 'low',
+      reason: 'plugin attempted to waive approval',
+    }))
+  })
+
+  const controller = new AbortController()
+  let pending
+  try {
+    const preApprovalCheck = revalidateToolPermission({
+      userId: session.userId,
+      origin: 'job',
+      toolName: 'run_code',
+      args,
+      allowAsk: false,
+    })
+    assert.equal(preApprovalCheck.proceed, false)
+    assert.equal(preApprovalCheck.approvalRequired, true)
+
+    const terminalPermissionRevalidation = revalidateToolPermission({
+      userId: session.userId,
+      origin: 'job',
+      toolName: 'run_code',
+      args,
+      allowAsk: true,
+    })
+    assert.equal(terminalPermissionRevalidation.proceed, true)
+
+    pending = requestApproval({
+      userId: session.userId,
+      origin: 'job',
+      jobId,
+      toolName: 'run_code',
+      args,
+      mode: 'unattended',
+      signal: controller.signal,
+    })
+    const approval = await waitForPendingApproval(session.userId)
+    assert.equal(approval.toolName, 'run_code')
+    assert.equal(approval.risk, 'high')
+    assert.equal(decideApproval({
+      userId: session.userId,
+      id: approval.id,
+      decision: 'approve',
+    }).ok, true)
+    releaseApproval(approval.id)
+
+    const result = await pending
+    pending = null
+    assert.equal(result.proceed, true)
+    assert.equal(result.approvalId, approval.id)
+  } finally {
+    controller.abort()
+    if (pending) await pending
+    await unregisterPlugin(pluginId)
+  }
+
+  assert.equal(policyBinding()?.id, BUILTIN_POLICY_ID)
 })
 
 test('plugin policy registration rejects undeclared, malformed, implicit, and low-priority replacements without residue', async () => {

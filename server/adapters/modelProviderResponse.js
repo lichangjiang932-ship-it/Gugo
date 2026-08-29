@@ -172,8 +172,11 @@ export function extractUsage(data) {
   })
 }
 
-function normalizeCompatibleFinishReason(value, hasToolCalls = false) {
-  const raw = String(value || '').trim()
+export function normalizeCompatibleFinishReason(value, hasToolCalls = false) {
+  const raw = Array.from(String(value ?? ''), (character) => {
+    const code = character.charCodeAt(0)
+    return code < 0x20 || code === 0x7f ? ' ' : character
+  }).join('').trim().slice(0, 120)
   const normalized = raw.toLowerCase()
   // Responses JSON uses status="incomplete" plus
   // incomplete_details.reason="max_output_tokens" instead of a Chat
@@ -181,8 +184,21 @@ function normalizeCompatibleFinishReason(value, hasToolCalls = false) {
   // truncated too: executing an otherwise valid-looking partial tool call is
   // less safe than asking the model to regenerate it.
   if (['length', 'max_tokens', 'max_output_tokens', 'incomplete'].includes(normalized)) return 'length'
-  if (hasToolCalls || normalized === 'function_call' || normalized === 'tool_calls') return 'tool_calls'
-  return raw || null
+  if (['function_call', 'tool_calls', 'tool_use'].includes(normalized)) return 'tool_calls'
+  if (['stop', 'end', 'end_turn', 'stop_sequence', 'completed', 'eos', 'eos_token'].includes(normalized)) {
+    return hasToolCalls ? 'tool_calls' : 'stop'
+  }
+  if (!raw) return hasToolCalls ? 'tool_calls' : null
+
+  const error = new Error(`模型提供商返回了非成功终止原因：${raw}。`)
+  error.code = 'MODEL_PROVIDER_STOP_REASON_ERROR'
+  error.type = 'provider_error'
+  error.providerKind = 'compatible'
+  error.stopReason = raw
+  error.fromUpstream = true
+  error.retryable = false
+  error.modelRequestOutcome = 'failed'
+  throw error
 }
 
 export function parseModelProviderResponse(data, profile = {}, { providerRequest = null } = {}) {

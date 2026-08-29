@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X } from 'lucide-react'
 import Modal from './Modal.jsx'
+import { useT } from '../i18n/I18nProvider.jsx'
 
 /**
  * FullscreenMediaModal —— 全屏媒体查看器
@@ -34,6 +35,7 @@ export default function FullscreenMediaModal({
   index = 0,
   onIndexChange,
 }) {
+  const { t } = useT()
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [isDragging, setIsDragging] = useState(false)
@@ -150,7 +152,7 @@ export default function FullscreenMediaModal({
     <AnimatePresence>
       <Modal
         onClose={onClose}
-        ariaLabel={alt || '全屏媒体查看器'}
+        ariaLabel={alt || t('foundation.fullscreenMedia')}
         overlayClassName="bg-black/95 p-0 select-none touch-none overflow-hidden"
         className="h-full max-w-none overflow-hidden rounded-none border-0 bg-transparent shadow-none"
       >
@@ -179,8 +181,8 @@ export default function FullscreenMediaModal({
             onClose?.()
           }}
           className="absolute top-4 right-4 z-10 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
-          title="关闭 (Esc)"
-          aria-label="关闭全屏查看器"
+          title={t('foundation.closeFullscreenTitle')}
+          aria-label={t('foundation.closeFullscreen')}
         >
           <X className="w-5 h-5" />
         </button>
@@ -205,8 +207,8 @@ export default function FullscreenMediaModal({
                 goPrev()
               }}
               className="absolute left-4 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-xl"
-              title="上一张 (←)"
-              aria-label="上一张"
+              title={t('foundation.previousMediaTitle')}
+              aria-label={t('foundation.previousMedia')}
             >
               ‹
             </button>
@@ -217,8 +219,8 @@ export default function FullscreenMediaModal({
                 goNext()
               }}
               className="absolute right-4 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-xl"
-              title="下一张 (→)"
-              aria-label="下一张"
+              title={t('foundation.nextMediaTitle')}
+              aria-label={t('foundation.nextMedia')}
             >
               ›
             </button>

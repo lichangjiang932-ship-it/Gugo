@@ -54,7 +54,7 @@ export function hexToHsl(hex) {
   }
 }
 
-const DEFAULT_HEX = '#E86A3C' // ember
+const DEFAULT_HEX = '#16A34A' // brand green (accent picker removed, fixed brand accent)
 const LIGHT_CONTRAST_RGB = { r: 255, g: 255, b: 255 }
 const DARK_CONTRAST_RGB = { r: 0, g: 0, b: 0 }
 

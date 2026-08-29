@@ -181,7 +181,9 @@ export function createTurnCancellationRuntime({
           userId,
           sessionId,
           role: 'assistant',
-          content: 'Cancelled by user',
+          // Cancellation status is carried by the terminal event/context.
+          // Assistant content remains reserved for model-authored output.
+          content: '',
           modelContext: {
             ...buildAssistantModelContext({
               turnId,

@@ -20,7 +20,7 @@ import {
 } from './approvalStore.js'
 import { createNotification } from './notificationsStore.js'
 import { getApprovalSettings } from './approvalSettingsStore.js'
-import { resolveApprovalMode, resolveApprovalTimeoutMs } from '../utils/approvalPolicy.js'
+import { requiresPerCallApproval, resolveApprovalMode, resolveApprovalTimeoutMs } from '../utils/approvalPolicy.js'
 import { getDynamicTool, getToolMetadata } from './toolRegistry.js'
 import { getHook } from './hooksService.js'
 import { validateHookAuthorizationProvenance } from './hookAuthorizationProvenance.js'
@@ -349,6 +349,22 @@ export function revalidateToolPermission({
     if (classified.decision?.failure) {
       return policyFailureResult(classified.decision, classified.policyProvenance)
     }
+    // Host safety invariant: plugin policy cannot manufacture the human approval
+    // required for model-authored code. `allowAsk` requires a terminal record.
+    if (requiresPerCallApproval(toolName)
+      && !allowAsk
+      && classified.decision?.decision !== 'deny') {
+      return {
+        proceed: false,
+        reason: toolName === 'run_code'
+          ? 'run_code 必须由用户逐次批准后才能执行'
+          : `${toolName} 必须由用户逐次批准后才能执行`,
+        approvalRequired: true,
+        permissionMode: settings.mode,
+        suggestedPermissionMode: settings.mode === 'plan' ? 'acceptEdits' : 'normal',
+        policyProvenance: classified.policyProvenance,
+      }
+    }
     if (classified.decision?.decision === 'allow'
       || (allowAsk && classified.decision?.decision === 'ask')) {
       return {
@@ -438,6 +454,18 @@ export function formatDeniedToolResult(gate) {
   }
   if (gate?.cancelled) {
     return { ...base, cancelled: true, error: gate.reason }
+  }
+  if (gate?.approvalRequired) {
+    return {
+      ...base,
+      denied: false,
+      code: 'approval_required',
+      approvalRequired: true,
+      retryable: true,
+      permissionMode: gate.permissionMode || null,
+      suggestedPermissionMode: gate.suggestedPermissionMode || 'normal',
+      error: `${gate.reason || '本次工具调用尚未获得批准'}。请重新发起该工具调用以创建新的逐次审批请求；获得用户批准后再继续。`,
+    }
   }
   if (gate?.policyDenied) {
     const currentMode = gate.permissionMode === 'plan' ? '计划模式' : String(gate.permissionMode || '当前模式')
@@ -572,6 +600,37 @@ export async function requestApproval({
   let verdict = classified.decision
   const policyProvenance = classified.policyProvenance
   if (verdict?.failure) return policyFailureResult(verdict, policyProvenance)
+  // Requiring a fresh human decision for model-authored code is owned by the
+  // host. Runtime policy plugins may make the classification stricter, but a
+  // permissive replacement must never weaken this boundary.
+  if (requiresPerCallApproval(toolName) && verdict?.decision !== 'deny') {
+    verdict = effectiveMode === 'off'
+      ? {
+          ...verdict,
+          decision: 'deny',
+          risk: 'high',
+          reason: toolName === 'run_code'
+            ? '审批队列已关闭，run_code 必须逐次批准，因此已保守拒绝。请开启审批后重试。'
+            : `审批队列已关闭，${toolName} 必须逐次批准，因此已保守拒绝。请开启审批后重试。`,
+        }
+      : settings.mode === 'plan'
+        ? {
+            ...verdict,
+            decision: 'deny',
+            risk: 'high',
+            reason: toolName === 'run_code'
+              ? '当前是计划模式，run_code 不允许执行。请切换到正常模式后再逐次批准。'
+              : `当前是计划模式，${toolName} 不允许执行。请切换到正常模式后再逐次批准。`,
+          }
+        : {
+            ...verdict,
+            decision: 'ask',
+            risk: 'high',
+            reason: verdict?.reason || (toolName === 'run_code'
+              ? '执行模型生成的受限代码，每次调用都需要明确批准'
+              : `执行 ${toolName}，每次调用都需要明确批准`),
+          }
+  }
   // plan 档位:直接拒,不排队等人 —— 用户要的就是「只看不动」
   if (verdict?.decision === 'deny') {
     return {
@@ -607,12 +666,16 @@ export async function requestApproval({
       requireLive: true,
     })
     if (!hookAuthorization.proceed) return hookAuthorization
-    return {
-      proceed: true,
-      args,
-      hookAuthorized: true,
-      hookAuthorizationProvenance: hookAuthorization.hookAuthorizationProvenance,
-      policyProvenance,
+    // Hooks may waive ordinary prompts, but mandatory tools still enter the
+    // durable inbox.
+    if (!requiresPerCallApproval(toolName)) {
+      return {
+        proceed: true,
+        args,
+        hookAuthorized: true,
+        hookAuthorizationProvenance: hookAuthorization.hookAuthorizationProvenance,
+        policyProvenance,
+      }
     }
   }
   // “全部放行”是用户对审批层的最终选择。Hook 仍可拒绝调用，

@@ -26,6 +26,7 @@ import {
 import AssistantAnswer from './messageRow/AssistantAnswer.jsx'
 import CollapsedArtifactContent from './messageRow/CollapsedArtifactContent.jsx'
 import { SideEffectRecoveryCard } from './messageRow/FailureCards.jsx'
+import IncompleteTaskNotice from './messageRow/IncompleteTaskNotice.jsx'
 import { AssistantMeta, UserMeta } from './messageRow/MetaActions.jsx'
 import { InlineDirectoryRequestCard, UserBubble } from './messageRow/UserBubble.jsx'
 
@@ -124,6 +125,22 @@ export default function MessageRow({
     && msg.meta?.serverRecoveryBlocked === true
     && isModelRequestOutcomeUnknownRecoveryKind(msg.meta?.serverRecoveryKind)
     && msg.meta?.serverConnectionState === 'blocked'
+  const serverFailureCode = String(msg.meta?.serverFailure?.code || '').trim().toUpperCase()
+  const hasIncompleteDiagnostic = Boolean(
+    String(msg.meta?.serverFailure?.incompleteReason || '').trim()
+    || serverFailureCode === 'TURN_INCOMPLETE',
+  )
+  const isIncompleteTerminal = msg.meta?.failed === true
+    || msg.meta?.interrupted === true
+    || msg.meta?.serverConnectionState === 'blocked'
+  const showIncompleteTaskNotice = msg.role === 'assistant'
+    && isIncompleteTerminal
+    && (msg.meta?.serverConnectionState === 'blocked' || !isPreExecutionFailure(msg))
+    && (
+      hasIncompleteDiagnostic
+      || localFileReferences.length > 0
+      || (msg.meta?.type !== 'model_reply' && expectsFileReceipt)
+    )
 
   return (
     <div
@@ -203,18 +220,14 @@ export default function MessageRow({
             t={t}
           />
         )}
-        {msg.role === 'assistant'
-          && msg.meta?.failed
-          && msg.meta?.type !== 'model_reply'
-          && !isPreExecutionFailure(msg)
-          && (expectsFileReceipt || localFileReferences.length > 0) && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-accent-ink" data-testid="reply-completion-state">
-              {t(localFileReferences.length > 0
-                ? 'chatMessages.replyPartiallyCompleted'
-                : 'chatMessages.replyIncomplete')}
-            </span>
-          </div>
+        {showIncompleteTaskNotice && (
+          <IncompleteTaskNotice
+            expectsFileReceipt={expectsFileReceipt}
+            msg={msg}
+            retainedCount={retainedLocalFileReferences.length}
+            t={t}
+            verifiedCount={verifiedLocalFileReferences.length}
+          />
         )}
         {msg.role === 'assistant' && (
           <UiContributionSlot

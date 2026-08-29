@@ -102,6 +102,37 @@ test('bash_exec can never create or consume a standing rule', () => {
   assert.equal(matchesRememberedGrant('bash_exec', { command: 'git status' }, [legacyGrant]), false)
 })
 
+test('run_code always requires one-time approval and cannot use standing grants', () => {
+  const args = { code: 'return 42', description: 'Calculate an answer' }
+  assert.throws(
+    () => buildRememberedGrant('run_code', args),
+    /model-authored code also cannot be remembered/u,
+  )
+  assert.equal(matchesRememberedGrant('run_code', args, [{
+    toolName: 'run_code',
+    commandPrefix: 'args:legacy',
+  }]), false)
+  for (const permissionMode of ['normal', 'acceptEdits', 'bypass']) {
+    const out = classifyToolRisk('run_code', args, {
+      ...JOB,
+      permissionMode,
+      taskGrants: [{ toolName: 'run_code', target: '*', scope: 'all' }],
+      rememberedGrants: [{ toolName: 'run_code', commandPrefix: 'args:legacy' }],
+    })
+    assert.equal(out.needsApproval, true, permissionMode)
+    assert.equal(out.risk, 'high', permissionMode)
+  }
+
+  const queueDisabled = classifyToolRisk('run_code', args, {
+    ...JOB,
+    mode: 'off',
+    permissionMode: 'bypass',
+  })
+  assert.equal(queueDisabled.needsApproval, false)
+  assert.equal(queueDisabled.denied, true)
+  assert.match(queueDisabled.reason, /run_code.*逐次批准/u)
+})
+
 test('bash_exec remembered grants reject shell operators and ignore legacy tool-wide grants', () => {
   for (const command of [
     'git status; rm -rf /',

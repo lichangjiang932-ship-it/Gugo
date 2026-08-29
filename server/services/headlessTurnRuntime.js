@@ -173,8 +173,16 @@ export async function runHeadlessTurn({
   onApproval = null,
   onToken = () => {},
   onDiagnostic = () => {},
+  signal = null,
   env = process.env,
 } = {}, dependencies = {}) {
+  if (signal !== null && signal !== undefined && (
+    typeof signal?.aborted !== 'boolean'
+    || typeof signal?.addEventListener !== 'function'
+    || typeof signal?.removeEventListener !== 'function'
+  )) {
+    throw new HeadlessTurnError('CLI_SIGNAL_INVALID', 'signal must be an AbortSignal', 2)
+  }
   const normalizedModel = model == null ? null : String(model).trim()
   const normalizedModelProviderId = modelProviderId == null ? null : String(modelProviderId).trim()
   if (model != null && !normalizedModel) {
@@ -230,6 +238,9 @@ export async function runHeadlessTurn({
   const startTurn = requireFunction(engine, 'startTurn', 'headless TurnEngine')
   const recoverTurn = requireFunction(engine, 'recoverTurn', 'headless TurnEngine')
   const waitForTurn = requireFunction(engine, 'waitForTurn', 'headless TurnEngine')
+  const cancelTurn = signal
+    ? requireFunction(engine, 'cancelTurn', 'headless TurnEngine')
+    : null
   const listEvents = dependencies.listEvents
     ? requireFunction(dependencies, 'listEvents', 'headless dependencies')
     : requireFunction(engine, 'listEvents', 'headless TurnEngine')
@@ -251,6 +262,11 @@ export async function runHeadlessTurn({
   const pendingApprovalTasks = new Set()
   let cursor = -1
   let lastEvent = null
+  let turnReadyForCancellation = Boolean(resumeTurnId)
+  let cancellationRequested = false
+  let cancellationStarted = false
+  let cancellationError = null
+  let cancellationTask = null
 
   const resolveApproval = async (event) => {
     const approvalId = String(event?.payload?.approvalId || '')
@@ -310,7 +326,28 @@ export async function runHeadlessTurn({
 
   const wait = dependencies.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
   let unsubscribe = () => {}
+  let removeAbortListener = () => {}
+  const requestCancellation = () => {
+    cancellationRequested = true
+    if (!turnReadyForCancellation || cancellationStarted || !cancelTurn) return
+    cancellationStarted = true
+    cancellationTask = Promise.resolve()
+      .then(() => cancelTurn({ ...scope, authMode }))
+      .catch((error) => {
+        cancellationError = error
+        onDiagnostic(`turn cancellation failed: ${error?.message || error}`)
+      })
+  }
+  const throwCancellationError = () => {
+    if (cancellationError) throw cancellationError
+  }
   try {
+    if (signal) {
+      const onAbort = () => requestCancellation()
+      signal.addEventListener('abort', onAbort, { once: true })
+      removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+      if (signal.aborted) onAbort()
+    }
     if (subscribeEvents) {
       const subscribe = requireFunction(dependencies, 'subscribeEvents', 'headless dependencies')
       const subscribed = await subscribe(scope, deliver)
@@ -341,6 +378,8 @@ export async function runHeadlessTurn({
         approvalMode: permissionMode,
         authMode,
       })
+      turnReadyForCancellation = true
+      if (cancellationRequested) requestCancellation()
     }
 
     // A crashed process may leave a still-valid durable execution lease. The
@@ -358,6 +397,7 @@ export async function runHeadlessTurn({
     ) {
       await wait(250)
       await drainPersistedEvents()
+      throwCancellationError()
       if (STOP_EVENT_TYPES.has(lastEvent?.type)) break
       recoveryOutcome = await recoverTurn({ ...scope, authMode })
     }
@@ -376,11 +416,16 @@ export async function runHeadlessTurn({
     while (!engineWaitSettled && !STOP_EVENT_TYPES.has(lastEvent?.type)) {
       await drainPersistedEvents()
       await Promise.all([...pendingApprovalTasks])
+      throwCancellationError()
       if (engineWaitSettled || STOP_EVENT_TYPES.has(lastEvent?.type)) break
       await Promise.race([engineWait, wait(250)])
     }
-    await engineWait
-    if (engineWaitError) throw engineWaitError
+    // The durable terminal event is authoritative. A custom or externally
+    // owned engine may leave waitForTurn pending after that event is written;
+    // waiting for it here would hang an otherwise safely stopped CLI turn.
+    if (!STOP_EVENT_TYPES.has(lastEvent?.type)) await engineWait
+    if (engineWaitSettled && engineWaitError) throw engineWaitError
+    throwCancellationError()
     await drainPersistedEvents()
     await Promise.all([...pendingApprovalTasks])
     await drainPersistedEvents()
@@ -390,9 +435,13 @@ export async function runHeadlessTurn({
     while (!STOP_EVENT_TYPES.has(lastEvent?.type)) {
       await wait(250)
       await drainPersistedEvents()
+      throwCancellationError()
     }
+    if (cancellationTask) await cancellationTask
+    throwCancellationError()
     return { ...resultForLastEvent({ sessionId: resolvedSessionId, turnId, lastEvent }), workspace }
   } finally {
+    removeAbortListener()
     await unsubscribe()
   }
 }

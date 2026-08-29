@@ -45,7 +45,8 @@ function isImageAttachment(item) {
   return type === 'image' || mime.startsWith('image/')
 }
 
-function sanitizedInboundPayload(message) {
+function sanitizedInboundPayload(message, provider = '') {
+  const omitCredentialUrl = cleanString(provider).toLowerCase() === 'telegram'
   return {
     text: cleanString(message.text),
     isGroup: !!message.isGroup,
@@ -54,7 +55,7 @@ function sanitizedInboundPayload(message) {
       .slice(0, 20)
       .map((item) => ({
         type: cleanString(item?.type),
-        url: cleanString(item?.url) || null,
+        url: omitCredentialUrl ? null : (cleanString(item?.url) || null),
         platformRef: cleanString(item?.platformRef) || null,
         filename: cleanString(item?.filename) || null,
         mimeType: cleanString(item?.mimeType || item?.mime) || null,
@@ -215,13 +216,21 @@ export function createSocialBridgeManager({
     })
   }
 
-  async function buildInboundText({ userId, text, attachments = [] }) {
+  async function buildInboundText({ userId, integrationId, provider, text, attachments = [] }) {
     const base = cleanString(text)
     const images = attachments.filter(isImageAttachment)
     if (!images.length) return base
+    const entry = adapters.get(adapterKey(provider, integrationId))
+    const resolveAttachment = typeof entry?.adapter?.resolveAttachment === 'function'
+      ? (attachment) => entry.adapter.resolveAttachment(attachment)
+      : null
     let descriptions
     try {
-      descriptions = await describeAttachments({ userId, attachments: images })
+      descriptions = await describeAttachments({
+        userId,
+        attachments: images,
+        ...(resolveAttachment ? { resolveAttachment } : {}),
+      })
     } catch (err) {
       descriptions = images.map((_, index) => ({
         index,
@@ -345,7 +354,7 @@ export function createSocialBridgeManager({
         chatId,
         externalUserId,
         senderName,
-        payload: sanitizedInboundPayload(message),
+        payload: sanitizedInboundPayload(message, provider),
       })
       try {
         createNotification({
@@ -377,6 +386,8 @@ export function createSocialBridgeManager({
     })
     const text = await buildInboundText({
       userId,
+      integrationId,
+      provider,
       text: message.text,
       attachments: message.attachments || [],
     })

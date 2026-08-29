@@ -6,6 +6,7 @@ import {
   decodeModelStreamLine,
   normalizeCompatibleModelStreamPayload,
 } from '../server/adapters/modelResponseStream.js'
+import { streamOpenAICompatible } from '../server/adapters/modelProxy.js'
 
 test('Ollama NDJSON exposes content, thinking, complete tool calls, and terminal state', () => {
   const state = createCompatibleModelStreamState()
@@ -122,4 +123,77 @@ test('decodeModelStreamLine accepts SSE variants, NDJSON, and done markers', () 
   assert.deepEqual(decodeModelStreamLine('{"content":"b"}'), { done: false, data: { content: 'b' } })
   assert.deepEqual(decodeModelStreamLine('data: [DONE]'), { done: true, data: null })
   assert.equal(decodeModelStreamLine('event: message'), null)
+  assert.equal(decodeModelStreamLine('id: 7'), null)
+  assert.equal(decodeModelStreamLine('retry: 1000'), null)
+  assert.equal(decodeModelStreamLine('vendor-field: opaque metadata'), null)
+  assert.equal(decodeModelStreamLine('data:'), null)
+  assert.equal(decodeModelStreamLine('data'), null)
+})
+
+test('malformed model data frames fail closed while SSE metadata remains ignorable', () => {
+  for (const line of [
+    'data: {"choices":[}',
+    '{"message":',
+    'not-json',
+    'data: null',
+    'data: 1',
+    'data: "text"',
+    'data: []',
+    'data: {}',
+  ]) {
+    assert.throws(
+      () => decodeModelStreamLine(line),
+      (error) => error?.code === 'MODEL_STREAM_MALFORMED_FRAME'
+        && error?.fromUpstream === true
+        && error?.retryable === false
+        && error?.modelRequestOutcome === 'failed',
+      line,
+    )
+  }
+})
+
+test('a malformed frame before done rejects without a canonical terminal event', async () => {
+  const events = []
+
+  await assert.rejects(
+    async () => {
+      for await (const event of streamOpenAICompatible({
+        config: { baseUrl: 'https://example.test/v1', apiKey: 'x', modelName: 'compatible-model' },
+        messages: [{ role: 'user', content: 'hi' }],
+        fetchImpl: async () => new Response('data: null\n\ndata: [DONE]\n\n', { status: 200 }),
+        env: {},
+      })) events.push(event)
+    },
+    (error) => error?.code === 'MODEL_STREAM_MALFORMED_FRAME'
+      && error?.retryable === false
+      && error?.modelRequestOutcome === 'failed',
+  )
+
+  assert.deepEqual(events, [])
+})
+
+test('compatible safety and unknown finish reasons fail even after tool input', () => {
+  const state = createCompatibleModelStreamState()
+  normalizeCompatibleModelStreamPayload({
+    choices: [{
+      delta: {
+        tool_calls: [{
+          index: 0,
+          id: 'unsafe',
+          function: { name: 'write_file', arguments: '{"path":"unsafe.txt"}' },
+        }],
+      },
+    }],
+  }, state)
+
+  for (const finishReason of ['content_filter', 'future_finish_reason']) {
+    assert.throws(
+      () => normalizeCompatibleModelStreamPayload({
+        choices: [{ delta: {}, finish_reason: finishReason }],
+      }, state),
+      (error) => error?.code === 'MODEL_PROVIDER_STOP_REASON_ERROR'
+        && error?.stopReason === finishReason,
+      finishReason,
+    )
+  }
 })

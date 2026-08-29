@@ -56,6 +56,7 @@ export function modelRequestOutcomeUnknown(error, {
   // recovery target that does not exist.
   const requestId = String(modelRequestId || '').trim()
   if (!requestId) return error
+  if (error?.modelRequestOutcome === 'failed') return error
   if (error?.code === MODEL_REQUEST_OUTCOME_UNKNOWN_CODE || error?.unsafeToReplay === true) return error
 
   const physicalRequestStarted = requestStarted === true || responseReceived === true

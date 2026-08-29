@@ -5,6 +5,10 @@ import { deleteManagedAttachmentsForSession } from './managedAttachmentStore.js'
 import { runGovernedSessionDeletion } from './sessionDeletionGovernanceRuntime.js'
 import { enqueueSessionContentEventInDb } from './sessionContentOutboxStore.js'
 import { extractVerifiedLocalFiles, recoverLegacyVerifiedLocalFiles } from './turnMessageContext.js'
+import {
+  missingRequirementsForIncompleteReason,
+  normalizeIncompleteReason,
+} from './turnTerminalProjection.js'
 
 const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
 const MAX_BRANCH_DEPTH = 5
@@ -531,6 +535,104 @@ function withRecoveredVerifiedLocalFiles(message) {
   }
 }
 
+function incompleteCheckpointMetadata(stateJson) {
+  const state = parseModelContext(stateJson)
+  const final = state?.final
+  if (!final || typeof final !== 'object' || Array.isArray(final) || final.incomplete !== true) {
+    return null
+  }
+  const budgetExceeded = typeof final.budgetExceeded === 'boolean'
+    ? final.budgetExceeded
+    : undefined
+  const noProgress = typeof final.noProgress === 'boolean'
+    ? final.noProgress
+    : undefined
+  const rawReason = String(final.reason || '').trim().toLowerCase()
+  const incompleteReason = budgetExceeded === true
+    ? 'execution_budget_exhausted'
+    : noProgress === true
+      ? 'tool_no_progress'
+      : (rawReason ? normalizeIncompleteReason(rawReason, '') : '')
+  return {
+    ...(incompleteReason
+      ? {
+          incompleteReason,
+          missingRequirements: missingRequirementsForIncompleteReason(incompleteReason),
+        }
+      : {}),
+  }
+}
+
+function loadIncompleteCheckpointMetadata(db, { userId, sessionId, messages }) {
+  const turnIds = [...new Set((Array.isArray(messages) ? messages : [])
+    .filter((message) => (
+      message?.role === 'assistant'
+      && message?.modelContext?.turnEvidence === true
+      && message.modelContext.evidenceState === 'failed'
+      && message.modelContext.error
+      && typeof message.modelContext.error === 'object'
+      && !Array.isArray(message.modelContext.error)
+      && String(message.modelContext.error.code || '').trim().toUpperCase() === 'TURN_INCOMPLETE'
+      && ['incompleteReason', 'missingRequirements']
+        .some((field) => !Object.hasOwn(message.modelContext.error, field))
+    ))
+    .map((message) => String(message.modelContext.turnId || '').trim())
+    .filter(Boolean))]
+  if (turnIds.length === 0) return new Map()
+
+  const metadataByTurn = new Map()
+  const chunkSize = 250
+  for (let index = 0; index < turnIds.length; index += chunkSize) {
+    const chunk = turnIds.slice(index, index + chunkSize)
+    const placeholders = chunk.map(() => '?').join(', ')
+    const rows = db.prepare(`
+      SELECT turn_id, state_json
+      FROM turn_checkpoints
+      WHERE user_id = ? AND session_id = ? AND turn_id IN (${placeholders})
+    `).all(userId, sessionId, ...chunk)
+    for (const row of rows) {
+      const metadata = incompleteCheckpointMetadata(row.state_json)
+      if (metadata) metadataByTurn.set(String(row.turn_id), metadata)
+    }
+  }
+  return metadataByTurn
+}
+
+function withRecoveredIncompleteFailure(message, metadataByTurn) {
+  const context = message?.modelContext
+  const failure = context?.error
+  if (message?.role !== 'assistant'
+    || context?.turnEvidence !== true
+    || context.evidenceState !== 'failed'
+    || !failure
+    || typeof failure !== 'object'
+    || Array.isArray(failure)) {
+    return message
+  }
+  const turnId = String(context.turnId || '').trim()
+  const recovered = metadataByTurn.get(turnId)
+  if (!recovered) return message
+  const fields = ['incompleteReason', 'missingRequirements']
+  const additions = Object.fromEntries(fields
+    .filter((field) => !Object.hasOwn(failure, field) && Object.hasOwn(recovered, field))
+    .map((field) => [field, recovered[field]]))
+  if (Object.keys(additions).length === 0) return message
+
+  // Compatibility for older terminal evidence: enrich only the snapshot
+  // response. Newer persisted diagnostics and the database row remain the
+  // source of truth and are never overwritten here.
+  return {
+    ...message,
+    modelContext: {
+      ...context,
+      error: {
+        ...failure,
+        ...additions,
+      },
+    },
+  }
+}
+
 /**
  * Claim one legacy chat for the selected local-auth owner. This deliberately
  * does not merge whole users because providers and agents may exist on both.
@@ -846,8 +948,15 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
       })
       artifactsByTurn.set(artifact.turnId, entries)
     }
-    const messages = listMessages({ userId, sessionId, limit: safeLimit, offset: safeOffset })
+    const storedMessages = listMessages({ userId, sessionId, limit: safeLimit, offset: safeOffset })
       .map(withRecoveredVerifiedLocalFiles)
+    const incompleteMetadataByTurn = loadIncompleteCheckpointMetadata(db, {
+      userId,
+      sessionId,
+      messages: storedMessages,
+    })
+    const messages = storedMessages
+      .map((message) => withRecoveredIncompleteFailure(message, incompleteMetadataByTurn))
       .map((message) => {
         const turnId = String(message?.modelContext?.turnId || '')
         if (!turnId) return message

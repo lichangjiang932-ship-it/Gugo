@@ -24,6 +24,7 @@ const {
   getJobTurnCheckpoint,
   saveJobTurnCheckpoint,
 } = await import('../server/services/jobTurnCheckpointStore.js')
+const { setUserToolPermission } = await import('../server/db.js')
 const {
   attachJobBudget,
   getJobBudget,
@@ -33,6 +34,33 @@ const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const TEST_USER = issueTestSession().userId
 const OTHER_USER = issueTestSession().userId
+
+let toolPolicyProbeSequence = 0
+async function modelVisibleJobToolNames(userId) {
+  toolPolicyProbeSequence += 1
+  let visibleNames = null
+  const executeStep = createDefaultExecuteStep({
+    runModelWithTools: async ({ tools }) => {
+      visibleNames ??= tools.map((spec) => spec?.function?.name).filter(Boolean)
+      return { content: 'No execution evidence yet.', toolCalls: [] }
+    },
+  })
+  await executeStep({
+    job: {
+      id: `job-tool-policy-probe-${toolPolicyProbeSequence}`,
+      userId,
+      title: 'Code-mode tool policy probe',
+      prompt: 'Use JavaScript computation to calculate 20 plus 22.',
+      steps: [],
+    },
+    step: {
+      id: `job-tool-policy-probe-step-${toolPolicyProbeSequence}`,
+      kind: 'execute',
+    },
+    signal: new AbortController().signal,
+  })
+  return visibleNames || []
+}
 
 test('direct runtime creation is gated and explicit retry safely refreshes a changed provider revision', async () => {
   const isolatedUser = issueTestSession().userId
@@ -1052,6 +1080,50 @@ test('default executor maps an incomplete tool loop to a truncated failed step r
   assert.equal(result.truncated, true)
   assert.equal(result.incomplete, true)
   assert.equal(result.reason, 'execution_evidence_missing')
+})
+
+test('background jobs hide run_code when every trusted execution switch is disabled', async () => {
+  const userId = issueTestSession({ email: 'job-run-code-switch@example.com' }).userId
+  const savedLocalCodeExecution = process.env.LOCAL_CODE_EXECUTION_ENABLED
+  const savedWorkspaceShell = process.env.WORKSPACE_SHELL_ENABLED
+  setUserToolPermission({ userId, toolName: 'run_code', enabled: true })
+  try {
+    process.env.LOCAL_CODE_EXECUTION_ENABLED = '0'
+    process.env.WORKSPACE_SHELL_ENABLED = '0'
+    const disabledNames = await modelVisibleJobToolNames(userId)
+    assert.equal(disabledNames.includes('run_code'), false)
+    assert.ok(disabledNames.includes('manage_todos'))
+
+    process.env.LOCAL_CODE_EXECUTION_ENABLED = '1'
+    const enabledNames = await modelVisibleJobToolNames(userId)
+    assert.equal(enabledNames.includes('run_code'), true)
+  } finally {
+    if (savedLocalCodeExecution === undefined) delete process.env.LOCAL_CODE_EXECUTION_ENABLED
+    else process.env.LOCAL_CODE_EXECUTION_ENABLED = savedLocalCodeExecution
+    if (savedWorkspaceShell === undefined) delete process.env.WORKSPACE_SHELL_ENABLED
+    else process.env.WORKSPACE_SHELL_ENABLED = savedWorkspaceShell
+  }
+})
+
+test('background jobs hide run_code when the user explicitly disables it', async () => {
+  const userId = issueTestSession({ email: 'job-run-code-user-override@example.com' }).userId
+  const savedLocalCodeExecution = process.env.LOCAL_CODE_EXECUTION_ENABLED
+  const savedWorkspaceShell = process.env.WORKSPACE_SHELL_ENABLED
+  try {
+    process.env.LOCAL_CODE_EXECUTION_ENABLED = '1'
+    process.env.WORKSPACE_SHELL_ENABLED = '0'
+    setUserToolPermission({ userId, toolName: 'run_code', enabled: false })
+
+    const visibleNames = await modelVisibleJobToolNames(userId)
+    assert.equal(visibleNames.includes('run_code'), false)
+    assert.ok(visibleNames.includes('manage_todos'))
+  } finally {
+    setUserToolPermission({ userId, toolName: 'run_code', enabled: true })
+    if (savedLocalCodeExecution === undefined) delete process.env.LOCAL_CODE_EXECUTION_ENABLED
+    else process.env.LOCAL_CODE_EXECUTION_ENABLED = savedLocalCodeExecution
+    if (savedWorkspaceShell === undefined) delete process.env.WORKSPACE_SHELL_ENABLED
+    else process.env.WORKSPACE_SHELL_ENABLED = savedWorkspaceShell
+  }
 })
 
 test('execute steps require real tool evidence even when the prompt verb is not in the heuristic list', async () => {

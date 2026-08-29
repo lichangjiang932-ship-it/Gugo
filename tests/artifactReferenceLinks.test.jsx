@@ -675,7 +675,23 @@ test('a failed turn exposes its retained file as pending verification without up
       link.getAttribute('href'),
       '/api/local-files/retained/retained-answer-path-file?turnId=retained-answer-path-turn',
     )
-    assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent, 'chatMessages.replyPartiallyCompleted')
+    assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent, 'chatMessages.incompleteTitle')
+    assert.equal(
+      rootElement.querySelector('[data-testid="incomplete-task-reason"]')?.textContent,
+      'chatMessages.incompleteReasonLabelchatMessages.incompleteReasonFallback',
+    )
+    assert.equal(
+      rootElement.querySelector('[data-testid="incomplete-task-missing"]')?.textContent,
+      'chatMessages.incompleteMissingLabelchatMessages.incompleteMissingFallback',
+    )
+    assert.equal(
+      rootElement.querySelector('[data-testid="incomplete-task-next-step"]')?.textContent,
+      'chatMessages.incompleteNextStepLabelchatMessages.incompleteNextAdjust',
+    )
+    assert.equal(
+      rootElement.querySelector('[data-testid="incomplete-task-file-state"]')?.textContent,
+      'chatMessages.incompletePendingFiles',
+    )
 
     await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', {
       bubbles: true,

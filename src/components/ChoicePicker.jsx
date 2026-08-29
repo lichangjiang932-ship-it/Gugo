@@ -12,9 +12,11 @@
 
 import { useState } from 'react'
 import { parseChoices } from '../lib/choices.js'
+import { useT } from '../i18n/I18nProvider.jsx'
 
 export default function ChoicePicker({ text, onChoose, disabled }) {
   const [selected, setSelected] = useState(null)
+  const { t } = useT()
   const parsed = parseChoices(text)
   if (!parsed) return null
 
@@ -32,7 +34,7 @@ export default function ChoicePicker({ text, onChoose, disabled }) {
 
   return (
     <div className="mt-3 mb-2">
-      <p className="text-xs text-ink-fade mb-2 font-medium tracking-wide">请选择一个选项：</p>
+      <p className="text-xs text-ink-fade mb-2 font-medium tracking-wide">{t('foundation.choicePrompt')}</p>
       <div className="flex flex-wrap gap-2">
         {parsed.options.map((opt) => (
           <button
@@ -51,7 +53,7 @@ export default function ChoicePicker({ text, onChoose, disabled }) {
           >
             <span className="font-medium block">{opt.title}</span>
             {opt.summary && (
-              <span className="text-[10px] text-ink-fade mt-0.5 block leading-tight">{opt.summary}</span>
+              <span className="text-xs text-ink-fade mt-0.5 block leading-tight">{opt.summary}</span>
             )}
           </button>
         ))}

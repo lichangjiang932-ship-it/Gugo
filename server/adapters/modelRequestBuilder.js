@@ -1,6 +1,6 @@
 import { ensureApiVersionPath, profileForConfig } from './modelEndpoint.js'
 import { attachModelRequestIdentity } from './modelRequestIdentity.js'
-import { prepareOutboundMessages } from './outboundMessagePipeline.js'
+import { prepareOutboundMessages, retainReasoningForEnv } from './outboundMessagePipeline.js'
 import { buildNativeProviderRequest, isNativeProviderKind } from './nativeModelProviders.js'
 
 export function normalizeOpenAICompatibleUrl(rawUrl = '') {
@@ -75,6 +75,8 @@ export function supportsStreamUsage(config, env = process.env) {
     || base.includes('openai.azure.com')
 }
 
+export { retainReasoningForEnv }
+
 export function buildOpenAICompatibleRequest({
   config,
   messages,
@@ -104,6 +106,7 @@ export function buildOpenAICompatibleRequest({
     providerKind: endpoint.kind,
     providerId: config?.providerId,
     ephemeralContext,
+    retainReasoning: retainReasoningForEnv(env),
   })
   if (outboundMessages.length === 0) throw new Error('消息不能为空。')
 

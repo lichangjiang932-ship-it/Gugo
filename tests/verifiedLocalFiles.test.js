@@ -724,7 +724,9 @@ test('TurnEngine preserves an unverified successful write as a retained file on 
   assert.equal(failed.payload.retainedLocalFiles[0].path, fs.realpathSync(fullPath))
   assert.deepEqual(assistant.modelContext.retainedLocalFiles, failed.payload.retainedLocalFiles)
   assert.equal(assistant.modelContext.evidenceState, 'failed')
-  assert.match(failed.payload.message, /已成功写入的本地修改会保留/)
+  assert.equal(failed.payload.message, undefined)
+  assert.equal(failed.payload.incompleteReason, 'post_mutation_verification_missing')
+  assert.deepEqual(failed.payload.missingRequirements, ['mutation_readback', 'diff_or_project_check'])
 })
 
 test('TurnEngine keeps retained writes distinct from verified files in every remaining terminal state', async () => {

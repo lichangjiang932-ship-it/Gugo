@@ -1,7 +1,7 @@
 {
   "name": "gugo",
   "private": true,
-  "version": "0.11.47",
+  "version": "0.11.49",
   "description": "Self-hosted AI workspace for browser and Windows desktop with agents, tools, memory, jobs, and MCP.",
   "author": "lichangjiang932-ship-it",
   "license": "MIT",
@@ -53,8 +53,9 @@
     "desktop:smoke-package": "node scripts/smoke-test-desktop-package.mjs",
     "desktop:media-sidecars": "node scripts/prepare-media-sidecars.mjs",
     "desktop:package": "npm run desktop:media-sidecars && electron-builder --win nsis --publish never && npm run desktop:smoke-package",
+    "desktop:package:signed": "npm run desktop:media-sidecars && electron-builder --win nsis --publish never -c.forceCodeSigning=true && npm run desktop:smoke-package",
     "desktop:dist": "npm run build && npm run desktop:check && npm run desktop:package",
-    "desktop:publish": "npm run build && npm run desktop:check && npm run desktop:media-sidecars && electron-builder --win nsis --publish always",
+    "desktop:publish": "node scripts/release/block-direct-desktop-publish.mjs",
     "preview": "vite preview --configLoader runner",
     "seed:skills": "node server/seedSystemSkills.js",
     "cli": "node bin/yma-cli.js"

@@ -11,6 +11,12 @@ import {
 } from './toolRegistry.js'
 import { getUserToolPermissions } from '../db.js'
 import { isToolVisibleInPermissionMode } from '../utils/approvalPolicy.js'
+import { hasConfiguredLspProvider } from './lspRuntime.js'
+import { isRunCodeExecutionEnabled } from './localFileAccessService.js'
+import {
+  CODEX_MODELS_TOOL_NAME,
+} from './codexAppServerTool.js'
+import { isCodexAppServerModelCatalogAvailable } from './codexAppServerRuntime.js'
 
 function normalizeNames(values, limit = 256) {
   return [...new Set((Array.isArray(values) ? values : []).map(String).map((name) => name.trim()).filter(Boolean))]
@@ -33,7 +39,7 @@ function canonicalizeToolSpec(spec) {
 const LOCAL_TASK_TOOL_NAMES = new Set([
   'list_directory', 'read_file', 'read_artifact_source', 'write_file', 'edit_file', 'multi_edit', 'apply_patch', 'patch_file',
   'bash_exec', 'run_command', 'bash_background', 'process_list', 'process_kill',
-  'grep_code', 'find_symbol', 'list_imports', 'run_project_check', 'run_test', 'docker_exec',
+  'grep_code', 'find_symbol', 'list_imports', 'lsp', 'run_code', 'run_project_check', 'run_test', 'docker_exec',
   'git_status', 'git_diff', 'git_write', 'git_commit', 'git_push', 'git_rollback',
   'request_directory', 'file_download', 'rewind_files', 'set_deliverables',
   'manage_todos', 'request_clarification', 'reflect', 'Agent', 'sleep_until',
@@ -109,6 +115,7 @@ const SHELL_TOOLS = new Set([
   'bash_exec', 'run_command', 'run_project_check', 'run_test', 'docker_exec',
   'bash_background', 'process_list', 'process_kill', 'media_transform',
 ])
+const CODE_EXECUTION_TOOLS = new Set(['run_code'])
 const GIT_READ_TOOLS = new Set(['git_status', 'git_diff'])
 const GIT_WRITE_TOOLS = new Set(['git_commit', 'git_push', 'git_rollback', 'git_write'])
 
@@ -126,6 +133,9 @@ function workspaceToolCapabilities(status) {
   const bypass = value.bypassEnabled === true
   const allFiles = value.allFilesEnabled === true
   const localExecution = value.runtime?.localCodeExecutionEnabled === true
+  const runCodeExecution = typeof value.runtime?.runCodeExecutionEnabled === 'boolean'
+    ? value.runtime.runCodeExecutionEnabled
+    : localExecution || workspaceEffective.shell === true
   const globalGit = trustStates.some((entry) => entry?.global?.git === true)
   const globalGitMutation = trustStates.some((entry) => entry?.global?.gitMutation === true)
   const trustedGit = trustStates.some((entry) => entry?.trusted === true && entry?.effective?.git === true)
@@ -143,6 +153,7 @@ function workspaceToolCapabilities(status) {
   // the normal per-call approval gate. Hiding the schema made normal mode look
   // less capable than bypass and prompted models to tell users to change modes.
   const shellRequestable = localExecution && (fileRead || directoryRead || fileWrite)
+  const codeExecution = runCodeExecution
   const git = (bypass && globalGit) || trustedGit
   const gitWrite = (bypass && globalGitMutation) || trustedGitMutation
   return {
@@ -152,6 +163,7 @@ function workspaceToolCapabilities(status) {
     fileWrite,
     shell,
     shellRequestable,
+    codeExecution,
     git,
     gitWrite,
   }
@@ -171,6 +183,10 @@ function workspaceToolVisible(spec, capabilities, {
   permissionMode = 'normal',
 } = {}) {
   const name = toolName(spec)
+  if (name === CODEX_MODELS_TOOL_NAME) return isCodexAppServerModelCatalogAvailable()
+  if (CODE_EXECUTION_TOOLS.has(name)) {
+    return capabilities ? capabilities.codeExecution : isRunCodeExecutionEnabled()
+  }
   if (!capabilities) return true
   // A dynamic provider that deliberately replaces a local tool inherits that
   // tool's workspace boundary. Checking the local slots first prevents a
@@ -448,6 +464,10 @@ export function projectToolSpecsForRuntimePolicy(specs, {
     let reason = null
     let stage = 'availability'
     if (!name) reason = 'invalid_schema'
+    else if (name === 'lsp' && !hasConfiguredLspProvider()) reason = 'lsp_not_configured'
+    else if (name === CODEX_MODELS_TOOL_NAME && !isCodexAppServerModelCatalogAvailable()) {
+      reason = 'codex_app_server_unavailable'
+    }
     else if (disabledByTurn.has(name)) reason = 'tool_disabled'
     else if (overrides[name] === false) reason = 'user_tool_disabled'
     else if (dynamicState.bound && !dynamicState.current) {
@@ -460,7 +480,9 @@ export function projectToolSpecsForRuntimePolicy(specs, {
       reason = 'permission_mode_plan'
       stage = 'permission'
     } else if (!workspaceToolVisible(spec, capabilities, { userId, permissionMode })) {
-      reason = capabilities?.authorized ? 'workspace_capability_unavailable' : 'workspace_authorization_required'
+      reason = CODE_EXECUTION_TOOLS.has(name)
+        ? 'local_code_execution_disabled'
+        : capabilities?.authorized ? 'workspace_capability_unavailable' : 'workspace_authorization_required'
       stage = 'permission'
     }
     if (!reason) return true
@@ -516,6 +538,7 @@ export async function resolveTurnToolSpecs({
   const deliveryControlSpec = getBuiltinSpec('set_deliverables')
   for (const spec of [...baseSpecs, deliveryControlSpec, ...mcpSpecs, ...browserSpecs, ...runtimeSpecs]) {
     const name = String(spec?.function?.name || '')
+    if (name === 'lsp' && !hasConfiguredLspProvider()) continue
     if (name) merged.set(name, spec)
   }
   let connectorTools = enabledConnectorTools

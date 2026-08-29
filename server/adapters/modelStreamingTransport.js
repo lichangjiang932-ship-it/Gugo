@@ -205,7 +205,7 @@ export async function* streamModelProviderEvents({
       if (decoded.done) {
         sawTerminal = true
         if (nativeStreamState) {
-          for (const event of finishNativeProviderStream(nativeStreamState)) yield event
+          for (const event of finishNativeProviderStream(nativeStreamState, { requireFinishReason: true })) yield event
           return
         }
         if (toolCallAcc.size > 0) {

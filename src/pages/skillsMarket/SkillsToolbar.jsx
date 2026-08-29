@@ -1,4 +1,5 @@
 import { GitBranch, Package, Plus, Search, Upload } from 'lucide-react'
+import { OFFICIAL_SKILL_PRESETS } from '../../lib/skillPresets.js'
 
 export default function SkillsToolbar({
   query, setQuery, activeFilter, setActiveFilter, filterDefs, searchRef, folderInputRef,
@@ -35,9 +36,11 @@ export default function SkillsToolbar({
           <button type="button" onClick={openPlugins} className="h-9 px-4 border border-ink/70 rounded-md font-semibold text-sm flex items-center gap-1.5 hover:bg-paper-2">
             <Package className="w-4 h-4" />{t('skillsMarket.fromPlugin')}
           </button>
-          <button type="button" onClick={() => openGithub('gsap')} className="h-9 px-4 border border-ink/70 rounded-md font-semibold text-sm flex items-center gap-1.5 hover:bg-paper-2">
-            <GitBranch className="w-4 h-4" />GSAP
-          </button>
+          {OFFICIAL_SKILL_PRESETS.map((preset) => (
+            <button key={preset.id} type="button" onClick={() => openGithub(preset.id)} className="h-9 px-4 border border-ink/70 rounded-md font-semibold text-sm flex items-center gap-1.5 hover:bg-paper-2">
+              <GitBranch className="w-4 h-4" />{preset.name}
+            </button>
+          ))}
           <button type="button" onClick={() => openGithub()} className="h-9 px-4 border border-ink/70 rounded-md font-semibold text-sm flex items-center gap-1.5 hover:bg-paper-2">
             <GitBranch className="w-4 h-4" />{t('skillsMarket.fromGithub')}
           </button>

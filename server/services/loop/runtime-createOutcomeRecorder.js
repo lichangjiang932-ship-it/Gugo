@@ -3,7 +3,7 @@ import { assertRuntimeStage } from './runtimeContract.js'
 export async function createOutcomeRecorder(s) {
   assertRuntimeStage(s, 'create-outcome-recorder')
   const i = s.iteration
-  const { AVAILABLE_TOOL_CAPABILITIES_MARKER, COMMAND_EXECUTION_TOOL_NAMES, DYNAMIC_EXECUTION_TOOL_RECOVERY_MARKER, DYNAMIC_MUTATION_TOOL_NAMES, PATCH_WRITE_TOOL_NAMES, PROJECT_SCOPE_TARGET, SCHEDULED_WAIT_INTENT, VERIFICATION_TOOLS, buildToolResultMessageBundle, clearArtifactValidatedMutationTargets, clearVerifiedDeletionTargets, clearVerifiedMutationTargets, extractMutationTargets, hasCommandExecutionTool, installAttemptSignature, isCommandExecutionTool, isExplorationOnlyCall, isFileArtifactTool, isLocalMutationCall, isMutationExecutionCall, isProductiveExecutionOutcome, isSubstantiveToolCall, isSuccessfulPdfLayoutVerification, isSuccessfulToolResult, isVerificationCall, looksLikeDeletionCommand, normalizeArtifactIdList, normalizeMutationTarget, normalizeToolResult, persistLocalToolArtifactsAsync, progressChangesFor, recordToolProgress, replaceRuntimeCapabilityBlock, shouldRequirePdfLayoutVerification, staticDeletionTargets, targetsMatch, toolNameFromSpec } = s.d
+  const { AVAILABLE_TOOL_CAPABILITIES_MARKER, COMMAND_EXECUTION_TOOL_NAMES, DYNAMIC_EXECUTION_TOOL_RECOVERY_MARKER, DYNAMIC_MUTATION_TOOL_NAMES, PATCH_WRITE_TOOL_NAMES, PROJECT_SCOPE_TARGET, SCHEDULED_WAIT_INTENT, VERIFICATION_TOOLS, appendFinalAnswerToolEvidence, buildToolResultMessageBundle, clearArtifactValidatedMutationTargets, clearVerifiedDeletionTargets, clearVerifiedMutationTargets, extractMutationTargets, hasCommandExecutionTool, installAttemptSignature, isCommandExecutionTool, isExplorationOnlyCall, isFileArtifactTool, isLocalMutationCall, isMutationExecutionCall, isProductiveExecutionOutcome, isSubstantiveToolCall, isSuccessfulPdfLayoutVerification, isSuccessfulToolResult, isVerificationCall, looksLikeDeletionCommand, normalizeArtifactIdList, normalizeMutationTarget, normalizeToolResult, persistLocalToolArtifactsAsync, progressChangesFor, recordToolProgress, replaceRuntimeCapabilityBlock, shouldRequirePdfLayoutVerification, staticDeletionTargets, targetsMatch, toolNameFromSpec } = s.d
   i.recordOutcome = async (outcome) => {
         outcome.result = normalizeToolResult(outcome.result)
         const succeeded = isSuccessfulToolResult(outcome.result)
@@ -350,6 +350,11 @@ export async function createOutcomeRecorder(s) {
           delete compactImage.data
           outcome.result = { ...outcome.result, image: { ...compactImage, captured: true } }
         }
+        s.finalAnswerToolEvidence = appendFinalAnswerToolEvidence(
+          s.finalAnswerToolEvidence,
+          executedCall,
+          outcome.result,
+        )
         s.convo.push(...toolResultBundle.durableMessages)
         i.deferredEphemeralToolMessages.push(...toolResultBundle.ephemeralMessages)
         if (executedCall?.name === 'request_directory'

@@ -14,6 +14,7 @@ import {
   closeSessionContentMaterializerRuntime,
   startSessionContentMaterializerRuntime,
 } from '../services/sessionContentMaterializerRuntime.js'
+import { closeLspRuntime, startLspRuntime } from '../services/lspRuntime.js'
 import { closeTurnEngine } from '../services/turnEngineHost.js'
 import { logger } from '../utils/logger.js'
 
@@ -30,6 +31,7 @@ export const HEADLESS_LIFECYCLE_CAPABILITY_IDS = Object.freeze({
   runtimePluginConfig: 'headless.startup.runtime-plugin-config',
   pluginDiscovery: 'headless.startup.plugin-discovery',
   runtimePlugins: 'headless.resource.runtime-plugins',
+  lsp: 'headless.resource.lsp',
   turnEngine: 'headless.resource.turn-engine',
 })
 
@@ -43,6 +45,8 @@ const DEFAULT_ADAPTERS = Object.freeze({
   initPlugins,
   restoreEnabledRuntimePlugins,
   shutdownRuntimePlugins,
+  startLspRuntime,
+  closeLspRuntime,
   closeTurnEngine,
   warn: (message) => logger.warn(message),
 })
@@ -165,6 +169,11 @@ export function createHeadlessLifecycleCapabilities({
       stop: () => adapters.shutdownRuntimePlugins(),
       stopFailure: 'fail',
       errorLabel: 'headless runtime plugin lifecycle',
+    }),
+    definition(ids.lsp, ids.runtimePlugins, {
+      start: () => adapters.startLspRuntime({ env: runtimeEnv }),
+      stop: () => adapters.closeLspRuntime(),
+      errorLabel: 'headless LSP runtime lifecycle',
     }),
     definition(ids.turnEngine, ids.runtimePlugins, {
       stop: () => adapters.closeTurnEngine(),

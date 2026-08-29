@@ -6,7 +6,7 @@ import { lookup, translations } from '../src/i18n/translations.js'
 
 test('Chrome DevTools MCP preset uses the official stdio package', () => {
   const preset = createMcpServerFromPreset('chrome-devtools')
-  assert.equal(MCP_SERVER_PRESETS.length, 6)
+  assert.equal(MCP_SERVER_PRESETS.length, 11)
   assert.equal(preset.name, 'chrome_devtools')
   assert.equal(preset.transport, 'stdio')
   assert.equal(preset.command, 'npx')
@@ -67,6 +67,49 @@ test('Chrome DevTools MCP preset and Access installer have complete five-languag
 test('New MCP presets ship five-language descriptions', () => {
   for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
     for (const key of ['access.fetchMcpDesc', 'access.fetchMcpHint', 'access.sequentialThinkingMcpDesc', 'access.sequentialThinkingMcpHint', 'access.memoryMcpDesc', 'access.memoryMcpHint', 'access.playwrightMcpDesc', 'access.playwrightMcpHint']) {
+      assert.ok(lookup(translations[lang], key), `${lang} missing ${key}`)
+    }
+  }
+})
+
+test('Credential-backed official presets (github / brave-search / slack / postgres) are well-formed', () => {
+  const expectations = [
+    ['github', 'github', ['-y', '@modelcontextprotocol/server-github'], ['GITHUB_PERSONAL_ACCESS_TOKEN']],
+    ['brave-search', 'brave_search', ['-y', '@modelcontextprotocol/server-brave-search'], ['BRAVE_API_KEY']],
+    ['slack', 'slack', ['-y', '@modelcontextprotocol/server-slack'], ['SLACK_BOT_TOKEN', 'SLACK_TEAM_ID']],
+    ['postgres', 'postgres', ['-y', '@modelcontextprotocol/server-postgres'], ['POSTGRES_DSN']],
+  ]
+  for (const [id, name, args, envKeys] of expectations) {
+    const preset = createMcpServerFromPreset(id)
+    assert.ok(preset, `${id} preset resolves`)
+    assert.equal(preset.name, name)
+    assert.equal(preset.transport, 'stdio')
+    assert.equal(preset.command, 'npx')
+    assert.deepEqual(preset.args, args)
+    assert.deepEqual(Object.keys(preset.env).sort(), [...envKeys].sort(), `${id} exposes credential env slots`)
+    assert.equal(getMcpServerPreset(id)?.official, true)
+    // env placeholders must be empty strings so the editor prompts the user to fill them
+    for (const key of envKeys) assert.equal(preset.env[key], '', `${id}.${key} starts empty`)
+  }
+})
+
+test('Puppeteer preset is a zero-credential browser automation option', () => {
+  const preset = createMcpServerFromPreset('puppeteer')
+  assert.equal(preset.name, 'puppeteer')
+  assert.deepEqual(preset.args, ['-y', '@modelcontextprotocol/server-puppeteer'])
+  assert.deepEqual(preset.env, {})
+})
+
+test('New credential-backed MCP presets ship five-language copy', () => {
+  const keys = [
+    'access.githubMcpDesc', 'access.githubMcpHint',
+    'access.braveSearchMcpDesc', 'access.braveSearchMcpHint',
+    'access.slackMcpDesc', 'access.slackMcpHint',
+    'access.postgresMcpDesc', 'access.postgresMcpHint',
+    'access.puppeteerMcpDesc', 'access.puppeteerMcpHint',
+  ]
+  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+    for (const key of keys) {
       assert.ok(lookup(translations[lang], key), `${lang} missing ${key}`)
     }
   }

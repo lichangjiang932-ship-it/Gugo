@@ -57,6 +57,7 @@ export {
   resolveModelFailoverConfigs,
 } from './modelProviderConfig.js'
 export { isProviderFailoverError, runWithProviderFailover, streamWithProviderFailover } from './modelFailover.js'
+import { canonicalStreamToolCalls } from './modelStreamToolCalls.js'
 export { shouldScheduleStreamAutoMemory, streamOpenAICompatible } from './modelProxyResponseCoordinator.js'
 export {
   getModelContextWindow,
@@ -352,26 +353,6 @@ export async function callBackgroundModelWithTools({
   }, { signal })
 }
 
-function canonicalStreamToolCalls(toolCalls = []) {
-  return (Array.isArray(toolCalls) ? toolCalls : []).map((call) => {
-    const fn = call?.function && typeof call.function === 'object' ? call.function : {}
-    const rawArguments = fn.arguments ?? call?.arguments ?? '{}'
-    let argumentsText
-    if (typeof rawArguments === 'string') argumentsText = rawArguments
-    else {
-      try { argumentsText = JSON.stringify(rawArguments ?? {}) } catch { argumentsText = '{}' }
-    }
-    return {
-      ...(call?.id ? { id: call.id } : {}),
-      type: call?.type || 'function',
-      function: {
-        name: String(fn.name || call?.name || ''),
-        arguments: argumentsText,
-      },
-    }
-  })
-}
-
 /**
  * Chat tool-loop model call with the same stable result shape as
  * callBackgroundModelWithTools, but backed by the provider streaming adapter.
@@ -421,6 +402,7 @@ export async function callStreamingModelWithTools({
   })
   let activeConfig = candidates[0] || null
   let content = ''
+  let reasoningText = ''
   let reasoningChars = 0
   let toolCalls = []
   let usage = null
@@ -457,6 +439,7 @@ export async function callStreamingModelWithTools({
       }
     } else if (event?.type === 'reasoning' && event.delta) {
       const delta = String(event.delta)
+      reasoningText += delta
       reasoningChars += delta.length
       if (typeof onReasoningDelta === 'function') {
         await onReasoningDelta(delta, { modelName: activeConfig.modelName })
@@ -504,6 +487,9 @@ export async function callStreamingModelWithTools({
     ...(costUsd !== null ? { costUsd } : {}),
     streamed: true,
     reasoningChars,
+    // Retained chain-of-thought for the current turn. Outbound replay stays
+    // gated behind MODEL_REASONING_RETENTION in the request preparation layer.
+    ...(reasoningText ? { reasoning: reasoningText } : {}),
   }
 }
 

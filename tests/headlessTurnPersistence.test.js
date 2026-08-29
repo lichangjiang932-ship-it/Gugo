@@ -867,3 +867,97 @@ test('headless runtime uses the active async persistence adapter without SQLite 
     controller.release()
   }
 })
+
+test('builtin headless abort cancels once, waits for durable cancellation, and stops lifecycle', async () => {
+  const userId = 'headless-abort-user'
+  const sessionId = 'headless-abort-session'
+  const turnId = 'headless-abort-turn'
+  const backend = createAsyncHeadlessAdapter({ userId, sessionId, turnId })
+  const events = []
+  let subscriber = () => {}
+  let finishTurn
+  const completed = new Promise((resolve) => { finishTurn = resolve })
+  const abortListeners = new Set()
+  const signal = {
+    aborted: false,
+    addEventListener(type, listener) {
+      if (type === 'abort') abortListeners.add(listener)
+    },
+    removeEventListener(type, listener) {
+      if (type === 'abort') abortListeners.delete(listener)
+    },
+    abort() {
+      this.aborted = true
+      for (const listener of [...abortListeners]) listener()
+    },
+  }
+  const emit = (type, payload = {}) => {
+    const event = {
+      id: `${turnId}:${events.length}`,
+      userId,
+      sessionId,
+      turnId,
+      sequence: events.length,
+      type,
+      payload,
+      createdAt: events.length + 1,
+    }
+    events.push(event)
+    subscriber(event)
+  }
+  let cancelCalls = 0
+  let cancelledScope = null
+  let stopCalls = 0
+  const dependencies = {
+    ...createHeadlessHostTestDependencies(backend, userId),
+    idFactory: (() => {
+      const ids = [turnId, sessionId]
+      return () => ids.shift()
+    })(),
+    subscribeEvents: (_scope, callback) => {
+      subscriber = callback
+      return () => { subscriber = () => {} }
+    },
+    listEvents: ({ after }) => events.filter((event) => event.sequence > after),
+    engine: {
+      startTurn: async () => {
+        emit('turn.started')
+        signal.abort()
+        signal.abort()
+      },
+      recoverTurn: async () => ({ terminal: false }),
+      cancelTurn: async (scope) => {
+        cancelCalls += 1
+        cancelledScope = scope
+        emit('turn.cancelled', { reason: 'Cancelled by user' })
+        finishTurn()
+      },
+      waitForTurn: async () => completed,
+      listEvents: ({ after }) => events.filter((event) => event.sequence > after),
+    },
+    createLifecycleRuntime: () => ({
+      start: () => ({ ready: Promise.resolve({ failures: [] }) }),
+      stop: async () => {
+        stopCalls += 1
+        return { exitCode: 0 }
+      },
+    }),
+  }
+
+  const delivered = []
+  const result = await runBuiltinHeadlessTurn({
+    prompt: 'cancel this turn',
+    runtimeEnv: { GUGO_LOAD_DOTENV: '0' },
+    signal,
+    onEvent: (event) => delivered.push(event.type),
+    turnPersistenceAdapter: backend.adapter,
+  }, dependencies)
+
+  assert.equal(result.status, 'cancelled')
+  assert.equal(result.exitCode, 1)
+  assert.equal(cancelCalls, 1)
+  assert.deepEqual(cancelledScope, { userId, sessionId, turnId, authMode: 'local' })
+  assert.deepEqual(delivered, ['turn.started', 'turn.cancelled'])
+  assert.equal(stopCalls, 1)
+  assert.equal(abortListeners.size, 0)
+})

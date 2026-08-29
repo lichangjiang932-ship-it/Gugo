@@ -10,8 +10,6 @@ const labels = {
   'settings.themeWhite': 'White',
   'settings.themeDark': 'Dark',
   'settings.themeSystem': 'System',
-  'settings.strongAccent': 'Strong accent',
-  'settings.strongAccentDescription': 'Strengthen the selected accent.',
   'settings.inputHistoryNavigation': 'Input history navigation',
   'settings.inputHistoryNavigationDescription': 'Browse sent prompts from an empty input.',
 }
@@ -24,8 +22,6 @@ test('appearance exposes white as a distinct selectable theme', () => {
       t={t}
       state={{
         theme: 'white',
-        accentColor: '#E86A3C',
-        strongAccent: false,
         fontSize: 'medium',
         density: 'comfortable',
         animationsEnabled: true,
@@ -41,5 +37,6 @@ test('appearance exposes white as a distinct selectable theme', () => {
   assert.match(markup, /aria-pressed="true">White<\/button>/)
   assert.doesNotMatch(markup, /aria-pressed="true">Light<\/button>/)
   assert.doesNotMatch(markup, /Strong accent/)
-  assert.match(markup, /role="switch" aria-checked="false" aria-label="Input history navigation"/)
+  // Accent color picker removed: no swatch UI, no accentColor state usage.
+  assert.doesNotMatch(markup, /accentColor/)
 })

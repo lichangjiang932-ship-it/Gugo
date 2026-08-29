@@ -31,6 +31,7 @@ const markdownSource = source('../src/components/MarkdownRenderer.jsx')
   + sourceTree('../src/components/markdown/', '.js')
 const artifactPreviewSource = source('../src/pages/ChatSplit/ArtifactPreview.jsx')
 const settingsViewStylesSource = source('../src/pages/SettingsView.css')
+const settingsWebSearchSource = source('../src/components/settings/SettingsWebSearchPanel.jsx')
 const chatSplitJsxSource = sourceTree('../src/pages/ChatSplit/', '.jsx')
 const appLayoutSource = source('../src/components/AppLayout.jsx')
 const pageJsxSource = sourceTree('../src/pages/', '.jsx')
@@ -142,6 +143,14 @@ test('agent and settings surfaces use live theme tokens instead of dead aliases 
   assert.doesNotMatch(settingsViewStylesSource, /#[0-9a-f]{3,8}\b/i)
   assert.match(settingsViewStylesSource, /\.settings-toggle\[data-checked="true"\][\s\S]*?background:\s*var\(--color-accent\)/)
   assert.match(settingsViewStylesSource, /\.settings-action-button-primary\s*\{[\s\S]*?background:\s*var\(--color-accent\)[\s\S]*?color:\s*rgb\(var\(--color-accent-contrast-rgb\)\)/)
+})
+
+test('web search settings use theme-owned neutral and semantic colors', () => {
+  assert.doesNotMatch(settingsWebSearchSource, /#[0-9a-f]{3,8}\b/i)
+  assert.doesNotMatch(settingsWebSearchSource, /\b(?:bg|text)-white\b/)
+  for (const token of ['paper', 'paper-2', 'ink', 'ink-soft', 'ink-fade', 'focus', 'success', 'danger']) {
+    assert.match(settingsWebSearchSource, new RegExp(`(?:bg|text|border|ring|placeholder:text)-${token}(?:\\b|/)`))
+  }
 })
 
 test('ChatSplit JSX uses semantic theme and status tokens instead of Tailwind palette colors', () => {

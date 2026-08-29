@@ -126,6 +126,8 @@ function noopLifecycleAdapters() {
     initializeRuntimePluginConfig: noop,
     initPlugins: noop,
     restoreEnabledRuntimePlugins: () => [],
+    startCodexAppServerRuntime: noop,
+    closeCodexAppServerRuntime: noop,
     initCodexPluginSkills: noop,
     setVisionAssistResolver: noop,
     getEnabledIntegrationCredentials: () => null,

@@ -104,7 +104,8 @@ test('WebSocket permission decisions share approve, deny, forbidden, stale and i
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const user = issueTestSession({ email: 'approval-ws@example.com' })
   const socket = new WebSocket(
-    `ws://127.0.0.1:${server.address().port}/api/realtime?token=${encodeURIComponent(user.token)}`,
+    `ws://127.0.0.1:${server.address().port}/api/realtime`,
+    ['gugo.realtime', `bearer.${user.token}`],
   )
   const inbox = createInbox(socket)
   await once(socket, 'open')

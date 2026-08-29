@@ -6,6 +6,57 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.49] - 2026-08-30
+
+### Added
+
+- Sandboxed `run_code` execution and LSP tools with model-visible capability gating, per-call approval, permission checks, rate limits, cancellation, and audit records.
+- Evidence-backed final-answer review so a turn cannot claim completion when its answer disagrees with verified files, checks, or other host evidence.
+- A centralized outbound-network guard with DNS pinning, redirect revalidation, private/metadata address blocking, and bounded response reads across connectors and model integrations.
+- Native model-provider adapters, runtime plugin definitions, social-bridge outbound delivery, and bounded subagent batches.
+- An opt-in, signature-verified Codex CLI app-server bridge with a guarded `codex_models` consumer for the fixed `model/list` RPC.
+- A production CLI with structured output, cancellation, project selection, and documented command behavior.
+- Task-level offline eval suites for code mode, final-answer evidence, outbound networking, LSP, native providers, and the Codex app-server bridge.
+
+### Changed
+
+- Made the Codex app-server strictly opt-in and sanitized its child environment, startup lifecycle, cancellation semantics, handshake deadline, and public diagnostics.
+- Consolidated every oversized-source exception into `docs/DEBT.md`; the code-debt gate now derives its ceilings from that register and rejects missing or duplicate entries.
+- Extended offline-eval coverage enforcement to the exact set of all 13 suites, including minimum scenario and category requirements.
+- Moved terminal failure, interruption, and incomplete-turn presentation to stable reason codes with client-side localization and actionable missing-requirement details.
+- Hardened the Windows release pipeline with mandatory signing verification, immutable draft publication, checksums, attestations, and package-version consistency checks.
+
+### Fixed
+
+- Prevented completed files from masking an unfinished task and required terminal turns to explain why work stopped and what remains.
+- Removed sensitive cursor and model-content fields from generic Agent-loop audit persistence.
+- Kept app-server readiness accurate during disposal and prevented one cancelled startup waiter from aborting other active waiters.
+
+## [0.11.48] - 2026-08-26
+
+### Added
+
+- Shell network-egress policy tier (P2 sandbox ladder step 1) with deny mode and tool-audit logging.
+- DEBT.md architecture-debt registry with evidence, exit criteria, and verification per item.
+- Offline eval suites: shell-guard red-team and compaction-fidelity.
+- Expanded MCP preset baseline (GitHub, Brave Search, Slack, PostgreSQL, Puppeteer) and official skill presets.
+- shared/turnEvidenceText to strip legacy server-side dirty data persisted by older builds.
+
+### Changed
+
+- Closed DEBT-I18N-001: assistant content carries only model output; server-side failure/cancel/block text uses stable codes with client-side i18n (5 languages).
+- turn.blocked stepLabel now renders from recoveryKind via localized chatMessages keys instead of server-embedded text.
+- mediaModelService outbound routes through fetchSafeOutbound with response throttling and base64 pre-check.
+- runtimeStoragePath blocks Windows reserved device names (NUL/CON/COM1..., trailing dots/spaces, ADS, drive-relative paths).
+- Narrow-port runtime extractions: turnResumeRuntime, turnCanaryOutcomeRuntime, canonicalStreamToolCalls.
+
+### Fixed
+
+- normalizeTurnFailure CJK-sniff bug that silently dropped non-Chinese hints.
+- artifactDownloadPreview test cleanup EPERM on Windows (best-effort removal).
+- Restored callStreamingModelWithTools JSDoc dropped during extraction.
+- UI readability 12px gate; web-search panel hardcoded hex migrated to design tokens.
+
 ## [0.11.47] - 2026-08-25
 
 ### Fixed

@@ -52,6 +52,7 @@ export const VERIFICATION_TOOLS = new Set([
   'grep_code',
   'find_symbol',
   'list_imports',
+  'lsp',
   'git_status',
   'git_diff',
   'run_project_check',
@@ -86,7 +87,10 @@ export const FILE_WRITE_TOOL_NAMES = new Set([
 ])
 export const PDF_DOCUMENT_REFERENCE = /(?:\.pdf\b|\bpdf\b|application\/pdf)/i
 export const PDF_LAYOUT_MUTATION_INTENT = /(?:write|fill|insert|overlay|edit|modify|create|generate|render|export|save|\u5199\u5165|\u586b\u5199|\u586b\u5165|\u53e0\u52a0|\u7f16\u8f91|\u4fee\u6539|\u751f\u6210|\u6e32\u67d3|\u5bfc\u51fa|\u4fdd\u5b58)/i
-export const PDF_LAYOUT_VALIDATOR_COMMAND = /(?:^|[\s&|])(?:(?:"[^"]*(?:python(?:3)?|py)(?:\.exe)?")|(?:[^\s"]*[\\/])?(?:python(?:3)?|py)(?:\.exe)?)\s+(?:"[^"]*verify[_-]?pdf[_-]?layout[^"\r\n]*\.py"|'[^']*verify[_-]?pdf[_-]?layout[^'\r\n]*\.py'|[^\s;&|]*verify[_-]?pdf[_-]?layout[^\s;&|]*\.py)(?=$|[\s;&|])/i
+// Keep this allowlist deliberately narrow. A validator may use the dedicated
+// layout name or the comprehensive validator name used by the artifact flow,
+// but an arbitrary verify_*.py command must not become trusted evidence.
+export const PDF_LAYOUT_VALIDATOR_COMMAND = /(?:^|[\s&|])(?:(?:"[^"]*(?:python(?:3)?|py)(?:\.exe)?")|(?:[^\s"]*[\\/])?(?:python(?:3)?|py)(?:\.exe)?)\s+(?:"(?:[^"]*[\\/])?(?:verify[_-]?pdf[_-]?layout|verify[_-]?comprehensive)\.py"|'(?:[^']*[\\/])?(?:verify[_-]?pdf[_-]?layout|verify[_-]?comprehensive)\.py'|(?:[^\s;&|]*[\\/])?(?:verify[_-]?pdf[_-]?layout|verify[_-]?comprehensive)\.py)(?=$|[\s;&|])/i
 export const PATH_AUTHORIZATION_FAILURE_CODES = new Set([
   'ABSOLUTE_PATH_REQUIRED',
   'PATH_NOT_AUTHORIZED',

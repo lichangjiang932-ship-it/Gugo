@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { createLoopContext } from '../server/services/loop/context.js'
+import { SERVER_TOOL_SPECS } from '../server/services/toolLoopHeuristics.js'
 import {
   consumePreparedToolsLoopTerminalOutcome,
   executePreparedToolsLoop,
@@ -135,4 +136,103 @@ test('prepared execution preserves an initialization-phase terminal outcome', as
     executePreparedToolsLoop(prepared),
     hasCode('TOOLS_LOOP_RUNTIME_PREPARED_STALE'),
   )
+})
+
+test('restored successful final without a current evidence review re-enters the model loop', async () => {
+  let modelCalls = 0
+  let reviewPromptObserved = false
+  const prepared = await prepareToolsLoopRuntime(runtimeContext('unused', {
+    loadCheckpoint: async () => ({
+      state: {
+        messages: [{ role: 'user', content: 'Apply and verify the requested fix.' }],
+        toolCalls: [],
+        artifactIds: [],
+        iterations: 0,
+        completionGuards: {
+          executionEvidenceObserved: true,
+          mutationExecutionObserved: true,
+        },
+        final: {
+          text: 'stale unreviewed completion',
+          iterations: 1,
+        },
+      },
+    }),
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      reviewPromptObserved = messages.some((message) => (
+        String(message?.content || '').includes('[FINAL ANSWER EVIDENCE REVIEW REQUIRED]')
+      ))
+      return { content: 'reviewed recovery completion', toolCalls: [] }
+    },
+  }))
+
+  assert.deepEqual(consumePreparedToolsLoopTerminalOutcome(prepared), { terminal: false })
+  const result = await executePreparedToolsLoop(prepared)
+  assert.equal(result.text, 'reviewed recovery completion')
+  assert.equal(modelCalls, 1)
+  assert.equal(reviewPromptObserved, true)
+})
+
+test('restored successful final with an unselected artifact enters set_deliverables first', async () => {
+  const suffix = `${process.pid}-${Date.now()}`
+  const userId = `prepared-artifact-user-${suffix}`
+  const sessionId = `prepared-artifact-session-${suffix}`
+  const turnId = `prepared-artifact-turn-${suffix}`
+  const artifactId = `prepared-artifact-${suffix}`
+
+  const createDocx = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'create_docx')
+  let modelCalls = 0
+  const forcedToolChoices = []
+  const prepared = await prepareToolsLoopRuntime(createLoopContext({
+    job: {
+      id: turnId,
+      userId,
+      sessionId,
+      origin: 'chat',
+      prompt: 'Create and deliver the final Word document.',
+      userPrompt: 'Create and deliver the final Word document.',
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: [{ role: 'user', content: 'Create and deliver the final Word document.' }],
+    toolSpecs: [createDocx],
+    maxIters: 3,
+    loadCheckpoint: async () => ({
+      state: {
+        messages: [{ role: 'user', content: 'Create and deliver the final Word document.' }],
+        toolCalls: [],
+        artifactIds: [artifactId],
+        iterations: 0,
+        completionGuards: {
+          activeArtifactTools: ['create_docx'],
+          requiredArtifactTools: ['create_docx'],
+          artifactProvenance: [{
+            artifactId,
+            toolName: 'create_docx',
+            verified: true,
+            artifactType: 'docx',
+          }],
+          executionEvidenceObserved: true,
+          mutationExecutionObserved: true,
+        },
+        final: {
+          text: 'stale completion without deliverable selection',
+          iterations: 1,
+        },
+      },
+    }),
+    runModel: async ({ toolChoice }) => {
+      modelCalls += 1
+      forcedToolChoices.push(toolChoice?.function?.name || null)
+      return { content: 'completion attempted without selecting the recovered artifact', toolCalls: [] }
+    },
+  }))
+
+  assert.deepEqual(consumePreparedToolsLoopTerminalOutcome(prepared), { terminal: false })
+  const result = await executePreparedToolsLoop(prepared)
+  assert.notEqual(result.text, 'stale completion without deliverable selection')
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'deliverable_selection_missing')
+  assert.ok(modelCalls > 0)
+  assert.deepEqual(forcedToolChoices, Array(modelCalls).fill('set_deliverables'))
 })

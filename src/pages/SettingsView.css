@@ -47,14 +47,7 @@
   margin-top: 16px;
 }
 
-.settings-nav-group-label {
-  margin: 0 8px 5px;
-  color: var(--color-ink-fade);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
+/* Group label styles removed (v4.1): settings nav is a flat list. */
 
 .settings-nav-item {
   display: block;
@@ -552,10 +545,6 @@
   .settings-nav-group-items {
     display: flex;
     gap: 3px;
-  }
-
-  .settings-nav-group-label {
-    margin-left: 4px;
   }
 
   .settings-nav-item {

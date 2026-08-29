@@ -38,6 +38,16 @@ export function isLocalCodeExecutionEnabled(env = getRuntimeEnv()) {
   return authMode === 'local' && isLoopbackHost(serverHost)
 }
 
+/**
+ * The bounded run_code worker may be enabled by either the newer local-code
+ * deployment policy or the legacy trusted-workspace shell switch. Keep this
+ * predicate shared by status projection and the execution boundary so model
+ * visibility cannot drift from what the dispatcher will actually permit.
+ */
+export function isRunCodeExecutionEnabled(env = getRuntimeEnv()) {
+  return env?.WORKSPACE_SHELL_ENABLED === '1' || isLocalCodeExecutionEnabled(env)
+}
+
 function serviceError(message, statusCode = 400, code = 'LOCAL_FILE_ACCESS_ERROR') {
   const error = new Error(message)
   error.statusCode = statusCode
@@ -548,6 +558,7 @@ export function getLocalFileAccessStatus({ userId }) {
       pickerAvailable: ['win32', 'darwin', 'linux'].includes(process.platform),
       hostFileSystem: true,
       localCodeExecutionEnabled: isLocalCodeExecutionEnabled(),
+      runCodeExecutionEnabled: isRunCodeExecutionEnabled(),
     },
   }
 }

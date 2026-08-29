@@ -20,6 +20,7 @@ const { appendTurnArtifact } = await import('../server/services/turnArtifactStor
 const {
   artifactDeliveryError,
   isLocalMutationCall,
+  isSuccessfulPdfLayoutVerification,
   isVerificationCall,
 } = await import('../server/services/toolLoopHeuristics.js')
 
@@ -240,6 +241,7 @@ test('executes tool calls returned by the model response that crosses the token 
   })
   let modelCalls = 0
   let executed = false
+  const phases = []
 
   const result = await runToolsLoop({
     job: {
@@ -258,7 +260,7 @@ test('executes tool calls returned by the model response that crosses the token 
     runModel: async () => {
       modelCalls += 1
       return {
-        content: '',
+        content: 'Completed before the command ran.',
         toolCalls: [{
           id: 'budget-crossing-command',
           type: 'function',
@@ -272,12 +274,16 @@ test('executes tool calls returned by the model response that crosses the token 
       executed = true
       return { ok: true, exitCode: 0, stdout: 'ok' }
     },
+    onModelPhase: async (event) => phases.push(structuredClone(event)),
   })
 
   assert.equal(executed, true)
   assert.equal(modelCalls, 1, 'the exhausted budget must block every later provider request')
   assert.equal(result.budgetExceeded, true)
   assert.equal(result.incomplete, true)
+  const toolPhase = phases.find((event) => event.phase === 'completed' && event.toolCalls?.length > 0)
+  assert.ok(toolPhase)
+  assert.equal(toolPhase.content, '')
 })
 
 test('provider cost estimate remains telemetry and never blocks normal BYOK completion', async () => {
@@ -1512,6 +1518,7 @@ test('a first-turn visual edit exposes write tools and rejects a false missing-t
   assert.equal(specs.every(Boolean), true)
 
   const executed = []
+  const modelRequestMessages = []
   let modelCalls = 0
   let updated = false
   const result = await runToolsLoop({
@@ -1529,6 +1536,7 @@ test('a first-turn visual edit exposes write tools and rejects a false missing-t
     maxIters: 7,
     enableToolHooks: false,
     runModel: async ({ messages, tools }) => {
+      modelRequestMessages.push(structuredClone(messages))
       modelCalls += 1
       const visibleNames = tools.map((item) => item?.function?.name).filter(Boolean)
       for (const name of ['read_file', 'write_file', 'edit_file', 'apply_patch']) {
@@ -1611,7 +1619,101 @@ test('a first-turn visual edit exposes write tools and rejects a false missing-t
   assert.equal(result.text, '已原位修改并回读验证 gallery.html。')
   assert.equal(result.incomplete, undefined)
   assert.deepEqual(executed, ['read_file', 'write_file', 'read_file'])
+  assert.equal(modelCalls, process.platform === 'win32' ? 6 : 5)
+  const reviewRequests = modelRequestMessages.filter((request) => request.some((message) => (
+    message.role === 'system'
+      && String(message.content).includes('[FINAL ANSWER EVIDENCE REVIEW REQUIRED]')
+  )))
+  assert.equal(reviewRequests.length, 1)
+  assert.equal(reviewRequests[0], modelRequestMessages.at(-1))
+  const reviewText = reviewRequests[0].map((message) => String(message.content || '')).join('\n')
+  assert.match(reviewText, /postMutationVerificationPassed":true/)
+  assert.match(reviewText, /localHtmlValidationPassed":true/)
+})
+
+test('execution completion text stays private until the current evidence review is valid', async () => {
+  const target = 'D:\\evidence-review-stream-guard.txt'
+  const specs = ['read_file', 'write_file']
+    .map((name) => SERVER_TOOL_SPECS.find((item) => item?.function?.name === name))
+  const deltas = []
+  let modelCalls = 0
+  let written = false
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-evidence-review-stream-guard',
+      userId: null,
+      origin: 'chat',
+      prompt: `Modify ${target} and verify the saved content.`,
+    },
+    step: { id: 'step-evidence-review-stream-guard', kind: 'chat' },
+    messages: [{ role: 'user', content: `Modify ${target} and verify the saved content.` }],
+    intentMode: 'execute',
+    toolSpecs: specs,
+    approvalMode: 'bypass',
+    maxIters: 7,
+    enableToolHooks: false,
+    onModelDelta: async ({ text }) => deltas.push(text),
+    runModel: async ({ messages, onTextDelta }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'stream-guard-initial-read',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: target }) },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'stream-guard-write',
+            type: 'function',
+            function: {
+              name: 'write_file',
+              arguments: JSON.stringify({ path: target, content: 'updated' }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 3) {
+        await onTextDelta?.('Premature completed claim.')
+        return { content: 'Premature completed claim.', toolCalls: [] }
+      }
+      if (modelCalls === 4) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'stream-guard-verification-read',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: target }) },
+          }],
+        }
+      }
+      const reviewText = messages.map((message) => String(message.content || '')).join('\n')
+      assert.match(reviewText, /\[FINAL ANSWER EVIDENCE REVIEW REQUIRED\]/u)
+      await onTextDelta?.('Verified completion.')
+      return { content: 'Verified completion.', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      if (name === 'write_file') {
+        written = true
+        return { ok: true, path: args.path, changedPaths: [args.path] }
+      }
+      return {
+        ok: true,
+        path: args.path,
+        content: written ? 'updated' : 'original',
+        truncated: false,
+      }
+    },
+  })
+
   assert.equal(modelCalls, 5)
+  assert.equal(result.text, 'Verified completion.')
+  assert.deepEqual(deltas, ['Verified completion.'])
 })
 
 test('a successful expected-path HTML patch suppresses a stray generate_image call', async () => {
@@ -1725,6 +1827,7 @@ test('a behavioral revision rejects a post-read missing-tool claim and rewrites 
 
   const executed = []
   const checkpoints = []
+  const modelRequestMessages = []
   let modelCalls = 0
   let updated = false
   const result = await runToolsLoop({
@@ -1771,6 +1874,7 @@ test('a behavioral revision rejects a post-read missing-tool claim and rewrites 
       return true
     },
     runModel: async ({ messages, tools }) => {
+      modelRequestMessages.push(structuredClone(messages))
       modelCalls += 1
       const visibleNames = tools.map((item) => item?.function?.name).filter(Boolean)
       for (const name of names) assert.ok(visibleNames.includes(name), `${name} must remain mounted`)
@@ -1846,7 +1950,16 @@ test('a behavioral revision rejects a post-read missing-tool claim and rewrites 
   assert.equal(result.text, '已让所有图片在旋转时始终面向镜头，并回读验证。')
   assert.equal(result.incomplete, undefined)
   assert.deepEqual(executed, ['read_file', 'write_file', 'read_file'])
-  assert.equal(modelCalls, 5)
+  assert.equal(modelCalls, process.platform === 'win32' ? 6 : 5)
+  const reviewRequests = modelRequestMessages.filter((request) => request.some((message) => (
+    message.role === 'system'
+      && String(message.content).includes('[FINAL ANSWER EVIDENCE REVIEW REQUIRED]')
+  )))
+  assert.equal(reviewRequests.length, 1)
+  assert.equal(reviewRequests[0], modelRequestMessages.at(-1))
+  const reviewText = reviewRequests[0].map((message) => String(message.content || '')).join('\n')
+  assert.match(reviewText, /postMutationVerificationPassed":true/)
+  assert.match(reviewText, /localHtmlValidationPassed":true/)
   const capabilityDecision = checkpoints.at(-1)?.capabilityDecision
   assert.deepEqual(capabilityDecision?.requiredCapabilities, [
     'execution_evidence',
@@ -1867,6 +1980,7 @@ test('a capability challenge after a false refusal rechecks tools and completes 
   assert.equal(specs.every(Boolean), true)
 
   const executed = []
+  const modelRequestMessages = []
   let modelCalls = 0
   let updated = false
   const result = await runToolsLoop({
@@ -1889,6 +2003,7 @@ test('a capability challenge after a false refusal rechecks tools and completes 
     maxIters: 6,
     enableToolHooks: false,
     runModel: async ({ messages, tools }) => {
+      modelRequestMessages.push(structuredClone(messages))
       modelCalls += 1
       const visibleNames = tools.map((item) => item?.function?.name).filter(Boolean)
       for (const name of names) assert.ok(visibleNames.includes(name), `${name} must be rechecked`)
@@ -1953,7 +2068,16 @@ test('a capability challenge after a false refusal rechecks tools and completes 
   assert.equal(result.text, '已直接修改并回读验证 gallery.html。')
   assert.equal(result.incomplete, undefined)
   assert.deepEqual(executed, ['write_file', 'read_file'])
-  assert.equal(modelCalls, 4)
+  assert.equal(modelCalls, process.platform === 'win32' ? 5 : 4)
+  const reviewRequests = modelRequestMessages.filter((request) => request.some((message) => (
+    message.role === 'system'
+      && String(message.content).includes('[FINAL ANSWER EVIDENCE REVIEW REQUIRED]')
+  )))
+  assert.equal(reviewRequests.length, 1)
+  assert.equal(reviewRequests[0], modelRequestMessages.at(-1))
+  const reviewText = reviewRequests[0].map((message) => String(message.content || '')).join('\n')
+  assert.match(reviewText, /postMutationVerificationPassed":true/)
+  assert.match(reviewText, /localHtmlValidationPassed":true/)
 })
 
 test('a capability challenge after an explicit read-only turn sees write tools but cannot execute them', async () => {
@@ -2727,6 +2851,125 @@ test('iteration limit cannot bypass verification after a successful local mutati
   assert.equal(result.reason, 'post_mutation_verification_missing')
 })
 
+test('first-round completion deltas stay private when the same response writes an unverified file', async () => {
+  const writeFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'write_file')
+  const published = []
+  const phases = []
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-first-round-write-stream-guard',
+      userId: null,
+      origin: 'chat',
+      prompt: 'Create result.txt now and verify it.',
+    },
+    step: { id: 'step-first-round-write-stream-guard', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Create result.txt now and verify it.' }],
+    toolSpecs: [writeFile],
+    maxIters: 1,
+    enableToolHooks: false,
+    onModelDelta: async ({ text }) => published.push(text),
+    onModelPhase: async (event) => phases.push(structuredClone(event)),
+    runModel: async ({ onTextDelta, toolChoice }) => {
+      if (toolChoice === 'none') {
+        return { content: 'The file was written but verification is still pending.', toolCalls: [] }
+      }
+      await onTextDelta?.('Completed: result.txt is ready.')
+      return {
+        content: 'Completed: result.txt is ready.',
+        toolCalls: [{
+          id: 'first-round-streamed-write',
+          type: 'function',
+          function: {
+            name: 'write_file',
+            arguments: JSON.stringify({ path: 'result.txt', content: 'hello' }),
+          },
+        }],
+      }
+    },
+    executeTool: async () => ({ ok: true, path: 'result.txt', bytes: 5 }),
+  })
+
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'post_mutation_verification_missing')
+  assert.equal(published.some((text) => /Completed: result\.txt is ready\./u.test(text)), false)
+  const toolPhase = phases.find((event) => event.phase === 'completed' && event.toolCalls?.length > 0)
+  assert.ok(toolPhase)
+  assert.equal(toolPhase.content, '')
+})
+
+test('a spontaneous first-round write cannot leak completion text from an answer-mode chat', async () => {
+  const writeFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'write_file')
+  const published = []
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-answer-mode-spontaneous-write-stream-guard',
+      userId: null,
+      origin: 'chat',
+      prompt: 'Tell me whether result.txt is ready.',
+    },
+    step: { id: 'step-answer-mode-spontaneous-write-stream-guard', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Tell me whether result.txt is ready.' }],
+    intentMode: 'answer',
+    toolSpecs: [writeFile],
+    maxIters: 1,
+    enableToolHooks: false,
+    onModelDelta: async ({ text }) => published.push(text),
+    runModel: async ({ onTextDelta, toolChoice }) => {
+      if (toolChoice === 'none') {
+        return { content: 'The write ran, but the task did not finish.', toolCalls: [] }
+      }
+      await onTextDelta?.('任务已经完成。')
+      return {
+        content: '任务已经完成。',
+        toolCalls: [{
+          id: 'answer-mode-spontaneous-write',
+          type: 'function',
+          function: {
+            name: 'write_file',
+            arguments: JSON.stringify({ path: 'result.txt', content: 'hello' }),
+          },
+        }],
+      }
+    },
+    executeTool: async () => ({ ok: true, path: 'result.txt', bytes: 5 }),
+  })
+
+  assert.equal(result.incomplete, true)
+  assert.equal(published.includes('任务已经完成。'), false)
+})
+
+test('pure chat deltas remain live without execution evidence requirements', async () => {
+  const published = []
+  let publishedBeforeModelReturn = false
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-pure-chat-live-stream',
+      userId: null,
+      origin: 'chat',
+      prompt: 'Say hello.',
+    },
+    step: { id: 'step-pure-chat-live-stream', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Say hello.' }],
+    intentMode: 'answer',
+    toolSpecs: [],
+    maxIters: 1,
+    enableToolHooks: false,
+    onModelDelta: async ({ text }) => published.push(text),
+    runModel: async ({ onTextDelta }) => {
+      await onTextDelta?.('Hello from the live stream.')
+      publishedBeforeModelReturn = published.includes('Hello from the live stream.')
+      return { content: 'Hello from the live stream.', toolCalls: [] }
+    },
+    executeTool: async () => {
+      throw new Error('pure chat must not execute tools')
+    },
+  })
+
+  assert.equal(result.text, 'Hello from the live stream.')
+  assert.equal(publishedBeforeModelReturn, true)
+  assert.deepEqual(published, ['Hello from the live stream.'])
+})
+
 test('shell writes stay pending until the matching target is read back', async () => {
   const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
@@ -2935,10 +3178,28 @@ for (const scenario of [
 }
 
 test('Windows cmd directory discovery redirected to nul is verification, not a mutation', () => {
+  const commands = [
+    'cmd.exe /c "cd /d D:\\destok && dir /s /b qa-context-test*.html 2>nul"',
+    'dir "D:\\destok\\artifact-output"',
+  ]
+
+  for (const name of ['bash_exec', 'run_command']) {
+    for (const command of commands) {
+      const call = { name, args: { command } }
+      assert.equal(isVerificationCall(call), true, `${name}: ${command}`)
+      assert.equal(isLocalMutationCall(call), false, `${name}: ${command}`)
+    }
+  }
+})
+
+test('LSP navigation is classified as read-only verification, not a mutation', () => {
   const call = {
-    name: 'bash_exec',
+    name: 'lsp',
     args: {
-      command: 'cmd.exe /c "cd /d D:\\destok && dir /s /b qa-context-test*.html 2>nul"',
+      operation: 'goToDefinition',
+      file: 'D:\\workspace\\source.js',
+      line: 1,
+      character: 1,
     },
   }
 
@@ -2955,13 +3216,194 @@ test('Windows cmd verification classification stays conservative for dynamic or 
     'cmd.exe /c "dir /b `whoami`"',
     'cmd.exe /c "dir /b %TARGET%"',
     'cmd.exe /v:on /c "dir /b !TARGET!"',
+    'dir > results.txt',
+    'dir; del victim.txt',
+    'dir $(New-Item victim.txt)',
   ]
 
-  for (const command of commands) {
-    const call = { name: 'bash_exec', args: { command } }
-    assert.equal(isVerificationCall(call), false, command)
-    assert.equal(isLocalMutationCall(call), true, command)
+  for (const name of ['bash_exec', 'run_command']) {
+    for (const command of commands) {
+      const call = { name, args: { command } }
+      assert.equal(isVerificationCall(call), false, `${name}: ${command}`)
+      assert.equal(isLocalMutationCall(call), true, `${name}: ${command}`)
+    }
   }
+})
+
+test('PDF layout completion accepts only controlled validator commands and result lines', () => {
+  const comprehensive = {
+    name: 'bash_exec',
+    args: { command: 'python verify_comprehensive.py' },
+  }
+  const successful = {
+    ok: true,
+    exitCode: 0,
+    stdout: 'all structural checks passed\nRESULT: PDF_LAYOUT_VERIFICATION_OK\n',
+  }
+
+  assert.equal(isVerificationCall(comprehensive), true)
+  assert.equal(isLocalMutationCall(comprehensive), false)
+  assert.equal(isSuccessfulPdfLayoutVerification(comprehensive, successful), true)
+  assert.equal(isSuccessfulPdfLayoutVerification({
+    name: 'bash_exec',
+    args: { command: 'python verify_final.py' },
+  }, successful), false)
+  assert.equal(isSuccessfulPdfLayoutVerification(comprehensive, {
+    ...successful,
+    stdout: 'prefix PDF_LAYOUT_VERIFICATION_OK suffix\n',
+  }), false)
+  assert.equal(isSuccessfulPdfLayoutVerification({
+    name: 'bash_exec',
+    args: { command: 'python verify_comprehensive.py PDF_LAYOUT_VERIFICATION_OK' },
+  }, successful), false)
+  assert.equal(isSuccessfulPdfLayoutVerification({
+    name: 'bash_exec',
+    args: { command: 'python verify_comprehensive.py', expected_outputs: ['result.pdf'] },
+  }, successful), false)
+})
+
+test('comprehensive PDF verification followed by bare dir remains complete', async () => {
+  const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
+  const runCommand = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'run_command')
+  const writeFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'write_file')
+  const directory = 'D:\\destok\\pdf-layout-regression'
+  const pdfPath = `${directory}\\filled-answer.pdf`
+  const pngPath = `${directory}\\filled-answer.png`
+  const validatorPath = `${directory}\\verify_comprehensive.py`
+  let modelCalls = 0
+  let checkpoint = null
+  const executed = []
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'comprehensive-pdf-verification-bare-dir-job',
+      userId: null,
+      origin: 'chat',
+      prompt: `Fill the supplied PDF, save ${pdfPath} and ${pngPath}, and verify the layout.`,
+    },
+    step: { id: 'comprehensive-pdf-verification-bare-dir-step', kind: 'chat' },
+    messages: [{
+      role: 'user',
+      content: `Fill the supplied PDF, save ${pdfPath} and ${pngPath}, and verify the layout.`,
+    }],
+    intentMode: 'execute',
+    toolSpecs: [bashExec, runCommand, writeFile],
+    maxIters: 8,
+    enableToolHooks: false,
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return true
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) return {
+        content: '',
+        toolCalls: [{
+          id: 'generate-pdf-layout-artifacts',
+          type: 'function',
+          function: {
+            name: 'bash_exec',
+            arguments: JSON.stringify({
+              command: 'python fill_pdf.py',
+              cwd: directory,
+              expected_outputs: [pdfPath, pngPath],
+            }),
+          },
+        }],
+      }
+      if (modelCalls === 2) return {
+        content: '',
+        toolCalls: [{
+          id: 'first-pdf-layout-validator',
+          type: 'function',
+          function: {
+            name: 'bash_exec',
+            arguments: JSON.stringify({ command: 'python verify_pdf_layout.py', cwd: directory }),
+          },
+        }],
+      }
+      if (modelCalls === 3) return {
+        content: '',
+        toolCalls: [{
+          id: 'write-comprehensive-validator',
+          type: 'function',
+          function: {
+            name: 'write_file',
+            arguments: JSON.stringify({
+              path: validatorPath,
+              content: 'print("RESULT: PDF_LAYOUT_VERIFICATION_OK")',
+            }),
+          },
+        }],
+      }
+      if (modelCalls === 4) return {
+        content: '',
+        toolCalls: [{
+          id: 'run-comprehensive-validator',
+          type: 'function',
+          function: {
+            name: 'bash_exec',
+            arguments: JSON.stringify({ command: 'python verify_comprehensive.py', cwd: directory }),
+          },
+        }],
+      }
+      if (modelCalls === 5) return {
+        content: '',
+        toolCalls: [{
+          id: 'list-generated-files-with-bare-dir',
+          type: 'function',
+          function: {
+            name: 'run_command',
+            arguments: JSON.stringify({ command: `dir "${directory}"`, cwd: directory }),
+          },
+        }],
+      }
+      return {
+        content: 'The PDF and PNG passed comprehensive layout verification.',
+        toolCalls: [],
+      }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push(args.command ? args.command : `${name}:${args.path}`)
+      if (name === 'write_file') {
+        return { ok: true, path: args.path, changedPaths: [args.path] }
+      }
+      if (Array.isArray(args.expected_outputs) && args.expected_outputs.length > 0) {
+        return {
+          ok: true,
+          exitCode: 0,
+          cwd: directory,
+          stdout: 'generated\n',
+          changedPaths: [pdfPath, pngPath],
+        }
+      }
+      if (args.command.includes('verify_pdf_layout.py')) {
+        return { ok: true, exitCode: 0, cwd: directory, stdout: 'PDF_LAYOUT_VERIFICATION_OK\n' }
+      }
+      if (args.command.includes('verify_comprehensive.py')) {
+        return {
+          ok: true,
+          exitCode: 0,
+          cwd: directory,
+          stdout: 'all structural checks passed\nRESULT: PDF_LAYOUT_VERIFICATION_OK\n',
+        }
+      }
+      return { ok: true, exitCode: 0, cwd: directory, stdout: 'filled-answer.pdf\nfilled-answer.png\n' }
+    },
+  })
+
+  assert.equal(result.incomplete, undefined, JSON.stringify(result))
+  assert.equal(result.text, 'The PDF and PNG passed comprehensive layout verification.')
+  assert.equal(modelCalls, 6)
+  assert.deepEqual(executed, [
+    'python fill_pdf.py',
+    'python verify_pdf_layout.py',
+    `write_file:${validatorPath}`,
+    'python verify_comprehensive.py',
+    `dir "${directory}"`,
+  ])
+  assert.equal(checkpoint?.completionGuards?.pdfLayoutVerificationObserved, true)
+  assert.deepEqual(checkpoint?.completionGuards?.pendingMutationTargets, [])
 })
 
 test('directory discovery through cmd can precede a write and read-back without leaving a phantom nul target', async () => {
@@ -3060,7 +3502,16 @@ test('directory discovery through cmd can precede a write and read-back without 
   })
 
   assert.deepEqual(executed, ['bash_exec', 'write_file', 'read_file'])
-  assert.equal(modelCalls, 4)
+  assert.equal(modelCalls, process.platform === 'win32' ? 5 : 4)
+  const reviewRequests = modelRequestMessages.filter((request) => request.some((message) => (
+    message.role === 'system'
+      && String(message.content).includes('[FINAL ANSWER EVIDENCE REVIEW REQUIRED]')
+  )))
+  assert.equal(reviewRequests.length, 1)
+  assert.equal(reviewRequests[0], modelRequestMessages.at(-1))
+  const reviewText = reviewRequests[0].map((message) => String(message.content || '')).join('\n')
+  assert.match(reviewText, /postMutationVerificationPassed":true/)
+  assert.match(reviewText, /localHtmlValidationPassed":true/)
   assert.equal(result.incomplete, undefined)
   assert.notEqual(result.reason, 'post_mutation_verification_missing')
   assert.equal(result.text, 'The second revision was saved and verified.')
@@ -3452,6 +3903,13 @@ test('local file mutations require a successful verification before completion',
     .map((item) => item.content)
     .join('\n')
   assert.match(correction, /\[POST-MUTATION VERIFICATION REQUIRED\]/)
+  const finalReview = observedRequests[3]
+    .filter((item) => item.role === 'system')
+    .map((item) => item.content)
+    .join('\n')
+  assert.match(finalReview, /\[FINAL ANSWER EVIDENCE REVIEW REQUIRED\]/)
+  assert.match(finalReview, /evidence_digest=[a-f0-9]{64}/)
+  assert.match(finalReview, /postMutationVerificationPassed":true/)
 })
 
 async function runGitDiffVerificationScenario(diffResult) {

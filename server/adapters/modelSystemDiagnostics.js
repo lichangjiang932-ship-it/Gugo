@@ -10,6 +10,16 @@ const UNAVAILABLE_RUNTIME_HOST_DIAGNOSTICS = Object.freeze({
     persistenceConfigured: false,
     compactionArchiveConfigured: false,
   }),
+  codexHost: Object.freeze({
+    enabled: false,
+    configured: false,
+    discovered: false,
+    signatureValid: false,
+    version: null,
+    ready: false,
+    failureStage: null,
+    reasonCode: 'CODEX_APP_SERVER_NOT_STARTED',
+  }),
 })
 
 export function readUnavailableRuntimeHostDiagnostics() {

@@ -9,6 +9,7 @@ import { createRuntimePluginToolExecutor } from './pluginToolInvocation.js'
 import { snapshotPluginToolSpec } from './runtimePluginToolSpec.js'
 
 const CONNECTOR_TOOL_NAME_SET = new Set(CONNECTOR_TOOL_NAMES)
+const HOST_BOUND_EXECUTION_TOOL_NAMES = new Set(['run_code'])
 const PLUGIN_CAPABILITY_ID_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/
 const PLUGIN_TOOL_RISK_METADATA = Object.freeze({
   riskClass: 'external',
@@ -36,6 +37,14 @@ function reservedToolOwner(name) {
   if (name.startsWith('mcp__')) return 'MCP'
   if (name.startsWith('browser_')) return 'browser'
   return null
+}
+
+function assertHostBoundExecutionToolNotReplaced(name, builtinCapabilityId) {
+  if (!builtinCapabilityId || !HOST_BOUND_EXECUTION_TOOL_NAMES.has(name)) return
+  const error = new Error(`plugin tool cannot replace host-bound execution tool: ${name}`)
+  error.code = 'PLUGIN_TOOL_HOST_BOUND'
+  error.retryable = false
+  throw error
 }
 
 export function createRuntimePluginToolRegistry({
@@ -99,6 +108,7 @@ export function createRuntimePluginToolRegistry({
       throw new Error(`plugin tool cannot shadow ${reservedOwner} tool: ${name}`)
     }
     assertHostManagedArtifactToolNotReplaced(name, builtinCapabilityId)
+    assertHostBoundExecutionToolNotReplaced(name, builtinCapabilityId)
     if (builtinCapabilityId && !supportsRuntimeCapabilityReplacement) {
       throw new Error(`plugin tool cannot shadow builtin tool: ${name}`)
     }
