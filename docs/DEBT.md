@@ -174,6 +174,39 @@ worker containment or execution-time policy checks.
 `tests/approvalPolicy.test.js`, `tests/toolRiskMetadata.test.js`, and
 `tests/runtimePluginCapabilityBinding.test.js`.
 
+## DEBT-EXEC-002 — Atomic Windows process-tree ownership
+
+**Status:** Open
+**Priority:** P1
+**Area:** Execution isolation
+
+**Evidence / reproduction:** Windows commands are currently spawned by Node
+before the tree-kill worker binds a native process handle by PID. The creation
+time cutoff and fail-closed bind reduce PID-reuse risk, and a successful bind
+pins the original identity, but they do not make spawn and ownership atomic.
+The worker also discovers descendants from current Toolhelp snapshots; if an
+intermediate parent exits before the first kill snapshot, its surviving child
+can no longer be linked to the tracked root. The current lease protocol is
+therefore a bounded transition guard, not proof that every descendant was
+contained or terminated.
+
+**Exit criteria:** A trusted native spawn broker must place every Windows
+command that requests tree cleanup into a private Job Object before user code
+runs, preferably with `PROC_THREAD_ATTRIBUTE_JOB_LIST`, or by using
+`CREATE_SUSPENDED`, `AssignProcessToJobObject`, and `ResumeThread`. The job must
+use `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; cleanup success is proven by zero
+active job processes or completion-port evidence. Failure to establish job
+ownership prevents the command from starting, without falling back to bare PID
+or `taskkill`, and all job, process, thread, and pipe handles close on startup
+failure, cancellation, timeout, or broker crash.
+
+**Verification:** Windows CI covers direct children, a short-lived
+intermediate parent with a long-lived grandchild, rapid launch/cancel under PID
+churn without unrelated-process termination, broker startup and runtime
+crashes, immediate working-directory deletion after cancellation, and
+unsupported or nested-job environments failing before user code executes with
+a stable error code.
+
 ## DEBT-LSP-001 — Native language-server navigation
 
 **Status:** Closed
@@ -422,7 +455,6 @@ unregistered oversized files, growth, and shrinkage that was not ratcheted.
     { "path": "server/services/userDataGovernanceService.js", "ceiling": 1714, "group": "artifact-delivery" },
     { "path": "server/services/userDataManagedFileCatalog.js", "ceiling": 1213, "group": "artifact-delivery" },
     { "path": "server/utils/codeSearch.js", "ceiling": 650, "group": "tool-infrastructure" },
-    { "path": "server/utils/processGroup.js", "ceiling": 972, "group": "host-protocol-process" },
     { "path": "server/utils/toolCallHarness.js", "ceiling": 1307, "group": "tool-infrastructure" },
     { "path": "server/utils/toolSchemaCatalog.js", "ceiling": 1077, "group": "tool-infrastructure" }
   ]

@@ -131,7 +131,7 @@ function createBoundedLogSink(logPath) {
 }
 
 function updateStatus(id, userId, fields, now = Date.now()) {
-  getDb().prepare(`
+  return getDb().prepare(`
     UPDATE background_processes SET
       ${Object.keys(fields).map((key) => `${key} = ?`).join(', ')},
       updated_at = ?
@@ -139,28 +139,62 @@ function updateStatus(id, userId, fields, now = Date.now()) {
   `).run(...Object.values(fields), now, id, userId)
 }
 
+function commitRunningStatus(id, userId, fields, now = Date.now()) {
+  return getDb().prepare(`
+    UPDATE background_processes SET
+      ${Object.keys(fields).map((key) => `${key} = ?`).join(', ')},
+      updated_at = ?
+    WHERE id = ? AND user_id = ? AND status = 'running'
+  `).run(...Object.values(fields), now, id, userId)
+}
+
 function attachExitTracking(id, userId, child, closeLog) {
-  const record = { child, closeLog, terminating: false }
+  const record = {
+    child,
+    closeLog,
+    terminating: false,
+    terminationPromise: null,
+    cleanupUnconfirmed: false,
+    rootExited: false,
+    naturalTerminal: null,
+    naturalTerminalPromise: null,
+  }
   liveProcesses.set(id, record)
+  const flushNaturalTerminal = () => {
+    if (!record.naturalTerminal || record.naturalTerminalPromise) {
+      return record.naturalTerminalPromise
+    }
+    record.naturalTerminalPromise = (async () => {
+      await closeLog()
+      if (record.terminating) return
+      const fields = record.cleanupUnconfirmed
+        ? { status: 'orphaned' }
+        : record.naturalTerminal
+      try {
+        commitRunningStatus(id, userId, fields)
+      } catch { return }
+      liveProcesses.delete(id)
+    })().finally(() => { record.naturalTerminalPromise = null })
+    return record.naturalTerminalPromise
+  }
+  record.flushNaturalTerminal = flushNaturalTerminal
+  const commitNaturalTerminal = (fields) => {
+    if (!record.naturalTerminal) record.naturalTerminal = fields
+    return flushNaturalTerminal()
+  }
   // `close` fires only after stdout/stderr have drained. Using `exit` here can
   // close the bounded log sink while pipe data is still queued in Node.
-  child.once('close', async (code, signal) => {
-    await closeLog()
-    try {
-      updateStatus(id, userId, {
+  child.once('close', (code, signal) => {
+    record.rootExited = true
+    commitNaturalTerminal({
         status: signal && code == null ? 'killed' : 'exited',
         exit_code: code,
       })
-    } catch { /* best-effort */ }
-    if (!record.terminating) liveProcesses.delete(id)
   })
-  child.once('error', async () => {
-    await closeLog()
-    try {
-      updateStatus(id, userId, { status: 'failed' })
-    } catch { /* best-effort */ }
-    if (!record.terminating) liveProcesses.delete(id)
+  child.once('error', () => {
+    commitNaturalTerminal({ status: 'failed' })
   })
+  child.once('exit', () => { record.rootExited = true })
 }
 
 /**
@@ -270,7 +304,10 @@ export function listBackgroundProcesses({ userId, limit = 200 } = {}) {
   `).all(userId, lim).map(reconcileOrphanedRow).map(mapProcess)
 }
 
-export async function killBackgroundProcess({ userId, id }) {
+export async function killBackgroundProcess(
+  { userId, id },
+  { terminateProcessTreeFn = terminateProcessTree } = {},
+) {
   if (!userId || !id) return null
   const row = reconcileOrphanedRow(
     getDb().prepare('SELECT * FROM background_processes WHERE id = ? AND user_id = ?').get(id, userId),
@@ -278,18 +315,58 @@ export async function killBackgroundProcess({ userId, id }) {
   if (!row) return null
   const live = liveProcesses.get(id)
   if (row.status !== 'running' || !live?.child?.pid) return mapProcess(row)
-  live.terminating = true
-  const killed = await terminateProcessTree({ pid: live.child.pid, child: live.child })
-  await live.closeLog?.()
-  if (!killed) {
-    const orphanedAt = Date.now()
-    updateStatus(id, userId, { status: 'orphaned' }, orphanedAt)
-    liveProcesses.delete(id)
-    return mapProcess({ ...row, status: 'orphaned', updated_at: orphanedAt })
+  if (live.rootExited || live.child.exitCode != null || live.child.signalCode != null) {
+    await live.naturalTerminalPromise
+    const current = getDb().prepare(
+      'SELECT * FROM background_processes WHERE id = ? AND user_id = ?',
+    ).get(id, userId)
+    if (current?.status !== 'running') return mapProcess(current)
+    const error = new Error('Process identity was lost before tree cleanup could be verified.')
+    error.code = 'PROCESS_TREE_CLEANUP_UNCONFIRMED'
+    error.retryable = false
+    throw error
   }
-  updateStatus(id, userId, { status: 'killed' })
-  liveProcesses.delete(id)
-  return mapProcess(getDb().prepare('SELECT * FROM background_processes WHERE id = ? AND user_id = ?').get(id, userId))
+  if (!live.terminationPromise) {
+    live.terminating = true
+    live.terminationPromise = (async () => {
+      try {
+        const killed = await terminateProcessTreeFn({
+          pid: live.child.pid,
+          child: live.child,
+          killRootOnFailure: false,
+        }) === true
+        if (!killed) {
+          // Cleanup is unproven, not orphaned: retain both the live handle and
+          // the running row so the operation can be retried and destructive
+          // user-data cleanup remains blocked.
+          live.cleanupUnconfirmed = true
+          const error = new Error('Process-tree cleanup could not be verified; the running record was retained.')
+          error.code = 'PROCESS_TREE_CLEANUP_UNCONFIRMED'
+          error.retryable = true
+          throw error
+        }
+        await live.closeLog?.()
+        commitRunningStatus(id, userId, { status: 'killed' })
+        liveProcesses.delete(id)
+        return mapProcess(
+          getDb().prepare('SELECT * FROM background_processes WHERE id = ? AND user_id = ?').get(id, userId),
+        )
+      } finally {
+        if (liveProcesses.get(id) === live) {
+          live.terminating = false
+          if (live.rootExited) {
+            await live.naturalTerminalPromise
+            await live.flushNaturalTerminal?.()
+          }
+        }
+      }
+    })()
+  }
+  try {
+    return await live.terminationPromise
+  } finally {
+    if (liveProcesses.get(id) === live) live.terminationPromise = null
+  }
 }
 
 export function readBackgroundLog({ userId, id, limit = 16_384 } = {}) {

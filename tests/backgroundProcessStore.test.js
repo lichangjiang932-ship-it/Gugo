@@ -62,16 +62,51 @@ test('startBackgroundProcess launches a background process and records it', asyn
   assert.match(read.log, /bg-ok/)
 })
 
-test('killBackgroundProcess marks the record killed', async () => {
+test('killBackgroundProcess marks the record killed and the terminal state stays stable', async (t) => {
   const node = process.execPath
   const bgProcess = startBackgroundProcess({
     userId,
     command: `"${node}" -e "setInterval(() => {}, 1000)"`,
     cwd: workspace,
   })
+  t.after(async () => {
+    try { await killBackgroundProcess({ userId, id: bgProcess.id }) } catch { /* best-effort cleanup */ }
+  })
   const killed = await killBackgroundProcess({ userId, id: bgProcess.id })
   assert.equal(killed.status, 'killed')
   await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.equal(
+    getDb().prepare('SELECT status FROM background_processes WHERE id = ?').get(bgProcess.id).status,
+    'killed',
+    'late close/error events must not overwrite the kill-owned terminal state',
+  )
+})
+
+test('unconfirmed process-tree cleanup remains running and can be retried', async (t) => {
+  const bgProcess = startBackgroundProcess({
+    userId,
+    command: `"${process.execPath}" -e "setInterval(() => {}, 1000)"`,
+    cwd: workspace,
+  })
+  t.after(async () => {
+    try { await killBackgroundProcess({ userId, id: bgProcess.id }) } catch { /* best-effort cleanup */ }
+  })
+
+  await assert.rejects(
+    killBackgroundProcess(
+      { userId, id: bgProcess.id },
+      { terminateProcessTreeFn: async () => false },
+    ),
+    (error) => error?.code === 'PROCESS_TREE_CLEANUP_UNCONFIRMED' && error?.retryable === true,
+  )
+  assert.equal(
+    getDb().prepare('SELECT status FROM background_processes WHERE id = ?').get(bgProcess.id).status,
+    'running',
+    'unproven cleanup must continue blocking destructive user-data cleanup',
+  )
+
+  const retried = await killBackgroundProcess({ userId, id: bgProcess.id })
+  assert.equal(retried.status, 'killed')
 })
 
 test('background processes are owner-scoped', async () => {
