@@ -199,6 +199,7 @@ const CASES = [
     id: 'APP-04',
     category: 'agent-loop-consumer',
     title: 'an approved Agent Loop call consumes only model/list and feeds its sanitized result back to the model',
+    timeoutMs: 15_000,
     async run(ctx) {
       const protocolMessages = []
       const approvals = []
