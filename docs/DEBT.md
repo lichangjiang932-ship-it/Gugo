@@ -419,7 +419,7 @@ unregistered oversized files, growth, and shrinkage that was not ratcheted.
     { "path": "server/core/subagentRunPersistencePort.js", "ceiling": 633, "group": "kernel-runtime-ports" },
     { "path": "server/core/toolLoopAdapter.js", "ceiling": 736, "group": "kernel-runtime-ports" },
     { "path": "server/db.js", "ceiling": 1653, "group": "persistence-state" },
-    { "path": "server/plugins/localPluginPackageStore.js", "ceiling": 1355, "group": "plugin-lifecycle" },
+    { "path": "server/plugins/localPluginPackageStore.js", "ceiling": 1317, "group": "plugin-lifecycle" },
     { "path": "server/plugins/runtimePluginRegistry.js", "ceiling": 968, "group": "plugin-lifecycle" },
     { "path": "server/routes/evolutionRoutes.js", "ceiling": 882, "group": "route-composition" },
     { "path": "server/routes/pluginRoutes.js", "ceiling": 827, "group": "route-composition" },
