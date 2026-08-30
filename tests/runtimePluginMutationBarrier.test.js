@@ -565,6 +565,12 @@ test('schema 103 upgrade recreates stale identity and JSON barrier triggers', ()
       Number(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value),
       LATEST_SCHEMA_VERSION,
     )
+    const evolutionRunTable = db.prepare(`
+      SELECT sql FROM sqlite_master
+      WHERE type = 'table' AND name = 'evolution_auto_runs'
+    `).get()
+    assert.match(evolutionRunTable?.sql || '', /session_ids_json/u)
+    assert.match(evolutionRunTable?.sql || '', /'promoted'/u)
     db.prepare(`
       INSERT INTO runtime_plugin_releases (release_id, plugin_id) VALUES (?, ?)
     `).run('sample-release', 'sample-plugin')

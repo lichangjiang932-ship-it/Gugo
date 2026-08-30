@@ -5,6 +5,17 @@ import { migrateToV105 } from './v105RuntimePluginMutationBarrierHardening.js'
 import { migrateToV106 } from './v106EvolutionAutoLoop.js'
 
 const VERSION = 107
+const CANONICAL_EVOLUTION_RUN_STATES = Object.freeze([
+  'queued',
+  'running',
+  'rejected',
+  'canary_active',
+  'validated',
+  'promoted',
+  'rolled_back',
+  'stopped',
+  'failed',
+])
 
 function repairError(missing, details = {}) {
   const error = databaseSchemaIncompleteError({
@@ -20,6 +31,25 @@ function validSessionScope(expression) {
   return `json_valid(${expression})
     AND json_type(${expression}) = 'array'
     AND json_array_length(${expression}) BETWEEN 1 AND 10`
+}
+
+function hasCanonicalEvolutionRunStateCheck(db) {
+  const table = db.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = 'evolution_auto_runs'
+  `).get()
+  const stateCheck = String(table?.sql || '').match(
+    /\bstate\s+TEXT\s+NOT\s+NULL\s+CHECK\s*\(\s*state\s+IN\s*\(([\s\S]*?)\)\s*\)/iu,
+  )
+  if (!stateCheck) return false
+  const states = [...stateCheck[1].matchAll(/'([^']+)'/gu)].map((match) => match[1])
+  return states.length === CANONICAL_EVOLUTION_RUN_STATES.length
+    && CANONICAL_EVOLUTION_RUN_STATES.every((state) => states.includes(state))
+}
+
+function evolutionAutoRunsNeedsRebuild(db) {
+  return !hasColumn(db, 'evolution_auto_runs', 'session_ids_json')
+    || !hasCanonicalEvolutionRunStateCheck(db)
 }
 
 function repairBarrierGenerationClaim(db) {
@@ -253,9 +283,10 @@ function repairEvolutionDraft(db) {
         ADD COLUMN promotion_id TEXT REFERENCES evolution_promotions(id) ON DELETE SET NULL;
     `)
   }
-  // Rebuild even when every column exists. Pre-release v106 drafts used a
-  // narrower state CHECK, so column presence alone cannot prove parity.
-  rebuildEvolutionAutoRuns(db)
+  // v106 creates the canonical table for older databases. Rebuild only a
+  // pre-release draft; otherwise unrelated sparse historical fixtures can
+  // force SQLite to reparse schema objects outside this repair's boundary.
+  if (evolutionAutoRunsNeedsRebuild(db)) rebuildEvolutionAutoRuns(db)
   normalizeEvolutionIndexes(db)
 }
 
