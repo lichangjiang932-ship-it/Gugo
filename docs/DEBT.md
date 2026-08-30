@@ -419,7 +419,7 @@ unregistered oversized files, growth, and shrinkage that was not ratcheted.
     { "path": "server/services/turnEventStore.js", "ceiling": 798, "group": "persistence-state" },
     { "path": "server/services/turnExecutionEnvironment.js", "ceiling": 873, "group": "turn-agent-orchestration" },
     { "path": "server/services/turnMessageContext.js", "ceiling": 1048, "group": "turn-agent-orchestration" },
-    { "path": "server/services/userDataGovernanceService.js", "ceiling": 1948, "group": "artifact-delivery" },
+    { "path": "server/services/userDataGovernanceService.js", "ceiling": 1714, "group": "artifact-delivery" },
     { "path": "server/services/userDataManagedFileCatalog.js", "ceiling": 1213, "group": "artifact-delivery" },
     { "path": "server/utils/codeSearch.js", "ceiling": 650, "group": "tool-infrastructure" },
     { "path": "server/utils/processGroup.js", "ceiling": 972, "group": "host-protocol-process" },

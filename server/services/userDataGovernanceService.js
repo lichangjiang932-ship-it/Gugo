@@ -1,15 +1,12 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import JSZip from 'jszip'
 
 import { getDb } from '../db.js'
-import { createCompactionArchiveExportSnapshot } from './compactionArchiveExportRuntime.js'
 import { acquireCompactionArchiveGovernanceLease } from './compactionArchiveGovernanceRuntime.js'
 import {
   buildManagedUserFileCatalog,
   cleanupManagedDeletionStage,
-  openManagedFileDescriptor,
   rollbackManagedDeletionStage,
   stageManagedDeletionDomain,
 } from './userDataManagedFileCatalog.js'
@@ -27,19 +24,22 @@ import {
   listManagedAttachmentUploadBlockers,
   reapDeadManagedAttachmentUploadLeases,
 } from './managedAttachmentUploadLease.js'
+import { createUserDataGovernanceError as governanceError } from './userDataGovernanceError.js'
 import {
   collectDatabaseRows,
   foreignKeyGroups,
   primaryKeyColumns,
   quoteIdentifier,
   rowKey,
-  sanitizeExportDatabase,
   userOwnershipColumn,
 } from './userDataRecordGraph.js'
 
+export {
+  buildAuthoritativeUserDataSnapshot,
+  createAuthoritativeUserDataArchive,
+} from './userDataExportRuntime.js'
+
 export const USER_DATA_CLEAR_CONFIRMATION = 'DELETE ALL MY GUGO DATA'
-const EXPORT_FORMAT = 'gugo-authoritative-user-data'
-const EXPORT_VERSION = 1
 const activeClears = new Set()
 const CLEAR_OPERATION_STAGING = 'staging'
 const CLEAR_OPERATION_COMMITTED = 'database_committed'
@@ -50,14 +50,6 @@ const CLEAR_PREVIEW_VERSION = 1
 const CLEAR_PREVIEW_TTL_MS = 5 * 60 * 1000
 const CLEAR_PREVIEW_MAX_TOKENS = 1024
 const clearPreviewTokens = new Map()
-
-function governanceError(code, message, statusCode = 400, cause = null, details = {}) {
-  const error = new Error(message, cause ? { cause } : undefined)
-  error.code = code
-  error.statusCode = statusCode
-  Object.assign(error, details)
-  return error
-}
 
 const CLEAR_IMPACT_CATEGORIES = Object.freeze([
   'conversations',
@@ -478,24 +470,6 @@ function assertUserRuntimeIdle(db, userId, now = Date.now()) {
   )
 }
 
-function assertUserSessionContentExportReady(db, userId) {
-  if (!tableExists(db, 'session_content_outbox')) return
-  const pending = db.prepare(`
-    SELECT session_id, status
-    FROM session_content_outbox
-    WHERE user_id = ? AND status <> 'materialized'
-    ORDER BY id ASC LIMIT 1
-  `).get(userId)
-  if (!pending) return
-  throw governanceError(
-    'USER_DATA_EXPORT_MATERIALIZATION_PENDING',
-    'Session content is still being committed to local storage; retry the export shortly',
-    409,
-    null,
-    { sessionId: pending.session_id, materializationStatus: pending.status },
-  )
-}
-
 function checkpointUserDataWal(db) {
   let state
   try {
@@ -847,214 +821,6 @@ export function previewAuthoritativeUserDataClear({
       )
     }
     throw error
-  }
-}
-
-export function buildAuthoritativeUserDataSnapshot({
-  userId,
-  db = getDb(),
-  env = process.env,
-  now = Date.now(),
-  cwd = process.cwd(),
-  tempDir,
-  fileSystem = fs,
-  compactionArchivePort,
-} = {}) {
-  const safeUserId = String(userId || '').trim()
-  if (!safeUserId) throw governanceError('UNAUTHORIZED', 'User is required', 401)
-  const compactionExport = createCompactionArchiveExportSnapshot({
-    userId: safeUserId,
-    port: compactionArchivePort,
-  })
-  try {
-    return db.transaction(() => {
-      assertUserSessionContentExportReady(db, safeUserId)
-      const collected = collectDatabaseRows(db, safeUserId, {
-        excludedTables: ['compaction_archive'],
-      })
-      const {
-        records,
-        redactedFields,
-        excludedTables,
-      } = sanitizeExportDatabase(collected)
-      const { catalog } = collected
-      const managed = buildManagedUserFileCatalog({
-        records,
-        userId: safeUserId,
-        db,
-        catalogByName: new Map(catalog.map((table) => [table.name, table])),
-        env,
-        purpose: 'export',
-        fileSystem,
-      })
-      const emergencyJournalFiles = collectTurnEmergencyFailureExportFiles({
-        userId: safeUserId,
-        env,
-        cwd,
-        tempDir,
-        fileSystem,
-      })
-      const files = [...managed.files, ...emergencyJournalFiles, ...compactionExport.files]
-      const tableCounts = Object.fromEntries(
-        Object.entries(records).map(([name, rows]) => [name, rows.length]),
-      )
-      const manifest = {
-        format: EXPORT_FORMAT,
-        version: EXPORT_VERSION,
-        exportedAt: new Date(now).toISOString(),
-        userId: safeUserId,
-        credentialKeyIncluded: false,
-        authenticationSessionsIncluded: false,
-        database: { tableCounts, redactedFields, excludedTables, tables: records },
-        compactionArchiveSource: {
-          portId: compactionExport.portId,
-          governanceApiVersion: compactionExport.governanceApiVersion,
-        },
-        compactionArchives: compactionExport.manifestEntries,
-        files: files.map((file) => ({
-          kind: file.kind,
-          id: file.id,
-          archivePath: file.archivePath,
-          size: file.size,
-          sha256: file.sha256,
-        })),
-      }
-      return { manifest, files, compactionExport }
-    }).immediate()
-  } catch (error) {
-    try {
-      compactionExport.releaseSnapshot()
-    } catch (releaseError) {
-      throw new AggregateError(
-        [error, releaseError],
-        'User-data export snapshot creation failed and compaction cleanup also failed',
-        { cause: releaseError },
-      )
-    }
-    throw error
-  }
-}
-
-export function createAuthoritativeUserDataArchive(options = {}, {
-  acquireGovernanceLease = acquireCompactionArchiveGovernanceLease,
-} = {}) {
-  const lease = acquireGovernanceLease()
-  let compactionExport = null
-  let resourcesReleased = false
-  const releaseResources = () => {
-    if (resourcesReleased) return false
-    resourcesReleased = true
-    const errors = []
-    try { compactionExport?.releaseSnapshot() } catch (error) { errors.push(error) }
-    try { lease.release() } catch (error) { errors.push(error) }
-    if (errors.length === 1) throw errors[0]
-    if (errors.length > 1) {
-      throw new AggregateError(errors, 'User-data export resources could not be released')
-    }
-    return true
-  }
-  let snapshot
-  try {
-    snapshot = buildAuthoritativeUserDataSnapshot({
-      ...options,
-      compactionArchivePort: lease.port,
-    })
-    compactionExport = snapshot.compactionExport
-  } catch (error) {
-    try {
-      releaseResources()
-    } catch (releaseError) {
-      throw new AggregateError(
-        [error, releaseError],
-        'User-data export setup failed and its governance lease could not be released',
-        { cause: releaseError },
-      )
-    }
-    throw error
-  }
-  const { manifest, files } = snapshot
-  const zip = new JSZip()
-  zip.file('manifest.json', `${JSON.stringify(manifest, null, 2)}\n`)
-  zip.file('README.txt', [
-    'Gugo authoritative local user-data export',
-    'The archive contains user-owned database records and managed file contents.',
-    'Authentication session tokens and the credential-vault key are intentionally excluded.',
-    'Encrypted credential envelopes remain encrypted; keep the original vault key separately if they must be restored.',
-    '',
-  ].join('\n'))
-  const fileStreams = []
-  try {
-    for (const file of files) {
-      if (typeof file.createReadStream === 'function') {
-        const fileStream = file.createReadStream()
-        fileStreams.push(fileStream)
-        zip.file(file.archivePath, fileStream)
-        continue
-      }
-      if (Buffer.isBuffer(file.bytes)) {
-        zip.file(file.archivePath, file.bytes)
-        continue
-      }
-      const descriptor = openManagedFileDescriptor(file)
-      if (file.size === 0) {
-        fs.closeSync(descriptor)
-        zip.file(file.archivePath, Buffer.alloc(0))
-        continue
-      }
-      const stream = fs.createReadStream(file.fullPath, {
-        fd: descriptor,
-        autoClose: true,
-        start: 0,
-        end: file.size - 1,
-      })
-      fileStreams.push(stream)
-      zip.file(file.archivePath, stream)
-    }
-  } catch (error) {
-    for (const stream of fileStreams) stream.destroy()
-    try {
-      releaseResources()
-    } catch (releaseError) {
-      throw new AggregateError(
-        [error, releaseError],
-        'User-data export file setup failed and its resources could not be released',
-        { cause: releaseError },
-      )
-    }
-    throw error
-  }
-  const stamp = manifest.exportedAt.replace(/[:.]/g, '-').replace('T', '_').replace('Z', '')
-  const stream = zip.generateNodeStream({ streamFiles: true, compression: 'DEFLATE' })
-  stream.once('error', (error) => {
-    for (const fileStream of fileStreams) fileStream.destroy()
-    try {
-      releaseResources()
-    } catch (releaseError) {
-      error.cleanupError = releaseError
-    }
-  })
-  stream.once('end', () => {
-    try {
-      releaseResources()
-    } catch (error) {
-      stream.destroy(error)
-    }
-  })
-  stream.once('close', () => {
-    if (resourcesReleased) return
-    for (const fileStream of fileStreams) fileStream.destroy()
-    try { releaseResources() } catch { /* surfaced by explicit dispose/error paths */ }
-  })
-  const dispose = () => {
-    for (const fileStream of fileStreams) fileStream.destroy()
-    if (!stream.destroyed) stream.destroy()
-    return releaseResources()
-  }
-  return {
-    filename: `gugo-user-data-${stamp}.zip`,
-    manifest,
-    stream,
-    dispose,
   }
 }
 
