@@ -137,7 +137,9 @@ async function writeRequestFile(commandFile, command) {
  * cwd/environment are committed only after the authenticated control frame is
  * fully validated; every failure path retains the last committed snapshot.
  */
-export async function executeWindowsShellRequest(record, request, prepared) {
+export async function executeWindowsShellRequest(record, request, prepared, {
+  runProcessWithGroupFn = runProcessWithGroup,
+} = {}) {
   const ephemeralEnv = normalizeWindowsEphemeralEnvironment(prepared?.ephemeralEnv || {})
   const snapshotEnv = record.persistentEnv
   const executionEnv = mergeWindowsEnvironment(snapshotEnv, ephemeralEnv)
@@ -166,7 +168,7 @@ export async function executeWindowsShellRequest(record, request, prepared) {
       internalAbortController,
     }
     record.current = current
-    const processResult = await runProcessWithGroup({
+    const processResult = await runProcessWithGroupFn({
       ...buildWindowsTrustedInvocation({ commandFile, token }),
       cwd: record.currentCwd,
       env: executionEnv,
@@ -189,6 +191,16 @@ export async function executeWindowsShellRequest(record, request, prepared) {
     assertSessionOpen(record)
     if (processResult.timedOut || processResult.aborted || processResult.processTreeCleanupFailed) {
       return failureResult(record, current, processResult)
+    }
+    if (processResult.processIsolationFailed) {
+      return failureResult(record, current, processResult, {
+        error: `持久 Shell 进程隔离建立失败：${processResult.processIsolationError || '未知错误'}`,
+      })
+    }
+    if (processResult.processStartFailed) {
+      return failureResult(record, current, processResult, {
+        error: `持久 Shell 启动失败：${processResult.processStartError || '未知错误'}`,
+      })
     }
     if (isSessionExitCommand(request.command)) {
       return failureResult(record, current, processResult, {

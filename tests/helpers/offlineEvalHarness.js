@@ -10,6 +10,7 @@ import {
 } from '../../scripts/offlineEvalCli.js'
 
 const DEFAULT_SUITE_DIRECTORY = fileURLToPath(new URL('../offline-evals/', import.meta.url))
+const OFFLINE_EVAL_SUITE_SOURCE_PATHS = new WeakMap()
 const SUITE_ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/
 const CASE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const MAX_DIAGNOSTIC_LENGTH = 2_000
@@ -26,6 +27,8 @@ const SENSITIVE_DIAGNOSTIC_KEY_SUFFIXES = Object.freeze([
 ])
 export const DEFAULT_OFFLINE_EVAL_CASE_TIMEOUT_MS = 5_000
 export const OFFLINE_EVAL_TEST_TIMEOUT_GRACE_MS = 2_000
+export const OFFLINE_EVAL_WORKER_READY_KIND = 'gugo.offline-eval-case-ready'
+export const OFFLINE_EVAL_WORKER_RESULT_KIND = 'gugo.offline-eval-case-result'
 const OFFLINE_EVAL_CLEANUP_TIMEOUT_MS = 1_000
 
 class OfflineEvalDefinitionError extends Error {
@@ -179,16 +182,22 @@ export async function discoverOfflineEvalSuites({
   const suites = []
   const ids = new Set()
   for (const entry of entries) {
-    const module = await loadModule(join(directory, entry.name))
+    const filePath = join(directory, entry.name)
+    const module = await loadModule(filePath)
     const suite = module?.default
     if (!suite || !Array.isArray(suite.cases)) {
       definitionError(`offline eval module ${entry.name} must default-export a suite`)
     }
     if (ids.has(suite.id)) definitionError(`duplicate offline eval suite id: ${suite.id}`)
     ids.add(suite.id)
+    OFFLINE_EVAL_SUITE_SOURCE_PATHS.set(suite, filePath)
     suites.push(suite)
   }
   return Object.freeze(suites.sort((left, right) => left.id.localeCompare(right.id)))
+}
+
+export function offlineEvalSuiteSourcePath(suite) {
+  return OFFLINE_EVAL_SUITE_SOURCE_PATHS.get(suite) || null
 }
 
 function createCaseContext(signal) {

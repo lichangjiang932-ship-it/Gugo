@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -11,6 +12,7 @@ process.env.APP_DATA_DIR = dataDir
 
 const { createAppServer } = await import('../server/appServer.js')
 const { closeDb, getDb } = await import('../server/db.js')
+const { handleRuntimeConfigRequest } = await import('../server/routes/runtimeConfigRoutes.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 const {
   activateTestCompactionArchivePort,
@@ -47,6 +49,144 @@ test('runtime config endpoint requires authentication', async () => {
   const preview = await fetch(`${origin}/api/system/user-data/preview`)
   assert.equal(preview.status, 401)
   assert.equal((await preview.json()).error.code, 'UNAUTHORIZED')
+})
+
+test('user-data export returns a private ZIP with authoritative manifest metadata', async () => {
+  const { token, userId } = issueTestSession({ email: 'runtime-config-export@example.com' })
+  const response = await fetch(`${origin}/api/system/user-data/export`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('content-type'), 'application/zip')
+  assert.match(response.headers.get('content-disposition'), /^attachment; filename="gugo-user-data-.+\.zip"$/)
+  assert.equal(response.headers.get('cache-control'), 'private, no-store')
+  assert.match(response.headers.get('content-security-policy'), /sandbox/)
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(Buffer.from(await response.arrayBuffer()))
+  const manifest = JSON.parse(await zip.file('manifest.json').async('string'))
+  assert.equal(manifest.userId, userId)
+  assert.equal(manifest.authenticationSessionsIncluded, false)
+  assert.equal(manifest.credentialKeyIncluded, false)
+})
+
+test('user-data export preserves stable service errors before sending headers', async () => {
+  const { token } = issueTestSession({ email: 'runtime-config-export-error@example.com' })
+  const req = {
+    method: 'GET',
+    url: '/api/system/user-data/export',
+    headers: { authorization: `Bearer ${token}` },
+    socket: { remoteAddress: '127.0.0.1' },
+  }
+  const response = { statusCode: null, headers: null, body: '' }
+  response.writeHead = (statusCode, headers) => {
+    response.statusCode = statusCode
+    response.headers = headers
+  }
+  response.end = (body = '') => { response.body += String(body) }
+  const failure = Object.assign(new Error('Export is waiting for durable session content'), {
+    code: 'USER_DATA_EXPORT_MATERIALIZATION_PENDING',
+    statusCode: 409,
+  })
+
+  await handleRuntimeConfigRequest(req, response, {
+    env: { AUTH_MODE: 'local' },
+    createUserDataArchive() { throw failure },
+  })
+
+  assert.equal(response.statusCode, 409)
+  assert.deepEqual(JSON.parse(response.body).error, {
+    code: failure.code,
+    message: failure.message,
+  })
+})
+
+test('user-data export abort and response close dispose once and surface cleanup failure', async () => {
+  const { token } = issueTestSession({ email: 'runtime-config-export-abort@example.com' })
+  const req = Object.assign(new EventEmitter(), {
+    method: 'GET',
+    url: '/api/system/user-data/export',
+    headers: { authorization: `Bearer ${token}` },
+    socket: { remoteAddress: '127.0.0.1' },
+  })
+  const response = Object.assign(new EventEmitter(), {
+    destroyed: false,
+    writableEnded: false,
+    destroyError: null,
+  })
+  response.writeHead = () => {}
+  response.destroy = (error) => {
+    response.destroyed = true
+    response.destroyError = error
+  }
+  const stream = new EventEmitter()
+  stream.pipe = () => response
+  const cleanupError = new AggregateError([new Error('release failed')], 'cleanup failed')
+  let disposeCalls = 0
+
+  await handleRuntimeConfigRequest(req, response, {
+    env: { AUTH_MODE: 'local' },
+    createUserDataArchive() {
+      return {
+        filename: 'user-data.zip',
+        stream,
+        dispose() {
+          disposeCalls += 1
+          throw cleanupError
+        },
+      }
+    },
+  })
+  req.emit('aborted')
+  response.emit('close')
+
+  assert.equal(disposeCalls, 1)
+  assert.equal(response.destroyError, cleanupError)
+})
+
+test('user-data export disposes once when piping throws after response headers start', async () => {
+  const { token } = issueTestSession({ email: 'runtime-config-export-pipe-error@example.com' })
+  const req = Object.assign(new EventEmitter(), {
+    method: 'GET',
+    url: '/api/system/user-data/export',
+    headers: { authorization: `Bearer ${token}` },
+    socket: { remoteAddress: '127.0.0.1' },
+  })
+  const response = Object.assign(new EventEmitter(), {
+    destroyed: false,
+    headersSent: false,
+    writableEnded: false,
+    destroyError: null,
+    writeHeadCalls: 0,
+  })
+  response.writeHead = () => {
+    response.writeHeadCalls += 1
+    response.headersSent = true
+  }
+  response.destroy = (error) => {
+    response.destroyed = true
+    response.destroyError = error
+  }
+  const pipeError = new Error('pipe failed')
+  const stream = new EventEmitter()
+  stream.pipe = () => { throw pipeError }
+  let disposeCalls = 0
+
+  await handleRuntimeConfigRequest(req, response, {
+    env: { AUTH_MODE: 'local' },
+    createUserDataArchive() {
+      return {
+        filename: 'user-data.zip',
+        stream,
+        dispose() { disposeCalls += 1 },
+      }
+    },
+  })
+  response.emit('close')
+
+  assert.equal(response.writeHeadCalls, 1)
+  assert.equal(disposeCalls, 1)
+  assert.equal(response.destroyError, pipeError)
 })
 
 test('user-data DELETE requires a fresh preview token before any deletion', async () => {

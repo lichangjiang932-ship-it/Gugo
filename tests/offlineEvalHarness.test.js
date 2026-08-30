@@ -11,6 +11,7 @@ import {
   defineOfflineEvalCase,
   defineOfflineEvalSuite,
   discoverOfflineEvalSuites,
+  offlineEvalSuiteSourcePath,
   parseOfflineEvalOptions,
   runOfflineEvalSuites,
   writeOfflineEvalReport,
@@ -69,6 +70,8 @@ test('offline eval discovery is deterministic and rejects duplicate suite ids', 
       loadModule: async (filePath) => modules.get(basename(filePath)),
     })
     assert.deepEqual(discovered.map((entry) => entry.id), ['alpha', 'zeta'])
+    assert.equal(offlineEvalSuiteSourcePath(discovered[0]), join(root, 'z.eval.js'))
+    assert.equal(offlineEvalSuiteSourcePath(discovered[1]), join(root, 'a.eval.js'))
 
     await assert.rejects(
       discoverOfflineEvalSuites({

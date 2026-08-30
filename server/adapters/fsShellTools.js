@@ -23,6 +23,7 @@ import {
   isProtectedExecutionEnvKey,
   sanitizeChildEnv,
 } from '../utils/sensitiveEnv.js'
+import { processExecutionBoundaryFailure } from '../utils/processExecutionFailure.js'
 import {
   buildCodeExecutionEnv,
   codeExecutionFailureHint,
@@ -977,7 +978,7 @@ export async function bashExecTool({
   signal = null,
   onOutput = null,
 }, {
-  permissionToolName = 'bash_exec',
+  permissionToolName = 'bash_exec', runProcessWithGroupFn = runProcessWithGroup,
 } = {}) {
   assertToolPermitted(userId, effectivePermissionToolName(permissionToolName, 'bash_exec'))
   if (typeof command !== 'string' || !command.trim()) throw badReq('command 必填')
@@ -1058,7 +1059,7 @@ export async function bashExecTool({
     await prepareExecution(cwd)
     const shellPath = isWin ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh'
     const shellArgs = isWin ? ['/d', '/s', '/c', command] : ['-c', command]
-    rawResult = await runProcessWithGroup({
+    rawResult = await runProcessWithGroupFn({
       shellPath,
       shellArgs,
       cwd,
@@ -1125,23 +1126,12 @@ export async function bashExecTool({
     ...(r.outputLogError ? { outputLogError: r.outputLogError } : {}),
   }
 
-  if (r.processTreeCleanupFailed) {
+  const boundaryFailure = processExecutionBoundaryFailure(
+    r, { cwd: displayCwd, executionMetadata, verificationFields },
+  )
+  if (boundaryFailure) {
     if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
-    return {
-      ok: false,
-      code: 'PROCESS_TREE_CLEANUP_FAILED',
-      processTreeCleanupFailed: true,
-      ...(r.aborted ? { cancelled: true } : {}),
-      ...(r.timedOut ? { timedOut: true } : {}),
-      ...(r.truncated ? { truncated: true } : {}),
-      error: '命令已停止，但无法确认所有子进程都已退出',
-      hint: '请检查仍在运行的子进程；在确认清理完成前不要重试会修改同一目录的命令。',
-      stdout: r.stdout,
-      stderr: r.stderr,
-      cwd: displayCwd,
-      ...executionMetadata,
-      ...verificationFields,
-    }
+    return boundaryFailure
   }
   if (r.sessionBoundaryViolation) {
     if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })

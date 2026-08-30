@@ -406,6 +406,93 @@ test('bash_exec:启用后能跑简单命令', async () => {
   assert.equal('changedPaths' in result, false)
 })
 
+test('bash_exec:进程边界失败保留公开诊断且不漂移 cwd', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  const boundaryCwd = 'boundary-failure-cwd'
+  fs.mkdirSync(path.join(workspace, boundaryCwd), { recursive: true })
+  const cases = [
+    {
+      name: 'isolation',
+      override: {
+        processIsolationFailed: true,
+        processIsolationError: 'job object denied',
+      },
+      code: 'PROCESS_ISOLATION_FAILED',
+      flag: 'processIsolationFailed',
+      error: /job object denied/iu,
+    },
+    {
+      name: 'start',
+      override: {
+        processStartFailed: true,
+        processStartError: 'spawn ENOENT',
+      },
+      code: 'PROCESS_START_FAILED',
+      flag: 'processStartFailed',
+      error: /spawn ENOENT/iu,
+    },
+    {
+      name: 'cleanup',
+      override: { processTreeCleanupFailed: true },
+      code: 'PROCESS_TREE_CLEANUP_FAILED',
+      flag: 'processTreeCleanupFailed',
+      error: /无法确认所有子进程都已退出/iu,
+    },
+  ]
+
+  for (const scenario of cases) {
+    const result = await bashExecTool(
+      { command: `echo MUST_NOT_RUN_${scenario.name}`, cwd: boundaryCwd },
+      {
+        runProcessWithGroupFn: async () => ({
+          stdout: '',
+          stderr: '',
+          code: null,
+          signal: null,
+          timedOut: false,
+          killed: false,
+          processStartFailed: false,
+          processStartError: null,
+          processIsolationFailed: false,
+          processIsolationError: null,
+          processTreeCleanupFailed: false,
+          truncated: false,
+          aborted: false,
+          totalOutputBytes: 0,
+          ...scenario.override,
+        }),
+      },
+    )
+
+    assert.equal(result.ok, false, scenario.name)
+    assert.equal(result.code, scenario.code, scenario.name)
+    assert.equal(result[scenario.flag], true, scenario.name)
+    assert.match(result.error, scenario.error, scenario.name)
+    assert.equal(result.cwd, boundaryCwd, scenario.name)
+  }
+})
+
+test('bash_exec: Windows 目标程序启动失败返回结构化诊断', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  const originalComspec = process.env.COMSPEC
+  try {
+    process.env.COMSPEC = path.join(workspace, `gugo-missing-shell-${process.pid}.exe`)
+    const result = await bashExecTool({ command: 'echo MUST_NOT_RUN' })
+
+    assert.equal(result.ok, false)
+    assert.equal(result.code, 'PROCESS_START_FAILED')
+    assert.equal(result.processStartFailed, true)
+    assert.match(result.processStartError, /ENOENT/iu)
+    assert.equal(result.processIsolationFailed, undefined)
+    assert.match(result.error, /ENOENT/iu)
+  } finally {
+    if (originalComspec === undefined) delete process.env.COMSPEC
+    else process.env.COMSPEC = originalComspec
+  }
+})
+
 test('bash_exec:expected_outputs 验证新建二进制文件并返回真实 changedPaths', async () => {
   process.env.WORKSPACE_SHELL_ENABLED = '1'
   fs.writeFileSync(path.join(workspace, 'fresh-source.bin'), Buffer.from([0, 255, 1, 2]))

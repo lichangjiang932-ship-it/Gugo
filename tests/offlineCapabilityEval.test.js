@@ -11,7 +11,7 @@ import {
   writeOfflineEvalReport,
 } from './helpers/offlineEvalHarness.js'
 import {
-  offlineEvalCaseWorkerDeadlineMs,
+  offlineEvalCaseTestDeadlineMs,
   runOfflineEvalCaseInWorker,
 } from './helpers/offlineEvalCaseWorkerHost.js'
 
@@ -62,7 +62,7 @@ test('offline eval suites', async (t) => {
         let outcome = null
         await t.test(
           `[offline:${suite.id}:${evalCase.id}] ${evalCase.category} — ${evalCase.title}`,
-          { timeout: offlineEvalCaseWorkerDeadlineMs(evalCase) + 1_000 },
+          { timeout: offlineEvalCaseTestDeadlineMs(evalCase) },
           async () => {
             const isolated = await runOfflineEvalCaseInWorker({ suite, evalCase })
             outcome = isolated.outcome

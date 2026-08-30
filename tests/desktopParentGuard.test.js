@@ -114,6 +114,7 @@ test('parent guard stays inert for a standalone server without desktop mode', as
 function createRealParentGuardFixture(t) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-desktop-parent-'))
   const markerPath = path.join(tempDir, 'shutdown.json')
+  const markerTempPath = path.join(tempDir, 'shutdown.pending.json')
   const backendPath = path.join(tempDir, 'backend.mjs')
   const ownerPath = path.join(tempDir, 'owner.mjs')
   const guardUrl = pathToFileURL(
@@ -140,7 +141,8 @@ import { bindDesktopParentGuard, DESKTOP_PARENT_GUARD_MODE } from ${JSON.stringi
 bindDesktopParentGuard({
   mode: DESKTOP_PARENT_GUARD_MODE,
   requestShutdown: async (reason) => {
-    fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({ reason, pid: process.pid }))
+    fs.writeFileSync(${JSON.stringify(markerTempPath)}, JSON.stringify({ reason, pid: process.pid }))
+    fs.renameSync(${JSON.stringify(markerTempPath)}, ${JSON.stringify(markerPath)})
     return 0
   },
 })

@@ -34,7 +34,11 @@ function contentDisposition(filename) {
 export async function handleRuntimeConfigRequest(
   req,
   res,
-  { cwd = process.cwd(), env = process.env } = {},
+  {
+    cwd = process.cwd(),
+    env = process.env,
+    createUserDataArchive = createAuthoritativeUserDataArchive,
+  } = {},
 ) {
   const userId = authenticateRequest(req)
   if (!userId) {
@@ -56,8 +60,15 @@ export async function handleRuntimeConfigRequest(
 
   const url = new URL(req.url, 'http://localhost')
   if (req.method === 'GET' && url.pathname === '/api/system/user-data/export') {
+    let archive = null
+    let exportDisposed = false
+    const disposeExport = () => {
+      if (!archive || exportDisposed) return false
+      exportDisposed = true
+      return archive.dispose()
+    }
     try {
-      const archive = createAuthoritativeUserDataArchive({ userId, env })
+      archive = createUserDataArchive({ userId, env })
       res.writeHead(200, {
         'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename="${archive.filename}"`,
@@ -71,7 +82,7 @@ export async function handleRuntimeConfigRequest(
       })
       const abortExport = () => {
         try {
-          archive.dispose()
+          disposeExport()
         } catch (error) {
           if (!res.destroyed) res.destroy(error)
         }
@@ -83,6 +94,20 @@ export async function handleRuntimeConfigRequest(
       archive.stream.pipe(res)
       return
     } catch (error) {
+      let terminalError = error
+      try {
+        disposeExport()
+      } catch (cleanupError) {
+        terminalError = new AggregateError(
+          [error, cleanupError],
+          'User-data export failed and its resources could not be released',
+          { cause: error },
+        )
+      }
+      if (res.headersSent || res.writableEnded || res.destroyed) {
+        if (!res.destroyed) res.destroy(terminalError)
+        return
+      }
       return sendJson(res, error?.statusCode || 500, {
         ok: false,
         error: {

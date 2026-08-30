@@ -108,6 +108,8 @@ test('desktop ASAR verifier normalizes package paths and covers the backend entr
     'server/core/turnPersistenceBootstrap.js',
     'server/services/desktopParentGuard.js',
     'server/services/runtimeServerStartup.js',
+    'server/utils/windowsProcessGateChild.js',
+    'server/utils/windowsProcessGateRuntime.js',
     'shared/runtimeConfigRecoveryProtocol.js',
     'src/lib/officeExport/documentExport.js',
     'src/lib/officeExport/officeCommon.js',

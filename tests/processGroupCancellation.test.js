@@ -30,7 +30,6 @@ test('Windows cancellation waits for a cmd child tree to release its working dir
     let removed = false
     try {
       const controller = new AbortController()
-      const abortTimer = setTimeout(() => controller.abort(), 100)
       const command = 'node -e "setTimeout(() => {}, 10000)"'
       const result = await runProcessWithGroup({
         shellPath: process.env.COMSPEC || 'cmd.exe',
@@ -41,8 +40,8 @@ test('Windows cancellation waits for a cmd child tree to release its working dir
         windowsHide: true,
         windowsVerbatimArguments: true,
         signal: controller.signal,
+        onSpawn: () => setTimeout(() => controller.abort(), 100),
       })
-      clearTimeout(abortTimer)
 
       assert.equal(result.aborted, true)
       assert.equal(result.killed, true)

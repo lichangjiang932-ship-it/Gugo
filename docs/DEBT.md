@@ -174,6 +174,44 @@ worker containment or execution-time policy checks.
 `tests/approvalPolicy.test.js`, `tests/toolRiskMetadata.test.js`, and
 `tests/runtimePluginCapabilityBinding.test.js`.
 
+## DEBT-EXEC-002 — Gate-before-start Windows process-tree ownership
+
+**Status:** Closed
+**Priority:** P1
+**Area:** Execution isolation
+
+**Evidence / reproduction:** `runProcessWithGroup` on Windows now starts only the
+trusted `windowsProcessGateChild.js` gate, binds that live process identity to a
+private Job Object, and waits for both the gate handshake and the worker lease
+before sending the target command. The target and its descendants therefore
+inherit Job membership before user code can run. A failed worker startup or
+bind never sends the start request and is projected as the stable
+`PROCESS_ISOLATION_FAILED` tool result instead of falling back to a bare PID or
+`taskkill` cleanup path.
+
+**Exit criteria:** The gate-before-start path uses
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; cancellation, timeout, and normal root
+exit terminate the complete job, and cleanup succeeds only after
+`QueryInformationJobObject` reports zero active processes. Lease disposal
+closes the job and retained root-process handles, so worker failure also invokes
+the kill-on-close boundary. Startup or ownership failure keeps the user target
+gated and returns a stable failure result.
+
+Legacy callers that pass an already-running process to `terminateProcessTree`
+use a hybrid late-bind path: it identity-checks the observable descendant tree,
+binds the root to a Job Object, and refuses to report success until the job and
+all retained identities are empty across stable snapshots. That path cannot
+retroactively recover a descendant whose complete parent chain disappeared
+before its first snapshot, so this closed item does not claim atomic ownership
+for arbitrary pre-existing trees.
+
+**Verification:** `tests/processGroup.test.js` covers worker startup and runtime
+failure, cancellation while preparing, bind ordering and bind failure, target
+execution after a successful bind, gated descendant cleanup after the root
+exits, and identity-checked late-bind cleanup of a real three-level process tree.
+`tests/processGroupCancellation.test.js` verifies that cancellation waits for
+the Windows child tree to release its working directory.
+
 ## DEBT-LSP-001 — Native language-server navigation
 
 **Status:** Closed
@@ -368,7 +406,7 @@ unregistered oversized files, growth, and shrinkage that was not ratcheted.
     { "path": "server/adapters/browserAutomation.js", "ceiling": 633, "group": "adapter-capabilities" },
     { "path": "server/adapters/codexPluginSkills.js", "ceiling": 637, "group": "adapter-capabilities" },
     { "path": "server/adapters/codingAgentTools.js", "ceiling": 796, "group": "adapter-capabilities" },
-    { "path": "server/adapters/fsShellTools.js", "ceiling": 1393, "group": "adapter-capabilities" },
+    { "path": "server/adapters/fsShellTools.js", "ceiling": 1383, "group": "adapter-capabilities" },
     { "path": "server/adapters/gitWorkbench.js", "ceiling": 628, "group": "adapter-capabilities" },
     { "path": "server/adapters/mediaTools.js", "ceiling": 1175, "group": "adapter-capabilities" },
     { "path": "server/adapters/nativeModelProviders.js", "ceiling": 687, "group": "adapter-capabilities" },
@@ -419,10 +457,9 @@ unregistered oversized files, growth, and shrinkage that was not ratcheted.
     { "path": "server/services/turnEventStore.js", "ceiling": 798, "group": "persistence-state" },
     { "path": "server/services/turnExecutionEnvironment.js", "ceiling": 873, "group": "turn-agent-orchestration" },
     { "path": "server/services/turnMessageContext.js", "ceiling": 1048, "group": "turn-agent-orchestration" },
-    { "path": "server/services/userDataGovernanceService.js", "ceiling": 1948, "group": "artifact-delivery" },
+    { "path": "server/services/userDataGovernanceService.js", "ceiling": 1714, "group": "artifact-delivery" },
     { "path": "server/services/userDataManagedFileCatalog.js", "ceiling": 1213, "group": "artifact-delivery" },
     { "path": "server/utils/codeSearch.js", "ceiling": 650, "group": "tool-infrastructure" },
-    { "path": "server/utils/processGroup.js", "ceiling": 972, "group": "host-protocol-process" },
     { "path": "server/utils/toolCallHarness.js", "ceiling": 1307, "group": "tool-infrastructure" },
     { "path": "server/utils/toolSchemaCatalog.js", "ceiling": 1077, "group": "tool-infrastructure" }
   ]
