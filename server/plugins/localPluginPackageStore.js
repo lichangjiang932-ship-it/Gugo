@@ -156,7 +156,7 @@ function sameFileMetadata(left, right) {
     && left.ctimeMs === right.ctimeMs
 }
 
-function readBoundedJson(filePath, maxBytes, code) {
+function readBoundedJson(filePath, maxBytes, code, { missingCode = code } = {}) {
   let descriptor
   try {
     const before = fs.lstatSync(filePath)
@@ -199,7 +199,14 @@ function readBoundedJson(filePath, maxBytes, code) {
     }
     return parsed
   } catch (error) {
-    if (error?.code === code) throw error
+    if (error?.code === code || error?.code === missingCode) throw error
+    if (error?.code === 'ENOENT' && missingCode !== code) {
+      throw packageStoreError(
+        missingCode,
+        'required metadata disappeared while it was being read',
+        409,
+      )
+    }
     throw packageStoreError(code, `required metadata is missing: ${error?.message || error}`)
   } finally {
     if (descriptor !== undefined) fs.closeSync(descriptor)
@@ -365,11 +372,20 @@ function readStoreLock(lockPath) {
   }
   const ownerPath = lockOwnerPathFor(lockPath)
   if (!fs.existsSync(ownerPath)) return { owner: null, lockStat, ownerStat: null }
-  const owner = readBoundedJson(
-    ownerPath,
-    RECEIPT_LIMIT_BYTES,
-    'PLUGIN_PACKAGE_STORE_LOCK_CORRUPT',
-  )
+  let owner
+  try {
+    owner = readBoundedJson(
+      ownerPath,
+      RECEIPT_LIMIT_BYTES,
+      'PLUGIN_PACKAGE_STORE_LOCK_CORRUPT',
+      { missingCode: 'PLUGIN_PACKAGE_STORE_LOCK_CHANGED' },
+    )
+  } catch (error) {
+    if (error?.code === 'PLUGIN_PACKAGE_STORE_LOCK_CHANGED') {
+      return { owner: null, lockStat, ownerStat: null, changed: true }
+    }
+    throw error
+  }
   const keys = Object.keys(owner || {}).sort()
   const expectedKeys = ['createdAt', 'pid', 'schemaVersion', 'token'].sort()
   if (
@@ -389,12 +405,22 @@ function readStoreLock(lockPath) {
       409,
     )
   }
-  return { owner, lockStat, ownerStat: fs.lstatSync(ownerPath) }
+  let ownerStat
+  try {
+    ownerStat = fs.lstatSync(ownerPath)
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return { owner: null, lockStat, ownerStat: null, changed: true }
+    }
+    throw error
+  }
+  return { owner, lockStat, ownerStat, changed: false }
 }
 
 function clearStaleStoreLock(lockPath, transactionRoot) {
   const lock = readStoreLock(lockPath)
   if (!lock) return true
+  if (lock.changed) return false
   const context = STORE_LOCK_CONTEXT.getStore()
   if (
     lock.owner
@@ -413,6 +439,7 @@ function clearStaleStoreLock(lockPath, transactionRoot) {
   try {
     const current = readStoreLock(lockPath)
     if (!current) return true
+    if (current.changed) return false
     if (lock.owner?.token !== current.owner?.token) return false
     if (current.owner && processIsAlive(current.owner.pid)) return false
     if (current.owner) fs.unlinkSync(lockOwnerPathFor(lockPath))
