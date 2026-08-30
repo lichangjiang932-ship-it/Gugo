@@ -237,7 +237,7 @@ export async function runModelRequest(s) {
             }
             const terminal = await s.finishTerminalResult({
               text: !s.hasRequiredArtifacts()
-                ? s.missingArtifactBlockerText()
+                ? ''
                 : wrapUpText || '模型预算已用尽，任务尚未完成。请重试以继续。',
               ...(wrapUpText ? { partialText: wrapUpText } : {}),
               artifactIds: s.artifactIds,
@@ -279,7 +279,7 @@ export async function runModelRequest(s) {
 
           const terminal = await s.finishTerminalResult(s.partialResultFallback.apply({
             text: !s.hasRequiredArtifacts()
-              ? s.missingArtifactBlockerText()
+              ? ''
               : '任务执行被中断，尚未完成。请重试以继续。',
             artifactIds: s.artifactIds,
             iterations: s.iter + 1,

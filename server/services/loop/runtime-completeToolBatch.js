@@ -18,6 +18,10 @@ export async function completeToolBatch(s) {
       }
   i.deferredPostBatchMessages = []
   i.deferredEphemeralToolMessages = []
+  i.taskVerificationBatchId = [
+    `iteration:${s.iter}`,
+    ...i.toolCalls.map((call) => String(call?.id || '').trim()),
+  ].join('\u0000').slice(0, 2_000)
   i.isParallelReadCall = (call) => {
         const metadata = getToolMetadata(call.name, {
           args: call.args,

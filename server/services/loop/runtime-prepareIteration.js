@@ -4,10 +4,7 @@ export async function prepareIteration(s) {
   if (s.artifactRecoveryActive()
         && s.artifactDeliveryRetries >= MAX_ARTIFACT_DELIVERY_RETRIES
         && !s.hasRequiredArtifacts()) {
-        return { kind: 'return', value: s.finishIncomplete({
-          text: s.missingArtifactBlockerText(),
-          reason: 'artifact_delivery_not_converged',
-        }) }
+        return { kind: 'return', value: s.finishIncomplete(s.missingArtifactBlocker()) }
       }
   if (s.signal?.aborted) {
         const error = new Error('Turn cancelled')

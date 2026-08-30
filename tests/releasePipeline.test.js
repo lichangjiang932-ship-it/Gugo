@@ -82,8 +82,15 @@ test('Web release staging refuses a build without dist/index.html', (t) => {
 test('Release workflow is gated by reusable CI and never overwrites a published release', () => {
   const ci = read('.github/workflows/ci.yml')
   const release = read('.github/workflows/release.yml')
+  const packageMetadata = JSON.parse(read('package.json'))
+  const offlineGate = ci.match(
+    /- name: Offline agent capability gate[\s\S]*?(?=\n\s+- name:)/,
+  )?.[0] || ''
   assert.match(ci, /workflow_call:/)
   assert.match(ci, /checkout_ref:/)
+  assert.match(offlineGate, /run:\s*npm run eval:offline\s*$/m)
+  assert.doesNotMatch(offlineGate, /--eval-suite/)
+  assert.equal(packageMetadata.scripts['eval:offline'], 'node scripts/run-tests.js offline-eval')
   assert.match(ci, /npm run test:coverage/)
   assert.match(ci, /npm run audit:prod/)
   assert.match(ci, /gitleaks\/gitleaks-action/)

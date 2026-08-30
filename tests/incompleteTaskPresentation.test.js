@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { buildIncompleteTaskPresentation } from '../src/pages/ChatSplit/chatMessages/messageRow/incompleteTaskPresentation.js'
-import { normalizeTurnFailure } from '../server/services/turnTerminalProjection.js'
+import { missingArtifactBlocker } from '../server/services/loop/runtime-initializeCompletion.js'
+import {
+  ARTIFACT_DELIVERY_INCOMPLETE_REASON,
+  normalizeTurnFailure,
+} from '../server/services/turnTerminalProjection.js'
 
 const t = (key) => key
 
@@ -30,6 +34,29 @@ test('known incomplete reasons produce deterministic reasons, requirements, and 
     assert.equal(value.nextStep, 'chatMessages.incompleteNextRetry', incompleteReason)
     assert.equal(value.code, incompleteReason.toUpperCase(), incompleteReason)
   }
+})
+
+test('missing artifact completion uses a stable reason code and client-localized copy', () => {
+  const blocker = missingArtifactBlocker()
+  assert.deepEqual(blocker, { reason: ARTIFACT_DELIVERY_INCOMPLETE_REASON })
+  assert.equal(Object.hasOwn(blocker, 'text'), false)
+
+  const failure = normalizeTurnFailure({
+    code: 'TURN_INCOMPLETE',
+    incompleteReason: blocker.reason,
+  })
+  assert.deepEqual(failure, {
+    code: 'TURN_INCOMPLETE',
+    retryable: false,
+    incompleteReason: ARTIFACT_DELIVERY_INCOMPLETE_REASON,
+    missingRequirements: ['deliverable_artifact'],
+  })
+
+  const value = buildIncompleteTaskPresentation({
+    meta: { serverFailure: failure },
+  }, t)
+  assert.equal(value.reason, 'chatMessages.incompleteReasonArtifactDelivery')
+  assert.deepEqual(value.missing, ['chatMessages.incompleteRequirementArtifact'])
 })
 
 test('legacy incomplete failures disclose the retained public reason without exposing stacks', () => {

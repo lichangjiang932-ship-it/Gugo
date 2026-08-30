@@ -15,6 +15,22 @@ import {
   runOfflineEvalCaseInWorker,
 } from './helpers/offlineEvalCaseWorkerHost.js'
 
+const REQUIRED_FULL_GATE_SUITE_IDS = Object.freeze([
+  'compaction-fidelity',
+  'task-verification-repair',
+])
+
+function assertRequiredFullGateSuites(suites) {
+  const discoveredSuiteIds = new Set(suites.map((suite) => suite.id))
+  for (const suiteId of REQUIRED_FULL_GATE_SUITE_IDS) {
+    assert.equal(
+      discoveredSuiteIds.has(suiteId),
+      true,
+      `full offline eval gate is missing required suite: ${suiteId}`,
+    )
+  }
+}
+
 function baselineGateFailure(report) {
   const baseline = report?.baseline
   if (!baseline?.compared) return null
@@ -38,6 +54,7 @@ const isolatedNetworkAttempts = []
 test('offline eval suites', async (t) => {
   try {
     const suites = await discoverOfflineEvalSuites()
+    assertRequiredFullGateSuites(suites)
     report = await runOfflineEvalSuites({
       suites,
       selectedSuiteIds: options.suiteIds,

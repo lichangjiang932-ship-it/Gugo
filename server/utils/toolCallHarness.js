@@ -79,18 +79,18 @@ function toolError(code, error, extra = {}) {
 
 const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const MAX_ERROR_TEXT_CHARS = 2_000
-
+export function redactSensitiveText(value) {
+  return String(value ?? '').replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/giu, 'Bearer [REDACTED]')
+    .replace(/\b(?:sk|ghp|github_pat)-?[A-Za-z0-9_-]{12,}\b/giu, '[REDACTED]')
+    .replace(/\b(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|token|password|passwd|secret)\s*[=:]\s*[^\s,;]+/giu, '$1=[REDACTED]')
+    .replace(/([?&](?:api[_-]?key|access[_-]?token|token|password|secret)=)[^&#\s]+/giu, '$1[REDACTED]')
+}
 function safeErrorText(value, fallback = '') {
-  let text = String(value ?? fallback).slice(0, MAX_ERROR_TEXT_CHARS)
+  const text = String(value ?? fallback).slice(0, MAX_ERROR_TEXT_CHARS)
   // Tool/provider errors can contain request headers or URLs. Preserve the
   // actionable message while ensuring credentials never enter checkpoints,
   // turn events, model context, or the browser state.
-  text = text
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/giu, 'Bearer [REDACTED]')
-    .replace(/\b(?:sk|ghp|github_pat)-?[A-Za-z0-9_-]{12,}\b/giu, '[REDACTED]')
-    .replace(/\b(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|token|password|passwd|secret)\s*[:=]\s*[^\s,;]+/giu, '$1=[REDACTED]')
-    .replace(/([?&](?:api[_-]?key|access[_-]?token|token|password|secret)=)[^&#\s]+/giu, '$1[REDACTED]')
-  return text
+  return redactSensitiveText(text)
 }
 
 function normalizedStatus(value) {
@@ -646,10 +646,8 @@ export function buildAssistantToolCallsMessage(calls, content = '', { reasoning 
   return {
     role: 'assistant',
     content: content || null,
-    // Internal chain-of-thought retention (Codex-style). Replayed to the same
-    // provider by default for OpenAI-compatible kinds; Anthropic/Gemini keep
-    // it stripped unless a deployment explicitly opts in via
-    // MODEL_REASONING_RETENTION=1.
+    // Replayed by default for OpenAI-compatible providers; Anthropic/Gemini keep it
+    // stripped unless the deployment explicitly sets MODEL_REASONING_RETENTION=1.
     ...(typeof reasoning === 'string' && reasoning.trim() ? { reasoning_content: reasoning } : {}),
     tool_calls: calls.map((call) => ({
       id: call.id,

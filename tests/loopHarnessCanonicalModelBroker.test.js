@@ -111,7 +111,10 @@ test('shared terminal gate preserves the host blocker priority', async () => {
       hasRequiredArtifacts: () => scenario.artifacts,
       hasRequiredExecutionEvidence: () => scenario.evidence,
       localHtmlDeliveryRetries: 2,
-      missingArtifactBlockerText: () => 'Required artifact is missing.',
+      missingArtifactBlocker: () => ({
+        reason: 'artifact_delivery_not_converged',
+        text: 'Required artifact is missing.',
+      }),
       validateLocalHtmlDeliveries: async () => {
         htmlCalls += 1
         return scenario.htmlFailure
@@ -222,7 +225,10 @@ test('canonical terminal gate persists and returns the host incomplete result', 
   }))
   accessPreparedToolsLoopRuntime(prepared, (state) => {
     state.hasRequiredArtifacts = () => false
-    state.missingArtifactBlockerText = () => 'Host requires a durable artifact.'
+    state.missingArtifactBlocker = () => ({
+      reason: 'artifact_delivery_not_converged',
+      text: 'Host requires a durable artifact.',
+    })
   })
   const broker = createCanonicalHarnessModelBroker(prepared)
 
@@ -476,7 +482,10 @@ test('durable incomplete final is not overwritten when terminal notification fai
   const prepared = await prepareToolsLoopRuntime(modelContext({ checkpoints }))
   accessPreparedToolsLoopRuntime(prepared, (state) => {
     state.hasRequiredArtifacts = () => false
-    state.missingArtifactBlockerText = () => 'Host requires a durable artifact.'
+    state.missingArtifactBlocker = () => ({
+      reason: 'artifact_delivery_not_converged',
+      text: 'Host requires a durable artifact.',
+    })
     state.emitTurnStopping = async () => { throw notificationFailure }
   })
   const broker = createCanonicalHarnessModelBroker(prepared)

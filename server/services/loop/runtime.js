@@ -52,6 +52,15 @@ import { prepareIteration } from './runtime-prepareIteration.js'
 import { executeToolCalls } from './runtime-executeToolCalls.js'
 import { createSideEffectExecution } from './sideEffectExecution.js'
 import { installToolFailureRecovery } from './toolFailureRecovery.js'
+import {
+  buildTaskVerificationRepairPrompt,
+  hasPendingTaskVerificationRepair,
+  observeTaskVerificationRepair,
+  restoreTaskVerificationRepair,
+  serializeTaskVerificationRepair,
+  taskVerificationRepairBlockerText,
+  taskVerificationRepairExhausted,
+} from './taskVerificationRepair.js'
 import { createOutcomeRecorder } from './runtime-createOutcomeRecorder.js'
 import { completeToolBatch } from './runtime-completeToolBatch.js'
 import { completeIteration } from './runtime-completeIteration.js'
@@ -209,6 +218,7 @@ const runtimeDependencies = {
   buildRepresentativeReadCalls,
   buildToolResultMessage,
   buildToolResultMessageBundle,
+  buildTaskVerificationRepairPrompt,
   callModelWithContextRecovery,
   clearArtifactValidatedMutationTargets,
   clearVerifiedDeletionTargets,
@@ -254,6 +264,7 @@ const runtimeDependencies = {
   hasSuccessfulLocalPreflightRead,
   hasEffectiveReadOnlyBoundary,
   hasMutationExecutionIntent,
+  hasPendingTaskVerificationRepair,
   installAttemptSignature,
   inspectToolLoopModelResponse,
   isArtifactRevisionRequest,
@@ -290,6 +301,7 @@ const runtimeDependencies = {
   normalizeToolCalls,
   normalizeToolError,
   normalizeToolResult,
+  observeTaskVerificationRepair,
   observeToolCalls,
   parseSkillIdFromPrompt,
   path,
@@ -314,6 +326,7 @@ const runtimeDependencies = {
   restoreFailureRecovery,
   restoreNamedToolSpecs,
   restoreToolProgress,
+  restoreTaskVerificationRepair,
   resolveSideEffectExecutionLedger,
   resumePersistedApproval,
   revalidateHookAuthorization,
@@ -334,6 +347,7 @@ const runtimeDependencies = {
   serializeExecutionConvergence,
   serializeFailureRecovery,
   serializeToolProgress,
+  serializeTaskVerificationRepair,
   shellTargetWithCwd,
   shouldInheritExecutionIntent,
   shouldReflectOnFailure,
@@ -346,6 +360,8 @@ const runtimeDependencies = {
   supportsIdempotentResume,
   synchronizeCheckpointToolCallMessages,
   targetsMatch,
+  taskVerificationRepairBlockerText,
+  taskVerificationRepairExhausted,
   toolNameFromSpec,
   toolProgressPayload,
   validateLocalHtmlDelivery,

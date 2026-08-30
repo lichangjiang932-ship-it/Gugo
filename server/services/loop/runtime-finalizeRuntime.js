@@ -8,8 +8,7 @@
 export async function finishUnsatisfiedTerminalGate(s, { steeringLeaseId = null } = {}) {
   if (!s.hasRequiredArtifacts()) {
     return s.finishIncomplete({
-      text: s.missingArtifactBlockerText(),
-      reason: 'artifact_delivery_not_converged',
+      ...s.missingArtifactBlocker(),
       steeringLeaseId,
     })
   }
@@ -17,6 +16,22 @@ export async function finishUnsatisfiedTerminalGate(s, { steeringLeaseId = null 
     return s.finishIncomplete({
       text: '\u4efb\u52a1\u5c1a\u672a\u5b8c\u6210\uff1a\u5c1a\u672a\u53d6\u5f97\u7b26\u5408\u672c\u6b21\u4fee\u6539\u76ee\u6807\u7684\u5b9e\u9645\u6267\u884c\u8bc1\u636e\u3002\u53ef\u91cd\u8bd5\u672c\u4efb\u52a1\uff0c\u6216\u5207\u6362\u5230\u652f\u6301\u5de5\u5177\u8c03\u7528\u7684\u6a21\u578b\u3002',
       reason: 'execution_evidence_missing',
+      steeringLeaseId,
+    })
+  }
+  if (s.taskVerificationRepairExhausted?.()) {
+    return s.finishIncomplete({
+      text: s.taskVerificationRepairBlockerText(),
+      reason: 'task_verification_repair_exhausted',
+      code: 'task_verification_repair_exhausted',
+      steeringLeaseId,
+    })
+  }
+  if (s.hasPendingTaskVerificationRepair?.()) {
+    return s.finishIncomplete({
+      text: s.taskVerificationRepairBlockerText(),
+      reason: 'task_verification_repair_pending',
+      code: 'task_verification_repair_pending',
       steeringLeaseId,
     })
   }

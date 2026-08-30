@@ -3,8 +3,10 @@ import {
 } from './turnEventEmitter.js'
 import { normalizePublicFailureCode } from '../../shared/turnEventProjection.js'
 
+export const ARTIFACT_DELIVERY_INCOMPLETE_REASON = 'artifact_delivery_not_converged'
+
 const INCOMPLETE_REASON_REQUIREMENTS = Object.freeze({
-  artifact_delivery_not_converged: ['deliverable_artifact'],
+  [ARTIFACT_DELIVERY_INCOMPLETE_REASON]: ['deliverable_artifact'],
   deliverable_selection_missing: ['deliverable_selection'],
   directory_resume_not_converged: ['authorized_directory'],
   empty_model_response: ['model_response'],

@@ -252,6 +252,20 @@ export async function createOutcomeRecorder(s) {
             }
           }
         }
+        const taskVerificationObservation = s.observeTaskVerificationRepair(
+          executedCall,
+          outcome.result,
+        )
+        if (taskVerificationObservation.changed && !taskVerificationObservation.failed) {
+          s.loopGuard.markProgress?.()
+          s.mutationVerificationRetries = 0
+        }
+        if (taskVerificationObservation.failed) {
+          i.deferredPostBatchMessages.push({
+            role: 'system',
+            content: s.taskVerificationRepairPrompt(),
+          })
+        }
         if (succeeded
           && executedCall?.name === 'read_file'
           && typeof outcome.result?.content === 'string'
