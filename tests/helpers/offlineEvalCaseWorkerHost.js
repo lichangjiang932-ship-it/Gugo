@@ -2,13 +2,16 @@ import { Worker } from 'node:worker_threads'
 
 import {
   DEFAULT_OFFLINE_EVAL_CASE_TIMEOUT_MS,
+  offlineEvalSuiteSourcePath,
 } from './offlineEvalHarness.js'
 
 const WORKER_ENTRY = new URL('./offlineEvalCaseWorker.mjs', import.meta.url)
 const WORKER_RESULT_KIND = 'gugo.offline-eval-case-result'
 const MIN_WORKER_HARD_TIMEOUT_GRACE_MS = 1_500
 const MAX_WORKER_HARD_TIMEOUT_GRACE_MS = 4_000
-const WORKER_SHUTDOWN_GRACE_MS = 1_000
+const WORKER_NATURAL_EXIT_GRACE_MS = 1_000
+const WORKER_TERMINATE_GRACE_MS = 1_000
+const OUTER_TEST_SCHEDULING_GRACE_MS = 2_000
 
 function failedOutcome(suite, evalCase, diagnostic, durationMs) {
   return {
@@ -36,6 +39,13 @@ export function offlineEvalCaseWorkerDeadlineMs(evalCase) {
   return timeoutMs + startupGraceMs
 }
 
+export function offlineEvalCaseTestDeadlineMs(evalCase) {
+  return offlineEvalCaseWorkerDeadlineMs(evalCase)
+    + WORKER_NATURAL_EXIT_GRACE_MS
+    + WORKER_TERMINATE_GRACE_MS
+    + OUTER_TEST_SCHEDULING_GRACE_MS
+}
+
 function validWorkerResult(message, suite, evalCase) {
   const outcome = message?.outcome
   return message?.kind === WORKER_RESULT_KIND
@@ -49,8 +59,28 @@ function validWorkerResult(message, suite, evalCase) {
 async function terminateWorker(worker) {
   await Promise.race([
     Promise.resolve(worker.terminate()).catch(() => undefined),
-    new Promise((resolve) => setTimeout(resolve, WORKER_SHUTDOWN_GRACE_MS)),
+    new Promise((resolve) => setTimeout(resolve, WORKER_TERMINATE_GRACE_MS)),
   ])
+}
+
+async function waitForNaturalWorkerExit(worker) {
+  let timer = null
+  let onError = null
+  let onExit = null
+  const exited = await new Promise((resolve) => {
+    const finish = (value) => {
+      if (timer) clearTimeout(timer)
+      worker.removeListener('error', onError)
+      worker.removeListener('exit', onExit)
+      resolve(value)
+    }
+    onError = () => finish(false)
+    onExit = () => finish(true)
+    worker.once('error', onError)
+    worker.once('exit', onExit)
+    timer = setTimeout(() => finish(false), WORKER_NATURAL_EXIT_GRACE_MS)
+  })
+  if (!exited) await terminateWorker(worker)
 }
 
 export async function runOfflineEvalCaseInWorker({
@@ -66,6 +96,7 @@ export async function runOfflineEvalCaseInWorker({
       suiteId: suite.id,
       caseId: evalCase.id,
       suiteDirectory,
+      suiteFilePath: offlineEvalSuiteSourcePath(suite),
     },
   })
 
@@ -73,12 +104,16 @@ export async function runOfflineEvalCaseInWorker({
     let settled = false
     let timer = null
 
-    const finish = async (outcome, networkAttempts = []) => {
+    const finish = async (outcome, networkAttempts = [], allowNaturalExit = false) => {
       if (settled) return
       settled = true
       if (timer) clearTimeout(timer)
       worker.removeAllListeners()
-      await terminateWorker(worker)
+      if (allowNaturalExit) {
+        await waitForNaturalWorkerExit(worker)
+      } else {
+        await terminateWorker(worker)
+      }
       resolve({ outcome, networkAttempts })
     }
 
@@ -92,7 +127,9 @@ export async function runOfflineEvalCaseInWorker({
         ))
         return
       }
-      void finish(message.outcome, message.networkAttempts)
+      const allowNaturalExit = message.outcome.status === 'passed'
+        || message.outcome.status === 'skipped'
+      void finish(message.outcome, message.networkAttempts, allowNaturalExit)
     })
 
     worker.once('error', () => {

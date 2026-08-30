@@ -1,4 +1,5 @@
 import { parentPort, workerData } from 'node:worker_threads'
+import { pathToFileURL } from 'node:url'
 
 import {
   createOfflineEvalFailureReport,
@@ -27,12 +28,18 @@ function workerFailure(error) {
 async function main() {
   let outcome
   try {
-    const suites = await discoverOfflineEvalSuites({
-      ...(workerData.suiteDirectory ? { directory: workerData.suiteDirectory } : {}),
-    })
-    const suite = suites.find((candidate) => candidate.id === workerData.suiteId)
+    let suite = null
+    if (workerData.suiteFilePath) {
+      const module = await import(pathToFileURL(workerData.suiteFilePath).href)
+      suite = module?.default || null
+    } else {
+      const suites = await discoverOfflineEvalSuites({
+        ...(workerData.suiteDirectory ? { directory: workerData.suiteDirectory } : {}),
+      })
+      suite = suites.find((candidate) => candidate.id === workerData.suiteId)
+    }
     const evalCase = suite?.cases.find((candidate) => candidate.id === workerData.caseId)
-    if (!suite || !evalCase) {
+    if (!suite || suite.id !== workerData.suiteId || !evalCase) {
       const error = new Error('isolated offline eval case was not found')
       error.code = 'OFFLINE_EVAL_CASE_NOT_FOUND'
       throw error
@@ -47,6 +54,7 @@ async function main() {
     outcome,
     networkAttempts: await networkAttempts(),
   })
+  parentPort.close()
 }
 
 await main()
