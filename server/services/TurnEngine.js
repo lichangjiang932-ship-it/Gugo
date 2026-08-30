@@ -9,7 +9,6 @@ import { publishTurnActivity } from './turnActivityBus.js'
 import { dispatchHooks as dispatchHooksService } from './hooksService.js'
 import { getApprovalMode } from './approvalSettingsStore.js'
 import {
-  buildAssistantModelContext,
   expandStoredMessages,
   extractRetainedLocalFiles,
   extractVerifiedLocalFiles,
@@ -28,19 +27,8 @@ import { listRuntimePluginStates } from './runtimePluginStateStore.js'
 import {
   assertTurnExecutionEnvironmentCompatible,
   createTurnExecutionEnvironmentSnapshot,
-  TURN_EXECUTION_ENVIRONMENT_MISSING,
-  TURN_MODEL_BINDING_DRIFT,
-  TURN_PERMISSION_CONTEXT_DRIFT,
-  TURN_POLICY_CONTEXT_DRIFT,
-  TURN_RUNTIME_PLUGIN_RELEASE_DRIFT,
-  TURN_RUNTIME_PLUGIN_RELEASE_UNPINNED,
-  TURN_TOOL_CATALOG_DRIFT,
-  TURN_TOOL_IMPLEMENTATION_DRIFT,
 } from './turnExecutionEnvironment.js'
-import {
-  resolveToolImplementationRevisions as resolveCurrentToolImplementationRevisions,
-  TOOL_IMPLEMENTATION_REVISION_UNAVAILABLE,
-} from './toolImplementationRevision.js'
+import { resolveToolImplementationRevisions as resolveCurrentToolImplementationRevisions } from './toolImplementationRevision.js'
 import { getActiveRuntimePolicyProvenance } from '../core/runtimeCapabilityState.js'
 import {
   getLocalFileAccessStatus,
@@ -51,7 +39,6 @@ import { logWarn, newTraceId, withLogContext } from '../utils/logger.js'
 import {
   checkpointMessagesForTurn,
   latestLegacyCheckpoint,
-  normalizeResolutionPath,
   recoveryAttemptAfterCheckpoint,
   storedCheckpointEvent,
 } from './turnRecoveryProjection.js'
@@ -81,10 +68,7 @@ import {
   createChatOnlyToolExecutionError,
   createTurnModelRequestRunner,
 } from './turnModelRequestRuntime.js'
-import {
-  createTurnResolutionRuntime,
-  TurnEngineError,
-} from './turnResolutionRuntime.js'
+import { TurnEngineError } from './turnResolutionRuntime.js'
 import {
   createTurnStartRuntime,
   normalizeTurnModelMode as normalizeModelMode,
@@ -99,159 +83,36 @@ import {
   missingAttachmentPreparationRuntime,
   missingAttachmentValidationRuntime,
 } from './turnManagedAttachmentRuntime.js'
+import {
+  abortError,
+  activeKey,
+  checkpointStateForResolution,
+  isExplicitTurnCancellation,
+  isManualRecoveryBlock,
+  isRecord,
+  isTemporaryTurnEvidence,
+  lostTurnLease,
+  MANUAL_RECOVERY_BLOCK_CODES,
+  missingTurnModelRuntime,
+  missingTurnPromptRuntime,
+  normalizePositiveInteger,
+  normalizePromptContextSnapshot,
+  publicStatus,
+  recoveryCandidateVersion,
+  rejectResumeApprovalModeOverride,
+  sessionKey,
+} from './turnEnginePolicy.js'
+import {
+  createCompletedTurnMessage,
+  createInitialCancellationMessage,
+  createPausedTurnMessage,
+  createTurnEvidenceMessage as projectTurnEvidenceMessage,
+} from './turnEvidenceMessageProjection.js'
 
 export { TurnEngineError } from './turnResolutionRuntime.js'
 
-const MANUAL_RECOVERY_BLOCK_CODES = new Set([
-  TURN_EXECUTION_ENVIRONMENT_MISSING,
-  TURN_MODEL_BINDING_DRIFT,
-  TURN_PERMISSION_CONTEXT_DRIFT,
-  TURN_POLICY_CONTEXT_DRIFT,
-  TURN_TOOL_CATALOG_DRIFT,
-  TURN_TOOL_IMPLEMENTATION_DRIFT,
-  TURN_RUNTIME_PLUGIN_RELEASE_DRIFT,
-  TURN_RUNTIME_PLUGIN_RELEASE_UNPINNED,
-  TOOL_IMPLEMENTATION_REVISION_UNAVAILABLE,
-  'PLUGIN_RELEASE_CORRUPT',
-  'SIDE_EFFECT_LEDGER_CONFLICT',
-  'SIDE_EFFECT_LEDGER_OUTCOME_INVALID',
-  'SIDE_EFFECT_OUTCOME_UNKNOWN',
-  'MODEL_REQUEST_OUTCOME_UNKNOWN',
-  'MODEL_REQUEST_CONTEXT_DRIFT',
-])
-function rejectResumeApprovalModeOverride(value) {
-  if (value === null || value === undefined) return
-  throw new TurnEngineError(
-    'TURN_APPROVAL_MODE_OVERRIDE_FORBIDDEN',
-    'approvalMode cannot be changed while resuming a turn; the persisted turn mode is restored',
-    409,
-  )
-}
-
 const ATOMIC_CHECKPOINT_UNSUPPORTED_CODE = 'TURN_ATOMIC_CHECKPOINT_UNSUPPORTED'
 const ATOMIC_CHECKPOINT_COMMIT_MISMATCH_CODE = 'TURN_ATOMIC_CHECKPOINT_COMMIT_MISMATCH'
-function activeKey(userId, sessionId, turnId) {
-  return `${userId}\u0000${sessionId}\u0000${turnId}`
-}
-
-function sessionKey(userId, sessionId) {
-  return `${userId}\u0000${sessionId}`
-}
-
-function isRecord(value) {
-  return !!value && typeof value === 'object' && !Array.isArray(value)
-}
-
-const {
-  applyToCheckpoint: checkpointStateForResolution,
-  publicStatus,
-} = createTurnResolutionRuntime({ normalizePath: normalizeResolutionPath })
-
-function normalizePromptContextIds(values, limit = 64) {
-  return [...new Set((Array.isArray(values) ? values : [])
-    .map((value) => normalizeOptionalId(value))
-    .filter(Boolean))]
-    .slice(0, limit)
-}
-
-function normalizeCanaryAssignmentSnapshot(value) {
-  if (!isRecord(value)) return null
-  const id = normalizeOptionalId(value.id)
-  const releaseId = normalizeOptionalId(value.releaseId)
-  const variant = String(value.variant || '').trim()
-  if (!id || !releaseId || !['baseline', 'candidate'].includes(variant)) return null
-  return {
-    id,
-    releaseId,
-    variant,
-    decisionReason: normalizeOptionalId(value.decisionReason),
-    target: normalizeOptionalId(value.target),
-  }
-}
-
-function normalizePromptContextSnapshot(value) {
-  if (!isRecord(value)) return null
-  return {
-    version: 1,
-    effectiveAgentId: normalizeOptionalId(value.effectiveAgentId),
-    skillIds: normalizePromptContextIds(value.skillIds, 32),
-    memoryIds: normalizePromptContextIds(value.memoryIds),
-    pluginPromptBlockIds: normalizePromptContextIds(value.pluginPromptBlockIds),
-    canaryAssignment: normalizeCanaryAssignmentSnapshot(value.canaryAssignment),
-  }
-}
-
-function isManualRecoveryBlock(error) {
-  const code = String(error?.code || '').trim()
-  if (code === 'SIDE_EFFECT_OUTCOME_UNKNOWN') {
-    return error?.unsafeToReplay === true
-      && error?.retryable === false
-      && error?.requiresUserVerification === true
-  }
-  return error?.unsafeToReplay === true
-    && error?.retryable === false
-    && MANUAL_RECOVERY_BLOCK_CODES.has(code)
-}
-
-function recoveryCandidateVersion(event) {
-  return [event.sequence, event.type, event.createdAt].join(':')
-}
-
-function normalizePositiveInteger(value) {
-  const normalized = Number(value)
-  return Number.isInteger(normalized) && normalized > 0 ? normalized : null
-}
-
-function abortError(code, message) {
-  return Object.assign(new Error(message), { name: 'AbortError', code })
-}
-
-function isExplicitTurnCancellation(signal, error) {
-  if (signal?.aborted) return true
-  const codes = [error?.code, error?.cause?.code, signal?.reason?.code]
-    .map((value) => String(value || '').trim().toUpperCase())
-  return codes.includes('TURN_CANCEL_REQUESTED') || codes.includes('USER_STOPPED')
-}
-
-function isTemporaryTurnEvidence(message, turnId) {
-  return message?.id === `${turnId}:assistant`
-    && message?.modelContext?.turnEvidence === true
-}
-
-function lostTurnLease(signal, error = null) {
-  const terminalCodes = new Set(['TURN_LEASE_LOST', 'TURN_ENGINE_SHUTDOWN', 'TURN_ALREADY_TERMINAL'])
-  const hasTerminalCode = (candidate) => {
-    const seen = new Set()
-    let current = candidate
-    for (let depth = 0; current && depth < 8 && !seen.has(current); depth += 1) {
-      if (terminalCodes.has(String(current?.code || '').trim().toUpperCase())) return true
-      seen.add(current)
-      current = current?.cause
-    }
-    return false
-  }
-  return hasTerminalCode(error) || hasTerminalCode(signal?.reason)
-}
-
-function missingTurnModelRuntime() {
-  const error = new TurnEngineError(
-    'TURN_MODEL_RUNTIME_NOT_CONFIGURED',
-    'TurnEngine requires its host to provide a model runtime',
-    503,
-  )
-  error.retryable = false
-  throw error
-}
-
-function missingTurnPromptRuntime() {
-  const error = new TurnEngineError(
-    'TURN_PROMPT_RUNTIME_NOT_CONFIGURED',
-    'TurnEngine requires its host to provide a prompt runtime',
-    503,
-  )
-  error.retryable = false
-  throw error
-}
 
 export class TurnEngine {
   constructor(options = {}) {
@@ -782,33 +643,13 @@ export class TurnEngine {
       if (!lostTurnLease(signal)) {
         const cancelledAt = this.deps.now()
         const cancellationReason = signal.reason?.message || 'Cancelled by user'
-        const cancellationMessage = {
-          id: `${turnId}:assistant`,
+        const cancellationMessage = createInitialCancellationMessage({
           userId,
           sessionId,
-          role: 'assistant',
-          // Cancellation status is event metadata, not model-authored output.
-          content: '',
-          modelContext: {
-            ...buildAssistantModelContext({
-              turnId,
-              checkpointMessages: [],
-              baselineToolCallIds: new Set(),
-              userId,
-              verifiedLocalFiles: [],
-              retainedLocalFiles: [],
-              artifactIds: [],
-              deliveryArtifactIds: [],
-              iterations: 0,
-              turnStartedAt,
-              turnCompletedAt: cancelledAt,
-            }),
-            turnEvidence: true,
-            evidenceState: 'cancelled',
-          },
-          createdAt: cancelledAt,
-          updatedAt: cancelledAt,
-        }
+          turnId,
+          turnStartedAt,
+          cancelledAt,
+        })
         const atomicTurnBoundary = typeof this.deps.commitTurnBoundary === 'function'
         await emitter('turn.cancelled', {
           reason: cancellationReason,
@@ -1051,85 +892,32 @@ export class TurnEngine {
       }).filter((file) => !verifiedIds.has(String(file?.id || '').trim()))
     }
     const atomicTurnBoundary = typeof this.deps.commitTurnBoundary === 'function'
-    const createTurnEvidenceMessage = ({
-      state,
-      text,
-      artifactIds,
-      deliveryArtifactIds,
-      iterations,
-      error = null,
-      serverLastSequence = null,
-      verifiedLocalFiles = null,
-      retainedLocalFiles = null,
-      blockedRecovery = null,
-      writtenAt = this.deps.now(),
-    }) => {
-      // Assistant content is reserved for model-authored output. Failure and
-      // recovery copy stays in structured metadata so each client can render
-      // it in the user's selected language.
-      const evidenceText = String(text ?? '').trim()
-      const evidenceArtifacts = normalizeArtifactIds(artifactIds)
-      const evidenceIterations = Math.max(0, Number(iterations) || 0)
-      const evidenceVerifiedLocalFiles = Array.isArray(verifiedLocalFiles)
-        ? verifiedLocalFiles
+    const createTurnEvidenceMessage = (options = {}) => {
+      const writtenAt = options.writtenAt ?? this.deps.now()
+      const verifiedLocalFiles = Array.isArray(options.verifiedLocalFiles)
+        ? options.verifiedLocalFiles
         : verifiedLocalFilesAt(writtenAt)
-      const evidenceRetainedLocalFiles = Array.isArray(retainedLocalFiles)
-        ? retainedLocalFiles
-        : retainedLocalFilesAt(writtenAt, evidenceVerifiedLocalFiles)
-      const recoveryKind = state === 'blocked' && blockedRecovery?.requiresUserVerification === true
-        ? String(blockedRecovery.recoveryKind || '').trim()
-        : ''
-      const recoveryToolCallId = recoveryKind === 'side_effect_outcome_unknown'
-        ? normalizeOptionalId(blockedRecovery.toolCallId)
-        : null
-      const recoveryModelRequestId = recoveryKind === 'model_request_outcome_unknown'
-        ? normalizeOptionalId(blockedRecovery.modelRequestId)
-        : null
-      const evidenceRecovery = ['side_effect_outcome_unknown', 'model_request_outcome_unknown'].includes(recoveryKind)
-        ? {
-            recoveryKind,
-            requiresUserVerification: true,
-            ...(recoveryToolCallId ? { toolCallId: recoveryToolCallId } : {}),
-            ...(recoveryModelRequestId ? { modelRequestId: recoveryModelRequestId } : {}),
-            recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
-          }
-        : null
-      return {
-        id: `${turnId}:assistant`,
+      const retainedLocalFiles = Array.isArray(options.retainedLocalFiles)
+        ? options.retainedLocalFiles
+        : retainedLocalFilesAt(writtenAt, verifiedLocalFiles)
+      return projectTurnEvidenceMessage({
+        ...options,
+        writtenAt,
+        verifiedLocalFiles,
+        retainedLocalFiles,
+      }, {
         userId,
         sessionId,
-        role: 'assistant',
-        content: evidenceText,
-        modelContext: {
-          ...buildAssistantModelContext({
-            turnId,
-            checkpointMessages,
-            baselineToolCallIds,
-            userId,
-            verifiedLocalFiles: evidenceVerifiedLocalFiles,
-            retainedLocalFiles: evidenceRetainedLocalFiles,
-            artifactIds: evidenceArtifacts,
-            deliveryArtifactIds,
-            iterations: evidenceIterations,
-            pluginPromptBlockIds: promptContextSnapshot?.pluginPromptBlockIds,
-            compactionRecovery: checkpointRecovery,
-            usage: latestModelUsage,
-            turnModelUsage,
-            estimatedPromptTokens: latestEstimatedPromptTokens,
-            turnStartedAt: effectiveTurnStartedAt,
-            turnCompletedAt: writtenAt,
-          }),
-          turnEvidence: true,
-          evidenceState: state,
-          ...(Number.isInteger(serverLastSequence) && serverLastSequence >= 0
-            ? { serverLastSequence }
-            : {}),
-          ...(error ? { error } : {}),
-          ...(evidenceRecovery ? { recovery: evidenceRecovery } : {}),
-        },
-        createdAt: writtenAt,
-        updatedAt: writtenAt,
-      }
+        turnId,
+        checkpointMessages,
+        baselineToolCallIds,
+        pluginPromptBlockIds: promptContextSnapshot?.pluginPromptBlockIds,
+        checkpointRecovery,
+        latestModelUsage,
+        turnModelUsage,
+        latestEstimatedPromptTokens,
+        effectiveTurnStartedAt,
+      })
     }
     const persistTurnEvidence = async (options) => {
       const message = createTurnEvidenceMessage(options)
@@ -1849,38 +1637,28 @@ export class TurnEngine {
         const pausedAt = this.deps.now()
         const verifiedLocalFiles = verifiedLocalFilesAt(pausedAt)
         const retainedLocalFiles = retainedLocalFilesAt(pausedAt, verifiedLocalFiles)
-        const createPausedMessage = (pausedEvent) => ({
-          id: `${turnId}:assistant`,
+        const createPausedMessage = (pausedEvent) => createPausedTurnMessage({
           userId,
           sessionId,
-          role: 'assistant',
-          content: text,
-          modelContext: {
-            ...buildAssistantModelContext({
-              turnId,
-              checkpointMessages,
-              baselineToolCallIds,
-              userId,
-              verifiedLocalFiles,
-              retainedLocalFiles,
-              artifactIds,
-              deliveryArtifactIds,
-              iterations,
-              paused: true,
-              pluginPromptBlockIds: promptContextSnapshot?.pluginPromptBlockIds,
-              compactionArchiveId: result?.recovery?.archiveId || null,
-              compactionRecovery: result?.recovery || checkpointRecovery,
-              usage: latestModelUsage,
-              turnModelUsage,
-              estimatedPromptTokens: latestEstimatedPromptTokens,
-              turnStartedAt: effectiveTurnStartedAt,
-              turnCompletedAt: pausedAt,
-            }),
-            clarification,
-            pausedSequence: pausedEvent.sequence,
-          },
-          createdAt: pausedAt,
-          updatedAt: pausedAt,
+          turnId,
+          text,
+          clarification,
+          pausedEventSequence: pausedEvent.sequence,
+          checkpointMessages,
+          baselineToolCallIds,
+          verifiedLocalFiles,
+          retainedLocalFiles,
+          artifactIds,
+          deliveryArtifactIds,
+          iterations,
+          pluginPromptBlockIds: promptContextSnapshot?.pluginPromptBlockIds,
+          compactionArchiveId: result?.recovery?.archiveId || null,
+          compactionRecovery: result?.recovery || checkpointRecovery,
+          latestModelUsage,
+          turnModelUsage,
+          latestEstimatedPromptTokens,
+          effectiveTurnStartedAt,
+          pausedAt,
         })
         await emitter('turn.paused', {
           text,
@@ -1909,29 +1687,27 @@ export class TurnEngine {
       const completedAt = this.deps.now()
       const verifiedLocalFiles = verifiedLocalFilesAt(completedAt)
       const retainedLocalFiles = retainedLocalFilesAt(completedAt, verifiedLocalFiles)
-      const completedMessage = {
-        id: `${turnId}:assistant`, userId, sessionId, role: 'assistant', content: text,
-        modelContext: buildAssistantModelContext({
-          turnId,
-          checkpointMessages,
-          baselineToolCallIds,
-          userId,
-          verifiedLocalFiles,
-          retainedLocalFiles,
-          artifactIds,
-          deliveryArtifactIds,
-          iterations: result?.iterations || 0,
-          pluginPromptBlockIds: promptContextSnapshot?.pluginPromptBlockIds,
-          compactionArchiveId: result?.recovery?.archiveId || null,
-          compactionRecovery: result?.recovery || checkpointRecovery,
-          usage: latestModelUsage,
-          turnModelUsage,
-          estimatedPromptTokens: latestEstimatedPromptTokens,
-          turnStartedAt: effectiveTurnStartedAt,
-          turnCompletedAt: completedAt,
-        }),
-        createdAt: completedAt, updatedAt: completedAt,
-      }
+      const completedMessage = createCompletedTurnMessage({
+        userId,
+        sessionId,
+        turnId,
+        text,
+        checkpointMessages,
+        baselineToolCallIds,
+        verifiedLocalFiles,
+        retainedLocalFiles,
+        artifactIds,
+        deliveryArtifactIds,
+        iterations: result?.iterations || 0,
+        pluginPromptBlockIds: promptContextSnapshot?.pluginPromptBlockIds,
+        compactionArchiveId: result?.recovery?.archiveId || null,
+        compactionRecovery: result?.recovery || checkpointRecovery,
+        latestModelUsage,
+        turnModelUsage,
+        latestEstimatedPromptTokens,
+        effectiveTurnStartedAt,
+        completedAt,
+      })
       await emitter('turn.completed', {
         text,
         artifactIds,

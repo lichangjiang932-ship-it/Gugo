@@ -17,6 +17,7 @@ follow [Semantic Versioning](https://semver.org/).
 - An opt-in, signature-verified Codex CLI app-server bridge with a guarded `codex_models` consumer for the fixed `model/list` RPC.
 - A production CLI with structured output, cancellation, project selection, and documented command behavior.
 - Task-level offline eval suites for code mode, final-answer evidence, outbound networking, LSP, native providers, and the Codex app-server bridge.
+- Task-level test, lint, build, check, and typecheck repair feedback that blocks premature completion, survives checkpoints, and stops with the final diagnostic after a bounded number of repair rounds.
 
 ### Changed
 
@@ -25,12 +26,16 @@ follow [Semantic Versioning](https://semver.org/).
 - Extended offline-eval coverage enforcement to the exact set of all 13 suites, including minimum scenario and category requirements.
 - Moved terminal failure, interruption, and incomplete-turn presentation to stable reason codes with client-side localization and actionable missing-requirement details.
 - Hardened the Windows release pipeline with mandatory signing verification, immutable draft publication, checksums, attestations, and package-version consistency checks.
+- Enabled retained-reasoning replay by default for compatible OpenAI-style providers while keeping Anthropic and Gemini behavior unchanged.
+- Made compaction-fidelity and task-verification-repair evals mandatory in the complete release gate.
+- Extracted Turn policy/evidence projection and user-data record traversal into focused modules, ratcheting both oversized-file ceilings downward.
 
 ### Fixed
 
 - Prevented completed files from masking an unfinished task and required terminal turns to explain why work stopped and what remains.
 - Removed sensitive cursor and model-content fields from generic Agent-loop audit persistence.
 - Kept app-server readiness accurate during disposal and prevented one cancelled startup waiter from aborting other active waiters.
+- Prevented parallel failing verification checks from consuming multiple repair rounds before the model can respond.
 
 ## [0.11.48] - 2026-08-26
 

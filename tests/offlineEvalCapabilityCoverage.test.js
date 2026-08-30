@@ -166,6 +166,15 @@ const OFFLINE_EVAL_SUITE_CONTRACTS = Object.freeze({
       ['SUBP-03', 'fail-closed'],
     ],
   },
+  'task-verification-repair': {
+    minimumCases: 3,
+    requiredCategories: ['repair-convergence', 'retry-boundary', 'checkpoint-recovery'],
+    coverageSignals: [
+      ['REPAIR-01', 'repair-convergence'],
+      ['REPAIR-02', 'retry-boundary'],
+      ['REPAIR-03', 'checkpoint-recovery'],
+    ],
+  },
 })
 
 test('every discovered offline eval suite has a reviewed task-level coverage contract', async () => {

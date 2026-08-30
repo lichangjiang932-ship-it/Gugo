@@ -72,11 +72,17 @@ export async function completeIteration(s) {
   await s.persistTurn()
   await s.emitToolProgress('batch_completed')
   if (i.batchSupersededBySteering) return { kind: 'continue' }
+  if (s.taskVerificationRepairExhausted?.()) {
+    const incomplete = await s.finishIncomplete({
+      text: s.taskVerificationRepairBlockerText(),
+      reason: 'task_verification_repair_exhausted',
+      code: 'task_verification_repair_exhausted',
+    })
+    if (incomplete.deferredForSteering) return { kind: 'continue' }
+    return { kind: 'return', value: incomplete }
+  }
   if (i.artifactRecoveryExhausted) {
-        const incomplete = await s.finishIncomplete({
-          text: s.missingArtifactBlockerText(),
-          reason: 'artifact_delivery_not_converged',
-        })
+        const incomplete = await s.finishIncomplete(s.missingArtifactBlocker())
         if (incomplete.deferredForSteering) return { kind: 'continue' }
         return { kind: 'return', value: incomplete }
       }
@@ -178,7 +184,7 @@ export async function completeIteration(s) {
         }
         const terminal = await s.finishTerminalResult({
           text: !s.hasRequiredArtifacts()
-            ? s.missingArtifactBlockerText()
+            ? ''
             : s.finalText || `(任务预算已用尽:${i.budgetExceeded}。可以点「重试」从断点继续。)`,
           artifactIds: s.artifactIds,
           iterations: s.iter + 1,
@@ -234,7 +240,7 @@ export async function completeIteration(s) {
         }
         const terminal = await s.finishTerminalResult({
           text: !s.hasRequiredArtifacts()
-            ? s.missingArtifactBlockerText()
+            ? ''
             : s.finalText || `(工具循环已停止：${i.noProgressReason})`,
           artifactIds: s.artifactIds,
           iterations: s.iter + 1,

@@ -329,7 +329,7 @@ export function buildNativeProviderRequest(args = {}) {
     providerKind: args.profile?.kind,
     providerId: args.config?.providerId,
     ephemeralContext: args.ephemeralContext,
-    retainReasoning: retainReasoningForEnv(args.env),
+    retainReasoning: retainReasoningForEnv(args.env, { providerKind: args.profile?.kind }),
   })
   if (messages.length === 0) throw new Error('消息不能为空。')
   const prepared = { ...args, messages }

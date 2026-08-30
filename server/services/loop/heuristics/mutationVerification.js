@@ -219,7 +219,7 @@ export function clearVerifiedMutationTargets(pendingTargets, call, result) {
   if (call?.name === 'git_diff') {
     return clearTargetsMatchingEvidence(pendingTargets, diffVerificationTargets(call, result))
   }
-  if (call?.name === 'run_project_check') {
+  if (call?.name === 'run_project_check' || call?.name === 'run_test') {
     return clearWorkspaceScopedMutationTargets(pendingTargets)
   }
   if (isCommandExecutionTool(call)) {

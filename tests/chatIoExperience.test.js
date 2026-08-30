@@ -101,7 +101,8 @@ test('only the streaming assistant hides copy actions while completed messages r
 
 test('local mutation receipts stay visible when managed-artifact acceptance fails', () => {
   assert.doesNotMatch(runtimeCompletionSource, /未通过验证的中间文件不会交付/)
-  assert.match(runtimeCompletionSource, /已成功提交到本地的文件仍会保留并显示其验证状态/)
+  assert.doesNotMatch(runtimeCompletionSource, /文件工具连续纠错|所需文件尚未通过完整性验证/)
+  assert.match(runtimeCompletionSource, /ARTIFACT_DELIVERY_INCOMPLETE_REASON/)
   assert.match(runtimeStateSource, /已提交到本地的文件仍会保留并显示其验证状态/)
   assert.match(runtimeStateSource, /未通过验证的受管理产物不会作为最终交付/)
   assert.match(messageRowSource, /const canPresentLocalFiles = isMessageComplete[\s\S]*?\|\| isSuspendedTurn[\s\S]*?\|\| msg\.meta\?\.failed === true/)

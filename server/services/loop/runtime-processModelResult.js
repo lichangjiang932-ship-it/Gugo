@@ -64,8 +64,7 @@ export async function processModelResult(s) {
               s.artifactDeliveryRetries += 1
               if (s.artifactDeliveryRetries >= MAX_ARTIFACT_DELIVERY_RETRIES) {
                 const incomplete = await s.finishIncomplete({
-                  text: s.missingArtifactBlockerText(),
-                  reason: 'artifact_delivery_not_converged',
+                  ...s.missingArtifactBlocker(),
                   steeringLeaseId: i.steeringLeaseId,
                 })
                 if (incomplete.deferredForSteering) return { kind: 'continue' }
@@ -82,8 +81,7 @@ export async function processModelResult(s) {
             }
             if (s.artifactDeliveryRetries >= MAX_ARTIFACT_DELIVERY_RETRIES) {
               const incomplete = await s.finishIncomplete({
-                text: s.missingArtifactBlockerText(),
-                reason: 'artifact_delivery_not_converged',
+                ...s.missingArtifactBlocker(),
                 steeringLeaseId: i.steeringLeaseId,
               })
               if (incomplete.deferredForSteering) return { kind: 'continue' }
@@ -140,6 +138,16 @@ export async function processModelResult(s) {
             }
             return { kind: 'continue' }
           }
+          if (s.taskVerificationRepairExhausted?.()) {
+            const incomplete = await s.finishIncomplete({
+              text: s.taskVerificationRepairBlockerText(),
+              reason: 'task_verification_repair_exhausted',
+              code: 'task_verification_repair_exhausted',
+              steeringLeaseId: i.steeringLeaseId,
+            })
+            if (incomplete.deferredForSteering) return { kind: 'continue' }
+            return { kind: 'return', value: incomplete }
+          }
           if (s.hasPendingMutationVerification()) {
             const canRetry = s.mutationVerificationRetries < MAX_MUTATION_VERIFICATION_RETRIES
               && s.iter + 1 < s.maxIters
@@ -164,6 +172,7 @@ export async function processModelResult(s) {
                 'A local mutation succeeded, but no later verification has succeeded, so the completion claim was discarded.',
                 `Pending changed targets: ${[...s.pendingMutationTargets].join(', ')}.`,
                 `Pending deleted targets: ${[...s.pendingDeletionTargets].join(', ')}.`,
+                s.taskVerificationRepairPrompt?.() || '',
                 `Verify the changed state now with one of these available tools: ${s.availableVerificationToolNames.join(', ')}.`,
                 'Read back each matching changed file, inspect the project diff, or run the relevant project check before answering. For deleted targets, list the complete parent directory so absence can be verified. Reading an unrelated file does not verify these targets.',
               ].join(' '),

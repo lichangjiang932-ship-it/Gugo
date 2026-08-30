@@ -56,6 +56,7 @@ export const VERIFICATION_TOOLS = new Set([
   'git_status',
   'git_diff',
   'run_project_check',
+  'run_test',
   'image_info',
   'media_probe',
   'pdf_info',

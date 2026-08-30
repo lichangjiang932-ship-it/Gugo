@@ -106,7 +106,7 @@ export function buildOpenAICompatibleRequest({
     providerKind: endpoint.kind,
     providerId: config?.providerId,
     ephemeralContext,
-    retainReasoning: retainReasoningForEnv(env),
+    retainReasoning: retainReasoningForEnv(env, { providerKind: endpoint.kind }),
   })
   if (outboundMessages.length === 0) throw new Error('消息不能为空。')
 
