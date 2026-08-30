@@ -16,7 +16,6 @@ process.env.LOCAL_CODE_EXECUTION_ENABLED = '1'
 
 const { closeDb, getDb } = await import('../server/db.js')
 const { grantLocalPath } = await import('../server/services/localFileAccessService.js')
-const { _testing: processGroupTesting } = await import('../server/utils/processGroup.js')
 const {
   listBackgroundProcesses,
   killBackgroundProcess,
@@ -188,14 +187,7 @@ test('unconfirmed process-tree cleanup remains running and can be retried', asyn
     'unproven cleanup must continue blocking destructive user-data cleanup',
   )
 
-  let retried
-  try {
-    retried = await killBackgroundProcess({ userId, id: bgProcess.id })
-  } catch (error) {
-    assert.fail(
-      `${error?.message || String(error)}; processGroup=${JSON.stringify(processGroupTesting.getWindowsTreeKillWorkerSnapshot())}`,
-    )
-  }
+  const retried = await killBackgroundProcess({ userId, id: bgProcess.id })
   assert.equal(retried.status, 'killed')
 })
 
@@ -210,13 +202,7 @@ test('background processes are owner-scoped', async () => {
   })
   assert.equal(await killBackgroundProcess({ userId: otherId, id: bgProcess.id }), null)
   assert.equal(readBackgroundLog({ userId: otherId, id: bgProcess.id }), null)
-  try {
-    await killBackgroundProcess({ userId, id: bgProcess.id })
-  } catch (error) {
-    assert.fail(
-      `${error?.message || String(error)}; processGroup=${JSON.stringify(processGroupTesting.getWindowsTreeKillWorkerSnapshot())}`,
-    )
-  }
+  await killBackgroundProcess({ userId, id: bgProcess.id })
   await new Promise((resolve) => setTimeout(resolve, 400))
 })
 

@@ -141,6 +141,9 @@ test('Windows missing shell executable reports startup failure instead of an inv
 
     assert.equal(result.code, null)
     assert.equal(result.sessionCrashed, true)
+    assert.equal(result.processStartFailed, true)
+    assert.match(result.processStartError, /ENOENT/iu)
+    assert.equal(result.processIsolationFailed, false)
     assert.match(result.error, /(?:启动失败|ENOENT)/iu)
     assert.doesNotMatch(result.error, /回执无效/iu)
     assert.match(result.stderr, /ENOENT/iu)
