@@ -130,6 +130,26 @@ test('Windows setlocal with delayed expansion disabled still returns a trusted e
   assert.match(result.stdout, /GUGO_SETLOCAL_BANG:before!literal!after/u)
 })
 
+test('Windows missing shell executable reports startup failure instead of an invalid receipt', windowsOnly, async () => {
+  const originalComspec = process.env.COMSPEC
+  try {
+    process.env.COMSPEC = path.join(
+      workspace,
+      `gugo-missing-shell-${process.pid}-${Date.now()}.exe`,
+    )
+    const result = await run('missing-shell-executable', 'echo MUST_NOT_RUN')
+
+    assert.equal(result.code, null)
+    assert.equal(result.sessionCrashed, true)
+    assert.match(result.error, /(?:启动失败|ENOENT)/iu)
+    assert.doesNotMatch(result.error, /回执无效/iu)
+    assert.match(result.stderr, /ENOENT/iu)
+  } finally {
+    if (originalComspec === undefined) delete process.env.COMSPEC
+    else process.env.COMSPEC = originalComspec
+  }
+})
+
 test('Windows logical session preserves literal exclamation-mark expressions', windowsOnly, async () => {
   const result = await run(
     'literal-exclamation-output',

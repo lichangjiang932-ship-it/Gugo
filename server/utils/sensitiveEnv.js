@@ -18,7 +18,12 @@ const RUNTIME_INJECTION_ENV = new Set([
   // requested command. These are never eligible for env_keys restoration.
   'NODE_OPTIONS',
   'NODE_PATH',
+  'NODE_CHANNEL_FD',
+  'NODE_CHANNEL_SERIALIZATION_MODE',
+  'NODE_UNIQUE_ID',
   'NPM_CONFIG_NODE_OPTIONS',
+  'ELECTRON_RUN_AS_NODE',
+  'ELECTRON_NO_ASAR',
   'PYTHONPATH',
   'PYTHONHOME',
   'PYTHONSTARTUP',

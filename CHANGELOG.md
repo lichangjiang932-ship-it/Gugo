@@ -36,6 +36,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Removed sensitive cursor and model-content fields from generic Agent-loop audit persistence.
 - Kept app-server readiness accurate during disposal and prevented one cancelled startup waiter from aborting other active waiters.
 - Prevented parallel failing verification checks from consuming multiple repair rounds before the model can respond.
+- Gated Windows commands behind Job Object attachment, preserved identity-safe cleanup for late-bound descendants, and separated startup, isolation, and cleanup failures without leaking desktop runtime environment variables.
 
 ## [0.11.48] - 2026-08-26
 

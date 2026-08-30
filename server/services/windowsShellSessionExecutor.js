@@ -187,6 +187,16 @@ export async function executeWindowsShellRequest(record, request, prepared) {
     })
 
     assertSessionOpen(record)
+    if (processResult.processIsolationFailed) {
+      return failureResult(record, current, processResult, {
+        error: `持久 Shell 进程隔离建立失败：${processResult.processIsolationError || '未知错误'}`,
+      })
+    }
+    if (processResult.processStartFailed) {
+      return failureResult(record, current, processResult, {
+        error: `持久 Shell 启动失败：${processResult.processStartError || '未知错误'}`,
+      })
+    }
     if (processResult.timedOut || processResult.aborted || processResult.processTreeCleanupFailed) {
       return failureResult(record, current, processResult)
     }

@@ -1,16 +1,17 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { _testing, runProcessWithGroup } from '../server/utils/processGroup.js'
+import { _testing, runProcessWithGroup, terminateProcessTree } from '../server/utils/processGroup.js'
 import {
   windowsTreeKillWorkerArgs,
   windowsTreeKillWorkerPayload,
   windowsTreeKillWorkerScript,
+  windowsPowerShellPath,
 } from '../server/utils/windowsTreeKillWorkerSource.js'
 
 const isPosix = process.platform !== 'win32'
@@ -113,6 +114,32 @@ function respond(child, row, succeeded = true) {
 
 const nextTurn = () => new Promise((resolve) => setImmediate(resolve))
 
+function requestWithKnownIdentity(manager, pid, options = {}) {
+  return manager.request(pid, {
+    ...options,
+    identityCutoffMs: options.identityCutoffMs ?? Date.now(),
+  })
+}
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    if (error?.code === 'ESRCH') return false
+    throw error
+  }
+}
+
+async function waitForProcessExit(pid, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!processExists(pid)) return true
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  return !processExists(pid)
+}
+
 async function completeBoundRequest(child, pending, { bind = true, kill = true } = {}) {
   const bindRow = workerRequestRows(child).at(-1)
   assert.equal(bindRow.operation, 'BIND')
@@ -135,11 +162,11 @@ test('Windows tree-kill worker: prewarm 与连续 BIND/KILL 复用同一 worker'
   assert.equal(children.length, 1)
   children[0].stdout.emit('data', 'READY\t2\n')
 
-  const first = manager.request(101)
+  const first = requestWithKnownIdentity(manager, 101)
   const firstBind = workerRequestRows(children[0])[0]
   assert.equal(await completeBoundRequest(children[0], first), true)
 
-  const second = manager.request(202)
+  const second = requestWithKnownIdentity(manager, 202)
   const secondBind = workerRequestRows(children[0])[2]
   assert.equal(await completeBoundRequest(children[0], second), true)
   assert.deepEqual([firstBind.pid, secondBind.pid], [101, 202])
@@ -155,8 +182,8 @@ test('Windows tree-kill worker: 并发响应乱序仍按 request id 与 lease �
   const child = children[0]
   child.stdout.emit('data', 'READY\t2\n')
 
-  const first = manager.request(301)
-  const second = manager.request(302)
+  const first = requestWithKnownIdentity(manager, 301)
+  const second = requestWithKnownIdentity(manager, 302)
   const [firstBind, secondBind] = workerRequestRows(child)
   respond(child, secondBind, true)
   respond(child, firstBind, true)
@@ -180,11 +207,11 @@ test('Windows tree-kill worker: 崩溃拒绝全部 pending 且下次请求重建
   crashed.stdout.emit('data', 'READY\t2\n')
 
   const firstRejected = assert.rejects(
-    manager.request(401),
+    requestWithKnownIdentity(manager, 401),
     (error) => error?.code === 'WINDOWS_TREE_KILL_WORKER_CRASHED',
   )
   const secondRejected = assert.rejects(
-    manager.request(402),
+    requestWithKnownIdentity(manager, 402),
     (error) => error?.code === 'WINDOWS_TREE_KILL_WORKER_CRASHED',
   )
   crashed.emit('close', 9, null)
@@ -192,7 +219,7 @@ test('Windows tree-kill worker: 崩溃拒绝全部 pending 且下次请求重建
   assert.equal(manager.snapshot().active, false)
   assert.equal(manager.snapshot().pending, 0)
 
-  const rebuiltRequest = manager.request(403)
+  const rebuiltRequest = requestWithKnownIdentity(manager, 403)
   assert.equal(children.length, 2)
   const rebuilt = children[1]
   rebuilt.stdout.emit('data', 'READY\t2\n')
@@ -209,7 +236,7 @@ test('Windows tree-kill worker: idle 句柄 unref，pending 期间临时 ref', a
   const handles = [child, child.stdin, child.stdout, child.stderr]
   assert.equal(handles.every((handle) => handle.referenced === false), true)
 
-  const pending = manager.request(501)
+  const pending = requestWithKnownIdentity(manager, 501)
   assert.equal(handles.every((handle) => handle.referenced === true), true)
   child.stdout.emit('data', 'READY\t2\n')
   assert.equal(await completeBoundRequest(child, pending), true)
@@ -306,7 +333,7 @@ test('Windows tree-kill worker: 冷启动等待不消耗 BIND 响应超时', asy
   t.after(() => manager.shutdown())
 
   let settled = false
-  const pending = manager.request(601).finally(() => { settled = true })
+  const pending = requestWithKnownIdentity(manager, 601).finally(() => { settled = true })
   await new Promise((resolve) => setTimeout(resolve, 60))
   assert.equal(settled, false, 'request timeout must not start while queued for READY')
 
@@ -319,7 +346,7 @@ test('Windows tree-kill worker: READY 前目标退出会撤销排队 BIND', asyn
   const { children, manager } = mockWindowsTreeKillManager()
   t.after(() => manager.shutdown())
   const controller = new AbortController()
-  const pending = manager.request(602, { signal: controller.signal })
+  const pending = requestWithKnownIdentity(manager, 602, { signal: controller.signal })
   controller.abort()
   await assert.rejects(
     pending,
@@ -342,6 +369,195 @@ test('Windows tree-kill worker: 大源码通过 stdin 传输且启动命令远�
   assert.ok(payload.length > commandLineChars, 'full worker source must not be embedded in argv')
 })
 
+test('Windows tree-kill worker: repeated KILL reuses worker threads without leaking handles', {
+  skip: process.platform !== 'win32',
+  timeout: 30_000,
+}, async (t) => {
+  const manager = _testing.createWindowsTreeKillWorkerManager()
+  t.after(() => manager.shutdown())
+  await manager.ready({ timeoutMs: 30_000 })
+  const workerPid = manager.snapshot().pid
+  assert.ok(workerPid > 0)
+
+  const handleCount = () => {
+    const output = execFileSync(windowsPowerShellPath(), [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `(Get-Process -Id ${workerPid}).HandleCount`,
+    ], { encoding: 'utf8', windowsHide: true })
+    const count = Number.parseInt(output.trim(), 10)
+    assert.ok(Number.isSafeInteger(count) && count > 0, `invalid worker handle count: ${output}`)
+    return count
+  }
+
+  const killOne = async () => {
+    const target = spawn(node, ['-e', "process.stdout.write('READY\\n'); setInterval(() => {}, 1_000)"], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    })
+    const closed = new Promise((resolve) => target.once('close', resolve))
+    try {
+      await new Promise((resolve, reject) => {
+        target.stdout.once('data', resolve)
+        target.once('error', reject)
+      })
+      const lease = await manager.bind(target.pid)
+      assert.ok(lease, 'worker must bind the live target')
+      assert.equal(await manager.kill(lease), true)
+      await closed
+    } finally {
+      if (target.exitCode == null && target.signalCode == null) {
+        try { target.kill('SIGKILL') } catch { /* target already exited */ }
+      }
+    }
+  }
+
+  // Warm the CLR thread pool before measuring its steady-state handle count.
+  for (let index = 0; index < 8; index += 1) await killOne()
+  const before = handleCount()
+  for (let index = 0; index < 40; index += 1) await killOne()
+  const after = handleCount()
+
+  assert.ok(
+    after - before <= 8,
+    `worker handles grew from ${before} to ${after}; repeated KILL must not allocate dedicated threads`,
+  )
+})
+
+test('Windows tree-kill worker: invalid identity cutoff rejects the bind without killing the target', {
+  skip: process.platform !== 'win32',
+  timeout: 15_000,
+}, async (t) => {
+  const manager = _testing.createWindowsTreeKillWorkerManager()
+  t.after(() => manager.shutdown())
+  await manager.ready({ timeoutMs: 30_000 })
+  const target = spawn(node, ['-e', 'setInterval(() => {}, 1_000)'], {
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  const closed = new Promise((resolve) => target.once('close', resolve))
+  try {
+    await new Promise((resolve, reject) => {
+      target.once('spawn', resolve)
+      target.once('error', reject)
+    })
+    assert.equal(
+      await manager.bind(target.pid, { identityCutoffMs: 1 }),
+      null,
+      'an identity created after the claimed cutoff must not be bound',
+    )
+    assert.equal(processExists(target.pid), true, 'a rejected bind must not terminate the target')
+  } finally {
+    if (processExists(target.pid)) target.kill('SIGKILL')
+    await closed
+  }
+})
+
+test('Windows tree-kill worker: a process created after the identity cutoff is never bound', {
+  skip: process.platform !== 'win32',
+  timeout: 15_000,
+}, async (t) => {
+  const manager = _testing.createWindowsTreeKillWorkerManager()
+  t.after(() => manager.shutdown())
+  await manager.ready({ timeoutMs: 30_000 })
+
+  const identityCutoffMs = Date.now()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const target = spawn(node, ['-e', 'setInterval(() => {}, 1_000)'], {
+    stdio: 'ignore',
+    windowsHide: true,
+  })
+  const closed = new Promise((resolve) => target.once('close', resolve))
+  try {
+    await new Promise((resolve, reject) => {
+      target.once('spawn', resolve)
+      target.once('error', reject)
+    })
+    assert.equal(
+      await manager.bind(target.pid, { identityCutoffMs }),
+      null,
+      'an identity created after the cutoff must fail closed',
+    )
+    assert.equal(processExists(target.pid), true, 'a rejected bind must not terminate the target')
+  } finally {
+    if (processExists(target.pid)) target.kill('SIGKILL')
+    await closed
+  }
+})
+
+test('terminateProcessTree late-bind removes a root, child, and grandchild before reporting success', {
+  skip: process.platform !== 'win32',
+  timeout: 20_000,
+}, async () => {
+  _testing.resetWindowsTreeKillWorker()
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-late-bind-tree-'))
+  const childScript = path.join(fixture, 'child.cjs')
+  const identityPath = path.join(fixture, 'tree.json')
+  const identities = []
+  let root = null
+  let removed = false
+  try {
+    fs.writeFileSync(childScript, [
+      "const fs = require('node:fs')",
+      "const { spawn } = require('node:child_process')",
+      "const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: __dirname, stdio: 'ignore', windowsHide: true })",
+      "fs.writeFileSync(process.argv[2], JSON.stringify({ childPid: process.pid, grandchildPid: grandchild.pid }))",
+      'setInterval(() => {}, 1000)',
+    ].join(';'), 'utf8')
+    const rootScript = [
+      "const { spawn } = require('node:child_process')",
+      `spawn(process.execPath, [${JSON.stringify(childScript)}, ${JSON.stringify(identityPath)}], { cwd: ${JSON.stringify(fixture)}, stdio: 'ignore', windowsHide: true })`,
+      'setInterval(() => {}, 1000)',
+    ].join(';')
+    root = spawn(node, ['-e', rootScript], {
+      cwd: fixture,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    const rootClosed = new Promise((resolve) => root.once('close', resolve))
+    await new Promise((resolve, reject) => {
+      root.once('spawn', resolve)
+      root.once('error', reject)
+    })
+
+    const readyDeadline = Date.now() + 5_000
+    while (!fs.existsSync(identityPath) && Date.now() < readyDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    assert.equal(fs.existsSync(identityPath), true, 'child and grandchild identities must be observable')
+    const recorded = JSON.parse(fs.readFileSync(identityPath, 'utf8'))
+    identities.push(root.pid, recorded.childPid, recorded.grandchildPid)
+    assert.equal(identities.every((pid) => Number.isSafeInteger(pid) && pid > 0), true)
+    assert.equal(identities.every(processExists), true)
+
+    assert.equal(
+      await terminateProcessTree({ pid: root.pid, child: root, killRootOnFailure: false }),
+      true,
+      'late-bound cleanup must prove the complete pre-existing tree exited',
+    )
+    await rootClosed
+    assert.deepEqual(
+      await Promise.all(identities.map((pid) => waitForProcessExit(pid))),
+      [true, true, true],
+    )
+    fs.rmSync(fixture, { recursive: true, force: true })
+    removed = true
+  } finally {
+    for (const pid of identities.reverse()) {
+      if (processExists(pid)) {
+        try { process.kill(pid, 'SIGKILL') } catch { /* already exited */ }
+      }
+    }
+    if (root && processExists(root.pid)) {
+      try { root.kill('SIGKILL') } catch { /* already exited */ }
+    }
+    if (!removed) fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    _testing.resetWindowsTreeKillWorker()
+  }
+})
+
 test('Windows tree-kill worker: 响应超时会关闭 worker 并拒绝请求', async (t) => {
   const { children, manager } = mockWindowsTreeKillManager({ requestTimeoutMs: 20 })
   t.after(() => manager.shutdown())
@@ -351,7 +567,7 @@ test('Windows tree-kill worker: 响应超时会关闭 worker 并拒绝请求', a
 
   const keepAlive = setTimeout(() => {}, 100)
   await assert.rejects(
-    manager.request(603).finally(() => clearTimeout(keepAlive)),
+    requestWithKnownIdentity(manager, 603).finally(() => clearTimeout(keepAlive)),
     (error) => error?.code === 'WINDOWS_TREE_KILL_WORKER_REQUEST_TIMEOUT',
   )
   assert.equal(manager.snapshot().pending, 0)
@@ -369,7 +585,7 @@ test('Windows tree-kill worker: 响应计时仅在真实写入完成后开始', 
   child.stdout.emit('data', 'READY\t2\n')
 
   let settled = false
-  const pending = manager.request(604).finally(() => { settled = true })
+  const pending = requestWithKnownIdentity(manager, 604).finally(() => { settled = true })
   await new Promise((resolve) => setTimeout(resolve, 60))
   assert.equal(settled, false, 'response timeout must start after the delayed write callback')
   const bindRow = workerRequestRows(child)[0]
@@ -482,8 +698,9 @@ test('runProcessWithGroup: 默认剥离敏感与运行时注入变量，只恢�
     ...process.env,
     [secretKey]: 'approved-operational-secret',
     NODE_OPTIONS: '--definitely-invalid-gugo-option',
+    eLeCtRoN_rUn_As_NoDe: '1',
   }
-  const script = `process.stdout.write(JSON.stringify({ secret: process.env.${secretKey} || null, nodeOptions: process.env.NODE_OPTIONS || null }))`
+  const script = `process.stdout.write(JSON.stringify({ secret: process.env.${secretKey} || null, nodeOptions: process.env.NODE_OPTIONS || null, electronRunAsNode: process.env.ELECTRON_RUN_AS_NODE || null }))`
   const denied = await runProcessWithGroup({
     shellPath: node,
     shellArgs: nodeArgs(script),
@@ -492,20 +709,25 @@ test('runProcessWithGroup: 默认剥离敏感与运行时注入变量，只恢�
     timeout: 5_000,
   })
   assert.equal(denied.code, 0, denied.stderr)
-  assert.deepEqual(JSON.parse(denied.stdout), { secret: null, nodeOptions: null })
+  assert.deepEqual(JSON.parse(denied.stdout), {
+    secret: null,
+    nodeOptions: null,
+    electronRunAsNode: null,
+  })
 
   const approved = await runProcessWithGroup({
     shellPath: node,
     shellArgs: nodeArgs(script),
     cwd: process.cwd(),
     env: sourceEnv,
-    inheritEnvKeys: [secretKey],
+    inheritEnvKeys: [secretKey, 'eLeCtRoN_rUn_As_NoDe'],
     timeout: 5_000,
   })
   assert.equal(approved.code, 0, approved.stderr)
   assert.deepEqual(JSON.parse(approved.stdout), {
     secret: 'approved-operational-secret',
     nodeOptions: null,
+    electronRunAsNode: null,
   })
 })
 
@@ -738,7 +960,8 @@ test('runProcessWithGroup: Windows worker 准备预算不受系统墙钟跳变�
   const readyPromise = new Promise((resolve) => { resolveReady = resolve })
   const manager = {
     ready: () => readyPromise,
-    bind: () => Promise.resolve(null),
+    bind: () => Promise.resolve({ generation: 1, leaseId: 'clock-test-lease' }),
+    kill: () => Promise.resolve(true),
     release: () => Promise.resolve(false),
     shutdown: () => {},
   }
@@ -788,7 +1011,9 @@ test('runProcessWithGroup: Windows worker 准备失败时 fail-closed 且不启�
       onSpawn: () => { spawned = true },
     })
 
-    assert.equal(result.processTreeCleanupFailed, true)
+    assert.equal(result.processIsolationFailed, true)
+    assert.match(result.processIsolationError, /worker.*(?:失败|异常)|ENOENT/iu)
+    assert.equal(result.processTreeCleanupFailed, false)
     assert.equal(result.code, null)
     assert.equal(spawned, false)
     assert.match(result.stderr, /worker.*(?:失败|异常)|ENOENT/iu)
@@ -799,6 +1024,179 @@ test('runProcessWithGroup: Windows worker 准备失败时 fail-closed 且不启�
     else process.env.WINDIR = originalWindir
     _testing.resetWindowsTreeKillWorker()
   }
+})
+
+test('runProcessWithGroup: Windows BIND 确认前不得执行用户命令', {
+  skip: process.platform !== 'win32',
+  timeout: 10_000,
+}, async (t) => {
+  let resolveBind
+  const bindPending = new Promise((resolve) => { resolveBind = resolve })
+  let notifyBind
+  const bindCalled = new Promise((resolve) => { notifyBind = resolve })
+  const manager = {
+    ready: () => Promise.resolve(true),
+    bind: () => {
+      notifyBind()
+      return bindPending
+    },
+    kill: () => Promise.resolve(true),
+    release: () => Promise.resolve(true),
+    shutdown: () => {},
+  }
+  _testing.setWindowsTreeKillWorkerManager(manager)
+  t.after(() => _testing.resetWindowsTreeKillWorker())
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-process-bind-gate-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const markerPath = path.join(root, 'started.txt')
+  let spawned = false
+
+  const pending = runProcessWithGroup({
+    shellPath: node,
+    shellArgs: nodeArgs(`require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'started')`),
+    cwd: root,
+    env: process.env,
+    timeout: 5_000,
+    cleanupWindowsTreeOnExit: true,
+    onSpawn: () => { spawned = true },
+  })
+
+  await bindCalled
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(spawned, false, 'onSpawn must describe the real target, not the inert gate')
+  assert.equal(fs.existsSync(markerPath), false, 'target must remain gated while BIND is pending')
+  resolveBind({ generation: 1, leaseId: 'test-lease' })
+
+  const result = await pending
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.processTreeCleanupFailed, false)
+  assert.equal(spawned, true)
+  assert.equal(fs.readFileSync(markerPath, 'utf8'), 'started')
+})
+
+test('runProcessWithGroup: Windows BIND 失败时不得执行用户命令', {
+  skip: process.platform !== 'win32',
+  timeout: 10_000,
+}, async (t) => {
+  const manager = {
+    ready: () => Promise.resolve(true),
+    bind: () => Promise.resolve(null),
+    kill: () => Promise.resolve(false),
+    release: () => Promise.resolve(false),
+    shutdown: () => {},
+  }
+  _testing.setWindowsTreeKillWorkerManager(manager)
+  t.after(() => _testing.resetWindowsTreeKillWorker())
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-process-bind-denied-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const markerPath = path.join(root, 'must-not-exist.txt')
+  let spawned = false
+
+  const result = await runProcessWithGroup({
+    shellPath: node,
+    shellArgs: nodeArgs(`require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'unsafe')`),
+    cwd: root,
+    env: process.env,
+    timeout: 5_000,
+    cleanupWindowsTreeOnExit: true,
+    onSpawn: () => { spawned = true },
+  })
+
+  assert.equal(result.code, null)
+  assert.equal(result.processIsolationFailed, true)
+  assert.match(result.processIsolationError, /isolation/iu)
+  assert.equal(result.processTreeCleanupFailed, false)
+  assert.equal(spawned, false)
+  assert.equal(fs.existsSync(markerPath), false)
+})
+
+test('runProcessWithGroup: Windows gate 按大小写无关方式剔除 Node IPC 环境污染', {
+  skip: process.platform !== 'win32',
+  timeout: 10_000,
+}, async () => {
+  const inheritedEnvKeys = [
+    'nOdE_ChAnNeL_Fd',
+    'NoDe_ChAnNeL_sErIaLiZaTiOn_MoDe',
+    'nOdE_uNiQuE_iD',
+  ]
+  const env = {
+    ...process.env,
+    [inheritedEnvKeys[0]]: '99',
+    [inheritedEnvKeys[1]]: 'advanced',
+    [inheritedEnvKeys[2]]: 'untrusted-parent-identity',
+  }
+  const script = [
+    "const polluted = Object.keys(process.env).filter((key) => /^(?:NODE_CHANNEL_FD|NODE_CHANNEL_SERIALIZATION_MODE|NODE_UNIQUE_ID)$/i.test(key))",
+    'process.stdout.write(JSON.stringify(polluted))',
+  ].join(';')
+
+  const result = await runProcessWithGroup({
+    shellPath: node,
+    shellArgs: nodeArgs(script),
+    cwd: process.cwd(),
+    env,
+    inheritEnvKeys: inheritedEnvKeys,
+    timeout: 5_000,
+    cleanupWindowsTreeOnExit: true,
+  })
+
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout), [])
+})
+
+test('runProcessWithGroup: Windows onSpawn 内同步取消后不得继续写入 stdin', {
+  skip: process.platform !== 'win32',
+  timeout: 10_000,
+}, async () => {
+  const controller = new AbortController()
+  let stdinWrites = 0
+
+  const result = await runProcessWithGroup({
+    shellPath: node,
+    shellArgs: nodeArgs('setInterval(() => {}, 1_000)'),
+    cwd: process.cwd(),
+    env: process.env,
+    timeout: 5_000,
+    signal: controller.signal,
+    stdinInput: 'must-not-be-written',
+    cleanupWindowsTreeOnExit: true,
+    onSpawn: (child) => {
+      child.stdin.end = () => { stdinWrites += 1 }
+      controller.abort()
+    },
+  })
+
+  assert.equal(result.aborted, true)
+  assert.equal(result.killed, true)
+  assert.equal(stdinWrites, 0)
+})
+
+test('runProcessWithGroup: Windows 目标 executable 不存在时明确报告启动失败', {
+  skip: process.platform !== 'win32',
+  timeout: 10_000,
+}, async () => {
+  const missingExecutable = path.join(
+    os.tmpdir(),
+    `gugo-missing-executable-${process.pid}-${Date.now()}.exe`,
+  )
+  const result = await runProcessWithGroup({
+    shellPath: missingExecutable,
+    shellArgs: [],
+    cwd: process.cwd(),
+    env: process.env,
+    timeout: 5_000,
+    cleanupWindowsTreeOnExit: true,
+    controlPipe: true,
+  })
+
+  assert.equal(result.code, null)
+  assert.equal(result.processStartFailed, true)
+  assert.match(result.processStartError, /ENOENT/iu)
+  assert.equal(result.processTreeCleanupFailed, false)
+  assert.equal(result.controlError, null)
+  assert.equal(result.control.length, 0)
+  assert.equal(result.timedOut, false)
+  assert.equal(result.aborted, false)
 })
 
 test('runProcessWithGroup: Windows 根进程自然退出后清理仍存活的后代', {

@@ -174,38 +174,43 @@ worker containment or execution-time policy checks.
 `tests/approvalPolicy.test.js`, `tests/toolRiskMetadata.test.js`, and
 `tests/runtimePluginCapabilityBinding.test.js`.
 
-## DEBT-EXEC-002 — Atomic Windows process-tree ownership
+## DEBT-EXEC-002 — Gate-before-start Windows process-tree ownership
 
-**Status:** Open
+**Status:** Closed
 **Priority:** P1
 **Area:** Execution isolation
 
-**Evidence / reproduction:** Windows commands are currently spawned by Node
-before the tree-kill worker binds a native process handle by PID. The creation
-time cutoff and fail-closed bind reduce PID-reuse risk, and a successful bind
-pins the original identity, but they do not make spawn and ownership atomic.
-The worker also discovers descendants from current Toolhelp snapshots; if an
-intermediate parent exits before the first kill snapshot, its surviving child
-can no longer be linked to the tracked root. The current lease protocol is
-therefore a bounded transition guard, not proof that every descendant was
-contained or terminated.
+**Evidence / reproduction:** `runProcessWithGroup` on Windows now starts only the
+trusted `windowsProcessGateChild.js` gate, binds that live process identity to a
+private Job Object, and waits for both the gate handshake and the worker lease
+before sending the target command. The target and its descendants therefore
+inherit Job membership before user code can run. A failed worker startup or
+bind never sends the start request and is projected as the stable
+`PROCESS_ISOLATION_FAILED` tool result instead of falling back to a bare PID or
+`taskkill` cleanup path.
 
-**Exit criteria:** A trusted native spawn broker must place every Windows
-command that requests tree cleanup into a private Job Object before user code
-runs, preferably with `PROC_THREAD_ATTRIBUTE_JOB_LIST`, or by using
-`CREATE_SUSPENDED`, `AssignProcessToJobObject`, and `ResumeThread`. The job must
-use `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; cleanup success is proven by zero
-active job processes or completion-port evidence. Failure to establish job
-ownership prevents the command from starting, without falling back to bare PID
-or `taskkill`, and all job, process, thread, and pipe handles close on startup
-failure, cancellation, timeout, or broker crash.
+**Exit criteria:** The gate-before-start path uses
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; cancellation, timeout, and normal root
+exit terminate the complete job, and cleanup succeeds only after
+`QueryInformationJobObject` reports zero active processes. Lease disposal
+closes the job and retained root-process handles, so worker failure also invokes
+the kill-on-close boundary. Startup or ownership failure keeps the user target
+gated and returns a stable failure result.
 
-**Verification:** Windows CI covers direct children, a short-lived
-intermediate parent with a long-lived grandchild, rapid launch/cancel under PID
-churn without unrelated-process termination, broker startup and runtime
-crashes, immediate working-directory deletion after cancellation, and
-unsupported or nested-job environments failing before user code executes with
-a stable error code.
+Legacy callers that pass an already-running process to `terminateProcessTree`
+use a hybrid late-bind path: it identity-checks the observable descendant tree,
+binds the root to a Job Object, and refuses to report success until the job and
+all retained identities are empty across stable snapshots. That path cannot
+retroactively recover a descendant whose complete parent chain disappeared
+before its first snapshot, so this closed item does not claim atomic ownership
+for arbitrary pre-existing trees.
+
+**Verification:** `tests/processGroup.test.js` covers worker startup and runtime
+failure, cancellation while preparing, bind ordering and bind failure, target
+execution after a successful bind, gated descendant cleanup after the root
+exits, and identity-checked late-bind cleanup of a real three-level process tree.
+`tests/processGroupCancellation.test.js` verifies that cancellation waits for
+the Windows child tree to release its working directory.
 
 ## DEBT-LSP-001 — Native language-server navigation
 
@@ -401,7 +406,7 @@ unregistered oversized files, growth, and shrinkage that was not ratcheted.
     { "path": "server/adapters/browserAutomation.js", "ceiling": 633, "group": "adapter-capabilities" },
     { "path": "server/adapters/codexPluginSkills.js", "ceiling": 637, "group": "adapter-capabilities" },
     { "path": "server/adapters/codingAgentTools.js", "ceiling": 796, "group": "adapter-capabilities" },
-    { "path": "server/adapters/fsShellTools.js", "ceiling": 1393, "group": "adapter-capabilities" },
+    { "path": "server/adapters/fsShellTools.js", "ceiling": 1383, "group": "adapter-capabilities" },
     { "path": "server/adapters/gitWorkbench.js", "ceiling": 628, "group": "adapter-capabilities" },
     { "path": "server/adapters/mediaTools.js", "ceiling": 1175, "group": "adapter-capabilities" },
     { "path": "server/adapters/nativeModelProviders.js", "ceiling": 687, "group": "adapter-capabilities" },

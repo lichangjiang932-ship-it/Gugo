@@ -9,10 +9,38 @@ import {
 const INTERNAL_TIMEOUT_MS = 4_000
 const STARTUP_TIMEOUT_MS = 30_000
 const REQUEST_TIMEOUT_MS = INTERNAL_TIMEOUT_MS + 4_000
+const IDENTITY_CLOCK_SETTLE_MS = 20
+function unixNowMs() {
+  return Date.now()
+}
 function workerError(code, message) {
   const error = new Error(message)
   error.code = code
   return error
+}
+
+function settledIdentityCutoff(signal) {
+  if (signal?.aborted) {
+    return Promise.reject(workerError(
+      'WINDOWS_TREE_KILL_TARGET_EXITED',
+      'Windows 进程树清理目标在身份确认前已退出',
+    ))
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(workerError(
+        'WINDOWS_TREE_KILL_TARGET_EXITED',
+        'Windows 进程树清理目标在身份确认前已退出',
+      ))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve(unixNowMs())
+    }, IDENTITY_CLOCK_SETTLE_MS)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
+  })
 }
 
 function setReferenced(child, referenced) {
@@ -364,9 +392,11 @@ export function createWindowsTreeKillWorkerManager({
     })
   }
 
-  const bind = (rawPid, { identityCutoffMs = Date.now(), signal = null } = {}) => {
+  const bind = async (rawPid, { identityCutoffMs = null, signal = null } = {}) => {
     const pid = Math.floor(Number(rawPid) || 0)
-    const cutoffMs = Math.floor(Number(identityCutoffMs) || 0)
+    const cutoffMs = identityCutoffMs == null
+      ? await settledIdentityCutoff(signal)
+      : Number(identityCutoffMs)
     if (pid <= 0 || !Number.isSafeInteger(cutoffMs) || cutoffMs <= 0) {
       return Promise.reject(workerError(
         'WINDOWS_TREE_KILL_WORKER_IDENTITY_INVALID',
@@ -433,12 +463,17 @@ export function prepareWindowsTreeKillWorker(options) {
   return manager().ready(options)
 }
 
-export function bindWindowsProcessTree({ pid, child = null, signal = null } = {}) {
-  const identityCutoffMs = Date.now()
+export async function bindWindowsProcessTree({ pid, child = null, signal = null } = {}) {
   if (child) {
     try {
-      if (child.kill(0) !== true) return Promise.resolve(null)
-    } catch { return Promise.resolve(null) }
+      if (child.kill(0) !== true) return null
+    } catch { return null }
+  }
+  const identityCutoffMs = await settledIdentityCutoff(signal)
+  if (child) {
+    try {
+      if (child.kill(0) !== true) return null
+    } catch { return null }
   }
   return manager().bind(pid, { identityCutoffMs, signal })
 }

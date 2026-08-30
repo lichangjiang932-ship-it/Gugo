@@ -31,9 +31,14 @@ using System.Threading;
 public static class GugoProcessTreeNative {
   private const uint TH32CS_SNAPPROCESS = 0x00000002;
   private const uint PROCESS_TERMINATE = 0x00000001;
+  private const uint PROCESS_SET_QUOTA = 0x00000100;
   private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000;
   private const uint SYNCHRONIZE = 0x00100000;
+  private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+  private const int JobObjectBasicAccountingInformation = 1;
+  private const int JobObjectExtendedLimitInformation = 9;
   private const uint WAIT_TIMEOUT = 258;
+  private const int ERROR_ACCESS_DENIED = 5;
   private const int ERROR_NO_MORE_FILES = 18;
   private const long WINDOWS_EPOCH_OFFSET = 116444736000000000L;
   private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
@@ -58,18 +63,6 @@ public static class GugoProcessTreeNative {
     }
   }
 
-  private sealed class ProcessLease {
-    public readonly string Id;
-    public readonly ProcessIdentity Root;
-    public int State;
-
-    public ProcessLease(string id, ProcessIdentity root) {
-      Id = id;
-      Root = root;
-      State = 0;
-    }
-  }
-
   [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
   private struct PROCESSENTRY32 {
     public uint dwSize;
@@ -83,6 +76,70 @@ public static class GugoProcessTreeNative {
     public uint dwFlags;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
     public string szExeFile;
+  }
+
+  private sealed class ProcessLease {
+    public readonly string Id;
+    public readonly ProcessIdentity Root;
+    public readonly IntPtr Job;
+    public int State;
+
+    public ProcessLease(string id, ProcessIdentity root, IntPtr job) {
+      Id = id;
+      Root = root;
+      Job = job;
+      State = 0;
+    }
+
+    public void Dispose() {
+      if (Job != IntPtr.Zero) CloseHandle(Job);
+      Root.Dispose();
+    }
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
+    public long PerProcessUserTimeLimit;
+    public long PerJobUserTimeLimit;
+    public uint LimitFlags;
+    public UIntPtr MinimumWorkingSetSize;
+    public UIntPtr MaximumWorkingSetSize;
+    public uint ActiveProcessLimit;
+    public UIntPtr Affinity;
+    public uint PriorityClass;
+    public uint SchedulingClass;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct IO_COUNTERS {
+    public ulong ReadOperationCount;
+    public ulong WriteOperationCount;
+    public ulong OtherOperationCount;
+    public ulong ReadTransferCount;
+    public ulong WriteTransferCount;
+    public ulong OtherTransferCount;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+    public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+    public IO_COUNTERS IoInfo;
+    public UIntPtr ProcessMemoryLimit;
+    public UIntPtr JobMemoryLimit;
+    public UIntPtr PeakProcessMemoryUsed;
+    public UIntPtr PeakJobMemoryUsed;
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION {
+    public long TotalUserTime;
+    public long TotalKernelTime;
+    public long ThisPeriodTotalUserTime;
+    public long ThisPeriodTotalKernelTime;
+    public uint TotalPageFaultCount;
+    public uint TotalProcesses;
+    public uint ActiveProcesses;
+    public uint TotalTerminatedProcesses;
   }
 
   [DllImport("kernel32.dll", SetLastError = true)]
@@ -107,6 +164,27 @@ public static class GugoProcessTreeNative {
     out System.Runtime.InteropServices.ComTypes.FILETIME kernelTime,
     out System.Runtime.InteropServices.ComTypes.FILETIME userTime
   );
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern IntPtr CreateJobObject(IntPtr jobAttributes, string name);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool SetInformationJobObject(
+    IntPtr job,
+    int informationClass,
+    ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION information,
+    uint informationLength
+  );
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool QueryInformationJobObject(
+    IntPtr job,
+    int informationClass,
+    out JOBOBJECT_BASIC_ACCOUNTING_INFORMATION information,
+    uint informationLength,
+    out uint returnLength
+  );
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
 
   private static long FileTimeValue(System.Runtime.InteropServices.ComTypes.FILETIME value) {
     return ((long)(uint)value.dwHighDateTime << 32) | (uint)value.dwLowDateTime;
@@ -152,9 +230,44 @@ public static class GugoProcessTreeNative {
     return false;
   }
 
-  private static ProcessIdentity OpenIdentity(uint processId) {
+  private static IntPtr CreateKillOnCloseJob() {
+    IntPtr job = CreateJobObject(IntPtr.Zero, null);
+    if (job == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+    try {
+      var limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+      limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+      uint size = (uint)Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+      if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref limits, size)) {
+        throw new Win32Exception(Marshal.GetLastWin32Error());
+      }
+      return job;
+    } catch {
+      CloseHandle(job);
+      throw;
+    }
+  }
+
+  private static uint ActiveJobProcessCount(IntPtr job) {
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
+    uint returned;
+    uint size = (uint)Marshal.SizeOf(typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION));
+    if (!QueryInformationJobObject(
+      job,
+      JobObjectBasicAccountingInformation,
+      out accounting,
+      size,
+      out returned
+    )) {
+      throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
+    return accounting.ActiveProcesses;
+  }
+
+  private static ProcessIdentity OpenIdentity(uint processId, bool forJobAssignment = false) {
+    uint access = PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
+    if (forJobAssignment) access |= PROCESS_SET_QUOTA;
     IntPtr process = OpenProcess(
-      PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+      access,
       false,
       processId
     );
@@ -195,22 +308,31 @@ public static class GugoProcessTreeNative {
     if (String.IsNullOrWhiteSpace(leaseId) || rootPid <= 0 || identityCutoffUnixMs <= 0) {
       return false;
     }
-    ProcessIdentity root = OpenIdentity((uint)rootPid);
+    ProcessIdentity root = OpenIdentity((uint)rootPid, true);
     if (root == null) return false;
+    IntPtr job = IntPtr.Zero;
     bool owned = false;
     try {
-      // The root may exit after the caller validates its ChildProcess handle
-      // but before this request is handled. Its retained creation/exit times
-      // still define the descendant identity boundary.
-      if (root.CreatedAt > UnixMillisecondsToFileTime(identityCutoffUnixMs)) return false;
+      long cutoffFileTime;
+      try {
+        cutoffFileTime = UnixMillisecondsToFileTime(identityCutoffUnixMs);
+      } catch (OverflowException) {
+        return false;
+      }
+      if (root.CreatedAt > cutoffFileTime || !IsAlive(root)) return false;
+      job = CreateKillOnCloseJob();
+      if (!AssignProcessToJobObject(job, root.Handle)) return false;
       lock (LeaseLock) {
         if (Leases.ContainsKey(leaseId)) return false;
-        Leases.Add(leaseId, new ProcessLease(leaseId, root));
+        Leases.Add(leaseId, new ProcessLease(leaseId, root, job));
         owned = true;
       }
       return true;
     } finally {
-      if (!owned) root.Dispose();
+      if (!owned) {
+        if (job != IntPtr.Zero) CloseHandle(job);
+        root.Dispose();
+      }
     }
   }
 
@@ -221,7 +343,7 @@ public static class GugoProcessTreeNative {
       lease.State = 2;
       Leases.Remove(leaseId);
     }
-    lease.Root.Dispose();
+    lease.Dispose();
     return true;
   }
 
@@ -278,9 +400,16 @@ public static class GugoProcessTreeNative {
 
   private static void Terminate(ProcessIdentity identity) {
     if (!IsAlive(identity)) return;
-    if (!TerminateProcess(identity.Handle, 1) && IsAlive(identity)) {
-      throw new Win32Exception(Marshal.GetLastWin32Error());
-    }
+    if (TerminateProcess(identity.Handle, 1)) return;
+    int error = Marshal.GetLastWin32Error();
+    if (!IsAlive(identity)) return;
+    // TerminateJobObject can put a process into its irreversible terminating
+    // state before the process handle becomes signalled. During that narrow
+    // window a redundant TerminateProcess call returns ERROR_ACCESS_DENIED.
+    // Keep polling: success is still gated on two stable snapshots where the
+    // job is empty and every retained identity handle is signalled.
+    if (error == ERROR_ACCESS_DENIED) return;
+    throw new Win32Exception(error);
   }
 
   private static bool AnyTrackedProcessAlive(Dictionary<uint, ProcessIdentity> tracked) {
@@ -295,9 +424,20 @@ public static class GugoProcessTreeNative {
     tracked.Add(lease.Root.Pid, lease.Root);
     DateTime deadline = DateTime.UtcNow.AddMilliseconds(Math.Max(250, timeoutMs));
     int stableEmptySnapshots = 0;
+    bool jobTerminated = false;
     try {
       while (DateTime.UtcNow < deadline) {
+        // AssignProcessToJobObject is not retroactive. Capture any descendants
+        // that existed before the late bind before terminating the job root.
         ExpandDescendants(tracked, Snapshot());
+        if (!jobTerminated) {
+          bool terminated = TerminateJobObject(lease.Job, 1);
+          int terminateError = terminated ? 0 : Marshal.GetLastWin32Error();
+          if (!terminated && ActiveJobProcessCount(lease.Job) > 0) {
+            throw new Win32Exception(terminateError);
+          }
+          jobTerminated = true;
+        }
         foreach (var identity in tracked.Values) {
           if (DateTime.UtcNow >= deadline) break;
           Terminate(identity);
@@ -305,7 +445,7 @@ public static class GugoProcessTreeNative {
         if (DateTime.UtcNow >= deadline) break;
         Thread.Sleep((int)Math.Min(50, Math.Max(1, (deadline - DateTime.UtcNow).TotalMilliseconds)));
         ExpandDescendants(tracked, Snapshot());
-        if (AnyTrackedProcessAlive(tracked)) {
+        if (ActiveJobProcessCount(lease.Job) > 0 || AnyTrackedProcessAlive(tracked)) {
           stableEmptySnapshots = 0;
           continue;
         }
@@ -315,7 +455,9 @@ public static class GugoProcessTreeNative {
       }
       return false;
     } finally {
-      foreach (var identity in tracked.Values) identity.Dispose();
+      foreach (var pair in tracked) {
+        if (pair.Key != lease.Root.Pid) pair.Value.Dispose();
+      }
     }
   }
 
@@ -324,6 +466,7 @@ public static class GugoProcessTreeNative {
       return KillBoundTree(lease, timeoutMs);
     } finally {
       FinishLease(lease);
+      lease.Dispose();
     }
   }
 
@@ -340,7 +483,7 @@ public static class GugoProcessTreeNative {
     ProcessLease lease = TakeLease(leaseId);
     if (lease == null) return false;
     try {
-      var thread = new Thread(delegate() {
+      bool queued = ThreadPool.QueueUserWorkItem(delegate(object ignored) {
         bool succeeded = false;
         try {
           succeeded = Kill(lease, timeoutMs);
@@ -349,12 +492,13 @@ public static class GugoProcessTreeNative {
         }
         WriteResponse(requestId, succeeded);
       });
-      thread.IsBackground = true;
-      thread.Start();
-      return true;
+      if (queued) return true;
+      FinishLease(lease);
+      lease.Dispose();
+      return false;
     } catch {
       FinishLease(lease);
-      lease.Root.Dispose();
+      lease.Dispose();
       return false;
     }
   }
