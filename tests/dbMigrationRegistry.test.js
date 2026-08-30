@@ -65,6 +65,7 @@ import { migrateToV101 } from '../server/migrations/v101RuntimePluginPermissionO
 import { migrateToV102 } from '../server/migrations/v102FileSnapshotAfterIdentity.js'
 import { migrateToV103 } from '../server/migrations/v103RuntimePluginMutationBarrier.js'
 import { migrateToV104 } from '../server/migrations/v104RuntimePluginMutationRecoveryReceipts.js'
+import { migrateToV106 } from '../server/migrations/v106EvolutionAutoLoop.js'
 
 function createRuntimePluginMutationBarrierPrerequisites(db, {
   includePermissionGrants = true,
@@ -107,6 +108,388 @@ function createRuntimePluginMutationBarrierPrerequisites(db, {
     `)
   }
 }
+
+function createV106DraftDatabase({ unresolvedSessionScope = false } = {}) {
+  const db = new Database(':memory:')
+  const fingerprint = (character) => character.repeat(64)
+  db.pragma('foreign_keys = ON')
+  db.exec(`
+    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    INSERT INTO meta VALUES ('schema_version', '106');
+
+    CREATE TABLE users (id TEXT PRIMARY KEY);
+    INSERT INTO users VALUES ('draft-user');
+
+    CREATE TABLE runtime_plugin_states (
+      plugin_id TEXT PRIMARY KEY,
+      active_release_id TEXT,
+      release_revision INTEGER
+    );
+    CREATE TABLE runtime_plugin_releases (
+      release_id TEXT PRIMARY KEY,
+      plugin_id TEXT NOT NULL
+    );
+    CREATE TABLE runtime_plugin_release_pins (
+      plugin_id TEXT NOT NULL,
+      release_id TEXT NOT NULL,
+      reference_kind TEXT NOT NULL,
+      reference_id TEXT NOT NULL,
+      PRIMARY KEY (plugin_id, release_id, reference_kind, reference_id)
+    );
+    CREATE TABLE runtime_plugin_permission_grants (plugin_id TEXT PRIMARY KEY);
+    CREATE TABLE turn_checkpoints (turn_id TEXT PRIMARY KEY, state_json TEXT NOT NULL);
+    CREATE TABLE job_turn_checkpoints (step_id TEXT PRIMARY KEY, state_json TEXT NOT NULL);
+    CREATE TABLE turn_events (id TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
+    CREATE TABLE event_write_failures (
+      id INTEGER PRIMARY KEY,
+      checkpoint_state_json TEXT,
+      payload_json TEXT
+    );
+
+    CREATE TABLE runtime_plugin_mutation_barrier_generations (
+      plugin_id TEXT PRIMARY KEY,
+      last_generation INTEGER NOT NULL,
+      UNIQUE (plugin_id, last_generation)
+    );
+    CREATE TABLE runtime_plugin_mutation_barriers (
+      plugin_id TEXT PRIMARY KEY
+        REFERENCES runtime_plugin_mutation_barrier_generations(plugin_id) ON DELETE RESTRICT,
+      token TEXT NOT NULL UNIQUE,
+      generation INTEGER NOT NULL,
+      operation TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      owner_pid INTEGER NOT NULL,
+      store_revision TEXT,
+      created_at INTEGER NOT NULL,
+      heartbeat_at INTEGER NOT NULL,
+      recovery_required INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO runtime_plugin_mutation_barrier_generations VALUES
+      ('completed-plugin', 3),
+      ('draft-plugin', 7);
+    INSERT INTO runtime_plugin_mutation_barriers VALUES (
+      'draft-plugin', 'token-0000000007', 7, 'uninstall', 'guarding', 1, NULL, 10, 11, 0
+    );
+
+    CREATE TABLE evolution_candidates (id TEXT PRIMARY KEY);
+    CREATE TABLE evolution_replay_suites (id TEXT PRIMARY KEY);
+    CREATE TABLE evolution_replay_runs (id TEXT PRIMARY KEY);
+    CREATE TABLE evolution_evaluations (id TEXT PRIMARY KEY);
+    CREATE TABLE evolution_approval_decisions (id TEXT PRIMARY KEY);
+    CREATE TABLE evolution_canary_releases (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      session_ids_json TEXT NOT NULL
+    );
+    CREATE TABLE evolution_promotions (id TEXT PRIMARY KEY);
+    INSERT INTO evolution_approval_decisions VALUES ('draft-approval');
+    INSERT INTO evolution_canary_releases VALUES (
+      'draft-canary', 'draft-user', '["canary-session"]'
+    );
+    INSERT INTO evolution_promotions VALUES ('draft-promotion');
+
+    CREATE TABLE evolution_auto_configs (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+      target TEXT NOT NULL CHECK (target = 'prompt:workspace-instructions'),
+      objective TEXT NOT NULL CHECK (length(objective) BETWEEN 1 AND 2000),
+      generator_provider_id TEXT NOT NULL,
+      generator_model TEXT NOT NULL,
+      replay_provider_id TEXT NOT NULL,
+      replay_model TEXT NOT NULL,
+      evaluator_provider_id TEXT NOT NULL,
+      evaluator_model TEXT NOT NULL,
+      session_ids_json TEXT NOT NULL CHECK (
+        json_valid(session_ids_json)
+        AND json_type(session_ids_json) = 'array'
+        AND json_array_length(session_ids_json) BETWEEN 1 AND 10
+      ),
+      minimum_signal_count INTEGER NOT NULL,
+      maximum_source_records INTEGER NOT NULL,
+      cooldown_ms INTEGER NOT NULL,
+      traffic_percent INTEGER NOT NULL,
+      canary_max_outcomes INTEGER NOT NULL,
+      canary_max_age_ms INTEGER NOT NULL,
+      rollback_policy_json TEXT NOT NULL,
+      config_revision INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    INSERT INTO evolution_auto_configs VALUES (
+      'draft-user', 1, 'prompt:workspace-instructions', 'Preserve the verified scope',
+      'generator-provider', 'generator-model', 'replay-provider', 'replay-model',
+      'evaluator-provider', 'evaluator-model', '["config-session"]',
+      1, 1, 60000, 1, 6, 300000, '{}', 3, 20, 21
+    );
+
+    CREATE TABLE evolution_auto_runs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      config_revision INTEGER NOT NULL CHECK (config_revision >= 1),
+      evidence_fingerprint TEXT NOT NULL CHECK (length(evidence_fingerprint) = 64),
+      dataset_fingerprint TEXT NOT NULL CHECK (length(dataset_fingerprint) = 64),
+      source_record_ids_json TEXT NOT NULL CHECK (
+        json_valid(source_record_ids_json) AND json_type(source_record_ids_json) = 'array'
+      ),
+      source_evidence_ids_json TEXT NOT NULL CHECK (
+        json_valid(source_evidence_ids_json) AND json_type(source_evidence_ids_json) = 'array'
+      ),
+      signal_count INTEGER NOT NULL CHECK (signal_count >= 1),
+      signal_cutoff_at INTEGER NOT NULL CHECK (signal_cutoff_at >= 0),
+      state TEXT NOT NULL CHECK (state IN (
+        'queued', 'running', 'rejected', 'canary_active',
+        'validated', 'rolled_back', 'stopped', 'failed'
+      )),
+      stage TEXT NOT NULL CHECK (length(stage) BETWEEN 1 AND 120),
+      candidate_id TEXT,
+      replay_suite_id TEXT,
+      replay_id TEXT,
+      evaluation_id TEXT,
+      approval_id TEXT,
+      canary_id TEXT,
+      verdict TEXT,
+      error_code TEXT,
+      error_message TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      UNIQUE (user_id, config_revision, evidence_fingerprint)
+    );
+  `)
+
+  const insertRun = db.prepare(`
+    INSERT INTO evolution_auto_runs (
+      id, user_id, config_revision, evidence_fingerprint, dataset_fingerprint,
+      source_record_ids_json, source_evidence_ids_json, signal_count,
+      signal_cutoff_at, state, stage, candidate_id, replay_suite_id, replay_id,
+      evaluation_id, approval_id, canary_id, verdict, error_code, error_message,
+      created_at, updated_at, finished_at
+    ) VALUES (?, 'draft-user', ?, ?, ?, '[]', '[]', 1, 19, 'queued', 'draft',
+      NULL, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, ?, ?, NULL)
+  `)
+  if (unresolvedSessionScope) {
+    insertRun.run('unresolved-run', 4, fingerprint('a'), fingerprint('b'), null, 30, 31)
+  } else {
+    insertRun.run('config-run', 3, fingerprint('a'), fingerprint('b'), null, 30, 31)
+    insertRun.run(
+      'canary-run',
+      4,
+      fingerprint('c'),
+      fingerprint('d'),
+      'draft-canary',
+      32,
+      33,
+    )
+  }
+  return db
+}
+
+function draftV106DataSnapshot(db) {
+  return {
+    generations: db.prepare(`
+      SELECT plugin_id, last_generation
+      FROM runtime_plugin_mutation_barrier_generations ORDER BY plugin_id
+    `).all(),
+    barriers: db.prepare(`
+      SELECT * FROM runtime_plugin_mutation_barriers ORDER BY plugin_id
+    `).all(),
+    configs: db.prepare('SELECT * FROM evolution_auto_configs ORDER BY user_id').all(),
+    runs: db.prepare(`
+      SELECT id, user_id, config_revision, evidence_fingerprint,
+        dataset_fingerprint, source_record_ids_json,
+        source_evidence_ids_json, signal_count, signal_cutoff_at,
+        state, stage, candidate_id, replay_suite_id, replay_id,
+        evaluation_id, approval_id, canary_id, verdict, error_code,
+        error_message, created_at, updated_at, finished_at
+      FROM evolution_auto_runs ORDER BY id
+    `).all(),
+    approvals: db.prepare('SELECT id FROM evolution_approval_decisions ORDER BY id').all(),
+    canaries: db.prepare('SELECT * FROM evolution_canary_releases ORDER BY id').all(),
+    promotions: db.prepare('SELECT id FROM evolution_promotions ORDER BY id').all(),
+  }
+}
+
+function draftV106SchemaSnapshot(db) {
+  return db.prepare(`
+    SELECT type, name, tbl_name, sql
+    FROM sqlite_schema
+    WHERE name NOT LIKE 'sqlite_%'
+    ORDER BY type, name
+  `).all()
+}
+
+test('v107 repairs a pre-release v106 draft without losing persisted data', () => {
+  const db = createV106DraftDatabase()
+  try {
+    const before = draftV106DataSnapshot(db)
+
+    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      String(LATEST_SCHEMA_VERSION),
+    )
+
+    const generations = db.prepare(`
+      SELECT plugin_id, last_generation, generation_claimed
+      FROM runtime_plugin_mutation_barrier_generations
+      ORDER BY plugin_id
+    `).all()
+    assert.deepEqual(generations, [
+      { plugin_id: 'completed-plugin', last_generation: 3, generation_claimed: 1 },
+      { plugin_id: 'draft-plugin', last_generation: 7, generation_claimed: 1 },
+    ])
+    assert.deepEqual(
+      db.prepare(`
+        SELECT id, session_ids_json, promotion_id
+        FROM evolution_auto_runs ORDER BY id
+      `).all(),
+      [
+        { id: 'canary-run', session_ids_json: '["canary-session"]', promotion_id: null },
+        { id: 'config-run', session_ids_json: '["config-session"]', promotion_id: null },
+      ],
+    )
+    assert.deepEqual(
+      db.prepare(`
+        SELECT id, decision_origin, automation_run_id
+        FROM evolution_approval_decisions
+      `).get(),
+      { id: 'draft-approval', decision_origin: 'human_review', automation_run_id: null },
+    )
+    assert.deepEqual(
+      db.prepare(`
+        SELECT id, decision_origin, automation_run_id
+        FROM evolution_promotions
+      `).get(),
+      { id: 'draft-promotion', decision_origin: 'human_review', automation_run_id: null },
+    )
+
+    db.prepare("UPDATE evolution_auto_runs SET state = 'promoted' WHERE id = 'config-run'").run()
+    assert.equal(
+      db.prepare("SELECT state FROM evolution_auto_runs WHERE id = 'config-run'").get().state,
+      'promoted',
+    )
+    db.prepare("UPDATE evolution_auto_runs SET state = 'queued' WHERE id = 'config-run'").run()
+
+    assert.deepEqual(draftV106DataSnapshot(db), before)
+
+    const approvalIndex = db.prepare(`
+      SELECT "unique" AS isUnique, partial
+      FROM pragma_index_list('evolution_approval_decisions')
+      WHERE name = 'idx_evolution_approval_automation_run'
+    `).get()
+    const promotionIndex = db.prepare(`
+      SELECT "unique" AS isUnique, partial
+      FROM pragma_index_list('evolution_promotions')
+      WHERE name = 'idx_evolution_promotion_automation_run'
+    `).get()
+    assert.deepEqual(approvalIndex, { isUnique: 1, partial: 1 })
+    assert.deepEqual(promotionIndex, { isUnique: 1, partial: 1 })
+    assert.equal(db.pragma('integrity_check', { simple: true }), 'ok')
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
+
+    const schemaAfterFirstRun = draftV106SchemaSnapshot(db)
+    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.deepEqual(draftV106SchemaSnapshot(db), schemaAfterFirstRun)
+  } finally {
+    db.close()
+  }
+})
+
+test('v107 preserves existing non-null automation run references', () => {
+  const db = createV106DraftDatabase()
+  try {
+    migrateToV106(db)
+    db.prepare(`
+      UPDATE evolution_approval_decisions
+      SET automation_run_id = ?, decision_origin = 'automatic_policy'
+      WHERE id = ?
+    `).run('config-run', 'draft-approval')
+    db.prepare(`
+      UPDATE evolution_promotions
+      SET automation_run_id = ?, decision_origin = 'automatic_policy'
+      WHERE id = ?
+    `).run('canary-run', 'draft-promotion')
+
+    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.deepEqual(
+      db.prepare(`
+        SELECT id, decision_origin, automation_run_id
+        FROM evolution_approval_decisions
+      `).get(),
+      {
+        id: 'draft-approval',
+        decision_origin: 'automatic_policy',
+        automation_run_id: 'config-run',
+      },
+    )
+    assert.deepEqual(
+      db.prepare(`
+        SELECT id, decision_origin, automation_run_id
+        FROM evolution_promotions
+      `).get(),
+      {
+        id: 'draft-promotion',
+        decision_origin: 'automatic_policy',
+        automation_run_id: 'canary-run',
+      },
+    )
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
+  } finally {
+    db.close()
+  }
+})
+
+test('v107 rolls back every write when barrier generations disagree', () => {
+  const db = createV106DraftDatabase()
+  try {
+    db.prepare(`
+      UPDATE runtime_plugin_mutation_barrier_generations
+      SET last_generation = 8 WHERE plugin_id = 'draft-plugin'
+    `).run()
+    const beforeSchema = draftV106SchemaSnapshot(db)
+    const beforeData = draftV106DataSnapshot(db)
+
+    assert.throws(
+      () => runSchemaMigrations(db),
+      (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+        && error?.details?.stage === 'migration-v107'
+        && error?.details?.missing?.includes('data:runtime_plugin_mutation_barrier_generations')
+        && error?.details?.pluginId === 'draft-plugin'
+        && error?.details?.barrierGeneration === 7
+        && error?.details?.lastGeneration === 8,
+    )
+    assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '106')
+    assert.deepEqual(draftV106SchemaSnapshot(db), beforeSchema)
+    assert.deepEqual(draftV106DataSnapshot(db), beforeData)
+    assert.equal(db.pragma('integrity_check', { simple: true }), 'ok')
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
+  } finally {
+    db.close()
+  }
+})
+
+test('v107 rolls back every write when a draft run session scope cannot be proven', () => {
+  const db = createV106DraftDatabase({ unresolvedSessionScope: true })
+  try {
+    const beforeSchema = draftV106SchemaSnapshot(db)
+    const beforeData = draftV106DataSnapshot(db)
+
+    assert.throws(
+      () => runSchemaMigrations(db),
+      (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+        && error?.details?.stage === 'migration-v107'
+        && error?.details?.missing?.includes('column:evolution_auto_runs.session_ids_json')
+        && error?.details?.unresolvedRunId === 'unresolved-run',
+    )
+    assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '106')
+    assert.deepEqual(draftV106SchemaSnapshot(db), beforeSchema)
+    assert.deepEqual(draftV106DataSnapshot(db), beforeData)
+    assert.equal(db.pragma('integrity_check', { simple: true }), 'ok')
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
+  } finally {
+    db.close()
+  }
+})
 
 test('v103 persists a fail-closed plugin mutation barrier across identity and checkpoint writes', () => {
   const db = new Database(':memory:')
@@ -275,7 +658,7 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 106)
+  assert.equal(LATEST_SCHEMA_VERSION, 107)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
 })
@@ -415,6 +798,13 @@ test('v95 rolls back every schema change and version write when a retired column
       );
       CREATE INDEX block_cost_credit_drop ON session_meters(cost_credits);
       CREATE TABLE subagent_runs (id TEXT PRIMARY KEY, credits INTEGER, status TEXT);
+      CREATE TABLE evolution_candidates (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_replay_suites (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_replay_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_evaluations (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_approval_decisions (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_canary_releases (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_promotions (id TEXT PRIMARY KEY);
       INSERT INTO users VALUES ('owner', 5, 'user-data');
       INSERT INTO ledger VALUES ('ledger', 'ledger-data');
       INSERT INTO session_meters VALUES ('meter', 6, 7);
@@ -2824,9 +3214,15 @@ test('schema migration registry upgrades a v30 database through every registered
       CREATE TABLE turn_events (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
         turn_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
         created_at INTEGER NOT NULL
       );
+      CREATE UNIQUE INDEX idx_turn_events_fixture_replay
+        ON turn_events(user_id, session_id, turn_id, sequence);
       CREATE TABLE jobs (id TEXT PRIMARY KEY);
     `)
 
