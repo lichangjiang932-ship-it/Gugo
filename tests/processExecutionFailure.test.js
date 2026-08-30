@@ -56,3 +56,15 @@ test('process failure projection distinguishes isolation and startup failures', 
   assert.equal(startup.code, 'PROCESS_START_FAILED')
   assert.match(startup.error, /spawn ENOENT/u)
 })
+
+test('process failure projection preserves abort and timeout over late startup diagnostics', () => {
+  for (const terminal of [{ aborted: true }, { timedOut: true }]) {
+    assert.equal(processExecutionBoundaryFailure({
+      ...terminal,
+      processIsolationFailed: true,
+      processIsolationError: 'late isolation failure',
+      processStartFailed: true,
+      processStartError: 'late start failure',
+    }), null)
+  }
+})

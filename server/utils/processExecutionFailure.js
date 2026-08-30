@@ -33,8 +33,9 @@ export function processExecutionBoundaryFailure(result, {
   executionMetadata = {},
   verificationFields = {},
 } = {}) {
-  const isolationFailed = result?.processIsolationFailed === true
-  const startFailed = result?.processStartFailed === true
+  const interrupted = result?.aborted === true || result?.timedOut === true
+  const isolationFailed = !interrupted && result?.processIsolationFailed === true
+  const startFailed = !interrupted && result?.processStartFailed === true
   const cleanupFailed = result?.processTreeCleanupFailed === true
   if (!isolationFailed && !startFailed && !cleanupFailed) return null
 

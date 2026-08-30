@@ -8,6 +8,7 @@ import {
   closeAllShellSessions,
   runShellSessionCommand,
 } from '../server/services/shellSessionStore.js'
+import { executeWindowsShellRequest } from '../server/services/windowsShellSessionExecutor.js'
 
 const windowsOnly = { skip: process.platform !== 'win32' }
 let workspace
@@ -151,6 +152,56 @@ test('Windows missing shell executable reports startup failure instead of an inv
     if (originalComspec === undefined) delete process.env.COMSPEC
     else process.env.COMSPEC = originalComspec
   }
+})
+
+test('Windows isolation failure retains the committed session state and public diagnostics', windowsOnly, async () => {
+  const stableCwd = fs.realpathSync(workspace)
+  const record = {
+    rootPath: stableCwd,
+    currentCwd: stableCwd,
+    persistentEnv: {},
+    closed: false,
+    current: null,
+    child: null,
+    spawnCount: 0,
+    recoveryPending: false,
+  }
+  const request = {
+    command: 'echo MUST_NOT_RUN',
+    timeout: 5_000,
+    maxBuffer: 1024,
+    signal: null,
+    fullOutputPath: null,
+    onOutput: null,
+  }
+
+  const result = await executeWindowsShellRequest(record, request, null, {
+    runProcessWithGroupFn: async () => ({
+      stdout: '',
+      stderr: '',
+      code: null,
+      signal: null,
+      timedOut: false,
+      killed: false,
+      processStartFailed: false,
+      processStartError: null,
+      processIsolationFailed: true,
+      processIsolationError: 'job assignment rejected',
+      processTreeCleanupFailed: false,
+      truncated: false,
+      aborted: false,
+      totalOutputBytes: 0,
+    }),
+  })
+
+  assert.equal(result.code, null)
+  assert.equal(result.processIsolationFailed, true)
+  assert.equal(result.processIsolationError, 'job assignment rejected')
+  assert.equal(result.sessionCrashed, true)
+  assert.match(result.error, /job assignment rejected/iu)
+  assert.equal(result.currentCwd, stableCwd)
+  assert.equal(record.currentCwd, stableCwd)
+  assert.equal(record.recoveryPending, true)
 })
 
 test('Windows logical session preserves literal exclamation-mark expressions', windowsOnly, async () => {

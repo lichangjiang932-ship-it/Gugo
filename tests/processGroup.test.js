@@ -2,11 +2,13 @@ import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { _testing, runProcessWithGroup, terminateProcessTree } from '../server/utils/processGroup.js'
+import { WINDOWS_PROCESS_GATE_PROTOCOL } from '../server/utils/windowsProcessGateRuntime.js'
 import {
   windowsTreeKillWorkerArgs,
   windowsTreeKillWorkerPayload,
@@ -63,6 +65,83 @@ function mockWindowsTreeKillWorker(pid, { writeCallbackDelayMs = 0 } = {}) {
     return true
   }
   return child
+}
+
+let nextMockWindowsGatePid = 30_000
+
+function mockWindowsProcessGate({
+  ready = true,
+  onSend = null,
+  closeDelayMs = 0,
+  exitBeforeReady = false,
+} = {}) {
+  const child = new EventEmitter()
+  child.pid = nextMockWindowsGatePid += 1
+  child.exitCode = null
+  child.signalCode = null
+  child.stdin = new PassThrough()
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  child.stdio = [child.stdin, child.stdout, child.stderr]
+  child.sentMessages = []
+  child.killCalls = []
+  child.ref = () => {}
+  child.unref = () => {}
+  child.send = (message, callback) => {
+    child.sentMessages.push(message)
+    if (onSend) onSend({ child, message, callback })
+    else queueMicrotask(() => callback?.(null))
+    return true
+  }
+  child.kill = (signal) => {
+    if (signal === 0) return child.exitCode == null && child.signalCode == null
+    child.killCalls.push(signal)
+    if (child.exitCode != null || child.signalCode != null) return false
+    child.signalCode = signal
+    const finish = () => {
+      child.emit('exit', null, signal)
+      child.stdin.end()
+      child.stdout.end()
+      child.stderr.end()
+      child.emit('close', null, signal)
+    }
+    if (closeDelayMs > 0) setTimeout(finish, closeDelayMs)
+    else queueMicrotask(finish)
+    return true
+  }
+  // The real gate cannot announce READY before spawnProcessFn returns and the
+  // caller installs its IPC listeners. Keep the fixture on that same boundary.
+  setImmediate(() => {
+    child.emit('spawn')
+    if (exitBeforeReady) {
+      child.exitCode = 1
+      child.emit('exit', 1, null)
+      child.stdin.end()
+      child.stdout.end()
+      child.stderr.end()
+      child.emit('close', 1, null)
+      return
+    }
+    if (ready) child.emit('message', {
+      protocol: WINDOWS_PROCESS_GATE_PROTOCOL,
+      operation: 'READY',
+    })
+  })
+  return child
+}
+
+async function settlesWithin(promise, timeoutMs = 1_000) {
+  let timer
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('process result did not settle')), timeoutMs)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 function mockWindowsTreeKillManager({
@@ -1108,6 +1187,212 @@ test('runProcessWithGroup: Windows BIND 失败时不得执行用户命令', {
   assert.equal(result.processTreeCleanupFailed, false)
   assert.equal(spawned, false)
   assert.equal(fs.existsSync(markerPath), false)
+})
+
+test('runProcessWithGroup: Windows gate 永不 READY 时任务 deadline 仍会收敛', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  let bindCalls = 0
+  const manager = {
+    ready: () => Promise.resolve(true),
+    bind: () => { bindCalls += 1; return Promise.resolve(null) },
+    kill: () => Promise.resolve(true),
+    release: () => Promise.resolve(true),
+    shutdown: () => {},
+  }
+  _testing.setWindowsTreeKillWorkerManager(manager)
+  t.after(() => _testing.resetWindowsTreeKillWorker())
+  const gate = mockWindowsProcessGate({ ready: false })
+  let spawned = false
+
+  const result = await settlesWithin(runProcessWithGroup({
+    shellPath: node,
+    shellArgs: nodeArgs('process.exit(99)'),
+    cwd: process.cwd(),
+    env: process.env,
+    timeout: 25,
+    cleanupWindowsTreeOnExit: true,
+    onSpawn: () => { spawned = true },
+  }, { spawnProcessFn: () => gate }))
+
+  assert.equal(result.timedOut, true)
+  assert.equal(result.aborted, false)
+  assert.equal(result.processIsolationFailed, false)
+  assert.equal(result.processStartFailed, false)
+  assert.equal(result.processTreeCleanupFailed, false)
+  assert.equal(bindCalls, 0)
+  assert.equal(spawned, false)
+  assert.equal(gate.sentMessages.length, 0)
+  assert.deepEqual(gate.killCalls, ['SIGKILL'])
+})
+
+test('runProcessWithGroup: Windows gate 在 READY 前退出只报告启动失败', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  const manager = {
+    ready: () => Promise.resolve(true),
+    bind: () => Promise.reject(new Error('BIND must not run before READY')),
+    kill: () => Promise.resolve(false),
+    release: () => Promise.resolve(false),
+    shutdown: () => {},
+  }
+  _testing.setWindowsTreeKillWorkerManager(manager)
+  t.after(() => _testing.resetWindowsTreeKillWorker())
+  const gate = mockWindowsProcessGate({ ready: false, exitBeforeReady: true })
+  let spawned = false
+
+  const result = await settlesWithin(runProcessWithGroup({
+    shellPath: node,
+    shellArgs: nodeArgs('process.exit(99)'),
+    cwd: process.cwd(),
+    env: process.env,
+    timeout: 2_000,
+    onSpawn: () => { spawned = true },
+  }, { spawnProcessFn: () => gate }))
+
+  assert.equal(result.processStartFailed, true)
+  assert.equal(result.processIsolationFailed, false)
+  assert.equal(result.processTreeCleanupFailed, false)
+  assert.equal(spawned, false)
+  assert.equal(gate.sentMessages.length, 0)
+})
+
+test('runProcessWithGroup: Windows 取消优先于迟到的 BIND 失败', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  let resolveBind
+  const bindPending = new Promise((resolve) => { resolveBind = resolve })
+  let notifyBind
+  const bindCalled = new Promise((resolve) => { notifyBind = resolve })
+  const manager = {
+    ready: () => Promise.resolve(true),
+    bind: () => { notifyBind(); return bindPending },
+    kill: () => Promise.resolve(true),
+    release: () => Promise.resolve(true),
+    shutdown: () => {},
+  }
+  _testing.setWindowsTreeKillWorkerManager(manager)
+  t.after(() => _testing.resetWindowsTreeKillWorker())
+  const controller = new AbortController()
+  const gate = mockWindowsProcessGate()
+  let spawned = false
+  const pending = runProcessWithGroup({
+    shellPath: node,
+    shellArgs: nodeArgs('process.exit(99)'),
+    cwd: process.cwd(),
+    env: process.env,
+    timeout: 2_000,
+    signal: controller.signal,
+    cleanupWindowsTreeOnExit: true,
+    onSpawn: () => { spawned = true },
+  }, { spawnProcessFn: () => gate })
+
+  await settlesWithin(bindCalled)
+  controller.abort()
+  const result = await settlesWithin(pending)
+  resolveBind(null)
+  await nextTurn()
+
+  assert.equal(result.aborted, true)
+  assert.equal(result.processIsolationFailed, false)
+  assert.equal(result.processStartFailed, false)
+  assert.equal(result.processTreeCleanupFailed, false)
+  assert.equal(spawned, false)
+  assert.equal(gate.sentMessages.length, 0)
+  assert.deepEqual(gate.killCalls, ['SIGKILL'])
+})
+
+test('runProcessWithGroup: Windows 取消优先于迟到的 START IPC 故障', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  const controller = new AbortController()
+  const gate = mockWindowsProcessGate({
+    onSend: ({ child, message, callback }) => {
+      if (message?.operation !== 'START') return callback?.(null)
+      controller.abort()
+      queueMicrotask(() => {
+        callback?.(new Error('late IPC failure'))
+        child.emit('message', {
+          protocol: WINDOWS_PROCESS_GATE_PROTOCOL,
+          operation: 'START_FAILED',
+          error: 'late target failure',
+        })
+        child.emit('message', {
+          protocol: WINDOWS_PROCESS_GATE_PROTOCOL,
+          operation: 'STARTED',
+          pid: 44_444,
+        })
+      })
+    },
+  })
+  const manager = {
+    ready: () => Promise.resolve(true),
+    bind: () => Promise.resolve({ generation: 1, leaseId: 'late-ipc-lease' }),
+    kill: () => { gate.kill('SIGKILL'); return Promise.resolve(true) },
+    release: () => Promise.resolve(true),
+    shutdown: () => {},
+  }
+  _testing.setWindowsTreeKillWorkerManager(manager)
+  t.after(() => _testing.resetWindowsTreeKillWorker())
+  let spawned = false
+
+  const result = await settlesWithin(runProcessWithGroup({
+    shellPath: node,
+    shellArgs: nodeArgs('process.exit(99)'),
+    cwd: process.cwd(),
+    env: process.env,
+    timeout: 2_000,
+    signal: controller.signal,
+    cleanupWindowsTreeOnExit: true,
+    onSpawn: () => { spawned = true },
+  }, { spawnProcessFn: () => gate }))
+
+  assert.equal(result.aborted, true)
+  assert.equal(result.processIsolationFailed, false)
+  assert.equal(result.processStartFailed, false)
+  assert.equal(result.processTreeCleanupFailed, false)
+  assert.equal(spawned, false)
+  assert.equal(
+    gate.sentMessages.filter((message) => message?.operation === 'START').length,
+    1,
+  )
+})
+
+test('runProcessWithGroup: Windows 取消与超时仅保留先到的终态', {
+  skip: process.platform !== 'win32',
+  timeout: 10_000,
+}, async (t) => {
+  const manager = {
+    ready: () => Promise.resolve(true),
+    bind: () => Promise.reject(new Error('BIND must not run without READY')),
+    kill: () => Promise.resolve(false),
+    release: () => Promise.resolve(false),
+    shutdown: () => {},
+  }
+  _testing.setWindowsTreeKillWorkerManager(manager)
+  t.after(() => _testing.resetWindowsTreeKillWorker())
+
+  for (const firstTerminal of ['timeout', 'abort']) {
+    const controller = new AbortController()
+    const gate = mockWindowsProcessGate({ ready: false, closeDelayMs: 100 })
+    const timeout = firstTerminal === 'timeout' ? 20 : 80
+    const abortDelay = firstTerminal === 'timeout' ? 50 : 20
+    const pending = runProcessWithGroup({
+      shellPath: node,
+      shellArgs: nodeArgs('process.exit(99)'),
+      cwd: process.cwd(),
+      env: process.env,
+      timeout,
+      signal: controller.signal,
+    }, { spawnProcessFn: () => gate })
+    setTimeout(() => controller.abort(), abortDelay)
+
+    const result = await settlesWithin(pending)
+    assert.equal(result.timedOut, firstTerminal === 'timeout')
+    assert.equal(result.aborted, firstTerminal === 'abort')
+    assert.equal(result.processIsolationFailed, false)
+    assert.equal(result.processStartFailed, false)
+  }
 })
 
 test('runProcessWithGroup: Windows gate 按大小写无关方式剔除 Node IPC 环境污染', {

@@ -978,7 +978,7 @@ export async function bashExecTool({
   signal = null,
   onOutput = null,
 }, {
-  permissionToolName = 'bash_exec',
+  permissionToolName = 'bash_exec', runProcessWithGroupFn = runProcessWithGroup,
 } = {}) {
   assertToolPermitted(userId, effectivePermissionToolName(permissionToolName, 'bash_exec'))
   if (typeof command !== 'string' || !command.trim()) throw badReq('command 必填')
@@ -1059,7 +1059,7 @@ export async function bashExecTool({
     await prepareExecution(cwd)
     const shellPath = isWin ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh'
     const shellArgs = isWin ? ['/d', '/s', '/c', command] : ['-c', command]
-    rawResult = await runProcessWithGroup({
+    rawResult = await runProcessWithGroupFn({
       shellPath,
       shellArgs,
       cwd,

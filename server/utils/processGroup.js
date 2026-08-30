@@ -75,11 +75,12 @@ export async function terminateProcessTree({
     } catch { return false }
   }
 }
-export function runProcessWithGroup(options) {
+export function runProcessWithGroup(options, { spawnProcessFn = spawn } = {}) {
+  const startExecution = (startedOptions) => runProcessWithGroupStarted(startedOptions, { spawnProcessFn })
   if (process.platform === 'win32') {
-    return prepareWindowsProcessExecution(options, runProcessWithGroupStarted)
+    return prepareWindowsProcessExecution(options, startExecution)
   }
-  return runProcessWithGroupStarted(options)
+  return startExecution(options)
 }
 function runProcessWithGroupStarted({
   shellPath,
@@ -100,7 +101,7 @@ function runProcessWithGroupStarted({
   cleanupWindowsTreeOnExit = false,
   controlPipe = false,
   controlMaxBuffer = 256 * 1024,
-}) {
+}, { spawnProcessFn = spawn } = {}) {
   const hasControlPipe = controlPipe === true
   const hasStdinInput = typeof stdinInput === 'string' || Buffer.isBuffer(stdinInput)
   const requestedControlMaxBuffer = Number(controlMaxBuffer)
@@ -120,7 +121,7 @@ function runProcessWithGroupStarted({
       inheritKeys: inheritEnvKeys,
     })
     const useWindowsProcessGate = isWin
-    const child = spawn(
+    const child = spawnProcessFn(
       useWindowsProcessGate ? process.execPath : shellPath,
       useWindowsProcessGate ? [WINDOWS_PROCESS_GATE_PATH] : shellArgs,
       {
@@ -189,6 +190,7 @@ function runProcessWithGroupStarted({
       windowsGateReadySettled = true
       resolveWindowsGateReady?.(ready === true)
     }
+    const hasTerminalIntent = () => finalizing || timedOut || aborted || killed || settled
     child.once('error', () => settleWindowsGateReady(false))
     child.once('exit', () => settleWindowsGateReady(false))
     // READY is an IPC proof from this exact, still-inert gate. Only after that
@@ -204,7 +206,7 @@ function runProcessWithGroupStarted({
             signal: windowsBindController.signal,
           })
         }).catch((error) => {
-          windowsBindError = error
+          if (!hasTerminalIntent()) windowsBindError = error
           return null
         })
       : null
@@ -217,14 +219,14 @@ function runProcessWithGroupStarted({
           settleWindowsGateReady(true)
           return
         }
-        if (message?.operation === 'START_FAILED' && !windowsGateStarted) {
+        if (message?.operation === 'START_FAILED' && !windowsGateStarted && !hasTerminalIntent()) {
           processStartFailed = true
           processStartError = typeof message.error === 'string' && message.error
             ? message.error
             : 'Windows target process failed to start'
           return
         }
-        if (message?.operation !== 'STARTED' || windowsGateStarted) return
+        if (message?.operation !== 'STARTED' || windowsGateStarted || hasTerminalIntent()) return
         windowsGateStarted = true
         if (settled || finalizing || timedOut || aborted || killed) return
         try {
@@ -237,6 +239,7 @@ function runProcessWithGroupStarted({
         if (hasStdinInput) child.stdin?.end(stdinInput)
       })
       void Promise.all([windowsTreeLeasePromise, windowsGateReadyPromise]).then(([lease, gateReady]) => {
+        if (hasTerminalIntent()) return
         if (!lease || gateReady !== true) {
           processIsolationFailed = true
           processIsolationError = windowsBindError
@@ -261,13 +264,14 @@ function runProcessWithGroupStarted({
             windowsHide,
             windowsVerbatimArguments,
           }, (error) => {
-            if (!error) return
+            if (!error || hasTerminalIntent()) return
             processIsolationFailed = true
             processIsolationError = error?.message || String(error)
             stderrBuf += error?.message || String(error)
             killTree('SIGKILL', { markKilled: false })
           })
         } catch (error) {
+          if (hasTerminalIntent()) return
           processIsolationFailed = true
           processIsolationError = error?.message || String(error)
           stderrBuf += error?.message || String(error)
@@ -400,6 +404,16 @@ function runProcessWithGroupStarted({
           // The bound native lease may still be walking descendants after the
           // root emits `close`; finalization waits for its identity-safe proof.
           if (!windowsTreeKillPromise) {
+            if (useWindowsProcessGate && !windowsStartRequestMayHaveArrived && !windowsGateStarted) {
+              settleWindowsGateReady(false)
+              windowsBindController?.abort()
+              void releaseWindowsProcessTree(windowsTreeLeasePromise)
+              const gateAlreadyExited = child.exitCode != null || child.signalCode != null
+              try {
+                windowsTreeKillPromise = Promise.resolve(gateAlreadyExited || child.kill('SIGKILL') === true)
+              } catch { windowsTreeKillPromise = Promise.resolve(false) }
+              return
+            }
             // Once BIND succeeds for the original identity, the worker holds
             // that root handle so later PID reuse cannot redirect cleanup.
             windowsTreeKillPromise = terminateWindowsProcessTree({
@@ -423,7 +437,7 @@ function runProcessWithGroupStarted({
 
     if (signal) {
       abortListener = () => {
-        if (settled || aborted) return
+        if (hasTerminalIntent()) return
         aborted = true
         killTree('SIGTERM')
         scheduleForceKill()
@@ -433,6 +447,7 @@ function runProcessWithGroupStarted({
     }
 
     killTimer = setTimeout(() => {
+      if (hasTerminalIntent()) return
       timedOut = true
       killTree('SIGTERM')
       scheduleForceKill()
@@ -543,12 +558,17 @@ function runProcessWithGroupStarted({
     }
 
     child.on('error', (err) => {
+      if (useWindowsProcessGate && hasTerminalIntent()) {
+        windowsBindController?.abort()
+        void finalize(null, null)
+        return
+      }
       const message = err?.message || String(err)
       stderrBuf = (stderrBuf || '') + message
       if (useWindowsProcessGate) {
+        settleWindowsGateReady(false)
         processIsolationFailed = true
         processIsolationError = message
-        resolveWindowsGateReady?.(false)
       } else {
         processStartFailed = true
         processStartError = message

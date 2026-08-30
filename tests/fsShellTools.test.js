@@ -406,6 +406,72 @@ test('bash_exec:启用后能跑简单命令', async () => {
   assert.equal('changedPaths' in result, false)
 })
 
+test('bash_exec:进程边界失败保留公开诊断且不漂移 cwd', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  const boundaryCwd = 'boundary-failure-cwd'
+  fs.mkdirSync(path.join(workspace, boundaryCwd), { recursive: true })
+  const cases = [
+    {
+      name: 'isolation',
+      override: {
+        processIsolationFailed: true,
+        processIsolationError: 'job object denied',
+      },
+      code: 'PROCESS_ISOLATION_FAILED',
+      flag: 'processIsolationFailed',
+      error: /job object denied/iu,
+    },
+    {
+      name: 'start',
+      override: {
+        processStartFailed: true,
+        processStartError: 'spawn ENOENT',
+      },
+      code: 'PROCESS_START_FAILED',
+      flag: 'processStartFailed',
+      error: /spawn ENOENT/iu,
+    },
+    {
+      name: 'cleanup',
+      override: { processTreeCleanupFailed: true },
+      code: 'PROCESS_TREE_CLEANUP_FAILED',
+      flag: 'processTreeCleanupFailed',
+      error: /无法确认所有子进程都已退出/iu,
+    },
+  ]
+
+  for (const scenario of cases) {
+    const result = await bashExecTool(
+      { command: `echo MUST_NOT_RUN_${scenario.name}`, cwd: boundaryCwd },
+      {
+        runProcessWithGroupFn: async () => ({
+          stdout: '',
+          stderr: '',
+          code: null,
+          signal: null,
+          timedOut: false,
+          killed: false,
+          processStartFailed: false,
+          processStartError: null,
+          processIsolationFailed: false,
+          processIsolationError: null,
+          processTreeCleanupFailed: false,
+          truncated: false,
+          aborted: false,
+          totalOutputBytes: 0,
+          ...scenario.override,
+        }),
+      },
+    )
+
+    assert.equal(result.ok, false, scenario.name)
+    assert.equal(result.code, scenario.code, scenario.name)
+    assert.equal(result[scenario.flag], true, scenario.name)
+    assert.match(result.error, scenario.error, scenario.name)
+    assert.equal(result.cwd, boundaryCwd, scenario.name)
+  }
+})
+
 test('bash_exec: Windows 目标程序启动失败返回结构化诊断', {
   skip: process.platform !== 'win32',
 }, async () => {
