@@ -55,6 +55,7 @@ import { installToolFailureRecovery } from './toolFailureRecovery.js'
 import {
   buildTaskVerificationRepairPrompt,
   hasPendingTaskVerificationRepair,
+  observeTaskVerificationMutation,
   observeTaskVerificationRepair,
   restoreTaskVerificationRepair,
   serializeTaskVerificationRepair,
@@ -301,6 +302,7 @@ const runtimeDependencies = {
   normalizeToolCalls,
   normalizeToolError,
   normalizeToolResult,
+  observeTaskVerificationMutation,
   observeTaskVerificationRepair,
   observeToolCalls,
   parseSkillIdFromPrompt,

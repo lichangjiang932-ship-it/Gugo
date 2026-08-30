@@ -407,7 +407,7 @@ unregistered oversized files, growth, and shrinkage that was not ratcheted.
     { "path": "server/adapters/codexPluginSkills.js", "ceiling": 637, "group": "adapter-capabilities" },
     { "path": "server/adapters/codingAgentTools.js", "ceiling": 796, "group": "adapter-capabilities" },
     { "path": "server/adapters/fsShellTools.js", "ceiling": 1383, "group": "adapter-capabilities" },
-    { "path": "server/adapters/gitWorkbench.js", "ceiling": 628, "group": "adapter-capabilities" },
+    { "path": "server/adapters/gitWorkbench.js", "ceiling": 614, "group": "adapter-capabilities" },
     { "path": "server/adapters/mediaTools.js", "ceiling": 1175, "group": "adapter-capabilities" },
     { "path": "server/adapters/nativeModelProviders.js", "ceiling": 687, "group": "adapter-capabilities" },
     { "path": "server/adapters/pdfTools.js", "ceiling": 1428, "group": "adapter-capabilities" },

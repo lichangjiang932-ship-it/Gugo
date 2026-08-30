@@ -29,8 +29,19 @@ const VALID_STATUSES = new Set(['ok', 'error', 'denied', 'timeout', 'truncated',
 const REDACTED = '[REDACTED]'
 const MAX_RESULT_PREVIEW_CHARS = 500
 const RUN_CODE_TOOL_NAME = 'run_code'
+const RUN_PROJECT_CHECK_TOOL_NAME = 'run_project_check'
 const CODEX_MODELS_TOOL_NAME = 'codex_models'
 const SHA256_RE = /^[a-f0-9]{64}$/iu
+const PROJECT_CHECK_NAMES = new Set(['lint', 'test', 'build'])
+const PROJECT_CHECK_AUDIT_CODES = new Set([
+  'TOOL_DISABLED',
+  'WORKSPACE_SHELL_DISABLED',
+  'LOCAL_CODE_EXECUTION_DISABLED',
+  'USER_REQUIRED',
+  'SHELL_DIRECTORY_GRANT_REQUIRED',
+  'WORKSPACE_NOT_TRUSTED',
+  'WORKSPACE_CAPABILITY_DISABLED',
+])
 
 function runCodeAuditArgsSummary(args) {
   const value = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
@@ -87,6 +98,31 @@ function runCodeAuditResultSummary(result) {
   return Object.keys(summary).length > 0 ? summary : { resultType: 'object' }
 }
 
+function runProjectCheckAuditArgsSummary(args) {
+  const value = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+  const check = String(value.check || '').trim().toLowerCase()
+  return {
+    check: PROJECT_CHECK_NAMES.has(check) ? check : 'invalid',
+    hasCwd: typeof value.cwd === 'string' && value.cwd.trim().length > 0,
+  }
+}
+
+function runProjectCheckAuditResultSummary(result) {
+  const value = result && typeof result === 'object' && !Array.isArray(result) ? result : {}
+  const check = String(value.check || '').trim().toLowerCase()
+  const code = String(value.code || '').trim().toUpperCase()
+  return {
+    ok: value.ok === true,
+    ...(PROJECT_CHECK_NAMES.has(check) ? { check } : {}),
+    ...(Number.isInteger(value.exitCode) ? { exitCode: value.exitCode } : {}),
+    ...(value.timedOut === true ? { timedOut: true } : {}),
+    ...(code ? { code: PROJECT_CHECK_AUDIT_CODES.has(code) ? code : 'OTHER' } : {}),
+    stdoutBytes: typeof value.stdout === 'string' ? Buffer.byteLength(value.stdout, 'utf8') : 0,
+    stderrBytes: typeof value.stderr === 'string' ? Buffer.byteLength(value.stderr, 'utf8') : 0,
+    errorPresent: value.error != null,
+  }
+}
+
 function codexModelsAuditArgsSummary(args) {
   const value = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
   return {
@@ -118,6 +154,12 @@ export function sanitizeToolAuditPayload({ toolName, args, result } = {}) {
   if (name === RUN_CODE_TOOL_NAME) {
     return { args: runCodeAuditArgsSummary(args), result: runCodeAuditResultSummary(result) }
   }
+  if (name === RUN_PROJECT_CHECK_TOOL_NAME) {
+    return {
+      args: runProjectCheckAuditArgsSummary(args),
+      result: runProjectCheckAuditResultSummary(result),
+    }
+  }
   if (name === CODEX_MODELS_TOOL_NAME) {
     return { args: codexModelsAuditArgsSummary(args), result: codexModelsAuditResultSummary(result) }
   }
@@ -145,6 +187,7 @@ function redactSensitiveText(value) {
       `$1${REDACTED}`,
     )
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, `Bearer ${REDACTED}`)
+    .replace(/\b(?:ghp_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})\b/giu, REDACTED)
 }
 
 export function sanitizeAuditValue(value, { maxDepth = 16 } = {}) {

@@ -7,6 +7,7 @@ const {
 } = await import('../server/services/jobTools.js')
 const {
   buildTaskVerificationRepairPrompt,
+  observeTaskVerificationMutation,
   observeTaskVerificationRepair,
   restoreTaskVerificationRepair,
   serializeTaskVerificationRepair,
@@ -70,6 +71,94 @@ test('task verification repair state round-trips without trusting an unmodified 
   assert.deepEqual([...restored.pending.values()].map(({ kind }) => kind), ['test'])
   assert.equal([...restored.pending.values()][0].failures, 1)
   assert.equal(restored.consecutiveFailures, 1)
+})
+
+test('a scoped mutation promotes an earlier failing check even through an indirect dependency', () => {
+  const state = restoreTaskVerificationRepair()
+  const check = { name: 'run_project_check', args: { check: 'test', cwd: '.' } }
+  const failure = {
+    ok: false,
+    check: 'test',
+    exitCode: 1,
+    stderr: 'tests/widget.test.js: expected normalized output',
+  }
+
+  const observed = observeTaskVerificationRepair(state, check, failure, {
+    mutationObserved: false,
+    workspaceRoot: 'C:/workspace',
+  })
+  assert.equal(observed.failed, false)
+  assert.equal(state.pending.size, 0)
+  assert.equal(state.candidates.size, 1)
+
+  const mutation = observeTaskVerificationMutation(state, ['src/shared/normalize.js'], {
+    workspaceRoot: 'C:/workspace',
+  })
+  assert.equal(mutation.promoted.length, 1)
+  assert.equal(state.mutationEpoch, 1)
+  assert.equal(state.pending.size, 1)
+  assert.equal([...state.pending.values()][0].failures, 0)
+  assert.equal([...state.pending.values()][0].reason, 'failure_before_mutation')
+  assert.equal(state.consecutiveFailures, 0)
+
+  const restored = restoreTaskVerificationRepair(serializeTaskVerificationRepair(state))
+  assert.equal(restored.mutationEpoch, 1)
+  assert.equal(restored.pending.size, 1)
+  assert.equal(restored.candidates.size, 0)
+})
+
+test('a later related mutation invalidates a successful check until the same scope reruns', () => {
+  const state = restoreTaskVerificationRepair()
+  const check = { name: 'run_project_check', args: { check: 'test', cwd: '.' } }
+
+  observeTaskVerificationRepair(state, check, {
+    ok: true,
+    check: 'test',
+    exitCode: 0,
+  })
+  assert.equal(state.verified.size, 1)
+
+  const mutation = observeTaskVerificationMutation(state, ['src/result.js'], {
+    workspaceRoot: 'C:/workspace',
+  })
+  assert.equal(mutation.invalidated.length, 1)
+  assert.equal(state.pending.size, 1)
+  assert.equal([...state.pending.values()][0].reason, 'mutation_after_success')
+  assert.equal([...state.pending.values()][0].requiredEpoch, 1)
+
+  observeTaskVerificationRepair(state, check, {
+    ok: true,
+    check: 'test',
+    exitCode: 0,
+  }, { mutationObserved: true, workspaceRoot: 'C:/workspace' })
+  assert.equal(state.pending.size, 0)
+  assert.equal([...state.verified.values()][0].verifiedEpoch, 1)
+})
+
+test('an unrelated pre-existing failure remains a candidate instead of opening repair debt', () => {
+  const state = restoreTaskVerificationRepair()
+  observeTaskVerificationRepair(state, {
+    name: 'run_project_check',
+    args: { check: 'test', cwd: 'packages/widget' },
+  }, {
+    ok: false,
+    check: 'test',
+    exitCode: 1,
+    stderr: 'tests/unrelated.test.js: one assertion failed',
+  }, { workspaceRoot: 'C:/workspace' })
+
+  const unrelated = observeTaskVerificationMutation(state, ['packages/other/src/result.js'], {
+    workspaceRoot: 'C:/workspace',
+  })
+  assert.deepEqual(unrelated.promoted, [])
+  assert.equal(state.pending.size, 0)
+  assert.equal(state.candidates.size, 1)
+
+  const related = observeTaskVerificationMutation(state, ['packages/widget/src/shared/normalize.js'], {
+    workspaceRoot: 'C:/workspace',
+  })
+  assert.equal(related.promoted.length, 1)
+  assert.equal(state.pending.size, 1)
 })
 
 test('verification diagnostics redact credentials before checkpoint persistence and final display', () => {
@@ -163,6 +252,173 @@ test('verification debt uses a canonical check scope and ignores infrastructure 
     taskVerificationKinds({ name: 'run_test', args: { command: 'npm run lint' } }),
     ['lint'],
   )
+})
+
+test('a failing check before a related mutation must be rerun before completion', async () => {
+  let modelCalls = 0
+  let checkCalls = 0
+  const modelInputs = []
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'failure-before-mutation-job',
+      origin: 'chat',
+      prompt: 'Fix src/shared/normalize.js based on the failing widget test and verify the repair.',
+    },
+    step: { id: 'failure-before-mutation-step', kind: 'chat' },
+    messages: [{
+      role: 'user',
+      content: 'Fix src/shared/normalize.js based on the failing widget test and verify the repair.',
+    }],
+    intentMode: 'execute',
+    maxIters: 10,
+    toolSpecs: [spec('run_project_check'), spec('edit_file'), spec('read_file'), spec('git_diff')],
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      modelInputs.push(structuredClone(messages))
+      if (modelCalls === 1) {
+        return toolCall('pre-mutation-failure', 'run_project_check', { check: 'test' })
+      }
+      if (modelCalls === 2) {
+        return toolCall('repair-after-failure', 'edit_file', {
+          path: 'src/shared/normalize.js',
+          old_string: 'return input',
+          new_string: 'return input.trim()',
+        })
+      }
+      if (modelCalls === 3) {
+        return toolCall('read-repair', 'read_file', { path: 'src/shared/normalize.js' })
+      }
+      if (modelCalls === 4) return toolCall('diff-repair', 'git_diff', {})
+      if (modelCalls === 5) return { content: 'The repair is complete.', toolCalls: [] }
+      if (modelCalls === 6) {
+        return toolCall('rerun-after-repair', 'run_project_check', { check: 'test' })
+      }
+      return { content: 'The repair is complete and the tests pass.', toolCalls: [] }
+    },
+    executeTool: async ({ name }) => {
+      if (name === 'edit_file') return { ok: true, path: 'src/shared/normalize.js', replacedCount: 1 }
+      if (name === 'read_file') {
+        return { ok: true, path: 'src/shared/normalize.js', content: 'return input.trim()\n' }
+      }
+      if (name === 'git_diff') return { ok: true, diff: '- return input\n+ return input.trim()' }
+      checkCalls += 1
+      return checkCalls === 1
+        ? { ok: false, check: 'test', exitCode: 1, stderr: 'tests/widget.test.js: expected normalized output' }
+        : { ok: true, check: 'test', exitCode: 0, stdout: '1 test passed' }
+    },
+  })
+
+  assert.equal(result.incomplete, undefined)
+  assert.equal(result.text, 'The repair is complete and the tests pass.')
+  assert.equal(checkCalls, 2)
+  assert.equal(modelCalls, 7)
+  assert.ok(modelInputs.some((messages) => messages.some((message) => (
+    message?.role === 'system'
+      && String(message.content).includes('has no verification result for mutation epoch')
+  ))))
+})
+
+test('a related mutation invalidates a passing check and readback cannot replace rerunning it', async () => {
+  let modelCalls = 0
+  let checkCalls = 0
+  const executed = []
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'success-before-mutation-job',
+      origin: 'chat',
+      prompt: 'Verify the project, update src/result.js, and deliver only after verification.',
+    },
+    step: { id: 'success-before-mutation-step', kind: 'chat' },
+    messages: [{
+      role: 'user',
+      content: 'Verify the project, update src/result.js, and deliver only after verification.',
+    }],
+    intentMode: 'execute',
+    maxIters: 10,
+    toolSpecs: [spec('run_project_check'), spec('edit_file'), spec('read_file'), spec('git_diff')],
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return toolCall('passing-before-edit', 'run_project_check', { check: 'test' })
+      }
+      if (modelCalls === 2) {
+        return toolCall('edit-after-pass', 'edit_file', {
+          path: 'src/result.js',
+          old_string: 'result = 1',
+          new_string: 'result = 2',
+        })
+      }
+      if (modelCalls === 3) {
+        return toolCall('read-after-edit', 'read_file', { path: 'src/result.js' })
+      }
+      if (modelCalls === 4) return toolCall('diff-after-edit', 'git_diff', {})
+      if (modelCalls === 5) return { content: 'The verified update is complete.', toolCalls: [] }
+      if (modelCalls === 6) {
+        return toolCall('passing-after-edit', 'run_project_check', { check: 'test' })
+      }
+      return { content: 'The update is complete and post-edit tests pass.', toolCalls: [] }
+    },
+    executeTool: async ({ name }) => {
+      executed.push(name)
+      if (name === 'edit_file') return { ok: true, path: 'src/result.js', replacedCount: 1 }
+      if (name === 'read_file') {
+        return { ok: true, path: 'src/result.js', content: 'export const result = 2\n' }
+      }
+      if (name === 'git_diff') return { ok: true, diff: '- result = 1\n+ result = 2' }
+      checkCalls += 1
+      return { ok: true, check: 'test', exitCode: 0, stdout: '1 test passed' }
+    },
+  })
+
+  assert.equal(result.incomplete, undefined)
+  assert.equal(result.text, 'The update is complete and post-edit tests pass.')
+  assert.equal(modelCalls, 7)
+  assert.equal(checkCalls, 2)
+  assert.deepEqual(executed, [
+    'run_project_check',
+    'edit_file',
+    'read_file',
+    'git_diff',
+    'run_project_check',
+  ])
+})
+
+test('a Git checkout invalidates a passing check before completion', async () => {
+  let modelCalls = 0
+  let checkCalls = 0
+  const executed = []
+  const result = await runToolsLoop({
+    job: { id: 'checkout-after-pass-job', origin: 'chat', prompt: 'Checkout the fixed branch and verify it.' },
+    step: { id: 'checkout-after-pass-step', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Checkout the fixed branch and verify it.' }],
+    intentMode: 'execute',
+    maxIters: 10,
+    toolSpecs: [spec('run_project_check'), spec('git_write'), spec('read_file'), spec('git_diff')],
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) return toolCall('check-before-checkout', 'run_project_check', { check: 'test' })
+      if (modelCalls === 2) return toolCall('checkout', 'git_write', { action: 'checkout', branch: 'fixed' })
+      if (modelCalls === 3) return toolCall('read-checkout', 'read_file', { path: 'src/result.js' })
+      if (modelCalls === 4) return toolCall('diff-checkout', 'git_diff', {})
+      if (modelCalls === 5) return { content: 'Checkout complete.', toolCalls: [] }
+      if (modelCalls === 6) return toolCall('check-after-checkout', 'run_project_check', { check: 'test' })
+      return { content: 'Checkout complete and tests pass.', toolCalls: [] }
+    },
+    executeTool: async ({ name }) => {
+      executed.push(name)
+      if (name === 'git_write') return { ok: true, action: 'checkout', changedPaths: ['src/result.js'] }
+      if (name === 'read_file') return { ok: true, path: 'src/result.js', content: 'export const result = 2\n' }
+      if (name === 'git_diff') return { ok: true, diff: '' }
+      checkCalls += 1
+      return { ok: true, check: 'test', exitCode: 0, stdout: '1 test passed' }
+    },
+  })
+  assert.equal(result.incomplete, undefined)
+  assert.equal(result.text, 'Checkout complete and tests pass.')
+  assert.equal(checkCalls, 2)
+  assert.deepEqual(executed, ['run_project_check', 'git_write', 'read_file', 'git_diff', 'run_project_check'])
 })
 
 test('a failed post-mutation check must be repaired and rerun before completion', async () => {

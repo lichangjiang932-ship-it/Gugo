@@ -161,6 +161,15 @@ export async function createOutcomeRecorder(s) {
         if (mutationExecutionSucceeded && isLocalMutationCall(executedCall)) {
           if (s.requiresPdfLayoutVerification) s.pdfLayoutVerificationObserved = false
           const currentMutationTargets = extractMutationTargets(executedCall, outcome.result)
+          const taskVerificationMutation = s.observeTaskVerificationMutation(
+            currentMutationTargets,
+          )
+          if (taskVerificationMutation.changed) {
+            i.deferredPostBatchMessages.push({
+              role: 'system',
+              content: s.taskVerificationRepairPrompt(),
+            })
+          }
           const deletionTargets = looksLikeDeletionCommand(executedCall?.args?.command)
             ? staticDeletionTargets(executedCall, outcome.result)
             : null

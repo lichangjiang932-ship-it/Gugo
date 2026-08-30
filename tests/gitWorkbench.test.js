@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import http from 'node:http'
 import test from 'node:test'
 
 import {
@@ -14,9 +15,11 @@ import {
   gitPushTool,
   gitRollbackTool,
   gitWriteTool,
+  handleGitWorkbenchRequest,
   GIT_TOOL_SPECS,
 } from '../server/adapters/gitWorkbench.js'
-import { createUser, setUserToolPermission } from '../server/db.js'
+import { createUser, getDb, setUserToolPermission } from '../server/db.js'
+import { issueTestSession } from './helpers/testAuth.js'
 
 function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' })
@@ -125,6 +128,68 @@ test('run_project_check requires shell authorization instead of the Git gate', a
   })
 })
 
+test('run_project_check HTTP audits success, check failure, and permission denial', async () => {
+  const cwd = withTempRepo()
+  const auditSecret = ['gh', 'p_', 'AuditSecretMustNeverPersist1234567890'].join('')
+  const stderrSecret = ['github', '_pat_', 'AuditSecretMustNeverPersist_1234567890'].join('')
+  const session = issueTestSession({ email: `project-check-audit-${process.pid}@example.com` })
+  const server = http.createServer((req, res) => handleGitWorkbenchRequest(req, res))
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const endpoint = `http://127.0.0.1:${server.address().port}/api/tools/check/run`
+  const request = (body = { check: 'lint' }) => fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+
+  try {
+    await withEnv({
+      WORKSPACE_ROOT: cwd,
+      WORKSPACE_GIT_ENABLED: '0',
+      WORKSPACE_SHELL_ENABLED: '1',
+    }, async () => {
+      getDb().prepare('DELETE FROM tool_audit WHERE user_id = ? AND tool_name = ?')
+        .run(session.userId, 'run_project_check')
+      setUserToolPermission({ userId: session.userId, toolName: 'run_project_check', enabled: true })
+
+      const success = await request({ check: 'lint', note: auditSecret })
+      assert.equal(success.status, 200)
+      assert.equal((await success.json()).ok, true)
+
+      fs.writeFileSync(
+        path.join(cwd, 'lint-ok.js'),
+        `console.log(${JSON.stringify(auditSecret)})\nconsole.error(${JSON.stringify(stderrSecret)})\nprocess.exitCode = 1\n`,
+        'utf8',
+      )
+      const failed = await request()
+      assert.equal(failed.status, 200)
+      assert.equal((await failed.json()).ok, false)
+
+      setUserToolPermission({ userId: session.userId, toolName: 'run_project_check', enabled: false })
+      const denied = await request()
+      assert.equal(denied.status, 403)
+      assert.equal((await denied.json()).code, 'TOOL_DISABLED')
+
+      const audit = getDb().prepare(`
+        SELECT status, args_json, result_preview FROM tool_audit
+        WHERE user_id = ? AND tool_name = ?
+        ORDER BY id ASC
+      `).all(session.userId, 'run_project_check')
+      assert.deepEqual(audit.map(({ status }) => status), ['ok', 'error', 'denied'])
+      for (const row of audit) {
+        assert.doesNotMatch(`${row.args_json}${row.result_preview}`, new RegExp(auditSecret, 'iu'))
+        assert.doesNotMatch(`${row.args_json}${row.result_preview}`, new RegExp(stderrSecret, 'iu'))
+        assert.deepEqual(Object.keys(JSON.parse(row.args_json)).sort(), ['check', 'hasCwd'])
+      }
+    })
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
 test('git_commit requires mutation gate, non-empty message, selected changed files', async () => {
   const cwd = withTempRepo()
   fs.writeFileSync(path.join(cwd, 'README.md'), 'hello\nchanged\n', 'utf8')
@@ -168,8 +233,13 @@ test('git_write creates and checks out branches without shell interpolation', as
     assert.equal(created.action, 'create_branch')
     assert.equal(git(cwd, ['branch', '--show-current']).trim(), 'feat/structured-write')
 
+    fs.writeFileSync(path.join(cwd, 'README.md'), 'hello from branch\n', 'utf8')
+    git(cwd, ['add', 'README.md'])
+    git(cwd, ['commit', '-m', 'test: branch content'])
+
     const checkedOut = await gitWriteTool({ action: 'checkout', branch: 'master' })
     assert.equal(checkedOut.ok, true)
+    assert.deepEqual(checkedOut.changedPaths, ['README.md'])
     assert.equal(git(cwd, ['branch', '--show-current']).trim(), 'master')
   })
 })
@@ -328,6 +398,7 @@ test('git_rollback reverts only the clean current HEAD without rewriting history
     assert.equal(rollback.ok, true)
     assert.equal(rollback.revertedCommit, committed.commit)
     assert.notEqual(rollback.rollbackCommit, committed.commit)
+    assert.deepEqual(rollback.changedPaths, ['README.md'])
     assert.equal(
       fs.readFileSync(path.join(cwd, 'README.md'), 'utf8').replace(/\r\n/g, '\n'),
       'hello\n',
