@@ -54,6 +54,8 @@ export function processExecutionBoundaryFailure(result, {
   return {
     ok: false,
     code,
+    ...(Number.isInteger(result?.code) ? { exitCode: result.code } : {}),
+    ...(result?.signal ? { signal: result.signal } : {}),
     ...(isolationFailed ? {
       processIsolationFailed: true,
       processIsolationError: result.processIsolationError || null,
