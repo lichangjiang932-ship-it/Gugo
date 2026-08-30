@@ -22,19 +22,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { fileURLToPath } from 'node:url'
-import { Readable } from 'node:stream'
-import * as fontkit from 'fontkit'
-import { PDFDocument, rgb } from 'pdf-lib'
 import { getArtifactByFilename } from './jobStore.js'
 import { getTurnArtifactByFilename } from './turnArtifactStore.js'
-import { htmlArtifactAssetIds } from './htmlArtifactAssets.js'
-import {
-  htmlPreviewRemoteImageOrigins,
-  maskAllowedHtmlPreviewRemoteImages,
-} from './htmlPreviewRemoteImagePolicy.js'
-import { officeImageSize, prepareOfficeArtifactImages } from './officeArtifactImages.js'
+import { resolveHtmlArtifactSource } from './htmlArtifactFormat.js'
+import { prepareOfficeArtifactImages } from './officeArtifactImages.js'
 import { buildDocxArtifactBuffer } from './docxArtifactFormat.js'
+import {
+  buildPdfArtifactBuffer,
+  normalizePdfArtifactInput,
+} from './pdfArtifactFormat.js'
 import { buildPptxArtifactBuffer } from './pptxArtifactFormat.js'
 import { buildXlsxArtifactBuffer } from './xlsxArtifactFormat.js'
 import { snapshotXlsxSheets } from './xlsxArtifactContract.js'
@@ -46,19 +42,11 @@ import {
   isSafeArtifactFilename,
   replaceUnsafeFilenameCharacters,
 } from './artifactStorage.js'
-const PDF_CJK_FONT_PATH = fileURLToPath(new URL('../assets/fonts/NotoSansSC-Regular.ttf', import.meta.url))
-const pdfLibFontkit = {
-  create(...args) {
-    const font = fontkit.create(...args)
-    const createSubset = font.createSubset.bind(font)
-    font.createSubset = () => {
-      const subset = createSubset()
-      subset.encodeStream = () => Readable.from([subset.encode()])
-      return subset
-    }
-    return font
-  },
-}
+
+export {
+  MAX_HTML_ARTIFACT_BYTES,
+  validateHtmlArtifactSource,
+} from './htmlArtifactFormat.js'
 
 const ARTIFACT_FALLBACK_NAMES = Object.freeze({
   pptx: 'presentation',
@@ -128,21 +116,6 @@ export function createImageArtifact({ title = 'generated-image', buffer, mimeTyp
   if (!bytes.length) throw new Error('image buffer is empty')
   const artifactPath = writeNewArtifact(title, extension, bytes)
   return { ...artifactPath, type: 'image', title: String(title || 'generated-image').slice(0, 200) }
-}
-
-export const MAX_HTML_ARTIFACT_BYTES = 2 * 1024 * 1024
-const HTML_FENCE = /^\s*```(?:html)?\s*([\s\S]*?)\s*```\s*$/i
-const HTML_LOCAL_RESOURCE_REFERENCE = /(?:\b(?:src|poster)\s*=\s*["']\s*|\burl\s*\(\s*["']?\s*|["'`])(?:file:\/\/{0,2}|[a-z]:[\\/]|\\\\[^\\\s"'`]+\\)/i
-const HTML_REMOTE_RESOURCE_REFERENCE = /(?:\b(?:src|srcset|poster|data|background)\s*=\s*["']?\s*|\burl\s*\(\s*["']?\s*|@import\s+(?:url\s*\(\s*)?["']?\s*)(?:https?:|wss?:|ftp:|\/\/)/i
-const HTML_REMOTE_LINK_REFERENCE = /<(?:link|base)\b[^>]*\bhref\s*=\s*["']?\s*(?:https?:|wss?:|ftp:|\/\/)/i
-const HTML_FORM_SUBMISSION = /<(?:form\b[^>]*\baction|(?:button|input)\b[^>]*\bformaction)\s*=/i
-const HTML_META_REFRESH = /<meta\b[^>]*\bhttp-equiv\s*=\s*["']?refresh\b/i
-const HTML_NETWORK_API_CALL = /(?:\b(?:fetch|sendBeacon)\s*\(|\[\s*["'](?:fetch|sendBeacon)["']\s*\]\s*\(|\b(?:new\s+)?(?:XMLHttpRequest|WebSocket|EventSource|WebTransport)\s*\()/i
-
-function normalizeHtmlArtifactSource(value) {
-  const raw = String(value || '')
-  const fenced = raw.match(HTML_FENCE)
-  return (fenced ? fenced[1] : raw).trim()
 }
 
 function newArtifactPathForFilename(requestedFilename) {
@@ -1252,107 +1225,8 @@ export async function createLocalFileArtifactAsync({ sourcePath, filename = '', 
   }
 }
 
-const HTML_DELIVERY_INSTRUCTION_PATTERNS = Object.freeze([
-  /(?:网页|页面|html)(?:\s*代码)?(?:已经|已)?(?:生成|完成|准备好)|(?:html|webpage|page)(?:\s+code)?\s+(?:is\s+)?(?:ready|generated|complete)/i,
-  /(?:复制|拷贝)[^。！？\n]{0,48}(?:代码|源码)|copy[^.!?\n]{0,48}(?:code|source)/i,
-  /(?:新建|创建)[^。！？\n]{0,32}(?:文件|\.html)|create[^.!?\n]{0,32}(?:file|\.html)/i,
-  /(?:粘贴|貼上)[^。！？\n]{0,32}(?:保存|存储)|(?:保存|另存)[^。！？\n]{0,48}(?:\.html|html\s*文件)|paste[^.!?\n]{0,32}save|save[^.!?\n]{0,48}(?:\.html|as\s+html)/i,
-  /(?:双击|浏览器)[^。！？\n]{0,48}(?:打开|预览)|(?:double[- ]?click|open)[^.!?\n]{0,48}(?:browser|locally)/i,
-])
-
-function visibleHtmlText(source) {
-  return String(source || '')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<(?:style|script)\b[^>]*>[\s\S]*?<\/(?:style|script)\s*>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&(?:nbsp|ensp|emsp|thinsp);/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function assertHtmlIsPageContent(source) {
-  const visibleText = visibleHtmlText(source)
-  const instructionSignals = HTML_DELIVERY_INSTRUCTION_PATTERNS
-    .filter((pattern) => pattern.test(visibleText))
-    .length
-  const structuralTags = (source.match(/<(?:h[1-6]|main|section|article|nav|header|footer|form|button|input|select|textarea|canvas|svg|table|ul|ol|li|img|video|audio|p)\b/gi) || []).length
-  const looksLikeShortHandoff = visibleText.length <= 2_000 && structuralTags <= 3 && instructionSignals >= 2
-  if (instructionSignals >= 4 || looksLikeShortHandoff) {
-    throw new Error('html contains file-delivery instructions instead of the requested webpage content')
-  }
-}
-
-export function validateHtmlArtifactSource(source, {
-  assetIds = [],
-  remoteImageOrigins = htmlPreviewRemoteImageOrigins(),
-} = {}) {
-  const html = normalizeHtmlArtifactSource(source)
-  if (!html) throw new Error('html is required')
-  if (Buffer.byteLength(html, 'utf8') > MAX_HTML_ARTIFACT_BYTES) {
-    throw new Error('html artifact exceeds the 2 MB limit')
-  }
-  if (!/<(?:!doctype\s+html|html|head|body|main|section)\b/i.test(html)) {
-    throw new Error('html must contain a complete HTML document')
-  }
-  if (/attachment:\/\//i.test(html)) {
-    throw new Error('html artifact contains an unresolved attachment URI')
-  }
-  if (HTML_LOCAL_RESOURCE_REFERENCE.test(html)) {
-    throw new Error('html artifact cannot reference a local disk path; declare the file in assets and use gugo-asset://<id>')
-  }
-  const declaredAssetIds = new Set(
-    Array.isArray(assetIds)
-      ? assetIds.map((value) => String(value || '').trim()).filter(Boolean)
-      : [],
-  )
-  const referencedAssetIds = new Set(htmlArtifactAssetIds(html))
-  for (const id of referencedAssetIds) {
-    if (!declaredAssetIds.has(id)) {
-      throw new Error(`html artifact references undeclared managed asset: ${id}`)
-    }
-  }
-  for (const id of declaredAssetIds) {
-    if (!referencedAssetIds.has(id)) {
-      throw new Error(`html artifact declares an unused managed asset: ${id}`)
-    }
-  }
-  const networkValidationSource = maskAllowedHtmlPreviewRemoteImages(html, remoteImageOrigins)
-  const blocked = [
-    /<script\b[^>]*\bsrc\s*=/i,
-    /<link\b[^>]*\brel\s*=\s*["']?stylesheet["']?[^>]*\bhref\s*=/i,
-    /<iframe\b/i,
-    HTML_REMOTE_RESOURCE_REFERENCE,
-    HTML_REMOTE_LINK_REFERENCE,
-    HTML_FORM_SUBMISSION,
-    HTML_META_REFRESH,
-    HTML_NETWORK_API_CALL,
-    /javascript\s*:/i,
-  ]
-  if (blocked.some((pattern) => pattern.test(networkValidationSource))) {
-    throw new Error('html artifact must be self-contained and cannot load external scripts, styles, frames, or network requests')
-  }
-  assertHtmlIsPageContent(html)
-  return html
-}
-
-function inlineHtmlFiles(files = {}) {
-  const index = files && typeof files === 'object' ? files['index.html'] : ''
-  let html = normalizeHtmlArtifactSource(index)
-  const css = String(files?.['styles.css'] || '').trim()
-  const js = String(files?.['app.js'] || '').trim()
-  if (css) {
-    const style = `<style>\n${css}\n</style>`
-    html = /<\/head\s*>/i.test(html) ? html.replace(/<\/head\s*>/i, `${style}\n</head>`) : `${style}\n${html}`
-  }
-  if (js) {
-    const script = `<script>\n${js}\n</script>`
-    html = /<\/body\s*>/i.test(html) ? html.replace(/<\/body\s*>/i, `${script}\n</body>`) : `${html}\n${script}`
-  }
-  return html
-}
-
 export function createHtmlArtifact({ title = 'Webpage', html, files, assetIds = [] } = {}) {
-  const source = validateHtmlArtifactSource(html || inlineHtmlFiles(files), { assetIds })
+  const source = resolveHtmlArtifactSource({ html, files, assetIds })
   const artifactPath = writeNewArtifact(title, 'html', source, 'utf8')
   return {
     ...artifactPath,
@@ -1417,157 +1291,19 @@ export async function createDocx({ title = 'Document', paragraphs = [], images =
 
 /* ────────────────────────── PDF ────────────────────────── */
 
-const PDF_PAGE_WIDTH = 595.28
-const PDF_PAGE_HEIGHT = 841.89
-const PDF_MARGIN_X = 56
-const PDF_MARGIN_TOP = 58
-const PDF_MARGIN_BOTTOM = 52
-
-function pdfTextWidth(font, text, size) {
-  return font.widthOfTextAtSize(String(text || ''), size)
-}
-
-function wrapPdfText(text, font, size, maxWidth) {
-  const source = String(text || '').replace(/\s+/g, ' ').trim()
-  if (!source) return []
-  const lines = []
-  let current = ''
-  for (const character of source) {
-    const candidate = `${current}${character}`
-    if (current && pdfTextWidth(font, candidate, size) > maxWidth) {
-      lines.push(current.trimEnd())
-      current = character.trimStart()
-    } else {
-      current = candidate
-    }
-  }
-  if (current.trim()) lines.push(current.trimEnd())
-  return lines
-}
-
-function normalizedPdfBlocks(blocks = []) {
-  return (Array.isArray(blocks) ? blocks : [])
-    .map((block) => ({
-      type: ['title', 'heading', 'bullet'].includes(block?.type) ? block.type : 'paragraph',
-      text: String(block?.text || '').trim(),
-    }))
-    .filter((block) => block.text)
-}
-
 export async function createPdf({ title = 'Document', blocks = [], images = [], userId = null } = {}) {
-  const normalizedTitle = String(title || 'Document').trim().slice(0, 200) || 'Document'
-  const contentBlocks = normalizedPdfBlocks(blocks)
+  const pdfInput = normalizePdfArtifactInput({ title, blocks })
   const officeImages = await prepareOfficeArtifactImages(images, { userId })
-  if (!contentBlocks.length && !officeImages.length) throw new Error('PDF content blocks 或 images 不能为空')
-
-  const document = await PDFDocument.create()
-  let font = null
-  if (contentBlocks.length) {
-    document.registerFontkit(pdfLibFontkit)
-    try {
-      font = await document.embedFont(fs.readFileSync(PDF_CJK_FONT_PATH), { subset: true })
-    } catch (cause) {
-      throw new Error(`PDF 中文字体加载失败: ${cause?.message || cause}`, { cause })
-    }
-  }
-  document.setTitle(normalizedTitle)
-  document.setCreator('Gugo')
-  document.setProducer('Gugo PDF artifact generator')
-
-  let page = null
-  let y = 0
-  const addPage = () => {
-    page = document.addPage([PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT])
-    y = PDF_PAGE_HEIGHT - PDF_MARGIN_TOP
-  }
-  const ensureSpace = (height) => {
-    if (!page || y - height < PDF_MARGIN_BOTTOM) addPage()
-  }
-  const drawBlock = ({ type, text }) => {
-    const titleBlock = type === 'title'
-    const headingBlock = type === 'heading'
-    const bulletBlock = type === 'bullet'
-    const size = titleBlock ? 25 : headingBlock ? 16 : 11.5
-    const lineHeight = titleBlock ? 34 : headingBlock ? 24 : 18
-    const before = titleBlock ? 0 : headingBlock ? 12 : 4
-    const after = titleBlock ? 18 : headingBlock ? 7 : 5
-    const prefix = bulletBlock ? '• ' : ''
-    const indent = bulletBlock ? 14 : 0
-    const maxWidth = PDF_PAGE_WIDTH - (PDF_MARGIN_X * 2) - indent
-    const lines = wrapPdfText(`${prefix}${text}`, font, size, maxWidth)
-    ensureSpace(before + Math.max(1, lines.length) * lineHeight + after)
-    y -= before
-    for (const line of lines) {
-      ensureSpace(lineHeight + after)
-      page.drawText(line, {
-        x: PDF_MARGIN_X + indent,
-        y: y - size,
-        size,
-        font,
-        color: titleBlock ? rgb(0.08, 0.12, 0.2) : headingBlock ? rgb(0.12, 0.2, 0.34) : rgb(0.16, 0.18, 0.22),
-      })
-      y -= lineHeight
-    }
-    y -= after
-  }
-
-  if (contentBlocks.length) {
-    const startsWithSameTitle = contentBlocks[0]?.type === 'title'
-      && contentBlocks[0].text.localeCompare(normalizedTitle, undefined, { sensitivity: 'base' }) === 0
-    drawBlock({ type: 'title', text: normalizedTitle })
-    for (const block of startsWithSameTitle ? contentBlocks.slice(1) : contentBlocks) drawBlock(block)
-  }
-
-  for (const [imageIndex, image] of officeImages.entries()) {
-    let targetPage
-    if (image.targetIndex) {
-      while (document.getPageCount() < image.targetIndex) document.addPage([PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT])
-      targetPage = document.getPage(image.targetIndex - 1)
-    } else {
-      targetPage = document.addPage([PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT])
-    }
-    const embedded = image.mimeType === 'image/jpeg'
-      ? await document.embedJpg(image.buffer)
-      : await document.embedPng(image.buffer)
-    const { width: pageWidth, height: pageHeight } = targetPage.getSize()
-    const availableWidth = Math.max(1, pageWidth - (PDF_MARGIN_X * 2))
-    const availableHeight = Math.max(1, pageHeight - PDF_MARGIN_TOP - PDF_MARGIN_BOTTOM)
-    const requested = officeImageSize(image, {
-      defaultWidth: availableWidth / 72,
-      maxWidth: availableWidth / 72,
-      maxHeight: availableHeight / 72,
-    })
-    const width = requested.width * 72
-    const height = requested.height * 72
-    const x = image.x == null ? (pageWidth - width) / 2 : image.x * 72
-    const y = image.y == null ? (pageHeight - height) / 2 : pageHeight - (image.y * 72) - height
-    if (x < 0 || y < 0 || x + width > pageWidth || y + height > pageHeight) {
-      throw new Error(`images[${imageIndex}] placement exceeds PDF page bounds`)
-    }
-    targetPage.drawImage(embedded, { x, y, width, height })
-  }
-
-  const pages = document.getPages()
-  if (contentBlocks.length) {
-    pages.forEach((item, index) => {
-      const label = `${index + 1} / ${pages.length}`
-      item.drawText(label, {
-        x: (item.getWidth() - pdfTextWidth(font, label, 9)) / 2,
-        y: 24,
-        size: 9,
-        font,
-        color: rgb(0.48, 0.5, 0.54),
-      })
-    })
-  }
-
-  const buffer = Buffer.from(await document.save())
-  const artifactPath = writeNewArtifact(normalizedTitle, 'pdf', buffer)
+  const { buffer, pageCount } = await buildPdfArtifactBuffer({
+    ...pdfInput,
+    preparedImages: officeImages,
+  })
+  const artifactPath = writeNewArtifact(pdfInput.normalizedTitle, 'pdf', buffer)
   return {
     ...artifactPath,
     type: 'pdf',
-    title: normalizedTitle,
-    pageCount: pages.length,
+    title: pdfInput.normalizedTitle,
+    pageCount,
     imageCount: officeImages.length,
     byteLength: buffer.length,
   }

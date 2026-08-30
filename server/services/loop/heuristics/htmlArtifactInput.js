@@ -13,7 +13,7 @@ import {
 } from '../../../adapters/imageTools.js'
 import {
   MAX_HTML_ARTIFACT_BYTES,
-} from '../../artifactGen.js'
+} from '../../htmlArtifactFormat.js'
 import { resolveOfficeArtifactImageInputs } from '../../officeArtifactImages.js'
 import {
   MEDIA_TOOL_SPECS,
