@@ -25,6 +25,7 @@ $nativeSource = @'
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -419,14 +420,43 @@ public static class GugoProcessTreeNative {
     return false;
   }
 
+  private static int RemainingBudgetMilliseconds(Stopwatch elapsed, int budgetMs) {
+    long remaining = (long)budgetMs - elapsed.ElapsedMilliseconds;
+    if (remaining <= 0) return 0;
+    return (int)Math.Min((long)Int32.MaxValue, remaining);
+  }
+
+  private static bool IsBoundTreeEmpty(
+    ProcessLease lease,
+    Dictionary<uint, ProcessIdentity> tracked
+  ) {
+    ExpandDescendants(tracked, Snapshot());
+    return ActiveJobProcessCount(lease.Job) == 0 && !AnyTrackedProcessAlive(tracked);
+  }
+
+  private static bool ConfirmBoundTreeEmpty(
+    ProcessLease lease,
+    Dictionary<uint, ProcessIdentity> tracked
+  ) {
+    // A busy Windows runner can resume this worker exactly at the cleanup
+    // deadline. Do not turn an already-finished cleanup into a false failure,
+    // but keep success fail-closed: two identity-safe empty observations are
+    // still required across the same bounded 50 ms quiescence window used by
+    // the normal polling loop.
+    if (!IsBoundTreeEmpty(lease, tracked)) return false;
+    Thread.Sleep(50);
+    return IsBoundTreeEmpty(lease, tracked);
+  }
+
   private static bool KillBoundTree(ProcessLease lease, int timeoutMs) {
     var tracked = new Dictionary<uint, ProcessIdentity>();
     tracked.Add(lease.Root.Pid, lease.Root);
-    DateTime deadline = DateTime.UtcNow.AddMilliseconds(Math.Max(250, timeoutMs));
+    int budgetMs = Math.Max(250, timeoutMs);
+    Stopwatch elapsed = Stopwatch.StartNew();
     int stableEmptySnapshots = 0;
     bool jobTerminated = false;
     try {
-      while (DateTime.UtcNow < deadline) {
+      while (RemainingBudgetMilliseconds(elapsed, budgetMs) > 0) {
         // AssignProcessToJobObject is not retroactive. Capture any descendants
         // that existed before the late bind before terminating the job root.
         ExpandDescendants(tracked, Snapshot());
@@ -439,21 +469,22 @@ public static class GugoProcessTreeNative {
           jobTerminated = true;
         }
         foreach (var identity in tracked.Values) {
-          if (DateTime.UtcNow >= deadline) break;
+          if (RemainingBudgetMilliseconds(elapsed, budgetMs) <= 0) break;
           Terminate(identity);
         }
-        if (DateTime.UtcNow >= deadline) break;
-        Thread.Sleep((int)Math.Min(50, Math.Max(1, (deadline - DateTime.UtcNow).TotalMilliseconds)));
-        ExpandDescendants(tracked, Snapshot());
-        if (ActiveJobProcessCount(lease.Job) > 0 || AnyTrackedProcessAlive(tracked)) {
+        int remainingMs = RemainingBudgetMilliseconds(elapsed, budgetMs);
+        if (remainingMs <= 0) break;
+        Thread.Sleep(Math.Min(50, remainingMs));
+        if (!IsBoundTreeEmpty(lease, tracked)) {
           stableEmptySnapshots = 0;
           continue;
         }
         stableEmptySnapshots++;
         if (stableEmptySnapshots >= 2) return true;
-        Thread.Sleep((int)Math.Min(50, Math.Max(1, (deadline - DateTime.UtcNow).TotalMilliseconds)));
+        remainingMs = RemainingBudgetMilliseconds(elapsed, budgetMs);
+        if (remainingMs > 0) Thread.Sleep(Math.Min(50, remainingMs));
       }
-      return false;
+      return ConfirmBoundTreeEmpty(lease, tracked);
     } finally {
       foreach (var pair in tracked) {
         if (pair.Key != lease.Root.Pid) pair.Value.Dispose();

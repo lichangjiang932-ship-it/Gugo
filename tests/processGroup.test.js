@@ -448,6 +448,13 @@ test('Windows tree-kill worker: 大源码通过 stdin 传输且启动命令远�
   assert.ok(payload.length > commandLineChars, 'full worker source must not be embedded in argv')
 })
 
+test('Windows tree-kill worker: cleanup deadline is monotonic and keeps a bounded final proof', () => {
+  const source = windowsTreeKillWorkerScript()
+  assert.match(source, /Stopwatch\.StartNew\(\)/u)
+  assert.match(source, /return ConfirmBoundTreeEmpty\(lease, tracked\);/u)
+  assert.doesNotMatch(source, /DateTime\.UtcNow/u)
+})
+
 test('Windows tree-kill worker: repeated KILL reuses worker threads without leaking handles', {
   skip: process.platform !== 'win32',
   timeout: 30_000,
