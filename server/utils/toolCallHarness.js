@@ -646,8 +646,10 @@ export function buildAssistantToolCallsMessage(calls, content = '', { reasoning 
   return {
     role: 'assistant',
     content: content || null,
-    // Internal chain-of-thought retention (Codex-style). Stripped from every
-    // outbound provider request unless MODEL_REASONING_RETENTION is enabled.
+    // Internal chain-of-thought retention (Codex-style). Replayed to the same
+    // provider by default for OpenAI-compatible kinds; Anthropic/Gemini keep
+    // it stripped unless a deployment explicitly opts in via
+    // MODEL_REASONING_RETENTION=1.
     ...(typeof reasoning === 'string' && reasoning.trim() ? { reasoning_content: reasoning } : {}),
     tool_calls: calls.map((call) => ({
       id: call.id,

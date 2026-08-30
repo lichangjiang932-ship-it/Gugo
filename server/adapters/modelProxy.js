@@ -487,8 +487,9 @@ export async function callStreamingModelWithTools({
     ...(costUsd !== null ? { costUsd } : {}),
     streamed: true,
     reasoningChars,
-    // Retained chain-of-thought for the current turn. Outbound replay stays
-    // gated behind MODEL_REASONING_RETENTION in the request preparation layer.
+    // Retained chain-of-thought for the current turn. This is delivered to the
+    // client for inline display; outbound replay is governed by
+    // retainReasoningForEnv ( default-on for OpenAI-compatible ).
     ...(reasoningText ? { reasoning: reasoningText } : {}),
   }
 }

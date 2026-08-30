@@ -54,10 +54,20 @@ test('blank or non-string reasoning never attaches to durable assistant messages
   assert.equal('reasoning_content' in buildAssistantToolCallsMessage(TOOL_CALLS), false)
 })
 
-test('retainReasoningForEnv accepts only explicit 1', () => {
+test('retainReasoningForEnv defaults on for OpenAI-compatible providers', () => {
+  // Explicit override forces either direction.
   assert.equal(retainReasoningForEnv({ MODEL_REASONING_RETENTION: '1' }), true)
   assert.equal(retainReasoningForEnv({ MODEL_REASONING_RETENTION: '0' }), false)
-  assert.equal(retainReasoningForEnv({ MODEL_REASONING_RETENTION: 'true' }), false)
-  assert.equal(retainReasoningForEnv({}), false)
-  assert.equal(retainReasoningForEnv(undefined), false)
+  // Unset defaults ON for OpenAI-compatible / default pipeline.
+  assert.equal(retainReasoningForEnv({}), true)
+  assert.equal(retainReasoningForEnv(undefined), true)
+  assert.equal(retainReasoningForEnv({}, { providerKind: 'openai-compatible' }), true)
+  assert.equal(retainReasoningForEnv({}, { providerKind: 'ollama' }), true)
+  assert.equal(retainReasoningForEnv({}, { providerKind: 'deepseek' }), true)
+  // Anthropic/Gemini do not accept reasoning_content — default stays OFF.
+  assert.equal(retainReasoningForEnv({}, { providerKind: 'anthropic' }), false)
+  assert.equal(retainReasoningForEnv({}, { providerKind: 'gemini' }), false)
+  // Explicit 1 overrides even native kinds; explicit 0 disables everywhere.
+  assert.equal(retainReasoningForEnv({ MODEL_REASONING_RETENTION: '1' }, { providerKind: 'anthropic' }), true)
+  assert.equal(retainReasoningForEnv({ MODEL_REASONING_RETENTION: '0' }, { providerKind: 'openai-compatible' }), false)
 })

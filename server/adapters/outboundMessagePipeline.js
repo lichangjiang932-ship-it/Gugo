@@ -1,6 +1,13 @@
 import { normalizeModelContentForEndpoint } from '../utils/modelContentCapabilities.js'
 import { replaceUnsupportedVisionContent } from './visionAssist.js'
 
+// Anthropic/Gemini express reasoning as thinking/thought blocks and reject the
+// OpenAI-compatible `reasoning_content` field. Retention must stay off for
+// those native kinds unless a deployment explicitly opts in; every other kind
+// (ollama / lmstudio / llamacpp / vllm / openai-compatible) round-trips the
+// field natively and benefits from the default-on replay.
+const REASONING_REJECTION_KINDS = new Set(['anthropic', 'gemini'])
+
 const CORE_MESSAGE_KEYS = new Set(['role', 'content', 'name', 'tool_call_id', 'tool_calls'])
 const INTERNAL_KEYS = new Set([
   '_display',
@@ -24,14 +31,20 @@ const INTERNAL_KEYS = new Set([
 /**
  * Chain-of-thought replay gate (Codex-style retained reasoning).
  *
- * Off by default: some reasoning providers reject `reasoning_content` in the
- * input sequence, so replay stays opt-in per deployment via
- * MODEL_REASONING_RETENTION=1. When enabled, assistant turns inside a tool
- * loop carry their captured chain-of-thought back to the provider, which
- * measurably improves multi-step task convergence.
+ * Default-on for OpenAI-compatible providers, whose native field IS
+ * `reasoning_content`: assistant turns inside a tool loop carry their captured
+ * chain-of-thought back to the provider, which measurably improves multi-step
+ * task convergence. Anthropic/Gemini keep it off by default because they
+ * express reasoning as thinking/thought blocks and reject `reasoning_content`.
+ * A deployment can still force either direction:
+ *   MODEL_REASONING_RETENTION=1  => always retain
+ *   MODEL_REASONING_RETENTION=0  => never retain
  */
-export function retainReasoningForEnv(env = process.env) {
-  return String(env?.MODEL_REASONING_RETENTION || '').trim() === '1'
+export function retainReasoningForEnv(env = process.env, { providerKind = '' } = {}) {
+  const explicit = String(env?.MODEL_REASONING_RETENTION || '').trim().toLowerCase()
+  if (explicit === '1') return true
+  if (explicit === '0') return false
+  return !REASONING_REJECTION_KINDS.has(String(providerKind || '').trim().toLowerCase())
 }
 
 function cloneValue(value) {
