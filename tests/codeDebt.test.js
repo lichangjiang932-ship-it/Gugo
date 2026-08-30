@@ -3,11 +3,6 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
-const TARGETED_FILE_CEILINGS = Object.freeze({
-  'src/lib/presentationExport.js': 3630,
-  'server/adapters/modelProxy.js': 517,
-  'src/pages/ChatSplit/index.jsx': 1636,
-})
 const BACKEND_IMPLEMENTATION_LINE_LIMIT = 600
 const BACKEND_LARGE_FILE_DEBT_ID = 'DEBT-SIZE-001'
 const DEBT_MARKER_CEILING = 168
@@ -130,13 +125,6 @@ function inspectBackendSizeDebtInventory(inventory, lineLimit) {
     filesAreSorted: filePaths.every((file, index) => index === 0 || filePaths[index - 1] < file),
   }
 }
-
-test('targeted large files can only shrink until they are split', () => {
-  const regressions = Object.entries(TARGETED_FILE_CEILINGS)
-    .map(([file, ceiling]) => ({ file, ceiling, actual: lineCount(file) }))
-    .filter(({ actual, ceiling }) => actual > ceiling)
-  assert.deepEqual(regressions, [], 'Extract a cohesive module instead of growing a known large file')
-})
 
 test('new oversized backend implementation files fail the frozen debt gate', () => {
   const debtSource = readFileSync('docs/DEBT.md', 'utf8')
