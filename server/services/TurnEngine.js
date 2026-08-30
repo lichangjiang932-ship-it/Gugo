@@ -10,8 +10,6 @@ import { dispatchHooks as dispatchHooksService } from './hooksService.js'
 import { getApprovalMode } from './approvalSettingsStore.js'
 import {
   expandStoredMessages,
-  extractRetainedLocalFiles,
-  extractVerifiedLocalFiles,
   selectAttachmentIdsForModelRequest,
   selectStoredMessagesAfterCompaction,
 } from './turnMessageContext.js'
@@ -43,21 +41,12 @@ import {
   storedCheckpointEvent,
 } from './turnRecoveryProjection.js'
 import {
-  createTerminalPersistenceFailure,
   createTurnEventEmitter,
-  findEventPersistenceFailure,
   isTerminalTurnEventType,
-  TURN_TERMINAL_PERSISTENCE_FAILURE_CODE,
 } from './turnEventEmitter.js'
 import {
-  deliveryArtifactFields,
-  finalClarificationText,
   normalizeArtifactIds,
-  missingRequirementsForIncompleteReason,
-  normalizeIncompleteReason,
-  normalizeTurnFailure as normalizeFailure,
   optionalDeliveryArtifactIds,
-  publicIncompleteText,
   sameArtifactIds,
 } from './turnTerminalProjection.js'
 import {
@@ -76,6 +65,8 @@ import {
 } from './turnStartRuntime.js'
 import { assembleTurnEnginePersistence } from './turnEnginePersistenceAssembly.js'
 import { createTurnFailedRetryRuntime } from './turnFailedRetryRuntime.js'
+import { createTurnTerminalEvidenceRuntime } from './turnTerminalEvidenceRuntime.js'
+import { createTurnTerminalOutcomeRuntime } from './turnTerminalOutcomeRuntime.js'
 import { resolveTurnToolSpecs } from './turnToolSpecs.js'
 import { createTurnResumeRuntime } from './turnResumeRuntime.js'
 import {
@@ -87,27 +78,16 @@ import {
   abortError,
   activeKey,
   checkpointStateForResolution,
-  isExplicitTurnCancellation,
-  isManualRecoveryBlock,
-  isRecord,
   isTemporaryTurnEvidence,
-  lostTurnLease,
   MANUAL_RECOVERY_BLOCK_CODES,
   missingTurnModelRuntime,
   missingTurnPromptRuntime,
   normalizePositiveInteger,
   normalizePromptContextSnapshot,
   publicStatus,
-  recoveryCandidateVersion,
   rejectResumeApprovalModeOverride,
   sessionKey,
 } from './turnEnginePolicy.js'
-import {
-  createCompletedTurnMessage,
-  createInitialCancellationMessage,
-  createPausedTurnMessage,
-  createTurnEvidenceMessage as projectTurnEvidenceMessage,
-} from './turnEvidenceMessageProjection.js'
 
 export { TurnEngineError } from './turnResolutionRuntime.js'
 
@@ -260,6 +240,14 @@ export class TurnEngine {
       recordCanaryOutcome: (input) => this.deps.recordCanaryOutcome(input),
       env: this.deps.env,
     } })
+    this.terminalOutcomeRuntime = createTurnTerminalOutcomeRuntime({
+      now: this.deps.now,
+      writeMessage: this.deps.writeMessage,
+      commitTurnBoundary: this.deps.commitTurnBoundary,
+      dispatchHooks: this.deps.dispatchHooks,
+      scheduleMemoryExtraction: this.deps.scheduleMemoryExtraction,
+      runMemoryModel: this.deps.runMemoryModel,
+    })
   }
 
   shutdown() {
@@ -640,42 +628,13 @@ export class TurnEngine {
     executionLease = null,
   }, signal) {
     if (signal.aborted) {
-      if (!lostTurnLease(signal)) {
-        const cancelledAt = this.deps.now()
-        const cancellationReason = signal.reason?.message || 'Cancelled by user'
-        const cancellationMessage = createInitialCancellationMessage({
-          userId,
-          sessionId,
-          turnId,
-          turnStartedAt,
-          cancelledAt,
-        })
-        const atomicTurnBoundary = typeof this.deps.commitTurnBoundary === 'function'
-        await emitter('turn.cancelled', {
-          reason: cancellationReason,
-          verifiedLocalFiles: [],
-          retainedLocalFiles: [],
-        }, {
-          commitEvent: atomicTurnBoundary
-            ? ({ event }) => this.deps.commitTurnBoundary({
-                userId,
-                event,
-                message: cancellationMessage,
-                executionLease,
-              })
-            : null,
-        })
-        if (!atomicTurnBoundary) {
-          try {
-            await this.deps.writeMessage(cancellationMessage)
-          } catch (error) {
-            // Legacy injected stores retain the event-authoritative behavior.
-            logWarn('turn.legacy_evidence_projection', error, {
-              userId, sessionId, turnId, state: 'cancelled',
-            })
-          }
-        }
-      }
+      await this.terminalOutcomeRuntime.cancelBeforeExecution({
+        scope: { userId, sessionId, turnId },
+        signal,
+        emitter,
+        executionLease,
+        turnStartedAt,
+      })
       return
     }
     const checkpointScope = { userId, sessionId, turnId }
@@ -877,255 +836,36 @@ export class TurnEngine {
     let streamedAssistantText = String(
       pendingRecoveryAttempt?.assistantText || restoredCheckpointState?.retryAssistantText || '',
     )
-    const verifiedLocalFilesAt = (verifiedAt = this.deps.now()) => extractVerifiedLocalFiles(
+    const readTerminalState = () => ({
       checkpointMessages,
-      { userId, baselineToolCallIds, verifiedAt },
-    )
-    const retainedLocalFilesAt = (retainedAt = this.deps.now(), verifiedLocalFiles = []) => {
-      const verifiedIds = new Set((Array.isArray(verifiedLocalFiles) ? verifiedLocalFiles : [])
-        .map((file) => String(file?.id || '').trim())
-        .filter(Boolean))
-      return extractRetainedLocalFiles(checkpointMessages, {
-        userId,
-        baselineToolCallIds,
-        retainedAt,
-      }).filter((file) => !verifiedIds.has(String(file?.id || '').trim()))
-    }
-    const atomicTurnBoundary = typeof this.deps.commitTurnBoundary === 'function'
-    const createTurnEvidenceMessage = (options = {}) => {
-      const writtenAt = options.writtenAt ?? this.deps.now()
-      const verifiedLocalFiles = Array.isArray(options.verifiedLocalFiles)
-        ? options.verifiedLocalFiles
-        : verifiedLocalFilesAt(writtenAt)
-      const retainedLocalFiles = Array.isArray(options.retainedLocalFiles)
-        ? options.retainedLocalFiles
-        : retainedLocalFilesAt(writtenAt, verifiedLocalFiles)
-      return projectTurnEvidenceMessage({
-        ...options,
-        writtenAt,
-        verifiedLocalFiles,
-        retainedLocalFiles,
-      }, {
-        userId,
-        sessionId,
-        turnId,
-        checkpointMessages,
-        baselineToolCallIds,
-        pluginPromptBlockIds: promptContextSnapshot?.pluginPromptBlockIds,
-        checkpointRecovery,
-        latestModelUsage,
-        turnModelUsage,
-        latestEstimatedPromptTokens,
-        effectiveTurnStartedAt,
-      })
-    }
-    const persistTurnEvidence = async (options) => {
-      const message = createTurnEvidenceMessage(options)
-      await this.deps.writeMessage(message)
-      return message.content
-    }
-    const commitBoundaryEvent = ({ event, message }) => this.deps.commitTurnBoundary({
-      userId,
-      event,
-      message,
-      executionLease,
+      baselineToolCallIds,
+      checkpointArtifactIds,
+      checkpointDeliveryArtifactIds,
+      checkpointIterations,
+      checkpointRecovery,
+      latestCheckpointSequence,
+      latestModelUsage,
+      turnModelUsage,
+      latestEstimatedPromptTokens,
+      effectiveTurnStartedAt,
+      promptContextSnapshot,
+      promptContext,
+      historyMessages,
+      agentId,
+      failedRetryActive,
+      streamedAssistantText,
     })
-    const evidenceBoundaryOptions = (options, {
-      legacyBeforeAppend = false,
-    } = {}) => {
-      if (atomicTurnBoundary) {
-        return {
-          commitEvent: ({ event }) => commitBoundaryEvent({
-            event,
-            message: createTurnEvidenceMessage({
-              ...options,
-              serverLastSequence: event.sequence,
-            }),
-          }),
-        }
-      }
-      if (legacyBeforeAppend) {
-        return {
-          beforeAppend: (event) => persistTurnEvidence({
-            ...options,
-            serverLastSequence: event.sequence,
-          }),
-        }
-      }
-      return {}
-    }
-    const emitFailedTerminal = async (sourceError) => {
-      const originalError = sourceError
-      const artifactIds = normalizeArtifactIds(originalError?.artifactIds ?? checkpointArtifactIds)
-      const deliveryArtifactIds = optionalDeliveryArtifactIds(originalError, [])
-      const iterations = Math.max(0, Number(originalError?.iterations) || checkpointIterations)
-      const failedAt = this.deps.now()
-      const verifiedLocalFiles = verifiedLocalFilesAt(failedAt)
-      const retainedLocalFiles = retainedLocalFilesAt(failedAt, verifiedLocalFiles)
-      let activeError = findEventPersistenceFailure(sourceError) || sourceError
-
-      // The first turn.failed attempt can itself be the durability barrier that
-      // discovers an earlier deferred delta failure. That barrier performs no
-      // terminal append, so one retry with the persistence failure as the
-      // authoritative cause is safe. A direct append failure has unknown
-      // outcome and must never be retried blindly.
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const failure = normalizeFailure(activeError)
-        const partialText = publicIncompleteText(
-          originalError?.partialText || streamedAssistantText,
-          '',
-        )
-        const evidenceOptions = {
-          state: 'failed',
-          text: partialText,
-          artifactIds,
-          deliveryArtifactIds,
-          iterations,
-          error: failure,
-          verifiedLocalFiles,
-          retainedLocalFiles,
-          writtenAt: failedAt,
-        }
-        try {
-          await emitter('turn.failed', {
-            code: failure.code,
-            error: failure,
-            partialText,
-            artifactIds,
-            ...deliveryArtifactFields(deliveryArtifactIds),
-            verifiedLocalFiles,
-            retainedLocalFiles,
-            iterations,
-            ...(latestModelUsage ? { usage: latestModelUsage } : {}),
-            ...(turnModelUsage ? { turnModelUsage } : {}),
-            ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-          }, evidenceBoundaryOptions(evidenceOptions))
-          if (!atomicTurnBoundary) {
-            try {
-              await persistTurnEvidence(evidenceOptions)
-            } catch (error) {
-              // Legacy injected stores retain the event-authoritative behavior.
-              logWarn('turn.legacy_evidence_projection', error, {
-                userId, sessionId, turnId, state: 'failed',
-              })
-            }
-          }
-          await recordCanaryTerminal('failed', failure.code, failedAt, partialText)
-          return
-        } catch (terminalError) {
-          const deferredFailure = findEventPersistenceFailure(terminalError)
-          const terminalOutcomeUnknown = String(terminalError?.code || '').trim().toUpperCase()
-            === TURN_TERMINAL_PERSISTENCE_FAILURE_CODE
-          if (deferredFailure && !terminalOutcomeUnknown && attempt === 0) {
-            activeError = deferredFailure
-            continue
-          }
-          throw createTerminalPersistenceFailure(terminalError)
-        }
-      }
-    }
-    const emitBlockedRecovery = async (sourceError) => {
-      const failure = normalizeFailure(sourceError, { retryable: false })
-      const sideEffectUnknown = failure.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN'
-        && sourceError?.unsafeToReplay === true
-        && sourceError?.requiresUserVerification === true
-      const modelRequestUnknown = failure.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
-        && sourceError?.unsafeToReplay === true
-      const recoveryToolCallId = sideEffectUnknown
-        ? normalizeOptionalId(sourceError?.sideEffectExecution?.toolCallId)
-        : null
-      const recoveryModelRequestId = modelRequestUnknown
-        ? normalizeOptionalId(sourceError?.modelRequestId || sourceError?.modelInvocation?.id)
-        : null
-      const blockedAt = this.deps.now()
-      const verifiedLocalFiles = verifiedLocalFilesAt(blockedAt)
-      const retainedLocalFiles = retainedLocalFilesAt(blockedAt, verifiedLocalFiles)
-      const partialText = publicIncompleteText(
-        sourceError?.partialText || streamedAssistantText,
-        '',
-      )
-      const blockedRecovery = sideEffectUnknown
-        ? {
-            recoveryKind: 'side_effect_outcome_unknown',
-            requiresUserVerification: true,
-            ...(recoveryToolCallId ? { toolCallId: recoveryToolCallId } : {}),
-          }
-        : modelRequestUnknown
-          ? {
-              recoveryKind: 'model_request_outcome_unknown',
-              requiresUserVerification: true,
-              ...(recoveryModelRequestId ? { modelRequestId: recoveryModelRequestId } : {}),
-            }
-          : null
-      const blockedEvidenceOptions = {
-        state: 'blocked',
-        text: partialText,
-        artifactIds: checkpointArtifactIds,
-        deliveryArtifactIds: optionalDeliveryArtifactIds(
-          { deliveryArtifactIds: checkpointDeliveryArtifactIds },
-          [],
-        ),
-        iterations: checkpointIterations,
-        error: { ...failure, retryable: false },
-        verifiedLocalFiles,
-        retainedLocalFiles,
-        blockedRecovery,
-        writtenAt: blockedAt,
-      }
-      const blockedEvent = await emitter('turn.blocked', {
-        code: failure.code,
-        partialText,
-        retryable: false,
-        manualRetryable: true,
-        recoveryStatus: 'dead_letter',
-        ...(sideEffectUnknown ? {
-          turnId,
-          requiresUserVerification: true,
-          recoveryKind: 'side_effect_outcome_unknown',
-          ...(recoveryToolCallId ? { toolCallId: recoveryToolCallId } : {}),
-          recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
-        } : {}),
-        ...(modelRequestUnknown ? {
-          turnId,
-          requiresUserVerification: true,
-          recoveryKind: 'model_request_outcome_unknown',
-          ...(recoveryModelRequestId ? { modelRequestId: recoveryModelRequestId } : {}),
-          recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
-        } : {}),
-        checkpointSequence: latestCheckpointSequence,
-        artifactIds: normalizeArtifactIds(checkpointArtifactIds),
-        deliveryArtifactIds: optionalDeliveryArtifactIds(
-          { deliveryArtifactIds: checkpointDeliveryArtifactIds },
-          [],
-        ),
-        verifiedLocalFiles,
-        retainedLocalFiles,
-        iterations: checkpointIterations,
-      }, evidenceBoundaryOptions(blockedEvidenceOptions))
-      if (!atomicTurnBoundary) {
-        try {
-          await persistTurnEvidence({
-            ...blockedEvidenceOptions,
-            serverLastSequence: blockedEvent.sequence,
-          })
-        } catch (error) {
-          // Legacy injected stores retain the event-authoritative behavior.
-          logWarn('turn.legacy_evidence_projection', error, {
-            userId, sessionId, turnId, state: 'blocked',
-          })
-        }
-      }
-      await this.deps.writeRecoveryFailure({
-        userId,
-        sessionId,
-        turnId,
-        candidateVersion: recoveryCandidateVersion(blockedEvent),
-        retryable: false,
-        errorCode: failure.code,
-        errorMessage: String(sourceError?.message || failure.code),
-        now: blockedEvent.createdAt,
-      })
-    }
+    const terminalEvidenceRuntime = createTurnTerminalEvidenceRuntime({
+      scope: { userId, sessionId, turnId },
+      emitter,
+      executionLease,
+      now: this.deps.now,
+      writeMessage: this.deps.writeMessage,
+      writeRecoveryFailure: this.deps.writeRecoveryFailure,
+      commitTurnBoundary: this.deps.commitTurnBoundary,
+      recordCanaryTerminal,
+      readState: readTerminalState,
+    })
     let contextWindow
     try {
       contextWindow = this.deps.getContextWindow({
@@ -1464,367 +1204,23 @@ export class TurnEngine {
           reason: decision.reason || null,
         }),
       })
-      if (signal.aborted) {
-        if (lostTurnLease(signal)) return
-        const cancelledAt = this.deps.now()
-        const verifiedLocalFiles = verifiedLocalFilesAt(cancelledAt)
-        const retainedLocalFiles = retainedLocalFilesAt(cancelledAt, verifiedLocalFiles)
-        const artifactIds = normalizeArtifactIds(checkpointArtifactIds)
-        const partialText = publicIncompleteText(streamedAssistantText, '')
-        const evidenceOptions = {
-          state: 'cancelled',
-          text: partialText,
-          artifactIds,
-          deliveryArtifactIds: [],
-          iterations: checkpointIterations,
-          verifiedLocalFiles,
-          retainedLocalFiles,
-          writtenAt: cancelledAt,
-        }
-        await emitter('turn.cancelled', {
-          reason: 'Cancelled by user',
-          artifactIds,
-          deliveryArtifactIds: [],
-          verifiedLocalFiles,
-          retainedLocalFiles,
-          iterations: checkpointIterations,
-          ...(latestModelUsage ? { usage: latestModelUsage } : {}),
-          ...(turnModelUsage ? { turnModelUsage } : {}),
-          ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-        }, evidenceBoundaryOptions(evidenceOptions))
-        if (!atomicTurnBoundary) {
-          try {
-            await persistTurnEvidence(evidenceOptions)
-          } catch (error) {
-            // Legacy injected stores retain the event-authoritative behavior.
-            logWarn('turn.legacy_evidence_projection', error, {
-              userId, sessionId, turnId, state: 'cancelled',
-            })
-          }
-        }
-        await recordCanaryTerminal(
-          'cancelled',
-          null,
-          cancelledAt,
-          partialText,
-        )
-        return
-      }
-      if (result?.interrupted) {
-        const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
-        const deliveryArtifactIds = []
-        const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
-        const partialText = publicIncompleteText(
-          result.partialText || streamedAssistantText,
-          '',
-        )
-        const interruptedAt = this.deps.now()
-        const verifiedLocalFiles = verifiedLocalFilesAt(interruptedAt)
-        const retainedLocalFiles = retainedLocalFilesAt(interruptedAt, verifiedLocalFiles)
-        const failure = normalizeFailure({
-          code: result.code,
-          message: result.reason,
-          retryable: true,
-        }, { code: 'MODEL_CALL_INTERRUPTED', retryable: true })
-        const evidenceOptions = {
-          state: 'interrupted',
-          text: partialText,
-          artifactIds,
-          deliveryArtifactIds,
-          iterations,
-          error: failure,
-          verifiedLocalFiles,
-          retainedLocalFiles,
-          writtenAt: interruptedAt,
-        }
-        await emitter('turn.interrupted', {
-          code: failure.code,
-          retryable: true,
-          text: partialText,
-          artifactIds,
-          ...deliveryArtifactFields(deliveryArtifactIds),
-          verifiedLocalFiles,
-          retainedLocalFiles,
-          iterations,
-          ...(latestModelUsage ? { usage: latestModelUsage } : {}),
-          ...(turnModelUsage ? { turnModelUsage } : {}),
-          ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-        }, evidenceBoundaryOptions(evidenceOptions, { legacyBeforeAppend: true }))
-        return
-      }
-      if (result?.incomplete) {
-        // `partialText` is model-authored output, not a server-localized status
-        // channel. Keep it empty when only an internal failure summary exists;
-        // clients render the stable failure code in the selected UI language.
-        const partialText = publicIncompleteText(result.partialText || streamedAssistantText, '')
-        const resultCode = String(result.code || '').trim()
-        const incompleteReason = normalizeIncompleteReason(
-          result.budgetExceeded === true
-            ? 'execution_budget_exhausted'
-            : result.noProgress === true
-              ? 'tool_no_progress'
-              : resultCode === 'REASONING_RUNAWAY' ? 'reasoning_runaway' : result.reason,
-        )
-        const missingRequirements = missingRequirementsForIncompleteReason(incompleteReason)
-        const resultRetryable = typeof result.retryable === 'boolean'
-          ? result.retryable
-          : resultCode !== 'REASONING_RUNAWAY'
-        // A user-triggered failed retry gets one real checkpoint continuation.
-        // If that continuation still cannot finish, another identical retry is
-        // unlikely to make progress and previously created an infinite button
-        // loop. Keep the evidence, but close this Turn as non-retryable.
-        const retryable = failedRetryActive ? false : resultRetryable
-        const failure = normalizeFailure({
-          code: resultCode || 'TURN_INCOMPLETE',
-          incompleteReason,
-          missingRequirements,
-          retryable,
-        }, { retryable })
-        const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
-        // An incomplete loop may still return an explicit, already-validated
-        // partial selection. Never revive an implicit checkpoint selection:
-        // only the terminal result is authoritative for partial delivery.
-        const deliveryArtifactIds = optionalDeliveryArtifactIds(result, [])
-        const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
-        const failedAt = this.deps.now()
-        const verifiedLocalFiles = verifiedLocalFilesAt(failedAt)
-        const retainedLocalFiles = retainedLocalFilesAt(failedAt, verifiedLocalFiles)
-        const evidenceOptions = {
-          state: 'failed',
-          text: partialText,
-          artifactIds,
-          deliveryArtifactIds,
-          iterations,
-          error: failure,
-          verifiedLocalFiles,
-          retainedLocalFiles,
-          writtenAt: failedAt,
-        }
-        if (!atomicTurnBoundary) await persistTurnEvidence(evidenceOptions)
-        await emitter('turn.failed', {
-          code: failure.code,
-          error: failure,
-          incompleteReason,
-          missingRequirements,
-          partialText,
-          artifactIds,
-          ...deliveryArtifactFields(deliveryArtifactIds),
-          verifiedLocalFiles,
-          retainedLocalFiles,
-          iterations,
-          ...(latestModelUsage ? { usage: latestModelUsage } : {}),
-          ...(turnModelUsage ? { turnModelUsage } : {}),
-          ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-        }, evidenceBoundaryOptions(evidenceOptions))
-        await recordCanaryTerminal('failed', failure.code, failedAt, partialText)
-        return
-      }
-      if (result?.paused) {
-        const text = finalClarificationText(result)
-        const clarification = isRecord(result.clarification)
-          ? {
-              ...result.clarification,
-              ...(!text && !result.clarification.reason_code && !result.clarification.reasonCode
-                ? { reason_code: 'clarification_required' }
-                : {}),
-            }
-          : typeof result.clarification === 'string' && result.clarification.trim()
-            ? result.clarification
-            : { reason_code: 'clarification_required', blocker_kind: 'missing_info' }
-        const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
-        const deliveryArtifactIds = []
-        const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
-        const pausedAt = this.deps.now()
-        const verifiedLocalFiles = verifiedLocalFilesAt(pausedAt)
-        const retainedLocalFiles = retainedLocalFilesAt(pausedAt, verifiedLocalFiles)
-        const createPausedMessage = (pausedEvent) => createPausedTurnMessage({
-          userId,
-          sessionId,
-          turnId,
-          text,
-          clarification,
-          pausedEventSequence: pausedEvent.sequence,
-          checkpointMessages,
-          baselineToolCallIds,
-          verifiedLocalFiles,
-          retainedLocalFiles,
-          artifactIds,
-          deliveryArtifactIds,
-          iterations,
-          pluginPromptBlockIds: promptContextSnapshot?.pluginPromptBlockIds,
-          compactionArchiveId: result?.recovery?.archiveId || null,
-          compactionRecovery: result?.recovery || checkpointRecovery,
-          latestModelUsage,
-          turnModelUsage,
-          latestEstimatedPromptTokens,
-          effectiveTurnStartedAt,
-          pausedAt,
-        })
-        await emitter('turn.paused', {
-          text,
-          clarification,
-          artifactIds,
-          ...deliveryArtifactFields(deliveryArtifactIds),
-          verifiedLocalFiles,
-          retainedLocalFiles,
-          iterations,
-          ...(latestModelUsage ? { usage: latestModelUsage } : {}),
-          ...(turnModelUsage ? { turnModelUsage } : {}),
-          ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-        }, atomicTurnBoundary ? {
-          commitEvent: ({ event }) => commitBoundaryEvent({
-            event,
-            message: createPausedMessage(event),
-          }),
-        } : {
-          beforeAppend: async (event) => this.deps.writeMessage(createPausedMessage(event)),
-        })
-        return
-      }
-      const text = String(result?.text || '')
-      const artifactIds = normalizeArtifactIds(result?.artifactIds ?? checkpointArtifactIds)
-      const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
-      const completedAt = this.deps.now()
-      const verifiedLocalFiles = verifiedLocalFilesAt(completedAt)
-      const retainedLocalFiles = retainedLocalFilesAt(completedAt, verifiedLocalFiles)
-      const completedMessage = createCompletedTurnMessage({
-        userId,
-        sessionId,
-        turnId,
-        text,
-        checkpointMessages,
-        baselineToolCallIds,
-        verifiedLocalFiles,
-        retainedLocalFiles,
-        artifactIds,
-        deliveryArtifactIds,
-        iterations: result?.iterations || 0,
-        pluginPromptBlockIds: promptContextSnapshot?.pluginPromptBlockIds,
-        compactionArchiveId: result?.recovery?.archiveId || null,
-        compactionRecovery: result?.recovery || checkpointRecovery,
-        latestModelUsage,
-        turnModelUsage,
-        latestEstimatedPromptTokens,
-        effectiveTurnStartedAt,
-        completedAt,
+      await this.terminalOutcomeRuntime.settleResult({
+        scope: { userId, sessionId, turnId },
+        signal,
+        result,
+        state: readTerminalState(),
+        evidence: terminalEvidenceRuntime,
+        recordCanaryTerminal,
       })
-      await emitter('turn.completed', {
-        text,
-        artifactIds,
-        ...deliveryArtifactFields(deliveryArtifactIds),
-        verifiedLocalFiles,
-        retainedLocalFiles,
-        iterations: result?.iterations || 0,
-        ...(latestModelUsage ? { usage: latestModelUsage } : {}),
-        ...(turnModelUsage ? { turnModelUsage } : {}),
-        ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-      }, {
-        commitEvent: atomicTurnBoundary
-          ? ({ event }) => commitBoundaryEvent({ event, message: completedMessage })
-          : null,
-      })
-      if (!atomicTurnBoundary) {
-        try {
-          await this.deps.writeMessage(completedMessage)
-        } catch (error) {
-          // Legacy injected stores retain the event-authoritative behavior.
-          logWarn('turn.legacy_evidence_projection', error, {
-            userId, sessionId, turnId, state: 'completed',
-          })
-        }
-      }
-      await recordCanaryTerminal('completed', null, completedAt, text)
-      // Best-effort async notification to external subscribers.
-      void this.deps.dispatchHooks?.({
-        userId,
-        event: 'notification',
-        tool: null,
-        args: {
-          text: String(text || '').slice(0, 4_000),
-          artifactIds,
-          ...deliveryArtifactFields(deliveryArtifactIds),
-          iterations: result?.iterations || 0,
-        },
-        sessionId,
-      }).catch(() => { /* notification hook is best-effort */ })
-      try {
-        this.deps.scheduleMemoryExtraction({
-          userId,
-          sessionId,
-          agentId: promptContext.effectiveAgentId || agentId || null,
-          messages: historyMessages,
-          assistantText: text,
-          callModel: ({ messages: memoryMessages }) => this.deps.runMemoryModel({
-            messages: memoryMessages,
-            userId,
-          }),
-        })
-      } catch (error) {
-        // Automatic memory extraction is best-effort and must not change turn completion.
-        logWarn('turn.memory_extraction_schedule', error, { userId, sessionId, turnId })
-      }
     } catch (error) {
-      if (lostTurnLease(signal, error)) return
-      if (isManualRecoveryBlock(error)) {
-        await emitBlockedRecovery(error)
-        return
-      }
-      if (String(error?.code || '').trim().toUpperCase() === TURN_TERMINAL_PERSISTENCE_FAILURE_CODE) {
-        throw error
-      }
-      const deferredPersistenceFailure = findEventPersistenceFailure(error)
-      if (deferredPersistenceFailure) {
-        await emitFailedTerminal(deferredPersistenceFailure)
-        return
-      }
-      if (isExplicitTurnCancellation(signal, error)) {
-        const cancelledAt = this.deps.now()
-        const verifiedLocalFiles = verifiedLocalFilesAt(cancelledAt)
-        const retainedLocalFiles = retainedLocalFilesAt(cancelledAt, verifiedLocalFiles)
-        const artifactIds = normalizeArtifactIds(checkpointArtifactIds)
-        const partialText = publicIncompleteText(streamedAssistantText, '')
-        const evidenceOptions = {
-          state: 'cancelled',
-          text: partialText,
-          artifactIds,
-          deliveryArtifactIds: [],
-          iterations: checkpointIterations,
-          verifiedLocalFiles,
-          retainedLocalFiles,
-          writtenAt: cancelledAt,
-        }
-        try {
-          await emitter('turn.cancelled', {
-            reason: error?.message || 'Cancelled by user',
-            artifactIds,
-            deliveryArtifactIds: [],
-            verifiedLocalFiles,
-            retainedLocalFiles,
-            iterations: checkpointIterations,
-            ...(latestModelUsage ? { usage: latestModelUsage } : {}),
-            ...(turnModelUsage ? { turnModelUsage } : {}),
-            ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
-          }, evidenceBoundaryOptions(evidenceOptions))
-        } catch (terminalError) {
-          const deferredFailure = findEventPersistenceFailure(terminalError)
-          if (!deferredFailure) throw terminalError
-          await emitFailedTerminal(deferredFailure)
-          return
-        }
-        if (!atomicTurnBoundary) {
-          try {
-            await persistTurnEvidence(evidenceOptions)
-          } catch (projectionError) {
-            // Legacy injected stores retain the event-authoritative behavior.
-            logWarn('turn.legacy_evidence_projection', projectionError, {
-              userId, sessionId, turnId, state: 'cancelled',
-            })
-          }
-        }
-        await recordCanaryTerminal('cancelled', null, cancelledAt, evidenceOptions.text)
-        return
-      }
-      await emitFailedTerminal(error)
+      await this.terminalOutcomeRuntime.settleError({
+        scope: { userId, sessionId, turnId },
+        signal,
+        error,
+        state: readTerminalState(),
+        evidence: terminalEvidenceRuntime,
+        recordCanaryTerminal,
+      })
     }
   }
 
