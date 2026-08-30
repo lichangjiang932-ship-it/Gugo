@@ -6,11 +6,10 @@ import {
   hasColumn,
   runSchemaMigrations,
 } from './migrations/index.js'
-import { preflightExistingSchemaVersion } from './dbSchemaPreflight.js'
+import { assertCurrentSchemaContract, preflightExistingSchemaVersion } from './dbSchemaPreflight.js'
 import { validateRuntimeStoragePath } from './utils/runtimeStoragePath.js'
 
 export const DB_SCHEMA_VERSION = LATEST_SCHEMA_VERSION
-
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
 function getDataDir() {
@@ -55,6 +54,7 @@ export function getDb() {
     db.pragma('synchronous = NORMAL')
     initSchema(db)
     runMigrations(db)
+    assertCurrentSchemaContract(db, DB_SCHEMA_VERSION)
     _db = db
     return _db
   } catch (error) {

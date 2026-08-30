@@ -74,8 +74,9 @@ import { migrateToV103 } from './v103RuntimePluginMutationBarrier.js'
 import { migrateToV104 } from './v104RuntimePluginMutationRecoveryReceipts.js'
 import { migrateToV105 } from './v105RuntimePluginMutationBarrierHardening.js'
 import { migrateToV106 } from './v106EvolutionAutoLoop.js'
+import { migrateToV107 } from './v107SchemaContractRepair.js'
 
-export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56, migrateToV57, migrateToV58, migrateToV59, migrateToV60, migrateToV61, migrateToV62, migrateToV63, migrateToV64, migrateToV65, migrateToV66, migrateToV67, migrateToV68, migrateToV69, migrateToV70, migrateToV71, migrateToV72, migrateToV73, migrateToV74, migrateToV75, migrateToV76, migrateToV77, migrateToV78, migrateToV79, migrateToV80, migrateToV81, migrateToV82, migrateToV83, migrateToV84, migrateToV85, migrateToV86, migrateToV87, migrateToV88, migrateToV89, migrateToV90, migrateToV91, migrateToV92, migrateToV93, migrateToV94, migrateToV95, migrateToV96, migrateToV97, migrateToV98, migrateToV99, migrateToV100, migrateToV101, migrateToV102, migrateToV103, migrateToV104, migrateToV105, migrateToV106 }
+export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56, migrateToV57, migrateToV58, migrateToV59, migrateToV60, migrateToV61, migrateToV62, migrateToV63, migrateToV64, migrateToV65, migrateToV66, migrateToV67, migrateToV68, migrateToV69, migrateToV70, migrateToV71, migrateToV72, migrateToV73, migrateToV74, migrateToV75, migrateToV76, migrateToV77, migrateToV78, migrateToV79, migrateToV80, migrateToV81, migrateToV82, migrateToV83, migrateToV84, migrateToV85, migrateToV86, migrateToV87, migrateToV88, migrateToV89, migrateToV90, migrateToV91, migrateToV92, migrateToV93, migrateToV94, migrateToV95, migrateToV96, migrateToV97, migrateToV98, migrateToV99, migrateToV100, migrateToV101, migrateToV102, migrateToV103, migrateToV104, migrateToV105, migrateToV106, migrateToV107 }
 
 /**
  * V2-V30 stay in db.js for upgrade compatibility. New migrations are registered
@@ -158,6 +159,7 @@ export const schemaMigrations = Object.freeze([
   { version: 104, up: migrateToV104, atomicWithVersion: true },
   { version: 105, up: migrateToV105, atomicWithVersion: true },
   { version: 106, up: migrateToV106, atomicWithVersion: true },
+  { version: 107, up: migrateToV107, atomicWithVersion: true },
 ])
 
 export const LATEST_SCHEMA_VERSION = schemaMigrations.at(-1)?.version || 30
