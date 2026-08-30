@@ -79,6 +79,17 @@ SERVER_HOST=127.0.0.1
 
 `local` 是便利模式，不提供多用户身份边界。不要把它用于共享服务器、局域网或公网部署。
 
+### 推理态跨轮保留（chain-of-thought replay）
+
+工具调用循环里，模型在上一条 assistant 消息中捕获的推理（`reasoning_content`）会默认回传给同一 provider，用于提升多步任务收敛。默认对 OpenAI 兼容 provider（ollama / lmstudio / llamacpp / vllm / openai-compatible）开启；对 Anthropic / Gemini 原生关闭，因为它们用 thinking / thought 块表达推理，会拒绝 `reasoning_content` 字段。
+
+```dotenv
+# 显式 1 对原生 provider 也强制开启；显式 0 全程关闭。
+# MODEL_REASONING_RETENTION=1
+```
+
+回传仅命中已捕获推理的 assistant 消息（即 provider 本就支持该字段），因此 OpenAI 兼容端点可安全往返；未解锁该能力时可在 `.env` 设 `MODEL_REASONING_RETENTION=0`。
+
 ### 非回环暴露保护
 
 `AUTH_MODE=local` 只允许有效监听地址为回环地址（`127.0.0.0/8`、`localhost` 或 `::1`）。服务启动时会检查实际对外暴露地址：普通部署检查 `SERVER_HOST`，Compose 部署还会考虑宿主机的 `DOCKER_BIND_ADDRESS`。如果本地免登录模式将监听或发布到非回环地址，服务默认拒绝启动，而不只是打印提示。
