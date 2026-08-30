@@ -576,3 +576,46 @@ test('two processes competing on one revision produce one complete install', asy
   )
   assert.equal(fs.existsSync(path.join(transactionRoot, 'store.lock')), false)
 })
+
+for (const { phase, releaseOnOwnerStat } of [
+  { phase: 'during its bounded read', releaseOnOwnerStat: 2 },
+  { phase: 'during its final verification', releaseOnOwnerStat: 3 },
+]) {
+  test(`lock release ${phase} fails closed as busy`, async (t) => {
+    const { managedRoot } = createFixture(t, `owner-release-race-${releaseOnOwnerStat}`)
+    const transactionRoot = transactionRootFor(managedRoot)
+    const lockPath = path.join(transactionRoot, 'store.lock')
+    const ownerPath = path.join(lockPath, 'owner.json')
+    fs.mkdirSync(lockPath, { recursive: true })
+    fs.writeFileSync(ownerPath, `${JSON.stringify({
+      schemaVersion: 1,
+      token: randomUUID(),
+      pid: process.pid,
+      createdAt: Date.now(),
+    })}\n`)
+    const canonicalOwnerPath = fs.realpathSync.native?.(ownerPath) || fs.realpathSync(ownerPath)
+
+    const originalLstatSync = fs.lstatSync
+    let ownerStatCalls = 0
+    const lstatSyncMock = t.mock.method(fs, 'lstatSync', function lstatSync(target, ...args) {
+      if (path.resolve(String(target)) === canonicalOwnerPath) {
+        ownerStatCalls += 1
+        if (ownerStatCalls === releaseOnOwnerStat) {
+          fs.unlinkSync(ownerPath)
+          fs.rmdirSync(lockPath)
+        }
+      }
+      return originalLstatSync.call(fs, target, ...args)
+    })
+
+    await assert.rejects(
+      listInstalledLocalPluginPackages({ managedRoot }),
+      errorCode('PLUGIN_PACKAGE_STORE_BUSY'),
+    )
+    assert.equal(ownerStatCalls, releaseOnOwnerStat)
+
+    lstatSyncMock.mock.restore()
+    const recovered = await listInstalledLocalPluginPackages({ managedRoot })
+    assert.deepEqual(recovered.packages, [])
+  })
+}

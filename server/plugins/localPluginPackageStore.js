@@ -2,9 +2,9 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { TextDecoder } from 'node:util'
 
 import { loadPlugins } from './pluginLoader.js'
+import { readBoundedJson, sameFileMetadata } from './localPluginPackageMetadata.js'
 import {
   LOCAL_PLUGIN_PACKAGE_RECEIPT_FILE,
   snapshotLocalPluginPackage,
@@ -146,64 +146,6 @@ function syncDirectoryTree(root) {
   }
   walk(root)
   for (const directory of directories) syncDirectory(directory)
-}
-
-function sameFileMetadata(left, right) {
-  return left.dev === right.dev
-    && left.ino === right.ino
-    && left.size === right.size
-    && left.mtimeMs === right.mtimeMs
-    && left.ctimeMs === right.ctimeMs
-}
-
-function readBoundedJson(filePath, maxBytes, code) {
-  let descriptor
-  try {
-    const before = fs.lstatSync(filePath)
-    if (before.isSymbolicLink() || !before.isFile() || before.size > maxBytes) {
-      throw packageStoreError(code, 'required metadata is not a bounded regular file')
-    }
-    descriptor = fs.openSync(
-      filePath,
-      fs.constants.O_RDONLY | Number(fs.constants.O_NOFOLLOW || 0),
-    )
-    const opened = fs.fstatSync(descriptor)
-    if (!opened.isFile() || !sameFileMetadata(before, opened)) {
-      throw packageStoreError(code, 'required metadata changed before it could be read')
-    }
-    const chunks = []
-    let totalBytes = 0
-    while (true) {
-      const remaining = maxBytes + 1 - totalBytes
-      if (remaining <= 0) {
-        throw packageStoreError(code, 'required metadata exceeds its size limit')
-      }
-      const chunk = Buffer.allocUnsafe(Math.min(16 * 1024, remaining))
-      const bytesRead = fs.readSync(descriptor, chunk, 0, chunk.length, null)
-      if (bytesRead === 0) break
-      totalBytes += bytesRead
-      chunks.push(chunk.subarray(0, bytesRead))
-    }
-    if (totalBytes > maxBytes) {
-      throw packageStoreError(code, 'required metadata exceeds its size limit')
-    }
-    const after = fs.fstatSync(descriptor)
-    const current = fs.lstatSync(filePath)
-    if (!sameFileMetadata(opened, after) || !sameFileMetadata(after, current)) {
-      throw packageStoreError(code, 'required metadata changed while it was being read')
-    }
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, totalBytes))
-    const parsed = JSON.parse(text)
-    if (`${JSON.stringify(parsed)}\n` !== text) {
-      throw packageStoreError(code, 'required metadata is not canonical JSON')
-    }
-    return parsed
-  } catch (error) {
-    if (error?.code === code) throw error
-    throw packageStoreError(code, `required metadata is missing: ${error?.message || error}`)
-  } finally {
-    if (descriptor !== undefined) fs.closeSync(descriptor)
-  }
 }
 
 function publicReceipt(receipt) {
@@ -365,11 +307,20 @@ function readStoreLock(lockPath) {
   }
   const ownerPath = lockOwnerPathFor(lockPath)
   if (!fs.existsSync(ownerPath)) return { owner: null, lockStat, ownerStat: null }
-  const owner = readBoundedJson(
-    ownerPath,
-    RECEIPT_LIMIT_BYTES,
-    'PLUGIN_PACKAGE_STORE_LOCK_CORRUPT',
-  )
+  let owner
+  try {
+    owner = readBoundedJson(
+      ownerPath,
+      RECEIPT_LIMIT_BYTES,
+      'PLUGIN_PACKAGE_STORE_LOCK_CORRUPT',
+      { missingCode: 'PLUGIN_PACKAGE_STORE_LOCK_CHANGED' },
+    )
+  } catch (error) {
+    if (error?.code === 'PLUGIN_PACKAGE_STORE_LOCK_CHANGED') {
+      return { owner: null, lockStat, ownerStat: null, changed: true }
+    }
+    throw error
+  }
   const keys = Object.keys(owner || {}).sort()
   const expectedKeys = ['createdAt', 'pid', 'schemaVersion', 'token'].sort()
   if (
@@ -389,12 +340,22 @@ function readStoreLock(lockPath) {
       409,
     )
   }
-  return { owner, lockStat, ownerStat: fs.lstatSync(ownerPath) }
+  let ownerStat
+  try {
+    ownerStat = fs.lstatSync(ownerPath)
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return { owner: null, lockStat, ownerStat: null, changed: true }
+    }
+    throw error
+  }
+  return { owner, lockStat, ownerStat, changed: false }
 }
 
 function clearStaleStoreLock(lockPath, transactionRoot) {
   const lock = readStoreLock(lockPath)
   if (!lock) return true
+  if (lock.changed) return false
   const context = STORE_LOCK_CONTEXT.getStore()
   if (
     lock.owner
@@ -413,6 +374,7 @@ function clearStaleStoreLock(lockPath, transactionRoot) {
   try {
     const current = readStoreLock(lockPath)
     if (!current) return true
+    if (current.changed) return false
     if (lock.owner?.token !== current.owner?.token) return false
     if (current.owner && processIsAlive(current.owner.pid)) return false
     if (current.owner) fs.unlinkSync(lockOwnerPathFor(lockPath))
