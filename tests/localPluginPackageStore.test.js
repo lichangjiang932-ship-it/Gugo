@@ -593,11 +593,12 @@ for (const { phase, releaseOnOwnerStat } of [
       pid: process.pid,
       createdAt: Date.now(),
     })}\n`)
+    const canonicalOwnerPath = fs.realpathSync.native?.(ownerPath) || fs.realpathSync(ownerPath)
 
     const originalLstatSync = fs.lstatSync
     let ownerStatCalls = 0
     const lstatSyncMock = t.mock.method(fs, 'lstatSync', function lstatSync(target, ...args) {
-      if (path.resolve(String(target)) === path.resolve(ownerPath)) {
+      if (path.resolve(String(target)) === canonicalOwnerPath) {
         ownerStatCalls += 1
         if (ownerStatCalls === releaseOnOwnerStat) {
           fs.unlinkSync(ownerPath)
