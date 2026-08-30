@@ -29,6 +29,14 @@ function detachAbort(pending) {
   }
 }
 
+function detachReadyWaiter(waiter) {
+  if (waiter?.timer) clearTimeout(waiter.timer)
+  waiter.timer = null
+  if (waiter?.signal && waiter.abortListener) {
+    waiter.signal.removeEventListener('abort', waiter.abortListener)
+  }
+}
+
 export function createWindowsTreeKillWorkerManager({
   spawnProcess = spawn,
   workerPath = windowsPowerShellPath(),
@@ -43,6 +51,14 @@ export function createWindowsTreeKillWorkerManager({
   let nextLeaseId = 0
   let spawnCount = 0
 
+  const refreshReference = (worker) => {
+    if (!worker) return
+    setReferenced(
+      worker.child,
+      !worker.failed && (worker.pending.size > 0 || worker.readyWaiters.size > 0),
+    )
+  }
+
   const failWorker = (worker, error, { terminate = true } = {}) => {
     if (!worker || worker.failed) return
     worker.failed = true
@@ -55,11 +71,14 @@ export function createWindowsTreeKillWorkerManager({
       detachAbort(pending)
       pending.reject(error)
     }
-    for (const waiter of worker.readyWaiters) waiter.reject(error)
+    for (const waiter of worker.readyWaiters) {
+      detachReadyWaiter(waiter)
+      waiter.reject(error)
+    }
     worker.readyWaiters.clear()
     worker.pending.clear()
     worker.queue.length = 0
-    setReferenced(worker.child, false)
+    refreshReference(worker)
     if (terminate) {
       try { worker.child.stdin?.destroy() } catch { /* already closed */ }
       try { worker.child.kill('SIGKILL') } catch { /* already exited */ }
@@ -124,9 +143,12 @@ export function createWindowsTreeKillWorkerManager({
       worker.ready = true
       if (worker.startupTimer) clearTimeout(worker.startupTimer)
       worker.startupTimer = null
-      for (const waiter of worker.readyWaiters) waiter.resolve(true)
+      for (const waiter of worker.readyWaiters) {
+        detachReadyWaiter(waiter)
+        waiter.resolve(true)
+      }
       worker.readyWaiters.clear()
-      if (worker.pending.size === 0) setReferenced(worker.child, false)
+      refreshReference(worker)
       flushQueue(worker)
       return
     }
@@ -151,7 +173,7 @@ export function createWindowsTreeKillWorkerManager({
     detachAbort(pending)
     worker.pending.delete(fields[0])
     pending.resolve(fields[1] === '1')
-    if (worker.pending.size === 0) setReferenced(worker.child, false)
+    refreshReference(worker)
   }
 
   const spawnWorker = () => {
@@ -181,7 +203,7 @@ export function createWindowsTreeKillWorkerManager({
     }
     activeWorker = worker
     spawnCount += 1
-    setReferenced(child, false)
+    refreshReference(worker)
     child.stdout?.setEncoding?.('utf8')
     child.stdout?.on('data', (chunk) => {
       if (worker.failed) return
@@ -250,13 +272,51 @@ export function createWindowsTreeKillWorkerManager({
     activeWorker && !activeWorker.failed ? activeWorker : spawnWorker()
   )
 
-  const ready = () => {
+  const ready = ({ signal = null, timeoutMs = null } = {}) => {
+    if (signal?.aborted) {
+      return Promise.reject(workerError(
+        'WINDOWS_TREE_KILL_WORKER_READY_ABORTED',
+        'Windows 进程树清理 worker 准备已取消',
+      ))
+    }
+    const requestedTimeout = timeoutMs == null ? null : Math.floor(Number(timeoutMs))
+    if (requestedTimeout != null && (!Number.isFinite(requestedTimeout) || requestedTimeout <= 0)) {
+      return Promise.reject(workerError(
+        'WINDOWS_TREE_KILL_WORKER_READY_TIMEOUT',
+        'Windows 进程树清理 worker 准备超时',
+      ))
+    }
     let worker
     try { worker = ensureWorker() } catch (error) { return Promise.reject(error) }
     if (worker.ready) return Promise.resolve(true)
     return new Promise((resolve, reject) => {
-      worker.readyWaiters.add({ resolve, reject })
-      setReferenced(worker.child, true)
+      const waiter = {
+        resolve,
+        reject,
+        signal,
+        abortListener: null,
+        timer: null,
+      }
+      const rejectWaiter = (error) => {
+        if (!worker.readyWaiters.delete(waiter)) return
+        detachReadyWaiter(waiter)
+        reject(error)
+        refreshReference(worker)
+      }
+      waiter.abortListener = () => rejectWaiter(workerError(
+        'WINDOWS_TREE_KILL_WORKER_READY_ABORTED',
+        'Windows 进程树清理 worker 准备已取消',
+      ))
+      if (requestedTimeout != null) {
+        waiter.timer = setTimeout(() => rejectWaiter(workerError(
+          'WINDOWS_TREE_KILL_WORKER_READY_TIMEOUT',
+          'Windows 进程树清理 worker 准备超时',
+        )), requestedTimeout)
+      }
+      signal?.addEventListener('abort', waiter.abortListener, { once: true })
+      worker.readyWaiters.add(waiter)
+      refreshReference(worker)
+      if (signal?.aborted) waiter.abortListener()
     })
   }
 
@@ -293,11 +353,11 @@ export function createWindowsTreeKillWorkerManager({
           'WINDOWS_TREE_KILL_TARGET_EXITED',
           'Windows 进程树清理目标在请求发送前已退出',
         ))
-        if (worker.pending.size === 0) setReferenced(worker.child, false)
+        refreshReference(worker)
       }
       signal?.addEventListener('abort', pending.abortListener, { once: true })
       worker.pending.set(requestId, pending)
-      if (worker.pending.size === 1) setReferenced(worker.child, true)
+      refreshReference(worker)
       worker.queue.push(requestId)
       if (signal?.aborted) pending.abortListener()
       flushQueue(worker)
@@ -369,8 +429,8 @@ function manager() {
   return sharedManager
 }
 
-export function prepareWindowsTreeKillWorker() {
-  return manager().ready()
+export function prepareWindowsTreeKillWorker(options) {
+  return manager().ready(options)
 }
 
 export function bindWindowsProcessTree({ pid, child = null, signal = null } = {}) {
@@ -420,6 +480,10 @@ export const windowsTreeKillTesting = {
   },
   prewarm: () => manager().prewarm(),
   request: (pid, options) => manager().request(pid, options),
+  setManager: (nextManager) => {
+    sharedManager?.shutdown()
+    sharedManager = nextManager || null
+  },
   reset: () => {
     sharedManager?.shutdown()
     sharedManager = null

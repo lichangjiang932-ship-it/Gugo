@@ -229,6 +229,66 @@ test('Windows tree-kill worker: READY waiter 保活至握手后恢复 idle unref
   assert.equal(handles.every((handle) => handle.referenced === false), true)
 })
 
+test('Windows tree-kill worker: READY waiter 可取消且不关闭共享 worker', async (t) => {
+  const { children, manager } = mockWindowsTreeKillManager()
+  t.after(() => manager.shutdown())
+  const controller = new AbortController()
+  const pending = manager.ready({ signal: controller.signal })
+  const child = children[0]
+  const handles = [child, child.stdin, child.stdout, child.stderr]
+
+  controller.abort()
+  await assert.rejects(
+    pending,
+    (error) => error?.code === 'WINDOWS_TREE_KILL_WORKER_READY_ABORTED',
+  )
+  assert.equal(manager.snapshot().active, true)
+  assert.equal(handles.every((handle) => handle.referenced === false), true)
+  assert.deepEqual(child.killCalls, [])
+
+  child.stdout.emit('data', 'READY\t2\n')
+  assert.equal(await manager.ready(), true)
+})
+
+test('Windows tree-kill worker: 排队 BIND 取消不会解除其他 READY waiter 的保活', async (t) => {
+  const { children, manager } = mockWindowsTreeKillManager()
+  t.after(() => manager.shutdown())
+  const readyPending = manager.ready()
+  const child = children[0]
+  const handles = [child, child.stdin, child.stdout, child.stderr]
+  const controller = new AbortController()
+  const bindPending = manager.bind(701, {
+    identityCutoffMs: Date.now(),
+    signal: controller.signal,
+  })
+
+  controller.abort()
+  await assert.rejects(
+    bindPending,
+    (error) => error?.code === 'WINDOWS_TREE_KILL_TARGET_EXITED',
+  )
+  assert.equal(handles.every((handle) => handle.referenced === true), true)
+  assert.equal(manager.snapshot().pending, 0)
+
+  child.stdout.emit('data', 'READY\t2\n')
+  assert.equal(await readyPending, true)
+  assert.equal(handles.every((handle) => handle.referenced === false), true)
+})
+
+test('Windows tree-kill worker: READY waiter 使用调用方短超时且不关闭共享 worker', async (t) => {
+  const { children, manager } = mockWindowsTreeKillManager()
+  t.after(() => manager.shutdown())
+  const startedAt = Date.now()
+
+  await assert.rejects(
+    manager.ready({ timeoutMs: 25 }),
+    (error) => error?.code === 'WINDOWS_TREE_KILL_WORKER_READY_TIMEOUT',
+  )
+  assert.ok(Date.now() - startedAt < 500, 'caller READY timeout must beat the worker startup timeout')
+  assert.equal(manager.snapshot().active, true)
+  assert.deepEqual(children[0].killCalls, [])
+})
+
 test('Windows tree-kill worker: 冷启动等待不消耗 BIND 响应超时', async (t) => {
   const children = []
   const manager = _testing.createWindowsTreeKillWorkerManager({
@@ -609,6 +669,65 @@ test('runProcessWithGroup: Windows 预取消不启动 worker 或用户命令', {
   assert.equal(result.aborted, true)
   assert.equal(spawned, false)
   assert.equal(_testing.getWindowsTreeKillWorkerSnapshot().spawnCount, 0)
+})
+
+test('runProcessWithGroup: Windows worker 冷启动等待响应运行中取消且不启动用户命令', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  const { children, manager } = mockWindowsTreeKillManager()
+  _testing.setWindowsTreeKillWorkerManager(manager)
+  t.after(() => _testing.resetWindowsTreeKillWorker())
+  const controller = new AbortController()
+  let spawned = false
+  const startedAt = Date.now()
+  const pending = runProcessWithGroup({
+    shellPath: node,
+    shellArgs: nodeArgs('process.exit(99)'),
+    cwd: process.cwd(),
+    env: process.env,
+    timeout: 2_000,
+    signal: controller.signal,
+    cleanupWindowsTreeOnExit: true,
+    onSpawn: () => { spawned = true },
+  })
+  setTimeout(() => controller.abort(), 20)
+
+  const result = await pending
+  assert.equal(result.aborted, true)
+  assert.equal(result.timedOut, false)
+  assert.equal(result.processTreeCleanupFailed, false)
+  assert.equal(spawned, false)
+  assert.equal(children.length, 1)
+  assert.equal(children[0].stdin.writes.length, 0)
+  assert.ok(Date.now() - startedAt < 500, 'abort must not wait for the worker startup timeout')
+})
+
+test('runProcessWithGroup: Windows worker 冷启动计入任务 deadline 且不启动超时命令', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  const { children, manager } = mockWindowsTreeKillManager()
+  _testing.setWindowsTreeKillWorkerManager(manager)
+  t.after(() => _testing.resetWindowsTreeKillWorker())
+  let spawned = false
+  const startedAt = Date.now()
+
+  const result = await runProcessWithGroup({
+    shellPath: node,
+    shellArgs: nodeArgs('process.exit(99)'),
+    cwd: process.cwd(),
+    env: process.env,
+    timeout: 25,
+    cleanupWindowsTreeOnExit: true,
+    onSpawn: () => { spawned = true },
+  })
+
+  assert.equal(result.timedOut, true)
+  assert.equal(result.aborted, false)
+  assert.equal(result.processTreeCleanupFailed, false)
+  assert.equal(spawned, false)
+  assert.equal(children.length, 1)
+  assert.equal(children[0].stdin.writes.length, 0)
+  assert.ok(Date.now() - startedAt < 500, 'task deadline must beat the worker startup timeout')
 })
 
 test('runProcessWithGroup: Windows worker 准备失败时 fail-closed 且不启动用户命令', {

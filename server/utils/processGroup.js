@@ -22,6 +22,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { performance } from 'node:perf_hooks'
 import { sanitizeChildEnv } from './sensitiveEnv.js'
 import { windowsTreeKillWorkerScript } from './windowsTreeKillWorkerSource.js'
 import {
@@ -35,6 +36,7 @@ import {
 
 const GRACE_MS = 2_000
 const WINDOWS_TREE_HANDLE_DRAIN_MS = 250
+const DEFAULT_PROCESS_TIMEOUT_MS = 60_000
 
 function utf8Tail(value, maxBytes) {
   const source = Buffer.from(String(value || ''), 'utf8')
@@ -75,28 +77,54 @@ export async function terminateProcessTree({
 export function runProcessWithGroup(options) {
   if (process.platform === 'win32' && options?.cleanupWindowsTreeOnExit === true) {
     if (options?.signal?.aborted) return runProcessWithGroupStarted(options)
-    return prepareWindowsTreeKillWorker().then(
-      () => runProcessWithGroupStarted(options),
-      (error) => ({
+    const requestedTimeout = options?.timeout == null
+      ? DEFAULT_PROCESS_TIMEOUT_MS
+      : Math.max(0, Math.floor(Number(options.timeout) || 0))
+    const startedAt = performance.now()
+    const beforeExecutionResult = ({ error = null, aborted = false, timedOut = false } = {}) => ({
         stdout: '',
-        stderr: error?.message || String(error),
+        stderr: error ? (error?.message || String(error)) : '',
         code: null,
         signal: null,
-        timedOut: false,
+        timedOut,
         killed: false,
-        processTreeCleanupFailed: true,
+        processTreeCleanupFailed: Boolean(error && !aborted && !timedOut),
         truncated: false,
-        aborted: Boolean(options?.signal?.aborted),
+        aborted,
         totalOutputBytes: 0,
         ...(options?.controlPipe === true
           ? {
               control: Buffer.alloc(0),
-              controlError: 'Windows process-tree worker was unavailable before execution',
+              controlError: error
+                ? 'Windows process-tree worker was unavailable before execution'
+                : null,
               controlTruncated: false,
               controlTotalBytes: 0,
             }
           : {}),
-      }),
+      })
+    if (requestedTimeout <= 0) {
+      return Promise.resolve(beforeExecutionResult({ timedOut: true }))
+    }
+    return prepareWindowsTreeKillWorker({
+      signal: options?.signal || null,
+      timeoutMs: requestedTimeout,
+    }).then(
+      () => {
+        if (options?.signal?.aborted) return runProcessWithGroupStarted(options)
+        const elapsed = performance.now() - startedAt
+        const remainingTimeout = Math.max(0, Math.floor(requestedTimeout - elapsed))
+        if (remainingTimeout <= 0) return beforeExecutionResult({ timedOut: true })
+        return runProcessWithGroupStarted({ ...options, timeout: remainingTimeout })
+      },
+      (error) => {
+        const aborted = Boolean(
+          options?.signal?.aborted
+          || error?.code === 'WINDOWS_TREE_KILL_WORKER_READY_ABORTED'
+        )
+        const timedOut = !aborted && error?.code === 'WINDOWS_TREE_KILL_WORKER_READY_TIMEOUT'
+        return beforeExecutionResult({ error: aborted || timedOut ? null : error, aborted, timedOut })
+      },
     )
   }
   return runProcessWithGroupStarted(options)
@@ -478,4 +506,5 @@ export const _testing = {
   resetWindowsTreeKillWorker: windowsTreeKillTesting.reset,
   prewarmWindowsTreeKillWorker: windowsTreeKillTesting.prewarm,
   requestWindowsTreeKill: windowsTreeKillTesting.request,
+  setWindowsTreeKillWorkerManager: windowsTreeKillTesting.setManager,
 }
