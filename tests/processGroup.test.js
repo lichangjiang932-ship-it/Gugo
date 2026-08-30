@@ -5,6 +5,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { performance } from 'node:perf_hooks'
 import { _testing, runProcessWithGroup } from '../server/utils/processGroup.js'
 import {
   windowsTreeKillWorkerArgs,
@@ -679,7 +680,7 @@ test('runProcessWithGroup: Windows worker 冷启动等待响应运行中取消�
   t.after(() => _testing.resetWindowsTreeKillWorker())
   const controller = new AbortController()
   let spawned = false
-  const startedAt = Date.now()
+  const startedAt = performance.now()
   const pending = runProcessWithGroup({
     shellPath: node,
     shellArgs: nodeArgs('process.exit(99)'),
@@ -699,7 +700,7 @@ test('runProcessWithGroup: Windows worker 冷启动等待响应运行中取消�
   assert.equal(spawned, false)
   assert.equal(children.length, 1)
   assert.equal(children[0].stdin.writes.length, 0)
-  assert.ok(Date.now() - startedAt < 500, 'abort must not wait for the worker startup timeout')
+  assert.ok(performance.now() - startedAt < 500, 'abort must not wait for the worker startup timeout')
 })
 
 test('runProcessWithGroup: Windows worker 冷启动计入任务 deadline 且不启动超时命令', {
@@ -709,7 +710,7 @@ test('runProcessWithGroup: Windows worker 冷启动计入任务 deadline 且不�
   _testing.setWindowsTreeKillWorkerManager(manager)
   t.after(() => _testing.resetWindowsTreeKillWorker())
   let spawned = false
-  const startedAt = Date.now()
+  const startedAt = performance.now()
 
   const result = await runProcessWithGroup({
     shellPath: node,
@@ -727,7 +728,44 @@ test('runProcessWithGroup: Windows worker 冷启动计入任务 deadline 且不�
   assert.equal(spawned, false)
   assert.equal(children.length, 1)
   assert.equal(children[0].stdin.writes.length, 0)
-  assert.ok(Date.now() - startedAt < 500, 'task deadline must beat the worker startup timeout')
+  assert.ok(performance.now() - startedAt < 500, 'task deadline must beat the worker startup timeout')
+})
+
+test('runProcessWithGroup: Windows worker 准备预算不受系统墙钟跳变影响', {
+  skip: process.platform !== 'win32',
+}, async (t) => {
+  let resolveReady
+  const readyPromise = new Promise((resolve) => { resolveReady = resolve })
+  const manager = {
+    ready: () => readyPromise,
+    bind: () => Promise.resolve(null),
+    release: () => Promise.resolve(false),
+    shutdown: () => {},
+  }
+  _testing.setWindowsTreeKillWorkerManager(manager)
+  const originalDateNow = Date.now
+  t.after(() => {
+    Date.now = originalDateNow
+    _testing.resetWindowsTreeKillWorker()
+  })
+  let spawned = false
+  const pending = runProcessWithGroup({
+    shellPath: node,
+    shellArgs: nodeArgs('process.exit(0)'),
+    cwd: process.cwd(),
+    env: process.env,
+    timeout: 1_000,
+    cleanupWindowsTreeOnExit: true,
+    onSpawn: () => { spawned = true },
+  })
+
+  Date.now = () => originalDateNow() + 24 * 60 * 60 * 1_000
+  resolveReady(true)
+  const result = await pending
+
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.timedOut, false)
+  assert.equal(spawned, true)
 })
 
 test('runProcessWithGroup: Windows worker 准备失败时 fail-closed 且不启动用户命令', {
