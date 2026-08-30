@@ -5,9 +5,9 @@ import {
   createOfflineEvalFailureReport,
   discoverOfflineEvalSuites,
   executeOfflineEvalCase,
+  OFFLINE_EVAL_WORKER_READY_KIND,
+  OFFLINE_EVAL_WORKER_RESULT_KIND,
 } from './offlineEvalHarness.js'
-
-const WORKER_RESULT_KIND = 'gugo.offline-eval-case-result'
 
 async function networkAttempts() {
   if (process.env.YMA_OFFLINE_EVAL_NETWORK_GUARD !== '1') return []
@@ -44,13 +44,18 @@ async function main() {
       error.code = 'OFFLINE_EVAL_CASE_NOT_FOUND'
       throw error
     }
+    parentPort.postMessage({
+      kind: OFFLINE_EVAL_WORKER_READY_KIND,
+      suiteId: suite.id,
+      caseId: evalCase.id,
+    })
     outcome = await executeOfflineEvalCase(suite, evalCase)
   } catch (error) {
     outcome = workerFailure(error)
   }
 
   parentPort.postMessage({
-    kind: WORKER_RESULT_KIND,
+    kind: OFFLINE_EVAL_WORKER_RESULT_KIND,
     outcome,
     networkAttempts: await networkAttempts(),
   })

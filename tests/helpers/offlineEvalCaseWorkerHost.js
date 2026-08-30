@@ -2,16 +2,19 @@ import { Worker } from 'node:worker_threads'
 
 import {
   DEFAULT_OFFLINE_EVAL_CASE_TIMEOUT_MS,
+  OFFLINE_EVAL_TEST_TIMEOUT_GRACE_MS,
+  OFFLINE_EVAL_WORKER_READY_KIND,
+  OFFLINE_EVAL_WORKER_RESULT_KIND,
   offlineEvalSuiteSourcePath,
 } from './offlineEvalHarness.js'
 
 const WORKER_ENTRY = new URL('./offlineEvalCaseWorker.mjs', import.meta.url)
-const WORKER_RESULT_KIND = 'gugo.offline-eval-case-result'
+const WINDOWS_WORKER_STARTUP_TIMEOUT_MS = 30_000
+const DEFAULT_WORKER_STARTUP_TIMEOUT_MS = 10_000
 const MIN_WORKER_HARD_TIMEOUT_GRACE_MS = 1_500
 const MAX_WORKER_HARD_TIMEOUT_GRACE_MS = 4_000
 const WORKER_NATURAL_EXIT_GRACE_MS = 1_000
 const WORKER_TERMINATE_GRACE_MS = 1_000
-const OUTER_TEST_SCHEDULING_GRACE_MS = 2_000
 
 function failedOutcome(suite, evalCase, diagnostic, durationMs) {
   return {
@@ -39,16 +42,29 @@ export function offlineEvalCaseWorkerDeadlineMs(evalCase) {
   return timeoutMs + startupGraceMs
 }
 
-export function offlineEvalCaseTestDeadlineMs(evalCase) {
-  return offlineEvalCaseWorkerDeadlineMs(evalCase)
+export function offlineEvalCaseWorkerStartupDeadlineMs({ platform = process.platform } = {}) {
+  return platform === 'win32'
+    ? WINDOWS_WORKER_STARTUP_TIMEOUT_MS
+    : DEFAULT_WORKER_STARTUP_TIMEOUT_MS
+}
+
+export function offlineEvalCaseTestDeadlineMs(evalCase, options = {}) {
+  return offlineEvalCaseWorkerStartupDeadlineMs(options)
+    + offlineEvalCaseWorkerDeadlineMs(evalCase)
     + WORKER_NATURAL_EXIT_GRACE_MS
     + WORKER_TERMINATE_GRACE_MS
-    + OUTER_TEST_SCHEDULING_GRACE_MS
+    + OFFLINE_EVAL_TEST_TIMEOUT_GRACE_MS
+}
+
+function validWorkerReady(message, suite, evalCase) {
+  return message?.kind === OFFLINE_EVAL_WORKER_READY_KIND
+    && message.suiteId === suite.id
+    && message.caseId === evalCase.id
 }
 
 function validWorkerResult(message, suite, evalCase) {
   const outcome = message?.outcome
-  return message?.kind === WORKER_RESULT_KIND
+  return message?.kind === OFFLINE_EVAL_WORKER_RESULT_KIND
     && outcome
     && outcome.suiteId === suite.id
     && outcome.id === evalCase.id
@@ -88,9 +104,10 @@ export async function runOfflineEvalCaseInWorker({
   evalCase,
   suiteDirectory = null,
   createWorker = (url, options) => new Worker(url, options),
+  startupTimeoutMs = offlineEvalCaseWorkerStartupDeadlineMs(),
+  hardTimeoutMs = offlineEvalCaseWorkerDeadlineMs(evalCase),
 } = {}) {
   const startedAt = Date.now()
-  const hardTimeoutMs = offlineEvalCaseWorkerDeadlineMs(evalCase)
   const worker = createWorker(WORKER_ENTRY, {
     workerData: {
       suiteId: suite.id,
@@ -103,6 +120,19 @@ export async function runOfflineEvalCaseInWorker({
   return new Promise((resolve) => {
     let settled = false
     let timer = null
+    let phase = 'starting'
+
+    const armTimer = (timeoutMs, diagnostic) => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        void finish(failedOutcome(
+          suite,
+          evalCase,
+          diagnostic,
+          Date.now() - startedAt,
+        ))
+      }, timeoutMs)
+    }
 
     const finish = async (outcome, networkAttempts = [], allowNaturalExit = false) => {
       if (settled) return
@@ -117,12 +147,38 @@ export async function runOfflineEvalCaseInWorker({
       resolve({ outcome, networkAttempts })
     }
 
-    worker.once('message', (message) => {
+    worker.on('message', (message) => {
+      if (validWorkerReady(message, suite, evalCase)) {
+        if (phase !== 'starting') {
+          void finish(failedOutcome(
+            suite,
+            evalCase,
+            '[OFFLINE_EVAL_WORKER_PROTOCOL_INVALID] isolated eval worker returned duplicate readiness',
+            Date.now() - startedAt,
+          ))
+          return
+        }
+        phase = 'running'
+        armTimer(
+          hardTimeoutMs,
+          `[OFFLINE_EVAL_CASE_HARD_TIMEOUT] isolated eval worker exceeded ${hardTimeoutMs}ms after readiness`,
+        )
+        return
+      }
       if (!validWorkerResult(message, suite, evalCase)) {
         void finish(failedOutcome(
           suite,
           evalCase,
           '[OFFLINE_EVAL_WORKER_PROTOCOL_INVALID] isolated eval worker returned an invalid result',
+          Date.now() - startedAt,
+        ))
+        return
+      }
+      if (phase !== 'running' && message.outcome.status !== 'failed') {
+        void finish(failedOutcome(
+          suite,
+          evalCase,
+          '[OFFLINE_EVAL_WORKER_PROTOCOL_INVALID] isolated eval worker returned a successful result before readiness',
           Date.now() - startedAt,
         ))
         return
@@ -151,13 +207,9 @@ export async function runOfflineEvalCaseInWorker({
       ))
     })
 
-    timer = setTimeout(() => {
-      void finish(failedOutcome(
-        suite,
-        evalCase,
-        `[OFFLINE_EVAL_CASE_HARD_TIMEOUT] isolated eval worker exceeded ${hardTimeoutMs}ms`,
-        Date.now() - startedAt,
-      ))
-    }, hardTimeoutMs)
+    armTimer(
+      startupTimeoutMs,
+      `[OFFLINE_EVAL_WORKER_STARTUP_TIMEOUT] isolated eval worker did not become ready within ${startupTimeoutMs}ms`,
+    )
   })
 }

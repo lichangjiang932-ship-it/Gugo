@@ -10,6 +10,7 @@ import { discoverOfflineEvalSuites } from './helpers/offlineEvalHarness.js'
 import {
   offlineEvalCaseTestDeadlineMs,
   offlineEvalCaseWorkerDeadlineMs,
+  offlineEvalCaseWorkerStartupDeadlineMs,
   runOfflineEvalCaseInWorker,
 } from './helpers/offlineEvalCaseWorkerHost.js'
 
@@ -17,9 +18,14 @@ test('offline eval worker deadlines preserve short fixtures and bound cold-start
   assert.equal(offlineEvalCaseWorkerDeadlineMs({ timeoutMs: 20 }), 1_520)
   assert.equal(offlineEvalCaseWorkerDeadlineMs({}), 9_000)
   assert.equal(offlineEvalCaseWorkerDeadlineMs({ timeoutMs: 20_000 }), 24_000)
-  assert.equal(offlineEvalCaseTestDeadlineMs({ timeoutMs: 20 }), 5_520)
-  assert.equal(offlineEvalCaseTestDeadlineMs({}), 13_000)
-  assert.equal(offlineEvalCaseTestDeadlineMs({ timeoutMs: 20_000 }), 28_000)
+  assert.equal(offlineEvalCaseWorkerStartupDeadlineMs({ platform: 'win32' }), 30_000)
+  assert.equal(offlineEvalCaseWorkerStartupDeadlineMs({ platform: 'linux' }), 10_000)
+  assert.equal(offlineEvalCaseTestDeadlineMs({ timeoutMs: 20 }, { platform: 'win32' }), 35_520)
+  assert.equal(offlineEvalCaseTestDeadlineMs({}, { platform: 'linux' }), 23_000)
+  assert.equal(
+    offlineEvalCaseTestDeadlineMs({ timeoutMs: 20_000 }, { platform: 'win32' }),
+    58_000,
+  )
 })
 
 test('offline eval worker exits naturally after reporting a valid result', async () => {
@@ -40,6 +46,11 @@ test('offline eval worker exits naturally after reporting a valid result', async
         terminateCalls += 1
       }
       queueMicrotask(() => {
+        worker.emit('message', {
+          kind: 'gugo.offline-eval-case-ready',
+          suiteId: suite.id,
+          caseId: evalCase.id,
+        })
         worker.emit('message', {
           kind: 'gugo.offline-eval-case-result',
           outcome: {
@@ -62,6 +73,93 @@ test('offline eval worker exits naturally after reporting a valid result', async
 
   assert.equal(result.outcome.status, 'passed')
   assert.equal(terminateCalls, 0)
+})
+
+test('offline eval worker startup does not consume the case execution deadline', async () => {
+  const evalCase = {
+    id: 'PASS',
+    category: 'isolation',
+    title: 'Delayed worker startup',
+    timeoutMs: 20,
+  }
+  const suite = { id: 'delayed-startup', cases: [evalCase] }
+
+  const result = await runOfflineEvalCaseInWorker({
+    suite,
+    evalCase,
+    startupTimeoutMs: 100,
+    hardTimeoutMs: 20,
+    createWorker: () => {
+      const worker = new EventEmitter()
+      worker.terminate = async () => undefined
+      setTimeout(() => {
+        worker.emit('message', {
+          kind: 'gugo.offline-eval-case-ready',
+          suiteId: suite.id,
+          caseId: evalCase.id,
+        })
+        setTimeout(() => {
+          worker.emit('message', {
+            kind: 'gugo.offline-eval-case-result',
+            outcome: {
+              suiteId: suite.id,
+              id: evalCase.id,
+              category: evalCase.category,
+              title: evalCase.title,
+              status: 'passed',
+              durationMs: 1,
+              metrics: {},
+              diagnostics: [],
+            },
+            networkAttempts: [],
+          })
+          setImmediate(() => worker.emit('exit', 0))
+        }, 5)
+      }, 30)
+      return worker
+    },
+  })
+
+  assert.equal(result.outcome.status, 'passed')
+})
+
+test('offline eval worker rejects successful results before readiness', async () => {
+  const evalCase = {
+    id: 'PASS',
+    category: 'isolation',
+    title: 'Premature worker result',
+  }
+  const suite = { id: 'premature-result', cases: [evalCase] }
+
+  const result = await runOfflineEvalCaseInWorker({
+    suite,
+    evalCase,
+    startupTimeoutMs: 100,
+    createWorker: () => {
+      const worker = new EventEmitter()
+      worker.terminate = async () => undefined
+      queueMicrotask(() => {
+        worker.emit('message', {
+          kind: 'gugo.offline-eval-case-result',
+          outcome: {
+            suiteId: suite.id,
+            id: evalCase.id,
+            category: evalCase.category,
+            title: evalCase.title,
+            status: 'passed',
+            durationMs: 1,
+            metrics: {},
+            diagnostics: [],
+          },
+          networkAttempts: [],
+        })
+      })
+      return worker
+    },
+  })
+
+  assert.equal(result.outcome.status, 'failed')
+  assert.match(result.outcome.diagnostics.join('\n'), /PROTOCOL_INVALID/u)
 })
 
 test('offline eval worker imports only the mapped target suite', async () => {

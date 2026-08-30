@@ -27,6 +27,8 @@ const SENSITIVE_DIAGNOSTIC_KEY_SUFFIXES = Object.freeze([
 ])
 export const DEFAULT_OFFLINE_EVAL_CASE_TIMEOUT_MS = 5_000
 export const OFFLINE_EVAL_TEST_TIMEOUT_GRACE_MS = 2_000
+export const OFFLINE_EVAL_WORKER_READY_KIND = 'gugo.offline-eval-case-ready'
+export const OFFLINE_EVAL_WORKER_RESULT_KIND = 'gugo.offline-eval-case-result'
 const OFFLINE_EVAL_CLEANUP_TIMEOUT_MS = 1_000
 
 class OfflineEvalDefinitionError extends Error {
