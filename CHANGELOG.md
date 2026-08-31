@@ -6,6 +6,10 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced GitHub CLI release publication with direct REST and Release Upload API calls that verify remote asset names and sizes before publishing an immutable draft.
+
 ## [0.11.49] - 2026-08-30
 
 ### Added

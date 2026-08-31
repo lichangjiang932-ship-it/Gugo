@@ -82,6 +82,8 @@ test('Web release staging refuses a build without dist/index.html', (t) => {
 test('Release workflow is gated by reusable CI and never overwrites a published release', () => {
   const ci = read('.github/workflows/ci.yml')
   const release = read('.github/workflows/release.yml')
+  const publisher = read('scripts/release/publish-github-release.mjs')
+  const releaseDocs = read('docs/DESKTOP_RELEASES.md')
   const packageMetadata = JSON.parse(read('package.json'))
   const offlineGate = ci.match(
     /- name: Offline agent capability gate[\s\S]*?(?=\n\s+- name:)/,
@@ -101,14 +103,22 @@ test('Release workflow is gated by reusable CI and never overwrites a published 
   assert.match(release, /npm run desktop:check/)
   assert.match(release, /scripts\/release\/package-web\.mjs/)
   assert.match(release, /scripts\/release\/verify-web-release\.ps1/)
-  assert.match(release, /gh release view[^\n]*--json isDraft/)
-  assert.match(release, /Published GitHub Release[^\n]*already exists and is immutable/)
-  assert.match(release, /gh release upload[^\n]*--clobber/)
-  assert.match(release, /gh release create[^\n]*--draft/)
-  assert.match(release, /gh release edit[^\n]*--draft=false/)
+  assert.match(release, /GITHUB_TOKEN:\s*\$\{\{ github\.token \}\}/)
+  assert.match(release, /node scripts\/release\/publish-github-release\.mjs/)
+  assert.match(release, /--commit \$releaseCommit/)
+  assert.doesNotMatch(release, /\bgh(?:\.exe)?\s+release\b/)
+  assert.doesNotMatch(releaseDocs, /\bgh(?:\.exe)?\s+release\b/)
+  assert.match(publisher, /generate_release_notes:\s*true/)
+  assert.match(publisher, /git\/ref\/tags\/\$\{encodeURIComponent\(tag\)\}/)
+  assert.match(publisher, /target_commitish:\s*commit/)
+  assert.match(publisher, /Published GitHub Release[^\n]*already exists and is immutable/)
+  assert.match(publisher, /releases\/assets\/\$\{asset\.id\}/)
+  assert.match(publisher, /uploadsBaseUrl[^\n]*\/assets\?name=/)
+  assert.match(publisher, /Draft GitHub Release contains unexpected assets/)
   assert.ok(
-    release.indexOf('if (-not $existingRelease.isDraft)') < release.indexOf('gh release upload'),
-    'only an unpublished draft may replace partially uploaded assets',
+    publisher.indexOf('verifyRemoteAssets(uploadedAssets, assets)')
+      < publisher.indexOf('await publishDraft('),
+    'remote asset verification must complete before the draft is published',
   )
   const verification = read('scripts/release/verify-web-release.ps1')
   assert.match(verification, /THIRD_PARTY_NOTICES\.md/)
