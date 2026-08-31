@@ -359,8 +359,17 @@ export default function useTaskRunController({ linkedJobId, t, toast }) {
     finally { setPlanApproving(false) }
   }
 
-  const latestSuspension = selectedJob?.status === 'waiting' ? [...(selectedJob.events || [])].reverse().find((event) => event.type === 'plan_proposed' || event.type === 'awaiting_user') : null
-  const pendingClarification = latestSuspension?.type === 'awaiting_user' ? latestSuspension.payload?.clarification : null
+  const latestSuspension = selectedJob?.status === 'waiting' ? [...(selectedJob.events || [])].reverse().find((event) => ['plan_proposed', 'awaiting_user', 'sleeping'].includes(event.type)) : null
+  const pendingClarification = latestSuspension?.type === 'awaiting_user'
+    ? latestSuspension.payload?.clarification
+    : latestSuspension?.type === 'sleeping'
+      ? {
+          question: latestSuspension.message,
+          why: latestSuspension.payload?.reason || null,
+          wakeAt: latestSuspension.payload?.wakeAt || null,
+          waitingKind: 'sleeping',
+        }
+      : null
   const pendingPlan = latestSuspension?.type === 'plan_proposed' ? latestSuspension.payload?.plan : null
   const pendingDirectoryRequest = pendingClarification?.request_type === 'directory' ? pendingClarification : null
   const jobFailureRecovery = taskRunJobFailureRecovery(selectedJob)

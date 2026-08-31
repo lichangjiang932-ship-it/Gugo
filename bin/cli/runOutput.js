@@ -165,7 +165,8 @@ function terminalDiagnostic(event) {
   const label = TEXT_TERMINAL_DIAGNOSTICS[event?.type]
   if (!label) return null
   const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {}
-  const code = String(payload.code || payload.error?.code || '').trim()
+  const nested = payload.error && typeof payload.error === 'object' ? payload.error : {}
+  const code = String(payload.code || nested.code || '').trim()
   const clarification = payload.clarification
   const clarificationMessage = typeof clarification === 'string'
     ? clarification
@@ -177,7 +178,57 @@ function terminalDiagnostic(event) {
       || clarificationMessage
       || '',
   ).trim()
-  return line(`${label}${code ? ` [${code}]` : ''}${message ? `: ${message}` : ''}`)
+  const incompleteReason = String(
+    payload.incompleteReason || nested.incompleteReason || '',
+  ).trim()
+  const nestedMissingRequirements = Array.isArray(nested.missingRequirements)
+    ? nested.missingRequirements
+    : []
+  const payloadMissingRequirements = Array.isArray(payload.missingRequirements)
+    ? payload.missingRequirements
+    : []
+  const missingRequirements = [...new Set((nestedMissingRequirements.length > 0
+    ? nestedMissingRequirements
+    : payloadMissingRequirements)
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))]
+  const artifactIds = [...new Set((Array.isArray(payload.artifactIds)
+    && payload.artifactIds.length > 0
+    ? payload.artifactIds
+    : Array.isArray(nested.artifactIds) ? nested.artifactIds : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))]
+  const verifiedFiles = (Array.isArray(payload.verifiedLocalFiles)
+    && payload.verifiedLocalFiles.length > 0
+    ? payload.verifiedLocalFiles
+    : Array.isArray(nested.verifiedLocalFiles) ? nested.verifiedLocalFiles : [])
+    .map((file) => String(file?.filename || file?.path || '').trim())
+    .filter(Boolean)
+  const retainedFiles = (Array.isArray(payload.retainedLocalFiles)
+    && payload.retainedLocalFiles.length > 0
+    ? payload.retainedLocalFiles
+    : Array.isArray(nested.retainedLocalFiles) ? nested.retainedLocalFiles : [])
+    .map((file) => String(file?.filename || file?.path || '').trim())
+    .filter(Boolean)
+  const retryable = typeof nested.retryable === 'boolean'
+    ? nested.retryable
+    : payload.retryable === true
+  const manualRetryable = typeof nested.manualRetryable === 'boolean'
+    ? nested.manualRetryable
+    : payload.manualRetryable === true
+  const details = [`${label}${code ? ` [${code}]` : ''}`]
+  const reason = incompleteReason || message
+  if (reason) details.push(`Reason: ${reason}`)
+  if (missingRequirements.length > 0) {
+    details.push(`Missing: ${missingRequirements.join(', ')}`)
+  }
+  if (artifactIds.length > 0) details.push(`Saved artifacts: ${artifactIds.join(', ')}`)
+  if (verifiedFiles.length > 0) details.push(`Verified files: ${verifiedFiles.join(', ')}`)
+  if (retainedFiles.length > 0) details.push(`Saved files awaiting verification: ${retainedFiles.join(', ')}`)
+  if (retryable) details.push('Next: retry this turn from its durable checkpoint.')
+  else if (manualRetryable) details.push('Next: verify the recorded outcome, then retry explicitly.')
+  else if (missingRequirements.length > 0) details.push('Next: satisfy the missing requirements and run again.')
+  return line(details.join('\n'))
 }
 
 export function formatRunEvent(event, { format = 'jsonl' } = {}) {
@@ -188,7 +239,18 @@ export function formatRunEvent(event, { format = 'jsonl' } = {}) {
   if (event?.type === 'turn.completed') {
     return Object.freeze({ stdout: line(event?.payload?.text), stderr: null })
   }
-  return Object.freeze({ stdout: null, stderr: terminalDiagnostic(event) })
+  const diagnostic = terminalDiagnostic(event)
+  if (!diagnostic) return Object.freeze({ stdout: null, stderr: null })
+  const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {}
+  const nested = payload.error && typeof payload.error === 'object' ? payload.error : {}
+  const partialText = Object.hasOwn(payload, 'partialText')
+    ? payload.partialText
+    : Object.hasOwn(nested, 'partialText')
+      ? nested.partialText
+      : Object.hasOwn(payload, 'text')
+        ? payload.text
+        : Object.hasOwn(nested, 'text') ? nested.text : null
+  return Object.freeze({ stdout: line(partialText), stderr: diagnostic })
 }
 
 export function formatRunError(error, { format = 'jsonl' } = {}) {
@@ -260,7 +322,7 @@ export function createRunOutputFormatter({
         return output
       }
       if (resolvedFormat === 'text' && TEXT_TERMINAL_DIAGNOSTICS[event?.type]) {
-        pendingCompletedText = null
+        pendingCompletedText = output.stdout
         pendingTerminalDiagnostic = output.stderr
         return output
       }
@@ -285,7 +347,7 @@ export function createRunOutputFormatter({
     }
     finalized = true
     const completed = result?.status === 'completed' && result?.exitCode === 0
-    const committedText = completed ? pendingCompletedText : null
+    const committedText = pendingCompletedText
     const committedDiagnostic = completed ? null : pendingTerminalDiagnostic
     pendingCompletedText = null
     pendingTerminalDiagnostic = null

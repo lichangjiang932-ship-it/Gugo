@@ -295,23 +295,36 @@ function turnEvidenceMeta(message) {
 
   return {
     ...(state === 'failed'
-      ? { failed: true }
+      ? {
+          cancelled: false,
+          failed: true,
+          interrupted: false,
+          paused: false,
+        }
       : state === 'cancelled'
         ? {
             cancelled: true,
+            failed: false,
+            interrupted: false,
+            paused: false,
             streaming: false,
             serverConnectionState: 'cancelled',
           }
         : state === 'interrupted'
           ? {
+              cancelled: false,
+              failed: false,
               interrupted: true,
+              paused: false,
               streaming: true,
               turnCompletedAt: null,
               latency: null,
               serverConnectionState: 'interrupted',
             }
-          : {
+            : {
+              cancelled: false,
               failed: false,
+              interrupted: false,
               paused: false,
               streaming: false,
               turnCompletedAt: null,
@@ -351,6 +364,9 @@ function pausedTurnMeta(message) {
   const pausedSequence = Number(context.pausedSequence ?? context.paused_sequence)
 
   return {
+    cancelled: false,
+    failed: false,
+    interrupted: false,
     paused: true,
     serverConnectionState: 'paused',
     serverClarification: clarification,

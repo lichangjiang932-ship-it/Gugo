@@ -1,11 +1,12 @@
 import {
   appendJobEvent,
+  getJobWithChildren,
   listJobSteps,
   updateJob,
   updateJobStep,
 } from './jobStore.js'
 import { cancelJobWake } from './jobWakeStore.js'
-import { deriveJobProgress, resolveWorkflowState } from './jobWorkflow.js'
+import { buildJobOutcomeDiagnostics, deriveJobProgress, resolveWorkflowState } from './jobWorkflow.js'
 import { notifyJobStopHook, notifyJobTerminal } from './jobRuntimeLifecycle.js'
 import { applyRuntimeTaskReviewGuard } from './taskReviewGuard.js'
 
@@ -279,6 +280,14 @@ export function persistRejectedStepResult({
       progress: deriveJobProgress(listJobSteps(job.id)),
       finishedAt: Date.now(),
     })
+    const snapshot = getJobWithChildren(job.id, { userId: job.userId })
+    const diagnostics = buildJobOutcomeDiagnostics(snapshot, {
+      reason: failure,
+      nextAction: 'retry_step',
+    })
+    updateJobStep(nextStep.id, {
+      output: { ...(output || {}), ...diagnostics },
+    })
     cancelJobWake({ jobId: job.id, userId: job.userId })
     emitTaskReviewEvent({ emit, jobId: job.id, stepId: nextStep.id, acceptance: result.acceptance, repairAttempt })
     emit(appendJobEvent({
@@ -286,7 +295,7 @@ export function persistRejectedStepResult({
       stepId: nextStep.id,
       type: 'failed',
       message: failure,
-      payload: failurePayload,
+      payload: { ...failurePayload, ...diagnostics },
     }))
   })
   if (!committed) return false
@@ -296,7 +305,7 @@ export function persistRejectedStepResult({
   return true
 }
 
-export function completeManualJobTransition({ jobId, updated }) {
+export function completeManualJobTransition({ jobId, userId, updated }) {
   if (!updated?.steps?.every((step) => step.status === 'completed')) {
     updateJob(jobId, { progress: deriveJobProgress(updated.steps) })
     return { terminal: false, event: null }
@@ -311,10 +320,28 @@ export function completeManualJobTransition({ jobId, updated }) {
         error: resolution.reason,
         finishedAt: Date.now(),
       })
+  let diagnostics = null
+  if (!completed) {
+    const snapshot = getJobWithChildren(jobId, { userId })
+    diagnostics = buildJobOutcomeDiagnostics(snapshot, {
+      reason: resolution.reason,
+      nextAction: 'retry_job',
+    })
+    const targetStep = [...(snapshot?.steps || [])].reverse().find((step) => (
+      step.kind === 'finalize' || step.output?.acceptance?.verdict !== 'pass'
+    ))
+    if (targetStep) {
+      const priorOutput = targetStep.output && typeof targetStep.output === 'object' && !Array.isArray(targetStep.output)
+        ? targetStep.output
+        : {}
+      updateJobStep(targetStep.id, { output: { ...priorOutput, ...diagnostics } })
+    }
+  }
   const event = appendJobEvent({
     jobId,
     type: completed ? 'completed' : 'failed',
     message: completed ? '任务已完成' : resolution.reason,
+    ...(diagnostics ? { payload: diagnostics } : {}),
   })
   return {
     terminal: true,

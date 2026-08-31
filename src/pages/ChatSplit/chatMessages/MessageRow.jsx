@@ -125,22 +125,14 @@ export default function MessageRow({
     && msg.meta?.serverRecoveryBlocked === true
     && isModelRequestOutcomeUnknownRecoveryKind(msg.meta?.serverRecoveryKind)
     && msg.meta?.serverConnectionState === 'blocked'
-  const serverFailureCode = String(msg.meta?.serverFailure?.code || '').trim().toUpperCase()
-  const hasIncompleteDiagnostic = Boolean(
-    String(msg.meta?.serverFailure?.incompleteReason || '').trim()
-    || serverFailureCode === 'TURN_INCOMPLETE',
-  )
   const isIncompleteTerminal = msg.meta?.failed === true
-    || msg.meta?.interrupted === true
+    || (msg.meta?.interrupted === true && msg.meta?.streaming !== true)
     || msg.meta?.serverConnectionState === 'blocked'
   const showIncompleteTaskNotice = msg.role === 'assistant'
     && isIncompleteTerminal
+    && msg.meta?.serverConnectionState !== 'reconnecting'
+    && (msg.meta?.serverConnectionState === 'blocked' || !isCurrentStreamingMessage)
     && (msg.meta?.serverConnectionState === 'blocked' || !isPreExecutionFailure(msg))
-    && (
-      hasIncompleteDiagnostic
-      || localFileReferences.length > 0
-      || (msg.meta?.type !== 'model_reply' && expectsFileReceipt)
-    )
 
   return (
     <div

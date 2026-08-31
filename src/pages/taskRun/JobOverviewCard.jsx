@@ -40,5 +40,8 @@ function Metric({ label, value }) {
 
 function Clarification({ controller, t }) {
   const clarification = controller.pendingClarification
-  return <div className="mt-3 rounded-md border border-dashed border-running/45 bg-running/5 p-3"><p className="text-xs font-medium text-running">{t('taskSteering.waitingTitle')}</p><p className="text-sm text-ink mt-1">{clarification.question}</p>{clarification.why && <p className="text-xs text-ink-soft mt-1">{clarification.why}</p>}{Array.isArray(clarification.options) && <div className="mt-2 flex flex-wrap gap-2">{clarification.options.map((option) => <button type="button" key={option} onClick={() => controller.setSteering(option)} className="px-2.5 py-1 rounded-md border border-running/40 text-xs text-running">{option}</button>)}</div>}</div>
+  const title = clarification.waitingKind === 'sleeping'
+    ? t('taskCenter.statuses.waiting')
+    : t('taskSteering.waitingTitle')
+  return <div className="mt-3 rounded-md border border-dashed border-running/45 bg-running/5 p-3"><p className="text-xs font-medium text-running">{title}</p><p className="text-sm text-ink mt-1">{clarification.question}</p>{clarification.why && <p className="text-xs text-ink-soft mt-1">{clarification.why}</p>}{clarification.wakeAt && <p className="text-xs text-ink-soft mt-1">{t('taskCenter.wakesAt', { time: formatTime(clarification.wakeAt) })}</p>}{Array.isArray(clarification.options) && <div className="mt-2 flex flex-wrap gap-2">{clarification.options.map((option) => <button type="button" key={option} onClick={() => controller.setSteering(option)} className="px-2.5 py-1 rounded-md border border-running/40 text-xs text-running">{option}</button>)}</div>}</div>
 }

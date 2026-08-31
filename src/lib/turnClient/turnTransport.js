@@ -216,6 +216,10 @@ export async function streamServerTurnEvents({
     buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done })
     const frames = buffer.split(/\r?\n\r?\n/)
     buffer = frames.pop() || ''
+    if (chunk.done && buffer.trim()) {
+      frames.push(buffer)
+      buffer = ''
+    }
     for (const rawFrame of frames) {
       const frame = parseSseFrame(rawFrame)
       if (frame?.eventType === 'turn_activity') {

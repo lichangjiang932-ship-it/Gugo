@@ -298,6 +298,10 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
             merged.meta.serverLastSequence = serverPauseSequence
           }
         } else if (serverMeta.interrupted === true && !localHasNewerTurnState) {
+          merged.meta.failed = false
+          merged.meta.cancelled = false
+          merged.meta.interrupted = true
+          merged.meta.paused = false
           merged.meta.streaming = true
           merged.meta.turnCompletedAt = null
           merged.meta.latency = null
@@ -320,6 +324,9 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
           // Persisted pause state is authoritative over stale live metadata.
           // In particular, a local `serverClarification: null` must not erase
           // the directory request before MessageRow can render its inline card.
+          merged.meta.failed = false
+          merged.meta.cancelled = false
+          merged.meta.interrupted = false
           merged.meta.paused = true
           merged.meta.streaming = false
           merged.meta.serverConnectionState = serverMeta.serverConnectionState || 'paused'

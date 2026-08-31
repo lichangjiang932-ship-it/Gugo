@@ -71,11 +71,12 @@ const JOB_CANCELLED_MESSAGE = '任务已由用户终止'
 const SUSPENDED_JOB_STATUSES = new Set(['waiting', 'awaiting_approval'])
 
 function persistJobOutcomeDiagnostics(jobId, {
+  userId = null,
   stepId = null,
   reason = null,
   nextAction = null,
 } = {}) {
-  const snapshot = getJobWithChildren(jobId)
+  const snapshot = getJobWithChildren(jobId, { userId })
   if (!snapshot) return null
   const diagnostics = buildJobOutcomeDiagnostics(snapshot, { reason, nextAction })
   const targetStep = (stepId
@@ -90,6 +91,21 @@ function persistJobOutcomeDiagnostics(jobId, {
     updateJobStep(targetStep.id, { output: { ...priorOutput, ...diagnostics } })
   }
   return diagnostics
+}
+
+function persistedOutcomeFields(output) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return {}
+  return {
+    ...(String(output.reason || '').trim() ? { reason: String(output.reason).trim() } : {}),
+    ...(Array.isArray(output.artifactIds) ? { artifactIds: output.artifactIds } : {}),
+    ...(Array.isArray(output.completedDeliverables)
+      ? { completedDeliverables: output.completedDeliverables }
+      : {}),
+    ...(Array.isArray(output.missingDeliverables)
+      ? { missingDeliverables: output.missingDeliverables }
+      : {}),
+    ...(Array.isArray(output.issues) ? { issues: output.issues } : {}),
+  }
 }
 
 function hasRejectedCompletedOutcome(step) {
@@ -468,6 +484,9 @@ export class JobRuntime {
       const retriedSteps = currentJob.steps.filter((step) => (
         RETRYABLE_STEP_STATUSES.has(step.status) || hasRejectedCompletedOutcome(step)
       ))
+      const previousDiagnostics = persistedOutcomeFields(
+        [...retriedSteps].reverse().find((step) => step.output)?.output,
+      )
       const transition = retryJobTransition({
         jobId,
         userId,
@@ -497,6 +516,8 @@ export class JobRuntime {
             previousModelConfigRevision: currentJob.modelConfigRevision,
             modelProviderId: modelSnapshot.modelProviderId,
             modelConfigRevision: modelSnapshot.modelConfigRevision,
+            ...previousDiagnostics,
+            nextAction: 'resume_execution',
           },
         },
       })
@@ -575,7 +596,7 @@ export class JobRuntime {
           payload: { evidenceCount: normalizedEvidence.length },
         }))
         const updated = this.getJob(jobId, { userId })
-        terminalTransition = completeManualJobTransition({ jobId, updated })
+        terminalTransition = completeManualJobTransition({ jobId, userId, updated })
         if (terminalTransition.event) completionEvents.push(terminalTransition.event)
         completedJob = this.getJob(jobId, { userId })
         return true
@@ -723,6 +744,8 @@ export class JobRuntime {
             previousModelConfigRevision: job.modelConfigRevision,
             modelProviderId: modelSnapshot.modelProviderId,
             modelConfigRevision: modelSnapshot.modelConfigRevision,
+            ...persistedOutcomeFields(step.output),
+            nextAction: 'resume_execution',
           },
         },
       })
@@ -827,6 +850,7 @@ export class JobRuntime {
           finishedAt: Date.now(),
         })
         const diagnostics = persistJobOutcomeDiagnostics(job.id, {
+          userId: job.userId,
           reason: JOB_CANCELLED_MESSAGE,
           nextAction: 'retry_job',
         })
@@ -919,8 +943,9 @@ export class JobRuntime {
       if (!commitOwned(() => {
         updateJob(job.id, { status: 'failed', error: message, finishedAt: Date.now() })
         const diagnostics = persistJobOutcomeDiagnostics(job.id, {
+          userId: job.userId,
           reason: message,
-          nextAction: 'retry_job',
+          nextAction: error.action || 'retry_job',
         })
         this.emit(appendJobEvent({
           jobId: job.id,
@@ -964,6 +989,7 @@ export class JobRuntime {
           if (!commitOwned(() => {
             updateJob(job.id, { status: 'failed', error: reason, finishedAt: Date.now() })
             const diagnostics = persistJobOutcomeDiagnostics(job.id, {
+              userId: job.userId,
               reason,
               nextAction: 'retry_job',
             })
@@ -1007,6 +1033,7 @@ export class JobRuntime {
               finishedAt: Date.now(),
             })
         const diagnostics = completed ? null : persistJobOutcomeDiagnostics(job.id, {
+          userId: job.userId,
           reason: resolution.reason,
           nextAction: 'retry_job',
         })
@@ -1127,6 +1154,7 @@ export class JobRuntime {
             })
           }
           const diagnostics = persistJobOutcomeDiagnostics(job.id, {
+            userId: job.userId,
             stepId: nextStep.id,
             reason: clarification.why || question,
             nextAction: sleeping ? 'wait_for_wake' : 'provide_input',
@@ -1199,6 +1227,7 @@ export class JobRuntime {
           })
           cancelJobWake({ jobId: job.id, userId: job.userId })
           const diagnostics = persistJobOutcomeDiagnostics(job.id, {
+            userId: job.userId,
             stepId: nextStep.id,
             reason: why,
             nextAction: 'retry_step',
@@ -1315,6 +1344,7 @@ export class JobRuntime {
           this.runtimeCore.checkpoint.clear({ jobId: job.id, stepId: nextStep.id, userId: job.userId })
           cancelJobWake({ jobId: job.id, userId: job.userId })
           const diagnostics = persistJobOutcomeDiagnostics(job.id, {
+            userId: job.userId,
             stepId: nextStep.id,
             reason: JOB_CANCELLED_MESSAGE,
             nextAction: 'retry_job',

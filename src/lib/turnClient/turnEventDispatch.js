@@ -49,6 +49,13 @@ const CLEARED_SERVER_FAILURE_META = Object.freeze({
   serverPartialText: null,
 })
 
+const CLEARED_TERMINAL_STATE_META = Object.freeze({
+  cancelled: false,
+  failed: false,
+  interrupted: false,
+  paused: false,
+})
+
 function resultText(result) {
   if (typeof result === 'string') return result
   try { return JSON.stringify(result ?? {}) } catch { return String(result ?? '') }
@@ -325,13 +332,11 @@ export async function dispatchTurnEvent(event, {
       },
       meta: {
         ...CLEARED_SERVER_RECOVERY_META,
-        interrupted: false,
-        failed: false,
-        paused: false,
+        ...CLEARED_SERVER_FAILURE_META,
+        ...CLEARED_TERMINAL_STATE_META,
         streaming: true,
         turnCompletedAt: null,
         latency: null,
-        serverFailure: null,
         serverPartialText: '',
         serverArtifactIds: [],
         modelActivity: null,
@@ -345,9 +350,7 @@ export async function dispatchTurnEvent(event, {
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
         ...CLEARED_SERVER_FAILURE_META,
-        interrupted: false,
-        failed: false,
-        paused: false,
+        ...CLEARED_TERMINAL_STATE_META,
         streaming: true,
         turnCompletedAt: null,
         latency: null,
@@ -520,6 +523,7 @@ export async function dispatchTurnEvent(event, {
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
         ...CLEARED_SERVER_FAILURE_META,
+        ...CLEARED_TERMINAL_STATE_META,
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
@@ -631,6 +635,7 @@ export async function dispatchTurnEvent(event, {
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
         serverFailure: failure.error,
+        cancelled: false,
         streaming: event.type === 'turn.interrupted',
         turnCompletedAt: event.type === 'turn.interrupted' || blocked ? null : event.createdAt,
         ...(event.type === 'turn.interrupted' || blocked ? { latency: null } : {}),
@@ -685,7 +690,7 @@ export async function dispatchTurnEvent(event, {
                     : '/settings?tab=recovery',
                 } : {}),
               }
-            : { failed: true, streaming: false }),
+            : { failed: true, paused: false, streaming: false }),
       },
       ...streamCursor,
     })

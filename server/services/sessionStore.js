@@ -8,6 +8,7 @@ import { extractVerifiedLocalFiles, recoverLegacyVerifiedLocalFiles } from './tu
 import {
   missingRequirementsForIncompleteReason,
   normalizeIncompleteReason,
+  normalizeTurnFailure,
 } from './turnTerminalProjection.js'
 
 const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
@@ -652,6 +653,216 @@ function withRecoveredIncompleteFailure(message, metadataByTurn) {
   }
 }
 
+const SNAPSHOT_BOUNDARY_TYPES = new Set([
+  'turn.completed',
+  'turn.cancelled',
+  'turn.failed',
+  'turn.interrupted',
+  'turn.blocked',
+  'turn.paused',
+])
+
+const SNAPSHOT_FAILURE_BOUNDARY_TYPES = new Set([
+  'turn.failed',
+  'turn.interrupted',
+  'turn.blocked',
+])
+
+function latestTurnBoundaries(db, { userId, sessionId, turnIds = null }) {
+  const scopedTurnIds = Array.isArray(turnIds)
+    ? [...new Set(turnIds.map((value) => String(value || '').trim()).filter(Boolean))]
+    : null
+  if (scopedTurnIds && scopedTurnIds.length === 0) return []
+  const turnFilter = scopedTurnIds
+    ? ` AND event.turn_id IN (${scopedTurnIds.map(() => '?').join(', ')})`
+    : ''
+  return db.prepare(`
+    SELECT event.turn_id, event.sequence, event.type, event.payload_json,
+      event.created_at,
+      EXISTS(
+        SELECT 1 FROM messages
+        WHERE messages.user_id = event.user_id
+          AND messages.session_id = event.session_id
+          AND messages.id = event.turn_id || ':assistant'
+      ) AS has_evidence_message
+    FROM turn_events AS event
+    WHERE event.user_id = ? AND event.session_id = ?${turnFilter}
+      AND event.sequence = (
+        SELECT MAX(latest.sequence)
+        FROM turn_events AS latest
+        WHERE latest.user_id = event.user_id
+          AND latest.session_id = event.session_id
+          AND latest.turn_id = event.turn_id
+      )
+  `).all(userId, sessionId, ...(scopedTurnIds || []))
+    .filter((row) => SNAPSHOT_BOUNDARY_TYPES.has(row.type))
+}
+
+function eventFailure(payload, type) {
+  const nested = payload?.error && typeof payload.error === 'object' && !Array.isArray(payload.error)
+    ? payload.error
+    : {}
+  const source = { ...payload, ...nested }
+  if ((!Array.isArray(nested.missingRequirements) || nested.missingRequirements.length === 0)
+    && Array.isArray(payload?.missingRequirements)) {
+    source.missingRequirements = payload.missingRequirements
+  }
+  if ((!nested.taskVerification || Object.keys(nested.taskVerification).length === 0)
+    && payload?.taskVerification && typeof payload.taskVerification === 'object') {
+    source.taskVerification = payload.taskVerification
+  }
+  return normalizeTurnFailure(source, {
+    code: type === 'turn.interrupted'
+      ? 'TURN_INTERRUPTED'
+      : type === 'turn.blocked' ? 'TURN_RECOVERY_BLOCKED' : 'TURN_FAILED',
+    retryable: type === 'turn.interrupted',
+  })
+}
+
+function terminalEventEvidence(payload, key) {
+  if (payload && typeof payload === 'object' && Object.hasOwn(payload, key)) return payload[key]
+  const nested = payload?.error
+  if (nested && typeof nested === 'object' && !Array.isArray(nested) && Object.hasOwn(nested, key)) {
+    return nested[key]
+  }
+  return undefined
+}
+
+function projectTerminalEvidence(message, row, { userId, sessionId }) {
+  const payload = parseModelContext(row.payload_json) || {}
+  const context = message?.modelContext && typeof message.modelContext === 'object'
+    ? message.modelContext
+    : {}
+  const failureBoundary = SNAPSHOT_FAILURE_BOUNDARY_TYPES.has(row.type)
+  const state = row.type.slice('turn.'.length)
+  const artifactIds = terminalEventEvidence(payload, 'artifactIds')
+  const deliveryArtifactIds = terminalEventEvidence(payload, 'deliveryArtifactIds')
+  const verifiedLocalFiles = terminalEventEvidence(payload, 'verifiedLocalFiles')
+  const retainedLocalFiles = terminalEventEvidence(payload, 'retainedLocalFiles')
+  const iterations = terminalEventEvidence(payload, 'iterations')
+  const usage = terminalEventEvidence(payload, 'usage')
+  const turnModelUsage = terminalEventEvidence(payload, 'turnModelUsage')
+  const estimatedPromptTokens = terminalEventEvidence(payload, 'estimatedPromptTokens')
+  const terminalContextBase = { ...context }
+  for (const key of [
+    'error',
+    'recovery',
+    'failedRetryRejection',
+    'paused',
+    'clarification',
+    'pausedSequence',
+    'paused_sequence',
+  ]) delete terminalContextBase[key]
+  const recoveryKind = String(terminalEventEvidence(payload, 'recoveryKind') || '').trim()
+  const recoveryToolCallId = String(terminalEventEvidence(payload, 'toolCallId') || '').trim()
+  const recoveryModelRequestId = String(terminalEventEvidence(payload, 'modelRequestId') || '').trim()
+  const recoveryAction = terminalEventEvidence(payload, 'recoveryAction')
+  const recovery = row.type === 'turn.blocked'
+    && terminalEventEvidence(payload, 'requiresUserVerification') === true
+    && recoveryKind
+    ? {
+        recoveryKind,
+        requiresUserVerification: true,
+        ...(recoveryToolCallId ? { toolCallId: recoveryToolCallId } : {}),
+        ...(recoveryModelRequestId ? { modelRequestId: recoveryModelRequestId } : {}),
+        ...(recoveryAction && typeof recoveryAction === 'object' && !Array.isArray(recoveryAction)
+          ? { recoveryAction }
+          : {}),
+      }
+    : null
+  const terminalContext = {
+    ...terminalContextBase,
+    turnId: row.turn_id,
+    turnEvidence: true,
+    evidenceState: state,
+    serverLastSequence: row.sequence,
+    turnCompletedAt: row.created_at,
+    ...(Array.isArray(artifactIds)
+      ? { artifactIds }
+      : {}),
+    ...(Array.isArray(deliveryArtifactIds)
+      ? { deliveryArtifactIds }
+      : {}),
+    ...(Array.isArray(verifiedLocalFiles)
+      ? { verifiedLocalFiles }
+      : {}),
+    ...(Array.isArray(retainedLocalFiles)
+      ? { retainedLocalFiles }
+      : {}),
+    ...(Number.isInteger(iterations) && iterations >= 0
+      ? { iterations }
+      : {}),
+    ...(usage && typeof usage === 'object' && !Array.isArray(usage) ? { usage } : {}),
+    ...(turnModelUsage && typeof turnModelUsage === 'object' && !Array.isArray(turnModelUsage)
+      ? { turnModelUsage }
+      : {}),
+    ...(Number.isInteger(estimatedPromptTokens) && estimatedPromptTokens >= 0
+      ? { estimatedPromptTokens }
+      : {}),
+    ...(failureBoundary ? {
+      error: eventFailure(payload, row.type),
+    } : {}),
+    ...(recovery ? { recovery } : {}),
+    ...(row.type === 'turn.paused'
+      ? {
+          paused: true,
+          pausedSequence: row.sequence,
+          ...(payload.clarification ? { clarification: payload.clarification } : {}),
+        }
+      : {}),
+  }
+  const eventText = String(
+    terminalEventEvidence(payload, 'partialText')
+      ?? terminalEventEvidence(payload, 'text')
+      ?? '',
+  )
+  return {
+    ...(message || {}),
+    id: `${row.turn_id}:assistant`,
+    userId,
+    sessionId,
+    role: 'assistant',
+    content: eventText || String(message?.content || ''),
+    modelContext: terminalContext,
+    createdAt: message?.createdAt ?? row.created_at,
+    updatedAt: Math.max(Number(message?.updatedAt) || 0, Number(row.created_at) || 0),
+  }
+}
+
+function recoverTerminalEvidenceMessages(messages, rows, scope, { synthesizeMissing = false } = {}) {
+  const byId = new Map(messages.map((message, index) => [message.id, index]))
+  const recovered = [...messages]
+  const missing = []
+  let synthesized = 0
+  for (const row of rows) {
+    const id = `${row.turn_id}:assistant`
+    const index = byId.get(id)
+    if (index !== undefined) {
+      recovered[index] = projectTerminalEvidence(recovered[index], row, scope)
+    } else if (synthesizeMissing && !row.has_evidence_message) {
+      missing.push({ row, message: projectTerminalEvidence(null, row, scope) })
+      synthesized += 1
+    }
+  }
+  missing.sort((left, right) => (
+    (Number(left.message.createdAt) || 0) - (Number(right.message.createdAt) || 0)
+      || left.row.sequence - right.row.sequence
+  ))
+  for (const entry of missing) {
+    const userMessageId = `${entry.row.turn_id}:user`
+    const userIndex = recovered.findIndex((message) => message.id === userMessageId)
+    if (userIndex >= 0) {
+      recovered.splice(userIndex + 1, 0, entry.message)
+      continue
+    }
+    const createdAt = Number(entry.message.createdAt) || 0
+    const nextIndex = recovered.findIndex((message) => (Number(message.createdAt) || 0) >= createdAt)
+    if (nextIndex >= 0) recovered.splice(nextIndex, 0, entry.message)
+    else recovered.push(entry.message)
+  }
+  return { messages: recovered, synthesized }
+}
+
 /**
  * Claim one legacy chat for the selected local-auth owner. This deliberately
  * does not merge whole users because providers and agents may exist on both.
@@ -969,12 +1180,37 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
     }
     const storedMessages = listMessages({ userId, sessionId, limit: safeLimit, offset: safeOffset })
       .map(withRecoveredVerifiedLocalFiles)
+    const durableSnapshotFits = safeOffset === 0 && totalMessages <= safeLimit
+    const pageTurnIds = durableSnapshotFits
+      ? null
+      : storedMessages.map((message) => message?.modelContext?.turnId)
+    const terminalBoundaries = latestTurnBoundaries(db, {
+      userId,
+      sessionId,
+      turnIds: pageTurnIds,
+    })
+    const missingEvidenceMessages = terminalBoundaries.reduce(
+      (count, row) => count + (row.has_evidence_message ? 0 : 1),
+      0,
+    )
+    // Virtual terminal messages must obey the same pagination contract as
+    // durable messages. Only synthesize when the whole merged snapshot fits
+    // in this page; otherwise repair the durable messages already on the page
+    // without changing totalMessages/nextOffset between requests.
+    const synthesizeMissing = durableSnapshotFits
+      && totalMessages + missingEvidenceMessages <= safeLimit
+    const terminalRecovery = recoverTerminalEvidenceMessages(
+      storedMessages,
+      terminalBoundaries,
+      { userId, sessionId },
+      { synthesizeMissing },
+    )
     const incompleteMetadataByTurn = loadIncompleteCheckpointMetadata(db, {
       userId,
       sessionId,
-      messages: storedMessages,
+      messages: terminalRecovery.messages,
     })
-    const messages = storedMessages
+    const messages = terminalRecovery.messages
       .map((message) => withRecoveredIncompleteFailure(message, incompleteMetadataByTurn))
       .map((message) => {
         const turnId = String(message?.modelContext?.turnId || '')
@@ -992,12 +1228,13 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
           : artifacts
         return matched.length ? { ...message, artifacts: matched } : message
       })
-    const complete = safeOffset + messages.length >= totalMessages
+    const snapshotTotalMessages = totalMessages + terminalRecovery.synthesized
+    const complete = safeOffset + messages.length >= snapshotTotalMessages
     return {
       session,
       messages,
       revision: session.revision,
-      totalMessages,
+      totalMessages: snapshotTotalMessages,
       complete,
       nextOffset: complete ? null : safeOffset + messages.length,
     }
