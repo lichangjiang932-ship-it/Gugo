@@ -78,10 +78,11 @@ function persistJobOutcomeDiagnostics(jobId, {
   stepId = null,
   reason = null,
   nextAction = null,
+  status = 'failed',
 } = {}) {
   const snapshot = getJobWithChildren(jobId, { userId })
   if (!snapshot) return null
-  const diagnostics = buildJobOutcomeDiagnostics(snapshot, { reason, nextAction })
+  const diagnostics = buildJobOutcomeDiagnostics(snapshot, { reason, nextAction, status })
   const targetStep = (stepId
     ? snapshot.steps.find((step) => step.id === stepId)
     : null)
@@ -97,11 +98,34 @@ function persistJobOutcomeDiagnostics(jobId, {
 }
 
 function latestPersistedOutcomeFields(steps) {
-  for (const step of [...(Array.isArray(steps) ? steps : [])].reverse()) {
+  const merged = {}
+  const listFields = new Set([
+    'missingRequirements',
+    'verifiedLocalFiles',
+    'retainedLocalFiles',
+    'artifactIds',
+    'completedDeliverables',
+    'missingDeliverables',
+    'issues',
+  ])
+  for (const step of Array.isArray(steps) ? steps : []) {
     const fields = persistedJobOutcomeFields(step?.output)
-    if (Object.keys(fields).length > 0) return fields
+    for (const [field, value] of Object.entries(fields)) {
+      if (Array.isArray(value)) {
+        if (!value.length) continue
+        merged[field] = listFields.has(field)
+          ? [...new Set([...(Array.isArray(merged[field]) ? merged[field] : []), ...value])]
+          : value
+        continue
+      }
+      if (value && typeof value === 'object') {
+        if (Object.keys(value).length > 0) merged[field] = value
+        continue
+      }
+      if (value !== undefined && value !== null && value !== '') merged[field] = value
+    }
   }
-  return {}
+  return merged
 }
 
 function hasRejectedCompletedOutcome(step) {
@@ -111,6 +135,28 @@ function hasRejectedCompletedOutcome(step) {
     return verdict && verdict !== 'pass'
   }
   return step.kind === 'finalize' && step.output?.complete === false
+}
+
+const COMPLETED_TASK_VERIFICATION_STATUSES = new Set([
+  'pass',
+  'passed',
+  'success',
+  'succeeded',
+  'complete',
+  'completed',
+  'ok',
+])
+
+function hasExplicitIncompleteStepOutput(output) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return false
+  if (output.complete === false || String(output.incompleteReason || '').trim()) return true
+  if (Array.isArray(output.missingRequirements) && output.missingRequirements.length > 0) return true
+  const verification = output.taskVerification
+  if (!verification || typeof verification !== 'object' || Array.isArray(verification)) return false
+  return (Array.isArray(verification.checks) ? verification.checks : []).some((check) => {
+    if (!check || typeof check !== 'object' || Array.isArray(check)) return true
+    return !COMPLETED_TASK_VERIFICATION_STATUSES.has(String(check.status || '').trim().toLowerCase())
+  })
 }
 
 function uniqueJobSteps(steps = []) {
@@ -691,6 +737,14 @@ export class JobRuntime {
           error.statusCode = 409
           throw error
         }
+        if (hasExplicitIncompleteStepOutput(step.output)) {
+          const error = new Error(
+            step.output.incompleteReason || 'job step still reports incomplete requirements',
+          )
+          error.code = 'JOB_COMPLETION_INCOMPLETE'
+          error.statusCode = 409
+          throw error
+        }
         const completedAt = Date.now()
         // completeJobStep validates evidence before writing. Keep wake/checkpoint
         // cleanup after that gate so a rejected completion is entirely side-effect free.
@@ -734,6 +788,7 @@ export class JobRuntime {
           }, {
             status: terminalTransition.status,
             body: terminalTransition.message,
+            payload: terminalTransition.payload,
           })
           notifyJobStopHook(completedJob, {
             status: terminalTransition.status,
@@ -1014,6 +1069,7 @@ export class JobRuntime {
           userId: job.userId,
           reason: JOB_CANCELLED_MESSAGE,
           nextAction: 'retry_job',
+          status: 'cancelled',
         })
         this.emit(appendJobEvent({
           jobId: job.id,
@@ -1037,6 +1093,7 @@ export class JobRuntime {
     const approvalCandidate = findNextRunnableStep(listJobSteps(job.id))
     if (approvalCandidate && approvalCandidate.kind !== 'plan') {
       let pausedForPlanApproval = false
+      let planPausePayload = null
       if (!commitOwned(() => {
         const currentJob = getJobWithChildren(job.id)
         const authorization = resolveJobPlanApproval(currentJob)
@@ -1044,12 +1101,21 @@ export class JobRuntime {
 
         pausedForPlanApproval = true
         updateJob(job.id, { status: 'waiting', error: null, finishedAt: null })
+        const pauseDiagnostics = buildJobOutcomeDiagnostics(currentJob, {
+          reason: authorization.reason || 'plan_approval_required',
+          nextAction: 'approve_plan',
+          status: 'waiting',
+        })
         if (authorization.needsNewProposal) {
-          const proposalPayload = buildJobPlanProposalPayload(currentJob, {
-            planGuard: authorization.proposal?.payload?.planGuard || null,
-            reason: authorization.reason,
-            supersedesProposalEventId: authorization.proposal?.id || null,
-          })
+          const proposalPayload = {
+            ...buildJobPlanProposalPayload(currentJob, {
+              planGuard: authorization.proposal?.payload?.planGuard || null,
+              reason: authorization.reason,
+              supersedesProposalEventId: authorization.proposal?.id || null,
+            }),
+            ...pauseDiagnostics,
+          }
+          planPausePayload = proposalPayload
           this.emit(appendJobEvent({
             jobId: job.id,
             type: 'plan_proposed',
@@ -1057,18 +1123,18 @@ export class JobRuntime {
             payload: proposalPayload,
           }))
         } else {
+          planPausePayload = {
+            ...pauseDiagnostics,
+            contract: JOB_PLAN_APPROVAL_CONTRACT,
+            version: JOB_PLAN_APPROVAL_VERSION,
+            proposalEventId: authorization.proposal?.id || null,
+            planDigest: authorization.currentPlanDigest,
+          }
           this.emit(appendJobEvent({
             jobId: job.id,
             type: 'plan_approval_required',
             message: 'A durable approval for the current plan is required before execution',
-            payload: {
-              contract: JOB_PLAN_APPROVAL_CONTRACT,
-              version: JOB_PLAN_APPROVAL_VERSION,
-              proposalEventId: authorization.proposal?.id || null,
-              planDigest: authorization.currentPlanDigest,
-              reason: authorization.reason,
-              nextAction: 'approve_plan',
-            },
+            payload: planPausePayload,
           }))
         }
       })) return true
@@ -1080,7 +1146,12 @@ export class JobRuntime {
             title: job.title || job.id,
             body: '计划需要重新确认，批准后才会继续执行。',
             link: `/task?job=${encodeURIComponent(job.id)}`,
-            data: { jobId: job.id, status: 'waiting', planProposed: true },
+            data: {
+              jobId: job.id,
+              ...(planPausePayload || {}),
+              status: 'waiting',
+              planProposed: true,
+            },
           })
         } catch (error) {
           console.error('[jobs] refreshed plan notification failed:', error?.stack || error)
@@ -1209,7 +1280,9 @@ export class JobRuntime {
           reason: terminalReason,
           nextAction: 'retry_job',
         })
-        const terminalPayload = completed ? finalOutput : diagnostics
+        const terminalPayload = completed
+          ? { ...finalOutput, status: 'completed', complete: true, error: null }
+          : diagnostics
         this.emit(appendJobEvent({
           jobId: job.id,
           type: completed ? 'completed' : 'failed',
@@ -1296,6 +1369,19 @@ export class JobRuntime {
       if (repair.leaseLost) return true
       result = repair.result
       const { repairAttempt } = repair
+      if (!result?.paused && !result?.truncated && hasExplicitIncompleteStepOutput(result?.output)) {
+        result = {
+          ...result,
+          ok: false,
+          incomplete: true,
+          truncated: true,
+          incompleteReason: String(
+            result.output.incompleteReason
+              || result.reason
+              || '步骤输出仍有未完成条件',
+          ).trim(),
+        }
+      }
       // ★ 截断(需澄清 / 预算耗尽):不是失败也不是成功,如实标记并通知用户,
       // 不能再像以前那样被吞成 ok:true 假装完成。
       if (result?.paused) {
@@ -1303,6 +1389,7 @@ export class JobRuntime {
         const question = clarification.question || 'The task needs more information before it can continue.'
         const wakeAt = Number(clarification.wakeAt)
         const sleeping = Number.isFinite(wakeAt)
+        let waitingPayload = null
         if (!commitOwned(() => {
           updateJobStep(nextStep.id, {
             status: 'queued',
@@ -1331,15 +1418,17 @@ export class JobRuntime {
             stepId: nextStep.id,
             reason: clarification.why || question,
             nextAction: sleeping ? 'wait_for_wake' : 'provide_input',
+            status: 'waiting',
           })
+          waitingPayload = sleeping
+            ? { wakeAt, ...(diagnostics || {}) }
+            : { clarification, ...(diagnostics || {}) }
           this.emit(appendJobEvent({
             jobId: job.id,
             stepId: nextStep.id,
             type: sleeping ? 'sleeping' : 'awaiting_user',
             message: question,
-            payload: sleeping
-              ? { wakeAt, reason: clarification.why || null, ...(diagnostics || {}) }
-              : { clarification, ...(diagnostics || {}) },
+            payload: waitingPayload,
           }))
         })) return true
         if (sleeping) return true
@@ -1350,7 +1439,7 @@ export class JobRuntime {
             title: job.title || job.id,
             body: question,
             link: `/task?job=${encodeURIComponent(job.id)}`,
-            data: { jobId: job.id, status: 'waiting', clarification },
+            data: { jobId: job.id, ...(waitingPayload || {}), status: 'waiting' },
           })
         } catch (error) {
           // ★ 通知插入失败以前只 console.error 就完事了。
@@ -1454,6 +1543,7 @@ export class JobRuntime {
         return true
       }
       const requiresPlanApproval = stepRequiresPlanApproval(nextStep, getApprovalMode({ userId: job.userId }))
+      let planProposalPayload = null
       if (!commitOwned(() => {
         updateJobStep(nextStep.id, {
           status: 'completed',
@@ -1473,9 +1563,17 @@ export class JobRuntime {
         }))
         if (requiresPlanApproval) {
           const plannedJob = this.getJob(job.id, { userId: job.userId })
-          const proposalPayload = buildJobPlanProposalPayload(plannedJob, {
-            planGuard: nextStep.input?.planGuard || null,
-          })
+          const proposalPayload = {
+            ...buildJobPlanProposalPayload(plannedJob, {
+              planGuard: nextStep.input?.planGuard || null,
+            }),
+            ...buildJobOutcomeDiagnostics(plannedJob, {
+              reason: 'plan_approval_required',
+              nextAction: 'approve_plan',
+              status: 'waiting',
+            }),
+          }
+          planProposalPayload = proposalPayload
           updateJob(job.id, { status: 'waiting', error: null, finishedAt: null })
           this.emit(appendJobEvent({
             jobId: job.id,
@@ -1494,7 +1592,12 @@ export class JobRuntime {
             title: job.title || job.id,
             body: '计划已准备好，批准后才会开始执行。',
             link: `/task?job=${encodeURIComponent(job.id)}`,
-            data: { jobId: job.id, status: 'waiting', planProposed: true },
+            data: {
+              jobId: job.id,
+              ...(planProposalPayload || {}),
+              status: 'waiting',
+              planProposed: true,
+            },
           })
         } catch (error) {
           console.error('[jobs] plan notification failed:', error?.stack || error)
@@ -1529,6 +1632,7 @@ export class JobRuntime {
             stepId: nextStep.id,
             reason: JOB_CANCELLED_MESSAGE,
             nextAction: 'retry_job',
+            status: 'cancelled',
           })
           this.emit(appendJobEvent({
             jobId: job.id,

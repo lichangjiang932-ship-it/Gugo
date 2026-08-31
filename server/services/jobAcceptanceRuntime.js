@@ -411,11 +411,17 @@ export function completeManualJobTransition({ jobId, userId, updated }) {
         error: outcomeReason,
         finishedAt: Date.now(),
       })
+  const terminalPayload = {
+    ...(finalOutput || diagnostics || {}),
+    status: completed ? 'completed' : 'failed',
+    complete: completed,
+    error: completed ? null : outcomeReason,
+  }
   const event = appendJobEvent({
     jobId,
     type: completed ? 'completed' : 'failed',
     message: completed ? '任务已完成' : outcomeReason,
-    ...((finalOutput || diagnostics) ? { payload: finalOutput || diagnostics } : {}),
+    payload: terminalPayload,
   })
   return {
     terminal: true,
@@ -423,6 +429,7 @@ export function completeManualJobTransition({ jobId, userId, updated }) {
     status: completed ? 'completed' : 'failed',
     error: completed ? null : outcomeReason,
     message: completed ? '任务已完成' : outcomeReason,
+    payload: terminalPayload,
     event,
   }
 }

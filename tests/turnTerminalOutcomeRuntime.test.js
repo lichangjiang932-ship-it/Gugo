@@ -27,7 +27,8 @@ function completedEvidence(order) {
     atomicTurnBoundary: false,
     verifiedLocalFilesAt: () => [{ id: 'verified-1' }],
     retainedLocalFilesAt: () => [{ id: 'retained-1' }],
-    emitter: async (type, payload) => {
+    emitter: async (type, payload, options = {}) => {
+      await options.beforeAppend?.({ sequence: 3, type, payload })
       order.push(['event', type, payload])
       return { sequence: 3, type, payload }
     },
@@ -82,7 +83,7 @@ test('completed outcome dispatches a non-blocking notification hook with deliver
   ])
 
   assert.equal(outcome, 'settled')
-  assert.deepEqual(order.map(([kind]) => kind), ['event', 'message', 'canary', 'hook', 'memory'])
+  assert.deepEqual(order.map(([kind]) => kind), ['message', 'event', 'canary', 'hook', 'memory'])
   assert.equal(hookCalls.length, 1)
   assert.deepEqual(hookCalls[0], {
     userId: scope.userId,
@@ -97,8 +98,8 @@ test('completed outcome dispatches a non-blocking notification hook with deliver
     sessionId: scope.sessionId,
   })
   assert.equal(writtenMessages[0].content, text)
-  assert.deepEqual(order[0][2].verifiedLocalFiles, [{ id: 'verified-1' }])
-  assert.deepEqual(order[0][2].retainedLocalFiles, [{ id: 'retained-1' }])
+  assert.deepEqual(order[1][2].verifiedLocalFiles, [{ id: 'verified-1' }])
+  assert.deepEqual(order[1][2].retainedLocalFiles, [{ id: 'retained-1' }])
   assert.deepEqual(canaryCalls, [['completed', null, 2_000, text]])
   assert.equal(memoryCalls[0].agentId, 'agent-resolved')
   assert.equal(memoryCalls[0].assistantText, text)

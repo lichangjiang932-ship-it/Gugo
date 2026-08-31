@@ -18,15 +18,20 @@ export function markJobAwaitingApproval(job, step = null, approval = null) {
            AND status = 'running'
       `).run(Date.now(), job.id, job.userId).changes === 1
       if (!changed) return false
+      const snapshot = getJobWithChildren(job.id, { userId: job.userId }) || job
+      const diagnostics = buildJobOutcomeDiagnostics(snapshot, {
+        reason: 'tool_approval_required',
+        nextAction: 'review_approval',
+        status: 'awaiting_approval',
+      })
       appendJobEvent({
         jobId: job.id,
         stepId: step?.id || null,
         type: 'awaiting_approval',
         message: '等待用户批准一个工具调用',
         payload: {
+          ...diagnostics,
           approvalId: approval?.id || null,
-          reason: 'tool_approval_required',
-          nextAction: 'review_approval',
         },
       })
       return true
@@ -82,7 +87,7 @@ function terminalNotificationPayload(job, { status, body, payload = null }) {
       : buildFinalOutput(snapshot)
     if (delivery.complete === false) {
       const reason = String(
-        delivery.incompleteReason || delivery.reason || delivery.summary || '任务未全部完成',
+        delivery.reason || delivery.summary || delivery.incompleteReason || '任务未全部完成',
       ).trim()
       const diagnostics = buildJobOutcomeDiagnostics(snapshot, {
         reason,

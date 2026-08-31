@@ -404,16 +404,10 @@ export function createTurnTerminalOutcomeRuntime({
       commitEvent: evidence.atomicTurnBoundary
         ? ({ event }) => evidence.commitBoundaryEvent({ event, message: completedMessage })
         : null,
+      beforeAppend: evidence.atomicTurnBoundary
+        ? null
+        : () => ports.writeMessage(completedMessage),
     })
-    if (!evidence.atomicTurnBoundary) {
-      try {
-        await ports.writeMessage(completedMessage)
-      } catch (error) {
-        logWarn('turn.legacy_evidence_projection', error, {
-          userId, sessionId, turnId, state: 'completed',
-        })
-      }
-    }
     await recordCanaryTerminal('completed', null, completedAt, text)
     void ports.dispatchHooks?.({
       userId,

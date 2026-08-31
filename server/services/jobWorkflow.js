@@ -683,6 +683,17 @@ export function buildJobOutcomeDiagnostics(job, {
   const effectiveReason = normalizedReason
     || String(carriedDiagnostics.incompleteReason || '').trim().slice(0, 2_000)
     || String(delivery.issues?.[0] || delivery.summary || '任务未完成').trim().slice(0, 2_000)
+  const rawIncompleteReason = String(
+    carriedDiagnostics.incompleteReason || normalizedReason || '',
+  ).trim().toLowerCase()
+  const incompleteReason = /^[a-z][a-z0-9_]{1,95}$/u.test(rawIncompleteReason)
+    ? rawIncompleteReason
+    : {
+        awaiting_approval: 'job_approval_required',
+        cancelled: 'job_cancelled',
+        failed: 'job_execution_incomplete',
+        waiting: 'job_waiting_for_input',
+      }[normalizedStatus]
   const issues = [...new Set([
     ...(Array.isArray(delivery.issues) ? delivery.issues : []),
     effectiveReason,
@@ -692,7 +703,7 @@ export function buildJobOutcomeDiagnostics(job, {
     status: normalizedStatus,
     complete: false,
     reason: effectiveReason,
-    incompleteReason: String(carriedDiagnostics.incompleteReason || effectiveReason).trim().slice(0, 2_000),
+    incompleteReason,
     missingRequirements: Array.isArray(carriedDiagnostics.missingRequirements)
       ? carriedDiagnostics.missingRequirements
       : [],
