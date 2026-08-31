@@ -124,6 +124,28 @@ test('Release workflow is gated by reusable CI and never overwrites a published 
   assert.match(verification, /Read-ServerDiagnostics/)
 })
 
+test('Release full offline gate cannot omit compaction fidelity', () => {
+  const release = read('.github/workflows/release.yml')
+  const ci = read('.github/workflows/ci.yml')
+  const runner = read('scripts/run-tests.js')
+  const fullGate = read('tests/offlineCapabilityEval.test.js')
+  const suite = read('tests/offline-evals/compactionFidelity.eval.js')
+  const offlineGate = ci.match(
+    /- name: Offline agent capability gate[\s\S]*?(?=\n\s+- name:)/,
+  )?.[0] || ''
+
+  assert.match(release, /uses:\s*\.\/\.github\/workflows\/ci\.yml/)
+  assert.match(release, /needs:\s*ci/)
+  assert.match(offlineGate, /run:\s*npm run eval:offline\s*$/m)
+  assert.doesNotMatch(offlineGate, /--eval-suite/)
+  assert.match(
+    runner,
+    /selector === 'offline-eval'\) return \['tests\/offlineCapabilityEval\.test\.js'\]/,
+  )
+  assert.match(fullGate, /REQUIRED_FULL_GATE_SUITE_IDS[\s\S]*?'compaction-fidelity'/)
+  assert.match(suite, /id:\s*'compaction-fidelity'/)
+})
+
 test('CI workflow pins checkout and Node setup actions to immutable commits', () => {
   const ci = read('.github/workflows/ci.yml')
   const checkoutRefs = [...ci.matchAll(/actions\/checkout@([^\s#]+)/g)].map((match) => match[1])

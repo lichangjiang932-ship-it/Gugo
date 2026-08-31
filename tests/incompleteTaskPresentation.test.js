@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { translations } from '../src/i18n/translations.js'
 import { buildIncompleteTaskPresentation } from '../src/pages/ChatSplit/chatMessages/messageRow/incompleteTaskPresentation.js'
 import { missingArtifactBlocker } from '../server/services/loop/runtime-initializeCompletion.js'
 import {
@@ -57,6 +58,12 @@ test('missing artifact completion uses a stable reason code and client-localized
   }, t)
   assert.equal(value.reason, 'chatMessages.incompleteReasonArtifactDelivery')
   assert.deepEqual(value.missing, ['chatMessages.incompleteRequirementArtifact'])
+
+  const localizedReasons = ['zh', 'en', 'ja', 'ko', 'zh-TW'].map((locale) => (
+    translations[locale].chatMessages.incompleteReasonArtifactDelivery
+  ))
+  assert.equal(localizedReasons.every((reason) => typeof reason === 'string' && reason.trim()), true)
+  assert.equal(new Set(localizedReasons).size, localizedReasons.length)
 })
 
 test('legacy incomplete failures disclose the retained public reason without exposing stacks', () => {
