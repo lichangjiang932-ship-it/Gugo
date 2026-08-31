@@ -3,6 +3,7 @@ import { getDb } from '../db.js'
 import { appendJobEvent } from './jobStore.js'
 import {
   clearResumedJobOutcomeDiagnostics,
+  normalizeJobLocalFileReceipts,
   persistedJobOutcomeFields,
 } from './jobWorkflow.js'
 
@@ -169,6 +170,16 @@ export function enqueueJobSteeringTransition({ jobId, userId, content, now = Dat
         ...persistedJobOutcomeFields(parseJson(latestSuspension?.payload_json)),
         ...persistedJobOutcomeFields(output),
       }
+      const localFiles = normalizeJobLocalFileReceipts(resumeDiagnostics)
+      resumeDiagnostics = {
+        ...resumeDiagnostics,
+        ...(Object.hasOwn(resumeDiagnostics, 'verifiedLocalFiles')
+          ? { verifiedLocalFiles: localFiles.verifiedLocalFiles }
+          : {}),
+        ...(Object.hasOwn(resumeDiagnostics, 'retainedLocalFiles')
+          ? { retainedLocalFiles: localFiles.retainedLocalFiles }
+          : {}),
+      }
       if (step) {
         const resumedOutput = clearResumedJobOutcomeDiagnostics(output)
         db.prepare(`
@@ -211,26 +222,42 @@ export function resumeJobAfterApprovalTransition({
     `).get(jobId, leaseOwnerId, now)
     if (!owned) return { found: true, owned: false, changed: false, status: current.status, event: null }
 
+    const resumedDiagnostics = {}
     if (stepId) {
-      const step = db.prepare('SELECT status FROM job_steps WHERE id = ? AND job_id = ?').get(stepId, jobId)
+      const step = db.prepare('SELECT status, output_json FROM job_steps WHERE id = ? AND job_id = ?').get(stepId, jobId)
       if (!step) {
         return { found: true, owned: true, changed: false, status: current.status, event: null }
       }
       if (step.status === 'running') {
+        Object.assign(resumedDiagnostics, persistedJobOutcomeFields(parseJson(step.output_json)))
+        const resumedOutput = clearResumedJobOutcomeDiagnostics(parseJson(step.output_json))
         db.prepare(`
           UPDATE job_steps
-             SET status = 'queued', error = NULL, started_at = NULL,
+             SET status = 'queued', output_json = ?, error = NULL, started_at = NULL,
                  finished_at = NULL, updated_at = ?
            WHERE id = ? AND job_id = ? AND status = 'running'
-        `).run(now, stepId, jobId)
+        `).run(resumedOutput == null ? null : JSON.stringify(resumedOutput), now, stepId, jobId)
       }
     } else {
-      db.prepare(`
+      const runningSteps = db.prepare(`
+        SELECT id, output_json FROM job_steps WHERE job_id = ? AND status = 'running'
+      `).all(jobId)
+      const requeueStep = db.prepare(`
         UPDATE job_steps
-           SET status = 'queued', error = NULL, started_at = NULL,
+           SET status = 'queued', output_json = ?, error = NULL, started_at = NULL,
                finished_at = NULL, updated_at = ?
-         WHERE job_id = ? AND status = 'running'
-      `).run(now, jobId)
+         WHERE id = ? AND job_id = ? AND status = 'running'
+      `)
+      for (const step of runningSteps) {
+        Object.assign(resumedDiagnostics, persistedJobOutcomeFields(parseJson(step.output_json)))
+        const resumedOutput = clearResumedJobOutcomeDiagnostics(parseJson(step.output_json))
+        requeueStep.run(
+          resumedOutput == null ? null : JSON.stringify(resumedOutput),
+          now,
+          step.id,
+          jobId,
+        )
+      }
     }
 
     const changed = db.prepare(`
@@ -245,6 +272,7 @@ export function resumeJobAfterApprovalTransition({
       type: 'approval_recovered',
       message: 'Approval decided after process restart; the interrupted turn was requeued',
       payload: {
+        ...resumedDiagnostics,
         reason: 'tool_approval_resolved',
         nextAction: 'resume_execution',
       },

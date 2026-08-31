@@ -1,12 +1,95 @@
 const RUN_OUTPUT_FORMATS = new Set(['jsonl', 'text'])
 
 const TEXT_TERMINAL_DIAGNOSTICS = Object.freeze({
-  'turn.failed': 'Failed',
-  'turn.blocked': 'Blocked',
-  'turn.cancelled': 'Cancelled',
-  'turn.paused': 'Paused',
-  'turn.interrupted': 'Interrupted',
+  'turn.failed': Object.freeze({ label: 'Failed', fallbackCode: 'TURN_FAILED' }),
+  'turn.blocked': Object.freeze({ label: 'Blocked', fallbackCode: 'TURN_RECOVERY_BLOCKED' }),
+  'turn.cancelled': Object.freeze({ label: 'Cancelled', fallbackCode: 'TURN_CANCELLED' }),
+  'turn.paused': Object.freeze({ label: 'Paused', fallbackCode: 'TURN_PAUSED' }),
+  'turn.waiting': Object.freeze({ label: 'Waiting', fallbackCode: 'TURN_WAITING' }),
+  'turn.awaiting_approval': Object.freeze({ label: 'Waiting', fallbackCode: 'TURN_AWAITING_APPROVAL' }),
+  'turn.interrupted': Object.freeze({ label: 'Interrupted', fallbackCode: 'TURN_INTERRUPTED' }),
+  'job.failed': Object.freeze({ label: 'Job failed', fallbackCode: 'JOB_FAILED' }),
+  'job.blocked': Object.freeze({ label: 'Job blocked', fallbackCode: 'JOB_BLOCKED' }),
+  'job.cancelled': Object.freeze({ label: 'Job cancelled', fallbackCode: 'JOB_CANCELLED' }),
+  'job.paused': Object.freeze({ label: 'Job paused', fallbackCode: 'JOB_PAUSED' }),
+  'job.waiting': Object.freeze({ label: 'Job waiting', fallbackCode: 'JOB_WAITING' }),
+  'job.awaiting_approval': Object.freeze({ label: 'Job waiting', fallbackCode: 'JOB_AWAITING_APPROVAL' }),
+  'job.interrupted': Object.freeze({ label: 'Job interrupted', fallbackCode: 'JOB_INTERRUPTED' }),
 })
+
+const SUCCESS_RESULT_STATUSES = new Set(['completed', 'complete', 'succeeded', 'success', 'ok'])
+
+function objectValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null
+}
+
+function completionIsExplicitlyIncomplete(value) {
+  const source = objectValue(value)
+  if (!source) return false
+  if (source.complete === false || source.completed === false
+    || source.paused === true || source.interrupted === true) return true
+  return [source.output, source.finalOutput, source.delivery, source.outcome]
+    .some((candidate) => objectValue(candidate)?.complete === false)
+}
+
+function completedEventSucceeded(event) {
+  return event?.type === 'turn.completed'
+    && !completionIsExplicitlyIncomplete(event?.payload)
+}
+
+function terminalDescriptor(event) {
+  if (event?.type === 'turn.completed' && !completedEventSucceeded(event)) {
+    return Object.freeze({ label: 'Incomplete', fallbackCode: 'TURN_INCOMPLETE' })
+  }
+  if (event?.type === 'job.completed' && completionIsExplicitlyIncomplete(event?.payload)) {
+    return Object.freeze({ label: 'Job incomplete', fallbackCode: 'JOB_INCOMPLETE' })
+  }
+  const direct = TEXT_TERMINAL_DIAGNOSTICS[event?.type]
+  if (direct) return direct
+  if (!event?.jobId) return null
+  const legacyJobTypes = {
+    failed: TEXT_TERMINAL_DIAGNOSTICS['job.failed'],
+    blocked: TEXT_TERMINAL_DIAGNOSTICS['job.blocked'],
+    cancelled: TEXT_TERMINAL_DIAGNOSTICS['job.cancelled'],
+    paused: TEXT_TERMINAL_DIAGNOSTICS['job.paused'],
+    waiting: TEXT_TERMINAL_DIAGNOSTICS['job.waiting'],
+    awaiting_user: TEXT_TERMINAL_DIAGNOSTICS['job.waiting'],
+    sleeping: TEXT_TERMINAL_DIAGNOSTICS['job.waiting'],
+    awaiting_approval: TEXT_TERMINAL_DIAGNOSTICS['job.awaiting_approval'],
+    interrupted: TEXT_TERMINAL_DIAGNOSTICS['job.interrupted'],
+  }
+  if (event.type === 'completed' && completionIsExplicitlyIncomplete(event.payload)) {
+    return Object.freeze({ label: 'Job incomplete', fallbackCode: 'JOB_INCOMPLETE' })
+  }
+  return legacyJobTypes[event.type] || null
+}
+
+function stableCode(value, fallback) {
+  const normalized = String(value || '').trim().toUpperCase()
+  return /^[A-Z][A-Z0-9_]{0,127}$/u.test(normalized) ? normalized : fallback
+}
+
+function actionText(value) {
+  if (typeof value === 'string') return value.trim()
+  const action = objectValue(value)
+  if (!action) return ''
+  const kind = String(action.kind || action.action || '').trim()
+  const target = String(action.path || action.target || action.url || '').trim()
+  return [kind, target].filter(Boolean).join(' ')
+}
+
+function runResultSucceeded(result, observedTurnTerminal = null) {
+  if (completionIsExplicitlyIncomplete(result)) return false
+  const source = objectValue(result)
+  if (Number.isInteger(source?.exitCode) && source.exitCode !== 0) return false
+  const status = String(source?.status || '').trim().toLowerCase()
+  if (status && !SUCCESS_RESULT_STATUSES.has(status)) return false
+  const lastEvent = source?.lastEvent
+  if (lastEvent?.type?.startsWith?.('turn.')) return completedEventSucceeded(lastEvent)
+  if (observedTurnTerminal) return completedEventSucceeded(observedTurnTerminal)
+  if (status) return SUCCESS_RESULT_STATUSES.has(status)
+  return Number.isInteger(result?.exitCode) && result.exitCode === 0
+}
 
 export class CliOutputError extends Error {
   constructor(code, message, exitCode = 2) {
@@ -221,13 +304,13 @@ function taskVerificationIssues(...sources) {
 }
 
 function terminalDiagnostic(event) {
-  const label = TEXT_TERMINAL_DIAGNOSTICS[event?.type]
-  if (!label) return null
+  const descriptor = terminalDescriptor(event)
+  if (!descriptor) return null
   const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {}
   const nested = payload.error && typeof payload.error === 'object' ? payload.error : {}
   // `payload.error` is the canonical failure object. Top-level fields only
   // remain for replay compatibility and may contain an older generic value.
-  const code = String(nested.code || payload.code || '').trim()
+  const code = stableCode(nested.code || payload.code, descriptor.fallbackCode)
   const clarification = payload.clarification
   const clarificationMessage = typeof clarification === 'string'
     ? clarification
@@ -272,9 +355,12 @@ function terminalDiagnostic(event) {
   const manualRetryable = typeof nested.manualRetryable === 'boolean'
     ? nested.manualRetryable
     : payload.manualRetryable === true
-  const details = [`${label}${code ? ` [${code}]` : ''}`]
+  const nextAction = actionText(
+    nested.nextAction || payload.nextAction || nested.action || payload.recoveryAction,
+  )
+  const details = [`${descriptor.label} [${code}]`]
   const reason = incompleteReason || message
-  if (reason) details.push(`Reason: ${reason}`)
+  details.push(`Reason: ${reason || 'terminal_reason_not_recorded'}`)
   if (incompleteReason && message && message !== incompleteReason) {
     details.push(`Detail: ${message}`)
   }
@@ -285,9 +371,11 @@ function terminalDiagnostic(event) {
   if (verifiedFiles.length > 0) details.push(`Verified files: ${verifiedFiles.join(', ')}`)
   if (retainedFiles.length > 0) details.push(`Saved files awaiting verification: ${retainedFiles.join(', ')}`)
   if (verificationIssues.length > 0) details.push(`Verification: ${verificationIssues.join('; ')}`)
-  if (retryable) details.push('Next: retry this turn from its durable checkpoint.')
+  if (nextAction) details.push(`Next: ${nextAction}`)
+  else if (retryable) details.push('Next: retry this turn from its durable checkpoint.')
   else if (manualRetryable) details.push('Next: verify the recorded outcome, then retry explicitly.')
   else if (missingRequirements.length > 0) details.push('Next: satisfy the missing requirements and run again.')
+  else details.push('Next: inspect the stable code and terminal record before retrying.')
   return line(details.join('\n'))
 }
 
@@ -296,7 +384,7 @@ export function formatRunEvent(event, { format = 'jsonl' } = {}) {
   if (resolvedFormat === 'jsonl') {
     return Object.freeze({ stdout: `${JSON.stringify(event)}\n`, stderr: null })
   }
-  if (event?.type === 'turn.completed') {
+  if (completedEventSucceeded(event)) {
     return Object.freeze({ stdout: line(event?.payload?.text), stderr: null })
   }
   const diagnostic = terminalDiagnostic(event)
@@ -390,6 +478,11 @@ export function formatRunError(error, { format = 'jsonl' } = {}) {
       : typeof recoveryFailure.manualRetryable === 'boolean'
         ? recoveryFailure.manualRetryable
         : typeof recovery.manualRetryable === 'boolean' ? recovery.manualRetryable : null
+  const nextAction = actionText(
+    error?.nextAction || serverFailure.nextAction || recoveryFailure.nextAction
+      || recovery.nextAction || error?.action || serverFailure.action
+      || recoveryFailure.action || recovery.action,
+  )
   const details = [`Error [${code}]: ${message}`]
   if (causeMessage) details.push(`Detail: ${causeMessage}`)
   const explicitReason = incompleteReason || reason
@@ -399,7 +492,8 @@ export function formatRunError(error, { format = 'jsonl' } = {}) {
   if (verifiedFiles.length > 0) details.push(`Verified files: ${verifiedFiles.join(', ')}`)
   if (retainedFiles.length > 0) details.push(`Saved files awaiting verification: ${retainedFiles.join(', ')}`)
   if (verificationIssues.length > 0) details.push(`Verification: ${verificationIssues.join('; ')}`)
-  if (retryable) details.push('Next: retry this turn from its durable checkpoint.')
+  if (nextAction) details.push(`Next: ${nextAction}`)
+  else if (retryable) details.push('Next: retry this turn from its durable checkpoint.')
   else if (manualRetryable) details.push('Next: verify the recorded outcome, then retry explicitly.')
   else if (missingRequirements.length > 0) details.push('Next: satisfy the missing requirements and run again.')
   const diagnostic = line(details.join('\n'))
@@ -413,6 +507,7 @@ export function formatRunError(error, { format = 'jsonl' } = {}) {
       message,
       ...(causeMessage ? { causeMessage } : {}),
       ...(action ? { action } : {}),
+      ...(nextAction ? { nextAction } : {}),
       ...(reason && reason !== message ? { reason } : {}),
       ...(incompleteReason ? { incompleteReason } : {}),
       ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
@@ -438,6 +533,7 @@ export function createRunOutputFormatter({
   const stderrWriter = createSerializedWriter(stderr, 'stderr')
   let pendingCompletedText = null
   let pendingTerminalDiagnostic = null
+  let observedTurnTerminal = null
   let finalized = false
   let operationTail = Promise.resolve()
 
@@ -475,12 +571,16 @@ export function createRunOutputFormatter({
   const writeEvent = (event) => {
     const output = formatRunEvent(event, { format: resolvedFormat })
     return enqueue(async () => {
-      if (resolvedFormat === 'text' && event?.type === 'turn.completed') {
+      if (event?.type?.startsWith?.('turn.')
+        && (event.type === 'turn.completed' || terminalDescriptor(event))) {
+        observedTurnTerminal = event
+      }
+      if (resolvedFormat === 'text' && completedEventSucceeded(event)) {
         pendingCompletedText = output.stdout
         pendingTerminalDiagnostic = null
         return output
       }
-      if (resolvedFormat === 'text' && TEXT_TERMINAL_DIAGNOSTICS[event?.type]) {
+      if (resolvedFormat === 'text' && terminalDescriptor(event)) {
         pendingCompletedText = output.stdout
         pendingTerminalDiagnostic = output.stderr
         return output
@@ -505,7 +605,7 @@ export function createRunOutputFormatter({
       return Object.freeze({ stdout: null, stderr: null })
     }
     finalized = true
-    const completed = result?.status === 'completed' && result?.exitCode === 0
+    const completed = runResultSucceeded(result, observedTurnTerminal)
     const committedText = completed ? pendingCompletedText : null
     const committedDiagnostic = completed ? null : pendingTerminalDiagnostic
     pendingCompletedText = null
@@ -516,12 +616,20 @@ export function createRunOutputFormatter({
     return output
   })
   const flush = () => enqueue(flushWriters)
+  const resolveExitCode = (result) => {
+    const declared = Number.isInteger(result?.exitCode) ? result.exitCode : null
+    if (!runResultSucceeded(result, observedTurnTerminal)) {
+      return declared !== null && declared !== 0 ? declared : 1
+    }
+    return declared ?? 0
+  }
   return Object.freeze({
     format: resolvedFormat,
     writeEvent,
     writeError,
     finish,
     flush,
+    resolveExitCode,
     onEvent: writeEvent,
   })
 }

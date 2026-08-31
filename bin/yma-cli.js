@@ -345,7 +345,7 @@ export async function cmdRun(argv, {
       return timeoutError.exitCode
     }
     await output.finish(result)
-    return Number.isInteger(result?.exitCode) ? result.exitCode : 0
+    return output.resolveExitCode(result)
   } catch (error) {
     const resolvedError = timeoutTriggered ? timeoutError : error
     await output.writeError(resolvedError)
@@ -628,6 +628,7 @@ function responseError(result) {
     'reason',
     'incompleteReason',
     'missingRequirements',
+    'nextAction',
     'taskVerification',
     'artifactIds',
     'deliveryArtifactIds',

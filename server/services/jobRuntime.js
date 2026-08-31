@@ -26,8 +26,10 @@ import {
   buildFinalOutput,
   deriveJobProgress,
   buildJobOutcomeDiagnostics,
+  clearCompletedJobOutcomeDiagnostics,
   clearResumedJobOutcomeDiagnostics,
   findNextRunnableStep,
+  normalizeJobLocalFileReceipts,
   persistedJobOutcomeFields,
   resolveWorkflowState,
   stepRequiresPlanApproval,
@@ -124,6 +126,13 @@ function latestPersistedOutcomeFields(steps) {
       }
       if (value !== undefined && value !== null && value !== '') merged[field] = value
     }
+  }
+  const localFiles = normalizeJobLocalFileReceipts(merged)
+  if (Object.hasOwn(merged, 'verifiedLocalFiles')) {
+    merged.verifiedLocalFiles = localFiles.verifiedLocalFiles
+  }
+  if (Object.hasOwn(merged, 'retainedLocalFiles')) {
+    merged.retainedLocalFiles = localFiles.retainedLocalFiles
   }
   return merged
 }
@@ -353,6 +362,9 @@ export class JobRuntime {
           let event
           if (['planning', 'running'].includes(job.status)) {
             updateJob(job.id, { status: 'queued', error: null, finishedAt: null })
+            const recoveredDiagnostics = latestPersistedOutcomeFields(
+              listJobSteps(job.id).filter((step) => step.status === 'running'),
+            )
             for (const step of listJobSteps(job.id)) {
               if (step.status === 'running') {
                 updateJobStep(step.id, {
@@ -369,6 +381,7 @@ export class JobRuntime {
               type: 'recovered',
               message: '服务重启后已恢复到队列',
               payload: {
+                ...recoveredDiagnostics,
                 reason: 'process_restart_recovery',
                 nextAction: 'resume_execution',
               },
@@ -377,6 +390,9 @@ export class JobRuntime {
             const approval = getLatestJobApproval({ jobId: job.id, userId: job.userId })
             if (!approval || approval.status === 'pending') return null
             updateJob(job.id, { status: 'queued', error: null, finishedAt: null })
+            const recoveredDiagnostics = latestPersistedOutcomeFields(
+              listJobSteps(job.id).filter((step) => step.status === 'running'),
+            )
             for (const step of listJobSteps(job.id)) {
               if (step.status === 'running') {
                 updateJobStep(step.id, {
@@ -394,6 +410,7 @@ export class JobRuntime {
               type: 'approval_recovered',
               message: 'Persisted approval decision found after restart; the interrupted turn was requeued',
               payload: {
+                ...recoveredDiagnostics,
                 approvalId: approval.id,
                 decision: approval.status,
                 reason: 'tool_approval_resolved',
@@ -1027,6 +1044,7 @@ export class JobRuntime {
       ? listJobSteps(job.id).filter((step) => step.status === 'running')
       : []
     if (abandonedSteps.length > 0) {
+      const recoveredDiagnostics = latestPersistedOutcomeFields(abandonedSteps)
       if (!commitOwned(() => {
         for (const step of abandonedSteps) {
           updateJobStep(step.id, {
@@ -1042,6 +1060,7 @@ export class JobRuntime {
           type: 'recovered',
           message: 'Expired execution owner was replaced; resuming from the durable checkpoint',
           payload: {
+            ...recoveredDiagnostics,
             reason: 'execution_lease_recovered',
             nextAction: 'resume_execution',
           },
@@ -1283,6 +1302,12 @@ export class JobRuntime {
         const terminalPayload = completed
           ? { ...finalOutput, status: 'completed', complete: true, error: null }
           : diagnostics
+        if (completed) {
+          for (const step of listJobSteps(job.id)) {
+            const output = clearCompletedJobOutcomeDiagnostics(step.output)
+            if (output !== step.output) updateJobStep(step.id, { output })
+          }
+        }
         this.emit(appendJobEvent({
           jobId: job.id,
           type: completed ? 'completed' : 'failed',

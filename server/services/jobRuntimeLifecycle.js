@@ -94,12 +94,25 @@ function terminalNotificationPayload(job, { status, body, payload = null }) {
         nextAction: delivery.nextAction || 'retry_job',
         status: 'failed',
       })
+      const missingRequirements = Array.isArray(delivery.missingRequirements)
+        && delivery.missingRequirements.length > 0
+        ? delivery.missingRequirements
+        : diagnostics.missingRequirements
       return {
         ...diagnostics,
         ...delivery,
         status: 'failed',
         complete: false,
         error: reason,
+        reason,
+        incompleteReason: delivery.incompleteReason || diagnostics.incompleteReason,
+        missingRequirements,
+        verifiedLocalFiles: Array.isArray(delivery.verifiedLocalFiles)
+          ? delivery.verifiedLocalFiles
+          : diagnostics.verifiedLocalFiles,
+        retainedLocalFiles: Array.isArray(delivery.retainedLocalFiles)
+          ? delivery.retainedLocalFiles
+          : diagnostics.retainedLocalFiles,
         nextAction: delivery.nextAction || diagnostics.nextAction,
       }
     }
@@ -116,12 +129,26 @@ function terminalNotificationPayload(job, { status, body, payload = null }) {
     nextAction: payload?.nextAction || 'retry_job',
     status: normalizedStatus,
   })
+  const extra = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {}
   return {
     ...diagnostics,
-    ...(payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {}),
+    ...extra,
     status: normalizedStatus,
     complete: false,
     error: reason,
+    reason: String(extra.reason || diagnostics.reason || reason).trim(),
+    incompleteReason: extra.incompleteReason || diagnostics.incompleteReason,
+    missingRequirements: Array.isArray(extra.missingRequirements)
+      && extra.missingRequirements.length > 0
+      ? extra.missingRequirements
+      : diagnostics.missingRequirements,
+    verifiedLocalFiles: Array.isArray(extra.verifiedLocalFiles)
+      ? extra.verifiedLocalFiles
+      : diagnostics.verifiedLocalFiles,
+    retainedLocalFiles: Array.isArray(extra.retainedLocalFiles)
+      ? extra.retainedLocalFiles
+      : diagnostics.retainedLocalFiles,
+    nextAction: extra.nextAction || diagnostics.nextAction,
   }
 }
 

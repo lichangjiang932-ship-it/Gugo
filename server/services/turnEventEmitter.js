@@ -15,6 +15,92 @@ const DURABLE_BOUNDARY_EVENT_TYPES = new Set([
   'turn.blocked',
 ])
 
+const INCOMPLETE_BOUNDARY_DEFAULTS = Object.freeze({
+  'turn.cancelled': {
+    incompleteReason: 'turn_incomplete',
+    reason: 'The turn was cancelled before all requested work completed.',
+    missingRequirements: ['remaining_task_steps'],
+    nextAction: 'retry_turn',
+  },
+  'turn.failed': {
+    incompleteReason: 'turn_incomplete',
+    reason: 'The turn stopped before all requested work completed.',
+    missingRequirements: ['remaining_task_steps'],
+    nextAction: 'retry_turn',
+  },
+  'turn.interrupted': {
+    incompleteReason: 'model_call_interrupted',
+    reason: 'The turn was interrupted before all requested work completed.',
+    missingRequirements: ['model_response', 'remaining_task_steps'],
+    nextAction: 'resume_turn',
+  },
+  'turn.blocked': {
+    incompleteReason: 'recovery_blocked',
+    reason: 'The turn is blocked until its recovery requirements are satisfied.',
+    missingRequirements: ['execution_environment_repair', 'explicit_recovery_retry'],
+    nextAction: 'retry_recovery',
+  },
+  'turn.paused': {
+    incompleteReason: 'turn_incomplete',
+    reason: 'The turn is waiting for required information.',
+    missingRequirements: ['user_clarification'],
+    nextAction: 'provide_input',
+  },
+})
+
+function normalizedBoundaryStringList(value, fallback) {
+  const values = Array.isArray(value) && value.length > 0 ? value : fallback
+  return [...new Set(values.map((entry) => String(entry || '').trim()).filter(Boolean))].slice(0, 16)
+}
+
+function incompleteBoundaryPayload(type, value) {
+  const defaults = INCOMPLETE_BOUNDARY_DEFAULTS[type]
+  if (!defaults) return value
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const error = source.error && typeof source.error === 'object' && !Array.isArray(source.error)
+    ? source.error
+    : null
+  const rawIncompleteReason = String(
+    source.incompleteReason || error?.incompleteReason || defaults.incompleteReason,
+  ).trim().toLowerCase()
+  const incompleteReason = /^[a-z][a-z0-9_]{1,95}$/u.test(rawIncompleteReason)
+    ? rawIncompleteReason
+    : defaults.incompleteReason
+  const clarificationReason = String(
+    source.clarification?.question || source.clarification?.message || '',
+  ).trim()
+  const reason = String(
+    source.message
+      || error?.message
+      || source.reason
+      || error?.reason
+      || clarificationReason
+      || source.text
+      || source.partialText
+      || defaults.reason,
+  ).trim().slice(0, 2_000) || defaults.reason
+  const missingRequirements = normalizedBoundaryStringList(
+    source.missingRequirements || error?.missingRequirements,
+    defaults.missingRequirements,
+  )
+  const nextAction = String(
+    source.nextAction || error?.nextAction || defaults.nextAction,
+  ).trim().slice(0, 80) || defaults.nextAction
+  return {
+    ...source,
+    incompleteReason,
+    reason,
+    missingRequirements,
+    nextAction,
+    verifiedLocalFiles: Array.isArray(source.verifiedLocalFiles)
+      ? source.verifiedLocalFiles
+      : Array.isArray(error?.verifiedLocalFiles) ? error.verifiedLocalFiles : [],
+    retainedLocalFiles: Array.isArray(source.retainedLocalFiles)
+      ? source.retainedLocalFiles
+      : Array.isArray(error?.retainedLocalFiles) ? error.retainedLocalFiles : [],
+  }
+}
+
 export function isTerminalTurnEventType(value) {
   return TERMINAL_EVENT_TYPES.has(String(value || ''))
 }
@@ -336,7 +422,7 @@ export function createTurnEventEmitter({
         turnId,
         sequence: nextSequence,
         type,
-        payload,
+        payload: incompleteBoundaryPayload(type, payload),
         createdAt: now(),
       })
       await beforeAppend?.(event)

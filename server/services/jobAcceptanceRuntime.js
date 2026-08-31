@@ -9,6 +9,7 @@ import { cancelJobWake } from './jobWakeStore.js'
 import {
   buildFinalOutput,
   buildJobOutcomeDiagnostics,
+  clearCompletedJobOutcomeDiagnostics,
   deriveJobProgress,
   mergeJobEvidence,
   resolveWorkflowState,
@@ -303,6 +304,7 @@ export function persistRejectedStepResult({
     ...(artifactIds.length > 0 ? { artifactIds } : {}),
     ...(issues.length > 0 ? { issues } : {}),
   }
+  let terminalPayload = null
   const committed = commitOwned(() => {
     updateJobStep(nextStep.id, {
       status: 'failed',
@@ -321,6 +323,7 @@ export function persistRejectedStepResult({
       reason: failure,
       nextAction: 'retry_step',
     })
+    terminalPayload = { ...failurePayload, ...diagnostics }
     updateJobStep(nextStep.id, {
       output: { ...(output || {}), ...diagnostics },
     })
@@ -331,12 +334,16 @@ export function persistRejectedStepResult({
       stepId: nextStep.id,
       type: 'failed',
       message: failure,
-      payload: { ...failurePayload, ...diagnostics },
+      payload: terminalPayload,
     }))
   })
   if (!committed) return false
   runtimeCore.approval.release({ jobId: job.id, userId: job.userId })
-  notifyJobTerminal({ ...job, error: failure }, { status: 'failed', body: failure })
+  notifyJobTerminal({ ...job, error: failure }, {
+    status: 'failed',
+    body: failure,
+    payload: terminalPayload,
+  })
   notifyJobStopHook(job, { status: 'failed', error: failure, stepId: nextStep.id })
   return true
 }
@@ -365,10 +372,20 @@ export function completeManualJobTransition({ jobId, userId, updated }) {
       }
       finalOutput = null
     }
+    if (completed) {
+      for (const persistedStep of snapshot?.steps || []) {
+        updateJobStep(persistedStep.id, {
+          output: clearCompletedJobOutcomeDiagnostics(persistedStep.output),
+        })
+      }
+    }
     const finalStep = [...(snapshot?.steps || [])].reverse().find((step) => step.kind === 'finalize')
     if (finalStep) {
-      const priorOutput = finalStep.output && typeof finalStep.output === 'object' && !Array.isArray(finalStep.output)
-        ? finalStep.output
+      const normalizedPriorOutput = completed
+        ? clearCompletedJobOutcomeDiagnostics(finalStep.output)
+        : finalStep.output
+      const priorOutput = normalizedPriorOutput && typeof normalizedPriorOutput === 'object' && !Array.isArray(normalizedPriorOutput)
+        ? normalizedPriorOutput
         : {}
       const terminalOutput = finalOutput || diagnostics
       const finalEvidence = mergeJobEvidence(priorOutput.evidence, terminalOutput?.evidence)

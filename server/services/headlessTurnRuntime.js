@@ -142,14 +142,28 @@ function normalizeApprovalDecision(value) {
   return 'deny'
 }
 
+function completedEventSucceeded(event) {
+  const payload = event?.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+    ? event.payload
+    : {}
+  return event?.type === 'turn.completed'
+    && payload.complete !== false
+    && payload.completed !== false
+    && payload.paused !== true
+    && payload.interrupted !== true
+}
+
 function resultForLastEvent({ sessionId, turnId, lastEvent }) {
   const type = lastEvent?.type || null
+  const completed = completedEventSucceeded(lastEvent)
   return {
     sessionId,
     turnId,
-    status: type ? type.slice('turn.'.length) : 'unknown',
+    status: type === 'turn.completed' && !completed
+      ? 'incomplete'
+      : type ? type.slice('turn.'.length) : 'unknown',
     lastEvent,
-    exitCode: SUCCESS_EVENT_TYPES.has(type) ? 0 : 1,
+    exitCode: completed && SUCCESS_EVENT_TYPES.has(type) ? 0 : 1,
   }
 }
 

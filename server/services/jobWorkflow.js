@@ -1,4 +1,8 @@
 import { detectArtifactIntent, expectsFileArtifact } from './artifactIntent.js'
+import {
+  excludeVerifiedLocalFiles,
+  mergeLocalFileReceipts,
+} from './turnRecoveryProjection.js'
 
 const RUNNABLE_STEP_STATUSES = new Set(['queued', 'pending'])
 const ARTIFACT_DELIVERABLE_LABELS = Object.freeze({
@@ -328,6 +332,20 @@ export function mergeJobEvidence(...sources) {
   return evidence
 }
 
+export function normalizeJobLocalFileReceipts({
+  verifiedLocalFiles = [],
+  retainedLocalFiles = [],
+} = {}) {
+  const verified = mergeLocalFileReceipts(verifiedLocalFiles)
+  return {
+    verifiedLocalFiles: verified,
+    retainedLocalFiles: excludeVerifiedLocalFiles(
+      mergeLocalFileReceipts(retainedLocalFiles),
+      verified,
+    ),
+  }
+}
+
 function normalizeReviewer(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return {
@@ -489,12 +507,14 @@ export function buildFinalOutput(job) {
   )
   const completedDeliverables = expectedDeliverables.filter((type) => deliveredTypes.has(type))
   const missingDeliverables = expectedDeliverables.filter((type) => !deliveredTypes.has(type))
-  const verifiedLocalFiles = mergeJobEvidence(...steps.map((step) => step?.output?.verifiedLocalFiles))
-  const verifiedPaths = new Set(verifiedLocalFiles
-    .map((file) => cleanText(file?.path || file))
-    .filter(Boolean))
-  const retainedLocalFiles = mergeJobEvidence(...steps.map((step) => step?.output?.retainedLocalFiles))
-    .filter((file) => !verifiedPaths.has(cleanText(file?.path || file)))
+  const { verifiedLocalFiles, retainedLocalFiles } = normalizeJobLocalFileReceipts({
+    verifiedLocalFiles: mergeLocalFileReceipts(
+      ...steps.map((step) => step?.output?.verifiedLocalFiles),
+    ),
+    retainedLocalFiles: mergeLocalFileReceipts(
+      ...steps.map((step) => step?.output?.retainedLocalFiles),
+    ),
+  })
   const missingRequirements = [...new Set(steps.flatMap((step) => (
     normalizeStringList(step?.output?.missingRequirements)
   )))]
@@ -549,6 +569,10 @@ export function buildFinalOutput(job) {
     }
   }
 
+  if (retainedLocalFiles.length > 0) {
+    issues.push(`${retainedLocalFiles.length} 个已保存文件仍待验证`)
+  }
+
   const acceptance = normalizeAcceptance(verification?.output?.acceptance)
   if (acceptance && acceptance.verdict !== 'pass') {
     issues.push(acceptance.summary || '验证步骤未通过结构化验收')
@@ -601,6 +625,12 @@ export function buildFinalOutput(job) {
 
 export function persistedJobOutcomeFields(output) {
   if (!output || typeof output !== 'object' || Array.isArray(output)) return {}
+  const hasVerifiedLocalFiles = Object.hasOwn(output, 'verifiedLocalFiles')
+  const hasRetainedLocalFiles = Object.hasOwn(output, 'retainedLocalFiles')
+  const localFiles = normalizeJobLocalFileReceipts({
+    verifiedLocalFiles: output.verifiedLocalFiles,
+    retainedLocalFiles: output.retainedLocalFiles,
+  })
   return {
     ...(typeof output.complete === 'boolean' ? { complete: output.complete } : {}),
     ...(String(output.reason || '').trim() ? { reason: String(output.reason).trim() } : {}),
@@ -614,12 +644,8 @@ export function persistedJobOutcomeFields(output) {
       && !Array.isArray(output.taskVerification)
       ? { taskVerification: output.taskVerification }
       : {}),
-    ...(Array.isArray(output.verifiedLocalFiles)
-      ? { verifiedLocalFiles: output.verifiedLocalFiles }
-      : {}),
-    ...(Array.isArray(output.retainedLocalFiles)
-      ? { retainedLocalFiles: output.retainedLocalFiles }
-      : {}),
+    ...(hasVerifiedLocalFiles ? { verifiedLocalFiles: localFiles.verifiedLocalFiles } : {}),
+    ...(hasRetainedLocalFiles ? { retainedLocalFiles: localFiles.retainedLocalFiles } : {}),
     ...(typeof output.retryable === 'boolean' ? { retryable: output.retryable } : {}),
     ...(typeof output.manualRetryable === 'boolean'
       ? { manualRetryable: output.manualRetryable }
@@ -650,8 +676,6 @@ export function clearResumedJobOutcomeDiagnostics(output) {
     'nextAction',
     'missingRequirements',
     'taskVerification',
-    'verifiedLocalFiles',
-    'retainedLocalFiles',
     'retryable',
     'manualRetryable',
     'missingDeliverables',
@@ -659,7 +683,47 @@ export function clearResumedJobOutcomeDiagnostics(output) {
     'acceptance',
     'repairAttempts',
   ]) delete resumed[key]
+  const localFiles = normalizeJobLocalFileReceipts({
+    verifiedLocalFiles: resumed.verifiedLocalFiles,
+    retainedLocalFiles: resumed.retainedLocalFiles,
+  })
+  if (Object.hasOwn(resumed, 'verifiedLocalFiles')) {
+    resumed.verifiedLocalFiles = localFiles.verifiedLocalFiles
+  }
+  if (Object.hasOwn(resumed, 'retainedLocalFiles')) {
+    resumed.retainedLocalFiles = localFiles.retainedLocalFiles
+  }
   return resumed
+}
+
+export function clearCompletedJobOutcomeDiagnostics(output) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return output
+  const completed = { ...output }
+  for (const key of [
+    'status',
+    'error',
+    'reason',
+    'incompleteReason',
+    'nextAction',
+    'missingRequirements',
+    'retryable',
+    'manualRetryable',
+    'missingDeliverables',
+    'issues',
+    'repairAttempts',
+  ]) delete completed[key]
+  if (completed.complete === false) delete completed.complete
+  const localFiles = normalizeJobLocalFileReceipts({
+    verifiedLocalFiles: completed.verifiedLocalFiles,
+    retainedLocalFiles: completed.retainedLocalFiles,
+  })
+  if (Object.hasOwn(completed, 'verifiedLocalFiles')) {
+    completed.verifiedLocalFiles = localFiles.verifiedLocalFiles
+  }
+  if (Object.hasOwn(completed, 'retainedLocalFiles')) {
+    completed.retainedLocalFiles = localFiles.retainedLocalFiles
+  }
+  return completed
 }
 
 export function buildJobOutcomeDiagnostics(job, {
@@ -698,14 +762,31 @@ export function buildJobOutcomeDiagnostics(job, {
         : value
     }
   }
+  const localFiles = normalizeJobLocalFileReceipts({
+    verifiedLocalFiles: carriedDiagnostics.verifiedLocalFiles,
+    retainedLocalFiles: carriedDiagnostics.retainedLocalFiles,
+  })
+  carriedDiagnostics.verifiedLocalFiles = localFiles.verifiedLocalFiles
+  carriedDiagnostics.retainedLocalFiles = localFiles.retainedLocalFiles
   const normalizedReason = String(reason || '').trim().slice(0, 2_000)
   const normalizedNextAction = String(nextAction || '').trim().slice(0, 80)
   const normalizedStatus = ['failed', 'cancelled', 'waiting', 'awaiting_approval'].includes(status)
     ? status
     : 'failed'
-  const effectiveReason = normalizedReason
+  const genericReasons = new Set(['任务未完成', '任务未全部完成', 'task incomplete'])
+  const deliveryReason = String(delivery.issues?.[0] || delivery.summary || '').trim().slice(0, 2_000)
+  const fallbackReason = {
+    awaiting_approval: 'The job is waiting for a required tool approval.',
+    cancelled: 'The job was cancelled before all requested work completed.',
+    failed: 'The job stopped before all requested work completed.',
+    waiting: 'The job is waiting for required user input.',
+  }[normalizedStatus]
+  const effectiveReason = (normalizedReason && !genericReasons.has(normalizedReason.toLowerCase())
+    ? normalizedReason
+    : '')
+    || (deliveryReason && !genericReasons.has(deliveryReason.toLowerCase()) ? deliveryReason : '')
     || String(carriedDiagnostics.incompleteReason || '').trim().slice(0, 2_000)
-    || String(delivery.issues?.[0] || delivery.summary || '任务未完成').trim().slice(0, 2_000)
+    || fallbackReason
   const rawIncompleteReason = String(
     carriedDiagnostics.incompleteReason || normalizedReason || '',
   ).trim().toLowerCase()
@@ -717,6 +798,12 @@ export function buildJobOutcomeDiagnostics(job, {
         failed: 'job_execution_incomplete',
         waiting: 'job_waiting_for_input',
       }[normalizedStatus]
+  const inferredMissingRequirements = {
+    awaiting_approval: ['approval_decision'],
+    cancelled: ['remaining_task_steps'],
+    failed: ['remaining_task_steps'],
+    waiting: ['user_input'],
+  }[normalizedStatus]
   const issues = [...new Set([
     ...(Array.isArray(delivery.issues) ? delivery.issues : []),
     effectiveReason,
@@ -729,8 +816,9 @@ export function buildJobOutcomeDiagnostics(job, {
     reason: effectiveReason,
     incompleteReason,
     missingRequirements: Array.isArray(carriedDiagnostics.missingRequirements)
+      && carriedDiagnostics.missingRequirements.length > 0
       ? carriedDiagnostics.missingRequirements
-      : [],
+      : inferredMissingRequirements,
     taskVerification: carriedDiagnostics.taskVerification || null,
     verifiedLocalFiles: Array.isArray(carriedDiagnostics.verifiedLocalFiles)
       ? carriedDiagnostics.verifiedLocalFiles

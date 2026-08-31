@@ -31,6 +31,7 @@ export function persistJobStepFailure({
   })
   const message = modelFailure?.message || formatProxyError(error) || rawMessage
   const modelPayload = modelFailurePayload(modelFailure)
+  let terminalPayload = null
   const committed = commitOwned(() => {
     updateJobStep(step.id, {
       status: 'failed',
@@ -48,23 +49,24 @@ export function persistJobStepFailure({
       reason: message || 'Step execution failed',
       nextAction: 'retry_step',
     })
+    terminalPayload = { ...(modelPayload || {}), ...diagnostics }
     const persistedStep = snapshot?.steps?.find((candidate) => candidate.id === step.id)
     const priorOutput = persistedStep?.output && typeof persistedStep.output === 'object' && !Array.isArray(persistedStep.output)
       ? persistedStep.output
       : {}
-    updateJobStep(step.id, { output: { ...priorOutput, ...(modelPayload || {}), ...diagnostics } })
+    updateJobStep(step.id, { output: { ...priorOutput, ...terminalPayload } })
     emit(appendJobEvent({
       jobId: job.id,
       stepId: step.id,
       type: 'failed',
       message: message || 'Step execution failed',
-      payload: { ...(modelPayload || {}), ...diagnostics },
+      payload: terminalPayload,
     }))
   })
   if (!committed) return false
   notifyJobTerminal(
     { ...job, error: message },
-    { status: 'failed', body: message || 'Step execution failed' },
+    { status: 'failed', body: message || 'Step execution failed', payload: terminalPayload },
   )
   notifyJobStopHook(job, {
     status: 'failed',
