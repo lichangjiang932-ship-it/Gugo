@@ -20,6 +20,35 @@ function normalizedFencingToken(value) {
   return Number.isSafeInteger(token) && token > 0 ? token : null
 }
 
+export function assertLiveTurnExecutionLease(db, {
+  userId,
+  event,
+  executionLease,
+  now = Date.now(),
+} = {}) {
+  const ownerId = String(executionLease?.ownerId || '').trim()
+  const fencingToken = normalizedFencingToken(executionLease?.fencingToken)
+  const checkedAt = Number(now)
+  const live = db && userId && event?.sessionId && event?.turnId
+    && ownerId && fencingToken && Number.isFinite(checkedAt)
+    ? db.prepare(`
+        SELECT 1
+        FROM turn_execution_leases
+        WHERE user_id = ? AND session_id = ? AND turn_id = ?
+          AND owner_id = ? AND fencing_token = ? AND expires_at > ?
+        LIMIT 1
+      `).get(userId, event.sessionId, event.turnId, ownerId, fencingToken, checkedAt)
+    : null
+  if (!live) {
+    const error = new Error('turn execution lease is missing, expired, or has been superseded')
+    error.code = 'TURN_EXECUTION_LEASE_STALE'
+    error.status = 409
+    error.retryable = false
+    throw error
+  }
+  return { ownerId, fencingToken }
+}
+
 function rememberFencingToken(db, { userId, sessionId, turnId, fencingToken, now }) {
   db.prepare(`
     INSERT INTO turn_execution_fences

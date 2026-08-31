@@ -71,13 +71,46 @@ export function claimDueJobWakes({ now = Date.now(), limit = 100 } = {}) {
        ORDER BY wake_at ASC LIMIT ?
     `).all(now, capped)
     const claimed = []
-    const update = db.prepare(`
+    const requeueStep = db.prepare(`
+      UPDATE job_steps
+         SET status = 'queued', error = NULL, started_at = NULL,
+             finished_at = NULL, updated_at = ?
+       WHERE id = ? AND job_id = ? AND status IN ('queued', 'running')
+         AND EXISTS (
+           SELECT 1 FROM jobs
+            WHERE id = job_steps.job_id AND user_id = ? AND status = 'waiting'
+         )
+    `)
+    const requeueJob = db.prepare(`
+      UPDATE jobs
+         SET status = 'queued', error = NULL, finished_at = NULL, updated_at = ?
+       WHERE id = ? AND user_id = ? AND status = 'waiting'
+         AND EXISTS (
+           SELECT 1 FROM job_steps
+            WHERE id = ? AND job_id = jobs.id
+         )
+    `)
+    const fire = db.prepare(`
       UPDATE job_wakeups
          SET status = 'fired', fired_at = ?, updated_at = ?
-       WHERE job_id = ? AND status = 'scheduled'
+       WHERE job_id = ? AND step_id = ? AND user_id = ?
+         AND status = 'scheduled' AND wake_at <= ?
+    `)
+    const cancelStale = db.prepare(`
+      UPDATE job_wakeups
+         SET status = 'cancelled', updated_at = ?
+       WHERE job_id = ? AND step_id = ? AND user_id = ? AND status = 'scheduled'
     `)
     for (const row of rows) {
-      if (update.run(now, now, row.job_id).changes > 0) claimed.push(mapWake({
+      requeueStep.run(now, row.step_id, row.job_id, row.user_id)
+      const awakened = requeueJob.run(now, row.job_id, row.user_id, row.step_id).changes === 1
+      if (!awakened) {
+        cancelStale.run(now, row.job_id, row.step_id, row.user_id)
+        continue
+      }
+      const fired = fire.run(now, now, row.job_id, row.step_id, row.user_id, now).changes === 1
+      if (!fired) throw new Error('job wake claim lost its compare-and-swap race')
+      claimed.push(mapWake({
         ...row,
         status: 'fired',
         fired_at: now,
@@ -85,5 +118,5 @@ export function claimDueJobWakes({ now = Date.now(), limit = 100 } = {}) {
       }))
     }
     return claimed
-  })()
+  }).immediate()
 }

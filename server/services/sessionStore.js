@@ -965,7 +965,10 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
         const requestedIds = Array.isArray(message.modelContext?.artifactIds)
           ? new Set(message.modelContext.artifactIds.map(String))
           : null
-        const matched = requestedIds?.size
+        // An explicit empty list means this terminal message owns no managed
+        // artifacts. Only legacy messages that omit artifactIds may fall back
+        // to every durable artifact recorded for the turn.
+        const matched = requestedIds
           ? artifacts.filter((artifact) => requestedIds.has(String(artifact.id)))
           : artifacts
         return matched.length ? { ...message, artifacts: matched } : message

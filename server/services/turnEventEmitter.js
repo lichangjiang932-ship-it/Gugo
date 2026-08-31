@@ -1,5 +1,5 @@
 import { createTurnEvent } from '../../shared/turnEvents.js'
-import { EventWriteBehindError } from './eventWriteBehind.js'
+import { EventWriteBehindError, findTurnEventFenceError } from './eventWriteBehind.js'
 import { publishCommittedAgentEvent } from '../core/agentEventConsumerRuntime.js'
 import { logWarn } from '../utils/logger.js'
 
@@ -205,6 +205,7 @@ export function createTurnEventEmitter({
   let closed = false
   let closePromise = null
   let deferredSinceBarrier = []
+  let executionLease = null
   const eventWriteBehind = createEventWriteBehind()
   if (!eventWriteBehind
     || typeof eventWriteBehind.enqueue !== 'function'
@@ -224,6 +225,7 @@ export function createTurnEventEmitter({
   }
 
   const journalReportedFailure = async (failure) => {
+    if (findTurnEventFenceError(failure)) return
     const batch = Array.isArray(failure?.failedEntries) ? failure.failedEntries : []
     const failedAt = Number.isInteger(failure?.failedAt) ? failure.failedAt : now()
     let journalError = null
@@ -340,7 +342,7 @@ export function createTurnEventEmitter({
       await beforeAppend?.(event)
       let stored
       if (DEFERRED_EVENT_TYPES.has(type) && checkpointState === null && !commitEvent) {
-        const entry = { userId, event, checkpointState }
+        const entry = { userId, event, checkpointState, executionLease }
         const queued = eventWriteBehind.enqueue(entry)
         deferredSinceBarrier.push(queued?.event ? queued : entry)
         stored = queued?.event || event
@@ -349,7 +351,7 @@ export function createTurnEventEmitter({
         try {
           stored = commitEvent
             ? await commitEvent({ userId, event, checkpointState })
-            : await appendEvent({ userId, event, checkpointState })
+            : await appendEvent({ userId, event, checkpointState, executionLease })
           if (isDurableTurnBoundaryEventType(type)) {
             const verification = await verifyEventCommit({ userId, event, storedEvent: stored })
             if (verification?.committed !== true || !verification?.receipt) {
@@ -357,8 +359,10 @@ export function createTurnEventEmitter({
             }
           }
         } catch (error) {
+          const fenceError = findTurnEventFenceError(error)
+          if (fenceError) throw fenceError
           const failedAt = now()
-          const failedEntry = { userId, event, checkpointState }
+          const failedEntry = { userId, event, checkpointState, executionLease }
           let journalError = null
           try {
             await recordEventWriteFailure?.({
@@ -441,6 +445,19 @@ export function createTurnEventEmitter({
       onWriterClose?.(eventWriteBehind)
     })()
     return closePromise
+  }
+  emit.bindExecutionLease = (proof) => {
+    const ownerId = String(proof?.ownerId || '').trim()
+    const fencingToken = Number(proof?.fencingToken)
+    if (!ownerId || !Number.isSafeInteger(fencingToken) || fencingToken <= 0) {
+      throw new TypeError('a valid execution lease proof is required')
+    }
+    if (executionLease
+      && (executionLease.ownerId !== ownerId || executionLease.fencingToken !== fencingToken)) {
+      throw new Error('turn event emitter execution lease is already bound')
+    }
+    executionLease = Object.freeze({ ownerId, fencingToken })
+    return executionLease
   }
   emit.writer = eventWriteBehind
   return emit

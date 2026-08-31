@@ -29,7 +29,7 @@ const libreOfficePath = await findLibreOffice()
 test('POST /api/artifacts/render-preview returns a PNG dataUrl', {
   skip: libreOfficePath ? false : 'libreoffice is not installed',
 }, async () => {
-  const { token } = issueTestSession()
+  const { token, userId } = issueTestSession()
   const result = await createPptx({
     title: 'Preview Smoke',
     theme: 'ocean',
@@ -37,6 +37,7 @@ test('POST /api/artifacts/render-preview returns a PNG dataUrl', {
       { title: '封面' },
       { title: '章节', layout: 'section' },
     ],
+    userId,
   })
 
   const server = createAppServer({ getEnv: () => ({}) })

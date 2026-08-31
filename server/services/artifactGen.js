@@ -36,6 +36,7 @@ import { buildXlsxArtifactBuffer } from './xlsxArtifactFormat.js'
 import { snapshotXlsxSheets } from './xlsxArtifactContract.js'
 import { writeGeneratedArtifactAtomically } from './artifactAtomicWriter.js'
 import { removeOwnedFailedPublication } from './artifactPublicationCleanup.js'
+import { registerTemporaryArtifactPreview } from './artifactPreviewGrantStore.js'
 import {
   ARTIFACT_DIR,
   ensureArtifactDir,
@@ -1257,6 +1258,7 @@ export async function createPptx({ title = 'Presentation', subtitle = '', theme:
     generatedAt: resolvedGeneratedAt,
   })
   const a = writeNewArtifact(title, 'pptx', buffer)
+  registerTemporaryArtifactPreview({ userId, artifactPath: a.fullPath })
   return {
     ...a,
     type: 'pptx',

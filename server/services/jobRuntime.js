@@ -13,10 +13,14 @@ import { cancelJobWake, claimDueJobWakes, scheduleJobWake } from './jobWakeStore
 import {
   acknowledgeJobSteering,
   claimJobSteering,
-  enqueueJobSteering,
   releaseAllJobSteeringLeases,
   releaseJobSteeringLease,
 } from './jobSteeringStore.js'
+import {
+  enqueueJobSteeringTransition,
+  requestJobCancellationTransition,
+  resumeJobAfterApprovalTransition,
+} from './jobRuntimeTransitionStore.js'
 import {
   deriveJobProgress,
   findNextRunnableStep,
@@ -170,37 +174,59 @@ export class JobRuntime {
   recover() {
     releaseAllJobSteeringLeases()
     const jobs = listRecoverableJobs()
-    const orphanedJobs = jobs.filter((job) => !this.runtimeCore.lease.isActive({ jobId: job.id }))
-    const recovered = recoverInterruptedJobs(orphanedJobs)
-    for (const job of recovered) {
-      this.jobUserCache.set(job.id, job.userId || null)
-      updateJob(job.id, { status: 'queued' })
-      for (const step of listJobSteps(job.id)) {
-        if (step.status === 'running') updateJobStep(step.id, { status: 'queued' })
+    const recovered = []
+    for (const candidate of jobs) {
+      if (!['planning', 'running', 'awaiting_approval'].includes(candidate.status)) continue
+      const scope = { jobId: candidate.id }
+      // The observation alone is not authority to recover: another process can
+      // claim the job immediately afterwards. Take a short execution lease and
+      // fence the requeue in the same ownership transaction.
+      if (this.runtimeCore.lease.isActive(scope)) continue
+      const recoveryLease = this.runtimeCore.lease.acquire(scope)
+      if (!recoveryLease) continue
+      try {
+        const outcome = this.runtimeCore.lease.runIfOwned(scope, () => {
+          const job = getJobRow(candidate.id)
+          if (!job) return null
+          let event
+          if (['planning', 'running'].includes(job.status)) {
+            updateJob(job.id, { status: 'queued', error: null, finishedAt: null })
+            for (const step of listJobSteps(job.id)) {
+              if (step.status === 'running') {
+                updateJobStep(step.id, { status: 'queued', error: null, startedAt: null, finishedAt: null })
+              }
+            }
+            event = appendJobEvent({
+              jobId: job.id,
+              type: 'recovered',
+              message: '服务重启后已恢复到队列',
+            })
+          } else if (job.status === 'awaiting_approval') {
+            const approval = getLatestJobApproval({ jobId: job.id, userId: job.userId })
+            if (!approval || approval.status === 'pending') return null
+            updateJob(job.id, { status: 'queued', error: null, finishedAt: null })
+            for (const step of listJobSteps(job.id)) {
+              if (step.status === 'running') {
+                updateJobStep(step.id, { status: 'queued', error: null, startedAt: null, finishedAt: null })
+              }
+            }
+            event = appendJobEvent({
+              jobId: job.id,
+              type: 'approval_recovered',
+              message: 'Persisted approval decision found after restart; the interrupted turn was requeued',
+              payload: { approvalId: approval.id, decision: approval.status },
+            })
+          } else {
+            return null
+          }
+          this.jobUserCache.set(job.id, job.userId || null)
+          this.emit(event)
+          return { ...job, status: 'queued' }
+        })
+        if (outcome?.owned && outcome.value) recovered.push(outcome.value)
+      } finally {
+        recoveryLease.release()
       }
-      const event = appendJobEvent({
-        jobId: job.id,
-        type: 'recovered',
-        message: '服务重启后已恢复到队列',
-      })
-      this.emit(event)
-    }
-    for (const job of orphanedJobs.filter((candidate) => candidate.status === 'awaiting_approval')) {
-      const approval = getLatestJobApproval({ jobId: job.id, userId: job.userId })
-      if (!approval || approval.status === 'pending') continue
-      this.jobUserCache.set(job.id, job.userId || null)
-      updateJob(job.id, { status: 'queued' })
-      for (const step of listJobSteps(job.id)) {
-        if (step.status === 'running') updateJobStep(step.id, { status: 'queued' })
-      }
-      const event = appendJobEvent({
-        jobId: job.id,
-        type: 'approval_recovered',
-        message: 'Persisted approval decision found after restart; the interrupted turn was requeued',
-        payload: { approvalId: approval.id, decision: approval.status },
-      })
-      this.emit(event)
-      recovered.push({ ...job, status: 'queued' })
     }
     return recovered
   }
@@ -271,22 +297,19 @@ export class JobRuntime {
   }
 
   steerJob(jobId, { userId, content } = {}) {
-    const job = this.getJob(jobId, { userId })
-    if (!job) return null
-    if (TERMINAL_JOB_STATUSES.has(job.status)) {
-      return { accepted: false, error: 'job is already finished', job }
+    const transition = enqueueJobSteeringTransition({ jobId, userId, content })
+    if (!transition.found) return null
+    if (!transition.accepted) {
+      return {
+        accepted: false,
+        error: transition.reason === 'plan_approval_required'
+          ? 'approve the proposed plan before steering execution'
+          : 'job is already finished',
+        job: this.getJob(jobId, { userId }),
+      }
     }
-    const latestSuspension = [...(job.events || [])]
-      .reverse()
-      .find((event) => event.type === 'plan_proposed' || event.type === 'awaiting_user')
-    if (job.status === 'waiting' && latestSuspension?.type === 'plan_proposed') {
-      return { accepted: false, error: 'approve the proposed plan before steering execution', job }
-    }
-    const message = enqueueJobSteering({ jobId, userId, content })
-    if (!message) return null
-    if (job.status === 'waiting') {
-      cancelJobWake({ jobId, userId })
-      updateJob(jobId, { status: 'queued', error: null, finishedAt: null })
+    const { message } = transition
+    if (transition.requeued) {
       this.emit(appendJobEvent({
         jobId,
         type: 'user_response_received',
@@ -319,11 +342,12 @@ export class JobRuntime {
   }
 
   requestCancel(jobId, { userId } = {}) {
-    const job = this.getJob(jobId, { userId })
-    if (!job || TERMINAL_JOB_STATUSES.has(job.status)) return job
-    cancelJobWake({ jobId, userId })
-    updateJob(jobId, { status: 'cancel_requested', cancelRequested: true })
-    this.activeControllers.get(jobId)?.abort(userCancellationError('JOB_CANCEL_REQUESTED', 'Cancelled by user'))
+    const transition = requestJobCancellationTransition({ jobId, userId })
+    if (!transition.found) return null
+    if (transition.status === 'cancel_requested') {
+      this.activeControllers.get(jobId)?.abort(userCancellationError('JOB_CANCEL_REQUESTED', 'Cancelled by user'))
+    }
+    if (!transition.changed) return this.getJob(jobId, { userId })
     const event = appendJobEvent({
       jobId,
       type: 'cancel_requested',
@@ -337,13 +361,22 @@ export class JobRuntime {
     if (!job || job.status !== 'awaiting_approval') return job
     // In the original process the durable waiter will resume itself. Only a
     // restarted process, which has no active controller, needs requeueing.
-    if (this.activeControllers.has(jobId)) return job
-    for (const step of job.steps) {
-      if (step.status === 'running' && (!stepId || step.id === stepId)) {
-        updateJobStep(step.id, { status: 'queued' })
-      }
+    const scope = { jobId }
+    if (this.activeControllers.has(jobId) || this.runtimeCore.lease.isActive(scope)) return job
+    const recoveryLease = this.runtimeCore.lease.acquire(scope)
+    if (!recoveryLease) return this.getJob(jobId, { userId })
+    let transition
+    try {
+      transition = resumeJobAfterApprovalTransition({
+        jobId,
+        userId,
+        stepId,
+        leaseOwnerId: this.runtimeCore.lease.ownerId,
+      })
+    } finally {
+      recoveryLease.release()
     }
-    updateJob(jobId, { status: 'queued', error: null, finishedAt: null })
+    if (!transition.changed) return this.getJob(jobId, { userId })
     this.emit(appendJobEvent({
       jobId,
       stepId,
@@ -589,10 +622,7 @@ export class JobRuntime {
 
   async _runOneTick() {
     for (const wake of claimDueJobWakes()) {
-      const sleepingJob = getJobRow(wake.jobId, { userId: wake.userId })
-      if (!sleepingJob || sleepingJob.status !== 'waiting') continue
       this.jobUserCache.set(wake.jobId, wake.userId)
-      updateJob(wake.jobId, { status: 'queued', error: null, finishedAt: null })
       this.emit(appendJobEvent({
         jobId: wake.jobId,
         stepId: wake.stepId,

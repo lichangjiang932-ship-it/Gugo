@@ -23,6 +23,7 @@ import {
   failedRetryAttemptPayload,
   isValidFailedRetryAttemptRecord,
 } from './turnRecoveryProjection.js'
+import { assertLiveTurnExecutionLease } from './turnExecutionLeaseStore.js'
 
 const TURN_BOUNDARY_TYPES = new Set([
   'turn.completed',
@@ -92,41 +93,6 @@ function failedRetryCheckpointState(state, attemptPayload) {
       ? { budget: resetRetryBudget(state.budget) }
       : {}),
   }
-}
-
-function normalizedExecutionLease(value) {
-  const ownerId = String(value?.ownerId || '').trim()
-  const fencingToken = Number(value?.fencingToken)
-  if (!ownerId || !Number.isSafeInteger(fencingToken) || fencingToken <= 0) return null
-  return { ownerId, fencingToken }
-}
-
-function assertLiveExecutionLease(db, { userId, event, executionLease, now }) {
-  const proof = normalizedExecutionLease(executionLease)
-  const checkedAt = Number(now)
-  const live = proof && Number.isFinite(checkedAt)
-    ? db.prepare(`
-        SELECT 1
-        FROM turn_execution_leases
-        WHERE user_id = ? AND session_id = ? AND turn_id = ?
-          AND owner_id = ? AND fencing_token = ? AND expires_at > ?
-        LIMIT 1
-      `).get(
-        userId,
-        event.sessionId,
-        event.turnId,
-        proof.ownerId,
-        proof.fencingToken,
-        checkedAt,
-      )
-    : null
-  if (!live) {
-    throw persistenceError(
-      'TURN_EXECUTION_LEASE_STALE',
-      'turn execution lease is missing, expired, or has been superseded',
-    )
-  }
-  return proof
 }
 
 function assertEventScope({ userId, event, type = null } = {}) {
@@ -295,7 +261,7 @@ export function createSqliteTurnPersistenceTransactions({
     let committed
     let mutationResult
     db.transaction(() => {
-      assertLiveExecutionLease(db, { userId, event, executionLease, now: now() })
+      assertLiveTurnExecutionLease(db, { userId, event, executionLease, now: now() })
       mutationResult = mutate?.({ db })
       committed = appendEventsInTransaction([{ userId, event, checkpointState }], db)
     }).immediate()
@@ -375,7 +341,7 @@ export function createSqliteTurnPersistenceTransactions({
       const db = openDatabase()
       let committed
       db.transaction(() => {
-        assertLiveExecutionLease(db, { userId, event, executionLease, now: now() })
+        assertLiveTurnExecutionLease(db, { userId, event, executionLease, now: now() })
         committed = appendEventsInTransaction([{ userId, event, checkpointState: null }], db)
         if (message) {
           if (committed.insertedEvents.length > 0) writeMessage(message)

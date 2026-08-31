@@ -9,6 +9,7 @@ import { projectTurnEventForClient } from '../../shared/turnEventProjection.js'
 import { publishAgentEventEnvelope } from '../core/agentEventConsumerRuntime.js'
 import { saveTurnCheckpoint } from './turnCheckpointStore.js'
 import { failureAllowsFailedRetry } from './turnFailedRetryPolicy.js'
+import { findTurnEventFenceError, isTurnEventFenceFailureRecord } from './eventWriteBehind.js'
 
 const subscribers = new Map()
 const DAY_MS = 86_400_000
@@ -195,11 +196,7 @@ export function assertContiguousTurnEvents(events = [], {
 
 export const turnEventForClient = projectTurnEventForClient
 
-/**
- * Retention is applied to whole turns, never to individual events. This keeps
- * replay sequences internally consistent: recent/active turns remain complete,
- * while expired or surplus terminal turns disappear atomically as a unit.
- */
+// Retention deletes whole turns so every remaining replay stays contiguous.
 export function pruneTurnEvents({
   userId = null,
   now = Date.now(),
@@ -517,10 +514,12 @@ export function verifyTurnEventCommit({ userId, event } = {}) {
 
 export function recordTurnEventWriteFailure({
   batch = [],
+  error = null,
   errorMessage = 'event write failed',
   attempts = 3,
   failedAt = Date.now(),
 } = {}) {
+  if (findTurnEventFenceError(error)) return 0
   if (!Array.isArray(batch) || batch.length === 0) return 0
   const db = getDb()
   const findExisting = db.prepare(`SELECT id FROM event_write_failures
@@ -657,6 +656,10 @@ export function replayTurnEventWriteFailure({ userId, id } = {}) {
   const row = getDb().prepare(`SELECT * FROM event_write_failures
     WHERE id = ? AND user_id = ?`).get(safeId, userId)
   if (!row) return null
+  if (isTurnEventFenceFailureRecord(row)) {
+    throw failureReplayError('TURN_EVENT_FAILURE_FENCED',
+      'an event rejected from a stale execution owner cannot be replayed', 422)
+  }
   const failure = mapFailureRow(row)
   if (!failure.eventId || !failure.sessionId || !failure.turnId
     || !Number.isInteger(failure.eventSequence) || !failure.eventType) {
@@ -723,11 +726,7 @@ export function pruneTurnEventWriteFailures({
   return deleted
 }
 
-/**
- * Resolve the Session Store scope for a user-owned turn id without exposing
- * SQLite details to Headless or other hosts. Turn ids are not globally unique,
- * so callers must handle the explicit ambiguous state instead of guessing.
- */
+// Turn ids are not global, so ambiguous user-owned scopes remain explicit.
 export function resolveTurnSession({ userId, turnId } = {}) {
   const normalizedUserId = typeof userId === 'string' ? userId.trim() : ''
   const normalizedTurnId = typeof turnId === 'string' ? turnId.trim() : ''

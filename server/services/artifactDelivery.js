@@ -8,9 +8,10 @@ import { applyHtmlArtifactDocumentPolicy, HTML_ARTIFACT_RESPONSE_CSP } from '../
 import { authenticateRequest } from '../middleware.js'
 import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
 import { expandHtmlArtifactAssets, getHtmlArtifactAsset } from './htmlArtifactAssets.js'
-import { getArtifactByFilename } from './jobStore.js'
+import { listArtifactsByFilename } from './jobStore.js'
+import { hasTemporaryArtifactPreviewGrant } from './artifactPreviewGrantStore.js'
 import { ARTIFACT_DIR, ensureArtifactDir, isSafeArtifactFilename } from './artifactStorage.js'
-import { getTurnArtifactByFilename } from './turnArtifactStore.js'
+import { listTurnArtifactsByFilename } from './turnArtifactStore.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -110,6 +111,22 @@ function withStatus(statusCode, message) {
   return error
 }
 
+function resolveOwnedArtifactByFilename(filename, userId) {
+  const candidates = [
+    ...listArtifactsByFilename(filename),
+    ...listTurnArtifactsByFilename(filename),
+  ]
+  if (candidates.length === 0) return { artifact: null, persisted: false, conflict: false }
+  if (candidates.some((artifact) => artifact.userId !== userId)) {
+    return { artifact: null, persisted: true, conflict: true }
+  }
+  return {
+    artifact: candidates.find((artifact) => artifact.userId === userId) || null,
+    persisted: true,
+    conflict: false,
+  }
+}
+
 async function findExecutable(names) {
   for (const name of names) {
     try {
@@ -160,8 +177,11 @@ function resolvePreviewArtifactPath(input, userId) {
     throw withStatus(400, 'artifactPath must be inside the artifact directory')
   }
 
-  const artifact = getArtifactByFilename(path.basename(full)) || getTurnArtifactByFilename(path.basename(full))
-  if (artifact?.userId && artifact.userId !== userId) {
+  const ownership = resolveOwnedArtifactByFilename(path.basename(full), userId)
+  if (ownership.conflict || (ownership.persisted && !ownership.artifact)) {
+    throw withStatus(404, 'artifact not found')
+  }
+  if (!ownership.artifact && !hasTemporaryArtifactPreviewGrant({ userId, artifactPath: full })) {
     throw withStatus(404, 'artifact not found')
   }
   return full
@@ -262,9 +282,9 @@ export function handleArtifactDownload(req, res) {
   }
   if (!userId) { res.statusCode = 401; res.end('Unauthorized'); return }
 
-  const artifact = getArtifactByFilename(filename) || getTurnArtifactByFilename(filename)
-  if (!artifact) { res.statusCode = 404; res.end('not found'); return }
-  if (artifact.userId !== userId) {
+  const ownership = resolveOwnedArtifactByFilename(filename, userId)
+  const artifact = ownership.artifact
+  if (!artifact || ownership.conflict) {
     res.statusCode = 404; res.end('not found'); return
   }
 

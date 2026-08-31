@@ -22,6 +22,12 @@ function boundedText(value, maxLength) {
   return text ? text.slice(0, maxLength) : ''
 }
 
+function updatedField(updates, key, current) {
+  return Object.hasOwn(updates, key) && updates[key] !== undefined
+    ? updates[key]
+    : current
+}
+
 function completionEvidenceError(code, message) {
   return Object.assign(new Error(message), { code, statusCode: 422 })
 }
@@ -295,13 +301,13 @@ export function updateJob(id, updates = {}, now = Date.now()) {
   const current = getJob(id)
   if (!current) return null
   const next = {
-    prompt: updates.prompt ?? current.prompt,
-    status: updates.status ?? current.status,
-    progress: updates.progress ?? current.progress,
-    cancelRequested: updates.cancelRequested ?? current.cancelRequested,
-    startedAt: updates.startedAt ?? current.startedAt,
-    finishedAt: updates.finishedAt ?? current.finishedAt,
-    error: updates.error ?? current.error,
+    prompt: updatedField(updates, 'prompt', current.prompt),
+    status: updatedField(updates, 'status', current.status),
+    progress: updatedField(updates, 'progress', current.progress),
+    cancelRequested: updatedField(updates, 'cancelRequested', current.cancelRequested),
+    startedAt: updatedField(updates, 'startedAt', current.startedAt),
+    finishedAt: updatedField(updates, 'finishedAt', current.finishedAt),
+    error: updatedField(updates, 'error', current.error),
   }
   getDb().prepare(`
     UPDATE jobs
@@ -589,11 +595,11 @@ export function updateJobStep(stepId, updates = {}, now = Date.now()) {
   const current = getJobStep(stepId)
   if (!current) return null
   const next = {
-    status: updates.status ?? current.status,
-    output: updates.output ?? current.output,
-    error: updates.error ?? current.error,
-    startedAt: updates.startedAt ?? current.startedAt,
-    finishedAt: updates.finishedAt ?? current.finishedAt,
+    status: updatedField(updates, 'status', current.status),
+    output: updatedField(updates, 'output', current.output),
+    error: updatedField(updates, 'error', current.error),
+    startedAt: updatedField(updates, 'startedAt', current.startedAt),
+    finishedAt: updatedField(updates, 'finishedAt', current.finishedAt),
   }
   getDb().prepare(`
     UPDATE job_steps
@@ -690,13 +696,21 @@ export function appendJobArtifact({
   filename = null,
   now = Date.now(),
 }) {
-  if (!userId) throw new Error('appendJobArtifact requires userId')
+  if (!id || !jobId || !userId || !type || !title || !url) {
+    throw new Error('appendJobArtifact requires an owned artifact identity')
+  }
   const db = getDb()
   return db.transaction(() => {
     assertManagedArtifactMutationAllowed(
       db,
       'Artifacts cannot change while local data is being cleared',
     )
+    if (!db.prepare('SELECT 1 FROM jobs WHERE id = ? AND user_id = ?').get(jobId, userId)) {
+      throw new Error('appendJobArtifact job ownership mismatch')
+    }
+    if (stepId && !db.prepare('SELECT 1 FROM job_steps WHERE id = ? AND job_id = ?').get(stepId, jobId)) {
+      throw new Error('appendJobArtifact step ownership mismatch')
+    }
     db.prepare(`
       INSERT INTO job_artifacts (id, job_id, user_id, step_id, type, title, url, filename, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -707,10 +721,13 @@ export function appendJobArtifact({
   }).immediate()
 }
 
-export function listJobArtifacts(jobId) {
+export function listJobArtifacts(jobId, { userId } = {}) {
+  const query = userId
+    ? 'SELECT * FROM job_artifacts WHERE job_id = ? AND user_id = ? ORDER BY created_at ASC'
+    : 'SELECT * FROM job_artifacts WHERE job_id = ? ORDER BY created_at ASC'
   return getDb()
-    .prepare('SELECT * FROM job_artifacts WHERE job_id = ? ORDER BY created_at ASC')
-    .all(jobId)
+    .prepare(query)
+    .all(...(userId ? [jobId, userId] : [jobId]))
     .map(mapArtifact)
 }
 
@@ -744,7 +761,7 @@ export function getJobWithChildren(id, { userId } = {}) {
     ...job,
     steps: listJobSteps(id),
     events: listJobEvents(id),
-    artifacts: listJobArtifacts(id),
+    artifacts: listJobArtifacts(id, { userId: job.userId }),
   }
 }
 
