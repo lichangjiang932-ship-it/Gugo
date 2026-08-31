@@ -1,5 +1,6 @@
 import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
+import { projectTurnEventForClient } from '../../../shared/turnEventProjection.js'
 import { removeVerifiedLocalFilesFromRetained } from '../localFileReferences.js'
 import { createToolOutputBuffer } from './toolOutputBuffer.js'
 
@@ -323,7 +324,7 @@ export function createBufferedTurnActivityDispatcher(options = {}) {
   }
 }
 
-export async function dispatchTurnEvent(event, {
+export async function dispatchTurnEvent(sourceEvent, {
   dispatch,
   taskId,
   onApproval,
@@ -331,6 +332,7 @@ export async function dispatchTurnEvent(event, {
   messageTarget,
   flushToolOutput,
 } = {}) {
+  const event = projectTurnEventForClient(sourceEvent)
   const payload = event.payload || {}
   if (TOOL_OUTPUT_FLUSH_EVENT_TYPES.has(event.type)) await flushToolOutput?.()
   const dispatchMessage = (action) => dispatch?.({ ...action, ...(messageTarget || {}) })

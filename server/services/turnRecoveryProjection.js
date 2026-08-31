@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 import { failureAllowsFailedRetry } from './turnFailedRetryPolicy.js'
 
 const TERMINAL_TYPES = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
@@ -7,6 +8,11 @@ const STREAM_DELTA_TYPES = new Set(['assistant.delta', 'reasoning.delta'])
 
 function isRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isTerminalRecoveryEvent(event) {
+  if (!TERMINAL_TYPES.has(event?.type)) return false
+  return event.type !== 'turn.completed' || isSuccessfulTurnCompletedEvent(event)
 }
 
 export function normalizeResolutionPath(value) {
@@ -123,7 +129,7 @@ export function isValidActiveFailedRetryAttempt(events, attemptEvent, checkpoint
     && !(Array.isArray(events) ? events : []).some((event) => (
       Number.isInteger(event?.sequence)
       && event.sequence > attemptEvent.sequence
-      && TERMINAL_TYPES.has(event.type)
+      && isTerminalRecoveryEvent(event)
     ))
 }
 
@@ -131,7 +137,7 @@ export async function recoveryAttemptAfterCheckpoint(replayEvents, scope, checkp
   const events = await replayPersistedTurnEvents(replayEvents, scope)
   const checkpointSequence = Number.isInteger(checkpoint?.sequence) ? checkpoint.sequence : -1
   const terminalAfterCheckpoint = events.some((event) => (
-    TERMINAL_TYPES.has(event.type) && event.sequence > checkpointSequence
+    isTerminalRecoveryEvent(event) && event.sequence > checkpointSequence
   ))
   if (terminalAfterCheckpoint) return null
 

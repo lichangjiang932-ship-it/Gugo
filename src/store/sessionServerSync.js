@@ -91,18 +91,56 @@ function hasMeaningfulEvidence(value) {
   return value !== undefined && value !== null && value !== ''
 }
 
+function stableTerminalFailure(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const failure = { ...value }
+  for (const field of ['message', 'hint', 'reason']) delete failure[field]
+  if (failure.error && typeof failure.error === 'object' && !Array.isArray(failure.error)) {
+    failure.error = stableTerminalFailure(failure.error)
+  } else if (Object.hasOwn(failure, 'error')) {
+    delete failure.error
+  }
+  if (failure.cause && typeof failure.cause === 'object' && !Array.isArray(failure.cause)) {
+    failure.cause = stableTerminalFailure(failure.cause)
+  } else if (Object.hasOwn(failure, 'cause')) {
+    delete failure.cause
+  }
+  if (failure.recovery && typeof failure.recovery === 'object' && !Array.isArray(failure.recovery)) {
+    const recovery = { ...failure.recovery }
+    for (const field of ['message', 'hint', 'reason', 'errorMessage']) delete recovery[field]
+    if (recovery.error && typeof recovery.error === 'object' && !Array.isArray(recovery.error)) {
+      recovery.error = stableTerminalFailure(recovery.error)
+    } else if (Object.hasOwn(recovery, 'error')) {
+      delete recovery.error
+    }
+    if (recovery.cause && typeof recovery.cause === 'object' && !Array.isArray(recovery.cause)) {
+      recovery.cause = stableTerminalFailure(recovery.cause)
+    } else if (Object.hasOwn(recovery, 'cause')) {
+      delete recovery.cause
+    }
+    failure.recovery = recovery
+  }
+  return failure
+}
+
 function mergeTerminalFailureDiagnostics(serverFailure, localFailure) {
-  if (!serverFailure || typeof serverFailure !== 'object' || Array.isArray(serverFailure)) return serverFailure
-  if (!localFailure || typeof localFailure !== 'object' || Array.isArray(localFailure)) return serverFailure
-  const merged = { ...localFailure, ...serverFailure }
-  for (const key of ['reason', 'incompleteReason', 'nextAction']) {
-    const serverValue = String(serverFailure[key] || '').trim()
-    const localValue = String(localFailure[key] || '').trim()
+  const stableServerFailure = stableTerminalFailure(serverFailure)
+  const stableLocalFailure = stableTerminalFailure(localFailure)
+  if (!stableServerFailure || typeof stableServerFailure !== 'object' || Array.isArray(stableServerFailure)) {
+    return stableServerFailure
+  }
+  if (!stableLocalFailure || typeof stableLocalFailure !== 'object' || Array.isArray(stableLocalFailure)) {
+    return stableServerFailure
+  }
+  const merged = { ...stableLocalFailure, ...stableServerFailure }
+  for (const key of ['incompleteReason', 'nextAction']) {
+    const serverValue = String(stableServerFailure[key] || '').trim()
+    const localValue = String(stableLocalFailure[key] || '').trim()
     if (serverValue || localValue) merged[key] = serverValue || localValue
   }
   for (const key of ['missingRequirements', 'taskVerification']) {
-    if (!Object.hasOwn(serverFailure, key) && hasMeaningfulEvidence(localFailure[key])) {
-      merged[key] = localFailure[key]
+    if (!hasMeaningfulEvidence(stableServerFailure[key]) && hasMeaningfulEvidence(stableLocalFailure[key])) {
+      merged[key] = stableLocalFailure[key]
     }
   }
   return merged

@@ -31,12 +31,58 @@ export function headers(json = false) {
   }
 }
 
+function stableFailureRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const failure = { ...value }
+  for (const field of ['message', 'hint', 'reason']) delete failure[field]
+  if (failure.error && typeof failure.error === 'object' && !Array.isArray(failure.error)) {
+    failure.error = stableFailureRecord(failure.error)
+  } else if (Object.hasOwn(failure, 'error')) {
+    delete failure.error
+  }
+  if (failure.cause && typeof failure.cause === 'object' && !Array.isArray(failure.cause)) {
+    failure.cause = stableFailureRecord(failure.cause)
+  } else if (Object.hasOwn(failure, 'cause')) {
+    delete failure.cause
+  }
+  if (failure.recovery && typeof failure.recovery === 'object' && !Array.isArray(failure.recovery)) {
+    const recovery = { ...failure.recovery }
+    for (const field of ['message', 'hint', 'reason', 'errorMessage']) delete recovery[field]
+    if (recovery.error && typeof recovery.error === 'object' && !Array.isArray(recovery.error)) {
+      recovery.error = stableFailureRecord(recovery.error)
+    } else if (Object.hasOwn(recovery, 'error')) {
+      delete recovery.error
+    }
+    if (recovery.cause && typeof recovery.cause === 'object' && !Array.isArray(recovery.cause)) {
+      recovery.cause = stableFailureRecord(recovery.cause)
+    } else if (Object.hasOwn(recovery, 'cause')) {
+      delete recovery.cause
+    }
+    failure.recovery = recovery
+  }
+  return failure
+}
+
+function meaningfulFailureValue(value) {
+  if (Array.isArray(value)) return value.length > 0
+  if (value && typeof value === 'object') return Object.keys(value).length > 0
+  return value !== undefined && value !== null && value !== ''
+}
+
+const NESTED_DIAGNOSTIC_FALLBACK_FIELDS = new Set([
+  'nextAction',
+  'incompleteReason',
+  'missingRequirements',
+  'taskVerification',
+])
+
 export async function parseResponse(response) {
   let body
   try { body = await response.json() } catch { body = null }
   if (!response.ok) {
-    const error = new Error(body?.error?.message || `Turn request failed: HTTP ${response.status}`)
-    error.code = body?.error?.code || 'TURN_REQUEST_FAILED'
+    const code = String(body?.error?.code || 'TURN_REQUEST_FAILED').trim() || 'TURN_REQUEST_FAILED'
+    const error = new Error(code)
+    error.code = code
     error.status = response.status
     for (const field of [
       'action',
@@ -62,12 +108,20 @@ export async function parseResponse(response) {
       'retainedLocalFiles',
       'iterations',
     ]) {
-      if (body?.[field] !== undefined) error[field] = body[field]
-      else if (body?.error?.[field] !== undefined) error[field] = body.error[field]
+      const outerOwns = body && typeof body === 'object' && Object.hasOwn(body, field)
+      const nestedOwns = body?.error && typeof body.error === 'object' && Object.hasOwn(body.error, field)
+      if (NESTED_DIAGNOSTIC_FALLBACK_FIELDS.has(field)) {
+        if (outerOwns && meaningfulFailureValue(body[field])) error[field] = body[field]
+        else if (nestedOwns) error[field] = body.error[field]
+        else if (outerOwns) error[field] = body[field]
+      } else if (outerOwns) error[field] = body[field]
+      else if (nestedOwns) error[field] = body.error[field]
     }
-    error.serverFailure = body?.error && typeof body.error === 'object'
-      ? { ...body.error }
-      : { code: error.code, message: error.message, status: error.status }
+    error.serverFailure = stableFailureRecord(
+      body?.error && typeof body.error === 'object'
+        ? body.error
+        : { code: error.code, status: error.status },
+    )
     const retryAfter = response.headers?.get?.('retry-after')
     if (retryAfter !== undefined && retryAfter !== null) error.retryAfter = retryAfter
     throw error
@@ -158,6 +212,7 @@ function streamFailureError(rawData) {
   } catch {
     payload = {}
   }
+  payload = stableFailureRecord(payload)
   const nested = payload?.error && typeof payload.error === 'object'
     ? payload.error
     : null
@@ -363,8 +418,9 @@ export function streamServerTurnEventsWebSocket({
         return
       }
       if (frame.type === 'error') {
-        const error = new Error(frame.message || 'WebSocket turn subscription failed')
-        error.code = String(frame.code || 'TURN_WEBSOCKET_ERROR')
+        const code = String(frame.code || 'TURN_WEBSOCKET_ERROR')
+        const error = new Error(code)
+        error.code = code
         for (const field of [
           'action',
           'status',

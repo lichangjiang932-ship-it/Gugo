@@ -716,6 +716,15 @@ export async function requestApproval({
       policyProvenance,
       reason: verdict.reason,
       expiresAt: Date.now() + resolveApprovalTimeoutMs(),
+      notificationData: origin === 'job' && jobId
+        ? {
+            status: 'awaiting_approval',
+            complete: false,
+            incompleteReason: 'job_approval_required',
+            missingRequirements: ['approval_decision'],
+            nextAction: 'review_approval',
+          }
+        : null,
     })
   } catch (err) {
     // 写不进审批表 = 无法保证门控 → 保守拒绝,不静默放行。

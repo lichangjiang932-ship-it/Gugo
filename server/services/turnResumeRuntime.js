@@ -1,4 +1,5 @@
 import { isTerminalTurnEventType } from './turnEventEmitter.js'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 import { recoveryCandidateVersion } from './turnEnginePolicy.js'
 import {
   excludeVerifiedLocalFiles,
@@ -28,6 +29,11 @@ function rejectResumeApprovalModeOverride(value) {
 
 function activeKey(userId, sessionId, turnId) {
   return `${userId}\u0000${sessionId}\u0000${turnId}`
+}
+
+function isTerminalResumeEvent(event) {
+  if (!isTerminalTurnEventType(event?.type)) return false
+  return event.type !== 'turn.completed' || isSuccessfulTurnCompletedEvent(event)
 }
 
 function normalizePositiveInteger(value) {
@@ -240,7 +246,7 @@ export function createTurnResumeRuntime({
     const started = await deps.lastEvent({ userId, sessionId, turnId, type: 'turn.started' })
     if (!started) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
     let last = await deps.lastEvent({ userId, sessionId, turnId })
-    if (isTerminalTurnEventType(last?.type)) {
+    if (isTerminalResumeEvent(last)) {
       return {
         turn: await getTurn({ userId, sessionId, turnId }),
         scheduled: false,
@@ -289,7 +295,7 @@ export function createTurnResumeRuntime({
       && replayBoundary.sequence > (Number(last?.sequence) || 0)) {
       last = replayBoundary
     }
-    if (isTerminalTurnEventType(last?.type)) {
+    if (isTerminalResumeEvent(last)) {
       return {
         turn: await getTurn(scope),
         scheduled: false,
@@ -327,7 +333,7 @@ export function createTurnResumeRuntime({
     )
     if (interruptionRecovery.exhausted) {
       const latestBoundary = await deps.lastEvent(scope)
-      if (isTerminalTurnEventType(latestBoundary?.type)) {
+      if (isTerminalResumeEvent(latestBoundary)) {
         return {
           turn: await getTurn(scope),
           scheduled: false,
@@ -453,7 +459,7 @@ export function createTurnResumeRuntime({
       .filter((event) => event.type === 'turn.attempt' && event.payload?.reason === 'failed_retry')
       .at(-1)
     const failedRetryPending = Boolean(latestFailedRetry) && !persistedEvents.some((event) => (
-      event.sequence > latestFailedRetry.sequence && isTerminalTurnEventType(event.type)
+      event.sequence > latestFailedRetry.sequence && isTerminalResumeEvent(event)
     ))
     let failedRetryActive = false
     if (failedRetryPending) {
@@ -521,7 +527,7 @@ export function createTurnResumeRuntime({
       last = resumedEvent
       if (running?.promise) await running.promise
       last = await deps.lastEvent({ userId, sessionId, turnId }) || last
-      if (isTerminalTurnEventType(last?.type)) {
+      if (isTerminalResumeEvent(last)) {
         return {
           turn: await getTurn(scope),
           scheduled: false,

@@ -142,14 +142,43 @@ export function buildServerTurnMessageIds(turnId) {
   return { userId: `${normalized}:user`, assistantId: `${normalized}:assistant` }
 }
 
+function stableServerTurnFailure(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const failure = { ...value }
+  for (const field of ['message', 'hint', 'reason']) delete failure[field]
+  if (failure.error && typeof failure.error === 'object' && !Array.isArray(failure.error)) {
+    failure.error = stableServerTurnFailure(failure.error)
+  } else if (Object.hasOwn(failure, 'error')) {
+    delete failure.error
+  }
+  if (failure.cause && typeof failure.cause === 'object' && !Array.isArray(failure.cause)) {
+    failure.cause = stableServerTurnFailure(failure.cause)
+  } else if (Object.hasOwn(failure, 'cause')) {
+    delete failure.cause
+  }
+  if (failure.recovery && typeof failure.recovery === 'object' && !Array.isArray(failure.recovery)) {
+    const recovery = { ...failure.recovery }
+    for (const field of ['message', 'hint', 'reason', 'errorMessage']) delete recovery[field]
+    if (recovery.error && typeof recovery.error === 'object' && !Array.isArray(recovery.error)) {
+      recovery.error = stableServerTurnFailure(recovery.error)
+    } else if (Object.hasOwn(recovery, 'error')) {
+      delete recovery.error
+    }
+    if (recovery.cause && typeof recovery.cause === 'object' && !Array.isArray(recovery.cause)) {
+      recovery.cause = stableServerTurnFailure(recovery.cause)
+    } else if (Object.hasOwn(recovery, 'cause')) {
+      delete recovery.cause
+    }
+    failure.recovery = recovery
+  }
+  return failure
+}
+
 export function normalizeServerTurnFailure(error) {
-  const nested = error?.serverFailure && typeof error.serverFailure === 'object'
-    ? error.serverFailure
-    : {}
+  const nested = stableServerTurnFailure(error?.serverFailure)
   const failure = {
     ...nested,
     code: String(nested.code || error?.code || 'TURN_REQUEST_FAILED').trim() || 'TURN_REQUEST_FAILED',
-    message: String(nested.message || error?.message || 'Turn request failed').trim() || 'Turn request failed',
   }
   for (const field of [
     'status',
@@ -164,7 +193,6 @@ export function normalizeServerTurnFailure(error) {
     'retryable',
     'manualRetryable',
     'retryAfter',
-    'reason',
     'incompleteReason',
     'missingRequirements',
     'taskVerification',
@@ -176,6 +204,9 @@ export function normalizeServerTurnFailure(error) {
   const nestedIncompleteReason = String(failure.incompleteReason || '').trim()
   const outerIncompleteReason = String(error?.incompleteReason || '').trim()
   if (!nestedIncompleteReason && outerIncompleteReason) failure.incompleteReason = outerIncompleteReason
+  const nestedNextAction = String(failure.nextAction || '').trim()
+  const outerNextAction = String(error?.nextAction || '').trim()
+  if (!nestedNextAction && outerNextAction) failure.nextAction = outerNextAction
   const nestedMissingRequirements = Array.isArray(failure.missingRequirements)
     ? failure.missingRequirements.filter(Boolean)
     : []

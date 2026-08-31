@@ -95,6 +95,20 @@ function turnCompletionInvalid() {
   })
 }
 
+function storedTurnEventIsTerminal(row) {
+  if (row?.type === 'turn.cancelled' || row?.type === 'turn.failed') return true
+  if (row?.type !== 'turn.completed') return false
+  try {
+    return isSuccessfulTurnCompletedEvent({
+      type: row.type,
+      payload: JSON.parse(row.payload_json),
+    })
+  } catch {
+    // A corrupt terminal row must be repaired explicitly rather than extended.
+    return true
+  }
+}
+
 function canonicalCheckpointState(value) {
   try {
     const normalized = JSON.parse(JSON.stringify(value))
@@ -382,7 +396,7 @@ export function appendTurnEventsInTransaction(entries = [], db, {
         continue
       }
       const latest = readLatest.get(userId, value.sessionId, value.turnId)
-      const latestIsTerminal = ['turn.completed', 'turn.cancelled', 'turn.failed'].includes(latest?.type)
+      const latestIsTerminal = storedTurnEventIsTerminal(latest)
       const allowedFailedRetry = allowFailedRetry === true
         && latest?.type === 'turn.failed'
         && failureAllowsAttempt(latest.payload_json, value.payload)

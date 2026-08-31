@@ -20,6 +20,21 @@ const TERMINAL_LIST_FIELDS = Object.freeze([
   'missingDeliverables',
   'issues',
 ])
+const GENERIC_TERMINAL_REASONS = new Set([
+  '任务未完成',
+  '任务未全部完成',
+  '任务交付未全部完成',
+  'task incomplete',
+])
+
+function effectiveTerminalReason(...values) {
+  const normalized = values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  return normalized.find((value) => !GENERIC_TERMINAL_REASONS.has(value.toLowerCase()))
+    || normalized[0]
+    || ''
+}
 
 function mergeTerminalPayload(authoritative, supplied) {
   const base = authoritative && typeof authoritative === 'object' && !Array.isArray(authoritative)
@@ -44,6 +59,15 @@ function mergeTerminalPayload(authoritative, supplied) {
   }
   Object.assign(merged, mergePersistedJobOutcomeFields(base, extra))
   return merged
+}
+
+function latestTerminalEventPayload(job, status) {
+  const events = Array.isArray(job?.events) ? job.events : []
+  const event = events.at(-1)
+  if (event?.type !== status) return null
+  return event?.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+    ? event.payload
+    : null
 }
 
 export function markJobAwaitingApproval(job, step = null, approval = null) {
@@ -121,18 +145,32 @@ function terminalNotificationPayload(job, { status, body, payload = null }) {
     : status === 'cancelled'
       ? 'cancelled'
       : 'failed'
+  const suppliedPayload = mergeTerminalPayload(
+    latestTerminalEventPayload(snapshot, normalizedStatus),
+    payload,
+  )
   if (normalizedStatus === 'completed') {
     const snapshotDelivery = buildFinalOutput(snapshot)
-    const delivery = mergeTerminalPayload(snapshotDelivery, payload)
+    const delivery = mergeTerminalPayload(snapshotDelivery, suppliedPayload)
     if (snapshotDelivery.complete === false || delivery.complete === false) {
-      const reason = String(
-        delivery.reason || delivery.summary || delivery.incompleteReason || '任务未全部完成',
-      ).trim()
+      const reason = effectiveTerminalReason(
+        delivery.reason,
+        delivery.issues?.[0],
+        delivery.incompleteReason,
+        delivery.summary,
+        '任务未全部完成',
+      )
       const diagnostics = buildJobOutcomeDiagnostics(snapshot, {
         reason,
         nextAction: delivery.nextAction || 'retry_job',
         status: 'failed',
       })
+      const diagnosedReason = effectiveTerminalReason(
+        diagnostics.reason,
+        delivery.reason,
+        delivery.incompleteReason,
+        reason,
+      )
       const missingRequirements = Array.isArray(delivery.missingRequirements)
         && delivery.missingRequirements.length > 0
         ? delivery.missingRequirements
@@ -142,8 +180,8 @@ function terminalNotificationPayload(job, { status, body, payload = null }) {
         ...delivery,
         status: 'failed',
         complete: false,
-        error: reason,
-        reason,
+        error: diagnosedReason,
+        reason: diagnosedReason,
         incompleteReason: delivery.incompleteReason || diagnostics.incompleteReason,
         missingRequirements,
         verifiedLocalFiles: Array.isArray(delivery.verifiedLocalFiles)
@@ -162,19 +200,31 @@ function terminalNotificationPayload(job, { status, body, payload = null }) {
       error: null,
     }
   }
-  const reason = String(job.error || body || '').trim() || '任务未完成'
+  const reason = effectiveTerminalReason(
+    suppliedPayload.reason,
+    job.error,
+    body,
+    suppliedPayload.incompleteReason,
+    '任务未完成',
+  )
   const diagnostics = buildJobOutcomeDiagnostics(snapshot, {
     reason,
-    nextAction: payload?.nextAction || 'retry_job',
+    nextAction: suppliedPayload.nextAction || 'retry_job',
     status: normalizedStatus,
   })
-  const extra = mergeTerminalPayload(diagnostics, payload)
+  const extra = mergeTerminalPayload(diagnostics, suppliedPayload)
+  const diagnosedReason = effectiveTerminalReason(
+    diagnostics.reason,
+    extra.reason,
+    suppliedPayload.incompleteReason,
+    reason,
+  )
   return {
     ...extra,
     status: normalizedStatus,
     complete: false,
-    error: reason,
-    reason: String(extra.reason || diagnostics.reason || reason).trim(),
+    error: diagnosedReason,
+    reason: diagnosedReason,
     incompleteReason: extra.incompleteReason || diagnostics.incompleteReason,
     missingRequirements: Array.isArray(extra.missingRequirements)
       && extra.missingRequirements.length > 0

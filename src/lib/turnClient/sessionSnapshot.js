@@ -257,6 +257,38 @@ function modelAuthoredEvidenceText(message, failure, state) {
   })
 }
 
+function stableSnapshotFailure(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const failure = { ...value }
+  for (const field of ['message', 'hint', 'reason']) delete failure[field]
+  if (failure.error && typeof failure.error === 'object' && !Array.isArray(failure.error)) {
+    failure.error = stableSnapshotFailure(failure.error)
+  } else if (Object.hasOwn(failure, 'error')) {
+    delete failure.error
+  }
+  if (failure.cause && typeof failure.cause === 'object' && !Array.isArray(failure.cause)) {
+    failure.cause = stableSnapshotFailure(failure.cause)
+  } else if (Object.hasOwn(failure, 'cause')) {
+    delete failure.cause
+  }
+  if (failure.recovery && typeof failure.recovery === 'object' && !Array.isArray(failure.recovery)) {
+    const recovery = { ...failure.recovery }
+    for (const field of ['message', 'hint', 'reason', 'errorMessage']) delete recovery[field]
+    if (recovery.error && typeof recovery.error === 'object' && !Array.isArray(recovery.error)) {
+      recovery.error = stableSnapshotFailure(recovery.error)
+    } else if (Object.hasOwn(recovery, 'error')) {
+      delete recovery.error
+    }
+    if (recovery.cause && typeof recovery.cause === 'object' && !Array.isArray(recovery.cause)) {
+      recovery.cause = stableSnapshotFailure(recovery.cause)
+    } else if (Object.hasOwn(recovery, 'cause')) {
+      delete recovery.cause
+    }
+    failure.recovery = recovery
+  }
+  return failure
+}
+
 function turnEvidenceMeta(message) {
   const context = message?.modelContext && typeof message.modelContext === 'object'
     ? message.modelContext
@@ -264,12 +296,10 @@ function turnEvidenceMeta(message) {
   const state = context.turnEvidence === true ? String(context.evidenceState || '') : ''
   if (!['blocked', 'cancelled', 'failed', 'incomplete', 'interrupted'].includes(state)) return {}
 
-  const persistedFailure = context.error && typeof context.error === 'object' ? context.error : null
-  const failure = persistedFailure ? { ...persistedFailure } : null
+  const failure = stableSnapshotFailure(context.error)
   if (failure) {
     // Persisted legacy snapshots may contain server-authored/localized copy.
     // Keep only stable diagnostic codes in client state.
-    delete failure.reason
     for (const key of ['incompleteReason', 'nextAction']) {
       const value = String(context[key] || '').trim()
       if (value) failure[key] = value

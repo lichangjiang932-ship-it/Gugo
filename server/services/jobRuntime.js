@@ -30,6 +30,7 @@ import {
   clearResumedJobOutcomeDiagnostics,
   findNextRunnableStep,
   mergePersistedJobOutcomeFields,
+  normalizeJobLocalFileReceipts,
   persistedJobOutcomeFields,
   resolveWorkflowState,
   stepRequiresPlanApproval,
@@ -105,41 +106,85 @@ function latestPersistedOutcomeFields(steps) {
   )
 }
 
+function currentStatusEventOutcomeFields(job) {
+  const events = Array.isArray(job?.events) ? job.events : []
+  const lastEvent = events.at(-1)
+  const expectedTypes = {
+    awaiting_approval: new Set(['awaiting_approval']),
+    cancelled: new Set(['cancelled']),
+    completed: new Set(['completed']),
+    failed: new Set(['failed']),
+    waiting: new Set(['awaiting_user', 'plan_approval_required', 'plan_proposed', 'sleeping']),
+  }[job?.status]
+  if (!expectedTypes?.has(lastEvent?.type)) return {}
+  return persistedJobOutcomeFields(lastEvent.payload)
+}
+
+function projectPersistedOutcomeDiagnostics(diagnostics, persisted) {
+  const projected = { ...diagnostics }
+  for (const field of ['incompleteReason', 'taskVerification', 'retryable', 'manualRetryable']) {
+    if (Object.hasOwn(persisted, field)) projected[field] = persisted[field]
+  }
+  if (Array.isArray(persisted.missingRequirements) && persisted.missingRequirements.length > 0) {
+    projected.missingRequirements = persisted.missingRequirements
+  }
+  const localFiles = normalizeJobLocalFileReceipts({
+    verifiedLocalFiles: persisted.verifiedLocalFiles,
+    retainedLocalFiles: persisted.retainedLocalFiles,
+  })
+  if (Object.hasOwn(persisted, 'verifiedLocalFiles')) {
+    projected.verifiedLocalFiles = localFiles.verifiedLocalFiles
+  }
+  if (Object.hasOwn(persisted, 'retainedLocalFiles')) {
+    projected.retainedLocalFiles = localFiles.retainedLocalFiles
+  }
+  projected.nextAction = persisted.nextAction || projected.nextAction
+  return projected
+}
+
 function projectJobForClient(job) {
   if (!job) return null
-  const persisted = latestPersistedOutcomeFields(job.steps)
+  const persisted = mergePersistedJobOutcomeFields(
+    latestPersistedOutcomeFields(job.steps),
+    currentStatusEventOutcomeFields(job),
+  )
   if (job.status === 'completed') {
     const delivery = buildFinalOutput(job)
     if (delivery.complete !== false) {
       return { ...job, ...delivery, status: 'completed', complete: true, error: null }
     }
     const reason = String(
-      delivery.summary || delivery.issues?.[0] || '任务交付未全部完成',
+      delivery.issues?.[0]
+        || delivery.incompleteReason
+        || delivery.summary
+        || '任务交付未全部完成',
     ).trim()
+    const diagnostics = projectPersistedOutcomeDiagnostics(buildJobOutcomeDiagnostics(job, {
+      reason,
+      nextAction: persisted.nextAction || 'retry_job',
+      status: 'failed',
+    }), persisted)
     return {
       ...job,
       persistedStatus: 'completed',
-      ...buildJobOutcomeDiagnostics(job, {
-        reason,
-        nextAction: persisted.nextAction || 'retry_job',
-        status: 'failed',
-      }),
+      ...diagnostics,
       status: 'failed',
       complete: false,
-      error: reason,
+      error: diagnostics.reason || reason,
     }
   }
   if (['failed', 'cancelled', 'waiting', 'awaiting_approval'].includes(job.status)) {
+    const diagnostics = projectPersistedOutcomeDiagnostics(buildJobOutcomeDiagnostics(job, {
+      reason: persisted.reason || job.error,
+      nextAction: persisted.nextAction || {
+        awaiting_approval: 'review_approval',
+        waiting: 'provide_input',
+      }[job.status] || 'retry_job',
+      status: job.status,
+    }), persisted)
     return {
       ...job,
-      ...buildJobOutcomeDiagnostics(job, {
-        reason: job.error,
-        nextAction: persisted.nextAction || {
-          awaiting_approval: 'review_approval',
-          waiting: 'provide_input',
-        }[job.status] || 'retry_job',
-        status: job.status,
-      }),
+      ...diagnostics,
     }
   }
   return job

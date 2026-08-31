@@ -107,6 +107,41 @@ function plainData(value, label, fail, state = { nodes: 0 }, depth = 0) {
   return Object.freeze(projected)
 }
 
+function stablePublicFailureRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return Object.freeze({})
+  const failure = { ...value }
+  for (const field of ['message', 'hint', 'reason']) delete failure[field]
+  for (const field of ['error', 'cause']) {
+    if (!Object.hasOwn(failure, field)) continue
+    if (failure[field] && typeof failure[field] === 'object' && !Array.isArray(failure[field])) {
+      failure[field] = stablePublicFailureRecord(failure[field])
+    } else {
+      delete failure[field]
+    }
+  }
+  if (failure.recovery && typeof failure.recovery === 'object' && !Array.isArray(failure.recovery)) {
+    const recovery = { ...failure.recovery }
+    for (const field of ['message', 'hint', 'reason', 'errorMessage']) delete recovery[field]
+    for (const field of ['error', 'cause']) {
+      if (!Object.hasOwn(recovery, field)) continue
+      if (recovery[field] && typeof recovery[field] === 'object' && !Array.isArray(recovery[field])) {
+        recovery[field] = stablePublicFailureRecord(recovery[field])
+      } else {
+        delete recovery[field]
+      }
+    }
+    failure.recovery = Object.freeze(recovery)
+  }
+  return Object.freeze(failure)
+}
+
+function publicMessageModelContext(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.turnEvidence !== true) {
+    return value
+  }
+  return stablePublicFailureRecord(value)
+}
+
 function sessionDto(value, label, fail) {
   const source = record(value, label, fail)
   const projected = {
@@ -220,7 +255,11 @@ function messageDto(value, label, fail, input) {
     fail(`${label} ownership does not match the request`)
   }
   const modelContext = own(source, 'modelContext', label, fail, { optional: true })
-  if (modelContext !== undefined) projected.modelContext = plainData(modelContext, `${label}.modelContext`, fail)
+  if (modelContext !== undefined) {
+    projected.modelContext = publicMessageModelContext(
+      plainData(modelContext, `${label}.modelContext`, fail),
+    )
+  }
   const artifacts = own(source, 'artifacts', label, fail, { optional: true })
   if (artifacts !== undefined) {
     projected.artifacts = array(

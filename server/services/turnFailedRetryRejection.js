@@ -36,12 +36,31 @@ function uniqueStrings(values, limit = 64) {
     .filter(Boolean))].slice(0, limit)
 }
 
+function nestedEvidenceSources(values) {
+  const sources = []
+  const queue = values.filter(isRecord).map((value) => ({ value, depth: 0 }))
+  const visited = new Set()
+  while (queue.length > 0 && sources.length < 64) {
+    const { value, depth } = queue.shift()
+    if (visited.has(value)) continue
+    visited.add(value)
+    sources.push(value)
+    if (depth >= 8) continue
+    for (const nested of [value.error, value.cause]) {
+      if (isRecord(nested) && !visited.has(nested)) {
+        queue.push({ value: nested, depth: depth + 1 })
+      }
+    }
+  }
+  return sources
+}
+
 /**
  * Merge public delivery evidence without allowing an empty wrapper/error to
  * erase durable evidence read from the terminal event or assistant message.
  */
 export function mergeFailedRetryEvidence(...values) {
-  const sources = values.filter(isRecord)
+  const sources = nestedEvidenceSources(values)
   const owns = (key) => sources.some((source) => Object.hasOwn(source, key))
   const partialText = sources
     .flatMap((source) => [source.partialText, source.text])
@@ -66,6 +85,9 @@ export function mergeFailedRetryEvidence(...values) {
   const incompleteReason = sources
     .map((source) => String(source.incompleteReason || '').trim())
     .find(Boolean) || ''
+  const nextAction = sources
+    .map((source) => String(source.nextAction || '').trim().toLowerCase().slice(0, 80))
+    .find((value) => /^[a-z][a-z0-9_]{0,79}$/u.test(value)) || ''
   const missingRequirements = uniqueStrings(sources.flatMap((source) => (
     Array.isArray(source.missingRequirements) ? source.missingRequirements : []
   )), 16)
@@ -80,6 +102,7 @@ export function mergeFailedRetryEvidence(...values) {
     ...(owns('retainedLocalFiles') ? { retainedLocalFiles } : {}),
     ...(iterations >= 0 ? { iterations } : {}),
     ...(incompleteReason ? { incompleteReason } : {}),
+    ...(nextAction ? { nextAction } : {}),
     ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
     ...(taskVerification ? { taskVerification } : {}),
   }

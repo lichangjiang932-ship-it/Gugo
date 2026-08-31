@@ -31,6 +31,36 @@ function completionRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
 
+function stablePublicFailureRecord(value, seen = new Set()) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  if (seen.has(value)) return {}
+  seen.add(value)
+  const failure = { ...value }
+  for (const field of ['message', 'hint', 'reason']) delete failure[field]
+  for (const field of ['error', 'cause']) {
+    if (!Object.hasOwn(failure, field)) continue
+    if (failure[field] && typeof failure[field] === 'object' && !Array.isArray(failure[field])) {
+      failure[field] = stablePublicFailureRecord(failure[field], seen)
+    } else {
+      delete failure[field]
+    }
+  }
+  if (failure.recovery && typeof failure.recovery === 'object' && !Array.isArray(failure.recovery)) {
+    const recovery = { ...failure.recovery }
+    for (const field of ['message', 'hint', 'reason', 'errorMessage']) delete recovery[field]
+    for (const field of ['error', 'cause']) {
+      if (!Object.hasOwn(recovery, field)) continue
+      if (recovery[field] && typeof recovery[field] === 'object' && !Array.isArray(recovery[field])) {
+        recovery[field] = stablePublicFailureRecord(recovery[field], seen)
+      } else {
+        delete recovery[field]
+      }
+    }
+    failure.recovery = recovery
+  }
+  return failure
+}
+
 function completedEvidenceFields(payload) {
   const fields = {}
   for (const key of [
@@ -235,33 +265,23 @@ function projectTerminalFailureEvent(event) {
   const nestedError = payload.error && typeof payload.error === 'object'
     ? payload.error
     : null
-  const projectedPayload = {
+  const projectedCode = normalizePublicFailureCode(payload.code ?? nestedError?.code, fallback)
+  const projectedPayload = stablePublicFailureRecord({
     ...payload,
-    code: normalizePublicFailureCode(payload.code ?? nestedError?.code, fallback),
-  }
-  delete projectedPayload.message
-  delete projectedPayload.hint
-  delete projectedPayload.reason
-  if (nestedError) {
-    const projectedError = {
-      ...nestedError,
-      code: normalizePublicFailureCode(nestedError.code, projectedPayload.code),
-    }
-    delete projectedError.message
-    delete projectedError.hint
-    delete projectedError.reason
-    projectedPayload.error = projectedError
-  }
+    code: projectedCode,
+    ...(nestedError ? {
+      error: {
+        ...nestedError,
+        code: normalizePublicFailureCode(nestedError.code, projectedCode),
+      },
+    } : {}),
+  })
   return { ...event, payload: projectedPayload }
 }
 
 function projectPausedEvent(event) {
   const payload = completionRecord(event.payload)
-  const projectedPayload = { ...payload }
-  delete projectedPayload.message
-  delete projectedPayload.hint
-  delete projectedPayload.reason
-  return { ...event, payload: projectedPayload }
+  return { ...event, payload: stablePublicFailureRecord(payload) }
 }
 
 /**

@@ -68,10 +68,6 @@ function publicTurnFailureFrameFields(error) {
             || source.recovery.errorCode
             || source.code
             || 'TURN_RECOVERY_BLOCKED'),
-          message: String(source.recovery.error?.message
-            || source.recovery.errorMessage
-            || source.message
-            || 'turn recovery is blocked'),
         },
       }
     : null
@@ -79,7 +75,7 @@ function publicTurnFailureFrameFields(error) {
     ? evidence.missingRequirements
     : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
   const taskVerification = normalizeTaskVerificationDetails(evidence.taskVerification)
-  const rawNextAction = String(errorChain
+  const rawNextAction = String(evidence.nextAction || errorChain
     .map((entry) => entry?.nextAction || entry?.error?.nextAction)
     .find(Boolean) || '').trim().toLowerCase().slice(0, 80)
   const nextAction = /^[a-z][a-z0-9_]{0,79}$/u.test(rawNextAction) ? rawNextAction : ''
@@ -503,7 +499,7 @@ export function attachTurnWebSocketServer(server, {
     const deliverActivity = (_subscription, activity) => {
       if (activity) sendFrame({ type: 'turn.activity', activity })
     }
-    const failSubscription = (error, subscription, { fallbackCode, fallbackMessage }) => {
+    const failSubscription = (error, subscription, { fallbackCode }) => {
       const hostUnavailable = describeTurnEngineHostUnavailableError(error)
       if (hostUnavailable) {
         try { subscription?.unsubscribe() } catch { /* best-effort cleanup */ }
@@ -513,10 +509,8 @@ export function attachTurnWebSocketServer(server, {
       }
       sendFrame({
         type: 'error',
-        ...(hostUnavailable?.error || {
-          code: error?.code || fallbackCode,
-          message: error?.message || fallbackMessage,
-        }),
+        code: hostUnavailable?.error?.code || error?.code || fallbackCode,
+        ...(hostUnavailable?.error?.action ? { action: hostUnavailable.error.action } : {}),
         ...publicTurnFailureFrameFields(error),
         sessionId: subscription.sessionId,
         turnId: subscription.turnId,
@@ -535,7 +529,6 @@ export function attachTurnWebSocketServer(server, {
         onError: (error, subscription) => {
           failSubscription(error, subscription, {
             fallbackCode: 'TURN_SUBSCRIPTION_POLL_FAILED',
-            fallbackMessage: 'Turn subscription poll failed',
           })
         },
       }).catch((error) => {
@@ -563,7 +556,6 @@ export function attachTurnWebSocketServer(server, {
         sendFrame({
           type: 'error',
           code: validation.code,
-          message: validation.message,
           ...(validation.code === 'VERSION_MISMATCH'
             ? {
                 expectedVersion: validation.expectedVersion,
@@ -602,7 +594,6 @@ export function attachTurnWebSocketServer(server, {
             onError: (error, failedSubscription) => {
               failSubscription(error, failedSubscription, {
                 fallbackCode: 'TURN_SUBSCRIBE_FAILED',
-                fallbackMessage: 'Turn subscription failed',
               })
             },
           })
@@ -612,10 +603,8 @@ export function attachTurnWebSocketServer(server, {
           const hostUnavailable = describeTurnEngineHostUnavailableError(error)
           sendFrame({
             type: 'error',
-            ...(hostUnavailable?.error || {
-              code: error?.code || 'TURN_SUBSCRIBE_FAILED',
-              message: error?.message || 'Turn subscription failed',
-            }),
+            code: hostUnavailable?.error?.code || error?.code || 'TURN_SUBSCRIBE_FAILED',
+            ...(hostUnavailable?.error?.action ? { action: hostUnavailable.error.action } : {}),
             ...publicTurnFailureFrameFields(error),
             sessionId,
             turnId,
@@ -646,7 +635,6 @@ export function attachTurnWebSocketServer(server, {
           sendFrame({
             type: 'error',
             code: error?.code || 'APPROVAL_DECISION_FAILED',
-            message: error?.message || 'Approval decision failed.',
           })
         }
       }

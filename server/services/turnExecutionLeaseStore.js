@@ -1,4 +1,5 @@
 import { getDb } from '../db.js'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 import { assertUserDataMutationAllowed } from './userDataClearGuard.js'
 
 // A turn can briefly monopolize the event loop while packaging a large local
@@ -13,6 +14,21 @@ function normalizedDuration(leaseMs) {
 
 function validScope({ userId, sessionId, turnId } = {}) {
   return !!(userId && sessionId && turnId)
+}
+
+function storedTurnEventIsTerminal(row) {
+  const type = row?.type || row?.last_event_type
+  if (type === 'turn.cancelled' || type === 'turn.failed') return true
+  if (type !== 'turn.completed') return false
+  try {
+    return isSuccessfulTurnCompletedEvent({
+      type,
+      payload: JSON.parse(row.payload_json),
+    })
+  } catch {
+    // A corrupt terminal row must be repaired explicitly rather than resumed.
+    return true
+  }
 }
 
 function normalizedFencingToken(value) {
@@ -119,12 +135,12 @@ export function claimTurnExecutionLease({
       'A turn cannot start while local session data is being deleted',
     )
     const latest = db.prepare(`
-      SELECT type FROM turn_events
+      SELECT type, payload_json FROM turn_events
       WHERE user_id = ? AND session_id = ? AND turn_id = ?
       ORDER BY sequence DESC
       LIMIT 1
     `).get(userId, sessionId, turnId)
-    if (['turn.completed', 'turn.cancelled', 'turn.failed'].includes(latest?.type)) return false
+    if (storedTurnEventIsTerminal(latest)) return false
     const current = db.prepare(`
       SELECT owner_id, expires_at, fencing_token
       FROM turn_execution_leases
@@ -341,6 +357,7 @@ export function listUnfinishedTurnExecutions({ before = Date.now(), limit = 10_0
       summary.turn_id,
       latest.sequence AS last_sequence,
       latest.type AS last_event_type,
+      latest.payload_json,
       latest.created_at AS last_event_at,
       lease.owner_id,
       lease.expires_at,
@@ -357,25 +374,27 @@ export function listUnfinishedTurnExecutions({ before = Date.now(), limit = 10_0
      AND lease.session_id = summary.session_id
      AND lease.turn_id = summary.turn_id
     WHERE summary.has_started = 1
-      AND latest.type NOT IN ('turn.completed', 'turn.cancelled', 'turn.failed')
+      AND latest.type NOT IN ('turn.cancelled', 'turn.failed')
       AND latest.created_at <= ?
     ORDER BY latest.created_at ASC, summary.user_id ASC, summary.session_id ASC, summary.turn_id ASC
-    LIMIT ?
-  `).all(safeBefore, safeLimit)
-  return rows.map((row) => ({
-    userId: row.user_id,
-    sessionId: row.session_id,
-    turnId: row.turn_id,
-    lastSequence: row.last_sequence,
-    lastEventType: row.last_event_type,
-    lastEventAt: row.last_event_at,
-    lease: row.owner_id ? {
-      ownerId: row.owner_id,
-      expiresAt: row.expires_at,
-      fencingToken: row.fencing_token,
-      cancelRequestedAt: row.cancel_requested_at ?? null,
-    } : null,
-  }))
+  `).all(safeBefore)
+  return rows
+    .filter((row) => !storedTurnEventIsTerminal(row))
+    .slice(0, safeLimit)
+    .map((row) => ({
+      userId: row.user_id,
+      sessionId: row.session_id,
+      turnId: row.turn_id,
+      lastSequence: row.last_sequence,
+      lastEventType: row.last_event_type,
+      lastEventAt: row.last_event_at,
+      lease: row.owner_id ? {
+        ownerId: row.owner_id,
+        expiresAt: row.expires_at,
+        fencingToken: row.fencing_token,
+        cancelRequestedAt: row.cancel_requested_at ?? null,
+      } : null,
+    }))
 }
 
 export function pruneExpiredTurnExecutionLeases(now = Date.now()) {

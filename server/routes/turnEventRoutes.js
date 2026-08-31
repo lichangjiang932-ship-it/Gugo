@@ -75,6 +75,38 @@ function routeParts(pathname) {
   return pathname.split('/').filter(Boolean)
 }
 
+function stablePublicFailureRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const failure = { ...value }
+  for (const field of ['message', 'hint', 'reason']) delete failure[field]
+  if (failure.error && typeof failure.error === 'object' && !Array.isArray(failure.error)) {
+    failure.error = stablePublicFailureRecord(failure.error)
+  } else if (Object.hasOwn(failure, 'error')) {
+    delete failure.error
+  }
+  if (failure.cause && typeof failure.cause === 'object' && !Array.isArray(failure.cause)) {
+    failure.cause = stablePublicFailureRecord(failure.cause)
+  } else if (Object.hasOwn(failure, 'cause')) {
+    delete failure.cause
+  }
+  if (failure.recovery && typeof failure.recovery === 'object' && !Array.isArray(failure.recovery)) {
+    const recovery = { ...failure.recovery }
+    for (const field of ['message', 'hint', 'reason', 'errorMessage']) delete recovery[field]
+    if (recovery.error && typeof recovery.error === 'object' && !Array.isArray(recovery.error)) {
+      recovery.error = stablePublicFailureRecord(recovery.error)
+    } else if (Object.hasOwn(recovery, 'error')) {
+      delete recovery.error
+    }
+    if (recovery.cause && typeof recovery.cause === 'object' && !Array.isArray(recovery.cause)) {
+      recovery.cause = stablePublicFailureRecord(recovery.cause)
+    } else if (Object.hasOwn(recovery, 'cause')) {
+      delete recovery.cause
+    }
+    failure.recovery = recovery
+  }
+  return failure
+}
+
 function publicTurnErrorProjection(error) {
   const errorFields = error && typeof error === 'object' ? error : {}
   const errorChain = []
@@ -127,7 +159,7 @@ function publicTurnErrorProjection(error) {
     ? evidence.missingRequirements
     : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
   const taskVerification = normalizeTaskVerificationDetails(evidence.taskVerification)
-  const rawNextAction = String(errorChain
+  const rawNextAction = String(evidence.nextAction || errorChain
     .map((entry) => entry?.nextAction || entry?.error?.nextAction)
     .find(Boolean) || '').trim().toLowerCase().slice(0, 80)
   const nextAction = /^[a-z][a-z0-9_]{0,79}$/u.test(rawNextAction) ? rawNextAction : ''
@@ -145,15 +177,13 @@ function publicTurnErrorProjection(error) {
     verifiedLocalFiles,
   )
   const iterations = Number(evidence.iterations)
-  return {
-    status,
-    payload: {
+  const payload = {
     error: {
       ...(readiness || (hostUnavailable
         ? hostUnavailable.error
         : {
-        code: error?.code || 'INVALID_TURN_REQUEST',
-        message: error?.message || String(error),
+            code: error?.code || 'INVALID_TURN_REQUEST',
+            message: error?.message || String(error),
           })),
       ...(Number.isInteger(error?.expectedSequence) ? { expectedSequence: error.expectedSequence } : {}),
       ...(Number.isInteger(error?.actualSequence) ? { actualSequence: error.actualSequence } : {}),
@@ -174,7 +204,10 @@ function publicTurnErrorProjection(error) {
     ...(hasVerifiedLocalFiles ? { verifiedLocalFiles } : {}),
     ...(hasRetainedLocalFiles ? { retainedLocalFiles } : {}),
     ...(Number.isInteger(iterations) && iterations >= 0 ? { iterations } : {}),
-    },
+  }
+  return {
+    status,
+    payload: stablePublicFailureRecord(payload),
   }
 }
 

@@ -22,6 +22,7 @@ import useChatSendFlow from './useChatSendFlow.js'
 import useTurnSteering from './useTurnSteering.js'
 import useSlashCommandExecution from './useSlashCommandExecution.js'
 import { readSessionDraft } from '../../lib/chatDrafts.js'
+import { getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
 import { useChatAttachmentActions } from './chatAttachmentActions.js'
 import useChatCatalogState from './useChatCatalogState.js'
 import { useChatReplayActions } from './chatReplayActions.js'
@@ -123,7 +124,7 @@ export default function ChatSplit() {
       title: t('toast.chatSendFailed'),
       body: authenticationRefreshed
         ? t('chatReliability.authenticationRefreshedResend')
-        : String(error?.message || t('errors.chatFailure')),
+        : getVisibleModelErrorMessage(error, t),
     })
   }, [t, toast])
   const showSendBlocked = useCallback((reason) => setWorkbenchMessage(t(reason === 'directory-approval' ? 'chatSteering.directoryAuthorizationRequired'

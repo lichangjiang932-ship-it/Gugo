@@ -10,7 +10,10 @@ import {
   normalizeIncompleteReason,
   normalizeTurnFailure,
 } from './turnTerminalProjection.js'
-import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
+import {
+  isSuccessfulTurnCompletedEvent,
+  projectTurnEventForClient,
+} from '../../shared/turnEventProjection.js'
 
 const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
 const MAX_BRANCH_DEPTH = 5
@@ -770,6 +773,18 @@ function projectTerminalEvidence(message, row, { userId, sessionId }) {
     : {}
   const invalidCompletion = row.type === 'turn.completed'
     && !isSuccessfulTurnCompletedEvent({ type: row.type, payload })
+  const projectedCompletion = invalidCompletion
+    ? projectTurnEventForClient({ type: row.type, payload })
+    : null
+  const failureType = projectedCompletion?.type || row.type
+  const failurePayload = invalidCompletion
+    ? {
+        ...(projectedCompletion?.payload || payload),
+        code: projectedCompletion?.payload?.code
+          || projectedCompletion?.payload?.error?.code
+          || 'TURN_INCOMPLETE',
+      }
+    : payload
   const failureBoundary = SNAPSHOT_FAILURE_BOUNDARY_TYPES.has(row.type) || invalidCompletion
   const state = invalidCompletion ? 'incomplete' : row.type.slice('turn.'.length)
   const artifactIds = terminalEventEvidence(payload, 'artifactIds')
@@ -849,7 +864,9 @@ function projectTerminalEvidence(message, row, { userId, sessionId }) {
       ? { estimatedPromptTokens }
       : {}),
     ...(failureBoundary ? {
-      error: preservedFailedRetryRejection ? context.error : eventFailure(payload, row.type),
+      error: preservedFailedRetryRejection
+        ? context.error
+        : eventFailure(failurePayload, failureType),
     } : {}),
     ...(preservedFailedRetryRejection
       ? { failedRetryRejection: preservedFailedRetryRejection }
