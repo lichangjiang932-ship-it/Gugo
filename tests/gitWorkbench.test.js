@@ -15,6 +15,7 @@ import {
   gitPushTool,
   gitRollbackTool,
   gitWriteTool,
+  dispatchGitTool,
   handleGitWorkbenchRequest,
   GIT_TOOL_SPECS,
 } from '../server/adapters/gitWorkbench.js'
@@ -113,8 +114,59 @@ test('run_project_check only allows lint/test/build scripts', async () => {
   await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '0', WORKSPACE_SHELL_ENABLED: '1' }, async () => {
     const lint = await runProjectCheckTool({ check: 'lint' })
     assert.equal(lint.ok, true)
+    assert.equal(lint.passed, true)
+    assert.equal(lint.verificationVerdict, 'passed')
+    assert.equal(lint.systemFailure, false)
     assert.match(lint.stdout, /lint-ok/)
     await assert.rejects(() => runProjectCheckTool({ check: 'start' }), /only supports lint, test, build/)
+  })
+})
+
+test('run_project_check reports an unavailable script runner as indeterminate', async () => {
+  const cwd = withTempRepo()
+  const packageJsonPath = path.join(cwd, 'package.json')
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
+  packageJson.scripts.test = 'gugo-verification-runner-that-does-not-exist'
+  fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson), 'utf8')
+  await withEnv({
+    WORKSPACE_ROOT: cwd,
+    WORKSPACE_GIT_ENABLED: '0',
+    WORKSPACE_SHELL_ENABLED: '1',
+  }, async () => {
+    const result = await runProjectCheckTool({ check: 'test' })
+    assert.equal(result.ok, false)
+    assert.equal(result.code, 'VERIFICATION_TOOLCHAIN_UNAVAILABLE', JSON.stringify(result))
+    assert.equal(result.passed, null)
+    assert.equal(result.verificationVerdict, 'indeterminate')
+    assert.equal(result.failureKind, 'infrastructure')
+    assert.equal(result.systemFailure, true)
+  })
+})
+
+test('run_project_check propagates cancellation as an indeterminate verdict', async () => {
+  const cwd = withTempRepo()
+  fs.writeFileSync(
+    path.join(cwd, 'test-ok.js'),
+    'setTimeout(() => console.log("must-not-finish"), 30_000)\n',
+    'utf8',
+  )
+  await withEnv({
+    WORKSPACE_ROOT: cwd,
+    WORKSPACE_GIT_ENABLED: '0',
+    WORKSPACE_SHELL_ENABLED: '1',
+  }, async () => {
+    const controller = new AbortController()
+    const pending = dispatchGitTool('run_project_check', { check: 'test' }, {
+      signal: controller.signal,
+    })
+    setTimeout(() => controller.abort(), 100)
+    const result = await pending
+    assert.equal(result.ok, false)
+    assert.equal(result.cancelled, true)
+    assert.equal(result.passed, null)
+    assert.equal(result.verificationVerdict, 'indeterminate')
+    assert.equal(result.failureKind, 'infrastructure')
+    assert.equal(result.systemFailure, true)
   })
 })
 
@@ -166,7 +218,12 @@ test('run_project_check HTTP audits success, check failure, and permission denia
       )
       const failed = await request()
       assert.equal(failed.status, 200)
-      assert.equal((await failed.json()).ok, false)
+      const failedBody = await failed.json()
+      assert.equal(failedBody.ok, false)
+      assert.equal(failedBody.passed, false)
+      assert.equal(failedBody.verificationVerdict, 'failed')
+      assert.equal(failedBody.failureKind, 'project')
+      assert.equal(failedBody.systemFailure, false)
 
       setUserToolPermission({ userId: session.userId, toolName: 'run_project_check', enabled: false })
       const denied = await request()

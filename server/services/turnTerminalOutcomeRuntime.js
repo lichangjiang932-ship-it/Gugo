@@ -196,7 +196,13 @@ export function createTurnTerminalOutcomeRuntime({
     }
 
     if (result?.incomplete) {
-      const partialText = publicIncompleteText(result.partialText || state.streamedAssistantText, '')
+      // `result.text` may be host-authored blocker copy. Keep assistant content
+      // model-authored and carry task diagnostics through the structured
+      // failure contract below so clients can localize the explanation.
+      const partialText = publicIncompleteText(
+        result.partialText || state.streamedAssistantText,
+        '',
+      )
       const resultCode = String(result.code || '').trim()
       const incompleteReason = normalizeIncompleteReason(
         result.budgetExceeded === true
@@ -205,7 +211,12 @@ export function createTurnTerminalOutcomeRuntime({
             ? 'tool_no_progress'
             : resultCode === 'REASONING_RUNAWAY' ? 'reasoning_runaway' : result.reason,
       )
-      const missingRequirements = missingRequirementsForIncompleteReason(incompleteReason)
+      const explicitMissingRequirements = Array.isArray(result.missingRequirements)
+        ? result.missingRequirements
+        : []
+      const missingRequirements = explicitMissingRequirements.length > 0
+        ? explicitMissingRequirements
+        : missingRequirementsForIncompleteReason(incompleteReason)
       const resultRetryable = typeof result.retryable === 'boolean'
         ? result.retryable
         : resultCode !== 'REASONING_RUNAWAY'
@@ -215,6 +226,8 @@ export function createTurnTerminalOutcomeRuntime({
         incompleteReason,
         missingRequirements,
         retryable,
+        manualRetryable: state.failedRetryActive ? false : result.manualRetryable,
+        taskVerification: result.taskVerification,
       }, { retryable })
       const artifactIds = normalizeArtifactIds(result.artifactIds ?? state.checkpointArtifactIds)
       const deliveryArtifactIds = optionalDeliveryArtifactIds(result, [])
@@ -237,8 +250,9 @@ export function createTurnTerminalOutcomeRuntime({
       await evidence.emitter('turn.failed', {
         code: failure.code,
         error: failure,
-        incompleteReason,
-        missingRequirements,
+        incompleteReason: failure.incompleteReason,
+        missingRequirements: failure.missingRequirements,
+        ...(failure.taskVerification ? { taskVerification: failure.taskVerification } : {}),
         partialText,
         artifactIds,
         ...deliveryArtifactFields(deliveryArtifactIds),

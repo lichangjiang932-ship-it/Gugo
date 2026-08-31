@@ -4019,6 +4019,150 @@ test('TurnEngine maps an incomplete loop result to failure instead of completion
   assert.equal(evidence?.content, '')
 })
 
+test('TurnEngine preserves a concrete task-verification blocker and structured recovery data', async () => {
+  const turnId = `turn-task-verification-blocker-${Date.now()}`
+  const blocker = 'Task verification did not pass (test@. via npm test). Last failure: src/result.test.js expected 2, received 1.'
+  const taskVerification = {
+    version: 1,
+    maxFailures: 3,
+    consecutiveFailures: 3,
+    checks: [{
+      status: 'failed',
+      kind: 'test',
+      cwd: '.',
+      commandScope: 'npm test',
+      coverage: 'cwd',
+      code: 'task_test_failed',
+      failures: 3,
+      requiredEpoch: 2,
+      mutationTargets: ['src/result.js'],
+      diagnostic: 'src/result.test.js expected 2, received 1',
+    }],
+  }
+  const engine = createTestEngine({
+    runLoop: async () => ({
+      text: blocker,
+      iterations: 6,
+      incomplete: true,
+      code: 'TASK_VERIFICATION_REPAIR_EXHAUSTED',
+      reason: 'task_verification_repair_exhausted',
+      missingRequirements: [
+        'verification_failure_repair',
+        'passing_project_check',
+        'explicit_recovery_retry',
+      ],
+      retryable: false,
+      manualRetryable: true,
+      taskVerification,
+    }),
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Fix the failing implementation and verify the project.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const failed = events(turnId).at(-1)
+  assert.equal(failed.type, 'turn.failed')
+  assert.equal(failed.payload.code, 'TASK_VERIFICATION_REPAIR_EXHAUSTED')
+  assert.equal(failed.payload.incompleteReason, 'task_verification_repair_exhausted')
+  assert.equal(failed.payload.partialText, '')
+  assert.equal(failed.payload.error.retryable, false)
+  assert.equal(failed.payload.error.manualRetryable, true)
+  assert.deepEqual(failed.payload.error.missingRequirements, [
+    'verification_failure_repair',
+    'passing_project_check',
+    'explicit_recovery_retry',
+  ])
+  assert.deepEqual(failed.payload.error.taskVerification.checks[0], {
+    ...taskVerification.checks[0],
+    code: 'TASK_TEST_FAILED',
+  })
+
+  const evidence = getMessage({
+    userId,
+    sessionId: 'turn-engine-session',
+    messageId: `${turnId}:assistant`,
+  })
+  assert.equal(evidence?.content, '')
+  assert.equal(evidence?.modelContext?.error?.retryable, false)
+  assert.deepEqual(
+    evidence?.modelContext?.error?.taskVerification,
+    failed.payload.error.taskVerification,
+  )
+})
+
+test('TurnEngine executes one explicit manual retry and resets the exhausted verification budget', async () => {
+  const turnId = `turn-task-verification-manual-retry-${Date.now()}`
+  let loopCalls = 0
+  const engine = createTestEngine({
+    runLoop: async ({ loadCheckpoint, saveCheckpoint }) => {
+      loopCalls += 1
+      if (loopCalls === 1) {
+        await saveCheckpoint({
+          messages: [],
+          artifactIds: [],
+          iterations: 3,
+          completionGuards: {
+            pendingMutationTargets: ['src/result.js'],
+            taskVerificationRepair: {
+              consecutiveFailures: 3,
+              lastFailureBatchId: 'failure-batch-3',
+              pending: [{
+                kind: 'test',
+                cwd: '.',
+                commandScope: 'npm test',
+                coverage: 'cwd',
+                failures: 3,
+                lastFailureBatchId: 'failure-batch-3',
+              }],
+            },
+          },
+          final: { incomplete: true },
+        })
+        return {
+          incomplete: true,
+          code: 'TASK_VERIFICATION_REPAIR_EXHAUSTED',
+          reason: 'task_verification_repair_exhausted',
+          retryable: false,
+          manualRetryable: true,
+          iterations: 3,
+        }
+      }
+      const restored = await loadCheckpoint()
+      assert.equal(restored.completionGuards.taskVerificationRepair.consecutiveFailures, 0)
+      assert.equal(restored.completionGuards.taskVerificationRepair.pending[0].failures, 0)
+      assert.deepEqual(restored.completionGuards.pendingMutationTargets, ['src/result.js'])
+      return { text: '修复后验证已通过。', iterations: 4 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: '修复失败检查并重新验证。',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  assert.equal(events(turnId).at(-1)?.payload?.error?.manualRetryable, true)
+
+  await engine.resumeTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    retryFailed: true,
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const turnEvents = events(turnId)
+  assert.equal(turnEvents.find((event) => event.type === 'turn.attempt')?.payload?.manualRetry, true)
+  assert.equal(turnEvents.at(-1)?.type, 'turn.completed')
+  assert.equal(loopCalls, 2)
+})
+
 test('TurnEngine projects reasoning runaway with a stable reason and concrete missing requirement', async () => {
   const turnId = 'turn-reasoning-runaway-incomplete'
   const engine = createTestEngine({
@@ -4252,7 +4396,10 @@ test('TurnEngine allows one checkpoint retry and closes a repeatedly incomplete 
       turnId,
       retryFailed: true,
     }),
-    (error) => error?.code === 'TURN_FAILED_RETRY_LIMIT_REACHED' && error?.retryable === false,
+    (error) => error?.code === 'TURN_FAILED_RETRY_LIMIT_REACHED'
+      && error?.message === 'TURN_FAILED_RETRY_LIMIT_REACHED'
+      && error?.retryable === false
+      && !Object.hasOwn(error, 'hint'),
   )
 })
 
@@ -4296,7 +4443,7 @@ test('TurnEngine permanently seals a failed retry when its checkpoint is missing
       }),
       (error) => error?.code === 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED'
         && error?.retryable === false
-        && /检查点不存在或已失效/.test(error?.message || ''),
+        && error?.message === 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
     )
   }
 
@@ -4310,6 +4457,75 @@ test('TurnEngine permanently seals a failed retry when its checkpoint is missing
   assert.equal(sealedEvidence?.modelContext?.serverLastSequence, failure.sequence)
   assert.equal(sealedEvidence?.modelContext?.error?.code, 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED')
   assert.equal(sealedEvidence?.modelContext?.error?.retryable, false)
+  assert.equal(Object.hasOwn(sealedEvidence?.modelContext?.error || {}, 'message'), false)
+  assert.equal(Object.hasOwn(sealedEvidence?.modelContext?.error || {}, 'hint'), false)
+  assert.deepEqual(sealedEvidence?.modelContext?.failedRetryRejection, {
+    code: 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
+    failureSequence: failure.sequence,
+  })
+  assert.equal(events(turnId).length, eventCount)
+  assert.equal(events(turnId).at(-1)?.id, failure.id)
+  assert.equal(loopCalls, 1)
+})
+
+test('TurnEngine permanently seals a manually recoverable failure when its checkpoint is missing', async () => {
+  const turnId = `turn-manual-retry-missing-checkpoint-${Date.now()}`
+  let loopCalls = 0
+  const engine = createTestEngine({
+    runLoop: async () => {
+      loopCalls += 1
+      return {
+        incomplete: true,
+        code: 'TASK_VERIFICATION_REPAIR_EXHAUSTED',
+        reason: 'task_verification_repair_exhausted',
+        retryable: false,
+        manualRetryable: true,
+        iterations: 3,
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: '修复检查失败并重新验证。',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const failure = events(turnId).at(-1)
+  const eventCount = events(turnId).length
+  assert.equal(failure.type, 'turn.failed')
+  assert.equal(failure.payload.error.retryable, false)
+  assert.equal(failure.payload.error.manualRetryable, true)
+  assert.equal(getTurnCheckpoint({ userId, sessionId: 'turn-engine-session', turnId }), null)
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(
+      engine.resumeTurn({
+        userId,
+        sessionId: 'turn-engine-session',
+        turnId,
+        retryFailed: true,
+      }),
+      (error) => error?.code === 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED'
+        && error?.retryable === false
+        && error?.message === 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
+    )
+  }
+
+  const sealedEvidence = getMessage({
+    userId,
+    sessionId: 'turn-engine-session',
+    messageId: `${turnId}:assistant`,
+  })
+  assert.equal(sealedEvidence?.modelContext?.turnEvidence, true)
+  assert.equal(sealedEvidence?.modelContext?.evidenceState, 'failed')
+  assert.equal(sealedEvidence?.modelContext?.serverLastSequence, failure.sequence)
+  assert.equal(sealedEvidence?.modelContext?.error?.code, 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED')
+  assert.equal(sealedEvidence?.modelContext?.error?.retryable, false)
+  assert.equal(Object.hasOwn(sealedEvidence?.modelContext?.error || {}, 'message'), false)
+  assert.equal(Object.hasOwn(sealedEvidence?.modelContext?.error || {}, 'hint'), false)
   assert.deepEqual(sealedEvidence?.modelContext?.failedRetryRejection, {
     code: 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
     failureSequence: failure.sequence,

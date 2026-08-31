@@ -45,6 +45,7 @@ import {
   runDefaultJobModel,
   runDefaultJobModelWithTools,
 } from './jobModelExecutionRuntime.js'
+import { filterLiveJobDirectoryAuthorizationCheckpoint } from './jobCheckpointAuthorizationRuntime.js'
 
 export function createDefaultExecuteStep({
   runModel = runDefaultJobModel,
@@ -247,7 +248,10 @@ export function createDefaultExecuteStep({
         acknowledgeSteering,
         releaseSteering,
         loadCheckpoint: checkpointEnabled
-          ? () => runtimeCore.checkpoint.load({ jobId: job.id, stepId: step.id, userId: job.userId })
+          ? async () => filterLiveJobDirectoryAuthorizationCheckpoint(
+              await runtimeCore.checkpoint.load({ jobId: job.id, stepId: step.id, userId: job.userId }),
+              { userId: job.userId },
+            )
           : null,
         saveCheckpoint: checkpointEnabled
           ? (state, metadata = {}) => {

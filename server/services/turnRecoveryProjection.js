@@ -71,6 +71,7 @@ export function failedRetryAttemptPayload(events, failureEvent, checkpoint) {
       ? previousAttemptNumber + 1
       : 2,
     reason: 'failed_retry',
+    ...(failureEvent.payload?.error?.manualRetryable === true ? { manualRetry: true } : {}),
     resetStreaming: true,
     checkpointSequence: Number.isInteger(checkpoint?.eventSequence)
       ? checkpoint.eventSequence

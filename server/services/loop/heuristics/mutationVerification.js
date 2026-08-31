@@ -1,11 +1,14 @@
 import path from 'node:path'
+import { projectVerificationFields } from '../../../utils/processExecutionFailure.js'
 import {
   isCommandExecutionTool,
 } from './capabilityChecks.js'
 import {
   PROJECT_SCOPE_TARGET,
-  SHELL_PROJECT_CHECK_COMMAND,
 } from './constants.js'
+import {
+  taskVerificationScopes,
+} from '../taskVerificationCheckScope.js'
 import {
   clearWorkspaceScopedMutationTargets,
   isReadOnlyPowerShellVerificationCall,
@@ -204,7 +207,12 @@ export function clearArtifactValidatedMutationTargets(pendingTargets, receipts, 
   return clearExplicitTargetsMatchingEvidence(pendingTargets, evidence)
 }
 
-export function clearVerifiedMutationTargets(pendingTargets, call, result) {
+export function clearVerifiedMutationTargets(
+  pendingTargets,
+  call,
+  result,
+  { projectDirectory = '', projectDirectories = [] } = {},
+) {
   if (!pendingTargets.size) return false
   if (call?.name === 'list_directory') {
     const evidence = listDirectoryVerificationTargets(call, result)
@@ -219,19 +227,33 @@ export function clearVerifiedMutationTargets(pendingTargets, call, result) {
   if (call?.name === 'git_diff') {
     return clearTargetsMatchingEvidence(pendingTargets, diffVerificationTargets(call, result))
   }
+  const projectVerdict = projectVerificationFields(result)
+  const deterministicProjectPass = result?.ok === true
+    && projectVerdict.verificationVerdict === 'passed'
+    && projectVerdict.passed === true
+  const clearCoveredProjectTargets = () => deterministicProjectPass
+    && taskVerificationScopes(call, result)
+    .filter((scope) => scope.coverage === 'cwd')
+    .reduce((cleared, scope) => (
+      clearWorkspaceScopedMutationTargets(
+        pendingTargets,
+        scope.cwd,
+        { projectDirectory, projectDirectories },
+      ) || cleared
+    ), false)
   if (call?.name === 'run_project_check' || call?.name === 'run_test') {
-    return clearWorkspaceScopedMutationTargets(pendingTargets)
+    return clearCoveredProjectTargets()
   }
   if (isCommandExecutionTool(call)) {
     const command = String(call?.args?.command || '')
-    if (/\bgit\s+diff\b/i.test(command)) {
+    if (/^git(?:\.exe)?\s+diff\b[^&|;<>`\r\n]*$/iu.test(command.trim())) {
       return clearTargetsMatchingEvidence(pendingTargets, diffVerificationTargets(call, {
         ...result,
         diff: result?.diff || result?.stdout,
       }))
     }
-    if (SHELL_PROJECT_CHECK_COMMAND.test(command)) {
-      return clearWorkspaceScopedMutationTargets(pendingTargets)
+    if (taskVerificationScopes(call, result).length > 0) {
+      return clearCoveredProjectTargets()
     }
     const powerShellEvidence = powerShellVerificationTargets(call, result)
     if (powerShellEvidence.size > 0) {

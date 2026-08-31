@@ -15,7 +15,7 @@ import {
 } from './fsShellTools.js'
 import { dispatchApplyPatchTool } from '../utils/applyPatch.js'
 import { writeLimiter } from '../utils/rateLimiter.js'
-
+import { projectVerificationFields } from '../utils/processExecutionFailure.js'
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 2 * 60 * 1000
 const MAX_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000
 const DEFAULT_DOWNLOAD_MAX_BYTES = 512 * 1024 * 1024
@@ -289,7 +289,7 @@ export async function runTestTool({
   const safeResult = redactForwardedEnvValues(result, env_keys)
   return {
     ...safeResult,
-    passed: result.ok === true && result.exitCode === 0,
+    ...projectVerificationFields(result),
     framework: selected.framework,
     command: selected.command,
     summary: parseTestSummary(result.stdout, result.stderr),

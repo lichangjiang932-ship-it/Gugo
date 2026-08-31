@@ -12,6 +12,8 @@ const REASON_KEYS = Object.freeze({
   post_mutation_verification_missing: 'chatMessages.incompleteReasonMutationVerification',
   recovery_attempts_exhausted: 'chatMessages.incompleteReasonRecoveryExhausted',
   reasoning_runaway: 'chatMessages.incompleteReasonReasoningRunaway',
+  task_verification_repair_exhausted: 'chatMessages.incompleteReasonVerificationExhausted',
+  task_verification_repair_pending: 'chatMessages.incompleteReasonVerificationPending',
   tool_no_progress: 'chatMessages.incompleteReasonNoProgress',
 })
 
@@ -28,11 +30,15 @@ const REQUIREMENT_KEYS = Object.freeze({
   model_service_available: 'chatMessages.incompleteRequirementModelService',
   mutation_readback: 'chatMessages.incompleteRequirementReadback',
   operation_outcome_verification: 'chatMessages.incompleteRequirementOutcomeVerification',
+  passing_project_check: 'chatMessages.incompleteRequirementPassingProjectCheck',
   pdf_layout_validation: 'chatMessages.incompleteRequirementPdfValidation',
   progress_after_last_checkpoint: 'chatMessages.incompleteRequirementProgress',
   execution_environment_repair: 'chatMessages.incompleteRequirementEnvironmentRepair',
   explicit_recovery_retry: 'chatMessages.incompleteRequirementExplicitRetry',
   remaining_task_steps: 'chatMessages.incompleteRequirementRemainingSteps',
+  verification_failure_repair: 'chatMessages.incompleteRequirementVerificationRepair',
+  conclusive_project_verification: 'chatMessages.incompleteRequirementConclusiveVerification',
+  rerun_verification_scope: 'chatMessages.incompleteRequirementVerificationRerun',
 })
 
 const DEFAULT_REQUIREMENTS = Object.freeze({
@@ -49,7 +55,32 @@ const DEFAULT_REQUIREMENTS = Object.freeze({
   post_mutation_verification_missing: ['mutation_readback', 'diff_or_project_check'],
   recovery_attempts_exhausted: ['execution_environment_repair', 'explicit_recovery_retry'],
   reasoning_runaway: ['bounded_model_response'],
+  task_verification_repair_exhausted: [
+    'verification_failure_repair',
+    'passing_project_check',
+    'explicit_recovery_retry',
+  ],
+  task_verification_repair_pending: [
+    'verification_failure_repair',
+    'passing_project_check',
+  ],
   tool_no_progress: ['progress_after_last_checkpoint'],
+})
+
+const VERIFICATION_STATUS_KEYS = Object.freeze({
+  failed: 'chatMessages.incompleteVerificationFailed',
+  indeterminate: 'chatMessages.incompleteVerificationIndeterminate',
+  rerun_required: 'chatMessages.incompleteVerificationRerunRequired',
+  stale: 'chatMessages.incompleteVerificationStale',
+})
+
+const VERIFICATION_DIAGNOSTIC_KEYS = Object.freeze({
+  PROCESS_TREE_CLEANUP_FAILED: 'chatMessages.incompleteVerificationProcessTreeCleanupFailed',
+})
+
+const VERIFICATION_NEXT_STEP_KEYS = Object.freeze({
+  task_verification_repair_exhausted: 'chatMessages.incompleteNextVerificationExhausted',
+  task_verification_repair_pending: 'chatMessages.incompleteNextVerificationPending',
 })
 
 function translated(t, key, values) {
@@ -74,6 +105,36 @@ function publicFailureDetail(failure) {
     || !message
     || /(?:^|\n)\s*(?:error|exception|typeerror|rangeerror)\s*:/iu.test(message)) return ''
   return message.slice(0, 600)
+}
+
+function verificationCheckPresentations(failure, t) {
+  const source = failure?.taskVerification
+  if (!source || Number(source.version) !== 1 || !Array.isArray(source.checks)) return []
+  return source.checks.slice(0, 9).map((check) => {
+    const status = String(check?.status || '').trim().toLowerCase()
+    const kind = String(check?.kind || '').trim().toLowerCase()
+    if (!VERIFICATION_STATUS_KEYS[status] || !kind) return null
+    const cwd = String(check?.cwd || '.').trim().slice(0, 1_000) || '.'
+    const command = String(check?.commandScope || kind).trim().slice(0, 1_000) || kind
+    const code = String(check?.code || 'VERIFICATION_INDETERMINATE').trim().toUpperCase()
+    const rawDiagnostic = String(check?.diagnostic || '').trim().slice(0, 1_200)
+    const diagnosticKey = VERIFICATION_DIAGNOSTIC_KEYS[code]
+      || VERIFICATION_DIAGNOSTIC_KEYS[rawDiagnostic.toUpperCase()]
+    const diagnostic = diagnosticKey
+      ? translated(t, diagnosticKey)
+      : rawDiagnostic
+    return {
+      code,
+      diagnostic,
+      scope: translated(t, 'chatMessages.incompleteVerificationScope', {
+        command,
+        cwd,
+        kind,
+        status: translated(t, VERIFICATION_STATUS_KEYS[status]),
+      }),
+      status,
+    }
+  }).filter(Boolean)
 }
 
 export function buildIncompleteTaskPresentation(msg, t, {
@@ -113,20 +174,26 @@ export function buildIncompleteTaskPresentation(msg, t, {
             : 'chatMessages.incompleteMissingFallback',
         { code: reasonCode.toUpperCase() },
       )]
-  const retryable = failure.retryable === true
+  // Older retained records may predate the server-side retryability guard.
+  // Never advertise a direct retry after the repair budget was exhausted.
+  const retryable = reasonCode === 'task_verification_repair_exhausted'
+    ? false
+    : failure.retryable === true
   const manualRetryable = failure.manualRetryable === true
+  const verificationNextStepKey = VERIFICATION_NEXT_STEP_KEYS[reasonCode]
   return {
     code: String(failure.incompleteReason || failure.code || 'TURN_INCOMPLETE').trim().toUpperCase(),
     missing,
-    nextStep: translated(t, retryable
+    nextStep: translated(t, verificationNextStepKey || (retryable
       ? 'chatMessages.incompleteNextRetry'
       : manualRetryable
         ? 'chatMessages.incompleteNextManualRecovery'
-        : 'chatMessages.incompleteNextAdjust'),
+        : 'chatMessages.incompleteNextAdjust')),
     reason,
     retainedCount,
     retryable,
     manualRetryable,
+    verificationChecks: verificationCheckPresentations(failure, t),
     verifiedCount,
   }
 }

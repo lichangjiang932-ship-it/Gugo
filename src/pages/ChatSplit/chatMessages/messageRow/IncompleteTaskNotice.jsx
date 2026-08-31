@@ -42,6 +42,29 @@ export default function IncompleteTaskNotice({
             <span className="font-medium">{t('chatMessages.incompleteNextStepLabel')}</span>
             <span className="ml-1 text-ink-soft">{presentation.nextStep}</span>
           </p>
+          {presentation.verificationChecks.length > 0 ? (
+            <div className="space-y-1 text-ink-soft" data-testid="incomplete-task-verification-details">
+              <span className="font-medium text-ink">
+                {t('chatMessages.incompleteVerificationDetailsLabel')}
+              </span>
+              <ul className="list-disc space-y-1 pl-5">
+                {presentation.verificationChecks.map((check, index) => (
+                  <li key={`${check.status}:${check.code}:${index}`}>
+                    <span>{check.scope}</span>
+                    <code className="ml-1 rounded bg-ink/5 px-1 text-xs text-ink-fade">
+                      {check.code}
+                    </code>
+                    {check.diagnostic ? (
+                      <p className="whitespace-pre-wrap break-words text-ink-fade">
+                        <span>{t('chatMessages.incompleteVerificationDiagnosticLabel')}</span>
+                        <span className="ml-1">{check.diagnostic}</span>
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {presentation.verifiedCount > 0 || presentation.retainedCount > 0 ? (
             <p className="text-ink-fade" data-testid="incomplete-task-file-state">
               {[

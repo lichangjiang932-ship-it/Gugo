@@ -13,13 +13,18 @@ process.env.APP_DATA_DIR = tempDir
 const { closeDb } = await import('../server/db.js')
 const { JobRuntime } = await import('../server/services/jobRuntime.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
-const { grantLocalPath } = await import('../server/services/localFileAccessService.js')
+const {
+  findAuthorizedDirectoryGrant,
+  grantLocalPath,
+  revokeLocalPath,
+} = await import('../server/services/localFileAccessService.js')
 const { appendJobEvent, updateJob } = await import('../server/services/jobStore.js')
 const { getJobTurnCheckpoint, saveJobTurnCheckpoint } = await import('../server/services/jobTurnCheckpointStore.js')
 const { getJobWake, scheduleJobWake } = await import('../server/services/jobWakeStore.js')
 const { runToolLoop, SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
 const { handleJobRequest } = await import('../server/routes/jobRoutes.js')
 const { resumeJobDirectoryAuthorization } = await import('../src/lib/jobClient.js')
+const { filterLiveJobDirectoryAuthorizationCheckpoint } = await import('../server/services/jobCheckpointAuthorizationRuntime.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const resolveTestModelBinding = () => ({
@@ -94,7 +99,7 @@ test('persisted read-write directory grant resumes the paused Job checkpoint wit
 
   const checkpoint = getJobTurnCheckpoint({ jobId, stepId, userId })
   assert.equal(checkpoint.state.final, null)
-  assert.deepEqual(checkpoint.state.directoryAuthorizationResolution, {
+  assert.deepEqual(checkpoint.state.directoryAuthorizationResolution, [{
     type: 'directory_authorization',
     approved: true,
     path: authorizedDir,
@@ -103,7 +108,8 @@ test('persisted read-write directory grant resumes the paused Job checkpoint wit
     awaiting_event_id: result.job.events.find((event) => event.type === 'awaiting_user').id,
     step_id: stepId,
     grant_id: grant.id,
-  })
+    authorization_scope: grant.scope,
+  }])
   const marker = checkpoint.state.messages.find((message) => (
     message.role === 'system' && String(message.content).includes('[JOB_DIRECTORY_RESOLUTION:')
   ))
@@ -127,6 +133,118 @@ test('persisted read-write directory grant resumes the paused Job checkpoint wit
   )
   runtime.requestCancel(jobId, { userId })
   await runtime.runOneTick()
+})
+
+test('revoked Job directory grants remove checkpoint authority and its model marker', () => {
+  const { userId } = issueTestSession()
+  const grant = grantLocalPath({
+    userId,
+    rootPath: authorizedDir,
+    accessMode: 'read_write',
+    scope: 'session',
+  })
+  const checkpoint = {
+    state: {
+      messages: [
+        { role: 'user', content: 'Write the output.' },
+        { role: 'system', content: '[JOB_DIRECTORY_RESOLUTION:event-1] already persisted and verified' },
+      ],
+      directoryAuthorizationResolution: [{
+        type: 'directory_authorization',
+        approved: true,
+        path: authorizedDir,
+        access_mode: 'read_write',
+        authorization_scope: grant.scope,
+        resource_type: 'directory',
+        awaiting_event_id: 'event-1',
+        grant_id: grant.id,
+      }],
+    },
+  }
+  assert.equal(
+    filterLiveJobDirectoryAuthorizationCheckpoint(checkpoint, { userId })
+      .state.directoryAuthorizationResolution.length,
+    1,
+  )
+  assert.equal(revokeLocalPath({ userId, id: grant.id }), true)
+  const filtered = filterLiveJobDirectoryAuthorizationCheckpoint(checkpoint, { userId })
+  assert.deepEqual(filtered.state.directoryAuthorizationResolution, [])
+  assert.deepEqual(filtered.state.messages, [{ role: 'user', content: 'Write the output.' }])
+})
+
+test('legacy Job checkpoint without structured authority drops stale model markers', () => {
+  const checkpoint = {
+    state: {
+      messages: [
+        { role: 'user', content: 'Write the output.' },
+        { role: 'system', content: 'Keep this unrelated system instruction.' },
+        { role: 'system', content: '[JOB_DIRECTORY_RESOLUTION:legacy-event] already persisted and verified' },
+      ],
+    },
+  }
+
+  const filtered = filterLiveJobDirectoryAuthorizationCheckpoint(checkpoint, {
+    userId: 'legacy-user',
+  })
+
+  assert.deepEqual(filtered.state.messages, [
+    { role: 'user', content: 'Write the output.' },
+    { role: 'system', content: 'Keep this unrelated system instruction.' },
+  ])
+  assert.equal(Object.hasOwn(filtered.state, 'directoryAuthorizationResolution'), false)
+})
+
+test('Job checkpoint keeps its exact session grant when a persistent parent also covers the path', () => {
+  const { userId } = issueTestSession()
+  const parentDir = path.join(tempDir, `overlap-parent-${Date.now()}`)
+  const childDir = path.join(parentDir, 'session-child')
+  fs.mkdirSync(childDir, { recursive: true })
+  const parentGrant = grantLocalPath({
+    userId,
+    rootPath: parentDir,
+    accessMode: 'read_write',
+    scope: 'persistent',
+  })
+  const childGrant = grantLocalPath({
+    userId,
+    rootPath: childDir,
+    accessMode: 'read_write',
+    scope: 'session',
+  })
+  const resolution = {
+    type: 'directory_authorization',
+    approved: true,
+    path: childDir,
+    access_mode: 'read_write',
+    authorization_scope: childGrant.scope,
+    resource_type: 'directory',
+    awaiting_event_id: 'event-overlap',
+    grant_id: childGrant.id,
+  }
+  const checkpoint = {
+    state: {
+      messages: [
+        { role: 'user', content: 'Write the output.' },
+        { role: 'system', content: '[JOB_DIRECTORY_RESOLUTION:event-overlap] already persisted and verified' },
+      ],
+      directoryAuthorizationResolution: [resolution],
+    },
+  }
+
+  const live = filterLiveJobDirectoryAuthorizationCheckpoint(checkpoint, { userId })
+  assert.deepEqual(live.state.directoryAuthorizationResolution, [resolution])
+  assert.equal(live.state.messages.length, 2)
+
+  assert.equal(revokeLocalPath({ userId, id: childGrant.id }), true)
+  assert.equal(findAuthorizedDirectoryGrant({
+    userId,
+    rawPath: childDir,
+    accessMode: 'read_write',
+  })?.id, parentGrant.id, 'the persistent parent still grants new access to the child')
+  const filtered = filterLiveJobDirectoryAuthorizationCheckpoint(checkpoint, { userId })
+  assert.deepEqual(filtered.state.directoryAuthorizationResolution, [])
+  assert.deepEqual(filtered.state.messages, [{ role: 'user', content: 'Write the output.' }])
+  assert.equal(revokeLocalPath({ userId, id: parentGrant.id }), true)
 })
 
 test('old directory suspension cannot resume a later sleeping wait or cancel its wake', async () => {

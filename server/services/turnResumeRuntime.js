@@ -90,6 +90,29 @@ export function createTurnResumeRuntime({
   createEmitter,
   schedule,
 }) {
+  function assertCurrentDirectoryGrant(userId, resolution) {
+    if (resolution?.type !== 'directory_authorization') return
+    let grants
+    try {
+      grants = deps.readFileAccessStatus({ userId })?.grants || []
+    } catch (error) {
+      const wrapped = new TurnEngineError(
+        'TURN_DIRECTORY_GRANT_CHECK_FAILED',
+        'failed to verify the persisted directory authorization',
+        500,
+      )
+      wrapped.cause = error
+      throw wrapped
+    }
+    if (!hasSufficientDirectoryGrant(grants, resolution)) {
+      throw new TurnEngineError(
+        'TURN_DIRECTORY_GRANT_NOT_FOUND',
+        'the requested directory authorization is not persisted for this user',
+        403,
+      )
+    }
+  }
+
   /**
    * Startup recovery needs to distinguish "another process owns the lease"
    * from "this process scheduled the turn". The public resume response stays
@@ -150,6 +173,8 @@ export function createTurnResumeRuntime({
     const failedRetryActive = Boolean(latestFailedRetry) && !persistedEvents.some((event) => (
       event.sequence > latestFailedRetry.sequence && isTerminalTurnEventType(event.type)
     ))
+    const manualFailedRetryActive = failedRetryActive
+      && latestFailedRetry.payload?.manualRetry === true
     const pause = pauseState(persistedEvents)
     const normalizedResolution = resolution == null ? null : normalizeTurnResolution(resolution)
     let resumeContext = pause.resumed ? {
@@ -158,6 +183,7 @@ export function createTurnResumeRuntime({
     } : null
     const running = active.get(key)
 
+    let directoryGrantVerified = false
     if (pause.pending) {
       if (!normalizedResolution) {
         return {
@@ -170,25 +196,8 @@ export function createTurnResumeRuntime({
       }
       validateResolutionForPause(normalizedResolution, pause.paused)
       if (normalizedResolution.type === 'directory_authorization') {
-        let grants
-        try {
-          grants = deps.readFileAccessStatus({ userId })?.grants || []
-        } catch (error) {
-          const wrapped = new TurnEngineError(
-            'TURN_DIRECTORY_GRANT_CHECK_FAILED',
-            'failed to verify the persisted directory authorization',
-            500,
-          )
-          wrapped.cause = error
-          throw wrapped
-        }
-        if (!hasSufficientDirectoryGrant(grants, normalizedResolution)) {
-          throw new TurnEngineError(
-            'TURN_DIRECTORY_GRANT_NOT_FOUND',
-            'the requested directory authorization is not persisted for this user',
-            403,
-          )
-        }
+        assertCurrentDirectoryGrant(userId, normalizedResolution)
+        directoryGrantVerified = true
       }
       const resumeEmitter = createEmitter({
         userId,
@@ -229,6 +238,10 @@ export function createTurnResumeRuntime({
       }
     }
 
+    if (!directoryGrantVerified && resumeContext?.resolution?.type === 'directory_authorization') {
+      assertCurrentDirectoryGrant(userId, resumeContext.resolution)
+    }
+
     const emitter = createEmitter({ userId, sessionId, turnId, sequence: last.sequence + 1 })
     const persistedWorkspacePath = String(started.payload.workspacePath || '').trim() || null
     const persistedProjectDirectory = String(started.payload.projectDirectory || '').trim() || null
@@ -265,6 +278,7 @@ export function createTurnResumeRuntime({
         || recoveredDirectory?.projectDirectory
         || null,
       failedRetryActive,
+      manualFailedRetryActive,
       resumeContext,
       emitter,
     })

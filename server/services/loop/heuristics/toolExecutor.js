@@ -489,6 +489,7 @@ export async function executeServerTool({
     try {
       return await dispatchGitTool(name, args || {}, {
         userId: job?.userId || null,
+        signal,
         toolCallId,
         idempotencyKey,
       })

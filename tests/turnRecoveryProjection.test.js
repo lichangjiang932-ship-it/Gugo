@@ -5,6 +5,7 @@ import path from 'node:path'
 import {
   checkpointMessagesForTurn,
   excludeVerifiedLocalFiles,
+  failedRetryAttemptPayload,
   latestLegacyCheckpoint,
   latestRetainedLocalFiles,
   latestVerifiedLocalFiles,
@@ -14,6 +15,7 @@ import {
   replayPersistedTurnEvents,
   storedCheckpointEvent,
 } from '../server/services/turnRecoveryProjection.js'
+import { checkpointStateForFailedRetry } from '../server/services/turnExecutionRuntime.js'
 
 function replayFrom(events) {
   return ({ after, limit }) => events
@@ -55,6 +57,41 @@ test('recovery attempt preserves only the checkpointed stream prefix and stops a
 
   events.push({ sequence: 4, type: 'turn.failed', payload: {} })
   assert.equal(await recoveryAttemptAfterCheckpoint(replayFrom(events), {}, checkpoint), null)
+})
+
+test('manual failed retry is durable and resets only the verification repair budget', () => {
+  const attempt = failedRetryAttemptPayload([
+    { sequence: 1, type: 'assistant.delta', payload: { text: 'saved' } },
+  ], {
+    sequence: 2,
+    type: 'turn.failed',
+    payload: {
+      partialText: '',
+      error: { manualRetryable: true },
+    },
+  }, { eventSequence: 1 })
+  assert.equal(attempt.manualRetry, true)
+
+  const original = {
+    final: { incomplete: true },
+    completionGuards: {
+      pendingMutationTargets: ['src/result.js'],
+      taskVerificationRepair: {
+        consecutiveFailures: 3,
+        lastFailureBatchId: 'batch-3',
+        pending: [{ kind: 'test', failures: 3, lastFailureBatchId: 'batch-3' }],
+        candidates: [{ kind: 'lint', failures: 1 }],
+      },
+    },
+  }
+  const restored = checkpointStateForFailedRetry(original, { manualRetry: true })
+  assert.equal(restored.final, null)
+  assert.equal(restored.completionGuards.taskVerificationRepair.consecutiveFailures, 0)
+  assert.equal(restored.completionGuards.taskVerificationRepair.pending[0].failures, 0)
+  assert.equal(restored.completionGuards.taskVerificationRepair.pending[0].lastFailureBatchId, '')
+  assert.deepEqual(restored.completionGuards.pendingMutationTargets, ['src/result.js'])
+  assert.deepEqual(restored.completionGuards.taskVerificationRepair.candidates, [{ kind: 'lint', failures: 1 }])
+  assert.equal(original.completionGuards.taskVerificationRepair.consecutiveFailures, 3)
 })
 
 test('checkpoint projection isolates the current turn and keeps protocol-only checkpoints', () => {

@@ -3,6 +3,9 @@ import test from 'node:test'
 
 import {
   createTurnResolutionRuntime,
+  filterAuthorizedDirectoryResolutions,
+  MAX_DIRECTORY_AUTHORIZATION_RESOLUTIONS,
+  normalizeDirectoryAuthorizationResolutions,
   TurnEngineError,
 } from '../server/services/turnResolutionRuntime.js'
 
@@ -152,6 +155,109 @@ test('checkpoint resolution projection is immutable and idempotent', () => {
   assert.match(first.messages.at(-1).content, /\[TURN_RESOLUTION:9\]/)
   assert.equal(second.messages.length, first.messages.length)
   assert.notStrictEqual(second.messages[0], first.messages[0])
+})
+
+test('checkpoint resolution projection preserves structured directory authorization', () => {
+  const runtime = createRuntime()
+  const state = {
+    messages: [{ role: 'assistant', content: 'waiting' }],
+    final: { paused: true, text: 'waiting' },
+  }
+  const resolution = {
+    type: 'directory_authorization',
+    approved: true,
+    path: 'C:\\Workspace',
+    access_mode: 'read_write',
+    authorization_scope: 'persistent',
+    grant_id: 'grant-1',
+    resource_type: 'directory',
+    paused_sequence: 7,
+  }
+  const resumeContext = { resolution, pausedSequence: 7 }
+
+  const first = runtime.applyToCheckpoint(state, resumeContext)
+  const second = runtime.applyToCheckpoint(first, resumeContext)
+
+  assert.deepEqual(first.directoryAuthorizationResolution, [resolution])
+  assert.notStrictEqual(first.directoryAuthorizationResolution[0], resolution)
+  assert.deepEqual(second.directoryAuthorizationResolution, [resolution])
+  assert.notStrictEqual(
+    second.directoryAuthorizationResolution[0],
+    first.directoryAuthorizationResolution[0],
+  )
+  assert.equal(first.messages.at(-1).role, 'system')
+  assert.match(first.messages.at(-1).content, /\[TURN_RESOLUTION:7\]/)
+  assert.equal(second.messages.length, first.messages.length)
+  assert.equal(Object.hasOwn(state, 'directoryAuthorizationResolution'), false)
+})
+
+test('directory authorization checkpoints retain bounded distinct roots and accept legacy single values', () => {
+  const runtime = createRuntime()
+  const resolution = (index) => ({
+    type: 'directory_authorization',
+    approved: true,
+    path: `C:\\Workspace-${index}`,
+    access_mode: 'read_write',
+    authorization_scope: 'persistent',
+    grant_id: `grant-${index}`,
+    resource_type: 'directory',
+    paused_sequence: index,
+  })
+  const legacy = resolution(0)
+  assert.deepEqual(normalizeDirectoryAuthorizationResolutions(legacy), [legacy])
+
+  let state = { messages: [], final: { paused: true } }
+  state = runtime.applyToCheckpoint(state, { resolution: legacy, pausedSequence: 0 })
+  state = runtime.applyToCheckpoint(state, { resolution: resolution(1), pausedSequence: 1 })
+  assert.deepEqual(
+    state.directoryAuthorizationResolution.map(({ grant_id: grantId }) => grantId),
+    ['grant-0', 'grant-1'],
+  )
+
+  const bounded = normalizeDirectoryAuthorizationResolutions(
+    Array.from({ length: MAX_DIRECTORY_AUTHORIZATION_RESOLUTIONS + 2 }, (_, index) => resolution(index)),
+  )
+  assert.equal(bounded.length, MAX_DIRECTORY_AUTHORIZATION_RESOLUTIONS)
+  assert.deepEqual(
+    bounded.map(({ grant_id: grantId }) => grantId),
+    Array.from(
+      { length: MAX_DIRECTORY_AUTHORIZATION_RESOLUTIONS },
+      (_, index) => `grant-${index + 2}`,
+    ),
+  )
+
+  const replacement = { ...resolution(10), path: resolution(9).path }
+  const deduplicated = normalizeDirectoryAuthorizationResolutions([...bounded, replacement])
+  assert.equal(deduplicated.length, MAX_DIRECTORY_AUTHORIZATION_RESOLUTIONS)
+  assert.equal(deduplicated.at(-1).grant_id, 'grant-10')
+  assert.equal(deduplicated.at(-1).path, resolution(9).path)
+})
+
+test('revoked directory grants are removed before checkpoint roots can be restored', () => {
+  const first = {
+    type: 'directory_authorization',
+    approved: true,
+    path: 'C:\\Workspace-A',
+    access_mode: 'read_write',
+    authorization_scope: 'persistent',
+    grant_id: 'grant-a',
+  }
+  const second = {
+    ...first,
+    path: 'C:\\Workspace-B',
+    grant_id: 'grant-b',
+  }
+  const grants = [{
+    id: 'grant-b',
+    path: 'c:\\workspace-b\\',
+    accessMode: 'read_write',
+    resourceType: 'directory',
+    scope: 'persistent',
+    available: true,
+  }]
+
+  assert.deepEqual(filterAuthorizedDirectoryResolutions([first, second], grants), [second])
+  assert.deepEqual(filterAuthorizedDirectoryResolutions([first, second], null), [])
 })
 
 test('pause and public status projections preserve durable event precedence', () => {

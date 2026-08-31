@@ -27,6 +27,14 @@ import {
   isTemporaryTurnEvidence,
   normalizePromptContextSnapshot,
 } from './turnEnginePolicy.js'
+import { resetManualRetryVerificationBudget } from './turnFailedRetryPolicy.js'
+import { filterAuthorizedDirectoryResolutions } from './turnResolutionRuntime.js'
+
+export function checkpointStateForFailedRetry(state, { manualRetry = false } = {}) {
+  if (!state || typeof state !== 'object') return state || null
+  const restored = state.final ? { ...state, final: null } : { ...state }
+  return manualRetry ? resetManualRetryVerificationBudget(restored) : restored
+}
 
 export function createTurnExecutionRuntime({
   deps,
@@ -55,6 +63,7 @@ export function createTurnExecutionRuntime({
     intentMode,
     approvalMode,
     failedRetryActive = false,
+    manualFailedRetryActive = false,
     resumeContext,
     emitter,
     executionLease = null,
@@ -78,9 +87,29 @@ export function createTurnExecutionRuntime({
     )
     const checkpoint = storedCheckpoint || await latestLegacyCheckpoint(deps.replayEvents, scope)
     const resolvedCheckpointState = checkpointStateForResolution(checkpoint?.payload?.state, resumeContext)
-    const restoredCheckpointState = failedRetryActive && resolvedCheckpointState?.final
-      ? { ...resolvedCheckpointState, final: null }
+    const retryRestoredCheckpointState = failedRetryActive
+      ? checkpointStateForFailedRetry(resolvedCheckpointState, {
+          manualRetry: manualFailedRetryActive,
+        })
       : resolvedCheckpointState
+    let fileAccessStatus
+    try {
+      fileAccessStatus = deps.readFileAccessStatus({ userId })
+    } catch {
+      // A stale checkpoint is never authority. An unreadable current grant
+      // snapshot fails closed for both tool projection and verification roots.
+      fileAccessStatus = null
+    }
+    const restoredCheckpointState = retryRestoredCheckpointState
+      && Object.hasOwn(retryRestoredCheckpointState, 'directoryAuthorizationResolution')
+      ? {
+          ...retryRestoredCheckpointState,
+          directoryAuthorizationResolution: filterAuthorizedDirectoryResolutions(
+            retryRestoredCheckpointState.directoryAuthorizationResolution,
+            fileAccessStatus?.grants,
+          ),
+        }
+      : retryRestoredCheckpointState
     const steeringOwnerId = String(deps.runtimeCore.lease.ownerId || '').trim() || null
     const steeringScope = { ...scope, ownerId: steeringOwnerId }
     if (steeringOwnerId) {
@@ -208,6 +237,7 @@ export function createTurnExecutionRuntime({
       approvalMode,
       resumeResolution: resumeContext?.resolution,
       restoredCheckpointState,
+      fileAccessStatus,
       promptContextSkillIds: promptContextSnapshot?.skillIds || promptContext.skillIds,
       fallbackSkillIds: skillIds,
       toolResolutionMessages,
@@ -262,6 +292,7 @@ export function createTurnExecutionRuntime({
       historyMessages,
       agentId,
       failedRetryActive,
+      manualFailedRetryActive,
     })
     const terminalEvidenceRuntime = createTurnTerminalEvidenceRuntime({
       scope,
@@ -286,8 +317,7 @@ export function createTurnExecutionRuntime({
       logWarn('turn.context_window_discovery', error, scope)
     }
     try {
-      const executionFileAccess = toolContext.modelToolFileAccessStatus
-        ?? deps.readFileAccessStatus({ userId })
+      const executionFileAccess = toolContext.modelToolFileAccessStatus ?? fileAccessStatus
       const executionRuntimePlugins = deps.readRuntimePlugins()
       let executionRuntimePluginStates
       try {

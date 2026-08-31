@@ -11,6 +11,7 @@ import { localFileOpenPayload } from '../../../../lib/localFileReferences.js'
 import {
   getVisibleModelErrorMessage,
   getVisibleTurnClarification,
+  isPermanentFailedRetryRejectionFailure,
   isPreExecutionFailure,
 } from '../../../../lib/chatFlowGuards.js'
 import { ArtifactReferenceLinks } from '../ArtifactCards.jsx'
@@ -81,11 +82,20 @@ export default function AssistantAnswer({
   const hasProcessSummary = hasExecution || hasReasoningSummary
   const preExecutionFailure = isPreExecutionFailure(msg)
   const { modelSetupFailure, runtimeRestartRequired } = failurePresentation(msg)
+  const failedRetryRejection = hasStructuredFailure
+    && isPermanentFailedRetryRejectionFailure(msg)
+  const failedRetryRejectionDetail = failedRetryRejection
+    ? getVisibleModelErrorMessage(msg, t)
+    : ''
   // serverPartialText is authoritative model-authored output for structured
   // failed, interrupted, cancelled, and recovery-blocked turns.
   // Derive missing presentation copy at render time so reloads and language
   // changes never treat server-localized error prose as assistant output.
-  const visibleAnswer = presentation.answer
+  const visibleAnswer = (presentation.answer
+    ? (failedRetryRejectionDetail && !presentation.answer.includes(failedRetryRejectionDetail)
+        ? `${presentation.answer}\n\n${failedRetryRejectionDetail}`
+        : presentation.answer)
+    : '')
     || (msg.meta?.paused === true
       ? getVisibleTurnClarification(msg.meta?.serverClarification, t)
       : '')

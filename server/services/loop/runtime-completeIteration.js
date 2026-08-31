@@ -76,7 +76,15 @@ export async function completeIteration(s) {
     const incomplete = await s.finishIncomplete({
       text: s.taskVerificationRepairBlockerText(),
       reason: 'task_verification_repair_exhausted',
-      code: 'task_verification_repair_exhausted',
+      code: 'TASK_VERIFICATION_REPAIR_EXHAUSTED',
+      missingRequirements: [
+        'verification_failure_repair',
+        'conclusive_project_verification',
+        'explicit_recovery_retry',
+      ],
+      retryable: false,
+      manualRetryable: true,
+      taskVerification: s.taskVerificationRepairDetails?.(),
     })
     if (incomplete.deferredForSteering) return { kind: 'continue' }
     return { kind: 'return', value: incomplete }

@@ -7,6 +7,7 @@ import {
   buildChatFailureMessage,
   getVisibleModelErrorMessage,
   getVisibleTurnClarification,
+  isPermanentFailedRetryRejectionFailure,
   isModelPreExecutionFailure,
   isModelSetupFailure,
   isPreExecutionFailure,
@@ -20,6 +21,12 @@ const COPY = {
   'errors.turnReasoningRunaway': '模型推理超过安全上限。',
   'errors.turnRepeatedToolCall': '工具调用重复且没有进展。',
   'errors.turnRetryLimitReached': '恢复后仍未完成。',
+  'errors.turnFailedRetryUnsupported': '存储后端不支持断点续写。',
+  'errors.turnFailedRetryCheckpointRequired': '恢复检查点不存在。',
+  'errors.turnFailedRetryCheckpointConflict': '恢复检查点已变更。',
+  'errors.turnFailedRetryEventInvalid': '续写事件元数据无效。',
+  'errors.turnFailedRetryAttemptInvalid': '续写次数状态无效。',
+  'errors.turnFailedRetryProjectionInvalid': '续写消息投影无效。',
   'errors.turnIncomplete': '任务尚未完全通过验证。',
   'errors.turnToolErrorStreak': '多个工具调用连续失败。',
   'errors.turnNoProgress': '任务长时间没有新进展。',
@@ -104,6 +111,12 @@ test('deterministic loop failures use localized code mappings instead of server 
     ['MODEL_CALL_INTERRUPTED', 'errors.turnModelInterrupted'],
     ['TURN_EVENT_PERSISTENCE_FAILED', 'errors.turnPersistenceFailure'],
     ['TURN_TERMINAL_PERSISTENCE_FAILED', 'errors.turnPersistenceFailure'],
+    ['TURN_FAILED_RETRY_UNSUPPORTED', 'errors.turnFailedRetryUnsupported'],
+    ['TURN_FAILED_RETRY_CHECKPOINT_REQUIRED', 'errors.turnFailedRetryCheckpointRequired'],
+    ['TURN_FAILED_RETRY_CHECKPOINT_CONFLICT', 'errors.turnFailedRetryCheckpointConflict'],
+    ['TURN_FAILED_RETRY_EVENT_INVALID', 'errors.turnFailedRetryEventInvalid'],
+    ['TURN_FAILED_RETRY_ATTEMPT_INVALID', 'errors.turnFailedRetryAttemptInvalid'],
+    ['TURN_FAILED_RETRY_PROJECTION_INVALID', 'errors.turnFailedRetryProjectionInvalid'],
     ['TURN_MODEL_RUNTIME_NOT_CONFIGURED', 'errors.turnRuntimeCapabilityMissing'],
     ['TURN_PROMPT_RUNTIME_NOT_CONFIGURED', 'errors.turnRuntimeCapabilityMissing'],
     ['TURN_ATOMIC_CHECKPOINT_UNSUPPORTED', 'errors.turnCheckpointFailure'],
@@ -130,6 +143,38 @@ test('deterministic loop failures use localized code mappings instead of server 
       serverFailure: { code: 'MODEL_CALL_INTERRUPTED' },
     },
   }, t), COPY['errors.turnModelInterrupted'])
+})
+
+test('permanent failed-retry reasons and retry exhaustion are localized in every supported language', () => {
+  const mappings = new Map([
+    ['TURN_FAILED_RETRY_LIMIT_REACHED', 'turnRetryLimitReached'],
+    ['TURN_FAILED_RETRY_UNSUPPORTED', 'turnFailedRetryUnsupported'],
+    ['TURN_FAILED_RETRY_CHECKPOINT_REQUIRED', 'turnFailedRetryCheckpointRequired'],
+    ['TURN_FAILED_RETRY_CHECKPOINT_CONFLICT', 'turnFailedRetryCheckpointConflict'],
+    ['TURN_FAILED_RETRY_EVENT_INVALID', 'turnFailedRetryEventInvalid'],
+    ['TURN_FAILED_RETRY_ATTEMPT_INVALID', 'turnFailedRetryAttemptInvalid'],
+    ['TURN_FAILED_RETRY_PROJECTION_INVALID', 'turnFailedRetryProjectionInvalid'],
+  ])
+  const locales = ['zh', 'en', 'ja', 'ko', 'zh-TW']
+
+  for (const [code, key] of mappings) {
+    assert.equal(isPermanentFailedRetryRejectionFailure({ code }), true, code)
+    const values = locales.map((locale) => translations[locale].errors[key])
+    assert.equal(values.every((value) => typeof value === 'string' && value.trim()), true, key)
+    assert.equal(new Set(values).size, locales.length, key)
+    for (const locale of locales) {
+      const localized = translations[locale].errors[key]
+      assert.equal(
+        getVisibleModelErrorMessage({ code, message: 'private server diagnostic' }, (path) => {
+          const [, translationKey] = path.split('.')
+          return translations[locale].errors[translationKey]
+        }),
+        localized,
+        `${locale}:${code}`,
+      )
+      assert.notEqual(localized, translations[locale].errors.chatFailure, `${locale}:${code}`)
+    }
+  }
 })
 
 test('provider HTTP and first-token timeout codes retain actionable model causes', () => {

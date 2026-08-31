@@ -3551,6 +3551,16 @@ test('verified directory resume rejects a repeated authorization wait claim and 
       },
     ],
     iterations: 0,
+    directoryAuthorizationResolution: [{
+      type: 'directory_authorization',
+      approved: true,
+      path: directory,
+      access_mode: 'read_write',
+      authorization_scope: 'session',
+      grant_id: 'verified-directory-resume-grant',
+      resource_type: 'directory',
+      paused_sequence: 33,
+    }],
     completionGuards: {},
   }
   const modelRequests = []

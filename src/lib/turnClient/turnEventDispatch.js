@@ -124,6 +124,12 @@ export function normalizeTurnFailurePayload(payload = {}, {
     : Array.isArray(payload.missingRequirements) ? payload.missingRequirements : [])
     .map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
   if (missingRequirements.length > 0) error.missingRequirements = missingRequirements
+  const taskVerification = nested.taskVerification && typeof nested.taskVerification === 'object'
+    ? nested.taskVerification
+    : payload.taskVerification && typeof payload.taskVerification === 'object'
+      ? payload.taskVerification
+      : null
+  if (taskVerification) error.taskVerification = taskVerification
   const iterations = optionalInteger(payload.iterations, 0)
   const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
   const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)

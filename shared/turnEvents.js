@@ -59,6 +59,24 @@ const toolFailureSchema = z.object({
   hint: z.string().optional(),
   attempts: z.number().int().positive().optional(),
 }).strict()
+const taskVerificationCheckSchema = z.object({
+  status: z.enum(['failed', 'indeterminate', 'rerun_required', 'stale']),
+  kind: z.enum(['test', 'lint', 'build', 'check', 'typecheck']),
+  cwd: z.string().min(1).max(1_000),
+  commandScope: z.string().max(1_000),
+  coverage: z.enum(['cwd', 'targeted']),
+  code: z.string().min(1).max(128).regex(/^[A-Z][A-Z0-9_]*$/u),
+  failures: z.number().int().min(0).max(3),
+  requiredEpoch: z.number().int().nonnegative(),
+  mutationTargets: z.array(z.string().min(1).max(2_000)).max(16).optional(),
+  diagnostic: z.string().min(1).max(1_200).optional(),
+}).strict()
+const taskVerificationSchema = z.object({
+  version: z.literal(1),
+  maxFailures: z.number().int().min(1).max(3),
+  consecutiveFailures: z.number().int().min(0).max(3),
+  checks: z.array(taskVerificationCheckSchema).min(1).max(9),
+}).strict()
 const turnFailureSchema = toolFailureSchema.extend({
   // New terminal projections are code-only. `message` and `hint` remain
   // optional solely so clients can replay events written by older runtimes.
@@ -67,6 +85,7 @@ const turnFailureSchema = toolFailureSchema.extend({
   manualRetryable: z.boolean().optional(),
   incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
   missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+  taskVerification: taskVerificationSchema.optional(),
   persistence: z.object({
     failedEventCount: z.number().int().nonnegative(),
     blockedEventCount: z.number().int().nonnegative(),
@@ -157,6 +176,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   'turn.attempt': z.object({
     attempt: z.number().int().positive(),
     reason: z.string(),
+    manualRetry: z.literal(true).optional(),
     resetStreaming: z.boolean(),
     checkpointSequence: z.number().int().nonnegative().nullable(),
     previousStreamSequence: z.number().int().nonnegative(),
@@ -372,6 +392,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     error: turnFailureSchema.optional(),
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+    taskVerification: taskVerificationSchema.optional(),
     partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),

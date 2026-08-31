@@ -24,6 +24,7 @@ const {
   bindManagedAttachmentsToMessage,
 } = await import('../server/services/managedAttachmentStore.js')
 const {
+  getMessage,
   getSession,
   listMessages,
   upsertMessage,
@@ -124,6 +125,128 @@ function claimExecutionLease({ sessionId, turnId, ownerId }) {
   }), true)
   const lease = getTurnExecutionLease(scope)
   return { ownerId: lease.ownerId, fencingToken: lease.fencingToken }
+}
+
+function failedRetryFixture({ suffix, createdAt }) {
+  const sessionId = `aggregate-failed-retry-${suffix}-session`
+  const turnId = `aggregate-failed-retry-${suffix}-turn`
+  upsertSession({ id: sessionId, userId, title: `Failed retry ${suffix}` })
+  appendTurnEvent({ userId, event: startedEvent({ sessionId, turnId, createdAt }) })
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:checkpoint`,
+      sessionId,
+      turnId,
+      sequence: 1,
+      type: 'turn.checkpoint',
+      payload: { storage: 'turn_checkpoints', checkpointVersion: 1 },
+      createdAt: createdAt + 1,
+    }),
+    checkpointState: {
+      iterations: 2,
+      final: { incomplete: true },
+      budget: { used: 4, modelCalls: 2 },
+      toolCalls: [{ id: 'preserved-tool-call' }],
+    },
+  })
+  const failureCreatedAt = createdAt + 2
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:failed`,
+      sessionId,
+      turnId,
+      sequence: 2,
+      type: 'turn.failed',
+      payload: {
+        code: 'MODEL_UNAVAILABLE',
+        message: 'model unavailable',
+        error: { code: 'MODEL_UNAVAILABLE', message: 'model unavailable', retryable: true },
+        partialText: 'durable partial',
+      },
+      createdAt: failureCreatedAt,
+    }),
+  })
+  upsertMessage({
+    id: `${turnId}:assistant`,
+    userId,
+    sessionId,
+    role: 'assistant',
+    content: 'original failed projection',
+    modelContext: {
+      version: 1,
+      turnId,
+      turnEvidence: true,
+      evidenceState: 'failed',
+      serverLastSequence: 2,
+    },
+    createdAt: failureCreatedAt,
+    updatedAt: failureCreatedAt,
+  })
+  const payload = {
+    attempt: 2,
+    reason: 'failed_retry',
+    resetStreaming: true,
+    checkpointSequence: 1,
+    previousStreamSequence: 2,
+    assistantText: 'durable partial',
+    reasoningText: '',
+  }
+  const retryCreatedAt = createdAt + 3
+  return {
+    sessionId,
+    turnId,
+    originalCheckpoint: structuredClone(getTurnCheckpoint({ userId, sessionId, turnId })),
+    originalMessage: structuredClone(getMessage({
+      userId,
+      sessionId,
+      messageId: `${turnId}:assistant`,
+    })),
+    event: createTurnEvent({
+      id: `${turnId}:attempt:2`,
+      sessionId,
+      turnId,
+      sequence: 3,
+      type: 'turn.attempt',
+      payload,
+      createdAt: retryCreatedAt,
+    }),
+    message: {
+      id: `${turnId}:assistant`,
+      userId,
+      sessionId,
+      role: 'assistant',
+      content: payload.assistantText,
+      modelContext: {
+        version: 1,
+        turnId,
+        turnEvidence: true,
+        evidenceState: 'retrying',
+        serverLastSequence: 3,
+      },
+      createdAt: failureCreatedAt,
+      updatedAt: retryCreatedAt,
+    },
+  }
+}
+
+function assertFailedRetryFixtureUnchanged(fixture, publishCalls) {
+  const { sessionId, turnId } = fixture
+  assert.deepEqual(
+    getTurnCheckpoint({ userId, sessionId, turnId }),
+    fixture.originalCheckpoint,
+  )
+  assert.equal(
+    listTurnEvents({ userId, sessionId, turnId, limit: 100 })
+      .some((event) => event.type === 'turn.attempt'),
+    false,
+  )
+  assert.deepEqual(
+    getMessage({ userId, sessionId, messageId: `${turnId}:assistant` }),
+    fixture.originalMessage,
+  )
+  assert.equal(publishCalls, 0)
 }
 
 test('Agent Event plugins observe only newly committed Turn events', async () => {
@@ -823,9 +946,34 @@ test('appendTurnEventsInTransaction fails closed outside a caller-owned transact
   assert.deepEqual(listTurnEvents({ userId, sessionId, turnId, limit: 100 }), [])
 })
 
-test('failed retry transaction bypass requires an explicitly retryable failure', () => {
-  for (const retryable of [false, true]) {
-    const suffix = retryable ? 'retryable' : 'non-retryable'
+test('failed retry transaction bypass strictly pairs automatic and manual retry authorization', () => {
+  const cases = [
+    {
+      suffix: 'automatic-authorized',
+      failure: { retryable: true },
+      manualRetry: false,
+      allowed: true,
+    },
+    {
+      suffix: 'automatic-cannot-impersonate-manual',
+      failure: { retryable: true },
+      manualRetry: true,
+      allowed: false,
+    },
+    {
+      suffix: 'manual-authorized',
+      failure: { retryable: false, manualRetryable: true },
+      manualRetry: true,
+      allowed: true,
+    },
+    {
+      suffix: 'manual-requires-explicit-intent',
+      failure: { retryable: false, manualRetryable: true },
+      manualRetry: false,
+      allowed: false,
+    },
+  ]
+  for (const { suffix, failure, manualRetry, allowed } of cases) {
     const sessionId = `aggregate-failed-retry-guard-${suffix}-session`
     const turnId = `aggregate-failed-retry-guard-${suffix}-turn`
     upsertSession({ id: sessionId, userId, title: 'Failed retry guard' })
@@ -841,7 +989,7 @@ test('failed retry transaction bypass requires an explicitly retryable failure',
         payload: {
           code: 'MODEL_FAILURE',
           message: 'model failed',
-          error: { code: 'MODEL_FAILURE', message: 'model failed', retryable },
+          error: { code: 'MODEL_FAILURE', message: 'model failed', ...failure },
         },
         createdAt: 611,
       }),
@@ -855,6 +1003,7 @@ test('failed retry transaction bypass requires an explicitly retryable failure',
       payload: {
         attempt: 2,
         reason: 'failed_retry',
+        ...(manualRetry ? { manualRetry: true } : {}),
         resetStreaming: true,
         checkpointSequence: null,
         previousStreamSequence: 1,
@@ -869,7 +1018,7 @@ test('failed retry transaction bypass requires an explicitly retryable failure',
       { allowFailedRetry: true },
     ))()
 
-    if (retryable) {
+    if (allowed) {
       const committed = appendRetry()
       assert.equal(committed.insertedEvents.length, 1)
       assert.equal(committed.stored[0].id, retryEvent.id)
@@ -877,6 +1026,111 @@ test('failed retry transaction bypass requires an explicitly retryable failure',
       assert.throws(appendRetry, (error) => error?.code === 'TURN_ALREADY_TERMINAL')
     }
   }
+})
+
+test('manual failed retry atomically resets only task verification repair failures', async () => {
+  const sessionId = 'aggregate-manual-failed-retry-session'
+  const turnId = 'aggregate-manual-failed-retry-turn'
+  upsertSession({ id: sessionId, userId, title: 'Manual failed retry' })
+  appendTurnEvent({ userId, event: startedEvent({ sessionId, turnId, createdAt: 615 }) })
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:checkpoint`,
+      sessionId,
+      turnId,
+      sequence: 1,
+      type: 'turn.checkpoint',
+      payload: { storage: 'turn_checkpoints', checkpointVersion: 1 },
+      createdAt: 616,
+    }),
+    checkpointState: {
+      iterations: 4,
+      final: { incomplete: true },
+      budget: { used: 8, modelCalls: 3, modelTokens: 120 },
+      completionGuards: {
+        pendingMutationTargets: ['src/result.js'],
+        taskVerificationRepair: {
+          consecutiveFailures: 3,
+          lastFailureBatchId: 'batch-3',
+          pending: [{ kind: 'test', failures: 3, lastFailureBatchId: 'batch-3' }],
+          candidates: [{ kind: 'lint', failures: 1 }],
+        },
+      },
+    },
+  })
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:failed`,
+      sessionId,
+      turnId,
+      sequence: 2,
+      type: 'turn.failed',
+      payload: {
+        code: 'TASK_VERIFICATION_REPAIR_EXHAUSTED',
+        message: 'manual retry required',
+        error: {
+          code: 'TASK_VERIFICATION_REPAIR_EXHAUSTED',
+          message: 'manual retry required',
+          retryable: false,
+          manualRetryable: true,
+        },
+      },
+      createdAt: 617,
+    }),
+  })
+  const retryPayload = {
+    attempt: 2,
+    reason: 'failed_retry',
+    manualRetry: true,
+    resetStreaming: true,
+    checkpointSequence: 1,
+    previousStreamSequence: 2,
+    assistantText: '',
+    reasoningText: '',
+  }
+  await SQLITE_TURN_PERSISTENCE_TRANSACTIONS.commitTurnFailedRetry({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:attempt:2`,
+      sessionId,
+      turnId,
+      sequence: 3,
+      type: 'turn.attempt',
+      payload: retryPayload,
+      createdAt: 618,
+    }),
+    message: {
+      id: `${turnId}:assistant`,
+      userId,
+      sessionId,
+      role: 'assistant',
+      content: '',
+      modelContext: {
+        version: 1,
+        turnId,
+        turnEvidence: true,
+        evidenceState: 'retrying',
+        serverLastSequence: 3,
+      },
+      createdAt: 617,
+      updatedAt: 618,
+    },
+  })
+
+  const state = getTurnCheckpoint({ userId, sessionId, turnId }).state
+  assert.equal(state.final, null)
+  assert.equal(state.budget.used, 0)
+  assert.equal(state.completionGuards.taskVerificationRepair.consecutiveFailures, 0)
+  assert.equal(state.completionGuards.taskVerificationRepair.lastFailureBatchId, '')
+  assert.equal(state.completionGuards.taskVerificationRepair.pending[0].failures, 0)
+  assert.equal(state.completionGuards.taskVerificationRepair.pending[0].lastFailureBatchId, '')
+  assert.deepEqual(state.completionGuards.pendingMutationTargets, ['src/result.js'])
+  assert.deepEqual(
+    state.completionGuards.taskVerificationRepair.candidates,
+    [{ kind: 'lint', failures: 1 }],
+  )
 })
 
 test('concurrent failed retries coalesce to one attempt without journaling a write failure', async (t) => {
@@ -980,6 +1234,7 @@ test('concurrent failed retries coalesce to one attempt without journaling a wri
             role: 'assistant',
             content: payload.assistantText,
             modelContext: {
+              turnId,
               turnEvidence: true,
               evidenceState: 'retrying',
               serverLastSequence: event.sequence,
@@ -1125,6 +1380,74 @@ test('duplicate failed retry commits converge on one attempt without replaying p
   )
   assert.equal(checkpoint.state.budget.used, 0)
 })
+
+for (const fault of [
+  {
+    suffix: 'append-after-write',
+    createdAt: 900,
+    dependencies(injectedFailure) {
+      return {
+        appendEventsInTransaction(entries, db, options) {
+          appendTurnEventsInTransaction(entries, db, options)
+          throw injectedFailure
+        },
+      }
+    },
+  },
+  {
+    suffix: 'message-after-write',
+    createdAt: 910,
+    dependencies(injectedFailure) {
+      return {
+        writeMessage(message) {
+          upsertMessage(message)
+          throw injectedFailure
+        },
+      }
+    },
+  },
+  {
+    suffix: 'readback-throws',
+    createdAt: 920,
+    dependencies(injectedFailure) {
+      return { readMessage() { throw injectedFailure } }
+    },
+  },
+  {
+    suffix: 'readback-mismatch',
+    createdAt: 930,
+    dependencies() {
+      return {
+        readMessage(scope) {
+          return { ...getMessage(scope), content: 'injected readback mismatch' }
+        },
+      }
+    },
+    expected(error) {
+      return error?.code === 'TURN_STORAGE_OPERATION_CONFLICT'
+    },
+  },
+]) {
+  test(`commitTurnFailedRetry rolls back checkpoint, event, and projection on ${fault.suffix}`, async () => {
+    const fixture = failedRetryFixture({ suffix: fault.suffix, createdAt: fault.createdAt })
+    const injectedFailure = new Error(`injected ${fault.suffix} failure`)
+    let publishCalls = 0
+    const transactions = createSqliteTurnPersistenceTransactions({
+      ...fault.dependencies(injectedFailure),
+      publishEvents() { publishCalls += 1 },
+    })
+
+    await assert.rejects(
+      transactions.commitTurnFailedRetry({
+        userId,
+        event: fixture.event,
+        message: fixture.message,
+      }),
+      fault.expected || ((error) => error === injectedFailure),
+    )
+    assertFailedRetryFixtureUnchanged(fixture, publishCalls)
+  })
+}
 
 test('an event retry with a different createdAt conflicts and preserves the original event', () => {
   const sessionId = 'aggregate-event-created-at-session'

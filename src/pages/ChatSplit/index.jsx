@@ -97,7 +97,7 @@ export default function ChatSplit() {
   })
   const {
     handleAbort, handleAuthorizeDirectoryRequest, handleDismissResume, handleResume,
-    handleTurnResult, handleTurnStart, resumeAvailable, showPendingDirectoryGuidance,
+    handleTurnResult, handleTurnStart, manualRetryAvailable, resumeAvailable, showPendingDirectoryGuidance,
   } = useChatTurnRecovery({
     abortCtrlRef, activeSessionId, approvals, dispatch, isGenerating, messages,
     resumingTurnIdsRef, setInput, setWorkbenchMessage, state, stateRef, t, toast,
@@ -284,6 +284,7 @@ export default function ChatSplit() {
       onWorkbenchTabChange={setWorkbenchTab} onWorkbenchToggle={() => setWorkbenchOpen((open) => !open)}
       previewArtifact={state.previewArtifact} previewTabs={state.previewTabs} previewActiveId={state.previewActiveId}
       resumeAvailable={resumeAvailable}
+      manualRetryAvailable={manualRetryAvailable}
       runtimeSkillIds={runtimeSkills.filter((skill) => skill.runnable !== false).map((skill) => skill.id)}
       selectedModel={effectiveSelectedModel} selectedModelProviderId={effectiveSelectedModelProviderId}
       selectedWorkspacePath={selectedWorkspacePath} recentWorkspaces={recentWorkspaces}

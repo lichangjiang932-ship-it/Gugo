@@ -13,6 +13,7 @@ import {
   buildChatFailureMessage,
   getVisibleModelErrorMessage,
   getVisibleTurnClarification,
+  isPermanentFailedRetryRejectionFailure,
 } from '../../lib/chatFlowGuards.js'
 import { isUserStopped, turnEventTimestamp } from './serverTurnFlow.js'
 import { hasTurnRun, registerTurnRun, unregisterTurnRun } from './turnRunRegistry.js'
@@ -37,6 +38,20 @@ export function terminalResumeText(currentText, terminal, t) {
       ? getVisibleTurnClarification(terminal.payload?.clarification, t)
       : '')
   return missingAssistantTextSuffix(currentText, terminalText)
+}
+
+export function failedRetryFailureFromError(error) {
+  const code = String(error?.serverFailure?.code || error?.code || 'TURN_REQUEST_FAILED')
+    .trim().toUpperCase() || 'TURN_REQUEST_FAILED'
+  const status = Number(error?.serverFailure?.status ?? error?.status)
+  const retryable = error?.serverFailure?.retryable ?? error?.retryable
+  const manualRetryable = error?.serverFailure?.manualRetryable ?? error?.manualRetryable
+  return {
+    code,
+    retryable: retryable === true,
+    ...(Number.isInteger(status) && status >= 100 && status <= 599 ? { status } : {}),
+    ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),
+  }
 }
 
 export function isRecoverableServerMessage(message) {
@@ -160,6 +175,9 @@ export default function useServerTurnResume({
     if (failedRetry) onFailedTurnRetryConsumed?.(failedTurnRetry)
     const taskId = `resume-${turnId}`
     const serverArtifacts = [...(message.meta?.serverArtifacts || [])]
+    const failedRetryPartialText = failedRetry && typeof message.meta?.serverPartialText === 'string'
+      ? message.meta.serverPartialText
+      : ''
     const resumeResolution = failedRetry ? null : message.meta?.serverResumeResolution || null
     const messageTarget = { sessionId: session.id, messageId: message.id }
     const dispatchMessage = (type, payload) => dispatch({ type, payload, ...messageTarget })
@@ -365,8 +383,11 @@ export default function useServerTurnResume({
       turnActivityDispatcher.flush()
       const stopped = isUserStopped(error)
       const recoveryDeadLetter = error?.recovery?.status === 'dead_letter'
-      const durableFailure = error?.serverFailure
-        || message.meta?.serverFailure
+      const permanentFailedRetryRejection = failedRetry
+        && isPermanentFailedRetryRejectionFailure(error)
+      const durableFailure = permanentFailedRetryRejection
+        ? failedRetryFailureFromError(error)
+        : error?.serverFailure || message.meta?.serverFailure
         || (recoveryDeadLetter
           ? {
               code: String(error?.code || 'TURN_RECOVERY_DEAD_LETTER'),
@@ -423,7 +444,7 @@ export default function useServerTurnResume({
           serverRecoveryBlocked: recoveryDeadLetter,
           serverFailure: durableFailure,
           serverFailureDisplayKey,
-          serverPartialText: error.partialText || '',
+          serverPartialText: error.partialText || failedRetryPartialText,
           serverArtifactIds: Array.isArray(error.artifactIds) ? error.artifactIds : [],
         })
       } else {

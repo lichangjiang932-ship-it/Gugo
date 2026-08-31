@@ -6,6 +6,7 @@ import {
   saveJobTurnCheckpoint,
 } from './jobTurnCheckpointStore.js'
 import { findAuthorizedDirectoryGrant } from './localFileAccessService.js'
+import { mergeDirectoryAuthorizationResolutions } from './turnResolutionRuntime.js'
 
 const JOB_DIRECTORY_RESOLUTION_MARKER = '[JOB_DIRECTORY_RESOLUTION:'
 const JOB_SUSPENSION_EVENT_TYPES = new Set([
@@ -109,7 +110,12 @@ export function resumeJobDirectoryAuthorization({
     awaiting_event_id: latestSuspension.id,
     step_id: stepId,
     grant_id: grant.id,
+    authorization_scope: grant.scope,
   }
+  const directoryAuthorizationResolutions = mergeDirectoryAuthorizationResolutions(
+    checkpoint.state.directoryAuthorizationResolution,
+    directoryAuthorizationResolution,
+  )
   const messages = Array.isArray(checkpoint.state.messages)
     ? checkpoint.state.messages.map((message) => ({ ...message }))
     : []
@@ -127,12 +133,14 @@ export function resumeJobDirectoryAuthorization({
       ...checkpoint.state,
       checkpointWriteSequence: nextJobCheckpointWriteSequence(checkpoint.state),
       messages,
-      directoryAuthorizationResolution,
+      directoryAuthorizationResolution: directoryAuthorizationResolutions,
       final: null,
     },
   })
   if (!savedCheckpoint
-      || savedCheckpoint.state?.directoryAuthorizationResolution?.awaiting_event_id !== latestSuspension.id) {
+      || !savedCheckpoint.state?.directoryAuthorizationResolution?.some?.((resolution) => (
+        resolution?.awaiting_event_id === latestSuspension.id
+      ))) {
     return { resumed: false, error: 'the paused job checkpoint could not be updated', job }
   }
   updateJobStep(stepId, { status: 'queued', error: null, finishedAt: null })

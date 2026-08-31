@@ -12,6 +12,12 @@ import {
   appendTurnEventsInTransaction,
   publishCommittedTurnEvents,
 } from './turnEventStore.js'
+import {
+  failureAllowsFailedRetry,
+  failureSupportsFailedRetry,
+  resetManualRetryVerificationBudget,
+} from './turnFailedRetryPolicy.js'
+import { failedRetryAttemptPayload } from './turnRecoveryProjection.js'
 
 const TURN_BOUNDARY_TYPES = new Set([
   'turn.completed',
@@ -67,9 +73,12 @@ function resetRetryBudget(value) {
 }
 
 function failedRetryCheckpointState(state, attemptPayload) {
-  const iterations = Math.max(0, Number(state?.iterations) || 0)
+  const retryState = attemptPayload?.manualRetry === true
+    ? resetManualRetryVerificationBudget(state)
+    : state
+  const iterations = Math.max(0, Number(retryState?.iterations) || 0)
   return {
-    ...state,
+    ...retryState,
     final: null,
     iterationWindowStart: iterations,
     retryAssistantText: String(attemptPayload?.assistantText || ''),
@@ -167,6 +176,46 @@ function assertExistingMessage(readMessage, message, options = {}) {
       `persisted message ${message.id} does not match the retried operation`,
     )
   }
+}
+
+function assertFailedRetryPayload(actual, expected) {
+  const fields = [
+    'attempt',
+    'reason',
+    'manualRetry',
+    'resetStreaming',
+    'checkpointSequence',
+    'previousStreamSequence',
+    'assistantText',
+    'reasoningText',
+  ]
+  const actualIdentity = Object.fromEntries(fields.map((field) => [field, actual?.[field]]))
+  const expectedIdentity = Object.fromEntries(fields.map((field) => [field, expected?.[field]]))
+  if (!expected
+    || !isDeepStrictEqual(actualIdentity, expectedIdentity)
+    || !isDeepStrictEqual(actual, expected)) {
+    throw persistenceError(
+      'TURN_FAILED_RETRY_EVENT_INVALID',
+      'failed Turn retry metadata does not match persisted Turn history',
+    )
+  }
+}
+
+function assertStoredFailedRetryEvent(row, { userId, event, expectedPayload }) {
+  if (!row
+    || row.user_id !== userId
+    || row.session_id !== event.sessionId
+    || row.turn_id !== event.turnId
+    || row.sequence !== event.sequence
+    || row.type !== 'turn.attempt'
+    || !String(row.id || '').trim()
+    || !Number.isFinite(Number(row.created_at))) {
+    throw persistenceError(
+      'TURN_FAILED_RETRY_CONFLICT',
+      'persisted failed Turn retry event identity is incomplete or conflicting',
+    )
+  }
+  assertFailedRetryPayload(parseJsonRecord(row.payload_json), expectedPayload)
 }
 
 function normalizeAttachmentBinding(value, { userId, sessionId }) {
@@ -338,9 +387,11 @@ export function createSqliteTurnPersistenceTransactions({
       if (message.id !== `${event.turnId}:assistant`
         || message.role !== 'assistant'
         || message.content !== event.payload.assistantText
+        || message.modelContext?.turnId !== event.turnId
         || message.modelContext?.turnEvidence !== true
         || message.modelContext?.evidenceState !== 'retrying'
-        || message.modelContext?.serverLastSequence !== event.sequence) {
+        || message.modelContext?.serverLastSequence !== event.sequence
+        || message.updatedAt !== event.createdAt) {
         throw persistenceError(
           'TURN_FAILED_RETRY_PROJECTION_INVALID',
           'failed Turn retry projection does not match the retry attempt',
@@ -350,42 +401,6 @@ export function createSqliteTurnPersistenceTransactions({
       const db = openDatabase()
       let committed
       db.transaction(() => {
-        const existingRetry = db.prepare(`SELECT * FROM turn_events
-          WHERE user_id = ? AND session_id = ? AND turn_id = ? AND sequence = ?
-          LIMIT 1`).get(userId, event.sessionId, event.turnId, event.sequence)
-        const existingRetryPayload = parseJsonRecord(existingRetry?.payload_json)
-        if (existingRetry?.type === 'turn.attempt'
-          && existingRetryPayload?.reason === 'failed_retry'
-          && isDeepStrictEqual(existingRetryPayload, event.payload)) {
-          committed = {
-            stored: [storedTurnEvent(existingRetry)],
-            insertedEvents: [],
-          }
-          return
-        }
-        const latest = db.prepare(`SELECT sequence, type, payload_json FROM turn_events
-          WHERE user_id = ? AND session_id = ? AND turn_id = ?
-          ORDER BY sequence DESC LIMIT 1`).get(userId, event.sessionId, event.turnId)
-        if (!latest || latest.type !== 'turn.failed') {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_CONFLICT',
-            'the Turn is no longer at a failed terminal boundary',
-          )
-        }
-        const failure = parseJsonRecord(latest.payload_json)
-        if (failure?.error?.retryable !== true) {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_NOT_ALLOWED',
-            'the failed Turn is not explicitly retryable',
-          )
-        }
-        if (event.sequence !== latest.sequence + 1) {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_CONFLICT',
-            'the failed Turn retry sequence is stale',
-          )
-        }
-
         const checkpoint = db.prepare(`SELECT event_sequence, state_json FROM turn_checkpoints
           WHERE user_id = ? AND session_id = ? AND turn_id = ?`).get(
           userId,
@@ -399,24 +414,62 @@ export function createSqliteTurnPersistenceTransactions({
             'a durable Turn checkpoint is required before retrying a failed Turn',
           )
         }
+
+        const eventRows = db.prepare(`SELECT * FROM turn_events
+          WHERE user_id = ? AND session_id = ? AND turn_id = ?
+          ORDER BY sequence ASC`).all(userId, event.sessionId, event.turnId)
+        const persistedEvents = eventRows.map(storedTurnEvent)
+        const existingRetry = db.prepare(`SELECT * FROM turn_events
+          WHERE user_id = ? AND session_id = ? AND turn_id = ? AND sequence = ?
+          LIMIT 1`).get(userId, event.sessionId, event.turnId, event.sequence)
+        const latest = eventRows.at(-1)
+        const failureRow = existingRetry
+          ? eventRows.find((row) => row.sequence === event.sequence - 1)
+          : latest
+        const failureEvent = storedTurnEvent(failureRow)
+        if (!failureEvent || failureEvent.type !== 'turn.failed') {
+          throw persistenceError(
+            'TURN_FAILED_RETRY_CONFLICT',
+            'the Turn is no longer at a failed terminal boundary',
+          )
+        }
+        const expectedPayload = failedRetryAttemptPayload(
+          persistedEvents,
+          failureEvent,
+          { eventSequence: checkpoint.event_sequence },
+        )
+        assertFailedRetryPayload(event.payload, expectedPayload)
+
+        if (existingRetry) {
+          assertStoredFailedRetryEvent(existingRetry, { userId, event, expectedPayload })
+          assertExistingMessage(readMessage, {
+            ...message,
+            updatedAt: existingRetry.created_at,
+          }, { ignoreCreatedAt: true })
+          committed = {
+            stored: [storedTurnEvent(existingRetry)],
+            insertedEvents: [],
+          }
+          return
+        }
+        const failure = parseJsonRecord(latest.payload_json)
+        if (!failureAllowsFailedRetry(failure, event.payload)) {
+          throw persistenceError(
+            'TURN_FAILED_RETRY_NOT_ALLOWED',
+            'the failed Turn does not authorize this retry mode',
+          )
+        }
+        if (event.sequence !== latest.sequence + 1) {
+          throw persistenceError(
+            'TURN_FAILED_RETRY_CONFLICT',
+            'the failed Turn retry sequence is stale',
+          )
+        }
+
         if (event.payload.checkpointSequence !== checkpoint.event_sequence) {
           throw persistenceError(
             'TURN_FAILED_RETRY_CHECKPOINT_CONFLICT',
             'the failed Turn checkpoint changed before retry',
-          )
-        }
-
-        const previousAttempt = db.prepare(`SELECT payload_json FROM turn_events
-          WHERE user_id = ? AND session_id = ? AND turn_id = ? AND type = 'turn.attempt'
-          ORDER BY sequence DESC LIMIT 1`).get(userId, event.sessionId, event.turnId)
-        const previousAttemptNumber = Number(parseJsonRecord(previousAttempt?.payload_json)?.attempt)
-        const expectedAttempt = Number.isInteger(previousAttemptNumber) && previousAttemptNumber > 0
-          ? previousAttemptNumber + 1
-          : 2
-        if (event.payload.attempt !== expectedAttempt) {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_ATTEMPT_INVALID',
-            'the failed Turn retry attempt number is stale',
           )
         }
 
@@ -495,7 +548,7 @@ export function createSqliteTurnPersistenceTransactions({
           )
         }
         const failure = parseJsonRecord(latest.payload_json)
-        if (failure?.error?.retryable !== true) {
+        if (!failureSupportsFailedRetry(failure)) {
           throw persistenceError(
             'TURN_FAILED_RETRY_REJECTION_CONFLICT',
             'the terminal failure is no longer eligible for failed retry rejection',

@@ -8,6 +8,7 @@ import {
 import { projectTurnEventForClient } from '../../shared/turnEventProjection.js'
 import { publishAgentEventEnvelope } from '../core/agentEventConsumerRuntime.js'
 import { saveTurnCheckpoint } from './turnCheckpointStore.js'
+import { failureAllowsFailedRetry } from './turnFailedRetryPolicy.js'
 
 const subscribers = new Map()
 const DAY_MS = 86_400_000
@@ -76,12 +77,10 @@ function turnEventSequenceInvalid() {
   return error
 }
 
-function hasExplicitRetryableFailure(payloadJson) {
+function failureAllowsAttempt(payloadJson, attemptPayload) {
   try {
-    return JSON.parse(payloadJson)?.error?.retryable === true
-  } catch {
-    return false
-  }
+    return failureAllowsFailedRetry(JSON.parse(payloadJson), attemptPayload)
+  } catch { return false }
 }
 
 function canonicalCheckpointState(value) {
@@ -375,7 +374,7 @@ export function appendTurnEventsInTransaction(entries = [], db, {
       const latestIsTerminal = ['turn.completed', 'turn.cancelled', 'turn.failed'].includes(latest?.type)
       const allowedFailedRetry = allowFailedRetry === true
         && latest?.type === 'turn.failed'
-        && hasExplicitRetryableFailure(latest.payload_json)
+        && failureAllowsAttempt(latest.payload_json, value.payload)
         && value.type === 'turn.attempt'
         && value.payload?.reason === 'failed_retry'
         && value.sequence === latest.sequence + 1

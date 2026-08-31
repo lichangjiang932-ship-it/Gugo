@@ -1,7 +1,23 @@
 export function installTerminalCompletion(s) {
   const { MAX_LOCAL_HTML_DELIVERY_RETRIES } = s.d
 
-  s.finishIncomplete = async ({ text, reason, steeringLeaseId = null }) => {
+  s.finishIncomplete = async ({
+    text,
+    reason,
+    code = null,
+    missingRequirements = null,
+    retryable,
+    manualRetryable,
+    taskVerification = null,
+    steeringLeaseId = null,
+  }) => {
+    const terminalMetadata = {
+      ...(code ? { code: String(code) } : {}),
+      ...(Array.isArray(missingRequirements) ? { missingRequirements } : {}),
+      ...(typeof retryable === 'boolean' ? { retryable } : {}),
+      ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),
+      ...(taskVerification ? { taskVerification } : {}),
+    }
     const safePartialResult = s.partialResultFallback.apply({
       text,
       incomplete: true,
@@ -24,6 +40,7 @@ export function installTerminalCompletion(s) {
           iterations: s.iter + 1,
           incomplete: true,
           reason,
+          ...terminalMetadata,
         },
       })
       s.finalCheckpointPersisted = true
@@ -39,6 +56,7 @@ export function installTerminalCompletion(s) {
       iterations: s.iter + 1,
       incomplete: true,
       reason,
+      ...terminalMetadata,
       recovery: s.recovery,
     })
   }

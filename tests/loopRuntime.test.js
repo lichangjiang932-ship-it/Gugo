@@ -4,6 +4,7 @@ import test from 'node:test'
 import { createToolLoop, runToolLoop } from '../server/services/loop/index.js'
 import { trustedInternalLoopPrincipal } from '../server/services/loop/internalExecutionPrincipal.js'
 import { processModelResult } from '../server/services/loop/runtime-processModelResult.js'
+import { SERVER_TOOL_SPECS } from '../server/services/toolLoopRuntime.js'
 import {
   attachJobBudget,
   releaseJobBudget,
@@ -86,6 +87,55 @@ function baseOptions(overrides = {}) {
     ...overrides,
   }
 }
+
+test('a historical directory resolution marker cannot suppress authorization after grant revocation', async () => {
+  const requestDirectorySpec = SERVER_TOOL_SPECS.find((spec) => (
+    spec?.function?.name === 'request_directory'
+  ))
+  let executionCalls = 0
+  const result = await runToolLoop(baseOptions({
+    messages: [
+      {
+        role: 'system',
+        content: '[JOB_DIRECTORY_RESOLUTION:revoked-event] The requested local directory authorization is already persisted and verified.',
+      },
+      { role: 'user', content: 'Continue writing the requested output.' },
+    ],
+    toolSpecs: [requestDirectorySpec],
+    maxIters: 1,
+    runModel: async () => ({
+      content: '',
+      toolCalls: [{
+        id: 'request-revoked-directory',
+        type: 'function',
+        function: {
+          name: 'request_directory',
+          arguments: JSON.stringify({
+            purpose: 'Continue writing the requested output.',
+            access_mode: 'read_write',
+          }),
+        },
+      }],
+    }),
+    executeTool: async ({ name }) => {
+      executionCalls += 1
+      assert.equal(name, 'request_directory')
+      return {
+        ok: true,
+        paused: true,
+        clarification: {
+          request_type: 'directory',
+          access_mode: 'read_write',
+          question: 'Choose the directory again.',
+        },
+      }
+    },
+  }))
+
+  assert.equal(executionCalls, 1)
+  assert.equal(result.paused, true)
+  assert.equal(result.clarification?.request_type, 'directory')
+})
 
 test('chat loops ignore the shared id cache and restore budget only from their scoped checkpoint', async () => {
   const sharedTurnId = `loop-chat-budget-isolation-${Date.now()}`

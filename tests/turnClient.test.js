@@ -2336,6 +2336,22 @@ test('dispatchTurnEvent preserves structured tool failure details for the UI', a
 })
 
 test('turn failure payloads retain recovery evidence and dispatch it without appending text', async () => {
+  const taskVerification = {
+    version: 1,
+    maxFailures: 3,
+    consecutiveFailures: 1,
+    checks: [{
+      status: 'failed',
+      kind: 'test',
+      cwd: 'packages/core',
+      commandScope: 'npm test',
+      coverage: 'cwd',
+      code: 'TASK_TEST_FAILED',
+      failures: 1,
+      requiredEpoch: 2,
+      diagnostic: 'index.test.js: expected 2, received 1',
+    }],
+  }
   const payload = {
     code: 'MODEL_TIMEOUT',
     message: 'provider timed out',
@@ -2345,6 +2361,7 @@ test('turn failure payloads retain recovery evidence and dispatch it without app
       manualRetryable: true,
       incompleteReason: 'post_mutation_verification_missing',
       missingRequirements: ['mutation_readback', 'diff_or_project_check'],
+      taskVerification,
     },
     partialText: 'durable partial output',
     artifactIds: ['a1', 'a1', 'a2'],
@@ -2357,6 +2374,7 @@ test('turn failure payloads retain recovery evidence and dispatch it without app
       manualRetryable: true,
       incompleteReason: 'post_mutation_verification_missing',
       missingRequirements: ['mutation_readback', 'diff_or_project_check'],
+      taskVerification,
     },
     partialText: 'durable partial output',
     artifactIds: ['a1', 'a2'],
@@ -2382,6 +2400,53 @@ test('turn failure payloads retain recovery evidence and dispatch it without app
   assert.equal(meta.serverPartialText, 'durable partial output')
   assert.deepEqual(meta.serverArtifactIds, ['a1', 'a2'])
   assert.equal(meta.failed, true)
+})
+
+test('task verification details survive authoritative session snapshot recovery', () => {
+  const taskVerification = {
+    version: 1,
+    maxFailures: 3,
+    consecutiveFailures: 3,
+    checks: [{
+      status: 'failed',
+      kind: 'lint',
+      cwd: 'D:/authorized/repo',
+      commandScope: 'npm run lint',
+      coverage: 'cwd',
+      code: 'TASK_LINT_FAILED',
+      failures: 3,
+      requiredEpoch: 4,
+      diagnostic: 'src/app.js: no-undef',
+    }],
+  }
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'verification-failed:assistant',
+      role: 'assistant',
+      content: '',
+      createdAt: 1,
+      modelContext: {
+        turnId: 'verification-failed',
+        turnEvidence: true,
+        evidenceState: 'failed',
+        error: {
+          code: 'TASK_VERIFICATION_REPAIR_EXHAUSTED',
+          retryable: false,
+          manualRetryable: true,
+          incompleteReason: 'task_verification_repair_exhausted',
+          missingRequirements: [
+            'verification_failure_repair',
+            'passing_project_check',
+            'explicit_recovery_retry',
+          ],
+          taskVerification,
+        },
+      },
+    }],
+  })
+
+  assert.deepEqual(snapshot.messages[0].meta.serverFailure.taskVerification, taskVerification)
 })
 
 test('blocked snapshots infer manual retry support without overwriting an explicit value', () => {

@@ -182,7 +182,11 @@ test('directory resume restores only the frozen checkpoint catalog and respects 
     resumeResolution: {
       type: 'directory_authorization',
       approved: true,
+      path: 'C:\\workspace',
       access_mode: 'read_write',
+      authorization_scope: 'persistent',
+      grant_id: 'workspace-grant',
+      resource_type: 'directory',
     },
     restoredCheckpointState: {
       approvalMode: 'normal',

@@ -16,6 +16,18 @@ function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+function permanentFailedRetryRejection(error) {
+  const visited = new Set()
+  let current = error
+  while (current && (typeof current === 'object' || typeof current === 'function')) {
+    if (visited.has(current)) return null
+    visited.add(current)
+    if (isPermanentFailedRetryRejectionCode(current.code)) return current
+    current = current.cause
+  }
+  return null
+}
+
 function retryingTurnEvidenceMessage({
   existing,
   userId,
@@ -170,18 +182,16 @@ export function createTurnFailedRetryRuntime({
       event.type === 'turn.attempt' && event.payload?.reason === 'failed_retry'
     )).length
     if (failedRetryCount >= MAX_FAILED_TURN_RETRIES) {
-      const error = new TurnEngineError(
-        'TURN_FAILED_RETRY_LIMIT_REACHED',
-        '本任务已经执行过一次断点续写但仍未完成。请查看上方明确失败原因，调整模型、权限或工具条件后发送新消息。',
-        409,
-      )
-      error.retryable = false
-      throw error
+      throw permanentFailedRetryError({
+        code: 'TURN_FAILED_RETRY_LIMIT_REACHED',
+        status: 409,
+      })
     }
-    if (last.payload?.error?.retryable !== true) {
+    if (last.payload?.error?.retryable !== true
+      && last.payload?.error?.manualRetryable !== true) {
       throw new TurnEngineError(
         'TURN_FAILED_RETRY_NOT_ALLOWED',
-        'the failed Turn is not explicitly retryable',
+        'the failed Turn is not explicitly retryable or manually recoverable',
         409,
       )
     }
@@ -235,8 +245,9 @@ export function createTurnFailedRetryRuntime({
       await emitter.close()
     }
     if (commitError) {
-      if (isPermanentFailedRetryRejectionCode(commitError?.code)) {
-        return rejectFailedRetry(commitError)
+      const permanentRejection = permanentFailedRetryRejection(commitError)
+      if (permanentRejection) {
+        return rejectFailedRetry(permanentRejection)
       }
       throw commitError
     }

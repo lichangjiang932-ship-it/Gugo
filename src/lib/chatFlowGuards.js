@@ -49,6 +49,16 @@ const RUNTIME_INTERRUPTION_FAILURE_CODES = new Set([
   'TURN_ENGINE_SHUTDOWN',
 ])
 
+const PERMANENT_FAILED_RETRY_REJECTION_CODES = new Set([
+  'TURN_FAILED_RETRY_LIMIT_REACHED',
+  'TURN_FAILED_RETRY_UNSUPPORTED',
+  'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
+  'TURN_FAILED_RETRY_CHECKPOINT_CONFLICT',
+  'TURN_FAILED_RETRY_EVENT_INVALID',
+  'TURN_FAILED_RETRY_ATTEMPT_INVALID',
+  'TURN_FAILED_RETRY_PROJECTION_INVALID',
+])
+
 // These failures are produced by deterministic loop guards after execution
 // has already started. The stable code selects client-localized copy; the
 // server message remains diagnostic data and must never become assistant text.
@@ -67,6 +77,12 @@ const STRUCTURED_EXECUTION_FAILURE_KEYS = new Map([
   ['TURN_EVENT_PERSISTENCE_FAILED', 'errors.turnPersistenceFailure'],
   ['TURN_TERMINAL_PERSISTENCE_FAILED', 'errors.turnPersistenceFailure'],
   ['TURN_FAILED_RETRY_LIMIT_REACHED', 'errors.turnRetryLimitReached'],
+  ['TURN_FAILED_RETRY_UNSUPPORTED', 'errors.turnFailedRetryUnsupported'],
+  ['TURN_FAILED_RETRY_CHECKPOINT_REQUIRED', 'errors.turnFailedRetryCheckpointRequired'],
+  ['TURN_FAILED_RETRY_CHECKPOINT_CONFLICT', 'errors.turnFailedRetryCheckpointConflict'],
+  ['TURN_FAILED_RETRY_EVENT_INVALID', 'errors.turnFailedRetryEventInvalid'],
+  ['TURN_FAILED_RETRY_ATTEMPT_INVALID', 'errors.turnFailedRetryAttemptInvalid'],
+  ['TURN_FAILED_RETRY_PROJECTION_INVALID', 'errors.turnFailedRetryProjectionInvalid'],
   ['TURN_INCOMPLETE', 'errors.turnIncomplete'],
   ['TOOL_ERROR_STREAK', 'errors.turnToolErrorStreak'],
   ['TOOL_NO_PROGRESS_HARD_LIMIT', 'errors.turnNoProgress'],
@@ -226,6 +242,10 @@ export function isRuntimeUnavailableFailure(value) {
 export function isRuntimeInterruptionFailure(value) {
   return RUNTIME_INTERRUPTION_FAILURE_CODES.has(failureCode(value))
     && executionStartedState(value) !== false
+}
+
+export function isPermanentFailedRetryRejectionFailure(value) {
+  return PERMANENT_FAILED_RETRY_REJECTION_CODES.has(failureCode(value))
 }
 
 function isPreExecutionFailureForCodes(value, codes) {
