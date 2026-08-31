@@ -55,7 +55,12 @@ export async function buildToolStepResult({
         workerModelName: job?.modelName,
       })
     : null
-  if (acceptance) output.acceptance = acceptance
+  if (acceptance) {
+    output.acceptance = acceptance
+    output.issues = [...new Set((Array.isArray(acceptance.issues) ? acceptance.issues : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean))]
+  }
   return {
     ok: !truncated && (!acceptance || acceptance.verdict === 'pass'),
     truncated,
@@ -98,7 +103,12 @@ export async function buildTextStepResult({
         workerModelName: job?.modelName,
       })
     : null
-  if (acceptance) output.acceptance = acceptance
+  if (acceptance) {
+    output.acceptance = acceptance
+    output.issues = [...new Set((Array.isArray(acceptance.issues) ? acceptance.issues : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean))]
+  }
   return {
     ok: !acceptance || acceptance.verdict === 'pass',
     acceptance,
@@ -240,7 +250,11 @@ export function persistRejectedStepResult({
   const artifactIds = [...new Set((Array.isArray(output?.artifactIds)
     ? output.artifactIds
     : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 64)
-  const issues = (Array.isArray(output?.issues) ? output.issues : [])
+  const issues = (Array.isArray(output?.issues)
+    ? output.issues
+    : Array.isArray(result?.acceptance?.issues)
+      ? result.acceptance.issues
+      : [])
     .map((value) => String(value || '').trim().slice(0, 1_000))
     .filter(Boolean)
     .slice(0, 16)

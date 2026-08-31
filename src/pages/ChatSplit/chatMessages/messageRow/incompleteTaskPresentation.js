@@ -141,11 +141,11 @@ function publicFailureDetail(failure) {
 
 function verificationCheckPresentations(failure, t) {
   const source = failure?.taskVerification
-  if (!source || Number(source.version) !== 1 || !Array.isArray(source.checks)) return []
+  if (!source || !Array.isArray(source.checks)) return []
   return source.checks.slice(0, 9).map((check) => {
     const status = String(check?.status || '').trim().toLowerCase()
     const kind = String(check?.kind || '').trim().toLowerCase()
-    if (!VERIFICATION_STATUS_KEYS[status] || !kind) return null
+    if (!status || !kind || ['passed', 'success'].includes(status)) return null
     const cwd = String(check?.cwd || '.').trim().slice(0, 1_000) || '.'
     const command = String(check?.commandScope || kind).trim().slice(0, 1_000) || kind
     const code = String(check?.code || 'VERIFICATION_INDETERMINATE').trim().toUpperCase()
@@ -162,7 +162,9 @@ function verificationCheckPresentations(failure, t) {
         command,
         cwd,
         kind,
-        status: translated(t, VERIFICATION_STATUS_KEYS[status]),
+        status: VERIFICATION_STATUS_KEYS[status]
+          ? translated(t, VERIFICATION_STATUS_KEYS[status])
+          : status.toUpperCase(),
       }),
       status,
     }
@@ -202,9 +204,15 @@ export function buildIncompleteTaskPresentation(msg, t, {
     ? rawRequirements
     : defaultRequirementsForReason(reasonCode))
     .map((value) => String(value || '').trim().toLowerCase())
-    .filter((value) => REQUIREMENT_KEYS[value]))]
+    .filter((value) => /^[a-z][a-z0-9_]{1,95}$/u.test(value)))]
   const missing = requirementCodes.length > 0
-    ? requirementCodes.map((code) => translated(t, REQUIREMENT_KEYS[code]))
+    ? requirementCodes.map((code) => (
+        REQUIREMENT_KEYS[code]
+          ? translated(t, REQUIREMENT_KEYS[code])
+          : translated(t, 'chatMessages.incompleteRequirementRecordedCode', {
+              code: code.toUpperCase(),
+            })
+      ))
     : [translated(t,
         expectsFileReceipt && verifiedCount + retainedCount === 0
           ? 'chatMessages.incompleteRequirementArtifact'

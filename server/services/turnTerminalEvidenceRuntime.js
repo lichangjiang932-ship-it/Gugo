@@ -181,7 +181,16 @@ export function createTurnTerminalEvidenceRuntime({
     // so exactly one retry is safe. A direct terminal append has unknown outcome
     // and must never be retried blindly.
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const failure = normalizeTurnFailure(activeError)
+      const projectedFailure = normalizeTurnFailure(activeError)
+      const incompleteReason = projectedFailure.incompleteReason || 'turn_incomplete'
+      const failure = {
+        ...projectedFailure,
+        incompleteReason,
+        missingRequirements: Array.isArray(projectedFailure.missingRequirements)
+          && projectedFailure.missingRequirements.length > 0
+          ? projectedFailure.missingRequirements
+          : missingRequirementsForIncompleteReason(incompleteReason),
+      }
       const partialText = publicIncompleteText(
         originalError?.partialText || state.streamedAssistantText,
         '',
@@ -198,7 +207,7 @@ export function createTurnTerminalEvidenceRuntime({
         writtenAt: failedAt,
       }
       try {
-        await ports.emitter('turn.failed', {
+        const failedEvent = await ports.emitter('turn.failed', {
           code: failure.code,
           error: failure,
           ...(failure.incompleteReason ? { incompleteReason: failure.incompleteReason } : {}),
@@ -216,7 +225,10 @@ export function createTurnTerminalEvidenceRuntime({
         }, boundaryOptions(evidenceOptions))
         if (!atomicTurnBoundary) {
           try {
-            await persistEvidence(evidenceOptions)
+            await persistEvidence({
+              ...evidenceOptions,
+              serverLastSequence: failedEvent.sequence,
+            })
           } catch (error) {
             logWarn('turn.legacy_evidence_projection', error, {
               userId, sessionId, turnId, state: 'failed',
@@ -295,7 +307,7 @@ export function createTurnTerminalEvidenceRuntime({
     const evidenceOptions = {
       state: 'blocked',
       text: partialText,
-      artifactIds: state.checkpointArtifactIds,
+      artifactIds,
       deliveryArtifactIds,
       iterations: state.checkpointIterations,
       error: { ...failure, retryable: false },

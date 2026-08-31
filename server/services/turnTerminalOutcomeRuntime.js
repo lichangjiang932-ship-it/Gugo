@@ -271,7 +271,6 @@ export function createTurnTerminalOutcomeRuntime({
         retainedLocalFiles,
         writtenAt: failedAt,
       }
-      if (!evidence.atomicTurnBoundary) await evidence.persistEvidence(evidenceOptions)
       await evidence.emitter('turn.failed', {
         code: failure.code,
         error: failure,
@@ -285,7 +284,7 @@ export function createTurnTerminalOutcomeRuntime({
         retainedLocalFiles,
         iterations,
         ...usageFields(state),
-      }, evidence.boundaryOptions(evidenceOptions))
+      }, evidence.boundaryOptions(evidenceOptions, { legacyBeforeAppend: true }))
       await recordCanaryTerminal('failed', failure.code, failedAt, partialText)
       return
     }

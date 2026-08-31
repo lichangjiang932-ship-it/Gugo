@@ -31,7 +31,7 @@ function DeliveryDiagnostics({ value, t }) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const completed = normalizedList(value.completedDeliverables, { uppercase: true })
   const missing = normalizedList(value.missingDeliverables, { uppercase: true })
-  const issues = normalizedList(value.issues).slice(0, 16)
+  const issues = normalizedList(Array.isArray(value.issues) ? value.issues : value.acceptance?.issues).slice(0, 16)
   if (completed.length === 0 && missing.length === 0 && issues.length === 0) return null
   return <div className="mt-2 rounded border border-ink/10 bg-ink/[0.03] p-2 text-xs space-y-1">{completed.length > 0 && <p className="text-success">{t('taskCenter.deliverablesCompleted', { items: completed.join(', ') })}</p>}{missing.length > 0 && <p className="text-danger">{t('taskCenter.deliverablesMissing', { items: missing.join(', ') })}</p>}{issues.length > 0 && <details className="text-ink-fade"><summary className="cursor-pointer">{t('taskCenter.unresolvedIssues')}</summary><ul className="mt-1 ml-4 list-disc space-y-1">{issues.map((issue) => <li key={issue}>{issue}</li>)}</ul></details>}</div>
 }
