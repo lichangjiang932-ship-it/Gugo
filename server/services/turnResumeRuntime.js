@@ -1,7 +1,9 @@
 import { isTerminalTurnEventType } from './turnEventEmitter.js'
 import { recoveryCandidateVersion } from './turnEnginePolicy.js'
 import {
+  excludeVerifiedLocalFiles,
   isValidActiveFailedRetryAttempt,
+  mergeLocalFileReceipts,
   normalizeResolutionPath,
   replayPersistedTurnEvents,
 } from './turnRecoveryProjection.js'
@@ -76,17 +78,18 @@ export function modelInterruptionRecoveryState(events = [], maxAttempts = DEFAUL
   }
 }
 
-function latestPersistedPayloadField(events, field) {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const payload = events[index]?.payload
+function persistedPayloadValues(events, field) {
+  const values = []
+  for (const event of events) {
+    const payload = event?.payload
     if (payload && typeof payload === 'object' && Object.hasOwn(payload, field)) {
-      return { found: true, value: payload[field] }
+      values.push(payload[field])
     }
     if (payload?.error && typeof payload.error === 'object' && Object.hasOwn(payload.error, field)) {
-      return { found: true, value: payload.error[field] }
+      values.push(payload.error[field])
     }
   }
-  return { found: false, value: undefined }
+  return values
 }
 
 function recoveryStateMatchesBoundary(recoveryState, boundary) {
@@ -105,26 +108,61 @@ function isModelRecoveryExhaustedBlock(event) {
 
 function persistedRecoveryEvidence(events) {
   const evidence = {}
-  const partialText = latestPersistedPayloadField(events, 'partialText')
-  if (partialText.found) evidence.partialText = String(partialText.value || '')
-  for (const field of [
-    'artifactIds',
-    'deliveryArtifactIds',
-    'verifiedLocalFiles',
-    'retainedLocalFiles',
-  ]) {
-    const persisted = latestPersistedPayloadField(events, field)
-    if (persisted.found && Array.isArray(persisted.value)) evidence[field] = persisted.value
+  const partialTextValues = persistedPayloadValues(events, 'partialText')
+  const partialText = partialTextValues
+    .map((value) => String(value || ''))
+    .filter((value) => value.trim().length > 0)
+    .at(-1)
+  if (partialText !== undefined) {
+    evidence.partialText = partialText
+  } else if (partialTextValues.length > 0) {
+    evidence.partialText = ''
   }
-  const taskVerification = latestPersistedPayloadField(events, 'taskVerification')
-  if (taskVerification.found && taskVerification.value && typeof taskVerification.value === 'object') {
-    evidence.taskVerification = taskVerification.value
+
+  for (const field of ['artifactIds', 'deliveryArtifactIds']) {
+    const values = persistedPayloadValues(events, field)
+    const ids = [...new Set(values
+      .filter(Array.isArray)
+      .flat()
+      .map((value) => String(value || '').trim())
+      .filter(Boolean))]
+    if (ids.length > 0 || values.some(Array.isArray)) evidence[field] = ids
   }
-  const iterations = latestPersistedPayloadField(events, 'iterations')
-  if (iterations.found && Number.isFinite(Number(iterations.value))) {
-    evidence.iterations = Math.max(0, Number(iterations.value) || 0)
+
+  const verifiedValues = persistedPayloadValues(events, 'verifiedLocalFiles')
+  const retainedValues = persistedPayloadValues(events, 'retainedLocalFiles')
+  const verifiedLocalFiles = mergeLocalFileReceipts(...verifiedValues.filter(Array.isArray))
+  const retainedLocalFiles = excludeVerifiedLocalFiles(
+    mergeLocalFileReceipts(...retainedValues.filter(Array.isArray)),
+    verifiedLocalFiles,
+  )
+  if (verifiedLocalFiles.length > 0 || verifiedValues.some(Array.isArray)) {
+    evidence.verifiedLocalFiles = verifiedLocalFiles
+  }
+  if (retainedLocalFiles.length > 0 || retainedValues.some(Array.isArray)) {
+    evidence.retainedLocalFiles = retainedLocalFiles
+  }
+
+  const taskVerification = persistedPayloadValues(events, 'taskVerification')
+    .filter((value) => value && typeof value === 'object' && !Array.isArray(value)
+      && Object.keys(value).length > 0)
+    .at(-1)
+  if (taskVerification) {
+    evidence.taskVerification = taskVerification
+  }
+
+  const iterations = persistedPayloadValues(events, 'iterations')
+    .map(Number)
+    .filter(Number.isFinite)
+  if (iterations.length > 0) {
+    evidence.iterations = Math.max(0, ...iterations)
   }
   return evidence
+}
+
+function attachPersistedRecoveryEvidence(error, events) {
+  Object.assign(error, persistedRecoveryEvidence(events))
+  return error
 }
 
 const {
@@ -231,7 +269,7 @@ export function createTurnResumeRuntime({
         errorCode: last?.payload?.code || 'TURN_RECOVERY_BLOCKED',
         errorMessage: last?.payload?.message || 'turn recovery is blocked',
       }
-      throw error
+      throw attachPersistedRecoveryEvidence(error, [last])
     }
     const modelBinding = resolveModelBinding({
       userId,
@@ -277,7 +315,7 @@ export function createTurnResumeRuntime({
         errorMessage: last.payload?.message || 'turn recovery is blocked',
         candidateVersion: recoveryCandidateVersion(last),
       }
-      throw error
+      throw attachPersistedRecoveryEvidence(error, persistedEvents)
     }
     let interruptionRecovery = modelInterruptionRecoveryState(
       persistedEvents,
@@ -310,7 +348,10 @@ export function createTurnResumeRuntime({
         concurrentError.causeCode = String(
           persistedFailure.causeCode || interruptionRecovery.causeCode,
         ).trim().toUpperCase()
-        throw concurrentError
+        throw attachPersistedRecoveryEvidence(
+          concurrentError,
+          [...persistedEvents, latestBoundary],
+        )
       }
       if (latestBoundary?.sequence !== last?.sequence) {
         last = latestBoundary || last
@@ -336,6 +377,7 @@ export function createTurnResumeRuntime({
       ]
       error.attempts = interruptionRecovery.attempts
       error.causeCode = interruptionRecovery.causeCode
+      attachPersistedRecoveryEvidence(error, persistedEvents)
       const failure = {
         code: error.code,
         status: error.status,
@@ -379,6 +421,7 @@ export function createTurnResumeRuntime({
           : error.missingRequirements
         error.attempts = Number(persistedFailure.attempts) || error.attempts
         error.causeCode = String(persistedFailure.causeCode || error.causeCode).trim().toUpperCase()
+        attachPersistedRecoveryEvidence(error, [...persistedEvents, concurrentBoundary])
       } finally {
         await blockedEmitter.close()
       }
@@ -423,7 +466,7 @@ export function createTurnResumeRuntime({
           409,
         )
         error.retryable = false
-        throw error
+        throw attachPersistedRecoveryEvidence(error, persistedEvents)
       }
     }
     const manualFailedRetryActive = failedRetryActive

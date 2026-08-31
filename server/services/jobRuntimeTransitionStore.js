@@ -20,9 +20,16 @@ function parseJson(value) {
   }
 }
 
-function isRetryableStepRow(row) {
+function isRetryableStepRow(row, completedRetryStepIds = new Set()) {
   if (RETRYABLE_STEP_STATUSES.has(row?.status)) return true
   if (row?.status !== 'completed') return false
+  // A failed delivery projection can leave every persisted step completed.
+  // In that recovery mode the verifier and finalizer are deliberately replayed
+  // together, even when the previous verifier passed. Never extend this escape
+  // hatch to execute/batch steps: replaying completed mutations is not safe.
+  if (completedRetryStepIds.has(row.id)) {
+    return row.kind === 'verify' || row.kind === 'finalize'
+  }
   const output = parseJson(row.output_json)
   if (row.kind === 'verify') {
     const verdict = String(output?.acceptance?.verdict || '').trim().toLowerCase()
@@ -260,6 +267,8 @@ export function retryJobTransition({
   steps = [],
   modelSnapshot,
   event,
+  completedRetryStepIds = [],
+  diagnosticResetStepIds = [],
   prepareCheckpoints = null,
   now = Date.now(),
 } = {}) {
@@ -280,6 +289,23 @@ export function retryJobTransition({
   if (targets.some((step) => !step.id || !step.status)
     || new Set(targets.map((step) => step.id)).size !== targets.length) {
     throw new Error('retryJobTransition requires unique step identities and expected statuses')
+  }
+  const completedRetryIds = new Set(
+    (Array.isArray(completedRetryStepIds) ? completedRetryStepIds : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean),
+  )
+  const targetIds = new Set(targets.map((step) => step.id))
+  if ([...completedRetryIds].some((stepId) => !targetIds.has(stepId))) {
+    throw new Error('retryJobTransition completed retry steps must be transition targets')
+  }
+  const diagnosticResetIds = new Set(
+    (Array.isArray(diagnosticResetStepIds) ? diagnosticResetStepIds : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean),
+  )
+  if ([...diagnosticResetIds].some((stepId) => targetIds.has(stepId))) {
+    throw new Error('retryJobTransition diagnostic reset steps must not be transition targets')
   }
 
   const db = getDb()
@@ -302,8 +328,12 @@ export function retryJobTransition({
       row: readStep.get(target.id, jobId),
     }))
     if (currentSteps.some(({ target, row }) => (
-      !row || row.status !== target.status || !isRetryableStepRow(row)
+      !row || row.status !== target.status || !isRetryableStepRow(row, completedRetryIds)
     ))) {
+      return { found: true, changed: false, status: current.status, event: null }
+    }
+    const diagnosticResetRows = [...diagnosticResetIds].map((stepId) => readStep.get(stepId, jobId))
+    if (diagnosticResetRows.some((row) => !row || row.status !== 'completed')) {
       return { found: true, changed: false, status: current.status, event: null }
     }
 
@@ -328,6 +358,22 @@ export function retryJobTransition({
         target.status,
       ).changes !== 1) {
         throw new Error('job retry step lost its compare-and-swap race')
+      }
+    }
+    const resetStepDiagnostics = db.prepare(`
+      UPDATE job_steps
+         SET output_json = ?, updated_at = ?
+       WHERE id = ? AND job_id = ? AND status = 'completed'
+    `)
+    for (const row of diagnosticResetRows) {
+      const resumedOutput = clearResumedJobOutcomeDiagnostics(parseJson(row.output_json))
+      if (resetStepDiagnostics.run(
+        resumedOutput == null ? null : JSON.stringify(resumedOutput),
+        now,
+        row.id,
+        jobId,
+      ).changes !== 1) {
+        throw new Error('job retry diagnostic reset lost its compare-and-swap race')
       }
     }
 

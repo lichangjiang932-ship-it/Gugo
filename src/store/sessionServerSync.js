@@ -85,6 +85,21 @@ function sameArtifactCollection(left, right) {
     && leftIds.every((id, index) => id === rightIds[index])
 }
 
+function hasMeaningfulEvidence(value) {
+  if (Array.isArray(value)) return value.length > 0
+  if (value && typeof value === 'object') return Object.keys(value).length > 0
+  return value !== undefined && value !== null && value !== ''
+}
+
+function terminalOutcomeState(meta) {
+  if (!meta || typeof meta !== 'object') return ''
+  if (meta.serverConnectionState === 'blocked' || meta.serverRecoveryBlocked === true) return 'blocked'
+  if (meta.cancelled === true) return 'cancelled'
+  if (meta.interrupted === true) return 'interrupted'
+  if (meta.failed === true) return 'failed'
+  return ''
+}
+
 function normalizedMessageContent(value) {
   if (typeof value === 'string') return value
   if (value == null) return ''
@@ -154,6 +169,9 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
       merged.meta = { ...serverMeta, ...localMeta }
       delete merged.meta.pendingServerSync
       if (serverMessage.role === 'assistant') {
+        const serverOutcomeState = terminalOutcomeState(serverMeta)
+        const preserveLocalTerminalEvidence = !!serverOutcomeState
+          && serverOutcomeState === terminalOutcomeState(localMeta)
         for (const key of ['turnStartedAt', 'turnCompletedAt', 'latency']) {
           if (localHasNewerTurnState) {
             if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
@@ -204,7 +222,15 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
         } else if (!recoveryStub) {
           for (const key of terminalEvidenceKeys) {
             if (Object.hasOwn(serverMeta, key)) {
-              merged.meta[key] = serverMeta[key]
+              // Compatibility snapshots can expose an empty outer field while
+              // a newer live terminal event already supplied durable evidence.
+              // Keep the richer value unless the snapshot carries meaningful
+              // replacement data.
+              if (!preserveLocalTerminalEvidence
+                || hasMeaningfulEvidence(serverMeta[key])
+                || !hasMeaningfulEvidence(localMeta[key])) {
+                merged.meta[key] = serverMeta[key]
+              }
             } else if (key === 'serverFailure') {
               delete merged.meta[key]
             }
@@ -219,12 +245,21 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
             if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
             else delete merged.meta[key]
           } else if (Object.hasOwn(serverMeta, key)) {
-            merged.meta[key] = serverMeta[key]
+            if (!preserveLocalTerminalEvidence
+              || hasMeaningfulEvidence(serverMeta[key])
+              || !hasMeaningfulEvidence(localMeta[key])) {
+              merged.meta[key] = serverMeta[key]
+            }
           }
         }
         if (!localHasNewerTurnState && Object.hasOwn(serverMeta, 'serverDeliveryArtifactIds')) {
-          merged.meta.serverDeliveryArtifactIds = serverMeta.serverDeliveryArtifactIds
-        } else if (!localHasNewerTurnState
+          if (!preserveLocalTerminalEvidence
+            || hasMeaningfulEvidence(serverMeta.serverDeliveryArtifactIds)
+            || !hasMeaningfulEvidence(localMeta.serverDeliveryArtifactIds)) {
+            merged.meta.serverDeliveryArtifactIds = serverMeta.serverDeliveryArtifactIds
+          }
+        } else if (!preserveLocalTerminalEvidence
+          && !localHasNewerTurnState
           && !recoveryStub
           && Object.hasOwn(serverMeta, 'serverArtifacts')
           && Object.hasOwn(localMeta, 'serverDeliveryArtifactIds')
@@ -240,7 +275,11 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
             if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
             else delete merged.meta[key]
           } else if (Object.hasOwn(serverMeta, key)) {
-            merged.meta[key] = serverMeta[key]
+            if (!preserveLocalTerminalEvidence
+              || hasMeaningfulEvidence(serverMeta[key])
+              || !hasMeaningfulEvidence(localMeta[key])) {
+              merged.meta[key] = serverMeta[key]
+            }
           }
         }
         if (Object.hasOwn(merged.meta, 'retainedLocalFiles')) {

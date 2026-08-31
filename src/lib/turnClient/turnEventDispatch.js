@@ -558,15 +558,15 @@ export async function dispatchTurnEvent(event, {
         serverClarification: payload.clarification || null,
         directoryAuthorizationPending: false,
         serverResumeResolution: null,
-        ...(artifactIds !== undefined ? { serverArtifactIds: artifactIds } : {}),
-        ...(partialText !== undefined ? { serverPartialText: partialText } : {}),
+        ...(artifactIds?.length > 0 ? { serverArtifactIds: artifactIds } : {}),
+        ...(partialText ? { serverPartialText: partialText } : {}),
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(modelUsage ? { modelUsage, actualPromptTokens: modelUsage.promptTokens } : {}),
         ...(turnModelUsage ? { turnModelUsage } : {}),
         ...(estimatedPromptTokens !== undefined ? { serverEstimatedPromptTokens: estimatedPromptTokens } : {}),
-        ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
-        ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
-        ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
+        ...(deliveryArtifactIds?.length > 0 ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
+        ...(verifiedLocalFiles?.length > 0 ? { verifiedLocalFiles } : {}),
+        ...(retainedLocalFiles?.length > 0 ? { retainedLocalFiles } : {}),
       },
       ...streamCursor,
     })
@@ -634,15 +634,15 @@ export async function dispatchTurnEvent(event, {
         interrupted: false,
         paused: false,
         serverConnectionState: 'cancelled',
-        ...(artifactIds !== undefined ? { serverArtifactIds: artifactIds } : {}),
-        ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
-        ...(partialText !== undefined ? { serverPartialText: partialText } : {}),
+        ...(artifactIds?.length > 0 ? { serverArtifactIds: artifactIds } : {}),
+        ...(deliveryArtifactIds?.length > 0 ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
+        ...(partialText ? { serverPartialText: partialText } : {}),
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(modelUsage ? { modelUsage, actualPromptTokens: modelUsage.promptTokens } : {}),
         ...(turnModelUsage ? { turnModelUsage } : {}),
         ...(estimatedPromptTokens !== undefined ? { serverEstimatedPromptTokens: estimatedPromptTokens } : {}),
-        ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
-        ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
+        ...(verifiedLocalFiles?.length > 0 ? { verifiedLocalFiles } : {}),
+        ...(retainedLocalFiles?.length > 0 ? { retainedLocalFiles } : {}),
       },
       ...streamCursor,
     })
@@ -670,15 +670,15 @@ export async function dispatchTurnEvent(event, {
         modelActivity: null,
         progress: null,
         ...(event.type === 'turn.failed' ? { serverConnectionState: null } : {}),
-        ...(failure.partialText !== undefined ? { serverPartialText: failure.partialText } : {}),
-        ...(failure.artifactIds !== undefined ? { serverArtifactIds: failure.artifactIds } : {}),
-        ...(failure.deliveryArtifactIds !== undefined
+        ...(failure.partialText ? { serverPartialText: failure.partialText } : {}),
+        ...(failure.artifactIds?.length > 0 ? { serverArtifactIds: failure.artifactIds } : {}),
+        ...(failure.deliveryArtifactIds?.length > 0
           ? { serverDeliveryArtifactIds: failure.deliveryArtifactIds }
           : {}),
-        ...(failure.verifiedLocalFiles !== undefined
+        ...(failure.verifiedLocalFiles?.length > 0
           ? { verifiedLocalFiles: failure.verifiedLocalFiles }
           : {}),
-        ...(failure.retainedLocalFiles !== undefined
+        ...(failure.retainedLocalFiles?.length > 0
           ? { retainedLocalFiles: failure.retainedLocalFiles }
           : {}),
         ...(failure.iterations !== undefined ? { serverIterations: failure.iterations } : {}),

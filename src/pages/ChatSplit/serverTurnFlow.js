@@ -545,8 +545,7 @@ export async function runServerChatTurn({
         latency: Math.max(0, completedAt - startedAt),
         turnCompletedAt: completedAt,
         serverArtifacts,
-        serverDeliveryArtifactIds: [],
-        serverConnectionState: null,
+        serverConnectionState: 'cancelled',
       })
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.CANCELLED, stepLabel: t('chat.serverTurn.cancelled') } } })
     } else {

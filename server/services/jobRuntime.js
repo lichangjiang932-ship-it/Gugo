@@ -112,6 +112,85 @@ function hasRejectedCompletedOutcome(step) {
   }
   return step.kind === 'finalize' && step.output?.complete === false
 }
+
+function uniqueJobSteps(steps = []) {
+  return [...new Map(
+    steps.filter((step) => step?.id).map((step) => [step.id, step]),
+  ).values()]
+}
+
+function hasDeliveryProjectionFailure(job) {
+  const steps = Array.isArray(job?.steps) ? job.steps : []
+  if (job?.status !== 'failed' || !steps.length) return false
+  const finalize = [...steps].reverse().find((step) => step.kind === 'finalize')
+  const allStepsCompleted = steps.every((step) => step.status === 'completed')
+  return finalize?.output?.complete === false
+    || (allStepsCompleted && buildFinalOutput(job).complete === false)
+}
+
+function deliveryProjectionRecoverySteps(job) {
+  const steps = Array.isArray(job?.steps) ? job.steps : []
+  if (!hasDeliveryProjectionFailure(job)) return []
+  const verify = [...steps].reverse().find((step) => step.kind === 'verify')
+  const finalize = [...steps].reverse().find((step) => step.kind === 'finalize')
+  const priorMutationStepsSettled = steps.every((step) => (
+    ['verify', 'finalize'].includes(step.kind) || step.status === 'completed'
+  ))
+  if (!verify || !priorMutationStepsSettled) return []
+
+  // Verification is the safe repair stage: its prompt permits inspecting and
+  // correcting prior work. Finalize must then run again so stale delivery
+  // diagnostics cannot immediately return the job to failed. Completed execute
+  // steps are intentionally not replayed because they may contain mutations.
+  return uniqueJobSteps([verify, finalize].filter((step) => (
+    step?.status === 'completed' || RETRYABLE_STEP_STATUSES.has(step?.status)
+  )))
+}
+
+function deliveryProjectionDiagnosticResetStepIds(job, retrySteps) {
+  if (!hasDeliveryProjectionFailure(job)) return []
+  const retryStepIds = new Set(retrySteps.map((step) => step.id))
+  return (Array.isArray(job?.steps) ? job.steps : [])
+    .filter((step) => {
+      if (step?.status !== 'completed' || retryStepIds.has(step.id)) return false
+      const output = step.output && typeof step.output === 'object' && !Array.isArray(step.output)
+        ? step.output
+        : null
+      if (!output) return false
+      const resumed = clearResumedJobOutcomeDiagnostics(output)
+      return Object.keys(output).some((key) => !Object.hasOwn(resumed, key))
+    })
+    .map((step) => step.id)
+}
+
+function retryStatusError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  error.statusCode = 409
+  return error
+}
+
+function deliveryProjectionRetryBlocker(job) {
+  if (!hasDeliveryProjectionFailure(job)) return null
+  const verify = [...job.steps].reverse().find((step) => step.kind === 'verify')
+  if (!verify) {
+    return 'job delivery cannot be retried safely because the persisted plan has no verify stage; completed mutation steps were not replayed'
+  }
+  if (!['queued', 'pending', 'completed', 'failed', 'cancelled'].includes(verify.status)) {
+    return `job delivery cannot be retried because verify stage is not recoverable from status ${verify.status}`
+  }
+  return null
+}
+
+function assertRetryHasRunnablePath(job, retrySteps) {
+  if (retrySteps.length > 0) return
+  const hasQueuedWork = job.steps.some((step) => ['queued', 'pending'].includes(step.status))
+  if (hasQueuedWork) return
+  throw retryStatusError(
+    'JOB_RETRY_STATUS_INVALID',
+    'job has no retryable step; completed mutation steps cannot be replayed safely and no verify/finalize recovery stage is available',
+  )
+}
 function newId(prefix) {
   return `${prefix}-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
 }
@@ -488,6 +567,10 @@ export class JobRuntime {
         error.statusCode = 409
         throw error
       }
+      const deliveryRetryBlocker = deliveryProjectionRetryBlocker(currentJob)
+      if (deliveryRetryBlocker) {
+        throw retryStatusError('JOB_RETRY_STATUS_INVALID', deliveryRetryBlocker)
+      }
       assertJobPlanRetryAllowed(currentJob)
       const modelBinding = this.resolveModelBinding({
         userId,
@@ -504,9 +587,18 @@ export class JobRuntime {
         job: currentJob,
         modelSnapshot,
       })
-      const retriedSteps = currentJob.steps.filter((step) => (
+      const deliveryRecoverySteps = deliveryProjectionRecoverySteps(currentJob)
+      const retriedSteps = uniqueJobSteps([...currentJob.steps.filter((step) => (
         RETRYABLE_STEP_STATUSES.has(step.status) || hasRejectedCompletedOutcome(step)
-      ))
+      )), ...deliveryRecoverySteps])
+      assertRetryHasRunnablePath(currentJob, retriedSteps)
+      const completedRetryStepIds = deliveryRecoverySteps
+        .filter((step) => step.status === 'completed')
+        .map((step) => step.id)
+      const diagnosticResetStepIds = deliveryProjectionDiagnosticResetStepIds(
+        currentJob,
+        retriedSteps,
+      )
       const retriedDiagnostics = latestPersistedOutcomeFields(retriedSteps)
       const previousDiagnostics = Object.keys(retriedDiagnostics).length > 0
         ? retriedDiagnostics
@@ -516,6 +608,8 @@ export class JobRuntime {
         userId,
         expectedJobStatus: currentJob.status,
         steps: retriedSteps,
+        completedRetryStepIds,
+        diagnosticResetStepIds,
         modelSnapshot,
         prepareCheckpoints: () => {
           for (const step of retriedSteps) {
@@ -696,12 +790,19 @@ export class JobRuntime {
     let job = this.getJob(jobId, { userId })
     let step = job?.steps.find((item) => item.id === stepId)
     if (!job || !step) return null
+    let deliveryRecoverySteps = deliveryProjectionRecoverySteps(job)
+    let deliveryRecoveryStepIds = new Set(deliveryRecoverySteps.map((item) => item.id))
     if (!RETRYABLE_JOB_STATUSES.has(job.status)
-      || (!RETRYABLE_STEP_STATUSES.has(step.status) && !hasRejectedCompletedOutcome(step))) {
-      const error = new Error(`job step cannot be retried from ${job.status}/${step.status}`)
-      error.code = 'JOB_STEP_RETRY_STATUS_INVALID'
-      error.statusCode = 409
-      throw error
+      || (!RETRYABLE_STEP_STATUSES.has(step.status)
+        && !hasRejectedCompletedOutcome(step)
+        && !deliveryRecoveryStepIds.has(step.id))) {
+      const detail = job.status === 'failed' && step.status === 'completed'
+        ? '; completed mutation steps are not replayed automatically—retry the verify/finalize stage or the whole job'
+        : ''
+      throw retryStatusError(
+        'JOB_STEP_RETRY_STATUS_INVALID',
+        `job step cannot be retried from ${job.status}/${step.status}${detail}`,
+      )
     }
     const retryLease = !this.activeControllers.has(jobId)
       ? this.runtimeCore.lease.acquire({ jobId })
@@ -715,12 +816,20 @@ export class JobRuntime {
     try {
       job = this.getJob(jobId, { userId })
       step = job?.steps.find((item) => item.id === stepId)
+      const deliveryRetryBlocker = deliveryProjectionRetryBlocker(job)
+      if (deliveryRetryBlocker) {
+        throw retryStatusError('JOB_STEP_RETRY_STATUS_INVALID', deliveryRetryBlocker)
+      }
+      deliveryRecoverySteps = deliveryProjectionRecoverySteps(job)
+      deliveryRecoveryStepIds = new Set(deliveryRecoverySteps.map((item) => item.id))
       if (!job || !step || !RETRYABLE_JOB_STATUSES.has(job.status)
-        || (!RETRYABLE_STEP_STATUSES.has(step.status) && !hasRejectedCompletedOutcome(step))) {
-        const error = new Error(`job step cannot be retried from ${job?.status || 'missing'}/${step?.status || 'missing'}`)
-        error.code = 'JOB_STEP_RETRY_STATUS_INVALID'
-        error.statusCode = 409
-        throw error
+        || (!RETRYABLE_STEP_STATUSES.has(step.status)
+          && !hasRejectedCompletedOutcome(step)
+          && !deliveryRecoveryStepIds.has(step.id))) {
+        throw retryStatusError(
+          'JOB_STEP_RETRY_STATUS_INVALID',
+          `job step cannot be retried from ${job?.status || 'missing'}/${step?.status || 'missing'}`,
+        )
       }
       assertJobPlanRetryAllowed(job, step)
       const modelBinding = this.resolveModelBinding({
@@ -733,31 +842,44 @@ export class JobRuntime {
         modelProviderId: modelBinding.providerId,
         modelConfigRevision: modelBinding.configRevision,
       })
-      const checkpoint = loadRetryCheckpoint({
-        runtimeCore: this.runtimeCore,
-        jobId,
-        stepId,
-        userId: job.userId,
-        modelSnapshot,
-      })
+      const retrySteps = deliveryRecoveryStepIds.has(step.id)
+        ? deliveryRecoverySteps
+        : [step]
+      const diagnosticResetStepIds = deliveryProjectionDiagnosticResetStepIds(job, retrySteps)
+      const checkpointsByStepId = new Map(retrySteps.map((retryStep) => [
+        retryStep.id,
+        loadRetryCheckpoint({
+          runtimeCore: this.runtimeCore,
+          jobId,
+          stepId: retryStep.id,
+          userId: job.userId,
+          modelSnapshot,
+        }),
+      ]))
       const transition = retryJobTransition({
         jobId,
         userId,
         expectedJobStatus: job.status,
-        steps: [step],
+        steps: retrySteps,
+        completedRetryStepIds: deliveryRecoverySteps
+          .filter((item) => item.status === 'completed')
+          .map((item) => item.id),
+        diagnosticResetStepIds,
         modelSnapshot,
         prepareCheckpoints: () => {
           // Preserve completed calls, results, and idempotency keys. Ordinary
           // retries get a fresh budget; manually reconciled paid responses keep
           // their counters. This is transactional with the retry state change.
-          makeRetryCheckpointResumable({
-            runtimeCore: this.runtimeCore,
-            checkpoint,
-            jobId,
-            stepId,
-            userId,
-            resetBudget,
-          })
+          for (const retryStep of retrySteps) {
+            makeRetryCheckpointResumable({
+              runtimeCore: this.runtimeCore,
+              checkpoint: checkpointsByStepId.get(retryStep.id),
+              jobId,
+              stepId: retryStep.id,
+              userId,
+              resetBudget,
+            })
+          }
         },
         event: {
           stepId,

@@ -163,7 +163,7 @@ function line(value) {
 
 function uniqueTextValues(...sources) {
   return [...new Set(sources
-    .flatMap((source) => Array.isArray(source) ? source : [])
+    .flatMap((source) => Array.isArray(source) ? source : (typeof source === 'string' ? [source] : []))
     .map((value) => String(value || '').trim())
     .filter(Boolean))]
 }
@@ -173,8 +173,37 @@ function localFileLabels(...sources) {
     .flatMap((source) => Array.isArray(source) ? source : [])
     .map((file) => typeof file === 'string'
       ? file.trim()
-      : String(file?.filename || file?.path || '').trim())
+      : String(file?.path || file?.filename || file?.id || '').trim())
     .filter(Boolean))]
+}
+
+const COMPLETED_VERIFICATION_CHECK_STATUSES = new Set([
+  'pass',
+  'passed',
+  'success',
+  'succeeded',
+  'complete',
+  'completed',
+  'ok',
+])
+
+function taskVerificationCheckIssue(check) {
+  if (!check || typeof check !== 'object' || Array.isArray(check)) return ''
+  const status = String(check.status || 'failed').trim().toLowerCase()
+  if (COMPLETED_VERIFICATION_CHECK_STATUSES.has(status)) return ''
+  const kind = String(check.kind || 'check').trim()
+  const code = String(check.code || '').trim()
+  const command = String(check.commandScope || '').trim()
+  const cwd = String(check.cwd || '').trim()
+  const diagnostic = String(check.diagnostic || '').trim()
+  const targets = uniqueTextValues(check.mutationTargets)
+  const identity = `${status} ${kind}${code ? ` [${code}]` : ''}`
+  const scope = [command ? `command=${command}` : '', cwd ? `cwd=${cwd}` : '']
+    .filter(Boolean)
+    .join(', ')
+  return `${identity}${scope ? ` (${scope})` : ''}`
+    + `${diagnostic ? `: ${diagnostic}` : ''}`
+    + `${targets.length > 0 ? `; targets=${targets.join(', ')}` : ''}`
 }
 
 function taskVerificationIssues(...sources) {
@@ -184,6 +213,9 @@ function taskVerificationIssues(...sources) {
     issues.push(...uniqueTextValues(source.issues, source.missingRequirements))
     const reason = String(source.reason || source.summary || '').trim()
     if (reason) issues.push(reason)
+    if (Array.isArray(source.checks)) {
+      issues.push(...source.checks.map(taskVerificationCheckIssue).filter(Boolean))
+    }
   }
   return [...new Set(issues)]
 }
@@ -202,9 +234,11 @@ function terminalDiagnostic(event) {
     : clarification?.question || clarification?.message
   const message = String(
     nested.message
+      || nested.reason
       || payload.message
       || payload.reason
       || clarificationMessage
+      || payload.text
       || '',
   ).trim()
   const incompleteReason = String(
@@ -241,6 +275,9 @@ function terminalDiagnostic(event) {
   const details = [`${label}${code ? ` [${code}]` : ''}`]
   const reason = incompleteReason || message
   if (reason) details.push(`Reason: ${reason}`)
+  if (incompleteReason && message && message !== incompleteReason) {
+    details.push(`Detail: ${message}`)
+  }
   if (missingRequirements.length > 0) {
     details.push(`Missing: ${missingRequirements.join(', ')}`)
   }
@@ -273,34 +310,90 @@ export function formatRunEvent(event, { format = 'jsonl' } = {}) {
 export function formatRunError(error, { format = 'jsonl' } = {}) {
   const resolvedFormat = normalizeRunOutputFormat(format)
   const recovery = error?.recovery && typeof error.recovery === 'object' ? error.recovery : {}
-  const code = String(error?.code || recovery.errorCode || 'CLI_RUN_FAILED').trim() || 'CLI_RUN_FAILED'
-  const message = String(error?.message || recovery.errorMessage || error || 'run failed').trim()
-  const action = String(error?.action || '').trim()
-  const incompleteReason = String(error?.incompleteReason || recovery.incompleteReason || '').trim()
+  const serverFailure = error?.serverFailure && typeof error.serverFailure === 'object'
+    ? error.serverFailure
+    : {}
+  const recoveryFailure = recovery.error && typeof recovery.error === 'object' ? recovery.error : {}
+  const code = String(
+    error?.code || serverFailure.code || recoveryFailure.code || recovery.errorCode || 'CLI_RUN_FAILED',
+  ).trim() || 'CLI_RUN_FAILED'
+  const message = String(
+    error?.message || serverFailure.message || recoveryFailure.message
+      || recovery.errorMessage || error?.reason || recovery.reason || error || 'run failed',
+  ).trim()
+  const causeMessage = [
+    serverFailure.message,
+    recoveryFailure.message,
+    recovery.errorMessage,
+  ].map((value) => String(value || '').trim()).find((value) => value && value !== message) || ''
+  const action = String(
+    error?.action || serverFailure.action || recoveryFailure.action || recovery.action || '',
+  ).trim()
+  const reason = String(
+    error?.reason || serverFailure.reason || recoveryFailure.reason || recovery.reason || '',
+  ).trim()
+  const incompleteReason = String(
+    error?.incompleteReason || serverFailure.incompleteReason
+      || recoveryFailure.incompleteReason || recovery.incompleteReason || '',
+  ).trim()
   const missingRequirements = uniqueTextValues(
     error?.missingRequirements,
+    serverFailure.missingRequirements,
+    recoveryFailure.missingRequirements,
     recovery.missingRequirements,
   )
   const artifactIds = uniqueTextValues(
     error?.artifactIds,
     error?.deliveryArtifactIds,
+    serverFailure.artifactIds,
+    serverFailure.deliveryArtifactIds,
+    recoveryFailure.artifactIds,
+    recoveryFailure.deliveryArtifactIds,
     recovery.artifactIds,
     recovery.deliveryArtifactIds,
   )
-  const verifiedFiles = localFileLabels(error?.verifiedLocalFiles, recovery.verifiedLocalFiles)
-  const retainedFiles = localFileLabels(error?.retainedLocalFiles, recovery.retainedLocalFiles)
+  const verifiedFiles = localFileLabels(
+    error?.verifiedLocalFiles,
+    serverFailure.verifiedLocalFiles,
+    recoveryFailure.verifiedLocalFiles,
+    recovery.verifiedLocalFiles,
+  )
+  const retainedFiles = localFileLabels(
+    error?.retainedLocalFiles,
+    serverFailure.retainedLocalFiles,
+    recoveryFailure.retainedLocalFiles,
+    recovery.retainedLocalFiles,
+  )
   const verificationIssues = taskVerificationIssues(
     error?.taskVerification,
+    serverFailure.taskVerification,
+    recoveryFailure.taskVerification,
     recovery.taskVerification,
   )
+  const taskVerification = [
+    error?.taskVerification,
+    serverFailure.taskVerification,
+    recoveryFailure.taskVerification,
+    recovery.taskVerification,
+  ].find((value) => value && typeof value === 'object' && !Array.isArray(value)) || null
   const retryable = typeof error?.retryable === 'boolean'
     ? error.retryable
-    : typeof recovery.retryable === 'boolean' ? recovery.retryable : null
+    : typeof serverFailure.retryable === 'boolean'
+      ? serverFailure.retryable
+      : typeof recoveryFailure.retryable === 'boolean'
+        ? recoveryFailure.retryable
+        : typeof recovery.retryable === 'boolean' ? recovery.retryable : null
   const manualRetryable = typeof error?.manualRetryable === 'boolean'
     ? error.manualRetryable
-    : typeof recovery.manualRetryable === 'boolean' ? recovery.manualRetryable : null
+    : typeof serverFailure.manualRetryable === 'boolean'
+      ? serverFailure.manualRetryable
+      : typeof recoveryFailure.manualRetryable === 'boolean'
+        ? recoveryFailure.manualRetryable
+        : typeof recovery.manualRetryable === 'boolean' ? recovery.manualRetryable : null
   const details = [`Error [${code}]: ${message}`]
-  if (incompleteReason && incompleteReason !== message) details.push(`Reason: ${incompleteReason}`)
+  if (causeMessage) details.push(`Detail: ${causeMessage}`)
+  const explicitReason = incompleteReason || reason
+  if (explicitReason && explicitReason !== message) details.push(`Reason: ${explicitReason}`)
   if (missingRequirements.length > 0) details.push(`Missing: ${missingRequirements.join(', ')}`)
   if (artifactIds.length > 0) details.push(`Saved artifacts: ${artifactIds.join(', ')}`)
   if (verifiedFiles.length > 0) details.push(`Verified files: ${verifiedFiles.join(', ')}`)
@@ -318,12 +411,15 @@ export function formatRunError(error, { format = 'jsonl' } = {}) {
     error: {
       code,
       message,
+      ...(causeMessage ? { causeMessage } : {}),
       ...(action ? { action } : {}),
+      ...(reason && reason !== message ? { reason } : {}),
       ...(incompleteReason ? { incompleteReason } : {}),
       ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
       ...(artifactIds.length > 0 ? { artifactIds } : {}),
       ...(verifiedFiles.length > 0 ? { verifiedLocalFiles: verifiedFiles } : {}),
       ...(retainedFiles.length > 0 ? { retainedLocalFiles: retainedFiles } : {}),
+      ...(taskVerification ? { taskVerification } : {}),
       ...(verificationIssues.length > 0 ? { verificationIssues } : {}),
       ...(typeof retryable === 'boolean' ? { retryable } : {}),
       ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),

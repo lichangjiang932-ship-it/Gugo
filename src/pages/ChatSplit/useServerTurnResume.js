@@ -557,7 +557,7 @@ export default function useServerTurnResume({
           directoryAuthorizationError: null,
           serverResumeResolution: null,
           serverArtifacts,
-          serverConnectionState: null,
+          serverConnectionState: 'cancelled',
         })
       }
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: stopped ? TASK_STATUS.CANCELLED : TASK_STATUS.FAILED, stepLabel: stopped ? t('chat.serverTurn.cancelled') : t('chat.serverTurn.resumeFailed') } } })
