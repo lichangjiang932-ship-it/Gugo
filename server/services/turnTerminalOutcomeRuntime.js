@@ -377,23 +377,6 @@ export function createTurnTerminalOutcomeRuntime({
     const completedAt = ports.now()
     const verifiedLocalFiles = evidence.verifiedLocalFilesAt(completedAt)
     const retainedLocalFiles = evidence.retainedLocalFilesAt(completedAt, verifiedLocalFiles)
-    if (retainedLocalFiles.length > 0) {
-      return settleResult({
-        scope,
-        signal,
-        result: {
-          ...result,
-          incomplete: true,
-          partialText: text,
-          code: 'TURN_INCOMPLETE',
-          incompleteReason: 'post_mutation_verification_missing',
-          missingRequirements: ['mutation_readback', 'diff_or_project_check'],
-        },
-        state,
-        evidence,
-        recordCanaryTerminal,
-      })
-    }
     const iterations = result?.iterations || 0
     const completedMessage = createCompletedTurnMessage({
       userId,

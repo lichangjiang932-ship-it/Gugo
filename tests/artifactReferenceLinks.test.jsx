@@ -689,7 +689,7 @@ test('a failed turn exposes its retained file as pending verification without up
       'chatMessages.incompleteNextStepLabelchatMessages.incompleteNextAdjust',
     )
     assert.equal(
-      rootElement.querySelector('[data-testid="incomplete-task-file-state"]')?.textContent,
+      rootElement.querySelector('[data-testid="incomplete-task-file-state"] > p')?.textContent,
       'chatMessages.incompletePendingFiles',
     )
 

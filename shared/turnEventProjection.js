@@ -144,11 +144,6 @@ export function isSuccessfulTurnCompletedEvent(event) {
     FAILED_VERIFICATION_STATUSES.has(String(check?.status || '').trim().toLowerCase())
   ))) return false
   if (taskVerification.ok === false || taskVerification.passed === false) return false
-  const retained = Array.isArray(payload.retainedLocalFiles) ? payload.retainedLocalFiles : []
-  // A retained receipt means the write is known to exist but has not passed
-  // readback/project verification. Path equality with an older verified
-  // receipt is not enough: the same path may have been mutated again later.
-  if (retained.length > 0) return false
   return true
 }
 

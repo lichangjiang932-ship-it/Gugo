@@ -194,8 +194,9 @@ test('turn WebSocket preserves the host shutdown contract when initial subscript
     const errorFrame = await inbox.next((frame) => frame.type === 'error')
     assert.deepEqual(errorFrame, createTurnWebSocketFrame('error', {
       code: 'TURN_ENGINE_SHUTTING_DOWN',
-      message: 'turn runtime is restarting; retry shortly',
       action: 'retry',
+      status: 503,
+      retryable: true,
       sessionId,
       turnId,
     }))
@@ -252,8 +253,8 @@ test('turn WebSocket exposes persistence configuration failures as restart_runti
     const errorFrame = await inbox.next((frame) => frame.type === 'error')
     assert.deepEqual(errorFrame, createTurnWebSocketFrame('error', {
       code: 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
-      message: 'turn runtime is not ready because persistence is not configured',
       action: 'restart_runtime',
+      status: 503,
       sessionId,
       turnId,
     }))
@@ -344,8 +345,9 @@ test('turn WebSocket normalizes async host failures and removes subscriptions be
 
         assert.deepEqual(errorFrame, createTurnWebSocketFrame('error', {
           code: 'TURN_ENGINE_SHUTTING_DOWN',
-          message: 'turn runtime is restarting; retry shortly',
           action: 'retry',
+          status: 503,
+          retryable: true,
           sessionId,
           turnId,
         }))

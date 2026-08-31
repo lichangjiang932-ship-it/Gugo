@@ -262,7 +262,9 @@ export function createTurnCancellationRuntime({
           turnId,
           sequence: fencedLast.sequence + 1,
         })
-        emit.bindExecutionLease?.(cancellationLease.executionLease)
+        if (cancellationLease.executionLease) {
+          emit.bindExecutionLease?.(cancellationLease.executionLease)
+        }
         try {
           await emit('turn.cancelled', {
             reason: 'Cancelled by user',
