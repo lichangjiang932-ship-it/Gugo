@@ -190,7 +190,12 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
         // live event has already advanced this Turn. In particular, an older
         // local TURN_INCOMPLETE object must not erase structured diagnostics
         // recovered by the server from the scoped checkpoint.
-        const terminalEvidenceKeys = ['serverFailure', 'serverPartialText', 'serverArtifactIds']
+        const terminalEvidenceKeys = [
+          'serverFailure',
+          'serverPartialText',
+          'serverArtifactIds',
+          'serverIterations',
+        ]
         if (localHasNewerTurnState) {
           for (const key of terminalEvidenceKeys) {
             if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
@@ -248,7 +253,41 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
         const localResumeInFlight = localMeta.directoryAuthorizationPending === true
           || localMeta.serverResumeResolution != null
 
-        if (serverMeta.cancelled === true && !localHasNewerTurnState) {
+        const recoveryMetaKeys = [
+          'serverRecoveryKind',
+          'serverRecoveryToolCallId',
+          'serverRecoveryModelRequestId',
+          'serverRecoveryActionPath',
+        ]
+        const serverRecoveryBlocked = serverMeta.serverConnectionState === 'blocked'
+          || serverMeta.serverRecoveryBlocked === true
+        if (serverRecoveryBlocked && !localHasNewerTurnState) {
+          merged.meta.failed = false
+          merged.meta.cancelled = false
+          merged.meta.interrupted = false
+          merged.meta.paused = false
+          merged.meta.streaming = false
+          merged.meta.serverConnectionState = 'blocked'
+          merged.meta.serverRecoveryBlocked = true
+          for (const key of recoveryMetaKeys) {
+            merged.meta[key] = serverMeta[key] ?? null
+          }
+          if (serverPauseSequence !== null) {
+            merged.meta.serverLastSequence = serverPauseSequence
+          }
+        } else if (serverMeta.failed === true && !localHasNewerTurnState) {
+          merged.meta.failed = true
+          merged.meta.cancelled = false
+          merged.meta.interrupted = false
+          merged.meta.paused = false
+          merged.meta.streaming = false
+          merged.meta.serverConnectionState = serverMeta.serverConnectionState ?? null
+          merged.meta.serverRecoveryBlocked = false
+          for (const key of recoveryMetaKeys) merged.meta[key] = null
+          if (serverPauseSequence !== null) {
+            merged.meta.serverLastSequence = serverPauseSequence
+          }
+        } else if (serverMeta.cancelled === true && !localHasNewerTurnState) {
           merged.meta.cancelled = true
           merged.meta.failed = false
           merged.meta.interrupted = false
