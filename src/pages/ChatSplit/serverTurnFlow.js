@@ -212,10 +212,10 @@ export function terminalFailureEvidenceMeta(error) {
   if (Array.isArray(error.deliveryArtifactIds) && error.deliveryArtifactIds.length > 0) {
     meta.serverDeliveryArtifactIds = error.deliveryArtifactIds
   }
-  if (Array.isArray(error.verifiedLocalFiles) && error.verifiedLocalFiles.length > 0) {
+  if (Object.hasOwn(error, 'verifiedLocalFiles') && Array.isArray(error.verifiedLocalFiles)) {
     meta.verifiedLocalFiles = error.verifiedLocalFiles
   }
-  if (Array.isArray(error.retainedLocalFiles) && error.retainedLocalFiles.length > 0) {
+  if (Object.hasOwn(error, 'retainedLocalFiles') && Array.isArray(error.retainedLocalFiles)) {
     meta.retainedLocalFiles = error.retainedLocalFiles
   }
   if (Number.isInteger(error.iterations) && error.iterations >= 0) {

@@ -84,9 +84,12 @@ function incompleteBoundaryPayload(type, value) {
     source.missingRequirements || error?.missingRequirements,
     defaults.missingRequirements,
   )
-  const nextAction = String(
+  const rawNextAction = String(
     source.nextAction || error?.nextAction || defaults.nextAction,
-  ).trim().slice(0, 80) || defaults.nextAction
+  ).trim().toLowerCase().slice(0, 80)
+  const nextAction = /^[a-z][a-z0-9_]{0,79}$/u.test(rawNextAction)
+    ? rawNextAction
+    : defaults.nextAction
   return {
     ...source,
     incompleteReason,
@@ -415,6 +418,7 @@ export function createTurnEventEmitter({
       return Promise.reject(Object.assign(new Error('turn.completed payload contains incomplete terminal evidence'), {
         code: 'TURN_COMPLETION_INVALID',
         status: 409,
+        retryable: false,
       }))
     }
     if (commitEvent !== null && typeof commitEvent !== 'function') {

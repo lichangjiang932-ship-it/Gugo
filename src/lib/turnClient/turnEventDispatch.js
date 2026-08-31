@@ -617,6 +617,7 @@ export async function dispatchTurnEvent(event, {
     })
     cursorCommitted = true
   } else if (event.type === 'turn.cancelled') {
+    const failure = normalizeTurnFailurePayload(payload, { fallbackCode: 'TURN_CANCELLED' })
     const partialText = Object.hasOwn(payload, 'partialText')
       ? String(payload.partialText ?? '')
       : Object.hasOwn(payload, 'text') ? String(payload.text ?? '') : undefined
@@ -632,6 +633,7 @@ export async function dispatchTurnEvent(event, {
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
         ...CLEARED_SERVER_FAILURE_META,
+        serverFailure: failure.error,
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,

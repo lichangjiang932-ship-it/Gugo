@@ -127,6 +127,10 @@ function publicTurnErrorProjection(error) {
     ? evidence.missingRequirements
     : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
   const taskVerification = normalizeTaskVerificationDetails(evidence.taskVerification)
+  const rawNextAction = String(errorChain
+    .map((entry) => entry?.nextAction || entry?.error?.nextAction)
+    .find(Boolean) || '').trim().toLowerCase().slice(0, 80)
+  const nextAction = /^[a-z][a-z0-9_]{0,79}$/u.test(rawNextAction) ? rawNextAction : ''
   const hasPartialText = Object.hasOwn(evidence, 'partialText')
   const hasArtifactIds = Object.hasOwn(evidence, 'artifactIds')
   const hasDeliveryArtifactIds = Object.hasOwn(evidence, 'deliveryArtifactIds')
@@ -155,6 +159,7 @@ function publicTurnErrorProjection(error) {
       ...(Number.isInteger(error?.actualSequence) ? { actualSequence: error.actualSequence } : {}),
       ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}),
       ...(typeof error?.manualRetryable === 'boolean' ? { manualRetryable: error.manualRetryable } : {}),
+      ...(nextAction ? { nextAction } : {}),
       ...(String(evidence.incompleteReason || '').trim()
         ? { incompleteReason: String(evidence.incompleteReason).trim() }
         : {}),

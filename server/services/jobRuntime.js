@@ -29,7 +29,7 @@ import {
   clearCompletedJobOutcomeDiagnostics,
   clearResumedJobOutcomeDiagnostics,
   findNextRunnableStep,
-  normalizeJobLocalFileReceipts,
+  mergePersistedJobOutcomeFields,
   persistedJobOutcomeFields,
   resolveWorkflowState,
   stepRequiresPlanApproval,
@@ -100,41 +100,9 @@ function persistJobOutcomeDiagnostics(jobId, {
 }
 
 function latestPersistedOutcomeFields(steps) {
-  const merged = {}
-  const listFields = new Set([
-    'missingRequirements',
-    'verifiedLocalFiles',
-    'retainedLocalFiles',
-    'artifactIds',
-    'completedDeliverables',
-    'missingDeliverables',
-    'issues',
-  ])
-  for (const step of Array.isArray(steps) ? steps : []) {
-    const fields = persistedJobOutcomeFields(step?.output)
-    for (const [field, value] of Object.entries(fields)) {
-      if (Array.isArray(value)) {
-        if (!value.length) continue
-        merged[field] = listFields.has(field)
-          ? [...new Set([...(Array.isArray(merged[field]) ? merged[field] : []), ...value])]
-          : value
-        continue
-      }
-      if (value && typeof value === 'object') {
-        if (Object.keys(value).length > 0) merged[field] = value
-        continue
-      }
-      if (value !== undefined && value !== null && value !== '') merged[field] = value
-    }
-  }
-  const localFiles = normalizeJobLocalFileReceipts(merged)
-  if (Object.hasOwn(merged, 'verifiedLocalFiles')) {
-    merged.verifiedLocalFiles = localFiles.verifiedLocalFiles
-  }
-  if (Object.hasOwn(merged, 'retainedLocalFiles')) {
-    merged.retainedLocalFiles = localFiles.retainedLocalFiles
-  }
-  return merged
+  return mergePersistedJobOutcomeFields(
+    ...(Array.isArray(steps) ? steps : []).map((step) => step?.output),
+  )
 }
 
 function projectJobForClient(job) {

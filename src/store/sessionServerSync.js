@@ -101,7 +101,7 @@ function mergeTerminalFailureDiagnostics(serverFailure, localFailure) {
     if (serverValue || localValue) merged[key] = serverValue || localValue
   }
   for (const key of ['missingRequirements', 'taskVerification']) {
-    if (!hasMeaningfulEvidence(serverFailure[key]) && hasMeaningfulEvidence(localFailure[key])) {
+    if (!Object.hasOwn(serverFailure, key) && hasMeaningfulEvidence(localFailure[key])) {
       merged[key] = localFailure[key]
     }
   }
@@ -294,11 +294,10 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
             if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
             else delete merged.meta[key]
           } else if (Object.hasOwn(serverMeta, key)) {
-            if (!preserveLocalTerminalEvidence
-              || hasMeaningfulEvidence(serverMeta[key])
-              || !hasMeaningfulEvidence(localMeta[key])) {
-              merged.meta[key] = serverMeta[key]
-            }
+            // Presence is the authority boundary for persisted receipts. An
+            // explicit empty list means the latest terminal projection found
+            // no files in that state and must clear an older live/retry list.
+            merged.meta[key] = serverMeta[key]
           }
         }
         if (Object.hasOwn(merged.meta, 'retainedLocalFiles')) {

@@ -3,6 +3,7 @@ import { getDb } from '../db.js'
 import { appendJobEvent } from './jobStore.js'
 import {
   clearResumedJobOutcomeDiagnostics,
+  mergePersistedJobOutcomeFields,
   normalizeJobLocalFileReceipts,
   persistedJobOutcomeFields,
 } from './jobWorkflow.js'
@@ -166,10 +167,10 @@ export function enqueueJobSteeringTransition({ jobId, userId, content, now = Dat
         SELECT output_json FROM job_steps WHERE id = ? AND job_id = ?
       `).get(resumedStepId, jobId)
       const output = parseJson(step?.output_json)
-      resumeDiagnostics = {
-        ...persistedJobOutcomeFields(parseJson(latestSuspension?.payload_json)),
-        ...persistedJobOutcomeFields(output),
-      }
+      resumeDiagnostics = mergePersistedJobOutcomeFields(
+        parseJson(latestSuspension?.payload_json),
+        output,
+      )
       const localFiles = normalizeJobLocalFileReceipts(resumeDiagnostics)
       resumeDiagnostics = {
         ...resumeDiagnostics,
@@ -229,7 +230,10 @@ export function resumeJobAfterApprovalTransition({
         return { found: true, owned: true, changed: false, status: current.status, event: null }
       }
       if (step.status === 'running') {
-        Object.assign(resumedDiagnostics, persistedJobOutcomeFields(parseJson(step.output_json)))
+        Object.assign(
+          resumedDiagnostics,
+          mergePersistedJobOutcomeFields(resumedDiagnostics, parseJson(step.output_json)),
+        )
         const resumedOutput = clearResumedJobOutcomeDiagnostics(parseJson(step.output_json))
         db.prepare(`
           UPDATE job_steps
@@ -249,7 +253,10 @@ export function resumeJobAfterApprovalTransition({
          WHERE id = ? AND job_id = ? AND status = 'running'
       `)
       for (const step of runningSteps) {
-        Object.assign(resumedDiagnostics, persistedJobOutcomeFields(parseJson(step.output_json)))
+        Object.assign(
+          resumedDiagnostics,
+          mergePersistedJobOutcomeFields(resumedDiagnostics, parseJson(step.output_json)),
+        )
         const resumedOutput = clearResumedJobOutcomeDiagnostics(parseJson(step.output_json))
         requeueStep.run(
           resumedOutput == null ? null : JSON.stringify(resumedOutput),

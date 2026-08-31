@@ -1,3 +1,5 @@
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
+
 const RUN_OUTPUT_FORMATS = new Set(['jsonl', 'text'])
 
 const TEXT_TERMINAL_DIAGNOSTICS = Object.freeze({
@@ -23,18 +25,29 @@ function objectValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null
 }
 
-function completionIsExplicitlyIncomplete(value) {
+function completionIsExplicitlyIncomplete(value, seen = new Set()) {
   const source = objectValue(value)
-  if (!source) return false
+  if (!source || seen.has(source)) return false
+  seen.add(source)
   if (source.complete === false || source.completed === false
-    || source.paused === true || source.interrupted === true) return true
+    || source.incomplete === true || source.paused === true || source.interrupted === true) return true
+  const status = String(source.status || '').trim().toLowerCase()
+  if (['blocked', 'cancelled', 'failed', 'incomplete', 'interrupted', 'paused'].includes(status)) return true
+  if (String(source.incompleteReason || '').trim()) return true
+  if (Array.isArray(source.missingRequirements) && source.missingRequirements.length > 0) return true
+  if (Array.isArray(source.retainedLocalFiles) && source.retainedLocalFiles.length > 0) return true
+  const verification = objectValue(source.taskVerification)
+  if (verification && (
+    verification.ok === false
+    || verification.passed === false
+    || (Array.isArray(verification.checks) && verification.checks.length > 0)
+  )) return true
   return [source.output, source.finalOutput, source.delivery, source.outcome]
-    .some((candidate) => objectValue(candidate)?.complete === false)
+    .some((candidate) => completionIsExplicitlyIncomplete(candidate, seen))
 }
 
 function completedEventSucceeded(event) {
-  return event?.type === 'turn.completed'
-    && !completionIsExplicitlyIncomplete(event?.payload)
+  return isSuccessfulTurnCompletedEvent(event)
 }
 
 function terminalDescriptor(event) {

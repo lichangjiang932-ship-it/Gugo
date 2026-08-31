@@ -560,6 +560,8 @@ function incompleteCheckpointMetadata(stateJson) {
       .map((value) => String(value || '').trim().toLowerCase())
       .filter((value) => /^[a-z][a-z0-9_]{1,95}$/u.test(value)),
   )].slice(0, 16)
+  const rawNextAction = String(final.nextAction || '').trim().toLowerCase().slice(0, 80)
+  const nextAction = /^[a-z][a-z0-9_]{0,79}$/u.test(rawNextAction) ? rawNextAction : ''
   return {
     ...(incompleteReason
       ? {
@@ -573,6 +575,7 @@ function incompleteCheckpointMetadata(stateJson) {
     ...(typeof final.manualRetryable === 'boolean'
       ? { manualRetryable: final.manualRetryable }
       : {}),
+    ...(nextAction ? { nextAction } : {}),
     ...(final.taskVerification && typeof final.taskVerification === 'object'
       ? { taskVerification: final.taskVerification }
       : {}),
@@ -588,7 +591,7 @@ function loadIncompleteCheckpointMetadata(db, { userId, sessionId, messages }) {
       && message.modelContext.error
       && typeof message.modelContext.error === 'object'
       && !Array.isArray(message.modelContext.error)
-      && ['incompleteReason', 'missingRequirements', 'retryable', 'manualRetryable', 'taskVerification']
+      && ['incompleteReason', 'missingRequirements', 'retryable', 'manualRetryable', 'nextAction', 'taskVerification']
         .some((field) => !Object.hasOwn(message.modelContext.error, field))
     ))
     .map((message) => String(message.modelContext.turnId || '').trim())
@@ -632,6 +635,7 @@ function withRecoveredIncompleteFailure(message, metadataByTurn) {
     'missingRequirements',
     'retryable',
     'manualRetryable',
+    'nextAction',
     'taskVerification',
   ]
   const additions = Object.fromEntries(fields
@@ -667,6 +671,7 @@ const SNAPSHOT_FAILURE_BOUNDARY_TYPES = new Set([
   'turn.failed',
   'turn.interrupted',
   'turn.blocked',
+  'turn.cancelled',
 ])
 
 function latestTurnBoundaries(db, { userId, sessionId, turnIds = null }) {
@@ -742,7 +747,9 @@ function eventFailure(payload, type) {
   return normalizeTurnFailure(source, {
     code: type === 'turn.interrupted'
       ? 'TURN_INTERRUPTED'
-      : type === 'turn.blocked' ? 'TURN_RECOVERY_BLOCKED' : 'TURN_FAILED',
+      : type === 'turn.blocked'
+        ? 'TURN_RECOVERY_BLOCKED'
+        : type === 'turn.cancelled' ? 'TURN_CANCELLED' : 'TURN_FAILED',
     retryable: type === 'turn.interrupted',
   })
 }

@@ -1,4 +1,5 @@
 import { normalizeModelUsage } from '../../shared/modelUsage.js'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 import {
   buildAssistantModelContext,
   extractRetainedLocalFiles,
@@ -67,7 +68,10 @@ const SETTLED_TURN_STATUS_BY_EVENT = Object.freeze({
 
 async function cancellingProjection(getTurn, scope) {
   const turn = await getTurn(scope)
-  const settledStatus = SETTLED_TURN_STATUS_BY_EVENT[turn?.lastEvent?.type]
+  const lastEvent = turn?.lastEvent
+  const settledStatus = lastEvent?.type === 'turn.completed'
+    ? (isSuccessfulTurnCompletedEvent(lastEvent) ? 'completed' : 'incomplete')
+    : SETTLED_TURN_STATUS_BY_EVENT[lastEvent?.type]
   return settledStatus ? { ...turn, status: settledStatus } : { ...turn, status: 'cancelling' }
 }
 

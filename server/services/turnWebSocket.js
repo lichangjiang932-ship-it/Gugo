@@ -79,6 +79,10 @@ function publicTurnFailureFrameFields(error) {
     ? evidence.missingRequirements
     : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
   const taskVerification = normalizeTaskVerificationDetails(evidence.taskVerification)
+  const rawNextAction = String(errorChain
+    .map((entry) => entry?.nextAction || entry?.error?.nextAction)
+    .find(Boolean) || '').trim().toLowerCase().slice(0, 80)
+  const nextAction = /^[a-z][a-z0-9_]{0,79}$/u.test(rawNextAction) ? rawNextAction : ''
   const verifiedLocalFiles = mergeLocalFileReceipts(evidence.verifiedLocalFiles).slice(0, 128)
   const retainedLocalFiles = excludeVerifiedLocalFiles(
     mergeLocalFileReceipts(evidence.retainedLocalFiles),
@@ -97,6 +101,7 @@ function publicTurnFailureFrameFields(error) {
       : {}),
     ...(typeof source.retryable === 'boolean' ? { retryable: source.retryable } : {}),
     ...(typeof source.manualRetryable === 'boolean' ? { manualRetryable: source.manualRetryable } : {}),
+    ...(nextAction ? { nextAction } : {}),
     ...(String(evidence.incompleteReason || '').trim()
       ? { incompleteReason: String(evidence.incompleteReason).trim() }
       : {}),

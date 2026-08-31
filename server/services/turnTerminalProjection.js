@@ -190,6 +190,8 @@ export function normalizeTurnFailure(error, {
   if (typeof error?.manualRetryable === 'boolean') {
     failure.manualRetryable = error.manualRetryable
   }
+  const rawNextAction = String(error?.nextAction || '').trim().toLowerCase().slice(0, 80)
+  if (/^[a-z][a-z0-9_]{0,79}$/u.test(rawNextAction)) failure.nextAction = rawNextAction
   const incompleteReason = error?.incompleteReason
     ? normalizeIncompleteReason(error.incompleteReason)
     : ''

@@ -267,7 +267,10 @@ function turnEvidenceMeta(message) {
   const persistedFailure = context.error && typeof context.error === 'object' ? context.error : null
   const failure = persistedFailure ? { ...persistedFailure } : null
   if (failure) {
-    for (const key of ['reason', 'incompleteReason', 'nextAction']) {
+    // Persisted legacy snapshots may contain server-authored/localized copy.
+    // Keep only stable diagnostic codes in client state.
+    delete failure.reason
+    for (const key of ['incompleteReason', 'nextAction']) {
       const value = String(context[key] || '').trim()
       if (value) failure[key] = value
     }

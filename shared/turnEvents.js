@@ -59,6 +59,8 @@ const toolFailureSchema = z.object({
   hint: z.string().optional(),
   attempts: z.number().int().positive().optional(),
 }).strict()
+const terminalReasonSchema = z.string().min(1).max(2_000)
+const terminalNextActionSchema = z.string().min(1).max(80).regex(/^[a-z][a-z0-9_]{0,79}$/u)
 const taskVerificationCheckSchema = z.object({
   status: z.enum(['failed', 'indeterminate', 'rerun_required', 'stale']),
   kind: z.enum(['test', 'lint', 'build', 'check', 'typecheck']),
@@ -82,6 +84,8 @@ const turnFailureSchema = toolFailureSchema.extend({
   // optional solely so clients can replay events written by older runtimes.
   message: z.string().min(1).optional(),
   hint: z.string().optional(),
+  reason: terminalReasonSchema.optional(),
+  nextAction: terminalNextActionSchema.optional(),
   manualRetryable: z.boolean().optional(),
   incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
   missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
@@ -258,12 +262,15 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     code: z.string().min(1),
     // Legacy runtimes included localized copy here. New runtimes send code.
     message: z.string().min(1).optional(),
+    reason: terminalReasonSchema.optional(),
+    nextAction: terminalNextActionSchema.optional(),
     error: turnFailureSchema.optional(),
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
     taskVerification: taskVerificationSchema.optional(),
     retryable: z.boolean(),
     text: z.string().optional(),
+    partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
@@ -277,6 +284,8 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     code: z.string().min(1),
     // Kept for backwards-compatible event replay only.
     message: z.string().min(1).optional(),
+    reason: terminalReasonSchema.optional(),
+    nextAction: terminalNextActionSchema.optional(),
     error: turnFailureSchema.optional(),
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
@@ -347,6 +356,10 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   'turn.paused': z.object({
     text: z.string(),
     clarification: z.union([jsonRecord, z.string().min(1)]),
+    reason: terminalReasonSchema.optional(),
+    nextAction: terminalNextActionSchema.optional(),
+    incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
+    missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
@@ -384,6 +397,9 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     // replace server-authored copy with the stable cancellation code.
     code: z.string().optional(),
     reason: z.string().optional(),
+    nextAction: terminalNextActionSchema.optional(),
+    incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
+    missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
     partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
@@ -398,6 +414,8 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     // Keep the legacy top-level fields so older clients can still render the failure.
     code: z.string().optional(),
     message: z.string().optional(),
+    reason: terminalReasonSchema.optional(),
+    nextAction: terminalNextActionSchema.optional(),
     error: turnFailureSchema.optional(),
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),

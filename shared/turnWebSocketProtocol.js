@@ -112,6 +112,7 @@ export const TURN_WEBSOCKET_SERVER_FRAME_SCHEMA = z.discriminatedUnion('type', [
     action: z.enum(['retry', 'restart_runtime']).optional(),
     retryable: z.boolean().optional(),
     manualRetryable: z.boolean().optional(),
+    nextAction: z.string().min(1).max(80).regex(/^[a-z][a-z0-9_]{0,79}$/u).optional(),
     incompleteReason: z.string().optional(),
     missingRequirements: z.array(z.string()).max(16).optional(),
     taskVerification: jsonRecordSchema.optional(),

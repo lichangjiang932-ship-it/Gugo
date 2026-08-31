@@ -2,7 +2,12 @@ import { dispatchHooks } from './hooksService.js'
 import { createNotification } from './notificationsStore.js'
 import { getDb } from '../db.js'
 import { appendJobEvent, getJobWithChildren } from './jobStore.js'
-import { buildFinalOutput, buildJobOutcomeDiagnostics } from './jobWorkflow.js'
+import {
+  buildFinalOutput,
+  buildJobOutcomeDiagnostics,
+  mergeJobEvidence,
+  mergePersistedJobOutcomeFields,
+} from './jobWorkflow.js'
 
 const RECOVERABLE_JOB_STATUSES = new Set(['planning', 'running'])
 const TERMINAL_LIST_FIELDS = Object.freeze([
@@ -23,15 +28,21 @@ function mergeTerminalPayload(authoritative, supplied) {
   const extra = supplied && typeof supplied === 'object' && !Array.isArray(supplied)
     ? supplied
     : {}
-  const merged = { ...base, ...extra }
+  const merged = { ...base }
+  for (const [field, value] of Object.entries(extra)) {
+    const empty = value == null
+      || (typeof value === 'string' && !value.trim())
+      || (Array.isArray(value) && value.length === 0)
+      || (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0)
+    if (!empty || !Object.hasOwn(base, field)) merged[field] = value
+  }
   for (const field of TERMINAL_LIST_FIELDS) {
-    if (Array.isArray(extra[field]) && extra[field].length > 0) continue
-    if (Array.isArray(base[field])) merged[field] = base[field]
+    const values = mergeJobEvidence(base[field], extra[field])
+    if (values.length > 0 || Array.isArray(base[field]) || Array.isArray(extra[field])) {
+      merged[field] = values
+    }
   }
-  if ((!extra.taskVerification || typeof extra.taskVerification !== 'object')
-    && base.taskVerification && typeof base.taskVerification === 'object') {
-    merged.taskVerification = base.taskVerification
-  }
+  Object.assign(merged, mergePersistedJobOutcomeFields(base, extra))
   return merged
 }
 

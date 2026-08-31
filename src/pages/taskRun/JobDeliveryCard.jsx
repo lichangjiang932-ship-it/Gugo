@@ -44,6 +44,16 @@ function hasDeliveryFields(value) {
   return !!output && DELIVERY_FIELDS.some((field) => Object.hasOwn(output, field))
 }
 
+function selectDeliveryFields(value) {
+  const source = record(value)
+  if (!source) return null
+  const selected = {}
+  for (const field of DELIVERY_FIELDS) {
+    if (Object.hasOwn(source, field)) selected[field] = source[field]
+  }
+  return Object.keys(selected).length > 0 ? selected : null
+}
+
 function hasMeaningfulDeliveryValue(value) {
   if (value == null) return false
   if (typeof value === 'string') return value.trim().length > 0
@@ -86,13 +96,29 @@ function mergeTaskVerification(current, incoming) {
   return merged
 }
 
-function mergeDeliverySources(sources) {
+function mergeDeliverySources(sources, authoritativeSource = null) {
   const merged = {}
   for (const source of sources) {
+    const authoritative = source === authoritativeSource
     for (const [field, value] of Object.entries(source)) {
+      if (authoritative) {
+        if (MERGED_DIAGNOSTIC_LIST_FIELDS.has(field) && Array.isArray(value)) {
+          merged[field] = mergeDiagnosticLists([], value)
+          continue
+        }
+        if (field === 'taskVerification') {
+          if (record(value)) merged.taskVerification = { ...value }
+          else delete merged.taskVerification
+          continue
+        }
+        if (!hasMeaningfulDeliveryValue(value)) {
+          delete merged[field]
+          continue
+        }
+      }
       if (!hasMeaningfulDeliveryValue(value)) continue
       if (field === 'complete' && typeof value === 'boolean') {
-        if (value === false || merged.complete !== false) merged.complete = value
+        merged.complete = value
         continue
       }
       if (MERGED_DIAGNOSTIC_LIST_FIELDS.has(field) && Array.isArray(value)) {
@@ -113,21 +139,31 @@ export function resolveCanonicalJobDelivery(job) {
   if (!job || !TERMINAL_JOB_STATUSES.has(job.status)) return null
   const steps = Array.isArray(job.steps) ? job.steps : []
   const events = Array.isArray(job.events) ? job.events : []
+  const persistedStatus = TERMINAL_JOB_STATUSES.has(job.persistedStatus)
+    ? job.persistedStatus
+    : job.status
   const finalOutput = record([...steps].reverse().find((step) => (
     step?.kind === 'finalize' && hasDeliveryFields(step.output)
   ))?.output)
   const terminalPayload = record([...events].reverse().find((event) => (
-    event?.type === job.status && hasDeliveryFields(event.payload)
+    event?.type === persistedStatus && hasDeliveryFields(event.payload)
   ))?.payload)
+  const projectedDelivery = selectDeliveryFields(job)
   const diagnosticOutputs = steps
     .filter((step) => hasDeliveryFields(step?.output))
     .map((step) => record(step.output))
     .filter(Boolean)
   // Step outputs are chronological evidence; the terminal event is the newest
   // authoritative projection and must not be overwritten by a stale finalize
-  // payload. Diagnostic lists remain cumulative across every source.
-  const sources = [...diagnosticOutputs, finalOutput, terminalPayload].filter(Boolean)
-  return mergeDeliverySources(sources)
+  // payload. Its explicit empty diagnostic lists clear evidence from an older
+  // attempt, while omitted fields still fall back to durable step output.
+  const sources = [
+    ...diagnosticOutputs,
+    finalOutput,
+    terminalPayload,
+    projectedDelivery,
+  ].filter(Boolean)
+  return mergeDeliverySources(sources, projectedDelivery || terminalPayload || finalOutput)
 }
 
 function normalizedList(values) {

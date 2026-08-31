@@ -10,7 +10,7 @@ import { findAuthorizedDirectoryGrant } from './localFileAccessService.js'
 import { mergeDirectoryAuthorizationResolutions } from './turnResolutionRuntime.js'
 import {
   clearResumedJobOutcomeDiagnostics,
-  persistedJobOutcomeFields,
+  mergePersistedJobOutcomeFields,
 } from './jobWorkflow.js'
 
 const JOB_DIRECTORY_RESOLUTION_MARKER = '[JOB_DIRECTORY_RESOLUTION:'
@@ -205,8 +205,10 @@ export function resumeJobDirectoryAuthorization({
         type: 'directory_authorization_resumed',
         message: 'Directory authorization verified; the suspended task has been requeued',
         payload: {
-          ...persistedJobOutcomeFields(latestSuspension.payload),
-          ...persistedJobOutcomeFields(parseJson(currentStep.output_json)),
+          ...mergePersistedJobOutcomeFields(
+            latestSuspension.payload,
+            parseJson(currentStep.output_json),
+          ),
           path: submittedPath,
           accessMode: submittedMode,
           grantId: grant.id,

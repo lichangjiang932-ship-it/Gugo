@@ -126,6 +126,7 @@ export default function MessageRow({
     && isModelRequestOutcomeUnknownRecoveryKind(msg.meta?.serverRecoveryKind)
     && msg.meta?.serverConnectionState === 'blocked'
   const isIncompleteTerminal = msg.meta?.failed === true
+    || msg.meta?.cancelled === true
     || (msg.meta?.interrupted === true && msg.meta?.streaming !== true)
     || msg.meta?.serverConnectionState === 'blocked'
   const showIncompleteTaskNotice = msg.role === 'assistant'

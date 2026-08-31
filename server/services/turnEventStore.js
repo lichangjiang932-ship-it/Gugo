@@ -5,7 +5,10 @@ import {
   createTurnEventTransportEnvelope,
   parseTurnEvent,
 } from '../../shared/turnEvents.js'
-import { projectTurnEventForClient } from '../../shared/turnEventProjection.js'
+import {
+  isSuccessfulTurnCompletedEvent,
+  projectTurnEventForClient,
+} from '../../shared/turnEventProjection.js'
 import { publishAgentEventEnvelope } from '../core/agentEventConsumerRuntime.js'
 import { saveTurnCheckpoint } from './turnCheckpointStore.js'
 import { failureAllowsFailedRetry } from './turnFailedRetryPolicy.js'
@@ -82,6 +85,14 @@ function failureAllowsAttempt(payloadJson, attemptPayload) {
   try {
     return failureAllowsFailedRetry(JSON.parse(payloadJson), attemptPayload)
   } catch { return false }
+}
+
+function turnCompletionInvalid() {
+  return Object.assign(new Error('turn.completed payload contains incomplete terminal evidence'), {
+    code: 'TURN_COMPLETION_INVALID',
+    status: 409,
+    retryable: false,
+  })
 }
 
 function canonicalCheckpointState(value) {
@@ -293,6 +304,9 @@ function maybePruneTurnEvents(now = Date.now()) {
 function normalizeAppendEntry({ userId, event, checkpointState = null } = {}) {
   if (!userId) throw new Error('user id is required')
   const value = parseTurnEvent(event)
+  if (value.type === 'turn.completed' && !isSuccessfulTurnCompletedEvent(value)) {
+    throw turnCompletionInvalid()
+  }
   if ((value.sequence === 0) !== (value.type === 'turn.started')) {
     throw turnEventSequenceInvalid()
   }

@@ -2,6 +2,7 @@ import {
   findEventPersistenceFailure,
   TURN_TERMINAL_PERSISTENCE_FAILURE_CODE,
 } from './turnEventEmitter.js'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 import {
   isExplicitTurnCancellation,
   isManualRecoveryBlock,
@@ -154,6 +155,16 @@ export function createTurnTerminalOutcomeRuntime({
       }))
       await recordCanaryTerminal('cancelled', null, cancelledAt, partialText)
       return
+    }
+
+    if (!result?.incomplete && !result?.interrupted && !result?.paused
+      && !isSuccessfulTurnCompletedEvent({ type: 'turn.completed', payload: result })) {
+      result = {
+        ...(result && typeof result === 'object' && !Array.isArray(result) ? result : {}),
+        incomplete: true,
+        partialText: result?.partialText || result?.text || '',
+        reason: result?.incompleteReason || result?.reason || 'turn_incomplete',
+      }
     }
 
     if (result?.interrupted) {
@@ -366,6 +377,23 @@ export function createTurnTerminalOutcomeRuntime({
     const completedAt = ports.now()
     const verifiedLocalFiles = evidence.verifiedLocalFilesAt(completedAt)
     const retainedLocalFiles = evidence.retainedLocalFilesAt(completedAt, verifiedLocalFiles)
+    if (retainedLocalFiles.length > 0) {
+      return settleResult({
+        scope,
+        signal,
+        result: {
+          ...result,
+          incomplete: true,
+          partialText: text,
+          code: 'TURN_INCOMPLETE',
+          incompleteReason: 'post_mutation_verification_missing',
+          missingRequirements: ['mutation_readback', 'diff_or_project_check'],
+        },
+        state,
+        evidence,
+        recordCanaryTerminal,
+      })
+    }
     const iterations = result?.iterations || 0
     const completedMessage = createCompletedTurnMessage({
       userId,

@@ -63,6 +63,7 @@ function inheritTurnFailureContext(target, source) {
     'manualRetryable',
     'retryAfter',
     'incompleteReason',
+    'nextAction',
     'missingRequirements',
     'taskVerification',
     'attempts',

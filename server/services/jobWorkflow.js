@@ -664,6 +664,79 @@ export function persistedJobOutcomeFields(output) {
   }
 }
 
+const PERSISTED_JOB_OUTCOME_LIST_FIELDS = new Set([
+  'missingRequirements',
+  'verifiedLocalFiles',
+  'retainedLocalFiles',
+  'artifactIds',
+  'completedDeliverables',
+  'missingDeliverables',
+  'issues',
+])
+
+function mergeTaskVerificationDetails(current, incoming) {
+  const previous = current && typeof current === 'object' && !Array.isArray(current)
+    ? current
+    : {}
+  const next = incoming && typeof incoming === 'object' && !Array.isArray(incoming)
+    ? incoming
+    : null
+  if (!next || Object.keys(next).length === 0) {
+    return Object.keys(previous).length > 0 ? previous : null
+  }
+  const merged = { ...previous }
+  for (const [field, value] of Object.entries(next)) {
+    if (Array.isArray(value)) {
+      if (value.length > 0 || !Array.isArray(previous[field])) {
+        merged[field] = mergeJobEvidence(previous[field], value)
+      }
+      continue
+    }
+    if (value && typeof value === 'object') {
+      if (Object.keys(value).length > 0) merged[field] = value
+      continue
+    }
+    if (value !== undefined && value !== null && value !== '') merged[field] = value
+  }
+  return Object.keys(merged).length > 0 ? merged : null
+}
+
+/**
+ * Merge durable outcome snapshots without allowing a later sparse/empty
+ * projection to erase diagnostics already written by an earlier boundary.
+ */
+export function mergePersistedJobOutcomeFields(...outputs) {
+  const merged = {}
+  const observedLists = new Set()
+  for (const output of outputs) {
+    const fields = persistedJobOutcomeFields(output)
+    for (const [field, value] of Object.entries(fields)) {
+      if (PERSISTED_JOB_OUTCOME_LIST_FIELDS.has(field) && Array.isArray(value)) {
+        observedLists.add(field)
+        if (value.length > 0) merged[field] = mergeJobEvidence(merged[field], value)
+        continue
+      }
+      if (field === 'taskVerification') {
+        const taskVerification = mergeTaskVerificationDetails(merged.taskVerification, value)
+        if (taskVerification) merged.taskVerification = taskVerification
+        continue
+      }
+      if (value && typeof value === 'object') {
+        if (Object.keys(value).length > 0) merged[field] = value
+        continue
+      }
+      if (value !== undefined && value !== null && value !== '') merged[field] = value
+    }
+  }
+  for (const field of observedLists) {
+    if (!Array.isArray(merged[field])) merged[field] = []
+  }
+  const localFiles = normalizeJobLocalFileReceipts(merged)
+  if (observedLists.has('verifiedLocalFiles')) merged.verifiedLocalFiles = localFiles.verifiedLocalFiles
+  if (observedLists.has('retainedLocalFiles')) merged.retainedLocalFiles = localFiles.retainedLocalFiles
+  return merged
+}
+
 export function clearResumedJobOutcomeDiagnostics(output) {
   if (!output || typeof output !== 'object' || Array.isArray(output)) return output
   const resumed = { ...output }
@@ -732,6 +805,9 @@ export function buildJobOutcomeDiagnostics(job, {
   status = 'failed',
 } = {}) {
   const delivery = buildFinalOutput(job)
+  const persistedDiagnostics = mergePersistedJobOutcomeFields(
+    ...(Array.isArray(job?.steps) ? job.steps : []).map((step) => step?.output),
+  )
   const carriedDiagnostics = {}
   const carryFields = [
     'incompleteReason',
@@ -742,25 +818,14 @@ export function buildJobOutcomeDiagnostics(job, {
     'retryable',
     'manualRetryable',
   ]
-  const listFields = new Set([
-    'missingRequirements',
-    'verifiedLocalFiles',
-    'retainedLocalFiles',
-  ])
-  for (const step of Array.isArray(job?.steps) ? job.steps : []) {
-    const fields = persistedJobOutcomeFields(step?.output)
-    for (const field of carryFields) {
-      const value = fields[field]
-      const meaningful = Array.isArray(value)
-        ? value.length > 0
-        : value && typeof value === 'object'
-          ? Object.keys(value).length > 0
-          : value !== undefined && value !== null && value !== ''
-      if (!meaningful) continue
-      carriedDiagnostics[field] = listFields.has(field)
-        ? mergeJobEvidence(carriedDiagnostics[field], value)
-        : value
-    }
+  for (const field of carryFields) {
+    const value = persistedDiagnostics[field]
+    const meaningful = Array.isArray(value)
+      ? value.length > 0
+      : value && typeof value === 'object'
+        ? Object.keys(value).length > 0
+        : value !== undefined && value !== null && value !== ''
+    if (meaningful) carriedDiagnostics[field] = value
   }
   const localFiles = normalizeJobLocalFileReceipts({
     verifiedLocalFiles: carriedDiagnostics.verifiedLocalFiles,

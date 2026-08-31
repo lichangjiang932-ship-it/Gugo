@@ -51,6 +51,7 @@ function inferredIncompleteReason(failure) {
   const code = String(failure?.code || '').trim().toUpperCase()
   if (!code || GENERIC_TURN_FAILURE_CODES.has(code)) return 'turn_incomplete'
   if (code === 'REASONING_RUNAWAY') return 'reasoning_runaway'
+  if (code === 'TURN_COMPLETION_INVALID') return 'post_mutation_verification_missing'
   if (/^(?:REPEATED_TOOL_CALL|TOOL_NO_PROGRESS)/u.test(code)) return 'tool_no_progress'
   if (/^(?:MODEL_|TURN_MODEL_)/u.test(code)) return 'model_call_interrupted'
   if (/(?:PERSISTENCE|CHECKPOINT|RECOVERY|LEASE|CONTEXT_DRIFT|EVENT_SEQUENCE)/u.test(code)) {
