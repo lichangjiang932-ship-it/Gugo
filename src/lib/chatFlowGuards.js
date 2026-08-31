@@ -50,6 +50,7 @@ const RUNTIME_INTERRUPTION_FAILURE_CODES = new Set([
 ])
 
 const PERMANENT_FAILED_RETRY_REJECTION_CODES = new Set([
+  'TURN_FAILED_RETRY_NOT_ALLOWED',
   'TURN_FAILED_RETRY_LIMIT_REACHED',
   'TURN_FAILED_RETRY_UNSUPPORTED',
   'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
@@ -76,6 +77,7 @@ const STRUCTURED_EXECUTION_FAILURE_KEYS = new Map([
   ['TURN_CHECKPOINT_PERSISTENCE_FAILED', 'errors.turnCheckpointFailure'],
   ['TURN_EVENT_PERSISTENCE_FAILED', 'errors.turnPersistenceFailure'],
   ['TURN_TERMINAL_PERSISTENCE_FAILED', 'errors.turnPersistenceFailure'],
+  ['TURN_FAILED_RETRY_NOT_ALLOWED', 'errors.turnFailedRetryNotAllowed'],
   ['TURN_FAILED_RETRY_LIMIT_REACHED', 'errors.turnRetryLimitReached'],
   ['TURN_FAILED_RETRY_UNSUPPORTED', 'errors.turnFailedRetryUnsupported'],
   ['TURN_FAILED_RETRY_CHECKPOINT_REQUIRED', 'errors.turnFailedRetryCheckpointRequired'],

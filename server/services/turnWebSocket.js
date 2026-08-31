@@ -21,6 +21,15 @@ import {
 } from '../../shared/turnEvents.js'
 import { isHttpServerDraining } from '../core/httpServerDrain.js'
 import { runtimeNotReadyMessage } from '../core/runtimeReadiness.js'
+import {
+  normalizeArtifactIds,
+  normalizeTaskVerificationDetails,
+  publicIncompleteText,
+} from './turnTerminalProjection.js'
+import {
+  excludeVerifiedLocalFiles,
+  mergeLocalFileReceipts,
+} from './turnRecoveryProjection.js'
 
 const VALID_DECISIONS = new Set(['approve', 'deny', 'edit'])
 const CROSS_PROCESS_POLL_MS = 1_000
@@ -30,6 +39,68 @@ const MAX_SUBSCRIPTIONS_PER_SOCKET = 32
 const MAX_SOCKET_BUFFERED_BYTES = 1024 * 1024
 const MESSAGE_RATE_CAPACITY = 64
 const MESSAGE_RATE_REFILL_PER_SECOND = 32
+
+function publicTurnFailureFrameFields(error) {
+  const source = error && typeof error === 'object' ? error : {}
+  const explicitStatus = Number(source.status ?? source.statusCode)
+  const recovery = source.recovery && typeof source.recovery === 'object' && !Array.isArray(source.recovery)
+    ? {
+        status: String(source.recovery.status || 'dead_letter'),
+        retryable: source.recovery.retryable === true,
+        manualRetryable: source.recovery.manualRetryable === true
+          || source.recovery.status === 'dead_letter',
+        ...(Number.isInteger(source.recovery.attemptCount)
+          ? { attemptCount: source.recovery.attemptCount }
+          : {}),
+        error: {
+          code: String(source.recovery.error?.code
+            || source.recovery.errorCode
+            || source.code
+            || 'TURN_RECOVERY_BLOCKED'),
+          message: String(source.recovery.error?.message
+            || source.recovery.errorMessage
+            || source.message
+            || 'turn recovery is blocked'),
+        },
+      }
+    : null
+  const missingRequirements = [...new Set((Array.isArray(source.missingRequirements)
+    ? source.missingRequirements
+    : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
+  const taskVerification = normalizeTaskVerificationDetails(source.taskVerification)
+  const verifiedLocalFiles = mergeLocalFileReceipts(source.verifiedLocalFiles).slice(0, 128)
+  const retainedLocalFiles = excludeVerifiedLocalFiles(
+    mergeLocalFileReceipts(source.retainedLocalFiles),
+    verifiedLocalFiles,
+  ).slice(0, 128)
+  const iterations = Number(source.iterations)
+  return {
+    ...(Number.isInteger(explicitStatus) && explicitStatus >= 100 && explicitStatus <= 599
+      ? { status: explicitStatus }
+      : {}),
+    ...(typeof source.retryable === 'boolean' ? { retryable: source.retryable } : {}),
+    ...(typeof source.manualRetryable === 'boolean' ? { manualRetryable: source.manualRetryable } : {}),
+    ...(String(source.incompleteReason || '').trim()
+      ? { incompleteReason: String(source.incompleteReason).trim() }
+      : {}),
+    ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
+    ...(taskVerification ? { taskVerification } : {}),
+    ...(Number.isInteger(source.attempts) && source.attempts > 0 ? { attempts: source.attempts } : {}),
+    ...(recovery ? { recovery } : {}),
+    ...(Object.hasOwn(source, 'partialText')
+      ? { partialText: publicIncompleteText(source.partialText, '') }
+      : {}),
+    ...(Object.hasOwn(source, 'artifactIds')
+      ? { artifactIds: normalizeArtifactIds(source.artifactIds).slice(0, 64) }
+      : {}),
+    ...(Object.hasOwn(source, 'deliveryArtifactIds')
+      ? { deliveryArtifactIds: normalizeArtifactIds(source.deliveryArtifactIds).slice(0, 64) }
+      : {}),
+    ...(Object.hasOwn(source, 'verifiedLocalFiles') ? { verifiedLocalFiles } : {}),
+    ...(Object.hasOwn(source, 'retainedLocalFiles') ? { retainedLocalFiles } : {}),
+    ...(Number.isInteger(iterations) && iterations >= 0 ? { iterations } : {}),
+  }
+}
 
 function closeSocket(socket, code, reason) {
   if (![socket.OPEN, socket.CONNECTING].includes(socket.readyState)) return
@@ -424,6 +495,7 @@ export function attachTurnWebSocketServer(server, {
           code: error?.code || fallbackCode,
           message: error?.message || fallbackMessage,
         }),
+        ...publicTurnFailureFrameFields(error),
         sessionId: subscription.sessionId,
         turnId: subscription.turnId,
       })
@@ -518,7 +590,11 @@ export function attachTurnWebSocketServer(server, {
           const hostUnavailable = describeTurnEngineHostUnavailableError(error)
           sendFrame({
             type: 'error',
-            ...(hostUnavailable?.error || { code: 'TURN_SUBSCRIBE_FAILED' }),
+            ...(hostUnavailable?.error || {
+              code: error?.code || 'TURN_SUBSCRIBE_FAILED',
+              message: error?.message || 'Turn subscription failed',
+            }),
+            ...publicTurnFailureFrameFields(error),
             sessionId,
             turnId,
           })

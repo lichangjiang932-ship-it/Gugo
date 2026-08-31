@@ -552,6 +552,9 @@ export function approveJobPlan({
       mode: previousMode,
       edited: edited === true,
       stepCount,
+      reason: 'plan_approved',
+      nextAction: 'resume_execution',
+      resolvesEventId: expectedProposalId,
     }
     const info = db.prepare(`
       INSERT INTO job_events (job_id, step_id, type, message, payload_json, created_at)

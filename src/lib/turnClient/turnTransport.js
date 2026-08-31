@@ -61,8 +61,12 @@ export async function parseResponse(response) {
       'retainedLocalFiles',
       'iterations',
     ]) {
-      if (body?.error?.[field] !== undefined) error[field] = body.error[field]
+      if (body?.[field] !== undefined) error[field] = body[field]
+      else if (body?.error?.[field] !== undefined) error[field] = body.error[field]
     }
+    error.serverFailure = body?.error && typeof body.error === 'object'
+      ? { ...body.error }
+      : { code: error.code, message: error.message, status: error.status }
     const retryAfter = response.headers?.get?.('retry-after')
     if (retryAfter !== undefined && retryAfter !== null) error.retryAfter = retryAfter
     throw error
@@ -350,7 +354,25 @@ export function streamServerTurnEventsWebSocket({
       if (frame.type === 'error') {
         const error = new Error(frame.message || 'WebSocket turn subscription failed')
         error.code = String(frame.code || 'TURN_WEBSOCKET_ERROR')
-        error.action = frame.action
+        for (const field of [
+          'action',
+          'status',
+          'retryable',
+          'manualRetryable',
+          'incompleteReason',
+          'missingRequirements',
+          'taskVerification',
+          'attempts',
+          'recovery',
+          'partialText',
+          'artifactIds',
+          'deliveryArtifactIds',
+          'verifiedLocalFiles',
+          'retainedLocalFiles',
+          'iterations',
+        ]) {
+          if (frame[field] !== undefined) error[field] = frame[field]
+        }
         finishAfterPendingEvents(error)
         return
       }

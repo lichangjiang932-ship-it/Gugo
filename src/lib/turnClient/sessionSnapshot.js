@@ -356,11 +356,18 @@ function pausedTurnMeta(message) {
     : {}
   if (context.paused !== true) return {}
 
-  const clarification = context.clarification
-    && typeof context.clarification === 'object'
-    && !Array.isArray(context.clarification)
-    ? { ...context.clarification }
-    : null
+  const rawClarification = context.clarification
+  const clarification = rawClarification
+    && typeof rawClarification === 'object'
+    && !Array.isArray(rawClarification)
+    ? { ...rawClarification }
+    : typeof rawClarification === 'string' && rawClarification.trim()
+      ? {
+          question: rawClarification.trim(),
+          reason_code: 'clarification_required',
+          blocker_kind: 'missing_info',
+        }
+      : null
   const pausedSequence = Number(context.pausedSequence ?? context.paused_sequence)
 
   return {
@@ -607,6 +614,7 @@ export async function fetchServerSessionSnapshot({
   for (let attempt = 0; attempt < safeAttempts; attempt += 1) {
     let offset = 0
     let revision = null
+    let turnEventRevision = null
     let totalMessages = null
     let firstPage = null
     const messages = []
@@ -624,9 +632,13 @@ export async function fetchServerSessionSnapshot({
 
       if (revision === null) {
         revision = page.revision
+        turnEventRevision = Number.isInteger(page.turnEventRevision)
+          ? page.turnEventRevision
+          : null
         totalMessages = Number.isInteger(page.totalMessages) ? page.totalMessages : null
         firstPage = page
       } else if (page.revision !== revision
+        || (turnEventRevision !== null && page.turnEventRevision !== turnEventRevision)
         || (Number.isInteger(page.totalMessages) && totalMessages !== page.totalMessages)) {
         break
       }
@@ -645,6 +657,7 @@ export async function fetchServerSessionSnapshot({
           session: firstPage.session || page.session,
           messages,
           revision,
+          ...(turnEventRevision !== null ? { turnEventRevision } : {}),
           totalMessages: totalMessages ?? messages.length,
           offset: 0,
           nextOffset: null,

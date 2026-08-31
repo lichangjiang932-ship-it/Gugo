@@ -299,7 +299,11 @@ export function createTurnTerminalOutcomeRuntime({
               : {}),
           }
         : typeof result.clarification === 'string' && result.clarification.trim()
-          ? result.clarification
+          ? {
+              question: result.clarification.trim(),
+              reason_code: 'clarification_required',
+              blocker_kind: 'missing_info',
+            }
           : { reason_code: 'clarification_required', blocker_kind: 'missing_info' }
       const artifactIds = normalizeArtifactIds(result.artifactIds ?? state.checkpointArtifactIds)
       const deliveryArtifactIds = []

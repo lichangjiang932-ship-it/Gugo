@@ -328,7 +328,24 @@ export function completeManualJobTransition({ jobId, userId, updated }) {
   let diagnostics = null
   let finalOutput = null
   if (completed) {
-    finalOutput = buildFinalOutput(getJobWithChildren(jobId, { userId }))
+    const snapshot = getJobWithChildren(jobId, { userId })
+    finalOutput = buildFinalOutput(snapshot)
+    const finalStep = [...(snapshot?.steps || [])].reverse().find((step) => step.kind === 'finalize')
+    if (finalStep) {
+      const priorOutput = finalStep.output && typeof finalStep.output === 'object' && !Array.isArray(finalStep.output)
+        ? finalStep.output
+        : {}
+      const finalEvidence = Array.isArray(finalOutput.evidence) && finalOutput.evidence.length > 0
+        ? finalOutput.evidence
+        : priorOutput.evidence
+      updateJobStep(finalStep.id, {
+        output: {
+          ...priorOutput,
+          ...finalOutput,
+          ...(Array.isArray(finalEvidence) ? { evidence: finalEvidence } : {}),
+        },
+      })
+    }
   }
   if (!completed) {
     const snapshot = getJobWithChildren(jobId, { userId })

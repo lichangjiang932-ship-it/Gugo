@@ -7,7 +7,7 @@ import { useT } from '../i18n/I18nProvider.jsx'
 import TaskRunHeader from './taskRun/TaskRunHeader.jsx'
 import TaskListSidebar from './taskRun/TaskListSidebar.jsx'
 import JobOverviewCard from './taskRun/JobOverviewCard.jsx'
-import JobDeliveryCard from './taskRun/JobDeliveryCard.jsx'
+import JobDeliveryCard, { resolveCanonicalJobDelivery } from './taskRun/JobDeliveryCard.jsx'
 import JobProgressPanels from './taskRun/JobProgressPanels.jsx'
 import useTaskRunController from './taskRun/useTaskRunController.js'
 import { FILTER_KEYS, STATUS_KEYS } from './taskRun/taskRunUtils.js'
@@ -27,10 +27,10 @@ export default function TaskRunPanel() {
   const controller = useTaskRunController({ linkedJobId, t, toast })
   const filters = FILTER_KEYS.map((key) => ({ key, label: t(`taskCenter.filters.${key}`) }))
   const statusLabel = (status) => STATUS_KEYS.has(status) ? t(`taskCenter.statuses.${status}`) : status
-  const finalStep = controller.selectedJob?.steps?.find((step) => step.kind === 'finalize' && step.status === 'completed')
+  const delivery = resolveCanonicalJobDelivery(controller.selectedJob)
   const verifyStep = controller.selectedJob?.steps?.find((step) => step.kind === 'verify')
-  const evidence = Array.isArray(finalStep?.output?.evidence)
-    ? finalStep.output.evidence
+  const evidence = Array.isArray(delivery?.evidence)
+    ? delivery.evidence
     : Array.isArray(verifyStep?.output?.evidence) ? verifyStep.output.evidence : []
   const returnJobId = controller.selectedJobId || linkedJobId
   const taskReturnTo = normalizeSettingsReturnTo(returnJobId
@@ -81,7 +81,7 @@ export default function TaskRunPanel() {
                   onOpenModelRecovery={openModelRecovery}
                   t={t}
                 />
-                <JobDeliveryCard finalStep={finalStep} evidence={evidence} t={t} />
+                <JobDeliveryCard delivery={delivery} jobStatus={controller.selectedJob.status} evidence={evidence} t={t} />
                 <JobProgressPanels job={controller.selectedJob} selectedArtifact={controller.selectedArtifact} setSelectedArtifact={controller.setSelectedArtifact} statusLabel={statusLabel} onRetryStep={controller.handleRetryStep} t={t} />
               </div>
             )}

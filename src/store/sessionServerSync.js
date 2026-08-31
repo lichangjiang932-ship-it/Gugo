@@ -336,6 +336,31 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
           if (serverPauseSequence !== null) {
             merged.meta.serverLastSequence = serverPauseSequence
           }
+        } else if (!localHasNewerTurnState
+          && !recoveryStub
+          && serverMeta.serverAuthoritative === true
+          && serverMeta.streaming !== true) {
+          // A canonical completed assistant row must clear every lifecycle bit
+          // inherited from an older local failure/pause/interruption. Without
+          // this branch the final text can be complete while the UI still
+          // renders the task as unfinished.
+          merged.meta.failed = false
+          merged.meta.cancelled = false
+          merged.meta.interrupted = false
+          merged.meta.paused = false
+          merged.meta.streaming = false
+          merged.meta.serverConnectionState = null
+          merged.meta.serverRecoveryBlocked = false
+          merged.meta.serverClarification = null
+          merged.meta.directoryAuthorizationPending = false
+          merged.meta.serverResumeResolution = null
+          for (const key of recoveryMetaKeys) merged.meta[key] = null
+          if (!Object.hasOwn(serverMeta, 'serverPartialText')) {
+            delete merged.meta.serverPartialText
+          }
+          if (serverPauseSequence !== null) {
+            merged.meta.serverLastSequence = serverPauseSequence
+          }
         }
       }
     }

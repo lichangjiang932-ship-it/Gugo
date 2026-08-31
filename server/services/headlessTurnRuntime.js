@@ -237,6 +237,9 @@ export async function runHeadlessTurn({
     || await (dependencies.getEngine || getTurnEngine)()
   const startTurn = requireFunction(engine, 'startTurn', 'headless TurnEngine')
   const recoverTurn = requireFunction(engine, 'recoverTurn', 'headless TurnEngine')
+  const resumeTurn = typeof engine?.resumeTurn === 'function'
+    ? engine.resumeTurn.bind(engine)
+    : null
   const waitForTurn = requireFunction(engine, 'waitForTurn', 'headless TurnEngine')
   const cancelTurn = signal
     ? requireFunction(engine, 'cancelTurn', 'headless TurnEngine')
@@ -365,7 +368,14 @@ export async function runHeadlessTurn({
       // A recovered checkpoint may already be waiting on an approval. Resolve
       // replayed approval events before the loop re-enters its durable waiter.
       await Promise.all([...pendingApprovalTasks])
-      recoveryOutcome = await recoverTurn({ ...scope, authMode })
+      // `gugo run --resume` is an explicit user recovery action. Route it
+      // through the public engine gate so a dead-letter is cleared deliberately
+      // instead of bypassing recovery policy through the internal worker API.
+      // Older injected engines only expose recoverTurn; keep that compatibility
+      // path for adapters that predate the public resume entry point.
+      recoveryOutcome = resumeTurn
+        ? await resumeTurn({ ...scope, authMode, retryRecovery: true })
+        : await recoverTurn({ ...scope, authMode })
     } else {
       const content = String(prompt || '').trim()
       if (!content) throw new HeadlessTurnError('PROMPT_REQUIRED', 'prompt is required', 2)

@@ -75,6 +75,7 @@ function routeParts(pathname) {
 }
 
 function publicTurnErrorProjection(error) {
+  const errorFields = error && typeof error === 'object' ? error : {}
   const explicitStatus = Number(error?.status ?? error?.statusCode)
   const hostUnavailable = describeTurnEngineHostUnavailableError(error)
   const readinessFailure = isModelReadinessError(error)
@@ -115,6 +116,11 @@ function publicTurnErrorProjection(error) {
     ? error.missingRequirements
     : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
   const taskVerification = normalizeTaskVerificationDetails(error?.taskVerification)
+  const hasPartialText = Object.hasOwn(errorFields, 'partialText')
+  const hasArtifactIds = Object.hasOwn(errorFields, 'artifactIds')
+  const hasDeliveryArtifactIds = Object.hasOwn(errorFields, 'deliveryArtifactIds')
+  const hasVerifiedLocalFiles = Object.hasOwn(errorFields, 'verifiedLocalFiles')
+  const hasRetainedLocalFiles = Object.hasOwn(errorFields, 'retainedLocalFiles')
   const partialText = publicIncompleteText(error?.partialText, '')
   const artifactIds = normalizeArtifactIds(error?.artifactIds).slice(0, 64)
   const deliveryArtifactIds = normalizeArtifactIds(error?.deliveryArtifactIds).slice(0, 64)
@@ -146,11 +152,11 @@ function publicTurnErrorProjection(error) {
       ...(Number.isInteger(error?.attempts) && error.attempts > 0 ? { attempts: error.attempts } : {}),
       ...(recovery ? { recovery } : {}),
     },
-    ...(partialText ? { partialText } : {}),
-    ...(artifactIds.length > 0 ? { artifactIds } : {}),
-    ...(deliveryArtifactIds.length > 0 ? { deliveryArtifactIds } : {}),
-    ...(verifiedLocalFiles.length > 0 ? { verifiedLocalFiles } : {}),
-    ...(retainedLocalFiles.length > 0 ? { retainedLocalFiles } : {}),
+    ...(hasPartialText ? { partialText } : {}),
+    ...(hasArtifactIds ? { artifactIds } : {}),
+    ...(hasDeliveryArtifactIds ? { deliveryArtifactIds } : {}),
+    ...(hasVerifiedLocalFiles ? { verifiedLocalFiles } : {}),
+    ...(hasRetainedLocalFiles ? { retainedLocalFiles } : {}),
     ...(Number.isInteger(iterations) && iterations >= 0 ? { iterations } : {}),
     },
   }

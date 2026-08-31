@@ -1207,6 +1207,14 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
   return db.transaction(() => {
     const session = getSession({ userId, sessionId })
     if (!session) return null
+    // Session revisions track transcript mutations, while terminal turn events
+    // are append-only and can change independently. Expose both watermarks so
+    // a paged client cannot combine pages from different terminal states.
+    const turnEventRevision = Number(db.prepare(`
+      SELECT COALESCE(MAX(rowid), 0) AS revision
+      FROM turn_events
+      WHERE user_id = ? AND session_id = ?
+    `).get(userId, sessionId)?.revision) || 0
     const safeLimit = Math.min(2000, Math.max(1, Number(limit) || 2000))
     const safeOffset = clampOffset(offset)
     const totalMessages = db.prepare(`
@@ -1287,6 +1295,7 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
       session,
       messages,
       revision: session.revision,
+      turnEventRevision,
       totalMessages: snapshotTotalMessages,
       complete,
       // Virtual terminal rows are returned beside their unique durable anchor
