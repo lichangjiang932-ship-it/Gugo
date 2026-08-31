@@ -6,11 +6,7 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Changed
-
-- Replaced GitHub CLI release publication with direct REST and Release Upload API calls that verify remote asset names and sizes before publishing an immutable draft.
-
-## [0.11.49] - 2026-08-30
+## [0.11.49] - 2026-08-31
 
 ### Added
 
@@ -30,6 +26,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Extended offline-eval coverage enforcement to the exact set of all 13 suites, including minimum scenario and category requirements.
 - Moved terminal failure, interruption, and incomplete-turn presentation to stable reason codes with client-side localization and actionable missing-requirement details.
 - Hardened the Windows release pipeline with mandatory signing verification, immutable draft publication, checksums, attestations, and package-version consistency checks.
+- Replaced GitHub CLI release publication with direct REST and Release Upload API calls that verify remote asset names and sizes before publishing an immutable draft.
 - Enabled retained-reasoning replay by default for compatible OpenAI-style providers while keeping Anthropic and Gemini behavior unchanged.
 - Made compaction-fidelity and task-verification-repair evals mandatory in the complete release gate.
 - Extracted Turn policy/evidence projection and user-data record traversal into focused modules, ratcheting both oversized-file ceilings downward.
@@ -891,7 +888,16 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.39...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.49...HEAD
+[0.11.49]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.48...v0.11.49
+[0.11.48]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.47...v0.11.48
+[0.11.47]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.46...v0.11.47
+[0.11.46]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.45...v0.11.46
+[0.11.45]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.44...v0.11.45
+[0.11.44]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.43...v0.11.44
+[0.11.43]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.42...v0.11.43
+[0.11.42]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.41...v0.11.42
+[0.11.40]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.39...v0.11.40
 [0.11.39]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.38...v0.11.39
 [0.11.38]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.37...v0.11.38
 [0.11.37]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.11.36...v0.11.37

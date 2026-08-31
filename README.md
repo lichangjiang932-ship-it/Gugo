@@ -13,7 +13,7 @@ Gugo 是开源 BYOK（Bring Your Own Key）项目：不内置支付、充值、�
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
   <a href="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml"><img src="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/release-v0.11.47-blue" alt="v0.11.47" />
+  <img src="https://img.shields.io/badge/release-v0.11.49-blue" alt="v0.11.49" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
 
