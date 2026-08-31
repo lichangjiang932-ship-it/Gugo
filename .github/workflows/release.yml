@@ -113,9 +113,11 @@ jobs:
       - name: Verify Windows installer signature
         shell: pwsh
         run: |
+          $version = node -p "require('./package.json').version"
+          $expectedInstallerName = "Gugo-Setup-$version-x64.exe"
           $installers = @(Get-ChildItem -LiteralPath release -Filter 'Gugo-Setup-*.exe' -File)
-          if ($installers.Count -ne 1) {
-            throw "Expected exactly one Windows installer, found $($installers.Count)"
+          if ($installers.Count -ne 1 -or $installers[0].Name -cne $expectedInstallerName) {
+            throw "Expected exactly one Windows installer named $expectedInstallerName"
           }
           $packagedExecutable = (Resolve-Path 'release/win-unpacked/Gugo.exe').Path
           $signedExecutables = @($installers[0].FullName, $packagedExecutable)
@@ -162,11 +164,34 @@ jobs:
         run: |
           $version = node -p "require('./package.json').version"
           $webAsset = (Resolve-Path "gugo-$version-web.tar.gz").Path
-          $desktopAssets = Get-ChildItem release -File | Where-Object {
+          $installerName = "Gugo-Setup-$version-x64.exe"
+          $installerPath = "release/$installerName"
+          $blockmapPath = "$installerPath.blockmap"
+          $updateMetadataPath = 'release/latest.yml'
+          if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
+            throw 'Windows installer was not generated'
+          }
+          if (-not (Test-Path -LiteralPath $blockmapPath -PathType Leaf)) {
+            throw 'Windows differential update blockmap was not generated'
+          }
+          if (-not (Test-Path -LiteralPath $updateMetadataPath -PathType Leaf)) {
+            throw 'Auto-update metadata latest.yml was not generated'
+          }
+          $expectedDesktopNames = @($installerName, "$installerName.blockmap", 'latest.yml')
+          $unexpectedDesktopAssets = @(Get-ChildItem -LiteralPath release -File | Where-Object {
             $_.Extension -eq '.exe' -or
             $_.Extension -eq '.blockmap' -or
             $_.Name -eq 'latest.yml'
-          } | ForEach-Object { $_.FullName }
+          } | Where-Object { $expectedDesktopNames -cnotcontains $_.Name })
+          if ($unexpectedDesktopAssets.Count -ne 0) {
+            throw "Unexpected Windows release assets: $($unexpectedDesktopAssets.Name -join ', ')"
+          }
+          $desktopAssets = @(
+            (Resolve-Path -LiteralPath $installerPath).Path
+            (Resolve-Path -LiteralPath $blockmapPath).Path
+            (Resolve-Path -LiteralPath $updateMetadataPath).Path
+          )
+          if ($desktopAssets.Count -ne 3) { throw 'Expected exactly three Windows release assets' }
           $checksumInputs = @($webAsset) + @($desktopAssets)
           node scripts/release/create-checksums.mjs --output SHA256SUMS.txt @checksumInputs
           if ($LASTEXITCODE -ne 0) { throw 'Failed to create SHA256SUMS.txt' }
@@ -181,40 +206,48 @@ jobs:
             release/latest.yml
             SHA256SUMS.txt
 
-      - name: Create or update GitHub Release
+      - name: Create or update GitHub Release through REST API
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $version = node -p "require('./package.json').version"
           $webAsset = (Resolve-Path "gugo-$version-web.tar.gz").Path
-          $desktopAssets = Get-ChildItem release -File | Where-Object {
+          $installerName = "Gugo-Setup-$version-x64.exe"
+          $installerPath = "release/$installerName"
+          $blockmapPath = "$installerPath.blockmap"
+          $updateMetadataPath = 'release/latest.yml'
+          if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
+            throw 'Windows installer was not generated'
+          }
+          if (-not (Test-Path -LiteralPath $blockmapPath -PathType Leaf)) {
+            throw 'Windows differential update blockmap was not generated'
+          }
+          if (-not (Test-Path -LiteralPath $updateMetadataPath -PathType Leaf)) {
+            throw 'Auto-update metadata latest.yml was not generated'
+          }
+          $expectedDesktopNames = @($installerName, "$installerName.blockmap", 'latest.yml')
+          $unexpectedDesktopAssets = @(Get-ChildItem -LiteralPath release -File | Where-Object {
             $_.Extension -eq '.exe' -or
             $_.Extension -eq '.blockmap' -or
             $_.Name -eq 'latest.yml'
-          } | ForEach-Object { $_.FullName }
-          if (-not ($desktopAssets | Where-Object { $_ -like '*.exe' })) {
-            throw 'Windows installer was not generated'
+          } | Where-Object { $expectedDesktopNames -cnotcontains $_.Name })
+          if ($unexpectedDesktopAssets.Count -ne 0) {
+            throw "Unexpected Windows release assets: $($unexpectedDesktopAssets.Name -join ', ')"
           }
-          if (-not ($desktopAssets | Where-Object { $_ -like '*.blockmap' })) {
-            throw 'Windows differential update blockmap was not generated'
-          }
-          if (-not ($desktopAssets | Where-Object { $_ -like '*latest.yml' })) {
-            throw 'Auto-update metadata latest.yml was not generated'
-          }
+          $desktopAssets = @(
+            (Resolve-Path -LiteralPath $installerPath).Path
+            (Resolve-Path -LiteralPath $blockmapPath).Path
+            (Resolve-Path -LiteralPath $updateMetadataPath).Path
+          )
+          if ($desktopAssets.Count -ne 3) { throw 'Expected exactly three Windows release assets' }
           $checksumAsset = (Resolve-Path 'SHA256SUMS.txt').Path
           $assets = @($webAsset) + @($desktopAssets) + @($checksumAsset)
-          $releaseJson = gh release view $env:RELEASE_TAG --json isDraft 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            $existingRelease = $releaseJson | ConvertFrom-Json
-            if (-not $existingRelease.isDraft) {
-              throw "Published GitHub Release $env:RELEASE_TAG already exists and is immutable"
-            }
-            gh release upload $env:RELEASE_TAG @assets --clobber
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to resume draft GitHub Release assets' }
-          } else {
-            gh release create $env:RELEASE_TAG @assets --verify-tag --generate-notes --draft
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to create draft GitHub Release' }
-          }
-          gh release edit $env:RELEASE_TAG --draft=false --prerelease=false
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to publish the draft GitHub Release' }
+          if ($assets.Count -ne 5) { throw 'Expected exactly five GitHub Release assets' }
+          $releaseCommit = (git rev-parse HEAD).Trim()
+          node scripts/release/publish-github-release.mjs `
+            --repo $env:GITHUB_REPOSITORY `
+            --tag $env:RELEASE_TAG `
+            --commit $releaseCommit `
+            -- @assets
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub REST API release publication failed' }
