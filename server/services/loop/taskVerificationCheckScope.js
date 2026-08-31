@@ -1,5 +1,6 @@
 import { scanVerificationArguments } from './taskVerificationArgumentScanner.js'
 import { isRuntimeInjectionEnvKey } from '../../utils/sensitiveEnv.js'
+import { isCommandExecutionTool } from './heuristics/commandCapabilities.js'
 import {
   CARGO_ARGUMENTS,
   DOTNET_ARGUMENTS,
@@ -22,10 +23,17 @@ import {
 } from './taskVerificationCliProfiles.js'
 
 const TASK_CHECK_KINDS = new Set(['test', 'lint', 'build', 'check', 'typecheck'])
+const MAX_TARGET_PATHS = 16
 const TRUSTED_VERIFICATION_ENV_VALUES = new Map([
   ['CI', new Set(['1', 'true'])],
   ['NODE_ENV', new Set(['test'])],
 ])
+
+function isTaskVerificationTool(name) {
+  return name === 'run_project_check'
+    || name === 'run_test'
+    || isCommandExecutionTool(name)
+}
 
 export function normalizeCheckKind(value) {
   const kind = String(value || '').trim().toLowerCase()
@@ -97,7 +105,18 @@ function normalizeTargetPath(value) {
 }
 
 function normalizedTargetPaths(values) {
-  return [...new Set(values.map(normalizeTargetPath).filter(Boolean))].slice(0, 16)
+  const paths = new Set()
+  for (const value of values) {
+    const normalized = normalizeTargetPath(value)
+    if (!normalized) continue
+    paths.add(normalized)
+    // An empty targeted-path list is interpreted conservatively by the
+    // attribution layer as "any mutation in this cwd may invalidate it".
+    // Prefer that fail-closed meaning over retaining only the first paths and
+    // silently treating later selected targets as unrelated.
+    if (paths.size > MAX_TARGET_PATHS) return []
+  }
+  return [...paths]
 }
 
 function buildToolGoal(value, executablePattern, options = {}) {
@@ -387,6 +406,7 @@ export function isTaskVerificationCommand(command) {
 
 export function taskVerificationKinds(call, result = null) {
   const name = String(call?.name || '').trim()
+  if (!isTaskVerificationTool(name)) return []
   if (name === 'run_project_check') {
     const kind = normalizeCheckKind(result?.check || call?.args?.check)
     return kind ? [kind] : []
@@ -416,7 +436,7 @@ function scopePathWithSuffix(base, suffix) {
 
 export function taskVerificationScopes(call, result) {
   const name = String(call?.name || '').trim()
-  if (!name) return []
+  if (!isTaskVerificationTool(name)) return []
   const cwd = normalizeScopePath(result?.cwd || call?.args?.cwd)
   let descriptors = []
   if (name === 'run_project_check') {

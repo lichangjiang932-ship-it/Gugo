@@ -12,6 +12,7 @@ import {
 
 export const MAX_PENDING_TASK_VERIFICATIONS = 64
 export const MAX_TASK_VERIFICATION_CANDIDATES = 64
+export const MAX_TASK_VERIFICATION_VERIFIED = 64
 export const MAX_TASK_VERIFICATION_INDETERMINATES = 64
 export const MAX_TASK_VERIFICATION_MUTATION_TARGETS = 64
 
@@ -37,6 +38,14 @@ export function normalizePathList(value, limit = 16) {
     if (paths.size >= limit) break
   }
   return [...paths]
+}
+
+function normalizeTargetPathList(value, limit = 16) {
+  const paths = normalizePathList(value, limit + 1)
+  // Empty means conservative cwd-wide invalidation for a targeted verifier.
+  // Keeping a truncated prefix could let a later mutation outside that prefix
+  // retain stale success evidence.
+  return paths.length > limit ? [] : paths
 }
 
 function normalizeCoverage(value) {
@@ -69,7 +78,7 @@ export function normalizeScopeDescriptor(value, fallbackKind = '') {
     commandScope,
     verifierFamily,
     coverage: normalizeCoverage(value?.coverage),
-    targetPaths: normalizePathList(value?.targetPaths),
+    targetPaths: normalizeTargetPathList(value?.targetPaths),
     scopeLabel: boundedIdentityText(value?.scopeLabel || `${kind}@${cwd}`, 300),
     scope: `${kind}\u0000${cwd}\u0000${commandScope}`,
   }
@@ -155,6 +164,14 @@ function restoreEntryMap(value, normalizer, limit) {
   return entries
 }
 
+function serializedListExceedsLimit(value, limit) {
+  return Array.isArray(value) && value.length > limit
+}
+
+function stateMapExceedsLimit(value, limit) {
+  return value instanceof Map && value.size > limit
+}
+
 function restoreMutationTargets(value) {
   const targets = new Map()
   for (const entry of (Array.isArray(value) ? value : [])
@@ -225,18 +242,35 @@ export function restoreTaskVerificationRepair(value = {}) {
   const verified = restoreEntryMap(
     value?.verified,
     normalizeVerified,
-    MAX_PENDING_TASK_VERIFICATIONS,
+    MAX_TASK_VERIFICATION_VERIFIED,
   )
   const legacyIndeterminate = normalizeIndeterminate(value?.lastIndeterminate)
+  const serializedIndeterminate = Array.isArray(value?.indeterminate)
+    ? value.indeterminate
+    : legacyIndeterminate ? [legacyIndeterminate] : []
   const indeterminate = restoreEntryMap(
-    Array.isArray(value?.indeterminate)
-      ? value.indeterminate
-      : legacyIndeterminate ? [legacyIndeterminate] : [],
+    serializedIndeterminate,
     normalizeIndeterminate,
     MAX_TASK_VERIFICATION_INDETERMINATES,
   )
   const lastIndeterminate = [...indeterminate.values()].at(-1) || null
   const mutationTargets = restoreMutationTargets(value?.mutationTargets)
+  const serializedStateOverflowed = serializedListExceedsLimit(
+    value?.pending,
+    MAX_PENDING_TASK_VERIFICATIONS,
+  ) || serializedListExceedsLimit(
+    value?.candidates,
+    MAX_TASK_VERIFICATION_CANDIDATES,
+  ) || serializedListExceedsLimit(
+    value?.verified,
+    MAX_TASK_VERIFICATION_VERIFIED,
+  ) || serializedListExceedsLimit(
+    serializedIndeterminate,
+    MAX_TASK_VERIFICATION_INDETERMINATES,
+  ) || serializedListExceedsLimit(
+    value?.mutationTargets,
+    MAX_TASK_VERIFICATION_MUTATION_TARGETS,
+  )
   const mutationEpoch = Math.max(
     normalizeEpoch(value?.mutationEpoch),
     ...[...mutationTargets.values()],
@@ -250,7 +284,8 @@ export function restoreTaskVerificationRepair(value = {}) {
     verified,
     indeterminate,
     lastIndeterminate,
-    verificationOverflowed: value?.verificationOverflowed === true,
+    verificationOverflowed: value?.verificationOverflowed === true
+      || serializedStateOverflowed,
     mutationEpoch,
     mutationTargets,
     consecutiveFailures: Math.min(
@@ -262,6 +297,22 @@ export function restoreTaskVerificationRepair(value = {}) {
 }
 
 export function serializeTaskVerificationRepair(value = {}) {
+  const inMemoryStateOverflowed = stateMapExceedsLimit(
+    value.pending,
+    MAX_PENDING_TASK_VERIFICATIONS,
+  ) || stateMapExceedsLimit(
+    value.candidates,
+    MAX_TASK_VERIFICATION_CANDIDATES,
+  ) || stateMapExceedsLimit(
+    value.verified,
+    MAX_TASK_VERIFICATION_VERIFIED,
+  ) || stateMapExceedsLimit(
+    value.indeterminate,
+    MAX_TASK_VERIFICATION_INDETERMINATES,
+  ) || stateMapExceedsLimit(
+    value.mutationTargets,
+    MAX_TASK_VERIFICATION_MUTATION_TARGETS,
+  )
   return {
     pending: [...(value.pending instanceof Map ? value.pending.values() : [])]
       .slice(-MAX_PENDING_TASK_VERIFICATIONS)
@@ -270,7 +321,7 @@ export function serializeTaskVerificationRepair(value = {}) {
       .slice(-MAX_TASK_VERIFICATION_CANDIDATES)
       .map((entry) => ({ ...entry })),
     verified: [...(value.verified instanceof Map ? value.verified.values() : [])]
-      .slice(-MAX_PENDING_TASK_VERIFICATIONS)
+      .slice(-MAX_TASK_VERIFICATION_VERIFIED)
       .map((entry) => ({ ...entry })),
     indeterminate: [...(value.indeterminate instanceof Map
       ? value.indeterminate.values()
@@ -285,7 +336,8 @@ export function serializeTaskVerificationRepair(value = {}) {
         ? [...value.indeterminate.values()].at(-1)
         : value?.lastIndeterminate,
     ),
-    verificationOverflowed: value?.verificationOverflowed === true,
+    verificationOverflowed: value?.verificationOverflowed === true
+      || inMemoryStateOverflowed,
     mutationEpoch: normalizeEpoch(value.mutationEpoch),
     mutationTargets: [...(value.mutationTargets instanceof Map ? value.mutationTargets : [])]
       .slice(-MAX_TASK_VERIFICATION_MUTATION_TARGETS)

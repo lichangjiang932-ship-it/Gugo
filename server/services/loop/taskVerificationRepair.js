@@ -13,6 +13,7 @@ import {
   MAX_TASK_VERIFICATION_CANDIDATES,
   MAX_TASK_VERIFICATION_INDETERMINATES,
   MAX_TASK_VERIFICATION_MUTATION_TARGETS,
+  MAX_TASK_VERIFICATION_VERIFIED,
   normalizeBatchId,
   normalizeCandidate,
   normalizeEpoch,
@@ -54,6 +55,10 @@ export function observeTaskVerificationRepair(state, call, result, {
   if (mutationObserved && state.mutationEpoch === 0) {
     state.mutationEpoch = 1
     state.mutationTargets.set(PROJECT_SCOPE_TARGET, state.mutationEpoch)
+    while (state.mutationTargets.size > MAX_TASK_VERIFICATION_MUTATION_TARGETS) {
+      markVerificationOverflow(state)
+      state.mutationTargets.delete(state.mutationTargets.keys().next().value)
+    }
   }
   const currentEpoch = normalizeEpoch(state.mutationEpoch)
   const projectedResult = { ...(result || {}), ...projectVerificationFields(result) }
@@ -84,7 +89,12 @@ export function observeTaskVerificationRepair(state, call, result, {
         verifiedEpoch: currentEpoch,
       })
       if (verified) {
-        state.verified.set(verified.scope, verified)
+        if (!state.verified.has(verified.scope)
+          && state.verified.size >= MAX_TASK_VERIFICATION_VERIFIED) {
+          markVerificationOverflow(state)
+        } else {
+          state.verified.set(verified.scope, verified)
+        }
       }
       for (const [indeterminateKey, indeterminate] of [...state.indeterminate]) {
         if (verificationScopeCovers(scope, indeterminate, workspaceRoot)) {
@@ -261,10 +271,14 @@ export function observeTaskVerificationMutation(state, targets, { workspaceRoot 
     || !(state?.mutationTargets instanceof Map)) {
     return { changed: false, promoted: [], invalidated: [] }
   }
-  const normalizedTargets = normalizePathList(
+  const observedTargets = normalizePathList(
     targets instanceof Set ? [...targets] : targets,
-    MAX_TASK_VERIFICATION_MUTATION_TARGETS,
+    MAX_TASK_VERIFICATION_MUTATION_TARGETS + 1,
   )
+  if (observedTargets.length > MAX_TASK_VERIFICATION_MUTATION_TARGETS) {
+    markVerificationOverflow(state)
+  }
+  const normalizedTargets = observedTargets.slice(0, MAX_TASK_VERIFICATION_MUTATION_TARGETS)
   if (normalizedTargets.length === 0) {
     return { changed: false, promoted: [], invalidated: [] }
   }
@@ -276,6 +290,7 @@ export function observeTaskVerificationMutation(state, targets, { workspaceRoot 
     state.mutationTargets.set(target, currentEpoch)
   }
   while (state.mutationTargets.size > MAX_TASK_VERIFICATION_MUTATION_TARGETS) {
+    markVerificationOverflow(state)
     state.mutationTargets.delete(state.mutationTargets.keys().next().value)
   }
 

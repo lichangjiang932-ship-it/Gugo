@@ -79,12 +79,18 @@ export function matchesManualRecoveryResume(session, message, resume) {
 }
 
 export function matchesFailedTurnRetryResume(session, message, retry) {
+  const failure = message?.meta?.serverFailure
+  const sameFailureCode = typeof retry?.code === 'string'
+    && retry.code.length > 0
+    && retry.code === failure?.code
   return sameNonEmptyId(retry?.sessionId, session?.id)
     && sameNonEmptyId(retry?.turnId, message?.meta?.serverTurnId)
-    && retry?.code === 'TURN_INCOMPLETE'
     && message?.meta?.failed === true
-    && message?.meta?.serverFailure?.code === 'TURN_INCOMPLETE'
-    && message.meta.serverFailure.retryable === true
+    && sameFailureCode
+    && (
+      (retry.code === 'TURN_INCOMPLETE' && failure.retryable === true)
+      || (retry.manualRetryable === true && failure.manualRetryable === true)
+    )
 }
 
 function serverTurnResumeClaimKey(sessionId, turnId) {

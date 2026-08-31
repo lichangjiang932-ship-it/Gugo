@@ -17,6 +17,7 @@ import {
   failureSupportsFailedRetry,
   resetManualRetryVerificationBudget,
 } from './turnFailedRetryPolicy.js'
+import { isPermanentFailedRetryRejectionCode } from './turnFailedRetryRejection.js'
 import { failedRetryAttemptPayload } from './turnRecoveryProjection.js'
 
 const TURN_BOUNDARY_TYPES = new Set([
@@ -522,7 +523,8 @@ export function createSqliteTurnPersistenceTransactions({
         || message.modelContext?.serverLastSequence !== failureEvent.sequence
         || message.modelContext?.error?.retryable !== false
         || rejection?.failureSequence !== failureEvent.sequence
-        || rejection?.code !== message.modelContext?.error?.code) {
+        || rejection?.code !== message.modelContext?.error?.code
+        || !isPermanentFailedRetryRejectionCode(rejection?.code)) {
         throw persistenceError(
           'TURN_FAILED_RETRY_REJECTION_PROJECTION_INVALID',
           'failed Turn retry rejection projection does not match the terminal failure',

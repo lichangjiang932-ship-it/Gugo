@@ -30,6 +30,7 @@ export function failedRetryRejectionFromMessage(message, failureEvent) {
     || context?.serverLastSequence !== failureEvent?.sequence
     || rejection?.failureSequence !== failureEvent?.sequence
     || rejection?.code !== failure?.code
+    || !isPermanentFailedRetryRejectionCode(rejection?.code)
     || failure?.retryable !== false) return null
   return failure
 }

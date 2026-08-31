@@ -43,7 +43,20 @@ export function isDeterministicVerificationSuccess(result) {
   if (result?.verificationVerdict === 'indeterminate'
     || result?.failureKind === 'infrastructure'
     || result?.passed === null) return false
-  if (result?.ok !== true || result?.passed === false || result?.timedOut === true) return false
+  if (result?.ok !== true
+    || result?.passed === false
+    || result?.timedOut === true
+    || result?.cancelled === true
+    || result?.denied === true
+    || result?.policyDenied === true
+    || result?.systemFailure === true
+    || result?.requiresUserVerification === true
+    || result?.retryable === true) return false
+  const code = String(result?.code || '').trim().toLowerCase()
+  if (NON_VERDICT_CODES.has(code)
+    || /(?:timeout|cancel|denied|permission|authori[sz]|unknown|conflict|invalid|parse)/iu.test(code)) {
+    return false
+  }
   if (Object.hasOwn(result || {}, 'passed')) return result.passed === true
   if (result?.verificationVerdict) return result.verificationVerdict === 'passed'
   if (result?.exitCode == null) return true
