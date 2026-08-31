@@ -54,6 +54,12 @@ export async function parseResponse(response) {
       'missingRequirements',
       'taskVerification',
       'attempts',
+      'partialText',
+      'artifactIds',
+      'deliveryArtifactIds',
+      'verifiedLocalFiles',
+      'retainedLocalFiles',
+      'iterations',
     ]) {
       if (body?.error?.[field] !== undefined) error[field] = body.error[field]
     }
@@ -101,6 +107,22 @@ export function reconnectExhaustedError(attempts, cause) {
   const error = new Error(`Turn connection could not be restored after ${attempts} attempts`)
   error.code = 'TURN_RECONNECT_EXHAUSTED'
   error.cause = cause
+  if (cause && typeof cause === 'object') {
+    for (const field of [
+      'serverFailure',
+      'incompleteReason',
+      'missingRequirements',
+      'taskVerification',
+      'partialText',
+      'artifactIds',
+      'deliveryArtifactIds',
+      'verifiedLocalFiles',
+      'retainedLocalFiles',
+      'iterations',
+    ]) {
+      if (cause[field] !== undefined) error[field] = cause[field]
+    }
+  }
   return error
 }
 

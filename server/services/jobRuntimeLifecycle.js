@@ -1,30 +1,43 @@
 import { dispatchHooks } from './hooksService.js'
 import { createNotification } from './notificationsStore.js'
-import { appendJobEvent, getJob as getJobRow, updateJob } from './jobStore.js'
+import { getDb } from '../db.js'
+import { appendJobEvent } from './jobStore.js'
 
 const RECOVERABLE_JOB_STATUSES = new Set(['planning', 'running'])
 
 export function markJobAwaitingApproval(job) {
-  if (!job?.id) return
+  if (!job?.id || !job.userId) return
   try {
-    updateJob(job.id, { status: 'awaiting_approval' })
-    appendJobEvent({
-      jobId: job.id,
-      type: 'awaiting_approval',
-      message: '等待用户批准一个工具调用',
-    })
+    const db = getDb()
+    db.transaction(() => {
+      const changed = db.prepare(`
+        UPDATE jobs
+         SET status = 'awaiting_approval', updated_at = ?
+         WHERE id = ? AND user_id = ? AND cancel_requested = 0
+           AND status = 'running'
+      `).run(Date.now(), job.id, job.userId).changes === 1
+      if (!changed) return false
+      appendJobEvent({
+        jobId: job.id,
+        type: 'awaiting_approval',
+        message: '等待用户批准一个工具调用',
+      })
+      return true
+    }).immediate()
   } catch (error) {
     console.error('[jobs] 标记 awaiting_approval 失败:', error?.stack || error)
   }
 }
 
 export function markJobRunningAgain(job) {
-  if (!job?.id) return
+  if (!job?.id || !job.userId) return
   try {
-    const fresh = getJobRow(job.id)
-    if (fresh?.status === 'awaiting_approval') {
-      updateJob(job.id, { status: 'running' })
-    }
+    getDb().prepare(`
+      UPDATE jobs
+         SET status = 'running', updated_at = ?
+       WHERE id = ? AND user_id = ? AND status = 'awaiting_approval'
+         AND cancel_requested = 0
+    `).run(Date.now(), job.id, job.userId)
   } catch (error) {
     console.error('[jobs] 恢复 running 状态失败:', error?.stack || error)
   }

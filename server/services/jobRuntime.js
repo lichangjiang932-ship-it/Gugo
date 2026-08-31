@@ -64,6 +64,7 @@ export { createDefaultExecuteStep }
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 const RETRYABLE_JOB_STATUSES = new Set(['failed', 'cancelled'])
 const RETRYABLE_STEP_STATUSES = new Set(['failed', 'cancelled'])
+const JOB_CANCELLED_MESSAGE = '任务已由用户终止'
 // ★ 注意:awaiting_approval 故意不在这里。等人的 job 崩溃恢复时若被重排成 queued,
 // 会把已经批准执行过的动作重跑一遍(发消息/改日历这类不可撤销动作尤其危险)。
 const SUSPENDED_JOB_STATUSES = new Set(['waiting', 'awaiting_approval'])
@@ -305,7 +306,9 @@ export class JobRuntime {
         accepted: false,
         error: transition.reason === 'plan_approval_required'
           ? 'approve the proposed plan before steering execution'
-          : 'job is already finished',
+          : transition.reason === 'cancelling'
+            ? 'job cancellation has already been requested'
+            : 'job is already finished',
         job: this.getJob(jobId, { userId }),
       }
     }
@@ -326,7 +329,27 @@ export class JobRuntime {
     }))
     return { accepted: true, message, job: this.getJob(jobId, { userId }) }
   }
-  resumeDirectoryAuthorization(jobId, options = {}) { return resumeJobDirectoryAuthorization({ jobId, ...options, getJob: this.getJob.bind(this), cancelJobWake, emit: this.emit.bind(this) }) }
+  resumeDirectoryAuthorization(jobId, options = {}) {
+    const current = this.getJob(jobId, { userId: options.userId })
+    if (!current) return null
+    const recoveryLease = !this.activeControllers.has(jobId)
+      ? this.runtimeCore.lease.acquire({ jobId })
+      : null
+    if (!recoveryLease) {
+      return { resumed: false, error: 'job is currently active', job: current }
+    }
+    try {
+      return resumeJobDirectoryAuthorization({
+        jobId,
+        ...options,
+        getJob: this.getJob.bind(this),
+        cancelJobWake,
+        emit: this.emit.bind(this),
+      })
+    } finally {
+      recoveryLease.release()
+    }
+  }
 
   approvePlan(jobId, {
     userId,
@@ -349,12 +372,7 @@ export class JobRuntime {
       this.activeControllers.get(jobId)?.abort(userCancellationError('JOB_CANCEL_REQUESTED', 'Cancelled by user'))
     }
     if (!transition.changed) return this.getJob(jobId, { userId })
-    const event = appendJobEvent({
-      jobId,
-      type: 'cancel_requested',
-      message: '已请求终止任务',
-    })
-    this.emit(event)
+    this.emit(transition.event)
     return this.getJob(jobId, { userId })
   }
   resumeAfterApproval(jobId, { userId, stepId = null } = {}) {
@@ -378,12 +396,7 @@ export class JobRuntime {
       recoveryLease.release()
     }
     if (!transition.changed) return this.getJob(jobId, { userId })
-    this.emit(appendJobEvent({
-      jobId,
-      stepId,
-      type: 'approval_recovered',
-      message: 'Approval decided after process restart; the interrupted turn was requeued',
-    }))
+    this.emit(transition.event)
     return this.getJob(jobId, { userId })
   }
 
@@ -478,50 +491,78 @@ export class JobRuntime {
 
   /**
    * 标记步骤完成并附 evidence。
-   * 借鉴 Reasonix mark_step_complete 设计。
-   */
+  * 借鉴 Reasonix mark_step_complete 设计。
+  */
   completeStep(jobId, stepId, { userId, evidence = [] } = {}) {
-    const job = this.getJob(jobId, { userId })
-    const step = job?.steps.find((item) => item.id === stepId)
-    if (!job || !step) return null
-    assertJobPlanApprovalResolved(job)
-    if (TERMINAL_JOB_STATUSES.has(job.status)) {
-      const error = new Error(`job step cannot be completed after job reached ${job.status}`)
-      error.code = 'JOB_COMPLETION_STATUS_INVALID'
+    const initial = this.getJob(jobId, { userId })
+    if (!initial) return null
+    const completionLease = !this.activeControllers.has(jobId)
+      ? this.runtimeCore.lease.acquire({ jobId })
+      : null
+    if (!completionLease) {
+      const error = new Error('job step cannot be completed while the job is active')
+      error.code = 'JOB_COMPLETION_CONFLICT'
       error.statusCode = 409
       throw error
     }
-    if (!['queued', 'pending', 'running'].includes(step.status)) {
-      const error = new Error(`job step cannot be completed from status ${step.status}`)
-      error.code = 'JOB_COMPLETION_STATUS_INVALID'
-      error.statusCode = 409
-      throw error
+    try {
+      let completedJob = null
+      const outcome = this.runtimeCore.lease.runIfOwned({ jobId }, () => {
+        const job = this.getJob(jobId, { userId })
+        const step = job?.steps.find((item) => item.id === stepId)
+        if (!job || !step) return false
+        assertJobPlanApprovalResolved(job)
+        if (TERMINAL_JOB_STATUSES.has(job.status)
+          || job.cancelRequested
+          || job.status === 'cancel_requested') {
+          const error = new Error(`job step cannot be completed after job reached ${job.status}`)
+          error.code = 'JOB_COMPLETION_STATUS_INVALID'
+          error.statusCode = 409
+          throw error
+        }
+        if (!['queued', 'pending', 'running'].includes(step.status)) {
+          const error = new Error(`job step cannot be completed from status ${step.status}`)
+          error.code = 'JOB_COMPLETION_STATUS_INVALID'
+          error.statusCode = 409
+          throw error
+        }
+        const completedAt = Date.now()
+        // completeJobStep validates evidence before writing. Keep wake/checkpoint
+        // cleanup after that gate so a rejected completion is entirely side-effect free.
+        completeJobStep(stepId, {
+          evidence,
+          output: step.output || {},
+          completedAt,
+          userId,
+        })
+        cancelJobWake({ jobId, userId })
+        this.runtimeCore.checkpoint.clear({ jobId, stepId, userId })
+        const completedStep = this.getJob(jobId, { userId })?.steps.find((item) => item.id === stepId)
+        const normalizedEvidence = Array.isArray(completedStep?.output?.evidence)
+          ? completedStep.output.evidence
+          : []
+        this.emit(appendJobEvent({
+          jobId,
+          type: 'step_completed',
+          stepId,
+          message: `步骤已完成,${normalizedEvidence.length} 项验证`,
+          payload: { evidenceCount: normalizedEvidence.length },
+        }))
+        const updated = this.getJob(jobId, { userId })
+        completeManualJobTransition({ jobId, stepId, updated, emit: this.emit.bind(this) })
+        completedJob = this.getJob(jobId, { userId })
+        return true
+      })
+      if (!outcome?.owned) {
+        const error = new Error('job completion lease was lost')
+        error.code = 'JOB_COMPLETION_CONFLICT'
+        error.statusCode = 409
+        throw error
+      }
+      return outcome.value ? completedJob : null
+    } finally {
+      completionLease.release()
     }
-    const completedAt = Date.now()
-    // completeJobStep validates evidence before writing. Keep wake/checkpoint
-    // cleanup after that gate so a rejected completion is entirely side-effect free.
-    completeJobStep(stepId, {
-      evidence,
-      output: step.output || {},
-      completedAt,
-      userId,
-    })
-    cancelJobWake({ jobId, userId })
-    this.runtimeCore.checkpoint.clear({ jobId, stepId, userId })
-    const completedStep = this.getJob(jobId, { userId })?.steps.find((item) => item.id === stepId)
-    const normalizedEvidence = Array.isArray(completedStep?.output?.evidence)
-      ? completedStep.output.evidence
-      : []
-    this.emit(appendJobEvent({
-      jobId,
-      type: 'step_completed',
-      stepId,
-      message: `步骤已完成,${normalizedEvidence.length} 项验证`,
-      payload: { evidenceCount: normalizedEvidence.length },
-    }))
-    const updated = this.getJob(jobId, { userId })
-    completeManualJobTransition({ jobId, stepId, updated, emit: this.emit.bind(this) })
-    return this.getJob(jobId, { userId })
   }
 
   /**
@@ -689,9 +730,23 @@ export class JobRuntime {
     this.activeControllers.set(job.id, controller)
     const leaseScope = { jobId: job.id }
     const releaseExecutionLease = this.runtimeCore.lease.hold(leaseScope, controller)
-    const commitOwned = (callback) => (
-      this.runtimeCore.lease.runIfOwned(leaseScope, callback)?.owned === true
-    )
+    const commitOwned = (callback, { allowCancellation = false } = {}) => {
+      const outcome = this.runtimeCore.lease.runIfOwned(leaseScope, () => {
+        const current = getJobRow(job.id)
+        if (!current) return false
+        // requestCancel intentionally does not wait for the execution lease so
+        // it can interrupt a long-running model/tool call. Once that durable
+        // request exists, an older tick must not overwrite it with completed,
+        // failed, waiting, or running state.
+        if (!allowCancellation
+          && (current.cancelRequested || current.status === 'cancel_requested')) {
+          return false
+        }
+        callback(current)
+        return true
+      })
+      return outcome?.owned === true && outcome.value === true
+    }
     const leaseIsOwned = () => this.runtimeCore.lease.owns(leaseScope)
     try {
     const abandonedSteps = ['planning', 'running'].includes(job.status)
@@ -715,23 +770,29 @@ export class JobRuntime {
           if (['queued', 'running'].includes(step.status)) {
             updateJobStep(step.id, {
               status: 'cancelled',
+              error: JOB_CANCELLED_MESSAGE,
               finishedAt: Date.now(),
             })
           }
         }
         updateJob(job.id, {
           status: 'cancelled',
+          error: JOB_CANCELLED_MESSAGE,
           progress: deriveJobProgress(listJobSteps(job.id)),
           finishedAt: Date.now(),
         })
         this.emit(appendJobEvent({
           jobId: job.id,
           type: 'cancelled',
-          message: '任务已终止',
+          message: JOB_CANCELLED_MESSAGE,
+          payload: { code: 'JOB_CANCEL_REQUESTED', reason: 'user_requested' },
         }))
-      })) return true
-      notifyJobTerminal(job, { status: 'cancelled', body: '任务已终止' })
-      notifyJobStopHook(job, { status: 'cancelled' })
+      }, { allowCancellation: true })) return true
+      notifyJobTerminal({ ...job, error: JOB_CANCELLED_MESSAGE }, {
+        status: 'cancelled',
+        body: JOB_CANCELLED_MESSAGE,
+      })
+      notifyJobStopHook(job, { status: 'cancelled', error: JOB_CANCELLED_MESSAGE })
       return true
     }
 
@@ -844,7 +905,7 @@ export class JobRuntime {
             updateJob(job.id, { status: 'failed', error: reason, finishedAt: Date.now() })
             this.emit(appendJobEvent({ jobId: job.id, type: 'failed', message: reason }))
           })) return true
-          notifyJobTerminal(job, { status: 'failed', body: reason })
+          notifyJobTerminal({ ...job, error: reason }, { status: 'failed', body: reason })
           notifyJobStopHook(job, { status: 'failed', error: reason })
           return true
         }
@@ -882,7 +943,10 @@ export class JobRuntime {
           message: completed ? '任务已完成' : resolution.reason,
         }))
       })) return true
-      notifyJobTerminal(job, {
+      notifyJobTerminal({
+        ...job,
+        error: completed ? null : resolution.reason,
+      }, {
         status: completed ? 'completed' : 'failed',
         body: completed ? '任务已完成' : resolution.reason,
       })
@@ -1144,12 +1208,14 @@ export class JobRuntime {
             if (['queued', 'running'].includes(step.status)) {
               updateJobStep(step.id, {
                 status: 'cancelled',
+                error: JOB_CANCELLED_MESSAGE,
                 finishedAt: Date.now(),
               })
             }
           }
           updateJob(job.id, {
             status: 'cancelled',
+            error: JOB_CANCELLED_MESSAGE,
             progress: deriveJobProgress(listJobSteps(job.id)),
             finishedAt: Date.now(),
           })
@@ -1159,11 +1225,19 @@ export class JobRuntime {
             jobId: job.id,
             stepId: nextStep.id,
             type: 'cancelled',
-            message: '任务已终止',
+            message: JOB_CANCELLED_MESSAGE,
+            payload: { code: 'JOB_CANCEL_REQUESTED', reason: 'user_requested' },
           }))
-        })) return true
-        notifyJobTerminal(job, { status: 'cancelled', body: '任务已终止' })
-        notifyJobStopHook(job, { status: 'cancelled', stepId: nextStep.id })
+        }, { allowCancellation: true })) return true
+        notifyJobTerminal({ ...job, error: JOB_CANCELLED_MESSAGE }, {
+          status: 'cancelled',
+          body: JOB_CANCELLED_MESSAGE,
+        })
+        notifyJobStopHook(job, {
+          status: 'cancelled',
+          error: JOB_CANCELLED_MESSAGE,
+          stepId: nextStep.id,
+        })
         return true
       }
       persistJobStepFailure({

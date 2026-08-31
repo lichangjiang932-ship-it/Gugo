@@ -15,9 +15,15 @@ import {
   getVisibleTurnClarification,
   isPermanentFailedRetryRejectionFailure,
 } from '../../lib/chatFlowGuards.js'
-import { isUserStopped, turnEventTimestamp } from './serverTurnFlow.js'
+import { isUserStopped, terminalFailureEvidenceMeta, turnEventTimestamp } from './serverTurnFlow.js'
 import { hasTurnRun, registerTurnRun, unregisterTurnRun } from './turnRunRegistry.js'
 import { mergeAssistantText, missingAssistantTextSuffix } from '../../lib/assistantTextContinuity.js'
+
+function nonEmptyTaskVerification(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0
+    ? value
+    : null
+}
 
 export function reduceResumedAssistantText(currentText, event) {
   if (event?.type === 'turn.attempt' && event.payload?.resetStreaming) {
@@ -52,17 +58,25 @@ export function failedRetryFailureFromError(error, previousFailure = null) {
   const status = Number(error?.serverFailure?.status ?? error?.status)
   const retryable = error?.serverFailure?.retryable ?? error?.retryable
   const manualRetryable = error?.serverFailure?.manualRetryable ?? error?.manualRetryable
-  const incompleteReason = String(current.incompleteReason || previous.incompleteReason || '').trim()
-  const missingRequirements = [...new Set((Array.isArray(current.missingRequirements)
+  const incompleteReason = String(
+    current.incompleteReason || error?.incompleteReason || previous.incompleteReason || '',
+  ).trim()
+  const currentMissingRequirements = Array.isArray(current.missingRequirements)
     ? current.missingRequirements
-    : Array.isArray(previous.missingRequirements) ? previous.missingRequirements : [])
+    : []
+  const outerMissingRequirements = Array.isArray(error?.missingRequirements)
+    ? error.missingRequirements
+    : []
+  const missingRequirements = [...new Set((currentMissingRequirements.length > 0
+    ? currentMissingRequirements
+    : outerMissingRequirements.length > 0
+      ? outerMissingRequirements
+      : Array.isArray(previous.missingRequirements) ? previous.missingRequirements : [])
     .map((value) => String(value || '').trim())
     .filter(Boolean))].slice(0, 16)
-  const taskVerification = current.taskVerification && typeof current.taskVerification === 'object'
-    ? current.taskVerification
-    : previous.taskVerification && typeof previous.taskVerification === 'object'
-      ? previous.taskVerification
-      : null
+  const taskVerification = nonEmptyTaskVerification(current.taskVerification)
+    || nonEmptyTaskVerification(error?.taskVerification)
+    || nonEmptyTaskVerification(previous.taskVerification)
   return {
     code,
     retryable: retryable === true,
@@ -70,6 +84,29 @@ export function failedRetryFailureFromError(error, previousFailure = null) {
     ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),
     ...(incompleteReason ? { incompleteReason } : {}),
     ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
+    ...(taskVerification ? { taskVerification } : {}),
+  }
+}
+
+function mergeFailureDiagnostics(currentFailure, previousFailure) {
+  const current = currentFailure && typeof currentFailure === 'object' ? currentFailure : null
+  const previous = previousFailure && typeof previousFailure === 'object' ? previousFailure : null
+  if (!current) return previous
+  if (!previous) return current
+  const currentMissing = Array.isArray(current.missingRequirements)
+    ? current.missingRequirements.filter(Boolean)
+    : []
+  const taskVerification = nonEmptyTaskVerification(current.taskVerification)
+    || nonEmptyTaskVerification(previous.taskVerification)
+  return {
+    ...previous,
+    ...current,
+    ...(current.incompleteReason || previous.incompleteReason
+      ? { incompleteReason: current.incompleteReason || previous.incompleteReason }
+      : {}),
+    ...(currentMissing.length > 0 || Array.isArray(previous.missingRequirements)
+      ? { missingRequirements: currentMissing.length > 0 ? currentMissing : previous.missingRequirements }
+      : {}),
     ...(taskVerification ? { taskVerification } : {}),
   }
 }
@@ -411,18 +448,25 @@ export default function useServerTurnResume({
       const recoveryDeadLetter = error?.recovery?.status === 'dead_letter'
       const permanentFailedRetryRejection = failedRetry
         && isPermanentFailedRetryRejectionFailure(error)
+      const recoveryFailure = recoveryDeadLetter
+        ? {
+            code: String(error?.code || 'TURN_RECOVERY_DEAD_LETTER'),
+            retryable: false,
+            manualRetryable: true,
+            incompleteReason: 'recovery_attempts_exhausted',
+            missingRequirements: ['execution_environment_repair', 'explicit_recovery_retry'],
+          }
+        : null
       const durableFailure = permanentFailedRetryRejection
         ? failedRetryFailureFromError(error, message.meta?.serverFailure)
-        : error?.serverFailure || message.meta?.serverFailure
-        || (recoveryDeadLetter
-          ? {
-              code: String(error?.code || 'TURN_RECOVERY_DEAD_LETTER'),
-              retryable: false,
-              manualRetryable: true,
-              incompleteReason: 'recovery_attempts_exhausted',
-              missingRequirements: ['execution_environment_repair', 'explicit_recovery_retry'],
-            }
-          : null)
+        : mergeFailureDiagnostics(
+            error?.serverFailure || recoveryFailure,
+            message.meta?.serverFailure,
+          )
+      const failureEvidenceMeta = terminalFailureEvidenceMeta(error)
+      if (!Object.hasOwn(failureEvidenceMeta, 'serverPartialText') && failedRetryPartialText) {
+        failureEvidenceMeta.serverPartialText = failedRetryPartialText
+      }
       const completedAt = turnEventTimestamp(error?.turnCompletedAt)
       const timingMeta = {
         turnStartedAt,
@@ -470,8 +514,7 @@ export default function useServerTurnResume({
           serverRecoveryBlocked: recoveryDeadLetter,
           serverFailure: durableFailure,
           serverFailureDisplayKey,
-          serverPartialText: error.partialText || failedRetryPartialText,
-          serverArtifactIds: Array.isArray(error.artifactIds) ? error.artifactIds : [],
+          ...failureEvidenceMeta,
         })
       } else {
         dispatchMessage('UPDATE_LAST_MESSAGE_META', {

@@ -143,12 +143,13 @@ export function buildServerTurnMessageIds(turnId) {
 }
 
 export function normalizeServerTurnFailure(error) {
-  if (error?.serverFailure && typeof error.serverFailure === 'object') {
-    return error.serverFailure
-  }
+  const nested = error?.serverFailure && typeof error.serverFailure === 'object'
+    ? error.serverFailure
+    : {}
   const failure = {
-    code: String(error?.code || 'TURN_REQUEST_FAILED').trim() || 'TURN_REQUEST_FAILED',
-    message: String(error?.message || 'Turn request failed').trim() || 'Turn request failed',
+    ...nested,
+    code: String(nested.code || error?.code || 'TURN_REQUEST_FAILED').trim() || 'TURN_REQUEST_FAILED',
+    message: String(nested.message || error?.message || 'Turn request failed').trim() || 'Turn request failed',
   }
   for (const field of [
     'status',
@@ -163,10 +164,51 @@ export function normalizeServerTurnFailure(error) {
     'retryable',
     'manualRetryable',
     'retryAfter',
+    'incompleteReason',
+    'missingRequirements',
+    'taskVerification',
+    'attempts',
   ]) {
-    if (error?.[field] !== undefined) failure[field] = error[field]
+    if (failure[field] === undefined && error?.[field] !== undefined) failure[field] = error[field]
+  }
+  const nestedIncompleteReason = String(failure.incompleteReason || '').trim()
+  const outerIncompleteReason = String(error?.incompleteReason || '').trim()
+  if (!nestedIncompleteReason && outerIncompleteReason) failure.incompleteReason = outerIncompleteReason
+  const nestedMissingRequirements = Array.isArray(failure.missingRequirements)
+    ? failure.missingRequirements.filter(Boolean)
+    : []
+  const outerMissingRequirements = Array.isArray(error?.missingRequirements)
+    ? error.missingRequirements.filter(Boolean)
+    : []
+  if (nestedMissingRequirements.length === 0 && outerMissingRequirements.length > 0) {
+    failure.missingRequirements = outerMissingRequirements
+  }
+  const nestedTaskVerification = failure.taskVerification
+    && typeof failure.taskVerification === 'object'
+    && !Array.isArray(failure.taskVerification)
+    && Object.keys(failure.taskVerification).length > 0
+  const outerTaskVerification = error?.taskVerification
+    && typeof error.taskVerification === 'object'
+    && !Array.isArray(error.taskVerification)
+    && Object.keys(error.taskVerification).length > 0
+  if (!nestedTaskVerification && outerTaskVerification) {
+    failure.taskVerification = error.taskVerification
   }
   return failure
+}
+
+export function terminalFailureEvidenceMeta(error) {
+  if (!error || typeof error !== 'object') return {}
+  const meta = {}
+  if (Object.hasOwn(error, 'partialText')) meta.serverPartialText = String(error.partialText || '')
+  if (Array.isArray(error.artifactIds)) meta.serverArtifactIds = error.artifactIds
+  if (Array.isArray(error.deliveryArtifactIds)) meta.serverDeliveryArtifactIds = error.deliveryArtifactIds
+  if (Array.isArray(error.verifiedLocalFiles)) meta.verifiedLocalFiles = error.verifiedLocalFiles
+  if (Array.isArray(error.retainedLocalFiles)) meta.retainedLocalFiles = error.retainedLocalFiles
+  if (Number.isInteger(error.iterations) && error.iterations >= 0) {
+    meta.serverIterations = error.iterations
+  }
+  return meta
 }
 
 function appendArtifact(artifact, artifacts, dispatchMessage) {
@@ -484,6 +526,7 @@ export async function runServerChatTurn({
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.CANCELLED, stepLabel: t('chat.serverTurn.cancelled') } } })
     } else {
       const serverFailure = normalizeServerTurnFailure(error)
+      const failureEvidenceMeta = terminalFailureEvidenceMeta(error)
       const failureView = {
         role: 'assistant',
         message: error?.message,
@@ -492,8 +535,7 @@ export async function runServerChatTurn({
           executionStarted,
           serverFailure,
           serverArtifacts,
-          serverPartialText: error.partialText || '',
-          serverArtifactIds: Array.isArray(error.artifactIds) ? error.artifactIds : [],
+          ...failureEvidenceMeta,
         },
       }
       const failedBeforeExecution = executionStarted === false && isPreExecutionFailure(failureView)
@@ -517,8 +559,7 @@ export async function runServerChatTurn({
         serverFailureDisplayKey,
         ...(failedBeforeExecution ? {} : {
           serverArtifacts,
-          serverPartialText: error.partialText || '',
-          serverArtifactIds: Array.isArray(error.artifactIds) ? error.artifactIds : [],
+          ...failureEvidenceMeta,
         }),
       })
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.FAILED, stepLabel: t('chat.serverTurn.failed') } } })

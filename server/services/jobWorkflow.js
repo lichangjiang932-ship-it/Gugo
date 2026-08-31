@@ -155,6 +155,14 @@ export function resolveWorkflowState(steps = []) {
   if (!steps.length) return { state: 'invalid', reason: '任务没有可执行步骤' }
   const failed = steps.find((step) => step.status === 'failed')
   if (failed) return { state: 'failed', reason: failed.error || `步骤“${failed.title}”执行失败` }
+  const cancelled = steps.filter((step) => step.status === 'cancelled')
+  if (cancelled.length) {
+    const names = cancelled.slice(0, 3).map((step) => step.title || step.id).filter(Boolean)
+    return {
+      state: 'failed',
+      reason: `${cancelled.length} 个步骤已取消${names.length ? `（${names.join('、')}${cancelled.length > names.length ? ' 等' : ''}）` : ''}`,
+    }
+  }
   const rejectedAcceptance = steps.find((step) => (
     step.kind === 'verify'
     && step.output?.acceptance?.verdict

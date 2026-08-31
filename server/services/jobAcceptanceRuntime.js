@@ -228,6 +228,30 @@ export function persistRejectedStepResult({
   emit,
 }) {
   const failure = result.error || result.acceptance?.summary || '步骤执行失败'
+  const output = result?.output && typeof result.output === 'object' && !Array.isArray(result.output)
+    ? result.output
+    : null
+  const completedDeliverables = [...new Set((Array.isArray(output?.completedDeliverables)
+    ? output.completedDeliverables
+    : []).map((value) => String(value || '').trim().toLowerCase()).filter(Boolean))].slice(0, 16)
+  const missingDeliverables = [...new Set((Array.isArray(output?.missingDeliverables)
+    ? output.missingDeliverables
+    : []).map((value) => String(value || '').trim().toLowerCase()).filter(Boolean))].slice(0, 16)
+  const artifactIds = [...new Set((Array.isArray(output?.artifactIds)
+    ? output.artifactIds
+    : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 64)
+  const issues = (Array.isArray(output?.issues) ? output.issues : [])
+    .map((value) => String(value || '').trim().slice(0, 1_000))
+    .filter(Boolean)
+    .slice(0, 16)
+  const failurePayload = {
+    ...(result.acceptance ? { acceptance: result.acceptance } : {}),
+    repairAttempts: Math.max(0, Number(repairAttempt) || 0),
+    ...(completedDeliverables.length > 0 ? { completedDeliverables } : {}),
+    ...(missingDeliverables.length > 0 ? { missingDeliverables } : {}),
+    ...(artifactIds.length > 0 ? { artifactIds } : {}),
+    ...(issues.length > 0 ? { issues } : {}),
+  }
   const committed = commitOwned(() => {
     updateJobStep(nextStep.id, {
       status: 'failed',
@@ -248,7 +272,7 @@ export function persistRejectedStepResult({
       stepId: nextStep.id,
       type: 'failed',
       message: failure,
-      payload: result.acceptance ? { acceptance: result.acceptance, repairAttempts: repairAttempt } : null,
+      payload: failurePayload,
     }))
   })
   if (!committed) return false
@@ -278,7 +302,10 @@ export function completeManualJobTransition({ jobId, stepId, updated, emit }) {
     type: completed ? 'completed' : 'failed',
     message: completed ? '任务已完成' : resolution.reason,
   }))
-  notifyJobTerminal(updated, {
+  notifyJobTerminal({
+    ...updated,
+    error: completed ? null : resolution.reason,
+  }, {
     status: completed ? 'completed' : 'failed',
     body: completed ? '任务已完成' : resolution.reason,
   })

@@ -443,12 +443,17 @@ export function normalizeServerSessionSnapshot(snapshot) {
       const serverDeliveryArtifactIds = message.role === 'assistant'
         ? optionalContextArtifactIds(message?.modelContext, 'deliveryArtifactIds')
         : undefined
+      const serverArtifactIds = message.role === 'assistant'
+        ? optionalContextArtifactIds(message?.modelContext, 'artifactIds')
+        : undefined
       const persistedArtifacts = message.role === 'assistant' && Array.isArray(message?.artifacts)
         ? message.artifacts.filter((artifact) => artifact?.id && artifact?.url && artifact?.filename)
         : []
       const serverArtifacts = persistedArtifacts.length > 0
         ? persistedArtifacts
         : recoverSelectedToolArtifacts(message?.modelContext, serverDeliveryArtifactIds)
+      const hasAuthoritativeArtifactCollection = message.role === 'assistant'
+        && (serverArtifactIds !== undefined || Object.hasOwn(message, 'artifacts'))
       const verifiedLocalFiles = message.role === 'assistant'
         ? optionalContextVerifiedLocalFiles(message?.modelContext)
         : undefined
@@ -530,7 +535,10 @@ export function normalizeServerSessionSnapshot(snapshot) {
             serverAuthoritative: true,
             toolCalls,
             ...(toolTrace.length ? { toolTrace } : {}),
-            ...(serverArtifacts.length ? { serverArtifacts } : {}),
+            ...(hasAuthoritativeArtifactCollection || serverArtifacts.length
+              ? { serverArtifacts }
+              : {}),
+            ...(serverArtifactIds !== undefined ? { serverArtifactIds } : {}),
             ...(serverDeliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds } : {}),
             ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
             ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),

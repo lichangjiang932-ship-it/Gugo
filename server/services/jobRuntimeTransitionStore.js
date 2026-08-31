@@ -51,15 +51,15 @@ function mapSteeringMessage(row) {
 }
 
 export function requestJobCancellationTransition({ jobId, userId, now = Date.now() } = {}) {
-  if (!jobId || !userId) return { found: false, changed: false, status: null }
+  if (!jobId || !userId) return { found: false, changed: false, status: null, event: null }
   const db = getDb()
   return db.transaction(() => {
     const current = db.prepare(`
       SELECT status, cancel_requested FROM jobs WHERE id = ? AND user_id = ?
     `).get(jobId, userId)
-    if (!current) return { found: false, changed: false, status: null }
+    if (!current) return { found: false, changed: false, status: null, event: null }
     if (TERMINAL_JOB_STATUSES.has(current.status)) {
-      return { found: true, changed: false, status: current.status }
+      return { found: true, changed: false, status: current.status, event: null }
     }
 
     let changed = false
@@ -72,7 +72,16 @@ export function requestJobCancellationTransition({ jobId, userId, now = Date.now
       if (!changed) throw new Error('job cancellation lost its compare-and-swap race')
     }
     cancelScheduledWake(db, { jobId, userId, now })
-    return { found: true, changed, status: 'cancel_requested' }
+    const event = changed
+      ? appendJobEvent({
+          jobId,
+          type: 'cancel_requested',
+          message: '已请求终止任务',
+          payload: { code: 'JOB_CANCEL_REQUESTED', reason: 'user_requested' },
+          now,
+        })
+      : null
+    return { found: true, changed, status: 'cancel_requested', event }
   }).immediate()
 }
 
@@ -88,8 +97,14 @@ export function enqueueJobSteeringTransition({ jobId, userId, content, now = Dat
   return db.transaction(() => {
     const current = db.prepare('SELECT status FROM jobs WHERE id = ? AND user_id = ?').get(jobId, userId)
     if (!current) return { found: false, accepted: false, reason: 'missing', message: null, requeued: false }
-    if (TERMINAL_JOB_STATUSES.has(current.status)) {
-      return { found: true, accepted: false, reason: 'terminal', message: null, requeued: false }
+    if (TERMINAL_JOB_STATUSES.has(current.status) || current.status === 'cancel_requested') {
+      return {
+        found: true,
+        accepted: false,
+        reason: current.status === 'cancel_requested' ? 'cancelling' : 'terminal',
+        message: null,
+        requeued: false,
+      }
     }
 
     if (current.status === 'waiting') {
@@ -142,25 +157,25 @@ export function resumeJobAfterApprovalTransition({
   now = Date.now(),
 } = {}) {
   if (!jobId || !userId || !leaseOwnerId) {
-    return { found: false, owned: false, changed: false, status: null }
+    return { found: false, owned: false, changed: false, status: null, event: null }
   }
   const db = getDb()
   return db.transaction(() => {
     const current = db.prepare('SELECT status FROM jobs WHERE id = ? AND user_id = ?').get(jobId, userId)
-    if (!current) return { found: false, owned: false, changed: false, status: null }
+    if (!current) return { found: false, owned: false, changed: false, status: null, event: null }
     if (current.status !== 'awaiting_approval') {
-      return { found: true, owned: false, changed: false, status: current.status }
+      return { found: true, owned: false, changed: false, status: current.status, event: null }
     }
     const owned = !!db.prepare(`
       SELECT 1 FROM job_execution_leases
        WHERE job_id = ? AND owner_id = ? AND expires_at > ?
     `).get(jobId, leaseOwnerId, now)
-    if (!owned) return { found: true, owned: false, changed: false, status: current.status }
+    if (!owned) return { found: true, owned: false, changed: false, status: current.status, event: null }
 
     if (stepId) {
       const step = db.prepare('SELECT status FROM job_steps WHERE id = ? AND job_id = ?').get(stepId, jobId)
       if (!step) {
-        return { found: true, owned: true, changed: false, status: current.status }
+        return { found: true, owned: true, changed: false, status: current.status, event: null }
       }
       if (step.status === 'running') {
         db.prepare(`
@@ -185,7 +200,14 @@ export function resumeJobAfterApprovalTransition({
        WHERE id = ? AND user_id = ? AND status = 'awaiting_approval'
     `).run(now, jobId, userId).changes === 1
     if (!changed) throw new Error('job approval resume lost its compare-and-swap race')
-    return { found: true, owned: true, changed: true, status: 'queued' }
+    const event = appendJobEvent({
+      jobId,
+      stepId,
+      type: 'approval_recovered',
+      message: 'Approval decided after process restart; the interrupted turn was requeued',
+      now,
+    })
+    return { found: true, owned: true, changed: true, status: 'queued', event }
   }).immediate()
 }
 

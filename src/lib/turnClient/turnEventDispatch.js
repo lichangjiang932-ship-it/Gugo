@@ -119,18 +119,35 @@ export function normalizeTurnFailurePayload(payload = {}, {
   }
   const incompleteReason = String(nested.incompleteReason || payload.incompleteReason || '').trim()
   if (incompleteReason) error.incompleteReason = incompleteReason
-  const missingRequirements = [...new Set((Array.isArray(nested.missingRequirements)
+  const nestedMissingRequirements = [...new Set((Array.isArray(nested.missingRequirements)
     ? nested.missingRequirements
-    : Array.isArray(payload.missingRequirements) ? payload.missingRequirements : [])
-    .map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
+    : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
+  const payloadMissingRequirements = [...new Set((Array.isArray(payload.missingRequirements)
+    ? payload.missingRequirements
+    : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
+  const missingRequirements = nestedMissingRequirements.length > 0
+    ? nestedMissingRequirements
+    : payloadMissingRequirements
   if (missingRequirements.length > 0) error.missingRequirements = missingRequirements
-  const taskVerification = nested.taskVerification && typeof nested.taskVerification === 'object'
+  const nestedTaskVerification = nested.taskVerification
+    && typeof nested.taskVerification === 'object'
+    && !Array.isArray(nested.taskVerification)
+    && Object.keys(nested.taskVerification).length > 0
     ? nested.taskVerification
-    : payload.taskVerification && typeof payload.taskVerification === 'object'
+    : null
+  const payloadTaskVerification = payload.taskVerification
+    && typeof payload.taskVerification === 'object'
+    && !Array.isArray(payload.taskVerification)
+    && Object.keys(payload.taskVerification).length > 0
       ? payload.taskVerification
       : null
+  const taskVerification = nestedTaskVerification || payloadTaskVerification
   if (taskVerification) error.taskVerification = taskVerification
   const iterations = optionalInteger(payload.iterations, 0)
+  const partialText = Object.hasOwn(payload, 'partialText')
+    ? String(payload.partialText ?? '')
+    : Object.hasOwn(payload, 'text') ? String(payload.text ?? '') : undefined
+  const artifactIds = optionalArtifactIds(payload, 'artifactIds')
   const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
   const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
   const retainedLocalFiles = optionalRetainedLocalFiles(payload)
@@ -139,9 +156,8 @@ export function normalizeTurnFailurePayload(payload = {}, {
   const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
   return {
     error,
-    partialText: String(payload.partialText ?? payload.text ?? ''),
-    artifactIds: [...new Set((Array.isArray(payload.artifactIds) ? payload.artifactIds : [])
-      .map((value) => String(value || '').trim()).filter(Boolean))],
+    ...(partialText !== undefined ? { partialText } : {}),
+    ...(artifactIds !== undefined ? { artifactIds } : {}),
     ...(deliveryArtifactIds !== undefined ? { deliveryArtifactIds } : {}),
     ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
     ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
@@ -567,8 +583,8 @@ export async function dispatchTurnEvent(event, {
         modelActivity: null,
         progress: null,
         ...(event.type === 'turn.failed' ? { serverConnectionState: null } : {}),
-        serverPartialText: failure.partialText,
-        serverArtifactIds: failure.artifactIds,
+        ...(failure.partialText !== undefined ? { serverPartialText: failure.partialText } : {}),
+        ...(failure.artifactIds !== undefined ? { serverArtifactIds: failure.artifactIds } : {}),
         ...(failure.deliveryArtifactIds !== undefined
           ? { serverDeliveryArtifactIds: failure.deliveryArtifactIds }
           : {}),

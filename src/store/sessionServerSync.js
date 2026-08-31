@@ -39,9 +39,19 @@ export function isServerBackedSession(session) {
 function hasIncompleteTaskDiagnosticGap(message) {
   const failure = message?.meta?.serverFailure
   if (!failure || typeof failure !== 'object' || Array.isArray(failure)) return false
-  if (String(failure.code || '').trim().toUpperCase() !== 'TURN_INCOMPLETE') return false
-  return !String(failure.incompleteReason || '').trim()
+  const code = String(failure.code || '').trim().toUpperCase()
+  const incompleteReason = String(failure.incompleteReason || '').trim().toLowerCase()
+  if (code !== 'TURN_INCOMPLETE' && !incompleteReason) return false
+  if (!incompleteReason
     || !Array.isArray(failure.missingRequirements)
+    || typeof failure.retryable !== 'boolean') return true
+  if (['task_verification_repair_exhausted', 'task_verification_repair_pending'].includes(incompleteReason)) {
+    const verification = failure.taskVerification
+    if (!verification || typeof verification !== 'object' || !Array.isArray(verification.checks)) return true
+  }
+  const blocked = message?.meta?.serverConnectionState === 'blocked'
+    || code === 'TURN_RECOVERY_BLOCKED'
+  return blocked && typeof failure.manualRetryable !== 'boolean'
 }
 
 export function needsServerTranscriptHydration(session) {
@@ -133,7 +143,11 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
       role: serverMessage.role,
       // A completed snapshot should be authoritative, but an unexpectedly empty
       // assistant row must not erase text already received over the live stream.
-      content: serverMessage.content || localMessage.content || '',
+      // Conversely, a snapshot behind the live event cursor must never roll
+      // newer partial/final model output back to an older persisted body.
+      content: localHasNewerTurnState
+        ? localMessage.content || serverMessage.content || ''
+        : serverMessage.content || localMessage.content || '',
       timestamp: serverMessage.timestamp ?? localMessage.timestamp,
     }
     if (Object.keys(serverMeta).length || Object.keys(localMeta).length) {
@@ -141,7 +155,12 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
       delete merged.meta.pendingServerSync
       if (serverMessage.role === 'assistant') {
         for (const key of ['turnStartedAt', 'turnCompletedAt', 'latency']) {
-          if (Object.hasOwn(serverMeta, key)) merged.meta[key] = serverMeta[key]
+          if (localHasNewerTurnState) {
+            if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
+            else delete merged.meta[key]
+          } else if (Object.hasOwn(serverMeta, key)) {
+            merged.meta[key] = serverMeta[key]
+          }
         }
         const recoveryStub = serverMeta.serverRecoveryStub === true
         const canonicalTextChanged = !recoveryStub && merged.content !== localMessage.content
@@ -161,7 +180,9 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
           }
         }
         merged.meta.serverTurnId = serverMeta.serverTurnId ?? localMeta.serverTurnId ?? null
-        merged.meta.streaming = recoveryStub || serverMeta.streaming === true
+        merged.meta.streaming = localHasNewerTurnState
+          ? localMeta.streaming === true
+          : recoveryStub || serverMeta.streaming === true
         merged.meta.serverAuthoritative = !recoveryStub
         if (recoveryStub) merged.meta.serverRecoveryStub = true
         else delete merged.meta.serverRecoveryStub
@@ -169,23 +190,37 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
         // live event has already advanced this Turn. In particular, an older
         // local TURN_INCOMPLETE object must not erase structured diagnostics
         // recovered by the server from the scoped checkpoint.
-        if (!localHasNewerTurnState && !recoveryStub) {
-          if (Object.hasOwn(serverMeta, 'serverFailure')) {
-            merged.meta.serverFailure = serverMeta.serverFailure
-          } else {
-            delete merged.meta.serverFailure
+        const terminalEvidenceKeys = ['serverFailure', 'serverPartialText', 'serverArtifactIds']
+        if (localHasNewerTurnState) {
+          for (const key of terminalEvidenceKeys) {
+            if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
+            else delete merged.meta[key]
+          }
+        } else if (!recoveryStub) {
+          for (const key of terminalEvidenceKeys) {
+            if (Object.hasOwn(serverMeta, key)) {
+              merged.meta[key] = serverMeta[key]
+            } else if (key === 'serverFailure') {
+              delete merged.meta[key]
+            }
           }
         }
         // A completed snapshot is the source of truth for persisted files.
         // Keep local artifacts only when an older server response does not
         // expose the field at all; an explicit server list must replace an
         // empty or partial list left behind by a missed live tool event.
-        if (Object.hasOwn(serverMeta, 'serverArtifacts')) {
-          merged.meta.serverArtifacts = serverMeta.serverArtifacts
+        for (const key of ['serverArtifacts', 'serverDeliveryArtifactIds']) {
+          if (localHasNewerTurnState) {
+            if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
+            else delete merged.meta[key]
+          } else if (Object.hasOwn(serverMeta, key)) {
+            merged.meta[key] = serverMeta[key]
+          }
         }
-        if (Object.hasOwn(serverMeta, 'serverDeliveryArtifactIds')) {
+        if (!localHasNewerTurnState && Object.hasOwn(serverMeta, 'serverDeliveryArtifactIds')) {
           merged.meta.serverDeliveryArtifactIds = serverMeta.serverDeliveryArtifactIds
-        } else if (!recoveryStub
+        } else if (!localHasNewerTurnState
+          && !recoveryStub
           && Object.hasOwn(serverMeta, 'serverArtifacts')
           && Object.hasOwn(localMeta, 'serverDeliveryArtifactIds')
           && !sameArtifactCollection(localMeta.serverArtifacts, serverMeta.serverArtifacts)) {
