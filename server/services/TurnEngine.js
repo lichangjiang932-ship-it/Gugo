@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { normalizeModelUsage } from '../../shared/modelUsage.js'
 import {
   getBoundTurnToolSpecs,
   runBoundTurnLoop,
@@ -9,11 +8,6 @@ import { publishTurnActivity } from './turnActivityBus.js'
 import { dispatchHooks as dispatchHooksService } from './hooksService.js'
 import { getApprovalMode } from './approvalSettingsStore.js'
 import {
-  expandStoredMessages,
-  selectAttachmentIdsForModelRequest,
-  selectStoredMessagesAfterCompaction,
-} from './turnMessageContext.js'
-import {
   recordEvolutionCanaryOutcome,
   resolveEvolutionCanaryAssignment,
 } from './evolutionCanaryService.js'
@@ -22,10 +16,6 @@ import { createTurnCancellationRuntime } from './turnCancellationRuntime.js'
 import { createTurnCanaryOutcomeRuntime } from './turnCanaryOutcomeRuntime.js'
 import { scheduleAutoMemoryExtraction } from './autoMemoryService.js'
 import { listRuntimePluginStates } from './runtimePluginStateStore.js'
-import {
-  assertTurnExecutionEnvironmentCompatible,
-  createTurnExecutionEnvironmentSnapshot,
-} from './turnExecutionEnvironment.js'
 import { resolveToolImplementationRevisions as resolveCurrentToolImplementationRevisions } from './toolImplementationRevision.js'
 import { getActiveRuntimePolicyProvenance } from '../core/runtimeCapabilityState.js'
 import {
@@ -35,28 +25,10 @@ import {
 } from './localFileAccessService.js'
 import { logWarn, newTraceId, withLogContext } from '../utils/logger.js'
 import {
-  checkpointMessagesForTurn,
-  latestLegacyCheckpoint,
-  recoveryAttemptAfterCheckpoint,
-  storedCheckpointEvent,
-} from './turnRecoveryProjection.js'
-import {
   createTurnEventEmitter,
   isTerminalTurnEventType,
 } from './turnEventEmitter.js'
-import {
-  normalizeArtifactIds,
-  optionalDeliveryArtifactIds,
-  sameArtifactIds,
-} from './turnTerminalProjection.js'
-import {
-  addTurnModelUsage as addModelUsage,
-  normalizePromptTokenEstimate,
-} from './turnModelUsageProjection.js'
-import {
-  createChatOnlyToolExecutionError,
-  createTurnModelRequestRunner,
-} from './turnModelRequestRuntime.js'
+import { createTurnModelRequestRunner } from './turnModelRequestRuntime.js'
 import { TurnEngineError } from './turnResolutionRuntime.js'
 import {
   createTurnStartRuntime,
@@ -65,8 +37,9 @@ import {
 } from './turnStartRuntime.js'
 import { assembleTurnEnginePersistence } from './turnEnginePersistenceAssembly.js'
 import { createTurnFailedRetryRuntime } from './turnFailedRetryRuntime.js'
-import { createTurnTerminalEvidenceRuntime } from './turnTerminalEvidenceRuntime.js'
 import { createTurnTerminalOutcomeRuntime } from './turnTerminalOutcomeRuntime.js'
+import { createTurnExecutionRuntime } from './turnExecutionRuntime.js'
+import { createTurnSchedulingRuntime } from './turnSchedulingRuntime.js'
 import { resolveTurnToolSpecs } from './turnToolSpecs.js'
 import { createTurnResumeRuntime } from './turnResumeRuntime.js'
 import {
@@ -77,22 +50,16 @@ import {
 import {
   abortError,
   activeKey,
-  checkpointStateForResolution,
-  isTemporaryTurnEvidence,
   MANUAL_RECOVERY_BLOCK_CODES,
   missingTurnModelRuntime,
   missingTurnPromptRuntime,
   normalizePositiveInteger,
-  normalizePromptContextSnapshot,
   publicStatus,
   rejectResumeApprovalModeOverride,
   sessionKey,
 } from './turnEnginePolicy.js'
 
 export { TurnEngineError } from './turnResolutionRuntime.js'
-
-const ATOMIC_CHECKPOINT_UNSUPPORTED_CODE = 'TURN_ATOMIC_CHECKPOINT_UNSUPPORTED'
-const ATOMIC_CHECKPOINT_COMMIT_MISMATCH_CODE = 'TURN_ATOMIC_CHECKPOINT_COMMIT_MISMATCH'
 
 export class TurnEngine {
   constructor(options = {}) {
@@ -247,6 +214,21 @@ export class TurnEngine {
       dispatchHooks: this.deps.dispatchHooks,
       scheduleMemoryExtraction: this.deps.scheduleMemoryExtraction,
       runMemoryModel: this.deps.runMemoryModel,
+    })
+    this.executionRuntime = createTurnExecutionRuntime({
+      deps: this.deps,
+      executionToolContextRuntime: this.executionToolContextRuntime,
+      canaryOutcomeRuntime: this.canaryOutcomeRuntime,
+      terminalOutcomeRuntime: this.terminalOutcomeRuntime,
+    })
+    this.scheduleTurn = createTurnSchedulingRuntime({
+      active: this.active,
+      scheduling: this.scheduling,
+      leaseReleaseRetries: this.shutdownLeaseReleaseRetries,
+      isClosing: () => this.closing,
+      acquireLease: (scope) => this.deps.runtimeCore.lease.acquire(scope),
+      runWithProjectDirectory: (scope, run) => this.deps.runWithProjectDirectory(scope, run),
+      executeTurn: (context, signal) => this.executionRuntime(context, signal),
     })
   }
 
@@ -434,7 +416,7 @@ export class TurnEngine {
     this.startingSessions.set(startingKey, (this.startingSessions.get(startingKey) || 0) + 1)
     try {
       const initialized = await this.startRuntime.initialize(args)
-      const scheduled = await this.#schedule({ ...initialized.execution, emitter: initialized.emitter })
+      const scheduled = await this.scheduleTurn({ ...initialized.execution, emitter: initialized.emitter })
       const { userId, sessionId, turnId } = initialized.scope
       if (!scheduled) await initialized.emitter.close()
       return await this.getTurn({ userId, sessionId, turnId })
@@ -507,7 +489,7 @@ export class TurnEngine {
       resolveModelBinding: (input) => this.#resolveModelBinding(input),
       active: this.active,
       createEmitter: (input) => this.#createEmitter(input),
-      schedule: (context) => this.#schedule(context),
+      schedule: (context) => this.scheduleTurn(context),
     })
     return this.resumeRuntime.resumeTurn(scope)
   }
@@ -551,677 +533,6 @@ export class TurnEngine {
       onWriterOpen: (writer) => this.eventWriters.add(writer),
       onWriterClose: (writer) => this.eventWriters.delete(writer),
     })
-  }
-
-  async #schedule(context) {
-    if (this.closing) return false
-    const key = activeKey(context.userId, context.sessionId, context.turnId)
-    if (this.active.has(key) || this.scheduling.has(key)) return false
-    this.scheduling.add(key)
-    const scope = { userId: context.userId, sessionId: context.sessionId, turnId: context.turnId }
-    try {
-      const lease = await this.deps.runtimeCore.lease.acquire(scope)
-      if (!lease) return false
-      if (this.closing || this.active.has(key)) {
-        await lease.release()
-        return false
-      }
-      const { controller, executionLease = null } = lease
-      const releaseLease = () => lease.release()
-      const entry = { controller, executionLease, promise: null, releaseLease, emitter: context.emitter }
-      this.active.set(key, entry)
-      entry.promise = Promise.resolve()
-        .then(() => this.deps.runWithProjectDirectory({
-          userId: context.userId,
-          projectDirectory: context.projectDirectory,
-          defaultOutputDirectory: context.defaultOutputDirectory,
-        }, () => this.#execute({ ...context, executionLease }, controller.signal)))
-        .finally(async () => {
-          let failure = null
-          let failed = false
-          try {
-            await context.emitter?.close?.()
-          } catch (error) {
-            failure = error
-            failed = true
-          }
-          try {
-            await releaseLease?.()
-            this.shutdownLeaseReleaseRetries.delete(releaseLease)
-          } catch (error) {
-            this.shutdownLeaseReleaseRetries.add(releaseLease)
-            failure = error
-            failed = true
-          } finally {
-            if (this.active.get(key) === entry) this.active.delete(key)
-          }
-          if (failed) throw failure
-        })
-      entry.promise.catch(() => {})
-      return true
-    } finally {
-      this.scheduling.delete(key)
-    }
-  }
-
-  async #execute({
-    userId,
-    sessionId,
-    turnId,
-    turnStartedAt,
-    content,
-    displayContent,
-    modelName,
-    modelProviderId,
-    modelConfigRevision,
-    modelRuntimeEnv,
-    modelMode,
-    agentId,
-    skillIds,
-    skillDefinitions,
-    toolsConfig,
-    intentMode,
-    approvalMode,
-    failedRetryActive = false,
-    resumeContext,
-    emitter,
-    executionLease = null,
-  }, signal) {
-    if (signal.aborted) {
-      await this.terminalOutcomeRuntime.cancelBeforeExecution({
-        scope: { userId, sessionId, turnId },
-        signal,
-        emitter,
-        executionLease,
-        turnStartedAt,
-      })
-      return
-    }
-    const checkpointScope = { userId, sessionId, turnId }
-    const effectiveTurnStartedAt = Number.isFinite(Number(turnStartedAt))
-      ? Math.max(0, Number(turnStartedAt))
-      : this.deps.now()
-    const storedCheckpoint = storedCheckpointEvent(
-      await this.deps.runtimeCore.checkpoint.load(checkpointScope),
-    )
-    const checkpoint = storedCheckpoint
-      || await latestLegacyCheckpoint(this.deps.replayEvents, checkpointScope)
-    let latestCheckpointSequence = Number.isInteger(checkpoint?.sequence) ? checkpoint.sequence : null
-    const resolvedCheckpointState = checkpointStateForResolution(checkpoint?.payload?.state, resumeContext)
-    // A failed-retry attempt resumes the durable conversation/tool state, not
-    // the previous retryable terminal projection. Replaying final.incomplete
-    // here would return the same failure without making another model call.
-    const restoredCheckpointState = failedRetryActive && resolvedCheckpointState?.final
-      ? { ...resolvedCheckpointState, final: null }
-      : resolvedCheckpointState
-    const steeringOwnerId = normalizeOptionalId(this.deps.runtimeCore.lease.ownerId)
-    const steeringScope = { userId, sessionId, turnId, ownerId: steeringOwnerId }
-    if (steeringOwnerId) {
-      const appliedSteeringIds = Array.isArray(checkpoint?.payload?.state?.appliedSteeringIds)
-        ? checkpoint.payload.state.appliedSteeringIds
-        : []
-      await this.deps.acknowledgeAppliedSteering({
-        ...steeringScope,
-        steeringIds: appliedSteeringIds,
-        now: this.deps.now(),
-      })
-      await this.deps.releaseStaleSteering({ ...steeringScope, now: this.deps.now() })
-    }
-    let pendingRecoveryAttempt = await recoveryAttemptAfterCheckpoint(
-      this.deps.replayEvents,
-      { userId, sessionId, turnId },
-      checkpoint,
-    )
-    const storedMessages = (await this.deps.readMessages({ userId, sessionId, limit: 500, recent: true }))
-      .filter((message) => !isTemporaryTurnEvidence(message, turnId))
-      .filter((message) => !(
-        message?.id === `${turnId}:assistant`
-          && message?.modelContext?.paused === true
-      ))
-      .filter((message) => !(
-        message?.modelContext?.liveSteering === true
-          && message?.modelContext?.turnId === turnId
-      ))
-      .map((message) => message.id === `${turnId}:user`
-        ? { ...message, content }
-        : message)
-    const currentUserMessage = storedMessages.find((message) => message.id === `${turnId}:user`)
-    const previousUserPrompt = (await this.deps.readPreviousUserMessage({
-      userId,
-      sessionId,
-      messageId: `${turnId}:user`,
-    }))?.content || ''
-    const managedAttachments = Array.isArray(currentUserMessage?.modelContext?.attachments)
-      ? currentUserMessage.modelContext.attachments
-      : []
-    const restoredPromptContextSnapshot = normalizePromptContextSnapshot(
-      restoredCheckpointState?.promptContextSnapshot,
-    )
-    let canaryAssignment = restoredPromptContextSnapshot?.canaryAssignment || null
-    let promptContext = {
-      messages: [],
-      effectiveAgentId: restoredPromptContextSnapshot?.effectiveAgentId || agentId,
-      skillIds: restoredPromptContextSnapshot?.skillIds || skillIds,
-      memoryIds: restoredPromptContextSnapshot?.memoryIds || [],
-      pluginPromptBlockIds: restoredPromptContextSnapshot?.pluginPromptBlockIds || [],
-      compactionArchiveId: null,
-      compactionBoundary: null,
-      canaryAssignment,
-    }
-    if (!restoredPromptContextSnapshot) {
-      try {
-        canaryAssignment = await this.deps.resolveCanaryAssignment({
-          userId,
-          sessionId,
-          turnId,
-          env: this.deps.env,
-          now: this.deps.now(),
-        })
-      } catch (error) {
-        // Canary routing is optional and must fail closed to the baseline prompt.
-        try { logWarn('evolution.canary.resolve', error, { userId, sessionId, turnId }) } catch { /* optional */ }
-      }
-      try {
-        promptContext = await this.deps.preparePromptContext({
-          userId,
-          agentId,
-          skillIds,
-          skillDefinitions,
-          sessionId,
-          recentMessages: storedMessages,
-          includeRecentTranscript: false,
-          query: content,
-          canaryAssignment,
-          env: this.deps.env,
-        }) || promptContext
-      } catch (error) {
-        // Optional memory/agent/skill/canary context must never prevent a turn from running.
-        if (String(error?.code || '').trim() !== 'TURN_PROMPT_RUNTIME_NOT_CONFIGURED') {
-          logWarn('turn.optional_prompt_context', error, { userId, sessionId, turnId })
-        }
-        canaryAssignment = null
-      }
-    }
-    const promptContextSnapshot = restoredPromptContextSnapshot || normalizePromptContextSnapshot({
-      effectiveAgentId: promptContext.effectiveAgentId || agentId,
-      skillIds: promptContext.skillIds,
-      memoryIds: promptContext.memoryIds,
-      pluginPromptBlockIds: promptContext.pluginPromptBlockIds,
-      canaryAssignment: canaryAssignment || promptContext.canaryAssignment,
-    })
-    const selectedStoredMessages = selectStoredMessagesAfterCompaction(
-      storedMessages,
-      promptContext.compactionBoundary,
-    )
-    const promptStoredMessages = currentUserMessage
-      && !selectedStoredMessages.some((message) => message?.id === currentUserMessage.id)
-      ? [...selectedStoredMessages, currentUserMessage]
-      : selectedStoredMessages
-    const historyMessages = expandStoredMessages(promptStoredMessages)
-    const messages = [
-      ...(Array.isArray(promptContext.messages) ? promptContext.messages : []),
-      ...historyMessages,
-    ]
-    const toolResolutionMessages = Array.isArray(restoredCheckpointState?.messages)
-      ? restoredCheckpointState.messages
-      : messages
-    const attachmentIdsForFirstModelRequest = selectAttachmentIdsForModelRequest(messages, {
-      currentAttachmentIds: managedAttachments.map((attachment) => attachment.id),
-      prompt: content,
-    })
-    const {
-      normalizedModelMode,
-      chatOnlyMode,
-      effectiveToolsConfig,
-      effectiveIntentMode,
-      effectiveSkillIds,
-      activeSkillId,
-      currentApprovalMode,
-      effectiveApprovalMode,
-      resolvedToolSpecs,
-      toolResolutionDecision,
-      modelToolFileAccessStatus,
-    } = await this.executionToolContextRuntime.resolve({
-      userId,
-      content,
-      modelMode,
-      toolsConfig,
-      intentMode,
-      approvalMode,
-      resumeResolution: resumeContext?.resolution,
-      restoredCheckpointState,
-      promptContextSkillIds: promptContextSnapshot?.skillIds || promptContext.skillIds,
-      fallbackSkillIds: skillIds,
-      toolResolutionMessages,
-      baseToolSpecs: this.deps.toolSpecs,
-      directoryAuthorizationToolSpecs: this.deps.directoryAuthorizationToolSpecs,
-    })
-    const baselineToolCallIds = new Set()
-    let checkpointMessages = checkpointMessagesForTurn(restoredCheckpointState, { content })
-    let checkpointArtifactIds = normalizeArtifactIds(restoredCheckpointState?.artifactIds)
-    let checkpointDeliveryArtifactIds = optionalDeliveryArtifactIds(restoredCheckpointState)
-    let checkpointIterations = Math.max(0, Number(restoredCheckpointState?.iterations) || 0)
-    let checkpointRecovery = restoredCheckpointState?.recovery || null
-    let latestModelUsage = normalizeModelUsage(restoredCheckpointState?.latestModelUsage)
-    let turnModelUsage = normalizeModelUsage(restoredCheckpointState?.turnModelUsage)
-      || latestModelUsage
-    let latestEstimatedPromptTokens = normalizePromptTokenEstimate(
-      restoredCheckpointState?.latestEstimatedPromptTokens,
-    )
-    // Evolution telemetry stays host-owned: recording is optional and must
-    // never fail the turn. Live run context binds at call time because usage
-    // counters and the canary assignment mutate during execution.
-    const recordCanaryTerminal = (
-      terminalState,
-      errorCode = null,
-      completedAt = this.deps.now(),
-      evaluationOutput = '',
-    ) => this.canaryOutcomeRuntime({
-      canaryAssignment,
-      userId,
-      sessionId,
-      turnId,
-      effectiveTurnStartedAt,
-      turnModelUsage,
-      latestModelUsage,
-      modelProviderId,
-      modelName,
-      modelConfigRevision,
-      evaluationInput: content,
-      terminalState,
-      errorCode,
-      completedAt,
-      evaluationOutput,
-    })
-    let streamedAssistantText = String(
-      pendingRecoveryAttempt?.assistantText || restoredCheckpointState?.retryAssistantText || '',
-    )
-    const readTerminalState = () => ({
-      checkpointMessages,
-      baselineToolCallIds,
-      checkpointArtifactIds,
-      checkpointDeliveryArtifactIds,
-      checkpointIterations,
-      checkpointRecovery,
-      latestCheckpointSequence,
-      latestModelUsage,
-      turnModelUsage,
-      latestEstimatedPromptTokens,
-      effectiveTurnStartedAt,
-      promptContextSnapshot,
-      promptContext,
-      historyMessages,
-      agentId,
-      failedRetryActive,
-      streamedAssistantText,
-    })
-    const terminalEvidenceRuntime = createTurnTerminalEvidenceRuntime({
-      scope: { userId, sessionId, turnId },
-      emitter,
-      executionLease,
-      now: this.deps.now,
-      writeMessage: this.deps.writeMessage,
-      writeRecoveryFailure: this.deps.writeRecoveryFailure,
-      commitTurnBoundary: this.deps.commitTurnBoundary,
-      recordCanaryTerminal,
-      readState: readTerminalState,
-    })
-    let contextWindow
-    try {
-      contextWindow = this.deps.getContextWindow({
-        userId: modelRuntimeEnv ? null : userId,
-        modelName: modelName || undefined,
-        modelProviderId: modelRuntimeEnv ? undefined : (modelProviderId || undefined),
-        env: modelRuntimeEnv || this.deps.env,
-      })
-    } catch (error) {
-      // Endpoint metadata is advisory; model execution remains available if discovery fails.
-      logWarn('turn.context_window_discovery', error, { userId, sessionId, turnId })
-    }
-    try {
-      const executionFileAccess = modelToolFileAccessStatus
-        ?? this.deps.readFileAccessStatus({ userId })
-      const executionRuntimePlugins = this.deps.readRuntimePlugins()
-      let executionRuntimePluginStates
-      try {
-        executionRuntimePluginStates = this.deps.readRuntimePluginStates({
-          verifyActiveReleases: true,
-        })
-      } catch (error) {
-        if (restoredCheckpointState
-          && String(error?.code || '').trim() === 'PLUGIN_RELEASE_CORRUPT') {
-          error.retryable = false
-          error.unsafeToReplay = true
-        }
-        throw error
-      }
-      const toolImplementations = this.deps.resolveToolImplementationRevisions({
-        userId,
-        toolSpecs: resolvedToolSpecs,
-      })
-      const runtimePolicyProvenance = this.deps.readRuntimePolicyProvenance()
-      const observedExecutionEnvironment = createTurnExecutionEnvironmentSnapshot({
-        modelName,
-        modelProviderId,
-        modelConfigRevision,
-        modelMode: normalizedModelMode,
-        approvalMode: currentApprovalMode,
-        policy: runtimePolicyProvenance,
-        toolsConfig: effectiveToolsConfig,
-        toolSpecs: resolvedToolSpecs,
-        toolImplementations,
-        fileAccess: executionFileAccess,
-        runtimePlugins: executionRuntimePlugins,
-        runtimePluginStates: executionRuntimePluginStates,
-      })
-      const effectiveExecutionEnvironment = createTurnExecutionEnvironmentSnapshot({
-        modelName,
-        modelProviderId,
-        modelConfigRevision,
-        modelMode: normalizedModelMode,
-        approvalMode: effectiveApprovalMode,
-        policy: runtimePolicyProvenance,
-        toolsConfig: effectiveToolsConfig,
-        toolSpecs: resolvedToolSpecs,
-        toolImplementations,
-        fileAccess: executionFileAccess,
-        runtimePlugins: executionRuntimePlugins,
-        runtimePluginStates: executionRuntimePluginStates,
-      })
-      const restoredExecutionEnvironment = restoredCheckpointState?.executionEnvironment
-      if (restoredCheckpointState) {
-        assertTurnExecutionEnvironmentCompatible(
-          restoredExecutionEnvironment,
-          observedExecutionEnvironment,
-          { directoryAuthorization: resumeContext?.resolution },
-        )
-        assertTurnExecutionEnvironmentCompatible(
-          restoredExecutionEnvironment,
-          effectiveExecutionEnvironment,
-          { directoryAuthorization: resumeContext?.resolution },
-        )
-      }
-      const runTurnModelRequest = this.deps.modelRequestRunnerFactory({
-        runModel: this.deps.runModel,
-        prepareAttachments: this.deps.prepareAttachments,
-        publishActivity: this.deps.publishActivity,
-        emitEvent: emitter,
-        userId,
-        sessionId,
-        turnId,
-        modelName,
-        modelProviderId,
-        modelRuntimeEnv,
-        modelMode: normalizedModelMode,
-        env: this.deps.env,
-        contextWindow,
-        firstRequestAttachmentIds: attachmentIdsForFirstModelRequest,
-        pendingRecoveryAttempt,
-        onRecoveryAttempt: (attempt) => {
-          streamedAssistantText = String(attempt?.assistantText || '')
-        },
-        onPromptTokenEstimate: (value) => {
-          latestEstimatedPromptTokens = normalizePromptTokenEstimate(value)
-        },
-        now: this.deps.now,
-      })
-      if (typeof runTurnModelRequest !== 'function') {
-        throw new TypeError('modelRequestRunnerFactory must return a runModel function')
-      }
-      const reconcileTurnModelRequest = async (invocation) => {
-        const manualResolution = typeof this.deps.readModelRequestResolution === 'function'
-          ? await this.deps.readModelRequestResolution({
-              userId,
-              sessionId,
-              turnId,
-              invocation,
-            })
-          : null
-        if (manualResolution) return manualResolution
-        if (typeof this.deps.reconcileModelRequest !== 'function') return null
-        return this.deps.reconcileModelRequest({
-          invocation,
-          modelName,
-          modelProviderId,
-          modelConfigRevision,
-          env: modelRuntimeEnv || this.deps.env,
-        })
-      }
-      const result = await this.deps.runLoop({
-        job: {
-          id: turnId,
-          userId,
-          sessionId,
-          modelName: String(modelName || '').trim() || null,
-          modelProviderId: normalizeOptionalId(modelProviderId),
-          modelConfigRevision: normalizePositiveInteger(modelConfigRevision),
-          modelMode: normalizedModelMode,
-          agentId: promptContextSnapshot?.effectiveAgentId || promptContext.effectiveAgentId || agentId || null,
-          skillIds: effectiveSkillIds,
-          skillDefinitions,
-          origin: 'chat',
-          prompt: content,
-          userPrompt: displayContent || content,
-          previousUserPrompt,
-          title: content.slice(0, 120),
-          managedAttachments,
-          hasManagedAttachments: managedAttachments.length > 0,
-        },
-        step: { id: turnId, kind: 'chat' },
-        messages,
-        contextWindow,
-        intentMode: effectiveIntentMode,
-        signal,
-        toolSpecs: resolvedToolSpecs,
-        toolsConfig: effectiveToolsConfig,
-        // The loop may progressively remount tools for an execution turn, but
-        // its recovery catalog must remain the same user-configured catalog
-        // resolved above. Never let it fall back to the global server catalog.
-        fallbackToolSpecs: resolvedToolSpecs,
-        toolResolutionDecision,
-        skillId: activeSkillId,
-        executeTool: chatOnlyMode
-          ? async () => { throw createChatOnlyToolExecutionError() }
-          : this.deps.executeTool,
-        approvalOrigin: 'chat',
-        approvalSessionId: sessionId,
-        approvalMode: effectiveApprovalMode,
-        claimSteering: steeringOwnerId
-          ? async () => this.deps.claimSteering({
-              ...steeringScope,
-              now: this.deps.now(),
-            })
-          : null,
-        acknowledgeSteering: steeringOwnerId
-          ? async (leaseId) => this.deps.acknowledgeSteering({
-              ...steeringScope,
-              leaseId,
-              now: this.deps.now(),
-            })
-          : null,
-        releaseSteering: steeringOwnerId
-          ? async (leaseId) => this.deps.releaseSteering({
-              ...steeringScope,
-              leaseId,
-              now: this.deps.now(),
-            })
-          : null,
-        beforeFinalCompletion: steeringOwnerId
-          ? async () => {
-              const decision = await this.deps.runtimeCore.lease.closeSteeringInbox({ userId, sessionId, turnId })
-              if (!decision?.closed && decision?.reason !== 'pending') {
-                throw abortError('TURN_LEASE_LOST', 'Turn execution lease was lost before completion')
-              }
-              return decision
-            }
-          : null,
-        loadCheckpoint: async () => restoredCheckpointState || null,
-        reconcileModelRequest: reconcileTurnModelRequest,
-        saveCheckpoint: async (state) => {
-          if (!this.deps.supportsAtomicCheckpointState) {
-            const error = new TurnEngineError(
-              ATOMIC_CHECKPOINT_UNSUPPORTED_CODE,
-              'The configured turn event adapter does not support atomic checkpoint state commits.',
-              503,
-            )
-            error.retryable = false
-            error.unsafeToReplay = true
-            throw error
-          }
-          checkpointMessages = checkpointMessagesForTurn(state, {
-            content,
-            fallback: checkpointMessages,
-          })
-          const checkpointState = {
-            ...state,
-            approvalMode: effectiveApprovalMode,
-            modelMode: normalizedModelMode,
-            executionEnvironment: effectiveExecutionEnvironment,
-            promptContextSnapshot,
-            turnMessages: checkpointMessages,
-            ...(latestModelUsage ? { latestModelUsage } : {}),
-            ...(turnModelUsage ? { turnModelUsage } : {}),
-            ...(latestEstimatedPromptTokens !== null ? { latestEstimatedPromptTokens } : {}),
-          }
-          const nextCheckpointArtifactIds = normalizeArtifactIds(
-            checkpointState?.artifactIds ?? checkpointArtifactIds,
-          )
-          const artifactCollectionChanged = !sameArtifactIds(checkpointArtifactIds, nextCheckpointArtifactIds)
-          checkpointArtifactIds = nextCheckpointArtifactIds
-          checkpointDeliveryArtifactIds = optionalDeliveryArtifactIds(
-            checkpointState,
-            artifactCollectionChanged ? [] : checkpointDeliveryArtifactIds,
-          )
-          checkpointIterations = Math.max(0, Number(checkpointState?.iterations) || checkpointIterations)
-          checkpointRecovery = checkpointState?.recovery || checkpointRecovery
-          const checkpointEvent = await emitter('turn.checkpoint', {
-            storage: 'turn_checkpoints',
-            checkpointVersion: 1,
-            iterations: checkpointIterations,
-            toolCallCount: Array.isArray(checkpointState?.toolCalls) ? checkpointState.toolCalls.length : 0,
-          }, {
-            checkpointState,
-            commitEvent: typeof this.deps.commitTurnCheckpoint === 'function'
-                ? ({ event, checkpointState: durableState }) => this.deps.commitTurnCheckpoint({
-                    userId,
-                    event,
-                    checkpointState: durableState,
-                    executionLease,
-                  })
-              : null,
-          })
-          const saved = await this.deps.runtimeCore.checkpoint.load({ userId, sessionId, turnId })
-          if (saved?.eventSequence !== checkpointEvent.sequence) {
-            const error = new TurnEngineError(
-              ATOMIC_CHECKPOINT_COMMIT_MISMATCH_CODE,
-              'The turn event adapter acknowledged a checkpoint event without atomically committing its state.',
-              503,
-            )
-            error.retryable = false
-            error.unsafeToReplay = true
-            error.eventSequence = checkpointEvent.sequence
-            throw error
-          }
-          if (!saved?.state) {
-            const error = new TurnEngineError(
-              'TURN_CHECKPOINT_PERSISTENCE_FAILED',
-              'Failed to persist turn checkpoint',
-              503,
-            )
-            error.retryable = true
-            throw error
-          }
-          latestCheckpointSequence = checkpointEvent.sequence
-          return true
-        },
-        runModel: runTurnModelRequest,
-        onModelPhase: async ({ phase, iteration, usage, modelName: activeModel, error }) => {
-          const normalizedUsage = phase === 'completed' ? normalizeModelUsage(usage) : null
-          if (normalizedUsage) {
-            latestModelUsage = normalizedUsage
-            turnModelUsage = addModelUsage(turnModelUsage, normalizedUsage)
-          }
-          await emitter('model.phase', {
-            phase,
-            iteration,
-            usage: normalizedUsage || usage,
-            modelName: activeModel,
-            error,
-          })
-        },
-        onModelDelta: async ({ text: delta, iteration, modelName: activeModel }) => {
-          streamedAssistantText += String(delta || '')
-          await emitter('assistant.delta', { text: delta, iteration, modelName: activeModel })
-        },
-        onReasoningDelta: async ({ text: delta, iteration, modelName: activeModel }) => {
-          await emitter('reasoning.delta', { text: delta, iteration, modelName: activeModel })
-        },
-        onProgress: async ({ completed, total, iteration, filesChanged, additions, deletions, phase } = {}) => {
-          await emitter('turn.progress', {
-            ...(completed !== undefined ? { completed } : {}),
-            ...(total !== undefined ? { total } : {}),
-            ...(iteration !== undefined ? { iteration } : {}),
-            ...(filesChanged !== undefined ? { filesChanged } : {}),
-            ...(additions !== undefined ? { additions } : {}),
-            ...(deletions !== undefined ? { deletions } : {}),
-            ...(phase !== undefined ? { phase } : {}),
-          })
-        },
-        onToolCall: async (call) => emitter('tool.call', {
-          toolCallId: call.id, name: call.name, args: call.args,
-        }),
-        onToolStarted: async (call) => emitter('tool.started', {
-          toolCallId: call.id, name: call.name, args: call.args, outputReplay: 'live_only',
-        }),
-        onToolCompleted: async (outcome) => {
-          const failure = outcome.result?.ok === false ? {
-            code: String(outcome.result.code || 'tool_execution_failed'),
-            message: String(outcome.result.error || 'Tool execution failed.'),
-            retryable: outcome.result.retryable === true,
-            ...(Number.isInteger(outcome.result.status) ? { status: outcome.result.status } : {}),
-            ...(outcome.result.hint ? { hint: String(outcome.result.hint) } : {}),
-            ...(Number.isInteger(outcome.result.attempts) ? { attempts: outcome.result.attempts } : {}),
-          } : null
-          return emitter('tool.completed', {
-            toolCallId: outcome.call.id, name: outcome.call.name,
-            args: outcome.executionArgs ?? outcome.call.args,
-            result: outcome.result,
-            error: failure,
-            artifactId: outcome.artifactId || null,
-            artifacts: Array.isArray(outcome.artifacts) ? outcome.artifacts : [],
-          })
-        },
-        onApprovalPending: async (approval) => emitter('approval.required', {
-          approvalId: approval.id, toolName: approval.toolName, args: approval.args,
-          risk: approval.risk, metadataSource: approval.metadataSource,
-          reason: approval.reason, expiresAt: approval.expiresAt,
-        }),
-        onApprovalResolved: async (decision) => emitter('approval.resolved', {
-          approvalId: decision.approvalId || null,
-          proceed: !!decision.proceed,
-          edited: !!decision.edited,
-          args: decision.args ?? null,
-          reason: decision.reason || null,
-        }),
-      })
-      await this.terminalOutcomeRuntime.settleResult({
-        scope: { userId, sessionId, turnId },
-        signal,
-        result,
-        state: readTerminalState(),
-        evidence: terminalEvidenceRuntime,
-        recordCanaryTerminal,
-      })
-    } catch (error) {
-      await this.terminalOutcomeRuntime.settleError({
-        scope: { userId, sessionId, turnId },
-        signal,
-        error,
-        state: readTerminalState(),
-        evidence: terminalEvidenceRuntime,
-        recordCanaryTerminal,
-      })
-    }
   }
 
   #resolveModelBinding({

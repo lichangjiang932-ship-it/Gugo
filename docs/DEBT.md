@@ -7,19 +7,19 @@ to reproducible evidence, and define an observable exit condition.
 
 ## DEBT-ARCH-001 — Turn execution compatibility shell
 
-**Status:** Open  
+**Status:** Closed
 **Priority:** P1  
 **Area:** Runtime architecture
 
-**Evidence / reproduction:** `server/services/TurnEngine.js` remains well over
-the repository's 600-line preference, and its execution method still coordinates
-prompt preparation, recovery, tool-loop outcomes, terminal evidence, and optional
-post-processing. Run `npm run debt:check` to verify that the file can shrink but
-cannot grow beyond its recorded ceiling.
+**Evidence / reproduction:** `server/services/TurnEngine.js` is now a 569-line
+lifecycle and composition shell. Prompt and recovery preparation live in
+`turnExecutionRuntime.js`, model-loop/checkpoint projection lives in
+`turnLoopExecutionRuntime.js`, and execution lease scheduling lives in
+`turnSchedulingRuntime.js`.
 
-**Exit criteria:** Extract cohesive lifecycle and outcome services until the
-class is a narrow orchestration shell below 600 lines, without weakening atomic
-turn boundaries or recovery fencing.
+**Exit criteria:** Met. The class is below 600 lines and the extracted runtimes
+retain atomic checkpoint commits, recovery environment fencing, terminal
+evidence settlement, and lease cleanup.
 
 **Verification:** `tests/turnEngine.test.js`,
 `tests/turnPersistenceTransactions.test.js`, and `tests/turnEngineHost.test.js`.
@@ -423,7 +423,6 @@ unregistered oversized files, growth, and shrinkage that was not ratcheted.
     { "path": "server/plugins/runtimePluginRegistry.js", "ceiling": 968, "group": "plugin-lifecycle" },
     { "path": "server/routes/evolutionRoutes.js", "ceiling": 882, "group": "route-composition" },
     { "path": "server/routes/pluginRoutes.js", "ceiling": 827, "group": "route-composition" },
-    { "path": "server/services/TurnEngine.js", "ceiling": 1258, "group": "turn-agent-orchestration" },
     { "path": "server/services/approvalGate.js", "ceiling": 899, "group": "turn-agent-orchestration" },
     { "path": "server/services/artifactGen.js", "ceiling": 1329, "group": "artifact-delivery" },
     { "path": "server/services/contextCompactionRuntime.js", "ceiling": 1037, "group": "turn-agent-orchestration" },

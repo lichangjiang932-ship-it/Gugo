@@ -42,7 +42,10 @@ test('legacy presentation ids resolve the canonical ppt prompt and planner', () 
 test('chat split loads runtime skills instead of filtering only hard-coded skills', () => {
   const source = readSourceTree('../src/pages/ChatSplit/')
   const serverTurn = fs.readFileSync(new URL('../src/pages/ChatSplit/serverTurnFlow.js', import.meta.url), 'utf8')
-  const turnEngine = fs.readFileSync(new URL('../server/services/TurnEngine.js', import.meta.url), 'utf8')
+  const turnExecutionRuntime = fs.readFileSync(
+    new URL('../server/services/turnExecutionRuntime.js', import.meta.url),
+    'utf8',
+  )
   const turnEngineHost = fs.readFileSync(new URL('../server/services/turnEngineHost.js', import.meta.url), 'utf8')
   assert.match(source, /listSkills/)
   assert.match(source, /listLocalSkills/)
@@ -52,7 +55,7 @@ test('chat split loads runtime skills instead of filtering only hard-coded skill
   // 规划器改放到 history 之后,避免每轮炸掉上游前缀缓存。
   assert.match(serverTurn, /skillIds: skillId \? \[skillId\] : \[\]/)
   assert.doesNotMatch(serverTurn, /getSkillSystemPrompt/)
-  assert.match(turnEngine, /this\.deps\.preparePromptContext/)
+  assert.match(turnExecutionRuntime, /deps\.preparePromptContext/)
   assert.match(
     turnEngineHost,
     /preparePromptContext:\s*\([^)]*\)\s*=>\s*prepareTurnPromptContext\(\{/,

@@ -19,6 +19,9 @@ const PUBLIC_ENTRY_CONSUMERS = [
 
 const ARCHITECTURE_CONSUMERS = [
   'server/services/TurnEngine.js',
+  'server/services/turnExecutionRuntime.js',
+  'server/services/turnLoopExecutionRuntime.js',
+  'server/services/turnSchedulingRuntime.js',
   'server/services/jobRuntime.js',
   ...PUBLIC_ENTRY_CONSUMERS,
 ]
@@ -283,15 +286,15 @@ test('loop consumers use the public runToolLoop entry without legacy calls', () 
   assert.deepEqual(violations, [], 'All runtimes must share the public runToolLoop entry')
 })
 
-test('TurnEngine consumes the loop through its injected host port', () => {
-  const relativeFile = 'server/services/TurnEngine.js'
+test('turn loop execution consumes the loop through its injected host port', () => {
+  const relativeFile = 'server/services/turnLoopExecutionRuntime.js'
   const file = path.join(REPO_ROOT, relativeFile)
   const source = readFileSync(file, 'utf8')
   const result = inspectLoopConsumer(file)
   assert.equal(
     result.importsPublicRunToolLoop,
     false,
-    'TurnEngine must not import the concrete loop implementation',
+    'turn loop execution must not import the concrete loop implementation',
   )
-  assert.match(source, /this\.deps\.runLoop\s*\(/)
+  assert.match(source, /deps\.runLoop\s*\(/)
 })
