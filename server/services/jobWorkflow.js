@@ -477,3 +477,27 @@ export function buildFinalOutput(job) {
     acceptance: acceptance || null,
   }
 }
+
+export function buildJobOutcomeDiagnostics(job, { reason = null, nextAction = null } = {}) {
+  const delivery = buildFinalOutput(job)
+  const normalizedReason = String(reason || '').trim().slice(0, 2_000)
+  const normalizedNextAction = String(nextAction || '').trim().slice(0, 80)
+  const issues = [...new Set([
+    ...(Array.isArray(delivery.issues) ? delivery.issues : []),
+    normalizedReason,
+  ].map((value) => String(value || '').trim()).filter(Boolean))]
+  return {
+    complete: false,
+    ...(normalizedReason ? { reason: normalizedReason } : {}),
+    ...(normalizedNextAction ? { nextAction: normalizedNextAction } : {}),
+    artifactIds: Array.isArray(delivery.artifactIds) ? delivery.artifactIds : [],
+    completedDeliverables: Array.isArray(delivery.completedDeliverables)
+      ? delivery.completedDeliverables
+      : [],
+    missingDeliverables: Array.isArray(delivery.missingDeliverables)
+      ? delivery.missingDeliverables
+      : [],
+    issues,
+    ...(delivery.acceptance ? { acceptance: delivery.acceptance } : {}),
+  }
+}

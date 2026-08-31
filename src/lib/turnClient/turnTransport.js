@@ -136,6 +136,22 @@ function streamInterruptedError(event) {
   return createTurnFailureError(event?.payload, { fallbackCode: 'TURN_INTERRUPTED' })
 }
 
+function streamFailureError(rawData) {
+  let payload
+  try {
+    payload = JSON.parse(rawData)
+  } catch {
+    payload = {}
+  }
+  const nested = payload?.error && typeof payload.error === 'object'
+    ? payload.error
+    : null
+  return createTurnFailureError(
+    nested ? { ...nested, ...payload, error: nested } : payload,
+    { fallbackCode: 'TURN_EVENT_STREAM_FAILED' },
+  )
+}
+
 function normalizeToolNames(names) {
   if (!Array.isArray(names)) return []
   return [...new Set(names
@@ -206,6 +222,7 @@ export async function streamServerTurnEvents({
         await onActivity?.(parseTurnActivity(JSON.parse(frame.data)))
         continue
       }
+      if (frame?.eventType === 'error') throw streamFailureError(frame.data)
       if (frame?.eventType !== 'turn_event') continue
       const event = parseTurnEventTransportPayload(JSON.parse(frame.data))
       await onEvent?.(event)

@@ -63,6 +63,7 @@ export default function AssistantAnswer({
   const hasStructuredOutcome = msg.meta?.failed === true
     || msg.meta?.interrupted === true
     || msg.meta?.cancelled === true
+    || msg.meta?.paused === true
     || (msg.meta?.serverRecoveryBlocked === true
       && msg.meta?.serverConnectionState === 'blocked')
   const recoveryBlocked = msg.meta?.serverRecoveryBlocked === true
@@ -88,7 +89,7 @@ export default function AssistantAnswer({
     ? getVisibleModelErrorMessage(msg, t)
     : ''
   // serverPartialText is authoritative model-authored output for structured
-  // failed, interrupted, cancelled, and recovery-blocked turns.
+  // failed, interrupted, paused, cancelled, and recovery-blocked turns.
   // Derive missing presentation copy at render time so reloads and language
   // changes never treat server-localized error prose as assistant output.
   const visibleAnswer = (presentation.answer

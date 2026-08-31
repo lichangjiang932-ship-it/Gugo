@@ -24,6 +24,7 @@ import {
 } from './jobRuntimeTransitionStore.js'
 import {
   deriveJobProgress,
+  buildJobOutcomeDiagnostics,
   findNextRunnableStep,
   resolveWorkflowState,
   stepRequiresPlanApproval,
@@ -68,6 +69,28 @@ const JOB_CANCELLED_MESSAGE = '任务已由用户终止'
 // ★ 注意:awaiting_approval 故意不在这里。等人的 job 崩溃恢复时若被重排成 queued,
 // 会把已经批准执行过的动作重跑一遍(发消息/改日历这类不可撤销动作尤其危险)。
 const SUSPENDED_JOB_STATUSES = new Set(['waiting', 'awaiting_approval'])
+
+function persistJobOutcomeDiagnostics(jobId, {
+  stepId = null,
+  reason = null,
+  nextAction = null,
+} = {}) {
+  const snapshot = getJobWithChildren(jobId)
+  if (!snapshot) return null
+  const diagnostics = buildJobOutcomeDiagnostics(snapshot, { reason, nextAction })
+  const targetStep = (stepId
+    ? snapshot.steps.find((step) => step.id === stepId)
+    : null)
+    || [...snapshot.steps].reverse().find((step) => step.kind === 'finalize')
+    || snapshot.steps.at(-1)
+  if (targetStep) {
+    const priorOutput = targetStep.output && typeof targetStep.output === 'object' && !Array.isArray(targetStep.output)
+      ? targetStep.output
+      : {}
+    updateJobStep(targetStep.id, { output: { ...priorOutput, ...diagnostics } })
+  }
+  return diagnostics
+}
 
 function hasRejectedCompletedOutcome(step) {
   if (step?.status !== 'completed') return false
@@ -803,11 +826,20 @@ export class JobRuntime {
           progress: deriveJobProgress(listJobSteps(job.id)),
           finishedAt: Date.now(),
         })
+        const diagnostics = persistJobOutcomeDiagnostics(job.id, {
+          reason: JOB_CANCELLED_MESSAGE,
+          nextAction: 'retry_job',
+        })
         this.emit(appendJobEvent({
           jobId: job.id,
           type: 'cancelled',
           message: JOB_CANCELLED_MESSAGE,
-          payload: { code: 'JOB_CANCEL_REQUESTED', reason: 'user_requested' },
+          payload: {
+            code: 'JOB_CANCEL_REQUESTED',
+            reason: 'user_requested',
+            nextAction: 'retry_job',
+            ...(diagnostics || {}),
+          },
         }))
       }, { allowCancellation: true })) return true
       notifyJobTerminal({ ...job, error: JOB_CANCELLED_MESSAGE }, {
@@ -886,6 +918,10 @@ export class JobRuntime {
       const message = error?.message || '任务绑定的模型 Provider 已不可用'
       if (!commitOwned(() => {
         updateJob(job.id, { status: 'failed', error: message, finishedAt: Date.now() })
+        const diagnostics = persistJobOutcomeDiagnostics(job.id, {
+          reason: message,
+          nextAction: 'retry_job',
+        })
         this.emit(appendJobEvent({
           jobId: job.id,
           type: 'failed',
@@ -896,6 +932,8 @@ export class JobRuntime {
             providerId: error.providerId || job.modelProviderId || null,
             modelName: error.modelName || job.modelName || null,
             configRevision: error.configRevision ?? job.modelConfigRevision ?? null,
+            nextAction: error.action || 'retry_job',
+            ...(diagnostics || {}),
           },
         }))
       })) return true
@@ -925,7 +963,16 @@ export class JobRuntime {
           const reason = promptHook.reason || 'job prompt rejected by hook'
           if (!commitOwned(() => {
             updateJob(job.id, { status: 'failed', error: reason, finishedAt: Date.now() })
-            this.emit(appendJobEvent({ jobId: job.id, type: 'failed', message: reason }))
+            const diagnostics = persistJobOutcomeDiagnostics(job.id, {
+              reason,
+              nextAction: 'retry_job',
+            })
+            this.emit(appendJobEvent({
+              jobId: job.id,
+              type: 'failed',
+              message: reason,
+              payload: diagnostics,
+            }))
           })) return true
           notifyJobTerminal({ ...job, error: reason }, { status: 'failed', body: reason })
           notifyJobStopHook(job, { status: 'failed', error: reason })
@@ -959,10 +1006,15 @@ export class JobRuntime {
               progress: deriveJobProgress(currentSteps),
               finishedAt: Date.now(),
             })
+        const diagnostics = completed ? null : persistJobOutcomeDiagnostics(job.id, {
+          reason: resolution.reason,
+          nextAction: 'retry_job',
+        })
         this.emit(appendJobEvent({
           jobId: job.id,
           type: completed ? 'completed' : 'failed',
           message: completed ? '任务已完成' : resolution.reason,
+          ...(diagnostics ? { payload: diagnostics } : {}),
         }))
       })) return true
       notifyJobTerminal({
@@ -1074,14 +1126,19 @@ export class JobRuntime {
               reason: clarification.why || null,
             })
           }
+          const diagnostics = persistJobOutcomeDiagnostics(job.id, {
+            stepId: nextStep.id,
+            reason: clarification.why || question,
+            nextAction: sleeping ? 'wait_for_wake' : 'provide_input',
+          })
           this.emit(appendJobEvent({
             jobId: job.id,
             stepId: nextStep.id,
             type: sleeping ? 'sleeping' : 'awaiting_user',
             message: question,
             payload: sleeping
-              ? { wakeAt, reason: clarification.why || null }
-              : { clarification },
+              ? { wakeAt, reason: clarification.why || null, ...(diagnostics || {}) }
+              : { clarification, ...(diagnostics || {}) },
           }))
         })) return true
         if (sleeping) return true
@@ -1141,11 +1198,25 @@ export class JobRuntime {
             finishedAt: Date.now(),
           })
           cancelJobWake({ jobId: job.id, userId: job.userId })
+          const diagnostics = persistJobOutcomeDiagnostics(job.id, {
+            stepId: nextStep.id,
+            reason: why,
+            nextAction: 'retry_step',
+          })
           this.emit(appendJobEvent({
             jobId: job.id,
             stepId: nextStep.id,
             type: 'failed',
             message: why,
+            payload: {
+              code: result.interrupted
+                ? 'JOB_STEP_INTERRUPTED'
+                : result.noProgress
+                  ? 'JOB_STEP_NO_PROGRESS'
+                  : 'JOB_STEP_BUDGET_EXHAUSTED',
+              retryable: true,
+              ...(diagnostics || {}),
+            },
           }))
         })) return true
         // ★ 不再删 checkpoint。
@@ -1243,12 +1314,22 @@ export class JobRuntime {
           })
           this.runtimeCore.checkpoint.clear({ jobId: job.id, stepId: nextStep.id, userId: job.userId })
           cancelJobWake({ jobId: job.id, userId: job.userId })
+          const diagnostics = persistJobOutcomeDiagnostics(job.id, {
+            stepId: nextStep.id,
+            reason: JOB_CANCELLED_MESSAGE,
+            nextAction: 'retry_job',
+          })
           this.emit(appendJobEvent({
             jobId: job.id,
             stepId: nextStep.id,
             type: 'cancelled',
             message: JOB_CANCELLED_MESSAGE,
-            payload: { code: 'JOB_CANCEL_REQUESTED', reason: 'user_requested' },
+            payload: {
+              code: 'JOB_CANCEL_REQUESTED',
+              reason: 'user_requested',
+              nextAction: 'retry_job',
+              ...(diagnostics || {}),
+            },
           }))
         }, { allowCancellation: true })) return true
         notifyJobTerminal({ ...job, error: JOB_CANCELLED_MESSAGE }, {

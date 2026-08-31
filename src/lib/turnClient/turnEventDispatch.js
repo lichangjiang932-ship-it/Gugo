@@ -43,6 +43,12 @@ const CLEARED_SERVER_RECOVERY_META = Object.freeze({
   serverRecoveryActionPath: null,
 })
 
+const CLEARED_SERVER_FAILURE_META = Object.freeze({
+  serverFailure: null,
+  serverFailureDisplayKey: null,
+  serverPartialText: null,
+})
+
 function resultText(result) {
   if (typeof result === 'string') return result
   try { return JSON.stringify(result ?? {}) } catch { return String(result ?? '') }
@@ -57,6 +63,12 @@ function optionalArtifactIds(payload, key) {
   if (!payload || typeof payload !== 'object' || !Object.hasOwn(payload, key)) return undefined
   return [...new Set((Array.isArray(payload[key]) ? payload[key] : [])
     .map((value) => String(value || '').trim()).filter(Boolean))]
+}
+
+function terminalEvidenceSource(payload, nested, key) {
+  if (payload && typeof payload === 'object' && Object.hasOwn(payload, key)) return payload
+  if (nested && typeof nested === 'object' && Object.hasOwn(nested, key)) return nested
+  return payload
 }
 
 function optionalLocalFileReceipts(payload, key, timestampKey) {
@@ -144,17 +156,41 @@ export function normalizeTurnFailurePayload(payload = {}, {
       : null
   const taskVerification = nestedTaskVerification || payloadTaskVerification
   if (taskVerification) error.taskVerification = taskVerification
-  const iterations = optionalInteger(payload.iterations, 0)
-  const partialText = Object.hasOwn(payload, 'partialText')
-    ? String(payload.partialText ?? '')
-    : Object.hasOwn(payload, 'text') ? String(payload.text ?? '') : undefined
-  const artifactIds = optionalArtifactIds(payload, 'artifactIds')
-  const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
-  const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
-  const retainedLocalFiles = optionalRetainedLocalFiles(payload)
-  const modelUsage = normalizeModelUsage(payload.usage)
-  const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
-  const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
+  const iterations = optionalInteger(
+    terminalEvidenceSource(payload, nested, 'iterations')?.iterations,
+    0,
+  )
+  const partialTextSource = terminalEvidenceSource(payload, nested, 'partialText')
+  const textSource = terminalEvidenceSource(payload, nested, 'text')
+  const partialText = Object.hasOwn(partialTextSource || {}, 'partialText')
+    ? String(partialTextSource.partialText ?? '')
+    : Object.hasOwn(textSource || {}, 'text') ? String(textSource.text ?? '') : undefined
+  const artifactIds = optionalArtifactIds(
+    terminalEvidenceSource(payload, nested, 'artifactIds'),
+    'artifactIds',
+  )
+  const deliveryArtifactIds = optionalArtifactIds(
+    terminalEvidenceSource(payload, nested, 'deliveryArtifactIds'),
+    'deliveryArtifactIds',
+  )
+  const verifiedLocalFiles = optionalVerifiedLocalFiles(
+    terminalEvidenceSource(payload, nested, 'verifiedLocalFiles'),
+  )
+  const retainedSource = terminalEvidenceSource(payload, nested, 'retainedLocalFiles')
+  const retainedLocalFiles = removeVerifiedLocalFilesFromRetained(
+    optionalRetainedLocalFiles(retainedSource),
+    verifiedLocalFiles,
+  )
+  const modelUsage = normalizeModelUsage(
+    terminalEvidenceSource(payload, nested, 'usage')?.usage,
+  )
+  const turnModelUsage = normalizeModelUsage(
+    terminalEvidenceSource(payload, nested, 'turnModelUsage')?.turnModelUsage,
+  )
+  const estimatedPromptTokens = optionalInteger(
+    terminalEvidenceSource(payload, nested, 'estimatedPromptTokens')?.estimatedPromptTokens,
+    0,
+  )
   return {
     error,
     ...(partialText !== undefined ? { partialText } : {}),
@@ -308,6 +344,7 @@ export async function dispatchTurnEvent(event, {
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
+        ...CLEARED_SERVER_FAILURE_META,
         interrupted: false,
         failed: false,
         paused: false,
@@ -469,6 +506,9 @@ export async function dispatchTurnEvent(event, {
   } else if (event.type === 'approval.resolved') {
     dispatch?.({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: 'Approval resolved, continuing' } } })
   } else if (event.type === 'turn.paused') {
+    const partialText = Object.hasOwn(payload, 'partialText')
+      ? String(payload.partialText ?? '')
+      : Object.hasOwn(payload, 'text') ? String(payload.text ?? '') : undefined
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     const retainedLocalFiles = optionalRetainedLocalFiles(payload)
@@ -479,6 +519,7 @@ export async function dispatchTurnEvent(event, {
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
+        ...CLEARED_SERVER_FAILURE_META,
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
@@ -488,6 +529,8 @@ export async function dispatchTurnEvent(event, {
         serverClarification: payload.clarification || null,
         directoryAuthorizationPending: false,
         serverResumeResolution: null,
+        serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
+        ...(partialText !== undefined ? { serverPartialText: partialText } : {}),
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(modelUsage ? { modelUsage, actualPromptTokens: modelUsage.promptTokens } : {}),
         ...(turnModelUsage ? { turnModelUsage } : {}),
@@ -511,11 +554,16 @@ export async function dispatchTurnEvent(event, {
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
+        ...CLEARED_SERVER_FAILURE_META,
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
         progress: null,
         serverConnectionState: null,
+        failed: false,
+        interrupted: false,
+        paused: false,
+        cancelled: false,
         serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
@@ -532,6 +580,9 @@ export async function dispatchTurnEvent(event, {
     })
     cursorCommitted = true
   } else if (event.type === 'turn.cancelled') {
+    const partialText = Object.hasOwn(payload, 'partialText')
+      ? String(payload.partialText ?? '')
+      : Object.hasOwn(payload, 'text') ? String(payload.text ?? '') : undefined
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     const retainedLocalFiles = optionalRetainedLocalFiles(payload)
     const modelUsage = normalizeModelUsage(payload.usage)
@@ -541,6 +592,7 @@ export async function dispatchTurnEvent(event, {
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
+        ...CLEARED_SERVER_FAILURE_META,
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
@@ -552,6 +604,7 @@ export async function dispatchTurnEvent(event, {
         serverConnectionState: 'cancelled',
         serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
         serverDeliveryArtifactIds: optionalArtifactIds(payload, 'deliveryArtifactIds') || [],
+        ...(partialText !== undefined ? { serverPartialText: partialText } : {}),
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(modelUsage ? { modelUsage, actualPromptTokens: modelUsage.promptTokens } : {}),
         ...(turnModelUsage ? { turnModelUsage } : {}),

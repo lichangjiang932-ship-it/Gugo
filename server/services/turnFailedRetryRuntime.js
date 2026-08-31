@@ -112,6 +112,7 @@ export function createTurnFailedRetryRuntime({
     const started = await deps.lastEvent({ ...scope, type: 'turn.started' })
     if (!started) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
     const last = await deps.lastEvent(scope)
+    const recoveryStateBeforeRetry = await deps.readRecoveryState(scope)
     const persistedEvents = await replayPersistedTurnEvents(deps.replayEvents, scope)
     if (last?.type === 'turn.attempt' && last.payload?.reason === 'failed_retry') {
       const checkpoint = await deps.runtimeCore.checkpoint.load(scope)
@@ -265,7 +266,11 @@ export function createTurnFailedRetryRuntime({
       }
       throw commitError
     }
-    await deps.clearRecoveryState(scope)
+    if (recoveryStateBeforeRetry?.candidateVersion) {
+      await deps.clearRecoveryState(scope, {
+        candidateVersion: recoveryStateBeforeRetry.candidateVersion,
+      })
+    }
     const outcome = await recoverTurn({ ...scope, authMode })
     return outcome.turn
   }
