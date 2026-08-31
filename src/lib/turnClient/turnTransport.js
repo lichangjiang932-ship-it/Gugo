@@ -357,6 +357,8 @@ export function streamServerTurnEventsWebSocket({
         for (const field of [
           'action',
           'status',
+          'expectedSequence',
+          'actualSequence',
           'retryable',
           'manualRetryable',
           'incompleteReason',

@@ -683,7 +683,14 @@ function latestTurnBoundaries(db, { userId, sessionId, turnIds = null }) {
         SELECT 1 FROM messages
         WHERE messages.user_id = event.user_id
           AND messages.session_id = event.session_id
-          AND messages.id = event.turn_id || ':assistant'
+          AND (
+            messages.id = event.turn_id || ':assistant'
+            OR (
+              messages.role = 'assistant'
+              AND json_valid(messages.model_context_json)
+              AND json_extract(messages.model_context_json, '$.turnId') = event.turn_id
+            )
+          )
       ) AS has_evidence_message,
       COALESCE(
         (
@@ -853,7 +860,7 @@ function projectTerminalEvidence(message, row, { userId, sessionId }) {
   )
   return {
     ...(message || {}),
-    id: `${row.turn_id}:assistant`,
+    id: message?.id || `${row.turn_id}:assistant`,
     userId,
     sessionId,
     role: 'assistant',
@@ -870,12 +877,18 @@ function recoverTerminalEvidenceMessages(messages, rows, scope, {
   includeUnanchored = false,
 } = {}) {
   const byId = new Map(messages.map((message, index) => [message.id, index]))
+  const byAssistantTurnId = new Map()
+  messages.forEach((message, index) => {
+    if (message?.role !== 'assistant') return
+    const turnId = String(message?.modelContext?.turnId || '').trim()
+    if (turnId && !byAssistantTurnId.has(turnId)) byAssistantTurnId.set(turnId, index)
+  })
   const recovered = [...messages]
   const missing = []
   let synthesized = 0
   for (const row of rows) {
     const id = `${row.turn_id}:assistant`
-    const index = byId.get(id)
+    const index = byId.get(id) ?? byAssistantTurnId.get(row.turn_id)
     if (index !== undefined) {
       recovered[index] = projectTerminalEvidence(recovered[index], row, scope)
     } else if (synthesizeMissing

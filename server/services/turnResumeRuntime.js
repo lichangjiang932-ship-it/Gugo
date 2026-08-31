@@ -76,14 +76,55 @@ export function modelInterruptionRecoveryState(events = [], maxAttempts = DEFAUL
   }
 }
 
-function latestPersistedPayloadField(events, field, fallback) {
+function latestPersistedPayloadField(events, field) {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const payload = events[index]?.payload
     if (payload && typeof payload === 'object' && Object.hasOwn(payload, field)) {
-      return payload[field]
+      return { found: true, value: payload[field] }
+    }
+    if (payload?.error && typeof payload.error === 'object' && Object.hasOwn(payload.error, field)) {
+      return { found: true, value: payload.error[field] }
     }
   }
-  return fallback
+  return { found: false, value: undefined }
+}
+
+function recoveryStateMatchesBoundary(recoveryState, boundary) {
+  return Boolean(
+    recoveryState?.candidateVersion
+    && boundary?.sequence != null
+    && recoveryState.candidateVersion === recoveryCandidateVersion(boundary),
+  )
+}
+
+function isModelRecoveryExhaustedBlock(event) {
+  return event?.type === 'turn.blocked'
+    && String(event.payload?.code || event.payload?.error?.code || '').trim().toUpperCase()
+      === 'TURN_MODEL_RECOVERY_EXHAUSTED'
+}
+
+function persistedRecoveryEvidence(events) {
+  const evidence = {}
+  const partialText = latestPersistedPayloadField(events, 'partialText')
+  if (partialText.found) evidence.partialText = String(partialText.value || '')
+  for (const field of [
+    'artifactIds',
+    'deliveryArtifactIds',
+    'verifiedLocalFiles',
+    'retainedLocalFiles',
+  ]) {
+    const persisted = latestPersistedPayloadField(events, field)
+    if (persisted.found && Array.isArray(persisted.value)) evidence[field] = persisted.value
+  }
+  const taskVerification = latestPersistedPayloadField(events, 'taskVerification')
+  if (taskVerification.found && taskVerification.value && typeof taskVerification.value === 'object') {
+    evidence.taskVerification = taskVerification.value
+  }
+  const iterations = latestPersistedPayloadField(events, 'iterations')
+  if (iterations.found && Number.isFinite(Number(iterations.value))) {
+    evidence.iterations = Math.max(0, Number(iterations.value) || 0)
+  }
+  return evidence
 }
 
 const {
@@ -166,11 +207,14 @@ export function createTurnResumeRuntime({
       }
     }
     const recoveryState = await deps.readRecoveryState(scope)
-    if ((last?.type === 'turn.blocked' || recoveryState?.status === 'dead_letter')
+    const currentRecoveryState = recoveryStateMatchesBoundary(recoveryState, last)
+      ? recoveryState
+      : null
+    if ((last?.type === 'turn.blocked' || currentRecoveryState?.status === 'dead_letter')
       && retryRecovery !== true) {
       const error = new TurnEngineError(
         'TURN_RECOVERY_DEAD_LETTER',
-        recoveryState?.errorMessage || last?.payload?.message
+        currentRecoveryState?.errorMessage || last?.payload?.message
           || 'automatic turn recovery stopped; repair the execution environment and retry explicitly',
         409,
       )
@@ -180,7 +224,7 @@ export function createTurnResumeRuntime({
       error.missingRequirements = Array.isArray(last?.payload?.missingRequirements)
         ? last.payload.missingRequirements
         : ['execution_environment_repair', 'explicit_recovery_retry']
-      error.recovery = recoveryState || {
+      error.recovery = currentRecoveryState || {
         status: 'dead_letter',
         retryable: false,
         manualRetryable: true,
@@ -197,11 +241,86 @@ export function createTurnResumeRuntime({
       modelMode: normalizeModelMode(started.payload.modelMode),
       requirePersistedBinding: true,
     })
-    const persistedEvents = await replayPersistedTurnEvents(deps.replayEvents, scope)
-    const interruptionRecovery = modelInterruptionRecoveryState(
+    let persistedEvents = await replayPersistedTurnEvents(deps.replayEvents, scope)
+    const replayBoundary = persistedEvents.at(-1)
+    if (Number.isInteger(replayBoundary?.sequence)
+      && replayBoundary.sequence > (Number(last?.sequence) || 0)) {
+      last = replayBoundary
+    }
+    if (isTerminalTurnEventType(last?.type)) {
+      return {
+        turn: await getTurn(scope),
+        scheduled: false,
+        locallyActive: false,
+        terminal: true,
+      }
+    }
+    if (last?.type === 'turn.blocked' && retryRecovery !== true) {
+      const failure = last.payload?.error || last.payload || {}
+      const error = new TurnEngineError(
+        'TURN_RECOVERY_DEAD_LETTER',
+        last.payload?.message
+          || 'automatic turn recovery stopped; repair the execution environment and retry explicitly',
+        409,
+      )
+      error.retryable = false
+      error.manualRetryable = true
+      error.incompleteReason = failure.incompleteReason || 'recovery_blocked'
+      error.missingRequirements = Array.isArray(failure.missingRequirements)
+        ? failure.missingRequirements
+        : ['execution_environment_repair', 'explicit_recovery_retry']
+      error.recovery = {
+        status: 'dead_letter',
+        retryable: false,
+        manualRetryable: true,
+        errorCode: failure.code || last.payload?.code || 'TURN_RECOVERY_BLOCKED',
+        errorMessage: last.payload?.message || 'turn recovery is blocked',
+        candidateVersion: recoveryCandidateVersion(last),
+      }
+      throw error
+    }
+    let interruptionRecovery = modelInterruptionRecoveryState(
       persistedEvents,
       resolveModelInterruptionMaxAttempts(deps.env),
     )
+    if (interruptionRecovery.exhausted) {
+      const latestBoundary = await deps.lastEvent(scope)
+      if (isTerminalTurnEventType(latestBoundary?.type)) {
+        return {
+          turn: await getTurn(scope),
+          scheduled: false,
+          locallyActive: false,
+          terminal: true,
+        }
+      }
+      if (isModelRecoveryExhaustedBlock(latestBoundary)) {
+        const persistedFailure = latestBoundary.payload?.error || latestBoundary.payload || {}
+        const concurrentError = new TurnEngineError(
+          'TURN_MODEL_RECOVERY_EXHAUSTED',
+          `model recovery stopped after ${Number(persistedFailure.attempts) || interruptionRecovery.attempts} interruptions without durable progress`,
+          409,
+        )
+        concurrentError.retryable = false
+        concurrentError.manualRetryable = true
+        concurrentError.incompleteReason = persistedFailure.incompleteReason || 'recovery_attempts_exhausted'
+        concurrentError.missingRequirements = Array.isArray(persistedFailure.missingRequirements)
+          ? persistedFailure.missingRequirements
+          : ['model_service_available', 'explicit_recovery_retry']
+        concurrentError.attempts = Number(persistedFailure.attempts) || interruptionRecovery.attempts
+        concurrentError.causeCode = String(
+          persistedFailure.causeCode || interruptionRecovery.causeCode,
+        ).trim().toUpperCase()
+        throw concurrentError
+      }
+      if (latestBoundary?.sequence !== last?.sequence) {
+        last = latestBoundary || last
+        persistedEvents = await replayPersistedTurnEvents(deps.replayEvents, scope)
+        interruptionRecovery = modelInterruptionRecoveryState(
+          persistedEvents,
+          resolveModelInterruptionMaxAttempts(deps.env),
+        )
+      }
+    }
     if (interruptionRecovery.exhausted) {
       const error = new TurnEngineError(
         'TURN_MODEL_RECOVERY_EXHAUSTED',
@@ -234,58 +353,53 @@ export function createTurnResumeRuntime({
         sequence: last.sequence + 1,
       })
       let blockedEvent
+      let wroteBlockedEvent = false
       try {
         blockedEvent = await blockedEmitter('turn.blocked', {
           code: error.code,
           error: failure,
           incompleteReason: error.incompleteReason,
           missingRequirements: error.missingRequirements,
-          partialText: String(latestPersistedPayloadField(persistedEvents, 'partialText', '')),
-          artifactIds: Array.isArray(latestPersistedPayloadField(persistedEvents, 'artifactIds', []))
-            ? latestPersistedPayloadField(persistedEvents, 'artifactIds', [])
-            : [],
-          deliveryArtifactIds: Array.isArray(latestPersistedPayloadField(
-            persistedEvents,
-            'deliveryArtifactIds',
-            [],
-          ))
-            ? latestPersistedPayloadField(persistedEvents, 'deliveryArtifactIds', [])
-            : [],
-          verifiedLocalFiles: Array.isArray(latestPersistedPayloadField(
-            persistedEvents,
-            'verifiedLocalFiles',
-            [],
-          ))
-            ? latestPersistedPayloadField(persistedEvents, 'verifiedLocalFiles', [])
-            : [],
-          retainedLocalFiles: Array.isArray(latestPersistedPayloadField(
-            persistedEvents,
-            'retainedLocalFiles',
-            [],
-          ))
-            ? latestPersistedPayloadField(persistedEvents, 'retainedLocalFiles', [])
-            : [],
-          iterations: Math.max(
-            0,
-            Number(latestPersistedPayloadField(persistedEvents, 'iterations', 0)) || 0,
-          ),
+          ...persistedRecoveryEvidence(persistedEvents),
           retryable: false,
           manualRetryable: true,
           recoveryStatus: 'dead_letter',
           attempts: error.attempts,
           causeCode: error.causeCode,
         })
+        wroteBlockedEvent = true
+      } catch (writeError) {
+        const concurrentBoundary = await deps.lastEvent(scope)
+        if (!isModelRecoveryExhaustedBlock(concurrentBoundary)) throw writeError
+        blockedEvent = concurrentBoundary
+        const persistedFailure = concurrentBoundary.payload?.error || concurrentBoundary.payload || {}
+        error.incompleteReason = persistedFailure.incompleteReason || error.incompleteReason
+        error.missingRequirements = Array.isArray(persistedFailure.missingRequirements)
+          ? persistedFailure.missingRequirements
+          : error.missingRequirements
+        error.attempts = Number(persistedFailure.attempts) || error.attempts
+        error.causeCode = String(persistedFailure.causeCode || error.causeCode).trim().toUpperCase()
       } finally {
         await blockedEmitter.close()
       }
-      await deps.writeRecoveryFailure({
-        ...scope,
-        candidateVersion: recoveryCandidateVersion(blockedEvent),
-        retryable: false,
-        errorCode: error.code,
-        errorMessage: error.message,
-        now: blockedEvent.createdAt,
-      })
+      if (wroteBlockedEvent) {
+        const candidateVersion = recoveryCandidateVersion(blockedEvent)
+        const latestBoundary = await deps.lastEvent(scope)
+        if (latestBoundary && recoveryCandidateVersion(latestBoundary) === candidateVersion) {
+          try {
+            await deps.writeRecoveryFailure({
+              ...scope,
+              candidateVersion,
+              retryable: false,
+              errorCode: error.code,
+              errorMessage: error.message,
+              now: blockedEvent.createdAt,
+            })
+          } catch (recoveryStateError) {
+            error.cause = recoveryStateError
+          }
+        }
+      }
       throw error
     }
     const latestFailedRetry = persistedEvents

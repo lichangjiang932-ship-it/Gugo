@@ -262,6 +262,34 @@ function normalizeStringList(value) {
     .slice(0, 50)
 }
 
+function evidenceIdentity(value) {
+  if (typeof value === 'string') return `text:${value.trim()}`
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  const semanticFields = ['type', 'toolCallId', 'command', 'artifactId', 'path', 'summary']
+  const semanticIdentity = semanticFields.map((field) => cleanText(value[field])).join('\u0000')
+  if (semanticIdentity.replaceAll('\u0000', '')) return `record:${semanticIdentity}`
+  try {
+    return Object.keys(value).length > 0 ? `record:${JSON.stringify(value)}` : ''
+  } catch {
+    return ''
+  }
+}
+
+export function mergeJobEvidence(...sources) {
+  const evidence = []
+  const seen = new Set()
+  for (const source of sources) {
+    for (const item of Array.isArray(source) ? source : []) {
+      const value = typeof item === 'string' ? item.trim() : item
+      const identity = evidenceIdentity(value)
+      if (!identity || seen.has(identity)) continue
+      seen.add(identity)
+      evidence.push(value)
+    }
+  }
+  return evidence
+}
+
 function normalizeReviewer(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return {
@@ -405,6 +433,12 @@ export function buildFinalOutput(job) {
   const texts = resultSteps.map(stepText).filter(Boolean)
   const verification = steps.find((step) => step.kind === 'verify')
   const verificationText = stepText(verification)
+  const evidence = mergeJobEvidence(
+    ...steps
+      .filter((step) => ['execute', 'batch_item', 'verify'].includes(step?.kind))
+      .map((step) => step?.output?.evidence),
+    verificationText ? [verificationText] : [],
+  )
   // A tool result may report an artifact id before persistence succeeds, and
   // plugin tools can return arbitrary ids. Only owned rows loaded with the job
   // are durable, downloadable deliverables and may satisfy file acceptance.
@@ -468,7 +502,7 @@ export function buildFinalOutput(job) {
   return {
     summary,
     text,
-    evidence: verificationText ? [verificationText] : [],
+    evidence,
     artifactIds,
     completedDeliverables,
     missingDeliverables,

@@ -78,6 +78,12 @@ function publicTurnFailureFrameFields(error) {
     ...(Number.isInteger(explicitStatus) && explicitStatus >= 100 && explicitStatus <= 599
       ? { status: explicitStatus }
       : {}),
+    ...(Number.isInteger(source.expectedSequence) && source.expectedSequence >= 0
+      ? { expectedSequence: source.expectedSequence }
+      : {}),
+    ...(Number.isInteger(source.actualSequence) && source.actualSequence >= 0
+      ? { actualSequence: source.actualSequence }
+      : {}),
     ...(typeof source.retryable === 'boolean' ? { retryable: source.retryable } : {}),
     ...(typeof source.manualRetryable === 'boolean' ? { manualRetryable: source.manualRetryable } : {}),
     ...(String(source.incompleteReason || '').trim()

@@ -373,9 +373,17 @@ export async function runHeadlessTurn({
       // instead of bypassing recovery policy through the internal worker API.
       // Older injected engines only expose recoverTurn; keep that compatibility
       // path for adapters that predate the public resume entry point.
-      recoveryOutcome = resumeTurn
-        ? await resumeTurn({ ...scope, authMode, retryRecovery: true })
-        : await recoverTurn({ ...scope, authMode })
+      if (resumeTurn) {
+        const resumedTurn = await resumeTurn({ ...scope, authMode, retryRecovery: true })
+        recoveryOutcome = {
+          turn: resumedTurn,
+          terminal: ['completed', 'failed', 'cancelled'].includes(resumedTurn?.status),
+          paused: resumedTurn?.status === 'paused',
+          locallyActive: false,
+        }
+      } else {
+        recoveryOutcome = await recoverTurn({ ...scope, authMode })
+      }
     } else {
       const content = String(prompt || '').trim()
       if (!content) throw new HeadlessTurnError('PROMPT_REQUIRED', 'prompt is required', 2)

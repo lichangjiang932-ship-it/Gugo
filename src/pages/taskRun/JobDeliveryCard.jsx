@@ -24,6 +24,24 @@ function hasDeliveryFields(value) {
   return !!output && DELIVERY_FIELDS.some((field) => Object.hasOwn(output, field))
 }
 
+function hasMeaningfulDeliveryValue(value) {
+  if (value == null) return false
+  if (typeof value === 'string') return value.trim().length > 0
+  if (Array.isArray(value)) return value.length > 0
+  if (typeof value === 'object') return Object.keys(value).length > 0
+  return true
+}
+
+function mergeDeliverySources(sources) {
+  const merged = {}
+  for (const source of sources) {
+    for (const [field, value] of Object.entries(source)) {
+      if (hasMeaningfulDeliveryValue(value)) merged[field] = value
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : null
+}
+
 export function resolveCanonicalJobDelivery(job) {
   if (!job || !TERMINAL_JOB_STATUSES.has(job.status)) return null
   const steps = Array.isArray(job.steps) ? job.steps : []
@@ -38,7 +56,7 @@ export function resolveCanonicalJobDelivery(job) {
     hasDeliveryFields(step?.output)
   ))?.output)
   const sources = [diagnosticOutput, terminalPayload, finalOutput].filter(Boolean)
-  return sources.length > 0 ? Object.assign({}, ...sources) : null
+  return mergeDeliverySources(sources)
 }
 
 function normalizedList(values) {

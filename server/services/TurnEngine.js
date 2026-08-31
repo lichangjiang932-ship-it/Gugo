@@ -55,6 +55,7 @@ import {
   missingTurnPromptRuntime,
   normalizePositiveInteger,
   publicStatus,
+  recoveryCandidateVersion,
   rejectResumeApprovalModeOverride,
   sessionKey,
 } from './turnEnginePolicy.js'
@@ -437,15 +438,19 @@ export class TurnEngine {
     if (scope?.retryFailed === true) return this.#retryFailedTurn(scope)
     const recovery = await this.deps.readRecoveryState(scope)
     const last = await this.deps.lastEvent(scope)
-    if ((recovery?.status === 'dead_letter' || last?.type === 'turn.blocked')
+    const currentRecovery = last
+      && recovery?.candidateVersion === recoveryCandidateVersion(last)
+      ? recovery
+      : null
+    if ((currentRecovery?.status === 'dead_letter' || last?.type === 'turn.blocked')
       && scope?.retryRecovery !== true) {
       const error = new TurnEngineError(
         'TURN_RECOVERY_DEAD_LETTER',
-        recovery?.errorMessage || last?.payload?.message
+        currentRecovery?.errorMessage || last?.payload?.message
           || 'automatic turn recovery stopped; repair the execution environment and retry explicitly',
         409,
       )
-      error.recovery = recovery || {
+      error.recovery = currentRecovery || {
         status: 'dead_letter',
         retryable: false,
         manualRetryable: true,

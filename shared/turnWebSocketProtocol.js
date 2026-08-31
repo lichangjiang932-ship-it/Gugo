@@ -107,6 +107,8 @@ export const TURN_WEBSOCKET_SERVER_FRAME_SCHEMA = z.discriminatedUnion('type', [
     code: z.string().min(1).max(160),
     message: z.string().optional(),
     status: z.number().int().min(100).max(599).optional(),
+    expectedSequence: z.number().int().nonnegative().optional(),
+    actualSequence: z.number().int().nonnegative().optional(),
     action: z.enum(['retry', 'restart_runtime']).optional(),
     retryable: z.boolean().optional(),
     manualRetryable: z.boolean().optional(),

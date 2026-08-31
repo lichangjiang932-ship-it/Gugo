@@ -10,6 +10,7 @@ import {
   buildFinalOutput,
   buildJobOutcomeDiagnostics,
   deriveJobProgress,
+  mergeJobEvidence,
   resolveWorkflowState,
 } from './jobWorkflow.js'
 import { notifyJobStopHook, notifyJobTerminal } from './jobRuntimeLifecycle.js'
@@ -316,38 +317,46 @@ export function completeManualJobTransition({ jobId, userId, updated }) {
     return { terminal: false, event: null }
   }
   const resolution = resolveWorkflowState(updated.steps)
-  const completed = resolution.state === 'completed'
-  updateJob(jobId, completed
-    ? { status: 'completed', progress: 100, error: null, finishedAt: Date.now() }
-    : {
-        status: 'failed',
-        progress: deriveJobProgress(updated.steps),
-        error: resolution.reason,
-        finishedAt: Date.now(),
-      })
+  let completed = resolution.state === 'completed'
+  let outcomeReason = String(resolution.reason || '').trim()
   let diagnostics = null
   let finalOutput = null
   if (completed) {
     const snapshot = getJobWithChildren(jobId, { userId })
     finalOutput = buildFinalOutput(snapshot)
+    if (finalOutput.complete === false) {
+      completed = false
+      outcomeReason = String(finalOutput.summary || '任务交付验收未通过').trim()
+      diagnostics = {
+        ...finalOutput,
+        complete: false,
+        reason: outcomeReason,
+        nextAction: 'retry_job',
+      }
+      finalOutput = null
+    }
     const finalStep = [...(snapshot?.steps || [])].reverse().find((step) => step.kind === 'finalize')
     if (finalStep) {
       const priorOutput = finalStep.output && typeof finalStep.output === 'object' && !Array.isArray(finalStep.output)
         ? finalStep.output
         : {}
-      const finalEvidence = Array.isArray(finalOutput.evidence) && finalOutput.evidence.length > 0
-        ? finalOutput.evidence
-        : priorOutput.evidence
+      const terminalOutput = finalOutput || diagnostics
+      const finalEvidence = mergeJobEvidence(priorOutput.evidence, terminalOutput?.evidence)
+      const mergedOutput = {
+        ...terminalOutput,
+        evidence: finalEvidence,
+      }
+      if (completed) finalOutput = mergedOutput
+      else diagnostics = mergedOutput
       updateJobStep(finalStep.id, {
         output: {
           ...priorOutput,
-          ...finalOutput,
-          ...(Array.isArray(finalEvidence) ? { evidence: finalEvidence } : {}),
+          ...mergedOutput,
         },
       })
     }
   }
-  if (!completed) {
+  if (!completed && !diagnostics) {
     const snapshot = getJobWithChildren(jobId, { userId })
     diagnostics = buildJobOutcomeDiagnostics(snapshot, {
       reason: resolution.reason,
@@ -363,18 +372,27 @@ export function completeManualJobTransition({ jobId, userId, updated }) {
       updateJobStep(targetStep.id, { output: { ...priorOutput, ...diagnostics } })
     }
   }
+  outcomeReason = String(diagnostics?.reason || outcomeReason || '任务未完成').trim()
+  updateJob(jobId, completed
+    ? { status: 'completed', progress: 100, error: null, finishedAt: Date.now() }
+    : {
+        status: 'failed',
+        progress: deriveJobProgress(updated.steps),
+        error: outcomeReason,
+        finishedAt: Date.now(),
+      })
   const event = appendJobEvent({
     jobId,
     type: completed ? 'completed' : 'failed',
-    message: completed ? '任务已完成' : resolution.reason,
+    message: completed ? '任务已完成' : outcomeReason,
     ...((finalOutput || diagnostics) ? { payload: finalOutput || diagnostics } : {}),
   })
   return {
     terminal: true,
     completed,
     status: completed ? 'completed' : 'failed',
-    error: completed ? null : resolution.reason,
-    message: completed ? '任务已完成' : resolution.reason,
+    error: completed ? null : outcomeReason,
+    message: completed ? '任务已完成' : outcomeReason,
     event,
   }
 }

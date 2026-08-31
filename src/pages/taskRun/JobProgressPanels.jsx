@@ -79,11 +79,11 @@ function nextActionLabel(value, t) {
   return key ? t(key) : String(value || '').trim().replaceAll('_', ' ')
 }
 
-function DeliveryDiagnostics({ value, showNextAction = true, t }) {
+function DeliveryDiagnostics({ value, showNextAction = true, showReason = true, t }) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const completed = normalizedList(value.completedDeliverables, { uppercase: true })
   const missing = normalizedList(value.missingDeliverables, { uppercase: true })
-  const reason = String(value.reason || '').trim()
+  const reason = showReason ? String(value.reason || '').trim() : ''
   const issues = normalizedList(Array.isArray(value.issues) ? value.issues : value.acceptance?.issues)
     .filter((issue) => issue !== reason)
     .slice(0, 16)
@@ -93,7 +93,8 @@ function DeliveryDiagnostics({ value, showNextAction = true, t }) {
 }
 
 function JobEvent({ event, showNextAction, t }) {
-  return <div className="text-xs"><p className="text-ink">{event.message}</p><DeliveryDiagnostics value={event.payload} showNextAction={showNextAction} t={t} /><p className="text-ink-fade">{formatTime(event.createdAt)}</p></div>
+  const showReason = !['plan_approved', 'step_completed', 'completed'].includes(event.type)
+  return <div className="text-xs"><p className="text-ink">{event.message}</p><DeliveryDiagnostics value={event.payload} showNextAction={showNextAction} showReason={showReason} t={t} /><p className="text-ink-fade">{formatTime(event.createdAt)}</p></div>
 }
 
 function ArtifactRow({ artifact, active, onSelect, t }) {
