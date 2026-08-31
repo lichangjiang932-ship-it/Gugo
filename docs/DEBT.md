@@ -30,17 +30,21 @@ evidence settlement, and lease cleanup.
 **Priority:** P1  
 **Area:** Storage
 
-**Evidence / reproduction:** `server/migrations/` is authoritative from v31
-onward, while `server/db.js` still owns the v2-v30 compatibility bootstrap and
-inline `CREATE TABLE IF NOT EXISTS` statements. Reasonix also retains a separate
-schema version for its legacy boundary.
+**Evidence / reproduction:** The tested
+`server/migrations/legacyCompatibility.js` adapter now owns the exact v2-v30
+upgrade sequence, with the historical implementations isolated in two
+sub-600-line compatibility modules. `server/db.js` only composes that adapter.
+Fresh bootstrap DDL remains inline, v31 onward still uses the primary registry,
+and Reasonix retains a separate schema version for its legacy boundary, so fresh
+and upgraded schemas have not yet converged on one authoritative path.
 
 **Exit criteria:** Fresh and upgraded databases reach the same schema through a
 single registry; `server/db.js` contains composition only, and legacy import is
 isolated behind one tested compatibility adapter.
 
-**Verification:** `tests/dbMigrationRegistry.test.js`,
-`tests/dbMigration.test.js`, and `tests/dbSchemaPreflight.test.js`.
+**Verification:** `tests/legacySchemaCompatibility.test.js`,
+`tests/dbMigrationRegistry.test.js`, `tests/dbMigration.test.js`, and
+`tests/dbSchemaPreflight.test.js`.
 
 ## DEBT-NET-001 — Remaining outbound HTTP call sites
 
@@ -418,7 +422,6 @@ unregistered oversized files, growth, and shrinkage that was not ratcheted.
     { "path": "server/core/managedAttachmentRuntimeBoundary.js", "ceiling": 605, "group": "kernel-runtime-ports" },
     { "path": "server/core/subagentRunPersistencePort.js", "ceiling": 633, "group": "kernel-runtime-ports" },
     { "path": "server/core/toolLoopAdapter.js", "ceiling": 736, "group": "kernel-runtime-ports" },
-    { "path": "server/db.js", "ceiling": 1653, "group": "persistence-state" },
     { "path": "server/plugins/localPluginPackageStore.js", "ceiling": 1317, "group": "plugin-lifecycle" },
     { "path": "server/plugins/runtimePluginRegistry.js", "ceiling": 968, "group": "plugin-lifecycle" },
     { "path": "server/routes/evolutionRoutes.js", "ceiling": 882, "group": "route-composition" },
