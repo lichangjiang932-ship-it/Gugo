@@ -860,8 +860,7 @@ export class JobRuntime {
           message: JOB_CANCELLED_MESSAGE,
           payload: {
             code: 'JOB_CANCEL_REQUESTED',
-            reason: 'user_requested',
-            nextAction: 'retry_job',
+            cancellationReason: 'user_requested',
             ...(diagnostics || {}),
           },
         }))
@@ -1356,8 +1355,7 @@ export class JobRuntime {
             message: JOB_CANCELLED_MESSAGE,
             payload: {
               code: 'JOB_CANCEL_REQUESTED',
-              reason: 'user_requested',
-              nextAction: 'retry_job',
+              cancellationReason: 'user_requested',
               ...(diagnostics || {}),
             },
           }))

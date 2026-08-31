@@ -743,6 +743,18 @@ function projectTerminalEvidence(message, row, { userId, sessionId }) {
   const usage = terminalEventEvidence(payload, 'usage')
   const turnModelUsage = terminalEventEvidence(payload, 'turnModelUsage')
   const estimatedPromptTokens = terminalEventEvidence(payload, 'estimatedPromptTokens')
+  const failedRetryRejection = context.failedRetryRejection
+  const preservedFailedRetryRejection = row.type === 'turn.failed'
+    && context.turnEvidence === true
+    && context.evidenceState === 'failed'
+    && context.serverLastSequence === row.sequence
+    && failedRetryRejection && typeof failedRetryRejection === 'object'
+    && !Array.isArray(failedRetryRejection)
+    && failedRetryRejection.failureSequence === row.sequence
+    && failedRetryRejection.code === context.error?.code
+    && context.error?.retryable === false
+      ? failedRetryRejection
+      : null
   const terminalContextBase = { ...context }
   for (const key of [
     'error',
@@ -800,8 +812,11 @@ function projectTerminalEvidence(message, row, { userId, sessionId }) {
       ? { estimatedPromptTokens }
       : {}),
     ...(failureBoundary ? {
-      error: eventFailure(payload, row.type),
+      error: preservedFailedRetryRejection ? context.error : eventFailure(payload, row.type),
     } : {}),
+    ...(preservedFailedRetryRejection
+      ? { failedRetryRejection: preservedFailedRetryRejection }
+      : {}),
     ...(recovery ? { recovery } : {}),
     ...(row.type === 'turn.paused'
       ? {
@@ -852,7 +867,12 @@ function recoverTerminalEvidenceMessages(messages, rows, scope, { synthesizeMiss
     const userMessageId = `${entry.row.turn_id}:user`
     const userIndex = recovered.findIndex((message) => message.id === userMessageId)
     if (userIndex >= 0) {
-      recovered.splice(userIndex + 1, 0, entry.message)
+      let insertIndex = userIndex + 1
+      while (insertIndex < recovered.length
+        && String(recovered[insertIndex]?.modelContext?.turnId || '') === entry.row.turn_id) {
+        insertIndex += 1
+      }
+      recovered.splice(insertIndex, 0, entry.message)
       continue
     }
     const createdAt = Number(entry.message.createdAt) || 0
