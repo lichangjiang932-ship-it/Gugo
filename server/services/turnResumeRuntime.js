@@ -80,13 +80,17 @@ export function modelInterruptionRecoveryState(events = [], maxAttempts = DEFAUL
 
 function persistedPayloadValues(events, field) {
   const values = []
+  const fields = Array.isArray(field) ? field : [field]
   for (const event of events) {
     const payload = event?.payload
-    if (payload && typeof payload === 'object' && Object.hasOwn(payload, field)) {
-      values.push(payload[field])
-    }
-    if (payload?.error && typeof payload.error === 'object' && Object.hasOwn(payload.error, field)) {
-      values.push(payload.error[field])
+    for (const fieldName of fields) {
+      if (payload && typeof payload === 'object' && Object.hasOwn(payload, fieldName)) {
+        values.push(payload[fieldName])
+      }
+      if (payload?.error && typeof payload.error === 'object'
+        && Object.hasOwn(payload.error, fieldName)) {
+        values.push(payload.error[fieldName])
+      }
     }
   }
   return values
@@ -108,7 +112,7 @@ function isModelRecoveryExhaustedBlock(event) {
 
 function persistedRecoveryEvidence(events) {
   const evidence = {}
-  const partialTextValues = persistedPayloadValues(events, 'partialText')
+  const partialTextValues = persistedPayloadValues(events, ['partialText', 'text'])
   const partialText = partialTextValues
     .map((value) => String(value || ''))
     .filter((value) => value.trim().length > 0)
