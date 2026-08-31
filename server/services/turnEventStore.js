@@ -253,6 +253,8 @@ export function pruneTurnEvents({
       event.user_id,
       event.session_id,
       event.turn_id,
+      event.type,
+      event.payload_json,
       event.created_at AS last_event_at,
       CASE
         WHEN event.type IN ('turn.completed', 'turn.cancelled', 'turn.failed')
@@ -273,7 +275,7 @@ export function pruneTurnEvents({
   for (const row of summaries) {
     const key = `${row.user_id}\u0000${row.session_id}\u0000${row.turn_id}`
     if (Number(row.last_event_at) < cutoff) doomed.set(key, row)
-    if (row.terminal_at !== null && row.terminal_at !== undefined) {
+    if (storedTurnEventIsTerminal(row)) {
       const count = (terminalCounts.get(row.user_id) || 0) + 1
       terminalCounts.set(row.user_id, count)
       if (count > safeMaxTerminalTurns) doomed.set(key, row)

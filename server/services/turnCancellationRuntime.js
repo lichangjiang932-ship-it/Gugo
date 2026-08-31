@@ -66,12 +66,16 @@ const SETTLED_TURN_STATUS_BY_EVENT = Object.freeze({
   'turn.failed': 'failed',
 })
 
+function settledTurnStatus(event) {
+  if (!isTerminalTurnEventType(event?.type)) return null
+  if (event.type === 'turn.completed' && !isSuccessfulTurnCompletedEvent(event)) return null
+  return SETTLED_TURN_STATUS_BY_EVENT[event.type] || null
+}
+
 async function cancellingProjection(getTurn, scope) {
   const turn = await getTurn(scope)
   const lastEvent = turn?.lastEvent
-  const settledStatus = lastEvent?.type === 'turn.completed'
-    ? (isSuccessfulTurnCompletedEvent(lastEvent) ? 'completed' : 'incomplete')
-    : SETTLED_TURN_STATUS_BY_EVENT[lastEvent?.type]
+  const settledStatus = settledTurnStatus(lastEvent)
   return settledStatus ? { ...turn, status: settledStatus } : { ...turn, status: 'cancelling' }
 }
 
@@ -156,7 +160,7 @@ export function createTurnCancellationRuntime({
           return cancellingProjection(ports.getTurn, scope)
         }
         const latest = await ports.lastEvent(scope)
-        if (isTerminalTurnEventType(latest?.type)) return await ports.getTurn(scope)
+        if (settledTurnStatus(latest)) return await ports.getTurn(scope)
         const error = new TurnEngineError(
           'TURN_CANCELLATION_CONFLICT',
           'turn cancellation could not acquire the execution fence',
@@ -172,7 +176,7 @@ export function createTurnCancellationRuntime({
         ports.releaseApproval(scope)
         const fencedLast = await ports.lastEvent(scope)
         if (!fencedLast) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
-        if (isTerminalTurnEventType(fencedLast.type)) return await ports.getTurn(scope)
+        if (settledTurnStatus(fencedLast)) return await ports.getTurn(scope)
 
         const replayedEvents = await replayPersistedTurnEvents(ports.replayEvents, scope)
         const checkpoint = storedCheckpointEvent(await ports.loadCheckpoint(scope))

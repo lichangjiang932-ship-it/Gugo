@@ -1,4 +1,5 @@
 import { getDb } from '../db.js'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 
 const MIN_DELAY_MS = 25
 const DEFAULT_MAX_ATTEMPTS = 5
@@ -9,6 +10,19 @@ const CANDIDATE_VERSION_PATTERN = /^(\d+):([^:]+):(\d+)$/
 
 function validScope({ userId, sessionId, turnId } = {}) {
   return !!(userId && sessionId && turnId)
+}
+
+function storedTurnEventResolved(row) {
+  if (row?.type === 'turn.cancelled' || row?.type === 'turn.failed') return true
+  if (row?.type !== 'turn.completed') return false
+  try {
+    return isSuccessfulTurnCompletedEvent({
+      type: row.type,
+      payload: JSON.parse(row.payload_json),
+    })
+  } catch {
+    return false
+  }
 }
 
 function normalizeNow(value) {
@@ -199,23 +213,36 @@ export function clearTurnRecoveryState(scope = {}, { candidateVersion = null } =
 
 /** Remove diagnostics only after the corresponding turn is durably terminal. */
 export function pruneResolvedTurnRecoveryStates() {
-  return getDb().prepare(`
-    DELETE FROM turn_recovery_states AS recovery
-    WHERE EXISTS (
-      SELECT 1 FROM turn_events AS event
-      WHERE event.user_id = recovery.user_id
-        AND event.session_id = recovery.session_id
-        AND event.turn_id = recovery.turn_id
-        AND event.type IN ('turn.completed', 'turn.cancelled', 'turn.failed')
-        AND event.sequence = (
-          SELECT MAX(latest.sequence)
-          FROM turn_events AS latest
-          WHERE latest.user_id = recovery.user_id
-            AND latest.session_id = recovery.session_id
-            AND latest.turn_id = recovery.turn_id
-        )
-    )
-  `).run().changes
+  const db = getDb()
+  return db.transaction(() => {
+    const rows = db.prepare(`
+      SELECT recovery.user_id, recovery.session_id, recovery.turn_id,
+        event.type, event.payload_json
+      FROM turn_recovery_states AS recovery
+      JOIN turn_events AS event
+        ON event.user_id = recovery.user_id
+       AND event.session_id = recovery.session_id
+       AND event.turn_id = recovery.turn_id
+       AND event.sequence = (
+         SELECT MAX(latest.sequence)
+         FROM turn_events AS latest
+         WHERE latest.user_id = recovery.user_id
+           AND latest.session_id = recovery.session_id
+           AND latest.turn_id = recovery.turn_id
+       )
+      WHERE event.type IN ('turn.completed', 'turn.cancelled', 'turn.failed')
+    `).all()
+    const remove = db.prepare(`
+      DELETE FROM turn_recovery_states
+      WHERE user_id = ? AND session_id = ? AND turn_id = ?
+    `)
+    let changes = 0
+    for (const row of rows) {
+      if (!storedTurnEventResolved(row)) continue
+      changes += remove.run(row.user_id, row.session_id, row.turn_id).changes
+    }
+    return changes
+  }).immediate()
 }
 
 export function listTurnRecoveryStates({ status = null, limit = 1_000 } = {}) {
