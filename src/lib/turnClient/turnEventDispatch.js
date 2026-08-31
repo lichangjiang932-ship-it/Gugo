@@ -120,6 +120,8 @@ export function normalizeTurnFailurePayload(payload = {}, {
 } = {}) {
   const nested = payload?.error && typeof payload.error === 'object' ? payload.error : {}
   const status = optionalInteger(nested.status ?? nested.statusCode ?? payload.status ?? payload.statusCode, 100, 599)
+  const expectedSequence = optionalInteger(nested.expectedSequence ?? payload.expectedSequence, 0)
+  const actualSequence = optionalInteger(nested.actualSequence ?? payload.actualSequence, 0)
   const attempts = optionalInteger(nested.attempts ?? payload.attempts, 1)
   const retryable = typeof nested.retryable === 'boolean'
     ? nested.retryable
@@ -127,15 +129,25 @@ export function normalizeTurnFailurePayload(payload = {}, {
   const manualRetryable = typeof nested.manualRetryable === 'boolean'
     ? nested.manualRetryable
     : (typeof payload.manualRetryable === 'boolean' ? payload.manualRetryable : undefined)
+  const action = String(nested.action || payload.action || '').trim()
+  const recoverySource = nested.recovery && typeof nested.recovery === 'object' && !Array.isArray(nested.recovery)
+    ? nested.recovery
+    : payload.recovery && typeof payload.recovery === 'object' && !Array.isArray(payload.recovery)
+      ? payload.recovery
+      : null
   const legacyMessage = String(nested.message || payload.message || payload.reason || '').trim()
   const error = {
     code: String(nested.code || payload.code || fallbackCode).trim() || fallbackCode,
     ...(legacyMessage ? { message: legacyMessage } : {}),
     ...(status !== undefined ? { status } : {}),
+    ...(expectedSequence !== undefined ? { expectedSequence } : {}),
+    ...(actualSequence !== undefined ? { actualSequence } : {}),
+    ...(action ? { action } : {}),
     ...(retryable !== undefined ? { retryable } : {}),
     ...(manualRetryable !== undefined ? { manualRetryable } : {}),
     ...((nested.hint || payload.hint) ? { hint: String(nested.hint || payload.hint) } : {}),
     ...(attempts !== undefined ? { attempts } : {}),
+    ...(recoverySource ? { recovery: { ...recoverySource } } : {}),
   }
   const incompleteReason = String(nested.incompleteReason || payload.incompleteReason || '').trim()
   if (incompleteReason) error.incompleteReason = incompleteReason

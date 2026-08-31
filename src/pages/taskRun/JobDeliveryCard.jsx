@@ -6,6 +6,11 @@ const DELIVERY_FIELDS = [
   'summary',
   'text',
   'reason',
+  'incompleteReason',
+  'missingRequirements',
+  'taskVerification',
+  'verifiedLocalFiles',
+  'retainedLocalFiles',
   'artifactIds',
   'completedDeliverables',
   'missingDeliverables',
@@ -71,6 +76,12 @@ function evidenceText(value) {
   return String(value.summary || value.command || value.path || '').trim()
 }
 
+function localFileLabel(value) {
+  if (typeof value === 'string') return value.trim()
+  if (!record(value)) return ''
+  return String(value.filename || value.path || '').trim()
+}
+
 function nextActionLabel(value, t) {
   const key = {
     retry_job: 'taskCenter.retry',
@@ -94,16 +105,29 @@ function nextActionLabel(value, t) {
 
 export default function JobDeliveryCard({ delivery, jobStatus, evidence = [], t }) {
   if (!record(delivery)) return null
-  const issues = normalizedList(delivery.issues)
+  const verification = record(delivery.taskVerification)
+  const issues = normalizedList([
+    ...(Array.isArray(delivery.issues) ? delivery.issues : []),
+    ...(Array.isArray(verification?.issues) ? verification.issues : []),
+    verification?.reason,
+  ])
   const completed = normalizedList(delivery.completedDeliverables).map((value) => value.toUpperCase())
   const missing = normalizedList(delivery.missingDeliverables).map((value) => value.toUpperCase())
-  const reason = String(delivery.reason || '').trim()
+  const missingRequirements = normalizedList(delivery.missingRequirements)
+  const verifiedFiles = normalizedList((Array.isArray(delivery.verifiedLocalFiles)
+    ? delivery.verifiedLocalFiles
+    : []).map(localFileLabel))
+  const retainedFiles = normalizedList((Array.isArray(delivery.retainedLocalFiles)
+    ? delivery.retainedLocalFiles
+    : []).map(localFileLabel))
+  const reason = String(delivery.incompleteReason || delivery.reason || '').trim()
   const summary = String(delivery.summary || reason).trim()
   const nextAction = nextActionLabel(delivery.nextAction, t)
   const renderedEvidence = normalizedList(evidence.map(evidenceText))
   const incomplete = jobStatus !== 'completed'
     || delivery.complete === false
     || missing.length > 0
+    || missingRequirements.length > 0
     || issues.length > 0
     || !!reason
   return (
@@ -113,7 +137,10 @@ export default function JobDeliveryCard({ delivery, jobStatus, evidence = [], t 
       {reason && reason !== summary && <p className="mt-2 text-xs text-danger">{reason}</p>}
       {completed.length > 0 && <p className="mt-2 text-xs text-success">{t('taskCenter.deliverablesCompleted', { items: completed.join(', ') })}</p>}
       {missing.length > 0 && <p className="mt-2 text-xs text-danger">{t('taskCenter.deliverablesMissing', { items: missing.join(', ') })}</p>}
+      {missingRequirements.length > 0 && <p className="mt-2 text-xs text-danger"><span className="font-medium">{t('chatMessages.incompleteMissingLabel')}</span> {missingRequirements.join(', ')}</p>}
       {issues.length > 0 && <ul className="mt-2 space-y-1 border-l-2 border-warning/50 pl-3">{issues.map((issue) => <li key={issue} className="text-xs leading-5 text-warning">{issue}</li>)}</ul>}
+      {verifiedFiles.length > 0 && <p className="mt-2 text-xs text-success">{t('chatMessages.incompleteVerifiedFiles', { count: verifiedFiles.length })}: {verifiedFiles.join(', ')}</p>}
+      {retainedFiles.length > 0 && <p className="mt-2 text-xs text-warning">{t('chatMessages.incompletePendingFiles', { count: retainedFiles.length })}: {retainedFiles.join(', ')}</p>}
       {delivery.text && <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-6 text-ink-soft">{delivery.text}</div>}
       {nextAction && <p className="mt-2 text-xs text-accent-ink">→ {nextAction}</p>}
       {renderedEvidence.length > 0 && <details className="mt-3 border-t border-dashed border-ink-fade/40 pt-3"><summary className="cursor-pointer text-xs font-medium text-ink">{t('taskCenter.evidence', { count: renderedEvidence.length })}</summary><div className="mt-2 space-y-2">{renderedEvidence.map((item, index) => <p key={`${index}-${item.slice(0, 24)}`} className="whitespace-pre-wrap break-words text-xs leading-5 text-ink-soft">{item}</p>)}</div></details>}

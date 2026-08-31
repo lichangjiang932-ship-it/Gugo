@@ -114,9 +114,18 @@ export function reconnectExhaustedError(attempts, cause) {
   if (cause && typeof cause === 'object') {
     for (const field of [
       'serverFailure',
+      'action',
+      'status',
+      'expectedSequence',
+      'actualSequence',
+      'recovery',
+      'retryable',
+      'manualRetryable',
+      'retryAfter',
       'incompleteReason',
       'missingRequirements',
       'taskVerification',
+      'attempts',
       'partialText',
       'artifactIds',
       'deliveryArtifactIds',

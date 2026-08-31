@@ -517,6 +517,26 @@ export function persistedJobOutcomeFields(output) {
   return {
     ...(typeof output.complete === 'boolean' ? { complete: output.complete } : {}),
     ...(String(output.reason || '').trim() ? { reason: String(output.reason).trim() } : {}),
+    ...(String(output.incompleteReason || '').trim()
+      ? { incompleteReason: String(output.incompleteReason).trim() }
+      : {}),
+    ...(Array.isArray(output.missingRequirements)
+      ? { missingRequirements: output.missingRequirements }
+      : {}),
+    ...(output.taskVerification && typeof output.taskVerification === 'object'
+      && !Array.isArray(output.taskVerification)
+      ? { taskVerification: output.taskVerification }
+      : {}),
+    ...(Array.isArray(output.verifiedLocalFiles)
+      ? { verifiedLocalFiles: output.verifiedLocalFiles }
+      : {}),
+    ...(Array.isArray(output.retainedLocalFiles)
+      ? { retainedLocalFiles: output.retainedLocalFiles }
+      : {}),
+    ...(typeof output.retryable === 'boolean' ? { retryable: output.retryable } : {}),
+    ...(typeof output.manualRetryable === 'boolean'
+      ? { manualRetryable: output.manualRetryable }
+      : {}),
     ...(Array.isArray(output.artifactIds) ? { artifactIds: output.artifactIds } : {}),
     ...(Array.isArray(output.completedDeliverables)
       ? { completedDeliverables: output.completedDeliverables }
@@ -537,7 +557,12 @@ export function clearResumedJobOutcomeDiagnostics(output) {
   for (const key of [
     'complete',
     'reason',
+    'incompleteReason',
     'nextAction',
+    'missingRequirements',
+    'taskVerification',
+    'retryable',
+    'manualRetryable',
     'missingDeliverables',
     'issues',
     'acceptance',
@@ -548,6 +573,36 @@ export function clearResumedJobOutcomeDiagnostics(output) {
 
 export function buildJobOutcomeDiagnostics(job, { reason = null, nextAction = null } = {}) {
   const delivery = buildFinalOutput(job)
+  const carriedDiagnostics = {}
+  const carryFields = [
+    'incompleteReason',
+    'missingRequirements',
+    'taskVerification',
+    'verifiedLocalFiles',
+    'retainedLocalFiles',
+    'retryable',
+    'manualRetryable',
+  ]
+  const listFields = new Set([
+    'missingRequirements',
+    'verifiedLocalFiles',
+    'retainedLocalFiles',
+  ])
+  for (const step of Array.isArray(job?.steps) ? job.steps : []) {
+    const fields = persistedJobOutcomeFields(step?.output)
+    for (const field of carryFields) {
+      const value = fields[field]
+      const meaningful = Array.isArray(value)
+        ? value.length > 0
+        : value && typeof value === 'object'
+          ? Object.keys(value).length > 0
+          : value !== undefined && value !== null && value !== ''
+      if (!meaningful) continue
+      carriedDiagnostics[field] = listFields.has(field)
+        ? mergeJobEvidence(carriedDiagnostics[field], value)
+        : value
+    }
+  }
   const normalizedReason = String(reason || '').trim().slice(0, 2_000)
   const normalizedNextAction = String(nextAction || '').trim().slice(0, 80)
   const issues = [...new Set([
@@ -555,6 +610,7 @@ export function buildJobOutcomeDiagnostics(job, { reason = null, nextAction = nu
     normalizedReason,
   ].map((value) => String(value || '').trim()).filter(Boolean))]
   return {
+    ...carriedDiagnostics,
     complete: false,
     ...(normalizedReason ? { reason: normalizedReason } : {}),
     ...(normalizedNextAction ? { nextAction: normalizedNextAction } : {}),

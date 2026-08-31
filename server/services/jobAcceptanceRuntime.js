@@ -40,7 +40,30 @@ export async function buildToolStepResult({
     text: result.text,
     artifactIds: result.artifactIds,
     toolIterations: result.iterations,
-    evidence: step.kind === 'verify' && result.text ? [result.text] : [],
+    evidence: mergeJobEvidence(
+      result.evidence,
+      step.kind === 'verify' && result.text ? [result.text] : [],
+    ),
+    ...(truncated && String(result.incompleteReason || result.reason || '').trim()
+      ? { incompleteReason: String(result.incompleteReason || result.reason).trim() }
+      : {}),
+    ...(Array.isArray(result.missingRequirements)
+      ? { missingRequirements: result.missingRequirements }
+      : {}),
+    ...(result.taskVerification && typeof result.taskVerification === 'object'
+      && !Array.isArray(result.taskVerification)
+      ? { taskVerification: result.taskVerification }
+      : {}),
+    ...(Array.isArray(result.verifiedLocalFiles)
+      ? { verifiedLocalFiles: result.verifiedLocalFiles }
+      : {}),
+    ...(Array.isArray(result.retainedLocalFiles)
+      ? { retainedLocalFiles: result.retainedLocalFiles }
+      : {}),
+    ...(typeof result.retryable === 'boolean' ? { retryable: result.retryable } : {}),
+    ...(typeof result.manualRetryable === 'boolean'
+      ? { manualRetryable: result.manualRetryable }
+      : {}),
   }
   const evaluatedAcceptance = step.kind === 'verify' && !truncated
     ? await taskEvaluator({
@@ -77,6 +100,13 @@ export async function buildToolStepResult({
     budgetExceeded: !!result.budgetExceeded,
     noProgress: !!result.noProgress,
     interrupted: !!result.interrupted,
+    incompleteReason: output.incompleteReason || null,
+    missingRequirements: output.missingRequirements || [],
+    taskVerification: output.taskVerification || null,
+    verifiedLocalFiles: output.verifiedLocalFiles || [],
+    retainedLocalFiles: output.retainedLocalFiles || [],
+    retryable: output.retryable,
+    manualRetryable: output.manualRetryable,
     acceptance,
     error: acceptance && acceptance.verdict !== 'pass' ? acceptance.summary : null,
     reason: result.reason || (result.paused ? '需要用户澄清' : null),

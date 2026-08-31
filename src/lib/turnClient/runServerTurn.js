@@ -54,9 +54,18 @@ function inheritTurnFailureContext(target, source) {
   if (!target || !source || typeof source !== 'object') return target
   for (const field of [
     'serverFailure',
+    'action',
+    'status',
+    'expectedSequence',
+    'actualSequence',
+    'recovery',
+    'retryable',
+    'manualRetryable',
+    'retryAfter',
     'incompleteReason',
     'missingRequirements',
     'taskVerification',
+    'attempts',
     'partialText',
     'artifactIds',
     'deliveryArtifactIds',

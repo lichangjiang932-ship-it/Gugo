@@ -161,6 +161,33 @@ function line(value) {
   return /\r?\n$/u.test(text) ? text : `${text}\n`
 }
 
+function uniqueTextValues(...sources) {
+  return [...new Set(sources
+    .flatMap((source) => Array.isArray(source) ? source : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))]
+}
+
+function localFileLabels(...sources) {
+  return [...new Set(sources
+    .flatMap((source) => Array.isArray(source) ? source : [])
+    .map((file) => typeof file === 'string'
+      ? file.trim()
+      : String(file?.filename || file?.path || '').trim())
+    .filter(Boolean))]
+}
+
+function taskVerificationIssues(...sources) {
+  const issues = []
+  for (const source of sources) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) continue
+    issues.push(...uniqueTextValues(source.issues, source.missingRequirements))
+    const reason = String(source.reason || source.summary || '').trim()
+    if (reason) issues.push(reason)
+  }
+  return [...new Set(issues)]
+}
+
 function terminalDiagnostic(event) {
   const label = TEXT_TERMINAL_DIAGNOSTICS[event?.type]
   if (!label) return null
@@ -183,35 +210,28 @@ function terminalDiagnostic(event) {
   const incompleteReason = String(
     nested.incompleteReason || payload.incompleteReason || '',
   ).trim()
-  const nestedMissingRequirements = Array.isArray(nested.missingRequirements)
-    ? nested.missingRequirements
-    : []
-  const payloadMissingRequirements = Array.isArray(payload.missingRequirements)
-    ? payload.missingRequirements
-    : []
-  const missingRequirements = [...new Set((nestedMissingRequirements.length > 0
-    ? nestedMissingRequirements
-    : payloadMissingRequirements)
-    .map((value) => String(value || '').trim())
-    .filter(Boolean))]
-  const artifactIds = [...new Set((Array.isArray(payload.artifactIds)
-    && payload.artifactIds.length > 0
-    ? payload.artifactIds
-    : Array.isArray(nested.artifactIds) ? nested.artifactIds : [])
-    .map((value) => String(value || '').trim())
-    .filter(Boolean))]
-  const verifiedFiles = (Array.isArray(payload.verifiedLocalFiles)
-    && payload.verifiedLocalFiles.length > 0
-    ? payload.verifiedLocalFiles
-    : Array.isArray(nested.verifiedLocalFiles) ? nested.verifiedLocalFiles : [])
-    .map((file) => String(file?.filename || file?.path || '').trim())
-    .filter(Boolean)
-  const retainedFiles = (Array.isArray(payload.retainedLocalFiles)
-    && payload.retainedLocalFiles.length > 0
-    ? payload.retainedLocalFiles
-    : Array.isArray(nested.retainedLocalFiles) ? nested.retainedLocalFiles : [])
-    .map((file) => String(file?.filename || file?.path || '').trim())
-    .filter(Boolean)
+  const missingRequirements = uniqueTextValues(
+    nested.missingRequirements,
+    payload.missingRequirements,
+  )
+  const artifactIds = uniqueTextValues(
+    nested.artifactIds,
+    nested.deliveryArtifactIds,
+    payload.artifactIds,
+    payload.deliveryArtifactIds,
+  )
+  const verifiedFiles = localFileLabels(
+    nested.verifiedLocalFiles,
+    payload.verifiedLocalFiles,
+  )
+  const retainedFiles = localFileLabels(
+    nested.retainedLocalFiles,
+    payload.retainedLocalFiles,
+  )
+  const verificationIssues = taskVerificationIssues(
+    nested.taskVerification,
+    payload.taskVerification,
+  )
   const retryable = typeof nested.retryable === 'boolean'
     ? nested.retryable
     : payload.retryable === true
@@ -227,6 +247,7 @@ function terminalDiagnostic(event) {
   if (artifactIds.length > 0) details.push(`Saved artifacts: ${artifactIds.join(', ')}`)
   if (verifiedFiles.length > 0) details.push(`Verified files: ${verifiedFiles.join(', ')}`)
   if (retainedFiles.length > 0) details.push(`Saved files awaiting verification: ${retainedFiles.join(', ')}`)
+  if (verificationIssues.length > 0) details.push(`Verification: ${verificationIssues.join('; ')}`)
   if (retryable) details.push('Next: retry this turn from its durable checkpoint.')
   else if (manualRetryable) details.push('Next: verify the recorded outcome, then retry explicitly.')
   else if (missingRequirements.length > 0) details.push('Next: satisfy the missing requirements and run again.')
@@ -251,16 +272,62 @@ export function formatRunEvent(event, { format = 'jsonl' } = {}) {
 
 export function formatRunError(error, { format = 'jsonl' } = {}) {
   const resolvedFormat = normalizeRunOutputFormat(format)
-  const code = String(error?.code || 'CLI_RUN_FAILED').trim() || 'CLI_RUN_FAILED'
-  const message = String(error?.message || error || 'run failed').trim()
+  const recovery = error?.recovery && typeof error.recovery === 'object' ? error.recovery : {}
+  const code = String(error?.code || recovery.errorCode || 'CLI_RUN_FAILED').trim() || 'CLI_RUN_FAILED'
+  const message = String(error?.message || recovery.errorMessage || error || 'run failed').trim()
   const action = String(error?.action || '').trim()
-  const diagnostic = line(`Error [${code}]: ${message}`)
+  const incompleteReason = String(error?.incompleteReason || recovery.incompleteReason || '').trim()
+  const missingRequirements = uniqueTextValues(
+    error?.missingRequirements,
+    recovery.missingRequirements,
+  )
+  const artifactIds = uniqueTextValues(
+    error?.artifactIds,
+    error?.deliveryArtifactIds,
+    recovery.artifactIds,
+    recovery.deliveryArtifactIds,
+  )
+  const verifiedFiles = localFileLabels(error?.verifiedLocalFiles, recovery.verifiedLocalFiles)
+  const retainedFiles = localFileLabels(error?.retainedLocalFiles, recovery.retainedLocalFiles)
+  const verificationIssues = taskVerificationIssues(
+    error?.taskVerification,
+    recovery.taskVerification,
+  )
+  const retryable = typeof error?.retryable === 'boolean'
+    ? error.retryable
+    : typeof recovery.retryable === 'boolean' ? recovery.retryable : null
+  const manualRetryable = typeof error?.manualRetryable === 'boolean'
+    ? error.manualRetryable
+    : typeof recovery.manualRetryable === 'boolean' ? recovery.manualRetryable : null
+  const details = [`Error [${code}]: ${message}`]
+  if (incompleteReason && incompleteReason !== message) details.push(`Reason: ${incompleteReason}`)
+  if (missingRequirements.length > 0) details.push(`Missing: ${missingRequirements.join(', ')}`)
+  if (artifactIds.length > 0) details.push(`Saved artifacts: ${artifactIds.join(', ')}`)
+  if (verifiedFiles.length > 0) details.push(`Verified files: ${verifiedFiles.join(', ')}`)
+  if (retainedFiles.length > 0) details.push(`Saved files awaiting verification: ${retainedFiles.join(', ')}`)
+  if (verificationIssues.length > 0) details.push(`Verification: ${verificationIssues.join('; ')}`)
+  if (retryable) details.push('Next: retry this turn from its durable checkpoint.')
+  else if (manualRetryable) details.push('Next: verify the recorded outcome, then retry explicitly.')
+  else if (missingRequirements.length > 0) details.push('Next: satisfy the missing requirements and run again.')
+  const diagnostic = line(details.join('\n'))
   if (resolvedFormat === 'text') {
     return Object.freeze({ stdout: null, stderr: diagnostic })
   }
   const event = {
     type: 'cli.error',
-    error: { code, message, ...(action ? { action } : {}) },
+    error: {
+      code,
+      message,
+      ...(action ? { action } : {}),
+      ...(incompleteReason ? { incompleteReason } : {}),
+      ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
+      ...(artifactIds.length > 0 ? { artifactIds } : {}),
+      ...(verifiedFiles.length > 0 ? { verifiedLocalFiles: verifiedFiles } : {}),
+      ...(retainedFiles.length > 0 ? { retainedLocalFiles: retainedFiles } : {}),
+      ...(verificationIssues.length > 0 ? { verificationIssues } : {}),
+      ...(typeof retryable === 'boolean' ? { retryable } : {}),
+      ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),
+    },
   }
   return Object.freeze({ stdout: `${JSON.stringify(event)}\n`, stderr: diagnostic })
 }

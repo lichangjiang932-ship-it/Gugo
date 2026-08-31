@@ -1243,13 +1243,16 @@ export class JobRuntime {
         return true
       }
       if (result?.truncated) {
+        const incompleteReason = String(result.incompleteReason || result.reason || '').trim()
         const why = result.paused
           ? `需要澄清:${result.clarification?.question || '模型请求用户补充信息'}`
           : result.interrupted
             ? `中断:${result.reason || '模型调用出错'}（已保留部分进展，可点重试从断点继续）`
             : result.noProgress
               ? `无进展:${result.reason || '工具调用反复失败或重复'}`
-              : `预算耗尽:${result.reason || '工具调用次数达上限'}`
+              : result.budgetExceeded
+                ? `预算耗尽:${result.reason || '工具调用次数达上限'}`
+                : `任务未完成:${incompleteReason || '仍有完成条件尚未满足'}`
         if (!commitOwned(() => {
           updateJobStep(nextStep.id, {
             status: 'failed',
@@ -1280,8 +1283,13 @@ export class JobRuntime {
                 ? 'JOB_STEP_INTERRUPTED'
                 : result.noProgress
                   ? 'JOB_STEP_NO_PROGRESS'
-                  : 'JOB_STEP_BUDGET_EXHAUSTED',
-              retryable: true,
+                  : result.budgetExceeded
+                    ? 'JOB_STEP_BUDGET_EXHAUSTED'
+                    : 'JOB_STEP_INCOMPLETE',
+              retryable: result.retryable !== false,
+              ...(typeof result.manualRetryable === 'boolean'
+                ? { manualRetryable: result.manualRetryable }
+                : {}),
               ...(diagnostics || {}),
             },
           }))

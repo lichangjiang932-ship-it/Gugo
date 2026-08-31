@@ -881,7 +881,10 @@ function recoverTerminalEvidenceMessages(messages, rows, scope, {
   messages.forEach((message, index) => {
     if (message?.role !== 'assistant') return
     const turnId = String(message?.modelContext?.turnId || '').trim()
-    if (turnId && !byAssistantTurnId.has(turnId)) byAssistantTurnId.set(turnId, index)
+    // Replacement/import flows may contain more than one assistant row for a
+    // Turn. The latest row is the visible answer and must own the recovered
+    // terminal evidence; projecting onto the first row rewrites stale history.
+    if (turnId) byAssistantTurnId.set(turnId, index)
   })
   const recovered = [...messages]
   const missing = []
