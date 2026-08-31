@@ -216,9 +216,12 @@ export default function MessageRow({
           <IncompleteTaskNotice
             expectsFileReceipt={expectsFileReceipt}
             msg={msg}
+            onOpenArtifact={openArtifact}
             retainedCount={retainedLocalFileReferences.length}
+            retainedLocalFileReferences={retainedLocalFileReferences}
             t={t}
             verifiedCount={verifiedLocalFileReferences.length}
+            verifiedLocalFileReferences={verifiedLocalFileReferences}
           />
         )}
         {msg.role === 'assistant' && (

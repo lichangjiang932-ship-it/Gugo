@@ -90,6 +90,16 @@ const VERIFICATION_STATUS_KEYS = Object.freeze({
   stale: 'chatMessages.incompleteVerificationStale',
 })
 
+const SUCCESS_VERIFICATION_STATUSES = new Set([
+  'complete',
+  'completed',
+  'ok',
+  'pass',
+  'passed',
+  'succeeded',
+  'success',
+])
+
 const VERIFICATION_DIAGNOSTIC_KEYS = Object.freeze({
   PROCESS_TREE_CLEANUP_FAILED: 'chatMessages.incompleteVerificationProcessTreeCleanupFailed',
 })
@@ -145,7 +155,7 @@ function verificationCheckPresentations(failure, t) {
   return source.checks.slice(0, 9).map((check) => {
     const status = String(check?.status || '').trim().toLowerCase()
     const kind = String(check?.kind || '').trim().toLowerCase()
-    if (!status || !kind || ['passed', 'success'].includes(status)) return null
+    if (!status || !kind || SUCCESS_VERIFICATION_STATUSES.has(status)) return null
     const cwd = String(check?.cwd || '.').trim().slice(0, 1_000) || '.'
     const command = String(check?.commandScope || kind).trim().slice(0, 1_000) || kind
     const code = String(check?.code || 'VERIFICATION_INDETERMINATE').trim().toUpperCase()
