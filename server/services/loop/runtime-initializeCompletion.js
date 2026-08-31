@@ -528,7 +528,9 @@ export async function initializeCompletion(s) {
     selectedArtifactIds: s.hasCurrentDeliverableSelection() ? s.deliveryArtifactIds : [],
     mutationExecutionObserved: s.mutationExecutionObserved,
     executionEvidenceObserved: s.executionEvidenceObserved,
-    postMutationVerificationPassed: s.mutationExecutionObserved && !s.hasPendingMutationVerification(),
+    postMutationVerificationPassed: s.mutationExecutionObserved
+      && !s.hasPendingMutationVerification()
+      && !s.hasPendingTaskVerificationRepair(),
     pdfLayoutVerificationPassed: !s.requiresPdfLayoutVerification || s.pdfLayoutVerificationObserved,
     localHtmlValidationPassed: !s.localHtmlDeliveryValidationPending,
     toolEvidence: s.finalAnswerToolEvidence,
@@ -539,6 +541,7 @@ export async function initializeCompletion(s) {
   s.finalAnswerEvidenceReady = () => s.requiresFinalAnswerEvidenceReview()
     && s.hasRequiredArtifacts()
     && s.hasRequiredExecutionEvidence()
+    && !s.hasPendingTaskVerificationRepair()
     && !s.hasPendingMutationVerification()
     && (!s.requiresPdfLayoutVerification || s.pdfLayoutVerificationObserved)
     && !s.localHtmlDeliveryValidationPending

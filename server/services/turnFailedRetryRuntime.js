@@ -190,7 +190,7 @@ export function createTurnFailedRetryRuntime({
         }
         await deps.writeMessage(message)
       }
-      throw rejectionError
+      throw permanentFailedRetryError(message.modelContext.error)
     }
     const failedRetryCount = persistedEvents.filter((event) => (
       isValidFailedRetryAttemptRecord(persistedEvents, event)

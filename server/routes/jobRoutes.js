@@ -75,6 +75,16 @@ function sendJobModelRequestRecoveryError(res, error) {
   })
 }
 
+function sendJobTransitionError(res, error) {
+  return sendJson(res, error.statusCode || 409, {
+    error: {
+      code: error.code,
+      message: error.message,
+      retryable: false,
+    },
+  })
+}
+
 export async function handleJobRequest(req, res, runtime, { env = process.env } = {}) {
   const url = new URL(req.url, 'http://localhost')
   const parts = routeParts(url.pathname)
@@ -297,6 +307,7 @@ export async function handleJobRequest(req, res, runtime, { env = process.env } 
         if (error?.code === 'JOB_PLAN_APPROVAL_REQUIRED') {
           return sendJson(res, 409, { error: error.message, code: error.code })
         }
+        if (error?.code === 'JOB_RETRY_STATUS_INVALID') return sendJobTransitionError(res, error)
         throw error
       }
     }
@@ -315,6 +326,7 @@ export async function handleJobRequest(req, res, runtime, { env = process.env } 
         if (error?.code === 'JOB_PLAN_APPROVAL_REQUIRED') {
           return sendJson(res, 409, { error: error.message, code: error.code })
         }
+        if (error?.code === 'JOB_STEP_RETRY_STATUS_INVALID') return sendJobTransitionError(res, error)
         throw error
       }
     }
@@ -335,6 +347,7 @@ export async function handleJobRequest(req, res, runtime, { env = process.env } 
         if (error?.code === 'JOB_PLAN_APPROVAL_REQUIRED') {
           return sendJson(res, 409, { error: error.message, code: error.code })
         }
+        if (error?.code === 'JOB_COMPLETION_STATUS_INVALID') return sendJobTransitionError(res, error)
         throw error
       }
     }

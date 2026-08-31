@@ -380,12 +380,15 @@ export function buildFinalOutput(job) {
   const texts = resultSteps.map(stepText).filter(Boolean)
   const verification = steps.find((step) => step.kind === 'verify')
   const verificationText = stepText(verification)
-  const artifactIds = [...new Set([
-    ...steps.flatMap((step) => (
-      Array.isArray(step.output?.artifactIds) ? step.output.artifactIds : []
-    )),
-    ...(Array.isArray(job?.artifacts) ? job.artifacts.map((artifact) => artifact?.id) : []),
-  ].filter(Boolean))]
+  // A tool result may report an artifact id before persistence succeeds, and
+  // plugin tools can return arbitrary ids. Only owned rows loaded with the job
+  // are durable, downloadable deliverables and may satisfy file acceptance.
+  const artifactIds = [...new Set(
+    (Array.isArray(job?.artifacts) ? job.artifacts : [])
+      .filter((artifact) => artifact?.jobId === job?.id && artifact?.userId === job?.userId)
+      .map((artifact) => artifact?.id)
+      .filter(Boolean),
+  )]
 
   const issues = []
 

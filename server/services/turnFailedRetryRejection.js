@@ -1,4 +1,5 @@
 import { TurnEngineError } from './turnResolutionRuntime.js'
+import { normalizeTurnFailure } from './turnTerminalProjection.js'
 
 const PERMANENT_REJECTION_CODES = new Set([
   'TURN_FAILED_RETRY_LIMIT_REACHED',
@@ -45,11 +46,16 @@ export function failedRetryRejectionEvidenceMessage({
   writtenAt,
 }) {
   const modelContext = isRecord(existing?.modelContext) ? { ...existing.modelContext } : {}
-  const failure = {
+  const previousFailure = isRecord(failureEvent?.payload?.error)
+    ? failureEvent.payload.error
+    : isRecord(modelContext.error) ? modelContext.error : {}
+  const failure = normalizeTurnFailure({
+    ...previousFailure,
     code: String(error?.code || 'TURN_FAILED_RETRY_NOT_ALLOWED'),
     retryable: false,
+    manualRetryable: false,
     ...(Number.isInteger(error?.status) ? { status: error.status } : {}),
-  }
+  }, { code: 'TURN_FAILED_RETRY_NOT_ALLOWED', retryable: false })
   return {
     id: `${turnId}:assistant`,
     userId,
@@ -88,5 +94,14 @@ export function permanentFailedRetryError(error) {
     Number.isInteger(error?.status) ? error.status : 409,
   )
   wrapped.retryable = false
+  if (typeof error?.manualRetryable === 'boolean') wrapped.manualRetryable = error.manualRetryable
+  const incompleteReason = String(error?.incompleteReason || '').trim()
+  if (incompleteReason) wrapped.incompleteReason = incompleteReason
+  const missingRequirements = [...new Set((Array.isArray(error?.missingRequirements)
+    ? error.missingRequirements
+    : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
+  if (missingRequirements.length > 0) wrapped.missingRequirements = missingRequirements
+  if (isRecord(error?.taskVerification)) wrapped.taskVerification = error.taskVerification
+  if (Number.isInteger(error?.attempts) && error.attempts > 0) wrapped.attempts = error.attempts
   return wrapped
 }

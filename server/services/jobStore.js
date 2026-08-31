@@ -67,7 +67,10 @@ export function requiresStructuredCompletionEvidence(step) {
   return STRUCTURED_EVIDENCE_STEP_KINDS.has(String(step?.kind || '').trim().toLowerCase())
 }
 
-export function validateStructuredCompletionEvidence(evidence) {
+export function validateStructuredCompletionEvidence(evidence, {
+  jobId = null,
+  userId = null,
+} = {}) {
   if (!Array.isArray(evidence) || evidence.length === 0) {
     return {
       ok: false,
@@ -81,6 +84,37 @@ export function validateStructuredCompletionEvidence(evidence) {
       ok: false,
       code: 'JOB_COMPLETION_EVIDENCE_INVALID',
       error: 'Completion evidence must use a supported structured evidence shape.',
+    }
+  }
+  if (jobId) {
+    const artifactIds = normalized
+      .filter((entry) => entry.type === 'artifact')
+      .map((entry) => entry.artifactId)
+    if (artifactIds.length > 0) {
+      const db = getDb()
+      const artifactBelongsToJob = userId
+        ? db.prepare(`
+            SELECT 1
+              FROM job_artifacts
+             WHERE id = ? AND job_id = ? AND user_id = ?
+          `)
+        : db.prepare(`
+            SELECT 1
+              FROM job_artifacts
+             WHERE id = ? AND job_id = ?
+          `)
+      const missing = artifactIds.find((artifactId) => !(
+        userId
+          ? artifactBelongsToJob.get(artifactId, jobId, userId)
+          : artifactBelongsToJob.get(artifactId, jobId)
+      ))
+      if (missing) {
+        return {
+          ok: false,
+          code: 'JOB_COMPLETION_EVIDENCE_ARTIFACT_NOT_FOUND',
+          error: 'Artifact completion evidence must reference a persisted artifact owned by this job.',
+        }
+      }
     }
   }
   return { ok: true, evidence: normalized }
@@ -581,13 +615,17 @@ export function completeJobStep(stepId, {
   evidence = [],
   output = null,
   completedAt = Date.now(),
+  userId = null,
 } = {}) {
   const current = getJobStep(stepId)
   if (!current) return null
 
   let storedEvidence
   if (requiresStructuredCompletionEvidence(current)) {
-    const validation = validateStructuredCompletionEvidence(evidence)
+    const validation = validateStructuredCompletionEvidence(evidence, {
+      jobId: current.jobId,
+      userId,
+    })
     if (!validation.ok) throw completionEvidenceError(validation.code, validation.error)
     storedEvidence = validation.evidence
   } else {

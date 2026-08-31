@@ -57,9 +57,20 @@ export { recoverInterruptedJobs } from './jobRuntimeLifecycle.js'
 export { runPlanningExploration, selectPlanningToolSpecs } from './jobPlanningExplorationRuntime.js'
 export { createDefaultExecuteStep }
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+const RETRYABLE_JOB_STATUSES = new Set(['failed', 'cancelled'])
+const RETRYABLE_STEP_STATUSES = new Set(['failed', 'cancelled'])
 // ★ 注意:awaiting_approval 故意不在这里。等人的 job 崩溃恢复时若被重排成 queued,
 // 会把已经批准执行过的动作重跑一遍(发消息/改日历这类不可撤销动作尤其危险)。
 const SUSPENDED_JOB_STATUSES = new Set(['waiting', 'awaiting_approval'])
+
+function hasRejectedCompletedOutcome(step) {
+  if (step?.status !== 'completed') return false
+  if (step.kind === 'verify') {
+    const verdict = String(step.output?.acceptance?.verdict || '').trim().toLowerCase()
+    return verdict && verdict !== 'pass'
+  }
+  return step.kind === 'finalize' && step.output?.complete === false
+}
 function newId(prefix) {
   return `${prefix}-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
 }
@@ -345,6 +356,12 @@ export class JobRuntime {
   retryJob(jobId, { userId } = {}) {
     const currentJob = this.getJob(jobId, { userId })
     if (!currentJob) return null
+    if (!RETRYABLE_JOB_STATUSES.has(currentJob.status)) {
+      const error = new Error(`job cannot be retried from status ${currentJob.status}`)
+      error.code = 'JOB_RETRY_STATUS_INVALID'
+      error.statusCode = 409
+      throw error
+    }
     assertJobPlanRetryAllowed(currentJob)
     const modelBinding = this.resolveModelBinding({
       userId,
@@ -364,7 +381,7 @@ export class JobRuntime {
     updateJobModelSnapshot(jobId, { userId, ...modelSnapshot })
     cancelJobWake({ jobId, userId })
     for (const step of currentJob.steps) {
-      if (['failed', 'cancelled'].includes(step.status)) {
+      if (RETRYABLE_STEP_STATUSES.has(step.status) || hasRejectedCompletedOutcome(step)) {
         // A truncated run deliberately keeps its durable checkpoint. Clear only
         // the terminal marker so the next tick continues after the completed
         // tool results instead of either returning the old failure immediately
@@ -415,6 +432,18 @@ export class JobRuntime {
     const step = job?.steps.find((item) => item.id === stepId)
     if (!job || !step) return null
     assertJobPlanApprovalResolved(job)
+    if (TERMINAL_JOB_STATUSES.has(job.status)) {
+      const error = new Error(`job step cannot be completed after job reached ${job.status}`)
+      error.code = 'JOB_COMPLETION_STATUS_INVALID'
+      error.statusCode = 409
+      throw error
+    }
+    if (!['queued', 'pending', 'running'].includes(step.status)) {
+      const error = new Error(`job step cannot be completed from status ${step.status}`)
+      error.code = 'JOB_COMPLETION_STATUS_INVALID'
+      error.statusCode = 409
+      throw error
+    }
     const completedAt = Date.now()
     // completeJobStep validates evidence before writing. Keep wake/checkpoint
     // cleanup after that gate so a rejected completion is entirely side-effect free.
@@ -422,6 +451,7 @@ export class JobRuntime {
       evidence,
       output: step.output || {},
       completedAt,
+      userId,
     })
     cancelJobWake({ jobId, userId })
     this.runtimeCore.checkpoint.clear({ jobId, stepId, userId })
@@ -483,6 +513,13 @@ export class JobRuntime {
     const job = this.getJob(jobId, { userId })
     const step = job?.steps.find((item) => item.id === stepId)
     if (!job || !step) return null
+    if (!RETRYABLE_JOB_STATUSES.has(job.status)
+      || (!RETRYABLE_STEP_STATUSES.has(step.status) && !hasRejectedCompletedOutcome(step))) {
+      const error = new Error(`job step cannot be retried from ${job.status}/${step.status}`)
+      error.code = 'JOB_STEP_RETRY_STATUS_INVALID'
+      error.statusCode = 409
+      throw error
+    }
     assertJobPlanRetryAllowed(job, step)
     const modelBinding = this.resolveModelBinding({
       userId,

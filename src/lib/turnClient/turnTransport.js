@@ -49,6 +49,10 @@ export async function parseResponse(response) {
       'retryable',
       'manualRetryable',
       'retryAfter',
+      'incompleteReason',
+      'missingRequirements',
+      'taskVerification',
+      'attempts',
     ]) {
       if (body?.error?.[field] !== undefined) error[field] = body.error[field]
     }

@@ -156,6 +156,38 @@ export async function processModelResult(s) {
             if (incomplete.deferredForSteering) return { kind: 'continue' }
             return { kind: 'return', value: incomplete }
           }
+          if (s.hasPendingTaskVerificationRepair?.()) {
+            const canRetry = s.mutationVerificationRetries < MAX_MUTATION_VERIFICATION_RETRIES
+              && s.iter + 1 < s.maxIters
+              && s.availableVerificationToolNames.length > 0
+            if (!canRetry) {
+              const incomplete = await s.finishIncomplete({
+                text: s.taskVerificationRepairBlockerText(),
+                reason: 'task_verification_repair_pending',
+                code: 'TASK_VERIFICATION_REPAIR_PENDING',
+                missingRequirements: [
+                  'conclusive_project_verification',
+                  'rerun_verification_scope',
+                ],
+                retryable: true,
+                taskVerification: s.taskVerificationRepairDetails?.(),
+                steeringLeaseId: i.steeringLeaseId,
+              })
+              if (incomplete.deferredForSteering) return { kind: 'continue' }
+              return { kind: 'return', value: incomplete }
+            }
+            s.mutationVerificationRetries += 1
+            if (i.content) s.convo.push({ role: 'assistant', content: i.content })
+            s.convo.push({
+              role: 'system',
+              content: s.taskVerificationRepairPrompt(),
+            })
+            await s.persistTurn()
+            if (i.steeringLeaseId && typeof s.acknowledgeSteering === 'function') {
+              await s.acknowledgeSteering(i.steeringLeaseId)
+            }
+            return { kind: 'continue' }
+          }
           if (s.hasPendingMutationVerification()) {
             const canRetry = s.mutationVerificationRetries < MAX_MUTATION_VERIFICATION_RETRIES
               && s.iter + 1 < s.maxIters

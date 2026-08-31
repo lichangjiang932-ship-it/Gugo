@@ -102,6 +102,9 @@ function sendError(res, error) {
         },
       }
     : null
+  const missingRequirements = [...new Set((Array.isArray(error?.missingRequirements)
+    ? error.missingRequirements
+    : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
   return sendJson(res, status, {
     error: {
       ...(readiness || (hostUnavailable
@@ -112,6 +115,16 @@ function sendError(res, error) {
           })),
       ...(Number.isInteger(error?.expectedSequence) ? { expectedSequence: error.expectedSequence } : {}),
       ...(Number.isInteger(error?.actualSequence) ? { actualSequence: error.actualSequence } : {}),
+      ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}),
+      ...(typeof error?.manualRetryable === 'boolean' ? { manualRetryable: error.manualRetryable } : {}),
+      ...(String(error?.incompleteReason || '').trim()
+        ? { incompleteReason: String(error.incompleteReason).trim() }
+        : {}),
+      ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
+      ...(error?.taskVerification && typeof error.taskVerification === 'object'
+        ? { taskVerification: error.taskVerification }
+        : {}),
+      ...(Number.isInteger(error?.attempts) && error.attempts > 0 ? { attempts: error.attempts } : {}),
       ...(recovery ? { recovery } : {}),
     },
   })

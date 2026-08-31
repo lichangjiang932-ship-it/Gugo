@@ -95,7 +95,10 @@ export function appendFinalAnswerToolEvidence(entries = [], call, result) {
       call?.function?.arguments ?? call?.argumentsText ?? call?.arguments ?? call?.args ?? {},
       MAX_ARGUMENT_CHARS,
     ),
-    succeeded: parsed?.ok !== false && parsed?.error == null,
+    // Match the runtime's single tool-result contract. Ambiguous/legacy values
+    // without an explicit `ok: true` must not become affirmative evidence for
+    // a completion claim.
+    succeeded: parsed?.ok === true,
     result: boundedEvidenceText(parsed ?? result ?? '', MAX_RESULT_CHARS),
   }].slice(-MAX_TOOL_EVIDENCE)
 }
@@ -126,7 +129,7 @@ export function collectFinalAnswerToolEvidence(messages = []) {
     evidence.push({
       tool: call.name,
       arguments: call.arguments,
-      succeeded: parsed?.ok !== false && parsed?.error == null,
+      succeeded: parsed?.ok === true,
       result: boundedEvidenceText(parsed ?? message.content ?? '', MAX_RESULT_CHARS),
     })
   }

@@ -40,17 +40,37 @@ export function terminalResumeText(currentText, terminal, t) {
   return missingAssistantTextSuffix(currentText, terminalText)
 }
 
-export function failedRetryFailureFromError(error) {
+export function failedRetryFailureFromError(error, previousFailure = null) {
+  const previous = previousFailure && typeof previousFailure === 'object'
+    ? previousFailure
+    : {}
+  const current = error?.serverFailure && typeof error.serverFailure === 'object'
+    ? error.serverFailure
+    : error || {}
   const code = String(error?.serverFailure?.code || error?.code || 'TURN_REQUEST_FAILED')
     .trim().toUpperCase() || 'TURN_REQUEST_FAILED'
   const status = Number(error?.serverFailure?.status ?? error?.status)
   const retryable = error?.serverFailure?.retryable ?? error?.retryable
   const manualRetryable = error?.serverFailure?.manualRetryable ?? error?.manualRetryable
+  const incompleteReason = String(current.incompleteReason || previous.incompleteReason || '').trim()
+  const missingRequirements = [...new Set((Array.isArray(current.missingRequirements)
+    ? current.missingRequirements
+    : Array.isArray(previous.missingRequirements) ? previous.missingRequirements : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))].slice(0, 16)
+  const taskVerification = current.taskVerification && typeof current.taskVerification === 'object'
+    ? current.taskVerification
+    : previous.taskVerification && typeof previous.taskVerification === 'object'
+      ? previous.taskVerification
+      : null
   return {
     code,
     retryable: retryable === true,
     ...(Number.isInteger(status) && status >= 100 && status <= 599 ? { status } : {}),
     ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),
+    ...(incompleteReason ? { incompleteReason } : {}),
+    ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
+    ...(taskVerification ? { taskVerification } : {}),
   }
 }
 
@@ -392,7 +412,7 @@ export default function useServerTurnResume({
       const permanentFailedRetryRejection = failedRetry
         && isPermanentFailedRetryRejectionFailure(error)
       const durableFailure = permanentFailedRetryRejection
-        ? failedRetryFailureFromError(error)
+        ? failedRetryFailureFromError(error, message.meta?.serverFailure)
         : error?.serverFailure || message.meta?.serverFailure
         || (recoveryDeadLetter
           ? {
