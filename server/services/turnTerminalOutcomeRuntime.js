@@ -122,11 +122,12 @@ export function createTurnTerminalOutcomeRuntime({
       const retainedLocalFiles = evidence.retainedLocalFilesAt(cancelledAt, verifiedLocalFiles)
       const artifactIds = normalizeArtifactIds(state.checkpointArtifactIds)
       const partialText = publicIncompleteText(state.streamedAssistantText, '')
+      const deliveryArtifactIds = normalizeArtifactIds(state.checkpointDeliveryArtifactIds)
       const evidenceOptions = {
         state: 'cancelled',
         text: partialText,
         artifactIds,
-        deliveryArtifactIds: [],
+        deliveryArtifactIds,
         iterations: state.checkpointIterations,
         verifiedLocalFiles,
         retainedLocalFiles,
@@ -134,8 +135,9 @@ export function createTurnTerminalOutcomeRuntime({
       }
       await evidence.emitter('turn.cancelled', {
         reason: 'Cancelled by user',
+        partialText,
         artifactIds,
-        deliveryArtifactIds: [],
+        deliveryArtifactIds,
         verifiedLocalFiles,
         retainedLocalFiles,
         iterations: state.checkpointIterations,
@@ -156,7 +158,10 @@ export function createTurnTerminalOutcomeRuntime({
 
     if (result?.interrupted) {
       const artifactIds = normalizeArtifactIds(result.artifactIds ?? state.checkpointArtifactIds)
-      const deliveryArtifactIds = []
+      const deliveryArtifactIds = optionalDeliveryArtifactIds(
+        result,
+        normalizeArtifactIds(state.checkpointDeliveryArtifactIds),
+      )
       const iterations = Math.max(0, Number(result.iterations) || state.checkpointIterations)
       const partialText = publicIncompleteText(
         result.partialText || state.streamedAssistantText,
@@ -201,6 +206,7 @@ export function createTurnTerminalOutcomeRuntime({
         ...(failure.taskVerification ? { taskVerification: failure.taskVerification } : {}),
         retryable: true,
         text: partialText,
+        partialText,
         artifactIds,
         ...deliveryArtifactFields(deliveryArtifactIds),
         verifiedLocalFiles,
@@ -246,7 +252,10 @@ export function createTurnTerminalOutcomeRuntime({
         taskVerification: result.taskVerification,
       }, { retryable })
       const artifactIds = normalizeArtifactIds(result.artifactIds ?? state.checkpointArtifactIds)
-      const deliveryArtifactIds = optionalDeliveryArtifactIds(result, [])
+      const deliveryArtifactIds = optionalDeliveryArtifactIds(
+        result,
+        normalizeArtifactIds(state.checkpointDeliveryArtifactIds),
+      )
       const iterations = Math.max(0, Number(result.iterations) || state.checkpointIterations)
       const failedAt = ports.now()
       const verifiedLocalFiles = evidence.verifiedLocalFilesAt(failedAt)
@@ -443,11 +452,12 @@ export function createTurnTerminalOutcomeRuntime({
       const retainedLocalFiles = evidence.retainedLocalFilesAt(cancelledAt, verifiedLocalFiles)
       const artifactIds = normalizeArtifactIds(state.checkpointArtifactIds)
       const partialText = publicIncompleteText(state.streamedAssistantText, '')
+      const deliveryArtifactIds = normalizeArtifactIds(state.checkpointDeliveryArtifactIds)
       const evidenceOptions = {
         state: 'cancelled',
         text: partialText,
         artifactIds,
-        deliveryArtifactIds: [],
+        deliveryArtifactIds,
         iterations: state.checkpointIterations,
         verifiedLocalFiles,
         retainedLocalFiles,
@@ -456,8 +466,9 @@ export function createTurnTerminalOutcomeRuntime({
       try {
         await evidence.emitter('turn.cancelled', {
           reason: error?.message || 'Cancelled by user',
+          partialText,
           artifactIds,
-          deliveryArtifactIds: [],
+          deliveryArtifactIds,
           verifiedLocalFiles,
           retainedLocalFiles,
           iterations: state.checkpointIterations,

@@ -39,6 +39,7 @@ const CLEARED_SERVER_RECOVERY_META = Object.freeze({
   serverRecoveryBlocked: false,
   serverRecoveryKind: null,
   serverRecoveryToolCallId: null,
+  serverRecoveryModelRequestId: null,
   serverRecoveryActionPath: null,
 })
 

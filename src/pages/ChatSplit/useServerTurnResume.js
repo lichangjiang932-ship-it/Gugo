@@ -32,7 +32,9 @@ export function reduceResumedAssistantText(currentText, event) {
   if (event?.type === 'assistant.delta' && event.payload?.text) {
     return `${String(currentText || '')}${String(event.payload.text)}`
   }
-  if (event?.type === 'turn.interrupted' || event?.type === 'turn.failed') {
+  if (event?.type === 'turn.interrupted'
+    || event?.type === 'turn.blocked'
+    || event?.type === 'turn.failed') {
     return mergeAssistantText(currentText, event.payload?.partialText ?? event.payload?.text ?? '')
   }
   return String(currentText || '')
@@ -256,9 +258,14 @@ export default function useServerTurnResume({
       turnActivityDispatcher.flush()
       resolveToolApprovalForOwner(owner, { approved: false })
     }, { once: true })
-    let currentAssistantText = String(message.content || '')
+    const durablePartialText = !failedRetry && typeof message.meta?.serverPartialText === 'string'
+      ? message.meta.serverPartialText
+      : ''
+    let currentAssistantText = mergeAssistantText(message.content, durablePartialText)
     let resumeAccepted = false
     let failedRetryResult = null
+    const durablePartialSuffix = missingAssistantTextSuffix(message.content, durablePartialText)
+    if (durablePartialSuffix) dispatchMessage('APPEND_TO_LAST_MESSAGE', durablePartialSuffix)
     dispatchMessage('UPDATE_LAST_MESSAGE_META', {
       turnStartedAt,
       turnCompletedAt: null,
@@ -268,6 +275,7 @@ export default function useServerTurnResume({
       serverRecoveryBlocked: false,
       serverRecoveryKind: null,
       serverRecoveryToolCallId: null,
+      serverRecoveryModelRequestId: null,
       serverRecoveryActionPath: null,
       ...(failedRetry ? {
         failed: false,
@@ -308,7 +316,9 @@ export default function useServerTurnResume({
         if (event?.type === 'turn.resumed') resumeAccepted = true
         const previousAssistantText = currentAssistantText
         currentAssistantText = reduceResumedAssistantText(currentAssistantText, event)
-        if (event.type === 'turn.interrupted' || event.type === 'turn.failed') {
+        if (event.type === 'turn.interrupted'
+          || event.type === 'turn.blocked'
+          || event.type === 'turn.failed') {
           const suffix = currentAssistantText.startsWith(previousAssistantText)
             ? currentAssistantText.slice(previousAssistantText.length)
             : currentAssistantText
@@ -361,6 +371,7 @@ export default function useServerTurnResume({
           serverRecoveryBlocked: true,
           serverRecoveryKind: null,
           serverRecoveryToolCallId: null,
+          serverRecoveryModelRequestId: null,
           serverRecoveryActionPath: null,
           ...(isSideEffectOutcomeUnknownRecoveryKind(terminal.payload?.recoveryKind) ? {
             serverRecoveryKind: SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND,

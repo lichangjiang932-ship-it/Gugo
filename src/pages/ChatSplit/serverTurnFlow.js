@@ -410,6 +410,7 @@ export async function runServerChatTurn({
       throw error
     }
     if (terminal.type === 'turn.blocked') {
+      appendMissingAssistantText(terminal.payload?.partialText ?? terminal.payload?.text)
       dispatchMessage('UPDATE_LAST_MESSAGE_META', {
         type: 'model_reply',
         modelName: modelName || 'backend-default',
@@ -426,6 +427,7 @@ export async function runServerChatTurn({
         serverRecoveryBlocked: true,
         serverRecoveryKind: null,
         serverRecoveryToolCallId: null,
+        serverRecoveryModelRequestId: null,
         serverRecoveryActionPath: null,
         ...(isSideEffectOutcomeUnknownRecoveryKind(terminal.payload?.recoveryKind) ? {
           serverRecoveryKind: SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND,

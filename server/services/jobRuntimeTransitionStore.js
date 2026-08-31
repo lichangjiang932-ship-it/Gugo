@@ -224,6 +224,7 @@ export function retryJobTransition({
   steps = [],
   modelSnapshot,
   event,
+  prepareCheckpoints = null,
   now = Date.now(),
 } = {}) {
   if (!jobId || !userId) throw new Error('retryJobTransition requires jobId and userId')
@@ -232,6 +233,9 @@ export function retryJobTransition({
   }
   if (!modelSnapshot?.modelName) throw new Error('retryJobTransition requires a model snapshot')
   if (!event?.type || !event?.message) throw new Error('retryJobTransition requires an event')
+  if (prepareCheckpoints != null && typeof prepareCheckpoints !== 'function') {
+    throw new Error('retryJobTransition prepareCheckpoints must be a function')
+  }
 
   const targets = steps.map((step) => ({
     id: String(step?.id || '').trim(),
@@ -266,6 +270,12 @@ export function retryJobTransition({
     ))) {
       return { found: true, changed: false, status: current.status, event: null }
     }
+
+    // Checkpoint terminal markers and durable retry state must change in the
+    // same transaction. Cancellation deliberately bypasses the execution
+    // lease; preparing checkpoints before this transaction could otherwise
+    // mutate a failed checkpoint and then lose the job-status CAS to cancel.
+    prepareCheckpoints?.()
 
     const requeueStep = db.prepare(`
       UPDATE job_steps

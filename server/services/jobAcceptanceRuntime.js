@@ -282,10 +282,10 @@ export function persistRejectedStepResult({
   return true
 }
 
-export function completeManualJobTransition({ jobId, stepId, updated, emit }) {
+export function completeManualJobTransition({ jobId, updated }) {
   if (!updated?.steps?.every((step) => step.status === 'completed')) {
     updateJob(jobId, { progress: deriveJobProgress(updated.steps) })
-    return
+    return { terminal: false, event: null }
   }
   const resolution = resolveWorkflowState(updated.steps)
   const completed = resolution.state === 'completed'
@@ -297,21 +297,17 @@ export function completeManualJobTransition({ jobId, stepId, updated, emit }) {
         error: resolution.reason,
         finishedAt: Date.now(),
       })
-  emit(appendJobEvent({
+  const event = appendJobEvent({
     jobId,
     type: completed ? 'completed' : 'failed',
     message: completed ? '任务已完成' : resolution.reason,
-  }))
-  notifyJobTerminal({
-    ...updated,
-    error: completed ? null : resolution.reason,
-  }, {
-    status: completed ? 'completed' : 'failed',
-    body: completed ? '任务已完成' : resolution.reason,
   })
-  notifyJobStopHook(updated, {
+  return {
+    terminal: true,
+    completed,
     status: completed ? 'completed' : 'failed',
     error: completed ? null : resolution.reason,
-    stepId,
-  })
+    message: completed ? '任务已完成' : resolution.reason,
+    event,
+  }
 }

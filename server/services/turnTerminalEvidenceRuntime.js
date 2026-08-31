@@ -167,7 +167,10 @@ export function createTurnTerminalEvidenceRuntime({
     const artifactIds = normalizeArtifactIds(
       originalError?.artifactIds ?? state.checkpointArtifactIds,
     )
-    const deliveryArtifactIds = optionalDeliveryArtifactIds(originalError, [])
+    const deliveryArtifactIds = optionalDeliveryArtifactIds(
+      originalError,
+      normalizeArtifactIds(state.checkpointDeliveryArtifactIds),
+    )
     const iterations = Math.max(0, Number(originalError?.iterations) || state.checkpointIterations)
     const failedAt = ports.now()
     const verifiedLocalFiles = verifiedLocalFilesAt(failedAt)

@@ -31,6 +31,7 @@ const INCOMPLETE_REASON_REQUIREMENTS = Object.freeze({
     'passing_project_check',
   ],
   tool_no_progress: ['progress_after_last_checkpoint'],
+  turn_incomplete: ['remaining_task_steps'],
 })
 
 const TASK_VERIFICATION_INCOMPLETE_REASONS = new Set([
@@ -111,7 +112,7 @@ export function missingRequirementsForIncompleteReason(value) {
   const reason = normalizeIncompleteReason(value)
   if (reason === 'execution_budget_exhausted') return ['remaining_task_steps']
   if (reason.includes('no_progress')) return ['progress_after_last_checkpoint']
-  return [...(INCOMPLETE_REASON_REQUIREMENTS[reason] || [])]
+  return [...(INCOMPLETE_REASON_REQUIREMENTS[reason] || ['remaining_task_steps'])]
 }
 
 const INTERNAL_TERMINAL_FAILURE_PATTERNS = [

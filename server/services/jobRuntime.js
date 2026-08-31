@@ -445,26 +445,27 @@ export class JobRuntime {
       const retriedSteps = currentJob.steps.filter((step) => (
         RETRYABLE_STEP_STATUSES.has(step.status) || hasRejectedCompletedOutcome(step)
       ))
-      for (const step of retriedSteps) {
-        // A truncated run deliberately keeps its durable checkpoint. Clear only
-        // the terminal marker so the next tick continues after the completed
-        // tool results instead of either returning the old failure immediately
-        // or replaying the whole step from scratch. Cancelled steps normally
-        // have no checkpoint, making this a harmless no-op for that path.
-        makeRetryCheckpointResumable({
-          runtimeCore: this.runtimeCore,
-          checkpoint: checkpointsByStepId.get(step.id),
-          jobId,
-          stepId: step.id,
-          userId,
-        })
-      }
       const transition = retryJobTransition({
         jobId,
         userId,
         expectedJobStatus: currentJob.status,
         steps: retriedSteps,
         modelSnapshot,
+        prepareCheckpoints: () => {
+          for (const step of retriedSteps) {
+            // A truncated run deliberately keeps its durable checkpoint. Clear
+            // only the terminal marker so the next tick resumes after completed
+            // tool results. Keeping this inside retryJobTransition also makes
+            // checkpoint preparation atomic with the job/step compare-and-swap.
+            makeRetryCheckpointResumable({
+              runtimeCore: this.runtimeCore,
+              checkpoint: checkpointsByStepId.get(step.id),
+              jobId,
+              stepId: step.id,
+              userId,
+            })
+          }
+        },
         event: {
           type: 'retried',
           message: '任务已重新入队',
@@ -507,6 +508,8 @@ export class JobRuntime {
     }
     try {
       let completedJob = null
+      const completionEvents = []
+      let terminalTransition = null
       const outcome = this.runtimeCore.lease.runIfOwned({ jobId }, () => {
         const job = this.getJob(jobId, { userId })
         const step = job?.steps.find((item) => item.id === stepId)
@@ -541,7 +544,7 @@ export class JobRuntime {
         const normalizedEvidence = Array.isArray(completedStep?.output?.evidence)
           ? completedStep.output.evidence
           : []
-        this.emit(appendJobEvent({
+        completionEvents.push(appendJobEvent({
           jobId,
           type: 'step_completed',
           stepId,
@@ -549,7 +552,8 @@ export class JobRuntime {
           payload: { evidenceCount: normalizedEvidence.length },
         }))
         const updated = this.getJob(jobId, { userId })
-        completeManualJobTransition({ jobId, stepId, updated, emit: this.emit.bind(this) })
+        terminalTransition = completeManualJobTransition({ jobId, updated })
+        if (terminalTransition.event) completionEvents.push(terminalTransition.event)
         completedJob = this.getJob(jobId, { userId })
         return true
       })
@@ -558,6 +562,23 @@ export class JobRuntime {
         error.code = 'JOB_COMPLETION_CONFLICT'
         error.statusCode = 409
         throw error
+      }
+      if (outcome.value) {
+        for (const event of completionEvents) this.emit(event)
+        if (terminalTransition?.terminal) {
+          notifyJobTerminal({
+            ...completedJob,
+            error: terminalTransition.error,
+          }, {
+            status: terminalTransition.status,
+            body: terminalTransition.message,
+          })
+          notifyJobStopHook(completedJob, {
+            status: terminalTransition.status,
+            error: terminalTransition.error,
+            stepId,
+          })
+        }
       }
       return outcome.value ? completedJob : null
     } finally {
@@ -651,24 +672,25 @@ export class JobRuntime {
         userId: job.userId,
         modelSnapshot,
       })
-      // Preserve completed calls, their results, and idempotency keys. Ordinary
-      // user-initiated retries start a fresh budget window; recovery of an
-      // already-paid model response must retain the historical counters so the
-      // recovered usage can be added to the existing total exactly once.
-      makeRetryCheckpointResumable({
-        runtimeCore: this.runtimeCore,
-        checkpoint,
-        jobId,
-        stepId,
-        userId,
-        resetBudget,
-      })
       const transition = retryJobTransition({
         jobId,
         userId,
         expectedJobStatus: job.status,
         steps: [step],
         modelSnapshot,
+        prepareCheckpoints: () => {
+          // Preserve completed calls, results, and idempotency keys. Ordinary
+          // retries get a fresh budget; manually reconciled paid responses keep
+          // their counters. This is transactional with the retry state change.
+          makeRetryCheckpointResumable({
+            runtimeCore: this.runtimeCore,
+            checkpoint,
+            jobId,
+            stepId,
+            userId,
+            resetBudget,
+          })
+        },
         event: {
           stepId,
           type: 'step_retried',
