@@ -467,8 +467,7 @@ export function createTurnTerminalOutcomeRuntime({
     }
   }
 
-  async function settleError({ scope, signal, error, state, evidence, recordCanaryTerminal }) {
-    const { userId, sessionId, turnId } = scope
+  async function settleError({ signal, error, state, evidence, recordCanaryTerminal }) {
     if (lostTurnLease(signal, error)) return
     if (isManualRecoveryBlock(error)) {
       await evidence.emitBlocked(error)

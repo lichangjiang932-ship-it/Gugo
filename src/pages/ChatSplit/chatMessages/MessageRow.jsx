@@ -94,7 +94,6 @@ export default function MessageRow({
         turnId: msg.meta?.serverTurnId,
       })
     : []
-  const localFileReferences = [...verifiedLocalFileReferences, ...retainedLocalFileReferences]
   const expectsFileReceipt = Boolean(
     String(msg.meta?.artifactType || '').trim() || artifactTypeForSkill(msg.meta?.skillId),
   )

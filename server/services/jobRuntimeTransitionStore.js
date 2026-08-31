@@ -5,7 +5,6 @@ import {
   clearResumedJobOutcomeDiagnostics,
   mergePersistedJobOutcomeFields,
   normalizeJobLocalFileReceipts,
-  persistedJobOutcomeFields,
 } from './jobWorkflow.js'
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])

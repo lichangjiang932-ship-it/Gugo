@@ -7,10 +7,11 @@ import { useT } from '../i18n/I18nProvider.jsx'
 import TaskRunHeader from './taskRun/TaskRunHeader.jsx'
 import TaskListSidebar from './taskRun/TaskListSidebar.jsx'
 import JobOverviewCard from './taskRun/JobOverviewCard.jsx'
-import JobDeliveryCard, {
+import JobDeliveryCard from './taskRun/JobDeliveryCard.jsx'
+import {
   isIncompleteJobDelivery,
   resolveCanonicalJobDelivery,
-} from './taskRun/JobDeliveryCard.jsx'
+} from './taskRun/jobDeliveryProjection.js'
 import JobProgressPanels from './taskRun/JobProgressPanels.jsx'
 import useTaskRunController from './taskRun/useTaskRunController.js'
 import { FILTER_KEYS, STATUS_KEYS } from './taskRun/taskRunUtils.js'
