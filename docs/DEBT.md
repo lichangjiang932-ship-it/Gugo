@@ -402,7 +402,7 @@ unregistered oversized files, growth, and shrinkage that was not ratcheted.
   ],
   "files": [
     { "path": "server/adapters/authAccount.js", "ceiling": 649, "group": "adapter-capabilities" },
-    { "path": "server/adapters/batchFileTools.js", "ceiling": 1705, "group": "adapter-capabilities" },
+    { "path": "server/adapters/batchFileTools.js", "ceiling": 1367, "group": "adapter-capabilities" },
     { "path": "server/adapters/browserAutomation.js", "ceiling": 633, "group": "adapter-capabilities" },
     { "path": "server/adapters/codexPluginSkills.js", "ceiling": 637, "group": "adapter-capabilities" },
     { "path": "server/adapters/codingAgentTools.js", "ceiling": 796, "group": "adapter-capabilities" },

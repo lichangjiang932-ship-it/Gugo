@@ -28,6 +28,8 @@ test('process failure projection keeps cleanup uncertainty above startup diagnos
   const result = processExecutionBoundaryFailure({
     stdout: '',
     stderr: 'spawn ENOENT',
+    code: 7,
+    signal: 'SIGTERM',
     processStartFailed: true,
     processStartError: 'spawn ENOENT',
     processTreeCleanupFailed: true,
@@ -37,6 +39,8 @@ test('process failure projection keeps cleanup uncertainty above startup diagnos
   assert.equal(result.processTreeCleanupFailed, true)
   assert.equal(result.processStartFailed, true)
   assert.equal(result.processStartError, 'spawn ENOENT')
+  assert.equal(result.exitCode, 7)
+  assert.equal(result.signal, 'SIGTERM')
   assert.match(result.error, /无法确认所有子进程都已退出/u)
   assert.match(result.hint, /不要重试/u)
 })
