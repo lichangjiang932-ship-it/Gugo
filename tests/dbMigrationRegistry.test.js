@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import Database from 'better-sqlite3'
 
 import { DB_SCHEMA_VERSION } from '../server/db.js'
+import { LEGACY_SCHEMA_MIGRATIONS } from '../server/migrations/legacyCompatibility.js'
 import {
   LATEST_SCHEMA_VERSION,
   createSchemaMigrationPlan,
@@ -648,11 +649,7 @@ test('v102 adds nullable post-write identities and keeps legacy snapshots unboun
 })
 
 test('schema migration registry is contiguous and owns the latest version', () => {
-  const legacy = Array.from({ length: 29 }, (_, index) => ({
-    version: index + 2,
-    up() {},
-  }))
-  const plan = createSchemaMigrationPlan(legacy)
+  const plan = createSchemaMigrationPlan(LEGACY_SCHEMA_MIGRATIONS)
 
   assert.deepEqual(
     plan.map(({ version }) => version),
