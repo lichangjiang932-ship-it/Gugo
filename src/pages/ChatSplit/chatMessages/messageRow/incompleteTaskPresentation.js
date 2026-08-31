@@ -1,3 +1,5 @@
+import { getVisibleModelErrorMessage } from '../../../../lib/chatFlowGuards.js'
+
 const REASON_KEYS = Object.freeze({
   artifact_delivery_not_converged: 'chatMessages.incompleteReasonArtifactDelivery',
   deliverable_selection_missing: 'chatMessages.incompleteReasonDeliverableSelection',
@@ -8,10 +10,14 @@ const REASON_KEYS = Object.freeze({
   final_answer_evidence_review_missing: 'chatMessages.incompleteReasonFinalAnswerReview',
   iteration_limit_reached: 'chatMessages.incompleteReasonIterationLimit',
   local_html_delivery_validation_failed: 'chatMessages.incompleteReasonHtmlValidation',
+  model_call_interrupted: 'errors.turnModelInterrupted',
+  model_request_outcome_unknown: 'chatMessages.modelRequestUnknownBody',
   pdf_layout_verification_missing: 'chatMessages.incompleteReasonPdfValidation',
   post_mutation_verification_missing: 'chatMessages.incompleteReasonMutationVerification',
+  recovery_blocked: 'errors.turnRecoveryBlocked',
   recovery_attempts_exhausted: 'chatMessages.incompleteReasonRecoveryExhausted',
   reasoning_runaway: 'chatMessages.incompleteReasonReasoningRunaway',
+  side_effect_outcome_unknown: 'chatMessages.sideEffectUnknownBody',
   task_verification_repair_exhausted: 'chatMessages.incompleteReasonVerificationExhausted',
   task_verification_repair_pending: 'chatMessages.incompleteReasonVerificationPending',
   tool_no_progress: 'chatMessages.incompleteReasonNoProgress',
@@ -21,6 +27,12 @@ const REQUIREMENT_KEYS = Object.freeze({
   authorized_directory: 'chatMessages.incompleteRequirementDirectory',
   bounded_model_response: 'chatMessages.incompleteRequirementBoundedModelResponse',
   deliverable_artifact: 'chatMessages.incompleteRequirementArtifact',
+  deliverable_docx: 'chatMessages.incompleteRequirementDocx',
+  deliverable_html: 'chatMessages.incompleteRequirementHtml',
+  deliverable_image: 'chatMessages.incompleteRequirementImage',
+  deliverable_pdf: 'chatMessages.incompleteRequirementPdf',
+  deliverable_pptx: 'chatMessages.incompleteRequirementPptx',
+  deliverable_xlsx: 'chatMessages.incompleteRequirementXlsx',
   deliverable_selection: 'chatMessages.incompleteRequirementSelection',
   diff_or_project_check: 'chatMessages.incompleteRequirementProjectCheck',
   execution_evidence: 'chatMessages.incompleteRequirementExecutionEvidence',
@@ -51,10 +63,14 @@ const DEFAULT_REQUIREMENTS = Object.freeze({
   final_answer_evidence_review_missing: ['final_answer_consistency_review'],
   iteration_limit_reached: ['remaining_task_steps'],
   local_html_delivery_validation_failed: ['html_resource_validation'],
+  model_call_interrupted: ['model_response', 'remaining_task_steps'],
+  model_request_outcome_unknown: ['operation_outcome_verification'],
   pdf_layout_verification_missing: ['pdf_layout_validation'],
   post_mutation_verification_missing: ['mutation_readback', 'diff_or_project_check'],
+  recovery_blocked: ['execution_environment_repair', 'explicit_recovery_retry'],
   recovery_attempts_exhausted: ['execution_environment_repair', 'explicit_recovery_retry'],
   reasoning_runaway: ['bounded_model_response'],
+  side_effect_outcome_unknown: ['operation_outcome_verification'],
   task_verification_repair_exhausted: [
     'verification_failure_repair',
     'passing_project_check',
@@ -92,6 +108,22 @@ function normalizeReason(failure) {
   if (reason) return reason
   const code = String(failure?.code || '').trim().toLowerCase()
   return code === 'turn_incomplete' ? 'turn_incomplete' : code
+}
+
+function defaultRequirementsForReason(reasonCode) {
+  const explicit = DEFAULT_REQUIREMENTS[reasonCode]
+  if (explicit) return explicit
+  const code = String(reasonCode || '').trim().toUpperCase()
+  if (/^(?:MODEL_|TURN_MODEL_)/u.test(code)) {
+    return ['model_service_available', 'model_response', 'remaining_task_steps']
+  }
+  if (/^(?:TOOL_|REPEATED_TOOL_CALL)/u.test(code)) {
+    return ['progress_after_last_checkpoint', 'remaining_task_steps']
+  }
+  if (/(?:PERSISTENCE|CHECKPOINT|RUNTIME|CONTEXT_DRIFT|STREAM_TRUNCATED|RECONNECT)/u.test(code)) {
+    return ['execution_environment_repair', 'explicit_recovery_retry']
+  }
+  return []
 }
 
 function publicFailureDetail(failure) {
@@ -151,9 +183,16 @@ export function buildIncompleteTaskPresentation(msg, t, {
     && reasonCode !== 'turn_incomplete'
     && /^[a-z][a-z0-9_]{1,95}$/u.test(reasonCode),
   )
+  const localizedFailureReason = failure.incompleteReason
+    ? ''
+    : getVisibleModelErrorMessage(failure, t)
+  const specificFailureReason = localizedFailureReason
+    && localizedFailureReason !== translated(t, 'errors.chatFailure')
+    ? localizedFailureReason
+    : ''
   const reason = reasonKey
     ? translated(t, reasonKey, { attempts: Number(failure.attempts) || 0 })
-    : publicFailureDetail(failure) || translated(t, recordedUnknownReason
+    : publicFailureDetail(failure) || specificFailureReason || translated(t, recordedUnknownReason
       ? 'chatMessages.incompleteReasonRecordedCode'
       : 'chatMessages.incompleteReasonFallback', { code: reasonCode.toUpperCase() })
   const rawRequirements = Array.isArray(failure.missingRequirements)
@@ -161,7 +200,7 @@ export function buildIncompleteTaskPresentation(msg, t, {
     : []
   const requirementCodes = [...new Set((rawRequirements.length > 0
     ? rawRequirements
-    : DEFAULT_REQUIREMENTS[reasonCode] || [])
+    : defaultRequirementsForReason(reasonCode))
     .map((value) => String(value || '').trim().toLowerCase())
     .filter((value) => REQUIREMENT_KEYS[value]))]
   const missing = requirementCodes.length > 0

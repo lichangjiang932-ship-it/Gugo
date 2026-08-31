@@ -9,6 +9,7 @@ import {
   validateTurnWebSocketServerFrame,
 } from '../../../shared/turnWebSocketProtocol.js'
 import { getAuthToken } from '../accountClient.js'
+import { createTurnFailureError } from './turnEventDispatch.js'
 
 // `turn.paused` ends the current client subscription while remaining resumable
 // on the server after the user supplies the requested clarification/permission.
@@ -110,10 +111,7 @@ export function streamTruncatedError() {
 }
 
 function streamInterruptedError(event) {
-  const error = new Error(event?.payload?.message || 'Turn execution was interrupted and can be resumed')
-  error.code = event?.payload?.code || 'TURN_INTERRUPTED'
-  error.retryable = event?.payload?.retryable !== false
-  return error
+  return createTurnFailureError(event?.payload, { fallbackCode: 'TURN_INTERRUPTED' })
 }
 
 function normalizeToolNames(names) {

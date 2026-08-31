@@ -12,6 +12,7 @@ import { createTurnEvidenceMessage } from './turnEvidenceMessageProjection.js'
 import { normalizeTurnOptionalId as normalizeOptionalId } from './turnStartRuntime.js'
 import {
   deliveryArtifactFields,
+  missingRequirementsForIncompleteReason,
   normalizeArtifactIds,
   normalizeTurnFailure,
   optionalDeliveryArtifactIds,
@@ -197,6 +198,11 @@ export function createTurnTerminalEvidenceRuntime({
         await ports.emitter('turn.failed', {
           code: failure.code,
           error: failure,
+          ...(failure.incompleteReason ? { incompleteReason: failure.incompleteReason } : {}),
+          ...(Array.isArray(failure.missingRequirements)
+            ? { missingRequirements: failure.missingRequirements }
+            : {}),
+          ...(failure.taskVerification ? { taskVerification: failure.taskVerification } : {}),
           partialText,
           artifactIds,
           ...deliveryArtifactFields(deliveryArtifactIds),
@@ -231,12 +237,27 @@ export function createTurnTerminalEvidenceRuntime({
 
   async function emitBlocked(sourceError) {
     const state = stateSnapshot()
-    const failure = normalizeTurnFailure(sourceError, { retryable: false })
-    const sideEffectUnknown = failure.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN'
+    const baseFailure = normalizeTurnFailure(sourceError, { retryable: false })
+    const sideEffectUnknown = baseFailure.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN'
       && sourceError?.unsafeToReplay === true
       && sourceError?.requiresUserVerification === true
-    const modelRequestUnknown = failure.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+    const modelRequestUnknown = baseFailure.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
       && sourceError?.unsafeToReplay === true
+    const incompleteReason = baseFailure.incompleteReason || (sideEffectUnknown
+      ? 'side_effect_outcome_unknown'
+      : modelRequestUnknown ? 'model_request_outcome_unknown' : 'recovery_blocked')
+    const missingRequirements = Array.isArray(baseFailure.missingRequirements)
+      && baseFailure.missingRequirements.length > 0
+      ? baseFailure.missingRequirements
+      : missingRequirementsForIncompleteReason(incompleteReason)
+    const failure = normalizeTurnFailure({
+      ...sourceError,
+      code: baseFailure.code,
+      incompleteReason,
+      missingRequirements,
+      manualRetryable: true,
+      retryable: false,
+    }, { retryable: false })
     const recoveryToolCallId = sideEffectUnknown
       ? normalizeOptionalId(sourceError?.sideEffectExecution?.toolCallId)
       : null
@@ -282,6 +303,10 @@ export function createTurnTerminalEvidenceRuntime({
     }
     const blockedEvent = await ports.emitter('turn.blocked', {
       code: failure.code,
+      error: failure,
+      incompleteReason: failure.incompleteReason,
+      missingRequirements: failure.missingRequirements,
+      ...(failure.taskVerification ? { taskVerification: failure.taskVerification } : {}),
       partialText,
       retryable: false,
       manualRetryable: true,

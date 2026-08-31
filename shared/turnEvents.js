@@ -258,6 +258,10 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     code: z.string().min(1),
     // Legacy runtimes included localized copy here. New runtimes send code.
     message: z.string().min(1).optional(),
+    error: turnFailureSchema.optional(),
+    incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
+    missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+    taskVerification: taskVerificationSchema.optional(),
     retryable: z.boolean(),
     text: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
@@ -273,6 +277,10 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     code: z.string().min(1),
     // Kept for backwards-compatible event replay only.
     message: z.string().min(1).optional(),
+    error: turnFailureSchema.optional(),
+    incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
+    missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+    taskVerification: taskVerificationSchema.optional(),
     partialText: z.string().optional(),
     retryable: z.literal(false),
     manualRetryable: z.literal(true),

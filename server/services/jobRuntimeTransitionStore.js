@@ -1,8 +1,31 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../db.js'
+import { appendJobEvent } from './jobStore.js'
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+const RETRYABLE_JOB_STATUSES = new Set(['failed', 'cancelled'])
+const RETRYABLE_STEP_STATUSES = new Set(['failed', 'cancelled'])
 const MAX_STEERING_LENGTH = 20_000
+
+function parseJson(value) {
+  if (!value) return null
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
+function isRetryableStepRow(row) {
+  if (RETRYABLE_STEP_STATUSES.has(row?.status)) return true
+  if (row?.status !== 'completed') return false
+  const output = parseJson(row.output_json)
+  if (row.kind === 'verify') {
+    const verdict = String(output?.acceptance?.verdict || '').trim().toLowerCase()
+    return Boolean(verdict && verdict !== 'pass')
+  }
+  return row.kind === 'finalize' && output?.complete === false
+}
 
 function cancelScheduledWake(db, { jobId, userId, now }) {
   return db.prepare(`
@@ -163,5 +186,112 @@ export function resumeJobAfterApprovalTransition({
     `).run(now, jobId, userId).changes === 1
     if (!changed) throw new Error('job approval resume lost its compare-and-swap race')
     return { found: true, owned: true, changed: true, status: 'queued' }
+  }).immediate()
+}
+
+/**
+ * Atomically requeue a failed/cancelled job and the selected retryable steps.
+ * The caller may prepare checkpoints before this transition while holding the
+ * job execution lease; expected statuses prevent that old snapshot from
+ * overwriting a newer terminal or already-retried state.
+ */
+export function retryJobTransition({
+  jobId,
+  userId,
+  expectedJobStatus,
+  steps = [],
+  modelSnapshot,
+  event,
+  now = Date.now(),
+} = {}) {
+  if (!jobId || !userId) throw new Error('retryJobTransition requires jobId and userId')
+  if (!RETRYABLE_JOB_STATUSES.has(expectedJobStatus)) {
+    throw new Error('retryJobTransition requires a retryable expected job status')
+  }
+  if (!modelSnapshot?.modelName) throw new Error('retryJobTransition requires a model snapshot')
+  if (!event?.type || !event?.message) throw new Error('retryJobTransition requires an event')
+
+  const targets = steps.map((step) => ({
+    id: String(step?.id || '').trim(),
+    status: String(step?.status || '').trim(),
+  }))
+  if (targets.some((step) => !step.id || !step.status)
+    || new Set(targets.map((step) => step.id)).size !== targets.length) {
+    throw new Error('retryJobTransition requires unique step identities and expected statuses')
+  }
+
+  const db = getDb()
+  return db.transaction(() => {
+    const current = db.prepare(`
+      SELECT status FROM jobs WHERE id = ? AND user_id = ?
+    `).get(jobId, userId)
+    if (!current) return { found: false, changed: false, status: null, event: null }
+    if (current.status !== expectedJobStatus || !RETRYABLE_JOB_STATUSES.has(current.status)) {
+      return { found: true, changed: false, status: current.status, event: null }
+    }
+
+    const readStep = db.prepare(`
+      SELECT id, status, kind, output_json
+        FROM job_steps
+       WHERE id = ? AND job_id = ?
+    `)
+    const currentSteps = targets.map((target) => ({
+      target,
+      row: readStep.get(target.id, jobId),
+    }))
+    if (currentSteps.some(({ target, row }) => (
+      !row || row.status !== target.status || !isRetryableStepRow(row)
+    ))) {
+      return { found: true, changed: false, status: current.status, event: null }
+    }
+
+    const requeueStep = db.prepare(`
+      UPDATE job_steps
+         SET status = 'queued', error = NULL, finished_at = NULL, updated_at = ?
+       WHERE id = ? AND job_id = ? AND status = ?
+    `)
+    for (const { target } of currentSteps) {
+      if (requeueStep.run(now, target.id, jobId, target.status).changes !== 1) {
+        throw new Error('job retry step lost its compare-and-swap race')
+      }
+    }
+
+    cancelScheduledWake(db, { jobId, userId, now })
+    const counts = db.prepare(`
+      SELECT COUNT(*) AS total,
+             SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed
+        FROM job_steps
+       WHERE job_id = ?
+    `).get(jobId)
+    const total = Number(counts?.total) || 0
+    const completed = Number(counts?.completed) || 0
+    const progress = total > 0 ? Math.round((completed / total) * 100) : 0
+    const changed = db.prepare(`
+      UPDATE jobs
+         SET status = 'queued', progress = ?, cancel_requested = 0,
+             model_name = ?, model_provider_id = ?, model_config_revision = ?,
+             error = NULL, finished_at = NULL, updated_at = ?
+       WHERE id = ? AND user_id = ? AND status = ?
+    `).run(
+      progress,
+      modelSnapshot.modelName,
+      modelSnapshot.modelProviderId ?? null,
+      modelSnapshot.modelConfigRevision ?? null,
+      now,
+      jobId,
+      userId,
+      expectedJobStatus,
+    ).changes === 1
+    if (!changed) throw new Error('job retry lost its compare-and-swap race')
+
+    const persistedEvent = appendJobEvent({
+      jobId,
+      stepId: event.stepId || null,
+      type: event.type,
+      message: event.message,
+      payload: event.payload ?? null,
+      now,
+    })
+    return { found: true, changed: true, status: 'queued', event: persistedEvent }
   }).immediate()
 }

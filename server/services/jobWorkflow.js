@@ -1,6 +1,23 @@
 import { detectArtifactIntent, expectsFileArtifact } from './artifactIntent.js'
 
 const RUNNABLE_STEP_STATUSES = new Set(['queued', 'pending'])
+const ARTIFACT_DELIVERABLE_LABELS = Object.freeze({
+  pptx: 'PPTX 演示文稿',
+  docx: 'DOCX 文档',
+  xlsx: 'XLSX 工作簿',
+  html: 'HTML 页面',
+  pdf: 'PDF 文档',
+  image: '图片',
+})
+
+function expectedArtifactTypes(prompt = '') {
+  const intent = detectArtifactIntent(prompt)
+  return Object.keys(ARTIFACT_DELIVERABLE_LABELS).filter((type) => intent[type] === true)
+}
+
+function describeDeliverable(type) {
+  return ARTIFACT_DELIVERABLE_LABELS[type] || String(type || '').toUpperCase()
+}
 
 // 验证步骤自己说"没成"的信号。刻意不含"限制"——buildVerificationPrompt 就要求
 // 模型列出"仍存在的限制",那是正常输出,不该被判成失败。
@@ -383,12 +400,15 @@ export function buildFinalOutput(job) {
   // A tool result may report an artifact id before persistence succeeds, and
   // plugin tools can return arbitrary ids. Only owned rows loaded with the job
   // are durable, downloadable deliverables and may satisfy file acceptance.
-  const artifactIds = [...new Set(
-    (Array.isArray(job?.artifacts) ? job.artifacts : [])
-      .filter((artifact) => artifact?.jobId === job?.id && artifact?.userId === job?.userId)
-      .map((artifact) => artifact?.id)
-      .filter(Boolean),
-  )]
+  const durableArtifacts = (Array.isArray(job?.artifacts) ? job.artifacts : [])
+    .filter((artifact) => artifact?.jobId === job?.id && artifact?.userId === job?.userId && artifact?.id)
+  const artifactIds = [...new Set(durableArtifacts.map((artifact) => artifact.id))]
+  const expectedDeliverables = expectedArtifactTypes(job?.prompt || '')
+  const deliveredTypes = new Set(
+    durableArtifacts.map((artifact) => String(artifact?.type || '').trim().toLowerCase()).filter(Boolean),
+  )
+  const completedDeliverables = expectedDeliverables.filter((type) => deliveredTypes.has(type))
+  const missingDeliverables = expectedDeliverables.filter((type) => !deliveredTypes.has(type))
 
   const issues = []
 
@@ -412,7 +432,18 @@ export function buildFinalOutput(job) {
     issues.push('验证步骤的结论包含未通过项')
   }
 
-  if (expectsFileArtifact(job?.prompt || '') && !artifactIds.length) {
+  if (missingDeliverables.length) {
+    const missing = missingDeliverables.map(describeDeliverable).join('、')
+    if (completedDeliverables.length) {
+      const completed = completedDeliverables.map(describeDeliverable).join('、')
+      issues.push(`文件产物仅部分交付：已完成 ${completed}；缺少 ${missing}`)
+    } else {
+      issues.push(`用户要求的文件产物未交付：缺少 ${missing}`)
+    }
+  } else if (expectsFileArtifact(job?.prompt || '') && !artifactIds.length) {
+    // Fail closed if the intent schema gains a new deliverable type before
+    // this projection is updated. A generic file request must never become a
+    // successful task merely because its type is not yet recognized here.
     issues.push('用户要求了可下载的文件产物，但本次没有生成任何产物')
   }
 
@@ -431,6 +462,8 @@ export function buildFinalOutput(job) {
     text,
     evidence: verificationText ? [verificationText] : [],
     artifactIds,
+    completedDeliverables,
+    missingDeliverables,
     complete,
     issues,
     acceptance: acceptance || null,

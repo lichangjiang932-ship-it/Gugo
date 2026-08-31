@@ -165,10 +165,22 @@ export function createTurnTerminalOutcomeRuntime({
       const interruptedAt = ports.now()
       const verifiedLocalFiles = evidence.verifiedLocalFilesAt(interruptedAt)
       const retainedLocalFiles = evidence.retainedLocalFilesAt(interruptedAt, verifiedLocalFiles)
+      const incompleteReason = normalizeIncompleteReason(
+        result.incompleteReason || result.reasonCode || result.reason,
+        'model_call_interrupted',
+      )
+      const explicitMissingRequirements = Array.isArray(result.missingRequirements)
+        ? result.missingRequirements
+        : []
+      const missingRequirements = explicitMissingRequirements.length > 0
+        ? explicitMissingRequirements
+        : missingRequirementsForIncompleteReason(incompleteReason)
       const failure = normalizeTurnFailure({
         code: result.code,
-        message: result.reason,
+        incompleteReason,
+        missingRequirements,
         retryable: true,
+        taskVerification: result.taskVerification,
       }, { code: 'MODEL_CALL_INTERRUPTED', retryable: true })
       const evidenceOptions = {
         state: 'interrupted',
@@ -183,6 +195,10 @@ export function createTurnTerminalOutcomeRuntime({
       }
       await evidence.emitter('turn.interrupted', {
         code: failure.code,
+        error: failure,
+        incompleteReason: failure.incompleteReason,
+        missingRequirements: failure.missingRequirements,
+        ...(failure.taskVerification ? { taskVerification: failure.taskVerification } : {}),
         retryable: true,
         text: partialText,
         artifactIds,

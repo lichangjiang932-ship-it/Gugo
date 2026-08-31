@@ -92,7 +92,12 @@ export function createDefaultExecuteStep({
         .filter((item) => ['execute', 'batch_item'].includes(item.kind))
         .map((item) => item.output?.text)
         .filter(Boolean)
-      if (generatedTexts.length && shouldCompileDocx(job.prompt) && !(job.artifacts || []).length) {
+      const hasOwnedDocxArtifact = (Array.isArray(job.artifacts) ? job.artifacts : []).some((artifact) => (
+        artifact?.jobId === job.id
+        && artifact?.userId === job.userId
+        && String(artifact?.type || '').trim().toLowerCase() === 'docx'
+      ))
+      if (generatedTexts.length && shouldCompileDocx(job.prompt) && !hasOwnedDocxArtifact) {
         const artifact = await createDocxImpl({
           title: job.title,
           paragraphs: generatedTexts.map((text, index) => ({

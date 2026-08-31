@@ -4,8 +4,25 @@ const MISSING_ARTIFACT_BLOCKER = Object.freeze({
   reason: ARTIFACT_DELIVERY_INCOMPLETE_REASON,
 })
 
-export function missingArtifactBlocker() {
-  return MISSING_ARTIFACT_BLOCKER
+const ARTIFACT_REQUIREMENT_BY_TOOL = Object.freeze({
+  create_pptx: 'deliverable_pptx',
+  create_docx: 'deliverable_docx',
+  create_xlsx: 'deliverable_xlsx',
+  create_html_app: 'deliverable_html',
+  create_pdf: 'deliverable_pdf',
+  generate_image: 'deliverable_image',
+  render_pdf_pages: 'deliverable_image',
+})
+
+export function missingArtifactBlocker(missingArtifactTools = []) {
+  const missingRequirements = [...new Set(
+    (Array.isArray(missingArtifactTools) ? missingArtifactTools : [])
+      .map((toolName) => ARTIFACT_REQUIREMENT_BY_TOOL[String(toolName || '').trim()])
+      .filter(Boolean),
+  )]
+  return missingRequirements.length > 0
+    ? { ...MISSING_ARTIFACT_BLOCKER, missingRequirements }
+    : MISSING_ARTIFACT_BLOCKER
 }
 
 export async function initializeCompletion(s) {
@@ -499,7 +516,7 @@ export async function initializeCompletion(s) {
     }
   // Terminal transports project this stable reason into missing requirements;
   // the client owns all user-visible copy for the selected locale.
-  s.missingArtifactBlocker = missingArtifactBlocker
+  s.missingArtifactBlocker = () => missingArtifactBlocker(s.missingArtifactTools())
   const restoredAnswerReview = s.restoredState?.completionGuards?.finalAnswerEvidenceReview
   const restoredToolEvidence = s.restoredState?.completionGuards?.finalAnswerToolEvidence
   s.finalAnswerToolEvidence = Array.isArray(restoredToolEvidence)

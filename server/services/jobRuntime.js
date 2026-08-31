@@ -3,7 +3,7 @@ import { buildExploredPlan } from './jobPlanner.js'
 import {
   appendJobEvent, completeJobStep,
   getJob as getJobRow, getJobWithChildren, listJobSteps,
-  listJobs, listRecoverableJobs, updateJob, updateJobModelSnapshot, updateJobStep,
+  listJobs, listRecoverableJobs, updateJob, updateJobStep,
 } from './jobStore.js'
 import { createNotification } from './notificationsStore.js'
 import { dispatchHooks } from './hooksService.js'
@@ -20,6 +20,7 @@ import {
   enqueueJobSteeringTransition,
   requestJobCancellationTransition,
   resumeJobAfterApprovalTransition,
+  retryJobTransition,
 } from './jobRuntimeTransitionStore.js'
 import {
   deriveJobProgress,
@@ -387,7 +388,7 @@ export class JobRuntime {
   }
 
   retryJob(jobId, { userId } = {}) {
-    const currentJob = this.getJob(jobId, { userId })
+    let currentJob = this.getJob(jobId, { userId })
     if (!currentJob) return null
     if (!RETRYABLE_JOB_STATUSES.has(currentJob.status)) {
       const error = new Error(`job cannot be retried from status ${currentJob.status}`)
@@ -395,26 +396,43 @@ export class JobRuntime {
       error.statusCode = 409
       throw error
     }
-    assertJobPlanRetryAllowed(currentJob)
-    const modelBinding = this.resolveModelBinding({
-      userId,
-      providerId: currentJob.modelProviderId,
-      modelName: currentJob.modelName,
-    })
-    const modelSnapshot = normalizeJobModelSnapshot({
-      modelName: modelBinding.modelName,
-      modelProviderId: modelBinding.providerId,
-      modelConfigRevision: modelBinding.configRevision,
-    })
-    const checkpointsByStepId = loadJobRetryCheckpoints({
-      runtimeCore: this.runtimeCore,
-      job: currentJob,
-      modelSnapshot,
-    })
-    updateJobModelSnapshot(jobId, { userId, ...modelSnapshot })
-    cancelJobWake({ jobId, userId })
-    for (const step of currentJob.steps) {
-      if (RETRYABLE_STEP_STATUSES.has(step.status) || hasRejectedCompletedOutcome(step)) {
+    const retryLease = !this.activeControllers.has(jobId)
+      ? this.runtimeCore.lease.acquire({ jobId })
+      : null
+    if (!retryLease) {
+      const error = new Error('job retry is already active')
+      error.code = 'JOB_RETRY_CONFLICT'
+      error.statusCode = 409
+      throw error
+    }
+    try {
+      currentJob = this.getJob(jobId, { userId })
+      if (!currentJob || !RETRYABLE_JOB_STATUSES.has(currentJob.status)) {
+        const error = new Error(`job cannot be retried from status ${currentJob?.status || 'missing'}`)
+        error.code = 'JOB_RETRY_STATUS_INVALID'
+        error.statusCode = 409
+        throw error
+      }
+      assertJobPlanRetryAllowed(currentJob)
+      const modelBinding = this.resolveModelBinding({
+        userId,
+        providerId: currentJob.modelProviderId,
+        modelName: currentJob.modelName,
+      })
+      const modelSnapshot = normalizeJobModelSnapshot({
+        modelName: modelBinding.modelName,
+        modelProviderId: modelBinding.providerId,
+        modelConfigRevision: modelBinding.configRevision,
+      })
+      const checkpointsByStepId = loadJobRetryCheckpoints({
+        runtimeCore: this.runtimeCore,
+        job: currentJob,
+        modelSnapshot,
+      })
+      const retriedSteps = currentJob.steps.filter((step) => (
+        RETRYABLE_STEP_STATUSES.has(step.status) || hasRejectedCompletedOutcome(step)
+      ))
+      for (const step of retriedSteps) {
         // A truncated run deliberately keeps its durable checkpoint. Clear only
         // the terminal marker so the next tick continues after the completed
         // tool results instead of either returning the old failure immediately
@@ -427,33 +445,35 @@ export class JobRuntime {
           stepId: step.id,
           userId,
         })
-        updateJobStep(step.id, {
-          status: 'queued',
-          error: null,
-          finishedAt: null,
-        })
       }
+      const transition = retryJobTransition({
+        jobId,
+        userId,
+        expectedJobStatus: currentJob.status,
+        steps: retriedSteps,
+        modelSnapshot,
+        event: {
+          type: 'retried',
+          message: '任务已重新入队',
+          payload: {
+            previousModelProviderId: currentJob.modelProviderId,
+            previousModelConfigRevision: currentJob.modelConfigRevision,
+            modelProviderId: modelSnapshot.modelProviderId,
+            modelConfigRevision: modelSnapshot.modelConfigRevision,
+          },
+        },
+      })
+      if (!transition.changed) {
+        const error = new Error(`job cannot be retried from status ${transition.status || 'missing'}`)
+        error.code = 'JOB_RETRY_STATUS_INVALID'
+        error.statusCode = 409
+        throw error
+      }
+      this.emit(transition.event)
+      return this.getJob(jobId, { userId })
+    } finally {
+      retryLease.release()
     }
-    updateJob(jobId, {
-      status: 'queued',
-      cancelRequested: false,
-      finishedAt: null,
-      error: null,
-      progress: deriveJobProgress(this.getJob(jobId, { userId }).steps),
-    })
-    const event = appendJobEvent({
-      jobId,
-      type: 'retried',
-      message: '任务已重新入队',
-      payload: {
-        previousModelProviderId: currentJob.modelProviderId,
-        previousModelConfigRevision: currentJob.modelConfigRevision,
-        modelProviderId: modelSnapshot.modelProviderId,
-        modelConfigRevision: modelSnapshot.modelConfigRevision,
-      },
-    })
-    this.emit(event)
-    return this.getJob(jobId, { userId })
   }
 
   /**
@@ -543,8 +563,8 @@ export class JobRuntime {
   }
 
   retryStep(jobId, stepId, { userId, resetBudget = true } = {}) {
-    const job = this.getJob(jobId, { userId })
-    const step = job?.steps.find((item) => item.id === stepId)
+    let job = this.getJob(jobId, { userId })
+    let step = job?.steps.find((item) => item.id === stepId)
     if (!job || !step) return null
     if (!RETRYABLE_JOB_STATUSES.has(job.status)
       || (!RETRYABLE_STEP_STATUSES.has(step.status) && !hasRejectedCompletedOutcome(step))) {
@@ -553,63 +573,84 @@ export class JobRuntime {
       error.statusCode = 409
       throw error
     }
-    assertJobPlanRetryAllowed(job, step)
-    const modelBinding = this.resolveModelBinding({
-      userId,
-      providerId: job.modelProviderId,
-      modelName: job.modelName,
-    })
-    const modelSnapshot = normalizeJobModelSnapshot({
-      modelName: modelBinding.modelName,
-      modelProviderId: modelBinding.providerId,
-      modelConfigRevision: modelBinding.configRevision,
-    })
-    const checkpoint = loadRetryCheckpoint({
-      runtimeCore: this.runtimeCore,
-      jobId,
-      stepId,
-      userId: job.userId,
-      modelSnapshot,
-    })
-    updateJobModelSnapshot(jobId, { userId, ...modelSnapshot })
-    cancelJobWake({ jobId, userId })
-    // Preserve completed calls, their results, and idempotency keys. Ordinary
-    // user-initiated retries start a fresh budget window; recovery of an
-    // already-paid model response must retain the historical counters so the
-    // recovered usage can be added to the existing total exactly once.
-    makeRetryCheckpointResumable({
-      runtimeCore: this.runtimeCore,
-      checkpoint,
-      jobId,
-      stepId,
-      userId,
-      resetBudget,
-    })
-    updateJobStep(stepId, {
-      status: 'queued',
-      error: null,
-      finishedAt: null,
-    })
-    updateJob(jobId, {
-      status: 'queued',
-      cancelRequested: false,
-      finishedAt: null,
-      error: null,
-    })
-    const event = appendJobEvent({
-      jobId,
-      stepId,
-      type: 'step_retried',
-      message: `已重试步骤:${step.title}`,
-      payload: {
-        previousModelProviderId: job.modelProviderId,
-        previousModelConfigRevision: job.modelConfigRevision,
-        modelProviderId: modelSnapshot.modelProviderId,
-        modelConfigRevision: modelSnapshot.modelConfigRevision,
-      },
-    })
-    this.emit(event)
-    return this.getJob(jobId, { userId })
+    const retryLease = !this.activeControllers.has(jobId)
+      ? this.runtimeCore.lease.acquire({ jobId })
+      : null
+    if (!retryLease) {
+      const error = new Error('job retry is already active')
+      error.code = 'JOB_RETRY_CONFLICT'
+      error.statusCode = 409
+      throw error
+    }
+    try {
+      job = this.getJob(jobId, { userId })
+      step = job?.steps.find((item) => item.id === stepId)
+      if (!job || !step || !RETRYABLE_JOB_STATUSES.has(job.status)
+        || (!RETRYABLE_STEP_STATUSES.has(step.status) && !hasRejectedCompletedOutcome(step))) {
+        const error = new Error(`job step cannot be retried from ${job?.status || 'missing'}/${step?.status || 'missing'}`)
+        error.code = 'JOB_STEP_RETRY_STATUS_INVALID'
+        error.statusCode = 409
+        throw error
+      }
+      assertJobPlanRetryAllowed(job, step)
+      const modelBinding = this.resolveModelBinding({
+        userId,
+        providerId: job.modelProviderId,
+        modelName: job.modelName,
+      })
+      const modelSnapshot = normalizeJobModelSnapshot({
+        modelName: modelBinding.modelName,
+        modelProviderId: modelBinding.providerId,
+        modelConfigRevision: modelBinding.configRevision,
+      })
+      const checkpoint = loadRetryCheckpoint({
+        runtimeCore: this.runtimeCore,
+        jobId,
+        stepId,
+        userId: job.userId,
+        modelSnapshot,
+      })
+      // Preserve completed calls, their results, and idempotency keys. Ordinary
+      // user-initiated retries start a fresh budget window; recovery of an
+      // already-paid model response must retain the historical counters so the
+      // recovered usage can be added to the existing total exactly once.
+      makeRetryCheckpointResumable({
+        runtimeCore: this.runtimeCore,
+        checkpoint,
+        jobId,
+        stepId,
+        userId,
+        resetBudget,
+      })
+      const transition = retryJobTransition({
+        jobId,
+        userId,
+        expectedJobStatus: job.status,
+        steps: [step],
+        modelSnapshot,
+        event: {
+          stepId,
+          type: 'step_retried',
+          message: `已重试步骤:${step.title}`,
+          payload: {
+            previousModelProviderId: job.modelProviderId,
+            previousModelConfigRevision: job.modelConfigRevision,
+            modelProviderId: modelSnapshot.modelProviderId,
+            modelConfigRevision: modelSnapshot.modelConfigRevision,
+          },
+        },
+      })
+      if (!transition.changed) {
+        const error = new Error(`job step cannot be retried from ${transition.status || 'missing'}/${step.status}`)
+        error.code = 'JOB_STEP_RETRY_STATUS_INVALID'
+        error.statusCode = 409
+        throw error
+      }
+      this.emit(transition.event)
+      return this.getJob(jobId, { userId })
+    } finally {
+      retryLease.release()
+    }
   }
 
   runOneTick() {

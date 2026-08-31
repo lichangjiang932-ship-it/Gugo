@@ -1,3 +1,8 @@
+import {
+  missingRequirementsForIncompleteReason,
+  normalizeIncompleteReason,
+} from '../turnTerminalProjection.js'
+
 export function installTerminalCompletion(s) {
   const { MAX_LOCAL_HTML_DELIVERY_RETRIES } = s.d
 
@@ -11,9 +16,18 @@ export function installTerminalCompletion(s) {
     taskVerification = null,
     steeringLeaseId = null,
   }) => {
+    const incompleteReason = normalizeIncompleteReason(reason)
+    const normalizedMissingRequirements = [...new Set((Array.isArray(missingRequirements)
+      ? missingRequirements
+      : missingRequirementsForIncompleteReason(incompleteReason))
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter((value) => /^[a-z][a-z0-9_]{1,95}$/u.test(value)))]
+    if (normalizedMissingRequirements.length === 0) {
+      normalizedMissingRequirements.push('remaining_task_steps')
+    }
     const terminalMetadata = {
       ...(code ? { code: String(code) } : {}),
-      ...(Array.isArray(missingRequirements) ? { missingRequirements } : {}),
+      missingRequirements: normalizedMissingRequirements,
       ...(typeof retryable === 'boolean' ? { retryable } : {}),
       ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),
       ...(taskVerification ? { taskVerification } : {}),
@@ -21,14 +35,14 @@ export function installTerminalCompletion(s) {
     const safePartialResult = s.partialResultFallback.apply({
       text,
       incomplete: true,
-      reason,
+      reason: incompleteReason,
     })
     s.finalText = s.protectTerminalText(safePartialResult.text, { incomplete: true })
     const completion = await s.steeringController.prepareCompletion({
       text: s.finalText,
       leaseId: steeringLeaseId,
       incomplete: true,
-      reason,
+      reason: incompleteReason,
     })
     if (!completion.closed) return { deferredForSteering: true }
     s.suppressTerminalArtifacts()
@@ -39,7 +53,7 @@ export function installTerminalCompletion(s) {
           text: s.finalText,
           iterations: s.iter + 1,
           incomplete: true,
-          reason,
+          reason: incompleteReason,
           ...terminalMetadata,
         },
       })
@@ -55,7 +69,7 @@ export function installTerminalCompletion(s) {
       ...s.deliverySelectionFields(),
       iterations: s.iter + 1,
       incomplete: true,
-      reason,
+      reason: incompleteReason,
       ...terminalMetadata,
       recovery: s.recovery,
     })
@@ -97,6 +111,39 @@ export function installTerminalCompletion(s) {
     appendTextToConversation = true,
   } = {}) => {
     result = s.partialResultFallback.apply(result)
+    let incompleteMetadata = {}
+    if (result?.incomplete === true) {
+      const incompleteReason = normalizeIncompleteReason(
+        result.budgetExceeded === true
+          ? 'execution_budget_exhausted'
+          : result.noProgress === true
+            ? 'tool_no_progress'
+            : String(result.code || '').trim().toUpperCase() === 'REASONING_RUNAWAY'
+              ? 'reasoning_runaway'
+              : result.reason,
+      )
+      const normalizedMissingRequirements = [...new Set((Array.isArray(result.missingRequirements)
+        ? result.missingRequirements
+        : missingRequirementsForIncompleteReason(incompleteReason))
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter((value) => /^[a-z][a-z0-9_]{1,95}$/u.test(value)))]
+      if (normalizedMissingRequirements.length === 0) {
+        normalizedMissingRequirements.push('remaining_task_steps')
+      }
+      incompleteMetadata = {
+        missingRequirements: normalizedMissingRequirements,
+        ...(typeof result.retryable === 'boolean' ? { retryable: result.retryable } : {}),
+        ...(typeof result.manualRetryable === 'boolean'
+          ? { manualRetryable: result.manualRetryable }
+          : {}),
+        ...(result.taskVerification ? { taskVerification: result.taskVerification } : {}),
+      }
+      result = {
+        ...result,
+        reason: incompleteReason,
+        ...incompleteMetadata,
+      }
+    }
     const terminalIsIncomplete = result?.incomplete === true
       || result?.paused === true
       || result?.interrupted === true
@@ -123,6 +170,7 @@ export function installTerminalCompletion(s) {
         incomplete: result?.incomplete === true,
         reason: result?.reason || null,
         ...finalMetadata,
+        ...incompleteMetadata,
       },
     })
     s.finalCheckpointPersisted = Boolean(text.trim())

@@ -14,9 +14,13 @@ const INCOMPLETE_REASON_REQUIREMENTS = Object.freeze({
   final_answer_evidence_review_missing: ['final_answer_consistency_review'],
   iteration_limit_reached: ['remaining_task_steps'],
   local_html_delivery_validation_failed: ['html_resource_validation'],
+  model_call_interrupted: ['model_response', 'remaining_task_steps'],
+  model_request_outcome_unknown: ['operation_outcome_verification'],
   pdf_layout_verification_missing: ['pdf_layout_validation'],
   post_mutation_verification_missing: ['mutation_readback', 'diff_or_project_check'],
+  recovery_blocked: ['execution_environment_repair', 'explicit_recovery_retry'],
   reasoning_runaway: ['bounded_model_response'],
+  side_effect_outcome_unknown: ['operation_outcome_verification'],
   task_verification_repair_exhausted: [
     'verification_failure_repair',
     'passing_project_check',

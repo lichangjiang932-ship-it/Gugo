@@ -553,12 +553,26 @@ function incompleteCheckpointMetadata(stateJson) {
     : noProgress === true
       ? 'tool_no_progress'
       : (rawReason ? normalizeIncompleteReason(rawReason, '') : '')
+  const recordedMissingRequirements = [...new Set(
+    (Array.isArray(final.missingRequirements) ? final.missingRequirements : [])
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter((value) => /^[a-z][a-z0-9_]{1,95}$/u.test(value)),
+  )].slice(0, 16)
   return {
     ...(incompleteReason
       ? {
           incompleteReason,
-          missingRequirements: missingRequirementsForIncompleteReason(incompleteReason),
+          missingRequirements: recordedMissingRequirements.length > 0
+            ? recordedMissingRequirements
+            : missingRequirementsForIncompleteReason(incompleteReason),
         }
+      : {}),
+    ...(typeof final.retryable === 'boolean' ? { retryable: final.retryable } : {}),
+    ...(typeof final.manualRetryable === 'boolean'
+      ? { manualRetryable: final.manualRetryable }
+      : {}),
+    ...(final.taskVerification && typeof final.taskVerification === 'object'
+      ? { taskVerification: final.taskVerification }
       : {}),
   }
 }
@@ -572,8 +586,7 @@ function loadIncompleteCheckpointMetadata(db, { userId, sessionId, messages }) {
       && message.modelContext.error
       && typeof message.modelContext.error === 'object'
       && !Array.isArray(message.modelContext.error)
-      && String(message.modelContext.error.code || '').trim().toUpperCase() === 'TURN_INCOMPLETE'
-      && ['incompleteReason', 'missingRequirements']
+      && ['incompleteReason', 'missingRequirements', 'retryable', 'manualRetryable', 'taskVerification']
         .some((field) => !Object.hasOwn(message.modelContext.error, field))
     ))
     .map((message) => String(message.modelContext.turnId || '').trim())
@@ -612,7 +625,13 @@ function withRecoveredIncompleteFailure(message, metadataByTurn) {
   const turnId = String(context.turnId || '').trim()
   const recovered = metadataByTurn.get(turnId)
   if (!recovered) return message
-  const fields = ['incompleteReason', 'missingRequirements']
+  const fields = [
+    'incompleteReason',
+    'missingRequirements',
+    'retryable',
+    'manualRetryable',
+    'taskVerification',
+  ]
   const additions = Object.fromEntries(fields
     .filter((field) => !Object.hasOwn(failure, field) && Object.hasOwn(recovered, field))
     .map((field) => [field, recovered[field]]))
