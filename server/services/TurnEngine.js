@@ -1,16 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import {
-  getBoundTurnToolSpecs,
-  runBoundTurnLoop,
-} from './turnLoopBindingRuntime.js'
+import { getBoundTurnToolSpecs, runBoundTurnLoop } from './turnLoopBindingRuntime.js'
 import { prepareBoundInlineSkillsForPrompt } from './inlineSkillPromptBindingRuntime.js'
 import { publishTurnActivity } from './turnActivityBus.js'
 import { dispatchHooks as dispatchHooksService } from './hooksService.js'
 import { getApprovalMode } from './approvalSettingsStore.js'
-import {
-  recordEvolutionCanaryOutcome,
-  resolveEvolutionCanaryAssignment,
-} from './evolutionCanaryService.js'
+import { recordEvolutionCanaryOutcome, resolveEvolutionCanaryAssignment } from './evolutionCanaryService.js'
 import { createTurnExecutionToolContextRuntime } from './turnExecutionToolContextRuntime.js'
 import { createTurnCancellationRuntime } from './turnCancellationRuntime.js'
 import { createTurnCanaryOutcomeRuntime } from './turnCanaryOutcomeRuntime.js'
@@ -18,23 +12,12 @@ import { scheduleAutoMemoryExtraction } from './autoMemoryService.js'
 import { listRuntimePluginStates } from './runtimePluginStateStore.js'
 import { resolveToolImplementationRevisions as resolveCurrentToolImplementationRevisions } from './toolImplementationRevision.js'
 import { getActiveRuntimePolicyProvenance } from '../core/runtimeCapabilityState.js'
-import {
-  getLocalFileAccessStatus,
-  resolveTurnProjectDirectory,
-  withTurnProjectDirectory,
-} from './localFileAccessService.js'
+import { getLocalFileAccessStatus, resolveTurnProjectDirectory, withTurnProjectDirectory } from './localFileAccessService.js'
 import { logWarn, newTraceId, withLogContext } from '../utils/logger.js'
-import {
-  createTurnEventEmitter,
-  isTerminalTurnEventType,
-} from './turnEventEmitter.js'
+import { createTurnEventEmitter, isTerminalTurnEventType } from './turnEventEmitter.js'
 import { createTurnModelRequestRunner } from './turnModelRequestRuntime.js'
 import { TurnEngineError } from './turnResolutionRuntime.js'
-import {
-  createTurnStartRuntime,
-  normalizeTurnModelMode as normalizeModelMode,
-  normalizeTurnOptionalId as normalizeOptionalId,
-} from './turnStartRuntime.js'
+import { createTurnStartRuntime, normalizeTurnModelMode as normalizeModelMode, normalizeTurnOptionalId as normalizeOptionalId } from './turnStartRuntime.js'
 import { assembleTurnEnginePersistence } from './turnEnginePersistenceAssembly.js'
 import { createTurnFailedRetryRuntime } from './turnFailedRetryRuntime.js'
 import { createTurnTerminalOutcomeRuntime } from './turnTerminalOutcomeRuntime.js'
@@ -42,11 +25,9 @@ import { createTurnExecutionRuntime } from './turnExecutionRuntime.js'
 import { createTurnSchedulingRuntime } from './turnSchedulingRuntime.js'
 import { resolveTurnToolSpecs } from './turnToolSpecs.js'
 import { createTurnResumeRuntime } from './turnResumeRuntime.js'
-import {
-  missingAttachmentBindingRuntime,
-  missingAttachmentPreparationRuntime,
-  missingAttachmentValidationRuntime,
-} from './turnManagedAttachmentRuntime.js'
+import { normalizeArtifactIds, normalizeTaskVerificationDetails, publicIncompleteText } from './turnTerminalProjection.js'
+import { excludeVerifiedLocalFiles, mergeLocalFileReceipts } from './turnRecoveryProjection.js'
+import { missingAttachmentBindingRuntime, missingAttachmentPreparationRuntime, missingAttachmentValidationRuntime } from './turnManagedAttachmentRuntime.js'
 import {
   abortError,
   activeKey,
@@ -55,6 +36,7 @@ import {
   missingTurnPromptRuntime,
   normalizePositiveInteger,
   publicStatus,
+  recoveryCandidateVersion,
   rejectResumeApprovalModeOverride,
   sessionKey,
 } from './turnEnginePolicy.js'
@@ -437,15 +419,56 @@ export class TurnEngine {
     if (scope?.retryFailed === true) return this.#retryFailedTurn(scope)
     const recovery = await this.deps.readRecoveryState(scope)
     const last = await this.deps.lastEvent(scope)
-    if ((recovery?.status === 'dead_letter' || last?.type === 'turn.blocked')
+    const currentRecovery = last
+      && recovery?.candidateVersion === recoveryCandidateVersion(last)
+      ? recovery
+      : null
+    if ((currentRecovery?.status === 'dead_letter' || last?.type === 'turn.blocked')
       && scope?.retryRecovery !== true) {
+      const payload = last?.payload && typeof last.payload === 'object' ? last.payload : {}
+      const nestedFailure = payload.error && typeof payload.error === 'object' && !Array.isArray(payload.error)
+        ? payload.error
+        : {}
+      const failureField = (key) => (Object.hasOwn(nestedFailure, key) ? nestedFailure[key] : payload[key])
+      const evidenceField = (key) => (Object.hasOwn(payload, key) ? payload[key] : nestedFailure[key])
+      const hasEvidenceField = (key) => Object.hasOwn(payload, key) || Object.hasOwn(nestedFailure, key)
+      const verifiedLocalFiles = mergeLocalFileReceipts(evidenceField('verifiedLocalFiles'))
+      const retainedLocalFiles = excludeVerifiedLocalFiles(
+        mergeLocalFileReceipts(evidenceField('retainedLocalFiles')),
+        verifiedLocalFiles,
+      )
+      const incompleteReason = String(failureField('incompleteReason') || 'recovery_blocked').trim()
+      const missingRequirements = [...new Set((Array.isArray(failureField('missingRequirements'))
+        ? failureField('missingRequirements')
+        : ['execution_environment_repair', 'explicit_recovery_retry'])
+        .map((value) => String(value || '').trim())
+        .filter(Boolean))].slice(0, 16)
+      const taskVerification = normalizeTaskVerificationDetails(failureField('taskVerification'))
+      const iterations = Number(evidenceField('iterations'))
       const error = new TurnEngineError(
         'TURN_RECOVERY_DEAD_LETTER',
-        recovery?.errorMessage || last?.payload?.message
+        currentRecovery?.errorMessage || payload.message || nestedFailure.message
           || 'automatic turn recovery stopped; repair the execution environment and retry explicitly',
         409,
       )
-      error.recovery = recovery || {
+      error.retryable = false
+      error.manualRetryable = true
+      error.incompleteReason = incompleteReason
+      error.missingRequirements = missingRequirements
+      if (taskVerification) error.taskVerification = taskVerification
+      if (hasEvidenceField('partialText')) {
+        error.partialText = publicIncompleteText(evidenceField('partialText'), '')
+      }
+      if (hasEvidenceField('artifactIds')) {
+        error.artifactIds = normalizeArtifactIds(evidenceField('artifactIds'))
+      }
+      if (hasEvidenceField('deliveryArtifactIds')) {
+        error.deliveryArtifactIds = normalizeArtifactIds(evidenceField('deliveryArtifactIds'))
+      }
+      if (hasEvidenceField('verifiedLocalFiles')) error.verifiedLocalFiles = verifiedLocalFiles
+      if (hasEvidenceField('retainedLocalFiles')) error.retainedLocalFiles = retainedLocalFiles
+      if (Number.isInteger(iterations) && iterations >= 0) error.iterations = iterations
+      error.recovery = currentRecovery || {
         status: 'dead_letter',
         retryable: false,
         manualRetryable: true,

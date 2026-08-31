@@ -54,6 +54,24 @@ test('durable TURN_INCOMPLETE output enables resume without treating transport r
   }, { sessionId: 'session-a', turnId: 'turn-a' }), null)
 })
 
+test('a manually recoverable terminal failure exposes one explicit task retry without partial text', () => {
+  assert.deepEqual(buildStreamResumeState({
+    failed: true,
+    error: {
+      code: 'TASK_VERIFICATION_REPAIR_EXHAUSTED',
+      retryable: false,
+      manualRetryable: true,
+    },
+  }, { sessionId: 'session-manual', turnId: 'turn-manual' }), {
+    sessionId: 'session-manual',
+    turnId: 'turn-manual',
+    code: 'TASK_VERIFICATION_REPAIR_EXHAUSTED',
+    manualRetryable: true,
+    reason: null,
+    partialText: '',
+  })
+})
+
 test('an explicitly non-retryable failure never publishes continue-generation state', () => {
   for (const code of ['STREAM_TRUNCATED', 'EMPTY_MODEL_RESPONSE_LENGTH', 'TURN_INCOMPLETE']) {
     assert.equal(buildStreamResumeState({
@@ -112,7 +130,7 @@ test('a persisted TURN_INCOMPLETE assistant message rebuilds the original turn r
     sessionId: 'session-refresh',
     turnId: 'turn-refresh',
     code: 'TURN_INCOMPLETE',
-    reason: 'length',
+    reason: null,
     partialText: 'durable partial answer',
   })
 })
@@ -132,8 +150,8 @@ test('a persisted failed-retry checkpoint rejection stays closed after refresh',
         serverLastSequence: 7,
         error: {
           code: 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
-          message: '恢复所需的执行检查点不存在或已失效。',
           retryable: false,
+          status: 409,
         },
         failedRetryRejection: {
           code: 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
@@ -148,6 +166,7 @@ test('a persisted failed-retry checkpoint rejection stays closed after refresh',
     null,
   )
   assert.equal(snapshot.messages[0]?.meta?.serverFailure?.retryable, false)
+  assert.equal(Object.hasOwn(snapshot.messages[0]?.meta?.serverFailure || {}, 'message'), false)
 })
 
 test('resume state updates are isolated per session', () => {

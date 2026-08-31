@@ -49,7 +49,7 @@ export function makeRetryCheckpointResumable({
   userId,
   resetBudget = true,
 }) {
-  return runtimeCore.checkpoint.makeResumable(
+  const resumed = runtimeCore.checkpoint.makeResumable(
     { jobId, stepId, userId },
     {
       resetBudget: mustPreserveBudgetForManualModelResolution(checkpoint)
@@ -57,4 +57,15 @@ export function makeRetryCheckpointResumable({
         : resetBudget !== false,
     },
   )
+  if (checkpoint?.state && !resumed?.state) {
+    const error = new Error('job retry checkpoint could not be made resumable')
+    error.code = 'JOB_RETRY_CHECKPOINT_UPDATE_FAILED'
+    throw error
+  }
+  if (checkpoint?.state?.final != null && resumed?.state?.final != null) {
+    const error = new Error('job retry checkpoint retained its terminal result')
+    error.code = 'JOB_RETRY_CHECKPOINT_UPDATE_FAILED'
+    throw error
+  }
+  return resumed
 }

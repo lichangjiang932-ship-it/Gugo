@@ -95,7 +95,7 @@ test('legacy TURN_INCOMPLETE status copy is not presented as a causal diagnosis'
   assert.equal(value.nextStep, 'chatMessages.incompleteNextRetry')
 })
 
-test('an unknown recorded reason is disclosed instead of being described as missing', () => {
+test('an unknown recorded recovery reason is disclosed with safe categorical requirements', () => {
   const interpolate = (key, values = {}) => `${key}:${values.code || ''}`
   const value = buildIncompleteTaskPresentation({
     meta: {
@@ -109,7 +109,8 @@ test('an unknown recorded reason is disclosed instead of being described as miss
 
   assert.equal(value.reason, 'chatMessages.incompleteReasonRecordedCode:CHECKPOINT_MISSING')
   assert.deepEqual(value.missing, [
-    'chatMessages.incompleteRequirementRecordedCode:CHECKPOINT_MISSING',
+    'chatMessages.incompleteRequirementEnvironmentRepair:',
+    'chatMessages.incompleteRequirementExplicitRetry:',
   ])
 })
 
@@ -132,6 +133,140 @@ test('server failure normalization derives missing requirements from a known inc
     'final_answer_consistency_review',
   ])
   assert.equal(Object.hasOwn(finalAnswerReviewFailure, 'message'), false)
+})
+
+test('task verification failures require repair plus a passing project check before completion', () => {
+  const taskVerification = {
+    version: 1,
+    maxFailures: 3,
+    consecutiveFailures: 1,
+    checks: [{
+      status: 'failed',
+      kind: 'test',
+      cwd: 'packages/core',
+      commandScope: 'npm test',
+      coverage: 'cwd',
+      code: 'TASK_TEST_FAILED',
+      failures: 1,
+      requiredEpoch: 2,
+      diagnostic: 'index.test.js: expected 2, received 1',
+    }],
+  }
+  const pendingFailure = normalizeTurnFailure({
+    code: 'TASK_VERIFICATION_REPAIR_PENDING',
+    incompleteReason: 'task_verification_repair_pending',
+    missingRequirements: [
+      'conclusive_project_verification',
+      'rerun_verification_scope',
+    ],
+    retryable: true,
+    taskVerification,
+  })
+  assert.equal(pendingFailure.retryable, true)
+  assert.deepEqual(pendingFailure.missingRequirements, [
+    'verification_failure_repair',
+    'passing_project_check',
+  ])
+
+  const pending = buildIncompleteTaskPresentation({
+    meta: { serverFailure: pendingFailure },
+  }, (key, values = {}) => key === 'chatMessages.incompleteVerificationScope'
+    ? `${values.status}|${values.kind}|${values.cwd}|${values.command}`
+    : key)
+  assert.equal(pending.reason, 'chatMessages.incompleteReasonVerificationPending')
+  assert.deepEqual(pending.missing, [
+    'chatMessages.incompleteRequirementVerificationRepair',
+    'chatMessages.incompleteRequirementPassingProjectCheck',
+  ])
+  assert.equal(pending.nextStep, 'chatMessages.incompleteNextVerificationPending')
+  assert.equal(pending.retryable, true)
+  assert.deepEqual(pending.verificationChecks, [{
+    code: 'TASK_TEST_FAILED',
+    diagnostic: 'index.test.js: expected 2, received 1',
+    scope: 'chatMessages.incompleteVerificationFailed|test|packages/core|npm test',
+    status: 'failed',
+  }])
+
+  const exhaustedFailure = normalizeTurnFailure({
+    code: 'TASK_VERIFICATION_REPAIR_EXHAUSTED',
+    incompleteReason: 'task_verification_repair_exhausted',
+    missingRequirements: [
+      'verification_failure_repair',
+      'conclusive_project_verification',
+      'explicit_recovery_retry',
+    ],
+    retryable: true,
+    manualRetryable: true,
+  })
+  assert.equal(exhaustedFailure.retryable, false)
+  assert.equal(exhaustedFailure.manualRetryable, true)
+  assert.deepEqual(exhaustedFailure.missingRequirements, [
+    'verification_failure_repair',
+    'passing_project_check',
+    'explicit_recovery_retry',
+  ])
+
+  const exhausted = buildIncompleteTaskPresentation({
+    meta: { serverFailure: exhaustedFailure },
+  }, t)
+  assert.equal(exhausted.reason, 'chatMessages.incompleteReasonVerificationExhausted')
+  assert.deepEqual(exhausted.missing, [
+    'chatMessages.incompleteRequirementVerificationRepair',
+    'chatMessages.incompleteRequirementPassingProjectCheck',
+    'chatMessages.incompleteRequirementExplicitRetry',
+  ])
+  assert.equal(exhausted.nextStep, 'chatMessages.incompleteNextVerificationExhausted')
+  assert.equal(exhausted.retryable, false)
+  assert.equal(exhausted.manualRetryable, true)
+})
+
+test('task verification recovery guidance is localized in all supported languages', () => {
+  const locales = ['zh', 'en', 'ja', 'ko', 'zh-TW']
+  const keys = [
+    'incompleteReasonVerificationPending',
+    'incompleteReasonVerificationExhausted',
+    'incompleteRequirementVerificationRepair',
+    'incompleteRequirementPassingProjectCheck',
+    'incompleteNextVerificationPending',
+    'incompleteNextVerificationExhausted',
+    'incompleteVerificationDetailsLabel',
+    'incompleteVerificationScope',
+    'incompleteVerificationDiagnosticLabel',
+    'incompleteVerificationProcessTreeCleanupFailed',
+  ]
+
+  for (const key of keys) {
+    const values = locales.map((locale) => translations[locale].chatMessages[key])
+    assert.equal(values.every((value) => typeof value === 'string' && value.trim()), true, key)
+    assert.equal(new Set(values).size, locales.length, key)
+  }
+})
+
+test('stable process cleanup diagnostics are localized by the client', () => {
+  const value = buildIncompleteTaskPresentation({
+    meta: {
+      serverFailure: {
+        code: 'TASK_VERIFICATION_REPAIR_PENDING',
+        incompleteReason: 'task_verification_repair_pending',
+        taskVerification: {
+          version: 1,
+          checks: [{
+            status: 'indeterminate',
+            kind: 'test',
+            cwd: '.',
+            commandScope: 'npm test',
+            code: 'PROCESS_TREE_CLEANUP_FAILED',
+            diagnostic: 'partial stdout/stderr that must not replace the stable cleanup diagnosis',
+          }],
+        },
+      },
+    },
+  }, t)
+
+  assert.equal(
+    value.verificationChecks[0].diagnostic,
+    'chatMessages.incompleteVerificationProcessTreeCleanupFailed',
+  )
 })
 
 test('a recovery dead letter explains why automation stopped and what must be repaired', () => {

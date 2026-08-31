@@ -9,6 +9,7 @@ import {
   validateTurnWebSocketServerFrame,
 } from '../../../shared/turnWebSocketProtocol.js'
 import { getAuthToken } from '../accountClient.js'
+import { createTurnFailureError } from './turnEventDispatch.js'
 
 // `turn.paused` ends the current client subscription while remaining resumable
 // on the server after the user supplies the requested clarification/permission.
@@ -30,12 +31,58 @@ export function headers(json = false) {
   }
 }
 
+function stableFailureRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const failure = { ...value }
+  for (const field of ['message', 'hint', 'reason']) delete failure[field]
+  if (failure.error && typeof failure.error === 'object' && !Array.isArray(failure.error)) {
+    failure.error = stableFailureRecord(failure.error)
+  } else if (Object.hasOwn(failure, 'error')) {
+    delete failure.error
+  }
+  if (failure.cause && typeof failure.cause === 'object' && !Array.isArray(failure.cause)) {
+    failure.cause = stableFailureRecord(failure.cause)
+  } else if (Object.hasOwn(failure, 'cause')) {
+    delete failure.cause
+  }
+  if (failure.recovery && typeof failure.recovery === 'object' && !Array.isArray(failure.recovery)) {
+    const recovery = { ...failure.recovery }
+    for (const field of ['message', 'hint', 'reason', 'errorMessage']) delete recovery[field]
+    if (recovery.error && typeof recovery.error === 'object' && !Array.isArray(recovery.error)) {
+      recovery.error = stableFailureRecord(recovery.error)
+    } else if (Object.hasOwn(recovery, 'error')) {
+      delete recovery.error
+    }
+    if (recovery.cause && typeof recovery.cause === 'object' && !Array.isArray(recovery.cause)) {
+      recovery.cause = stableFailureRecord(recovery.cause)
+    } else if (Object.hasOwn(recovery, 'cause')) {
+      delete recovery.cause
+    }
+    failure.recovery = recovery
+  }
+  return failure
+}
+
+function meaningfulFailureValue(value) {
+  if (Array.isArray(value)) return value.length > 0
+  if (value && typeof value === 'object') return Object.keys(value).length > 0
+  return value !== undefined && value !== null && value !== ''
+}
+
+const NESTED_DIAGNOSTIC_FALLBACK_FIELDS = new Set([
+  'nextAction',
+  'incompleteReason',
+  'missingRequirements',
+  'taskVerification',
+])
+
 export async function parseResponse(response) {
   let body
   try { body = await response.json() } catch { body = null }
   if (!response.ok) {
-    const error = new Error(body?.error?.message || `Turn request failed: HTTP ${response.status}`)
-    error.code = body?.error?.code || 'TURN_REQUEST_FAILED'
+    const code = String(body?.error?.code || 'TURN_REQUEST_FAILED').trim() || 'TURN_REQUEST_FAILED'
+    const error = new Error(code)
+    error.code = code
     error.status = response.status
     for (const field of [
       'action',
@@ -47,10 +94,34 @@ export async function parseResponse(response) {
       'actualSequence',
       'recovery',
       'retryable',
+      'manualRetryable',
+      'nextAction',
       'retryAfter',
+      'incompleteReason',
+      'missingRequirements',
+      'taskVerification',
+      'attempts',
+      'partialText',
+      'artifactIds',
+      'deliveryArtifactIds',
+      'verifiedLocalFiles',
+      'retainedLocalFiles',
+      'iterations',
     ]) {
-      if (body?.error?.[field] !== undefined) error[field] = body.error[field]
+      const outerOwns = body && typeof body === 'object' && Object.hasOwn(body, field)
+      const nestedOwns = body?.error && typeof body.error === 'object' && Object.hasOwn(body.error, field)
+      if (NESTED_DIAGNOSTIC_FALLBACK_FIELDS.has(field)) {
+        if (outerOwns && meaningfulFailureValue(body[field])) error[field] = body[field]
+        else if (nestedOwns) error[field] = body.error[field]
+        else if (outerOwns) error[field] = body[field]
+      } else if (outerOwns) error[field] = body[field]
+      else if (nestedOwns) error[field] = body.error[field]
     }
+    error.serverFailure = stableFailureRecord(
+      body?.error && typeof body.error === 'object'
+        ? body.error
+        : { code: error.code, status: error.status },
+    )
     const retryAfter = response.headers?.get?.('retry-after')
     if (retryAfter !== undefined && retryAfter !== null) error.retryAfter = retryAfter
     throw error
@@ -95,6 +166,32 @@ export function reconnectExhaustedError(attempts, cause) {
   const error = new Error(`Turn connection could not be restored after ${attempts} attempts`)
   error.code = 'TURN_RECONNECT_EXHAUSTED'
   error.cause = cause
+  if (cause && typeof cause === 'object') {
+    for (const field of [
+      'serverFailure',
+      'action',
+      'status',
+      'expectedSequence',
+      'actualSequence',
+      'recovery',
+      'retryable',
+      'manualRetryable',
+      'nextAction',
+      'retryAfter',
+      'incompleteReason',
+      'missingRequirements',
+      'taskVerification',
+      'attempts',
+      'partialText',
+      'artifactIds',
+      'deliveryArtifactIds',
+      'verifiedLocalFiles',
+      'retainedLocalFiles',
+      'iterations',
+    ]) {
+      if (cause[field] !== undefined) error[field] = cause[field]
+    }
+  }
   return error
 }
 
@@ -105,10 +202,24 @@ export function streamTruncatedError() {
 }
 
 function streamInterruptedError(event) {
-  const error = new Error(event?.payload?.message || 'Turn execution was interrupted and can be resumed')
-  error.code = event?.payload?.code || 'TURN_INTERRUPTED'
-  error.retryable = event?.payload?.retryable !== false
-  return error
+  return createTurnFailureError(event?.payload, { fallbackCode: 'TURN_INTERRUPTED' })
+}
+
+function streamFailureError(rawData) {
+  let payload
+  try {
+    payload = JSON.parse(rawData)
+  } catch {
+    payload = {}
+  }
+  payload = stableFailureRecord(payload)
+  const nested = payload?.error && typeof payload.error === 'object'
+    ? payload.error
+    : null
+  return createTurnFailureError(
+    nested ? { ...nested, ...payload, error: nested } : payload,
+    { fallbackCode: 'TURN_EVENT_STREAM_FAILED' },
+  )
 }
 
 function normalizeToolNames(names) {
@@ -175,12 +286,17 @@ export async function streamServerTurnEvents({
     buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done })
     const frames = buffer.split(/\r?\n\r?\n/)
     buffer = frames.pop() || ''
+    if (chunk.done && buffer.trim()) {
+      frames.push(buffer)
+      buffer = ''
+    }
     for (const rawFrame of frames) {
       const frame = parseSseFrame(rawFrame)
       if (frame?.eventType === 'turn_activity') {
         await onActivity?.(parseTurnActivity(JSON.parse(frame.data)))
         continue
       }
+      if (frame?.eventType === 'error') throw streamFailureError(frame.data)
       if (frame?.eventType !== 'turn_event') continue
       const event = parseTurnEventTransportPayload(JSON.parse(frame.data))
       await onEvent?.(event)
@@ -302,9 +418,31 @@ export function streamServerTurnEventsWebSocket({
         return
       }
       if (frame.type === 'error') {
-        const error = new Error(frame.message || 'WebSocket turn subscription failed')
-        error.code = String(frame.code || 'TURN_WEBSOCKET_ERROR')
-        error.action = frame.action
+        const code = String(frame.code || 'TURN_WEBSOCKET_ERROR')
+        const error = new Error(code)
+        error.code = code
+        for (const field of [
+          'action',
+          'status',
+          'expectedSequence',
+          'actualSequence',
+          'retryable',
+          'manualRetryable',
+          'incompleteReason',
+          'nextAction',
+          'missingRequirements',
+          'taskVerification',
+          'attempts',
+          'recovery',
+          'partialText',
+          'artifactIds',
+          'deliveryArtifactIds',
+          'verifiedLocalFiles',
+          'retainedLocalFiles',
+          'iterations',
+        ]) {
+          if (frame[field] !== undefined) error[field] = frame[field]
+        }
         finishAfterPendingEvents(error)
         return
       }

@@ -1,6 +1,6 @@
 import { appendJobEvent, approveJobPlan } from './jobStore.js'
 import { getApprovalMode } from './approvalSettingsStore.js'
-import { normalizeStructuredPlanSteps } from './jobWorkflow.js'
+import { buildJobOutcomeDiagnostics, normalizeStructuredPlanSteps } from './jobWorkflow.js'
 import {
   buildJobPlanProposalPayload,
   computeJobPlanDigest,
@@ -57,14 +57,22 @@ function normalizeReplacementSteps(job, steps, createStepId) {
 }
 
 function appendRefreshedProposal({ jobId, job, authorization, message, emit }) {
+  const diagnostics = buildJobOutcomeDiagnostics(job, {
+    reason: authorization.reason || 'plan_approval_required',
+    nextAction: 'approve_plan',
+    status: 'waiting',
+  })
   const event = appendJobEvent({
     jobId,
     type: 'plan_proposed',
     message,
-    payload: buildJobPlanProposalPayload(job, {
-      reason: authorization.reason,
-      supersedesProposalEventId: authorization.proposal?.id || null,
-    }),
+    payload: {
+      ...buildJobPlanProposalPayload(job, {
+        reason: authorization.reason,
+        supersedesProposalEventId: authorization.proposal?.id || null,
+      }),
+      ...diagnostics,
+    },
   })
   emit(event)
   return event

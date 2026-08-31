@@ -23,7 +23,7 @@ import {
   isProtectedExecutionEnvKey,
   sanitizeChildEnv,
 } from '../utils/sensitiveEnv.js'
-import { processExecutionBoundaryFailure } from '../utils/processExecutionFailure.js'
+import { infrastructureFailureFields, processExecutionBoundaryFailure } from '../utils/processExecutionFailure.js'
 import {
   buildCodeExecutionEnv,
   codeExecutionFailureHint,
@@ -1137,7 +1137,7 @@ export async function bashExecTool({
     if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
     return {
       ok: false,
-      code: 'SHELL_SESSION_BOUNDARY_VIOLATION',
+      ...infrastructureFailureFields('SHELL_SESSION_BOUNDARY_VIOLATION'),
       error: r.error || '持久 Shell 当前目录越出授权根，会话已重置',
       stdout: r.stdout,
       stderr: r.stderr,
@@ -1180,7 +1180,7 @@ export async function bashExecTool({
     if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
     return {
       ok: false,
-      code: 'SHELL_SESSION_CRASHED',
+      ...infrastructureFailureFields('SHELL_SESSION_CRASHED'),
       exitCode: r.code,
       signal: r.signal,
       error: r.error || '持久 Shell 已退出；下次调用将自动重建',

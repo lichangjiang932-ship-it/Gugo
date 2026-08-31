@@ -1,31 +1,55 @@
 import { detectArtifactIntent, expectsFileArtifact } from './artifactIntent.js'
+import {
+  excludeVerifiedLocalFiles,
+  mergeLocalFileReceipts,
+} from './turnRecoveryProjection.js'
+import {
+  normalizeJobStringList as normalizeStringList,
+  normalizeTaskAcceptance as normalizeAcceptance,
+  verificationTextReportsFailure,
+} from './jobTaskAcceptance.js'
 
-const RUNNABLE_STEP_STATUSES = new Set(['queued', 'pending'])
+export {
+  buildPlanningBrief,
+  buildPriorStepsContext,
+  buildVerificationPrompt,
+  deriveJobProgress,
+  findNextRunnableStep,
+  normalizeJobCreationSteps,
+  normalizeStructuredPlanSteps,
+  resolveWorkflowState,
+  stepRequiresPlanApproval,
+  withStableStepIds,
+} from './jobWorkflowPlanning.js'
+export { evaluateTaskAcceptance, parseTaskEvaluation } from './jobTaskAcceptance.js'
 
-// 验证步骤自己说"没成"的信号。刻意不含"限制"——buildVerificationPrompt 就要求
-// 模型列出"仍存在的限制",那是正常输出,不该被判成失败。
-// verify 步骤的结论里出现这些词 = 模型自己承认没成。
-// ★ 注意:不能简单匹配「阻塞问题」「失败」这类裸词 —— verify 的提示词本身会把
-//   完成标准原样回显(「结果可直接使用且没有已知阻塞问题」),裸词匹配会把
-//   这句**否定式的验收标准**误判成失败,导致每个正常任务都被标「部分完成」。
-//   所以这里只匹配带否定语义的说法,并在匹配前剥掉回显的完成标准段落。
-const VERIFICATION_FAILURE = /(未通过|不通过|未能|没能|无法(?:完成|修复|运行|验证)|执行失败|构建失败|测试失败|验证失败|仍然?报错|没有(?:完成|修复|通过)|未完成|尚未(?:修复|完成)|仍(?:然)?存在阻塞|仍有错误|not\s+(?:complete|completed|fixed|passing|working)|tests?\s+failed|build\s+failed)/i
-const VERIFICATION_NEEDS_USER = /(需要(?:用户|你)(?:提供|补充|确认|选择|授权)|等待(?:用户|你)|缺少(?:凭据|授权|输入|信息)|needs?\s+(?:user|input|approval)|waiting\s+for\s+(?:user|approval))/i
-const VERIFICATION_BLOCKED = /(外部(?:服务|依赖).*?(?:不可用|阻塞)|权限不足|环境(?:不可用|缺失)|无法在当前环境|blocked\s+by|environment\s+(?:is\s+)?unavailable|missing\s+(?:dependency|credential|permission))/i
-const ACCEPTANCE_VERDICTS = new Set(['pass', 'fixable', 'blocked', 'needs_user'])
+const ARTIFACT_DELIVERABLE_LABELS = Object.freeze({
+  pptx: 'PPTX 演示文稿',
+  docx: 'DOCX 文档',
+  xlsx: 'XLSX 工作簿',
+  html: 'HTML 页面',
+  pdf: 'PDF 文档',
+  image: '图片',
+})
 
-/** 剥掉 verify 提示词回显的「完成标准」清单,只对模型真正的结论做失败判定。 */
-function stripEchoedAcceptance(text = '') {
-  return String(text || '')
-    .replace(/完成标准：[\s\S]*?(?=\n\s*\n|$)/g, '')
-    .replace(/现在进入验证与修正阶段。[^\n]*/g, '')
-    .replace(/原始任务：[^\n]*/g, '')
-    .replace(/能运行测试、构建、格式检查或读取产物时[^\n]*/g, '')
-    .replace(/发现任务范围内且可修复的问题就直接修正并重新验证[^\n]*/g, '')
-    .replace(/最后给出简短验收结论[^\n]*/g, '')
-    .replace(/结尾必须单独输出一行\s*<task_evaluation>[^\n]*/gi, '')
-    .replace(/只有所有完成标准均有证据时才能使用 pass[^\n]*/gi, '')
+function expectedArtifactTypes(prompt = '') {
+  const intent = detectArtifactIntent(prompt)
+  return Object.keys(ARTIFACT_DELIVERABLE_LABELS).filter((type) => intent[type] === true)
 }
+
+function describeDeliverable(type) {
+  return ARTIFACT_DELIVERABLE_LABELS[type] || String(type || '').toUpperCase()
+}
+
+const COMPLETED_TASK_VERIFICATION_STATUSES = new Set([
+  'pass',
+  'passed',
+  'success',
+  'succeeded',
+  'complete',
+  'completed',
+  'ok',
+])
 
 function cleanText(value) {
   return typeof value === 'string' ? value.trim() : ''
@@ -35,321 +59,74 @@ function stepText(step) {
   return cleanText(step?.output?.text) || cleanText(step?.output?.summary)
 }
 
-export function deriveJobProgress(steps = []) {
-  if (!steps.length) return 0
-  const completed = steps.filter((step) => step.status === 'completed').length
-  return Math.round((completed / steps.length) * 100)
+function stepDiagnosticLabel(step) {
+  return cleanText(step?.title) || cleanText(step?.id) || cleanText(step?.kind) || '未命名步骤'
 }
 
-export function withStableStepIds(jobId, steps = []) {
-  const seen = new Set()
-  return steps.map((step, index) => {
-    const base = cleanText(step?.id) || `step-${index + 1}`
-    let id = `${jobId}:${base}`
-    let suffix = 2
-    while (seen.has(id)) {
-      id = `${jobId}:${base}-${suffix}`
-      suffix += 1
-    }
-    seen.add(id)
-    return {
-      ...step,
-      id,
-      status: RUNNABLE_STEP_STATUSES.has(step?.status) ? 'queued' : (step?.status || 'queued'),
-      sortOrder: index,
-    }
+function incompleteTaskVerificationChecks(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  return (Array.isArray(value.checks) ? value.checks : []).filter((check) => {
+    if (!check || typeof check !== 'object' || Array.isArray(check)) return true
+    const status = cleanText(check.status).toLowerCase()
+    return !COMPLETED_TASK_VERIFICATION_STATUSES.has(status)
   })
 }
 
-export function normalizeStructuredPlanSteps(steps = []) {
-  if (!Array.isArray(steps) || !steps.length) {
-    throw new Error('计划至少需要一个步骤')
-  }
-  const normalized = steps.map((step, index) => {
-    const sourceInput = step?.input && typeof step.input === 'object' && !Array.isArray(step.input)
-      ? step.input
-      : {}
-    const acceptance = step?.acceptance ?? sourceInput.acceptance ?? ''
-    const verification = step?.verification ?? sourceInput.verification ?? []
-    return {
-      id: cleanText(step?.id) || `step-${index + 1}`,
-      title: cleanText(step?.title) || `步骤 ${index + 1}`,
-      kind: cleanText(step?.kind) || 'execute',
-      status: 'queued',
-      parentStepId: step?.parentStepId || null,
-      input: {
-        ...sourceInput,
-        description: cleanText(step?.description) || cleanText(sourceInput.description),
-        action: cleanText(step?.action) || cleanText(sourceInput.action),
-        risk: cleanText(step?.risk) || cleanText(sourceInput.risk) || 'low',
-        targets: Array.isArray(step?.targets)
-          ? step.targets
-          : (Array.isArray(sourceInput.targets) ? sourceInput.targets : []),
-        acceptance: Array.isArray(acceptance) ? acceptance : cleanText(acceptance),
-        verification: Array.isArray(verification) ? verification : [],
-      },
-    }
-  })
-  const acceptance = normalized.find((step) => (
-    Array.isArray(step.input?.acceptance) && step.input.acceptance.length > 0
-  ))?.input.acceptance || []
-  const workSteps = normalized.filter((step) => !['verify', 'finalize'].includes(step.kind))
-  const verifyStep = normalized.find((step) => step.kind === 'verify') || {
-    id: 'verify',
-    title: '验证结果并修正问题',
-    kind: 'verify',
-    status: 'queued',
-    parentStepId: null,
-    input: { acceptance },
-  }
-  const finalizeStep = normalized.find((step) => step.kind === 'finalize') || {
-    id: 'finalize',
-    title: '整理并交付结果',
-    kind: 'finalize',
-    status: 'queued',
-    parentStepId: null,
-    input: { acceptance },
-  }
-  return [...workSteps, verifyStep, finalizeStep]
-}
-
-export function normalizeJobCreationSteps(steps = [], { requirePlanApproval = false } = {}) {
-  const sourceSteps = requirePlanApproval === true
-    && !steps?.some((step) => step?.kind === 'plan')
-    ? [{ id: 'plan', title: '理解目标并制定执行计划', kind: 'plan' }, ...(steps || [])]
-    : steps
-  return normalizeStructuredPlanSteps(sourceSteps).map((step) => (
-    requirePlanApproval === true && step.kind === 'plan'
-      ? { ...step, input: { ...(step.input || {}), requirePlanApproval: true } }
-      : step
-  ))
-}
-
-export function stepRequiresPlanApproval(step, approvalMode = null) {
-  return step?.kind === 'plan'
-    && (step.input?.requirePlanApproval === true || approvalMode === 'plan')
-}
-
-export function findNextRunnableStep(steps = []) {
-  return steps.find((step) => RUNNABLE_STEP_STATUSES.has(step.status)) || null
-}
-
-export function resolveWorkflowState(steps = []) {
-  if (!steps.length) return { state: 'invalid', reason: '任务没有可执行步骤' }
-  const failed = steps.find((step) => step.status === 'failed')
-  if (failed) return { state: 'failed', reason: failed.error || `步骤“${failed.title}”执行失败` }
-  const rejectedAcceptance = steps.find((step) => (
-    step.kind === 'verify'
-    && step.output?.acceptance?.verdict
-    && step.output.acceptance.verdict !== 'pass'
-  ))
-  if (rejectedAcceptance) {
-    return {
-      state: 'failed',
-      reason: rejectedAcceptance.output.acceptance.summary || '任务未通过结构化验收',
-    }
-  }
-  const incompleteFinalization = steps.find((step) => (
-    step.kind === 'finalize' && step.output?.complete === false
-  ))
-  if (incompleteFinalization) {
-    return {
-      state: 'failed',
-      reason: incompleteFinalization.output?.summary || '任务最终交付未通过验收',
-    }
-  }
-  if (steps.every((step) => step.status === 'completed')) return { state: 'completed', reason: null }
-  const unresolved = steps.filter((step) => step.status !== 'completed')
-  return {
-    state: 'blocked',
-    reason: `仍有 ${unresolved.length} 个步骤未完成，但当前没有可执行步骤`,
-  }
-}
-
-export function buildPriorStepsContext(
-  steps = [],
-  currentStepId,
-  { perStepChars = 600, maxSteps = 8 } = {},
-) {
-  const currentIndex = steps.findIndex((step) => step.id === currentStepId)
-  const done = steps
-    .filter((step, index) => step.status === 'completed' && (currentIndex < 0 || index < currentIndex))
-    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-  if (!done.length) return ''
-
-  const shown = done.slice(-maxSteps)
-  const omitted = done.length - shown.length
-  const lines = [
-    '# 本任务已完成的步骤',
-    '基于这些结果继续，不要重复劳动；如果发现冲突，以用户原始目标和可验证事实为准。',
-    '',
-  ]
-  if (omitted > 0) lines.push(`（更早的 ${omitted} 个步骤已省略）`, '')
-  for (const step of shown) {
-    let text = stepText(step).replace(/\s+/g, ' ')
-    if (text.length > perStepChars) text = `${text.slice(0, perStepChars)}…（已截断）`
-    const artifacts = Array.isArray(step.output?.artifactIds) && step.output.artifactIds.length
-      ? ` [已生成 ${step.output.artifactIds.length} 个产物]`
-      : ''
-    lines.push(`## ${step.title || step.id}${artifacts}`)
-    lines.push(text || '（无文本输出）', '')
-  }
-  return lines.join('\n').trim()
-}
-
-export function buildPlanningBrief(job) {
-  const steps = Array.isArray(job?.steps) ? job.steps : []
-  const acceptance = steps.find((step) => step.kind === 'plan')?.input?.acceptance
-  const executionSteps = steps.filter((step) => !['plan', 'finalize'].includes(step.kind))
-  const lines = [
-    `目标：${job.prompt}`,
-    '',
-    '执行顺序：',
-    ...executionSteps.map((step, index) => `${index + 1}. ${step.title}`),
-  ]
-  if (Array.isArray(acceptance) && acceptance.length) {
-    lines.push('', '完成标准：', ...acceptance.map((item) => `- ${item}`))
-  }
-  return lines.join('\n')
-}
-
-export function buildVerificationPrompt(job, step) {
-  const acceptance = Array.isArray(step?.input?.acceptance) ? step.input.acceptance : []
-  const repair = step?.input?.repairContext
+function describeTaskVerificationCheck(check) {
+  if (!check || typeof check !== 'object' || Array.isArray(check)) return '无效的验证检查记录'
+  const kind = cleanText(check.kind) || 'check'
+  const cwd = cleanText(check.cwd)
+  const status = cleanText(check.status).toLowerCase() || 'unknown'
+  const code = cleanText(check.code).toUpperCase()
+  const diagnostic = cleanText(check.diagnostic)
+    || cleanText(check.message)
+    || cleanText(check.summary)
   return [
-    `原始任务：${job.prompt}`,
-    '',
-    '现在进入验证与修正阶段。检查此前产出是否真正满足任务，而不是只检查是否调用过工具。',
-    acceptance.length ? `完成标准：\n- ${acceptance.join('\n- ')}` : '',
-    repair ? `上一次验收未通过（修正轮次 ${step.input.repairAttempt || 1}）：\n${JSON.stringify(repair)}` : '',
-    '能运行测试、构建、格式检查或读取产物时，使用相应工具取得证据。',
-    '发现任务范围内且可修复的问题就直接修正并重新验证；不要改动任务范围外的用户内容。',
-    '最后给出简短验收结论，列出已执行的检查、结果以及仍存在的限制。',
-    '结尾必须单独输出一行 <task_evaluation>{"verdict":"pass|fixable|blocked|needs_user","summary":"简短结论","issues":["问题"],"evidence":["检查证据"]}</task_evaluation>。',
-    '只有所有完成标准均有证据时才能使用 pass；可在当前任务范围内继续修复用 fixable；外部依赖阻塞用 blocked；必须由用户补充信息或授权用 needs_user。',
-  ].filter(Boolean).join('\n')
+    `${kind}${cwd ? `@${cwd}` : ''}`,
+    `[${status}${code ? `/${code}` : ''}]`,
+    diagnostic ? `：${diagnostic.slice(0, 500)}` : '',
+  ].join('')
 }
 
-function normalizeStringList(value) {
-  return (Array.isArray(value) ? value : [])
-    .map((item) => cleanText(item))
-    .filter(Boolean)
-    .slice(0, 50)
-}
-
-function normalizeReviewer(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  return {
-    independent: value.independent === true,
-    mode: cleanText(value.mode).slice(0, 120) || 'unknown',
-    reviewerModel: cleanText(value.reviewerModel).slice(0, 512) || null,
-    workerModel: cleanText(value.workerModel).slice(0, 512) || null,
-    ...(cleanText(value.error) ? { error: cleanText(value.error).slice(0, 1_000) } : {}),
-  }
-}
-
-function normalizeReviewGuard(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const decision = cleanText(value.decision).toLowerCase()
-  if (!['pass', 'veto', 'error'].includes(decision)) return null
-  return {
-    pluginId: cleanText(value.pluginId).slice(0, 80) || 'unknown',
-    service: 'task-review-guard',
-    mode: 'veto_only',
-    decision,
-    ...(cleanText(value.error) ? { error: cleanText(value.error).slice(0, 120) } : {}),
-  }
-}
-
-function normalizeAcceptance(value, fallback = {}) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const verdict = cleanText(value.verdict).toLowerCase()
-  if (!ACCEPTANCE_VERDICTS.has(verdict)) return null
-  const issues = normalizeStringList(value.issues)
-  const evidence = normalizeStringList(value.evidence)
-  const reviewer = normalizeReviewer(value.reviewer || fallback.reviewer)
-  const guard = normalizeReviewGuard(value.guard || fallback.guard)
-  return {
-    verdict,
-    summary: cleanText(value.summary) || cleanText(fallback.summary) || (
-      verdict === 'pass' ? '任务已通过验收' : '任务尚未通过验收'
-    ),
-    issues,
-    evidence,
-    source: cleanText(value.source) || cleanText(fallback.source) || 'structured',
-    ...(reviewer ? { reviewer } : {}),
-    ...(guard ? { guard } : {}),
-  }
-}
-
-export function parseTaskEvaluation(text = '') {
-  const source = String(text || '')
-  const marker = source.match(/<task_evaluation>\s*({[\s\S]*?})\s*<\/task_evaluation>/i)
-  if (!marker) return null
+function evidenceIdentity(value) {
+  if (typeof value === 'string') return `text:${value.trim()}`
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  const semanticFields = ['type', 'toolCallId', 'command', 'artifactId', 'path', 'summary']
+  const semanticIdentity = semanticFields.map((field) => cleanText(value[field])).join('\u0000')
+  if (semanticIdentity.replaceAll('\u0000', '')) return `record:${semanticIdentity}`
   try {
-    return normalizeAcceptance(JSON.parse(marker[1]), { source: 'model' })
+    return Object.keys(value).length > 0 ? `record:${JSON.stringify(value)}` : ''
   } catch {
-    return null
+    return ''
   }
 }
 
-/**
- * Default TaskEvaluator SPI. A runtime plugin may replace this function via
- * createDefaultExecuteStep({ taskEvaluator }) without changing orchestration.
- */
-export function evaluateTaskAcceptance({ text = '', evidence = [] } = {}) {
-  const structured = parseTaskEvaluation(text)
-  if (structured) {
-    return {
-      ...structured,
-      evidence: structured.evidence.length ? structured.evidence : normalizeStringList(evidence),
+export function mergeJobEvidence(...sources) {
+  const evidence = []
+  const seen = new Set()
+  for (const source of sources) {
+    for (const item of Array.isArray(source) ? source : []) {
+      const value = typeof item === 'string' ? item.trim() : item
+      const identity = evidenceIdentity(value)
+      if (!identity || seen.has(identity)) continue
+      seen.add(identity)
+      evidence.push(value)
     }
   }
+  return evidence
+}
 
-  const conclusion = stripEchoedAcceptance(text)
-  const normalizedEvidence = normalizeStringList(evidence)
-  if (!cleanText(conclusion)) {
-    return {
-      verdict: 'blocked',
-      summary: '验证步骤没有返回可判定的验收结论',
-      issues: ['缺少验收结论'],
-      evidence: normalizedEvidence,
-      source: 'fallback',
-    }
-  }
-  if (VERIFICATION_NEEDS_USER.test(conclusion)) {
-    return {
-      verdict: 'needs_user',
-      summary: '任务需要用户补充信息或授权后才能继续',
-      issues: [cleanText(conclusion).slice(0, 500)],
-      evidence: normalizedEvidence,
-      source: 'fallback',
-    }
-  }
-  if (VERIFICATION_BLOCKED.test(conclusion)) {
-    return {
-      verdict: 'blocked',
-      summary: '任务被当前环境或外部依赖阻塞',
-      issues: [cleanText(conclusion).slice(0, 500)],
-      evidence: normalizedEvidence,
-      source: 'fallback',
-    }
-  }
-  if (VERIFICATION_FAILURE.test(conclusion)) {
-    return {
-      verdict: 'fixable',
-      summary: '验收发现仍可继续修正的问题',
-      issues: [cleanText(conclusion).slice(0, 500)],
-      evidence: normalizedEvidence,
-      source: 'fallback',
-    }
-  }
+export function normalizeJobLocalFileReceipts({
+  verifiedLocalFiles = [],
+  retainedLocalFiles = [],
+} = {}) {
+  const verified = mergeLocalFileReceipts(verifiedLocalFiles)
   return {
-    verdict: 'pass',
-    summary: '任务已通过验收',
-    issues: [],
-    evidence: normalizedEvidence.length ? normalizedEvidence : [cleanText(conclusion).slice(0, 1000)],
-    source: 'fallback',
+    verifiedLocalFiles: verified,
+    retainedLocalFiles: excludeVerifiedLocalFiles(
+      mergeLocalFileReceipts(retainedLocalFiles),
+      verified,
+    ),
   }
 }
 
@@ -380,12 +157,43 @@ export function buildFinalOutput(job) {
   const texts = resultSteps.map(stepText).filter(Boolean)
   const verification = steps.find((step) => step.kind === 'verify')
   const verificationText = stepText(verification)
-  const artifactIds = [...new Set([
-    ...steps.flatMap((step) => (
-      Array.isArray(step.output?.artifactIds) ? step.output.artifactIds : []
-    )),
-    ...(Array.isArray(job?.artifacts) ? job.artifacts.map((artifact) => artifact?.id) : []),
-  ].filter(Boolean))]
+  const evidence = mergeJobEvidence(
+    ...steps
+      .filter((step) => ['execute', 'batch_item', 'verify'].includes(step?.kind))
+      .map((step) => step?.output?.evidence),
+    verificationText ? [verificationText] : [],
+  )
+  // A tool result may report an artifact id before persistence succeeds, and
+  // plugin tools can return arbitrary ids. Only owned rows loaded with the job
+  // are durable, downloadable deliverables and may satisfy file acceptance.
+  const durableArtifacts = (Array.isArray(job?.artifacts) ? job.artifacts : [])
+    .filter((artifact) => artifact?.jobId === job?.id && artifact?.userId === job?.userId && artifact?.id)
+  const artifactIds = [...new Set(durableArtifacts.map((artifact) => artifact.id))]
+  const expectedDeliverables = expectedArtifactTypes(job?.prompt || '')
+  const deliveredTypes = new Set(
+    durableArtifacts.map((artifact) => String(artifact?.type || '').trim().toLowerCase()).filter(Boolean),
+  )
+  const completedDeliverables = expectedDeliverables.filter((type) => deliveredTypes.has(type))
+  const missingDeliverables = expectedDeliverables.filter((type) => !deliveredTypes.has(type))
+  const { verifiedLocalFiles, retainedLocalFiles } = normalizeJobLocalFileReceipts({
+    verifiedLocalFiles: mergeLocalFileReceipts(
+      ...steps.map((step) => step?.output?.verifiedLocalFiles),
+    ),
+    retainedLocalFiles: mergeLocalFileReceipts(
+      ...steps.map((step) => step?.output?.retainedLocalFiles),
+    ),
+  })
+  const missingRequirements = [...new Set(steps.flatMap((step) => (
+    normalizeStringList(step?.output?.missingRequirements)
+  )))]
+  const incompleteReason = [...steps]
+    .reverse()
+    .map((step) => cleanText(step?.output?.incompleteReason))
+    .find(Boolean) || null
+  const taskVerification = [...steps]
+    .reverse()
+    .map((step) => step?.output?.taskVerification)
+    .find((value) => value && typeof value === 'object' && !Array.isArray(value)) || null
 
   const issues = []
 
@@ -402,14 +210,56 @@ export function buildFinalOutput(job) {
   ))
   if (unfinished.length) issues.push(`${unfinished.length} 个步骤未走到完成状态`)
 
+  for (const step of steps) {
+    const output = step?.output
+    if (!output || typeof output !== 'object' || Array.isArray(output)) continue
+    const label = stepDiagnosticLabel(step)
+    const incompleteReason = cleanText(output.incompleteReason)
+    if (output.complete === false || incompleteReason) {
+      const reason = incompleteReason || cleanText(output.reason) || cleanText(output.summary)
+      issues.push(reason
+        ? `步骤“${label}”报告未完成：${reason.slice(0, 1_000)}`
+        : `步骤“${label}”报告未完成，但未提供具体原因`)
+    }
+
+    const missingRequirements = [...new Set(normalizeStringList(output.missingRequirements))]
+    if (missingRequirements.length) {
+      issues.push(`步骤“${label}”仍缺少完成条件：${missingRequirements.join('、')}`)
+    }
+
+    const incompleteChecks = incompleteTaskVerificationChecks(output.taskVerification)
+    if (incompleteChecks.length) {
+      const shownChecks = incompleteChecks.slice(0, 3).map(describeTaskVerificationCheck)
+      const omitted = incompleteChecks.length - shownChecks.length
+      issues.push(
+        `步骤“${label}”有 ${incompleteChecks.length} 项任务验证未通过或未完成：${shownChecks.join('；')}${omitted > 0 ? `；另有 ${omitted} 项` : ''}`,
+      )
+    }
+  }
+
+  if (retainedLocalFiles.length > 0) {
+    issues.push(`${retainedLocalFiles.length} 个已保存文件仍待验证`)
+  }
+
   const acceptance = normalizeAcceptance(verification?.output?.acceptance)
   if (acceptance && acceptance.verdict !== 'pass') {
     issues.push(acceptance.summary || '验证步骤未通过结构化验收')
-  } else if (!acceptance && verificationText && VERIFICATION_FAILURE.test(stripEchoedAcceptance(verificationText))) {
+  } else if (!acceptance && verificationText && verificationTextReportsFailure(verificationText)) {
     issues.push('验证步骤的结论包含未通过项')
   }
 
-  if (expectsFileArtifact(job?.prompt || '') && !artifactIds.length) {
+  if (missingDeliverables.length) {
+    const missing = missingDeliverables.map(describeDeliverable).join('、')
+    if (completedDeliverables.length) {
+      const completed = completedDeliverables.map(describeDeliverable).join('、')
+      issues.push(`文件产物仅部分交付：已完成 ${completed}；缺少 ${missing}`)
+    } else {
+      issues.push(`用户要求的文件产物未交付：缺少 ${missing}`)
+    }
+  } else if (expectsFileArtifact(job?.prompt || '') && !artifactIds.length) {
+    // Fail closed if the intent schema gains a new deliverable type before
+    // this projection is updated. A generic file request must never become a
+    // successful task merely because its type is not yet recognized here.
     issues.push('用户要求了可下载的文件产物，但本次没有生成任何产物')
   }
 
@@ -426,10 +276,297 @@ export function buildFinalOutput(job) {
   return {
     summary,
     text,
-    evidence: verificationText ? [verificationText] : [],
+    evidence,
     artifactIds,
+    completedDeliverables,
+    missingDeliverables,
+    incompleteReason,
+    missingRequirements,
+    taskVerification,
+    verifiedLocalFiles,
+    retainedLocalFiles,
     complete,
     issues,
     acceptance: acceptance || null,
+  }
+}
+
+export function persistedJobOutcomeFields(output) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return {}
+  const hasVerifiedLocalFiles = Object.hasOwn(output, 'verifiedLocalFiles')
+  const hasRetainedLocalFiles = Object.hasOwn(output, 'retainedLocalFiles')
+  const localFiles = normalizeJobLocalFileReceipts({
+    verifiedLocalFiles: output.verifiedLocalFiles,
+    retainedLocalFiles: output.retainedLocalFiles,
+  })
+  return {
+    ...(typeof output.complete === 'boolean' ? { complete: output.complete } : {}),
+    ...(String(output.reason || '').trim() ? { reason: String(output.reason).trim() } : {}),
+    ...(String(output.incompleteReason || '').trim()
+      ? { incompleteReason: String(output.incompleteReason).trim() }
+      : {}),
+    ...(Array.isArray(output.missingRequirements)
+      ? { missingRequirements: output.missingRequirements }
+      : {}),
+    ...(output.taskVerification && typeof output.taskVerification === 'object'
+      && !Array.isArray(output.taskVerification)
+      ? { taskVerification: output.taskVerification }
+      : {}),
+    ...(hasVerifiedLocalFiles ? { verifiedLocalFiles: localFiles.verifiedLocalFiles } : {}),
+    ...(hasRetainedLocalFiles ? { retainedLocalFiles: localFiles.retainedLocalFiles } : {}),
+    ...(typeof output.retryable === 'boolean' ? { retryable: output.retryable } : {}),
+    ...(typeof output.manualRetryable === 'boolean'
+      ? { manualRetryable: output.manualRetryable }
+      : {}),
+    ...(Array.isArray(output.artifactIds) ? { artifactIds: output.artifactIds } : {}),
+    ...(Array.isArray(output.completedDeliverables)
+      ? { completedDeliverables: output.completedDeliverables }
+      : {}),
+    ...(Array.isArray(output.missingDeliverables)
+      ? { missingDeliverables: output.missingDeliverables }
+      : {}),
+    ...(Array.isArray(output.issues) ? { issues: output.issues } : {}),
+    ...(String(output.nextAction || '').trim()
+      ? { nextAction: String(output.nextAction).trim() }
+      : {}),
+  }
+}
+
+const PERSISTED_JOB_OUTCOME_LIST_FIELDS = new Set([
+  'missingRequirements',
+  'verifiedLocalFiles',
+  'retainedLocalFiles',
+  'artifactIds',
+  'completedDeliverables',
+  'missingDeliverables',
+  'issues',
+])
+
+function mergeTaskVerificationDetails(current, incoming) {
+  const previous = current && typeof current === 'object' && !Array.isArray(current)
+    ? current
+    : {}
+  const next = incoming && typeof incoming === 'object' && !Array.isArray(incoming)
+    ? incoming
+    : null
+  if (!next || Object.keys(next).length === 0) {
+    return Object.keys(previous).length > 0 ? previous : null
+  }
+  const merged = { ...previous }
+  for (const [field, value] of Object.entries(next)) {
+    if (Array.isArray(value)) {
+      if (value.length > 0 || !Array.isArray(previous[field])) {
+        merged[field] = mergeJobEvidence(previous[field], value)
+      }
+      continue
+    }
+    if (value && typeof value === 'object') {
+      if (Object.keys(value).length > 0) merged[field] = value
+      continue
+    }
+    if (value !== undefined && value !== null && value !== '') merged[field] = value
+  }
+  return Object.keys(merged).length > 0 ? merged : null
+}
+
+/**
+ * Merge durable outcome snapshots without allowing a later sparse/empty
+ * projection to erase diagnostics already written by an earlier boundary.
+ */
+export function mergePersistedJobOutcomeFields(...outputs) {
+  const merged = {}
+  const observedLists = new Set()
+  for (const output of outputs) {
+    const fields = persistedJobOutcomeFields(output)
+    for (const [field, value] of Object.entries(fields)) {
+      if (PERSISTED_JOB_OUTCOME_LIST_FIELDS.has(field) && Array.isArray(value)) {
+        observedLists.add(field)
+        if (value.length > 0) merged[field] = mergeJobEvidence(merged[field], value)
+        continue
+      }
+      if (field === 'taskVerification') {
+        const taskVerification = mergeTaskVerificationDetails(merged.taskVerification, value)
+        if (taskVerification) merged.taskVerification = taskVerification
+        continue
+      }
+      if (value && typeof value === 'object') {
+        if (Object.keys(value).length > 0) merged[field] = value
+        continue
+      }
+      if (value !== undefined && value !== null && value !== '') merged[field] = value
+    }
+  }
+  for (const field of observedLists) {
+    if (!Array.isArray(merged[field])) merged[field] = []
+  }
+  const localFiles = normalizeJobLocalFileReceipts(merged)
+  if (observedLists.has('verifiedLocalFiles')) merged.verifiedLocalFiles = localFiles.verifiedLocalFiles
+  if (observedLists.has('retainedLocalFiles')) merged.retainedLocalFiles = localFiles.retainedLocalFiles
+  return merged
+}
+
+export function clearResumedJobOutcomeDiagnostics(output) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return output
+  const resumed = { ...output }
+  for (const key of [
+    'status',
+    'complete',
+    'error',
+    'reason',
+    'incompleteReason',
+    'nextAction',
+    'missingRequirements',
+    'taskVerification',
+    'retryable',
+    'manualRetryable',
+    'missingDeliverables',
+    'issues',
+    'acceptance',
+    'repairAttempts',
+  ]) delete resumed[key]
+  const localFiles = normalizeJobLocalFileReceipts({
+    verifiedLocalFiles: resumed.verifiedLocalFiles,
+    retainedLocalFiles: resumed.retainedLocalFiles,
+  })
+  if (Object.hasOwn(resumed, 'verifiedLocalFiles')) {
+    resumed.verifiedLocalFiles = localFiles.verifiedLocalFiles
+  }
+  if (Object.hasOwn(resumed, 'retainedLocalFiles')) {
+    resumed.retainedLocalFiles = localFiles.retainedLocalFiles
+  }
+  return resumed
+}
+
+export function clearCompletedJobOutcomeDiagnostics(output) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return output
+  const completed = { ...output }
+  for (const key of [
+    'status',
+    'error',
+    'reason',
+    'incompleteReason',
+    'nextAction',
+    'missingRequirements',
+    'retryable',
+    'manualRetryable',
+    'missingDeliverables',
+    'issues',
+  ]) delete completed[key]
+  if (completed.complete === false) delete completed.complete
+  const localFiles = normalizeJobLocalFileReceipts({
+    verifiedLocalFiles: completed.verifiedLocalFiles,
+    retainedLocalFiles: completed.retainedLocalFiles,
+  })
+  if (Object.hasOwn(completed, 'verifiedLocalFiles')) {
+    completed.verifiedLocalFiles = localFiles.verifiedLocalFiles
+  }
+  if (Object.hasOwn(completed, 'retainedLocalFiles')) {
+    completed.retainedLocalFiles = localFiles.retainedLocalFiles
+  }
+  return completed
+}
+
+export function buildJobOutcomeDiagnostics(job, {
+  reason = null,
+  nextAction = null,
+  status = 'failed',
+} = {}) {
+  const delivery = buildFinalOutput(job)
+  const persistedDiagnostics = mergePersistedJobOutcomeFields(
+    ...(Array.isArray(job?.steps) ? job.steps : []).map((step) => step?.output),
+  )
+  const carriedDiagnostics = {}
+  const carryFields = [
+    'incompleteReason',
+    'missingRequirements',
+    'taskVerification',
+    'verifiedLocalFiles',
+    'retainedLocalFiles',
+    'retryable',
+    'manualRetryable',
+  ]
+  for (const field of carryFields) {
+    const value = persistedDiagnostics[field]
+    const meaningful = Array.isArray(value)
+      ? value.length > 0
+      : value && typeof value === 'object'
+        ? Object.keys(value).length > 0
+        : value !== undefined && value !== null && value !== ''
+    if (meaningful) carriedDiagnostics[field] = value
+  }
+  const localFiles = normalizeJobLocalFileReceipts({
+    verifiedLocalFiles: carriedDiagnostics.verifiedLocalFiles,
+    retainedLocalFiles: carriedDiagnostics.retainedLocalFiles,
+  })
+  carriedDiagnostics.verifiedLocalFiles = localFiles.verifiedLocalFiles
+  carriedDiagnostics.retainedLocalFiles = localFiles.retainedLocalFiles
+  const normalizedReason = String(reason || '').trim().slice(0, 2_000)
+  const normalizedNextAction = String(nextAction || '').trim().slice(0, 80)
+  const normalizedStatus = ['failed', 'cancelled', 'waiting', 'awaiting_approval'].includes(status)
+    ? status
+    : 'failed'
+  const genericReasons = new Set(['任务未完成', '任务未全部完成', 'task incomplete'])
+  const deliveryReason = String(delivery.issues?.[0] || delivery.summary || '').trim().slice(0, 2_000)
+  const fallbackReason = {
+    awaiting_approval: 'The job is waiting for a required tool approval.',
+    cancelled: 'The job was cancelled before all requested work completed.',
+    failed: 'The job stopped before all requested work completed.',
+    waiting: 'The job is waiting for required user input.',
+  }[normalizedStatus]
+  const effectiveReason = (normalizedReason && !genericReasons.has(normalizedReason.toLowerCase())
+    ? normalizedReason
+    : '')
+    || (deliveryReason && !genericReasons.has(deliveryReason.toLowerCase()) ? deliveryReason : '')
+    || String(carriedDiagnostics.incompleteReason || '').trim().slice(0, 2_000)
+    || fallbackReason
+  const rawIncompleteReason = String(
+    carriedDiagnostics.incompleteReason || normalizedReason || '',
+  ).trim().toLowerCase()
+  const incompleteReason = /^[a-z][a-z0-9_]{1,95}$/u.test(rawIncompleteReason)
+    ? rawIncompleteReason
+    : {
+        awaiting_approval: 'job_approval_required',
+        cancelled: 'job_cancelled',
+        failed: 'job_execution_incomplete',
+        waiting: 'job_waiting_for_input',
+      }[normalizedStatus]
+  const inferredMissingRequirements = {
+    awaiting_approval: ['approval_decision'],
+    cancelled: ['remaining_task_steps'],
+    failed: ['remaining_task_steps'],
+    waiting: ['user_input'],
+  }[normalizedStatus]
+  const issues = [...new Set([
+    ...(Array.isArray(delivery.issues) ? delivery.issues : []),
+    effectiveReason,
+  ].map((value) => String(value || '').trim()).filter(Boolean))]
+  return {
+    ...carriedDiagnostics,
+    status: normalizedStatus,
+    complete: false,
+    error: ['failed', 'cancelled'].includes(normalizedStatus) ? effectiveReason : null,
+    reason: effectiveReason,
+    incompleteReason,
+    missingRequirements: Array.isArray(carriedDiagnostics.missingRequirements)
+      && carriedDiagnostics.missingRequirements.length > 0
+      ? carriedDiagnostics.missingRequirements
+      : inferredMissingRequirements,
+    taskVerification: carriedDiagnostics.taskVerification || null,
+    verifiedLocalFiles: Array.isArray(carriedDiagnostics.verifiedLocalFiles)
+      ? carriedDiagnostics.verifiedLocalFiles
+      : [],
+    retainedLocalFiles: Array.isArray(carriedDiagnostics.retainedLocalFiles)
+      ? carriedDiagnostics.retainedLocalFiles
+      : [],
+    nextAction: normalizedNextAction || (normalizedStatus === 'waiting' ? 'provide_input' : 'retry_job'),
+    artifactIds: Array.isArray(delivery.artifactIds) ? delivery.artifactIds : [],
+    completedDeliverables: Array.isArray(delivery.completedDeliverables)
+      ? delivery.completedDeliverables
+      : [],
+    missingDeliverables: Array.isArray(delivery.missingDeliverables)
+      ? delivery.missingDeliverables
+      : [],
+    issues,
+    ...(delivery.acceptance ? { acceptance: delivery.acceptance } : {}),
   }
 }

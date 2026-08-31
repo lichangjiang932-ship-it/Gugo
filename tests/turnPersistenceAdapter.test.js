@@ -43,14 +43,16 @@ import {
   upsertSession,
 } from '../server/services/sessionStore.js'
 import {
-  appendTurnEvent,
-  appendTurnEvents,
   getLastTurnEvent,
   listTurnEvents,
   recordTurnEventWriteFailure,
   resolveTurnSession,
   verifyTurnEventCommit,
 } from '../server/services/turnEventStore.js'
+import {
+  appendFencedTurnEvent,
+  appendFencedTurnEvents,
+} from '../server/services/turnFencedEventStore.js'
 import {
   deleteTurnCheckpoint,
   getTurnCheckpoint,
@@ -418,45 +420,47 @@ test('explicit host activation binds the distribution SQLite persistence adapter
     turnPersistenceAdapter: SQLITE_TURN_PERSISTENCE_ADAPTER,
     subagentRunPersistenceAdapter: TEST_SUBAGENT_RUN_PERSISTENCE_PORT,
   })
-  await runtime.start().ready
-  const engine = getTurnEngine()
+  try {
+    await runtime.start().ready
+    const engine = getTurnEngine()
 
-  assert.equal(getTurnPersistenceAdapterStatus().adapterId, SQLITE_TURN_PERSISTENCE_ADAPTER_ID)
-  assert.equal(Object.isFrozen(engine.persistence), true)
-  assert.equal(engine.persistence.adapterId, SQLITE_TURN_PERSISTENCE_ADAPTER_ID)
-  assert.strictEqual(engine.persistence.session.getSession, getSession)
-  assert.strictEqual(engine.deps.readSession, getSession)
-  assert.strictEqual(engine.deps.sessionIdOccupied, isSessionIdOccupied)
-  assert.strictEqual(engine.deps.claimSession, claimLocalChatSession)
-  assert.strictEqual(engine.deps.writeSession, upsertSession)
-  assert.strictEqual(engine.deps.readMessages, listMessages)
-  assert.strictEqual(engine.deps.readPreviousUserMessage, getPreviousUserMessage)
-  assert.strictEqual(engine.deps.writeMessage, upsertMessage)
-  assert.strictEqual(engine.deps.removeMessage, deleteMessage)
-  assert.strictEqual(engine.deps.appendEvent, appendTurnEvent)
-  assert.strictEqual(engine.deps.lastEvent, getLastTurnEvent)
-  assert.strictEqual(engine.deps.replayEvents, listTurnEvents)
-  assert.strictEqual(engine.deps.recordEventWriteFailure, recordTurnEventWriteFailure)
-  assert.strictEqual(engine.deps.verifyEventCommit, verifyTurnEventCommit)
-  assert.strictEqual(SQLITE_TURN_PERSISTENCE_ADAPTER.eventLog.resolveTurnSession, resolveTurnSession)
-  assert.deepEqual(engine.deps.runtimeCore.checkpoint.load({}), getTurnCheckpoint({}))
-  assert.strictEqual(SQLITE_TURN_PERSISTENCE_ADAPTER.eventLog.appendTurnEvents, appendTurnEvents)
-  assert.strictEqual(SQLITE_TURN_PERSISTENCE_ADAPTER.eventLog.saveTurnCheckpoint, saveTurnCheckpoint)
-  assert.strictEqual(SQLITE_TURN_PERSISTENCE_ADAPTER.eventLog.deleteTurnCheckpoint, deleteTurnCheckpoint)
-  assert.strictEqual(
-    engine.deps.readPendingModelRequest,
-    SQLITE_TURN_PERSISTENCE_ADAPTER.modelRequestRecovery.getPendingModelRequestRecovery,
-  )
-  assert.strictEqual(
-    engine.deps.readModelRequestResolution,
-    SQLITE_TURN_PERSISTENCE_ADAPTER.modelRequestRecovery.readModelRequestRecoveryResolution,
-  )
-  assert.strictEqual(
-    engine.deps.commitPendingModelRequest,
-    SQLITE_TURN_PERSISTENCE_ADAPTER.modelRequestRecovery.resolvePendingModelRequest,
-  )
-
-  await runtime.stop()
+    assert.equal(getTurnPersistenceAdapterStatus().adapterId, SQLITE_TURN_PERSISTENCE_ADAPTER_ID)
+    assert.equal(Object.isFrozen(engine.persistence), true)
+    assert.equal(engine.persistence.adapterId, SQLITE_TURN_PERSISTENCE_ADAPTER_ID)
+    assert.strictEqual(engine.persistence.session.getSession, getSession)
+    assert.strictEqual(engine.deps.readSession, getSession)
+    assert.strictEqual(engine.deps.sessionIdOccupied, isSessionIdOccupied)
+    assert.strictEqual(engine.deps.claimSession, claimLocalChatSession)
+    assert.strictEqual(engine.deps.writeSession, upsertSession)
+    assert.strictEqual(engine.deps.readMessages, listMessages)
+    assert.strictEqual(engine.deps.readPreviousUserMessage, getPreviousUserMessage)
+    assert.strictEqual(engine.deps.writeMessage, upsertMessage)
+    assert.strictEqual(engine.deps.removeMessage, deleteMessage)
+    assert.strictEqual(engine.deps.appendEvent, appendFencedTurnEvent)
+    assert.strictEqual(engine.deps.lastEvent, getLastTurnEvent)
+    assert.strictEqual(engine.deps.replayEvents, listTurnEvents)
+    assert.strictEqual(engine.deps.recordEventWriteFailure, recordTurnEventWriteFailure)
+    assert.strictEqual(engine.deps.verifyEventCommit, verifyTurnEventCommit)
+    assert.strictEqual(SQLITE_TURN_PERSISTENCE_ADAPTER.eventLog.resolveTurnSession, resolveTurnSession)
+    assert.deepEqual(engine.deps.runtimeCore.checkpoint.load({}), getTurnCheckpoint({}))
+    assert.strictEqual(SQLITE_TURN_PERSISTENCE_ADAPTER.eventLog.appendTurnEvents, appendFencedTurnEvents)
+    assert.strictEqual(SQLITE_TURN_PERSISTENCE_ADAPTER.eventLog.saveTurnCheckpoint, saveTurnCheckpoint)
+    assert.strictEqual(SQLITE_TURN_PERSISTENCE_ADAPTER.eventLog.deleteTurnCheckpoint, deleteTurnCheckpoint)
+    assert.strictEqual(
+      engine.deps.readPendingModelRequest,
+      SQLITE_TURN_PERSISTENCE_ADAPTER.modelRequestRecovery.getPendingModelRequestRecovery,
+    )
+    assert.strictEqual(
+      engine.deps.readModelRequestResolution,
+      SQLITE_TURN_PERSISTENCE_ADAPTER.modelRequestRecovery.readModelRequestRecoveryResolution,
+    )
+    assert.strictEqual(
+      engine.deps.commitPendingModelRequest,
+      SQLITE_TURN_PERSISTENCE_ADAPTER.modelRequestRecovery.resolvePendingModelRequest,
+    )
+  } finally {
+    await runtime.stop()
+  }
   assert.equal(getTurnPersistenceAdapterStatus().configured, false)
 })
 

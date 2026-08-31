@@ -45,15 +45,23 @@ function authoritativeCommittedEntries(batch, result) {
   return entries
 }
 
-function terminalFenceError(error) {
+const TURN_EVENT_FENCE_CODES = new Set(['TURN_ALREADY_TERMINAL', 'TURN_EXECUTION_LEASE_STALE'])
+const STALE_EXECUTION_LEASE_MESSAGE = 'turn execution lease is missing, expired, or has been superseded'
+
+export function findTurnEventFenceError(error) {
   const seen = new Set()
   let current = error
   for (let depth = 0; current && depth < 8 && !seen.has(current); depth += 1) {
-    if (String(current?.code || '').trim().toUpperCase() === 'TURN_ALREADY_TERMINAL') return current
+    if (TURN_EVENT_FENCE_CODES.has(String(current?.code || '').trim().toUpperCase())) return current
     seen.add(current)
     current = current?.cause
   }
   return null
+}
+
+export function isTurnEventFenceFailureRecord(value) {
+  return !!findTurnEventFenceError(value?.error || value)
+    || String(value?.error_message || value?.errorMessage || '').includes(STALE_EXECUTION_LEASE_MESSAGE)
 }
 
 function batchFailureMetadata(batch) {
@@ -238,7 +246,7 @@ export function createEventWriteBehind({
     // generation must not leapfrog it. The next explicit flush observes and
     // clears the generation failure before any new generation can be written.
     if (barrierFailure) {
-      if (terminalFenceError(barrierFailure)) {
+      if (findTurnEventFenceError(barrierFailure)) {
         barrierFailure.include(batch, { blocked: true })
         return { ok: false, error: barrierFailure, attempts: 0, blocked: true }
       }
@@ -255,7 +263,7 @@ export function createEventWriteBehind({
         return { ok: true, result, attempts: attempt }
       } catch (error) {
         lastError = error
-        const fence = terminalFenceError(error)
+        const fence = findTurnEventFenceError(error)
         if (fence) {
           const failedAt = Math.max(0, Math.floor(Number(now()) || Date.now()))
           stats.failedEvents += batch.length

@@ -1,5 +1,7 @@
 import crypto from 'node:crypto'
 import { getDb } from '../db.js'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
+import { optionalSideEffectText as optionalText } from './sideEffectExecutionScope.js'
 
 export const DURABLE_SIDE_EFFECT_TOOL_NAMES = new Set([
   'write_file',
@@ -25,6 +27,19 @@ const DEFAULT_RESOLVED_RETENTION_DAYS = 90
 const DEFAULT_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000
 const TERMINAL_JOB_STATUSES = Object.freeze(['completed', 'failed', 'cancelled'])
 const TERMINAL_TURN_EVENT_TYPES = Object.freeze(['turn.completed', 'turn.cancelled', 'turn.failed'])
+
+function storedTurnEventIsResolved(type, payloadJson) {
+  if (type === 'turn.cancelled' || type === 'turn.failed') return true
+  if (type !== 'turn.completed') return false
+  try {
+    return isSuccessfulTurnCompletedEvent({
+      type,
+      payload: JSON.parse(payloadJson),
+    })
+  } catch {
+    return false
+  }
+}
 
 // These fields are sufficient to reconnect a replayed tool result to managed
 // artifacts, verified local outputs, and mutation verification. Large stdout,
@@ -210,43 +225,9 @@ function requiredText(value, name, maxLength = 500) {
   return normalized
 }
 
-function optionalText(value, maxLength = 500) {
-  const normalized = String(value || '').trim().slice(0, maxLength)
-  return normalized || null
-}
-
-export function createSideEffectScope({ job, step, approvalOrigin, approvalSessionId } = {}) {
-  const ownerId = requiredText(job?.userId, 'ownerId')
-  const jobId = requiredText(job?.id, 'job.id')
-  const stepId = requiredText(step?.id, 'step.id')
-  const availableSessionId = optionalText(approvalSessionId || job?.sessionId)
-  // Production chat entry points declare approvalOrigin='chat' and must always
-  // provide a real session identity. Lower-level Loop callers may label a job as
-  // chat-originated without carrying chat transport context; keep those calls
-  // durable under their explicit job/step identity instead of disabling the
-  // ledger or inventing a shared session.
-  if (approvalOrigin === 'chat' || (job?.origin === 'chat' && availableSessionId)) {
-    const sessionId = requiredText(availableSessionId, 'sessionId')
-    return {
-      ownerId,
-      kind: 'turn',
-      scopeKey: JSON.stringify(['turn', sessionId, jobId]),
-      sessionId,
-      turnId: jobId,
-      jobId: null,
-      stepId,
-    }
-  }
-  return {
-    ownerId,
-    kind: 'job',
-    scopeKey: JSON.stringify(['job', jobId, stepId]),
-    sessionId: optionalText(job?.sessionId),
-    turnId: null,
-    jobId,
-    stepId,
-  }
-}
+// Scope construction remains independent from the SQL-backed ledger transitions.
+// Re-export it here to preserve the ledger's public compatibility surface.
+export { createSideEffectScope } from './sideEffectExecutionScope.js'
 
 function normalizeIdentity({ scope, effectKind = 'tool', toolCallId, idempotencyKey, toolName, args } = {}) {
   if (!scope || !['turn', 'job', 'request'].includes(scope.kind)) throw new TypeError('valid side-effect scope is required')
@@ -464,46 +445,65 @@ export function pruneSideEffectExecutions({
   )))
   const cutoff = timestamp - retentionMs
   const normalizedOwnerId = userId == null ? null : requiredText(userId, 'userId')
-  const ownerClause = normalizedOwnerId ? 'AND owner_id = ?' : ''
+  const ownerClause = normalizedOwnerId ? 'AND execution.owner_id = ?' : ''
   const params = normalizedOwnerId ? [cutoff, normalizedOwnerId] : [cutoff]
-  const result = db.prepare(`
-    DELETE FROM side_effect_executions
-    WHERE status IN ('committed', 'failed')
-      AND finished_at IS NOT NULL
-      AND finished_at <= ?
-      ${ownerClause}
-      AND (
-        (scope_kind = 'turn' AND EXISTS (
-          SELECT 1 FROM turn_events AS event
-          WHERE event.user_id = side_effect_executions.owner_id
-            AND event.session_id = side_effect_executions.session_id
-            AND event.turn_id = side_effect_executions.turn_id
-            AND event.sequence = (
-              SELECT MAX(latest.sequence)
-              FROM turn_events AS latest
-              WHERE latest.user_id = side_effect_executions.owner_id
-                AND latest.session_id = side_effect_executions.session_id
-                AND latest.turn_id = side_effect_executions.turn_id
-            )
-            AND event.type IN (${TERMINAL_TURN_EVENT_TYPES.map(() => '?').join(', ')})
-        ))
-        OR
-        (scope_kind = 'job' AND EXISTS (
-          SELECT 1 FROM jobs AS job
-          WHERE job.id = side_effect_executions.job_id
-            AND job.user_id = side_effect_executions.owner_id
-            AND job.status IN (${TERMINAL_JOB_STATUSES.map(() => '?').join(', ')})
-            AND NOT EXISTS (
-              SELECT 1 FROM job_turn_checkpoints AS checkpoint
-              WHERE checkpoint.job_id = side_effect_executions.job_id
-                AND checkpoint.user_id = side_effect_executions.owner_id
-            )
-        ))
-        OR scope_kind = 'request'
-      )
-  `).run(...params, ...TERMINAL_TURN_EVENT_TYPES, ...TERMINAL_JOB_STATUSES)
+  const deleted = db.transaction(() => {
+    const candidates = db.prepare(`
+      SELECT
+        execution.owner_id,
+        execution.scope_key,
+        execution.tool_call_id,
+        execution.scope_kind,
+        latest_turn.type AS turn_event_type,
+        latest_turn.payload_json AS turn_payload_json,
+        job.status AS job_status,
+        EXISTS (
+          SELECT 1 FROM job_turn_checkpoints AS checkpoint
+          WHERE checkpoint.job_id = execution.job_id
+            AND checkpoint.user_id = execution.owner_id
+        ) AS has_job_checkpoint
+      FROM side_effect_executions AS execution
+      LEFT JOIN turn_events AS latest_turn
+        ON execution.scope_kind = 'turn'
+       AND latest_turn.user_id = execution.owner_id
+       AND latest_turn.session_id = execution.session_id
+       AND latest_turn.turn_id = execution.turn_id
+       AND latest_turn.sequence = (
+         SELECT MAX(event.sequence)
+         FROM turn_events AS event
+         WHERE event.user_id = execution.owner_id
+           AND event.session_id = execution.session_id
+           AND event.turn_id = execution.turn_id
+       )
+      LEFT JOIN jobs AS job
+        ON execution.scope_kind = 'job'
+       AND job.id = execution.job_id
+       AND job.user_id = execution.owner_id
+      WHERE execution.status IN ('committed', 'failed')
+        AND execution.finished_at IS NOT NULL
+        AND execution.finished_at <= ?
+        ${ownerClause}
+    `).all(...params)
+    const remove = db.prepare(`
+      DELETE FROM side_effect_executions
+      WHERE owner_id = ? AND scope_key = ? AND tool_call_id = ?
+    `)
+    let changes = 0
+    for (const row of candidates) {
+      const resolved = row.scope_kind === 'request'
+        || (row.scope_kind === 'job'
+          && TERMINAL_JOB_STATUSES.includes(row.job_status)
+          && Number(row.has_job_checkpoint) === 0)
+        || (row.scope_kind === 'turn'
+          && TERMINAL_TURN_EVENT_TYPES.includes(row.turn_event_type)
+          && storedTurnEventIsResolved(row.turn_event_type, row.turn_payload_json))
+      if (!resolved) continue
+      changes += remove.run(row.owner_id, row.scope_key, row.tool_call_id).changes
+    }
+    return changes
+  }).immediate()
   return {
-    deleted: result.changes || 0,
+    deleted,
     cutoff,
     unknownRetention: defaults.unknownRetention,
   }

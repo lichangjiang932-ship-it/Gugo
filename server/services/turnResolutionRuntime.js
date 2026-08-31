@@ -1,6 +1,8 @@
 import path from 'node:path'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 
 const TURN_RESOLUTION_MARKER = '[TURN_RESOLUTION:'
+export const MAX_DIRECTORY_AUTHORIZATION_RESOLUTIONS = 8
 
 export class TurnEngineError extends Error {
   constructor(code, message, status = 400) {
@@ -13,6 +15,81 @@ export class TurnEngineError extends Error {
 
 function isRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function defaultDirectoryPathIdentity(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const windowsPath = path.win32.isAbsolute(raw)
+  const api = windowsPath ? path.win32 : path.posix
+  const normalized = api.normalize(raw).replace(/[\\/]+$/, '').replace(/\\/g, '/')
+  return windowsPath || process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+function isDirectoryAuthorizationResolution(value) {
+  return isRecord(value)
+    && value.type === 'directory_authorization'
+    && value.approved === true
+}
+
+/**
+ * Checkpoints before multi-directory resume stored one resolution object.
+ * Normalize both that legacy shape and the current bounded list without
+ * retaining duplicate grants or duplicate canonical directory identities.
+ */
+export function normalizeDirectoryAuthorizationResolutions(value, {
+  normalizePath = defaultDirectoryPathIdentity,
+  limit = MAX_DIRECTORY_AUTHORIZATION_RESOLUTIONS,
+} = {}) {
+  const boundedLimit = Math.max(1, Math.min(
+    MAX_DIRECTORY_AUTHORIZATION_RESOLUTIONS,
+    Math.floor(Number(limit)) || MAX_DIRECTORY_AUTHORIZATION_RESOLUTIONS,
+  ))
+  const candidates = Array.isArray(value) ? value : (isRecord(value) ? [value] : [])
+  const normalized = []
+  for (const candidate of candidates) {
+    if (!isDirectoryAuthorizationResolution(candidate)) continue
+    const grantId = String(candidate.grant_id || candidate.grantId || '').trim()
+    const pathIdentity = normalizePath(candidate.path)
+    if (!pathIdentity) continue
+    const duplicateIndex = normalized.findIndex((entry) => (
+      (grantId && entry.grantId === grantId) || entry.pathIdentity === pathIdentity
+    ))
+    if (duplicateIndex >= 0) normalized.splice(duplicateIndex, 1)
+    normalized.push({
+      grantId,
+      pathIdentity,
+      resolution: { ...candidate },
+    })
+    if (normalized.length > boundedLimit) normalized.shift()
+  }
+  return normalized.map(({ resolution }) => resolution)
+}
+
+export function mergeDirectoryAuthorizationResolutions(current, resolution, options = {}) {
+  return normalizeDirectoryAuthorizationResolutions([
+    ...normalizeDirectoryAuthorizationResolutions(current, options),
+    resolution,
+  ], options)
+}
+
+function hasMatchingDirectoryGrant(grants, resolution, normalizePath) {
+  const expectedPath = normalizePath(resolution?.path)
+  return (Array.isArray(grants) ? grants : []).some((grant) => {
+    if (String(grant?.id || '').trim() !== String(resolution?.grant_id || '').trim()) return false
+    if (grant?.resourceType !== 'directory') return false
+    if (String(grant?.scope || '').trim() !== String(resolution?.authorization_scope || '').trim()) return false
+    if (grant.available === false) return false
+    if (normalizePath(grant.path) !== expectedPath) return false
+    return resolution?.access_mode !== 'read_write' || grant.accessMode === 'read_write'
+  })
+}
+
+export function filterAuthorizedDirectoryResolutions(value, grants, {
+  normalizePath = defaultDirectoryPathIdentity,
+} = {}) {
+  return normalizeDirectoryAuthorizationResolutions(value, { normalizePath })
+    .filter((resolution) => hasMatchingDirectoryGrant(grants, resolution, normalizePath))
 }
 
 /**
@@ -130,17 +207,9 @@ export function createTurnResolutionRuntime({ normalizePath } = {}) {
     }
   }
 
-  const hasSufficientDirectoryGrant = (grants, resolution) => {
-    const expectedPath = normalizePath(resolution.path)
-    return (Array.isArray(grants) ? grants : []).some((grant) => {
-      if (String(grant?.id || '').trim() !== resolution.grant_id) return false
-      if (grant?.resourceType !== 'directory') return false
-      if (String(grant?.scope || '').trim() !== resolution.authorization_scope) return false
-      if (grant.available === false) return false
-      if (normalizePath(grant.path) !== expectedPath) return false
-      return resolution.access_mode !== 'read_write' || grant.accessMode === 'read_write'
-    })
-  }
+  const hasSufficientDirectoryGrant = (grants, resolution) => (
+    hasMatchingDirectoryGrant(grants, resolution, normalizePath)
+  )
 
   const resolutionPrompt = (resolution, pausedSequence) => {
     const marker = `${TURN_RESOLUTION_MARKER}${pausedSequence}]`
@@ -178,6 +247,18 @@ export function createTurnResolutionRuntime({ normalizePath } = {}) {
       })
     }
     const restored = { ...state, messages }
+    if (resumeContext.resolution.type === 'directory_authorization'
+      && resumeContext.resolution.approved === true) {
+      const directoryResolution = {
+        ...resumeContext.resolution,
+        paused_sequence: resumeContext.pausedSequence,
+      }
+      restored.directoryAuthorizationResolution = mergeDirectoryAuthorizationResolutions(
+        state.directoryAuthorizationResolution,
+        directoryResolution,
+        { normalizePath },
+      )
+    }
     if (isRecord(restored.final) && restored.final.paused === true) delete restored.final
     return restored
   }
@@ -196,7 +277,9 @@ export function createTurnResolutionRuntime({ normalizePath } = {}) {
     if (lastEvent.type === 'turn.paused') return 'paused'
     if (lastEvent.type === 'turn.blocked') return 'blocked'
     if (running) return 'running'
-    if (lastEvent.type === 'turn.completed') return 'completed'
+    if (lastEvent.type === 'turn.completed') {
+      return isSuccessfulTurnCompletedEvent(lastEvent) ? 'completed' : 'incomplete'
+    }
     if (lastEvent.type === 'turn.cancelled') return 'cancelled'
     if (lastEvent.type === 'turn.failed') return 'failed'
     if (lastEvent.type === 'turn.interrupted') return 'interrupted'

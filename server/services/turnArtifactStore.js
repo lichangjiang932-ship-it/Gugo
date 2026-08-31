@@ -25,6 +25,9 @@ export function appendTurnArtifact({
       db,
       'Artifacts cannot change while local data is being cleared',
     )
+    if (!db.prepare('SELECT 1 FROM sessions WHERE token = ? AND user_id = ?').get(sessionId, userId)) {
+      throw new Error('turn artifact session ownership mismatch')
+    }
     db.prepare(`INSERT INTO turn_artifacts
       (id, user_id, session_id, turn_id, type, title, url, filename, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)

@@ -2,6 +2,7 @@ import {
   findEventPersistenceFailure,
   TURN_TERMINAL_PERSISTENCE_FAILURE_CODE,
 } from './turnEventEmitter.js'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 import {
   isExplicitTurnCancellation,
   isManualRecoveryBlock,
@@ -82,8 +83,12 @@ export function createTurnTerminalOutcomeRuntime({
     const atomicTurnBoundary = !!ports.commitTurnBoundary
     await emitter('turn.cancelled', {
       reason: signal.reason?.message || 'Cancelled by user',
+      partialText: '',
+      artifactIds: [],
+      deliveryArtifactIds: [],
       verifiedLocalFiles: [],
       retainedLocalFiles: [],
+      iterations: 0,
     }, {
       commitEvent: atomicTurnBoundary
         ? ({ event }) => ports.commitTurnBoundary({
@@ -93,16 +98,18 @@ export function createTurnTerminalOutcomeRuntime({
             executionLease,
           })
         : null,
+      afterAppend: atomicTurnBoundary
+        ? null
+        : async () => {
+            try {
+              await ports.writeMessage(cancellationMessage)
+            } catch (error) {
+              logWarn('turn.legacy_evidence_projection', error, {
+                userId, sessionId, turnId, state: 'cancelled',
+              })
+            }
+          },
     })
-    if (!atomicTurnBoundary) {
-      try {
-        await ports.writeMessage(cancellationMessage)
-      } catch (error) {
-        logWarn('turn.legacy_evidence_projection', error, {
-          userId, sessionId, turnId, state: 'cancelled',
-        })
-      }
-    }
     return true
   }
 
@@ -122,11 +129,12 @@ export function createTurnTerminalOutcomeRuntime({
       const retainedLocalFiles = evidence.retainedLocalFilesAt(cancelledAt, verifiedLocalFiles)
       const artifactIds = normalizeArtifactIds(state.checkpointArtifactIds)
       const partialText = publicIncompleteText(state.streamedAssistantText, '')
+      const deliveryArtifactIds = normalizeArtifactIds(state.checkpointDeliveryArtifactIds)
       const evidenceOptions = {
         state: 'cancelled',
         text: partialText,
         artifactIds,
-        deliveryArtifactIds: [],
+        deliveryArtifactIds,
         iterations: state.checkpointIterations,
         verifiedLocalFiles,
         retainedLocalFiles,
@@ -134,29 +142,37 @@ export function createTurnTerminalOutcomeRuntime({
       }
       await evidence.emitter('turn.cancelled', {
         reason: 'Cancelled by user',
+        partialText,
         artifactIds,
-        deliveryArtifactIds: [],
+        deliveryArtifactIds,
         verifiedLocalFiles,
         retainedLocalFiles,
         iterations: state.checkpointIterations,
         ...usageFields(state),
-      }, evidence.boundaryOptions(evidenceOptions))
-      if (!evidence.atomicTurnBoundary) {
-        try {
-          await evidence.persistEvidence(evidenceOptions)
-        } catch (error) {
-          logWarn('turn.legacy_evidence_projection', error, {
-            userId, sessionId, turnId, state: 'cancelled',
-          })
-        }
-      }
+      }, evidence.boundaryOptions(evidenceOptions, {
+        legacyAfterAppend: true,
+        legacyBestEffort: true,
+      }))
       await recordCanaryTerminal('cancelled', null, cancelledAt, partialText)
       return
     }
 
+    if (!result?.incomplete && !result?.interrupted && !result?.paused
+      && !isSuccessfulTurnCompletedEvent({ type: 'turn.completed', payload: result })) {
+      result = {
+        ...(result && typeof result === 'object' && !Array.isArray(result) ? result : {}),
+        incomplete: true,
+        partialText: result?.partialText || result?.text || '',
+        reason: result?.incompleteReason || result?.reason || 'turn_incomplete',
+      }
+    }
+
     if (result?.interrupted) {
       const artifactIds = normalizeArtifactIds(result.artifactIds ?? state.checkpointArtifactIds)
-      const deliveryArtifactIds = []
+      const deliveryArtifactIds = optionalDeliveryArtifactIds(
+        result,
+        normalizeArtifactIds(state.checkpointDeliveryArtifactIds),
+      )
       const iterations = Math.max(0, Number(result.iterations) || state.checkpointIterations)
       const partialText = publicIncompleteText(
         result.partialText || state.streamedAssistantText,
@@ -165,10 +181,22 @@ export function createTurnTerminalOutcomeRuntime({
       const interruptedAt = ports.now()
       const verifiedLocalFiles = evidence.verifiedLocalFilesAt(interruptedAt)
       const retainedLocalFiles = evidence.retainedLocalFilesAt(interruptedAt, verifiedLocalFiles)
+      const incompleteReason = normalizeIncompleteReason(
+        result.incompleteReason || result.reasonCode || result.reason,
+        'model_call_interrupted',
+      )
+      const explicitMissingRequirements = Array.isArray(result.missingRequirements)
+        ? result.missingRequirements
+        : []
+      const missingRequirements = explicitMissingRequirements.length > 0
+        ? explicitMissingRequirements
+        : missingRequirementsForIncompleteReason(incompleteReason)
       const failure = normalizeTurnFailure({
         code: result.code,
-        message: result.reason,
+        incompleteReason,
+        missingRequirements,
         retryable: true,
+        taskVerification: result.taskVerification,
       }, { code: 'MODEL_CALL_INTERRUPTED', retryable: true })
       const evidenceOptions = {
         state: 'interrupted',
@@ -183,8 +211,13 @@ export function createTurnTerminalOutcomeRuntime({
       }
       await evidence.emitter('turn.interrupted', {
         code: failure.code,
+        error: failure,
+        incompleteReason: failure.incompleteReason,
+        missingRequirements: failure.missingRequirements,
+        ...(failure.taskVerification ? { taskVerification: failure.taskVerification } : {}),
         retryable: true,
         text: partialText,
+        partialText,
         artifactIds,
         ...deliveryArtifactFields(deliveryArtifactIds),
         verifiedLocalFiles,
@@ -196,7 +229,13 @@ export function createTurnTerminalOutcomeRuntime({
     }
 
     if (result?.incomplete) {
-      const partialText = publicIncompleteText(result.partialText || state.streamedAssistantText, '')
+      // `result.text` may be host-authored blocker copy. Keep assistant content
+      // model-authored and carry task diagnostics through the structured
+      // failure contract below so clients can localize the explanation.
+      const partialText = publicIncompleteText(
+        result.partialText || state.streamedAssistantText,
+        '',
+      )
       const resultCode = String(result.code || '').trim()
       const incompleteReason = normalizeIncompleteReason(
         result.budgetExceeded === true
@@ -205,7 +244,12 @@ export function createTurnTerminalOutcomeRuntime({
             ? 'tool_no_progress'
             : resultCode === 'REASONING_RUNAWAY' ? 'reasoning_runaway' : result.reason,
       )
-      const missingRequirements = missingRequirementsForIncompleteReason(incompleteReason)
+      const explicitMissingRequirements = Array.isArray(result.missingRequirements)
+        ? result.missingRequirements
+        : []
+      const missingRequirements = explicitMissingRequirements.length > 0
+        ? explicitMissingRequirements
+        : missingRequirementsForIncompleteReason(incompleteReason)
       const resultRetryable = typeof result.retryable === 'boolean'
         ? result.retryable
         : resultCode !== 'REASONING_RUNAWAY'
@@ -215,9 +259,14 @@ export function createTurnTerminalOutcomeRuntime({
         incompleteReason,
         missingRequirements,
         retryable,
+        manualRetryable: state.failedRetryActive ? false : result.manualRetryable,
+        taskVerification: result.taskVerification,
       }, { retryable })
       const artifactIds = normalizeArtifactIds(result.artifactIds ?? state.checkpointArtifactIds)
-      const deliveryArtifactIds = optionalDeliveryArtifactIds(result, [])
+      const deliveryArtifactIds = optionalDeliveryArtifactIds(
+        result,
+        normalizeArtifactIds(state.checkpointDeliveryArtifactIds),
+      )
       const iterations = Math.max(0, Number(result.iterations) || state.checkpointIterations)
       const failedAt = ports.now()
       const verifiedLocalFiles = evidence.verifiedLocalFilesAt(failedAt)
@@ -233,12 +282,12 @@ export function createTurnTerminalOutcomeRuntime({
         retainedLocalFiles,
         writtenAt: failedAt,
       }
-      if (!evidence.atomicTurnBoundary) await evidence.persistEvidence(evidenceOptions)
       await evidence.emitter('turn.failed', {
         code: failure.code,
         error: failure,
-        incompleteReason,
-        missingRequirements,
+        incompleteReason: failure.incompleteReason,
+        missingRequirements: failure.missingRequirements,
+        ...(failure.taskVerification ? { taskVerification: failure.taskVerification } : {}),
         partialText,
         artifactIds,
         ...deliveryArtifactFields(deliveryArtifactIds),
@@ -246,7 +295,7 @@ export function createTurnTerminalOutcomeRuntime({
         retainedLocalFiles,
         iterations,
         ...usageFields(state),
-      }, evidence.boundaryOptions(evidenceOptions))
+      }, evidence.boundaryOptions(evidenceOptions, { legacyBeforeAppend: true }))
       await recordCanaryTerminal('failed', failure.code, failedAt, partialText)
       return
     }
@@ -261,10 +310,17 @@ export function createTurnTerminalOutcomeRuntime({
               : {}),
           }
         : typeof result.clarification === 'string' && result.clarification.trim()
-          ? result.clarification
+          ? {
+              question: result.clarification.trim(),
+              reason_code: 'clarification_required',
+              blocker_kind: 'missing_info',
+            }
           : { reason_code: 'clarification_required', blocker_kind: 'missing_info' }
       const artifactIds = normalizeArtifactIds(result.artifactIds ?? state.checkpointArtifactIds)
-      const deliveryArtifactIds = []
+      const deliveryArtifactIds = optionalDeliveryArtifactIds(
+        result,
+        normalizeArtifactIds(state.checkpointDeliveryArtifactIds),
+      )
       const iterations = Math.max(0, Number(result.iterations) || state.checkpointIterations)
       const pausedAt = ports.now()
       const verifiedLocalFiles = evidence.verifiedLocalFilesAt(pausedAt)
@@ -355,16 +411,18 @@ export function createTurnTerminalOutcomeRuntime({
       commitEvent: evidence.atomicTurnBoundary
         ? ({ event }) => evidence.commitBoundaryEvent({ event, message: completedMessage })
         : null,
+      afterAppend: evidence.atomicTurnBoundary
+        ? null
+        : async () => {
+            try {
+              await ports.writeMessage(completedMessage)
+            } catch (error) {
+              logWarn('turn.legacy_evidence_projection', error, {
+                userId, sessionId, turnId, state: 'completed',
+              })
+            }
+          },
     })
-    if (!evidence.atomicTurnBoundary) {
-      try {
-        await ports.writeMessage(completedMessage)
-      } catch (error) {
-        logWarn('turn.legacy_evidence_projection', error, {
-          userId, sessionId, turnId, state: 'completed',
-        })
-      }
-    }
     await recordCanaryTerminal('completed', null, completedAt, text)
     void ports.dispatchHooks?.({
       userId,
@@ -392,8 +450,7 @@ export function createTurnTerminalOutcomeRuntime({
     }
   }
 
-  async function settleError({ scope, signal, error, state, evidence, recordCanaryTerminal }) {
-    const { userId, sessionId, turnId } = scope
+  async function settleError({ signal, error, state, evidence, recordCanaryTerminal }) {
     if (lostTurnLease(signal, error)) return
     if (isManualRecoveryBlock(error)) {
       await evidence.emitBlocked(error)
@@ -413,11 +470,12 @@ export function createTurnTerminalOutcomeRuntime({
       const retainedLocalFiles = evidence.retainedLocalFilesAt(cancelledAt, verifiedLocalFiles)
       const artifactIds = normalizeArtifactIds(state.checkpointArtifactIds)
       const partialText = publicIncompleteText(state.streamedAssistantText, '')
+      const deliveryArtifactIds = normalizeArtifactIds(state.checkpointDeliveryArtifactIds)
       const evidenceOptions = {
         state: 'cancelled',
         text: partialText,
         artifactIds,
-        deliveryArtifactIds: [],
+        deliveryArtifactIds,
         iterations: state.checkpointIterations,
         verifiedLocalFiles,
         retainedLocalFiles,
@@ -426,27 +484,22 @@ export function createTurnTerminalOutcomeRuntime({
       try {
         await evidence.emitter('turn.cancelled', {
           reason: error?.message || 'Cancelled by user',
+          partialText,
           artifactIds,
-          deliveryArtifactIds: [],
+          deliveryArtifactIds,
           verifiedLocalFiles,
           retainedLocalFiles,
           iterations: state.checkpointIterations,
           ...usageFields(state),
-        }, evidence.boundaryOptions(evidenceOptions))
+        }, evidence.boundaryOptions(evidenceOptions, {
+          legacyAfterAppend: true,
+          legacyBestEffort: true,
+        }))
       } catch (terminalError) {
         const deferredFailure = findEventPersistenceFailure(terminalError)
         if (!deferredFailure) throw terminalError
         await evidence.emitFailed(deferredFailure)
         return
-      }
-      if (!evidence.atomicTurnBoundary) {
-        try {
-          await evidence.persistEvidence(evidenceOptions)
-        } catch (projectionError) {
-          logWarn('turn.legacy_evidence_projection', projectionError, {
-            userId, sessionId, turnId, state: 'cancelled',
-          })
-        }
       }
       await recordCanaryTerminal('cancelled', null, cancelledAt, evidenceOptions.text)
       return

@@ -1496,6 +1496,7 @@ test('run reports runtime/model failures as stable JSONL and diagnostics', async
       code: 'MODEL_CONFIG_MISSING',
       message: 'no configured model',
       action: 'configure_model',
+      nextAction: 'configure_model',
     },
   })
   assert.match(stderrChunks.join(''), /MODEL_CONFIG_MISSING/)

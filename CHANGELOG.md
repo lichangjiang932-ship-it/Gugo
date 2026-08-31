@@ -6,6 +6,23 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.50] - 2026-08-31
+
+### Added
+
+- Task-verification repair state, CLI-aware check profiles, and regression coverage for incomplete, interrupted, resumed, and concurrent execution paths.
+- Structured terminal diagnostics and verified file-receipt projections across the API, WebSocket replay, CLI, chat, and task-run interfaces.
+
+### Changed
+
+- Made completion, retry, checkpoint, lease, and terminal-outcome transitions authoritative and fenced so stale or parallel workers cannot overwrite newer evidence.
+- Preserved actionable reason codes, missing requirements, retry evidence, and partial-delivery status through persistence, recovery, and session hydration.
+
+### Fixed
+
+- Prevented ambiguous verification state, failed checks, invalid final answers, and missing terminal evidence from being reported as successful completion.
+- Kept incomplete work recoverable and clearly identified why execution stopped, what remains, and which saved files are still available.
+
 ## [0.11.49] - 2026-08-31
 
 ### Added

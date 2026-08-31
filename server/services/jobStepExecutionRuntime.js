@@ -45,6 +45,7 @@ import {
   runDefaultJobModel,
   runDefaultJobModelWithTools,
 } from './jobModelExecutionRuntime.js'
+import { filterLiveJobDirectoryAuthorizationCheckpoint } from './jobCheckpointAuthorizationRuntime.js'
 
 export function createDefaultExecuteStep({
   runModel = runDefaultJobModel,
@@ -91,7 +92,12 @@ export function createDefaultExecuteStep({
         .filter((item) => ['execute', 'batch_item'].includes(item.kind))
         .map((item) => item.output?.text)
         .filter(Boolean)
-      if (generatedTexts.length && shouldCompileDocx(job.prompt) && !(job.artifacts || []).length) {
+      const hasOwnedDocxArtifact = (Array.isArray(job.artifacts) ? job.artifacts : []).some((artifact) => (
+        artifact?.jobId === job.id
+        && artifact?.userId === job.userId
+        && String(artifact?.type || '').trim().toLowerCase() === 'docx'
+      ))
+      if (generatedTexts.length && shouldCompileDocx(job.prompt) && !hasOwnedDocxArtifact) {
         const artifact = await createDocxImpl({
           title: job.title,
           paragraphs: generatedTexts.map((text, index) => ({
@@ -241,13 +247,16 @@ export function createDefaultExecuteStep({
         runModel: loopModel.run,
         reconcileModelRequest: loopModel.reconcile,
         signal,
-        onApprovalPending: () => markJobAwaitingApproval(job),
-        onApprovalResolved: () => markJobRunningAgain(job),
+        onApprovalPending: (approval) => markJobAwaitingApproval(job, step, approval),
+        onApprovalResolved: (decision) => markJobRunningAgain(job, step, decision),
         claimSteering,
         acknowledgeSteering,
         releaseSteering,
         loadCheckpoint: checkpointEnabled
-          ? () => runtimeCore.checkpoint.load({ jobId: job.id, stepId: step.id, userId: job.userId })
+          ? async () => filterLiveJobDirectoryAuthorizationCheckpoint(
+              await runtimeCore.checkpoint.load({ jobId: job.id, stepId: step.id, userId: job.userId }),
+              { userId: job.userId },
+            )
           : null,
         saveCheckpoint: checkpointEnabled
           ? (state, metadata = {}) => {

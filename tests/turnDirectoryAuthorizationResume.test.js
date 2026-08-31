@@ -105,6 +105,7 @@ test('non-directory resolution cannot restore local execution tools', () => {
 
 test('directory authorization restores code tools missing from the pre-authorization base specs', async (t) => {
   const previousApprovalMode = getApprovalMode({ userId })
+  const generatedPath = path.join(authorizedDir, 'generated-preview.js')
   t.after(() => {
     setApprovalMode({ userId, mode: previousApprovalMode })
   })
@@ -187,8 +188,9 @@ test('directory authorization restores code tools missing from the pre-authoriza
         return {
           content: '',
           toolCalls: [toolCall('execute-code', 'bash_exec', {
-            command: 'node -e "process.stdout.write(\'code-ok\')"',
+            command: 'node -e "require(\'node:fs\').writeFileSync(\'generated-preview.js\', \'export default true\\n\')"',
             cwd: authorizedDir,
+            expected_outputs: [generatedPath],
           })],
         }
       }
@@ -225,11 +227,27 @@ test('directory authorization restores code tools missing from the pre-authoriza
       }
       if (name === 'bash_exec') {
         assert.equal(args.cwd, authorizedDir)
-        return { ok: true, exitCode: 0, stdout: 'code-ok', stderr: '' }
+        assert.deepEqual(args.expected_outputs, [generatedPath])
+        fs.writeFileSync(generatedPath, 'export default true\n', 'utf8')
+        return {
+          ok: true,
+          exitCode: 0,
+          stdout: 'code-ok',
+          stderr: '',
+          cwd: authorizedDir,
+          changedPaths: [generatedPath],
+        }
       }
       if (name === 'run_project_check') {
         assert.deepEqual(args, { check: 'test', cwd: authorizedDir })
-        return { ok: true, check: 'test', exitCode: 0, stdout: 'checks-passed', stderr: '' }
+        return {
+          ok: true,
+          check: 'test',
+          exitCode: 0,
+          stdout: 'checks-passed',
+          stderr: '',
+          cwd: authorizedDir,
+        }
       }
       throw new Error(`unexpected tool: ${name}`)
     },
@@ -304,6 +322,7 @@ test('directory authorization restores code tools missing from the pre-authoriza
   )
   assert.equal(finalEvents.at(-1).payload.text, '代码已执行并验证完成。')
   assert.deepEqual(executed.map(({ name }) => name), ['request_directory', 'bash_exec', 'run_project_check'])
+  assert.equal(fs.readFileSync(generatedPath, 'utf8'), 'export default true\n')
   assert.equal(modelCalls, 5)
   assert.equal(observedToolNames.length, 5)
   assert.match(resolutionMarker, new RegExp(`\\[TURN_RESOLUTION:${paused.sequence}\\]`))

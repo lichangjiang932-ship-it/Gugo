@@ -7,13 +7,26 @@ import {
 } from './turnFailedRetryRejection.js'
 import {
   failedRetryAttemptPayload,
+  isValidActiveFailedRetryAttempt,
+  isValidFailedRetryAttemptRecord,
   replayPersistedTurnEvents,
 } from './turnRecoveryProjection.js'
-
-const MAX_FAILED_TURN_RETRIES = 1
+import { MAX_FAILED_TURN_RETRIES } from './turnFailedRetryPolicy.js'
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function permanentFailedRetryRejection(error) {
+  const visited = new Set()
+  let current = error
+  while (current && (typeof current === 'object' || typeof current === 'function')) {
+    if (visited.has(current)) return null
+    visited.add(current)
+    if (isPermanentFailedRetryRejectionCode(current.code)) return current
+    current = current.cause
+  }
+  return null
 }
 
 function retryingTurnEvidenceMessage({
@@ -99,8 +112,36 @@ export function createTurnFailedRetryRuntime({
     const started = await deps.lastEvent({ ...scope, type: 'turn.started' })
     if (!started) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
     const last = await deps.lastEvent(scope)
+    const recoveryStateBeforeRetry = await deps.readRecoveryState(scope)
     const persistedEvents = await replayPersistedTurnEvents(deps.replayEvents, scope)
+    const latestPersistedFailure = persistedEvents
+      .filter((event) => event.type === 'turn.failed')
+      .at(-1) || null
+    let existingMessage = null
+    let existingMessageLoaded = false
+    const loadExistingMessage = async () => {
+      if (!existingMessageLoaded) {
+        existingMessage = await findExistingAssistantMessage(scope)
+        existingMessageLoaded = true
+      }
+      return existingMessage
+    }
+    const persistedEvidenceSources = () => [
+      latestPersistedFailure?.payload,
+      latestPersistedFailure?.payload?.error,
+      existingMessage?.modelContext,
+      existingMessage?.modelContext?.error,
+      { partialText: existingMessage?.content },
+    ]
     if (last?.type === 'turn.attempt' && last.payload?.reason === 'failed_retry') {
+      const checkpoint = await deps.runtimeCore.checkpoint.load(scope)
+      if (!isValidActiveFailedRetryAttempt(persistedEvents, last, checkpoint)) {
+        await loadExistingMessage()
+        throw permanentFailedRetryError({
+          code: 'TURN_FAILED_RETRY_ATTEMPT_INVALID',
+          status: 409,
+        }, ...persistedEvidenceSources())
+      }
       const outcome = await recoverTurn({ ...scope, authMode })
       return outcome.turn
     }
@@ -117,18 +158,23 @@ export function createTurnFailedRetryRuntime({
         const outcome = await recoverTurn({ ...scope, authMode })
         return outcome.turn
       }
-      throw new TurnEngineError(
-        'TURN_FAILED_RETRY_CONFLICT',
-        'the Turn is no longer at a failed terminal boundary',
-        409,
-      )
+      await loadExistingMessage()
+      throw permanentFailedRetryError({
+        code: 'TURN_FAILED_RETRY_CONFLICT',
+        status: 409,
+      }, last?.payload, last?.payload?.error, ...persistedEvidenceSources())
     }
-    const existingMessage = await findExistingAssistantMessage(scope)
+    await loadExistingMessage()
     const persistedRejection = failedRetryRejectionFromMessage(existingMessage, last)
     if (persistedRejection) throw permanentFailedRetryError(persistedRejection)
 
     const rejectFailedRetry = async (sourceError) => {
-      const rejectionError = permanentFailedRetryError(sourceError)
+      const rejectionError = permanentFailedRetryError(
+        sourceError,
+        last?.payload,
+        last?.payload?.error,
+        ...persistedEvidenceSources(),
+      )
       const message = failedRetryRejectionEvidenceMessage({
         existing: existingMessage,
         userId,
@@ -150,7 +196,21 @@ export function createTurnFailedRetryRuntime({
           const currentMessage = await findExistingAssistantMessage(scope)
           const concurrentRejection = failedRetryRejectionFromMessage(currentMessage, last)
           if (concurrentRejection) throw permanentFailedRetryError(concurrentRejection)
-          return (await recoverTurn({ ...scope, authMode })).turn
+          const currentLast = await deps.lastEvent(scope)
+          if (currentLast?.id !== last.id
+            || currentLast?.sequence !== last.sequence
+            || currentLast?.type !== 'turn.failed') {
+            return (await recoverTurn({ ...scope, authMode })).turn
+          }
+          throw permanentFailedRetryError(
+            error,
+            last?.payload,
+            last?.payload?.error,
+            currentMessage?.modelContext,
+            currentMessage?.modelContext?.error,
+            { partialText: currentMessage?.content },
+            ...persistedEvidenceSources(),
+          )
         }
       } else {
         // Legacy/custom adapters may not expose the atomic rejection helper.
@@ -164,26 +224,25 @@ export function createTurnFailedRetryRuntime({
         }
         await deps.writeMessage(message)
       }
-      throw rejectionError
+      throw permanentFailedRetryError(message.modelContext.error)
     }
     const failedRetryCount = persistedEvents.filter((event) => (
-      event.type === 'turn.attempt' && event.payload?.reason === 'failed_retry'
+      isValidFailedRetryAttemptRecord(persistedEvents, event)
     )).length
     if (failedRetryCount >= MAX_FAILED_TURN_RETRIES) {
-      const error = new TurnEngineError(
-        'TURN_FAILED_RETRY_LIMIT_REACHED',
-        '本任务已经执行过一次断点续写但仍未完成。请查看上方明确失败原因，调整模型、权限或工具条件后发送新消息。',
-        409,
-      )
-      error.retryable = false
-      throw error
+      return rejectFailedRetry({
+        code: 'TURN_FAILED_RETRY_LIMIT_REACHED',
+        status: 409,
+      })
     }
-    if (last.payload?.error?.retryable !== true) {
-      throw new TurnEngineError(
-        'TURN_FAILED_RETRY_NOT_ALLOWED',
-        'the failed Turn is not explicitly retryable',
-        409,
-      )
+    if (last.payload?.error?.retryable !== true
+      && last.payload?.error?.manualRetryable !== true) {
+      return rejectFailedRetry({
+        code: 'TURN_FAILED_RETRY_NOT_ALLOWED',
+        status: 409,
+        retryable: false,
+        manualRetryable: false,
+      })
     }
     if (typeof deps.commitTurnFailedRetry !== 'function') {
       return rejectFailedRetry(new TurnEngineError(
@@ -235,12 +294,17 @@ export function createTurnFailedRetryRuntime({
       await emitter.close()
     }
     if (commitError) {
-      if (isPermanentFailedRetryRejectionCode(commitError?.code)) {
-        return rejectFailedRetry(commitError)
+      const permanentRejection = permanentFailedRetryRejection(commitError)
+      if (permanentRejection) {
+        return rejectFailedRetry(permanentRejection)
       }
       throw commitError
     }
-    await deps.clearRecoveryState(scope)
+    if (recoveryStateBeforeRetry?.candidateVersion) {
+      await deps.clearRecoveryState(scope, {
+        candidateVersion: recoveryStateBeforeRetry.candidateVersion,
+      })
+    }
     const outcome = await recoverTurn({ ...scope, authMode })
     return outcome.turn
   }

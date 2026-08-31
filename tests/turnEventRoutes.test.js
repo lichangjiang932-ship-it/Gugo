@@ -125,7 +125,6 @@ test('turn routes resolve the host lazily and expose unavailable persistence as 
     assert.equal(response.status, 503)
     assert.deepEqual((await response.json()).error, {
       code: 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
-      message: 'turn runtime is not ready because persistence is not configured',
       action: 'restart_runtime',
     })
     assert.equal(resolutionCount, 1)
@@ -153,7 +152,6 @@ test('turn routes expose an engine shutdown handoff as a retryable 503', async (
       assert.equal(response.status, 503, failureCode)
       assert.deepEqual((await response.json()).error, {
         code: failureCode,
-        message: 'turn runtime is restarting; retry shortly',
         action: 'retry',
       })
     }
@@ -172,23 +170,23 @@ test('turn routes expose host configuration and cleanup failures as actionable 5
   const cases = [
     {
       code: 'COMPACTION_ARCHIVE_PORT_NOT_CONFIGURED',
-      message: 'turn runtime is not ready because compaction storage is not configured',
       action: 'restart_runtime',
+      retryable: true,
     },
     {
       code: 'TURN_ENGINE_HOST_PENDING_INITIALIZATION_CLEANUP_FAILED',
-      message: 'turn runtime cleanup is incomplete; retry shortly',
       action: 'retry',
+      retryable: true,
     },
     {
       code: 'TURN_ENGINE_HOST_INITIALIZATION_AND_CLEANUP_FAILED',
-      message: 'turn runtime cleanup is incomplete; retry shortly',
       action: 'retry',
+      retryable: true,
     },
     {
       code: 'TURN_ENGINE_HOST_CLEANUP_FAILED',
-      message: 'turn runtime cleanup is incomplete; retry shortly',
       action: 'retry',
+      retryable: true,
     },
   ]
 
@@ -222,11 +220,9 @@ test('turn run route preserves structured model readiness failures', async () =>
     const missing = await post()
     assert.equal(missing.status, 503)
     const missingError = (await missing.json()).error
-    assert.match(missingError.message, /设置.*模型/)
     assert.deepEqual(failure.details, { missing: ['MODEL_BASE_URL', 'MODEL_NAME'] })
-    assert.deepEqual({ ...missingError, message: '<localized>' }, {
+    assert.deepEqual(missingError, {
       code: 'MODEL_CONFIG_MISSING',
-      message: '<localized>',
       action: 'configure_model',
       providerId: null,
       modelName: null,
@@ -245,7 +241,6 @@ test('turn run route preserves structured model readiness failures', async () =>
     assert.equal(changed.status, 409)
     assert.deepEqual((await changed.json()).error, {
       code: 'MODEL_PROVIDER_CONFIG_CHANGED',
-      message: '任务绑定的模型 Provider 配置已变更或不可用。为避免静默切换模型，请重新测试 Provider 后创建新任务。',
       action: 'recreate_job',
       providerId: 'provider-uuid',
       modelName: 'bound-model',
@@ -334,7 +329,6 @@ test('turn resume route returns a structured manual-repair dead letter', async (
     assert.equal(response.status, 409)
     assert.deepEqual((await response.json()).error, {
       code: 'TURN_RECOVERY_DEAD_LETTER',
-      message: 'permission context changed; repair it before retrying',
       recovery: {
         status: 'dead_letter',
         retryable: false,
@@ -342,7 +336,6 @@ test('turn resume route returns a structured manual-repair dead letter', async (
         attemptCount: 1,
         error: {
           code: 'TURN_PERMISSION_CONTEXT_DRIFT',
-          message: 'permission context changed; repair it before retrying',
         },
       },
     })

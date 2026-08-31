@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   claimServerTurnResume,
+  failedRetryFailureFromError,
   isRecoverableServerMessage,
   matchesFailedTurnRetryResume,
   matchesManualRecoveryResume,
@@ -42,6 +43,25 @@ test('resume text tracking appends durable failure evidence without duplicating 
   const withWrapUp = reduceResumedAssistantText('已完成检查。', budgetWrapUp)
   assert.equal(withWrapUp, '已完成检查。\n\n预算耗尽，尚待验证。')
   assert.equal(reduceResumedAssistantText(withWrapUp, budgetWrapUp), withWrapUp)
+})
+
+test('failed-retry HTTP rejection replaces stale failure metadata with stable fields', () => {
+  const failure = failedRetryFailureFromError(Object.assign(
+    new Error('不应持久化的服务端文案'),
+    {
+      code: 'turn_failed_retry_checkpoint_required',
+      status: 409,
+      retryable: false,
+    },
+  ))
+
+  assert.deepEqual(failure, {
+    code: 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
+    retryable: false,
+    status: 409,
+  })
+  assert.equal(Object.hasOwn(failure, 'message'), false)
+  assert.equal(Object.hasOwn(failure, 'hint'), false)
 })
 
 test('resume terminal fallback appends only the missing completed suffix', () => {

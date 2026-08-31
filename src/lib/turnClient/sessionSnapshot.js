@@ -257,21 +257,66 @@ function modelAuthoredEvidenceText(message, failure, state) {
   })
 }
 
+function stableSnapshotFailure(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const failure = { ...value }
+  for (const field of ['message', 'hint', 'reason']) delete failure[field]
+  if (failure.error && typeof failure.error === 'object' && !Array.isArray(failure.error)) {
+    failure.error = stableSnapshotFailure(failure.error)
+  } else if (Object.hasOwn(failure, 'error')) {
+    delete failure.error
+  }
+  if (failure.cause && typeof failure.cause === 'object' && !Array.isArray(failure.cause)) {
+    failure.cause = stableSnapshotFailure(failure.cause)
+  } else if (Object.hasOwn(failure, 'cause')) {
+    delete failure.cause
+  }
+  if (failure.recovery && typeof failure.recovery === 'object' && !Array.isArray(failure.recovery)) {
+    const recovery = { ...failure.recovery }
+    for (const field of ['message', 'hint', 'reason', 'errorMessage']) delete recovery[field]
+    if (recovery.error && typeof recovery.error === 'object' && !Array.isArray(recovery.error)) {
+      recovery.error = stableSnapshotFailure(recovery.error)
+    } else if (Object.hasOwn(recovery, 'error')) {
+      delete recovery.error
+    }
+    if (recovery.cause && typeof recovery.cause === 'object' && !Array.isArray(recovery.cause)) {
+      recovery.cause = stableSnapshotFailure(recovery.cause)
+    } else if (Object.hasOwn(recovery, 'cause')) {
+      delete recovery.cause
+    }
+    failure.recovery = recovery
+  }
+  return failure
+}
+
 function turnEvidenceMeta(message) {
   const context = message?.modelContext && typeof message.modelContext === 'object'
     ? message.modelContext
     : {}
   const state = context.turnEvidence === true ? String(context.evidenceState || '') : ''
-  if (!['blocked', 'cancelled', 'failed', 'interrupted'].includes(state)) return {}
+  if (!['blocked', 'cancelled', 'failed', 'incomplete', 'interrupted'].includes(state)) return {}
 
-  const persistedFailure = context.error && typeof context.error === 'object' ? context.error : null
-  const failure = persistedFailure && state === 'blocked'
-    && typeof persistedFailure.manualRetryable !== 'boolean'
-    ? { ...persistedFailure, manualRetryable: true }
-    : persistedFailure
-  const artifactIds = [...new Set((Array.isArray(context.artifactIds) ? context.artifactIds : [])
-    .map((id) => String(id || '').trim())
-    .filter(Boolean))]
+  const failure = stableSnapshotFailure(context.error)
+  if (failure) {
+    // Persisted legacy snapshots may contain server-authored/localized copy.
+    // Keep only stable diagnostic codes in client state.
+    for (const key of ['incompleteReason', 'nextAction']) {
+      const value = String(context[key] || '').trim()
+      if (value) failure[key] = value
+    }
+    if (Array.isArray(context.missingRequirements) && context.missingRequirements.length > 0) {
+      failure.missingRequirements = context.missingRequirements
+    }
+    if (context.taskVerification && typeof context.taskVerification === 'object'
+      && !Array.isArray(context.taskVerification)
+      && Object.keys(context.taskVerification).length > 0) {
+      failure.taskVerification = context.taskVerification
+    }
+    if (state === 'blocked' && typeof failure.manualRetryable !== 'boolean') {
+      failure.manualRetryable = true
+    }
+  }
+  const artifactIds = optionalContextArtifactIds(context, 'artifactIds')
   const iterations = Number.isInteger(context.iterations) && context.iterations >= 0
     ? context.iterations
     : undefined
@@ -294,24 +339,39 @@ function turnEvidenceMeta(message) {
     : ''
 
   return {
-    ...(state === 'failed'
-      ? { failed: true }
+    ...(state === 'failed' || state === 'incomplete'
+      ? {
+          cancelled: false,
+          failed: true,
+          interrupted: false,
+          paused: false,
+          streaming: false,
+          serverConnectionState: 'failed',
+        }
       : state === 'cancelled'
         ? {
             cancelled: true,
+            failed: false,
+            interrupted: false,
+            paused: false,
             streaming: false,
             serverConnectionState: 'cancelled',
           }
         : state === 'interrupted'
           ? {
+              cancelled: false,
+              failed: false,
               interrupted: true,
+              paused: false,
               streaming: true,
               turnCompletedAt: null,
               latency: null,
               serverConnectionState: 'interrupted',
             }
-          : {
+            : {
+              cancelled: false,
               failed: false,
+              interrupted: false,
               paused: false,
               streaming: false,
               turnCompletedAt: null,
@@ -330,9 +390,11 @@ function turnEvidenceMeta(message) {
                 : null,
             }),
     serverFailure: failure,
-    serverPartialText: modelAuthoredEvidenceText(message, failure, state),
-    serverArtifactIds: artifactIds,
-    ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
+    serverPartialText: modelAuthoredEvidenceText(message, context.error, state),
+    ...(artifactIds !== undefined && artifactIds.length > 0 ? { serverArtifactIds: artifactIds } : {}),
+    ...(deliveryArtifactIds !== undefined && deliveryArtifactIds.length > 0
+      ? { serverDeliveryArtifactIds: deliveryArtifactIds }
+      : {}),
     ...(iterations !== undefined ? { serverIterations: iterations } : {}),
   }
 }
@@ -343,14 +405,24 @@ function pausedTurnMeta(message) {
     : {}
   if (context.paused !== true) return {}
 
-  const clarification = context.clarification
-    && typeof context.clarification === 'object'
-    && !Array.isArray(context.clarification)
-    ? { ...context.clarification }
-    : null
+  const rawClarification = context.clarification
+  const clarification = rawClarification
+    && typeof rawClarification === 'object'
+    && !Array.isArray(rawClarification)
+    ? { ...rawClarification }
+    : typeof rawClarification === 'string' && rawClarification.trim()
+      ? {
+          question: rawClarification.trim(),
+          reason_code: 'clarification_required',
+          blocker_kind: 'missing_info',
+        }
+      : null
   const pausedSequence = Number(context.pausedSequence ?? context.paused_sequence)
 
   return {
+    cancelled: false,
+    failed: false,
+    interrupted: false,
     paused: true,
     serverConnectionState: 'paused',
     serverClarification: clarification,
@@ -443,12 +515,17 @@ export function normalizeServerSessionSnapshot(snapshot) {
       const serverDeliveryArtifactIds = message.role === 'assistant'
         ? optionalContextArtifactIds(message?.modelContext, 'deliveryArtifactIds')
         : undefined
+      const serverArtifactIds = message.role === 'assistant'
+        ? optionalContextArtifactIds(message?.modelContext, 'artifactIds')
+        : undefined
       const persistedArtifacts = message.role === 'assistant' && Array.isArray(message?.artifacts)
         ? message.artifacts.filter((artifact) => artifact?.id && artifact?.url && artifact?.filename)
         : []
       const serverArtifacts = persistedArtifacts.length > 0
         ? persistedArtifacts
         : recoverSelectedToolArtifacts(message?.modelContext, serverDeliveryArtifactIds)
+      const hasAuthoritativeArtifactCollection = message.role === 'assistant'
+        && (serverArtifactIds !== undefined || Object.hasOwn(message, 'artifacts'))
       const verifiedLocalFiles = message.role === 'assistant'
         ? optionalContextVerifiedLocalFiles(message?.modelContext)
         : undefined
@@ -530,7 +607,10 @@ export function normalizeServerSessionSnapshot(snapshot) {
             serverAuthoritative: true,
             toolCalls,
             ...(toolTrace.length ? { toolTrace } : {}),
-            ...(serverArtifacts.length ? { serverArtifacts } : {}),
+            ...(hasAuthoritativeArtifactCollection || serverArtifacts.length
+              ? { serverArtifacts }
+              : {}),
+            ...(serverArtifactIds !== undefined ? { serverArtifactIds } : {}),
             ...(serverDeliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds } : {}),
             ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
             ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
@@ -583,6 +663,7 @@ export async function fetchServerSessionSnapshot({
   for (let attempt = 0; attempt < safeAttempts; attempt += 1) {
     let offset = 0
     let revision = null
+    let turnEventRevision = null
     let totalMessages = null
     let firstPage = null
     const messages = []
@@ -600,9 +681,13 @@ export async function fetchServerSessionSnapshot({
 
       if (revision === null) {
         revision = page.revision
+        turnEventRevision = Number.isInteger(page.turnEventRevision)
+          ? page.turnEventRevision
+          : null
         totalMessages = Number.isInteger(page.totalMessages) ? page.totalMessages : null
         firstPage = page
       } else if (page.revision !== revision
+        || (turnEventRevision !== null && page.turnEventRevision !== turnEventRevision)
         || (Number.isInteger(page.totalMessages) && totalMessages !== page.totalMessages)) {
         break
       }
@@ -621,6 +706,7 @@ export async function fetchServerSessionSnapshot({
           session: firstPage.session || page.session,
           messages,
           revision,
+          ...(turnEventRevision !== null ? { turnEventRevision } : {}),
           totalMessages: totalMessages ?? messages.length,
           offset: 0,
           nextOffset: null,

@@ -47,7 +47,9 @@ test('clarification suspends a job and a steering answer resumes the same job', 
     },
   })
 
-  const created = await runtime.createJob('Prepare the report', { userId })
+  // Keep this fixture text-only: file-delivery acceptance is covered by its
+  // own tests and must not turn a clarification lifecycle test into a DOCX job.
+  const created = await runtime.createJob('Prepare a concise summary', { userId })
   assert.equal(await runtime.runOneTick(), true)
   const waiting = runtime.getJob(created.id, { userId })
   assert.equal(waiting.status, 'waiting')

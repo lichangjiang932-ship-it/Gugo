@@ -436,7 +436,7 @@ test('bash_exec:进程边界失败保留公开诊断且不漂移 cwd', async () 
       override: { processTreeCleanupFailed: true },
       code: 'PROCESS_TREE_CLEANUP_FAILED',
       flag: 'processTreeCleanupFailed',
-      error: /无法确认所有子进程都已退出/iu,
+      error: /PROCESS_TREE_CLEANUP_FAILED/u,
     },
   ]
 
@@ -466,6 +466,9 @@ test('bash_exec:进程边界失败保留公开诊断且不漂移 cwd', async () 
 
     assert.equal(result.ok, false, scenario.name)
     assert.equal(result.code, scenario.code, scenario.name)
+    assert.equal(result.verificationVerdict, 'indeterminate', scenario.name)
+    assert.equal(result.failureKind, 'infrastructure', scenario.name)
+    assert.equal(result.systemFailure, true, scenario.name)
     assert.equal(result[scenario.flag], true, scenario.name)
     assert.match(result.error, scenario.error, scenario.name)
     assert.equal(result.cwd, boundaryCwd, scenario.name)
@@ -484,6 +487,9 @@ test('bash_exec: Windows 目标程序启动失败返回结构化诊断', {
     assert.equal(result.ok, false)
     assert.equal(result.code, 'PROCESS_START_FAILED')
     assert.equal(result.processStartFailed, true)
+    assert.equal(result.verificationVerdict, 'indeterminate')
+    assert.equal(result.failureKind, 'infrastructure')
+    assert.equal(result.systemFailure, true)
     assert.match(result.processStartError, /ENOENT/iu)
     assert.equal(result.processIsolationFailed, undefined)
     assert.match(result.error, /ENOENT/iu)

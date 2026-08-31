@@ -4,11 +4,13 @@ import { listSessionTurnArtifacts } from './turnArtifactStore.js'
 import { deleteManagedAttachmentsForSession } from './managedAttachmentStore.js'
 import { runGovernedSessionDeletion } from './sessionDeletionGovernanceRuntime.js'
 import { enqueueSessionContentEventInDb } from './sessionContentOutboxStore.js'
-import { extractVerifiedLocalFiles, recoverLegacyVerifiedLocalFiles } from './turnMessageContext.js'
 import {
-  missingRequirementsForIncompleteReason,
-  normalizeIncompleteReason,
-} from './turnTerminalProjection.js'
+  latestTurnBoundaries,
+  loadIncompleteCheckpointMetadata,
+  recoverTerminalEvidenceMessages,
+  withRecoveredIncompleteFailure,
+  withRecoveredVerifiedLocalFiles,
+} from './sessionSnapshotRecovery.js'
 
 const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
 const MAX_BRANCH_DEPTH = 5
@@ -509,129 +511,6 @@ function mapMessage(row) {
   }
 }
 
-function withRecoveredVerifiedLocalFiles(message) {
-  const context = message?.modelContext
-  if (message?.role !== 'assistant'
-    || !context
-    || typeof context !== 'object'
-    || Object.hasOwn(context, 'verifiedLocalFiles')) {
-    return message
-  }
-  const options = {
-    userId: message.userId,
-    verifiedAt: context.turnCompletedAt || message.updatedAt || message.createdAt,
-  }
-  const verifiedLocalFiles = extractVerifiedLocalFiles(context.toolTrace, options)
-  const compatibleVerifiedLocalFiles = verifiedLocalFiles.length > 0
-    ? verifiedLocalFiles
-    : recoverLegacyVerifiedLocalFiles(context.toolTrace, options)
-  if (compatibleVerifiedLocalFiles.length === 0) return message
-  // Older messages predate persisted receipts. Enrich only this read response;
-  // the database remains unchanged and the download route independently
-  // reconstructs and authorizes the same deterministic receipt.
-  return {
-    ...message,
-    modelContext: { ...context, verifiedLocalFiles: compatibleVerifiedLocalFiles },
-  }
-}
-
-function incompleteCheckpointMetadata(stateJson) {
-  const state = parseModelContext(stateJson)
-  const final = state?.final
-  if (!final || typeof final !== 'object' || Array.isArray(final) || final.incomplete !== true) {
-    return null
-  }
-  const budgetExceeded = typeof final.budgetExceeded === 'boolean'
-    ? final.budgetExceeded
-    : undefined
-  const noProgress = typeof final.noProgress === 'boolean'
-    ? final.noProgress
-    : undefined
-  const rawReason = String(final.reason || '').trim().toLowerCase()
-  const incompleteReason = budgetExceeded === true
-    ? 'execution_budget_exhausted'
-    : noProgress === true
-      ? 'tool_no_progress'
-      : (rawReason ? normalizeIncompleteReason(rawReason, '') : '')
-  return {
-    ...(incompleteReason
-      ? {
-          incompleteReason,
-          missingRequirements: missingRequirementsForIncompleteReason(incompleteReason),
-        }
-      : {}),
-  }
-}
-
-function loadIncompleteCheckpointMetadata(db, { userId, sessionId, messages }) {
-  const turnIds = [...new Set((Array.isArray(messages) ? messages : [])
-    .filter((message) => (
-      message?.role === 'assistant'
-      && message?.modelContext?.turnEvidence === true
-      && message.modelContext.evidenceState === 'failed'
-      && message.modelContext.error
-      && typeof message.modelContext.error === 'object'
-      && !Array.isArray(message.modelContext.error)
-      && String(message.modelContext.error.code || '').trim().toUpperCase() === 'TURN_INCOMPLETE'
-      && ['incompleteReason', 'missingRequirements']
-        .some((field) => !Object.hasOwn(message.modelContext.error, field))
-    ))
-    .map((message) => String(message.modelContext.turnId || '').trim())
-    .filter(Boolean))]
-  if (turnIds.length === 0) return new Map()
-
-  const metadataByTurn = new Map()
-  const chunkSize = 250
-  for (let index = 0; index < turnIds.length; index += chunkSize) {
-    const chunk = turnIds.slice(index, index + chunkSize)
-    const placeholders = chunk.map(() => '?').join(', ')
-    const rows = db.prepare(`
-      SELECT turn_id, state_json
-      FROM turn_checkpoints
-      WHERE user_id = ? AND session_id = ? AND turn_id IN (${placeholders})
-    `).all(userId, sessionId, ...chunk)
-    for (const row of rows) {
-      const metadata = incompleteCheckpointMetadata(row.state_json)
-      if (metadata) metadataByTurn.set(String(row.turn_id), metadata)
-    }
-  }
-  return metadataByTurn
-}
-
-function withRecoveredIncompleteFailure(message, metadataByTurn) {
-  const context = message?.modelContext
-  const failure = context?.error
-  if (message?.role !== 'assistant'
-    || context?.turnEvidence !== true
-    || context.evidenceState !== 'failed'
-    || !failure
-    || typeof failure !== 'object'
-    || Array.isArray(failure)) {
-    return message
-  }
-  const turnId = String(context.turnId || '').trim()
-  const recovered = metadataByTurn.get(turnId)
-  if (!recovered) return message
-  const fields = ['incompleteReason', 'missingRequirements']
-  const additions = Object.fromEntries(fields
-    .filter((field) => !Object.hasOwn(failure, field) && Object.hasOwn(recovered, field))
-    .map((field) => [field, recovered[field]]))
-  if (Object.keys(additions).length === 0) return message
-
-  // Compatibility for older terminal evidence: enrich only the snapshot
-  // response. Newer persisted diagnostics and the database row remain the
-  // source of truth and are never overwritten here.
-  return {
-    ...message,
-    modelContext: {
-      ...context,
-      error: {
-        ...failure,
-        ...additions,
-      },
-    },
-  }
-}
 
 /**
  * Claim one legacy chat for the selected local-auth owner. This deliberately
@@ -928,6 +807,14 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
   return db.transaction(() => {
     const session = getSession({ userId, sessionId })
     if (!session) return null
+    // Session revisions track transcript mutations, while terminal turn events
+    // are append-only and can change independently. Expose both watermarks so
+    // a paged client cannot combine pages from different terminal states.
+    const turnEventRevision = Number(db.prepare(`
+      SELECT COALESCE(MAX(rowid), 0) AS revision
+      FROM turn_events
+      WHERE user_id = ? AND session_id = ?
+    `).get(userId, sessionId)?.revision) || 0
     const safeLimit = Math.min(2000, Math.max(1, Number(limit) || 2000))
     const safeOffset = clampOffset(offset)
     const totalMessages = db.prepare(`
@@ -950,12 +837,40 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
     }
     const storedMessages = listMessages({ userId, sessionId, limit: safeLimit, offset: safeOffset })
       .map(withRecoveredVerifiedLocalFiles)
+    const allTerminalBoundaries = latestTurnBoundaries(db, {
+      userId,
+      sessionId,
+    })
+    const pageMessageIds = new Set(storedMessages.map((message) => message?.id).filter(Boolean))
+    const pageTurnIds = new Set(storedMessages
+      .map((message) => String(message?.modelContext?.turnId || '').trim())
+      .filter(Boolean))
+    const terminalBoundaries = allTerminalBoundaries.filter((row) => (
+      pageTurnIds.has(row.turn_id)
+      || pageMessageIds.has(`${row.turn_id}:assistant`)
+      || (row.evidence_anchor_id && pageMessageIds.has(row.evidence_anchor_id))
+      || (!row.evidence_anchor_id && safeOffset === 0)
+    ))
+    const missingEvidenceMessages = allTerminalBoundaries.reduce(
+      (count, row) => count + (row.has_evidence_message ? 0 : 1),
+      0,
+    )
+    const terminalRecovery = recoverTerminalEvidenceMessages(
+      storedMessages,
+      terminalBoundaries,
+      { userId, sessionId },
+      {
+        synthesizeMissing: true,
+        synthesisAnchorIds: pageMessageIds,
+        includeUnanchored: safeOffset === 0,
+      },
+    )
     const incompleteMetadataByTurn = loadIncompleteCheckpointMetadata(db, {
       userId,
       sessionId,
-      messages: storedMessages,
+      messages: terminalRecovery.messages,
     })
-    const messages = storedMessages
+    const messages = terminalRecovery.messages
       .map((message) => withRecoveredIncompleteFailure(message, incompleteMetadataByTurn))
       .map((message) => {
         const turnId = String(message?.modelContext?.turnId || '')
@@ -965,19 +880,27 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
         const requestedIds = Array.isArray(message.modelContext?.artifactIds)
           ? new Set(message.modelContext.artifactIds.map(String))
           : null
-        const matched = requestedIds?.size
+        // An explicit empty list means this terminal message owns no managed
+        // artifacts. Only legacy messages that omit artifactIds may fall back
+        // to every durable artifact recorded for the turn.
+        const matched = requestedIds
           ? artifacts.filter((artifact) => requestedIds.has(String(artifact.id)))
           : artifacts
         return matched.length ? { ...message, artifacts: matched } : message
       })
-    const complete = safeOffset + messages.length >= totalMessages
+    const durableNextOffset = safeOffset + storedMessages.length
+    const snapshotTotalMessages = totalMessages + missingEvidenceMessages
+    const complete = durableNextOffset >= totalMessages
     return {
       session,
       messages,
       revision: session.revision,
-      totalMessages,
+      turnEventRevision,
+      totalMessages: snapshotTotalMessages,
       complete,
-      nextOffset: complete ? null : safeOffset + messages.length,
+      // Virtual terminal rows are returned beside their unique durable anchor
+      // but never consume an OFFSET position in the messages table.
+      nextOffset: complete ? null : durableNextOffset,
     }
   })()
 }

@@ -59,14 +59,37 @@ const toolFailureSchema = z.object({
   hint: z.string().optional(),
   attempts: z.number().int().positive().optional(),
 }).strict()
+const terminalReasonSchema = z.string().min(1).max(2_000)
+const terminalNextActionSchema = z.string().min(1).max(80).regex(/^[a-z][a-z0-9_]{0,79}$/u)
+const taskVerificationCheckSchema = z.object({
+  status: z.enum(['failed', 'indeterminate', 'rerun_required', 'stale']),
+  kind: z.enum(['test', 'lint', 'build', 'check', 'typecheck']),
+  cwd: z.string().min(1).max(1_000),
+  commandScope: z.string().max(1_000),
+  coverage: z.enum(['cwd', 'targeted']),
+  code: z.string().min(1).max(128).regex(/^[A-Z][A-Z0-9_]*$/u),
+  failures: z.number().int().min(0).max(3),
+  requiredEpoch: z.number().int().nonnegative(),
+  mutationTargets: z.array(z.string().min(1).max(2_000)).max(16).optional(),
+  diagnostic: z.string().min(1).max(1_200).optional(),
+}).strict()
+const taskVerificationSchema = z.object({
+  version: z.literal(1),
+  maxFailures: z.number().int().min(1).max(3),
+  consecutiveFailures: z.number().int().min(0).max(3),
+  checks: z.array(taskVerificationCheckSchema).min(1).max(9),
+}).strict()
 const turnFailureSchema = toolFailureSchema.extend({
   // New terminal projections are code-only. `message` and `hint` remain
   // optional solely so clients can replay events written by older runtimes.
   message: z.string().min(1).optional(),
   hint: z.string().optional(),
+  reason: terminalReasonSchema.optional(),
+  nextAction: terminalNextActionSchema.optional(),
   manualRetryable: z.boolean().optional(),
   incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
   missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+  taskVerification: taskVerificationSchema.optional(),
   persistence: z.object({
     failedEventCount: z.number().int().nonnegative(),
     blockedEventCount: z.number().int().nonnegative(),
@@ -157,6 +180,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   'turn.attempt': z.object({
     attempt: z.number().int().positive(),
     reason: z.string(),
+    manualRetry: z.literal(true).optional(),
     resetStreaming: z.boolean(),
     checkpointSequence: z.number().int().nonnegative().nullable(),
     previousStreamSequence: z.number().int().nonnegative(),
@@ -238,8 +262,15 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     code: z.string().min(1),
     // Legacy runtimes included localized copy here. New runtimes send code.
     message: z.string().min(1).optional(),
+    reason: terminalReasonSchema.optional(),
+    nextAction: terminalNextActionSchema.optional(),
+    error: turnFailureSchema.optional(),
+    incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
+    missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+    taskVerification: taskVerificationSchema.optional(),
     retryable: z.boolean(),
     text: z.string().optional(),
+    partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
@@ -253,6 +284,12 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     code: z.string().min(1),
     // Kept for backwards-compatible event replay only.
     message: z.string().min(1).optional(),
+    reason: terminalReasonSchema.optional(),
+    nextAction: terminalNextActionSchema.optional(),
+    error: turnFailureSchema.optional(),
+    incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
+    missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+    taskVerification: taskVerificationSchema.optional(),
     partialText: z.string().optional(),
     retryable: z.literal(false),
     manualRetryable: z.literal(true),
@@ -319,6 +356,10 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   'turn.paused': z.object({
     text: z.string(),
     clarification: z.union([jsonRecord, z.string().min(1)]),
+    reason: terminalReasonSchema.optional(),
+    nextAction: terminalNextActionSchema.optional(),
+    incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
+    missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
@@ -356,6 +397,10 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     // replace server-authored copy with the stable cancellation code.
     code: z.string().optional(),
     reason: z.string().optional(),
+    nextAction: terminalNextActionSchema.optional(),
+    incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
+    missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+    partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
@@ -369,9 +414,12 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     // Keep the legacy top-level fields so older clients can still render the failure.
     code: z.string().optional(),
     message: z.string().optional(),
+    reason: terminalReasonSchema.optional(),
+    nextAction: terminalNextActionSchema.optional(),
     error: turnFailureSchema.optional(),
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+    taskVerification: taskVerificationSchema.optional(),
     partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),

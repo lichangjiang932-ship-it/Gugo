@@ -246,7 +246,9 @@ export async function initializeExecution(s) {
         loopGuard: s.loopGuard.snapshot(),
         capabilityDecision: s.capabilityDecisionSnapshot(),
         ...(s.modelInvocation ? { modelInvocation: s.modelInvocation } : {}),
-        ...(s.directoryAuthorizationResolution ? { directoryAuthorizationResolution: s.directoryAuthorizationResolution } : {}),
+        ...(s.directoryAuthorizationResolutions.length > 0
+          ? { directoryAuthorizationResolution: s.directoryAuthorizationResolutions }
+          : {}),
         completionGuards: {
           partialResultEntries: s.partialResultFallback.snapshot(),
           representativeReadsInjected: s.representativeReadsInjected,

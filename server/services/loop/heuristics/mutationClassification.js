@@ -20,12 +20,14 @@ import {
   POWERSHELL_READ_ONLY_COMMAND,
   PROJECT_SCOPE_TARGET,
   PYTHON_INLINE_READ_EVIDENCE,
-  SHELL_VERIFICATION_COMMAND,
   VERIFICATION_TOOLS,
 } from './constants.js'
 import {
   hasInlinePythonMutation,
 } from './pythonMutationAnalysis.js'
+import {
+  isTaskVerificationCommand,
+} from '../taskVerificationCheckScope.js'
 
 export function inlinePythonCode(call) {
   if (!isCommandExecutionTool(call)) return ''
@@ -142,7 +144,9 @@ export function isVerificationCall(call) {
     return false
   }
   const command = String(call?.args?.command || '')
-  return SHELL_VERIFICATION_COMMAND.test(command)
+  const readOnlyGitCommand = /^git(?:\.exe)?\s+(?:status|diff)\b[^&|;<>`\r\n]*$/iu.test(command.trim())
+  return isTaskVerificationCommand(command)
+    || readOnlyGitCommand
     || PDF_LAYOUT_VALIDATOR_COMMAND.test(command)
     || isReadOnlyPythonVerificationCall(call)
     || isReadOnlyPowerShellVerificationCall(call)
@@ -214,12 +218,104 @@ export function targetsMatch(left, right) {
   return absolute === normalizeCase(resolvedRelative)
 }
 
-export function clearWorkspaceScopedMutationTargets(pendingTargets) {
+function comparablePath(value) {
+  return process.platform === 'win32' ? value.toLowerCase() : value
+}
+
+function trustedProjectRoots(projectDirectory = '', projectDirectories = []) {
+  const configured = [projectDirectory, ...(Array.isArray(projectDirectories) ? projectDirectories : [])]
+    .map(normalizeMutationTarget)
+    .filter((root) => /^(?:[a-z]:\/|\/)/iu.test(root))
+  if (configured.length === 0) {
+    configured.push(normalizeMutationTarget(
+      process.env.WORKSPACE_ROOT?.trim() || process.cwd(),
+    ))
+  }
+  return [...new Map(
+    configured.filter(Boolean).map((root) => [comparablePath(root), root]),
+  ).values()]
+}
+
+function projectVerificationScope(rawCwd, {
+  projectDirectory = '',
+  projectDirectories = [],
+} = {}) {
+  const cwd = normalizeMutationTarget(rawCwd) || '.'
+  const roots = trustedProjectRoots(projectDirectory, projectDirectories)
+  const primaryRoot = normalizeMutationTarget(projectDirectory) || roots[0] || ''
+  if (!/^(?:[a-z]:\/|\/)/iu.test(cwd)) {
+    if (cwd === '..' || cwd.startsWith('../') || !primaryRoot) return null
+    return { cwd, root: primaryRoot, primaryRoot }
+  }
+  const comparableCwd = comparablePath(cwd)
+  const root = roots
+    .filter((candidate) => {
+      const comparableRoot = comparablePath(candidate)
+      return comparableCwd === comparableRoot || comparableCwd.startsWith(`${comparableRoot}/`)
+    })
+    .sort((left, right) => right.length - left.length)[0]
+  if (!root) return null
+  const comparableRoot = comparablePath(root)
+  return {
+    cwd: comparableCwd === comparableRoot ? '.' : cwd.slice(root.length + 1),
+    root,
+    primaryRoot,
+  }
+}
+
+const PROJECT_SOURCE_EXTENSIONS = new Set([
+  '.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.hxx',
+  '.cs', '.css', '.dart', '.go', '.java', '.js', '.jsx', '.kt', '.kts',
+  '.less', '.lua', '.m', '.mm', '.mjs', '.cjs', '.php', '.pl', '.pm',
+  '.ps1', '.py', '.pyi', '.r', '.rb', '.rs', '.sass', '.scala', '.scss',
+  '.sh', '.sol', '.sql', '.swift', '.ts', '.tsx', '.vue', '.svelte', '.zig',
+])
+
+const PROJECT_SOURCE_FILENAMES = new Set([
+  'dockerfile', 'gemfile', 'makefile', 'rakefile',
+])
+
+function isProjectSourceMutationTarget(target) {
+  const normalized = normalizeMutationTarget(target)
+  if (!normalized) return false
+  const filename = normalized.split('/').at(-1)?.toLowerCase() || ''
+  if (PROJECT_SOURCE_FILENAMES.has(filename)) return true
+  const extensionIndex = filename.lastIndexOf('.')
+  return extensionIndex > 0 && PROJECT_SOURCE_EXTENSIONS.has(filename.slice(extensionIndex))
+}
+
+function absoluteProjectMutationCovered(target, verificationScope) {
+  const root = verificationScope?.root || ''
+  if (!root || !isProjectSourceMutationTarget(target)) return false
+  const normalizedTarget = normalizeMutationTarget(target)
+  const absoluteVerificationCwd = normalizeMutationTarget(
+    verificationScope.cwd === '.' ? root : `${root}/${verificationScope.cwd}`,
+  )
+  if (!normalizedTarget || !absoluteVerificationCwd) return false
+  const candidate = comparablePath(normalizedTarget)
+  const scope = comparablePath(absoluteVerificationCwd)
+  return candidate === scope || candidate.startsWith(`${scope}/`)
+}
+
+export function clearWorkspaceScopedMutationTargets(
+  pendingTargets,
+  rawCwd = '.',
+  { projectDirectory = '', projectDirectories = [] } = {},
+) {
+  const verificationScope = projectVerificationScope(rawCwd, {
+    projectDirectory,
+    projectDirectories,
+  })
+  if (!verificationScope) return false
+  const verificationCwd = verificationScope.cwd
   let cleared = false
   for (const pending of [...pendingTargets]) {
     if (pending === PROJECT_SCOPE_TARGET) {
-      pendingTargets.delete(pending)
-      cleared = true
+      if (verificationCwd === '.'
+        && comparablePath(verificationScope.root) === comparablePath(verificationScope.primaryRoot)) {
+        pendingTargets.delete(pending)
+        cleared = true
+      }
       continue
     }
     const normalized = normalizeMutationTarget(pending)
@@ -228,9 +324,21 @@ export function clearWorkspaceScopedMutationTargets(pendingTargets) {
     // may be a separately authorized artifact (PDF/PNG/etc.), even when it
     // happens to sit below WORKSPACE_ROOT, so it still needs target-specific
     // read/list/diff evidence before completion.
-    if (/^(?:[a-z]:\/|\/)/i.test(normalized)) continue
-    pendingTargets.delete(pending)
-    cleared = true
+    if (/^(?:[a-z]:\/|\/)/i.test(normalized)) {
+      if (absoluteProjectMutationCovered(normalized, verificationScope)) {
+        pendingTargets.delete(pending)
+        cleared = true
+      }
+      continue
+    }
+    if (comparablePath(verificationScope.root) === comparablePath(verificationScope.primaryRoot)
+      && isProjectSourceMutationTarget(normalized)
+      && (verificationCwd === '.'
+        || normalized === verificationCwd
+        || normalized.startsWith(`${verificationCwd}/`))) {
+      pendingTargets.delete(pending)
+      cleared = true
+    }
   }
   return cleared
 }

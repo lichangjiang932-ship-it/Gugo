@@ -11,7 +11,12 @@ import { recoveryCandidateVersion } from './turnEnginePolicy.js'
 import { createTurnEvidenceMessage } from './turnEvidenceMessageProjection.js'
 import { normalizeTurnOptionalId as normalizeOptionalId } from './turnStartRuntime.js'
 import {
+  excludeVerifiedLocalFiles,
+  mergeLocalFileReceipts,
+} from './turnRecoveryProjection.js'
+import {
   deliveryArtifactFields,
+  missingRequirementsForIncompleteReason,
   normalizeArtifactIds,
   normalizeTurnFailure,
   optionalDeliveryArtifactIds,
@@ -32,6 +37,42 @@ function usageFields(state) {
       ? { estimatedPromptTokens: state.latestEstimatedPromptTokens }
       : {}),
   }
+}
+
+const GENERIC_TURN_FAILURE_CODES = new Set([
+  'TURN_FAILED',
+  'INVALID_TURN_REQUEST',
+  'INTERNAL_ERROR',
+  'UNKNOWN_ERROR',
+])
+
+function inferredIncompleteReason(failure) {
+  if (failure?.incompleteReason) return failure.incompleteReason
+  const code = String(failure?.code || '').trim().toUpperCase()
+  if (!code || GENERIC_TURN_FAILURE_CODES.has(code)) return 'turn_incomplete'
+  if (code === 'REASONING_RUNAWAY') return 'reasoning_runaway'
+  if (code === 'TURN_COMPLETION_INVALID') return 'post_mutation_verification_missing'
+  if (/^(?:REPEATED_TOOL_CALL|TOOL_NO_PROGRESS)/u.test(code)) return 'tool_no_progress'
+  if (/^(?:MODEL_|TURN_MODEL_)/u.test(code)) return 'model_call_interrupted'
+  if (/(?:PERSISTENCE|CHECKPOINT|RECOVERY|LEASE|CONTEXT_DRIFT|EVENT_SEQUENCE)/u.test(code)) {
+    return 'recovery_blocked'
+  }
+  // The public failure code has already passed normalizeTurnFailure's stable
+  // code projection. Retaining it as a reason is more useful than collapsing
+  // every otherwise-unclassified failure into the generic turn_incomplete.
+  return /^[A-Z][A-Z0-9_]{1,95}$/u.test(code)
+    ? code.toLowerCase()
+    : 'turn_incomplete'
+}
+
+function inferredMissingRequirements(failure, incompleteReason) {
+  if (Array.isArray(failure?.missingRequirements)
+    && failure.missingRequirements.length > 0) return failure.missingRequirements
+  const code = String(failure?.code || '').trim().toUpperCase()
+  if (/^(?:TOOL_|TURN_TOOL_|BASH_|DOCKER_|LSP_|RUN_CODE_)/u.test(code)) {
+    return ['execution_environment_repair', 'remaining_task_steps']
+  }
+  return missingRequirementsForIncompleteReason(incompleteReason)
 }
 
 /**
@@ -137,7 +178,11 @@ export function createTurnTerminalEvidenceRuntime({
     })
   }
 
-  function boundaryOptions(options, { legacyBeforeAppend = false } = {}) {
+  function boundaryOptions(options, {
+    legacyBeforeAppend = false,
+    legacyAfterAppend = false,
+    legacyBestEffort = false,
+  } = {}) {
     if (atomicTurnBoundary) {
       return {
         commitEvent: ({ event }) => commitBoundaryEvent({
@@ -149,12 +194,21 @@ export function createTurnTerminalEvidenceRuntime({
         }),
       }
     }
-    if (legacyBeforeAppend) {
+    if (legacyBeforeAppend || legacyAfterAppend) {
       return {
-        beforeAppend: (event) => persistEvidence({
-          ...options,
-          serverLastSequence: event.sequence,
-        }),
+        afterAppend: async (storedEvent) => {
+          try {
+            await persistEvidence({
+              ...options,
+              serverLastSequence: storedEvent.sequence,
+            })
+          } catch (error) {
+            if (!legacyBestEffort) throw error
+            logWarn('turn.legacy_evidence_projection', error, {
+              userId, sessionId, turnId, state: options.state,
+            })
+          }
+        },
       }
     }
     return {}
@@ -166,18 +220,36 @@ export function createTurnTerminalEvidenceRuntime({
     const artifactIds = normalizeArtifactIds(
       originalError?.artifactIds ?? state.checkpointArtifactIds,
     )
-    const deliveryArtifactIds = optionalDeliveryArtifactIds(originalError, [])
+    const deliveryArtifactIds = optionalDeliveryArtifactIds(
+      originalError,
+      normalizeArtifactIds(state.checkpointDeliveryArtifactIds),
+    )
     const iterations = Math.max(0, Number(originalError?.iterations) || state.checkpointIterations)
     const failedAt = ports.now()
-    const verifiedLocalFiles = verifiedLocalFilesAt(failedAt)
-    const retainedLocalFiles = retainedLocalFilesAt(failedAt, verifiedLocalFiles)
+    const verifiedLocalFiles = mergeLocalFileReceipts(
+      originalError?.verifiedLocalFiles,
+      verifiedLocalFilesAt(failedAt),
+    )
+    const retainedLocalFiles = excludeVerifiedLocalFiles(
+      mergeLocalFileReceipts(
+        originalError?.retainedLocalFiles,
+        retainedLocalFilesAt(failedAt, verifiedLocalFiles),
+      ),
+      verifiedLocalFiles,
+    )
     let activeError = findEventPersistenceFailure(sourceError) || sourceError
 
     // A deferred delta failure is discovered before the first terminal append,
     // so exactly one retry is safe. A direct terminal append has unknown outcome
     // and must never be retried blindly.
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const failure = normalizeTurnFailure(activeError)
+      const projectedFailure = normalizeTurnFailure(activeError)
+      const incompleteReason = inferredIncompleteReason(projectedFailure)
+      const failure = {
+        ...projectedFailure,
+        incompleteReason,
+        missingRequirements: inferredMissingRequirements(projectedFailure, incompleteReason),
+      }
       const partialText = publicIncompleteText(
         originalError?.partialText || state.streamedAssistantText,
         '',
@@ -194,9 +266,14 @@ export function createTurnTerminalEvidenceRuntime({
         writtenAt: failedAt,
       }
       try {
-        await ports.emitter('turn.failed', {
+        const failedEvent = await ports.emitter('turn.failed', {
           code: failure.code,
           error: failure,
+          ...(failure.incompleteReason ? { incompleteReason: failure.incompleteReason } : {}),
+          ...(Array.isArray(failure.missingRequirements)
+            ? { missingRequirements: failure.missingRequirements }
+            : {}),
+          ...(failure.taskVerification ? { taskVerification: failure.taskVerification } : {}),
           partialText,
           artifactIds,
           ...deliveryArtifactFields(deliveryArtifactIds),
@@ -207,7 +284,10 @@ export function createTurnTerminalEvidenceRuntime({
         }, boundaryOptions(evidenceOptions))
         if (!atomicTurnBoundary) {
           try {
-            await persistEvidence(evidenceOptions)
+            await persistEvidence({
+              ...evidenceOptions,
+              serverLastSequence: failedEvent.sequence,
+            })
           } catch (error) {
             logWarn('turn.legacy_evidence_projection', error, {
               userId, sessionId, turnId, state: 'failed',
@@ -231,12 +311,27 @@ export function createTurnTerminalEvidenceRuntime({
 
   async function emitBlocked(sourceError) {
     const state = stateSnapshot()
-    const failure = normalizeTurnFailure(sourceError, { retryable: false })
-    const sideEffectUnknown = failure.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN'
+    const baseFailure = normalizeTurnFailure(sourceError, { retryable: false })
+    const sideEffectUnknown = baseFailure.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN'
       && sourceError?.unsafeToReplay === true
       && sourceError?.requiresUserVerification === true
-    const modelRequestUnknown = failure.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+    const modelRequestUnknown = baseFailure.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
       && sourceError?.unsafeToReplay === true
+    const incompleteReason = baseFailure.incompleteReason || (sideEffectUnknown
+      ? 'side_effect_outcome_unknown'
+      : modelRequestUnknown ? 'model_request_outcome_unknown' : 'recovery_blocked')
+    const missingRequirements = Array.isArray(baseFailure.missingRequirements)
+      && baseFailure.missingRequirements.length > 0
+      ? baseFailure.missingRequirements
+      : missingRequirementsForIncompleteReason(incompleteReason)
+    const failure = normalizeTurnFailure({
+      ...sourceError,
+      code: baseFailure.code,
+      incompleteReason,
+      missingRequirements,
+      manualRetryable: true,
+      retryable: false,
+    }, { retryable: false })
     const recoveryToolCallId = sideEffectUnknown
       ? normalizeOptionalId(sourceError?.sideEffectExecution?.toolCallId)
       : null
@@ -244,8 +339,17 @@ export function createTurnTerminalEvidenceRuntime({
       ? normalizeOptionalId(sourceError?.modelRequestId || sourceError?.modelInvocation?.id)
       : null
     const blockedAt = ports.now()
-    const verifiedLocalFiles = verifiedLocalFilesAt(blockedAt)
-    const retainedLocalFiles = retainedLocalFilesAt(blockedAt, verifiedLocalFiles)
+    const verifiedLocalFiles = mergeLocalFileReceipts(
+      sourceError?.verifiedLocalFiles,
+      verifiedLocalFilesAt(blockedAt),
+    )
+    const retainedLocalFiles = excludeVerifiedLocalFiles(
+      mergeLocalFileReceipts(
+        sourceError?.retainedLocalFiles,
+        retainedLocalFilesAt(blockedAt, verifiedLocalFiles),
+      ),
+      verifiedLocalFiles,
+    )
     const partialText = publicIncompleteText(
       sourceError?.partialText || state.streamedAssistantText,
       '',
@@ -263,17 +367,20 @@ export function createTurnTerminalEvidenceRuntime({
             ...(recoveryModelRequestId ? { modelRequestId: recoveryModelRequestId } : {}),
           }
         : null
-    const artifactIds = normalizeArtifactIds(state.checkpointArtifactIds)
-    const deliveryArtifactIds = optionalDeliveryArtifactIds(
-      { deliveryArtifactIds: state.checkpointDeliveryArtifactIds },
-      [],
+    const artifactIds = normalizeArtifactIds(
+      sourceError?.artifactIds ?? state.checkpointArtifactIds,
     )
+    const deliveryArtifactIds = optionalDeliveryArtifactIds(
+      sourceError,
+      normalizeArtifactIds(state.checkpointDeliveryArtifactIds),
+    )
+    const iterations = Math.max(0, Number(sourceError?.iterations) || state.checkpointIterations)
     const evidenceOptions = {
       state: 'blocked',
       text: partialText,
-      artifactIds: state.checkpointArtifactIds,
+      artifactIds,
       deliveryArtifactIds,
-      iterations: state.checkpointIterations,
+      iterations,
       error: { ...failure, retryable: false },
       verifiedLocalFiles,
       retainedLocalFiles,
@@ -282,6 +389,10 @@ export function createTurnTerminalEvidenceRuntime({
     }
     const blockedEvent = await ports.emitter('turn.blocked', {
       code: failure.code,
+      error: failure,
+      incompleteReason: failure.incompleteReason,
+      missingRequirements: failure.missingRequirements,
+      ...(failure.taskVerification ? { taskVerification: failure.taskVerification } : {}),
       partialText,
       retryable: false,
       manualRetryable: true,
@@ -305,20 +416,11 @@ export function createTurnTerminalEvidenceRuntime({
       deliveryArtifactIds,
       verifiedLocalFiles,
       retainedLocalFiles,
-      iterations: state.checkpointIterations,
-    }, boundaryOptions(evidenceOptions))
-    if (!atomicTurnBoundary) {
-      try {
-        await persistEvidence({
-          ...evidenceOptions,
-          serverLastSequence: blockedEvent.sequence,
-        })
-      } catch (error) {
-        logWarn('turn.legacy_evidence_projection', error, {
-          userId, sessionId, turnId, state: 'blocked',
-        })
-      }
-    }
+      iterations,
+    }, boundaryOptions(evidenceOptions, {
+      legacyAfterAppend: true,
+      legacyBestEffort: true,
+    }))
     await ports.writeRecoveryFailure({
       userId,
       sessionId,

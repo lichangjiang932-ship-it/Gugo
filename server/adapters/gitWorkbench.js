@@ -6,8 +6,8 @@ import { readJson, sendJson } from '../utils.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
-import { resolveForShellCwd } from './fsShellTools.js'
 import { assertGitToolPermitted, runAuditedProjectCheckHttp } from './gitWorkbenchPolicy.js'
+import { runProjectCheckTool } from './gitWorkbenchProjectCheck.js'
 import {
   changedPathsBetweenGitRevisions,
   runGitWorkspaceChange,
@@ -15,8 +15,8 @@ import {
 
 const MAX_OUTPUT = 1024 * 1024
 const DEFAULT_TIMEOUT = 60_000
-const CHECK_TIMEOUT = 5 * 60_000
-const ALLOWED_CHECKS = new Set(['lint', 'test', 'build'])
+
+export { runProjectCheckTool }
 
 function badReq(message, statusCode = 400) {
   const err = new Error(message)
@@ -244,32 +244,6 @@ export async function gitDiffTool({ path: rawPath, cwd: rawCwd, staged = false, 
   }
 }
 
-export async function runProjectCheckTool({ check, cwd: rawCwd, userId = null } = {}) {
-  const name = String(check || '').trim()
-  if (!ALLOWED_CHECKS.has(name)) {
-    throw badReq('run_project_check only supports lint, test, build')
-  }
-  assertGitToolPermitted(userId, 'run_project_check')
-  const resolvedCwd = resolveForShellCwd(rawCwd, { userId })
-  const root = resolvedCwd.fullPath
-  if (!fs.statSync(root).isDirectory()) throw badReq('cwd must be a directory')
-  const command = npmCommandArgs(name)
-  const result = await runFile(command.file, command.args, {
-    cwd: root,
-    timeout: CHECK_TIMEOUT,
-    rejectOnError: false,
-  })
-  return {
-    ok: result.ok,
-    check: name,
-    command: `npm run ${name}`,
-    exitCode: result.exitCode,
-    timedOut: result.timedOut,
-    stdout: clip(result.stdout),
-    stderr: clip(result.stderr),
-  }
-}
-
 function validateSelectedFiles(files, statusFiles) {
   if (!Array.isArray(files) || files.length === 0) throw badReq('selected files are required')
   const changed = new Map(statusFiles.map((file) => [file.path, file]))
@@ -453,12 +427,12 @@ export async function gitWriteTool({
   throw badReq('git_write action must be commit, branch, create_branch, checkout, pull, or push')
 }
 
-export async function dispatchGitTool(name, args, { userId = null } = {}) {
+export async function dispatchGitTool(name, args, { userId = null, signal = null } = {}) {
   const argsWithUser = userId ? { ...(args || {}), userId } : (args || {})
   switch (name) {
     case 'git_status': return gitStatusTool(argsWithUser)
     case 'git_diff': return gitDiffTool(argsWithUser)
-    case 'run_project_check': return runProjectCheckTool(argsWithUser)
+    case 'run_project_check': return runProjectCheckTool({ ...argsWithUser, signal })
     case 'git_commit': return gitCommitTool(argsWithUser)
     case 'git_push': return gitPushTool(argsWithUser)
     case 'git_rollback': return gitRollbackTool(argsWithUser)

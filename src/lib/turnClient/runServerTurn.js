@@ -50,6 +50,35 @@ function finiteDelay(value, fallback) {
   return Number.isFinite(numeric) ? Math.max(0, numeric) : fallback
 }
 
+function inheritTurnFailureContext(target, source) {
+  if (!target || !source || typeof source !== 'object') return target
+  for (const field of [
+    'serverFailure',
+    'action',
+    'status',
+    'expectedSequence',
+    'actualSequence',
+    'recovery',
+    'retryable',
+    'manualRetryable',
+    'retryAfter',
+    'incompleteReason',
+    'nextAction',
+    'missingRequirements',
+    'taskVerification',
+    'attempts',
+    'partialText',
+    'artifactIds',
+    'deliveryArtifactIds',
+    'verifiedLocalFiles',
+    'retainedLocalFiles',
+    'iterations',
+  ]) {
+    if (source[field] !== undefined) target[field] = source[field]
+  }
+  return target
+}
+
 function incompleteInitialTurnError(turnId) {
   const error = new Error(`Turn ${turnId} was accepted but its response ended before the turn could be read`)
   error.code = 'TURN_INITIAL_RESPONSE_INCOMPLETE'
@@ -80,7 +109,7 @@ function unconfirmedInitialTurnError(turnId, attempts, cause) {
   error.turnId = turnId
   error.attempts = attempts
   if (cause) error.cause = cause
-  return error
+  return inheritTurnFailureContext(error, cause)
 }
 
 function requiresRuntimeRestart(error) {
@@ -99,12 +128,21 @@ function recoveryDeadLetterError(turn) {
     recovery.error?.code || recovery.errorCode || 'TURN_RECOVERY_DEAD_LETTER',
   ).trim().toUpperCase() || 'TURN_RECOVERY_DEAD_LETTER'
   const attemptCount = Number(recovery.attemptCount)
-  const missingRequirements = ['MODEL_REQUEST_OUTCOME_UNKNOWN', 'SIDE_EFFECT_OUTCOME_UNKNOWN']
+  const sourceFailure = recovery.error && typeof recovery.error === 'object'
+    ? recovery.error
+    : turn?.lastEvent?.payload?.error && typeof turn.lastEvent.payload.error === 'object'
+      ? turn.lastEvent.payload.error
+      : {}
+  const fallbackRequirements = ['MODEL_REQUEST_OUTCOME_UNKNOWN', 'SIDE_EFFECT_OUTCOME_UNKNOWN']
     .includes(causeCode)
     ? ['operation_outcome_verification', 'explicit_recovery_retry']
     : causeCode.startsWith('MODEL_')
       ? ['model_service_available', 'explicit_recovery_retry']
       : ['execution_environment_repair', 'explicit_recovery_retry']
+  const missingRequirements = [...new Set([
+    ...(Array.isArray(sourceFailure.missingRequirements) ? sourceFailure.missingRequirements : []),
+    ...fallbackRequirements,
+  ])]
   const error = new Error(
     recovery.error?.message || 'Automatic turn recovery stopped after repeated failures',
   )
@@ -112,14 +150,15 @@ function recoveryDeadLetterError(turn) {
   error.retryable = false
   error.recovery = recovery
   error.serverFailure = {
+    ...sourceFailure,
     code: causeCode,
     retryable: false,
     manualRetryable: recovery.manualRetryable !== false,
-    incompleteReason: 'recovery_attempts_exhausted',
+    incompleteReason: sourceFailure.incompleteReason || 'recovery_attempts_exhausted',
     missingRequirements,
     ...(Number.isInteger(attemptCount) && attemptCount > 0 ? { attempts: attemptCount } : {}),
   }
-  return error
+  return inheritTurnFailureContext(error, turn?.lastEvent?.payload)
 }
 
 function isRecoveryDeadLetterError(error) {
@@ -257,13 +296,15 @@ export async function runServerTurn({
   }
 
   const acceptTerminalFromTurn = async (turn) => {
+    if (TERMINAL_EVENTS.has(turn?.lastEvent?.type)) {
+      const event = parseTurnEvent(turn.lastEvent)
+      await deliverEvent(event)
+      terminal = event
+      return true
+    }
     const recoveryError = recoveryDeadLetterError(turn)
     if (recoveryError) throw recoveryError
-    if (!TERMINAL_EVENTS.has(turn?.lastEvent?.type)) return false
-    const event = parseTurnEvent(turn.lastEvent)
-    await deliverEvent(event)
-    terminal = event
-    return true
+    return false
   }
 
   const withRequestSignal = async (request) => {
@@ -648,6 +689,7 @@ export async function runServerTurn({
             if (cancelRequested && webSocketError?.name === 'AbortError') throw webSocketError
             if (isApprovalPresentationClosed(webSocketError)) throw webSocketError
             if (requiresRuntimeRestart(webSocketError)) throw webSocketError
+            if (webSocketError?.serverFailure) throw webSocketError
             webSocketDisabled = true
           }
         }

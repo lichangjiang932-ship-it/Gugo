@@ -7,16 +7,21 @@ import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { isApprovalBypassEnabled } from './approvalSettingsStore.js'
 import { getWorkspaceTrustStatus, setWorkspaceTrust } from './workspaceTrustService.js'
 import { resolveManagedAttachmentPath } from './managedAttachmentStore.js'
+import {
+  LOCAL_FILE_GRANT_SCOPES,
+  accessModeSatisfies,
+  findAuthorizedDirectoryGrantByIdAndScope as findAuthorizedDirectoryGrantByIdAndScopeWithDependencies,
+  isInside,
+  mapGrant,
+} from './localFileGrantIdentity.js'
+
+export { LOCAL_FILE_GRANT_SCOPES }
 
 const MAX_GRANTS = 64
 const MAX_DIRECTORY_BROWSER_ENTRIES = 500
 const MAX_MANAGED_PROJECT_NAME_LENGTH = 80
 const MANAGED_PROJECTS_DIRECTORY = 'Gugo Projects'
 const DEFAULT_MANAGED_PROJECT_DIRECTORY = 'Default'
-export const LOCAL_FILE_GRANT_SCOPES = Object.freeze({
-  PERSISTENT: 'persistent',
-  SESSION: 'session',
-})
 const sessionGrantsByUser = new Map()
 const turnProjectDirectoryContext = new AsyncLocalStorage()
 
@@ -118,11 +123,6 @@ function samePath(left, right) {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
-function isInside(root, target) {
-  const relative = path.relative(root, target)
-  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
-}
-
 function pathKey(value) {
   const normalized = path.normalize(value)
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized
@@ -131,10 +131,6 @@ function pathKey(value) {
 function normalizeGrantScope(scope = LOCAL_FILE_GRANT_SCOPES.PERSISTENT) {
   if (scope === LOCAL_FILE_GRANT_SCOPES.PERSISTENT || scope === LOCAL_FILE_GRANT_SCOPES.SESSION) return scope
   throw serviceError('scope 仅支持 persistent 或 session', 400, 'INVALID_GRANT_SCOPE')
-}
-
-function accessModeSatisfies(actual, requested) {
-  return actual === 'read_write' || requested === 'read_only'
 }
 
 function assertPathWritable(canonicalPath, stat) {
@@ -195,21 +191,6 @@ function resolveTarget(rawPath, { allowMissing = false } = {}) {
       throw serviceError('无可锚定的祖先目录', 404, 'PATH_NOT_FOUND')
     }
     return { fullPath, anchorPath, exists: false }
-  }
-}
-
-function mapGrant(row) {
-  let available = false
-  try { available = fs.existsSync(row.root_path) } catch { /* unavailable */ }
-  return {
-    id: row.id,
-    path: row.root_path,
-    resourceType: row.resource_type,
-    accessMode: row.access_mode,
-    scope: row.scope || LOCAL_FILE_GRANT_SCOPES.PERSISTENT,
-    available,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
   }
 }
 
@@ -621,6 +602,16 @@ export function findAuthorizedDirectoryGrant({
     }
   })
   return row ? mapGrant(row) : null
+}
+
+export function findAuthorizedDirectoryGrantByIdAndScope(options = {}) {
+  return findAuthorizedDirectoryGrantByIdAndScopeWithDependencies(options, {
+    findAuthorizedDirectoryGrant,
+    getPersistentGrantRows,
+    getSessionGrantRows,
+    resolveDirectoryRequestPath,
+    resolveTarget,
+  })
 }
 
 export function isExistingLocalDirectory(rawPath) {

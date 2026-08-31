@@ -1,10 +1,18 @@
 import path from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
+import { failureAllowsFailedRetry } from './turnFailedRetryPolicy.js'
 
 const TERMINAL_TYPES = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
 const STREAM_DELTA_TYPES = new Set(['assistant.delta', 'reasoning.delta'])
 
 function isRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isTerminalRecoveryEvent(event) {
+  if (!TERMINAL_TYPES.has(event?.type)) return false
+  return event.type !== 'turn.completed' || isSuccessfulTurnCompletedEvent(event)
 }
 
 export function normalizeResolutionPath(value) {
@@ -71,6 +79,7 @@ export function failedRetryAttemptPayload(events, failureEvent, checkpoint) {
       ? previousAttemptNumber + 1
       : 2,
     reason: 'failed_retry',
+    ...(failureEvent.payload?.error?.manualRetryable === true ? { manualRetry: true } : {}),
     resetStreaming: true,
     checkpointSequence: Number.isInteger(checkpoint?.eventSequence)
       ? checkpoint.eventSequence
@@ -81,11 +90,54 @@ export function failedRetryAttemptPayload(events, failureEvent, checkpoint) {
   }
 }
 
+/** Prove an attempt was derived from its immediately preceding failed event. */
+export function isValidFailedRetryAttemptRecord(events, attemptEvent) {
+  if (attemptEvent?.type !== 'turn.attempt'
+    || attemptEvent.payload?.reason !== 'failed_retry'
+    || attemptEvent.payload?.resetStreaming !== true
+    || !Number.isInteger(attemptEvent.payload?.checkpointSequence)) return false
+
+  const ordered = (Array.isArray(events) ? events : [])
+    .filter((event) => Number.isInteger(event?.sequence))
+    .sort((left, right) => left.sequence - right.sequence)
+  const persistedAttempt = ordered.find((event) => event.sequence === attemptEvent.sequence)
+  if (!persistedAttempt
+    || persistedAttempt.id !== attemptEvent.id
+    || persistedAttempt.sessionId !== attemptEvent.sessionId
+    || persistedAttempt.turnId !== attemptEvent.turnId
+    || persistedAttempt.type !== attemptEvent.type
+    || persistedAttempt.createdAt !== attemptEvent.createdAt
+    || !isDeepStrictEqual(persistedAttempt.payload, attemptEvent.payload)) {
+    return false
+  }
+  const failureEvent = ordered.find((event) => event.sequence === attemptEvent.sequence - 1)
+  if (failureEvent?.type !== 'turn.failed'
+    || !failureAllowsFailedRetry(failureEvent.payload, attemptEvent.payload)) return false
+
+  const expected = failedRetryAttemptPayload(ordered, failureEvent, {
+    eventSequence: attemptEvent.payload.checkpointSequence,
+  })
+  return !!expected && isDeepStrictEqual(attemptEvent.payload, expected)
+}
+
+/** Re-prove an active marker and its still-current checkpoint before restore. */
+export function isValidActiveFailedRetryAttempt(events, attemptEvent, checkpoint) {
+  return !!checkpoint?.state
+    && Number.isInteger(checkpoint.eventSequence)
+    && attemptEvent?.payload?.checkpointSequence === checkpoint.eventSequence
+    && isValidFailedRetryAttemptRecord(events, attemptEvent)
+    && !(Array.isArray(events) ? events : []).some((event) => (
+      Number.isInteger(event?.sequence)
+      && event.sequence > attemptEvent.sequence
+      && isTerminalRecoveryEvent(event)
+    ))
+}
+
 export async function recoveryAttemptAfterCheckpoint(replayEvents, scope, checkpoint) {
   const events = await replayPersistedTurnEvents(replayEvents, scope)
   const checkpointSequence = Number.isInteger(checkpoint?.sequence) ? checkpoint.sequence : -1
   const terminalAfterCheckpoint = events.some((event) => (
-    TERMINAL_TYPES.has(event.type) && event.sequence > checkpointSequence
+    isTerminalRecoveryEvent(event) && event.sequence > checkpointSequence
   ))
   if (terminalAfterCheckpoint) return null
 

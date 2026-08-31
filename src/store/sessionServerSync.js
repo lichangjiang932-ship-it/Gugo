@@ -39,9 +39,19 @@ export function isServerBackedSession(session) {
 function hasIncompleteTaskDiagnosticGap(message) {
   const failure = message?.meta?.serverFailure
   if (!failure || typeof failure !== 'object' || Array.isArray(failure)) return false
-  if (String(failure.code || '').trim().toUpperCase() !== 'TURN_INCOMPLETE') return false
-  return !String(failure.incompleteReason || '').trim()
+  const code = String(failure.code || '').trim().toUpperCase()
+  const incompleteReason = String(failure.incompleteReason || '').trim().toLowerCase()
+  if (code !== 'TURN_INCOMPLETE' && !incompleteReason) return false
+  if (!incompleteReason
     || !Array.isArray(failure.missingRequirements)
+    || typeof failure.retryable !== 'boolean') return true
+  if (['task_verification_repair_exhausted', 'task_verification_repair_pending'].includes(incompleteReason)) {
+    const verification = failure.taskVerification
+    if (!verification || typeof verification !== 'object' || !Array.isArray(verification.checks)) return true
+  }
+  const blocked = message?.meta?.serverConnectionState === 'blocked'
+    || code === 'TURN_RECOVERY_BLOCKED'
+  return blocked && typeof failure.manualRetryable !== 'boolean'
 }
 
 export function needsServerTranscriptHydration(session) {
@@ -73,6 +83,76 @@ function sameArtifactCollection(left, right) {
   const rightIds = normalizedArtifactIds(right)
   return leftIds.length === rightIds.length
     && leftIds.every((id, index) => id === rightIds[index])
+}
+
+function hasMeaningfulEvidence(value) {
+  if (Array.isArray(value)) return value.length > 0
+  if (value && typeof value === 'object') return Object.keys(value).length > 0
+  return value !== undefined && value !== null && value !== ''
+}
+
+function stableTerminalFailure(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const failure = { ...value }
+  for (const field of ['message', 'hint', 'reason']) delete failure[field]
+  if (failure.error && typeof failure.error === 'object' && !Array.isArray(failure.error)) {
+    failure.error = stableTerminalFailure(failure.error)
+  } else if (Object.hasOwn(failure, 'error')) {
+    delete failure.error
+  }
+  if (failure.cause && typeof failure.cause === 'object' && !Array.isArray(failure.cause)) {
+    failure.cause = stableTerminalFailure(failure.cause)
+  } else if (Object.hasOwn(failure, 'cause')) {
+    delete failure.cause
+  }
+  if (failure.recovery && typeof failure.recovery === 'object' && !Array.isArray(failure.recovery)) {
+    const recovery = { ...failure.recovery }
+    for (const field of ['message', 'hint', 'reason', 'errorMessage']) delete recovery[field]
+    if (recovery.error && typeof recovery.error === 'object' && !Array.isArray(recovery.error)) {
+      recovery.error = stableTerminalFailure(recovery.error)
+    } else if (Object.hasOwn(recovery, 'error')) {
+      delete recovery.error
+    }
+    if (recovery.cause && typeof recovery.cause === 'object' && !Array.isArray(recovery.cause)) {
+      recovery.cause = stableTerminalFailure(recovery.cause)
+    } else if (Object.hasOwn(recovery, 'cause')) {
+      delete recovery.cause
+    }
+    failure.recovery = recovery
+  }
+  return failure
+}
+
+function mergeTerminalFailureDiagnostics(serverFailure, localFailure) {
+  const stableServerFailure = stableTerminalFailure(serverFailure)
+  const stableLocalFailure = stableTerminalFailure(localFailure)
+  if (!stableServerFailure || typeof stableServerFailure !== 'object' || Array.isArray(stableServerFailure)) {
+    return stableServerFailure
+  }
+  if (!stableLocalFailure || typeof stableLocalFailure !== 'object' || Array.isArray(stableLocalFailure)) {
+    return stableServerFailure
+  }
+  const merged = { ...stableLocalFailure, ...stableServerFailure }
+  for (const key of ['incompleteReason', 'nextAction']) {
+    const serverValue = String(stableServerFailure[key] || '').trim()
+    const localValue = String(stableLocalFailure[key] || '').trim()
+    if (serverValue || localValue) merged[key] = serverValue || localValue
+  }
+  for (const key of ['missingRequirements', 'taskVerification']) {
+    if (!hasMeaningfulEvidence(stableServerFailure[key]) && hasMeaningfulEvidence(stableLocalFailure[key])) {
+      merged[key] = stableLocalFailure[key]
+    }
+  }
+  return merged
+}
+
+function terminalOutcomeState(meta) {
+  if (!meta || typeof meta !== 'object') return ''
+  if (meta.serverConnectionState === 'blocked' || meta.serverRecoveryBlocked === true) return 'blocked'
+  if (meta.cancelled === true) return 'cancelled'
+  if (meta.interrupted === true) return 'interrupted'
+  if (meta.failed === true) return 'failed'
+  return ''
 }
 
 function normalizedMessageContent(value) {
@@ -133,15 +213,27 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
       role: serverMessage.role,
       // A completed snapshot should be authoritative, but an unexpectedly empty
       // assistant row must not erase text already received over the live stream.
-      content: serverMessage.content || localMessage.content || '',
+      // Conversely, a snapshot behind the live event cursor must never roll
+      // newer partial/final model output back to an older persisted body.
+      content: localHasNewerTurnState
+        ? localMessage.content || serverMessage.content || ''
+        : serverMessage.content || localMessage.content || '',
       timestamp: serverMessage.timestamp ?? localMessage.timestamp,
     }
     if (Object.keys(serverMeta).length || Object.keys(localMeta).length) {
       merged.meta = { ...serverMeta, ...localMeta }
       delete merged.meta.pendingServerSync
       if (serverMessage.role === 'assistant') {
+        const serverOutcomeState = terminalOutcomeState(serverMeta)
+        const preserveLocalTerminalEvidence = !!serverOutcomeState
+          && serverOutcomeState === terminalOutcomeState(localMeta)
         for (const key of ['turnStartedAt', 'turnCompletedAt', 'latency']) {
-          if (Object.hasOwn(serverMeta, key)) merged.meta[key] = serverMeta[key]
+          if (localHasNewerTurnState) {
+            if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
+            else delete merged.meta[key]
+          } else if (Object.hasOwn(serverMeta, key)) {
+            merged.meta[key] = serverMeta[key]
+          }
         }
         const recoveryStub = serverMeta.serverRecoveryStub === true
         const canonicalTextChanged = !recoveryStub && merged.content !== localMessage.content
@@ -161,7 +253,9 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
           }
         }
         merged.meta.serverTurnId = serverMeta.serverTurnId ?? localMeta.serverTurnId ?? null
-        merged.meta.streaming = recoveryStub || serverMeta.streaming === true
+        merged.meta.streaming = localHasNewerTurnState
+          ? localMeta.streaming === true
+          : recoveryStub || serverMeta.streaming === true
         merged.meta.serverAuthoritative = !recoveryStub
         if (recoveryStub) merged.meta.serverRecoveryStub = true
         else delete merged.meta.serverRecoveryStub
@@ -169,23 +263,61 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
         // live event has already advanced this Turn. In particular, an older
         // local TURN_INCOMPLETE object must not erase structured diagnostics
         // recovered by the server from the scoped checkpoint.
-        if (!localHasNewerTurnState && !recoveryStub) {
-          if (Object.hasOwn(serverMeta, 'serverFailure')) {
-            merged.meta.serverFailure = serverMeta.serverFailure
-          } else {
-            delete merged.meta.serverFailure
+        const terminalEvidenceKeys = [
+          'serverFailure',
+          'serverPartialText',
+          'serverArtifactIds',
+          'serverIterations',
+        ]
+        if (localHasNewerTurnState) {
+          for (const key of terminalEvidenceKeys) {
+            if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
+            else delete merged.meta[key]
+          }
+        } else if (!recoveryStub) {
+          for (const key of terminalEvidenceKeys) {
+            if (Object.hasOwn(serverMeta, key)) {
+              // Compatibility snapshots can expose an empty outer field while
+              // a newer live terminal event already supplied durable evidence.
+              // Keep the richer value unless the snapshot carries meaningful
+              // replacement data.
+              if (!preserveLocalTerminalEvidence
+                || hasMeaningfulEvidence(serverMeta[key])
+                || !hasMeaningfulEvidence(localMeta[key])) {
+                merged.meta[key] = key === 'serverFailure'
+                  ? mergeTerminalFailureDiagnostics(serverMeta[key], localMeta[key])
+                  : serverMeta[key]
+              }
+            } else if (key === 'serverFailure') {
+              delete merged.meta[key]
+            }
           }
         }
         // A completed snapshot is the source of truth for persisted files.
         // Keep local artifacts only when an older server response does not
         // expose the field at all; an explicit server list must replace an
         // empty or partial list left behind by a missed live tool event.
-        if (Object.hasOwn(serverMeta, 'serverArtifacts')) {
-          merged.meta.serverArtifacts = serverMeta.serverArtifacts
+        for (const key of ['serverArtifacts', 'serverDeliveryArtifactIds']) {
+          if (localHasNewerTurnState) {
+            if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
+            else delete merged.meta[key]
+          } else if (Object.hasOwn(serverMeta, key)) {
+            if (!preserveLocalTerminalEvidence
+              || hasMeaningfulEvidence(serverMeta[key])
+              || !hasMeaningfulEvidence(localMeta[key])) {
+              merged.meta[key] = serverMeta[key]
+            }
+          }
         }
-        if (Object.hasOwn(serverMeta, 'serverDeliveryArtifactIds')) {
-          merged.meta.serverDeliveryArtifactIds = serverMeta.serverDeliveryArtifactIds
-        } else if (!recoveryStub
+        if (!localHasNewerTurnState && Object.hasOwn(serverMeta, 'serverDeliveryArtifactIds')) {
+          if (!preserveLocalTerminalEvidence
+            || hasMeaningfulEvidence(serverMeta.serverDeliveryArtifactIds)
+            || !hasMeaningfulEvidence(localMeta.serverDeliveryArtifactIds)) {
+            merged.meta.serverDeliveryArtifactIds = serverMeta.serverDeliveryArtifactIds
+          }
+        } else if (!preserveLocalTerminalEvidence
+          && !localHasNewerTurnState
+          && !recoveryStub
           && Object.hasOwn(serverMeta, 'serverArtifacts')
           && Object.hasOwn(localMeta, 'serverDeliveryArtifactIds')
           && !sameArtifactCollection(localMeta.serverArtifacts, serverMeta.serverArtifacts)) {
@@ -200,6 +332,9 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
             if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
             else delete merged.meta[key]
           } else if (Object.hasOwn(serverMeta, key)) {
+            // Presence is the authority boundary for persisted receipts. An
+            // explicit empty list means the latest terminal projection found
+            // no files in that state and must clear an older live/retry list.
             merged.meta[key] = serverMeta[key]
           }
         }
@@ -213,7 +348,41 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
         const localResumeInFlight = localMeta.directoryAuthorizationPending === true
           || localMeta.serverResumeResolution != null
 
-        if (serverMeta.cancelled === true && !localHasNewerTurnState) {
+        const recoveryMetaKeys = [
+          'serverRecoveryKind',
+          'serverRecoveryToolCallId',
+          'serverRecoveryModelRequestId',
+          'serverRecoveryActionPath',
+        ]
+        const serverRecoveryBlocked = serverMeta.serverConnectionState === 'blocked'
+          || serverMeta.serverRecoveryBlocked === true
+        if (serverRecoveryBlocked && !localHasNewerTurnState) {
+          merged.meta.failed = false
+          merged.meta.cancelled = false
+          merged.meta.interrupted = false
+          merged.meta.paused = false
+          merged.meta.streaming = false
+          merged.meta.serverConnectionState = 'blocked'
+          merged.meta.serverRecoveryBlocked = true
+          for (const key of recoveryMetaKeys) {
+            merged.meta[key] = serverMeta[key] ?? null
+          }
+          if (serverPauseSequence !== null) {
+            merged.meta.serverLastSequence = serverPauseSequence
+          }
+        } else if (serverMeta.failed === true && !localHasNewerTurnState) {
+          merged.meta.failed = true
+          merged.meta.cancelled = false
+          merged.meta.interrupted = false
+          merged.meta.paused = false
+          merged.meta.streaming = false
+          merged.meta.serverConnectionState = serverMeta.serverConnectionState ?? null
+          merged.meta.serverRecoveryBlocked = false
+          for (const key of recoveryMetaKeys) merged.meta[key] = null
+          if (serverPauseSequence !== null) {
+            merged.meta.serverLastSequence = serverPauseSequence
+          }
+        } else if (serverMeta.cancelled === true && !localHasNewerTurnState) {
           merged.meta.cancelled = true
           merged.meta.failed = false
           merged.meta.interrupted = false
@@ -224,6 +393,10 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
             merged.meta.serverLastSequence = serverPauseSequence
           }
         } else if (serverMeta.interrupted === true && !localHasNewerTurnState) {
+          merged.meta.failed = false
+          merged.meta.cancelled = false
+          merged.meta.interrupted = true
+          merged.meta.paused = false
           merged.meta.streaming = true
           merged.meta.turnCompletedAt = null
           merged.meta.latency = null
@@ -246,12 +419,40 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
           // Persisted pause state is authoritative over stale live metadata.
           // In particular, a local `serverClarification: null` must not erase
           // the directory request before MessageRow can render its inline card.
+          merged.meta.failed = false
+          merged.meta.cancelled = false
+          merged.meta.interrupted = false
           merged.meta.paused = true
           merged.meta.streaming = false
           merged.meta.serverConnectionState = serverMeta.serverConnectionState || 'paused'
           merged.meta.serverClarification = serverMeta.serverClarification ?? null
           merged.meta.directoryAuthorizationPending = false
           merged.meta.serverResumeResolution = null
+          if (serverPauseSequence !== null) {
+            merged.meta.serverLastSequence = serverPauseSequence
+          }
+        } else if (!localHasNewerTurnState
+          && !recoveryStub
+          && serverMeta.serverAuthoritative === true
+          && serverMeta.streaming !== true) {
+          // A canonical completed assistant row must clear every lifecycle bit
+          // inherited from an older local failure/pause/interruption. Without
+          // this branch the final text can be complete while the UI still
+          // renders the task as unfinished.
+          merged.meta.failed = false
+          merged.meta.cancelled = false
+          merged.meta.interrupted = false
+          merged.meta.paused = false
+          merged.meta.streaming = false
+          merged.meta.serverConnectionState = null
+          merged.meta.serverRecoveryBlocked = false
+          merged.meta.serverClarification = null
+          merged.meta.directoryAuthorizationPending = false
+          merged.meta.serverResumeResolution = null
+          for (const key of recoveryMetaKeys) merged.meta[key] = null
+          if (!Object.hasOwn(serverMeta, 'serverPartialText')) {
+            delete merged.meta.serverPartialText
+          }
           if (serverPauseSequence !== null) {
             merged.meta.serverLastSequence = serverPauseSequence
           }

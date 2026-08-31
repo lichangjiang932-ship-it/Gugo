@@ -1,7 +1,8 @@
 import { createTurnEvent } from '../../shared/turnEvents.js'
-import { EventWriteBehindError } from './eventWriteBehind.js'
+import { EventWriteBehindError, findTurnEventFenceError } from './eventWriteBehind.js'
 import { publishCommittedAgentEvent } from '../core/agentEventConsumerRuntime.js'
 import { logWarn } from '../utils/logger.js'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 
 export const TURN_EVENT_PERSISTENCE_FAILURE_CODE = 'TURN_EVENT_PERSISTENCE_FAILED'
 export const TURN_TERMINAL_PERSISTENCE_FAILURE_CODE = 'TURN_TERMINAL_PERSISTENCE_FAILED'
@@ -14,6 +15,95 @@ const DURABLE_BOUNDARY_EVENT_TYPES = new Set([
   'turn.interrupted',
   'turn.blocked',
 ])
+
+const INCOMPLETE_BOUNDARY_DEFAULTS = Object.freeze({
+  'turn.cancelled': {
+    incompleteReason: 'turn_incomplete',
+    reason: 'The turn was cancelled before all requested work completed.',
+    missingRequirements: ['remaining_task_steps'],
+    nextAction: 'retry_turn',
+  },
+  'turn.failed': {
+    incompleteReason: 'turn_incomplete',
+    reason: 'The turn stopped before all requested work completed.',
+    missingRequirements: ['remaining_task_steps'],
+    nextAction: 'retry_turn',
+  },
+  'turn.interrupted': {
+    incompleteReason: 'model_call_interrupted',
+    reason: 'The turn was interrupted before all requested work completed.',
+    missingRequirements: ['model_response', 'remaining_task_steps'],
+    nextAction: 'resume_turn',
+  },
+  'turn.blocked': {
+    incompleteReason: 'recovery_blocked',
+    reason: 'The turn is blocked until its recovery requirements are satisfied.',
+    missingRequirements: ['execution_environment_repair', 'explicit_recovery_retry'],
+    nextAction: 'retry_recovery',
+  },
+  'turn.paused': {
+    incompleteReason: 'turn_incomplete',
+    reason: 'The turn is waiting for required information.',
+    missingRequirements: ['user_clarification'],
+    nextAction: 'provide_input',
+  },
+})
+
+function normalizedBoundaryStringList(value, fallback) {
+  const values = Array.isArray(value) && value.length > 0 ? value : fallback
+  return [...new Set(values.map((entry) => String(entry || '').trim()).filter(Boolean))].slice(0, 16)
+}
+
+function incompleteBoundaryPayload(type, value) {
+  const defaults = INCOMPLETE_BOUNDARY_DEFAULTS[type]
+  if (!defaults) return value
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const error = source.error && typeof source.error === 'object' && !Array.isArray(source.error)
+    ? source.error
+    : null
+  const rawIncompleteReason = String(
+    source.incompleteReason || error?.incompleteReason || defaults.incompleteReason,
+  ).trim().toLowerCase()
+  const incompleteReason = /^[a-z][a-z0-9_]{1,95}$/u.test(rawIncompleteReason)
+    ? rawIncompleteReason
+    : defaults.incompleteReason
+  const clarificationReason = String(
+    source.clarification?.question || source.clarification?.message || '',
+  ).trim()
+  const reason = String(
+    source.message
+      || error?.message
+      || source.reason
+      || error?.reason
+      || clarificationReason
+      || source.text
+      || source.partialText
+      || defaults.reason,
+  ).trim().slice(0, 2_000) || defaults.reason
+  const missingRequirements = normalizedBoundaryStringList(
+    source.missingRequirements || error?.missingRequirements,
+    defaults.missingRequirements,
+  )
+  const rawNextAction = String(
+    source.nextAction || error?.nextAction || defaults.nextAction,
+  ).trim().toLowerCase().slice(0, 80)
+  const nextAction = /^[a-z][a-z0-9_]{0,79}$/u.test(rawNextAction)
+    ? rawNextAction
+    : defaults.nextAction
+  return {
+    ...source,
+    incompleteReason,
+    reason,
+    missingRequirements,
+    nextAction,
+    verifiedLocalFiles: Array.isArray(source.verifiedLocalFiles)
+      ? source.verifiedLocalFiles
+      : Array.isArray(error?.verifiedLocalFiles) ? error.verifiedLocalFiles : [],
+    retainedLocalFiles: Array.isArray(source.retainedLocalFiles)
+      ? source.retainedLocalFiles
+      : Array.isArray(error?.retainedLocalFiles) ? error.retainedLocalFiles : [],
+  }
+}
 
 export function isTerminalTurnEventType(value) {
   return TERMINAL_EVENT_TYPES.has(String(value || ''))
@@ -205,6 +295,7 @@ export function createTurnEventEmitter({
   let closed = false
   let closePromise = null
   let deferredSinceBarrier = []
+  let executionLease = null
   const eventWriteBehind = createEventWriteBehind()
   if (!eventWriteBehind
     || typeof eventWriteBehind.enqueue !== 'function'
@@ -224,6 +315,7 @@ export function createTurnEventEmitter({
   }
 
   const journalReportedFailure = async (failure) => {
+    if (findTurnEventFenceError(failure)) return
     const batch = Array.isArray(failure?.failedEntries) ? failure.failedEntries : []
     const failedAt = Number.isInteger(failure?.failedAt) ? failure.failedAt : now()
     let journalError = null
@@ -317,15 +409,27 @@ export function createTurnEventEmitter({
 
   const emit = (type, payload = {}, {
     beforeAppend,
+    afterAppend,
     checkpointState = null,
     commitEvent = null,
   } = {}) => {
     if (closed) return Promise.reject(createClosedError())
+    if (type === 'turn.completed'
+      && !isSuccessfulTurnCompletedEvent({ type, payload })) {
+      return Promise.reject(Object.assign(new Error('turn.completed payload contains incomplete terminal evidence'), {
+        code: 'TURN_COMPLETION_INVALID',
+        status: 409,
+        retryable: false,
+      }))
+    }
     if (commitEvent !== null && typeof commitEvent !== 'function') {
       return Promise.reject(new TypeError('commitEvent must be a function or null'))
     }
     if (commitEvent && beforeAppend) {
       return Promise.reject(new TypeError('commitEvent and beforeAppend are mutually exclusive'))
+    }
+    if (afterAppend !== undefined && afterAppend !== null && typeof afterAppend !== 'function') {
+      return Promise.reject(new TypeError('afterAppend must be a function when provided'))
     }
     const pending = appendQueue.then(async () => {
       const event = createTurnEvent({
@@ -334,13 +438,13 @@ export function createTurnEventEmitter({
         turnId,
         sequence: nextSequence,
         type,
-        payload,
+        payload: incompleteBoundaryPayload(type, payload),
         createdAt: now(),
       })
       await beforeAppend?.(event)
       let stored
       if (DEFERRED_EVENT_TYPES.has(type) && checkpointState === null && !commitEvent) {
-        const entry = { userId, event, checkpointState }
+        const entry = { userId, event, checkpointState, executionLease }
         const queued = eventWriteBehind.enqueue(entry)
         deferredSinceBarrier.push(queued?.event ? queued : entry)
         stored = queued?.event || event
@@ -349,7 +453,7 @@ export function createTurnEventEmitter({
         try {
           stored = commitEvent
             ? await commitEvent({ userId, event, checkpointState })
-            : await appendEvent({ userId, event, checkpointState })
+            : await appendEvent({ userId, event, checkpointState, executionLease })
           if (isDurableTurnBoundaryEventType(type)) {
             const verification = await verifyEventCommit({ userId, event, storedEvent: stored })
             if (verification?.committed !== true || !verification?.receipt) {
@@ -357,8 +461,10 @@ export function createTurnEventEmitter({
             }
           }
         } catch (error) {
+          const fenceError = findTurnEventFenceError(error)
+          if (fenceError) throw fenceError
           const failedAt = now()
-          const failedEntry = { userId, event, checkpointState }
+          const failedEntry = { userId, event, checkpointState, executionLease }
           let journalError = null
           try {
             await recordEventWriteFailure?.({
@@ -418,6 +524,7 @@ export function createTurnEventEmitter({
         }
       }
       if (!(DEFERRED_EVENT_TYPES.has(type) && checkpointState === null && !commitEvent)) {
+        await afterAppend?.(stored, event)
         // A transaction helper may coalesce a concurrent/idempotent request
         // onto an event that was committed by another writer. Publish the
         // authoritative persistence result, never the losing request event.
@@ -441,6 +548,19 @@ export function createTurnEventEmitter({
       onWriterClose?.(eventWriteBehind)
     })()
     return closePromise
+  }
+  emit.bindExecutionLease = (proof) => {
+    const ownerId = String(proof?.ownerId || '').trim()
+    const fencingToken = Number(proof?.fencingToken)
+    if (!ownerId || !Number.isSafeInteger(fencingToken) || fencingToken <= 0) {
+      throw new TypeError('a valid execution lease proof is required')
+    }
+    if (executionLease
+      && (executionLease.ownerId !== ownerId || executionLease.fencingToken !== fencingToken)) {
+      throw new Error('turn event emitter execution lease is already bound')
+    }
+    executionLease = Object.freeze({ ownerId, fencingToken })
+    return executionLease
   }
   emit.writer = eventWriteBehind
   return emit

@@ -146,6 +146,17 @@ test('turn attempt events require an explicit recovery cursor and confirmed stre
     createdAt: 5,
   })
   assert.equal(attempt.payload.checkpointSequence, null)
+  const manualAttempt = createTurnEvent({
+    ...attempt,
+    id: 'attempt-manual',
+    payload: { ...attempt.payload, manualRetry: true },
+  })
+  assert.equal(manualAttempt.payload.manualRetry, true)
+  assert.throws(() => createTurnEvent({
+    ...attempt,
+    id: 'attempt-manual-false',
+    payload: { ...attempt.payload, manualRetry: false },
+  }))
   assert.throws(() => createTurnEvent({
     ...attempt,
     id: 'invalid-attempt',
@@ -394,6 +405,23 @@ test('turn failed events preserve legacy fields and structured recovery evidence
         retryable: true,
         hint: 'retry with a healthy endpoint',
         attempts: 2,
+        taskVerification: {
+          version: 1,
+          maxFailures: 3,
+          consecutiveFailures: 1,
+          checks: [{
+            status: 'failed',
+            kind: 'test',
+            cwd: 'packages/core',
+            commandScope: 'npm test',
+            coverage: 'cwd',
+            code: 'TASK_TEST_FAILED',
+            failures: 1,
+            requiredEpoch: 2,
+            mutationTargets: ['packages/core/src/index.js'],
+            diagnostic: 'index.test.js: expected 2, received 1',
+          }],
+        },
       },
       partialText: 'A durable partial answer',
       artifactIds: ['artifact-1'],
@@ -403,11 +431,29 @@ test('turn failed events preserve legacy fields and structured recovery evidence
   })
   assert.equal(event.payload.code, 'MODEL_FIRST_TOKEN_TIMEOUT')
   assert.equal(event.payload.error.retryable, true)
+  assert.equal(event.payload.error.taskVerification.checks[0].cwd, 'packages/core')
   assert.deepEqual(event.payload.artifactIds, ['artifact-1'])
   assert.throws(() => createTurnEvent({
     ...event,
     id: 'turn-failed-drift',
     payload: { ...event.payload, stack: 'private stack' },
+  }))
+  assert.throws(() => createTurnEvent({
+    ...event,
+    id: 'turn-failed-verification-drift',
+    payload: {
+      ...event.payload,
+      error: {
+        ...event.payload.error,
+        taskVerification: {
+          ...event.payload.error.taskVerification,
+          checks: [{
+            ...event.payload.error.taskVerification.checks[0],
+            diagnostic: 'x'.repeat(1_201),
+          }],
+        },
+      },
+    },
   }))
 })
 

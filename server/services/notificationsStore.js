@@ -4,6 +4,17 @@ import { getDb } from '../db.js'
 const VALID_KINDS = new Set(['info', 'success', 'warn', 'error', 'job', 'approval'])
 const subscribers = new Map()
 
+export function jobApprovalNotificationData({ origin, jobId } = {}) {
+  if (origin !== 'job' || !jobId) return null
+  return {
+    status: 'awaiting_approval',
+    complete: false,
+    incompleteReason: 'job_approval_required',
+    missingRequirements: ['approval_decision'],
+    nextAction: 'review_approval',
+  }
+}
+
 function newId() {
   return crypto.randomUUID?.() || `notification-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }

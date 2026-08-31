@@ -246,6 +246,12 @@ export async function createOutcomeRecorder(s) {
             s.pendingMutationTargets,
             executedCall,
             outcome.result,
+            {
+              projectDirectory: s.verificationProjectDirectory
+                || s.outputDirectoryContext?.projectDirectory
+                || '',
+              projectDirectories: s.verificationProjectDirectories,
+            },
           )
           const clearedDeletion = clearVerifiedDeletionTargets(
             s.pendingDeletionTargets,
@@ -269,11 +275,14 @@ export async function createOutcomeRecorder(s) {
           s.loopGuard.markProgress?.()
           s.mutationVerificationRetries = 0
         }
-        if (taskVerificationObservation.failed) {
+        if (taskVerificationObservation.failed || taskVerificationObservation.indeterminate) {
+          const repairPrompt = s.taskVerificationRepairPrompt()
+          if (repairPrompt) {
           i.deferredPostBatchMessages.push({
             role: 'system',
-            content: s.taskVerificationRepairPrompt(),
+              content: repairPrompt,
           })
+          }
         }
         if (succeeded
           && executedCall?.name === 'read_file'

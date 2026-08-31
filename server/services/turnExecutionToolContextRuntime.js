@@ -45,6 +45,7 @@ export function createTurnExecutionToolContextRuntime({
       approvalMode,
       resumeResolution = null,
       restoredCheckpointState = null,
+      fileAccessStatus = undefined,
       promptContextSkillIds = [],
       fallbackSkillIds = [],
       toolResolutionMessages = [],
@@ -89,12 +90,16 @@ export function createTurnExecutionToolContextRuntime({
       } : null
       let modelToolFileAccessStatus
       if (!chatOnlyMode) {
-        try {
-          modelToolFileAccessStatus = readFileAccessStatus({ userId })
-        } catch {
-          // An unreadable authorization state is not permission to advertise
-          // workspace tools. The host projection below treats null as no access.
-          modelToolFileAccessStatus = null
+        if (fileAccessStatus !== undefined) {
+          modelToolFileAccessStatus = fileAccessStatus
+        } else {
+          try {
+            modelToolFileAccessStatus = readFileAccessStatus({ userId })
+          } catch {
+            // An unreadable authorization state is not permission to advertise
+            // workspace tools. The host projection below treats null as no access.
+            modelToolFileAccessStatus = null
+          }
         }
       }
       if (!chatOnlyMode) try {

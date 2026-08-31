@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { findTurnEventFenceError } from './eventWriteBehind.js'
 
 const JOURNAL_FILE = 'turn-emergency-failures.jsonl'
 const JOURNAL_LOCK_SUFFIX = '.lock'
@@ -351,6 +352,7 @@ export function recordTurnEmergencyFailure(input = {}, {
   tempDir = os.tmpdir(),
   fileSystem = fs,
 } = {}) {
+  if (findTurnEventFenceError(input?.error)) return null
   const record = createTurnEmergencyFailureRecord(input)
   const failures = []
   for (const filePath of resolveTurnEmergencyFailureLogPaths({ env, cwd, tempDir })) {

@@ -1,4 +1,13 @@
 import { getDb } from '../db.js'
+import {
+  clearResumedJobOutcomeDiagnostics,
+  persistedJobOutcomeFields,
+} from './jobWorkflow.js'
+
+function parseJson(value) {
+  if (!value) return null
+  try { return JSON.parse(value) } catch { return null }
+}
 
 function mapWake(row) {
   if (!row) return null
@@ -12,6 +21,9 @@ function mapWake(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     firedAt: row.fired_at || null,
+    ...(row.diagnostics && Object.keys(row.diagnostics).length > 0
+      ? { diagnostics: row.diagnostics }
+      : {}),
   }
 }
 
@@ -66,24 +78,70 @@ export function claimDueJobWakes({ now = Date.now(), limit = 100 } = {}) {
   const db = getDb()
   return db.transaction(() => {
     const rows = db.prepare(`
-      SELECT * FROM job_wakeups
-       WHERE status = 'scheduled' AND wake_at <= ?
-       ORDER BY wake_at ASC LIMIT ?
+      SELECT wake.*, step.output_json AS step_output_json
+        FROM job_wakeups AS wake
+        JOIN job_steps AS step
+          ON step.id = wake.step_id AND step.job_id = wake.job_id
+       WHERE wake.status = 'scheduled' AND wake.wake_at <= ?
+       ORDER BY wake.wake_at ASC LIMIT ?
     `).all(now, capped)
     const claimed = []
-    const update = db.prepare(`
+    const requeueStep = db.prepare(`
+      UPDATE job_steps
+         SET status = 'queued', output_json = ?, error = NULL, started_at = NULL,
+             finished_at = NULL, updated_at = ?
+       WHERE id = ? AND job_id = ? AND status IN ('queued', 'running')
+         AND EXISTS (
+           SELECT 1 FROM jobs
+            WHERE id = job_steps.job_id AND user_id = ? AND status = 'waiting'
+         )
+    `)
+    const requeueJob = db.prepare(`
+      UPDATE jobs
+         SET status = 'queued', error = NULL, finished_at = NULL, updated_at = ?
+       WHERE id = ? AND user_id = ? AND status = 'waiting'
+         AND EXISTS (
+           SELECT 1 FROM job_steps
+            WHERE id = ? AND job_id = jobs.id
+         )
+    `)
+    const fire = db.prepare(`
       UPDATE job_wakeups
          SET status = 'fired', fired_at = ?, updated_at = ?
-       WHERE job_id = ? AND status = 'scheduled'
+       WHERE job_id = ? AND step_id = ? AND user_id = ?
+         AND status = 'scheduled' AND wake_at <= ?
+    `)
+    const cancelStale = db.prepare(`
+      UPDATE job_wakeups
+         SET status = 'cancelled', updated_at = ?
+       WHERE job_id = ? AND step_id = ? AND user_id = ? AND status = 'scheduled'
     `)
     for (const row of rows) {
-      if (update.run(now, now, row.job_id).changes > 0) claimed.push(mapWake({
+      const previousOutput = parseJson(row.step_output_json)
+      const diagnostics = persistedJobOutcomeFields(previousOutput)
+      const resumedOutput = clearResumedJobOutcomeDiagnostics(previousOutput)
+      requeueStep.run(
+        resumedOutput == null ? null : JSON.stringify(resumedOutput),
+        now,
+        row.step_id,
+        row.job_id,
+        row.user_id,
+      )
+      const awakened = requeueJob.run(now, row.job_id, row.user_id, row.step_id).changes === 1
+      if (!awakened) {
+        cancelStale.run(now, row.job_id, row.step_id, row.user_id)
+        continue
+      }
+      const fired = fire.run(now, now, row.job_id, row.step_id, row.user_id, now).changes === 1
+      if (!fired) throw new Error('job wake claim lost its compare-and-swap race')
+      claimed.push(mapWake({
         ...row,
+        diagnostics,
         status: 'fired',
         fired_at: now,
         updated_at: now,
       }))
     }
     return claimed
-  })()
+  }).immediate()
 }

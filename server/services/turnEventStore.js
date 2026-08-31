@@ -5,9 +5,19 @@ import {
   createTurnEventTransportEnvelope,
   parseTurnEvent,
 } from '../../shared/turnEvents.js'
-import { projectTurnEventForClient } from '../../shared/turnEventProjection.js'
+import {
+  isSuccessfulTurnCompletedEvent,
+  projectTurnEventForClient,
+} from '../../shared/turnEventProjection.js'
 import { publishAgentEventEnvelope } from '../core/agentEventConsumerRuntime.js'
 import { saveTurnCheckpoint } from './turnCheckpointStore.js'
+import { findTurnEventFenceError, isTurnEventFenceFailureRecord } from './eventWriteBehind.js'
+import {
+  canonicalCheckpointState,
+  failureAllowsAttempt,
+  storedTurnEventIsTerminal,
+  turnCompletionInvalid,
+} from './turnEventValidation.js'
 
 const subscribers = new Map()
 const DAY_MS = 86_400_000
@@ -76,23 +86,9 @@ function turnEventSequenceInvalid() {
   return error
 }
 
-function hasExplicitRetryableFailure(payloadJson) {
-  try {
-    return JSON.parse(payloadJson)?.error?.retryable === true
-  } catch {
-    return false
-  }
-}
-
-function canonicalCheckpointState(value) {
-  try {
-    const normalized = JSON.parse(JSON.stringify(value))
-    if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) throw new TypeError()
-    return normalized
-  } catch {
-    throw new TypeError('checkpoint state must be JSON-compatible')
-  }
-}
+// Keep pure validation independent from transaction and publication orchestration.
+// This store now owns persistence concerns only.
+// The helpers remain synchronous so transaction behavior is unchanged.
 
 function boundedNumber(value, fallback, { min, max }) {
   const parsed = Number(value)
@@ -196,11 +192,7 @@ export function assertContiguousTurnEvents(events = [], {
 
 export const turnEventForClient = projectTurnEventForClient
 
-/**
- * Retention is applied to whole turns, never to individual events. This keeps
- * replay sequences internally consistent: recent/active turns remain complete,
- * while expired or surplus terminal turns disappear atomically as a unit.
- */
+// Retention deletes whole turns so every remaining replay stays contiguous.
 export function pruneTurnEvents({
   userId = null,
   now = Date.now(),
@@ -232,6 +224,8 @@ export function pruneTurnEvents({
       event.user_id,
       event.session_id,
       event.turn_id,
+      event.type,
+      event.payload_json,
       event.created_at AS last_event_at,
       CASE
         WHEN event.type IN ('turn.completed', 'turn.cancelled', 'turn.failed')
@@ -252,7 +246,7 @@ export function pruneTurnEvents({
   for (const row of summaries) {
     const key = `${row.user_id}\u0000${row.session_id}\u0000${row.turn_id}`
     if (Number(row.last_event_at) < cutoff) doomed.set(key, row)
-    if (row.terminal_at !== null && row.terminal_at !== undefined) {
+    if (storedTurnEventIsTerminal(row)) {
       const count = (terminalCounts.get(row.user_id) || 0) + 1
       terminalCounts.set(row.user_id, count)
       if (count > safeMaxTerminalTurns) doomed.set(key, row)
@@ -297,6 +291,9 @@ function maybePruneTurnEvents(now = Date.now()) {
 function normalizeAppendEntry({ userId, event, checkpointState = null } = {}) {
   if (!userId) throw new Error('user id is required')
   const value = parseTurnEvent(event)
+  if (value.type === 'turn.completed' && !isSuccessfulTurnCompletedEvent(value)) {
+    throw turnCompletionInvalid()
+  }
   if ((value.sequence === 0) !== (value.type === 'turn.started')) {
     throw turnEventSequenceInvalid()
   }
@@ -372,10 +369,10 @@ export function appendTurnEventsInTransaction(entries = [], db, {
         continue
       }
       const latest = readLatest.get(userId, value.sessionId, value.turnId)
-      const latestIsTerminal = ['turn.completed', 'turn.cancelled', 'turn.failed'].includes(latest?.type)
+      const latestIsTerminal = storedTurnEventIsTerminal(latest)
       const allowedFailedRetry = allowFailedRetry === true
         && latest?.type === 'turn.failed'
-        && hasExplicitRetryableFailure(latest.payload_json)
+        && failureAllowsAttempt(latest.payload_json, value.payload)
         && value.type === 'turn.attempt'
         && value.payload?.reason === 'failed_retry'
         && value.sequence === latest.sequence + 1
@@ -518,10 +515,12 @@ export function verifyTurnEventCommit({ userId, event } = {}) {
 
 export function recordTurnEventWriteFailure({
   batch = [],
+  error = null,
   errorMessage = 'event write failed',
   attempts = 3,
   failedAt = Date.now(),
 } = {}) {
+  if (findTurnEventFenceError(error)) return 0
   if (!Array.isArray(batch) || batch.length === 0) return 0
   const db = getDb()
   const findExisting = db.prepare(`SELECT id FROM event_write_failures
@@ -658,6 +657,10 @@ export function replayTurnEventWriteFailure({ userId, id } = {}) {
   const row = getDb().prepare(`SELECT * FROM event_write_failures
     WHERE id = ? AND user_id = ?`).get(safeId, userId)
   if (!row) return null
+  if (isTurnEventFenceFailureRecord(row)) {
+    throw failureReplayError('TURN_EVENT_FAILURE_FENCED',
+      'an event rejected from a stale execution owner cannot be replayed', 422)
+  }
   const failure = mapFailureRow(row)
   if (!failure.eventId || !failure.sessionId || !failure.turnId
     || !Number.isInteger(failure.eventSequence) || !failure.eventType) {
@@ -724,11 +727,7 @@ export function pruneTurnEventWriteFailures({
   return deleted
 }
 
-/**
- * Resolve the Session Store scope for a user-owned turn id without exposing
- * SQLite details to Headless or other hosts. Turn ids are not globally unique,
- * so callers must handle the explicit ambiguous state instead of guessing.
- */
+// Turn ids are not global, so ambiguous user-owned scopes remain explicit.
 export function resolveTurnSession({ userId, turnId } = {}) {
   const normalizedUserId = typeof userId === 'string' ? userId.trim() : ''
   const normalizedTurnId = typeof turnId === 'string' ? turnId.trim() : ''

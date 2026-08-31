@@ -29,6 +29,7 @@ import { observeToolCalls, recordToolProgress, restoreToolProgress, serializeToo
 import { listTurnArtifacts } from '../turnArtifactStore.js'
 import { createModelPhaseHeartbeat, DEFAULT_MODEL_PHASE_HEARTBEAT_MS } from '../modelPhaseHeartbeat.js'
 import { getDefaultOutputDirectory, getProjectDirectory } from '../localFileAccessService.js'
+import { normalizeDirectoryAuthorizationResolutions } from '../turnResolutionRuntime.js'
 import { createPartialResultFallback } from '../partialResultFallback.js'
 import { validateLocalHtmlDelivery } from '../localHtmlDeliveryValidation.js'
 import { CHECKPOINT_FLUSH_ERROR_CODE, createCheckpointBarrier } from './checkpoint.js'
@@ -60,6 +61,7 @@ import {
   restoreTaskVerificationRepair,
   serializeTaskVerificationRepair,
   taskVerificationRepairBlockerText,
+  taskVerificationRepairDetails,
   taskVerificationRepairExhausted,
 } from './taskVerificationRepair.js'
 import { createOutcomeRecorder } from './runtime-createOutcomeRecorder.js'
@@ -298,6 +300,7 @@ const runtimeDependencies = {
   normalizeArtifactIdList,
   normalizeFinalAnswerToolEvidence,
   normalizeCompactionRecovery,
+  normalizeDirectoryAuthorizationResolutions,
   normalizeMutationTarget,
   normalizeToolCalls,
   normalizeToolError,
@@ -363,6 +366,7 @@ const runtimeDependencies = {
   synchronizeCheckpointToolCallMessages,
   targetsMatch,
   taskVerificationRepairBlockerText,
+  taskVerificationRepairDetails,
   taskVerificationRepairExhausted,
   toolNameFromSpec,
   toolProgressPayload,

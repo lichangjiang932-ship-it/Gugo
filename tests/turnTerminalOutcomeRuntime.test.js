@@ -27,9 +27,12 @@ function completedEvidence(order) {
     atomicTurnBoundary: false,
     verifiedLocalFilesAt: () => [{ id: 'verified-1' }],
     retainedLocalFilesAt: () => [{ id: 'retained-1' }],
-    emitter: async (type, payload) => {
+    emitter: async (type, payload, options = {}) => {
+      const event = { sequence: 3, type, payload }
+      await options.beforeAppend?.(event)
       order.push(['event', type, payload])
-      return { sequence: 3, type, payload }
+      await options.afterAppend?.(event)
+      return event
     },
   }
 }

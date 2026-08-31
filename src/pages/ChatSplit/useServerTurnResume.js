@@ -13,10 +13,17 @@ import {
   buildChatFailureMessage,
   getVisibleModelErrorMessage,
   getVisibleTurnClarification,
+  isPermanentFailedRetryRejectionFailure,
 } from '../../lib/chatFlowGuards.js'
-import { isUserStopped, turnEventTimestamp } from './serverTurnFlow.js'
+import { isUserStopped, terminalFailureEvidenceMeta, turnEventTimestamp } from './serverTurnFlow.js'
 import { hasTurnRun, registerTurnRun, unregisterTurnRun } from './turnRunRegistry.js'
 import { mergeAssistantText, missingAssistantTextSuffix } from '../../lib/assistantTextContinuity.js'
+
+function nonEmptyTaskVerification(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0
+    ? value
+    : null
+}
 
 export function reduceResumedAssistantText(currentText, event) {
   if (event?.type === 'turn.attempt' && event.payload?.resetStreaming) {
@@ -25,7 +32,9 @@ export function reduceResumedAssistantText(currentText, event) {
   if (event?.type === 'assistant.delta' && event.payload?.text) {
     return `${String(currentText || '')}${String(event.payload.text)}`
   }
-  if (event?.type === 'turn.interrupted' || event?.type === 'turn.failed') {
+  if (event?.type === 'turn.interrupted'
+    || event?.type === 'turn.blocked'
+    || event?.type === 'turn.failed') {
     return mergeAssistantText(currentText, event.payload?.partialText ?? event.payload?.text ?? '')
   }
   return String(currentText || '')
@@ -37,6 +46,79 @@ export function terminalResumeText(currentText, terminal, t) {
       ? getVisibleTurnClarification(terminal.payload?.clarification, t)
       : '')
   return missingAssistantTextSuffix(currentText, terminalText)
+}
+
+export function failedRetryFailureFromError(error, previousFailure = null) {
+  const previous = previousFailure && typeof previousFailure === 'object'
+    ? previousFailure
+    : {}
+  const current = error?.serverFailure && typeof error.serverFailure === 'object'
+    ? error.serverFailure
+    : error || {}
+  const code = String(error?.serverFailure?.code || error?.code || 'TURN_REQUEST_FAILED')
+    .trim().toUpperCase() || 'TURN_REQUEST_FAILED'
+  const status = Number(error?.serverFailure?.status ?? error?.status)
+  const retryable = error?.serverFailure?.retryable ?? error?.retryable
+  const manualRetryable = error?.serverFailure?.manualRetryable ?? error?.manualRetryable
+  const incompleteReason = String(
+    current.incompleteReason || error?.incompleteReason || previous.incompleteReason || '',
+  ).trim()
+  const currentMissingRequirements = Array.isArray(current.missingRequirements)
+    ? current.missingRequirements
+    : []
+  const outerMissingRequirements = Array.isArray(error?.missingRequirements)
+    ? error.missingRequirements
+    : []
+  const missingRequirements = [...new Set((currentMissingRequirements.length > 0
+    ? currentMissingRequirements
+    : outerMissingRequirements.length > 0
+      ? outerMissingRequirements
+      : Array.isArray(previous.missingRequirements) ? previous.missingRequirements : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))].slice(0, 16)
+  const taskVerification = nonEmptyTaskVerification(current.taskVerification)
+    || nonEmptyTaskVerification(error?.taskVerification)
+    || nonEmptyTaskVerification(previous.taskVerification)
+  const reason = String(current.reason || error?.reason || previous.reason || '').trim()
+  const nextAction = String(current.nextAction || error?.nextAction || previous.nextAction || '').trim()
+  return {
+    code,
+    retryable: retryable === true,
+    ...(Number.isInteger(status) && status >= 100 && status <= 599 ? { status } : {}),
+    ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),
+    ...(incompleteReason ? { incompleteReason } : {}),
+    ...(reason ? { reason } : {}),
+    ...(nextAction ? { nextAction } : {}),
+    ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
+    ...(taskVerification ? { taskVerification } : {}),
+  }
+}
+
+function mergeFailureDiagnostics(currentFailure, previousFailure) {
+  const current = currentFailure && typeof currentFailure === 'object' ? currentFailure : null
+  const previous = previousFailure && typeof previousFailure === 'object' ? previousFailure : null
+  if (!current) return previous
+  if (!previous) return current
+  const currentMissing = Array.isArray(current.missingRequirements)
+    ? current.missingRequirements.filter(Boolean)
+    : []
+  const taskVerification = nonEmptyTaskVerification(current.taskVerification)
+    || nonEmptyTaskVerification(previous.taskVerification)
+  const reason = String(current.reason || previous.reason || '').trim()
+  const nextAction = String(current.nextAction || previous.nextAction || '').trim()
+  return {
+    ...previous,
+    ...current,
+    ...(current.incompleteReason || previous.incompleteReason
+      ? { incompleteReason: current.incompleteReason || previous.incompleteReason }
+      : {}),
+    ...(reason ? { reason } : {}),
+    ...(nextAction ? { nextAction } : {}),
+    ...(currentMissing.length > 0 || Array.isArray(previous.missingRequirements)
+      ? { missingRequirements: currentMissing.length > 0 ? currentMissing : previous.missingRequirements }
+      : {}),
+    ...(taskVerification ? { taskVerification } : {}),
+  }
 }
 
 export function isRecoverableServerMessage(message) {
@@ -64,12 +146,18 @@ export function matchesManualRecoveryResume(session, message, resume) {
 }
 
 export function matchesFailedTurnRetryResume(session, message, retry) {
+  const failure = message?.meta?.serverFailure
+  const sameFailureCode = typeof retry?.code === 'string'
+    && retry.code.length > 0
+    && retry.code === failure?.code
   return sameNonEmptyId(retry?.sessionId, session?.id)
     && sameNonEmptyId(retry?.turnId, message?.meta?.serverTurnId)
-    && retry?.code === 'TURN_INCOMPLETE'
     && message?.meta?.failed === true
-    && message?.meta?.serverFailure?.code === 'TURN_INCOMPLETE'
-    && message.meta.serverFailure.retryable === true
+    && sameFailureCode
+    && (
+      (retry.code === 'TURN_INCOMPLETE' && failure.retryable === true)
+      || (retry.manualRetryable === true && failure.manualRetryable === true)
+    )
 }
 
 function serverTurnResumeClaimKey(sessionId, turnId) {
@@ -160,6 +248,9 @@ export default function useServerTurnResume({
     if (failedRetry) onFailedTurnRetryConsumed?.(failedTurnRetry)
     const taskId = `resume-${turnId}`
     const serverArtifacts = [...(message.meta?.serverArtifacts || [])]
+    const failedRetryPartialText = failedRetry && typeof message.meta?.serverPartialText === 'string'
+      ? message.meta.serverPartialText
+      : ''
     const resumeResolution = failedRetry ? null : message.meta?.serverResumeResolution || null
     const messageTarget = { sessionId: session.id, messageId: message.id }
     const dispatchMessage = (type, payload) => dispatch({ type, payload, ...messageTarget })
@@ -175,9 +266,14 @@ export default function useServerTurnResume({
       turnActivityDispatcher.flush()
       resolveToolApprovalForOwner(owner, { approved: false })
     }, { once: true })
-    let currentAssistantText = String(message.content || '')
+    const durablePartialText = !failedRetry && typeof message.meta?.serverPartialText === 'string'
+      ? message.meta.serverPartialText
+      : ''
+    let currentAssistantText = mergeAssistantText(message.content, durablePartialText)
     let resumeAccepted = false
     let failedRetryResult = null
+    const durablePartialSuffix = missingAssistantTextSuffix(message.content, durablePartialText)
+    if (durablePartialSuffix) dispatchMessage('APPEND_TO_LAST_MESSAGE', durablePartialSuffix)
     dispatchMessage('UPDATE_LAST_MESSAGE_META', {
       turnStartedAt,
       turnCompletedAt: null,
@@ -187,6 +283,7 @@ export default function useServerTurnResume({
       serverRecoveryBlocked: false,
       serverRecoveryKind: null,
       serverRecoveryToolCallId: null,
+      serverRecoveryModelRequestId: null,
       serverRecoveryActionPath: null,
       ...(failedRetry ? {
         failed: false,
@@ -227,7 +324,9 @@ export default function useServerTurnResume({
         if (event?.type === 'turn.resumed') resumeAccepted = true
         const previousAssistantText = currentAssistantText
         currentAssistantText = reduceResumedAssistantText(currentAssistantText, event)
-        if (event.type === 'turn.interrupted' || event.type === 'turn.failed') {
+        if (event.type === 'turn.interrupted'
+          || event.type === 'turn.blocked'
+          || event.type === 'turn.failed') {
           const suffix = currentAssistantText.startsWith(previousAssistantText)
             ? currentAssistantText.slice(previousAssistantText.length)
             : currentAssistantText
@@ -273,6 +372,8 @@ export default function useServerTurnResume({
           turnCompletedAt: null,
           latency: null,
           streaming: false,
+          cancelled: false,
+          interrupted: false,
           paused: false,
           failed: false,
           serverArtifacts,
@@ -280,6 +381,7 @@ export default function useServerTurnResume({
           serverRecoveryBlocked: true,
           serverRecoveryKind: null,
           serverRecoveryToolCallId: null,
+          serverRecoveryModelRequestId: null,
           serverRecoveryActionPath: null,
           ...(isSideEffectOutcomeUnknownRecoveryKind(terminal.payload?.recoveryKind) ? {
             serverRecoveryKind: SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND,
@@ -323,6 +425,9 @@ export default function useServerTurnResume({
         dispatchMessage('UPDATE_LAST_MESSAGE_META', {
           ...timingMeta,
           streaming: false,
+          cancelled: false,
+          failed: false,
+          interrupted: false,
           paused: true,
           serverArtifacts,
           serverConnectionState: 'paused',
@@ -345,6 +450,9 @@ export default function useServerTurnResume({
       dispatchMessage('UPDATE_LAST_MESSAGE_META', {
         ...timingMeta,
         streaming: false,
+        cancelled: false,
+        failed: false,
+        interrupted: false,
         paused: false,
         serverClarification: null,
         directoryAuthorizationPending: false,
@@ -365,17 +473,31 @@ export default function useServerTurnResume({
       turnActivityDispatcher.flush()
       const stopped = isUserStopped(error)
       const recoveryDeadLetter = error?.recovery?.status === 'dead_letter'
-      const durableFailure = error?.serverFailure
-        || message.meta?.serverFailure
-        || (recoveryDeadLetter
-          ? {
-              code: String(error?.code || 'TURN_RECOVERY_DEAD_LETTER'),
-              retryable: false,
-              manualRetryable: true,
-              incompleteReason: 'recovery_attempts_exhausted',
-              missingRequirements: ['execution_environment_repair', 'explicit_recovery_retry'],
-            }
-          : null)
+      const permanentFailedRetryRejection = failedRetry
+        && isPermanentFailedRetryRejectionFailure(error)
+      const recoveryFailure = recoveryDeadLetter
+        ? {
+            code: String(error?.code || 'TURN_RECOVERY_DEAD_LETTER'),
+            retryable: false,
+            manualRetryable: true,
+            incompleteReason: 'recovery_attempts_exhausted',
+            missingRequirements: ['execution_environment_repair', 'explicit_recovery_retry'],
+          }
+        : null
+      const currentFailure = error?.serverFailure || recoveryFailure || createTurnFailureError(
+        error,
+        { fallbackCode: String(error?.code || 'TURN_REQUEST_FAILED') },
+      ).serverFailure
+      const durableFailure = permanentFailedRetryRejection
+        ? failedRetryFailureFromError(error, message.meta?.serverFailure)
+        : mergeFailureDiagnostics(
+            currentFailure,
+            message.meta?.serverFailure,
+          )
+      const failureEvidenceMeta = terminalFailureEvidenceMeta(error)
+      if (!Object.hasOwn(failureEvidenceMeta, 'serverPartialText') && failedRetryPartialText) {
+        failureEvidenceMeta.serverPartialText = failedRetryPartialText
+      }
       const completedAt = turnEventTimestamp(error?.turnCompletedAt)
       const timingMeta = {
         turnStartedAt,
@@ -386,6 +508,9 @@ export default function useServerTurnResume({
         dispatchMessage('UPDATE_LAST_MESSAGE_META', {
           ...timingMeta,
           streaming: false,
+          cancelled: false,
+          failed: false,
+          interrupted: false,
           paused: true,
           serverConnectionState: 'paused',
           directoryAuthorizationPending: false,
@@ -412,8 +537,10 @@ export default function useServerTurnResume({
         dispatchMessage('UPDATE_LAST_MESSAGE_META', {
           ...timingMeta,
           streaming: false,
+          cancelled: false,
           paused: false,
           failed: true,
+          interrupted: false,
           serverClarification: null,
           directoryAuthorizationPending: false,
           directoryAuthorizationError: null,
@@ -423,20 +550,22 @@ export default function useServerTurnResume({
           serverRecoveryBlocked: recoveryDeadLetter,
           serverFailure: durableFailure,
           serverFailureDisplayKey,
-          serverPartialText: error.partialText || '',
-          serverArtifactIds: Array.isArray(error.artifactIds) ? error.artifactIds : [],
+          ...failureEvidenceMeta,
         })
       } else {
         dispatchMessage('UPDATE_LAST_MESSAGE_META', {
           ...timingMeta,
           streaming: false,
+          cancelled: true,
+          failed: false,
+          interrupted: false,
           paused: false,
           serverClarification: null,
           directoryAuthorizationPending: false,
           directoryAuthorizationError: null,
           serverResumeResolution: null,
           serverArtifacts,
-          serverConnectionState: null,
+          serverConnectionState: 'cancelled',
         })
       }
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: stopped ? TASK_STATUS.CANCELLED : TASK_STATUS.FAILED, stepLabel: stopped ? t('chat.serverTurn.cancelled') : t('chat.serverTurn.resumeFailed') } } })

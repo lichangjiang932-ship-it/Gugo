@@ -9,14 +9,16 @@ import {
   upsertSession,
 } from '../services/sessionStore.js'
 import {
-  appendTurnEvent,
-  appendTurnEvents,
   getLastTurnEvent,
   listTurnEvents,
   recordTurnEventWriteFailure,
   resolveTurnSession,
   verifyTurnEventCommit,
 } from '../services/turnEventStore.js'
+import {
+  appendFencedTurnEvent,
+  appendFencedTurnEvents,
+} from '../services/turnFencedEventStore.js'
 import {
   deleteTurnCheckpoint,
   getTurnCheckpoint,
@@ -76,8 +78,8 @@ export const SQLITE_TURN_PERSISTENCE_ADAPTER = Object.freeze({
     deleteMessage,
   }),
   eventLog: Object.freeze({
-    appendTurnEvent,
-    appendTurnEvents,
+    appendTurnEvent: appendFencedTurnEvent,
+    appendTurnEvents: appendFencedTurnEvents,
     getLastTurnEvent,
     listTurnEvents,
     recordTurnEventWriteFailure,

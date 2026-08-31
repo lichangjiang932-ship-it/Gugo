@@ -529,7 +529,7 @@ test('three failed post-mutation checks with different parameters still stop wit
   const failedCommands = [
     'npm test -- --runInBand',
     'npm test -- --watch=false',
-    'npm test -- src/result.test.js',
+    'npm test -- --maxWorkers 2',
   ]
 
   const result = await runToolsLoop({
@@ -599,7 +599,13 @@ test('three failed post-mutation checks with different parameters still stop wit
     'task_verification_repair_exhausted',
     JSON.stringify(result),
   )
-  assert.match(result.text, /src\/result\.test\.js: expected 2, received 1/)
+  assert.equal(result.taskVerification?.version, 1)
+  assert.equal(result.taskVerification?.checks?.length, 3)
+  assert.equal(result.taskVerification?.checks?.[0]?.status, 'failed')
+  assert.match(
+    result.taskVerification?.checks?.[0]?.diagnostic || '',
+    /src\/result\.test\.js: expected 2, received 1/,
+  )
   assert.equal(checkpoint?.completionGuards?.taskVerificationRepair?.consecutiveFailures, 3)
   assert.equal(checkpoint?.completionGuards?.taskVerificationRepair?.pending?.length, 3)
   assert.deepEqual(

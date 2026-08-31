@@ -159,10 +159,11 @@ export default function useChatTurnRecovery({
     }
   }, [activeSessionId])
   const resumeAvailable = isStreamResumeStateForSession(resumeState, activeSessionId)
-    && resumeState.code === 'TURN_INCOMPLETE'
+    && (resumeState.code === 'TURN_INCOMPLETE' || resumeState.manualRetryable === true)
+  const manualRetryAvailable = resumeAvailable && resumeState.manualRetryable === true
   const handleResume = useCallback(() => {
     if (!isStreamResumeStateForSession(resumeState, activeSessionId)) return
-    if (resumeState.code !== 'TURN_INCOMPLETE') return
+    if (resumeState.code !== 'TURN_INCOMPLETE' && resumeState.manualRetryable !== true) return
     setResumeStates((current) => updateStreamResumeStates(current, activeSessionId, null))
     setFailedTurnRetry(resumeState)
   }, [activeSessionId, resumeState])
@@ -174,6 +175,7 @@ export default function useChatTurnRecovery({
     handleResume,
     handleTurnResult,
     handleTurnStart,
+    manualRetryAvailable,
     resumeAvailable,
     showPendingDirectoryGuidance,
   }

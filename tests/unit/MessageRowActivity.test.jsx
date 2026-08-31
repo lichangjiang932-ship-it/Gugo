@@ -117,6 +117,68 @@ test('failed snapshot messages derive localized copy without replacing durable p
   }
 })
 
+test('a permanent failed-retry rejection keeps partial output and appends its localized cause', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const partialText = 'Verified partial result from the model.'
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'turn-failed-retry:assistant',
+      role: 'assistant',
+      content: partialText,
+      createdAt: 1,
+      modelContext: {
+        turnId: 'turn-failed-retry',
+        turnEvidence: true,
+        evidenceState: 'failed',
+        serverLastSequence: 7,
+        error: {
+          code: 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
+          retryable: false,
+          status: 409,
+        },
+        failedRetryRejection: {
+          code: 'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
+          failureSequence: 7,
+        },
+      },
+    }],
+  })
+  const msg = snapshot.messages[0]
+  const renderMessage = (lang) => act(async () => root.render(
+    <I18nProvider>
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang={lang}
+        t={(key) => translateKey(key, lang)}
+      />
+    </I18nProvider>,
+  ))
+
+  try {
+    assert.equal(msg.meta.serverPartialText, partialText)
+    const englishCause = translateKey('errors.turnFailedRetryCheckpointRequired', 'en')
+    const japaneseCause = translateKey('errors.turnFailedRetryCheckpointRequired', 'ja')
+
+    await renderMessage('en')
+    assert.match(rootElement.querySelector('.chat-assistant-answer')?.textContent || '', new RegExp(partialText))
+    assert.match(rootElement.querySelector('.chat-assistant-answer')?.textContent || '', new RegExp(englishCause))
+    assert.doesNotMatch(rootElement.textContent, new RegExp(translateKey('errors.chatFailure', 'en')))
+
+    await renderMessage('ja')
+    assert.match(rootElement.querySelector('.chat-assistant-answer')?.textContent || '', new RegExp(partialText))
+    assert.match(rootElement.querySelector('.chat-assistant-answer')?.textContent || '', new RegExp(japaneseCause))
+    assert.doesNotMatch(rootElement.textContent, new RegExp(englishCause))
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('legacy interrupted, cancelled, and recovery-blocked snapshots never render server fallback prose as assistant text', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')

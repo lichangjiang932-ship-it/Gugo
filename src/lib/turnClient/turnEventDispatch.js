@@ -1,5 +1,6 @@
 import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
+import { projectTurnEventForClient } from '../../../shared/turnEventProjection.js'
 import { removeVerifiedLocalFilesFromRetained } from '../localFileReferences.js'
 import { createToolOutputBuffer } from './toolOutputBuffer.js'
 
@@ -39,7 +40,21 @@ const CLEARED_SERVER_RECOVERY_META = Object.freeze({
   serverRecoveryBlocked: false,
   serverRecoveryKind: null,
   serverRecoveryToolCallId: null,
+  serverRecoveryModelRequestId: null,
   serverRecoveryActionPath: null,
+})
+
+const CLEARED_SERVER_FAILURE_META = Object.freeze({
+  serverFailure: null,
+  serverFailureDisplayKey: null,
+  serverPartialText: null,
+})
+
+const CLEARED_TERMINAL_STATE_META = Object.freeze({
+  cancelled: false,
+  failed: false,
+  interrupted: false,
+  paused: false,
 })
 
 function resultText(result) {
@@ -56,6 +71,24 @@ function optionalArtifactIds(payload, key) {
   if (!payload || typeof payload !== 'object' || !Object.hasOwn(payload, key)) return undefined
   return [...new Set((Array.isArray(payload[key]) ? payload[key] : [])
     .map((value) => String(value || '').trim()).filter(Boolean))]
+}
+
+function terminalEvidenceSource(payload, nested, key) {
+  const payloadOwns = payload && typeof payload === 'object' && Object.hasOwn(payload, key)
+  const nestedOwns = nested && typeof nested === 'object' && Object.hasOwn(nested, key)
+  const meaningful = (value) => (
+    Array.isArray(value) ? value.length > 0
+      : value && typeof value === 'object' ? Object.keys(value).length > 0
+        : value !== undefined && value !== null && value !== ''
+  )
+  // Public projections may contain an empty compatibility field while the
+  // nested durable failure still carries the evidence. Never let that empty
+  // outer value erase the richer persisted value.
+  if (payloadOwns && meaningful(payload[key])) return payload
+  if (nestedOwns && meaningful(nested[key])) return nested
+  if (payloadOwns) return payload
+  if (nestedOwns) return nested
+  return payload
 }
 
 function optionalLocalFileReceipts(payload, key, timestampKey) {
@@ -100,6 +133,8 @@ export function normalizeTurnFailurePayload(payload = {}, {
 } = {}) {
   const nested = payload?.error && typeof payload.error === 'object' ? payload.error : {}
   const status = optionalInteger(nested.status ?? nested.statusCode ?? payload.status ?? payload.statusCode, 100, 599)
+  const expectedSequence = optionalInteger(nested.expectedSequence ?? payload.expectedSequence, 0)
+  const actualSequence = optionalInteger(nested.actualSequence ?? payload.actualSequence, 0)
   const attempts = optionalInteger(nested.attempts ?? payload.attempts, 1)
   const retryable = typeof nested.retryable === 'boolean'
     ? nested.retryable
@@ -107,35 +142,98 @@ export function normalizeTurnFailurePayload(payload = {}, {
   const manualRetryable = typeof nested.manualRetryable === 'boolean'
     ? nested.manualRetryable
     : (typeof payload.manualRetryable === 'boolean' ? payload.manualRetryable : undefined)
-  const legacyMessage = String(nested.message || payload.message || payload.reason || '').trim()
+  const action = String(nested.action || payload.action || '').trim()
+  const recoverySource = nested.recovery && typeof nested.recovery === 'object' && !Array.isArray(nested.recovery)
+    ? nested.recovery
+    : payload.recovery && typeof payload.recovery === 'object' && !Array.isArray(payload.recovery)
+      ? payload.recovery
+      : null
+  const reasonSource = terminalEvidenceSource(payload, nested, 'reason')
+  const nextActionSource = terminalEvidenceSource(payload, nested, 'nextAction')
+  const reason = String(reasonSource?.reason || '').trim()
+  const nextAction = String(nextActionSource?.nextAction || '').trim()
+  const legacyMessage = String(nested.message || payload.message || reason).trim()
   const error = {
     code: String(nested.code || payload.code || fallbackCode).trim() || fallbackCode,
     ...(legacyMessage ? { message: legacyMessage } : {}),
+    ...(reason ? { reason } : {}),
+    ...(nextAction ? { nextAction } : {}),
     ...(status !== undefined ? { status } : {}),
+    ...(expectedSequence !== undefined ? { expectedSequence } : {}),
+    ...(actualSequence !== undefined ? { actualSequence } : {}),
+    ...(action ? { action } : {}),
     ...(retryable !== undefined ? { retryable } : {}),
     ...(manualRetryable !== undefined ? { manualRetryable } : {}),
     ...((nested.hint || payload.hint) ? { hint: String(nested.hint || payload.hint) } : {}),
     ...(attempts !== undefined ? { attempts } : {}),
+    ...(recoverySource ? { recovery: { ...recoverySource } } : {}),
   }
-  const incompleteReason = String(nested.incompleteReason || payload.incompleteReason || '').trim()
+  const incompleteReasonSource = terminalEvidenceSource(payload, nested, 'incompleteReason')
+  const incompleteReason = String(incompleteReasonSource?.incompleteReason || '').trim()
   if (incompleteReason) error.incompleteReason = incompleteReason
-  const missingRequirements = [...new Set((Array.isArray(nested.missingRequirements)
+  const nestedMissingRequirements = [...new Set((Array.isArray(nested.missingRequirements)
     ? nested.missingRequirements
-    : Array.isArray(payload.missingRequirements) ? payload.missingRequirements : [])
-    .map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
+    : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
+  const payloadMissingRequirements = [...new Set((Array.isArray(payload.missingRequirements)
+    ? payload.missingRequirements
+    : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
+  const missingRequirements = payloadMissingRequirements.length > 0
+    ? payloadMissingRequirements
+    : nestedMissingRequirements
   if (missingRequirements.length > 0) error.missingRequirements = missingRequirements
-  const iterations = optionalInteger(payload.iterations, 0)
-  const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
-  const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
-  const retainedLocalFiles = optionalRetainedLocalFiles(payload)
-  const modelUsage = normalizeModelUsage(payload.usage)
-  const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
-  const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
+  const nestedTaskVerification = nested.taskVerification
+    && typeof nested.taskVerification === 'object'
+    && !Array.isArray(nested.taskVerification)
+    && Object.keys(nested.taskVerification).length > 0
+    ? nested.taskVerification
+    : null
+  const payloadTaskVerification = payload.taskVerification
+    && typeof payload.taskVerification === 'object'
+    && !Array.isArray(payload.taskVerification)
+    && Object.keys(payload.taskVerification).length > 0
+      ? payload.taskVerification
+      : null
+  const taskVerification = payloadTaskVerification || nestedTaskVerification
+  if (taskVerification) error.taskVerification = taskVerification
+  const iterations = optionalInteger(
+    terminalEvidenceSource(payload, nested, 'iterations')?.iterations,
+    0,
+  )
+  const partialTextSource = terminalEvidenceSource(payload, nested, 'partialText')
+  const textSource = terminalEvidenceSource(payload, nested, 'text')
+  const partialText = Object.hasOwn(partialTextSource || {}, 'partialText')
+    ? String(partialTextSource.partialText ?? '')
+    : Object.hasOwn(textSource || {}, 'text') ? String(textSource.text ?? '') : undefined
+  const artifactIds = optionalArtifactIds(
+    terminalEvidenceSource(payload, nested, 'artifactIds'),
+    'artifactIds',
+  )
+  const deliveryArtifactIds = optionalArtifactIds(
+    terminalEvidenceSource(payload, nested, 'deliveryArtifactIds'),
+    'deliveryArtifactIds',
+  )
+  const verifiedLocalFiles = optionalVerifiedLocalFiles(
+    terminalEvidenceSource(payload, nested, 'verifiedLocalFiles'),
+  )
+  const retainedSource = terminalEvidenceSource(payload, nested, 'retainedLocalFiles')
+  const retainedLocalFiles = removeVerifiedLocalFilesFromRetained(
+    optionalRetainedLocalFiles(retainedSource),
+    verifiedLocalFiles,
+  )
+  const modelUsage = normalizeModelUsage(
+    terminalEvidenceSource(payload, nested, 'usage')?.usage,
+  )
+  const turnModelUsage = normalizeModelUsage(
+    terminalEvidenceSource(payload, nested, 'turnModelUsage')?.turnModelUsage,
+  )
+  const estimatedPromptTokens = optionalInteger(
+    terminalEvidenceSource(payload, nested, 'estimatedPromptTokens')?.estimatedPromptTokens,
+    0,
+  )
   return {
     error,
-    partialText: String(payload.partialText ?? payload.text ?? ''),
-    artifactIds: [...new Set((Array.isArray(payload.artifactIds) ? payload.artifactIds : [])
-      .map((value) => String(value || '').trim()).filter(Boolean))],
+    ...(partialText !== undefined ? { partialText } : {}),
+    ...(artifactIds !== undefined ? { artifactIds } : {}),
     ...(deliveryArtifactIds !== undefined ? { deliveryArtifactIds } : {}),
     ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
     ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
@@ -226,7 +324,7 @@ export function createBufferedTurnActivityDispatcher(options = {}) {
   }
 }
 
-export async function dispatchTurnEvent(event, {
+export async function dispatchTurnEvent(sourceEvent, {
   dispatch,
   taskId,
   onApproval,
@@ -234,6 +332,7 @@ export async function dispatchTurnEvent(event, {
   messageTarget,
   flushToolOutput,
 } = {}) {
+  const event = projectTurnEventForClient(sourceEvent)
   const payload = event.payload || {}
   if (TOOL_OUTPUT_FLUSH_EVENT_TYPES.has(event.type)) await flushToolOutput?.()
   const dispatchMessage = (action) => dispatch?.({ ...action, ...(messageTarget || {}) })
@@ -266,13 +365,11 @@ export async function dispatchTurnEvent(event, {
       },
       meta: {
         ...CLEARED_SERVER_RECOVERY_META,
-        interrupted: false,
-        failed: false,
-        paused: false,
+        ...CLEARED_SERVER_FAILURE_META,
+        ...CLEARED_TERMINAL_STATE_META,
         streaming: true,
         turnCompletedAt: null,
         latency: null,
-        serverFailure: null,
         serverPartialText: '',
         serverArtifactIds: [],
         modelActivity: null,
@@ -285,9 +382,8 @@ export async function dispatchTurnEvent(event, {
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
-        interrupted: false,
-        failed: false,
-        paused: false,
+        ...CLEARED_SERVER_FAILURE_META,
+        ...CLEARED_TERMINAL_STATE_META,
         streaming: true,
         turnCompletedAt: null,
         latency: null,
@@ -446,9 +542,13 @@ export async function dispatchTurnEvent(event, {
   } else if (event.type === 'approval.resolved') {
     dispatch?.({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: 'Approval resolved, continuing' } } })
   } else if (event.type === 'turn.paused') {
+    const partialText = Object.hasOwn(payload, 'partialText')
+      ? String(payload.partialText ?? '')
+      : Object.hasOwn(payload, 'text') ? String(payload.text ?? '') : undefined
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     const retainedLocalFiles = optionalRetainedLocalFiles(payload)
+    const artifactIds = optionalArtifactIds(payload, 'artifactIds')
     const modelUsage = normalizeModelUsage(payload.usage)
     const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
     const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
@@ -456,6 +556,8 @@ export async function dispatchTurnEvent(event, {
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
+        ...CLEARED_SERVER_FAILURE_META,
+        ...CLEARED_TERMINAL_STATE_META,
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
@@ -465,11 +567,13 @@ export async function dispatchTurnEvent(event, {
         serverClarification: payload.clarification || null,
         directoryAuthorizationPending: false,
         serverResumeResolution: null,
+        ...(artifactIds?.length > 0 ? { serverArtifactIds: artifactIds } : {}),
+        ...(partialText ? { serverPartialText: partialText } : {}),
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(modelUsage ? { modelUsage, actualPromptTokens: modelUsage.promptTokens } : {}),
         ...(turnModelUsage ? { turnModelUsage } : {}),
         ...(estimatedPromptTokens !== undefined ? { serverEstimatedPromptTokens: estimatedPromptTokens } : {}),
-        ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
+        ...(deliveryArtifactIds?.length > 0 ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
         ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
         ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
       },
@@ -478,6 +582,7 @@ export async function dispatchTurnEvent(event, {
     dispatch?.({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: payload.clarification?.question || 'Waiting for user input' } } })
     cursorCommitted = true
   } else if (event.type === 'turn.completed') {
+    const artifactIds = optionalArtifactIds(payload, 'artifactIds')
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     const retainedLocalFiles = optionalRetainedLocalFiles(payload)
@@ -488,12 +593,17 @@ export async function dispatchTurnEvent(event, {
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
+        ...CLEARED_SERVER_FAILURE_META,
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
         progress: null,
         serverConnectionState: null,
-        serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
+        failed: false,
+        interrupted: false,
+        paused: false,
+        cancelled: false,
+        ...(artifactIds !== undefined ? { serverArtifactIds: artifactIds } : {}),
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
         ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
@@ -509,8 +619,14 @@ export async function dispatchTurnEvent(event, {
     })
     cursorCommitted = true
   } else if (event.type === 'turn.cancelled') {
+    const failure = normalizeTurnFailurePayload(payload, { fallbackCode: 'TURN_CANCELLED' })
+    const partialText = Object.hasOwn(payload, 'partialText')
+      ? String(payload.partialText ?? '')
+      : Object.hasOwn(payload, 'text') ? String(payload.text ?? '') : undefined
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     const retainedLocalFiles = optionalRetainedLocalFiles(payload)
+    const artifactIds = optionalArtifactIds(payload, 'artifactIds')
+    const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
     const modelUsage = normalizeModelUsage(payload.usage)
     const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
     const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
@@ -518,6 +634,8 @@ export async function dispatchTurnEvent(event, {
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
+        ...CLEARED_SERVER_FAILURE_META,
+        serverFailure: failure.error,
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
@@ -527,8 +645,9 @@ export async function dispatchTurnEvent(event, {
         interrupted: false,
         paused: false,
         serverConnectionState: 'cancelled',
-        serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
-        serverDeliveryArtifactIds: optionalArtifactIds(payload, 'deliveryArtifactIds') || [],
+        ...(artifactIds?.length > 0 ? { serverArtifactIds: artifactIds } : {}),
+        serverDeliveryArtifactIds: deliveryArtifactIds || [],
+        ...(partialText ? { serverPartialText: partialText } : {}),
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(modelUsage ? { modelUsage, actualPromptTokens: modelUsage.promptTokens } : {}),
         ...(turnModelUsage ? { turnModelUsage } : {}),
@@ -555,15 +674,16 @@ export async function dispatchTurnEvent(event, {
       payload: {
         ...CLEARED_SERVER_RECOVERY_META,
         serverFailure: failure.error,
+        cancelled: false,
         streaming: event.type === 'turn.interrupted',
         turnCompletedAt: event.type === 'turn.interrupted' || blocked ? null : event.createdAt,
         ...(event.type === 'turn.interrupted' || blocked ? { latency: null } : {}),
         modelActivity: null,
         progress: null,
         ...(event.type === 'turn.failed' ? { serverConnectionState: null } : {}),
-        serverPartialText: failure.partialText,
-        serverArtifactIds: failure.artifactIds,
-        ...(failure.deliveryArtifactIds !== undefined
+        ...(failure.partialText ? { serverPartialText: failure.partialText } : {}),
+        ...(failure.artifactIds?.length > 0 ? { serverArtifactIds: failure.artifactIds } : {}),
+        ...(failure.deliveryArtifactIds?.length > 0
           ? { serverDeliveryArtifactIds: failure.deliveryArtifactIds }
           : {}),
         ...(failure.verifiedLocalFiles !== undefined
@@ -609,7 +729,7 @@ export async function dispatchTurnEvent(event, {
                     : '/settings?tab=recovery',
                 } : {}),
               }
-            : { failed: true, streaming: false }),
+            : { failed: true, paused: false, streaming: false }),
       },
       ...streamCursor,
     })

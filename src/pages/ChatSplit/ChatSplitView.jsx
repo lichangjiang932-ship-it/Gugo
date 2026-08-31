@@ -11,7 +11,6 @@ import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
 import { estimateClientContextUsage, sumSessionModelUsage } from '../../lib/contextUsage.js'
 
 export { ChatRightPanels }
-
 export default function ChatSplitView({
   activeSession,
   activeSessionId,
@@ -71,6 +70,7 @@ export default function ChatSplitView({
   onWorkbenchSend,
   onWorkbenchTabChange,
   onWorkbenchToggle,
+  manualRetryAvailable,
   resumeAvailable,
   runtimeSkillIds,
   selectedModel,
@@ -103,8 +103,7 @@ export default function ChatSplitView({
     .find((message) => message?.role === 'assistant')
   const actualPromptTokens = latestAssistantMessage?.meta?.actualPromptTokens
   const serverEstimatedPromptTokens = latestAssistantMessage?.meta?.serverEstimatedPromptTokens
-  // 优先显示服务端真实 usage；上游不返回 usage 时使用服务端最终请求估算，
-  // 避免压缩后仍按完整 UI 历史高估当前上下文。
+  // 优先显示服务端真实 usage；缺失时用服务端最终请求估算，避免压缩后按完整 UI 历史高估。
   const contextUsage = {
     ...estimateClientContextUsage({
       messages,
@@ -213,9 +212,11 @@ export default function ChatSplitView({
         {resumeAvailable && !isGenerating && (
           <div className="mx-auto w-full min-w-0 max-w-[min(780px,calc(100vw-320px))] px-4 pb-1.5">
             <div className="flex items-center gap-2 rounded-md border border-ink/10 border-l-2 border-l-warning/55 bg-paper-2/45 px-3 py-2 text-xs">
-              <span className="flex-1 text-ink-soft">{t('toast.chatResumeHint')}</span>
+              <span className="flex-1 text-ink-soft">{t(manualRetryAvailable
+                ? 'toast.chatTaskRetryHint'
+                : 'toast.chatResumeHint')}</span>
               <button type="button" onClick={onResume} className="h-7 px-3 rounded-md bg-accent text-accent-contrast">
-                {t('toast.chatResumeButton')}
+                {t(manualRetryAvailable ? 'toast.chatTaskRetryButton' : 'toast.chatResumeButton')}
               </button>
               <button type="button" onClick={onDismissResume} className="h-7 px-2 text-ink-fade hover:text-ink">
                 {t('toast.chatResumeDismiss')}
@@ -294,7 +295,6 @@ export default function ChatSplitView({
           toolApproval={toolApproval}
         />
       )}
-
     </AppLayout>
   )
 }

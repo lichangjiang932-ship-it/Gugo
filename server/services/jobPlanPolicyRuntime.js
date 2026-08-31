@@ -173,6 +173,7 @@ export function buildJobPlanProposalPayload(job, {
     version: JOB_PLAN_APPROVAL_VERSION,
     planDigest: computeJobPlanDigest(steps),
     reason,
+    nextAction: 'approve_plan',
     ...(supersedesProposalEventId == null ? {} : { supersedesProposalEventId }),
     plan: {
       title: job?.title || '',

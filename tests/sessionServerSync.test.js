@@ -337,7 +337,7 @@ test('an older snapshot cannot roll a newer live tool result back to running', (
   assert.equal(merged.meta.serverLastSequence, 5)
   assert.equal(merged.meta.toolCalls[0].status, 'success')
   assert.equal(merged.meta.toolCalls[0].result, '{"ok":true}')
-  assert.equal(Object.hasOwn(merged.meta.toolCalls[0], 'textOffset'), false)
+  assert.equal(merged.meta.toolCalls[0].textOffset, 4)
 })
 
 test('authoritative snapshots replace stale local turn timing metadata', () => {

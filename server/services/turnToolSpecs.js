@@ -17,6 +17,7 @@ import {
   CODEX_MODELS_TOOL_NAME,
 } from './codexAppServerTool.js'
 import { isCodexAppServerModelCatalogAvailable } from './codexAppServerRuntime.js'
+import { normalizeDirectoryAuthorizationResolutions } from './turnResolutionRuntime.js'
 
 function normalizeNames(values, limit = 256) {
   return [...new Set((Array.isArray(values) ? values : []).map(String).map((name) => name.trim()).filter(Boolean))]
@@ -377,11 +378,14 @@ export function normalizeServerToolsConfig(value) {
 
 export function applyDirectoryAuthorizationToolsConfig(toolsConfig, resolution) {
   const normalized = normalizeServerToolsConfig(toolsConfig)
-  if (resolution?.type !== 'directory_authorization' || resolution?.approved !== true) {
-    return normalized
-  }
-  const accessMode = String(resolution.access_mode || resolution.accessMode || '').trim()
-  if (!['read_only', 'read_write'].includes(accessMode)) return normalized
+  const resolutions = normalizeDirectoryAuthorizationResolutions(resolution)
+  const accessModes = resolutions.map((entry) => (
+    String(entry.access_mode || entry.accessMode || '').trim()
+  ))
+  const accessMode = accessModes.includes('read_write')
+    ? 'read_write'
+    : accessModes.includes('read_only') ? 'read_only' : ''
+  if (!accessMode) return normalized
 
   const required = [
     'list_directory',
@@ -406,11 +410,14 @@ export function applyDirectoryAuthorizationToolsConfig(toolsConfig, resolution) 
 
 export function restoreDirectoryAuthorizationToolSpecs(baseSpecs, resolution, fallbackSpecs = []) {
   const current = Array.isArray(baseSpecs) ? baseSpecs : []
-  if (resolution?.type !== 'directory_authorization' || resolution?.approved !== true) {
-    return current
-  }
-  const accessMode = String(resolution.access_mode || resolution.accessMode || '').trim()
-  if (!['read_only', 'read_write'].includes(accessMode)) return current
+  const resolutions = normalizeDirectoryAuthorizationResolutions(resolution)
+  const accessModes = resolutions.map((entry) => (
+    String(entry.access_mode || entry.accessMode || '').trim()
+  ))
+  const accessMode = accessModes.includes('read_write')
+    ? 'read_write'
+    : accessModes.includes('read_only') ? 'read_only' : ''
+  if (!accessMode) return current
 
   const requiredNames = new Set([
     'list_directory',

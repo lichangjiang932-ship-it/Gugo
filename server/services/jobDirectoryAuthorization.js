@@ -1,11 +1,17 @@
 import path from 'node:path'
-import { appendJobEvent, updateJob, updateJobStep } from './jobStore.js'
+import { getDb } from '../db.js'
+import { appendJobEvent } from './jobStore.js'
 import {
   getJobTurnCheckpoint,
   nextJobCheckpointWriteSequence,
   saveJobTurnCheckpoint,
 } from './jobTurnCheckpointStore.js'
 import { findAuthorizedDirectoryGrant } from './localFileAccessService.js'
+import { mergeDirectoryAuthorizationResolutions } from './turnResolutionRuntime.js'
+import {
+  clearResumedJobOutcomeDiagnostics,
+  mergePersistedJobOutcomeFields,
+} from './jobWorkflow.js'
 
 const JOB_DIRECTORY_RESOLUTION_MARKER = '[JOB_DIRECTORY_RESOLUTION:'
 const JOB_SUSPENSION_EVENT_TYPES = new Set([
@@ -14,6 +20,11 @@ const JOB_SUSPENSION_EVENT_TYPES = new Set([
   'plan_proposed',
   'directory_authorization_resumed',
 ])
+
+function parseJson(value) {
+  if (!value) return null
+  try { return JSON.parse(value) } catch { return null }
+}
 
 function normalizedDirectoryPath(value) {
   const raw = String(value || '').trim()
@@ -109,7 +120,12 @@ export function resumeJobDirectoryAuthorization({
     awaiting_event_id: latestSuspension.id,
     step_id: stepId,
     grant_id: grant.id,
+    authorization_scope: grant.scope,
   }
+  const directoryAuthorizationResolutions = mergeDirectoryAuthorizationResolutions(
+    checkpoint.state.directoryAuthorizationResolution,
+    directoryAuthorizationResolution,
+  )
   const messages = Array.isArray(checkpoint.state.messages)
     ? checkpoint.state.messages.map((message) => ({ ...message }))
     : []
@@ -119,36 +135,96 @@ export function resumeJobDirectoryAuthorization({
       content: directoryResolutionPrompt({ path: submittedPath, accessMode: submittedMode, eventId: latestSuspension.id }),
     })
   }
-  const savedCheckpoint = saveJobTurnCheckpoint({
-    jobId,
-    stepId,
-    userId,
-    state: {
-      ...checkpoint.state,
-      checkpointWriteSequence: nextJobCheckpointWriteSequence(checkpoint.state),
-      messages,
-      directoryAuthorizationResolution,
-      final: null,
-    },
-  })
-  if (!savedCheckpoint
-      || savedCheckpoint.state?.directoryAuthorizationResolution?.awaiting_event_id !== latestSuspension.id) {
-    return { resumed: false, error: 'the paused job checkpoint could not be updated', job }
+  const db = getDb()
+  let transition
+  try {
+    transition = db.transaction(() => {
+      const current = db.prepare(`
+        SELECT status, cancel_requested FROM jobs WHERE id = ? AND user_id = ?
+      `).get(jobId, userId)
+      if (!current || current.status !== 'waiting' || current.cancel_requested === 1) {
+        return { resumed: false, error: 'job is no longer waiting for directory authorization' }
+      }
+      const currentSuspension = db.prepare(`
+        SELECT id, type FROM job_events
+         WHERE job_id = ?
+           AND type IN ('awaiting_user', 'sleeping', 'plan_proposed', 'directory_authorization_resumed')
+         ORDER BY id DESC LIMIT 1
+      `).get(jobId)
+      if (currentSuspension?.id !== latestSuspension.id || currentSuspension.type !== 'awaiting_user') {
+        return { resumed: false, error: 'the pending directory authorization request has changed' }
+      }
+      const currentStep = db.prepare(`
+        SELECT status, output_json FROM job_steps WHERE id = ? AND job_id = ?
+      `).get(stepId, jobId)
+      if (currentStep?.status !== 'queued') {
+        return { resumed: false, error: 'the paused job step is no longer resumable' }
+      }
+
+      const savedCheckpoint = saveJobTurnCheckpoint({
+        jobId,
+        stepId,
+        userId,
+        state: {
+          ...checkpoint.state,
+          checkpointWriteSequence: nextJobCheckpointWriteSequence(checkpoint.state),
+          messages,
+          directoryAuthorizationResolution: directoryAuthorizationResolutions,
+          final: null,
+        },
+      })
+      if (!savedCheckpoint
+          || !savedCheckpoint.state?.directoryAuthorizationResolution?.some?.((resolution) => (
+            resolution?.awaiting_event_id === latestSuspension.id
+          ))) {
+        const error = new Error('the paused job checkpoint could not be updated')
+        error.code = 'JOB_DIRECTORY_CHECKPOINT_UPDATE_FAILED'
+        throw error
+      }
+      const stepChanged = db.prepare(`
+        UPDATE job_steps
+           SET status = 'queued', output_json = ?, error = NULL, finished_at = NULL, updated_at = ?
+         WHERE id = ? AND job_id = ? AND status = 'queued'
+      `).run(
+        JSON.stringify(clearResumedJobOutcomeDiagnostics(parseJson(currentStep.output_json)) || {}),
+        Date.now(),
+        stepId,
+        jobId,
+      ).changes === 1
+      if (!stepChanged) throw new Error('directory authorization step resume lost its compare-and-swap race')
+      cancelJobWake({ jobId, userId })
+      const jobChanged = db.prepare(`
+        UPDATE jobs
+           SET status = 'queued', error = NULL, finished_at = NULL, updated_at = ?
+         WHERE id = ? AND user_id = ? AND status = 'waiting' AND cancel_requested = 0
+      `).run(Date.now(), jobId, userId).changes === 1
+      if (!jobChanged) throw new Error('directory authorization resume lost its compare-and-swap race')
+      const event = appendJobEvent({
+        jobId,
+        stepId,
+        type: 'directory_authorization_resumed',
+        message: 'Directory authorization verified; the suspended task has been requeued',
+        payload: {
+          ...mergePersistedJobOutcomeFields(
+            latestSuspension.payload,
+            parseJson(currentStep.output_json),
+          ),
+          path: submittedPath,
+          accessMode: submittedMode,
+          grantId: grant.id,
+          awaitingEventId: latestSuspension.id,
+          nextAction: 'resume_execution',
+        },
+      })
+      return { resumed: true, event }
+    }).immediate()
+  } catch (error) {
+    if (error?.code === 'JOB_DIRECTORY_CHECKPOINT_UPDATE_FAILED') {
+      return { resumed: false, error: error.message, job }
+    }
+    throw error
   }
-  updateJobStep(stepId, { status: 'queued', error: null, finishedAt: null })
-  cancelJobWake({ jobId, userId })
-  updateJob(jobId, { status: 'queued', error: null, finishedAt: null })
-  emit(appendJobEvent({
-    jobId,
-    stepId,
-    type: 'directory_authorization_resumed',
-    message: 'Directory authorization verified; the suspended task has been requeued',
-    payload: {
-      path: submittedPath,
-      accessMode: submittedMode,
-      grantId: grant.id,
-      awaitingEventId: latestSuspension.id,
-    },
-  }))
+  if (!transition.resumed) return { ...transition, job: getJob(jobId, { userId }) }
+  emit(transition.event)
   return { resumed: true, job: getJob(jobId, { userId }) }
 }

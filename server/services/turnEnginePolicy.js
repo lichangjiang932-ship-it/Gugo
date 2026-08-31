@@ -129,7 +129,12 @@ export function isTemporaryTurnEvidence(message, turnId) {
 }
 
 export function lostTurnLease(signal, error = null) {
-  const terminalCodes = new Set(['TURN_LEASE_LOST', 'TURN_ENGINE_SHUTDOWN', 'TURN_ALREADY_TERMINAL'])
+  const terminalCodes = new Set([
+    'TURN_LEASE_LOST',
+    'TURN_ENGINE_SHUTDOWN',
+    'TURN_ALREADY_TERMINAL',
+    'TURN_EXECUTION_LEASE_STALE',
+  ])
   const hasTerminalCode = (candidate) => {
     const seen = new Set()
     let current = candidate

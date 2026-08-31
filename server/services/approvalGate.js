@@ -18,9 +18,9 @@ import {
   expireStaleApprovals,
   getApprovalById,
 } from './approvalStore.js'
-import { createNotification } from './notificationsStore.js'
+import { createNotification, jobApprovalNotificationData } from './notificationsStore.js'
 import { getApprovalSettings } from './approvalSettingsStore.js'
-import { requiresPerCallApproval, resolveApprovalMode, resolveApprovalTimeoutMs } from '../utils/approvalPolicy.js'
+import { BUILTIN_POLICY_ID, requiresPerCallApproval, resolveApprovalMode, resolveApprovalTimeoutMs } from '../utils/approvalPolicy.js'
 import { getDynamicTool, getToolMetadata } from './toolRegistry.js'
 import { getHook } from './hooksService.js'
 import { validateHookAuthorizationProvenance } from './hookAuthorizationProvenance.js'
@@ -33,7 +33,6 @@ import {
 const waiters = new Map()
 /** 轮询间隔:兜底用,不是主路径。Windows CI 下 5000ms 足够宽松(AGENTS.md 五)。 */
 const POLL_INTERVAL_MS = 5_000
-const BUILTIN_POLICY_ID = 'builtin.harness-policy'
 const POLICY_PROVENANCE_FIELDS = Object.freeze([
   'id',
   'owner',
@@ -504,7 +503,7 @@ export function enqueueApprovalRequest({
   expiresAt = null,
   notificationTitle = null,
   notificationBody = null,
-  notificationData = null,
+  notificationData = jobApprovalNotificationData({ origin, jobId }),
 } = {}) {
   const approval = createPendingApproval({
     userId,

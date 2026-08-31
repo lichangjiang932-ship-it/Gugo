@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../db.js'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 import { enqueueSessionContentEventInDb } from './sessionContentOutboxStore.js'
 
 export const MAX_TURN_STEERING_LENGTH = 20_000
@@ -16,6 +17,19 @@ export class TurnSteeringError extends Error {
 
 function validScope({ userId, sessionId, turnId } = {}) {
   return !!(userId && sessionId && turnId)
+}
+
+function storedTurnEventIsTerminal(row) {
+  if (row?.type === 'turn.cancelled' || row?.type === 'turn.failed') return true
+  if (row?.type !== 'turn.completed') return false
+  try {
+    return isSuccessfulTurnCompletedEvent({
+      type: row.type,
+      payload: JSON.parse(row.payload_json),
+    })
+  } catch {
+    return true
+  }
 }
 
 function mapMessage(row) {
@@ -90,15 +104,14 @@ function requireOwnedTurn(db, { userId, sessionId, turnId }) {
 }
 
 function assertTurnAcceptingSteering(db, { userId, sessionId, turnId }, now) {
-  const terminal = db.prepare(`
-    SELECT type
+  const latest = db.prepare(`
+    SELECT type, payload_json
     FROM turn_events
     WHERE user_id = ? AND session_id = ? AND turn_id = ?
-      AND type IN ('turn.completed', 'turn.cancelled', 'turn.failed')
     ORDER BY sequence DESC
     LIMIT 1
   `).get(userId, sessionId, turnId)
-  if (terminal) {
+  if (storedTurnEventIsTerminal(latest)) {
     throw new TurnSteeringError('TURN_STEERING_TURN_FINISHED', 'turn is already finished', 409)
   }
 

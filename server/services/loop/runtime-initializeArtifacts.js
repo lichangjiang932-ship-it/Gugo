@@ -1,5 +1,5 @@
 export async function initializeArtifacts(s) {
-  const { CAPABILITY_CONTROL_TOOL_NAMES, DYNAMIC_EXECUTION_TOOL_NAMES, DYNAMIC_MUTATION_TOOL_NAMES, EXPLICIT_LOCAL_DIRECTORY_CONTEXT, FILE_WRITE_TOOL_NAMES, MAX_CAPABILITY_TOOL_NAMES, PROJECT_SCOPE_TARGET, SERVER_TOOL_SPECS, VERIFICATION_TOOLS, allowedArtifactTools, createDisabledToolGuard, createExplicitReadOnlyGuard, createPartialResultFallback, createRedundantImageGuard, createWorkspaceTargetGuard, getToolMetadata, hasCommandExecutionTool, hasEffectiveReadOnlyBoundary, hasMutationExecutionIntent, isCommandExecutionTool, isExecutionCapabilityChallenge, isExplicitLocalMutationRetryRequest, isFileArtifactTool, isLocalMutationContinuationRequest, isTextDeliverableRequest, recoverPriorLocalMutationTargets, resolveArtifactDeliveryTargets, resolveChatCapabilityMode, restoreDirectoryAuthorizationToolSpecs, restoreNamedToolSpecs, shouldInheritExecutionIntent, shouldRequireExecution, shouldRequirePdfLayoutVerification, toolNameFromSpec } = s.d
+  const { CAPABILITY_CONTROL_TOOL_NAMES, DYNAMIC_EXECUTION_TOOL_NAMES, DYNAMIC_MUTATION_TOOL_NAMES, EXPLICIT_LOCAL_DIRECTORY_CONTEXT, FILE_WRITE_TOOL_NAMES, MAX_CAPABILITY_TOOL_NAMES, PROJECT_SCOPE_TARGET, SERVER_TOOL_SPECS, VERIFICATION_TOOLS, allowedArtifactTools, createDisabledToolGuard, createExplicitReadOnlyGuard, createPartialResultFallback, createRedundantImageGuard, createWorkspaceTargetGuard, getToolMetadata, hasCommandExecutionTool, hasEffectiveReadOnlyBoundary, hasMutationExecutionIntent, isCommandExecutionTool, isExecutionCapabilityChallenge, isExplicitLocalMutationRetryRequest, isFileArtifactTool, isLocalMutationContinuationRequest, isTextDeliverableRequest, normalizeDirectoryAuthorizationResolutions, recoverPriorLocalMutationTargets, resolveArtifactDeliveryTargets, resolveChatCapabilityMode, restoreDirectoryAuthorizationToolSpecs, restoreNamedToolSpecs, shouldInheritExecutionIntent, shouldRequireExecution, shouldRequirePdfLayoutVerification, toolNameFromSpec } = s.d
   s.restoredState = s.restored?.state && typeof s.restored.state === 'object'
       ? s.restored.state
       : s.restored && typeof s.restored === 'object'
@@ -36,10 +36,10 @@ export async function initializeArtifacts(s) {
   s.partialResultFallback = createPartialResultFallback({
       entries: s.restoredState?.completionGuards?.partialResultEntries,
     })
-  s.directoryAuthorizationResolution = s.restoredState?.directoryAuthorizationResolution
-      && typeof s.restoredState.directoryAuthorizationResolution === 'object'
-      ? s.restoredState.directoryAuthorizationResolution
-      : null
+  s.directoryAuthorizationResolutions = normalizeDirectoryAuthorizationResolutions(
+      s.restoredState?.directoryAuthorizationResolution,
+    )
+  s.directoryAuthorizationResolution = s.directoryAuthorizationResolutions.at(-1) || null
   s.skillArtifactTools = s.explicitSkillId
       ? new Set([...allowedArtifactTools('', { skillId: s.explicitSkillId })]
           .filter((name) => s.authorizedArtifactTools.has(name)))
@@ -86,7 +86,7 @@ export async function initializeArtifacts(s) {
         const name = spec?.function?.name
         return s.job?.origin === 'chat' || !isFileArtifactTool(name) || s.stepArtifactTools.has(name)
       }),
-      s.directoryAuthorizationResolution,
+      s.directoryAuthorizationResolutions,
       // A persisted read_write/read_only directory grant is itself the authority
       // that re-enables the file tools for the authorized path. Restore from the
       // full catalog here so a resumed Job gets write/edit/exec capability back

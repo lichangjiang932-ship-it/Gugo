@@ -1,89 +1,29 @@
 import { getDb } from '../db.js'
 import { assertManagedArtifactMutationAllowed } from './userDataClearGuard.js'
 import { normalizeTaskGrants } from '../utils/taskGrants.js'
+import {
+  requiresStructuredCompletionEvidence,
+  validateStructuredCompletionEvidence,
+} from './jobCompletionEvidence.js'
 
-const STRUCTURED_EVIDENCE_STEP_KINDS = new Set(['execute', 'batch_item', 'verify'])
-const COMPLETION_EVIDENCE_TYPE_ALIASES = new Map([
-  ['tool', 'tool_result'],
-  ['tool_result', 'tool_result'],
-  ['test', 'check'],
-  ['test_result', 'check'],
-  ['check', 'check'],
-  ['check_result', 'check'],
-  ['artifact', 'artifact'],
-  ['artifact_result', 'artifact'],
-  ['readback', 'readback'],
-  ['file_readback', 'readback'],
-  ['user_confirmation', 'user_confirmation'],
-])
+export {
+  requiresStructuredCompletionEvidence,
+  validateStructuredCompletionEvidence,
+} from './jobCompletionEvidence.js'
 
 function boundedText(value, maxLength) {
   const text = typeof value === 'string' ? value.trim() : ''
   return text ? text.slice(0, maxLength) : ''
 }
 
+function updatedField(updates, key, current) {
+  return Object.hasOwn(updates, key) && updates[key] !== undefined
+    ? updates[key]
+    : current
+}
+
 function completionEvidenceError(code, message) {
   return Object.assign(new Error(message), { code, statusCode: 422 })
-}
-
-function normalizeCompletionEvidenceEntry(entry) {
-  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
-  const type = COMPLETION_EVIDENCE_TYPE_ALIASES.get(boundedText(entry.type, 64).toLowerCase())
-  const summary = boundedText(entry.summary, 2_000)
-  if (!type || !summary) return null
-
-  if (type === 'tool_result') {
-    const toolCallId = boundedText(entry.toolCallId, 256)
-    if (!toolCallId || entry.ok !== true) return null
-    return { type, summary, toolCallId, ok: true }
-  }
-  if (type === 'check') {
-    const command = boundedText(entry.command, 4_000)
-    const passed = entry.ok === true || entry.exitCode === 0
-    if (!command || !passed) return null
-    return {
-      type,
-      summary,
-      command,
-      ok: true,
-      ...(Number.isInteger(entry.exitCode) ? { exitCode: entry.exitCode } : {}),
-    }
-  }
-  if (type === 'artifact') {
-    const artifactId = boundedText(entry.artifactId, 256)
-    if (!artifactId) return null
-    return { type, summary, artifactId }
-  }
-  if (type === 'readback') {
-    const path = boundedText(entry.path, 2_000)
-    if (!path || entry.ok !== true) return null
-    return { type, summary, path, ok: true }
-  }
-  if (entry.confirmed !== true) return null
-  return { type, summary, confirmed: true }
-}
-
-export function requiresStructuredCompletionEvidence(step) {
-  return STRUCTURED_EVIDENCE_STEP_KINDS.has(String(step?.kind || '').trim().toLowerCase())
-}
-
-export function validateStructuredCompletionEvidence(evidence) {
-  if (!Array.isArray(evidence) || evidence.length === 0) {
-    return {
-      ok: false,
-      code: 'JOB_COMPLETION_EVIDENCE_REQUIRED',
-      error: 'Structured completion evidence is required for this step.',
-    }
-  }
-  const normalized = evidence.map(normalizeCompletionEvidenceEntry)
-  if (normalized.some((entry) => !entry)) {
-    return {
-      ok: false,
-      code: 'JOB_COMPLETION_EVIDENCE_INVALID',
-      error: 'Completion evidence must use a supported structured evidence shape.',
-    }
-  }
-  return { ok: true, evidence: normalized }
 }
 
 function parseJson(value, fallback = null) {
@@ -261,13 +201,13 @@ export function updateJob(id, updates = {}, now = Date.now()) {
   const current = getJob(id)
   if (!current) return null
   const next = {
-    prompt: updates.prompt ?? current.prompt,
-    status: updates.status ?? current.status,
-    progress: updates.progress ?? current.progress,
-    cancelRequested: updates.cancelRequested ?? current.cancelRequested,
-    startedAt: updates.startedAt ?? current.startedAt,
-    finishedAt: updates.finishedAt ?? current.finishedAt,
-    error: updates.error ?? current.error,
+    prompt: updatedField(updates, 'prompt', current.prompt),
+    status: updatedField(updates, 'status', current.status),
+    progress: updatedField(updates, 'progress', current.progress),
+    cancelRequested: updatedField(updates, 'cancelRequested', current.cancelRequested),
+    startedAt: updatedField(updates, 'startedAt', current.startedAt),
+    finishedAt: updatedField(updates, 'finishedAt', current.finishedAt),
+    error: updatedField(updates, 'error', current.error),
   }
   getDb().prepare(`
     UPDATE jobs
@@ -512,6 +452,9 @@ export function approveJobPlan({
       mode: previousMode,
       edited: edited === true,
       stepCount,
+      reason: 'plan_approved',
+      nextAction: 'resume_execution',
+      resolvesEventId: expectedProposalId,
     }
     const info = db.prepare(`
       INSERT INTO job_events (job_id, step_id, type, message, payload_json, created_at)
@@ -555,11 +498,11 @@ export function updateJobStep(stepId, updates = {}, now = Date.now()) {
   const current = getJobStep(stepId)
   if (!current) return null
   const next = {
-    status: updates.status ?? current.status,
-    output: updates.output ?? current.output,
-    error: updates.error ?? current.error,
-    startedAt: updates.startedAt ?? current.startedAt,
-    finishedAt: updates.finishedAt ?? current.finishedAt,
+    status: updatedField(updates, 'status', current.status),
+    output: updatedField(updates, 'output', current.output),
+    error: updatedField(updates, 'error', current.error),
+    startedAt: updatedField(updates, 'startedAt', current.startedAt),
+    finishedAt: updatedField(updates, 'finishedAt', current.finishedAt),
   }
   getDb().prepare(`
     UPDATE job_steps
@@ -581,13 +524,17 @@ export function completeJobStep(stepId, {
   evidence = [],
   output = null,
   completedAt = Date.now(),
+  userId = null,
 } = {}) {
   const current = getJobStep(stepId)
   if (!current) return null
 
   let storedEvidence
   if (requiresStructuredCompletionEvidence(current)) {
-    const validation = validateStructuredCompletionEvidence(evidence)
+    const validation = validateStructuredCompletionEvidence(evidence, {
+      jobId: current.jobId,
+      userId,
+    })
     if (!validation.ok) throw completionEvidenceError(validation.code, validation.error)
     storedEvidence = validation.evidence
   } else {
@@ -652,13 +599,21 @@ export function appendJobArtifact({
   filename = null,
   now = Date.now(),
 }) {
-  if (!userId) throw new Error('appendJobArtifact requires userId')
+  if (!id || !jobId || !userId || !type || !title || !url) {
+    throw new Error('appendJobArtifact requires an owned artifact identity')
+  }
   const db = getDb()
   return db.transaction(() => {
     assertManagedArtifactMutationAllowed(
       db,
       'Artifacts cannot change while local data is being cleared',
     )
+    if (!db.prepare('SELECT 1 FROM jobs WHERE id = ? AND user_id = ?').get(jobId, userId)) {
+      throw new Error('appendJobArtifact job ownership mismatch')
+    }
+    if (stepId && !db.prepare('SELECT 1 FROM job_steps WHERE id = ? AND job_id = ?').get(stepId, jobId)) {
+      throw new Error('appendJobArtifact step ownership mismatch')
+    }
     db.prepare(`
       INSERT INTO job_artifacts (id, job_id, user_id, step_id, type, title, url, filename, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -669,10 +624,13 @@ export function appendJobArtifact({
   }).immediate()
 }
 
-export function listJobArtifacts(jobId) {
+export function listJobArtifacts(jobId, { userId } = {}) {
+  const query = userId
+    ? 'SELECT * FROM job_artifacts WHERE job_id = ? AND user_id = ? ORDER BY created_at ASC'
+    : 'SELECT * FROM job_artifacts WHERE job_id = ? ORDER BY created_at ASC'
   return getDb()
-    .prepare('SELECT * FROM job_artifacts WHERE job_id = ? ORDER BY created_at ASC')
-    .all(jobId)
+    .prepare(query)
+    .all(...(userId ? [jobId, userId] : [jobId]))
     .map(mapArtifact)
 }
 
@@ -706,7 +664,7 @@ export function getJobWithChildren(id, { userId } = {}) {
     ...job,
     steps: listJobSteps(id),
     events: listJobEvents(id),
-    artifacts: listJobArtifacts(id),
+    artifacts: listJobArtifacts(id, { userId: job.userId }),
   }
 }
 

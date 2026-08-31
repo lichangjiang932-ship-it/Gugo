@@ -1,11 +1,19 @@
 import {
   appendJobEvent,
+  getJobWithChildren,
   listJobSteps,
   updateJob,
   updateJobStep,
 } from './jobStore.js'
 import { cancelJobWake } from './jobWakeStore.js'
-import { deriveJobProgress, resolveWorkflowState } from './jobWorkflow.js'
+import {
+  buildFinalOutput,
+  buildJobOutcomeDiagnostics,
+  clearCompletedJobOutcomeDiagnostics,
+  deriveJobProgress,
+  mergeJobEvidence,
+  resolveWorkflowState,
+} from './jobWorkflow.js'
 import { notifyJobStopHook, notifyJobTerminal } from './jobRuntimeLifecycle.js'
 import { applyRuntimeTaskReviewGuard } from './taskReviewGuard.js'
 
@@ -33,7 +41,30 @@ export async function buildToolStepResult({
     text: result.text,
     artifactIds: result.artifactIds,
     toolIterations: result.iterations,
-    evidence: step.kind === 'verify' && result.text ? [result.text] : [],
+    evidence: mergeJobEvidence(
+      result.evidence,
+      step.kind === 'verify' && result.text ? [result.text] : [],
+    ),
+    ...(truncated && String(result.incompleteReason || result.reason || '').trim()
+      ? { incompleteReason: String(result.incompleteReason || result.reason).trim() }
+      : {}),
+    ...(Array.isArray(result.missingRequirements)
+      ? { missingRequirements: result.missingRequirements }
+      : {}),
+    ...(result.taskVerification && typeof result.taskVerification === 'object'
+      && !Array.isArray(result.taskVerification)
+      ? { taskVerification: result.taskVerification }
+      : {}),
+    ...(Array.isArray(result.verifiedLocalFiles)
+      ? { verifiedLocalFiles: result.verifiedLocalFiles }
+      : {}),
+    ...(Array.isArray(result.retainedLocalFiles)
+      ? { retainedLocalFiles: result.retainedLocalFiles }
+      : {}),
+    ...(typeof result.retryable === 'boolean' ? { retryable: result.retryable } : {}),
+    ...(typeof result.manualRetryable === 'boolean'
+      ? { manualRetryable: result.manualRetryable }
+      : {}),
   }
   const evaluatedAcceptance = step.kind === 'verify' && !truncated
     ? await taskEvaluator({
@@ -55,7 +86,12 @@ export async function buildToolStepResult({
         workerModelName: job?.modelName,
       })
     : null
-  if (acceptance) output.acceptance = acceptance
+  if (acceptance) {
+    output.acceptance = acceptance
+    output.issues = [...new Set((Array.isArray(acceptance.issues) ? acceptance.issues : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean))]
+  }
   return {
     ok: !truncated && (!acceptance || acceptance.verdict === 'pass'),
     truncated,
@@ -65,6 +101,13 @@ export async function buildToolStepResult({
     budgetExceeded: !!result.budgetExceeded,
     noProgress: !!result.noProgress,
     interrupted: !!result.interrupted,
+    incompleteReason: output.incompleteReason || null,
+    missingRequirements: output.missingRequirements || [],
+    taskVerification: output.taskVerification || null,
+    verifiedLocalFiles: output.verifiedLocalFiles || [],
+    retainedLocalFiles: output.retainedLocalFiles || [],
+    retryable: output.retryable,
+    manualRetryable: output.manualRetryable,
     acceptance,
     error: acceptance && acceptance.verdict !== 'pass' ? acceptance.summary : null,
     reason: result.reason || (result.paused ? '需要用户澄清' : null),
@@ -98,7 +141,12 @@ export async function buildTextStepResult({
         workerModelName: job?.modelName,
       })
     : null
-  if (acceptance) output.acceptance = acceptance
+  if (acceptance) {
+    output.acceptance = acceptance
+    output.issues = [...new Set((Array.isArray(acceptance.issues) ? acceptance.issues : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean))]
+  }
   return {
     ok: !acceptance || acceptance.verdict === 'pass',
     acceptance,
@@ -228,6 +276,35 @@ export function persistRejectedStepResult({
   emit,
 }) {
   const failure = result.error || result.acceptance?.summary || '步骤执行失败'
+  const output = result?.output && typeof result.output === 'object' && !Array.isArray(result.output)
+    ? result.output
+    : null
+  const completedDeliverables = [...new Set((Array.isArray(output?.completedDeliverables)
+    ? output.completedDeliverables
+    : []).map((value) => String(value || '').trim().toLowerCase()).filter(Boolean))].slice(0, 16)
+  const missingDeliverables = [...new Set((Array.isArray(output?.missingDeliverables)
+    ? output.missingDeliverables
+    : []).map((value) => String(value || '').trim().toLowerCase()).filter(Boolean))].slice(0, 16)
+  const artifactIds = [...new Set((Array.isArray(output?.artifactIds)
+    ? output.artifactIds
+    : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 64)
+  const issues = (Array.isArray(output?.issues)
+    ? output.issues
+    : Array.isArray(result?.acceptance?.issues)
+      ? result.acceptance.issues
+      : [])
+    .map((value) => String(value || '').trim().slice(0, 1_000))
+    .filter(Boolean)
+    .slice(0, 16)
+  const failurePayload = {
+    ...(result.acceptance ? { acceptance: result.acceptance } : {}),
+    repairAttempts: Math.max(0, Number(repairAttempt) || 0),
+    ...(completedDeliverables.length > 0 ? { completedDeliverables } : {}),
+    ...(missingDeliverables.length > 0 ? { missingDeliverables } : {}),
+    ...(artifactIds.length > 0 ? { artifactIds } : {}),
+    ...(issues.length > 0 ? { issues } : {}),
+  }
+  let terminalPayload = null
   const committed = commitOwned(() => {
     updateJobStep(nextStep.id, {
       status: 'failed',
@@ -241,6 +318,15 @@ export function persistRejectedStepResult({
       progress: deriveJobProgress(listJobSteps(job.id)),
       finishedAt: Date.now(),
     })
+    const snapshot = getJobWithChildren(job.id, { userId: job.userId })
+    const diagnostics = buildJobOutcomeDiagnostics(snapshot, {
+      reason: failure,
+      nextAction: 'retry_step',
+    })
+    terminalPayload = { ...failurePayload, ...diagnostics }
+    updateJobStep(nextStep.id, {
+      output: { ...(output || {}), ...diagnostics },
+    })
     cancelJobWake({ jobId: job.id, userId: job.userId })
     emitTaskReviewEvent({ emit, jobId: job.id, stepId: nextStep.id, acceptance: result.acceptance, repairAttempt })
     emit(appendJobEvent({
@@ -248,43 +334,119 @@ export function persistRejectedStepResult({
       stepId: nextStep.id,
       type: 'failed',
       message: failure,
-      payload: result.acceptance ? { acceptance: result.acceptance, repairAttempts: repairAttempt } : null,
+      payload: terminalPayload,
     }))
   })
   if (!committed) return false
   runtimeCore.approval.release({ jobId: job.id, userId: job.userId })
-  notifyJobTerminal({ ...job, error: failure }, { status: 'failed', body: failure })
+  notifyJobTerminal({ ...job, error: failure }, {
+    status: 'failed',
+    body: failure,
+    payload: terminalPayload,
+  })
   notifyJobStopHook(job, { status: 'failed', error: failure, stepId: nextStep.id })
   return true
 }
 
-export function completeManualJobTransition({ jobId, stepId, updated, emit }) {
+export function completeManualJobTransition({ jobId, userId, updated }) {
   if (!updated?.steps?.every((step) => step.status === 'completed')) {
     updateJob(jobId, { progress: deriveJobProgress(updated.steps) })
-    return
+    return { terminal: false, event: null }
   }
   const resolution = resolveWorkflowState(updated.steps)
-  const completed = resolution.state === 'completed'
+  let completed = resolution.state === 'completed'
+  let outcomeReason = String(resolution.reason || '').trim()
+  let diagnostics = null
+  let finalOutput = null
+  if (completed) {
+    const snapshot = getJobWithChildren(jobId, { userId })
+    finalOutput = buildFinalOutput(snapshot)
+    if (finalOutput.complete === false) {
+      completed = false
+      outcomeReason = String(finalOutput.summary || '任务交付验收未通过').trim()
+      diagnostics = {
+        ...finalOutput,
+        complete: false,
+        reason: outcomeReason,
+        nextAction: 'retry_job',
+      }
+      finalOutput = null
+    }
+    if (completed) {
+      for (const persistedStep of snapshot?.steps || []) {
+        updateJobStep(persistedStep.id, {
+          output: clearCompletedJobOutcomeDiagnostics(persistedStep.output),
+        })
+      }
+    }
+    const finalStep = [...(snapshot?.steps || [])].reverse().find((step) => step.kind === 'finalize')
+    if (finalStep) {
+      const normalizedPriorOutput = completed
+        ? clearCompletedJobOutcomeDiagnostics(finalStep.output)
+        : finalStep.output
+      const priorOutput = normalizedPriorOutput && typeof normalizedPriorOutput === 'object' && !Array.isArray(normalizedPriorOutput)
+        ? normalizedPriorOutput
+        : {}
+      const terminalOutput = finalOutput || diagnostics
+      const finalEvidence = mergeJobEvidence(priorOutput.evidence, terminalOutput?.evidence)
+      const mergedOutput = {
+        ...terminalOutput,
+        evidence: finalEvidence,
+      }
+      if (completed) finalOutput = mergedOutput
+      else diagnostics = mergedOutput
+      updateJobStep(finalStep.id, {
+        output: {
+          ...priorOutput,
+          ...mergedOutput,
+        },
+      })
+    }
+  }
+  if (!completed && !diagnostics) {
+    const snapshot = getJobWithChildren(jobId, { userId })
+    diagnostics = buildJobOutcomeDiagnostics(snapshot, {
+      reason: resolution.reason,
+      nextAction: 'retry_job',
+    })
+    const targetStep = [...(snapshot?.steps || [])].reverse().find((step) => (
+      step.kind === 'finalize' || step.output?.acceptance?.verdict !== 'pass'
+    ))
+    if (targetStep) {
+      const priorOutput = targetStep.output && typeof targetStep.output === 'object' && !Array.isArray(targetStep.output)
+        ? targetStep.output
+        : {}
+      updateJobStep(targetStep.id, { output: { ...priorOutput, ...diagnostics } })
+    }
+  }
+  outcomeReason = String(diagnostics?.reason || outcomeReason || '任务未完成').trim()
   updateJob(jobId, completed
     ? { status: 'completed', progress: 100, error: null, finishedAt: Date.now() }
     : {
         status: 'failed',
         progress: deriveJobProgress(updated.steps),
-        error: resolution.reason,
+        error: outcomeReason,
         finishedAt: Date.now(),
       })
-  emit(appendJobEvent({
+  const terminalPayload = {
+    ...(finalOutput || diagnostics || {}),
+    status: completed ? 'completed' : 'failed',
+    complete: completed,
+    error: completed ? null : outcomeReason,
+  }
+  const event = appendJobEvent({
     jobId,
     type: completed ? 'completed' : 'failed',
-    message: completed ? '任务已完成' : resolution.reason,
-  }))
-  notifyJobTerminal(updated, {
-    status: completed ? 'completed' : 'failed',
-    body: completed ? '任务已完成' : resolution.reason,
+    message: completed ? '任务已完成' : outcomeReason,
+    payload: terminalPayload,
   })
-  notifyJobStopHook(updated, {
+  return {
+    terminal: true,
+    completed,
     status: completed ? 'completed' : 'failed',
-    error: completed ? null : resolution.reason,
-    stepId,
-  })
+    error: completed ? null : outcomeReason,
+    message: completed ? '任务已完成' : outcomeReason,
+    payload: terminalPayload,
+    event,
+  }
 }

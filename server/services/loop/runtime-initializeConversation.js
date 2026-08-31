@@ -1,5 +1,5 @@
 export async function initializeConversation(s) {
-  const { DIRECTORY_REVIEW_GUARD_MARKER, DIRECTORY_REVIEW_INTENT, DYNAMIC_EXECUTION_TARGET_MARKER, PUBLIC_FILTERED_CLARIFICATION_TEXT, PUBLIC_INCOMPLETE_TASK_TEXT, PUBLIC_UNVERIFIED_FILE_TEXT, buildRepresentativeReadCalls, ensureSafetySystemMessages, getDefaultOutputDirectory, getProjectDirectory, isFileArtifactTool, listTurnArtifacts, normalizeArtifactIdList, replaceRuntimeCapabilityBlock, sameArtifactIdList, sanitizeIncompleteTerminalText, sourceHandoffViolation, stripEphemeralToolMediaMessages, successfulReadFileInMessages } = s.d
+  const { DIRECTORY_REVIEW_GUARD_MARKER, DIRECTORY_REVIEW_INTENT, DYNAMIC_EXECUTION_TARGET_MARKER, PUBLIC_FILTERED_CLARIFICATION_TEXT, PUBLIC_INCOMPLETE_TASK_TEXT, PUBLIC_UNVERIFIED_FILE_TEXT, buildRepresentativeReadCalls, ensureSafetySystemMessages, getDefaultOutputDirectory, getProjectDirectory, isFileArtifactTool, listTurnArtifacts, normalizeArtifactIdList, path, replaceRuntimeCapabilityBlock, sameArtifactIdList, sanitizeIncompleteTerminalText, sourceHandoffViolation, stripEphemeralToolMediaMessages, successfulReadFileInMessages } = s.d
   s.representativeReadCalls = buildRepresentativeReadCalls(s.job?.prompt, s.job?.id)
   s.requiresRepresentativeRead = s.job?.origin === 'chat'
       && DIRECTORY_REVIEW_INTENT.test(String(s.job?.userPrompt || ''))
@@ -20,6 +20,28 @@ export async function initializeConversation(s) {
     } catch {
       // Prompt context is best-effort and must never block a turn.
     }
+  const authorizedVerificationRoots = s.directoryAuthorizationResolutions
+    .filter((resolution) => (
+      resolution?.type === 'directory_authorization'
+        && resolution?.approved === true
+        && resolution?.access_mode === 'read_write'
+        && Boolean(String(resolution?.grant_id || '').trim())
+        && path.isAbsolute(String(resolution?.path || '').trim())
+    ))
+    .map((resolution) => path.resolve(String(resolution.path).trim()))
+  const configuredVerificationRoot = path.isAbsolute(
+    String(s.outputDirectoryContext.projectDirectory || '').trim(),
+  )
+    ? path.resolve(String(s.outputDirectoryContext.projectDirectory).trim())
+    : ''
+  // Keep the configured project and the independently authorized directory as
+  // separate trusted roots. Verification selects the root containing the
+  // check cwd; authorizing an output directory must not replace project scope.
+  s.verificationProjectDirectory = configuredVerificationRoot || authorizedVerificationRoots[0] || ''
+  s.verificationProjectDirectories = [...new Set([
+    configuredVerificationRoot,
+    ...authorizedVerificationRoots,
+  ].filter(Boolean))]
   s.requiresLocalArtifactDelivery = ['workspace_file', 'mixed'].includes(s.artifactDelivery.target)
       || s.artifactRevisionMode === 'replace_original'
       || Boolean(String(s.outputDirectoryContext.defaultOutputDirectory || '').trim())

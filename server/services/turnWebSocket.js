@@ -21,6 +21,7 @@ import {
 } from '../../shared/turnEvents.js'
 import { isHttpServerDraining } from '../core/httpServerDrain.js'
 import { runtimeNotReadyMessage } from '../core/runtimeReadiness.js'
+import { publicTurnFailureFrameFields } from './turnWebSocketFailureProjection.js'
 
 const VALID_DECISIONS = new Set(['approve', 'deny', 'edit'])
 const CROSS_PROCESS_POLL_MS = 1_000
@@ -410,7 +411,7 @@ export function attachTurnWebSocketServer(server, {
     const deliverActivity = (_subscription, activity) => {
       if (activity) sendFrame({ type: 'turn.activity', activity })
     }
-    const failSubscription = (error, subscription, { fallbackCode, fallbackMessage }) => {
+    const failSubscription = (error, subscription, { fallbackCode }) => {
       const hostUnavailable = describeTurnEngineHostUnavailableError(error)
       if (hostUnavailable) {
         try { subscription?.unsubscribe() } catch { /* best-effort cleanup */ }
@@ -420,10 +421,9 @@ export function attachTurnWebSocketServer(server, {
       }
       sendFrame({
         type: 'error',
-        ...(hostUnavailable?.error || {
-          code: error?.code || fallbackCode,
-          message: error?.message || fallbackMessage,
-        }),
+        code: hostUnavailable?.error?.code || error?.code || fallbackCode,
+        ...(hostUnavailable?.error?.action ? { action: hostUnavailable.error.action } : {}),
+        ...publicTurnFailureFrameFields(error),
         sessionId: subscription.sessionId,
         turnId: subscription.turnId,
       })
@@ -441,7 +441,6 @@ export function attachTurnWebSocketServer(server, {
         onError: (error, subscription) => {
           failSubscription(error, subscription, {
             fallbackCode: 'TURN_SUBSCRIPTION_POLL_FAILED',
-            fallbackMessage: 'Turn subscription poll failed',
           })
         },
       }).catch((error) => {
@@ -469,7 +468,6 @@ export function attachTurnWebSocketServer(server, {
         sendFrame({
           type: 'error',
           code: validation.code,
-          message: validation.message,
           ...(validation.code === 'VERSION_MISMATCH'
             ? {
                 expectedVersion: validation.expectedVersion,
@@ -508,7 +506,6 @@ export function attachTurnWebSocketServer(server, {
             onError: (error, failedSubscription) => {
               failSubscription(error, failedSubscription, {
                 fallbackCode: 'TURN_SUBSCRIBE_FAILED',
-                fallbackMessage: 'Turn subscription failed',
               })
             },
           })
@@ -518,7 +515,9 @@ export function attachTurnWebSocketServer(server, {
           const hostUnavailable = describeTurnEngineHostUnavailableError(error)
           sendFrame({
             type: 'error',
-            ...(hostUnavailable?.error || { code: 'TURN_SUBSCRIBE_FAILED' }),
+            code: hostUnavailable?.error?.code || error?.code || 'TURN_SUBSCRIBE_FAILED',
+            ...(hostUnavailable?.error?.action ? { action: hostUnavailable.error.action } : {}),
+            ...publicTurnFailureFrameFields(error),
             sessionId,
             turnId,
           })
@@ -548,7 +547,6 @@ export function attachTurnWebSocketServer(server, {
           sendFrame({
             type: 'error',
             code: error?.code || 'APPROVAL_DECISION_FAILED',
-            message: error?.message || 'Approval decision failed.',
           })
         }
       }

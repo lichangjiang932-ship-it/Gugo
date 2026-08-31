@@ -66,6 +66,9 @@ test('run_test executes a real Python script and returns structured pass state',
 
   assert.equal(result.ok, true, JSON.stringify(result))
   assert.equal(result.passed, true)
+  assert.equal(result.verificationVerdict, 'passed')
+  assert.equal(result.failureKind, null)
+  assert.equal(result.systemFailure, false)
   assert.equal(result.exitCode, 0)
   assert.match(result.stdout, /PYTHON_EXECUTION_OK/)
 })
@@ -246,6 +249,9 @@ test('run_test preserves failing stdout/stderr and reports passed=false', async 
 
   assert.equal(result.ok, false)
   assert.equal(result.passed, false)
+  assert.equal(result.verificationVerdict, 'failed')
+  assert.equal(result.failureKind, 'project')
+  assert.equal(result.systemFailure, false)
   assert.equal(result.exitCode, 7)
   assert.match(result.stdout, /BEFORE_FAILURE/)
 })

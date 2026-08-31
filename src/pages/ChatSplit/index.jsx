@@ -22,6 +22,7 @@ import useChatSendFlow from './useChatSendFlow.js'
 import useTurnSteering from './useTurnSteering.js'
 import useSlashCommandExecution from './useSlashCommandExecution.js'
 import { readSessionDraft } from '../../lib/chatDrafts.js'
+import { getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
 import { useChatAttachmentActions } from './chatAttachmentActions.js'
 import useChatCatalogState from './useChatCatalogState.js'
 import { useChatReplayActions } from './chatReplayActions.js'
@@ -64,7 +65,6 @@ export default function ChatSplit() {
     const timer = setTimeout(() => setWorkbenchMessage(''), 5000)
     return () => clearTimeout(timer)
   }, [workbenchMessage])
-
   const {
     activeSession, activeSessionId, contextToolSpecs, effectiveAgentId,
     effectiveSelectedModel, effectiveSelectedModelProviderId, messages,
@@ -97,7 +97,7 @@ export default function ChatSplit() {
   })
   const {
     handleAbort, handleAuthorizeDirectoryRequest, handleDismissResume, handleResume,
-    handleTurnResult, handleTurnStart, resumeAvailable, showPendingDirectoryGuidance,
+    handleTurnResult, handleTurnStart, manualRetryAvailable, resumeAvailable, showPendingDirectoryGuidance,
   } = useChatTurnRecovery({
     abortCtrlRef, activeSessionId, approvals, dispatch, isGenerating, messages,
     resumingTurnIdsRef, setInput, setWorkbenchMessage, state, stateRef, t, toast,
@@ -123,7 +123,7 @@ export default function ChatSplit() {
       title: t('toast.chatSendFailed'),
       body: authenticationRefreshed
         ? t('chatReliability.authenticationRefreshedResend')
-        : String(error?.message || t('errors.chatFailure')),
+        : getVisibleModelErrorMessage(error, t),
     })
   }, [t, toast])
   const showSendBlocked = useCallback((reason) => setWorkbenchMessage(t(reason === 'directory-approval' ? 'chatSteering.directoryAuthorizationRequired'
@@ -284,6 +284,7 @@ export default function ChatSplit() {
       onWorkbenchTabChange={setWorkbenchTab} onWorkbenchToggle={() => setWorkbenchOpen((open) => !open)}
       previewArtifact={state.previewArtifact} previewTabs={state.previewTabs} previewActiveId={state.previewActiveId}
       resumeAvailable={resumeAvailable}
+      manualRetryAvailable={manualRetryAvailable}
       runtimeSkillIds={runtimeSkills.filter((skill) => skill.runnable !== false).map((skill) => skill.id)}
       selectedModel={effectiveSelectedModel} selectedModelProviderId={effectiveSelectedModelProviderId}
       selectedWorkspacePath={selectedWorkspacePath} recentWorkspaces={recentWorkspaces}

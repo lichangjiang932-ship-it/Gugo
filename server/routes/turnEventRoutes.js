@@ -20,6 +20,16 @@ import {
   isModelReadinessError,
 } from '../services/modelReadinessService.js'
 import {
+  normalizeArtifactIds,
+  normalizeTaskVerificationDetails,
+  publicIncompleteText,
+} from '../services/turnTerminalProjection.js'
+import {
+  excludeVerifiedLocalFiles,
+  mergeLocalFileReceipts,
+} from '../services/turnRecoveryProjection.js'
+import { mergeFailedRetryEvidence } from '../services/turnFailedRetryRejection.js'
+import {
   TURN_EVENT_TRANSPORT_QUERY_PARAM,
   TURN_EVENT_TRANSPORT_VERSION,
   canAdvanceTurnEventCursor,
@@ -65,7 +75,50 @@ function routeParts(pathname) {
   return pathname.split('/').filter(Boolean)
 }
 
-function sendError(res, error) {
+function stablePublicFailureRecord(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const failure = { ...value }
+  for (const field of ['message', 'hint', 'reason']) delete failure[field]
+  if (failure.error && typeof failure.error === 'object' && !Array.isArray(failure.error)) {
+    failure.error = stablePublicFailureRecord(failure.error)
+  } else if (Object.hasOwn(failure, 'error')) {
+    delete failure.error
+  }
+  if (failure.cause && typeof failure.cause === 'object' && !Array.isArray(failure.cause)) {
+    failure.cause = stablePublicFailureRecord(failure.cause)
+  } else if (Object.hasOwn(failure, 'cause')) {
+    delete failure.cause
+  }
+  if (failure.recovery && typeof failure.recovery === 'object' && !Array.isArray(failure.recovery)) {
+    const recovery = { ...failure.recovery }
+    for (const field of ['message', 'hint', 'reason', 'errorMessage']) delete recovery[field]
+    if (recovery.error && typeof recovery.error === 'object' && !Array.isArray(recovery.error)) {
+      recovery.error = stablePublicFailureRecord(recovery.error)
+    } else if (Object.hasOwn(recovery, 'error')) {
+      delete recovery.error
+    }
+    if (recovery.cause && typeof recovery.cause === 'object' && !Array.isArray(recovery.cause)) {
+      recovery.cause = stablePublicFailureRecord(recovery.cause)
+    } else if (Object.hasOwn(recovery, 'cause')) {
+      delete recovery.cause
+    }
+    failure.recovery = recovery
+  }
+  return failure
+}
+
+function publicTurnErrorProjection(error) {
+  const errorFields = error && typeof error === 'object' ? error : {}
+  const errorChain = []
+  const visitedErrors = new Set()
+  let currentError = errorFields
+  while (currentError && typeof currentError === 'object'
+    && !visitedErrors.has(currentError) && errorChain.length < 8) {
+    visitedErrors.add(currentError)
+    errorChain.push(currentError)
+    currentError = currentError.cause
+  }
+  const evidence = mergeFailedRetryEvidence(...errorChain)
   const explicitStatus = Number(error?.status ?? error?.statusCode)
   const hostUnavailable = describeTurnEngineHostUnavailableError(error)
   const readinessFailure = isModelReadinessError(error)
@@ -102,19 +155,65 @@ function sendError(res, error) {
         },
       }
     : null
-  return sendJson(res, status, {
+  const missingRequirements = [...new Set((Array.isArray(evidence.missingRequirements)
+    ? evidence.missingRequirements
+    : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
+  const taskVerification = normalizeTaskVerificationDetails(evidence.taskVerification)
+  const rawNextAction = String(evidence.nextAction || errorChain
+    .map((entry) => entry?.nextAction || entry?.error?.nextAction)
+    .find(Boolean) || '').trim().toLowerCase().slice(0, 80)
+  const nextAction = /^[a-z][a-z0-9_]{0,79}$/u.test(rawNextAction) ? rawNextAction : ''
+  const hasPartialText = Object.hasOwn(evidence, 'partialText')
+  const hasArtifactIds = Object.hasOwn(evidence, 'artifactIds')
+  const hasDeliveryArtifactIds = Object.hasOwn(evidence, 'deliveryArtifactIds')
+  const hasVerifiedLocalFiles = Object.hasOwn(evidence, 'verifiedLocalFiles')
+  const hasRetainedLocalFiles = Object.hasOwn(evidence, 'retainedLocalFiles')
+  const partialText = publicIncompleteText(evidence.partialText, '')
+  const artifactIds = normalizeArtifactIds(evidence.artifactIds).slice(0, 64)
+  const deliveryArtifactIds = normalizeArtifactIds(evidence.deliveryArtifactIds).slice(0, 64)
+  const verifiedLocalFiles = mergeLocalFileReceipts(evidence.verifiedLocalFiles)
+  const retainedLocalFiles = excludeVerifiedLocalFiles(
+    mergeLocalFileReceipts(evidence.retainedLocalFiles),
+    verifiedLocalFiles,
+  )
+  const iterations = Number(evidence.iterations)
+  const payload = {
     error: {
       ...(readiness || (hostUnavailable
         ? hostUnavailable.error
         : {
-        code: error?.code || 'INVALID_TURN_REQUEST',
-        message: error?.message || String(error),
+            code: error?.code || 'INVALID_TURN_REQUEST',
+            message: error?.message || String(error),
           })),
       ...(Number.isInteger(error?.expectedSequence) ? { expectedSequence: error.expectedSequence } : {}),
       ...(Number.isInteger(error?.actualSequence) ? { actualSequence: error.actualSequence } : {}),
+      ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}),
+      ...(typeof error?.manualRetryable === 'boolean' ? { manualRetryable: error.manualRetryable } : {}),
+      ...(nextAction ? { nextAction } : {}),
+      ...(String(evidence.incompleteReason || '').trim()
+        ? { incompleteReason: String(evidence.incompleteReason).trim() }
+        : {}),
+      ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
+      ...(taskVerification ? { taskVerification } : {}),
+      ...(Number.isInteger(error?.attempts) && error.attempts > 0 ? { attempts: error.attempts } : {}),
       ...(recovery ? { recovery } : {}),
     },
-  })
+    ...(hasPartialText ? { partialText } : {}),
+    ...(hasArtifactIds ? { artifactIds } : {}),
+    ...(hasDeliveryArtifactIds ? { deliveryArtifactIds } : {}),
+    ...(hasVerifiedLocalFiles ? { verifiedLocalFiles } : {}),
+    ...(hasRetainedLocalFiles ? { retainedLocalFiles } : {}),
+    ...(Number.isInteger(iterations) && iterations >= 0 ? { iterations } : {}),
+  }
+  return {
+    status,
+    payload: stablePublicFailureRecord(payload),
+  }
+}
+
+function sendError(res, error) {
+  const projected = publicTurnErrorProjection(error)
+  return sendJson(res, projected.status, projected.payload)
 }
 
 export async function handleTurnEventRequest(
@@ -213,14 +312,8 @@ export async function handleTurnEventRequest(
       const failStream = async (error) => {
         if (closed) return
         try {
-          await sendSse(res, 'error', {
-            error: {
-              code: error?.code || 'TURN_EVENT_STREAM_FAILED',
-              message: error?.message || 'Turn event stream failed',
-              ...(Number.isInteger(error?.expectedSequence) ? { expectedSequence: error.expectedSequence } : {}),
-              ...(Number.isInteger(error?.actualSequence) ? { actualSequence: error.actualSequence } : {}),
-            },
-          })
+          const projected = publicTurnErrorProjection(error)
+          await sendSse(res, 'error', projected.payload)
         } finally {
           cleanup()
           if (!res.writableEnded) res.end()

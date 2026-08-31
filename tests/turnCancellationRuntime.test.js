@@ -21,6 +21,7 @@ function createEmitterFactory(events = []) {
           payload,
           createdAt: 1_700_000_000_000,
         }
+        await options.beforeAppend?.(event)
         if (typeof options.commitEvent === 'function') {
           await options.commitEvent({ event })
         }

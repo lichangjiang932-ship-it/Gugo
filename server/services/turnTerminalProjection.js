@@ -14,11 +14,91 @@ const INCOMPLETE_REASON_REQUIREMENTS = Object.freeze({
   final_answer_evidence_review_missing: ['final_answer_consistency_review'],
   iteration_limit_reached: ['remaining_task_steps'],
   local_html_delivery_validation_failed: ['html_resource_validation'],
+  model_call_interrupted: ['model_response', 'remaining_task_steps'],
+  model_request_outcome_unknown: ['operation_outcome_verification'],
   pdf_layout_verification_missing: ['pdf_layout_validation'],
   post_mutation_verification_missing: ['mutation_readback', 'diff_or_project_check'],
+  recovery_blocked: ['execution_environment_repair', 'explicit_recovery_retry'],
   reasoning_runaway: ['bounded_model_response'],
+  side_effect_outcome_unknown: ['operation_outcome_verification'],
+  task_verification_repair_exhausted: [
+    'verification_failure_repair',
+    'passing_project_check',
+    'explicit_recovery_retry',
+  ],
+  task_verification_repair_pending: [
+    'verification_failure_repair',
+    'passing_project_check',
+  ],
   tool_no_progress: ['progress_after_last_checkpoint'],
+  turn_incomplete: ['remaining_task_steps'],
 })
+
+const TASK_VERIFICATION_INCOMPLETE_REASONS = new Set([
+  'task_verification_repair_exhausted',
+  'task_verification_repair_pending',
+])
+
+const TASK_VERIFICATION_STATUSES = new Set([
+  'failed',
+  'indeterminate',
+  'rerun_required',
+  'stale',
+])
+const TASK_VERIFICATION_KINDS = new Set(['test', 'lint', 'build', 'check', 'typecheck'])
+
+function boundedPublicText(value, limit) {
+  return [...String(value || '').trim()]
+    .filter((character) => {
+      const code = character.codePointAt(0)
+      return code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127)
+    })
+    .join('')
+    .slice(0, limit)
+}
+
+export function normalizeTaskVerificationDetails(value) {
+  if (!value || typeof value !== 'object' || Number(value.version) !== 1) return null
+  const checks = (Array.isArray(value.checks) ? value.checks : [])
+    .slice(0, 9)
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null
+      const status = String(entry.status || '').trim().toLowerCase()
+      const kind = String(entry.kind || '').trim().toLowerCase()
+      if (!TASK_VERIFICATION_STATUSES.has(status) || !TASK_VERIFICATION_KINDS.has(kind)) return null
+      const cwd = boundedPublicText(entry.cwd, 1_000) || '.'
+      const commandScope = boundedPublicText(entry.commandScope, 1_000)
+      const diagnostic = boundedPublicText(entry.diagnostic, 1_200)
+      const mutationTargets = [...new Set((Array.isArray(entry.mutationTargets)
+        ? entry.mutationTargets
+        : [])
+        .map((target) => boundedPublicText(target, 2_000))
+        .filter(Boolean))].slice(0, 16)
+      return {
+        status,
+        kind,
+        cwd,
+        commandScope,
+        coverage: entry.coverage === 'targeted' ? 'targeted' : 'cwd',
+        code: normalizePublicFailureCode(entry.code, 'VERIFICATION_INDETERMINATE'),
+        failures: Math.max(0, Math.min(3, Math.floor(Number(entry.failures) || 0))),
+        requiredEpoch: Math.max(0, Math.floor(Number(entry.requiredEpoch) || 0)),
+        ...(mutationTargets.length > 0 ? { mutationTargets } : {}),
+        ...(diagnostic ? { diagnostic } : {}),
+      }
+    })
+    .filter(Boolean)
+  if (checks.length === 0) return null
+  return {
+    version: 1,
+    maxFailures: Math.max(1, Math.min(3, Math.floor(Number(value.maxFailures) || 3))),
+    consecutiveFailures: Math.max(
+      0,
+      Math.min(3, Math.floor(Number(value.consecutiveFailures) || 0)),
+    ),
+    checks,
+  }
+}
 
 export function normalizeIncompleteReason(value, fallback = 'turn_incomplete') {
   const reason = String(value || '').trim().toLowerCase()
@@ -32,7 +112,7 @@ export function missingRequirementsForIncompleteReason(value) {
   const reason = normalizeIncompleteReason(value)
   if (reason === 'execution_budget_exhausted') return ['remaining_task_steps']
   if (reason.includes('no_progress')) return ['progress_after_last_checkpoint']
-  return [...(INCOMPLETE_REASON_REQUIREMENTS[reason] || [])]
+  return [...(INCOMPLETE_REASON_REQUIREMENTS[reason] || ['remaining_task_steps'])]
 }
 
 const INTERNAL_TERMINAL_FAILURE_PATTERNS = [
@@ -110,17 +190,33 @@ export function normalizeTurnFailure(error, {
   if (typeof error?.manualRetryable === 'boolean') {
     failure.manualRetryable = error.manualRetryable
   }
+  const rawNextAction = String(error?.nextAction || '').trim().toLowerCase().slice(0, 80)
+  if (/^[a-z][a-z0-9_]{0,79}$/u.test(rawNextAction)) failure.nextAction = rawNextAction
   const incompleteReason = error?.incompleteReason
     ? normalizeIncompleteReason(error.incompleteReason)
     : ''
-  if (incompleteReason) failure.incompleteReason = incompleteReason
+  if (incompleteReason) {
+    failure.incompleteReason = incompleteReason
+    // Exhausting the automatic repair budget is not a transient failure. A
+    // direct retry would restore the same checkpoint and immediately fail
+    // again; the caller must repair the code/environment first.
+    if (incompleteReason === 'task_verification_repair_exhausted') {
+      failure.retryable = false
+    }
+  }
   const explicitMissingRequirements = Array.isArray(error?.missingRequirements)
     ? [...new Set(error.missingRequirements.map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
     : []
-  const missingRequirements = explicitMissingRequirements.length > 0
-    ? explicitMissingRequirements
-    : (incompleteReason ? missingRequirementsForIncompleteReason(incompleteReason) : [])
+  // Keep task-verification terminal records on one stable recovery contract,
+  // including records produced by loop code that still sends older aliases.
+  const missingRequirements = TASK_VERIFICATION_INCOMPLETE_REASONS.has(incompleteReason)
+    ? missingRequirementsForIncompleteReason(incompleteReason)
+    : explicitMissingRequirements.length > 0
+      ? explicitMissingRequirements
+      : (incompleteReason ? missingRequirementsForIncompleteReason(incompleteReason) : [])
   if (missingRequirements.length > 0) failure.missingRequirements = missingRequirements
+  const taskVerification = normalizeTaskVerificationDetails(error?.taskVerification)
+  if (taskVerification) failure.taskVerification = taskVerification
   if (status !== null) failure.status = status
   const attempts = Number(error?.attempts)
   if (Number.isInteger(attempts) && attempts > 0) failure.attempts = attempts

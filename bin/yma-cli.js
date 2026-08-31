@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   createRunOutputFormatter,
+  formatRunError,
   normalizeRunOutputFormat,
 } from './cli/runOutput.js'
 
@@ -344,7 +345,7 @@ export async function cmdRun(argv, {
       return timeoutError.exitCode
     }
     await output.finish(result)
-    return Number.isInteger(result?.exitCode) ? result.exitCode : 0
+    return output.resolveExitCode(result)
   } catch (error) {
     const resolvedError = timeoutTriggered ? timeoutError : error
     await output.writeError(resolvedError)
@@ -620,7 +621,31 @@ function responseError(result) {
       || result.text
       || `HTTP ${result.status}`,
   )
-  return new CliError(code, message, 1, { statusCode: result.status })
+  const error = new CliError(code, message, 1, { statusCode: result.status })
+  if (nestedObject) error.serverFailure = { ...nestedObject }
+  for (const field of [
+    'action',
+    'reason',
+    'incompleteReason',
+    'missingRequirements',
+    'nextAction',
+    'taskVerification',
+    'artifactIds',
+    'deliveryArtifactIds',
+    'verifiedLocalFiles',
+    'retainedLocalFiles',
+    'retryable',
+    'manualRetryable',
+  ]) {
+    // Structured `error` is authoritative. Top-level fields only remain for
+    // responses emitted by older servers and must not replace newer details.
+    const value = nestedObject?.[field] ?? result.json?.[field]
+    if (value !== undefined) error[field] = value
+  }
+  if (result.json?.recovery && typeof result.json.recovery === 'object') {
+    error.recovery = result.json.recovery
+  }
+  return error
 }
 
 async function requestApi(path, {
@@ -945,8 +970,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       process.exitCode = Number.isInteger(exitCode) ? exitCode : 0
     })
     .catch((error) => {
-      const code = error?.code || 'CLI_FAILED'
-      process.stderr.write(`Error [${code}]: ${error?.message || error}\n`)
+      const output = formatRunError(error, { format: 'text' })
+      process.stderr.write(output.stderr)
       process.exitCode = Number.isInteger(error?.exitCode) ? error.exitCode : 1
     })
 }

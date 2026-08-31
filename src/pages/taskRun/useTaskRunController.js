@@ -21,6 +21,8 @@ const CONFIGURE_MODEL_ACTIONS = new Set([
   'configure_model',
   'test_provider',
   'choose_agent_provider',
+  'enable_provider',
+  'reload_model_provider',
 ])
 
 const CONFIGURE_MODEL_CODES = new Set([
@@ -29,6 +31,9 @@ const CONFIGURE_MODEL_CODES = new Set([
   'MODEL_PROVIDER_CHAT_ONLY',
   'MODEL_PROVIDER_UNAVAILABLE',
   'MODEL_PROVIDER_AMBIGUOUS',
+  'MODEL_PROVIDER_NOT_FOUND',
+  'MODEL_PROVIDER_DISABLED',
+  'MODEL_PROVIDER_MODEL_INVALID',
 ])
 
 function recoveryField(reason, field) {
@@ -359,8 +364,17 @@ export default function useTaskRunController({ linkedJobId, t, toast }) {
     finally { setPlanApproving(false) }
   }
 
-  const latestSuspension = selectedJob?.status === 'waiting' ? [...(selectedJob.events || [])].reverse().find((event) => event.type === 'plan_proposed' || event.type === 'awaiting_user') : null
-  const pendingClarification = latestSuspension?.type === 'awaiting_user' ? latestSuspension.payload?.clarification : null
+  const latestSuspension = selectedJob?.status === 'waiting' ? [...(selectedJob.events || [])].reverse().find((event) => ['plan_proposed', 'awaiting_user', 'sleeping'].includes(event.type)) : null
+  const pendingClarification = latestSuspension?.type === 'awaiting_user'
+    ? latestSuspension.payload?.clarification
+    : latestSuspension?.type === 'sleeping'
+      ? {
+          question: latestSuspension.message,
+          why: latestSuspension.payload?.reason || null,
+          wakeAt: latestSuspension.payload?.wakeAt || null,
+          waitingKind: 'sleeping',
+        }
+      : null
   const pendingPlan = latestSuspension?.type === 'plan_proposed' ? latestSuspension.payload?.plan : null
   const pendingDirectoryRequest = pendingClarification?.request_type === 'directory' ? pendingClarification : null
   const jobFailureRecovery = taskRunJobFailureRecovery(selectedJob)
