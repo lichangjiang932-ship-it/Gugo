@@ -2,6 +2,7 @@ import { TurnEngineError } from './turnResolutionRuntime.js'
 import { normalizeTurnFailure } from './turnTerminalProjection.js'
 
 const PERMANENT_REJECTION_CODES = new Set([
+  'TURN_FAILED_RETRY_NOT_ALLOWED',
   'TURN_FAILED_RETRY_LIMIT_REACHED',
   'TURN_FAILED_RETRY_UNSUPPORTED',
   'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',

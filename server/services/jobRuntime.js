@@ -25,7 +25,9 @@ import {
 import {
   deriveJobProgress,
   buildJobOutcomeDiagnostics,
+  clearResumedJobOutcomeDiagnostics,
   findNextRunnableStep,
+  persistedJobOutcomeFields,
   resolveWorkflowState,
   stepRequiresPlanApproval,
 } from './jobWorkflow.js'
@@ -93,19 +95,12 @@ function persistJobOutcomeDiagnostics(jobId, {
   return diagnostics
 }
 
-function persistedOutcomeFields(output) {
-  if (!output || typeof output !== 'object' || Array.isArray(output)) return {}
-  return {
-    ...(String(output.reason || '').trim() ? { reason: String(output.reason).trim() } : {}),
-    ...(Array.isArray(output.artifactIds) ? { artifactIds: output.artifactIds } : {}),
-    ...(Array.isArray(output.completedDeliverables)
-      ? { completedDeliverables: output.completedDeliverables }
-      : {}),
-    ...(Array.isArray(output.missingDeliverables)
-      ? { missingDeliverables: output.missingDeliverables }
-      : {}),
-    ...(Array.isArray(output.issues) ? { issues: output.issues } : {}),
+function latestPersistedOutcomeFields(steps) {
+  for (const step of [...(Array.isArray(steps) ? steps : [])].reverse()) {
+    const fields = persistedJobOutcomeFields(step?.output)
+    if (Object.keys(fields).length > 0) return fields
   }
+  return {}
 }
 
 function hasRejectedCompletedOutcome(step) {
@@ -234,13 +229,23 @@ export class JobRuntime {
             updateJob(job.id, { status: 'queued', error: null, finishedAt: null })
             for (const step of listJobSteps(job.id)) {
               if (step.status === 'running') {
-                updateJobStep(step.id, { status: 'queued', error: null, startedAt: null, finishedAt: null })
+                updateJobStep(step.id, {
+                  status: 'queued',
+                  output: clearResumedJobOutcomeDiagnostics(step.output),
+                  error: null,
+                  startedAt: null,
+                  finishedAt: null,
+                })
               }
             }
             event = appendJobEvent({
               jobId: job.id,
               type: 'recovered',
               message: '服务重启后已恢复到队列',
+              payload: {
+                reason: 'process_restart_recovery',
+                nextAction: 'resume_execution',
+              },
             })
           } else if (job.status === 'awaiting_approval') {
             const approval = getLatestJobApproval({ jobId: job.id, userId: job.userId })
@@ -248,14 +253,26 @@ export class JobRuntime {
             updateJob(job.id, { status: 'queued', error: null, finishedAt: null })
             for (const step of listJobSteps(job.id)) {
               if (step.status === 'running') {
-                updateJobStep(step.id, { status: 'queued', error: null, startedAt: null, finishedAt: null })
+                updateJobStep(step.id, {
+                  status: 'queued',
+                  output: clearResumedJobOutcomeDiagnostics(step.output),
+                  error: null,
+                  startedAt: null,
+                  finishedAt: null,
+                })
               }
             }
             event = appendJobEvent({
               jobId: job.id,
+              stepId: approval.stepId || null,
               type: 'approval_recovered',
               message: 'Persisted approval decision found after restart; the interrupted turn was requeued',
-              payload: { approvalId: approval.id, decision: approval.status },
+              payload: {
+                approvalId: approval.id,
+                decision: approval.status,
+                reason: 'tool_approval_resolved',
+                nextAction: 'resume_execution',
+              },
             })
           } else {
             return null
@@ -355,9 +372,14 @@ export class JobRuntime {
     if (transition.requeued) {
       this.emit(appendJobEvent({
         jobId,
+        stepId: transition.resumedStepId || null,
         type: 'user_response_received',
         message: 'User response received; the suspended task has been requeued',
-        payload: { steeringId: message.id },
+        payload: {
+          steeringId: message.id,
+          ...(transition.resumeDiagnostics || {}),
+          nextAction: 'resume_execution',
+        },
       }))
     }
     this.emit(appendJobEvent({
@@ -484,9 +506,10 @@ export class JobRuntime {
       const retriedSteps = currentJob.steps.filter((step) => (
         RETRYABLE_STEP_STATUSES.has(step.status) || hasRejectedCompletedOutcome(step)
       ))
-      const previousDiagnostics = persistedOutcomeFields(
-        [...retriedSteps].reverse().find((step) => step.output)?.output,
-      )
+      const retriedDiagnostics = latestPersistedOutcomeFields(retriedSteps)
+      const previousDiagnostics = Object.keys(retriedDiagnostics).length > 0
+        ? retriedDiagnostics
+        : latestPersistedOutcomeFields(currentJob.steps)
       const transition = retryJobTransition({
         jobId,
         userId,
@@ -744,7 +767,7 @@ export class JobRuntime {
             previousModelConfigRevision: job.modelConfigRevision,
             modelProviderId: modelSnapshot.modelProviderId,
             modelConfigRevision: modelSnapshot.modelConfigRevision,
-            ...persistedOutcomeFields(step.output),
+            ...persistedJobOutcomeFields(step.output),
             nextAction: 'resume_execution',
           },
         },
@@ -778,7 +801,12 @@ export class JobRuntime {
         stepId: wake.stepId,
         type: 'wake_fired',
         message: 'Scheduled wake time reached; resuming the same durable job',
-        payload: { wakeAt: wake.wakeAt, reason: wake.reason },
+        payload: {
+          wakeAt: wake.wakeAt,
+          ...(wake.diagnostics || {}),
+          reason: wake.reason || wake.diagnostics?.reason || null,
+          nextAction: 'resume_execution',
+        },
       }))
     }
     const jobs = listRecoverableJobs()
@@ -823,12 +851,22 @@ export class JobRuntime {
     if (abandonedSteps.length > 0) {
       if (!commitOwned(() => {
         for (const step of abandonedSteps) {
-          updateJobStep(step.id, { status: 'queued', startedAt: null, finishedAt: null })
+          updateJobStep(step.id, {
+            status: 'queued',
+            output: clearResumedJobOutcomeDiagnostics(step.output),
+            error: null,
+            startedAt: null,
+            finishedAt: null,
+          })
         }
         this.emit(appendJobEvent({
           jobId: job.id,
           type: 'recovered',
           message: 'Expired execution owner was replaced; resuming from the durable checkpoint',
+          payload: {
+            reason: 'execution_lease_recovered',
+            nextAction: 'resume_execution',
+          },
         }))
       })) return true
     }
@@ -906,6 +944,7 @@ export class JobRuntime {
               proposalEventId: authorization.proposal?.id || null,
               planDigest: authorization.currentPlanDigest,
               reason: authorization.reason,
+              nextAction: 'approve_plan',
             },
           }))
         }

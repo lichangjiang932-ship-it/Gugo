@@ -478,6 +478,40 @@ export function buildFinalOutput(job) {
   }
 }
 
+export function persistedJobOutcomeFields(output) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return {}
+  return {
+    ...(typeof output.complete === 'boolean' ? { complete: output.complete } : {}),
+    ...(String(output.reason || '').trim() ? { reason: String(output.reason).trim() } : {}),
+    ...(Array.isArray(output.artifactIds) ? { artifactIds: output.artifactIds } : {}),
+    ...(Array.isArray(output.completedDeliverables)
+      ? { completedDeliverables: output.completedDeliverables }
+      : {}),
+    ...(Array.isArray(output.missingDeliverables)
+      ? { missingDeliverables: output.missingDeliverables }
+      : {}),
+    ...(Array.isArray(output.issues) ? { issues: output.issues } : {}),
+    ...(String(output.nextAction || '').trim()
+      ? { nextAction: String(output.nextAction).trim() }
+      : {}),
+  }
+}
+
+export function clearResumedJobOutcomeDiagnostics(output) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return output
+  const resumed = { ...output }
+  for (const key of [
+    'complete',
+    'reason',
+    'nextAction',
+    'missingDeliverables',
+    'issues',
+    'acceptance',
+    'repairAttempts',
+  ]) delete resumed[key]
+  return resumed
+}
+
 export function buildJobOutcomeDiagnostics(job, { reason = null, nextAction = null } = {}) {
   const delivery = buildFinalOutput(job)
   const normalizedReason = String(reason || '').trim().slice(0, 2_000)

@@ -476,10 +476,14 @@ export default function useServerTurnResume({
             missingRequirements: ['execution_environment_repair', 'explicit_recovery_retry'],
           }
         : null
+      const currentFailure = error?.serverFailure || recoveryFailure || createTurnFailureError(
+        error,
+        { fallbackCode: String(error?.code || 'TURN_REQUEST_FAILED') },
+      ).serverFailure
       const durableFailure = permanentFailedRetryRejection
         ? failedRetryFailureFromError(error, message.meta?.serverFailure)
         : mergeFailureDiagnostics(
-            error?.serverFailure || recoveryFailure,
+            currentFailure,
             message.meta?.serverFailure,
           )
       const failureEvidenceMeta = terminalFailureEvidenceMeta(error)

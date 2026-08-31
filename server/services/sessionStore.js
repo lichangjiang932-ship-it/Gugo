@@ -684,7 +684,27 @@ function latestTurnBoundaries(db, { userId, sessionId, turnIds = null }) {
         WHERE messages.user_id = event.user_id
           AND messages.session_id = event.session_id
           AND messages.id = event.turn_id || ':assistant'
-      ) AS has_evidence_message
+      ) AS has_evidence_message,
+      COALESCE(
+        (
+          SELECT anchor.id
+          FROM messages AS anchor
+          WHERE anchor.user_id = event.user_id
+            AND anchor.session_id = event.session_id
+            AND anchor.id = event.turn_id || ':user'
+          LIMIT 1
+        ),
+        (
+          SELECT anchor.id
+          FROM messages AS anchor
+          WHERE anchor.user_id = event.user_id
+            AND anchor.session_id = event.session_id
+            AND json_valid(anchor.model_context_json)
+            AND json_extract(anchor.model_context_json, '$.turnId') = event.turn_id
+          ORDER BY anchor.created_at ASC, anchor.rowid ASC
+          LIMIT 1
+        )
+      ) AS evidence_anchor_id
     FROM turn_events AS event
     WHERE event.user_id = ? AND event.session_id = ?${turnFilter}
       AND event.sequence = (
@@ -844,7 +864,11 @@ function projectTerminalEvidence(message, row, { userId, sessionId }) {
   }
 }
 
-function recoverTerminalEvidenceMessages(messages, rows, scope, { synthesizeMissing = false } = {}) {
+function recoverTerminalEvidenceMessages(messages, rows, scope, {
+  synthesizeMissing = false,
+  synthesisAnchorIds = null,
+  includeUnanchored = false,
+} = {}) {
   const byId = new Map(messages.map((message, index) => [message.id, index]))
   const recovered = [...messages]
   const missing = []
@@ -854,7 +878,12 @@ function recoverTerminalEvidenceMessages(messages, rows, scope, { synthesizeMiss
     const index = byId.get(id)
     if (index !== undefined) {
       recovered[index] = projectTerminalEvidence(recovered[index], row, scope)
-    } else if (synthesizeMissing && !row.has_evidence_message) {
+    } else if (synthesizeMissing
+      && !row.has_evidence_message
+      && (synthesisAnchorIds === null
+        || (row.evidence_anchor_id
+          ? synthesisAnchorIds.has(row.evidence_anchor_id)
+          : includeUnanchored))) {
       missing.push({ row, message: projectTerminalEvidence(null, row, scope) })
       synthesized += 1
     }
@@ -1200,30 +1229,33 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
     }
     const storedMessages = listMessages({ userId, sessionId, limit: safeLimit, offset: safeOffset })
       .map(withRecoveredVerifiedLocalFiles)
-    const durableSnapshotFits = safeOffset === 0 && totalMessages <= safeLimit
-    const pageTurnIds = durableSnapshotFits
-      ? null
-      : storedMessages.map((message) => message?.modelContext?.turnId)
-    const terminalBoundaries = latestTurnBoundaries(db, {
+    const allTerminalBoundaries = latestTurnBoundaries(db, {
       userId,
       sessionId,
-      turnIds: pageTurnIds,
     })
-    const missingEvidenceMessages = terminalBoundaries.reduce(
+    const pageMessageIds = new Set(storedMessages.map((message) => message?.id).filter(Boolean))
+    const pageTurnIds = new Set(storedMessages
+      .map((message) => String(message?.modelContext?.turnId || '').trim())
+      .filter(Boolean))
+    const terminalBoundaries = allTerminalBoundaries.filter((row) => (
+      pageTurnIds.has(row.turn_id)
+      || pageMessageIds.has(`${row.turn_id}:assistant`)
+      || (row.evidence_anchor_id && pageMessageIds.has(row.evidence_anchor_id))
+      || (!row.evidence_anchor_id && safeOffset === 0)
+    ))
+    const missingEvidenceMessages = allTerminalBoundaries.reduce(
       (count, row) => count + (row.has_evidence_message ? 0 : 1),
       0,
     )
-    // Virtual terminal messages must obey the same pagination contract as
-    // durable messages. Only synthesize when the whole merged snapshot fits
-    // in this page; otherwise repair the durable messages already on the page
-    // without changing totalMessages/nextOffset between requests.
-    const synthesizeMissing = durableSnapshotFits
-      && totalMessages + missingEvidenceMessages <= safeLimit
     const terminalRecovery = recoverTerminalEvidenceMessages(
       storedMessages,
       terminalBoundaries,
       { userId, sessionId },
-      { synthesizeMissing },
+      {
+        synthesizeMissing: true,
+        synthesisAnchorIds: pageMessageIds,
+        includeUnanchored: safeOffset === 0,
+      },
     )
     const incompleteMetadataByTurn = loadIncompleteCheckpointMetadata(db, {
       userId,
@@ -1248,15 +1280,18 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
           : artifacts
         return matched.length ? { ...message, artifacts: matched } : message
       })
-    const snapshotTotalMessages = totalMessages + terminalRecovery.synthesized
-    const complete = safeOffset + messages.length >= snapshotTotalMessages
+    const durableNextOffset = safeOffset + storedMessages.length
+    const snapshotTotalMessages = totalMessages + missingEvidenceMessages
+    const complete = durableNextOffset >= totalMessages
     return {
       session,
       messages,
       revision: session.revision,
       totalMessages: snapshotTotalMessages,
       complete,
-      nextOffset: complete ? null : safeOffset + messages.length,
+      // Virtual terminal rows are returned beside their unique durable anchor
+      // but never consume an OFFSET position in the messages table.
+      nextOffset: complete ? null : durableNextOffset,
     }
   })()
 }

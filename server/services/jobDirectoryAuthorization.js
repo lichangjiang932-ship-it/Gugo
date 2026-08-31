@@ -8,6 +8,10 @@ import {
 } from './jobTurnCheckpointStore.js'
 import { findAuthorizedDirectoryGrant } from './localFileAccessService.js'
 import { mergeDirectoryAuthorizationResolutions } from './turnResolutionRuntime.js'
+import {
+  clearResumedJobOutcomeDiagnostics,
+  persistedJobOutcomeFields,
+} from './jobWorkflow.js'
 
 const JOB_DIRECTORY_RESOLUTION_MARKER = '[JOB_DIRECTORY_RESOLUTION:'
 const JOB_SUSPENSION_EVENT_TYPES = new Set([
@@ -16,6 +20,11 @@ const JOB_SUSPENSION_EVENT_TYPES = new Set([
   'plan_proposed',
   'directory_authorization_resumed',
 ])
+
+function parseJson(value) {
+  if (!value) return null
+  try { return JSON.parse(value) } catch { return null }
+}
 
 function normalizedDirectoryPath(value) {
   const raw = String(value || '').trim()
@@ -146,7 +155,7 @@ export function resumeJobDirectoryAuthorization({
         return { resumed: false, error: 'the pending directory authorization request has changed' }
       }
       const currentStep = db.prepare(`
-        SELECT status FROM job_steps WHERE id = ? AND job_id = ?
+        SELECT status, output_json FROM job_steps WHERE id = ? AND job_id = ?
       `).get(stepId, jobId)
       if (currentStep?.status !== 'queued') {
         return { resumed: false, error: 'the paused job step is no longer resumable' }
@@ -174,9 +183,14 @@ export function resumeJobDirectoryAuthorization({
       }
       const stepChanged = db.prepare(`
         UPDATE job_steps
-           SET status = 'queued', error = NULL, finished_at = NULL, updated_at = ?
+           SET status = 'queued', output_json = ?, error = NULL, finished_at = NULL, updated_at = ?
          WHERE id = ? AND job_id = ? AND status = 'queued'
-      `).run(Date.now(), stepId, jobId).changes === 1
+      `).run(
+        JSON.stringify(clearResumedJobOutcomeDiagnostics(parseJson(currentStep.output_json)) || {}),
+        Date.now(),
+        stepId,
+        jobId,
+      ).changes === 1
       if (!stepChanged) throw new Error('directory authorization step resume lost its compare-and-swap race')
       cancelJobWake({ jobId, userId })
       const jobChanged = db.prepare(`
@@ -191,10 +205,13 @@ export function resumeJobDirectoryAuthorization({
         type: 'directory_authorization_resumed',
         message: 'Directory authorization verified; the suspended task has been requeued',
         payload: {
+          ...persistedJobOutcomeFields(latestSuspension.payload),
+          ...persistedJobOutcomeFields(parseJson(currentStep.output_json)),
           path: submittedPath,
           accessMode: submittedMode,
           grantId: grant.id,
           awaitingEventId: latestSuspension.id,
+          nextAction: 'resume_execution',
         },
       })
       return { resumed: true, event }

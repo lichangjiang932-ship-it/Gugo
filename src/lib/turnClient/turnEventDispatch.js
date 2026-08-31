@@ -515,6 +515,7 @@ export async function dispatchTurnEvent(event, {
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     const retainedLocalFiles = optionalRetainedLocalFiles(payload)
+    const artifactIds = optionalArtifactIds(payload, 'artifactIds')
     const modelUsage = normalizeModelUsage(payload.usage)
     const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
     const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
@@ -533,7 +534,7 @@ export async function dispatchTurnEvent(event, {
         serverClarification: payload.clarification || null,
         directoryAuthorizationPending: false,
         serverResumeResolution: null,
-        serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
+        ...(artifactIds !== undefined ? { serverArtifactIds: artifactIds } : {}),
         ...(partialText !== undefined ? { serverPartialText: partialText } : {}),
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(modelUsage ? { modelUsage, actualPromptTokens: modelUsage.promptTokens } : {}),
@@ -548,6 +549,7 @@ export async function dispatchTurnEvent(event, {
     dispatch?.({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: payload.clarification?.question || 'Waiting for user input' } } })
     cursorCommitted = true
   } else if (event.type === 'turn.completed') {
+    const artifactIds = optionalArtifactIds(payload, 'artifactIds')
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     const retainedLocalFiles = optionalRetainedLocalFiles(payload)
@@ -568,7 +570,7 @@ export async function dispatchTurnEvent(event, {
         interrupted: false,
         paused: false,
         cancelled: false,
-        serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
+        ...(artifactIds !== undefined ? { serverArtifactIds: artifactIds } : {}),
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
         ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
@@ -589,6 +591,8 @@ export async function dispatchTurnEvent(event, {
       : Object.hasOwn(payload, 'text') ? String(payload.text ?? '') : undefined
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     const retainedLocalFiles = optionalRetainedLocalFiles(payload)
+    const artifactIds = optionalArtifactIds(payload, 'artifactIds')
+    const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
     const modelUsage = normalizeModelUsage(payload.usage)
     const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
     const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
@@ -606,8 +610,8 @@ export async function dispatchTurnEvent(event, {
         interrupted: false,
         paused: false,
         serverConnectionState: 'cancelled',
-        serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
-        serverDeliveryArtifactIds: optionalArtifactIds(payload, 'deliveryArtifactIds') || [],
+        ...(artifactIds !== undefined ? { serverArtifactIds: artifactIds } : {}),
+        ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
         ...(partialText !== undefined ? { serverPartialText: partialText } : {}),
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(modelUsage ? { modelUsage, actualPromptTokens: modelUsage.promptTokens } : {}),

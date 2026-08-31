@@ -21,6 +21,8 @@ const CONFIGURE_MODEL_ACTIONS = new Set([
   'configure_model',
   'test_provider',
   'choose_agent_provider',
+  'enable_provider',
+  'reload_model_provider',
 ])
 
 const CONFIGURE_MODEL_CODES = new Set([
@@ -29,6 +31,9 @@ const CONFIGURE_MODEL_CODES = new Set([
   'MODEL_PROVIDER_CHAT_ONLY',
   'MODEL_PROVIDER_UNAVAILABLE',
   'MODEL_PROVIDER_AMBIGUOUS',
+  'MODEL_PROVIDER_NOT_FOUND',
+  'MODEL_PROVIDER_DISABLED',
+  'MODEL_PROVIDER_MODEL_INVALID',
 ])
 
 function recoveryField(reason, field) {

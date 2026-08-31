@@ -164,6 +164,12 @@ export function createTurnResumeRuntime({
         409,
       )
       error.retryable = false
+      error.manualRetryable = true
+      error.incompleteReason = 'recovery_attempts_exhausted'
+      error.missingRequirements = [
+        'model_service_available',
+        'explicit_recovery_retry',
+      ]
       error.attempts = interruptionRecovery.attempts
       error.causeCode = interruptionRecovery.causeCode
       throw error

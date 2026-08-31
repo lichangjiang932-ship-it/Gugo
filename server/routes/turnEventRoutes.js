@@ -20,6 +20,15 @@ import {
   isModelReadinessError,
 } from '../services/modelReadinessService.js'
 import {
+  normalizeArtifactIds,
+  normalizeTaskVerificationDetails,
+  publicIncompleteText,
+} from '../services/turnTerminalProjection.js'
+import {
+  excludeVerifiedLocalFiles,
+  mergeLocalFileReceipts,
+} from '../services/turnRecoveryProjection.js'
+import {
   TURN_EVENT_TRANSPORT_QUERY_PARAM,
   TURN_EVENT_TRANSPORT_VERSION,
   canAdvanceTurnEventCursor,
@@ -65,7 +74,7 @@ function routeParts(pathname) {
   return pathname.split('/').filter(Boolean)
 }
 
-function sendError(res, error) {
+function publicTurnErrorProjection(error) {
   const explicitStatus = Number(error?.status ?? error?.statusCode)
   const hostUnavailable = describeTurnEngineHostUnavailableError(error)
   const readinessFailure = isModelReadinessError(error)
@@ -105,7 +114,19 @@ function sendError(res, error) {
   const missingRequirements = [...new Set((Array.isArray(error?.missingRequirements)
     ? error.missingRequirements
     : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
-  return sendJson(res, status, {
+  const taskVerification = normalizeTaskVerificationDetails(error?.taskVerification)
+  const partialText = publicIncompleteText(error?.partialText, '')
+  const artifactIds = normalizeArtifactIds(error?.artifactIds).slice(0, 64)
+  const deliveryArtifactIds = normalizeArtifactIds(error?.deliveryArtifactIds).slice(0, 64)
+  const verifiedLocalFiles = mergeLocalFileReceipts(error?.verifiedLocalFiles)
+  const retainedLocalFiles = excludeVerifiedLocalFiles(
+    mergeLocalFileReceipts(error?.retainedLocalFiles),
+    verifiedLocalFiles,
+  )
+  const iterations = Number(error?.iterations)
+  return {
+    status,
+    payload: {
     error: {
       ...(readiness || (hostUnavailable
         ? hostUnavailable.error
@@ -121,13 +142,23 @@ function sendError(res, error) {
         ? { incompleteReason: String(error.incompleteReason).trim() }
         : {}),
       ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
-      ...(error?.taskVerification && typeof error.taskVerification === 'object'
-        ? { taskVerification: error.taskVerification }
-        : {}),
+      ...(taskVerification ? { taskVerification } : {}),
       ...(Number.isInteger(error?.attempts) && error.attempts > 0 ? { attempts: error.attempts } : {}),
       ...(recovery ? { recovery } : {}),
     },
-  })
+    ...(partialText ? { partialText } : {}),
+    ...(artifactIds.length > 0 ? { artifactIds } : {}),
+    ...(deliveryArtifactIds.length > 0 ? { deliveryArtifactIds } : {}),
+    ...(verifiedLocalFiles.length > 0 ? { verifiedLocalFiles } : {}),
+    ...(retainedLocalFiles.length > 0 ? { retainedLocalFiles } : {}),
+    ...(Number.isInteger(iterations) && iterations >= 0 ? { iterations } : {}),
+    },
+  }
+}
+
+function sendError(res, error) {
+  const projected = publicTurnErrorProjection(error)
+  return sendJson(res, projected.status, projected.payload)
 }
 
 export async function handleTurnEventRequest(
@@ -226,14 +257,8 @@ export async function handleTurnEventRequest(
       const failStream = async (error) => {
         if (closed) return
         try {
-          await sendSse(res, 'error', {
-            error: {
-              code: error?.code || 'TURN_EVENT_STREAM_FAILED',
-              message: error?.message || 'Turn event stream failed',
-              ...(Number.isInteger(error?.expectedSequence) ? { expectedSequence: error.expectedSequence } : {}),
-              ...(Number.isInteger(error?.actualSequence) ? { actualSequence: error.actualSequence } : {}),
-            },
-          })
+          const projected = publicTurnErrorProjection(error)
+          await sendSse(res, 'error', projected.payload)
         } finally {
           cleanup()
           if (!res.writableEnded) res.end()

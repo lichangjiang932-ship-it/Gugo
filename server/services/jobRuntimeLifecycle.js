@@ -5,7 +5,7 @@ import { appendJobEvent } from './jobStore.js'
 
 const RECOVERABLE_JOB_STATUSES = new Set(['planning', 'running'])
 
-export function markJobAwaitingApproval(job) {
+export function markJobAwaitingApproval(job, step = null, approval = null) {
   if (!job?.id || !job.userId) return
   try {
     const db = getDb()
@@ -19,8 +19,14 @@ export function markJobAwaitingApproval(job) {
       if (!changed) return false
       appendJobEvent({
         jobId: job.id,
+        stepId: step?.id || null,
         type: 'awaiting_approval',
         message: '等待用户批准一个工具调用',
+        payload: {
+          approvalId: approval?.id || null,
+          reason: 'tool_approval_required',
+          nextAction: 'review_approval',
+        },
       })
       return true
     }).immediate()
@@ -29,15 +35,34 @@ export function markJobAwaitingApproval(job) {
   }
 }
 
-export function markJobRunningAgain(job) {
+export function markJobRunningAgain(job, step = null, decision = null) {
   if (!job?.id || !job.userId) return
   try {
-    getDb().prepare(`
-      UPDATE jobs
-         SET status = 'running', updated_at = ?
-       WHERE id = ? AND user_id = ? AND status = 'awaiting_approval'
-         AND cancel_requested = 0
-    `).run(Date.now(), job.id, job.userId)
+    const db = getDb()
+    db.transaction(() => {
+      const changed = db.prepare(`
+        UPDATE jobs
+           SET status = 'running', updated_at = ?
+         WHERE id = ? AND user_id = ? AND status = 'awaiting_approval'
+           AND cancel_requested = 0
+      `).run(Date.now(), job.id, job.userId).changes === 1
+      if (!changed) return false
+      appendJobEvent({
+        jobId: job.id,
+        stepId: step?.id || null,
+        type: 'approval_resolved',
+        message: decision?.proceed === false
+          ? '工具调用审批已拒绝；任务继续处理该结果'
+          : '工具调用审批已解决；任务恢复执行',
+        payload: {
+          approvalId: decision?.approvalId || null,
+          proceed: decision?.proceed !== false,
+          reason: decision?.reason || (decision?.proceed === false ? 'approval_denied' : 'approval_granted'),
+          nextAction: 'resume_execution',
+        },
+      })
+      return true
+    }).immediate()
   } catch (error) {
     console.error('[jobs] 恢复 running 状态失败:', error?.stack || error)
   }

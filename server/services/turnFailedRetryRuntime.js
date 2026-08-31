@@ -204,11 +204,12 @@ export function createTurnFailedRetryRuntime({
     }
     if (last.payload?.error?.retryable !== true
       && last.payload?.error?.manualRetryable !== true) {
-      throw new TurnEngineError(
-        'TURN_FAILED_RETRY_NOT_ALLOWED',
-        'the failed Turn is not explicitly retryable or manually recoverable',
-        409,
-      )
+      return rejectFailedRetry({
+        code: 'TURN_FAILED_RETRY_NOT_ALLOWED',
+        status: 409,
+        retryable: false,
+        manualRetryable: false,
+      })
     }
     if (typeof deps.commitTurnFailedRetry !== 'function') {
       return rejectFailedRetry(new TurnEngineError(

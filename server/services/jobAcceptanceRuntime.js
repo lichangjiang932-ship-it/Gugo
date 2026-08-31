@@ -6,7 +6,12 @@ import {
   updateJobStep,
 } from './jobStore.js'
 import { cancelJobWake } from './jobWakeStore.js'
-import { buildJobOutcomeDiagnostics, deriveJobProgress, resolveWorkflowState } from './jobWorkflow.js'
+import {
+  buildFinalOutput,
+  buildJobOutcomeDiagnostics,
+  deriveJobProgress,
+  resolveWorkflowState,
+} from './jobWorkflow.js'
 import { notifyJobStopHook, notifyJobTerminal } from './jobRuntimeLifecycle.js'
 import { applyRuntimeTaskReviewGuard } from './taskReviewGuard.js'
 
@@ -321,6 +326,10 @@ export function completeManualJobTransition({ jobId, userId, updated }) {
         finishedAt: Date.now(),
       })
   let diagnostics = null
+  let finalOutput = null
+  if (completed) {
+    finalOutput = buildFinalOutput(getJobWithChildren(jobId, { userId }))
+  }
   if (!completed) {
     const snapshot = getJobWithChildren(jobId, { userId })
     diagnostics = buildJobOutcomeDiagnostics(snapshot, {
@@ -341,7 +350,7 @@ export function completeManualJobTransition({ jobId, userId, updated }) {
     jobId,
     type: completed ? 'completed' : 'failed',
     message: completed ? '任务已完成' : resolution.reason,
-    ...(diagnostics ? { payload: diagnostics } : {}),
+    ...((finalOutput || diagnostics) ? { payload: finalOutput || diagnostics } : {}),
   })
   return {
     terminal: true,

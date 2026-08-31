@@ -166,20 +166,22 @@ function terminalDiagnostic(event) {
   if (!label) return null
   const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {}
   const nested = payload.error && typeof payload.error === 'object' ? payload.error : {}
-  const code = String(payload.code || nested.code || '').trim()
+  // `payload.error` is the canonical failure object. Top-level fields only
+  // remain for replay compatibility and may contain an older generic value.
+  const code = String(nested.code || payload.code || '').trim()
   const clarification = payload.clarification
   const clarificationMessage = typeof clarification === 'string'
     ? clarification
     : clarification?.question || clarification?.message
   const message = String(
-    payload.message
+    nested.message
+      || payload.message
       || payload.reason
-      || payload.error?.message
       || clarificationMessage
       || '',
   ).trim()
   const incompleteReason = String(
-    payload.incompleteReason || nested.incompleteReason || '',
+    nested.incompleteReason || payload.incompleteReason || '',
   ).trim()
   const nestedMissingRequirements = Array.isArray(nested.missingRequirements)
     ? nested.missingRequirements
@@ -241,16 +243,10 @@ export function formatRunEvent(event, { format = 'jsonl' } = {}) {
   }
   const diagnostic = terminalDiagnostic(event)
   if (!diagnostic) return Object.freeze({ stdout: null, stderr: null })
-  const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {}
-  const nested = payload.error && typeof payload.error === 'object' ? payload.error : {}
-  const partialText = Object.hasOwn(payload, 'partialText')
-    ? payload.partialText
-    : Object.hasOwn(nested, 'partialText')
-      ? nested.partialText
-      : Object.hasOwn(payload, 'text')
-        ? payload.text
-        : Object.hasOwn(nested, 'text') ? nested.text : null
-  return Object.freeze({ stdout: line(partialText), stderr: diagnostic })
+  // Text mode treats stdout as a successful-result channel. Partial model
+  // output remains available in JSONL but must not look like a completed
+  // answer to shell pipelines when the durable terminal state is non-success.
+  return Object.freeze({ stdout: null, stderr: diagnostic })
 }
 
 export function formatRunError(error, { format = 'jsonl' } = {}) {
@@ -347,7 +343,7 @@ export function createRunOutputFormatter({
     }
     finalized = true
     const completed = result?.status === 'completed' && result?.exitCode === 0
-    const committedText = pendingCompletedText
+    const committedText = completed ? pendingCompletedText : null
     const committedDiagnostic = completed ? null : pendingTerminalDiagnostic
     pendingCompletedText = null
     pendingTerminalDiagnostic = null

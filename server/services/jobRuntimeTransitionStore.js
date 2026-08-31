@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../db.js'
 import { appendJobEvent } from './jobStore.js'
+import {
+  clearResumedJobOutcomeDiagnostics,
+  persistedJobOutcomeFields,
+} from './jobWorkflow.js'
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 const RETRYABLE_JOB_STATUSES = new Set(['failed', 'cancelled'])
@@ -107,12 +111,14 @@ export function enqueueJobSteeringTransition({ jobId, userId, content, now = Dat
       }
     }
 
+    const latestSuspension = current.status === 'waiting'
+      ? db.prepare(`
+          SELECT type, step_id, payload_json FROM job_events
+           WHERE job_id = ? AND type IN ('plan_proposed', 'awaiting_user', 'sleeping')
+           ORDER BY id DESC LIMIT 1
+        `).get(jobId)
+      : null
     if (current.status === 'waiting') {
-      const latestSuspension = db.prepare(`
-        SELECT type FROM job_events
-         WHERE job_id = ? AND type IN ('plan_proposed', 'awaiting_user')
-         ORDER BY id DESC LIMIT 1
-      `).get(jobId)
       if (latestSuspension?.type === 'plan_proposed') {
         return {
           found: true,
@@ -145,7 +151,33 @@ export function enqueueJobSteeringTransition({ jobId, userId, content, now = Dat
     const message = mapSteeringMessage(
       db.prepare('SELECT * FROM job_steering_messages WHERE id = ?').get(id),
     )
-    return { found: true, accepted: true, reason: null, message, requeued }
+    let resumeDiagnostics = {}
+    const resumedStepId = requeued ? latestSuspension?.step_id || null : null
+    if (resumedStepId) {
+      const step = db.prepare(`
+        SELECT output_json FROM job_steps WHERE id = ? AND job_id = ?
+      `).get(resumedStepId, jobId)
+      const output = parseJson(step?.output_json)
+      resumeDiagnostics = {
+        ...persistedJobOutcomeFields(parseJson(latestSuspension?.payload_json)),
+        ...persistedJobOutcomeFields(output),
+      }
+      if (step) {
+        const resumedOutput = clearResumedJobOutcomeDiagnostics(output)
+        db.prepare(`
+          UPDATE job_steps SET output_json = ?, updated_at = ? WHERE id = ? AND job_id = ?
+        `).run(resumedOutput == null ? null : JSON.stringify(resumedOutput), now, resumedStepId, jobId)
+      }
+    }
+    return {
+      found: true,
+      accepted: true,
+      reason: null,
+      message,
+      requeued,
+      resumedStepId,
+      resumeDiagnostics,
+    }
   }).immediate()
 }
 
@@ -205,6 +237,10 @@ export function resumeJobAfterApprovalTransition({
       stepId,
       type: 'approval_recovered',
       message: 'Approval decided after process restart; the interrupted turn was requeued',
+      payload: {
+        reason: 'tool_approval_resolved',
+        nextAction: 'resume_execution',
+      },
       now,
     })
     return { found: true, owned: true, changed: true, status: 'queued', event }
@@ -279,11 +315,18 @@ export function retryJobTransition({
 
     const requeueStep = db.prepare(`
       UPDATE job_steps
-         SET status = 'queued', error = NULL, finished_at = NULL, updated_at = ?
+         SET status = 'queued', output_json = ?, error = NULL, finished_at = NULL, updated_at = ?
        WHERE id = ? AND job_id = ? AND status = ?
     `)
-    for (const { target } of currentSteps) {
-      if (requeueStep.run(now, target.id, jobId, target.status).changes !== 1) {
+    for (const { target, row } of currentSteps) {
+      const resumedOutput = clearResumedJobOutcomeDiagnostics(parseJson(row.output_json))
+      if (requeueStep.run(
+        resumedOutput == null ? null : JSON.stringify(resumedOutput),
+        now,
+        target.id,
+        jobId,
+        target.status,
+      ).changes !== 1) {
         throw new Error('job retry step lost its compare-and-swap race')
       }
     }

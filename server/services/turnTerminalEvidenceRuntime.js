@@ -35,6 +35,41 @@ function usageFields(state) {
   }
 }
 
+const GENERIC_TURN_FAILURE_CODES = new Set([
+  'TURN_FAILED',
+  'INVALID_TURN_REQUEST',
+  'INTERNAL_ERROR',
+  'UNKNOWN_ERROR',
+])
+
+function inferredIncompleteReason(failure) {
+  if (failure?.incompleteReason) return failure.incompleteReason
+  const code = String(failure?.code || '').trim().toUpperCase()
+  if (!code || GENERIC_TURN_FAILURE_CODES.has(code)) return 'turn_incomplete'
+  if (code === 'REASONING_RUNAWAY') return 'reasoning_runaway'
+  if (/^(?:REPEATED_TOOL_CALL|TOOL_NO_PROGRESS)/u.test(code)) return 'tool_no_progress'
+  if (/^(?:MODEL_|TURN_MODEL_)/u.test(code)) return 'model_call_interrupted'
+  if (/(?:PERSISTENCE|CHECKPOINT|RECOVERY|LEASE|CONTEXT_DRIFT|EVENT_SEQUENCE)/u.test(code)) {
+    return 'recovery_blocked'
+  }
+  // The public failure code has already passed normalizeTurnFailure's stable
+  // code projection. Retaining it as a reason is more useful than collapsing
+  // every otherwise-unclassified failure into the generic turn_incomplete.
+  return /^[A-Z][A-Z0-9_]{1,95}$/u.test(code)
+    ? code.toLowerCase()
+    : 'turn_incomplete'
+}
+
+function inferredMissingRequirements(failure, incompleteReason) {
+  if (Array.isArray(failure?.missingRequirements)
+    && failure.missingRequirements.length > 0) return failure.missingRequirements
+  const code = String(failure?.code || '').trim().toUpperCase()
+  if (/^(?:TOOL_|TURN_TOOL_|BASH_|DOCKER_|LSP_|RUN_CODE_)/u.test(code)) {
+    return ['execution_environment_repair', 'remaining_task_steps']
+  }
+  return missingRequirementsForIncompleteReason(incompleteReason)
+}
+
 /**
  * Own terminal evidence projection and its durability boundary for one Turn.
  *
@@ -182,14 +217,11 @@ export function createTurnTerminalEvidenceRuntime({
     // and must never be retried blindly.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const projectedFailure = normalizeTurnFailure(activeError)
-      const incompleteReason = projectedFailure.incompleteReason || 'turn_incomplete'
+      const incompleteReason = inferredIncompleteReason(projectedFailure)
       const failure = {
         ...projectedFailure,
         incompleteReason,
-        missingRequirements: Array.isArray(projectedFailure.missingRequirements)
-          && projectedFailure.missingRequirements.length > 0
-          ? projectedFailure.missingRequirements
-          : missingRequirementsForIncompleteReason(incompleteReason),
+        missingRequirements: inferredMissingRequirements(projectedFailure, incompleteReason),
       }
       const partialText = publicIncompleteText(
         originalError?.partialText || state.streamedAssistantText,

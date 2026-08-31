@@ -40,6 +40,8 @@ function nextActionLabel(value, t) {
     provide_input: 'taskSteering.waitingTitle',
     wait_for_wake: 'taskCenter.statuses.waiting',
     resume_execution: 'taskCenter.resumeExecution',
+    approve_plan: 'taskSteering.approvePlan',
+    review_approval: 'taskCenter.openApprovals',
     retry: 'taskCenter.retry',
     recreate_job: 'taskCenter.retry',
     configure_model: 'modelProviders.manage',
