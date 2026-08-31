@@ -201,10 +201,21 @@ export function terminalFailureEvidenceMeta(error) {
   if (!error || typeof error !== 'object') return {}
   const meta = {}
   if (Object.hasOwn(error, 'partialText')) meta.serverPartialText = String(error.partialText || '')
-  if (Array.isArray(error.artifactIds)) meta.serverArtifactIds = error.artifactIds
-  if (Array.isArray(error.deliveryArtifactIds)) meta.serverDeliveryArtifactIds = error.deliveryArtifactIds
-  if (Array.isArray(error.verifiedLocalFiles)) meta.verifiedLocalFiles = error.verifiedLocalFiles
-  if (Array.isArray(error.retainedLocalFiles)) meta.retainedLocalFiles = error.retainedLocalFiles
+  // UPDATE_LAST_MESSAGE_META is a merge. Omitting empty failure evidence keeps
+  // richer data already received from the terminal event instead of replacing
+  // it with an empty transport/reconnect fallback.
+  if (Array.isArray(error.artifactIds) && error.artifactIds.length > 0) {
+    meta.serverArtifactIds = error.artifactIds
+  }
+  if (Array.isArray(error.deliveryArtifactIds) && error.deliveryArtifactIds.length > 0) {
+    meta.serverDeliveryArtifactIds = error.deliveryArtifactIds
+  }
+  if (Array.isArray(error.verifiedLocalFiles) && error.verifiedLocalFiles.length > 0) {
+    meta.verifiedLocalFiles = error.verifiedLocalFiles
+  }
+  if (Array.isArray(error.retainedLocalFiles) && error.retainedLocalFiles.length > 0) {
+    meta.retainedLocalFiles = error.retainedLocalFiles
+  }
   if (Number.isInteger(error.iterations) && error.iterations >= 0) {
     meta.serverIterations = error.iterations
   }

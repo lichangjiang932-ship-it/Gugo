@@ -30,6 +30,15 @@ const VERIFICATION_FAILURE = /(未通过|不通过|未能|没能|无法(?:完成
 const VERIFICATION_NEEDS_USER = /(需要(?:用户|你)(?:提供|补充|确认|选择|授权)|等待(?:用户|你)|缺少(?:凭据|授权|输入|信息)|needs?\s+(?:user|input|approval)|waiting\s+for\s+(?:user|approval))/i
 const VERIFICATION_BLOCKED = /(外部(?:服务|依赖).*?(?:不可用|阻塞)|权限不足|环境(?:不可用|缺失)|无法在当前环境|blocked\s+by|environment\s+(?:is\s+)?unavailable|missing\s+(?:dependency|credential|permission))/i
 const ACCEPTANCE_VERDICTS = new Set(['pass', 'fixable', 'blocked', 'needs_user'])
+const COMPLETED_TASK_VERIFICATION_STATUSES = new Set([
+  'pass',
+  'passed',
+  'success',
+  'succeeded',
+  'complete',
+  'completed',
+  'ok',
+])
 
 /** 剥掉 verify 提示词回显的「完成标准」清单,只对模型真正的结论做失败判定。 */
 function stripEchoedAcceptance(text = '') {
@@ -50,6 +59,35 @@ function cleanText(value) {
 
 function stepText(step) {
   return cleanText(step?.output?.text) || cleanText(step?.output?.summary)
+}
+
+function stepDiagnosticLabel(step) {
+  return cleanText(step?.title) || cleanText(step?.id) || cleanText(step?.kind) || '未命名步骤'
+}
+
+function incompleteTaskVerificationChecks(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  return (Array.isArray(value.checks) ? value.checks : []).filter((check) => {
+    if (!check || typeof check !== 'object' || Array.isArray(check)) return true
+    const status = cleanText(check.status).toLowerCase()
+    return !COMPLETED_TASK_VERIFICATION_STATUSES.has(status)
+  })
+}
+
+function describeTaskVerificationCheck(check) {
+  if (!check || typeof check !== 'object' || Array.isArray(check)) return '无效的验证检查记录'
+  const kind = cleanText(check.kind) || 'check'
+  const cwd = cleanText(check.cwd)
+  const status = cleanText(check.status).toLowerCase() || 'unknown'
+  const code = cleanText(check.code).toUpperCase()
+  const diagnostic = cleanText(check.diagnostic)
+    || cleanText(check.message)
+    || cleanText(check.summary)
+  return [
+    `${kind}${cwd ? `@${cwd}` : ''}`,
+    `[${status}${code ? `/${code}` : ''}]`,
+    diagnostic ? `：${diagnostic.slice(0, 500)}` : '',
+  ].join('')
 }
 
 export function deriveJobProgress(steps = []) {
@@ -467,6 +505,33 @@ export function buildFinalOutput(job) {
   ))
   if (unfinished.length) issues.push(`${unfinished.length} 个步骤未走到完成状态`)
 
+  for (const step of steps) {
+    const output = step?.output
+    if (!output || typeof output !== 'object' || Array.isArray(output)) continue
+    const label = stepDiagnosticLabel(step)
+    const incompleteReason = cleanText(output.incompleteReason)
+    if (output.complete === false || incompleteReason) {
+      const reason = incompleteReason || cleanText(output.reason) || cleanText(output.summary)
+      issues.push(reason
+        ? `步骤“${label}”报告未完成：${reason.slice(0, 1_000)}`
+        : `步骤“${label}”报告未完成，但未提供具体原因`)
+    }
+
+    const missingRequirements = [...new Set(normalizeStringList(output.missingRequirements))]
+    if (missingRequirements.length) {
+      issues.push(`步骤“${label}”仍缺少完成条件：${missingRequirements.join('、')}`)
+    }
+
+    const incompleteChecks = incompleteTaskVerificationChecks(output.taskVerification)
+    if (incompleteChecks.length) {
+      const shownChecks = incompleteChecks.slice(0, 3).map(describeTaskVerificationCheck)
+      const omitted = incompleteChecks.length - shownChecks.length
+      issues.push(
+        `步骤“${label}”有 ${incompleteChecks.length} 项任务验证未通过或未完成：${shownChecks.join('；')}${omitted > 0 ? `；另有 ${omitted} 项` : ''}`,
+      )
+    }
+  }
+
   const acceptance = normalizeAcceptance(verification?.output?.acceptance)
   if (acceptance && acceptance.verdict !== 'pass') {
     issues.push(acceptance.summary || '验证步骤未通过结构化验收')
@@ -561,6 +626,8 @@ export function clearResumedJobOutcomeDiagnostics(output) {
     'nextAction',
     'missingRequirements',
     'taskVerification',
+    'verifiedLocalFiles',
+    'retainedLocalFiles',
     'retryable',
     'manualRetryable',
     'missingDeliverables',

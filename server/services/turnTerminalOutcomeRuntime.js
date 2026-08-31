@@ -82,8 +82,12 @@ export function createTurnTerminalOutcomeRuntime({
     const atomicTurnBoundary = !!ports.commitTurnBoundary
     await emitter('turn.cancelled', {
       reason: signal.reason?.message || 'Cancelled by user',
+      partialText: '',
+      artifactIds: [],
+      deliveryArtifactIds: [],
       verifiedLocalFiles: [],
       retainedLocalFiles: [],
+      iterations: 0,
     }, {
       commitEvent: atomicTurnBoundary
         ? ({ event }) => ports.commitTurnBoundary({
@@ -306,7 +310,10 @@ export function createTurnTerminalOutcomeRuntime({
             }
           : { reason_code: 'clarification_required', blocker_kind: 'missing_info' }
       const artifactIds = normalizeArtifactIds(result.artifactIds ?? state.checkpointArtifactIds)
-      const deliveryArtifactIds = []
+      const deliveryArtifactIds = optionalDeliveryArtifactIds(
+        result,
+        normalizeArtifactIds(state.checkpointDeliveryArtifactIds),
+      )
       const iterations = Math.max(0, Number(result.iterations) || state.checkpointIterations)
       const pausedAt = ports.now()
       const verifiedLocalFiles = evidence.verifiedLocalFilesAt(pausedAt)

@@ -57,10 +57,11 @@ export function resolveCanonicalJobDelivery(job) {
   const terminalPayload = record([...events].reverse().find((event) => (
     event?.type === job.status && hasDeliveryFields(event.payload)
   ))?.payload)
-  const diagnosticOutput = record([...steps].reverse().find((step) => (
-    hasDeliveryFields(step?.output)
-  ))?.output)
-  const sources = [diagnosticOutput, terminalPayload, finalOutput].filter(Boolean)
+  const diagnosticOutputs = steps
+    .filter((step) => hasDeliveryFields(step?.output))
+    .map((step) => record(step.output))
+    .filter(Boolean)
+  const sources = [...diagnosticOutputs, terminalPayload, finalOutput].filter(Boolean)
   return mergeDeliverySources(sources)
 }
 

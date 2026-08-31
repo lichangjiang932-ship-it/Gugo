@@ -269,9 +269,7 @@ function turnEvidenceMeta(message) {
     && typeof persistedFailure.manualRetryable !== 'boolean'
     ? { ...persistedFailure, manualRetryable: true }
     : persistedFailure
-  const artifactIds = [...new Set((Array.isArray(context.artifactIds) ? context.artifactIds : [])
-    .map((id) => String(id || '').trim())
-    .filter(Boolean))]
+  const artifactIds = optionalContextArtifactIds(context, 'artifactIds')
   const iterations = Number.isInteger(context.iterations) && context.iterations >= 0
     ? context.iterations
     : undefined
@@ -344,8 +342,10 @@ function turnEvidenceMeta(message) {
             }),
     serverFailure: failure,
     serverPartialText: modelAuthoredEvidenceText(message, failure, state),
-    serverArtifactIds: artifactIds,
-    ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
+    ...(artifactIds !== undefined && artifactIds.length > 0 ? { serverArtifactIds: artifactIds } : {}),
+    ...(deliveryArtifactIds !== undefined && deliveryArtifactIds.length > 0
+      ? { serverDeliveryArtifactIds: deliveryArtifactIds }
+      : {}),
     ...(iterations !== undefined ? { serverIterations: iterations } : {}),
   }
 }

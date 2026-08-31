@@ -11,6 +11,10 @@ import { recoveryCandidateVersion } from './turnEnginePolicy.js'
 import { createTurnEvidenceMessage } from './turnEvidenceMessageProjection.js'
 import { normalizeTurnOptionalId as normalizeOptionalId } from './turnStartRuntime.js'
 import {
+  excludeVerifiedLocalFiles,
+  mergeLocalFileReceipts,
+} from './turnRecoveryProjection.js'
+import {
   deliveryArtifactFields,
   missingRequirementsForIncompleteReason,
   normalizeArtifactIds,
@@ -208,8 +212,17 @@ export function createTurnTerminalEvidenceRuntime({
     )
     const iterations = Math.max(0, Number(originalError?.iterations) || state.checkpointIterations)
     const failedAt = ports.now()
-    const verifiedLocalFiles = verifiedLocalFilesAt(failedAt)
-    const retainedLocalFiles = retainedLocalFilesAt(failedAt, verifiedLocalFiles)
+    const verifiedLocalFiles = mergeLocalFileReceipts(
+      originalError?.verifiedLocalFiles,
+      verifiedLocalFilesAt(failedAt),
+    )
+    const retainedLocalFiles = excludeVerifiedLocalFiles(
+      mergeLocalFileReceipts(
+        originalError?.retainedLocalFiles,
+        retainedLocalFilesAt(failedAt, verifiedLocalFiles),
+      ),
+      verifiedLocalFiles,
+    )
     let activeError = findEventPersistenceFailure(sourceError) || sourceError
 
     // A deferred delta failure is discovered before the first terminal append,
@@ -312,8 +325,17 @@ export function createTurnTerminalEvidenceRuntime({
       ? normalizeOptionalId(sourceError?.modelRequestId || sourceError?.modelInvocation?.id)
       : null
     const blockedAt = ports.now()
-    const verifiedLocalFiles = verifiedLocalFilesAt(blockedAt)
-    const retainedLocalFiles = retainedLocalFilesAt(blockedAt, verifiedLocalFiles)
+    const verifiedLocalFiles = mergeLocalFileReceipts(
+      sourceError?.verifiedLocalFiles,
+      verifiedLocalFilesAt(blockedAt),
+    )
+    const retainedLocalFiles = excludeVerifiedLocalFiles(
+      mergeLocalFileReceipts(
+        sourceError?.retainedLocalFiles,
+        retainedLocalFilesAt(blockedAt, verifiedLocalFiles),
+      ),
+      verifiedLocalFiles,
+    )
     const partialText = publicIncompleteText(
       sourceError?.partialText || state.streamedAssistantText,
       '',
@@ -331,17 +353,20 @@ export function createTurnTerminalEvidenceRuntime({
             ...(recoveryModelRequestId ? { modelRequestId: recoveryModelRequestId } : {}),
           }
         : null
-    const artifactIds = normalizeArtifactIds(state.checkpointArtifactIds)
-    const deliveryArtifactIds = optionalDeliveryArtifactIds(
-      { deliveryArtifactIds: state.checkpointDeliveryArtifactIds },
-      [],
+    const artifactIds = normalizeArtifactIds(
+      sourceError?.artifactIds ?? state.checkpointArtifactIds,
     )
+    const deliveryArtifactIds = optionalDeliveryArtifactIds(
+      sourceError,
+      normalizeArtifactIds(state.checkpointDeliveryArtifactIds),
+    )
+    const iterations = Math.max(0, Number(sourceError?.iterations) || state.checkpointIterations)
     const evidenceOptions = {
       state: 'blocked',
       text: partialText,
       artifactIds,
       deliveryArtifactIds,
-      iterations: state.checkpointIterations,
+      iterations,
       error: { ...failure, retryable: false },
       verifiedLocalFiles,
       retainedLocalFiles,
@@ -377,7 +402,7 @@ export function createTurnTerminalEvidenceRuntime({
       deliveryArtifactIds,
       verifiedLocalFiles,
       retainedLocalFiles,
-      iterations: state.checkpointIterations,
+      iterations,
     }, boundaryOptions(evidenceOptions))
     if (!atomicTurnBoundary) {
       try {

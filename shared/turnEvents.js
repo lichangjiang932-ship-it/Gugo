@@ -384,6 +384,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     // replace server-authored copy with the stable cancellation code.
     code: z.string().optional(),
     reason: z.string().optional(),
+    partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,

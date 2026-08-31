@@ -73,8 +73,20 @@ function optionalArtifactIds(payload, key) {
 }
 
 function terminalEvidenceSource(payload, nested, key) {
-  if (payload && typeof payload === 'object' && Object.hasOwn(payload, key)) return payload
-  if (nested && typeof nested === 'object' && Object.hasOwn(nested, key)) return nested
+  const payloadOwns = payload && typeof payload === 'object' && Object.hasOwn(payload, key)
+  const nestedOwns = nested && typeof nested === 'object' && Object.hasOwn(nested, key)
+  const meaningful = (value) => (
+    Array.isArray(value) ? value.length > 0
+      : value && typeof value === 'object' ? Object.keys(value).length > 0
+        : value !== undefined && value !== null && value !== ''
+  )
+  // Public projections may contain an empty compatibility field while the
+  // nested durable failure still carries the evidence. Never let that empty
+  // outer value erase the richer persisted value.
+  if (payloadOwns && meaningful(payload[key])) return payload
+  if (nestedOwns && meaningful(nested[key])) return nested
+  if (payloadOwns) return payload
+  if (nestedOwns) return nested
   return payload
 }
 
