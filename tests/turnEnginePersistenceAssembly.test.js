@@ -160,13 +160,23 @@ function importSpecifiers(source) {
   return values
 }
 
-test('persistence assembly stays one-way and TurnEngine no longer imports concrete persistence stores', () => {
+test('persistence assembly stays one-way and Turn runtimes avoid concrete persistence stores', () => {
   const assemblyFile = fileURLToPath(
     new URL('../server/services/turnEnginePersistenceAssembly.js', import.meta.url),
   )
   const turnEngineFile = fileURLToPath(new URL('../server/services/TurnEngine.js', import.meta.url))
   const assemblyImports = importSpecifiers(readFileSync(assemblyFile, 'utf8'))
   const turnEngineImports = importSpecifiers(readFileSync(turnEngineFile, 'utf8'))
+  const turnRuntimeImports = [
+    'turnExecutionRuntime.js',
+    'turnLoopExecutionRuntime.js',
+    'turnSchedulingRuntime.js',
+  ].map((file) => ({
+    file,
+    imports: importSpecifiers(readFileSync(fileURLToPath(
+      new URL(`../server/services/${file}`, import.meta.url),
+    ), 'utf8')),
+  }))
   const forbiddenAssemblyImports = new Set([
     './TurnEngine.js',
     './turnEngineHost.js',
@@ -196,4 +206,11 @@ test('persistence assembly stays one-way and TurnEngine no longer imports concre
     turnEngineImports.filter((specifier) => concreteTurnEngineImports.has(specifier)),
     [],
   )
+  for (const { file, imports } of turnRuntimeImports) {
+    assert.deepEqual(
+      imports.filter((specifier) => concreteTurnEngineImports.has(specifier)),
+      [],
+      file,
+    )
+  }
 })

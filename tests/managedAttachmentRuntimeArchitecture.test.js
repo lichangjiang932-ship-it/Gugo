@@ -13,6 +13,8 @@ function source(file) {
 test('Turn runtime reaches managed attachments only through injected ports', () => {
   for (const file of [
     'server/services/TurnEngine.js',
+    'server/services/turnExecutionRuntime.js',
+    'server/services/turnLoopExecutionRuntime.js',
     'server/services/turnManagedAttachmentRuntime.js',
     'server/services/turnStartRuntime.js',
   ]) {
