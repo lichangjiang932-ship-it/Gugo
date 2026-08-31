@@ -52,7 +52,7 @@ export function persistJobStepFailure({
     const priorOutput = persistedStep?.output && typeof persistedStep.output === 'object' && !Array.isArray(persistedStep.output)
       ? persistedStep.output
       : {}
-    updateJobStep(step.id, { output: { ...priorOutput, ...diagnostics } })
+    updateJobStep(step.id, { output: { ...priorOutput, ...(modelPayload || {}), ...diagnostics } })
     emit(appendJobEvent({
       jobId: job.id,
       stepId: step.id,

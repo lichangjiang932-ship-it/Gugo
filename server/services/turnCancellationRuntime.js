@@ -278,16 +278,19 @@ export function createTurnCancellationRuntime({
                   executionLease: cancellationLease.executionLease,
                 })
               : null,
+            beforeAppend: atomicTurnBoundary
+              ? null
+              : async () => {
+                  try {
+                    await ports.writeMessage(cancellationMessage)
+                  } catch {
+                    // The terminal event remains authoritative and snapshot recovery
+                    // can reconstruct the evidence message from its payload.
+                  }
+                },
           })
         } finally {
           await emit.close()
-        }
-        if (!atomicTurnBoundary) {
-          try {
-            await ports.writeMessage(cancellationMessage)
-          } catch {
-            // Legacy injected stores retain the event-authoritative behavior.
-          }
         }
       } finally {
         await cancellationLease.release()

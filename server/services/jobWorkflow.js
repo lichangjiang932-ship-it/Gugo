@@ -489,6 +489,23 @@ export function buildFinalOutput(job) {
   )
   const completedDeliverables = expectedDeliverables.filter((type) => deliveredTypes.has(type))
   const missingDeliverables = expectedDeliverables.filter((type) => !deliveredTypes.has(type))
+  const verifiedLocalFiles = mergeJobEvidence(...steps.map((step) => step?.output?.verifiedLocalFiles))
+  const verifiedPaths = new Set(verifiedLocalFiles
+    .map((file) => cleanText(file?.path || file))
+    .filter(Boolean))
+  const retainedLocalFiles = mergeJobEvidence(...steps.map((step) => step?.output?.retainedLocalFiles))
+    .filter((file) => !verifiedPaths.has(cleanText(file?.path || file)))
+  const missingRequirements = [...new Set(steps.flatMap((step) => (
+    normalizeStringList(step?.output?.missingRequirements)
+  )))]
+  const incompleteReason = [...steps]
+    .reverse()
+    .map((step) => cleanText(step?.output?.incompleteReason))
+    .find(Boolean) || null
+  const taskVerification = [...steps]
+    .reverse()
+    .map((step) => step?.output?.taskVerification)
+    .find((value) => value && typeof value === 'object' && !Array.isArray(value)) || null
 
   const issues = []
 
@@ -571,6 +588,11 @@ export function buildFinalOutput(job) {
     artifactIds,
     completedDeliverables,
     missingDeliverables,
+    incompleteReason,
+    missingRequirements,
+    taskVerification,
+    verifiedLocalFiles,
+    retainedLocalFiles,
     complete,
     issues,
     acceptance: acceptance || null,
@@ -622,6 +644,7 @@ export function clearResumedJobOutcomeDiagnostics(output) {
   for (const key of [
     'status',
     'complete',
+    'error',
     'reason',
     'incompleteReason',
     'nextAction',
@@ -702,6 +725,7 @@ export function buildJobOutcomeDiagnostics(job, {
     ...carriedDiagnostics,
     status: normalizedStatus,
     complete: false,
+    error: ['failed', 'cancelled'].includes(normalizedStatus) ? effectiveReason : null,
     reason: effectiveReason,
     incompleteReason,
     missingRequirements: Array.isArray(carriedDiagnostics.missingRequirements)

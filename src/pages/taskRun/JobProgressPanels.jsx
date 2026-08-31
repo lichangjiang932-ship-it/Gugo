@@ -1,6 +1,7 @@
 import { Activity, CheckCircle2, Clock3, Eye, RotateCcw } from 'lucide-react'
 import { withDownloadToken } from '../../lib/jobClient.js'
 import { formatTime, stepAcceptance } from './taskRunUtils.js'
+import { localizedJobModelFailure } from './jobModelFailurePresentation.js'
 import StepDot from './StepDot.jsx'
 
 export default function JobProgressPanels({ job, selectedArtifact, setSelectedArtifact, statusLabel, onRetryStep, t }) {
@@ -26,7 +27,8 @@ export default function JobProgressPanels({ job, selectedArtifact, setSelectedAr
 function StepCard({ step, waitingStepId, statusLabel, onRetry, t }) {
   const acceptance = stepAcceptance(step)
   const showNextAction = step.id === waitingStepId || ['failed', 'cancelled'].includes(step.status)
-  return <div className="rounded-md border border-dashed border-ink-fade/40 p-3"><div className="flex items-center gap-2"><StepDot status={step.status} /><span className="text-sm text-ink">{step.title}</span><span className="ml-auto text-xs text-ink-fade">{statusLabel(step.status)}</span></div>{step.error && <p className="text-xs text-danger mt-2">{step.error}</p>}{step.output?.text && <p className="text-xs text-ink-soft mt-2">{step.output.text}</p>}<DeliveryDiagnostics value={step.output} showNextAction={showNextAction} t={t} />{acceptance.length > 0 && <details className="mt-2 text-xs text-ink-fade"><summary className="cursor-pointer">{t('taskCenter.acceptance')}</summary><ul className="mt-1.5 ml-4 list-disc space-y-1">{acceptance.map((item) => <li key={item}>{item}</li>)}</ul></details>}{step.status === 'failed' && <button type="button" onClick={() => onRetry(step.id)} className="mt-2 text-xs text-danger inline-flex items-center gap-1"><RotateCcw className="w-3 h-3" />{t('taskCenter.retryStep')}</button>}</div>
+  const error = localizedJobModelFailure(step.output, t, step.error)
+  return <div className="rounded-md border border-dashed border-ink-fade/40 p-3"><div className="flex items-center gap-2"><StepDot status={step.status} /><span className="text-sm text-ink">{step.title}</span><span className="ml-auto text-xs text-ink-fade">{statusLabel(step.status)}</span></div>{step.error && <p className="text-xs text-danger mt-2">{error}</p>}{step.output?.text && <p className="text-xs text-ink-soft mt-2">{step.output.text}</p>}<DeliveryDiagnostics value={step.output} showNextAction={showNextAction} t={t} />{acceptance.length > 0 && <details className="mt-2 text-xs text-ink-fade"><summary className="cursor-pointer">{t('taskCenter.acceptance')}</summary><ul className="mt-1.5 ml-4 list-disc space-y-1">{acceptance.map((item) => <li key={item}>{item}</li>)}</ul></details>}{step.status === 'failed' && <button type="button" onClick={() => onRetry(step.id)} className="mt-2 text-xs text-danger inline-flex items-center gap-1"><RotateCcw className="w-3 h-3" />{t('taskCenter.retryStep')}</button>}</div>
 }
 
 function nextActionMatchesStatus(action, status) {
@@ -58,6 +60,36 @@ function normalizedList(values, { uppercase = false } = {}) {
     .map((value) => uppercase ? value.toUpperCase() : value))]
 }
 
+function localFileLabel(value) {
+  if (typeof value === 'string') return value.trim()
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
+  return String(value.filename || value.path || value.id || '').trim()
+}
+
+function taskVerificationCheckIssue(check) {
+  if (!check || typeof check !== 'object' || Array.isArray(check)) return ''
+  const status = String(check.status || 'failed').trim().toLowerCase()
+  if (['pass', 'passed', 'success', 'succeeded', 'complete', 'completed', 'ok'].includes(status)) return ''
+  const kind = String(check.kind || 'check').trim()
+  const code = String(check.code || '').trim()
+  const command = String(check.commandScope || '').trim()
+  const cwd = String(check.cwd || '').trim()
+  const diagnostic = String(check.diagnostic || '').trim()
+  const scope = [command, cwd].filter(Boolean).join(' @ ')
+  return `${status} ${kind}${code ? ` [${code}]` : ''}`
+    + `${scope ? ` (${scope})` : ''}`
+    + `${diagnostic ? `: ${diagnostic}` : ''}`
+}
+
+function taskVerificationIssues(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+  return normalizedList([
+    ...(Array.isArray(value.issues) ? value.issues : []),
+    value.reason,
+    ...(Array.isArray(value.checks) ? value.checks.map(taskVerificationCheckIssue) : []),
+  ])
+}
+
 function nextActionLabel(value, t) {
   const key = {
     retry_job: 'taskCenter.retry',
@@ -83,18 +115,32 @@ function DeliveryDiagnostics({ value, showNextAction = true, showReason = true, 
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const completed = normalizedList(value.completedDeliverables, { uppercase: true })
   const missing = normalizedList(value.missingDeliverables, { uppercase: true })
-  const reason = showReason ? String(value.reason || '').trim() : ''
-  const issues = normalizedList(Array.isArray(value.issues) ? value.issues : value.acceptance?.issues)
+  const missingRequirements = normalizedList(value.missingRequirements)
+  const reason = showReason ? String(value.incompleteReason || value.reason || '').trim() : ''
+  const issues = normalizedList([
+    ...(Array.isArray(value.issues) ? value.issues : (value.acceptance?.issues || [])),
+    ...taskVerificationIssues(value.taskVerification),
+  ])
     .filter((issue) => issue !== reason)
     .slice(0, 16)
+  const verifiedFiles = normalizedList((Array.isArray(value.verifiedLocalFiles)
+    ? value.verifiedLocalFiles
+    : []).map(localFileLabel))
+  const retainedFiles = normalizedList((Array.isArray(value.retainedLocalFiles)
+    ? value.retainedLocalFiles
+    : []).map(localFileLabel))
+  const incomplete = value.complete === false && !reason ? t('taskCenter.deliveryIncomplete') : ''
   const nextAction = showNextAction ? nextActionLabel(value.nextAction, t) : ''
-  if (completed.length === 0 && missing.length === 0 && issues.length === 0 && !reason && !nextAction) return null
-  return <div className="mt-2 rounded border border-ink/10 bg-ink/[0.03] p-2 text-xs space-y-1">{reason && <p className="text-danger">{reason}</p>}{completed.length > 0 && <p className="text-success">{t('taskCenter.deliverablesCompleted', { items: completed.join(', ') })}</p>}{missing.length > 0 && <p className="text-danger">{t('taskCenter.deliverablesMissing', { items: missing.join(', ') })}</p>}{issues.length > 0 && <details className="text-ink-fade"><summary className="cursor-pointer">{t('taskCenter.unresolvedIssues')}</summary><ul className="mt-1 ml-4 list-disc space-y-1">{issues.map((issue) => <li key={issue}>{issue}</li>)}</ul></details>}{nextAction && <p className="text-accent-ink">→ {nextAction}</p>}</div>
+  if (completed.length === 0 && missing.length === 0 && missingRequirements.length === 0
+    && issues.length === 0 && verifiedFiles.length === 0 && retainedFiles.length === 0
+    && !reason && !incomplete && !nextAction) return null
+  return <div className="mt-2 rounded border border-ink/10 bg-ink/[0.03] p-2 text-xs space-y-1">{(reason || incomplete) && <p className="text-danger">{reason || incomplete}</p>}{completed.length > 0 && <p className="text-success">{t('taskCenter.deliverablesCompleted', { items: completed.join(', ') })}</p>}{missing.length > 0 && <p className="text-danger">{t('taskCenter.deliverablesMissing', { items: missing.join(', ') })}</p>}{missingRequirements.length > 0 && <p className="text-danger"><span className="font-medium">{t('chatMessages.incompleteMissingLabel')}</span> {missingRequirements.join(', ')}</p>}{issues.length > 0 && <details className="text-ink-fade"><summary className="cursor-pointer">{t('taskCenter.unresolvedIssues')}</summary><ul className="mt-1 ml-4 list-disc space-y-1">{issues.map((issue) => <li key={issue}>{issue}</li>)}</ul></details>}{verifiedFiles.length > 0 && <p className="text-success">{t('chatMessages.incompleteVerifiedFiles', { count: verifiedFiles.length })}: {verifiedFiles.join(', ')}</p>}{retainedFiles.length > 0 && <p className="text-warning">{t('chatMessages.incompletePendingFiles', { count: retainedFiles.length })}: {retainedFiles.join(', ')}</p>}{nextAction && <p className="text-accent-ink">→ {nextAction}</p>}</div>
 }
 
 function JobEvent({ event, showNextAction, t }) {
   const showReason = !['plan_approved', 'step_completed', 'completed'].includes(event.type)
-  return <div className="text-xs"><p className="text-ink">{event.message}</p><DeliveryDiagnostics value={event.payload} showNextAction={showNextAction} showReason={showReason} t={t} /><p className="text-ink-fade">{formatTime(event.createdAt)}</p></div>
+  const message = localizedJobModelFailure(event.payload, t, event.message)
+  return <div className="text-xs"><p className="text-ink">{message}</p><DeliveryDiagnostics value={event.payload} showNextAction={showNextAction} showReason={showReason} t={t} /><p className="text-ink-fade">{formatTime(event.createdAt)}</p></div>
 }
 
 function ArtifactRow({ artifact, active, onSelect, t }) {

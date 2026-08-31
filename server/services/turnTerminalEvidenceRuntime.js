@@ -177,7 +177,10 @@ export function createTurnTerminalEvidenceRuntime({
     })
   }
 
-  function boundaryOptions(options, { legacyBeforeAppend = false } = {}) {
+  function boundaryOptions(options, {
+    legacyBeforeAppend = false,
+    legacyBestEffort = false,
+  } = {}) {
     if (atomicTurnBoundary) {
       return {
         commitEvent: ({ event }) => commitBoundaryEvent({
@@ -191,10 +194,19 @@ export function createTurnTerminalEvidenceRuntime({
     }
     if (legacyBeforeAppend) {
       return {
-        beforeAppend: (event) => persistEvidence({
-          ...options,
-          serverLastSequence: event.sequence,
-        }),
+        beforeAppend: async (event) => {
+          try {
+            await persistEvidence({
+              ...options,
+              serverLastSequence: event.sequence,
+            })
+          } catch (error) {
+            if (!legacyBestEffort) throw error
+            logWarn('turn.legacy_evidence_projection', error, {
+              userId, sessionId, turnId, state: options.state,
+            })
+          }
+        },
       }
     }
     return {}
@@ -403,19 +415,10 @@ export function createTurnTerminalEvidenceRuntime({
       verifiedLocalFiles,
       retainedLocalFiles,
       iterations,
-    }, boundaryOptions(evidenceOptions))
-    if (!atomicTurnBoundary) {
-      try {
-        await persistEvidence({
-          ...evidenceOptions,
-          serverLastSequence: blockedEvent.sequence,
-        })
-      } catch (error) {
-        logWarn('turn.legacy_evidence_projection', error, {
-          userId, sessionId, turnId, state: 'blocked',
-        })
-      }
-    }
+    }, boundaryOptions(evidenceOptions, {
+      legacyBeforeAppend: true,
+      legacyBestEffort: true,
+    }))
     await ports.writeRecoveryFailure({
       userId,
       sessionId,

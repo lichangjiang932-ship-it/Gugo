@@ -97,16 +97,18 @@ export function createTurnTerminalOutcomeRuntime({
             executionLease,
           })
         : null,
+      beforeAppend: atomicTurnBoundary
+        ? null
+        : async () => {
+            try {
+              await ports.writeMessage(cancellationMessage)
+            } catch (error) {
+              logWarn('turn.legacy_evidence_projection', error, {
+                userId, sessionId, turnId, state: 'cancelled',
+              })
+            }
+          },
     })
-    if (!atomicTurnBoundary) {
-      try {
-        await ports.writeMessage(cancellationMessage)
-      } catch (error) {
-        logWarn('turn.legacy_evidence_projection', error, {
-          userId, sessionId, turnId, state: 'cancelled',
-        })
-      }
-    }
     return true
   }
 
@@ -146,16 +148,10 @@ export function createTurnTerminalOutcomeRuntime({
         retainedLocalFiles,
         iterations: state.checkpointIterations,
         ...usageFields(state),
-      }, evidence.boundaryOptions(evidenceOptions))
-      if (!evidence.atomicTurnBoundary) {
-        try {
-          await evidence.persistEvidence(evidenceOptions)
-        } catch (error) {
-          logWarn('turn.legacy_evidence_projection', error, {
-            userId, sessionId, turnId, state: 'cancelled',
-          })
-        }
-      }
+      }, evidence.boundaryOptions(evidenceOptions, {
+        legacyBeforeAppend: true,
+        legacyBestEffort: true,
+      }))
       await recordCanaryTerminal('cancelled', null, cancelledAt, partialText)
       return
     }
@@ -406,7 +402,15 @@ export function createTurnTerminalOutcomeRuntime({
         : null,
       beforeAppend: evidence.atomicTurnBoundary
         ? null
-        : () => ports.writeMessage(completedMessage),
+        : async () => {
+            try {
+              await ports.writeMessage(completedMessage)
+            } catch (error) {
+              logWarn('turn.legacy_evidence_projection', error, {
+                userId, sessionId, turnId, state: 'completed',
+              })
+            }
+          },
     })
     await recordCanaryTerminal('completed', null, completedAt, text)
     void ports.dispatchHooks?.({
@@ -477,21 +481,15 @@ export function createTurnTerminalOutcomeRuntime({
           retainedLocalFiles,
           iterations: state.checkpointIterations,
           ...usageFields(state),
-        }, evidence.boundaryOptions(evidenceOptions))
+        }, evidence.boundaryOptions(evidenceOptions, {
+          legacyBeforeAppend: true,
+          legacyBestEffort: true,
+        }))
       } catch (terminalError) {
         const deferredFailure = findEventPersistenceFailure(terminalError)
         if (!deferredFailure) throw terminalError
         await evidence.emitFailed(deferredFailure)
         return
-      }
-      if (!evidence.atomicTurnBoundary) {
-        try {
-          await evidence.persistEvidence(evidenceOptions)
-        } catch (projectionError) {
-          logWarn('turn.legacy_evidence_projection', projectionError, {
-            userId, sessionId, turnId, state: 'cancelled',
-          })
-        }
       }
       await recordCanaryTerminal('cancelled', null, cancelledAt, evidenceOptions.text)
       return

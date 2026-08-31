@@ -20,6 +20,20 @@ const DELIVERY_FIELDS = [
   'evidence',
   'nextAction',
 ]
+const MERGED_DIAGNOSTIC_LIST_FIELDS = new Set([
+  'missingRequirements',
+  'verifiedLocalFiles',
+  'retainedLocalFiles',
+])
+const COMPLETED_VERIFICATION_CHECK_STATUSES = new Set([
+  'pass',
+  'passed',
+  'success',
+  'succeeded',
+  'complete',
+  'completed',
+  'ok',
+])
 
 function record(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null
@@ -38,11 +52,58 @@ function hasMeaningfulDeliveryValue(value) {
   return true
 }
 
+function diagnosticValueKey(value) {
+  if (typeof value === 'string') return `text:${value.trim()}`
+  if (record(value)) {
+    const id = String(value.id || '').trim()
+    if (id) return `id:${id}`
+    try { return `object:${JSON.stringify(value)}` } catch { return `object:${String(value)}` }
+  }
+  return `${typeof value}:${String(value)}`
+}
+
+function mergeDiagnosticLists(current, incoming) {
+  const merged = []
+  const seen = new Set()
+  for (const value of [...(Array.isArray(current) ? current : []), ...(Array.isArray(incoming) ? incoming : [])]) {
+    const key = diagnosticValueKey(value)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    merged.push(value)
+  }
+  return merged
+}
+
+function mergeTaskVerification(current, incoming) {
+  const previous = record(current) || {}
+  const next = record(incoming)
+  if (!next) return Object.keys(previous).length > 0 ? previous : null
+  const merged = { ...previous, ...next }
+  for (const field of ['checks', 'issues', 'missingRequirements']) {
+    const values = mergeDiagnosticLists(previous[field], next[field])
+    if (values.length > 0) merged[field] = values
+  }
+  return merged
+}
+
 function mergeDeliverySources(sources) {
   const merged = {}
   for (const source of sources) {
     for (const [field, value] of Object.entries(source)) {
-      if (hasMeaningfulDeliveryValue(value)) merged[field] = value
+      if (!hasMeaningfulDeliveryValue(value)) continue
+      if (field === 'complete' && typeof value === 'boolean') {
+        if (value === false || merged.complete !== false) merged.complete = value
+        continue
+      }
+      if (MERGED_DIAGNOSTIC_LIST_FIELDS.has(field) && Array.isArray(value)) {
+        merged[field] = mergeDiagnosticLists(merged[field], value)
+        continue
+      }
+      if (field === 'taskVerification' && record(value)) {
+        merged.taskVerification = mergeTaskVerification(merged.taskVerification, value)
+        continue
+      }
+      merged[field] = value
     }
   }
   return Object.keys(merged).length > 0 ? merged : null
@@ -62,7 +123,10 @@ export function resolveCanonicalJobDelivery(job) {
     .filter((step) => hasDeliveryFields(step?.output))
     .map((step) => record(step.output))
     .filter(Boolean)
-  const sources = [...diagnosticOutputs, terminalPayload, finalOutput].filter(Boolean)
+  // Step outputs are chronological evidence; the terminal event is the newest
+  // authoritative projection and must not be overwritten by a stale finalize
+  // payload. Diagnostic lists remain cumulative across every source.
+  const sources = [...diagnosticOutputs, finalOutput, terminalPayload].filter(Boolean)
   return mergeDeliverySources(sources)
 }
 
@@ -82,6 +146,65 @@ function localFileLabel(value) {
   if (typeof value === 'string') return value.trim()
   if (!record(value)) return ''
   return String(value.filename || value.path || '').trim()
+}
+
+function localFileReceiptKey(value) {
+  if (typeof value === 'string') return value.trim() ? `file:${value.trim()}` : ''
+  if (!record(value)) return ''
+  const id = String(value.id || '').trim()
+  if (id) return `id:${id}`
+  const fallback = String(value.path || value.filename || '').trim()
+  return fallback ? `file:${fallback}` : ''
+}
+
+function unresolvedRetainedLocalFiles(delivery) {
+  const verifiedKeys = new Set((Array.isArray(delivery?.verifiedLocalFiles) ? delivery.verifiedLocalFiles : [])
+    .map(localFileReceiptKey)
+    .filter(Boolean))
+  return (Array.isArray(delivery?.retainedLocalFiles) ? delivery.retainedLocalFiles : [])
+    .filter((value) => {
+      const key = localFileReceiptKey(value)
+      return !key || !verifiedKeys.has(key)
+    })
+}
+
+function taskVerificationCheckIssue(check) {
+  if (!record(check)) return ''
+  const status = String(check.status || 'failed').trim().toLowerCase()
+  if (COMPLETED_VERIFICATION_CHECK_STATUSES.has(status)) return ''
+  const kind = String(check.kind || 'check').trim()
+  const code = String(check.code || '').trim()
+  const command = String(check.commandScope || '').trim()
+  const cwd = String(check.cwd || '').trim()
+  const diagnostic = String(check.diagnostic || '').trim()
+  const scope = [command, cwd].filter(Boolean).join(' @ ')
+  return `${status} ${kind}${code ? ` [${code}]` : ''}`
+    + `${scope ? ` (${scope})` : ''}`
+    + `${diagnostic ? `: ${diagnostic}` : ''}`
+}
+
+function taskVerificationIssues(value) {
+  const verification = record(value)
+  if (!verification) return []
+  return normalizedList([
+    ...(Array.isArray(verification.issues) ? verification.issues : []),
+    verification.reason,
+    ...(Array.isArray(verification.checks)
+      ? verification.checks.map(taskVerificationCheckIssue)
+      : []),
+  ])
+}
+
+export function isIncompleteJobDelivery(delivery, jobStatus) {
+  if (!record(delivery)) return jobStatus !== 'completed'
+  return jobStatus !== 'completed'
+    || delivery.complete === false
+    || normalizedList(delivery.missingDeliverables).length > 0
+    || normalizedList(delivery.missingRequirements).length > 0
+    || normalizedList(delivery.issues).length > 0
+    || taskVerificationIssues(delivery.taskVerification).length > 0
+    || unresolvedRetainedLocalFiles(delivery).length > 0
+    || !!String(delivery.incompleteReason || delivery.reason || '').trim()
 }
 
 function trustedLocalFileUrl(value, kind, fallbackTurnId = '') {
@@ -147,28 +270,21 @@ function nextActionLabel(value, t) {
 
 export default function JobDeliveryCard({ delivery, jobStatus, evidence = [], t }) {
   if (!record(delivery)) return null
-  const verification = record(delivery.taskVerification)
   const issues = normalizedList([
     ...(Array.isArray(delivery.issues) ? delivery.issues : []),
-    ...(Array.isArray(verification?.issues) ? verification.issues : []),
-    verification?.reason,
+    ...taskVerificationIssues(delivery.taskVerification),
   ])
   const completed = normalizedList(delivery.completedDeliverables).map((value) => value.toUpperCase())
   const missing = normalizedList(delivery.missingDeliverables).map((value) => value.toUpperCase())
   const missingRequirements = normalizedList(delivery.missingRequirements)
   const deliveryTurnId = String(delivery.turnId || delivery.serverTurnId || '').trim()
   const verifiedFiles = localFileRows(delivery.verifiedLocalFiles, 'verified', deliveryTurnId)
-  const retainedFiles = localFileRows(delivery.retainedLocalFiles, 'retained', deliveryTurnId)
+  const retainedFiles = localFileRows(unresolvedRetainedLocalFiles(delivery), 'retained', deliveryTurnId)
   const reason = String(delivery.reason || delivery.incompleteReason || '').trim()
   const summary = String(delivery.summary || reason).trim()
   const nextAction = nextActionLabel(delivery.nextAction, t)
   const renderedEvidence = normalizedList(evidence.map(evidenceText))
-  const incomplete = jobStatus !== 'completed'
-    || delivery.complete === false
-    || missing.length > 0
-    || missingRequirements.length > 0
-    || issues.length > 0
-    || !!reason
+  const incomplete = isIncompleteJobDelivery(delivery, jobStatus)
   return (
     <section className={`rounded-md border p-4 ${incomplete ? 'border-warning/40 bg-warning/5' : 'border-success/40 bg-success/5'}`}>
       <div className="flex items-center gap-2">{incomplete ? <AlertTriangle className="w-4 h-4 text-warning" /> : <CheckCircle2 className="w-4 h-4 text-success" />}<h3 className="font-semibold text-lg text-ink">{t(incomplete ? 'taskCenter.deliveryIncomplete' : 'taskCenter.delivery')}</h3></div>

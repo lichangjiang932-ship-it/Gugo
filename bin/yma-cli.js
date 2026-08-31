@@ -636,7 +636,9 @@ function responseError(result) {
     'retryable',
     'manualRetryable',
   ]) {
-    const value = result.json?.[field] ?? nestedObject?.[field]
+    // Structured `error` is authoritative. Top-level fields only remain for
+    // responses emitted by older servers and must not replace newer details.
+    const value = nestedObject?.[field] ?? result.json?.[field]
     if (value !== undefined) error[field] = value
   }
   if (result.json?.recovery && typeof result.json.recovery === 'object') {
