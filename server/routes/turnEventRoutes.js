@@ -28,6 +28,7 @@ import {
   excludeVerifiedLocalFiles,
   mergeLocalFileReceipts,
 } from '../services/turnRecoveryProjection.js'
+import { mergeFailedRetryEvidence } from '../services/turnFailedRetryRejection.js'
 import {
   TURN_EVENT_TRANSPORT_QUERY_PARAM,
   TURN_EVENT_TRANSPORT_VERSION,
@@ -76,6 +77,16 @@ function routeParts(pathname) {
 
 function publicTurnErrorProjection(error) {
   const errorFields = error && typeof error === 'object' ? error : {}
+  const errorChain = []
+  const visitedErrors = new Set()
+  let currentError = errorFields
+  while (currentError && typeof currentError === 'object'
+    && !visitedErrors.has(currentError) && errorChain.length < 8) {
+    visitedErrors.add(currentError)
+    errorChain.push(currentError)
+    currentError = currentError.cause
+  }
+  const evidence = mergeFailedRetryEvidence(...errorChain)
   const explicitStatus = Number(error?.status ?? error?.statusCode)
   const hostUnavailable = describeTurnEngineHostUnavailableError(error)
   const readinessFailure = isModelReadinessError(error)
@@ -112,24 +123,24 @@ function publicTurnErrorProjection(error) {
         },
       }
     : null
-  const missingRequirements = [...new Set((Array.isArray(error?.missingRequirements)
-    ? error.missingRequirements
+  const missingRequirements = [...new Set((Array.isArray(evidence.missingRequirements)
+    ? evidence.missingRequirements
     : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
-  const taskVerification = normalizeTaskVerificationDetails(error?.taskVerification)
-  const hasPartialText = Object.hasOwn(errorFields, 'partialText')
-  const hasArtifactIds = Object.hasOwn(errorFields, 'artifactIds')
-  const hasDeliveryArtifactIds = Object.hasOwn(errorFields, 'deliveryArtifactIds')
-  const hasVerifiedLocalFiles = Object.hasOwn(errorFields, 'verifiedLocalFiles')
-  const hasRetainedLocalFiles = Object.hasOwn(errorFields, 'retainedLocalFiles')
-  const partialText = publicIncompleteText(error?.partialText, '')
-  const artifactIds = normalizeArtifactIds(error?.artifactIds).slice(0, 64)
-  const deliveryArtifactIds = normalizeArtifactIds(error?.deliveryArtifactIds).slice(0, 64)
-  const verifiedLocalFiles = mergeLocalFileReceipts(error?.verifiedLocalFiles)
+  const taskVerification = normalizeTaskVerificationDetails(evidence.taskVerification)
+  const hasPartialText = Object.hasOwn(evidence, 'partialText')
+  const hasArtifactIds = Object.hasOwn(evidence, 'artifactIds')
+  const hasDeliveryArtifactIds = Object.hasOwn(evidence, 'deliveryArtifactIds')
+  const hasVerifiedLocalFiles = Object.hasOwn(evidence, 'verifiedLocalFiles')
+  const hasRetainedLocalFiles = Object.hasOwn(evidence, 'retainedLocalFiles')
+  const partialText = publicIncompleteText(evidence.partialText, '')
+  const artifactIds = normalizeArtifactIds(evidence.artifactIds).slice(0, 64)
+  const deliveryArtifactIds = normalizeArtifactIds(evidence.deliveryArtifactIds).slice(0, 64)
+  const verifiedLocalFiles = mergeLocalFileReceipts(evidence.verifiedLocalFiles)
   const retainedLocalFiles = excludeVerifiedLocalFiles(
-    mergeLocalFileReceipts(error?.retainedLocalFiles),
+    mergeLocalFileReceipts(evidence.retainedLocalFiles),
     verifiedLocalFiles,
   )
-  const iterations = Number(error?.iterations)
+  const iterations = Number(evidence.iterations)
   return {
     status,
     payload: {
@@ -144,8 +155,8 @@ function publicTurnErrorProjection(error) {
       ...(Number.isInteger(error?.actualSequence) ? { actualSequence: error.actualSequence } : {}),
       ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}),
       ...(typeof error?.manualRetryable === 'boolean' ? { manualRetryable: error.manualRetryable } : {}),
-      ...(String(error?.incompleteReason || '').trim()
-        ? { incompleteReason: String(error.incompleteReason).trim() }
+      ...(String(evidence.incompleteReason || '').trim()
+        ? { incompleteReason: String(evidence.incompleteReason).trim() }
         : {}),
       ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
       ...(taskVerification ? { taskVerification } : {}),

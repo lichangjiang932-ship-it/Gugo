@@ -114,13 +114,33 @@ export function createTurnFailedRetryRuntime({
     const last = await deps.lastEvent(scope)
     const recoveryStateBeforeRetry = await deps.readRecoveryState(scope)
     const persistedEvents = await replayPersistedTurnEvents(deps.replayEvents, scope)
+    const latestPersistedFailure = persistedEvents
+      .filter((event) => event.type === 'turn.failed')
+      .at(-1) || null
+    let existingMessage = null
+    let existingMessageLoaded = false
+    const loadExistingMessage = async () => {
+      if (!existingMessageLoaded) {
+        existingMessage = await findExistingAssistantMessage(scope)
+        existingMessageLoaded = true
+      }
+      return existingMessage
+    }
+    const persistedEvidenceSources = () => [
+      latestPersistedFailure?.payload,
+      latestPersistedFailure?.payload?.error,
+      existingMessage?.modelContext,
+      existingMessage?.modelContext?.error,
+      { partialText: existingMessage?.content },
+    ]
     if (last?.type === 'turn.attempt' && last.payload?.reason === 'failed_retry') {
       const checkpoint = await deps.runtimeCore.checkpoint.load(scope)
       if (!isValidActiveFailedRetryAttempt(persistedEvents, last, checkpoint)) {
+        await loadExistingMessage()
         throw permanentFailedRetryError({
           code: 'TURN_FAILED_RETRY_ATTEMPT_INVALID',
           status: 409,
-        })
+        }, ...persistedEvidenceSources())
       }
       const outcome = await recoverTurn({ ...scope, authMode })
       return outcome.turn
@@ -138,18 +158,23 @@ export function createTurnFailedRetryRuntime({
         const outcome = await recoverTurn({ ...scope, authMode })
         return outcome.turn
       }
-      throw new TurnEngineError(
-        'TURN_FAILED_RETRY_CONFLICT',
-        'the Turn is no longer at a failed terminal boundary',
-        409,
-      )
+      await loadExistingMessage()
+      throw permanentFailedRetryError({
+        code: 'TURN_FAILED_RETRY_CONFLICT',
+        status: 409,
+      }, last?.payload, last?.payload?.error, ...persistedEvidenceSources())
     }
-    const existingMessage = await findExistingAssistantMessage(scope)
+    await loadExistingMessage()
     const persistedRejection = failedRetryRejectionFromMessage(existingMessage, last)
     if (persistedRejection) throw permanentFailedRetryError(persistedRejection)
 
     const rejectFailedRetry = async (sourceError) => {
-      const rejectionError = permanentFailedRetryError(sourceError)
+      const rejectionError = permanentFailedRetryError(
+        sourceError,
+        last?.payload,
+        last?.payload?.error,
+        ...persistedEvidenceSources(),
+      )
       const message = failedRetryRejectionEvidenceMessage({
         existing: existingMessage,
         userId,
@@ -177,7 +202,15 @@ export function createTurnFailedRetryRuntime({
             || currentLast?.type !== 'turn.failed') {
             return (await recoverTurn({ ...scope, authMode })).turn
           }
-          throw error
+          throw permanentFailedRetryError(
+            error,
+            last?.payload,
+            last?.payload?.error,
+            currentMessage?.modelContext,
+            currentMessage?.modelContext?.error,
+            { partialText: currentMessage?.content },
+            ...persistedEvidenceSources(),
+          )
         }
       } else {
         // Legacy/custom adapters may not expose the atomic rejection helper.

@@ -30,6 +30,7 @@ import {
   excludeVerifiedLocalFiles,
   mergeLocalFileReceipts,
 } from './turnRecoveryProjection.js'
+import { mergeFailedRetryEvidence } from './turnFailedRetryRejection.js'
 
 const VALID_DECISIONS = new Set(['approve', 'deny', 'edit'])
 const CROSS_PROCESS_POLL_MS = 1_000
@@ -42,6 +43,16 @@ const MESSAGE_RATE_REFILL_PER_SECOND = 32
 
 function publicTurnFailureFrameFields(error) {
   const source = error && typeof error === 'object' ? error : {}
+  const errorChain = []
+  const visitedErrors = new Set()
+  let currentError = source
+  while (currentError && typeof currentError === 'object'
+    && !visitedErrors.has(currentError) && errorChain.length < 8) {
+    visitedErrors.add(currentError)
+    errorChain.push(currentError)
+    currentError = currentError.cause
+  }
+  const evidence = mergeFailedRetryEvidence(...errorChain)
   const explicitStatus = Number(source.status ?? source.statusCode)
   const recovery = source.recovery && typeof source.recovery === 'object' && !Array.isArray(source.recovery)
     ? {
@@ -64,16 +75,16 @@ function publicTurnFailureFrameFields(error) {
         },
       }
     : null
-  const missingRequirements = [...new Set((Array.isArray(source.missingRequirements)
-    ? source.missingRequirements
+  const missingRequirements = [...new Set((Array.isArray(evidence.missingRequirements)
+    ? evidence.missingRequirements
     : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
-  const taskVerification = normalizeTaskVerificationDetails(source.taskVerification)
-  const verifiedLocalFiles = mergeLocalFileReceipts(source.verifiedLocalFiles).slice(0, 128)
+  const taskVerification = normalizeTaskVerificationDetails(evidence.taskVerification)
+  const verifiedLocalFiles = mergeLocalFileReceipts(evidence.verifiedLocalFiles).slice(0, 128)
   const retainedLocalFiles = excludeVerifiedLocalFiles(
-    mergeLocalFileReceipts(source.retainedLocalFiles),
+    mergeLocalFileReceipts(evidence.retainedLocalFiles),
     verifiedLocalFiles,
   ).slice(0, 128)
-  const iterations = Number(source.iterations)
+  const iterations = Number(evidence.iterations)
   return {
     ...(Number.isInteger(explicitStatus) && explicitStatus >= 100 && explicitStatus <= 599
       ? { status: explicitStatus }
@@ -86,24 +97,24 @@ function publicTurnFailureFrameFields(error) {
       : {}),
     ...(typeof source.retryable === 'boolean' ? { retryable: source.retryable } : {}),
     ...(typeof source.manualRetryable === 'boolean' ? { manualRetryable: source.manualRetryable } : {}),
-    ...(String(source.incompleteReason || '').trim()
-      ? { incompleteReason: String(source.incompleteReason).trim() }
+    ...(String(evidence.incompleteReason || '').trim()
+      ? { incompleteReason: String(evidence.incompleteReason).trim() }
       : {}),
     ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
     ...(taskVerification ? { taskVerification } : {}),
     ...(Number.isInteger(source.attempts) && source.attempts > 0 ? { attempts: source.attempts } : {}),
     ...(recovery ? { recovery } : {}),
-    ...(Object.hasOwn(source, 'partialText')
-      ? { partialText: publicIncompleteText(source.partialText, '') }
+    ...(Object.hasOwn(evidence, 'partialText')
+      ? { partialText: publicIncompleteText(evidence.partialText, '') }
       : {}),
-    ...(Object.hasOwn(source, 'artifactIds')
-      ? { artifactIds: normalizeArtifactIds(source.artifactIds).slice(0, 64) }
+    ...(Object.hasOwn(evidence, 'artifactIds')
+      ? { artifactIds: normalizeArtifactIds(evidence.artifactIds).slice(0, 64) }
       : {}),
-    ...(Object.hasOwn(source, 'deliveryArtifactIds')
-      ? { deliveryArtifactIds: normalizeArtifactIds(source.deliveryArtifactIds).slice(0, 64) }
+    ...(Object.hasOwn(evidence, 'deliveryArtifactIds')
+      ? { deliveryArtifactIds: normalizeArtifactIds(evidence.deliveryArtifactIds).slice(0, 64) }
       : {}),
-    ...(Object.hasOwn(source, 'verifiedLocalFiles') ? { verifiedLocalFiles } : {}),
-    ...(Object.hasOwn(source, 'retainedLocalFiles') ? { retainedLocalFiles } : {}),
+    ...(Object.hasOwn(evidence, 'verifiedLocalFiles') ? { verifiedLocalFiles } : {}),
+    ...(Object.hasOwn(evidence, 'retainedLocalFiles') ? { retainedLocalFiles } : {}),
     ...(Number.isInteger(iterations) && iterations >= 0 ? { iterations } : {}),
   }
 }

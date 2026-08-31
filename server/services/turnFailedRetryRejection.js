@@ -1,5 +1,14 @@
 import { TurnEngineError } from './turnResolutionRuntime.js'
-import { normalizeTurnFailure } from './turnTerminalProjection.js'
+import {
+  normalizeArtifactIds,
+  normalizeTaskVerificationDetails,
+  normalizeTurnFailure,
+  publicIncompleteText,
+} from './turnTerminalProjection.js'
+import {
+  excludeVerifiedLocalFiles,
+  mergeLocalFileReceipts,
+} from './turnRecoveryProjection.js'
 
 const PERMANENT_REJECTION_CODES = new Set([
   'TURN_FAILED_RETRY_NOT_ALLOWED',
@@ -10,6 +19,7 @@ const PERMANENT_REJECTION_CODES = new Set([
   'TURN_FAILED_RETRY_EVENT_INVALID',
   'TURN_FAILED_RETRY_ATTEMPT_INVALID',
   'TURN_FAILED_RETRY_PROJECTION_INVALID',
+  'TURN_FAILED_RETRY_CONFLICT',
 ])
 
 function isRecord(value) {
@@ -18,6 +28,61 @@ function isRecord(value) {
 
 export function isPermanentFailedRetryRejectionCode(value) {
   return PERMANENT_REJECTION_CODES.has(String(value || '').trim())
+}
+
+function uniqueStrings(values, limit = 64) {
+  return [...new Set(values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))].slice(0, limit)
+}
+
+/**
+ * Merge public delivery evidence without allowing an empty wrapper/error to
+ * erase durable evidence read from the terminal event or assistant message.
+ */
+export function mergeFailedRetryEvidence(...values) {
+  const sources = values.filter(isRecord)
+  const owns = (key) => sources.some((source) => Object.hasOwn(source, key))
+  const partialText = sources
+    .flatMap((source) => [source.partialText, source.text])
+    .map((value) => publicIncompleteText(value, ''))
+    .find(Boolean) || ''
+  const mergedIds = (key) => uniqueStrings(sources.flatMap((source) => (
+    normalizeArtifactIds(source[key])
+  )), 64)
+  const artifactIds = mergedIds('artifactIds')
+  const deliveryArtifactIds = mergedIds('deliveryArtifactIds')
+  const verifiedLocalFiles = mergeLocalFileReceipts(
+    ...sources.map((source) => source.verifiedLocalFiles),
+  )
+  const retainedLocalFiles = excludeVerifiedLocalFiles(
+    mergeLocalFileReceipts(...sources.map((source) => source.retainedLocalFiles)),
+    verifiedLocalFiles,
+  )
+  const iterations = sources
+    .map((source) => Number(source.iterations))
+    .filter((value) => Number.isInteger(value) && value >= 0)
+    .reduce((highest, value) => Math.max(highest, value), -1)
+  const incompleteReason = sources
+    .map((source) => String(source.incompleteReason || '').trim())
+    .find(Boolean) || ''
+  const missingRequirements = uniqueStrings(sources.flatMap((source) => (
+    Array.isArray(source.missingRequirements) ? source.missingRequirements : []
+  )), 16)
+  const taskVerification = sources
+    .map((source) => normalizeTaskVerificationDetails(source.taskVerification))
+    .find(Boolean) || null
+  return {
+    ...(partialText ? { partialText } : {}),
+    ...(owns('artifactIds') ? { artifactIds } : {}),
+    ...(owns('deliveryArtifactIds') ? { deliveryArtifactIds } : {}),
+    ...(owns('verifiedLocalFiles') ? { verifiedLocalFiles } : {}),
+    ...(owns('retainedLocalFiles') ? { retainedLocalFiles } : {}),
+    ...(iterations >= 0 ? { iterations } : {}),
+    ...(incompleteReason ? { incompleteReason } : {}),
+    ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
+    ...(taskVerification ? { taskVerification } : {}),
+  }
 }
 
 export function failedRetryRejectionFromMessage(message, failureEvent) {
@@ -34,7 +99,16 @@ export function failedRetryRejectionFromMessage(message, failureEvent) {
     || rejection?.code !== failure?.code
     || !isPermanentFailedRetryRejectionCode(rejection?.code)
     || failure?.retryable !== false) return null
-  return failure
+  return {
+    ...failure,
+    ...mergeFailedRetryEvidence(
+      failureEvent?.payload,
+      failureEvent?.payload?.error,
+      context,
+      context?.error,
+      { partialText: message?.content },
+    ),
+  }
 }
 
 export function failedRetryRejectionEvidenceMessage({
@@ -50,8 +124,17 @@ export function failedRetryRejectionEvidenceMessage({
   const previousFailure = isRecord(failureEvent?.payload?.error)
     ? failureEvent.payload.error
     : isRecord(modelContext.error) ? modelContext.error : {}
+  const evidence = mergeFailedRetryEvidence(
+    failureEvent?.payload,
+    failureEvent?.payload?.error,
+    modelContext,
+    modelContext.error,
+    { partialText: existing?.content },
+    error,
+  )
   const failure = normalizeTurnFailure({
     ...previousFailure,
+    ...evidence,
     code: String(error?.code || 'TURN_FAILED_RETRY_NOT_ALLOWED'),
     retryable: false,
     manualRetryable: false,
@@ -62,14 +145,10 @@ export function failedRetryRejectionEvidenceMessage({
     userId,
     sessionId,
     role: 'assistant',
-    content: String(
-      existing?.content
-      || failureEvent?.payload?.partialText
-      || failureEvent?.payload?.text
-      || '',
-    ),
+    content: String(evidence.partialText || ''),
     modelContext: {
       ...modelContext,
+      ...evidence,
       turnId,
       turnEvidence: true,
       evidenceState: 'failed',
@@ -87,7 +166,7 @@ export function failedRetryRejectionEvidenceMessage({
   }
 }
 
-export function permanentFailedRetryError(error) {
+export function permanentFailedRetryError(error, ...evidenceSources) {
   const code = String(error?.code || 'TURN_FAILED_RETRY_NOT_ALLOWED').trim()
   const wrapped = new TurnEngineError(
     code,
@@ -96,13 +175,17 @@ export function permanentFailedRetryError(error) {
   )
   wrapped.retryable = false
   if (typeof error?.manualRetryable === 'boolean') wrapped.manualRetryable = error.manualRetryable
-  const incompleteReason = String(error?.incompleteReason || '').trim()
+  const evidence = mergeFailedRetryEvidence(...evidenceSources, error)
+  Object.assign(wrapped, evidence)
+  const incompleteReason = String(evidence.incompleteReason || error?.incompleteReason || '').trim()
   if (incompleteReason) wrapped.incompleteReason = incompleteReason
-  const missingRequirements = [...new Set((Array.isArray(error?.missingRequirements)
-    ? error.missingRequirements
+  const missingRequirements = [...new Set((Array.isArray(evidence.missingRequirements)
+    ? evidence.missingRequirements
+    : Array.isArray(error?.missingRequirements)
+      ? error.missingRequirements
     : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
   if (missingRequirements.length > 0) wrapped.missingRequirements = missingRequirements
-  if (isRecord(error?.taskVerification)) wrapped.taskVerification = error.taskVerification
+  if (isRecord(evidence.taskVerification)) wrapped.taskVerification = evidence.taskVerification
   if (Number.isInteger(error?.attempts) && error.attempts > 0) wrapped.attempts = error.attempts
   return wrapped
 }

@@ -1,7 +1,8 @@
 import { dispatchHooks } from './hooksService.js'
 import { createNotification } from './notificationsStore.js'
 import { getDb } from '../db.js'
-import { appendJobEvent } from './jobStore.js'
+import { appendJobEvent, getJobWithChildren } from './jobStore.js'
+import { buildFinalOutput, buildJobOutcomeDiagnostics } from './jobWorkflow.js'
 
 const RECOVERABLE_JOB_STATUSES = new Set(['planning', 'running'])
 
@@ -68,19 +69,73 @@ export function markJobRunningAgain(job, step = null, decision = null) {
   }
 }
 
-export function notifyJobTerminal(job, { status, body }) {
+function terminalNotificationPayload(job, { status, body, payload = null }) {
+  const snapshot = getJobWithChildren(job.id, { userId: job.userId }) || job
+  const normalizedStatus = status === 'completed'
+    ? 'completed'
+    : status === 'cancelled'
+      ? 'cancelled'
+      : 'failed'
+  if (normalizedStatus === 'completed') {
+    const delivery = payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? payload
+      : buildFinalOutput(snapshot)
+    if (delivery.complete === false) {
+      const reason = String(
+        delivery.incompleteReason || delivery.reason || delivery.summary || '任务未全部完成',
+      ).trim()
+      const diagnostics = buildJobOutcomeDiagnostics(snapshot, {
+        reason,
+        nextAction: delivery.nextAction || 'retry_job',
+        status: 'failed',
+      })
+      return {
+        ...diagnostics,
+        ...delivery,
+        status: 'failed',
+        complete: false,
+        error: reason,
+        nextAction: delivery.nextAction || diagnostics.nextAction,
+      }
+    }
+    return {
+      ...delivery,
+      status: 'completed',
+      complete: true,
+      error: null,
+    }
+  }
+  const reason = String(job.error || body || '').trim() || '任务未完成'
+  const diagnostics = buildJobOutcomeDiagnostics(snapshot, {
+    reason,
+    nextAction: payload?.nextAction || 'retry_job',
+    status: normalizedStatus,
+  })
+  return {
+    ...diagnostics,
+    ...(payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {}),
+    status: normalizedStatus,
+    complete: false,
+    error: reason,
+  }
+}
+
+export function notifyJobTerminal(job, { status, body, payload = null }) {
   if (!job?.id || !job.userId) return
   try {
+    const terminalPayload = terminalNotificationPayload(job, { status, body, payload })
+    const notificationBody = terminalPayload.complete === false
+      ? terminalPayload.reason || terminalPayload.incompleteReason || body
+      : body
     createNotification({
       userId: job.userId,
       kind: 'job',
       title: job.title || job.id,
-      body,
+      body: notificationBody,
       link: `/task?job=${encodeURIComponent(job.id)}`,
       data: {
         jobId: job.id,
-        status,
-        error: job.error || null,
+        ...terminalPayload,
       },
     })
   } catch (error) {

@@ -620,6 +620,7 @@ export function clearResumedJobOutcomeDiagnostics(output) {
   if (!output || typeof output !== 'object' || Array.isArray(output)) return output
   const resumed = { ...output }
   for (const key of [
+    'status',
     'complete',
     'reason',
     'incompleteReason',
@@ -638,7 +639,11 @@ export function clearResumedJobOutcomeDiagnostics(output) {
   return resumed
 }
 
-export function buildJobOutcomeDiagnostics(job, { reason = null, nextAction = null } = {}) {
+export function buildJobOutcomeDiagnostics(job, {
+  reason = null,
+  nextAction = null,
+  status = 'failed',
+} = {}) {
   const delivery = buildFinalOutput(job)
   const carriedDiagnostics = {}
   const carryFields = [
@@ -672,15 +677,33 @@ export function buildJobOutcomeDiagnostics(job, { reason = null, nextAction = nu
   }
   const normalizedReason = String(reason || '').trim().slice(0, 2_000)
   const normalizedNextAction = String(nextAction || '').trim().slice(0, 80)
+  const normalizedStatus = ['failed', 'cancelled', 'waiting', 'awaiting_approval'].includes(status)
+    ? status
+    : 'failed'
+  const effectiveReason = normalizedReason
+    || String(carriedDiagnostics.incompleteReason || '').trim().slice(0, 2_000)
+    || String(delivery.issues?.[0] || delivery.summary || '任务未完成').trim().slice(0, 2_000)
   const issues = [...new Set([
     ...(Array.isArray(delivery.issues) ? delivery.issues : []),
-    normalizedReason,
+    effectiveReason,
   ].map((value) => String(value || '').trim()).filter(Boolean))]
   return {
     ...carriedDiagnostics,
+    status: normalizedStatus,
     complete: false,
-    ...(normalizedReason ? { reason: normalizedReason } : {}),
-    ...(normalizedNextAction ? { nextAction: normalizedNextAction } : {}),
+    reason: effectiveReason,
+    incompleteReason: String(carriedDiagnostics.incompleteReason || effectiveReason).trim().slice(0, 2_000),
+    missingRequirements: Array.isArray(carriedDiagnostics.missingRequirements)
+      ? carriedDiagnostics.missingRequirements
+      : [],
+    taskVerification: carriedDiagnostics.taskVerification || null,
+    verifiedLocalFiles: Array.isArray(carriedDiagnostics.verifiedLocalFiles)
+      ? carriedDiagnostics.verifiedLocalFiles
+      : [],
+    retainedLocalFiles: Array.isArray(carriedDiagnostics.retainedLocalFiles)
+      ? carriedDiagnostics.retainedLocalFiles
+      : [],
+    nextAction: normalizedNextAction || (normalizedStatus === 'waiting' ? 'provide_input' : 'retry_job'),
     artifactIds: Array.isArray(delivery.artifactIds) ? delivery.artifactIds : [],
     completedDeliverables: Array.isArray(delivery.completedDeliverables)
       ? delivery.completedDeliverables
