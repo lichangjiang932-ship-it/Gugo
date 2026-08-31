@@ -164,9 +164,11 @@ export function normalizeServerTurnFailure(error) {
     'retryable',
     'manualRetryable',
     'retryAfter',
+    'reason',
     'incompleteReason',
     'missingRequirements',
     'taskVerification',
+    'nextAction',
     'attempts',
   ]) {
     if (failure[field] === undefined && error?.[field] !== undefined) failure[field] = error[field]

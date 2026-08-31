@@ -91,6 +91,23 @@ function hasMeaningfulEvidence(value) {
   return value !== undefined && value !== null && value !== ''
 }
 
+function mergeTerminalFailureDiagnostics(serverFailure, localFailure) {
+  if (!serverFailure || typeof serverFailure !== 'object' || Array.isArray(serverFailure)) return serverFailure
+  if (!localFailure || typeof localFailure !== 'object' || Array.isArray(localFailure)) return serverFailure
+  const merged = { ...localFailure, ...serverFailure }
+  for (const key of ['reason', 'incompleteReason', 'nextAction']) {
+    const serverValue = String(serverFailure[key] || '').trim()
+    const localValue = String(localFailure[key] || '').trim()
+    if (serverValue || localValue) merged[key] = serverValue || localValue
+  }
+  for (const key of ['missingRequirements', 'taskVerification']) {
+    if (!hasMeaningfulEvidence(serverFailure[key]) && hasMeaningfulEvidence(localFailure[key])) {
+      merged[key] = localFailure[key]
+    }
+  }
+  return merged
+}
+
 function terminalOutcomeState(meta) {
   if (!meta || typeof meta !== 'object') return ''
   if (meta.serverConnectionState === 'blocked' || meta.serverRecoveryBlocked === true) return 'blocked'
@@ -229,7 +246,9 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
               if (!preserveLocalTerminalEvidence
                 || hasMeaningfulEvidence(serverMeta[key])
                 || !hasMeaningfulEvidence(localMeta[key])) {
-                merged.meta[key] = serverMeta[key]
+                merged.meta[key] = key === 'serverFailure'
+                  ? mergeTerminalFailureDiagnostics(serverMeta[key], localMeta[key])
+                  : serverMeta[key]
               }
             } else if (key === 'serverFailure') {
               delete merged.meta[key]

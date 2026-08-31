@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 
 const TURN_RESOLUTION_MARKER = '[TURN_RESOLUTION:'
 export const MAX_DIRECTORY_AUTHORIZATION_RESOLUTIONS = 8
@@ -276,7 +277,9 @@ export function createTurnResolutionRuntime({ normalizePath } = {}) {
     if (lastEvent.type === 'turn.paused') return 'paused'
     if (lastEvent.type === 'turn.blocked') return 'blocked'
     if (running) return 'running'
-    if (lastEvent.type === 'turn.completed') return 'completed'
+    if (lastEvent.type === 'turn.completed') {
+      return isSuccessfulTurnCompletedEvent(lastEvent) ? 'completed' : 'incomplete'
+    }
     if (lastEvent.type === 'turn.cancelled') return 'cancelled'
     if (lastEvent.type === 'turn.failed') return 'failed'
     if (lastEvent.type === 'turn.interrupted') return 'interrupted'

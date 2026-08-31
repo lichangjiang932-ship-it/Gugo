@@ -79,12 +79,16 @@ export function failedRetryFailureFromError(error, previousFailure = null) {
   const taskVerification = nonEmptyTaskVerification(current.taskVerification)
     || nonEmptyTaskVerification(error?.taskVerification)
     || nonEmptyTaskVerification(previous.taskVerification)
+  const reason = String(current.reason || error?.reason || previous.reason || '').trim()
+  const nextAction = String(current.nextAction || error?.nextAction || previous.nextAction || '').trim()
   return {
     code,
     retryable: retryable === true,
     ...(Number.isInteger(status) && status >= 100 && status <= 599 ? { status } : {}),
     ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),
     ...(incompleteReason ? { incompleteReason } : {}),
+    ...(reason ? { reason } : {}),
+    ...(nextAction ? { nextAction } : {}),
     ...(missingRequirements.length > 0 ? { missingRequirements } : {}),
     ...(taskVerification ? { taskVerification } : {}),
   }
@@ -100,12 +104,16 @@ function mergeFailureDiagnostics(currentFailure, previousFailure) {
     : []
   const taskVerification = nonEmptyTaskVerification(current.taskVerification)
     || nonEmptyTaskVerification(previous.taskVerification)
+  const reason = String(current.reason || previous.reason || '').trim()
+  const nextAction = String(current.nextAction || previous.nextAction || '').trim()
   return {
     ...previous,
     ...current,
     ...(current.incompleteReason || previous.incompleteReason
       ? { incompleteReason: current.incompleteReason || previous.incompleteReason }
       : {}),
+    ...(reason ? { reason } : {}),
+    ...(nextAction ? { nextAction } : {}),
     ...(currentMissing.length > 0 || Array.isArray(previous.missingRequirements)
       ? { missingRequirements: currentMissing.length > 0 ? currentMissing : previous.missingRequirements }
       : {}),

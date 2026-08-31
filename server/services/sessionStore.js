@@ -10,6 +10,7 @@ import {
   normalizeIncompleteReason,
   normalizeTurnFailure,
 } from './turnTerminalProjection.js'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 
 const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
 const MAX_BRANCH_DEPTH = 5
@@ -760,8 +761,10 @@ function projectTerminalEvidence(message, row, { userId, sessionId }) {
   const context = message?.modelContext && typeof message.modelContext === 'object'
     ? message.modelContext
     : {}
-  const failureBoundary = SNAPSHOT_FAILURE_BOUNDARY_TYPES.has(row.type)
-  const state = row.type.slice('turn.'.length)
+  const invalidCompletion = row.type === 'turn.completed'
+    && !isSuccessfulTurnCompletedEvent({ type: row.type, payload })
+  const failureBoundary = SNAPSHOT_FAILURE_BOUNDARY_TYPES.has(row.type) || invalidCompletion
+  const state = invalidCompletion ? 'incomplete' : row.type.slice('turn.'.length)
   const artifactIds = terminalEventEvidence(payload, 'artifactIds')
   const deliveryArtifactIds = terminalEventEvidence(payload, 'deliveryArtifactIds')
   const verifiedLocalFiles = terminalEventEvidence(payload, 'verifiedLocalFiles')

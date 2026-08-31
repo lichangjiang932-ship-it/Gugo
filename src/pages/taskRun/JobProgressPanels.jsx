@@ -116,7 +116,7 @@ function DeliveryDiagnostics({ value, showNextAction = true, showReason = true, 
   const completed = normalizedList(value.completedDeliverables, { uppercase: true })
   const missing = normalizedList(value.missingDeliverables, { uppercase: true })
   const missingRequirements = normalizedList(value.missingRequirements)
-  const reason = showReason ? String(value.incompleteReason || value.reason || '').trim() : ''
+  const reason = showReason ? String(value.reason || value.incompleteReason || '').trim() : ''
   const issues = normalizedList([
     ...(Array.isArray(value.issues) ? value.issues : (value.acceptance?.issues || [])),
     ...taskVerificationIssues(value.taskVerification),

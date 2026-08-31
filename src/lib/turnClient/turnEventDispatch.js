@@ -147,10 +147,16 @@ export function normalizeTurnFailurePayload(payload = {}, {
     : payload.recovery && typeof payload.recovery === 'object' && !Array.isArray(payload.recovery)
       ? payload.recovery
       : null
-  const legacyMessage = String(nested.message || payload.message || payload.reason || '').trim()
+  const reasonSource = terminalEvidenceSource(payload, nested, 'reason')
+  const nextActionSource = terminalEvidenceSource(payload, nested, 'nextAction')
+  const reason = String(reasonSource?.reason || '').trim()
+  const nextAction = String(nextActionSource?.nextAction || '').trim()
+  const legacyMessage = String(nested.message || payload.message || reason).trim()
   const error = {
     code: String(nested.code || payload.code || fallbackCode).trim() || fallbackCode,
     ...(legacyMessage ? { message: legacyMessage } : {}),
+    ...(reason ? { reason } : {}),
+    ...(nextAction ? { nextAction } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(expectedSequence !== undefined ? { expectedSequence } : {}),
     ...(actualSequence !== undefined ? { actualSequence } : {}),
@@ -161,7 +167,8 @@ export function normalizeTurnFailurePayload(payload = {}, {
     ...(attempts !== undefined ? { attempts } : {}),
     ...(recoverySource ? { recovery: { ...recoverySource } } : {}),
   }
-  const incompleteReason = String(nested.incompleteReason || payload.incompleteReason || '').trim()
+  const incompleteReasonSource = terminalEvidenceSource(payload, nested, 'incompleteReason')
+  const incompleteReason = String(incompleteReasonSource?.incompleteReason || '').trim()
   if (incompleteReason) error.incompleteReason = incompleteReason
   const nestedMissingRequirements = [...new Set((Array.isArray(nested.missingRequirements)
     ? nested.missingRequirements
@@ -169,9 +176,9 @@ export function normalizeTurnFailurePayload(payload = {}, {
   const payloadMissingRequirements = [...new Set((Array.isArray(payload.missingRequirements)
     ? payload.missingRequirements
     : []).map((value) => String(value || '').trim()).filter(Boolean))].slice(0, 16)
-  const missingRequirements = nestedMissingRequirements.length > 0
-    ? nestedMissingRequirements
-    : payloadMissingRequirements
+  const missingRequirements = payloadMissingRequirements.length > 0
+    ? payloadMissingRequirements
+    : nestedMissingRequirements
   if (missingRequirements.length > 0) error.missingRequirements = missingRequirements
   const nestedTaskVerification = nested.taskVerification
     && typeof nested.taskVerification === 'object'
@@ -185,7 +192,7 @@ export function normalizeTurnFailurePayload(payload = {}, {
     && Object.keys(payload.taskVerification).length > 0
       ? payload.taskVerification
       : null
-  const taskVerification = nestedTaskVerification || payloadTaskVerification
+  const taskVerification = payloadTaskVerification || nestedTaskVerification
   if (taskVerification) error.taskVerification = taskVerification
   const iterations = optionalInteger(
     terminalEvidenceSource(payload, nested, 'iterations')?.iterations,
@@ -565,8 +572,8 @@ export async function dispatchTurnEvent(event, {
         ...(turnModelUsage ? { turnModelUsage } : {}),
         ...(estimatedPromptTokens !== undefined ? { serverEstimatedPromptTokens: estimatedPromptTokens } : {}),
         ...(deliveryArtifactIds?.length > 0 ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
-        ...(verifiedLocalFiles?.length > 0 ? { verifiedLocalFiles } : {}),
-        ...(retainedLocalFiles?.length > 0 ? { retainedLocalFiles } : {}),
+        ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
+        ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
       },
       ...streamCursor,
     })
@@ -641,8 +648,8 @@ export async function dispatchTurnEvent(event, {
         ...(modelUsage ? { modelUsage, actualPromptTokens: modelUsage.promptTokens } : {}),
         ...(turnModelUsage ? { turnModelUsage } : {}),
         ...(estimatedPromptTokens !== undefined ? { serverEstimatedPromptTokens: estimatedPromptTokens } : {}),
-        ...(verifiedLocalFiles?.length > 0 ? { verifiedLocalFiles } : {}),
-        ...(retainedLocalFiles?.length > 0 ? { retainedLocalFiles } : {}),
+        ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
+        ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
       },
       ...streamCursor,
     })
@@ -675,10 +682,10 @@ export async function dispatchTurnEvent(event, {
         ...(failure.deliveryArtifactIds?.length > 0
           ? { serverDeliveryArtifactIds: failure.deliveryArtifactIds }
           : {}),
-        ...(failure.verifiedLocalFiles?.length > 0
+        ...(failure.verifiedLocalFiles !== undefined
           ? { verifiedLocalFiles: failure.verifiedLocalFiles }
           : {}),
-        ...(failure.retainedLocalFiles?.length > 0
+        ...(failure.retainedLocalFiles !== undefined
           ? { retainedLocalFiles: failure.retainedLocalFiles }
           : {}),
         ...(failure.iterations !== undefined ? { serverIterations: failure.iterations } : {}),

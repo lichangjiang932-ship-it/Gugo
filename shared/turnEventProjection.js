@@ -1,4 +1,10 @@
 const PUBLIC_FAILURE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/u
+const INCOMPLETE_COMPLETION_STATUSES = new Set([
+  'blocked', 'cancelled', 'failed', 'incomplete', 'interrupted', 'paused',
+])
+const FAILED_VERIFICATION_STATUSES = new Set([
+  'failed', 'indeterminate', 'rerun_required', 'stale',
+])
 const PUBLIC_FAILURE_CODE_FALLBACKS = Object.freeze({
   'turn.failed': 'TURN_FAILED',
   'turn.interrupted': 'TURN_INTERRUPTED',
@@ -19,6 +25,47 @@ export function normalizePublicFailureCode(value, fallback = 'TURN_FAILED') {
   return normalizedCodeCandidate(value)
     || normalizedCodeCandidate(fallback)
     || 'TURN_FAILED'
+}
+
+function completionRecord(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+/**
+ * Treat a completed event as successful only when its payload contains no
+ * contradictory incomplete evidence. This also protects readers of legacy or
+ * externally imported logs whose event type predates the completion gate.
+ */
+export function isSuccessfulTurnCompletedEvent(event) {
+  if (event?.type !== 'turn.completed') return false
+  const payload = completionRecord(event.payload)
+  const error = completionRecord(payload.error)
+  if (payload.complete === false
+    || payload.completed === false
+    || payload.incomplete === true
+    || payload.paused === true
+    || payload.interrupted === true
+    || error.complete === false
+    || error.completed === false
+    || error.incomplete === true
+    || error.paused === true
+    || error.interrupted === true) return false
+  const status = String(payload.status || error.status || '').trim().toLowerCase()
+  if (INCOMPLETE_COMPLETION_STATUSES.has(status)) return false
+  if (String(payload.incompleteReason || error.incompleteReason || '').trim()) return false
+  const missingRequirements = payload.missingRequirements ?? error.missingRequirements
+  if (Array.isArray(missingRequirements) && missingRequirements.length > 0) return false
+  const taskVerification = completionRecord(payload.taskVerification || error.taskVerification)
+  if (Array.isArray(taskVerification.checks) && taskVerification.checks.some((check) => (
+    FAILED_VERIFICATION_STATUSES.has(String(check?.status || '').trim().toLowerCase())
+  ))) return false
+  if (taskVerification.ok === false || taskVerification.passed === false) return false
+  const retained = Array.isArray(payload.retainedLocalFiles) ? payload.retainedLocalFiles : []
+  // A retained receipt means the write is known to exist but has not passed
+  // readback/project verification. Path equality with an older verified
+  // receipt is not enough: the same path may have been mutated again later.
+  if (retained.length > 0) return false
+  return true
 }
 
 function projectTerminalFailureEvent(event) {

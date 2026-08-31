@@ -281,10 +281,10 @@ export default function JobDeliveryCard({ delivery, jobStatus, evidence = [], t 
   const verifiedFiles = localFileRows(delivery.verifiedLocalFiles, 'verified', deliveryTurnId)
   const retainedFiles = localFileRows(unresolvedRetainedLocalFiles(delivery), 'retained', deliveryTurnId)
   const reason = String(delivery.reason || delivery.incompleteReason || '').trim()
-  const summary = String(delivery.summary || reason).trim()
+  const incomplete = isIncompleteJobDelivery(delivery, jobStatus)
+  const summary = String(incomplete ? reason || delivery.summary : delivery.summary || reason).trim()
   const nextAction = nextActionLabel(delivery.nextAction, t)
   const renderedEvidence = normalizedList(evidence.map(evidenceText))
-  const incomplete = isIncompleteJobDelivery(delivery, jobStatus)
   return (
     <section className={`rounded-md border p-4 ${incomplete ? 'border-warning/40 bg-warning/5' : 'border-success/40 bg-success/5'}`}>
       <div className="flex items-center gap-2">{incomplete ? <AlertTriangle className="w-4 h-4 text-warning" /> : <CheckCircle2 className="w-4 h-4 text-success" />}<h3 className="font-semibold text-lg text-ink">{t(incomplete ? 'taskCenter.deliveryIncomplete' : 'taskCenter.delivery')}</h3></div>

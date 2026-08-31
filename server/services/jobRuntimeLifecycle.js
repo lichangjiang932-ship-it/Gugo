@@ -5,6 +5,35 @@ import { appendJobEvent, getJobWithChildren } from './jobStore.js'
 import { buildFinalOutput, buildJobOutcomeDiagnostics } from './jobWorkflow.js'
 
 const RECOVERABLE_JOB_STATUSES = new Set(['planning', 'running'])
+const TERMINAL_LIST_FIELDS = Object.freeze([
+  'evidence',
+  'missingRequirements',
+  'verifiedLocalFiles',
+  'retainedLocalFiles',
+  'artifactIds',
+  'completedDeliverables',
+  'missingDeliverables',
+  'issues',
+])
+
+function mergeTerminalPayload(authoritative, supplied) {
+  const base = authoritative && typeof authoritative === 'object' && !Array.isArray(authoritative)
+    ? authoritative
+    : {}
+  const extra = supplied && typeof supplied === 'object' && !Array.isArray(supplied)
+    ? supplied
+    : {}
+  const merged = { ...base, ...extra }
+  for (const field of TERMINAL_LIST_FIELDS) {
+    if (Array.isArray(extra[field]) && extra[field].length > 0) continue
+    if (Array.isArray(base[field])) merged[field] = base[field]
+  }
+  if ((!extra.taskVerification || typeof extra.taskVerification !== 'object')
+    && base.taskVerification && typeof base.taskVerification === 'object') {
+    merged.taskVerification = base.taskVerification
+  }
+  return merged
+}
 
 export function markJobAwaitingApproval(job, step = null, approval = null) {
   if (!job?.id || !job.userId) return
@@ -82,10 +111,9 @@ function terminalNotificationPayload(job, { status, body, payload = null }) {
       ? 'cancelled'
       : 'failed'
   if (normalizedStatus === 'completed') {
-    const delivery = payload && typeof payload === 'object' && !Array.isArray(payload)
-      ? payload
-      : buildFinalOutput(snapshot)
-    if (delivery.complete === false) {
+    const snapshotDelivery = buildFinalOutput(snapshot)
+    const delivery = mergeTerminalPayload(snapshotDelivery, payload)
+    if (snapshotDelivery.complete === false || delivery.complete === false) {
       const reason = String(
         delivery.reason || delivery.summary || delivery.incompleteReason || '任务未全部完成',
       ).trim()
@@ -129,9 +157,8 @@ function terminalNotificationPayload(job, { status, body, payload = null }) {
     nextAction: payload?.nextAction || 'retry_job',
     status: normalizedStatus,
   })
-  const extra = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {}
+  const extra = mergeTerminalPayload(diagnostics, payload)
   return {
-    ...diagnostics,
     ...extra,
     status: normalizedStatus,
     complete: false,

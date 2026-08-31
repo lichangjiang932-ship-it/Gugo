@@ -262,13 +262,27 @@ function turnEvidenceMeta(message) {
     ? message.modelContext
     : {}
   const state = context.turnEvidence === true ? String(context.evidenceState || '') : ''
-  if (!['blocked', 'cancelled', 'failed', 'interrupted'].includes(state)) return {}
+  if (!['blocked', 'cancelled', 'failed', 'incomplete', 'interrupted'].includes(state)) return {}
 
   const persistedFailure = context.error && typeof context.error === 'object' ? context.error : null
-  const failure = persistedFailure && state === 'blocked'
-    && typeof persistedFailure.manualRetryable !== 'boolean'
-    ? { ...persistedFailure, manualRetryable: true }
-    : persistedFailure
+  const failure = persistedFailure ? { ...persistedFailure } : null
+  if (failure) {
+    for (const key of ['reason', 'incompleteReason', 'nextAction']) {
+      const value = String(context[key] || '').trim()
+      if (value) failure[key] = value
+    }
+    if (Array.isArray(context.missingRequirements) && context.missingRequirements.length > 0) {
+      failure.missingRequirements = context.missingRequirements
+    }
+    if (context.taskVerification && typeof context.taskVerification === 'object'
+      && !Array.isArray(context.taskVerification)
+      && Object.keys(context.taskVerification).length > 0) {
+      failure.taskVerification = context.taskVerification
+    }
+    if (state === 'blocked' && typeof failure.manualRetryable !== 'boolean') {
+      failure.manualRetryable = true
+    }
+  }
   const artifactIds = optionalContextArtifactIds(context, 'artifactIds')
   const iterations = Number.isInteger(context.iterations) && context.iterations >= 0
     ? context.iterations
@@ -292,12 +306,14 @@ function turnEvidenceMeta(message) {
     : ''
 
   return {
-    ...(state === 'failed'
+    ...(state === 'failed' || state === 'incomplete'
       ? {
           cancelled: false,
           failed: true,
           interrupted: false,
           paused: false,
+          streaming: false,
+          serverConnectionState: 'failed',
         }
       : state === 'cancelled'
         ? {

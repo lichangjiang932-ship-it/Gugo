@@ -6,6 +6,7 @@ import { getTurnEngine } from './turnEngineHost.js'
 import { decideApproval } from './approvalStore.js'
 import { releaseApproval } from './approvalGate.js'
 import { turnEventForClient } from './turnEventStore.js'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 
 const PERMISSION_MODES = new Set(['normal', 'acceptEdits', 'plan', 'bypass'])
 const STOP_EVENT_TYPES = new Set([
@@ -143,14 +144,7 @@ function normalizeApprovalDecision(value) {
 }
 
 function completedEventSucceeded(event) {
-  const payload = event?.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
-    ? event.payload
-    : {}
-  return event?.type === 'turn.completed'
-    && payload.complete !== false
-    && payload.completed !== false
-    && payload.paused !== true
-    && payload.interrupted !== true
+  return isSuccessfulTurnCompletedEvent(event)
 }
 
 function resultForLastEvent({ sessionId, turnId, lastEvent }) {

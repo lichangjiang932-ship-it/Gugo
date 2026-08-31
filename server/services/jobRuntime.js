@@ -137,6 +137,46 @@ function latestPersistedOutcomeFields(steps) {
   return merged
 }
 
+function projectJobForClient(job) {
+  if (!job) return null
+  const persisted = latestPersistedOutcomeFields(job.steps)
+  if (job.status === 'completed') {
+    const delivery = buildFinalOutput(job)
+    if (delivery.complete !== false) {
+      return { ...job, ...delivery, status: 'completed', complete: true, error: null }
+    }
+    const reason = String(
+      delivery.summary || delivery.issues?.[0] || '任务交付未全部完成',
+    ).trim()
+    return {
+      ...job,
+      persistedStatus: 'completed',
+      ...buildJobOutcomeDiagnostics(job, {
+        reason,
+        nextAction: persisted.nextAction || 'retry_job',
+        status: 'failed',
+      }),
+      status: 'failed',
+      complete: false,
+      error: reason,
+    }
+  }
+  if (['failed', 'cancelled', 'waiting', 'awaiting_approval'].includes(job.status)) {
+    return {
+      ...job,
+      ...buildJobOutcomeDiagnostics(job, {
+        reason: job.error,
+        nextAction: persisted.nextAction || {
+          awaiting_approval: 'review_approval',
+          waiting: 'provide_input',
+        }[job.status] || 'retry_job',
+        status: job.status,
+      }),
+    }
+  }
+  return job
+}
+
 function hasRejectedCompletedOutcome(step) {
   if (step?.status !== 'completed') return false
   if (step.kind === 'verify') {
@@ -490,11 +530,13 @@ export class JobRuntime {
   }
 
   listJobs({ userId } = {}) {
-    return listJobs({ userId })
+    return listJobs({ userId }).map((job) => projectJobForClient(
+      getJobWithChildren(job.id, { userId }),
+    ))
   }
 
   getJob(id, { userId } = {}) {
-    return getJobWithChildren(id, { userId })
+    return projectJobForClient(getJobWithChildren(id, { userId }))
   }
 
   steerJob(jobId, { userId, content } = {}) {
@@ -1481,6 +1523,7 @@ export class JobRuntime {
               type: 'notification_failed',
               message: `${question}（提醒发送失败，请留意本页面）`,
               payload: {
+                ...(waitingPayload || {}),
                 notificationKind: 'job_clarification',
                 clarification,
               },

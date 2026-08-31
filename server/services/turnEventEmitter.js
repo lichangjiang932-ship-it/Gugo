@@ -2,6 +2,7 @@ import { createTurnEvent } from '../../shared/turnEvents.js'
 import { EventWriteBehindError, findTurnEventFenceError } from './eventWriteBehind.js'
 import { publishCommittedAgentEvent } from '../core/agentEventConsumerRuntime.js'
 import { logWarn } from '../utils/logger.js'
+import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 
 export const TURN_EVENT_PERSISTENCE_FAILURE_CODE = 'TURN_EVENT_PERSISTENCE_FAILED'
 export const TURN_TERMINAL_PERSISTENCE_FAILURE_CODE = 'TURN_TERMINAL_PERSISTENCE_FAILED'
@@ -409,6 +410,13 @@ export function createTurnEventEmitter({
     commitEvent = null,
   } = {}) => {
     if (closed) return Promise.reject(createClosedError())
+    if (type === 'turn.completed'
+      && !isSuccessfulTurnCompletedEvent({ type, payload })) {
+      return Promise.reject(Object.assign(new Error('turn.completed payload contains incomplete terminal evidence'), {
+        code: 'TURN_COMPLETION_INVALID',
+        status: 409,
+      }))
+    }
     if (commitEvent !== null && typeof commitEvent !== 'function') {
       return Promise.reject(new TypeError('commitEvent must be a function or null'))
     }
