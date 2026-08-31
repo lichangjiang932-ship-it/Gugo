@@ -33,7 +33,12 @@ test('task center uses backend job client instead of transient app tasks', () =>
 })
 
 test('task notifications deep-link to the routed task and legacy plural links remain supported', () => {
-  const runtimeSource = fs.readFileSync(new URL('../server/services/jobRuntime.js', import.meta.url), 'utf8')
+  const runtimeSource = [
+    '../server/services/jobRuntime.js',
+    '../server/services/jobRuntimeTick.js',
+    '../server/services/jobRuntimeStepExecution.js',
+    '../server/services/jobRuntimeLifecycle.js',
+  ].map((file) => fs.readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n')
   const appSource = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
 
   assert.match(runtimeSource, /`\/task\?job=\$\{encodeURIComponent\(job\.id\)\}`/)
