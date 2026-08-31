@@ -256,7 +256,7 @@ test('WebSocket terminal delivery completes before an immediate close is treated
   })
 })
 
-test('WebSocket protocol errors preserve code, message, and recovery action', async () => {
+test('WebSocket protocol errors preserve stable code and recovery action', async () => {
   await withWebSocketAuth(async () => {
     const socket = new FakeWebSocket()
     const stream = streamServerTurnEventsWebSocket({
@@ -270,20 +270,21 @@ test('WebSocket protocol errors preserve code, message, and recovery action', as
     socket.emit('message', { data: JSON.stringify({
       type: 'error',
       code: 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
-      message: 'turn runtime is not configured',
       action: 'restart_runtime',
+      status: 503,
     }) })
     await assert.rejects(
       stream,
       (error) => error.code === 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED'
-        && error.message === 'turn runtime is not configured'
-        && error.action === 'restart_runtime',
+        && error.message === 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED'
+        && error.action === 'restart_runtime'
+        && error.status === 503,
     )
     assert.equal(socket.closed, true)
   })
 })
 
-test('WebSocket retry protocol errors preserve code, message, and recovery action', async () => {
+test('WebSocket retry protocol errors preserve stable code and recovery action', async () => {
   await withWebSocketAuth(async () => {
     const socket = new FakeWebSocket()
     const stream = streamServerTurnEventsWebSocket({
@@ -297,14 +298,17 @@ test('WebSocket retry protocol errors preserve code, message, and recovery actio
     socket.emit('message', { data: JSON.stringify({
       type: 'error',
       code: 'TURN_ENGINE_SHUTTING_DOWN',
-      message: 'turn runtime is restarting; retry shortly',
       action: 'retry',
+      status: 503,
+      retryable: true,
     }) })
     await assert.rejects(
       stream,
       (error) => error.code === 'TURN_ENGINE_SHUTTING_DOWN'
-        && error.message === 'turn runtime is restarting; retry shortly'
-        && error.action === 'retry',
+        && error.message === 'TURN_ENGINE_SHUTTING_DOWN'
+        && error.action === 'retry'
+        && error.status === 503
+        && error.retryable === true,
     )
     assert.equal(socket.closed, true)
   })
@@ -724,16 +728,17 @@ test('runServerTurn preserves restart_runtime WebSocket failures without SSE fal
             socket.emit('message', { data: JSON.stringify({
               type: 'error',
               code: 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED',
-              message: 'turn runtime is not configured',
               action: 'restart_runtime',
+              status: 503,
             }) })
           })
           return socket
         },
       }),
       (error) => error?.code === 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED'
-        && error?.message === 'turn runtime is not configured'
-        && error?.action === 'restart_runtime',
+        && error?.message === 'TURN_PERSISTENCE_ADAPTER_NOT_CONFIGURED'
+        && error?.action === 'restart_runtime'
+        && error?.status === 503,
     )
     assert.deepEqual(urls, ['/api/turns/run'])
   })
@@ -2294,7 +2299,14 @@ test('dispatchTurnEvent exposes a paused directory request to the inline authori
         serverRecoveryBlocked: false,
         serverRecoveryKind: null,
         serverRecoveryToolCallId: null,
+        serverRecoveryModelRequestId: null,
         serverRecoveryActionPath: null,
+        serverFailure: null,
+        serverFailureDisplayKey: null,
+        serverPartialText: null,
+        cancelled: false,
+        failed: false,
+        interrupted: false,
         streaming: false,
         turnCompletedAt: 11,
         modelActivity: null,
@@ -2396,7 +2408,13 @@ test('turn failure payloads retain recovery evidence and dispatch it without app
   })
   assert.equal(actions.some((action) => action.type === 'APPEND_TO_LAST_MESSAGE'), false)
   const meta = actions.find((action) => action.type === 'UPDATE_LAST_MESSAGE_META')?.payload
-  assert.deepEqual(meta.serverFailure, payload.error)
+  assert.deepEqual(meta.serverFailure, {
+    code: 'MODEL_TIMEOUT', status: 504, retryable: true, attempts: 2,
+    manualRetryable: true,
+    incompleteReason: 'post_mutation_verification_missing',
+    missingRequirements: ['mutation_readback', 'diff_or_project_check'],
+    taskVerification,
+  })
   assert.equal(meta.serverPartialText, 'durable partial output')
   assert.deepEqual(meta.serverArtifactIds, ['a1', 'a2'])
   assert.equal(meta.failed, true)
@@ -2762,7 +2780,10 @@ test('dispatchTurnEvent atomically maps a recovery attempt to stream reset and c
       serverRecoveryBlocked: false,
       serverRecoveryKind: null,
       serverRecoveryToolCallId: null,
+      serverRecoveryModelRequestId: null,
       serverRecoveryActionPath: null,
+      serverFailureDisplayKey: null,
+      cancelled: false,
       interrupted: false,
       failed: false,
       paused: false,
@@ -3174,6 +3195,9 @@ test('server snapshot restores a paused directory request for inline authorizati
     serverAuthoritative: true,
     toolCalls: [],
     turnCompletedAt: 1,
+    cancelled: false,
+    failed: false,
+    interrupted: false,
     paused: true,
     serverConnectionState: 'paused',
     serverClarification: clarification,
@@ -3256,13 +3280,16 @@ test('server snapshot restores failed, interrupted, and cancelled turn evidence 
     streaming: false,
     serverAuthoritative: true,
     toolCalls: [],
+    serverArtifacts: [],
     turnCompletedAt: 1,
+    cancelled: false,
     failed: true,
+    interrupted: false,
+    paused: false,
+    serverConnectionState: 'failed',
     serverFailure: {
       code: 'MODEL_TIMEOUT',
-      message: 'The model stopped responding.',
       retryable: true,
-      hint: 'Resume the turn.',
     },
     serverPartialText: 'I created the draft before the provider failed.',
     serverArtifactIds: ['draft-1'],
@@ -3274,7 +3301,7 @@ test('server snapshot restores failed, interrupted, and cancelled turn evidence 
   assert.equal(snapshot.messages[1].meta.turnCompletedAt, null)
   assert.equal(snapshot.messages[1].meta.latency, null)
   assert.equal(snapshot.messages[1].meta.serverLastSequence, 9)
-  assert.equal(snapshot.messages[1].meta.failed, undefined)
+  assert.equal(snapshot.messages[1].meta.failed, false)
   assert.equal(snapshot.messages[1].meta.serverPartialText, 'Partial analysis')
   assert.deepEqual(snapshot.messages[1].meta.serverArtifactIds, ['report-1'])
   assert.equal(snapshot.messages[1].meta.serverFailure.code, 'MODEL_CALL_INTERRUPTED')
@@ -3283,8 +3310,8 @@ test('server snapshot restores failed, interrupted, and cancelled turn evidence 
   assert.equal(snapshot.messages[2].meta.streaming, false)
   assert.equal(snapshot.messages[2].meta.turnCompletedAt, 3)
   assert.equal(snapshot.messages[2].meta.serverLastSequence, 11)
-  assert.equal(snapshot.messages[2].meta.failed, undefined)
-  assert.equal(snapshot.messages[2].meta.interrupted, undefined)
+  assert.equal(snapshot.messages[2].meta.failed, false)
+  assert.equal(snapshot.messages[2].meta.interrupted, false)
   assert.equal(snapshot.messages[2].meta.serverPartialText, 'Stopped after saving the draft.')
   assert.deepEqual(snapshot.messages[2].meta.serverArtifactIds, ['cancelled-draft'])
   assert.equal(snapshot.messages[3].meta.interrupted, true)

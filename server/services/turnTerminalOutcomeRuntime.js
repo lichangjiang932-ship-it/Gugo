@@ -98,7 +98,7 @@ export function createTurnTerminalOutcomeRuntime({
             executionLease,
           })
         : null,
-      beforeAppend: atomicTurnBoundary
+      afterAppend: atomicTurnBoundary
         ? null
         : async () => {
             try {
@@ -150,7 +150,7 @@ export function createTurnTerminalOutcomeRuntime({
         iterations: state.checkpointIterations,
         ...usageFields(state),
       }, evidence.boundaryOptions(evidenceOptions, {
-        legacyBeforeAppend: true,
+        legacyAfterAppend: true,
         legacyBestEffort: true,
       }))
       await recordCanaryTerminal('cancelled', null, cancelledAt, partialText)
@@ -411,7 +411,7 @@ export function createTurnTerminalOutcomeRuntime({
       commitEvent: evidence.atomicTurnBoundary
         ? ({ event }) => evidence.commitBoundaryEvent({ event, message: completedMessage })
         : null,
-      beforeAppend: evidence.atomicTurnBoundary
+      afterAppend: evidence.atomicTurnBoundary
         ? null
         : async () => {
             try {
@@ -492,7 +492,7 @@ export function createTurnTerminalOutcomeRuntime({
           iterations: state.checkpointIterations,
           ...usageFields(state),
         }, evidence.boundaryOptions(evidenceOptions, {
-          legacyBeforeAppend: true,
+          legacyAfterAppend: true,
           legacyBestEffort: true,
         }))
       } catch (terminalError) {

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { getDb } from '../db.js'
 import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
+import { optionalSideEffectText as optionalText } from './sideEffectExecutionScope.js'
 
 export const DURABLE_SIDE_EFFECT_TOOL_NAMES = new Set([
   'write_file',
@@ -224,43 +225,9 @@ function requiredText(value, name, maxLength = 500) {
   return normalized
 }
 
-function optionalText(value, maxLength = 500) {
-  const normalized = String(value || '').trim().slice(0, maxLength)
-  return normalized || null
-}
-
-export function createSideEffectScope({ job, step, approvalOrigin, approvalSessionId } = {}) {
-  const ownerId = requiredText(job?.userId, 'ownerId')
-  const jobId = requiredText(job?.id, 'job.id')
-  const stepId = requiredText(step?.id, 'step.id')
-  const availableSessionId = optionalText(approvalSessionId || job?.sessionId)
-  // Production chat entry points declare approvalOrigin='chat' and must always
-  // provide a real session identity. Lower-level Loop callers may label a job as
-  // chat-originated without carrying chat transport context; keep those calls
-  // durable under their explicit job/step identity instead of disabling the
-  // ledger or inventing a shared session.
-  if (approvalOrigin === 'chat' || (job?.origin === 'chat' && availableSessionId)) {
-    const sessionId = requiredText(availableSessionId, 'sessionId')
-    return {
-      ownerId,
-      kind: 'turn',
-      scopeKey: JSON.stringify(['turn', sessionId, jobId]),
-      sessionId,
-      turnId: jobId,
-      jobId: null,
-      stepId,
-    }
-  }
-  return {
-    ownerId,
-    kind: 'job',
-    scopeKey: JSON.stringify(['job', jobId, stepId]),
-    sessionId: optionalText(job?.sessionId),
-    turnId: null,
-    jobId,
-    stepId,
-  }
-}
+// Scope construction remains independent from the SQL-backed ledger transitions.
+// Re-export it here to preserve the ledger's public compatibility surface.
+export { createSideEffectScope } from './sideEffectExecutionScope.js'
 
 function normalizeIdentity({ scope, effectKind = 'tool', toolCallId, idempotencyKey, toolName, args } = {}) {
   if (!scope || !['turn', 'job', 'request'].includes(scope.kind)) throw new TypeError('valid side-effect scope is required')

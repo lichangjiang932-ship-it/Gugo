@@ -390,7 +390,7 @@ function turnEvidenceMeta(message) {
                 : null,
             }),
     serverFailure: failure,
-    serverPartialText: modelAuthoredEvidenceText(message, failure, state),
+    serverPartialText: modelAuthoredEvidenceText(message, context.error, state),
     ...(artifactIds !== undefined && artifactIds.length > 0 ? { serverArtifactIds: artifactIds } : {}),
     ...(deliveryArtifactIds !== undefined && deliveryArtifactIds.length > 0
       ? { serverDeliveryArtifactIds: deliveryArtifactIds }

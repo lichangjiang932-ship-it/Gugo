@@ -180,6 +180,7 @@ export function createTurnTerminalEvidenceRuntime({
 
   function boundaryOptions(options, {
     legacyBeforeAppend = false,
+    legacyAfterAppend = false,
     legacyBestEffort = false,
   } = {}) {
     if (atomicTurnBoundary) {
@@ -193,13 +194,13 @@ export function createTurnTerminalEvidenceRuntime({
         }),
       }
     }
-    if (legacyBeforeAppend) {
+    if (legacyBeforeAppend || legacyAfterAppend) {
       return {
-        beforeAppend: async (event) => {
+        afterAppend: async (storedEvent) => {
           try {
             await persistEvidence({
               ...options,
-              serverLastSequence: event.sequence,
+              serverLastSequence: storedEvent.sequence,
             })
           } catch (error) {
             if (!legacyBestEffort) throw error
@@ -417,7 +418,7 @@ export function createTurnTerminalEvidenceRuntime({
       retainedLocalFiles,
       iterations,
     }, boundaryOptions(evidenceOptions, {
-      legacyBeforeAppend: true,
+      legacyAfterAppend: true,
       legacyBestEffort: true,
     }))
     await ports.writeRecoveryFailure({

@@ -11,8 +11,13 @@ import {
 } from '../../shared/turnEventProjection.js'
 import { publishAgentEventEnvelope } from '../core/agentEventConsumerRuntime.js'
 import { saveTurnCheckpoint } from './turnCheckpointStore.js'
-import { failureAllowsFailedRetry } from './turnFailedRetryPolicy.js'
 import { findTurnEventFenceError, isTurnEventFenceFailureRecord } from './eventWriteBehind.js'
+import {
+  canonicalCheckpointState,
+  failureAllowsAttempt,
+  storedTurnEventIsTerminal,
+  turnCompletionInvalid,
+} from './turnEventValidation.js'
 
 const subscribers = new Map()
 const DAY_MS = 86_400_000
@@ -81,43 +86,9 @@ function turnEventSequenceInvalid() {
   return error
 }
 
-function failureAllowsAttempt(payloadJson, attemptPayload) {
-  try {
-    return failureAllowsFailedRetry(JSON.parse(payloadJson), attemptPayload)
-  } catch { return false }
-}
-
-function turnCompletionInvalid() {
-  return Object.assign(new Error('turn.completed payload contains incomplete terminal evidence'), {
-    code: 'TURN_COMPLETION_INVALID',
-    status: 409,
-    retryable: false,
-  })
-}
-
-function storedTurnEventIsTerminal(row) {
-  if (row?.type === 'turn.cancelled' || row?.type === 'turn.failed') return true
-  if (row?.type !== 'turn.completed') return false
-  try {
-    return isSuccessfulTurnCompletedEvent({
-      type: row.type,
-      payload: JSON.parse(row.payload_json),
-    })
-  } catch {
-    // A corrupt terminal row must be repaired explicitly rather than extended.
-    return true
-  }
-}
-
-function canonicalCheckpointState(value) {
-  try {
-    const normalized = JSON.parse(JSON.stringify(value))
-    if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) throw new TypeError()
-    return normalized
-  } catch {
-    throw new TypeError('checkpoint state must be JSON-compatible')
-  }
-}
+// Keep pure validation independent from transaction and publication orchestration.
+// This store now owns persistence concerns only.
+// The helpers remain synchronous so transaction behavior is unchanged.
 
 function boundedNumber(value, fallback, { min, max }) {
   const parsed = Number(value)

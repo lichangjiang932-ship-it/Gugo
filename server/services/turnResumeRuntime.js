@@ -17,7 +17,6 @@ import {
   normalizeTurnOptionalId as normalizeOptionalId,
 } from './turnStartRuntime.js'
 import { createTurnResolutionRuntime, TurnEngineError } from './turnResolutionRuntime.js'
-
 function rejectResumeApprovalModeOverride(value) {
   if (value === null || value === undefined) return
   throw new TurnEngineError(

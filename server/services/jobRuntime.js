@@ -29,12 +29,15 @@ import {
   clearCompletedJobOutcomeDiagnostics,
   clearResumedJobOutcomeDiagnostics,
   findNextRunnableStep,
-  mergePersistedJobOutcomeFields,
-  normalizeJobLocalFileReceipts,
   persistedJobOutcomeFields,
   resolveWorkflowState,
   stepRequiresPlanApproval,
 } from './jobWorkflow.js'
+import {
+  latestPersistedOutcomeFields,
+  persistJobOutcomeDiagnostics,
+  projectJobForClient,
+} from './jobRuntimeProjection.js'
 import { completeManualJobTransition, emitTaskReviewEvent, persistRejectedStepResult, runVerificationRepairLoop } from './jobAcceptanceRuntime.js'
 import { applyRuntimeTaskPlanGuard } from './taskPlanGuard.js'
 import {
@@ -65,6 +68,7 @@ import {
   wrapJobModelFailure,
 } from './jobModelFailure.js'
 import { persistJobStepFailure } from './jobStepFailureRuntime.js'
+import { runJobRuntimeTick } from './jobRuntimeTick.js'
 export { recoverInterruptedJobs } from './jobRuntimeLifecycle.js'
 export { runPlanningExploration, selectPlanningToolSpecs } from './jobPlanningExplorationRuntime.js'
 export { createDefaultExecuteStep }
@@ -75,120 +79,6 @@ const JOB_CANCELLED_MESSAGE = '任务已由用户终止'
 // ★ 注意:awaiting_approval 故意不在这里。等人的 job 崩溃恢复时若被重排成 queued,
 // 会把已经批准执行过的动作重跑一遍(发消息/改日历这类不可撤销动作尤其危险)。
 const SUSPENDED_JOB_STATUSES = new Set(['waiting', 'awaiting_approval'])
-
-function persistJobOutcomeDiagnostics(jobId, {
-  userId = null,
-  stepId = null,
-  reason = null,
-  nextAction = null,
-  status = 'failed',
-} = {}) {
-  const snapshot = getJobWithChildren(jobId, { userId })
-  if (!snapshot) return null
-  const diagnostics = buildJobOutcomeDiagnostics(snapshot, { reason, nextAction, status })
-  const targetStep = (stepId
-    ? snapshot.steps.find((step) => step.id === stepId)
-    : null)
-    || [...snapshot.steps].reverse().find((step) => step.kind === 'finalize')
-    || snapshot.steps.at(-1)
-  if (targetStep) {
-    const priorOutput = targetStep.output && typeof targetStep.output === 'object' && !Array.isArray(targetStep.output)
-      ? targetStep.output
-      : {}
-    updateJobStep(targetStep.id, { output: { ...priorOutput, ...diagnostics } })
-  }
-  return diagnostics
-}
-
-function latestPersistedOutcomeFields(steps) {
-  return mergePersistedJobOutcomeFields(
-    ...(Array.isArray(steps) ? steps : []).map((step) => step?.output),
-  )
-}
-
-function currentStatusEventOutcomeFields(job) {
-  const events = Array.isArray(job?.events) ? job.events : []
-  const lastEvent = events.at(-1)
-  const expectedTypes = {
-    awaiting_approval: new Set(['awaiting_approval']),
-    cancelled: new Set(['cancelled']),
-    completed: new Set(['completed']),
-    failed: new Set(['failed']),
-    waiting: new Set(['awaiting_user', 'plan_approval_required', 'plan_proposed', 'sleeping']),
-  }[job?.status]
-  if (!expectedTypes?.has(lastEvent?.type)) return {}
-  return persistedJobOutcomeFields(lastEvent.payload)
-}
-
-function projectPersistedOutcomeDiagnostics(diagnostics, persisted) {
-  const projected = { ...diagnostics }
-  for (const field of ['incompleteReason', 'taskVerification', 'retryable', 'manualRetryable']) {
-    if (Object.hasOwn(persisted, field)) projected[field] = persisted[field]
-  }
-  if (Array.isArray(persisted.missingRequirements) && persisted.missingRequirements.length > 0) {
-    projected.missingRequirements = persisted.missingRequirements
-  }
-  const localFiles = normalizeJobLocalFileReceipts({
-    verifiedLocalFiles: persisted.verifiedLocalFiles,
-    retainedLocalFiles: persisted.retainedLocalFiles,
-  })
-  if (Object.hasOwn(persisted, 'verifiedLocalFiles')) {
-    projected.verifiedLocalFiles = localFiles.verifiedLocalFiles
-  }
-  if (Object.hasOwn(persisted, 'retainedLocalFiles')) {
-    projected.retainedLocalFiles = localFiles.retainedLocalFiles
-  }
-  projected.nextAction = persisted.nextAction || projected.nextAction
-  return projected
-}
-
-function projectJobForClient(job) {
-  if (!job) return null
-  const persisted = mergePersistedJobOutcomeFields(
-    latestPersistedOutcomeFields(job.steps),
-    currentStatusEventOutcomeFields(job),
-  )
-  if (job.status === 'completed') {
-    const delivery = buildFinalOutput(job)
-    if (delivery.complete !== false) {
-      return { ...job, ...delivery, status: 'completed', complete: true, error: null }
-    }
-    const reason = String(
-      delivery.issues?.[0]
-        || delivery.incompleteReason
-        || delivery.summary
-        || '任务交付未全部完成',
-    ).trim()
-    const diagnostics = projectPersistedOutcomeDiagnostics(buildJobOutcomeDiagnostics(job, {
-      reason,
-      nextAction: persisted.nextAction || 'retry_job',
-      status: 'failed',
-    }), persisted)
-    return {
-      ...job,
-      persistedStatus: 'completed',
-      ...diagnostics,
-      status: 'failed',
-      complete: false,
-      error: diagnostics.reason || reason,
-    }
-  }
-  if (['failed', 'cancelled', 'waiting', 'awaiting_approval'].includes(job.status)) {
-    const diagnostics = projectPersistedOutcomeDiagnostics(buildJobOutcomeDiagnostics(job, {
-      reason: persisted.reason || job.error,
-      nextAction: persisted.nextAction || {
-        awaiting_approval: 'review_approval',
-        waiting: 'provide_input',
-      }[job.status] || 'retry_job',
-      status: job.status,
-    }), persisted)
-    return {
-      ...job,
-      ...diagnostics,
-    }
-  }
-  return job
-}
 
 function hasRejectedCompletedOutcome(step) {
   if (step?.status !== 'completed') return false
@@ -305,6 +195,54 @@ function newId(prefix) {
 
 // ★ D6: job 进入这些终态事件后,从 jobUserCache 淘汰对应条目(防内存泄漏)。
 const TERMINAL_EVENT_TYPES = new Set(['completed', 'failed', 'cancelled', 'aborted'])
+
+const JOB_RUNTIME_TICK_DEPENDENCIES = {
+  claimDueJobWakes,
+  appendJobEvent,
+  listRecoverableJobs,
+  SUSPENDED_JOB_STATUSES,
+  createJobTickBudgetScope,
+  getJobRow,
+  getJobWithChildren,
+  listJobSteps,
+  updateJob,
+  updateJobStep,
+  clearResumedJobOutcomeDiagnostics,
+  latestPersistedOutcomeFields,
+  JOB_CANCELLED_MESSAGE,
+  deriveJobProgress,
+  persistJobOutcomeDiagnostics,
+  notifyJobTerminal,
+  notifyJobStopHook,
+  findNextRunnableStep,
+  resolveWorkflowState,
+  resolveJobPlanApproval,
+  buildJobOutcomeDiagnostics,
+  buildJobPlanProposalPayload,
+  JOB_PLAN_APPROVAL_CONTRACT,
+  JOB_PLAN_APPROVAL_VERSION,
+  createNotification,
+  isModelReadinessError,
+  dispatchHooks,
+  buildFinalOutput,
+  clearCompletedJobOutcomeDiagnostics,
+  userCancellationError,
+  claimJobSteering,
+  acknowledgeJobSteering,
+  releaseJobSteeringLease,
+  runVerificationRepairLoop,
+  lostJobExecutionLease,
+  hasExplicitIncompleteStepOutput,
+  scheduleJobWake,
+  cancelJobWake,
+  persistRejectedStepResult,
+  stepRequiresPlanApproval,
+  getApprovalMode,
+  emitTaskReviewEvent,
+  persistJobStepFailure,
+  TERMINAL_JOB_STATUSES,
+}
+
 
 export class JobRuntime {
   constructor({
@@ -662,6 +600,10 @@ export class JobRuntime {
   retryJob(jobId, { userId } = {}) {
     let currentJob = this.getJob(jobId, { userId })
     if (!currentJob) return null
+    // A pending plan approval is the authoritative blocker. Surface its
+    // stable error before the generic retry-status guard so retry routes
+    // cannot obscure the security decision behind JOB_RETRY_STATUS_INVALID.
+    assertJobPlanRetryAllowed(currentJob)
     if (!RETRYABLE_JOB_STATUSES.has(currentJob.status)) {
       const error = new Error(`job cannot be retried from status ${currentJob.status}`)
       error.code = 'JOB_RETRY_STATUS_INVALID'
@@ -679,6 +621,7 @@ export class JobRuntime {
     }
     try {
       currentJob = this.getJob(jobId, { userId })
+      if (currentJob) assertJobPlanRetryAllowed(currentJob)
       if (!currentJob || !RETRYABLE_JOB_STATUSES.has(currentJob.status)) {
         const error = new Error(`job cannot be retried from status ${currentJob?.status || 'missing'}`)
         error.code = 'JOB_RETRY_STATUS_INVALID'
@@ -689,7 +632,6 @@ export class JobRuntime {
       if (deliveryRetryBlocker) {
         throw retryStatusError('JOB_RETRY_STATUS_INVALID', deliveryRetryBlocker)
       }
-      assertJobPlanRetryAllowed(currentJob)
       const modelBinding = this.resolveModelBinding({
         userId,
         providerId: currentJob.modelProviderId,
@@ -917,6 +859,7 @@ export class JobRuntime {
     let job = this.getJob(jobId, { userId })
     let step = job?.steps.find((item) => item.id === stepId)
     if (!job || !step) return null
+    assertJobPlanRetryAllowed(job, step)
     let deliveryRecoverySteps = deliveryProjectionRecoverySteps(job)
     let deliveryRecoveryStepIds = new Set(deliveryRecoverySteps.map((item) => item.id))
     if (!RETRYABLE_JOB_STATUSES.has(job.status)
@@ -943,6 +886,7 @@ export class JobRuntime {
     try {
       job = this.getJob(jobId, { userId })
       step = job?.steps.find((item) => item.id === stepId)
+      if (job && step) assertJobPlanRetryAllowed(job, step)
       const deliveryRetryBlocker = deliveryProjectionRetryBlocker(job)
       if (deliveryRetryBlocker) {
         throw retryStatusError('JOB_STEP_RETRY_STATUS_INVALID', deliveryRetryBlocker)
@@ -958,7 +902,6 @@ export class JobRuntime {
           `job step cannot be retried from ${job?.status || 'missing'}/${step?.status || 'missing'}`,
         )
       }
-      assertJobPlanRetryAllowed(job, step)
       const modelBinding = this.resolveModelBinding({
         userId,
         providerId: job.modelProviderId,
@@ -1044,725 +987,8 @@ export class JobRuntime {
   }
 
   async _runOneTick() {
-    for (const wake of claimDueJobWakes()) {
-      this.jobUserCache.set(wake.jobId, wake.userId)
-      this.emit(appendJobEvent({
-        jobId: wake.jobId,
-        stepId: wake.stepId,
-        type: 'wake_fired',
-        message: 'Scheduled wake time reached; resuming the same durable job',
-        payload: {
-          wakeAt: wake.wakeAt,
-          ...(wake.diagnostics || {}),
-          reason: wake.reason || wake.diagnostics?.reason || null,
-          nextAction: 'resume_execution',
-        },
-      }))
-    }
-    const jobs = listRecoverableJobs()
-    const runnableJobs = jobs.filter((candidate) => (
-      !SUSPENDED_JOB_STATUSES.has(candidate.status) && !this.activeJobIds.has(candidate.id)
-    ))
-    const candidates = [
-      ...runnableJobs.filter((candidate) => candidate.status === 'cancel_requested'),
-      ...runnableJobs.filter((candidate) => candidate.status === 'queued'),
-      ...runnableJobs.filter((candidate) => !['cancel_requested', 'queued'].includes(candidate.status)),
-    ]
-    const job = candidates.find((candidate) => this.runtimeCore.lease.claim({ jobId: candidate.id }))
-    if (!job) return false
-    const tickBudget = createJobTickBudgetScope(job)
-    const controller = new AbortController()
-    this.activeJobIds.add(job.id)
-    this.activeControllers.set(job.id, controller)
-    const leaseScope = { jobId: job.id }
-    const releaseExecutionLease = this.runtimeCore.lease.hold(leaseScope, controller)
-    const commitOwned = (callback, { allowCancellation = false } = {}) => {
-      const outcome = this.runtimeCore.lease.runIfOwned(leaseScope, () => {
-        const current = getJobRow(job.id)
-        if (!current) return false
-        // requestCancel intentionally does not wait for the execution lease so
-        // it can interrupt a long-running model/tool call. Once that durable
-        // request exists, an older tick must not overwrite it with completed,
-        // failed, waiting, or running state.
-        if (!allowCancellation
-          && (current.cancelRequested || current.status === 'cancel_requested')) {
-          return false
-        }
-        callback(current)
-        return true
-      })
-      return outcome?.owned === true && outcome.value === true
-    }
-    const leaseIsOwned = () => this.runtimeCore.lease.owns(leaseScope)
-    try {
-    const abandonedSteps = ['planning', 'running'].includes(job.status)
-      ? listJobSteps(job.id).filter((step) => step.status === 'running')
-      : []
-    if (abandonedSteps.length > 0) {
-      const recoveredDiagnostics = latestPersistedOutcomeFields(abandonedSteps)
-      if (!commitOwned(() => {
-        for (const step of abandonedSteps) {
-          updateJobStep(step.id, {
-            status: 'queued',
-            output: clearResumedJobOutcomeDiagnostics(step.output),
-            error: null,
-            startedAt: null,
-            finishedAt: null,
-          })
-        }
-        this.emit(appendJobEvent({
-          jobId: job.id,
-          type: 'recovered',
-          message: 'Expired execution owner was replaced; resuming from the durable checkpoint',
-          payload: {
-            ...recoveredDiagnostics,
-            reason: 'execution_lease_recovered',
-            nextAction: 'resume_execution',
-          },
-        }))
-      })) return true
-    }
-    if (job.cancelRequested || job.status === 'cancel_requested') {
-      if (!commitOwned(() => {
-        for (const step of listJobSteps(job.id)) {
-          if (['queued', 'running'].includes(step.status)) {
-            updateJobStep(step.id, {
-              status: 'cancelled',
-              error: JOB_CANCELLED_MESSAGE,
-              finishedAt: Date.now(),
-            })
-          }
-        }
-        updateJob(job.id, {
-          status: 'cancelled',
-          error: JOB_CANCELLED_MESSAGE,
-          progress: deriveJobProgress(listJobSteps(job.id)),
-          finishedAt: Date.now(),
-        })
-        const diagnostics = persistJobOutcomeDiagnostics(job.id, {
-          userId: job.userId,
-          reason: JOB_CANCELLED_MESSAGE,
-          nextAction: 'retry_job',
-          status: 'cancelled',
-        })
-        this.emit(appendJobEvent({
-          jobId: job.id,
-          type: 'cancelled',
-          message: JOB_CANCELLED_MESSAGE,
-          payload: {
-            code: 'JOB_CANCEL_REQUESTED',
-            cancellationReason: 'user_requested',
-            ...(diagnostics || {}),
-          },
-        }))
-      }, { allowCancellation: true })) return true
-      notifyJobTerminal({ ...job, error: JOB_CANCELLED_MESSAGE }, {
-        status: 'cancelled',
-        body: JOB_CANCELLED_MESSAGE,
-      })
-      notifyJobStopHook(job, { status: 'cancelled', error: JOB_CANCELLED_MESSAGE })
-      return true
-    }
-
-    const approvalCandidate = findNextRunnableStep(listJobSteps(job.id))
-    if (approvalCandidate && approvalCandidate.kind !== 'plan') {
-      let pausedForPlanApproval = false
-      let planPausePayload = null
-      if (!commitOwned(() => {
-        const currentJob = getJobWithChildren(job.id)
-        const authorization = resolveJobPlanApproval(currentJob)
-        if (!authorization.required || authorization.authorized) return
-
-        pausedForPlanApproval = true
-        updateJob(job.id, { status: 'waiting', error: null, finishedAt: null })
-        const pauseDiagnostics = buildJobOutcomeDiagnostics(currentJob, {
-          reason: authorization.reason || 'plan_approval_required',
-          nextAction: 'approve_plan',
-          status: 'waiting',
-        })
-        if (authorization.needsNewProposal) {
-          const proposalPayload = {
-            ...buildJobPlanProposalPayload(currentJob, {
-              planGuard: authorization.proposal?.payload?.planGuard || null,
-              reason: authorization.reason,
-              supersedesProposalEventId: authorization.proposal?.id || null,
-            }),
-            ...pauseDiagnostics,
-          }
-          planPausePayload = proposalPayload
-          this.emit(appendJobEvent({
-            jobId: job.id,
-            type: 'plan_proposed',
-            message: 'Plan changed after approval; review the refreshed plan before execution',
-            payload: proposalPayload,
-          }))
-        } else {
-          planPausePayload = {
-            ...pauseDiagnostics,
-            contract: JOB_PLAN_APPROVAL_CONTRACT,
-            version: JOB_PLAN_APPROVAL_VERSION,
-            proposalEventId: authorization.proposal?.id || null,
-            planDigest: authorization.currentPlanDigest,
-          }
-          this.emit(appendJobEvent({
-            jobId: job.id,
-            type: 'plan_approval_required',
-            message: 'A durable approval for the current plan is required before execution',
-            payload: planPausePayload,
-          }))
-        }
-      })) return true
-      if (pausedForPlanApproval) {
-        try {
-          createNotification({
-            userId: job.userId,
-            kind: 'job',
-            title: job.title || job.id,
-            body: '计划需要重新确认，批准后才会继续执行。',
-            link: `/task?job=${encodeURIComponent(job.id)}`,
-            data: {
-              jobId: job.id,
-              ...(planPausePayload || {}),
-              status: 'waiting',
-              planProposed: true,
-            },
-          })
-        } catch (error) {
-          console.error('[jobs] refreshed plan notification failed:', error?.stack || error)
-        }
-        return true
-      }
-    }
-
-    let modelBinding
-    try {
-      modelBinding = this.resolveModelBinding({
-        userId: job.userId,
-        providerId: job.modelProviderId,
-        modelName: job.modelName,
-        configRevision: job.modelConfigRevision,
-        requirePersistedBinding: true,
-      })
-    } catch (error) {
-      if (!isModelReadinessError(error)) throw error
-      const message = error?.message || '任务绑定的模型 Provider 已不可用'
-      if (!commitOwned(() => {
-        updateJob(job.id, { status: 'failed', error: message, finishedAt: Date.now() })
-        const diagnostics = persistJobOutcomeDiagnostics(job.id, {
-          userId: job.userId,
-          reason: message,
-          nextAction: error.action || 'retry_job',
-        })
-        this.emit(appendJobEvent({
-          jobId: job.id,
-          type: 'failed',
-          message,
-          payload: {
-            code: error.code,
-            action: error.action || null,
-            providerId: error.providerId || job.modelProviderId || null,
-            modelName: error.modelName || job.modelName || null,
-            configRevision: error.configRevision ?? job.modelConfigRevision ?? null,
-            nextAction: error.action || 'retry_job',
-            ...(diagnostics || {}),
-          },
-        }))
-      })) return true
-      notifyJobTerminal({ ...job, error: message }, { status: 'failed', body: message })
-      notifyJobStopHook(job, { status: 'failed', error: message })
-      return true
-    }
-
-    if (job.status === 'queued') {
-      let promptHook = null
-      if (!job.startedAt) {
-        try {
-          promptHook = await dispatchHooks({
-            userId: job.userId,
-            event: 'user_prompt_submit',
-            tool: 'job',
-            args: { prompt: job.prompt, jobId: job.id },
-            sessionId: job.id,
-            requestId: job.id,
-            hookInvocationId: `job:${job.id}:user_prompt_submit`,
-          })
-        } catch (error) {
-          promptHook = { allow: false, reason: error?.message || 'job prompt hook failed' }
-        }
-        if (lostJobExecutionLease(controller.signal) || !leaseIsOwned()) return true
-        if (!promptHook.allow) {
-          const reason = promptHook.reason || 'job prompt rejected by hook'
-          if (!commitOwned(() => {
-            updateJob(job.id, { status: 'failed', error: reason, finishedAt: Date.now() })
-            const diagnostics = persistJobOutcomeDiagnostics(job.id, {
-              userId: job.userId,
-              reason,
-              nextAction: 'retry_job',
-            })
-            this.emit(appendJobEvent({
-              jobId: job.id,
-              type: 'failed',
-              message: reason,
-              payload: diagnostics,
-            }))
-          })) return true
-          notifyJobTerminal({ ...job, error: reason }, { status: 'failed', body: reason })
-          notifyJobStopHook(job, { status: 'failed', error: reason })
-          return true
-        }
-      }
-      if (!commitOwned(() => {
-        if (typeof promptHook?.replacementArgs?.prompt === 'string') {
-          updateJob(job.id, { prompt: promptHook.replacementArgs.prompt })
-        }
-        updateJob(job.id, { status: 'running', startedAt: job.startedAt || Date.now() })
-        this.emit(appendJobEvent({
-          jobId: job.id,
-          type: 'started',
-          message: '任务开始执行',
-        }))
-      })) return true
-    }
-
-    const currentSteps = listJobSteps(job.id)
-    const nextStep = findNextRunnableStep(currentSteps)
-    if (!nextStep) {
-      const resolution = resolveWorkflowState(currentSteps)
-      const workflowCompleted = resolution.state === 'completed'
-      let completed = workflowCompleted
-      let terminalReason = resolution.reason
-      if (!commitOwned(() => {
-        const finalOutput = workflowCompleted
-          ? buildFinalOutput(getJobWithChildren(job.id, { userId: job.userId }))
-          : null
-        completed = workflowCompleted && finalOutput?.complete !== false
-        terminalReason = completed
-          ? null
-          : workflowCompleted
-            ? finalOutput?.summary || finalOutput?.issues?.[0] || '任务交付未全部完成'
-            : resolution.reason
-        updateJob(job.id, completed
-          ? { status: 'completed', progress: 100, error: null, finishedAt: Date.now() }
-          : {
-              status: 'failed',
-              error: terminalReason,
-              progress: deriveJobProgress(currentSteps),
-              finishedAt: Date.now(),
-            })
-        const diagnostics = completed ? null : persistJobOutcomeDiagnostics(job.id, {
-          userId: job.userId,
-          reason: terminalReason,
-          nextAction: 'retry_job',
-        })
-        const terminalPayload = completed
-          ? { ...finalOutput, status: 'completed', complete: true, error: null }
-          : diagnostics
-        if (completed) {
-          for (const step of listJobSteps(job.id)) {
-            const output = clearCompletedJobOutcomeDiagnostics(step.output)
-            if (output !== step.output) updateJobStep(step.id, { output })
-          }
-        }
-        this.emit(appendJobEvent({
-          jobId: job.id,
-          type: completed ? 'completed' : 'failed',
-          message: completed ? '任务已完成' : terminalReason,
-          ...(terminalPayload ? { payload: terminalPayload } : {}),
-        }))
-      })) return true
-      notifyJobTerminal({
-        ...job,
-        error: completed ? null : terminalReason,
-      }, {
-        status: completed ? 'completed' : 'failed',
-        body: completed ? '任务已完成' : terminalReason,
-      })
-      notifyJobStopHook(job, {
-        status: completed ? 'completed' : 'failed',
-        error: completed ? null : terminalReason,
-      })
-      return true
-    }
-
-    if (!commitOwned(() => {
-      updateJobStep(nextStep.id, {
-        status: 'running',
-        startedAt: nextStep.startedAt || Date.now(),
-      })
-      this.emit(appendJobEvent({
-        jobId: job.id,
-        stepId: nextStep.id,
-        type: 'step_started',
-        message: `开始:${nextStep.title}`,
-      }))
-    })) return true
-
-    try {
-      // 直接传 freshJob(已经包含 userId),不再做权限过滤--
-      // tick 是服务端内部调度,不是面向用户的查询。
-      const freshJob = getJobWithChildren(job.id)
-      if (freshJob?.cancelRequested || freshJob?.status === 'cancel_requested') {
-        controller.abort(userCancellationError('JOB_CANCEL_REQUESTED', 'Cancelled by user'))
-      }
-      const executeCurrentStep = (stepToExecute) => tickBudget.run(() => this.executeStep({
-        job: getJobWithChildren(job.id) || freshJob,
-        step: stepToExecute,
-        signal: controller.signal,
-        modelEnv: modelBinding.env,
-        claimSteering: () => claimJobSteering({ jobId: job.id, userId: job.userId }),
-        acknowledgeSteering: (leaseId) => {
-          const count = acknowledgeJobSteering({ jobId: job.id, userId: job.userId, leaseId })
-          if (count > 0) {
-            this.emit(appendJobEvent({
-              jobId: job.id,
-              stepId: nextStep.id,
-              type: 'steering_consumed',
-              message: 'User steering injected into the engine loop',
-              payload: { count },
-            }))
-          }
-          return count
-        },
-        releaseSteering: (leaseId) => releaseJobSteeringLease({
-          jobId: job.id,
-          userId: job.userId,
-          leaseId,
-        }),
-        commitCheckpoint: (save) => {
-          const outcome = this.runtimeCore.lease.runIfOwned(leaseScope, save)
-          return outcome?.owned ? outcome.value : null
-        },
-      }))
-      let result = await executeCurrentStep(nextStep)
-      if (lostJobExecutionLease(controller.signal) || !leaseIsOwned()) return true
-
-      const repair = await runVerificationRepairLoop({
-        initialResult: result,
-        nextStep,
-        job,
-        executeCurrentStep,
-        leaseIsValid: () => !lostJobExecutionLease(controller.signal) && leaseIsOwned(),
-        commitOwned,
-        checkpoint: this.runtimeCore.checkpoint,
-        emit: this.emit.bind(this),
-      })
-      if (repair.leaseLost) return true
-      result = repair.result
-      const { repairAttempt } = repair
-      if (!result?.paused && !result?.truncated && hasExplicitIncompleteStepOutput(result?.output)) {
-        result = {
-          ...result,
-          ok: false,
-          incomplete: true,
-          truncated: true,
-          incompleteReason: String(
-            result.output.incompleteReason
-              || result.reason
-              || '步骤输出仍有未完成条件',
-          ).trim(),
-        }
-      }
-      // ★ 截断(需澄清 / 预算耗尽):不是失败也不是成功,如实标记并通知用户,
-      // 不能再像以前那样被吞成 ok:true 假装完成。
-      if (result?.paused) {
-        const clarification = result.clarification || {}
-        const question = clarification.question || 'The task needs more information before it can continue.'
-        const wakeAt = Number(clarification.wakeAt)
-        const sleeping = Number.isFinite(wakeAt)
-        let waitingPayload = null
-        if (!commitOwned(() => {
-          updateJobStep(nextStep.id, {
-            status: 'queued',
-            output: result?.output ?? null,
-            error: null,
-            startedAt: null,
-            finishedAt: null,
-          })
-          updateJob(job.id, {
-            status: 'waiting',
-            error: null,
-            progress: deriveJobProgress(listJobSteps(job.id)),
-            finishedAt: null,
-          })
-          if (sleeping) {
-            scheduleJobWake({
-              jobId: job.id,
-              stepId: nextStep.id,
-              userId: job.userId,
-              wakeAt,
-              reason: clarification.why || null,
-            })
-          }
-          const diagnostics = persistJobOutcomeDiagnostics(job.id, {
-            userId: job.userId,
-            stepId: nextStep.id,
-            reason: clarification.why || question,
-            nextAction: sleeping ? 'wait_for_wake' : 'provide_input',
-            status: 'waiting',
-          })
-          waitingPayload = sleeping
-            ? { wakeAt, ...(diagnostics || {}) }
-            : { clarification, ...(diagnostics || {}) }
-          this.emit(appendJobEvent({
-            jobId: job.id,
-            stepId: nextStep.id,
-            type: sleeping ? 'sleeping' : 'awaiting_user',
-            message: question,
-            payload: waitingPayload,
-          }))
-        })) return true
-        if (sleeping) return true
-        try {
-          createNotification({
-            userId: job.userId,
-            kind: 'job',
-            title: job.title || job.id,
-            body: question,
-            link: `/task?job=${encodeURIComponent(job.id)}`,
-            data: { jobId: job.id, ...(waitingPayload || {}), status: 'waiting' },
-          })
-        } catch (error) {
-          // ★ 通知插入失败以前只 console.error 就完事了。
-          //
-          // 但 waiting 是个「看起来像死了」的状态:job 不再被 tick 调度,
-          // 界面上没有任何动静。用户唯一能知道「它在等我回话」的渠道就是这条通知 ——
-          // 通知没发出去,用户就只会觉得任务做到一半没后续了。
-          // 至少把失败本身落成一个事件,让任务详情页能显示出来。
-          console.error('[jobs] clarification notification failed:', error?.stack || error)
-          try {
-            this.emit(appendJobEvent({
-              jobId: job.id,
-              stepId: nextStep.id,
-              type: 'notification_failed',
-              message: `${question}（提醒发送失败，请留意本页面）`,
-              payload: {
-                ...(waitingPayload || {}),
-                notificationKind: 'job_clarification',
-                clarification,
-              },
-            }))
-          } catch {
-            /* 事件也写不进去就真没别的办法了,不要再往上抛 */
-          }
-        }
-        return true
-      }
-      if (result?.truncated) {
-        const incompleteReason = String(result.incompleteReason || result.reason || '').trim()
-        const why = result.paused
-          ? `需要澄清:${result.clarification?.question || '模型请求用户补充信息'}`
-          : result.interrupted
-            ? `中断:${result.reason || '模型调用出错'}（已保留部分进展，可点重试从断点继续）`
-            : result.noProgress
-              ? `无进展:${result.reason || '工具调用反复失败或重复'}`
-              : result.budgetExceeded
-                ? `预算耗尽:${result.reason || '工具调用次数达上限'}`
-                : `任务未完成:${incompleteReason || '仍有完成条件尚未满足'}`
-        if (!commitOwned(() => {
-          updateJobStep(nextStep.id, {
-            status: 'failed',
-            output: result?.output ?? null,
-            error: why,
-            finishedAt: Date.now(),
-          })
-          updateJob(job.id, {
-            status: 'failed',
-            error: why,
-            progress: deriveJobProgress(listJobSteps(job.id)),
-            finishedAt: Date.now(),
-          })
-          cancelJobWake({ jobId: job.id, userId: job.userId })
-          const diagnostics = persistJobOutcomeDiagnostics(job.id, {
-            userId: job.userId,
-            stepId: nextStep.id,
-            reason: why,
-            nextAction: 'retry_step',
-          })
-          this.emit(appendJobEvent({
-            jobId: job.id,
-            stepId: nextStep.id,
-            type: 'failed',
-            message: why,
-            payload: {
-              code: result.interrupted
-                ? 'JOB_STEP_INTERRUPTED'
-                : result.noProgress
-                  ? 'JOB_STEP_NO_PROGRESS'
-                  : result.budgetExceeded
-                    ? 'JOB_STEP_BUDGET_EXHAUSTED'
-                    : 'JOB_STEP_INCOMPLETE',
-              retryable: result.retryable !== false,
-              ...(typeof result.manualRetryable === 'boolean'
-                ? { manualRetryable: result.manualRetryable }
-                : {}),
-              ...(diagnostics || {}),
-            },
-          }))
-        })) return true
-        // ★ 不再删 checkpoint。
-        //
-        // 原来无论什么原因截断都把 checkpoint 删掉,于是「有一份完整可用的断点」
-        // 和「retryStep 从零重跑」同时成立 —— 预算已经烧掉一半的 job 重试时
-        // 又要把所有 read 重做一遍,然后再次超预算。
-        // 现在保留断点,retryStep 才能真的「从停下的地方继续」。
-        // (用户主动取消的路径仍然删除,见下面的 cancelled 分支。)
-        this.runtimeCore.approval.release({ jobId: job.id, userId: job.userId })
-        notifyJobTerminal({ ...job, error: why }, { status: 'failed', body: why })
-        notifyJobStopHook(job, { status: 'failed', error: why, stepId: nextStep.id })
-        return true
-      }
-      if (result?.ok === false) {
-        persistRejectedStepResult({
-          result,
-          repairAttempt,
-          job,
-          nextStep,
-          runtimeCore: this.runtimeCore,
-          commitOwned,
-          emit: this.emit.bind(this),
-        })
-        return true
-      }
-      const requiresPlanApproval = stepRequiresPlanApproval(nextStep, getApprovalMode({ userId: job.userId }))
-      let planProposalPayload = null
-      if (!commitOwned(() => {
-        updateJobStep(nextStep.id, {
-          status: 'completed',
-          output: result?.output ?? null,
-          finishedAt: Date.now(),
-        })
-        this.runtimeCore.checkpoint.clear({ jobId: job.id, stepId: nextStep.id, userId: job.userId })
-        cancelJobWake({ jobId: job.id, userId: job.userId })
-        const updatedSteps = listJobSteps(job.id)
-        updateJob(job.id, { progress: deriveJobProgress(updatedSteps) })
-        emitTaskReviewEvent({ emit: this.emit.bind(this), jobId: job.id, stepId: nextStep.id, acceptance: result?.acceptance, repairAttempt })
-        this.emit(appendJobEvent({
-          jobId: job.id,
-          stepId: nextStep.id,
-          type: 'step_completed',
-          message: `完成:${nextStep.title}`,
-        }))
-        if (requiresPlanApproval) {
-          const plannedJob = this.getJob(job.id, { userId: job.userId })
-          const proposalPayload = {
-            ...buildJobPlanProposalPayload(plannedJob, {
-              planGuard: nextStep.input?.planGuard || null,
-            }),
-            ...buildJobOutcomeDiagnostics(plannedJob, {
-              reason: 'plan_approval_required',
-              nextAction: 'approve_plan',
-              status: 'waiting',
-            }),
-          }
-          planProposalPayload = proposalPayload
-          updateJob(job.id, { status: 'waiting', error: null, finishedAt: null })
-          this.emit(appendJobEvent({
-            jobId: job.id,
-            stepId: nextStep.id,
-            type: 'plan_proposed',
-            message: 'Plan proposed; waiting for explicit approval before execution',
-            payload: proposalPayload,
-          }))
-        }
-      })) return true
-      if (requiresPlanApproval) {
-        try {
-          createNotification({
-            userId: job.userId,
-            kind: 'job',
-            title: job.title || job.id,
-            body: '计划已准备好，批准后才会开始执行。',
-            link: `/task?job=${encodeURIComponent(job.id)}`,
-            data: {
-              jobId: job.id,
-              ...(planProposalPayload || {}),
-              status: 'waiting',
-              planProposed: true,
-            },
-          })
-        } catch (error) {
-          console.error('[jobs] plan notification failed:', error?.stack || error)
-        }
-        return true
-      }
-    } catch (error) {
-      if (lostJobExecutionLease(controller.signal, error) || !leaseIsOwned()) return true
-      const latestJob = getJobWithChildren(job.id)
-      const cancelled = controller.signal.aborted || latestJob?.cancelRequested || latestJob?.status === 'cancel_requested'
-      if (cancelled) {
-        if (!commitOwned(() => {
-          for (const step of listJobSteps(job.id)) {
-            if (['queued', 'running'].includes(step.status)) {
-              updateJobStep(step.id, {
-                status: 'cancelled',
-                error: JOB_CANCELLED_MESSAGE,
-                finishedAt: Date.now(),
-              })
-            }
-          }
-          updateJob(job.id, {
-            status: 'cancelled',
-            error: JOB_CANCELLED_MESSAGE,
-            progress: deriveJobProgress(listJobSteps(job.id)),
-            finishedAt: Date.now(),
-          })
-          this.runtimeCore.checkpoint.clear({ jobId: job.id, stepId: nextStep.id, userId: job.userId })
-          cancelJobWake({ jobId: job.id, userId: job.userId })
-          const diagnostics = persistJobOutcomeDiagnostics(job.id, {
-            userId: job.userId,
-            stepId: nextStep.id,
-            reason: JOB_CANCELLED_MESSAGE,
-            nextAction: 'retry_job',
-            status: 'cancelled',
-          })
-          this.emit(appendJobEvent({
-            jobId: job.id,
-            stepId: nextStep.id,
-            type: 'cancelled',
-            message: JOB_CANCELLED_MESSAGE,
-            payload: {
-              code: 'JOB_CANCEL_REQUESTED',
-              cancellationReason: 'user_requested',
-              ...(diagnostics || {}),
-            },
-          }))
-        }, { allowCancellation: true })) return true
-        notifyJobTerminal({ ...job, error: JOB_CANCELLED_MESSAGE }, {
-          status: 'cancelled',
-          body: JOB_CANCELLED_MESSAGE,
-        })
-        notifyJobStopHook(job, {
-          status: 'cancelled',
-          error: JOB_CANCELLED_MESSAGE,
-          stepId: nextStep.id,
-        })
-        return true
-      }
-      persistJobStepFailure({
-        commitOwned,
-        emit: this.emit.bind(this),
-        error,
-        job,
-        step: nextStep,
-      })
-    } finally {
-      if (this.activeControllers.get(job.id) === controller) {
-        this.activeControllers.delete(job.id)
-      }
-    }
-
-    return true
-    } finally {
-      releaseExecutionLease()
-      if (this.activeControllers.get(job.id) === controller) {
-        this.activeControllers.delete(job.id)
-      }
-      this.activeJobIds.delete(job.id)
-      const finalJob = getJobRow(job.id)
-      if (finalJob && TERMINAL_JOB_STATUSES.has(finalJob.status)) tickBudget.release()
-    }
+    return runJobRuntimeTick.call(this, JOB_RUNTIME_TICK_DEPENDENCIES)
   }
-
   async drain({ maxTicks = 1000 } = {}) {
     for (let index = 0; index < maxTicks; index += 1) {
       const didWork = await this.runOneTick()

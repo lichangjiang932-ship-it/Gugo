@@ -22,7 +22,7 @@ test('job model failures use fixed public messages and retain only safe binding 
 
   assert.deepEqual(failure, {
     code: 'MODEL_AUTH_FAILED',
-    message: '模型服务拒绝了认证信息，请检查 API Key 或自定义 Header 后重新测试。',
+    message: 'The model service rejected the credentials. Check the API key or custom headers.',
     action: 'test_provider',
     statusCode: 502,
     providerId: 'provider-local',

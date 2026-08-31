@@ -14,6 +14,7 @@ import { findMatchingTaskGrant } from './taskGrants.js'
 
 export const APPROVAL_MODES = Object.freeze(['off', 'unattended', 'all'])
 export const DEFAULT_APPROVAL_MODE = 'unattended'
+export const BUILTIN_POLICY_ID = 'builtin.harness-policy'
 
 /**
  * 每用户的权限档位(对齐 Claude Code / Codex)。和上面的 env 级 APPROVAL_MODE 是两层:

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { registerTemporaryArtifactPreview } from './artifactPreviewGrantStore.js'
 
 const LINK_UNSUPPORTED_CODES = new Set([
   'EACCES',
@@ -92,6 +93,7 @@ export function writeGeneratedArtifactAtomically({
   preferredFilename,
   contents,
   encoding = null,
+  previewUserId = null,
   filenameExists = () => false,
   fileSystem = fs,
   maxCandidates = 10_000,
@@ -112,6 +114,9 @@ export function writeGeneratedArtifactAtomically({
     try {
       writeCompleteStagingFile(fileSystem, temporary, contents, encoding)
       if (!publishCompleteStagingFile(fileSystem, temporary, target)) continue
+      if (previewUserId != null) {
+        registerTemporaryArtifactPreview({ userId: previewUserId, artifactPath: target })
+      }
       return { filename, fullPath: target }
     } finally {
       try { fileSystem.unlinkSync(temporary) } catch { /* committed or best-effort failure cleanup */ }

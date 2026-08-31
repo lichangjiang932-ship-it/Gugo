@@ -91,7 +91,8 @@ test('budget exceeded: exhausted job budget yields ok:false + budgetExceeded + r
   assert.equal(result.truncated, true)
   assert.equal(result.budgetExceeded, true)
   assert.equal(result.paused, false)
-  assert.match(String(result.reason), /budget exceeded/i)
+  assert.equal(result.reason, 'execution_budget_exhausted')
+  assert.ok(result.missingRequirements.includes('remaining_task_steps'))
   // 预算耗尽也必须给用户一句交代,绝不能是空文本
   assert.ok(String(result.output?.text || '').trim().length > 0, '预算耗尽也要有文字交代')
 })

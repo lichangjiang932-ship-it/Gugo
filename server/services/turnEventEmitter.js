@@ -409,6 +409,7 @@ export function createTurnEventEmitter({
 
   const emit = (type, payload = {}, {
     beforeAppend,
+    afterAppend,
     checkpointState = null,
     commitEvent = null,
   } = {}) => {
@@ -426,6 +427,9 @@ export function createTurnEventEmitter({
     }
     if (commitEvent && beforeAppend) {
       return Promise.reject(new TypeError('commitEvent and beforeAppend are mutually exclusive'))
+    }
+    if (afterAppend !== undefined && afterAppend !== null && typeof afterAppend !== 'function') {
+      return Promise.reject(new TypeError('afterAppend must be a function when provided'))
     }
     const pending = appendQueue.then(async () => {
       const event = createTurnEvent({
@@ -520,6 +524,7 @@ export function createTurnEventEmitter({
         }
       }
       if (!(DEFERRED_EVENT_TYPES.has(type) && checkpointState === null && !commitEvent)) {
+        await afterAppend?.(stored, event)
         // A transaction helper may coalesce a concurrent/idempotent request
         // onto an event that was committed by another writer. Publish the
         // authoritative persistence result, never the losing request event.

@@ -65,7 +65,6 @@ export default function ChatSplit() {
     const timer = setTimeout(() => setWorkbenchMessage(''), 5000)
     return () => clearTimeout(timer)
   }, [workbenchMessage])
-
   const {
     activeSession, activeSessionId, contextToolSpecs, effectiveAgentId,
     effectiveSelectedModel, effectiveSelectedModelProviderId, messages,

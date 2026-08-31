@@ -288,7 +288,7 @@ export function createTurnCancellationRuntime({
                   executionLease: cancellationLease.executionLease,
                 })
               : null,
-            beforeAppend: atomicTurnBoundary
+            afterAppend: atomicTurnBoundary
               ? null
               : async () => {
                   try {

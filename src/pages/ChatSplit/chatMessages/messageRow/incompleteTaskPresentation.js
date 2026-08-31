@@ -198,10 +198,10 @@ export function buildIncompleteTaskPresentation(msg, t, {
   const localizedFailureReason = failure.incompleteReason
     ? ''
     : getVisibleModelErrorMessage(failure, t)
-  const specificFailureReason = localizedFailureReason
+  const specificFailureReason = reasonCode !== 'turn_incomplete' && localizedFailureReason
     && localizedFailureReason !== translated(t, 'errors.chatFailure')
-    ? localizedFailureReason
-    : ''
+      ? localizedFailureReason
+      : ''
   const reason = reasonKey
     ? translated(t, reasonKey, { attempts: Number(failure.attempts) || 0 })
     : publicFailureDetail(failure) || specificFailureReason || translated(t, recordedUnknownReason

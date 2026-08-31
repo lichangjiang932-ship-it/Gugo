@@ -147,7 +147,13 @@ test('direct runtime creation is gated and explicit retry safely refreshes a cha
   const retried = runtime.retryJob(job.id, { userId: isolatedUser })
   assert.equal(retried.status, 'queued')
   assert.equal(retried.modelConfigRevision, updatedProvider.configRevision)
-  assert.deepEqual(retried.events.at(-1)?.payload, {
+  const retryPayload = retried.events.at(-1)?.payload
+  assert.deepEqual({
+    previousModelProviderId: retryPayload?.previousModelProviderId,
+    previousModelConfigRevision: retryPayload?.previousModelConfigRevision,
+    modelProviderId: retryPayload?.modelProviderId,
+    modelConfigRevision: retryPayload?.modelConfigRevision,
+  }, {
     previousModelProviderId: provider.id,
     previousModelConfigRevision: provider.configRevision,
     modelProviderId: updatedProvider.id,
@@ -257,7 +263,7 @@ test('runtime completes queued child steps in order', async () => {
     },
   })
 
-  const job = await runtime.createJob('生成 2 份周报', { userId: TEST_USER })
+  const job = await runtime.createJob('生成 2 份文本摘要', { userId: TEST_USER })
   await runtime.drain()
   const loaded = runtime.getJob(job.id, { userId: TEST_USER })
 
@@ -1031,7 +1037,8 @@ test('default finalize executor rejects an incomplete final output', async () =>
   assert.equal(result.ok, false)
   assert.equal(result.output.complete, false)
   assert.match(result.error, /部分完成/)
-  assert.ok(result.output.issues.some((issue) => /没有生成任何产物/.test(issue)))
+  assert.deepEqual(result.output.missingDeliverables, ['pdf'])
+  assert.ok(result.output.issues.some((issue) => /缺少 PDF 文档/.test(issue)))
 })
 
 test('default executor forwards cancellation signals to the model runner', async () => {

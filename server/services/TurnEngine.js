@@ -1,16 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import {
-  getBoundTurnToolSpecs,
-  runBoundTurnLoop,
-} from './turnLoopBindingRuntime.js'
+import { getBoundTurnToolSpecs, runBoundTurnLoop } from './turnLoopBindingRuntime.js'
 import { prepareBoundInlineSkillsForPrompt } from './inlineSkillPromptBindingRuntime.js'
 import { publishTurnActivity } from './turnActivityBus.js'
 import { dispatchHooks as dispatchHooksService } from './hooksService.js'
 import { getApprovalMode } from './approvalSettingsStore.js'
-import {
-  recordEvolutionCanaryOutcome,
-  resolveEvolutionCanaryAssignment,
-} from './evolutionCanaryService.js'
+import { recordEvolutionCanaryOutcome, resolveEvolutionCanaryAssignment } from './evolutionCanaryService.js'
 import { createTurnExecutionToolContextRuntime } from './turnExecutionToolContextRuntime.js'
 import { createTurnCancellationRuntime } from './turnCancellationRuntime.js'
 import { createTurnCanaryOutcomeRuntime } from './turnCanaryOutcomeRuntime.js'
@@ -18,23 +12,12 @@ import { scheduleAutoMemoryExtraction } from './autoMemoryService.js'
 import { listRuntimePluginStates } from './runtimePluginStateStore.js'
 import { resolveToolImplementationRevisions as resolveCurrentToolImplementationRevisions } from './toolImplementationRevision.js'
 import { getActiveRuntimePolicyProvenance } from '../core/runtimeCapabilityState.js'
-import {
-  getLocalFileAccessStatus,
-  resolveTurnProjectDirectory,
-  withTurnProjectDirectory,
-} from './localFileAccessService.js'
+import { getLocalFileAccessStatus, resolveTurnProjectDirectory, withTurnProjectDirectory } from './localFileAccessService.js'
 import { logWarn, newTraceId, withLogContext } from '../utils/logger.js'
-import {
-  createTurnEventEmitter,
-  isTerminalTurnEventType,
-} from './turnEventEmitter.js'
+import { createTurnEventEmitter, isTerminalTurnEventType } from './turnEventEmitter.js'
 import { createTurnModelRequestRunner } from './turnModelRequestRuntime.js'
 import { TurnEngineError } from './turnResolutionRuntime.js'
-import {
-  createTurnStartRuntime,
-  normalizeTurnModelMode as normalizeModelMode,
-  normalizeTurnOptionalId as normalizeOptionalId,
-} from './turnStartRuntime.js'
+import { createTurnStartRuntime, normalizeTurnModelMode as normalizeModelMode, normalizeTurnOptionalId as normalizeOptionalId } from './turnStartRuntime.js'
 import { assembleTurnEnginePersistence } from './turnEnginePersistenceAssembly.js'
 import { createTurnFailedRetryRuntime } from './turnFailedRetryRuntime.js'
 import { createTurnTerminalOutcomeRuntime } from './turnTerminalOutcomeRuntime.js'
@@ -42,20 +25,9 @@ import { createTurnExecutionRuntime } from './turnExecutionRuntime.js'
 import { createTurnSchedulingRuntime } from './turnSchedulingRuntime.js'
 import { resolveTurnToolSpecs } from './turnToolSpecs.js'
 import { createTurnResumeRuntime } from './turnResumeRuntime.js'
-import {
-  normalizeArtifactIds,
-  normalizeTaskVerificationDetails,
-  publicIncompleteText,
-} from './turnTerminalProjection.js'
-import {
-  excludeVerifiedLocalFiles,
-  mergeLocalFileReceipts,
-} from './turnRecoveryProjection.js'
-import {
-  missingAttachmentBindingRuntime,
-  missingAttachmentPreparationRuntime,
-  missingAttachmentValidationRuntime,
-} from './turnManagedAttachmentRuntime.js'
+import { normalizeArtifactIds, normalizeTaskVerificationDetails, publicIncompleteText } from './turnTerminalProjection.js'
+import { excludeVerifiedLocalFiles, mergeLocalFileReceipts } from './turnRecoveryProjection.js'
+import { missingAttachmentBindingRuntime, missingAttachmentPreparationRuntime, missingAttachmentValidationRuntime } from './turnManagedAttachmentRuntime.js'
 import {
   abortError,
   activeKey,

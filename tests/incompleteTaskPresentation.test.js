@@ -95,7 +95,7 @@ test('legacy TURN_INCOMPLETE status copy is not presented as a causal diagnosis'
   assert.equal(value.nextStep, 'chatMessages.incompleteNextRetry')
 })
 
-test('an unknown recorded reason is disclosed instead of being described as missing', () => {
+test('an unknown recorded recovery reason is disclosed with safe categorical requirements', () => {
   const interpolate = (key, values = {}) => `${key}:${values.code || ''}`
   const value = buildIncompleteTaskPresentation({
     meta: {
@@ -109,7 +109,8 @@ test('an unknown recorded reason is disclosed instead of being described as miss
 
   assert.equal(value.reason, 'chatMessages.incompleteReasonRecordedCode:CHECKPOINT_MISSING')
   assert.deepEqual(value.missing, [
-    'chatMessages.incompleteRequirementRecordedCode:CHECKPOINT_MISSING',
+    'chatMessages.incompleteRequirementEnvironmentRepair:',
+    'chatMessages.incompleteRequirementExplicitRetry:',
   ])
 })
 

@@ -29,7 +29,6 @@ test('HTTP turn failures retain structured readiness metadata for durable UI sta
   })
   assert.deepEqual(normalizeServerTurnFailure(error), {
     code: 'TURN_ENGINE_SHUTTING_DOWN',
-    message: 'runtime is restarting',
     status: 503,
     action: 'retry',
     details: { phase: 'shutdown' },
@@ -38,10 +37,10 @@ test('HTTP turn failures retain structured readiness metadata for durable UI sta
     retryAfter: '8',
   })
   const terminalFailure = { code: 'TURN_FAILED', message: 'durable failure', retryable: true }
-  assert.strictEqual(
-    normalizeServerTurnFailure({ serverFailure: terminalFailure }),
-    terminalFailure,
-  )
+  assert.deepEqual(normalizeServerTurnFailure({ serverFailure: terminalFailure }), {
+    code: 'TURN_FAILED',
+    retryable: true,
+  })
 })
 
 test('the default turn exposes a complete coding-agent execution loop', () => {

@@ -536,7 +536,9 @@ export function createSqliteTurnPersistenceTransactions({
             sessionId: failureEvent.sessionId,
             turnId: failureEvent.turnId,
           }) >= MAX_FAILED_TURN_RETRIES
-        if (!failureSupportsFailedRetry(failure) && !retryLimitReached) {
+        const retryNotAllowed = rejection.code === 'TURN_FAILED_RETRY_NOT_ALLOWED'
+          && !failureSupportsFailedRetry(failure)
+        if (!failureSupportsFailedRetry(failure) && !retryLimitReached && !retryNotAllowed) {
           throw persistenceError(
             'TURN_FAILED_RETRY_REJECTION_CONFLICT',
             'the terminal failure is no longer eligible for failed retry rejection',

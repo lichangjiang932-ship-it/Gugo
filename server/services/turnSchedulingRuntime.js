@@ -28,7 +28,7 @@ export function createTurnSchedulingRuntime({
       }
       const { controller, executionLease = null } = lease
       try {
-        context.emitter?.bindExecutionLease?.(executionLease)
+        if (executionLease) context.emitter?.bindExecutionLease?.(executionLease)
       } catch (error) {
         await lease.release()
         throw error

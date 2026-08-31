@@ -16,7 +16,7 @@ function FileStatusRows({ files, onOpenArtifact, pending, t }) {
     const filename = String(reference?.filename || reference?.title || '').trim()
     const href = withDownloadToken(reference?.url)
     if (!filename || !href) return null
-    return <li key={reference.identity || reference.id || href} className="flex min-w-0 items-center gap-2 rounded-control border border-ink/10 bg-paper/70 px-2 py-1.5"><FileText className="h-3.5 w-3.5 shrink-0 text-ink-fade" aria-hidden="true" /><a href={href} target="_blank" rel="noopener noreferrer" onClick={(event) => openReference(event, reference)} className="min-w-0 flex-1 truncate text-sm font-medium text-ink underline decoration-ink/20 underline-offset-2 hover:decoration-ink/60" title={t('chatMessages.incompleteOpenFile', { filename })}>{filename}</a><span className={`shrink-0 text-[11px] ${pending ? 'text-warning' : 'text-success'}`}>{t(pending ? 'chatMessages.incompleteFilePendingStatus' : 'chatMessages.incompleteFileVerifiedStatus')}</span><ExternalLink className="h-3.5 w-3.5 shrink-0 text-ink-fade" aria-hidden="true" /><a href={href} download={filename} className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-fade hover:bg-ink/5 hover:text-ink" aria-label={t('chatMessages.incompleteDownloadFile', { filename })} title={t('chatMessages.incompleteDownloadFile', { filename })}><Download className="h-3.5 w-3.5" aria-hidden="true" /></a></li>
+    return <li key={reference.identity || reference.id || href} className="flex min-w-0 items-center gap-2 rounded-control border border-ink/10 bg-paper/70 px-2 py-1.5"><FileText className="h-3.5 w-3.5 shrink-0 text-ink-fade" aria-hidden="true" /><a href={href} target="_blank" rel="noopener noreferrer" onClick={(event) => openReference(event, reference)} className="min-w-0 flex-1 truncate text-sm font-medium text-ink underline decoration-ink/20 underline-offset-2 hover:decoration-ink/60" title={t('chatMessages.incompleteOpenFile', { filename })}>{filename}</a><span className={`shrink-0 text-xs ${pending ? 'text-warning' : 'text-success'}`}>{t(pending ? 'chatMessages.incompleteFilePendingStatus' : 'chatMessages.incompleteFileVerifiedStatus')}</span><ExternalLink className="h-3.5 w-3.5 shrink-0 text-ink-fade" aria-hidden="true" /><a href={href} download={filename} className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-fade hover:bg-ink/5 hover:text-ink" aria-label={t('chatMessages.incompleteDownloadFile', { filename })} title={t('chatMessages.incompleteDownloadFile', { filename })}><Download className="h-3.5 w-3.5" aria-hidden="true" /></a></li>
   })}</ul>
 }
 
@@ -48,7 +48,7 @@ export default function IncompleteTaskNotice({
             <strong className="font-semibold" data-testid="reply-completion-state">
               {t('chatMessages.incompleteTitle')}
             </strong>
-            <code className="rounded bg-ink/5 px-1.5 py-0.5 text-[11px] text-ink-fade">
+            <code className="rounded bg-ink/5 px-1.5 py-0.5 text-xs text-ink-fade">
               {presentation.code}
             </code>
           </div>

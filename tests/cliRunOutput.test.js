@@ -88,13 +88,34 @@ test('text output writes only completed text to stdout', async () => {
 
 test('text terminal failures stay out of stdout and use stderr diagnostics', () => {
   for (const [event, diagnostic] of [
-    [{ type: 'turn.failed', payload: { code: 'MODEL_FAILED', message: 'model unavailable' } }, 'Failed [MODEL_FAILED]: model unavailable\n'],
-    [{ type: 'turn.blocked', payload: { code: 'APPROVAL_REQUIRED', message: 'approval required' } }, 'Blocked [APPROVAL_REQUIRED]: approval required\n'],
-    [{ type: 'turn.cancelled', payload: { code: 'TURN_CANCELLED' } }, 'Cancelled [TURN_CANCELLED]\n'],
-    [{ type: 'turn.cancelled', payload: { reason: 'Cancelled by user' } }, 'Cancelled: Cancelled by user\n'],
-    [{ type: 'turn.paused', payload: { clarification: { question: 'Choose a directory' } } }, 'Paused: Choose a directory\n'],
-    [{ type: 'turn.paused', payload: { clarification: 'Confirm the operation' } }, 'Paused: Confirm the operation\n'],
-    [{ type: 'turn.interrupted', payload: { code: 'MODEL_503', message: 'upstream unavailable' } }, 'Interrupted [MODEL_503]: upstream unavailable\n'],
+    [
+      { type: 'turn.failed', payload: { code: 'MODEL_FAILED', message: 'model unavailable' } },
+      'Failed [MODEL_FAILED]\nReason: model unavailable\nNext: inspect the stable code and terminal record before retrying.\n',
+    ],
+    [
+      { type: 'turn.blocked', payload: { code: 'APPROVAL_REQUIRED', message: 'approval required' } },
+      'Blocked [APPROVAL_REQUIRED]\nReason: approval required\nNext: inspect the stable code and terminal record before retrying.\n',
+    ],
+    [
+      { type: 'turn.cancelled', payload: { code: 'TURN_CANCELLED' } },
+      'Cancelled [TURN_CANCELLED]\nReason: terminal_reason_not_recorded\nNext: inspect the stable code and terminal record before retrying.\n',
+    ],
+    [
+      { type: 'turn.cancelled', payload: { reason: 'Cancelled by user' } },
+      'Cancelled [TURN_CANCELLED]\nReason: Cancelled by user\nNext: inspect the stable code and terminal record before retrying.\n',
+    ],
+    [
+      { type: 'turn.paused', payload: { clarification: { question: 'Choose a directory' } } },
+      'Paused [TURN_PAUSED]\nReason: Choose a directory\nNext: inspect the stable code and terminal record before retrying.\n',
+    ],
+    [
+      { type: 'turn.paused', payload: { clarification: 'Confirm the operation' } },
+      'Paused [TURN_PAUSED]\nReason: Confirm the operation\nNext: inspect the stable code and terminal record before retrying.\n',
+    ],
+    [
+      { type: 'turn.interrupted', payload: { code: 'MODEL_503', message: 'upstream unavailable' } },
+      'Interrupted [MODEL_503]\nReason: upstream unavailable\nNext: inspect the stable code and terminal record before retrying.\n',
+    ],
   ]) {
     const output = formatRunEvent(event, { format: 'text' })
     assert.equal(output.stdout, null)
@@ -135,7 +156,7 @@ test('text CLI errors stay on stderr while JSONL keeps the stable error event', 
   })
   assert.deepEqual(formatRunError(error, { format: 'text' }), {
     stdout: null,
-    stderr: 'Error [MODEL_CONFIG_MISSING]: model is not configured\n',
+    stderr: 'Error [MODEL_CONFIG_MISSING]: model is not configured\nNext: configure_model\n',
   })
   assert.deepEqual(JSON.parse(formatRunError(error).stdout.trim()), {
     type: 'cli.error',
@@ -143,6 +164,7 @@ test('text CLI errors stay on stderr while JSONL keeps the stable error event', 
       code: 'MODEL_CONFIG_MISSING',
       message: 'model is not configured',
       action: 'configure_model',
+      nextAction: 'configure_model',
     },
   })
 })

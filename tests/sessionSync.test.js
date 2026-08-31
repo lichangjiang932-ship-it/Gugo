@@ -649,7 +649,7 @@ test('legacy TURN_INCOMPLETE messages recover only their scoped checkpoint reaso
   assert.equal(Object.hasOwn(isolated, 'missingRequirements'), false)
 })
 
-test('legacy TURN_INCOMPLETE recovery rejects unknown reasons and non-boolean flags', { concurrency: false }, () => {
+test('legacy TURN_INCOMPLETE recovery preserves unknown reasons and rejects non-boolean flags', { concurrency: false }, () => {
   const { userId } = issueTestSession({ email: 'legacy-incomplete-unknown@example.com' })
   const sessionId = 'legacy-incomplete-unknown'
   const turnId = 'legacy-incomplete-unknown-turn'
@@ -688,7 +688,7 @@ test('legacy TURN_INCOMPLETE recovery rejects unknown reasons and non-boolean fl
 
   const failure = getSessionSnapshot({ userId, sessionId }).messages[0].modelContext.error
   assert.equal(failure.incompleteReason, 'private_internal_reason')
-  assert.deepEqual(failure.missingRequirements, [])
+  assert.deepEqual(failure.missingRequirements, ['remaining_task_steps'])
   assert.equal(Object.hasOwn(failure, 'budgetExceeded'), false)
   assert.equal(Object.hasOwn(failure, 'noProgress'), false)
 })

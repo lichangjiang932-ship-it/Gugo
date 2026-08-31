@@ -646,7 +646,7 @@ export async function dispatchTurnEvent(sourceEvent, {
         paused: false,
         serverConnectionState: 'cancelled',
         ...(artifactIds?.length > 0 ? { serverArtifactIds: artifactIds } : {}),
-        ...(deliveryArtifactIds?.length > 0 ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
+        serverDeliveryArtifactIds: deliveryArtifactIds || [],
         ...(partialText ? { serverPartialText: partialText } : {}),
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(modelUsage ? { modelUsage, actualPromptTokens: modelUsage.promptTokens } : {}),

@@ -44,7 +44,12 @@ test('permanent failed-retry rejections expose only stable structured failure da
       error,
       writtenAt: 11,
     })
-    assert.deepEqual(message.modelContext.error, { code, retryable: false, status: 409 })
+    assert.deepEqual(message.modelContext.error, {
+      code,
+      retryable: false,
+      manualRetryable: false,
+      status: 409,
+    })
     assert.deepEqual(message.modelContext.failedRetryRejection, {
       code,
       failureSequence: 7,
@@ -107,6 +112,7 @@ test('failed retry seals a permanent commit conflict wrapped by the event emitte
       lastEvent: async (input) => input.type === 'turn.started' ? started : failure,
       replayEvents: async ({ after }) => after < 0 ? [started, failure] : [],
       readMessages: async () => [existingMessage],
+      readRecoveryState: async () => null,
       runtimeCore: { checkpoint: { load: async () => ({ state: {}, eventSequence: 1 }) } },
       commitTurnFailedRetry: async () => {
         const conflict = new Error('checkpoint changed during retry')
@@ -138,6 +144,7 @@ test('failed retry seals a permanent commit conflict wrapped by the event emitte
   assert.deepEqual(sealedMessage?.modelContext?.error, {
     code: 'TURN_FAILED_RETRY_CHECKPOINT_CONFLICT',
     retryable: false,
+    manualRetryable: false,
     status: 409,
   })
   assert.equal(Object.hasOwn(sealedMessage?.modelContext?.error || {}, 'message'), false)

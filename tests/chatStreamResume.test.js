@@ -130,7 +130,7 @@ test('a persisted TURN_INCOMPLETE assistant message rebuilds the original turn r
     sessionId: 'session-refresh',
     turnId: 'turn-refresh',
     code: 'TURN_INCOMPLETE',
-    reason: 'length',
+    reason: null,
     partialText: 'durable partial answer',
   })
 })
