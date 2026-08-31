@@ -3,11 +3,15 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
-import { isToolPermittedForUser } from '../db.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
 import { resolveForShellCwd } from './fsShellTools.js'
+import { assertGitToolPermitted, runAuditedProjectCheckHttp } from './gitWorkbenchPolicy.js'
+import {
+  changedPathsBetweenGitRevisions,
+  runGitWorkspaceChange,
+} from './gitWorkbenchRevisionChanges.js'
 
 const MAX_OUTPUT = 1024 * 1024
 const DEFAULT_TIMEOUT = 60_000
@@ -171,13 +175,6 @@ async function currentStatusFiles(cwd) {
   return parsePorcelainZ(status.stdout)
 }
 
-function assertGitToolPermitted(userId, toolName) {
-  if (!userId || isToolPermittedForUser(userId, toolName)) return
-  const error = badReq(`工具 ${toolName} 已被该用户在权限中心关闭`, 403)
-  error.code = 'TOOL_DISABLED'
-  throw error
-}
-
 function effectivePermissionToolName(permissionToolName, fallback) {
   return typeof permissionToolName === 'string' && permissionToolName.trim()
     ? permissionToolName.trim()
@@ -252,6 +249,7 @@ export async function runProjectCheckTool({ check, cwd: rawCwd, userId = null } 
   if (!ALLOWED_CHECKS.has(name)) {
     throw badReq('run_project_check only supports lint, test, build')
   }
+  assertGitToolPermitted(userId, 'run_project_check')
   const resolvedCwd = resolveForShellCwd(rawCwd, { userId })
   const root = resolvedCwd.fullPath
   if (!fs.statSync(root).isDirectory()) throw badReq('cwd must be a directory')
@@ -385,10 +383,12 @@ export async function gitRollbackTool({ commit, cwd: rawCwd, userId = null } = {
     throw err
   }
   const rollbackHead = await runGit(['rev-parse', 'HEAD'], { cwd: root })
+  const rollbackCommit = rollbackHead.stdout.trim()
   return {
     ok: true,
     revertedCommit: head,
-    rollbackCommit: rollbackHead.stdout.trim(),
+    rollbackCommit,
+    changedPaths: await changedPathsBetweenGitRevisions(runGit, root, head, rollbackCommit),
     summary: reverted.stdout.trim(),
   }
 }
@@ -438,31 +438,17 @@ export async function gitWriteTool({
     return { ok: true, action: 'create_branch', branch: target, stdout: created.stdout, stderr: created.stderr }
   }
 
-  if (operation === 'checkout') {
-    await requireCleanWorkingTree(root, 'checkout')
-    const target = await validateBranchName(branch, root)
-    const exists = await runGit(['show-ref', '--verify', '--quiet', `refs/heads/${target}`], {
-      cwd: root,
-      rejectOnError: false,
-    })
-    if (!exists.ok) throw badReq(`local branch does not exist: ${target}`)
-    const switched = await runGit(['switch', target], { cwd: root, rejectOnError: false })
-    if (!switched.ok) throw badReq(String(switched.stderr || switched.stdout || 'git checkout failed').trim(), 500)
-    return { ok: true, action: operation, branch: target, stdout: switched.stdout, stderr: switched.stderr }
-  }
-
-  if (operation === 'pull') {
-    await requireCleanWorkingTree(root, 'pull')
-    const current = await currentBranch(root)
-    if (!current || current === 'HEAD') throw badReq('cannot pull from detached HEAD')
-    if (branch) {
-      const expected = await validateBranchName(branch, root)
-      if (expected !== current) throw badReq(`requested branch ${expected} is not the current branch ${current}`)
-    }
-    const pulled = await runGit(['pull', '--ff-only', 'origin', current], { cwd: root, rejectOnError: false })
-    if (!pulled.ok) throw badReq(String(pulled.stderr || pulled.stdout || 'git pull --ff-only failed').trim(), 500)
-    return { ok: true, action: operation, branch: current, remote: 'origin', stdout: pulled.stdout, stderr: pulled.stderr }
-  }
+  const workspaceChange = await runGitWorkspaceChange({
+    operation,
+    branch,
+    root,
+    runGit,
+    requireCleanWorkingTree,
+    validateBranchName,
+    currentBranch,
+    badReq,
+  })
+  if (workspaceChange) return workspaceChange
 
   throw badReq('git_write action must be commit, branch, create_branch, checkout, pull, or push')
 }
@@ -491,7 +477,7 @@ export async function handleGitWorkbenchRequest(req, res) {
     let result
     if (url.pathname === '/api/tools/git/status' || url.pathname === '/api/workbench/git/status') result = await gitStatusTool(bodyWithUser)
     else if (url.pathname === '/api/tools/git/diff' || url.pathname === '/api/workbench/git/diff') result = await gitDiffTool(bodyWithUser)
-    else if (url.pathname === '/api/tools/check/run' || url.pathname === '/api/workbench/check/run') result = await runProjectCheckTool(bodyWithUser)
+    else if (url.pathname === '/api/tools/check/run' || url.pathname === '/api/workbench/check/run') result = await runAuditedProjectCheckHttp({ body, userId: req.userId, execute: runProjectCheckTool })
     else if (url.pathname === '/api/workbench/git/commit') result = await gitCommitTool(bodyWithUser)
     else if (url.pathname === '/api/workbench/git/push') result = await gitPushTool(bodyWithUser)
     else if (url.pathname === '/api/workbench/git/rollback') result = await gitRollbackTool(bodyWithUser)

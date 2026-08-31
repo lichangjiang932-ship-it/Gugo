@@ -3207,6 +3207,16 @@ test('LSP navigation is classified as read-only verification, not a mutation', (
   assert.equal(isLocalMutationCall(call), false)
 })
 
+test('workspace-changing Git and rewind tools are local mutations', () => {
+  assert.equal(isLocalMutationCall({ name: 'git_write', args: { action: 'checkout' } }), true)
+  assert.equal(isLocalMutationCall({ name: 'git_write', args: { action: 'pull' } }), true)
+  assert.equal(isLocalMutationCall({ name: 'git_rollback', args: {} }), true)
+  assert.equal(isLocalMutationCall({ name: 'rewind_files', args: {} }), true)
+  for (const action of ['branch', 'create_branch', 'commit', 'push']) {
+    assert.equal(isLocalMutationCall({ name: 'git_write', args: { action } }), false, action)
+  }
+})
+
 test('Windows cmd verification classification stays conservative for dynamic or mutating syntax', () => {
   const commands = [
     'cmd.exe /c "dir /b && del victim.txt"',

@@ -3,9 +3,7 @@ import {
   CONNECTOR_WRITE_TOOL_NAMES,
   executeConnectorTool,
 } from '../../connectorTools.js'
-import {
-  callTool as callMcpTool,
-} from '../../../mcp/mcpManager.js'
+import { callTool as callMcpTool } from '../../../mcp/mcpManager.js'
 import {
   dispatchAgenticTool,
 } from '../../../utils/agenticTools.js'
@@ -282,6 +280,7 @@ export async function executeServerTool({
         ok: true,
         rewound: result.count,
         files: result.rewound.map((entry) => ({ path: entry.snapshot.filePath, action: entry.action })),
+        changedPaths: result.rewound.map((entry) => entry.snapshot.filePath),
       }
     } catch (err) {
       return {

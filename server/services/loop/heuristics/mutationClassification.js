@@ -120,6 +120,10 @@ export function isReadOnlyWindowsCmdVerificationCall(call) {
 }
 
 export function isLocalMutationCall(call) {
+  if (call?.name === 'rewind_files' || call?.name === 'git_rollback') return true
+  if (call?.name === 'git_write') {
+    return ['checkout', 'pull'].includes(String(call?.args?.action || '').trim().toLowerCase())
+  }
   if (LOCAL_MUTATION_TOOLS.has(call?.name)) {
     return !(['apply_patch', 'patch_file'].includes(call?.name) && call?.args?.dry_run === true)
   }
