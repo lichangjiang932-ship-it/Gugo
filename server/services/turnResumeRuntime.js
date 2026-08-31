@@ -1,5 +1,6 @@
 import { isTerminalTurnEventType } from './turnEventEmitter.js'
 import {
+  isValidActiveFailedRetryAttempt,
   normalizeResolutionPath,
   replayPersistedTurnEvents,
 } from './turnRecoveryProjection.js'
@@ -170,9 +171,27 @@ export function createTurnResumeRuntime({
     const latestFailedRetry = persistedEvents
       .filter((event) => event.type === 'turn.attempt' && event.payload?.reason === 'failed_retry')
       .at(-1)
-    const failedRetryActive = Boolean(latestFailedRetry) && !persistedEvents.some((event) => (
+    const failedRetryPending = Boolean(latestFailedRetry) && !persistedEvents.some((event) => (
       event.sequence > latestFailedRetry.sequence && isTerminalTurnEventType(event.type)
     ))
+    let failedRetryActive = false
+    if (failedRetryPending) {
+      const failedRetryCheckpoint = await deps.runtimeCore.checkpoint.load(scope)
+      failedRetryActive = isValidActiveFailedRetryAttempt(
+        persistedEvents,
+        latestFailedRetry,
+        failedRetryCheckpoint,
+      )
+      if (!failedRetryActive) {
+        const error = new TurnEngineError(
+          'TURN_FAILED_RETRY_ATTEMPT_INVALID',
+          'the persisted failed Turn retry is not bound to its failure and checkpoint',
+          409,
+        )
+        error.retryable = false
+        throw error
+      }
+    }
     const manualFailedRetryActive = failedRetryActive
       && latestFailedRetry.payload?.manualRetry === true
     const pause = pauseState(persistedEvents)

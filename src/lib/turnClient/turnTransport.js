@@ -47,6 +47,7 @@ export async function parseResponse(response) {
       'actualSequence',
       'recovery',
       'retryable',
+      'manualRetryable',
       'retryAfter',
     ]) {
       if (body?.error?.[field] !== undefined) error[field] = body.error[field]

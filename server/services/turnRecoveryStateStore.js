@@ -207,6 +207,13 @@ export function pruneResolvedTurnRecoveryStates() {
         AND event.session_id = recovery.session_id
         AND event.turn_id = recovery.turn_id
         AND event.type IN ('turn.completed', 'turn.cancelled', 'turn.failed')
+        AND event.sequence = (
+          SELECT MAX(latest.sequence)
+          FROM turn_events AS latest
+          WHERE latest.user_id = recovery.user_id
+            AND latest.session_id = recovery.session_id
+            AND latest.turn_id = recovery.turn_id
+        )
     )
   `).run().changes
 }

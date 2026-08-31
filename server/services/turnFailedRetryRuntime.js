@@ -7,10 +7,11 @@ import {
 } from './turnFailedRetryRejection.js'
 import {
   failedRetryAttemptPayload,
+  isValidActiveFailedRetryAttempt,
+  isValidFailedRetryAttemptRecord,
   replayPersistedTurnEvents,
 } from './turnRecoveryProjection.js'
-
-const MAX_FAILED_TURN_RETRIES = 1
+import { MAX_FAILED_TURN_RETRIES } from './turnFailedRetryPolicy.js'
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -113,6 +114,13 @@ export function createTurnFailedRetryRuntime({
     const last = await deps.lastEvent(scope)
     const persistedEvents = await replayPersistedTurnEvents(deps.replayEvents, scope)
     if (last?.type === 'turn.attempt' && last.payload?.reason === 'failed_retry') {
+      const checkpoint = await deps.runtimeCore.checkpoint.load(scope)
+      if (!isValidActiveFailedRetryAttempt(persistedEvents, last, checkpoint)) {
+        throw permanentFailedRetryError({
+          code: 'TURN_FAILED_RETRY_ATTEMPT_INVALID',
+          status: 409,
+        })
+      }
       const outcome = await recoverTurn({ ...scope, authMode })
       return outcome.turn
     }
@@ -162,7 +170,13 @@ export function createTurnFailedRetryRuntime({
           const currentMessage = await findExistingAssistantMessage(scope)
           const concurrentRejection = failedRetryRejectionFromMessage(currentMessage, last)
           if (concurrentRejection) throw permanentFailedRetryError(concurrentRejection)
-          return (await recoverTurn({ ...scope, authMode })).turn
+          const currentLast = await deps.lastEvent(scope)
+          if (currentLast?.id !== last.id
+            || currentLast?.sequence !== last.sequence
+            || currentLast?.type !== 'turn.failed') {
+            return (await recoverTurn({ ...scope, authMode })).turn
+          }
+          throw error
         }
       } else {
         // Legacy/custom adapters may not expose the atomic rejection helper.
@@ -179,10 +193,10 @@ export function createTurnFailedRetryRuntime({
       throw rejectionError
     }
     const failedRetryCount = persistedEvents.filter((event) => (
-      event.type === 'turn.attempt' && event.payload?.reason === 'failed_retry'
+      isValidFailedRetryAttemptRecord(persistedEvents, event)
     )).length
     if (failedRetryCount >= MAX_FAILED_TURN_RETRIES) {
-      throw permanentFailedRetryError({
+      return rejectFailedRetry({
         code: 'TURN_FAILED_RETRY_LIMIT_REACHED',
         status: 409,
       })

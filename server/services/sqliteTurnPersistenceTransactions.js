@@ -15,10 +15,14 @@ import {
 import {
   failureAllowsFailedRetry,
   failureSupportsFailedRetry,
+  MAX_FAILED_TURN_RETRIES,
   resetManualRetryVerificationBudget,
 } from './turnFailedRetryPolicy.js'
 import { isPermanentFailedRetryRejectionCode } from './turnFailedRetryRejection.js'
-import { failedRetryAttemptPayload } from './turnRecoveryProjection.js'
+import {
+  failedRetryAttemptPayload,
+  isValidFailedRetryAttemptRecord,
+} from './turnRecoveryProjection.js'
 
 const TURN_BOUNDARY_TYPES = new Set([
   'turn.completed',
@@ -177,6 +181,16 @@ function assertExistingMessage(readMessage, message, options = {}) {
       `persisted message ${message.id} does not match the retried operation`,
     )
   }
+}
+
+function failedRetryAttemptCount(db, { userId, sessionId, turnId }) {
+  const events = db.prepare(`SELECT * FROM turn_events
+    WHERE user_id = ? AND session_id = ? AND turn_id = ? ORDER BY sequence ASC`)
+    .all(userId, sessionId, turnId)
+    .map(storedTurnEvent)
+  return events.reduce((count, event) => (
+    isValidFailedRetryAttemptRecord(events, event) ? count + 1 : count
+  ), 0)
 }
 
 function assertFailedRetryPayload(actual, expected) {
@@ -550,7 +564,13 @@ export function createSqliteTurnPersistenceTransactions({
           )
         }
         const failure = parseJsonRecord(latest.payload_json)
-        if (!failureSupportsFailedRetry(failure)) {
+        const retryLimitReached = rejection.code === 'TURN_FAILED_RETRY_LIMIT_REACHED'
+          && failedRetryAttemptCount(db, {
+            userId,
+            sessionId: failureEvent.sessionId,
+            turnId: failureEvent.turnId,
+          }) >= MAX_FAILED_TURN_RETRIES
+        if (!failureSupportsFailedRetry(failure) && !retryLimitReached) {
           throw persistenceError(
             'TURN_FAILED_RETRY_REJECTION_CONFLICT',
             'the terminal failure is no longer eligible for failed retry rejection',

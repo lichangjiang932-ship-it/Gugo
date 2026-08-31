@@ -15,6 +15,7 @@ export const MAX_TASK_VERIFICATION_CANDIDATES = 64
 export const MAX_TASK_VERIFICATION_VERIFIED = 64
 export const MAX_TASK_VERIFICATION_INDETERMINATES = 64
 export const MAX_TASK_VERIFICATION_MUTATION_TARGETS = 64
+export const MAX_TASK_VERIFICATION_EPOCH = Number.MAX_SAFE_INTEGER
 
 export const FAILURE_PENDING_REASON = 'verification_failed'
 export const PRE_MUTATION_FAILURE_PENDING_REASON = 'failure_before_mutation'
@@ -172,6 +173,25 @@ function stateMapExceedsLimit(value, limit) {
   return value instanceof Map && value.size > limit
 }
 
+function invalidEpochValue(value) {
+  if (value == null || value === '') return false
+  const epoch = Number(value)
+  return !Number.isSafeInteger(epoch) || epoch < 0
+}
+
+function serializedEpochInvalid(value = {}) {
+  const entries = [
+    ...(Array.isArray(value?.pending) ? value.pending.map((entry) => entry?.requiredEpoch) : []),
+    ...(Array.isArray(value?.candidates) ? value.candidates.map((entry) => entry?.observedEpoch) : []),
+    ...(Array.isArray(value?.verified) ? value.verified.map((entry) => entry?.verifiedEpoch) : []),
+    ...(Array.isArray(value?.indeterminate)
+      ? value.indeterminate.map((entry) => entry?.requiredEpoch)
+      : [value?.lastIndeterminate?.requiredEpoch]),
+    ...(Array.isArray(value?.mutationTargets) ? value.mutationTargets.map((entry) => entry?.epoch) : []),
+  ]
+  return invalidEpochValue(value?.mutationEpoch) || entries.some(invalidEpochValue)
+}
+
 function restoreMutationTargets(value) {
   const targets = new Map()
   for (const entry of (Array.isArray(value) ? value : [])
@@ -285,7 +305,8 @@ export function restoreTaskVerificationRepair(value = {}) {
     indeterminate,
     lastIndeterminate,
     verificationOverflowed: value?.verificationOverflowed === true
-      || serializedStateOverflowed,
+      || serializedStateOverflowed
+      || serializedEpochInvalid(value),
     mutationEpoch,
     mutationTargets,
     consecutiveFailures: Math.min(

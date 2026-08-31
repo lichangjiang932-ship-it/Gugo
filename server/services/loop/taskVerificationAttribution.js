@@ -80,7 +80,9 @@ function projectWideMutationTarget(value) {
 function mutationTargetAffectsScope(target, scope, workspaceRoot = '') {
   const normalizedTarget = normalizeMutationTarget(target)
   if (!normalizedTarget) return false
-  if (normalizedTarget === PROJECT_SCOPE_TARGET) return true
+  // Root dependency/configuration mutations can affect every nested package
+  // verifier even though the file itself is outside that verifier's cwd.
+  if (normalizedTarget === PROJECT_SCOPE_TARGET || projectWideMutationTarget(normalizedTarget)) return true
   const cwd = String(scope?.cwd || '.').trim().replace(/\\/gu, '/').replace(/\/+$/u, '') || '.'
   const normalizedCwd = process.platform === 'win32' ? cwd.toLowerCase() : cwd
   if (normalizedCwd === '.' && !workspaceRoot) return !absolutePathLike(normalizedTarget)

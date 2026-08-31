@@ -1,3 +1,5 @@
+export const MAX_FAILED_TURN_RETRIES = 1
+
 export function failureSupportsFailedRetry(failurePayload) {
   const failure = failurePayload?.error
   if (!failure || typeof failure !== 'object' || Array.isArray(failure)) return false

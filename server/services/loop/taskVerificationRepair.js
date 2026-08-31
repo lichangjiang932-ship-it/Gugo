@@ -11,6 +11,7 @@ import {
   markVerificationOverflow,
   MAX_PENDING_TASK_VERIFICATIONS,
   MAX_TASK_VERIFICATION_CANDIDATES,
+  MAX_TASK_VERIFICATION_EPOCH,
   MAX_TASK_VERIFICATION_INDETERMINATES,
   MAX_TASK_VERIFICATION_MUTATION_TARGETS,
   MAX_TASK_VERIFICATION_VERIFIED,
@@ -283,7 +284,16 @@ export function observeTaskVerificationMutation(state, targets, { workspaceRoot 
     return { changed: false, promoted: [], invalidated: [] }
   }
 
-  state.mutationEpoch = normalizeEpoch(state.mutationEpoch) + 1
+  const previousEpoch = normalizeEpoch(state.mutationEpoch)
+  if (previousEpoch >= MAX_TASK_VERIFICATION_EPOCH) {
+    // Epoch ordering is no longer representable exactly. Keep the last safe
+    // value and leave a permanent fail-closed sentinel instead of wrapping to
+    // zero, which could otherwise let stale verification clear newer debt.
+    markVerificationOverflow(state)
+    state.mutationEpoch = MAX_TASK_VERIFICATION_EPOCH
+  } else {
+    state.mutationEpoch = previousEpoch + 1
+  }
   const currentEpoch = state.mutationEpoch
   for (const target of normalizedTargets) {
     state.mutationTargets.delete(target)

@@ -302,8 +302,7 @@ export function listUnfinishedTurnExecutions({ before = Date.now(), limit = 10_0
         session_id,
         turn_id,
         MAX(sequence) AS last_sequence,
-        MAX(CASE WHEN type = 'turn.started' THEN 1 ELSE 0 END) AS has_started,
-        MAX(CASE WHEN type IN ('turn.completed', 'turn.cancelled', 'turn.failed') THEN 1 ELSE 0 END) AS has_terminal
+        MAX(CASE WHEN type = 'turn.started' THEN 1 ELSE 0 END) AS has_started
       FROM turn_events
       GROUP BY user_id, session_id, turn_id
     )
@@ -329,7 +328,7 @@ export function listUnfinishedTurnExecutions({ before = Date.now(), limit = 10_0
      AND lease.session_id = summary.session_id
      AND lease.turn_id = summary.turn_id
     WHERE summary.has_started = 1
-      AND summary.has_terminal = 0
+      AND latest.type NOT IN ('turn.completed', 'turn.cancelled', 'turn.failed')
       AND latest.created_at <= ?
     ORDER BY latest.created_at ASC, summary.user_id ASC, summary.session_id ASC, summary.turn_id ASC
     LIMIT ?
