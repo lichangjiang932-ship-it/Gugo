@@ -425,7 +425,7 @@ unregistered oversized files, growth, and shrinkage that was not ratcheted.
     { "path": "server/routes/pluginRoutes.js", "ceiling": 827, "group": "route-composition" },
     { "path": "server/services/TurnEngine.js", "ceiling": 1258, "group": "turn-agent-orchestration" },
     { "path": "server/services/approvalGate.js", "ceiling": 899, "group": "turn-agent-orchestration" },
-    { "path": "server/services/artifactGen.js", "ceiling": 1593, "group": "artifact-delivery" },
+    { "path": "server/services/artifactGen.js", "ceiling": 1329, "group": "artifact-delivery" },
     { "path": "server/services/contextCompactionRuntime.js", "ceiling": 1037, "group": "turn-agent-orchestration" },
     { "path": "server/services/evolutionAutoLoopService.js", "ceiling": 1027, "group": "evolution-control-plane" },
     { "path": "server/services/evolutionCanaryService.js", "ceiling": 708, "group": "evolution-control-plane" },
