@@ -12,6 +12,7 @@ const {
   restoreTaskVerificationRepair,
   serializeTaskVerificationRepair,
   taskVerificationRepairBlockerText,
+  taskVerificationRepairDetails,
   taskVerificationKinds,
 } = await import('../server/services/loop/taskVerificationRepair.js')
 
@@ -184,6 +185,48 @@ test('verification diagnostics redact credentials before checkpoint persistence 
   })
   assert.doesNotMatch(JSON.stringify(serializeTaskVerificationRepair(restored)), new RegExp(exposed))
   assert.doesNotMatch(taskVerificationRepairBlockerText(restored), new RegExp(exposed))
+})
+
+test('terminal repair copy is bilingual while raw diagnostics remain structured', () => {
+  const failedDiagnostic = '原始断言失败 raw assertion diagnostic'
+  const indeterminateDiagnostic = '缺少 eslint executable'
+  const state = {
+    consecutiveFailures: 2,
+    pending: new Map([['test', {
+      reason: 'verification_failed',
+      kind: 'test',
+      cwd: '.',
+      commandScope: 'npm test',
+      code: 'PROJECT_CHECK_FAILED',
+      message: failedDiagnostic,
+      failures: 2,
+      requiredEpoch: 1,
+    }]]),
+    indeterminate: new Map([['lint', {
+      kind: 'lint',
+      cwd: '.',
+      commandScope: 'npm run lint',
+      code: 'VERIFICATION_TOOLCHAIN_UNAVAILABLE',
+      message: indeterminateDiagnostic,
+      requiredEpoch: 1,
+    }]]),
+  }
+
+  const details = taskVerificationRepairDetails(state)
+  assert.deepEqual(details?.checks.map(({ diagnostic }) => diagnostic), [
+    failedDiagnostic,
+    indeterminateDiagnostic,
+  ])
+
+  const zh = taskVerificationRepairBlockerText(state, { locale: 'zh' })
+  const en = taskVerificationRepairBlockerText(state, { locale: 'en' })
+  for (const copy of [zh, en, buildTaskVerificationRepairPrompt(state)]) {
+    assert.doesNotMatch(copy, /原始断言失败|raw assertion diagnostic|缺少 eslint executable/u)
+  }
+  assert.match(zh, /请查看结构化验证详情中的诊断信息/u)
+  assert.match(en, /See the structured verification details for diagnostics\./u)
+  assert.doesNotMatch(en, /[\u3400-\u9fff]/u)
+  assert.equal(taskVerificationRepairBlockerText(state, { locale: 'ja' }), en)
 })
 
 test('verification debt uses a canonical check scope and ignores infrastructure failures', () => {

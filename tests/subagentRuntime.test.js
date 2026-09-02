@@ -298,6 +298,7 @@ test('subagent model calls consume the shared hard budget and still return a wra
     tools: [SUBAGENT_TYPES.explore.tools.find((tool) => tool.function.name === 'read_file')],
     maxIters: 3,
     userId,
+    locale: 'en',
     budget,
     approveTool: async ({ args }) => ({ proceed: true, args }),
     executeTool: async () => ({ ok: true, content: 'evidence' }),

@@ -1,3 +1,5 @@
+import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
+
 /**
  * Apply the host-owned terminal gates in their canonical priority order.
  *
@@ -122,7 +124,7 @@ export async function finalizeRuntime(s) {
       })
       s.recovery = mergeCompactionRecovery(s.recovery, wrapUpRequest.recovery)
       const wrapUp = wrapUpRequest.response
-      s.finalText = wrapUp?.content || ''
+      s.finalText = localizedTerminalModelText(s.locale, wrapUp?.content, { strictLocale: true })
     } catch {
       writeToolAudit?.({
         userId: s.job?.userId,

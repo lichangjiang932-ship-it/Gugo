@@ -1,4 +1,5 @@
 import { normalizeOptionalUsageNumber } from '../../../shared/modelUsage.js'
+import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
 
 function modelPhaseUsage(result) {
   const usage = result?.usage
@@ -11,7 +12,7 @@ function modelPhaseUsage(result) {
 
 export async function runModelRequest(s) {
   const i = s.iteration
-  const { DIRECTORY_REVIEW_GUARD_MARKER, extractTextToolCalls, filterCurrentDynamicToolSpecs, getToolMetadata, mergeCompactionRecovery, snapshotDynamicToolSpecRegistrations, sourceHandoffViolation, toolNameFromSpec } = s.d
+  const { DIRECTORY_REVIEW_GUARD_MARKER, budgetExceededCopy, extractTextToolCalls, filterCurrentDynamicToolSpecs, formatIncompleteTerminalText, getToolMetadata, mergeCompactionRecovery, snapshotDynamicToolSpecRegistrations, sourceHandoffViolation, toolNameFromSpec } = s.d
   {
           const claimed = await s.steeringController.claimFresh(s.appliedSteeringIds)
           if (claimed.messages.length > 0) {
@@ -216,6 +217,7 @@ export async function runModelRequest(s) {
           // 现在对齐:已经跑过至少一轮 + 不是用户主动取消 → 降级成部分结果,
           // 把中断原因和已查到的东西交给用户,而不是一个空的 failed。
           if (error?.code === 'MODEL_BUDGET_EXCEEDED') {
+            const budgetCopy = budgetExceededCopy(s.locale, error.message)
             let wrapUpText = ''
             try {
               const wrapUpRequest = await s.callTrackedModel({
@@ -223,7 +225,7 @@ export async function runModelRequest(s) {
                   ...s.convo,
                   {
                     role: 'system',
-                    content: `模型预算已用尽(${error.message})。请基于目前已有的信息给出最终回答，不要再调用任何工具。`,
+                    content: budgetCopy.wrapUpPrompt,
                   },
                 ],
                 tools: [],
@@ -231,14 +233,18 @@ export async function runModelRequest(s) {
                 toolChoice: 'none',
               })
               s.recovery = mergeCompactionRecovery(s.recovery, wrapUpRequest.recovery)
-              wrapUpText = wrapUpRequest.response?.content || ''
+              wrapUpText = localizedTerminalModelText(
+                s.locale,
+                wrapUpRequest.response?.content,
+                { strictLocale: true },
+              )
             } catch (wrapUpError) {
               if (wrapUpError?.name === 'AbortError') throw wrapUpError
             }
             const terminal = await s.finishTerminalResult({
               text: !s.hasRequiredArtifacts()
                 ? ''
-                : wrapUpText || '模型预算已用尽，任务尚未完成。请重试以继续。',
+                : wrapUpText || budgetCopy.fallbackText,
               ...(wrapUpText ? { partialText: wrapUpText } : {}),
               artifactIds: s.artifactIds,
               iterations: s.iter + 1,
@@ -255,7 +261,7 @@ export async function runModelRequest(s) {
               if (typeof s.releaseSteering === 'function') await s.releaseSteering(i.steeringLeaseId)
             }
             const terminal = await s.finishTerminalResult({
-              text: '模型推理超过安全上限，任务已停止。请重试，或换用更适合执行工具任务的模型。',
+              text: formatIncompleteTerminalText('reasoning_runaway', { locale: s.locale }),
               artifactIds: s.artifactIds,
               iterations: s.iter + 1,
               incomplete: true,
@@ -280,7 +286,7 @@ export async function runModelRequest(s) {
           const terminal = await s.finishTerminalResult(s.partialResultFallback.apply({
             text: !s.hasRequiredArtifacts()
               ? ''
-              : '任务执行被中断，尚未完成。请重试以继续。',
+              : '',
             artifactIds: s.artifactIds,
             iterations: s.iter + 1,
             interrupted: true,

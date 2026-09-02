@@ -1,4 +1,7 @@
 import { normalizeTurnLocale } from '../../../shared/turnLocale.js'
+import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
+
+const HAN_TEXT = /[\u3400-\u9fff]/u
 
 function terminalCopy(locale) {
   if (normalizeTurnLocale(locale) === 'zh') {
@@ -6,13 +9,23 @@ function terminalCopy(locale) {
       clarificationFallback: '需要你补充信息后才能继续。',
       noProgressPrompt: '工具循环因持续无进展而停止。请基于已有信息给出部分结论，不要再调用工具。',
       noProgressFallback: '（工具循环因持续无进展而停止。）',
+      noProgressHint: '请停止重复调用，改用已有结果收尾或换一种方法。',
     }
   }
   return {
     clarificationFallback: 'More information is required before this task can continue.',
     noProgressPrompt: 'The tool loop stopped after making no progress. Use the available information to provide a partial conclusion in English. Do not call any tools.',
     noProgressFallback: '(The tool loop stopped after making no progress.)',
+    noProgressHint: 'Stop repeating the same tool call. Use the available results to finish, or try a different approach.',
   }
+}
+
+function localizedNoProgressHint(locale, hint, fallback) {
+  const value = String(hint || '').trim()
+  if (!value) return ''
+  return normalizeTurnLocale(locale) === 'zh'
+    ? (HAN_TEXT.test(value) ? value : fallback)
+    : (localizedTerminalModelText(locale, value) || fallback)
 }
 
 export async function completeIteration(s) {
@@ -194,7 +207,11 @@ export async function completeIteration(s) {
               toolChoice: 'none',
             })
             s.recovery = mergeCompactionRecovery(s.recovery, wrapUpRequest.recovery)
-            s.finalText = wrapUpRequest.response?.content || ''
+            s.finalText = localizedTerminalModelText(
+              s.locale,
+              wrapUpRequest.response?.content,
+              { strictLocale: true },
+            )
           } catch {
             writeToolAudit?.({
               userId: s.job?.userId,
@@ -245,6 +262,11 @@ export async function completeIteration(s) {
       }
   if (i.noProgressReason) {
         const copy = terminalCopy(s.locale)
+        const noProgressHint = localizedNoProgressHint(
+          s.locale,
+          i.noProgressFailure?.hint,
+          copy.noProgressHint,
+        )
         try {
           const wrapUpRequest = await s.callTrackedModel({
             messages: [
@@ -261,7 +283,7 @@ export async function completeIteration(s) {
           })
           s.recovery = mergeCompactionRecovery(s.recovery, wrapUpRequest.recovery)
           const wrapUp = wrapUpRequest.response
-          s.finalText = wrapUp?.content || ''
+          s.finalText = localizedTerminalModelText(s.locale, wrapUp?.content, { strictLocale: true })
         } catch {
           s.finalText = ''
         }
@@ -275,7 +297,7 @@ export async function completeIteration(s) {
           noProgress: true,
           code: i.noProgressCode || 'tool_no_progress',
           retryable: i.noProgressFailure?.retryable === true,
-          ...(i.noProgressFailure?.hint ? { hint: i.noProgressFailure.hint } : {}),
+          ...(noProgressHint ? { hint: noProgressHint } : {}),
           reason: i.noProgressReason,
           recovery: s.recovery,
         }, {
@@ -284,7 +306,7 @@ export async function completeIteration(s) {
               noProgress: true,
               code: i.noProgressCode || 'tool_no_progress',
               retryable: i.noProgressFailure?.retryable === true,
-              ...(i.noProgressFailure?.hint ? { hint: i.noProgressFailure.hint } : {}),
+              ...(noProgressHint ? { hint: noProgressHint } : {}),
             },
         })
         if (!terminal) return { kind: 'continue' }

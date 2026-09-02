@@ -1,12 +1,24 @@
 export const TURN_INTENT_MODES = Object.freeze(['auto', 'answer', 'execute'])
 
+const ENGLISH_STATUS_SUBJECT = String.raw`[^?？!！;；\r\n]{1,160}?`
+const ENGLISH_STATUS_OBJECT = String.raw`(?:\s+[^?？!！;；\r\n]{1,80}?)?`
+const ENGLISH_STATUS_ACTION = String.raw`(?:complete|finish|fix|update|change|delete|remove|save|install|deploy|create|generate|build|write|edit|modify|apply|test|verify)`
+const ENGLISH_STATUS_PARTICIPLE = String.raw`(?:completed|finished|fixed|updated|changed|deleted|removed|saved|installed|deployed|created|generated|built|written|edited|modified|applied|tested|verified)`
+const ENGLISH_STATUS_RESULT = String.raw`(?:complete|done|ready|${ENGLISH_STATUS_PARTICIPLE})`
+const ENGLISH_COMPLETION_STATUS = String.raw`(?:(?:is|are|was|were)\s+${ENGLISH_STATUS_SUBJECT}\s+${ENGLISH_STATUS_RESULT}(?:\s+yet)?|(?:has|have)\s+${ENGLISH_STATUS_SUBJECT}\s+${ENGLISH_STATUS_PARTICIPLE}${ENGLISH_STATUS_OBJECT}(?:\s+yet)?|did\s+${ENGLISH_STATUS_SUBJECT}\s+${ENGLISH_STATUS_ACTION}${ENGLISH_STATUS_OBJECT}(?:\s+yet)?)`
+const CHINESE_WORK_STATUS = String.raw`(?:(?:现在|当前|已经|已)\s*)?[^?？!！;；\r\n]{0,80}?(?:修复|修改|改|更新|删除|移除|保存|安装|部署|生成|创建|测试|验证|上传|下载|导出|重命名|移动)(?:好|完|完成|通过)?了\s*(?:吗|没有)`
+export const STATUS_INQUIRY_PROMPT = new RegExp(
+  String.raw`^(?:(?:请|先|那|那么|现在)\s*)?(?:(?:遇到|出现|发生)(?:了)?\s*(?:什么|哪些)?\s*(?:问题|错误|异常|阻塞)|(?:有|还有|到底有)\s*(?:什么|哪些)?\s*(?:问题|错误|异常)|(?:为什么|为何|怎么|哪里)\s*(?:会)?\s*(?:失败|报错|卡住|停止|中断|没(?:有)?完成|未完成)|(?:现在|当前)?\s*(?:是什么|什么)\s*(?:状态|进度)|(?:完成|做好|成功)(?:了)?\s*(?:吗|没有)|${CHINESE_WORK_STATUS}|what\s+(?:went\s+wrong|failed)|why\s+(?:did\s+it\s+fail|is\s+it\s+stuck)|what(?:'s|\s+is)\s+the\s+(?:status|problem)|${ENGLISH_COMPLETION_STATUS})(?:[了呢吗]?\s*[?？。.!！]*)$`,
+  'i',
+)
+
 const TURN_INTENT_MODE_SET = new Set(TURN_INTENT_MODES)
 const NUMBERED_STEP_LINE = /^(?:\d+[.)\u3001]|step\s+\d+|\u6b65\u9aa4\s*[0-9\u4e00-\u5341]+)\s*/i
 const STEP_EXECUTION_ACTION = /\b(?:implement|integrate|execute|run|apply|fix|create|generate|build|write|save|export|install|enable|open|click|upload|download|delete|rename|move|copy|test|verify|check|update|refactor)\b|(?:\u5b9e\u73b0|\u96c6\u6210|\u63a5\u5165|\u542f\u7528|\u6267\u884c|\u8fd0\u884c|\u4fee\u6539|\u4fee\u590d|\u521b\u5efa|\u751f\u6210|\u6784\u5efa|\u5199\u5165|\u4fdd\u5b58|\u5bfc\u51fa|\u5b89\u88c5|\u6253\u5f00|\u70b9\u51fb|\u4e0a\u4f20|\u4e0b\u8f7d|\u6dfb\u52a0|\u589e\u52a0|\u53bb\u6389|\u79fb\u9664|\u5220\u9664|\u6302\u8f7d|\u5206\u914d|\u91cd\u547d\u540d|\u79fb\u52a8|\u590d\u5236|\u6d4b\u8bd5|\u9a8c\u8bc1|\u68c0\u67e5|\u66f4\u65b0|\u91cd\u6784)/i
 const DIRECT_EXECUTION_INTENT = /(?:\b(?:implement|execute|run|apply|fix|create|generate|build|write|save|export)\b|(?:\u5b9e\u73b0|\u6267\u884c|\u8fd0\u884c|\u4fee\u590d|\u521b\u5efa|\u751f\u6210|\u6784\u5efa|\u5199\u5165|\u4fdd\u5b58|\u5bfc\u51fa|\u4fee\u6539))(?:[\s\S]{0,160})(?:\b(?:file|page|app|project|script|document|artifact)\b|(?:\u6587\u4ef6|\u7f51\u9875|\u9875\u9762|\u5e94\u7528|\u9879\u76ee|\u811a\u672c|\u6587\u6863|\u4ea7\u7269))/i
 const EXTERNAL_ACTION_ORDER = /^(?:\s*(?:please|directly|help\s+(?:me\s+)?|can\s+you|could\s+you|would\s+you|will\s+you)){0,3}\s*(?:send|notify)\b|^\s*(?:(?:\u8bf7|\u76f4\u63a5|\u5e2e\u6211|\u7ed9\u6211|\u4f60\u80fd|\u4f60\u53ef\u4ee5|\u53ef\u4ee5|\u80fd\u5426|\u9ebb\u70e6\u4f60)\s*){0,3}(?:\u53d1\u9001|\u901a\u77e5)/i
 const EXTERNAL_MUTATION_INTENT = /\b(?:send|notify|post|publish)\b|(?:\u53d1\u9001|\u901a\u77e5|\u53d1\u5e03)/i
-const MUTATION_EXECUTION_INTENT = /\b(?:implement|integrate|enable|apply|fix|handle|resolve|create|generate|build|write|edit|change|adjust|tweak|revise|replace|overwrite|save|export|install|remove|delete|rename|move|copy|update|modify|patch|refactor|improve|optimize|finish|complete)\b|\b(?:wire\s+in|take\s+care\s+of|sort\s+out)\b|(?:\u5b9e\u73b0|\u96c6\u6210|\u63a5\u5165|\u542f\u7528|\u4fee\u6539|\u7f16\u8f91|\u6539\u4e00\u4e0b|\u6539\u597d|\u6539\u6210|\u6539\u52a8|\u4fee\u590d|\u4fee\u597d|\u8c03\u6574|\u5904\u7406|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u6784\u5efa|\u5199\u5165|\u4fdd\u5b58|\u8986\u76d6|\u66ff\u6362|\u6dfb\u52a0|\u589e\u52a0|\u8865\u4e0a|\u53bb\u6389|\u79fb\u9664|\u5bfc\u51fa|\u5b89\u88c5|\u5220\u9664|(?:\u6309\u9700)?\u6302\u8f7d|\u5206\u914d|\u91cd\u547d\u540d|\u79fb\u52a8|\u590d\u5236|\u66f4\u65b0|\u6253\u8865\u4e01|\u91cd\u6784|\u4f18\u5316|\u5b8c\u5584|\u8865\u5168|\u641e\u5b9a|\u89e3\u51b3)/i
+const MUTATION_EXECUTION_INTENT = /\b(?:implement|integrate|enable|apply|fix|handle|resolve|create|generate|build|write|edit|change|adjust|tweak|revise|replace|overwrite|save|export|install|remove|delete|rename|move|copy|update|modify|patch|refactor|improve|optimize|finish|complete|deploy)\b|\b(?:wire\s+in|take\s+care\s+of|sort\s+out)\b|(?:\u5b9e\u73b0|\u96c6\u6210|\u63a5\u5165|\u542f\u7528|\u4fee\u6539|\u7f16\u8f91|\u6539\u4e00\u4e0b|\u6539\u597d|\u6539\u6210|\u6539\u52a8|\u4fee\u590d|\u4fee\u597d|\u8c03\u6574|\u5904\u7406|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u6784\u5efa|\u5199\u5165|\u4fdd\u5b58|\u8986\u76d6|\u66ff\u6362|\u6dfb\u52a0|\u589e\u52a0|\u8865\u4e0a|\u53bb\u6389|\u79fb\u9664|\u5bfc\u51fa|\u5b89\u88c5|\u5220\u9664|(?:\u6309\u9700)?\u6302\u8f7d|\u5206\u914d|\u91cd\u547d\u540d|\u79fb\u52a8|\u590d\u5236|\u66f4\u65b0|\u6253\u8865\u4e01|\u91cd\u6784|\u4f18\u5316|\u5b8c\u5584|\u8865\u5168|\u641e\u5b9a|\u89e3\u51b3|\u90e8\u7f72)/i
 const NEGATED_MUTATION_CLAUSE = /(?:(?:\b(?:do\s+not|don't|never|without|no\s+need\s+to|must\s+not)\b)|(?:\u4e0d\u8981|\u65e0\u9700|\u4e0d\u5fc5|\u4e0d\u5f97|\u7981\u6b62))[^,.;\uff0c\u3002\uff1b\r\n]{0,120}?(?:\b(?:re-?generate|regenerate|rewrite|implement|integrate|enable|apply|fix|create|generate|build|write|edit|change|adjust|tweak|revise|replace|overwrite|save|export|install|remove|delete|rename|move|copy|update|modify|patch|refactor|improve|optimize)(?:s|d|ed|ing)?\b|(?:\u5b9e\u73b0|\u96c6\u6210|\u63a5\u5165|\u542f\u7528|\u4fee\u6539|\u7f16\u8f91|\u6539\u4e00\u4e0b|\u6539\u597d|\u6539\u6210|\u6539\u52a8|\u4fee\u590d|\u4fee\u597d|\u8c03\u6574|\u5904\u7406|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u6784\u5efa|\u5199\u5165|\u4fdd\u5b58|\u8986\u76d6|\u66ff\u6362|\u53bb\u6389|\u79fb\u9664|\u5bfc\u51fa|\u5b89\u88c5|\u5220\u9664|\u91cd\u547d\u540d|\u79fb\u52a8|\u590d\u5236|\u66f4\u65b0|\u6253\u8865\u4e01|\u91cd\u6784|\u4f18\u5316|\u505a\u6210|\u6539\u9020(?:\u6210|\u4e3a)?))[^,.;\uff0c\u3002\uff1b\r\n]{0,120}/giu
 const NEGATED_ROUTING_MUTATION_CLAUSE = /(?:\u4e0d\u8981|\u65e0\u9700|\u4e0d\u5fc5|\u4e0d\u5f97|\u7981\u6b62)[^,.;\uff0c\u3002\uff1b\r\n]{0,120}?(?:\u6dfb\u52a0|\u589e\u52a0|\u8865\u4e0a|(?:\u6309\u9700)?\u6302\u8f7d|\u5206\u914d)[^,.;\uff0c\u3002\uff1b\r\n]{0,120}/giu
 const NEGATED_REWIND_MUTATION_CLAUSE = /(?:(?:\b(?:do\s+not|don't|never|without|must\s+not)\b)|(?:\u4e0d\u8981|\u65e0\u9700|\u4e0d\u5fc5|\u4e0d\u5f97|\u7981\u6b62))(?:\.(?=[a-z0-9]{1,12}\b)|[^,.;\uff0c\u3002\uff1b\r\n]){0,120}?(?:\b(?:revert|undo|rollback|restore)\b|(?:\u56de\u6eda|\u64a4\u9500|\u6062\u590d\u539f\u72b6|\u8fd8\u539f))(?:\.(?=[a-z0-9]{1,12}\b)|[^,.;\uff0c\u3002\uff1b\r\n]){0,120}/giu
@@ -30,6 +42,7 @@ const REWIND_IMPERATIVE_EXECUTION_INTENT = /(?:^|[\s,\uff0c\u3002\uff1b;!\uff01]
 const ANSWER_ONLY_LEAD = /^\s*(?:(?:\u6211(?:\u53ea\u662f)?\u60f3(?:\u77e5\u9053|\u4e86\u89e3|\u95ee(?:\u4e00\u4e0b)?)|\u53ea\u662f\u60f3(?:\u77e5\u9053|\u4e86\u89e3))\s*[,\uff0c\uff1a:]?\s*|(?:\u8bf7)?(?:\u89e3\u91ca|\u8bf4\u660e|\u4ecb\u7ecd|\u544a\u8bc9\u6211|\u6bd4\u8f83)|(?:\u4ec0\u4e48\u662f|\u4e3a\u4ec0\u4e48|\u4e3a\u4f55|\u5982\u4f55|\u600e\u4e48|\u80fd\u5426|\u662f\u5426)|(?:what|why|how|explain|describe|compare|tell\s+me|can\s+you|could\s+you)\b)/i
 const EXPLANATION_ONLY_LEAD = /^\s*(?:(?:\u6211(?:\u53ea\u662f)?\u60f3(?:\u77e5\u9053|\u4e86\u89e3|\u95ee(?:\u4e00\u4e0b)?)|\u53ea\u662f\u60f3(?:\u77e5\u9053|\u4e86\u89e3))\s*[,\uff0c\uff1a:]?\s*|(?:\u8bf7)?(?:\u89e3\u91ca|\u8bf4\u660e|\u4ecb\u7ecd|\u544a\u8bc9\u6211|\u6bd4\u8f83)|(?:\u4ec0\u4e48\u662f|\u4e3a\u4ec0\u4e48|\u4e3a\u4f55|\u5982\u4f55|\u600e\u4e48)|(?:what|why|how|explain|describe|compare|tell\s+me)\b)/i
 const FOLLOW_UP_EXECUTION = /(?:\u5e76\u4e14|\u5e76|\u7136\u540e|\u540c\u65f6|\u987a\u4fbf|and\s+then|then|also).{0,48}(?:(?:\u8bf7|\u5e2e\u6211|please|help\s+(?:me\s+)?)\s*)?(?:\u5b8c\u5584|\u4f18\u5316|\u4fee\u590d|\u5904\u7406|\u4fee\u6539|\u5b9e\u73b0|\u89e3\u51b3|\u6267\u884c|\u521b\u5efa|\u751f\u6210|fix|implement|apply|update|create|run)/i
+const STATUS_FOLLOW_UP_CONNECTOR = /\b(?:if\s+not|otherwise|and\s+(?:then|please)|then|also)\b|[,;]\s*(?=(?:please|also|then)\b)|(?:如果(?:没有|还没|未|不)|否则|然后(?:请)?|并且请)/i
 const DELEGATED_EXECUTION_INTENT = /^(?:please\s+)?(?:handle|resolve|finish|complete|take\s+care\s+of|sort\s+out)\b|(?:\u4f60\u6765|\u4ea4\u7ed9\u4f60|\u7531\u4f60|\u9ebb\u70e6\u4f60|\u52b3\u70e6\u4f60|\u8bf7\u4f60|\u4f60(?:\u6839\u636e.{0,32})?\u6765(?:\u8fdb\u884c)?|\u4f60(?:\u76f4\u63a5|\u73b0\u5728\u5c31|\u8d1f\u8d23|\u8fdb\u884c)).{0,80}(?:\u5904\u7406\u597d|\u6539\u597d|\u5b8c\u5584|\u4f18\u5316|\u4fee\u590d|\u4fee\u6539|\u5b9e\u73b0|\u8865\u5168|\u89e3\u51b3|\u641e\u5b9a|\u8c03\u6574|\u66f4\u65b0|\u91cd\u6784|\u521b\u5efa|\u751f\u6210|\u6267\u884c)/i
 const LOCAL_FILE_REQUIREMENTS_LEAD = /(?:\u73b0\u5728|\u63a5\u4e0b\u6765|\u53e6\u5916|\u6b64\u5916|\u7136\u540e)?\s*(?:\u6211\s*)?(?:\u8fd8\s*)?(?:\u6709|\u8865\u5145|\u63d0\u51fa)\s*(?:\u51e0\u4e2a|\u4ee5\u4e0b|\u8fd9\u4e9b|\u5982\u4e0b)?\s*(?:\u9700\u6c42|\u8981\u6c42|\u6539\u52a8|\u8c03\u6574)|(?:\u9700\u6c42|\u8981\u6c42|\u6539\u52a8|\u8c03\u6574)\s*(?:\u5982\u4e0b|\u6709)/i
 const LOCAL_FILE_REQUIREMENTS_READ_ONLY = /(?:\u8bf7|\u53ea|\u4ec5)?\s*(?:\u5206\u6790|\u89e3\u91ca|\u8bf4\u660e|\u8bc4\u4f30|\u5ba1\u67e5|\u8ba8\u8bba|\u68b3\u7406|\u603b\u7ed3|\u5217\u51fa|\u8bc6\u522b)(?:\u4e00\u4e0b)?\s*(?:\u8fd9\u4e9b|\u4ee5\u4e0b|\u4e0a\u8ff0)?\s*(?:\u9700\u6c42|\u8981\u6c42)|(?:\u80fd\u5426|\u662f\u5426|\u53ef\u4e0d\u53ef\u4ee5|\u80fd\u4e0d\u80fd).{0,20}(?:\u6ee1\u8db3|\u5b9e\u73b0|\u5b8c\u6210|\u5904\u7406)?\s*(?:\u8fd9\u4e9b|\u4ee5\u4e0b)?\s*(?:\u9700\u6c42|\u8981\u6c42)/i
@@ -48,6 +61,20 @@ const ENGLISH_MUTATION_CAPABILITY = /\b(?:edit|modify|change|fix|write|save|over
 const ENGLISH_ASSISTANT_CAPABILITY_REFERENT = /\b(?:you|yourself|tool|capability|environment|available)\b/i
 const ENGLISH_THIRD_PARTY_SUBJECT = /\b(?:users?|visitors?|admins?|administrators?|members?|customers?|employees?|students?|developers?)\b/i
 const ENGLISH_NON_ASSISTANT_CAPABILITY_SUBJECT = /\b(?:(?:the|a|an)\s+)?(?:(?:current|this|that)\s+)?(?:users?|visitors?|admins?|administrators?|members?|customers?|employees?|students?|developers?|systems?|pages?|apps?|applications?|sites?|fields?|forms?)\b[^.!?\r\n]{0,40}\b(?:cannot|can't|couldn't|won't|unable|not\s+able)\b/i
+
+function hasStatusFollowUpExecution(text) {
+  const prompt = String(text || '')
+  const connector = STATUS_FOLLOW_UP_CONNECTOR.exec(prompt)
+  if (!connector) return false
+  const followUp = prompt.slice(connector.index)
+  return IMPERATIVE_EXECUTION_INTENT.test(followUp)
+    || OBJECT_FIRST_EXECUTION_INTENT.test(followUp)
+    || OBJECT_TRANSFORMATION_EXECUTION_INTENT.test(followUp)
+    || OBJECT_TAIL_EXECUTION_INTENT.test(followUp)
+    || ROUTING_IMPERATIVE_EXECUTION_INTENT.test(followUp)
+    || REWIND_IMPERATIVE_EXECUTION_INTENT.test(followUp)
+    || DELEGATED_EXECUTION_INTENT.test(followUp)
+}
 
 export function normalizeTurnIntentMode(value) {
   const normalized = String(value || '').trim().toLowerCase()
@@ -90,6 +117,7 @@ export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) 
 
   const prompt = String(text || '').trim()
   if (!prompt) return false
+  if (STATUS_INQUIRY_PROMPT.test(prompt) && !hasStatusFollowUpExecution(prompt)) return false
   // Mutation verbs inside an explicit prohibition are constraints, not work
   // orders. Strip only the negated clause so mixed prompts remain executable:
   // "do not edit A; create B" still retains the affirmative second clause.
@@ -155,6 +183,7 @@ export function hasMutationExecutionIntent(text = '') {
     .replace(NEGATED_MUTATION_CLAUSE, ' ')
     .replace(NEGATED_ROUTING_MUTATION_CLAUSE, ' ')
     .replace(NEGATED_REWIND_MUTATION_CLAUSE, ' ')
+  if (STATUS_INQUIRY_PROMPT.test(prompt.trim()) && !hasStatusFollowUpExecution(prompt)) return false
   if (ANSWER_ONLY_LEAD.test(prompt) && !shouldRequireExecution({ text: prompt })) return false
   return MUTATION_EXECUTION_INTENT.test(prompt)
     || EXTERNAL_MUTATION_INTENT.test(prompt)

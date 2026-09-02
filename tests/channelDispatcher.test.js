@@ -152,13 +152,43 @@ test('dispatchUserMessage: selected model binding is snapshotted before a queued
     modelName: 'selected-model',
     modelProviderId: 'selected-provider',
     modelConfigRevision: 11,
+    locale: 'en',
   })
   assert.equal(calls.length, 1)
   assert.equal(calls[0].modelName, 'selected-model')
   assert.equal(calls[0].modelProviderId, 'selected-provider')
   assert.equal(calls[0].modelConfigRevision, 11)
+  assert.equal(calls[0].locale, 'en')
   releases[0]({ resultText: '' })
   await dispatcher.waitForChannelDispatcherIdleForTests({ userId, channelId: channel.id })
+})
+
+test('dispatchUserMessage: locale survives an agent-to-agent channel handoff', { concurrency: false }, async () => {
+  let callCount = 0
+  const { userId, agents, store, dispatcher, calls } = await setup({
+    runSubagent: async () => {
+      callCount += 1
+      return { resultText: callCount === 1 ? '@Ming continue' : '' }
+    },
+  })
+  const channel = store.createChannel({
+    userId,
+    name: 'Localized Crew',
+    kind: 'group',
+    agentIds: [agents.hanako.id, agents.ming.id],
+    defaultAgentId: agents.hanako.id,
+  })
+
+  await dispatcher.dispatchUserMessage({
+    channelId: channel.id,
+    userId,
+    text: 'continue in English',
+    locale: 'en',
+  })
+  await dispatcher.waitForChannelDispatcherIdleForTests({ userId, channelId: channel.id })
+  await dispatcher.waitForChannelDispatcherIdleForTests({ userId, channelId: channel.id })
+
+  assert.deepEqual(calls.map((call) => call.locale), ['en', 'en'])
 })
 
 test('dispatchUserMessage: no default routes to most recent speaking agent', { concurrency: false }, async () => {

@@ -6,6 +6,8 @@ import { createPartialResultFallback } from '../server/services/partialResultFal
 import {
   budgetExceededCopy,
   formatIncompleteTerminalText,
+  priorOutcomeStatusCopy,
+  terminalProtectionCopy,
 } from '../server/services/loop/incompleteTerminalPresentation.js'
 import { taskVerificationRepairBlockerText } from '../server/services/loop/taskVerificationRepair.js'
 import { runToolLoop } from '../server/services/loop/index.js'
@@ -105,10 +107,12 @@ test('artifact-delivery copy uses the runtime reason code in Chinese and English
 test('budget-exhaustion completion, wrap-up, and fallback copy are bilingual', () => {
   const zh = budgetExceededCopy('zh', 'token_limit')
   const en = budgetExceededCopy('en', 'token_limit')
+  const enFromChineseReason = budgetExceededCopy('en', '模型预算已用尽')
   const legacy = budgetExceededCopy('ja', 'token_limit')
 
   for (const value of Object.values(zh)) assert.match(value, CJK_TEXT)
   for (const value of Object.values(en)) assert.doesNotMatch(value, CJK_TEXT)
+  for (const value of Object.values(enFromChineseReason)) assert.doesNotMatch(value, CJK_TEXT)
   assert.deepEqual(legacy, en)
   assert.match(en.wrapUpPrompt, /Do not call any tools/)
 })
@@ -139,6 +143,33 @@ test('English partial-result fallback does not inject Chinese framing', () => {
   assert.doesNotMatch(result.text, CJK_TEXT)
   assert.match(result.text, /Task interrupted/)
   assert.match(result.text, /Completed work/)
+})
+
+test('prior-outcome status framing follows the locale and rejects mismatched blocker copy', () => {
+  const zh = priorOutcomeStatusCopy('zh', {
+    blocker: 'final verification failed',
+    verifiedFiles: ['result.txt'],
+  })
+  const en = priorOutcomeStatusCopy('en', {
+    blocker: '最终验证没有通过',
+    verifiedFiles: ['result.txt'],
+  })
+
+  assert.match(zh, /上一轮仍未完成：上一轮执行未完成/)
+  assert.match(en, /prior turn is still incomplete: the prior execution did not complete/i)
+  assert.match(en, /Verified files: result\.txt/)
+  assert.doesNotMatch(en, CJK_TEXT)
+})
+
+test('terminal-protection fallback copy is complete in Chinese and English', () => {
+  const zh = terminalProtectionCopy('zh')
+  const en = terminalProtectionCopy('en')
+
+  assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort())
+  for (const value of Object.values(zh)) assert.match(value, CJK_TEXT)
+  for (const value of Object.values(en)) assert.doesNotMatch(value, CJK_TEXT)
+  assert.match(en.filteredClarificationText, /More information is required/i)
+  assert.match(en.unverifiedFileText, /verification status/i)
 })
 
 test('task-verification blocker framing follows the selected runtime locale', () => {
@@ -216,6 +247,19 @@ test('iteration-limit completion follows the turn locale and persists the locali
     assert.equal(result.reason, 'iteration_limit_reached')
     assert.doesNotMatch(result.text, /[\u3040-\u30ff\uac00-\ud7af]/u)
     assert.match(result.text, /tool-call limit/i)
+    assert.equal(checkpoint.final.text, result.text)
+  })
+
+  await t.test('English rejects a wrap-up containing full-width punctuation', async () => {
+    const { checkpoint, result } = await runIterationLimitScenario({
+      locale: 'en',
+      wrapUpText: 'Progress saved。Retry to continue.',
+    })
+
+    assert.equal(result.incomplete, true)
+    assert.equal(result.reason, 'iteration_limit_reached')
+    assert.match(result.text, /tool-call limit/i)
+    assert.doesNotMatch(result.text, /。/u)
     assert.equal(checkpoint.final.text, result.text)
   })
 

@@ -1,4 +1,7 @@
-import { partialResultCopy } from './loop/incompleteTerminalPresentation.js'
+import {
+  localizedTerminalModelText,
+  partialResultCopy,
+} from './loop/incompleteTerminalPresentation.js'
 
 const INTERNAL_FAILURE_PATTERNS = [
   /Model call failed\s*:/i,
@@ -53,35 +56,71 @@ const COUNT_FIELD_PATTERN = /(?:^|_)(?:count|total|size|bytes|files?|items?|rows
 const HIGH_VALUE_TOOL_PATTERN = /^(?:create_|generate_|render_|write_|edit_|patch_|apply_patch$|file_(?:upload|download|copy|move)|copy_|move_|mkdir|git_(?:write|commit|push)|media_transform$)/i
 const VERIFICATION_TOOL_PATTERN = /^(?:run_project_check$|git_diff$|git_status$|media_probe$|browser_(?:snapshot|screenshot)|verify_|validate_|inspect_)/i
 
-function safeToolName(value) {
+function safeToolName(value, fallbackName) {
   const name = String(value || '').trim()
-  return /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(name) ? name : '工具'
+  return /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(name) ? name : fallbackName
 }
 
-function redactCredentials(value) {
+function redactCredentials(value, placeholder) {
   let text = String(value || '')
-  for (const pattern of CREDENTIAL_PATTERNS) text = text.replace(pattern, '[已隐藏凭据]')
-  text = text.replace(/([?&](?:token|key|signature|sig|credential|auth)=)[^&#\s]+/gi, '$1[已隐藏凭据]')
+  for (const pattern of CREDENTIAL_PATTERNS) text = text.replace(pattern, placeholder)
+  text = text.replace(
+    /([?&](?:token|key|signature|sig|credential|auth)=)[^&#\s]+/gi,
+    `$1${placeholder}`,
+  )
   return text
 }
 
-function sanitizeText(value, { maxLength = 500, rejectSource = true } = {}) {
+function sanitizeText(value, {
+  maxLength = 500,
+  rejectSource = true,
+  credentialPlaceholder,
+} = {}) {
   const raw = String(value ?? '').replace(/\0/g, '').trim()
   if (!raw || INTERNAL_FAILURE_PATTERNS.some((pattern) => pattern.test(raw))) return ''
   if (rejectSource && SOURCE_OR_CONFIG_PATTERNS.some((pattern) => pattern.test(raw))) return ''
-  return redactCredentials(raw).replace(/\s+/g, ' ').slice(0, maxLength)
+  return redactCredentials(raw, credentialPlaceholder).replace(/\s+/g, ' ').slice(0, maxLength)
 }
 
-function sanitizePath(value) {
-  const text = sanitizeText(value, { maxLength: 500, rejectSource: true })
+function sanitizeLocalizedText(value, locale, options) {
+  return localizedTerminalModelText(locale, sanitizeText(value, options))
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function restoredEntryLanguageProbe(entry, copy) {
+  const labels = [copy.fileLabel, copy.pathLabel].map(escapeRegExp).join('|')
+  const labelSeparator = escapeRegExp(copy.labelSeparator)
+  const itemSeparator = escapeRegExp(copy.itemSeparator)
+  return entry
+    .replace(
+      new RegExp(`(^[a-z][a-z0-9_-]{0,63}${labelSeparator}(?:${labels})${labelSeparator})[^;\\r\\n]*`, 'i'),
+      '$1',
+    )
+    .replace(
+      new RegExp(`(${itemSeparator}(?:${labels})${labelSeparator})[^;\\r\\n]*`, 'gi'),
+      '$1',
+    )
+}
+
+function sanitizePath(value, copy) {
+  // Paths are user data, not localized prose. Preserve non-English filenames
+  // while still applying source/config rejection and credential redaction.
+  const text = sanitizeText(value, {
+    maxLength: 500,
+    rejectSource: true,
+    credentialPlaceholder: copy.credentialPlaceholder,
+  })
   if (!text || /[\r\n]/.test(String(value ?? ''))) return ''
   return text
 }
 
-function normalizeCall(callOrName) {
+function normalizeCall(callOrName, copy) {
   if (callOrName && typeof callOrName === 'object') {
     return {
-      name: safeToolName(callOrName.name || callOrName.function?.name),
+      name: safeToolName(callOrName.name || callOrName.function?.name, copy.defaultToolName),
       args: callOrName.args && typeof callOrName.args === 'object'
         ? callOrName.args
         : callOrName.arguments && typeof callOrName.arguments === 'object'
@@ -89,63 +128,73 @@ function normalizeCall(callOrName) {
           : {},
     }
   }
-  return { name: safeToolName(callOrName), args: {} }
+  return { name: safeToolName(callOrName, copy.defaultToolName), args: {} }
 }
 
-function firstSafePath(source, keys) {
+function firstSafePath(source, keys, copy) {
   if (!source || typeof source !== 'object') return ''
   for (const key of keys) {
     if (!Object.hasOwn(source, key)) continue
     const value = source[key]
     if (Array.isArray(value)) {
-      const paths = value.map(sanitizePath).filter(Boolean)
-      if (paths.length) return paths.slice(0, 3).join('、')
+      const paths = value.map((path) => sanitizePath(path, copy)).filter(Boolean)
+      if (paths.length) return paths.slice(0, 3).join(copy.listSeparator)
       continue
     }
-    const path = sanitizePath(value)
+    const path = sanitizePath(value, copy)
     if (path) return path
   }
   return ''
 }
 
-function resultPaths(result) {
+function resultPaths(result, copy) {
   if (!result || typeof result !== 'object') return []
   const paths = []
-  const direct = firstSafePath(result, RESULT_PATH_KEYS)
+  const direct = firstSafePath(result, RESULT_PATH_KEYS, copy)
   if (direct) paths.push(direct)
   const artifacts = Array.isArray(result.artifacts) ? result.artifacts : []
   for (const artifact of artifacts.slice(0, 3)) {
-    const path = firstSafePath(artifact, [...RESULT_PATH_KEYS, 'url'])
+    const path = firstSafePath(artifact, [...RESULT_PATH_KEYS, 'url'], copy)
     if (path) paths.push(path)
   }
   return [...new Set(paths)].slice(0, 3)
 }
 
-function resultCounts(result) {
+function resultCounts(result, copy, locale) {
   if (!result || typeof result !== 'object') return []
   const counts = []
   for (const [key, value] of Object.entries(result)) {
     const normalizedKey = key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()
     if (!COUNT_FIELD_PATTERN.test(normalizedKey) || typeof value !== 'number' || !Number.isFinite(value)) continue
-    counts.push(`${sanitizeText(key, { maxLength: 60, rejectSource: false })}=${value}`)
+    const safeKey = sanitizeLocalizedText(key, locale, {
+      maxLength: 60,
+      rejectSource: false,
+      credentialPlaceholder: copy.credentialPlaceholder,
+    })
+    if (!safeKey) continue
+    counts.push(`${safeKey}=${value}`)
     if (counts.length >= 4) break
   }
   return counts
 }
 
-function buildEntry(callOrName, result, copy) {
+function buildEntry(callOrName, result, copy, locale) {
   if (!result || result.ok === false) return ''
-  const call = normalizeCall(callOrName)
-  const callPath = firstSafePath(call.args, PATH_ARGUMENT_KEYS)
-  const paths = resultPaths(result)
-  const counts = resultCounts(result)
+  const call = normalizeCall(callOrName, copy)
+  const callPath = firstSafePath(call.args, PATH_ARGUMENT_KEYS, copy)
+  const paths = resultPaths(result, copy)
+  const counts = resultCounts(result, copy, locale)
 
   // read_file output is deliberately opaque. Its data/content/text/value/
   // message fields may contain source, configuration or credentials. Only
   // the requested path and numeric metadata can be retained.
   const summary = call.name === 'read_file'
     ? ''
-    : sanitizeText(result.summary, { maxLength: 500, rejectSource: true })
+    : sanitizeLocalizedText(result.summary, locale, {
+        maxLength: 500,
+        rejectSource: true,
+        credentialPlaceholder: copy.credentialPlaceholder,
+      })
 
   const details = []
   if (summary) details.push(summary)
@@ -157,22 +206,29 @@ function buildEntry(callOrName, result, copy) {
     : `${call.name} ${copy.completedSuffix}`
 }
 
-function sanitizeRestoredEntry(entry) {
+function sanitizeRestoredEntry(entry, copy, locale) {
   if (typeof entry !== 'string') return ''
-  return sanitizeText(entry, { maxLength: 800, rejectSource: true })
+  const safeEntry = sanitizeText(entry, {
+    maxLength: 800,
+    rejectSource: true,
+    credentialPlaceholder: copy.credentialPlaceholder,
+  })
+  if (!safeEntry) return ''
+  const languageProbe = restoredEntryLanguageProbe(safeEntry, copy)
+  return localizedTerminalModelText(locale, languageProbe) ? safeEntry : ''
 }
 
-function entryPriority(toolName) {
-  const name = safeToolName(toolName)
+function entryPriority(toolName, copy) {
+  const name = safeToolName(toolName, copy.defaultToolName)
   if (HIGH_VALUE_TOOL_PATTERN.test(name)) return 3
   if (VERIFICATION_TOOL_PATTERN.test(name)) return 2
   if (/^(?:read_|list_|search_|find_|glob|grep|rg$)/i.test(name)) return 1
   return 2
 }
 
-function restoredEntryPriority(entry) {
+function restoredEntryPriority(entry, copy) {
   const name = String(entry || '').split(/[：\s]/, 1)[0]
-  return entryPriority(name)
+  return entryPriority(name, copy)
 }
 
 export function createPartialResultFallback({
@@ -183,8 +239,16 @@ export function createPartialResultFallback({
   entries: restoredEntries = [],
 } = {}) {
   const copy = partialResultCopy(locale)
-  const safeHeading = sanitizeText(heading, { maxLength: 80, rejectSource: true }) || copy.heading
-  const safeResultLabel = sanitizeText(resultLabel, { maxLength: 80, rejectSource: true }) || copy.resultLabel
+  const safeHeading = sanitizeLocalizedText(heading, locale, {
+    maxLength: 80,
+    rejectSource: true,
+    credentialPlaceholder: copy.credentialPlaceholder,
+  }) || copy.heading
+  const safeResultLabel = sanitizeLocalizedText(resultLabel, locale, {
+    maxLength: 80,
+    rejectSource: true,
+    credentialPlaceholder: copy.credentialPlaceholder,
+  }) || copy.resultLabel
   const entryLimit = Math.min(32, Math.max(1, Number(maxEntries) || 8))
   const entries = []
 
@@ -210,20 +274,20 @@ export function createPartialResultFallback({
   }
 
   for (const entry of Array.isArray(restoredEntries) ? restoredEntries : []) {
-    const safeEntry = sanitizeRestoredEntry(entry)
-    addEntry(safeEntry, restoredEntryPriority(safeEntry))
+    const safeEntry = sanitizeRestoredEntry(entry, copy, locale)
+    addEntry(safeEntry, restoredEntryPriority(safeEntry, copy))
   }
 
   return {
     record(callOrName, result) {
-      const entry = buildEntry(callOrName, result, copy)
-      const call = normalizeCall(callOrName)
-      addEntry(entry, entryPriority(call.name))
+      const entry = buildEntry(callOrName, result, copy, locale)
+      const call = normalizeCall(callOrName, copy)
+      addEntry(entry, entryPriority(call.name, copy))
       return entry
     },
 
     snapshot() {
-      return entries.map((entry) => sanitizeRestoredEntry(entry.text)).filter(Boolean)
+      return entries.map((entry) => sanitizeRestoredEntry(entry.text, copy, locale)).filter(Boolean)
     },
 
     apply(result) {
@@ -235,7 +299,7 @@ export function createPartialResultFallback({
       const progress = entries.length > 0
         ? `\n\n${safeResultLabel}${copy.labelSeparator}\n${entries.map((entry) => `- ${entry.text}`).join('\n')}`
         : ''
-      const existingText = String(result?.text || '').trim()
+      const existingText = localizedTerminalModelText(locale, result?.text, { strictLocale: true })
       const alreadyHasProgress = existingText.includes(`${safeResultLabel}${copy.labelSeparator}`)
       const baseText = result?.interrupted === true && !alreadyHasProgress
         ? `${safeHeading}${copy.labelSeparator}${copy.interruptedText}`

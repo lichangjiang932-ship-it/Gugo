@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { subscribeToChannelMessages } from '../src/lib/channelClient.js'
+import { sendChannelMessageApi, subscribeToChannelMessages } from '../src/lib/channelClient.js'
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -9,6 +9,20 @@ function deferred() {
   const promise = new Promise((done) => { resolve = done })
   return { promise, resolve }
 }
+
+test('channel messages send the selected UI locale', async () => {
+  let request = null
+  await sendChannelMessageApi('team / alpha', 'hello', {
+    locale: 'en',
+    fetchImpl: async (url, init) => {
+      request = { url, init }
+      return { ok: true, status: 200, text: async () => '{"ok":true}' }
+    },
+  })
+
+  assert.equal(request.url, '/api/channels/team%20%2F%20alpha/messages')
+  assert.deepEqual(JSON.parse(request.init.body), { content: 'hello', locale: 'en' })
+})
 
 test('channel subscription uses a channel-scoped ticket and parses messages', async () => {
   const calls = []

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { normalizeTurnLocale } from '../../shared/turnLocale.js'
 import {
   callBackgroundModelWithTools,
   getModelContextWindow,
@@ -10,6 +11,7 @@ import {
   normalizePromptContextIds,
 } from './optionalPromptContext.js'
 import { createPartialResultFallback } from './partialResultFallback.js'
+import { localizedTerminalModelText } from './loop/incompleteTerminalPresentation.js'
 import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
 import { requestApproval } from './approvalGate.js'
 import { createSubagentApprovalContext } from './subagentApprovalContext.js'
@@ -22,6 +24,28 @@ import {
 
 function now() {
   return Date.now()
+}
+
+function subagentTerminalCopy(locale) {
+  return normalizeTurnLocale(locale) === 'zh'
+    ? {
+        interruptedHeading: '探索中断',
+        resultLabel: '已经查到的信息',
+        clarificationPrefix: '⚠ 需要澄清',
+        optionsLabel: '选项',
+        reasonLabel: '原因',
+        defaultBlockerKind: '未说明',
+        defaultQuestion: '需要补充信息后才能继续。',
+      }
+    : {
+        interruptedHeading: 'Exploration interrupted',
+        resultLabel: 'Information found',
+        clarificationPrefix: '⚠ Clarification required',
+        optionsLabel: 'Options',
+        reasonLabel: 'Reason',
+        defaultBlockerKind: 'unspecified',
+        defaultQuestion: 'More information is required before this subagent can continue.',
+      }
 }
 
 /* ─── 子代理工具循环（隔离执行） ─── */
@@ -37,15 +61,18 @@ function now() {
  * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
  * @returns {Promise<Object>} 保留 completed / paused / interrupted / incomplete 等终态的 loop 结果
  */
-export async function runSubagentToolLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, modelProviderId = null, modelConfigRevision = null, modelRuntimeEnv = null, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = undefined, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, runToolLoop = undefined, sideEffectLedger = null, onTranscriptEvent = null, loadCheckpoint = null, saveCheckpoint = null }) {
+export async function runSubagentToolLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, modelProviderId = null, modelConfigRevision = null, modelRuntimeEnv = null, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, locale = 'zh', callModel = callBackgroundModelWithTools, executeTool = undefined, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, runToolLoop = undefined, sideEffectLedger = null, onTranscriptEvent = null, loadCheckpoint = null, saveCheckpoint = null }) {
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
   const effectiveSideEffectLedger = sideEffectLedger
     || getSideEffectExecutionLedger()
   const selectedModel = String(modelName || '').trim() || undefined
+  const normalizedLocale = normalizeTurnLocale(locale)
+  const terminalCopy = subagentTerminalCopy(normalizedLocale)
   const partialResultFallback = createPartialResultFallback({
-    heading: '探索中断',
-    resultLabel: '已经查到的信息',
+    locale: normalizedLocale,
+    heading: terminalCopy.interruptedHeading,
+    resultLabel: terminalCopy.resultLabel,
   })
   const contextRuntimeEnv = modelRuntimeEnv || buildUserModelEnv({ userId })
   const contextWindow = getModelContextWindow({
@@ -68,6 +95,7 @@ export async function runSubagentToolLoop({ messages, tools, signal, maxIters = 
     modelName: selectedModel || null,
     modelProviderId: modelProviderId || null,
     modelConfigRevision: modelConfigRevision || null,
+    locale: normalizedLocale,
   }
   const loopStep = { id: runId || 'subagent-step' }
   const executeLoopTool = ({
@@ -84,6 +112,7 @@ export async function runSubagentToolLoop({ messages, tools, signal, maxIters = 
     modelName: selectedModel,
     modelProviderId,
     modelConfigRevision,
+    locale: normalizedLocale,
     skillIds: normalizePromptContextIds(skillIds),
     skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
     depth,
@@ -180,11 +209,39 @@ export async function runSubagentToolLoop({ messages, tools, signal, maxIters = 
 
   if (result.paused && result.clarification) {
     const clarification = result.clarification
+    const blockerKind = localizedTerminalModelText(
+      normalizedLocale,
+      clarification.blocker_kind,
+      { strictLocale: true },
+    )
+      || terminalCopy.defaultBlockerKind
+    const question = localizedTerminalModelText(
+      normalizedLocale,
+      clarification.question,
+      { strictLocale: true },
+    )
+      || terminalCopy.defaultQuestion
+    const options = (Array.isArray(clarification.options) ? clarification.options : [])
+      .map((option) => localizedTerminalModelText(
+        normalizedLocale,
+        option,
+        { strictLocale: true },
+      ))
+      .filter(Boolean)
+    const why = localizedTerminalModelText(
+      normalizedLocale,
+      clarification.why,
+      { strictLocale: true },
+    )
     return {
       ...result,
-      text: `⚠ 需要澄清(${clarification.blocker_kind}):${clarification.question}` +
-      (clarification.options ? `\n选项:${clarification.options.join(' / ')}` : '') +
-      (clarification.why ? `\n原因:${clarification.why}` : ''),
+      text: normalizeTurnLocale(normalizedLocale) === 'zh'
+        ? `${terminalCopy.clarificationPrefix}(${blockerKind}):${question}` +
+          (options.length ? `\n${terminalCopy.optionsLabel}:${options.join(' / ')}` : '') +
+          (why ? `\n${terminalCopy.reasonLabel}:${why}` : '')
+        : `${terminalCopy.clarificationPrefix} (${blockerKind}): ${question}` +
+          (options.length ? `\n${terminalCopy.optionsLabel}: ${options.join(' / ')}` : '') +
+          (why ? `\n${terminalCopy.reasonLabel}: ${why}` : ''),
     }
   }
   return partialResultFallback.apply(result)

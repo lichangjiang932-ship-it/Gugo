@@ -77,6 +77,10 @@ test('English no-progress prompt and fallback do not echo a Chinese internal rea
   const { state, prompts } = makeState('en')
   state.iteration.noProgressReason = '内部工具重复调用'
   state.iteration.noProgressCode = 'repeated_tool_call'
+  state.iteration.noProgressFailure = {
+    retryable: false,
+    hint: '请停止重复调用，改用已有结果收尾或换一种方法。',
+  }
 
   const outcome = await completeIteration(state)
 
@@ -87,12 +91,18 @@ test('English no-progress prompt and fallback do not echo a Chinese internal rea
   assert.match(prompts.at(-1), /provide a partial conclusion in English/i)
   assert.doesNotMatch(outcome.value.text, CJK_TEXT)
   assert.match(outcome.value.text, /stopped after making no progress/i)
+  assert.doesNotMatch(outcome.value.hint, CJK_TEXT)
+  assert.match(outcome.value.hint, /Stop repeating the same tool call/i)
 })
 
 test('Chinese no-progress prompt and fallback do not echo an English internal reason', async () => {
   const { state, prompts } = makeState('zh')
   state.iteration.noProgressReason = 'internal tool loop repeated'
   state.iteration.noProgressCode = 'repeated_tool_call'
+  state.iteration.noProgressFailure = {
+    retryable: false,
+    hint: 'Stop repeating the same tool call.',
+  }
 
   const outcome = await completeIteration(state)
 
@@ -103,4 +113,5 @@ test('Chinese no-progress prompt and fallback do not echo an English internal re
   assert.match(prompts.at(-1), CJK_TEXT)
   assert.doesNotMatch(outcome.value.text, /internal tool loop repeated/i)
   assert.match(outcome.value.text, CJK_TEXT)
+  assert.match(outcome.value.hint, CJK_TEXT)
 })

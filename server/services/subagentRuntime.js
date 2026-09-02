@@ -17,6 +17,7 @@ import { dispatchCodeSearchTool } from '../utils/codeSearch.js'
 import { createJobBudget } from '../utils/jobBudget.js'
 import { dispatchLspTool } from '../utils/lspTool.js'
 import { dispatchMemoryTool } from '../utils/memoryTools.js'
+import { normalizeTurnLocale } from '../../shared/turnLocale.js'
 import { requestApproval } from './approvalGate.js'
 import { dispatchHooks } from './hooksService.js'
 import { hasConfiguredLspProvider } from './lspRuntime.js'
@@ -101,6 +102,7 @@ async function executeSubagentTool(toolName, args, {
   modelName = undefined,
   modelProviderId = null,
   modelConfigRevision = null,
+  locale = 'zh',
   skillIds = [],
   skillDefinitions = [],
   depth = 0,
@@ -162,6 +164,7 @@ async function executeSubagentTool(toolName, args, {
       })
       return withYieldedSlot(slotLease, signal, () => runSubagentBatch({
         userId,
+        locale: normalizeTurnLocale(locale),
         request: {
           ...request,
           modelName: String(request.modelName || request.model_name || modelName || '').trim() || undefined,
@@ -216,6 +219,7 @@ export async function runSubagent({
   modelName,
   modelProviderId = null,
   modelConfigRevision = null,
+  locale = 'zh',
   signal,
   depth = 0,
   budget = null,
@@ -241,6 +245,10 @@ export async function runSubagent({
   const runPersistence = resolveRunPersistencePort(persistencePort)
 
   const storedRun = await runPersistence.getRun({ id, userId })
+  const storedTrace = storedRun ? parseTrace(storedRun.trace) : []
+  const normalizedLocale = normalizeTurnLocale(
+    storedTrace.find((event) => event?.type === 'start')?.locale || locale,
+  )
   const explicitBlockedResume = storedRun?.status === SUBAGENT_NEEDS_VERIFICATION
     && resumeBlocked === true
   if (storedRun) {
@@ -283,9 +291,9 @@ export async function runSubagent({
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
 
   const trace = storedRun
-    ? parseTrace(storedRun.trace)
+    ? storedTrace
     : [
-        { type: 'start', description, at: now() },
+        { type: 'start', description, locale: normalizedLocale, at: now() },
         ...(team ? [{ type: 'team', team, at: now() }] : []),
       ]
   if (storedRun) trace.push({ type: 'resume', fromStatus: storedRun.status, at: now() })
@@ -445,6 +453,7 @@ export async function runSubagent({
           modelProviderId: modelBinding.providerId || null,
           modelConfigRevision: modelBinding.configRevision || null,
           modelRuntimeEnv: modelBinding.env || null,
+          locale: normalizedLocale,
           skillIds: normalizePromptContextIds(skillIds),
           skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
           sessionId: `subagent:${id}`,

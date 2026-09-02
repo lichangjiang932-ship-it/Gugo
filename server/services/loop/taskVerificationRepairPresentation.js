@@ -149,7 +149,7 @@ export function buildTaskVerificationRepairPrompt(state) {
         : `${scope} has no verification result for mutation epoch ${entry.requiredEpoch}; rerun a check that covers this scope.`
     }),
     ...indeterminate.map((entry) => (
-      `${entry.kind}@${entry.cwd} via ${entry.commandScope || entry.tool || 'project check'} is inconclusive [${entry.code}]: ${entry.message} Rerun a check that covers this scope after restoring the missing execution requirement.`
+      `${entry.kind}@${entry.cwd} via ${entry.commandScope || entry.tool || 'project check'} is inconclusive [${entry.code}]. Rerun a check that covers this scope after restoring the missing execution requirement; consult the structured verification details for diagnostics.`
     )),
   ].filter(Boolean).join('\n')
 }
@@ -164,8 +164,8 @@ export function taskVerificationRepairBlockerText(state, { locale = 'en' } = {})
     return [
       ...indeterminate.map((entry) => (
         zh
-          ? `任务验证未能得出明确结果（${entry.kind}@${entry.cwd}，检查方式：${entry.commandScope || entry.tool || '项目检查'}）[${entry.code}]：${entry.message}`
-          : `Task verification could not produce a conclusive result (${entry.kind}@${entry.cwd} via ${entry.commandScope || entry.tool || 'project check'}) [${entry.code}]: ${entry.message}`
+          ? `任务验证未能得出明确结果（${entry.kind}@${entry.cwd}，检查方式：${entry.commandScope || entry.tool || '项目检查'}）[${entry.code}]。请查看结构化验证详情中的诊断信息。`
+          : `Task verification could not produce a conclusive result (${entry.kind}@${entry.cwd} via ${entry.commandScope || entry.tool || 'project check'}) [${entry.code}]. See the structured verification details for diagnostics.`
       )),
       overflowed
         ? (zh
@@ -196,8 +196,8 @@ export function taskVerificationRepairBlockerText(state, { locale = 'en' } = {})
         : `Task verification was not rerun after the latest related mutation (${failedChecks}).`,
       indeterminate.length > 0
         ? (zh
-            ? `部分验证仍无明确结论：${indeterminate.map((entry) => `[${entry.code}] ${entry.message}`).join('；')}`
-            : `Some verification attempts remain inconclusive: ${indeterminate.map((entry) => `[${entry.code}] ${entry.message}`).join('; ')}`)
+            ? '部分验证仍无明确结论。请查看结构化验证详情中的诊断信息。'
+            : 'Some verification attempts remain inconclusive. See the structured verification details for diagnostics.')
         : '',
       overflowed ? (zh ? '验证状态超过容量上限。' : 'Verification state capacity was exceeded.') : '',
       zh
@@ -212,11 +212,13 @@ export function taskVerificationRepairBlockerText(state, { locale = 'en' } = {})
     zh
       ? `任务验证连续失败 ${failureCount} 次后仍未通过（${failedChecks}）。`
       : `Task verification did not pass after ${failureCount} verification failures (${failedChecks}).`,
-    zh ? `最近一次失败 [${last.code}]：${last.message}` : `Last failure [${last.code}]: ${last.message}`,
+    zh
+      ? `最近一次验证失败 [${last.code}] 仍未解决。请查看结构化验证详情中的诊断信息。`
+      : `The latest verification failure [${last.code}] remains unresolved. See the structured verification details for diagnostics.`,
     indeterminate.length > 0
       ? (zh
-          ? `部分重新检查仍无明确结论：${indeterminate.map((entry) => `[${entry.code}] ${entry.message}`).join('；')}。`
-          : `Some reruns remain inconclusive: ${indeterminate.map((entry) => `[${entry.code}] ${entry.message}`).join('; ')}.`)
+          ? '部分重新检查仍无明确结论。请查看结构化验证详情中的诊断信息。'
+          : 'Some reruns remain inconclusive. See the structured verification details for diagnostics.')
       : '',
     overflowed ? (zh ? '验证状态超过容量上限。' : 'Verification state capacity was exceeded.') : '',
     zh

@@ -71,6 +71,7 @@ function normalizeSubagentTasks(request = {}) {
 export async function runSubagentBatch({
   userId,
   request,
+  locale = 'zh',
   depth = 0,
   parentSessionId = null,
   parentMessageId = null,
@@ -107,6 +108,7 @@ export async function runSubagentBatch({
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
   const settled = await Promise.allSettled(tasks.map((task) => runSubagentImpl({
     userId,
+    locale,
     type: task.type,
     prompt: task.prompt,
     description: task.description,

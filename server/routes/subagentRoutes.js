@@ -55,6 +55,7 @@ export async function handleSubagentRequest(req, res, {
             modelName: body.modelName ?? body.model_name,
             modelProviderId: body.modelProviderId || body.model_provider_id || null,
             modelConfigRevision: body.modelConfigRevision ?? body.model_config_revision ?? null,
+            locale: body.locale,
           })
           writeSse(res, { type: 'done', run })
         } catch (err) {
@@ -77,6 +78,7 @@ export async function handleSubagentRequest(req, res, {
         modelName: body.modelName ?? body.model_name,
         modelProviderId: body.modelProviderId || body.model_provider_id || null,
         modelConfigRevision: body.modelConfigRevision ?? body.model_config_revision ?? null,
+        locale: body.locale,
       })
       return sendJson(res, 200, { ok: true, run, result_text: run.resultText })
     }

@@ -22,7 +22,7 @@ import {
 import { groupChannels } from './channels/channelViewUtils.js'
 
 export default function ChannelsPage() {
-  const { t } = useT()
+  const { t, lang } = useT()
   const [channels, setChannels] = useState([])
   const [agents, setAgents] = useState([])
   const [activeId, setActiveId] = useState('')
@@ -91,7 +91,7 @@ export default function ChannelsPage() {
     if (!content || !activeId) return
     setDraft('')
     setCursor(0)
-    try { await sendChannelMessageApi(activeId, content) }
+    try { await sendChannelMessageApi(activeId, content, { locale: lang }) }
     catch (requestError) { setDraft(content); setError(requestError.message || t('toast.chatSendFailed')) }
   }
   const handleKeyDown = (event) => {

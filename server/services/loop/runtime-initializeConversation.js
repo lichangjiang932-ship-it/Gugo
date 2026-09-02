@@ -1,5 +1,5 @@
 export async function initializeConversation(s) {
-  const { DIRECTORY_REVIEW_GUARD_MARKER, DIRECTORY_REVIEW_INTENT, DYNAMIC_EXECUTION_TARGET_MARKER, PUBLIC_FILTERED_CLARIFICATION_TEXT, PUBLIC_INCOMPLETE_TASK_TEXT, PUBLIC_UNVERIFIED_FILE_TEXT, buildRepresentativeReadCalls, ensureSafetySystemMessages, getDefaultOutputDirectory, getProjectDirectory, isFileArtifactTool, listTurnArtifacts, normalizeArtifactIdList, path, replaceRuntimeCapabilityBlock, sameArtifactIdList, sanitizeIncompleteTerminalText, sourceHandoffViolation, stripEphemeralToolMediaMessages, successfulReadFileInMessages } = s.d
+  const { DIRECTORY_REVIEW_GUARD_MARKER, DIRECTORY_REVIEW_INTENT, DYNAMIC_EXECUTION_TARGET_MARKER, buildRepresentativeReadCalls, ensureSafetySystemMessages, getDefaultOutputDirectory, getProjectDirectory, isFileArtifactTool, listTurnArtifacts, normalizeArtifactIdList, path, replaceRuntimeCapabilityBlock, sameArtifactIdList, sanitizeIncompleteTerminalText, sourceHandoffViolation, stripEphemeralToolMediaMessages, successfulReadFileInMessages, terminalProtectionCopy } = s.d
   s.representativeReadCalls = buildRepresentativeReadCalls(s.job?.prompt, s.job?.id)
   s.requiresRepresentativeRead = s.job?.origin === 'chat'
       && DIRECTORY_REVIEW_INTENT.test(String(s.job?.userPrompt || ''))
@@ -74,6 +74,7 @@ export async function initializeConversation(s) {
   s.representativeReadsInjected = Boolean(s.restoredState?.completionGuards?.representativeReadsInjected)
       || s.convo.some((message) => message?.role === 'system' && String(message?.content || '').includes(DIRECTORY_REVIEW_GUARD_MARKER))
   s.hasSuccessfulRepresentativeRead = successfulReadFileInMessages(s.convo)
+  const terminalCopy = terminalProtectionCopy(s.locale)
   s.artifactIds = normalizeArtifactIdList(s.restoredState?.artifactIds)
   s.artifactProvenance = new Map(
       (Array.isArray(s.restoredState?.completionGuards?.artifactProvenance)
@@ -96,19 +97,19 @@ export async function initializeConversation(s) {
       const value = incomplete
         ? sanitizeIncompleteTerminalText(
             text,
-            s.requiresPersistedArtifact ? PUBLIC_UNVERIFIED_FILE_TEXT : PUBLIC_INCOMPLETE_TASK_TEXT,
+            s.requiresPersistedArtifact ? terminalCopy.unverifiedFileText : terminalCopy.incompleteTaskText,
           )
         : String(text || '')
       if (!s.requiresSourceHandoffProtection || !sourceHandoffViolation(value)) return value
 
       if (s.artifactIds.length > 0) {
         return incomplete
-          ? PUBLIC_UNVERIFIED_FILE_TEXT
-          : '文件已通过工具生成并完成交付。已隐藏模型返回的代码内容。'
+          ? terminalCopy.unverifiedFileText
+          : terminalCopy.filteredCompletedFileText
       }
       return incomplete
-        ? PUBLIC_INCOMPLETE_TASK_TEXT
-        : '任务已通过工具执行并完成必要验证。已隐藏模型返回的代码内容。'
+        ? terminalCopy.incompleteTaskText
+        : terminalCopy.filteredCompletedTaskText
     }
   s.protectClarification = (clarification) => {
       if (!s.requiresSourceHandoffProtection || !clarification || typeof clarification !== 'object') {
@@ -123,11 +124,11 @@ export async function initializeConversation(s) {
       }
       const sourceWasFiltered = containsSourceHandoff(clarification)
       const safeQuestion = sourceWasFiltered
-        ? PUBLIC_FILTERED_CLARIFICATION_TEXT
+        ? terminalCopy.filteredClarificationText
         : s.protectTerminalText(
             clarification.question || clarification.message || clarification.why,
             { incomplete: true },
-          ) || '需要你补充信息后才能继续。'
+          ) || terminalCopy.clarificationText
       const seen = new WeakSet()
       const protectValue = (value) => {
         if (typeof value === 'string') {

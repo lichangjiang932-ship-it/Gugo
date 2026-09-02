@@ -51,6 +51,7 @@ test('POST /api/subagent/run forwards the selected model binding in JSON mode', 
     modelName: 'json-model',
     modelProviderId: 'json-provider',
     modelConfigRevision: 3,
+    locale: 'en',
   })
   const res = response()
 
@@ -72,6 +73,7 @@ test('POST /api/subagent/run forwards the selected model binding in JSON mode', 
   assert.equal(received.modelName, 'json-model')
   assert.equal(received.modelProviderId, 'json-provider')
   assert.equal(received.modelConfigRevision, 3)
+  assert.equal(received.locale, 'en')
   const body = JSON.parse(res.text())
   assert.equal(body.run.modelProviderId, 'json-provider')
   assert.equal(body.run.modelConfigRevision, 3)
@@ -85,6 +87,7 @@ test('POST /api/subagent/run forwards the selected model binding in SSE mode', a
     model_name: 'sse-model',
     model_provider_id: 'sse-provider',
     model_config_revision: 4,
+    locale: 'en',
     stream: true,
   }, { accept: 'text/event-stream' })
   const res = response()
@@ -108,6 +111,7 @@ test('POST /api/subagent/run forwards the selected model binding in SSE mode', a
   assert.equal(received.modelName, 'sse-model')
   assert.equal(received.modelProviderId, 'sse-provider')
   assert.equal(received.modelConfigRevision, 4)
+  assert.equal(received.locale, 'en')
   assert.match(res.text(), /"type":"start"/)
   assert.match(res.text(), /"type":"done"/)
   assert.match(res.text(), /"modelProviderId":"sse-provider"/)
