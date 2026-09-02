@@ -524,9 +524,24 @@ redaction support, and declarative schemas live in focused modules of 187 lines
 or fewer. Its former frozen exception has been removed with the legacy exports
 and download security contract preserved.
 
+`shared/turnEvents.js` now delegates the non-durable activity schema and
+constructors to `shared/turnActivity.js` while preserving the original public
+exports. Both modules are below 600 lines, so the former frozen exception has
+been removed without changing persisted event or transport compatibility.
+
+`bin/cli/runOutput.js` now delegates serialized writable-stream handling to
+`bin/cli/runOutputStream.js` while preserving the original public error export
+and ordered output contract. Both modules are below 600 lines, so the former
+frozen exception has been removed without changing text or JSONL semantics.
+
+`desktop/main.js` now delegates main-window security and updater setup to
+`desktop/mainWindowSecurity.js` and `desktop/updateSetup.js`. All three modules
+are below 600 lines, so the former frozen exception has been removed while
+preserving trusted navigation, permission, update, and window contracts.
+
 All previously frozen `server/` implementations are now at or below 600 lines.
 Expanding the executable scan to every host runtime implementation root exposed
-five existing oversized files outside `server/`. They are frozen below at
+two existing oversized files outside `server/`. They are frozen below at
 their exact current line counts: any growth, unregistered oversized file, stale
 entry, or unratcheted shrinkage fails the gate.
 
@@ -546,48 +561,18 @@ entry, or unratcheted shrinkage fails the gate.
       "id": "cli-entrypoint",
       "reason": "The CLI entrypoint combines argument parsing, authentication storage, API transport, Headless execution, and command dispatch in one process boundary.",
       "exitCriteria": "Move command families and transport or credential concerns into focused modules while keeping the executable entrypoint and exported CLI contracts stable."
-    },
-    {
-      "id": "cli-output",
-      "reason": "CLI output owns stream serialization, terminal outcome interpretation, verification diagnostics, and human or JSONL formatting in one module.",
-      "exitCriteria": "Separate terminal projection and format-specific writers without weakening ordered writes, bounded diagnostics, or exit-status semantics."
-    },
-    {
-      "id": "desktop-main-process",
-      "reason": "The Electron main process still combines bundled-server lifecycle, window and pet management, IPC authorization, update handling, and shutdown coordination.",
-      "exitCriteria": "Extract cohesive desktop lifecycle and IPC or window controllers while preserving fail-closed navigation, permission, and trusted-sender checks."
-    },
-    {
-      "id": "turn-event-contract",
-      "reason": "The shared Turn event module combines the event vocabulary, payload schemas, persistence compatibility, transport envelopes, cursor logic, and activity schemas.",
-      "exitCriteria": "Split stable schema families behind the unchanged shared event API without creating a second lifecycle vocabulary or weakening persisted-event compatibility."
     }
   ],
   "files": [
-    {
-      "path": "bin/cli/runOutput.js",
-      "ceiling": 648,
-      "group": "cli-output"
-    },
     {
       "path": "bin/yma-cli.js",
       "ceiling": 977,
       "group": "cli-entrypoint"
     },
     {
-      "path": "desktop/main.js",
-      "ceiling": 665,
-      "group": "desktop-main-process"
-    },
-    {
       "path": "shared/artifactIntent.js",
       "ceiling": 748,
       "group": "artifact-intent-contract"
-    },
-    {
-      "path": "shared/turnEvents.js",
-      "ceiling": 615,
-      "group": "turn-event-contract"
     }
   ]
 }

@@ -1,9 +1,6 @@
-/** Pure source builder for the persistent Windows process-tree worker. */
 export function windowsPowerShellPath() {
   const systemRoot = String(process.env.SystemRoot || process.env.WINDIR || '').trim()
-  return systemRoot
-    ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
-    : 'powershell.exe'
+  return systemRoot ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : 'powershell.exe'
 }
 
 export function windowsTreeKillWorkerBootstrapScript() {
@@ -386,15 +383,17 @@ public static class GugoProcessTreeNative {
           }
           continue;
         }
-        long parentExitedAt = IdentityExitTime(parent);
-        if (!SnapshotContains(processId, row.th32ParentProcessID)
-            || candidate.CreatedAt < parent.CreatedAt
-            || candidate.CreatedAt > parentExitedAt) {
-          candidate.Dispose();
-          continue;
+        try {
+          long parentExitedAt = IdentityExitTime(parent);
+          if (!SnapshotContains(processId, row.th32ParentProcessID)
+              || candidate.CreatedAt < parent.CreatedAt
+              || candidate.CreatedAt > parentExitedAt) continue;
+          tracked.Add(processId, candidate);
+          candidate = null;
+          changed = true;
+        } finally {
+          if (candidate != null) candidate.Dispose();
         }
-        tracked.Add(processId, candidate);
-        changed = true;
       }
     } while (changed);
   }
@@ -457,20 +456,28 @@ public static class GugoProcessTreeNative {
     bool jobTerminated = false;
     try {
       while (RemainingBudgetMilliseconds(elapsed, budgetMs) > 0) {
-        // AssignProcessToJobObject is not retroactive. Capture any descendants
-        // that existed before the late bind before terminating the job root.
+        // An incomplete ancestry snapshot can never be retried safely: an
+        // untracked parent may exit and leave a live descendant unreachable.
         ExpandDescendants(tracked, Snapshot());
-        if (!jobTerminated) {
-          bool terminated = TerminateJobObject(lease.Job, 1);
-          int terminateError = terminated ? 0 : Marshal.GetLastWin32Error();
-          if (!terminated && ActiveJobProcessCount(lease.Job) > 0) {
-            throw new Win32Exception(terminateError);
+        try {
+          if (!jobTerminated) {
+            bool terminated = TerminateJobObject(lease.Job, 1);
+            int terminateError = terminated ? 0 : Marshal.GetLastWin32Error();
+            if (!terminated && ActiveJobProcessCount(lease.Job) > 0) {
+              throw new Win32Exception(terminateError);
+            }
+            jobTerminated = true;
           }
-          jobTerminated = true;
-        }
-        foreach (var identity in tracked.Values) {
-          if (RemainingBudgetMilliseconds(elapsed, budgetMs) <= 0) break;
-          Terminate(identity);
+          foreach (var identity in tracked.Values) {
+            if (RemainingBudgetMilliseconds(elapsed, budgetMs) <= 0) break;
+            Terminate(identity);
+          }
+        } catch (Win32Exception) {
+          // Job and termination state can lag briefly on a busy Windows host.
+          stableEmptySnapshots = 0;
+          int retryRemainingMs = RemainingBudgetMilliseconds(elapsed, budgetMs);
+          if (retryRemainingMs > 0) Thread.Sleep(Math.Min(50, retryRemainingMs));
+          continue;
         }
         int remainingMs = RemainingBudgetMilliseconds(elapsed, budgetMs);
         if (remainingMs <= 0) break;

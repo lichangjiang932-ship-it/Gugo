@@ -448,9 +448,28 @@ test('Windows tree-kill worker: 大源码通过 stdin 传输且启动命令远�
   assert.ok(payload.length > commandLineChars, 'full worker source must not be embedded in argv')
 })
 
-test('Windows tree-kill worker: cleanup deadline is monotonic and keeps a bounded final proof', () => {
+test('Windows tree-kill worker: cleanup retries transient native races within a bounded proof', () => {
   const source = windowsTreeKillWorkerScript()
+  const expandStart = source.indexOf('private static void ExpandDescendants(')
+  const expandEnd = source.indexOf('private static void Terminate(', expandStart)
+  assert.ok(expandStart >= 0 && expandEnd > expandStart, 'ExpandDescendants source must be present')
+  const expandSource = source.slice(expandStart, expandEnd)
+  const killStart = source.indexOf('private static bool KillBoundTree(')
+  const killEnd = source.indexOf('private static bool Kill(', killStart)
+  assert.ok(killStart >= 0 && killEnd > killStart, 'KillBoundTree source must be present')
+  const killSource = source.slice(killStart, killEnd)
+  const captureIndex = killSource.indexOf('ExpandDescendants(tracked, Snapshot());')
+  const retryIndex = killSource.indexOf('try {', captureIndex)
+  const retryEnd = killSource.indexOf('} catch (Win32Exception)', retryIndex)
+
   assert.match(source, /Stopwatch\.StartNew\(\)/u)
+  assert.ok(captureIndex >= 0 && retryIndex > captureIndex && retryEnd > retryIndex)
+  assert.doesNotMatch(killSource.slice(retryIndex, retryEnd), /ExpandDescendants|IsBoundTreeEmpty/u)
+  assert.match(source, /stableEmptySnapshots >= 2/u)
+  assert.match(
+    expandSource,
+    /try \{[\s\S]*?tracked\.Add\(processId, candidate\);[\s\S]*?candidate = null;[\s\S]*?finally \{[\s\S]*?candidate\.Dispose\(\);/u,
+  )
   assert.match(source, /return ConfirmBoundTreeEmpty\(lease, tracked\);/u)
   assert.doesNotMatch(source, /DateTime\.UtcNow/u)
 })
