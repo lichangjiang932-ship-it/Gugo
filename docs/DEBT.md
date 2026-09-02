@@ -75,8 +75,10 @@ newer same-ID record. `runtimePluginReleaseController.js` owns the public
 reload/uninstall callback-deadlock guards, shutdown fencing and coalescing,
 pending-reload settlement, reverse-order staged/active release, and final Loop
 event detachment. `runtimePluginRegistry.js` supplies narrow host ports and now
-retains inventory, capability wiring, configuration-source initialization, and
-public facade composition.
+retains inventory, capability wiring, and public facade composition.
+`runtimePluginConfigSourceController.js` owns initial resolver construction,
+pre-installation source replacement, the installation-time seal, and resolver
+publication after a validated reload.
 
 Managed attachment HTTP operations now cross the host-created
 `ManagedAttachmentStoragePort v1`. Its default SQLite/file adapter owns concrete
@@ -111,7 +113,9 @@ rollback ordering, settlement, and generation-safe record removal, while
 `tests/runtimePluginUninstallController.test.js` preserves reload-generation
 revalidation before cleanup, and `tests/runtimePluginReleaseController.test.js`
 locks release ordering, callback-deadlock fencing, shutdown coalescing, and the
-one-way registry-to-controller dependency. Managed attachment storage port and
+one-way registry-to-controller dependency. The focused
+`tests/runtimePluginConfigSourceController.test.js` locks configuration-source
+initialization, sealing, resolver replacement, and registry delegation. Managed attachment storage port and
 architecture tests preserve DTO identity, path opacity, authoritative content
 opening, and the one-way route-to-port-to-adapter dependency.
 Boundary-specific changes also run the Turn, persistence, model proxy,

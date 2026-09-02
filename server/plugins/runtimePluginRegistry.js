@@ -1,6 +1,5 @@
 import { assertPluginCompatibility } from '../../shared/pluginCompatibility.js'
 import { createPluginContext } from './pluginContext.js'
-import { createPluginConfigResolver } from './pluginConfig.js'
 import {
   PLUGIN_API_VERSION,
   PLUGIN_HOST_VERSION,
@@ -19,6 +18,7 @@ import {
 import { createRuntimePluginCallbackRuntime } from './runtimePluginCallbackRuntime.js'
 import { createRuntimePluginCapabilityRegistry } from './runtimePluginCapabilityRegistry.js'
 import { createRuntimePluginConfigReloadController } from './runtimePluginConfigReloadController.js'
+import { createRuntimePluginConfigSourceController } from './runtimePluginConfigSourceController.js'
 import { createRuntimePluginContributionCoordinator } from './runtimePluginContributionCoordinator.js'
 import { assertNoRuntimePluginDependents } from './runtimePluginDependencyGuard.js'
 import { createRuntimePluginAgentEventRegistry } from './runtimePluginAgentEventRegistry.js'
@@ -56,10 +56,10 @@ export function createRuntimePluginRegistry(options = {}) {
   const assertRecordCanDeactivate = (record) => {
     for (const check of record.deactivationChecks) check()
   }
-  let activePluginConfigResolver = createPluginConfigResolver({
-    legacyConfig: config,
-    layers: configLayers,
-    layerSources: configLayerSources,
+  const configSourceController = createRuntimePluginConfigSourceController({
+    config,
+    configLayers,
+    configLayerSources,
   })
   const plugins = new Map()
   const stagingRecords = new Set()
@@ -81,22 +81,8 @@ export function createRuntimePluginRegistry(options = {}) {
     invokePluginSetup,
     waitForCallbacksToDrain,
   } = createRuntimePluginCallbackRuntime(registryToken)
-  let configLayerSourcesSealed = false
   let releaseController = null
   const isShuttingDown = () => releaseController?.isShuttingDown() === true
-
-  const initializeConfigLayerSources = (nextLayerSources) => {
-    if (configLayerSourcesSealed) {
-      const error = new Error(
-        'runtime plugin configuration sources cannot change after plugin installation begins',
-      )
-      error.code = 'PLUGIN_CONFIG_INITIALIZATION_TOO_LATE'
-      error.retryable = false
-      throw error
-    }
-    activePluginConfigResolver = activePluginConfigResolver.withLayerSources(nextLayerSources)
-    return true
-  }
 
   const assertPluginWritable = (record) => {
     if (!['installing', 'staging', 'active'].includes(record.state)) {
@@ -257,7 +243,7 @@ export function createRuntimePluginRegistry(options = {}) {
     createPluginRecord,
     disposePluginEffects,
     emitAudit,
-    getActivePluginConfigResolver: () => activePluginConfigResolver,
+    getActivePluginConfigResolver: configSourceController.getActiveResolver,
     getPlugin: (id) => plugins.get(id),
     hasPlugin: (id) => plugins.has(id),
     invokePluginSetup,
@@ -266,9 +252,7 @@ export function createRuntimePluginRegistry(options = {}) {
     publishPlugin: (id, record) => plugins.set(id, record),
     removePlugin: (id) => plugins.delete(id),
     revokeVisibleEffects,
-    sealConfigLayerSources: () => {
-      configLayerSourcesSealed = true
-    },
+    sealConfigLayerSources: configSourceController.seal,
     snapshotPlugin: snapshotRuntimePlugin,
   })
 
@@ -287,16 +271,14 @@ export function createRuntimePluginRegistry(options = {}) {
     createPluginRecord,
     disposePluginEffects,
     emitConfigReloadAudit,
-    getActivePluginConfigResolver: () => activePluginConfigResolver,
+    getActivePluginConfigResolver: configSourceController.getActiveResolver,
     invokePluginCallback,
     invokePluginSetup,
     isShuttingDown,
     plugins,
     retireManagedContributions,
     revokeVisibleEffects,
-    setActivePluginConfigResolver: (resolver) => {
-      activePluginConfigResolver = resolver
-    },
+    setActivePluginConfigResolver: configSourceController.replaceActiveResolver,
     stagingRecords,
     waitForCallbacksToDrain,
   })
@@ -335,7 +317,7 @@ export function createRuntimePluginRegistry(options = {}) {
   } = releaseController
 
   return Object.freeze({
-    initializeConfigLayerSources,
+    initializeConfigLayerSources: configSourceController.initialize,
     registerPlugin,
     unregisterPlugin,
     reloadPluginConfig,
