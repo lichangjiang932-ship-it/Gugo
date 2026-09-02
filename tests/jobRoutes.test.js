@@ -384,7 +384,7 @@ test('one user cannot fetch another user\'s job', async () => {
 test('job event stream sends proxy-safe SSE headers and releases its subscription on disconnect', async () => {
   const { token } = issueTestSession()
   const runtime = getJobRuntime()
-  const listenersBefore = runtime.listeners.size
+  const listenersBefore = runtime.eventListenerCount
   const server = createAppServer({ getEnv: () => ({}) })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
@@ -410,14 +410,14 @@ test('job event stream sends proxy-safe SSE headers and releases its subscriptio
     const reader = streamResponse.body.getReader()
     const firstChunk = await reader.read()
     assert.match(new TextDecoder().decode(firstChunk.value), /event: ready[\s\S]*data: \{"ok":true\}/)
-    assert.equal(runtime.listeners.size, listenersBefore + 1)
+    assert.equal(runtime.eventListenerCount, listenersBefore + 1)
 
     controller.abort()
     await reader.cancel().catch(() => {})
-    for (let attempt = 0; attempt < 20 && runtime.listeners.size !== listenersBefore; attempt += 1) {
+    for (let attempt = 0; attempt < 20 && runtime.eventListenerCount !== listenersBefore; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
-    assert.equal(runtime.listeners.size, listenersBefore)
+    assert.equal(runtime.eventListenerCount, listenersBefore)
   } finally {
     controller.abort()
     await new Promise((resolve) => server.close(resolve))

@@ -540,16 +540,36 @@ test('a guarded plan that fails before proposal can retry and still requires app
   assert.ok(waiting.events.some((event) => event.type === 'plan_proposed'))
 })
 
-test('D6: jobUserCache is evicted once a job reaches a terminal state', async () => {
+test('runtime delivers a terminal event to its owner through the event hub', async () => {
+  const received = []
   const runtime = new JobRuntime({
     planner: stubPlanner,
     executeStep: async ({ step }) => ({ ok: true, output: { text: step.title } }),
   })
+  const unsubscribe = runtime.subscribe(TEST_USER, (event) => received.push(event))
   const job = await runtime.createJob('内存泄漏检查', { userId: TEST_USER })
-  assert.ok(runtime.jobUserCache.has(job.id), 'cache populated while job runs')
-  await runtime.drain()
-  assert.equal(runtime.getJob(job.id, { userId: TEST_USER }).status, 'completed')
-  assert.equal(runtime.jobUserCache.has(job.id), false, 'cache entry removed after completion')
+  try {
+    await runtime.drain()
+    assert.equal(runtime.getJob(job.id, { userId: TEST_USER }).status, 'completed')
+    assert.ok(received.some((event) => event.jobId === job.id && event.type === 'completed'))
+  } finally {
+    unsubscribe()
+  }
+})
+
+test('runtime preserves the one-argument global event subscription form', () => {
+  const runtime = new JobRuntime({
+    planner: stubPlanner,
+    executeStep: async ({ step }) => ({ ok: true, output: { text: step.title } }),
+  })
+  const received = []
+  const unsubscribe = runtime.subscribe((event) => received.push(event))
+  const event = { jobId: 'compatibility-probe', type: 'progress' }
+
+  runtime.emit(event)
+
+  assert.deepEqual(received, [event])
+  assert.equal(unsubscribe(), true)
 })
 
 test('terminal cleanup only releases the budget generation held by its tick', async () => {

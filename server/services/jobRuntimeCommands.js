@@ -64,7 +64,7 @@ export async function createRuntimeJob(runtime, prompt, options = {}) {
     requirePlanApproval,
     taskPlanGuard: runtime.taskPlanGuard,
   })
-  runtime.jobUserCache.set(id, userId)
+  runtime.cacheJobOwner(id, userId)
   runtime.emit(event)
   return runtime.getJob(id, { userId })
 }
@@ -221,7 +221,7 @@ export async function createRuntimePlan(runtime, {
     ...modelSnapshot,
     taskPlanGuard: runtime.taskPlanGuard,
   })
-  runtime.jobUserCache.set(id, userId)
+  runtime.cacheJobOwner(id, userId)
   runtime.emit(event)
   return runtime.getJob(id, { userId })
 }

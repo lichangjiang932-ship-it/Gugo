@@ -46,7 +46,7 @@ export async function runJobRuntimeTick(dependencies) {
   } = dependencies
 
   for (const wake of claimDueJobWakes()) {
-    this.jobUserCache.set(wake.jobId, wake.userId)
+    this.cacheJobOwner(wake.jobId, wake.userId)
     if (wake.kind === 'auto_retry') {
       try {
         this.retryStep(wake.jobId, wake.stepId, {

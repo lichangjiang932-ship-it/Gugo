@@ -53,6 +53,7 @@ import { createDefaultExecuteStep } from './jobStepExecutionRuntime.js'
 import { persistJobStepFailure } from './jobStepFailureRuntime.js'
 import { runJobRuntimeTick } from './jobRuntimeTick.js'
 import { recoverRuntimeJobs } from './jobRuntimeRecovery.js'
+import { createJobRuntimeEventHub } from './jobRuntimeEventHub.js'
 import { hasExplicitIncompleteStepOutput } from './jobRetryEligibility.js'
 import {
   approveRuntimePlan,
@@ -78,9 +79,6 @@ const JOB_CANCELLED_MESSAGE = '任务已由用户终止'
 // ★ 注意:awaiting_approval 故意不在这里。等人的 job 崩溃恢复时若被重排成 queued,
 // 会把已经批准执行过的动作重跑一遍(发消息/改日历这类不可撤销动作尤其危险)。
 const SUSPENDED_JOB_STATUSES = new Set(['waiting', 'awaiting_approval'])
-
-// ★ D6: job 进入这些终态事件后,从 jobUserCache 淘汰对应条目(防内存泄漏)。
-const TERMINAL_EVENT_TYPES = new Set(['completed', 'failed', 'cancelled', 'aborted'])
 
 const JOB_RUNTIME_TICK_DEPENDENCIES = {
   claimDueJobWakes,
@@ -151,8 +149,6 @@ export class JobRuntime {
     this.resolveModelBinding = modelBindingResolver
     this.runtimeCore = runtimeCore || createJobRuntimeCore({ executionLeases })
     this.executeStep = executeStep || createDefaultExecuteStep({ runtimeCore: this.runtimeCore })
-    // listeners 改成 Map<listener, userId>;userId === null 表示无过滤(给内部/测试用)。
-    this.listeners = new Map()
     this.activeControllers = new Map()
     this.activeJobIds = new Set()
     this.activeTicks = new Set()
@@ -164,42 +160,18 @@ export class JobRuntime {
       runOneTick: () => this.runOneTick(),
       onError: (error) => console.error('[jobs] tick failed:', error?.stack || error),
     })
-    // jobId → userId 缓存,避免每次 emit 都查 DB;recover/createJob 时写入。
-    this.jobUserCache = new Map()
+    this.eventHub = createJobRuntimeEventHub({
+      resolveJobOwner: (jobId) => getJobRow(jobId)?.userId || null,
+    })
     this.recover()
   }
 
-  _jobUserId(jobId) {
-    if (this.jobUserCache.has(jobId)) return this.jobUserCache.get(jobId)
-    const row = getJobRow(jobId)
-    const uid = row?.userId || null
-    this.jobUserCache.set(jobId, uid)
-    return uid
+  cacheJobOwner(jobId, userId) {
+    this.eventHub.cacheJobOwner(jobId, userId)
   }
 
   emit(event) {
-    if (!event) return
-    const jobId = event.jobId || event.job_id
-    const eventOwner = jobId ? this._jobUserId(jobId) : null
-    for (const [listener, listenerUserId] of this.listeners) {
-      try {
-        // 没指定 userId 的订阅者收所有事件(测试/内部用);
-        // 指定了的只收自己 job 的事件--事件没归属(eventOwner=null)兜底也只发给同 userId,
-        // 防止历史无主 job 被错误推送。
-        if (listenerUserId == null) {
-          listener(event)
-        } else if (eventOwner && eventOwner === listenerUserId) {
-          listener(event)
-        }
-      } catch (err) {
-        console.error('[jobs] listener error:', err?.stack || err)
-      }
-    }
-    // ★ D6: job 进入终态后从 jobUserCache 删除对应条目,修内存泄漏(原来只增不清)。
-    //   放在 dispatch 之后,保证本条终态事件仍能正确解析 owner。
-    if (jobId && TERMINAL_EVENT_TYPES.has(event.type)) {
-      this.jobUserCache.delete(jobId)
-    }
+    this.eventHub.emit(event)
   }
 
   /**
@@ -208,22 +180,20 @@ export class JobRuntime {
    *   subscribe(userId, listener)    → 只收该用户名下 job 的事件(SSE 路由)
    */
   subscribe(userIdOrListener, maybeListener) {
-    let userId = null
-    let listener
-    if (typeof userIdOrListener === 'function') {
-      listener = userIdOrListener
-    } else {
-      userId = userIdOrListener
-      listener = maybeListener
+    if (arguments.length === 1) {
+      return this.eventHub.subscribe(userIdOrListener)
     }
-    this.listeners.set(listener, userId)
-    return () => this.listeners.delete(listener)
+    return this.eventHub.subscribe(userIdOrListener, maybeListener)
+  }
+
+  get eventListenerCount() {
+    return this.eventHub.listenerCount()
   }
 
   recover() {
     return recoverRuntimeJobs({
       lease: this.runtimeCore.lease,
-      cacheJobOwner: (jobId, userId) => this.jobUserCache.set(jobId, userId),
+      cacheJobOwner: (jobId, userId) => this.cacheJobOwner(jobId, userId),
       emit: (event) => this.emit(event),
     })
   }
