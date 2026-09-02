@@ -6,6 +6,26 @@ import { settingsPathAfterLogin } from '../../lib/settingsNavigation.js'
 
 const EMPTY_LOGIN = { open: false, email: '', code: '', password: '', message: '', loading: false, mode: 'password', countdown: 0, target: null }
 
+const LOGIN_ERROR_I18N_KEYS = Object.freeze({
+  AUTH_EMAIL_INVALID: 'leftRailLogin.emailInvalid',
+  AUTH_SEND_CODE_RATE_LIMITED: 'leftRailLogin.sendCodeRateLimited',
+  AUTH_SEND_CODE_FAILED: 'leftRailLogin.sendCodeFailed',
+  AUTH_CODE_INVALID_OR_EXPIRED: 'leftRailLogin.codeInvalidOrExpired',
+  AUTH_CODE_ATTEMPTS_EXCEEDED: 'leftRailLogin.codeAttemptsExceeded',
+  AUTH_CODE_INVALID: 'leftRailLogin.codeInvalid',
+  AUTH_CODE_EXPIRED: 'leftRailLogin.codeExpired',
+  AUTH_VERIFY_FAILED: 'leftRailLogin.verifyFailed',
+  AUTH_CREDENTIALS_REQUIRED: 'leftRailLogin.credentialsRequired',
+  AUTH_ACCOUNT_LOCKED: 'leftRailLogin.accountLocked',
+  AUTH_INVALID_CREDENTIALS: 'leftRailLogin.invalidCredentials',
+  AUTH_LOGIN_RATE_LIMITED: 'leftRailLogin.loginRateLimited',
+  AUTH_LOGIN_FAILED: 'leftRailLogin.loginFailed',
+})
+
+export function localizeLoginError(error, t) {
+  return t(LOGIN_ERROR_I18N_KEYS[String(error?.code || '')] || 'errors.unknown')
+}
+
 export default function useLeftRailController({ authMode, dispatch, location, navigate, t, toast }) {
   const [login, setLogin] = useState(EMPTY_LOGIN)
   const [openMenuId, setOpenMenuId] = useState(null)
@@ -67,7 +87,11 @@ export default function useLeftRailController({ authMode, dispatch, location, na
     try {
       const result = await sendLoginCode(login.email)
       updateLogin({ countdown: LOGIN_CODE_COUNTDOWN_SECONDS, message: result.devCode ? t('leftRailLogin.devCode', { code: result.devCode }) : t('leftRailLogin.codeSent') })
-    } catch (error) { updateLogin({ message: error.message }); toast.error({ title: t('toast.sendCodeFailed'), body: error.message }) }
+    } catch (error) {
+      const message = localizeLoginError(error, t)
+      updateLogin({ message })
+      toast.error({ title: t('toast.sendCodeFailed'), body: message })
+    }
     finally { updateLogin({ loading: false }) }
   }
 
@@ -79,7 +103,11 @@ export default function useLeftRailController({ authMode, dispatch, location, na
       const defaultPath = settingsPathAfterLogin(data.user)
       navigate(data.user.hasPassword === false ? defaultPath : (login.target || defaultPath))
       setLogin(EMPTY_LOGIN)
-    } catch (error) { updateLogin({ message: error.message }); toast.error({ title: t('toast.loginFailed'), body: error.message }) }
+    } catch (error) {
+      const message = localizeLoginError(error, t)
+      updateLogin({ message })
+      toast.error({ title: t('toast.loginFailed'), body: message })
+    }
     finally { updateLogin({ loading: false }) }
   }
 

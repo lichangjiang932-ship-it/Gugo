@@ -28,7 +28,12 @@ async function parseResponse(response) {
     data = null
   }
   if (!response.ok || data?.ok === false) {
-    throw new Error(data?.error || `请求失败：HTTP ${response.status}`)
+    const nestedError = data?.error && typeof data.error === 'object' ? data.error : null
+    const message = typeof data?.error === 'string' ? data.error : nestedError?.message
+    const error = new Error(message || `请求失败：HTTP ${response.status}`)
+    const code = nestedError?.code || data?.code
+    if (code) error.code = String(code)
+    throw error
   }
   return data
 }

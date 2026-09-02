@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import path from 'node:path'
 import os from 'node:os'
+import { Readable } from 'node:stream'
 
 import {
   bootstrapAuth,
@@ -42,6 +43,15 @@ function createRes() {
     writeHead(statusCode) { this.statusCode = statusCode },
     end(chunk = '') { this.body += chunk },
   }
+}
+
+function createJsonReq({ url, body, raw }) {
+  const req = Readable.from([raw ?? JSON.stringify(body)])
+  req.method = 'POST'
+  req.url = url
+  req.headers = { 'content-type': 'application/json' }
+  req.socket = { remoteAddress: '127.0.0.1' }
+  return req
 }
 
 test.beforeEach(cleanDb)
@@ -172,6 +182,52 @@ test('AUTH_DEV_CODES skips SMTP even when mail is configured', async () => {
     code: '123456',
   })
   assert.deepEqual(result, { sent: false, devCode: '123456' })
+})
+
+test('login routes retain legacy messages and add stable public error codes', async () => {
+  const sendCodeRes = createRes()
+  await handleAuthAccountRequest(createJsonReq({
+    url: '/api/auth/send-code',
+    body: { email: 'not-an-email' },
+  }), sendCodeRes)
+  assert.equal(sendCodeRes.statusCode, 400)
+  assert.deepEqual(JSON.parse(sendCodeRes.body), {
+    ok: false,
+    error: '请输入有效邮箱地址',
+    code: 'AUTH_EMAIL_INVALID',
+  })
+
+  const verifyRes = createRes()
+  await handleAuthAccountRequest(createJsonReq({
+    url: '/api/auth/verify',
+    body: { email: 'missing@example.com', code: '123456' },
+  }), verifyRes)
+  assert.equal(verifyRes.statusCode, 400)
+  assert.deepEqual(JSON.parse(verifyRes.body), {
+    ok: false,
+    error: '验证码不存在或已过期',
+    code: 'AUTH_CODE_INVALID_OR_EXPIRED',
+  })
+
+  const passwordRes = createRes()
+  await handleAuthAccountRequest(createJsonReq({
+    url: '/api/auth/login-password',
+    body: { email: 'missing@example.com', password: 'wrong-password' },
+  }), passwordRes)
+  assert.equal(passwordRes.statusCode, 400)
+  assert.deepEqual(JSON.parse(passwordRes.body), {
+    ok: false,
+    error: '邮箱或密码不正确',
+    code: 'AUTH_INVALID_CREDENTIALS',
+  })
+
+  const malformedRes = createRes()
+  await handleAuthAccountRequest(createJsonReq({
+    url: '/api/auth/verify',
+    raw: '{',
+  }), malformedRes)
+  assert.equal(malformedRes.statusCode, 400)
+  assert.equal(JSON.parse(malformedRes.body).code, 'AUTH_VERIFY_FAILED')
 })
 
 test('pure-local mode rejects public SMTP before creating a socket', async () => {

@@ -5,6 +5,7 @@ import {
   bootstrapAuth,
   bootstrapAuthWithRetry,
   getAuthToken,
+  loginWithPassword,
   setAuthToken,
   syncAuthTokenFromStorage,
 } from '../src/lib/accountClient.js'
@@ -136,4 +137,20 @@ test('bootstrap stops after the configured retry budget', async () => {
     /offline/,
   )
   assert.equal(attempts, 3)
+})
+
+test('account requests preserve the stable server error code', async () => {
+  await assert.rejects(
+    loginWithPassword({
+      email: 'person@example.com',
+      password: 'wrong-password',
+      fetchImpl: async () => response({
+        ok: false,
+        error: '邮箱或密码不正确',
+        code: 'AUTH_INVALID_CREDENTIALS',
+      }, 400),
+    }),
+    (error) => error?.code === 'AUTH_INVALID_CREDENTIALS'
+      && error.message === '邮箱或密码不正确',
+  )
 })
