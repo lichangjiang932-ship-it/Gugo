@@ -60,7 +60,10 @@ all-closed register.
 Job crash recovery now lives in `jobRuntimeRecovery.js`, including approval
 resolution, running-step reset, durable recovery events, and execution-lease
 fencing. `jobRuntime.js` only supplies its runtime port callbacks and no longer
-owns the recovery transaction.
+owns the recovery transaction. Owner lookup caching, tenant-scoped delivery,
+subscription cleanup, listener-failure isolation, and terminal owner eviction
+now live in `jobRuntimeEventHub.js`; creation, recovery, and wake paths populate
+that boundary before emitting instead of reaching into a facade-owned Map.
 
 **Exit criteria:** Close only after every linked transition row is either
 removed with evidence that its required boundary has been reached or moved to
@@ -74,6 +77,8 @@ to reference exactly one canonical Open debt record. `tests/dbStoreBoundary.test
 and `tests/dbStoreFacadeContracts.test.js` lock the settled database facade/store
 boundary, while `tests/jobRuntimeRecoveryBoundary.test.js` prevents recovery
 persistence from returning to the Job facade and
+`tests/jobRuntimeEventHub.test.js` and the Job recovery boundary test preserve
+tenant isolation and prevent direct owner-cache access, while
 `tests/modelInvocationRuntimeBoundary.test.js` prevents model invocation logic
 from returning to the proxy facade, and `tests/artifactGenBoundary.test.js`
 protects the settled artifact facade/service direction. Boundary-specific changes also run the Turn, persistence, model proxy,

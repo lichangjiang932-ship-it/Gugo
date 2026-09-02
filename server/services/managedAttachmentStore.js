@@ -13,6 +13,7 @@ import {
   managedAttachmentUploadLeaseDuration,
   releaseManagedAttachmentUploadLease,
 } from './managedAttachmentUploadLease.js'
+import { deleteManagedAttachmentRows } from './managedAttachmentDeletion.js'
 import {
   attachmentError,
   attachmentRoot,
@@ -323,45 +324,6 @@ export function bindManagedAttachmentsToMessage({ userId, sessionId, messageId, 
     .map((attachment) => ({ ...attachment, messageId }))
 }
 
-function deleteAttachmentRows(rows, { env = process.env } = {}) {
-  const candidates = Array.isArray(rows) ? rows.filter(Boolean) : []
-  if (!candidates.length) return 0
-  const db = getDb()
-  for (const ownerId of new Set(candidates.map((row) => row.user_id))) {
-    assertUserDataMutationAllowed(db, ownerId, 'Attachments cannot change while local data is being cleared')
-  }
-  const quarantined = []
-  try {
-    for (const row of candidates) {
-      let fullPath = null
-      try { fullPath = rowPath(row, env) } catch { /* bad DB row: remove metadata only */ }
-      if (!fullPath || !fs.existsSync(fullPath)) continue
-      const tombstone = `${fullPath}.deleting-${crypto.randomUUID()}`
-      fs.renameSync(fullPath, tombstone)
-      quarantined.push({ fullPath, tombstone })
-    }
-    const remove = db.prepare('DELETE FROM managed_attachments WHERE id = ? AND user_id = ?')
-    let removed = 0
-    db.transaction(() => {
-      for (const ownerId of new Set(candidates.map((row) => row.user_id))) {
-        assertUserDataMutationAllowed(db, ownerId, 'Attachments cannot change while local data is being cleared')
-      }
-      for (const row of candidates) removed += remove.run(row.id, row.user_id).changes
-    })()
-    for (const item of quarantined) safeUnlink(item.tombstone)
-    return removed
-  } catch (error) {
-    for (const item of quarantined.reverse()) {
-      try {
-        if (fs.existsSync(item.tombstone) && !fs.existsSync(item.fullPath)) {
-          fs.renameSync(item.tombstone, item.fullPath)
-        }
-      } catch { /* best effort rollback */ }
-    }
-    throw error
-  }
-}
-
 export function cleanupManagedAttachments({
   userId = null,
   now = Date.now(),
@@ -403,7 +365,7 @@ export function cleanupManagedAttachments({
     ) return true
     try { return !fs.existsSync(rowPath(row, env)) } catch { return true }
   })
-  const removedRows = deleteAttachmentRows(expiredRows, { env })
+  const removedRows = deleteManagedAttachmentRows(expiredRows, { env, requireSnapshotMatch: true })
 
   const root = path.resolve(attachmentRoot(env))
   // `maxRows` bounds stale-row inspection only. Bucket scanning must compare
@@ -457,7 +419,7 @@ export function deleteManagedAttachmentsForSession({ userId, sessionId, env = pr
   const rows = getDb().prepare(
     'SELECT * FROM managed_attachments WHERE user_id = ? AND session_id = ?',
   ).all(userId, String(sessionId))
-  return deleteAttachmentRows(rows, { env })
+  return deleteManagedAttachmentRows(rows, { env })
 }
 
 export function deleteManagedAttachmentsForUser({ userId, env = process.env } = {}) {
@@ -466,12 +428,12 @@ export function deleteManagedAttachmentsForUser({ userId, env = process.env } = 
   const rows = getDb().prepare(
     'SELECT * FROM managed_attachments WHERE user_id = ?',
   ).all(userId)
-  const removed = deleteAttachmentRows(rows, { env })
+  const removed = deleteManagedAttachmentRows(rows, { env })
   const root = path.resolve(attachmentRoot(env))
   const bucketDir = path.resolve(root, userBucket(userId))
   const relative = path.relative(root, bucketDir)
   if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
-    fs.rmSync(bucketDir, { recursive: true, force: true })
+    try { fs.rmdirSync(bucketDir) } catch { /* preserve a non-empty concurrent bucket */ }
   }
   return removed
 }
@@ -484,7 +446,7 @@ export function deleteManagedAttachment({ userId, id, env = process.env } = {}) 
     'SELECT * FROM managed_attachments WHERE id = ? AND user_id = ?',
   ).get(safeId, userId)
   if (!row) return false
-  return deleteAttachmentRows([row], { env }) === 1
+  return deleteManagedAttachmentRows([row], { env }) === 1
 }
 
 export function resolveManagedAttachmentPath({ userId, rawPath, write = false, env = process.env } = {}) {
