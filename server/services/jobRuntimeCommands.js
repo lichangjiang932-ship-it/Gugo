@@ -16,15 +16,10 @@ import {
 } from './jobPlanPolicyRuntime.js'
 import { approveRuntimeJobPlan } from './jobPlanApprovalRuntime.js'
 import { wrapJobModelFailure } from './jobModelFailure.js'
+import { requireRuntimeUserId } from './jobRuntimeIdentity.js'
 
 function newId(prefix) {
   return `${prefix}-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
-}
-
-function requireRuntimeUserId(userId, operation) {
-  if (typeof userId !== 'string' || !userId.trim()) {
-    throw new TypeError(`${operation} requires a non-empty userId string`)
-  }
 }
 
 export async function createRuntimeJob(runtime, prompt, options = {}) {

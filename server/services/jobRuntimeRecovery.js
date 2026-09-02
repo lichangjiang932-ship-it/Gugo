@@ -10,6 +10,7 @@ import {
 import { releaseAllJobSteeringLeases } from './jobSteeringStore.js'
 import { clearResumedJobOutcomeDiagnostics } from './jobWorkflow.js'
 import { latestPersistedOutcomeFields } from './jobRuntimeProjection.js'
+import { hasValidPersistedJobIdentity } from './jobRuntimeIdentity.js'
 
 const RECOVERABLE_STATUSES = new Set(['planning', 'running', 'awaiting_approval'])
 
@@ -30,7 +31,7 @@ function resetRunningSteps(jobId) {
 
 function recoverOwnedJob(candidate, { cacheJobOwner, emit }) {
   const job = getJobRow(candidate.id)
-  if (!job) return null
+  if (!job || !hasValidPersistedJobIdentity(job)) return null
 
   let event
   if (['planning', 'running'].includes(job.status)) {
@@ -78,6 +79,7 @@ export function recoverRuntimeJobs({ lease, cacheJobOwner, emit }) {
   const recovered = []
   for (const candidate of listRecoverableJobs()) {
     if (!RECOVERABLE_STATUSES.has(candidate.status)) continue
+    if (!hasValidPersistedJobIdentity(candidate)) continue
     const scope = { jobId: candidate.id }
     if (lease.isActive(scope)) continue
     const recoveryLease = lease.acquire(scope)

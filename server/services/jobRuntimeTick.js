@@ -1,4 +1,5 @@
 import { runJobRuntimeStepExecution } from './jobRuntimeStepExecution.js'
+import { hasValidPersistedJobIdentity } from './jobRuntimeIdentity.js'
 
 const DETERMINISTIC_AUTO_RETRY_BLOCKERS = new Set([
   'JOB_AUTO_RETRY_SIDE_EFFECT_UNKNOWN',
@@ -46,6 +47,8 @@ export async function runJobRuntimeTick(dependencies) {
   } = dependencies
 
   for (const wake of claimDueJobWakes()) {
+    const wakeJob = getJobRow(wake.jobId)
+    if (!hasValidPersistedJobIdentity(wakeJob) || wakeJob.userId !== wake.userId) continue
     this.cacheJobOwner(wake.jobId, wake.userId)
     if (wake.kind === 'auto_retry') {
       try {
@@ -94,7 +97,9 @@ export async function runJobRuntimeTick(dependencies) {
   }
   const jobs = listRecoverableJobs()
   const runnableJobs = jobs.filter((candidate) => (
-    !SUSPENDED_JOB_STATUSES.has(candidate.status) && !this.activeJobIds.has(candidate.id)
+    hasValidPersistedJobIdentity(candidate)
+    && !SUSPENDED_JOB_STATUSES.has(candidate.status)
+    && !this.activeJobIds.has(candidate.id)
   ))
   const candidates = [
     ...runnableJobs.filter((candidate) => candidate.status === 'cancel_requested'),

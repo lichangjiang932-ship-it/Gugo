@@ -1,3 +1,5 @@
+import { isValidRuntimeIdentity } from './jobRuntimeIdentity.js'
+
 const TERMINAL_EVENT_TYPES = new Set(['completed', 'failed', 'cancelled', 'aborted'])
 
 function defaultListenerErrorHandler(error) {
@@ -19,8 +21,7 @@ export function createJobRuntimeEventHub({
   const jobOwners = new Map()
 
   function cacheJobOwner(jobId, userId) {
-    if (typeof jobId !== 'string' || !jobId.trim()
-      || typeof userId !== 'string' || !userId.trim()) {
+    if (!isValidRuntimeIdentity(jobId) || !isValidRuntimeIdentity(userId)) {
       throw new TypeError('cacheJobOwner requires non-empty jobId and userId strings')
     }
     jobOwners.set(jobId, userId)
@@ -29,7 +30,7 @@ export function createJobRuntimeEventHub({
   function resolveCachedJobOwner(jobId) {
     if (jobOwners.has(jobId)) return jobOwners.get(jobId)
     const resolvedOwner = resolveJobOwner(jobId)
-    const userId = typeof resolvedOwner === 'string' && resolvedOwner.trim()
+    const userId = isValidRuntimeIdentity(resolvedOwner)
       ? resolvedOwner
       : null
     // Unknown jobs are fail-closed, but are not retained as negative cache
@@ -87,8 +88,7 @@ export function createJobRuntimeEventHub({
       && typeof userIdOrListener === 'function'
     if (!isGlobalSubscription && (
       arguments.length !== 2
-      || typeof userIdOrListener !== 'string'
-      || !userIdOrListener.trim()
+      || !isValidRuntimeIdentity(userIdOrListener)
       || typeof maybeListener !== 'function'
     )) {
       throw new TypeError('subscribe requires a listener or a non-empty userId and listener')

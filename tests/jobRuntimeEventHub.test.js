@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 
 import { createJobRuntimeEventHub } from '../server/services/jobRuntimeEventHub.js'
@@ -245,6 +246,32 @@ test('an async error reporter rejection is isolated from event delivery', async 
 
   assert.equal(reports, 1)
   assert.deepEqual(received, [event])
+})
+
+test('async error reporter rejection survives strict unhandled-rejection mode', () => {
+  const moduleUrl = new URL('../server/services/jobRuntimeEventHub.js', import.meta.url).href
+  const script = `
+    import assert from 'node:assert/strict'
+    import { createJobRuntimeEventHub } from ${JSON.stringify(moduleUrl)}
+    const received = []
+    const hub = createJobRuntimeEventHub({
+      resolveJobOwner: () => 'user-a',
+      onListenerError: async () => { throw new Error('diagnostics unavailable') },
+    })
+    hub.subscribe('user-a', async () => { throw new Error('listener failed') })
+    hub.subscribe('user-a', (event) => received.push(event.type))
+    hub.emit({ jobId: 'job-a', type: 'completed' })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(received, ['completed'])
+  `
+  const child = spawnSync(process.execPath, [
+    '--unhandled-rejections=strict',
+    '--input-type=module',
+    '--eval',
+    script,
+  ], { encoding: 'utf8' })
+
+  assert.equal(child.status, 0, child.stderr || child.stdout)
 })
 
 test('every terminal event is delivered before its owner cache entry is evicted', () => {

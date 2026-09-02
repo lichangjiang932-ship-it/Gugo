@@ -16,6 +16,7 @@ import {
   listJobEvents,
   mapJobEventRow as mapEvent,
 } from './jobEventStore.js'
+import { requireRuntimeJobId, requireRuntimeUserId } from './jobRuntimeIdentity.js'
 
 export {
   requiresStructuredCompletionEvidence,
@@ -62,7 +63,8 @@ export function createJob({
   progress = 0,
   now = Date.now(),
 }) {
-  if (!userId) throw new Error('createJob requires userId')
+  requireRuntimeJobId(id, 'createJob')
+  requireRuntimeUserId(userId, 'createJob')
   const selectedModel = boundedText(modelName, 512) || null
   const selectedProviderId = boundedText(modelProviderId, 512) || null
   const selectedConfigRevision = Number(modelConfigRevision)
