@@ -74,6 +74,32 @@ test('release controller coalesces shutdown and releases records in reverse acti
   ])
 })
 
+test('release controller continues cleanup after a pending reload rejects', async () => {
+  const calls = []
+  let rejectReload
+  const pendingReload = new Promise((resolve, reject) => {
+    rejectReload = reject
+  })
+  const controller = createRuntimePluginReleaseController(controllerOptions({
+    detachLoopEventBindings: async () => calls.push('loop:detached'),
+    listActiveRecords: () => [pluginRecord('active-plugin', 1)],
+    listPendingReloads: () => [pendingReload],
+    unregisterPluginUnchecked: async (id) => calls.push(`active:${id}`),
+  }))
+
+  const shutdown = controller.shutdown()
+  assert.deepEqual(calls, [])
+
+  rejectReload(new Error('reload failed before shutdown'))
+  await shutdown
+
+  assert.equal(controller.isShuttingDown(), false)
+  assert.deepEqual(calls, [
+    'active:active-plugin',
+    'loop:detached',
+  ])
+})
+
 test('release controller aggregates staged, active, and loop cleanup failures and resets state', async () => {
   const stagedFailure = new Error('staged cleanup failed')
   const activeFailure = new Error('active cleanup failed')
@@ -117,6 +143,7 @@ test('release controller aggregates staged, active, and loop cleanup failures an
 test('release controller fails callback-owned release operations before calling lifecycle ports', async () => {
   const calls = []
   const invocation = { record: pluginRecord('callback-owner', 1) }
+  const registryToken = Object.freeze({ registry: 'test' })
   const controller = createRuntimePluginReleaseController(controllerOptions({
     activeCallbackInvocation: () => invocation,
     callbackDrainDeadlockError: (operation, active, pluginId, token) => {
@@ -126,6 +153,7 @@ test('release controller fails callback-owned release operations before calling 
       })
     },
     reloadPluginConfigUnchecked: async () => calls.push('reload:unchecked'),
+    registryToken,
     unregisterPluginUnchecked: async () => calls.push('unregister:unchecked'),
   }))
 
@@ -152,6 +180,10 @@ test('release controller fails callback-owned release operations before calling 
     'target-plugin',
     '',
   ])
+  for (const call of calls) {
+    assert.strictEqual(call.active, invocation)
+    assert.strictEqual(call.token, registryToken)
+  }
 })
 
 test('runtime plugin registry delegates release state and orchestration to the focused controller', () => {
