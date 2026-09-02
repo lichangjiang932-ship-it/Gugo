@@ -22,6 +22,43 @@ const tickSource = readFileSync(
   new URL('../server/services/jobRuntimeTick.js', import.meta.url),
   'utf8',
 )
+const tickDependenciesSource = readFileSync(
+  new URL('../server/services/jobRuntimeTickDependencies.js', import.meta.url),
+  'utf8',
+)
+
+test('job runtime delegates concrete tick dependencies to a focused provider', () => {
+  assert.equal(
+    jobRuntimeSource.includes(
+      "import { DEFAULT_JOB_RUNTIME_TICK_DEPENDENCIES } from './jobRuntimeTickDependencies.js'",
+    ),
+    true,
+  )
+  assert.match(
+    jobRuntimeSource,
+    /runJobRuntimeTick\.call\(this, DEFAULT_JOB_RUNTIME_TICK_DEPENDENCIES\)/u,
+  )
+  assert.match(tickDependenciesSource, /Object\.freeze\(\{/u)
+  assert.doesNotMatch(tickDependenciesSource, /from ['"]\.\/jobRuntime\.js['"]/u)
+
+  for (const concreteDependency of [
+    './jobWakeStore.js',
+    './jobSteeringStore.js',
+    './notificationsStore.js',
+    './hooksService.js',
+  ]) {
+    assert.equal(
+      jobRuntimeSource.includes(concreteDependency),
+      false,
+      `jobRuntime.js must not directly compose tick dependency: ${concreteDependency}`,
+    )
+    assert.equal(
+      tickDependenciesSource.includes(concreteDependency),
+      true,
+      `tick dependency provider must retain composition: ${concreteDependency}`,
+    )
+  }
+})
 
 test('job runtime delegates crash recovery to the focused recovery service', () => {
   assert.match(jobRuntimeSource, /recoverRuntimeJobs\(\{/u)

@@ -1,60 +1,17 @@
 import { buildExploredPlan } from './jobPlanner.js'
-import {
-  appendJobEvent,
-  getJob as getJobRow, getJobWithChildren, listJobSteps,
-  listRecoverableJobs, updateJob, updateJobStep,
-} from './jobStore.js'
-import { createNotification } from './notificationsStore.js'
-import { dispatchHooks } from './hooksService.js'
-import { getApprovalMode } from './approvalSettingsStore.js'
-import {
-  cancelJobWake,
-  claimDueJobWakes,
-  scheduleJobWake,
-} from './jobWakeStore.js'
-import { blockClaimedAutoRetryWakeTransition } from './jobRuntimeTransitionStore.js'
-import {
-  acknowledgeJobSteering,
-  claimJobSteering,
-  releaseJobSteeringLease,
-} from './jobSteeringStore.js'
-import {
-  buildFinalOutput,
-  deriveJobProgress,
-  buildJobOutcomeDiagnostics,
-  clearCompletedJobOutcomeDiagnostics,
-  clearResumedJobOutcomeDiagnostics,
-  findNextRunnableStep,
-  resolveWorkflowState,
-  stepRequiresPlanApproval,
-} from './jobWorkflow.js'
-import {
-  latestPersistedOutcomeFields,
-  persistJobOutcomeDiagnostics,
-} from './jobRuntimeProjection.js'
-import { emitTaskReviewEvent, persistRejectedStepResult, runVerificationRepairLoop } from './jobAcceptanceRuntime.js'
+import { getJob as getJobRow } from './jobStore.js'
 import { applyRuntimeTaskPlanGuard } from './taskPlanGuard.js'
-import {
-  buildJobPlanProposalPayload,
-  JOB_PLAN_APPROVAL_CONTRACT,
-  JOB_PLAN_APPROVAL_VERSION,
-  resolveJobPlanApproval,
-} from './jobPlanPolicyRuntime.js'
 import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
 import { createJobExecutionLeaseCoordinator } from './jobExecutionLeaseRuntime.js'
 import { createJobRuntimeCore } from './runtimeCore.js'
-import { createJobTickBudgetScope } from './jobTickBudgetScope.js'
-import { userCancellationError } from '../utils/toolCancellation.js'
-import { lostJobExecutionLease, notifyJobStopHook, notifyJobTerminal } from './jobRuntimeLifecycle.js'
-import { isModelReadinessError, resolveAgentModelRuntimeBinding } from './modelReadinessService.js'
+import { resolveAgentModelRuntimeBinding } from './modelReadinessService.js'
 import { runPlanningExploration } from './jobPlanningExplorationRuntime.js'
 import { runDefaultJobModel } from './jobModelExecutionRuntime.js'
 import { createDefaultExecuteStep } from './jobStepExecutionRuntime.js'
-import { persistJobStepFailure } from './jobStepFailureRuntime.js'
 import { runJobRuntimeTick } from './jobRuntimeTick.js'
+import { DEFAULT_JOB_RUNTIME_TICK_DEPENDENCIES } from './jobRuntimeTickDependencies.js'
 import { recoverRuntimeJobs } from './jobRuntimeRecovery.js'
 import { createJobRuntimeEventHub } from './jobRuntimeEventHub.js'
-import { hasExplicitIncompleteStepOutput } from './jobRetryEligibility.js'
 import {
   approveRuntimePlan,
   createRuntimeJob,
@@ -70,65 +27,10 @@ import {
   completeRuntimeStep,
   retryRuntimeJob,
   retryRuntimeStep,
-  TERMINAL_JOB_STATUSES,
 } from './jobRuntimeRetryCommands.js'
 export { recoverInterruptedJobs } from './jobRuntimeLifecycle.js'
 export { runPlanningExploration, selectPlanningToolSpecs } from './jobPlanningExplorationRuntime.js'
 export { createDefaultExecuteStep }
-const JOB_CANCELLED_MESSAGE = '任务已由用户终止'
-// ★ 注意:awaiting_approval 故意不在这里。等人的 job 崩溃恢复时若被重排成 queued,
-// 会把已经批准执行过的动作重跑一遍(发消息/改日历这类不可撤销动作尤其危险)。
-const SUSPENDED_JOB_STATUSES = new Set(['waiting', 'awaiting_approval'])
-
-const JOB_RUNTIME_TICK_DEPENDENCIES = {
-  claimDueJobWakes,
-  blockClaimedAutoRetryWakeTransition,
-  appendJobEvent,
-  listRecoverableJobs,
-  SUSPENDED_JOB_STATUSES,
-  createJobTickBudgetScope,
-  getJobRow,
-  getJobWithChildren,
-  listJobSteps,
-  updateJob,
-  updateJobStep,
-  clearResumedJobOutcomeDiagnostics,
-  latestPersistedOutcomeFields,
-  JOB_CANCELLED_MESSAGE,
-  deriveJobProgress,
-  persistJobOutcomeDiagnostics,
-  notifyJobTerminal,
-  notifyJobStopHook,
-  findNextRunnableStep,
-  resolveWorkflowState,
-  resolveJobPlanApproval,
-  buildJobOutcomeDiagnostics,
-  buildJobPlanProposalPayload,
-  JOB_PLAN_APPROVAL_CONTRACT,
-  JOB_PLAN_APPROVAL_VERSION,
-  createNotification,
-  isModelReadinessError,
-  dispatchHooks,
-  buildFinalOutput,
-  clearCompletedJobOutcomeDiagnostics,
-  userCancellationError,
-  claimJobSteering,
-  acknowledgeJobSteering,
-  releaseJobSteeringLease,
-  runVerificationRepairLoop,
-  lostJobExecutionLease,
-  hasExplicitIncompleteStepOutput,
-  scheduleJobWake,
-  cancelJobWake,
-  persistRejectedStepResult,
-  stepRequiresPlanApproval,
-  getApprovalMode,
-  emitTaskReviewEvent,
-  persistJobStepFailure,
-  TERMINAL_JOB_STATUSES,
-}
-
-
 export class JobRuntime {
   constructor({
     planner = (prompt, { userId, modelName, modelEnv } = {}) => buildExploredPlan(prompt, {
@@ -271,7 +173,7 @@ export class JobRuntime {
   }
 
   async _runOneTick() {
-    return runJobRuntimeTick.call(this, JOB_RUNTIME_TICK_DEPENDENCIES)
+    return runJobRuntimeTick.call(this, DEFAULT_JOB_RUNTIME_TICK_DEPENDENCIES)
   }
   async drain({ maxTicks = 1000 } = {}) {
     for (let index = 0; index < maxTicks; index += 1) {
