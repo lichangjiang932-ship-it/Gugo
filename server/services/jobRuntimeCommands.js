@@ -21,6 +21,12 @@ function newId(prefix) {
   return `${prefix}-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
 }
 
+function requireRuntimeUserId(userId, operation) {
+  if (typeof userId !== 'string' || !userId.trim()) {
+    throw new TypeError(`${operation} requires a non-empty userId string`)
+  }
+}
+
 export async function createRuntimeJob(runtime, prompt, options = {}) {
   const {
     userId,
@@ -30,7 +36,7 @@ export async function createRuntimeJob(runtime, prompt, options = {}) {
     grants = [],
     autoRetry = false,
   } = options
-  if (!userId) throw new Error('createJob requires userId')
+  requireRuntimeUserId(userId, 'createJob')
   const binding = runtime.resolveModelBinding({
     userId,
     providerId: options.modelProviderId,
@@ -201,7 +207,7 @@ export async function createRuntimePlan(runtime, {
   env = process.env,
   autoRetry = false,
 } = {}) {
-  if (!userId) throw new Error('createPlan requires userId')
+  requireRuntimeUserId(userId, 'createPlan')
   const binding = runtime.resolveModelBinding({
     userId,
     providerId: modelProviderId,

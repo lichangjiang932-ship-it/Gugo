@@ -40,7 +40,10 @@ export function createJobRuntimeEventHub({
 
   function reportListenerError(error) {
     try {
-      onListenerError(error)
+      const outcome = onListenerError(error)
+      if (outcome && typeof outcome.then === 'function') {
+        Promise.resolve(outcome).catch(() => {})
+      }
     } catch {
       // Diagnostics must never affect event delivery or owner eviction.
     }

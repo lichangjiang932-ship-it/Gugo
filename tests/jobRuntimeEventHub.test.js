@@ -224,6 +224,29 @@ test('an async listener rejection is reported without blocking siblings or evict
   assert.equal(lookups, 1)
 })
 
+test('an async error reporter rejection is isolated from event delivery', async () => {
+  let reports = 0
+  const received = []
+  const hub = createJobRuntimeEventHub({
+    resolveJobOwner: () => 'user-a',
+    onListenerError: async () => {
+      reports += 1
+      throw new Error('diagnostics unavailable')
+    },
+  })
+  hub.subscribe('user-a', async () => {
+    throw new Error('listener failed')
+  })
+  hub.subscribe('user-a', (event) => received.push(event))
+  const event = { jobId: 'job-a', type: 'progress' }
+
+  assert.doesNotThrow(() => hub.emit(event))
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.equal(reports, 1)
+  assert.deepEqual(received, [event])
+})
+
 test('every terminal event is delivered before its owner cache entry is evicted', () => {
   const terminalTypes = ['completed', 'failed', 'cancelled', 'aborted']
   const lookups = new Map()
