@@ -90,7 +90,6 @@ target kernel:
 
 | File | Current role | Required direction | Canonical debt |
 |---|---|---|---|
-| `server/services/turnEngineHost.js` | Process singleton and selected-adapter composition shell | Keep host-only; never add backend selection, routes, or Turn business logic | `DEBT-ARCH-002` |
 | `server/adapters/modelProxy.js` | Small background/streaming model facade and legacy HTTP compatibility shell; endpoint, diagnostics, identity/outcome, request building/preparation, transport, error presentation, and SSE/non-stream response coordination are extracted | Treat remaining work as compatibility-boundary debt; do not move Provider or response policy back into it | `DEBT-ARCH-002` |
 | `server/services/artifactGen.js` | Thin artifact generation compatibility facade; storage, delivery, format encoders, shared prepared-image validation, atomic generated-file writes, and local-file publication lock/marker/staging runtimes are delegated to focused host-owned services | Keep the facade thin; authorization, persistence, publication policy, and final receipts remain host-owned and must not move into the kernel or plugin replacement seams | `DEBT-ARCH-002` |
 | `server/services/jobRuntime.js` | Job planning, recovery, policy, scheduling, and loop hosting | Keep extracting independent services and capability providers | `DEBT-ARCH-002` |
