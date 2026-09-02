@@ -186,6 +186,7 @@ test('CI keeps required Node 22 tests cross-platform and gates Node 20 and 24 ru
     testJob,
     /TEST_CONCURRENCY:\s*\$\{\{ runner\.os == 'Windows' && '1' \|\| '4' \}\}/,
   )
+  assert.match(testJob, /- name:\s*Test\s*\r?\n\s*timeout-minutes:\s*45/)
   assert.match(testJob, /run:\s*npm test/)
   assert.match(compatibilityJob, /runs-on:\s*ubuntu-latest/)
   assert.match(compatibilityJob, /node-version:\s*\[20\.19\.x, 24\.x\]/)

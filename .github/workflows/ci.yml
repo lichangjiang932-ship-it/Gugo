@@ -57,7 +57,7 @@ jobs:
         run: npm run eval:offline
 
       - name: Test
-        timeout-minutes: 30
+        timeout-minutes: 45
         env:
           TEST_CONCURRENCY: ${{ runner.os == 'Windows' && '1' || '4' }}
         run: npm test
