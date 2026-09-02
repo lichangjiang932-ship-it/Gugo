@@ -6,12 +6,13 @@ export function createRuntimePluginInstallController({
   disposePluginEffects,
   emitAudit,
   getActivePluginConfigResolver,
+  getPlugin,
   hasPlugin,
   invokePluginSetup,
   isShuttingDown,
   normalizeManifest,
   publishPlugin,
-  removePluginIfCurrent,
+  removePlugin,
   revokeVisibleEffects,
   sealConfigLayerSources,
   snapshotPlugin,
@@ -69,7 +70,7 @@ export function createRuntimePluginInstallController({
       }
       record.revocationErrors.length = 0
       if (rollbackErrors.length === 0 && record.managedContributions.length === 0) {
-        removePluginIfCurrent(normalized.id, record)
+        if (getPlugin(normalized.id) === record) removePlugin(normalized.id)
       } else {
         record.state = 'rollback_failed'
       }

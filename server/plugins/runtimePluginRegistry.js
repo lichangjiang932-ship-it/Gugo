@@ -257,15 +257,13 @@ export function createRuntimePluginRegistry(options = {}) {
     disposePluginEffects,
     emitAudit,
     getActivePluginConfigResolver: () => activePluginConfigResolver,
+    getPlugin: (id) => plugins.get(id),
     hasPlugin: (id) => plugins.has(id),
     invokePluginSetup,
     isShuttingDown: () => shuttingDown,
     normalizeManifest: normalizeRuntimePluginManifest,
     publishPlugin: (id, record) => plugins.set(id, record),
-    removePluginIfCurrent: (id, record) => {
-      if (plugins.get(id) !== record) return false
-      return plugins.delete(id)
-    },
+    removePlugin: (id) => plugins.delete(id),
     revokeVisibleEffects,
     sealConfigLayerSources: () => {
       configLayerSourcesSealed = true

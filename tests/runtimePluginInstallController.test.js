@@ -21,6 +21,7 @@ test('install controller revalidates after setup and only removes its own failed
   }
   let compatibilityChecks = 0
   let activationCalls = 0
+  let removeCalls = 0
   let snapshotCalls = 0
   let settled = false
 
@@ -51,6 +52,10 @@ test('install controller revalidates after setup and only removes its own failed
     getActivePluginConfigResolver: () => ({
       resolve: () => Object.freeze({ config: Object.freeze({}) }),
     }),
+    getPlugin: (id) => {
+      order.push('remove-check')
+      return plugins.get(id)
+    },
     hasPlugin: (id) => plugins.has(id),
     invokePluginSetup: async (candidate, setup, context) => {
       assert.equal(candidate, record)
@@ -66,10 +71,8 @@ test('install controller revalidates after setup and only removes its own failed
       order.push('publish')
       plugins.set(id, candidate)
     },
-    removePluginIfCurrent: (id, candidate) => {
-      order.push('remove-attempt')
-      assert.equal(candidate, record)
-      if (plugins.get(id) !== candidate) return false
+    removePlugin: (id) => {
+      removeCalls += 1
       return plugins.delete(id)
     },
     revokeVisibleEffects: async (candidate) => {
@@ -93,6 +96,7 @@ test('install controller revalidates after setup and only removes its own failed
 
   assert.equal(compatibilityChecks, 2)
   assert.equal(activationCalls, 0)
+  assert.equal(removeCalls, 0)
   assert.equal(snapshotCalls, 0)
   assert.equal(settled, true)
   assert.equal(plugins.get(manifest.id), replacement)
@@ -102,7 +106,7 @@ test('install controller revalidates after setup and only removes its own failed
     ['setup', 'compatibility:2'],
     ['compatibility:2', 'revoke'],
     ['revoke', 'dispose'],
-    ['dispose', 'remove-attempt'],
+    ['dispose', 'remove-check'],
   ]) {
     assert.ok(order.indexOf(before) < order.indexOf(after), `${before} must precede ${after}`)
   }
