@@ -6,6 +6,10 @@ export const SESSION_ADMIN_PORT_SUPPORTED_CONTRACT_VERSIONS = Object.freeze([
   LEGACY_SESSION_ADMIN_PORT_CONTRACT_VERSION,
   SESSION_ADMIN_PORT_CONTRACT_VERSION,
 ])
+export const SQLITE_SESSION_CATALOG_FINGERPRINT_STRATEGY = 'sqlite-path-sha256-v1'
+
+const CATALOG_BACKEND_TYPE_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/u
+const CATALOG_INSTANCE_FINGERPRINT_RE = /^[a-f0-9]{64}$/u
 
 export const SESSION_ADMIN_PORT_METHODS = Object.freeze([
   'searchMessages',
@@ -72,6 +76,48 @@ function ownDataValue(target, key, errorFactory, { optional = false } = {}) {
     throw errorFactory(`${key} must be an own data property`)
   }
   return descriptor.value
+}
+
+function snapshotCatalogSource(input) {
+  const fail = (message) => invalidPort(`session admin port catalogSource ${message}`)
+  const source = ownDataValue(input, 'catalogSource', fail, { optional: true })
+  if (source === undefined) return null
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    throw fail('must be an object when provided')
+  }
+  const backendType = ownDataValue(source, 'backendType', fail)
+  const instanceFingerprint = ownDataValue(
+    source,
+    'instanceFingerprint',
+    fail,
+    { optional: true },
+  )
+  const fingerprintStrategy = ownDataValue(
+    source,
+    'fingerprintStrategy',
+    fail,
+    { optional: true },
+  )
+  if (typeof backendType !== 'string' || !CATALOG_BACKEND_TYPE_RE.test(backendType)) {
+    throw fail('backendType is invalid')
+  }
+  const hasFingerprint = instanceFingerprint !== undefined
+  const hasStrategy = fingerprintStrategy !== undefined
+  if (hasFingerprint === hasStrategy) {
+    throw fail('must declare exactly one instance fingerprint source')
+  }
+  if (hasFingerprint && (
+    typeof instanceFingerprint !== 'string'
+    || !CATALOG_INSTANCE_FINGERPRINT_RE.test(instanceFingerprint)
+  )) throw fail('instanceFingerprint must be a lowercase SHA-256 digest')
+  if (hasStrategy && (
+    backendType !== 'sqlite'
+    || fingerprintStrategy !== SQLITE_SESSION_CATALOG_FINGERPRINT_STRATEGY
+  )) throw fail('fingerprintStrategy is unsupported')
+  return Object.freeze({
+    backendType,
+    ...(hasFingerprint ? { instanceFingerprint } : { fingerprintStrategy }),
+  })
 }
 
 function inputRecord(method, input) {
@@ -468,7 +514,11 @@ export function prepareSessionAdminPort(input) {
       `session admin port requires contractVersion ${SESSION_ADMIN_PORT_SUPPORTED_CONTRACT_VERSIONS.join(' or ')}`,
     )
   }
-  const prepared = { contractVersion }
+  const catalogSource = snapshotCatalogSource(input)
+  const prepared = {
+    contractVersion,
+    ...(catalogSource ? { catalogSource } : {}),
+  }
   for (const method of SESSION_ADMIN_PORT_METHODS) {
     const implementation = ownDataValue(
       input,

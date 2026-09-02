@@ -31,6 +31,35 @@ test('SessionAdmin core contract has no storage or service dependency', () => {
   assert.doesNotMatch(source, /from\s+['"]\.\.\/(?:db|services)\//u)
 })
 
+test('SessionAdmin snapshots only opaque stable catalog source identities', () => {
+  const definition = portDefinition({
+    catalogSource: {
+      backendType: 'remote-store',
+      instanceFingerprint: 'ab'.repeat(32),
+    },
+  })
+  const port = prepareSessionAdminPort(definition)
+  definition.catalogSource.backendType = 'mutated'
+  definition.catalogSource.instanceFingerprint = 'cd'.repeat(32)
+
+  assert.deepEqual(port.catalogSource, {
+    backendType: 'remote-store',
+    instanceFingerprint: 'ab'.repeat(32),
+  })
+  assert.equal(Object.isFrozen(port.catalogSource), true)
+
+  for (const catalogSource of [
+    { backendType: 'remote-store' },
+    { backendType: 'remote-store', instanceFingerprint: 'not-a-hash' },
+    { backendType: 'remote-store', fingerprintStrategy: 'sqlite-path-sha256-v1' },
+  ]) {
+    assert.throws(
+      () => prepareSessionAdminPort(portDefinition({ catalogSource })),
+      (error) => error?.code === 'SESSION_ADMIN_PORT_INVALID' && /catalogSource/.test(error.message),
+    )
+  }
+})
+
 test('SessionAdmin v2 normalizes query pagination before invoking the backend', async () => {
   const calls = []
   const port = prepareSessionAdminPort(portDefinition({

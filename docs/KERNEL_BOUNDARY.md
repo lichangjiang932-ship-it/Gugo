@@ -88,19 +88,21 @@ provenance.
 The following files are compatibility hosts and are explicitly outside the
 target kernel:
 
-| File | Current role | Required direction |
-|---|---|---|
-| `server/services/TurnEngine.js` | Narrow turn lifecycle and composition shell; execution preparation, model-loop/checkpoint projection, terminal outcomes, persistence assembly, and lease scheduling are delegated to focused runtimes | Keep it below 600 lines and move any new execution concern behind an explicit runtime port |
-| `server/services/turnEngineHost.js` | Process singleton and selected-adapter composition shell | Keep host-only; never add backend selection, routes, or Turn business logic |
-| `server/adapters/modelProxy.js` | Small background/streaming model facade and legacy HTTP compatibility shell; endpoint, diagnostics, identity/outcome, request building/preparation, transport, error presentation, and SSE/non-stream response coordination are extracted | Treat remaining work as compatibility-boundary debt; do not move Provider or response policy back into it |
-| `server/services/artifactGen.js` | Thin artifact generation compatibility facade; storage, delivery, format encoders, shared prepared-image validation, atomic generated-file writes, and local-file publication lock/marker/staging runtimes are delegated to focused host-owned services | Keep the facade thin; authorization, persistence, publication policy, and final receipts remain host-owned and must not move into the kernel or plugin replacement seams |
-| `server/services/jobRuntime.js` | Job planning, recovery, policy, scheduling, and loop hosting | Keep extracting independent services and capability providers |
-| `server/plugins/runtimePluginRegistry.js` | Inventory, installation, capability wiring, config, and release control; contribution transactions plus Prompt, Tool, Loop-hook, and read-only Agent Event hosting are delegated to dedicated coordinators/registries | Finish splitting inventory/loading from activation/execution, add a durable replay/cursor feed behind the separate Agent Event consumer seam, and keep contribution transactions behind the coordinator |
-| `server/db.js` | Database bootstrap and composition; the authoritative v1-v112 registry delegates historical v2-v30 upgrades to `legacyCompatibility.js`, retires the former Reasonix side chain at v108, and keeps later workspace, auto-retry, localization, and wake-claim changes in contiguous migrations | Keep bootstrap-only; add future schema changes exclusively through contiguous registry migrations without rewriting historical migrations |
-| Managed attachment HTTP/governance, artifacts, verified-file projections, and data governance | Turn validation and model materialization now cross `ManagedAttachmentRuntimePort v1`; routes, upload/deletion governance, and the atomic SQLite turn-start binding still assume host-owned identities or file layouts | Move the remaining aggregate operations behind backend-neutral governance/storage capabilities without weakening ownership checks or splitting the existing atomic turn-start commit |
+| File | Current role | Required direction | Canonical debt |
+|---|---|---|---|
+| `server/services/TurnEngine.js` | Narrow turn lifecycle and composition shell; execution preparation, model-loop/checkpoint projection, terminal outcomes, persistence assembly, and lease scheduling are delegated to focused runtimes | Keep it below 600 lines and move any new execution concern behind an explicit runtime port | `DEBT-ARCH-002` |
+| `server/services/turnEngineHost.js` | Process singleton and selected-adapter composition shell | Keep host-only; never add backend selection, routes, or Turn business logic | `DEBT-ARCH-002` |
+| `server/adapters/modelProxy.js` | Small background/streaming model facade and legacy HTTP compatibility shell; endpoint, diagnostics, identity/outcome, request building/preparation, transport, error presentation, and SSE/non-stream response coordination are extracted | Treat remaining work as compatibility-boundary debt; do not move Provider or response policy back into it | `DEBT-ARCH-002` |
+| `server/services/artifactGen.js` | Thin artifact generation compatibility facade; storage, delivery, format encoders, shared prepared-image validation, atomic generated-file writes, and local-file publication lock/marker/staging runtimes are delegated to focused host-owned services | Keep the facade thin; authorization, persistence, publication policy, and final receipts remain host-owned and must not move into the kernel or plugin replacement seams | `DEBT-ARCH-002` |
+| `server/services/jobRuntime.js` | Job planning, recovery, policy, scheduling, and loop hosting | Keep extracting independent services and capability providers | `DEBT-ARCH-002` |
+| `server/plugins/runtimePluginRegistry.js` | Inventory, installation, capability wiring, config, and release control; contribution transactions plus Prompt, Tool, Loop-hook, and read-only Agent Event hosting are delegated to dedicated coordinators/registries | Finish splitting inventory/loading from activation/execution, add a durable replay/cursor feed behind the separate Agent Event consumer seam, and keep contribution transactions behind the coordinator | `DEBT-ARCH-002` |
+| `server/db.js` | Database bootstrap and composition; the authoritative v1-v112 registry delegates historical v2-v30 upgrades to `legacyCompatibility.js`, retires the former Reasonix side chain at v108, and keeps later workspace, auto-retry, localization, and wake-claim changes in contiguous migrations | Keep bootstrap-only; add future schema changes exclusively through contiguous registry migrations without rewriting historical migrations | `DEBT-ARCH-002` |
+| Managed attachment HTTP/governance, artifacts, verified-file projections, and data governance | Turn validation and model materialization now cross `ManagedAttachmentRuntimePort v1`; routes, upload/deletion governance, and the atomic SQLite turn-start binding still assume host-owned identities or file layouts | Move the remaining aggregate operations behind backend-neutral governance/storage capabilities without weakening ownership checks or splitting the existing atomic turn-start commit | `DEBT-ARCH-002` |
 
-The repository's 600-line preference applies to implementation files. A file
-above that threshold is transition debt, not permission to add another concern.
+The repository's 600-line preference applies to implementation files under
+`server/`, `shared/`, `desktop/`, and `bin/`. `DEBT-SIZE-001` is the executable
+inventory; a file above that threshold is transition debt, not permission to
+add another concern.
 
 ## Dependency rules
 

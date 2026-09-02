@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { SQLITE_SESSION_CATALOG_FINGERPRINT_STRATEGY } from '../core/sessionAdminPort.js'
 import { validateRuntimeStoragePath } from '../utils/runtimeStoragePath.js'
 
 const SOURCE_VERSION = 1
@@ -38,20 +39,37 @@ function opaqueId(namespace, value) {
   return `${namespace}:${digest}`
 }
 
+function backendInstanceId(sessionAdmin, { cwd, env }) {
+  const descriptor = Object.getOwnPropertyDescriptor(sessionAdmin || {}, 'catalogSource')
+  if (!descriptor || !Object.hasOwn(descriptor, 'value')) return null
+  const source = descriptor.value
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null
+  if (source.fingerprintStrategy === SQLITE_SESSION_CATALOG_FINGERPRINT_STRATEGY) {
+    if (source.backendType !== 'sqlite') return null
+    const configuredDataDir = validateRuntimeStoragePath(env.APP_DATA_DIR, { key: 'APP_DATA_DIR' })
+    const dataDir = path.resolve(cwd, configuredDataDir || 'server-data')
+    const configuredDbPath = validateRuntimeStoragePath(env.APP_DB_PATH, { key: 'APP_DB_PATH' })
+    const dbPath = path.resolve(cwd, configuredDbPath || path.join(dataDir, 'app.db'))
+    return opaqueId('sqlite', dbPath)
+  }
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/u.test(source.backendType)
+    || !/^[a-f0-9]{64}$/u.test(source.instanceFingerprint)) return null
+  return `${source.backendType}:${source.instanceFingerprint.slice(0, ID_LENGTH)}`
+}
+
 export function describeSessionCatalogSource({
   cwd = process.cwd(),
   env = process.env,
+  sessionAdmin = null,
 } = {}) {
-  const configuredDataDir = validateRuntimeStoragePath(env.APP_DATA_DIR, { key: 'APP_DATA_DIR' })
-  const dataDir = path.resolve(cwd, configuredDataDir || 'server-data')
-  const configuredDbPath = validateRuntimeStoragePath(env.APP_DB_PATH, { key: 'APP_DB_PATH' })
-  const dbPath = path.resolve(cwd, configuredDbPath || path.join(dataDir, 'app.db'))
+  const backendId = backendInstanceId(sessionAdmin, { cwd, env })
+  if (!backendId) return null
   const configuredWorkspace = String(env.WORKSPACE_ROOT || '').trim()
   const workspacePath = canonicalPath(path.resolve(cwd, configuredWorkspace || cwd))
 
   return {
     version: SOURCE_VERSION,
-    backendInstanceId: opaqueId('sqlite', dbPath),
+    backendInstanceId: backendId,
     workspaceScope: {
       key: opaqueId('workspace', workspacePath),
       path: workspacePath,

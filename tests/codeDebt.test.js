@@ -3,8 +3,10 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
-const BACKEND_IMPLEMENTATION_LINE_LIMIT = 600
-const BACKEND_LARGE_FILE_DEBT_ID = 'DEBT-SIZE-001'
+const RUNTIME_IMPLEMENTATION_LINE_LIMIT = 600
+const RUNTIME_LARGE_FILE_DEBT_ID = 'DEBT-SIZE-001'
+const GOVERNED_IMPLEMENTATION_ROOTS = Object.freeze(['bin', 'desktop', 'server', 'shared'])
+const GOVERNED_IMPLEMENTATION_PATH_PATTERN = /^(?:bin|desktop|server|shared)\/.+\.(?:[cm]?[jt]s|[jt]sx)$/
 const FRONTEND_IMPLEMENTATION_LINE_LIMIT = 600
 const TRANSLATION_MODULE_LINE_LIMIT = 600
 const DEBT_MARKER_CEILING = 168
@@ -117,7 +119,7 @@ function inspectUiHexGovernance(sources) {
   return { violations, usedAllowlistIds }
 }
 
-function classifyFrozenBackendDebt({ measurements, frozenCeilings, lineLimit }) {
+function classifyFrozenRuntimeDebt({ measurements, frozenCeilings, lineLimit }) {
   const files = [...measurements.keys()].sort()
   const oversizedFiles = files.filter((file) => measurements.get(file) > lineLimit)
   const frozenFiles = Object.keys(frozenCeilings)
@@ -153,15 +155,15 @@ function findDuplicateValues(values, normalize = (value) => value) {
   return [...duplicates].sort()
 }
 
-function parseBackendSizeDebtInventory(debtSection) {
+function parseRuntimeSizeDebtInventory(debtSection) {
   const blocks = [...debtSection.matchAll(
     /<!-- debt-size-inventory:start -->\s*```json\s*([\s\S]*?)\s*```\s*<!-- debt-size-inventory:end -->/g,
   )]
-  assert.equal(blocks.length, 1, `${BACKEND_LARGE_FILE_DEBT_ID} must contain exactly one size inventory`)
+  assert.equal(blocks.length, 1, `${RUNTIME_LARGE_FILE_DEBT_ID} must contain exactly one size inventory`)
   return JSON.parse(blocks[0][1])
 }
 
-function inspectBackendSizeDebtInventory(inventory, lineLimit) {
+function inspectRuntimeSizeDebtInventory(inventory, lineLimit) {
   const groups = Array.isArray(inventory?.groups) ? inventory.groups : []
   const files = Array.isArray(inventory?.files) ? inventory.files : []
   const groupIds = groups.map((group) => group?.id)
@@ -182,7 +184,7 @@ function inspectBackendSizeDebtInventory(inventory, lineLimit) {
       .map((group) => group?.id ?? null),
     invalidFiles: files
       .filter((file) => (
-        !/^server\/.+\.(?:[cm]?[jt]s|[jt]sx)$/.test(file?.path ?? '')
+        !GOVERNED_IMPLEMENTATION_PATH_PATTERN.test(file?.path ?? '')
         || !Number.isSafeInteger(file?.ceiling)
         || file.ceiling <= lineLimit
         || typeof file?.group !== 'string'
@@ -197,34 +199,37 @@ function inspectBackendSizeDebtInventory(inventory, lineLimit) {
   }
 }
 
-test('backend implementation size policy rejects every ungoverned oversized file', () => {
+test('runtime implementation size policy rejects every ungoverned oversized file', () => {
   const debtSource = readFileSync('docs/DEBT.md', 'utf8')
   const registeredDebtIds = new Set([...debtSource.matchAll(/^## (DEBT-[A-Z]+-\d{3})\b/gm)].map((match) => match[1]))
-  const debtSectionStart = debtSource.indexOf(`## ${BACKEND_LARGE_FILE_DEBT_ID}`)
-  assert.notEqual(debtSectionStart, -1, `${BACKEND_LARGE_FILE_DEBT_ID} must remain in docs/DEBT.md`)
+  const debtSectionStart = debtSource.indexOf(`## ${RUNTIME_LARGE_FILE_DEBT_ID}`)
+  assert.notEqual(debtSectionStart, -1, `${RUNTIME_LARGE_FILE_DEBT_ID} must remain in docs/DEBT.md`)
   const debtSectionEnd = debtSource.indexOf('\n## ', debtSectionStart + 1)
   const debtSection = debtSource.slice(debtSectionStart, debtSectionEnd >= 0 ? debtSectionEnd : undefined)
-  const inventory = parseBackendSizeDebtInventory(debtSection)
-  const inventoryFindings = inspectBackendSizeDebtInventory(
+  const inventory = parseRuntimeSizeDebtInventory(debtSection)
+  const inventoryFindings = inspectRuntimeSizeDebtInventory(
     inventory,
-    BACKEND_IMPLEMENTATION_LINE_LIMIT,
+    RUNTIME_IMPLEMENTATION_LINE_LIMIT,
   )
   const frozenCeilings = Object.fromEntries(
     (Array.isArray(inventory.files) ? inventory.files : []).map((entry) => [entry.path, entry.ceiling]),
   )
   const hasFrozenExceptions = Array.isArray(inventory.files) && inventory.files.length > 0
-  const files = walkImplementationSources('server').map(repositoryPath).sort()
+  const files = GOVERNED_IMPLEMENTATION_ROOTS
+    .flatMap((root) => walkImplementationSources(root))
+    .map(repositoryPath)
+    .sort()
   const measurements = new Map(files.map((file) => [file, lineCount(file)]))
-  const findings = classifyFrozenBackendDebt({
+  const findings = classifyFrozenRuntimeDebt({
     measurements,
     frozenCeilings,
-    lineLimit: BACKEND_IMPLEMENTATION_LINE_LIMIT,
+    lineLimit: RUNTIME_IMPLEMENTATION_LINE_LIMIT,
   })
 
   assert.equal(
-    registeredDebtIds.has(BACKEND_LARGE_FILE_DEBT_ID),
+    registeredDebtIds.has(RUNTIME_LARGE_FILE_DEBT_ID),
     true,
-    `${BACKEND_LARGE_FILE_DEBT_ID} must remain documented as the executable backend size policy`,
+    `${RUNTIME_LARGE_FILE_DEBT_ID} must remain documented as the executable runtime size policy`,
   )
   assert.match(
     debtSection,
@@ -233,12 +238,12 @@ test('backend implementation size policy rejects every ungoverned oversized file
       ? 'Frozen size exceptions require an open debt record'
       : 'A fully repaid size inventory requires a closed debt record',
   )
-  assert.equal(inventory.schemaVersion, 1, 'Use the reviewed backend size inventory schema')
-  assert.equal(inventory.debtId, BACKEND_LARGE_FILE_DEBT_ID, 'Inventory must belong to its enclosing debt record')
+  assert.equal(inventory.schemaVersion, 1, 'Use the reviewed runtime size inventory schema')
+  assert.equal(inventory.debtId, RUNTIME_LARGE_FILE_DEBT_ID, 'Inventory must belong to its enclosing debt record')
   assert.equal(
     inventory.lineLimit,
-    BACKEND_IMPLEMENTATION_LINE_LIMIT,
-    'Inventory and executable backend size policy must use the same threshold',
+    RUNTIME_IMPLEMENTATION_LINE_LIMIT,
+    'Inventory and executable runtime size policy must use the same threshold',
   )
   assert.ok(Array.isArray(inventory.groups), 'Inventory governance groups must be an array')
   assert.ok(Array.isArray(inventory.files), 'Inventory frozen file records must be an array')
@@ -252,7 +257,7 @@ test('backend implementation size policy rejects every ungoverned oversized file
   assert.deepEqual(
     inventoryFindings.invalidFiles,
     [],
-    'Frozen file records require a canonical backend path, exact ceiling, and governance group',
+    'Frozen file records require a canonical governed implementation path, exact ceiling, and governance group',
   )
   assert.deepEqual(inventoryFindings.unknownGroupFiles, [], 'Every frozen file must resolve to documented governance')
   assert.deepEqual(inventoryFindings.unusedGroupIds, [], 'Remove governance groups that no longer own frozen files')
@@ -261,17 +266,17 @@ test('backend implementation size policy rejects every ungoverned oversized file
   assert.deepEqual(
     findings.frozenFiles,
     [...findings.frozenFiles].sort(),
-    'Keep the frozen backend debt inventory deterministic',
+    'Keep the frozen runtime debt inventory deterministic',
   )
   assert.deepEqual(findings.invalidCeilings, [], 'Frozen ceilings must be exact line counts above the 600-line limit')
-  assert.deepEqual(findings.unregistered, [], 'Split every new backend implementation file that exceeds 600 lines')
-  assert.deepEqual(findings.grew, [], 'Split a cohesive module instead of increasing frozen backend size debt')
+  assert.deepEqual(findings.unregistered, [], 'Split every new runtime implementation file that exceeds 600 lines')
+  assert.deepEqual(findings.grew, [], 'Split a cohesive module instead of increasing frozen runtime size debt')
   assert.deepEqual(
     findings.needsRatchet,
     [],
     'Lower the frozen ceiling in the same change when an oversized file shrinks',
   )
-  assert.deepEqual(findings.stale, [], 'Remove resolved or deleted files from the frozen backend debt inventory')
+  assert.deepEqual(findings.stale, [], 'Remove resolved or deleted files from the frozen runtime debt inventory')
 })
 
 test('frontend implementation files remain below the size limit', () => {
@@ -303,8 +308,8 @@ test('translation entry point and domain modules remain below the size limit', (
   )
 })
 
-test('backend size debt classifier reports every gate-evasion category', () => {
-  const findings = classifyFrozenBackendDebt({
+test('runtime size debt classifier reports every gate-evasion category', () => {
+  const findings = classifyFrozenRuntimeDebt({
     measurements: new Map([
       ['server/newRuntime.ts', 601],
       ['server/grew.js', 702],
@@ -333,8 +338,8 @@ test('backend size debt classifier reports every gate-evasion category', () => {
   assert.deepEqual(findings.invalidCeilings, ['server/invalid.js'])
 })
 
-test('backend size inventory reports duplicate and unactionable governance records', () => {
-  const findings = inspectBackendSizeDebtInventory({
+test('runtime size inventory reports duplicate and unactionable governance records', () => {
+  const findings = inspectRuntimeSizeDebtInventory({
     groups: [
       {
         id: 'duplicate-group',
@@ -373,6 +378,73 @@ test('backend size inventory reports duplicate and unactionable governance recor
   assert.deepEqual(findings.unusedGroupIds, ['unused-group'])
   assert.equal(findings.groupsAreSorted, false)
   assert.equal(findings.filesAreSorted, false)
+})
+
+test('runtime implementation size governance covers every host implementation root', () => {
+  assert.deepEqual(GOVERNED_IMPLEMENTATION_ROOTS, ['bin', 'desktop', 'server', 'shared'])
+
+  const group = {
+    id: 'covered-runtime',
+    reason: 'This fixture proves every governed runtime root accepts canonical source paths.',
+    exitCriteria: 'Keep every runtime implementation root covered by the executable size gate.',
+  }
+  const governedFiles = GOVERNED_IMPLEMENTATION_ROOTS.map((root) => ({
+    path: `${root}/nested/runtime.ts`,
+    ceiling: 601,
+    group: group.id,
+  }))
+  const governedFindings = inspectRuntimeSizeDebtInventory({
+    groups: [group],
+    files: governedFiles,
+  }, RUNTIME_IMPLEMENTATION_LINE_LIMIT)
+  const outOfScopeFindings = inspectRuntimeSizeDebtInventory({
+    groups: [group],
+    files: [
+      { path: 'src/runtime.ts', ceiling: 601, group: group.id },
+      { path: 'tests/runtime.test.js', ceiling: 601, group: group.id },
+    ],
+  }, RUNTIME_IMPLEMENTATION_LINE_LIMIT)
+
+  assert.deepEqual(governedFindings.invalidFiles, [])
+  assert.deepEqual(
+    outOfScopeFindings.invalidFiles,
+    ['src/runtime.ts', 'tests/runtime.test.js'],
+  )
+})
+
+test('kernel transition debt rows reference open canonical debt records', () => {
+  const debtSource = readFileSync('docs/DEBT.md', 'utf8')
+  const debtMatches = [...debtSource.matchAll(/^## (DEBT-[A-Z]+-\d{3})\b/gm)]
+  const debtStatuses = new Map(debtMatches.map((match, index) => {
+    const sectionEnd = debtMatches[index + 1]?.index ?? debtSource.indexOf('\n## Maintenance rules')
+    const section = debtSource.slice(match.index, sectionEnd >= 0 ? sectionEnd : undefined)
+    const status = section.match(/^\*\*Status:\*\* (Open|Closed)\b/m)?.[1] ?? null
+    return [match[1], status]
+  }))
+  const kernelSource = readFileSync('docs/KERNEL_BOUNDARY.md', 'utf8')
+  const sectionStart = kernelSource.indexOf('## Current transition debt')
+  const sectionEnd = kernelSource.indexOf('\n## ', sectionStart + 1)
+  assert.notEqual(sectionStart, -1, 'Kernel boundary must retain an explicit transition-debt section')
+  const section = kernelSource.slice(sectionStart, sectionEnd >= 0 ? sectionEnd : undefined)
+  const tableRows = section
+    .split(/\r?\n/)
+    .filter((line) => /^\|.+\|$/.test(line.trim()))
+    .map((line) => line.split('|').slice(1, -1).map((cell) => cell.trim()))
+  const [header, separator, ...rows] = tableRows
+
+  assert.deepEqual(header, ['File', 'Current role', 'Required direction', 'Canonical debt'])
+  assert.ok(separator.every((cell) => /^:?-{3,}:?$/.test(cell)), 'Transition debt table needs a valid separator')
+  assert.ok(rows.length >= 7, 'Every documented kernel transition surface must remain governed')
+  for (const row of rows) {
+    assert.equal(row.length, header.length, `Malformed kernel transition row: ${row.join(' | ')}`)
+    const debtIds = [...row[3].matchAll(/\bDEBT-[A-Z]+-\d{3}\b/g)].map((match) => match[0])
+    assert.equal(debtIds.length, 1, `Transition row must reference exactly one canonical debt: ${row[0]}`)
+    assert.equal(
+      debtStatuses.get(debtIds[0]),
+      'Open',
+      `Kernel transition debt ${row[0]} must reference an open canonical debt record`,
+    )
+  }
 })
 
 test('source debt markers cannot increase beyond the cleanup baseline', () => {

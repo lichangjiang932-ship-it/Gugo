@@ -24,6 +24,32 @@ evidence settlement, and lease cleanup.
 **Verification:** `tests/turnEngine.test.js`,
 `tests/turnPersistenceTransactions.test.js`, and `tests/turnEngineHost.test.js`.
 
+## DEBT-ARCH-002 — Host compatibility transition surfaces
+
+**Status:** Open
+**Priority:** P1
+**Area:** Runtime architecture
+
+**Evidence / reproduction:** The `Current transition debt` table in
+`docs/KERNEL_BOUNDARY.md` still lists host compatibility and composition
+surfaces outside the target minimal kernel. Earlier focused debt records prove
+individual improvements such as reducing `TurnEngine.js` below 600 lines; they
+do not prove that the remaining host responsibilities have crossed stable
+runtime ports. Every table row therefore references this open canonical record
+instead of appearing as undocumented debt beside an all-closed register.
+
+**Exit criteria:** Close only after every linked transition row is either
+removed with evidence that its required boundary has been reached or moved to
+a narrower open debt record with its own observable exit criteria. Completion
+must preserve the dependency and host-ownership rules in
+`docs/KERNEL_BOUNDARY.md`; deleting a row or relabeling a compatibility host
+without extracting its remaining responsibility does not repay the debt.
+
+**Verification:** `tests/codeDebt.test.js` requires every kernel transition row
+to reference exactly one canonical Open debt record. Boundary-specific changes
+also run the Turn, persistence, model proxy, artifact, Job, runtime-plugin,
+migration, and managed-attachment contract suites named by the affected row.
+
 ## DEBT-DATA-001 — Legacy schema bootstrap paths
 
 **Status:** Closed
@@ -394,22 +420,22 @@ crash-recovery protocol.
 **Verification:** `tests/evolutionConfigReview.test.js`,
 `tests/evolutionConfig.test.js`, and `tests/evolutionConfigStartupRecovery.test.js`.
 
-## DEBT-SIZE-001 — Oversized backend implementation inventory
+## DEBT-SIZE-001 — Oversized runtime implementation inventory
 
-**Status:** Closed
+**Status:** Open
 **Priority:** P1
 **Area:** Architecture
 
 **Evidence / reproduction:** `tests/codeDebt.test.js` recursively measures all
-JavaScript and TypeScript implementation files under `server/`. Every
-pre-existing file above the 600-line preference has an exact frozen ceiling; an
-unknown oversized file, growth above a ceiling, a stale exception, or failure
-to ratchet a reduced ceiling fails the gate. The former 1,303-line Codex
-app-server runtime has been split into runtime, process, and contract modules
-below the limit, so it has no frozen exception; every extracted module remains
-covered by the same scan.
+JavaScript and TypeScript implementation files under `server/`, `shared/`,
+`desktop/`, and `bin/`. Every pre-existing file above the 600-line preference
+has an exact frozen ceiling; an unknown oversized file, growth above a ceiling,
+a stale exception, or failure to ratchet a reduced ceiling fails the gate. The
+former 1,303-line Codex app-server runtime has been split into runtime, process,
+and contract modules below the limit, so it has no frozen exception; every
+extracted module remains covered by the same scan.
 
-The machine-readable inventory below is the sole source of frozen backend
+The machine-readable inventory below is the sole source of frozen runtime
 ceilings. A file record inherits the architectural reason and exit criteria of
 its `group`; this keeps related decomposition work governed together instead of
 creating dozens of copy-pasted debt entries. The test rejects duplicate paths
@@ -498,9 +524,11 @@ redaction support, and declarative schemas live in focused modules of 187 lines
 or fewer. Its former frozen exception has been removed with the legacy exports
 and download security contract preserved.
 
-All previously frozen backend implementations are now at or below 600 lines.
-The empty inventory remains executable policy: any new oversized backend file
-fails the gate instead of silently creating a new exception.
+All previously frozen `server/` implementations are now at or below 600 lines.
+Expanding the executable scan to every host runtime implementation root exposed
+five existing oversized files outside `server/`. They are frozen below at
+their exact current line counts: any growth, unregistered oversized file, stale
+entry, or unratcheted shrinkage fails the gate.
 
 <!-- debt-size-inventory:start -->
 ```json
@@ -508,20 +536,73 @@ fails the gate instead of silently creating a new exception.
   "schemaVersion": 1,
   "debtId": "DEBT-SIZE-001",
   "lineLimit": 600,
-  "groups": [],
-  "files": []
+  "groups": [
+    {
+      "id": "artifact-intent-contract",
+      "reason": "Shared artifact intent detection combines alias resolution, delivery targets, revision classification, and natural-language prompt heuristics in one contract module.",
+      "exitCriteria": "Extract cohesive parsing and delivery-target concerns while preserving the shared public intent API and its deterministic classification fixtures."
+    },
+    {
+      "id": "cli-entrypoint",
+      "reason": "The CLI entrypoint combines argument parsing, authentication storage, API transport, Headless execution, and command dispatch in one process boundary.",
+      "exitCriteria": "Move command families and transport or credential concerns into focused modules while keeping the executable entrypoint and exported CLI contracts stable."
+    },
+    {
+      "id": "cli-output",
+      "reason": "CLI output owns stream serialization, terminal outcome interpretation, verification diagnostics, and human or JSONL formatting in one module.",
+      "exitCriteria": "Separate terminal projection and format-specific writers without weakening ordered writes, bounded diagnostics, or exit-status semantics."
+    },
+    {
+      "id": "desktop-main-process",
+      "reason": "The Electron main process still combines bundled-server lifecycle, window and pet management, IPC authorization, update handling, and shutdown coordination.",
+      "exitCriteria": "Extract cohesive desktop lifecycle and IPC or window controllers while preserving fail-closed navigation, permission, and trusted-sender checks."
+    },
+    {
+      "id": "turn-event-contract",
+      "reason": "The shared Turn event module combines the event vocabulary, payload schemas, persistence compatibility, transport envelopes, cursor logic, and activity schemas.",
+      "exitCriteria": "Split stable schema families behind the unchanged shared event API without creating a second lifecycle vocabulary or weakening persisted-event compatibility."
+    }
+  ],
+  "files": [
+    {
+      "path": "bin/cli/runOutput.js",
+      "ceiling": 648,
+      "group": "cli-output"
+    },
+    {
+      "path": "bin/yma-cli.js",
+      "ceiling": 977,
+      "group": "cli-entrypoint"
+    },
+    {
+      "path": "desktop/main.js",
+      "ceiling": 665,
+      "group": "desktop-main-process"
+    },
+    {
+      "path": "shared/artifactIntent.js",
+      "ceiling": 748,
+      "group": "artifact-intent-contract"
+    },
+    {
+      "path": "shared/turnEvents.js",
+      "ceiling": 615,
+      "group": "turn-event-contract"
+    }
+  ]
 }
 ```
 <!-- debt-size-inventory:end -->
 
-**Exit criteria:** Met. Every formerly frozen backend implementation is split
-into cohesive files at or below 600 lines, and all frozen entries are removed.
-Do not add new inventory entries merely to admit newly created oversized files;
-an intentional temporary exception requires a separately reviewed debt record.
+**Exit criteria:** Close only after every frozen runtime implementation is split
+into cohesive files at or below 600 lines and the inventory is empty. Do not add
+new inventory entries merely to admit newly created oversized files; an
+intentional temporary exception requires a separately reviewed debt record.
 
-**Verification:** `npm run debt:check` discovers every backend JavaScript file,
-rejects new oversized files, rejects growth, requires shrinkage to ratchet the
-frozen ceiling, and rejects resolved or deleted inventory entries.
+**Verification:** `npm run debt:check` discovers JavaScript and TypeScript
+implementation files under `server/`, `shared/`, `desktop/`, and `bin/`; rejects
+new oversized files and growth; requires shrinkage to ratchet the frozen
+ceiling; and rejects resolved or deleted inventory entries.
 
 ## Maintenance rules
 

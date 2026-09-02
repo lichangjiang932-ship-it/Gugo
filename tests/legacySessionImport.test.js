@@ -82,7 +82,7 @@ function legacySession(id, overrides = {}) {
   }
 }
 
-function unsupportedPort() {
+function unsupportedPort(overrides = {}) {
   const nullable = () => null
   return prepareSessionAdminPort({
     contractVersion: SESSION_ADMIN_PORT_CONTRACT_VERSION,
@@ -97,6 +97,7 @@ function unsupportedPort() {
     unarchiveSession: nullable,
     pinSession: nullable,
     unpinSession: nullable,
+    ...overrides,
   })
 }
 
@@ -145,6 +146,24 @@ test('adapters without the optional import capability remain valid and return un
   }, port)
   assert.equal(workspaceResponse.statusCode, 501)
   assert.equal(workspaceResponse.json().error.code, 'SESSION_WORKSPACE_UPDATE_UNSUPPORTED')
+})
+
+test('legacy import rejects an adapter whose catalog fingerprint is unknown', async () => {
+  let calls = 0
+  const port = unsupportedPort({
+    importLegacySessions() {
+      calls += 1
+      throw new Error('unverified backend must stay unreachable')
+    },
+  })
+  const response = await invoke({
+    token: owner.token,
+    body: { sessions: [legacySession('unverified-source')] },
+  }, port)
+
+  assert.equal(response.statusCode, 501)
+  assert.equal(response.json().error.code, 'LEGACY_SESSION_IMPORT_SOURCE_UNVERIFIED')
+  assert.equal(calls, 0)
 })
 
 test('first import commits once and a retry preserves the exact server revision and transcript', async () => {

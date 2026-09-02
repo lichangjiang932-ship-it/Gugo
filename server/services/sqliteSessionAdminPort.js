@@ -18,6 +18,7 @@ import { importLegacySessions } from './legacySessionImportService.js'
 import {
   prepareSessionAdminPort,
   SESSION_ADMIN_PORT_CONTRACT_VERSION,
+  SQLITE_SESSION_CATALOG_FINGERPRINT_STRATEGY,
 } from '../core/sessionAdminPort.js'
 
 function setSessionWorkspace({ userId, sessionId, workspacePath }) {
@@ -43,6 +44,10 @@ function setSessionWorkspace({ userId, sessionId, workspacePath }) {
 
 export const SQLITE_SESSION_ADMIN_PORT = prepareSessionAdminPort({
   contractVersion: SESSION_ADMIN_PORT_CONTRACT_VERSION,
+  catalogSource: {
+    backendType: 'sqlite',
+    fingerprintStrategy: SQLITE_SESSION_CATALOG_FINGERPRINT_STRATEGY,
+  },
   searchMessages,
   listSessions,
   getSessionSnapshot,

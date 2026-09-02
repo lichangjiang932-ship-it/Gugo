@@ -344,6 +344,10 @@ test('Session routes fail closed on malformed backend results', async () => {
 test('Session routes serialize only public fields from valid adapter results', async () => {
   const { token } = issueTestSession({ email: 'session-public-dto@example.com' })
   const sessionAdmin = createSessionAdminPort({
+    catalogSource: {
+      backendType: 'remote-store',
+      instanceFingerprint: 'ab'.repeat(32),
+    },
     listSessions: () => [{
       id: 'public-session',
       title: 'Visible',
@@ -360,7 +364,7 @@ test('Session routes serialize only public fields from valid adapter results', a
   assert.deepEqual(payload.sessions, [
     { id: 'public-session', title: 'Visible', revision: 0 },
   ])
-  assert.match(payload.source.backendInstanceId, /^sqlite:[a-f0-9]{24}$/)
+  assert.equal(payload.source.backendInstanceId, `remote-store:${'ab'.repeat(12)}`)
   assert.equal(Object.hasOwn(payload.source, 'backendSecret'), false)
 })
 
@@ -523,8 +527,7 @@ test('session route awaits the selected async admin port without SQLite fallback
   assert.deepEqual(payload.sessions, [
     { id: 'async-session', title: 'Async backend', revision: 0 },
   ])
-  assert.match(payload.source.backendInstanceId, /^sqlite:[a-f0-9]{24}$/)
-  assert.match(payload.source.workspaceScope.key, /^workspace:[a-f0-9]{24}$/)
+  assert.equal(payload.source, null)
   assert.deepEqual(calls, [[
     'listSessions',
     { userId, archived: 'all', limit: 3, offset: 2 },

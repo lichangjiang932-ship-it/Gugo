@@ -134,6 +134,14 @@ export async function handleSessionRequest(
         },
       })
     }
+    if (!describeSessionCatalogSource({ cwd, env, sessionAdmin: admin })) {
+      return sendJson(res, 501, {
+        error: {
+          code: 'LEGACY_SESSION_IMPORT_SOURCE_UNVERIFIED',
+          message: 'the active Session persistence adapter has no stable catalog fingerprint',
+        },
+      })
+    }
     const body = await readJson(req, { maxBytes: LEGACY_SESSION_IMPORT_MAX_BODY_BYTES })
     const result = await admin.importLegacySessions({ userId, sessions: body.sessions })
     return sendJson(res, 200, { ok: true, ...result })
@@ -158,7 +166,7 @@ export async function handleSessionRequest(
     })
     return sendJson(res, 200, {
       sessions,
-      source: describeSessionCatalogSource({ cwd, env }),
+      source: describeSessionCatalogSource({ cwd, env, sessionAdmin: admin }),
     })
   }
 
