@@ -13,6 +13,7 @@ const { getDb } = await import('../server/db.js')
 const { JobRuntime } = await import('../server/services/jobRuntime.js')
 const { runJobRuntimeTick } = await import('../server/services/jobRuntimeTick.js')
 const { createJob: createStoredJob } = await import('../server/services/jobStore.js')
+const { claimDueJobWakes } = await import('../server/services/jobWakeStore.js')
 
 function insertUser(db, { id, email, now }) {
   db.prepare(
@@ -164,4 +165,99 @@ test('invalid or mismatched persisted wake owners are ignored before caching', a
   assert.equal(result, false)
   assert.deepEqual(cacheCalls, [])
   assert.deepEqual(emitted, [])
+})
+
+test('invalid persisted wake identities do not consume the due claim limit', () => {
+  const db = getDb()
+  const now = Date.now()
+  const validUserId = 'wake-claim-valid-owner'
+  const whitespaceUserId = ' \t '
+  const binaryUserId = Buffer.from('wake-claim-binary-owner')
+  const fixtures = [
+    { id: ' \n ', userId: validUserId, wakeAt: now - 4, status: 'scheduled' },
+    {
+      id: 'wake-claim-whitespace-owner-job',
+      userId: whitespaceUserId,
+      wakeAt: now - 3,
+      status: 'fired',
+      claimToken: 'stale-whitespace-owner-claim',
+    },
+    { id: Buffer.from('wake-claim-binary-job'), userId: validUserId, wakeAt: now - 2, status: 'scheduled' },
+    {
+      id: 'wake-claim-binary-owner-job',
+      userId: binaryUserId,
+      wakeAt: now - 1,
+      status: 'fired',
+      claimToken: 'stale-binary-owner-claim',
+    },
+    { id: 'wake-claim-valid-job', userId: validUserId, wakeAt: now, status: 'scheduled' },
+  ]
+
+  insertUser(db, {
+    id: validUserId,
+    email: 'runtime-wake-claim-valid@example.test',
+    now,
+  })
+  insertUser(db, {
+    id: whitespaceUserId,
+    email: 'runtime-wake-claim-whitespace@example.test',
+    now,
+  })
+  insertUser(db, {
+    id: binaryUserId,
+    email: 'runtime-wake-claim-binary@example.test',
+    now,
+  })
+
+  try {
+    for (const fixture of fixtures) {
+      insertJob(db, {
+        ...fixture,
+        status: fixture.status === 'fired' ? 'failed' : 'waiting',
+        now,
+      })
+      const stepId = `step-${String(fixture.id)}`
+      db.prepare('UPDATE job_steps SET status = ? WHERE id = ?').run('failed', stepId)
+      db.prepare(`
+        INSERT INTO job_wakeups
+          (job_id, step_id, user_id, wake_at, reason, wake_kind, status,
+           created_at, updated_at, fired_at, claim_token)
+        VALUES (?, ?, ?, ?, 'identity regression', 'auto_retry', ?, ?, ?, ?, ?)
+      `).run(
+        fixture.id,
+        stepId,
+        fixture.userId,
+        fixture.wakeAt,
+        fixture.status,
+        now,
+        now,
+        fixture.status === 'fired' ? now - 1_001 : null,
+        fixture.claimToken || null,
+      )
+    }
+
+    const claimed = claimDueJobWakes({ now, limit: 1, autoRetryClaimMs: 1_000 })
+    assert.equal(claimed.length, 1)
+    assert.equal(claimed[0].jobId, 'wake-claim-valid-job')
+    assert.equal(claimed[0].userId, validUserId)
+    assert.ok(claimed[0].claimToken)
+
+    const wakeRows = db.prepare(`
+      SELECT status, claim_token
+        FROM job_wakeups
+       ORDER BY wake_at ASC
+    `).all()
+    assert.deepEqual(wakeRows.slice(0, 4), [
+      { status: 'scheduled', claim_token: null },
+      { status: 'fired', claim_token: 'stale-whitespace-owner-claim' },
+      { status: 'scheduled', claim_token: null },
+      { status: 'fired', claim_token: 'stale-binary-owner-claim' },
+    ])
+    assert.equal(wakeRows.at(-1).status, 'fired')
+  } finally {
+    db.prepare(`
+      DELETE FROM users
+       WHERE email LIKE 'runtime-wake-claim-%@example.test'
+    `).run()
+  }
 })

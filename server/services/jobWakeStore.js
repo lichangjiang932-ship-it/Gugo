@@ -7,6 +7,14 @@ import {
 
 export const DEFAULT_AUTO_RETRY_WAKE_CLAIM_MS = 30_000
 
+// SQLite trim(value) only removes U+0020. Keep claim eligibility aligned with
+// JavaScript String#trim, which is the persisted runtime identity contract.
+const SQLITE_RUNTIME_IDENTITY_TRIM_CHARS = 'char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)'
+
+function validRuntimeIdentitySql(column) {
+  return `typeof(${column}) = 'text' AND trim(${column}, ${SQLITE_RUNTIME_IDENTITY_TRIM_CHARS}) <> ''`
+}
+
 function parseJson(value) {
   if (!value) return null
   try { return JSON.parse(value) } catch { return null }
@@ -153,14 +161,20 @@ export function claimDueJobWakes({
           ON step.id = wake.step_id AND step.job_id = wake.job_id
         JOIN jobs AS job
           ON job.id = wake.job_id AND job.user_id = wake.user_id
-       WHERE (wake.status = 'scheduled' AND wake.wake_at <= ?)
-          OR (
-            wake.wake_kind = 'auto_retry' AND wake.status = 'fired'
-            AND wake.claim_token IS NOT NULL
-            AND wake.fired_at IS NOT NULL AND wake.fired_at <= ?
-            AND step.status = 'failed' AND job.status = 'failed'
-            AND job.cancel_requested = 0
-          )
+       WHERE ${validRuntimeIdentitySql('wake.job_id')}
+         AND ${validRuntimeIdentitySql('wake.user_id')}
+         AND ${validRuntimeIdentitySql('job.id')}
+         AND ${validRuntimeIdentitySql('job.user_id')}
+         AND (
+           (wake.status = 'scheduled' AND wake.wake_at <= ?)
+           OR (
+             wake.wake_kind = 'auto_retry' AND wake.status = 'fired'
+             AND wake.claim_token IS NOT NULL
+             AND wake.fired_at IS NOT NULL AND wake.fired_at <= ?
+             AND step.status = 'failed' AND job.status = 'failed'
+             AND job.cancel_requested = 0
+           )
+         )
        ORDER BY wake.wake_at ASC LIMIT ?
     `).all(now, staleClaimAt, capped)
     const claimed = []
@@ -187,6 +201,8 @@ export function claimDueJobWakes({
       UPDATE job_wakeups
          SET status = 'fired', claim_token = ?, fired_at = ?, updated_at = ?
        WHERE job_id = ? AND step_id = ? AND user_id = ?
+         AND ${validRuntimeIdentitySql('job_id')}
+         AND ${validRuntimeIdentitySql('user_id')}
          AND status = 'scheduled' AND wake_at <= ? AND wake_at = ?
     `)
     const cancelStale = db.prepare(`
@@ -216,6 +232,8 @@ export function claimDueJobWakes({
       UPDATE job_wakeups
          SET claim_token = ?, fired_at = ?, updated_at = ?
        WHERE job_id = ? AND step_id = ? AND user_id = ?
+         AND ${validRuntimeIdentitySql('job_id')}
+         AND ${validRuntimeIdentitySql('user_id')}
          AND wake_kind = 'auto_retry' AND status = 'fired'
          AND claim_token = ?
          AND wake_at = ? AND fired_at = ?
