@@ -1,0 +1,52 @@
+const translations = {
+  "zh": {
+    "title": "频道",
+    "subtitle": "多 Agent 协作与 @ 委派",
+    "newChannel": "新建频道",
+    "create": "创建",
+    "settings": "频道设置",
+    "name": "频道名称",
+    "group": "群组",
+    "dm": "DM",
+    "archived": "已归档",
+    "members": "成员",
+    "defaultAgent": "默认 Agent",
+    "noDefault": "不设置默认",
+    "addAgent": "添加 Agent",
+    "archive": "归档频道",
+    "inputPlaceholder": "输入消息，@Agent 委派任务",
+    "send": "发送",
+    "you": "你",
+    "empty": "选择或新建一个频道",
+    "emptyTitle": "还没有任何频道",
+    "emptyHint": "频道是多 Agent 协作的工作区。在这里 @Agent 委派任务、查看协作记录。",
+    "emptyCta": "+ 新建频道",
+    "emptyBindIm": "去设置绑定外部 IM →"
+  },
+  "en": {
+    "title": "Channels",
+    "subtitle": "Multi-agent collaboration and @ delegation",
+    "newChannel": "New Channel",
+    "create": "Create",
+    "settings": "Channel settings",
+    "name": "Channel name",
+    "group": "Group",
+    "dm": "DM",
+    "archived": "Archived",
+    "members": "Members",
+    "defaultAgent": "Default agent",
+    "noDefault": "No default",
+    "addAgent": "Add agent",
+    "archive": "Archive channel",
+    "inputPlaceholder": "Type a message, @Agent to delegate",
+    "send": "Send",
+    "you": "You",
+    "empty": "Select or create a channel",
+    "emptyTitle": "No channels yet",
+    "emptyHint": "Channels are workspaces for multi-agent collaboration. @Agent to delegate tasks and review collaboration history here.",
+    "emptyCta": "+ New channel",
+    "emptyBindIm": "Bind external IM in Settings →"
+  }
+}
+
+export default translations

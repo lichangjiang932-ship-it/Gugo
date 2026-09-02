@@ -15,7 +15,6 @@ export async function processModelResult(s) {
               && s.iter + 1 < s.maxIters
             if (!canRetry) {
               const incomplete = await s.finishIncomplete({
-                text: '\u76ee\u5f55\u6743\u9650\u5df2\u6388\u4e88\uff0c\u4f46\u6a21\u578b\u5728\u6062\u590d\u540e\u4ecd\u91cd\u590d\u8bf7\u6c42\u540c\u4e00\u6388\u6743\uff0c\u4e14\u672a\u6267\u884c\u539f\u4efb\u52a1\u3002\u672c\u8f6e\u6ca1\u6709\u6807\u8bb0\u4e3a\u5b8c\u6210\u3002',
                 reason: 'directory_resume_not_converged',
                 steeringLeaseId: i.steeringLeaseId,
               })
@@ -114,7 +113,6 @@ export async function processModelResult(s) {
               && s.iter + 1 < s.maxIters
             if (!canRetry) {
               const incomplete = await s.finishIncomplete({
-                text: '任务尚未完成：尚未取得符合本次修改目标的实际执行证据。可重试本任务，或切换到支持工具调用的模型。',
                 reason: 'execution_evidence_missing',
                 steeringLeaseId: i.steeringLeaseId,
               })
@@ -194,9 +192,6 @@ export async function processModelResult(s) {
               && s.availableVerificationToolNames.length > 0
             if (!canRetry) {
               const incomplete = await s.finishIncomplete({
-                text: s.availableVerificationToolNames.length > 0
-                  ? '修改已经执行，但尚未通过读回、差异检查或项目检查验证，因此没有标记为完成。请重试以继续验证。'
-                  : '修改已经执行，但当前没有启用可用于读回、差异检查或项目检查的工具，因此无法确认完成。',
                 reason: 'post_mutation_verification_missing',
                 steeringLeaseId: i.steeringLeaseId,
               })
@@ -243,7 +238,6 @@ export async function processModelResult(s) {
               && hasCommandExecutionTool(s.activeToolSpecs)
             if (!canRetry) {
               const incomplete = await s.finishIncomplete({
-                text: '\u6587\u4ef6\u5df2\u751f\u6210\uff0c\u4f46\u5c1a\u672a\u901a\u8fc7\u76ee\u6807\u9875\u3001\u975e\u76ee\u6807\u9875\u3001\u6587\u672c\u8fb9\u754c\u4e0e\u9010\u9875\u6e32\u67d3\u7684 PDF \u5e03\u5c40\u6821\u9a8c\uff0c\u56e0\u6b64\u6ca1\u6709\u6807\u8bb0\u4e3a\u5b8c\u6210\u3002',
                 reason: 'pdf_layout_verification_missing',
                 steeringLeaseId: i.steeringLeaseId,
               })
@@ -283,7 +277,6 @@ export async function processModelResult(s) {
                 await s.persistTurn()
               } else {
                 const incomplete = await s.finishIncomplete({
-                  text: 'Files were created, but final deliverable selection did not converge. No unverified or intermediate files were attached to the answer.',
                   reason: 'deliverable_selection_missing',
                   steeringLeaseId: i.steeringLeaseId,
                 })

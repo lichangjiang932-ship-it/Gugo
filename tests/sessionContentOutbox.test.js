@@ -26,6 +26,7 @@ const {
   deleteSession,
   getSession,
   listMessages,
+  listSessions,
   replaceSessionMessages,
   upsertMessage,
   upsertSession,
@@ -119,6 +120,69 @@ test('message mutation and outbox hand-off commit or roll back together', () => 
   }), (error) => error?.code === 'SESSION_JSONL_EVENT_INVALID')
   assert.equal(listMessages(scope).some((message) => message.id === 'x'.repeat(513)), false)
   assert.equal(listSessionContentOutbox(scope).length, 1)
+})
+
+test('message upsert advances revision and outbox only for real mutations', () => {
+  const scope = fixture('message-watermark')
+  const message = {
+    id: `${scope.sessionId}:stable-message`,
+    ...scope,
+    role: 'assistant',
+    content: 'first payload',
+    modelContext: { turnId: 'stable-turn' },
+    createdAt: 2_100,
+    updatedAt: 2_100,
+  }
+  const initialRevision = getSession(scope).revision
+
+  upsertMessage(message)
+  assert.equal(getSession(scope).revision, initialRevision + 1)
+  assert.equal(listSessionContentOutbox(scope).length, 1)
+
+  upsertMessage(message)
+  assert.equal(getSession(scope).revision, initialRevision + 1)
+  assert.equal(listSessionContentOutbox(scope).length, 1)
+
+  upsertMessage({
+    ...message,
+    content: 'changed payload',
+    updatedAt: 2_101,
+  })
+  assert.equal(getSession(scope).revision, initialRevision + 2)
+  assert.equal(listSessionContentOutbox(scope).length, 2)
+
+  assert.equal(deleteMessage({ userId: scope.userId, messageId: message.id }), true)
+  assert.equal(getSession(scope).revision, initialRevision + 3)
+  assert.equal(listSessionContentOutbox(scope).length, 3)
+  assert.deepEqual(
+    listSessionContentOutbox(scope).map((row) => row.eventType),
+    ['message.upsert', 'message.upsert', 'message.delete'],
+  )
+})
+
+test('Session catalog exposes an independent turn-event watermark', () => {
+  const scope = fixture('turn-event-watermark')
+  const before = listSessions({ userId: scope.userId })[0]
+  assert.equal(before.turnEventRevision, 0)
+
+  const turnId = `${scope.sessionId}:terminal-turn`
+  appendTurnEvent({
+    userId: scope.userId,
+    event: createTurnEvent({
+      id: `${turnId}:started`,
+      sessionId: scope.sessionId,
+      turnId,
+      sequence: 0,
+      type: 'turn.started',
+      payload: {},
+      createdAt: 2_200,
+    }),
+  })
+
+  const after = listSessions({ userId: scope.userId })[0]
+  assert.equal(after.revision, before.revision)
+  assert.equal(after.turnEventRevision > before.turnEventRevision, true)
+  assert.equal(getSession(scope).turnEventRevision, after.turnEventRevision)
 })
 
 test('claim leases only the earliest event per session while allowing cross-session progress', () => {

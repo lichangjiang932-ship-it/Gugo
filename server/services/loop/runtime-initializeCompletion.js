@@ -289,8 +289,9 @@ export async function initializeCompletion(s) {
       s.taskVerificationRepair,
     )
   s.taskVerificationRepairBlockerText = () => taskVerificationRepairBlockerText(
-      s.taskVerificationRepair,
-    )
+    s.taskVerificationRepair,
+    { locale: s.locale },
+  )
   s.taskVerificationRepairDetails = () => taskVerificationRepairDetails(
       s.taskVerificationRepair,
     )

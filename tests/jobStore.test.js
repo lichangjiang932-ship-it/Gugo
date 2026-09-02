@@ -37,7 +37,12 @@ test('job store persists parent job, child steps, events, and artifacts', () => 
     { id: firstStepId, title: '规划任务', kind: 'plan' },
     { id: secondStepId, title: '生成周报', kind: 'batch_item' },
   ])
-  appendJobEvent({ jobId, type: 'created', message: '已创建' })
+  appendJobEvent({
+    jobId,
+    type: 'created',
+    code: 'JOB_CREATED',
+    params: { title: '生成 3 份周报' },
+  })
   appendJobArtifact({
     id: `artifact-${suffix}`,
     jobId,
@@ -54,7 +59,16 @@ test('job store persists parent job, child steps, events, and artifacts', () => 
   assert.equal(job.id, jobId)
   assert.equal(listJobs({ userId })[0].status, 'running')
   assert.equal(loaded.steps.length, 2)
-  assert.equal(listJobEvents(jobId)[0].message, '已创建')
+  assert.deepEqual(listJobEvents(jobId)[0], {
+    id: listJobEvents(jobId)[0].id,
+    jobId,
+    stepId: null,
+    type: 'created',
+    code: 'JOB_CREATED',
+    params: { title: '生成 3 份周报' },
+    payload: null,
+    createdAt: listJobEvents(jobId)[0].createdAt,
+  })
   assert.equal(listJobArtifacts(jobId)[0].filename, 'report.docx')
 
   // 另一个用户看不到这个 job

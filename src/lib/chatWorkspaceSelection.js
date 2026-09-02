@@ -208,6 +208,30 @@ export function mergeChatProjects(
   return merged
 }
 
+export function deriveVisibleChatProjectGroups(recentWorkspaces, selectedWorkspacePath = '') {
+  const recent = mergeChatProjects(
+    (Array.isArray(recentWorkspaces) ? recentWorkspaces : []).map((workspace) => ({
+      path: workspace?.path,
+      name: chatWorkspaceName(workspace?.path),
+      usedAt: workspace?.usedAt,
+    })),
+    [],
+  )
+  const selectedKey = workspacePathKey(selectedWorkspacePath)
+  if (!selectedKey) return { projects: [], recent }
+
+  const matchingRecent = recent.find((project) => workspacePathKey(project.path) === selectedKey)
+  const selectedPath = matchingRecent?.path || normalizeChatWorkspacePath(selectedWorkspacePath)
+  return {
+    projects: [{
+      path: selectedPath,
+      name: chatWorkspaceName(selectedPath),
+      usedAt: matchingRecent?.usedAt || 0,
+    }],
+    recent: recent.filter((project) => workspacePathKey(project.path) !== selectedKey),
+  }
+}
+
 export async function activateChatWorkspace(
   value,
   {

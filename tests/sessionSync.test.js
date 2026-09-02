@@ -356,9 +356,12 @@ test('Session routes serialize only public fields from valid adapter results', a
   await handleSessionRequest(makeRequest({ url: '/api/sessions', token }), res, null, sessionAdmin)
 
   assert.equal(res.statusCode, 200)
-  assert.deepEqual(res.json(), {
-    sessions: [{ id: 'public-session', title: 'Visible', revision: 0 }],
-  })
+  const payload = res.json()
+  assert.deepEqual(payload.sessions, [
+    { id: 'public-session', title: 'Visible', revision: 0 },
+  ])
+  assert.match(payload.source.backendInstanceId, /^sqlite:[a-f0-9]{24}$/)
+  assert.equal(Object.hasOwn(payload.source, 'backendSecret'), false)
 })
 
 test('Session routes map invalid v2 inputs to 400 without backend invocation', async () => {
@@ -516,9 +519,12 @@ test('session route awaits the selected async admin port without SQLite fallback
   await handling
 
   assert.equal(res.statusCode, 200)
-  assert.deepEqual(res.json(), {
-    sessions: [{ id: 'async-session', title: 'Async backend', revision: 0 }],
-  })
+  const payload = res.json()
+  assert.deepEqual(payload.sessions, [
+    { id: 'async-session', title: 'Async backend', revision: 0 },
+  ])
+  assert.match(payload.source.backendInstanceId, /^sqlite:[a-f0-9]{24}$/)
+  assert.match(payload.source.workspaceScope.key, /^workspace:[a-f0-9]{24}$/)
   assert.deepEqual(calls, [[
     'listSessions',
     { userId, archived: 'all', limit: 3, offset: 2 },

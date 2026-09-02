@@ -38,6 +38,7 @@ import {
   listEvolutionReplaySuitesApi,
   recordChatFeedback,
   recoverEvolutionOperationNotSentApi,
+  reviewEvolutionConfigCandidateApi,
   resumeEvolutionOperationApi,
   reverseEvolutionConfigChangeApi,
   revokeEvolutionPromotionApi,
@@ -141,6 +142,31 @@ test('evolution client drives the reviewed config replay, approval, apply, and r
     assert.equal(requests[2].init.method, undefined)
     assert.equal(requests[4].init.method, undefined)
     assert.equal(requests[6].init.method, undefined)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('evolution client starts the bounded automatic config review without approval or apply input', async () => {
+  const originalFetch = globalThis.fetch
+  let captured
+  globalThis.fetch = async (url, init = {}) => {
+    captured = { url, init }
+    return new Response(JSON.stringify({
+      ok: true,
+      review: { state: 'awaiting_explicit_approval' },
+    }), {
+      status: 201,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  try {
+    const result = await reviewEvolutionConfigCandidateApi('candidate/automatic')
+    assert.equal(result.review.state, 'awaiting_explicit_approval')
+    assert.equal(captured.url, '/api/evolution/config-reviews')
+    assert.equal(captured.init.method, 'POST')
+    assert.deepEqual(JSON.parse(captured.init.body), { candidateId: 'candidate/automatic' })
   } finally {
     globalThis.fetch = originalFetch
   }

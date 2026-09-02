@@ -34,6 +34,8 @@ export const WORKSPACE_FEATURE_ENV_KEYS = Object.freeze([
   'WORKSPACE_GIT_MUTATION_ENABLED',
 ])
 
+export const PURE_LOCAL_MODE_ENV_KEY = 'GUGO_PURE_LOCAL_MODE'
+
 function runtimeConfigFileError(message, {
   code = 'RUNTIME_CONFIG_FILE_INVALID',
   statusCode = 422,
@@ -330,6 +332,90 @@ function runtimeFeatureLock(key, { cwd = process.cwd(), env = process.env } = {}
   if (Object.hasOwn(explicit, key)) return { locked: true, source: 'explicit_config' }
   if (Object.hasOwn(project, key)) return { locked: true, source: 'project_config' }
   return { locked: false, source: 'user_config' }
+}
+
+function runtimeBoolean(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase())
+}
+
+export function getOutboundNetworkPolicyConfiguration({
+  cwd = process.cwd(),
+  env = process.env,
+} = {}) {
+  const paths = resolveRuntimeConfigPaths({ cwd, env })
+  const document = readRuntimeConfigDocument(paths.user)
+  const resolved = getRuntimeEnv(env, { cwd })
+  const lock = runtimeFeatureLock(PURE_LOCAL_MODE_ENV_KEY, { cwd, env })
+  return {
+    path: paths.user,
+    pureLocal: {
+      enabled: runtimeBoolean(resolved[PURE_LOCAL_MODE_ENV_KEY]),
+      locked: lock.locked,
+      source: lock.locked
+        ? lock.source
+        : Object.hasOwn(document.env, PURE_LOCAL_MODE_ENV_KEY) ? 'user_config' : 'default',
+    },
+  }
+}
+
+/**
+ * Persist the installation-wide outbound policy. Deployment-owned layers stay
+ * authoritative; the Settings toggle may only update the user runtime layer.
+ */
+export function updateOutboundNetworkPolicyConfiguration({
+  pureLocal,
+  cwd = process.cwd(),
+  env = process.env,
+} = {}) {
+  if (typeof pureLocal !== 'boolean') {
+    const error = new Error('pureLocal must be a boolean')
+    error.statusCode = 400
+    error.code = 'INVALID_OUTBOUND_NETWORK_POLICY'
+    throw error
+  }
+
+  const before = getOutboundNetworkPolicyConfiguration({ cwd, env })
+  if (before.pureLocal.locked && before.pureLocal.enabled !== pureLocal) {
+    const error = new Error(`${PURE_LOCAL_MODE_ENV_KEY} is locked by deployment policy`)
+    error.statusCode = 409
+    error.code = 'RUNTIME_CONFIG_LOCKED'
+    error.locks = [{
+      key: PURE_LOCAL_MODE_ENV_KEY,
+      source: before.pureLocal.source,
+      current: before.pureLocal.enabled,
+    }]
+    throw error
+  }
+  if (before.pureLocal.locked) return before
+
+  const paths = resolveRuntimeConfigPaths({ cwd, env })
+  const document = readRuntimeConfigDocument(paths.user)
+  const value = pureLocal ? '1' : '0'
+  const next = {
+    ...document,
+    env: { ...document.env, [PURE_LOCAL_MODE_ENV_KEY]: value },
+  }
+  fs.mkdirSync(path.dirname(paths.user), { recursive: true })
+  const tempPath = `${paths.user}.${process.pid}.${Date.now()}.tmp`
+  try {
+    fs.writeFileSync(tempPath, `${JSON.stringify(next, null, 2)}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    })
+    fs.renameSync(tempPath, paths.user)
+  } catch (error) {
+    try { fs.unlinkSync(tempPath) } catch { /* best effort */ }
+    throw error
+  }
+
+  // The central guard reads process.env synchronously immediately before each
+  // physical request, so a successful Settings update takes effect at once.
+  process.env[PURE_LOCAL_MODE_ENV_KEY] = value
+  return getOutboundNetworkPolicyConfiguration({
+    cwd,
+    env: { ...env, [PURE_LOCAL_MODE_ENV_KEY]: value },
+  })
 }
 
 export function getWorkspaceRuntimeConfiguration({ cwd = process.cwd(), env = process.env } = {}) {

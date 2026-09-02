@@ -61,6 +61,7 @@ async function readJsonResponse(responsePromise) {
 export function createJob(prompt, {
   fetchImpl = fetch,
   requirePlanApproval = false,
+  autoRetry = false,
   modelName,
   providerId,
 } = {}) {
@@ -72,6 +73,7 @@ export function createJob(prompt, {
     body: JSON.stringify({
       prompt,
       ...(requirePlanApproval === true ? { requirePlanApproval: true } : {}),
+      ...(autoRetry === true ? { autoRetry: true } : {}),
       ...(selectedModel ? { modelName: selectedModel } : {}),
       ...(selectedProvider ? { providerId: selectedProvider } : {}),
     }),

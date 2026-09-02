@@ -34,9 +34,10 @@ export async function runConnectorWriteOnce({
   const timestamp = Number(now()) || Date.now()
   const db = getDb()
   const claimed = db.prepare(`
-    INSERT OR IGNORE INTO connector_idempotency
+    INSERT INTO connector_idempotency
       (user_id, idempotency_key, tool_name, args_hash, status, result_json, created_at, updated_at)
     VALUES (?, ?, ?, ?, 'executing', NULL, ?, ?)
+    ON CONFLICT(user_id, idempotency_key) DO NOTHING
   `).run(userId, key, toolName, argsHash, timestamp, timestamp)
 
   if (claimed.changes === 0) {

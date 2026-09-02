@@ -325,6 +325,54 @@ test('local plugin package client rejects incompatible receipts and mutation sta
   }
 })
 
+test('local plugin package client accepts only complete signed Marketplace identity', async () => {
+  const originalFetch = globalThis.fetch
+  const signed = {
+    schemaVersion: 2,
+    pluginId: 'sample-plugin',
+    pluginVersion: '1.0.0',
+    packageDigest: `sha256-${'e'.repeat(64)}`,
+    fileCount: 2,
+    totalBytes: 128,
+    installedAt: 1,
+    publisherVerified: true,
+    sourceKind: 'local-marketplace',
+    marketplace: { name: 'team-local', displayName: 'Team Local' },
+    publisher: {
+      id: 'example-publisher',
+      displayName: 'Example Publisher',
+      keyId: `sha256-${'a'.repeat(64)}`,
+    },
+    publicationDigest: `sha256-${'b'.repeat(64)}`,
+  }
+  const responses = [
+    packageResponse({
+      store: { schemaVersion: 1, revision: packageRevision, packages: [signed] },
+    }),
+    packageResponse({
+      store: {
+        schemaVersion: 1,
+        revision: packageRevision,
+        packages: [{ ...signed, publisher: { id: 'example-publisher' } }],
+      },
+    }),
+  ]
+  globalThis.fetch = async () => new Response(JSON.stringify(responses.shift()), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+  try {
+    const accepted = await listLocalPluginPackagesApi()
+    assert.deepEqual(accepted.store.packages[0], signed)
+    await assert.rejects(
+      listLocalPluginPackagesApi(),
+      /unsupported local plugin package response/,
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('local plugin package client accepts explicit and dead-owner orphan recoveries only', async () => {
   const originalFetch = globalThis.fetch
   const base = {

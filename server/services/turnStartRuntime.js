@@ -1,4 +1,5 @@
 import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
+import { normalizeTurnLocale } from '../../shared/turnLocale.js'
 import { normalizeTurnIntentMode } from '../utils/executionIntent.js'
 import { PERMISSION_MODES } from '../utils/approvalPolicy.js'
 import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
@@ -157,6 +158,7 @@ export function createTurnStartRuntime({
       content,
       displayContent = null,
       workspacePath = '',
+      locale = null,
       modelName = null,
       modelProviderId = null,
       modelConfigRevision = null,
@@ -176,6 +178,9 @@ export function createTurnStartRuntime({
       const resolvedSkill = resolveSkillPrefixFromContent(rawText, skillIds)
       const text = resolvedSkill.content || (normalizedAttachmentIds.length ? '请分析附件内容。' : '')
       const displayText = String(displayContent ?? rawText ?? '').trim() || text
+      const normalizedLocale = locale === null || locale === undefined || locale === ''
+        ? null
+        : normalizeTurnLocale(locale)
       if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
       if (!sessionId) throw new TurnEngineError('SESSION_REQUIRED', 'sessionId is required')
       if (!text) throw new TurnEngineError('CONTENT_REQUIRED', 'content is required')
@@ -233,6 +238,7 @@ export function createTurnStartRuntime({
         userId,
         title: displayText.slice(0, 80) || 'Untitled',
         createdAt,
+        ...(projectDirectory ? { workspacePath: normalizedWorkspacePath } : {}),
       } : null
       const atomicTurnStart = !!ports.commitTurnStart
       if (pendingSession && !atomicTurnStart) {
@@ -334,6 +340,7 @@ export function createTurnStartRuntime({
           skillDefinitions: normalizedSkillDefinitions,
           toolsConfig: normalizedToolsConfig,
           intentMode: normalizedIntentMode,
+          ...(normalizedLocale ? { locale: normalizedLocale } : {}),
           ...(normalizedApprovalMode ? { approvalMode: normalizedApprovalMode } : {}),
           ...(projectDirectory ? {
             workspacePath: normalizedWorkspacePath,
@@ -396,6 +403,7 @@ export function createTurnStartRuntime({
           skillDefinitions: normalizedSkillDefinitions,
           toolsConfig: normalizedToolsConfig,
           intentMode: normalizedIntentMode,
+          ...(normalizedLocale ? { locale: normalizedLocale } : {}),
           approvalMode: normalizedApprovalMode,
           projectDirectory,
           defaultOutputDirectory,

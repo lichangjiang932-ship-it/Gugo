@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "name": "invalid-remote",
+  "interface": { "displayName": "Invalid Remote" },
+  "publishers": [
+    {
+      "id": "gugo-conformance",
+      "displayName": "Gugo Conformance Publisher",
+      "keyId": "sha256-21fe31dfa154a261626bf854046fd2271b7bed4b6abe45aa58877ef47f9721b9",
+      "publicKey": "ed25519-11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+    }
+  ],
+  "plugins": [
+    {
+      "name": "conformance-plugin",
+      "version": "1.0.0",
+      "source": { "source": "https", "path": "https://example.invalid/plugin.zip" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Developer Tools",
+      "packageDigest": "sha256-1c9ec0b752706c05fe268498272b835db8cf9d5d72e231643c7b59736dcde47f",
+      "publisher": {
+        "id": "gugo-conformance",
+        "keyId": "sha256-21fe31dfa154a261626bf854046fd2271b7bed4b6abe45aa58877ef47f9721b9"
+      },
+      "signature": {
+        "algorithm": "ed25519",
+        "value": "E29pncLbVkaho_pHk587o0dujAwC1d0gLxZOYxSnpJDWr3v7WWrfHgAYzgYyshj2FOV83ohUEZKvVzmPh3cbAg"
+      }
+    }
+  ]
+}

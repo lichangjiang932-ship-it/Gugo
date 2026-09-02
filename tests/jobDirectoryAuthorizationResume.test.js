@@ -257,7 +257,8 @@ test('old directory suspension cannot resume a later sleeping wait or cancel its
     jobId,
     stepId,
     type: 'sleeping',
-    message: 'Waiting for the scheduled wake.',
+    code: 'JOB_SLEEPING',
+    params: { wakeAt },
     payload: { wakeAt, reason: 'later scheduled wait' },
   })
 
@@ -279,7 +280,7 @@ test('notification failure metadata does not hide the active directory suspensio
     jobId,
     stepId,
     type: 'notification_failed',
-    message: 'Clarification notification failed.',
+    code: 'JOB_NOTIFICATION_FAILED',
     payload: { notificationKind: 'job_clarification' },
   })
 

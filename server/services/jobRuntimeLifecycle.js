@@ -92,7 +92,7 @@ export function markJobAwaitingApproval(job, step = null, approval = null) {
         jobId: job.id,
         stepId: step?.id || null,
         type: 'awaiting_approval',
-        message: '等待用户批准一个工具调用',
+        code: 'JOB_AWAITING_APPROVAL',
         payload: {
           ...diagnostics,
           approvalId: approval?.id || null,
@@ -121,9 +121,9 @@ export function markJobRunningAgain(job, step = null, decision = null) {
         jobId: job.id,
         stepId: step?.id || null,
         type: 'approval_resolved',
-        message: decision?.proceed === false
-          ? '工具调用审批已拒绝；任务继续处理该结果'
-          : '工具调用审批已解决；任务恢复执行',
+        code: decision?.proceed === false
+          ? 'JOB_APPROVAL_REJECTED'
+          : 'JOB_APPROVAL_RESOLVED',
         payload: {
           approvalId: decision?.approvalId || null,
           proceed: decision?.proceed !== false,

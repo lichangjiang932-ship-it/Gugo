@@ -1,3 +1,5 @@
+import { partialResultCopy } from './loop/incompleteTerminalPresentation.js'
+
 const INTERNAL_FAILURE_PATTERNS = [
   /Model call failed\s*:/i,
   /This reply could not be completed/i,
@@ -131,7 +133,7 @@ function resultCounts(result) {
   return counts
 }
 
-function buildEntry(callOrName, result) {
+function buildEntry(callOrName, result, copy) {
   if (!result || result.ok === false) return ''
   const call = normalizeCall(callOrName)
   const callPath = firstSafePath(call.args, PATH_ARGUMENT_KEYS)
@@ -147,12 +149,12 @@ function buildEntry(callOrName, result) {
 
   const details = []
   if (summary) details.push(summary)
-  if (paths.length) details.push(`文件：${paths.join('、')}`)
-  else if (callPath) details.push(`路径：${callPath}`)
-  if (counts.length) details.push(`数量：${counts.join('，')}`)
+  if (paths.length) details.push(`${copy.fileLabel}${copy.labelSeparator}${paths.join(copy.listSeparator)}`)
+  else if (callPath) details.push(`${copy.pathLabel}${copy.labelSeparator}${callPath}`)
+  if (counts.length) details.push(`${copy.countLabel}${copy.labelSeparator}${counts.join(copy.listSeparator)}`)
   return details.length
-    ? `${call.name}：${details.join('；')}`
-    : `${call.name} 已成功完成。`
+    ? `${call.name}${copy.labelSeparator}${details.join(copy.itemSeparator)}`
+    : `${call.name} ${copy.completedSuffix}`
 }
 
 function sanitizeRestoredEntry(entry) {
@@ -174,13 +176,15 @@ function restoredEntryPriority(entry) {
 }
 
 export function createPartialResultFallback({
-  heading = '任务中断',
-  resultLabel = '已经完成的部分',
+  heading,
+  resultLabel,
+  locale = 'zh',
   maxEntries = 8,
   entries: restoredEntries = [],
 } = {}) {
-  const safeHeading = sanitizeText(heading, { maxLength: 80, rejectSource: true }) || '任务中断'
-  const safeResultLabel = sanitizeText(resultLabel, { maxLength: 80, rejectSource: true }) || '已经完成的部分'
+  const copy = partialResultCopy(locale)
+  const safeHeading = sanitizeText(heading, { maxLength: 80, rejectSource: true }) || copy.heading
+  const safeResultLabel = sanitizeText(resultLabel, { maxLength: 80, rejectSource: true }) || copy.resultLabel
   const entryLimit = Math.min(32, Math.max(1, Number(maxEntries) || 8))
   const entries = []
 
@@ -212,7 +216,7 @@ export function createPartialResultFallback({
 
   return {
     record(callOrName, result) {
-      const entry = buildEntry(callOrName, result)
+      const entry = buildEntry(callOrName, result, copy)
       const call = normalizeCall(callOrName)
       addEntry(entry, entryPriority(call.name))
       return entry
@@ -229,13 +233,13 @@ export function createPartialResultFallback({
         || result?.noProgress === true
       if (!shouldApply) return result
       const progress = entries.length > 0
-        ? `\n\n${safeResultLabel}：\n${entries.map((entry) => `- ${entry.text}`).join('\n')}`
+        ? `\n\n${safeResultLabel}${copy.labelSeparator}\n${entries.map((entry) => `- ${entry.text}`).join('\n')}`
         : ''
       const existingText = String(result?.text || '').trim()
-      const alreadyHasProgress = existingText.includes(`${safeResultLabel}：`)
+      const alreadyHasProgress = existingText.includes(`${safeResultLabel}${copy.labelSeparator}`)
       const baseText = result?.interrupted === true && !alreadyHasProgress
-        ? `${safeHeading}：后续模型请求未能继续，任务尚未完成。请重试以继续。`
-        : existingText || `${safeHeading}：任务尚未完成。请重试以继续。`
+        ? `${safeHeading}${copy.labelSeparator}${copy.interruptedText}`
+        : existingText || `${safeHeading}${copy.labelSeparator}${copy.incompleteText}`
       return {
         ...result,
         text: `${baseText}${alreadyHasProgress ? '' : progress}`,

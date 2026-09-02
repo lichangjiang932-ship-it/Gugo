@@ -13,132 +13,36 @@ import {
   buildShellPayload,
   commandToken,
   hardKillProcessTree,
-  pathKey,
   sameOrInside,
   setChildReferenced,
   signalDescendants,
   softCloseProcessTree,
 } from './shellSessionRuntime.js'
+import {
+  abortedShellResult as abortedBeforeExecutionResult,
+  appendShellOutput as appendOutput,
+  assertSessionOpen,
+  clearShellCommandTimers as clearCurrentTimers,
+  existingShellDirectory as existingDirectory,
+  finishShellOutputLog as finishLog,
+  openShellOutputLog as openLog,
+  sessionClosedError,
+  shellOutputBuffers as outputBuffers,
+  shellSessionKey as sessionKey,
+  waitForShellChildClose as waitForChildCloseWithin,
+  waitForShellChildCloseStrict as waitForChildCloseStrict,
+} from './shellSessionStoreSupport.js'
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000
 const PROTOCOL_BUFFER_LIMIT = 64 * 1024
 
 const sessions = new Map()
 
-function sessionClosedError() {
-  const error = new Error('持久 Shell 会话已关闭')
-  error.code = 'SHELL_SESSION_CLOSED'
-  return error
-}
-
-function assertSessionOpen(record) {
-  if (record.closed) throw sessionClosedError()
-}
-
-function sessionKey(userId, rootPath) {
-  return JSON.stringify([userId == null ? '__system__' : String(userId), pathKey(rootPath)])
-}
-
-function existingDirectory(value, fallback) {
-  try {
-    const resolved = fs.realpathSync(value)
-    if (fs.statSync(resolved).isDirectory()) return resolved
-  } catch { /* fall through */ }
-  return fs.realpathSync(fallback)
-}
-
-
-function appendOutput(current, stream, chunk) {
-  const text = String(chunk || '')
-  if (!text) return
-  const bytes = Buffer.byteLength(text, 'utf8')
-  current.totalOutputBytes += bytes
-  try { current.onOutput?.({ stream, chunk: text }) } catch { /* best-effort */ }
-  if (current.logStream && !current.logStream.destroyed) {
-    try { current.logStream.write(text) } catch (error) { current.outputLogError = error }
-  }
-  current.events.push({ stream, text, bytes })
-  current.bufferedBytes += bytes
-  while (current.bufferedBytes > current.maxBuffer && current.events.length > 0) {
-    current.truncated = true
-    const first = current.events[0]
-    const overflow = current.bufferedBytes - current.maxBuffer
-    if (first.bytes <= overflow) {
-      current.events.shift()
-      current.bufferedBytes -= first.bytes
-      continue
-    }
-    const source = Buffer.from(first.text, 'utf8')
-    let start = Math.max(0, source.length - (first.bytes - overflow))
-    while (start < source.length && (source[start] & 0xc0) === 0x80) start += 1
-    const kept = source.subarray(start).toString('utf8')
-    const keptBytes = Buffer.byteLength(kept, 'utf8')
-    current.bufferedBytes -= first.bytes - keptBytes
-    first.text = kept
-    first.bytes = keptBytes
-  }
-}
-
-function outputBuffers(current) {
-  return {
-    stdout: current.events.filter((entry) => entry.stream === 'stdout').map((entry) => entry.text).join(''),
-    stderr: current.events.filter((entry) => entry.stream === 'stderr').map((entry) => entry.text).join(''),
-  }
-}
-
-function abortedBeforeExecutionResult(record) {
-  return {
-    stdout: '',
-    stderr: '',
-    code: null,
-    signal: null,
-    timedOut: false,
-    killed: false,
-    truncated: false,
-    aborted: true,
-    totalOutputBytes: 0,
-    currentCwd: record.currentCwd,
-    sessionRecovered: process.platform === 'win32'
-      ? Boolean(record.recoveryPending)
-      : record.spawnCount > 1,
-  }
-}
-
 function resolveAbortBeforeExecution(record, request) {
   record.lastUsedAt = Date.now()
   request.resolve(abortedBeforeExecutionResult(record))
   scheduleIdle(record)
   queueMicrotask(() => { void pump(record) })
-}
-
-async function finishLog(current) {
-  if (current.logStream && !current.logStream.destroyed) {
-    await new Promise((resolve) => {
-      let settled = false
-      const done = () => {
-        if (settled) return
-        settled = true
-        resolve()
-      }
-      current.logStream.once('finish', done)
-      current.logStream.once('close', done)
-      current.logStream.once('error', done)
-      current.logStream.end()
-    })
-  }
-  if (current.truncated && current.fullOutputPath && current.outputLogOwned && !current.outputLogError) {
-    return current.fullOutputPath
-  }
-  if (current.fullOutputPath && current.outputLogOwned) {
-    try { await fs.promises.rm(current.fullOutputPath, { force: true }) } catch { /* best-effort */ }
-  }
-  return null
-}
-
-function clearCurrentTimers(current) {
-  if (current.timeoutTimer) clearTimeout(current.timeoutTimer)
-  if (current.hardKillTimer) clearTimeout(current.hardKillTimer)
-  if (current.abortListener) current.signal?.removeEventListener('abort', current.abortListener)
 }
 
 async function settleCurrent(record, extra = {}) {
@@ -306,18 +210,6 @@ async function ensureShell(record) {
     record.spawnPromise = spawnShell(record).finally(() => { record.spawnPromise = null })
   }
   return record.spawnPromise
-}
-
-function openLog(current) {
-  if (!current.fullOutputPath) return
-  try {
-    fs.mkdirSync(path.dirname(current.fullOutputPath), { recursive: true })
-    current.logStream = fs.createWriteStream(current.fullOutputPath, { flags: 'wx' })
-    current.logStream.once('open', () => { current.outputLogOwned = true })
-    current.logStream.on('error', (error) => { current.outputLogError = error })
-  } catch (error) {
-    current.outputLogError = error
-  }
 }
 
 async function pump(record) {
@@ -575,29 +467,6 @@ export function getShellSessionCwd({ userId = null, rootPath } = {}) {
   let root
   try { root = fs.realpathSync(rootPath) } catch { return null }
   return sessions.get(sessionKey(userId, root))?.currentCwd || null
-}
-
-function waitForChildCloseWithin(child, timeoutMs) {
-  if (!child) return Promise.resolve(true)
-  return new Promise((resolve) => {
-    let settled = false
-    const finish = (closed) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      child.removeListener('close', onClose)
-      resolve(closed)
-    }
-    const onClose = () => finish(true)
-    child.once('close', onClose)
-    const timer = setTimeout(() => finish(false), timeoutMs)
-    timer.unref?.()
-  })
-}
-
-function waitForChildCloseStrict(child) {
-  if (!child) return Promise.resolve()
-  return new Promise((resolve) => child.once('close', resolve))
 }
 
 function closeRecord(record) {

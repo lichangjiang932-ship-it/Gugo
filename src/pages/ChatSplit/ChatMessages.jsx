@@ -18,9 +18,10 @@ export default function ChatMessages({
   onQuoteSelection,
   onRetryModelFailure,
   onPromptSelect,
+  routeHash = '',
 }) {
   const { t, lang } = useT()
-  const viewport = useChatMessageViewport({ messages, onQuoteSelection })
+  const viewport = useChatMessageViewport({ messages, onQuoteSelection, routeHash })
   const {
     hiddenCount,
     visibleMessages,

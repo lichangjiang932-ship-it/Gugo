@@ -71,7 +71,11 @@ export const BUILTIN_HTTP_CAPABILITY_CATALOG = Object.freeze([
   descriptor('builtin.auth.account', 9_900, ['/api/auth', '/api/account']),
   descriptor('builtin.model.providers', 9_800, ['/api/model/providers']),
   descriptor('builtin.model.status', 9_700, ['/api/model/status']),
-  descriptor('builtin.system.runtime-config', 9_600, ['/api/system/runtime-config', '/api/system/user-data']),
+  descriptor('builtin.system.runtime-config', 9_600, [
+    '/api/system/runtime-config',
+    '/api/system/network-policy',
+    '/api/system/user-data',
+  ]),
   descriptor('builtin.system.diagnostics', 9_500, ['/api/system/diagnostics']),
   descriptor('builtin.model.proxy', 9_400, ['/api/model/test', '/api/model/chat']),
   descriptor('builtin.browser', 9_300, ['/api/browser']),
@@ -194,7 +198,11 @@ export function createBuiltinHttpCapabilities({
     ),
     capability(
       'builtin.system.runtime-config',
-      (req) => startsWithAny(req, ['/api/system/runtime-config', '/api/system/user-data']),
+      (req) => startsWithAny(req, [
+        '/api/system/runtime-config',
+        '/api/system/network-policy',
+        '/api/system/user-data',
+      ]),
       (req, res) => handleRuntimeConfigRequest(req, res, { cwd, env: getEnv() }),
     ),
     capability(
@@ -332,7 +340,7 @@ export function createBuiltinHttpCapabilities({
     capability(
       'builtin.sessions',
       (req) => req.url?.startsWith('/api/sessions'),
-      (req, res) => handleSessionRequest(req, res),
+      (req, res) => handleSessionRequest(req, res, null, null, getEnv(), cwd),
     ),
     capability(
       'builtin.knowledge',

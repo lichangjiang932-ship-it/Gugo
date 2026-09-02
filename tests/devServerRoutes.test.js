@@ -13,11 +13,23 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { BUILTIN_HTTP_API_PREFIXES } from '../server/core/builtinHttpCapabilities.js'
-import { runtimeLifecyclePlugin } from '../vite.config.js'
+import {
+  developmentHttpCapabilityPlugin,
+  runtimeLifecyclePlugin,
+  VITE_PROJECT_ROOT,
+} from '../vite.config.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const VITE_CONFIG_PATH = join(ROOT, 'vite.config.js')
 const VITE_CONFIG_URL = pathToFileURL(VITE_CONFIG_PATH).href
+
+test('vite anchors default runtime storage and workspace identity to its project root', () => {
+  assert.equal(VITE_PROJECT_ROOT, ROOT)
+  const configSource = source()
+  assert.match(configSource, /const runtimeCwd = VITE_PROJECT_ROOT/)
+  assert.match(configSource, /root: runtimeCwd/)
+  assert.doesNotMatch(configSource, /const runtimeCwd = process\.cwd\(\)/)
+})
 
 function source() {
   return readFileSync(VITE_CONFIG_PATH, 'utf8').replace(/\r\n/g, '\n')
@@ -104,6 +116,56 @@ test('vite dev mounts the same production HTTP capability catalog', () => {
   ]) {
     assert.ok(BUILTIN_HTTP_API_PREFIXES.includes(prefix), `生产 capability catalog 缺少 ${prefix}`)
   }
+})
+
+function createDevelopmentHttpHarness() {
+  const handlers = []
+  const calls = []
+  const registry = {
+    dispatch() {
+      calls.push('dispatch')
+      return { handled: false }
+    },
+    disposeAll() {},
+  }
+  const plugin = developmentHttpCapabilityPlugin({
+    bindRuntimePluginHttpCapabilities: () => () => {},
+    createHttpCapabilityRegistry: () => registry,
+    healthCheck: () => calls.push('health'),
+    healthCheckFull: () => calls.push('health-full'),
+    registerBuiltinHttpCapabilities: () => () => {},
+    requireAuth: (_req, _res, next) => {
+      calls.push('auth')
+      next()
+    },
+    runtimeCwd: ROOT,
+    runtimeEnv: {},
+  })
+  plugin.configureServer({
+    httpServer: { once() {} },
+    middlewares: { use: (handler) => handlers.push(handler) },
+  })
+  return { calls, handler: handlers[0] }
+}
+
+test('vite dev handles query-string liveness requests before the SPA fallback', () => {
+  const { calls, handler } = createDevelopmentHttpHarness()
+  let nextCalls = 0
+
+  handler({ url: '/api/health?source=startup-probe' }, {}, () => { nextCalls += 1 })
+
+  assert.deepEqual(calls, ['health'])
+  assert.equal(nextCalls, 0)
+})
+
+test('vite dev authenticates query-string full-health requests before dispatch', () => {
+  const { calls, handler } = createDevelopmentHttpHarness()
+  let nextCalls = 0
+
+  handler({ url: '/api/health/full?source=doctor' }, {}, () => { nextCalls += 1 })
+
+  assert.deepEqual(calls, ['auth', 'health-full'])
+  assert.equal(nextCalls, 0)
 })
 
 test('vite dev mounts realtime WebSocket through deferred runtime imports', () => {
@@ -336,16 +398,17 @@ for (const probeCase of [
 
 test('vite dev preflights relocated storage before loading the backend runtime', () => {
   const cwd = mkdtempSync(join(tmpdir(), 'gugo-vite-dev-'))
-  const relocatedDbPath = join(cwd, 'relocated-data', 'app.db')
+  const relocatedDataDir = join(cwd, 'relocated-data')
+  const relocatedDbPath = join(relocatedDataDir, 'app.db')
   const defaultDbPath = join(cwd, 'server-data', 'app.db')
   try {
-    writeFileSync(join(cwd, '.env'), 'APP_DATA_DIR=relocated-data\n', 'utf8')
     const result = runConfigProbe({
       cwd,
       command: 'serve',
       isPreview: false,
       env: {
-        GUGO_LOAD_DOTENV: '1',
+        APP_DATA_DIR: relocatedDataDir,
+        GUGO_LOAD_DOTENV: '0',
         NODE_ENV: 'test',
       },
     })

@@ -66,6 +66,53 @@ async function structuredResponseError(response, fallbackCode) {
   return structuredErrorFromData(response, data, fallbackCode)
 }
 
+async function parseStructuredJson(response, fallbackCode) {
+  let data = null
+  try { data = await response.json() } catch { /* handled below */ }
+  if (!response.ok || data?.ok === false) {
+    throw structuredErrorFromData(response, data, fallbackCode)
+  }
+  return data
+}
+
+export async function getOutboundNetworkPolicy({
+  fetchImpl = fetch,
+  authToken = getAuthToken(),
+} = {}) {
+  const response = await fetchImpl('/api/system/network-policy', {
+    headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+    credentials: 'same-origin',
+  })
+  const data = await parseStructuredJson(response, 'OUTBOUND_NETWORK_POLICY_READ_FAILED')
+  if (!data?.policy || typeof data.policy.pureLocal !== 'boolean') {
+    throw configError('The server returned an invalid outbound network policy.', 'OUTBOUND_NETWORK_POLICY_INVALID')
+  }
+  return data.policy
+}
+
+export async function updateOutboundNetworkPolicy(pureLocal, {
+  fetchImpl = fetch,
+  authToken = getAuthToken(),
+} = {}) {
+  if (typeof pureLocal !== 'boolean') {
+    throw configError('pureLocal must be a boolean', 'INVALID_OUTBOUND_NETWORK_POLICY')
+  }
+  const response = await fetchImpl('/api/system/network-policy', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+    credentials: 'same-origin',
+    body: JSON.stringify({ pureLocal }),
+  })
+  const data = await parseStructuredJson(response, 'OUTBOUND_NETWORK_POLICY_UPDATE_FAILED')
+  if (!data?.policy || typeof data.policy.pureLocal !== 'boolean') {
+    throw configError('The server returned an invalid outbound network policy.', 'OUTBOUND_NETWORK_POLICY_INVALID')
+  }
+  return data.policy
+}
+
 export const USER_DATA_CLEAR_CONFIRMATION = 'DELETE ALL MY GUGO DATA'
 
 function responseFilename(response, fallback = 'gugo-local-data.zip') {

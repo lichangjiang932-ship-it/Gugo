@@ -1,12 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import http from 'node:http'
-import https from 'node:https'
-import net from 'node:net'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash } from 'node:crypto'
 
-import { isToolPermittedForUser } from '../db.js'
-import { assertSafeOutboundUrl } from '../utils/outboundNetworkGuard.js'
 import {
   bashExecTool,
   resolveForFileTool,
@@ -14,68 +9,22 @@ import {
   writeFileTool,
 } from './fsShellTools.js'
 import { dispatchApplyPatchTool } from '../utils/applyPatch.js'
-import { writeLimiter } from '../utils/rateLimiter.js'
 import { projectVerificationFields } from '../utils/processExecutionFailure.js'
-const DEFAULT_DOWNLOAD_TIMEOUT_MS = 2 * 60 * 1000
-const MAX_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000
-const DEFAULT_DOWNLOAD_MAX_BYTES = 512 * 1024 * 1024
-const HARD_DOWNLOAD_MAX_BYTES = 4 * 1024 * 1024 * 1024
-const DEFAULT_TEST_TIMEOUT_MS = 10 * 60 * 1000
-const MAX_TEST_TIMEOUT_MS = 30 * 60 * 1000
-const DEFAULT_DOCKER_TIMEOUT_MS = 5 * 60 * 1000
-const MAX_DOCKER_TIMEOUT_MS = 30 * 60 * 1000
-const MAX_REDIRECTS = 5
+import { fileDownloadTool, codingAgentDownloadInternals } from './codingAgentDownload.js'
+import {
+  DEFAULT_DOCKER_TIMEOUT_MS,
+  DEFAULT_TEST_TIMEOUT_MS,
+  MAX_DOCKER_TIMEOUT_MS,
+  MAX_TEST_TIMEOUT_MS,
+  assertToolPermitted,
+  clampInteger,
+  quoteCommandArg,
+  redactForwardedEnvValues,
+  toolError,
+} from './codingAgentToolSupport.js'
 
-function toolError(message, statusCode = 400, code = 'CODING_TOOL_FAILED', hint = null) {
-  const error = new Error(message)
-  error.statusCode = statusCode
-  error.code = code
-  if (hint) error.hint = hint
-  return error
-}
-
-function assertToolPermitted(userId, toolName) {
-  if (userId && !isToolPermittedForUser(userId, toolName)) {
-    throw toolError(`工具 ${toolName} 已被该用户在权限中心关闭`, 403, 'TOOL_DISABLED')
-  }
-}
-
-function clampInteger(value, fallback, min, max) {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return fallback
-  return Math.min(max, Math.max(min, Math.floor(parsed)))
-}
-
-function redactForwardedEnvValues(result, envKeys, sourceEnv = process.env) {
-  const secrets = [...new Set((Array.isArray(envKeys) ? envKeys : [])
-    .map((key) => sourceEnv[String(key || '')])
-    .filter((value) => typeof value === 'string' && value.length > 0))]
-    .sort((left, right) => right.length - left.length)
-  if (secrets.length === 0) return result
-
-  const seen = new WeakMap()
-  const redact = (value) => {
-    if (typeof value === 'string') {
-      return secrets.reduce(
-        (text, secret) => text.split(secret).join('[REDACTED_ENV]'),
-        value,
-      )
-    }
-    if (!value || typeof value !== 'object' || Buffer.isBuffer(value)) return value
-    if (seen.has(value)) return seen.get(value)
-    const copy = Array.isArray(value) ? [] : {}
-    seen.set(value, copy)
-    for (const [key, nested] of Object.entries(value)) copy[key] = redact(nested)
-    return copy
-  }
-  return redact(result)
-}
-
-function quoteCommandArg(value, platform = process.platform) {
-  const text = String(value ?? '')
-  if (platform === 'win32') return `"${text.replace(/"/g, '""')}"`
-  return `'${text.replace(/'/g, `'"'"'`)}'`
-}
+export { CODING_AGENT_TOOL_SPECS } from './codingAgentToolSpecs.js'
+export { fileDownloadTool } from './codingAgentDownload.js'
 
 function inferTestCommand(cwd, requestedFramework = 'auto') {
   const framework = String(requestedFramework || 'auto').trim().toLowerCase()
@@ -475,194 +424,6 @@ export async function dockerExecTool({
   return { ...safeResult, container: String(container || '').trim() }
 }
 
-function requestDownload(target, { headers = {}, timeoutMs, signal }) {
-  return new Promise((resolve, reject) => {
-    const isHttps = target.protocol === 'https:'
-    const transport = isHttps ? https : http
-    const lockedIp = target.lockedIp || (net.isIP(target.hostname) ? target.hostname : null)
-    const options = {
-      hostname: target.hostname,
-      port: target.port || (isHttps ? 443 : 80),
-      path: `${target.pathname}${target.search}`,
-      method: 'GET',
-      headers: {
-        'User-Agent': 'Gugo-Coding-Agent/1.0',
-        Accept: '*/*',
-        ...headers,
-        Host: target.host,
-      },
-    }
-    if (lockedIp) {
-      const family = net.isIPv6(lockedIp) ? 6 : 4
-      options.lookup = (_hostname, lookupOptions, callback) => {
-        if (lookupOptions?.all) callback(null, [{ address: lockedIp, family }])
-        else callback(null, lockedIp, family)
-      }
-      if (isHttps) options.servername = target.hostname
-    }
-    const request = transport.request(options, resolve)
-    const abort = () => request.destroy(toolError('下载已取消', 499, 'DOWNLOAD_CANCELLED'))
-    request.setTimeout(timeoutMs, () => request.destroy(toolError('下载超时', 408, 'DOWNLOAD_TIMEOUT')))
-    request.once('error', reject)
-    request.once('close', () => signal?.removeEventListener('abort', abort))
-    if (signal?.aborted) abort()
-    else signal?.addEventListener('abort', abort, { once: true })
-    request.end()
-  })
-}
-
-async function openDownloadResponse(url, options) {
-  let current = String(url || '').trim()
-  for (let redirect = 0; redirect <= MAX_REDIRECTS; redirect += 1) {
-    const target = await (options.validateUrl || assertSafeOutboundUrl)(current)
-    const response = await (options.requestImpl || requestDownload)(target, options)
-    if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers?.location) {
-      response.resume?.()
-      if (redirect >= MAX_REDIRECTS) {
-        throw toolError('下载重定向次数过多', 502, 'DOWNLOAD_REDIRECT_LIMIT')
-      }
-      current = new URL(response.headers.location, target).toString()
-      continue
-    }
-    return { response, finalUrl: target.toString() }
-  }
-  throw toolError('下载重定向次数过多', 502, 'DOWNLOAD_REDIRECT_LIMIT')
-}
-
-function configuredDownloadLimit() {
-  return clampInteger(
-    process.env.FILE_DOWNLOAD_MAX_BYTES,
-    DEFAULT_DOWNLOAD_MAX_BYTES,
-    1,
-    HARD_DOWNLOAD_MAX_BYTES,
-  )
-}
-
-async function commitDownloadedFile(tempPath, destination, overwrite) {
-  if (overwrite) {
-    // tempPath lives beside destination, so rename is a same-volume atomic
-    // replacement on supported filesystems (including Windows MoveFileEx).
-    await fs.promises.rename(tempPath, destination)
-    return
-  }
-  try {
-    // A same-directory hard link is an atomic, exclusive commit: exactly one
-    // concurrent downloader can create destination and readers never observe
-    // a partially copied file. The caller removes the temporary link.
-    await fs.promises.link(tempPath, destination)
-  } catch (error) {
-    if (error?.code === 'EEXIST') {
-      throw toolError(
-        '目标文件已存在；确认需要覆盖后传 overwrite=true',
-        409,
-        'DOWNLOAD_TARGET_EXISTS',
-      )
-    }
-    throw error
-  }
-}
-
-export async function fileDownloadTool({
-  url,
-  path: rawPath,
-  overwrite = false,
-  sha256,
-  headers = {},
-  timeout_ms,
-  max_bytes,
-} = {}, {
-  userId = null,
-  signal = null,
-  validateUrl = assertSafeOutboundUrl,
-  requestImpl = requestDownload,
-} = {}) {
-  assertToolPermitted(userId, 'file_download')
-  if (typeof url !== 'string' || !url.trim()) {
-    throw toolError('url 必填', 400, 'DOWNLOAD_URL_REQUIRED')
-  }
-  const expected = String(sha256 || '').trim().toLowerCase()
-  if (expected && !/^[0-9a-f]{64}$/u.test(expected)) {
-    throw toolError('sha256 必须是 64 位十六进制字符串', 400, 'DOWNLOAD_CHECKSUM_INVALID')
-  }
-  if (headers == null || typeof headers !== 'object' || Array.isArray(headers)) {
-    throw toolError('headers 必须是对象', 400, 'DOWNLOAD_HEADERS_INVALID')
-  }
-  for (const key of Object.keys(headers)) {
-    if (/^(?:authorization|cookie|proxy-authorization)$/iu.test(key)) {
-      throw toolError(`不允许通过 file_download 发送敏感请求头: ${key}`, 400, 'DOWNLOAD_HEADER_DENIED')
-    }
-  }
-  if (userId && !writeLimiter.tryConsume(userId, 'write')) {
-    throw toolError('文件写入限流：超过 120 次/分钟', 429, 'DOWNLOAD_RATE_LIMITED')
-  }
-  const resolved = resolveForFileTool(rawPath, { userId, write: true, allowMissing: true })
-  const destination = resolved.fullPath
-  fs.mkdirSync(path.dirname(destination), { recursive: true })
-  const timeoutMs = clampInteger(timeout_ms, DEFAULT_DOWNLOAD_TIMEOUT_MS, 1000, MAX_DOWNLOAD_TIMEOUT_MS)
-  const maxBytes = clampInteger(max_bytes, configuredDownloadLimit(), 1, configuredDownloadLimit())
-  const tempPath = path.join(
-    path.dirname(destination),
-    `.gugo-download-${process.pid}-${randomBytes(8).toString('hex')}.part`,
-  )
-  let response = null
-  try {
-    const opened = await openDownloadResponse(url, {
-      headers,
-      timeoutMs,
-      signal,
-      validateUrl,
-      requestImpl,
-    })
-    response = opened.response
-    const status = Number(response.statusCode || 0)
-    if (status < 200 || status >= 300) {
-      response.resume?.()
-      throw toolError(`下载失败：HTTP ${status}`, 502, 'DOWNLOAD_HTTP_ERROR')
-    }
-    const declaredLength = Number(response.headers?.['content-length'])
-    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-      response.destroy?.()
-      throw toolError(`远程文件超过大小上限 ${maxBytes} 字节`, 413, 'DOWNLOAD_TOO_LARGE')
-    }
-    const hash = createHash('sha256')
-    let bytes = 0
-    const file = await fs.promises.open(tempPath, 'wx')
-    try {
-      for await (const chunk of response) {
-        if (signal?.aborted) throw toolError('下载已取消', 499, 'DOWNLOAD_CANCELLED')
-        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-        bytes += buffer.length
-        if (bytes > maxBytes) throw toolError(`远程文件超过大小上限 ${maxBytes} 字节`, 413, 'DOWNLOAD_TOO_LARGE')
-        hash.update(buffer)
-        await file.write(buffer)
-      }
-    } catch (error) {
-      response.destroy?.()
-      throw error
-    } finally {
-      await file.close()
-    }
-    const digest = hash.digest('hex')
-    if (expected && digest !== expected) {
-      throw toolError('下载文件 SHA-256 校验失败', 422, 'DOWNLOAD_CHECKSUM_MISMATCH')
-    }
-    await commitDownloadedFile(tempPath, destination, overwrite === true)
-    return {
-      ok: true,
-      path: resolved.displayPath,
-      scope: resolved.source,
-      bytes,
-      sha256: digest,
-      contentType: String(response.headers?.['content-type'] || ''),
-      finalUrl: opened.finalUrl,
-      changedPaths: [resolved.displayPath],
-    }
-  } finally {
-    response?.destroy?.()
-    try { await fs.promises.rm(tempPath, { force: true }) } catch { /* best-effort cleanup */ }
-  }
-}
-
 export async function dispatchCodingAgentTool(name, args = {}, context = {}) {
   switch (name) {
     case 'run_command': return runCommandTool({ ...args, userId: context.userId, signal: context.signal })
@@ -674,115 +435,6 @@ export async function dispatchCodingAgentTool(name, args = {}, context = {}) {
   }
 }
 
-export const CODING_AGENT_TOOL_SPECS = [
-  {
-    type: 'function',
-    function: {
-      name: 'run_command',
-      description: 'Execute a shell command in the authorized workspace with timeout, cancellation, process-tree cleanup, stdout, stderr, and exit code. Use this for Python, Node, npm, PowerShell, builds, and arbitrary project commands. Pass cwd explicitly when working in an authorized directory outside the default workspace. Declare files that should change in expected_outputs. env_keys can forward named host credentials only after high-risk approval; credential values are never accepted in arguments or added to structured results.',
-      parameters: {
-        type: 'object',
-        properties: {
-          command: { type: 'string' },
-          cmd: { type: 'string', description: 'Compatibility alias for command.' },
-          cwd: { type: 'string', description: 'Workspace-relative or authorized absolute working directory.' },
-          timeout_ms: { type: 'integer', minimum: 1000 },
-          expected_outputs: { type: 'array', items: { type: 'string' }, description: 'Files expected to be created or modified; omit for read-only commands.' },
-          env_keys: { type: 'array', items: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_]*$' }, uniqueItems: true, maxItems: 32, description: 'Host environment variable names to forward after high-risk approval. Pass names only; values are neither accepted here nor added to structured results. Gugo service/model credentials are always prohibited.' },
-        },
-        anyOf: [{ required: ['command'] }, { required: ['cmd'] }],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'patch_file',
-      description: 'Safely patch files either with a Codex-style atomic patch string or by replacing an exact inclusive line range. Supports dry-run and an optional SHA-256 precondition to prevent stale writes.',
-      parameters: {
-        type: 'object',
-        properties: {
-          patch: { type: 'string', description: 'Codex patch text beginning with *** Begin Patch.' },
-          path: { type: 'string' },
-          start_line: { type: 'integer', minimum: 1 },
-          end_line: { type: 'integer', minimum: 0 },
-          replacement: { type: 'string' },
-          expected_sha256: { type: 'string' },
-          dry_run: { type: 'boolean', default: false },
-        },
-        anyOf: [
-          { required: ['patch'] },
-          { required: ['path', 'start_line', 'end_line', 'replacement'] },
-        ],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'run_test',
-      description: 'Run project tests in the authorized workspace and return pass/fail, exit code, stdout/stderr, and a parsed summary. Auto-detects npm, pytest, Cargo, Go, Maven, or Gradle; a custom command is allowed when needed. env_keys can forward named host credentials only after high-risk approval; credential values are never accepted in arguments or added to structured results.',
-      parameters: {
-        type: 'object',
-        properties: {
-          command: { type: 'string', description: 'Optional custom test command. Omit to auto-detect.' },
-          framework: { type: 'string', enum: ['auto', 'npm', 'pytest', 'cargo', 'go', 'maven', 'gradle', 'custom'], default: 'auto' },
-          cwd: { type: 'string', description: 'Workspace-relative or authorized absolute project directory.' },
-          timeout_ms: { type: 'integer', minimum: 1000, maximum: MAX_TEST_TIMEOUT_MS },
-          env_keys: { type: 'array', items: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_]*$' }, uniqueItems: true, maxItems: 32, description: 'Host environment variable names to forward after high-risk approval. Pass names only; values are neither accepted here nor added to structured results. Gugo service/model credentials are always prohibited.' },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'docker_exec',
-      description: 'Execute a command in an existing Docker container through the system Docker CLI. Returns stdout, stderr, exit code, timeout, and cancellation state. Requires shell authorization and per-call approval. env configures explicit variables inside the container; env_keys separately forwards named host credentials to the Docker CLI only after high-risk approval, without accepting or adding their values to structured results.',
-      parameters: {
-        type: 'object',
-        properties: {
-          container: { type: 'string', description: 'Docker container name or ID.' },
-          command: {
-            oneOf: [
-              { type: 'string', description: 'Command interpreted by /bin/sh -lc (cmd.exe /c for Windows containers).' },
-              { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Exact executable and argument array.' },
-            ],
-          },
-          workdir: { type: 'string', description: 'Optional working directory inside the container.' },
-          env: { type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] } },
-          container_os: { type: 'string', enum: ['linux', 'windows'], default: 'linux', description: 'Container OS used only for string commands; arrays remain exact argv.' },
-          env_keys: { type: 'array', items: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_]*$' }, uniqueItems: true, maxItems: 32, description: 'Host environment variable names for the Docker CLI after high-risk approval. This is separate from container env; pass names only and values are never added to structured results. Gugo service/model credentials are always prohibited.' },
-          cwd: { type: 'string', description: 'Authorized host directory used only to launch docker.' },
-          timeout_ms: { type: 'integer', minimum: 1000, maximum: MAX_DOCKER_TIMEOUT_MS },
-          expected_outputs: { type: 'array', items: { type: 'string' }, description: 'Optional authorized host files expected to change through mounted volumes.' },
-        },
-        required: ['container', 'command'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'file_download',
-      description: 'Download an HTTP/HTTPS binary file directly into an authorized local path with streaming, redirect/SSRF protection, an atomic write, size limit, and optional SHA-256 verification. Unlike fetch_url, this preserves binary data and supports large files.',
-      parameters: {
-        type: 'object',
-        properties: {
-          url: { type: 'string' },
-          path: { type: 'string', description: 'Workspace-relative or authorized absolute destination file.' },
-          overwrite: { type: 'boolean', default: false },
-          sha256: { type: 'string', description: 'Optional expected lowercase/uppercase SHA-256 hex digest.' },
-          headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Optional non-sensitive request headers.' },
-          timeout_ms: { type: 'integer', minimum: 1000, maximum: MAX_DOWNLOAD_TIMEOUT_MS },
-          max_bytes: { type: 'integer', minimum: 1, maximum: HARD_DOWNLOAD_MAX_BYTES },
-        },
-        required: ['url', 'path'],
-      },
-    },
-  },
-]
-
 export const _internals = {
   inferTestCommand,
   parseTestSummary,
@@ -790,7 +442,5 @@ export const _internals = {
   redactForwardedEnvValues,
   dockerCommand,
   findDockerCli,
-  commitDownloadedFile,
-  requestDownload,
-  openDownloadResponse,
+  ...codingAgentDownloadInternals,
 }

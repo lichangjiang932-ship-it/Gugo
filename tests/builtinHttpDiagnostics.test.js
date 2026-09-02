@@ -55,3 +55,32 @@ test('builtin diagnostics capability carries runtime host state through the prod
   assert.equal(JSON.stringify(body.runtime).includes('adapterId'), false)
   assert.equal(JSON.stringify(body.runtime).includes('portId'), false)
 })
+
+test('builtin diagnostics rejects unauthenticated requests before reading runtime state', async () => {
+  let reads = 0
+  const definitions = createBuiltinHttpCapabilities({
+    jobRuntime: {},
+    readRuntimeDiagnostics() {
+      reads += 1
+      return {
+        lspHost: {
+          enabled: true,
+          providerCount: 1,
+          reason: 'configured',
+          code: null,
+        },
+      }
+    },
+  })
+  const diagnostics = definitions.find((entry) => entry.id === 'builtin.system.diagnostics')
+  const res = createResponse()
+
+  await diagnostics.handle({
+    method: 'GET',
+    url: '/api/system/diagnostics',
+    headers: {},
+  }, res)
+
+  assert.equal(res.statusCode, 401)
+  assert.equal(reads, 0)
+})

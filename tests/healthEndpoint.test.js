@@ -4,11 +4,17 @@ import {
   createAppServer,
   enforceLocalAuthExposurePolicy,
   getLocalAuthExposurePolicy,
+  healthCheck,
   healthCheckFull,
   isLoopbackBindAddress,
   RUNTIME_KERNEL_REVISION,
   resolveEffectiveExposureAddress,
 } from '../server/appServer.js'
+
+test('app server publicly exposes both health probes used by production and Vite', () => {
+  assert.equal(typeof healthCheck, 'function')
+  assert.equal(typeof healthCheckFull, 'function')
+})
 
 test('local auth recognizes only actual loopback bind addresses', () => {
   for (const address of ['localhost', 'localhost.', '127.0.0.1', '127.255.255.254', '::1', '[::1]', '0:0:0:0:0:0:0:1']) {

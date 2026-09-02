@@ -47,6 +47,7 @@ import {
 } from './mcpToolRegistry.js'
 import { writeToolAudit } from '../utils/audit.js'
 import { getMcpOAuthHeaders } from './mcpOAuth.js'
+import { isPureLocalModeEnabled } from '../utils/outboundNetworkGuard.js'
 
 export { onMcpEvent, onMcpToolsChange }
 
@@ -61,8 +62,16 @@ function getAllowedCommands() {
   return raw.split(',').map((s) => s.trim()).filter(Boolean)
 }
 
-function stdioEnabled() {
-  return process.env.MCP_STDIO_ENABLED !== '0'
+function stdioEnabled(env = process.env) {
+  return env.MCP_STDIO_ENABLED !== '0'
+}
+
+function assertMcpTransportAllowed(server, env = process.env) {
+  if (server?.transport !== 'stdio' || !isPureLocalModeEnabled(env)) return
+  const error = new Error('MCP stdio is disabled by pure-local mode')
+  error.code = 'OUTBOUND_PURE_LOCAL_DENIED'
+  error.retryable = false
+  throw error
 }
 
 /**
@@ -101,6 +110,7 @@ function getUserMap(userId) {
 async function startConnection(userId, server) {
   let transport
   if (server.transport === 'stdio') {
+    assertMcpTransportAllowed(server)
     if (!stdioEnabled()) throw new Error('MCP stdio 已被环境禁用 (MCP_STDIO_ENABLED=0)')
     const allowed = getAllowedCommands()
     const base = String(server.command || '').replace(/\.cmd$/i, '').replace(/\.exe$/i, '')
@@ -160,6 +170,15 @@ async function startConnection(userId, server) {
     prompts = Array.isArray(result?.prompts) ? result.prompts : []
   } catch { /* not supported */ }
 
+  try {
+    // Re-check after handshake so a pure-local toggle racing an in-flight
+    // startup cannot leave a newly connected child process behind.
+    assertMcpTransportAllowed(server)
+  } catch (error) {
+    await transport.stop()
+    throw error
+  }
+
   const startedAt = Date.now()
   return { transport, tools, resources, prompts, startedAt, lastUsedAt: startedAt }
 }
@@ -196,6 +215,7 @@ const connectionSupervisor = createMcpConnectionSupervisor({
 
 export async function ensureServerConnected(userId, server, { manual = true } = {}) {
   if (!server?.enabled) return null
+  assertMcpTransportAllowed(server)
   const connection = await connectionSupervisor.ensure(userId, server, { manual })
   return touchConnection(connection)
 }
@@ -298,6 +318,7 @@ function stateErrorForConnection(userId, serverId) {
 }
 
 async function connectionForOperation(userId, server) {
+  assertMcpTransportAllowed(server)
   const stateError = stateErrorForConnection(userId, server.id)
   if (stateError) throw stateError
   const map = getUserMap(userId)
@@ -509,6 +530,19 @@ export function disconnectUser(userId) {
   return Math.max(disconnected, supervised)
 }
 
+/** Stop every already-running stdio server when pure-local mode is enabled. */
+export function enforcePureLocalMcpPolicy(env = process.env) {
+  if (!isPureLocalModeEnabled(env)) return 0
+  const targets = []
+  for (const [userId, map] of userConnections) {
+    for (const serverId of map.keys()) {
+      if (getServer(userId, serverId)?.transport === 'stdio') targets.push([userId, serverId])
+    }
+  }
+  for (const [userId, serverId] of targets) disconnectServer(userId, serverId)
+  return targets.length
+}
+
 export function sweepIdleConnections({ now = Date.now(), timeoutMs = idleTimeoutMs() } = {}) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return 0
   const expired = []
@@ -545,6 +579,7 @@ export async function shutdownAll() {
 }
 
 export const _mcpManagerInternals = Object.freeze({
+  assertMcpTransportAllowed,
   connectionSupervisor,
   synchronizeToolsForConnection,
 })

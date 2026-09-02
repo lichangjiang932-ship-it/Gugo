@@ -155,7 +155,7 @@ test('permanent failed-retry reasons and retry exhaustion are localized in every
     ['TURN_FAILED_RETRY_ATTEMPT_INVALID', 'turnFailedRetryAttemptInvalid'],
     ['TURN_FAILED_RETRY_PROJECTION_INVALID', 'turnFailedRetryProjectionInvalid'],
   ])
-  const locales = ['zh', 'en', 'ja', 'ko', 'zh-TW']
+  const locales = ['zh', 'en']
 
   for (const [code, key] of mappings) {
     assert.equal(isPermanentFailedRetryRejectionFailure({ code }), true, code)
@@ -482,7 +482,7 @@ test('model failure copy is present in every supported language', () => {
     'modelEndpointUnavailable',
     'modelConfigurationAction',
   ]
-  for (const language of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+  for (const language of ['zh', 'en']) {
     for (const key of keys) {
       assert.ok(String(translations[language]?.errors?.[key] || '').trim(), `${language}:${key}`)
     }

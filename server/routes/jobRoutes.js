@@ -146,6 +146,9 @@ export async function handleJobRequest(req, res, runtime, { env = process.env } 
         requirePlanApproval: body.requirePlanApproval === true,
         modelName: typeof body.modelName === 'string' ? body.modelName : '',
         modelProviderId: typeof body.providerId === 'string' ? body.providerId : '',
+        autoRetry: body.autoRetry === true || body.autoRetry?.enabled === true
+          ? body.autoRetry
+          : false,
         env,
       })
       return sendJson(res, 201, { job })

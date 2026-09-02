@@ -1,16 +1,11 @@
-import { SLASH_ACTION_COPY } from '../i18n/translations.js'
+import { normalizeUiLanguage, SLASH_ACTION_COPY } from '../i18n/translations.js'
 
 export const CORE_SLASH_COMMANDS = [
   'mcp', 'side', 'init', 'compact', 'feedback', 'continue', 'pet', 'new', 'status', 'goals', 'plan',
 ]
 
 function localeCopy(lang) {
-  const value = String(lang || 'en').toLowerCase()
-  if (value.startsWith('zh-tw') || value.startsWith('zh-hk')) return SLASH_ACTION_COPY['zh-TW']
-  if (value.startsWith('zh')) return SLASH_ACTION_COPY.zh
-  if (value.startsWith('ja')) return SLASH_ACTION_COPY.ja
-  if (value.startsWith('ko')) return SLASH_ACTION_COPY.ko
-  return SLASH_ACTION_COPY.en
+  return SLASH_ACTION_COPY[normalizeUiLanguage(lang)] || SLASH_ACTION_COPY.en
 }
 
 function localized(lang) {

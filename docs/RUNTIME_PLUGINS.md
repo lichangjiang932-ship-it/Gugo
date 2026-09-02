@@ -18,7 +18,9 @@ Gugo 的进程内 runtime plugin 通过 `server/plugins/runtimePluginRegistry.js
 
 managed 来源已经具备离线本地包管理闭环。`localPluginPackageStore` 对源目录生成不可变快照和 SHA-256 整包摘要，以 store revision 做 compare-and-swap，并在跨进程独占锁内完成 staging 校验、持久事务日志、备份和 rename 提交；安装、显式替换与卸载共用这条事务路径。安装回执记录 plugin/version、摘要、文件数、总字节数和安装时间；发现、列举和变更前都会在同一锁内恢复遗留事务，回滚未提交操作、保留已提交结果并清理日志，同时重新核对回执与磁盘内容，损坏时 fail closed。包卸载要求 runtime 已停用且处于 `inactive`；此前的 runtime 卸载会先撤销贡献可见性并等待已接受的 callback 排空。包服务再以共享生命周期屏障覆盖安全门禁、磁盘事务和 discovery refresh，阻止并发重新启用；活跃依赖、Release/pin/checkpoint 引用或无法确认的状态都会阻止删除。
 
-因此 managed 候选现在是 `mutable=false`、`verifiedPackage=true` 并携带 `installReceipt`；这里的 verified 只表示“与宿主本地安装回执和内容摘要一致”，不表示 publisher 身份可信。内置项的 `mutable=false` 也只表示宿主优先级与分发意图，仍是 `verifiedPackage=false`、`installReceipt=null`。当前依然没有 Marketplace、联网下载/远程更新通道、publisher 签名与信任链，也没有对外发布的公共兼容规范；更不存在平台计费、余额、套餐或订阅。不能把本地回执或可信目录描述成生态级来源认证。
+因此 managed 候选现在是 `mutable=false`、`verifiedPackage=true` 并携带 `installReceipt`；这里的 `verifiedPackage` 只表示磁盘内容与安装回执一致。若源目录采用 `<root>/marketplace.json + <root>/plugins/<id>` 的离线布局，安装前还会按 [Plugin Compatibility Contract v1](./PLUGIN_COMPATIBILITY_V1.md) 核对 local-only 来源、整包摘要、publisher key fingerprint 和 canonical metadata 的 Ed25519 签名，并将可重验的证据写入 v2 回执；普通开发目录继续使用 `publisherVerified=false` 的 v1 回执。相邻 Marketplace 一旦存在便是权威元数据，校验失败不会降级为 unsigned。
+
+该 Marketplace 不联网、不下载、不接受 URL，也拒绝 `INSTALLED_BY_DEFAULT`；所有安装和升级仍需本地 owner 显式确认。签名证明内容由显示的 key identity 签发，并不等于外部 CA 对人读 publisher 名称的背书。内置项的 `mutable=false` 也只表示宿主优先级与分发意图，仍是 `verifiedPackage=false`、`installReceipt=null`。磁盘 discovery candidate、公开 package receipt、Plugin Definition 和 stored Release restore 现在共用 `pluginDistributionContract.js` 的有界快照与信任身份；只有确实缺少 `distribution` 字段的旧 Release 可走 legacy 兼容，显式 `null`、来源/trust flag、receipt schema、publisher ID 或 key 改变都会 fail closed。远程发现/更新、证书吊销与透明度仍是 v1 的明确非目标，因此该离线能力不能描述成完整生态商店。
 
 持久化 adapter 的 checkpoint/boundary 命令还必须验证宿主签发的执行租约 proof（owner ID + 单调 fencing token）。该 proof 只在 TurnEngine 获取 lease 时捕获，不向 runtime plugin context 暴露；plugin service、event listener 或工具不能伪造它来提交 Turn 终态。
 

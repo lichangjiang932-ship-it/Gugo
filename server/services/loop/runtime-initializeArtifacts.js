@@ -34,6 +34,7 @@ export async function initializeArtifacts(s) {
         .map((spec) => [spec.function.name, spec]),
     )
   s.partialResultFallback = createPartialResultFallback({
+      locale: s.locale,
       entries: s.restoredState?.completionGuards?.partialResultEntries,
     })
   s.directoryAuthorizationResolutions = normalizeDirectoryAuthorizationResolutions(

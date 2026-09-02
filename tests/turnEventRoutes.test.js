@@ -446,8 +446,9 @@ test('local auth claims legacy sessions before resuming or cancelling turns', as
     headers: auth(current.token),
     body: JSON.stringify({ sessionId: 'turn-route-local-cancel-session' }),
   })
-  assert.equal(cancelled.status, 200)
-  assert.equal((await cancelled.json()).turn.status, 'cancelled')
+  const cancelledBody = await cancelled.json()
+  assert.equal(cancelled.status, 200, JSON.stringify(cancelledBody))
+  assert.equal(cancelledBody.turn.status, 'cancelled')
   assert.equal(
     getDb().prepare('SELECT user_id FROM sessions WHERE token = ?').get('turn-route-local-cancel-session').user_id,
     current.userId,
@@ -742,7 +743,6 @@ test('turn event stream closes an interrupted attempt while keeping it resumable
       type: 'turn.interrupted',
       payload: {
         code: 'MODEL_HTTP_503',
-        message: 'upstream unavailable',
         retryable: true,
         text: '',
         artifactIds: [],

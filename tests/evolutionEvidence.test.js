@@ -77,7 +77,8 @@ test('evolution evidence persists explicit feedback and exposes only user-scoped
     jobId: 'alice-reviewed-job',
     stepId: 'verify-step',
     type: 'task_reviewed',
-    message: 'RAW_PRIVATE_EVENT_MESSAGE',
+    code: 'JOB_TASK_REVIEWED',
+    params: { verdict: 'fixable' },
     now: 50,
     payload: {
       acceptance: {
@@ -109,7 +110,8 @@ test('evolution evidence persists explicit feedback and exposes only user-scoped
   appendJobEvent({
     jobId: 'bob-reviewed-job',
     type: 'task_reviewed',
-    message: 'Bob review',
+    code: 'JOB_TASK_REVIEWED',
+    params: { verdict: 'pass' },
     payload: { acceptance: { verdict: 'pass', summary: 'BOB_PRIVATE_REVIEW' } },
   })
 

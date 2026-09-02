@@ -6,6 +6,10 @@ const runtimeSource = readFileSync(
   new URL('../server/services/subagentRuntime.js', import.meta.url),
   'utf8',
 )
+const runStateSource = readFileSync(
+  new URL('../server/services/subagentRunState.js', import.meta.url),
+  'utf8',
+)
 const portSource = readFileSync(
   new URL('../server/core/subagentRunPersistencePort.js', import.meta.url),
   'utf8',
@@ -20,11 +24,12 @@ const appServerSource = readFileSync(
 )
 
 test('subagent runtime owns no concrete database or subagent_runs SQL dependency', () => {
-  assert.doesNotMatch(runtimeSource, /from ['"]\.\.\/db\.js['"]/u)
-  assert.doesNotMatch(runtimeSource, /\bsubagent_runs\b/u)
-  assert.doesNotMatch(runtimeSource, /\.prepare\s*\(/u)
-  assert.match(runtimeSource, /getActiveSubagentRunPersistencePort/u)
-  assert.match(runtimeSource, /prepareSubagentRunPersistencePort/u)
+  const runtimeBoundarySource = `${runtimeSource}\n${runStateSource}`
+  assert.doesNotMatch(runtimeBoundarySource, /from ['"]\.\.\/db\.js['"]/u)
+  assert.doesNotMatch(runtimeBoundarySource, /\bsubagent_runs\b/u)
+  assert.doesNotMatch(runtimeBoundarySource, /\.prepare\s*\(/u)
+  assert.match(runStateSource, /getActiveSubagentRunPersistencePort/u)
+  assert.match(runStateSource, /prepareSubagentRunPersistencePort/u)
 })
 
 test('core subagent persistence port remains free of adapter, service, and database imports', () => {

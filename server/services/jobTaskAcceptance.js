@@ -2,6 +2,16 @@ const VERIFICATION_FAILURE = /(未通过|不通过|未能|没能|无法(?:完成
 const VERIFICATION_NEEDS_USER = /(需要(?:用户|你)(?:提供|补充|确认|选择|授权)|等待(?:用户|你)|缺少(?:凭据|授权|输入|信息)|needs?\s+(?:user|input|approval)|waiting\s+for\s+(?:user|approval))/i
 const VERIFICATION_BLOCKED = /(外部(?:服务|依赖).*?(?:不可用|阻塞)|权限不足|环境(?:不可用|缺失)|无法在当前环境|blocked\s+by|environment\s+(?:is\s+)?unavailable|missing\s+(?:dependency|credential|permission))/i
 const ACCEPTANCE_VERDICTS = new Set(['pass', 'fixable', 'blocked', 'needs_user'])
+const COMPLETED_TASK_VERIFICATION_STATUSES = new Set([
+  'pass',
+  'passed',
+  'success',
+  'succeeded',
+  'complete',
+  'completed',
+  'ok',
+])
+const BLOCKED_TASK_VERIFICATION_STATUSES = new Set(['indeterminate', 'blocked'])
 
 function cleanText(value) {
   return typeof value === 'string' ? value.trim() : ''
@@ -86,11 +96,60 @@ export function verificationTextReportsFailure(text = '') {
   return VERIFICATION_FAILURE.test(stripEchoedAcceptance(text))
 }
 
+function taskVerificationIssue(check) {
+  if (!check || typeof check !== 'object' || Array.isArray(check)) {
+    return '任务验证包含无效的检查记录'
+  }
+  const kind = cleanText(check.kind) || 'check'
+  const cwd = cleanText(check.cwd) || '.'
+  const status = cleanText(check.status).toLowerCase() || 'unknown'
+  const code = cleanText(check.code).toUpperCase()
+  const diagnostic = cleanText(check.diagnostic)
+    || cleanText(check.message)
+    || cleanText(check.summary)
+  return [
+    `${kind}@${cwd} [${status}${code ? `/${code}` : ''}]`,
+    diagnostic ? `：${diagnostic.slice(0, 500)}` : '',
+  ].join('')
+}
+
+export function evaluateTaskVerificationAcceptance({ taskVerification, evidence = [] } = {}) {
+  if (!taskVerification || typeof taskVerification !== 'object' || Array.isArray(taskVerification)) {
+    return null
+  }
+  const incompleteChecks = (Array.isArray(taskVerification.checks)
+    ? taskVerification.checks
+    : []).filter((check) => {
+    if (!check || typeof check !== 'object' || Array.isArray(check)) return true
+    return !COMPLETED_TASK_VERIFICATION_STATUSES.has(cleanText(check.status).toLowerCase())
+  })
+  if (incompleteChecks.length === 0) return null
+
+  const blocked = incompleteChecks.some((check) => {
+    const status = cleanText(check?.status).toLowerCase()
+    const code = cleanText(check?.code).toUpperCase()
+    return BLOCKED_TASK_VERIFICATION_STATUSES.has(status)
+      || code === 'TASK_VERIFICATION_STATE_OVERFLOW'
+  })
+  return {
+    verdict: blocked ? 'blocked' : 'fixable',
+    summary: blocked
+      ? '宿主任务验证尚未产生可判定的通过结果'
+      : '宿主任务验证仍有未通过或需要重跑的检查',
+    issues: incompleteChecks.slice(0, 9).map(taskVerificationIssue),
+    evidence: normalizeJobStringList(evidence),
+    source: 'task_verification',
+  }
+}
+
 /**
  * Default TaskEvaluator SPI. A runtime plugin may replace this function via
  * createDefaultExecuteStep({ taskEvaluator }) without changing orchestration.
  */
-export function evaluateTaskAcceptance({ text = '', evidence = [] } = {}) {
+export function evaluateTaskAcceptance({ text = '', evidence = [], taskVerification = null } = {}) {
+  const hostVerification = evaluateTaskVerificationAcceptance({ taskVerification, evidence })
+  if (hostVerification) return hostVerification
+
   const structured = parseTaskEvaluation(text)
   if (structured) {
     return {

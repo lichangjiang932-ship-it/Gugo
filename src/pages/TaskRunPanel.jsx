@@ -67,6 +67,8 @@ export default function TaskRunPanel() {
           prompt={controller.prompt}
           setPrompt={controller.setPrompt}
           submitting={controller.submitting}
+          autoRetryEnabled={controller.autoRetryEnabled}
+          setAutoRetryEnabled={controller.setAutoRetryEnabled}
           error={controller.error}
           errorAction={controller.errorAction}
           modelName={controller.modelSelection.modelName}

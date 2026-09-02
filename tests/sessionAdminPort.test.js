@@ -65,6 +65,39 @@ test('SessionAdmin v2 normalizes query pagination before invoking the backend', 
   ]])
 })
 
+test('SessionAdmin optional workspace mutation normalizes selections and explicit clears', () => {
+  const calls = []
+  const port = prepareSessionAdminPort(portDefinition({
+    setSessionWorkspace(input) {
+      calls.push(input)
+      return {
+        id: input.sessionId,
+        revision: 3,
+        workspacePath: input.workspacePath,
+      }
+    },
+  }))
+
+  assert.deepEqual(port.setSessionWorkspace({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    workspacePath: '  C:\\Project  ',
+  }), { id: 'session-1', revision: 3, workspacePath: 'C:\\Project' })
+  assert.deepEqual(port.setSessionWorkspace({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    workspacePath: null,
+  }), { id: 'session-1', revision: 3, workspacePath: null })
+  assert.deepEqual(calls.map(({ workspacePath }) => workspacePath), ['C:\\Project', null])
+
+  for (const workspacePath of ['', 42, 'x'.repeat(32_769)]) {
+    assert.throws(
+      () => port.setSessionWorkspace({ userId: 'user-1', sessionId: 'session-1', workspacePath }),
+      (error) => error?.code === 'SESSION_ADMIN_INPUT_INVALID',
+    )
+  }
+})
+
 test('SessionAdmin v2 rejects invalid inputs before backend invocation', () => {
   let calls = 0
   const port = prepareSessionAdminPort(portDefinition({

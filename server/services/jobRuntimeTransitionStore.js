@@ -42,9 +42,98 @@ function isRetryableStepRow(row, completedRetryStepIds = new Set()) {
 function cancelScheduledWake(db, { jobId, userId, now }) {
   return db.prepare(`
     UPDATE job_wakeups
-       SET status = 'cancelled', updated_at = ?
-     WHERE job_id = ? AND user_id = ? AND status = 'scheduled'
+       SET status = 'cancelled', claim_token = NULL, updated_at = ?
+     WHERE job_id = ? AND user_id = ?
+       AND (status = 'scheduled' OR (status = 'fired' AND claim_token IS NOT NULL))
   `).run(now, jobId, userId).changes || 0
+}
+
+function finalizeClaimedAutoRetryWake(db, {
+  jobId,
+  stepId,
+  userId,
+  wakeAt,
+  claimedAt,
+  retryAttempt,
+  claimToken,
+  now,
+}) {
+  return db.prepare(`
+    UPDATE job_wakeups
+       SET status = 'fired', claim_token = NULL, updated_at = ?
+     WHERE job_id = ? AND step_id = ? AND user_id = ?
+       AND wake_kind = 'auto_retry' AND status = 'fired' AND claim_token = ?
+       AND wake_at = ? AND fired_at = ?
+       AND EXISTS (
+         SELECT 1 FROM jobs
+          WHERE id = job_wakeups.job_id AND user_id = job_wakeups.user_id
+            AND auto_retry_attempts = ?
+       )
+  `).run(
+    now,
+    jobId,
+    stepId,
+    userId,
+    claimToken,
+    wakeAt,
+    claimedAt,
+    retryAttempt,
+  ).changes === 1
+}
+
+export function blockClaimedAutoRetryWakeTransition({
+  jobId,
+  stepId,
+  userId,
+  wakeAt,
+  claimedAt,
+  retryAttempt,
+  claimToken,
+  errorCode = 'JOB_AUTO_RETRY_BLOCKED',
+  now = Date.now(),
+} = {}) {
+  const db = getDb()
+  return db.transaction(() => {
+    const cancelled = db.prepare(`
+      UPDATE job_wakeups
+         SET status = 'cancelled', claim_token = NULL, updated_at = ?
+       WHERE job_id = ? AND step_id = ? AND user_id = ?
+         AND wake_kind = 'auto_retry' AND status = 'fired' AND claim_token = ?
+         AND wake_at = ? AND fired_at = ?
+         AND EXISTS (
+           SELECT 1
+             FROM jobs AS job
+             JOIN job_steps AS step
+               ON step.id = job_wakeups.step_id AND step.job_id = job.id
+            WHERE job.id = job_wakeups.job_id AND job.user_id = job_wakeups.user_id
+              AND job.status = 'failed' AND job.cancel_requested = 0
+              AND job.auto_retry_attempts = ? AND step.status = 'failed'
+         )
+    `).run(
+      now,
+      jobId,
+      stepId,
+      userId,
+      claimToken,
+      Number(wakeAt),
+      Number(claimedAt),
+      Number(retryAttempt),
+    ).changes === 1
+    if (!cancelled) return { changed: false, event: null }
+    const event = appendJobEvent({
+      jobId,
+      stepId,
+      type: 'auto_retry_blocked',
+      code: 'JOB_AUTO_RETRY_BLOCKED',
+      payload: {
+        code: errorCode,
+        retryable: false,
+        nextAction: 'retry_step',
+      },
+      now,
+    })
+    return { changed: true, event }
+  }).immediate()
 }
 
 function mapSteeringMessage(row) {
@@ -70,7 +159,12 @@ export function requestJobCancellationTransition({ jobId, userId, now = Date.now
       SELECT status, cancel_requested FROM jobs WHERE id = ? AND user_id = ?
     `).get(jobId, userId)
     if (!current) return { found: false, changed: false, status: null, event: null }
-    if (TERMINAL_JOB_STATUSES.has(current.status)) {
+    const hasClaimedAutoRetryWake = current.status === 'failed' && Boolean(db.prepare(`
+      SELECT 1 FROM job_wakeups
+       WHERE job_id = ? AND user_id = ? AND wake_kind = 'auto_retry'
+         AND status = 'fired' AND claim_token IS NOT NULL AND fired_at IS NOT NULL
+    `).get(jobId, userId))
+    if (TERMINAL_JOB_STATUSES.has(current.status) && !hasClaimedAutoRetryWake) {
       return { found: true, changed: false, status: current.status, event: null }
     }
 
@@ -88,7 +182,7 @@ export function requestJobCancellationTransition({ jobId, userId, now = Date.now
       ? appendJobEvent({
           jobId,
           type: 'cancel_requested',
-          message: '已请求终止任务',
+          code: 'JOB_CANCEL_REQUESTED',
           payload: { code: 'JOB_CANCEL_REQUESTED', reason: 'user_requested' },
           now,
         })
@@ -122,7 +216,8 @@ export function enqueueJobSteeringTransition({ jobId, userId, content, now = Dat
     const latestSuspension = current.status === 'waiting'
       ? db.prepare(`
           SELECT type, step_id, payload_json FROM job_events
-           WHERE job_id = ? AND type IN ('plan_proposed', 'awaiting_user', 'sleeping')
+           WHERE job_id = ?
+             AND type IN ('plan_proposed', 'awaiting_user', 'sleeping', 'auto_retry_scheduled')
            ORDER BY id DESC LIMIT 1
         `).get(jobId)
       : null
@@ -146,7 +241,11 @@ export function enqueueJobSteeringTransition({ jobId, userId, content, now = Dat
     `).run(id, jobId, userId, text, now)
 
     let requeued = false
-    if (current.status === 'waiting') {
+    // Steering added during an automatic-retry backoff must remain queued for
+    // the retried model loop. Waking the job here would cancel the durable
+    // timer while leaving its failed step non-runnable, silently losing both
+    // the retry and the user's new direction.
+    if (current.status === 'waiting' && latestSuspension?.type !== 'auto_retry_scheduled') {
       requeued = db.prepare(`
         UPDATE jobs
            SET status = 'queued', error = NULL, finished_at = NULL, updated_at = ?
@@ -276,7 +375,7 @@ export function resumeJobAfterApprovalTransition({
       jobId,
       stepId,
       type: 'approval_recovered',
-      message: 'Approval decided after process restart; the interrupted turn was requeued',
+      code: 'JOB_APPROVAL_RECOVERED',
       payload: {
         ...resumedDiagnostics,
         reason: 'tool_approval_resolved',
@@ -303,6 +402,8 @@ export function retryJobTransition({
   event,
   completedRetryStepIds = [],
   diagnosticResetStepIds = [],
+  autoRetryWake = null,
+  validateRetry = null,
   prepareCheckpoints = null,
   now = Date.now(),
 } = {}) {
@@ -311,7 +412,27 @@ export function retryJobTransition({
     throw new Error('retryJobTransition requires a retryable expected job status')
   }
   if (!modelSnapshot?.modelName) throw new Error('retryJobTransition requires a model snapshot')
-  if (!event?.type || !event?.message) throw new Error('retryJobTransition requires an event')
+  if (!event?.type || !event?.code) throw new Error('retryJobTransition requires an event')
+  const autoRetryStepId = autoRetryWake == null
+    ? null
+    : String(autoRetryWake.stepId || '').trim()
+  const autoRetryWakeAt = autoRetryWake == null ? null : Number(autoRetryWake.wakeAt)
+  const autoRetryClaimedAt = autoRetryWake == null ? null : Number(autoRetryWake.claimedAt)
+  const autoRetryAttempt = autoRetryWake == null ? null : Number(autoRetryWake.retryAttempt)
+  const autoRetryClaimToken = autoRetryWake == null ? '' : String(autoRetryWake.claimToken || '')
+  if ((event.type === 'auto_retry_started') !== (autoRetryWake != null)
+    || (autoRetryWake != null && (
+      !autoRetryStepId
+      || !Number.isFinite(autoRetryWakeAt)
+      || !Number.isFinite(autoRetryClaimedAt)
+      || !Number.isInteger(autoRetryAttempt)
+      || !autoRetryClaimToken
+    ))) {
+    throw new Error('retryJobTransition requires a valid automatic-retry wake')
+  }
+  if (validateRetry != null && typeof validateRetry !== 'function') {
+    throw new Error('retryJobTransition validateRetry must be a function')
+  }
   if (prepareCheckpoints != null && typeof prepareCheckpoints !== 'function') {
     throw new Error('retryJobTransition prepareCheckpoints must be a function')
   }
@@ -330,6 +451,9 @@ export function retryJobTransition({
       .filter(Boolean),
   )
   const targetIds = new Set(targets.map((step) => step.id))
+  if (autoRetryStepId && !targetIds.has(autoRetryStepId)) {
+    throw new Error('retryJobTransition automatic-retry wake must target a retried step')
+  }
   if ([...completedRetryIds].some((stepId) => !targetIds.has(stepId))) {
     throw new Error('retryJobTransition completed retry steps must be transition targets')
   }
@@ -371,6 +495,8 @@ export function retryJobTransition({
       return { found: true, changed: false, status: current.status, event: null }
     }
 
+    validateRetry?.()
+
     // Checkpoint terminal markers and durable retry state must change in the
     // same transaction. Cancellation deliberately bypasses the execution
     // lease; preparing checkpoints before this transaction could otherwise
@@ -411,7 +537,22 @@ export function retryJobTransition({
       }
     }
 
-    cancelScheduledWake(db, { jobId, userId, now })
+    if (autoRetryStepId) {
+      if (!finalizeClaimedAutoRetryWake(db, {
+        jobId,
+        stepId: autoRetryStepId,
+        userId,
+        wakeAt: autoRetryWakeAt,
+        claimedAt: autoRetryClaimedAt,
+        retryAttempt: autoRetryAttempt,
+        claimToken: autoRetryClaimToken,
+        now,
+      })) {
+        throw new Error('job automatic-retry wake claim was lost')
+      }
+    } else {
+      cancelScheduledWake(db, { jobId, userId, now })
+    }
     const counts = db.prepare(`
       SELECT COUNT(*) AS total,
              SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed
@@ -443,7 +584,8 @@ export function retryJobTransition({
       jobId,
       stepId: event.stepId || null,
       type: event.type,
-      message: event.message,
+      code: event.code,
+      params: event.params || {},
       payload: event.payload ?? null,
       now,
     })

@@ -8,6 +8,7 @@ import { LEGACY_SCHEMA_MIGRATIONS } from '../server/migrations/legacyCompatibili
 import {
   LATEST_SCHEMA_VERSION,
   createSchemaMigrationPlan,
+  hasColumn,
   runSchemaMigrations,
   schemaMigrations,
 } from '../server/migrations/index.js'
@@ -68,6 +69,99 @@ import { migrateToV103 } from '../server/migrations/v103RuntimePluginMutationBar
 import { migrateToV104 } from '../server/migrations/v104RuntimePluginMutationRecoveryReceipts.js'
 import { migrateToV106 } from '../server/migrations/v106EvolutionAutoLoop.js'
 
+function migrateThroughVersion(db, targetVersion) {
+  const plan = createSchemaMigrationPlan(LEGACY_SCHEMA_MIGRATIONS)
+  const metaExists = Boolean(db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
+  ).get())
+  let currentVersion = metaExists
+    ? Number(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value || 0)
+    : 0
+
+  for (const migration of plan) {
+    if (migration.version <= currentVersion) continue
+    if (migration.version > targetVersion) break
+    const applyMigration = () => {
+      migration.up(db)
+      db.prepare(`
+        INSERT INTO meta (key, value) VALUES ('schema_version', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).run(String(migration.version))
+    }
+    if (migration.atomicWithVersion) db.transaction(applyMigration).immediate()
+    else applyMigration()
+    currentVersion = migration.version
+  }
+  return currentVersion
+}
+
+function rebuildSessionsWithoutPrimaryKey(db) {
+  const tableSql = db.prepare(`
+    SELECT sql FROM sqlite_schema
+    WHERE type = 'table' AND name = 'sessions'
+  `).get()?.sql
+  assert.ok(tableSql, 'sessions table DDL must exist')
+  const replacementSql = tableSql
+    .replace(/^CREATE TABLE\s+sessions\b/u, 'CREATE TABLE sessions_without_primary_key')
+    .replace(/\btoken\s+TEXT\s+PRIMARY KEY\b/u, 'token TEXT NOT NULL')
+  assert.notEqual(replacementSql, tableSql, 'sessions primary key must be removed')
+
+  const columns = db.prepare('SELECT name FROM pragma_table_info(?) ORDER BY cid')
+    .all('sessions')
+    .map((row) => `"${String(row.name).replaceAll('"', '""')}"`)
+    .join(', ')
+  const sessionIndexes = db.prepare(`
+    SELECT sql FROM sqlite_schema
+    WHERE tbl_name = 'sessions'
+      AND type = 'index'
+      AND sql IS NOT NULL
+    ORDER BY name
+  `).all()
+  const triggers = db.prepare(`
+    SELECT name, sql FROM sqlite_schema
+    WHERE type = 'trigger' AND sql IS NOT NULL
+    ORDER BY name
+  `).all()
+  const foreignKeysEnabled = db.pragma('foreign_keys', { simple: true }) === 1
+  db.pragma('foreign_keys = OFF')
+  db.transaction(() => {
+    for (const entry of triggers) {
+      const name = `"${String(entry.name).replaceAll('"', '""')}"`
+      db.exec(`DROP TRIGGER ${name}`)
+    }
+    db.exec(replacementSql)
+    db.exec(`
+      INSERT INTO sessions_without_primary_key (${columns})
+      SELECT ${columns} FROM sessions
+    `)
+    db.exec('DROP TABLE sessions')
+    db.exec('ALTER TABLE sessions_without_primary_key RENAME TO sessions')
+    for (const entry of sessionIndexes) db.exec(entry.sql)
+    for (const entry of triggers) db.exec(entry.sql)
+  }).immediate()
+  if (foreignKeysEnabled) db.pragma('foreign_keys = ON')
+
+  assert.deepEqual(
+    db.prepare('SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk')
+      .all('sessions'),
+    [],
+  )
+}
+
+function migrationDatabaseSnapshot(db) {
+  return {
+    schema: db.prepare(`
+      SELECT type, name, tbl_name, sql
+      FROM sqlite_schema
+      WHERE name NOT LIKE 'sqlite_%'
+      ORDER BY type, name
+    `).all(),
+    meta: db.prepare('SELECT key, value FROM meta ORDER BY key').all(),
+    users: db.prepare('SELECT * FROM users ORDER BY id').all(),
+    sessions: db.prepare('SELECT * FROM sessions ORDER BY token').all(),
+  }
+}
+
 function createRuntimePluginMutationBarrierPrerequisites(db, {
   includePermissionGrants = true,
 } = {}) {
@@ -118,8 +212,13 @@ function createV106DraftDatabase({ unresolvedSessionScope = false } = {}) {
     CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     INSERT INTO meta VALUES ('schema_version', '106');
 
-    CREATE TABLE users (id TEXT PRIMARY KEY);
-    INSERT INTO users VALUES ('draft-user');
+    CREATE TABLE users (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    INSERT INTO users VALUES ('draft-user', 'draft-user@example.test', 1, 1);
 
     CREATE TABLE runtime_plugin_states (
       plugin_id TEXT PRIMARY KEY,
@@ -324,10 +423,10 @@ test('v107 repairs a pre-release v106 draft without losing persisted data', () =
   try {
     const before = draftV106DataSnapshot(db)
 
-    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.equal(migrateThroughVersion(db, 107), 107)
     assert.equal(
       db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-      String(LATEST_SCHEMA_VERSION),
+      '107',
     )
 
     const generations = db.prepare(`
@@ -389,7 +488,7 @@ test('v107 repairs a pre-release v106 draft without losing persisted data', () =
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
 
     const schemaAfterFirstRun = draftV106SchemaSnapshot(db)
-    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.equal(migrateThroughVersion(db, 107), 107)
     assert.deepEqual(draftV106SchemaSnapshot(db), schemaAfterFirstRun)
   } finally {
     db.close()
@@ -411,7 +510,7 @@ test('v107 preserves existing non-null automation run references', () => {
       WHERE id = ?
     `).run('canary-run', 'draft-promotion')
 
-    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.equal(migrateThroughVersion(db, 107), 107)
     assert.deepEqual(
       db.prepare(`
         SELECT id, decision_origin, automation_run_id
@@ -653,11 +752,709 @@ test('schema migration registry is contiguous and owns the latest version', () =
 
   assert.deepEqual(
     plan.map(({ version }) => version),
-    Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
+    Array.from({ length: LATEST_SCHEMA_VERSION }, (_, index) => index + 1),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 107)
+  assert.equal(LATEST_SCHEMA_VERSION, 112)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v109 adds nullable workspace metadata without changing existing Session data', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    assert.equal(migrateThroughVersion(db, 108), 108)
+    assert.equal(hasColumn(db, 'sessions', 'workspace_path'), false)
+    db.prepare(`
+      INSERT INTO users (id, email, created_at, updated_at)
+      VALUES (?, ?, ?, ?)
+    `).run('owner-v109', 'owner-v109@example.test', 1, 1)
+    db.prepare(`
+      INSERT INTO sessions
+        (token, id, user_id, title, expires_at, created_at, updated_at, revision)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run('session-v109', 'session-v109', 'owner-v109', 'preserved title', 99, 2, 3, 7)
+    db.prepare(`
+      INSERT INTO messages
+        (id, session_id, user_id, role, content, session_title, model_context_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run('message-v109', 'session-v109', 'owner-v109', 'user', 'preserved content', 'preserved title', '{}', 2, 3)
+    const sessionBeforeMigration = db.prepare(`
+      SELECT token, title, revision
+      FROM sessions WHERE token = ?
+    `).get('session-v109')
+
+    assert.equal(migrateThroughVersion(db, 109), 109)
+    assert.deepEqual(
+      db.prepare(`
+        SELECT token, title, revision, workspace_path
+        FROM sessions WHERE token = ?
+      `).get('session-v109'),
+      { ...sessionBeforeMigration, workspace_path: null },
+    )
+    assert.deepEqual(
+      db.prepare('SELECT id, content FROM messages WHERE id = ?').get('message-v109'),
+      { id: 'message-v109', content: 'preserved content' },
+    )
+    db.prepare('UPDATE sessions SET workspace_path = ? WHERE token = ?')
+      .run('C:\\Preserved', 'session-v109')
+    assert.equal(migrateThroughVersion(db, 109), 109)
+    assert.equal(
+      db.prepare('SELECT workspace_path FROM sessions WHERE token = ?').get('session-v109').workspace_path,
+      'C:\\Preserved',
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v110 keeps existing jobs opted out and persists the auto-retry wake discriminator', () => {
+  const db = new Database(':memory:')
+  try {
+    assert.equal(migrateThroughVersion(db, 109), 109)
+    db.prepare(`
+      INSERT INTO users (id, email, created_at, updated_at)
+      VALUES ('owner-v110', 'owner-v110@example.test', 1, 1)
+    `).run()
+    db.prepare(`
+      INSERT INTO jobs (id, user_id, title, prompt, status, progress, created_at, updated_at)
+      VALUES ('job-v110', 'owner-v110', 'Existing job', 'Preserve me', 'queued', 0, 2, 2)
+    `).run()
+
+    assert.equal(migrateThroughVersion(db, 110), 110)
+    assert.deepEqual(db.prepare(`
+      SELECT auto_retry_enabled, auto_retry_max_attempts, auto_retry_attempts,
+             auto_retry_base_delay_ms
+        FROM jobs WHERE id = 'job-v110'
+    `).get(), {
+      auto_retry_enabled: 0,
+      auto_retry_max_attempts: 0,
+      auto_retry_attempts: 0,
+      auto_retry_base_delay_ms: 1_000,
+    })
+    assert.equal(hasColumn(db, 'job_wakeups', 'wake_kind'), true)
+    assert.equal(migrateThroughVersion(db, 110), 110)
+  } finally {
+    db.close()
+  }
+})
+
+test('v111 adds code-only Job event localization fields without rewriting legacy messages', () => {
+  const db = new Database(':memory:')
+  try {
+    assert.equal(migrateThroughVersion(db, 110), 110)
+    db.prepare(`
+      INSERT INTO users (id, email, created_at, updated_at)
+      VALUES ('owner-v111', 'owner-v111@example.test', 1, 1)
+    `).run()
+    db.prepare(`
+      INSERT INTO jobs (id, user_id, title, prompt, status, progress, created_at, updated_at)
+      VALUES ('job-v111', 'owner-v111', 'Existing job', 'Preserve me', 'queued', 0, 2, 2)
+    `).run()
+    db.prepare(`
+      INSERT INTO job_events (job_id, type, message, payload_json, created_at)
+      VALUES ('job-v111', 'created', 'Legacy persisted copy', '{"legacy":true}', 3)
+    `).run()
+
+    assert.equal(migrateThroughVersion(db, 111), 111)
+    assert.equal(hasColumn(db, 'job_events', 'code'), true)
+    assert.equal(hasColumn(db, 'job_events', 'params_json'), true)
+    assert.deepEqual(db.prepare(`
+      SELECT message, code, params_json, payload_json
+      FROM job_events WHERE job_id = 'job-v111'
+    `).get(), {
+      message: 'Legacy persisted copy',
+      code: null,
+      params_json: null,
+      payload_json: '{"legacy":true}',
+    })
+    assert.equal(migrateThroughVersion(db, 111), 111)
+  } finally {
+    db.close()
+  }
+})
+
+test('v112 adds nullable fenced auto-retry wake claims without rewriting existing wakes', () => {
+  const db = new Database(':memory:')
+  try {
+    assert.equal(migrateThroughVersion(db, 111), 111)
+    assert.equal(hasColumn(db, 'job_wakeups', 'claim_token'), false)
+
+    db.exec(`
+      INSERT INTO users (id, email, created_at, updated_at)
+      VALUES ('wake-owner-v112', 'wake-owner-v112@example.test', 1, 1);
+      INSERT INTO jobs (
+        id, user_id, title, prompt, model_name, source_type, status,
+        progress, created_at, updated_at
+      ) VALUES (
+        'job-v112', 'wake-owner-v112', 'wake', 'wake', 'model', 'manual',
+        'waiting', 0, 1, 1
+      );
+      INSERT INTO job_steps (
+        id, job_id, kind, title, status, sort_order, created_at, updated_at
+      ) VALUES (
+        'step-v112', 'job-v112', 'execute', 'wake', 'failed', 0, 1, 1
+      );
+      INSERT INTO job_wakeups (
+        job_id, step_id, user_id, wake_at, reason, wake_kind, status,
+        created_at, updated_at, fired_at
+      ) VALUES (
+        'job-v112', 'step-v112', 'wake-owner-v112', 10, 'preserve-me',
+        'auto_retry', 'scheduled', 1, 2, NULL
+      );
+    `)
+
+    assert.equal(migrateThroughVersion(db, 112), 112)
+    assert.equal(hasColumn(db, 'job_wakeups', 'claim_token'), true)
+    assert.deepEqual(db.prepare(`
+      SELECT job_id, step_id, wake_at, reason, wake_kind, status, claim_token
+      FROM job_wakeups WHERE job_id = 'job-v112'
+    `).get(), {
+      job_id: 'job-v112',
+      step_id: 'step-v112',
+      wake_at: 10,
+      reason: 'preserve-me',
+      wake_kind: 'auto_retry',
+      status: 'scheduled',
+      claim_token: null,
+    })
+    assert.equal(migrateThroughVersion(db, 112), 112)
+  } finally {
+    db.close()
+  }
+})
+
+test('v112 rolls back its claim column when schema-version persistence fails', () => {
+  const db = new Database(':memory:')
+  try {
+    assert.equal(migrateThroughVersion(db, 111), 111)
+    db.exec(`
+      CREATE TRIGGER fail_v112_schema_version
+      BEFORE UPDATE OF value ON meta
+      WHEN OLD.key = 'schema_version' AND NEW.value = '112'
+      BEGIN
+        SELECT RAISE(ABORT, 'reject v112 schema version');
+      END;
+    `)
+
+    assert.throws(() => runSchemaMigrations(db), /reject v112 schema version/u)
+    assert.equal(hasColumn(db, 'job_wakeups', 'claim_token'), false)
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '111',
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v109 fails closed on a missing or malformed Session table without advancing the version', () => {
+  const missingTable = new Database(':memory:')
+  try {
+    assert.equal(migrateThroughVersion(missingTable, 108), 108)
+    missingTable.pragma('foreign_keys = OFF')
+    missingTable.exec('DROP TABLE sessions')
+    assert.throws(
+      () => runSchemaMigrations(missingTable),
+      (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+        && error?.details?.stage === 'migration-v109'
+        && error?.details?.missing?.includes('table:sessions'),
+    )
+    assert.equal(
+      missingTable.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '108',
+    )
+  } finally {
+    missingTable.close()
+  }
+
+  const malformedColumn = new Database(':memory:')
+  try {
+    assert.equal(migrateThroughVersion(malformedColumn, 108), 108)
+    malformedColumn.exec(`
+      ALTER TABLE sessions
+      ADD COLUMN workspace_path INTEGER NOT NULL DEFAULT 0
+    `)
+    assert.throws(
+      () => runSchemaMigrations(malformedColumn),
+      (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+        && error?.details?.stage === 'migration-v109'
+        && error?.details?.missing?.includes('column-type:sessions.workspace_path')
+        && error?.details?.missing?.includes('column-nullability:sessions.workspace_path'),
+    )
+    assert.equal(
+      malformedColumn.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '108',
+    )
+  } finally {
+    malformedColumn.close()
+  }
+})
+
+test('v109 rolls back its ALTER TABLE when schema-version persistence fails', () => {
+  const db = new Database(':memory:')
+  try {
+    assert.equal(migrateThroughVersion(db, 108), 108)
+    db.exec(`
+      CREATE TRIGGER fail_v109_version
+      BEFORE UPDATE OF value ON meta
+      WHEN OLD.key = 'schema_version' AND NEW.value = '109'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected v109 version failure');
+      END;
+    `)
+
+    assert.throws(() => runSchemaMigrations(db), /injected v109 version failure/u)
+    assert.equal(hasColumn(db, 'sessions', 'workspace_path'), false)
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '108',
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v108 folds legacy bootstrap adjuncts into the primary registry without data loss', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    assert.equal(migrateThroughVersion(db, 107), 107)
+    db.exec(`
+      INSERT INTO meta VALUES ('reasonix_schema_version', '2');
+      INSERT INTO users (id, email, created_at, updated_at)
+        VALUES ('owner-v108', 'owner-v108@example.com', 1, 1);
+      CREATE TABLE pinned_memories (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL DEFAULT 'user',
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tokens INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO pinned_memories VALUES (
+        'memory-v108', 'owner-v108', 'user', 'keep', 'preserved', 3, 1, 2, 3
+      );
+      CREATE TABLE session_meters (
+        session_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tokens_in INTEGER NOT NULL DEFAULT 0,
+        tokens_out INTEGER NOT NULL DEFAULT 0,
+        tokens_cached INTEGER NOT NULL DEFAULT 0,
+        turns INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO session_meters VALUES ('session-v108', 'owner-v108', 5, 7, 2, 1, 4);
+    `)
+
+    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      String(LATEST_SCHEMA_VERSION),
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'reasonix_schema_version'").get(),
+      undefined,
+    )
+    assert.deepEqual(
+      db.prepare('SELECT id, content FROM pinned_memories').get(),
+      { id: 'memory-v108', content: 'preserved' },
+    )
+    assert.deepEqual(
+      db.prepare('SELECT tokens_in, tokens_out, tokens_cached, turns FROM session_meters').get(),
+      { tokens_in: 5, tokens_out: 7, tokens_cached: 2, turns: 1 },
+    )
+    for (const table of ['user_tool_permissions', 'todos', 'effort_settings']) {
+      assert.ok(db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+      ).get(table), table)
+    }
+    assert.ok(hasColumn(db, 'users', 'password_hash'))
+    assert.ok(hasColumn(db, 'sessions', 'workspace_path'))
+    const schema = db.prepare(`
+      SELECT type, name, sql FROM sqlite_schema
+      WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name
+    `).all()
+    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.deepEqual(db.prepare(`
+      SELECT type, name, sql FROM sqlite_schema
+      WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name
+    `).all(), schema)
+  } finally {
+    db.close()
+  }
+})
+
+test('v108 rejects a missing session identity key and rolls back every migration write', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    assert.equal(migrateThroughVersion(db, 107), 107)
+    db.exec(`
+      INSERT INTO meta (key, value) VALUES ('reasonix_schema_version', '2');
+      INSERT INTO users (id, email, created_at, updated_at)
+        VALUES ('session-owner', 'session-owner@example.test', 1, 1);
+      INSERT INTO sessions (token, user_id, expires_at, created_at)
+        VALUES ('preserved-session', 'session-owner', 2, 1);
+    `)
+    rebuildSessionsWithoutPrimaryKey(db)
+
+    for (const table of ['pinned_memories', 'todos']) {
+      assert.equal(db.prepare(`
+        SELECT 1 FROM sqlite_schema
+        WHERE type = 'table' AND name = ?
+      `).get(table), undefined)
+    }
+    const before = migrationDatabaseSnapshot(db)
+
+    assert.throws(
+      () => runSchemaMigrations(db),
+      (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+        && error?.details?.stage === 'migration-v108'
+        && error?.details?.missing?.includes('primary-key:sessions'),
+    )
+
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '107',
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'reasonix_schema_version'").get().value,
+      '2',
+    )
+    for (const table of ['pinned_memories', 'todos']) {
+      assert.equal(db.prepare(`
+        SELECT 1 FROM sqlite_schema
+        WHERE type = 'table' AND name = ?
+      `).get(table), undefined)
+    }
+    assert.deepEqual(migrationDatabaseSnapshot(db), before)
+  } finally {
+    db.close()
+  }
+})
+
+test('v108 rolls back bootstrap convergence and version advancement for an unprovable legacy table', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '107');
+      INSERT INTO meta VALUES ('reasonix_schema_version', '2');
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE pinned_memories (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `)
+
+    assert.throws(
+      () => runSchemaMigrations(db),
+      (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+        && error?.details?.stage === 'migration-v108'
+        && error?.details?.missing?.includes('column:pinned_memories.content')
+        && error?.details?.missing?.includes('foreign-key:pinned_memories.user_id'),
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '107',
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'reasonix_schema_version'").get().value,
+      '2',
+    )
+    assert.equal(hasColumn(db, 'users', 'password_hash'), false)
+    assert.equal(db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'todos'",
+    ).get(), undefined)
+  } finally {
+    db.close()
+  }
+})
+
+test('v108 rejects a required index name attached to the wrong table without advancing the version', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '107');
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE index_name_collision (user_id TEXT NOT NULL);
+      CREATE INDEX idx_user_tool_permissions_user
+        ON index_name_collision(user_id);
+    `)
+
+    assert.throws(
+      () => runSchemaMigrations(db),
+      (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+        && error?.details?.stage === 'migration-v108'
+        && error?.details?.missing?.includes('index:idx_user_tool_permissions_user'),
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '107',
+    )
+    assert.equal(hasColumn(db, 'users', 'password_hash'), false)
+    assert.equal(db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'todos'",
+    ).get(), undefined)
+  } finally {
+    db.close()
+  }
+})
+
+test('v108 rejects a unique todos status index and rolls back every migration write', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    assert.equal(migrateThroughVersion(db, 107), 107)
+    db.exec(`
+      INSERT INTO meta (key, value) VALUES ('reasonix_schema_version', '2');
+      CREATE TABLE todos (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        priority INTEGER NOT NULL DEFAULT 0,
+        project TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER
+      );
+      CREATE UNIQUE INDEX idx_todos_user_status
+        ON todos(user_id, status, priority DESC);
+    `)
+    const before = migrationDatabaseSnapshot(db)
+
+    assert.throws(
+      () => runSchemaMigrations(db),
+      (error) => {
+        assert.equal(error?.code, 'DB_SCHEMA_INCOMPLETE')
+        assert.equal(error?.details?.stage, 'migration-v108')
+        assert.deepEqual(error?.details?.missing, ['index-unique:idx_todos_user_status'])
+        return true
+      },
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '107',
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'reasonix_schema_version'").get().value,
+      '2',
+    )
+    assert.deepEqual(migrationDatabaseSnapshot(db), before)
+  } finally {
+    db.close()
+  }
+})
+
+test('v108 rejects a partial todos status index and rolls back every migration write', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    assert.equal(migrateThroughVersion(db, 107), 107)
+    db.exec(`
+      INSERT INTO meta (key, value) VALUES ('reasonix_schema_version', '2');
+      CREATE TABLE todos (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        priority INTEGER NOT NULL DEFAULT 0,
+        project TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER
+      );
+      CREATE INDEX idx_todos_user_status
+        ON todos(user_id, status, priority DESC)
+        WHERE status != 'completed';
+    `)
+    const before = migrationDatabaseSnapshot(db)
+
+    assert.throws(
+      () => runSchemaMigrations(db),
+      (error) => {
+        assert.equal(error?.code, 'DB_SCHEMA_INCOMPLETE')
+        assert.equal(error?.details?.stage, 'migration-v108')
+        assert.deepEqual(error?.details?.missing, ['index-partial:idx_todos_user_status'])
+        return true
+      },
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '107',
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'reasonix_schema_version'").get().value,
+      '2',
+    )
+    assert.deepEqual(migrationDatabaseSnapshot(db), before)
+  } finally {
+    db.close()
+  }
+})
+
+test('v108 rejects complete bootstrap tables whose declared primary keys are missing', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '107');
+      INSERT INTO meta VALUES ('reasonix_schema_version', '2');
+      CREATE TABLE users (
+        id TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE user_tool_permissions (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tool_name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE pinned_memories (
+        id TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL DEFAULT 'user',
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tokens INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE todos (
+        id TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        priority INTEGER NOT NULL DEFAULT 0,
+        project TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER
+      );
+      CREATE TABLE effort_settings (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        effort TEXT NOT NULL DEFAULT 'medium',
+        max_steps INTEGER NOT NULL DEFAULT 12,
+        reasoning_depth INTEGER NOT NULL DEFAULT 2,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_meters (
+        session_id TEXT NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tokens_in INTEGER NOT NULL DEFAULT 0,
+        tokens_out INTEGER NOT NULL DEFAULT 0,
+        tokens_cached INTEGER NOT NULL DEFAULT 0,
+        turns INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
+    `)
+
+    const requiredPrimaryKeys = [
+      'primary-key:users',
+      'primary-key:user_tool_permissions',
+      'primary-key:pinned_memories',
+      'primary-key:todos',
+      'primary-key:effort_settings',
+      'primary-key:session_meters',
+    ]
+    assert.throws(
+      () => runSchemaMigrations(db),
+      (error) => {
+        assert.equal(error?.code, 'DB_SCHEMA_INCOMPLETE')
+        assert.equal(error?.details?.stage, 'migration-v108')
+        for (const key of requiredPrimaryKeys) {
+          assert.ok(error?.details?.missing?.includes(key), key)
+        }
+        return true
+      },
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '107',
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'reasonix_schema_version'").get().value,
+      '2',
+    )
+    assert.equal(hasColumn(db, 'users', 'password_hash'), false)
+    assert.equal(db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_user_tool_permissions_user'",
+    ).get(), undefined)
+  } finally {
+    db.close()
+  }
+})
+
+test('v108 rejects users without a complete email uniqueness key and rolls back all writes', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta VALUES ('schema_version', '107');
+      INSERT INTO meta VALUES ('reasonix_schema_version', '2');
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO users VALUES ('owner-a', 'shared@example.test', 1, 1);
+      INSERT INTO users VALUES ('owner-b', 'shared@example.test', 2, 2);
+      CREATE UNIQUE INDEX idx_users_email_with_id ON users(email, id);
+      CREATE UNIQUE INDEX idx_users_email_partial
+        ON users(email) WHERE id = 'owner-a';
+    `)
+
+    assert.throws(
+      () => runSchemaMigrations(db),
+      (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+        && error?.details?.stage === 'migration-v108'
+        && error?.details?.missing?.includes('unique-key:users.email'),
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '107',
+    )
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'reasonix_schema_version'").get().value,
+      '2',
+    )
+    assert.equal(hasColumn(db, 'users', 'password_hash'), false)
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS count FROM users WHERE email = ?')
+        .get('shared@example.test').count,
+      2,
+    )
+    assert.equal(db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user_tool_permissions'",
+    ).get(), undefined)
+  } finally {
+    db.close()
+  }
 })
 
 test('v95 removes only retired account fields and preserves local runtime data', () => {
@@ -786,12 +1583,24 @@ test('v95 rolls back every schema change and version write when a retired column
     db.exec(`
       CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       INSERT INTO meta VALUES ('schema_version', '94');
-      CREATE TABLE users (id TEXT PRIMARY KEY, credits INTEGER NOT NULL DEFAULT 0, keep TEXT);
+      CREATE TABLE users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        credits INTEGER NOT NULL DEFAULT 0,
+        keep TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
       CREATE TABLE ledger (id TEXT PRIMARY KEY, keep TEXT);
       CREATE TABLE session_meters (
         session_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         cost_credits INTEGER NOT NULL DEFAULT 0,
-        tokens_in INTEGER NOT NULL DEFAULT 0
+        tokens_in INTEGER NOT NULL DEFAULT 0,
+        tokens_out INTEGER NOT NULL DEFAULT 0,
+        tokens_cached INTEGER NOT NULL DEFAULT 0,
+        turns INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
       );
       CREATE INDEX block_cost_credit_drop ON session_meters(cost_credits);
       CREATE TABLE subagent_runs (id TEXT PRIMARY KEY, credits INTEGER, status TEXT);
@@ -802,28 +1611,35 @@ test('v95 rolls back every schema change and version write when a retired column
       CREATE TABLE evolution_approval_decisions (id TEXT PRIMARY KEY);
       CREATE TABLE evolution_canary_releases (id TEXT PRIMARY KEY);
       CREATE TABLE evolution_promotions (id TEXT PRIMARY KEY);
-      INSERT INTO users VALUES ('owner', 5, 'user-data');
+      INSERT INTO users VALUES ('owner', 'owner@example.test', 5, 'user-data', 1, 1);
       INSERT INTO ledger VALUES ('ledger', 'ledger-data');
-      INSERT INTO session_meters VALUES ('meter', 6, 7);
+      INSERT INTO session_meters VALUES ('meter', 'owner', 6, 7, 0, 0, 0, 1);
       INSERT INTO subagent_runs VALUES ('run', 8, 'complete');
     `)
     createRuntimePluginMutationBarrierPrerequisites(db, { includePermissionGrants: false })
 
-    assert.throws(() => runSchemaMigrations(db), /cost_credits|error in index/u)
+    assert.throws(() => migrateThroughVersion(db, 95), /cost_credits|error in index/u)
     assert.equal(db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value, '94')
     assert.equal(Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ledger'").get()), true)
     assert.equal(db.prepare('PRAGMA table_info(users)').all().some((row) => row.name === 'credits'), true)
     assert.equal(db.prepare('PRAGMA table_info(session_meters)').all().some((row) => row.name === 'cost_credits'), true)
     assert.equal(db.prepare('PRAGMA table_info(subagent_runs)').all().some((row) => row.name === 'credits'), true)
-    assert.deepEqual(db.prepare('SELECT * FROM users').get(), { id: 'owner', credits: 5, keep: 'user-data' })
+    assert.deepEqual(db.prepare('SELECT * FROM users').get(), {
+      id: 'owner',
+      email: 'owner@example.test',
+      credits: 5,
+      keep: 'user-data',
+      created_at: 1,
+      updated_at: 1,
+    })
     assert.deepEqual(db.prepare('SELECT * FROM ledger').get(), { id: 'ledger', keep: 'ledger-data' })
 
     db.exec('DROP INDEX block_cost_credit_drop')
-    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
-    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.equal(migrateThroughVersion(db, 95), 95)
+    assert.equal(migrateThroughVersion(db, 95), 95)
     assert.equal(
       db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-      String(LATEST_SCHEMA_VERSION),
+      '95',
     )
     assert.deepEqual(db.prepare('SELECT * FROM ledger').get(), { id: 'ledger', keep: 'ledger-data' })
   } finally {
@@ -3201,27 +4017,7 @@ test('schema migration runner rejects invalid and future versions before migrati
 test('schema migration registry upgrades a v30 database through every registered migration', () => {
   const db = new Database(':memory:')
   try {
-    db.exec(`
-      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      INSERT INTO meta (key, value) VALUES ('schema_version', '30');
-      CREATE TABLE users (id TEXT PRIMARY KEY);
-      CREATE TABLE sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL);
-      CREATE TABLE mcp_servers (id TEXT PRIMARY KEY);
-      CREATE TABLE model_providers (id TEXT PRIMARY KEY);
-      CREATE TABLE turn_events (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        turn_id TEXT NOT NULL,
-        sequence INTEGER NOT NULL,
-        type TEXT NOT NULL,
-        payload_json TEXT NOT NULL DEFAULT '{}',
-        created_at INTEGER NOT NULL
-      );
-      CREATE UNIQUE INDEX idx_turn_events_fixture_replay
-        ON turn_events(user_id, session_id, turn_id, sequence);
-      CREATE TABLE jobs (id TEXT PRIMARY KEY);
-    `)
+    assert.equal(migrateThroughVersion(db, 30), 30)
 
     assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
     assert.equal(

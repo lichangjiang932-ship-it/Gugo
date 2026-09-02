@@ -135,9 +135,27 @@ test('LSP diagnostics show bounded readiness states without reading sensitive co
         enabled: true,
         providerCount: 2,
         reason: 'query_failed',
+        code: 'LSP_PROCESS_FAILED',
+      },
+      expected: [/首次查询执行失败/, /无法启动或完成/, /2 个语言服务器提供方仍已配置/],
+    },
+    {
+      status: {
+        enabled: true,
+        providerCount: 2,
+        reason: 'query_failed',
+        code: 'LSP_PROCESS_BACKOFF',
+      },
+      expected: [/首次查询执行失败/, /无法启动或完成/, /2 个语言服务器提供方仍已配置/],
+    },
+    {
+      status: {
+        enabled: true,
+        providerCount: 2,
+        reason: 'query_failed',
         code: 'LSP_MALFORMED_RESPONSE',
       },
-      expected: [/运行异常/, /最近一次 LSP 查询失败/, /2 个语言服务器提供方仍已配置/],
+      expected: [/协议失败/, /无效或不兼容的协议响应/, /2 个语言服务器提供方仍已配置/],
     },
     {
       status: { enabled: true, providerCount: 2, reason: 'configured' },

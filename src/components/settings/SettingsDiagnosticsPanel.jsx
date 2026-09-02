@@ -22,15 +22,19 @@ const LSP_INITIALIZATION_CODES = Object.freeze([
   'LSP_PROVIDER_INIT_FAILED',
 ])
 
-const LSP_QUERY_FAILURE_CODES = Object.freeze([
-  'LSP_MALFORMED_RESPONSE',
+const LSP_EXECUTION_FAILURE_CODES = Object.freeze([
+  'LSP_PROCESS_BACKOFF',
   'LSP_PROCESS_EXITED',
   'LSP_PROCESS_FAILED',
   'LSP_PROVIDER_FAILED',
-  'LSP_RESPONSE_TOO_LARGE',
-  'LSP_SERVER_ERROR',
   'LSP_TIMEOUT',
   'LSP_TRANSPORT_FAILED',
+])
+
+const LSP_PROTOCOL_FAILURE_CODES = Object.freeze([
+  'LSP_MALFORMED_RESPONSE',
+  'LSP_RESPONSE_TOO_LARGE',
+  'LSP_SERVER_ERROR',
 ])
 
 function resolveLspPresentation(lspHost) {
@@ -59,7 +63,23 @@ function resolveLspPresentation(lspHost) {
       statusKey: 'settings.lspInitializationFailed',
     }
   }
-  if (reason === 'query_failed' || LSP_QUERY_FAILURE_CODES.includes(code)) {
+  if (reason === 'query_failed' && LSP_EXECUTION_FAILURE_CODES.includes(code)) {
+    return {
+      descriptionKey: 'settings.lspExecutionFailedDescription',
+      ok: false,
+      providerCount,
+      statusKey: 'settings.lspExecutionFailed',
+    }
+  }
+  if (reason === 'query_failed' && LSP_PROTOCOL_FAILURE_CODES.includes(code)) {
+    return {
+      descriptionKey: 'settings.lspProtocolFailedDescription',
+      ok: false,
+      providerCount,
+      statusKey: 'settings.lspProtocolFailed',
+    }
+  }
+  if (reason === 'query_failed') {
     return {
       descriptionKey: 'settings.lspQueryFailedDescription',
       ok: false,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { DEFAULT_MESSAGE_WINDOW_SIZE, getExpandedWindowCount, getMessageWindow } from '../../../lib/messageWindow.js'
+import { DEFAULT_MESSAGE_WINDOW_SIZE, getAnchoredWindowStart, getMessageWindow } from '../../../lib/messageWindow.js'
 
 function directoryRequestKey(messages) {
   const message = messages[messages.length - 1]
@@ -16,9 +16,31 @@ function directoryRequestKey(messages) {
   ].join(':')
 }
 
-export default function useChatMessageViewport({ messages, onQuoteSelection }) {
-  const [visibleCount, setVisibleCount] = useState(DEFAULT_MESSAGE_WINDOW_SIZE)
-  const { hiddenCount, visibleMessages } = getMessageWindow(messages, visibleCount)
+function scrollElementToBottom(element, behavior = 'smooth') {
+  if (typeof element?.scrollTo === 'function') {
+    element.scrollTo({ top: element.scrollHeight, behavior })
+    return
+  }
+  if (element) element.scrollTop = element.scrollHeight
+}
+
+function routeMessageTarget(routeHash) {
+  if (!String(routeHash || '').startsWith('#message-')) return null
+  try {
+    const messageId = decodeURIComponent(String(routeHash).slice('#message-'.length))
+    return messageId ? { messageId, targetId: `message-${messageId}` } : null
+  } catch {
+    return null
+  }
+}
+
+export default function useChatMessageViewport({ messages, onQuoteSelection, routeHash = '' }) {
+  const [windowStart, setWindowStart] = useState(null)
+  const { hiddenCount, hiddenAfterCount, visibleMessages } = getMessageWindow(
+    messages,
+    DEFAULT_MESSAGE_WINDOW_SIZE,
+    windowStart,
+  )
   const [quoteBubble, setQuoteBubble] = useState(null)
   const scrollRef = useRef(null)
   const containerRef = useRef(null)
@@ -27,6 +49,7 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
   const lastCountRef = useRef(messages.length)
   const lastDirectoryRequestKeyRef = useRef(directoryRequestKey(messages))
   const pendingScrollRestoreRef = useRef(null)
+  const pendingScrollBottomRef = useRef(false)
   const pendingTurnIndexRef = useRef(null)
   const [activeTurnIndex, setActiveTurnIndex] = useState(null)
 
@@ -54,12 +77,18 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
 
   useLayoutEffect(() => {
     const element = scrollRef.current
-    if (!element || (typeof window !== 'undefined' && window.location.hash.startsWith('#message-'))) return
+    if (!element || routeMessageTarget(routeHash)) return
     element.scrollTop = element.scrollHeight
-  }, [])
+  }, [routeHash])
   useLayoutEffect(() => {
     const element = scrollRef.current
     if (!element) return
+    if (pendingScrollBottomRef.current) {
+      pendingScrollBottomRef.current = false
+      scrollElementToBottom(element)
+      updateActiveTurn()
+      return
+    }
     const pendingTurnIndex = pendingTurnIndexRef.current
     if (pendingTurnIndex != null) {
       const target = element.querySelector(`[data-chat-turn-index="${pendingTurnIndex}"]`)
@@ -72,9 +101,13 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
     }
     const pending = pendingScrollRestoreRef.current
     if (!pending) return
-    element.scrollTop = pending.top + (element.scrollHeight - pending.height)
+    const anchor = element.querySelector(`[data-chat-message-index="${pending.index}"]`)
+    if (anchor) {
+      const nextOffset = anchor.getBoundingClientRect().top - element.getBoundingClientRect().top
+      element.scrollTop += nextOffset - pending.offset
+    }
     pendingScrollRestoreRef.current = null
-  }, [visibleCount, updateActiveTurn])
+  }, [hiddenCount, updateActiveTurn])
   useEffect(() => {
     const element = scrollRef.current
     if (!element) return undefined
@@ -97,27 +130,31 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
     const nextDirectoryRequestKey = directoryRequestKey(messages)
     const directoryRequestAppeared = !!nextDirectoryRequestKey
       && nextDirectoryRequestKey !== lastDirectoryRequestKeyRef.current
-    if ((grew || streaming || directoryRequestAppeared) && atBottomRef.current) {
+    if ((grew || streaming || directoryRequestAppeared) && hiddenAfterCount === 0 && atBottomRef.current) {
       element.scrollTop = element.scrollHeight
     }
     lastCountRef.current = messages.length
     lastDirectoryRequestKeyRef.current = nextDirectoryRequestKey
-  }, [messages])
+  }, [hiddenAfterCount, messages])
   useLayoutEffect(() => {
     updateActiveTurn()
-  }, [messages, updateActiveTurn, visibleCount])
+  }, [hiddenCount, messages, updateActiveTurn])
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.location.hash.startsWith('#message-')) return undefined
-    const targetId = decodeURIComponent(window.location.hash.slice(1))
-    const messageId = targetId.slice('message-'.length)
+    if (typeof window === 'undefined') return undefined
+    const target = routeMessageTarget(routeHash)
+    if (!target) return undefined
+    const { messageId, targetId } = target
     const targetIndex = messages.findIndex((message) => String(message?.id) === messageId)
-    if (targetIndex >= 0 && targetIndex < hiddenCount) {
-      const timer = window.setTimeout(() => setVisibleCount(getExpandedWindowCount(messages.length, targetIndex)), 0)
+    const visibleEnd = hiddenCount + visibleMessages.length
+    if (targetIndex >= 0 && (targetIndex < hiddenCount || targetIndex >= visibleEnd)) {
+      const timer = window.setTimeout(() => {
+        setWindowStart(getAnchoredWindowStart(messages.length, targetIndex))
+      }, 0)
       return () => window.clearTimeout(timer)
     }
     const timer = window.setTimeout(() => document.getElementById(targetId)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 80)
     return () => window.clearTimeout(timer)
-  }, [messages, hiddenCount])
+  }, [hiddenCount, messages, routeHash, visibleMessages.length])
   useEffect(() => {
     const handleSelectionChange = () => {
       const selection = typeof window !== 'undefined' ? window.getSelection() : null
@@ -144,17 +181,33 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
   const bindContainer = (element) => { scrollRef.current = element; containerRef.current = element }
   const loadEarlierMessages = () => {
     const element = scrollRef.current
-    if (element) pendingScrollRestoreRef.current = { height: element.scrollHeight, top: element.scrollTop }
-    setVisibleCount((count) => Math.min(messages.length, count + DEFAULT_MESSAGE_WINDOW_SIZE))
+    const anchor = element?.querySelector(`[data-chat-message-index="${hiddenCount}"]`)
+    if (element && anchor) {
+      pendingScrollRestoreRef.current = {
+        index: hiddenCount,
+        offset: anchor.getBoundingClientRect().top - element.getBoundingClientRect().top,
+      }
+    }
+    setWindowStart(Math.max(0, hiddenCount - Math.floor(DEFAULT_MESSAGE_WINDOW_SIZE / 2)))
   }
-  const scrollToBottom = () => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+  const scrollToBottom = () => {
+    const element = scrollRef.current
+    if (!element) return
+    if (hiddenAfterCount > 0) {
+      pendingScrollBottomRef.current = true
+      setWindowStart(null)
+      return
+    }
+    scrollElementToBottom(element)
+  }
   const scrollToTurn = (messageIndex) => {
     const element = scrollRef.current
     if (!element || !Number.isInteger(messageIndex)) return
     setActiveTurnIndex(messageIndex)
-    if (messageIndex < hiddenCount) {
+    const visibleEnd = hiddenCount + visibleMessages.length
+    if (messageIndex < hiddenCount || messageIndex >= visibleEnd) {
       pendingTurnIndexRef.current = messageIndex
-      setVisibleCount(getExpandedWindowCount(messages.length, messageIndex))
+      setWindowStart(getAnchoredWindowStart(messages.length, messageIndex))
       return
     }
     element.querySelector(`[data-chat-turn-index="${messageIndex}"]`)
@@ -166,5 +219,16 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
     setQuoteBubble(null)
     if (typeof window !== 'undefined') window.getSelection()?.removeAllRanges()
   }
-  return { hiddenCount, visibleMessages, quoteBubble, atBottom, activeTurnIndex, bindContainer, loadEarlierMessages, scrollToBottom, scrollToTurn, quoteSelection }
+  return {
+    hiddenCount,
+    visibleMessages,
+    quoteBubble,
+    atBottom: hiddenAfterCount === 0 && atBottom,
+    activeTurnIndex,
+    bindContainer,
+    loadEarlierMessages,
+    scrollToBottom,
+    scrollToTurn,
+    quoteSelection,
+  }
 }

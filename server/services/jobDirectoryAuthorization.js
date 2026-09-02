@@ -203,7 +203,7 @@ export function resumeJobDirectoryAuthorization({
         jobId,
         stepId,
         type: 'directory_authorization_resumed',
-        message: 'Directory authorization verified; the suspended task has been requeued',
+        code: 'JOB_DIRECTORY_AUTHORIZATION_RESUMED',
         payload: {
           ...mergePersistedJobOutcomeFields(
             latestSuspension.payload,

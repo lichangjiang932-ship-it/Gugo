@@ -1,8 +1,18 @@
 import { runJobRuntimeStepExecution } from './jobRuntimeStepExecution.js'
 
+const DETERMINISTIC_AUTO_RETRY_BLOCKERS = new Set([
+  'JOB_AUTO_RETRY_SIDE_EFFECT_UNKNOWN',
+  'JOB_PLAN_APPROVAL_REQUIRED',
+  'JOB_STEP_RETRY_STATUS_INVALID',
+  'MODEL_AUTH_FAILED',
+  'MODEL_CONFIG_MISSING',
+  'MODEL_PROVIDER_NOT_FOUND',
+])
+
 export async function runJobRuntimeTick(dependencies) {
   const {
     claimDueJobWakes,
+    blockClaimedAutoRetryWakeTransition,
     appendJobEvent,
     listRecoverableJobs,
     SUSPENDED_JOB_STATUSES,
@@ -37,11 +47,43 @@ export async function runJobRuntimeTick(dependencies) {
 
   for (const wake of claimDueJobWakes()) {
     this.jobUserCache.set(wake.jobId, wake.userId)
+    if (wake.kind === 'auto_retry') {
+      try {
+        this.retryStep(wake.jobId, wake.stepId, {
+          userId: wake.userId,
+          resetBudget: false,
+          preserveModelSnapshot: true,
+          automatic: true,
+          autoRetryWake: wake,
+        })
+      } catch (error) {
+        if (error?.code === 'JOB_RETRY_CONFLICT') continue
+        const current = getJobRow(wake.jobId, { userId: wake.userId })
+        if (!current || current.cancelRequested
+          || ['cancel_requested', 'cancelled', 'queued', 'planning', 'running', 'completed'].includes(current.status)) {
+          continue
+        }
+        if (!DETERMINISTIC_AUTO_RETRY_BLOCKERS.has(error?.code)
+          && !isModelReadinessError(error)) continue
+        const blocked = blockClaimedAutoRetryWakeTransition({
+          jobId: wake.jobId,
+          stepId: wake.stepId,
+          userId: wake.userId,
+          wakeAt: wake.wakeAt,
+          claimedAt: wake.firedAt,
+          retryAttempt: wake.retryAttempt,
+          claimToken: wake.claimToken,
+          errorCode: error?.code || 'JOB_AUTO_RETRY_BLOCKED',
+        })
+        if (blocked.event) this.emit(blocked.event)
+      }
+      continue
+    }
     this.emit(appendJobEvent({
       jobId: wake.jobId,
       stepId: wake.stepId,
       type: 'wake_fired',
-      message: 'Scheduled wake time reached; resuming the same durable job',
+      code: 'JOB_WAKE_FIRED',
       payload: {
         wakeAt: wake.wakeAt,
         ...(wake.diagnostics || {}),
@@ -104,7 +146,7 @@ export async function runJobRuntimeTick(dependencies) {
       this.emit(appendJobEvent({
         jobId: job.id,
         type: 'recovered',
-        message: 'Expired execution owner was replaced; resuming from the durable checkpoint',
+        code: 'JOB_EXECUTION_LEASE_RECOVERED',
         payload: {
           ...recoveredDiagnostics,
           reason: 'execution_lease_recovered',
@@ -139,7 +181,7 @@ export async function runJobRuntimeTick(dependencies) {
       this.emit(appendJobEvent({
         jobId: job.id,
         type: 'cancelled',
-        message: JOB_CANCELLED_MESSAGE,
+        code: 'JOB_CANCELLED',
         payload: {
           code: 'JOB_CANCEL_REQUESTED',
           cancellationReason: 'user_requested',
@@ -184,7 +226,7 @@ export async function runJobRuntimeTick(dependencies) {
         this.emit(appendJobEvent({
           jobId: job.id,
           type: 'plan_proposed',
-          message: 'Plan changed after approval; review the refreshed plan before execution',
+          code: 'JOB_PLAN_REVIEW_REFRESHED',
           payload: proposalPayload,
         }))
       } else {
@@ -198,7 +240,7 @@ export async function runJobRuntimeTick(dependencies) {
         this.emit(appendJobEvent({
           jobId: job.id,
           type: 'plan_approval_required',
-          message: 'A durable approval for the current plan is required before execution',
+          code: 'JOB_PLAN_APPROVAL_REQUIRED',
           payload: planPausePayload,
         }))
       }
@@ -247,7 +289,7 @@ export async function runJobRuntimeTick(dependencies) {
       this.emit(appendJobEvent({
         jobId: job.id,
         type: 'failed',
-        message,
+        code: 'JOB_FAILED',
         payload: {
           code: error.code,
           action: error.action || null,
@@ -293,7 +335,7 @@ export async function runJobRuntimeTick(dependencies) {
           this.emit(appendJobEvent({
             jobId: job.id,
             type: 'failed',
-            message: reason,
+            code: 'JOB_FAILED',
             payload: diagnostics,
           }))
         })) return true
@@ -310,7 +352,7 @@ export async function runJobRuntimeTick(dependencies) {
       this.emit(appendJobEvent({
         jobId: job.id,
         type: 'started',
-        message: '任务开始执行',
+        code: 'JOB_STARTED',
       }))
     })) return true
   }
@@ -357,7 +399,7 @@ export async function runJobRuntimeTick(dependencies) {
       this.emit(appendJobEvent({
         jobId: job.id,
         type: completed ? 'completed' : 'failed',
-        message: completed ? '任务已完成' : terminalReason,
+        code: completed ? 'JOB_COMPLETED' : 'JOB_FAILED',
         ...(terminalPayload ? { payload: terminalPayload } : {}),
       }))
     })) return true
@@ -384,7 +426,8 @@ export async function runJobRuntimeTick(dependencies) {
       jobId: job.id,
       stepId: nextStep.id,
       type: 'step_started',
-      message: `开始:${nextStep.title}`,
+      code: 'JOB_STEP_STARTED',
+      params: { title: nextStep.title },
     }))
   })) return true
 

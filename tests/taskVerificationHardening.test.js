@@ -5,6 +5,7 @@ import {
   commandCheckDescriptors,
   taskVerificationScopes,
 } from '../server/services/loop/taskVerificationCheckScope.js'
+import { diagnosticPaths } from '../server/services/loop/taskVerificationAttribution.js'
 import {
   clearVerifiedMutationTargets,
   isVerificationCall,
@@ -139,6 +140,65 @@ test('verification command parser recognizes supported project checks conservati
   }
 })
 
+test('verification command parser covers additional common ecosystems without accepting mutators', () => {
+  const cases = new Map([
+    ['vendor/bin/phpunit', 'test'],
+    ['bundle exec rspec', 'test'],
+    ['bundle exec rubocop', 'lint'],
+    ['swift test', 'test'],
+    ['swift build', 'build'],
+    ['swiftlint', 'lint'],
+    ['xcodebuild test', 'test'],
+    ['ktlint', 'lint'],
+    ['detekt', 'lint'],
+    ['sbt test', 'test'],
+    ['bazel test //...', 'test'],
+    ['bazel build //...', 'build'],
+    ['ctest', 'test'],
+    ['cmake --build .', 'build'],
+    ['meson test', 'test'],
+    ['flutter test', 'test'],
+    ['dart test', 'test'],
+    ['dart analyze', 'lint'],
+    ['flutter analyze', 'lint'],
+    ['flutter build windows', 'build'],
+    ['mix test', 'test'],
+    ['busted', 'test'],
+    ['msbuild', 'build'],
+  ])
+  for (const [command, kind] of cases) {
+    assert.equal(commandCheckDescriptors(command)[0]?.kind, kind, command)
+  }
+
+  for (const command of [
+    'vendor/bin/phpunit tests/unit/FooTest.php',
+    'bundle exec rspec spec/models',
+    'swift test --filter FooTests',
+    'bazel test //packages/api:unit',
+  ]) {
+    assert.equal(commandCheckDescriptors(command)[0]?.coverage, 'targeted', command)
+  }
+
+  for (const command of [
+    'bundle exec rubocop -A',
+    'rubocop --autocorrect-all',
+    'ktlint -F',
+    'swiftlint --fix',
+    'msbuild /t:Clean',
+  ]) {
+    assert.deepEqual(commandCheckDescriptors(command), [], command)
+  }
+})
+
+test('diagnostic path attribution covers common script, data, mobile, and schema files', () => {
+  const extensions = [
+    'sql', 'sh', 'ps1', 'lua', 'r', 'swift', 'dart', 'exs', 'clj', 'hs',
+    'ml', 'elm', 'zig', 'proto', 'graphql', 'md',
+  ]
+  const paths = extensions.map((extension) => `packages/sample/failure.${extension}`)
+  assert.deepEqual(diagnosticPaths({ stderr: paths.join('\n') }), paths)
+})
+
 test('verification environment assignments and boolean flags fail closed unless exact and safe', () => {
   for (const command of [
     'CI=1 npm test',
@@ -262,7 +322,7 @@ test('multiple inconclusive verifier families remain independently blocking', ()
   )
 })
 
-test('bounded verification state leaves a durable overflow blocker', () => {
+test('bounded verification overflow requires a covering successful check to recover', () => {
   const state = restoreTaskVerificationRepair()
   for (let index = 0; index < 65; index += 1) {
     observeTaskVerificationRepair(state, {
@@ -275,18 +335,26 @@ test('bounded verification state leaves a durable overflow blocker', () => {
   }
   assert.equal(state.pending.size, 64)
   assert.equal(state.verificationOverflowed, true)
+  assert.equal(state.overflowScopes.size, 1)
+  const restored = restoreTaskVerificationRepair(serializeTaskVerificationRepair(state))
   for (let index = 0; index < 64; index += 1) {
-    observeTaskVerificationRepair(state, {
+    observeTaskVerificationRepair(restored, {
       name: 'bash_exec',
       args: { command: 'npm test', cwd: `packages/p${index}` },
     }, { ok: true, exitCode: 0 }, { workspaceRoot: 'D:/workspace' })
   }
-  assert.equal(state.pending.size, 0)
-  assert.equal(hasPendingTaskVerificationRepair(state), true)
+  assert.equal(restored.pending.size, 0)
+  assert.equal(hasPendingTaskVerificationRepair(restored), true)
   assert.equal(
-    taskVerificationRepairDetails(state)?.checks[0]?.code,
+    taskVerificationRepairDetails(restored)?.checks[0]?.code,
     'TASK_VERIFICATION_STATE_OVERFLOW',
   )
+  observeTaskVerificationRepair(restored, {
+    name: 'bash_exec', args: { command: 'npm test', cwd: '.' },
+  }, { ok: true, exitCode: 0 }, { workspaceRoot: 'D:/workspace' })
+  assert.equal(restored.verificationOverflowed, false)
+  assert.equal(hasPendingTaskVerificationRepair(restored), false)
+  assert.equal(taskVerificationRepairDetails(restored), null)
 
   const candidateOverflow = restoreTaskVerificationRepair()
   const indeterminateOverflow = restoreTaskVerificationRepair()
@@ -305,6 +373,13 @@ test('bounded verification state leaves a durable overflow blocker', () => {
   assert.equal(indeterminateOverflow.verificationOverflowed, true)
   assert.equal(hasPendingTaskVerificationRepair(candidateOverflow), true)
   assert.equal(hasPendingTaskVerificationRepair(indeterminateOverflow), true)
+  for (const overflowState of [candidateOverflow, indeterminateOverflow]) {
+    observeTaskVerificationRepair(overflowState, {
+      name: 'bash_exec', args: { command: 'npm test', cwd: '.' },
+    }, { ok: true, exitCode: 0 }, { workspaceRoot: 'D:/workspace' })
+    assert.equal(overflowState.verificationOverflowed, false)
+    assert.equal(hasPendingTaskVerificationRepair(overflowState), false)
+  }
 })
 
 test('verification command parser rejects compound, mutating, and output-producing variants', () => {

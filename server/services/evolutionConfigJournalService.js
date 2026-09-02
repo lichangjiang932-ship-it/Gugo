@@ -14,153 +14,16 @@ import {
   atomicWriteEvolutionRuntimeConfig,
   EMPTY_RUNTIME_CONFIG,
 } from './evolutionConfigRuntime.js'
+import {
+  EVOLUTION_CONFIG_JOURNAL_VERSION as JOURNAL_VERSION,
+  evolutionConfigJournalError as journalError,
+  isEvolutionConfigJournalHash as validHash,
+  MAX_EVOLUTION_CONFIG_DOCUMENT_BYTES as MAX_DOCUMENT_BYTES,
+  normalizeEvolutionConfigJournal as normalizeJournal,
+  normalizeEvolutionConfigJournalEvent as normalizeEvent,
+} from './evolutionConfigJournalValidation.js'
 
-const SHA256_RE = /^[a-f0-9]{64}$/u
-const OPERATIONS = new Set(['apply', 'rollback', 'revoke'])
-const JOURNAL_VERSION = 1
-const MAX_DOCUMENT_BYTES = 64 * 1024
 const MAX_JOURNAL_BYTES = 512 * 1024
-const JOURNAL_KEYS = [
-  'schemaVersion',
-  'state',
-  'journalId',
-  'targetPath',
-  'reviewFingerprint',
-  'event',
-  'journalFingerprint',
-]
-const EVENT_KEYS = [
-  'id',
-  'userId',
-  'approvalId',
-  'candidateId',
-  'rootApplyId',
-  'operation',
-  'beforeDocumentJson',
-  'afterDocumentJson',
-  'beforeDocumentSha256',
-  'afterDocumentSha256',
-  'expectedCurrentSha256',
-  'reason',
-  'confirmationSha256',
-  'eventFingerprint',
-  'createdAt',
-]
-
-function journalError(code, message, statusCode = 409, cause) {
-  return Object.assign(new Error(message), { code, statusCode, ...(cause ? { cause } : {}) })
-}
-
-function isPlainObject(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const prototype = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
-}
-
-function hasExactKeys(value, keys) {
-  if (!isPlainObject(value)) return false
-  const actual = Object.keys(value).sort()
-  const expected = [...keys].sort()
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index])
-}
-
-function requiredString(value, maximum = 2_000) {
-  return typeof value === 'string' && value.length > 0 && value.length <= maximum
-}
-
-function validHash(value) {
-  return typeof value === 'string' && SHA256_RE.test(value)
-}
-
-function validateDocument(content, expectedHash) {
-  if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_DOCUMENT_BYTES) return false
-  if (configSha256(content) !== expectedHash) return false
-  try {
-    normalizeRuntimeConfigDocument(content)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function eventFingerprint(event) {
-  if (event.operation === 'apply') {
-    return configSha256({
-      operation: event.operation,
-      approvalId: event.approvalId,
-      candidateId: event.candidateId,
-      beforeDocumentSha256: event.beforeDocumentSha256,
-      afterDocumentSha256: event.afterDocumentSha256,
-      reason: event.reason,
-      confirmationSha256: event.confirmationSha256,
-      createdAt: event.createdAt,
-    })
-  }
-  return configSha256({
-    operation: event.operation,
-    applyId: event.rootApplyId,
-    beforeDocumentSha256: event.beforeDocumentSha256,
-    afterDocumentSha256: event.afterDocumentSha256,
-    reason: event.reason,
-    confirmationSha256: event.confirmationSha256,
-    createdAt: event.createdAt,
-  })
-}
-
-function normalizeEvent(value) {
-  if (!hasExactKeys(value, EVENT_KEYS)
-    || !requiredString(value.id, 200)
-    || !requiredString(value.userId, 200)
-    || !requiredString(value.approvalId, 200)
-    || !requiredString(value.candidateId, 200)
-    || !(value.rootApplyId === null || requiredString(value.rootApplyId, 200))
-    || !OPERATIONS.has(value.operation)
-    || !requiredString(value.reason)
-    || !validHash(value.beforeDocumentSha256)
-    || !validHash(value.afterDocumentSha256)
-    || !validHash(value.expectedCurrentSha256)
-    || !validHash(value.confirmationSha256)
-    || !validHash(value.eventFingerprint)
-    || !Number.isSafeInteger(value.createdAt)
-    || value.createdAt < 0
-    || !validateDocument(value.beforeDocumentJson, value.beforeDocumentSha256)
-    || !validateDocument(value.afterDocumentJson, value.afterDocumentSha256)
-    || (value.operation === 'apply' ? value.rootApplyId !== null : value.rootApplyId === null)
-    || eventFingerprint(value) !== value.eventFingerprint) {
-    throw journalError('EVOLUTION_CONFIG_JOURNAL_INVALID', 'pending config change journal is invalid')
-  }
-  return Object.freeze(Object.fromEntries(EVENT_KEYS.map((key) => [key, value[key]])))
-}
-
-function normalizeJournal(value, expectedTargetPath = null) {
-  if (!hasExactKeys(value, JOURNAL_KEYS)
-    || value.schemaVersion !== JOURNAL_VERSION
-    || value.state !== 'pending'
-    || !requiredString(value.journalId, 200)
-    || !requiredString(value.targetPath, 4_096)
-    || !path.isAbsolute(value.targetPath)
-    || !validHash(value.reviewFingerprint)
-    || !validHash(value.journalFingerprint)) {
-    throw journalError('EVOLUTION_CONFIG_JOURNAL_INVALID', 'pending config change journal is invalid')
-  }
-  const event = normalizeEvent(value.event)
-  const targetPath = path.resolve(value.targetPath)
-  if (expectedTargetPath && targetPath !== path.resolve(expectedTargetPath)) {
-    throw journalError('EVOLUTION_CONFIG_JOURNAL_CONFLICT', 'pending config change target does not match')
-  }
-  const normalized = {
-    schemaVersion: JOURNAL_VERSION,
-    state: 'pending',
-    journalId: value.journalId,
-    targetPath,
-    reviewFingerprint: value.reviewFingerprint,
-    event,
-  }
-  if (configSha256(normalized) !== value.journalFingerprint) {
-    throw journalError('EVOLUTION_CONFIG_JOURNAL_INVALID', 'pending config change journal is invalid')
-  }
-  return Object.freeze({ ...normalized, journalFingerprint: value.journalFingerprint })
-}
 
 function fsyncDirectory(directory) {
   let descriptor

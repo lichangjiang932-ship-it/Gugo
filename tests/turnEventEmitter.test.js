@@ -208,7 +208,6 @@ test('turn event emitter rejects legacy non-throwing durability failures and reu
 
   const failed = await emit('turn.failed', {
     code: failure.code,
-    message: failure.message,
   })
   assert.equal(failed.sequence, 3)
   assert.equal(failed.type, 'turn.failed')
@@ -248,7 +247,7 @@ test('turn event emitter reuses the missing sequence from a wrapped durability f
   const failure = await emit('turn.completed', { text: 'must not complete' }).catch((error) => error)
   assert.equal(findEventPersistenceFailure(failure)?.firstFailedSequence, 3)
 
-  const failed = await emit('turn.failed', { code: failure.code, message: failure.message })
+  const failed = await emit('turn.failed', { code: failure.code })
   assert.equal(failed.sequence, 3)
   assert.deepEqual(durable.map((event) => event.type), ['turn.failed'])
 })
@@ -282,7 +281,7 @@ test('turn event emitter normalizes a custom writer rejection and keeps the log 
   assert.equal(failure.code, 'TURN_EVENT_PERSISTENCE_FAILED')
   assert.equal(failure.firstFailedSequence, 3)
 
-  const failed = await emit('turn.failed', { code: failure.code, message: failure.message })
+  const failed = await emit('turn.failed', { code: failure.code })
   assert.equal(failed.sequence, 3)
   assert.deepEqual(durable.map((event) => event.type), ['turn.failed'])
 })
@@ -310,7 +309,6 @@ test('turn event emitter journals direct failures and distinguishes unknown term
 
   const terminalFailure = await emit('turn.failed', {
     code: 'TURN_FAILED',
-    message: 'failed',
   }).catch((error) => error)
   assert.equal(terminalFailure.code, 'TURN_TERMINAL_PERSISTENCE_FAILED')
   assert.equal(terminalFailure.terminalEventType, 'turn.failed')
@@ -360,12 +358,10 @@ test('turn event emitter verifies every resumable durable boundary and preserves
     ['turn.paused', { text: '', clarification: 'Need clarification' }],
     ['turn.interrupted', {
       code: 'MODEL_CALL_INTERRUPTED',
-      message: 'Model call interrupted',
       retryable: true,
     }],
     ['turn.blocked', {
       code: 'SIDE_EFFECT_OUTCOME_UNKNOWN',
-      message: 'Side-effect outcome requires verification',
       retryable: false,
       manualRetryable: true,
       recoveryStatus: 'dead_letter',

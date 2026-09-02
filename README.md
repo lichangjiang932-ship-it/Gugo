@@ -171,7 +171,7 @@ npm run dev            # 前端 HMR（默认 :5175）
 npm run local          # 生产模式：build + 启动 Node server
 ```
 
-打开 `http://127.0.0.1:5175`，无需注册或登录。首次使用先进入「权限中心」，在「首次启动 · 开启本地工作区」中选择工作目录、分别启用文件/Shell/Git 能力并选择审批模式；只会授权所选目录，部署环境锁定的开关不会被界面覆盖。随后进入「设置 → 模型」添加自己的 OpenAI 兼容、Anthropic、Gemini、Ollama 或 LM Studio Provider；项目不附带可用的模型 API Key。也可以在 `.env` 中配置服务端默认模型。
+打开 `http://127.0.0.1:5175`，无需注册或登录。应用会直接把服务启动目录（或显式配置的 `WORKSPACE_ROOT`）作为默认工作区，不显示首次配置向导；如需更换目录、收紧文件/Shell/Git 能力或调整审批模式，可随时进入「权限中心」。随后进入「设置 → 模型」添加自己的 OpenAI 兼容、Anthropic、Gemini、Ollama 或 LM Studio Provider；项目不附带可用的模型 API Key。也可以在 `.env` 中配置服务端默认模型。
 
 Docker：
 
@@ -185,7 +185,7 @@ Compose 默认只把端口绑定到宿主机 `127.0.0.1`。若要从局域网或
 
 默认本地模式下可直接在「设置 → 模型」新增模型 Provider。模型配置会自动用于聊天、诊断、后台任务和子代理；留空 API Key 可保留原密钥。启用 `AUTH_MODE=multi_user` 后，各用户登录后分别配置自己的 Provider。
 
-Browser 工具需要 Node.js 20 或更高版本，以及已安装的 Edge/Chrome。默认自动探测浏览器，也可在 `.env` 设置 `BROWSER_EXECUTABLE_PATH`；仅受限 CI/沙箱环境才使用 `BROWSER_NO_SANDBOX=1`。
+Browser 工具需要受支持的 Node.js 版本（`^20.19.0`、`^22.13.0` 或 `>=24.0.0`）以及已安装的 Edge/Chrome。默认自动探测浏览器，也可在 `.env` 设置 `BROWSER_EXECUTABLE_PATH`；仅受限 CI/沙箱环境才使用 `BROWSER_NO_SANDBOX=1`。
 
 视频/音频剪辑、转码、抽帧、拼接、音量调整和降噪需要 `ffmpeg` 与 `ffprobe`。官方 Windows 桌面包从 Electron `resources/bin` 自带 sidecar；源码或自托管部署可将它们加入 `PATH`，或用 `GUGO_FFMPEG_PATH` / `GUGO_FFPROBE_PATH` 指向绝对路径。详见 [配置说明](docs/CONFIGURATION.md#媒体工具可执行文件)。
 
@@ -317,6 +317,8 @@ Gugo/
 ## 贡献
 
 见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+
+插件作者可参阅公开的 [Plugin Compatibility Contract v1](./docs/PLUGIN_COMPATIBILITY_V1.md)，其中包含离线 Marketplace 布局、Ed25519 publisher 签名、兼容/升级政策和可执行夹具。
 
 报告安全问题见 [SECURITY.md](./SECURITY.md)，行为准则见 [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)。
 

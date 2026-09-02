@@ -92,6 +92,57 @@ function schemaSnapshot(filePath) {
   }
 }
 
+function rebuildSessionsWithoutPrimaryKey(db) {
+  const tableSql = db.prepare(`
+    SELECT sql FROM sqlite_schema
+    WHERE type = 'table' AND name = 'sessions'
+  `).get()?.sql
+  assert.ok(tableSql, 'sessions table DDL must exist')
+  const replacementSql = tableSql
+    .replace(/^CREATE TABLE\s+sessions\b/u, 'CREATE TABLE sessions_without_primary_key')
+    .replace(/\btoken\s+TEXT\s+PRIMARY KEY\b/u, 'token TEXT NOT NULL')
+  assert.notEqual(replacementSql, tableSql, 'sessions primary key must be removed')
+
+  const columns = db.prepare('SELECT name FROM pragma_table_info(?) ORDER BY cid')
+    .all('sessions')
+    .map((row) => `"${String(row.name).replaceAll('"', '""')}"`)
+    .join(', ')
+  const sessionIndexes = db.prepare(`
+    SELECT sql FROM sqlite_schema
+    WHERE tbl_name = 'sessions'
+      AND type = 'index'
+      AND sql IS NOT NULL
+    ORDER BY name
+  `).all()
+  const triggers = db.prepare(`
+    SELECT name, sql FROM sqlite_schema
+    WHERE type = 'trigger' AND sql IS NOT NULL
+    ORDER BY name
+  `).all()
+  db.pragma('foreign_keys = OFF')
+  db.transaction(() => {
+    for (const entry of triggers) {
+      const name = `"${String(entry.name).replaceAll('"', '""')}"`
+      db.exec(`DROP TRIGGER ${name}`)
+    }
+    db.exec(replacementSql)
+    db.exec(`
+      INSERT INTO sessions_without_primary_key (${columns})
+      SELECT ${columns} FROM sessions
+    `)
+    db.exec('DROP TABLE sessions')
+    db.exec('ALTER TABLE sessions_without_primary_key RENAME TO sessions')
+    for (const entry of sessionIndexes) db.exec(entry.sql)
+    for (const entry of triggers) db.exec(entry.sql)
+  }).immediate()
+
+  assert.deepEqual(
+    db.prepare('SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk')
+      .all('sessions'),
+    [],
+  )
+}
+
 test.afterEach(() => {
   closeDb()
 })
@@ -237,6 +288,192 @@ test('current-version databases with a missing critical column or index fail clo
     assert.deepEqual(schemaSnapshot(filePath), before)
     assert.deepEqual(databaseFileSnapshot(filePath), fileBefore)
   }
+})
+
+test('a current v108 database missing the tool-permission conflict key fails preflight without mutation', () => {
+  const filePath = path.join(tempDir, 'missing-tool-permission-primary-key.db')
+  initializeCurrentDatabase(filePath)
+  const mutate = new Database(filePath)
+  try {
+    mutate.exec(`
+      DROP TABLE user_tool_permissions;
+      CREATE TABLE user_tool_permissions (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tool_name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_user_tool_permissions_user
+        ON user_tool_permissions(user_id);
+    `)
+    assert.deepEqual(
+      mutate.prepare('SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk')
+        .all('user_tool_permissions'),
+      [],
+    )
+    assert.ok(mutate.prepare('SELECT * FROM pragma_foreign_key_list(?)').all('user_tool_permissions')
+      .some((row) => row.from === 'user_id'
+        && row.table === 'users'
+        && row.to === 'id'
+        && row.on_delete === 'CASCADE'))
+  } finally {
+    mutate.close()
+  }
+  const before = schemaSnapshot(filePath)
+  const fileBefore = databaseFileSnapshot(filePath)
+  selectDatabase(filePath)
+
+  assert.throws(
+    () => getDb(),
+    (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+      && error?.details?.stage === 'preflight'
+      && error?.details?.missing?.includes('primary-key:user_tool_permissions'),
+  )
+  assert.deepEqual(schemaSnapshot(filePath), before)
+  assert.deepEqual(databaseFileSnapshot(filePath), fileBefore)
+})
+
+test('a current v108 database missing the session identity key fails preflight without mutation', () => {
+  const filePath = path.join(tempDir, 'missing-session-primary-key.db')
+  initializeCurrentDatabase(filePath)
+  const mutate = new Database(filePath)
+  try {
+    mutate.prepare(`
+      INSERT INTO users (id, email, created_at, updated_at)
+      VALUES (?, ?, ?, ?)
+    `).run('session-owner', 'session-owner@example.test', 1, 1)
+    mutate.prepare(`
+      INSERT INTO sessions (token, user_id, expires_at, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run('preserved-session', 'session-owner', 2, 1)
+    rebuildSessionsWithoutPrimaryKey(mutate)
+    assert.deepEqual(
+      mutate.prepare('SELECT token, user_id FROM sessions ORDER BY token').all(),
+      [{ token: 'preserved-session', user_id: 'session-owner' }],
+    )
+  } finally {
+    mutate.close()
+  }
+  const before = schemaSnapshot(filePath)
+  const fileBefore = databaseFileSnapshot(filePath)
+  selectDatabase(filePath)
+
+  assert.throws(
+    () => getDb(),
+    (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+      && error?.details?.stage === 'preflight'
+      && error?.details?.missing?.includes('primary-key:sessions'),
+  )
+  assert.deepEqual(schemaSnapshot(filePath), before)
+  assert.deepEqual(databaseFileSnapshot(filePath), fileBefore)
+})
+
+test('a current v108 database missing the user identity key fails preflight without mutation', () => {
+  const filePath = path.join(tempDir, 'missing-user-primary-key.db')
+  initializeCurrentDatabase(filePath)
+  const mutate = new Database(filePath)
+  try {
+    mutate.pragma('foreign_keys = OFF')
+    mutate.exec(`
+      CREATE TABLE users_without_primary_key (
+        id TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        password_hash TEXT,
+        password_salt TEXT,
+        password_set_at INTEGER
+      );
+      INSERT INTO users_without_primary_key SELECT * FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_without_primary_key RENAME TO users;
+    `)
+    assert.deepEqual(
+      mutate.prepare('SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk')
+        .all('users'),
+      [],
+    )
+    assert.ok(mutate.prepare('SELECT * FROM pragma_foreign_key_list(?)').all('effort_settings')
+      .some((row) => row.from === 'user_id'
+        && row.table === 'users'
+        && row.to === 'id'
+        && row.on_delete === 'CASCADE'))
+  } finally {
+    mutate.close()
+  }
+  const before = schemaSnapshot(filePath)
+  const fileBefore = databaseFileSnapshot(filePath)
+  selectDatabase(filePath)
+
+  assert.throws(
+    () => getDb(),
+    (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+      && error?.details?.stage === 'preflight'
+      && error?.details?.missing?.includes('primary-key:users'),
+  )
+  assert.deepEqual(schemaSnapshot(filePath), before)
+  assert.deepEqual(databaseFileSnapshot(filePath), fileBefore)
+})
+
+test('a current v108 database missing complete user email uniqueness fails preflight without mutation', () => {
+  const filePath = path.join(tempDir, 'missing-user-email-unique-key.db')
+  initializeCurrentDatabase(filePath)
+  const mutate = new Database(filePath)
+  try {
+    mutate.pragma('foreign_keys = OFF')
+    mutate.exec(`
+      CREATE TABLE users_without_email_unique (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        password_hash TEXT,
+        password_salt TEXT,
+        password_set_at INTEGER
+      );
+      INSERT INTO users_without_email_unique SELECT * FROM users;
+      INSERT INTO users_without_email_unique (id, email, created_at, updated_at)
+        VALUES ('duplicate-email-a', 'shared@example.test', 1, 1);
+      INSERT INTO users_without_email_unique (id, email, created_at, updated_at)
+        VALUES ('duplicate-email-b', 'shared@example.test', 2, 2);
+      DROP TABLE users;
+      ALTER TABLE users_without_email_unique RENAME TO users;
+      CREATE UNIQUE INDEX idx_users_email_with_id ON users(email, id);
+      CREATE UNIQUE INDEX idx_users_email_partial
+        ON users(email) WHERE id = 'duplicate-email-a';
+    `)
+    const uniqueIndexes = mutate.prepare(`
+      SELECT name, "unique" AS is_unique, partial
+      FROM pragma_index_list(?)
+    `).all('users')
+    const hasCompleteUniqueEmail = uniqueIndexes.some((index) => {
+      if (Number(index.is_unique) !== 1 || Number(index.partial) !== 0) return false
+      const columns = mutate.prepare('SELECT name FROM pragma_index_info(?) ORDER BY seqno')
+        .all(index.name)
+        .map((row) => row.name)
+      return columns.length === 1 && columns[0] === 'email'
+    })
+    assert.equal(hasCompleteUniqueEmail, false)
+    assert.equal(
+      mutate.prepare('SELECT COUNT(*) AS count FROM users WHERE email = ?')
+        .get('shared@example.test').count,
+      2,
+    )
+  } finally {
+    mutate.close()
+  }
+  const before = schemaSnapshot(filePath)
+  const fileBefore = databaseFileSnapshot(filePath)
+  selectDatabase(filePath)
+
+  assert.throws(
+    () => getDb(),
+    (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+      && error?.details?.stage === 'preflight'
+      && error?.details?.missing?.includes('unique-key:users.email'),
+  )
+  assert.deepEqual(schemaSnapshot(filePath), before)
+  assert.deepEqual(databaseFileSnapshot(filePath), fileBefore)
 })
 
 test('fresh and v5→v6, v27→v28, and v29→v30 fixtures converge idempotently with valid integrity and foreign keys', () => {

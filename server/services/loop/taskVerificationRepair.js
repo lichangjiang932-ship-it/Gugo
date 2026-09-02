@@ -8,6 +8,7 @@ import {
 } from './taskVerificationCheckScope.js'
 import {
   FAILURE_PENDING_REASON,
+  clearCoveredVerificationOverflow,
   markVerificationOverflow,
   MAX_PENDING_TASK_VERIFICATIONS,
   MAX_TASK_VERIFICATION_CANDIDATES,
@@ -57,8 +58,8 @@ export function observeTaskVerificationRepair(state, call, result, {
     state.mutationEpoch = 1
     state.mutationTargets.set(PROJECT_SCOPE_TARGET, state.mutationEpoch)
     while (state.mutationTargets.size > MAX_TASK_VERIFICATION_MUTATION_TARGETS) {
-      markVerificationOverflow(state)
-      state.mutationTargets.delete(state.mutationTargets.keys().next().value)
+      state.mutationTargets.clear()
+      state.mutationTargets.set(PROJECT_SCOPE_TARGET, state.mutationEpoch)
     }
   }
   const currentEpoch = normalizeEpoch(state.mutationEpoch)
@@ -67,7 +68,10 @@ export function observeTaskVerificationRepair(state, call, result, {
   if (isDeterministicVerificationSuccess(projectedResult)) {
     const cleared = []
     let indeterminateCleared = false
+    let overflowCleared = false
     for (const scope of scopes) {
+      overflowCleared = clearCoveredVerificationOverflow(state, scope, workspaceRoot)
+        || overflowCleared
       for (const [candidateKey, candidate] of [...state.candidates]) {
         if (verificationScopeCovers(scope, candidate, workspaceRoot)) {
           state.candidates.delete(candidateKey)
@@ -92,7 +96,7 @@ export function observeTaskVerificationRepair(state, call, result, {
       if (verified) {
         if (!state.verified.has(verified.scope)
           && state.verified.size >= MAX_TASK_VERIFICATION_VERIFIED) {
-          markVerificationOverflow(state)
+          markVerificationOverflow(state, verified)
         } else {
           state.verified.set(verified.scope, verified)
         }
@@ -105,14 +109,15 @@ export function observeTaskVerificationRepair(state, call, result, {
       }
     }
     syncLastIndeterminate(state)
-    if ((cleared.length > 0 || indeterminateCleared)
+    if ((cleared.length > 0 || indeterminateCleared || overflowCleared)
       && state.pending.size === 0
-      && state.indeterminate.size === 0) {
+      && state.indeterminate.size === 0
+      && !state.verificationOverflowed) {
       state.consecutiveFailures = 0
       state.lastFailureBatchId = ''
     }
     return {
-      changed: cleared.length > 0 || indeterminateCleared,
+      changed: cleared.length > 0 || indeterminateCleared || overflowCleared,
       failed: false,
       cleared,
     }
@@ -147,7 +152,7 @@ export function observeTaskVerificationRepair(state, call, result, {
       if (!indeterminate) continue
       if (!state.indeterminate.has(indeterminate.scope)
         && state.indeterminate.size >= MAX_TASK_VERIFICATION_INDETERMINATES) {
-        markVerificationOverflow(state)
+        markVerificationOverflow(state, indeterminate)
         continue
       }
       state.indeterminate.delete(indeterminate.scope)
@@ -186,7 +191,7 @@ export function observeTaskVerificationRepair(state, call, result, {
     if (!candidate) continue
     if (!state.candidates.has(candidate.scope)
       && state.candidates.size >= MAX_TASK_VERIFICATION_CANDIDATES) {
-      markVerificationOverflow(state)
+      markVerificationOverflow(state, candidate)
       continue
     }
     state.candidates.set(candidate.scope, candidate)
@@ -227,7 +232,15 @@ export function observeTaskVerificationRepair(state, call, result, {
   } of relatedScopes) {
     const previous = state.pending.get(scope)
     if (!previous && state.pending.size >= MAX_PENDING_TASK_VERIFICATIONS) {
-      markVerificationOverflow(state)
+      markVerificationOverflow(state, {
+        kind,
+        cwd,
+        commandScope,
+        verifierFamily,
+        coverage,
+        scope,
+        scopeLabel,
+      })
       continue
     }
     const scopeAlreadyCounted = Boolean(
@@ -276,10 +289,10 @@ export function observeTaskVerificationMutation(state, targets, { workspaceRoot 
     targets instanceof Set ? [...targets] : targets,
     MAX_TASK_VERIFICATION_MUTATION_TARGETS + 1,
   )
-  if (observedTargets.length > MAX_TASK_VERIFICATION_MUTATION_TARGETS) {
-    markVerificationOverflow(state)
-  }
-  const normalizedTargets = observedTargets.slice(0, MAX_TASK_VERIFICATION_MUTATION_TARGETS)
+  const mutationTargetsOverflowed = observedTargets.length > MAX_TASK_VERIFICATION_MUTATION_TARGETS
+  const normalizedTargets = mutationTargetsOverflowed
+    ? [PROJECT_SCOPE_TARGET]
+    : observedTargets
   if (normalizedTargets.length === 0) {
     return { changed: false, promoted: [], invalidated: [] }
   }
@@ -295,13 +308,18 @@ export function observeTaskVerificationMutation(state, targets, { workspaceRoot 
     state.mutationEpoch = previousEpoch + 1
   }
   const currentEpoch = state.mutationEpoch
-  for (const target of normalizedTargets) {
-    state.mutationTargets.delete(target)
-    state.mutationTargets.set(target, currentEpoch)
-  }
-  while (state.mutationTargets.size > MAX_TASK_VERIFICATION_MUTATION_TARGETS) {
-    markVerificationOverflow(state)
-    state.mutationTargets.delete(state.mutationTargets.keys().next().value)
+  if (mutationTargetsOverflowed || state.mutationTargets.has(PROJECT_SCOPE_TARGET)) {
+    state.mutationTargets.clear()
+    state.mutationTargets.set(PROJECT_SCOPE_TARGET, currentEpoch)
+  } else {
+    for (const target of normalizedTargets) {
+      state.mutationTargets.delete(target)
+      state.mutationTargets.set(target, currentEpoch)
+    }
+    if (state.mutationTargets.size > MAX_TASK_VERIFICATION_MUTATION_TARGETS) {
+      state.mutationTargets.clear()
+      state.mutationTargets.set(PROJECT_SCOPE_TARGET, currentEpoch)
+    }
   }
 
   const promoted = []
@@ -315,7 +333,7 @@ export function observeTaskVerificationMutation(state, targets, { workspaceRoot 
     if (related.length === 0) continue
     const previous = state.pending.get(candidate.scope)
     if (!previous && state.pending.size >= MAX_PENDING_TASK_VERIFICATIONS) {
-      markVerificationOverflow(state)
+      markVerificationOverflow(state, candidate)
       continue
     }
     const normalized = normalizeFailure({
@@ -342,7 +360,7 @@ export function observeTaskVerificationMutation(state, targets, { workspaceRoot 
     if (related.length === 0) continue
     const previous = state.pending.get(verified.scope)
     if (!previous && state.pending.size >= MAX_PENDING_TASK_VERIFICATIONS) {
-      markVerificationOverflow(state)
+      markVerificationOverflow(state, verified)
       continue
     }
     const normalized = normalizeFailure({

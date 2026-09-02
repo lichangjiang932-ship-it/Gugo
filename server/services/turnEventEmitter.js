@@ -19,35 +19,39 @@ const DURABLE_BOUNDARY_EVENT_TYPES = new Set([
 const INCOMPLETE_BOUNDARY_DEFAULTS = Object.freeze({
   'turn.cancelled': {
     incompleteReason: 'turn_incomplete',
-    reason: 'The turn was cancelled before all requested work completed.',
     missingRequirements: ['remaining_task_steps'],
     nextAction: 'retry_turn',
   },
   'turn.failed': {
     incompleteReason: 'turn_incomplete',
-    reason: 'The turn stopped before all requested work completed.',
     missingRequirements: ['remaining_task_steps'],
     nextAction: 'retry_turn',
   },
   'turn.interrupted': {
     incompleteReason: 'model_call_interrupted',
-    reason: 'The turn was interrupted before all requested work completed.',
     missingRequirements: ['model_response', 'remaining_task_steps'],
     nextAction: 'resume_turn',
   },
   'turn.blocked': {
     incompleteReason: 'recovery_blocked',
-    reason: 'The turn is blocked until its recovery requirements are satisfied.',
     missingRequirements: ['execution_environment_repair', 'explicit_recovery_retry'],
     nextAction: 'retry_recovery',
   },
   'turn.paused': {
     incompleteReason: 'turn_incomplete',
-    reason: 'The turn is waiting for required information.',
     missingRequirements: ['user_clarification'],
     nextAction: 'provide_input',
   },
 })
+
+function withoutLegacyPresentationFields(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const stable = { ...value }
+  delete stable.message
+  delete stable.hint
+  delete stable.reason
+  return stable
+}
 
 function normalizedBoundaryStringList(value, fallback) {
   const values = Array.isArray(value) && value.length > 0 ? value : fallback
@@ -61,25 +65,14 @@ function incompleteBoundaryPayload(type, value) {
   const error = source.error && typeof source.error === 'object' && !Array.isArray(source.error)
     ? source.error
     : null
+  const stableSource = withoutLegacyPresentationFields(source)
+  if (error) stableSource.error = withoutLegacyPresentationFields(error)
   const rawIncompleteReason = String(
     source.incompleteReason || error?.incompleteReason || defaults.incompleteReason,
   ).trim().toLowerCase()
   const incompleteReason = /^[a-z][a-z0-9_]{1,95}$/u.test(rawIncompleteReason)
     ? rawIncompleteReason
     : defaults.incompleteReason
-  const clarificationReason = String(
-    source.clarification?.question || source.clarification?.message || '',
-  ).trim()
-  const reason = String(
-    source.message
-      || error?.message
-      || source.reason
-      || error?.reason
-      || clarificationReason
-      || source.text
-      || source.partialText
-      || defaults.reason,
-  ).trim().slice(0, 2_000) || defaults.reason
   const missingRequirements = normalizedBoundaryStringList(
     source.missingRequirements || error?.missingRequirements,
     defaults.missingRequirements,
@@ -91,9 +84,8 @@ function incompleteBoundaryPayload(type, value) {
     ? rawNextAction
     : defaults.nextAction
   return {
-    ...source,
+    ...stableSource,
     incompleteReason,
-    reason,
     missingRequirements,
     nextAction,
     verifiedLocalFiles: Array.isArray(source.verifiedLocalFiles)

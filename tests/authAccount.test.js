@@ -174,6 +174,28 @@ test('AUTH_DEV_CODES skips SMTP even when mail is configured', async () => {
   assert.deepEqual(result, { sent: false, devCode: '123456' })
 })
 
+test('pure-local mode rejects public SMTP before creating a socket', async () => {
+  let socketCreated = false
+  await assert.rejects(
+    sendEmailCode({
+      env: {
+        GUGO_PURE_LOCAL_MODE: '1',
+        MAIL_SERVER: 'smtp.example.com',
+        MAIL_USERNAME: 'mailer@example.com',
+        MAIL_PASSWORD: 'secret',
+      },
+      email: 'local@example.com',
+      code: '123456',
+    }, {
+      lookupHost: async () => [{ address: '93.184.216.34', family: 4 }],
+      netConnect: () => { socketCreated = true },
+      tlsConnect: () => { socketCreated = true },
+    }),
+    (error) => error?.code === 'OUTBOUND_PURE_LOCAL_DENIED' && error.retryable === false,
+  )
+  assert.equal(socketCreated, false)
+})
+
 test('mail diagnostics are safe for browser display', () => {
   const mail = getMailDiagnostics({
     MAIL_SERVER: 'smtp.qq.com',

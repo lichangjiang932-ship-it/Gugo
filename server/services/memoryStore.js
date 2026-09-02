@@ -240,7 +240,10 @@ export function upsertMemory({ id, userId, type, title, body, frontmatter = {}, 
   while ((m = linkPattern.exec(body)) !== null) {
     links.add(normalizeSlug(m[1]))
   }
-  const insLink = db.prepare('INSERT OR IGNORE INTO memory_links (from_id, to_slug) VALUES (?, ?)')
+  const insLink = db.prepare(`
+    INSERT INTO memory_links (from_id, to_slug) VALUES (?, ?)
+    ON CONFLICT(from_id, to_slug) DO NOTHING
+  `)
   for (const s of links) insLink.run(memoryId, s)
 
   return getMemory(userId, memoryId)

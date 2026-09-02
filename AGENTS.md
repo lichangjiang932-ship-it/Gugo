@@ -9,7 +9,7 @@
 
 **Gugo**（yma）—— 浏览器即用的本地/内网 Web AI 工作台。React 19 SPA + Node.js HTTP（**零框架**） + SQLite（better-sqlite3, WAL）。和 Claude Code / Cursor / Cherry Studio / openhanako 同品类，但走 Web 路线。
 
-当前：v0.11.31 · DB schema **v101** · **608 个默认 test 文件 + 1 个离线 eval** · 零后端框架依赖。
+当前：v0.11.50 · DB schema **v112** · **729 个默认 test 文件 + 1 个离线 eval** · 零后端框架依赖。
 
 ---
 
@@ -77,7 +77,7 @@ src/
 ├── lib/            # 客户端 REST helper、纯工具
 ├── store/          # AppContext + reducer + localStorage 持久化
 ├── agents/         # ActiveAgentProvider + context
-└── i18n/           # 5 语言 translations.js + I18nProvider.jsx
+└── i18n/           # 中英文入口 translations.js + domains/ 分域数据 + I18nProvider.jsx
 tests/              # node:test，每个 .test.js 对应一个 service/route
 scripts/
 └── run-tests.js    # node --test 包装；npm test 走这里
@@ -118,7 +118,7 @@ scripts/
 
 1. `src/pages/XxxView.jsx`（或子目录如 `ChatSplit/index.jsx`）
 2. `src/lib/xxxClient.js` REST 调用
-3. `src/i18n/translations.js` 加 5 语言 key（zh/en/ja/ko/zh-TW）—— **5 语言必须全加**，不准只加中文
+3. 在 `src/i18n/domains/` 对应分域模块同步添加中英文 key（zh/en）—— **两种语言必须都加**，不准只加中文
 4. `src/store/` 里如果要持久化，走现有的 AppContext reducer pattern
 5. 导航入口：`src/components/LeftRail.jsx`
 
@@ -139,7 +139,7 @@ npm run serve         # 仅启动 node 后端（需先 build）
 npm run local         # build + serve
 ```
 
-**CI 矩阵**：`.github/workflows/ci.yml` 跑 `ubuntu-latest` + `windows-latest`（required gate）。Node 20。任何 PR 必须 windows 也绿才能合。
+**CI 矩阵**：`.github/workflows/ci.yml` 以 Node 22 跑 `ubuntu-latest` + `windows-latest` required gate，并在 Ubuntu 上对 Node 20.19 与 Node 24 跑原生 SQLite/服务端运行时兼容门禁。任何 PR 必须全部通过才能合。
 
 **Windows pitfall**：
 - `worker_threads` 冷启动 ~1000–1100ms。任何 sandbox/plugin/timeout 默认值 `< 5000ms` 都会在 windows runner 上 flake。默认设 5000ms。
@@ -184,9 +184,9 @@ batch id 约定（用户分配）：`S1..S6` / `A1..A6` / `B*` / `C1..Cn` / `F1.
 
 ## 七、I18n
 
-**5 语言**：`zh / en / ja / ko / zh-TW`。`src/i18n/translations.js` 是单一来源。
+**2 语言**：`zh / en`。`src/i18n/translations.js` 是公共入口，翻译数据以 `src/i18n/domains/` 为单一来源；历史 `ja / ko / zh-TW` 设置统一回退到英文。
 
-新 UI 加新 key 必须 5 语言都填。**别留 TODO/占位**——如果某语言不会写，至少给英文兜底（不要给中文兜底，因为日文/韩文用户看不懂）。
+新 UI 加新 key 必须同时填写中英文。**别留 TODO/占位**，也不要重新引入第三套翻译表。
 
 key 命名：`<domain>.<feature>.<element>`，例 `channels.list.empty`、`agents.editor.saveButton`。
 
@@ -254,7 +254,7 @@ key 命名：`<domain>.<feature>.<element>`，例 `channels.list.empty`、`agent
 
 1. **改了 service 忘改 route 的 response 字段** → route 测试里 `assert.equal(body.field, ...)` 会挂。先跑相关 test 文件。
 2. **加 DB 字段忘改 prepared statement 的 column 列表** → SQL 报 `no such column` 或 silent skip。grep `INSERT INTO <table>` 全文找补。
-3. **i18n 只加了中英文** → 日韩繁体三语 fallback 到 key 字符串，UI 上显示成 `channels.list.empty`。lint 时会报 missing key。
+3. **i18n 只改了中文或英文一侧** → 两侧 key 不对称，UI 可能显示成 `channels.list.empty`。`npm run i18n:check` 会报 missing key。
 4. **frontend `useEffect` 缺依赖** → eslint-plugin-react-hooks 会报，**不要** `// eslint-disable-next-line`，是真有 bug。
 5. **better-sqlite3 prepared statement 跨 user 复用** → 不准。每次操作都要把 `userId` 当 param 传进去。
 6. **写 plugin 忘加 manifest type 校验** → loader silently skip。`pluginManifest.js` 的 `PLUGIN_TYPES` 是 source of truth。

@@ -643,8 +643,8 @@ test('evolution settings builds a human decision from the exact reviewed confirm
   assert.equal(buildEvolutionDecisionInput({ evaluationId: 'eval-1', confirmations }, 'approved', '  '), null)
 })
 
-test('evolution workbench copy is complete in every supported language', () => {
-  for (const language of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('evolution workbench copy is complete in both supported languages', () => {
+  for (const language of ['zh', 'en']) {
     assert.equal(typeof translations[language].evolution.title, 'string')
     assert.equal(typeof translations[language].evolution.unsupportedBoundary, 'string')
     assert.equal(typeof translations[language].evolution.rollbackPolicyReason, 'string')

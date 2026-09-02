@@ -396,7 +396,10 @@ test('artifact host delegates XLSX package construction to the format leaf', () 
     'utf8',
   )
   assert.match(source, /import \{ buildXlsxArtifactBuffer \} from '\.\/xlsxArtifactFormat\.js'/)
-  assert.match(source, /await buildXlsxArtifactBuffer\(\{ sheets: validSheets, preparedImages: officeImages \}\)/)
+  assert.match(
+    source,
+    /await buildXlsxArtifactBuffer\(\{\s*sheets:\s*validSheets,\s*preparedImages:\s*officeImages,?\s*\}\)/,
+  )
   assert.doesNotMatch(source, /function (?:buildSheetXml|buildXlsxDrawingXml|xlsxAnchorCell)\b/)
   assert.doesNotMatch(source, /spreadsheetDrawing|xl\/worksheets/)
 })

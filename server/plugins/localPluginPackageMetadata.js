@@ -17,7 +17,10 @@ export function sameFileMetadata(left, right) {
     && left.ctimeMs === right.ctimeMs
 }
 
-export function readBoundedJson(filePath, maxBytes, code, { missingCode = code } = {}) {
+export function readBoundedJson(filePath, maxBytes, code, {
+  missingCode = code,
+  requireCanonical = true,
+} = {}) {
   let descriptor
   try {
     const before = fs.lstatSync(filePath)
@@ -55,7 +58,7 @@ export function readBoundedJson(filePath, maxBytes, code, { missingCode = code }
     }
     const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, totalBytes))
     const parsed = JSON.parse(text)
-    if (`${JSON.stringify(parsed)}\n` !== text) {
+    if (requireCanonical && `${JSON.stringify(parsed)}\n` !== text) {
       throw metadataError(code, 'required metadata is not canonical JSON')
     }
     return parsed

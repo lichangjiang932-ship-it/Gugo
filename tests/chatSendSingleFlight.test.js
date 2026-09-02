@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client'
 
 import { getAuthToken, setAuthToken } from '../src/lib/accountClient.js'
 import useChatSendFlow from '../src/pages/ChatSplit/useChatSendFlow.js'
+import { reduceSessionLifecycleState } from '../src/store/reducers/sessionLifecycleReducer.js'
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
@@ -365,6 +366,74 @@ test('a project draft stays out of the sidebar until ACK and commits its workspa
     })
     assert.equal(accepted, true)
     assert.equal(actions.filter((action) => action.type === 'NEW_SESSION').length, 1)
+  } finally {
+    setAuthToken('')
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('switching from a project draft to a workspace-less session sends from the server default', async () => {
+  const dom = setupDom()
+  const actions = []
+  const activations = []
+  const turnRequests = []
+  const root = createRoot(document.getElementById('root'))
+  let triggerSend = null
+  setAuthToken('local-test-token')
+
+  const defaultWorkspacePath = 'D:\\Current\\default-project'
+  const projectDraftPath = 'D:\\Projects\\project-a'
+  const switchedState = reduceSessionLifecycleState({
+    activeSessionId: null,
+    agentMode: 'chat',
+    defaultWorkspacePath,
+    draftSessionId: null,
+    draftWorkspacePath: projectDraftPath,
+    sessions: [{
+      id: 'legacy-workspace-less',
+      title: 'Legacy session',
+      messages: [],
+      modelName: 'model-a',
+      modelProviderId: 'provider-a',
+    }],
+    skillConfigs: {},
+    toolsConfig: {},
+  }, {
+    type: 'SWITCH_SESSION',
+    payload: 'legacy-workspace-less',
+  })
+
+  assert.equal(switchedState.draftWorkspacePath, '')
+
+  try {
+    await act(async () => {
+      root.render(createElement(Harness, {
+        activateWorkspaceForTurn: async (path) => {
+          activations.push(path)
+          return { path }
+        },
+        dispatch: (action) => actions.push(action),
+        draftWorkspacePath: projectDraftPath,
+        onReady: (value) => { triggerSend = value },
+        state: switchedState,
+        runChatTurn: async (request) => {
+          turnRequests.push(request)
+          request.onTurnAccepted?.({ turnId: 'turn-default-workspace' })
+          return { completed: true }
+        },
+      }))
+    })
+
+    let accepted
+    await act(async () => { accepted = await triggerSend('continue in the default project') })
+
+    assert.equal(accepted, true)
+    assert.deepEqual(activations, [defaultWorkspacePath])
+    assert.equal(turnRequests[0].workspacePath, defaultWorkspacePath)
+    assert.equal(activations.includes(projectDraftPath), false)
+    assert.equal(turnRequests.some((request) => request.workspacePath === projectDraftPath), false)
+    assert.equal(actions.some((action) => action.payload?.workspacePath === projectDraftPath), false)
   } finally {
     setAuthToken('')
     await act(async () => root.unmount())

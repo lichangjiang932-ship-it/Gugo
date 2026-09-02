@@ -49,6 +49,7 @@ export async function startServerTurn({
   displayContent,
   attachments,
   workspacePath,
+  locale,
   modelConfigRevision,
   modelName,
   modelProviderId,
@@ -78,6 +79,7 @@ export async function startServerTurn({
       displayContent,
       attachments: Array.isArray(attachments) ? attachments : [],
       ...(normalizedWorkspacePath ? { workspacePath: normalizedWorkspacePath } : {}),
+      ...(typeof locale === 'string' && locale.trim() ? { locale: locale.trim() } : {}),
       modelName,
       ...(modelProviderId ? { modelProviderId } : {}),
       ...(normalizedModelConfigRevision === null

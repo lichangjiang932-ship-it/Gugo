@@ -7,6 +7,7 @@ import test from 'node:test'
 import Database from '../server/adapters/sqliteDriver.js'
 
 import {
+  createSchemaMigrationPlan,
   LATEST_SCHEMA_VERSION,
   runSchemaMigrations,
 } from '../server/migrations/index.js'
@@ -54,6 +55,24 @@ function createBarrierPrerequisites(db) {
       checkpoint_state_json TEXT
     );
   `)
+}
+
+function migrateSchemaThrough(db, targetVersion) {
+  let currentVersion = 0
+  for (const migration of createSchemaMigrationPlan()) {
+    if (migration.version > targetVersion) break
+    const applyMigration = () => {
+      migration.up(db)
+      db.prepare(`
+        INSERT INTO meta (key, value) VALUES ('schema_version', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).run(String(migration.version))
+    }
+    if (migration.atomicWithVersion) db.transaction(applyMigration).immediate()
+    else applyMigration()
+    currentVersion = migration.version
+  }
+  return currentVersion
 }
 
 function createBarrierDatabasePair() {
@@ -552,11 +571,8 @@ test('non-canonical JSON plugin ids cannot bypass a canonical barrier', () => {
 test('schema 103 upgrade recreates stale identity and JSON barrier triggers', () => {
   const db = new Database(':memory:')
   try {
-    createBarrierPrerequisites(db)
-    migrateToV103(db)
+    assert.equal(migrateSchemaThrough(db, 103), 103)
     db.exec(`
-      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-      INSERT INTO meta (key, value) VALUES ('schema_version', '103');
       DROP TRIGGER trg_runtime_plugin_states_release_identity_update;
       DROP TRIGGER trg_turn_checkpoints_state_json_plugin_mutation_barrier_insert;
     `)
@@ -571,10 +587,21 @@ test('schema 103 upgrade recreates stale identity and JSON barrier triggers', ()
     `).get()
     assert.match(evolutionRunTable?.sql || '', /session_ids_json/u)
     assert.match(evolutionRunTable?.sql || '', /'promoted'/u)
+    db.prepare(`INSERT INTO runtime_plugin_releases (
+      release_id, plugin_id, source_digest, source_text, plugin_snapshot_json,
+      validation_status, health_status, created_at
+    ) VALUES (?, ?, ?, ?, ?, 'passed', 'passed', ?)`)
+      .run(
+        'sample-release',
+        'sample-plugin',
+        `sha256-${'a'.repeat(64)}`,
+        'source',
+        '{"id":"sample-plugin"}',
+        1,
+      )
     db.prepare(`
-      INSERT INTO runtime_plugin_releases (release_id, plugin_id) VALUES (?, ?)
-    `).run('sample-release', 'sample-plugin')
-    db.prepare('INSERT INTO runtime_plugin_states (plugin_id) VALUES (?)').run('other-plugin')
+      INSERT INTO runtime_plugin_states (plugin_id, updated_at) VALUES (?, ?)
+    `).run('other-plugin', 1)
     acquireRuntimePluginMutationBarrier('sample-plugin', {
       db,
       token: 'barrier-token-0001',

@@ -133,6 +133,7 @@ const viteWrapperTests = new Set([
   normalize('tests/RightPreviewPane.test.js'),
   normalize('tests/RightWorkbench.test.js'),
   normalize('tests/SlashInlinePanelHost.test.js'),
+  normalize('tests/TaskProgressTable.test.js'),
 ])
 
 function requiresNativeTransform(file) {
@@ -204,7 +205,7 @@ function killProcessTree(child, signal = 'SIGTERM') {
   }
 }
 
-function runTestProcess(args, { captureOutput = false, timeoutMs }) {
+function runTestProcess(args, { captureOutput = false, streamOutput = false, timeoutMs }) {
   return new Promise((resolve) => {
     const stdout = []
     const stderr = []
@@ -230,7 +231,7 @@ function runTestProcess(args, { captureOutput = false, timeoutMs }) {
 
     try {
       child = spawn(process.execPath, args, {
-        stdio: captureOutput ? ['inherit', 'pipe', 'pipe'] : 'inherit',
+        stdio: captureOutput || streamOutput ? ['inherit', 'pipe', 'pipe'] : 'inherit',
         env: testEnv,
         windowsHide: true,
         // A dedicated process group lets POSIX runners terminate workers and
@@ -242,9 +243,15 @@ function runTestProcess(args, { captureOutput = false, timeoutMs }) {
       return
     }
 
-    if (captureOutput) {
-      child.stdout?.on('data', (chunk) => stdout.push(Buffer.from(chunk)))
-      child.stderr?.on('data', (chunk) => stderr.push(Buffer.from(chunk)))
+    if (captureOutput || streamOutput) {
+      child.stdout?.on('data', (chunk) => {
+        if (captureOutput) stdout.push(Buffer.from(chunk))
+        if (streamOutput) process.stdout.write(chunk)
+      })
+      child.stderr?.on('data', (chunk) => {
+        if (captureOutput) stderr.push(Buffer.from(chunk))
+        if (streamOutput) process.stderr.write(chunk)
+      })
     }
 
     child.once('error', (error) => finish(null, null, error))
@@ -289,7 +296,11 @@ function processOutcome(result) {
 }
 
 function reportFailedProcess(result, label) {
-  const summary = `${label}; ${processOutcome(result)}`
+  const tapFailures = tapFailureSummaries(result)
+  const tapDetails = tapFailures.length
+    ? `; tapFailures=${tapFailures.join(' | ')}`
+    : ''
+  const summary = `${label}; ${processOutcome(result)}${tapDetails}`
   console.error(`[run-tests] failed ${summary}`)
   return summary
 }
@@ -319,7 +330,8 @@ if (batchFiles.length) {
       ...batchNodeArgs,
       ...batch,
     ], {
-      captureOutput: coverageMode,
+      captureOutput: true,
+      streamOutput: !coverageMode,
       timeoutMs: batchTimeoutMs,
     })
     if (coverageMode) forwardCapturedOutput(result)
@@ -360,6 +372,19 @@ function capturedOutput(result) {
     .filter(Boolean)
     .map((chunk) => chunk.toString('utf8'))
     .join('\n')
+}
+
+function tapFailureSummaries(result) {
+  const failures = []
+  for (const match of capturedOutput(result).matchAll(
+    /^\s*not ok\s+\d+\s+-\s+([^\r\n]+)/gmu,
+  )) {
+    const summary = match[1].trim().slice(0, 200)
+    if (!summary || failures.includes(summary)) continue
+    failures.push(summary)
+    if (failures.length === 3) break
+  }
+  return failures
 }
 
 function coverageThresholdFailures(result) {

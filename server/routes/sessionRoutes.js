@@ -1,6 +1,11 @@
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
 import { describeTurnEngineHostUnavailableError } from '../services/turnEngineHostErrorContract.js'
+import { isLocalOwnerUser, resolveAuthMode } from '../adapters/authAccount.js'
+import { isLoopbackRequest } from '../utils/loopbackRequest.js'
+import { describeSessionCatalogSource } from '../services/sessionCatalogSource.js'
+
+export const LEGACY_SESSION_IMPORT_MAX_BODY_BYTES = 8 * 1024 * 1024
 
 async function resolveSessionAdminPort() {
   const { getSessionAdminPort } = await import('../core/turnPersistenceAdapter.js')
@@ -45,6 +50,14 @@ function sendSessionError(res, error) {
       },
     })
   }
+  if (error?.code === 'LEGACY_SESSION_IMPORT_CONFLICT') {
+    return sendJson(res, 409, {
+      error: {
+        code: error.code,
+        message: 'legacy Session import conflicts with server-owned data',
+      },
+    })
+  }
   if (error?.code === 'SESSION_BRANCH_DEPTH_LIMIT') {
     return sendJson(res, 409, {
       error: {
@@ -52,6 +65,15 @@ function sendSessionError(res, error) {
         message: error.message,
         maxDepth: error.maxDepth,
       },
+    })
+  }
+  if (typeof error?.code === 'string'
+    && error.code.startsWith('TURN_WORKSPACE_')
+    && Number.isInteger(error.statusCode)
+    && error.statusCode >= 400
+    && error.statusCode < 500) {
+    return sendJson(res, error.statusCode, {
+      error: { code: error.code, message: error.message },
     })
   }
   if (error?.code === 'INVALID_SESSION_MUTATION' || error instanceof SyntaxError) {
@@ -83,6 +105,8 @@ export async function handleSessionRequest(
   res,
   engine = null,
   sessionAdmin = null,
+  env = process.env,
+  cwd = process.cwd(),
 ) {
   const userId = authenticateRequest(req)
   if (!userId) return unauthorized(res)
@@ -91,6 +115,29 @@ export async function handleSessionRequest(
   const url = new URL(req.url, 'http://localhost')
   const parts = routeParts(url.pathname)
 
+  if (req.method === 'POST' && url.pathname === '/api/sessions/import') {
+    if (resolveAuthMode(env) !== 'local'
+      || !isLoopbackRequest(req)
+      || !isLocalOwnerUser(userId, env)) {
+      return sendJson(res, 403, {
+        error: {
+          code: 'LOCAL_OWNER_ONLY',
+          message: 'legacy Session import is limited to the loopback local owner',
+        },
+      })
+    }
+    if (typeof admin.importLegacySessions !== 'function') {
+      return sendJson(res, 501, {
+        error: {
+          code: 'LEGACY_SESSION_IMPORT_UNSUPPORTED',
+          message: 'the active Session persistence adapter does not support legacy imports',
+        },
+      })
+    }
+    const body = await readJson(req, { maxBytes: LEGACY_SESSION_IMPORT_MAX_BODY_BYTES })
+    const result = await admin.importLegacySessions({ userId, sessions: body.sessions })
+    return sendJson(res, 200, { ok: true, ...result })
+  }
   if (req.method === 'GET' && url.pathname === '/api/sessions/search') {
     const results = await admin.searchMessages({
       userId,
@@ -109,7 +156,10 @@ export async function handleSessionRequest(
       limit: url.searchParams.get('limit') || 100,
       offset: url.searchParams.get('offset') || 0,
     })
-    return sendJson(res, 200, { sessions })
+    return sendJson(res, 200, {
+      sessions,
+      source: describeSessionCatalogSource({ cwd, env }),
+    })
   }
 
   if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2]
@@ -170,6 +220,28 @@ export async function handleSessionRequest(
     })
     return result
       ? sendJson(res, 200, { ...result, ok: true })
+      : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
+  }
+
+  if (req.method === 'PUT' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2]
+    && parts[3] === 'workspace' && parts.length === 4) {
+    if (typeof admin.setSessionWorkspace !== 'function') {
+      return sendJson(res, 501, {
+        error: {
+          code: 'SESSION_WORKSPACE_UPDATE_UNSUPPORTED',
+          message: 'the active Session persistence adapter does not support workspace updates',
+        },
+      })
+    }
+    const sessionId = decodeURIComponent(parts[2])
+    const body = await readJson(req, { maxBytes: 64 * 1024 })
+    const session = await admin.setSessionWorkspace({
+      userId,
+      sessionId,
+      workspacePath: body.workspacePath,
+    })
+    return session
+      ? sendJson(res, 200, { ok: true, session })
       : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
   }
 

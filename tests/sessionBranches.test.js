@@ -127,6 +127,7 @@ test('forkSession copies only persisted transcript with fresh message ids and sa
   assert.deepEqual(result.session, {
     id: 'branch-copy',
     title: 'Source',
+    workspacePath: null,
     createdAt: 500,
     updatedAt: 500,
     lastViewedAt: null,
@@ -136,6 +137,7 @@ test('forkSession copies only persisted transcript with fresh message ids and sa
     branchLabel: 'Alternative',
     forkedAt: 500,
     revision: 2,
+    turnEventRevision: 0,
   })
   const copied = listMessages({ userId: owner.userId, sessionId: 'branch-copy' })
   assert.deepEqual(copied.map(({ id }) => id), ['branch-user-copy', 'branch-assistant-copy'])

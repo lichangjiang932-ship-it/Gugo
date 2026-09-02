@@ -2,6 +2,7 @@ import { PauseCircle, RotateCcw, Send } from 'lucide-react'
 import EditablePlanCard from '../../components/EditablePlanCard.jsx'
 import DirectoryRequestCard from './DirectoryRequestCard.jsx'
 import { localizedJobModelFailure } from './jobModelFailurePresentation.js'
+import { localizedJobEventMessage } from './jobEventPresentation.js'
 import { ACTIVE_STATUSES, formatTime } from './taskRunUtils.js'
 
 export default function JobOverviewCard({
@@ -14,8 +15,10 @@ export default function JobOverviewCard({
 }) {
   const job = controller.selectedJob
   const failureAction = controller.jobFailureRecovery?.action || ''
-  const terminalFailure = [...(job.events || [])].reverse().find((event) => event?.type === 'failed')?.payload
-  const failureMessage = localizedJobModelFailure(terminalFailure, t, job.error)
+  const terminalFailureEvent = [...(job.events || [])].reverse().find((event) => event?.type === 'failed')
+  const failureMessage = terminalFailureEvent
+    ? localizedJobEventMessage(terminalFailureEvent, t)
+    : localizedJobModelFailure(null, t, job.error)
   return (
     <div className="rounded-md border border-ink/20 bg-paper-2 p-4">
       <div className="flex items-start justify-between gap-4">

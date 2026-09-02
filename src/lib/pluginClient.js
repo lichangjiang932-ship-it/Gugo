@@ -49,11 +49,25 @@ function assertLocalPluginPackageStore(store) {
     throw new TypeError('unsupported local plugin package response')
   }
   for (const entry of store.packages) {
+    const signedMarketplacePackage = entry?.publisherVerified === true
+      && entry?.schemaVersion === 2
+      && entry?.sourceKind === 'local-marketplace'
+      && entry?.marketplace
+      && /^[A-Za-z0-9_-]{1,80}$/.test(String(entry.marketplace.name || ''))
+      && typeof entry.marketplace.displayName === 'string'
+      && entry?.publisher
+      && LOCAL_PLUGIN_PACKAGE_ID_RE.test(String(entry.publisher.id || ''))
+      && typeof entry.publisher.displayName === 'string'
+      && LOCAL_PLUGIN_PACKAGE_REVISION_RE.test(String(entry.publisher.keyId || ''))
+      && LOCAL_PLUGIN_PACKAGE_REVISION_RE.test(String(entry.publicationDigest || ''))
+    const directLocalPackage = entry?.publisherVerified === false
+      && entry?.schemaVersion === 1
+      && entry?.sourceKind === 'local-directory'
     if (
       !entry
       || typeof entry !== 'object'
       || Array.isArray(entry)
-      || entry.schemaVersion !== LOCAL_PLUGIN_PACKAGE_SCHEMA_VERSION
+      || (!directLocalPackage && !signedMarketplacePackage)
       || !LOCAL_PLUGIN_PACKAGE_ID_RE.test(String(entry.pluginId || ''))
       || typeof entry.pluginVersion !== 'string'
       || !entry.pluginVersion
@@ -65,8 +79,6 @@ function assertLocalPluginPackageStore(store) {
       || entry.totalBytes < 1
       || !Number.isSafeInteger(entry.installedAt)
       || entry.installedAt < 0
-      || entry.publisherVerified !== false
-      || entry.sourceKind !== 'local-directory'
     ) {
       throw new TypeError('unsupported local plugin package response')
     }

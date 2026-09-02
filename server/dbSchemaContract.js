@@ -1,13 +1,27 @@
 const REQUIRED_TABLE_COLUMNS = Object.freeze({
   meta: ['key', 'value'],
   users: ['id', 'email', 'created_at', 'updated_at', 'password_hash', 'password_salt', 'password_set_at'],
-  sessions: ['token', 'user_id', 'expires_at', 'created_at', 'revision', 'pinned_at', 'parent_session_id'],
-  jobs: ['id', 'user_id', 'status', 'created_at', 'updated_at', 'model_provider_id', 'model_config_revision'],
+  sessions: [
+    'token',
+    'user_id',
+    'expires_at',
+    'created_at',
+    'revision',
+    'pinned_at',
+    'parent_session_id',
+    'workspace_path',
+  ],
+  jobs: ['id', 'user_id', 'status', 'created_at', 'updated_at', 'model_provider_id', 'model_config_revision', 'auto_retry_enabled', 'auto_retry_max_attempts', 'auto_retry_attempts', 'auto_retry_base_delay_ms'],
   job_steps: ['id', 'job_id', 'status', 'sort_order'],
-  job_events: ['id', 'job_id', 'type', 'created_at'],
+  job_events: ['id', 'job_id', 'type', 'code', 'params_json', 'created_at'],
   job_artifacts: ['id', 'job_id', 'user_id', 'type', 'url', 'created_at'],
+  job_wakeups: ['job_id', 'wake_kind', 'claim_token'],
   skills: ['id', 'user_id', 'name', 'version'],
   skill_assets: ['skill_id', 'path', 'content'],
+  user_tool_permissions: ['user_id', 'tool_name', 'enabled', 'updated_at'],
+  pinned_memories: ['id', 'user_id', 'kind', 'title', 'content', 'tokens', 'enabled', 'created_at', 'updated_at'],
+  todos: ['id', 'user_id', 'title', 'status', 'priority', 'project', 'created_at', 'updated_at', 'completed_at'],
+  effort_settings: ['user_id', 'effort', 'max_steps', 'reasoning_depth', 'updated_at'],
   agents: ['id', 'user_id', 'name'],
   memories: ['id', 'user_id', 'agent_id', 'pinned', 'last_used_at'],
   model_providers: [
@@ -107,12 +121,110 @@ const REQUIRED_TABLE_COLUMNS = Object.freeze({
   evolution_promotions: ['id', 'decision_origin', 'automation_run_id'],
 })
 
+export const REQUIRED_PRIMARY_KEYS = Object.freeze({
+  meta: ['key'],
+  users: ['id'],
+  sessions: ['token'],
+  connector_idempotency: ['user_id', 'idempotency_key'],
+  login_codes: ['email'],
+  messages: ['id'],
+  user_tool_permissions: ['user_id', 'tool_name'],
+  pinned_memories: ['id'],
+  todos: ['id'],
+  effort_settings: ['user_id'],
+  turn_events: ['id'],
+  session_meters: ['session_id'],
+  memory_links: ['from_id', 'to_slug'],
+  side_effect_executions: ['owner_id', 'scope_key', 'tool_call_id'],
+  channel_agents: ['channel_id', 'agent_id'],
+  bridge_contacts: ['user_id', 'integration_id', 'provider', 'external_user_id'],
+  local_file_access_settings: ['user_id'],
+  local_file_grants: ['id'],
+  user_approval_settings: ['user_id'],
+  approval_tool_grants: ['user_id', 'tool_name', 'command_prefix'],
+  job_turn_checkpoints: ['step_id'],
+  job_wakeups: ['job_id'],
+  mcp_oauth_credentials: ['server_id'],
+  workspace_trust: ['user_id', 'root_path'],
+  user_tool_risk_overrides: ['user_id', 'tool_name'],
+  webhook_replay_guard: ['integration_id', 'signature_digest'],
+  job_execution_leases: ['job_id'],
+  turn_execution_leases: ['user_id', 'session_id', 'turn_id'],
+  turn_checkpoints: ['user_id', 'session_id', 'turn_id'],
+  runtime_plugin_states: ['plugin_id'],
+  evolution_evidence_exclusions: ['user_id', 'evidence_id'],
+  turn_recovery_states: ['user_id', 'session_id', 'turn_id'],
+  runtime_plugin_release_pins: ['plugin_id', 'release_id', 'reference_kind', 'reference_id'],
+  turn_execution_fences: ['user_id', 'session_id', 'turn_id'],
+  runtime_plugin_permission_grants: ['plugin_id'],
+  evolution_auto_configs: ['user_id'],
+  evolution_canary_outcome_snapshots: ['outcome_id'],
+  evolution_promotion_outcome_snapshots: ['outcome_id'],
+})
+
+export const REQUIRED_UNIQUE_KEYS = Object.freeze({
+  users: [['email']],
+  evolution_operations: [['user_id', 'kind', 'idempotency_key']],
+  evolution_canary_assignments: [['user_id', 'session_id', 'turn_id']],
+  evolution_canary_outcomes: [['assignment_id']],
+  evolution_canary_online_grades: [['outcome_id']],
+  evolution_canary_online_guard_evaluations: [['trigger_grade_id']],
+  evolution_canary_rollbacks: [['release_id']],
+  evolution_canary_rollback_evaluations: [['outcome_id']],
+  evolution_promotion_assignments: [['user_id', 'session_id', 'turn_id']],
+  evolution_promotion_outcomes: [['assignment_id']],
+  evolution_promotion_online_grades: [['outcome_id']],
+  evolution_promotion_online_guard_evaluations: [['trigger_grade_id']],
+  evolution_promotion_rollbacks: [['promotion_id']],
+  side_effect_executions: [['owner_id', 'scope_key', 'idempotency_key']],
+  turn_events: [['user_id', 'session_id', 'turn_id', 'sequence']],
+  session_content_outbox: [['event_id']],
+})
+
+/** Return exact PK/UNIQUE conflicts that would make a runtime UPSERT unsafe. */
+export function collectMissingRequiredKeyConstraints(db) {
+  const missing = []
+  for (const [table, expectedColumns] of Object.entries(REQUIRED_PRIMARY_KEYS)) {
+    const actualColumns = db.prepare('SELECT name, pk FROM pragma_table_info(?)').all(table)
+      .filter((row) => Number(row.pk) > 0)
+      .sort((left, right) => Number(left.pk) - Number(right.pk))
+      .map((row) => row.name)
+    if (actualColumns.length !== expectedColumns.length
+      || actualColumns.some((column, position) => column !== expectedColumns[position])) {
+      missing.push(`primary-key:${table}`)
+    }
+  }
+
+  for (const [table, expectedKeys] of Object.entries(REQUIRED_UNIQUE_KEYS)) {
+    const indexes = db.prepare(`
+      SELECT name, "unique" AS is_unique, partial
+      FROM pragma_index_list(?)
+    `).all(table)
+    for (const expectedColumns of expectedKeys) {
+      const exists = indexes.some((index) => {
+        if (Number(index.is_unique) !== 1 || Number(index.partial) !== 0) return false
+        const actualColumns = db.prepare('SELECT name FROM pragma_index_info(?) ORDER BY seqno')
+          .all(index.name)
+          .map((row) => row.name)
+        return actualColumns.length === expectedColumns.length
+          && actualColumns.every((column, position) => column === expectedColumns[position])
+      })
+      if (!exists) missing.push(`unique-key:${table}.${expectedColumns.join(',')}`)
+    }
+  }
+  return missing
+}
+
 const REQUIRED_INDEXES = Object.freeze({
   idx_sessions_user: { table: 'sessions', columns: ['user_id'] },
   idx_sessions_expires: { table: 'sessions', columns: ['expires_at'] },
   idx_jobs_status_created: { table: 'jobs', columns: ['status', 'created_at'] },
   idx_jobs_user_created: { table: 'jobs', columns: ['user_id', 'created_at'] },
   idx_jobs_user_status: { table: 'jobs', columns: ['user_id', 'status'] },
+  idx_user_tool_permissions_user: { table: 'user_tool_permissions', columns: ['user_id'] },
+  idx_pinned_memories_user: { table: 'pinned_memories', columns: ['user_id', 'updated_at'] },
+  idx_todos_user_status: { table: 'todos', columns: ['user_id', 'status', 'priority'] },
+  idx_session_meters_user: { table: 'session_meters', columns: ['user_id', 'updated_at'] },
   idx_memories_user_agent: { table: 'memories', columns: ['user_id', 'agent_id', 'pinned', 'last_used_at'] },
   idx_model_providers_user: { table: 'model_providers', columns: ['user_id', 'enabled', 'provider_key'] },
   idx_turn_events_replay: { table: 'turn_events', columns: ['user_id', 'session_id', 'turn_id', 'sequence'] },
@@ -151,6 +263,11 @@ const REQUIRED_INDEXES = Object.freeze({
 const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { table: 'sessions', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
   { table: 'jobs', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
+  { table: 'user_tool_permissions', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
+  { table: 'pinned_memories', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
+  { table: 'todos', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
+  { table: 'effort_settings', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
+  { table: 'session_meters', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
   { table: 'memories', from: 'agent_id', target: 'agents', to: 'id', onDelete: 'SET NULL' },
   { table: 'turn_events', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
   { table: 'turn_events', from: 'session_id', target: 'sessions', to: 'token', onDelete: 'CASCADE' },
@@ -266,10 +383,9 @@ export function databaseSchemaIncompleteError({ expectedVersion, stage, missing 
 }
 
 /**
- * Verify a small, stable set of schema sentinels spanning the historical and
- * current migration epochs. This is intentionally read-only: a database that
- * claims the current version must prove it before startup enables WAL or any
- * compatibility repair can write to it.
+ * Verify stable schema sentinels and every runtime UPSERT key. This is
+ * intentionally read-only: a database that claims the current version must
+ * prove it before startup enables WAL or any compatibility repair can write.
  */
 export function assertCurrentSchemaContract(db, expectedVersion, { stage = 'postflight' } = {}) {
   const missing = []
@@ -278,6 +394,9 @@ export function assertCurrentSchemaContract(db, expectedVersion, { stage = 'post
   `).get()
   if (String(versionRow?.value) !== String(expectedVersion)) {
     missing.push(`meta.schema_version=${expectedVersion}`)
+  }
+  if (db.prepare("SELECT 1 FROM meta WHERE key = 'reasonix_schema_version'").get()) {
+    missing.push('retired-meta-key:reasonix_schema_version')
   }
 
   for (const [table, requiredColumns] of Object.entries(REQUIRED_TABLE_COLUMNS)) {
@@ -295,6 +414,8 @@ export function assertCurrentSchemaContract(db, expectedVersion, { stage = 'post
       if (!columns.has(column)) missing.push(`column:${table}.${column}`)
     }
   }
+
+  missing.push(...collectMissingRequiredKeyConstraints(db))
 
   for (const [table, forbiddenColumns] of Object.entries(FORBIDDEN_TABLE_COLUMNS)) {
     const columns = new Set(

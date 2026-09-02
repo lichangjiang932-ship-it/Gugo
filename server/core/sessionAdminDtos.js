@@ -152,6 +152,22 @@ function sessionDto(value, label, fail) {
   }
   const title = own(source, 'title', label, fail, { optional: true })
   if (title !== undefined) projected.title = text(title, `${label}.title`, fail, { max: 4096 })
+  const turnEventRevision = own(source, 'turnEventRevision', label, fail, { optional: true })
+  if (turnEventRevision !== undefined) {
+    projected.turnEventRevision = integer(
+      turnEventRevision,
+      `${label}.turnEventRevision`,
+      fail,
+    )
+  }
+  const workspacePath = own(source, 'workspacePath', label, fail, { optional: true })
+  if (workspacePath !== undefined) {
+    projected.workspacePath = text(workspacePath, `${label}.workspacePath`, fail, {
+      max: 32_768,
+      empty: false,
+      nullable: true,
+    })
+  }
   for (const key of SESSION_TIME_FIELDS) {
     const valueAtKey = own(source, key, label, fail, { optional: true })
     if (valueAtKey !== undefined) projected[key] = integer(valueAtKey, `${label}.${key}`, fail)
@@ -291,6 +307,10 @@ function snapshotDto(value, fail, input) {
   }
   const revision = integer(own(source, 'revision', 'result', fail), 'result.revision', fail)
   if (revision !== session.revision) fail('result.revision must match result.session.revision')
+  const rawTurnEventRevision = own(source, 'turnEventRevision', 'result', fail, { optional: true })
+  const turnEventRevision = rawTurnEventRevision === undefined
+    ? undefined
+    : integer(rawTurnEventRevision, 'result.turnEventRevision', fail)
   const totalMessages = integer(
     own(source, 'totalMessages', 'result', fail),
     'result.totalMessages',
@@ -318,7 +338,15 @@ function snapshotDto(value, fail, input) {
     || nextOffset > totalMessages) {
     fail('incomplete snapshot pagination is inconsistent')
   }
-  return Object.freeze({ session, messages, revision, totalMessages, complete, nextOffset })
+  return Object.freeze({
+    session,
+    messages,
+    revision,
+    ...(turnEventRevision === undefined ? {} : { turnEventRevision }),
+    totalMessages,
+    complete,
+    nextOffset,
+  })
 }
 
 function branchesDto(value, fail) {
@@ -370,7 +398,66 @@ function branchesDto(value, fail) {
   return Object.freeze({ rootSessionId, branches, truncated })
 }
 
+function legacyImportResultDto(value, fail, input) {
+  const source = record(value, 'result', fail)
+  const results = array(
+    own(source, 'results', 'result', fail),
+    'result.results',
+    fail,
+    (entry, index) => {
+      const label = `result.results[${index}]`
+      const item = record(entry, label, fail)
+      const id = text(own(item, 'id', label, fail), `${label}.id`, fail, {
+        max: 512,
+        empty: false,
+      })
+      const status = text(own(item, 'status', label, fail), `${label}.status`, fail, {
+        max: 32,
+        empty: false,
+      })
+      if (!['imported', 'server_authoritative'].includes(status)) {
+        fail(`${label}.status is invalid`)
+      }
+      const rawSession = own(item, 'session', label, fail)
+      const session = rawSession === null ? null : sessionDto(rawSession, `${label}.session`, fail)
+      if (session && session.id !== id) fail(`${label}.session.id must match ${label}.id`)
+      if (status === 'imported' && !session) fail(`${label}.session is required for imported sessions`)
+      return Object.freeze({ id, status, session })
+    },
+    { max: input.sessions.length },
+  )
+  if (results.length !== input.sessions.length) {
+    fail('result.results must contain exactly one entry per requested session')
+  }
+  const requestedIds = new Set(input.sessions.map((session) => session.id))
+  const resultIds = new Set()
+  for (const entry of results) {
+    if (!requestedIds.has(entry.id) || resultIds.has(entry.id)) {
+      fail('result.results must match the requested session ids')
+    }
+    resultIds.add(entry.id)
+  }
+  const importedCount = integer(
+    own(source, 'importedCount', 'result', fail),
+    'result.importedCount',
+    fail,
+    { max: input.sessions.length },
+  )
+  const serverAuthoritativeCount = integer(
+    own(source, 'serverAuthoritativeCount', 'result', fail),
+    'result.serverAuthoritativeCount',
+    fail,
+    { max: input.sessions.length },
+  )
+  if (importedCount !== results.filter((entry) => entry.status === 'imported').length
+    || serverAuthoritativeCount !== results.length - importedCount) {
+    fail('result import counts do not match result.results')
+  }
+  return Object.freeze({ results, importedCount, serverAuthoritativeCount })
+}
+
 export function projectSessionAdminResult({ method, value, input, fail }) {
+  if (method === 'importLegacySessions') return legacyImportResultDto(value, fail, input)
   if (method === 'searchMessages') {
     const results = array(
       value,

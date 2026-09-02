@@ -73,6 +73,11 @@ import { finalizeRuntime } from './runtime-finalizeRuntime.js'
 import { assertRuntimeDependencies } from './runtimeContract.js'
 import { isTrustedInternalLoopPrincipal } from './internalExecutionPrincipal.js'
 import {
+  budgetExceededCopy,
+  formatIncompleteTerminalText,
+} from './incompleteTerminalPresentation.js'
+import { normalizeTurnLocale } from '../../../shared/turnLocale.js'
+import {
   appendFinalAnswerToolEvidence,
   buildFinalAnswerEvidenceReviewPrompt,
   buildFinalAnswerEvidenceSnapshot,
@@ -252,6 +257,8 @@ const runtimeDependencies = {
   extractMutationTargets,
   extractTextToolCalls,
   filterCurrentDynamicToolSpecs,
+  budgetExceededCopy,
+  formatIncompleteTerminalText,
   finalAnswerEvidenceDigest,
   findAdjacentDeliveredArtifacts,
   findContinuableArtifactTargets,
@@ -305,6 +312,7 @@ const runtimeDependencies = {
   normalizeToolCalls,
   normalizeToolError,
   normalizeToolResult,
+  normalizeTurnLocale,
   observeTaskVerificationMutation,
   observeTaskVerificationRepair,
   observeToolCalls,

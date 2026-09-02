@@ -267,7 +267,7 @@ export function createTurnCancellationRuntime({
         }
         try {
           await emit('turn.cancelled', {
-            reason: 'Cancelled by user',
+            code: 'TURN_CANCELLED',
             partialText,
             artifactIds,
             deliveryArtifactIds,

@@ -2,6 +2,7 @@ import { Activity, CheckCircle2, Clock3, Eye, RotateCcw } from 'lucide-react'
 import { withDownloadToken } from '../../lib/jobClient.js'
 import { formatTime, stepAcceptance } from './taskRunUtils.js'
 import { localizedJobModelFailure } from './jobModelFailurePresentation.js'
+import { localizedJobEventMessage } from './jobEventPresentation.js'
 import StepDot from './StepDot.jsx'
 
 export default function JobProgressPanels({ job, selectedArtifact, setSelectedArtifact, statusLabel, onRetryStep, t }) {
@@ -139,7 +140,7 @@ function DeliveryDiagnostics({ value, showNextAction = true, showReason = true, 
 
 function JobEvent({ event, showNextAction, t }) {
   const showReason = !['plan_approved', 'step_completed', 'completed'].includes(event.type)
-  const message = localizedJobModelFailure(event.payload, t, event.message)
+  const message = localizedJobEventMessage(event, t)
   return <div className="text-xs"><p className="text-ink">{message}</p><DeliveryDiagnostics value={event.payload} showNextAction={showNextAction} showReason={showReason} t={t} /><p className="text-ink-fade">{formatTime(event.createdAt)}</p></div>
 }
 

@@ -5,6 +5,7 @@ import {
   translations,
   translateKey,
   lookup,
+  normalizeUiLanguage,
   SUPPORTED_LANGUAGES,
   DEFAULT_LANGUAGE,
 } from '../src/i18n/translations.js'
@@ -22,35 +23,42 @@ function leafKeys(obj, prefix = '') {
   return out
 }
 
-test('translations 包含 zh / en / ja / ko / zh-TW 五种语言', () => {
+test('UI 仅保留并公开 zh / en 翻译数据', () => {
   assert.ok(translations.zh, 'zh 缺失')
   assert.ok(translations.en, 'en 缺失')
-  assert.ok(translations.ja, 'ja 缺失')
-  assert.ok(translations.ko, 'ko 缺失')
-  assert.ok(translations['zh-TW'], 'zh-TW 缺失')
+  assert.deepEqual(Object.keys(translations).sort(), ['en', 'zh'])
   assert.equal(DEFAULT_LANGUAGE, 'zh')
   assert.deepEqual(
     SUPPORTED_LANGUAGES.map((l) => l.code).sort(),
-    ['en', 'ja', 'ko', 'zh', 'zh-TW'],
+    ['en', 'zh'],
   )
 })
 
-test('QQ Mail local environment fallback is explained in all five languages', () => {
-  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('旧语言持久值安全回退到英文', () => {
+  assert.equal(normalizeUiLanguage(undefined), 'zh')
+  assert.equal(normalizeUiLanguage('zh'), 'zh')
+  assert.equal(normalizeUiLanguage('en-US'), 'en')
+  assert.equal(normalizeUiLanguage('ja'), 'en')
+  assert.equal(normalizeUiLanguage('ko'), 'en')
+  assert.equal(normalizeUiLanguage('zh-TW'), 'en')
+})
+
+test('QQ Mail local environment fallback is explained in both languages', () => {
+  for (const lang of ['zh', 'en']) {
     const hint = translations[lang]?.access?.qqMailPasswordHint || ''
     assert.match(hint, /MAIL_\*/)
     assert.ok(hint.length >= 20, `${lang} QQ Mail hint is incomplete`)
   }
 })
 
-test('input history navigation setting copy exists in all five languages', () => {
-  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('input history navigation setting copy exists in both languages', () => {
+  for (const lang of ['zh', 'en']) {
     assert.ok(translations[lang]?.settings?.inputHistoryNavigation)
     assert.ok(translations[lang]?.settings?.inputHistoryNavigationDescription)
   }
 })
 
-test('execution activity copy exists in all five languages', () => {
+test('execution activity copy exists in both languages', () => {
   const keys = [
     'toolCallLabel', 'toolCalls', 'expandToolDetails', 'collapseToolDetails', 'toolCopyDetail',
     'toolStandingRule', 'toolStandingRuleScope', 'toolRetry', 'toolLiveOutputReplayNote',
@@ -61,9 +69,6 @@ test('execution activity copy exists in all five languages', () => {
   const toolCounts = {
     zh: '{count} 个工具',
     en: '{count} tools',
-    ja: 'ツール {count} 個',
-    ko: '도구 {count}개',
-    'zh-TW': '{count} 個工具',
   }
   for (const [language, expectedToolCount] of Object.entries(toolCounts)) {
     for (const key of keys) {
@@ -73,13 +78,10 @@ test('execution activity copy exists in all five languages', () => {
   }
 })
 
-test('external and model-provider fee warnings are explicit in all five languages', () => {
+test('external and model-provider fee warnings are explicit in both languages', () => {
   const markers = {
     zh: { external: '外部服务', provider: '上游模型供应商' },
     en: { external: 'external service', provider: 'upstream model provider' },
-    ja: { external: '外部サービス', provider: '上流モデル Provider' },
-    ko: { external: '외부 서비스', provider: '상위 모델 Provider' },
-    'zh-TW': { external: '外部服務', provider: '上游模型供應商' },
   }
   for (const [language, marker] of Object.entries(markers)) {
     assert.ok(translations[language].chatMessages.sideEffectUnknownBody.includes(marker.external), language)
@@ -90,14 +92,14 @@ test('external and model-provider fee warnings are explicit in all five language
   }
 })
 
-test('model provider settings omit the removed billing notice in all five languages', () => {
-  for (const language of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('model provider settings omit the removed billing notice in both languages', () => {
+  for (const language of ['zh', 'en']) {
     assert.equal(Object.hasOwn(translations[language]?.modelProviders || {}, 'byokNotice'), false, language)
   }
 })
 
-test('task center model readiness copy distinguishes configuration and Agent capability in all five languages', () => {
-  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('task center model readiness copy distinguishes configuration and Agent capability in both languages', () => {
+  for (const lang of ['zh', 'en']) {
     const copy = translations[lang]?.taskCenter?.modelReadiness
     assert.ok(copy?.unconfigured, `${lang}: unconfigured`)
     assert.ok(copy?.untested, `${lang}: untested`)
@@ -108,22 +110,19 @@ test('task center model readiness copy distinguishes configuration and Agent cap
   }
 })
 
-test('directory authorization lifetime copy exists in all five languages', () => {
-  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('directory authorization lifetime copy exists in both languages', () => {
+  for (const lang of ['zh', 'en']) {
     assert.ok(translations[lang]?.localFiles?.authorizationLifetime)
     assert.ok(translations[lang]?.localFiles?.authorizationSession)
     assert.ok(translations[lang]?.localFiles?.authorizationPersistent)
   }
 })
 
-test('新增语言 ja/ko/zh-TW 的 key 与 zh 完全对称', () => {
-  const zhKeys = leafKeys(translations.zh).sort()
+test('旧语言代码不保留翻译数据并统一回退到英文', () => {
   for (const lang of ['ja', 'ko', 'zh-TW']) {
-    const langKeys = leafKeys(translations[lang]).sort()
-    const missing = zhKeys.filter((k) => !langKeys.includes(k))
-    const extra = langKeys.filter((k) => !zhKeys.includes(k))
-    assert.deepEqual(missing, [], `${lang} 缺少 key：${missing.join(', ')}`)
-    assert.deepEqual(extra, [], `${lang} 多出 key：${extra.join(', ')}`)
+    assert.equal(Object.hasOwn(translations, lang), false, `${lang} 不应保留物理翻译数据`)
+    assert.equal(translateKey('nav.home', lang), translations.en.nav.home)
+    assert.equal(translateKey('errors.chatFailure', lang), translations.en.errors.chatFailure)
   }
 })
 
@@ -196,7 +195,6 @@ test('lookup 工具函数', () => {
   assert.equal(lookup(null, 'x'), undefined)
 })
 
-test('未知语言代码退化到 zh', () => {
-  // 不在 translations 里的语言 → primary undefined → fallback zh
-  assert.equal(translateKey('nav.home', 'fr'), '首页')
+test('未知语言代码退化到 en', () => {
+  assert.equal(translateKey('nav.home', 'fr'), 'Home')
 })

@@ -175,6 +175,8 @@ v82 在上述确定性 operational guard 之外增加独立的逐 Outcome 在线
 
 `config:runtime` 候选只能提交 `schemaVersion=1`、`mode=patch` 和明确安全键白名单中的 `env` 值；模型端点、模型名称、URL、API Key、token、secret、工具、路径、权限及原型污染键全部在候选落库前拒绝，且 `permissionsRequested` 必须为空。专用 replay 只解析候选并计算 baseline/proposed 哈希和锁定层，不写文件、不调用模型或插件；独立宿主策略随后生成 evaluation。只有 loopback local owner 能逐项确认 candidate、replay、evaluation、baseline/proposed 指纹并作出一次性 approval。
 
+`POST /api/evolution/config-reviews` 现在把 replay、确定性 evaluation 和 approval review 编排为一次自动审查，并明确返回 `awaiting_explicit_approval` 或 `not_eligible`。该入口只生成不可变审计证据：不会创建 approval、不会 apply、不会进入 canary，也不允许权限扩大；通过审查后仍必须由 loopback local owner 明确批准，并在 apply 前提交第二个确认哈希。
+
 应用前还需要第二个由完整审查包派生的 `applyConfirmationSha256`。服务同时对原始 `runtime.json` 和 effective config 做 CAS；任何更高优先级配置锁、审批漂移或手工文件修改都会 fail closed。apply、rollback 和 revoke 都追加不可变 `evolution_config_change_events`，回滚同样要求当前文件精确等于原 apply 的 after 哈希，因此绝不会覆盖后续手工编辑。
 
 文件与 SQLite 审计之间使用持久化 pending journal 保证崩溃恢复：

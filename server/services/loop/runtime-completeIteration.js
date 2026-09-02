@@ -99,7 +99,6 @@ export async function completeIteration(s) {
         const fallback = s.applySafeDeliverableFallback()
         if (!fallback) {
           const incomplete = await s.finishIncomplete({
-            text: 'Files were created, but final deliverable selection did not converge. No unverified or intermediate files were attached to the answer.',
             reason: 'deliverable_selection_missing',
             steeringLeaseId: i.steeringLeaseId,
           })
@@ -142,6 +141,7 @@ export async function completeIteration(s) {
         s.localHtmlDeliveryRetries = 0
       }
   if (i.budgetExceeded) {
+        const budgetCopy = s.d.budgetExceededCopy(s.locale, i.budgetExceeded)
         // ★ Lens-4 fix:预算超限写 audit,审计员能追查 job 为什么没跑完
         if (s.job?.userId) {
           writeToolAudit({
@@ -160,7 +160,7 @@ export async function completeIteration(s) {
         // 对齐 maxIters 路径的做法:让模型基于已有信息收个尾。
         // `allowOverBudget` 只放宽调用次数/token，给本轮一次受控收尾机会。
         if (!s.finalText && i.budgetExceededByCompletedModelResponse) {
-          s.finalText = '\u5df2\u6267\u884c\u6a21\u578b\u8fd4\u56de\u7684\u6700\u540e\u4e00\u6279\u5de5\u5177\u8c03\u7528\uff0c\u4f46\u6a21\u578b token \u9884\u7b97\u5df2\u7528\u5c3d\u3002\u5df2\u4fdd\u5b58\u68c0\u67e5\u70b9\uff1b\u91cd\u8bd5\u540e\u53ef\u4ece\u5f53\u524d\u8fdb\u5ea6\u7ee7\u7eed\uff0c\u4e0d\u4f1a\u91cd\u590d\u5df2\u5b8c\u6210\u7684\u5de5\u5177\u8c03\u7528\u3002'
+          s.finalText = budgetCopy.completedModelResponse
         }
         if (!s.finalText) {
           try {
@@ -169,7 +169,7 @@ export async function completeIteration(s) {
                 ...s.convo,
                 {
                   role: 'system',
-                  content: `任务预算已用尽(${i.budgetExceeded})。请基于目前已经取得的进展给出总结:做完了什么、还差什么、建议用户下一步怎么做。不要再调用任何工具。`,
+                  content: budgetCopy.wrapUpPrompt,
                 },
               ],
               tools: [],
@@ -193,7 +193,7 @@ export async function completeIteration(s) {
         const terminal = await s.finishTerminalResult({
           text: !s.hasRequiredArtifacts()
             ? ''
-            : s.finalText || `(任务预算已用尽:${i.budgetExceeded}。可以点「重试」从断点继续。)`,
+            : s.finalText || budgetCopy.fallbackText,
           artifactIds: s.artifactIds,
           iterations: s.iter + 1,
           incomplete: true,

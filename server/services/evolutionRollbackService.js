@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 import { getDb } from '../db.js'
 import { sanitizeEvolutionText } from './evolutionDatasetService.js'
+import { buildEvolutionRollbackMetrics, evolutionRollbackDecisionMetrics, findEvolutionRollbackPolicyBreaches } from './evolutionRollbackMetrics.js'
 import { readWorkspaceInstructions } from './workspaceInstructions.js'
+
+export { evolutionRollbackDecisionMetrics } from './evolutionRollbackMetrics.js'
 
 const POLICY_VERSION = 'canary-rollback-v1'
 const MAX_EVALUATIONS = 200
@@ -331,21 +333,6 @@ export function hasEvolutionCanaryRollback(releaseId) {
   return Boolean(rollbackRow(String(releaseId)))
 }
 
-function ratio(candidate, baseline) {
-  if (baseline === 0) return candidate === 0 ? 1 : null
-  return candidate / baseline
-}
-
-function average(rows, readValue) {
-  if (!rows.length) return null
-  return rows.reduce((sum, row) => sum + readValue(row), 0) / rows.length
-}
-
-function measuredCost(row) {
-  const usage = parseJson(row.usage_json, null)
-  return normalizeOptionalUsageNumber(usage?.costUsd)
-}
-
 function sampleRows(releaseId, windowSize) {
   return getDb().prepare(`
     WITH eligible AS (
@@ -371,77 +358,6 @@ function sampleRows(releaseId, windowSize) {
   `).all(releaseId, windowSize)
 }
 
-function buildMetrics(rows, policy) {
-  const candidate = rows.filter((row) => row.effective_variant === 'candidate')
-  const baseline = rows.filter((row) => row.effective_variant === 'baseline')
-  const candidateCosts = candidate.map(measuredCost).filter((value) => value !== null)
-  const baselineCosts = baseline.map(measuredCost).filter((value) => value !== null)
-  const candidateAverageDurationMs = average(candidate, (row) => Math.max(0, Number(row.duration_ms) || 0))
-  const baselineAverageDurationMs = average(baseline, (row) => Math.max(0, Number(row.duration_ms) || 0))
-  const candidateAverageCostUsd = candidateCosts.length
-    ? candidateCosts.reduce((sum, value) => sum + value, 0) / candidateCosts.length
-    : null
-  const baselineAverageCostUsd = baselineCosts.length
-    ? baselineCosts.reduce((sum, value) => sum + value, 0) / baselineCosts.length
-    : null
-  const candidateReady = candidate.length >= policy.minimum_candidate_outcomes
-  const baselineReady = baseline.length >= policy.minimum_baseline_outcomes
-  const costReady = candidateReady && baselineReady
-    && candidateCosts.length === candidate.length
-    && baselineCosts.length === baseline.length
-  return {
-    windowSize: policy.window_size,
-    candidate: {
-      outcomes: candidate.length,
-      completed: candidate.filter((row) => row.terminal_state === 'completed').length,
-      failed: candidate.filter((row) => row.terminal_state === 'failed').length,
-      cancelled: candidate.filter((row) => row.terminal_state === 'cancelled').length,
-      failureRate: candidate.length
-        ? candidate.filter((row) => row.terminal_state === 'failed').length / candidate.length
-        : null,
-      cancellationRate: candidate.length
-        ? candidate.filter((row) => row.terminal_state === 'cancelled').length / candidate.length
-        : null,
-      averageDurationMs: candidateAverageDurationMs,
-      costMeasured: candidateCosts.length,
-      averageCostUsd: candidateAverageCostUsd,
-    },
-    baseline: {
-      outcomes: baseline.length,
-      completed: baseline.filter((row) => row.terminal_state === 'completed').length,
-      failed: baseline.filter((row) => row.terminal_state === 'failed').length,
-      cancelled: baseline.filter((row) => row.terminal_state === 'cancelled').length,
-      averageDurationMs: baselineAverageDurationMs,
-      costMeasured: baselineCosts.length,
-      averageCostUsd: baselineAverageCostUsd,
-    },
-    evidence: { candidateReady, baselineReady, costReady },
-    latencyRatio: candidateReady && baselineReady
-      ? ratio(candidateAverageDurationMs, baselineAverageDurationMs)
-      : null,
-    costRatio: costReady ? ratio(candidateAverageCostUsd, baselineAverageCostUsd) : null,
-  }
-}
-
-function policyBreaches(metrics, policy) {
-  const breaches = []
-  if (metrics.evidence.candidateReady
-    && metrics.candidate.failureRate > policy.maximum_candidate_failure_rate) {
-    breaches.push('maximum_candidate_failure_rate')
-  }
-  if (metrics.evidence.candidateReady
-    && metrics.candidate.cancellationRate > policy.maximum_candidate_cancellation_rate) {
-    breaches.push('maximum_candidate_cancellation_rate')
-  }
-  if (metrics.evidence.candidateReady && metrics.evidence.baselineReady) {
-    const latencyBreach = metrics.latencyRatio === null
-      ? metrics.candidate.averageDurationMs > 0 && metrics.baseline.averageDurationMs === 0
-      : metrics.latencyRatio > policy.maximum_latency_ratio
-    if (latencyBreach) breaches.push('maximum_latency_ratio')
-  }
-  return breaches
-}
-
 function baselineObservation(env, expectedSha256) {
   try {
     const text = String(readWorkspaceInstructions({ env })?.text || '').trim()
@@ -450,31 +366,6 @@ function baselineObservation(env, expectedSha256) {
     return { status: observed === expectedSha256 ? 'verified' : 'drifted', sha256: observed }
   } catch {
     return { status: 'unavailable', sha256: null }
-  }
-}
-
-export function evolutionRollbackDecisionMetrics(metrics = {}) {
-  const stripCost = (value = {}) => {
-    const result = { ...value }
-    delete result.costMeasured
-    delete result.averageCostUsd
-    return result
-  }
-  const root = { ...(metrics || {}) }
-  const candidate = root.candidate || {}
-  const baseline = root.baseline || {}
-  const evidence = root.evidence || {}
-  delete root.costRatio
-  delete root.candidate
-  delete root.baseline
-  delete root.evidence
-  const decisionEvidence = { ...evidence }
-  delete decisionEvidence.costReady
-  return {
-    ...root,
-    candidate: stripCost(candidate),
-    baseline: stripCost(baseline),
-    evidence: decisionEvidence,
   }
 }
 
@@ -541,12 +432,12 @@ export function applyEvolutionCanaryOnlineRollback({
   const reason = `Automatic rollback: online_quality_safety:${normalizedBreaches.join(', ')}`
     .slice(0, 2_000)
   getDb().prepare(`
-    INSERT OR IGNORE INTO evolution_canary_rollbacks (
+    INSERT INTO evolution_canary_rollbacks (
       id, user_id, release_id, policy_id, evaluation_id,
       rollback_baseline_sha256, release_fingerprint, baseline_status,
       observed_baseline_sha256, trigger_fingerprint, reason, created_at,
       online_guard_evaluation_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(release_id) DO NOTHING
   `).run(
     randomUUID(), owner, release.id, policy.id, operationalEvaluation.id,
     release.baseline_sha256, release.release_fingerprint, baseline.status,
@@ -574,8 +465,8 @@ export function evaluateEvolutionCanaryRollback({
   `).get(String(outcomeId || '').trim(), release.id, owner)
   if (!outcome) throw serviceError('EVOLUTION_CANARY_OUTCOME_NOT_FOUND', 'canary outcome was not found', 404)
   const rows = sampleRows(release.id, policy.window_size)
-  const metrics = buildMetrics(rows, policy)
-  const breaches = policyBreaches(metrics, policy)
+  const metrics = buildEvolutionRollbackMetrics(rows, policy)
+  const breaches = findEvolutionRollbackPolicyBreaches(metrics, policy)
   // Cost evidence is optional BYOK telemetry. It is persisted for local
   // inspection but never participates in rollback decisions.
   const completeEvidence = metrics.evidence.candidateReady
@@ -593,10 +484,10 @@ export function evaluateEvolutionCanaryRollback({
   const evaluationId = randomUUID()
   const createdAt = timestamp(now)
   getDb().prepare(`
-    INSERT OR IGNORE INTO evolution_canary_rollback_evaluations (
+    INSERT INTO evolution_canary_rollback_evaluations (
       id, user_id, release_id, policy_id, outcome_id, decision,
       metrics_json, breaches_json, evaluation_fingerprint, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(outcome_id) DO NOTHING
   `).run(
     evaluationId,
     owner,
@@ -616,11 +507,11 @@ export function evaluateEvolutionCanaryRollback({
     const baseline = baselineObservation(env, release.baseline_sha256)
     const reason = `Automatic rollback: ${parseJson(evaluation.breaches_json, []).join(', ')}`.slice(0, 2_000)
     getDb().prepare(`
-      INSERT OR IGNORE INTO evolution_canary_rollbacks (
+      INSERT INTO evolution_canary_rollbacks (
         id, user_id, release_id, policy_id, evaluation_id,
         rollback_baseline_sha256, release_fingerprint, baseline_status,
         observed_baseline_sha256, trigger_fingerprint, reason, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(release_id) DO NOTHING
     `).run(
       randomUUID(),
       owner,

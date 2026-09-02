@@ -1,5 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, translateKey } from './translations.js'
+import {
+  DEFAULT_LANGUAGE,
+  normalizeUiLanguage,
+  SUPPORTED_LANGUAGES,
+  translateKey,
+} from './translations.js'
 
 const STORAGE_KEY = 'lang'
 const I18nContext = createContext(null)
@@ -8,7 +13,11 @@ function readInitialLang() {
   if (typeof window === 'undefined') return DEFAULT_LANGUAGE
   try {
     const stored = window.localStorage?.getItem(STORAGE_KEY)
-    if (stored && SUPPORTED_LANGUAGES.some((l) => l.code === stored)) return stored
+    if (stored) {
+      const normalized = normalizeUiLanguage(stored)
+      if (normalized !== stored) window.localStorage?.setItem(STORAGE_KEY, normalized)
+      return normalized
+    }
   } catch {
     // localStorage 不可用（隐私模式/SSR）→ 默认
   }
@@ -19,10 +28,10 @@ export function I18nProvider({ children }) {
   const [lang, setLangState] = useState(readInitialLang)
 
   const setLang = useCallback((next) => {
-    if (!SUPPORTED_LANGUAGES.some((l) => l.code === next)) return
-    setLangState(next)
+    const normalized = normalizeUiLanguage(next)
+    setLangState(normalized)
     try {
-      window.localStorage?.setItem(STORAGE_KEY, next)
+      window.localStorage?.setItem(STORAGE_KEY, normalized)
     } catch {
       // 忽略写入失败
     }
@@ -32,8 +41,8 @@ export function I18nProvider({ children }) {
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
     const onStorage = (e) => {
-      if (e.key === STORAGE_KEY && e.newValue && SUPPORTED_LANGUAGES.some((l) => l.code === e.newValue)) {
-        setLangState(e.newValue)
+      if (e.key === STORAGE_KEY && e.newValue) {
+        setLangState(normalizeUiLanguage(e.newValue))
       }
     }
     window.addEventListener('storage', onStorage)

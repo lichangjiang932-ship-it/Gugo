@@ -6,6 +6,7 @@ import SettingsDataExport from '../components/settings/SettingsDataExport.jsx'
 import SettingsDiagnosticsPanel from '../components/settings/SettingsDiagnosticsPanel.jsx'
 import SettingsFileOutputPanel from '../components/settings/SettingsFileOutputPanel.jsx'
 import SettingsModelsPanel from '../components/settings/SettingsModelsPanel.jsx'
+import SettingsNetworkPolicyPanel from '../components/settings/SettingsNetworkPolicyPanel.jsx'
 import SettingsSideEffectRecoveryPanel from '../components/settings/SettingsSideEffectRecoveryPanel.jsx'
 import {
   SettingsAgentPresetsPanel,
@@ -151,6 +152,7 @@ export default function SettingsView() {
   function renderGeneral() {
     return (
       <SettingsPanel title={t('settings.general')} description={t('settings.generalDescription')}>
+        <SettingsNetworkPolicyPanel t={t} />
         <SettingsFileOutputPanel compact t={t} />
         <SettingsPetPanel compact t={t} />
       </SettingsPanel>

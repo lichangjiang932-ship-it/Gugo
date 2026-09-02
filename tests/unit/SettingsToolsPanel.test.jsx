@@ -104,10 +104,17 @@ test('code execution settings describe the local runtime honestly and keep the t
   }
 })
 
-test('PDF generator settings labels exist in every supported language', () => {
-  for (const language of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('PDF generator settings labels exist in both supported languages', () => {
+  for (const language of ['zh', 'en']) {
     assert.notEqual(translateKey('settingsTools.tools.create_pdf.name', language), 'settingsTools.tools.create_pdf.name')
     assert.notEqual(translateKey('settingsTools.tools.run_code.name', language), 'settingsTools.tools.run_code.name')
     assert.notEqual(translateKey('chatMessages.toolCreatePdf', language), 'chatMessages.toolCreatePdf')
+  }
+
+  for (const legacyLanguage of ['ja', 'ko', 'zh-TW']) {
+    assert.equal(
+      translateKey('settingsTools.tools.create_pdf.name', legacyLanguage),
+      translateKey('settingsTools.tools.create_pdf.name', 'en'),
+    )
   }
 })

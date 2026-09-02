@@ -457,7 +457,10 @@ test('Windows tree-kill worker: cleanup deadline is monotonic and keeps a bounde
 
 test('Windows tree-kill worker: repeated KILL reuses worker threads without leaking handles', {
   skip: process.platform !== 'win32',
-  timeout: 30_000,
+  // The worker may spend up to 30s in its own readiness gate before this
+  // 48-process steady-state stress loop begins. Keep the outer test budget
+  // independent from that inner deadline so ordinary CI load is not a failure.
+  timeout: 90_000,
 }, async (t) => {
   const manager = _testing.createWindowsTreeKillWorkerManager()
   t.after(() => manager.shutdown())
@@ -641,6 +644,80 @@ test('terminateProcessTree late-bind removes a root, child, and grandchild befor
     }
     if (!removed) fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
     _testing.resetWindowsTreeKillWorker()
+  }
+})
+
+test('terminateProcessTree waits for POSIX process-group exit and escalates ignored SIGTERM', {
+  skip: process.platform === 'win32',
+  timeout: 10_000,
+}, async () => {
+  const target = spawn(node, ['-e', [
+    "process.on('SIGTERM', () => {})",
+    "process.stdout.write('READY\\n')",
+    'setInterval(() => {}, 1000)',
+  ].join(';')], {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  })
+  const closed = new Promise((resolve) => target.once('close', resolve))
+  try {
+    await new Promise((resolve, reject) => {
+      target.stdout.once('data', resolve)
+      target.once('error', reject)
+    })
+    assert.equal(await terminateProcessTree({ pid: target.pid, child: target }), true)
+    await closed
+    assert.equal(processExists(target.pid), false)
+  } finally {
+    if (processExists(target.pid)) {
+      try { process.kill(-target.pid, 'SIGKILL') } catch { /* already exited */ }
+      try { target.kill('SIGKILL') } catch { /* already exited */ }
+      await closed
+    }
+  }
+})
+
+test('runProcessWithGroup waits for a POSIX descendant that outlives the SIGTERM root', {
+  skip: process.platform === 'win32',
+  timeout: 10_000,
+}, async () => {
+  const descendantScript = [
+    "process.on('SIGTERM', () => {})",
+    "process.stdout.write('descendant=' + process.pid + '\\n')",
+    'setInterval(() => {}, 1000)',
+  ].join(';')
+  const rootScript = [
+    "const { spawn } = require('node:child_process')",
+    `spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: ['ignore', 'inherit', 'ignore'] })`,
+    'setInterval(() => {}, 1000)',
+  ].join(';')
+  let rootPid = 0
+  let descendantPid = 0
+
+  try {
+    const result = await runProcessWithGroup({
+      shellPath: node,
+      shellArgs: nodeArgs(rootScript),
+      cwd: process.cwd(),
+      env: process.env,
+      timeout: 1_500,
+      onSpawn: (child) => { rootPid = child.pid },
+    })
+    const match = /descendant=(\d+)/u.exec(result.stdout)
+    assert.ok(match, 'the descendant must be ready before the timeout')
+    descendantPid = Number(match[1])
+    assert.equal(result.timedOut, true)
+    assert.equal(result.processTreeCleanupFailed, false)
+    assert.equal(processExists(descendantPid), false)
+    rootPid = 0
+    descendantPid = 0
+  } finally {
+    if (rootPid > 0) {
+      try { process.kill(-rootPid, 'SIGKILL') } catch { /* already exited */ }
+    }
+    if (descendantPid > 0) {
+      try { process.kill(descendantPid, 'SIGKILL') } catch { /* already exited */ }
+    }
   }
 })
 

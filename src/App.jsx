@@ -10,7 +10,6 @@ import { ToastProvider } from './components/Toast.jsx'
 import PreviewBanner from './components/PreviewBanner.jsx'
 import StoragePersistenceNotice from './components/StoragePersistenceNotice.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
-import WorkspaceOnboardingPrompt from './components/WorkspaceOnboardingPrompt.jsx'
 import './plugins/firstPartyUiContributions.js'
 import { UiContributionRenderer, useUiContributions } from './plugins/uiContributionRegistry.js'
 
@@ -64,7 +63,6 @@ function App() {
       <StoragePersistenceNotice />
       <CommandPalette />
       <SessionSearchModal />
-      <WorkspaceOnboardingPrompt />
       <Suspense fallback={<Fallback />}>
         <main>
           <PreviewBanner />

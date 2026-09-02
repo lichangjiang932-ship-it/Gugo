@@ -290,6 +290,32 @@ test('close is idempotent, disposes providers once, and hides LSP again', async 
   assert.equal(await turnHasLsp(), false)
 })
 
+test('runtime close does not resolve before asynchronous provider cleanup finishes', async () => {
+  let releaseCleanup
+  let confirmCleanupStarted
+  const cleanupGate = new Promise((resolve) => { releaseCleanup = resolve })
+  const cleanupStarted = new Promise((resolve) => { confirmCleanupStarted = resolve })
+  await startLspRuntime({
+    env: runtimeEnv([providerConfig()]),
+    createProvider: async (config) => ({
+      ...createProvider(config),
+      async close() {
+        confirmCleanupStarted()
+        await cleanupGate
+      },
+    }),
+  })
+
+  let settled = false
+  const closing = closeLspRuntime().then(() => { settled = true })
+  await cleanupStarted
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(settled, false)
+  releaseCleanup()
+  await closing
+  assert.equal(settled, true)
+})
+
 test('runtime reports only stable query failure codes and recovers after a successful query', async () => {
   let failQuery = true
   await startLspRuntime({
@@ -342,6 +368,41 @@ test('runtime reports only stable query failure codes and recovers after a succe
     reason: 'configured',
     code: null,
   })
+})
+
+test('runtime reports a first-query execution failure without leaking process details', async () => {
+  await startLspRuntime({
+    env: runtimeEnv([providerConfig()]),
+    createProvider: async (config) => ({
+      ...createProvider(config),
+      async query() {
+        const failure = new Error('private executable C:\\secret\\typescript-language-server.exe')
+        failure.code = 'LSP_PROCESS_FAILED'
+        failure.command = 'C:\\secret\\typescript-language-server.exe'
+        failure.args = ['--private']
+        failure.env = { PRIVATE_TOKEN: 'secret' }
+        failure.cwd = 'C:\\private-workspace'
+        throw failure
+      },
+    }),
+  })
+
+  await assert.rejects(
+    getLspService().query({
+      operation: 'goToDefinition',
+      filePath: 'src/example.ts',
+      workspaceRoot: '/workspace',
+      position: { line: 0, character: 0 },
+    }),
+    (failure) => failure?.code === 'LSP_PROCESS_FAILED',
+  )
+  assert.deepEqual(getLspRuntimeStatus(), {
+    enabled: true,
+    providerCount: 1,
+    reason: 'query_failed',
+    code: 'LSP_PROCESS_FAILED',
+  })
+  assert.equal(JSON.stringify(getLspRuntimeStatus()).includes('secret'), false)
 })
 
 test('runtime ignores request failures that do not describe provider readiness', async () => {

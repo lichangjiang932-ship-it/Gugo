@@ -104,6 +104,10 @@ test('project picker searches, closes accessibly, and creates a real selected pr
   }
 
   try {
+    localStorage.setItem(CHAT_PROJECTS_STORAGE_KEY, JSON.stringify([
+      { path: 'D:\\Work\\alpha', name: 'Browser-only alias', usedAt: 99 },
+      { path: 'D:\\Old\\stale', name: 'Stale project', usedAt: 100 },
+    ]))
     await act(async () => root.render(<Harness />))
     const trigger = rootElement.querySelector('[data-testid="workspace-project-trigger"]')
     assert.equal(trigger.getAttribute('aria-haspopup'), 'dialog')
@@ -115,14 +119,19 @@ test('project picker searches, closes accessibly, and creates a real selected pr
     const search = popover.querySelector('input')
     assert.equal(trigger.getAttribute('aria-expanded'), 'true')
     assert.equal(document.activeElement, search)
-    assert.equal(popover.querySelector('[data-testid="workspace-projects-group"]').getAttribute('aria-label'), '项目')
+    assert.equal(popover.querySelector('[data-testid="workspace-projects-group"]'), null)
     assert.equal(popover.querySelector('[data-testid="workspace-recent-group"]').getAttribute('aria-label'), '最近')
-    assert.equal(popover.querySelector('[data-testid="workspace-projects-group"] [role="option"]'), null)
     assert.equal(popover.querySelectorAll('[data-testid="workspace-recent-group"] [role="option"]').length, 2)
+    assert.deepEqual(
+      [...popover.querySelectorAll('[data-testid="workspace-recent-group"] [role="option"]')]
+        .map((option) => option.textContent.trim()),
+      ['alpha', 'beta'],
+    )
+    assert.doesNotMatch(popover.textContent, /Browser-only alias|Stale project/)
     await act(async () => setInputValue(dom, search, 'beta'))
     assert.deepEqual(
       [...popover.querySelectorAll('[data-testid="workspace-project-option"]')].map((option) => option.textContent.trim()),
-      ['Beta'],
+      ['beta'],
     )
     assert.equal(popover.querySelector('[data-testid="workspace-project-option"]').title, 'D:\\Work\\beta')
 
@@ -161,7 +170,7 @@ test('project picker searches, closes accessibly, and creates a real selected pr
     })
     assert.deepEqual(activations, ['D:\\Work\\source-project'])
     assert.equal(document.querySelector('[role="dialog"]'), null)
-    assert.match(trigger.textContent, /官网改版/)
+    assert.match(trigger.textContent, /Source Project Canonical/)
     assert.match(trigger.title, /Source Project Canonical/)
     const stored = JSON.parse(localStorage.getItem(CHAT_PROJECTS_STORAGE_KEY))
     assert.equal(stored[0].name, '官网改版')

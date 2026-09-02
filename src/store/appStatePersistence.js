@@ -11,6 +11,7 @@ export const STATE_SYNC_CHANNEL_NAME = 'your-model-atelier:state-sync'
 export const PERSIST_KEYS = Object.freeze([
   'sessions',
   'activeSessionId',
+  'sessionCatalogSource',
   'tasks',
   'history',
   'permissions',
@@ -28,6 +29,7 @@ export const PERSIST_KEYS = Object.freeze([
 
 export const LIGHTWEIGHT_PERSIST_KEYS = Object.freeze([
   'activeSessionId',
+  'sessionCatalogSource',
   'permissions',
   'theme',
   'fontSize',
@@ -85,7 +87,9 @@ export function selectPersistedSnapshot(state) {
 }
 
 export function selectLightweightSnapshot(snapshot) {
-  return selectKeys(snapshot, LIGHTWEIGHT_PERSIST_KEYS)
+  const selected = selectKeys(snapshot, LIGHTWEIGHT_PERSIST_KEYS)
+  if (snapshot?.sessionCatalogSource == null) delete selected.sessionCatalogSource
+  return selected
 }
 
 function parseStoredPayload(raw, fallbackTimestamp) {

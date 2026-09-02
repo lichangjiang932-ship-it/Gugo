@@ -68,6 +68,7 @@ test('job client uses expected endpoints', async () => {
   await createJob('生成周报', { fetchImpl })
   await createJob('修复项目', { fetchImpl, requirePlanApproval: true })
   await createJob('model-specific job', { fetchImpl, requirePlanApproval: true, modelName: ' context-model ' })
+  await createJob('retry safe transient failures', { fetchImpl, autoRetry: true })
   await listJobs({ fetchImpl })
   await getJob('job-1', { fetchImpl })
   await cancelJob('job-1', { fetchImpl })
@@ -75,6 +76,7 @@ test('job client uses expected endpoints', async () => {
   await retryStep('job-1', 'step-1', { fetchImpl })
 
   assert.deepEqual(calls.map((call) => call.url), [
+    '/api/jobs',
     '/api/jobs',
     '/api/jobs',
     '/api/jobs',
@@ -93,6 +95,10 @@ test('job client uses expected endpoints', async () => {
     prompt: 'model-specific job',
     requirePlanApproval: true,
     modelName: 'context-model',
+  })
+  assert.deepEqual(JSON.parse(calls[3].init.body), {
+    prompt: 'retry safe transient failures',
+    autoRetry: true,
   })
 })
 

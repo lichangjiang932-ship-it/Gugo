@@ -5,9 +5,56 @@ import path from 'node:path'
 
 const BACKEND_IMPLEMENTATION_LINE_LIMIT = 600
 const BACKEND_LARGE_FILE_DEBT_ID = 'DEBT-SIZE-001'
+const TRANSLATION_MODULE_LINE_LIMIT = 600
 const DEBT_MARKER_CEILING = 168
 const LEGACY_EMBER_CEILING = 106
 const TINY_TEXT_CEILING = 132
+const UI_HEX_PATTERN = /#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4}|[0-9a-f]{3})\b/gi
+
+const DOCUMENT_RENDERING_COLOR_FILES = new Set([
+  'src/lib/artifactPreview/htmlDeckEnhancer.js',
+  'src/lib/artifactPreview/htmlDocuments.js',
+  'src/lib/artifactPreview/visualDocuments.js',
+  'src/lib/htmlSlidesToPptx/htmlDeckConversion.js',
+  'src/pages/ChatSplit/preview/reactSandboxDocument.js',
+])
+
+const UI_HEX_ALLOWLIST = Object.freeze([
+  {
+    id: 'third-party-brand-svg',
+    accepts: ({ file, prefix }) => file === 'src/components/ConnectorBrandIcon.jsx'
+      && /(?:fill|stroke|stopColor)=["']$/.test(prefix),
+  },
+  {
+    id: 'third-party-brand-metadata',
+    accepts: ({ file, prefix }) => (
+      file === 'src/lib/accessCatalog.js'
+      && /\bnative\(\s*['"][^'"]+['"]\s*,\s*['"][^'"]+['"]\s*,\s*['"]$/.test(prefix)
+    ) || (
+      file === 'src/lib/mcpPresets.js'
+      && /\bbrandColor:\s*['"]$/.test(prefix)
+    ),
+  },
+  {
+    id: 'file-type-identity',
+    accepts: ({ file, prefix }) => file === 'src/components/FileExplorer.jsx'
+      && (/["']\.[^"']+["']:\s*["']$/.test(prefix) || /return colors\[ext\]\s*\|\|\s*["']$/.test(prefix)),
+  },
+  {
+    id: 'artifact-document-rendering',
+    accepts: ({ file }) => DOCUMENT_RENDERING_COLOR_FILES.has(file)
+      || file.startsWith('src/lib/presentationExport/'),
+  },
+  {
+    id: 'design-token-source',
+    accepts: ({ file, prefix }) => file === 'src/lib/themeAccent.js'
+      && /const DEFAULT_HEX\s*=\s*['"]$/.test(prefix),
+  },
+  {
+    id: 'non-ui-skill-prompt-copy',
+    accepts: ({ file }) => file === 'src/data/skillCatalog.js',
+  },
+])
 
 function lineCount(file) {
   const source = readFileSync(file, 'utf8')
@@ -44,6 +91,29 @@ function walkUiSources(dir) {
 
 function countMatches(files, pattern) {
   return files.reduce((total, file) => total + (readFileSync(file, 'utf8').match(pattern) || []).length, 0)
+}
+
+function inspectUiHexGovernance(sources) {
+  const violations = []
+  const usedAllowlistIds = new Set()
+  for (const { file, source } of sources) {
+    source.split(/\r?\n/).forEach((sourceLine, lineIndex) => {
+      for (const match of sourceLine.matchAll(UI_HEX_PATTERN)) {
+        const occurrence = {
+          file,
+          sourceLine,
+          prefix: sourceLine.slice(0, match.index),
+          value: match[0].toLowerCase(),
+          line: lineIndex + 1,
+          column: match.index + 1,
+        }
+        const allowance = UI_HEX_ALLOWLIST.find((entry) => entry.accepts(occurrence))
+        if (allowance) usedAllowlistIds.add(allowance.id)
+        else violations.push(`${file}:${occurrence.line}:${occurrence.column} ${occurrence.value}`)
+      }
+    })
+  }
+  return { violations, usedAllowlistIds }
 }
 
 function classifyFrozenBackendDebt({ measurements, frozenCeilings, lineLimit }) {
@@ -126,7 +196,7 @@ function inspectBackendSizeDebtInventory(inventory, lineLimit) {
   }
 }
 
-test('new oversized backend implementation files fail the frozen debt gate', () => {
+test('backend implementation size policy rejects every ungoverned oversized file', () => {
   const debtSource = readFileSync('docs/DEBT.md', 'utf8')
   const registeredDebtIds = new Set([...debtSource.matchAll(/^## (DEBT-[A-Z]+-\d{3})\b/gm)].map((match) => match[1]))
   const debtSectionStart = debtSource.indexOf(`## ${BACKEND_LARGE_FILE_DEBT_ID}`)
@@ -141,6 +211,7 @@ test('new oversized backend implementation files fail the frozen debt gate', () 
   const frozenCeilings = Object.fromEntries(
     (Array.isArray(inventory.files) ? inventory.files : []).map((entry) => [entry.path, entry.ceiling]),
   )
+  const hasFrozenExceptions = Array.isArray(inventory.files) && inventory.files.length > 0
   const files = walkBackendSources('server').map(repositoryPath).sort()
   const measurements = new Map(files.map((file) => [file, lineCount(file)]))
   const findings = classifyFrozenBackendDebt({
@@ -152,9 +223,15 @@ test('new oversized backend implementation files fail the frozen debt gate', () 
   assert.equal(
     registeredDebtIds.has(BACKEND_LARGE_FILE_DEBT_ID),
     true,
-    `${BACKEND_LARGE_FILE_DEBT_ID} must remain documented while frozen size exceptions exist`,
+    `${BACKEND_LARGE_FILE_DEBT_ID} must remain documented as the executable backend size policy`,
   )
-  assert.match(debtSection, /\*\*Status:\*\* Open\b/, 'Frozen size exceptions require an open debt record')
+  assert.match(
+    debtSection,
+    hasFrozenExceptions ? /\*\*Status:\*\* Open\b/ : /\*\*Status:\*\* Closed\b/,
+    hasFrozenExceptions
+      ? 'Frozen size exceptions require an open debt record'
+      : 'A fully repaid size inventory requires a closed debt record',
+  )
   assert.equal(inventory.schemaVersion, 1, 'Use the reviewed backend size inventory schema')
   assert.equal(inventory.debtId, BACKEND_LARGE_FILE_DEBT_ID, 'Inventory must belong to its enclosing debt record')
   assert.equal(
@@ -162,8 +239,8 @@ test('new oversized backend implementation files fail the frozen debt gate', () 
     BACKEND_IMPLEMENTATION_LINE_LIMIT,
     'Inventory and executable backend size policy must use the same threshold',
   )
-  assert.ok(Array.isArray(inventory.groups) && inventory.groups.length > 0, 'Inventory requires governance groups')
-  assert.ok(Array.isArray(inventory.files) && inventory.files.length > 0, 'Inventory requires frozen file records')
+  assert.ok(Array.isArray(inventory.groups), 'Inventory governance groups must be an array')
+  assert.ok(Array.isArray(inventory.files), 'Inventory frozen file records must be an array')
   assert.deepEqual(inventoryFindings.duplicateGroupIds, [], 'Governance group identifiers must be unique')
   assert.deepEqual(inventoryFindings.duplicateFiles, [], 'Frozen file paths must be unique, including case aliases')
   assert.deepEqual(
@@ -194,6 +271,21 @@ test('new oversized backend implementation files fail the frozen debt gate', () 
     'Lower the frozen ceiling in the same change when an oversized file shrinks',
   )
   assert.deepEqual(findings.stale, [], 'Remove resolved or deleted files from the frozen backend debt inventory')
+})
+
+test('translation entry point and domain modules remain below the size limit', () => {
+  const domainFiles = walk('src/i18n/domains').map(repositoryPath).sort()
+  const files = ['src/i18n/translations.js', ...domainFiles]
+  const oversized = files
+    .map((file) => ({ file, lines: lineCount(file) }))
+    .filter(({ lines }) => lines > TRANSLATION_MODULE_LINE_LIMIT)
+
+  assert.ok(domainFiles.length > 1, 'Keep translation data split into cohesive domain modules')
+  assert.deepEqual(
+    oversized,
+    [],
+    `Split translation modules above ${TRANSLATION_MODULE_LINE_LIMIT} lines by domain`,
+  )
 })
 
 test('backend size debt classifier reports every gate-evasion category', () => {
@@ -289,6 +381,47 @@ test('legacy ember naming and tiny UI text can only shrink', () => {
   assert.deepEqual(legacyUtilityFiles, [], 'Use semantic UI tokens instead of ember utility classes')
   assert.ok(legacyEmber <= LEGACY_EMBER_CEILING, `${legacyEmber} legacy ember tokens exceeds ${LEGACY_EMBER_CEILING}`)
   assert.ok(tinyText <= TINY_TEXT_CEILING, `${tinyText} tiny text declarations exceeds ${TINY_TEXT_CEILING}`)
+})
+
+test('UI hex governance only exempts reviewed brand and rendered-document semantics', () => {
+  const findings = inspectUiHexGovernance([
+    { file: 'src/components/NewBadge.jsx', source: 'const style = { color: "#abcdef" }' },
+    { file: 'src/components/ConnectorBrandIcon.jsx', source: '<path fill="#4285F4" />' },
+    { file: 'src/components/ConnectorBrandIcon.jsx', source: '<span style={{ color: "#123456" }} />' },
+    { file: 'src/components/FileExplorer.jsx', source: "'.js': '#8B7B30'," },
+    { file: 'src/components/FileExplorer.jsx', source: '<div style={{ background: "#fedcba" }} />' },
+    { file: 'src/lib/accessCatalog.js', source: "native('github', 'GitHub', '#24292F', 'description')" },
+    { file: 'src/lib/mcpPresets.js', source: "brandColor: '#1A73E8'," },
+    { file: 'src/lib/artifactPreview/htmlDocuments.js', source: 'body { color: #26211c; }' },
+    { file: 'src/lib/themeAccent.js', source: "const DEFAULT_HEX = '#16A34A'" },
+  ])
+
+  assert.deepEqual(
+    findings.violations.map((violation) => violation.replace(/:\d+:\d+ /, ' ')),
+    [
+      'src/components/NewBadge.jsx #abcdef',
+      'src/components/ConnectorBrandIcon.jsx #123456',
+      'src/components/FileExplorer.jsx #fedcba',
+    ],
+  )
+})
+
+test('ordinary JS and JSX UI colors use design tokens instead of raw hex', () => {
+  const files = walkUiSources('src').filter((file) => /\.(?:jsx?|tsx?)$/.test(file))
+  const findings = inspectUiHexGovernance(files.map((file) => ({
+    file: repositoryPath(file),
+    source: readFileSync(file, 'utf8'),
+  })))
+  const unusedAllowlistIds = UI_HEX_ALLOWLIST
+    .map((entry) => entry.id)
+    .filter((id) => !findings.usedAllowlistIds.has(id))
+
+  assert.deepEqual(
+    findings.violations,
+    [],
+    'Replace ordinary UI hex with a theme token; extend the narrow allowlist only for reviewed semantic colors',
+  )
+  assert.deepEqual(unusedAllowlistIds, [], 'Remove stale UI hex allowlist categories')
 })
 
 test('engineering debt has a canonical, actionable register', () => {

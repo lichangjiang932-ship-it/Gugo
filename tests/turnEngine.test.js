@@ -3745,6 +3745,9 @@ test('TurnEngine aborts an active model request with an explicit cancelled event
   await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-cancel' })
   const cancelled = events('turn-cancel').at(-1)
   assert.equal(cancelled.type, 'turn.cancelled')
+  assert.equal(cancelled.payload.code, 'TURN_CANCELLED')
+  assert.equal(Object.hasOwn(cancelled.payload, 'reason'), false)
+  assert.equal(Object.hasOwn(cancelled.payload, 'message'), false)
   assert.deepEqual(cancelled.payload.artifactIds, [])
   assert.deepEqual(cancelled.payload.deliveryArtifactIds, [])
   assert.equal(getMessage({

@@ -145,12 +145,16 @@ test('skill library, slash menu, and command palette share presented metadata', 
   assert.match(commands, /syncSkillsToCommands\(presentSkillCollection\(skills, lang\)\)/)
 })
 
-test('skill details explain invocation and runtime requirements in every UI language', () => {
-  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('skill details explain invocation and runtime requirements in every supported UI language', () => {
+  for (const lang of ['zh', 'en']) {
     const copy = getSkillDetailCopy(lang)
     assert.ok(copy.overview)
     assert.ok(copy.command)
     assert.ok(copy.requirements)
+  }
+  const englishCopy = getSkillDetailCopy('en')
+  for (const legacyLang of ['ja', 'ko', 'zh-TW']) {
+    assert.deepEqual(getSkillDetailCopy(legacyLang), englishCopy)
   }
   assert.deepEqual(describeSkillRequirements({ requirements: {} }, 'zh'), ['当前环境已满足运行要求'])
   assert.deepEqual(describeSkillRequirements({ requirements: { app: true, mcp: true, runtime: ['references'] } }, 'zh'), [

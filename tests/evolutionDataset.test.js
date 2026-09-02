@@ -80,7 +80,8 @@ test('curation redacts, deduplicates, clusters, fingerprints, and reversibly exc
     jobId: 'dataset-review-job',
     stepId: 'verification-step',
     type: 'task_reviewed',
-    message: 'Structured review',
+    code: 'JOB_TASK_REVIEWED',
+    params: { verdict: 'fixable' },
     now: 100,
     payload: {
       acceptance: {

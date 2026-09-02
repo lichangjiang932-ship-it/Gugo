@@ -4,7 +4,7 @@ import {
 } from '../turnTerminalProjection.js'
 
 export function installTerminalCompletion(s) {
-  const { MAX_LOCAL_HTML_DELIVERY_RETRIES } = s.d
+  const { MAX_LOCAL_HTML_DELIVERY_RETRIES, formatIncompleteTerminalText } = s.d
 
   s.finishIncomplete = async ({
     text,
@@ -32,8 +32,15 @@ export function installTerminalCompletion(s) {
       ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),
       ...(taskVerification ? { taskVerification } : {}),
     }
+    const localizedText = formatIncompleteTerminalText(incompleteReason, {
+      locale: s.locale,
+      fallbackText: text,
+      hasVerificationTools: s.availableVerificationToolNames?.length > 0,
+      maxIterations: s.maxIters,
+      preserveFallbackText: incompleteReason === 'iteration_limit_reached',
+    })
     const safePartialResult = s.partialResultFallback.apply({
-      text,
+      text: localizedText,
       incomplete: true,
       reason: incompleteReason,
     })
@@ -88,7 +95,6 @@ export function installTerminalCompletion(s) {
       return {
         scheduled: false,
         result: await s.finishIncomplete({
-          text: '网页文件尚未通过资源完整性验证，因此没有作为已完成文件显示或交付。请重试以继续自动修复。',
           reason: 'local_html_delivery_validation_failed',
           steeringLeaseId,
         }),

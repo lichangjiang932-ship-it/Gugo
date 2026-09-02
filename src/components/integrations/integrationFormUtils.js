@@ -15,7 +15,7 @@ function inferFieldType(key, secret) {
 function inferOptions(key) {
   const normalized = String(key || '').toLowerCase()
   if (normalized === 'method') return ['POST', 'GET']
-  if (normalized === 'language') return ['zh', 'en', 'ja', 'ko', 'zh-TW']
+  if (normalized === 'language') return ['zh', 'en']
   return []
 }
 

@@ -15,6 +15,7 @@ import {
   resolveWorkflowState,
 } from './jobWorkflow.js'
 import { notifyJobStopHook, notifyJobTerminal } from './jobRuntimeLifecycle.js'
+import { evaluateTaskVerificationAcceptance } from './jobTaskAcceptance.js'
 import { applyRuntimeTaskReviewGuard } from './taskReviewGuard.js'
 
 const JOB_VERIFY_MAX_REPAIR_ATTEMPTS = (() => {
@@ -73,16 +74,30 @@ export async function buildToolStepResult({
         text: result.text,
         evidence: output.evidence,
         artifactIds: result.artifactIds,
+        taskVerification: output.taskVerification || null,
       })
     : null
-  const acceptance = evaluatedAcceptance
+  const hostVerificationAcceptance = step.kind === 'verify' && !truncated
+    ? evaluateTaskVerificationAcceptance({
+        taskVerification: output.taskVerification,
+        evidence: output.evidence,
+      })
+    : null
+  const constrainedAcceptance = hostVerificationAcceptance
+    ? {
+        ...hostVerificationAcceptance,
+        ...(evaluatedAcceptance?.reviewer ? { reviewer: evaluatedAcceptance.reviewer } : {}),
+      }
+    : evaluatedAcceptance
+  const acceptance = constrainedAcceptance
     ? await taskReviewGuard({
-        acceptance: evaluatedAcceptance,
+        acceptance: constrainedAcceptance,
         job,
         step,
         text: result.text,
         evidence: output.evidence,
         artifactIds: result.artifactIds,
+        taskVerification: output.taskVerification || null,
         workerModelName: job?.modelName,
       })
     : null
@@ -161,7 +176,8 @@ export function emitTaskReviewEvent({ emit, jobId, stepId, acceptance, repairAtt
     jobId,
     stepId,
     type: 'task_reviewed',
-    message: `Reviewer verdict: ${acceptance.verdict}`,
+    code: 'JOB_TASK_REVIEWED',
+    params: { verdict: acceptance.verdict },
     payload: { acceptance, repairAttempts: repairAttempt, reviewer: acceptance.reviewer || null },
   }))
 }
@@ -203,7 +219,8 @@ export async function runVerificationRepairLoop({
         jobId: job.id,
         stepId: nextStep.id,
         type: 'verification_repair_started',
-        message: `验收未通过，开始第 ${repairAttempt} 次修正并重新验证`,
+        code: 'JOB_VERIFICATION_REPAIR_STARTED',
+        params: { attempt: repairAttempt, maxAttempts: JOB_VERIFY_MAX_REPAIR_ATTEMPTS },
         payload: {
           attempt: repairAttempt,
           maxAttempts: JOB_VERIFY_MAX_REPAIR_ATTEMPTS,
@@ -232,7 +249,8 @@ export async function runVerificationRepairLoop({
             jobId: job.id,
             stepId: nextStep.id,
             type: 'verification_repair_stalled',
-            message: '修正后验收失败签名未变化，停止重复重试',
+            code: 'JOB_VERIFICATION_REPAIR_STALLED',
+            params: { attempt: repairAttempt },
             payload: { attempt: repairAttempt, acceptance: result.acceptance },
           }))
         })
@@ -333,7 +351,7 @@ export function persistRejectedStepResult({
       jobId: job.id,
       stepId: nextStep.id,
       type: 'failed',
-      message: failure,
+      code: 'JOB_FAILED',
       payload: terminalPayload,
     }))
   })
@@ -437,7 +455,7 @@ export function completeManualJobTransition({ jobId, userId, updated }) {
   const event = appendJobEvent({
     jobId,
     type: completed ? 'completed' : 'failed',
-    message: completed ? '任务已完成' : outcomeReason,
+    code: completed ? 'JOB_COMPLETED' : 'JOB_FAILED',
     payload: terminalPayload,
   })
   return {

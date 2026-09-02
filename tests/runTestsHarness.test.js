@@ -1,11 +1,28 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import test from 'node:test'
 
 const ISOLATED_PROBE = 'tests/unit/ManualRecoveryRouteState.test.jsx'
+
+function walkTestFiles(directory) {
+  const files = []
+  for (const entry of readdirSync(directory)) {
+    const path = join(directory, entry)
+    if (statSync(path).isDirectory()) files.push(...walkTestFiles(path))
+    else if (entry.endsWith('.test.js') || entry.endsWith('.test.jsx')) files.push(path)
+  }
+  return files
+}
+
+function findViteWrapperTests() {
+  return walkTestFiles('tests')
+    .filter((path) => /from ['"]vite['"]/u.test(readFileSync(path, 'utf8')))
+    .map((path) => relative(process.cwd(), path).replaceAll('\\', '/'))
+    .sort()
+}
 
 function childEnv(overrides = {}) {
   const env = { ...process.env, ...overrides }
@@ -17,7 +34,7 @@ function dataImport(source) {
   return `data:text/javascript,${encodeURIComponent(source)}`
 }
 
-function fakeSpawnPreload({ status = null, signal = null, errorCode = null } = {}) {
+function fakeSpawnPreload({ status = null, signal = null, errorCode = null, output = '' } = {}) {
   const outcome = errorCode
     ? `const error = Object.assign(new Error('spawn failed'), { code: ${JSON.stringify(errorCode)} }); child.emit('error', error)`
     : `child.emit('close', ${JSON.stringify(status)}, ${JSON.stringify(signal)})`
@@ -25,19 +42,24 @@ function fakeSpawnPreload({ status = null, signal = null, errorCode = null } = {
     import childProcess from 'node:child_process'
     import { EventEmitter } from 'node:events'
     import { syncBuiltinESMExports } from 'node:module'
+    import { PassThrough } from 'node:stream'
     childProcess.spawn = () => {
       const child = new EventEmitter()
-      child.stdout = null
-      child.stderr = null
+      child.stdout = new PassThrough()
+      child.stderr = new PassThrough()
       child.stdin = null
-      queueMicrotask(() => { ${outcome} })
+      queueMicrotask(() => {
+        child.stdout.end(${JSON.stringify(output)})
+        child.stderr.end()
+        ${outcome}
+      })
       return child
     }
     syncBuiltinESMExports()
   `
 }
 
-function fakeCoverageSpawnPreload({ thresholdFailure = false } = {}) {
+function fakeCoverageSpawnPreload({ thresholdFailure = false, tapFailure = false } = {}) {
   return `
     import childProcess from 'node:child_process'
     import { EventEmitter } from 'node:events'
@@ -56,7 +78,8 @@ function fakeCoverageSpawnPreload({ thresholdFailure = false } = {}) {
       ]
       const validArgs = required.every((arg) => args.includes(arg))
       const thresholdFailure = ${JSON.stringify(thresholdFailure)}
-      const status = validArgs && thresholdFailure ? 1 : (validArgs ? 0 : 91)
+      const tapFailure = ${JSON.stringify(tapFailure)}
+      const status = validArgs && (thresholdFailure || tapFailure) ? 1 : (validArgs ? 0 : 91)
       const output = thresholdFailure ? [
         'TAP version 13',
         '1..1',
@@ -66,7 +89,19 @@ function fakeCoverageSpawnPreload({ thresholdFailure = false } = {}) {
         '# Error: 39.00% line coverage does not meet threshold of 40%.',
         '# Error: 59.00% branch coverage does not meet threshold of 60%.',
         '',
-      ].join('\\n') : ''
+      ].join('\\n') : (tapFailure ? [
+        'TAP version 13',
+        '# Subtest: flaky coverage probe',
+        'not ok 1 - flaky coverage probe',
+        '  ---',
+        "  error: 'probe failed'",
+        '  ...',
+        '1..1',
+        '# tests 1',
+        '# pass 0',
+        '# fail 1',
+        '',
+      ].join('\\n') : '')
       queueMicrotask(() => {
         child.stdout.end(output)
         child.stderr.end()
@@ -299,6 +334,31 @@ test('normal test mode continues to honor the configured batch size', () => {
   assert.match(output, /finished batch 2\/2 \(1 files\).*status=0/u)
 })
 
+test('Vite wrapper tests stay isolated and use worker-local optimizer caches', () => {
+  const viteWrappers = findViteWrapperTests()
+  assert.ok(viteWrappers.length > 0, 'expected at least one Vite wrapper test')
+
+  for (const file of viteWrappers) {
+    assert.match(
+      readFileSync(file, 'utf8'),
+      /cacheDir:\s*resolveViteTestCacheDir\(\)/u,
+      `${file} must use the worker-local Vite cache`,
+    )
+  }
+
+  const result = runRunner(viteWrappers, {
+    preloadSource: fakeSpawnPreload({ status: 0 }),
+  })
+  const output = combinedOutput(result)
+
+  assert.equal(result.status, 0)
+  assert.doesNotMatch(output, /starting batch/u)
+  assert.equal(
+    (output.match(/starting isolated test/gmu) || []).length,
+    viteWrappers.length,
+  )
+})
+
 test('coverage mode uses one complete batch and retains the CI thresholds', () => {
   const result = runRunner([
     '--coverage',
@@ -342,5 +402,50 @@ test('coverage failure is reported separately from successful test processes', (
   assert.match(output, /# fail 0/u)
   assert.match(output, /failed coverage gate; status=failed; 39\.00% line coverage does not meet threshold of 40%/u)
   assert.doesNotMatch(output, /failed batch/u)
+  assert.match(output, /final result: FAIL \(1 final failure\(s\)\)/u)
+})
+
+test('normal batch failures retain their TAP subtest in the final summary', () => {
+  const tapOutput = [
+    'TAP version 13',
+    '# Subtest: shared-state probe',
+    'not ok 1 - shared-state probe',
+    '1..1',
+    '# tests 1',
+    '# pass 0',
+    '# fail 1',
+    '',
+  ].join('\n')
+  const result = runRunner(['tests/codeDebt.test.js'], {
+    preloadSource: fakeSpawnPreload({ status: 1, output: tapOutput }),
+  })
+  const output = combinedOutput(result)
+
+  assert.equal(result.status, 1)
+  assert.match(output, /not ok 1 - shared-state probe/u)
+  assert.match(output, /tapFailures=shared-state probe/u)
+  assert.match(output, /final result: FAIL \(1 final failure\(s\)\)/u)
+})
+
+test('coverage test failures identify their TAP subtests in the final summary', () => {
+  const result = runRunner([
+    '--coverage',
+    'tests/codeDebt.test.js',
+  ], {
+    preloadSource: fakeCoverageSpawnPreload({ tapFailure: true }),
+    env: childEnv({
+      COVERAGE_LINES: '40',
+      COVERAGE_FUNCTIONS: '35',
+      COVERAGE_BRANCHES: '60',
+    }),
+  })
+  const output = combinedOutput(result)
+
+  assert.equal(result.status, 1)
+  assert.match(
+    output,
+    /failed batch 1\/1 \(1 files\); status=failed; exitCode=1; signal=none; errorCode=none; tapFailures=flaky coverage probe/u,
+  )
+  assert.doesNotMatch(output, /failed coverage gate/u)
   assert.match(output, /final result: FAIL \(1 final failure\(s\)\)/u)
 })

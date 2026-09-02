@@ -1,3 +1,5 @@
+import { normalizeUiLanguage } from '../i18n/translations.js'
+
 const ZH_SKILL_COPY = {
   brainstorming: ['创意构思', '在开始创作或功能设计前梳理目标、需求、约束与候选方案。'],
   'code-review': ['代码审查', '检查代码变更的正确性、安全性、可维护性与测试覆盖，并给出可执行的修改建议。'],
@@ -67,9 +69,9 @@ const PHRASE_COPY = [
 const SKILL_DETAIL_COPY = {
   zh: { overview: '技能说明', usage: '使用方式', command: '调用命令', originalName: '原始名称', requirements: '运行要求', ready: '当前环境已满足运行要求', requiresApp: '需要对应应用连接', requiresMcp: '需要 MCP 服务', requiresRuntime: '需要额外运行资源', promptPlaceholder: '描述你希望完成的任务' },
   en: { overview: 'Skill overview', usage: 'How to use', command: 'Command', originalName: 'Original name', requirements: 'Requirements', ready: 'Ready in the current environment', requiresApp: 'Requires a connected app', requiresMcp: 'Requires an MCP server', requiresRuntime: 'Requires additional runtime resources', promptPlaceholder: 'describe the task to complete' },
-  ja: { overview: 'スキル説明', usage: '使い方', command: '呼び出しコマンド', originalName: '元の名前', requirements: '実行要件', ready: '現在の環境で実行できます', requiresApp: '対応アプリの接続が必要', requiresMcp: 'MCP サービスが必要', requiresRuntime: '追加の実行リソースが必要', promptPlaceholder: '実行したいタスクを入力' },
-  ko: { overview: '스킬 설명', usage: '사용 방법', command: '호출 명령', originalName: '원래 이름', requirements: '실행 요구 사항', ready: '현재 환경에서 바로 실행 가능', requiresApp: '해당 앱 연결 필요', requiresMcp: 'MCP 서버 필요', requiresRuntime: '추가 런타임 리소스 필요', promptPlaceholder: '완료할 작업을 설명하세요' },
-  'zh-TW': { overview: '技能說明', usage: '使用方式', command: '呼叫指令', originalName: '原始名稱', requirements: '執行要求', ready: '目前環境已滿足執行要求', requiresApp: '需要連接對應應用程式', requiresMcp: '需要 MCP 服務', requiresRuntime: '需要額外執行資源', promptPlaceholder: '描述你希望完成的任務' },
+
+
+
 }
 
 function containsChinese(value) {
@@ -124,7 +126,7 @@ function genericChineseDescription(skill, title) {
 }
 
 export function getPresentedSkill(skill, lang = 'zh') {
-  if (!skill || !String(lang).startsWith('zh')) return skill
+  if (!skill || normalizeUiLanguage(lang) !== 'zh') return skill
   if (containsChinese(skill.name) && containsChinese(skill.desc)) return skill
 
   const originalName = rawSkillName(skill)
@@ -165,9 +167,9 @@ const CATALOG_CATEGORY_ORDER = Object.freeze([
 const CATALOG_CATEGORY_COPY = Object.freeze({
   zh: { office: '办公创作', development: '开发与测试', analysis: '分析与研究', communication: '沟通协作', productivity: '通用效率', custom: '我的技能' },
   en: { office: 'Office & creation', development: 'Development & testing', analysis: 'Analysis & research', communication: 'Communication', productivity: 'Productivity', custom: 'My skills' },
-  ja: { office: '文書・制作', development: '開発・テスト', analysis: '分析・調査', communication: 'コミュニケーション', productivity: '生産性', custom: 'マイスキル' },
-  ko: { office: '문서 및 제작', development: '개발 및 테스트', analysis: '분석 및 조사', communication: '커뮤니케이션', productivity: '생산성', custom: '내 스킬' },
-  'zh-TW': { office: '辦公創作', development: '開發與測試', analysis: '分析與研究', communication: '溝通協作', productivity: '通用效率', custom: '我的技能' },
+
+
+
 })
 
 const CATALOG_CAPABILITIES = Object.freeze([
@@ -193,8 +195,7 @@ const DEFAULT_PLUGIN_SKILL_IDENTITIES = Object.freeze([
 ])
 
 function catalogLanguage(lang) {
-  if (CATALOG_CATEGORY_COPY[lang]) return lang
-  return String(lang || '').startsWith('zh') ? 'zh' : 'en'
+  return normalizeUiLanguage(lang)
 }
 
 function isUserManagedSkill(skill) {
@@ -352,7 +353,7 @@ export function presentSkillCollection(skills, lang = 'zh') {
 }
 
 export function getSkillDetailCopy(lang = 'zh') {
-  return SKILL_DETAIL_COPY[lang] || SKILL_DETAIL_COPY[String(lang).startsWith('zh') ? 'zh' : 'en']
+  return SKILL_DETAIL_COPY[normalizeUiLanguage(lang)]
 }
 
 export function describeSkillRequirements(skill, lang = 'zh') {
