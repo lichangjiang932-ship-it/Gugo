@@ -65,6 +65,13 @@ subscription cleanup, listener-failure isolation, and terminal owner eviction
 now live in `jobRuntimeEventHub.js`; creation, recovery, and wake paths populate
 that boundary before emitting instead of reaching into a facade-owned Map.
 
+Runtime plugin installation settlement now lives in
+`runtimePluginInstallController.js`, including the pre/post-setup compatibility
+checks, cancellation observation, activation, rollback ordering, and audit
+outcome. Record removal is generation-checked so a failed install cannot delete
+a newer same-ID record. `runtimePluginRegistry.js` supplies narrow host ports and
+continues to own inventory, uninstall, config reload, and release composition.
+
 **Exit criteria:** Close only after every linked transition row is either
 removed with evidence that its required boundary has been reached or moved to
 a narrower open debt record with its own observable exit criteria. Completion
@@ -81,7 +88,10 @@ persistence from returning to the Job facade and
 tenant isolation and prevent direct owner-cache access, while
 `tests/modelInvocationRuntimeBoundary.test.js` prevents model invocation logic
 from returning to the proxy facade, and `tests/artifactGenBoundary.test.js`
-protects the settled artifact facade/service direction. Boundary-specific changes also run the Turn, persistence, model proxy,
+protects the settled artifact facade/service direction. The focused
+`tests/runtimePluginInstallController.test.js` preserves installation revalidation,
+rollback ordering, settlement, and generation-safe record removal.
+Boundary-specific changes also run the Turn, persistence, model proxy,
 artifact, Job, runtime-plugin, migration, and managed-attachment contract suites
 named by the affected row.
 

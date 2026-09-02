@@ -11,7 +11,7 @@ export function createRuntimePluginInstallController({
   isShuttingDown,
   normalizeManifest,
   publishPlugin,
-  removePlugin,
+  removePluginIfCurrent,
   revokeVisibleEffects,
   sealConfigLayerSources,
   snapshotPlugin,
@@ -69,7 +69,7 @@ export function createRuntimePluginInstallController({
       }
       record.revocationErrors.length = 0
       if (rollbackErrors.length === 0 && record.managedContributions.length === 0) {
-        removePlugin(normalized.id)
+        removePluginIfCurrent(normalized.id, record)
       } else {
         record.state = 'rollback_failed'
       }

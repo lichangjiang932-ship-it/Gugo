@@ -262,7 +262,10 @@ export function createRuntimePluginRegistry(options = {}) {
     isShuttingDown: () => shuttingDown,
     normalizeManifest: normalizeRuntimePluginManifest,
     publishPlugin: (id, record) => plugins.set(id, record),
-    removePlugin: (id) => plugins.delete(id),
+    removePluginIfCurrent: (id, record) => {
+      if (plugins.get(id) !== record) return false
+      return plugins.delete(id)
+    },
     revokeVisibleEffects,
     sealConfigLayerSources: () => {
       configLayerSourcesSealed = true
