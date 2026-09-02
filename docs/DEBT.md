@@ -539,9 +539,14 @@ frozen exception has been removed without changing text or JSONL semantics.
 are below 600 lines, so the former frozen exception has been removed while
 preserving trusted navigation, permission, update, and window contracts.
 
+`shared/artifactIntent.js` now delegates skill alias resolution, file-target
+parsing, and standalone format checks to `shared/artifactIntentSupport.js`.
+Both modules are below 600 lines, so its former frozen exception has been
+removed without changing the shared public intent API or delivery semantics.
+
 All previously frozen `server/` implementations are now at or below 600 lines.
 Expanding the executable scan to every host runtime implementation root exposed
-two existing oversized files outside `server/`. They are frozen below at
+one existing oversized file outside `server/`. It is frozen below at
 their exact current line counts: any growth, unregistered oversized file, stale
 entry, or unratcheted shrinkage fails the gate.
 
@@ -553,11 +558,6 @@ entry, or unratcheted shrinkage fails the gate.
   "lineLimit": 600,
   "groups": [
     {
-      "id": "artifact-intent-contract",
-      "reason": "Shared artifact intent detection combines alias resolution, delivery targets, revision classification, and natural-language prompt heuristics in one contract module.",
-      "exitCriteria": "Extract cohesive parsing and delivery-target concerns while preserving the shared public intent API and its deterministic classification fixtures."
-    },
-    {
       "id": "cli-entrypoint",
       "reason": "The CLI entrypoint combines argument parsing, authentication storage, API transport, Headless execution, and command dispatch in one process boundary.",
       "exitCriteria": "Move command families and transport or credential concerns into focused modules while keeping the executable entrypoint and exported CLI contracts stable."
@@ -568,11 +568,6 @@ entry, or unratcheted shrinkage fails the gate.
       "path": "bin/yma-cli.js",
       "ceiling": 977,
       "group": "cli-entrypoint"
-    },
-    {
-      "path": "shared/artifactIntent.js",
-      "ceiling": 748,
-      "group": "artifact-intent-contract"
     }
   ]
 }

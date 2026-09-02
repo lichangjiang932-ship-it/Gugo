@@ -1,56 +1,24 @@
-export const PPT_SKILL_ID_ALIASES = Object.freeze([
-  'ppt',
-  'ppt-master',
-  'axippt',
-  'htmlppt',
-  'guizang-ppt',
-])
+import {
+  ARTIFACT_DELIVERY_TARGETS,
+  ARTIFACT_TERMS,
+  extractFileTargetReferences,
+  filenameEquals,
+  intentTypes,
+  parseArtifactSkillId,
+  resolveArtifactToolForSkillId,
+  SKILL_PREFIX,
+  typeForArtifactTool,
+} from './artifactIntentSupport.js'
 
-const PPT_SKILL_ID_ALIAS_SET = new Set(PPT_SKILL_ID_ALIASES)
+export {
+  PPT_SKILL_ID_ALIASES,
+  canonicalizeSkillId,
+  isExplicitCodeSnippetRequest,
+  isPdfToImageConversionRequest,
+  stripRemoteUrlReferences,
+} from './artifactIntentSupport.js'
 
-export function canonicalizeSkillId(skillId) {
-  const value = String(skillId ?? '').trim()
-  if (!value) return null
-  return PPT_SKILL_ID_ALIAS_SET.has(value.toLowerCase()) ? 'ppt' : value
-}
-
-const SKILL_ARTIFACT_TOOL = Object.freeze({
-  ppt: 'create_pptx',
-  doc: 'create_docx',
-  excel: 'create_xlsx',
-  webpage: 'create_html_app',
-  pdf: 'create_pdf',
-  image: 'generate_image',
-})
-
-// 常见 PPT/文档/表格类技能 ID → 文件工具映射。技能前缀（如 /ppt-master 做演示）
-// 在 skillId 无法精确命中时按关键词判定，而"做演示"这类短指令没有 artifact 名词，
-// 会漏解锁；这里把已知技能 ID 显式归类，前缀命中即解锁对应工具。
-const SKILL_ID_ALIASES = Object.freeze({
-  doc: ['doc', 'write-doc'],
-  excel: ['excel', 'analyze-excel'],
-  webpage: ['webpage', 'html', 'website'],
-  pdf: ['pdf'],
-  image: ['image', 'imagegen', 'image-gen'],
-})
-
-export function resolveArtifactToolForSkillId(skillId) {
-  const id = String(canonicalizeSkillId(skillId) || '').toLowerCase()
-  if (SKILL_ARTIFACT_TOOL[id]) return SKILL_ARTIFACT_TOOL[id]
-  for (const [kind, aliases] of Object.entries(SKILL_ID_ALIASES)) {
-    if (aliases.includes(id)) return SKILL_ARTIFACT_TOOL[kind]
-  }
-  return null
-}
-
-const ARTIFACT_TERMS = Object.freeze({
-  pptx: /\bpptx?\b|\.pptx?\b|power\s*point|幻灯片|演示文稿|演示稿|路演稿|slide\s*deck|\bslides?\b/gi,
-  docx: /\bdocx?\b|\.docx?\b|\bword\b|word\s*文档|文档|报告|会议纪要|纪要|周报|合同|简历|document|report|minutes/gi,
-  xlsx: /\bxlsx?\b|\.xlsx?\b|\bexcel\b|工作簿|电子表格|spread\s*sheet/gi,
-  html: /\bhtml?\b|\.html?\b|\bweb\s*page\b|\bwebsite\b|\blanding\s*page\b|网页|网站|落地页/gi,
-  pdf: /\bpdf\b|\.pdf\b|便携式文档/gi,
-  image: /\bimages?\b|\bpictures?\b|\bphotos?\b|\billustrations?\b|\bposters?\b|\blogos?\b|\bmarketing\s+(?:images?|graphics?|art)\b|\bcover\s+art\b|\bhero\s+art\b|\u56fe\u7247|\u56fe\u50cf|\u63d2\u56fe|\u63d2\u753b|\u914d\u56fe|\u6d77\u62a5|\u8425\u9500\u56fe|\u5ba3\u4f20\u56fe|\u5e7f\u544a\u56fe|\u5c01\u9762\u56fe|\u5fbd\u6807|(?:\u54c1\u724c)?\u6807\u5fd7/gi,
-})
+export { ARTIFACT_DELIVERY_TARGETS, parseArtifactSkillId, resolveArtifactToolForSkillId }
 
 const BEFORE_ACTION = /(?:帮我|请|麻烦|给我|我要|我需要|我想要|希望|来(?:一|个|份|套)?|写|编写|撰写|做|制作|生成|创建|输出|导出|整理成|转换成|转换为|转成|转为|改成|改为|做成|放入|放进|加入|写入|整理到|设计|起草|重做|重制|修改|编辑|更新|优化|润色|make|create|generate|build|produce|export|convert|design|draft|prepare|write|revise|edit|update|redesign|give\s+me|i\s+(?:want|need))[^。！？!?\n]{0,32}$/i
 const AFTER_ACTION = /^[^，,；;。！？!?\n]{0,12}(?:写|编写|撰写|做|制作|生成|创建|输出|导出|重做|修改|编辑|更新|优化|润色|make|create|generate|export|edit|update)/i
@@ -71,9 +39,6 @@ const ARTIFACT_INPUT_ACTION_BEFORE = /(?:使用|用|利用|采用|基于|根据|
 const ARTIFACT_INPUT_AFTER = /^[^。！？!?；;\n]{0,20}(?:作为|用作|用于|放入|放进|加入|展示在|显示在|写入|整理到|生成|制作|创建|写|编写|撰写|as\s+(?:an?\s+)?(?:input|source|reference)|into|to\s+(?:build|create|write|make)|for\s+(?:a|the)?\s*(?:website|webpage|document|deck|presentation))/i
 const ARTIFACT_COMPOUND_MODIFIER_AFTER = /^(?:展示|浏览|查看|画廊|图库|图片墙|管理|检索|搜索|gallery|viewer|browser|catalog|library|list)(?:网站|网页|页面|系统|工具|应用|app|website|webpage|page)?/i
 const ARTIFACT_OUTPUT_RELATION_BEFORE = /(?:把|将)[^。！？!?；;\n]{1,48}(?:作为|用作|设为|设置为|设成|当作)[^。！？!?；;\n]{0,12}$/i
-const PDF_TO_IMAGE_CONVERSION = /(?:\b(?:convert|render|export)\b[^。！？!?;\n]{0,64}\bpdf\b[^。！？!?;\n]{0,32}\b(?:to|into|as)\b[^。！？!?;\n]{0,24}\b(?:images?|pictures?|png|jpe?g|webp)\b|(?:把|将)?[^。！？!?；;\n]{0,24}(?:pdf|\.pdf)[^。！？!?；;\n]{0,24}(?:转(?:换)?(?:成|为)|导出(?:成|为)|渲染(?:成|为)|生成)[^。！？!?；;\n]{0,16}(?:图片|图像|png|jpe?g|webp))/i
-const SKILL_PREFIX = /^\/([a-z0-9_-]+)(?:\s|$)/i
-
 // A slash artifact skill is a delivery contract, not merely another keyword.
 // Keep it on its own generator unless the prompt clearly asks for an
 // additional *file format*. This prevents content phrases such as
@@ -192,116 +157,15 @@ const ARTIFACT_CREATE_COPY_CUE = /(?:(?:新建|另建|另做|另生成|另外生
 const ARTIFACT_CREATE_COPY_DENIAL = /(?:(?:不要|别|无需)(?:再)?(?:新建|另建|另做|新生成|创建新(?:文件|版本|副本))|without\s+creating\s+(?:a\s+)?new\s+(?:file|copy))/gi
 const ARTIFACT_REPLACE_ORIGINAL_DENIAL = /(?:(?:保留|不改|不要修改|不要覆盖)(?:原版|原文件|当前文件|上一版)|keep\s+(?:the\s+)?original)/gi
 const ARTIFACT_FILENAME_PRESERVATION = /(?:(?:保留|保持|维持|不改|不修改|别修改|不要修改|不要更改|不要改变|别更改|别改变)\s*(?:(?:原|当前)\s*)?文件\s*(?:名(?:称)?|的\s*(?:文件\s*)?名(?:称)?)|(?:keep|preserve|retain|do\s+not\s+change|don't\s+change|dont\s+change)\s+(?:the\s+)?(?:(?:original|existing|same|current)\s+)?(?:file\s*name|filename))/gi
-const CODE_SNIPPET_DENIAL = /(?:不要|别|无需|不用|禁止|避免)[^。！？!?\n]{0,24}(?:代码|源码|code|source)|(?:do\s+not|don't|dont|never|without)[^.!?\n]{0,24}(?:code|source)/i
-const EXPLICIT_CODE_SNIPPET_REQUEST = /(?:代码片段|源码片段|示例代码|完整代码|完整源码|(?:html|css|javascript|typescript|python|java|c\+\+|sql)\s*(?:代码|源码)|\bcode\s+snippet\b|\bfull\s+source(?:\s+code)?\b)|(?:给我|输出|提供|展示|贴出|发我|返回|生成|写出)[^。！？!?\n]{0,20}(?:代码|源码)|(?:show|provide|print|paste|return|write|give\s+me)[^.!?\n]{0,20}(?:code|source)/i
-const ARTIFACT_TYPE_BY_EXTENSION = Object.freeze({
-  ppt: 'pptx',
-  pptx: 'pptx',
-  doc: 'docx',
-  docx: 'docx',
-  xls: 'xlsx',
-  xlsx: 'xlsx',
-  htm: 'html',
-  html: 'html',
-  pdf: 'pdf',
-  png: 'image',
-  jpg: 'image',
-  jpeg: 'image',
-  webp: 'image',
-  gif: 'image',
-  svg: 'image',
-})
-const FILE_TARGET_REFERENCE = /(?:[a-z]:[\\/]|\.{1,2}[\\/]|[\\/])?(?:[^\s"'`“”‘’<>|?*，。；：！？（）()\u005b\u005d【】{}\\/]+[\\/])*[^\s"'`“”‘’<>|?*，。；：！？（）()\u005b\u005d【】{}\\/]+\.(?:pptx?|docx?|xlsx?|html?|pdf|png|jpe?g|webp|gif|svg)(?=$|[\s"'`“”‘’<>（）()\u005b\u005d【】{},;:，。；：！？])/giu
-const REMOTE_URL_REFERENCE = /\b(?:https?|ftp):\/\/[a-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/giu
 const WORKSPACE_FILE_CUE = /(?:本地|工作区|项目(?:中|内|里)|仓库|目录|磁盘)(?:中|内|里|上|的)?[^。！？!?\n]{0,20}(?:现有|已有)?(?:原)?文件|(?:现有|已有)(?:的)?(?:本地|工作区|项目)?(?:原)?文件|(?:local|workspace|project|repository|on[- ]disk)\s+(?:existing\s+)?files?|existing\s+(?:local\s+|workspace\s+|project\s+)?files?/i
 const MANAGED_ARTIFACT_DENIAL = /(?:不要|别|禁止|不允许|无需|不用|不得)[^。！？!?\n]{0,48}(?:artifact|托管产物|可下载产物|产物卡片)|(?:without|do\s+not|don't|dont|never|must\s+not|no)\s+[^.!?\n]{0,48}(?:managed\s+)?artifact/i
 const LOCAL_PATH_CONTEXT = /(?:本地|工作区|当前?(?:的)?项目|项目(?:根)?目录|仓库|目录|磁盘|原文件|现有文件|已有文件|原版文件|local|workspace|project|repository|on[- ]disk|existing\s+file)/i
 const LOCAL_MUTATION_ACTION = /(?:继续\s*)?(?:修改|编辑|更新|覆盖|改写|调整|优化|完善|润色|修复|替换|edit|update|modify|overwrite|revise|adjust|refine)\s*(?:这个|该|现有的?|已有的?|原版的?|原)?\s*$/i
 const LOCAL_MUTATION_AFTER = /^\s*(?:这个|该|现有的?|已有的?|原版的?|原)?\s*(?:文件)?\s*(?:修改|编辑|更新|覆盖|改写|调整|优化|完善|润色|修复|替换|edit|update|modify|overwrite|revise|adjust|refine)\b/i
 const FILE_CREATION_ACTION = /(?:新建|创建|生成|制作|导出|另存为|create|generate|make|produce|export|save\s+as)\s*(?:一个|一份|新的?|the|a|an)?\s*$/i
-const LEADING_FILE_ACTION = /^(?:(?:请|帮我|麻烦|给我|直接|继续|把|将|再|重新)\s*)*(?:新建|创建|生成|制作|导出|修改|编辑|更新|覆盖|打开|读取|检查)\s*/iu
 const LOCAL_PATCH_INTENT = /(?:修复|修改|编辑|更新|覆盖|改写|调整|优化|完善|润色|替换|fix|edit|update|modify|overwrite|revise|adjust|refine)/i
 const ARTIFACT_CREATION_BEFORE = /(?:另外|另行|另外再|并另外|随后|之后|后再|再|重新)?\s*(?:新建|创建|生成|制作|导出|另存为|create|generate|make|produce|export|save\s+as)(?:[^。！？!?\n]{0,24})$/i
 const ARTIFACT_CREATION_AFTER = /^[^，,；;。！？!?\n]{0,12}(?:新建|创建|生成|制作|导出|create|generate|make|produce|export)/i
-
-export const ARTIFACT_DELIVERY_TARGETS = Object.freeze({
-  WORKSPACE_FILE: 'workspace_file',
-  MANAGED_ARTIFACT: 'managed_artifact',
-  MIXED: 'mixed',
-  STANDALONE: 'standalone',
-})
-
-function maskRemoteUrlReferences(prompt = '') {
-  REMOTE_URL_REFERENCE.lastIndex = 0
-  const masked = String(prompt || '').replace(REMOTE_URL_REFERENCE, (url) => ' '.repeat(url.length))
-  REMOTE_URL_REFERENCE.lastIndex = 0
-  return masked
-}
-
-export function stripRemoteUrlReferences(prompt = '') {
-  REMOTE_URL_REFERENCE.lastIndex = 0
-  const stripped = String(prompt || '').replace(REMOTE_URL_REFERENCE, ' ')
-  REMOTE_URL_REFERENCE.lastIndex = 0
-  return stripped
-}
-
-function normalizeFileTargetPath(value = '') {
-  const raw = String(value || '').trim()
-  if (!raw) return ''
-  const withoutAction = /[\\/]/.test(raw) || /^[a-z]:/i.test(raw)
-    ? raw
-    : raw.replace(LEADING_FILE_ACTION, '')
-  return withoutAction.trim()
-}
-
-function fileTargetType(path = '') {
-  const match = String(path || '').match(/\.([a-z0-9]+)$/i)
-  return match ? ARTIFACT_TYPE_BY_EXTENSION[match[1].toLowerCase()] || null : null
-}
-
-function extractFileTargetReferences(prompt = '') {
-  const text = maskRemoteUrlReferences(prompt)
-  FILE_TARGET_REFERENCE.lastIndex = 0
-  const references = []
-  const seen = new Set()
-  for (const match of text.matchAll(FILE_TARGET_REFERENCE)) {
-    const path = normalizeFileTargetPath(match[0])
-    const type = fileTargetType(path)
-    if (!path || !type) continue
-    const normalized = path.replace(/\\/g, '/').toLowerCase()
-    if (seen.has(normalized)) continue
-    seen.add(normalized)
-    references.push({
-      path,
-      filename: path.split(/[\\/]/).pop() || path,
-      type,
-      index: match.index,
-      length: match[0].length,
-      raw: match[0],
-    })
-  }
-  FILE_TARGET_REFERENCE.lastIndex = 0
-  return { text, references }
-}
-
-function typeForArtifactTool(toolName = '') {
-  return Object.entries({
-    pptx: 'create_pptx',
-    docx: 'create_docx',
-    xlsx: 'create_xlsx',
-    html: 'create_html_app',
-    pdf: 'create_pdf',
-    image: 'generate_image',
-  }).find(([, tool]) => tool === toolName)?.[0] || null
-}
-
-function filenameEquals(left = '', right = '') {
-  return String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase()
-}
-
-function intentTypes(intent = {}) {
-  return Object.keys(ARTIFACT_TERMS).filter((type) => intent?.[type] === true)
-}
 
 /**
  * Resolve local/workspace targets independently from managed artifact formats.
@@ -458,15 +322,6 @@ export function resolveArtifactRevisionMode(prompt = '') {
   return 'unspecified'
 }
 
-export function isExplicitCodeSnippetRequest(prompt = '') {
-  const text = String(prompt || '').trim()
-  return Boolean(
-    text
-      && !CODE_SNIPPET_DENIAL.test(text)
-      && EXPLICIT_CODE_SNIPPET_REQUEST.test(text),
-  )
-}
-
 export function isArtifactRevisionRequest(prompt = '', { hasPriorArtifact = false } = {}) {
   const text = String(prompt || '').trim()
   if (!text
@@ -494,11 +349,6 @@ function normalizePriorArtifactTypes(values) {
     .map((value) => String(value || '').trim().toLowerCase().replace(/^\./, ''))
     .map((value) => value === 'ppt' ? 'pptx' : value === 'doc' ? 'docx' : value === 'xls' ? 'xlsx' : value)
     .filter((value) => Object.hasOwn(ARTIFACT_TERMS, value)))
-}
-
-export function parseArtifactSkillId(prompt = '') {
-  const match = String(prompt || '').trim().match(SKILL_PREFIX)
-  return match ? canonicalizeSkillId(match[1]) : null
 }
 
 function clauseAroundOccurrence(text, match) {
@@ -670,14 +520,6 @@ export function hasExplicitArtifactRequest(prompt = '', type) {
     if (occurrenceIsExplicitRequest(text, match, type)) return true
   }
   return false
-}
-
-/**
- * A PDF rasterization request consumes an existing PDF. It must use the
- * deterministic renderer, never the generative image model.
- */
-export function isPdfToImageConversionRequest(prompt = '') {
-  return PDF_TO_IMAGE_CONVERSION.test(String(prompt || ''))
 }
 
 function detectArtifactIntentRaw(prompt = '', {
