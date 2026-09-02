@@ -22,6 +22,7 @@ import {
   DEFAULT_DESKTOP_PET_LAYOUT,
   resolveDesktopPetLayout,
 } from '../shared/desktopPetLayout.js'
+import { normalizeProductLanguage } from '../shared/productLanguage.js'
 import {
   createDesktopPetDragSession,
   resolveDesktopPetDragMove,
@@ -59,11 +60,7 @@ function hideDesktopPet() {
 }
 
 function desktopPetCloseLabel(locale = app.getLocale()) {
-  const language = String(locale || '').toLowerCase()
-  if (language.startsWith('zh')) return '关闭宠物'
-  if (language.startsWith('ja')) return 'ペットを閉じる'
-  if (language.startsWith('ko')) return '펫 닫기'
-  return 'Close pet'
+  return normalizeProductLanguage(locale, 'en') === 'zh' ? '关闭宠物' : 'Close pet'
 }
 
 function showDesktopPetMenu() {

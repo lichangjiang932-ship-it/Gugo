@@ -73,10 +73,13 @@ async function runIterationLimitScenario({ locale, wrapUpText }) {
 
 test('turn locale normalizes the existing UI languages to the zh/en runtime contract', () => {
   assert.equal(normalizeTurnLocale(undefined), 'zh')
-  assert.equal(normalizeTurnLocale('zh-TW'), 'zh')
+  assert.equal(normalizeTurnLocale('zh-CN'), 'zh')
+  assert.equal(normalizeTurnLocale('zh-Hans'), 'zh')
+  assert.equal(normalizeTurnLocale('zh-TW'), 'en')
   assert.equal(normalizeTurnLocale('en-US'), 'en')
   assert.equal(normalizeTurnLocale('ja'), 'en')
   assert.equal(normalizeTurnLocale('ko'), 'en')
+  assert.equal(normalizeTurnLocale('', 'zh-TW'), 'en')
 })
 
 test('incomplete terminal copy is stable in Chinese and English', () => {

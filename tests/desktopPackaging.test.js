@@ -383,6 +383,8 @@ test('desktop pet uses an independent transparent always-on-top window', () => {
   assert.match(preload, /onPetDragCancel/)
   assert.match(main, /Menu\.buildFromTemplate/)
   assert.match(main, /desktop:show-pet-menu/)
+  assert.match(main, /normalizeProductLanguage\(locale, 'en'\)/)
+  assert.doesNotMatch(main, /ペットを閉じる|펫 닫기/)
   assert.match(main, /mainWindow\?\.webContents\.send\('desktop:pet-visibility', false\)/)
   const hidePet = main.slice(main.indexOf('function hideDesktopPet()'), main.indexOf('function desktopPetCloseLabel'))
   assert.doesNotMatch(hidePet, /app\.quit|mainWindow\?\.close|mainWindow\.close/)

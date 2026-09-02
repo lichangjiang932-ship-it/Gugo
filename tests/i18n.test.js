@@ -6,6 +6,7 @@ import {
   translateKey,
   lookup,
   normalizeUiLanguage,
+  SLASH_ACTION_COPY,
   SUPPORTED_LANGUAGES,
   DEFAULT_LANGUAGE,
 } from '../src/i18n/translations.js'
@@ -41,6 +42,14 @@ test('旧语言持久值安全回退到英文', () => {
   assert.equal(normalizeUiLanguage('ja'), 'en')
   assert.equal(normalizeUiLanguage('ko'), 'en')
   assert.equal(normalizeUiLanguage('zh-TW'), 'en')
+})
+
+test('slash action copy only exposes symmetric zh / en data', () => {
+  assert.deepEqual(Object.keys(SLASH_ACTION_COPY).sort(), ['en', 'zh'])
+  assert.deepEqual(
+    leafKeys(SLASH_ACTION_COPY.zh).sort(),
+    leafKeys(SLASH_ACTION_COPY.en).sort(),
+  )
 })
 
 test('QQ Mail local environment fallback is explained in both languages', () => {
