@@ -37,7 +37,7 @@ class ErrorBoundaryImpl extends Component {
     const message = this.state.error?.message || String(this.state.error)
     const stack = this.state.errorInfo?.componentStack || ''
 
-    return (
+    const fallback = (
       <div className="min-h-screen flex items-center justify-center p-6 bg-paper">
         <div className="w-full max-w-xl border border-ink-fade rounded-md p-5 bg-paper-2">
           <div className="flex items-baseline justify-between gap-3 mb-3">
@@ -77,6 +77,9 @@ class ErrorBoundaryImpl extends Component {
         </div>
       </div>
     )
+
+    const FallbackWrapper = this.props.fallbackWrapper
+    return FallbackWrapper ? <FallbackWrapper>{fallback}</FallbackWrapper> : fallback
   }
 }
 
