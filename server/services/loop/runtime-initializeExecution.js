@@ -204,10 +204,18 @@ export async function initializeExecution(s) {
        ))) {
       if (!s.restoredLocalHtmlDeliveryFailure) {
         const restoredClarification = s.protectClarification(s.restoredState.final.clarification)
+        const restoredTerminalText = s.restoredState.final.paused === true && restoredClarification
+          ? restoredClarification.question || restoredClarification.message
+          : s.d.formatIncompleteTerminalText(s.restoredState.final.reason, {
+              locale: s.locale,
+              fallbackText: s.restoredState.final.text,
+              hasVerificationTools: s.availableVerificationToolNames?.length > 0,
+              maxIterations: s.maxIters,
+            })
         return { kind: 'return', value: s.emitTurnStopping({
           ...s.restoredState.final,
           text: s.restoredFinalIsTerminal
-            ? s.protectTerminalText(s.restoredState.final.text, { incomplete: true })
+            ? s.protectTerminalText(restoredTerminalText, { incomplete: true })
             : String(s.restoredState.final.text),
           ...(restoredClarification ? { clarification: restoredClarification } : {}),
           artifactIds: s.artifactIds,

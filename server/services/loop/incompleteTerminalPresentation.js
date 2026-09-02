@@ -1,7 +1,30 @@
 import { normalizeTurnLocale } from '../../../shared/turnLocale.js'
 
 const HAN_TEXT = /[\u3400-\u9fff]/u
+const HAN_CHARACTER = /[\u3400-\u9fff]/gu
 const EAST_ASIAN_TERMINAL_MARKER = /[\u3000-\u303f\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]/u
+const LATIN_WORD = /[A-Za-z]+(?:'[A-Za-z]+)?/gu
+const ENGLISH_PROSE_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'been', 'but', 'by', 'can',
+  'did', 'do', 'does', 'for', 'from', 'had', 'has', 'have', 'if', 'in', 'is',
+  'it', 'not', 'of', 'on', 'or', 'please', 'retry', 'should', 'still', 'than',
+  'that', 'the', 'then', 'this', 'to', 'was', 'we', 'were', 'what', 'when',
+  'where', 'which', 'will', 'with', 'you', 'your',
+])
+
+function containsEnglishProseSegment(text) {
+  return String(text || '').split(/[\n\u3002\uff01\uff1f!?]+/u).some((segment) => {
+    const words = segment.match(LATIN_WORD) || []
+    if (words.length < 4) return false
+    const proseWords = words.reduce((count, word) => (
+      count + (ENGLISH_PROSE_WORDS.has(word.toLowerCase()) ? 1 : 0)
+    ), 0)
+    if (proseWords < 2) return false
+    const latinLetters = words.join('').length
+    const hanCharacters = (segment.match(HAN_CHARACTER) || []).length
+    return latinLetters > Math.max(12, hanCharacters * 2)
+  })
+}
 
 function localizedReason(locale, reason, fallback) {
   const value = String(reason || '').trim()
@@ -15,7 +38,7 @@ export function localizedTerminalModelText(locale, value, { strictLocale = false
   const text = String(value || '').trim()
   if (!text) return text
   if (normalizeTurnLocale(locale) === 'zh') {
-    return strictLocale && !HAN_TEXT.test(text) ? '' : text
+    return strictLocale && (!HAN_TEXT.test(text) || containsEnglishProseSegment(text)) ? '' : text
   }
   return EAST_ASIAN_TERMINAL_MARKER.test(text) ? '' : text
 }

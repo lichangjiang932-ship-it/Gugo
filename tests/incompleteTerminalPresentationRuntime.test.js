@@ -6,6 +6,7 @@ import { createPartialResultFallback } from '../server/services/partialResultFal
 import {
   budgetExceededCopy,
   formatIncompleteTerminalText,
+  localizedTerminalModelText,
   priorOutcomeStatusCopy,
   terminalProtectionCopy,
 } from '../server/services/loop/incompleteTerminalPresentation.js'
@@ -93,6 +94,22 @@ test('incomplete terminal copy is stable in Chinese and English', () => {
   assert.doesNotMatch(en, CJK_TEXT)
   assert.equal(fallback, en)
   assert.match(en, /execution evidence/i)
+})
+
+test('strict Chinese terminal text rejects English prose but preserves commands and identifiers', () => {
+  assert.equal(
+    localizedTerminalModelText(
+      'zh',
+      '进度已保存。 The task is still incomplete.',
+      { strictLocale: true },
+    ),
+    '',
+  )
+  const technical = '已运行 npm run build，并检查 ManagedAttachmentStoragePort v1。'
+  assert.equal(
+    localizedTerminalModelText('zh', technical, { strictLocale: true }),
+    technical,
+  )
 })
 
 test('artifact-delivery copy uses the runtime reason code in Chinese and English', () => {
@@ -276,6 +293,19 @@ test('iteration-limit completion follows the turn locale and persists the locali
     assert.doesNotMatch(result.text, /The tool ran, but the task is incomplete\./)
     assert.equal(checkpoint.final.text, result.text)
     assert.equal(checkpoint.final.reason, result.reason)
+  })
+
+  await t.test('Chinese rejects a mixed English-prose wrap-up response', async () => {
+    const { checkpoint, result } = await runIterationLimitScenario({
+      locale: 'zh',
+      wrapUpText: '进度已保存。 The task is still incomplete.',
+    })
+
+    assert.equal(result.incomplete, true)
+    assert.equal(result.reason, 'iteration_limit_reached')
+    assert.match(result.text, CJK_TEXT)
+    assert.doesNotMatch(result.text, /The task is still incomplete\./)
+    assert.equal(checkpoint.final.text, result.text)
   })
 })
 

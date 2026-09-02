@@ -2,17 +2,12 @@ import {
   missingRequirementsForIncompleteReason,
   normalizeIncompleteReason,
 } from '../turnTerminalProjection.js'
-import { normalizeTurnLocale } from '../../../shared/turnLocale.js'
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
-
-const HAN_TEXT = /[\u3400-\u9fff]/u
 
 function terminalTextMatchesLocale(text, locale) {
   const normalizedText = String(text || '').trim()
   if (!normalizedText) return false
-  return normalizeTurnLocale(locale) === 'en'
-    ? Boolean(localizedTerminalModelText(locale, normalizedText))
-    : HAN_TEXT.test(normalizedText)
+  return Boolean(localizedTerminalModelText(locale, normalizedText, { strictLocale: true }))
 }
 
 export function installTerminalCompletion(s) {

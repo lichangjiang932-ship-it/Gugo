@@ -1360,7 +1360,13 @@ test('a real execution failure still allows a specific clarification', async () 
   let modelCalls = 0
   const executed = []
   const result = await runToolsLoop({
-    job: { id: 'real-permission-blocker-job', userId: null, origin: 'chat', prompt: 'Create result.txt now.' },
+    job: {
+      id: 'real-permission-blocker-job',
+      userId: null,
+      origin: 'chat',
+      locale: 'en',
+      prompt: 'Create result.txt now.',
+    },
     step: { id: 'real-permission-blocker-step', kind: 'chat' },
     messages: [{ role: 'user', content: 'Create result.txt now.' }],
     intentMode: 'execute',

@@ -702,6 +702,7 @@ test('a failed terminal checkpoint restores its exact outcome without rerunning 
     job: {
       id: 'resume-incomplete-job',
       userId: alice,
+      locale: 'en',
       prompt: 'Fix the project and verify it.',
     },
     step: { id: 'resume-incomplete-step', kind: 'execute' },
