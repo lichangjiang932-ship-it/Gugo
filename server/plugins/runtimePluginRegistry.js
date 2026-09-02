@@ -6,10 +6,7 @@ import {
   PLUGIN_HOST_VERSION,
 } from './pluginHostContract.js'
 import { snapshotPluginAuditEntry } from './pluginContextData.js'
-import {
-  createEffectTracker,
-  normalizeRuntimePluginManifest,
-} from './pluginLifecycle.js'
+import { normalizeRuntimePluginManifest } from './pluginLifecycle.js'
 import {
   listRuntimePluginEffectiveConfigs,
   listRuntimePluginInventory,
@@ -30,12 +27,11 @@ import { createRuntimePluginEventRegistry } from './runtimePluginEventRegistry.j
 import { createRuntimePluginServiceRegistry } from './runtimePluginServiceRegistry.js'
 import { createRuntimePluginPromptRegistry } from './runtimePluginPromptRegistry.js'
 import { createRuntimePluginToolRegistry } from './runtimePluginToolRegistry.js'
-
-const MAX_CONFIG_RELOAD_AUDIT_EVENTS = 256
-
-function trimmedString(value) {
-  return typeof value === 'string' ? value.trim() : ''
-}
+import {
+  createRuntimePluginAuditRuntime,
+  createRuntimePluginRecordFactory,
+  normalizeRuntimePluginId,
+} from './runtimePluginRegistrySupport.js'
 
 export function createRuntimePluginRegistry(options = {}) {
   const {
@@ -66,7 +62,12 @@ export function createRuntimePluginRegistry(options = {}) {
   const plugins = new Map()
   const stagingRecords = new Set()
   const configReloads = new Set()
-  const configReloadAudit = []
+  const {
+    emitAudit,
+    emitConfigReloadAudit,
+    listConfigReloadAudit,
+  } = createRuntimePluginAuditRuntime(audit)
+  const createPluginRecord = createRuntimePluginRecordFactory()
   const registryToken = Object.freeze({})
   const {
     activeCallbackInvocation,
@@ -78,7 +79,6 @@ export function createRuntimePluginRegistry(options = {}) {
     invokePluginSetup,
     waitForCallbacksToDrain,
   } = createRuntimePluginCallbackRuntime(registryToken)
-  let installSequence = 0
   let configLayerSourcesSealed = false
   let shuttingDown = false
   let shutdownPromise = null
@@ -120,15 +120,6 @@ export function createRuntimePluginRegistry(options = {}) {
     error.code = 'PLUGIN_CONTRIBUTION_UNDECLARED'
     error.retryable = false
     throw error
-  }
-
-  const emitAudit = (event, details = {}) => {
-    if (typeof audit !== 'function') return
-    try {
-      audit(Object.freeze({ event, ...details }))
-    } catch {
-      // Observability must never change lifecycle correctness.
-    }
   }
 
   const {
@@ -219,13 +210,6 @@ export function createRuntimePluginRegistry(options = {}) {
     supportsRuntimeCapabilityReplacement,
   })
 
-  const emitConfigReloadAudit = (event, details = {}) => {
-    const entry = Object.freeze({ event, at: new Date().toISOString(), ...details })
-    configReloadAudit.push(entry)
-    if (configReloadAudit.length > MAX_CONFIG_RELOAD_AUDIT_EVENTS) configReloadAudit.shift()
-    emitAudit(event, details)
-  }
-
   const assertManifestCompatible = (manifest) => assertPluginCompatibility(manifest, {
     hostVersion: PLUGIN_HOST_VERSION,
     apiVersion: PLUGIN_API_VERSION,
@@ -233,40 +217,6 @@ export function createRuntimePluginRegistry(options = {}) {
       const dependency = plugins.get(id)
       return dependency?.state === 'active' ? dependency.manifest.version : null
     },
-  })
-
-  const createPluginRecord = ({
-    manifest,
-    setup,
-    configResolver,
-    configResolution,
-    configRevision,
-    state,
-    deferVisibility,
-    installedAt = null,
-  }) => ({
-    manifest,
-    setup,
-    configResolver,
-    configResolution,
-    configRevision,
-    state,
-    deferVisibility,
-    cancelRequested: false,
-    installedAt,
-    sequence: ++installSequence,
-    effects: createEffectTracker(),
-    managedContributions: [],
-    deactivationChecks: new Set(),
-    configHealthChecks: new Set(),
-    eventContributions: new Set(),
-    agentEventContributions: new Set(),
-    httpCapabilities: new Set(),
-    visibleEffects: new Set(),
-    revocationErrors: [],
-    revocationPromise: null,
-    activeCallbacks: 0,
-    callbackDrainWaiters: new Set(),
   })
 
   const createContextForRecord = (record) => createPluginContext({
@@ -402,7 +352,7 @@ export function createRuntimePluginRegistry(options = {}) {
   })
 
   const reloadPluginConfig = (id, options) => {
-    const normalizedId = trimmedString(id)
+    const normalizedId = normalizeRuntimePluginId(id)
     const invocation = activeCallbackInvocation()
     if (invocation) {
       return createHandledRejectedPromise(
@@ -491,7 +441,7 @@ export function createRuntimePluginRegistry(options = {}) {
   }
 
   const unregisterPlugin = (id) => {
-    const normalizedId = trimmedString(id)
+    const normalizedId = normalizeRuntimePluginId(id)
     const invocation = activeCallbackInvocation()
     if (invocation) {
       return createHandledRejectedPromise(
@@ -558,9 +508,9 @@ export function createRuntimePluginRegistry(options = {}) {
       ...plugins.values(),
       ...stagingRecords,
     ]),
-    getPlugin: (id) => snapshotRuntimePlugin(plugins.get(trimmedString(id))),
+    getPlugin: (id) => snapshotRuntimePlugin(plugins.get(normalizeRuntimePluginId(id))),
     listEffectiveConfigs: () => listRuntimePluginEffectiveConfigs(plugins.values()),
-    listConfigReloadAudit: () => Object.freeze([...configReloadAudit]),
+    listConfigReloadAudit,
     hasService,
     invokeService,
     renderPromptBlocks,
