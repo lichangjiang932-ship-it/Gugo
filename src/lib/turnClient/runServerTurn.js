@@ -1,4 +1,3 @@
-import { fetchServerSessionSnapshot } from './sessionSnapshot.js'
 import {
   cancelServerTurn,
   getServerTurn,
@@ -12,10 +11,9 @@ import {
   TERMINAL_EVENTS,
   defaultWebSocketFactory,
   reconnectDelayForAttempt,
-  streamServerTurnEvents,
-  streamServerTurnEventsWebSocket,
   waitForReconnect,
 } from './turnTransport.js'
+import { fetchTerminalServerSessionSnapshot, streamServerTurnRealtimeAttempt } from './runServerTurnRealtime.js'
 import { canAdvanceTurnEventCursor, parseTurnEvent } from '../../../shared/turnEvents.js'
 import {
   DEFAULT_CANCEL_RETRY_DELAY_MS, DEFAULT_CANCEL_RETRY_MAX_DELAY_MS,
@@ -507,46 +505,32 @@ export async function runServerTurn({
       }
 
       try {
-        const streamArgs = {
+        terminal = await streamServerTurnRealtimeAttempt({
           sessionId,
           turnId: activeTurnId,
           after,
-          onEvent: async (event) => {
-            const delivered = await deliverEvent(event)
-            if (!delivered || event.type === 'turn.interrupted') return
-            if (reconnectAttempts > 0) {
-              reconnectAttempts = 0
-              recoveryMode = false
-              resumeWakeRequested = false
-              await notifyConnectionState({ status: cancelRequested ? 'cancelling' : 'connected', confirmed: cancelAcknowledged })
-            }
+          deliverEvent,
+          deliverActivity,
+          getReconnectState: () => ({
+            attempts: reconnectAttempts,
+            cancelRequested,
+            cancelAcknowledged,
+          }),
+          resetReconnectState: () => {
+            reconnectAttempts = 0
+            recoveryMode = false
+            resumeWakeRequested = false
           },
-          onActivity: deliverActivity,
-        }
-        if (!webSocketDisabled) {
-          try {
-            terminal = await withRequestSignal((requestSignal) => streamServerTurnEventsWebSocket({
-              ...streamArgs,
-              signal: requestSignal,
-              webSocketFactory,
-              connectTimeoutMs: webSocketConnectTimeoutMs,
-              subscribeTimeoutMs: webSocketSubscribeTimeoutMs,
-            }))
-          } catch (webSocketError) {
-            if (cancelRequested && webSocketError?.name === 'AbortError') throw webSocketError
-            if (isApprovalPresentationClosed(webSocketError)) throw webSocketError
-            if (requiresRuntimeRestart(webSocketError)) throw webSocketError
-            if (webSocketError?.serverFailure) throw webSocketError
-            webSocketDisabled = true
-          }
-        }
-        if (!terminal) {
-          terminal = await withRequestSignal((requestSignal) => streamServerTurnEvents({
-            ...streamArgs,
-            signal: requestSignal,
-            fetchImpl,
-          }))
-        }
+          notifyConnectionState,
+          withRequestSignal,
+          shouldAttemptWebSocket: !webSocketDisabled,
+          markWebSocketDisabled: () => { webSocketDisabled = true },
+          isCancellationRequested: () => cancelRequested,
+          webSocketFactory,
+          webSocketConnectTimeoutMs,
+          webSocketSubscribeTimeoutMs,
+          fetchImpl,
+        })
       } catch (error) {
         if (cancelRequested && error?.name === 'AbortError') continue
         if (isApprovalPresentationClosed(error)) throw error
@@ -582,14 +566,7 @@ export async function runServerTurn({
       }
     }
 
-    let sessionSnapshot = null
-    if (syncSessionSnapshot && TERMINAL_EVENTS.has(terminal?.type)) {
-      try {
-        sessionSnapshot = await fetchServerSessionSnapshot({ sessionId, fetchImpl })
-      } catch {
-        // The terminal event remains authoritative even if browser convergence is unavailable.
-      }
-    }
+    const sessionSnapshot = await fetchTerminalServerSessionSnapshot({ syncSessionSnapshot, terminal, sessionId, fetchImpl })
     return { turnId: activeTurnId, terminal, lastSequence: after, sessionSnapshot }
   } finally {
     initialRequestController?.abort()
