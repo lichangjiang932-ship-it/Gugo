@@ -28,6 +28,7 @@ import { createRuntimePluginInstallController } from './runtimePluginInstallCont
 import { createRuntimePluginServiceRegistry } from './runtimePluginServiceRegistry.js'
 import { createRuntimePluginPromptRegistry } from './runtimePluginPromptRegistry.js'
 import { createRuntimePluginToolRegistry } from './runtimePluginToolRegistry.js'
+import { createRuntimePluginUninstallController } from './runtimePluginUninstallController.js'
 import {
   createRuntimePluginAuditRuntime,
   createRuntimePluginRecordFactory,
@@ -311,83 +312,20 @@ export function createRuntimePluginRegistry(options = {}) {
     return reloadPluginConfigUnchecked(id, options)
   }
 
-  const unregisterPluginUnchecked = async (normalizedId) => {
-    let record = plugins.get(normalizedId)
-    if (!record) return false
-    const pendingReloads = [...configReloads]
-      .filter((entry) => entry.pluginId === normalizedId)
-      .map((entry) => entry.promise)
-    if (pendingReloads.length > 0) {
-      await Promise.allSettled(pendingReloads)
-      const current = plugins.get(normalizedId)
-      if (!current) return true
-      if (current !== record) return unregisterPluginUnchecked(normalizedId)
-      record = current
-    }
-    if (record.state === 'cancelling') {
-      await record.cancelPromise
-      return !plugins.has(normalizedId)
-    }
-    if (record.state === 'installing') {
-      record.cancelRequested = true
-      record.state = 'cancelling'
-      record.cancelPromise = (async () => {
-        await revokeVisibleEffects(record)
-        await record.installSettled
-      })()
-      await record.cancelPromise
-      return !plugins.has(normalizedId)
-    }
-    if (record.state === 'failed') {
-      await record.installSettled
-      return !plugins.has(normalizedId)
-    }
-    if (record.state === 'uninstalling' && record.uninstallPromise) return record.uninstallPromise
-    assertNoRuntimePluginDependents(plugins, record, normalizedId)
-    assertRecordCanDeactivate(record)
-    record.state = 'uninstalling'
-    emitAudit('plugin.uninstalling', { pluginId: normalizedId })
-    record.uninstallPromise = (async () => {
-      await revokeVisibleEffects(record)
-      if (record.revocationErrors.length > 0 || record.managedContributions.length > 0) {
-        const errors = [...record.revocationErrors]
-        record.revocationErrors.length = 0
-        const states = record.managedContributions.map((contribution) => contribution.snapshot().state)
-        record.state = states.every((state) => state === 'revoked')
-          ? 'inactive_cleanup_failed'
-          : 'visibility_indeterminate'
-        const failure = errors.length > 0
-          ? new AggregateError(errors, `plugin uninstall failed: ${normalizedId}`)
-          : new Error(`plugin uninstall visibility was not fully revoked: ${normalizedId}`)
-        failure.code = 'PLUGIN_UNINSTALL_INCOMPLETE'
-        failure.retryable = true
-        emitAudit('plugin.uninstall_failed', {
-          pluginId: normalizedId,
-          state: record.state,
-          errors: errors.map((item) => item?.message || String(item)),
-        })
-        throw failure
-      }
-      await waitForCallbacksToDrain(record)
-      const errors = await disposePluginEffects(record)
-      record.revocationErrors.length = 0
-      if (errors.length > 0) {
-        record.state = 'inactive_cleanup_failed'
-        emitAudit('plugin.uninstall_failed', {
-          pluginId: normalizedId,
-          state: record.state,
-          errors: errors.map((item) => item?.message || String(item)),
-        })
-        throw new AggregateError(errors, `plugin uninstall failed: ${normalizedId}`)
-      }
-      plugins.delete(normalizedId)
-      emitAudit('plugin.uninstalled', { pluginId: normalizedId, errors: [] })
-      return true
-    })().finally(() => {
-      if (plugins.get(normalizedId) === record) record.uninstallPromise = null
-    })
-    return record.uninstallPromise
-  }
+  const { unregisterPluginUnchecked } = createRuntimePluginUninstallController({
+    assertNoDependents: (record, id) => assertNoRuntimePluginDependents(plugins, record, id),
+    assertRecordCanDeactivate,
+    disposePluginEffects,
+    emitAudit,
+    getPlugin: (id) => plugins.get(id),
+    hasPlugin: (id) => plugins.has(id),
+    listPendingReloads: (id) => [...configReloads]
+      .filter((entry) => entry.pluginId === id)
+      .map((entry) => entry.promise),
+    removePlugin: (id) => plugins.delete(id),
+    revokeVisibleEffects,
+    waitForCallbacksToDrain,
+  })
 
   const unregisterPlugin = (id) => {
     const normalizedId = normalizeRuntimePluginId(id)
