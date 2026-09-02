@@ -570,5 +570,5 @@ export function startAppServer({
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { startRuntimeServer } = await import('./services/runtimeServerStartup.js')
-  await startRuntimeServer({ cwd: process.cwd(), env: process.env })
+  await startRuntimeServer({ cwd: rootDir, env: process.env })
 }

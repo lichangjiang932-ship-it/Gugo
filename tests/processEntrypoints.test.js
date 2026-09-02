@@ -9,7 +9,7 @@ import {
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { startHubProcess } from '../server/hub/index.js'
 import { runSeedSystemSkillsProcess } from '../server/seedSystemSkills.js'
@@ -17,6 +17,27 @@ import { runSeedSystemSkillsProcess } from '../server/seedSystemSkills.js'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const HUB_ENTRY = path.join(ROOT, 'server', 'hub', 'index.js')
 const SEED_ENTRY = path.join(ROOT, 'server', 'seedSystemSkills.js')
+const SERVER_APPLICATION_ROOT_MODULE = pathToFileURL(
+  path.join(ROOT, 'server', 'utils', 'serverApplicationRoot.js'),
+).href
+const RUNTIME_ENV_MODULE = pathToFileURL(path.join(ROOT, 'server', 'utils', 'runtimeEnv.js')).href
+
+const SERVER_IDENTITY_PROBE = `
+  import path from 'node:path'
+  import { SERVER_APPLICATION_ROOT } from ${JSON.stringify(SERVER_APPLICATION_ROOT_MODULE)}
+  import { resolveRuntimeConfigPaths } from ${JSON.stringify(RUNTIME_ENV_MODULE)}
+
+  const defaultPaths = resolveRuntimeConfigPaths({ cwd: SERVER_APPLICATION_ROOT, env: {} })
+  const relativeOverridePaths = resolveRuntimeConfigPaths({
+    cwd: SERVER_APPLICATION_ROOT,
+    env: { APP_DATA_DIR: 'custom-data' },
+  })
+  process.stdout.write(JSON.stringify({
+    applicationRoot: SERVER_APPLICATION_ROOT,
+    defaultDataDir: path.dirname(defaultPaths.user),
+    relativeOverrideDataDir: path.dirname(relativeOverridePaths.user),
+  }))
+`
 
 function cleanRuntimeIdentity() {
   const env = { ...process.env }
@@ -25,6 +46,38 @@ function cleanRuntimeIdentity() {
   }
   return env
 }
+
+function probeServerIdentity(cwd) {
+  const result = spawnSync(
+    process.execPath,
+    ['--input-type=module', '--eval', SERVER_IDENTITY_PROBE],
+    {
+      cwd,
+      env: cleanRuntimeIdentity(),
+      encoding: 'utf8',
+      timeout: 30_000,
+    },
+  )
+  assert.equal(result.status, 0, result.stderr)
+  return JSON.parse(result.stdout)
+}
+
+test('server entry persistence identity is stable across caller working directories', () => {
+  const firstCwd = mkdtempSync(path.join(tmpdir(), 'gugo-server-entry-cwd-a-'))
+  const secondCwd = mkdtempSync(path.join(tmpdir(), 'gugo-server-entry-cwd-b-'))
+  try {
+    const first = probeServerIdentity(firstCwd)
+    const second = probeServerIdentity(secondCwd)
+
+    assert.deepEqual(second, first)
+    assert.equal(path.resolve(first.applicationRoot), ROOT)
+    assert.equal(path.resolve(first.defaultDataDir), path.join(ROOT, 'server-data'))
+    assert.equal(path.resolve(first.relativeOverrideDataDir), path.join(ROOT, 'custom-data'))
+  } finally {
+    rmSync(firstCwd, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    rmSync(secondCwd, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  }
+})
 
 test('disabled Hub entry exits without importing or opening the runtime database', () => {
   const cwd = mkdtempSync(path.join(tmpdir(), 'gugo-hub-disabled-'))
