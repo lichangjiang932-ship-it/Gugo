@@ -71,9 +71,12 @@ They own pre/post-setup compatibility checks, cancellation observation,
 activation and rollback ordering, reload-generation revalidation, visibility
 revocation, callback drain, effect disposal, and audit outcomes. Record removal
 is generation-checked so a failed install or delayed uninstall cannot delete a
-newer same-ID record. `runtimePluginRegistry.js` supplies narrow host ports and
-continues to own inventory, public deadlock guards, shutdown, config reload, and
-release composition.
+newer same-ID record. `runtimePluginReleaseController.js` owns the public
+reload/uninstall callback-deadlock guards, shutdown fencing and coalescing,
+pending-reload settlement, reverse-order staged/active release, and final Loop
+event detachment. `runtimePluginRegistry.js` supplies narrow host ports and now
+retains inventory, capability wiring, configuration-source initialization, and
+public facade composition.
 
 **Exit criteria:** Close only after every linked transition row is either
 removed with evidence that its required boundary has been reached or moved to
@@ -95,7 +98,9 @@ protects the settled artifact facade/service direction. The focused
 `tests/runtimePluginInstallController.test.js` preserves installation revalidation,
 rollback ordering, settlement, and generation-safe record removal, while
 `tests/runtimePluginUninstallController.test.js` preserves reload-generation
-revalidation before cleanup.
+revalidation before cleanup, and `tests/runtimePluginReleaseController.test.js`
+locks release ordering, callback-deadlock fencing, shutdown coalescing, and the
+one-way registry-to-controller dependency.
 Boundary-specific changes also run the Turn, persistence, model proxy,
 artifact, Job, runtime-plugin, migration, and managed-attachment contract suites
 named by the affected row.

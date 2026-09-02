@@ -16,7 +16,6 @@ import {
   compatibilityRuntimeCapabilityHost,
   snapshotRuntimePluginHostOptions,
 } from './runtimePluginHostOptions.js'
-import { createHandledRejectedPromise } from './runtimePluginAsyncBoundary.js'
 import { createRuntimePluginCallbackRuntime } from './runtimePluginCallbackRuntime.js'
 import { createRuntimePluginCapabilityRegistry } from './runtimePluginCapabilityRegistry.js'
 import { createRuntimePluginConfigReloadController } from './runtimePluginConfigReloadController.js'
@@ -27,6 +26,7 @@ import { createRuntimePluginEventRegistry } from './runtimePluginEventRegistry.j
 import { createRuntimePluginInstallController } from './runtimePluginInstallController.js'
 import { createRuntimePluginServiceRegistry } from './runtimePluginServiceRegistry.js'
 import { createRuntimePluginPromptRegistry } from './runtimePluginPromptRegistry.js'
+import { createRuntimePluginReleaseController } from './runtimePluginReleaseController.js'
 import { createRuntimePluginToolRegistry } from './runtimePluginToolRegistry.js'
 import { createRuntimePluginUninstallController } from './runtimePluginUninstallController.js'
 import {
@@ -82,8 +82,8 @@ export function createRuntimePluginRegistry(options = {}) {
     waitForCallbacksToDrain,
   } = createRuntimePluginCallbackRuntime(registryToken)
   let configLayerSourcesSealed = false
-  let shuttingDown = false
-  let shutdownPromise = null
+  let releaseController = null
+  const isShuttingDown = () => releaseController?.isShuttingDown() === true
 
   const initializeConfigLayerSources = (nextLayerSources) => {
     if (configLayerSourcesSealed) {
@@ -261,7 +261,7 @@ export function createRuntimePluginRegistry(options = {}) {
     getPlugin: (id) => plugins.get(id),
     hasPlugin: (id) => plugins.has(id),
     invokePluginSetup,
-    isShuttingDown: () => shuttingDown,
+    isShuttingDown,
     normalizeManifest: normalizeRuntimePluginManifest,
     publishPlugin: (id, record) => plugins.set(id, record),
     removePlugin: (id) => plugins.delete(id),
@@ -290,7 +290,7 @@ export function createRuntimePluginRegistry(options = {}) {
     getActivePluginConfigResolver: () => activePluginConfigResolver,
     invokePluginCallback,
     invokePluginSetup,
-    isShuttingDown: () => shuttingDown,
+    isShuttingDown,
     plugins,
     retireManagedContributions,
     revokeVisibleEffects,
@@ -300,17 +300,6 @@ export function createRuntimePluginRegistry(options = {}) {
     stagingRecords,
     waitForCallbacksToDrain,
   })
-
-  const reloadPluginConfig = (id, options) => {
-    const normalizedId = normalizeRuntimePluginId(id)
-    const invocation = activeCallbackInvocation()
-    if (invocation) {
-      return createHandledRejectedPromise(
-        callbackDrainDeadlockError('reload', invocation, normalizedId, registryToken),
-      )
-    }
-    return reloadPluginConfigUnchecked(id, options)
-  }
 
   const { unregisterPluginUnchecked } = createRuntimePluginUninstallController({
     assertNoDependents: (record, id) => assertNoRuntimePluginDependents(plugins, record, id),
@@ -327,63 +316,23 @@ export function createRuntimePluginRegistry(options = {}) {
     waitForCallbacksToDrain,
   })
 
-  const unregisterPlugin = (id) => {
-    const normalizedId = normalizeRuntimePluginId(id)
-    const invocation = activeCallbackInvocation()
-    if (invocation) {
-      return createHandledRejectedPromise(
-        callbackDrainDeadlockError('unregister', invocation, normalizedId, registryToken),
-      )
-    }
-    return unregisterPluginUnchecked(normalizedId)
-  }
-
-  const shutdown = () => {
-    const invocation = activeCallbackInvocation()
-    if (invocation) {
-      return createHandledRejectedPromise(
-        callbackDrainDeadlockError('shutdown', invocation, '', registryToken),
-      )
-    }
-    if (shutdownPromise) return shutdownPromise
-    shuttingDown = true
-    shutdownPromise = (async () => {
-      const errors = []
-      const pendingReloads = [...configReloads].map((entry) => entry.promise)
-      if (pendingReloads.length > 0) await Promise.allSettled(pendingReloads)
-      const staged = [...stagingRecords].sort((a, b) => b.sequence - a.sequence)
-      for (const record of staged) {
-        const outcome = await discardStagedRecord(record)
-        if (!outcome.removed) {
-          const cleanupErrors = outcome.errors.length > 0
-            ? outcome.errors
-            : [new Error(`staged runtime plugin cleanup remains incomplete: ${record.manifest.id}`)]
-          errors.push(new AggregateError(
-            cleanupErrors,
-            `staged runtime plugin cleanup failed: ${record.manifest.id}`,
-          ))
-        }
-      }
-      const ordered = [...plugins.values()].sort((a, b) => b.sequence - a.sequence)
-      for (const record of ordered) {
-        try {
-          await unregisterPlugin(record.manifest.id)
-        } catch (error) {
-          errors.push(error)
-        }
-      }
-      try {
-        await detachLoopEventBindings()
-      } catch (error) {
-        errors.push(error)
-      }
-      if (errors.length > 0) throw new AggregateError(errors, 'runtime plugin shutdown failed')
-    })().finally(() => {
-      shuttingDown = false
-      shutdownPromise = null
-    })
-    return shutdownPromise
-  }
+  releaseController = createRuntimePluginReleaseController({
+    activeCallbackInvocation,
+    callbackDrainDeadlockError,
+    detachLoopEventBindings,
+    discardStagedRecord,
+    listActiveRecords: () => plugins.values(),
+    listPendingReloads: () => [...configReloads].map((entry) => entry.promise),
+    listStagedRecords: () => stagingRecords.values(),
+    registryToken,
+    reloadPluginConfigUnchecked,
+    unregisterPluginUnchecked,
+  })
+  const {
+    reloadPluginConfig,
+    shutdown,
+    unregisterPlugin,
+  } = releaseController
 
   return Object.freeze({
     initializeConfigLayerSources,
