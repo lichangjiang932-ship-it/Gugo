@@ -20,6 +20,7 @@ import { writeGeneratedArtifactAtomically } from './artifactAtomicWriter.js'
 import { artifactNameExists } from './artifactLocalPublicationPaths.js'
 import {
   ensureArtifactDir,
+  hasWindowsReservedDeviceBasename,
   replaceUnsafeFilenameCharacters,
 } from './artifactStorage.js'
 
@@ -70,7 +71,8 @@ function cleanArtifactTitle(title, ext) {
 export function buildArtifactFilename(title, extension) {
   const ext = String(extension || '').replace(/^\./, '').toLowerCase()
   if (!/^[a-z0-9]{1,12}$/.test(ext)) throw new Error('invalid artifact extension')
-  return `${cleanArtifactTitle(title, ext)}.${ext}`
+  const filename = `${cleanArtifactTitle(title, ext)}.${ext}`
+  return hasWindowsReservedDeviceBasename(filename) ? `file-${filename}` : filename
 }
 
 function writeNewArtifact(title, ext, contents, encoding = null, previewUserId = null) {

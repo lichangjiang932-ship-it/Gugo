@@ -389,6 +389,9 @@ test('HTML artifact validation rejects remote resources, submissions, and networ
 
 test('artifact filenames use the document title and increment duplicate names', async () => {
   assert.equal(buildArtifactFilename('项目总结', 'docx'), '项目总结.docx')
+  assert.equal(buildArtifactFilename('NUL.txt', 'docx'), 'file-NUL.txt.docx')
+  assert.equal(buildArtifactFilename('CON.backup', 'pdf'), 'file-CON.backup.pdf')
+  assert.equal(buildArtifactFilename('COM1.log', 'xlsx'), 'file-COM1.log.xlsx')
   const first = await createDocx({ title: '项目总结', paragraphs: [{ text: '第一版' }] })
   const second = await createDocx({ title: '项目总结', paragraphs: [{ text: '第二版' }] })
   assert.equal(first.filename, '项目总结.docx')
