@@ -1,3 +1,7 @@
 # Generated third-party browser bundles are vendored byte-for-byte. Their
 # upstream output may contain intentional trailing whitespace in embedded CSS.
 public/sandbox/*.min.js -text -whitespace linguist-vendored
+
+# Published conformance fixtures include byte-level package digests and
+# signatures, so Git must not rewrite their bytes on Windows checkouts.
+tests/fixtures/plugin-compatibility-v1/** text eol=lf

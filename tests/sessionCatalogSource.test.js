@@ -29,7 +29,10 @@ test('catalog source identity follows the database while workspace aliases norma
     assert.equal(first.version, 1)
     assert.match(first.backendInstanceId, /^sqlite:[a-f0-9]{24}$/)
     assert.match(first.workspaceScope.key, /^workspace:[a-f0-9]{24}$/)
-    assert.equal(first.workspaceScope.path, fs.realpathSync(workspace))
+    const expectedWorkspace = typeof fs.realpathSync.native === 'function'
+      ? fs.realpathSync.native(workspace)
+      : fs.realpathSync(workspace)
+    assert.equal(first.workspaceScope.path, expectedWorkspace)
     assert.notEqual(first.backendInstanceId, otherDatabase.backendInstanceId)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
