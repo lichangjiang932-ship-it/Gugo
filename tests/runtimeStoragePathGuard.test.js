@@ -10,6 +10,7 @@ import { validateRuntimeStoragePath } from '../server/utils/runtimeStoragePath.j
 import { resolveRuntimeStartupEnvironment } from '../server/utils/runtimeEnv.js'
 
 const dbModuleUrl = pathToFileURL(path.resolve('server/db.js')).href
+const artifactStorageModuleUrl = pathToFileURL(path.resolve('server/services/artifactStorage.js')).href
 const invalidLiterals = ['undefined', 'null', 'NaN', '[object Object]']
 const windowsReservedDeviceNames = [
   'CON',
@@ -60,7 +61,7 @@ test('runtime storage paths preserve normal Windows paths and non-Windows device
 test('runtime startup rejects coerced storage path literals before resolving them under cwd', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-invalid-runtime-storage-'))
   try {
-    for (const key of ['APP_DATA_DIR', 'APP_DB_PATH']) {
+    for (const key of ['APP_DATA_DIR', 'APP_DB_PATH', 'ARTIFACT_DIR']) {
       for (const value of invalidLiterals) {
         assert.throws(
           () => resolveRuntimeStartupEnvironment({
@@ -69,6 +70,7 @@ test('runtime startup rejects coerced storage path literals before resolving the
               GUGO_LOAD_DOTENV: '0',
               APP_DATA_DIR: key === 'APP_DATA_DIR' ? value : path.join(cwd, 'data'),
               ...(key === 'APP_DB_PATH' ? { APP_DB_PATH: value } : {}),
+              ...(key === 'ARTIFACT_DIR' ? { ARTIFACT_DIR: value } : {}),
             },
           }),
           (error) => error?.code === 'RUNTIME_STORAGE_PATH_INVALID'
@@ -81,6 +83,49 @@ test('runtime startup rejects coerced storage path literals before resolving the
     for (const value of invalidLiterals) {
       assert.equal(fs.existsSync(path.join(cwd, value)), false)
     }
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test('direct artifact storage import rejects unsafe path literals without creating directories', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-invalid-artifact-path-'))
+  try {
+    const invalidArtifactPaths = process.platform === 'win32'
+      ? [...invalidLiterals, 'NUL', 'nul.txt', 'COM1']
+      : invalidLiterals
+    const script = `
+      const results = [];
+      for (const [index, value] of ${JSON.stringify(invalidArtifactPaths)}.entries()) {
+        process.env.ARTIFACT_DIR = value;
+        try {
+          await import(${JSON.stringify(artifactStorageModuleUrl)} + '?case=' + index);
+          results.push({ value, imported: true });
+        } catch (error) {
+          results.push({ value, code: error.code, key: error.key });
+        }
+      }
+      process.stdout.write(JSON.stringify(results));
+    `
+    const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+      cwd,
+      env: {
+        ...process.env,
+        GUGO_LOAD_DOTENV: '0',
+        ARTIFACT_DIR: 'undefined',
+      },
+      encoding: 'utf8',
+      timeout: 30_000,
+    })
+
+    assert.equal(result.error, undefined, result.error?.message)
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+    assert.deepEqual(JSON.parse(result.stdout), invalidArtifactPaths.map((value) => ({
+      value,
+      code: 'RUNTIME_STORAGE_PATH_INVALID',
+      key: 'ARTIFACT_DIR',
+    })))
+    assert.deepEqual(fs.readdirSync(cwd), [])
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true })
   }

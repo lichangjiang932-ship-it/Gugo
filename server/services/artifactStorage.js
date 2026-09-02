@@ -1,10 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { validateRuntimeStoragePath } from '../utils/runtimeStoragePath.js'
 
-export const ARTIFACT_DIR =
-  process.env.ARTIFACT_DIR && path.isAbsolute(process.env.ARTIFACT_DIR)
-    ? process.env.ARTIFACT_DIR
-    : path.resolve(process.cwd(), process.env.ARTIFACT_DIR || '.artifacts')
+const configuredArtifactDir = validateRuntimeStoragePath(process.env.ARTIFACT_DIR, {
+  key: 'ARTIFACT_DIR',
+})
+
+export const ARTIFACT_DIR = path.resolve(process.cwd(), configuredArtifactDir || '.artifacts')
 
 const FORBIDDEN_FILENAME_CHARACTERS = new Set(['<', '>', ':', '"', '/', '\\', '|', '?', '*'])
 const WINDOWS_RESERVED_DEVICE_BASENAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i

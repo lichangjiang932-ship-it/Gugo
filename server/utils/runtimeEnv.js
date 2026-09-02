@@ -12,6 +12,7 @@ const USER_CONFIG_SELF_RELOCATION_KEYS = Object.freeze(['APP_DATA_DIR', 'APP_CON
 const RUNTIME_STARTUP_IDENTITY_KEYS = Object.freeze([
   'APP_DATA_DIR',
   'APP_DB_PATH',
+  'ARTIFACT_DIR',
   'APP_CONFIG_PATH',
 ])
 
@@ -268,14 +269,17 @@ export function resolveRuntimeStartupEnvironment({
   const resolved = { ...user, ...project, ...explicit, ...dotenv, ...env }
   const configuredDataDir = validateRuntimeStoragePath(resolved.APP_DATA_DIR, { key: 'APP_DATA_DIR' })
   const configuredDbPath = validateRuntimeStoragePath(resolved.APP_DB_PATH, { key: 'APP_DB_PATH' })
+  const configuredArtifactDir = validateRuntimeStoragePath(resolved.ARTIFACT_DIR, { key: 'ARTIFACT_DIR' })
   const appDataDir = path.resolve(cwd, configuredDataDir || 'server-data')
   const appDbPath = configuredDbPath
     ? path.resolve(cwd, configuredDbPath)
     : path.join(appDataDir, 'app.db')
+  const artifactDir = path.resolve(cwd, configuredArtifactDir || '.artifacts')
   return Object.freeze({
     ...resolved,
     APP_DATA_DIR: appDataDir,
     APP_DB_PATH: appDbPath,
+    ARTIFACT_DIR: artifactDir,
     ...(sourcePaths.explicit ? { APP_CONFIG_PATH: sourcePaths.explicit } : {}),
   })
 }
@@ -301,6 +305,7 @@ export function applyRuntimeStorageBootstrap(options = {}) {
   const resolved = resolveRuntimeStartupEnvironment(options)
   process.env.APP_DATA_DIR = resolved.APP_DATA_DIR
   process.env.APP_DB_PATH = resolved.APP_DB_PATH
+  process.env.ARTIFACT_DIR = resolved.ARTIFACT_DIR
   return resolved
 }
 
