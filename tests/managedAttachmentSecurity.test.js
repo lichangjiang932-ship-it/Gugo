@@ -261,6 +261,7 @@ test('cleanup restores a quarantined attachment when its stale snapshot changes'
 
   const originalRenameSync = fs.renameSync
   let bindingInjected = false
+  let readDuringQuarantine = false
   fs.renameSync = function renameWithConcurrentBinding(source, destination, ...args) {
     const result = originalRenameSync.call(fs, source, destination, ...args)
     if (!bindingInjected && source === attachment.fullPath && String(destination).includes('.deleting-')) {
@@ -272,6 +273,12 @@ test('cleanup restores a quarantined attachment when its stale snapshot changes'
         attachmentIds: [attachment.id],
         now,
       })
+      assert.throws(
+        () => getManagedAttachment({ userId: identity.userId, id: attachment.id }),
+        (error) => error?.code === 'ATTACHMENT_CONTENT_MISSING' && error?.statusCode === 410,
+      )
+      assert.equal(rowCount(attachment.id), 1)
+      readDuringQuarantine = true
     }
     return result
   }
@@ -292,6 +299,7 @@ test('cleanup restores a quarantined attachment when its stale snapshot changes'
   }
 
   assert.equal(bindingInjected, true)
+  assert.equal(readDuringQuarantine, true)
   assert.deepEqual(result, { removedRows: 0, removedFiles: 0 })
   const restored = getManagedAttachment({ userId: identity.userId, id: attachment.id })
   assert.equal(restored?.sessionId, identity.sessionId)
@@ -423,13 +431,58 @@ test('cleanup row limits never turn valid uninspected attachments into disk orph
   }
 })
 
-test('a missing disk object returns 410 and removes its corrupt database row', async () => {
+test('a missing disk object returns 410 and preserves metadata until snapshot cleanup', async () => {
   const identity = makeIdentity('missing')
   const attachment = await upload({ identity, name: 'missing.txt' })
   fs.unlinkSync(attachment.fullPath)
   assert.throws(
     () => getManagedAttachment({ userId: identity.userId, id: attachment.id }),
     (error) => error?.code === 'ATTACHMENT_CONTENT_MISSING' && error?.statusCode === 410,
+  )
+  assert.equal(rowCount(attachment.id), 1)
+  assert.deepEqual(
+    cleanupManagedAttachments({ userId: identity.userId }),
+    { removedRows: 1, removedFiles: 0 },
+  )
+  assert.equal(rowCount(attachment.id), 0)
+})
+
+test('content download opens bytes before success headers when concurrent removal wins', async () => {
+  const identity = makeIdentity('download-open-race')
+  const attachment = await upload({
+    identity,
+    name: 'removed-before-open.txt',
+    body: 'download race bytes',
+  })
+  const originalOpenSync = fs.openSync
+  let removalInjected = false
+  fs.openSync = function openAfterConcurrentRemoval(filePath, ...args) {
+    if (!removalInjected && path.resolve(String(filePath)) === path.resolve(attachment.fullPath)) {
+      removalInjected = true
+      fs.unlinkSync(attachment.fullPath)
+      const error = new Error('injected concurrent attachment removal')
+      error.code = 'ENOENT'
+      throw error
+    }
+    return originalOpenSync.call(fs, filePath, ...args)
+  }
+
+  let response
+  try {
+    response = await fetch(`${origin}${attachment.downloadUrl}`, {
+      headers: authorization(identity),
+    })
+  } finally {
+    fs.openSync = originalOpenSync
+  }
+
+  assert.equal(removalInjected, true)
+  assert.equal(response.status, 410)
+  assert.equal((await response.json()).error?.code, 'ATTACHMENT_CONTENT_MISSING')
+  assert.equal(rowCount(attachment.id), 1)
+  assert.deepEqual(
+    cleanupManagedAttachments({ userId: identity.userId }),
+    { removedRows: 1, removedFiles: 0 },
   )
   assert.equal(rowCount(attachment.id), 0)
 })

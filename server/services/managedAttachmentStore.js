@@ -244,7 +244,11 @@ export function getManagedAttachment({ userId, id, env = process.env } = {}) {
     throw attachmentError('附件存储记录损坏，已自动清理', 410, 'ATTACHMENT_STORAGE_INVALID')
   }
   if (!fs.existsSync(fullPath)) {
-    deleteCorruptAttachmentMetadata(db, userId, safeId)
+    assertUserDataMutationAllowed(
+      db,
+      userId,
+      'Attachment content cannot be read while local data is being cleared',
+    )
     throw attachmentError('附件内容不存在', 410, 'ATTACHMENT_CONTENT_MISSING')
   }
   return { ...mapAttachment(row), fullPath }

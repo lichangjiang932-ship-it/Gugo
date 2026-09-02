@@ -114,8 +114,28 @@ function attachmentSecurityHeaders({ activePreview, inline, mimeType, preview })
   }
 }
 
-function streamAttachment(res, fullPath, range) {
-  const stream = fs.createReadStream(fullPath, range || undefined)
+function openAttachmentContent(fullPath) {
+  try {
+    return fs.openSync(fullPath, 'r')
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+    const missing = new Error('附件内容不存在', { cause: error })
+    missing.statusCode = 410
+    missing.code = 'ATTACHMENT_CONTENT_MISSING'
+    throw missing
+  }
+}
+
+function closeAttachmentContent(descriptor) {
+  try { fs.closeSync(descriptor) } catch { /* best effort after a response failure */ }
+}
+
+function streamAttachment(res, fullPath, descriptor, range) {
+  const stream = fs.createReadStream(fullPath, {
+    ...(range || {}),
+    fd: descriptor,
+    autoClose: true,
+  })
   stream.once('error', (error) => {
     if (!res.headersSent) return sendError(res, error)
     if (!res.destroyed) res.destroy(error)
@@ -215,18 +235,26 @@ export async function handleAttachmentRequest(req, res) {
           })
           return res.end()
         }
-        res.writeHead(range ? 206 : 200, {
-          'Content-Type': presentation.contentType,
-          'Content-Length': String(range ? range.end - range.start + 1 : attachment.size),
-          'Content-Disposition': contentDisposition(attachment.name, presentation.inline),
-          'Cache-Control': 'private, max-age=31536000, immutable',
-          'Accept-Ranges': 'bytes',
-          ETag: `"sha256-${attachment.sha256}"`,
-          ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${attachment.size}` } : {}),
-          ...securityHeaders,
-        })
-        if (req.method === 'HEAD') return res.end()
-        return streamAttachment(res, attachment.fullPath, range)
+        const descriptor = openAttachmentContent(attachment.fullPath)
+        let streamOwnsDescriptor = false
+        try {
+          res.writeHead(range ? 206 : 200, {
+            'Content-Type': presentation.contentType,
+            'Content-Length': String(range ? range.end - range.start + 1 : attachment.size),
+            'Content-Disposition': contentDisposition(attachment.name, presentation.inline),
+            'Cache-Control': 'private, max-age=31536000, immutable',
+            'Accept-Ranges': 'bytes',
+            ETag: `"sha256-${attachment.sha256}"`,
+            ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${attachment.size}` } : {}),
+            ...securityHeaders,
+          })
+          if (req.method === 'HEAD') return res.end()
+          const stream = streamAttachment(res, attachment.fullPath, descriptor, range)
+          streamOwnsDescriptor = true
+          return stream
+        } finally {
+          if (!streamOwnsDescriptor) closeAttachmentContent(descriptor)
+        }
       }
       if (req.method === 'DELETE' && parts.length === 3) {
         deleteManagedAttachment({ userId, id })
