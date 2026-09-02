@@ -422,7 +422,7 @@ crash-recovery protocol.
 
 ## DEBT-SIZE-001 — Oversized runtime implementation inventory
 
-**Status:** Open
+**Status:** Closed
 **Priority:** P1
 **Area:** Architecture
 
@@ -544,11 +544,12 @@ parsing, and standalone format checks to `shared/artifactIntentSupport.js`.
 Both modules are below 600 lines, so its former frozen exception has been
 removed without changing the shared public intent API or delivery semantics.
 
-All previously frozen `server/` implementations are now at or below 600 lines.
-Expanding the executable scan to every host runtime implementation root exposed
-one existing oversized file outside `server/`. It is frozen below at
-their exact current line counts: any growth, unregistered oversized file, stale
-entry, or unratcheted shrinkage fails the gate.
+All previously frozen runtime implementations are now at or below 600 lines.
+`bin/yma-cli.js` is a 500-line executable facade and local headless-run boundary;
+server command parsing, scoped credential storage, API transport, and remote
+command handlers live in `bin/cli/serverCommands.js`, while shared CLI errors
+live in `bin/cli/errors.js`. All three files are below the limit, the original
+entrypoint exports remain stable, and the final frozen exception is removed.
 
 <!-- debt-size-inventory:start -->
 ```json
@@ -556,20 +557,8 @@ entry, or unratcheted shrinkage fails the gate.
   "schemaVersion": 1,
   "debtId": "DEBT-SIZE-001",
   "lineLimit": 600,
-  "groups": [
-    {
-      "id": "cli-entrypoint",
-      "reason": "The CLI entrypoint combines argument parsing, authentication storage, API transport, Headless execution, and command dispatch in one process boundary.",
-      "exitCriteria": "Move command families and transport or credential concerns into focused modules while keeping the executable entrypoint and exported CLI contracts stable."
-    }
-  ],
-  "files": [
-    {
-      "path": "bin/yma-cli.js",
-      "ceiling": 977,
-      "group": "cli-entrypoint"
-    }
-  ]
+  "groups": [],
+  "files": []
 }
 ```
 <!-- debt-size-inventory:end -->
@@ -581,8 +570,7 @@ intentional temporary exception requires a separately reviewed debt record.
 
 **Verification:** `npm run debt:check` discovers JavaScript and TypeScript
 implementation files under `server/`, `shared/`, `desktop/`, and `bin/`; rejects
-new oversized files and growth; requires shrinkage to ratchet the frozen
-ceiling; and rejects resolved or deleted inventory entries.
+new oversized files and requires the closed inventory to remain empty.
 
 ## Maintenance rules
 
