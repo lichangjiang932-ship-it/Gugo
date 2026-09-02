@@ -31,12 +31,14 @@ evidence settlement, and lease cleanup.
 **Area:** Runtime architecture
 
 **Evidence / reproduction:** The `Current transition debt` table in
-`docs/KERNEL_BOUNDARY.md` still lists host compatibility and composition
-surfaces outside the target minimal kernel. Earlier focused debt records prove
-individual improvements such as reducing `TurnEngine.js` below 600 lines; they
-do not prove that the remaining host responsibilities have crossed stable
-runtime ports. Every table row therefore references this open canonical record
-instead of appearing as undocumented debt beside an all-closed register.
+`docs/KERNEL_BOUNDARY.md` still lists seven host compatibility and composition
+surfaces outside the target minimal kernel. The former `TurnEngine.js` row was
+retired only after `DEBT-ARCH-001` recorded its 544-line composition shell,
+focused execution runtimes, stable runtime-port rules, and boundary regression
+suites. That settled boundary is no longer transition debt. The remaining rows
+still describe responsibilities that have not fully crossed their required
+boundaries, so every one references this open canonical record instead of
+appearing as undocumented debt beside an all-closed register.
 
 **Exit criteria:** Close only after every linked transition row is either
 removed with evidence that its required boundary has been reached or moved to
