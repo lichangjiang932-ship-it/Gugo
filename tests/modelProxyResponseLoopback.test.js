@@ -51,9 +51,13 @@ const upstream = http.createServer((req, res) => {
       return
     }
 
+    const shouldReturnEmpty = body.messages?.at(-1)?.content === 'empty json reply'
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify({
-      choices: [{ message: { role: 'assistant', content: 'loopback json reply' }, finish_reason: 'stop' }],
+      choices: [{
+        message: { role: 'assistant', content: shouldReturnEmpty ? '' : 'loopback json reply' },
+        finish_reason: 'stop',
+      }],
       usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
     }))
   })
@@ -114,6 +118,22 @@ test('model proxy preserves non-streaming JSON behavior across a real HTTP loopb
   assert.equal(outbound.body.model, 'loopback-model')
   assert.equal(outbound.body.stream, false)
   assert.deepEqual(outbound.body.messages.at(-1), { role: 'user', content: 'json ping' })
+})
+
+test('model proxy returns a stable code for an empty non-streaming response', async () => {
+  const response = await fetch(`${proxyOrigin}/api/model/chat`, {
+    method: 'POST',
+    headers: requestHeaders(),
+    body: JSON.stringify({
+      modelName: 'loopback-model',
+      messages: [{ role: 'user', content: 'empty json reply' }],
+    }),
+  })
+
+  assert.equal(response.status, 502)
+  const payload = await response.json()
+  assert.equal(payload.ok, false)
+  assert.equal(payload.code, 'EMPTY_MODEL_RESPONSE')
 })
 
 test('model proxy preserves connecting, delta, and done SSE ordering across a real HTTP loopback', async () => {

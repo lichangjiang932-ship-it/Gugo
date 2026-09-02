@@ -182,6 +182,28 @@ test('background tool response preserves an upstream output-limit finish reason'
   assert.equal(response.toolCalls[0].function.arguments, '{"path":"READ')
 })
 
+test('background model calls expose stable empty-response error codes', async () => {
+  for (const [finishReason, expectedCode] of [
+    ['stop', 'EMPTY_MODEL_RESPONSE'],
+    ['length', 'EMPTY_MODEL_RESPONSE_LENGTH'],
+  ]) {
+    await assert.rejects(
+      () => callBackgroundModel({
+        messages: [{ role: 'user', content: 'return an empty response' }],
+        env: {
+          MODEL_BASE_URL: 'https://example.test/v1',
+          MODEL_NAME: 'test-model',
+        },
+        fetchImpl: async () => new Response(JSON.stringify({
+          choices: [{ message: { content: '' }, finish_reason: finishReason }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      }),
+      (error) => error?.code === expectedCode,
+      finishReason,
+    )
+  }
+})
+
 test('tracked background response-body failure is unknown and never retried or failed over', async () => {
   const urls = []
   await assert.rejects(
@@ -1321,7 +1343,7 @@ test('parses OpenAI compatible responses and reports empty choices clearly', () 
 
   assert.throws(
     () => parseOpenAICompatibleResponse({ choices: [] }),
-    /模型返回为空/
+    (error) => error?.code === 'EMPTY_MODEL_RESPONSE'
   )
 })
 

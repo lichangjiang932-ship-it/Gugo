@@ -291,7 +291,7 @@ export async function handleNonStreamingModelProxyResponse({
     }))
     const parsed = parseModelProviderResponse(data, candidateProfile, { providerRequest })
     recordUsage(candidate.modelName, parsed.usage, { ownerId: requestUserId })
-    if (!parsed.content) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')
+    if (!parsed.content) throw createEmptyModelResponseError(parsed.finishReason)
     return {
       reply: parsed.content,
       modelName: candidate.modelName,

@@ -9,6 +9,7 @@ import {
   parseModelProviderResponse,
   stripEmbeddedReasoning,
 } from './modelProviderResponse.js'
+import { createEmptyModelResponseError } from './sseLifecycle.js'
 import { createTextToolCallDeltaFilter, extractTextToolCalls } from '../utils/textToolCalls.js'
 import { calculateModelCostUsd, recordUsage } from './modelUsage.js'
 import {
@@ -155,7 +156,7 @@ export async function callBackgroundModel({
       }
       const parsed = parseModelProviderResponse(data, profile, { providerRequest })
       recordUsage(candidate.modelName, parsed.usage, { ownerId: usageOwnerId })
-      if (!parsed.content) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')
+      if (!parsed.content) throw createEmptyModelResponseError(parsed.finishReason)
       return parsed.content
     }), {
       signal,
