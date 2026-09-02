@@ -13,6 +13,64 @@ import { normalizeTurnLocale } from '../shared/turnLocale.js'
 
 const CJK_TEXT = /[\u3400-\u9fff]/u
 
+const ECHO_TOOL_SPEC = {
+  type: 'function',
+  function: {
+    name: 'echo_tool',
+    description: 'Echo a short value.',
+    parameters: {
+      type: 'object',
+      properties: { text: { type: 'string' } },
+      required: ['text'],
+      additionalProperties: false,
+    },
+  },
+}
+
+async function runIterationLimitScenario({ locale, wrapUpText }) {
+  let checkpoint = null
+  let wrapUpPrompt = ''
+  const result = await runToolLoop({
+    job: {
+      id: `iteration-limit-${locale}`,
+      userId: `iteration-limit-${locale}-user`,
+      origin: 'chat',
+      locale,
+      prompt: 'Use echo_tool, then summarize the result.',
+    },
+    step: { id: `iteration-limit-${locale}`, kind: 'chat' },
+    messages: [{ role: 'user', content: 'Use echo_tool, then summarize the result.' }],
+    toolSpecs: [ECHO_TOOL_SPEC],
+    enableToolHooks: false,
+    maxIters: 1,
+    requestToolApproval: async ({ args }) => ({
+      proceed: true,
+      args,
+      approvalId: `iteration-limit-${locale}-approval`,
+    }),
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return true
+    },
+    runModel: async ({ messages, toolChoice }) => {
+      if (toolChoice === 'none') {
+        wrapUpPrompt = String(messages.at(-1)?.content || '')
+        return { content: wrapUpText, toolCalls: [] }
+      }
+      return {
+        content: '',
+        toolCalls: [{
+          id: `iteration-limit-${locale}-echo`,
+          type: 'function',
+          function: { name: 'echo_tool', arguments: '{"text":"done"}' },
+        }],
+      }
+    },
+    executeTool: async () => ({ ok: true, echoed: 'done' }),
+  })
+  return { checkpoint, result, wrapUpPrompt }
+}
+
 test('turn locale normalizes the existing UI languages to the zh/en runtime contract', () => {
   assert.equal(normalizeTurnLocale(undefined), 'zh')
   assert.equal(normalizeTurnLocale('zh-TW'), 'zh')
@@ -30,6 +88,15 @@ test('incomplete terminal copy is stable in Chinese and English', () => {
   assert.doesNotMatch(en, CJK_TEXT)
   assert.equal(fallback, en)
   assert.match(en, /execution evidence/i)
+})
+
+test('artifact-delivery copy uses the runtime reason code in Chinese and English', () => {
+  const zh = formatIncompleteTerminalText('artifact_delivery_not_converged', { locale: 'zh' })
+  const en = formatIncompleteTerminalText('artifact_delivery_not_converged', { locale: 'en' })
+
+  assert.match(zh, CJK_TEXT)
+  assert.doesNotMatch(en, CJK_TEXT)
+  assert.match(en, /required file/i)
 })
 
 test('budget-exhaustion completion, wrap-up, and fallback copy are bilingual', () => {
@@ -117,6 +184,52 @@ test('an empty English loop response persists and returns English incomplete cop
   assert.equal(result.reason, 'empty_model_response')
   assert.doesNotMatch(result.text, CJK_TEXT)
   assert.equal(checkpoint.final.text, result.text)
+})
+
+test('iteration-limit completion follows the turn locale and persists the localized text', async (t) => {
+  await t.test('English rejects a Chinese wrap-up response', async () => {
+    const { checkpoint, result, wrapUpPrompt } = await runIterationLimitScenario({
+      locale: 'en',
+      wrapUpText: '工具执行了，但任务没有完成。',
+    })
+
+    assert.equal(result.incomplete, true)
+    assert.equal(result.reason, 'iteration_limit_reached')
+    assert.doesNotMatch(wrapUpPrompt, CJK_TEXT)
+    assert.match(wrapUpPrompt, /tool-call limit/i)
+    assert.doesNotMatch(result.text, CJK_TEXT)
+    assert.match(result.text, /tool-call limit/i)
+    assert.equal(checkpoint.final.text, result.text)
+    assert.equal(checkpoint.final.reason, result.reason)
+  })
+
+  await t.test('English rejects Japanese and Korean wrap-up text', async () => {
+    const { checkpoint, result } = await runIterationLimitScenario({
+      locale: 'en',
+      wrapUpText: 'ツールは実行済みですが、작업이 완료되지 않았습니다.',
+    })
+
+    assert.equal(result.incomplete, true)
+    assert.equal(result.reason, 'iteration_limit_reached')
+    assert.doesNotMatch(result.text, /[\u3040-\u30ff\uac00-\ud7af]/u)
+    assert.match(result.text, /tool-call limit/i)
+    assert.equal(checkpoint.final.text, result.text)
+  })
+
+  await t.test('Chinese rejects an English wrap-up response', async () => {
+    const { checkpoint, result, wrapUpPrompt } = await runIterationLimitScenario({
+      locale: 'zh',
+      wrapUpText: 'The tool ran, but the task is incomplete.',
+    })
+
+    assert.equal(result.incomplete, true)
+    assert.equal(result.reason, 'iteration_limit_reached')
+    assert.match(wrapUpPrompt, CJK_TEXT)
+    assert.match(result.text, CJK_TEXT)
+    assert.doesNotMatch(result.text, /The tool ran, but the task is incomplete\./)
+    assert.equal(checkpoint.final.text, result.text)
+    assert.equal(checkpoint.final.reason, result.reason)
+  })
 })
 
 test('startServerTurn sends the selected UI locale with the initial request', async () => {

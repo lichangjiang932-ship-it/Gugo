@@ -5,6 +5,7 @@ import path from 'node:path'
 
 const BACKEND_IMPLEMENTATION_LINE_LIMIT = 600
 const BACKEND_LARGE_FILE_DEBT_ID = 'DEBT-SIZE-001'
+const FRONTEND_IMPLEMENTATION_LINE_LIMIT = 600
 const TRANSLATION_MODULE_LINE_LIMIT = 600
 const DEBT_MARKER_CEILING = 168
 const LEGACY_EMBER_CEILING = 106
@@ -69,10 +70,10 @@ function walk(dir) {
   })
 }
 
-function walkBackendSources(dir) {
+function walkImplementationSources(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) return walkBackendSources(full)
+    if (entry.isDirectory()) return walkImplementationSources(full)
     return /\.(?:[cm]?[jt]s|[jt]sx)$/.test(entry.name) ? [full] : []
   })
 }
@@ -212,7 +213,7 @@ test('backend implementation size policy rejects every ungoverned oversized file
     (Array.isArray(inventory.files) ? inventory.files : []).map((entry) => [entry.path, entry.ceiling]),
   )
   const hasFrozenExceptions = Array.isArray(inventory.files) && inventory.files.length > 0
-  const files = walkBackendSources('server').map(repositoryPath).sort()
+  const files = walkImplementationSources('server').map(repositoryPath).sort()
   const measurements = new Map(files.map((file) => [file, lineCount(file)]))
   const findings = classifyFrozenBackendDebt({
     measurements,
@@ -271,6 +272,20 @@ test('backend implementation size policy rejects every ungoverned oversized file
     'Lower the frozen ceiling in the same change when an oversized file shrinks',
   )
   assert.deepEqual(findings.stale, [], 'Remove resolved or deleted files from the frozen backend debt inventory')
+})
+
+test('frontend implementation files remain below the size limit', () => {
+  const oversized = walkImplementationSources('src')
+    .map(repositoryPath)
+    .sort()
+    .map((file) => ({ file, lines: lineCount(file) }))
+    .filter(({ lines }) => lines > FRONTEND_IMPLEMENTATION_LINE_LIMIT)
+
+  assert.deepEqual(
+    oversized,
+    [],
+    `Split frontend implementation files above ${FRONTEND_IMPLEMENTATION_LINE_LIMIT} lines`,
+  )
 })
 
 test('translation entry point and domain modules remain below the size limit', () => {

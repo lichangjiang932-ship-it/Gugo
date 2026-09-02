@@ -88,6 +88,13 @@ export function protectTerminalCandidate(s, text, { incomplete = false } = {}) {
   return s.protectTerminalText(statusSafeText, { incomplete })
 }
 
+function iterationLimitWrapUpPrompt(locale, maxIterations) {
+  const rounds = Math.max(1, Number(maxIterations) || 1)
+  return locale === 'en'
+    ? `The tool-call limit (${rounds} rounds) has been reached. Summarize the progress so far and what remains based on the available information. Do not call any more tools.`
+    : `你已达到工具调用上限（${rounds} 轮）。请基于目前已有的信息总结当前进展和剩余工作，不要再调用任何工具。`
+}
+
 export async function finalizeRuntime(s) {
   const { mergeCompactionRecovery, writeToolAudit } = s.d
   // A normal no-tool response can be accepted on the final dynamically
@@ -105,7 +112,7 @@ export async function finalizeRuntime(s) {
           ...s.convo,
           {
             role: 'system',
-            content: `你已达到工具调用上限(${s.maxIters} 轮)。请基于目前已有的信息给出最终回答,不要再调用任何工具。`,
+            content: iterationLimitWrapUpPrompt(s.locale, s.maxIters),
           },
         ],
         tools: [],

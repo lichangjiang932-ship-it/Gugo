@@ -587,8 +587,7 @@ export async function runServerTurn({
       try {
         sessionSnapshot = await fetchServerSessionSnapshot({ sessionId, fetchImpl })
       } catch {
-        // The terminal event remains authoritative and replayable even when
-        // this best-effort browser convergence request is unavailable.
+        // The terminal event remains authoritative even if browser convergence is unavailable.
       }
     }
     return { turnId: activeTurnId, terminal, lastSequence: after, sessionSnapshot }

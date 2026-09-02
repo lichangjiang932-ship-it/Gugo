@@ -21,6 +21,12 @@ import {
   usePreparedToolsLoopRuntime as accessPreparedToolsLoopRuntime,
 } from '../server/services/loop/runtime.js'
 import { collectFinalAnswerToolEvidence } from '../server/services/loop/finalAnswerEvidenceReview.js'
+import { formatIncompleteTerminalText } from '../server/services/loop/incompleteTerminalPresentation.js'
+
+const EMPTY_MODEL_RESPONSE_COPY = Object.freeze({
+  zh: '模型未返回可显示内容，本次任务未完成。请重试，或检查当前模型配置。',
+  en: 'The model returned no displayable content, so this task is incomplete. Retry, or check the current model configuration.',
+})
 
 function hasCode(code) {
   return (error) => error?.code === code && error?.retryable === false
@@ -30,6 +36,7 @@ function modelContext({
   checkpoints = [],
   contextWindow,
   loadCheckpoint,
+  locale,
   messages = [{ role: 'user', content: 'Answer once.' }],
   runModel,
   saveCheckpoint,
@@ -41,6 +48,7 @@ function modelContext({
       sessionId: 'canonical-harness-session',
       origin: 'chat',
       prompt: 'Answer once.',
+      ...(locale ? { locale } : {}),
       modelName: 'user-configured-model',
       modelProviderId: 'user-configured-provider',
       modelConfigRevision: 3,
@@ -237,7 +245,10 @@ test('canonical terminal gate persists and returns the host incomplete result', 
 
   assert.equal(result.incomplete, true)
   assert.equal(result.reason, 'artifact_delivery_not_converged')
-  assert.equal(result.text, 'Host requires a durable artifact.')
+  assert.equal(
+    result.text,
+    formatIncompleteTerminalText('artifact_delivery_not_converged', { locale: 'zh' }),
+  )
   assert.equal(Object.isFrozen(result), true)
   assert.equal(Object.isFrozen(result.artifactIds), true)
   assert.equal(Object.isFrozen(result.deliveryArtifactIds), true)
@@ -578,87 +589,96 @@ test('canonical broker fixes the host transcript and tool surface, then commits 
   )
 })
 
-test('canonical broker converts empty terminal text into a durable incomplete result', async (t) => {
-  for (const scenario of [
-    { name: 'empty text', text: '' },
-    { name: 'whitespace-only text', text: ' \r\n\t ' },
-  ]) {
-    await t.test(scenario.name, async () => {
+test('canonical broker persists and restores localized empty terminal text', async (t) => {
+  for (const locale of ['zh', 'en']) {
+    for (const scenario of [
+      { name: 'empty text', text: '' },
+      { name: 'whitespace-only text', text: ' \r\n\t ' },
+    ]) {
+      await t.test(`${locale}: ${scenario.name}`, async () => {
+        const checkpoints = []
+        let providerCalls = 0
+        const prepared = await prepareToolsLoopRuntime(modelContext({
+          checkpoints,
+          locale,
+          runModel: async () => {
+            providerCalls += 1
+            return { content: scenario.text, toolCalls: [] }
+          },
+        }))
+        const broker = createCanonicalHarnessModelBroker(prepared)
+
+        await broker.modelRequest({})
+        const result = await broker.finalize({ text: scenario.text })
+
+        assert.equal(result.incomplete, true)
+        assert.equal(result.text, EMPTY_MODEL_RESPONSE_COPY[locale])
+        assert.equal(result.reason, 'empty_model_response')
+
+        const terminalCheckpoint = structuredClone(checkpoints.at(-1).state)
+        assert.equal(terminalCheckpoint.final.incomplete, true)
+        assert.equal(terminalCheckpoint.final.text, EMPTY_MODEL_RESPONSE_COPY[locale])
+        assert.equal(terminalCheckpoint.final.reason, 'empty_model_response')
+        assert.equal(Object.hasOwn(terminalCheckpoint, 'modelInvocation'), false)
+
+        const resumed = await runToolsLoop(modelContext({
+          loadCheckpoint: async () => ({ state: terminalCheckpoint }),
+          locale,
+          runModel: async () => {
+            providerCalls += 1
+            return { content: 'must not repeat an empty Provider response', toolCalls: [] }
+          },
+        }))
+        assert.equal(resumed.incomplete, true)
+        assert.equal(resumed.text, EMPTY_MODEL_RESPONSE_COPY[locale])
+        assert.equal(resumed.reason, 'empty_model_response')
+        assert.equal(providerCalls, 1)
+      })
+    }
+  }
+})
+
+test('legacy empty canonical final restores localized text without another Provider request', async (t) => {
+  for (const locale of ['zh', 'en']) {
+    await t.test(locale, async () => {
       const checkpoints = []
       let providerCalls = 0
       const prepared = await prepareToolsLoopRuntime(modelContext({
         checkpoints,
+        locale,
         runModel: async () => {
           providerCalls += 1
-          return { content: scenario.text, toolCalls: [] }
+          return { content: 'initial response', toolCalls: [] }
         },
       }))
       const broker = createCanonicalHarnessModelBroker(prepared)
 
-      await broker.modelRequest({})
-      const result = await broker.finalize({ text: scenario.text })
-
-      assert.equal(result.incomplete, true)
-      assert.ok(result.text.trim(), 'empty model output must produce a visible terminal message')
-      assert.ok(String(result.reason || '').trim(), 'empty model output must have an incomplete reason')
-
-      const terminalCheckpoint = structuredClone(checkpoints.at(-1).state)
-      assert.equal(terminalCheckpoint.final.incomplete, true)
-      assert.equal(terminalCheckpoint.final.text, result.text)
-      assert.equal(terminalCheckpoint.final.reason, result.reason)
-      assert.equal(terminalCheckpoint.final.reason, 'empty_model_response')
-      assert.equal(Object.hasOwn(terminalCheckpoint, 'modelInvocation'), false)
+      const response = await broker.modelRequest({})
+      await broker.finalize({ text: response.content })
+      const legacyCheckpoint = structuredClone(checkpoints.at(-1).state)
+      legacyCheckpoint.final = {
+        ...legacyCheckpoint.final,
+        text: '',
+        incomplete: false,
+        reason: null,
+        harnessAdapter: true,
+      }
 
       const resumed = await runToolsLoop(modelContext({
-        loadCheckpoint: async () => ({ state: terminalCheckpoint }),
+        loadCheckpoint: async () => ({ state: legacyCheckpoint }),
+        locale,
         runModel: async () => {
           providerCalls += 1
-          return { content: 'must not repeat an empty Provider response', toolCalls: [] }
+          return { content: 'must not repeat Provider work', toolCalls: [] }
         },
       }))
+
       assert.equal(resumed.incomplete, true)
-      assert.equal(resumed.text, result.text)
-      assert.equal(resumed.reason, result.reason)
+      assert.equal(resumed.reason, 'empty_model_response')
+      assert.equal(resumed.text, EMPTY_MODEL_RESPONSE_COPY[locale])
       assert.equal(providerCalls, 1)
     })
   }
-})
-
-test('legacy empty canonical final resumes as incomplete without another Provider request', async () => {
-  const checkpoints = []
-  let providerCalls = 0
-  const prepared = await prepareToolsLoopRuntime(modelContext({
-    checkpoints,
-    runModel: async () => {
-      providerCalls += 1
-      return { content: 'initial response', toolCalls: [] }
-    },
-  }))
-  const broker = createCanonicalHarnessModelBroker(prepared)
-
-  const response = await broker.modelRequest({})
-  await broker.finalize({ text: response.content })
-  const legacyCheckpoint = structuredClone(checkpoints.at(-1).state)
-  legacyCheckpoint.final = {
-    ...legacyCheckpoint.final,
-    text: '',
-    incomplete: false,
-    reason: null,
-    harnessAdapter: true,
-  }
-
-  const resumed = await runToolsLoop(modelContext({
-    loadCheckpoint: async () => ({ state: legacyCheckpoint }),
-    runModel: async () => {
-      providerCalls += 1
-      return { content: 'must not repeat Provider work', toolCalls: [] }
-    },
-  }))
-
-  assert.equal(resumed.incomplete, true)
-  assert.equal(resumed.reason, 'empty_model_response')
-  assert.ok(resumed.text.trim(), 'legacy empty final must recover with a visible message')
-  assert.equal(providerCalls, 1)
 })
 
 test('canonical terminal receipt matches the stopping event and durable final', async () => {

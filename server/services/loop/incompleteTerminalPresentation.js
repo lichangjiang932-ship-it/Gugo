@@ -2,7 +2,7 @@ import { normalizeTurnLocale } from '../../../shared/turnLocale.js'
 
 const COPY = Object.freeze({
   zh: Object.freeze({
-    artifact_delivery_missing: '任务尚未完成：所需文件未能成功生成并通过验证，因此未作为最终交付。请重试以继续。',
+    artifact_delivery_not_converged: '任务尚未完成：所需文件未能成功生成并通过验证，因此未作为最终交付。请重试以继续。',
     deliverable_selection_missing: '文件已生成，但最终交付文件的选择未能收敛。未验证文件和中间文件均未附加到回答中。请重试以继续。',
     directory_resume_not_converged: '目录权限已经授予，但模型恢复后仍重复请求同一授权，且没有执行原任务。本轮未标记为完成。请重试以继续。',
     empty_model_response: '模型未返回可显示内容，本次任务未完成。请重试，或检查当前模型配置。',
@@ -17,7 +17,7 @@ const COPY = Object.freeze({
     }),
   }),
   en: Object.freeze({
-    artifact_delivery_missing: 'The task is incomplete because the required file was not successfully generated and verified, so it was not delivered. Retry to continue.',
+    artifact_delivery_not_converged: 'The task is incomplete because the required file was not successfully generated and verified, so it was not delivered. Retry to continue.',
     deliverable_selection_missing: 'Files were created, but final deliverable selection did not converge. No unverified or intermediate files were attached to the answer. Retry to continue.',
     directory_resume_not_converged: 'Directory access was granted, but after resuming the model requested the same authorization again without executing the original task. This turn was not marked complete. Retry to continue.',
     empty_model_response: 'The model returned no displayable content, so this task is incomplete. Retry, or check the current model configuration.',

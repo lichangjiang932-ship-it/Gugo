@@ -2,6 +2,18 @@ import {
   missingRequirementsForIncompleteReason,
   normalizeIncompleteReason,
 } from '../turnTerminalProjection.js'
+import { normalizeTurnLocale } from '../../../shared/turnLocale.js'
+
+const HAN_TEXT = /[\u3400-\u9fff]/u
+const EAST_ASIAN_SCRIPT_TEXT = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/u
+
+function terminalTextMatchesLocale(text, locale) {
+  const normalizedText = String(text || '').trim()
+  if (!normalizedText) return false
+  return normalizeTurnLocale(locale) === 'en'
+    ? !EAST_ASIAN_SCRIPT_TEXT.test(normalizedText)
+    : HAN_TEXT.test(normalizedText)
+}
 
 export function installTerminalCompletion(s) {
   const { MAX_LOCAL_HTML_DELIVERY_RETRIES, formatIncompleteTerminalText } = s.d
@@ -37,7 +49,8 @@ export function installTerminalCompletion(s) {
       fallbackText: text,
       hasVerificationTools: s.availableVerificationToolNames?.length > 0,
       maxIterations: s.maxIters,
-      preserveFallbackText: incompleteReason === 'iteration_limit_reached',
+      preserveFallbackText: incompleteReason === 'iteration_limit_reached'
+        && terminalTextMatchesLocale(text, s.locale),
     })
     const safePartialResult = s.partialResultFallback.apply({
       text: localizedText,

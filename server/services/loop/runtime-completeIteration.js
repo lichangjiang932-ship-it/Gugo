@@ -1,3 +1,20 @@
+import { normalizeTurnLocale } from '../../../shared/turnLocale.js'
+
+function terminalCopy(locale) {
+  if (normalizeTurnLocale(locale) === 'zh') {
+    return {
+      clarificationFallback: '需要你补充信息后才能继续。',
+      noProgressPrompt: '工具循环因持续无进展而停止。请基于已有信息给出部分结论，不要再调用工具。',
+      noProgressFallback: '（工具循环因持续无进展而停止。）',
+    }
+  }
+  return {
+    clarificationFallback: 'More information is required before this task can continue.',
+    noProgressPrompt: 'The tool loop stopped after making no progress. Use the available information to provide a partial conclusion in English. Do not call any tools.',
+    noProgressFallback: '(The tool loop stopped after making no progress.)',
+  }
+}
+
 export async function completeIteration(s) {
   const i = s.iteration
   const { ARTIFACT_RECOVERY_PHASE_FORCE, DELIVERABLE_SELECTION_FALLBACK_MARKER, MAX_ARTIFACT_DELIVERY_RETRIES, MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS, MAX_DELIVERABLE_SELECTION_RETRIES, mergeCompactionRecovery, writeToolAudit } = s.d
@@ -207,11 +224,12 @@ export async function completeIteration(s) {
   if (i.pausedByClarification) {
         // ★ M3: 模型主动调 request_clarification → 当轮 loop 中断交回用户
         const protectedClarification = s.protectClarification(i.pausedByClarification)
+        const copy = terminalCopy(s.locale)
         const terminal = await s.finishTerminalResult({
           text: s.finalText || String(
             protectedClarification.question
             || protectedClarification.message
-            || '需要你补充信息后才能继续。',
+            || copy.clarificationFallback,
           ),
           artifactIds: s.artifactIds,
           iterations: s.iter + 1,
@@ -226,13 +244,14 @@ export async function completeIteration(s) {
         return { kind: 'return', value: terminal }
       }
   if (i.noProgressReason) {
+        const copy = terminalCopy(s.locale)
         try {
           const wrapUpRequest = await s.callTrackedModel({
             messages: [
               ...s.convo,
               {
                 role: 'system',
-                content: `工具循环因无进展停止：${i.noProgressReason}。请基于已有信息给出部分结论，不要再调用工具。`,
+                content: copy.noProgressPrompt,
               },
             ],
             tools: [],
@@ -249,7 +268,7 @@ export async function completeIteration(s) {
         const terminal = await s.finishTerminalResult({
           text: !s.hasRequiredArtifacts()
             ? ''
-            : s.finalText || `(工具循环已停止：${i.noProgressReason})`,
+            : s.finalText || copy.noProgressFallback,
           artifactIds: s.artifactIds,
           iterations: s.iter + 1,
           incomplete: true,

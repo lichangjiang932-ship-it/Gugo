@@ -2,8 +2,6 @@ import { observeLoopEvent } from './eventIsolation.js'
 import { assertRuntimeStage } from './runtimeContract.js'
 import { restoreModelInvocationCheckpoint } from './modelInvocationCheckpoint.js'
 
-const LEGACY_EMPTY_MODEL_RESPONSE_TEXT = '模型未返回可显示内容，本次任务未完成。请重试，或检查当前模型配置。'
-
 export async function initializeExecution(s) {
   const { ARTIFACT_RECOVERY_DIAGNOSIS_MARKER, ARTIFACT_RECOVERY_FORCE_MARKER, ARTIFACT_RECOVERY_PHASE_DIAGNOSE, ARTIFACT_RECOVERY_PHASE_FORCE, FAILURE_RECOVERY_THRESHOLD, MAX_ITERS, buildJobToolIdempotencyKey, createCheckpointBarrier, createRepeatCallGuard, createSteeringController, isSuccessfulToolResult, normalizeCompactionRecovery, normalizeToolResult, observeToolCalls, progressChangesFor, recordToolProgress, resolveIterationWindow, restoreFailureRecovery, restoreToolProgress, serializeExecutionConvergence, serializeFailureRecovery, serializeTaskVerificationRepair, serializeToolProgress, sourceHandoffViolation, synchronizeCheckpointToolCallMessages, toolProgressPayload } = s.d
   s.recovery = normalizeCompactionRecovery(s.restoredState?.recovery)
@@ -167,7 +165,7 @@ export async function initializeExecution(s) {
       && !restoredFinal.text.trim()) {
     s.restoredState.final = {
       ...restoredFinal,
-      text: LEGACY_EMPTY_MODEL_RESPONSE_TEXT,
+      text: s.d.formatIncompleteTerminalText('empty_model_response', { locale: s.locale }),
       incomplete: true,
       reason: 'empty_model_response',
     }
