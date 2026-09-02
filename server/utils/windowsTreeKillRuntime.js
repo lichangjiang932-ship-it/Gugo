@@ -392,7 +392,7 @@ export function createWindowsTreeKillWorkerManager({
     })
   }
 
-  const bind = async (rawPid, { identityCutoffMs = null, signal = null } = {}) => {
+  const bind = async (rawPid, { identityCutoffMs = null, signal = null, sealedJob = false } = {}) => {
     const pid = Math.floor(Number(rawPid) || 0)
     const cutoffMs = identityCutoffMs == null
       ? await settledIdentityCutoff(signal)
@@ -407,9 +407,10 @@ export function createWindowsTreeKillWorkerManager({
     try { worker = ensureWorker() } catch (error) { return Promise.reject(error) }
     const requestId = `${worker.generation}:${++nextRequestId}`
     const leaseId = `${worker.generation}:lease:${++nextLeaseId}`
+    const operation = sealedJob === true ? 'BIND_SEALED' : 'BIND'
     return enqueue(
       worker,
-      `BIND\t${requestId}\t${leaseId}\t${pid}\t${cutoffMs}`,
+      `${operation}\t${requestId}\t${leaseId}\t${pid}\t${cutoffMs}`,
       { signal },
     ).then((bound) => (bound ? { generation: worker.generation, leaseId } : null))
   }
@@ -463,7 +464,8 @@ export function prepareWindowsTreeKillWorker(options) {
   return manager().ready(options)
 }
 
-export async function bindWindowsProcessTree({ pid, child = null, signal = null } = {}) {
+// sealedJob is reserved for an inert trusted gate bound before it can spawn.
+export async function bindWindowsProcessTree({ pid, child = null, signal = null, sealedJob = false } = {}) {
   if (child) {
     try {
       if (child.kill(0) !== true) return null
@@ -475,7 +477,7 @@ export async function bindWindowsProcessTree({ pid, child = null, signal = null 
       if (child.kill(0) !== true) return null
     } catch { return null }
   }
-  return manager().bind(pid, { identityCutoffMs, signal })
+  return manager().bind(pid, { identityCutoffMs, signal, sealedJob })
 }
 
 export async function terminateWindowsProcessTree({

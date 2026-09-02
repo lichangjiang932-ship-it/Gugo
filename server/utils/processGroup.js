@@ -180,6 +180,7 @@ function runProcessWithGroupStarted({
             pid: child.pid,
             child,
             signal: windowsBindController.signal,
+            sealedJob: true,
           })
         }).catch((error) => {
           if (!hasTerminalIntent()) windowsBindError = error

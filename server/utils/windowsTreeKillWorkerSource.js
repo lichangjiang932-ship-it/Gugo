@@ -80,12 +80,14 @@ public static class GugoProcessTreeNative {
     public readonly string Id;
     public readonly ProcessIdentity Root;
     public readonly IntPtr Job;
+    public readonly bool JobContainsTree;
     public int State;
 
-    public ProcessLease(string id, ProcessIdentity root, IntPtr job) {
+    public ProcessLease(string id, ProcessIdentity root, IntPtr job, bool jobContainsTree) {
       Id = id;
       Root = root;
       Job = job;
+      JobContainsTree = jobContainsTree;
       State = 0;
     }
 
@@ -302,7 +304,7 @@ public static class GugoProcessTreeNative {
     return value > 0 ? value : identity.CreatedAt;
   }
 
-  public static bool Bind(string leaseId, int rootPid, long identityCutoffUnixMs) {
+  public static bool Bind(string leaseId, int rootPid, long identityCutoffUnixMs, bool jobContainsTree) {
     if (String.IsNullOrWhiteSpace(leaseId) || rootPid <= 0 || identityCutoffUnixMs <= 0) {
       return false;
     }
@@ -322,7 +324,7 @@ public static class GugoProcessTreeNative {
       if (!AssignProcessToJobObject(job, root.Handle)) return false;
       lock (LeaseLock) {
         if (Leases.ContainsKey(leaseId)) return false;
-        Leases.Add(leaseId, new ProcessLease(leaseId, root, job));
+        Leases.Add(leaseId, new ProcessLease(leaseId, root, job, jobContainsTree));
         owned = true;
       }
       return true;
@@ -429,8 +431,13 @@ public static class GugoProcessTreeNative {
     ProcessLease lease,
     Dictionary<uint, ProcessIdentity> tracked
   ) {
-    ExpandDescendants(tracked, Snapshot());
-    return ActiveJobProcessCount(lease.Job) == 0 && !AnyTrackedProcessAlive(tracked);
+    try {
+      if (!lease.JobContainsTree) ExpandDescendants(tracked, Snapshot());
+      return ActiveJobProcessCount(lease.Job) == 0 && !AnyTrackedProcessAlive(tracked);
+    } catch (Win32Exception) {
+      if (lease.JobContainsTree) return false;
+      throw;
+    }
   }
 
   private static bool ConfirmBoundTreeEmpty(
@@ -458,7 +465,7 @@ public static class GugoProcessTreeNative {
       while (RemainingBudgetMilliseconds(elapsed, budgetMs) > 0) {
         // An incomplete ancestry snapshot can never be retried safely: an
         // untracked parent may exit and leave a live descendant unreachable.
-        ExpandDescendants(tracked, Snapshot());
+        if (!lease.JobContainsTree) ExpandDescendants(tracked, Snapshot());
         try {
           if (!jobTerminated) {
             bool terminated = TerminateJobObject(lease.Job, 1);
@@ -553,11 +560,11 @@ while ($true) {
   if ($parts.Length -lt 3 -or [string]::IsNullOrWhiteSpace($parts[1])) { continue }
   $operation = $parts[0]
   $requestId = $parts[1]
-  if ($operation -eq 'BIND' -and $parts.Length -eq 5) {
+  if (($operation -eq 'BIND' -or $operation -eq 'BIND_SEALED') -and $parts.Length -eq 5) {
     $rootPid = 0
     $identityCutoffUnixMs = 0L
     $valid = [int]::TryParse($parts[3], [ref]$rootPid) -and [long]::TryParse($parts[4], [ref]$identityCutoffUnixMs)
-    $bound = $valid -and [GugoProcessTreeNative]::Bind($parts[2], $rootPid, $identityCutoffUnixMs)
+    $bound = $valid -and [GugoProcessTreeNative]::Bind($parts[2], $rootPid, $identityCutoffUnixMs, $operation -eq 'BIND_SEALED')
     [GugoProcessTreeNative]::WriteResponse($requestId, $bound)
     continue
   }

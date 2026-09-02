@@ -169,7 +169,7 @@ function mockWindowsTreeKillManager({
 function workerRequestRows(child) {
   return child.stdin.writes.map((line) => {
     const fields = line.trimEnd().split('\t')
-    if (fields[0] === 'BIND') {
+    if (fields[0] === 'BIND' || fields[0] === 'BIND_SEALED') {
       return {
         operation: fields[0],
         requestId: fields[1],
@@ -221,7 +221,7 @@ async function waitForProcessExit(pid, timeoutMs = 5_000) {
 
 async function completeBoundRequest(child, pending, { bind = true, kill = true } = {}) {
   const bindRow = workerRequestRows(child).at(-1)
-  assert.equal(bindRow.operation, 'BIND')
+  assert.match(bindRow.operation, /^BIND(?:_SEALED)?$/u)
   respond(child, bindRow, bind)
   if (!bind) return pending
   await nextTurn()
@@ -248,7 +248,15 @@ test('Windows tree-kill worker: prewarm 与连续 BIND/KILL 复用同一 worker'
   const second = requestWithKnownIdentity(manager, 202)
   const secondBind = workerRequestRows(children[0])[2]
   assert.equal(await completeBoundRequest(children[0], second), true)
-  assert.deepEqual([firstBind.pid, secondBind.pid], [101, 202])
+  assert.equal(firstBind.operation, 'BIND')
+  assert.equal(secondBind.operation, 'BIND')
+
+  const sealed = requestWithKnownIdentity(manager, 303, { sealedJob: true })
+  const sealedBind = workerRequestRows(children[0])[4]
+  assert.equal(sealedBind.operation, 'BIND_SEALED')
+  assert.equal(await completeBoundRequest(children[0], sealed), true)
+
+  assert.deepEqual([firstBind.pid, secondBind.pid, sealedBind.pid], [101, 202, 303])
   assert.notEqual(firstBind.leaseId, secondBind.leaseId)
   assert.equal(children.length, 1)
   assert.equal(manager.snapshot().spawnCount, 1)
@@ -463,6 +471,9 @@ test('Windows tree-kill worker: cleanup retries transient native races within a 
   const retryEnd = killSource.indexOf('} catch (Win32Exception)', retryIndex)
 
   assert.match(source, /Stopwatch\.StartNew\(\)/u)
+  assert.match(source, /if \(!lease\.JobContainsTree\) ExpandDescendants\(tracked, Snapshot\(\)\);/u)
+  assert.match(source, /catch \(Win32Exception\) \{\s*if \(lease\.JobContainsTree\) return false;\s*throw;/u)
+  assert.match(source, /BIND_SEALED/u)
   assert.ok(captureIndex >= 0 && retryIndex > captureIndex && retryEnd > retryIndex)
   assert.doesNotMatch(killSource.slice(retryIndex, retryEnd), /ExpandDescendants|IsBoundTreeEmpty/u)
   assert.match(source, /stableEmptySnapshots >= 2/u)
@@ -1213,12 +1224,14 @@ test('runProcessWithGroup: Windows BIND 确认前不得执行用户命令', {
   timeout: 10_000,
 }, async (t) => {
   let resolveBind
+  let bindOptions = null
   const bindPending = new Promise((resolve) => { resolveBind = resolve })
   let notifyBind
   const bindCalled = new Promise((resolve) => { notifyBind = resolve })
   const manager = {
     ready: () => Promise.resolve(true),
-    bind: () => {
+    bind: (_pid, options) => {
+      bindOptions = options
       notifyBind()
       return bindPending
     },
@@ -1244,6 +1257,7 @@ test('runProcessWithGroup: Windows BIND 确认前不得执行用户命令', {
   })
 
   await bindCalled
+  assert.equal(bindOptions?.sealedJob, true)
   await new Promise((resolve) => setTimeout(resolve, 100))
   assert.equal(spawned, false, 'onSpawn must describe the real target, not the inert gate')
   assert.equal(fs.existsSync(markerPath), false, 'target must remain gated while BIND is pending')
