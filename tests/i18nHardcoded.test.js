@@ -24,7 +24,6 @@ const BASELINE = {
   'src/lib/skillCommands.js': 120,
   'src/lib/toolPermissionClient.js': 22,
   'src/pages/DeskView.jsx': 81,
-  'src/pages/MobileKeysView.jsx': 146,
   'src/pages/ReasonixWorkspace.jsx': 276,
   'src/store/AppContext.jsx': 5,
   'src/store/exportSchema.js': 109,

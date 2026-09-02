@@ -3,6 +3,7 @@ import { Blocks } from 'lucide-react'
 import { getUiPlugin, registerTrustedUiPlugin } from './uiContributionRegistry.js'
 
 const McpServersView = lazy(() => import('../pages/McpServersView.jsx'))
+const MobileKeysView = lazy(() => import('../pages/MobileKeysView.jsx'))
 const ReasonixWorkspace = lazy(() => import('../pages/ReasonixWorkspace.jsx'))
 const SettingsEvolutionPanel = lazy(() => import('../components/settings/SettingsEvolutionPanel.jsx'))
 
@@ -12,6 +13,7 @@ const FIRST_PARTY_UI_MANIFEST = Object.freeze({
   version: '1.0.0',
   contributes: Object.freeze([
     'ui:route:mcp-route',
+    'ui:route:mobile-keys-route',
     'ui:route:reasonix-route',
     'ui:account-menu:mcp-account-menu',
     'ui:settings-section:evolution-settings',
@@ -28,6 +30,14 @@ export function registerFirstPartyUiContributions() {
       component: McpServersView,
       requiresAuth: true,
       order: 100,
+    },
+    {
+      id: 'mobile-keys-route',
+      slot: 'route',
+      path: '/mobile-keys',
+      component: MobileKeysView,
+      requiresAuth: true,
+      order: 105,
     },
     {
       id: 'reasonix-route',

@@ -18,7 +18,7 @@ import {
 } from '../lib/deskClient.js'
 
 export default function DeskView() {
-  const t = useT()
+  const { t } = useT()
   const [notes, setNotes] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')

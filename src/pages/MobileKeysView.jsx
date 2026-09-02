@@ -16,22 +16,24 @@ import {
   revokeMobileKeyApi,
 } from '../lib/mobileClient.js'
 
-function fmtTs(ts) {
-  if (!ts) return '—'
-  return new Date(ts).toLocaleString()
+function fmtTs(ts, lang, emptyValue) {
+  if (!ts) return emptyValue
+  return new Date(ts).toLocaleString(lang === 'zh' ? 'zh-CN' : 'en-US')
 }
 
-function fmtTtl(record) {
-  if (!record.expiresAt) return '永久'
+function fmtTtl(record, t) {
+  if (!record.expiresAt) return t('mobile.permanent')
   const remain = record.expiresAt - Date.now()
-  if (remain <= 0) return '已过期'
+  if (remain <= 0) return t('mobile.expired')
   const h = Math.floor(remain / 3600_000)
   const m = Math.floor((remain % 3600_000) / 60_000)
-  return h > 0 ? `${h}h ${m}m` : `${m}m`
+  return h > 0
+    ? t('mobile.durationHoursMinutes', { hours: h, minutes: m })
+    : t('mobile.durationMinutes', { minutes: m })
 }
 
 export default function MobileKeysView() {
-  const t = useT()
+  const { t, lang } = useT()
   const [keys, setKeys] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -56,8 +58,8 @@ export default function MobileKeysView() {
   }, [])
 
   useEffect(() => {
-    const t = window.setTimeout(() => { reload() }, 0)
-    return () => window.clearTimeout(t)
+    const timer = window.setTimeout(() => { reload() }, 0)
+    return () => window.clearTimeout(timer)
   }, [reload])
 
   const onCreate = async () => {
@@ -79,7 +81,7 @@ export default function MobileKeysView() {
   }
 
   const onRevoke = async (id) => {
-    if (!window.confirm(t('mobile.confirmRevoke') || '撤销该 access key?')) return
+    if (!window.confirm(t('mobile.confirmRevoke'))) return
     try {
       await revokeMobileKeyApi(id)
       await reload()
@@ -105,9 +107,9 @@ export default function MobileKeysView() {
         <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
           <MonitorSmartphone className="w-5 h-5 text-accent-ink" />
           <div className="flex-1">
-            <div className="text-base font-semibold text-ink">{t('mobile.title') || '手机入口'}</div>
+            <div className="text-base font-semibold text-ink">{t('mobile.title')}</div>
             <div className="text-xs text-ink-fade">
-              {t('mobile.subtitle') || '生成 access key，在手机/局域网浏览器打开 /mobile.html 即可登录使用。'}
+              {t('mobile.subtitle')}
             </div>
           </div>
           <button
@@ -116,17 +118,17 @@ export default function MobileKeysView() {
             className="h-8 px-3 bg-accent text-accent-contrast rounded-md text-xs hover:bg-accent/90 flex items-center gap-1"
           >
             <Plus className="w-3.5 h-3.5" />
-            {t('mobile.new') || '新建 Key'}
+            {t('mobile.new')}
           </button>
         </div>
 
         <div className="flex-1 overflow-auto p-6">
-          {loading && <div className="text-sm text-ink-fade">{t('mobile.loading') || '加载中…'}</div>}
+          {loading && <div className="text-sm text-ink-fade">{t('mobile.loading')}</div>}
           {err && <div className="text-sm text-danger mb-3">{err}</div>}
 
           {!loading && keys.length === 0 && (
             <div className="text-center text-sm text-ink-fade py-20">
-              {t('mobile.empty') || '还没有 access key，点「新建 Key」开始'}
+              {t('mobile.empty')}
             </div>
           )}
 
@@ -136,12 +138,12 @@ export default function MobileKeysView() {
                 <div key={k.id} className="border border-ink/10 rounded-md p-3 bg-paper-2 flex items-center gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-ink truncate">
-                      {k.label || (t('mobile.noLabel') || '(无标签)')}
+                      {k.label || t('mobile.noLabel')}
                     </div>
                     <div className="text-xs text-ink-fade mt-0.5 flex flex-wrap gap-x-3">
-                      <span>{t('mobile.created') || '创建'}：{fmtTs(k.createdAt)}</span>
-                      <span>{t('mobile.lastUsed') || '上次使用'}：{fmtTs(k.lastUsedAt)}</span>
-                      <span>{t('mobile.ttl') || '有效期'}：{fmtTtl(k)}</span>
+                      <span>{t('mobile.createdAt', { value: fmtTs(k.createdAt, lang, t('mobile.notAvailable')) })}</span>
+                      <span>{t('mobile.lastUsedAt', { value: fmtTs(k.lastUsedAt, lang, t('mobile.neverUsed')) })}</span>
+                      <span>{t('mobile.validFor', { value: fmtTtl(k, t) })}</span>
                       <span className="font-mono">{k.prefix}…</span>
                     </div>
                   </div>
@@ -151,7 +153,7 @@ export default function MobileKeysView() {
                     className="h-8 px-2 rounded-md border border-ink/10 hover:bg-danger/5 text-danger text-xs flex items-center gap-1"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    {t('mobile.revoke') || '撤销'}
+                    {t('mobile.revoke')}
                   </button>
                 </div>
               ))}
@@ -164,31 +166,31 @@ export default function MobileKeysView() {
           <Modal onClose={() => setShowCreate(false)} closeOnBackdrop={false} ariaLabelledby="mobile-key-create-title" className="w-[420px] max-w-[90vw] p-5 flex flex-col gap-3">
               <div className="flex items-center gap-2">
                 <div id="mobile-key-create-title" className="text-base font-semibold text-ink flex-1">
-                  {t('mobile.createTitle') || '新建 access key'}
+                  {t('mobile.createTitle')}
                 </div>
-                <button type="button" onClick={() => setShowCreate(false)} className="text-ink-fade hover:text-ink">
+                <button type="button" onClick={() => setShowCreate(false)} aria-label={t('mobile.close')} className="text-ink-fade hover:text-ink">
                   <X className="w-4 h-4" />
                 </button>
               </div>
               <label className="text-xs text-ink-soft">
-                {t('mobile.label') || '标签（可选）'}
+                {t('mobile.label')}
                 <input
                   type="text"
                   value={newLabel}
                   onChange={(e) => setNewLabel(e.target.value)}
-                  placeholder="iPhone 15 / 客厅 iPad"
+                  placeholder={t('mobile.labelPlaceholder')}
                   className="w-full mt-1 border border-ink/10 rounded-md px-2 py-1.5 text-sm bg-paper-2 outline-none focus:border-focus/40"
                 />
               </label>
               <label className="text-xs text-ink-soft">
-                {t('mobile.ttlHours') || '有效期（小时，留空 = 永久）'}
+                {t('mobile.ttlHours')}
                 <input
                   type="number"
                   min="0"
                   step="1"
                   value={newTtlHours}
                   onChange={(e) => setNewTtlHours(e.target.value)}
-                  placeholder="24"
+                  placeholder={t('mobile.ttlPlaceholder')}
                   className="w-full mt-1 border border-ink/10 rounded-md px-2 py-1.5 text-sm bg-paper-2 outline-none focus:border-focus/40"
                 />
               </label>
@@ -198,7 +200,7 @@ export default function MobileKeysView() {
                   onClick={() => setShowCreate(false)}
                   className="h-8 px-3 rounded-md border border-ink/10 text-xs text-ink-soft hover:bg-paper-2"
                 >
-                  {t('mobile.cancel') || '取消'}
+                  {t('mobile.cancel')}
                 </button>
                 <button
                   type="button"
@@ -206,7 +208,7 @@ export default function MobileKeysView() {
                   disabled={creating}
                   className="h-8 px-3 rounded-md bg-accent text-accent-contrast text-xs hover:bg-accent/90 disabled:opacity-60"
                 >
-                  {creating ? (t('mobile.creating') || '创建中…') : (t('mobile.create') || '创建')}
+                  {creating ? t('mobile.creating') : t('mobile.create')}
                 </button>
               </div>
           </Modal>
@@ -217,14 +219,14 @@ export default function MobileKeysView() {
           <Modal onClose={() => setRevealed(null)} closeOnBackdrop={false} ariaLabelledby="mobile-key-reveal-title" className="w-[520px] max-w-[90vw] border-accent/40 p-5 flex flex-col gap-3">
               <div className="flex items-center gap-2">
                 <div id="mobile-key-reveal-title" className="text-base font-semibold text-ink flex-1">
-                  {t('mobile.revealTitle') || '只显示一次，请立即复制'}
+                  {t('mobile.revealTitle')}
                 </div>
-                <button type="button" onClick={() => setRevealed(null)} className="text-ink-fade hover:text-ink">
+                <button type="button" onClick={() => setRevealed(null)} aria-label={t('mobile.close')} className="text-ink-fade hover:text-ink">
                   <X className="w-4 h-4" />
                 </button>
               </div>
               <div className="text-xs text-ink-fade">
-                {t('mobile.revealHint') || '此 key 仅显示这一次。关闭对话框后无法再次查看，但可在列表中撤销。'}
+                {t('mobile.revealHint')}
               </div>
               <div className="bg-paper-2 border border-ink/10 rounded-md p-3 font-mono text-sm break-all text-ink">
                 {revealed.rawKey}
@@ -236,18 +238,18 @@ export default function MobileKeysView() {
                   className="h-8 px-3 rounded-md border border-ink/10 text-xs text-ink-soft hover:bg-paper-2 flex items-center gap-1"
                 >
                   {copied ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copied ? (t('mobile.copied') || '已复制') : (t('mobile.copy') || '复制')}
+                  {copied ? t('mobile.copied') : t('mobile.copy')}
                 </button>
                 <button
                   type="button"
                   onClick={() => setRevealed(null)}
                   className="h-8 px-3 rounded-md bg-accent text-accent-contrast text-xs hover:bg-accent/90"
                 >
-                  {t('mobile.done') || '我已保存'}
+                  {t('mobile.done')}
                 </button>
               </div>
               <div className="text-xs text-ink-fade pt-1 border-t border-ink/5">
-                {t('mobile.howTo') || '使用方法：手机浏览器打开'} <span className="font-mono">/mobile.html</span> {t('mobile.thenPaste') || '，粘贴此 key 即可登录。'}
+                {t('mobile.howToPrefix')} <span className="font-mono">/mobile.html</span> {t('mobile.howToSuffix')}
               </div>
           </Modal>
         )}

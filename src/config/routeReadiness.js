@@ -6,7 +6,7 @@
 //   - 'wip'      : 仅为骨架/雏形，业务流程残缺，慎入
 //
 // 判定依据（一次性人工评估，避免运行期遍历组件源码）：
-//   1. 是否有完整 5 语言 i18n（useT）
+//   1. 是否有完整 zh / en i18n（useT）
 //   2. 是否有真实后端数据 / 增删改查闭环
 //   3. 是否含 'TODO' / 硬编码 '暂不可用' 等字样
 //   4. 行数 < 200 且仅为静态展示 → 偏 preview
@@ -14,7 +14,7 @@
 // 新增 / 改路由时同步更新这个 map；tests/config/routeReadiness.test.js 会守门。
 
 export const ROUTE_READINESS = Object.freeze({
-  // ---- stable: 完整功能 + 5 语言 i18n + 持久化 ----
+  // ---- stable: 完整功能 + zh/en i18n + 持久化 ----
   '/': 'stable',              // Redirects directly to ChatSplit
   '/chat': 'stable',          // ChatSplit
   '/skills': 'stable',        // SkillsMarket
@@ -28,6 +28,7 @@ export const ROUTE_READINESS = Object.freeze({
   '/channels': 'stable',      // ChannelsPage
   '/access': 'stable',        // AccessView
   '/mcp': 'stable',           // McpServersView
+  '/mobile-keys': 'stable',   // MobileKeysView
   '/approvals': 'stable',     // ApprovalsInbox
 
   // ---- preview: 主流程能跑，但 i18n / UX 还粗糙 ----

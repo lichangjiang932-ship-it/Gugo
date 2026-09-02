@@ -1,0 +1,38 @@
+const translations = {
+  zh: {
+    title: '书桌便笺',
+    subtitle: '随手记录，会自动保存',
+    new: '新建',
+    loading: '加载中…',
+    empty: '还没有便笺，点击「新建」开始。',
+    pickOne: '从左侧选择一条便笺',
+    untitled: '无标题',
+    titlePlaceholder: '标题',
+    bodyPlaceholder: '在这里随手写点什么…',
+    pin: '置顶',
+    unpin: '取消置顶',
+    pinned: '已置顶',
+    delete: '删除',
+    confirmDelete: '删除这条便笺？此操作不可撤销。',
+    savedAt: '更新于',
+  },
+  en: {
+    title: 'Desk notes',
+    subtitle: 'Capture quick notes with automatic saving',
+    new: 'New',
+    loading: 'Loading…',
+    empty: 'No notes yet. Select New to create one.',
+    pickOne: 'Select a note from the left',
+    untitled: 'Untitled',
+    titlePlaceholder: 'Title',
+    bodyPlaceholder: 'Write something here…',
+    pin: 'Pin',
+    unpin: 'Unpin',
+    pinned: 'Pinned',
+    delete: 'Delete',
+    confirmDelete: 'Delete this note? This cannot be undone.',
+    savedAt: 'Updated',
+  },
+}
+
+export default translations

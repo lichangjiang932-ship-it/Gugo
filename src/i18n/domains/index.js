@@ -7,6 +7,8 @@ import sideEffectRecovery from './sideEffectRecovery.js'
 import modelRequestRecovery from './modelRequestRecovery.js'
 import evolution from './evolution.js'
 import memory from './memory.js'
+import desk from './desk.js'
+import mobile from './mobile.js'
 import taskCenter from './taskCenter.js'
 import jobEvents from './jobEvents.js'
 import artifact from './artifact.js'
@@ -65,6 +67,8 @@ const domains = [
   ['modelRequestRecovery', modelRequestRecovery],
   ['evolution', evolution],
   ['memory', memory],
+  ['desk', desk],
+  ['mobile', mobile],
   ['taskCenter', taskCenter],
   ['jobEvents', jobEvents],
   ['artifact', artifact],
