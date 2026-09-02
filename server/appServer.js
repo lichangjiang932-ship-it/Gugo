@@ -125,6 +125,7 @@ export function createAppServer({
   includeBuiltinHttpCapabilities = true,
   configureHttpCapabilities = null,
   httpCapabilityAudit = null,
+  managedAttachmentStoragePort = null,
   runtimeReadiness = createRuntimeReadinessController({ initialState: 'ready' }),
 } = {}) {
   if (configureHttpCapabilities !== null && typeof configureHttpCapabilities !== 'function') {
@@ -150,6 +151,7 @@ export function createAppServer({
       disposeBuiltins = registerBuiltinHttpCapabilities(capabilities, {
         getEnv,
         cwd: runtimeCwd,
+        managedAttachmentStoragePort,
       })
     }
     if (configureHttpCapabilities) {

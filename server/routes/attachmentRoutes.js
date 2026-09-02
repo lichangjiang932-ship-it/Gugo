@@ -1,18 +1,6 @@
-import fs from 'node:fs'
-import {
-  projectManagedAttachmentDto,
-  projectManagedAttachmentList,
-} from '../core/managedAttachmentDtos.js'
+import { assertManagedAttachmentStoragePort } from '../core/managedAttachmentStoragePort.js'
 import { authenticateRequest } from '../middleware.js'
 import { sendJson } from '../utils.js'
-import {
-  cleanupManagedAttachments,
-  createManagedAttachment,
-  deleteManagedAttachment,
-  deleteManagedAttachmentsForSession,
-  getManagedAttachment,
-  listManagedAttachments,
-} from '../services/managedAttachmentStore.js'
 
 const SAFE_INLINE_MIME_TYPES = new Set([
   'application/pdf',
@@ -114,28 +102,17 @@ function attachmentSecurityHeaders({ activePreview, inline, mimeType, preview })
   }
 }
 
-function openAttachmentContent(fullPath) {
-  try {
-    return fs.openSync(fullPath, 'r')
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error
-    const missing = new Error('附件内容不存在', { cause: error })
-    missing.statusCode = 410
-    missing.code = 'ATTACHMENT_CONTENT_MISSING'
-    throw missing
+function streamAttachment(req, res, stream) {
+  const stop = () => {
+    if (!stream.destroyed) stream.destroy()
   }
-}
-
-function closeAttachmentContent(descriptor) {
-  try { fs.closeSync(descriptor) } catch { /* best effort after a response failure */ }
-}
-
-function streamAttachment(res, fullPath, descriptor, range) {
-  const stream = fs.createReadStream(fullPath, {
-    ...(range || {}),
-    fd: descriptor,
-    autoClose: true,
-  })
+  const detach = () => {
+    if (typeof req.off === 'function') req.off('aborted', stop)
+    if (typeof res.off === 'function') res.off('close', stop)
+  }
+  if (typeof req.once === 'function') req.once('aborted', stop)
+  if (typeof res.once === 'function') res.once('close', stop)
+  stream.once('close', detach)
   stream.once('error', (error) => {
     if (!res.headersSent) return sendError(res, error)
     if (!res.destroyed) res.destroy(error)
@@ -162,14 +139,15 @@ function authenticateAttachmentRequest(req, url, parts) {
   return authenticateRequest(req)
 }
 
-export async function handleAttachmentRequest(req, res) {
+export async function handleAttachmentRequest(req, res, { storagePort } = {}) {
   const url = new URL(req.url, 'http://localhost')
   const parts = routeParts(url.pathname)
   const userId = authenticateAttachmentRequest(req, url, parts)
   if (!userId) return sendJson(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } })
   try {
+    const storage = assertManagedAttachmentStoragePort(storagePort)
     if (req.method === 'POST' && url.pathname === '/api/attachments/cleanup') {
-      return sendJson(res, 200, cleanupManagedAttachments({ userId }))
+      return sendJson(res, 200, await storage.cleanup({ userId }))
     }
 
     if (req.method === 'POST' && url.pathname === '/api/attachments') {
@@ -177,7 +155,7 @@ export async function handleAttachmentRequest(req, res) {
       const mimeType = url.searchParams.get('mimeType') || req.headers['content-type']
       const sessionId = url.searchParams.get('sessionId') || req.headers['x-gugo-session-id'] || null
       const messageId = url.searchParams.get('messageId') || req.headers['x-gugo-message-id'] || null
-      const attachment = await createManagedAttachment({
+      const attachment = await storage.create({
         userId,
         name,
         mimeType,
@@ -186,17 +164,17 @@ export async function handleAttachmentRequest(req, res) {
         source: req,
         contentLength: req.headers['content-length'],
       })
-      return sendJson(res, 201, { attachment: projectManagedAttachmentDto(attachment) })
+      return sendJson(res, 201, { attachment })
     }
 
     if (req.method === 'GET' && url.pathname === '/api/attachments') {
-      const attachments = listManagedAttachments({
+      const attachments = await storage.list({
         userId,
         sessionId: url.searchParams.get('sessionId'),
         messageId: url.searchParams.get('messageId'),
         limit: url.searchParams.get('limit'),
       })
-      return sendJson(res, 200, { attachments: projectManagedAttachmentList(attachments) })
+      return sendJson(res, 200, { attachments })
     }
 
     if (req.method === 'DELETE' && url.pathname === '/api/attachments') {
@@ -204,18 +182,18 @@ export async function handleAttachmentRequest(req, res) {
       if (!sessionId) {
         return sendJson(res, 400, { error: { code: 'ATTACHMENT_SESSION_REQUIRED', message: 'sessionId is required' } })
       }
-      const removed = deleteManagedAttachmentsForSession({ userId, sessionId })
+      const removed = await storage.deleteForSession({ userId, sessionId })
       return sendJson(res, 200, { ok: true, removed })
     }
 
     if (parts[0] === 'api' && parts[1] === 'attachments' && parts[2]) {
       const id = decodeURIComponent(parts[2])
-      const attachment = getManagedAttachment({ userId, id })
+      const attachment = await storage.get({ userId, id })
       if (!attachment) {
         return sendJson(res, 404, { error: { code: 'ATTACHMENT_NOT_FOUND', message: '附件不存在或无权访问' } })
       }
       if (req.method === 'GET' && parts.length === 3) {
-        return sendJson(res, 200, { attachment: projectManagedAttachmentDto(attachment) })
+        return sendJson(res, 200, { attachment })
       }
       if (['GET', 'HEAD'].includes(req.method) && parts.length === 4 && parts[3] === 'content') {
         const preview = url.searchParams.get('preview') === '1'
@@ -235,29 +213,48 @@ export async function handleAttachmentRequest(req, res) {
           })
           return res.end()
         }
-        const descriptor = openAttachmentContent(attachment.fullPath)
+        const opened = await storage.openContent({
+          userId,
+          id,
+          range,
+          expected: { size: attachment.size, sha256: attachment.sha256 },
+        })
+        const authoritativeAttachment = opened.attachment
+        const stream = opened.stream
+        const authoritativePresentation = attachmentPresentation(
+          authoritativeAttachment.mimeType,
+          preview,
+        )
+        const authoritativeSecurityHeaders = attachmentSecurityHeaders({
+          ...authoritativePresentation,
+          mimeType: authoritativeAttachment.mimeType,
+          preview,
+        })
         let streamOwnsDescriptor = false
         try {
           res.writeHead(range ? 206 : 200, {
-            'Content-Type': presentation.contentType,
-            'Content-Length': String(range ? range.end - range.start + 1 : attachment.size),
-            'Content-Disposition': contentDisposition(attachment.name, presentation.inline),
+            'Content-Type': authoritativePresentation.contentType,
+            'Content-Length': String(range ? range.end - range.start + 1 : authoritativeAttachment.size),
+            'Content-Disposition': contentDisposition(
+              authoritativeAttachment.name,
+              authoritativePresentation.inline,
+            ),
             'Cache-Control': 'private, max-age=31536000, immutable',
             'Accept-Ranges': 'bytes',
-            ETag: `"sha256-${attachment.sha256}"`,
-            ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${attachment.size}` } : {}),
-            ...securityHeaders,
+            ETag: `"sha256-${authoritativeAttachment.sha256}"`,
+            ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${authoritativeAttachment.size}` } : {}),
+            ...authoritativeSecurityHeaders,
           })
           if (req.method === 'HEAD') return res.end()
-          const stream = streamAttachment(res, attachment.fullPath, descriptor, range)
+          streamAttachment(req, res, stream)
           streamOwnsDescriptor = true
           return stream
         } finally {
-          if (!streamOwnsDescriptor) closeAttachmentContent(descriptor)
+          if (!streamOwnsDescriptor) stream.destroy()
         }
       }
       if (req.method === 'DELETE' && parts.length === 3) {
-        deleteManagedAttachment({ userId, id })
+        await storage.delete({ userId, id })
         return sendJson(res, 200, { ok: true })
       }
     }

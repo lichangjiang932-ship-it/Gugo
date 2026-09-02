@@ -49,9 +49,14 @@ import { handleWebSearchRequest } from '../routes/webSearchRoutes.js'
 import { handleRuntimeConfigRequest } from '../routes/runtimeConfigRoutes.js'
 import { handleSideEffectRequest } from '../routes/sideEffectRoutes.js'
 import { handleCapabilityInventoryRequest } from '../routes/capabilityInventoryRoutes.js'
+import { createSqliteFileManagedAttachmentStorageAdapter } from '../adapters/sqliteFileManagedAttachmentStorageAdapter.js'
 import { handleMcpServerRequest } from '../mcp/mcpServer.js'
 import { getRuntimeHostDiagnostics } from '../services/runtimeHostDiagnostics.js'
 import { acquireCompactionArchivePort } from './compactionArchivePort.js'
+import {
+  assertManagedAttachmentStoragePort,
+  createManagedAttachmentStoragePort,
+} from './managedAttachmentStoragePort.js'
 import { getActiveTurnPersistenceAdapter } from './turnPersistenceAdapter.js'
 
 function descriptor(id, priority, apiPrefixes = []) {
@@ -165,6 +170,7 @@ export function createBuiltinHttpCapabilities({
   readCanarySession = readActiveTurnSession,
   readRuntimeDiagnostics = getRuntimeHostDiagnostics,
   acquireArchivePort = acquireCompactionArchivePort,
+  managedAttachmentStoragePort = null,
   modelProxyRequestHandler = handleModelProxyRequest,
   compactionRequestHandler = handleCompactionRequest,
 } = {}) {
@@ -174,6 +180,11 @@ export function createBuiltinHttpCapabilities({
   const jobRuntimeForRequest = jobRuntime === null
     ? () => resolveJobRuntime()
     : () => jobRuntime
+  const attachmentStorage = managedAttachmentStoragePort === null
+    ? createManagedAttachmentStoragePort(
+        createSqliteFileManagedAttachmentStorageAdapter({ getEnv }),
+      )
+    : assertManagedAttachmentStoragePort(managedAttachmentStoragePort)
 
   const definitions = [
     capability(
@@ -245,7 +256,7 @@ export function createBuiltinHttpCapabilities({
     capability(
       'builtin.attachments',
       (req) => req.url?.startsWith('/api/attachments'),
-      (req, res) => handleAttachmentRequest(req, res),
+      (req, res) => handleAttachmentRequest(req, res, { storagePort: attachmentStorage }),
     ),
     capability(
       'builtin.web-search',

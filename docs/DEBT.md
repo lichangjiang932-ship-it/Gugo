@@ -78,6 +78,17 @@ event detachment. `runtimePluginRegistry.js` supplies narrow host ports and now
 retains inventory, capability wiring, configuration-source initialization, and
 public facade composition.
 
+Managed attachment HTTP operations now cross the host-created
+`ManagedAttachmentStoragePort v1`. Its default SQLite/file adapter owns concrete
+store calls, file descriptors, consistency checks, and stream construction;
+the route receives only validated public attachment receipts and path-free
+readable capabilities. Content opening binds response metadata to the
+authoritative opened receipt, verifies the full SHA-256 from that opened file
+descriptor before streaming, and revokes the readable capability on client
+disconnect. The separate Turn runtime port and existing SQLite aggregate
+transaction continue to own validation/materialization and atomic message
+binding respectively.
+
 **Exit criteria:** Close only after every linked transition row is either
 removed with evidence that its required boundary has been reached or moved to
 a narrower open debt record with its own observable exit criteria. Completion
@@ -100,7 +111,9 @@ rollback ordering, settlement, and generation-safe record removal, while
 `tests/runtimePluginUninstallController.test.js` preserves reload-generation
 revalidation before cleanup, and `tests/runtimePluginReleaseController.test.js`
 locks release ordering, callback-deadlock fencing, shutdown coalescing, and the
-one-way registry-to-controller dependency.
+one-way registry-to-controller dependency. Managed attachment storage port and
+architecture tests preserve DTO identity, path opacity, authoritative content
+opening, and the one-way route-to-port-to-adapter dependency.
 Boundary-specific changes also run the Turn, persistence, model proxy,
 artifact, Job, runtime-plugin, migration, and managed-attachment contract suites
 named by the affected row.
