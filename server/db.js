@@ -6,6 +6,12 @@ import {
   runSchemaMigrations,
 } from './migrations/index.js'
 import { assertCurrentSchemaContract, preflightExistingSchemaVersion } from './dbSchemaPreflight.js'
+import { createAuthSessionStore } from './services/authSessionStore.js'
+import { createLegacyJsonMigrationStore } from './services/legacyJsonMigrationStore.js'
+import { createLoginCodeStore } from './services/loginCodeStore.js'
+import { createRateLimitStore } from './services/rateLimitStore.js'
+import { createUserAccountStore } from './services/userAccountStore.js'
+import { createUserToolPermissionStore } from './services/userToolPermissionStore.js'
 import { validateRuntimeStoragePath } from './utils/runtimeStoragePath.js'
 
 export const DB_SCHEMA_VERSION = LATEST_SCHEMA_VERSION
@@ -97,179 +103,37 @@ export function closeDb() {
   }
 }
 
-/* ── Users ── */
+// Compatibility facade: focused stores receive this module's connection provider,
+// so callers keep the historic db.js surface without store -> db.js cycles.
+const userAccounts = createUserAccountStore(getDb)
+const userToolPermissions = createUserToolPermissionStore(getDb)
+const authSessions = createAuthSessionStore(getDb)
+const loginCodes = createLoginCodeStore(getDb)
+const rateLimits = createRateLimitStore(getDb)
 
-export function createUser({ id, email, now = Date.now() }) {
-  const db = getDb()
-  const stmt = db.prepare(
-    'INSERT INTO users (id, email, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at'
-  )
-  stmt.run(id, email, now, now)
-  return getUserById(id)
-}
+export const clearUserPassword = userAccounts.clearUserPassword
+export const createUser = userAccounts.createUser
+export const getUserByEmail = userAccounts.getUserByEmail
+export const getUserById = userAccounts.getUserById
+export const setUserPassword = userAccounts.setUserPassword
 
-export function getUserById(id) {
-  const db = getDb()
-  const stmt = db.prepare('SELECT * FROM users WHERE id = ?')
-  return stmt.get(id) || null
-}
+export const getUserToolPermissions = userToolPermissions.getUserToolPermissions
+export const isToolPermittedForUser = userToolPermissions.isToolPermittedForUser
+export const setUserToolPermission = userToolPermissions.setUserToolPermission
 
-export function getUserByEmail(email) {
-  const db = getDb()
-  const stmt = db.prepare('SELECT * FROM users WHERE email = ?')
-  return stmt.get(email) || null
-}
+export const createSession = authSessions.createSession
+export const deleteExpiredSessions = authSessions.deleteExpiredSessions
+export const deleteSession = authSessions.deleteSession
+export const getSessionByToken = authSessions.getSessionByToken
 
-export function setUserPassword({ id, passwordHash, passwordSalt, now = Date.now() }) {
-  const db = getDb()
-  const stmt = db.prepare(
-    'UPDATE users SET password_hash = ?, password_salt = ?, password_set_at = ?, updated_at = ? WHERE id = ?'
-  )
-  stmt.run(passwordHash, passwordSalt, now, now, id)
-  return getUserById(id)
-}
+export const createLoginCode = loginCodes.createLoginCode
+export const deleteExpiredCodes = loginCodes.deleteExpiredCodes
+export const deleteLoginCode = loginCodes.deleteLoginCode
+export const getLoginCode = loginCodes.getLoginCode
+export const incrementLoginAttempts = loginCodes.incrementLoginAttempts
 
-export function clearUserPassword({ id, now = Date.now() }) {
-  const db = getDb()
-  db.prepare(
-    'UPDATE users SET password_hash = NULL, password_salt = NULL, password_set_at = NULL, updated_at = ? WHERE id = ?'
-  ).run(now, id)
-  return getUserById(id)
-}
-
-/* ── User Tool Permissions (per-user 工具 gate) ── */
-
-/**
- * 设置某用户对某工具的权限。enabled=false 表示显式禁用(默认放行,只存覆盖)。
- */
-export function setUserToolPermission({ userId, toolName, enabled, now = Date.now() }) {
-  const db = getDb()
-  db.prepare(
-    `INSERT INTO user_tool_permissions (user_id, tool_name, enabled, updated_at)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(user_id, tool_name) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at`
-  ).run(userId, toolName, enabled ? 1 : 0, now)
-}
-
-/**
- * 返回该用户的显式权限覆盖 map: { toolName: boolean }。只含显式设过的工具。
- */
-export function getUserToolPermissions(userId) {
-  const db = getDb()
-  const rows = db
-    .prepare('SELECT tool_name, enabled FROM user_tool_permissions WHERE user_id = ?')
-    .all(userId)
-  const map = {}
-  for (const row of rows) map[row.tool_name] = !!row.enabled
-  return map
-}
-
-/**
- * 工具是否对该用户放行。默认放行(无显式覆盖即 true);只有显式 enabled=0 才拒绝。
- */
-export function isToolPermittedForUser(userId, toolName) {
-  if (!userId) return true // 无用户上下文(系统/匿名内部调用)不 gate
-  const db = getDb()
-  const row = db
-    .prepare('SELECT enabled FROM user_tool_permissions WHERE user_id = ? AND tool_name = ?')
-    .get(userId, toolName)
-  if (!row) return true
-  return !!row.enabled
-}
-
-/* ── Sessions (auth tokens) ── */
-
-const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
-
-export function createSession({ token, userId, now = Date.now(), ttlMs = TOKEN_TTL_MS }) {
-  const db = getDb()
-  // 清理过期 session
-  db.prepare('DELETE FROM sessions WHERE id IS NULL AND title IS NULL AND expires_at < ?').run(now)
-  const stmt = db.prepare(
-    `INSERT INTO sessions (token, user_id, expires_at, created_at)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(token) DO UPDATE SET expires_at = excluded.expires_at
-     WHERE sessions.id IS NULL AND sessions.title IS NULL AND sessions.user_id = excluded.user_id`
-  )
-  const result = stmt.run(token, userId, now + ttlMs, now)
-  if (result.changes !== 1) throw new Error('session token already exists')
-  return { token, userId, expiresAt: now + ttlMs }
-}
-
-export function getSessionByToken(token, now = Date.now()) {
-  const db = getDb()
-  const stmt = db.prepare(`
-    SELECT * FROM sessions
-    WHERE token = ? AND id IS NULL AND title IS NULL AND expires_at > ?
-  `)
-  return stmt.get(token, now) || null
-}
-
-export function deleteSession(token) {
-  const db = getDb()
-  db.prepare('DELETE FROM sessions WHERE token = ? AND id IS NULL AND title IS NULL').run(token)
-}
-
-export function deleteExpiredSessions(now = Date.now()) {
-  const db = getDb()
-  db.prepare('DELETE FROM sessions WHERE id IS NULL AND title IS NULL AND expires_at < ?').run(now)
-}
-
-/* ── Login Codes ── */
-
-export function createLoginCode({ email, code, now = Date.now(), ttlMs = 10 * 60 * 1000 }) {
-  const db = getDb()
-  const stmt = db.prepare(
-    'INSERT INTO login_codes (email, code, attempts, expires_at, created_at) VALUES (?, ?, 0, ?, ?) ON CONFLICT(email) DO UPDATE SET code = excluded.code, attempts = 0, expires_at = excluded.expires_at, created_at = excluded.created_at'
-  )
-  stmt.run(email, code, now + ttlMs, now)
-  return { email, code, expiresAt: now + ttlMs }
-}
-
-export function getLoginCode(email) {
-  const db = getDb()
-  const stmt = db.prepare('SELECT * FROM login_codes WHERE email = ?')
-  return stmt.get(email) || null
-}
-
-export function incrementLoginAttempts(email) {
-  const db = getDb()
-  const stmt = db.prepare('UPDATE login_codes SET attempts = attempts + 1 WHERE email = ?')
-  stmt.run(email)
-}
-
-export function deleteLoginCode(email) {
-  const db = getDb()
-  db.prepare('DELETE FROM login_codes WHERE email = ?').run(email)
-}
-
-export function deleteExpiredCodes(now = Date.now()) {
-  const db = getDb()
-  db.prepare('DELETE FROM login_codes WHERE expires_at < ?').run(now)
-}
-
-/* ── Rate Limits ── */
-
-export function checkRateLimit({ key, windowMs, maxRequests, now = Date.now() }) {
-  const db = getDb()
-  return db.transaction(() => {
-    // 只清理当前 key 的旧窗口；不同限流器可能窗口长度不同，不能互相删记录。
-    db.prepare('DELETE FROM rate_limits WHERE key = ? AND window_start < ?').run(key, now - windowMs)
-
-    const row = db.prepare('SELECT * FROM rate_limits WHERE key = ?').get(key)
-    if (!row) {
-      db.prepare('INSERT INTO rate_limits (key, count, window_start) VALUES (?, 1, ?)').run(key, now)
-      return { allowed: true, remaining: maxRequests - 1 }
-    }
-
-    if (row.count >= maxRequests) {
-      return { allowed: false, remaining: 0, resetAt: row.window_start + windowMs }
-    }
-
-    db.prepare('UPDATE rate_limits SET count = count + 1 WHERE key = ?').run(key)
-    return { allowed: true, remaining: maxRequests - row.count - 1 }
-  })()
-}
+export const checkRateLimit = rateLimits.checkRateLimit
+export const deleteExpiredRates = rateLimits.deleteExpiredRates
 
 /* ── Migration ── */
 
@@ -284,26 +148,5 @@ export function setSchemaVersion(version) {
   db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run('schema_version', String(version))
 }
 
-export function deleteExpiredRates(now = Date.now()) {
-  const db = getDb()
-  db.prepare('DELETE FROM rate_limits WHERE window_start < ?').run(now)
-}
-
-/* ── 旧 JSON 数据迁移 ── */
-
-export function migrateFromJson(store) {
-  const db = getDb()
-  const now = Date.now()
-  const insertUser = db.prepare(
-    'INSERT INTO users (id, email, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at'
-  )
-  db.transaction(() => {
-    for (const user of Object.values(store.users || {})) {
-      const createdAt = user.createdAt || now
-      insertUser.run(user.id, user.email, createdAt, createdAt)
-    }
-    for (const [token, userId] of Object.entries(store.sessions || {})) {
-      createSession({ token, userId, now, ttlMs: TOKEN_TTL_MS })
-    }
-  })()
-}
+const legacyJsonMigration = createLegacyJsonMigrationStore(getDb)
+export const migrateFromJson = legacyJsonMigration.migrateFromJson

@@ -31,15 +31,19 @@ evidence settlement, and lease cleanup.
 **Area:** Runtime architecture
 
 **Evidence / reproduction:** The `Current transition debt` table in
-`docs/KERNEL_BOUNDARY.md` still lists six host compatibility and composition
+`docs/KERNEL_BOUNDARY.md` still lists five host compatibility and composition
 surfaces outside the target minimal kernel. The former `TurnEngine.js` row was
 retired after `DEBT-ARCH-001` recorded its focused execution runtimes and stable
 runtime-port rules. The `turnEngineHost.js` row was retired after its transitive
 boundary test enforced fail-closed persistence composition and prohibited both
-SQLite/database selection and route imports. Those settled boundaries are no
-longer transition debt. The remaining rows still describe responsibilities that
-have not fully crossed their required boundaries, so every one references this
-open canonical record instead of appearing as undocumented debt beside an
+SQLite/database selection and route imports. The `server/db.js` row was retired
+after user accounts, tool permissions, auth sessions, login codes, rate limits,
+and legacy JSON import moved behind focused stores injected with the facade's
+connection provider. Static boundary tests now reject business-table SQL in the
+bootstrap facade and reverse imports from those stores. Those settled boundaries
+are no longer transition debt. The remaining rows still describe responsibilities
+that have not fully crossed their required boundaries, so every one references
+this open canonical record instead of appearing as undocumented debt beside an
 all-closed register.
 
 **Exit criteria:** Close only after every linked transition row is either
@@ -50,9 +54,11 @@ must preserve the dependency and host-ownership rules in
 without extracting its remaining responsibility does not repay the debt.
 
 **Verification:** `tests/codeDebt.test.js` requires every kernel transition row
-to reference exactly one canonical Open debt record. Boundary-specific changes
-also run the Turn, persistence, model proxy, artifact, Job, runtime-plugin,
-migration, and managed-attachment contract suites named by the affected row.
+to reference exactly one canonical Open debt record. `tests/dbStoreBoundary.test.js`
+and `tests/dbStoreFacadeContracts.test.js` lock the settled database facade/store
+boundary. Boundary-specific changes also run the Turn, persistence, model proxy,
+artifact, Job, runtime-plugin, migration, and managed-attachment contract suites
+named by the affected row.
 
 ## DEBT-DATA-001 — Legacy schema bootstrap paths
 
