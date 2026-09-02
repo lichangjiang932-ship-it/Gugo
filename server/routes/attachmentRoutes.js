@@ -1,4 +1,8 @@
 import fs from 'node:fs'
+import {
+  projectManagedAttachmentDto,
+  projectManagedAttachmentList,
+} from '../core/managedAttachmentDtos.js'
 import { authenticateRequest } from '../middleware.js'
 import { sendJson } from '../utils.js'
 import {
@@ -47,13 +51,6 @@ const ACTIVE_PREVIEW_MIME_TYPES = new Set([
 ])
 
 const ACTIVE_PREVIEW_CSP = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: blob:"
-
-function publicAttachment(attachment) {
-  if (!attachment) return null
-  const safe = { ...attachment }
-  delete safe.fullPath
-  return safe
-}
 
 function sendError(res, error) {
   return sendJson(res, error?.statusCode || 500, {
@@ -169,7 +166,7 @@ export async function handleAttachmentRequest(req, res) {
         source: req,
         contentLength: req.headers['content-length'],
       })
-      return sendJson(res, 201, { attachment: publicAttachment(attachment) })
+      return sendJson(res, 201, { attachment: projectManagedAttachmentDto(attachment) })
     }
 
     if (req.method === 'GET' && url.pathname === '/api/attachments') {
@@ -179,7 +176,7 @@ export async function handleAttachmentRequest(req, res) {
         messageId: url.searchParams.get('messageId'),
         limit: url.searchParams.get('limit'),
       })
-      return sendJson(res, 200, { attachments })
+      return sendJson(res, 200, { attachments: projectManagedAttachmentList(attachments) })
     }
 
     if (req.method === 'DELETE' && url.pathname === '/api/attachments') {
@@ -198,7 +195,7 @@ export async function handleAttachmentRequest(req, res) {
         return sendJson(res, 404, { error: { code: 'ATTACHMENT_NOT_FOUND', message: '附件不存在或无权访问' } })
       }
       if (req.method === 'GET' && parts.length === 3) {
-        return sendJson(res, 200, { attachment: publicAttachment(attachment) })
+        return sendJson(res, 200, { attachment: projectManagedAttachmentDto(attachment) })
       }
       if (['GET', 'HEAD'].includes(req.method) && parts.length === 4 && parts[3] === 'content') {
         const preview = url.searchParams.get('preview') === '1'

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { types as utilTypes } from 'node:util'
+import { MANAGED_ATTACHMENT_PUBLIC_FIELDS } from './managedAttachmentDtos.js'
 import { managedAttachmentBoundaryError } from './managedAttachmentRuntimeErrors.js'
 import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_CONTENT_PARTS, MAX_INLINE_BYTES, MAX_TEXT_CHARS, MAX_TOTAL_CONTENT_CHARS } from './managedAttachmentRuntimeLimits.js'
 
@@ -11,10 +12,6 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/u
 const HOST_PATH_PATTERN = /(?:(?:^|[^a-zA-Z0-9])[a-zA-Z]:[\\/]|\\\\|file:\/\/|https?:\/\/|\/(?:home|Users|private|var|tmp)\/)/u
 const MAX_BASE64_CHARS = Math.ceil(MAX_INLINE_BYTES / 3) * 4
 
-const ATTACHMENT_FIELDS = Object.freeze([
-  'id', 'name', 'mimeType', 'size', 'sha256', 'status', 'sessionId', 'messageId',
-  'uri', 'downloadUrl', 'createdAt', 'updatedAt',
-])
 const EXPECTED_ATTACHMENT_FIELDS = Object.freeze([
   'id', 'name', 'mimeType', 'size', 'sha256', 'status', 'sessionId', 'messageId',
   'uri', 'downloadUrl',
@@ -256,7 +253,11 @@ function digest(value, label) {
 
 function attachmentDto(value, label, { expected = false } = {}) {
   assertRecord(value, label)
-  assertAllowedFields(value, expected ? EXPECTED_ATTACHMENT_FIELDS : ATTACHMENT_FIELDS, label)
+  assertAllowedFields(
+    value,
+    expected ? EXPECTED_ATTACHMENT_FIELDS : MANAGED_ATTACHMENT_PUBLIC_FIELDS,
+    label,
+  )
   const id = attachmentId(ownDataValue(value, 'id', label), `${label}.id`)
   const status = boundedString(ownDataValue(value, 'status', label), `${label}.status`, {
     nonEmpty: true,
