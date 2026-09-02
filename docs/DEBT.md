@@ -46,6 +46,11 @@ that have not fully crossed their required boundaries, so every one references
 this open canonical record instead of appearing as undocumented debt beside an
 all-closed register.
 
+Job crash recovery now lives in `jobRuntimeRecovery.js`, including approval
+resolution, running-step reset, durable recovery events, and execution-lease
+fencing. `jobRuntime.js` only supplies its runtime port callbacks and no longer
+owns the recovery transaction.
+
 **Exit criteria:** Close only after every linked transition row is either
 removed with evidence that its required boundary has been reached or moved to
 a narrower open debt record with its own observable exit criteria. Completion
@@ -56,7 +61,8 @@ without extracting its remaining responsibility does not repay the debt.
 **Verification:** `tests/codeDebt.test.js` requires every kernel transition row
 to reference exactly one canonical Open debt record. `tests/dbStoreBoundary.test.js`
 and `tests/dbStoreFacadeContracts.test.js` lock the settled database facade/store
-boundary. Boundary-specific changes also run the Turn, persistence, model proxy,
+boundary, while `tests/jobRuntimeRecoveryBoundary.test.js` prevents recovery
+persistence from returning to the Job facade. Boundary-specific changes also run the Turn, persistence, model proxy,
 artifact, Job, runtime-plugin, migration, and managed-attachment contract suites
 named by the affected row.
 

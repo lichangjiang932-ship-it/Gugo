@@ -6,7 +6,6 @@ import {
 } from './jobStore.js'
 import { createNotification } from './notificationsStore.js'
 import { dispatchHooks } from './hooksService.js'
-import { getLatestJobApproval } from './approvalStore.js'
 import { getApprovalMode } from './approvalSettingsStore.js'
 import {
   cancelJobWake,
@@ -17,7 +16,6 @@ import { blockClaimedAutoRetryWakeTransition } from './jobRuntimeTransitionStore
 import {
   acknowledgeJobSteering,
   claimJobSteering,
-  releaseAllJobSteeringLeases,
   releaseJobSteeringLease,
 } from './jobSteeringStore.js'
 import {
@@ -54,6 +52,7 @@ import { runDefaultJobModel } from './jobModelExecutionRuntime.js'
 import { createDefaultExecuteStep } from './jobStepExecutionRuntime.js'
 import { persistJobStepFailure } from './jobStepFailureRuntime.js'
 import { runJobRuntimeTick } from './jobRuntimeTick.js'
+import { recoverRuntimeJobs } from './jobRuntimeRecovery.js'
 import { hasExplicitIncompleteStepOutput } from './jobRetryEligibility.js'
 import {
   approveRuntimePlan,
@@ -222,93 +221,11 @@ export class JobRuntime {
   }
 
   recover() {
-    releaseAllJobSteeringLeases()
-    const jobs = listRecoverableJobs()
-    const recovered = []
-    for (const candidate of jobs) {
-      if (!['planning', 'running', 'awaiting_approval'].includes(candidate.status)) continue
-      const scope = { jobId: candidate.id }
-      // The observation alone is not authority to recover: another process can
-      // claim the job immediately afterwards. Take a short execution lease and
-      // fence the requeue in the same ownership transaction.
-      if (this.runtimeCore.lease.isActive(scope)) continue
-      const recoveryLease = this.runtimeCore.lease.acquire(scope)
-      if (!recoveryLease) continue
-      try {
-        const outcome = this.runtimeCore.lease.runIfOwned(scope, () => {
-          const job = getJobRow(candidate.id)
-          if (!job) return null
-          let event
-          if (['planning', 'running'].includes(job.status)) {
-            updateJob(job.id, { status: 'queued', error: null, finishedAt: null })
-            const recoveredDiagnostics = latestPersistedOutcomeFields(
-              listJobSteps(job.id).filter((step) => step.status === 'running'),
-            )
-            for (const step of listJobSteps(job.id)) {
-              if (step.status === 'running') {
-                updateJobStep(step.id, {
-                  status: 'queued',
-                  output: clearResumedJobOutcomeDiagnostics(step.output),
-                  error: null,
-                  startedAt: null,
-                  finishedAt: null,
-                })
-              }
-            }
-            event = appendJobEvent({
-              jobId: job.id,
-              type: 'recovered',
-              code: 'JOB_PROCESS_RESTART_RECOVERED',
-              payload: {
-                ...recoveredDiagnostics,
-                reason: 'process_restart_recovery',
-                nextAction: 'resume_execution',
-              },
-            })
-          } else if (job.status === 'awaiting_approval') {
-            const approval = getLatestJobApproval({ jobId: job.id, userId: job.userId })
-            if (!approval || approval.status === 'pending') return null
-            updateJob(job.id, { status: 'queued', error: null, finishedAt: null })
-            const recoveredDiagnostics = latestPersistedOutcomeFields(
-              listJobSteps(job.id).filter((step) => step.status === 'running'),
-            )
-            for (const step of listJobSteps(job.id)) {
-              if (step.status === 'running') {
-                updateJobStep(step.id, {
-                  status: 'queued',
-                  output: clearResumedJobOutcomeDiagnostics(step.output),
-                  error: null,
-                  startedAt: null,
-                  finishedAt: null,
-                })
-              }
-            }
-            event = appendJobEvent({
-              jobId: job.id,
-              stepId: approval.stepId || null,
-              type: 'approval_recovered',
-              code: 'JOB_APPROVAL_RECOVERED',
-              payload: {
-                ...recoveredDiagnostics,
-                approvalId: approval.id,
-                decision: approval.status,
-                reason: 'tool_approval_resolved',
-                nextAction: 'resume_execution',
-              },
-            })
-          } else {
-            return null
-          }
-          this.jobUserCache.set(job.id, job.userId || null)
-          this.emit(event)
-          return { ...job, status: 'queued' }
-        })
-        if (outcome?.owned && outcome.value) recovered.push(outcome.value)
-      } finally {
-        recoveryLease.release()
-      }
-    }
-    return recovered
+    return recoverRuntimeJobs({
+      lease: this.runtimeCore.lease,
+      cacheJobOwner: (jobId, userId) => this.jobUserCache.set(jobId, userId),
+      emit: (event) => this.emit(event),
+    })
   }
 
   start() {
