@@ -14,6 +14,10 @@ const eventHubSource = readFileSync(
   new URL('../server/services/jobRuntimeEventHub.js', import.meta.url),
   'utf8',
 )
+const defaultEventHubSource = readFileSync(
+  new URL('../server/services/jobRuntimeDefaultEventHub.js', import.meta.url),
+  'utf8',
+)
 const commandSource = readFileSync(
   new URL('../server/services/jobRuntimeCommands.js', import.meta.url),
   'utf8',
@@ -184,9 +188,23 @@ test('job recovery remains fenced by a short execution lease', () => {
 })
 
 test('job owner caching and tenant event delivery stay behind the focused event hub', () => {
-  assert.match(jobRuntimeSource, /createJobRuntimeEventHub\(\{/u)
+  assert.match(jobRuntimeSource, /createDefaultJobRuntimeEventHub\(\)/u)
   assert.match(eventHubSource, /const jobOwners = new Map\(\)/u)
   assert.match(eventHubSource, /const listeners = new Map\(\)/u)
+  assert.match(defaultEventHubSource, /from ['"]\.\/jobStore\.js['"]/u)
+  assert.match(defaultEventHubSource, /createJobRuntimeEventHub\(\{/u)
+  assert.doesNotMatch(defaultEventHubSource, /from ['"]\.\/jobRuntime\.js['"]/u)
+
+  for (const concreteDependency of [
+    './jobStore.js',
+    './jobRuntimeEventHub.js',
+  ]) {
+    assert.equal(
+      jobRuntimeSource.includes(concreteDependency),
+      false,
+      `jobRuntime.js must not directly compose event hub dependency: ${concreteDependency}`,
+    )
+  }
 
   for (const [name, source] of [
     ['job runtime facade', jobRuntimeSource],

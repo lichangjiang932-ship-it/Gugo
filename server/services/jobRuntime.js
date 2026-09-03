@@ -1,11 +1,10 @@
-import { getJob as getJobRow } from './jobStore.js'
 import {
   createDefaultExecuteStep,
   createDefaultJobRuntimePolicyCapabilities,
 } from './jobRuntimeDefaultPolicyCapabilities.js'
+import { createDefaultJobRuntimeEventHub } from './jobRuntimeDefaultEventHub.js'
 import { createJobRuntimeLoopHost } from './jobRuntimeLoopHost.js'
 import { recoverRuntimeJobs } from './jobRuntimeRecovery.js'
-import { createJobRuntimeEventHub } from './jobRuntimeEventHub.js'
 import {
   approveRuntimePlan,
   createRuntimeJob,
@@ -56,9 +55,7 @@ export class JobRuntime {
       tickMs,
       maxConcurrency,
     })
-    this.eventHub = createJobRuntimeEventHub({
-      resolveJobOwner: (jobId) => getJobRow(jobId)?.userId || null,
-    })
+    this.eventHub = createDefaultJobRuntimeEventHub()
     this.recover()
   }
 
