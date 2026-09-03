@@ -31,8 +31,8 @@ evidence settlement, and lease cleanup.
 **Area:** Runtime architecture
 
 **Evidence / reproduction:** The `Current transition debt` table in
-`docs/KERNEL_BOUNDARY.md` still lists two host compatibility and composition
-surfaces outside the target minimal kernel. The former `TurnEngine.js` row was
+`docs/KERNEL_BOUNDARY.md` still lists one host compatibility and composition
+surface outside the target minimal kernel. The former `TurnEngine.js` row was
 retired after `DEBT-ARCH-001` recorded its focused execution runtimes and stable
 runtime-port rules. The `turnEngineHost.js` row was retired after its transitive
 boundary test enforced fail-closed persistence composition and prohibited both
@@ -87,8 +87,13 @@ is generation-checked so a failed install or delayed uninstall cannot delete a
 newer same-ID record. `runtimePluginReleaseController.js` owns the public
 reload/uninstall callback-deadlock guards, shutdown fencing and coalescing,
 pending-reload settlement, reverse-order staged/active release, and final Loop
-event detachment. `runtimePluginRegistry.js` supplies narrow host ports and now
-retains inventory, capability wiring, and public facade composition.
+event detachment. `runtimePluginRegistry.js` is now a sub-300-line composition host. Record
+writability, contribution declarations, compatibility checks, and dependency
+resolution live in `runtimePluginRegistryPolicy.js`; plugin-facing context
+projection and audit snapshotting live in `runtimePluginContextFactory.js`.
+Executable boundary tests prevent either focused module from importing the
+registry and prevent lifecycle error policy from returning to the composition
+host, so the plugin registry transition row is retired.
 `runtimePluginConfigSourceController.js` owns initial resolver construction,
 pre-installation source replacement, the installation-time seal, and resolver
 publication after a validated reload.

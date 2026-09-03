@@ -1,10 +1,3 @@
-import { assertPluginCompatibility } from '../../shared/pluginCompatibility.js'
-import { createPluginContext } from './pluginContext.js'
-import {
-  PLUGIN_API_VERSION,
-  PLUGIN_HOST_VERSION,
-} from './pluginHostContract.js'
-import { snapshotPluginAuditEntry } from './pluginContextData.js'
 import { normalizeRuntimePluginManifest } from './pluginLifecycle.js'
 import {
   listRuntimePluginEffectiveConfigs,
@@ -25,6 +18,8 @@ import { createRuntimePluginAgentEventRegistry } from './runtimePluginAgentEvent
 import { snapshotTrustedRuntimePluginDurableIdentity } from './runtimePluginDurableIdentity.js'
 import { createRuntimePluginEventRegistry } from './runtimePluginEventRegistry.js'
 import { createRuntimePluginInstallController } from './runtimePluginInstallController.js'
+import { createRuntimePluginContextForRecord } from './runtimePluginContextFactory.js'
+import { createRuntimePluginRegistryPolicy } from './runtimePluginRegistryPolicy.js'
 import { createRuntimePluginServiceRegistry } from './runtimePluginServiceRegistry.js'
 import { createRuntimePluginPromptRegistry } from './runtimePluginPromptRegistry.js'
 import { createRuntimePluginReleaseController } from './runtimePluginReleaseController.js'
@@ -55,9 +50,6 @@ export function createRuntimePluginRegistry(options = {}) {
     registerRuntimeCapability !== compatibilityRuntimeCapabilityHost
   )
 
-  const assertRecordCanDeactivate = (record) => {
-    for (const check of record.deactivationChecks) check()
-  }
   const configSourceController = createRuntimePluginConfigSourceController({
     config,
     configLayers,
@@ -66,6 +58,14 @@ export function createRuntimePluginRegistry(options = {}) {
   const plugins = new Map()
   const stagingRecords = new Set()
   const configReloads = new Set()
+  const {
+    assertRecordCanDeactivate,
+    assertPluginWritable,
+    registerConfigHealthCheck,
+    assertContributionDeclared,
+    assertManifestCompatible,
+    isConsumerRecordCurrent,
+  } = createRuntimePluginRegistryPolicy({ plugins, stagingRecords })
   const {
     emitAudit,
     emitConfigReloadAudit,
@@ -85,32 +85,6 @@ export function createRuntimePluginRegistry(options = {}) {
   } = createRuntimePluginCallbackRuntime(registryToken)
   let releaseController = null
   const isShuttingDown = () => releaseController?.isShuttingDown() === true
-
-  const assertPluginWritable = (record) => {
-    if (!['installing', 'staging', 'active'].includes(record.state)) {
-      throw new Error(`plugin lifecycle is closed: ${record.manifest.id}`)
-    }
-  }
-
-  const registerConfigHealthCheck = (record, check) => {
-    assertPluginWritable(record)
-    if (typeof check !== 'function') {
-      const error = new TypeError('plugin config health check must be a function')
-      error.code = 'PLUGIN_CONFIG_HEALTH_CHECK_INVALID'
-      error.retryable = false
-      throw error
-    }
-    record.configHealthChecks.add(check)
-    return record.effects.track(() => record.configHealthChecks.delete(check))
-  }
-
-  const assertContributionDeclared = (record, declaration) => {
-    if (record.manifest.contributes.includes(declaration)) return
-    const error = new Error(`plugin contribution is not declared: ${record.manifest.id}/${declaration}`)
-    error.code = 'PLUGIN_CONTRIBUTION_UNDECLARED'
-    error.retryable = false
-    throw error
-  }
 
   const {
     activateManagedContributions,
@@ -179,9 +153,7 @@ export function createRuntimePluginRegistry(options = {}) {
     assertPluginWritable,
     createManagedContribution,
     invokePluginCallback,
-    isConsumerRecordCurrent: (record) => (
-      plugins.get(record.manifest.id) === record || stagingRecords.has(record)
-    ),
+    isConsumerRecordCurrent,
   })
 
   const {
@@ -204,42 +176,20 @@ export function createRuntimePluginRegistry(options = {}) {
     supportsRuntimeCapabilityReplacement,
   })
 
-  const assertManifestCompatible = (manifest) => assertPluginCompatibility(manifest, {
-    hostVersion: PLUGIN_HOST_VERSION,
-    apiVersion: PLUGIN_API_VERSION,
-    resolveDependencyVersion: (id) => {
-      const dependency = plugins.get(id)
-      return dependency?.state === 'active' ? dependency.manifest.version : null
-    },
-  })
-
-  const createContextForRecord = (record) => createPluginContext({
-    manifest: record.manifest,
-    config: record.configResolution.config,
-    track: record.effects.track,
-    registerConfigHealthCheck: (check) => registerConfigHealthCheck(record, check),
-    registerTool: (definition) => registerToolContribution(record, definition),
-    registerEvent: (event, listener) => registerEventContribution(record, event, listener),
-    registerAgentEvent: (eventType, listener, options) => (
-      registerAgentEventContribution(record, eventType, listener, options)
-    ),
-    registerModelProvider: (kind, adapter, options) => (
-      registerModelProviderContribution(record, kind, adapter, options)
-    ),
-    registerLoop: (adapter, options) => registerLoopContribution(record, adapter, options),
-    registerPolicy: (adapter, options) => registerPolicyContribution(record, adapter, options),
-    registerHttpCapability: (definition) => registerHttpCapabilityContribution(record, definition),
-    registerPrompt: (definition) => registerPromptContribution(record, definition),
-    provideService: (name, value) => provideService(record, name, value),
-    invokeService: (name, method, args) => invokeServiceForConsumer(record, name, method, args),
-    hasService: (name) => hasServiceForConsumer(record, name),
-    emitAudit: (event, details) => {
-      const entry = snapshotPluginAuditEntry(event, details)
-      emitAudit(entry.event, {
-        pluginId: record.manifest.id,
-        details: entry.details,
-      })
-    },
+  const createContextForRecord = (record) => createRuntimePluginContextForRecord(record, {
+    registerConfigHealthCheck,
+    registerToolContribution,
+    registerEventContribution,
+    registerAgentEventContribution,
+    registerModelProviderContribution,
+    registerLoopContribution,
+    registerPolicyContribution,
+    registerHttpCapabilityContribution,
+    registerPromptContribution,
+    provideService,
+    invokeServiceForConsumer,
+    hasServiceForConsumer,
+    emitAudit,
   })
 
   const { registerPlugin } = createRuntimePluginInstallController({

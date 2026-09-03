@@ -90,7 +90,6 @@ target kernel:
 
 | File | Current role | Required direction | Canonical debt |
 |---|---|---|---|
-| `server/plugins/runtimePluginRegistry.js` | Inventory, capability wiring, and facade composition; configuration-source initialization/sealing, installation settlement/rollback, uninstall deactivation/cleanup, release deadlock fencing/shutdown, record construction, bounded audit storage, contribution transactions, Prompt, Tool, Loop-hook, best-effort Agent Event v1, and durable Agent Event v2 hosting are delegated to focused modules | Finish splitting inventory/loading from activation/execution, and keep configuration-source state, installation, uninstall, release, contribution transactions, durable subscription delivery, and retention behind their focused controllers | `DEBT-ARCH-002` |
 | Managed attachment governance, artifacts, verified-file projections, and data governance | Turn validation and model materialization cross `ManagedAttachmentRuntimePort v1`; HTTP upload, metadata, deletion, and authoritative content streaming cross `ManagedAttachmentStoragePort v1` without exposing host paths. Bulk user-data governance and the atomic SQLite turn-start binding still assume host-owned transaction domains | Move the remaining aggregate operations behind backend-neutral governance capabilities without weakening ownership checks or splitting the existing atomic turn-start commit | `DEBT-ARCH-002` |
 
 The repository's 600-line preference applies to implementation files under
