@@ -3,7 +3,8 @@
  *
  * This is an application-level guard between the bash tripwire (bashGuard)
  * and a future OS-level sandbox. It classifies commands that open outbound
- * network connections and enforces GUGO_SHELL_NETWORK_MODE:
+ * network connections and enforces GUGO_SHELL_NETWORK_MODE. Pure-local mode
+ * always resolves to deny, even when the shell-specific setting says allow:
  *   - 'allow' (default): current behavior, nothing changes.
  *   - 'deny': every classified network invocation is rejected before spawn,
  *     with an audit trail written by the caller.
@@ -13,6 +14,8 @@
  * give operators an enforceable egress posture for shell tools without
  * standing up a full sandbox.
  */
+
+import { isPureLocalModeEnabled } from './outboundNetworkGuard.js'
 
 const NETWORK_COMMANDS = new Set([
   'curl', 'wget', 'nc', 'ncat', 'netcat', 'socat',
@@ -88,6 +91,7 @@ export function classifyShellNetworkUse(command) {
  * Resolve GUGO_SHELL_NETWORK_MODE. Unknown values fall back to 'allow'.
  */
 export function resolveShellNetworkMode(env = process.env) {
+  if (isPureLocalModeEnabled(env)) return 'deny'
   const mode = String(env.GUGO_SHELL_NETWORK_MODE || '').trim().toLowerCase()
   return mode === 'deny' ? 'deny' : 'allow'
 }

@@ -38,15 +38,15 @@ test('chat composer keeps keyboard history without rendering shortcut hints in t
   assert.match(chatSendActionsSource, /if \(shouldSubmitChatKey\(event\)\)/)
 })
 
-test('project selection is shown only before a workspace is selected or any message is sent', () => {
+test('project selection remains available until the first message is sent', () => {
   const chatSplitViewSource = fs.readFileSync(
     new URL('../../src/pages/ChatSplit/ChatSplitView.jsx', import.meta.url),
     'utf8',
   )
   assert.match(
     chatSplitViewSource,
-    /showWorkspacePicker=\{messages\.length === 0 && !String\(selectedWorkspacePath \|\| ''\)\.trim\(\)\}/,
+    /showWorkspacePicker=\{messages\.length === 0\}/,
   )
-  assert.match(chatComposerSource, /\{showWorkspacePicker && \(/)
+  assert.match(composerSource, /\{showWorkspacePicker && \(/)
   assert.doesNotMatch(chatComposerSource, /!String\(selectedWorkspacePath/)
 })

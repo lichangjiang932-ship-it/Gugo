@@ -79,21 +79,17 @@ function compactCachePayload(value, depth = 0) {
 }
 
 export function compactSnapshotMetadata(snapshot) {
-  return {
-    ...snapshot,
-    sessions: (snapshot.sessions || []).map((session) => ({
-      ...session,
-      messages: (session.messages || []).map((message) => ({
-        ...message,
-        ...(message.meta ? { meta: compactCachePayload(message.meta) } : {}),
-      })),
-    })),
-  }
+  // Session transcripts are removed by the persistence sanitizer. Compact
+  // regenerable cache fields wherever they appear without recreating a
+  // browser-owned `sessions` collection during quota fallback.
+  return compactCachePayload(snapshot)
 }
 
 export function persistWithDegradation(snapshot, setItem, storageKey = DEFAULT_STORAGE_KEY) {
   // ★ #35: 入口先做一遍敏感字段 redact
-  let payload = sanitizeForPersist(sanitizeRetiredBrowserAccountFields(snapshot).payload)
+  let payload = sanitizeForPersist(sanitizeRetiredBrowserAccountFields(snapshot, {
+    preservePendingLegacySessions: true,
+  }).payload)
   try {
     setItem(storageKey, JSON.stringify(payload))
     return { ok: true, level: 'full' }
@@ -105,8 +101,7 @@ export function persistWithDegradation(snapshot, setItem, storageKey = DEFAULT_S
     return { ok: true, level: 'compact-metadata', requiresUserAction: true }
   } catch (err) {
     if (!isQuotaError(err)) return { ok: false, level: 'error', error: err }
-    // A failed setItem leaves the previous complete snapshot intact. Do not replace it
-    // with a transcript that silently drops messages or entire sessions.
+    // A failed setItem leaves the previous complete snapshot intact.
     return { ok: false, level: 'quota', error: err, requiresUserAction: true }
   }
 }

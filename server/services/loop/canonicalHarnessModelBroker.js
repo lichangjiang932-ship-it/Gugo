@@ -18,7 +18,6 @@ export const CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES = Object.freeze({
 
 const claimedPreparedRuntimes = new WeakSet()
 const CANONICAL_HARNESS_ABORT_GRACE_MS = 100
-const EMPTY_MODEL_RESPONSE_TEXT = '模型未返回可显示内容，本次任务未完成。请重试，或检查当前模型配置。'
 const EMPTY_MODEL_RESPONSE_REASON = 'empty_model_response'
 
 function brokerError(code, message) {
@@ -397,7 +396,13 @@ export function createCanonicalHarnessModelBroker(prepared) {
       const protectedText = protectTerminalCandidate(runtimeState, terminalCandidate)
       const emptyModelResponse = !protectedText.trim()
       const terminalText = emptyModelResponse
-        ? protectTerminalCandidate(runtimeState, EMPTY_MODEL_RESPONSE_TEXT, { incomplete: true })
+        ? protectTerminalCandidate(
+            runtimeState,
+            runtimeState.d.formatIncompleteTerminalText(EMPTY_MODEL_RESPONSE_REASON, {
+              locale: runtimeState.locale,
+            }),
+            { incomplete: true },
+          )
         : protectedText
       const terminalReceipt = {
         text: terminalText,

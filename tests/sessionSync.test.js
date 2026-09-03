@@ -4,11 +4,21 @@ import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import test from 'node:test'
+import { JSDOM } from 'jsdom'
+import { act, createElement, useEffect, useRef } from 'react'
+import { createRoot } from 'react-dom/client'
+
+import { syncAuthTokenFromStorage, TOKEN_KEY } from '../src/lib/accountClient.js'
+import useAuthBootstrap from '../src/store/useAuthBootstrap.js'
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-session-sync-'))
 process.env.APP_DATA_DIR = tempDir
 
 const { closeDb, getDb } = await import('../server/db.js')
+const {
+  bootstrapAuth: bootstrapServerAuth,
+  handleAuthAccountRequest,
+} = await import('../server/adapters/authAccount.js')
 const { handleSessionRequest } = await import('../server/routes/sessionRoutes.js')
 const { getTurnPersistenceAdapterStatus } = await import('../server/core/turnPersistenceAdapter.js')
 const { SQLITE_TURN_PERSISTENCE_ADAPTER } = await import('../server/adapters/sqliteTurnPersistenceAdapter.js')
@@ -55,11 +65,12 @@ test.after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true })
 })
 
-function makeRequest({ method = 'GET', url, token, body = null }) {
+function makeRequest({ method = 'GET', url, token, body = null, origin = null }) {
   const req = Readable.from(body === null ? [] : [Buffer.from(JSON.stringify(body))])
   req.method = method
   req.url = url
   req.headers = token ? { authorization: `Bearer ${token}` } : {}
+  if (origin) req.headers.origin = origin
   if (body !== null) req.headers['content-type'] = 'application/json'
   return req
 }
@@ -79,6 +90,54 @@ function makeResponse() {
     json() {
       return JSON.parse(Buffer.concat(this.chunks).toString('utf8'))
     },
+  }
+}
+
+function AuthBootstrapHarness({ dispatch, stateRef }) {
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
+  useAuthBootstrap({ dispatch, hydrated: true, mountedRef, stateRef })
+  return createElement('output')
+}
+
+function installFrontendDom(dom) {
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.HTMLElement = dom.window.HTMLElement
+  globalThis.localStorage = dom.window.localStorage
+  globalThis.sessionStorage = dom.window.sessionStorage
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+}
+
+const FRONTEND_GLOBAL_NAMES = [
+  'window',
+  'document',
+  'HTMLElement',
+  'localStorage',
+  'sessionStorage',
+  'IS_REACT_ACT_ENVIRONMENT',
+  'fetch',
+]
+
+function captureFrontendGlobals() {
+  return new Map(FRONTEND_GLOBAL_NAMES.map((name) => [
+    name,
+    Object.getOwnPropertyDescriptor(globalThis, name),
+  ]))
+}
+
+function restoreFrontendGlobals(snapshot) {
+  for (const [name, descriptor] of snapshot) {
+    if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+    else delete globalThis[name]
+  }
+}
+
+function fetchResponseFromRoute(response) {
+  return {
+    ok: response.statusCode >= 200 && response.statusCode < 300,
+    status: response.statusCode,
+    async json() { return response.json() },
   }
 }
 
@@ -344,6 +403,10 @@ test('Session routes fail closed on malformed backend results', async () => {
 test('Session routes serialize only public fields from valid adapter results', async () => {
   const { token } = issueTestSession({ email: 'session-public-dto@example.com' })
   const sessionAdmin = createSessionAdminPort({
+    catalogSource: {
+      backendType: 'remote-store',
+      instanceFingerprint: 'ab'.repeat(32),
+    },
     listSessions: () => [{
       id: 'public-session',
       title: 'Visible',
@@ -356,11 +419,157 @@ test('Session routes serialize only public fields from valid adapter results', a
   await handleSessionRequest(makeRequest({ url: '/api/sessions', token }), res, null, sessionAdmin)
 
   assert.equal(res.statusCode, 200)
-  assert.deepEqual(res.json(), {
-    sessions: [{ id: 'public-session', title: 'Visible', revision: 0 }],
-  })
+  const payload = res.json()
+  assert.deepEqual(payload.sessions, [
+    { id: 'public-session', title: 'Visible', revision: 0 },
+  ])
+  assert.equal(payload.source.backendInstanceId, `remote-store:${'ab'.repeat(12)}`)
+  assert.equal(Object.hasOwn(payload.source, 'backendSecret'), false)
 })
 
+test('isolated frontend storages bootstrap into the same server-owned workspace history', { concurrency: false }, async () => {
+  const frontendGlobals = captureFrontendGlobals()
+  const browserDom = new JSDOM('<!doctype html><div id="root"></div>', {
+    url: 'http://127.0.0.1:5173/#/chat',
+  })
+  const codexDom = new JSDOM('<!doctype html><div id="root"></div>', {
+    url: 'http://127.0.0.1:5175/#/chat',
+  })
+  assert.notEqual(browserDom.window.localStorage, codexDom.window.localStorage)
+  assert.equal(browserDom.window.localStorage.length, 0)
+  assert.equal(codexDom.window.localStorage.length, 0)
+
+  const owner = bootstrapServerAuth({ env: { AUTH_MODE: 'local' } })
+  const userId = owner.user.id
+  const sessionId = 'session-cross-origin-history'
+  const workspacePath = typeof fs.realpathSync.native === 'function'
+    ? fs.realpathSync.native(process.cwd())
+    : fs.realpathSync(process.cwd())
+  upsertSession({ id: sessionId, userId, title: 'Shared server history', workspacePath })
+  upsertMessage({
+    id: `${sessionId}:user`,
+    userId,
+    sessionId,
+    role: 'user',
+    content: 'Persist this on the server.',
+  })
+
+  async function runFrontend(dom) {
+    installFrontendDom(dom)
+    syncAuthTokenFromStorage('')
+    const origin = dom.window.location.origin
+    const actions = []
+    let resolveCatalog
+    let rejectCatalog
+    const catalogReady = new Promise((resolve, reject) => {
+      resolveCatalog = resolve
+      rejectCatalog = reject
+    })
+    const timeout = setTimeout(() => rejectCatalog(new Error(`catalog bootstrap timed out for ${origin}`)), 2_000)
+    const stateRef = {
+      current: {
+        authReady: false,
+        authMode: 'unknown',
+        isLoggedIn: false,
+        user: null,
+        sessions: [],
+        activeSessionId: null,
+        draftSessionId: null,
+        draftWorkspacePath: '',
+        sessionCatalogSource: null,
+      },
+    }
+    globalThis.fetch = async (input, init = {}) => {
+      const target = new URL(String(input), origin)
+      const headers = Object.fromEntries(Object.entries(init.headers || {})
+        .map(([key, value]) => [String(key).toLowerCase(), String(value)]))
+      const token = headers.authorization?.replace(/^Bearer\s+/i, '') || ''
+      if (target.pathname === '/api/local-files') {
+        return {
+          ok: true,
+          status: 200,
+          async json() { return { ok: true, defaultWorkspacePath: workspacePath, grants: [] } },
+        }
+      }
+      const response = makeResponse()
+      const request = makeRequest({
+        method: init.method || 'GET',
+        url: `${target.pathname}${target.search}`,
+        token,
+        origin,
+      })
+      if (target.pathname === '/api/auth/bootstrap') {
+        await handleAuthAccountRequest(request, response, { AUTH_MODE: 'local' })
+      } else if (target.pathname === '/api/sessions') {
+        await handleSessionRequest(request, response, null, SQLITE_TURN_PERSISTENCE_ADAPTER.sessionAdmin)
+      } else {
+        throw new Error(`Unexpected frontend bootstrap request: ${target.pathname}`)
+      }
+      return fetchResponseFromRoute(response)
+    }
+
+    const root = createRoot(dom.window.document.getElementById('root'))
+    try {
+      await act(async () => {
+        root.render(createElement(AuthBootstrapHarness, {
+          stateRef,
+          dispatch(action) {
+            actions.push(action)
+            if (action.type === 'RECONCILE_SERVER_SESSION_CATALOG') resolveCatalog(action.payload)
+          },
+        }))
+      })
+      const catalog = await catalogReady
+      const token = dom.window.localStorage.getItem(TOKEN_KEY)
+      assert.ok(token)
+      assert.equal(actions.some((action) => action.type === 'AUTH_BOOTSTRAP'), true)
+      assert.equal(actions.some((action) => action.type === 'SET_DEFAULT_WORKSPACE'), true)
+      return { actions, catalog, origin, token }
+    } finally {
+      clearTimeout(timeout)
+      await act(async () => root.unmount())
+    }
+  }
+
+  let browser
+  let codex
+  try {
+    browser = await runFrontend(browserDom)
+    codex = await runFrontend(codexDom)
+  } finally {
+    browserDom.window.close()
+    codexDom.window.close()
+    restoreFrontendGlobals(frontendGlobals)
+  }
+
+  assert.deepEqual(codex.catalog, browser.catalog)
+  const sharedSession = browser.catalog.sessions.find(({ id }) => id === sessionId)
+  assert.ok(sharedSession)
+  assert.equal(sharedSession.workspacePath, workspacePath)
+  assert.equal(browser.catalog.source.workspaceScope.path, workspacePath)
+
+  async function readHistory({ origin, token }) {
+    const catalog = await invokeRoute({ url: '/api/sessions', token, origin })
+    const snapshot = await invokeRoute({
+      url: `/api/sessions/${sessionId}/snapshot`,
+      token,
+      origin,
+    })
+    assert.equal(catalog.statusCode, 200)
+    assert.equal(snapshot.statusCode, 200)
+    return { catalog: catalog.json(), snapshot: snapshot.json() }
+  }
+
+  const browserHistory = await readHistory(browser)
+  const codexHistory = await readHistory(codex)
+
+  assert.deepEqual(codexHistory, browserHistory)
+  assert.equal(browserHistory.catalog.source.workspaceScope.path, workspacePath)
+  assert.deepEqual(
+    browserHistory.snapshot.snapshot.messages.map(({ content }) => content),
+    ['Persist this on the server.'],
+  )
+})
 test('Session routes map invalid v2 inputs to 400 without backend invocation', async () => {
   const { token } = issueTestSession({ email: 'session-invalid-input@example.com' })
   const calls = []
@@ -516,9 +725,11 @@ test('session route awaits the selected async admin port without SQLite fallback
   await handling
 
   assert.equal(res.statusCode, 200)
-  assert.deepEqual(res.json(), {
-    sessions: [{ id: 'async-session', title: 'Async backend', revision: 0 }],
-  })
+  const payload = res.json()
+  assert.deepEqual(payload.sessions, [
+    { id: 'async-session', title: 'Async backend', revision: 0 },
+  ])
+  assert.equal(payload.source, null)
   assert.deepEqual(calls, [[
     'listSessions',
     { userId, archived: 'all', limit: 3, offset: 2 },

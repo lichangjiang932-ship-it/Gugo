@@ -5,6 +5,7 @@ import {
   PLUGIN_ACTIVATION_KINDS,
   PLUGIN_DEFINITION_SCHEMA_VERSION,
   assertPluginDefinition,
+  assertReleaseDistributionMatchesDefinition,
   createDistributedPluginDefinition,
   createHostPluginDefinition,
   distributedPluginFromDefinition,
@@ -70,11 +71,22 @@ test('distributed transformer definitions snapshot one complete immutable plugin
     entryPath: 'C:\\gugo-data\\plugins\\full-transformer\\runtime\\entry.js',
   }
   const installReceipt = {
+    schemaVersion: 2,
     pluginId: 'full-transformer',
     pluginVersion: '2.3.4',
     packageDigest: `sha256-${'b'.repeat(64)}`,
-    files: [{ path: 'runtime/entry.js', digest: `sha256-${'c'.repeat(64)}` }],
-    publisher: { name: 'Local owner', verifiedAt: 123 },
+    fileCount: 1,
+    totalBytes: 128,
+    installedAt: 123,
+    publisherVerified: true,
+    sourceKind: 'local-marketplace',
+    marketplace: { name: 'local-test', displayName: 'Local test' },
+    publisher: {
+      id: 'local-owner',
+      displayName: 'Local owner',
+      keyId: `sha256-${'c'.repeat(64)}`,
+    },
+    publicationDigest: `sha256-${'d'.repeat(64)}`,
   }
   const distribution = {
     sourceKind: 'managed-user-directory',
@@ -120,8 +132,8 @@ test('distributed transformer definitions snapshot one complete immutable plugin
   assert.equal(definition.manifest.stateSchemaVersion, 3)
   assert.equal(definition.manifest.integrity, `sha256-${'a'.repeat(64)}`)
   assert.equal(definition.distribution.sourceKind, 'managed-user-directory')
-  assert.equal(definition.distribution.installReceipt.files[0].path, 'runtime/entry.js')
-  assert.equal(definition.distribution.installReceipt.publisher.name, 'Local owner')
+  assert.equal(definition.distribution.installReceipt.marketplace.name, 'local-test')
+  assert.equal(definition.distribution.installReceipt.publisher.displayName, 'Local owner')
 
   assert.equal(releaseSnapshot.type, 'transformer')
   assert.equal(releaseSnapshot.entry, 'runtime/entry.js')
@@ -129,7 +141,7 @@ test('distributed transformer definitions snapshot one complete immutable plugin
   assert.deepEqual(releaseSnapshot.tags, ['transformer', 'verified'])
   assert.deepEqual(releaseSnapshot.capabilities, ['log'])
   assert.equal(releaseSnapshot.distribution.sourceKind, 'managed-user-directory')
-  assert.equal(releaseSnapshot.distribution.installReceipt.publisher.name, 'Local owner')
+  assert.equal(releaseSnapshot.distribution.installReceipt.publisher.displayName, 'Local owner')
 
   for (const value of [
     definition,
@@ -137,8 +149,7 @@ test('distributed transformer definitions snapshot one complete immutable plugin
     definition.plugin,
     definition.distribution,
     definition.distribution.installReceipt,
-    definition.distribution.installReceipt.files,
-    definition.distribution.installReceipt.files[0],
+    definition.distribution.installReceipt.marketplace,
     definition.distribution.installReceipt.publisher,
     definition.activation,
     definition.activation.declaredContributes,
@@ -175,8 +186,8 @@ test('distributed transformer definitions snapshot one complete immutable plugin
   configSchema.properties.mode.enum[0] = 'unsafe'
   configSchema.required.push('options')
   distribution.sourceKind = 'mutated-source'
-  installReceipt.files[0].path = '../outside.js'
-  installReceipt.publisher.name = 'Mutated publisher'
+  installReceipt.marketplace.displayName = 'Mutated marketplace'
+  installReceipt.publisher.displayName = 'Mutated publisher'
 
   assert.equal(definition.manifest.name, 'Full Transformer')
   assert.equal(definition.plugin.rootDir, 'C:\\gugo-data\\plugins\\full-transformer')
@@ -189,8 +200,8 @@ test('distributed transformer definitions snapshot one complete immutable plugin
   assert.deepEqual(definition.manifest.configSchema.required, ['mode'])
   assert.equal(definition.manifest.configSchema.properties.mode.enum[0], 'safe')
   assert.equal(definition.distribution.sourceKind, 'managed-user-directory')
-  assert.equal(definition.distribution.installReceipt.files[0].path, 'runtime/entry.js')
-  assert.equal(definition.distribution.installReceipt.publisher.name, 'Local owner')
+  assert.equal(definition.distribution.installReceipt.marketplace.displayName, 'Local test')
+  assert.equal(definition.distribution.installReceipt.publisher.displayName, 'Local owner')
 })
 
 test('resource plugin definitions cannot cross the runtime activation boundary', () => {
@@ -302,7 +313,7 @@ test('verified distribution definitions require an immutable plain-data receipt'
     type: 'transformer',
     entry: 'entry.js',
   }
-  for (const installReceipt of [undefined, 'forged', 42, []]) {
+  for (const installReceipt of [undefined, 'forged', 42, [], {}]) {
     assert.throws(
       () => createDistributedPluginDefinition(plugin, {
         distribution: {
@@ -358,6 +369,230 @@ test('verified distribution definitions require an immutable plain-data receipt'
   )
   assert.equal(getterCalls, 0)
   assert.equal(proxyTraps, 0)
+})
+
+test('release reconciliation keeps same-publisher upgrades but rejects receipt trust changes', () => {
+  const managedDistribution = (installReceipt) => ({
+    sourceKind: 'managed-user-directory',
+    mutable: false,
+    verifiedPackage: true,
+    installReceipt,
+  })
+  const signedReceipt = ({
+    pluginVersion,
+    packageDigest,
+    publicationDigest,
+    installedAt = 100,
+    publisherId = 'publisher-a',
+    publisherKeyId = `sha256-${'c'.repeat(64)}`,
+  }) => ({
+    schemaVersion: 2,
+    pluginId: 'reconciled-transformer',
+    pluginVersion,
+    packageDigest,
+    fileCount: 2,
+    totalBytes: 128,
+    installedAt,
+    publisherVerified: true,
+    sourceKind: 'local-marketplace',
+    marketplace: { name: 'local-marketplace', displayName: 'Local Marketplace' },
+    publisher: {
+      id: publisherId,
+      displayName: publisherId,
+      keyId: publisherKeyId,
+    },
+    publicationDigest,
+  })
+  const releaseDefinition = createDistributedPluginDefinition({
+    id: 'reconciled-transformer',
+    name: 'Reconciled Transformer v1',
+    version: '1.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+  }, {
+    distribution: managedDistribution(signedReceipt({
+      pluginVersion: '1.0.0',
+      packageDigest: `sha256-${'a'.repeat(64)}`,
+      publicationDigest: `sha256-${'b'.repeat(64)}`,
+    })),
+  })
+  const releasePlugin = releasePluginSnapshotFromDefinition(releaseDefinition)
+  const upgradedDefinition = createDistributedPluginDefinition({
+    id: 'reconciled-transformer',
+    name: 'Reconciled Transformer v2',
+    version: '2.0.0',
+    type: 'transformer',
+    entry: 'next.js',
+  }, {
+    distribution: managedDistribution(signedReceipt({
+      pluginVersion: '2.0.0',
+      packageDigest: `sha256-${'d'.repeat(64)}`,
+      publicationDigest: `sha256-${'e'.repeat(64)}`,
+      installedAt: 200,
+    })),
+  })
+  const unsignedReplacement = createDistributedPluginDefinition({
+    id: 'reconciled-transformer',
+    name: 'Unsigned Replacement',
+    version: '2.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+  }, {
+    distribution: managedDistribution({
+      schemaVersion: 1,
+      pluginId: 'reconciled-transformer',
+      pluginVersion: '2.0.0',
+      packageDigest: `sha256-${'f'.repeat(64)}`,
+      fileCount: 2,
+      totalBytes: 128,
+      installedAt: 200,
+      publisherVerified: false,
+      sourceKind: 'local-directory',
+    }),
+  })
+  const replacementPublisher = createDistributedPluginDefinition({
+    id: 'reconciled-transformer',
+    name: 'Replacement Publisher',
+    version: '2.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+  }, {
+    distribution: managedDistribution(signedReceipt({
+      pluginVersion: '2.0.0',
+      packageDigest: `sha256-${'1'.repeat(64)}`,
+      publicationDigest: `sha256-${'2'.repeat(64)}`,
+      publisherId: 'publisher-b',
+    })),
+  })
+  const replacementPublisherKey = createDistributedPluginDefinition({
+    id: 'reconciled-transformer',
+    name: 'Replacement Publisher Key',
+    version: '2.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+  }, {
+    distribution: managedDistribution(signedReceipt({
+      pluginVersion: '2.0.0',
+      packageDigest: `sha256-${'4'.repeat(64)}`,
+      publicationDigest: `sha256-${'5'.repeat(64)}`,
+      publisherKeyId: `sha256-${'6'.repeat(64)}`,
+    })),
+  })
+
+  assert.equal(
+    assertReleaseDistributionMatchesDefinition(upgradedDefinition, releasePlugin),
+    upgradedDefinition,
+  )
+  const upgradedReceipt = upgradedDefinition.distribution.installReceipt
+  for (const changedReceipt of [
+    { ...upgradedReceipt, schemaVersion: 3 },
+    { ...upgradedReceipt, sourceKind: 'replacement-marketplace' },
+    { ...upgradedReceipt, publisherVerified: false },
+  ]) {
+    assert.throws(
+      () => createDistributedPluginDefinition({
+        id: 'reconciled-transformer',
+        name: 'Changed Receipt Identity',
+        version: '2.0.0',
+        type: 'transformer',
+        entry: 'next.js',
+      }, {
+        distribution: managedDistribution(changedReceipt),
+      }),
+      errorCode('PLUGIN_DEFINITION_DISTRIBUTION_INVALID'),
+    )
+  }
+  assert.throws(
+    () => assertReleaseDistributionMatchesDefinition(unsignedReplacement, releasePlugin),
+    errorCode('PLUGIN_RELEASE_DISTRIBUTION_CONFLICT'),
+  )
+  assert.throws(
+    () => assertReleaseDistributionMatchesDefinition(replacementPublisher, releasePlugin),
+    errorCode('PLUGIN_RELEASE_DISTRIBUTION_CONFLICT'),
+  )
+  assert.throws(
+    () => assertReleaseDistributionMatchesDefinition(replacementPublisherKey, releasePlugin),
+    errorCode('PLUGIN_RELEASE_DISTRIBUTION_CONFLICT'),
+  )
+
+  const receiptBearingDevelopmentRelease = {
+    ...releasePlugin,
+    distribution: {
+      sourceKind: 'receipt-bearing-development',
+      mutable: true,
+      verifiedPackage: false,
+      installReceipt: releasePlugin.distribution.installReceipt,
+    },
+  }
+  const replacedDevelopmentPublisher = createDistributedPluginDefinition({
+    id: 'reconciled-transformer',
+    name: 'Replaced Development Publisher',
+    version: '2.0.0',
+    type: 'transformer',
+    entry: 'next.js',
+  }, {
+    distribution: {
+      sourceKind: 'receipt-bearing-development',
+      mutable: true,
+      verifiedPackage: false,
+      installReceipt: replacementPublisher.distribution.installReceipt,
+    },
+  })
+  assert.throws(
+    () => assertReleaseDistributionMatchesDefinition(
+      replacedDevelopmentPublisher,
+      receiptBearingDevelopmentRelease,
+    ),
+    errorCode('PLUGIN_RELEASE_DISTRIBUTION_CONFLICT'),
+  )
+})
+
+test('release reconciliation rejects provenance removal but keeps legacy releases loadable', () => {
+  const releaseDefinition = createDistributedPluginDefinition({
+    id: 'legacy-reconciled-transformer',
+    name: 'Legacy Reconciled Transformer',
+    version: '1.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+  }, {
+    distribution: {
+      sourceKind: 'local-directory-development',
+      mutable: true,
+      verifiedPackage: false,
+      installReceipt: null,
+    },
+  })
+  const currentWithoutProvenance = createDistributedPluginDefinition({
+    id: 'legacy-reconciled-transformer',
+    name: 'Current Without Provenance',
+    version: '2.0.0',
+    type: 'transformer',
+    entry: 'entry.js',
+  })
+  const releasePlugin = releasePluginSnapshotFromDefinition(releaseDefinition)
+  assert.throws(
+    () => assertReleaseDistributionMatchesDefinition(currentWithoutProvenance, releasePlugin),
+    errorCode('PLUGIN_RELEASE_DISTRIBUTION_CONFLICT'),
+  )
+  const explicitNullSnapshot = { ...releasePlugin, distribution: null }
+  assert.throws(
+    () => assertReleaseDistributionMatchesDefinition(releaseDefinition, explicitNullSnapshot),
+    errorCode('PLUGIN_RELEASE_DISTRIBUTION_CONFLICT'),
+  )
+  assert.equal(
+    assertReleaseDistributionMatchesDefinition(currentWithoutProvenance, explicitNullSnapshot),
+    currentWithoutProvenance,
+  )
+  const legacySnapshot = { ...releasePlugin }
+  delete legacySnapshot.distribution
+  assert.equal(
+    assertReleaseDistributionMatchesDefinition(currentWithoutProvenance, legacySnapshot),
+    currentWithoutProvenance,
+  )
+  assert.equal(
+    assertReleaseDistributionMatchesDefinition(releaseDefinition, legacySnapshot),
+    releaseDefinition,
+  )
 })
 
 test('host registry preserves asynchronous manifest rejection', async () => {

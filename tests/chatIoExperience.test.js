@@ -22,7 +22,7 @@ const markdownSource = fs.readFileSync(new URL('../src/components/MarkdownRender
 const toolCardSource = fs.readFileSync(new URL('../src/components/ToolCallCard.jsx', import.meta.url), 'utf8')
 const stylesSource = fs.readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
 const runtimeCompletionSource = fs.readFileSync(new URL('../server/services/loop/runtime-initializeCompletion.js', import.meta.url), 'utf8')
-const runtimeStateSource = fs.readFileSync(new URL('../server/services/loop/runtimeState.js', import.meta.url), 'utf8')
+const incompleteTerminalPresentationSource = fs.readFileSync(new URL('../server/services/loop/incompleteTerminalPresentation.js', import.meta.url), 'utf8')
 
 test('chat composer accepts pasted files and shows managed upload state', () => {
   assert.match(composerSource, /onPaste=/)
@@ -38,7 +38,7 @@ test('chat drafts persist while user edit, failure resend, and copy actions stay
   assert.match(lifecycleSource, /if \(!preserveAttachments\) setAttachments\(nextDraft\.attachments\)/)
   assert.match(
     chatSendActionsSource,
-    /await triggerSendFlow\([\s\S]{0,120}typedContent \|\| describeAttachmentPrompt\(currentAttachments\),[\s\S]{0,80}currentAttachments,[\s\S]{0,120}\(\{ sessionId: acceptedSessionId \}/,
+    /await triggerSendFlow\([\s\S]{0,120}typedContent \|\| describeAttachmentPrompt\(currentAttachments, lang\),[\s\S]{0,80}currentAttachments,[\s\S]{0,120}\(\{ sessionId: acceptedSessionId \}/,
   )
   assert.match(chatSource, /handleEditMessage/)
   assert.doesNotMatch(chatSource, /handleRegenerateMessage|canRegenerateAssistantMessage|onRegenerateMessage/)
@@ -103,8 +103,10 @@ test('local mutation receipts stay visible when managed-artifact acceptance fail
   assert.doesNotMatch(runtimeCompletionSource, /未通过验证的中间文件不会交付/)
   assert.doesNotMatch(runtimeCompletionSource, /文件工具连续纠错|所需文件尚未通过完整性验证/)
   assert.match(runtimeCompletionSource, /ARTIFACT_DELIVERY_INCOMPLETE_REASON/)
-  assert.match(runtimeStateSource, /已提交到本地的文件仍会保留并显示其验证状态/)
-  assert.match(runtimeStateSource, /未通过验证的受管理产物不会作为最终交付/)
+  assert.match(incompleteTerminalPresentationSource, /已提交到本地的文件仍会保留并显示其验证状态/)
+  assert.match(incompleteTerminalPresentationSource, /未通过验证的受管理产物不会作为最终交付/)
+  assert.match(incompleteTerminalPresentationSource, /Files written locally are preserved with their verification status/)
+  assert.match(incompleteTerminalPresentationSource, /unverified managed artifacts are not delivered as final output/)
   assert.match(messageRowSource, /const canPresentLocalFiles = isMessageComplete[\s\S]*?\|\| isSuspendedTurn[\s\S]*?\|\| msg\.meta\?\.failed === true/)
 })
 

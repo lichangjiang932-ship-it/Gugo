@@ -1,7 +1,13 @@
 export const LOGIN_CODE_COUNTDOWN_SECONDS = 60
 
-export function formatLoginCodeCountdownLabel(countdown) {
-  return countdown > 0 ? `重新发送 ${countdown}s` : '发送验证码'
+export function formatLoginCodeCountdownLabel(
+  countdown,
+  {
+    sendCodeLabel = 'Send code',
+    resendCodeLabel = (seconds) => `Resend in ${seconds}s`,
+  } = {},
+) {
+  return countdown > 0 ? resendCodeLabel(countdown) : sendCodeLabel
 }
 
 export function shouldDisableLoginCodeButton({ accountLoading, loginEmail, countdown }) {

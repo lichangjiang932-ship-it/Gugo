@@ -2,6 +2,8 @@ import { Suspense, lazy } from 'react'
 import { Routes, Route, Navigate, useSearchParams } from './lib/router.jsx'
 
 import ErrorBoundary from './components/ErrorBoundary'
+import AppLayout from './components/AppLayout.jsx'
+import RouteErrorBoundary from './components/RouteErrorBoundary.jsx'
 import { I18nProvider, useT } from './i18n/I18nProvider.jsx'
 import { ActiveAgentProvider } from './agents/ActiveAgentProvider.jsx'
 import RequireAuth from './components/RequireAuth'
@@ -10,7 +12,6 @@ import { ToastProvider } from './components/Toast.jsx'
 import PreviewBanner from './components/PreviewBanner.jsx'
 import StoragePersistenceNotice from './components/StoragePersistenceNotice.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
-import WorkspaceOnboardingPrompt from './components/WorkspaceOnboardingPrompt.jsx'
 import './plugins/firstPartyUiContributions.js'
 import { UiContributionRenderer, useUiContributions } from './plugins/uiContributionRegistry.js'
 
@@ -54,6 +55,14 @@ function ContributedRoute({ contribution }) {
   return contribution.requiresAuth ? <RequireAuth>{content}</RequireAuth> : content
 }
 
+function PageErrorFallbackShell({ children }) {
+  return (
+    <AppLayout className="flex h-screen min-w-0 overflow-hidden bg-paper">
+      <div className="min-w-0 flex-1 overflow-auto">{children}</div>
+    </AppLayout>
+  )
+}
+
 function App() {
   const contributedRoutes = useUiContributions('route')
   return (
@@ -64,10 +73,10 @@ function App() {
       <StoragePersistenceNotice />
       <CommandPalette />
       <SessionSearchModal />
-      <WorkspaceOnboardingPrompt />
       <Suspense fallback={<Fallback />}>
         <main>
           <PreviewBanner />
+          <RouteErrorBoundary fallbackWrapper={PageErrorFallbackShell}>
           <Routes>
           <Route path="/" element={<Navigate to="/chat" replace />} />
           <Route path="/chat" element={<ChatSplit />} />
@@ -94,6 +103,7 @@ function App() {
           <Route path="/login" element={<Navigate to="/chat" replace />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Routes>
+          </RouteErrorBoundary>
         </main>
       </Suspense>
     </ErrorBoundary>

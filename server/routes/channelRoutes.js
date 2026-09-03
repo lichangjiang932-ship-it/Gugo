@@ -202,6 +202,7 @@ export async function handleChannelRequest(req, res) {
             modelName: body.modelName ?? body.model_name ?? null,
             modelProviderId: body.modelProviderId ?? body.model_provider_id ?? null,
             modelConfigRevision: body.modelConfigRevision ?? body.model_config_revision ?? null,
+            locale: body.locale,
           })
           return sendJson(res, 200, { ok: true, messageId: result.messageId, jobIds: result.jobIds })
         }

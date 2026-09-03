@@ -49,9 +49,14 @@ import { handleWebSearchRequest } from '../routes/webSearchRoutes.js'
 import { handleRuntimeConfigRequest } from '../routes/runtimeConfigRoutes.js'
 import { handleSideEffectRequest } from '../routes/sideEffectRoutes.js'
 import { handleCapabilityInventoryRequest } from '../routes/capabilityInventoryRoutes.js'
+import { createSqliteFileManagedAttachmentStorageAdapter } from '../adapters/sqliteFileManagedAttachmentStorageAdapter.js'
 import { handleMcpServerRequest } from '../mcp/mcpServer.js'
 import { getRuntimeHostDiagnostics } from '../services/runtimeHostDiagnostics.js'
 import { acquireCompactionArchivePort } from './compactionArchivePort.js'
+import {
+  assertManagedAttachmentStoragePort,
+  createManagedAttachmentStoragePort,
+} from './managedAttachmentStoragePort.js'
 import { getActiveTurnPersistenceAdapter } from './turnPersistenceAdapter.js'
 
 function descriptor(id, priority, apiPrefixes = []) {
@@ -71,7 +76,11 @@ export const BUILTIN_HTTP_CAPABILITY_CATALOG = Object.freeze([
   descriptor('builtin.auth.account', 9_900, ['/api/auth', '/api/account']),
   descriptor('builtin.model.providers', 9_800, ['/api/model/providers']),
   descriptor('builtin.model.status', 9_700, ['/api/model/status']),
-  descriptor('builtin.system.runtime-config', 9_600, ['/api/system/runtime-config', '/api/system/user-data']),
+  descriptor('builtin.system.runtime-config', 9_600, [
+    '/api/system/runtime-config',
+    '/api/system/network-policy',
+    '/api/system/user-data',
+  ]),
   descriptor('builtin.system.diagnostics', 9_500, ['/api/system/diagnostics']),
   descriptor('builtin.model.proxy', 9_400, ['/api/model/test', '/api/model/chat']),
   descriptor('builtin.browser', 9_300, ['/api/browser']),
@@ -161,6 +170,7 @@ export function createBuiltinHttpCapabilities({
   readCanarySession = readActiveTurnSession,
   readRuntimeDiagnostics = getRuntimeHostDiagnostics,
   acquireArchivePort = acquireCompactionArchivePort,
+  managedAttachmentStoragePort = null,
   modelProxyRequestHandler = handleModelProxyRequest,
   compactionRequestHandler = handleCompactionRequest,
 } = {}) {
@@ -170,6 +180,11 @@ export function createBuiltinHttpCapabilities({
   const jobRuntimeForRequest = jobRuntime === null
     ? () => resolveJobRuntime()
     : () => jobRuntime
+  const attachmentStorage = managedAttachmentStoragePort === null
+    ? createManagedAttachmentStoragePort(
+        createSqliteFileManagedAttachmentStorageAdapter({ getEnv }),
+      )
+    : assertManagedAttachmentStoragePort(managedAttachmentStoragePort)
 
   const definitions = [
     capability(
@@ -194,7 +209,11 @@ export function createBuiltinHttpCapabilities({
     ),
     capability(
       'builtin.system.runtime-config',
-      (req) => startsWithAny(req, ['/api/system/runtime-config', '/api/system/user-data']),
+      (req) => startsWithAny(req, [
+        '/api/system/runtime-config',
+        '/api/system/network-policy',
+        '/api/system/user-data',
+      ]),
       (req, res) => handleRuntimeConfigRequest(req, res, { cwd, env: getEnv() }),
     ),
     capability(
@@ -237,7 +256,7 @@ export function createBuiltinHttpCapabilities({
     capability(
       'builtin.attachments',
       (req) => req.url?.startsWith('/api/attachments'),
-      (req, res) => handleAttachmentRequest(req, res),
+      (req, res) => handleAttachmentRequest(req, res, { storagePort: attachmentStorage }),
     ),
     capability(
       'builtin.web-search',
@@ -332,7 +351,7 @@ export function createBuiltinHttpCapabilities({
     capability(
       'builtin.sessions',
       (req) => req.url?.startsWith('/api/sessions'),
-      (req, res) => handleSessionRequest(req, res),
+      (req, res) => handleSessionRequest(req, res, null, null, getEnv(), cwd),
     ),
     capability(
       'builtin.knowledge',

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { getArtifactDir } from './artifactGen.js'
+import { getArtifactDir } from './artifactStorage.js'
 
 const SOURCE_DIRECTORY_NAME = '.artifact-sources'
 const SOURCE_SNAPSHOT_VERSION = 2

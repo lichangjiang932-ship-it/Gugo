@@ -168,6 +168,57 @@ test('CI workflow pins checkout and Node setup actions to immutable commits', ()
   assert.doesNotMatch(ci, /actions\/(?:checkout|setup-node)@v4\b/)
 })
 
+test('CI keeps required Node 22 tests cross-platform and gates Node 20 and 24 runtimes', () => {
+  const ci = read('.github/workflows/ci.yml')
+  const release = read('.github/workflows/release.yml')
+  const testJob = ci.match(/^ {2}test:\r?\n([\s\S]*?)(?=^ {2}[a-z0-9-]+:\r?$)/m)?.[0] || ''
+  const compatibilityJob = ci.match(
+    /^ {2}node-runtime-compatibility:\r?\n([\s\S]*?)(?=^ {2}[a-z0-9-]+:\r?$)/m,
+  )?.[0] || ''
+  const coverageJob = ci.match(
+    /^ {2}coverage:\r?\n([\s\S]*?)(?=^ {2}[a-z0-9-]+:\r?$)/m,
+  )?.[0] || ''
+
+  assert.match(testJob, /name:\s*test \(\$\{\{ matrix\.os \}\}, Node \$\{\{ matrix\.node-version \}\}\)/)
+  assert.match(testJob, /os:\s*\[ubuntu-latest, windows-latest\]/)
+  assert.match(testJob, /node-version:\s*\[22\.x\]/)
+  assert.match(
+    testJob,
+    /TEST_CONCURRENCY:\s*\$\{\{ runner\.os == 'Windows' && '1' \|\| '4' \}\}/,
+  )
+  assert.match(testJob, /- name:\s*Test\s*\r?\n\s*timeout-minutes:\s*45/)
+  assert.match(testJob, /run:\s*npm test/)
+  assert.match(compatibilityJob, /runs-on:\s*ubuntu-latest/)
+  assert.match(compatibilityJob, /node-version:\s*\[20\.19\.x, 24\.x\]/)
+  assert.match(compatibilityJob, /node-version:\s*\$\{\{ matrix\.node-version \}\}/)
+  assert.match(
+    compatibilityJob,
+    /run:\s*node --test --test-concurrency=1 tests\/dbMigrationRegistry\.test\.js tests\/runtimeReadiness\.test\.js/,
+  )
+  assert.match(compatibilityJob, /run:\s*npm run lint/)
+  assert.match(compatibilityJob, /run:\s*npm run build/)
+  assert.match(coverageJob, /TEST_CONCURRENCY:\s*1/)
+  assert.match(coverageJob, /run:\s*npm run test:coverage/)
+  assert.match(release, /uses:\s*\.\/\.github\/workflows\/ci\.yml/)
+  assert.match(release, /node-version:\s*22\.x/)
+})
+
+test('scheduled debt check is read-only, lightweight, and manually runnable', () => {
+  const workflow = read('.github/workflows/debt-check.yml')
+  const packageMetadata = JSON.parse(read('package.json'))
+
+  assert.match(workflow, /schedule:\s*\r?\n\s+- cron:\s*'[^']+'/)
+  assert.match(workflow, /workflow_dispatch:/)
+  assert.match(workflow, /permissions:\s*\r?\n\s+contents:\s*read/)
+  assert.match(workflow, /actions\/checkout@11d5960a326750d5838078e36cf38b85af677262/)
+  assert.match(workflow, /persist-credentials:\s*false/)
+  assert.match(workflow, /actions\/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020/)
+  assert.match(workflow, /node-version:\s*22\.x/)
+  assert.match(workflow, /run:\s*npm run debt:check/)
+  assert.doesNotMatch(workflow, /npm (?:ci|install)/)
+  assert.equal(packageMetadata.scripts['debt:check'], 'node --test tests/codeDebt.test.js')
+})
+
 test('Release secret scanning cannot pass without scanning an explicit checkout ref', () => {
   const ci = read('.github/workflows/ci.yml')
   const ignoreEntries = read('.gitleaksignore')

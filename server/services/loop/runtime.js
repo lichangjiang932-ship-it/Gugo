@@ -39,7 +39,7 @@ import { runPreStep } from './preStep.js'
 import { runModelStep } from './step.js'
 import { createSteeringController } from './steering.js'
 import { createArtifactReplacementGuard, createDisabledToolGuard, createExplicitReadOnlyGuard, createRedundantImageGuard, createWorkspaceTargetGuard, resolveIterationWindow } from './guards.js'
-import { FALSE_SUCCESS_STATUS, INCOMPLETE_STATUS, PUBLIC_FILTERED_CLARIFICATION_TEXT, PUBLIC_INCOMPLETE_TASK_TEXT, PUBLIC_UNVERIFIED_FILE_TEXT, STATUS_INQUIRY_PROMPT, isExplicitLocalMutationRetryRequest, isForcedToolChoiceCompatibilityError, isLocalMutationContinuationRequest, latestPriorTurnOutcome, mergeCompactionRecovery, normalizeArtifactIdList, normalizeCompactionRecovery, recoverPriorLocalMutationTargets, restoreNamedToolSpecs, sameArtifactIdList, sanitizeIncompleteTerminalText, sourceHandoffViolation, synchronizeCheckpointToolCallMessages } from './runtimeState.js'
+import { FALSE_SUCCESS_STATUS, INCOMPLETE_STATUS, STATUS_INQUIRY_PROMPT, isExplicitLocalMutationRetryRequest, isForcedToolChoiceCompatibilityError, isLocalMutationContinuationRequest, latestPriorTurnOutcome, mergeCompactionRecovery, normalizeArtifactIdList, normalizeCompactionRecovery, recoverPriorLocalMutationTargets, restoreNamedToolSpecs, sameArtifactIdList, sanitizeIncompleteTerminalText, sourceHandoffViolation, synchronizeCheckpointToolCallMessages } from './runtimeState.js'
 import { hasEffectiveReadOnlyBoundary, resolveChatCapabilityMode, shouldInheritExecutionIntent } from '../chatToolSelection.js'
 import { createRepeatCallGuard } from '../../utils/repeatCallGuard.js'
 import { COMMAND_EXECUTION_TOOL_NAMES, GENERATED_ARTIFACT_TYPE, MAX_ITERS, JOB_READ_CONCURRENCY, ARTIFACT_DELIVERY_GUARD_MARKER, MAX_ARTIFACT_DELIVERY_RETRIES, EXECUTION_EVIDENCE_GUARD_MARKER, DIRECTORY_RESUME_GUARD_MARKER, AVAILABLE_TOOL_CAPABILITIES_MARKER, POST_MUTATION_VERIFICATION_GUARD_MARKER, PDF_LAYOUT_EXECUTION_CONTRACT_MARKER, PDF_LAYOUT_VERIFICATION_GUARD_MARKER, PDF_LAYOUT_VERIFICATION_OK, MAX_EXECUTION_EVIDENCE_RETRIES, MAX_DIRECTORY_RESUME_RETRIES, MAX_MUTATION_VERIFICATION_RETRIES, MAX_PDF_LAYOUT_VERIFICATION_RETRIES, VERIFIED_DIRECTORY_RESOLUTION, DIRECTORY_AUTHORIZATION_WAIT_CLAIM, EXPLICIT_LOCAL_DIRECTORY_CONTEXT, MANAGED_ATTACHMENT_MARKER, PROJECT_SCOPE_TARGET, VERIFICATION_TOOLS, SCHEDULED_WAIT_INTENT, FILE_WRITE_TOOL_NAMES, FAILURE_RECOVERY_MARKER, FAILURE_RECOVERY_THRESHOLD, EXECUTION_CONVERGENCE_MARKER, REPEAT_CALL_GUARD_MARKER, EXECUTION_CONVERGENCE_ROUND_THRESHOLD, MAX_INSTALL_ATTEMPT_SIGNATURES, toolNameFromSpec, isCommandExecutionTool, hasCommandExecutionTool, commandExecutionToolLabel, contradictedCapabilityClarification, isSuccessfulToolResult, requestedPdfSectionLabel, shouldRequirePdfLayoutVerification, buildPdfLayoutExecutionContract, isSuccessfulPdfLayoutVerification, restoreFailureRecovery, serializeFailureRecovery, installAttemptSignature, isProbeLikeCall, isExplorationOnlyCall, restoreExecutionConvergence, serializeExecutionConvergence, isProductiveExecutionOutcome, shouldReflectOnFailure, progressChangesFor, isLocalMutationCall, isVerificationCall, isMutationExecutionCall, normalizeMutationTarget, targetsMatch, shellTargetWithCwd, looksLikeDeletionCommand, staticDeletionTargets, extractMutationTargets, clearArtifactValidatedMutationTargets, clearVerifiedDeletionTargets, clearVerifiedMutationTargets, persistLocalToolArtifactsAsync, DIRECTORY_REVIEW_GUARD_MARKER, LIVE_STEERING_GUARD_MARKER, DIRECTORY_REVIEW_INTENT, buildRepresentativeReadCalls, hasSuccessfulLocalPreflightRead, successfulReadFileInMessages, requestedArtifactOutputDirective, executeServerTool, supportsIdempotentResume, SERVER_TOOL_SPECS, selectJobToolSpecs, buildJobToolIdempotencyKey, scopeTextToolCallIds } from '../toolLoopHeuristics.js'
@@ -72,6 +72,13 @@ import { processModelResult } from './runtime-processModelResult.js'
 import { finalizeRuntime } from './runtime-finalizeRuntime.js'
 import { assertRuntimeDependencies } from './runtimeContract.js'
 import { isTrustedInternalLoopPrincipal } from './internalExecutionPrincipal.js'
+import {
+  budgetExceededCopy,
+  formatIncompleteTerminalText,
+  priorOutcomeStatusCopy,
+  terminalProtectionCopy,
+} from './incompleteTerminalPresentation.js'
+import { normalizeTurnLocale } from '../../../shared/turnLocale.js'
 import {
   appendFinalAnswerToolEvidence,
   buildFinalAnswerEvidenceReviewPrompt,
@@ -198,9 +205,6 @@ const runtimeDependencies = {
   PDF_LAYOUT_VERIFICATION_OK,
   POST_MUTATION_VERIFICATION_GUARD_MARKER,
   PROJECT_SCOPE_TARGET,
-  PUBLIC_FILTERED_CLARIFICATION_TEXT,
-  PUBLIC_INCOMPLETE_TASK_TEXT,
-  PUBLIC_UNVERIFIED_FILE_TEXT,
   REPEAT_CALL_GUARD_MARKER,
   SCHEDULED_WAIT_INTENT,
   SERVER_TOOL_SPECS,
@@ -252,6 +256,10 @@ const runtimeDependencies = {
   extractMutationTargets,
   extractTextToolCalls,
   filterCurrentDynamicToolSpecs,
+  budgetExceededCopy,
+  formatIncompleteTerminalText,
+  priorOutcomeStatusCopy,
+  terminalProtectionCopy,
   finalAnswerEvidenceDigest,
   findAdjacentDeliveredArtifacts,
   findContinuableArtifactTargets,
@@ -305,6 +313,7 @@ const runtimeDependencies = {
   normalizeToolCalls,
   normalizeToolError,
   normalizeToolResult,
+  normalizeTurnLocale,
   observeTaskVerificationMutation,
   observeTaskVerificationRepair,
   observeToolCalls,

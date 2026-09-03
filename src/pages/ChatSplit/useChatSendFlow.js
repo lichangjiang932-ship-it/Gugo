@@ -31,6 +31,7 @@ export default function useChatSendFlow({
   effectiveAgentId,
   ensureLocalPathAccess,
   isGenerating,
+  lang,
   modelReadiness,
   modelOptions,
   onAuthenticationRequired,
@@ -78,7 +79,10 @@ export default function useChatSendFlow({
     let sessionId = state.activeSessionId || String(state.draftSessionId || '').trim() || null
     let activeSession = state.sessions.find((session) => session.id === sessionId)
     const storedWorkspacePath = String(activeSession?.workspacePath || '').trim()
-    let workspacePath = storedWorkspacePath || (!activeSession ? String(draftWorkspacePath || '').trim() : '')
+    const fallbackWorkspacePath = activeSession
+      ? String(state.defaultWorkspacePath || '').trim()
+      : String(draftWorkspacePath || state.defaultWorkspacePath || '').trim()
+    let workspacePath = storedWorkspacePath || fallbackWorkspacePath
     const storedSelection = readStoredModelSelection()
     const modelSelection = resolveSessionModelSelection(modelOptions, {
       sessionModel: activeSession?.modelName,
@@ -232,6 +236,7 @@ export default function useChatSendFlow({
       historyMessages,
       intentMode,
       localPathAccess,
+      locale: lang,
       modelName,
       modelProviderId,
       modelConfigRevision,
@@ -284,9 +289,9 @@ export default function useChatSendFlow({
   }, [
     abortCtrlRef, abortSessionIdRef, activateWorkspaceForTurn, attachments, approvalMode, changeApprovalMode,
     directoryApprovalResolveRef, dispatch, draftWorkspacePath, effectiveAgentId,
-    ensureLocalPathAccess, isGenerating, modelOptions, modelReadiness, onAuthenticationRequired, onModelCatalogChanged, onModelUnavailable, onSendBlocked, onSendRejected, onTurnResult, onTurnStart, onWorkspaceUnavailable, preflightModelSelection, probeLocalPathAccess, requestServerToolApproval,
+    ensureLocalPathAccess, isGenerating, lang, modelOptions, modelReadiness, onAuthenticationRequired, onModelCatalogChanged, onModelUnavailable, onSendBlocked, onSendRejected, onTurnResult, onTurnStart, onWorkspaceUnavailable, preflightModelSelection, probeLocalPathAccess, requestServerToolApproval,
     refreshAuth, resolveToolApprovalForOwner, runChatTurn, runtimeSkills, selectedModel, selectedModelProviderId,
     setContextSystemPrompts, clearToolApprovalForOwner,
-    state.activeSessionId, state.agentMode, state.draftSessionId, state.sessions, state.skillConfigs, state.toolsConfig, t,
+    state.activeSessionId, state.agentMode, state.defaultWorkspacePath, state.draftSessionId, state.sessions, state.skillConfigs, state.toolsConfig, t,
   ])
 }

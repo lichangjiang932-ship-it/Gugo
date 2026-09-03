@@ -154,7 +154,9 @@ export async function writePersistedSnapshot(payload, options = {}) {
     factory = resolveFactory(options)
     const now = options?.now || Date.now
     const database = await connectionFor(factory)
-    const sanitizedPayload = sanitizeRetiredBrowserAccountFields(payload).payload
+    const sanitizedPayload = sanitizeRetiredBrowserAccountFields(payload, {
+      preservePendingLegacySessions: true,
+    }).payload
     const updatedAt = Number(now()) || Date.now()
     const bytes = payloadBytes(sanitizedPayload)
     const transaction = database.transaction(SESSION_SNAPSHOT_STORE_NAME, 'readwrite')
@@ -178,7 +180,10 @@ export async function readPersistedSnapshot(options = {}) {
     factory = resolveFactory(options)
     const record = await readRecord(factory)
     if (!record) return { ok: true, status: 'ok', payload: null, updatedAt: null }
-    const sanitized = sanitizeRetiredBrowserAccountFields(record.payload)
+    const sanitized = sanitizeRetiredBrowserAccountFields(record.payload, {
+      preservePendingLegacySessions: true,
+      stageLegacySessions: true,
+    })
     let cleanupError = null
     if (sanitized.changed) {
       try {

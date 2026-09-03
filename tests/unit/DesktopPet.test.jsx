@@ -75,9 +75,9 @@ test('desktop pet derives idle, thinking, tool, completed, and failed work state
   )
 })
 
-test('desktop pet status and accessibility copy exists in all supported languages', () => {
+test('desktop pet status and accessibility copy exists in both supported languages', () => {
   const expectedStatuses = ['completed', 'failed', 'idle', 'thinking', 'tool']
-  for (const language of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+  for (const language of ['zh', 'en']) {
     const copy = translations[language].desktopPet
     assert.equal(typeof copy.close, 'string')
     assert.equal(typeof copy.handle, 'string')

@@ -27,6 +27,7 @@ import AssistantAnswer from './messageRow/AssistantAnswer.jsx'
 import CollapsedArtifactContent from './messageRow/CollapsedArtifactContent.jsx'
 import { SideEffectRecoveryCard } from './messageRow/FailureCards.jsx'
 import IncompleteTaskNotice from './messageRow/IncompleteTaskNotice.jsx'
+import { normalizeIncompleteReasonCode } from './messageRow/incompleteTaskPresentation.js'
 import { AssistantMeta, UserMeta } from './messageRow/MetaActions.jsx'
 import { InlineDirectoryRequestCard, UserBubble } from './messageRow/UserBubble.jsx'
 
@@ -56,6 +57,11 @@ export default function MessageRow({
     serverClarification?.access_mode || serverClarification?.accessMode || '',
   ].join(':')
   const resolvedDeliveryArtifacts = resolveDeliveryArtifacts(msg.meta)
+  const hasTerminalOutcome = msg.meta?.failed === true
+    || msg.meta?.cancelled === true
+    || msg.meta?.interrupted === true
+    || msg.meta?.paused === true
+    || msg.meta?.serverConnectionState === 'blocked'
   const isCurrentStreamingMessage = msg.meta?.streaming === true
     || (msg.meta?.streaming == null && msg.id === generatingMessageId)
   const isMessageComplete = !isCurrentStreamingMessage
@@ -124,20 +130,26 @@ export default function MessageRow({
     && msg.meta?.serverRecoveryBlocked === true
     && isModelRequestOutcomeUnknownRecoveryKind(msg.meta?.serverRecoveryKind)
     && msg.meta?.serverConnectionState === 'blocked'
-  const isIncompleteTerminal = msg.meta?.failed === true
-    || msg.meta?.cancelled === true
-    || (msg.meta?.interrupted === true && msg.meta?.streaming !== true)
-    || msg.meta?.serverConnectionState === 'blocked'
+  const serverFailure = msg.meta?.serverFailure
+  const hasIncompleteEvidence = expectsFileReceipt
+    || verifiedLocalFileReferences.length > 0
+    || retainedLocalFileReferences.length > 0
+    || Boolean(normalizeIncompleteReasonCode(serverFailure?.incompleteReason))
+    || (Array.isArray(serverFailure?.missingRequirements)
+      && serverFailure.missingRequirements.length > 0)
+    || (Array.isArray(serverFailure?.taskVerification?.checks)
+      && serverFailure.taskVerification.checks.length > 0)
   const showIncompleteTaskNotice = msg.role === 'assistant'
-    && isIncompleteTerminal
+    && hasTerminalOutcome
+    && (msg.meta?.serverConnectionState === 'blocked' || hasIncompleteEvidence)
     && msg.meta?.serverConnectionState !== 'reconnecting'
-    && (msg.meta?.serverConnectionState === 'blocked' || !isCurrentStreamingMessage)
     && (msg.meta?.serverConnectionState === 'blocked' || !isPreExecutionFailure(msg))
 
   return (
     <div
       key={rowKey}
       id={msg.id ? `message-${msg.id}` : undefined}
+      data-chat-message-index={turnIndex}
       data-chat-turn-index={msg.role === 'user' ? turnIndex : undefined}
       data-message-role={msg.role}
       className={`group/message flex w-full py-0.5 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}

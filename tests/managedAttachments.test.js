@@ -5,6 +5,8 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
+import { MANAGED_ATTACHMENT_PUBLIC_FIELDS } from '../server/core/managedAttachmentDtos.js'
+
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-managed-attachments-'))
 process.env.APP_DATA_DIR = tempDir
 
@@ -76,12 +78,16 @@ test('raw binary upload persists identical bytes and returns stable metadata', a
   )
   assert.equal(response.status, 201)
   uploaded = (await response.json()).attachment
+  assert.deepEqual(Object.keys(uploaded), MANAGED_ATTACHMENT_PUBLIC_FIELDS)
   assert.equal(uploaded.name, 'sample.pdf')
   assert.equal(uploaded.mimeType, 'application/pdf')
   assert.equal(uploaded.size, pdfBytes.length)
   assert.equal(uploaded.sha256, crypto.createHash('sha256').update(pdfBytes).digest('hex'))
   assert.equal(uploaded.uri, `attachment://${uploaded.id}`)
   assert.equal(uploaded.status, 'ready')
+  for (const field of ['fullPath', 'storagePath', 'rootPath', 'sentinel']) {
+    assert.equal(Object.hasOwn(uploaded, field), false)
+  }
 
   const contentResponse = await fetch(`${origin}${uploaded.downloadUrl}`, {
     headers: authorization(alice.token),
@@ -89,6 +95,31 @@ test('raw binary upload persists identical bytes and returns stable metadata', a
   assert.equal(contentResponse.status, 200)
   assert.equal(contentResponse.headers.get('content-type'), 'application/pdf')
   assert.deepEqual(Buffer.from(await contentResponse.arrayBuffer()), pdfBytes)
+})
+
+test('metadata list and item endpoints retain the exact public attachment shape', async () => {
+  assert.ok(uploaded)
+  const [listResponse, itemResponse] = await Promise.all([
+    fetch(`${origin}/api/attachments?sessionId=${encodeURIComponent(sessionId)}`, {
+      headers: authorization(alice.token),
+    }),
+    fetch(`${origin}/api/attachments/${uploaded.id}`, {
+      headers: authorization(alice.token),
+    }),
+  ])
+  assert.equal(listResponse.status, 200)
+  assert.equal(itemResponse.status, 200)
+
+  const listed = (await listResponse.json()).attachments
+    .find((attachment) => attachment.id === uploaded.id)
+  const item = (await itemResponse.json()).attachment
+  assert.deepEqual(Object.keys(listed), MANAGED_ATTACHMENT_PUBLIC_FIELDS)
+  assert.deepEqual(Object.keys(item), MANAGED_ATTACHMENT_PUBLIC_FIELDS)
+  for (const responseAttachment of [listed, item]) {
+    for (const field of ['fullPath', 'storagePath', 'rootPath', 'sentinel']) {
+      assert.equal(Object.hasOwn(responseAttachment, field), false)
+    }
+  }
 })
 
 test('embedded attachment previews and downloads accept a content-scoped query token', async () => {

@@ -103,6 +103,7 @@ test('runToolsLoopCore composes preparation and one-shot execution', async () =>
 
 test('prepared execution preserves an initialization-phase terminal outcome', async () => {
   let modelCalls = 0
+  const restoredText = '已恢复终止结果。'
   const prepared = await prepareToolsLoopRuntime(runtimeContext('must not run', {
     loadCheckpoint: async () => ({
       state: {
@@ -111,7 +112,7 @@ test('prepared execution preserves an initialization-phase terminal outcome', as
         artifactIds: [],
         iterations: 2,
         final: {
-          text: 'restored terminal outcome',
+          text: restoredText,
           incomplete: true,
           iterations: 2,
         },
@@ -128,7 +129,7 @@ test('prepared execution preserves an initialization-phase terminal outcome', as
   assert.deepEqual(Reflect.ownKeys(terminal), ['terminal', 'value'])
   assert.equal(terminal.terminal, true)
   const result = await terminal.value
-  assert.equal(result.text, 'restored terminal outcome')
+  assert.equal(result.text, restoredText)
   assert.equal(result.resumed, true)
   assert.equal(result.iterations, 2)
   assert.equal(modelCalls, 0)
@@ -136,6 +137,126 @@ test('prepared execution preserves an initialization-phase terminal outcome', as
     executePreparedToolsLoop(prepared),
     hasCode('TOOLS_LOOP_RUNTIME_PREPARED_STALE'),
   )
+})
+
+test('restored terminal checkpoints follow the current runtime locale', async (t) => {
+  const cases = [
+    {
+      locale: 'en',
+      restoredText: '任务尚未完成。请重试。',
+      expected: /The task is incomplete/i,
+      rejected: /[\u3400-\u9fff]/u,
+    },
+    {
+      locale: 'zh',
+      restoredText: 'The task is incomplete. Retry to continue.',
+      expected: /任务尚未完成/u,
+      rejected: /The task is incomplete/i,
+    },
+  ]
+
+  for (const scenario of cases) {
+    await t.test(scenario.locale, async () => {
+      let modelCalls = 0
+      const prepared = await prepareToolsLoopRuntime(runtimeContext('must not run', {
+        job: {
+          id: `restored-terminal-${scenario.locale}`,
+          userId: `restored-terminal-${scenario.locale}-user`,
+          origin: 'job',
+          locale: scenario.locale,
+          prompt: 'Answer once.',
+        },
+        loadCheckpoint: async () => ({
+          state: {
+            messages: [{ role: 'user', content: 'already completed' }],
+            toolCalls: [],
+            artifactIds: [],
+            iterations: 2,
+            final: {
+              text: scenario.restoredText,
+              incomplete: true,
+              reason: 'legacy_incomplete',
+              iterations: 2,
+            },
+          },
+        }),
+        runModel: async () => {
+          modelCalls += 1
+          return { content: 'unexpected model result', toolCalls: [] }
+        },
+      }))
+
+      const terminal = consumePreparedToolsLoopTerminalOutcome(prepared)
+      assert.equal(terminal.terminal, true)
+      const result = await terminal.value
+      assert.match(result.text, scenario.expected)
+      assert.doesNotMatch(result.text, scenario.rejected)
+      assert.equal(result.resumed, true)
+      assert.equal(modelCalls, 0)
+    })
+  }
+})
+
+test('restored clarification prose follows the current runtime locale', async (t) => {
+  const cases = [
+    {
+      locale: 'en',
+      restoredText: '请提供缺少的范围。',
+      expected: /More information is required/i,
+      rejected: /[\u3400-\u9fff]/u,
+    },
+    {
+      locale: 'zh',
+      restoredText: 'Please provide the missing scope.',
+      expected: /需要你补充信息/u,
+      rejected: /Please provide the missing scope/i,
+    },
+  ]
+
+  for (const scenario of cases) {
+    await t.test(scenario.locale, async () => {
+      const prepared = await prepareToolsLoopRuntime(runtimeContext('must not run', {
+        job: {
+          id: `restored-clarification-${scenario.locale}`,
+          userId: `restored-clarification-${scenario.locale}-user`,
+          origin: 'job',
+          locale: scenario.locale,
+          prompt: 'Answer once.',
+        },
+        loadCheckpoint: async () => ({
+          state: {
+            messages: [{ role: 'user', content: 'already paused' }],
+            toolCalls: [],
+            artifactIds: [],
+            iterations: 2,
+            final: {
+              text: scenario.restoredText,
+              paused: true,
+              iterations: 2,
+              clarification: {
+                question: scenario.restoredText,
+                message: scenario.restoredText,
+                why: scenario.restoredText,
+                blocker_kind: 'missing_info',
+                options: ['npm run test'],
+              },
+            },
+          },
+        }),
+      }))
+
+      const terminal = consumePreparedToolsLoopTerminalOutcome(prepared)
+      assert.equal(terminal.terminal, true)
+      const result = await terminal.value
+      assert.match(result.text, scenario.expected)
+      assert.match(result.clarification.question, scenario.expected)
+      assert.match(result.clarification.message, scenario.expected)
+      assert.equal(result.clarification.why, '')
+      assert.deepEqual(result.clarification.options, ['npm run test'])
+      assert.doesNotMatch(result.text, scenario.rejected)
+      assert.equal(result.resumed, true)
+    })
+  }
 })
 
 test('restored successful final without a current evidence review re-enters the model loop', async () => {

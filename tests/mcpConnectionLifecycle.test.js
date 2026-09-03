@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { Readable } from 'node:stream'
 import test from 'node:test'
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-mcp-lifecycle-'))
@@ -40,8 +41,11 @@ lines.on('close', () => process.exit(0))
 
 const { closeDb, createSession, createUser, getSessionByToken } = await import('../server/db.js')
 const { handleAuthAccountRequest } = await import('../server/adapters/authAccount.js')
+const { handleRuntimeConfigRequest } = await import('../server/routes/runtimeConfigRoutes.js')
 const {
   callTool,
+  disconnectServer,
+  enforcePureLocalMcpPolicy,
   ensureServerConnected,
   getMcpConnectionState,
   getUserCatalog,
@@ -109,6 +113,76 @@ test('idle sweep closes expired MCP connections and unregisters their tools', as
   assert.equal(sweepIdleConnections({ now: Date.now() + 10_000, timeoutMs: 1 }), 1)
   assert.equal(getUserCatalog('mcp-idle-user')[0].connected, false)
   assert.equal(getDynamicTool('mcp__Idle_Server__ping', { userId: 'mcp-idle-user' }), null)
+})
+
+test('pure-local mode blocks stdio MCP startup before spawning a connection', async () => {
+  createUser({ id: 'mcp-pure-local-user', email: 'mcp-pure-local@example.com' })
+  const server = addServer('mcp-pure-local-user', 'mcp-pure-local-server', 'Pure Local Server')
+  const previous = process.env.GUGO_PURE_LOCAL_MODE
+  process.env.GUGO_PURE_LOCAL_MODE = '1'
+  try {
+    await assert.rejects(
+      ensureServerConnected('mcp-pure-local-user', server),
+      (error) => error?.code === 'OUTBOUND_PURE_LOCAL_DENIED' && error.retryable === false,
+    )
+    assert.equal(getUserCatalog('mcp-pure-local-user')[0].connected, false)
+  } finally {
+    if (previous === undefined) delete process.env.GUGO_PURE_LOCAL_MODE
+    else process.env.GUGO_PURE_LOCAL_MODE = previous
+    disconnectServer('mcp-pure-local-user', server.id)
+  }
+})
+
+test('enabling pure-local mode disconnects an already-running stdio MCP server', async () => {
+  createUser({ id: 'mcp-pure-local-live-user', email: 'mcp-pure-local-live@example.com' })
+  const server = addServer('mcp-pure-local-live-user', 'mcp-pure-local-live-server', 'Pure Local Live Server')
+  const connection = await ensureServerConnected('mcp-pure-local-live-user', server)
+  assert.equal(connection.transport.isAlive(), true)
+  assert.equal(enforcePureLocalMcpPolicy({ GUGO_PURE_LOCAL_MODE: '1' }), 1)
+  assert.equal(getUserCatalog('mcp-pure-local-live-user')[0].connected, false)
+})
+
+test('network policy toggle enforces pure-local against a stale request env snapshot', async () => {
+  const userId = 'mcp-pure-local-route-user'
+  const token = 'mcp-pure-local-route-token'
+  createUser({ id: userId, email: 'mcp-pure-local-route@example.com' })
+  createSession({ token, userId })
+  const server = addServer(userId, 'mcp-pure-local-route-server', 'Pure Local Route Server')
+  const previous = process.env.GUGO_PURE_LOCAL_MODE
+  delete process.env.GUGO_PURE_LOCAL_MODE
+  try {
+    const connection = await ensureServerConnected(userId, server)
+    assert.equal(connection.transport.isAlive(), true)
+
+    const req = Readable.from([Buffer.from(JSON.stringify({ pureLocal: true }))])
+    Object.assign(req, {
+      method: 'PATCH',
+      url: '/api/system/network-policy',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      socket: { remoteAddress: '127.0.0.1' },
+    })
+    const res = response()
+    await handleRuntimeConfigRequest(req, res, {
+      cwd: tempDir,
+      env: {
+        APP_DATA_DIR: tempDir,
+        AUTH_MODE: 'local',
+        GUGO_LOAD_DOTENV: '0',
+        LOCAL_USER_ID: userId,
+      },
+    })
+
+    assert.equal(res.statusCode, 200)
+    assert.equal(JSON.parse(res.body).policy.pureLocal, true)
+    assert.equal(getUserCatalog(userId)[0].connected, false)
+  } finally {
+    if (previous === undefined) delete process.env.GUGO_PURE_LOCAL_MODE
+    else process.env.GUGO_PURE_LOCAL_MODE = previous
+    disconnectServer(userId, server.id)
+  }
 })
 
 test('logout disconnects only the current user MCP connections', async () => {

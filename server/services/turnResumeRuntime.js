@@ -17,6 +17,7 @@ import {
   normalizeTurnOptionalId as normalizeOptionalId,
 } from './turnStartRuntime.js'
 import { createTurnResolutionRuntime, TurnEngineError } from './turnResolutionRuntime.js'
+import { createTurnResumeDirectoryGrantGuard } from './turnResumeDirectoryGrant.js'
 function rejectResumeApprovalModeOverride(value) {
   if (value === null || value === undefined) return
   throw new TurnEngineError(
@@ -199,28 +200,10 @@ export function createTurnResumeRuntime({
   createEmitter,
   schedule,
 }) {
-  function assertCurrentDirectoryGrant(userId, resolution) {
-    if (resolution?.type !== 'directory_authorization') return
-    let grants
-    try {
-      grants = deps.readFileAccessStatus({ userId })?.grants || []
-    } catch (error) {
-      const wrapped = new TurnEngineError(
-        'TURN_DIRECTORY_GRANT_CHECK_FAILED',
-        'failed to verify the persisted directory authorization',
-        500,
-      )
-      wrapped.cause = error
-      throw wrapped
-    }
-    if (!hasSufficientDirectoryGrant(grants, resolution)) {
-      throw new TurnEngineError(
-        'TURN_DIRECTORY_GRANT_NOT_FOUND',
-        'the requested directory authorization is not persisted for this user',
-        403,
-      )
-    }
-  }
+  const assertCurrentDirectoryGrant = createTurnResumeDirectoryGrantGuard({
+    readFileAccessStatus: (input) => deps.readFileAccessStatus(input),
+    hasSufficientDirectoryGrant,
+  })
 
   /**
    * Startup recovery needs to distinguish "another process owns the lease"
@@ -564,6 +547,7 @@ export function createTurnResumeRuntime({
       turnStartedAt: started.createdAt,
       content: String(started.payload.content || ''),
       displayContent: String(started.payload.displayContent || started.payload.content || ''),
+      ...(started.payload.locale ? { locale: started.payload.locale } : {}),
       modelName: modelBinding.modelName,
       modelProviderId: modelBinding.modelProviderId,
       modelConfigRevision: modelBinding.modelConfigRevision,

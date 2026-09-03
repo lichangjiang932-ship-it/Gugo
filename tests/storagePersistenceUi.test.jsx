@@ -2,6 +2,7 @@ import { after } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
 import reactPlugin from '@vitejs/plugin-react'
+import { resolveViteTestCacheDir } from './helpers/viteTestCache.js'
 
 const APP_CONTEXT_STUB = '\0storage-persistence-app-context'
 const I18N_STUB = '\0storage-persistence-i18n'
@@ -40,6 +41,7 @@ const dependencyStubs = {
 const viteServer = await createServer({
   configFile: false,
   root: fileURLToPath(new URL('..', import.meta.url)),
+  cacheDir: resolveViteTestCacheDir(),
   appType: 'custom',
   plugins: [dependencyStubs, reactPlugin()],
   server: { middlewareMode: true, hmr: false, ws: false },

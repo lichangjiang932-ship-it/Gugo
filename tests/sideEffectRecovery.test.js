@@ -751,8 +751,7 @@ test('GC retains a resolved Turn side effect while a failed Turn retry is active
     userId: owner.userId,
     event: event(1, 'turn.failed', {
       code: 'TURN_INCOMPLETE',
-      message: 'retryable failure',
-      error: { code: 'TURN_INCOMPLETE', message: 'retryable failure', retryable: true },
+      error: { code: 'TURN_INCOMPLETE', retryable: true },
     }),
   })
   getDb().transaction(() => appendTurnEventsInTransaction(

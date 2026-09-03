@@ -88,19 +88,16 @@ provenance.
 The following files are compatibility hosts and are explicitly outside the
 target kernel:
 
-| File | Current role | Required direction |
-|---|---|---|
-| `server/services/TurnEngine.js` | Narrow turn lifecycle and composition shell; execution preparation, model-loop/checkpoint projection, terminal outcomes, persistence assembly, and lease scheduling are delegated to focused runtimes | Keep it below 600 lines and move any new execution concern behind an explicit runtime port |
-| `server/services/turnEngineHost.js` | Process singleton and selected-adapter composition shell | Keep host-only; never add backend selection, routes, or Turn business logic |
-| `server/adapters/modelProxy.js` | Small background/streaming model facade and legacy HTTP compatibility shell; endpoint, diagnostics, identity/outcome, request building/preparation, transport, error presentation, and SSE/non-stream response coordination are extracted | Treat remaining work as compatibility-boundary debt; do not move Provider or response policy back into it |
-| `server/services/artifactGen.js` | Artifact generation compatibility facade; storage, delivery, HTML validation, PDF formatting, PPTX/DOCX/XLSX encoding, shared prepared-image validation, and atomic generated-file publication are extracted, while local-file publication plus authorized preparation, persistence, and final receipts stay here | Continue splitting local-file publication without moving authorization, persistence, publication, or final receipts out of the host |
-| `server/services/jobRuntime.js` | Job planning, recovery, policy, scheduling, and loop hosting | Keep extracting independent services and capability providers |
-| `server/plugins/runtimePluginRegistry.js` | Inventory, installation, capability wiring, config, and release control; contribution transactions plus Prompt, Tool, Loop-hook, and read-only Agent Event hosting are delegated to dedicated coordinators/registries | Finish splitting inventory/loading from activation/execution, add a durable replay/cursor feed behind the separate Agent Event consumer seam, and keep contribution transactions behind the coordinator |
-| `server/db.js` | Database bootstrap and composition; v2-v30 upgrade compatibility is delegated to `server/migrations/legacyCompatibility.js` | Keep bootstrap-only; converge fresh-schema and Reasonix paths on the authoritative registry without rewriting historical migrations |
-| Managed attachment HTTP/governance, artifacts, verified-file projections, and data governance | Turn validation and model materialization now cross `ManagedAttachmentRuntimePort v1`; routes, upload/deletion governance, and the atomic SQLite turn-start binding still assume host-owned identities or file layouts | Move the remaining aggregate operations behind backend-neutral governance/storage capabilities without weakening ownership checks or splitting the existing atomic turn-start commit |
+| File | Current role | Required direction | Canonical debt |
+|---|---|---|---|
+| `server/services/jobRuntime.js` | Job command facade; scheduler ownership, tick tracking, bounded draining, and shutdown are delegated to `jobRuntimeLoopHost.js`, default policy capability composition to `jobRuntimeDefaultPolicyCapabilities.js`, planning details to `jobRuntimeDefaultPlanner.js`, crash recovery to `jobRuntimeRecovery.js`, and owner-aware event delivery plus terminal-evicted owner caching to `jobRuntimeEventHub.js` | Keep extracting independent services and capability providers without moving loop lifecycle, default capability composition, planning details, recovery persistence, or event routing back into the facade | `DEBT-ARCH-002` |
+| `server/plugins/runtimePluginRegistry.js` | Inventory, capability wiring, and facade composition; configuration-source initialization/sealing, installation settlement/rollback, uninstall deactivation/cleanup, release deadlock fencing/shutdown, record construction, bounded audit storage, contribution transactions, Prompt, Tool, Loop-hook, best-effort Agent Event v1, and durable Agent Event v2 hosting are delegated to focused modules | Finish splitting inventory/loading from activation/execution, and keep configuration-source state, installation, uninstall, release, contribution transactions, durable subscription delivery, and retention behind their focused controllers | `DEBT-ARCH-002` |
+| Managed attachment governance, artifacts, verified-file projections, and data governance | Turn validation and model materialization cross `ManagedAttachmentRuntimePort v1`; HTTP upload, metadata, deletion, and authoritative content streaming cross `ManagedAttachmentStoragePort v1` without exposing host paths. Bulk user-data governance and the atomic SQLite turn-start binding still assume host-owned transaction domains | Move the remaining aggregate operations behind backend-neutral governance capabilities without weakening ownership checks or splitting the existing atomic turn-start commit | `DEBT-ARCH-002` |
 
-The repository's 600-line preference applies to implementation files. A file
-above that threshold is transition debt, not permission to add another concern.
+The repository's 600-line preference applies to implementation files under
+`server/`, `shared/`, `desktop/`, and `bin/`. `DEBT-SIZE-001` is the executable
+inventory; a file above that threshold is transition debt, not permission to
+add another concern.
 
 ## Dependency rules
 
@@ -140,11 +137,24 @@ above that threshold is transition debt, not permission to add another concern.
   `shared/turnEvents.js`. The top-level registry composes these hosts but must
   not regain their validation, ordering, binding, execution, or revocation
   logic. The plugin-facing Agent Event v1 stream is a separate, read-only,
-  versioned adapter over the shared vocabulary. It is a post-commit,
-  process-local best-effort observer, not a durable subscription: replay,
-  global cursors, retention watermarks, retries, and DLQ/ACK state require a
-  future host-owned outbox contract rather than coupling consumers to
-  retention-pruned `turn_events` rows.
+  versioned adapter over the shared vocabulary. It remains a post-commit,
+  process-local best-effort observer, not a durable subscription. The built-in
+  SQLite v113 schema captures every newly inserted Turn Event in the same
+  synchronous transaction into a host-owned `agent_event_outbox`, with a
+  globally monotonic cursor and an envelope independent of retention-pruned
+  `turn_events` rows. The schema also persists the initial stream metadata
+  (`epoch=1`, `truncatedThrough=0`); the host reader returns it and fails closed
+  when a requested cursor is behind that watermark. SQLite v114 adds the
+  durable Agent Event v2 subscription and DLQ contract. Verified immutable
+  plugin Releases may register a stable publisher/release/plugin/subscription/
+  event identity; the focused consumer host replays detached envelopes with
+  exclusive fenced leases, durable cursor ACK, bounded retry/backoff, and
+  atomic dead-letter transitions. Retention computes the minimum scanned
+  cursor across active subscriptions and advances the stream epoch, subscriber
+  epochs, truncation watermark, and outbox deletion in one IMMEDIATE
+  transaction. Unknown or incomplete subscription state fails closed. v1
+  remains the explicitly best-effort live observer and is not upgraded by
+  implication; v2 is at-least-once and listeners must remain idempotent.
 - `runtimePluginContributionCoordinator.js` is the sole transaction owner for
   contribution activation, rollback, revocation, and retirement. Leaf
   registries must never decide plugin record state or discard retained or

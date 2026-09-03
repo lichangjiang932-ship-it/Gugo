@@ -1,6 +1,7 @@
 import { callBackgroundModel } from '../adapters/modelProxy.js'
 import { ensureSafetySystemMessages } from './promptCompiler.js'
 import { evaluateTaskAcceptance, parseTaskEvaluation } from './jobWorkflow.js'
+import { evaluateTaskVerificationAcceptance } from './jobTaskAcceptance.js'
 
 const MAX_REVIEW_TEXT_CHARS = 24_000
 const MAX_REVIEW_EVIDENCE_CHARS = 12_000
@@ -96,6 +97,9 @@ export function createTaskReviewer({
 
   return async function reviewTask(input = {}) {
     const workerModel = clean(input.workerModelName || input.job?.modelName)
+    const hostVerification = evaluateTaskVerificationAcceptance(input)
+    if (hostVerification) return hostVerification
+
     const hasDistinctReviewer = configuredReviewerModel
       && workerModel
       && configuredReviewerModel !== workerModel

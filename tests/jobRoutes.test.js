@@ -44,12 +44,18 @@ test('job routes create, fetch, and cancel jobs', async () => {
     const createdResponse = await fetch(`http://127.0.0.1:${port}/api/jobs`, {
       method: 'POST',
       headers: authHeaders,
-      body: JSON.stringify({ prompt: '生成 2 份周报', requirePlanApproval: true }),
+      body: JSON.stringify({ prompt: '生成 2 份周报', requirePlanApproval: true, autoRetry: true }),
     })
     assert.equal(createdResponse.status, 201)
     const created = await createdResponse.json()
     assert.equal(created.job.title, '生成 2 份周报')
     assert.equal(created.job.steps.find((step) => step.kind === 'plan').input.requirePlanApproval, true)
+    assert.deepEqual(created.job.autoRetry, {
+      enabled: true,
+      maxAttempts: 2,
+      attempts: 0,
+      baseDelayMs: 1_000,
+    })
 
     const detailResponse = await fetch(`http://127.0.0.1:${port}/api/jobs/${created.job.id}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -378,7 +384,7 @@ test('one user cannot fetch another user\'s job', async () => {
 test('job event stream sends proxy-safe SSE headers and releases its subscription on disconnect', async () => {
   const { token } = issueTestSession()
   const runtime = getJobRuntime()
-  const listenersBefore = runtime.listeners.size
+  const listenersBefore = runtime.eventListenerCount
   const server = createAppServer({ getEnv: () => ({}) })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
@@ -404,14 +410,14 @@ test('job event stream sends proxy-safe SSE headers and releases its subscriptio
     const reader = streamResponse.body.getReader()
     const firstChunk = await reader.read()
     assert.match(new TextDecoder().decode(firstChunk.value), /event: ready[\s\S]*data: \{"ok":true\}/)
-    assert.equal(runtime.listeners.size, listenersBefore + 1)
+    assert.equal(runtime.eventListenerCount, listenersBefore + 1)
 
     controller.abort()
     await reader.cancel().catch(() => {})
-    for (let attempt = 0; attempt < 20 && runtime.listeners.size !== listenersBefore; attempt += 1) {
+    for (let attempt = 0; attempt < 20 && runtime.eventListenerCount !== listenersBefore; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
-    assert.equal(runtime.listeners.size, listenersBefore)
+    assert.equal(runtime.eventListenerCount, listenersBefore)
   } finally {
     controller.abort()
     await new Promise((resolve) => server.close(resolve))

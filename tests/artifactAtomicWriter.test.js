@@ -13,6 +13,23 @@ function temporaryFiles(directory) {
   return fs.readdirSync(directory).filter((name) => name.endsWith('.tmp'))
 }
 
+test('generated artifact writer rejects Windows device basenames on every platform', () => {
+  const directory = fixture()
+
+  for (const preferredFilename of ['NUL.pdf', 'CON.backup.pdf', 'COM1.log.xlsx']) {
+    assert.throws(
+      () => writeGeneratedArtifactAtomically({
+        artifactDirectory: directory,
+        preferredFilename,
+        contents: Buffer.from('must-not-be-written'),
+      }),
+      /invalid generated artifact filename/,
+      preferredFilename,
+    )
+  }
+  assert.deepEqual(fs.readdirSync(directory), [])
+})
+
 test('generated artifact write failure never exposes a partial final file', () => {
   const directory = fixture()
   const fileSystem = Object.create(fs)

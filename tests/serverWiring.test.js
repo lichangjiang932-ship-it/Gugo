@@ -118,7 +118,19 @@ test('server entrypoint performs one preflight and reuses its resolved environme
   )
   const hostSource = fs.readFileSync(new URL('../server/appServer.js', import.meta.url), 'utf8')
 
-  assert.match(entrySource, /await startRuntimeServer\(\{ cwd: process\.cwd\(\), env: process\.env \}\)/)
+  assert.match(
+    entrySource,
+    /import \{ SERVER_APPLICATION_ROOT \} from '\.\/utils\/serverApplicationRoot\.js'/,
+  )
+  assert.match(
+    entrySource,
+    /await startRuntimeServer\(\{ cwd: SERVER_APPLICATION_ROOT, env: process\.env \}\)/,
+  )
+  assert.doesNotMatch(entrySource, /cwd: process\.cwd\(\)/)
+  assert.match(
+    hostSource,
+    /await startRuntimeServer\(\{ cwd: rootDir, env: process\.env \}\)/,
+  )
   assert.equal(startupSource.match(/preflight\(\{ cwd, env \}\)/g)?.length, 1)
   assert.match(
     startupSource,

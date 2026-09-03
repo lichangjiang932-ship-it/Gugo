@@ -4,6 +4,7 @@ import {
   parseNativeProviderResponse,
 } from './nativeModelProviders.js'
 import { normalizeModelUsage, normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
+import { createEmptyModelResponseError } from './sseLifecycle.js'
 
 export function stripEmbeddedReasoning(value) {
   const text = String(value || '')
@@ -140,7 +141,7 @@ export function parseOpenAICompatibleResponse(data) {
   const responseError = extractModelResponseError(data)
   if (responseError) throw responseError
   const reply = extractModelResponseText(data)
-  if (!reply) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')
+  if (!reply) throw createEmptyModelResponseError()
   return stripEmbeddedReasoning(reply)
 }
 

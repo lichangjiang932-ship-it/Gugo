@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { registerTemporaryArtifactPreview } from './artifactPreviewGrantStore.js'
+import { isSafeArtifactFilename } from './artifactStorage.js'
 
 const LINK_UNSUPPORTED_CODES = new Set([
   'EACCES',
@@ -100,7 +101,7 @@ export function writeGeneratedArtifactAtomically({
 } = {}) {
   const directory = path.resolve(String(artifactDirectory || ''))
   const preferred = String(preferredFilename || '')
-  if (!preferred || preferred !== path.basename(preferred)) {
+  if (!isSafeArtifactFilename(preferred)) {
     throw new Error('invalid generated artifact filename')
   }
   fileSystem.mkdirSync(directory, { recursive: true })

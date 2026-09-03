@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { getArtifactDir } from './artifactGen.js'
+import { getArtifactDir } from './artifactStorage.js'
 import { getHtmlArtifactAsset, htmlArtifactAssetIds } from './htmlArtifactAssets.js'
 import { getArtifactById, listArtifactsByFilename } from './jobStore.js'
 import { getTurnArtifactByIdForUser, listTurnArtifactsByFilename } from './turnArtifactStore.js'

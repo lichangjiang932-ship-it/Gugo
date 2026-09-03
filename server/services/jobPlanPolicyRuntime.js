@@ -274,6 +274,7 @@ export async function persistGuardedGeneratedPlan({
   sourceType,
   sourceId,
   grants,
+  autoRetry,
   taskPlanGuard,
 }) {
   const guarded = await prepareGuardedTaskPlan({
@@ -295,6 +296,7 @@ export async function persistGuardedGeneratedPlan({
     sourceType,
     sourceId,
     grants,
+    autoRetry,
     planGuard: guarded.planGuard,
   })
   return { event, plan: guarded.plan }
@@ -310,6 +312,7 @@ export async function persistGuardedStructuredPlan({
   modelProviderId,
   modelConfigRevision,
   taskPlanGuard,
+  autoRetry,
 }) {
   const guarded = await prepareGuardedTaskPlan({
     plan: {
@@ -336,6 +339,7 @@ export async function persistGuardedStructuredPlan({
     sourceType: null,
     sourceId: null,
     grants: [],
+    autoRetry,
     planGuard: guarded.planGuard,
   })
   return { event, plan: guarded.plan }

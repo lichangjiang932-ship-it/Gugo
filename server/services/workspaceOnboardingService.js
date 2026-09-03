@@ -36,6 +36,20 @@ function samePath(left, right) {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
+function isFilesystemRoot(rootPath) {
+  const resolved = path.resolve(rootPath)
+  return samePath(resolved, path.parse(resolved).root)
+}
+
+function selectDefaultWorkspacePath({ userId, onboarding, preferredRoot }) {
+  const trustedDirectories = onboarding.writableDirectories.filter((entry) => (
+    getWorkspaceTrustStatus({ userId, rootPath: entry.path }).trusted
+  ))
+  return trustedDirectories.find((entry) => samePath(entry.path, preferredRoot))?.path
+    || trustedDirectories[0]?.path
+    || ''
+}
+
 function normalizeFeatures(features) {
   if (!features || typeof features !== 'object' || Array.isArray(features)) {
     throw serviceError('features must be an object', 400, 'INVALID_WORKSPACE_FEATURES')
@@ -85,6 +99,68 @@ export function getWorkspaceOnboardingStatus({
   }
 }
 
+export function ensureDefaultLocalWorkspace({
+  userId,
+  cwd = process.cwd(),
+  env = process.env,
+  authorizeLocalOwner,
+} = {}) {
+  if (typeof authorizeLocalOwner !== 'function' || authorizeLocalOwner(userId, env) !== true) {
+    throw serviceError(
+      'default workspace setup is restricted to the local owner',
+      403,
+      'LOCAL_OWNER_ONLY',
+    )
+  }
+  const rootPath = canonicalizeWorkspaceRoot(
+    path.resolve(String(env.WORKSPACE_ROOT || '').trim() || cwd),
+  )
+  const onboarding = getWorkspaceOnboardingStatus({ userId, cwd, env })
+  const selectedDefault = selectDefaultWorkspacePath({
+    userId,
+    onboarding,
+    preferredRoot: rootPath,
+  })
+  const preferredRootTrusted = getWorkspaceTrustStatus({ userId, rootPath }).trusted
+  if (onboarding.completedAt) {
+    if ((selectedDefault && samePath(selectedDefault, rootPath))
+      || preferredRootTrusted
+      || isFilesystemRoot(rootPath)) {
+      return {
+        ...getLocalFileAccessStatus({ userId }),
+        onboarding,
+        defaultWorkspacePath: selectedDefault,
+      }
+    }
+  }
+  if (isFilesystemRoot(rootPath)) {
+    throw serviceError(
+      'default workspace cannot be a filesystem root',
+      403,
+      'DEFAULT_WORKSPACE_ROOT_FORBIDDEN',
+    )
+  }
+
+  const features = Object.fromEntries(Object.entries(onboarding.features).map(([name, state]) => (
+    [name, onboarding.completedAt ? state.enabled : true]
+  )))
+  const approvalMode = onboarding.completedAt ? onboarding.approvalMode : 'normal'
+  const configured = configureWorkspaceOnboarding({
+    userId,
+    rootPath,
+    features,
+    approvalMode,
+    confirmation: 'ENABLE_WORKSPACE_CAPABILITIES',
+    ...(approvalMode === 'bypass'
+      ? { bypassConfirmation: 'BYPASS_ALL_APPROVALS' }
+      : {}),
+    preserveDeploymentLocks: true,
+    cwd,
+    env,
+  })
+  return { ...configured, defaultWorkspacePath: rootPath }
+}
+
 export function configureWorkspaceOnboarding({
   userId,
   rootPath,
@@ -92,6 +168,7 @@ export function configureWorkspaceOnboarding({
   approvalMode = 'normal',
   confirmation,
   bypassConfirmation,
+  preserveDeploymentLocks = false,
   cwd = process.cwd(),
   env = process.env,
 } = {}) {
@@ -106,8 +183,12 @@ export function configureWorkspaceOnboarding({
     throw serviceError('bypass mode requires separate confirmation', 400, 'BYPASS_CONFIRMATION_REQUIRED')
   }
 
-  const envFeatures = normalizeFeatures(features)
   const runtimeBefore = getWorkspaceRuntimeConfiguration({ cwd, env })
+  const requestedFeatures = normalizeFeatures(features)
+  const envFeatures = Object.fromEntries(Object.entries(requestedFeatures).map(([envKey, enabled]) => {
+    const state = runtimeBefore.features[envKey]
+    return [envKey, preserveDeploymentLocks && state.locked ? state.enabled : enabled]
+  }))
   const locks = Object.entries(envFeatures).flatMap(([envKey, enabled]) => {
     const state = runtimeBefore.features[envKey]
     return state.locked && state.enabled !== enabled

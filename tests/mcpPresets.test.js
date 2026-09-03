@@ -55,8 +55,8 @@ test('MCP preset returns independent mutable editor values', () => {
   assert.equal(findInstalledMcpPreset([], 'chrome-devtools'), null)
 })
 
-test('Chrome DevTools MCP preset and Access installer have complete five-language copy', () => {
-  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('Chrome DevTools MCP preset and Access installer have complete bilingual copy', () => {
+  for (const lang of ['zh', 'en']) {
     assert.ok(lookup(translations[lang], 'mcp.chromeDevtoolsPreset'))
     for (const key of ['access.filterMcp', 'access.mcpTitle', 'access.capabilityMcp', 'access.chromeDevtoolsMcpDesc', 'access.installMcp', 'access.mcpReady']) {
       assert.ok(lookup(translations[lang], key), `${lang} missing ${key}`)
@@ -64,8 +64,8 @@ test('Chrome DevTools MCP preset and Access installer have complete five-languag
   }
 })
 
-test('New MCP presets ship five-language descriptions', () => {
-  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('New MCP presets ship bilingual descriptions', () => {
+  for (const lang of ['zh', 'en']) {
     for (const key of ['access.fetchMcpDesc', 'access.fetchMcpHint', 'access.sequentialThinkingMcpDesc', 'access.sequentialThinkingMcpHint', 'access.memoryMcpDesc', 'access.memoryMcpHint', 'access.playwrightMcpDesc', 'access.playwrightMcpHint']) {
       assert.ok(lookup(translations[lang], key), `${lang} missing ${key}`)
     }
@@ -100,7 +100,7 @@ test('Puppeteer preset is a zero-credential browser automation option', () => {
   assert.deepEqual(preset.env, {})
 })
 
-test('New credential-backed MCP presets ship five-language copy', () => {
+test('New credential-backed MCP presets ship bilingual copy', () => {
   const keys = [
     'access.githubMcpDesc', 'access.githubMcpHint',
     'access.braveSearchMcpDesc', 'access.braveSearchMcpHint',
@@ -108,7 +108,7 @@ test('New credential-backed MCP presets ship five-language copy', () => {
     'access.postgresMcpDesc', 'access.postgresMcpHint',
     'access.puppeteerMcpDesc', 'access.puppeteerMcpHint',
   ]
-  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+  for (const lang of ['zh', 'en']) {
     for (const key of keys) {
       assert.ok(lookup(translations[lang], key), `${lang} missing ${key}`)
     }

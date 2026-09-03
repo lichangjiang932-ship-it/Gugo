@@ -13,6 +13,10 @@ const sessionListSource = fs.readFileSync(
   new URL('../src/components/leftRail/SessionList.jsx', import.meta.url),
   'utf8',
 )
+const leftRailSource = fs.readFileSync(
+  new URL('../src/components/LeftRail.jsx', import.meta.url),
+  'utf8',
+)
 
 test('session history is one continuous newest-first list', () => {
   const sessions = [
@@ -57,6 +61,11 @@ test('workspace sessions group by normalized path while plain sessions remain in
   assert.deepEqual(grouped.projects.map(({ name }) => name), ['Alpha custom', 'Empty project'])
   assert.deepEqual(grouped.projects[0].sessions.map(({ id }) => id), ['newer', 'older'])
   assert.deepEqual(grouped.projects[1].sessions, [])
+})
+
+test('the production session rail derives project groups only from visible sessions', () => {
+  assert.doesNotMatch(leftRailSource, /readStoredChatProjects|CHAT_PROJECTS_STORAGE_KEY/)
+  assert.doesNotMatch(leftRailSource, /storedProjects=/)
 })
 
 test('timestampOf accepts message timestamps and rejects invalid values', () => {

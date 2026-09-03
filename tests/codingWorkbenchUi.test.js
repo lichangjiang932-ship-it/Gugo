@@ -18,7 +18,7 @@ test('chat composer removes local-file and quick-skill clutter', () => {
   const settings = fs.readFileSync(new URL('../src/pages/SettingsView.jsx', import.meta.url), 'utf8')
   assert.doesNotMatch(settings, /import LocalFilesPanel/)
   assert.doesNotMatch(settings, /return <LocalFilesPanel/)
-  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+  for (const lang of ['zh', 'en']) {
     assert.ok(lookup(translations[lang], 'localFiles.chatAction'))
   }
 })
@@ -44,7 +44,7 @@ test('model management has a dedicated settings page and refreshes the chat mode
   assert.match(rail, /addEventListener\('auth:required'/)
   assert.match(rail, /login\.target \|\| defaultPath/)
   assert.match(runtimeCatalog, /addEventListener\('model-providers:changed'/)
-  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+  for (const lang of ['zh', 'en']) {
     assert.ok(lookup(translations[lang], 'chat.modelPicker.manage'))
   }
 })

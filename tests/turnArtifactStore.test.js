@@ -40,6 +40,9 @@ const {
   createPptx,
   createXlsx,
 } = await import('../server/services/artifactGen.js')
+const {
+  verifyPublishedArtifact,
+} = await import('../server/services/artifactLocalPublicationStaging.js')
 const { getSideEffectExecutionLedger } = await import('../server/services/sideEffectExecutionLedger.js')
 const {
   isLocalMutationCall,
@@ -51,6 +54,26 @@ function isPublicationMarkerLink(args) {
   return String(args[1] || '').includes(`${path.sep}.artifact-publications${path.sep}`)
 }
 
+function isPublicationLockLink(args) {
+  const source = path.basename(String(args[0] || ''))
+  const target = path.basename(String(args[1] || ''))
+  return target.startsWith('.publish-')
+    && target.endsWith('.lock')
+    && source.startsWith(`.${target}-`)
+    && source.endsWith('.tmp')
+}
+
+function isPublicationMetadataLink(args) {
+  return isPublicationMarkerLink(args) || isPublicationLockLink(args)
+}
+
+function isPublicationLockTemporary(target, lockPath) {
+  const targetPath = String(target || '')
+  return path.dirname(targetPath) === path.dirname(lockPath)
+    && path.basename(targetPath).startsWith(`.${path.basename(lockPath)}-`)
+    && path.basename(targetPath).endsWith('.tmp')
+}
+
 function statWithFileIdentity(stat, identity) {
   return new Proxy(stat, {
     get(target, property) {
@@ -59,6 +82,21 @@ function statWithFileIdentity(stat, identity) {
       return typeof value === 'function' ? value.bind(target) : value
     },
   })
+}
+
+function errorChain(root) {
+  const found = []
+  const pending = [root]
+  const visited = new Set()
+  while (pending.length > 0) {
+    const current = pending.shift()
+    if (!current || visited.has(current)) continue
+    visited.add(current)
+    found.push(current)
+    if (current.cause) pending.push(current.cause)
+    if (current instanceof AggregateError) pending.push(...current.errors)
+  }
+  return found
 }
 
 function stablePublicationPaths(filename, publicationKey) {
@@ -114,6 +152,28 @@ function publicationAttemptResidue(publicationKey) {
   }
 }
 
+function artifactCleanupClaims() {
+  const directories = [
+    process.env.ARTIFACT_DIR,
+    path.join(process.env.ARTIFACT_DIR, '.artifact-publications'),
+  ]
+  return directories.flatMap((directory) => {
+    if (!fs.existsSync(directory)) return []
+    return fs.readdirSync(directory)
+      .filter((name) => name.startsWith('.artifact-cleanup-') && name.endsWith('.tmp'))
+      .map((name) => path.join(directory, name))
+  })
+}
+
+function linkedRecordTemporaries(recordPath) {
+  const directory = path.dirname(recordPath)
+  if (!fs.existsSync(directory)) return []
+  const prefix = `.${path.basename(recordPath)}-`
+  return fs.readdirSync(directory)
+    .filter((name) => name.startsWith(prefix) && name.endsWith('.tmp'))
+    .map((name) => path.join(directory, name))
+}
+
 function cleanupPublicationTestResidue(filename, publicationKey) {
   const { digest, lockPath, stagingPaths } = publicationAttemptResidue(publicationKey)
   const { artifactPath, markerPath } = stablePublicationPaths(filename, publicationKey)
@@ -124,6 +184,8 @@ function cleanupPublicationTestResidue(filename, publicationKey) {
   for (const target of [
     ...stagingPaths,
     ...markerEntries,
+    ...linkedRecordTemporaries(lockPath),
+    ...artifactCleanupClaims(),
     lockPath,
     artifactPath,
     `${artifactPath}.displaced`,
@@ -565,54 +627,17 @@ test('failed old lock initialization never removes a replacement lock owner', as
   const successorLock = JSON.stringify({ owner: 'successor-lock' })
   fs.writeFileSync(sourcePath, '%PDF-1.4\nlock-owner-aba')
 
-  const originalOpen = fs.promises.open
-  const originalLstat = fs.promises.lstat
+  const originalLink = fs.promises.link
   let injected = false
-  let retiredIdentity = null
-  fs.promises.open = async (target, flags, ...args) => {
-    const handle = await originalOpen(target, flags, ...args)
-    if (String(target) === lockPath && flags === 'r' && injected && retiredIdentity) {
-      return {
-        stat: async (...statArgs) => statWithFileIdentity(
-          await handle.stat(...statArgs),
-          retiredIdentity,
-        ),
-        readFile: (...readArgs) => handle.readFile(...readArgs),
-        close: (...closeArgs) => handle.close(...closeArgs),
-      }
-    }
-    if (String(target) !== lockPath || flags !== 'wx' || injected) return handle
-    let closed = false
-    return {
-      stat: async (...statArgs) => {
-        const stat = await handle.stat(...statArgs)
-        retiredIdentity ||= stat
-        return stat
-      },
-      writeFile: (...writeArgs) => handle.writeFile(...writeArgs),
-      sync: async () => {
-        await handle.close()
-        closed = true
-        fs.unlinkSync(lockPath)
-        fs.writeFileSync(lockPath, successorLock, { flag: 'wx' })
-        injected = true
-        const error = new Error('injected lock initialization failure after replacement')
-        error.code = 'EIO'
-        throw error
-      },
-      close: async () => {
-        if (!closed) await handle.close()
-        closed = true
-      },
-    }
-  }
-  fs.promises.lstat = async (target, ...args) => {
-    const stat = await originalLstat(target, ...args)
-    const isLockCleanupClaim = path.dirname(String(target)) === path.dirname(lockPath)
-      && path.basename(String(target)).startsWith('.artifact-cleanup-')
-    return injected && retiredIdentity && (String(target) === lockPath || isLockCleanupClaim)
-      ? statWithFileIdentity(stat, retiredIdentity)
-      : stat
+  fs.promises.link = async (source, target, ...args) => {
+    if (String(target) !== lockPath || injected) return originalLink(source, target, ...args)
+    await originalLink(source, target, ...args)
+    fs.unlinkSync(lockPath)
+    fs.writeFileSync(lockPath, successorLock, { flag: 'wx' })
+    injected = true
+    const error = new Error('injected lock initialization failure after replacement')
+    error.code = 'EIO'
+    throw error
   }
   try {
     await assert.rejects(
@@ -622,8 +647,7 @@ test('failed old lock initialization never removes a replacement lock owner', as
     assert.equal(injected, true)
     assert.equal(fs.readFileSync(lockPath, 'utf8'), successorLock)
   } finally {
-    fs.promises.open = originalOpen
-    fs.promises.lstat = originalLstat
+    fs.promises.link = originalLink
     fs.rmSync(lockPath, { force: true })
   }
 })
@@ -677,8 +701,7 @@ test('failed old publication never removes a successor marker at the same path',
     fs.promises.link = originalLink
     fs.promises.lstat = originalLstat
     fs.promises.rename = originalRename
-    fs.rmSync(markerPath, { force: true })
-    fs.rmSync(artifactPath, { force: true })
+    cleanupPublicationTestResidue(filename, publicationKey)
   }
 })
 
@@ -748,7 +771,7 @@ test('stable publication falls back to exclusive copy when the artifact filesyst
   const originalLink = fs.promises.link
   let linkAttempts = 0
   fs.promises.link = async (...args) => {
-    if (isPublicationMarkerLink(args)) return originalLink(...args)
+    if (isPublicationMetadataLink(args)) return originalLink(...args)
     linkAttempts += 1
     const error = new Error('hard links are unavailable on this test filesystem')
     error.code = 'EPERM'
@@ -772,6 +795,1038 @@ test('stable publication falls back to exclusive copy when the artifact filesyst
   } finally {
     fs.promises.link = originalLink
   }
+})
+
+test('a partially written private lock stage never exposes a partial canonical lock', async (t) => {
+  const filename = 'partial-live-lock.pdf'
+  const publicationKey = 'partial-live-lock'
+  const sourcePath = path.join(tempDir, filename)
+  const content = '%PDF-1.4\npartial-live-lock'
+  const { artifactPath, lockPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalOpen = fs.promises.open
+  const originalLink = fs.promises.link
+  let signalPartialWritten
+  let allowLockWrite
+  let signalCanonicalClaimed
+  let allowCanonicalLinkReturn
+  let signalContenderLinkAttempted
+  const partialWritten = new Promise((resolve) => { signalPartialWritten = resolve })
+  const lockWriteAllowed = new Promise((resolve) => { allowLockWrite = resolve })
+  const canonicalClaimed = new Promise((resolve) => { signalCanonicalClaimed = resolve })
+  const canonicalLinkReturnAllowed = new Promise((resolve) => { allowCanonicalLinkReturn = resolve })
+  const contenderLinkAttempted = new Promise((resolve) => { signalContenderLinkAttempted = resolve })
+  let firstLockWrapped = false
+  let partialContents = null
+  let privateLockPath = ''
+  let canonicalLinkAttempts = 0
+  let firstPublication = null
+  let secondPublication = null
+
+  fs.promises.open = async (target, flags, ...args) => {
+    const handle = await originalOpen(target, flags, ...args)
+    if (isPublicationLockTemporary(target, lockPath) && flags === 'wx' && !firstLockWrapped) {
+      firstLockWrapped = true
+      privateLockPath = String(target)
+      return {
+        stat: (...statArgs) => handle.stat(...statArgs),
+        writeFile: async (value) => {
+          const complete = Buffer.from(String(value), 'utf8')
+          partialContents = complete.subarray(0, Math.max(1, Math.floor(complete.length / 3)))
+          await handle.write(partialContents, 0, partialContents.length, 0)
+          await handle.truncate(partialContents.length)
+          signalPartialWritten()
+          await lockWriteAllowed
+          await handle.write(complete, 0, complete.length, 0)
+          await handle.truncate(complete.length)
+        },
+        sync: (...syncArgs) => handle.sync(...syncArgs),
+        close: (...closeArgs) => handle.close(...closeArgs),
+      }
+    }
+    return handle
+  }
+  fs.promises.link = async (...args) => {
+    if (String(args[1]) !== lockPath) return originalLink(...args)
+    canonicalLinkAttempts += 1
+    if (canonicalLinkAttempts === 1) {
+      const linked = await originalLink(...args)
+      signalCanonicalClaimed()
+      await canonicalLinkReturnAllowed
+      return linked
+    }
+    signalContenderLinkAttempted()
+    return originalLink(...args)
+  }
+
+  try {
+    firstPublication = createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    await partialWritten
+    assert.ok(privateLockPath)
+    assert.deepEqual(fs.readFileSync(privateLockPath), partialContents)
+    assert.equal(fs.existsSync(lockPath), false)
+
+    secondPublication = createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    await canonicalClaimed
+    const canonicalOwner = JSON.parse(fs.readFileSync(lockPath, 'utf8'))
+    assert.equal(canonicalOwner.publicationDigest.length, 64)
+    assert.notDeepEqual(fs.readFileSync(lockPath), partialContents)
+    assert.equal(fs.existsSync(artifactPath), false)
+
+    allowLockWrite()
+    await contenderLinkAttempted
+    assert.equal(fs.existsSync(lockPath), true)
+    assert.equal(fs.existsSync(artifactPath), false)
+
+    allowCanonicalLinkReturn()
+    const [first, second] = await Promise.all([firstPublication, secondPublication])
+    assert.equal(first.fullPath, artifactPath)
+    assert.equal(second.fullPath, artifactPath)
+    assert.equal(first.publicationReconciled, true)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+  } finally {
+    allowLockWrite()
+    allowCanonicalLinkReturn()
+    fs.promises.open = originalOpen
+    fs.promises.link = originalLink
+    await Promise.allSettled([firstPublication, secondPublication].filter(Boolean))
+  }
+})
+
+test('a half-written failed lock initialization removes its inode and permits retry', async (t) => {
+  const filename = 'partial-lock-eio.pdf'
+  const publicationKey = 'partial-lock-eio'
+  const sourcePath = path.join(tempDir, filename)
+  const content = '%PDF-1.4\npartial-lock-eio'
+  const { artifactPath, lockPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalOpen = fs.promises.open
+  const initializationError = Object.assign(
+    new Error('injected half-written publication lock failure'),
+    { code: 'EIO' },
+  )
+  let injected = false
+  let privateLockPath = ''
+  fs.promises.open = async (target, flags, ...args) => {
+    const handle = await originalOpen(target, flags, ...args)
+    if (!isPublicationLockTemporary(target, lockPath) || flags !== 'wx' || injected) return handle
+    injected = true
+    privateLockPath = String(target)
+    return {
+      stat: (...statArgs) => handle.stat(...statArgs),
+      writeFile: async (value) => {
+        const partial = Buffer.from(String(value), 'utf8').subarray(0, 13)
+        await handle.write(partial, 0, partial.length, 0)
+        await handle.truncate(partial.length)
+        throw initializationError
+      },
+      sync: (...syncArgs) => handle.sync(...syncArgs),
+      close: (...closeArgs) => handle.close(...closeArgs),
+    }
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => errorChain(error).includes(initializationError),
+    )
+    assert.equal(injected, true)
+    assert.ok(privateLockPath)
+    assert.equal(fs.existsSync(privateLockPath), false)
+    assert.equal(fs.existsSync(lockPath), false)
+
+    const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(retried.fullPath, artifactPath)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    assert.equal(fs.existsSync(lockPath), false)
+  } finally {
+    fs.promises.open = originalOpen
+  }
+})
+
+test('a linked lock temporary survives one unlink failure and is reclaimed during release', async (t) => {
+  const filename = 'partial-lock-cleanup-retry.pdf'
+  const publicationKey = 'partial-lock-cleanup-retry'
+  const sourcePath = path.join(tempDir, filename)
+  const content = '%PDF-1.4\npartial-lock-cleanup-retry'
+  const { artifactPath, lockPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalUnlink = fs.promises.unlink
+  let lockCleanupFailureInjected = false
+  let retainedLockTemporary = ''
+  fs.promises.unlink = async (target, ...args) => {
+    if (!lockCleanupFailureInjected
+      && isPublicationLockTemporary(target, lockPath)
+      && fs.existsSync(lockPath)) {
+      lockCleanupFailureInjected = true
+      retainedLockTemporary = String(target)
+      const error = new Error('injected linked lock temporary cleanup failure')
+      error.code = 'EPERM'
+      throw error
+    }
+    return originalUnlink(target, ...args)
+  }
+
+  try {
+    const published = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(lockCleanupFailureInjected, true)
+    assert.ok(retainedLockTemporary)
+    assert.equal(published.fullPath, artifactPath)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    assert.equal(fs.existsSync(lockPath), false)
+    assert.equal(fs.existsSync(retainedLockTemporary), false)
+    assert.deepEqual(artifactCleanupClaims(), [])
+    assert.deepEqual(publicationAttemptResidue(publicationKey).stagingPaths, [])
+    assert.deepEqual(publicationAttemptResidue(publicationKey).attemptRecords, [])
+  } finally {
+    fs.promises.unlink = originalUnlink
+  }
+})
+
+test('publication preserves a primary failure when release cleanup also fails', async (t) => {
+  const filename = 'primary-and-cleanup-failure.pdf'
+  const publicationKey = 'primary-and-cleanup-failure'
+  const sourcePath = path.join(tempDir, filename)
+  const { artifactPath, lockPath, markerPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, '%PDF-1.4\nprimary-and-cleanup-failure')
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalLink = fs.promises.link
+  const originalRename = fs.promises.rename
+  const primaryError = Object.assign(new Error('injected primary publication failure'), {
+    code: 'EINJECTED_PRIMARY',
+  })
+  let primaryInjected = false
+  let cleanupInjected = false
+  fs.promises.link = async (source, target, ...args) => {
+    if (!primaryInjected && String(target) === markerPath) {
+      primaryInjected = true
+      throw primaryError
+    }
+    return originalLink(source, target, ...args)
+  }
+  fs.promises.rename = async (source, target, ...args) => {
+    if (!cleanupInjected && String(source) === lockPath) {
+      cleanupInjected = true
+      const error = new Error('injected cleanup failure after primary failure')
+      error.code = 'EPERM'
+      throw error
+    }
+    return originalRename(source, target, ...args)
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => {
+        const nested = errorChain(error)
+        assert.ok(error === primaryError || error instanceof AggregateError)
+        assert.ok(nested.includes(primaryError))
+        assert.ok(nested.some((entry) => entry?.code === 'ARTIFACT_PUBLICATION_CLEANUP_FAILED'))
+        return true
+      },
+    )
+    assert.equal(primaryInjected, true)
+    assert.equal(cleanupInjected, true)
+    assert.equal(fs.existsSync(artifactPath), false)
+    assert.equal(fs.existsSync(lockPath), true)
+
+    const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(retried.fullPath, artifactPath)
+    assert.equal(fs.existsSync(lockPath), false)
+  } finally {
+    fs.promises.link = originalLink
+    fs.promises.rename = originalRename
+  }
+})
+
+test('marker-conflict cleanup failure preserves the ownership error and retained lease', async (t) => {
+  const filename = 'marker-conflict-cleanup-failure.pdf'
+  const publicationKey = 'marker-conflict-cleanup-failure'
+  const sourcePath = path.join(tempDir, filename)
+  const content = '%PDF-1.4\nmarker-conflict-cleanup-failure'
+  const competitor = '%PDF-1.4\nmarker-conflict-competitor'
+  const { artifactPath, lockPath, markerPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalLink = fs.promises.link
+  const originalRename = fs.promises.rename
+  const cleanupError = Object.assign(
+    new Error('injected marker conflict cleanup failure'),
+    { code: 'EPERM' },
+  )
+  let competitorInjected = false
+  let cleanupFailureInjected = false
+  fs.promises.link = async (...args) => {
+    if (isPublicationMetadataLink(args)) return originalLink(...args)
+    if (!competitorInjected && String(args[1]) === artifactPath) {
+      competitorInjected = true
+      fs.writeFileSync(artifactPath, competitor, { flag: 'wx' })
+      const error = new Error('simulated non-cooperating artifact winner')
+      error.code = 'EEXIST'
+      throw error
+    }
+    return originalLink(...args)
+  }
+  fs.promises.rename = async (source, target, ...args) => {
+    if (!cleanupFailureInjected && String(source) === markerPath) {
+      cleanupFailureInjected = true
+      throw cleanupError
+    }
+    return originalRename(source, target, ...args)
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => {
+        const nested = errorChain(error)
+        assert.equal(error?.code, 'ARTIFACT_PUBLICATION_OWNERSHIP_CONFLICT')
+        assert.ok(nested.includes(cleanupError))
+        assert.ok(nested.some((entry) => entry?.code === 'ARTIFACT_PUBLICATION_CLEANUP_FAILED'))
+        return true
+      },
+    )
+    assert.equal(competitorInjected, true)
+    assert.equal(cleanupFailureInjected, true)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), competitor)
+    assert.equal(fs.existsSync(markerPath), true)
+    assert.equal(fs.existsSync(lockPath), true)
+    assert.deepEqual(publicationAttemptResidue(publicationKey).stagingPaths, [])
+    assert.deepEqual(publicationAttemptResidue(publicationKey).attemptRecords, [])
+
+    fs.unlinkSync(artifactPath)
+    const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(retried.fullPath, artifactPath)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    assert.equal(fs.existsSync(lockPath), false)
+  } finally {
+    fs.promises.link = originalLink
+    fs.promises.rename = originalRename
+  }
+})
+
+test('stage-record read failure remains in the cleanup cause chain', async (t) => {
+  const filename = 'stage-record-read-cleanup-failure.pdf'
+  const publicationKey = 'stage-record-read-cleanup-failure'
+  const sourcePath = path.join(tempDir, filename)
+  const content = '%PDF-1.4\nstage-record-read-cleanup-failure'
+  const { artifactPath, lockPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalLink = fs.promises.link
+  const originalOpen = fs.promises.open
+  const primaryError = Object.assign(new Error('injected post-stage publication failure'), {
+    code: 'EIO',
+  })
+  const cleanupReadError = Object.assign(new Error('injected stage-record read failure'), {
+    code: 'EIO',
+  })
+  let primaryInjected = false
+  let cleanupReadInjected = false
+  fs.promises.link = async (...args) => {
+    if (isPublicationMetadataLink(args)) return originalLink(...args)
+    if (!primaryInjected && String(args[1]) === artifactPath) {
+      primaryInjected = true
+      throw primaryError
+    }
+    return originalLink(...args)
+  }
+  fs.promises.open = async (target, flags, ...args) => {
+    if (primaryInjected
+      && !cleanupReadInjected
+      && String(target).endsWith('.stage.json')
+      && flags === 'r') {
+      cleanupReadInjected = true
+      throw cleanupReadError
+    }
+    return originalOpen(target, flags, ...args)
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => {
+        const nested = errorChain(error)
+        assert.ok(nested.includes(primaryError))
+        assert.ok(nested.includes(cleanupReadError))
+        assert.ok(nested.some((entry) => entry?.code === 'ARTIFACT_PUBLICATION_CLEANUP_FAILED'))
+        return true
+      },
+    )
+    assert.equal(primaryInjected, true)
+    assert.equal(cleanupReadInjected, true)
+    assert.equal(fs.existsSync(artifactPath), false)
+    assert.equal(fs.existsSync(lockPath), true)
+    const retained = publicationAttemptResidue(publicationKey)
+    assert.equal(retained.stagingPaths.length, 1)
+    assert.equal(retained.attemptRecords.filter((entry) => entry.endsWith('.stage.json')).length, 1)
+
+    const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(retried.fullPath, artifactPath)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    assert.equal(fs.existsSync(lockPath), false)
+    assert.deepEqual(publicationAttemptResidue(publicationKey).stagingPaths, [])
+    assert.deepEqual(publicationAttemptResidue(publicationKey).attemptRecords, [])
+  } finally {
+    fs.promises.link = originalLink
+    fs.promises.open = originalOpen
+  }
+})
+
+test('failed staging write retains its record and lock until staging cleanup can be confirmed', async (t) => {
+  const filename = 'staging-write-and-cleanup-failure.pdf'
+  const publicationKey = 'staging-write-and-cleanup-failure'
+  const sourcePath = path.join(tempDir, filename)
+  const content = `%PDF-1.4\n${'staging-cleanup-recovery-'.repeat(64)}`
+  const { artifactPath, lockPath } = stablePublicationPaths(filename, publicationKey)
+  const publicationDigest = crypto.createHash('sha256').update(publicationKey).digest('hex')
+  const stagingPrefix = path.join(
+    process.env.ARTIFACT_DIR,
+    `.publish-${publicationDigest.slice(0, 20)}-`,
+  )
+  const isAttemptStagingPath = (target) => String(target).startsWith(stagingPrefix)
+    && String(target).endsWith('.tmp')
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalOpen = fs.promises.open
+  const originalRename = fs.promises.rename
+  const primaryError = Object.assign(new Error('injected staging write failure'), {
+    code: 'EINJECTED_STAGE_WRITE',
+  })
+  let primaryInjected = false
+  let stagingCleanupBlocked = true
+  let stagingCleanupAttempts = 0
+  fs.promises.open = async (target, flags, ...args) => {
+    const handle = await originalOpen(target, flags, ...args)
+    if (primaryInjected || flags !== 'r+' || !isAttemptStagingPath(target)) return handle
+    return {
+      stat: (...statArgs) => handle.stat(...statArgs),
+      read: (...readArgs) => handle.read(...readArgs),
+      write: async (buffer, offset, length, position) => {
+        const partialLength = Math.min(length, 17)
+        await handle.write(buffer, offset, partialLength, position)
+        primaryInjected = true
+        throw primaryError
+      },
+      sync: (...syncArgs) => handle.sync(...syncArgs),
+      close: (...closeArgs) => handle.close(...closeArgs),
+    }
+  }
+  fs.promises.rename = async (source, target, ...args) => {
+    if (stagingCleanupBlocked && isAttemptStagingPath(source)) {
+      stagingCleanupAttempts += 1
+      const error = new Error('injected staging inode cleanup failure')
+      error.code = 'EPERM'
+      throw error
+    }
+    return originalRename(source, target, ...args)
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => {
+        const nested = errorChain(error)
+        assert.ok(nested.includes(primaryError))
+        assert.ok(nested.some((entry) => entry?.code === 'ARTIFACT_PUBLICATION_CLEANUP_FAILED'))
+        return true
+      },
+    )
+    assert.equal(primaryInjected, true)
+    assert.ok(stagingCleanupAttempts >= 2)
+    assert.equal(fs.existsSync(artifactPath), false)
+    assert.equal(fs.existsSync(lockPath), true)
+    const retained = publicationAttemptResidue(publicationKey)
+    assert.equal(retained.stagingPaths.length, 1)
+    assert.equal(retained.attemptRecords.filter((entry) => entry.endsWith('.stage.json')).length, 1)
+
+    stagingCleanupBlocked = false
+    const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(retried.fullPath, artifactPath)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    const cleaned = publicationAttemptResidue(publicationKey)
+    assert.equal(fs.existsSync(cleaned.lockPath), false)
+    assert.deepEqual(cleaned.stagingPaths, [])
+    assert.deepEqual(cleaned.attemptRecords, [])
+  } finally {
+    stagingCleanupBlocked = false
+    fs.promises.open = originalOpen
+    fs.promises.rename = originalRename
+  }
+})
+
+test('failed exclusive-copy write retains its destination claim until cleanup can safely retry', async (t) => {
+  const filename = 'destination-write-and-cleanup-failure.pdf'
+  const publicationKey = 'destination-write-and-cleanup-failure'
+  const sourcePath = path.join(tempDir, filename)
+  const content = `%PDF-1.4\n${'destination-cleanup-recovery-'.repeat(64)}`
+  const { artifactPath, lockPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalLink = fs.promises.link
+  const originalOpen = fs.promises.open
+  const originalRename = fs.promises.rename
+  const primaryError = Object.assign(new Error('injected destination write failure'), {
+    code: 'EINJECTED_DESTINATION_WRITE',
+  })
+  let fallbackAttempts = 0
+  let primaryInjected = false
+  let destinationCleanupBlocked = true
+  let destinationCleanupAttempts = 0
+  fs.promises.link = async (...args) => {
+    if (isPublicationMetadataLink(args)) return originalLink(...args)
+    if (String(args[1]) === artifactPath) {
+      fallbackAttempts += 1
+      const error = new Error('force exclusive-copy destination cleanup recovery')
+      error.code = 'EPERM'
+      throw error
+    }
+    return originalLink(...args)
+  }
+  fs.promises.open = async (target, flags, ...args) => {
+    const handle = await originalOpen(target, flags, ...args)
+    if (primaryInjected || String(target) !== artifactPath || flags !== 'r+') return handle
+    return {
+      stat: (...statArgs) => handle.stat(...statArgs),
+      read: (...readArgs) => handle.read(...readArgs),
+      write: async (buffer, offset, length, position) => {
+        const partialLength = Math.min(length, 19)
+        await handle.write(buffer, offset, partialLength, position)
+        primaryInjected = true
+        throw primaryError
+      },
+      sync: (...syncArgs) => handle.sync(...syncArgs),
+      close: (...closeArgs) => handle.close(...closeArgs),
+    }
+  }
+  fs.promises.rename = async (source, target, ...args) => {
+    if (destinationCleanupBlocked && String(source) === artifactPath) {
+      destinationCleanupAttempts += 1
+      const error = new Error('injected partial destination cleanup failure')
+      error.code = 'EPERM'
+      throw error
+    }
+    return originalRename(source, target, ...args)
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => {
+        const nested = errorChain(error)
+        assert.ok(nested.includes(primaryError))
+        assert.ok(nested.some((entry) => entry?.code === 'ARTIFACT_PUBLICATION_CLEANUP_FAILED'))
+        return true
+      },
+    )
+    assert.equal(primaryInjected, true)
+    assert.equal(fallbackAttempts, 1)
+    assert.ok(destinationCleanupAttempts >= 2)
+    assert.equal(fs.existsSync(lockPath), true)
+    const partial = fs.readFileSync(artifactPath)
+    assert.ok(partial.length > 0 && partial.length < Buffer.byteLength(content))
+    assert.deepEqual(partial, Buffer.from(content).subarray(0, partial.length))
+    const retained = publicationAttemptResidue(publicationKey)
+    assert.equal(retained.stagingPaths.length, 1)
+    assert.equal(retained.attemptRecords.filter((entry) => entry.endsWith('.stage.json')).length, 1)
+    assert.equal(retained.attemptRecords.filter((entry) => entry.endsWith('.destination.json')).length, 1)
+
+    destinationCleanupBlocked = false
+    const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(retried.fullPath, artifactPath)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    const cleaned = publicationAttemptResidue(publicationKey)
+    assert.equal(fs.existsSync(cleaned.lockPath), false)
+    assert.deepEqual(cleaned.stagingPaths, [])
+    assert.deepEqual(cleaned.attemptRecords, [])
+  } finally {
+    destinationCleanupBlocked = false
+    fs.promises.link = originalLink
+    fs.promises.open = originalOpen
+    fs.promises.rename = originalRename
+  }
+})
+
+test('exclusive-copy rolls back its claimed destination when final verification fails', async (t) => {
+  const filename = 'exclusive-copy-final-verify-failure.pdf'
+  const publicationKey = 'exclusive-copy-final-verify-failure'
+  const sourcePath = path.join(tempDir, filename)
+  const content = `%PDF-1.4\n${'exclusive-copy-final-verify-'.repeat(64)}`
+  const { artifactPath, lockPath, markerPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalLink = fs.promises.link
+  const originalOpen = fs.promises.open
+  const verificationError = Object.assign(
+    new Error('injected final exclusive-copy verification failure'),
+    { code: 'EIO' },
+  )
+  let verificationFailureInjected = false
+  fs.promises.link = async (...args) => {
+    if (isPublicationMetadataLink(args)) return originalLink(...args)
+    if (String(args[1]) === artifactPath) {
+      const error = new Error('force exclusive-copy final verification failure')
+      error.code = 'EPERM'
+      throw error
+    }
+    return originalLink(...args)
+  }
+  fs.promises.open = async (target, flags, ...args) => {
+    if (!verificationFailureInjected && String(target) === artifactPath && flags === 'r') {
+      verificationFailureInjected = true
+      throw verificationError
+    }
+    return originalOpen(target, flags, ...args)
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => errorChain(error).includes(verificationError),
+    )
+    assert.equal(verificationFailureInjected, true)
+    assert.equal(fs.existsSync(artifactPath), false)
+    assert.equal(fs.existsSync(lockPath), false)
+    assert.equal(fs.existsSync(markerPath), true)
+    assert.deepEqual(publicationAttemptResidue(publicationKey).stagingPaths, [])
+    assert.deepEqual(publicationAttemptResidue(publicationKey).attemptRecords, [])
+
+    const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(retried.fullPath, artifactPath)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+  } finally {
+    fs.promises.link = originalLink
+    fs.promises.open = originalOpen
+  }
+})
+
+test('destination-record read failure remains in the cleanup cause chain', async (t) => {
+  const filename = 'destination-record-read-cleanup-failure.pdf'
+  const publicationKey = 'destination-record-read-cleanup-failure'
+  const sourcePath = path.join(tempDir, filename)
+  const content = `%PDF-1.4\n${'destination-record-read-cleanup-'.repeat(32)}`
+  const { artifactPath, lockPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalLink = fs.promises.link
+  const originalOpen = fs.promises.open
+  const verificationError = Object.assign(
+    new Error('injected final verification failure before destination cleanup'),
+    { code: 'EIO' },
+  )
+  const cleanupReadError = Object.assign(
+    new Error('injected destination-record read failure'),
+    { code: 'EIO' },
+  )
+  let verificationFailureInjected = false
+  let cleanupReadInjected = false
+  fs.promises.link = async (...args) => {
+    if (isPublicationMetadataLink(args)) return originalLink(...args)
+    if (String(args[1]) === artifactPath) {
+      const error = new Error('force exclusive-copy destination-record cleanup')
+      error.code = 'EPERM'
+      throw error
+    }
+    return originalLink(...args)
+  }
+  fs.promises.open = async (target, flags, ...args) => {
+    if (!verificationFailureInjected && String(target) === artifactPath && flags === 'r') {
+      verificationFailureInjected = true
+      throw verificationError
+    }
+    if (verificationFailureInjected
+      && !cleanupReadInjected
+      && String(target).endsWith('.destination.json')
+      && flags === 'r') {
+      cleanupReadInjected = true
+      throw cleanupReadError
+    }
+    return originalOpen(target, flags, ...args)
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => {
+        const nested = errorChain(error)
+        assert.ok(nested.includes(verificationError))
+        assert.ok(nested.includes(cleanupReadError))
+        assert.ok(nested.some((entry) => entry?.code === 'ARTIFACT_PUBLICATION_CLEANUP_FAILED'))
+        return true
+      },
+    )
+    assert.equal(verificationFailureInjected, true)
+    assert.equal(cleanupReadInjected, true)
+    assert.equal(fs.existsSync(artifactPath), true)
+    assert.equal(fs.existsSync(lockPath), true)
+    const retained = publicationAttemptResidue(publicationKey)
+    assert.equal(retained.stagingPaths.length, 1)
+    assert.equal(retained.attemptRecords.filter((entry) => entry.endsWith('.stage.json')).length, 1)
+    assert.equal(
+      retained.attemptRecords.filter((entry) => entry.endsWith('.destination.json')).length,
+      1,
+    )
+
+    const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(retried.fullPath, artifactPath)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    assert.equal(fs.existsSync(lockPath), false)
+    assert.deepEqual(publicationAttemptResidue(publicationKey).stagingPaths, [])
+    assert.deepEqual(publicationAttemptResidue(publicationKey).attemptRecords, [])
+  } finally {
+    fs.promises.link = originalLink
+    fs.promises.open = originalOpen
+  }
+})
+
+test('exclusive-copy source disappearance rolls back its claimed target before retry', async (t) => {
+  const filename = 'exclusive-copy-source-disappearance.pdf'
+  const publicationKey = 'exclusive-copy-source-disappearance'
+  const sourcePath = path.join(tempDir, filename)
+  const content = `%PDF-1.4\n${'exclusive-copy-source-'.repeat(64)}`
+  const { artifactPath, lockPath, markerPath } = stablePublicationPaths(filename, publicationKey)
+  const publicationDigest = crypto.createHash('sha256').update(publicationKey).digest('hex')
+  const stagingPrefix = `.publish-${publicationDigest.slice(0, 20)}-`
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalLink = fs.promises.link
+  const originalOpen = fs.promises.open
+  let sourceFailureInjected = false
+  fs.promises.link = async (...args) => {
+    if (isPublicationMetadataLink(args)) return originalLink(...args)
+    if (String(args[1]) === artifactPath) {
+      const error = new Error('force exclusive-copy source disappearance')
+      error.code = 'EPERM'
+      throw error
+    }
+    return originalLink(...args)
+  }
+  fs.promises.open = async (target, flags, ...args) => {
+    const targetPath = String(target)
+    const stagedSource = path.dirname(targetPath) === process.env.ARTIFACT_DIR
+      && path.basename(targetPath).startsWith(stagingPrefix)
+      && targetPath.endsWith('.tmp')
+    if (!sourceFailureInjected && stagedSource && flags === 'r') {
+      sourceFailureInjected = true
+      const error = new Error('injected staged source disappearance')
+      error.code = 'ENOENT'
+      throw error
+    }
+    return originalOpen(target, flags, ...args)
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => error?.code === 'ARTIFACT_PUBLICATION_SOURCE_DRIFT',
+    )
+    assert.equal(sourceFailureInjected, true)
+    assert.equal(fs.existsSync(artifactPath), false)
+    assert.equal(fs.existsSync(lockPath), false)
+    assert.equal(fs.existsSync(markerPath), true)
+    assert.deepEqual(publicationAttemptResidue(publicationKey).stagingPaths, [])
+    assert.deepEqual(publicationAttemptResidue(publicationKey).attemptRecords, [])
+
+    const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(retried.fullPath, artifactPath)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    assert.equal(fs.existsSync(lockPath), false)
+  } finally {
+    fs.promises.link = originalLink
+    fs.promises.open = originalOpen
+  }
+})
+
+test('retry removes a staging cleanup claim left by an interrupted unlink', async (t) => {
+  const filename = 'staging-cleanup-claim-retry.pdf'
+  const publicationKey = 'staging-cleanup-claim-retry'
+  const sourcePath = path.join(tempDir, filename)
+  const content = '%PDF-1.4\nstaging-cleanup-claim-retry'
+  const { artifactPath, lockPath } = stablePublicationPaths(filename, publicationKey)
+  const publicationDigest = crypto.createHash('sha256').update(publicationKey).digest('hex')
+  const stagingPrefix = path.join(
+    process.env.ARTIFACT_DIR,
+    `.publish-${publicationDigest.slice(0, 20)}-`,
+  )
+  const isAttemptStagingPath = (target) => String(target).startsWith(stagingPrefix)
+    && String(target).endsWith('.tmp')
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalRename = fs.promises.rename
+  const originalUnlink = fs.promises.unlink
+  let stagingCleanupClaim = null
+  let cleanupClaimUnlinkFailureInjected = false
+  fs.promises.rename = async (source, target, ...args) => {
+    const cleanupClaim = path.dirname(String(target)) === process.env.ARTIFACT_DIR
+      && path.basename(String(target)).startsWith('.artifact-cleanup-')
+    if (!stagingCleanupClaim && isAttemptStagingPath(source) && cleanupClaim) {
+      stagingCleanupClaim = String(target)
+    }
+    return originalRename(source, target, ...args)
+  }
+  fs.promises.unlink = async (target, ...args) => {
+    if (!cleanupClaimUnlinkFailureInjected && String(target) === stagingCleanupClaim) {
+      cleanupClaimUnlinkFailureInjected = true
+      const error = new Error('injected staging cleanup claim unlink failure')
+      error.code = 'EPERM'
+      throw error
+    }
+    return originalUnlink(target, ...args)
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => error?.code === 'ARTIFACT_PUBLICATION_CLEANUP_FAILED',
+    )
+    assert.equal(cleanupClaimUnlinkFailureInjected, true)
+    assert.ok(stagingCleanupClaim)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    assert.equal(fs.existsSync(lockPath), true)
+    assert.equal(
+      publicationAttemptResidue(publicationKey).attemptRecords
+        .filter((entry) => entry.endsWith('.stage.json')).length,
+      1,
+    )
+
+    const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(retried.fullPath, artifactPath)
+    assert.equal(retried.publicationReconciled, true)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    assert.equal(fs.existsSync(lockPath), false)
+    assert.deepEqual(artifactCleanupClaims(), [])
+    assert.deepEqual(publicationAttemptResidue(publicationKey).stagingPaths, [])
+    assert.deepEqual(publicationAttemptResidue(publicationKey).attemptRecords, [])
+  } finally {
+    fs.promises.rename = originalRename
+    fs.promises.unlink = originalUnlink
+  }
+})
+
+test('retry clears a retained stage record after its staging inode was already removed', async (t) => {
+  const filename = 'stage-record-after-inode-cleanup.pdf'
+  const publicationKey = 'stage-record-after-inode-cleanup'
+  const sourcePath = path.join(tempDir, filename)
+  const content = '%PDF-1.4\nstage-record-after-inode-cleanup'
+  const { artifactPath, lockPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalRename = fs.promises.rename
+  let stageRecordCleanupInjected = false
+  fs.promises.rename = async (source, target, ...args) => {
+    if (!stageRecordCleanupInjected && String(source).endsWith('.stage.json')) {
+      stageRecordCleanupInjected = true
+      const error = new Error('injected stage record cleanup failure')
+      error.code = 'EPERM'
+      throw error
+    }
+    return originalRename(source, target, ...args)
+  }
+
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => error?.code === 'ARTIFACT_PUBLICATION_CLEANUP_FAILED',
+    )
+    assert.equal(stageRecordCleanupInjected, true)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    assert.equal(fs.existsSync(lockPath), true)
+    const retained = publicationAttemptResidue(publicationKey)
+    assert.deepEqual(retained.stagingPaths, [])
+    assert.equal(retained.attemptRecords.filter((entry) => entry.endsWith('.stage.json')).length, 1)
+
+    const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(retried.fullPath, artifactPath)
+    assert.equal(retried.publicationReconciled, true)
+    const cleaned = publicationAttemptResidue(publicationKey)
+    assert.equal(fs.existsSync(cleaned.lockPath), false)
+    assert.deepEqual(cleaned.stagingPaths, [])
+    assert.deepEqual(cleaned.attemptRecords, [])
+  } finally {
+    fs.promises.rename = originalRename
+  }
+})
+
+test('stable publication reports lock cleanup failure and reclaims the ended local attempt', async (t) => {
+  const filename = 'lock-cleanup-retry.pdf'
+  const publicationKey = 'lock-cleanup-retry'
+  const sourcePath = path.join(tempDir, filename)
+  const content = '%PDF-1.4\nlock-cleanup-retry'
+  const { artifactPath, lockPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  const originalRename = fs.promises.rename
+  let cleanupFailureInjected = false
+  fs.promises.rename = async (source, target) => {
+    if (!cleanupFailureInjected && String(source) === lockPath) {
+      cleanupFailureInjected = true
+      const error = new Error('injected publication lock cleanup failure')
+      error.code = 'EPERM'
+      throw error
+    }
+    return originalRename(source, target)
+  }
+  try {
+    await assert.rejects(
+      () => createLocalFileArtifactAsync({ sourcePath, filename, publicationKey }),
+      (error) => error?.code === 'ARTIFACT_PUBLICATION_CLEANUP_FAILED',
+    )
+    assert.equal(cleanupFailureInjected, true)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    assert.equal(fs.existsSync(lockPath), true)
+
+    const retried = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+    assert.equal(retried.fullPath, artifactPath)
+    assert.equal(retried.publicationReconciled, true)
+    assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+    assert.equal(fs.existsSync(lockPath), false)
+    assert.deepEqual(publicationAttemptResidue(publicationKey).stagingPaths, [])
+    assert.deepEqual(publicationAttemptResidue(publicationKey).attemptRecords, [])
+  } finally {
+    fs.promises.rename = originalRename
+  }
+})
+
+test('a crashed pre-marker owner is reclaimed when the source intent changes', async (t) => {
+  const filename = 'lock-before-marker-crash.pdf'
+  const publicationKey = 'lock-before-marker-crash'
+  const sourcePath = path.join(tempDir, filename)
+  const crashedContent = '%PDF-1.4\nlock-before-marker-crash'
+  const recoveredContent = '%PDF-1.4\nlock-before-marker-crash-with-new-content'
+  const { artifactPath, markerPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, crashedContent)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  crashStablePublisher({ mode: 'lock_after_acquire', sourcePath, filename, publicationKey })
+  const crashed = publicationAttemptResidue(publicationKey)
+  assert.equal(fs.existsSync(crashed.lockPath), true)
+  assert.equal(fs.existsSync(markerPath), false)
+  assert.equal(fs.existsSync(artifactPath), false)
+  assert.deepEqual(crashed.stagingPaths, [])
+  assert.deepEqual(crashed.attemptRecords, [])
+  const lockTemporaries = linkedRecordTemporaries(crashed.lockPath)
+  assert.equal(lockTemporaries.length, 1)
+  const lockIdentity = fs.lstatSync(crashed.lockPath, { bigint: true })
+  const lockTemporaryIdentity = fs.lstatSync(lockTemporaries[0], { bigint: true })
+  assert.equal(lockTemporaryIdentity.dev, lockIdentity.dev)
+  assert.equal(lockTemporaryIdentity.ino, lockIdentity.ino)
+
+  fs.writeFileSync(sourcePath, recoveredContent)
+  const recoveryStartedAt = Date.now()
+  const recovered = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+  const recoveryElapsedMs = Date.now() - recoveryStartedAt
+  assert.ok(recoveryElapsedMs < 1_500, `stale pre-marker lock recovery took ${recoveryElapsedMs}ms`)
+  assert.equal(recovered.fullPath, artifactPath)
+  assert.equal(fs.readFileSync(artifactPath, 'utf8'), recoveredContent)
+  const marker = JSON.parse(fs.readFileSync(markerPath, 'utf8'))
+  assert.equal(marker.size, Buffer.byteLength(recoveredContent))
+  assert.equal(
+    marker.contentSha256,
+    crypto.createHash('sha256').update(recoveredContent).digest('hex'),
+  )
+  const cleaned = publicationAttemptResidue(publicationKey)
+  assert.equal(fs.existsSync(cleaned.lockPath), false)
+  assert.deepEqual(linkedRecordTemporaries(cleaned.lockPath), [])
+  assert.deepEqual(cleaned.stagingPaths, [])
+  assert.deepEqual(cleaned.attemptRecords, [])
+})
+
+test('retry removes a marker temporary left after its atomic link was published', async (t) => {
+  const filename = 'marker-linked-temp-crash.pdf'
+  const publicationKey = 'marker-linked-temp-crash'
+  const sourcePath = path.join(tempDir, filename)
+  const content = '%PDF-1.4\nmarker-linked-temp-crash'
+  const { artifactPath, markerPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  crashStablePublisher({ mode: 'publication_marker_after_link', sourcePath, filename, publicationKey })
+  assert.equal(fs.existsSync(markerPath), true)
+  const markerTemporaries = linkedRecordTemporaries(markerPath)
+  assert.equal(markerTemporaries.length, 1)
+  const markerIdentity = fs.lstatSync(markerPath, { bigint: true })
+  const markerTemporaryIdentity = fs.lstatSync(markerTemporaries[0], { bigint: true })
+  assert.equal(markerTemporaryIdentity.dev, markerIdentity.dev)
+  assert.equal(markerTemporaryIdentity.ino, markerIdentity.ino)
+
+  const recovered = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+  assert.equal(recovered.fullPath, artifactPath)
+  assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+  assert.deepEqual(linkedRecordTemporaries(markerPath), [])
+})
+
+test('retry removes an attempt-record temporary left after its atomic link was published', async (t) => {
+  const filename = 'stage-record-linked-temp-crash.pdf'
+  const publicationKey = 'stage-record-linked-temp-crash'
+  const sourcePath = path.join(tempDir, filename)
+  const content = `%PDF-1.4\n${'stage-record-linked-temp-'.repeat(32)}`
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  crashStablePublisher({ mode: 'stage_record_after_link', sourcePath, filename, publicationKey })
+  const crashed = publicationAttemptResidue(publicationKey)
+  const stageRecords = crashed.attemptRecords.filter((entry) => entry.endsWith('.stage.json'))
+  assert.equal(stageRecords.length, 1)
+  const recordTemporaries = linkedRecordTemporaries(stageRecords[0])
+  assert.equal(recordTemporaries.length, 1)
+  const recordIdentity = fs.lstatSync(stageRecords[0], { bigint: true })
+  const recordTemporaryIdentity = fs.lstatSync(recordTemporaries[0], { bigint: true })
+  assert.equal(recordTemporaryIdentity.dev, recordIdentity.dev)
+  assert.equal(recordTemporaryIdentity.ino, recordIdentity.ino)
+
+  const recovered = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+  assert.equal(fs.readFileSync(recovered.fullPath, 'utf8'), content)
+  assert.deepEqual(linkedRecordTemporaries(stageRecords[0]), [])
+  assert.deepEqual(publicationAttemptResidue(publicationKey).attemptRecords, [])
+})
+
+test('a crashed release resumes after staging cleanup but before stage-record cleanup', async (t) => {
+  const filename = 'release-stage-record-crash.pdf'
+  const publicationKey = 'release-stage-record-crash'
+  const sourcePath = path.join(tempDir, filename)
+  const content = '%PDF-1.4\nrelease-stage-record-crash'
+  const { artifactPath, markerPath } = stablePublicationPaths(filename, publicationKey)
+  fs.writeFileSync(sourcePath, content)
+  t.after(() => cleanupPublicationTestResidue(filename, publicationKey))
+
+  crashStablePublisher({
+    mode: 'release_after_staging_inode_cleanup',
+    sourcePath,
+    filename,
+    publicationKey,
+  })
+  const crashed = publicationAttemptResidue(publicationKey)
+  assert.equal(fs.existsSync(crashed.lockPath), true)
+  assert.equal(fs.existsSync(markerPath), true)
+  assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+  assert.deepEqual(crashed.stagingPaths, [])
+  assert.equal(crashed.attemptRecords.filter((entry) => entry.endsWith('.stage.json')).length, 1)
+
+  const recovered = await createLocalFileArtifactAsync({ sourcePath, filename, publicationKey })
+  assert.equal(recovered.fullPath, artifactPath)
+  assert.equal(recovered.publicationReconciled, true)
+  assert.equal(fs.readFileSync(artifactPath, 'utf8'), content)
+  const cleaned = publicationAttemptResidue(publicationKey)
+  assert.equal(fs.existsSync(cleaned.lockPath), false)
+  assert.deepEqual(cleaned.stagingPaths, [])
+  assert.deepEqual(cleaned.attemptRecords, [])
 })
 
 test('stale claimed staging is completed and collected after a real process crash', async () => {
@@ -944,7 +1999,7 @@ test('stable publication serializes hard-link and exclusive-copy publishers with
   let secondPublication = null
 
   fs.promises.link = async (...args) => {
-    if (isPublicationMarkerLink(args)) return originalLink(...args)
+    if (isPublicationMetadataLink(args)) return originalLink(...args)
     linkAttempts += 1
     if (linkAttempts === 1) {
       const error = new Error('force the first publisher through the exclusive-copy fallback')
@@ -1007,7 +2062,7 @@ test('exclusive-copy fallback never overwrites a non-cooperating pathname winner
   let injected = false
 
   fs.promises.link = async (...args) => {
-    if (isPublicationMarkerLink(args)) return originalLink(...args)
+    if (isPublicationMetadataLink(args)) return originalLink(...args)
     const error = new Error('hard links are unavailable on this test filesystem')
     error.code = 'EPERM'
     throw error
@@ -1042,6 +2097,44 @@ test('exclusive-copy fallback never overwrites a non-cooperating pathname winner
   } finally {
     fs.promises.link = originalLink
     fs.promises.open = originalOpen
+  }
+})
+
+test('published artifact verification rejects a same-content pathname replacement', async (t) => {
+  const fullPath = path.join(tempDir, 'publication-verification-pathname-swap.pdf')
+  const displacedPath = `${fullPath}.displaced`
+  const content = Buffer.from('%PDF-1.4\npathname-swap')
+  const marker = {
+    size: content.length,
+    contentSha256: crypto.createHash('sha256').update(content).digest('hex'),
+  }
+  fs.writeFileSync(fullPath, content)
+  t.after(() => {
+    fs.rmSync(fullPath, { force: true })
+    fs.rmSync(displacedPath, { force: true })
+  })
+
+  const originalLstat = fs.promises.lstat
+  let pathnameSwapped = false
+  fs.promises.lstat = async (target, ...args) => {
+    const stat = await originalLstat(target, ...args)
+    if (!pathnameSwapped && String(target) === fullPath) {
+      pathnameSwapped = true
+      fs.renameSync(fullPath, displacedPath)
+      fs.writeFileSync(fullPath, content)
+    }
+    return stat
+  }
+
+  try {
+    await assert.rejects(
+      () => verifyPublishedArtifact({ fullPath, marker }),
+      (error) => error?.code === 'ARTIFACT_PUBLICATION_CONTENT_DRIFT',
+    )
+    assert.equal(pathnameSwapped, true)
+    assert.deepEqual(fs.readFileSync(fullPath), content)
+  } finally {
+    fs.promises.lstat = originalLstat
   }
 })
 
@@ -1108,7 +2201,7 @@ test('exclusive-copy fallback removes only its own incomplete destination after 
   let failedPath = ''
 
   fs.promises.link = async (...args) => {
-    if (isPublicationMarkerLink(args)) return originalLink(...args)
+    if (isPublicationMetadataLink(args)) return originalLink(...args)
     const error = new Error('hard links are unavailable on this test filesystem')
     error.code = 'EPERM'
     throw error

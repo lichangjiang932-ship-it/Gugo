@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { PassThrough } from 'node:stream'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
 
+import { createLspStdioRpc } from '../server/adapters/lspStdioProtocol.js'
 import {
   _testing,
   createLspStdioProvider,
@@ -78,6 +81,11 @@ function handle(message) {
     event.text = message.params && message.params.textDocument && message.params.textDocument.text
     event.textBytes = Buffer.byteLength(event.text || '', 'utf8')
     event.languageId = message.params && message.params.textDocument && message.params.textDocument.languageId
+    event.version = message.params && message.params.textDocument && message.params.textDocument.version
+  } else if (message.method === 'textDocument/didChange') {
+    event.text = message.params && message.params.contentChanges && message.params.contentChanges[0]
+      && message.params.contentChanges[0].text
+    event.version = message.params && message.params.textDocument && message.params.textDocument.version
   }
   log(event)
 
@@ -106,6 +114,7 @@ function handle(message) {
 
   if (message.method === 'textDocument/definition') {
     if (mode === 'hang') return
+    if (mode === 'crash') process.exit(86)
     result(message.id, {
       targetUri: 'file:///definition.ts',
       targetRange: range(8, 0, 20),
@@ -235,6 +244,14 @@ function providerConfig(fixture, mode = 'normal') {
   }
 }
 
+async function addWorkspace(fixture, name = 'workspace-two') {
+  const workspace = path.join(fixture.root, name)
+  const sourcePath = path.join(workspace, 'unicode.ts')
+  await fs.mkdir(workspace)
+  await fs.writeFile(sourcePath, fixture.source, 'utf8')
+  return { ...fixture, workspace, sourcePath }
+}
+
 function createTerminator({ settleMs = 75 } = {}) {
   const calls = []
   const terminateProcessTreeFn = async ({ pid, child }) => {
@@ -316,7 +333,7 @@ test('runs all four operations over byte-accurate stdio and completes the LSP li
     },
   })
 
-  assert.equal(spawnCalls.length, 4)
+  assert.equal(spawnCalls.length, 1)
   for (const call of spawnCalls) {
     assert.equal(call.command, process.execPath)
     assert.deepEqual(call.args, [fixture.serverPath])
@@ -326,18 +343,18 @@ test('runs all four operations over byte-accurate stdio and completes the LSP li
     assert.equal(call.options.env.FIXTURE_VISIBLE, 'yes')
     assert.equal(call.options.detached, process.platform !== 'win32')
   }
-  assert.equal(terminator.calls.length, 4)
+  assert.equal(terminator.calls.length, 1)
   assert.ok(terminator.calls.every(({ pid }) => Number.isInteger(pid) && pid > 0))
 
   const events = await readEvents(fixture.logPath)
   const starts = events.filter(({ type }) => type === 'start')
-  assert.equal(starts.length, 4)
+  assert.equal(starts.length, 1)
   assert.ok(starts.every(({ cwd }) => path.resolve(cwd) === path.resolve(fixture.workspace)))
   assert.ok(starts.every(({ sensitiveHostEnvPresent }) => sensitiveHostEnvPresent === false))
   assert.ok(starts.every(({ fixtureEnvPresent }) => fixtureEnvPresent === true))
 
   const didOpenEvents = events.filter(({ method }) => method === 'textDocument/didOpen')
-  assert.equal(didOpenEvents.length, 4)
+  assert.equal(didOpenEvents.length, 1)
   assert.ok(didOpenEvents.every(({ text }) => text === fixture.source))
   assert.ok(didOpenEvents.every(({ textBytes }) => textBytes === Buffer.byteLength(fixture.source, 'utf8')))
 
@@ -348,24 +365,260 @@ test('runs all four operations over byte-accurate stdio and completes the LSP li
     'textDocument/hover',
   ]
   for (const operation of expectedOperations) {
-    const operationEvent = events.find((event) => event.method === operation)
-    assert.ok(operationEvent, `missing ${operation}`)
-    const methods = events
-      .filter(({ pid, type }) => pid === operationEvent.pid && type === 'clientMessage')
-      .map(({ method }) => method)
-    assert.deepEqual(methods, [
-      'initialize',
-      'initialized',
-      'textDocument/didOpen',
-      operation,
-      'textDocument/didClose',
-      'shutdown',
-      'exit',
-    ])
+    assert.ok(events.some((event) => event.method === operation), `missing ${operation}`)
+  }
+  assert.deepEqual(events.filter(({ type }) => type === 'clientMessage').map(({ method }) => method), [
+    'initialize',
+    'initialized',
+    'textDocument/didOpen',
+    ...expectedOperations,
+    'textDocument/didClose',
+    'shutdown',
+    'exit',
+  ])
+})
+
+test('reused workspace sessions synchronize changed documents with monotonic versions', async (t) => {
+  const fixture = await createFixture(t)
+  const terminator = createTerminator({ settleMs: 0 })
+  const provider = createLspStdioProvider(providerConfig(fixture), {
+    terminateProcessTreeFn: terminator.terminateProcessTreeFn,
+  })
+
+  await provider.query(request(fixture, 'goToDefinition'))
+  const changedSource = `${fixture.source}export const changed = true\n`
+  await fs.writeFile(fixture.sourcePath, changedSource, 'utf8')
+  await provider.query(request(fixture, 'hover'))
+  await provider.close()
+
+  const events = await readEvents(fixture.logPath)
+  const opens = events.filter(({ method }) => method === 'textDocument/didOpen')
+  const changes = events.filter(({ method }) => method === 'textDocument/didChange')
+  assert.equal(events.filter(({ type }) => type === 'start').length, 1)
+  assert.deepEqual(opens.map(({ version }) => version), [1])
+  assert.deepEqual(changes.map(({ version }) => version), [2])
+  assert.equal(changes[0].text, changedSource)
+})
+
+test('a late older file read cannot overwrite a newer concurrent document snapshot', async (t) => {
+  const fixture = await createFixture(t)
+  const terminator = createTerminator({ settleMs: 0 })
+  const olderSource = fixture.source
+  const newerSource = `${fixture.source}export const newest = true\n`
+  let releaseOlderRead
+  let markOlderReadStarted
+  let readCount = 0
+  const olderReadStarted = new Promise((resolve) => { markOlderReadStarted = resolve })
+  const olderRead = new Promise((resolve) => { releaseOlderRead = resolve })
+  const provider = createLspStdioProvider(providerConfig(fixture), {
+    async readFile(...args) {
+      readCount += 1
+      if (readCount === 1) {
+        markOlderReadStarted()
+        return olderRead
+      }
+      return fs.readFile(...args)
+    },
+    terminateProcessTreeFn: terminator.terminateProcessTreeFn,
+  })
+
+  const olderQuery = provider.query(request(fixture, 'goToDefinition'))
+  await olderReadStarted
+  await fs.writeFile(fixture.sourcePath, newerSource, 'utf8')
+  const newerQuery = provider.query(request(fixture, 'hover'))
+  await newerQuery
+  releaseOlderRead(olderSource)
+  await olderQuery
+  await provider.close()
+
+  const events = await readEvents(fixture.logPath)
+  const opens = events.filter(({ method }) => method === 'textDocument/didOpen')
+  const changes = events.filter(({ method }) => method === 'textDocument/didChange')
+  assert.deepEqual(opens.map(({ text, version }) => ({ text, version })), [
+    { text: newerSource, version: 1 },
+  ])
+  assert.deepEqual(changes, [])
+})
+
+test('canonical workspaces use isolated language-server processes', async (t) => {
+  const fixture = await createFixture(t)
+  const other = await addWorkspace(fixture)
+  const terminator = createTerminator({ settleMs: 0 })
+  const provider = createLspStdioProvider(providerConfig(fixture), {
+    terminateProcessTreeFn: terminator.terminateProcessTreeFn,
+  })
+
+  await provider.query(request(fixture, 'hover'))
+  await provider.query(request(other, 'hover'))
+  await provider.close()
+
+  const events = await readEvents(fixture.logPath)
+  const starts = events.filter(({ type }) => type === 'start')
+  assert.equal(starts.length, 2)
+  assert.equal(new Set(starts.map(({ pid }) => pid)).size, 2)
+  assert.equal(terminator.calls.length, 2)
+})
+
+test('crashed workspaces back off before a clean replacement is started', async (t) => {
+  const fixture = await createFixture(t)
+  const terminator = createTerminator({ settleMs: 0 })
+  const provider = createLspStdioProvider(providerConfig(fixture, 'crash'), {
+    crashBackoffMs: 50,
+    terminateProcessTreeFn: terminator.terminateProcessTreeFn,
+  })
+
+  await assert.rejects(
+    provider.query(request(fixture, 'goToDefinition')),
+    (cause) => ['LSP_PROCESS_EXITED', 'LSP_TRANSPORT_FAILED'].includes(cause?.code),
+  )
+  await assert.rejects(
+    provider.query(request(fixture, 'hover')),
+    (cause) => cause?.code === 'LSP_PROCESS_BACKOFF' && cause.retryable === true,
+  )
+  assert.equal((await readEvents(fixture.logPath)).filter(({ type }) => type === 'start').length, 1)
+
+  await delay(75)
+  assert.equal((await provider.query(request(fixture, 'hover'))).kind, 'hover')
+  await provider.close()
+  assert.equal((await readEvents(fixture.logPath)).filter(({ type }) => type === 'start').length, 2)
+})
+
+test('idle workspace sessions are reaped and recreated on demand', async (t) => {
+  const fixture = await createFixture(t)
+  const terminator = createTerminator({ settleMs: 0 })
+  const provider = createLspStdioProvider(providerConfig(fixture), {
+    idleTimeoutMs: 40,
+    terminateProcessTreeFn: terminator.terminateProcessTreeFn,
+  })
+
+  await provider.query(request(fixture, 'hover'))
+  await withTimeout((async () => {
+    while (terminator.calls.length === 0) await delay(10)
+  })(), 5_000, 'idle workspace was not reaped')
+  await provider.query(request(fixture, 'hover'))
+  await provider.close()
+
+  assert.equal((await readEvents(fixture.logPath)).filter(({ type }) => type === 'start').length, 2)
+  assert.equal(terminator.calls.length, 2)
+})
+
+test('close waits for an idle eviction that has already left the active pool', async (t) => {
+  const fixture = await createFixture(t)
+  const terminator = createTerminator({ settleMs: 0 })
+  let releaseTermination
+  let confirmTerminationStarted
+  const terminationGate = new Promise((resolve) => { releaseTermination = resolve })
+  const terminationStarted = new Promise((resolve) => { confirmTerminationStarted = resolve })
+  const provider = createLspStdioProvider(providerConfig(fixture), {
+    idleTimeoutMs: 20,
+    async terminateProcessTreeFn(input) {
+      confirmTerminationStarted()
+      await terminationGate
+      return terminator.terminateProcessTreeFn(input)
+    },
+  })
+
+  await provider.query(request(fixture, 'hover'))
+  await withTimeout(terminationStarted, 5_000, 'idle termination did not start')
+  let settled = false
+  const closing = provider.close().then(() => { settled = true })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(settled, false)
+  releaseTermination()
+  await closing
+  assert.equal(settled, true)
+  assert.equal(terminator.calls.length, 1)
+})
+
+test('an acquire during idle retirement waits before recreating the same workspace', async (t) => {
+  const fixture = await createFixture(t)
+  const terminator = createTerminator({ settleMs: 0 })
+  let releaseTermination
+  let confirmTerminationStarted
+  const terminationGate = new Promise((resolve) => { releaseTermination = resolve })
+  const terminationStarted = new Promise((resolve) => { confirmTerminationStarted = resolve })
+  const provider = createLspStdioProvider(providerConfig(fixture), {
+    idleTimeoutMs: 20,
+    maxProcesses: 1,
+    async terminateProcessTreeFn(input) {
+      confirmTerminationStarted()
+      await terminationGate
+      return terminator.terminateProcessTreeFn(input)
+    },
+  })
+
+  await provider.query(request(fixture, 'hover'))
+  await withTimeout(terminationStarted, 5_000, 'idle termination did not start')
+  let replacementSettled = false
+  const replacement = provider.query(request(fixture, 'hover'))
+    .finally(() => { replacementSettled = true })
+  await delay(75)
+  assert.equal(replacementSettled, false)
+  assert.equal((await readEvents(fixture.logPath)).filter(({ type }) => type === 'start').length, 1)
+
+  releaseTermination()
+  await replacement
+  await provider.close()
+  assert.equal((await readEvents(fixture.logPath)).filter(({ type }) => type === 'start').length, 2)
+})
+
+test('workspace process cap rejects new work while every pooled process is leased', async (t) => {
+  const fixture = await createFixture(t)
+  const other = await addWorkspace(fixture)
+  const terminator = createTerminator({ settleMs: 0 })
+  const provider = createLspStdioProvider(providerConfig(fixture, 'hang'), {
+    maxProcesses: 1,
+    terminateProcessTreeFn: terminator.terminateProcessTreeFn,
+  })
+  const controller = new AbortController()
+  const first = provider.query(request(fixture, 'goToDefinition'), controller.signal)
+  await waitForEvent(fixture.logPath, ({ method }) => method === 'textDocument/definition')
+
+  await assert.rejects(
+    provider.query(request(other, 'hover')),
+    (cause) => cause?.code === 'LSP_BUSY' && cause.retryable === true,
+  )
+  assert.equal((await readEvents(fixture.logPath)).filter(({ type }) => type === 'start').length, 1)
+  controller.abort(new Error('test cleanup'))
+  await assert.rejects(first, (cause) => cause?.code === 'LSP_ABORTED')
+  await provider.close()
+})
+
+test('language-server stream failures reject pending requests without becoming uncaught', async (t) => {
+  for (const scenario of [
+    { stream: 'stdin', event: 'error', cause: new Error('fixture broken pipe') },
+    { stream: 'stdin', event: 'close' },
+    { stream: 'stdout', event: 'error', cause: new Error('fixture read failure') },
+    { stream: 'stdout', event: 'end' },
+    { stream: 'stderr', event: 'error', cause: new Error('fixture stderr failure') },
+  ]) {
+    await t.test(`${scenario.stream} ${scenario.event}`, async () => {
+      const child = Object.assign(new EventEmitter(), {
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+      })
+      let fatalError = null
+      const rpc = createLspStdioRpc(child, {
+        rootUri: 'file:///workspace',
+        onFatal(cause) { fatalError = cause },
+      })
+      const pending = rpc.request('textDocument/hover', {})
+      child[scenario.stream].emit(scenario.event, scenario.cause)
+      await assert.rejects(
+        pending,
+        (cause) => cause?.code === 'LSP_TRANSPORT_FAILED'
+          && (!scenario.cause || cause?.cause === scenario.cause),
+      )
+      assert.equal(fatalError?.code, 'LSP_TRANSPORT_FAILED')
+      child.stdin.destroy()
+      child.stdout.destroy()
+      child.stderr.destroy()
+    })
   }
 })
 
-test('aborting a hung query rejects it and invokes process-tree termination', async (t) => {
+test('aborting one query sends cancellation without terminating sibling queries', async (t) => {
   const fixture = await createFixture(t)
   const terminator = createTerminator({ settleMs: 0 })
   const provider = createLspStdioProvider(providerConfig(fixture, 'hang'), {
@@ -375,12 +628,18 @@ test('aborting a hung query rejects it and invokes process-tree termination', as
   const queryPromise = provider.query(request(fixture, 'goToDefinition'), controller.signal)
 
   await waitForEvent(fixture.logPath, ({ method }) => method === 'textDocument/definition')
+  const hoverPromise = provider.query(request(fixture, 'hover'))
   controller.abort(new Error('test cancellation'))
 
   await assert.rejects(queryPromise, (cause) => cause?.code === 'LSP_ABORTED')
+  assert.equal((await hoverPromise).kind, 'hover')
+  assert.equal(terminator.calls.length, 0)
+  const events = await readEvents(fixture.logPath)
+  assert.equal(events.filter(({ type }) => type === 'start').length, 1)
+  assert.equal(events.filter(({ method }) => method === '$/cancelRequest').length, 1)
+  await provider.close()
   assert.equal(terminator.calls.length, 1)
   assert.ok(terminator.calls[0].pid > 0)
-  await provider.close()
   await assert.rejects(
     provider.query(request(fixture, 'hover')),
     (cause) => cause?.code === 'LSP_DISPOSED',
@@ -495,7 +754,7 @@ test('concurrent queries reserve their slots before asynchronous document reads'
   assert.equal(earlyFifthOutcome.status, 'rejected')
   assert.equal(earlyFifthOutcome.reason?.code, 'LSP_BUSY')
   assert.equal(readCalls, 4)
-  assert.equal(spawnCalls, 4)
+  assert.equal(spawnCalls, 1)
 })
 
 test('close during document loading prevents the pending query from spawning', async (t) => {

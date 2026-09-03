@@ -1,5 +1,6 @@
 import { normalizeMutationTarget } from './heuristics/mutationClassification.js'
 import { redactSensitiveText } from '../../utils/toolCallHarness.js'
+import { normalizeTurnLocale } from '../../../shared/turnLocale.js'
 
 export const TASK_VERIFICATION_REPAIR_MARKER = '[TASK VERIFICATION REPAIR REQUIRED]'
 export const MAX_TASK_VERIFICATION_FAILURES = 3
@@ -130,7 +131,7 @@ export function buildTaskVerificationRepairPrompt(state) {
     pending.length === 0 && indeterminate.length > 0
       ? 'Restore the required tool or execution environment, then rerun the same check scope before completing the task.'
       : pending.length === 0
-        ? 'Restart verification from a fresh task checkpoint and rerun every required project check before completing the task.'
+        ? 'Run successful checks that cover every overflowed verification scope before completing the task.'
       : failed.length > 0
         ? 'Treat the exact tool output as actionable feedback. Inspect the failing assertion or diagnostic, correct the implementation with the available tools, then rerun every pending check.'
         : 'The latest related change invalidated earlier verification evidence. Rerun every pending check before completing the task.',
@@ -138,7 +139,7 @@ export function buildTaskVerificationRepairPrompt(state) {
       ? 'At least one check did not produce a conclusive project verdict. Restore the named tool or execution environment, then rerun that check; infrastructure failures do not consume the code-repair budget.'
       : '',
     overflowed
-      ? 'Verification scope capacity was exceeded. The overflow sentinel is fail-closed and cannot be cleared by partial checks.'
+      ? 'Verification scope capacity was exceeded. The overflow sentinel is fail-closed until successful checks cover every overflowed scope; unrelated checks cannot clear it.'
       : '',
     'A file read, directory listing, or diff cannot clear a failed test/lint/build result. Do not claim completion while any pending check remains.',
     ...pending.map((entry) => {
@@ -148,53 +149,80 @@ export function buildTaskVerificationRepairPrompt(state) {
         : `${scope} has no verification result for mutation epoch ${entry.requiredEpoch}; rerun a check that covers this scope.`
     }),
     ...indeterminate.map((entry) => (
-      `${entry.kind}@${entry.cwd} via ${entry.commandScope || entry.tool || 'project check'} is inconclusive [${entry.code}]: ${entry.message} Rerun a check that covers this scope after restoring the missing execution requirement.`
+      `${entry.kind}@${entry.cwd} via ${entry.commandScope || entry.tool || 'project check'} is inconclusive [${entry.code}]. Rerun a check that covers this scope after restoring the missing execution requirement; consult the structured verification details for diagnostics.`
     )),
   ].filter(Boolean).join('\n')
 }
 
-export function taskVerificationRepairBlockerText(state) {
+export function taskVerificationRepairBlockerText(state, { locale = 'en' } = {}) {
   const pending = pendingEntries(state)
   const indeterminate = indeterminateEntries(state)
   const overflowed = verificationOverflowed(state)
+  const zh = normalizeTurnLocale(locale, 'en') === 'zh'
   if (pending.length === 0 && indeterminate.length === 0 && !overflowed) return ''
   if (pending.length === 0) {
     return [
       ...indeterminate.map((entry) => (
-        `Task verification could not produce a conclusive result (${entry.kind}@${entry.cwd} via ${entry.commandScope || entry.tool || 'project check'}) [${entry.code}]: ${entry.message}`
+        zh
+          ? `任务验证未能得出明确结果（${entry.kind}@${entry.cwd}，检查方式：${entry.commandScope || entry.tool || '项目检查'}）[${entry.code}]。请查看结构化验证详情中的诊断信息。`
+          : `Task verification could not produce a conclusive result (${entry.kind}@${entry.cwd} via ${entry.commandScope || entry.tool || 'project check'}) [${entry.code}]. See the structured verification details for diagnostics.`
       )),
       overflowed
-        ? 'Task verification state exceeded its bounded capacity [TASK_VERIFICATION_STATE_OVERFLOW].'
+        ? (zh
+            ? '任务验证状态超过容量上限 [TASK_VERIFICATION_STATE_OVERFLOW]。'
+            : 'Task verification state exceeded its bounded capacity [TASK_VERIFICATION_STATE_OVERFLOW].')
         : '',
       indeterminate.length > 0
-        ? `Required check epoch: ${Math.max(...indeterminate.map((entry) => entry.requiredEpoch))}.`
+        ? (zh
+            ? `所需检查版本：${Math.max(...indeterminate.map((entry) => entry.requiredEpoch))}。`
+            : `Required check epoch: ${Math.max(...indeterminate.map((entry) => entry.requiredEpoch))}.`)
         : '',
-      'The applied file changes were preserved, but the task was not marked complete.',
+      zh
+        ? '已经应用的文件修改仍予保留，但任务未标记为完成。'
+        : 'The applied file changes were preserved, but the task was not marked complete.',
     ].filter(Boolean).join(' ')
   }
   const failedChecks = pending
-    .map((entry) => `${entry.kind}@${entry.cwd} via ${entry.commandScope || entry.tool || 'project check'}`)
+    .map((entry) => zh
+      ? `${entry.kind}@${entry.cwd}，检查方式：${entry.commandScope || entry.tool || '项目检查'}`
+      : `${entry.kind}@${entry.cwd} via ${entry.commandScope || entry.tool || 'project check'}`)
     .join(', ')
   const last = [...pending].sort((left, right) => right.failures - left.failures)[0]
   const failureCount = Math.max(last.failures, Number(state.consecutiveFailures) || 0)
   if (failureCount === 0) {
     return [
-      `Task verification was not rerun after the latest related mutation (${failedChecks}).`,
+      zh
+        ? `最新相关修改后尚未重新运行任务验证（${failedChecks}）。`
+        : `Task verification was not rerun after the latest related mutation (${failedChecks}).`,
       indeterminate.length > 0
-        ? `Some verification attempts remain inconclusive: ${indeterminate.map((entry) => `[${entry.code}] ${entry.message}`).join('; ')}`
+        ? (zh
+            ? '部分验证仍无明确结论。请查看结构化验证详情中的诊断信息。'
+            : 'Some verification attempts remain inconclusive. See the structured verification details for diagnostics.')
         : '',
-      overflowed ? 'Verification state capacity was exceeded.' : '',
-      `Required check epoch: ${Math.max(...pending.map((entry) => entry.requiredEpoch))}.`,
-      'The applied file changes were preserved, but the task was not marked complete.',
+      overflowed ? (zh ? '验证状态超过容量上限。' : 'Verification state capacity was exceeded.') : '',
+      zh
+        ? `所需检查版本：${Math.max(...pending.map((entry) => entry.requiredEpoch))}。`
+        : `Required check epoch: ${Math.max(...pending.map((entry) => entry.requiredEpoch))}.`,
+      zh
+        ? '已经应用的文件修改仍予保留，但任务未标记为完成。'
+        : 'The applied file changes were preserved, but the task was not marked complete.',
     ].filter(Boolean).join(' ')
   }
   return [
-    `Task verification did not pass after ${failureCount} verification failures (${failedChecks}).`,
-    `Last failure [${last.code}]: ${last.message}`,
+    zh
+      ? `任务验证连续失败 ${failureCount} 次后仍未通过（${failedChecks}）。`
+      : `Task verification did not pass after ${failureCount} verification failures (${failedChecks}).`,
+    zh
+      ? `最近一次验证失败 [${last.code}] 仍未解决。请查看结构化验证详情中的诊断信息。`
+      : `The latest verification failure [${last.code}] remains unresolved. See the structured verification details for diagnostics.`,
     indeterminate.length > 0
-      ? `Some reruns remain inconclusive: ${indeterminate.map((entry) => `[${entry.code}] ${entry.message}`).join('; ')}.`
+      ? (zh
+          ? '部分重新检查仍无明确结论。请查看结构化验证详情中的诊断信息。'
+          : 'Some reruns remain inconclusive. See the structured verification details for diagnostics.')
       : '',
-    overflowed ? 'Verification state capacity was exceeded.' : '',
-    'The applied file changes were preserved, but the task was not marked complete.',
+    overflowed ? (zh ? '验证状态超过容量上限。' : 'Verification state capacity was exceeded.') : '',
+    zh
+      ? '已经应用的文件修改仍予保留，但任务未标记为完成。'
+      : 'The applied file changes were preserved, but the task was not marked complete.',
   ].filter(Boolean).join(' ')
 }

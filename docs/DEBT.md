@@ -11,7 +11,7 @@ to reproducible evidence, and define an observable exit condition.
 **Priority:** P1  
 **Area:** Runtime architecture
 
-**Evidence / reproduction:** `server/services/TurnEngine.js` is now a 569-line
+**Evidence / reproduction:** `server/services/TurnEngine.js` is now a 544-line
 lifecycle and composition shell. Prompt and recovery preparation live in
 `turnExecutionRuntime.js`, model-loop/checkpoint projection lives in
 `turnLoopExecutionRuntime.js`, and execution lease scheduling lives in
@@ -24,27 +24,153 @@ evidence settlement, and lease cleanup.
 **Verification:** `tests/turnEngine.test.js`,
 `tests/turnPersistenceTransactions.test.js`, and `tests/turnEngineHost.test.js`.
 
+## DEBT-ARCH-002 — Host compatibility transition surfaces
+
+**Status:** Open
+**Priority:** P1
+**Area:** Runtime architecture
+
+**Evidence / reproduction:** The `Current transition debt` table in
+`docs/KERNEL_BOUNDARY.md` still lists three host compatibility and composition
+surfaces outside the target minimal kernel. The former `TurnEngine.js` row was
+retired after `DEBT-ARCH-001` recorded its focused execution runtimes and stable
+runtime-port rules. The `turnEngineHost.js` row was retired after its transitive
+boundary test enforced fail-closed persistence composition and prohibited both
+SQLite/database selection and route imports. The `server/db.js` row was retired
+after user accounts, tool permissions, auth sessions, login codes, rate limits,
+and legacy JSON import moved behind focused stores injected with the facade's
+connection provider. Static boundary tests now reject business-table SQL in the
+bootstrap facade and reverse imports from those stores. Those settled boundaries
+are no longer transition debt. The former `modelProxy.js` row was retired after
+background, tool-enabled, and streaming invocation orchestration moved into the
+focused `modelInvocationRuntime.js`; its boundary test preserves compatibility
+export identity, prohibits static direct or transitive reverse imports, and keeps
+the proxy facade limited to exports plus HTTP adapter composition. The former
+`artifactGen.js` row was retired after format encoding, image preparation,
+atomic writes, storage, local publication, and delivery remained behind focused
+host services. `tests/artifactGenBoundary.test.js` keeps the compatibility facade
+below 300 lines, limits its direct dependency set, preserves delegated export
+identity, and prevents those focused services from depending back on the facade;
+HTML preview and source storage now consume `artifactStorage.js` directly. The
+remaining rows still describe responsibilities
+that have not fully crossed their required boundaries, so every one references
+this open canonical record instead of appearing as undocumented debt beside an
+all-closed register.
+
+Job crash recovery now lives in `jobRuntimeRecovery.js`, including approval
+resolution, running-step reset, durable recovery events, and execution-lease
+fencing. `jobRuntime.js` only supplies its runtime port callbacks and no longer
+owns the recovery transaction. Owner lookup caching, tenant-scoped delivery,
+subscription cleanup, listener-failure isolation, and terminal owner eviction
+now live in `jobRuntimeEventHub.js`; creation, recovery, and wake paths populate
+that boundary before emitting instead of reaching into a facade-owned Map.
+Default planning composition now lives in `jobRuntimeDefaultPlanner.js`, which
+binds exploration and model execution behind the planner port while the Job
+facade retains only the injected planner capability. Default planner, execution
+lease/core, step executor, task-plan guard, and model-binding capabilities are
+now assembled into an immutable per-runtime snapshot by
+`jobRuntimeDefaultPolicyCapabilities.js`; the facade preserves its existing
+constructor overrides without importing those concrete policy dependencies.
+Scheduler ownership, tick tracking, bounded draining, and coalesced shutdown now
+live in `jobRuntimeLoopHost.js`; the facade delegates lifecycle calls while
+preserving its compatibility observations.
+
+Runtime plugin installation and uninstall settlement now live in
+`runtimePluginInstallController.js` and `runtimePluginUninstallController.js`.
+They own pre/post-setup compatibility checks, cancellation observation,
+activation and rollback ordering, reload-generation revalidation, visibility
+revocation, callback drain, effect disposal, and audit outcomes. Record removal
+is generation-checked so a failed install or delayed uninstall cannot delete a
+newer same-ID record. `runtimePluginReleaseController.js` owns the public
+reload/uninstall callback-deadlock guards, shutdown fencing and coalescing,
+pending-reload settlement, reverse-order staged/active release, and final Loop
+event detachment. `runtimePluginRegistry.js` supplies narrow host ports and now
+retains inventory, capability wiring, and public facade composition.
+`runtimePluginConfigSourceController.js` owns initial resolver construction,
+pre-installation source replacement, the installation-time seal, and resolver
+publication after a validated reload.
+
+Durable Agent Event delivery now crosses the v2 host exposed by
+`runtimePluginHostOptions.js`. Verified immutable Releases bind publisher,
+release, plugin, subscription, and event identities before registration.
+`durableAgentEventConsumerHost.js` owns replay orchestration and drain ordering,
+while the focused subscription stores own cursor ACK, exclusive lease fencing,
+bounded retry/backoff, atomic DLQ transitions, safe-watermark calculation, and
+IMMEDIATE-transaction outbox truncation. The registry retains only contribution
+composition and cannot bypass those durable state boundaries.
+
+Managed attachment HTTP operations now cross the host-created
+`ManagedAttachmentStoragePort v1`. Its default SQLite/file adapter owns concrete
+store calls, file descriptors, consistency checks, and stream construction;
+the route receives only validated public attachment receipts and path-free
+readable capabilities. Content opening binds response metadata to the
+authoritative opened receipt, verifies the full SHA-256 from that opened file
+descriptor before streaming, and revokes the readable capability on client
+disconnect. The separate Turn runtime port and existing SQLite aggregate
+transaction continue to own validation/materialization and atomic message
+binding respectively.
+
+**Exit criteria:** Close only after every linked transition row is either
+removed with evidence that its required boundary has been reached or moved to
+a narrower open debt record with its own observable exit criteria. Completion
+must preserve the dependency and host-ownership rules in
+`docs/KERNEL_BOUNDARY.md`; deleting a row or relabeling a compatibility host
+without extracting its remaining responsibility does not repay the debt.
+
+**Verification:** `tests/codeDebt.test.js` requires every kernel transition row
+to reference exactly one canonical Open debt record. `tests/dbStoreBoundary.test.js`
+and `tests/dbStoreFacadeContracts.test.js` lock the settled database facade/store
+boundary, while `tests/jobRuntimeRecoveryBoundary.test.js` prevents recovery
+persistence from returning to the Job facade and
+`tests/jobRuntimeEventHub.test.js` and the Job recovery boundary test preserve
+tenant isolation and prevent direct owner-cache access, while
+`tests/jobRuntimeDefaultPolicyCapabilities.test.js` preserves immutable,
+per-runtime default capability snapshots and explicit override identity, while
+`tests/jobRuntimeLoopHost.test.js` preserves active-tick tracking, bounded
+draining, and shutdown coalescing, while
+`tests/modelInvocationRuntimeBoundary.test.js` prevents model invocation logic
+from returning to the proxy facade, and `tests/artifactGenBoundary.test.js`
+protects the settled artifact facade/service direction. The focused
+`tests/runtimePluginInstallController.test.js` preserves installation revalidation,
+rollback ordering, settlement, and generation-safe record removal, while
+`tests/runtimePluginUninstallController.test.js` preserves reload-generation
+revalidation before cleanup, and `tests/runtimePluginReleaseController.test.js`
+locks release ordering, callback-deadlock fencing, shutdown coalescing, and the
+one-way registry-to-controller dependency. The focused
+`tests/runtimePluginConfigSourceController.test.js` locks configuration-source
+initialization, sealing, resolver replacement, and registry delegation.
+`tests/agentEventSubscriptionStore.test.js`,
+`tests/durableAgentEventConsumerHost.test.js`, and
+`tests/runtimePluginDurableAgentEvents.test.js` preserve the durable v2 identity,
+delivery, fencing, retry/DLQ, retention, lifecycle, and plugin-host boundaries.
+Managed attachment storage port and
+architecture tests preserve DTO identity, path opacity, authoritative content
+opening, and the one-way route-to-port-to-adapter dependency.
+Boundary-specific changes also run the Turn, persistence, model proxy,
+artifact, Job, runtime-plugin, migration, and managed-attachment contract suites
+named by the affected row.
+
 ## DEBT-DATA-001 — Legacy schema bootstrap paths
 
-**Status:** Open  
+**Status:** Closed
 **Priority:** P1  
 **Area:** Storage
 
-**Evidence / reproduction:** The tested
-`server/migrations/legacyCompatibility.js` adapter now owns the exact v2-v30
-upgrade sequence, with the historical implementations isolated in two
-sub-600-line compatibility modules. `server/db.js` only composes that adapter.
-Fresh bootstrap DDL remains inline, v31 onward still uses the primary registry,
-and Reasonix retains a separate schema version for its legacy boundary, so fresh
-and upgraded schemas have not yet converged on one authoritative path.
+**Evidence / reproduction:** The primary registry now owns the complete v1-v108
+path. `v1InitialSchema.js` supplies the idempotent empty-database contract,
+`legacyCompatibility.js` isolates the exact v2-v30 upgrade sequence, and
+`v108UnifiedBootstrapSchema.js` folds the former Reasonix and defensive
+bootstrap paths into the main version chain while retiring
+`reasonix_schema_version`. `server/db.js` only composes and runs the registry.
 
-**Exit criteria:** Fresh and upgraded databases reach the same schema through a
-single registry; `server/db.js` contains composition only, and legacy import is
-isolated behind one tested compatibility adapter.
+**Exit criteria:** Met. Fresh, v1, legacy, and current databases reach the same
+contract through one contiguous registry; upgraded Reasonix rows are preserved,
+the old version key is removed, and v108 rejects bootstrap tables whose columns,
+indexes, cascading foreign keys, or declared primary/conflict keys are incomplete.
 
 **Verification:** `tests/legacySchemaCompatibility.test.js`,
-`tests/dbMigrationRegistry.test.js`, `tests/dbMigration.test.js`, and
-`tests/dbSchemaPreflight.test.js`.
+`tests/dbMigrationRegistry.test.js`, `tests/dbMigration.test.js`,
+`tests/dbSchemaPreflight.test.js`, and `tests/dbConflictKeyContract.test.js`.
 
 ## DEBT-NET-001 — Remaining outbound HTTP call sites
 
@@ -94,37 +220,46 @@ unbounded send/replay buffers to consume server resources or reorder decisions.
 
 ## DEBT-UI-001 — Deep-history rendering cost
 
-**Status:** Open  
+**Status:** Closed
 **Priority:** P2  
 **Area:** Chat UI performance
 
-**Evidence / reproduction:** Normal chat rendering is bounded to an 80-message
-window, but locating a very old message may expand a large portion of history.
-Profile a multi-hundred-message session while jumping to its earliest result.
+**Evidence / reproduction:** Before closure, jumping to a message outside the
+recent 80-message tail expanded the mounted suffix through that target.
+
+**Resolution:** Chat rendering uses a fixed 80-message sliding window. Timeline
+and deep-link navigation center a bounded window on the requested message,
+manual backward paging preserves a visible DOM anchor, and returning to the
+bottom restores the latest bounded window without mounting the intervening
+history.
 
 **Exit criteria:** Deep-history navigation keeps mounted row count bounded and
 preserves variable-height scroll anchoring, keyboard navigation, attachment
 previews, and streaming updates.
 
 **Verification:** `tests/chatHistoryWindow.test.js`,
-`tests/chatMessageViewport.test.jsx`, and a checked-in performance fixture.
+`tests/chatMessageViewport.test.jsx`, and `tests/unit/ChatMiniTimeline.test.jsx`.
 
 ## DEBT-TYPE-001 — Runtime contract type coverage
 
-**Status:** Open  
+**Status:** Open
 **Priority:** P2  
 **Area:** Type safety
 
-**Evidence / reproduction:** Runtime ports and event contracts are primarily
-JavaScript. Zod protects serialized boundaries, but internal adapter and service
-composition still relies on runtime failures for many shape mismatches.
+**Evidence / reproduction:** Runtime ports and event contracts remain
+JavaScript. Zod schemas and the existing event, adapter, and persistence
+contract suites protect serialized and runtime boundaries, but the repository
+has no checked-in static contract declarations, type-check command, or required
+CI type-check step. Internal adapter and service composition therefore still
+relies on runtime failures for many shape mismatches.
 
 **Exit criteria:** Stable kernel ports, shared event payloads, and persistence
 adapter contracts have generated or native static types checked in CI; migration
 must be incremental and must not create a second event schema.
 
-**Verification:** type-check CI plus the existing event, adapter, and persistence
-contract suites.
+**Verification:** The existing event, adapter, and persistence contract suites
+are the runtime baseline. Closure additionally requires a checked-in type-check
+command and a required CI step that executes it.
 
 ## DEBT-RELEASE-001 — Desktop signing and provenance
 
@@ -243,20 +378,22 @@ runtime-injection-key rejection, and process-tree cleanup remain enforced.
 
 ## DEBT-LSP-002 — Per-query language-server cold starts
 
-**Status:** Open
+**Status:** Closed
 **Priority:** P2
 **Area:** Agent code intelligence
 
-**Evidence / reproduction:** `server/adapters/lspStdioProvider.js` currently
-spawns, initializes, opens one document, queries, shuts down, and reaps a new
-server process for every operation. This keeps cancellation and isolation
-simple, but repeated navigation cannot reuse a language server's workspace
-index and pays cold-start latency each time.
+**Evidence / reproduction:** The stdio provider now keeps one reusable language
+server session per canonical provider/workspace key. Open documents remain
+scoped to that session and changed source is synchronized through monotonic
+`didChange` versions; a single request cancellation sends `$/cancelRequest`
+without terminating sibling queries.
 
-**Exit criteria:** Reuse a bounded process by canonical provider and workspace
-without weakening authorization. The pool must synchronize document versions,
-isolate cancellation, evict idle workspaces, back off after crashes, cap total
-processes, and fully reap children during runtime shutdown.
+**Exit criteria:** Met. The bounded pool isolates canonical workspaces, evicts
+idle sessions, applies exponential crash backoff, refuses new work when every
+process slot is leased, and tracks both active and already-evicting cleanup so
+runtime shutdown cannot resolve before every child process is reaped. Existing
+source/workspace authorization, environment filtering, protocol bounds, and
+read-only server-request policy remain enforced.
 
 **Verification:** Extend `tests/lspStdioProvider.test.js` and
 `tests/lspRuntime.test.js` with same-workspace reuse, cross-workspace isolation,
@@ -264,15 +401,17 @@ crash recovery, cancellation isolation, idle eviction, and shutdown cleanup.
 
 ## DEBT-LSP-003 — Configuration and readiness diagnostics
 
-**Status:** Open
+**Status:** Closed
 **Priority:** P2
 **Area:** Operability
 
-**Evidence / reproduction:** `getLspRuntimeStatus()` distinguishes not
-configured, invalid configuration, and provider initialization failure, but the
-status is not yet projected into authenticated runtime diagnostics or the
-settings UI. Operators otherwise observe only that the model-facing tool is
-absent; executable or protocol errors first appear on a query.
+**Evidence / reproduction:** Authenticated system diagnostics now project the
+LSP runtime through exactly four bounded fields (`enabled`, `providerCount`,
+`reason`, and stable `code`). Unauthenticated callers are rejected before the
+runtime is inspected, and the projection never includes command, args,
+environment, cwd, or source paths. Settings distinguishes not configured,
+invalid configuration, initialization failure, first-query execution failure,
+and first-query protocol failure in all supported locales.
 
 **Exit criteria:** Authenticated diagnostics expose only bounded status fields
 (`enabled`, `providerCount`, `reason`, and stable `code`) without command, args,
@@ -281,70 +420,240 @@ separate not configured, invalid, initialization failure, and first-query
 execution/protocol failure.
 
 **Verification:** `tests/lspRuntime.test.js`,
-`tests/runtimeHostDiagnostics.test.js`, and settings diagnostics component tests.
+`tests/runtimeHostDiagnostics.test.js`, `tests/builtinHttpDiagnostics.test.js`,
+and `tests/unit/SettingsDiagnosticsPanel.test.jsx`.
 
 ## DEBT-PLUGIN-001 — Public plugin compatibility contract
 
-**Status:** Open  
-**Priority:** P2  
+**Status:** Closed
+**Priority:** P2
 **Area:** Extensibility
 
 **Evidence / reproduction:** Runtime plugins have versioned local manifests,
 capability boundaries, and a CAS-protected transactional local package store with
-receipts and crash recovery. The shared manifest envelope is only the first
-internal unification step: disk-plugin loading, process-local runtime contribution
-setup, package-state projection, and their discovery/restore reconciliation still
-use separate host paths. Marketplace discovery, publisher identity, and ecosystem
-interoperability remain project-specific or absent.
+receipts and crash recovery. The public v1 compatibility contract now includes
+offline local Marketplace metadata, deterministic conformance fixtures, Ed25519
+publisher-key verification, explicit-only installation, and upgrade/deprecation
+policy. Remote sources and automatic installation fail closed. Direct-local
+development packages remain available but are explicitly marked publisher
+unverified. `pluginDistributionContract.js` now owns the bounded distribution
+snapshot, public v1/v2 receipt projection, publisher trust identity, and stored
+Release reconciliation used by disk discovery, plugin definitions, package-state
+projection, and runtime restore. Only a Release that genuinely predates the
+distribution field receives legacy compatibility; an explicit `null`, changed
+source/trust flags, receipt schema, publisher ID, or publisher key fails closed.
 
-**Exit criteria:** Complete one internal plugin-definition and reconciliation
-contract across disk packages and runtime contributions, then publish a versioned
-compatibility specification, conformance fixtures, discovery metadata, and
-upgrade/deprecation policy without allowing plugins to bypass host authorization
-or artifact validation.
+**Exit criteria:** Met. Disk packages and runtime transformer Releases share one
+internal definition/reconciliation contract, and the public versioned specification,
+conformance fixtures, discovery metadata, and upgrade/deprecation policy are
+executable without weakening host authorization or artifact validation. Network
+Marketplace discovery, publisher CA/revocation, and transparency services remain
+explicit v1 non-goals rather than implied trust claims.
 
-**Verification:** plugin manifest, sandbox, lifecycle, permission, and package
-conformance suites.
+**Verification:** `docs/PLUGIN_COMPATIBILITY_V1.md`,
+`tests/fixtures/plugin-compatibility-v1/`, `tests/localPluginMarketplace.test.js`,
+`tests/pluginDistributionContract.test.js`, `tests/pluginDefinition.test.js`,
+`tests/pluginDistribution.test.js`, `tests/runtimePluginControl.test.js`, and plugin
+manifest, sandbox, lifecycle, permission, and package conformance suites.
 
 ## DEBT-I18N-001 — Legacy server failure copy
 
-**Status:** Open (user-visible leak mitigated)  
-**Priority:** P2  
+**Status:** Closed
+**Priority:** P2
 **Area:** Internationalization
 
-**Evidence / reproduction:** Stable failure codes now drive localized client
-presentation and server fallback copy is no longer inserted as model-authored
-assistant text. Some event fields still retain Chinese compatibility strings for
-older clients and stored diagnostics.
+**Evidence / reproduction:** New failed, interrupted, blocked, and cancelled Turn
+events require stable uppercase codes and reject `message`, `hint`, and `reason`
+presentation copy at both the top level and nested error boundary. Paused events
+likewise reject the legacy free-text `reason`. The emitter removes compatibility
+copy before persistence, all cancellation paths emit `TURN_CANCELLED`, and the
+client renders localized copy from stable codes in both supported languages.
+Existing rows remain readable only through the explicit
+`parsePersistedTurnEvent()` compatibility boundary; replay projects those rows
+to the same code-only public shape before any new write.
 
-**Exit criteria:** Event schemas carry stable presentation keys or codes only;
-all supported clients render the five language variants, and compatibility copy
-can be removed with an explicit protocol version transition.
+**Exit criteria:** Met. Current event writes are code-only, localized presentation
+is client-owned, and pre-transition persisted/raw SSE events have a named,
+read-only legacy parser rather than weakening the current write schema.
 
-**Verification:** `tests/turnEngine.test.js`, `tests/turnClient.test.js`,
+**Verification:** `tests/turnEvents.test.js`, `tests/turnEventEmitter.test.js`,
+`tests/turnEventProjection.test.js`, `tests/turnEventRoutes.test.js`,
+`tests/turnPersistenceTransactions.test.js`, `tests/turnCancellationRuntime.test.js`,
+`tests/turnEngine.test.js`, `tests/turnClient.test.js`,
 `tests/chatFlowGuards.test.js`, and `tests/i18n.test.js`.
 
-## DEBT-SIZE-001 — Oversized backend implementation inventory
+## DEBT-I18N-002 — Monolithic translation catalog
 
-**Status:** Open
+**Status:** Closed
+**Priority:** P2
+**Area:** Internationalization
+
+**Evidence / reproduction:** The UI intentionally supports only `zh` and `en`,
+and legacy `ja`, `ko`, and `zh-TW` preferences normalize to English. The public
+catalog API now stays in the 43-line `src/i18n/translations.js` entry point,
+while translation data is split across 61 cohesive modules under
+`src/i18n/domains/`; the largest domain module is 564 lines.
+
+**Exit criteria:** Met. The public lookup API is unchanged, Chinese and English
+keys remain symmetric, and `tests/codeDebt.test.js` enforces a 600-line limit
+for both the entry point and every domain module.
+
+**Verification:** `tests/codeDebt.test.js`, `tests/i18n.test.js`, and
+`npm run i18n:check`.
+
+## DEBT-EVOLUTION-001 — Runtime config automatic review orchestration
+
+**Status:** Closed
+**Priority:** P2
+**Area:** Self-evolution safety
+
+**Evidence / reproduction:** The `config:runtime` safety primitives already
+provided deterministic no-side-effect replay, host-policy evaluation, explicit
+local-owner approval, a second apply confirmation, CAS publication, and durable
+rollback. The remaining gap was orchestration: callers had to invoke replay,
+evaluation, and approval-review discovery separately. The dedicated automatic
+review service and local-owner-only API now perform those audit phases together
+and stop in `awaiting_explicit_approval` or `not_eligible`.
+
+**Exit criteria:** Met. Automatic review cannot create an approval, apply a
+configuration, enter canary, or expand permissions. A passing review still
+requires an explicit local-owner decision and the existing second apply
+confirmation; an explicitly applied change retains the existing rollback and
+crash-recovery protocol.
+
+**Verification:** `tests/evolutionConfigReview.test.js`,
+`tests/evolutionConfig.test.js`, and `tests/evolutionConfigStartupRecovery.test.js`.
+
+## DEBT-SIZE-001 — Oversized runtime implementation inventory
+
+**Status:** Closed
 **Priority:** P1
 **Area:** Architecture
 
 **Evidence / reproduction:** `tests/codeDebt.test.js` recursively measures all
-JavaScript and TypeScript implementation files under `server/`. Every
-pre-existing file above the 600-line preference has an exact frozen ceiling; an
-unknown oversized file, growth above a ceiling, a stale exception, or failure
-to ratchet a reduced ceiling fails the gate. The former 1,303-line Codex
-app-server runtime has been split into runtime, process, and contract modules
-below the limit, so it has no frozen exception; every extracted module remains
-covered by the same scan.
+JavaScript and TypeScript implementation files under `server/`, `shared/`,
+`desktop/`, and `bin/`. Every pre-existing file above the 600-line preference
+has an exact frozen ceiling; an unknown oversized file, growth above a ceiling,
+a stale exception, or failure to ratchet a reduced ceiling fails the gate. The
+former 1,303-line Codex app-server runtime has been split into runtime, process,
+and contract modules below the limit, so it has no frozen exception; every
+extracted module remains covered by the same scan.
 
-The machine-readable inventory below is the sole source of frozen backend
+The machine-readable inventory below is the sole source of frozen runtime
 ceilings. A file record inherits the architectural reason and exit criteria of
 its `group`; this keeps related decomposition work governed together instead of
 creating dozens of copy-pasted debt entries. The test rejects duplicate paths
 or groups, missing or unused groups, unactionable group text, stale files,
 unregistered oversized files, growth, and shrinkage that was not ratcheted.
+
+`artifactGen.js` is now a 253-line compatibility facade and
+`evolutionOperationService.js` is a 30-line facade. Their extracted publication,
+lease, lifecycle, terminal, recovery, and query modules are all below 600 lines,
+so both former frozen exceptions have been removed from the inventory.
+
+`pdfTools.js` is now a 17-line compatibility facade. PDF input/output policy,
+read/render operations, transformations, and tool schemas live in focused
+modules of 505 lines or fewer, so its former frozen exception is also removed.
+
+`batchFileTools.js` is now a 21-line compatibility facade. ZIP creation,
+archive catalog validation, extraction/publication, hashing, and tool schemas
+live in focused modules of 467 lines or fewer, so its former frozen exception
+is also removed.
+
+`subagentRuntime.js` is now a 566-line stable facade and single-run
+orchestrator. Runtime policy, tool-loop execution, durable run state, and batch
+coordination live in focused modules of 327 lines or fewer, so its former
+frozen exception is also removed.
+
+`managedAttachmentRuntimeBoundary.js` now delegates its public capacity
+contract to a focused limits module, `promptCompiler.js` delegates deterministic
+LRU fingerprinting and cache telemetry to `promptCompilerCache.js`, and
+`codeSearch.js` delegates its declarative tool schemas to
+`codeSearchToolSpecs.js`. Each implementation is now below 600 lines, so their
+former frozen exceptions have been removed.
+
+`codexPluginSkills.js` now delegates discovery limits and defensive public-view
+projection to focused modules, while `browserAutomation.js` delegates its CDP
+transport, cancellation, and request timeout lifecycle to `browserCdpClient.js`.
+Both former frozen exceptions have been removed.
+
+`subagentRunPersistencePort.js` now delegates hostile-boundary validation and
+immutable data projection to `subagentRunPersistenceBoundary.js`, leaving the
+port focused on adapter preparation and lifecycle binding. Its former frozen
+exception has been removed.
+
+`evolutionRollbackService.js` now delegates outcome aggregation, breach
+classification, and decision-safe telemetry projection to the pure
+`evolutionRollbackMetrics.js` module. Its former frozen exception has been
+removed.
+
+`authAccount.js` now delegates SMTP diagnostics, DNS pinning, protocol flow,
+and development-code response projection to `authMailTransport.js`. The
+outbound-host hardening remains intact and its former frozen exception has been
+removed.
+
+`mediaTools.js` is now a 239-line compatibility facade. Binary discovery,
+bounded child-process execution, path policy, and atomic commits live in
+`mediaToolRuntime.js`; pure transform validation and FFmpeg command planning
+live in `mediaTransformPlan.js`; declarative schemas live in
+`mediaToolSpecs.js`. All extracted modules are below 600 lines, so the former
+frozen exception has been removed.
+
+`toolCallHarness.js` is now a 41-line compatibility facade. Argument parsing,
+error normalization and retry, result projection, reusable primitives, and
+loop guards live in five focused modules of 425 lines or fewer. Its former
+frozen exception has been removed with the public import surface unchanged.
+
+`fsShellTools.js` is now an 84-line compatibility facade. Path and grant
+support, file operations, shell execution, output verification, and declarative
+tool schemas live in five focused modules of 403 lines or fewer. Its former
+frozen exception has been removed without changing the authorization or public
+tool contract.
+
+`nativeModelProviders.js` is now a 444-line registry, response, and streaming
+facade. Anthropic and Gemini message conversion and request construction live
+in the 243-line `nativeModelProviderRequests.js` module. Both are below 600
+lines, so the former frozen exception has been removed with plugin override and
+provider failover behavior unchanged.
+
+`evolutionConfigJournalService.js` is now a 508-line persistence and recovery
+service. Strict event and journal validation, document hashing, and fingerprint
+verification live in the 167-line `evolutionConfigJournalValidation.js`
+module. Both are below 600 lines, so the former frozen exception has been
+removed with atomic claim, restore, and reconciliation behavior unchanged.
+
+`codingAgentTools.js` is now a 447-line command, patch, test, and Docker
+orchestrator. Streaming download and atomic commit, shared permission and
+redaction support, and declarative schemas live in focused modules of 187 lines
+or fewer. Its former frozen exception has been removed with the legacy exports
+and download security contract preserved.
+
+`shared/turnEvents.js` now delegates the non-durable activity schema and
+constructors to `shared/turnActivity.js` while preserving the original public
+exports. Both modules are below 600 lines, so the former frozen exception has
+been removed without changing persisted event or transport compatibility.
+
+`bin/cli/runOutput.js` now delegates serialized writable-stream handling to
+`bin/cli/runOutputStream.js` while preserving the original public error export
+and ordered output contract. Both modules are below 600 lines, so the former
+frozen exception has been removed without changing text or JSONL semantics.
+
+`desktop/main.js` now delegates main-window security and updater setup to
+`desktop/mainWindowSecurity.js` and `desktop/updateSetup.js`. All three modules
+are below 600 lines, so the former frozen exception has been removed while
+preserving trusted navigation, permission, update, and window contracts.
+
+`shared/artifactIntent.js` now delegates skill alias resolution, file-target
+parsing, and standalone format checks to `shared/artifactIntentSupport.js`.
+Both modules are below 600 lines, so its former frozen exception has been
+removed without changing the shared public intent API or delivery semantics.
+
+All previously frozen runtime implementations are now at or below 600 lines.
+`bin/yma-cli.js` is a 500-line executable facade and local headless-run boundary;
+server command parsing, scoped credential storage, API transport, and remote
+command handlers live in `bin/cli/serverCommands.js`, while shared CLI errors
+live in `bin/cli/errors.js`. All three files are below the limit, the original
+entrypoint exports remain stable, and the final frozen exception is removed.
 
 <!-- debt-size-inventory:start -->
 ```json
@@ -352,128 +661,20 @@ unregistered oversized files, growth, and shrinkage that was not ratcheted.
   "schemaVersion": 1,
   "debtId": "DEBT-SIZE-001",
   "lineLimit": 600,
-  "groups": [
-    {
-      "id": "adapter-capabilities",
-      "reason": "Capability adapters still combine operation catalogs, input normalization, policy checks, execution plumbing, and result projection across many related tools.",
-      "exitCriteria": "Extract cohesive operation modules and shared policy or result boundaries until every listed adapter is at or below 600 lines without weakening authorization or tool contracts."
-    },
-    {
-      "id": "artifact-delivery",
-      "reason": "Artifact and managed-file services still combine format-specific generation, validation, filesystem policy, and delivery or governance workflows.",
-      "exitCriteria": "Separate format handlers, validation policies, governed file access, and delivery orchestration until every listed service is at or below 600 lines with the existing artifact and security suites passing."
-    },
-    {
-      "id": "evolution-control-plane",
-      "reason": "Evolution services each coordinate multiple state-machine phases such as grading, canary decisions, promotion, rollback, journaling, and durable operation recovery.",
-      "exitCriteria": "Extract transition policies, persistence adapters, and phase-specific executors until every listed evolution service is at or below 600 lines while preserving idempotency and recovery tests."
-    },
-    {
-      "id": "host-protocol-process",
-      "reason": "Host protocol and process modules still combine protocol state machines, platform-specific spawning, cancellation, cleanup, and failure recovery.",
-      "exitCriteria": "Separate protocol parsing or command handling from reusable process lifecycle primitives until every listed module is at or below 600 lines with cancellation and process-tree cleanup behavior preserved."
-    },
-    {
-      "id": "kernel-runtime-ports",
-      "reason": "Kernel-facing ports still aggregate compatibility normalization, lifecycle graph traversal, persistence translation, attachment boundaries, and tool-loop bridging.",
-      "exitCriteria": "Narrow each port to one runtime contract and move compatibility or traversal helpers behind focused modules until every listed core file is at or below 600 lines with contract suites unchanged."
-    },
-    {
-      "id": "persistence-state",
-      "reason": "Database and store modules still combine schema compatibility, query construction, transaction coordination, concurrency fencing, and domain projection.",
-      "exitCriteria": "Extract schema or query repositories, transactional coordinators, and domain mappers until every listed persistence file is at or below 600 lines while migration, atomicity, and recovery tests remain green."
-    },
-    {
-      "id": "plugin-lifecycle",
-      "reason": "Plugin modules still combine package persistence, manifest resolution, registry projection, lifecycle control, revocation, recovery, and release garbage collection.",
-      "exitCriteria": "Separate transactional package storage, definition resolution, runtime lifecycle, and release cleanup until every listed plugin file is at or below 600 lines without weakening install rollback or revocation guarantees."
-    },
-    {
-      "id": "route-composition",
-      "reason": "HTTP composition modules still combine route registration, authentication and validation middleware, request handlers, response projection, and service assembly.",
-      "exitCriteria": "Extract bounded route maps, handlers, and presenters until every listed composition file is at or below 600 lines while preserving middleware order, authorization, and API compatibility."
-    },
-    {
-      "id": "tool-infrastructure",
-      "reason": "Shared tool infrastructure still combines large schema catalogs, invocation harness behavior, search strategies, compatibility aliases, and output normalization.",
-      "exitCriteria": "Move declarative tool specifications and independent harness or search strategies into focused modules until every listed utility is at or below 600 lines with schema snapshots and execution contracts passing."
-    },
-    {
-      "id": "turn-agent-orchestration",
-      "reason": "Turn and agent services still coordinate multiple execution phases including context preparation, approval, model loops, jobs, subagents, environment policy, and terminal outcomes.",
-      "exitCriteria": "Extract phase-specific services behind explicit ports until every listed orchestrator is at or below 600 lines while preserving turn atomicity, cancellation, authorization, and completion evidence."
-    }
-  ],
-  "files": [
-    { "path": "server/adapters/authAccount.js", "ceiling": 649, "group": "adapter-capabilities" },
-    { "path": "server/adapters/batchFileTools.js", "ceiling": 1367, "group": "adapter-capabilities" },
-    { "path": "server/adapters/browserAutomation.js", "ceiling": 633, "group": "adapter-capabilities" },
-    { "path": "server/adapters/codexPluginSkills.js", "ceiling": 637, "group": "adapter-capabilities" },
-    { "path": "server/adapters/codingAgentTools.js", "ceiling": 796, "group": "adapter-capabilities" },
-    { "path": "server/adapters/fsShellTools.js", "ceiling": 1383, "group": "adapter-capabilities" },
-    { "path": "server/adapters/mediaTools.js", "ceiling": 1175, "group": "adapter-capabilities" },
-    { "path": "server/adapters/nativeModelProviders.js", "ceiling": 687, "group": "adapter-capabilities" },
-    { "path": "server/adapters/pdfTools.js", "ceiling": 1428, "group": "adapter-capabilities" },
-    { "path": "server/adapters/toolProxy.js", "ceiling": 653, "group": "adapter-capabilities" },
-    { "path": "server/appServer.js", "ceiling": 817, "group": "route-composition" },
-    { "path": "server/core/compactionArchivePort.js", "ceiling": 958, "group": "kernel-runtime-ports" },
-    { "path": "server/core/lifecycleCapabilityGraph.js", "ceiling": 733, "group": "kernel-runtime-ports" },
-    { "path": "server/core/managedAttachmentRuntimeBoundary.js", "ceiling": 605, "group": "kernel-runtime-ports" },
-    { "path": "server/core/subagentRunPersistencePort.js", "ceiling": 633, "group": "kernel-runtime-ports" },
-    { "path": "server/core/toolLoopAdapter.js", "ceiling": 736, "group": "kernel-runtime-ports" },
-    { "path": "server/plugins/localPluginPackageStore.js", "ceiling": 1317, "group": "plugin-lifecycle" },
-    { "path": "server/plugins/runtimePluginRegistry.js", "ceiling": 968, "group": "plugin-lifecycle" },
-    { "path": "server/routes/evolutionRoutes.js", "ceiling": 882, "group": "route-composition" },
-    { "path": "server/routes/pluginRoutes.js", "ceiling": 827, "group": "route-composition" },
-    { "path": "server/services/approvalGate.js", "ceiling": 898, "group": "turn-agent-orchestration" },
-    { "path": "server/services/artifactGen.js", "ceiling": 1329, "group": "artifact-delivery" },
-    { "path": "server/services/contextCompactionRuntime.js", "ceiling": 1037, "group": "turn-agent-orchestration" },
-    { "path": "server/services/evolutionAutoLoopService.js", "ceiling": 1027, "group": "evolution-control-plane" },
-    { "path": "server/services/evolutionCanaryService.js", "ceiling": 708, "group": "evolution-control-plane" },
-    { "path": "server/services/evolutionConfigJournalService.js", "ceiling": 645, "group": "evolution-control-plane" },
-    { "path": "server/services/evolutionOnlineGraderService.js", "ceiling": 887, "group": "evolution-control-plane" },
-    { "path": "server/services/evolutionOperationService.js", "ceiling": 1330, "group": "evolution-control-plane" },
-    { "path": "server/services/evolutionPromotionOnlineGraderService.js", "ceiling": 691, "group": "evolution-control-plane" },
-    { "path": "server/services/evolutionPromotionService.js", "ceiling": 942, "group": "evolution-control-plane" },
-    { "path": "server/services/evolutionRollbackService.js", "ceiling": 658, "group": "evolution-control-plane" },
-    { "path": "server/services/generatedArtifactFormatValidation.js", "ceiling": 893, "group": "artifact-delivery" },
-    { "path": "server/services/integrationsStore.js", "ceiling": 1003, "group": "persistence-state" },
-    { "path": "server/services/jobRuntime.js", "ceiling": 1046, "group": "turn-agent-orchestration" },
-    { "path": "server/services/jobStore.js", "ceiling": 680, "group": "persistence-state" },
-    { "path": "server/services/localFileAccessService.js", "ceiling": 960, "group": "artifact-delivery" },
-    { "path": "server/services/localHtmlDeliveryValidation.js", "ceiling": 959, "group": "artifact-delivery" },
-    { "path": "server/services/localPluginPackageService.js", "ceiling": 1003, "group": "plugin-lifecycle" },
-    { "path": "server/services/mailProtocolClient.js", "ceiling": 917, "group": "host-protocol-process" },
-    { "path": "server/services/managedAttachmentStore.js", "ceiling": 704, "group": "persistence-state" },
-    { "path": "server/services/modelProviderStore.js", "ceiling": 925, "group": "persistence-state" },
-    { "path": "server/services/pptxArtifactFormat.js", "ceiling": 764, "group": "artifact-delivery" },
-    { "path": "server/services/promptCompiler.js", "ceiling": 653, "group": "turn-agent-orchestration" },
-    { "path": "server/services/runtimePluginControlService.js", "ceiling": 1082, "group": "plugin-lifecycle" },
-    { "path": "server/services/runtimePluginReleaseGc.js", "ceiling": 797, "group": "plugin-lifecycle" },
-    { "path": "server/services/sessionStore.js", "ceiling": 1076, "group": "persistence-state" },
-    { "path": "server/services/shellSessionStore.js", "ceiling": 676, "group": "persistence-state" },
-    { "path": "server/services/sideEffectExecutionLedger.js", "ceiling": 776, "group": "persistence-state" },
-    { "path": "server/services/sqliteFileCompactionArchiveGovernanceStorage.js", "ceiling": 813, "group": "persistence-state" },
-    { "path": "server/services/subagentRuntime.js", "ceiling": 1427, "group": "turn-agent-orchestration" },
-    { "path": "server/services/turnEventStore.js", "ceiling": 797, "group": "persistence-state" },
-    { "path": "server/services/turnExecutionEnvironment.js", "ceiling": 873, "group": "turn-agent-orchestration" },
-    { "path": "server/services/turnMessageContext.js", "ceiling": 1048, "group": "turn-agent-orchestration" },
-    { "path": "server/utils/codeSearch.js", "ceiling": 650, "group": "tool-infrastructure" },
-    { "path": "server/utils/toolCallHarness.js", "ceiling": 1307, "group": "tool-infrastructure" },
-    { "path": "server/utils/toolSchemaCatalog.js", "ceiling": 1077, "group": "tool-infrastructure" }
-  ]
+  "groups": [],
+  "files": []
 }
 ```
 <!-- debt-size-inventory:end -->
 
-**Exit criteria:** Split every frozen backend implementation into cohesive files
-at or below 600 lines, removing each frozen entry as it crosses the boundary.
-Do not add new inventory entries merely to admit newly created oversized files;
-an intentional temporary exception requires a separately reviewed debt record.
+**Exit criteria:** Close only after every frozen runtime implementation is split
+into cohesive files at or below 600 lines and the inventory is empty. Do not add
+new inventory entries merely to admit newly created oversized files; an
+intentional temporary exception requires a separately reviewed debt record.
 
-**Verification:** `npm run debt:check` discovers every backend JavaScript file,
-rejects new oversized files, rejects growth, requires shrinkage to ratchet the
-frozen ceiling, and rejects resolved or deleted inventory entries.
+**Verification:** `npm run debt:check` discovers JavaScript and TypeScript
+implementation files under `server/`, `shared/`, `desktop/`, and `bin/`; rejects
+new oversized files and requires the closed inventory to remain empty.
 
 ## Maintenance rules
 

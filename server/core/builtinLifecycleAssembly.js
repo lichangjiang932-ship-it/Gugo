@@ -14,6 +14,10 @@ import {
 import { registerBrowserTools } from '../services/browserTools.js'
 import { closeCronScheduler, getCronScheduler } from '../services/cronScheduler.js'
 import { registerConnectorTools } from '../services/connectorTools.js'
+import {
+  closeAgentEventDurableConsumerRuntime,
+  startAgentEventDurableConsumerRuntime,
+} from '../services/agentEventDurableConsumerRuntime.js'
 import { createSqliteFileCompactionArchiveAdapter } from '../services/sqliteFileCompactionArchiveAdapter.js'
 import { createSqliteFileManagedAttachmentRuntimeAdapter } from '../adapters/sqliteFileManagedAttachmentRuntimeAdapter.js'
 import { getEnabledIntegrationCredentials, listEnabledIntegrationCredentials } from '../services/integrationsStore.js'
@@ -82,6 +86,7 @@ export const BUILTIN_LIFECYCLE_CAPABILITY_IDS = Object.freeze({
   visionAssist: 'builtin.startup.vision-assist',
   socialBridges: 'builtin.resource.social-bridges',
   runtimePlugins: 'builtin.resource.runtime-plugins',
+  agentEventConsumers: 'builtin.resource.agent-event-consumers',
   lsp: 'builtin.resource.lsp',
   shellSessions: 'builtin.resource.shell-sessions',
   jobs: 'builtin.resource.jobs',
@@ -123,6 +128,8 @@ const DEFAULT_ADAPTERS = Object.freeze({
   startSocialIntegration: (integration) => socialBridgeManager.startIntegration(integration),
   stopSocialBridges: () => socialBridgeManager.stopAll(),
   shutdownRuntimePlugins,
+  startAgentEventDurableConsumerRuntime,
+  closeAgentEventDurableConsumerRuntime,
   closeShellSessions: closeAllShellSessions,
   closeJobRuntime,
   startEvolutionOperationSweeperRuntime,
@@ -350,7 +357,7 @@ export function createBuiltinLifecycleCapabilities({
       stop: () => adapters.closeLspRuntime(),
       errorLabel: 'LSP runtime lifecycle',
     }),
-    definition(ids.toolLoop, ids.runtimePlugins, {
+    definition(ids.toolLoop, ids.agentEventConsumers, {
       start: () => {
         releaseSubagentModelBindingResolver = adapters.configureSubagentModelBindingResolver(
           adapters.resolveSubagentModelBinding,
@@ -451,6 +458,13 @@ export function createBuiltinLifecycleCapabilities({
       stop: () => adapters.shutdownRuntimePlugins(),
       stopFailure: 'fail',
       errorLabel: 'runtime plugin shutdown',
+    }),
+    definition(ids.agentEventConsumers, ids.runtimePlugins, {
+      start: () => adapters.startAgentEventDurableConsumerRuntime(),
+      startFailure: 'fail',
+      stop: () => adapters.closeAgentEventDurableConsumerRuntime(),
+      stopFailure: 'fail',
+      errorLabel: 'durable Agent Event consumer lifecycle',
     }),
     definition(ids.evolutionOperationSweeper, ids.toolLoop, {
       start: () => adapters.startEvolutionOperationSweeperRuntime(),

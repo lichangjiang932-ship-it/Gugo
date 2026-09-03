@@ -1,21 +1,42 @@
-import { randomUUID } from 'node:crypto'
 import { getDb } from '../db.js'
-import { listSessionTurnArtifacts } from './turnArtifactStore.js'
 import { deleteManagedAttachmentsForSession } from './managedAttachmentStore.js'
 import { runGovernedSessionDeletion } from './sessionDeletionGovernanceRuntime.js'
 import { enqueueSessionContentEventInDb } from './sessionContentOutboxStore.js'
 import {
-  latestTurnBoundaries,
-  loadIncompleteCheckpointMetadata,
-  recoverTerminalEvidenceMessages,
-  withRecoveredIncompleteFailure,
-  withRecoveredVerifiedLocalFiles,
-} from './sessionSnapshotRecovery.js'
+  normalizeSessionExpectedRevision,
+  normalizeSessionWorkspacePath,
+} from './sessionMutationValidation.js'
+import {
+  clampLimit,
+  clampOffset,
+  contentEventTimestamp,
+  getSessionRecord,
+  listSessionContentSnapshots,
+  mapSession,
+  normalizeArchivedFilter,
+  SessionOwnershipError,
+  SessionRevisionConflictError,
+} from './sessionStoreShared.js'
+
+export { SessionMutationValidationError } from './sessionMutationValidation.js'
+export {
+  MessageOwnershipError,
+  SessionBranchDepthError,
+  SessionOwnershipError,
+  SessionRevisionConflictError,
+} from './sessionStoreShared.js'
+export { forkSession, getSessionBranches } from './sessionBranchStore.js'
+export {
+  deleteMessage,
+  getMessage,
+  getPreviousUserMessage,
+  getSessionSnapshot,
+  listMessages,
+  replaceSessionMessages,
+  upsertMessage,
+} from './sessionMessageStore.js'
 
 const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
-const MAX_BRANCH_DEPTH = 5
-const MAX_BRANCH_LABEL_LENGTH = 120
-const MAX_BRANCH_TREE_NODES = 1_000
 const SESSION_SCOPED_TABLES = [
   ['messages', 'session_id'],
   ['turn_events', 'session_id'],
@@ -27,300 +48,6 @@ const SESSION_SCOPED_TABLES = [
   ['subagent_runs', 'parent_session_id'],
 ]
 
-export class SessionOwnershipError extends Error {
-  constructor(message = 'session not found') {
-    super(message)
-    this.name = 'SessionOwnershipError'
-    this.code = 'SESSION_OWNERSHIP_CONFLICT'
-  }
-}
-
-export class SessionRevisionConflictError extends Error {
-  constructor(currentRevision) {
-    super('session revision conflict')
-    this.name = 'SessionRevisionConflictError'
-    this.code = 'SESSION_REVISION_CONFLICT'
-    this.currentRevision = Number(currentRevision) || 0
-  }
-}
-
-export class SessionMutationValidationError extends Error {
-  constructor(message) {
-    super(message)
-    this.name = 'SessionMutationValidationError'
-    this.code = 'INVALID_SESSION_MUTATION'
-  }
-}
-
-export class SessionBranchDepthError extends Error {
-  constructor(maxDepth = MAX_BRANCH_DEPTH) {
-    super(`session branch depth cannot exceed ${maxDepth}`)
-    this.name = 'SessionBranchDepthError'
-    this.code = 'SESSION_BRANCH_DEPTH_LIMIT'
-    this.maxDepth = maxDepth
-  }
-}
-
-function clampLimit(limit, { fallback = 50, max = 100 } = {}) {
-  const value = Number(limit)
-  if (!Number.isFinite(value) || value <= 0) return fallback
-  return Math.min(max, Math.floor(value))
-}
-
-function clampOffset(offset) {
-  const value = Number(offset)
-  if (!Number.isFinite(value) || value < 0) return 0
-  return Math.floor(value)
-}
-
-function normalizeArchivedFilter(archived = 'false') {
-  if (archived === true || archived === 'true') return 'true'
-  if (archived === 'all') return 'all'
-  return 'false'
-}
-
-function mapSession(row) {
-  if (!row) return null
-  return {
-    id: row.id || row.token,
-    title: row.title || 'Untitled',
-    createdAt: row.created_at,
-    updatedAt: row.updated_at || row.created_at,
-    lastViewedAt: row.last_viewed_at || null,
-    archivedAt: row.archived_at || null,
-    pinnedAt: row.pinned_at ?? null,
-    parentSessionId: row.parent_session_id || null,
-    branchLabel: row.branch_label || null,
-    forkedAt: row.forked_at ?? null,
-    revision: Number(row.revision) || 0,
-  }
-}
-
-function normalizeBranchLabel(value) {
-  if (value == null) return null
-  if (typeof value !== 'string') {
-    throw new SessionMutationValidationError('label must be a string')
-  }
-  const label = value.trim().replace(/\s+/g, ' ')
-  if (!label) return null
-  if (label.length > MAX_BRANCH_LABEL_LENGTH) {
-    throw new SessionMutationValidationError(
-      `label exceeds the ${MAX_BRANCH_LABEL_LENGTH} character limit`,
-    )
-  }
-  return label
-}
-
-function forkSafeModelContext(value) {
-  if (!value) return '{}'
-  try {
-    const context = JSON.parse(value)
-    if (!context || typeof context !== 'object' || Array.isArray(context)) return '{}'
-    for (const key of [
-      'clarification',
-      'directoryAuthorizationPending',
-      'interrupted',
-      'liveSteering',
-      'paused',
-      'pausedSequence',
-      'serverConnectionState',
-      'serverResumeResolution',
-      'streaming',
-    ]) delete context[key]
-    return JSON.stringify(context)
-  } catch {
-    return '{}'
-  }
-}
-
-function uniqueGeneratedId(db, { factory, table, used }) {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const id = String(factory()).trim()
-    if (!id || id.length > 512 || used.has(id)) continue
-    const exists = table === 'sessions'
-      ? db.prepare('SELECT 1 FROM sessions WHERE token = ?').get(id)
-      : db.prepare('SELECT 1 FROM messages WHERE id = ?').get(id)
-    if (exists) continue
-    used.add(id)
-    return id
-  }
-  throw new Error('failed to allocate a unique session branch id')
-}
-
-function sessionAncestors(db, { userId, sessionId, maxDepth = MAX_BRANCH_DEPTH + 1 }) {
-  return db.prepare(`
-    WITH RECURSIVE ancestors(token, parent_session_id, depth) AS (
-      SELECT token, parent_session_id, 0
-      FROM sessions
-      WHERE user_id = @userId AND token = @sessionId
-        AND (id IS NOT NULL OR title IS NOT NULL)
-      UNION ALL
-      SELECT parent.token, parent.parent_session_id, ancestors.depth + 1
-      FROM sessions AS parent
-      JOIN ancestors ON parent.token = ancestors.parent_session_id
-      WHERE parent.user_id = @userId
-        AND (parent.id IS NOT NULL OR parent.title IS NOT NULL)
-        AND ancestors.depth < @maxDepth
-    )
-    SELECT token, parent_session_id, depth
-    FROM ancestors
-    ORDER BY depth ASC
-  `).all({ userId, sessionId, maxDepth })
-}
-
-export function forkSession({
-  userId,
-  sessionId,
-  label = null,
-  now = Date.now(),
-  idFactory = randomUUID,
-} = {}) {
-  if (!userId || !sessionId) return null
-  if (typeof idFactory !== 'function') {
-    throw new SessionMutationValidationError('idFactory must be a function')
-  }
-  const branchLabel = normalizeBranchLabel(label)
-  const db = getDb()
-  return db.transaction(() => {
-    const source = db.prepare(`
-      SELECT token, title
-      FROM sessions
-      WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
-    `).get(userId, sessionId)
-    if (!source) return null
-
-    const ancestors = sessionAncestors(db, { userId, sessionId })
-    const sourceDepth = Math.max(0, ...ancestors.map((item) => Number(item.depth) || 0))
-    if (sourceDepth >= MAX_BRANCH_DEPTH) throw new SessionBranchDepthError()
-
-    const usedSessionIds = new Set()
-    const usedMessageIds = new Set()
-    const forkedSessionId = uniqueGeneratedId(db, {
-      factory: idFactory,
-      table: 'sessions',
-      used: usedSessionIds,
-    })
-    const timestamp = Number.isFinite(Number(now)) ? Math.floor(Number(now)) : Date.now()
-    db.prepare(`
-      INSERT INTO sessions
-        (token, id, user_id, title, expires_at, created_at, updated_at,
-          last_viewed_at, archived_at, pinned_at, parent_session_id, branch_label, forked_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)
-    `).run(
-      forkedSessionId,
-      forkedSessionId,
-      userId,
-      source.title || 'Untitled',
-      Number.MAX_SAFE_INTEGER,
-      timestamp,
-      timestamp,
-      source.token,
-      branchLabel,
-      timestamp,
-    )
-
-    const sourceMessages = db.prepare(`
-      SELECT role, content, model_context_json, created_at, updated_at, rowid
-      FROM messages
-      WHERE user_id = ? AND session_id = ?
-      ORDER BY created_at ASC, rowid ASC
-    `).all(userId, source.token)
-    const insertMessage = db.prepare(`
-      INSERT INTO messages
-        (id, session_id, user_id, role, content, session_title,
-          model_context_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-    const forkedMessages = []
-    for (const message of sourceMessages) {
-      const messageId = uniqueGeneratedId(db, {
-        factory: idFactory,
-        table: 'messages',
-        used: usedMessageIds,
-      })
-      const modelContextJson = forkSafeModelContext(message.model_context_json)
-      insertMessage.run(
-        messageId,
-        forkedSessionId,
-        userId,
-        message.role,
-        message.content,
-        source.title || 'Untitled',
-        modelContextJson,
-        message.created_at,
-        message.updated_at,
-      )
-      forkedMessages.push(messageContentSnapshot({
-        id: messageId,
-        role: message.role,
-        content: message.content,
-        modelContextJson,
-        createdAt: message.created_at,
-        updatedAt: message.updated_at,
-      }))
-    }
-    enqueueSessionContentEventInDb(db, {
-      userId,
-      sessionId: forkedSessionId,
-      eventType: 'session.replace',
-      payload: { messages: forkedMessages },
-      createdAt: contentEventTimestamp(timestamp),
-    })
-
-    return {
-      session: getSession({ userId, sessionId: forkedSessionId }),
-      totalMessages: sourceMessages.length,
-    }
-  })()
-}
-
-export function getSessionBranches({ userId, sessionId } = {}) {
-  if (!userId || !sessionId) return null
-  const db = getDb()
-  const ancestors = sessionAncestors(db, { userId, sessionId, maxDepth: MAX_BRANCH_DEPTH })
-  if (!ancestors.length) return null
-  const rootSessionId = ancestors.at(-1).token
-  const rows = db.prepare(`
-    WITH RECURSIVE branch_tree(
-      token, id, title, created_at, updated_at, last_viewed_at, archived_at,
-      pinned_at, revision, parent_session_id, branch_label, forked_at, depth
-    ) AS (
-      SELECT token, id, title, created_at, updated_at, last_viewed_at, archived_at,
-        pinned_at, revision, parent_session_id, branch_label, forked_at, 0
-      FROM sessions
-      WHERE user_id = @userId AND token = @rootSessionId
-        AND (id IS NOT NULL OR title IS NOT NULL)
-      UNION ALL
-      SELECT child.token, child.id, child.title, child.created_at, child.updated_at,
-        child.last_viewed_at, child.archived_at, child.pinned_at, child.revision,
-        child.parent_session_id, child.branch_label, child.forked_at,
-        branch_tree.depth + 1
-      FROM sessions AS child
-      JOIN branch_tree ON child.parent_session_id = branch_tree.token
-      WHERE child.user_id = @userId
-        AND (child.id IS NOT NULL OR child.title IS NOT NULL)
-        AND branch_tree.depth < @maxDepth
-    )
-    SELECT * FROM branch_tree
-    ORDER BY depth ASC, COALESCE(forked_at, created_at) ASC, token ASC
-    LIMIT @limit
-  `).all({
-    userId,
-    rootSessionId,
-    maxDepth: MAX_BRANCH_DEPTH,
-    limit: MAX_BRANCH_TREE_NODES + 1,
-  })
-  const truncated = rows.length > MAX_BRANCH_TREE_NODES
-  return {
-    rootSessionId,
-    branches: rows.slice(0, MAX_BRANCH_TREE_NODES).map((row) => ({
-      ...mapSession(row),
-      depth: Number(row.depth) || 0,
-    })),
-    truncated,
-  }
-}
-
 function upsertSessionRecord({
   id,
   userId,
@@ -329,6 +56,7 @@ function upsertSessionRecord({
   updatedAt = createdAt,
   lastViewedAt = null,
   archivedAt = null,
+  workspacePath = undefined,
 }, { notifyLifecycle = true } = {}) {
   if (!id) throw new Error('session id is required')
   if (!userId) throw new Error('user id is required')
@@ -338,30 +66,36 @@ function upsertSessionRecord({
   if (owner && (ownerIsAuthSession || owner.user_id !== userId)) throw new SessionOwnershipError()
   const row = owner?.user_id === userId ? owner : null
   const finalCreatedAt = row?.created_at || createdAt
+  const normalizedWorkspacePath = normalizeSessionWorkspacePath(workspacePath)
   db.prepare(`
-    INSERT INTO sessions (token, id, user_id, title, expires_at, created_at, updated_at, last_viewed_at, archived_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions
+      (token, id, user_id, title, expires_at, created_at, updated_at, last_viewed_at,
+        archived_at, workspace_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(token) DO UPDATE SET
       id = excluded.id,
       title = excluded.title,
       updated_at = excluded.updated_at,
       last_viewed_at = COALESCE(excluded.last_viewed_at, sessions.last_viewed_at),
       archived_at = excluded.archived_at,
+      workspace_path = CASE WHEN ? = 1 THEN excluded.workspace_path ELSE sessions.workspace_path END,
       revision = sessions.revision + 1
     WHERE sessions.user_id = excluded.user_id
-  `).run(id, id, userId, title, Number.MAX_SAFE_INTEGER, finalCreatedAt, updatedAt, lastViewedAt, archivedAt)
+  `).run(
+    id,
+    id,
+    userId,
+    title,
+    Number.MAX_SAFE_INTEGER,
+    finalCreatedAt,
+    updatedAt,
+    lastViewedAt,
+    archivedAt,
+    normalizedWorkspacePath,
+    workspacePath === undefined ? 0 : 1,
+  )
   if (!row && notifyLifecycle) notifySessionStarted({ userId, sessionId: id, title })
   return getSession({ userId, sessionId: id })
-}
-
-export class MessageOwnershipError extends Error {
-  constructor(message = 'message id belongs to another session') {
-    super(message)
-    this.name = 'MessageOwnershipError'
-    this.code = 'MESSAGE_OWNERSHIP_CONFLICT'
-    this.status = 409
-    this.retryable = false
-  }
 }
 
 /** Best-effort notification; aggregate commits call this only after COMMIT. */
@@ -390,128 +124,39 @@ export function upsertSessionForAtomicCommit(input) {
   return upsertSessionRecord(input, { notifyLifecycle: false })
 }
 
-function parseModelContext(value) {
-  if (!value) return null
-  try {
-    const parsed = JSON.parse(value)
-    return parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0 ? parsed : null
-  } catch {
-    return null
-  }
+/** Internal aggregate-store primitive: callers own the surrounding transaction. */
+export function setSessionWorkspacePathForAtomicCommit({
+  userId,
+  sessionId,
+  workspacePath,
+} = {}) {
+  if (!userId || !sessionId) return false
+  const normalizedWorkspacePath = normalizeSessionWorkspacePath(workspacePath)
+  const result = getDb().prepare(`
+    UPDATE sessions
+    SET workspace_path = ?
+    WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+  `).run(normalizedWorkspacePath, userId, sessionId)
+  return result.changes === 1
 }
 
-function serializeModelContext(value) {
-  if (!value || typeof value !== 'object') return '{}'
-  return JSON.stringify(value)
+/** Persist an explicit workspace selection (or clear) outside a Turn commit. */
+export function setSessionWorkspace({
+  userId,
+  sessionId,
+  workspacePath,
+  now = Date.now(),
+} = {}) {
+  if (!userId || !sessionId) return null
+  const normalizedWorkspacePath = normalizeSessionWorkspacePath(workspacePath)
+  const result = getDb().prepare(`
+    UPDATE sessions
+    SET workspace_path = ?, updated_at = ?
+    WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+  `).run(normalizedWorkspacePath, now, userId, sessionId)
+  if (result.changes !== 1) return null
+  return getSession({ userId, sessionId })
 }
-
-function contentEventTimestamp(value = Date.now()) {
-  const timestamp = Number(value)
-  return Number.isSafeInteger(timestamp) && timestamp >= 0 ? timestamp : Date.now()
-}
-
-function messageContentSnapshot({
-  id,
-  role,
-  content,
-  modelContext = null,
-  modelContextJson = null,
-  createdAt,
-  updatedAt,
-}) {
-  return {
-    id,
-    role,
-    content: String(content ?? ''),
-    modelContext: modelContextJson == null ? modelContext : parseModelContext(modelContextJson),
-    createdAt,
-    updatedAt,
-  }
-}
-
-function listSessionContentSnapshots(db, { userId, sessionId }) {
-  return db.prepare(`
-    SELECT id, role, content, model_context_json, created_at, updated_at, rowid
-    FROM messages
-    WHERE user_id = ? AND session_id = ?
-    ORDER BY created_at ASC, rowid ASC
-  `).all(userId, sessionId).map((row) => messageContentSnapshot({
-    id: row.id,
-    role: row.role,
-    content: row.content,
-    modelContextJson: row.model_context_json,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }))
-}
-
-function normalizeExpectedRevision(value) {
-  const revision = Number(value)
-  if (!Number.isSafeInteger(revision) || revision < 0) {
-    throw new SessionMutationValidationError('expectedRevision must be a non-negative integer')
-  }
-  return revision
-}
-
-function normalizeMessageContent(value) {
-  if (typeof value === 'string') return value
-  if (value == null) return ''
-  try { return JSON.stringify(value) } catch { return String(value) }
-}
-
-function normalizeReplacementMessages(messages, existingContexts, now) {
-  if (!Array.isArray(messages)) {
-    throw new SessionMutationValidationError('messages must be an array')
-  }
-  if (messages.length > 50_000) {
-    throw new SessionMutationValidationError('messages exceeds the 50000 item limit')
-  }
-  const ids = new Set()
-  return messages.map((message, index) => {
-    const id = String(message?.id || '').trim()
-    const role = String(message?.role || '').trim()
-    if (!id || id.length > 512) {
-      throw new SessionMutationValidationError(`messages[${index}].id is invalid`)
-    }
-    if (ids.has(id)) {
-      throw new SessionMutationValidationError(`duplicate message id: ${id}`)
-    }
-    ids.add(id)
-    if (!['user', 'assistant', 'system', 'tool'].includes(role)) {
-      throw new SessionMutationValidationError(`messages[${index}].role is invalid`)
-    }
-    const createdAtValue = Number(message?.createdAt)
-    const updatedAtValue = Number(message?.updatedAt)
-    const createdAt = Number.isFinite(createdAtValue) ? Math.floor(createdAtValue) : now + index
-    const updatedAt = Number.isFinite(updatedAtValue) ? Math.floor(updatedAtValue) : createdAt
-    const providedContext = message?.modelContext && typeof message.modelContext === 'object'
-      ? serializeModelContext(message.modelContext)
-      : null
-    return {
-      id,
-      role,
-      content: normalizeMessageContent(message?.content),
-      modelContextJson: providedContext || existingContexts.get(id) || '{}',
-      createdAt,
-      updatedAt,
-    }
-  })
-}
-
-function mapMessage(row) {
-  return {
-    id: row.id,
-    sessionId: row.session_id,
-    userId: row.user_id,
-    role: row.role,
-    content: row.content,
-    modelContext: parseModelContext(row.model_context_json),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }
-}
-
-
 /**
  * Claim one legacy chat for the selected local-auth owner. This deliberately
  * does not merge whole users because providers and agents may exist on both.
@@ -568,14 +213,7 @@ export function claimLocalChatSession({ userId, sessionId, authMode, now = Date.
 }
 
 export function getSession({ userId, sessionId }) {
-  if (!userId || !sessionId) return null
-  const row = getDb().prepare(`
-    SELECT token, id, title, created_at, updated_at, last_viewed_at, archived_at,
-      pinned_at, revision, parent_session_id, branch_label, forked_at
-    FROM sessions
-    WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
-  `).get(userId, sessionId)
-  return mapSession(row)
+  return getSessionRecord({ userId, sessionId })
 }
 
 /**
@@ -595,7 +233,10 @@ export function listSessions({ userId, archived = 'false', limit = 100, offset =
   if (filter === 'false') clauses.push('archived_at IS NULL')
   const rows = getDb().prepare(`
     SELECT token, id, title, created_at, updated_at, last_viewed_at, archived_at,
-      pinned_at, revision, parent_session_id, branch_label, forked_at
+      pinned_at, revision, parent_session_id, branch_label, forked_at, workspace_path,
+      COALESCE((SELECT MAX(turn_events.rowid) FROM turn_events
+        WHERE turn_events.user_id = sessions.user_id
+          AND turn_events.session_id = sessions.token), 0) AS turn_event_revision
     FROM sessions
     WHERE ${clauses.join(' AND ')}
     ORDER BY
@@ -656,334 +297,9 @@ export function unpinSession({ userId, sessionId }) {
   return getSession({ userId, sessionId })
 }
 
-export function upsertMessage({
-  id,
-  userId,
-  sessionId,
-  role,
-  content = '',
-  modelContext = null,
-  createdAt = Date.now(),
-  updatedAt = createdAt,
-}) {
-  if (!id) throw new Error('message id is required')
-  if (!userId) throw new Error('user id is required')
-  if (!sessionId) throw new Error('session id is required')
-  if (!role) throw new Error('message role is required')
-  const db = getDb()
-  const session = db.prepare(`
-    SELECT title FROM sessions
-    WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
-  `).get(userId, sessionId)
-  if (!session) throw new Error('session not found')
-  const serializedContext = serializeModelContext(modelContext)
-  db.transaction(() => {
-    const write = db.prepare(`
-      INSERT INTO messages
-        (id, session_id, user_id, role, content, session_title, model_context_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        role = excluded.role,
-        content = excluded.content,
-        session_title = excluded.session_title,
-        model_context_json = excluded.model_context_json,
-        updated_at = excluded.updated_at
-      WHERE messages.user_id = excluded.user_id AND messages.session_id = excluded.session_id
-    `).run(
-      id,
-      sessionId,
-      userId,
-      role,
-      String(content ?? ''),
-      session.title || '',
-      serializedContext,
-      createdAt,
-      updatedAt,
-    )
-    if (write.changes !== 1) throw new MessageOwnershipError()
-    db.prepare(`
-      UPDATE sessions
-      SET updated_at = CASE
-        WHEN COALESCE(updated_at, 0) < ? THEN ?
-        ELSE updated_at
-      END
-      WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
-    `).run(updatedAt, updatedAt, userId, sessionId)
-    const persisted = db.prepare(`
-      SELECT id, role, content, model_context_json, created_at, updated_at
-      FROM messages
-      WHERE user_id = ? AND session_id = ? AND id = ?
-    `).get(userId, sessionId, id)
-    enqueueSessionContentEventInDb(db, {
-      userId,
-      sessionId,
-      eventType: 'message.upsert',
-      payload: {
-        message: messageContentSnapshot({
-          id: persisted.id,
-          role: persisted.role,
-          content: persisted.content,
-          modelContextJson: persisted.model_context_json,
-          createdAt: persisted.created_at,
-          updatedAt: persisted.updated_at,
-        }),
-      },
-      createdAt: contentEventTimestamp(updatedAt),
-    })
-  })()
-  return {
-    id,
-    sessionId,
-    userId,
-    role,
-    content: String(content ?? ''),
-    modelContext: parseModelContext(serializedContext),
-    createdAt,
-    updatedAt,
-  }
-}
-
-export function listMessages({ userId, sessionId, limit = 500, offset = 0, recent = false } = {}) {
-  if (!userId || !sessionId) return []
-  const safeLimit = Math.min(2000, Math.max(1, Number(limit) || 500))
-  const safeOffset = clampOffset(offset)
-  const order = recent ? 'DESC' : 'ASC'
-  const rows = getDb().prepare(`
-    SELECT id, session_id, user_id, role, content, model_context_json, created_at, updated_at, rowid
-    FROM messages
-    WHERE user_id = ? AND session_id = ?
-    ORDER BY created_at ${order}, rowid ${order}
-    LIMIT ? OFFSET ?
-  `).all(userId, sessionId, safeLimit, safeOffset)
-  if (recent) rows.reverse()
-  return rows.map(mapMessage)
-}
-
-export function getMessage({ userId, sessionId, messageId } = {}) {
-  if (!userId || !messageId) return null
-  const row = sessionId
-    ? getDb().prepare(`
-      SELECT id, session_id, user_id, role, content, model_context_json, created_at, updated_at, rowid
-      FROM messages
-      WHERE user_id = ? AND session_id = ? AND id = ?
-      LIMIT 1
-    `).get(userId, sessionId, messageId)
-    : getDb().prepare(`
-      SELECT id, session_id, user_id, role, content, model_context_json, created_at, updated_at, rowid
-      FROM messages
-      WHERE user_id = ? AND id = ?
-      LIMIT 1
-    `).get(userId, messageId)
-  return row ? mapMessage(row) : null
-}
-
-export function getPreviousUserMessage({ userId, sessionId, messageId } = {}) {
-  if (!userId || !sessionId || !messageId) return null
-  const row = getDb().prepare(`
-    SELECT previous.id, previous.session_id, previous.user_id, previous.role,
-      previous.content, previous.model_context_json, previous.created_at,
-      previous.updated_at, previous.rowid
-    FROM messages AS current
-    JOIN messages AS previous
-      ON previous.user_id = current.user_id
-      AND previous.session_id = current.session_id
-    WHERE current.id = ?
-      AND current.user_id = ?
-      AND current.session_id = ?
-      AND current.role = 'user'
-      AND previous.role = 'user'
-      AND (
-        previous.created_at < current.created_at
-        OR (previous.created_at = current.created_at AND previous.rowid < current.rowid)
-      )
-    ORDER BY previous.created_at DESC, previous.rowid DESC
-    LIMIT 1
-  `).get(messageId, userId, sessionId)
-  return row ? mapMessage(row) : null
-}
-
-export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0 } = {}) {
-  const db = getDb()
-  return db.transaction(() => {
-    const session = getSession({ userId, sessionId })
-    if (!session) return null
-    // Session revisions track transcript mutations, while terminal turn events
-    // are append-only and can change independently. Expose both watermarks so
-    // a paged client cannot combine pages from different terminal states.
-    const turnEventRevision = Number(db.prepare(`
-      SELECT COALESCE(MAX(rowid), 0) AS revision
-      FROM turn_events
-      WHERE user_id = ? AND session_id = ?
-    `).get(userId, sessionId)?.revision) || 0
-    const safeLimit = Math.min(2000, Math.max(1, Number(limit) || 2000))
-    const safeOffset = clampOffset(offset)
-    const totalMessages = db.prepare(`
-      SELECT COUNT(*) AS count
-      FROM messages
-      WHERE user_id = ? AND session_id = ?
-    `).get(userId, sessionId).count
-    const artifactsByTurn = new Map()
-    for (const artifact of listSessionTurnArtifacts({ userId, sessionId })) {
-      const entries = artifactsByTurn.get(artifact.turnId) || []
-      entries.push({
-        id: artifact.id,
-        type: artifact.type,
-        title: artifact.title,
-        url: artifact.url,
-        filename: artifact.filename,
-        createdAt: artifact.createdAt,
-      })
-      artifactsByTurn.set(artifact.turnId, entries)
-    }
-    const storedMessages = listMessages({ userId, sessionId, limit: safeLimit, offset: safeOffset })
-      .map(withRecoveredVerifiedLocalFiles)
-    const allTerminalBoundaries = latestTurnBoundaries(db, {
-      userId,
-      sessionId,
-    })
-    const pageMessageIds = new Set(storedMessages.map((message) => message?.id).filter(Boolean))
-    const pageTurnIds = new Set(storedMessages
-      .map((message) => String(message?.modelContext?.turnId || '').trim())
-      .filter(Boolean))
-    const terminalBoundaries = allTerminalBoundaries.filter((row) => (
-      pageTurnIds.has(row.turn_id)
-      || pageMessageIds.has(`${row.turn_id}:assistant`)
-      || (row.evidence_anchor_id && pageMessageIds.has(row.evidence_anchor_id))
-      || (!row.evidence_anchor_id && safeOffset === 0)
-    ))
-    const missingEvidenceMessages = allTerminalBoundaries.reduce(
-      (count, row) => count + (row.has_evidence_message ? 0 : 1),
-      0,
-    )
-    const terminalRecovery = recoverTerminalEvidenceMessages(
-      storedMessages,
-      terminalBoundaries,
-      { userId, sessionId },
-      {
-        synthesizeMissing: true,
-        synthesisAnchorIds: pageMessageIds,
-        includeUnanchored: safeOffset === 0,
-      },
-    )
-    const incompleteMetadataByTurn = loadIncompleteCheckpointMetadata(db, {
-      userId,
-      sessionId,
-      messages: terminalRecovery.messages,
-    })
-    const messages = terminalRecovery.messages
-      .map((message) => withRecoveredIncompleteFailure(message, incompleteMetadataByTurn))
-      .map((message) => {
-        const turnId = String(message?.modelContext?.turnId || '')
-        if (!turnId) return message
-        const artifacts = artifactsByTurn.get(turnId) || []
-        if (!artifacts.length) return message
-        const requestedIds = Array.isArray(message.modelContext?.artifactIds)
-          ? new Set(message.modelContext.artifactIds.map(String))
-          : null
-        // An explicit empty list means this terminal message owns no managed
-        // artifacts. Only legacy messages that omit artifactIds may fall back
-        // to every durable artifact recorded for the turn.
-        const matched = requestedIds
-          ? artifacts.filter((artifact) => requestedIds.has(String(artifact.id)))
-          : artifacts
-        return matched.length ? { ...message, artifacts: matched } : message
-      })
-    const durableNextOffset = safeOffset + storedMessages.length
-    const snapshotTotalMessages = totalMessages + missingEvidenceMessages
-    const complete = durableNextOffset >= totalMessages
-    return {
-      session,
-      messages,
-      revision: session.revision,
-      turnEventRevision,
-      totalMessages: snapshotTotalMessages,
-      complete,
-      // Virtual terminal rows are returned beside their unique durable anchor
-      // but never consume an OFFSET position in the messages table.
-      nextOffset: complete ? null : durableNextOffset,
-    }
-  })()
-}
-
-export function replaceSessionMessages({
-  userId,
-  sessionId,
-  expectedRevision,
-  messages,
-  now = Date.now(),
-} = {}) {
-  if (!userId || !sessionId) return null
-  const revision = normalizeExpectedRevision(expectedRevision)
-  const db = getDb()
-  return db.transaction(() => {
-    const session = db.prepare(`
-      SELECT token, title, revision
-      FROM sessions
-      WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
-    `).get(userId, sessionId)
-    if (!session) return null
-    if (Number(session.revision) !== revision) {
-      throw new SessionRevisionConflictError(session.revision)
-    }
-
-    const existingContexts = new Map(db.prepare(`
-      SELECT id, model_context_json
-      FROM messages
-      WHERE user_id = ? AND session_id = ?
-    `).all(userId, sessionId).map((row) => [row.id, row.model_context_json || '{}']))
-    const normalized = normalizeReplacementMessages(messages, existingContexts, now)
-    db.prepare('DELETE FROM messages WHERE user_id = ? AND session_id = ?').run(userId, sessionId)
-    const insert = db.prepare(`
-      INSERT INTO messages
-        (id, session_id, user_id, role, content, session_title, model_context_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-    for (const message of normalized) {
-      insert.run(
-        message.id,
-        sessionId,
-        userId,
-        message.role,
-        message.content,
-        session.title || '',
-        message.modelContextJson,
-        message.createdAt,
-        message.updatedAt,
-      )
-    }
-    enqueueSessionContentEventInDb(db, {
-      userId,
-      sessionId,
-      eventType: 'session.replace',
-      payload: {
-        messages: normalized.map((message) => messageContentSnapshot({
-          id: message.id,
-          role: message.role,
-          content: message.content,
-          modelContextJson: message.modelContextJson,
-          createdAt: message.createdAt,
-          updatedAt: message.updatedAt,
-        })),
-      },
-      createdAt: contentEventTimestamp(now),
-    })
-    db.prepare(`
-      UPDATE sessions
-      SET updated_at = ?, revision = revision + 1
-      WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
-    `).run(now, userId, sessionId)
-    const current = db.prepare('SELECT revision FROM sessions WHERE user_id = ? AND token = ?')
-      .get(userId, sessionId)
-    return {
-      revision: Number(current.revision) || 0,
-      totalMessages: normalized.length,
-    }
-  })()
-}
-
 export function deleteSession({ userId, sessionId, expectedRevision } = {}, governanceDependencies) {
   if (!userId || !sessionId) return null
-  const revision = normalizeExpectedRevision(expectedRevision)
+  const revision = normalizeSessionExpectedRevision(expectedRevision)
   const db = getDb()
   const validate = () => {
     const session = db.prepare(`
@@ -1052,25 +368,4 @@ export function deleteSession({ userId, sessionId, expectedRevision } = {}, gove
     }
   }
   return result
-}
-
-export function deleteMessage({ userId, messageId }) {
-  if (!userId || !messageId) return false
-  const db = getDb()
-  return db.transaction(() => {
-    const row = db.prepare('SELECT session_id FROM messages WHERE user_id = ? AND id = ?')
-      .get(userId, messageId)
-    if (!row) return false
-    const result = db.prepare('DELETE FROM messages WHERE user_id = ? AND id = ?').run(userId, messageId)
-    if (result.changes > 0) {
-      enqueueSessionContentEventInDb(db, {
-        userId,
-        sessionId: row.session_id,
-        eventType: 'message.delete',
-        payload: { messageId },
-        createdAt: contentEventTimestamp(),
-      })
-    }
-    return result.changes > 0
-  })()
 }

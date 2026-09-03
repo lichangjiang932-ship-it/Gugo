@@ -1,3 +1,5 @@
+import { migrateToV1 } from './v1InitialSchema.js'
+import { LEGACY_SCHEMA_MIGRATIONS } from './legacyCompatibility.js'
 import { migrateToV31 } from './v31McpOAuth.js'
 import { migrateToV32 } from './v32WorkspaceTrust.js'
 import { migrateToV33 } from './v33ProviderRiskOverrides.js'
@@ -75,12 +77,20 @@ import { migrateToV104 } from './v104RuntimePluginMutationRecoveryReceipts.js'
 import { migrateToV105 } from './v105RuntimePluginMutationBarrierHardening.js'
 import { migrateToV106 } from './v106EvolutionAutoLoop.js'
 import { migrateToV107 } from './v107SchemaContractRepair.js'
+import { migrateToV108 } from './v108UnifiedBootstrapSchema.js'
+import { migrateToV109 } from './v109SessionWorkspacePath.js'
+import { migrateToV110 } from './v110JobAutoRetry.js'
+import { migrateToV111 } from './v111JobEventLocalization.js'
+import { migrateToV112 } from './v112JobAutoRetryWakeClaims.js'
+import { migrateToV113 } from './v113AgentEventOutbox.js'
+import { migrateToV114 } from './v114AgentEventSubscriptions.js'
+import { migrateToV115 } from './v115TenantScopedAgentEventSubscriptions.js'
 
-export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56, migrateToV57, migrateToV58, migrateToV59, migrateToV60, migrateToV61, migrateToV62, migrateToV63, migrateToV64, migrateToV65, migrateToV66, migrateToV67, migrateToV68, migrateToV69, migrateToV70, migrateToV71, migrateToV72, migrateToV73, migrateToV74, migrateToV75, migrateToV76, migrateToV77, migrateToV78, migrateToV79, migrateToV80, migrateToV81, migrateToV82, migrateToV83, migrateToV84, migrateToV85, migrateToV86, migrateToV87, migrateToV88, migrateToV89, migrateToV90, migrateToV91, migrateToV92, migrateToV93, migrateToV94, migrateToV95, migrateToV96, migrateToV97, migrateToV98, migrateToV99, migrateToV100, migrateToV101, migrateToV102, migrateToV103, migrateToV104, migrateToV105, migrateToV106, migrateToV107 }
+export { migrateToV1, migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56, migrateToV57, migrateToV58, migrateToV59, migrateToV60, migrateToV61, migrateToV62, migrateToV63, migrateToV64, migrateToV65, migrateToV66, migrateToV67, migrateToV68, migrateToV69, migrateToV70, migrateToV71, migrateToV72, migrateToV73, migrateToV74, migrateToV75, migrateToV76, migrateToV77, migrateToV78, migrateToV79, migrateToV80, migrateToV81, migrateToV82, migrateToV83, migrateToV84, migrateToV85, migrateToV86, migrateToV87, migrateToV88, migrateToV89, migrateToV90, migrateToV91, migrateToV92, migrateToV93, migrateToV94, migrateToV95, migrateToV96, migrateToV97, migrateToV98, migrateToV99, migrateToV100, migrateToV101, migrateToV102, migrateToV103, migrateToV104, migrateToV105, migrateToV106, migrateToV107, migrateToV108, migrateToV109, migrateToV110, migrateToV111, migrateToV112, migrateToV113, migrateToV114, migrateToV115 }
 
 /**
- * V2-V30 stay in db.js for upgrade compatibility. New migrations are registered
- * here so ordering and the latest schema version have one source of truth.
+ * V2-V30 remain isolated behind the legacy compatibility adapter. The primary
+ * registry owns empty-database bootstrap and every current migration.
  */
 export const schemaMigrations = Object.freeze([
   { version: 31, up: migrateToV31 },
@@ -160,6 +170,14 @@ export const schemaMigrations = Object.freeze([
   { version: 105, up: migrateToV105, atomicWithVersion: true },
   { version: 106, up: migrateToV106, atomicWithVersion: true },
   { version: 107, up: migrateToV107, atomicWithVersion: true },
+  { version: 108, up: migrateToV108, atomicWithVersion: true },
+  { version: 109, up: migrateToV109, atomicWithVersion: true },
+  { version: 110, up: migrateToV110, atomicWithVersion: true },
+  { version: 111, up: migrateToV111, atomicWithVersion: true },
+  { version: 112, up: migrateToV112, atomicWithVersion: true },
+  { version: 113, up: migrateToV113, atomicWithVersion: true },
+  { version: 114, up: migrateToV114, atomicWithVersion: true },
+  { version: 115, up: migrateToV115, atomicWithVersion: true },
 ])
 
 export const LATEST_SCHEMA_VERSION = schemaMigrations.at(-1)?.version || 30
@@ -192,14 +210,14 @@ function validatedCurrentSchemaVersion(row) {
   return version
 }
 
-export function createSchemaMigrationPlan(legacyMigrations = []) {
-  const plan = [...legacyMigrations, ...schemaMigrations]
+export function createSchemaMigrationPlan(legacyMigrations = LEGACY_SCHEMA_MIGRATIONS) {
+  const plan = [{ version: 1, up: migrateToV1, atomicWithVersion: true }, ...legacyMigrations, ...schemaMigrations]
     .map((migration) => ({ ...migration }))
     .sort((left, right) => left.version - right.version)
 
   for (let index = 0; index < plan.length; index += 1) {
     const migration = plan[index]
-    if (!Number.isInteger(migration.version) || migration.version < 2 || typeof migration.up !== 'function') {
+    if (!Number.isInteger(migration.version) || migration.version < 1 || typeof migration.up !== 'function') {
       throw new TypeError(`Invalid schema migration at index ${index}`)
     }
     if (index > 0 && migration.version !== plan[index - 1].version + 1) {
@@ -209,7 +227,7 @@ export function createSchemaMigrationPlan(legacyMigrations = []) {
   return plan
 }
 
-export function runSchemaMigrations(db, { legacyMigrations = [] } = {}) {
+export function runSchemaMigrations(db, { legacyMigrations = LEGACY_SCHEMA_MIGRATIONS } = {}) {
   const readVersion = () => {
     const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
     return validatedCurrentSchemaVersion(row)
@@ -218,8 +236,15 @@ export function runSchemaMigrations(db, { legacyMigrations = [] } = {}) {
     'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
   ).run('schema_version', String(version))
 
-  let currentVersion = readVersion()
-  for (const migration of createSchemaMigrationPlan(legacyMigrations)) {
+  const plan = createSchemaMigrationPlan(legacyMigrations)
+  let currentVersion = hasTable(db, 'meta') ? readVersion() : 0
+  // Historical v1 databases were allowed to omit part of the bootstrap
+  // contract. Replaying the idempotent v1 entry preserves that compatibility
+  // without keeping an out-of-band initializer in db.js.
+  if (currentVersion === 1) {
+    db.transaction(() => migrateToV1(db)).immediate()
+  }
+  for (const migration of plan) {
     if (currentVersion >= migration.version) continue
     const applyMigration = () => {
       migration.up(db)

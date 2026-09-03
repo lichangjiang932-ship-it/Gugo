@@ -3,6 +3,7 @@ import { types as utilTypes } from 'node:util'
 import { registerModelProviderAdapter } from '../adapters/modelProviderRegistry.js'
 import { registerDynamicTool } from '../utils/toolSchemaCatalog.js'
 import { agentEventConsumerHost } from '../core/agentEventConsumerRuntime.js'
+import { durableAgentEventConsumerHost } from '../services/agentEventDurableConsumerRuntime.js'
 import {
   attachRuntimePluginBeginRevoke,
   createRuntimePluginRevokeReceipt,
@@ -47,9 +48,13 @@ function ownHostOption(options, field, fallback) {
   return descriptor.value === undefined ? fallback : descriptor.value
 }
 
-function snapshotAgentEventConsumerHost(host) {
+function snapshotAgentEventConsumerHost(host, {
+  field = 'agentEventConsumerHost',
+  contractVersion = 1,
+} = {}) {
+  const expected = `v${contractVersion} host data`
   if (!host || typeof host !== 'object' || Array.isArray(host) || utilTypes.isProxy(host)) {
-    throw hostAdapterError('agentEventConsumerHost', 'v1 host data')
+    throw hostAdapterError(field, expected)
   }
   let contractVersionDescriptor
   let registerDescriptor
@@ -57,16 +62,16 @@ function snapshotAgentEventConsumerHost(host) {
     contractVersionDescriptor = Object.getOwnPropertyDescriptor(host, 'contractVersion')
     registerDescriptor = Object.getOwnPropertyDescriptor(host, 'register')
   } catch {
-    throw hostAdapterError('agentEventConsumerHost', 'v1 host data')
+    throw hostAdapterError(field, expected)
   }
   if (!contractVersionDescriptor
     || !Object.hasOwn(contractVersionDescriptor, 'value')
-    || contractVersionDescriptor.value !== 1
+    || contractVersionDescriptor.value !== contractVersion
     || !registerDescriptor
     || !Object.hasOwn(registerDescriptor, 'value')
     || typeof registerDescriptor.value !== 'function'
     || utilTypes.isProxy(registerDescriptor.value)) {
-    throw hostAdapterError('agentEventConsumerHost', 'v1 host data')
+    throw hostAdapterError(field, expected)
   }
   return Object.freeze({
     contractVersion: contractVersionDescriptor.value,
@@ -113,6 +118,14 @@ export function snapshotRuntimePluginHostOptions(options) {
       'agentEventConsumerHost',
       agentEventConsumerHost,
     )),
+    durableAgentEventConsumerHost: snapshotAgentEventConsumerHost(ownHostOption(
+      options,
+      'durableAgentEventConsumerHost',
+      durableAgentEventConsumerHost,
+    ), {
+      field: 'durableAgentEventConsumerHost',
+      contractVersion: 2,
+    }),
     audit: ownHostOption(options, 'audit', null),
   }
   for (const field of [

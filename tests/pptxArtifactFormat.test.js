@@ -262,6 +262,7 @@ test('PPTX format leaf has an explicit pure dependency boundary and artifactGen 
   const graph = collectStaticModuleGraph(entry)
   const allowedInternalFiles = new Set([
     entry,
+    fileURLToPath(new URL('../server/services/pptxArtifactSlideRendering.js', import.meta.url)),
     fileURLToPath(new URL('../server/services/officeImageLayout.js', import.meta.url)),
     fileURLToPath(new URL('../server/services/officePreparedImageValidation.js', import.meta.url)),
     fileURLToPath(new URL('../src/lib/pptCore.js', import.meta.url)),

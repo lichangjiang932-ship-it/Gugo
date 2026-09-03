@@ -59,26 +59,28 @@ test('manual model verification is not given an unsafe partial recovery target',
 })
 
 test('a refreshed failed job restores its persisted model configuration action', () => {
+  const failedEvent = {
+    type: 'failed',
+    stepId: 'step-refresh',
+    message: '端点不可达，请确认本地模型服务或代理已启动。',
+    payload: {
+      code: 'MODEL_ENDPOINT_UNREACHABLE',
+      action: 'test_provider',
+      providerId: 'provider-refresh',
+      modelName: 'local-model',
+      configRevision: 4,
+    },
+  }
   assert.deepEqual(taskRunJobFailureRecovery({
     id: 'job-refresh',
     status: 'failed',
     error: '端点不可达',
     events: [
       { type: 'started', message: 'started' },
-      {
-        type: 'failed',
-        stepId: 'step-refresh',
-        message: '端点不可达，请确认本地模型服务或代理已启动。',
-        payload: {
-          code: 'MODEL_ENDPOINT_UNREACHABLE',
-          action: 'test_provider',
-          providerId: 'provider-refresh',
-          modelName: 'local-model',
-          configRevision: 4,
-        },
-      },
+      failedEvent,
     ],
   }), {
+    event: failedEvent,
     message: '端点不可达，请确认本地模型服务或代理已启动。',
     failure: {
       code: 'MODEL_ENDPOINT_UNREACHABLE',
@@ -95,6 +97,24 @@ test('a refreshed failed job restores its persisted model configuration action',
     status: 'running',
     events: [{ type: 'failed', payload: { action: 'test_provider' } }],
   }), null)
+})
+
+test('a current code-only failed job does not revive persisted server copy', () => {
+  const event = {
+    type: 'failed',
+    code: 'JOB_FAILED',
+    params: {},
+    payload: { code: 'MODEL_ENDPOINT_UNREACHABLE', action: 'test_provider' },
+  }
+  const recovery = taskRunJobFailureRecovery({
+    id: 'job-code-only',
+    status: 'failed',
+    error: 'server-authored fallback',
+    events: [event],
+  })
+  assert.equal(recovery.message, '')
+  assert.equal(recovery.event, event)
+  assert.equal(recovery.action, 'configure_model')
 })
 
 test('a refreshed failed job never revives recovery from an older failed attempt', () => {

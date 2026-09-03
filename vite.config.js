@@ -1,5 +1,13 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// Anchor the frontend, workspace and default persistence identity to the
+// checked-out project instead of the shell that happened to launch Vite.
+// `npm --prefix`, IDE terminals and Codex panels can all have different cwd
+// values while referring to this same checkout.
+export const VITE_PROJECT_ROOT = dirname(fileURLToPath(import.meta.url))
 
 function localAuthExposureGuardPlugin({
   devHost,
@@ -164,7 +172,7 @@ function turnRealtimePlugin({ attachTurnWebSocketServer, getTurnEngine }) {
   }
 }
 
-function developmentHttpCapabilityPlugin({
+export function developmentHttpCapabilityPlugin({
   bindRuntimePluginHttpCapabilities,
   createHttpCapabilityRegistry,
   healthCheck,
@@ -204,11 +212,12 @@ function developmentHttpCapabilityPlugin({
       server.httpServer?.once('close', dispose)
 
       server.middlewares.use((req, res, next) => {
-        if (req.url === '/api/health') {
+        const pathname = new URL(String(req.url || '/'), 'http://localhost').pathname
+        if (pathname === '/api/health') {
           healthCheck(req, res)
           return
         }
-        if (req.url === '/api/health/full') {
+        if (pathname === '/api/health/full') {
           requireAuth(req, res, () => healthCheckFull(req, res, getEnv))
           return
         }
@@ -320,7 +329,7 @@ async function loadDevelopmentRuntime({ runtimeCwd, startupEnv }) {
 // Build and preview are pure frontend operations. Only a real Vite development
 // server owns the local backend runtime; preview serves already-built assets.
 export default defineConfig(async ({ command, mode, isPreview }) => {
-  const runtimeCwd = process.cwd()
+  const runtimeCwd = VITE_PROJECT_ROOT
   const fileEnv = process.env.GUGO_LOAD_DOTENV !== '0'
     ? loadEnv(mode, runtimeCwd, '')
     : {}
@@ -335,6 +344,7 @@ export default defineConfig(async ({ command, mode, isPreview }) => {
     || Number(serverEnv.VITE_DEV_PORT || serverEnv.SERVER_PORT || 5175)
 
   return {
+    root: runtimeCwd,
     plugins: [...(development?.plugins || []), react()],
     base: serverEnv.PUBLIC_BASE_PATH || '/',
     server: {

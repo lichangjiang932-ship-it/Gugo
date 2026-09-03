@@ -456,10 +456,15 @@ export async function registerPlugin(manifest, setup) {
 }
 
 /** Activate one canonical plugin definition through the shared runtime lifecycle. */
-export async function registerPluginDefinition(definition, setup) {
+export async function registerPluginDefinition(
+  definition,
+  setup,
+  durableIdentity = null,
+  registrationOptions = undefined,
+) {
   const manifest = runtimeManifestFromPluginDefinition(definition)
   ensureRuntimePluginConfigInitialized()
-  return RUNTIME.registerPlugin(manifest, setup)
+  return RUNTIME.registerPlugin(manifest, setup, durableIdentity, registrationOptions)
 }
 
 /** Uninstall a runtime plugin after checking active dependants. */
@@ -481,6 +486,10 @@ export function listRuntimePluginEffectiveConfigs() {
 
 export function listRuntimePluginConfigReloadAudit() {
   return RUNTIME.listConfigReloadAudit()
+}
+
+export function listRuntimePluginAgentEventResetAudit() {
+  return RUNTIME.listAgentEventResetAudit()
 }
 
 export function reloadRuntimePluginConfig(id, options = {}) {

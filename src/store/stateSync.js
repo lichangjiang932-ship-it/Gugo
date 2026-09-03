@@ -1,8 +1,11 @@
 import { sanitizeRetiredBrowserAccountFields } from './browserSnapshotSanitizer.js'
+import { mergeLegacySessionQueues } from './legacySessionQueue.js'
 
 export const STATE_SYNC_META_KEY = '__sync'
 
-const ARRAY_ENTITY_FIELDS = new Set(['sessions', 'tasks', 'history', 'permissions'])
+const PENDING_LEGACY_SESSION_FIELD = 'pendingLegacySessions'
+
+const ARRAY_ENTITY_FIELDS = new Set(['tasks', 'history', 'permissions'])
 const RECORD_ENTITY_FIELDS = new Set(['sessionDrafts', 'skillConfigs', 'toolsConfig'])
 const ENTITY_FIELDS = new Set([...ARRAY_ENTITY_FIELDS, ...RECORD_ENTITY_FIELDS])
 
@@ -13,6 +16,14 @@ function jsonEqual(left, right) {
   } catch {
     return false
   }
+}
+
+function mergePendingLegacySessions(leftValue, rightValue, leftMeta, rightMeta) {
+  const leftClock = normalizeClock(leftMeta.fields[PENDING_LEGACY_SESSION_FIELD])
+  const rightClock = normalizeClock(rightMeta.fields[PENDING_LEGACY_SESSION_FIELD])
+  const preferRight = rightClock > leftClock
+    || (rightClock === leftClock && rightMeta.writtenAt > leftMeta.writtenAt)
+  return mergeLegacySessionQueues(leftValue, rightValue, { preferRight })
 }
 
 function normalizeClock(value) {
@@ -38,12 +49,6 @@ function collectionEntries(field, value) {
 function collectionFromEntries(field, entries) {
   if (ARRAY_ENTITY_FIELDS.has(field)) {
     const values = entries.map(([, value]) => value)
-    if (field === 'sessions') {
-      return values.sort((left, right) => {
-        const timeDiff = Number(right?.updatedAt || right?.createdAt || 0) - Number(left?.updatedAt || left?.createdAt || 0)
-        return timeDiff || String(left?.id || '').localeCompare(String(right?.id || ''))
-      })
-    }
     if (field === 'history') {
       return values.sort((left, right) => Number(right?.date || 0) - Number(left?.date || 0) || String(left?.id || '').localeCompare(String(right?.id || '')))
     }
@@ -88,10 +93,14 @@ function chooseByClock(localValue, remoteValue, localClock, remoteClock, localWr
   return remoteWrittenAt > localWrittenAt ? remoteValue : localValue
 }
 
-export function readPersistedPayload(raw, fallbackTimestamp = 0) {
+export function readPersistedPayload(raw, fallbackTimestamp = 0, {
+  preservePendingLegacySessions = false,
+} = {}) {
   const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new TypeError('Persisted app state must be an object')
-  const sanitized = sanitizeRetiredBrowserAccountFields(parsed)
+  const sanitized = sanitizeRetiredBrowserAccountFields(parsed, {
+    preservePendingLegacySessions,
+  })
   const snapshot = { ...sanitized.payload }
   delete snapshot[STATE_SYNC_META_KEY]
   const storedMeta = sanitized.payload[STATE_SYNC_META_KEY]
@@ -179,6 +188,14 @@ export function mergePersistedSnapshots(localSnapshot, localMeta, remoteSnapshot
     if (preserve.has(field)) {
       snapshot[field] = local[field]
       meta.fields[field] = normalizeClock(leftMeta.fields[field])
+      continue
+    }
+    if (field === PENDING_LEGACY_SESSION_FIELD) {
+      snapshot[field] = mergePendingLegacySessions(local[field], remote[field], leftMeta, rightMeta)
+      meta.fields[field] = Math.max(
+        normalizeClock(leftMeta.fields[field]),
+        normalizeClock(rightMeta.fields[field]),
+      )
       continue
     }
     if (!ENTITY_FIELDS.has(field)) {

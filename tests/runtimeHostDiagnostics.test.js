@@ -200,6 +200,20 @@ test('runtime host diagnostics distinguish public LSP lifecycle and query states
       status: { enabled: true, providerCount: 1, reason: 'query_failed', code: 'LSP_TIMEOUT' },
       expected: { enabled: true, providerCount: 1, reason: 'query_failed', code: 'LSP_TIMEOUT' },
     },
+    {
+      status: {
+        enabled: true,
+        providerCount: 1,
+        reason: 'query_failed',
+        code: 'LSP_PROCESS_BACKOFF',
+      },
+      expected: {
+        enabled: true,
+        providerCount: 1,
+        reason: 'query_failed',
+        code: 'LSP_PROCESS_BACKOFF',
+      },
+    },
   ]
 
   for (const { status, expected } of fixtures) {

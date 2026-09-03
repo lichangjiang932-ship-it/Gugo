@@ -23,8 +23,10 @@ test('voice recognition supports standard and Chromium constructors without a se
 
 test('voice recognition maps UI languages and combines final and interim speech', () => {
   assert.equal(resolveSpeechRecognitionLanguage('zh'), 'zh-CN')
-  assert.equal(resolveSpeechRecognitionLanguage('zh-TW'), 'zh-TW')
   assert.equal(resolveSpeechRecognitionLanguage('en'), 'en-US')
+  assert.equal(resolveSpeechRecognitionLanguage('ja'), 'en-US')
+  assert.equal(resolveSpeechRecognitionLanguage('ko'), 'en-US')
+  assert.equal(resolveSpeechRecognitionLanguage('zh-TW'), 'en-US')
 
   const first = readSpeechRecognitionEvent({
     resultIndex: 0,

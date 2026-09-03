@@ -1,4 +1,5 @@
 import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
+import { normalizeTurnLocale } from '../../shared/turnLocale.js'
 import { normalizeTurnIntentMode } from '../utils/executionIntent.js'
 import { PERMISSION_MODES } from '../utils/approvalPolicy.js'
 import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
@@ -57,6 +58,12 @@ function normalizeAttachmentIds(values) {
     throw new TurnEngineError('ATTACHMENT_COUNT_EXCEEDED', '单次最多使用 32 个附件', 400)
   }
   return normalized
+}
+
+function attachmentOnlyPrompt(locale) {
+  return normalizeTurnLocale(locale) === 'zh'
+    ? '请分析附件内容。'
+    : 'Please analyze the attached content.'
 }
 
 function attachmentTurnError(error) {
@@ -157,6 +164,7 @@ export function createTurnStartRuntime({
       content,
       displayContent = null,
       workspacePath = '',
+      locale = null,
       modelName = null,
       modelProviderId = null,
       modelConfigRevision = null,
@@ -174,7 +182,11 @@ export function createTurnStartRuntime({
       const rawText = String(content || '').trim()
       const normalizedAttachmentIds = normalizeAttachmentIds(attachments)
       const resolvedSkill = resolveSkillPrefixFromContent(rawText, skillIds)
-      const text = resolvedSkill.content || (normalizedAttachmentIds.length ? '请分析附件内容。' : '')
+      const normalizedLocale = locale === null || locale === undefined || locale === ''
+        ? null
+        : normalizeTurnLocale(locale)
+      const text = resolvedSkill.content
+        || (normalizedAttachmentIds.length ? attachmentOnlyPrompt(normalizedLocale) : '')
       const displayText = String(displayContent ?? rawText ?? '').trim() || text
       if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
       if (!sessionId) throw new TurnEngineError('SESSION_REQUIRED', 'sessionId is required')
@@ -233,6 +245,7 @@ export function createTurnStartRuntime({
         userId,
         title: displayText.slice(0, 80) || 'Untitled',
         createdAt,
+        ...(projectDirectory ? { workspacePath: normalizedWorkspacePath } : {}),
       } : null
       const atomicTurnStart = !!ports.commitTurnStart
       if (pendingSession && !atomicTurnStart) {
@@ -334,6 +347,7 @@ export function createTurnStartRuntime({
           skillDefinitions: normalizedSkillDefinitions,
           toolsConfig: normalizedToolsConfig,
           intentMode: normalizedIntentMode,
+          ...(normalizedLocale ? { locale: normalizedLocale } : {}),
           ...(normalizedApprovalMode ? { approvalMode: normalizedApprovalMode } : {}),
           ...(projectDirectory ? {
             workspacePath: normalizedWorkspacePath,
@@ -396,6 +410,7 @@ export function createTurnStartRuntime({
           skillDefinitions: normalizedSkillDefinitions,
           toolsConfig: normalizedToolsConfig,
           intentMode: normalizedIntentMode,
+          ...(normalizedLocale ? { locale: normalizedLocale } : {}),
           approvalMode: normalizedApprovalMode,
           projectDirectory,
           defaultOutputDirectory,

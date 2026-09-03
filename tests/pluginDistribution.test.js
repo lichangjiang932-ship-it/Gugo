@@ -46,6 +46,31 @@ function pluginFixture() {
   }
 }
 
+function verifiedInstallReceipt(overrides = {}) {
+  return {
+    schemaVersion: 2,
+    pluginId: 'distribution-test',
+    pluginVersion: '1.0.0',
+    packageDigest: `sha256-${'a'.repeat(64)}`,
+    fileCount: 1,
+    totalBytes: 128,
+    installedAt: 100,
+    publisherVerified: true,
+    sourceKind: 'local-marketplace',
+    marketplace: {
+      name: 'test-local',
+      displayName: 'Test Local',
+    },
+    publisher: {
+      id: 'test-publisher',
+      displayName: 'Test Publisher',
+      keyId: `sha256-${'b'.repeat(64)}`,
+    },
+    publicationDigest: `sha256-${'c'.repeat(64)}`,
+    ...overrides,
+  }
+}
+
 function writePlugin(root, directory, {
   id,
   version = '1.0.0',
@@ -96,6 +121,7 @@ test('local directory distribution is frozen and never claims package verificati
 
 test('registry keeps distribution provenance in its host-only view', () => {
   _resetForTests()
+  const installReceipt = verifiedInstallReceipt()
   const port = Object.freeze({
     discover: () => ({
       candidates: [{
@@ -103,7 +129,7 @@ test('registry keeps distribution provenance in its host-only view', () => {
         sourceKind: 'verified-local-package',
         mutable: false,
         verifiedPackage: true,
-        installReceipt: Object.freeze({ digest: 'sha256-test' }),
+        installReceipt,
       }],
       errors: [],
     }),
@@ -126,7 +152,7 @@ test('registry keeps distribution provenance in its host-only view', () => {
     sourceKind: 'verified-local-package',
     mutable: false,
     verifiedPackage: true,
-    installReceipt: { digest: 'sha256-test' },
+    installReceipt,
   })
   assert.equal(Object.isFrozen(hostedPlugin.distribution), true)
   assert.equal(Object.isFrozen(hostedPlugin.distribution.installReceipt), true)
@@ -301,7 +327,7 @@ test('distribution snapshot does not call overridden array methods', () => {
     sourceKind: 'verified-local-package',
     mutable: false,
     verifiedPackage: true,
-    installReceipt: { digest: 'sha256-test' },
+    installReceipt: verifiedInstallReceipt(),
   }]
   const errors = [{ dir: 'bad', message: 'invalid' }]
   for (const entries of [candidates, errors]) {
@@ -323,8 +349,9 @@ test('distribution snapshot does not call overridden array methods', () => {
 
 test('verified package trust metadata must be immutable and receipted', () => {
   for (const overrides of [
-    { mutable: true, installReceipt: { digest: 'sha256-test' } },
+    { mutable: true, installReceipt: verifiedInstallReceipt() },
     { mutable: false, installReceipt: null },
+    { mutable: false, installReceipt: {} },
   ]) {
     assert.throws(
       () => discoverPluginDistribution(Object.freeze({
@@ -361,7 +388,7 @@ test('distribution snapshot rejects own then without invoking accessors', () => 
 })
 
 test('install receipts are detached and deeply frozen', () => {
-  const receipt = { digest: 'sha256-test', origin: { kind: 'local-file' } }
+  const receipt = verifiedInstallReceipt()
   const snapshot = discoverPluginDistribution(Object.freeze({
     discover: () => ({
       candidates: [{
@@ -374,9 +401,9 @@ test('install receipts are detached and deeply frozen', () => {
       errors: [],
     }),
   }))
-  receipt.origin.kind = 'mutated'
-  assert.equal(snapshot.candidates[0].installReceipt.origin.kind, 'local-file')
-  assert.equal(Object.isFrozen(snapshot.candidates[0].installReceipt.origin), true)
+  receipt.publisher.displayName = 'Mutated publisher'
+  assert.equal(snapshot.candidates[0].installReceipt.publisher.displayName, 'Test Publisher')
+  assert.equal(Object.isFrozen(snapshot.candidates[0].installReceipt.publisher), true)
 })
 
 test('default local directory port preserves existing loader behavior', () => {

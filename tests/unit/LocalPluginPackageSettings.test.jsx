@@ -26,6 +26,8 @@ const labels = {
   'settings.localPluginPackageNone': '尚未安装',
   'settings.localPluginPackageNoneHint': '选择插件包目录',
   'settings.localPluginPackageFiles': '{count} 个文件',
+  'settings.localPluginPackageVerifiedPublisher': '签名已验证：{marketplace} / {publisher}（{keyId}…）',
+  'settings.localPluginPackageUnverifiedPublisher': '直接本地目录 · 发布者未验证',
   'settings.localPluginPackageUpgrade': '升级',
   'settings.localPluginPackageUninstall': '卸载',
   'settings.localPluginPackageUninstallConfirmTitle': '确认卸载插件包',
@@ -222,6 +224,41 @@ test('selecting an install directory does not submit until explicit confirmation
       expectedRevision: REVISION_A,
       replace: false,
     })
+  } finally {
+    await harness.cleanup()
+  }
+})
+
+test('package rows distinguish verified Marketplace identity from direct-local packages', async () => {
+  const signed = packageEntry({
+    schemaVersion: 2,
+    publisherVerified: true,
+    sourceKind: 'local-marketplace',
+    marketplace: { name: 'team-local', displayName: 'Team Local' },
+    publisher: {
+      id: 'example-publisher',
+      displayName: 'Example Publisher',
+      keyId: `sha256-${'d'.repeat(64)}`,
+    },
+    publicationDigest: `sha256-${'e'.repeat(64)}`,
+  })
+  const direct = packageEntry({ pluginId: 'direct-plugin' })
+  const harness = await renderManager({
+    fetchImpl: async (url) => {
+      assert.equal(url, '/api/plugins/packages')
+      return response(listResponse(packageStore(REVISION_A, [signed, direct])))
+    },
+  })
+  try {
+    const signedRow = harness.rootElement.querySelector(
+      '[data-testid="local-plugin-package-demo-transformer"]',
+    )
+    const directRow = harness.rootElement.querySelector(
+      '[data-testid="local-plugin-package-direct-plugin"]',
+    )
+    assert.match(signedRow.textContent, /签名已验证：Team Local \/ Example Publisher/)
+    assert.match(signedRow.textContent, /sha256-ddddddddddd/)
+    assert.match(directRow.textContent, /发布者未验证/)
   } finally {
     await harness.cleanup()
   }

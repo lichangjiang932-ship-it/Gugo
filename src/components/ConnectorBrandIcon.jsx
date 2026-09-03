@@ -1,12 +1,12 @@
 function hexToRgba(hex, alpha) {
   const value = String(hex || '').replace('#', '')
-  if (!/^[0-9a-f]{6}$/i.test(value)) return `rgba(107, 114, 128, ${alpha})`
+  if (!/^[0-9a-f]{6}$/i.test(value)) return `rgb(var(--color-ink-fade-rgb) / ${alpha})`
   const number = Number.parseInt(value, 16)
   return `rgba(${number >> 16}, ${(number >> 8) & 255}, ${number & 255}, ${alpha})`
 }
 
 export default function ConnectorBrandIcon({ connector, size = 'md' }) {
-  const color = connector?.brandColor || '#6B7280'
+  const color = connector?.brandColor || 'rgb(var(--color-ink-fade-rgb))'
   const compact = size === 'sm'
   return (
     <span
@@ -15,11 +15,11 @@ export default function ConnectorBrandIcon({ connector, size = 'md' }) {
       style={{
         color,
         borderColor: hexToRgba(color, 0.24),
-        background: `linear-gradient(145deg, #fff 8%, ${hexToRgba(color, 0.13)} 100%)`,
+        background: `linear-gradient(145deg, rgb(var(--color-paper-rgb)) 8%, ${hexToRgba(color, 0.13)} 100%)`,
         boxShadow: `inset 0 1px 0 rgba(255,255,255,.9), 0 5px 14px ${hexToRgba(color, 0.12)}`,
       }}
     >
-      <span className={`${compact ? 'w-7 h-7' : 'w-9 h-9'} inline-flex items-center justify-center rounded-full bg-white/90 shadow-[0_1px_4px_rgba(15,23,42,.08)]`}>
+      <span className={`${compact ? 'w-7 h-7' : 'w-9 h-9'} inline-flex items-center justify-center rounded-full bg-paper/90 shadow-[0_1px_4px_rgba(15,23,42,.08)]`}>
         <BrandMark provider={connector?.provider} color={color} compact={compact} />
       </span>
     </span>

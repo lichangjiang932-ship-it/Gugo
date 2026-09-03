@@ -8,6 +8,10 @@ import {
   shutdownRuntimePlugins,
 } from '../plugins/pluginRegistry.js'
 import { restoreEnabledRuntimePlugins } from '../services/runtimePluginControlService.js'
+import {
+  closeAgentEventDurableConsumerRuntime,
+  startAgentEventDurableConsumerRuntime,
+} from '../services/agentEventDurableConsumerRuntime.js'
 import { seedSystemSkills } from '../services/seedSystemSkills.js'
 import { recoverPendingSessionDeletion } from '../services/sessionDeletionGovernanceRuntime.js'
 import {
@@ -31,6 +35,7 @@ export const HEADLESS_LIFECYCLE_CAPABILITY_IDS = Object.freeze({
   runtimePluginConfig: 'headless.startup.runtime-plugin-config',
   pluginDiscovery: 'headless.startup.plugin-discovery',
   runtimePlugins: 'headless.resource.runtime-plugins',
+  agentEventConsumers: 'headless.resource.agent-event-consumers',
   lsp: 'headless.resource.lsp',
   turnEngine: 'headless.resource.turn-engine',
 })
@@ -45,6 +50,8 @@ const DEFAULT_ADAPTERS = Object.freeze({
   initPlugins,
   restoreEnabledRuntimePlugins,
   shutdownRuntimePlugins,
+  startAgentEventDurableConsumerRuntime,
+  closeAgentEventDurableConsumerRuntime,
   startLspRuntime,
   closeLspRuntime,
   closeTurnEngine,
@@ -170,12 +177,19 @@ export function createHeadlessLifecycleCapabilities({
       stopFailure: 'fail',
       errorLabel: 'headless runtime plugin lifecycle',
     }),
-    definition(ids.lsp, ids.runtimePlugins, {
+    definition(ids.agentEventConsumers, ids.runtimePlugins, {
+      start: () => adapters.startAgentEventDurableConsumerRuntime(),
+      startFailure: 'fail',
+      stop: () => adapters.closeAgentEventDurableConsumerRuntime(),
+      stopFailure: 'fail',
+      errorLabel: 'headless durable Agent Event consumer lifecycle',
+    }),
+    definition(ids.lsp, ids.agentEventConsumers, {
       start: () => adapters.startLspRuntime({ env: runtimeEnv }),
       stop: () => adapters.closeLspRuntime(),
       errorLabel: 'headless LSP runtime lifecycle',
     }),
-    definition(ids.turnEngine, ids.runtimePlugins, {
+    definition(ids.turnEngine, ids.agentEventConsumers, {
       stop: () => adapters.closeTurnEngine(),
       stopFailure: 'fail',
       errorLabel: 'headless turn engine shutdown',

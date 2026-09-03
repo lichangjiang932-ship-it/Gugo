@@ -8,7 +8,10 @@ import ActivityStream from '../../src/pages/ChatSplit/chatMessages/ActivityStrea
 function render(msg, language = 'en') {
   const previousWindow = globalThis.window
   const hadWindow = Object.hasOwn(globalThis, 'window')
-  const storage = { getItem: (key) => key === 'lang' ? language : null }
+  const storage = {
+    getItem: (key) => key === 'lang' ? language : null,
+    setItem: () => {},
+  }
   globalThis.window = { localStorage: storage }
   try {
     return renderToStaticMarkup(
@@ -134,13 +137,13 @@ test('reconnection status overrides a stale running tool state', () => {
   assert.match(markup, /Reconnecting/)
 })
 
-test('activity status follows all five supported UI languages', () => {
+test('activity status follows the supported UI languages and falls back to English', () => {
   const expected = {
     zh: '模型正在思考下一步…',
     en: 'Model is reasoning through the next step…',
-    ja: 'モデルが次のステップを検討中…',
-    ko: '모델이 다음 단계를 검토하는 중…',
-    'zh-TW': '模型正在思考下一步…',
+    ja: 'Model is reasoning through the next step…',
+    ko: 'Model is reasoning through the next step…',
+    'zh-TW': 'Model is reasoning through the next step…',
   }
   for (const [language, copy] of Object.entries(expected)) {
     const markup = render({ meta: { streaming: true, modelActivity: { kind: 'reasoning' } } }, language)

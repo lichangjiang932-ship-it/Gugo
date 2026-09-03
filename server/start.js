@@ -1,5 +1,6 @@
 import { startRuntimeServer } from './services/runtimeServerStartup.js'
 import { bindDesktopParentGuard } from './services/desktopParentGuard.js'
+import { SERVER_APPLICATION_ROOT } from './utils/serverApplicationRoot.js'
 
 let server = null
 const desktopParentGuard = bindDesktopParentGuard({
@@ -11,7 +12,7 @@ const desktopParentGuard = bindDesktopParentGuard({
 })
 
 try {
-  server = await startRuntimeServer({ cwd: process.cwd(), env: process.env })
+  server = await startRuntimeServer({ cwd: SERVER_APPLICATION_ROOT, env: process.env })
   if (!server) desktopParentGuard.dispose()
 } catch (error) {
   desktopParentGuard.dispose()

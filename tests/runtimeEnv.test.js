@@ -170,7 +170,11 @@ test('startup resolution anchors relative storage to cwd and reads relocated use
   const dataDir = path.join(cwd, 'relative-data')
   try {
     fs.mkdirSync(dataDir, { recursive: true })
-    fs.writeFileSync(path.join(cwd, '.env'), 'APP_DATA_DIR=relative-data\n', 'utf8')
+    fs.writeFileSync(
+      path.join(cwd, '.env'),
+      'APP_DATA_DIR=relative-data\nARTIFACT_DIR=relative-artifacts\n',
+      'utf8',
+    )
     fs.writeFileSync(path.join(dataDir, 'runtime.json'), JSON.stringify({
       env: { RELOCATED_USER_CONFIG: 'loaded' },
     }), 'utf8')
@@ -178,6 +182,7 @@ test('startup resolution anchors relative storage to cwd and reads relocated use
     const runtime = resolveRuntimeStartupEnvironment({ cwd, env: {} })
     assert.equal(runtime.APP_DATA_DIR, dataDir)
     assert.equal(runtime.APP_DB_PATH, path.join(dataDir, 'app.db'))
+    assert.equal(runtime.ARTIFACT_DIR, path.join(cwd, 'relative-artifacts'))
     assert.equal(runtime.RELOCATED_USER_CONFIG, 'loaded')
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true })
@@ -264,11 +269,12 @@ test('startup identity guard rejects data, database, and config source changes',
   const stable = Object.freeze({
     APP_DATA_DIR: 'D:\\runtime-data',
     APP_DB_PATH: 'D:\\runtime-data\\app.db',
+    ARTIFACT_DIR: 'D:\\runtime-artifacts',
     APP_CONFIG_PATH: 'D:\\runtime-config.json',
   })
   assert.equal(assertRuntimeStartupIdentityStable(stable, { ...stable }), true)
 
-  for (const key of ['APP_DATA_DIR', 'APP_DB_PATH', 'APP_CONFIG_PATH']) {
+  for (const key of ['APP_DATA_DIR', 'APP_DB_PATH', 'ARTIFACT_DIR', 'APP_CONFIG_PATH']) {
     assert.throws(
       () => assertRuntimeStartupIdentityStable(stable, {
         ...stable,
@@ -307,7 +313,11 @@ test('startup resolution rejects a user runtime config that relocates its own so
 test('startup preflight creates SQLite under the cwd-relative dotenv data root', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-runtime-storage-preflight-'))
   try {
-    fs.writeFileSync(path.join(cwd, '.env'), 'APP_DATA_DIR=relative-data\n', 'utf8')
+    fs.writeFileSync(
+      path.join(cwd, '.env'),
+      'APP_DATA_DIR=relative-data\nARTIFACT_DIR=relative-artifacts\n',
+      'utf8',
+    )
     const result = spawnSync(process.execPath, [storageBootstrapFixture], {
       cwd,
       env: { ...process.env },
@@ -318,12 +328,15 @@ test('startup preflight creates SQLite under the cwd-relative dotenv data root',
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
 
     const expectedDbPath = path.join(cwd, 'relative-data', 'app.db')
+    const expectedArtifactDir = path.join(cwd, 'relative-artifacts')
     const defaultDbPath = path.join(cwd, 'server-data', 'app.db')
     assert.equal(fs.existsSync(expectedDbPath), true)
     assert.equal(fs.existsSync(defaultDbPath), false)
     assert.deepEqual(JSON.parse(result.stdout.trim()), {
       appDataDir: path.join(cwd, 'relative-data'),
       appDbPath: expectedDbPath,
+      artifactDir: expectedArtifactDir,
+      importedArtifactDir: expectedArtifactDir,
     })
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true })
@@ -353,6 +366,8 @@ test('startup preflight creates nested parents for a cwd-relative custom SQLite 
     assert.deepEqual(JSON.parse(result.stdout.trim()), {
       appDataDir: expectedDataDir,
       appDbPath: expectedDbPath,
+      artifactDir: path.join(cwd, '.artifacts'),
+      importedArtifactDir: path.join(cwd, '.artifacts'),
     })
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true })
@@ -384,6 +399,8 @@ test('startup preflight creates nested parents for an absolute custom SQLite pat
     assert.deepEqual(JSON.parse(result.stdout.trim()), {
       appDataDir: expectedDataDir,
       appDbPath: expectedDbPath,
+      artifactDir: path.join(cwd, '.artifacts'),
+      importedArtifactDir: path.join(cwd, '.artifacts'),
     })
   } finally {
     fs.rmSync(root, { recursive: true, force: true })

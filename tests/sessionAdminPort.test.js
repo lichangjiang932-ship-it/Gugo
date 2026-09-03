@@ -31,6 +31,35 @@ test('SessionAdmin core contract has no storage or service dependency', () => {
   assert.doesNotMatch(source, /from\s+['"]\.\.\/(?:db|services)\//u)
 })
 
+test('SessionAdmin snapshots only opaque stable catalog source identities', () => {
+  const definition = portDefinition({
+    catalogSource: {
+      backendType: 'remote-store',
+      instanceFingerprint: 'ab'.repeat(32),
+    },
+  })
+  const port = prepareSessionAdminPort(definition)
+  definition.catalogSource.backendType = 'mutated'
+  definition.catalogSource.instanceFingerprint = 'cd'.repeat(32)
+
+  assert.deepEqual(port.catalogSource, {
+    backendType: 'remote-store',
+    instanceFingerprint: 'ab'.repeat(32),
+  })
+  assert.equal(Object.isFrozen(port.catalogSource), true)
+
+  for (const catalogSource of [
+    { backendType: 'remote-store' },
+    { backendType: 'remote-store', instanceFingerprint: 'not-a-hash' },
+    { backendType: 'remote-store', fingerprintStrategy: 'sqlite-path-sha256-v1' },
+  ]) {
+    assert.throws(
+      () => prepareSessionAdminPort(portDefinition({ catalogSource })),
+      (error) => error?.code === 'SESSION_ADMIN_PORT_INVALID' && /catalogSource/.test(error.message),
+    )
+  }
+})
+
 test('SessionAdmin v2 normalizes query pagination before invoking the backend', async () => {
   const calls = []
   const port = prepareSessionAdminPort(portDefinition({
@@ -63,6 +92,95 @@ test('SessionAdmin v2 normalizes query pagination before invoking the backend', 
     'searchMessages',
     { userId: 'user-1', query: 'local facts', sessionId: null, limit: 4, offset: 1 },
   ]])
+})
+
+test('SessionAdmin optional workspace mutation normalizes selections and explicit clears', () => {
+  const calls = []
+  const port = prepareSessionAdminPort(portDefinition({
+    setSessionWorkspace(input) {
+      calls.push(input)
+      return {
+        id: input.sessionId,
+        revision: 3,
+        workspacePath: input.workspacePath,
+      }
+    },
+  }))
+
+  assert.deepEqual(port.setSessionWorkspace({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    workspacePath: '  C:\\Project  ',
+  }), { id: 'session-1', revision: 3, workspacePath: 'C:\\Project' })
+  assert.deepEqual(port.setSessionWorkspace({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    workspacePath: null,
+  }), { id: 'session-1', revision: 3, workspacePath: null })
+  assert.deepEqual(calls.map(({ workspacePath }) => workspacePath), ['C:\\Project', null])
+
+  for (const workspacePath of ['', 42, 'x'.repeat(32_769)]) {
+    assert.throws(
+      () => port.setSessionWorkspace({ userId: 'user-1', sessionId: 'session-1', workspacePath }),
+      (error) => error?.code === 'SESSION_ADMIN_INPUT_INVALID',
+    )
+  }
+})
+
+test('SessionAdmin legacy import projects recovered ids and rejects mismatched recovery sessions', () => {
+  const input = {
+    userId: 'user-1',
+    sessions: [{
+      id: 'occupied-id',
+      title: 'Recovered history',
+      messages: [{ id: 'message-1', role: 'user', content: 'keep this' }],
+    }],
+  }
+  const port = prepareSessionAdminPort(portDefinition({
+    importLegacySessions() {
+      return {
+        results: [{
+          id: 'occupied-id',
+          sessionId: 'legacy-recovery-stable',
+          status: 'imported',
+          session: { id: 'legacy-recovery-stable', revision: 0 },
+        }],
+        importedCount: 1,
+        serverAuthoritativeCount: 0,
+      }
+    },
+  }))
+
+  assert.deepEqual(port.importLegacySessions(input), {
+    results: [{
+      id: 'occupied-id',
+      sessionId: 'legacy-recovery-stable',
+      status: 'imported',
+      session: { id: 'legacy-recovery-stable', revision: 0 },
+    }],
+    importedCount: 1,
+    serverAuthoritativeCount: 0,
+  })
+
+  const invalid = prepareSessionAdminPort(portDefinition({
+    importLegacySessions() {
+      return {
+        results: [{
+          id: 'occupied-id',
+          sessionId: 'legacy-recovery-stable',
+          status: 'imported',
+          session: { id: 'wrong-id', revision: 0 },
+        }],
+        importedCount: 1,
+        serverAuthoritativeCount: 0,
+      }
+    },
+  }))
+  assert.throws(
+    () => invalid.importLegacySessions(input),
+    (error) => error?.code === 'SESSION_ADMIN_RESULT_INVALID'
+      && /session\.id must match/.test(error.message),
+  )
 })
 
 test('SessionAdmin v2 rejects invalid inputs before backend invocation', () => {

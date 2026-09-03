@@ -27,6 +27,7 @@ const {
   getMessage,
   getSession,
   listMessages,
+  setSessionWorkspace,
   upsertMessage,
   upsertSession,
 } = await import('../server/services/sessionStore.js')
@@ -62,6 +63,7 @@ function startedEvent({
   id = `${turnId}:started`,
   createdAt = 100,
   attachments = [],
+  workspacePath = undefined,
 } = {}) {
   return createTurnEvent({
     id,
@@ -72,6 +74,7 @@ function startedEvent({
     payload: {
       content: 'persist this turn',
       userMessageId: `${turnId}:user`,
+      ...(workspacePath === undefined ? {} : { workspacePath }),
       attachments: attachments.map(({ id, name, mimeType, size, sha256 }) => ({
         id,
         name,
@@ -161,8 +164,7 @@ function failedRetryFixture({ suffix, createdAt }) {
       type: 'turn.failed',
       payload: {
         code: 'MODEL_UNAVAILABLE',
-        message: 'model unavailable',
-        error: { code: 'MODEL_UNAVAILABLE', message: 'model unavailable', retryable: true },
+        error: { code: 'MODEL_UNAVAILABLE', retryable: true },
         partialText: 'durable partial',
       },
       createdAt: failureCreatedAt,
@@ -346,6 +348,90 @@ test('commitTurnStart rolls back the new session, all messages, and turn.started
   })
 })
 
+test('commitTurnStart persists workspace metadata for both new and existing sessions', async () => {
+  const newSessionId = 'aggregate-start-new-workspace-session'
+  const newTurnId = 'aggregate-start-new-workspace-turn'
+  await SQLITE_TURN_PERSISTENCE_TRANSACTIONS.commitTurnStart({
+    userId,
+    session: {
+      id: newSessionId,
+      userId,
+      title: 'New workspace session',
+      createdAt: 150,
+      updatedAt: 150,
+    },
+    messages: startMessages({ sessionId: newSessionId, turnId: newTurnId, createdAt: 150 }),
+    event: startedEvent({
+      sessionId: newSessionId,
+      turnId: newTurnId,
+      createdAt: 150,
+      workspacePath: 'C:\\Canonical\\New',
+    }),
+  })
+  assert.equal(getSession({ userId, sessionId: newSessionId }).workspacePath, 'C:\\Canonical\\New')
+
+  const existingSessionId = 'aggregate-start-existing-workspace-session'
+  const existingTurnId = 'aggregate-start-existing-workspace-turn'
+  upsertSession({
+    id: existingSessionId,
+    userId,
+    title: 'Existing workspace session',
+    workspacePath: 'C:\\Canonical\\Old',
+  })
+  await SQLITE_TURN_PERSISTENCE_TRANSACTIONS.commitTurnStart({
+    userId,
+    messages: startMessages({ sessionId: existingSessionId, turnId: existingTurnId, createdAt: 160 }),
+    event: startedEvent({
+      sessionId: existingSessionId,
+      turnId: existingTurnId,
+      createdAt: 160,
+      workspacePath: 'C:\\Canonical\\Existing',
+    }),
+  })
+  assert.equal(
+    getSession({ userId, sessionId: existingSessionId }).workspacePath,
+    'C:\\Canonical\\Existing',
+  )
+})
+
+test('commitTurnStart rolls an existing workspace back when a later aggregate write fails', async () => {
+  const sessionId = 'aggregate-start-workspace-rollback-session'
+  const turnId = 'aggregate-start-workspace-rollback-turn'
+  upsertSession({
+    id: sessionId,
+    userId,
+    title: 'Workspace rollback',
+    workspacePath: 'C:\\Canonical\\Before',
+  })
+  const injectedFailure = new Error('fail after workspace update')
+  const transactions = createSqliteTurnPersistenceTransactions({
+    writeMessage(message) {
+      const stored = upsertMessage(message)
+      if (message.id === `${turnId}:user`) throw injectedFailure
+      return stored
+    },
+    publishEvents: () => {},
+    notifySession: () => {},
+  })
+
+  await assert.rejects(
+    transactions.commitTurnStart({
+      userId,
+      messages: startMessages({ sessionId, turnId, createdAt: 175 }),
+      event: startedEvent({
+        sessionId,
+        turnId,
+        createdAt: 175,
+        workspacePath: 'C:\\Canonical\\After',
+      }),
+    }),
+    (error) => error === injectedFailure,
+  )
+  assert.equal(getSession({ userId, sessionId }).workspacePath, 'C:\\Canonical\\Before')
+  assert.deepEqual(aggregateRows({ sessionId, turnId }).messages, [])
+  assert.deepEqual(aggregateRows({ sessionId, turnId }).events, [])
+})
+
 test('commitTurnStart rolls back attachment binding and can safely retry the whole aggregate', async () => {
   const sessionId = 'aggregate-start-attachment-session'
   const turnId = 'aggregate-start-attachment-turn'
@@ -477,7 +563,12 @@ test('an exact commitTurnStart retry resolves a post-commit acknowledgement loss
       updatedAt: 250,
     },
     messages: startMessages({ sessionId, turnId, createdAt: 250 }),
-    event: startedEvent({ sessionId, turnId, createdAt: 250 }),
+    event: startedEvent({
+      sessionId,
+      turnId,
+      createdAt: 250,
+      workspacePath: 'C:\\Canonical\\FirstCommit',
+    }),
   }
   const acknowledgementLoss = new Error('commit response lost after SQLite COMMIT')
   let failPublishedCommit = true
@@ -497,11 +588,20 @@ test('an exact commitTurnStart retry resolves a post-commit acknowledgement loss
   )
   assert.equal(aggregateRows({ sessionId, turnId }).events.length, 1)
   assert.equal(aggregateRows({ sessionId, turnId }).messages.length, 2)
+  assert.equal(getSession({ userId, sessionId }).workspacePath, 'C:\\Canonical\\FirstCommit')
+
+  setSessionWorkspace({
+    userId,
+    sessionId,
+    workspacePath: 'C:\\Canonical\\NewerSelection',
+    now: 251,
+  })
 
   const receipt = await transactions.commitTurnStart(command)
   assert.equal(receipt.id, command.event.id)
   assert.equal(aggregateRows({ sessionId, turnId }).events.length, 1)
   assert.equal(aggregateRows({ sessionId, turnId }).messages.length, 2)
+  assert.equal(getSession({ userId, sessionId }).workspacePath, 'C:\\Canonical\\NewerSelection')
 })
 
 test('concurrent startTurn calls for one turnId never delete the winning user message', async () => {
@@ -988,8 +1088,7 @@ test('failed retry transaction bypass strictly pairs automatic and manual retry 
         type: 'turn.failed',
         payload: {
           code: 'MODEL_FAILURE',
-          message: 'model failed',
-          error: { code: 'MODEL_FAILURE', message: 'model failed', ...failure },
+          error: { code: 'MODEL_FAILURE', ...failure },
         },
         createdAt: 611,
       }),
@@ -1069,10 +1168,8 @@ test('manual failed retry atomically resets only task verification repair failur
       type: 'turn.failed',
       payload: {
         code: 'TASK_VERIFICATION_REPAIR_EXHAUSTED',
-        message: 'manual retry required',
         error: {
           code: 'TASK_VERIFICATION_REPAIR_EXHAUSTED',
-          message: 'manual retry required',
           retryable: false,
           manualRetryable: true,
         },
@@ -1179,8 +1276,7 @@ test('concurrent failed retries coalesce to one attempt without journaling a wri
       type: 'turn.failed',
       payload: {
         code: 'MODEL_UNAVAILABLE',
-        message: 'model unavailable',
-        error: { code: 'MODEL_UNAVAILABLE', message: 'model unavailable', retryable: true },
+        error: { code: 'MODEL_UNAVAILABLE', retryable: true },
         partialText: 'durable partial',
       },
       createdAt: 622,
@@ -1300,8 +1396,7 @@ test('duplicate failed retry commits converge on one attempt without replaying p
       type: 'turn.failed',
       payload: {
         code: 'TURN_INCOMPLETE',
-        message: 'retry this turn',
-        error: { code: 'TURN_INCOMPLETE', message: 'retry this turn', retryable: true },
+        error: { code: 'TURN_INCOMPLETE', retryable: true },
         partialText: 'durable partial',
       },
       createdAt: 632,

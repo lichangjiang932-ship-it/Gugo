@@ -69,6 +69,8 @@ test('workspace onboarding requires risk confirmation and preserves deployment-l
   try {
     await act(async () => root.render(<WorkspaceOnboardingSection controller={controller} t={t} />))
     const form = rootElement.querySelector('[data-testid="workspace-onboarding"]')
+    assert.equal(rootElement.textContent.includes('QUICK START'), false)
+    assert.equal(rootElement.textContent.includes('permissionsDashboard.workspaceEyebrow'), true)
     const submit = form.querySelector('button[type="submit"]')
     const featureCheckboxes = form.querySelectorAll('fieldset input[type="checkbox"]')
     assert.equal(featureCheckboxes[0].disabled, true)

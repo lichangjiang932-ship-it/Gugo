@@ -6,6 +6,7 @@ export function useChatReplayActions({
   attachmentsRef,
   inputRef,
   isGenerating,
+  lang,
   messageEdit,
   modelReadiness,
   setAttachments,
@@ -28,7 +29,7 @@ export function useChatReplayActions({
     }
     setShowModelPicker(false)
     triggerSendFlow(
-      request.content || describeAttachmentPrompt(request.attachments),
+      request.content || describeAttachmentPrompt(request.attachments, lang),
       request.attachments,
       request.historyLimit,
     )

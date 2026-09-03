@@ -1,9 +1,6 @@
-/** Pure source builder for the persistent Windows process-tree worker. */
 export function windowsPowerShellPath() {
   const systemRoot = String(process.env.SystemRoot || process.env.WINDIR || '').trim()
-  return systemRoot
-    ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
-    : 'powershell.exe'
+  return systemRoot ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe` : 'powershell.exe'
 }
 
 export function windowsTreeKillWorkerBootstrapScript() {
@@ -83,12 +80,14 @@ public static class GugoProcessTreeNative {
     public readonly string Id;
     public readonly ProcessIdentity Root;
     public readonly IntPtr Job;
+    public readonly bool JobContainsTree;
     public int State;
 
-    public ProcessLease(string id, ProcessIdentity root, IntPtr job) {
+    public ProcessLease(string id, ProcessIdentity root, IntPtr job, bool jobContainsTree) {
       Id = id;
       Root = root;
       Job = job;
+      JobContainsTree = jobContainsTree;
       State = 0;
     }
 
@@ -305,7 +304,7 @@ public static class GugoProcessTreeNative {
     return value > 0 ? value : identity.CreatedAt;
   }
 
-  public static bool Bind(string leaseId, int rootPid, long identityCutoffUnixMs) {
+  public static bool Bind(string leaseId, int rootPid, long identityCutoffUnixMs, bool jobContainsTree) {
     if (String.IsNullOrWhiteSpace(leaseId) || rootPid <= 0 || identityCutoffUnixMs <= 0) {
       return false;
     }
@@ -325,7 +324,7 @@ public static class GugoProcessTreeNative {
       if (!AssignProcessToJobObject(job, root.Handle)) return false;
       lock (LeaseLock) {
         if (Leases.ContainsKey(leaseId)) return false;
-        Leases.Add(leaseId, new ProcessLease(leaseId, root, job));
+        Leases.Add(leaseId, new ProcessLease(leaseId, root, job, jobContainsTree));
         owned = true;
       }
       return true;
@@ -386,15 +385,17 @@ public static class GugoProcessTreeNative {
           }
           continue;
         }
-        long parentExitedAt = IdentityExitTime(parent);
-        if (!SnapshotContains(processId, row.th32ParentProcessID)
-            || candidate.CreatedAt < parent.CreatedAt
-            || candidate.CreatedAt > parentExitedAt) {
-          candidate.Dispose();
-          continue;
+        try {
+          long parentExitedAt = IdentityExitTime(parent);
+          if (!SnapshotContains(processId, row.th32ParentProcessID)
+              || candidate.CreatedAt < parent.CreatedAt
+              || candidate.CreatedAt > parentExitedAt) continue;
+          tracked.Add(processId, candidate);
+          candidate = null;
+          changed = true;
+        } finally {
+          if (candidate != null) candidate.Dispose();
         }
-        tracked.Add(processId, candidate);
-        changed = true;
       }
     } while (changed);
   }
@@ -430,8 +431,13 @@ public static class GugoProcessTreeNative {
     ProcessLease lease,
     Dictionary<uint, ProcessIdentity> tracked
   ) {
-    ExpandDescendants(tracked, Snapshot());
-    return ActiveJobProcessCount(lease.Job) == 0 && !AnyTrackedProcessAlive(tracked);
+    try {
+      if (!lease.JobContainsTree) ExpandDescendants(tracked, Snapshot());
+      return ActiveJobProcessCount(lease.Job) == 0 && !AnyTrackedProcessAlive(tracked);
+    } catch (Win32Exception) {
+      if (lease.JobContainsTree) return false;
+      throw;
+    }
   }
 
   private static bool ConfirmBoundTreeEmpty(
@@ -457,20 +463,28 @@ public static class GugoProcessTreeNative {
     bool jobTerminated = false;
     try {
       while (RemainingBudgetMilliseconds(elapsed, budgetMs) > 0) {
-        // AssignProcessToJobObject is not retroactive. Capture any descendants
-        // that existed before the late bind before terminating the job root.
-        ExpandDescendants(tracked, Snapshot());
-        if (!jobTerminated) {
-          bool terminated = TerminateJobObject(lease.Job, 1);
-          int terminateError = terminated ? 0 : Marshal.GetLastWin32Error();
-          if (!terminated && ActiveJobProcessCount(lease.Job) > 0) {
-            throw new Win32Exception(terminateError);
+        // An incomplete ancestry snapshot can never be retried safely: an
+        // untracked parent may exit and leave a live descendant unreachable.
+        if (!lease.JobContainsTree) ExpandDescendants(tracked, Snapshot());
+        try {
+          if (!jobTerminated) {
+            bool terminated = TerminateJobObject(lease.Job, 1);
+            int terminateError = terminated ? 0 : Marshal.GetLastWin32Error();
+            if (!terminated && ActiveJobProcessCount(lease.Job) > 0) {
+              throw new Win32Exception(terminateError);
+            }
+            jobTerminated = true;
           }
-          jobTerminated = true;
-        }
-        foreach (var identity in tracked.Values) {
-          if (RemainingBudgetMilliseconds(elapsed, budgetMs) <= 0) break;
-          Terminate(identity);
+          foreach (var identity in tracked.Values) {
+            if (RemainingBudgetMilliseconds(elapsed, budgetMs) <= 0) break;
+            Terminate(identity);
+          }
+        } catch (Win32Exception) {
+          // Job and termination state can lag briefly on a busy Windows host.
+          stableEmptySnapshots = 0;
+          int retryRemainingMs = RemainingBudgetMilliseconds(elapsed, budgetMs);
+          if (retryRemainingMs > 0) Thread.Sleep(Math.Min(50, retryRemainingMs));
+          continue;
         }
         int remainingMs = RemainingBudgetMilliseconds(elapsed, budgetMs);
         if (remainingMs <= 0) break;
@@ -546,11 +560,11 @@ while ($true) {
   if ($parts.Length -lt 3 -or [string]::IsNullOrWhiteSpace($parts[1])) { continue }
   $operation = $parts[0]
   $requestId = $parts[1]
-  if ($operation -eq 'BIND' -and $parts.Length -eq 5) {
+  if (($operation -eq 'BIND' -or $operation -eq 'BIND_SEALED') -and $parts.Length -eq 5) {
     $rootPid = 0
     $identityCutoffUnixMs = 0L
     $valid = [int]::TryParse($parts[3], [ref]$rootPid) -and [long]::TryParse($parts[4], [ref]$identityCutoffUnixMs)
-    $bound = $valid -and [GugoProcessTreeNative]::Bind($parts[2], $rootPid, $identityCutoffUnixMs)
+    $bound = $valid -and [GugoProcessTreeNative]::Bind($parts[2], $rootPid, $identityCutoffUnixMs, $operation -eq 'BIND_SEALED')
     [GugoProcessTreeNative]::WriteResponse($requestId, $bound)
     continue
   }

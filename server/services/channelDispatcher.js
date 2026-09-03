@@ -11,6 +11,7 @@ import {
 } from './channelStore.js'
 import { resolveAgentModelRuntimeBinding } from './modelReadinessService.js'
 import { newSubagentRunId, runSubagent } from './subagentRuntime.js'
+import { normalizeTurnLocale } from '../../shared/turnLocale.js'
 
 const MAX_AGENT_CHAIN_DEPTH = 3
 
@@ -158,6 +159,7 @@ function runAgentTurn({
   cleanedText,
   fromAgentId = null,
   modelBinding,
+  locale,
 }) {
   if (!getChannel({ userId, channelId })) return null
   const id = newSubagentRunId()
@@ -189,6 +191,7 @@ function runAgentTurn({
       modelName: modelBinding.modelName,
       modelProviderId: modelBinding.modelProviderId,
       modelConfigRevision: modelBinding.modelConfigRevision,
+      locale,
     })
     const resultText = String(run?.resultText || run?.result_text || '').trim()
     if (!resultText) return
@@ -213,6 +216,7 @@ function runAgentTurn({
       modelName: run?.modelName || modelBinding.modelName,
       modelProviderId: run?.modelProviderId || modelBinding.modelProviderId,
       modelConfigRevision: run?.modelConfigRevision ?? modelBinding.modelConfigRevision,
+      locale,
     })
   })
   return id
@@ -227,6 +231,7 @@ export async function dispatchUserMessage(channelIdOrArgs, userIdArg, textArg, o
     modelName = null,
     modelProviderId = null,
     modelConfigRevision = null,
+    locale = 'zh',
   } = normalizeUserArgs(channelIdOrArgs, userIdArg, textArg, optsArg)
   if (!channelId || !userId) throw new Error('channelId + userId required')
   const channel = getChannel({ userId, channelId })
@@ -267,6 +272,7 @@ export async function dispatchUserMessage(channelIdOrArgs, userIdArg, textArg, o
       sourceMessage: message,
       cleanedText: parsed.cleanedText,
       modelBinding,
+      locale: normalizeTurnLocale(locale),
     }))
     .filter(Boolean)
 
@@ -279,6 +285,7 @@ export async function dispatchAgentMessage(channelIdOrArgs, fromAgentIdArg, text
   const userId = args.userId || channelOwner(channelId)
   const fromAgentId = args.fromAgentId
   const text = args.text
+  const locale = normalizeTurnLocale(args.locale)
   if (!channelId || !userId || !fromAgentId) throw new Error('channelId + fromAgentId required')
   const channel = getChannel({ userId, channelId })
   if (!channel) {
@@ -321,6 +328,7 @@ export async function dispatchAgentMessage(channelIdOrArgs, fromAgentIdArg, text
       cleanedText: parsed.cleanedText,
       fromAgentId,
       modelBinding,
+      locale,
     }))
     .filter(Boolean)
 

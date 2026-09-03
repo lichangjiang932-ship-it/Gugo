@@ -26,7 +26,7 @@ export function missingArtifactBlocker(missingArtifactTools = []) {
 }
 
 export async function initializeCompletion(s) {
-  const { ARTIFACT_RECOVERY_PHASE_DIAGNOSE, ARTIFACT_RECOVERY_PHASE_FORCE, AVAILABLE_TOOL_CAPABILITIES_MARKER, FALSE_SUCCESS_STATUS, FILE_WRITE_TOOL_NAMES, GENERATED_ARTIFACT_TYPE, INCOMPLETE_STATUS, LOCAL_HTML_DELIVERY_GUARD_MARKER, MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS, PDF_LAYOUT_EXECUTION_CONTRACT_MARKER, PROJECT_SCOPE_TARGET, buildFinalAnswerEvidenceReviewPrompt, buildFinalAnswerEvidenceSnapshot, buildPdfLayoutExecutionContract, buildTaskVerificationRepairPrompt, collectFinalAnswerToolEvidence, finalAnswerEvidenceDigest, getProjectDirectory, hasPendingTaskVerificationRepair, hasSuccessfulLocalPreflightRead, isCommandExecutionTool, isFileArtifactTool, normalizeFinalAnswerToolEvidence, normalizeMutationTarget, observeTaskVerificationMutation, observeTaskVerificationRepair, path, restoreExecutionConvergence, restoreTaskVerificationRepair, shellTargetWithCwd, targetsMatch, taskVerificationRepairBlockerText, taskVerificationRepairDetails, taskVerificationRepairExhausted, toolNameFromSpec, validateLocalHtmlDelivery } = s.d
+  const { ARTIFACT_RECOVERY_PHASE_DIAGNOSE, ARTIFACT_RECOVERY_PHASE_FORCE, AVAILABLE_TOOL_CAPABILITIES_MARKER, FALSE_SUCCESS_STATUS, FILE_WRITE_TOOL_NAMES, GENERATED_ARTIFACT_TYPE, INCOMPLETE_STATUS, LOCAL_HTML_DELIVERY_GUARD_MARKER, MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS, PDF_LAYOUT_EXECUTION_CONTRACT_MARKER, PROJECT_SCOPE_TARGET, buildFinalAnswerEvidenceReviewPrompt, buildFinalAnswerEvidenceSnapshot, buildPdfLayoutExecutionContract, buildTaskVerificationRepairPrompt, collectFinalAnswerToolEvidence, finalAnswerEvidenceDigest, getProjectDirectory, hasPendingTaskVerificationRepair, hasSuccessfulLocalPreflightRead, isCommandExecutionTool, isFileArtifactTool, normalizeFinalAnswerToolEvidence, normalizeMutationTarget, observeTaskVerificationMutation, observeTaskVerificationRepair, path, priorOutcomeStatusCopy, restoreExecutionConvergence, restoreTaskVerificationRepair, shellTargetWithCwd, targetsMatch, taskVerificationRepairBlockerText, taskVerificationRepairDetails, taskVerificationRepairExhausted, toolNameFromSpec, validateLocalHtmlDelivery } = s.d
   s.artifactDeliveryRetries = Math.max(0, Number(s.restoredState?.completionGuards?.artifactDeliveryRetries) || 0)
   s.forcedArtifactToolName = s.expectedArtifactTools.has(
       String(s.restoredState?.completionGuards?.forcedArtifactToolName || '').trim(),
@@ -119,18 +119,12 @@ export async function initializeCompletion(s) {
         || INCOMPLETE_STATUS.test(text)
         || !FALSE_SUCCESS_STATUS.test(text)) return text
       const blocker = String(
-        s.priorTurnOutcome?.error?.message || s.priorTurnOutcome?.error?.code || '上一轮执行未完成',
+        s.priorTurnOutcome?.error?.message || s.priorTurnOutcome?.error?.code || '',
       ).trim()
       const verifiedFiles = Array.isArray(s.priorTurnOutcome?.verifiedLocalFiles)
         ? s.priorTurnOutcome.verifiedLocalFiles.map((file) => String(file?.path || '').trim()).filter(Boolean)
         : []
-      return [
-        `上一轮仍未完成：${blocker}。`,
-        verifiedFiles.length > 0
-          ? `已确认存在的文件：${verifiedFiles.join('、')}；文件存在不代表整项任务已经完成。`
-          : '',
-        '在取得新的执行与验证证据前，不能标记为完成。',
-      ].filter(Boolean).join('\n')
+      return priorOutcomeStatusCopy(s.locale, { blocker, verifiedFiles })
     }
   s.executionEvidenceRetries = Math.max(
       0,
@@ -289,8 +283,9 @@ export async function initializeCompletion(s) {
       s.taskVerificationRepair,
     )
   s.taskVerificationRepairBlockerText = () => taskVerificationRepairBlockerText(
-      s.taskVerificationRepair,
-    )
+    s.taskVerificationRepair,
+    { locale: s.locale },
+  )
   s.taskVerificationRepairDetails = () => taskVerificationRepairDetails(
       s.taskVerificationRepair,
     )

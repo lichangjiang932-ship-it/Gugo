@@ -229,6 +229,70 @@ test('auto mode leaves explanatory questions as answer-only requests', () => {
   assert.equal(shouldRequireExecution({ text: '如何定位问题，然后帮我修复登录逻辑' }), true)
 })
 
+test('completion status questions never become mutation orders in auto mode', () => {
+  for (const text of [
+    '完成了吗？',
+    'Is it complete?',
+    'Is this complete?',
+    'Is result.txt complete?',
+    'Is the file complete?',
+    'Is my task complete?',
+    'Is src/result.txt complete?',
+    'Is the work complete?',
+    'Is the task done?',
+    'Is this task complete yet?',
+    'Has it finished?',
+    'Have you finished?',
+    'Have you completed it?',
+    'Have you finished the fix yet?',
+    'Is the task finished?',
+    'Is the fix ready?',
+    'Is it fixed?',
+    'Are the changes done?',
+    'Was it fixed?',
+    'Were the files deleted?',
+    'Did it complete?',
+    'Did the task finish?',
+    'Did result.txt finish?',
+    'Did you finish it?',
+    'Did you fix it?',
+    'Did you update result.txt?',
+    'Did you delete the stale file?',
+    'Did you change it?',
+    'Have you fixed it?',
+    '修复好了吗？',
+    '改好了吗？',
+    '更新了吗？',
+    '删除了吗？',
+    '保存了吗？',
+    '安装了吗？',
+    '文件生成了吗？',
+    '已经修复了吗？',
+    '现在修复完成了吗？',
+    '测试通过了吗？',
+  ]) {
+    assert.equal(shouldRequireExecution({ text }), false, text)
+    assert.equal(hasMutationExecutionIntent(text), false, text)
+  }
+
+  for (const text of [
+    'Complete it.',
+    'Finish the task.',
+    'Please complete result.txt.',
+    'Is it complete? If not, fix it.',
+    'Have you finished? If not, fix it.',
+    'Did you finish it, and if not, fix it.',
+    'Have you completed the work and please deploy it.',
+    'Did you finish it and then update the docs.',
+    'Did you fix it, also update the tests.',
+    'Have you completed it, please fix remaining issues.',
+    '修复好了吗？如果没有请继续修复。',
+  ]) {
+    assert.equal(shouldRequireExecution({ text }), true, text)
+    assert.equal(hasMutationExecutionIntent(text), true, text)
+  }
+})
+
 test('external action requests execute while send-how-to questions remain answers', () => {
   for (const text of [
     'Send a Slack message to the release channel.',

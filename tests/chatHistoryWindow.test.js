@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { getUserInputHistory, shouldNavigateInputHistory } from '../src/pages/ChatSplit/useInputHistory.js'
-import { getExpandedWindowCount, getMessageWindow } from '../src/lib/messageWindow.js'
+import { getAnchoredWindowStart, getMessageWindow } from '../src/lib/messageWindow.js'
 
 test('input history returns recent user prompts from newest to oldest', () => {
   const messages = [
@@ -45,15 +45,21 @@ test('input history navigation setting disables both arrow directions', () => {
   assert.equal(shouldNavigateInputHistory(event, 'down', false), false)
 })
 
-test('message window mounts the recent 80 messages and expands by page', () => {
+test('message window mounts at most 80 recent or target-anchored messages', () => {
   const messages = Array.from({ length: 205 }, (_, index) => ({ id: index }))
   const initial = getMessageWindow(messages)
   assert.equal(initial.hiddenCount, 125)
+  assert.equal(initial.hiddenAfterCount, 0)
   assert.equal(initial.visibleMessages.length, 80)
   assert.equal(initial.visibleMessages[0].id, 125)
 
-  const expanded = getMessageWindow(messages, 160)
-  assert.equal(expanded.hiddenCount, 45)
-  assert.equal(expanded.visibleMessages[0].id, 45)
-  assert.equal(getExpandedWindowCount(messages.length, 12), 240)
+  const anchoredStart = getAnchoredWindowStart(messages.length, 100)
+  const anchored = getMessageWindow(messages, 80, anchoredStart)
+  assert.equal(anchored.hiddenCount, 60)
+  assert.equal(anchored.hiddenAfterCount, 65)
+  assert.equal(anchored.visibleMessages.length, 80)
+  assert.equal(anchored.visibleMessages[0].id, 60)
+  assert.equal(anchored.visibleMessages.at(-1).id, 139)
+  assert.equal(getAnchoredWindowStart(messages.length, 0), 0)
+  assert.equal(getAnchoredWindowStart(messages.length, 204), 125)
 })

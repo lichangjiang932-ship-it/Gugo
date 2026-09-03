@@ -183,9 +183,10 @@ test('TurnEngine stays transitively below its host and persistence composition r
     hostSpecifiers.some((specifier) => (
       /(?:^|\/)sqliteTurnPersistenceAdapter\.js$/.test(specifier)
       || /(?:^|\/)db\.js$/.test(specifier)
+      || /(?:^|\/)routes(?:\/|$)/.test(specifier)
     )),
     false,
-    'turnEngineHost must compose the active adapter without selecting SQLite',
+    'turnEngineHost must compose the active adapter without selecting SQLite or importing routes',
   )
 })
 

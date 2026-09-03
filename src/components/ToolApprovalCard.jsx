@@ -51,7 +51,7 @@ function headline(name, args) {
   return ''
 }
 
-function DiffPreview({ changes }) {
+function DiffPreview({ changes, t }) {
   if (!Array.isArray(changes) || !changes.length) return null
   return (
     <div className="mt-2 flex flex-col gap-2">
@@ -61,7 +61,7 @@ function DiffPreview({ changes }) {
         return (
           <div key={`${change?.path || i}`} className="rounded border border-ink/15 overflow-hidden">
             <div className="px-2 py-1 bg-paper-2 font-mono text-[10px] text-ink-soft truncate">
-              {change?.op ? `[${change.op}] ` : ''}{change?.path || '(未知路径)'}
+              {change?.op ? `[${change.op}] ` : ''}{change?.path || `(${t('toolApproval.unknownPath')})`}
             </div>
             <pre className="px-2 py-1.5 font-mono text-[10px] leading-relaxed overflow-x-auto max-h-40">
               {lines.map((line, li) => (
@@ -81,7 +81,9 @@ function DiffPreview({ changes }) {
         )
       })}
       {changes.length > 8 && (
-        <p className="font-mono text-[10px] text-ink-fade">…还有 {changes.length - 8} 个文件</p>
+        <p className="font-mono text-[10px] text-ink-fade">
+          {t('toolApproval.moreFiles', { count: changes.length - 8 })}
+        </p>
       )}
     </div>
   )
@@ -142,7 +144,7 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
               {main}
             </pre>
           )}
-          <DiffPreview changes={preview} />
+          <DiffPreview changes={preview} t={t} />
 
           <button
             type="button"

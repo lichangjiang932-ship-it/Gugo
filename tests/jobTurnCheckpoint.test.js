@@ -702,6 +702,7 @@ test('a failed terminal checkpoint restores its exact outcome without rerunning 
     job: {
       id: 'resume-incomplete-job',
       userId: alice,
+      locale: 'en',
       prompt: 'Fix the project and verify it.',
     },
     step: { id: 'resume-incomplete-step', kind: 'execute' },
@@ -795,7 +796,7 @@ test('resume restores the repeated-call fuse and blocks the third identical call
   }
 
   const interrupted = await runToolsLoop({
-    job: { id: 'resume-loop-guard-job', userId: alice },
+    job: { id: 'resume-loop-guard-job', userId: alice, locale: 'en' },
     step: { id: 'resume-loop-guard-step' },
     messages: [{ role: 'user', content: 'read missing.txt' }],
     saveCheckpoint,
@@ -815,7 +816,7 @@ test('resume restores the repeated-call fuse and blocks the third identical call
 
   let resumedModelCalls = 0
   const result = await runToolsLoop({
-    job: { id: 'resume-loop-guard-job', userId: alice },
+    job: { id: 'resume-loop-guard-job', userId: alice, locale: 'en' },
     step: { id: 'resume-loop-guard-step' },
     messages: [],
     loadCheckpoint: async () => ({ state: checkpoint }),

@@ -348,6 +348,50 @@ test('split supports pages and ranges with multiple independently atomic outputs
   assert.equal(second.getPage(2).getWidth(), 301)
 })
 
+test('split overwrite restores every old output when a later publication fails', async () => {
+  await createPdf('split-rollback-source.pdf', 2)
+  const outputDir = path.join(workspace, 'split-rollback')
+  fs.mkdirSync(outputDir, { recursive: true })
+  const firstPath = path.join(outputDir, 'first.pdf')
+  const secondPath = path.join(outputDir, 'second.pdf')
+  const oldFirst = Buffer.from('old first PDF bytes')
+  const oldSecond = Buffer.from('old second PDF bytes')
+  fs.writeFileSync(firstPath, oldFirst)
+  fs.writeFileSync(secondPath, oldSecond)
+
+  const originalRenameSync = fs.renameSync
+  fs.renameSync = (source, target) => {
+    if (String(source).endsWith('.tmp') && path.resolve(String(target)) === path.resolve(secondPath)) {
+      const error = new Error('injected second PDF publication failure')
+      error.code = 'EACCES'
+      throw error
+    }
+    return originalRenameSync(source, target)
+  }
+  try {
+    await assert.rejects(
+      () => dispatchPdfTool('pdf_transform', {
+        operation: 'split',
+        input: 'split-rollback-source.pdf',
+        outputs: [
+          { path: 'split-rollback/first.pdf', pages: [1] },
+          { path: 'split-rollback/second.pdf', pages: [2] },
+        ],
+        overwrite: true,
+      }),
+      (error) => error?.code === 'PDF_OUTPUT_WRITE_FAILED'
+        && error?.rollbackFailures?.length === 0
+        && error?.recoveryPaths?.length === 0,
+    )
+  } finally {
+    fs.renameSync = originalRenameSync
+  }
+
+  assert.deepEqual(fs.readFileSync(firstPath), oldFirst)
+  assert.deepEqual(fs.readFileSync(secondPath), oldSecond)
+  assert.equal(fs.readdirSync(outputDir).some((name) => name.endsWith('.tmp') || name.endsWith('.bak')), false)
+})
+
 test('rotate applies relative right-angle rotation only to selected pages', async () => {
   await createPdf('rotate-source.pdf', 3)
   const source = await loadOutput('rotate-source.pdf')
@@ -607,6 +651,74 @@ test('overwrite replaces an existing output only when explicitly enabled', async
   const output = await loadOutput('overwrite-target.pdf')
   assert.equal(output.getPageCount(), 2)
   assert.deepEqual(output.getPages().map((page) => page.getRotation().angle), [90, 90])
+})
+
+test('pdf_transform rejects a pre-aborted signal without creating output', async () => {
+  await createPdf('pre-abort-source.pdf', 1)
+  const controller = new AbortController()
+  controller.abort()
+
+  await assert.rejects(
+    () => dispatchPdfTool('pdf_transform', {
+      operation: 'rotate',
+      input: 'pre-abort-source.pdf',
+      output: 'pre-abort-output.pdf',
+      degrees: 90,
+    }, { signal: controller.signal }),
+    (error) => error?.name === 'AbortError'
+      && error?.code === 'ABORT_ERR'
+      && error?.statusCode === 499
+      && error?.cancelled === true,
+  )
+  assert.equal(fs.existsSync(path.join(workspace, 'pre-abort-output.pdf')), false)
+})
+
+test('pdf_transform cancellation during publication restores overwritten outputs', async () => {
+  await createPdf('publish-abort-source.pdf', 2)
+  const outputDir = path.join(workspace, 'publish-abort')
+  fs.mkdirSync(outputDir, { recursive: true })
+  const firstPath = path.join(outputDir, 'first.pdf')
+  const secondPath = path.join(outputDir, 'second.pdf')
+  const oldFirst = Buffer.from('old first before abort')
+  const oldSecond = Buffer.from('old second before abort')
+  fs.writeFileSync(firstPath, oldFirst)
+  fs.writeFileSync(secondPath, oldSecond)
+
+  const controller = new AbortController()
+  const originalRenameSync = fs.renameSync
+  let publications = 0
+  fs.renameSync = (source, target) => {
+    const result = originalRenameSync(source, target)
+    if (String(source).endsWith('.tmp') && path.resolve(String(target)) === path.resolve(firstPath)) {
+      publications += 1
+      controller.abort()
+    }
+    return result
+  }
+  try {
+    await assert.rejects(
+      () => dispatchPdfTool('pdf_transform', {
+        operation: 'split',
+        input: 'publish-abort-source.pdf',
+        outputs: [
+          { path: 'publish-abort/first.pdf', pages: [1] },
+          { path: 'publish-abort/second.pdf', pages: [2] },
+        ],
+        overwrite: true,
+      }, { signal: controller.signal }),
+      (error) => error?.code === 'ABORT_ERR'
+        && error?.statusCode === 499
+        && error?.rollbackFailures?.length === 0
+        && error?.recoveryPaths?.length === 0,
+    )
+  } finally {
+    fs.renameSync = originalRenameSync
+  }
+
+  assert.equal(publications, 1)
+  assert.deepEqual(fs.readFileSync(firstPath), oldFirst)
+  assert.deepEqual(fs.readFileSync(secondPath), oldSecond)
+  assert.equal(fs.readdirSync(outputDir).some((name) => name.endsWith('.tmp') || name.endsWith('.bak')), false)
 })
 
 test('PDF input and output limits are separate and configurable', async () => {

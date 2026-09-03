@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Scoped durable Agent Event subscriptions to the host-authenticated owner so plugins cannot receive another user's conversation, reasoning, tool, or local-file event payloads.
+- Persistently disabled abandoned durable consumers after their drain deadline so inactive subscriptions cannot pin the global retention watermark indefinitely.
+- Added schema v115; ownerless v114 durable subscription cursors and DLQ records are discarded fail-closed and recreated under the local owner during plugin restore.
+
 ## [0.11.50] - 2026-08-31
 
 ### Added

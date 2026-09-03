@@ -515,9 +515,23 @@ test('TurnEngine exposes recovery diagnostics and requires an explicit dead-lett
   })
   await assert.rejects(
     engine.resumeTurn(scope),
-    (error) => error?.code === 'TURN_RECOVERY_DEAD_LETTER' && error?.status === 409,
+    (error) => {
+      assert.equal(error?.code, 'TURN_RECOVERY_DEAD_LETTER')
+      assert.equal(error?.status, 409)
+      assert.equal(error?.message, 'provider remained unavailable')
+      assert.equal(error?.retryable, false)
+      assert.equal(error?.manualRetryable, true)
+      assert.equal(error?.incompleteReason, 'recovery_blocked')
+      assert.deepEqual(error?.missingRequirements, [
+        'execution_environment_repair',
+        'explicit_recovery_retry',
+      ])
+      assert.equal(error?.recovery, recoveryState)
+      return true
+    },
   )
   assert.equal(recoveries, 0)
+  assert.equal(clears, 0)
 
   const turn = await engine.resumeTurn({ ...scope, retryRecovery: true })
   assert.equal(turn.status, 'running')
@@ -3745,6 +3759,9 @@ test('TurnEngine aborts an active model request with an explicit cancelled event
   await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-cancel' })
   const cancelled = events('turn-cancel').at(-1)
   assert.equal(cancelled.type, 'turn.cancelled')
+  assert.equal(cancelled.payload.code, 'TURN_CANCELLED')
+  assert.equal(Object.hasOwn(cancelled.payload, 'reason'), false)
+  assert.equal(Object.hasOwn(cancelled.payload, 'message'), false)
   assert.deepEqual(cancelled.payload.artifactIds, [])
   assert.deepEqual(cancelled.payload.deliveryArtifactIds, [])
   assert.equal(getMessage({

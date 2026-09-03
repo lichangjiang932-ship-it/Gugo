@@ -11,6 +11,7 @@ process.env.APP_DATA_DIR = tempDir
 const { createAppServer } = await import('../server/appServer.js')
 const { closeDb, getDb } = await import('../server/db.js')
 const {
+  bindManagedAttachmentsToMessage,
   cleanupManagedAttachments,
   createManagedAttachment,
   deleteManagedAttachment,
@@ -20,7 +21,12 @@ const {
   validateManagedAttachmentsForTurn,
 } = await import('../server/services/managedAttachmentStore.js')
 const { validateOfficeArchiveSafety } = await import('../server/services/managedAttachmentContent.js')
-const { deleteSession, getSessionSnapshot, upsertSession } = await import('../server/services/sessionStore.js')
+const {
+  deleteSession,
+  getSessionSnapshot,
+  upsertMessage,
+  upsertSession,
+} = await import('../server/services/sessionStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 const { activateTestCompactionArchivePort } = await import('./helpers/testCompactionArchivePort.js')
 const { default: JSZip } = await import('jszip')
@@ -232,6 +238,144 @@ test('cleanup removes an attachment after its provisional session misses the gra
   assert.equal(fs.existsSync(attachment.fullPath), false)
 })
 
+test('cleanup restores a quarantined attachment when its stale snapshot changes', async () => {
+  const identity = makeIdentity('cleanup-bind-race')
+  const now = Date.now()
+  const attachment = await upload({
+    identity,
+    sessionId: null,
+    name: 'bound-during-cleanup.txt',
+    body: 'preserve these bytes',
+    now: now - 5_000,
+  })
+  const messageId = 'managed-security-cleanup-bind-race-message'
+  upsertMessage({
+    id: messageId,
+    userId: identity.userId,
+    sessionId: identity.sessionId,
+    role: 'user',
+    content: 'bind the attachment',
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  const originalRenameSync = fs.renameSync
+  let bindingInjected = false
+  let readDuringQuarantine = false
+  fs.renameSync = function renameWithConcurrentBinding(source, destination, ...args) {
+    const result = originalRenameSync.call(fs, source, destination, ...args)
+    if (!bindingInjected && source === attachment.fullPath && String(destination).includes('.deleting-')) {
+      bindingInjected = true
+      bindManagedAttachmentsToMessage({
+        userId: identity.userId,
+        sessionId: identity.sessionId,
+        messageId,
+        attachmentIds: [attachment.id],
+        now,
+      })
+      assert.throws(
+        () => getManagedAttachment({ userId: identity.userId, id: attachment.id }),
+        (error) => error?.code === 'ATTACHMENT_CONTENT_MISSING' && error?.statusCode === 410,
+      )
+      assert.equal(rowCount(attachment.id), 1)
+      readDuringQuarantine = true
+    }
+    return result
+  }
+
+  let result
+  try {
+    result = cleanupManagedAttachments({
+      userId: identity.userId,
+      now,
+      env: {
+        ...process.env,
+        ATTACHMENT_PENDING_TTL_MS: '1000',
+        ATTACHMENT_ORPHAN_GRACE_MS: '1000',
+      },
+    })
+  } finally {
+    fs.renameSync = originalRenameSync
+  }
+
+  assert.equal(bindingInjected, true)
+  assert.equal(readDuringQuarantine, true)
+  assert.deepEqual(result, { removedRows: 0, removedFiles: 0 })
+  const restored = getManagedAttachment({ userId: identity.userId, id: attachment.id })
+  assert.equal(restored?.sessionId, identity.sessionId)
+  assert.equal(restored?.messageId, messageId)
+  assert.equal(fs.readFileSync(attachment.fullPath, 'utf8'), 'preserve these bytes')
+  assert.deepEqual(
+    fs.readdirSync(path.dirname(attachment.fullPath)).filter((name) => name.includes('.deleting-')),
+    [],
+  )
+})
+
+test('cleanup fails closed when a changed snapshot cannot restore its quarantined file', async () => {
+  const identity = makeIdentity('cleanup-restore-failure')
+  const now = Date.now()
+  const attachment = await upload({
+    identity,
+    sessionId: null,
+    name: 'lost-during-cleanup.txt',
+    now: now - 5_000,
+  })
+  const messageId = 'managed-security-cleanup-restore-failure-message'
+  upsertMessage({
+    id: messageId,
+    userId: identity.userId,
+    sessionId: identity.sessionId,
+    role: 'user',
+    content: 'bind before the injected restore failure',
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  const originalRenameSync = fs.renameSync
+  let failureInjected = false
+  fs.renameSync = function renameThenRemoveTombstone(source, destination, ...args) {
+    const result = originalRenameSync.call(fs, source, destination, ...args)
+    if (!failureInjected && source === attachment.fullPath && String(destination).includes('.deleting-')) {
+      failureInjected = true
+      bindManagedAttachmentsToMessage({
+        userId: identity.userId,
+        sessionId: identity.sessionId,
+        messageId,
+        attachmentIds: [attachment.id],
+        now,
+      })
+      fs.unlinkSync(destination)
+    }
+    return result
+  }
+
+  try {
+    assert.throws(
+      () => cleanupManagedAttachments({
+        userId: identity.userId,
+        now,
+        env: {
+          ...process.env,
+          ATTACHMENT_PENDING_TTL_MS: '1000',
+          ATTACHMENT_ORPHAN_GRACE_MS: '1000',
+        },
+      }),
+      (error) => error instanceof AggregateError
+        && /Failed to restore attachments whose cleanup snapshot changed/.test(error.message),
+    )
+  } finally {
+    fs.renameSync = originalRenameSync
+  }
+
+  assert.equal(failureInjected, true)
+  const row = getDb().prepare(`
+    SELECT session_id, message_id FROM managed_attachments WHERE id = ? AND user_id = ?
+  `).get(attachment.id, identity.userId)
+  assert.deepEqual(row, { session_id: identity.sessionId, message_id: messageId })
+  getDb().prepare('DELETE FROM managed_attachments WHERE id = ? AND user_id = ?')
+    .run(attachment.id, identity.userId)
+})
+
 test('cleanup never treats DB-backed files outside the maintenance batch as orphans', async () => {
   const identity = makeIdentity('cleanup-batch')
   const createdAt = Date.now() - 5_000
@@ -287,13 +431,58 @@ test('cleanup row limits never turn valid uninspected attachments into disk orph
   }
 })
 
-test('a missing disk object returns 410 and removes its corrupt database row', async () => {
+test('a missing disk object returns 410 and preserves metadata until snapshot cleanup', async () => {
   const identity = makeIdentity('missing')
   const attachment = await upload({ identity, name: 'missing.txt' })
   fs.unlinkSync(attachment.fullPath)
   assert.throws(
     () => getManagedAttachment({ userId: identity.userId, id: attachment.id }),
     (error) => error?.code === 'ATTACHMENT_CONTENT_MISSING' && error?.statusCode === 410,
+  )
+  assert.equal(rowCount(attachment.id), 1)
+  assert.deepEqual(
+    cleanupManagedAttachments({ userId: identity.userId }),
+    { removedRows: 1, removedFiles: 0 },
+  )
+  assert.equal(rowCount(attachment.id), 0)
+})
+
+test('content download opens bytes before success headers when concurrent removal wins', async () => {
+  const identity = makeIdentity('download-open-race')
+  const attachment = await upload({
+    identity,
+    name: 'removed-before-open.txt',
+    body: 'download race bytes',
+  })
+  const originalOpenSync = fs.openSync
+  let removalInjected = false
+  fs.openSync = function openAfterConcurrentRemoval(filePath, ...args) {
+    if (!removalInjected && path.resolve(String(filePath)) === path.resolve(attachment.fullPath)) {
+      removalInjected = true
+      fs.unlinkSync(attachment.fullPath)
+      const error = new Error('injected concurrent attachment removal')
+      error.code = 'ENOENT'
+      throw error
+    }
+    return originalOpenSync.call(fs, filePath, ...args)
+  }
+
+  let response
+  try {
+    response = await fetch(`${origin}${attachment.downloadUrl}`, {
+      headers: authorization(identity),
+    })
+  } finally {
+    fs.openSync = originalOpenSync
+  }
+
+  assert.equal(removalInjected, true)
+  assert.equal(response.status, 410)
+  assert.equal((await response.json()).error?.code, 'ATTACHMENT_CONTENT_MISSING')
+  assert.equal(rowCount(attachment.id), 1)
+  assert.deepEqual(
+    cleanupManagedAttachments({ userId: identity.userId }),
+    { removedRows: 1, removedFiles: 0 },
   )
   assert.equal(rowCount(attachment.id), 0)
 })

@@ -1,4 +1,5 @@
 import { types as utilTypes } from 'node:util'
+import { projectManagedAttachmentDto } from '../core/managedAttachmentDtos.js'
 import { prepareManagedAttachmentsForModel } from '../services/managedAttachmentContent.js'
 import {
   bindManagedAttachmentsToMessage,
@@ -8,21 +9,6 @@ import {
 export const SQLITE_FILE_MANAGED_ATTACHMENT_RUNTIME_ADAPTER_ID = 'builtin.sqlite-file'
 
 const MANAGED_ATTACHMENT_RUNTIME_PORT_VERSION = 1
-
-const PUBLIC_ATTACHMENT_FIELDS = Object.freeze([
-  'id',
-  'name',
-  'mimeType',
-  'size',
-  'sha256',
-  'status',
-  'sessionId',
-  'messageId',
-  'uri',
-  'downloadUrl',
-  'createdAt',
-  'updatedAt',
-])
 
 function adapterError(message) {
   const error = new TypeError(message)
@@ -86,13 +72,12 @@ function arrayDataValues(value, label) {
 
 function publicAttachmentDto(value, index) {
   const label = `managed attachment result[${index}]`
-  const attachment = assertRecord(value, label)
-  const dto = {}
-  for (const field of PUBLIC_ATTACHMENT_FIELDS) {
-    const descriptor = ownDataDescriptor(attachment, field, label, { optional: true })
-    if (descriptor) dto[field] = descriptor.value
+  assertRecord(value, label)
+  try {
+    return projectManagedAttachmentDto(value, { label })
+  } catch (error) {
+    throw adapterError(error?.message || `${label} is invalid`)
   }
-  return Object.freeze(dto)
 }
 
 function publicAttachmentList(value) {

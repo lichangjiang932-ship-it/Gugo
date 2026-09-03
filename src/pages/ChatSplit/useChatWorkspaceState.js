@@ -4,6 +4,7 @@ import {
   deriveRecentChatWorkspaces,
   normalizeChatWorkspacePath,
 } from '../../lib/chatWorkspaceSelection.js'
+import { setSessionWorkspaceRemote } from '../../lib/sessionClient.js'
 
 export default function useChatWorkspaceState({
   activeSession,
@@ -17,10 +18,14 @@ export default function useChatWorkspaceState({
     draftVersion: state.newDraftVersion,
     message: '',
   }))
-  const draftWorkspacePath = normalizeChatWorkspacePath(state.draftWorkspacePath)
-  const selectedWorkspacePath = normalizeChatWorkspacePath(
-    activeSession?.workspacePath || (!activeSessionId ? draftWorkspacePath : ''),
+  const defaultWorkspacePath = normalizeChatWorkspacePath(state.defaultWorkspacePath)
+  const draftWorkspacePath = normalizeChatWorkspacePath(
+    state.draftWorkspacePath || defaultWorkspacePath,
   )
+  const selectedWorkspacePath = normalizeChatWorkspacePath(
+    activeSession?.workspacePath || (!activeSessionId ? draftWorkspacePath : defaultWorkspacePath),
+  )
+  const activeSessionServerRevision = activeSession?.serverRevision
   const recentWorkspaces = useMemo(
     () => deriveRecentChatWorkspaces(state.sessions),
     [state.sessions],
@@ -46,26 +51,61 @@ export default function useChatWorkspaceState({
   }, [state.newDraftVersion, t])
 
   const handleWorkspaceSelect = useCallback(async (path) => {
-    const activated = await activateWorkspaceForTurn(path)
-    if (activeSessionId) {
-      dispatch({
-        type: 'SET_SESSION_WORKSPACE',
-        payload: { sessionId: activeSessionId, workspacePath: activated.path },
-      })
-    } else {
-      dispatch({ type: 'SET_DRAFT_WORKSPACE', payload: { workspacePath: activated.path } })
-    }
-    return activated
-  }, [activeSessionId, activateWorkspaceForTurn, dispatch])
-
-  const handleWorkspaceClear = useCallback(() => {
+    setWorkspaceBusy(true)
     setWorkspaceErrorState({ draftVersion: state.newDraftVersion, message: '' })
-    if (activeSessionId) {
+    try {
+      const activated = await activateChatWorkspace(path)
+      if (activeSessionId && Number.isInteger(activeSessionServerRevision)) {
+        const result = await setSessionWorkspaceRemote(activeSessionId, activated.path)
+        dispatch({
+          type: 'APPLY_SERVER_SESSION_METADATA',
+          payload: { sessionId: activeSessionId, session: result.session },
+        })
+      } else if (activeSessionId) {
+        dispatch({
+          type: 'SET_SESSION_WORKSPACE',
+          payload: { sessionId: activeSessionId, workspacePath: activated.path },
+        })
+      } else {
+        dispatch({ type: 'SET_DRAFT_WORKSPACE', payload: { workspacePath: activated.path } })
+      }
+      return activated
+    } catch (error) {
+      setWorkspaceErrorState({
+        draftVersion: state.newDraftVersion,
+        message: String(error?.message || t('chatMessages.workspaceSelectionFailed')),
+      })
+      throw error
+    } finally {
+      setWorkspaceBusy(false)
+    }
+  }, [activeSessionId, activeSessionServerRevision, dispatch, state.newDraftVersion, t])
+
+  const handleWorkspaceClear = useCallback(async () => {
+    setWorkspaceErrorState({ draftVersion: state.newDraftVersion, message: '' })
+    if (activeSessionId && Number.isInteger(activeSessionServerRevision)) {
+      setWorkspaceBusy(true)
+      try {
+        const result = await setSessionWorkspaceRemote(activeSessionId, null)
+        dispatch({
+          type: 'APPLY_SERVER_SESSION_METADATA',
+          payload: { sessionId: activeSessionId, session: result.session },
+        })
+      } catch (error) {
+        setWorkspaceErrorState({
+          draftVersion: state.newDraftVersion,
+          message: String(error?.message || t('chatMessages.workspaceSelectionFailed')),
+        })
+        throw error
+      } finally {
+        setWorkspaceBusy(false)
+      }
+    } else if (activeSessionId) {
       dispatch({ type: 'SET_SESSION_WORKSPACE', payload: { sessionId: activeSessionId, workspacePath: '' } })
     } else {
-      dispatch({ type: 'SET_DRAFT_WORKSPACE', payload: { workspacePath: '' } })
+      dispatch({ type: 'SET_DRAFT_WORKSPACE', payload: { workspacePath: defaultWorkspacePath } })
     }
-  }, [activeSessionId, dispatch, state.newDraftVersion])
+  }, [activeSessionId, activeSessionServerRevision, defaultWorkspacePath, dispatch, state.newDraftVersion, t])
 
   return {
     activateWorkspaceForTurn,

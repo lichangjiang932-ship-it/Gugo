@@ -267,6 +267,15 @@ export async function runEvolutionConfigReplayApi(candidateId) {
   return jsonOk(resp)
 }
 
+export async function reviewEvolutionConfigCandidateApi(candidateId) {
+  const resp = await fetch('/api/evolution/config-reviews', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ candidateId }),
+  })
+  return jsonOk(resp)
+}
+
 export async function evaluateEvolutionConfigReplayApi(replayId) {
   const resp = await fetch('/api/evolution/config-evaluations', {
     method: 'POST',

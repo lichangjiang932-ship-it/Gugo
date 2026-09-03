@@ -1,8 +1,6 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
-import net from 'node:net'
 import path from 'node:path'
-import tls from 'node:tls'
 import { readJson, sendJson, authToken } from '../utils.js'
 import {
   resolveClientId,
@@ -11,6 +9,9 @@ import {
   clearPasswordFailures,
 } from '../utils/loginGuard.js'
 import { logger, logWarn } from '../utils/logger.js'
+import { buildSendCodeResponse, sendEmailCode } from './authMailTransport.js'
+
+export { buildSendCodeResponse, getMailDiagnostics, sendEmailCode } from './authMailTransport.js'
 
 import {
   getDb,
@@ -32,6 +33,33 @@ import {
 import { disconnectUser as disconnectMcpUser } from '../mcp/mcpManager.js'
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
+
+const LOGIN_ERROR_CODES = new Set([
+  'AUTH_EMAIL_INVALID',
+  'AUTH_SEND_CODE_RATE_LIMITED',
+  'AUTH_SEND_CODE_FAILED',
+  'AUTH_CODE_INVALID_OR_EXPIRED',
+  'AUTH_CODE_ATTEMPTS_EXCEEDED',
+  'AUTH_CODE_INVALID',
+  'AUTH_CODE_EXPIRED',
+  'AUTH_VERIFY_FAILED',
+  'AUTH_CREDENTIALS_REQUIRED',
+  'AUTH_ACCOUNT_LOCKED',
+  'AUTH_INVALID_CREDENTIALS',
+  'AUTH_LOGIN_RATE_LIMITED',
+  'AUTH_LOGIN_FAILED',
+])
+
+function loginError(message, code) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+function publicLoginErrorCode(error, fallbackCode) {
+  const code = String(error?.code || '').trim()
+  return LOGIN_ERROR_CODES.has(code) ? code : fallbackCode
+}
 
 function getDataDir() {
   return process.env.APP_DATA_DIR || DEFAULT_DATA_DIR
@@ -140,15 +168,19 @@ export function resolveAuthMode(env = process.env) {
   throw new Error('AUTH_MODE must be local or multi_user')
 }
 
+export function getLocalOwnerUserId(env = process.env) {
+  if (resolveAuthMode(env) !== 'local') return null
+  const configuredId = String(env.LOCAL_USER_ID || '').trim()
+  if (configuredId) return getUserById(configuredId)?.id || null
+  const storedOwnerId = String(getDb().prepare(
+    'SELECT value FROM meta WHERE key = ?',
+  ).get(LOCAL_OWNER_META_KEY)?.value || '').trim()
+  return storedOwnerId && getUserById(storedOwnerId) ? storedOwnerId : null
+}
+
 export function isLocalOwnerUser(userId, env = process.env) {
   const normalizedUserId = String(userId || '').trim()
-  if (!normalizedUserId || resolveAuthMode(env) !== 'local') return false
-  const configuredId = String(env.LOCAL_USER_ID || '').trim()
-  if (configuredId) return configuredId === normalizedUserId
-  const storedOwnerId = getDb().prepare(
-    'SELECT value FROM meta WHERE key = ?',
-  ).get(LOCAL_OWNER_META_KEY)?.value
-  return String(storedOwnerId || '').trim() === normalizedUserId
+  return Boolean(normalizedUserId && getLocalOwnerUserId(env) === normalizedUserId)
 }
 
 function rememberLocalOwner(userId) {
@@ -275,15 +307,15 @@ export function removePasswordForUser({ token, currentPassword, now = Date.now()
 
 export function loginWithPassword({ email, password, now = Date.now() }) {
   ensureLegacyMigration()
-  if (!email || !password) throw new Error('邮箱与密码不能为空')
+  if (!email || !password) throw loginError('邮箱与密码不能为空', 'AUTH_CREDENTIALS_REQUIRED')
   const normalized = String(email).trim().toLowerCase()
   // ★ C-P2.5: 账号维度锁定(与发码限流分离),多次失败先拒。
   if (isAccountLocked(normalized)) {
-    throw new Error('账号因多次登录失败已被临时锁定，请 15 分钟后再试')
+    throw loginError('账号因多次登录失败已被临时锁定，请 15 分钟后再试', 'AUTH_ACCOUNT_LOCKED')
   }
   const user = getUserByEmail(normalized)
   // 统一报错避免透露「账号是否存在」
-  const FAIL = new Error('邮箱或密码不正确')
+  const FAIL = loginError('邮箱或密码不正确', 'AUTH_INVALID_CREDENTIALS')
   if (!user || !user.password_hash) {
     recordPasswordFailure(normalized)
     throw FAIL
@@ -344,7 +376,7 @@ export function issueEmailCode({ email, now = Date.now(), code }) {
   ensureLegacyMigration()
   const normalized = normalizeEmail(email)
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalized)) {
-    throw new Error('请输入有效邮箱地址')
+    throw loginError('请输入有效邮箱地址', 'AUTH_EMAIL_INVALID')
   }
   const actualCode = code || createCode()
   createLoginCode({ email: normalized, code: hashLoginCode(actualCode), now, ttlMs: CODE_TTL_MS })
@@ -356,21 +388,21 @@ export function verifyEmailCode({ email, code, now = Date.now() }) {
   ensureLegacyMigration()
   const normalized = normalizeEmail(email)
   const record = getLoginCode(normalized)
-  if (!record) throw new Error('验证码不存在或已过期')
+  if (!record) throw loginError('验证码不存在或已过期', 'AUTH_CODE_INVALID_OR_EXPIRED')
 
   if (record.attempts >= MAX_LOGIN_ATTEMPTS) {
     deleteLoginCode(normalized)
-    throw new Error('验证失败次数过多，请重新获取验证码')
+    throw loginError('验证失败次数过多，请重新获取验证码', 'AUTH_CODE_ATTEMPTS_EXCEEDED')
   }
 
   if (!loginCodesMatch(record.code, String(code).trim())) {
     incrementLoginAttempts(normalized)
-    throw new Error('验证码不正确')
+    throw loginError('验证码不正确', 'AUTH_CODE_INVALID')
   }
 
   if (record.expires_at < now) {
     deleteLoginCode(normalized)
-    throw new Error('验证码已过期')
+    throw loginError('验证码已过期', 'AUTH_CODE_EXPIRED')
   }
 
   const userId = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 24)
@@ -393,166 +425,6 @@ export function getPublicAccount({ token }) {
   return publicUser(user)
 }
 
-export function getMailDiagnostics(env = process.env) {
-  const required = ['MAIL_SERVER', 'MAIL_USERNAME', 'MAIL_PASSWORD', 'MAIL_DEFAULT_SENDER']
-  const missing = required.filter((key) => !env[key]?.trim())
-  const port = Number(env.MAIL_PORT || 587)
-  return {
-    ok: true,
-    configured: missing.length === 0,
-    missing,
-    server: env.MAIL_SERVER || '',
-    port: Number.isFinite(port) ? port : 587,
-    useTls: String(env.MAIL_USE_TLS).toLowerCase() === 'true',
-    useSsl: String(env.MAIL_USE_SSL).toLowerCase() === 'true',
-    username: env.MAIL_USERNAME || '',
-    sender: env.MAIL_DEFAULT_SENDER || env.MAIL_USERNAME || '',
-    devCodes: String(env.AUTH_DEV_CODES).toLowerCase() === 'true',
-  }
-}
-
-/* ── SMTP 邮件发送 ── */
-
-function createSmtpReader(socket) {
-  let buffer = ''
-  return function readResponse() {
-    return new Promise((resolve, reject) => {
-      const tryResolve = () => {
-        const lines = buffer.split(/\r?\n/)
-        const completeLines = lines.slice(0, -1)
-        for (let i = 0; i < completeLines.length; i += 1) {
-          const line = completeLines[i]
-          if (/^\d{3} /.test(line)) {
-            const responseLines = completeLines.slice(0, i + 1)
-            buffer = [...completeLines.slice(i + 1), lines.at(-1) || ''].join('\n')
-            resolve(responseLines.join('\n'))
-            return true
-          }
-        }
-        return false
-      }
-
-      if (tryResolve()) return
-
-      const onData = (chunk) => {
-        buffer += chunk.toString('utf8')
-        tryResolve() && cleanup()
-      }
-      const onError = (err) => {
-        cleanup()
-        reject(err)
-      }
-      const onClose = () => {
-        cleanup()
-        reject(new Error('SMTP 连接已关闭'))
-      }
-      const cleanup = () => {
-        socket.off('data', onData)
-        socket.off('error', onError)
-        socket.off('close', onClose)
-      }
-      socket.on('data', onData)
-      socket.on('error', onError)
-      socket.on('close', onClose)
-    })
-  }
-}
-
-function waitForSecureConnect(socket) {
-  if (socket.authorized || socket.encrypted) return Promise.resolve()
-  return new Promise((resolve, reject) => {
-    const onSecure = () => { cleanup(); resolve() }
-    const onError = (err) => { cleanup(); reject(err) }
-    const cleanup = () => {
-      socket.off('secureConnect', onSecure)
-      socket.off('error', onError)
-    }
-    socket.on('secureConnect', onSecure)
-    socket.on('error', onError)
-  })
-}
-
-function waitForConnect(socket) {
-  if (!socket.connecting) return Promise.resolve()
-  return new Promise((resolve, reject) => {
-    const onConnect = () => { cleanup(); resolve() }
-    const onError = (err) => { cleanup(); reject(err) }
-    const cleanup = () => {
-      socket.off('connect', onConnect)
-      socket.off('error', onError)
-    }
-    socket.on('connect', onConnect)
-    socket.on('error', onError)
-  })
-}
-
-async function smtpCommand(readResponse, socket, command, expected = /^2|^3/) {
-  if (command) socket.write(`${command}\r\n`)
-  const response = await readResponse()
-  if (!expected.test(response)) throw new Error(`SMTP 错误：${response.trim()}`)
-  return response
-}
-
-export async function sendEmailCode({ env, email, code }) {
-  if (String(env.AUTH_DEV_CODES).toLowerCase() === 'true') {
-    return { sent: false, devCode: code }
-  }
-  if (!env.MAIL_SERVER || !env.MAIL_USERNAME || !env.MAIL_PASSWORD) {
-    return { sent: false, devCode: code }
-  }
-
-  const port = Number(env.MAIL_PORT || 587)
-  const useSsl = String(env.MAIL_USE_SSL).toLowerCase() === 'true'
-  const sender = env.MAIL_DEFAULT_SENDER || env.MAIL_USERNAME
-  const subject = 'Gugo 登录验证码'
-  const body = `你的登录验证码是：${code}\n\n验证码 10 分钟内有效。`
-  const message = [
-    `From: ${sender}`,
-    `To: ${email}`,
-    `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
-    'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=UTF-8',
-    '',
-    body,
-  ].join('\r\n')
-
-  let socket = useSsl
-    ? tls.connect({ host: env.MAIL_SERVER, port, servername: env.MAIL_SERVER })
-    : net.connect({ host: env.MAIL_SERVER, port })
-  if (useSsl) await waitForSecureConnect(socket)
-  else await waitForConnect(socket)
-
-  let readResponse = createSmtpReader(socket)
-  await smtpCommand(readResponse, socket, null)
-  await smtpCommand(readResponse, socket, `EHLO localhost`)
-  if (!useSsl && String(env.MAIL_USE_TLS).toLowerCase() === 'true') {
-    await smtpCommand(readResponse, socket, 'STARTTLS')
-    socket = tls.connect({ socket, servername: env.MAIL_SERVER })
-    await waitForSecureConnect(socket)
-    readResponse = createSmtpReader(socket)
-    await smtpCommand(readResponse, socket, `EHLO localhost`)
-  }
-  await smtpCommand(readResponse, socket, 'AUTH LOGIN', /^3/)
-  await smtpCommand(readResponse, socket, Buffer.from(env.MAIL_USERNAME).toString('base64'), /^3/)
-  await smtpCommand(readResponse, socket, Buffer.from(env.MAIL_PASSWORD).toString('base64'))
-  await smtpCommand(readResponse, socket, `MAIL FROM:<${sender}>`)
-  await smtpCommand(readResponse, socket, `RCPT TO:<${email}>`)
-  await smtpCommand(readResponse, socket, 'DATA', /^3/)
-  await smtpCommand(readResponse, socket, `${message}\r\n.`)
-  await smtpCommand(readResponse, socket, 'QUIT', /^2/)
-  socket.end()
-  return { sent: true }
-}
-
-export function buildSendCodeResponse({ issued, delivery, env }) {
-  const response = { ok: true, email: issued.email, expiresIn: issued.expiresIn }
-  const exposeDevCode =
-    delivery?.sent === false ||
-    String(env.AUTH_DEV_CODES).toLowerCase() === 'true'
-  if (exposeDevCode) response.devCode = issued.devCode
-  return response
-}
-
 /* ── HTTP 处理 ── */
 
 function clientId(req, env = process.env) {
@@ -562,6 +434,7 @@ function clientId(req, env = process.env) {
 
 export async function handleAuthAccountRequest(req, res, env = process.env) {
   ensureLegacyMigration()
+  let fallbackLoginErrorCode = ''
   try {
     const url = new URL(req.url, 'http://localhost')
 
@@ -571,10 +444,15 @@ export async function handleAuthAccountRequest(req, res, env = process.env) {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/auth/send-code') {
+      fallbackLoginErrorCode = 'AUTH_SEND_CODE_FAILED'
       const body = await readJson(req, { maxBytes: 256 * 1024 })
       const limit = checkCodeRate(clientId(req, env))
       if (!limit.allowed) {
-        sendJson(res, 429, { ok: false, error: '发送验证码次数过多，请 1 小时后再试' })
+        sendJson(res, 429, {
+          ok: false,
+          error: '发送验证码次数过多，请 1 小时后再试',
+          code: 'AUTH_SEND_CODE_RATE_LIMITED',
+        })
         return
       }
       const issued = issueEmailCode({ email: body.email })
@@ -584,6 +462,7 @@ export async function handleAuthAccountRequest(req, res, env = process.env) {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/auth/verify') {
+      fallbackLoginErrorCode = 'AUTH_VERIFY_FAILED'
       const body = await readJson(req, { maxBytes: 256 * 1024 })
       const result = verifyEmailCode({ email: body.email, code: body.code })
       sendJson(res, 200, result)
@@ -591,10 +470,15 @@ export async function handleAuthAccountRequest(req, res, env = process.env) {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/auth/login-password') {
+      fallbackLoginErrorCode = 'AUTH_LOGIN_FAILED'
       const body = await readJson(req, { maxBytes: 256 * 1024 })
       const limit = checkPasswordLoginRate(clientId(req, env))
       if (!limit.allowed) {
-        sendJson(res, 429, { ok: false, error: '请求过于频繁，请稍后再试' })
+        sendJson(res, 429, {
+          ok: false,
+          error: '请求过于频繁，请稍后再试',
+          code: 'AUTH_LOGIN_RATE_LIMITED',
+        })
         return
       }
       const result = loginWithPassword({ email: body.email, password: body.password })
@@ -644,6 +528,12 @@ export async function handleAuthAccountRequest(req, res, env = process.env) {
   } catch (error) {
     // ★ #36: 尊重 readJson 抛的 statusCode (e.g. 413)
     const status = error?.statusCode || 400
-    sendJson(res, status, { ok: false, error: error.message || '请求失败' })
+    sendJson(res, status, {
+      ok: false,
+      error: error.message || '请求失败',
+      ...(fallbackLoginErrorCode
+        ? { code: publicLoginErrorCode(error, fallbackLoginErrorCode) }
+        : {}),
+    })
   }
 }

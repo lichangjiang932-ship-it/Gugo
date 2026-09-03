@@ -61,7 +61,7 @@ async function call(route, opts) {
   return res
 }
 
-async function setup({ useRealModelBinding = false } = {}) {
+async function setup({ useRealModelBinding = false, runSubagentImpl = null } = {}) {
   process.env.APP_DATA_DIR = tmpDir()
   const dbMod = await import('../server/db.js')
   dbMod.closeDb()
@@ -69,8 +69,12 @@ async function setup({ useRealModelBinding = false } = {}) {
   const agentMod = await import('../server/services/agentStore.js')
   const dispatcher = await import('../server/services/channelDispatcher.js')
   const routeMod = await import('../server/routes/channelRoutes.js')
+  const calls = []
   dispatcher.configureChannelDispatcherForTests({
-    runSubagent: () => new Promise(() => {}),
+    runSubagent: (payload) => {
+      calls.push(payload)
+      return runSubagentImpl ? runSubagentImpl(payload) : new Promise(() => {})
+    },
     ...(!useRealModelBinding ? {
       resolveModelBinding: () => ({
         providerId: 'channel-route-provider',
@@ -94,8 +98,38 @@ async function setup({ useRealModelBinding = false } = {}) {
     token: login1.token,
     userId: login1.user.id,
     agents: { a, b, c, other },
+    dispatcher,
+    calls,
   }
 }
+
+test('channelRoutes: message locale reaches the dispatched agent turn', { concurrency: false }, async () => {
+  const { route, token, userId, agents, dispatcher, calls } = await setup({
+    runSubagentImpl: async () => ({ resultText: '' }),
+  })
+  const createRes = await call(route, {
+    method: 'POST',
+    url: '/api/channels',
+    token,
+    body: {
+      name: 'Localized channel',
+      kind: 'group',
+      agentIds: [agents.a.id],
+      defaultAgentId: agents.a.id,
+    },
+  })
+  const channel = createRes.json().channel
+
+  const postRes = await call(route, {
+    method: 'POST',
+    url: `/api/channels/${channel.id}/messages`,
+    token,
+    body: { content: 'continue', locale: 'en' },
+  })
+  assert.equal(postRes.statusCode, 200)
+  await dispatcher.waitForChannelDispatcherIdleForTests({ userId, channelId: channel.id })
+  assert.equal(calls[0].locale, 'en')
+})
 
 test('channelRoutes: ambiguous model names return a code and an explicit Provider UUID succeeds', { concurrency: false }, async () => {
   const { route, token, userId, agents } = await setup({ useRealModelBinding: true })

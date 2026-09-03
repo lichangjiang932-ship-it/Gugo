@@ -183,6 +183,32 @@ test('ToolApprovalCard renders an apply_patch diff preview', async () => {
   await view.cleanup()
 })
 
+test('ToolApprovalCard localizes missing paths and truncated diff counts in English', async () => {
+  const dom = setupDom()
+  dom.window.localStorage.setItem('lang', 'en')
+  const view = await renderInto(dom, (
+    <ToolApprovalCard
+      open
+      busy={false}
+      onDecide={() => {}}
+      request={{
+        name: 'apply_patch',
+        args: { patch: 'x' },
+        risk: 'medium',
+        preview: Array.from({ length: 10 }, (_, index) => ({
+          path: index === 0 ? '' : `file-${index}.txt`,
+          preview: '+hello',
+        })),
+      }}
+    />
+  ))
+  const text = dom.window.document.body.textContent
+  assert.match(text, /Unknown path/)
+  assert.match(text, /and 2 more files/)
+  assert.doesNotMatch(text, /未知路径|还有 2 个文件/)
+  await view.cleanup()
+})
+
 test('non-shell approval actions return one-time, standing-rule, and deny decisions', async () => {
   const dom = setupDom()
   const decisions = []

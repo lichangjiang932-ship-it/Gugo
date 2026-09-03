@@ -564,10 +564,8 @@ test('runServerTurn synchronizes the authoritative session snapshot after an inc
     type: 'turn.failed',
     payload: {
       code: 'TURN_INCOMPLETE',
-      message: 'Task incomplete.',
       error: {
         code: 'TURN_INCOMPLETE',
-        message: 'Task incomplete.',
         retryable: true,
       },
     },
@@ -1178,7 +1176,7 @@ test('runServerTurn waits for a terminal cancellation event after the stop is ac
   const controller = new AbortController()
   const cancelled = createTurnEvent({
     id: 'cancelled', sessionId: 's1', turnId: 't-stop', sequence: 0,
-    type: 'turn.cancelled', payload: { reason: 'user stopped' }, createdAt: 1,
+    type: 'turn.cancelled', payload: { code: 'TURN_CANCELLED' }, createdAt: 1,
   })
   const fetchImpl = async (url) => {
     urls.push(url)
@@ -1201,7 +1199,7 @@ test('runServerTurn cancels and retries while the initial start response is stil
   let cancelCalls = 0
   const cancelled = createTurnEvent({
     id: 'cancelled-during-start', sessionId: 's-start-stop', turnId: 't-start-stop', sequence: 0,
-    type: 'turn.cancelled', payload: { reason: 'user stopped' }, createdAt: 1,
+    type: 'turn.cancelled', payload: { code: 'TURN_CANCELLED' }, createdAt: 1,
   })
   const fetchImpl = async (url, options = {}) => {
     urls.push(String(url))
@@ -1373,7 +1371,7 @@ test('runServerTurn treats turn.interrupted as resumable and waits for a real te
   const interrupted = createTurnEvent({
     id: 'interrupted', sessionId: 's1', turnId: 'interrupted-turn', sequence: 0,
     type: 'turn.interrupted',
-    payload: { code: 'PROCESS_RESTARTED', message: 'worker restarted', retryable: true },
+    payload: { code: 'PROCESS_RESTARTED', retryable: true },
     createdAt: 1,
   })
   const completed = createTurnEvent({
@@ -1669,7 +1667,7 @@ test('cancel retries after a network failure and does not finish before turn.can
   const states = []
   const cancelled = createTurnEvent({
     id: 'cancel-retry-done', sessionId: 's1', turnId: 'cancel-retry', sequence: 0,
-    type: 'turn.cancelled', payload: { reason: 'user stopped' }, createdAt: 1,
+    type: 'turn.cancelled', payload: { code: 'TURN_CANCELLED' }, createdAt: 1,
   })
   const fetchImpl = async (url) => {
     if (url === '/api/turns/run') return response({ turn: { sessionId: 's1', turnId: 'cancel-retry', status: 'running' } }, 202)
@@ -1910,13 +1908,12 @@ test('terminal events stop streaming while interrupted turns remain visibly resu
   const cases = [
     { type: 'turn.completed', payload: { text: 'done', artifactIds: [] }, expected: 'cancelled', connection: null, streaming: false },
     { type: 'turn.paused', payload: { text: '', clarification: { question: 'Need input' } }, expected: 'cancelled', connection: 'paused', streaming: false },
-    { type: 'turn.cancelled', payload: { reason: 'user stopped' }, expected: 'cancelled', connection: 'cancelled', streaming: false },
-    { type: 'turn.interrupted', payload: { code: 'MODEL_503', message: 'interrupted', retryable: true }, expected: 'cancelled', connection: 'interrupted', streaming: true },
+    { type: 'turn.cancelled', payload: { code: 'TURN_CANCELLED' }, expected: 'cancelled', connection: 'cancelled', streaming: false },
+    { type: 'turn.interrupted', payload: { code: 'MODEL_503', retryable: true }, expected: 'cancelled', connection: 'interrupted', streaming: true },
     {
       type: 'turn.blocked',
       payload: {
         code: 'TURN_PERMISSION_CONTEXT_DRIFT',
-        message: 'repair permissions and retry',
         retryable: false,
         manualRetryable: true,
         recoveryStatus: 'dead_letter',
@@ -1927,7 +1924,7 @@ test('terminal events stop streaming while interrupted turns remain visibly resu
       streaming: false,
       completedAt: null,
     },
-    { type: 'turn.failed', payload: { code: 'TURN_FAILED', message: 'failed' }, expected: 'error', connection: null, streaming: false },
+    { type: 'turn.failed', payload: { code: 'TURN_FAILED' }, expected: 'error', connection: null, streaming: false },
   ]
 
   for (const [index, terminal] of cases.entries()) {
@@ -2027,7 +2024,6 @@ test('side-effect blocked events normalize legacy and canonical recovery kinds f
       type: 'turn.blocked',
       payload: {
         code: 'SIDE_EFFECT_OUTCOME_UNKNOWN',
-        message: 'verify the local outcome',
         retryable: false,
         manualRetryable: true,
         recoveryStatus: 'dead_letter',
@@ -2087,7 +2083,6 @@ test('later terminal states clear stale side-effect recovery metadata on the sam
 
   await emit(1, 'turn.blocked', {
     code: 'SIDE_EFFECT_OUTCOME_UNKNOWN',
-    message: 'verify the local outcome',
     retryable: false,
     manualRetryable: true,
     recoveryStatus: 'dead_letter',
@@ -2104,7 +2099,6 @@ test('later terminal states clear stale side-effect recovery metadata on the sam
 
   await emit(2, 'turn.blocked', {
     code: 'TURN_PERMISSION_CONTEXT_DRIFT',
-    message: 'repair permissions and retry',
     retryable: false,
     manualRetryable: true,
     recoveryStatus: 'dead_letter',
@@ -2366,10 +2360,9 @@ test('turn failure payloads retain recovery evidence and dispatch it without app
   }
   const payload = {
     code: 'MODEL_TIMEOUT',
-    message: 'provider timed out',
     error: {
-      code: 'MODEL_TIMEOUT', message: 'provider timed out', status: 504,
-      retryable: true, hint: 'check the endpoint', attempts: 2,
+      code: 'MODEL_TIMEOUT', status: 504,
+      retryable: true, attempts: 2,
       manualRetryable: true,
       incompleteReason: 'post_mutation_verification_missing',
       missingRequirements: ['mutation_readback', 'diff_or_project_check'],
@@ -2381,8 +2374,8 @@ test('turn failure payloads retain recovery evidence and dispatch it without app
   }
   assert.deepEqual(normalizeTurnFailurePayload(payload), {
     error: {
-      code: 'MODEL_TIMEOUT', message: 'provider timed out', status: 504,
-      retryable: true, hint: 'check the endpoint', attempts: 2,
+      code: 'MODEL_TIMEOUT', status: 504,
+      retryable: true, attempts: 2,
       manualRetryable: true,
       incompleteReason: 'post_mutation_verification_missing',
       missingRequirements: ['mutation_readback', 'diff_or_project_check'],
@@ -2517,7 +2510,6 @@ test('retained local files survive terminal dispatch, snapshot restore, and auth
     type: 'turn.failed',
     payload: {
       code: 'DELIVERY_VALIDATION_FAILED',
-      message: 'The final artifact did not pass validation.',
       retainedLocalFiles,
     },
     createdAt: 5,
@@ -2690,8 +2682,11 @@ test('terminal verified receipts prune matching retained state when retained is 
       sequence: 5,
       type,
       payload: {
+        ...(['turn.failed', 'turn.cancelled'].includes(type)
+          ? { code: type === 'turn.failed' ? 'TURN_FAILED' : 'TURN_CANCELLED' }
+          : {}),
         ...(type === 'turn.interrupted'
-          ? { code: 'MODEL_INTERRUPTED', message: 'interrupted after saving the file', retryable: true }
+          ? { code: 'MODEL_INTERRUPTED', retryable: true }
           : {}),
         ...(type === 'turn.paused'
           ? { text: '', clarification: 'Authorize the workspace directory.' }
@@ -2721,7 +2716,7 @@ test('interrupted turns retain resumable evidence and a recovery attempt clears 
     id: 'interrupted-turn', sessionId: 's', turnId: 't', sequence: 6,
     type: 'turn.interrupted',
     payload: {
-      code: 'MODEL_503', message: 'temporarily unavailable', retryable: true,
+      code: 'MODEL_503', retryable: true,
       text: 'preserved work', artifactIds: ['artifact-1'], iterations: 2,
     },
     createdAt: 7,

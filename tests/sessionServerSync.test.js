@@ -10,6 +10,468 @@ import {
   resolveSessionMutationTarget,
 } from '../src/store/sessionServerSync.js'
 import { buildMessageTimeline } from '../src/lib/messageTimeline.js'
+import {
+  reconcileServerSessionCatalog,
+  reduceServerSessionState,
+} from '../src/store/reducers/serverSessionReducer.js'
+
+test('server session catalog makes browser histories converge without dropping local drafts', () => {
+  const state = {
+    activeSessionId: 'removed-server-session',
+    sessionDrafts: {
+      'local-draft': 'keep',
+      'removed-server-session': 'drop',
+    },
+    sessions: [
+      {
+        id: 'local-draft',
+        title: 'Unsynced draft',
+        messages: [],
+        createdAt: 30,
+        updatedAt: 30,
+      },
+      {
+        id: 'known-session',
+        title: 'Old browser title',
+        messages: [{ id: 'pending', role: 'assistant', content: '', meta: { streaming: true } }],
+        serverRevision: 2,
+        createdAt: 10,
+        updatedAt: 20,
+      },
+      {
+        id: 'removed-server-session',
+        title: 'Deleted elsewhere',
+        messages: [],
+        serverRevision: 1,
+        createdAt: 5,
+        updatedAt: 5,
+      },
+    ],
+  }
+
+  const result = reconcileServerSessionCatalog(state, [
+    {
+      id: 'known-session',
+      title: 'Canonical title',
+      revision: 3,
+      createdAt: 10,
+      updatedAt: 40,
+      lastViewedAt: 35,
+      archivedAt: null,
+      pinnedAt: 39,
+      parentSessionId: null,
+      branchLabel: null,
+      forkedAt: null,
+    },
+    {
+      id: 'new-from-other-browser',
+      title: 'Other browser chat',
+      revision: 1,
+      createdAt: 25,
+      updatedAt: 25,
+      lastViewedAt: null,
+      archivedAt: null,
+      pinnedAt: null,
+      parentSessionId: null,
+      branchLabel: null,
+      forkedAt: null,
+    },
+  ], { preserveLocalOnly: true })
+
+  assert.deepEqual(result.sessions.map(({ id }) => id), [
+    'local-draft',
+    'known-session',
+    'new-from-other-browser',
+  ])
+  assert.equal(result.activeSessionId, 'local-draft')
+  assert.deepEqual(result.sessionDrafts, { 'local-draft': 'keep' })
+  assert.equal(result.sessions[1].title, 'Canonical title')
+  assert.equal(result.sessions[1].serverRevision, 3)
+  assert.equal(result.sessions[1].messages[0].id, 'pending')
+  assert.equal(result.sessions[1].serverTranscriptStale, true)
+  assert.deepEqual(result.sessions[2].messages, [])
+})
+
+test('server workspace metadata restores canonical paths and removes stale browser-local paths', () => {
+  const state = {
+    activeSessionId: 'session-1',
+    sessionDrafts: {},
+    sessions: [{
+      id: 'session-1',
+      messages: [{ id: 'message-1', role: 'user', content: 'keep' }],
+      workspacePath: 'C:\\BrowserOnly',
+      serverRevision: 5,
+    }],
+  }
+  const restored = reconcileServerSessionCatalog(state, [{
+    id: 'session-1',
+    title: 'Canonical',
+    revision: 5,
+    workspacePath: 'C:\\Canonical',
+  }])
+  assert.equal(restored.sessions[0].workspacePath, 'C:\\Canonical')
+  assert.equal(restored.sessions[0].messages.length, 1)
+
+  const cleared = reduceServerSessionState(restored, {
+    type: 'APPLY_SERVER_SESSION_METADATA',
+    payload: {
+      sessionId: 'session-1',
+      session: { id: 'session-1', revision: 5, workspacePath: null },
+    },
+  })
+  assert.equal(Object.hasOwn(cleared.sessions[0], 'workspacePath'), false)
+
+  const snapshotCleared = reduceServerSessionState(restored, {
+    type: 'APPLY_SERVER_SESSION_SNAPSHOT',
+    payload: {
+      sessionId: 'session-1',
+      snapshot: {
+        complete: true,
+        revision: 5,
+        messages: [],
+        session: { id: 'session-1', revision: 5, workspacePath: null },
+      },
+    },
+  })
+  assert.equal(Object.hasOwn(snapshotCleared.sessions[0], 'workspacePath'), false)
+})
+
+test('a newer catalog revision preserves an active local stream until terminal hydration', () => {
+  const messages = [
+    { id: 'old-user', role: 'user', content: 'earlier' },
+    { id: 'turn:user', role: 'user', content: 'new', meta: { pendingServerSync: true } },
+    { id: 'turn:assistant', role: 'assistant', content: 'partial', meta: { streaming: true } },
+  ]
+  const result = reconcileServerSessionCatalog({
+    activeSessionId: 'session-1',
+    sessionDrafts: {},
+    sessions: [{ id: 'session-1', serverRevision: 4, messages }],
+  }, [{ id: 'session-1', title: 'Canonical', revision: 6 }])
+
+  assert.equal(result.sessions[0].serverRevision, 6)
+  assert.deepEqual(result.sessions[0].messages, messages)
+  assert.equal(result.sessions[0].serverTranscriptStale, true)
+})
+
+test('a protected matching catalog session keeps its pending transcript before revision acknowledgement', () => {
+  const messages = [
+    { id: 'turn:user', role: 'user', content: 'new', meta: { pendingServerSync: true } },
+    { id: 'turn:assistant', role: 'assistant', content: 'partial', meta: { streaming: true } },
+  ]
+  const result = reconcileServerSessionCatalog({
+    activeSessionId: 'foreground-session',
+    sessionDrafts: {},
+    sessions: [
+      { id: 'foreground-session', serverRevision: 2, messages: [] },
+      { id: 'pending-background-session', messages },
+    ],
+  }, [
+    { id: 'foreground-session', title: 'Foreground', revision: 2 },
+    { id: 'pending-background-session', title: 'Pending', revision: 1 },
+  ], { preserveSessionIds: ['pending-background-session'] })
+
+  const pending = result.sessions.find((session) => session.id === 'pending-background-session')
+  assert.equal(pending.serverRevision, 1)
+  assert.deepEqual(pending.messages, messages)
+})
+
+test('an event-only catalog advance preserves a pending background transcript', () => {
+  const messages = [
+    { id: 'turn:user', role: 'user', content: 'new', meta: { pendingServerSync: true } },
+    { id: 'turn:assistant', role: 'assistant', content: 'partial', meta: { streaming: true } },
+  ]
+  const result = reconcileServerSessionCatalog({
+    activeSessionId: 'foreground-session',
+    sessionDrafts: {},
+    sessions: [
+      { id: 'foreground-session', serverRevision: 2, serverTurnEventRevision: 3, messages: [] },
+      { id: 'background-session', serverRevision: 5, serverTurnEventRevision: 10, messages },
+    ],
+  }, [
+    { id: 'foreground-session', title: 'Foreground', revision: 2, turnEventRevision: 3 },
+    { id: 'background-session', title: 'Background', revision: 5, turnEventRevision: 11 },
+  ])
+
+  const background = result.sessions.find((session) => session.id === 'background-session')
+  assert.equal(background.serverTurnEventRevision, 11)
+  assert.deepEqual(background.messages, messages)
+  assert.equal(background.serverTranscriptStale, true)
+})
+
+test('a terminal transcript revision retains pending background rows until snapshot hydration', () => {
+  const state = reconcileServerSessionCatalog({
+    activeSessionId: 'foreground-session',
+    sessionDrafts: {},
+    sessions: [
+      { id: 'foreground-session', serverRevision: 2, serverTurnEventRevision: 3, messages: [] },
+      {
+        id: 'background-session',
+        serverRevision: 5,
+        serverTurnEventRevision: 10,
+        messages: [
+          { id: 'turn:user', role: 'user', content: 'new', meta: { pendingServerSync: true } },
+          { id: 'turn:assistant', role: 'assistant', content: 'stale partial', meta: { streaming: true } },
+        ],
+      },
+    ],
+  }, [
+    { id: 'foreground-session', title: 'Foreground', revision: 2, turnEventRevision: 3 },
+    { id: 'background-session', title: 'Background', revision: 6, turnEventRevision: 12 },
+  ])
+
+  const background = state.sessions.find((session) => session.id === 'background-session')
+  assert.equal(background.serverRevision, 6)
+  assert.equal(background.serverTurnEventRevision, 12)
+  assert.equal(background.messages.at(-1).content, 'stale partial')
+  assert.equal(background.serverTranscriptStale, true)
+  assert.equal(needsServerTranscriptHydration(background), true)
+
+  const hydrated = reduceServerSessionState(state, {
+    type: 'APPLY_SERVER_SESSION_SNAPSHOT',
+    payload: {
+      sessionId: 'background-session',
+      snapshot: {
+        complete: true,
+        revision: 6,
+        turnEventRevision: 12,
+        messages: [
+          { id: 'turn:user', role: 'user', content: 'new', meta: {} },
+          { id: 'turn:assistant', role: 'assistant', content: 'final', meta: { streaming: false } },
+        ],
+      },
+    },
+  })
+  const canonical = hydrated.sessions.find((session) => session.id === 'background-session')
+  assert.equal(canonical.messages.at(-1).content, 'final')
+  assert.equal(canonical.messages.at(-1).meta.streaming, false)
+  assert.equal(Object.hasOwn(canonical, 'serverTranscriptStale'), false)
+})
+
+test('a newer catalog revision invalidates a stale completed transcript', () => {
+  const result = reconcileServerSessionCatalog({
+    activeSessionId: 'session-1',
+    sessionDrafts: {},
+    sessions: [{
+      id: 'session-1',
+      serverRevision: 4,
+      messages: [{ id: 'old', role: 'assistant', content: 'stale' }],
+    }],
+  }, [{ id: 'session-1', title: 'Canonical', revision: 5 }])
+
+  assert.equal(result.sessions[0].serverRevision, 5)
+  assert.deepEqual(result.sessions[0].messages, [])
+})
+
+test('a newer turn-event watermark invalidates a stale transcript at the same message revision', () => {
+  const result = reconcileServerSessionCatalog({
+    activeSessionId: 'session-1',
+    sessionDrafts: {},
+    sessions: [{
+      id: 'session-1',
+      serverRevision: 5,
+      serverTurnEventRevision: 10,
+      messages: [{ id: 'old', role: 'assistant', content: 'still running' }],
+    }],
+  }, [{
+    id: 'session-1',
+    title: 'Canonical',
+    revision: 5,
+    turnEventRevision: 11,
+  }])
+
+  assert.equal(result.sessions[0].serverRevision, 5)
+  assert.equal(result.sessions[0].serverTurnEventRevision, 11)
+  assert.deepEqual(result.sessions[0].messages, [])
+})
+
+test('catalog preserves the transcript just imported by this browser at its canonical revision', () => {
+  const result = reconcileServerSessionCatalog({
+    activeSessionId: 'just-imported',
+    sessionDrafts: {},
+    sessions: [{
+      id: 'just-imported',
+      title: 'Local title',
+      updatedAt: 999,
+      messages: [{ id: 'local-history', role: 'user', content: 'keep' }],
+    }],
+  }, [{
+    id: 'just-imported',
+    title: 'Canonical title',
+    revision: 1,
+    createdAt: 10,
+    updatedAt: 20,
+  }], {
+    preserveLocalOnly: true,
+    importedSessionIds: ['just-imported'],
+  })
+
+  assert.equal(result.sessions[0].messages[0].id, 'local-history')
+  assert.equal(result.sessions[0].serverRevision, 1)
+  assert.equal(result.sessions[0].updatedAt, 20)
+})
+
+test('catalog remaps a recovered legacy session and hydrates its re-keyed transcript', () => {
+  const result = reconcileServerSessionCatalog({
+    activeSessionId: 'occupied-id',
+    sessionDrafts: { 'occupied-id': 'keep this draft' },
+    sessions: [{
+      id: 'occupied-id',
+      title: 'Local recovered history',
+      messages: [{ id: 'old-message-id', role: 'user', content: 'must survive' }],
+    }],
+  }, [{
+    id: 'legacy-recovery-stable',
+    title: 'Local recovered history',
+    revision: 0,
+    createdAt: 10,
+    updatedAt: 20,
+  }], {
+    importedSessionIds: ['legacy-recovery-stable'],
+    legacySessionIdMappings: [{
+      sourceSessionId: 'occupied-id',
+      sessionId: 'legacy-recovery-stable',
+    }],
+  })
+
+  assert.equal(result.activeSessionId, 'legacy-recovery-stable')
+  assert.deepEqual(result.sessionDrafts, { 'legacy-recovery-stable': 'keep this draft' })
+  assert.equal(result.sessions[0].id, 'legacy-recovery-stable')
+  assert.equal(result.sessions[0].serverRevision, 0)
+  assert.deepEqual(result.sessions[0].messages, [])
+})
+
+test('multi-user session catalog does not retain browser-local sessions from another account', () => {
+  const result = reconcileServerSessionCatalog({
+    activeSessionId: 'local-only',
+    sessionDrafts: { 'local-only': 'private draft' },
+    sessions: [{ id: 'local-only', messages: [] }],
+  }, [{
+    id: 'server-owned',
+    title: 'Server owned',
+    revision: 4,
+    createdAt: 10,
+    updatedAt: 11,
+  }])
+
+  assert.deepEqual(result.sessions.map(({ id }) => id), ['server-owned'])
+  assert.equal(result.activeSessionId, 'server-owned')
+  assert.deepEqual(result.sessionDrafts, {})
+})
+
+test('background catalog refresh protects only explicitly pending local sessions', () => {
+  const result = reconcileServerSessionCatalog({
+    activeSessionId: 'pending-local',
+    sessionDrafts: {
+      'pending-local': 'keep until acknowledged',
+      'stale-local': 'remove across account catalog refresh',
+    },
+    sessions: [
+      { id: 'pending-local', messages: [{ meta: { pendingServerSync: true } }] },
+      { id: 'stale-local', messages: [] },
+      { id: 'deleted-server-session', serverRevision: 2, messages: [] },
+    ],
+  }, [], { preserveSessionIds: ['pending-local'] })
+
+  assert.deepEqual(result.sessions.map(({ id }) => id), ['pending-local'])
+  assert.equal(result.activeSessionId, 'pending-local')
+  assert.deepEqual(result.sessionDrafts, { 'pending-local': 'keep until acknowledged' })
+})
+
+test('independent browser stores converge on the same server Session directory', () => {
+  const catalog = [
+    { id: 'from-browser-a', title: 'A', revision: 1, createdAt: 10, updatedAt: 11 },
+    { id: 'from-browser-b', title: 'B', revision: 2, createdAt: 20, updatedAt: 21 },
+  ]
+  const browserA = reconcileServerSessionCatalog({
+    activeSessionId: 'from-browser-a',
+    sessionDrafts: {},
+    sessions: [{
+      id: 'from-browser-a',
+      title: 'A local',
+      messages: [{ id: 'a-message', role: 'user', content: 'a' }],
+    }],
+  }, catalog, { preserveLocalOnly: true })
+  const browserB = reconcileServerSessionCatalog({
+    activeSessionId: 'from-browser-b',
+    sessionDrafts: {},
+    sessions: [{
+      id: 'from-browser-b',
+      title: 'B local',
+      messages: [{ id: 'b-message', role: 'user', content: 'b' }],
+    }],
+  }, catalog, { preserveLocalOnly: true })
+
+  assert.deepEqual(browserA.sessions.map(({ id }) => id), ['from-browser-a', 'from-browser-b'])
+  assert.deepEqual(browserB.sessions.map(({ id }) => id), ['from-browser-a', 'from-browser-b'])
+  assert.deepEqual(browserA.sessions.map(({ serverRevision }) => serverRevision), [1, 2])
+  assert.deepEqual(browserB.sessions.map(({ serverRevision }) => serverRevision), [1, 2])
+})
+
+test('catalog reconciliation records a visible mismatch when backend or workspace scope changes', () => {
+  const previous = {
+    version: 1,
+    backendInstanceId: 'sqlite:one',
+    workspaceScope: { key: 'workspace:one', path: 'D:\\one' },
+  }
+  const current = {
+    version: 1,
+    backendInstanceId: 'sqlite:two',
+    workspaceScope: { key: 'workspace:one', path: 'D:\\one' },
+  }
+  const state = reduceServerSessionState({
+    activeSessionId: null,
+    sessionCatalogSource: previous,
+    sessionCatalogSourceMismatch: null,
+    sessionDrafts: {},
+    sessions: [],
+  }, {
+    type: 'RECONCILE_SERVER_SESSION_CATALOG',
+    payload: { sessions: [], source: current },
+  })
+
+  assert.deepEqual(state.sessionCatalogSource, current)
+  assert.deepEqual(state.sessionCatalogSourceMismatch, { previous, current })
+})
+
+test('catalog reconciliation clears staged legacy history only with an explicit success signal', () => {
+  const pendingLegacySessions = [{ id: 'legacy', messages: [{ id: 'message', content: 'keep' }] }]
+  const base = {
+    activeSessionId: null,
+    pendingLegacySessions,
+    sessionDrafts: {},
+    sessions: [],
+  }
+  const retained = reduceServerSessionState(base, {
+    type: 'RECONCILE_SERVER_SESSION_CATALOG',
+    payload: { sessions: [] },
+  })
+  assert.strictEqual(retained.pendingLegacySessions, pendingLegacySessions)
+
+  const cleared = reduceServerSessionState(base, {
+    type: 'RECONCILE_SERVER_SESSION_CATALOG',
+    payload: { sessions: [], clearPendingLegacySessions: true },
+  })
+  assert.deepEqual(cleared.pendingLegacySessions, [])
+})
+
+test('server-authoritative ids remove invisible owner collisions from the local catalog', () => {
+  const result = reconcileServerSessionCatalog({
+    activeSessionId: 'occupied-by-server',
+    sessionDrafts: { 'occupied-by-server': 'must not shadow the server id' },
+    sessions: [{
+      id: 'occupied-by-server',
+      title: 'Browser copy',
+      messages: [{ id: 'local-message', role: 'user', content: 'local' }],
+    }],
+  }, [], {
+    preserveLocalOnly: true,
+    serverAuthoritativeIds: ['occupied-by-server'],
+  })
+
+  assert.deepEqual(result.sessions, [])
+  assert.equal(result.activeSessionId, null)
+  assert.deepEqual(result.sessionDrafts, {})
+})
 
 function replaceSession(state, sessionId, update) {
   return {
@@ -818,6 +1280,9 @@ test('a server session containing only an active-turn stub still requires transc
   assert.equal(needsServerTranscriptHydration(session), true)
   assert.equal(needsServerSessionSnapshot(session, null), true)
   assert.equal(needsServerSessionSnapshot(session, 7), false)
+  const withTurnEvents = { ...session, serverTurnEventRevision: 3 }
+  assert.equal(needsServerSessionSnapshot(withTurnEvents, '7:3'), false)
+  assert.equal(needsServerSessionSnapshot(withTurnEvents, '7:2'), true)
   assert.equal(needsServerTranscriptHydration({ ...session, messages: [{ id: 'history', role: 'user' }] }), false)
 })
 

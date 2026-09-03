@@ -121,6 +121,243 @@ export async function searchSessionMessages({ query, sessionId, limit = 20, offs
   return parseResponse(response)
 }
 
+export const LEGACY_SESSION_IMPORT_BATCH_SIZE = 20
+
+function hasUnstableLegacyTurnState(message) {
+  const meta = message?.meta && typeof message.meta === 'object' ? message.meta : {}
+  return meta.streaming === true || meta.pendingServerSync === true
+}
+
+function normalizeLegacySessionMessagesForServer(messages) {
+  if (!Array.isArray(messages)) return []
+  return messages.map((message) => {
+    const [normalized] = normalizeSessionMessagesForServer([message])
+    if (!hasUnstableLegacyTurnState(message)) return normalized
+
+    // A browser may have staged the final user row or a visible assistant
+    // partial while a server Turn was still in flight. Preserve that text as
+    // recovery history, but sever its non-portable Turn/tool lifecycle so the
+    // imported snapshot cannot masquerade as a completed or resumable Turn.
+    const recovered = { ...normalized }
+    delete recovered.modelContext
+    return recovered
+  })
+}
+
+export function selectLegacySessionImportCandidates(sessions) {
+  if (!Array.isArray(sessions)) return []
+  return sessions.flatMap((session) => {
+    if (!session?.id || Number.isInteger(session.serverRevision)) return []
+    const messages = normalizeLegacySessionMessagesForServer(session.messages)
+    return [{
+      id: session.id,
+      title: session.title || 'Untitled',
+      ...(String(session.workspacePath || '').trim()
+        ? { workspacePath: String(session.workspacePath).trim() }
+        : {}),
+      ...(Number.isSafeInteger(session.createdAt) ? { createdAt: session.createdAt } : {}),
+      ...(Number.isSafeInteger(session.updatedAt) ? { updatedAt: session.updatedAt } : {}),
+      ...(session.lastViewedAt === null || Number.isSafeInteger(session.lastViewedAt)
+        ? { lastViewedAt: session.lastViewedAt }
+        : {}),
+      ...(session.archivedAt === null || Number.isSafeInteger(session.archivedAt)
+        ? { archivedAt: session.archivedAt }
+        : {}),
+      ...(session.pinnedAt === null || Number.isSafeInteger(session.pinnedAt)
+        ? { pinnedAt: session.pinnedAt }
+        : {}),
+      messages,
+    }]
+  })
+}
+
+export async function importLegacySessionsRemote(sessions, {
+  fetchImpl = fetch,
+  signal,
+} = {}) {
+  const response = await fetchImpl('/api/sessions/import', {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ sessions }),
+    signal,
+  })
+  const result = await parseResponse(response)
+  const requestedIds = new Set((Array.isArray(sessions) ? sessions : []).map((session) => session?.id))
+  const resultIds = new Set()
+  const targetIds = new Set()
+  const validResults = Array.isArray(result?.results)
+    && result.results.length === requestedIds.size
+    && result.results.every((entry) => {
+      const id = entry?.id
+      const sessionId = entry?.sessionId
+      const status = entry?.status
+      const session = entry?.session
+      if (!requestedIds.has(id)
+        || resultIds.has(id)
+        || typeof sessionId !== 'string'
+        || !sessionId
+        || sessionId.length > 512
+        || targetIds.has(sessionId)
+        || !['imported', 'server_authoritative'].includes(status)
+        || (session !== null && (
+          !session
+          || typeof session !== 'object'
+          || Array.isArray(session)
+          || session.id !== sessionId
+        ))
+        || (status === 'imported' && session === null)
+        || (sessionId !== id && session === null)) return false
+      resultIds.add(id)
+      targetIds.add(sessionId)
+      return true
+    })
+  const importedCount = validResults
+    ? result.results.filter((entry) => entry.status === 'imported').length
+    : -1
+  if (!validResults
+    || !Number.isInteger(result?.importedCount)
+    || !Number.isInteger(result?.serverAuthoritativeCount)
+    || result.importedCount !== importedCount
+    || result.serverAuthoritativeCount !== result.results.length - importedCount) {
+    const error = new Error('Legacy Session import returned an invalid result')
+    error.name = 'SessionRequestError'
+    error.code = 'INVALID_LEGACY_SESSION_IMPORT_RESULT'
+    throw error
+  }
+  return result
+}
+
+export async function importAllLegacySessionsRemote(sessions, {
+  fetchImpl = fetch,
+  signal,
+  batchSize = LEGACY_SESSION_IMPORT_BATCH_SIZE,
+} = {}) {
+  const size = Math.max(1, Math.min(LEGACY_SESSION_IMPORT_BATCH_SIZE, Math.floor(Number(batchSize)) || 1))
+  const results = []
+  let importedCount = 0
+  let serverAuthoritativeCount = 0
+  for (let offset = 0; offset < sessions.length; offset += size) {
+    const batch = await importLegacySessionsRemote(sessions.slice(offset, offset + size), {
+      fetchImpl,
+      signal,
+    })
+    results.push(...batch.results)
+    importedCount += batch.importedCount
+    serverAuthoritativeCount += batch.serverAuthoritativeCount
+  }
+  return { results, importedCount, serverAuthoritativeCount }
+}
+
+function invalidCatalogSource(message, code = 'INVALID_SESSION_CATALOG_SOURCE') {
+  const error = new Error(message)
+  error.name = 'SessionRequestError'
+  error.code = code
+  return error
+}
+
+export function normalizeSessionCatalogSource(source) {
+  if (source == null) return null
+  const version = Number(source?.version)
+  const backendInstanceId = String(source?.backendInstanceId || '').trim()
+  const workspaceKey = String(source?.workspaceScope?.key || '').trim()
+  const workspacePath = String(source?.workspaceScope?.path || '').trim()
+  if (!Number.isInteger(version) || version < 1
+    || !backendInstanceId || !workspaceKey || !workspacePath) {
+    throw invalidCatalogSource('Session catalog returned invalid source metadata')
+  }
+  return {
+    version,
+    backendInstanceId,
+    workspaceScope: { key: workspaceKey, path: workspacePath },
+  }
+}
+
+export function sameSessionCatalogSource(left, right) {
+  if (left == null || right == null) return left == null && right == null
+  return Number(left.version) === Number(right.version)
+    && left.backendInstanceId === right.backendInstanceId
+    && left.workspaceScope?.key === right.workspaceScope?.key
+}
+
+async function listSessionCatalogPageRemote({
+  archived = 'all',
+  limit = 200,
+  offset = 0,
+  fetchImpl = fetch,
+  signal,
+} = {}) {
+  const params = new URLSearchParams({
+    archived: String(archived),
+    limit: String(limit),
+    offset: String(offset),
+  })
+  const response = await fetchImpl(`/api/sessions?${params.toString()}`, {
+    headers: authHeaders(),
+    signal,
+  })
+  const result = await parseResponse(response)
+  if (!Array.isArray(result?.sessions)) {
+    const error = new Error('Session catalog request returned an invalid result')
+    error.name = 'SessionRequestError'
+    error.code = 'INVALID_SESSION_CATALOG'
+    throw error
+  }
+  return {
+    sessions: result.sessions,
+    source: normalizeSessionCatalogSource(result.source),
+  }
+}
+
+export async function listSessionsRemote(options = {}) {
+  const page = await listSessionCatalogPageRemote(options)
+  return page.sessions
+}
+
+export async function listSessionCatalogRemote({
+  archived = 'all',
+  fetchImpl = fetch,
+  signal,
+  pageSize = 200,
+} = {}) {
+  const sessions = []
+  const seen = new Set()
+  let offset = 0
+  let source
+
+  for (;;) {
+    const page = await listSessionCatalogPageRemote({
+      archived,
+      limit: pageSize,
+      offset,
+      fetchImpl,
+      signal,
+    })
+    if (source === undefined) source = page.source
+    else if (!sameSessionCatalogSource(source, page.source)) {
+      throw invalidCatalogSource(
+        'Session catalog source changed while loading pages',
+        'SESSION_CATALOG_SOURCE_CHANGED',
+      )
+    }
+    let added = 0
+    for (const session of page.sessions) {
+      const id = String(session?.id || '').trim()
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      sessions.push(session)
+      added += 1
+    }
+    if (page.sessions.length < pageSize || added === 0) break
+    offset += page.sessions.length
+  }
+
+  return { sessions, source: source ?? null }
+}
+
+export async function listAllSessionsRemote(options = {}) {
+  return (await listSessionCatalogRemote(options)).sessions
+}
+
 export async function archiveSessionRemote(sessionId, { fetchImpl = fetch } = {}) {
   const response = await fetchImpl(`/api/sessions/${encodeURIComponent(sessionId)}/archive`, {
     method: 'POST',
@@ -151,6 +388,27 @@ export async function unpinSessionRemote(sessionId, { fetchImpl = fetch } = {}) 
     headers: authHeaders(),
   })
   return parseResponse(response)
+}
+
+export async function setSessionWorkspaceRemote(
+  sessionId,
+  workspacePath,
+  { fetchImpl = fetch } = {},
+) {
+  const normalizedWorkspacePath = String(workspacePath || '').trim() || null
+  const response = await fetchImpl(`/api/sessions/${encodeURIComponent(sessionId)}/workspace`, {
+    method: 'PUT',
+    headers: authHeaders(true),
+    body: JSON.stringify({ workspacePath: normalizedWorkspacePath }),
+  })
+  const result = await parseResponse(response)
+  if (!result?.session || !Number.isInteger(result.session.revision)) {
+    const error = new Error('Session workspace update returned invalid metadata')
+    error.name = 'SessionRequestError'
+    error.code = 'INVALID_SESSION_WORKSPACE_RESULT'
+    throw error
+  }
+  return result
 }
 
 export async function forkSessionRemote(

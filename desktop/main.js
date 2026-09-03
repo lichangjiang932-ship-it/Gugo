@@ -3,10 +3,9 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, shell } from 'electron'
 import updaterPackage from 'electron-updater'
 import {
-  isSafeExternalUrl,
   isTrustedNavigation,
   resolveDesktopDevUrl,
 } from './security.js'
@@ -22,11 +21,17 @@ import {
   DEFAULT_DESKTOP_PET_LAYOUT,
   resolveDesktopPetLayout,
 } from '../shared/desktopPetLayout.js'
+import { normalizeProductLanguage } from '../shared/productLanguage.js'
 import {
   createDesktopPetDragSession,
   resolveDesktopPetDragMove,
 } from './petDrag.js'
-import { createDesktopUpdateRuntime } from './updateRuntime.js'
+import {
+  configureDesktopMainWindowPermissions,
+  createDesktopMainWindow,
+  secureDesktopWebContents,
+} from './mainWindowSecurity.js'
+import { configureDesktopUpdates } from './updateSetup.js'
 
 const { autoUpdater } = updaterPackage
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -59,11 +64,7 @@ function hideDesktopPet() {
 }
 
 function desktopPetCloseLabel(locale = app.getLocale()) {
-  const language = String(locale || '').toLowerCase()
-  if (language.startsWith('zh')) return '关闭宠物'
-  if (language.startsWith('ja')) return 'ペットを閉じる'
-  if (language.startsWith('ko')) return '펫 닫기'
-  return 'Close pet'
+  return normalizeProductLanguage(locale, 'en') === 'zh' ? '关闭宠物' : 'Close pet'
 }
 
 function showDesktopPetMenu() {
@@ -99,28 +100,6 @@ if (!hasSingleInstanceLock) app.quit()
 function sendUpdateStatus(status, details = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return
   mainWindow.webContents.send('desktop:update-status', { status, ...details })
-}
-
-function openExternalUrl(url) {
-  if (!isSafeExternalUrl(url)) return
-  void shell.openExternal(url).catch(() => {})
-}
-
-function secureWebContents(webContents) {
-  webContents.setWindowOpenHandler(({ url }) => {
-    openExternalUrl(url)
-    return { action: 'deny' }
-  })
-
-  const guardNavigation = (event, url) => {
-    if (isTrustedNavigation(url, applicationOrigin)) return
-    event.preventDefault()
-    openExternalUrl(url)
-  }
-
-  webContents.on('will-navigate', guardNavigation)
-  webContents.on('will-redirect', guardNavigation)
-  webContents.on('will-attach-webview', (event) => event.preventDefault())
 }
 
 function configureDesktopRuntime() {
@@ -266,42 +245,12 @@ async function resolveApplicationUrl() {
   return startBundledServer()
 }
 
-function configurePermissions() {
-  const allowed = new Set(['media', 'notifications'])
-  const isAllowed = (webContents, permission, requestingUrl) => allowed.has(permission)
-    && isTrustedNavigation(requestingUrl || webContents?.getURL(), applicationOrigin)
-
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
-    callback(isAllowed(webContents, permission, details.requestingUrl))
-  })
-  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin) => (
-    isAllowed(webContents, permission, requestingOrigin)
-  ))
-}
-
 function createMainWindow() {
-  const window = new BrowserWindow({
-    width: 1440,
-    height: 920,
-    minWidth: 1024,
-    minHeight: 700,
-    show: false,
-    backgroundColor: '#ffffff',
-    autoHideMenuBar: true,
-    icon: appIconPath,
-    webPreferences: {
-      preload: preloadPath,
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true,
-      allowRunningInsecureContent: false,
-      webviewTag: false,
-    },
+  const window = createDesktopMainWindow({
+    applicationOrigin,
+    appIconPath,
+    preloadPath,
   })
-
-  secureWebContents(window.webContents)
-  window.once('ready-to-show', () => window.show())
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = null
   })
@@ -351,7 +300,7 @@ function createPetWindow() {
   })
   window.setAlwaysOnTop(true, 'floating')
   window.setMovable(true)
-  secureWebContents(window.webContents)
+  secureDesktopWebContents(window.webContents, { applicationOrigin })
   window.on('blur', () => cancelPetDrag())
   window.on('hide', () => cancelPetDrag())
   window.on('moved', () => {
@@ -546,52 +495,18 @@ function registerDesktopIpc() {
   })
 }
 
-function configureDesktopUpdates() {
-  if (!app.isPackaged) return
-
-  // The built-in downloader discards a stalled differential transfer and then
-  // starts the whole installer again. Keep electron-updater for release checks
-  // and NSIS installation, while the desktop runtime owns resumable downloads.
-  autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = false
-  // Production packages derive publisherName from their signing certificate so
-  // electron-updater verifies the installer signer. Unsigned local packages keep
-  // relying on release HTTPS plus latest.yml SHA-512 integrity checks.
-  autoUpdater.allowPrerelease = false
-  autoUpdater.allowDowngrade = false
-  try {
-    desktopUpdateRuntime = createDesktopUpdateRuntime({
-      updater: autoUpdater,
-      updateBaseUrl: process.env.GUGO_UPDATE_BASE_URL,
-      onStatus(payload = {}) {
-        const { status, ...details } = payload
-        if (status) sendUpdateStatus(status, details)
-      },
-    })
-  } catch (error) {
-    sendUpdateStatus('error', { message: error?.message || 'update runtime configuration failed' })
-    return
-  }
-  autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'))
-  autoUpdater.on('update-available', (info) => sendUpdateStatus('available', { version: info.version }))
-  autoUpdater.on('update-not-available', () => sendUpdateStatus('current'))
-  autoUpdater.on('update-downloaded', (info) => {
-    updateReady = true
-    sendUpdateStatus('ready', { version: info.version })
-  })
-  autoUpdater.on('error', (error) => sendUpdateStatus('error', { message: error?.message || 'update failed' }))
-
-  // Local-first default: configuring the updater must not contact a release
-  // server. The only check entry point is the trusted IPC handler above,
-  // invoked after the user explicitly chooses "check and download".
-}
-
 async function launch() {
   applicationOrigin = await resolveApplicationUrl()
-  configurePermissions()
+  configureDesktopMainWindowPermissions({ applicationOrigin })
   mainWindow = createMainWindow()
   await mainWindow.loadURL(applicationOrigin)
-  configureDesktopUpdates()
+  desktopUpdateRuntime = configureDesktopUpdates({
+    isPackaged: app.isPackaged,
+    autoUpdater,
+    updateBaseUrl: process.env.GUGO_UPDATE_BASE_URL,
+    sendStatus: sendUpdateStatus,
+    markReady: () => { updateReady = true },
+  })
 }
 
 async function stopBackend() {

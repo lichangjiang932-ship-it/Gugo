@@ -1,3 +1,5 @@
+import { normalizeProductLanguage } from '../../shared/productLanguage.js'
+
 export function formatAttachmentForPrompt(attachment) {
   if (attachment.kind === 'text' || attachment.kind === 'pdf') {
     return `\n\n[附件: ${attachment.name}, ${attachment.sizeKB} KB]\n\`\`\`\n${attachment.text}\n\`\`\``
@@ -32,11 +34,20 @@ export function buildUserContentWithAttachments(prompt, attachments = []) {
   ]
 }
 
-export function describeAttachmentPrompt(attachments = []) {
+export function describeAttachmentPrompt(attachments = [], locale = 'zh') {
   if (!attachments.length) return ''
-  const names = attachments.map((item) => item.name).filter(Boolean).slice(0, 4).join('、')
-  const suffix = attachments.length > 4 ? ` 等 ${attachments.length} 个附件` : ''
-  return `请分析附件：${names}${suffix}`
+  const language = normalizeProductLanguage(locale)
+  const names = attachments
+    .map((item) => item.name)
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(language === 'zh' ? '、' : ', ')
+  if (language === 'zh') {
+    const suffix = attachments.length > 4 ? ` 等 ${attachments.length} 个附件` : ''
+    return `请分析附件：${names}${suffix}`
+  }
+  const suffix = attachments.length > 4 ? ` and ${attachments.length - 4} more` : ''
+  return `Please analyze the attached files: ${names}${suffix}`
 }
 
 export function buildUserDisplayContent(prompt, attachments = []) {

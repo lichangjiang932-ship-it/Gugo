@@ -1,5 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { buildChatTurnMarkers } from './chatMiniTimeline.js'
+import { buildChatTurnMarkers, getBoundedChatTimeline } from './chatMiniTimeline.js'
+
+function TimelineWindowControl({ direction, target, onSelectTurn, t }) {
+  const isEarlier = direction === 'earlier'
+  const label = t(
+    isEarlier ? 'chatTimeline.earlierTurns' : 'chatTimeline.laterTurns',
+    { number: target.number },
+  )
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      className="chat-mini-timeline-window-control flex h-3.5 w-8 shrink-0 items-center justify-start rounded-control pl-1 text-xs leading-3 text-ink-fade hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ink/35 focus-visible:ring-offset-1 focus-visible:ring-offset-paper"
+      data-testid={`chat-timeline-${direction}`}
+      onClick={() => onSelectTurn(target.messageIndex)}
+    >
+      <span aria-hidden="true">{isEarlier ? '▲' : '▼'}</span>
+    </button>
+  )
+}
 
 export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTurn, t }) {
   const turns = useMemo(
@@ -10,10 +30,19 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
   const markerRefs = useRef(new Map())
   const timelineRef = useRef(null)
   const [preview, setPreview] = useState(null)
+  const {
+    activeMessageIndex,
+    visibleTurns,
+    earlierTurn,
+    laterTurn,
+  } = useMemo(
+    () => getBoundedChatTimeline(turns, activeTurnIndex),
+    [activeTurnIndex, turns],
+  )
 
   useEffect(() => {
     const list = markerListRef.current
-    const marker = markerRefs.current.get(activeTurnIndex)
+    const marker = markerRefs.current.get(activeMessageIndex)
     if (!list || !marker) return
     const markerTop = marker.offsetTop
     const markerBottom = markerTop + marker.offsetHeight
@@ -21,7 +50,7 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
     else if (markerBottom > list.scrollTop + list.clientHeight) {
       list.scrollTop = markerBottom - list.clientHeight
     }
-  }, [activeTurnIndex, turns.length])
+  }, [activeMessageIndex, turns.length])
 
   if (turns.length < 2) return null
 
@@ -46,8 +75,16 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
         ref={markerListRef}
         className="chat-mini-timeline-list relative flex max-h-[min(42vh,18rem)] w-8 flex-col items-center gap-0.5 overflow-y-auto py-1.5"
       >
-        {turns.map((turn) => {
-          const active = turn.messageIndex === activeTurnIndex
+        {earlierTurn && (
+          <TimelineWindowControl
+            direction="earlier"
+            target={earlierTurn}
+            onSelectTurn={onSelectTurn}
+            t={t}
+          />
+        )}
+        {visibleTurns.map((turn) => {
+          const active = turn.messageIndex === activeMessageIndex
           const label = `${t('chatTimeline.jumpTo')} ${turn.number}: ${turn.summary}`
           return (
             <button
@@ -75,6 +112,14 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
             </button>
           )
         })}
+        {laterTurn && (
+          <TimelineWindowControl
+            direction="later"
+            target={laterTurn}
+            onSelectTurn={onSelectTurn}
+            t={t}
+          />
+        )}
       </div>
       {preview && (
         <div

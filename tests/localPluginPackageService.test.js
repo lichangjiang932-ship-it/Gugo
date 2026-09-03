@@ -37,6 +37,25 @@ function packageReceipt(overrides = {}) {
   })
 }
 
+function signedPackageReceipt(overrides = {}) {
+  return packageReceipt({
+    schemaVersion: 2,
+    publisherVerified: true,
+    sourceKind: 'local-marketplace',
+    marketplace: Object.freeze({
+      name: 'team-local',
+      displayName: 'Team Local',
+    }),
+    publisher: Object.freeze({
+      id: 'example-publisher',
+      displayName: 'Example Publisher',
+      keyId: `sha256-${'4'.repeat(64)}`,
+    }),
+    publicationDigest: `sha256-${'5'.repeat(64)}`,
+    ...overrides,
+  })
+}
+
 function store(packages = [], revision = EMPTY_REVISION) {
   return Object.freeze({
     schemaVersion: 1,
@@ -274,6 +293,39 @@ test('list binds the startup-owned managed root and returns a frozen serializabl
   assert.equal(JSON.stringify(result).includes('foreign'), false)
 })
 
+test('list projects verified publisher identity without signature or public-key material', async () => {
+  const receipt = signedPackageReceipt({
+    publisherPublicKey: 'must-not-leak',
+    signature: 'must-not-leak',
+  })
+  const service = createLocalPluginPackageService(dependencies({
+    listInstalledLocalPluginPackages: async () => store([receipt]),
+  }))
+  const result = await service.listLocalPluginPackages()
+  assert.deepEqual(result.store.packages[0], {
+    schemaVersion: 2,
+    pluginId: 'sample-plugin',
+    pluginVersion: '1.0.0',
+    packageDigest: PACKAGE_DIGEST,
+    fileCount: 2,
+    totalBytes: 128,
+    installedAt: 100,
+    publisherVerified: true,
+    sourceKind: 'local-marketplace',
+    marketplace: {
+      name: 'team-local',
+      displayName: 'Team Local',
+    },
+    publisher: {
+      id: 'example-publisher',
+      displayName: 'Example Publisher',
+      keyId: `sha256-${'4'.repeat(64)}`,
+    },
+    publicationDigest: `sha256-${'5'.repeat(64)}`,
+  })
+  assert.equal(JSON.stringify(result).includes('must-not-leak'), false)
+})
+
 test('service rejects discovery without a startup-managed package root', async () => {
   const service = createLocalPluginPackageService(dependencies({
     getPluginDiscoverySourceSnapshot: () => ({
@@ -454,11 +506,35 @@ test('committed import remains durable but pending when refresh reports discover
 })
 
 test('committed import is pending when refreshed target is absent or receipt-mismatched', async () => {
-  for (const distributedPlugins of [
-    [],
-    [managedDistributedPlugin(packageReceipt({ packageDigest: `sha256-${'9'.repeat(64)}` }))],
-  ]) {
+  const installedReceipt = signedPackageReceipt()
+  const refreshCases = [
+    { distributedPlugins: [] },
+    {
+      distributedPlugins: [
+        managedDistributedPlugin(packageReceipt({ packageDigest: `sha256-${'9'.repeat(64)}` })),
+      ],
+    },
+    {
+      installedReceipt,
+      distributedPlugins: [managedDistributedPlugin(signedPackageReceipt({
+        publisher: Object.freeze({
+          id: 'replacement-publisher',
+          displayName: 'Replacement Publisher',
+          keyId: `sha256-${'6'.repeat(64)}`,
+        }),
+      }))],
+    },
+  ]
+  for (const { distributedPlugins, installedReceipt: receipt = null } of refreshCases) {
     const service = createLocalPluginPackageService(dependencies({
+      ...(receipt
+        ? {
+            installLocalPluginPackage: async () => installedMutation({
+              package: receipt,
+              store: store([receipt], NEXT_REVISION),
+            }),
+          }
+        : {}),
       refreshPlugins: () => refreshSnapshot(distributedPlugins),
     }))
     const result = await service.importLocalPluginPackage({
@@ -468,6 +544,30 @@ test('committed import is pending when refreshed target is absent or receipt-mis
     assert.equal(result.refreshPending, true)
     assert.equal(result.restartRequired, true)
   }
+})
+
+test('committed import maps a malformed registry receipt to the refresh failure code', async () => {
+  const installedReceipt = signedPackageReceipt()
+  const malformedReceipt = Object.freeze({
+    ...installedReceipt,
+    fileCount: 0,
+  })
+  const service = createLocalPluginPackageService(dependencies({
+    installLocalPluginPackage: async () => installedMutation({
+      package: installedReceipt,
+      store: store([installedReceipt], NEXT_REVISION),
+    }),
+    refreshPlugins: () => refreshSnapshot([managedDistributedPlugin(malformedReceipt)]),
+  }))
+
+  const result = await service.importLocalPluginPackage({
+    sourceDirectory: SOURCE_DIRECTORY,
+    expectedRevision: EMPTY_REVISION,
+  })
+
+  assert.equal(result.refreshPending, true)
+  assert.equal(result.restartRequired, true)
+  assert.equal(result.refreshError.code, 'PLUGIN_PACKAGE_REFRESH_FAILED')
 })
 
 test('uninstall rejects protected builtin ids before touching runtime or filesystem', async () => {
@@ -945,6 +1045,75 @@ test('recovery rejects an orphan barrier while its owner process is alive', asyn
   }), errorCode('PLUGIN_PACKAGE_RECOVERY_OWNER_ACTIVE', 409))
   assert.equal(refreshCalls, 0)
   assert.equal(snapshotCalls, 0)
+})
+
+test('recovery rejects a registry package with a different publisher receipt identity', async () => {
+  const installedReceipt = signedPackageReceipt()
+  const replacementReceipt = signedPackageReceipt({
+    publisher: Object.freeze({
+      id: 'replacement-publisher',
+      displayName: 'Replacement Publisher',
+      keyId: `sha256-${'6'.repeat(64)}`,
+    }),
+  })
+  const replacementPlugin = managedDistributedPlugin(replacementReceipt)
+  const service = createLocalPluginPackageService(dependencies({
+    getRuntimePluginMutationBarrier: () => Object.freeze({
+      pluginId: 'sample-plugin',
+      generation: 7,
+      operation: 'install',
+      phase: 'recovery_required',
+      ownerPid: 4242,
+      storeRevision: EMPTY_REVISION,
+      createdAt: 100,
+      heartbeatAt: 150,
+      recoveryRequired: true,
+    }),
+    refreshPlugins: () => refreshSnapshot([replacementPlugin]),
+    listDistributedPlugins: () => [replacementPlugin],
+    runWithLockedLocalPluginPackageStoreSnapshot: async ({ operation }) => (
+      operation(store([installedReceipt], NEXT_REVISION))
+    ),
+  }))
+
+  await assert.rejects(service.recoverManagedLocalPluginPackage({
+    pluginId: 'sample-plugin',
+    expectedRevision: EMPTY_REVISION,
+    expectedGeneration: 7,
+  }), errorCode('PLUGIN_PACKAGE_RECOVERY_UNSAFE', 503))
+})
+
+test('recovery maps a malformed registry receipt to the unsafe recovery code', async () => {
+  const installedReceipt = signedPackageReceipt()
+  const malformedReceipt = Object.freeze({
+    ...installedReceipt,
+    fileCount: 0,
+  })
+  const malformedPlugin = managedDistributedPlugin(malformedReceipt)
+  const service = createLocalPluginPackageService(dependencies({
+    getRuntimePluginMutationBarrier: () => Object.freeze({
+      pluginId: 'sample-plugin',
+      generation: 7,
+      operation: 'install',
+      phase: 'recovery_required',
+      ownerPid: 4242,
+      storeRevision: EMPTY_REVISION,
+      createdAt: 100,
+      heartbeatAt: 150,
+      recoveryRequired: true,
+    }),
+    refreshPlugins: () => refreshSnapshot([malformedPlugin]),
+    listDistributedPlugins: () => [malformedPlugin],
+    runWithLockedLocalPluginPackageStoreSnapshot: async ({ operation }) => (
+      operation(store([installedReceipt], NEXT_REVISION))
+    ),
+  }))
+
+  await assert.rejects(service.recoverManagedLocalPluginPackage({
+    pluginId: 'sample-plugin',
+    expectedRevision: EMPTY_REVISION,
+    expectedGeneration: 7,
+  }), errorCode('PLUGIN_PACKAGE_RECOVERY_UNSAFE', 503))
 })
 
 test('recovery binds exact barrier snapshot evidence and rechecks an orphan owner', async () => {

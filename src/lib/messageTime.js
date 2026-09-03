@@ -1,9 +1,8 @@
+import { normalizeUiLanguage } from '../i18n/translations.js'
+
 const LOCALES = {
   zh: 'zh-CN',
   en: 'en-US',
-  ja: 'ja-JP',
-  ko: 'ko-KR',
-  'zh-TW': 'zh-TW',
 }
 
 export function normalizeMessageTimestamp(value) {
@@ -36,7 +35,7 @@ export function backfillMessageTimestamps(sessions, now = Date.now()) {
 }
 
 function localeFor(lang) {
-  return LOCALES[lang] || LOCALES.en
+  return LOCALES[normalizeUiLanguage(lang)]
 }
 
 export function formatMessageTime(timestamp, lang = 'zh') {

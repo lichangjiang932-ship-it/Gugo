@@ -59,24 +59,67 @@ test('missing artifact completion uses a stable reason code and client-localized
   assert.equal(value.reason, 'chatMessages.incompleteReasonArtifactDelivery')
   assert.deepEqual(value.missing, ['chatMessages.incompleteRequirementArtifact'])
 
-  const localizedReasons = ['zh', 'en', 'ja', 'ko', 'zh-TW'].map((locale) => (
+  const localizedReasons = ['zh', 'en'].map((locale) => (
     translations[locale].chatMessages.incompleteReasonArtifactDelivery
   ))
   assert.equal(localizedReasons.every((reason) => typeof reason === 'string' && reason.trim()), true)
   assert.equal(new Set(localizedReasons).size, localizedReasons.length)
 })
 
-test('legacy incomplete failures disclose the retained public reason without exposing stacks', () => {
+test('legacy incomplete failures do not expose retained server diagnostics', () => {
   const legacy = buildIncompleteTaskPresentation({
     meta: { serverFailure: { code: 'TURN_FAILED', message: 'Validation stopped after the final write.', retryable: false } },
   }, t, { retainedCount: 1 })
-  assert.equal(legacy.reason, 'Validation stopped after the final write.')
+  assert.equal(legacy.reason, 'chatMessages.incompleteReasonFallback')
+  assert.doesNotMatch(legacy.reason, /Validation stopped after the final write\./)
   assert.equal(legacy.nextStep, 'chatMessages.incompleteNextAdjust')
 
   const stack = buildIncompleteTaskPresentation({
     meta: { serverFailure: { code: 'TURN_FAILED', message: 'TypeError: secret internal stack' } },
   }, t)
   assert.equal(stack.reason, 'chatMessages.incompleteReasonFallback')
+})
+
+test('invalid legacy incomplete reasons never become presentation codes or reasons', () => {
+  const invalidReasons = [
+    'TypeError: secret internal stack',
+    'checkpoint_missing\nTypeError: secret internal stack',
+    `a${'b'.repeat(96)}`,
+    'ſecret',
+    'Key',
+  ]
+
+  for (const incompleteReason of invalidReasons) {
+    const value = buildIncompleteTaskPresentation({
+      meta: {
+        serverFailure: {
+          code: 'TURN_INCOMPLETE',
+          incompleteReason,
+          retryable: false,
+        },
+      },
+    }, t)
+    const serialized = JSON.stringify(value)
+
+    assert.equal(value.code, 'TURN_INCOMPLETE', incompleteReason)
+    assert.equal(value.reason, 'chatMessages.incompleteReasonFallback', incompleteReason)
+    assert.equal(serialized.includes(incompleteReason), false, incompleteReason)
+  }
+})
+
+test('canonical incomplete reason codes remain case-insensitively compatible', () => {
+  const value = buildIncompleteTaskPresentation({
+    meta: {
+      serverFailure: {
+        code: 'TURN_INCOMPLETE',
+        incompleteReason: 'Checkpoint_Missing',
+        retryable: false,
+      },
+    },
+  }, (key, values = {}) => `${key}:${values.code || ''}`)
+
+  assert.equal(value.code, 'CHECKPOINT_MISSING')
+  assert.equal(value.reason, 'chatMessages.incompleteReasonRecordedCode:CHECKPOINT_MISSING')
 })
 
 test('legacy TURN_INCOMPLETE status copy is not presented as a causal diagnosis', () => {
@@ -221,7 +264,7 @@ test('task verification failures require repair plus a passing project check bef
 })
 
 test('task verification recovery guidance is localized in all supported languages', () => {
-  const locales = ['zh', 'en', 'ja', 'ko', 'zh-TW']
+  const locales = ['zh', 'en']
   const keys = [
     'incompleteReasonVerificationPending',
     'incompleteReasonVerificationExhausted',

@@ -143,9 +143,14 @@ function createLifecycleRuntimeInternal({
         pluginRoot,
         turnPersistenceController,
         managedAttachmentRuntimeAdapter,
+        managedAttachmentRuntimeController: inertHostAdapters
+          ? INERT_HOST_ADAPTER_CONTROLLER
+          : null,
         subagentRunPersistenceController,
         compactionArchiveAdapter,
-        compactionArchiveController,
+        compactionArchiveController: inertHostAdapters
+          ? INERT_HOST_ADAPTER_CONTROLLER
+          : compactionArchiveController,
         toolLoopController,
         runtimeEnv,
         cwd,

@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto'
 
 import { normalizePluginManifest } from '../../shared/pluginManifest.js'
+import {
+  assertPluginDistributionCompatible,
+  snapshotPluginDistribution,
+} from './pluginDistributionContract.js'
 import { snapshotPluginData } from './pluginServiceData.js'
 import { validateManifest } from './pluginManifest.js'
 
@@ -45,63 +49,6 @@ function ownDataValue(value, field, { optional = false } = {}) {
     )
   }
   return descriptor.value
-}
-
-function snapshotDistribution(distribution) {
-  if (distribution === null || distribution === undefined) return null
-  const snapshot = snapshotPluginData(distribution, {
-    code: 'PLUGIN_DEFINITION_DISTRIBUTION_INVALID',
-    label: 'plugin definition distribution',
-    maxDepth: 32,
-    maxNodes: 4_096,
-    maxBytes: 256 * 1024,
-    rejectProxies: true,
-  })
-  const sourceKind = ownDataValue(snapshot, 'sourceKind')
-  const mutable = ownDataValue(snapshot, 'mutable')
-  const verifiedPackage = ownDataValue(snapshot, 'verifiedPackage')
-  const installReceipt = ownDataValue(snapshot, 'installReceipt')
-  if (typeof sourceKind !== 'string' || !sourceKind.trim()) {
-    throw definitionError(
-      'PLUGIN_DEFINITION_DISTRIBUTION_INVALID',
-      'plugin definition distribution sourceKind must be a non-empty string',
-    )
-  }
-  if (typeof mutable !== 'boolean' || typeof verifiedPackage !== 'boolean') {
-    throw definitionError(
-      'PLUGIN_DEFINITION_DISTRIBUTION_INVALID',
-      'plugin definition distribution trust flags must be booleans',
-    )
-  }
-  if (installReceipt !== null && (
-    !installReceipt
-    || typeof installReceipt !== 'object'
-    || Array.isArray(installReceipt)
-  )) {
-    throw definitionError(
-      'PLUGIN_DEFINITION_DISTRIBUTION_INVALID',
-      'plugin definition distribution installReceipt must be null or a plain object',
-    )
-  }
-  if (verifiedPackage && (mutable || installReceipt === null)) {
-    throw definitionError(
-      'PLUGIN_DEFINITION_DISTRIBUTION_INVALID',
-      'verified plugin definitions must be immutable and include an install receipt',
-    )
-  }
-  return snapshotPluginData({
-    sourceKind: sourceKind.trim(),
-    mutable,
-    verifiedPackage,
-    installReceipt,
-  }, {
-    code: 'PLUGIN_DEFINITION_DISTRIBUTION_INVALID',
-    label: 'plugin definition distribution',
-    maxDepth: 32,
-    maxNodes: 4_096,
-    maxBytes: 256 * 1024,
-    rejectProxies: true,
-  })
 }
 
 function canonicalDistributedPlugin(plugin) {
@@ -180,7 +127,10 @@ export function createDistributedPluginDefinition(plugin, { distribution = null 
   return createDefinition({
     manifest,
     plugin: canonicalPlugin,
-    distribution: snapshotDistribution(distribution),
+    distribution: snapshotPluginDistribution(distribution, {
+      code: 'PLUGIN_DEFINITION_DISTRIBUTION_INVALID',
+      label: 'plugin definition distribution',
+    }),
     kind: transformer
       ? PLUGIN_ACTIVATION_KINDS.SANDBOX_TRANSFORMER
       : PLUGIN_ACTIVATION_KINDS.RESOURCE,
@@ -214,6 +164,49 @@ export function distributedPluginFromDefinition(definition) {
     )
   }
   return verified.plugin
+}
+
+/**
+ * Reconcile an immutable stored Release with the currently authoritative
+ * discovery definition without requiring their manifest versions to match.
+ * A stored Release is intentionally allowed to outlive same-source disk
+ * changes, but it must not inherit desired state through a different
+ * distribution source or trust class. Legacy snapshots without distribution
+ * provenance remain loadable until a replacement Release records it.
+ */
+export function assertReleaseDistributionMatchesDefinition(definition, releasePlugin) {
+  const verified = assertPluginDefinition(definition)
+  const currentPlugin = distributedPluginFromDefinition(verified)
+  const releaseSnapshot = snapshotPluginData(releasePlugin, {
+    code: 'PLUGIN_RELEASE_DEFINITION_CONFLICT',
+    label: 'runtime plugin release definition',
+    maxDepth: 32,
+    maxNodes: 4_096,
+    maxBytes: 256 * 1024,
+    rejectProxies: true,
+  })
+  const releasedPlugin = canonicalDistributedPlugin(releaseSnapshot)
+  if (releasedPlugin.id !== currentPlugin.id
+    || releasedPlugin.type !== currentPlugin.type
+    || verified.activation.kind !== PLUGIN_ACTIVATION_KINDS.SANDBOX_TRANSFORMER) {
+    throw definitionError(
+      'PLUGIN_RELEASE_DEFINITION_CONFLICT',
+      'runtime plugin release does not match the authoritative plugin definition',
+    )
+  }
+
+  const releasePresent = Object.hasOwn(releaseSnapshot, 'distribution')
+  assertPluginDistributionCompatible({
+    releasePresent,
+    releaseDistribution: releasePresent
+      ? ownDataValue(releaseSnapshot, 'distribution')
+      : undefined,
+    currentDistribution: verified.distribution,
+    pluginId: currentPlugin.id,
+    snapshotCode: 'PLUGIN_DEFINITION_DISTRIBUTION_INVALID',
+    conflictCode: 'PLUGIN_RELEASE_DISTRIBUTION_CONFLICT',
+  })
+  return verified
 }
 
 export function runtimeManifestFromPluginDefinition(definition) {

@@ -1,0 +1,1 @@
+{"id":"conformance-plugin","name":"Conformance Plugin","version":"1.0.0","type":"transformer","entry":"index.js","apiVersion":"1.0.0","hostVersion":">=0.11.50 <1.0.0","permissions":["runtime:tool"],"capabilities":[]}

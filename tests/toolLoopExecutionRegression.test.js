@@ -1360,7 +1360,13 @@ test('a real execution failure still allows a specific clarification', async () 
   let modelCalls = 0
   const executed = []
   const result = await runToolsLoop({
-    job: { id: 'real-permission-blocker-job', userId: null, origin: 'chat', prompt: 'Create result.txt now.' },
+    job: {
+      id: 'real-permission-blocker-job',
+      userId: null,
+      origin: 'chat',
+      locale: 'en',
+      prompt: 'Create result.txt now.',
+    },
     step: { id: 'real-permission-blocker-step', kind: 'chat' },
     messages: [{ role: 'user', content: 'Create result.txt now.' }],
     intentMode: 'execute',
@@ -2627,6 +2633,55 @@ test('a status inquiry keeps the immediately preceding failure after read-only i
   assert.equal(modelCalls, 2)
   assert.match(result.text, /上一轮仍未完成：最终验证没有通过/)
   assert.doesNotMatch(result.text, /没有任何问题/)
+})
+
+test('an English status inquiry never exposes a Chinese prior-failure message', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  let modelCalls = 0
+  const messages = [
+    { role: 'user', content: 'Generate and verify result.txt.' },
+    {
+      role: 'system',
+      content: '[PRIOR TURN OUTCOME]\n{"state":"failed","error":{"message":"最终验证没有通过"}}\nThe prior turn did not complete.',
+    },
+    { role: 'assistant', content: 'The task is incomplete.' },
+    { role: 'user', content: 'Is it complete?' },
+  ]
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-prior-failure-read-only-en',
+      userId: null,
+      origin: 'chat',
+      locale: 'en',
+      prompt: 'Is it complete?',
+    },
+    step: { id: 'step-prior-failure-read-only-en', kind: 'chat' },
+    messages,
+    toolSpecs: [readFile],
+    maxIters: 3,
+    enableToolHooks: false,
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'inspect-prior-output-en',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: 'result.txt' }) },
+          }],
+        }
+      }
+      return { content: 'Everything is complete.', toolCalls: [] }
+    },
+    executeTool: async () => ({ ok: true, path: 'result.txt', content: 'partial output' }),
+  })
+
+  assert.ok(modelCalls >= 2)
+  assert.match(result.text, /prior turn is still incomplete/i)
+  assert.doesNotMatch(result.text, /Everything is complete/)
+  assert.doesNotMatch(result.text, /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/u)
 })
 
 test('an older failure cannot leak through a newer successful turn into a status inquiry', async () => {

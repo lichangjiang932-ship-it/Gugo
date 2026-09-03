@@ -1,4 +1,5 @@
 import { shouldInheritExecutionIntent } from '../chatToolSelection.js'
+import { STATUS_INQUIRY_PROMPT } from '../../utils/executionIntent.js'
 import {
   extractMutationTargets,
   isLocalMutationCall,
@@ -10,13 +11,18 @@ import {
 
 const PRIOR_TURN_OUTCOME_MARKER = '[PRIOR TURN OUTCOME]'
 
-export const STATUS_INQUIRY_PROMPT = /^(?:(?:请|先|那|那么|现在)\s*)?(?:(?:遇到|出现|发生)(?:了)?\s*(?:什么|哪些)?\s*(?:问题|错误|异常|阻塞)|(?:有|还有|到底有)\s*(?:什么|哪些)?\s*(?:问题|错误|异常)|(?:为什么|为何|怎么|哪里)\s*(?:会)?\s*(?:失败|报错|卡住|停止|中断|没(?:有)?完成|未完成)|(?:现在|当前)?\s*(?:是什么|什么)\s*(?:状态|进度)|(?:完成|做好|成功)(?:了)?\s*(?:吗|没有)|what\s+(?:went\s+wrong|failed)|why\s+(?:did\s+it\s+fail|is\s+it\s+stuck)|what(?:'s|\s+is)\s+the\s+(?:status|problem))(?:[了呢吗]?\s*[?？。.!！]*)$/i
-export const FALSE_SUCCESS_STATUS = /(?:没有(?:任何)?(?:问题|错误|异常)|(?:已经|已|任务)(?:顺利|成功)?完成|完成了|all\s+good|completed\s+successfully)/i
+export { STATUS_INQUIRY_PROMPT }
+const TERSE_COMPLETION_CLAIM = String.raw`(?:(?:yes[\s,，:：-]*)?(?:done|complete|completed|finished)|yes[\s,，:：-]+it\s+(?:is|was))`
+const COMPLETION_SUBJECT = String.raw`(?:everything|it|(?:the\s+)?(?:requested\s+)?(?:task|work|changes?|deliverables?|files?))`
+const COMPLETION_OBJECT = String.raw`(?:it|this|everything|(?:the\s+)?(?:requested\s+)?(?:task|work|changes?|deliverables?|files?))`
+const EXPLICIT_COMPLETION_CLAIM = String.raw`(?:没有(?:任何)?(?:问题|错误|异常)|(?:已经|已|任务)(?:顺利|成功)?完成|完成了|all\s+(?:good|done|complete|completed|finished)|completed\s+successfully|it['’]s\s+(?:complete|completed|done|finished)|this\s+is\s+(?:complete|completed|done|finished)|(?:the\s+)?(?:task|work)\s+(?:complete|completed|done|finished)|${COMPLETION_SUBJECT}\s+(?:(?:is|was|are|were)\s+(?:now\s+)?(?:complete|completed|done|finished)|(?:has|have)\s+(?:finished|been\s+(?:complete|completed|done|finished)))|we(?:['’]re|\s+are)\s+(?:all\s+)?(?:complete|completed|done|finished)|(?:i|we)(?:(?:\s+have|['’]ve))?\s+(?:completed|finished)\s+${COMPLETION_OBJECT}(?:\s+successfully)?)`
+const DECLARATIVE_COMPLETION_BOUNDARY = String.raw`(?=\s*(?:[.!！。](?:\s|$)|$))`
+const NON_COMPLETION_CONTEXT = String.raw`(?:(?:actually|however|but)\s*[,，:]?\s*)?(?:if|unless|not\b|i\s+(?:(?:do\s+not|don['’]t)\s+think|doubt|question|(?:am|['’]m)\s+(?:not\s+)?(?:sure|certain))\b|it\s+(?:does|did)\s+not\s+(?:look|seem|appear)\b|(?:none|some)\s+of\b|not\s+all\b|only\s+(?:one|some|part\s+of)\b|(?:the\s+)?(?:logs?|report|model|assistant)\s+(?:claim(?:s|ed)?|(?:say|says|said)|report(?:s|ed)?|state(?:s|d)?)\b|according\s+to\b)`
+export const FALSE_SUCCESS_STATUS = new RegExp(
+  String.raw`^(?!\s*${NON_COMPLETION_CONTEXT})(?:\s*${TERSE_COMPLETION_CLAIM}${DECLARATIVE_COMPLETION_BOUNDARY}|[\s\S]*?${EXPLICIT_COMPLETION_CLAIM}${DECLARATIVE_COMPLETION_BOUNDARY})`,
+  'i',
+)
 export const INCOMPLETE_STATUS = /(?:尚未完成|仍未完成|还没(?:有)?完成|没有完成|未完成|任务尚未|incomplete|not\s+(?:yet\s+)?complete)/i
-export const PUBLIC_INCOMPLETE_TASK_TEXT = '任务尚未完成。请重试以继续；若仍失败，请检查模型和工具调用支持。'
-export const PUBLIC_UNVERIFIED_FILE_TEXT = '任务尚未通过最终验收。已提交到本地的文件仍会保留并显示其验证状态；未通过验证的受管理产物不会作为最终交付。请重试以继续。'
-export const PUBLIC_FILTERED_CLARIFICATION_TEXT = '需要你补充信息后才能继续。已隐藏模型异常收尾时返回的代码内容。'
-
 const INTERNAL_TERMINAL_FAILURE_PATTERNS = [
   /Model call failed\s*:/i,
   /This reply could not be completed/i,
@@ -95,7 +101,7 @@ export function isForcedToolChoiceCompatibilityError(error) {
   return namesToolChoice && rejectsForcedChoice
 }
 
-export function sanitizeIncompleteTerminalText(value, fallback = PUBLIC_INCOMPLETE_TASK_TEXT) {
+export function sanitizeIncompleteTerminalText(value, fallback = '') {
   const text = String(value || '').trim()
   if (!text) return fallback
   return INTERNAL_TERMINAL_FAILURE_PATTERNS.some((pattern) => pattern.test(text))

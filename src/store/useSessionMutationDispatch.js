@@ -31,14 +31,26 @@ export default function useSessionMutationDispatch({ dispatch, reducer, state, s
     ? activeSession.id
     : null
   const hydrationRevision = hydrationSessionId ? activeSession.serverRevision : null
+  const hydrationTurnEventRevision = hydrationSessionId
+    ? activeSession.serverTurnEventRevision
+    : null
 
   useEffect(() => {
     if (!hydrationSessionId) return
     void dispatchWithSessionSync({
       type: 'HYDRATE_SERVER_SESSION',
-      payload: { sessionId: hydrationSessionId, revision: hydrationRevision },
+      payload: {
+        sessionId: hydrationSessionId,
+        revision: hydrationRevision,
+        turnEventRevision: hydrationTurnEventRevision,
+      },
     })
-  }, [dispatchWithSessionSync, hydrationRevision, hydrationSessionId])
+  }, [
+    dispatchWithSessionSync,
+    hydrationRevision,
+    hydrationSessionId,
+    hydrationTurnEventRevision,
+  ])
 
   return dispatchWithSessionSync
 }

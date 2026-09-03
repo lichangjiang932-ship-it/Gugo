@@ -9,8 +9,8 @@ export const STATE_CLEAR_EPOCH_KEY = 'your-model-atelier:last-clear:v1'
 export const STATE_SYNC_CHANNEL_NAME = 'your-model-atelier:state-sync'
 
 export const PERSIST_KEYS = Object.freeze([
-  'sessions',
   'activeSessionId',
+  'sessionCatalogSource',
   'tasks',
   'history',
   'permissions',
@@ -26,8 +26,11 @@ export const PERSIST_KEYS = Object.freeze([
   'sessionDrafts',
 ])
 
+export const LOCAL_ONLY_PERSIST_KEYS = Object.freeze(['pendingLegacySessions'])
+
 export const LIGHTWEIGHT_PERSIST_KEYS = Object.freeze([
   'activeSessionId',
+  'sessionCatalogSource',
   'permissions',
   'theme',
   'fontSize',
@@ -46,54 +49,34 @@ function selectKeys(source, keys) {
   return selected
 }
 
-function selectActiveTurnStub(messages) {
-  const active = [...(Array.isArray(messages) ? messages : [])].reverse().find((message) => (
-    message?.id
-    && message.role === 'assistant'
-    && message.meta?.streaming === true
-    && typeof message.meta?.serverTurnId === 'string'
-    && message.meta.serverTurnId.trim()
-  ))
-  if (!active) return []
-  return [{
-    id: String(active.id),
-    role: 'assistant',
-    content: '',
-    timestamp: Number(active.timestamp) || 0,
-    meta: {
-      streaming: true,
-      serverTurnId: active.meta.serverTurnId,
-      serverLastSequence: -1,
-    },
-  }]
-}
-
 export function selectPersistedSnapshot(state) {
-  const snapshot = selectKeys(state, PERSIST_KEYS)
-  // The server is the sole durable source for migrated chat transcripts.
-  // Keep legacy/local-only sessions intact, but do not duplicate complete
-  // server-backed histories into IndexedDB and reconcile two sources later.
-  snapshot.sessions = (Array.isArray(snapshot.sessions) ? snapshot.sessions : []).map((session) => (
-    Number.isInteger(session?.serverRevision)
-      ? {
-        ...session,
-        messages: selectActiveTurnStub(session.messages),
-      }
-      : session
-  ))
-  return snapshot
+  // The server catalog is the only durable session history. Browser storage
+  // retains settings and drafts. The one local-only exception is an upgrade
+  // queue, which exists only until the server confirms the legacy import.
+  const selected = selectKeys(state, PERSIST_KEYS)
+  if (Array.isArray(state?.pendingLegacySessions) && state.pendingLegacySessions.length) {
+    selected.pendingLegacySessions = state.pendingLegacySessions
+  }
+  return selected
 }
 
 export function selectLightweightSnapshot(snapshot) {
-  return selectKeys(snapshot, LIGHTWEIGHT_PERSIST_KEYS)
+  const selected = selectKeys(snapshot, LIGHTWEIGHT_PERSIST_KEYS)
+  if (snapshot?.sessionCatalogSource == null) delete selected.sessionCatalogSource
+  return selected
 }
 
 function parseStoredPayload(raw, fallbackTimestamp) {
   if (!raw) return null
   try {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-    const sanitized = sanitizeRetiredBrowserAccountFields(parsed)
-    const payload = readPersistedPayload(sanitized.payload, fallbackTimestamp)
+    const sanitized = sanitizeRetiredBrowserAccountFields(parsed, {
+      preservePendingLegacySessions: true,
+      stageLegacySessions: true,
+    })
+    const payload = readPersistedPayload(sanitized.payload, fallbackTimestamp, {
+      preservePendingLegacySessions: true,
+    })
     return {
       payload,
       sanitizedPayload: sanitized.changed ? sanitized.payload : null,

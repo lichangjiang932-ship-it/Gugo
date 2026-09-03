@@ -6,16 +6,12 @@ import { archiveSessionRemote, forkSessionRemote, pinSessionRemote, unarchiveSes
 import { getAuthToken } from '../lib/accountClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
-import {
-  CHAT_PROJECTS_CHANGED_EVENT,
-  CHAT_PROJECTS_STORAGE_KEY,
-  readStoredChatProjects,
-} from '../lib/chatWorkspaceSelection.js'
 import BrandMark from './BrandMark.jsx'
 import AccountArea from './leftRail/AccountArea.jsx'
 import LoginModal from './leftRail/LoginModal.jsx'
 import SessionList from './leftRail/SessionList.jsx'
 import useLeftRailController from './leftRail/useLeftRailController.js'
+import { presentSessionCatalogSource } from './leftRail/sessionCatalogSourcePresentation.js'
 
 const COLLAPSED_KEY = 'gugo:left-rail-collapsed'
 const NARROW_RAIL_QUERY = '(max-width: 959px)'
@@ -38,7 +34,6 @@ export default function LeftRail() {
   const [collapsedPreference, setCollapsedPreference] = useState(initialCollapsed)
   const [narrowViewport, setNarrowViewport] = useState(initialNarrowViewport)
   const [mobileExpanded, setMobileExpanded] = useState(false)
-  const [storedProjects, setStoredProjects] = useState(readStoredChatProjects)
   const collapsed = narrowViewport ? !mobileExpanded : collapsedPreference
   const railWidthClass = collapsed
     ? 'w-[60px] max-w-full px-2 py-2.5'
@@ -46,6 +41,11 @@ export default function LeftRail() {
       ? 'w-[min(320px,calc(100vw-60px))] min-w-0 max-w-[320px] px-2.5 py-2.5'
       : 'w-[clamp(280px,20vw,320px)] min-w-[280px] max-w-[320px] px-2.5 py-2.5'
   const sessions = state.sessions.filter((session) => !session.archivedAt)
+  const catalogSource = presentSessionCatalogSource(
+    state.sessionCatalogSource,
+    state.sessionCatalogSourceMismatch,
+    t,
+  )
 
   useEffect(() => {
     const media = window.matchMedia?.(NARROW_RAIL_QUERY)
@@ -56,20 +56,6 @@ export default function LeftRail() {
     }
     media.addEventListener?.('change', onChange)
     return () => media.removeEventListener?.('change', onChange)
-  }, [])
-
-  useEffect(() => {
-    const refreshProjects = (event) => {
-      if (event?.type === 'storage' && event.key !== CHAT_PROJECTS_STORAGE_KEY) return
-      const projects = event?.detail?.projects
-      setStoredProjects(Array.isArray(projects) ? projects : readStoredChatProjects())
-    }
-    window.addEventListener(CHAT_PROJECTS_CHANGED_EVENT, refreshProjects)
-    window.addEventListener('storage', refreshProjects)
-    return () => {
-      window.removeEventListener(CHAT_PROJECTS_CHANGED_EVENT, refreshProjects)
-      window.removeEventListener('storage', refreshProjects)
-    }
   }, [])
 
   const closeMobileRail = () => { if (narrowViewport) setMobileExpanded(false) }
@@ -157,7 +143,19 @@ export default function LeftRail() {
         {collapsed && navButton(Search, t('nav.searchPlaceholder'), handleSearch)}
       </div>
 
-      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} storedProjects={storedProjects} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onNewInProject={handleNewChatInProject} onSearch={handleSearch} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>}
+      {!collapsed && catalogSource && (
+        <div
+          className={`mt-2 truncate rounded-control border px-2.5 py-1 text-xs ${catalogSource.changed ? 'border-warning/50 bg-warning/10 text-warning' : 'border-ink/10 bg-ink/[0.025] text-ink-fade'}`}
+          data-testid="session-catalog-source"
+          data-source-changed={catalogSource.changed ? 'true' : 'false'}
+          role={catalogSource.changed ? 'alert' : 'status'}
+          title={catalogSource.title}
+        >
+          {catalogSource.changed ? '⚠ ' : ''}{catalogSource.label}
+        </div>
+      )}
+
+      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onNewInProject={handleNewChatInProject} onSearch={handleSearch} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>}
       {collapsed && <div className="min-h-0 flex-1" />}
       <AccountArea compact={collapsed} accountMenuOpen={controller.accountMenuOpen} accountMenuRef={controller.accountMenuRef} user={state.user} pendingApprovals={controller.pendingApprovals} onToggle={() => { controller.closeSessionMenu(); controller.setAccountMenuOpen((open) => !open) }} onNavigate={(item) => { closeMobileRail(); controller.navigateItem(item) }} t={t} />
     </aside>

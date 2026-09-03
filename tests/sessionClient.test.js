@@ -2,9 +2,15 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   deleteSessionRemote,
+  importAllLegacySessionsRemote,
+  listAllSessionsRemote,
+  listSessionCatalogRemote,
+  listSessionsRemote,
   normalizeSessionMessagesForServer,
   pinSessionRemote,
   replaceSessionMessagesRemote,
+  selectLegacySessionImportCandidates,
+  setSessionWorkspaceRemote,
   unpinSessionRemote,
 } from '../src/lib/sessionClient.js'
 
@@ -84,6 +90,303 @@ test('session mutation clients preserve structured conflict errors', async () =>
       return true
     },
   )
+})
+
+test('session workspace client persists canonical selections and explicit clears', async () => {
+  const requests = []
+  const fetchImpl = async (url, options) => {
+    const workspacePath = JSON.parse(options.body).workspacePath
+    requests.push({ url, options, workspacePath })
+    return response({
+      ok: true,
+      session: { id: 'session/one', revision: 4, workspacePath },
+    })
+  }
+
+  await setSessionWorkspaceRemote('session/one', '  C:\\Project  ', { fetchImpl })
+  await setSessionWorkspaceRemote('session/one', '', { fetchImpl })
+
+  assert.deepEqual(requests.map(({ url, workspacePath }) => ({ url, workspacePath })), [
+    { url: '/api/sessions/session%2Fone/workspace', workspacePath: 'C:\\Project' },
+    { url: '/api/sessions/session%2Fone/workspace', workspacePath: null },
+  ])
+  assert.ok(requests.every(({ options }) => (
+    options.method === 'PUT' && options.headers['Content-Type'] === 'application/json'
+  )))
+})
+
+test('session catalog client requests every user-scoped metadata page', async () => {
+  const requests = []
+  const firstPage = Array.from({ length: 2 }, (_, index) => ({
+    id: `session-${index + 1}`,
+    revision: index + 1,
+  }))
+  const sessions = await listAllSessionsRemote({
+    pageSize: 2,
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options })
+      return response({
+        sessions: requests.length === 1
+          ? firstPage
+          : [{ id: 'session-3', revision: 3 }],
+      })
+    },
+  })
+
+  assert.deepEqual(requests.map(({ url }) => url), [
+    '/api/sessions?archived=all&limit=2&offset=0',
+    '/api/sessions?archived=all&limit=2&offset=2',
+  ])
+  assert.ok(requests.every(({ options }) => options.signal === undefined))
+  assert.deepEqual(sessions.map(({ id }) => id), ['session-1', 'session-2', 'session-3'])
+})
+
+test('session catalog exposes one stable backend and normalized workspace source across pages', async () => {
+  const source = {
+    version: 1,
+    backendInstanceId: 'sqlite:0123456789abcdef',
+    workspaceScope: {
+      key: 'workspace:fedcba9876543210',
+      path: 'D:\\work\\project',
+    },
+  }
+  let requests = 0
+  const catalog = await listSessionCatalogRemote({
+    pageSize: 1,
+    fetchImpl: async () => {
+      requests += 1
+      return response({
+        sessions: requests === 1 ? [{ id: 'one', revision: 1 }] : [],
+        source,
+      })
+    },
+  })
+
+  assert.deepEqual(catalog, {
+    sessions: [{ id: 'one', revision: 1 }],
+    source,
+  })
+})
+
+test('session catalog never combines pages from different backend data sources', async () => {
+  let requests = 0
+  await assert.rejects(
+    listSessionCatalogRemote({
+      pageSize: 1,
+      fetchImpl: async () => {
+        requests += 1
+        return response({
+          sessions: requests === 1 ? [{ id: 'one', revision: 1 }] : [],
+          source: {
+            version: 1,
+            backendInstanceId: `sqlite:${requests}`,
+            workspaceScope: { key: 'workspace:one', path: 'D:\\work\\project' },
+          },
+        })
+      },
+    }),
+    (error) => error?.code === 'SESSION_CATALOG_SOURCE_CHANGED',
+  )
+})
+
+test('legacy catalog responses remain compatible without source metadata', async () => {
+  const catalog = await listSessionCatalogRemote({
+    fetchImpl: async () => response({ sessions: [{ id: 'legacy', revision: 1 }] }),
+  })
+  assert.deepEqual(catalog, {
+    sessions: [{ id: 'legacy', revision: 1 }],
+    source: null,
+  })
+})
+
+test('session catalog client rejects malformed server results', async () => {
+  await assert.rejects(
+    listSessionsRemote({ fetchImpl: async () => response({ sessions: null }) }),
+    (error) => error?.code === 'INVALID_SESSION_CATALOG',
+  )
+})
+
+test('legacy import candidates preserve pending visible content without portable Turn state', () => {
+  const sessions = [
+    {
+      id: 'legacy-history',
+      title: 'Legacy',
+      createdAt: 10,
+      updatedAt: 20,
+      messages: [
+        { id: 'stable', role: 'user', content: 'keep', timestamp: 11 },
+        {
+          id: 'pending',
+          role: 'user',
+          content: 'pending user text',
+          timestamp: 12,
+          modelContext: { turnId: 'unstable-turn', privateCheckpoint: 'discard' },
+          meta: { pendingServerSync: true, serverTurnId: 'unstable-turn' },
+        },
+        {
+          id: 'streaming',
+          role: 'assistant',
+          content: 'visible partial answer',
+          timestamp: 13,
+          modelContext: { turnId: 'unstable-turn', toolTrace: [{ role: 'tool', content: 'partial' }] },
+          meta: {
+            streaming: true,
+            serverTurnId: 'unstable-turn',
+            serverConnectionState: 'connected',
+            toolCalls: [{ id: 'partial-call', name: 'read_file', result: 'partial' }],
+          },
+        },
+      ],
+    },
+    { id: 'local-empty', messages: [] },
+    { id: 'server-backed', serverRevision: 0, messages: [{ id: 'server', role: 'user', content: 'skip' }] },
+  ]
+  const original = structuredClone(sessions)
+
+  const candidates = selectLegacySessionImportCandidates(sessions)
+  const repeated = selectLegacySessionImportCandidates(sessions)
+
+  assert.deepEqual(candidates.map(({ id }) => id), ['legacy-history', 'local-empty'])
+  assert.deepEqual(candidates[0].messages, [
+    { id: 'stable', role: 'user', content: 'keep', createdAt: 11 },
+    { id: 'pending', role: 'user', content: 'pending user text', createdAt: 12 },
+    { id: 'streaming', role: 'assistant', content: 'visible partial answer', createdAt: 13 },
+  ])
+  assert.deepEqual(candidates[1].messages, [])
+  assert.deepEqual(repeated, candidates)
+  assert.deepEqual(
+    repeated[0].messages.map(({ id }) => id),
+    ['stable', 'pending', 'streaming'],
+  )
+  assert.deepEqual(sessions, original)
+})
+
+test('legacy import client batches requests and leaves caller-owned sessions untouched on failure', async () => {
+  const sessions = Array.from({ length: 45 }, (_, index) => ({
+    id: `legacy-${index}`,
+    title: `Legacy ${index}`,
+    messages: [{ id: `message-${index}`, role: 'user', content: 'history' }],
+  }))
+  const original = structuredClone(sessions)
+  const batchSizes = []
+  const result = await importAllLegacySessionsRemote(sessions, {
+    fetchImpl: async (url, options) => {
+      assert.equal(url, '/api/sessions/import')
+      assert.equal(options.method, 'POST')
+      const body = JSON.parse(options.body)
+      batchSizes.push(body.sessions.length)
+      return response({
+        results: body.sessions.map((session) => ({
+          id: session.id,
+          sessionId: session.id,
+          status: 'imported',
+          session: { id: session.id, revision: 1 },
+        })),
+        importedCount: body.sessions.length,
+        serverAuthoritativeCount: 0,
+      })
+    },
+  })
+
+  assert.deepEqual(batchSizes, [20, 20, 5])
+  assert.equal(result.importedCount, 45)
+  assert.deepEqual(sessions, original)
+
+  let calls = 0
+  await assert.rejects(
+    importAllLegacySessionsRemote(sessions, {
+      fetchImpl: async () => {
+        calls += 1
+        if (calls === 2) return response({ error: { code: 'IMPORT_FAILED', message: 'failed' } }, 500)
+        return response({
+          results: Array.from({ length: 20 }, (_, index) => ({
+            id: `legacy-${index}`,
+            sessionId: `legacy-${index}`,
+            status: 'imported',
+            session: { id: `legacy-${index}`, revision: 1 },
+          })),
+          importedCount: 20,
+          serverAuthoritativeCount: 0,
+        })
+      },
+    }),
+    (error) => error?.code === 'IMPORT_FAILED',
+  )
+  assert.equal(calls, 2)
+  assert.deepEqual(sessions, original)
+})
+
+test('legacy import client rejects incomplete, duplicated, or inconsistent acknowledgements', async () => {
+  const sessions = [
+    { id: 'legacy-a', messages: [] },
+    { id: 'legacy-b', messages: [] },
+  ]
+  const acknowledged = (id, overrides = {}) => ({
+    id,
+    sessionId: id,
+    status: 'imported',
+    session: { id },
+    ...overrides,
+  })
+  const invalidResults = [
+    {
+      results: [acknowledged('legacy-a')],
+      importedCount: 1,
+      serverAuthoritativeCount: 0,
+    },
+    {
+      results: [
+        acknowledged('legacy-a'),
+        acknowledged('legacy-a', { status: 'server_authoritative' }),
+      ],
+      importedCount: 1,
+      serverAuthoritativeCount: 1,
+    },
+    {
+      results: [
+        acknowledged('legacy-a'),
+        acknowledged('legacy-b', { status: 'ignored' }),
+      ],
+      importedCount: 1,
+      serverAuthoritativeCount: 1,
+    },
+    {
+      results: [
+        acknowledged('legacy-a'),
+        acknowledged('legacy-b', { status: 'server_authoritative' }),
+      ],
+      importedCount: 2,
+      serverAuthoritativeCount: 0,
+    },
+    {
+      results: [
+        acknowledged('legacy-a', {
+          sessionId: 'recovered-a',
+          session: { id: 'wrong-recovery-id' },
+        }),
+        acknowledged('legacy-b'),
+      ],
+      importedCount: 2,
+      serverAuthoritativeCount: 0,
+    },
+    {
+      results: [
+        acknowledged('legacy-a', { sessionId: 'same-target', session: { id: 'same-target' } }),
+        acknowledged('legacy-b', { sessionId: 'same-target', session: { id: 'same-target' } }),
+      ],
+      importedCount: 2,
+      serverAuthoritativeCount: 0,
+    },
+  ]
+
+  for (const body of invalidResults) {
+    await assert.rejects(
+      importAllLegacySessionsRemote(sessions, {
+        fetchImpl: async () => response(body),
+      }),
+      (error) => error?.code === 'INVALID_LEGACY_SESSION_IMPORT_RESULT',
+    )
+  }
 })
 
 test('session message DTO keeps timestamps and restores UI tool context', () => {

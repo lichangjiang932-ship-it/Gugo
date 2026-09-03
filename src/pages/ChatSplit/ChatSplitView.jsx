@@ -25,8 +25,7 @@ export default function ChatSplitView({
   editingMessageId,
   input,
   isGenerating,
-  messages,
-  modelReadiness,
+  messages, messageRouteHash, modelReadiness,
   modelOptions,
   onAbort,
   onApprovalModeChange,
@@ -145,7 +144,7 @@ export default function ChatSplitView({
         </header>
         <ChatMessages
           key={activeSessionId || '__draft__'}
-          messages={messages}
+          messages={messages} routeHash={messageRouteHash}
           workbenchMessage={workbenchMessage}
           isGenerating={isGenerating}
           onEditMessage={onEditMessage}
@@ -260,7 +259,7 @@ export default function ChatSplitView({
           onSelectWorkspace={onSelectWorkspace}
           recentWorkspaces={recentWorkspaces}
           selectedWorkspacePath={selectedWorkspacePath}
-          showWorkspacePicker={messages.length === 0 && !String(selectedWorkspacePath || '').trim()}
+          showWorkspacePicker={messages.length === 0}
           workspaceBusy={workspaceBusy}
           workspaceError={workspaceError}
         />

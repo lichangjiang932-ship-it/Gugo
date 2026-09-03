@@ -183,6 +183,16 @@ test('sqlite-file managed attachment adapter rejects missing dependencies and ma
     (error) => error?.code === 'MANAGED_ATTACHMENT_RUNTIME_ADAPTER_INVALID',
   )
 
+  const nullItem = createSqliteFileManagedAttachmentRuntimeAdapter({
+    validate: () => [null],
+    bind: () => [],
+    prepare: () => ({ attachments: [], content: [] }),
+  })
+  assert.throws(
+    () => nullItem.validateAttachments({}),
+    (error) => error?.code === 'MANAGED_ATTACHMENT_RUNTIME_ADAPTER_INVALID',
+  )
+
   const badContent = createSqliteFileManagedAttachmentRuntimeAdapter({
     validate: () => [],
     bind: () => [],

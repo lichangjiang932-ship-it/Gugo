@@ -5,6 +5,13 @@ import {
   utf8ByteLength,
 } from './inlineSkillDefinitions.js'
 
+export {
+  TURN_ACTIVITY_KINDS,
+  TurnActivitySchema,
+  createTurnActivity,
+  parseTurnActivity,
+} from './turnActivity.js'
+
 export const TURN_EVENT_TYPES = Object.freeze([
   'turn.started', 'turn.attempt', 'model.phase', 'model.failover', 'assistant.delta', 'reasoning.delta',
   'tool.call', 'tool.started', 'tool.completed', 'turn.progress', 'approval.required',
@@ -446,11 +453,56 @@ const TurnEventBaseSchema = z.object({
   createdAt: z.number().int().nonnegative(),
 }).strict()
 
-export const TurnEventSchema = TurnEventBaseSchema.superRefine((event, context) => {
+export const PersistedTurnEventSchema = TurnEventBaseSchema.superRefine((event, context) => {
   const result = TURN_EVENT_PAYLOAD_SCHEMAS[event.type].safeParse(event.payload)
   if (result.success) return
   for (const issue of result.error.issues) {
     context.addIssue({ ...issue, path: ['payload', ...issue.path] })
+  }
+})
+
+const CODE_ONLY_TERMINAL_EVENT_TYPES = new Set([
+  'turn.interrupted',
+  'turn.blocked',
+  'turn.cancelled',
+  'turn.failed',
+])
+const LEGACY_PRESENTATION_FIELDS = Object.freeze({
+  'turn.interrupted': ['message', 'hint', 'reason'],
+  'turn.blocked': ['message', 'hint', 'reason'],
+  'turn.cancelled': ['message', 'hint', 'reason'],
+  'turn.failed': ['message', 'hint', 'reason'],
+  'turn.paused': ['reason'],
+})
+const STABLE_EVENT_CODE = /^[A-Z][A-Z0-9_]{0,127}$/u
+
+export const TurnEventSchema = PersistedTurnEventSchema.superRefine((event, context) => {
+  const payload = event.payload && typeof event.payload === 'object' ? event.payload : {}
+  if (CODE_ONLY_TERMINAL_EVENT_TYPES.has(event.type)
+    && !STABLE_EVENT_CODE.test(String(payload.code || ''))) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['payload', 'code'],
+      message: 'new terminal events require a stable code',
+    })
+  }
+  const legacyFields = LEGACY_PRESENTATION_FIELDS[event.type] || []
+  for (const field of legacyFields) {
+    if (Object.hasOwn(payload, field)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['payload', field],
+        message: `${field} is accepted only when reading persisted legacy events`,
+      })
+    }
+    if (payload.error && typeof payload.error === 'object'
+      && Object.hasOwn(payload.error, field)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['payload', 'error', field],
+        message: `${field} is accepted only when reading persisted legacy events`,
+      })
+    }
   }
 })
 
@@ -462,6 +514,11 @@ export const TurnEventTransportEnvelopeSchema = z.object({
 
 export function parseTurnEvent(value) {
   return TurnEventSchema.parse(value)
+}
+
+/** Read-only compatibility parser for events persisted by pre-code-only runtimes. */
+export function parsePersistedTurnEvent(value) {
+  return PersistedTurnEventSchema.parse(value)
 }
 
 export function parseTurnEventTransportEnvelope(value) {
@@ -492,7 +549,7 @@ export function parseTurnEventTransportPayload(value) {
     )
   return envelopeLike
     ? parseTurnEventTransportEnvelope(value).event
-    : parseTurnEvent(value)
+    : parsePersistedTurnEvent(value)
 }
 
 export function createTurnEvent({
@@ -525,41 +582,4 @@ export function canAdvanceTurnEventCursor(event, after = -1) {
     && event.sequence > expectedSequence
     && Number.isInteger(event.compactedThrough)
     && event.sequence <= event.compactedThrough
-}
-
-export const TURN_ACTIVITY_KINDS = Object.freeze(['tool_call_ready', 'tool_output_delta'])
-
-export const TurnActivitySchema = z.object({
-  sessionId: z.string().min(1).max(160),
-  turnId: z.string().min(1).max(160),
-  kind: z.enum(TURN_ACTIVITY_KINDS),
-  toolName: z.string().min(1).max(160),
-  modelName: z.string().min(1).max(320).nullable().optional(),
-  toolCallId: z.string().min(1).max(160).nullable().optional(),
-  stream: z.enum(['stdout', 'stderr']).nullable().optional(),
-  chunk: z.string().max(64 * 1024).nullable().optional(),
-  createdAt: z.number().int().nonnegative(),
-}).strict()
-
-export function parseTurnActivity(value) {
-  return TurnActivitySchema.parse(value)
-}
-
-export function createTurnActivity({
-  sessionId,
-  turnId,
-  kind,
-  toolName,
-  modelName = null,
-  toolCallId = null,
-  stream = null,
-  chunk = null,
-  createdAt = Date.now(),
-}) {
-  const activity = { sessionId, turnId, kind, toolName, createdAt }
-  if (modelName != null) activity.modelName = modelName
-  if (toolCallId != null) activity.toolCallId = toolCallId
-  if (stream != null) activity.stream = stream
-  if (chunk != null) activity.chunk = chunk
-  return parseTurnActivity(activity)
 }

@@ -169,7 +169,7 @@ function mockWindowsTreeKillManager({
 function workerRequestRows(child) {
   return child.stdin.writes.map((line) => {
     const fields = line.trimEnd().split('\t')
-    if (fields[0] === 'BIND') {
+    if (fields[0] === 'BIND' || fields[0] === 'BIND_SEALED') {
       return {
         operation: fields[0],
         requestId: fields[1],
@@ -221,7 +221,7 @@ async function waitForProcessExit(pid, timeoutMs = 5_000) {
 
 async function completeBoundRequest(child, pending, { bind = true, kill = true } = {}) {
   const bindRow = workerRequestRows(child).at(-1)
-  assert.equal(bindRow.operation, 'BIND')
+  assert.match(bindRow.operation, /^BIND(?:_SEALED)?$/u)
   respond(child, bindRow, bind)
   if (!bind) return pending
   await nextTurn()
@@ -248,7 +248,15 @@ test('Windows tree-kill worker: prewarm 与连续 BIND/KILL 复用同一 worker'
   const second = requestWithKnownIdentity(manager, 202)
   const secondBind = workerRequestRows(children[0])[2]
   assert.equal(await completeBoundRequest(children[0], second), true)
-  assert.deepEqual([firstBind.pid, secondBind.pid], [101, 202])
+  assert.equal(firstBind.operation, 'BIND')
+  assert.equal(secondBind.operation, 'BIND')
+
+  const sealed = requestWithKnownIdentity(manager, 303, { sealedJob: true })
+  const sealedBind = workerRequestRows(children[0])[4]
+  assert.equal(sealedBind.operation, 'BIND_SEALED')
+  assert.equal(await completeBoundRequest(children[0], sealed), true)
+
+  assert.deepEqual([firstBind.pid, secondBind.pid, sealedBind.pid], [101, 202, 303])
   assert.notEqual(firstBind.leaseId, secondBind.leaseId)
   assert.equal(children.length, 1)
   assert.equal(manager.snapshot().spawnCount, 1)
@@ -448,16 +456,41 @@ test('Windows tree-kill worker: 大源码通过 stdin 传输且启动命令远�
   assert.ok(payload.length > commandLineChars, 'full worker source must not be embedded in argv')
 })
 
-test('Windows tree-kill worker: cleanup deadline is monotonic and keeps a bounded final proof', () => {
+test('Windows tree-kill worker: cleanup retries transient native races within a bounded proof', () => {
   const source = windowsTreeKillWorkerScript()
+  const expandStart = source.indexOf('private static void ExpandDescendants(')
+  const expandEnd = source.indexOf('private static void Terminate(', expandStart)
+  assert.ok(expandStart >= 0 && expandEnd > expandStart, 'ExpandDescendants source must be present')
+  const expandSource = source.slice(expandStart, expandEnd)
+  const killStart = source.indexOf('private static bool KillBoundTree(')
+  const killEnd = source.indexOf('private static bool Kill(', killStart)
+  assert.ok(killStart >= 0 && killEnd > killStart, 'KillBoundTree source must be present')
+  const killSource = source.slice(killStart, killEnd)
+  const captureIndex = killSource.indexOf('ExpandDescendants(tracked, Snapshot());')
+  const retryIndex = killSource.indexOf('try {', captureIndex)
+  const retryEnd = killSource.indexOf('} catch (Win32Exception)', retryIndex)
+
   assert.match(source, /Stopwatch\.StartNew\(\)/u)
+  assert.match(source, /if \(!lease\.JobContainsTree\) ExpandDescendants\(tracked, Snapshot\(\)\);/u)
+  assert.match(source, /catch \(Win32Exception\) \{\s*if \(lease\.JobContainsTree\) return false;\s*throw;/u)
+  assert.match(source, /BIND_SEALED/u)
+  assert.ok(captureIndex >= 0 && retryIndex > captureIndex && retryEnd > retryIndex)
+  assert.doesNotMatch(killSource.slice(retryIndex, retryEnd), /ExpandDescendants|IsBoundTreeEmpty/u)
+  assert.match(source, /stableEmptySnapshots >= 2/u)
+  assert.match(
+    expandSource,
+    /try \{[\s\S]*?tracked\.Add\(processId, candidate\);[\s\S]*?candidate = null;[\s\S]*?finally \{[\s\S]*?candidate\.Dispose\(\);/u,
+  )
   assert.match(source, /return ConfirmBoundTreeEmpty\(lease, tracked\);/u)
   assert.doesNotMatch(source, /DateTime\.UtcNow/u)
 })
 
 test('Windows tree-kill worker: repeated KILL reuses worker threads without leaking handles', {
   skip: process.platform !== 'win32',
-  timeout: 30_000,
+  // The worker may spend up to 30s in its own readiness gate before this
+  // 48-process steady-state stress loop begins. Keep the outer test budget
+  // independent from that inner deadline so ordinary CI load is not a failure.
+  timeout: 90_000,
 }, async (t) => {
   const manager = _testing.createWindowsTreeKillWorkerManager()
   t.after(() => manager.shutdown())
@@ -641,6 +674,80 @@ test('terminateProcessTree late-bind removes a root, child, and grandchild befor
     }
     if (!removed) fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
     _testing.resetWindowsTreeKillWorker()
+  }
+})
+
+test('terminateProcessTree waits for POSIX process-group exit and escalates ignored SIGTERM', {
+  skip: process.platform === 'win32',
+  timeout: 10_000,
+}, async () => {
+  const target = spawn(node, ['-e', [
+    "process.on('SIGTERM', () => {})",
+    "process.stdout.write('READY\\n')",
+    'setInterval(() => {}, 1000)',
+  ].join(';')], {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  })
+  const closed = new Promise((resolve) => target.once('close', resolve))
+  try {
+    await new Promise((resolve, reject) => {
+      target.stdout.once('data', resolve)
+      target.once('error', reject)
+    })
+    assert.equal(await terminateProcessTree({ pid: target.pid, child: target }), true)
+    await closed
+    assert.equal(processExists(target.pid), false)
+  } finally {
+    if (processExists(target.pid)) {
+      try { process.kill(-target.pid, 'SIGKILL') } catch { /* already exited */ }
+      try { target.kill('SIGKILL') } catch { /* already exited */ }
+      await closed
+    }
+  }
+})
+
+test('runProcessWithGroup waits for a POSIX descendant that outlives the SIGTERM root', {
+  skip: process.platform === 'win32',
+  timeout: 10_000,
+}, async () => {
+  const descendantScript = [
+    "process.on('SIGTERM', () => {})",
+    "process.stdout.write('descendant=' + process.pid + '\\n')",
+    'setInterval(() => {}, 1000)',
+  ].join(';')
+  const rootScript = [
+    "const { spawn } = require('node:child_process')",
+    `spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { stdio: ['ignore', 'inherit', 'ignore'] })`,
+    'setInterval(() => {}, 1000)',
+  ].join(';')
+  let rootPid = 0
+  let descendantPid = 0
+
+  try {
+    const result = await runProcessWithGroup({
+      shellPath: node,
+      shellArgs: nodeArgs(rootScript),
+      cwd: process.cwd(),
+      env: process.env,
+      timeout: 1_500,
+      onSpawn: (child) => { rootPid = child.pid },
+    })
+    const match = /descendant=(\d+)/u.exec(result.stdout)
+    assert.ok(match, 'the descendant must be ready before the timeout')
+    descendantPid = Number(match[1])
+    assert.equal(result.timedOut, true)
+    assert.equal(result.processTreeCleanupFailed, false)
+    assert.equal(processExists(descendantPid), false)
+    rootPid = 0
+    descendantPid = 0
+  } finally {
+    if (rootPid > 0) {
+      try { process.kill(-rootPid, 'SIGKILL') } catch { /* already exited */ }
+    }
+    if (descendantPid > 0) {
+      try { process.kill(descendantPid, 'SIGKILL') } catch { /* already exited */ }
+    }
   }
 })
 
@@ -1117,12 +1224,14 @@ test('runProcessWithGroup: Windows BIND 确认前不得执行用户命令', {
   timeout: 10_000,
 }, async (t) => {
   let resolveBind
+  let bindOptions = null
   const bindPending = new Promise((resolve) => { resolveBind = resolve })
   let notifyBind
   const bindCalled = new Promise((resolve) => { notifyBind = resolve })
   const manager = {
     ready: () => Promise.resolve(true),
-    bind: () => {
+    bind: (_pid, options) => {
+      bindOptions = options
       notifyBind()
       return bindPending
     },
@@ -1148,6 +1257,7 @@ test('runProcessWithGroup: Windows BIND 确认前不得执行用户命令', {
   })
 
   await bindCalled
+  assert.equal(bindOptions?.sealedJob, true)
   await new Promise((resolve) => setTimeout(resolve, 100))
   assert.equal(spawned, false, 'onSpawn must describe the real target, not the inert gate')
   assert.equal(fs.existsSync(markerPath), false, 'target must remain gated while BIND is pending')

@@ -18,7 +18,9 @@ Gugo 的进程内 runtime plugin 通过 `server/plugins/runtimePluginRegistry.js
 
 managed 来源已经具备离线本地包管理闭环。`localPluginPackageStore` 对源目录生成不可变快照和 SHA-256 整包摘要，以 store revision 做 compare-and-swap，并在跨进程独占锁内完成 staging 校验、持久事务日志、备份和 rename 提交；安装、显式替换与卸载共用这条事务路径。安装回执记录 plugin/version、摘要、文件数、总字节数和安装时间；发现、列举和变更前都会在同一锁内恢复遗留事务，回滚未提交操作、保留已提交结果并清理日志，同时重新核对回执与磁盘内容，损坏时 fail closed。包卸载要求 runtime 已停用且处于 `inactive`；此前的 runtime 卸载会先撤销贡献可见性并等待已接受的 callback 排空。包服务再以共享生命周期屏障覆盖安全门禁、磁盘事务和 discovery refresh，阻止并发重新启用；活跃依赖、Release/pin/checkpoint 引用或无法确认的状态都会阻止删除。
 
-因此 managed 候选现在是 `mutable=false`、`verifiedPackage=true` 并携带 `installReceipt`；这里的 verified 只表示“与宿主本地安装回执和内容摘要一致”，不表示 publisher 身份可信。内置项的 `mutable=false` 也只表示宿主优先级与分发意图，仍是 `verifiedPackage=false`、`installReceipt=null`。当前依然没有 Marketplace、联网下载/远程更新通道、publisher 签名与信任链，也没有对外发布的公共兼容规范；更不存在平台计费、余额、套餐或订阅。不能把本地回执或可信目录描述成生态级来源认证。
+因此 managed 候选现在是 `mutable=false`、`verifiedPackage=true` 并携带 `installReceipt`；这里的 `verifiedPackage` 只表示磁盘内容与安装回执一致。若源目录采用 `<root>/marketplace.json + <root>/plugins/<id>` 的离线布局，安装前还会按 [Plugin Compatibility Contract v1](./PLUGIN_COMPATIBILITY_V1.md) 核对 local-only 来源、整包摘要、publisher key fingerprint 和 canonical metadata 的 Ed25519 签名，并将可重验的证据写入 v2 回执；普通开发目录继续使用 `publisherVerified=false` 的 v1 回执。相邻 Marketplace 一旦存在便是权威元数据，校验失败不会降级为 unsigned。
+
+该 Marketplace 不联网、不下载、不接受 URL，也拒绝 `INSTALLED_BY_DEFAULT`；所有安装和升级仍需本地 owner 显式确认。签名证明内容由显示的 key identity 签发，并不等于外部 CA 对人读 publisher 名称的背书。内置项的 `mutable=false` 也只表示宿主优先级与分发意图，仍是 `verifiedPackage=false`、`installReceipt=null`。磁盘 discovery candidate、公开 package receipt、Plugin Definition 和 stored Release restore 现在共用 `pluginDistributionContract.js` 的有界快照与信任身份；只有确实缺少 `distribution` 字段的旧 Release 可走 legacy 兼容，显式 `null`、来源/trust flag、receipt schema、publisher ID 或 key 改变都会 fail closed。远程发现/更新、证书吊销与透明度仍是 v1 的明确非目标，因此该离线能力不能描述成完整生态商店。
 
 持久化 adapter 的 checkpoint/boundary 命令还必须验证宿主签发的执行租约 proof（owner ID + 单调 fencing token）。该 proof 只在 TurnEngine 获取 lease 时捕获，不向 runtime plugin context 暴露；plugin service、event listener 或工具不能伪造它来提交 Turn 终态。
 
@@ -80,7 +82,7 @@ code: PLUGIN_CONTRIBUTION_UNDECLARED
 retryable: false
 ```
 
-### 只读 Agent Events（API 1.1）
+### 只读 Agent Events（API 1.1 / durable v2）
 
 `context.agentEvents.subscribe(eventType, listener, { contractVersion: 1 })` 消费 `shared/turnEvents.js` 的权威 `TURN_EVENT_TYPES`，用于观测已经持久化的 Turn 生命周期。它与 `context.events.on()` 完全独立：后者是 Agent Loop 内部 hook，部分事件允许受限改写请求；Agent Events 永远只读，listener 返回值被忽略，不能改变模型请求、工具调用、checkpoint 或终态。
 
@@ -88,7 +90,11 @@ retryable: false
 
 交付边界是“持久化成功之后”：内置 SQLite 从事务提交点发布，回滚不会泄露事件，幂等重写也不会重复通知；emitter 只在 adapter 返回权威 stored event 或与整个 write-behind batch 一一对应的权威回执后补发。自定义 v6 adapter 缺少可校验的逐项 batch 回执时会安全降级为不补发，而不会把请求快照冒充成已提交事实。
 
-当前契约只是 **best-effort、进程内、提交后 live observer**，不是 reliable queue、exactly-once stream 或跨重启订阅。进程内有界 event identity 去重只用于抑制 Store 与 emitter 双入口，不承诺缓存淘汰后或进程重启后不重复；跨进程写入、进程崩溃窗口和历史事件均可能不可见。v1 API 也不暴露权威 replay/cursor，因此插件不能声称可从该接口恢复状态。可靠 v2 需要独立于 retention-pruned `turn_events` 的宿主 outbox、全局单调 cursor、稳定 subscription ID、持久 ACK、retry/backoff、DLQ 及 truncation watermark。卸载或热重载会先移除订阅可见性，再排空卸载前已经接受的 callback。
+内置 SQLite 的 v113 schema 完成 **durable capture**：每个新插入的 Turn Event 都在写入 `turn_events` 的同一同步事务内写入 `agent_event_outbox`，保存不含 `userId` 的 transport envelope，并取得宿主全局单调 cursor。该 outbox 不依赖 Session/Turn 外键，因此不会随 `turn_events` retention 裁剪丢失；schema 还持久化初始 `epoch=1`、`truncatedThrough=0`，宿主 reader 会返回这组 stream metadata，并在请求 cursor 落后于水位时 fail closed。reader 条目含内部 `userId`，只供宿主编排，不能直接暴露给插件或公共 API。
+
+v114 增加 durable v2：已验证、不可变的 plugin Release 可以使用 `context.agentEvents.subscribe(eventType, listener, { contractVersion: 2, subscriptionId })`。宿主将 publisher、release、plugin、subscriptionId 和 event type 绑定为稳定订阅身份，并持久化扫描/ACK cursor、独占 lease 与单调 fencing generation。listener 失败按有界指数 backoff 重试，耗尽后以同一事务记录脱敏 DLQ 且推进 cursor；安全裁剪只使用所有 active 订阅的最小 scanned cursor，并在一个 IMMEDIATE 事务内推进 stream epoch/水位、同步订阅 epoch 和删除 outbox 前缀；任何未知状态均 fail closed。v2 是 at-least-once，listener 必须幂等，不宣称 exactly-once。
+
+v1 仍只是 **best-effort、进程内、提交后 live observer**，不会因 v2 存在而隐式升级。进程内有界 event identity 去重只用于抑制 Store 与 emitter 双入口，不承诺缓存淘汰后或进程重启后不重复；需要跨重启 replay 的插件必须显式选择 v2。卸载或热重载会先移除订阅可见性，再排空卸载前已经接受的 callback。
 
 `context.tools.register()` 的 `name/spec/exec` 与 `context.prompts.register()` 的 `id/render` 必须是定义对象自己的 data property。宿主在注册时通过 descriptor 一次捕获所需值；getter 不执行，prototype property 被拒绝，注册后的 callback/schema/id swap 不改变已安装 contribution。非法定义以 `PLUGIN_CONTRIBUTION_DEFINITION_INVALID`、`retryable=false` 在可见副作用前失败。
 

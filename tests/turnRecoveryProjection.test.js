@@ -11,6 +11,7 @@ import {
   latestVerifiedLocalFiles,
   mergeLocalFileReceipts,
   normalizeResolutionPath,
+  projectRecoveryDeadLetterError,
   recoveryAttemptAfterCheckpoint,
   replayPersistedTurnEvents,
   storedCheckpointEvent,
@@ -152,6 +153,106 @@ test('local file projections retain the latest durable lists and remove verified
     { id: 'pending', path: secondPath },
   ])
   assert.equal(normalizeResolutionPath(`${firstPath}${path.sep}`), normalizeResolutionPath(firstPath))
+})
+
+test('dead-letter projection preserves public repair evidence and nested failure precedence', () => {
+  const verifiedPath = path.resolve('tmp', 'verified.txt')
+  const retainedPath = path.resolve('tmp', 'retained.txt')
+  const recovery = { status: 'dead_letter', errorMessage: 'durable recovery failure' }
+  const error = projectRecoveryDeadLetterError({
+    recovery,
+    event: {
+      type: 'turn.blocked',
+      payload: {
+        message: 'outer failure',
+        partialText: 'safe partial answer',
+        artifactIds: ['artifact-a', '', 'artifact-a', 'artifact-b'],
+        deliveryArtifactIds: ['artifact-b', 'artifact-b'],
+        verifiedLocalFiles: [{ id: 'verified', path: verifiedPath }],
+        retainedLocalFiles: [
+          { id: 'duplicate', path: verifiedPath },
+          { id: 'retained', path: retainedPath },
+        ],
+        iterations: 3,
+        incompleteReason: 'outer_reason',
+        missingRequirements: ['outer_requirement'],
+        error: {
+          message: 'nested failure',
+          partialText: 'nested partial answer',
+          artifactIds: ['nested-artifact'],
+          deliveryArtifactIds: ['nested-delivery'],
+          verifiedLocalFiles: [{ id: 'nested-verified', path: retainedPath }],
+          retainedLocalFiles: [{ id: 'nested-retained', path: verifiedPath }],
+          iterations: 99,
+          incompleteReason: 'task_verification_repair_exhausted',
+          missingRequirements: ['repair_tests', '', 'repair_tests'],
+          taskVerification: {
+            version: 1,
+            maxFailures: 3,
+            consecutiveFailures: 3,
+            checks: [{
+              status: 'failed',
+              kind: 'test',
+              cwd: '.',
+              commandScope: 'node --test tests/example.test.js',
+            }],
+          },
+        },
+      },
+    },
+  })
+
+  assert.equal(error.code, 'TURN_RECOVERY_DEAD_LETTER')
+  assert.equal(error.status, 409)
+  assert.equal(error.message, 'durable recovery failure')
+  assert.equal(error.retryable, false)
+  assert.equal(error.manualRetryable, true)
+  assert.equal(error.incompleteReason, 'task_verification_repair_exhausted')
+  assert.deepEqual(error.missingRequirements, ['repair_tests'])
+  assert.equal(error.taskVerification.checks[0].kind, 'test')
+  assert.equal(error.partialText, 'safe partial answer')
+  assert.deepEqual(error.artifactIds, ['artifact-a', 'artifact-b'])
+  assert.deepEqual(error.deliveryArtifactIds, ['artifact-b'])
+  assert.deepEqual(error.verifiedLocalFiles, [{ id: 'verified', path: verifiedPath }])
+  assert.deepEqual(error.retainedLocalFiles, [{ id: 'retained', path: retainedPath }])
+  assert.equal(error.iterations, 3)
+  assert.equal(error.recovery, recovery)
+})
+
+test('dead-letter projection supplies a stable manual-repair fallback', () => {
+  const error = projectRecoveryDeadLetterError({ event: { type: 'turn.blocked', payload: null } })
+
+  assert.equal(error.name, 'TurnEngineError')
+  assert.equal(error.code, 'TURN_RECOVERY_DEAD_LETTER')
+  assert.equal(error.status, 409)
+  assert.equal(
+    error.message,
+    'automatic turn recovery stopped; repair the execution environment and retry explicitly',
+  )
+  assert.equal(error.retryable, false)
+  assert.equal(error.manualRetryable, true)
+  assert.equal(error.incompleteReason, 'recovery_blocked')
+  assert.deepEqual(error.missingRequirements, [
+    'execution_environment_repair',
+    'explicit_recovery_retry',
+  ])
+  assert.deepEqual(error.recovery, {
+    status: 'dead_letter',
+    retryable: false,
+    manualRetryable: true,
+    errorCode: 'TURN_RECOVERY_BLOCKED',
+    errorMessage: 'turn recovery is blocked',
+  })
+  for (const field of [
+    'partialText',
+    'artifactIds',
+    'deliveryArtifactIds',
+    'verifiedLocalFiles',
+    'retainedLocalFiles',
+    'iterations',
+  ]) {
+    assert.equal(Object.hasOwn(error, field), false, field)
+  }
 })
 
 test('checkpoint adapters preserve durable event identity and reject malformed legacy state', async () => {

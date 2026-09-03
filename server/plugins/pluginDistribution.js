@@ -1,6 +1,7 @@
 import { types as nodeTypes } from 'node:util'
 
 import { loadPlugins } from './pluginLoader.js'
+import { snapshotPluginDistribution } from './pluginDistributionContract.js'
 
 export const LOCAL_DIRECTORY_PLUGIN_SOURCE = 'local-directory-development'
 export const PLUGIN_DISTRIBUTION_SCHEMA_VERSION = 1
@@ -276,50 +277,18 @@ function freezeCandidate(candidate) {
     'installReceipt',
     'PLUGIN_DISTRIBUTION_SNAPSHOT_INVALID',
   )
-  if (typeof sourceKind !== 'string' || !sourceKind.trim()) {
-    throw distributionError(
-      'PLUGIN_DISTRIBUTION_SNAPSHOT_INVALID',
-      'plugin distribution candidate.sourceKind must be a non-empty string',
-    )
-  }
-  if (typeof mutable !== 'boolean' || typeof verifiedPackage !== 'boolean') {
-    throw distributionError(
-      'PLUGIN_DISTRIBUTION_SNAPSHOT_INVALID',
-      'plugin distribution candidate trust flags must be booleans',
-    )
-  }
-  if (
-    installReceipt !== null
-    && (
-      !installReceipt
-      || typeof installReceipt !== 'object'
-      || nodeTypes.isProxy(installReceipt)
-      || Array.isArray(installReceipt)
-    )
-  ) {
-    throw distributionError(
-      'PLUGIN_DISTRIBUTION_SNAPSHOT_INVALID',
-      'plugin distribution candidate.installReceipt must be null or an object',
-    )
-  }
-  if (verifiedPackage && (mutable || installReceipt === null)) {
-    throw distributionError(
-      'PLUGIN_DISTRIBUTION_SNAPSHOT_INVALID',
-      'verified plugin packages must be immutable and include an install receipt',
-    )
-  }
-  return Object.freeze({
-    plugin: freezePlugin(plugin),
-    sourceKind: sourceKind.trim(),
+  const distribution = snapshotPluginDistribution({
+    sourceKind,
     mutable,
     verifiedPackage,
-    installReceipt: installReceipt === null
-      ? null
-      : snapshotPlainData(
-        installReceipt,
-        'candidate.installReceipt',
-        { seen: new WeakSet(), nodes: 0 },
-      ),
+    installReceipt,
+  }, {
+    code: 'PLUGIN_DISTRIBUTION_SNAPSHOT_INVALID',
+    label: 'plugin distribution candidate',
+  })
+  return Object.freeze({
+    plugin: freezePlugin(plugin),
+    ...distribution,
   })
 }
 

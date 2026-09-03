@@ -56,7 +56,7 @@ function normalizeReplacementSteps(job, steps, createStepId) {
   return { replacementSteps }
 }
 
-function appendRefreshedProposal({ jobId, job, authorization, message, emit }) {
+function appendRefreshedProposal({ jobId, job, authorization, emit }) {
   const diagnostics = buildJobOutcomeDiagnostics(job, {
     reason: authorization.reason || 'plan_approval_required',
     nextAction: 'approve_plan',
@@ -65,7 +65,7 @@ function appendRefreshedProposal({ jobId, job, authorization, message, emit }) {
   const event = appendJobEvent({
     jobId,
     type: 'plan_proposed',
-    message,
+    code: 'JOB_PLAN_REVIEW_REFRESHED',
     payload: {
       ...buildJobPlanProposalPayload(job, {
         reason: authorization.reason,
@@ -106,7 +106,6 @@ export function approveRuntimeJobPlan({
       jobId,
       job,
       authorization,
-      message: 'Plan changed or used an outdated approval contract; review the refreshed plan',
       emit,
     })
     return {
@@ -150,7 +149,6 @@ export function approveRuntimeJobPlan({
         jobId,
         job: latestJob,
         authorization,
-        message: 'Plan changed while approval was being committed; review the refreshed plan',
         emit,
       })
       latestJob = getJob(jobId, { userId })

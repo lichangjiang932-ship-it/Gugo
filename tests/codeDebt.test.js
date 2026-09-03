@@ -3,11 +3,62 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
-const BACKEND_IMPLEMENTATION_LINE_LIMIT = 600
-const BACKEND_LARGE_FILE_DEBT_ID = 'DEBT-SIZE-001'
+const RUNTIME_IMPLEMENTATION_LINE_LIMIT = 600
+const RUNTIME_LARGE_FILE_DEBT_ID = 'DEBT-SIZE-001'
+const TYPE_COVERAGE_DEBT_ID = 'DEBT-TYPE-001'
+const GOVERNED_IMPLEMENTATION_ROOTS = Object.freeze(['bin', 'desktop', 'server', 'shared'])
+const GOVERNED_IMPLEMENTATION_PATH_PATTERN = /^(?:bin|desktop|server|shared)\/.+\.(?:[cm]?[jt]s|[jt]sx)$/
+const FRONTEND_IMPLEMENTATION_LINE_LIMIT = 600
+const TRANSLATION_MODULE_LINE_LIMIT = 600
 const DEBT_MARKER_CEILING = 168
 const LEGACY_EMBER_CEILING = 106
 const TINY_TEXT_CEILING = 132
+const UI_HEX_PATTERN = /#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{4}|[0-9a-f]{3})\b/gi
+
+const DOCUMENT_RENDERING_COLOR_FILES = new Set([
+  'src/lib/artifactPreview/htmlDeckEnhancer.js',
+  'src/lib/artifactPreview/htmlDocuments.js',
+  'src/lib/artifactPreview/visualDocuments.js',
+  'src/lib/htmlSlidesToPptx/htmlDeckConversion.js',
+  'src/pages/ChatSplit/preview/reactSandboxDocument.js',
+])
+
+const UI_HEX_ALLOWLIST = Object.freeze([
+  {
+    id: 'third-party-brand-svg',
+    accepts: ({ file, prefix }) => file === 'src/components/ConnectorBrandIcon.jsx'
+      && /(?:fill|stroke|stopColor)=["']$/.test(prefix),
+  },
+  {
+    id: 'third-party-brand-metadata',
+    accepts: ({ file, prefix }) => (
+      file === 'src/lib/accessCatalog.js'
+      && /\bnative\(\s*['"][^'"]+['"]\s*,\s*['"][^'"]+['"]\s*,\s*['"]$/.test(prefix)
+    ) || (
+      file === 'src/lib/mcpPresets.js'
+      && /\bbrandColor:\s*['"]$/.test(prefix)
+    ),
+  },
+  {
+    id: 'file-type-identity',
+    accepts: ({ file, prefix }) => file === 'src/components/FileExplorer.jsx'
+      && (/["']\.[^"']+["']:\s*["']$/.test(prefix) || /return colors\[ext\]\s*\|\|\s*["']$/.test(prefix)),
+  },
+  {
+    id: 'artifact-document-rendering',
+    accepts: ({ file }) => DOCUMENT_RENDERING_COLOR_FILES.has(file)
+      || file.startsWith('src/lib/presentationExport/'),
+  },
+  {
+    id: 'design-token-source',
+    accepts: ({ file, prefix }) => file === 'src/lib/themeAccent.js'
+      && /const DEFAULT_HEX\s*=\s*['"]$/.test(prefix),
+  },
+  {
+    id: 'non-ui-skill-prompt-copy',
+    accepts: ({ file }) => file === 'src/data/skillCatalog.js',
+  },
+])
 
 function lineCount(file) {
   const source = readFileSync(file, 'utf8')
@@ -22,10 +73,10 @@ function walk(dir) {
   })
 }
 
-function walkBackendSources(dir) {
+function walkImplementationSources(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) return walkBackendSources(full)
+    if (entry.isDirectory()) return walkImplementationSources(full)
     return /\.(?:[cm]?[jt]s|[jt]sx)$/.test(entry.name) ? [full] : []
   })
 }
@@ -46,7 +97,30 @@ function countMatches(files, pattern) {
   return files.reduce((total, file) => total + (readFileSync(file, 'utf8').match(pattern) || []).length, 0)
 }
 
-function classifyFrozenBackendDebt({ measurements, frozenCeilings, lineLimit }) {
+function inspectUiHexGovernance(sources) {
+  const violations = []
+  const usedAllowlistIds = new Set()
+  for (const { file, source } of sources) {
+    source.split(/\r?\n/).forEach((sourceLine, lineIndex) => {
+      for (const match of sourceLine.matchAll(UI_HEX_PATTERN)) {
+        const occurrence = {
+          file,
+          sourceLine,
+          prefix: sourceLine.slice(0, match.index),
+          value: match[0].toLowerCase(),
+          line: lineIndex + 1,
+          column: match.index + 1,
+        }
+        const allowance = UI_HEX_ALLOWLIST.find((entry) => entry.accepts(occurrence))
+        if (allowance) usedAllowlistIds.add(allowance.id)
+        else violations.push(`${file}:${occurrence.line}:${occurrence.column} ${occurrence.value}`)
+      }
+    })
+  }
+  return { violations, usedAllowlistIds }
+}
+
+function classifyFrozenRuntimeDebt({ measurements, frozenCeilings, lineLimit }) {
   const files = [...measurements.keys()].sort()
   const oversizedFiles = files.filter((file) => measurements.get(file) > lineLimit)
   const frozenFiles = Object.keys(frozenCeilings)
@@ -82,15 +156,15 @@ function findDuplicateValues(values, normalize = (value) => value) {
   return [...duplicates].sort()
 }
 
-function parseBackendSizeDebtInventory(debtSection) {
+function parseRuntimeSizeDebtInventory(debtSection) {
   const blocks = [...debtSection.matchAll(
     /<!-- debt-size-inventory:start -->\s*```json\s*([\s\S]*?)\s*```\s*<!-- debt-size-inventory:end -->/g,
   )]
-  assert.equal(blocks.length, 1, `${BACKEND_LARGE_FILE_DEBT_ID} must contain exactly one size inventory`)
+  assert.equal(blocks.length, 1, `${RUNTIME_LARGE_FILE_DEBT_ID} must contain exactly one size inventory`)
   return JSON.parse(blocks[0][1])
 }
 
-function inspectBackendSizeDebtInventory(inventory, lineLimit) {
+function inspectRuntimeSizeDebtInventory(inventory, lineLimit) {
   const groups = Array.isArray(inventory?.groups) ? inventory.groups : []
   const files = Array.isArray(inventory?.files) ? inventory.files : []
   const groupIds = groups.map((group) => group?.id)
@@ -111,7 +185,7 @@ function inspectBackendSizeDebtInventory(inventory, lineLimit) {
       .map((group) => group?.id ?? null),
     invalidFiles: files
       .filter((file) => (
-        !/^server\/.+\.(?:[cm]?[jt]s|[jt]sx)$/.test(file?.path ?? '')
+        !GOVERNED_IMPLEMENTATION_PATH_PATTERN.test(file?.path ?? '')
         || !Number.isSafeInteger(file?.ceiling)
         || file.ceiling <= lineLimit
         || typeof file?.group !== 'string'
@@ -126,44 +200,54 @@ function inspectBackendSizeDebtInventory(inventory, lineLimit) {
   }
 }
 
-test('new oversized backend implementation files fail the frozen debt gate', () => {
+test('runtime implementation size policy rejects every ungoverned oversized file', () => {
   const debtSource = readFileSync('docs/DEBT.md', 'utf8')
   const registeredDebtIds = new Set([...debtSource.matchAll(/^## (DEBT-[A-Z]+-\d{3})\b/gm)].map((match) => match[1]))
-  const debtSectionStart = debtSource.indexOf(`## ${BACKEND_LARGE_FILE_DEBT_ID}`)
-  assert.notEqual(debtSectionStart, -1, `${BACKEND_LARGE_FILE_DEBT_ID} must remain in docs/DEBT.md`)
+  const debtSectionStart = debtSource.indexOf(`## ${RUNTIME_LARGE_FILE_DEBT_ID}`)
+  assert.notEqual(debtSectionStart, -1, `${RUNTIME_LARGE_FILE_DEBT_ID} must remain in docs/DEBT.md`)
   const debtSectionEnd = debtSource.indexOf('\n## ', debtSectionStart + 1)
   const debtSection = debtSource.slice(debtSectionStart, debtSectionEnd >= 0 ? debtSectionEnd : undefined)
-  const inventory = parseBackendSizeDebtInventory(debtSection)
-  const inventoryFindings = inspectBackendSizeDebtInventory(
+  const inventory = parseRuntimeSizeDebtInventory(debtSection)
+  const inventoryFindings = inspectRuntimeSizeDebtInventory(
     inventory,
-    BACKEND_IMPLEMENTATION_LINE_LIMIT,
+    RUNTIME_IMPLEMENTATION_LINE_LIMIT,
   )
   const frozenCeilings = Object.fromEntries(
     (Array.isArray(inventory.files) ? inventory.files : []).map((entry) => [entry.path, entry.ceiling]),
   )
-  const files = walkBackendSources('server').map(repositoryPath).sort()
+  const hasFrozenExceptions = Array.isArray(inventory.files) && inventory.files.length > 0
+  const files = GOVERNED_IMPLEMENTATION_ROOTS
+    .flatMap((root) => walkImplementationSources(root))
+    .map(repositoryPath)
+    .sort()
   const measurements = new Map(files.map((file) => [file, lineCount(file)]))
-  const findings = classifyFrozenBackendDebt({
+  const findings = classifyFrozenRuntimeDebt({
     measurements,
     frozenCeilings,
-    lineLimit: BACKEND_IMPLEMENTATION_LINE_LIMIT,
+    lineLimit: RUNTIME_IMPLEMENTATION_LINE_LIMIT,
   })
 
   assert.equal(
-    registeredDebtIds.has(BACKEND_LARGE_FILE_DEBT_ID),
+    registeredDebtIds.has(RUNTIME_LARGE_FILE_DEBT_ID),
     true,
-    `${BACKEND_LARGE_FILE_DEBT_ID} must remain documented while frozen size exceptions exist`,
+    `${RUNTIME_LARGE_FILE_DEBT_ID} must remain documented as the executable runtime size policy`,
   )
-  assert.match(debtSection, /\*\*Status:\*\* Open\b/, 'Frozen size exceptions require an open debt record')
-  assert.equal(inventory.schemaVersion, 1, 'Use the reviewed backend size inventory schema')
-  assert.equal(inventory.debtId, BACKEND_LARGE_FILE_DEBT_ID, 'Inventory must belong to its enclosing debt record')
+  assert.match(
+    debtSection,
+    hasFrozenExceptions ? /\*\*Status:\*\* Open\b/ : /\*\*Status:\*\* Closed\b/,
+    hasFrozenExceptions
+      ? 'Frozen size exceptions require an open debt record'
+      : 'A fully repaid size inventory requires a closed debt record',
+  )
+  assert.equal(inventory.schemaVersion, 1, 'Use the reviewed runtime size inventory schema')
+  assert.equal(inventory.debtId, RUNTIME_LARGE_FILE_DEBT_ID, 'Inventory must belong to its enclosing debt record')
   assert.equal(
     inventory.lineLimit,
-    BACKEND_IMPLEMENTATION_LINE_LIMIT,
-    'Inventory and executable backend size policy must use the same threshold',
+    RUNTIME_IMPLEMENTATION_LINE_LIMIT,
+    'Inventory and executable runtime size policy must use the same threshold',
   )
-  assert.ok(Array.isArray(inventory.groups) && inventory.groups.length > 0, 'Inventory requires governance groups')
-  assert.ok(Array.isArray(inventory.files) && inventory.files.length > 0, 'Inventory requires frozen file records')
+  assert.ok(Array.isArray(inventory.groups), 'Inventory governance groups must be an array')
+  assert.ok(Array.isArray(inventory.files), 'Inventory frozen file records must be an array')
   assert.deepEqual(inventoryFindings.duplicateGroupIds, [], 'Governance group identifiers must be unique')
   assert.deepEqual(inventoryFindings.duplicateFiles, [], 'Frozen file paths must be unique, including case aliases')
   assert.deepEqual(
@@ -174,7 +258,7 @@ test('new oversized backend implementation files fail the frozen debt gate', () 
   assert.deepEqual(
     inventoryFindings.invalidFiles,
     [],
-    'Frozen file records require a canonical backend path, exact ceiling, and governance group',
+    'Frozen file records require a canonical governed implementation path, exact ceiling, and governance group',
   )
   assert.deepEqual(inventoryFindings.unknownGroupFiles, [], 'Every frozen file must resolve to documented governance')
   assert.deepEqual(inventoryFindings.unusedGroupIds, [], 'Remove governance groups that no longer own frozen files')
@@ -183,21 +267,50 @@ test('new oversized backend implementation files fail the frozen debt gate', () 
   assert.deepEqual(
     findings.frozenFiles,
     [...findings.frozenFiles].sort(),
-    'Keep the frozen backend debt inventory deterministic',
+    'Keep the frozen runtime debt inventory deterministic',
   )
   assert.deepEqual(findings.invalidCeilings, [], 'Frozen ceilings must be exact line counts above the 600-line limit')
-  assert.deepEqual(findings.unregistered, [], 'Split every new backend implementation file that exceeds 600 lines')
-  assert.deepEqual(findings.grew, [], 'Split a cohesive module instead of increasing frozen backend size debt')
+  assert.deepEqual(findings.unregistered, [], 'Split every new runtime implementation file that exceeds 600 lines')
+  assert.deepEqual(findings.grew, [], 'Split a cohesive module instead of increasing frozen runtime size debt')
   assert.deepEqual(
     findings.needsRatchet,
     [],
     'Lower the frozen ceiling in the same change when an oversized file shrinks',
   )
-  assert.deepEqual(findings.stale, [], 'Remove resolved or deleted files from the frozen backend debt inventory')
+  assert.deepEqual(findings.stale, [], 'Remove resolved or deleted files from the frozen runtime debt inventory')
 })
 
-test('backend size debt classifier reports every gate-evasion category', () => {
-  const findings = classifyFrozenBackendDebt({
+test('frontend implementation files remain below the size limit', () => {
+  const oversized = walkImplementationSources('src')
+    .map(repositoryPath)
+    .sort()
+    .map((file) => ({ file, lines: lineCount(file) }))
+    .filter(({ lines }) => lines > FRONTEND_IMPLEMENTATION_LINE_LIMIT)
+
+  assert.deepEqual(
+    oversized,
+    [],
+    `Split frontend implementation files above ${FRONTEND_IMPLEMENTATION_LINE_LIMIT} lines`,
+  )
+})
+
+test('translation entry point and domain modules remain below the size limit', () => {
+  const domainFiles = walk('src/i18n/domains').map(repositoryPath).sort()
+  const files = ['src/i18n/translations.js', ...domainFiles]
+  const oversized = files
+    .map((file) => ({ file, lines: lineCount(file) }))
+    .filter(({ lines }) => lines > TRANSLATION_MODULE_LINE_LIMIT)
+
+  assert.ok(domainFiles.length > 1, 'Keep translation data split into cohesive domain modules')
+  assert.deepEqual(
+    oversized,
+    [],
+    `Split translation modules above ${TRANSLATION_MODULE_LINE_LIMIT} lines by domain`,
+  )
+})
+
+test('runtime size debt classifier reports every gate-evasion category', () => {
+  const findings = classifyFrozenRuntimeDebt({
     measurements: new Map([
       ['server/newRuntime.ts', 601],
       ['server/grew.js', 702],
@@ -226,8 +339,8 @@ test('backend size debt classifier reports every gate-evasion category', () => {
   assert.deepEqual(findings.invalidCeilings, ['server/invalid.js'])
 })
 
-test('backend size inventory reports duplicate and unactionable governance records', () => {
-  const findings = inspectBackendSizeDebtInventory({
+test('runtime size inventory reports duplicate and unactionable governance records', () => {
+  const findings = inspectRuntimeSizeDebtInventory({
     groups: [
       {
         id: 'duplicate-group',
@@ -268,6 +381,107 @@ test('backend size inventory reports duplicate and unactionable governance recor
   assert.equal(findings.filesAreSorted, false)
 })
 
+test('runtime implementation size governance covers every host implementation root', () => {
+  assert.deepEqual(GOVERNED_IMPLEMENTATION_ROOTS, ['bin', 'desktop', 'server', 'shared'])
+
+  const group = {
+    id: 'covered-runtime',
+    reason: 'This fixture proves every governed runtime root accepts canonical source paths.',
+    exitCriteria: 'Keep every runtime implementation root covered by the executable size gate.',
+  }
+  const governedFiles = GOVERNED_IMPLEMENTATION_ROOTS.map((root) => ({
+    path: `${root}/nested/runtime.ts`,
+    ceiling: 601,
+    group: group.id,
+  }))
+  const governedFindings = inspectRuntimeSizeDebtInventory({
+    groups: [group],
+    files: governedFiles,
+  }, RUNTIME_IMPLEMENTATION_LINE_LIMIT)
+  const outOfScopeFindings = inspectRuntimeSizeDebtInventory({
+    groups: [group],
+    files: [
+      { path: 'src/runtime.ts', ceiling: 601, group: group.id },
+      { path: 'tests/runtime.test.js', ceiling: 601, group: group.id },
+    ],
+  }, RUNTIME_IMPLEMENTATION_LINE_LIMIT)
+
+  assert.deepEqual(governedFindings.invalidFiles, [])
+  assert.deepEqual(
+    outOfScopeFindings.invalidFiles,
+    ['src/runtime.ts', 'tests/runtime.test.js'],
+  )
+})
+
+test('kernel transition debt rows reference open canonical debt records', () => {
+  const debtSource = readFileSync('docs/DEBT.md', 'utf8')
+  const debtMatches = [...debtSource.matchAll(/^## (DEBT-[A-Z]+-\d{3})\b/gm)]
+  const debtStatuses = new Map(debtMatches.map((match, index) => {
+    const sectionEnd = debtMatches[index + 1]?.index ?? debtSource.indexOf('\n## Maintenance rules')
+    const section = debtSource.slice(match.index, sectionEnd >= 0 ? sectionEnd : undefined)
+    const status = section.match(/^\*\*Status:\*\* (Open|Closed)\b/m)?.[1] ?? null
+    return [match[1], status]
+  }))
+  const kernelSource = readFileSync('docs/KERNEL_BOUNDARY.md', 'utf8')
+  const sectionStart = kernelSource.indexOf('## Current transition debt')
+  const sectionEnd = kernelSource.indexOf('\n## ', sectionStart + 1)
+  assert.notEqual(sectionStart, -1, 'Kernel boundary must retain an explicit transition-debt section')
+  const section = kernelSource.slice(sectionStart, sectionEnd >= 0 ? sectionEnd : undefined)
+  const tableRows = section
+    .split(/\r?\n/)
+    .filter((line) => /^\|.+\|$/.test(line.trim()))
+    .map((line) => line.split('|').slice(1, -1).map((cell) => cell.trim()))
+  const [header, separator, ...rows] = tableRows
+
+  assert.deepEqual(header, ['File', 'Current role', 'Required direction', 'Canonical debt'])
+  assert.ok(separator.every((cell) => /^:?-{3,}:?$/.test(cell)), 'Transition debt table needs a valid separator')
+  assert.ok(rows.length > 0, 'Open kernel transition debt must retain at least one governed surface')
+  for (const row of rows) {
+    assert.equal(row.length, header.length, `Malformed kernel transition row: ${row.join(' | ')}`)
+    const debtIds = [...row[3].matchAll(/\bDEBT-[A-Z]+-\d{3}\b/g)].map((match) => match[0])
+    assert.equal(debtIds.length, 1, `Transition row must reference exactly one canonical debt: ${row[0]}`)
+    assert.equal(
+      debtStatuses.get(debtIds[0]),
+      'Open',
+      `Kernel transition debt ${row[0]} must reference an open canonical debt record`,
+    )
+  }
+})
+
+test('type coverage debt cannot close before static type checking is required in CI', () => {
+  const debtSource = readFileSync('docs/DEBT.md', 'utf8')
+  const sectionStart = debtSource.indexOf(`## ${TYPE_COVERAGE_DEBT_ID}`)
+  const sectionEnd = debtSource.indexOf('\n## ', sectionStart + 1)
+  assert.notEqual(sectionStart, -1, `${TYPE_COVERAGE_DEBT_ID} must remain in the debt register`)
+  const section = debtSource.slice(sectionStart, sectionEnd >= 0 ? sectionEnd : undefined)
+  const status = section.match(/^\*\*Status:\*\* (Open|Closed)\b/m)?.[1] ?? null
+
+  const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
+  const typecheckScript = packageJson.scripts?.typecheck
+  const hasTypecheckScript = typeof typecheckScript === 'string' && typecheckScript.trim().length > 0
+
+  const ciSource = readFileSync('.github/workflows/ci.yml', 'utf8')
+  const typecheckRunIndex = ciSource.search(/^\s+run:\s+npm run typecheck\s*$/m)
+  const stepStart = typecheckRunIndex < 0
+    ? -1
+    : ciSource.lastIndexOf('\n      - ', typecheckRunIndex)
+  const stepEnd = stepStart < 0 ? -1 : ciSource.indexOf('\n      - ', typecheckRunIndex)
+  const stepSource = stepStart < 0
+    ? ''
+    : ciSource.slice(stepStart, stepEnd >= 0 ? stepEnd : undefined)
+  const hasRequiredCiStep = typecheckRunIndex >= 0
+    && !/^\s+if:/m.test(stepSource)
+    && !/^\s+continue-on-error:\s*true\s*$/m.test(stepSource)
+
+  if (!hasTypecheckScript || !hasRequiredCiStep) {
+    assert.equal(
+      status,
+      'Open',
+      `${TYPE_COVERAGE_DEBT_ID} cannot close without a typecheck script and unconditional CI step`,
+    )
+  }
+})
+
 test('source debt markers cannot increase beyond the cleanup baseline', () => {
   const markers = [new RegExp(['TO', 'DO'].join(''), 'g'), new RegExp(['FIX', 'ME'].join(''), 'g')]
   const count = ['src', 'server', 'tests', 'scripts']
@@ -289,6 +503,47 @@ test('legacy ember naming and tiny UI text can only shrink', () => {
   assert.deepEqual(legacyUtilityFiles, [], 'Use semantic UI tokens instead of ember utility classes')
   assert.ok(legacyEmber <= LEGACY_EMBER_CEILING, `${legacyEmber} legacy ember tokens exceeds ${LEGACY_EMBER_CEILING}`)
   assert.ok(tinyText <= TINY_TEXT_CEILING, `${tinyText} tiny text declarations exceeds ${TINY_TEXT_CEILING}`)
+})
+
+test('UI hex governance only exempts reviewed brand and rendered-document semantics', () => {
+  const findings = inspectUiHexGovernance([
+    { file: 'src/components/NewBadge.jsx', source: 'const style = { color: "#abcdef" }' },
+    { file: 'src/components/ConnectorBrandIcon.jsx', source: '<path fill="#4285F4" />' },
+    { file: 'src/components/ConnectorBrandIcon.jsx', source: '<span style={{ color: "#123456" }} />' },
+    { file: 'src/components/FileExplorer.jsx', source: "'.js': '#8B7B30'," },
+    { file: 'src/components/FileExplorer.jsx', source: '<div style={{ background: "#fedcba" }} />' },
+    { file: 'src/lib/accessCatalog.js', source: "native('github', 'GitHub', '#24292F', 'description')" },
+    { file: 'src/lib/mcpPresets.js', source: "brandColor: '#1A73E8'," },
+    { file: 'src/lib/artifactPreview/htmlDocuments.js', source: 'body { color: #26211c; }' },
+    { file: 'src/lib/themeAccent.js', source: "const DEFAULT_HEX = '#16A34A'" },
+  ])
+
+  assert.deepEqual(
+    findings.violations.map((violation) => violation.replace(/:\d+:\d+ /, ' ')),
+    [
+      'src/components/NewBadge.jsx #abcdef',
+      'src/components/ConnectorBrandIcon.jsx #123456',
+      'src/components/FileExplorer.jsx #fedcba',
+    ],
+  )
+})
+
+test('ordinary JS and JSX UI colors use design tokens instead of raw hex', () => {
+  const files = walkUiSources('src').filter((file) => /\.(?:jsx?|tsx?)$/.test(file))
+  const findings = inspectUiHexGovernance(files.map((file) => ({
+    file: repositoryPath(file),
+    source: readFileSync(file, 'utf8'),
+  })))
+  const unusedAllowlistIds = UI_HEX_ALLOWLIST
+    .map((entry) => entry.id)
+    .filter((id) => !findings.usedAllowlistIds.has(id))
+
+  assert.deepEqual(
+    findings.violations,
+    [],
+    'Replace ordinary UI hex with a theme token; extend the narrow allowlist only for reviewed semantic colors',
+  )
+  assert.deepEqual(unusedAllowlistIds, [], 'Remove stale UI hex allowlist categories')
 })
 
 test('engineering debt has a canonical, actionable register', () => {

@@ -31,6 +31,7 @@ export function persistPlannedJob({
   sourceType,
   sourceId,
   grants,
+  autoRetry,
   planGuard = null,
 }) {
   const normalizedPlanGuard = normalizePlanGuard(planGuard)
@@ -54,13 +55,14 @@ export function persistPlannedJob({
     sourceType,
     sourceId,
     grants,
+    autoRetry,
     status: 'queued',
   })
   appendJobSteps(id, withStableStepIds(id, normalizedSteps))
   return appendJobEvent({
     jobId: id,
     type: 'created',
-    message: '任务已创建',
+    code: 'JOB_CREATED',
     payload: {
       stepCount: normalizedSteps.length,
       requirePlanApproval: effectivePlanApproval,

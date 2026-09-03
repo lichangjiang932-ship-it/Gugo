@@ -23,7 +23,8 @@ process.env.WORKSPACE_FS_ENABLED = '1'
 
 const { getDb } = await import('../server/db.js')
 const { grantLocalPath } = await import('../server/services/localFileAccessService.js')
-const { SUBAGENT_TYPES, _testing } = await import('../server/services/subagentRuntime.js')
+const { SUBAGENT_TYPES, runSubagent, _testing } = await import('../server/services/subagentRuntime.js')
+const { configureSubagentBatchRunner } = await import('../server/services/subagentBatchRuntime.js')
 
 const USER = 'subcall-user'
 const now = Date.now()
@@ -301,6 +302,7 @@ test('nested Agent calls inherit the selected skills through the subagent tool a
     messages: [{ role: 'user', content: 'delegate with the active skill' }],
     tools: SUBAGENT_TYPES.general.tools,
     userId: USER,
+    locale: 'en',
     skillIds: ['webpage', 'webpage'],
     skillDefinitions: [{
       id: 'webpage',
@@ -321,9 +323,39 @@ test('nested Agent calls inherit the selected skills through the subagent tool a
   })
 
   assert.equal(result.text, 'done')
+  assert.equal(nestedOptions?.locale, 'en')
   assert.deepEqual(nestedOptions?.skillIds, ['webpage'])
   assert.equal(nestedOptions?.skillDefinitions?.[0]?.id, 'webpage')
   assert.match(nestedOptions?.skillDefinitions?.[0]?.systemPrompt || '', /gugo-skill-quality:v1/)
+})
+
+test('builtin nested Agent execution preserves English locale and the legacy Chinese default', async (t) => {
+  const childLocales = []
+  configureSubagentBatchRunner(async (options) => {
+    childLocales.push(options.locale)
+    return {
+      id: `locale-child-${childLocales.length}`,
+      status: 'completed',
+      resultText: 'done',
+    }
+  })
+  t.after(() => configureSubagentBatchRunner(runSubagent))
+
+  await _testing.executeSubagentTool('Agent', {
+    prompt: 'English child',
+    subagent_type: 'general',
+  }, {
+    userId: USER,
+    locale: 'en',
+  })
+  await _testing.executeSubagentTool('Agent', {
+    prompt: 'Default child',
+    subagent_type: 'general',
+  }, {
+    userId: USER,
+  })
+
+  assert.deepEqual(childLocales, ['en', 'zh'])
 })
 
 test('审批只复用同一树内工具名和完整参数完全相同的人工批准', async () => {

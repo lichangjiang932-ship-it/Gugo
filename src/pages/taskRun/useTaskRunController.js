@@ -16,6 +16,7 @@ import {
   resolveChatModelReadiness,
 } from '../ChatSplit/chatModelReadiness.js'
 import { ACTIVE_STATUSES } from './taskRunUtils.js'
+import { legacyJobEventMessage, localizedJobEventMessage } from './jobEventPresentation.js'
 
 const CONFIGURE_MODEL_ACTIONS = new Set([
   'configure_model',
@@ -85,7 +86,8 @@ export function taskRunJobFailureRecovery(job) {
   })
   if (!recovery.action) return null
   return {
-    message: String(event.message || job.error || '').trim(),
+    event,
+    message: legacyJobEventMessage(event) || (!event.code ? String(job.error || '').trim() : ''),
     failure: {
       code: String(failure.code || '').trim() || null,
       action: String(failure.action || '').trim() || null,
@@ -156,6 +158,7 @@ export default function useTaskRunController({ linkedJobId, t, toast }) {
   const [activeFilter, setActiveFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [autoRetryEnabled, setAutoRetryEnabled] = useState(false)
   const [steering, setSteering] = useState('')
   const [steeringSubmitting, setSteeringSubmitting] = useState(false)
   const [planApproving, setPlanApproving] = useState(false)
@@ -315,6 +318,7 @@ export default function useTaskRunController({ linkedJobId, t, toast }) {
       const { job } = await createJob(trimmed, {
         modelName: preflight.selection.modelName || undefined,
         providerId: preflight.selection.providerId || undefined,
+        autoRetry: autoRetryEnabled,
       })
       setPrompt(''); setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]); setSelectedJobId(job.id); setSelectedJob(job)
     } catch (reason) {
@@ -369,7 +373,7 @@ export default function useTaskRunController({ linkedJobId, t, toast }) {
     ? latestSuspension.payload?.clarification
     : latestSuspension?.type === 'sleeping'
       ? {
-          question: latestSuspension.message,
+          question: latestSuspension.params?.question || legacyJobEventMessage(latestSuspension),
           why: latestSuspension.payload?.reason || null,
           wakeAt: latestSuspension.payload?.wakeAt || null,
           waitingKind: 'sleeping',
@@ -378,7 +382,11 @@ export default function useTaskRunController({ linkedJobId, t, toast }) {
   const pendingPlan = latestSuspension?.type === 'plan_proposed' ? latestSuspension.payload?.plan : null
   const pendingDirectoryRequest = pendingClarification?.request_type === 'directory' ? pendingClarification : null
   const jobFailureRecovery = taskRunJobFailureRecovery(selectedJob)
-  const visibleError = error || jobFailureRecovery?.message || ''
+  const visibleError = error
+    || (jobFailureRecovery?.event
+      ? localizedJobEventMessage(jobFailureRecovery.event, t)
+      : jobFailureRecovery?.message)
+    || ''
   const visibleErrorAction = error ? errorAction : jobFailureRecovery?.action || ''
   const visibleModelRecoveryTarget = error
     ? modelRecoveryTarget
@@ -402,7 +410,7 @@ export default function useTaskRunController({ linkedJobId, t, toast }) {
 
   return {
     prompt, setPrompt, jobs, selectedJobId, selectedJob, selectedArtifact, setSelectedArtifact, activeFilter, setActiveFilter,
-    loading, submitting, steering, setSteering, steeringSubmitting, planApproving, directoryBusy,
+    loading, submitting, autoRetryEnabled, setAutoRetryEnabled, steering, setSteering, steeringSubmitting, planApproving, directoryBusy,
     error: visibleError,
     errorAction: visibleErrorAction,
     modelRecoveryTarget: visibleModelRecoveryTarget,

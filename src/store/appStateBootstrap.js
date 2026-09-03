@@ -1,7 +1,7 @@
 import { PERMISSIONS } from '../data.js'
-import { backfillMessageTimestamps } from '../lib/messageTime.js'
 import { normalizeThemeMode } from '../lib/themeMode.js'
 import {
+  LOCAL_ONLY_PERSIST_KEYS,
   PERSIST_KEYS,
   readBootstrapPayloads,
   selectPersistedSnapshot,
@@ -22,6 +22,7 @@ export function createInitialState() {
     authMode: 'unknown',
     authReady: false,
     sessions: [],
+    pendingLegacySessions: [],
     activeSessionId: null,
     tasks: [],
     history: [],
@@ -39,7 +40,10 @@ export function createInitialState() {
     inputHistoryNavigationEnabled: true,
     draftInput: '',
     draftSessionId: null,
+    defaultWorkspacePath: '',
     draftWorkspacePath: '',
+    sessionCatalogSource: null,
+    sessionCatalogSourceMismatch: null,
     newDraftVersion: 0,
     skillConfigs: {},
     agentMode: 'chat',
@@ -101,7 +105,10 @@ export function createInitialState() {
 export function normalizePersistedFields(saved, { cancelRunningTasks = false } = {}) {
   const base = createInitialState()
   const normalized = {}
-  for (const key of PERSIST_KEYS) if (saved?.[key] !== undefined) normalized[key] = saved[key]
+  for (const key of [...PERSIST_KEYS, ...LOCAL_ONLY_PERSIST_KEYS]) {
+    if (saved?.[key] !== undefined) normalized[key] = saved[key]
+  }
+  if (!Array.isArray(normalized.pendingLegacySessions)) delete normalized.pendingLegacySessions
   if (normalized.inputHistoryNavigationEnabled !== undefined && typeof normalized.inputHistoryNavigationEnabled !== 'boolean') {
     delete normalized.inputHistoryNavigationEnabled
   }
@@ -171,7 +178,6 @@ export function normalizePersistedFields(saved, { cancelRunningTasks = false } =
     if (savedSchemaVersion < 12) normalized.toolsConfig.run_code = true
   }
   normalized.toolsConfigSchemaVersion = TOOLS_CONFIG_SCHEMA_VERSION
-  if (normalized.sessions !== undefined) normalized.sessions = backfillMessageTimestamps(normalized.sessions)
   if (Array.isArray(saved?.permissions)) {
     const enabledMap = new Map(saved.permissions.map((permission) => [permission.id, !!permission.enabled]))
     normalized.permissions = base.permissions.map((permission) => ({ ...permission, enabled: enabledMap.has(permission.id) ? enabledMap.get(permission.id) : permission.enabled }))

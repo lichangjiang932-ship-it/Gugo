@@ -1,4 +1,9 @@
 import { getVisibleModelErrorMessage } from '../../../../lib/chatFlowGuards.js'
+import { normalizePublicFailureCode } from '../../../../../shared/turnEventProjection.js'
+
+// Validate the original text before case normalization. Unicode case folding can
+// otherwise turn confusables such as `K` into an apparently valid ASCII code.
+const INCOMPLETE_REASON_CODE_PATTERN = /^[A-Za-z][A-Za-z0-9_]{1,95}$/u
 
 const REASON_KEYS = Object.freeze({
   artifact_delivery_not_converged: 'chatMessages.incompleteReasonArtifactDelivery',
@@ -113,11 +118,15 @@ function translated(t, key, values) {
   return String(typeof t === 'function' ? t(key, values) : key)
 }
 
+export function normalizeIncompleteReasonCode(value) {
+  const reason = String(value || '').trim()
+  return INCOMPLETE_REASON_CODE_PATTERN.test(reason) ? reason.toLowerCase() : ''
+}
+
 function normalizeReason(failure) {
-  const reason = String(failure?.incompleteReason || '').trim().toLowerCase()
+  const reason = normalizeIncompleteReasonCode(failure?.incompleteReason)
   if (reason) return reason
-  const code = String(failure?.code || '').trim().toLowerCase()
-  return code === 'turn_incomplete' ? 'turn_incomplete' : code
+  return normalizePublicFailureCode(failure?.code, 'TURN_INCOMPLETE').toLowerCase()
 }
 
 function defaultRequirementsForReason(reasonCode) {
@@ -134,19 +143,6 @@ function defaultRequirementsForReason(reasonCode) {
     return ['execution_environment_repair', 'explicit_recovery_retry']
   }
   return []
-}
-
-function publicFailureDetail(failure) {
-  const message = String(failure?.message || '').trim()
-  const code = String(failure?.code || '').trim().toUpperCase()
-  // TURN_INCOMPLETE messages from older runtimes were generic status copy
-  // (for example, "saved files remain available"), not a causal diagnosis.
-  // Present the explicit legacy-data fallback instead of repeating that copy
-  // under the "Why" label.
-  if (code === 'TURN_INCOMPLETE'
-    || !message
-    || /(?:^|\n)\s*(?:error|exception|typeerror|rangeerror)\s*:/iu.test(message)) return ''
-  return message.slice(0, 600)
 }
 
 function verificationCheckPresentations(failure, t) {
@@ -187,15 +183,15 @@ export function buildIncompleteTaskPresentation(msg, t, {
   verifiedCount = 0,
 } = {}) {
   const failure = msg?.meta?.serverFailure || {}
+  const incompleteReasonCode = normalizeIncompleteReasonCode(failure.incompleteReason)
   const reasonCode = normalizeReason(failure)
   const reasonKey = REASON_KEYS[reasonCode]
   const recordedUnknownReason = Boolean(
-    failure.incompleteReason
+    incompleteReasonCode
     && !reasonKey
     && reasonCode !== 'turn_incomplete'
-    && /^[a-z][a-z0-9_]{1,95}$/u.test(reasonCode),
   )
-  const localizedFailureReason = failure.incompleteReason
+  const localizedFailureReason = incompleteReasonCode
     ? ''
     : getVisibleModelErrorMessage(failure, t)
   const specificFailureReason = reasonCode !== 'turn_incomplete' && localizedFailureReason
@@ -204,7 +200,7 @@ export function buildIncompleteTaskPresentation(msg, t, {
       : ''
   const reason = reasonKey
     ? translated(t, reasonKey, { attempts: Number(failure.attempts) || 0 })
-    : publicFailureDetail(failure) || specificFailureReason || translated(t, recordedUnknownReason
+    : specificFailureReason || translated(t, recordedUnknownReason
       ? 'chatMessages.incompleteReasonRecordedCode'
       : 'chatMessages.incompleteReasonFallback', { code: reasonCode.toUpperCase() })
   const rawRequirements = Array.isArray(failure.missingRequirements)
@@ -239,7 +235,8 @@ export function buildIncompleteTaskPresentation(msg, t, {
   const manualRetryable = failure.manualRetryable === true
   const verificationNextStepKey = VERIFICATION_NEXT_STEP_KEYS[reasonCode]
   return {
-    code: String(failure.incompleteReason || failure.code || 'TURN_INCOMPLETE').trim().toUpperCase(),
+    code: incompleteReasonCode.toUpperCase()
+      || normalizePublicFailureCode(failure.code, 'TURN_INCOMPLETE'),
     missing,
     nextStep: translated(t, verificationNextStepKey || (retryable
       ? 'chatMessages.incompleteNextRetry'

@@ -351,8 +351,8 @@ test('unknown side-effect recovery distinguishes same-tool calls and tolerates o
   }
 })
 
-test('unknown side-effect recovery safety copy is complete in every supported language', () => {
-  for (const language of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('unknown side-effect recovery safety copy is complete in both supported languages', () => {
+  for (const language of ['zh', 'en']) {
     const copy = translations[language].sideEffectRecovery
     assert.equal(typeof copy.navTitle, 'string')
     assert.equal(typeof copy.safetyWarning, 'string')

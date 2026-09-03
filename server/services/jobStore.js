@@ -1,15 +1,32 @@
 import { getDb } from '../db.js'
 import { assertManagedArtifactMutationAllowed } from './userDataClearGuard.js'
 import { normalizeTaskGrants } from '../utils/taskGrants.js'
+import { normalizeJobAutoRetryPolicy } from './jobAutoRetryPolicy.js'
+import {
+  insertJobWithAutoRetry,
+  updateJobAutoRetryAttemptsInDb,
+} from './jobAutoRetryPersistence.js'
+import { mapArtifact, mapJob, mapStep } from './jobStoreProjection.js'
 import {
   requiresStructuredCompletionEvidence,
   validateStructuredCompletionEvidence,
 } from './jobCompletionEvidence.js'
+import {
+  appendJobEvent,
+  listJobEvents,
+  mapJobEventRow as mapEvent,
+} from './jobEventStore.js'
+import { requireRuntimeJobId, requireRuntimeUserId } from './jobRuntimeIdentity.js'
 
 export {
   requiresStructuredCompletionEvidence,
   validateStructuredCompletionEvidence,
 } from './jobCompletionEvidence.js'
+export {
+  appendJobEvent,
+  listJobEvents,
+  parsePersistedLegacyJobEvent,
+} from './jobEventStore.js'
 
 function boundedText(value, maxLength) {
   const text = typeof value === 'string' ? value.trim() : ''
@@ -24,93 +41,6 @@ function updatedField(updates, key, current) {
 
 function completionEvidenceError(code, message) {
   return Object.assign(new Error(message), { code, statusCode: 422 })
-}
-
-function parseJson(value, fallback = null) {
-  if (value == null || value === '') return fallback
-  try {
-    return JSON.parse(value)
-  } catch {
-    return fallback
-  }
-}
-
-function mapJob(row) {
-  if (!row) return null
-  return {
-    id: row.id,
-    userId: row.user_id || null,
-    title: row.title,
-    prompt: row.prompt,
-    modelName: row.model_name || null,
-    modelProviderId: row.model_provider_id || null,
-    modelConfigRevision: Number.isInteger(row.model_config_revision) ? row.model_config_revision : null,
-    sourceType: row.source_type || null,
-    sourceId: row.source_id || null,
-    grants: (() => {
-      try {
-        return normalizeTaskGrants(parseJson(row.grants_json, []))
-      } catch {
-        return []
-      }
-    })(),
-    status: row.status,
-    progress: row.progress,
-    cancelRequested: !!row.cancel_requested,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    startedAt: row.started_at,
-    finishedAt: row.finished_at,
-    error: row.error,
-  }
-}
-
-function mapStep(row) {
-  if (!row) return null
-  return {
-    id: row.id,
-    jobId: row.job_id,
-    parentStepId: row.parent_step_id,
-    title: row.title,
-    kind: row.kind,
-    status: row.status,
-    sortOrder: row.sort_order,
-    input: parseJson(row.input_json),
-    output: parseJson(row.output_json),
-    error: row.error,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    startedAt: row.started_at,
-    finishedAt: row.finished_at,
-  }
-}
-
-function mapEvent(row) {
-  if (!row) return null
-  return {
-    id: row.id,
-    jobId: row.job_id,
-    stepId: row.step_id,
-    type: row.type,
-    message: row.message,
-    payload: parseJson(row.payload_json),
-    createdAt: row.created_at,
-  }
-}
-
-function mapArtifact(row) {
-  if (!row) return null
-  return {
-    id: row.id,
-    jobId: row.job_id,
-    userId: row.user_id || null,
-    stepId: row.step_id,
-    type: row.type,
-    title: row.title,
-    url: row.url,
-    filename: row.filename,
-    createdAt: row.created_at,
-  }
 }
 
 /**
@@ -128,11 +58,13 @@ export function createJob({
   sourceType = null,
   sourceId = null,
   grants = [],
+  autoRetry = false,
   status = 'queued',
   progress = 0,
   now = Date.now(),
 }) {
-  if (!userId) throw new Error('createJob requires userId')
+  requireRuntimeJobId(id, 'createJob')
+  requireRuntimeUserId(userId, 'createJob')
   const selectedModel = boundedText(modelName, 512) || null
   const selectedProviderId = boundedText(modelProviderId, 512) || null
   const selectedConfigRevision = Number(modelConfigRevision)
@@ -145,32 +77,25 @@ export function createJob({
   const normalizedSourceType = boundedText(sourceType, 64) || null
   const normalizedSourceId = boundedText(sourceId, 512) || null
   const normalizedGrants = normalizeTaskGrants(grants)
+  const normalizedAutoRetry = normalizeJobAutoRetryPolicy(autoRetry)
   if ((normalizedSourceType === null) !== (normalizedSourceId === null)) {
     throw new Error('sourceType and sourceId must be provided together')
   }
-  getDb().prepare(`
-    INSERT INTO jobs (
-      id, user_id, title, prompt, model_name, model_provider_id, model_config_revision,
-      source_type, source_id, grants_json, status, progress, created_at, updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    userId,
-    title,
-    prompt,
-    selectedModel,
-    selectedProviderId,
-    normalizedConfigRevision,
-    normalizedSourceType,
-    normalizedSourceId,
-    JSON.stringify(normalizedGrants),
-    status,
-    progress,
-    now,
-    now,
-  )
+  insertJobWithAutoRetry(getDb(), {
+    id, userId, title, prompt, status, progress, now,
+    modelName: selectedModel,
+    modelProviderId: selectedProviderId,
+    modelConfigRevision: normalizedConfigRevision,
+    sourceType: normalizedSourceType,
+    sourceId: normalizedSourceId,
+    grantsJson: JSON.stringify(normalizedGrants),
+  }, normalizedAutoRetry)
   return getJob(id)
+}
+
+export function updateJobAutoRetryAttempts(id, { userId, attempts } = {}, now = Date.now()) {
+  const changed = updateJobAutoRetryAttemptsInDb(getDb(), id, { userId, attempts }, now)
+  return changed ? getJob(id, { userId }) : null
 }
 
 /**
@@ -456,16 +381,13 @@ export function approveJobPlan({
       nextAction: 'resume_execution',
       resolvesEventId: expectedProposalId,
     }
-    const info = db.prepare(`
-      INSERT INTO job_events (job_id, step_id, type, message, payload_json, created_at)
-      VALUES (?, NULL, 'plan_approved', ?, ?, ?)
-    `).run(
+    const event = appendJobEvent({
       jobId,
-      'Plan approved; execution has been requeued',
-      JSON.stringify(payload),
+      type: 'plan_approved',
+      code: 'JOB_PLAN_APPROVED',
+      payload,
       now,
-    )
-    const event = mapEvent(db.prepare('SELECT * FROM job_events WHERE id = ?').get(info.lastInsertRowid))
+    })
     return {
       status: 'approved',
       idempotent: false,
@@ -560,28 +482,6 @@ export function completeJobStep(stepId, {
     error: null,
     finishedAt: completedAt,
   }, completedAt)
-}
-
-export function appendJobEvent({
-  jobId,
-  stepId = null,
-  type,
-  message,
-  payload = null,
-  now = Date.now(),
-}) {
-  const info = getDb().prepare(`
-    INSERT INTO job_events (job_id, step_id, type, message, payload_json, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(jobId, stepId, type, message, payload == null ? null : JSON.stringify(payload), now)
-  return mapEvent(getDb().prepare('SELECT * FROM job_events WHERE id = ?').get(info.lastInsertRowid))
-}
-
-export function listJobEvents(jobId, { afterId = 0 } = {}) {
-  return getDb()
-    .prepare('SELECT * FROM job_events WHERE job_id = ? AND id > ? ORDER BY id ASC')
-    .all(jobId, afterId)
-    .map(mapEvent)
 }
 
 /**

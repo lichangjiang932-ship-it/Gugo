@@ -70,11 +70,14 @@ export async function listChannelMessagesApi(id, { limit = 50, before = null } =
   return jsonOk(resp)
 }
 
-export async function sendChannelMessageApi(id, content) {
-  const resp = await fetch(`/api/channels/${encodeURIComponent(id)}/messages`, {
+export async function sendChannelMessageApi(id, content, { locale, fetchImpl = fetch } = {}) {
+  const resp = await fetchImpl(`/api/channels/${encodeURIComponent(id)}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({
+      content,
+      ...(typeof locale === 'string' && locale.trim() ? { locale: locale.trim() } : {}),
+    }),
   })
   return jsonOk(resp)
 }

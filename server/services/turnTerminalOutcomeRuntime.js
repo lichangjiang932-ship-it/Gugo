@@ -82,7 +82,7 @@ export function createTurnTerminalOutcomeRuntime({
     })
     const atomicTurnBoundary = !!ports.commitTurnBoundary
     await emitter('turn.cancelled', {
-      reason: signal.reason?.message || 'Cancelled by user',
+      code: 'TURN_CANCELLED',
       partialText: '',
       artifactIds: [],
       deliveryArtifactIds: [],
@@ -141,7 +141,7 @@ export function createTurnTerminalOutcomeRuntime({
         writtenAt: cancelledAt,
       }
       await evidence.emitter('turn.cancelled', {
-        reason: 'Cancelled by user',
+        code: 'TURN_CANCELLED',
         partialText,
         artifactIds,
         deliveryArtifactIds,
@@ -483,7 +483,7 @@ export function createTurnTerminalOutcomeRuntime({
       }
       try {
         await evidence.emitter('turn.cancelled', {
-          reason: error?.message || 'Cancelled by user',
+          code: 'TURN_CANCELLED',
           partialText,
           artifactIds,
           deliveryArtifactIds,

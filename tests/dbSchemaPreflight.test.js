@@ -92,6 +92,238 @@ function schemaSnapshot(filePath) {
   }
 }
 
+function tableSchemaSql(db, table) {
+  const sql = db.prepare(`
+    SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?
+  `).get(table)?.sql
+  assert.ok(sql, `${table} schema must exist`)
+  return sql
+}
+
+function explicitIndexSql(db, tables) {
+  return db.prepare(`
+    SELECT sql FROM sqlite_schema
+    WHERE type = 'index' AND tbl_name IN (${tables.map(() => '?').join(', ')})
+      AND sql IS NOT NULL
+    ORDER BY name
+  `).all(...tables).map((row) => row.sql)
+}
+
+const V113_OUTBOX_CHECK_MUTATIONS = Object.freeze([
+  {
+    label: 'cursor',
+    pattern: /cursor INTEGER PRIMARY KEY AUTOINCREMENT CHECK \(\s*typeof\(cursor\) = 'integer' AND cursor > 0\s*\)/u,
+    replacement: 'cursor INTEGER PRIMARY KEY AUTOINCREMENT',
+  },
+  {
+    label: 'event-id',
+    pattern: /event_id TEXT NOT NULL UNIQUE CHECK \(length\(event_id\) BETWEEN 1 AND 512\)/u,
+    replacement: 'event_id TEXT NOT NULL UNIQUE',
+  },
+  {
+    label: 'event-type',
+    pattern: /event_type TEXT NOT NULL CHECK \(length\(event_type\) BETWEEN 1 AND 128\)/u,
+    replacement: 'event_type TEXT NOT NULL',
+  },
+  {
+    label: 'envelope-json',
+    pattern: /envelope_json TEXT NOT NULL CHECK \(\s*json_valid\(envelope_json\) AND json_type\(envelope_json\) = 'object'\s*\)/u,
+    replacement: 'envelope_json TEXT NOT NULL',
+  },
+  {
+    label: 'event-fingerprint',
+    pattern: /event_fingerprint TEXT NOT NULL CHECK \(\s*length\(event_fingerprint\) = 64\s*AND event_fingerprint NOT GLOB '\*\[\^0-9a-f\]\*'\s*\)/u,
+    replacement: 'event_fingerprint TEXT NOT NULL',
+  },
+  {
+    label: 'created-at',
+    pattern: /created_at INTEGER NOT NULL CHECK \(\s*typeof\(created_at\) = 'integer' AND created_at >= 0\s*\)/u,
+    replacement: 'created_at INTEGER NOT NULL',
+  },
+])
+
+const V113_STREAM_CHECK_MUTATIONS = Object.freeze([
+  {
+    label: 'stream-key',
+    pattern: /stream_key TEXT PRIMARY KEY NOT NULL CHECK \(stream_key = 'global'\)/u,
+    replacement: 'stream_key TEXT PRIMARY KEY NOT NULL',
+  },
+  {
+    label: 'epoch',
+    pattern: /epoch INTEGER NOT NULL CHECK \(\s*typeof\(epoch\) = 'integer' AND epoch >= 1\s*\)/u,
+    replacement: 'epoch INTEGER NOT NULL',
+  },
+  {
+    label: 'truncated-through',
+    pattern: /truncated_through INTEGER NOT NULL CHECK \(\s*typeof\(truncated_through\) = 'integer' AND truncated_through >= 0\s*\)/u,
+    replacement: 'truncated_through INTEGER NOT NULL',
+  },
+  {
+    label: 'without-rowid',
+    pattern: /\)\s+WITHOUT ROWID\s*$/u,
+    replacement: ')',
+  },
+])
+
+function rebuildV113Table(db, table, { pattern, replacement }) {
+  const sourceSql = tableSchemaSql(db, table)
+  const indexes = explicitIndexSql(db, [table])
+  const weakened = sourceSql.replace(pattern, replacement)
+  assert.notEqual(weakened, sourceSql)
+  db.pragma('foreign_keys = OFF')
+  db.transaction(() => {
+    db.exec(`DROP TABLE ${table}`)
+    db.exec(weakened)
+    for (const sql of indexes) db.exec(sql)
+    if (table === 'agent_event_stream_metadata') {
+      db.exec(`
+        INSERT INTO agent_event_stream_metadata (
+          stream_key, epoch, truncated_through
+        ) VALUES ('global', 1, 0)
+      `)
+    }
+  }).immediate()
+}
+
+const V114_SUBSCRIPTION_CHECK_MUTATIONS = Object.freeze([
+  {
+    label: 'publisher-id',
+    pattern: /publisher_id TEXT NOT NULL CHECK \(length\(publisher_id\) BETWEEN 1 AND 128\)/u,
+    replacement: 'publisher_id TEXT NOT NULL',
+  },
+  {
+    label: 'publisher-key-id',
+    pattern: /publisher_key_id TEXT NOT NULL CHECK \(length\(publisher_key_id\) BETWEEN 1 AND 256\)/u,
+    replacement: 'publisher_key_id TEXT NOT NULL',
+  },
+  {
+    label: 'release-id',
+    pattern: /release_id TEXT NOT NULL CHECK \(length\(release_id\) BETWEEN 1 AND 128\)/u,
+    replacement: 'release_id TEXT NOT NULL',
+  },
+  {
+    label: 'release-digest-version',
+    pattern: /release_digest_version INTEGER NOT NULL CHECK \(\s*typeof\(release_digest_version\) = 'integer' AND release_digest_version >= 1\s*\)/u,
+    replacement: 'release_digest_version INTEGER NOT NULL',
+  },
+  {
+    label: 'plugin-id',
+    pattern: /plugin_id TEXT NOT NULL CHECK \(length\(plugin_id\) BETWEEN 1 AND 80\)/u,
+    replacement: 'plugin_id TEXT NOT NULL',
+  },
+  {
+    label: 'plugin-version',
+    pattern: /plugin_version TEXT NOT NULL CHECK \(length\(plugin_version\) BETWEEN 1 AND 128\)/u,
+    replacement: 'plugin_version TEXT NOT NULL',
+  },
+  {
+    label: 'subscription-id',
+    pattern: /subscription_id TEXT NOT NULL CHECK \(length\(subscription_id\) BETWEEN 1 AND 128\)/u,
+    replacement: 'subscription_id TEXT NOT NULL',
+  },
+  {
+    label: 'retry-attempts',
+    pattern: /retry_attempts INTEGER NOT NULL CHECK \(\s*typeof\(retry_attempts\) = 'integer' AND retry_attempts >= 0\s*\)/u,
+    replacement: 'retry_attempts INTEGER NOT NULL',
+  },
+  {
+    label: 'created-at',
+    pattern: /created_at INTEGER NOT NULL CHECK \(\s*typeof\(created_at\) = 'integer' AND created_at >= 0\s*\)/u,
+    replacement: 'created_at INTEGER NOT NULL',
+  },
+  {
+    label: 'updated-at',
+    pattern: /updated_at INTEGER NOT NULL CHECK \(\s*typeof\(updated_at\) = 'integer' AND updated_at >= created_at\s*\)/u,
+    replacement: 'updated_at INTEGER NOT NULL',
+  },
+])
+
+function weakenSubscriptionCheck(db, { pattern, replacement }) {
+  const subscriptionSql = tableSchemaSql(db, 'agent_event_subscriptions')
+  const dlqSql = tableSchemaSql(db, 'agent_event_subscription_dlq')
+  const indexes = explicitIndexSql(db, [
+    'agent_event_subscriptions',
+    'agent_event_subscription_dlq',
+  ])
+  const weakened = subscriptionSql.replace(pattern, replacement)
+  assert.notEqual(weakened, subscriptionSql)
+  db.pragma('foreign_keys = OFF')
+  db.transaction(() => {
+    db.exec('DROP TABLE agent_event_subscription_dlq')
+    db.exec('DROP TABLE agent_event_subscriptions')
+    db.exec(weakened)
+    db.exec(dlqSql)
+    for (const sql of indexes) db.exec(sql)
+  }).immediate()
+}
+
+function weakenDlqAutoincrement(db) {
+  const dlqSql = tableSchemaSql(db, 'agent_event_subscription_dlq')
+  const indexes = explicitIndexSql(db, ['agent_event_subscription_dlq'])
+  const weakened = dlqSql.replace(
+    /INTEGER PRIMARY KEY AUTOINCREMENT/u,
+    'INTEGER PRIMARY KEY',
+  )
+  assert.notEqual(weakened, dlqSql)
+  db.pragma('foreign_keys = OFF')
+  db.transaction(() => {
+    db.exec('DROP TABLE agent_event_subscription_dlq')
+    db.exec(weakened)
+    for (const sql of indexes) db.exec(sql)
+  }).immediate()
+}
+
+function rebuildSessionsWithoutPrimaryKey(db) {
+  const tableSql = db.prepare(`
+    SELECT sql FROM sqlite_schema
+    WHERE type = 'table' AND name = 'sessions'
+  `).get()?.sql
+  assert.ok(tableSql, 'sessions table DDL must exist')
+  const replacementSql = tableSql
+    .replace(/^CREATE TABLE\s+sessions\b/u, 'CREATE TABLE sessions_without_primary_key')
+    .replace(/\btoken\s+TEXT\s+PRIMARY KEY\b/u, 'token TEXT NOT NULL')
+  assert.notEqual(replacementSql, tableSql, 'sessions primary key must be removed')
+
+  const columns = db.prepare('SELECT name FROM pragma_table_info(?) ORDER BY cid')
+    .all('sessions')
+    .map((row) => `"${String(row.name).replaceAll('"', '""')}"`)
+    .join(', ')
+  const sessionIndexes = db.prepare(`
+    SELECT sql FROM sqlite_schema
+    WHERE tbl_name = 'sessions'
+      AND type = 'index'
+      AND sql IS NOT NULL
+    ORDER BY name
+  `).all()
+  const triggers = db.prepare(`
+    SELECT name, sql FROM sqlite_schema
+    WHERE type = 'trigger' AND sql IS NOT NULL
+    ORDER BY name
+  `).all()
+  db.pragma('foreign_keys = OFF')
+  db.transaction(() => {
+    for (const entry of triggers) {
+      const name = `"${String(entry.name).replaceAll('"', '""')}"`
+      db.exec(`DROP TRIGGER ${name}`)
+    }
+    db.exec(replacementSql)
+    db.exec(`
+      INSERT INTO sessions_without_primary_key (${columns})
+      SELECT ${columns} FROM sessions
+    `)
+    db.exec('DROP TABLE sessions')
+    db.exec('ALTER TABLE sessions_without_primary_key RENAME TO sessions')
+    for (const entry of sessionIndexes) db.exec(entry.sql)
+    for (const entry of triggers) db.exec(entry.sql)
+  }).immediate()
+
+  assert.deepEqual(
+    db.prepare('SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk')
+      .all('sessions'),
+    [],
+  )
+}
+
 test.afterEach(() => {
   closeDb()
 })
@@ -193,7 +425,7 @@ test('a new empty database still initializes normally', () => {
   assert.ok(empty.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").get())
 })
 
-test('current-version databases with a missing critical column or index fail closed without mutation', () => {
+test('current-version databases with a missing critical column, index, or autoincrement key fail closed without mutation', () => {
   const cases = [
     {
       label: 'missing-column',
@@ -211,6 +443,104 @@ test('current-version databases with a missing critical column or index fail clo
         db.exec('DROP INDEX idx_turn_artifacts_turn')
       },
       expectedMissing: 'index:idx_turn_artifacts_turn',
+    },
+    {
+      label: 'missing-agent-event-autoincrement',
+      mutate(db) {
+        db.exec(`
+          DROP TABLE agent_event_outbox;
+          CREATE TABLE agent_event_outbox (
+            cursor INTEGER PRIMARY KEY CHECK (
+              typeof(cursor) = 'integer' AND cursor > 0
+            ),
+            event_id TEXT NOT NULL UNIQUE CHECK (length(event_id) BETWEEN 1 AND 512),
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 128),
+            envelope_json TEXT NOT NULL CHECK (
+              json_valid(envelope_json) AND json_type(envelope_json) = 'object'
+            ),
+            event_fingerprint TEXT NOT NULL CHECK (
+              length(event_fingerprint) = 64
+              AND event_fingerprint NOT GLOB '*[^0-9a-f]*'
+            ),
+            created_at INTEGER NOT NULL CHECK (
+              typeof(created_at) = 'integer' AND created_at >= 0
+            )
+          );
+          CREATE INDEX idx_agent_event_outbox_user_cursor
+            ON agent_event_outbox(user_id, cursor);
+          CREATE INDEX idx_agent_event_outbox_type_cursor
+            ON agent_event_outbox(event_type, cursor);
+        `)
+      },
+      expectedMissing: 'autoincrement-primary-key:agent_event_outbox.cursor',
+    },
+    ...V113_OUTBOX_CHECK_MUTATIONS.map((mutation) => ({
+      label: `missing-agent-event-outbox-${mutation.label}-check`,
+      mutate(db) {
+        rebuildV113Table(db, 'agent_event_outbox', mutation)
+      },
+      expectedMissing: 'constraints:agent_event_outbox',
+    })),
+    ...V113_STREAM_CHECK_MUTATIONS.map((mutation) => ({
+      label: `missing-agent-event-stream-${mutation.label}-constraint`,
+      mutate(db) {
+        rebuildV113Table(db, 'agent_event_stream_metadata', mutation)
+      },
+      expectedMissing: 'constraints:agent_event_stream_metadata',
+    })),
+    {
+      label: 'invalid-agent-event-stream-table-shape',
+      mutate(db) {
+        rebuildV113Table(db, 'agent_event_stream_metadata', {
+          pattern: /epoch INTEGER NOT NULL/u,
+          replacement: 'epoch BLOB NOT NULL',
+        })
+      },
+      expectedMissing: 'table-shape:agent_event_stream_metadata',
+    },
+    {
+      label: 'non-singleton-agent-event-stream-metadata',
+      mutate(db) {
+        db.pragma('ignore_check_constraints = ON')
+        db.prepare(`
+          INSERT INTO agent_event_stream_metadata (
+            stream_key, epoch, truncated_through
+          ) VALUES ('unexpected', 1, 0)
+        `).run()
+      },
+      expectedMissing: 'singleton:agent_event_stream_metadata.global',
+    },
+    {
+      label: 'missing-subscription-contract-check',
+      mutate(db) {
+        weakenSubscriptionCheck(db, {
+          pattern: /contract_version INTEGER NOT NULL CHECK \(\s*typeof\(contract_version\) = 'integer' AND contract_version = 2\s*\)/u,
+          replacement: 'contract_version INTEGER NOT NULL',
+        })
+      },
+      expectedMissing: 'constraints:agent_event_subscriptions',
+    },
+    ...V114_SUBSCRIPTION_CHECK_MUTATIONS.map((mutation) => ({
+      label: `missing-subscription-${mutation.label}-check`,
+      mutate(db) {
+        weakenSubscriptionCheck(db, mutation)
+      },
+      expectedMissing: 'constraints:agent_event_subscriptions',
+    })),
+    {
+      label: 'missing-subscription-index',
+      mutate(db) {
+        db.exec('DROP INDEX idx_agent_event_subscriptions_lease')
+      },
+      expectedMissing: 'index:idx_agent_event_subscriptions_lease',
+    },
+    {
+      label: 'missing-subscription-dlq-autoincrement',
+      mutate(db) {
+        weakenDlqAutoincrement(db)
+      },
+      expectedMissing: 'autoincrement-primary-key:agent_event_subscription_dlq.dlq_id',
     },
   ]
 
@@ -237,6 +567,192 @@ test('current-version databases with a missing critical column or index fail clo
     assert.deepEqual(schemaSnapshot(filePath), before)
     assert.deepEqual(databaseFileSnapshot(filePath), fileBefore)
   }
+})
+
+test('a current v108 database missing the tool-permission conflict key fails preflight without mutation', () => {
+  const filePath = path.join(tempDir, 'missing-tool-permission-primary-key.db')
+  initializeCurrentDatabase(filePath)
+  const mutate = new Database(filePath)
+  try {
+    mutate.exec(`
+      DROP TABLE user_tool_permissions;
+      CREATE TABLE user_tool_permissions (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tool_name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_user_tool_permissions_user
+        ON user_tool_permissions(user_id);
+    `)
+    assert.deepEqual(
+      mutate.prepare('SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk')
+        .all('user_tool_permissions'),
+      [],
+    )
+    assert.ok(mutate.prepare('SELECT * FROM pragma_foreign_key_list(?)').all('user_tool_permissions')
+      .some((row) => row.from === 'user_id'
+        && row.table === 'users'
+        && row.to === 'id'
+        && row.on_delete === 'CASCADE'))
+  } finally {
+    mutate.close()
+  }
+  const before = schemaSnapshot(filePath)
+  const fileBefore = databaseFileSnapshot(filePath)
+  selectDatabase(filePath)
+
+  assert.throws(
+    () => getDb(),
+    (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+      && error?.details?.stage === 'preflight'
+      && error?.details?.missing?.includes('primary-key:user_tool_permissions'),
+  )
+  assert.deepEqual(schemaSnapshot(filePath), before)
+  assert.deepEqual(databaseFileSnapshot(filePath), fileBefore)
+})
+
+test('a current v108 database missing the session identity key fails preflight without mutation', () => {
+  const filePath = path.join(tempDir, 'missing-session-primary-key.db')
+  initializeCurrentDatabase(filePath)
+  const mutate = new Database(filePath)
+  try {
+    mutate.prepare(`
+      INSERT INTO users (id, email, created_at, updated_at)
+      VALUES (?, ?, ?, ?)
+    `).run('session-owner', 'session-owner@example.test', 1, 1)
+    mutate.prepare(`
+      INSERT INTO sessions (token, user_id, expires_at, created_at)
+      VALUES (?, ?, ?, ?)
+    `).run('preserved-session', 'session-owner', 2, 1)
+    rebuildSessionsWithoutPrimaryKey(mutate)
+    assert.deepEqual(
+      mutate.prepare('SELECT token, user_id FROM sessions ORDER BY token').all(),
+      [{ token: 'preserved-session', user_id: 'session-owner' }],
+    )
+  } finally {
+    mutate.close()
+  }
+  const before = schemaSnapshot(filePath)
+  const fileBefore = databaseFileSnapshot(filePath)
+  selectDatabase(filePath)
+
+  assert.throws(
+    () => getDb(),
+    (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+      && error?.details?.stage === 'preflight'
+      && error?.details?.missing?.includes('primary-key:sessions'),
+  )
+  assert.deepEqual(schemaSnapshot(filePath), before)
+  assert.deepEqual(databaseFileSnapshot(filePath), fileBefore)
+})
+
+test('a current v108 database missing the user identity key fails preflight without mutation', () => {
+  const filePath = path.join(tempDir, 'missing-user-primary-key.db')
+  initializeCurrentDatabase(filePath)
+  const mutate = new Database(filePath)
+  try {
+    mutate.pragma('foreign_keys = OFF')
+    mutate.exec(`
+      CREATE TABLE users_without_primary_key (
+        id TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        password_hash TEXT,
+        password_salt TEXT,
+        password_set_at INTEGER
+      );
+      INSERT INTO users_without_primary_key SELECT * FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_without_primary_key RENAME TO users;
+    `)
+    assert.deepEqual(
+      mutate.prepare('SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk')
+        .all('users'),
+      [],
+    )
+    assert.ok(mutate.prepare('SELECT * FROM pragma_foreign_key_list(?)').all('effort_settings')
+      .some((row) => row.from === 'user_id'
+        && row.table === 'users'
+        && row.to === 'id'
+        && row.on_delete === 'CASCADE'))
+  } finally {
+    mutate.close()
+  }
+  const before = schemaSnapshot(filePath)
+  const fileBefore = databaseFileSnapshot(filePath)
+  selectDatabase(filePath)
+
+  assert.throws(
+    () => getDb(),
+    (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+      && error?.details?.stage === 'preflight'
+      && error?.details?.missing?.includes('primary-key:users'),
+  )
+  assert.deepEqual(schemaSnapshot(filePath), before)
+  assert.deepEqual(databaseFileSnapshot(filePath), fileBefore)
+})
+
+test('a current v108 database missing complete user email uniqueness fails preflight without mutation', () => {
+  const filePath = path.join(tempDir, 'missing-user-email-unique-key.db')
+  initializeCurrentDatabase(filePath)
+  const mutate = new Database(filePath)
+  try {
+    mutate.pragma('foreign_keys = OFF')
+    mutate.exec(`
+      CREATE TABLE users_without_email_unique (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        password_hash TEXT,
+        password_salt TEXT,
+        password_set_at INTEGER
+      );
+      INSERT INTO users_without_email_unique SELECT * FROM users;
+      INSERT INTO users_without_email_unique (id, email, created_at, updated_at)
+        VALUES ('duplicate-email-a', 'shared@example.test', 1, 1);
+      INSERT INTO users_without_email_unique (id, email, created_at, updated_at)
+        VALUES ('duplicate-email-b', 'shared@example.test', 2, 2);
+      DROP TABLE users;
+      ALTER TABLE users_without_email_unique RENAME TO users;
+      CREATE UNIQUE INDEX idx_users_email_with_id ON users(email, id);
+      CREATE UNIQUE INDEX idx_users_email_partial
+        ON users(email) WHERE id = 'duplicate-email-a';
+    `)
+    const uniqueIndexes = mutate.prepare(`
+      SELECT name, "unique" AS is_unique, partial
+      FROM pragma_index_list(?)
+    `).all('users')
+    const hasCompleteUniqueEmail = uniqueIndexes.some((index) => {
+      if (Number(index.is_unique) !== 1 || Number(index.partial) !== 0) return false
+      const columns = mutate.prepare('SELECT name FROM pragma_index_info(?) ORDER BY seqno')
+        .all(index.name)
+        .map((row) => row.name)
+      return columns.length === 1 && columns[0] === 'email'
+    })
+    assert.equal(hasCompleteUniqueEmail, false)
+    assert.equal(
+      mutate.prepare('SELECT COUNT(*) AS count FROM users WHERE email = ?')
+        .get('shared@example.test').count,
+      2,
+    )
+  } finally {
+    mutate.close()
+  }
+  const before = schemaSnapshot(filePath)
+  const fileBefore = databaseFileSnapshot(filePath)
+  selectDatabase(filePath)
+
+  assert.throws(
+    () => getDb(),
+    (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+      && error?.details?.stage === 'preflight'
+      && error?.details?.missing?.includes('unique-key:users.email'),
+  )
+  assert.deepEqual(schemaSnapshot(filePath), before)
+  assert.deepEqual(databaseFileSnapshot(filePath), fileBefore)
 })
 
 test('fresh and v5→v6, v27→v28, and v29→v30 fixtures converge idempotently with valid integrity and foreign keys', () => {
@@ -343,6 +859,15 @@ test('fresh and v5→v6, v27→v28, and v29→v30 fixtures converge idempotently
     try {
       fixture.pragma('foreign_keys = OFF')
       entry.mutate(fixture)
+      // The fixture starts from the current schema only to reuse its legacy
+      // tables. Remove post-target Agent Event tables before lowering the
+      // version so v113-v115 replay against the historical shape they own.
+      fixture.exec(`
+        DROP TABLE agent_event_subscription_dlq;
+        DROP TABLE agent_event_subscriptions;
+        DROP TABLE agent_event_stream_metadata;
+        DROP TABLE agent_event_outbox;
+      `)
       fixture.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'")
         .run(String(entry.version))
     } finally {

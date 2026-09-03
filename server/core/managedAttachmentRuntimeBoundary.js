@@ -1,24 +1,17 @@
 import { createHash } from 'node:crypto'
 import { types as utilTypes } from 'node:util'
-
+import { MANAGED_ATTACHMENT_PUBLIC_FIELDS } from './managedAttachmentDtos.js'
 import { managedAttachmentBoundaryError } from './managedAttachmentRuntimeErrors.js'
+import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_CONTENT_PARTS, MAX_INLINE_BYTES, MAX_TEXT_CHARS, MAX_TOTAL_CONTENT_CHARS } from './managedAttachmentRuntimeLimits.js'
+
+export { MANAGED_ATTACHMENT_RUNTIME_BOUNDARY_LIMITS } from './managedAttachmentRuntimeLimits.js'
 
 const ATTACHMENT_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/u
 const MIME_TYPE_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/u
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u
 const HOST_PATH_PATTERN = /(?:(?:^|[^a-zA-Z0-9])[a-zA-Z]:[\\/]|\\\\|file:\/\/|https?:\/\/|\/(?:home|Users|private|var|tmp)\/)/u
-const MAX_ATTACHMENTS = 32
-const MAX_ATTACHMENT_BYTES = 1024 * 1024 * 1024
-const MAX_INLINE_BYTES = 20 * 1024 * 1024
-const MAX_CONTENT_PARTS = 128
-const MAX_TEXT_CHARS = 1024 * 1024
-const MAX_TOTAL_CONTENT_CHARS = 64 * 1024 * 1024
 const MAX_BASE64_CHARS = Math.ceil(MAX_INLINE_BYTES / 3) * 4
 
-const ATTACHMENT_FIELDS = Object.freeze([
-  'id', 'name', 'mimeType', 'size', 'sha256', 'status', 'sessionId', 'messageId',
-  'uri', 'downloadUrl', 'createdAt', 'updatedAt',
-])
 const EXPECTED_ATTACHMENT_FIELDS = Object.freeze([
   'id', 'name', 'mimeType', 'size', 'sha256', 'status', 'sessionId', 'messageId',
   'uri', 'downloadUrl',
@@ -260,7 +253,11 @@ function digest(value, label) {
 
 function attachmentDto(value, label, { expected = false } = {}) {
   assertRecord(value, label)
-  assertAllowedFields(value, expected ? EXPECTED_ATTACHMENT_FIELDS : ATTACHMENT_FIELDS, label)
+  assertAllowedFields(
+    value,
+    expected ? EXPECTED_ATTACHMENT_FIELDS : MANAGED_ATTACHMENT_PUBLIC_FIELDS,
+    label,
+  )
   const id = attachmentId(ownDataValue(value, 'id', label), `${label}.id`)
   const status = boundedString(ownDataValue(value, 'status', label), `${label}.status`, {
     nonEmpty: true,
@@ -594,12 +591,3 @@ export function validateManagedAttachmentPreparedOutput(output, input) {
   }
   return Object.freeze({ attachments, content: Object.freeze(parts) })
 }
-
-export const MANAGED_ATTACHMENT_RUNTIME_BOUNDARY_LIMITS = Object.freeze({
-  maxAttachments: MAX_ATTACHMENTS,
-  maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
-  maxInlineBytes: MAX_INLINE_BYTES,
-  maxContentParts: MAX_CONTENT_PARTS,
-  maxTextChars: MAX_TEXT_CHARS,
-  maxTotalContentChars: MAX_TOTAL_CONTENT_CHARS,
-})

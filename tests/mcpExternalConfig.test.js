@@ -33,8 +33,8 @@ test('external MCP access key validation accepts only ymak keys or an empty plac
   assert.throws(() => buildExternalMcpConfig('unknown', '/mcp'), /Unsupported MCP application/)
 })
 
-test('external MCP connection panel has complete five-language copy', () => {
-  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('external MCP connection panel has complete bilingual copy', () => {
+  for (const lang of ['zh', 'en']) {
     for (const key of ['title', 'createKey', 'keyLabel', 'keyPrivacy', 'invalidKey', 'copy', 'copyError']) {
       assert.ok(lookup(translations[lang], `mcpExternal.${key}`), `${lang} is missing ${key}`)
     }

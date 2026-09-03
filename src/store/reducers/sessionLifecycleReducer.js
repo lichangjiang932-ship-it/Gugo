@@ -33,13 +33,27 @@ export function reduceSessionLifecycleState(state, action) {
     }
 
     case 'START_NEW_DRAFT': {
-      const workspacePath = normalizeWorkspacePath(action.payload?.workspacePath)
+      const hasExplicitWorkspace = Object.prototype.hasOwnProperty.call(
+        action.payload || {},
+        'workspacePath',
+      )
+      const workspacePath = normalizeWorkspacePath(
+        hasExplicitWorkspace ? action.payload.workspacePath : state.defaultWorkspacePath,
+      )
       return {
         ...state,
         activeSessionId: null,
         draftSessionId: null,
         draftWorkspacePath: workspacePath,
         newDraftVersion: state.newDraftVersion + 1,
+      }
+    }
+
+    case 'SET_DEFAULT_WORKSPACE': {
+      const workspacePath = normalizeWorkspacePath(action.payload?.workspacePath ?? action.payload)
+      return {
+        ...state,
+        defaultWorkspacePath: workspacePath,
       }
     }
 
@@ -65,6 +79,9 @@ export function reduceSessionLifecycleState(state, action) {
         ? action.payload.messages
         : []
       const revision = Number(metadata.revision)
+      const metadataWorkspacePath = Object.prototype.hasOwnProperty.call(metadata, 'workspacePath')
+        ? normalizeWorkspacePath(metadata.workspacePath)
+        : normalizeWorkspacePath(parent?.workspacePath)
       const forkedSession = {
         id,
         title: metadata.title || parent?.title || '\u65b0\u5bf9\u8bdd',
@@ -79,7 +96,7 @@ export function reduceSessionLifecycleState(state, action) {
         forkedAt: metadata.forkedAt ?? null,
         serverRevision: Number.isInteger(revision) && revision >= 0 ? revision : 0,
         agentId: parent?.agentId || null,
-        ...(parent?.workspacePath ? { workspacePath: parent.workspacePath } : {}),
+        ...(metadataWorkspacePath ? { workspacePath: metadataWorkspacePath } : {}),
         ...(parent?.modelName ? { modelName: parent.modelName } : {}),
         ...(parent?.modelProviderId ? { modelProviderId: parent.modelProviderId } : {}),
       }
@@ -143,6 +160,7 @@ export function reduceSessionLifecycleState(state, action) {
       return {
         ...state,
         activeSessionId: id,
+        draftWorkspacePath: '',
         sessions: state.sessions.map((s) =>
           s.id === id ? { ...s, lastViewedAt: Date.now() } : s
         ),

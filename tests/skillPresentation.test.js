@@ -10,6 +10,7 @@ import {
   presentSkillCollection,
   selectDefaultSkillCatalog,
 } from '../src/lib/skillPresentation.js'
+import { SKILLS } from '../src/data/skillCatalog.js'
 
 const present = (name, desc = 'Use this skill for professional work.') => getPresentedSkill({
   id: `codex-superpowers-${name}`,
@@ -48,6 +49,49 @@ test('unknown plugin skills retain a unique translated identity instead of a sha
 test('existing Chinese built-in skill copy remains unchanged', () => {
   const skill = { id: 'research', name: '深度研究', desc: '检索并核验多来源资料。' }
   assert.equal(getPresentedSkill(skill, 'zh'), skill)
+})
+
+test('every built-in skill exposes English catalog metadata without changing runtime identity', () => {
+  const english = presentSkillCollection(SKILLS, 'en')
+
+  assert.equal(english.length, 12)
+  assert.deepEqual(english.map((skill) => skill.id), SKILLS.map((skill) => skill.id))
+  assert.deepEqual(english.map((skill) => skill.name), [
+    'Presentation Design',
+    'Premium Webpage',
+    'Document Editing',
+    'Spreadsheet Analysis',
+    'Email Drafting',
+    'Financial Analysis',
+    'Code Generation',
+    'Code Review',
+    'Test Generation',
+    'Translation & Editing',
+    'Research & Analysis',
+    'Project Planning',
+  ])
+  for (const skill of english) {
+    assert.doesNotMatch(skill.name, /[\u3400-\u9fff]/u, `${skill.id} name must be English`)
+    assert.doesNotMatch(skill.desc, /[\u3400-\u9fff]/u, `${skill.id} description must be English`)
+    assert.doesNotMatch(skill.perms.join(' '), /[\u3400-\u9fff]/u, `${skill.id} permissions must be English`)
+    assert.equal(skill.systemPrompt, SKILLS.find((source) => source.id === skill.id)?.systemPrompt)
+  }
+})
+
+test('legacy UI languages use English built-in copy while user-managed skills keep their own metadata', () => {
+  const englishPpt = getPresentedSkill(SKILLS[0], 'en')
+  for (const legacyLang of ['ja', 'ko', 'zh-TW', 'en-US']) {
+    assert.deepEqual(getPresentedSkill(SKILLS[0], legacyLang), englishPpt)
+  }
+
+  const custom = {
+    id: 'ppt',
+    name: '我的演示技能',
+    desc: '保留用户自己的名称与说明。',
+    perms: ['自定义权限'],
+    custom: true,
+  }
+  assert.equal(getPresentedSkill(custom, 'en'), custom)
 })
 
 test('skill collection merges identical plugin copies and disambiguates real title collisions', () => {
@@ -145,12 +189,16 @@ test('skill library, slash menu, and command palette share presented metadata', 
   assert.match(commands, /syncSkillsToCommands\(presentSkillCollection\(skills, lang\)\)/)
 })
 
-test('skill details explain invocation and runtime requirements in every UI language', () => {
-  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+test('skill details explain invocation and runtime requirements in every supported UI language', () => {
+  for (const lang of ['zh', 'en']) {
     const copy = getSkillDetailCopy(lang)
     assert.ok(copy.overview)
     assert.ok(copy.command)
     assert.ok(copy.requirements)
+  }
+  const englishCopy = getSkillDetailCopy('en')
+  for (const legacyLang of ['ja', 'ko', 'zh-TW']) {
+    assert.deepEqual(getSkillDetailCopy(legacyLang), englishCopy)
   }
   assert.deepEqual(describeSkillRequirements({ requirements: {} }, 'zh'), ['当前环境已满足运行要求'])
   assert.deepEqual(describeSkillRequirements({ requirements: { app: true, mcp: true, runtime: ['references'] } }, 'zh'), [

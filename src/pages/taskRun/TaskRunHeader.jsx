@@ -13,6 +13,8 @@ export default function TaskRunHeader({
   prompt,
   setPrompt,
   submitting,
+  autoRetryEnabled = false,
+  setAutoRetryEnabled,
   error,
   errorAction,
   modelName = '',
@@ -29,9 +31,19 @@ export default function TaskRunHeader({
     <header className="px-7 py-5 border-b border-dashed border-ink-fade/40">
       <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">{t('taskCenter.kicker')}</span>
       <h1 className="font-semibold text-[28px] text-ink mt-1.5">{t('taskCenter.title')}</h1>
-      <form onSubmit={onCreate} className="mt-4 flex gap-2">
-        <input value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t('taskCenter.prompt')} className="flex-1 h-11 px-4 rounded-md border border-ink/30 bg-paper outline-none focus:border-focus text-sm" />
-        <button type="submit" disabled={submitting || !prompt.trim() || !taskCanStart} className="h-11 px-5 rounded-md bg-accent text-accent-contrast font-semibold text-sm disabled:opacity-50">{submitting ? t('taskCenter.creating') : t('taskCenter.start')}</button>
+      <form onSubmit={onCreate} className="mt-4">
+        <div className="flex gap-2">
+          <input value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t('taskCenter.prompt')} className="flex-1 h-11 px-4 rounded-md border border-ink/30 bg-paper outline-none focus:border-focus text-sm" />
+          <button type="submit" disabled={submitting || !prompt.trim() || !taskCanStart} className="h-11 px-5 rounded-md bg-accent text-accent-contrast font-semibold text-sm disabled:opacity-50">{submitting ? t('taskCenter.creating') : t('taskCenter.start')}</button>
+        </div>
+        <label className="mt-2 inline-flex items-center gap-2 text-xs text-ink-soft">
+          <input
+            type="checkbox"
+            checked={autoRetryEnabled}
+            onChange={(event) => setAutoRetryEnabled?.(event.target.checked)}
+          />
+          {t('taskCenter.autoRetry')}
+        </label>
       </form>
       <div
         className={`mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-3 py-2 text-sm ${MODEL_READINESS_TONE[modelStatus.state]}`}

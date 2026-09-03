@@ -43,9 +43,16 @@ test('segments split on shell operators but not inside quotes', () => {
 })
 
 test('default mode is allow and policy passes everything', () => {
-  assert.equal(resolveShellNetworkMode(), 'allow')
-  assert.equal(checkShellNetworkPolicy('curl https://example.com'), null)
+  assert.equal(resolveShellNetworkMode({}), 'allow')
+  assert.equal(checkShellNetworkPolicy('curl https://example.com', {}), null)
   assert.deepEqual(describeShellPolicy({}), { networkMode: 'allow' })
+})
+
+test('pure-local mode forces shell network deny over an explicit allow', () => {
+  const env = { GUGO_PURE_LOCAL_MODE: '1', GUGO_SHELL_NETWORK_MODE: 'allow' }
+  assert.equal(resolveShellNetworkMode(env), 'deny')
+  assert.equal(checkShellNetworkPolicy('curl https://example.com', env)?.code, 'SHELL_NETWORK_DENIED')
+  assert.equal(checkShellNetworkPolicy('npm run build', env), null)
 })
 
 test('deny mode blocks classified uses with a readable reason and code', () => {

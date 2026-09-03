@@ -16,5 +16,5 @@
 - [ ] `npm test`
 - [ ] `npm run build`
 - [ ] Tests added or updated for changed behavior
-- [ ] UI text updated in all five locales, when applicable
+- [ ] UI text updated in both supported languages (`zh` / `en`), when applicable
 - [ ] No credentials, private data, generated artifacts, or local databases included

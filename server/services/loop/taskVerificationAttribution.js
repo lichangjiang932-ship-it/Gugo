@@ -1,7 +1,7 @@
 import { PROJECT_SCOPE_TARGET } from './heuristics/constants.js'
 import { normalizeMutationTarget } from './heuristics/mutationClassification.js'
 
-const DIAGNOSTIC_PATH_PATTERN = /(?:[a-z]:[\\/]|\/|\.{1,2}[\\/])?(?:[a-z0-9_@()[\].-]+[\\/])*[a-z0-9_@()[\].-]+\.(?:[cm]?[jt]sx?|py|rs|go|java|kt|cs|c|cc|cpp|h|hpp|rb|php|vue|svelte|json|ya?ml|toml|xml|html?|css|scss)/giu
+const DIAGNOSTIC_PATH_PATTERN = /(?:[a-z]:[\\/]|\/|\.{1,2}[\\/])?(?:[a-z0-9_@()[\].-]+[\\/])*[a-z0-9_@()[\].-]+\.(?:[cm]?[jt]sx?|py|rs|go|java|kt|cs|c|cc|cpp|h|hpp|rb|php|vue|svelte|json|ya?ml|toml|xml|html?|css|scss|sql|(?:ba|z)?sh|ps1|lua|r|swift|dart|exs?|clj[sc]?|l?hs|mli?|elm|zig|proto|graphql|gql|md|markdown)(?![a-z0-9])/giu
 const PROJECT_WIDE_MUTATION_NAMES = new Set([
   'package.json',
   'package-lock.json',

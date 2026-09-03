@@ -46,6 +46,8 @@ test('headless lifecycle starts only local durability/plugin services and stops 
       return [{ ok: true, pluginId: 'test-plugin' }]
     },
     shutdownRuntimePlugins: () => { events.push('stop:runtime-plugins') },
+    startAgentEventDurableConsumerRuntime: () => { events.push('start:agent-event-consumers') },
+    closeAgentEventDurableConsumerRuntime: () => { events.push('stop:agent-event-consumers') },
     startLspRuntime: (options) => {
       assert.strictEqual(options.env, runtimeEnv)
       events.push('start:lsp')
@@ -86,14 +88,16 @@ test('headless lifecycle starts only local durability/plugin services and stops 
     'start:plugin-config',
     'start:plugin-discovery',
     'start:runtime-plugins',
+    'start:agent-event-consumers',
     'start:lsp',
   ])
 
   const stopped = await graph.stopAll()
   assert.equal(stopped.exitCode, 0)
-  assert.deepEqual(events.slice(-7), [
+  assert.deepEqual(events.slice(-8), [
     'stop:turn-engine',
     'stop:lsp',
+    'stop:agent-event-consumers',
     'stop:runtime-plugins',
     'stop:materializer',
     'stop:compaction-archive',
@@ -132,6 +136,8 @@ test('headless runtime plugin restore remains fail-soft per plugin but lifecycle
         error: 'health check failed',
       }],
       shutdownRuntimePlugins: () => {},
+      startAgentEventDurableConsumerRuntime: () => {},
+      closeAgentEventDurableConsumerRuntime: () => {},
       startLspRuntime: () => {},
       closeLspRuntime: () => {},
       closeTurnEngine: () => {},
@@ -174,6 +180,12 @@ test('headless lifecycle fails closed before materialization when session deleti
       initPlugins: () => { events.push('start:plugin-discovery') },
       restoreEnabledRuntimePlugins: () => [],
       shutdownRuntimePlugins: () => { events.push('stop:runtime-plugins') },
+      startAgentEventDurableConsumerRuntime: () => {
+        events.push('start:agent-event-consumers')
+      },
+      closeAgentEventDurableConsumerRuntime: () => {
+        events.push('stop:agent-event-consumers')
+      },
       startLspRuntime: () => { events.push('start:lsp') },
       closeLspRuntime: () => { events.push('stop:lsp') },
       closeTurnEngine: () => { events.push('stop:turn-engine') },

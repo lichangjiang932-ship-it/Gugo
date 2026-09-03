@@ -8,12 +8,25 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 const METADATA_IPV4 = new Set(['100.100.100.200', '169.254.169.254'])
 const METADATA_IPV6 = new Set(['fd00:ec2::254'])
 const METADATA_HOST_RE = /^(?:metadata|metadata\.google\.internal)$/i
+const PURE_LOCAL_MODE_ENV_KEY = 'GUGO_PURE_LOCAL_MODE'
+const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on'])
 
 function outboundError(message, code) {
   const error = new Error(message)
   error.code = code
   error.retryable = false
   return error
+}
+
+export function isPureLocalModeEnabled(env = process.env) {
+  return TRUE_VALUES.has(String(env?.[PURE_LOCAL_MODE_ENV_KEY] || '').trim().toLowerCase())
+}
+
+function pureLocalDenied() {
+  return outboundError(
+    'Public outbound network access is disabled by pure-local mode',
+    'OUTBOUND_PURE_LOCAL_DENIED',
+  )
 }
 
 function ipv4Parts(ip) {
@@ -111,8 +124,11 @@ function isAllowedLocalIp(ip) {
   return /^f[cd][0-9a-f]{2}:/.test(lower)
 }
 
-function assertAddressAllowed(address, { allowLocal = false } = {}) {
-  if (!isUnsafeIp(address)) return
+function assertAddressAllowed(address, { allowLocal = false, env = process.env } = {}) {
+  if (!isUnsafeIp(address)) {
+    if (isPureLocalModeEnabled(env)) throw pureLocalDenied()
+    return
+  }
   if (allowLocal === 'loopback' && isLoopbackIp(address)) return
   if (allowLocal === true && isAllowedLocalIp(address)) return
   const kind = METADATA_IPV4.has(address) || METADATA_IPV6.has(String(address).toLowerCase())
@@ -125,21 +141,27 @@ export async function resolvePublicHost(hostname, {
   lookup = dns.lookup,
   allowLocal = false,
   resolveDns = true,
+  env = process.env,
 } = {}) {
   const host = String(hostname || '').replace(/^\[|\]$/g, '')
   if (net.isIP(host)) {
-    assertAddressAllowed(host, { allowLocal })
+    assertAddressAllowed(host, { allowLocal, env })
     return { host, lockedIp: host }
   }
   if (!host) throw outboundError('Outbound target hostname is required', 'OUTBOUND_HOST_INVALID')
-  if (!resolveDns) return { host, lockedIp: null }
+  // A hostname cannot be proven local without resolving it. In pure-local
+  // mode, skipping DNS validation must never become a policy bypass.
+  if (!resolveDns) {
+    if (isPureLocalModeEnabled(env)) throw pureLocalDenied()
+    return { host, lockedIp: null }
+  }
   let records
   try { records = await lookup(host, { all: true, verbatim: true }) }
   catch { throw outboundError('Outbound target DNS resolution failed', 'OUTBOUND_DNS_FAILED') }
   if (!Array.isArray(records) || records.length === 0) {
     throw outboundError('Outbound target has no DNS records', 'OUTBOUND_DNS_EMPTY')
   }
-  for (const record of records) assertAddressAllowed(record?.address, { allowLocal })
+  for (const record of records) assertAddressAllowed(record?.address, { allowLocal, env })
   return { host, lockedIp: records[0].address }
 }
 

@@ -1,3 +1,5 @@
+import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
+
 /**
  * Apply the host-owned terminal gates in their canonical priority order.
  *
@@ -14,7 +16,6 @@ export async function finishUnsatisfiedTerminalGate(s, { steeringLeaseId = null 
   }
   if (!s.hasRequiredExecutionEvidence()) {
     return s.finishIncomplete({
-      text: '\u4efb\u52a1\u5c1a\u672a\u5b8c\u6210\uff1a\u5c1a\u672a\u53d6\u5f97\u7b26\u5408\u672c\u6b21\u4fee\u6539\u76ee\u6807\u7684\u5b9e\u9645\u6267\u884c\u8bc1\u636e\u3002\u53ef\u91cd\u8bd5\u672c\u4efb\u52a1\uff0c\u6216\u5207\u6362\u5230\u652f\u6301\u5de5\u5177\u8c03\u7528\u7684\u6a21\u578b\u3002',
       reason: 'execution_evidence_missing',
       steeringLeaseId,
     })
@@ -51,9 +52,6 @@ export async function finishUnsatisfiedTerminalGate(s, { steeringLeaseId = null 
   }
   if (s.hasPendingMutationVerification()) {
     return s.finishIncomplete({
-      text: s.availableVerificationToolNames.length > 0
-        ? '修改已成功写入并保留，可在文件栏查看；但尚未通过读回、差异检查或项目检查，因此仍标记为待验证。'
-        : '修改已成功写入并保留，可在文件栏查看；当前没有可用的验证工具，因此仍无法确认验证通过。',
       reason: 'post_mutation_verification_missing',
       steeringLeaseId,
     })
@@ -61,7 +59,6 @@ export async function finishUnsatisfiedTerminalGate(s, { steeringLeaseId = null 
   s.finalLocalHtmlDeliveryFailure = await s.validateLocalHtmlDeliveries()
   if (s.finalLocalHtmlDeliveryFailure) {
     return s.finishIncomplete({
-      text: '网页修改已成功写入并保留，可在文件栏查看；资源完整性验证尚未通过，因此仍标记为待验证。请重试以继续自动修复。',
       reason: 'local_html_delivery_validation_failed',
       steeringLeaseId,
     })
@@ -69,7 +66,6 @@ export async function finishUnsatisfiedTerminalGate(s, { steeringLeaseId = null 
   s.localHtmlDeliveryRetries = 0
   if (s.requiresPdfLayoutVerification && !s.pdfLayoutVerificationObserved) {
     return s.finishIncomplete({
-      text: '\u6587\u4ef6\u5df2\u751f\u6210\uff0c\u4f46\u5c1a\u672a\u901a\u8fc7\u76ee\u6807\u9875\u3001\u975e\u76ee\u6807\u9875\u3001\u6587\u672c\u8fb9\u754c\u4e0e\u9010\u9875\u6e32\u67d3\u7684 PDF \u5e03\u5c40\u6821\u9a8c\uff0c\u56e0\u6b64\u6ca1\u6709\u6807\u8bb0\u4e3a\u5b8c\u6210\u3002',
       reason: 'pdf_layout_verification_missing',
       steeringLeaseId,
     })
@@ -78,7 +74,6 @@ export async function finishUnsatisfiedTerminalGate(s, { steeringLeaseId = null 
     const fallback = s.applySafeDeliverableFallback?.()
     if (!fallback) {
       return s.finishIncomplete({
-        text: 'Files were created, but final deliverable selection did not converge. No unverified or intermediate files were attached to the answer.',
         reason: 'deliverable_selection_missing',
         steeringLeaseId,
       })
@@ -93,6 +88,13 @@ export function protectTerminalCandidate(s, text, { incomplete = false } = {}) {
     ? s.guardPriorOutcomeStatusText(text)
     : String(text || '')
   return s.protectTerminalText(statusSafeText, { incomplete })
+}
+
+function iterationLimitWrapUpPrompt(locale, maxIterations) {
+  const rounds = Math.max(1, Number(maxIterations) || 1)
+  return locale === 'en'
+    ? `The tool-call limit (${rounds} rounds) has been reached. Summarize the progress so far and what remains based on the available information. Do not call any more tools.`
+    : `你已达到工具调用上限（${rounds} 轮）。请基于目前已有的信息总结当前进展和剩余工作，不要再调用任何工具。`
 }
 
 export async function finalizeRuntime(s) {
@@ -112,7 +114,7 @@ export async function finalizeRuntime(s) {
           ...s.convo,
           {
             role: 'system',
-            content: `你已达到工具调用上限(${s.maxIters} 轮)。请基于目前已有的信息给出最终回答,不要再调用任何工具。`,
+            content: iterationLimitWrapUpPrompt(s.locale, s.maxIters),
           },
         ],
         tools: [],
@@ -122,7 +124,7 @@ export async function finalizeRuntime(s) {
       })
       s.recovery = mergeCompactionRecovery(s.recovery, wrapUpRequest.recovery)
       const wrapUp = wrapUpRequest.response
-      s.finalText = wrapUp?.content || ''
+      s.finalText = localizedTerminalModelText(s.locale, wrapUp?.content, { strictLocale: true })
     } catch {
       writeToolAudit?.({
         userId: s.job?.userId,
@@ -137,12 +139,17 @@ export async function finalizeRuntime(s) {
     if (!s.finalText) {
       emptyModelResponse = !iterationLimitReached
       s.finalText = iterationLimitReached
-        ? `已达到 ${s.maxIters} 轮工具调用上限，任务尚未完成。请重试以继续。`
-        : '模型未返回可显示内容，本次任务未完成。请重试，或检查当前模型配置。'
+        ? s.d.formatIncompleteTerminalText('iteration_limit_reached', {
+            locale: s.locale,
+            maxIterations: s.maxIters,
+          })
+        : s.d.formatIncompleteTerminalText('empty_model_response', { locale: s.locale })
     }
   }
   const blocked = await finishUnsatisfiedTerminalGate(s)
   if (blocked) return blocked
+  const sourceHandoffFiltered = s.requiresSourceHandoffProtection
+    && Boolean(s.d.sourceHandoffViolation(s.finalText))
   s.finalText = protectTerminalCandidate(s, s.finalText, { incomplete: true })
   if (iterationLimitReached) {
     // Every allowed iteration ended with another tool batch. The wrap-up text
@@ -151,6 +158,7 @@ export async function finalizeRuntime(s) {
     return s.finishIncomplete({
       text: s.finalText,
       reason: 'iteration_limit_reached',
+      sourceHandoffFiltered,
     })
   }
   if (emptyModelResponse) {

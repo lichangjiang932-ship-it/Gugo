@@ -15,6 +15,7 @@ export const MAX_TASK_VERIFICATION_CANDIDATES = 64
 export const MAX_TASK_VERIFICATION_VERIFIED = 64
 export const MAX_TASK_VERIFICATION_INDETERMINATES = 64
 export const MAX_TASK_VERIFICATION_MUTATION_TARGETS = 64
+export const MAX_TASK_VERIFICATION_OVERFLOW_SCOPES = 64
 export const MAX_TASK_VERIFICATION_EPOCH = Number.MAX_SAFE_INTEGER
 
 export const FAILURE_PENDING_REASON = 'verification_failed'
@@ -209,9 +210,27 @@ export function syncLastIndeterminate(state) {
   return state.lastIndeterminate
 }
 
-export function markVerificationOverflow(state) {
+export function syncVerificationOverflow(state) {
+  if (!state) return false
+  state.verificationOverflowed = state.verificationOverflowUnknown === true
+    || (state.overflowScopes instanceof Map && state.overflowScopes.size > 0)
+  return state.verificationOverflowed
+}
+
+export function markVerificationOverflow(state, scope = null) {
   if (!state) return
-  state.verificationOverflowed = true
+  const normalizedScope = normalizeScopeDescriptor(scope)
+  if (normalizedScope && state.overflowScopes instanceof Map) {
+    if (state.overflowScopes.has(normalizedScope.scope)
+      || state.overflowScopes.size < MAX_TASK_VERIFICATION_OVERFLOW_SCOPES) {
+      state.overflowScopes.set(normalizedScope.scope, normalizedScope)
+    } else {
+      state.verificationOverflowUnknown = true
+    }
+  } else {
+    state.verificationOverflowUnknown = true
+  }
+  syncVerificationOverflow(state)
 }
 
 function absolutePathLike(value) {
@@ -238,6 +257,18 @@ export function verificationScopeCovers(attempt, recorded, workspaceRoot = '') {
   if (attempt.verifierFamily !== recorded.verifierFamily) return false
   if (attempt.coverage === 'targeted') return attempt.scope === recorded.scope
   return cwdScopeCovers(attempt.cwd, recorded.cwd, workspaceRoot)
+}
+
+export function clearCoveredVerificationOverflow(state, attempt, workspaceRoot = '') {
+  if (!(state?.overflowScopes instanceof Map)) return false
+  let changed = false
+  for (const [scopeKey, recorded] of [...state.overflowScopes]) {
+    if (!verificationScopeCovers(attempt, recorded, workspaceRoot)) continue
+    state.overflowScopes.delete(scopeKey)
+    changed = true
+  }
+  syncVerificationOverflow(state)
+  return changed
 }
 
 export function relatedVerificationScopes(scopes, mutationTargets, workspaceRoot) {
@@ -275,6 +306,14 @@ export function restoreTaskVerificationRepair(value = {}) {
   )
   const lastIndeterminate = [...indeterminate.values()].at(-1) || null
   const mutationTargets = restoreMutationTargets(value?.mutationTargets)
+  const serializedOverflowScopes = Array.isArray(value?.overflowScopes)
+    ? value.overflowScopes
+    : []
+  const overflowScopes = restoreEntryMap(
+    serializedOverflowScopes,
+    normalizeScopeDescriptor,
+    MAX_TASK_VERIFICATION_OVERFLOW_SCOPES,
+  )
   const serializedStateOverflowed = serializedListExceedsLimit(
     value?.pending,
     MAX_PENDING_TASK_VERIFICATIONS,
@@ -298,15 +337,23 @@ export function restoreTaskVerificationRepair(value = {}) {
     ...[...verified.values()].map((entry) => entry.verifiedEpoch),
     ...[...indeterminate.values()].map((entry) => normalizeEpoch(entry?.requiredEpoch)),
   )
-  return {
+  const verificationOverflowUnknown = value?.verificationOverflowUnknown === true
+    || serializedStateOverflowed
+    || serializedEpochInvalid(value)
+    || serializedListExceedsLimit(
+      serializedOverflowScopes,
+      MAX_TASK_VERIFICATION_OVERFLOW_SCOPES,
+    )
+    || (value?.verificationOverflowed === true && serializedOverflowScopes.length === 0)
+  const restored = {
     pending,
     candidates,
     verified,
     indeterminate,
     lastIndeterminate,
-    verificationOverflowed: value?.verificationOverflowed === true
-      || serializedStateOverflowed
-      || serializedEpochInvalid(value),
+    overflowScopes,
+    verificationOverflowUnknown,
+    verificationOverflowed: false,
     mutationEpoch,
     mutationTargets,
     consecutiveFailures: Math.min(
@@ -315,6 +362,8 @@ export function restoreTaskVerificationRepair(value = {}) {
     ),
     lastFailureBatchId: normalizeBatchId(value?.lastFailureBatchId),
   }
+  syncVerificationOverflow(restored)
+  return restored
 }
 
 export function serializeTaskVerificationRepair(value = {}) {
@@ -334,6 +383,20 @@ export function serializeTaskVerificationRepair(value = {}) {
     value.mutationTargets,
     MAX_TASK_VERIFICATION_MUTATION_TARGETS,
   )
+  const serializedOverflowScopes = [...(value.overflowScopes instanceof Map
+    ? value.overflowScopes.values()
+    : [])]
+    .slice(-MAX_TASK_VERIFICATION_OVERFLOW_SCOPES)
+    .map((entry) => normalizeScopeDescriptor(entry))
+    .filter(Boolean)
+  const verificationOverflowUnknown = value?.verificationOverflowUnknown === true
+    || inMemoryStateOverflowed
+    || stateMapExceedsLimit(
+      value.overflowScopes,
+      MAX_TASK_VERIFICATION_OVERFLOW_SCOPES,
+    )
+    || (value?.verificationOverflowed === true
+      && !(value.overflowScopes instanceof Map))
   return {
     pending: [...(value.pending instanceof Map ? value.pending.values() : [])]
       .slice(-MAX_PENDING_TASK_VERIFICATIONS)
@@ -357,8 +420,10 @@ export function serializeTaskVerificationRepair(value = {}) {
         ? [...value.indeterminate.values()].at(-1)
         : value?.lastIndeterminate,
     ),
-    verificationOverflowed: value?.verificationOverflowed === true
-      || inMemoryStateOverflowed,
+    overflowScopes: serializedOverflowScopes,
+    verificationOverflowUnknown,
+    verificationOverflowed: verificationOverflowUnknown
+      || serializedOverflowScopes.length > 0,
     mutationEpoch: normalizeEpoch(value.mutationEpoch),
     mutationTargets: [...(value.mutationTargets instanceof Map ? value.mutationTargets : [])]
       .slice(-MAX_TASK_VERIFICATION_MUTATION_TARGETS)

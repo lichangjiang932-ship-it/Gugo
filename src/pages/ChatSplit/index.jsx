@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from '../../lib/router.jsx'
+import { useLocation, useNavigate } from '../../lib/router.jsx'
 import { useAppContext } from '../../store/AppContext'
 import { writeStoredModelSelection } from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
@@ -33,15 +33,15 @@ import useChatWorkspaceState from './useChatWorkspaceState.js'
 const CHAT_MODEL_SETTINGS_PATH = settingsPathForSection(SETTINGS_TAB_MODELS, [], { returnTo: '/chat' })
 
 export default function ChatSplit() {
+  const location = useLocation()
   const navigate = useNavigate()
   const { state, dispatch, refreshAuth } = useAppContext()
   const toast = useToast()
   const { t, lang } = useT()
   const { activeAgentId: globalActiveAgentId } = useActiveAgent()
   const initialSessionDraft = readSessionDraft((state.sessionDrafts || {})[state.activeSessionId])
-  const [input, setInput] = useState(() => (
-    state.activeSessionId ? initialSessionDraft.text : String(state.draftInput || '')
-  ))
+  const [input, setInput] = useState(() => (state.activeSessionId
+    ? initialSessionDraft.text : String(state.draftInput || '')))
   const [workbenchMessage, setWorkbenchMessage] = useState('')
   const [attachments, setAttachments] = useState(() => initialSessionDraft.attachments)
   const [isGenerating, setIsGenerating] = useState(false)
@@ -68,8 +68,7 @@ export default function ChatSplit() {
   const {
     activeSession, activeSessionId, contextToolSpecs, effectiveAgentId,
     effectiveSelectedModel, effectiveSelectedModelProviderId, messages,
-    modelOptions, modelReadiness, reloadModels, runtimeSkills, selectedContextWindow,
-    selectedContextWindowAuthoritative,
+    modelOptions, modelReadiness, reloadModels, runtimeSkills, selectedContextWindow, selectedContextWindowAuthoritative,
     selectedModel, selectedModelProviderId, setSelectedModel, slashRegistry,
   } = useChatCatalogState({
     authoritativeModelFailure, globalActiveAgentId, lang, state, t,
@@ -145,7 +144,7 @@ export default function ChatSplit() {
     probeLocalPathAccess: directory.probeLocalPathAccess, requestServerToolApproval: approvals.requestServerToolApproval,
     refreshAuth, resolveToolApprovalForOwner: approvals.resolveToolApprovalForOwner, runtimeSkills, selectedModel,
     selectedModelProviderId, setContextSystemPrompts,
-    clearToolApprovalForOwner: approvals.clearToolApprovalForOwner, state, t,
+    clearToolApprovalForOwner: approvals.clearToolApprovalForOwner, lang, state, t,
   })
   const steerActiveTurn = useTurnSteering({
     dispatch, inputRef, setInput, setWorkbenchMessage, stateRef, t,
@@ -159,7 +158,6 @@ export default function ChatSplit() {
   })
   const slashQuery = input.match(/^\/([^\s/]*)$/i)?.[1]
   const slashCommands = slashQuery === undefined ? [] : slashRegistry.listCommands({ query: slashQuery })
-
   const setModelForActiveSession = (modelName, modelProviderId = '') => {
     const normalized = String(modelName || '').trim()
     if (!normalized) return
@@ -183,6 +181,7 @@ export default function ChatSplit() {
     input,
     inputRef,
     isGenerating,
+    lang,
     messageEdit,
     modelReadiness,
     navigateInputHistory,
@@ -209,6 +208,7 @@ export default function ChatSplit() {
     attachmentsRef,
     inputRef,
     isGenerating,
+    lang,
     messageEdit,
     modelReadiness,
     setAttachments,
@@ -253,7 +253,7 @@ export default function ChatSplit() {
       attachments={attachments} contextSystemPrompt={contextSystemPrompts[state.activeSessionId || '__draft__'] || ''}
       contextToolSpecs={contextToolSpecs} contextWindow={selectedContextWindow} desktopPetVisible={desktopPetVisible}
       contextWindowAuthoritative={selectedContextWindowAuthoritative}
-      directoryApproval={directory.directoryApproval} input={input} isGenerating={isGenerating} messages={messages}
+      directoryApproval={directory.directoryApproval} input={input} isGenerating={isGenerating} messages={messages} messageRouteHash={location.hash}
       modelOptions={modelOptions} modelReadiness={modelReadiness} onAbort={handleAbort} onApprovalModeChange={approvals.changeApprovalMode}
       onClearWorkspace={handleWorkspaceClear} onSelectWorkspace={handleWorkspaceSelect}
       onAuthorizeDirectoryRequest={handleAuthorizeDirectoryRequest}

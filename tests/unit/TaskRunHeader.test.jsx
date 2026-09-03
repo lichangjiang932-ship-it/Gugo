@@ -33,6 +33,7 @@ test('task header shows readiness before submit and keeps configuration and retr
   const root = createRoot(rootElement)
   let configureCount = 0
   let retryCount = 0
+  let autoRetryEnabled = false
   const renderHeader = (modelReadiness) => root.render(
     <TaskRunHeader
       prompt="run a task"
@@ -40,6 +41,8 @@ test('task header shows readiness before submit and keeps configuration and retr
       submitting={false}
       modelName="local-agent"
       modelReadiness={modelReadiness}
+      autoRetryEnabled={autoRetryEnabled}
+      setAutoRetryEnabled={(enabled) => { autoRetryEnabled = enabled }}
       onConfigureModels={() => { configureCount += 1 }}
       onRetryModelStatus={() => { retryCount += 1 }}
       onCreate={() => {}}
@@ -54,6 +57,11 @@ test('task header shows readiness before submit and keeps configuration and retr
     assert.match(status.textContent, /taskCenter\.modelReadiness\.untested/)
     assert.match(status.textContent, /local-agent/)
     assert.equal(rootElement.querySelector('button[type="submit"]').disabled, true)
+    const autoRetryCheckbox = rootElement.querySelector('input[type="checkbox"]')
+    assert.ok(autoRetryCheckbox)
+    assert.equal(autoRetryCheckbox.checked, false)
+    await act(async () => autoRetryCheckbox.click())
+    assert.equal(autoRetryEnabled, true)
     await act(async () => [...status.querySelectorAll('button')]
       .find((button) => button.textContent === 'taskCenter.modelReadiness.configure').click())
     assert.equal(configureCount, 1)

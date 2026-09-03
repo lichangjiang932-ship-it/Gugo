@@ -28,6 +28,29 @@ const TRUSTED_VERIFICATION_ENV_VALUES = new Map([
   ['CI', new Set(['1', 'true'])],
   ['NODE_ENV', new Set(['test'])],
 ])
+const EXTENDED_COMMAND_PROFILES = Object.freeze([
+  { pattern: /^(?:(?:\.?[\\/])?vendor[\\/]bin[\\/])?phpunit(?:\.bat)?((?:\s+[^\r\n]*)?)$/iu, kind: 'test', family: 'phpunit', cwdMarkers: ['.'] },
+  { pattern: /^(?:bundle\s+exec\s+)?rspec((?:\s+[^\r\n]*)?)$/iu, kind: 'test', family: 'rspec', cwdMarkers: ['.'] },
+  { pattern: /^(?:bundle\s+exec\s+)?rubocop((?:\s+[^\r\n]*)?)$/iu, kind: 'lint', family: 'rubocop', cwdMarkers: ['.'] },
+  { pattern: /^swift\s+test((?:\s+[^\r\n]*)?)$/iu, kind: 'test', family: 'swift-test', cwdMarkers: ['.'] },
+  { pattern: /^swift\s+build((?:\s+[^\r\n]*)?)$/iu, kind: 'build', family: 'swift-build', cwdMarkers: ['.'] },
+  { pattern: /^swiftlint(?:\s+lint)?((?:\s+[^\r\n]*)?)$/iu, kind: 'lint', family: 'swiftlint', cwdMarkers: ['.'] },
+  { pattern: /^xcodebuild\s+test((?:\s+[^\r\n]*)?)$/iu, kind: 'test', family: 'xcodebuild-test', cwdMarkers: ['.'] },
+  { pattern: /^ktlint((?:\s+[^\r\n]*)?)$/iu, kind: 'lint', family: 'ktlint', cwdMarkers: ['.'] },
+  { pattern: /^detekt((?:\s+[^\r\n]*)?)$/iu, kind: 'lint', family: 'detekt', cwdMarkers: ['.'] },
+  { pattern: /^sbt\s+test((?:\s+[^\r\n]*)?)$/iu, kind: 'test', family: 'sbt-test', cwdMarkers: ['.'] },
+  { pattern: /^(?:bazel|bazelisk)\s+test((?:\s+[^\r\n]*)?)$/iu, kind: 'test', family: 'bazel-test', cwdMarkers: ['//...', '...'] },
+  { pattern: /^(?:bazel|bazelisk)\s+build((?:\s+[^\r\n]*)?)$/iu, kind: 'build', family: 'bazel-build', cwdMarkers: ['//...', '...'] },
+  { pattern: /^ctest((?:\s+[^\r\n]*)?)$/iu, kind: 'test', family: 'ctest', cwdMarkers: ['.'] },
+  { pattern: /^cmake\s+--build((?:\s+[^\r\n]*)?)$/iu, kind: 'build', family: 'cmake-build', cwdMarkers: ['.'] },
+  { pattern: /^meson\s+test((?:\s+[^\r\n]*)?)$/iu, kind: 'test', family: 'meson-test', cwdMarkers: ['.'] },
+  { pattern: /^(?:dart|flutter)\s+test((?:\s+[^\r\n]*)?)$/iu, kind: 'test', family: 'dart-test', cwdMarkers: ['.'] },
+  { pattern: /^(?:dart|flutter)\s+analyze((?:\s+[^\r\n]*)?)$/iu, kind: 'lint', family: 'dart-analyze', cwdMarkers: ['.'] },
+  { pattern: /^flutter\s+build((?:\s+[^\r\n]*)?)$/iu, kind: 'build', family: 'flutter-build', cwdMarkers: ['.'] },
+  { pattern: /^mix\s+test((?:\s+[^\r\n]*)?)$/iu, kind: 'test', family: 'mix-test', cwdMarkers: ['.'] },
+  { pattern: /^busted((?:\s+[^\r\n]*)?)$/iu, kind: 'test', family: 'busted', cwdMarkers: ['.'] },
+  { pattern: /^(?:dotnet\s+)?msbuild((?:\s+[^\r\n]*)?)$/iu, kind: 'build', family: 'msbuild', cwdMarkers: ['.'] },
+])
 
 function isTaskVerificationTool(name) {
   return name === 'run_project_check'
@@ -149,6 +172,19 @@ function commandArgumentAnalysis(argumentText, { cwdMarkers = [], ...options } =
   }
 }
 
+function extendedCommandCheckDescriptor(value) {
+  for (const profile of EXTENDED_COMMAND_PROFILES) {
+    const match = value.match(profile.pattern)
+    if (!match) continue
+    return {
+      kind: profile.kind,
+      verifierFamily: profile.family,
+      ...commandArgumentAnalysis(match[1], { cwdMarkers: profile.cwdMarkers }),
+    }
+  }
+  return null
+}
+
 function commandCheckDescriptor(segment) {
   const environment = stripInlineEnvironmentPrefix(segment)
   if (!environment.trusted) return null
@@ -176,6 +212,11 @@ function commandCheckDescriptor(segment) {
     || (/^go\s+(?:build|vet)\b/iu.test(value) && /(?:^|\s)-n(?:\s|$)/iu.test(value))
     || (/^(?:mvn|mvnw|dotnet\s+test)\b/iu.test(value)
       && /(?:^|\s)-l(?:[=\s]|$)/u.test(value))
+    || (/^(?:bundle\s+exec\s+)?rubocop\b/iu.test(value)
+      && /(?:^|\s)(?:-[aA]|--auto-?correct(?:-all)?)(?:\s|$)/u.test(value))
+    || (/^ktlint\b/iu.test(value) && /(?:^|\s)-F(?:\s|$)/u.test(value))
+    || (/^(?:dotnet\s+)?msbuild\b/iu.test(value)
+      && /(?:^|\s)[/-]t(?:arget)?:(?:clean|restore|pack|publish)(?:\s|$)/iu.test(value))
     || /(?:^|\s)(?:clean|deploy|install|publish)(?:\s|$)/iu.test(value)) return null
   const packageScript = value.match(
     /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(test|lint|build|check|typecheck)((?:\s+[^\r\n]*)?)$/iu,
@@ -187,6 +228,8 @@ function commandCheckDescriptor(segment) {
       ...commandArgumentAnalysis(packageScript[2], PACKAGE_SCRIPT_ARGUMENTS),
     }
   }
+  const extended = extendedCommandCheckDescriptor(value)
+  if (extended) return extended
   const testCommand = value.match(/^(?:pytest|vitest|jest)((?:\s+[^\r\n]*)?)$/iu)
     || value.match(/^(?:python(?:3)?|py)(?:\.exe)?\s+-m\s+(?:pytest|unittest)((?:\s+[^\r\n]*)?)$/iu)
     || value.match(/^node(?:\.exe)?\s+--test((?:\s+[^\r\n]*)?)$/iu)
@@ -379,8 +422,8 @@ export function commandCheckDescriptors(command) {
     if (index !== segments.length - 1 || descriptors.size > 0) return []
     const descriptor = commandCheckDescriptor(segment)
     if (!descriptor) return []
-    const { kind, coverage, targetPaths = [] } = descriptor
-    const verifierFamily = verifierFamilyForCommand(segment, kind)
+    const { kind, coverage, targetPaths = [], verifierFamily: explicitVerifierFamily } = descriptor
+    const verifierFamily = explicitVerifierFamily || verifierFamilyForCommand(segment, kind)
     if (!verifierFamily) return []
     const packageScript = segment.match(
       /^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(test|lint|build|check|typecheck)\s*$/iu,

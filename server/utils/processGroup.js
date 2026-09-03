@@ -23,6 +23,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { processExecutionNotStartedResult } from './processExecutionFailure.js'
+import { terminateProcessTree } from './processTreeTermination.js'
 import { sanitizeChildEnv } from './sensitiveEnv.js'
 import {
   prepareWindowsProcessExecution,
@@ -48,33 +49,7 @@ function utf8Tail(value, maxBytes) {
   return source.subarray(start).toString('utf8')
 }
 
-/**
- * Terminate one process tree and wait for the platform cleanup proof.
- *
- * Windows uses the shared Toolhelp32/TerminateProcess worker and also closes
- * the direct child handle as a last-resort root-process guarantee. POSIX uses
- * the detached process group when available.
- */
-export async function terminateProcessTree({
-  pid: rawPid,
-  child = null,
-  killRootOnFailure = true,
-} = {}) {
-  const pid = Math.floor(Number(rawPid) || 0)
-  if (pid <= 0) return false
-  if (process.platform === 'win32') {
-    return terminateWindowsProcessTree({ pid, child, killRootOnFailure })
-  }
-  try {
-    process.kill(-pid, 'SIGTERM')
-    return true
-  } catch {
-    try {
-      process.kill(pid, 'SIGTERM')
-      return true
-    } catch { return false }
-  }
-}
+export { terminateProcessTree }
 export function runProcessWithGroup(options, { spawnProcessFn = spawn } = {}) {
   const startExecution = (startedOptions) => runProcessWithGroupStarted(startedOptions, { spawnProcessFn })
   if (process.platform === 'win32') {
@@ -171,6 +146,7 @@ function runProcessWithGroupStarted({
     let abortListener = null
     let finalizing = false
     let windowsTreeKillPromise = null
+    let posixTreeKillPromise = null
     let outputLogStream = null
     let outputLogOwned = false
     let outputLogError = null
@@ -204,6 +180,7 @@ function runProcessWithGroupStarted({
             pid: child.pid,
             child,
             signal: windowsBindController.signal,
+            sealedJob: true,
           })
         }).catch((error) => {
           if (!hasTerminalIntent()) windowsBindError = error
@@ -424,8 +401,12 @@ function runProcessWithGroupStarted({
             })
           }
         } else {
-          // 负 pid → kill 整个进程组
-          process.kill(-child.pid, signal)
+          // Hold one cleanup proof across root `close`. Otherwise a root that
+          // accepts SIGTERM can finalize and clear the SIGKILL timer while an
+          // ignoring descendant remains in the detached process group.
+          if (!posixTreeKillPromise) {
+            posixTreeKillPromise = terminateProcessTree({ pid: child.pid, child })
+          }
         }
       } catch { /* 进程可能已退出 */ }
     }
@@ -477,6 +458,8 @@ function runProcessWithGroupStarted({
         }
       } else if (isWin && windowsTreeLeasePromise) {
         await releaseWindowsProcessTree(windowsTreeLeasePromise)
+      } else if (posixTreeKillPromise) {
+        processTreeCleanupFailed = !(await posixTreeKillPromise)
       }
       if (outputLogStream && !outputLogStream.destroyed) {
         await new Promise((resolveLog) => {

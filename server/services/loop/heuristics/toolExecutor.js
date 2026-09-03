@@ -40,9 +40,7 @@ import {
 import {
   executeBrowserTool,
 } from '../../browserToolExecutor.js'
-import {
-  executeSubagentBatch,
-} from '../../subagentBatchBridge.js'
+import { executeSubagentBatch } from '../../subagentBatchBridge.js'
 import {
   fetchAndExtract,
 } from '../../../adapters/toolProxy.js'
@@ -466,6 +464,7 @@ export async function executeServerTool({
     try {
       return await executeSubagentBatch({
         userId: job?.userId || null,
+        locale: job?.locale || 'zh',
         request: buildSubagentRequest(
           args,
           job?.modelName,

@@ -59,7 +59,8 @@ try {
           jobId: job.id,
           stepId: nextStep.id,
           type: 'steering_consumed',
-          message: 'User steering injected into the engine loop',
+          code: 'JOB_STEERING_CONSUMED',
+          params: { count },
           payload: { count },
         }))
       }
@@ -149,7 +150,8 @@ try {
         jobId: job.id,
         stepId: nextStep.id,
         type: sleeping ? 'sleeping' : 'awaiting_user',
-        message: question,
+        code: sleeping ? 'JOB_SLEEPING' : 'JOB_AWAITING_USER',
+        params: { question },
         payload: waitingPayload,
       }))
     })) return true
@@ -176,7 +178,8 @@ try {
           jobId: job.id,
           stepId: nextStep.id,
           type: 'notification_failed',
-          message: `${question}（提醒发送失败，请留意本页面）`,
+          code: 'JOB_NOTIFICATION_FAILED',
+          params: { question },
           payload: {
             ...(waitingPayload || {}),
             notificationKind: 'job_clarification',
@@ -224,7 +227,7 @@ try {
         jobId: job.id,
         stepId: nextStep.id,
         type: 'failed',
-        message: why,
+        code: 'JOB_FAILED',
         payload: {
           code: result.interrupted
             ? 'JOB_STEP_INTERRUPTED'
@@ -282,7 +285,8 @@ try {
       jobId: job.id,
       stepId: nextStep.id,
       type: 'step_completed',
-      message: `完成:${nextStep.title}`,
+      code: 'JOB_STEP_COMPLETED',
+      params: { title: nextStep.title },
     }))
     if (requiresPlanApproval) {
       const plannedJob = this.getJob(job.id, { userId: job.userId })
@@ -302,7 +306,7 @@ try {
         jobId: job.id,
         stepId: nextStep.id,
         type: 'plan_proposed',
-        message: 'Plan proposed; waiting for explicit approval before execution',
+        code: 'JOB_PLAN_PROPOSED',
         payload: proposalPayload,
       }))
     }
@@ -361,7 +365,7 @@ try {
         jobId: job.id,
         stepId: nextStep.id,
         type: 'cancelled',
-        message: JOB_CANCELLED_MESSAGE,
+        code: 'JOB_CANCELLED',
         payload: {
           code: 'JOB_CANCEL_REQUESTED',
           cancellationReason: 'user_requested',
@@ -395,4 +399,3 @@ try {
 
 return true
 }
-

@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { isLocalOwnerUser } from '../adapters/authAccount.js'
 import { authenticateRequest } from '../middleware.js'
 import {
   browseLocalDirectories,
@@ -13,6 +14,7 @@ import {
 import { setWorkspaceTrust } from '../services/workspaceTrustService.js'
 import {
   configureWorkspaceOnboarding,
+  ensureDefaultLocalWorkspace,
   getWorkspaceOnboardingStatus,
 } from '../services/workspaceOnboardingService.js'
 import { HTML_ARTIFACT_RESPONSE_CSP } from '../../shared/htmlArtifactPolicy.js'
@@ -28,6 +30,7 @@ import {
 } from '../services/localHtmlPreviewService.js'
 import { htmlPreviewRemoteImageOrigins } from '../services/htmlPreviewRemoteImagePolicy.js'
 import { selectNativeDirectory } from '../services/nativeDirectoryPickerService.js'
+import { isLoopbackRequest } from '../utils/loopbackRequest.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 
@@ -48,11 +51,6 @@ function sendError(res, error) {
       ...(Array.isArray(error?.locks) ? { locks: error.locks } : {}),
     },
   })
-}
-
-function isLoopbackRequest(req) {
-  const address = req.socket?.remoteAddress || ''
-  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
 }
 
 function contentDisposition(kind, name) {
@@ -334,18 +332,31 @@ export async function handleLocalFileAccessRequest(req, res, {
     }
 
     if (req.method === 'GET' && url.pathname === '/api/local-files') {
+      const localFiles = isLoopbackRequest(req) && isLocalOwnerUser(userId, env)
+        ? ensureDefaultLocalWorkspace({
+            userId,
+            cwd,
+            env,
+            authorizeLocalOwner: isLocalOwnerUser,
+          })
+        : {
+            ...getLocalFileAccessStatus({ userId }),
+            onboarding: getWorkspaceOnboardingStatus({ userId, cwd, env }),
+          }
       return sendJson(res, 200, {
         ok: true,
-        ...getLocalFileAccessStatus({ userId }),
-        onboarding: getWorkspaceOnboardingStatus({ userId, cwd, env }),
+        ...localFiles,
       })
     }
 
     if (req.method === 'POST' && url.pathname === '/api/local-files/onboarding') {
-      if (!isLoopbackRequest(req)) {
+      if (!isLoopbackRequest(req) || !isLocalOwnerUser(userId, env)) {
         return sendJson(res, 403, {
           ok: false,
-          error: { code: 'LOCAL_ONLY', message: 'Workspace onboarding can only be changed from the service host.' },
+          error: {
+            code: 'LOCAL_OWNER_ONLY',
+            message: 'Workspace onboarding can only be changed by the local owner on the service host.',
+          },
         })
       }
       const body = await readJson(req)

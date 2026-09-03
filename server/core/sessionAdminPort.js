@@ -6,6 +6,10 @@ export const SESSION_ADMIN_PORT_SUPPORTED_CONTRACT_VERSIONS = Object.freeze([
   LEGACY_SESSION_ADMIN_PORT_CONTRACT_VERSION,
   SESSION_ADMIN_PORT_CONTRACT_VERSION,
 ])
+export const SQLITE_SESSION_CATALOG_FINGERPRINT_STRATEGY = 'sqlite-path-sha256-v1'
+
+const CATALOG_BACKEND_TYPE_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/u
+const CATALOG_INSTANCE_FINGERPRINT_RE = /^[a-f0-9]{64}$/u
 
 export const SESSION_ADMIN_PORT_METHODS = Object.freeze([
   'searchMessages',
@@ -20,6 +24,21 @@ export const SESSION_ADMIN_PORT_METHODS = Object.freeze([
   'pinSession',
   'unpinSession',
 ])
+
+export const SESSION_ADMIN_PORT_OPTIONAL_METHODS = Object.freeze([
+  'importLegacySessions',
+  'setSessionWorkspace',
+])
+
+export const LEGACY_SESSION_IMPORT_LIMITS = Object.freeze({
+  sessionsPerBatch: 20,
+  messagesPerSession: 1_000,
+  messagesPerBatch: 2_000,
+  messageContentCharacters: 1_000_000,
+  modelContextCharacters: 256 * 1024,
+})
+
+const LEGACY_IMPORT_MESSAGE_ROLES = new Set(['user', 'assistant', 'system', 'tool'])
 
 const preparedPorts = new WeakSet()
 
@@ -59,6 +78,48 @@ function ownDataValue(target, key, errorFactory, { optional = false } = {}) {
   return descriptor.value
 }
 
+function snapshotCatalogSource(input) {
+  const fail = (message) => invalidPort(`session admin port catalogSource ${message}`)
+  const source = ownDataValue(input, 'catalogSource', fail, { optional: true })
+  if (source === undefined) return null
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    throw fail('must be an object when provided')
+  }
+  const backendType = ownDataValue(source, 'backendType', fail)
+  const instanceFingerprint = ownDataValue(
+    source,
+    'instanceFingerprint',
+    fail,
+    { optional: true },
+  )
+  const fingerprintStrategy = ownDataValue(
+    source,
+    'fingerprintStrategy',
+    fail,
+    { optional: true },
+  )
+  if (typeof backendType !== 'string' || !CATALOG_BACKEND_TYPE_RE.test(backendType)) {
+    throw fail('backendType is invalid')
+  }
+  const hasFingerprint = instanceFingerprint !== undefined
+  const hasStrategy = fingerprintStrategy !== undefined
+  if (hasFingerprint === hasStrategy) {
+    throw fail('must declare exactly one instance fingerprint source')
+  }
+  if (hasFingerprint && (
+    typeof instanceFingerprint !== 'string'
+    || !CATALOG_INSTANCE_FINGERPRINT_RE.test(instanceFingerprint)
+  )) throw fail('instanceFingerprint must be a lowercase SHA-256 digest')
+  if (hasStrategy && (
+    backendType !== 'sqlite'
+    || fingerprintStrategy !== SQLITE_SESSION_CATALOG_FINGERPRINT_STRATEGY
+  )) throw fail('fingerprintStrategy is unsupported')
+  return Object.freeze({
+    backendType,
+    ...(hasFingerprint ? { instanceFingerprint } : { fingerprintStrategy }),
+  })
+}
+
 function inputRecord(method, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw invalidInput(method, 'input must be an object')
@@ -86,6 +147,174 @@ function optionalString(method, input, key, { max = 512, trim = false } = {}) {
     throw invalidInput(method, `${key} must be null or a string of at most ${max} characters`)
   }
   return trim ? value.trim() : value
+}
+
+function optionalInteger(method, input, key, { nullable = false } = {}) {
+  const value = ownDataValue(
+    input,
+    key,
+    (message) => invalidInput(method, message),
+    { optional: true },
+  )
+  if (value === undefined) return undefined
+  if (nullable && value === null) return null
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw invalidInput(method, `${key} must be a non-negative safe integer${nullable ? ' or null' : ''}`)
+  }
+  return value
+}
+
+function plainJsonData(method, value, label, state = { nodes: 0 }, depth = 0) {
+  state.nodes += 1
+  if (state.nodes > 20_000 || depth > 32) {
+    throw invalidInput(method, `${label} exceeds the plain-data safety limit`)
+  }
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw invalidInput(method, `${label} must contain finite numbers`)
+    return value
+  }
+  if (!value || typeof value !== 'object') {
+    throw invalidInput(method, `${label} must contain plain JSON data`)
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 20_000) throw invalidInput(method, `${label} is too large`)
+    return value.map((item, index) => plainJsonData(method, item, `${label}[${index}]`, state, depth + 1))
+  }
+  let prototype
+  let descriptors
+  try {
+    prototype = Object.getPrototypeOf(value)
+    descriptors = Object.getOwnPropertyDescriptors(value)
+  } catch {
+    throw invalidInput(method, `${label} must be a plain object`)
+  }
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw invalidInput(method, `${label} must be a plain object`)
+  }
+  const projected = {}
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string') throw invalidInput(method, `${label} cannot contain symbol keys`)
+    const descriptor = descriptors[key]
+    if (!descriptor.enumerable) continue
+    if (!Object.hasOwn(descriptor, 'value')) {
+      throw invalidInput(method, `${label}.${key} must be an own data property`)
+    }
+    projected[key] = plainJsonData(method, descriptor.value, `${label}.${key}`, state, depth + 1)
+  }
+  return projected
+}
+
+function legacyImportMessage(method, value, label) {
+  const source = inputRecord(method, value)
+  const id = requiredString(method, source, 'id')
+  const role = requiredString(method, source, 'role', { max: 32 })
+  if (!LEGACY_IMPORT_MESSAGE_ROLES.has(role)) {
+    throw invalidInput(method, `${label}.role is invalid`)
+  }
+  const content = ownDataValue(source, 'content', (message) => invalidInput(method, message))
+  if (typeof content !== 'string' || content.length > LEGACY_SESSION_IMPORT_LIMITS.messageContentCharacters) {
+    throw invalidInput(
+      method,
+      `${label}.content must be a string of at most ${LEGACY_SESSION_IMPORT_LIMITS.messageContentCharacters} characters`,
+    )
+  }
+  const createdAt = optionalInteger(method, source, 'createdAt')
+  const updatedAt = optionalInteger(method, source, 'updatedAt')
+  const rawModelContext = ownDataValue(
+    source,
+    'modelContext',
+    (message) => invalidInput(method, message),
+    { optional: true },
+  )
+  let modelContext
+  if (rawModelContext !== undefined) {
+    if (!rawModelContext || typeof rawModelContext !== 'object' || Array.isArray(rawModelContext)) {
+      throw invalidInput(method, `${label}.modelContext must be a plain object`)
+    }
+    modelContext = plainJsonData(method, rawModelContext, `${label}.modelContext`)
+    if (JSON.stringify(modelContext).length > LEGACY_SESSION_IMPORT_LIMITS.modelContextCharacters) {
+      throw invalidInput(method, `${label}.modelContext is too large`)
+    }
+  }
+  return {
+    id,
+    role,
+    content,
+    ...(createdAt === undefined ? {} : { createdAt }),
+    ...(updatedAt === undefined ? {} : { updatedAt }),
+    ...(modelContext === undefined ? {} : { modelContext }),
+  }
+}
+
+function legacyImportSession(method, value, index) {
+  const source = inputRecord(method, value)
+  const label = `sessions[${index}]`
+  const id = requiredString(method, source, 'id')
+  const title = optionalString(method, source, 'title', { max: 4096 })
+  const workspacePath = optionalString(method, source, 'workspacePath', {
+    max: 32_768,
+    trim: true,
+  })
+  const createdAt = optionalInteger(method, source, 'createdAt')
+  const updatedAt = optionalInteger(method, source, 'updatedAt')
+  const lastViewedAt = optionalInteger(method, source, 'lastViewedAt', { nullable: true })
+  const archivedAt = optionalInteger(method, source, 'archivedAt', { nullable: true })
+  const pinnedAt = optionalInteger(method, source, 'pinnedAt', { nullable: true })
+  const messages = ownDataValue(source, 'messages', (message) => invalidInput(method, message))
+  if (!Array.isArray(messages)
+    || messages.length > LEGACY_SESSION_IMPORT_LIMITS.messagesPerSession) {
+    throw invalidInput(
+      method,
+      `${label}.messages must contain at most ${LEGACY_SESSION_IMPORT_LIMITS.messagesPerSession} items`,
+    )
+  }
+  return {
+    id,
+    title: title ?? 'Untitled',
+    ...(workspacePath ? { workspacePath } : {}),
+    ...(createdAt === undefined ? {} : { createdAt }),
+    ...(updatedAt === undefined ? {} : { updatedAt }),
+    ...(lastViewedAt === undefined ? {} : { lastViewedAt }),
+    ...(archivedAt === undefined ? {} : { archivedAt }),
+    ...(pinnedAt === undefined ? {} : { pinnedAt }),
+    messages: messages.map((message, messageIndex) => (
+      legacyImportMessage(method, message, `${label}.messages[${messageIndex}]`)
+    )),
+  }
+}
+
+function legacyImportInput(method, input) {
+  const source = inputRecord(method, input)
+  const userId = requiredString(method, source, 'userId')
+  const sessions = ownDataValue(source, 'sessions', (message) => invalidInput(method, message))
+  if (!Array.isArray(sessions) || sessions.length < 1
+    || sessions.length > LEGACY_SESSION_IMPORT_LIMITS.sessionsPerBatch) {
+    throw invalidInput(
+      method,
+      `sessions must contain between 1 and ${LEGACY_SESSION_IMPORT_LIMITS.sessionsPerBatch} items`,
+    )
+  }
+  const normalized = sessions.map((session, index) => legacyImportSession(method, session, index))
+  const sessionIds = new Set()
+  const messageIds = new Set()
+  let messageCount = 0
+  for (const session of normalized) {
+    if (sessionIds.has(session.id)) throw invalidInput(method, `duplicate session id: ${session.id}`)
+    sessionIds.add(session.id)
+    messageCount += session.messages.length
+    for (const message of session.messages) {
+      if (messageIds.has(message.id)) throw invalidInput(method, `duplicate message id: ${message.id}`)
+      messageIds.add(message.id)
+    }
+  }
+  if (messageCount > LEGACY_SESSION_IMPORT_LIMITS.messagesPerBatch) {
+    throw invalidInput(
+      method,
+      `sessions contain more than ${LEGACY_SESSION_IMPORT_LIMITS.messagesPerBatch} messages`,
+    )
+  }
+  return { userId, sessions: normalized }
 }
 
 function paginationInteger(method, input, key, { fallback, min, max }) {
@@ -128,7 +357,29 @@ function sessionInput(method, input) {
   }
 }
 
+function sessionWorkspaceInput(method, input) {
+  const source = inputRecord(method, input)
+  const workspacePath = ownDataValue(
+    source,
+    'workspacePath',
+    (message) => invalidInput(method, message),
+  )
+  if (workspacePath === null) {
+    return { ...sessionInput(method, source), workspacePath: null }
+  }
+  if (typeof workspacePath !== 'string') {
+    throw invalidInput(method, 'workspacePath must be a non-empty string or null')
+  }
+  const normalized = workspacePath.trim()
+  if (!normalized || normalized.length > 32_768) {
+    throw invalidInput(method, 'workspacePath must be a non-empty string of at most 32768 characters or null')
+  }
+  return { ...sessionInput(method, source), workspacePath: normalized }
+}
+
 function normalizeInput(method, input) {
+  if (method === 'importLegacySessions') return legacyImportInput(method, input)
+  if (method === 'setSessionWorkspace') return sessionWorkspaceInput(method, input)
   if (method === 'searchMessages') {
     const source = inputRecord(method, input)
     return {
@@ -263,7 +514,11 @@ export function prepareSessionAdminPort(input) {
       `session admin port requires contractVersion ${SESSION_ADMIN_PORT_SUPPORTED_CONTRACT_VERSIONS.join(' or ')}`,
     )
   }
-  const prepared = { contractVersion }
+  const catalogSource = snapshotCatalogSource(input)
+  const prepared = {
+    contractVersion,
+    ...(catalogSource ? { catalogSource } : {}),
+  }
   for (const method of SESSION_ADMIN_PORT_METHODS) {
     const implementation = ownDataValue(
       input,
@@ -272,6 +527,21 @@ export function prepareSessionAdminPort(input) {
     )
     if (typeof implementation !== 'function') {
       throw invalidPort(`session admin port ${method} must be a function`)
+    }
+    prepared[method] = contractVersion === LEGACY_SESSION_ADMIN_PORT_CONTRACT_VERSION
+      ? implementation
+      : wrapMethod(method, implementation)
+  }
+  for (const method of SESSION_ADMIN_PORT_OPTIONAL_METHODS) {
+    const implementation = ownDataValue(
+      input,
+      method,
+      (message) => invalidPort(`session admin port ${message}`),
+      { optional: true },
+    )
+    if (implementation === undefined) continue
+    if (typeof implementation !== 'function') {
+      throw invalidPort(`session admin port ${method} must be a function when provided`)
     }
     prepared[method] = contractVersion === LEGACY_SESSION_ADMIN_PORT_CONTRACT_VERSION
       ? implementation

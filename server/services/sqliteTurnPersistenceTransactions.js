@@ -5,6 +5,7 @@ import {
   getMessage,
   getSession,
   notifySessionStarted,
+  setSessionWorkspacePathForAtomicCommit,
   upsertMessage,
   upsertSessionForAtomicCommit,
 } from './sessionStore.js'
@@ -248,6 +249,7 @@ export function createSqliteTurnPersistenceTransactions({
   appendEventsInTransaction = appendTurnEventsInTransaction,
   publishEvents = publishCommittedTurnEvents,
   notifySession = notifySessionStarted,
+  writeSessionWorkspace = setSessionWorkspacePathForAtomicCommit,
   now = Date.now,
 } = {}) {
   const commit = ({
@@ -303,6 +305,19 @@ export function createSqliteTurnPersistenceTransactions({
 
         committed = appendEventsInTransaction([{ userId, event, checkpointState: null }], db)
         const inserted = committed.insertedEvents.length > 0
+        if (inserted && Object.hasOwn(event.payload || {}, 'workspacePath')) {
+          const updated = writeSessionWorkspace({
+            userId,
+            sessionId,
+            workspacePath: event.payload.workspacePath,
+          })
+          if (!updated) {
+            throw persistenceError(
+              'TURN_STORAGE_SCOPE_MISMATCH',
+              'session workspace scope does not match event scope',
+            )
+          }
+        }
         for (const message of scopedMessages) {
           if (inserted) writeMessage(message)
           assertExistingMessage(readMessage, message)

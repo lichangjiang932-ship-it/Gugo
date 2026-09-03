@@ -1,14 +1,14 @@
+import { normalizeUiLanguage } from '../i18n/translations.js'
+
 export function getSpeechRecognitionConstructor(scope = globalThis) {
   return scope?.SpeechRecognition || scope?.webkitSpeechRecognition || null
 }
 
 export function resolveSpeechRecognitionLanguage(lang) {
   return ({
+    zh: 'zh-CN',
     en: 'en-US',
-    ja: 'ja-JP',
-    ko: 'ko-KR',
-    'zh-TW': 'zh-TW',
-  })[lang] || 'zh-CN'
+  })[normalizeUiLanguage(lang)]
 }
 
 export function readSpeechRecognitionEvent(event, committed = '') {

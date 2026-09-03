@@ -46,7 +46,7 @@ test('UI contribution notifications isolate observer failures and snapshot each 
 
 test('first-party pages use the shared UI route contribution seam', () => {
   const routes = listUiContributions('route').filter((entry) => entry.pluginId === 'gugo-first-party')
-  assert.deepEqual(routes.map((entry) => entry.path), ['/mcp', '/reasonix'])
+  assert.deepEqual(routes.map((entry) => entry.path), ['/mcp', '/mobile-keys', '/reasonix'])
   assert.ok(routes.every((entry) => entry.requiresAuth === true))
 
   const menu = listUiContributions('account-menu').find((entry) => entry.id === 'mcp-account-menu')
@@ -57,6 +57,7 @@ test('first-party pages use the shared UI route contribution seam', () => {
   assert.equal(plugin.state, 'active')
   assert.deepEqual(plugin.contributes, [
     'ui:route:mcp-route',
+    'ui:route:mobile-keys-route',
     'ui:route:reasonix-route',
     'ui:account-menu:mcp-account-menu',
     'ui:settings-section:evolution-settings',

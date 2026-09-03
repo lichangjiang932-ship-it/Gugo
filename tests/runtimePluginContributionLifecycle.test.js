@@ -12,12 +12,16 @@ function v2Handle(beginRevoke) {
 
 test('revoked visibility remains authoritative when independent cleanup rejects', async () => {
   const cleanupError = new Error('cleanup failed after visibility commit')
+  let attempts = 0
   const lifecycle = createRuntimePluginContributionLifecycle([{
     id: 'tool',
-    handle: v2Handle(() => ({
-      visibility: 'revoked',
-      cleanup: Promise.reject(cleanupError),
-    })),
+    handle: v2Handle(() => {
+      attempts += 1
+      return {
+        visibility: 'revoked',
+        cleanup: attempts === 1 ? Promise.reject(cleanupError) : Promise.resolve(true),
+      }
+    }),
   }])
 
   const receipt = lifecycle.beginRevoke()
@@ -37,6 +41,12 @@ test('revoked visibility remains authoritative when independent cleanup rejects'
     }],
   })
   assert.equal(lifecycle.retire(), false)
+
+  const retry = lifecycle.beginRevoke()
+  assert.equal(retry.visibility, 'revoked')
+  await retry.cleanup
+  assert.equal(attempts, 2)
+  assert.equal(lifecycle.retire(), true)
 })
 
 test('retained part keeps its handle and can be explicitly retried', async () => {

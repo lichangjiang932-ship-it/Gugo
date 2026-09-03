@@ -30,6 +30,7 @@ export function runRuntimeConfigStartupPreflight({
       ...env,
       APP_DATA_DIR: storageEnv.APP_DATA_DIR,
       APP_DB_PATH: storageEnv.APP_DB_PATH,
+      ARTIFACT_DIR: storageEnv.ARTIFACT_DIR,
       ...(storageEnv.APP_CONFIG_PATH
         ? { APP_CONFIG_PATH: storageEnv.APP_CONFIG_PATH }
         : {}),

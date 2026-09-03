@@ -428,6 +428,38 @@ test('turn start commits the complete atomic aggregate before returning executio
   assert.equal(emitterFactory.emitters[0].closed, true)
 })
 
+for (const [locale, expectedPrompt] of [
+  ['zh', '请分析附件内容。'],
+  ['en-US', 'Please analyze the attached content.'],
+]) {
+  test(`attachment-only turn start persists its ${locale} prompt consistently`, async () => {
+    let aggregate = null
+    const { ports } = createPorts({
+      ports: {
+        validateAttachments: async ({ attachmentIds }) => (
+          attachmentIds.map((id) => ({ id, name: `${id}.txt` }))
+        ),
+        commitTurnStart: async (command) => { aggregate = command },
+      },
+    })
+
+    const result = await createTurnStartRuntime(ports).initialize({
+      ...BASE_INPUT,
+      content: '',
+      locale,
+      attachments: [{ id: 'attachment-1' }],
+    })
+
+    assert.equal(aggregate.event.payload.content, expectedPrompt)
+    assert.equal(aggregate.event.payload.displayContent, expectedPrompt)
+    assert.equal(aggregate.event.payload.locale, locale === 'zh' ? 'zh' : 'en')
+    assert.equal(aggregate.messages[0].content, expectedPrompt)
+    assert.equal(aggregate.messages[0].modelContext.modelContent, expectedPrompt)
+    assert.equal(result.execution.content, expectedPrompt)
+    await result.emitter.close()
+  })
+}
+
 test('turn start preserves skill-prefix and imported tool protocol in the atomic command', async () => {
   let aggregate = null
   const { ports } = createPorts({

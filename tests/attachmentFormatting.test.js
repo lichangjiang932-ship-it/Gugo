@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   buildUserContentWithAttachments,
   buildUserDisplayContent,
+  describeAttachmentPrompt,
   formatAttachmentForPrompt,
 } from '../src/lib/attachments.js'
 
@@ -11,6 +12,18 @@ test('builds the same durable display text used by local and server messages', (
   assert.equal(
     buildUserDisplayContent('Review', [{ name: 'notes.md', sizeKB: 1.2 }]),
     'Review\n\n[附件: notes.md, 1.2 KB]',
+  )
+})
+
+test('describes attachment-only sends in the active product language', () => {
+  const attachments = Array.from({ length: 5 }, (_, index) => ({ name: `file-${index + 1}.txt` }))
+  assert.equal(
+    describeAttachmentPrompt(attachments, 'zh'),
+    '请分析附件：file-1.txt、file-2.txt、file-3.txt、file-4.txt 等 5 个附件',
+  )
+  assert.equal(
+    describeAttachmentPrompt(attachments, 'en-US'),
+    'Please analyze the attached files: file-1.txt, file-2.txt, file-3.txt, file-4.txt and 1 more',
   )
 })
 

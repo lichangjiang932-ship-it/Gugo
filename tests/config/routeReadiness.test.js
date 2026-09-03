@@ -50,6 +50,7 @@ test('App.jsx 中声明的主要业务路由全部已登记 readiness', () => {
     '/channels',
     '/access',
     '/mcp',
+    '/mobile-keys',
     '/reasonix',
   ]
   for (const p of expected) {

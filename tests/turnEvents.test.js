@@ -10,11 +10,13 @@ import {
   createTurnEventTransportEnvelope,
   canAdvanceTurnEventCursor,
   parseTurnActivity,
+  parsePersistedTurnEvent,
   parseTurnEvent,
   parseTurnEventTransportEnvelope,
   parseTurnEventTransportPayload,
 } from '../shared/turnEvents.js'
 import { INLINE_SKILL_DEFINITION_LIMITS } from '../shared/inlineSkillDefinitions.js'
+import { projectTurnEventForClient } from '../shared/turnEventProjection.js'
 
 test('turn event protocol accepts known events and rejects protocol drift', () => {
   const event = createTurnEvent({
@@ -183,7 +185,6 @@ test('turn interrupted events are strict resumable attempt boundaries', () => {
     type: 'turn.interrupted',
     payload: {
       code: 'MODEL_HTTP_503',
-      message: 'upstream unavailable',
       retryable: true,
       text: 'The completed tool results were preserved.',
       artifactIds: [],
@@ -222,6 +223,35 @@ test('turn event transport envelope is versioned and decodes legacy SSE payloads
   assert.throws(() => parseTurnEventTransportEnvelope({ ...envelope, unexpected: true }))
 })
 
+test('new terminal events are code-only while persisted legacy copy remains readable', () => {
+  const legacy = {
+    id: 'legacy-cancelled',
+    sessionId: 'legacy-session',
+    turnId: 'legacy-turn',
+    sequence: 1,
+    type: 'turn.cancelled',
+    payload: { reason: '用户已取消' },
+    createdAt: 2,
+  }
+
+  assert.equal(parsePersistedTurnEvent(legacy).payload.reason, '用户已取消')
+  assert.equal(parseTurnEventTransportPayload(legacy).payload.reason, '用户已取消')
+  assert.throws(() => parseTurnEvent(legacy), /persisted legacy events/u)
+  assert.throws(() => createTurnEvent(legacy), /persisted legacy events/u)
+  assert.throws(() => createTurnEvent({
+    ...legacy,
+    id: 'cancelled-without-code',
+    payload: {},
+  }), /stable code/u)
+
+  const current = createTurnEvent({
+    ...legacy,
+    id: 'code-only-cancelled',
+    payload: { code: 'TURN_CANCELLED' },
+  })
+  assert.deepEqual(current.payload, { code: 'TURN_CANCELLED' })
+})
+
 test('turn blocked events are strict manual-repair recovery boundaries', () => {
   const blocked = createTurnEvent({
     id: 'blocked-1',
@@ -231,7 +261,6 @@ test('turn blocked events are strict manual-repair recovery boundaries', () => {
     type: 'turn.blocked',
     payload: {
       code: 'TURN_PERMISSION_CONTEXT_DRIFT',
-      message: 'repair the permission context before retrying',
       partialText: 'I completed the safe inspection before recovery was blocked.',
       retryable: false,
       manualRetryable: true,
@@ -388,7 +417,7 @@ test('turn progress events require bounded structured progress', () => {
   assert.throws(() => createTurnEvent({ ...event, id: 'drifted-progress', payload: { phase: 'verify', percent: 50 } }))
 })
 
-test('turn failed events preserve legacy fields and structured recovery evidence', () => {
+test('turn failed events preserve structured recovery evidence without presentation copy', () => {
   const event = createTurnEvent({
     id: 'turn-failed-structured',
     sessionId: 's1',
@@ -397,13 +426,10 @@ test('turn failed events preserve legacy fields and structured recovery evidence
     type: 'turn.failed',
     payload: {
       code: 'MODEL_FIRST_TOKEN_TIMEOUT',
-      message: 'model response timed out',
       error: {
         code: 'MODEL_FIRST_TOKEN_TIMEOUT',
-        message: 'model response timed out',
         status: 504,
         retryable: true,
-        hint: 'retry with a healthy endpoint',
         attempts: 2,
         taskVerification: {
           version: 1,
@@ -484,6 +510,40 @@ test('turn event store is append-only, idempotent, ordered, and user isolated', 
     assert.deepEqual(resolveTurnSession({ userId: 'u2', turnId: 't1' }), { status: 'not_found' })
     assert.throws(() => resolveTurnSession({ userId: '', turnId: 't1' }), /user id is required/)
     assert.throws(() => resolveTurnSession({ userId: 'u1', turnId: '' }), /turn id is required/)
+
+    upsertSession({ id: 'legacy-event-session', userId: 'u1', title: 'Legacy event replay' })
+    appendTurnEvent({
+      userId: 'u1',
+      event: createTurnEvent({
+        id: 'legacy-event-started',
+        sessionId: 'legacy-event-session',
+        turnId: 'legacy-event-turn',
+        sequence: 0,
+        type: 'turn.started',
+        createdAt: 3,
+      }),
+    })
+    getDb().prepare(`
+      INSERT INTO turn_events
+        (id, user_id, session_id, turn_id, sequence, type, payload_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'legacy-event-cancelled',
+      'u1',
+      'legacy-event-session',
+      'legacy-event-turn',
+      1,
+      'turn.cancelled',
+      JSON.stringify({ reason: '用户已取消' }),
+      4,
+    )
+    const legacyEvent = listTurnEvents({
+      userId: 'u1',
+      sessionId: 'legacy-event-session',
+      turnId: 'legacy-event-turn',
+    }).at(-1)
+    assert.equal(legacyEvent.payload.reason, '用户已取消')
+    assert.deepEqual(projectTurnEventForClient(legacyEvent).payload, { code: 'TURN_CANCELLED' })
 
     assert.throws(() => appendTurnEvent({ userId: 'u1', event: { ...event, id: 'other' } }), /conflict/)
     assert.throws(() => appendTurnEvent({

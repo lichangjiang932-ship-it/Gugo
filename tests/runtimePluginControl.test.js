@@ -1538,6 +1538,144 @@ test('enabled transformer state restores from SQLite after runtime registry rese
   )
 })
 
+test('startup restore rejects a same-id plugin discovered through a different source', async () => {
+  const owner = localOwner()
+  assert.equal((await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })).status, 200)
+  const persistedState = getRuntimePluginState('test-transformer')
+  const replacementPlugin = getPlugin('test-transformer')
+
+  await _resetRuntimePluginsForTests()
+  _resetForTests()
+  const replacementSource = Object.freeze({
+    discover: () => ({
+      candidates: [{
+        plugin: replacementPlugin,
+        sourceKind: 'replacement-local-source',
+        mutable: true,
+        verifiedPackage: false,
+        installReceipt: null,
+      }],
+      errors: [],
+    }),
+  })
+  assert.equal(initPlugins({
+    rootDir: pluginRoot,
+    silent: true,
+    distributionPort: replacementSource,
+  }).errors.length, 0)
+
+  const results = await restoreEnabledRuntimePlugins()
+  assert.equal(results.length, 1)
+  assert.equal(results[0].pluginId, 'test-transformer')
+  assert.equal(results[0].ok, false)
+  assert.equal(results[0].error.code, 'PLUGIN_RELEASE_DISTRIBUTION_CONFLICT')
+  assert.equal(getDynamicTool(runtimeTransformerToolName('test-transformer')), null)
+  const rejectedState = getRuntimePluginState('test-transformer')
+  assert.equal(rejectedState.activeReleaseId, persistedState.activeReleaseId)
+  assert.equal(rejectedState.releaseRevision, persistedState.releaseRevision)
+})
+
+test('startup restore rejects publisher trust changes without rolling back or registering code', async () => {
+  const pluginId = 'test-transformer'
+  const diskPlugin = getPlugin(pluginId)
+  const packageReceipt = ({ signed, packageDigest, publicationDigest = null }) => ({
+    schemaVersion: signed ? 2 : 1,
+    pluginId,
+    pluginVersion: diskPlugin.version,
+    packageDigest,
+    fileCount: 2,
+    totalBytes: 128,
+    installedAt: 100,
+    publisherVerified: signed,
+    sourceKind: signed ? 'local-marketplace' : 'local-directory',
+    ...(signed
+      ? {
+          marketplace: { name: 'local-marketplace', displayName: 'Local Marketplace' },
+          publisher: {
+            id: 'publisher-a',
+            displayName: 'Publisher A',
+            keyId: `sha256-${'a'.repeat(64)}`,
+          },
+          publicationDigest,
+        }
+      : {}),
+  })
+  const distributionPort = (installReceipt) => Object.freeze({
+    discover: () => ({
+      candidates: [{
+        plugin: diskPlugin,
+        sourceKind: 'managed-user-directory',
+        mutable: false,
+        verifiedPackage: true,
+        installReceipt,
+      }],
+      errors: [],
+    }),
+  })
+
+  await _resetRuntimePluginsForTests()
+  _resetForTests()
+  assert.equal(initPlugins({
+    rootDir: pluginRoot,
+    silent: true,
+    distributionPort: distributionPort(packageReceipt({
+      signed: true,
+      packageDigest: `sha256-${'b'.repeat(64)}`,
+      publicationDigest: `sha256-${'c'.repeat(64)}`,
+    })),
+  }).errors.length, 0)
+  const owner = localOwner()
+  assert.equal((await requestRuntime({
+    url: `/api/plugins/runtime/${pluginId}/enable`,
+    token: owner.token,
+    method: 'POST',
+  })).status, 200)
+  const previousReleaseId = getRuntimePluginState(pluginId).activeReleaseId
+  fs.writeFileSync(
+    path.join(pluginRoot, pluginId, 'entry.js'),
+    "function transform(input) { return 'publisher-a:' + input }",
+  )
+  assert.equal((await requestRuntime({
+    url: `/api/plugins/runtime/${pluginId}/reload`,
+    token: owner.token,
+    method: 'POST',
+  })).status, 200)
+  const persistedState = getRuntimePluginState(pluginId)
+  assert.notEqual(persistedState.activeReleaseId, previousReleaseId)
+  assert.equal(persistedState.previousReleaseId, previousReleaseId)
+
+  await _resetRuntimePluginsForTests()
+  _resetForTests()
+  assert.equal(initPlugins({
+    rootDir: pluginRoot,
+    silent: true,
+    distributionPort: distributionPort(packageReceipt({
+      signed: false,
+      packageDigest: `sha256-${'d'.repeat(64)}`,
+    })),
+  }).errors.length, 0)
+
+  const results = await restoreEnabledRuntimePlugins()
+  assert.equal(results.length, 1)
+  assert.equal(results[0].pluginId, pluginId)
+  assert.equal(results[0].ok, false)
+  assert.equal(results[0].error.code, 'PLUGIN_RELEASE_DISTRIBUTION_CONFLICT')
+  assert.equal(results[0].error.attemptedReleaseId, persistedState.activeReleaseId)
+  assert.equal(results[0].error.restoredReleaseId, null)
+  assert.equal(getDynamicTool(runtimeTransformerToolName(pluginId)), null)
+  const rejectedState = getRuntimePluginState(pluginId)
+  assert.equal(rejectedState.enabled, true)
+  assert.equal(rejectedState.activeReleaseId, persistedState.activeReleaseId)
+  assert.equal(rejectedState.previousReleaseId, persistedState.previousReleaseId)
+  assert.equal(rejectedState.releaseRevision, persistedState.releaseRevision)
+  assert.deepEqual(rejectedState.lastRollback, persistedState.lastRollback)
+  assert.match(rejectedState.lastError, /^PLUGIN_RELEASE_DISTRIBUTION_CONFLICT:/)
+})
+
 test('startup restore activates enabled runtime plugin dependencies before consumers', async () => {
   const dynamicPluginIds = ['a-consumer', 'z-provider']
   writePlugin('z-provider', {

@@ -5,6 +5,7 @@ import {
   chatWorkspaceName,
   createManagedChatProject,
   deriveRecentChatWorkspaces,
+  deriveVisibleChatProjectGroups,
   pickNativeChatWorkspaceDirectory,
 } from '../src/lib/chatWorkspaceSelection.js'
 import { useChatAttachmentActions } from '../src/pages/ChatSplit/chatAttachmentActions.js'
@@ -22,6 +23,18 @@ test('recent chat workspaces are unique, named, and ordered by latest session us
     { name: 'beta', usedAt: 20 },
   ])
   assert.equal(chatWorkspaceName('C:\\Projects\\gugo\\'), 'gugo')
+})
+
+test('visible project groups use deterministic path names and keep the selected path out of recent', () => {
+  const groups = deriveVisibleChatProjectGroups([
+    { path: 'D:\\Current\\repo', name: 'Browser A alias', usedAt: 20 },
+    { path: 'D:\\Shared\\history', name: 'Browser B alias', usedAt: 10 },
+  ], 'd:\\current\\repo\\')
+
+  assert.deepEqual(groups, {
+    projects: [{ path: 'D:\\Current\\repo', name: 'repo', usedAt: 20 }],
+    recent: [{ path: 'D:\\Shared\\history', name: 'history', usedAt: 10 }],
+  })
 })
 
 test('activating a chat workspace grants write access before trusting it', async () => {
@@ -283,4 +296,24 @@ test('normal and project new-chat actions remain drafts until an accepted send c
   assert.equal(accepted.sessions[0].workspacePath, 'D:\\Projects\\gugo')
   assert.equal(accepted.draftSessionId, null)
   assert.equal(accepted.draftWorkspacePath, '')
+})
+
+test('new drafts inherit the server default workspace unless a project is explicit', () => {
+  const base = {
+    sessions: [],
+    activeSessionId: null,
+    draftSessionId: null,
+    defaultWorkspacePath: 'D:\\Current\\repo',
+    draftWorkspacePath: '',
+    newDraftVersion: 0,
+    sessionDrafts: {},
+  }
+  const defaultDraft = reduceSessionLifecycleState(base, { type: 'START_NEW_DRAFT' })
+  assert.equal(defaultDraft.draftWorkspacePath, 'D:\\Current\\repo')
+
+  const explicitDraft = reduceSessionLifecycleState(defaultDraft, {
+    type: 'START_NEW_DRAFT',
+    payload: { workspacePath: 'D:\\Other\\repo' },
+  })
+  assert.equal(explicitDraft.draftWorkspacePath, 'D:\\Other\\repo')
 })

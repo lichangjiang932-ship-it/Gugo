@@ -11,49 +11,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseCodexSkillMarkdown } from './codexSkillMarkdown.js'
+import { MANIFEST_SCAN_SKIP, MAX_MANIFEST_BYTES, MAX_MANIFEST_DEPTH, MAX_MANIFESTS, MAX_SCAN_DIRECTORIES, MAX_SKILL_BYTES, MAX_SKILL_DEPTH, MAX_SKILL_METADATA_BYTES, MAX_SKILLS, RECOMMENDED_CODEX_PLUGINS, RUNTIME_MARKER_SET, SKILL_RESOURCE_REFERENCE_RE, SKILL_SCAN_SKIP } from './codexPluginSkillConfig.js'
+import { cloneCodexPlugin, cloneCodexPluginSkill } from './codexPluginSkillProjection.js'
 
 export { parseCodexSkillMarkdown }
+export { CODEX_SKILL_COMPATIBILITY, RECOMMENDED_CODEX_PLUGINS } from './codexPluginSkillConfig.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_REPO_ROOT = path.resolve(__dirname, '../..')
-
-export const CODEX_SKILL_COMPATIBILITY = Object.freeze([
-  'ready',
-  'needs-app',
-  'needs-mcp',
-  'needs-runtime',
-])
-
-export const RECOMMENDED_CODEX_PLUGINS = Object.freeze({
-  'build-web-apps': 'https://github.com/openai/plugins',
-  coderabbit: 'https://github.com/coderabbitai/codex-plugin',
-  'game-studio': 'https://github.com/openai/plugins',
-  'plugin-eval': 'https://github.com/openai/plugins',
-  remotion: 'https://github.com/remotion-dev/remotion',
-  superpowers: 'https://github.com/obra/superpowers',
-})
-
-const MAX_MANIFEST_BYTES = 256 * 1024
-const MAX_SKILL_BYTES = 512 * 1024
-const MAX_SKILL_METADATA_BYTES = 64 * 1024
-const MAX_SCAN_DIRECTORIES = 20_000
-const MAX_MANIFESTS = 2_000
-const MAX_SKILLS = 5_000
-const MAX_MANIFEST_DEPTH = 5
-const MAX_SKILL_DEPTH = 8
-const MANIFEST_SCAN_SKIP = new Set([
-  '.git', '.github', '.agents', 'node_modules', 'assets', 'skills', 'scripts',
-  'agents', 'commands', 'references', 'tests', 'fixtures', 'examples',
-])
-const SKILL_SCAN_SKIP = new Set([
-  '.git', '.github', 'node_modules', 'assets', 'scripts', 'agents', 'commands',
-  'references', 'reference', 'tests', 'fixtures', 'examples', 'evals', 'evaluations',
-])
-const RUNTIME_MARKERS = Object.freeze([
-  'scripts', 'commands', 'bin', 'preflight', 'workflows', 'hooks.json',
-])
-const RUNTIME_MARKER_SET = new Set(RUNTIME_MARKERS)
-const SKILL_RESOURCE_REFERENCE_RE = /(?:^|[\s("'`<[])(?:\.\.?[\\/])?(references?|assets|templates)[\\/]/gim
 
 let CURRENT_SKILLS = []
 let CURRENT_SKILL_SOURCES = new Map()
@@ -70,32 +35,6 @@ function normalizedPathKey(value) {
 function isInside(root, target) {
   const relative = path.relative(root, target)
   return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative))
-}
-
-function cloneRequirements(requirements = {}) {
-  return {
-    app: !!requirements.app,
-    mcp: !!requirements.mcp,
-    runtime: Array.isArray(requirements.runtime) ? [...requirements.runtime] : [],
-  }
-}
-
-function cloneSkill(skill) {
-  return {
-    ...skill,
-    permissions: [...(skill.permissions || [])],
-    perms: [...(skill.perms || [])],
-    requirements: cloneRequirements(skill.requirements),
-    source: skill.source ? { ...skill.source } : null,
-  }
-}
-
-function clonePlugin(plugin) {
-  return {
-    ...plugin,
-    requirements: cloneRequirements(plugin.requirements),
-    source: plugin.source ? { ...plugin.source } : null,
-  }
 }
 
 function discoveryError(code, target, message) {
@@ -573,11 +512,11 @@ export function initCodexPluginSkills(options = {}) {
     .map((skill) => [skill.id, skill[SKILL_SOURCE]])
     .filter(([, source]) => source))
   PROMPT_CACHE = new Map()
-  CURRENT_SKILLS = discovered.skills.map(cloneSkill)
+  CURRENT_SKILLS = discovered.skills.map(cloneCodexPluginSkill)
   LAST_DISCOVERY = {
     roots: [...discovered.roots],
-    plugins: discovered.plugins.map(clonePlugin),
-    skills: CURRENT_SKILLS.map(cloneSkill),
+    plugins: discovered.plugins.map(cloneCodexPlugin),
+    skills: CURRENT_SKILLS.map(cloneCodexPluginSkill),
     errors: discovered.errors.map((error) => ({ ...error })),
   }
   return getCodexPluginDiscovery()
@@ -586,7 +525,7 @@ export function initCodexPluginSkills(options = {}) {
 export function listCodexPluginSkills({ runnableOnly = false } = {}) {
   return CURRENT_SKILLS
     .filter((skill) => !runnableOnly || skill.runnable)
-    .map(cloneSkill)
+    .map(cloneCodexPluginSkill)
 }
 
 function loadCurrentSkillPrompt(id) {
@@ -614,7 +553,7 @@ function loadCurrentSkillPrompt(id) {
 export function getCodexPluginSkill(id, { runnableOnly = false, loadPrompt = false } = {}) {
   const skill = CURRENT_SKILLS.find((candidate) => candidate.id === id)
   if (!skill || (runnableOnly && !skill.runnable)) return null
-  const cloned = cloneSkill(skill)
+  const cloned = cloneCodexPluginSkill(skill)
   if (!loadPrompt || !skill.runnable) return cloned
   const systemPrompt = loadCurrentSkillPrompt(skill.id)
   return systemPrompt ? { ...cloned, systemPrompt } : null
@@ -623,8 +562,8 @@ export function getCodexPluginSkill(id, { runnableOnly = false, loadPrompt = fal
 export function getCodexPluginDiscovery() {
   return {
     roots: [...LAST_DISCOVERY.roots],
-    plugins: LAST_DISCOVERY.plugins.map(clonePlugin),
-    skills: LAST_DISCOVERY.skills.map(cloneSkill),
+    plugins: LAST_DISCOVERY.plugins.map(cloneCodexPlugin),
+    skills: LAST_DISCOVERY.skills.map(cloneCodexPluginSkill),
     errors: LAST_DISCOVERY.errors.map((error) => ({ ...error })),
   }
 }
