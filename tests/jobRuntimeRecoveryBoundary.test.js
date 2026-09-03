@@ -30,6 +30,10 @@ const tickDependenciesSource = readFileSync(
   new URL('../server/services/jobRuntimeTickDependencies.js', import.meta.url),
   'utf8',
 )
+const wakeProcessingSource = readFileSync(
+  new URL('../server/services/jobRuntimeWakeProcessing.js', import.meta.url),
+  'utf8',
+)
 const defaultPlannerSource = readFileSync(
   new URL('../server/services/jobRuntimeDefaultPlanner.js', import.meta.url),
   'utf8',
@@ -210,6 +214,7 @@ test('job owner caching and tenant event delivery stay behind the focused event 
     ['job runtime facade', jobRuntimeSource],
     ['job runtime commands', commandSource],
     ['job runtime tick', tickSource],
+    ['job runtime wake processing', wakeProcessingSource],
   ]) {
     assert.equal(
       source.includes('jobUserCache'),
@@ -219,5 +224,6 @@ test('job owner caching and tenant event delivery stay behind the focused event 
   }
   assert.equal(jobRuntimeSource.includes('this.listeners'), false)
   assert.match(commandSource, /runtime\.cacheJobOwner\(id, userId\)/u)
-  assert.match(tickSource, /this\.cacheJobOwner\(wake\.jobId, wake\.userId\)/u)
+  assert.match(tickSource, /processJobRuntimeWakes\(this, dependencies\)/u)
+  assert.match(wakeProcessingSource, /runtime\.cacheJobOwner\(wake\.jobId, wake\.userId\)/u)
 })
