@@ -71,6 +71,9 @@ lease/core, step executor, task-plan guard, and model-binding capabilities are
 now assembled into an immutable per-runtime snapshot by
 `jobRuntimeDefaultPolicyCapabilities.js`; the facade preserves its existing
 constructor overrides without importing those concrete policy dependencies.
+Scheduler ownership, tick tracking, bounded draining, and coalesced shutdown now
+live in `jobRuntimeLoopHost.js`; the facade delegates lifecycle calls while
+preserving its compatibility observations.
 
 Runtime plugin installation and uninstall settlement now live in
 `runtimePluginInstallController.js` and `runtimePluginUninstallController.js`.
@@ -114,6 +117,8 @@ persistence from returning to the Job facade and
 tenant isolation and prevent direct owner-cache access, while
 `tests/jobRuntimeDefaultPolicyCapabilities.test.js` preserves immutable,
 per-runtime default capability snapshots and explicit override identity, while
+`tests/jobRuntimeLoopHost.test.js` preserves active-tick tracking, bounded
+draining, and shutdown coalescing, while
 `tests/modelInvocationRuntimeBoundary.test.js` prevents model invocation logic
 from returning to the proxy facade, and `tests/artifactGenBoundary.test.js`
 protects the settled artifact facade/service direction. The focused

@@ -34,6 +34,32 @@ const defaultPolicyCapabilitiesSource = readFileSync(
   new URL('../server/services/jobRuntimeDefaultPolicyCapabilities.js', import.meta.url),
   'utf8',
 )
+const loopHostSource = readFileSync(
+  new URL('../server/services/jobRuntimeLoopHost.js', import.meta.url),
+  'utf8',
+)
+
+test('job runtime delegates scheduler and tick lifecycle to a focused loop host', () => {
+  assert.match(jobRuntimeSource, /createJobRuntimeLoopHost\(\{/u)
+  assert.doesNotMatch(loopHostSource, /from ['"]\.\/jobRuntime\.js['"]/u)
+
+  for (const concreteDependency of [
+    './jobRuntimeScheduler.js',
+    './jobRuntimeTick.js',
+    './jobRuntimeTickDependencies.js',
+  ]) {
+    assert.equal(
+      jobRuntimeSource.includes(concreteDependency),
+      false,
+      `jobRuntime.js must not directly compose loop dependency: ${concreteDependency}`,
+    )
+    assert.equal(
+      loopHostSource.includes(concreteDependency),
+      true,
+      `loop host must retain composition: ${concreteDependency}`,
+    )
+  }
+})
 
 test('job runtime delegates default policy capability composition to a focused provider', () => {
   assert.ok(
@@ -97,14 +123,14 @@ test('job runtime delegates default planning composition to a focused provider',
 
 test('job runtime delegates concrete tick dependencies to a focused provider', () => {
   assert.equal(
-    jobRuntimeSource.includes(
+    loopHostSource.includes(
       "import { DEFAULT_JOB_RUNTIME_TICK_DEPENDENCIES } from './jobRuntimeTickDependencies.js'",
     ),
     true,
   )
   assert.match(
-    jobRuntimeSource,
-    /runJobRuntimeTick\.call\(this, DEFAULT_JOB_RUNTIME_TICK_DEPENDENCIES\)/u,
+    loopHostSource,
+    /runJobRuntimeTick\.call\(runtime, DEFAULT_JOB_RUNTIME_TICK_DEPENDENCIES\)/u,
   )
   assert.match(tickDependenciesSource, /Object\.freeze\(\{/u)
   assert.doesNotMatch(tickDependenciesSource, /from ['"]\.\/jobRuntime\.js['"]/u)

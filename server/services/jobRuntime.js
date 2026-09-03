@@ -1,11 +1,9 @@
 import { getJob as getJobRow } from './jobStore.js'
-import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
 import {
   createDefaultExecuteStep,
   createDefaultJobRuntimePolicyCapabilities,
 } from './jobRuntimeDefaultPolicyCapabilities.js'
-import { runJobRuntimeTick } from './jobRuntimeTick.js'
-import { DEFAULT_JOB_RUNTIME_TICK_DEPENDENCIES } from './jobRuntimeTickDependencies.js'
+import { createJobRuntimeLoopHost } from './jobRuntimeLoopHost.js'
 import { recoverRuntimeJobs } from './jobRuntimeRecovery.js'
 import { createJobRuntimeEventHub } from './jobRuntimeEventHub.js'
 import {
@@ -53,14 +51,10 @@ export class JobRuntime {
     this.executeStep = policyCapabilities.executeStep
     this.activeControllers = new Map()
     this.activeJobIds = new Set()
-    this.activeTicks = new Set()
-    this.shutdownRequested = false
-    this.shutdownPromise = null
-    this.scheduler = createJobRuntimeScheduler({
+    this.loopHost = createJobRuntimeLoopHost({
+      runtime: this,
       tickMs,
       maxConcurrency,
-      runOneTick: () => this.runOneTick(),
-      onError: (error) => console.error('[jobs] tick failed:', error?.stack || error),
     })
     this.eventHub = createJobRuntimeEventHub({
       resolveJobOwner: (jobId) => getJobRow(jobId)?.userId || null,
@@ -92,6 +86,18 @@ export class JobRuntime {
     return this.eventHub.listenerCount()
   }
 
+  get activeTicks() {
+    return this.loopHost.activeTicks
+  }
+
+  get shutdownRequested() {
+    return this.loopHost.shutdownRequested
+  }
+
+  get shutdownPromise() {
+    return this.loopHost.shutdownPromise
+  }
+
   recover() {
     return recoverRuntimeJobs({
       lease: this.runtimeCore.lease,
@@ -101,19 +107,15 @@ export class JobRuntime {
   }
 
   start() {
-    if (this.shutdownRequested) return false
-    return this.scheduler.start()
+    return this.loopHost.start()
   }
 
   stop() {
-    this.scheduler.stop()
+    this.loopHost.stop()
   }
 
   shutdown() {
-    if (this.shutdownPromise) return this.shutdownPromise
-    this.shutdownRequested = true
-    this.shutdownPromise = this.scheduler.shutdown().then(() => Promise.allSettled([...this.activeTicks]))
-    return this.shutdownPromise
+    return this.loopHost.shutdown()
   }
 
   async createJob(prompt, options = {}) {
@@ -165,22 +167,11 @@ export class JobRuntime {
   }
 
   runOneTick() {
-    if (this.shutdownRequested) return Promise.resolve(false)
-    let tick
-    tick = this._runOneTick().finally(() => this.activeTicks.delete(tick))
-    this.activeTicks.add(tick)
-    return tick
+    return this.loopHost.runOneTick()
   }
 
-  async _runOneTick() {
-    return runJobRuntimeTick.call(this, DEFAULT_JOB_RUNTIME_TICK_DEPENDENCIES)
-  }
-  async drain({ maxTicks = 1000 } = {}) {
-    for (let index = 0; index < maxTicks; index += 1) {
-      const didWork = await this.runOneTick()
-      if (!didWork) return
-    }
-    throw new Error('job runtime drain exceeded max ticks')
+  drain(options = {}) {
+    return this.loopHost.drain(options)
   }
 }
 
