@@ -26,8 +26,7 @@ import { createTurnSchedulingRuntime } from './turnSchedulingRuntime.js'
 import { resolveTurnToolSpecs } from './turnToolSpecs.js'
 import { createTurnResumeRuntime } from './turnResumeRuntime.js'
 import { createTurnEngineShutdownRuntime } from './turnEngineShutdownRuntime.js'
-import { normalizeArtifactIds, normalizeTaskVerificationDetails, publicIncompleteText } from './turnTerminalProjection.js'
-import { excludeVerifiedLocalFiles, mergeLocalFileReceipts } from './turnRecoveryProjection.js'
+import { projectRecoveryDeadLetterError } from './turnRecoveryProjection.js'
 import { missingAttachmentBindingRuntime, missingAttachmentPreparationRuntime, missingAttachmentValidationRuntime } from './turnManagedAttachmentRuntime.js'
 import {
   abortError,
@@ -377,57 +376,7 @@ export class TurnEngine {
       : null
     if ((currentRecovery?.status === 'dead_letter' || last?.type === 'turn.blocked')
       && scope?.retryRecovery !== true) {
-      const payload = last?.payload && typeof last.payload === 'object' ? last.payload : {}
-      const nestedFailure = payload.error && typeof payload.error === 'object' && !Array.isArray(payload.error)
-        ? payload.error
-        : {}
-      const failureField = (key) => (Object.hasOwn(nestedFailure, key) ? nestedFailure[key] : payload[key])
-      const evidenceField = (key) => (Object.hasOwn(payload, key) ? payload[key] : nestedFailure[key])
-      const hasEvidenceField = (key) => Object.hasOwn(payload, key) || Object.hasOwn(nestedFailure, key)
-      const verifiedLocalFiles = mergeLocalFileReceipts(evidenceField('verifiedLocalFiles'))
-      const retainedLocalFiles = excludeVerifiedLocalFiles(
-        mergeLocalFileReceipts(evidenceField('retainedLocalFiles')),
-        verifiedLocalFiles,
-      )
-      const incompleteReason = String(failureField('incompleteReason') || 'recovery_blocked').trim()
-      const missingRequirements = [...new Set((Array.isArray(failureField('missingRequirements'))
-        ? failureField('missingRequirements')
-        : ['execution_environment_repair', 'explicit_recovery_retry'])
-        .map((value) => String(value || '').trim())
-        .filter(Boolean))].slice(0, 16)
-      const taskVerification = normalizeTaskVerificationDetails(failureField('taskVerification'))
-      const iterations = Number(evidenceField('iterations'))
-      const error = new TurnEngineError(
-        'TURN_RECOVERY_DEAD_LETTER',
-        currentRecovery?.errorMessage || payload.message || nestedFailure.message
-          || 'automatic turn recovery stopped; repair the execution environment and retry explicitly',
-        409,
-      )
-      error.retryable = false
-      error.manualRetryable = true
-      error.incompleteReason = incompleteReason
-      error.missingRequirements = missingRequirements
-      if (taskVerification) error.taskVerification = taskVerification
-      if (hasEvidenceField('partialText')) {
-        error.partialText = publicIncompleteText(evidenceField('partialText'), '')
-      }
-      if (hasEvidenceField('artifactIds')) {
-        error.artifactIds = normalizeArtifactIds(evidenceField('artifactIds'))
-      }
-      if (hasEvidenceField('deliveryArtifactIds')) {
-        error.deliveryArtifactIds = normalizeArtifactIds(evidenceField('deliveryArtifactIds'))
-      }
-      if (hasEvidenceField('verifiedLocalFiles')) error.verifiedLocalFiles = verifiedLocalFiles
-      if (hasEvidenceField('retainedLocalFiles')) error.retainedLocalFiles = retainedLocalFiles
-      if (Number.isInteger(iterations) && iterations >= 0) error.iterations = iterations
-      error.recovery = currentRecovery || {
-        status: 'dead_letter',
-        retryable: false,
-        manualRetryable: true,
-        errorCode: last?.payload?.code || 'TURN_RECOVERY_BLOCKED',
-        errorMessage: last?.payload?.message || 'turn recovery is blocked',
-      }
-      throw error
+      throw projectRecoveryDeadLetterError({ recovery: currentRecovery, event: last })
     }
     if (scope?.retryRecovery === true) await this.deps.clearRecoveryState(scope)
     const outcome = await this.recoverTurn(scope)

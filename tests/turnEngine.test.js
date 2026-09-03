@@ -515,9 +515,23 @@ test('TurnEngine exposes recovery diagnostics and requires an explicit dead-lett
   })
   await assert.rejects(
     engine.resumeTurn(scope),
-    (error) => error?.code === 'TURN_RECOVERY_DEAD_LETTER' && error?.status === 409,
+    (error) => {
+      assert.equal(error?.code, 'TURN_RECOVERY_DEAD_LETTER')
+      assert.equal(error?.status, 409)
+      assert.equal(error?.message, 'provider remained unavailable')
+      assert.equal(error?.retryable, false)
+      assert.equal(error?.manualRetryable, true)
+      assert.equal(error?.incompleteReason, 'recovery_blocked')
+      assert.deepEqual(error?.missingRequirements, [
+        'execution_environment_repair',
+        'explicit_recovery_retry',
+      ])
+      assert.equal(error?.recovery, recoveryState)
+      return true
+    },
   )
   assert.equal(recoveries, 0)
+  assert.equal(clears, 0)
 
   const turn = await engine.resumeTurn({ ...scope, retryRecovery: true })
   assert.equal(turn.status, 'running')

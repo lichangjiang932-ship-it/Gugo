@@ -459,7 +459,7 @@ read-only legacy parser rather than weakening the current write schema.
 **Evidence / reproduction:** The UI intentionally supports only `zh` and `en`,
 and legacy `ja`, `ko`, and `zh-TW` preferences normalize to English. The public
 catalog API now stays in the 43-line `src/i18n/translations.js` entry point,
-while translation data is split across 57 cohesive modules under
+while translation data is split across 61 cohesive modules under
 `src/i18n/domains/`; the largest domain module is 564 lines.
 
 **Exit criteria:** Met. The public lookup API is unchanged, Chinese and English
