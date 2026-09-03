@@ -26,13 +26,13 @@ evidence settlement, and lease cleanup.
 
 ## DEBT-ARCH-002 — Host compatibility transition surfaces
 
-**Status:** Open
+**Status:** Closed
 **Priority:** P1
 **Area:** Runtime architecture
 
-**Evidence / reproduction:** The `Current transition debt` table in
-`docs/KERNEL_BOUNDARY.md` still lists one host compatibility and composition
-surface outside the target minimal kernel. The former `TurnEngine.js` row was
+**Evidence / reproduction:** The `Current transition debt` section in
+`docs/KERNEL_BOUNDARY.md` now has no active compatibility-host rows. Every
+formerly listed surface has an executable one-way dependency boundary. The former `TurnEngine.js` row was
 retired after `DEBT-ARCH-001` recorded its focused execution runtimes and stable
 runtime-port rules. The `turnEngineHost.js` row was retired after its transitive
 boundary test enforced fail-closed persistence composition and prohibited both
@@ -51,11 +51,7 @@ atomic writes, storage, local publication, and delivery remained behind focused
 host services. `tests/artifactGenBoundary.test.js` keeps the compatibility facade
 below 300 lines, limits its direct dependency set, preserves delegated export
 identity, and prevents those focused services from depending back on the facade;
-HTML preview and source storage now consume `artifactStorage.js` directly. The
-remaining rows still describe responsibilities
-that have not fully crossed their required boundaries, so every one references
-this open canonical record instead of appearing as undocumented debt beside an
-all-closed register.
+HTML preview and source storage now consume `artifactStorage.js` directly.
 
 Job crash recovery now lives in `jobRuntimeRecovery.js`, including approval
 resolution, running-step reset, durable recovery events, and execution-lease
@@ -117,15 +113,15 @@ descriptor before streaming, and revokes the readable capability on client
 disconnect. The Turn runtime port owns validation/materialization. The SQLite
 aggregate transaction no longer imports the attachment store: its concrete
 adapter injects the binder while the binding remains inside the same atomic
-turn-start commit. Only attachment filesystem preview/staging/recovery/cleanup
-inside bulk user-data governance remains transition debt.
+turn-start commit. Attachment filesystem preview, staging, rollback, recovery,
+and cleanup now cross `ManagedAttachmentGovernancePort v1`; only the default
+SQLite/file adapter sees bucket paths and filesystem APIs. The public
+user-data-governance facade selects that adapter, while preview/clear/recovery
+runtimes receive only owner-scoped capability methods.
 
-**Exit criteria:** Close only after every linked transition row is either
-removed with evidence that its required boundary has been reached or moved to
-a narrower open debt record with its own observable exit criteria. Completion
-must preserve the dependency and host-ownership rules in
-`docs/KERNEL_BOUNDARY.md`; deleting a row or relabeling a compatibility host
-without extracting its remaining responsibility does not repay the debt.
+**Exit criteria:** Met. No transition rows remain; compatibility facades and
+composition roots are bounded by focused ports/controllers and executable
+one-way dependency tests.
 
 **Verification:** `tests/codeDebt.test.js` requires every kernel transition row
 to reference exactly one canonical Open debt record. `tests/dbStoreBoundary.test.js`
@@ -153,9 +149,10 @@ initialization, sealing, resolver replacement, and registry delegation.
 `tests/durableAgentEventConsumerHost.test.js`, and
 `tests/runtimePluginDurableAgentEvents.test.js` preserve the durable v2 identity,
 delivery, fencing, retry/DLQ, retention, lifecycle, and plugin-host boundaries.
-Managed attachment storage port and
-architecture tests preserve DTO identity, path opacity, authoritative content
-opening, and the one-way route-to-port-to-adapter dependency.
+Managed attachment storage/runtime/governance port and architecture tests
+preserve DTO identity, path opacity, authoritative content opening, atomic
+turn-start binding, recoverable user-data clearing, and one-way
+runtime-to-port-to-adapter dependencies.
 Boundary-specific changes also run the Turn, persistence, model proxy,
 artifact, Job, runtime-plugin, migration, and managed-attachment contract suites
 named by the affected row.

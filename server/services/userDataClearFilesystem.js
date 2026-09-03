@@ -23,6 +23,20 @@ export function attachmentBucket(userId, env) {
   return { root, path: path.join(root, bucket) }
 }
 
+export function captureAttachmentClearSnapshot({ userId, env, fileSystem = fs } = {}) {
+  const bucket = attachmentBucket(userId, env)
+  return captureUserDataFileSnapshot({
+    root: bucket.root,
+    selections: [{
+      fullPath: bucket.path,
+      type: 'directory',
+      logicalPath: path.basename(bucket.path),
+    }],
+    namespace: 'attachments',
+    fileSystem,
+  })
+}
+
 export function stageAttachmentDeletion(
   userId,
   operationId,
@@ -169,11 +183,19 @@ export function rollbackRecoveredAttachmentStage(paths, fileSystem) {
   return true
 }
 
+export function cleanupRecoveredAttachmentStage(paths, fileSystem) {
+  if (assertSafeStagingDirectory(fileSystem, paths.attachmentRoot, paths.attachmentStagePath)) {
+    removeTree(fileSystem, paths.attachmentStagePath)
+  }
+  return true
+}
+
 export function cleanupCommittedClearOperation({
   paths,
   userId,
   operationId,
   fileSystem,
+  attachmentGovernancePort,
   renewLease = () => true,
 }) {
   renewLease()
@@ -195,8 +217,6 @@ export function cleanupCommittedClearOperation({
     fileSystem,
   })
   renewLease()
-  if (assertSafeStagingDirectory(fileSystem, paths.attachmentRoot, paths.attachmentStagePath)) {
-    removeTree(fileSystem, paths.attachmentStagePath)
-  }
+  attachmentGovernancePort.cleanupUserClear({ userId, operationId })
   renewLease()
 }

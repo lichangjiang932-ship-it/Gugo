@@ -12,10 +12,7 @@ import {
   isProcessAlive,
   renewClearOperationLease,
 } from './userDataClearJournal.js'
-import {
-  cleanupCommittedClearOperation,
-  rollbackRecoveredAttachmentStage,
-} from './userDataClearFilesystem.js'
+import { cleanupCommittedClearOperation } from './userDataClearFilesystem.js'
 
 function compactionJournalBinding(operation, compactionArchivePort) {
   if (operation.operation_kind !== 'user_clear' || operation.session_id !== null) {
@@ -119,6 +116,7 @@ export function recoverPendingClearOperation({
   tempDir,
   fileSystem,
   compactionArchivePort,
+  attachmentGovernancePort,
 }) {
   const operation = db.prepare(`
     SELECT operation_id, owner_id, lease_owner, lease_pid, lease_expires_at, status,
@@ -198,7 +196,10 @@ export function recoverPendingClearOperation({
         fileSystem,
       })
       renewLease()
-      rollbackRecoveredAttachmentStage(paths, fileSystem)
+      attachmentGovernancePort.rollbackUserClear({
+        userId,
+        operationId: operation.operation_id,
+      })
       renewLease()
       recoverTurnEmergencyFailureUserClear({
         operationId: operation.operation_id,
@@ -259,6 +260,7 @@ export function recoverPendingClearOperation({
       userId,
       operationId: operation.operation_id,
       fileSystem,
+      attachmentGovernancePort,
       renewLease,
     })
     renewLease()

@@ -435,7 +435,13 @@ test('kernel transition debt rows reference open canonical debt records', () => 
 
   assert.deepEqual(header, ['File', 'Current role', 'Required direction', 'Canonical debt'])
   assert.ok(separator.every((cell) => /^:?-{3,}:?$/.test(cell)), 'Transition debt table needs a valid separator')
-  assert.ok(rows.length > 0, 'Open kernel transition debt must retain at least one governed surface')
+  const architectureDebtStatus = debtStatuses.get('DEBT-ARCH-002')
+  if (architectureDebtStatus === 'Open') {
+    assert.ok(rows.length > 0, 'Open kernel transition debt must retain at least one governed surface')
+  } else {
+    assert.equal(architectureDebtStatus, 'Closed')
+    assert.equal(rows.length, 0, 'Closed kernel transition debt must not retain governed surfaces')
+  }
   for (const row of rows) {
     assert.equal(row.length, header.length, `Malformed kernel transition row: ${row.join(' | ')}`)
     const debtIds = [...row[3].matchAll(/\bDEBT-[A-Z]+-\d{3}\b/g)].map((match) => match[0])

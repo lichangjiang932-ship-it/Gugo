@@ -41,7 +41,6 @@ import {
   persistCompactionStageReceipt,
   renewClearOperationLease,
 } from './userDataClearJournal.js'
-import { stageAttachmentDeletion } from './userDataClearFilesystem.js'
 import {
   recoverCompactionArchiveDeletion,
   recoverPendingClearOperation,
@@ -64,6 +63,7 @@ export function clearAuthoritativeUserData({
   fileSystem = fs,
 } = {}, {
   acquireGovernanceLease = acquireCompactionArchiveGovernanceLease,
+  attachmentGovernancePort,
 } = {}) {
   const safeUserId = String(userId || '').trim()
   if (!safeUserId) throw governanceError('UNAUTHORIZED', 'User is required', 401)
@@ -106,6 +106,7 @@ export function clearAuthoritativeUserData({
       tempDir,
       fileSystem,
       compactionArchivePort,
+      attachmentGovernancePort,
     })
     assertUserRuntimeIdle(db, safeUserId)
     archiveDeletionPreview = compactionArchivePort.previewDeletion({
@@ -135,6 +136,7 @@ export function clearAuthoritativeUserData({
           cwd,
           tempDir,
           fileSystem,
+          attachmentGovernancePort,
           includeCompactionArchives: false,
         })
       : null
@@ -188,13 +190,11 @@ export function clearAuthoritativeUserData({
     })
     renewStagingLease()
     const paths = clearOperationPaths({ userId: safeUserId, operationId, env })
-    stagedAttachments = stageAttachmentDeletion(
-      safeUserId,
+    stagedAttachments = attachmentGovernancePort.stageUserClear({
+      userId: safeUserId,
       operationId,
-      env,
-      fileSystem,
-      preparedImpact?.files?.domainSnapshots?.attachments || null,
-    )
+      expectedSnapshot: preparedImpact?.files?.domainSnapshots?.attachments || null,
+    })
     renewStagingLease()
     stagedArtifacts = stageManagedDeletionDomain({
       root: managed.deletion.artifacts.root,

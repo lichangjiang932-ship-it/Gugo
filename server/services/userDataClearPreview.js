@@ -7,7 +7,6 @@ import { acquireCompactionArchiveGovernanceLease } from './compactionArchiveGove
 import { reapDeadManagedAttachmentUploadLeases } from './managedAttachmentUploadLease.js'
 import { collectTurnEmergencyFailureExportFiles } from './turnEmergencyFailureDataGovernance.js'
 import { userRuntimeBlockers } from './userDataClearJournal.js'
-import { attachmentBucket } from './userDataClearFilesystem.js'
 import { createUserDataGovernanceError as governanceError } from './userDataGovernanceError.js'
 import {
   captureUserDataFileSnapshot,
@@ -77,18 +76,14 @@ export function clearDatabaseImpact(records) {
   return { categories, totalRows, digest: digest.digest('hex') }
 }
 
-function clearManagedFileImpact({ managed, userId, env, emergencyFiles, fileSystem }) {
-  const attachment = attachmentBucket(userId, env)
-  const attachments = captureUserDataFileSnapshot({
-    root: attachment.root,
-    selections: [{
-      fullPath: attachment.path,
-      type: 'directory',
-      logicalPath: path.basename(attachment.path),
-    }],
-    namespace: 'attachments',
-    fileSystem,
-  })
+function clearManagedFileImpact({
+  managed,
+  userId,
+  emergencyFiles,
+  fileSystem,
+  attachmentGovernancePort,
+}) {
+  const attachments = attachmentGovernancePort.captureUserClearSnapshot({ userId })
   const artifacts = captureUserDataFileSnapshot({
     root: managed.deletion.artifacts.root,
     selections: managed.deletion.artifacts.entries.map((entry) => ({
@@ -140,6 +135,7 @@ export function prepareClearImpact({
   cwd,
   tempDir,
   fileSystem,
+  attachmentGovernancePort,
   includeCompactionArchives = true,
 }) {
   const collected = collectDatabaseRows(db, userId)
@@ -171,6 +167,7 @@ export function prepareClearImpact({
       env,
       emergencyFiles,
       fileSystem,
+      attachmentGovernancePort,
     }),
   }
 }
@@ -296,6 +293,7 @@ export function previewAuthoritativeUserDataClear({
   fileSystem = fs,
 } = {}, {
   acquireGovernanceLease = acquireCompactionArchiveGovernanceLease,
+  attachmentGovernancePort,
 } = {}) {
   const safeUserId = String(userId || '').trim()
   if (!safeUserId) throw governanceError('UNAUTHORIZED', 'User is required', 401)
@@ -314,6 +312,7 @@ export function previewAuthoritativeUserDataClear({
         cwd,
         tempDir,
         fileSystem,
+        attachmentGovernancePort,
         includeCompactionArchives: false,
       })
     }).immediate()

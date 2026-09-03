@@ -85,12 +85,14 @@ provenance.
 
 ## Current transition debt
 
-The following files are compatibility hosts and are explicitly outside the
-target kernel:
+No active compatibility-host transition rows remain.
 
 | File | Current role | Required direction | Canonical debt |
 |---|---|---|---|
-| Managed attachment user-data governance | Turn validation/model materialization cross `ManagedAttachmentRuntimePort v1`; HTTP storage crosses `ManagedAttachmentStoragePort v1`; the SQLite turn-start transaction receives its attachment binder only from the concrete SQLite adapter and retains one atomic commit. Bulk user-data clear still stages attachment filesystem buckets directly | Move attachment preview, staging, rollback, recovery, and cleanup behind a backend-neutral governance capability without weakening snapshot or lease checks | `DEBT-ARCH-002` |
+
+New host-owned capabilities must enter through an existing versioned port or add
+a focused port with an executable one-way dependency boundary; composition roots
+may select concrete adapters but runtime and route code may not.
 
 The repository's 600-line preference applies to implementation files under
 `server/`, `shared/`, `desktop/`, and `bin/`. `DEBT-SIZE-001` is the executable
