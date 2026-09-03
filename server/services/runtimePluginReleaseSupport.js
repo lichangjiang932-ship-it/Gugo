@@ -358,6 +358,7 @@ function runtimeStateConflict() {
 }
 
 export async function installTransformerRelease(release, {
+  ownerUserId = null,
   resetDurableAgentEventSubscriptions = false,
 } = {}) {
   const plugin = release.plugin
@@ -400,7 +401,7 @@ export async function installTransformerRelease(release, {
           })
         },
       })
-    }, durableIdentity, { resetDurableAgentEventSubscriptions })
+    }, durableIdentity, { ownerUserId, resetDurableAgentEventSubscriptions })
     return Object.freeze({ runtime, slot, installed: true })
   } catch (error) {
     if (activeTransformerSlots.get(plugin.id) === slot) activeTransformerSlots.delete(plugin.id)

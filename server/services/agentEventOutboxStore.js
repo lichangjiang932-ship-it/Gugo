@@ -174,6 +174,70 @@ export function enqueueAgentEventOutboxInDb(db, { userId, event } = {}) {
  * Entries include internal tenant identity and must never cross a plugin or
  * public transport boundary; only each entry's envelope is plugin-safe.
  */
+export function readAgentEventOutboxSubscriptionPage({
+  afterCursor = 0,
+  userId,
+  eventType,
+  limit = DEFAULT_PAGE_LIMIT,
+  db = getDb(),
+} = {}) {
+  if (!db || typeof db.prepare !== 'function') throw new TypeError('db is required')
+  const cursor = nonNegativeCursor(afterCursor)
+  const pageLimit = boundedPageLimit(limit)
+  const ownerId = typeof userId === 'string' ? userId.trim() : ''
+  const type = typeof eventType === 'string' ? eventType.trim() : ''
+  if (!ownerId) throw new TypeError('userId is required')
+  if (!type) throw new TypeError('eventType is required')
+  const readPage = () => {
+    const stream = readStreamMetadata(db)
+    if (cursor < stream.truncatedThrough) {
+      const error = outboxError(
+        'AGENT_EVENT_OUTBOX_CURSOR_TRUNCATED',
+        'afterCursor is older than the retained Agent Event stream',
+      )
+      error.details = Object.freeze({
+        epoch: stream.epoch,
+        afterCursor: cursor,
+        truncatedThrough: stream.truncatedThrough,
+      })
+      throw error
+    }
+    // Page the global cursor using metadata only so one tenant can advance the
+    // shared retention watermark without materializing another tenant's
+    // envelope. The payload query itself is owner- and type-scoped in SQL.
+    const cursorRows = db.prepare(`
+      SELECT cursor FROM agent_event_outbox
+      WHERE cursor > ?
+      ORDER BY cursor ASC
+      LIMIT ?
+    `).all(cursor, pageLimit + 1)
+    const pageCursors = cursorRows.slice(0, pageLimit).map((row) => row.cursor)
+    const boundary = pageCursors.at(-1) ?? cursor
+    const row = boundary > cursor
+      ? db.prepare(`
+          SELECT * FROM agent_event_outbox
+          WHERE cursor > ? AND cursor <= ?
+            AND user_id = ? AND event_type = ?
+          ORDER BY cursor ASC
+          LIMIT 1
+        `).get(cursor, boundary, ownerId, type)
+      : null
+    const entry = row ? mapStoredRow(row) : null
+    const scannedThrough = entry
+      ? (pageCursors.findLast((value) => value < entry.cursor) ?? cursor)
+      : boundary
+    return Object.freeze({
+      stream,
+      entry,
+      afterCursor: cursor,
+      scannedThrough,
+      limit: pageLimit,
+      hasMore: Boolean(entry) || cursorRows.length > pageLimit,
+    })
+  }
+  return db.inTransaction ? readPage() : db.transaction(readPage)()
+}
+
 export function readAgentEventOutboxPage({
   afterCursor = 0,
   limit = DEFAULT_PAGE_LIMIT,

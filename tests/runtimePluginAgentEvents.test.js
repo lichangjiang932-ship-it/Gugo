@@ -179,9 +179,11 @@ test('durable Agent Event v2 requires trusted Release identity and stable subscr
       { contractVersion: 2, subscriptionId: 'heartbeat-stream' },
     ),
     identity,
+    { ownerUserId: 'tenant-a' },
   )
   assert.equal(registrations.length, 1)
   assert.deepEqual({
+    userId: registrations[0].userId,
     publisherId: registrations[0].publisherId,
     publisherKeyId: registrations[0].publisherKeyId,
     packageDigest: registrations[0].packageDigest,
@@ -196,6 +198,7 @@ test('durable Agent Event v2 requires trusted Release identity and stable subscr
     contractVersion: registrations[0].contractVersion,
   }, {
     ...identity,
+    userId: 'tenant-a',
     subscriptionId: 'heartbeat-stream',
     eventType: 'heartbeat',
     contractVersion: 2,
@@ -270,6 +273,7 @@ test('durable Agent Event cleanup retries after a failed host revoke', async () 
       { contractVersion: 2, subscriptionId: 'heartbeat-stream' },
     ),
     trustedDurableIdentity(),
+    { ownerUserId: 'tenant-a' },
   )
 
   await assert.rejects(

@@ -211,6 +211,7 @@ export function listRuntimePluginInventory() {
 }
 
 export function enableRuntimePlugin(pluginId, {
+  ownerUserId = null,
   permissionApproval = null,
   resetDurableAgentEventSubscriptions = false,
 } = {}) {
@@ -263,6 +264,7 @@ export function enableRuntimePlugin(pluginId, {
       })
       const { release, permissionRequest, persistPermissionGrant } = prepared
       const installation = await installTransformerRelease(release, {
+        ownerUserId,
         resetDurableAgentEventSubscriptions,
       })
       try {

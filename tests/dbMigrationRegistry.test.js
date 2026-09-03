@@ -754,7 +754,7 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION }, (_, index) => index + 1),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 114)
+  assert.equal(LATEST_SCHEMA_VERSION, 115)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
 })
@@ -1248,15 +1248,15 @@ test('v114 rejects malformed pre-existing subscription objects without advancing
   }
 })
 
-test('v114 upgrades a v113 database idempotently', () => {
+test('v115 replaces ownerless v114 subscriptions and upgrades idempotently', () => {
   const db = new Database(':memory:')
   try {
-    assert.equal(migrateThroughVersion(db, 113), 113)
-    assert.equal(runSchemaMigrations(db), 114)
-    assert.equal(runSchemaMigrations(db), 114)
+    assert.equal(migrateThroughVersion(db, 114), 114)
+    assert.equal(runSchemaMigrations(db), 115)
+    assert.equal(runSchemaMigrations(db), 115)
     assert.equal(
       db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-      '114',
+      '115',
     )
     for (const table of ['agent_event_subscriptions', 'agent_event_subscription_dlq']) {
       assert.ok(db.prepare(`
@@ -1266,7 +1266,10 @@ test('v114 upgrades a v113 database idempotently', () => {
     assert.equal(db.prepare(`
       SELECT COUNT(*) AS count FROM sqlite_schema
       WHERE type = 'index' AND name LIKE 'idx_agent_event_subscription%'
-    `).get().count, 3)
+    `).get().count, 4)
+    assert.ok(db.prepare(`
+      SELECT 1 FROM pragma_table_info('agent_event_subscriptions') WHERE name = 'user_id'
+    `).get())
   } finally {
     db.close()
   }

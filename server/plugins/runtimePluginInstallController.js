@@ -22,7 +22,7 @@ export function createRuntimePluginInstallController({
     manifest,
     setup,
     durableIdentity = null,
-    { resetDurableAgentEventSubscriptions = false } = {},
+    { ownerUserId = null, resetDurableAgentEventSubscriptions = false } = {},
   ) => {
     if (isShuttingDown()) {
       const error = new Error('runtime plugin registry is shutting down')
@@ -40,6 +40,10 @@ export function createRuntimePluginInstallController({
       throw error
     }
     if (typeof setup !== 'function') throw new TypeError('plugin setup must be a function')
+    const durableOwnerUserId = typeof ownerUserId === 'string' ? ownerUserId.trim() : ''
+    if (ownerUserId !== null && !durableOwnerUserId) {
+      throw new TypeError('ownerUserId must be a non-empty string or null')
+    }
     if (typeof resetDurableAgentEventSubscriptions !== 'boolean') {
       throw new TypeError('resetDurableAgentEventSubscriptions must be a boolean')
     }
@@ -58,6 +62,7 @@ export function createRuntimePluginInstallController({
       state: 'installing',
       deferVisibility: false,
       durableIdentity: trustedDurableIdentity,
+      durableOwnerUserId: durableOwnerUserId || null,
       resetDurableAgentEventSubscriptions,
     })
     record.installSettled = new Promise((resolve) => {

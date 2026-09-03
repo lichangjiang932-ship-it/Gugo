@@ -17,6 +17,7 @@ export function createRuntimePluginRecordFactory() {
     state,
     deferVisibility,
     durableIdentity = null,
+    durableOwnerUserId = null,
     resetDurableAgentEventSubscriptions = false,
     installedAt = null,
   }) => ({
@@ -28,6 +29,7 @@ export function createRuntimePluginRecordFactory() {
     state,
     deferVisibility,
     durableIdentity,
+    durableOwnerUserId,
     resetDurableAgentEventSubscriptions,
     cancelRequested: false,
     installedAt,

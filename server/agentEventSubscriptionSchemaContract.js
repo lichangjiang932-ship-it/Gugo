@@ -3,6 +3,7 @@ import { TURN_EVENT_TYPES } from '../shared/turnEvents.js'
 const EXPECTED_COLUMNS = Object.freeze({
   agent_event_subscriptions: Object.freeze([
     ['subscription_key', 'TEXT', 1, 1],
+    ['user_id', 'TEXT', 1, 0],
     ['publisher_id', 'TEXT', 1, 0],
     ['publisher_key_id', 'TEXT', 1, 0],
     ['package_digest', 'TEXT', 1, 0],
@@ -105,6 +106,12 @@ export function hasAgentEventSubscriptionChecks(value) {
   ])
 }
 
+export function hasTenantScopedAgentEventSubscriptionChecks(value) {
+  const sql = compactSql(value)
+  return hasAgentEventSubscriptionChecks(value)
+    && sql.includes('check(length(user_id)between1and256)')
+}
+
 export function hasAgentEventSubscriptionDlqChecks(value) {
   const sql = compactSql(value)
   const eventTypes = compactSql(TURN_EVENT_TYPES
@@ -127,8 +134,18 @@ export function collectAgentEventSubscriptionSchemaProblems(db) {
   }
 
   const subscriptionSql = tableSql(db, 'agent_event_subscriptions')
-  if (!hasAgentEventSubscriptionChecks(subscriptionSql)) {
+  if (!hasTenantScopedAgentEventSubscriptionChecks(subscriptionSql)) {
     missing.push('constraints:agent_event_subscriptions')
+  }
+  const subscriptionForeignKeys = db.prepare(`
+    SELECT * FROM pragma_foreign_key_list('agent_event_subscriptions')
+  `).all()
+  if (subscriptionForeignKeys.length !== 1
+    || subscriptionForeignKeys[0].from !== 'user_id'
+    || subscriptionForeignKeys[0].table !== 'users'
+    || subscriptionForeignKeys[0].to !== 'id'
+    || subscriptionForeignKeys[0].on_delete !== 'CASCADE') {
+    missing.push('foreign-key:agent_event_subscriptions.user_id')
   }
 
   const dlqSql = tableSql(db, 'agent_event_subscription_dlq')

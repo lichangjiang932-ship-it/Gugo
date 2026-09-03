@@ -327,7 +327,7 @@ export function createDurableAgentEventConsumerHost({
       try {
         record.lease = await operations.acquireAgentEventSubscriptionLease(
           record.subscriptionKey,
-          { owner, now: now(), leaseDurationMs: leaseMs },
+          { userId: record.userId, owner, now: now(), leaseDurationMs: leaseMs },
         )
         if (!record.lease) {
           await waitForWake(record, pollMs)
@@ -360,6 +360,7 @@ export function createDurableAgentEventConsumerHost({
           )
           if (abandoned) {
             record.abandoned = true
+            record.disableRequested = true
             markStopping(record)
             observeAgentEventHost(onHostError, {
               code: 'AGENT_EVENT_LISTENER_DRAIN_TIMEOUT',
@@ -408,6 +409,18 @@ export function createDurableAgentEventConsumerHost({
         })
       } finally {
         await releaseLease(record)
+      }
+      if (record.abandoned && record.disableRequested) {
+        try {
+          await operations.disableAgentEventSubscription(record.subscriptionKey, { now: now() })
+          record.disableRequested = false
+        } catch (error) {
+          observeAgentEventHost(onHostError, {
+            code: safeAgentEventFailureCode(error, 'AGENT_EVENT_SUBSCRIPTION_DISABLE_FAILED'),
+            phase: 'abandon-disable',
+            subscriptionKey: record.subscriptionKey,
+          })
+        }
       }
       if (started && !closed && !record.stopping && !record.abandoned) {
         await waitForWake(record, nextDelay)
@@ -461,10 +474,17 @@ export function createDurableAgentEventConsumerHost({
     const listener = normalizeDurableAgentEventListener(definition.listener)
     let subscription = operations.ensureAgentEventSubscription(definition)
     const subscriptionKey = subscription?.subscriptionKey
+    const subscriptionUserId = subscription?.userId
     if (typeof subscriptionKey !== 'string' || !/^[a-f0-9]{64}$/u.test(subscriptionKey)) {
       throw durableHostError(
         'AGENT_EVENT_DURABLE_STORE_INVALID',
         'durable Agent Event store returned an invalid subscription key',
+      )
+    }
+    if (typeof subscriptionUserId !== 'string' || !subscriptionUserId) {
+      throw durableHostError(
+        'AGENT_EVENT_DURABLE_STORE_INVALID',
+        'durable Agent Event store returned a subscription without an owner',
       )
     }
     if (subscription.status === 'disabled') {
@@ -485,6 +505,7 @@ export function createDurableAgentEventConsumerHost({
     })
     const record = {
       subscriptionKey,
+      userId: subscriptionUserId,
       eventType: subscription.eventType,
       listener,
       lease: null,

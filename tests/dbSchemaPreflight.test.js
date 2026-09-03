@@ -859,6 +859,15 @@ test('fresh and v5→v6, v27→v28, and v29→v30 fixtures converge idempotently
     try {
       fixture.pragma('foreign_keys = OFF')
       entry.mutate(fixture)
+      // The fixture starts from the current schema only to reuse its legacy
+      // tables. Remove post-target Agent Event tables before lowering the
+      // version so v113-v115 replay against the historical shape they own.
+      fixture.exec(`
+        DROP TABLE agent_event_subscription_dlq;
+        DROP TABLE agent_event_subscriptions;
+        DROP TABLE agent_event_stream_metadata;
+        DROP TABLE agent_event_outbox;
+      `)
       fixture.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'")
         .run(String(entry.version))
     } finally {

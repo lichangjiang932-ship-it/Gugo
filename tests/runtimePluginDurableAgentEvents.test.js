@@ -10,6 +10,7 @@ import Database from 'better-sqlite3'
 import { createDurableAgentEventConsumerHost } from '../server/core/durableAgentEventConsumerHost.js'
 import { migrateToV113 } from '../server/migrations/v113AgentEventOutbox.js'
 import { migrateToV114 } from '../server/migrations/v114AgentEventSubscriptions.js'
+import { migrateToV115 } from '../server/migrations/v115TenantScopedAgentEventSubscriptions.js'
 import { createRuntimePluginRegistry } from '../server/plugins/runtimePluginRegistry.js'
 import {
   createRuntimePluginDurableIdentity,
@@ -142,9 +143,10 @@ function createDatabase(file) {
   const db = new Database(file)
   db.pragma('foreign_keys = ON')
   db.exec('CREATE TABLE users (id TEXT PRIMARY KEY)')
+  db.prepare('INSERT INTO users (id) VALUES (?)').run('tenant-integration')
   migrateToV113(db)
   migrateToV114(db)
-  db.prepare('INSERT INTO users (id) VALUES (?)').run('tenant-integration')
+  migrateToV115(db)
   return db
 }
 
@@ -180,7 +182,10 @@ async function registerPlugin(registry, identity, received, registrationOptions 
       { contractVersion: 2, subscriptionId: SUBSCRIPTION_ID },
     ),
     identity,
-    registrationOptions,
+    {
+      ownerUserId: 'tenant-integration',
+      ...(registrationOptions || {}),
+    },
   )
 }
 

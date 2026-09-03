@@ -1,4 +1,4 @@
-import { resolveAuthMode } from '../adapters/authAccount.js'
+import { getLocalOwnerUserId, resolveAuthMode } from '../adapters/authAccount.js'
 import { getPlugin, getRuntimePlugin } from '../plugins/pluginRegistry.js'
 import {
   assertReleaseDistributionMatchesDefinition,
@@ -77,13 +77,14 @@ async function loadHealthyStoredRelease(
 
 async function installAndPersistRelease({
   release,
+  ownerUserId = null,
   previousReleaseId = null,
   expectedState,
   permissionRequest = permissionRequestForRelease(release),
   persistPermissionGrant = false,
   rollbackReceipt = null,
 }) {
-  const installation = await installTransformerRelease(release)
+  const installation = await installTransformerRelease(release, { ownerUserId })
   try {
     return expectedState.activeReleaseId === release.releaseId
       ? confirmRuntimePluginRelease({
@@ -111,7 +112,7 @@ async function installAndPersistRelease({
   }
 }
 
-async function restoreOneRuntimePlugin(definition, state, assertDependencies) {
+async function restoreOneRuntimePlugin(definition, state, assertDependencies, ownerUserId) {
   const plugin = distributedPluginFromDefinition(definition)
   if (!state.activeReleaseId) {
     assertDependencies(plugin)
@@ -121,6 +122,7 @@ async function restoreOneRuntimePlugin(definition, state, assertDependencies) {
     })
     await installAndPersistRelease({
       release: prepared.release,
+      ownerUserId,
       previousReleaseId: state.previousReleaseId || null,
       expectedState: state,
       permissionRequest: prepared.permissionRequest,
@@ -141,6 +143,7 @@ async function restoreOneRuntimePlugin(definition, state, assertDependencies) {
     )
     await installAndPersistRelease({
       release: active,
+      ownerUserId,
       previousReleaseId: state.previousReleaseId || null,
       expectedState: state,
     })
@@ -159,6 +162,7 @@ async function restoreOneRuntimePlugin(definition, state, assertDependencies) {
     )
     await installAndPersistRelease({
       release: previous,
+      ownerUserId,
       previousReleaseId: null,
       expectedState: state,
       rollbackReceipt: {
@@ -264,6 +268,7 @@ export async function restoreEnabledRuntimePlugins({ env = process.env } = {}) {
       reason: 'AUTH_MODE_NOT_LOCAL',
     }))
   }
+  const ownerUserId = getLocalOwnerUserId(env)
   const results = []
   const outcomesById = new Map()
   const statesById = new Map(states.map((state) => [state.pluginId, state]))
@@ -283,7 +288,7 @@ export async function restoreEnabledRuntimePlugins({ env = process.env } = {}) {
             statesById,
             outcomesById,
           })
-        })
+        }, ownerUserId)
       })
       const outcome = restored
         ? {

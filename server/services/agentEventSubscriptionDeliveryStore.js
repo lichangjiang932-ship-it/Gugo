@@ -1,5 +1,5 @@
 import { getDb } from '../db.js'
-import { readAgentEventOutboxPage } from './agentEventOutboxStore.js'
+import { readAgentEventOutboxSubscriptionPage } from './agentEventOutboxStore.js'
 import {
   assertActiveLease,
   inImmediateTransaction,
@@ -47,7 +47,8 @@ export function settleDeletedUserAgentEventRetriesInTransaction({
     JOIN agent_event_outbox AS event
       ON event.cursor = subscription.retry_cursor
       AND event.event_type = subscription.event_type
-    WHERE event.user_id = ?
+    WHERE subscription.user_id = ?
+      AND event.user_id = subscription.user_id
       AND subscription.status IN ('active', 'disabled')
     ORDER BY subscription.subscription_key
   `).all(ownerId)
@@ -141,9 +142,11 @@ export function scanAgentEventSubscription(input, {
         hasMore: true,
       })
     }
-    const page = readAgentEventOutboxPage({
+    const page = readAgentEventOutboxSubscriptionPage({
       db,
       afterCursor: row.scanned_cursor,
+      userId: row.user_id,
+      eventType: row.event_type,
       limit: scanLimit,
     })
     if (page.stream.epoch !== row.stream_epoch) {
@@ -152,12 +155,8 @@ export function scanAgentEventSubscription(input, {
         'subscription cursor changed stream epoch while scanning',
       )
     }
-    const matchIndex = page.entries.findIndex((entry) => entry.eventType === row.event_type)
-    const match = matchIndex < 0 ? null : page.entries[matchIndex]
-    const scannedThrough = matchIndex < 0
-      ? page.nextCursor
-      : (page.entries[matchIndex - 1]?.cursor ?? row.scanned_cursor)
-    row = updateScannedCursor(db, token, row, scannedThrough, timestamp)
+    const match = page.entry
+    row = updateScannedCursor(db, token, row, page.scannedThrough, timestamp)
     if (row.retry_cursor !== null && match?.cursor !== row.retry_cursor) {
       throw subscriptionError(
         'AGENT_EVENT_SUBSCRIPTION_STATE_UNKNOWN',
@@ -177,9 +176,9 @@ export function scanAgentEventSubscription(input, {
 function assertNextMatchingCursor(db, row, cursor) {
   const next = db.prepare(`
     SELECT cursor FROM agent_event_outbox
-    WHERE cursor > ? AND event_type = ?
+    WHERE cursor > ? AND user_id = ? AND event_type = ?
     ORDER BY cursor ASC LIMIT 1
-  `).get(row.scanned_cursor, row.event_type)
+  `).get(row.scanned_cursor, row.user_id, row.event_type)
   if (!next || next.cursor !== cursor) {
     throw subscriptionError(
       'AGENT_EVENT_SUBSCRIPTION_CURSOR_INVALID',

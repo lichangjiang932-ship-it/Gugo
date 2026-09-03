@@ -5,6 +5,7 @@ import { createDurableAgentEventConsumerHost } from '../server/core/durableAgent
 import { createTurnEventTransportEnvelope } from '../shared/turnEvents.js'
 
 const SUBSCRIPTION_KEY = 'a'.repeat(64)
+const SUBSCRIPTION_USER_ID = 'tenant-private'
 
 function eventEntry(index, type = 'turn.started') {
   const event = {
@@ -77,6 +78,7 @@ function createMemoryStore({
     ensureAgentEventSubscription(definition) {
       return Object.freeze({
         subscriptionKey: SUBSCRIPTION_KEY,
+        userId: definition.userId,
         contractVersion: 2,
         eventType: definition.eventType,
         status: state.status,
@@ -88,6 +90,7 @@ function createMemoryStore({
       state.status = 'active'
       return Object.freeze({
         subscriptionKey: SUBSCRIPTION_KEY,
+        userId: SUBSCRIPTION_USER_ID,
         contractVersion: 2,
         eventType: entries[0]?.eventType || 'turn.started',
         status: state.status,
@@ -103,12 +106,14 @@ function createMemoryStore({
       state.status = 'disabled'
       return Object.freeze({ subscriptionKey: SUBSCRIPTION_KEY, status: state.status })
     },
-    acquireAgentEventSubscriptionLease(_key, { owner, now, leaseDurationMs }) {
+    acquireAgentEventSubscriptionLease(_key, { userId, owner, now, leaseDurationMs }) {
+      assert.equal(userId, SUBSCRIPTION_USER_ID)
       if (state.status !== 'active') return null
       if (state.lease && state.lease.expiresAt > now && state.lease.owner !== owner) return null
       state.generation += 1
       state.lease = Object.freeze({
         subscriptionKey: SUBSCRIPTION_KEY,
+        userId,
         owner,
         generation: state.generation,
         expiresAt: now + leaseDurationMs,
@@ -246,6 +251,7 @@ function createControlledClock(start = 0) {
 function registration(listener, eventType = 'turn.started') {
   return {
     contractVersion: 2,
+    userId: SUBSCRIPTION_USER_ID,
     eventType,
     listener,
   }
@@ -527,6 +533,8 @@ test('shutdown abandons a hanging listener at the drain deadline and restart rep
   assert.deepEqual(memory.state.failed, [])
   assert.equal(memory.state.entries.length, 1)
   assert.equal(memory.state.lease, null)
+  assert.equal(memory.state.status, 'disabled')
+  assert.equal(memory.state.disableCalls, 1)
   assert.deepEqual(hostFailures, [{
     code: 'AGENT_EVENT_LISTENER_DRAIN_TIMEOUT',
     phase: 'drain',

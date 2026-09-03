@@ -5,6 +5,7 @@ import Database from 'better-sqlite3'
 
 import { migrateToV113 } from '../server/migrations/v113AgentEventOutbox.js'
 import { migrateToV114 } from '../server/migrations/v114AgentEventSubscriptions.js'
+import { migrateToV115 } from '../server/migrations/v115TenantScopedAgentEventSubscriptions.js'
 import { enqueueAgentEventOutboxInDb } from '../server/services/agentEventOutboxStore.js'
 import {
   AGENT_EVENT_DURABLE_SUBSCRIPTION_CONTRACT_VERSION,
@@ -26,6 +27,7 @@ import {
 import { createTurnEvent } from '../shared/turnEvents.js'
 
 const BASE_BINDING = Object.freeze({
+  userId: 'tenant-a',
   publisherId: 'publisher-a',
   publisherKeyId: `sha256-${'a'.repeat(64)}`,
   packageDigest: `sha256-${'c'.repeat(64)}`,
@@ -44,9 +46,10 @@ function createDb() {
   const db = new Database(':memory:')
   db.pragma('foreign_keys = ON')
   db.exec('CREATE TABLE users (id TEXT PRIMARY KEY)')
+  db.prepare('INSERT INTO users (id) VALUES (?), (?)').run('tenant-a', 'tenant-b')
   migrateToV113(db)
   migrateToV114(db)
-  db.prepare('INSERT INTO users (id) VALUES (?), (?)').run('tenant-a', 'tenant-b')
+  migrateToV115(db)
   return db
 }
 
@@ -57,7 +60,9 @@ function event(id, type = 'turn.started', createdAt = 1_000) {
     turnId: `turn-${id}`,
     sequence: type === 'turn.started' ? 0 : 1,
     type,
-    payload: type === 'turn.started' ? {} : { phase: id },
+    payload: type === 'turn.started'
+      ? {}
+      : type === 'reasoning.delta' ? { text: id } : { phase: id },
     createdAt,
   })
 }
@@ -79,11 +84,13 @@ function subscribe(db, overrides = {}) {
 }
 
 function lease(db, subscriptionKey, {
+  userId = BASE_BINDING.userId,
   owner = 'worker-a',
   now = 1_000,
   leaseDurationMs = 10_000,
 } = {}) {
   return acquireAgentEventSubscriptionLease(subscriptionKey, {
+    userId,
     owner,
     now,
     leaseDurationMs,
@@ -100,6 +107,7 @@ test('subscription key binds publisher, release, plugin, local id, event type, a
 
     assert.equal(first.subscriptionKey, expectedKey)
     assert.deepEqual(retry, first)
+    assert.equal(first.userId, BASE_BINDING.userId)
     assert.equal(first.publisherId, BASE_BINDING.publisherId)
     assert.equal(first.publisherKeyId, BASE_BINDING.publisherKeyId)
     assert.equal(first.packageDigest, BASE_BINDING.packageDigest)
@@ -119,6 +127,10 @@ test('subscription key binds publisher, release, plugin, local id, event type, a
 
     assert.notEqual(
       buildAgentEventSubscriptionKey({ ...BASE_BINDING, pluginVersion: '2.0.0' }),
+      expectedKey,
+    )
+    assert.notEqual(
+      buildAgentEventSubscriptionKey({ ...BASE_BINDING, userId: 'tenant-b' }),
       expectedKey,
     )
     assert.throws(
@@ -209,6 +221,31 @@ test('scan advances over filtered events but leaves the matching event pending f
     assert.equal(empty.entry, null)
     assert.equal(empty.scannedThrough, filteredAfter.cursor)
     assert.equal(empty.subscription.ackedCursor, matching.cursor)
+  } finally {
+    db.close()
+  }
+})
+
+test('tenant-scoped subscriptions never materialize another users matching event', () => {
+  const db = createDb()
+  try {
+    const foreign = enqueue(db, 'tenant-b-private-reasoning', 'reasoning.delta', 'tenant-b')
+    const owned = enqueue(db, 'tenant-a-private-reasoning', 'reasoning.delta', 'tenant-a')
+    const subscription = subscribe(db, {
+      eventType: 'reasoning.delta',
+      subscriptionId: 'reasoning-consumer',
+    })
+    const token = lease(db, subscription.subscriptionKey)
+
+    const first = scanAgentEventSubscription(token, { now: 1_001, db })
+    assert.equal(first.entry.cursor, owned.cursor)
+    assert.equal(first.entry.userId, 'tenant-a')
+    assert.notEqual(first.entry.cursor, foreign.cursor)
+    assert.equal(JSON.stringify(first.entry).includes('tenant-b-private-reasoning'), false)
+    acknowledgeAgentEventSubscription(token, { cursor: owned.cursor, now: 1_002, db })
+
+    const empty = scanAgentEventSubscription(token, { now: 1_003, db })
+    assert.equal(empty.entry, null)
   } finally {
     db.close()
   }
@@ -370,8 +407,9 @@ test('user clear settlement dead-letters active and disabled retries without blo
       owner: 'worker-resumed',
       now: 1_006,
     })
-    assert.equal(scanAgentEventSubscription(resumed, { now: 1_007, db }).entry.cursor, preserved.cursor)
-    acknowledgeAgentEventSubscription(resumed, { cursor: preserved.cursor, now: 1_008, db })
+    const isolated = scanAgentEventSubscription(resumed, { now: 1_007, db })
+    assert.equal(isolated.entry, null)
+    assert.equal(isolated.scannedThrough, preserved.cursor)
     const trimmed = truncateAgentEventOutboxToSafeWatermark({ now: 1_009, db })
     assert.equal(trimmed.truncated, true)
     assert.equal(trimmed.watermark, preserved.cursor)
@@ -498,16 +536,14 @@ test('reset keeps disabled subscription cursors monotonic when the retained tail
   try {
     const retainedTail = enqueue(db, 'retained-lower-cursor', 'turn.started', 'tenant-b')
     const removedHighCursor = enqueue(db, 'removed-higher-cursor')
-    const subscription = subscribe(db)
-    const token = lease(db, subscription.subscriptionKey)
+    const subscription = subscribe(db, { userId: 'tenant-b' })
+    const token = lease(db, subscription.subscriptionKey, { userId: 'tenant-b' })
 
     assert.equal(scanAgentEventSubscription(token, { now: 1_001, db }).entry.cursor, retainedTail.cursor)
     acknowledgeAgentEventSubscription(token, { cursor: retainedTail.cursor, now: 1_002, db })
-    assert.equal(
-      scanAgentEventSubscription(token, { now: 1_003, db }).entry.cursor,
-      removedHighCursor.cursor,
-    )
-    acknowledgeAgentEventSubscription(token, { cursor: removedHighCursor.cursor, now: 1_004, db })
+    const isolated = scanAgentEventSubscription(token, { now: 1_003, db })
+    assert.equal(isolated.entry, null)
+    assert.equal(isolated.scannedThrough, removedHighCursor.cursor)
     disableAgentEventSubscription(subscription.subscriptionKey, { now: 1_005, db })
 
     db.prepare('DELETE FROM users WHERE id = ?').run('tenant-a')
@@ -522,10 +558,11 @@ test('reset keeps disabled subscription cursors monotonic when the retained tail
     })
     assert.equal(enabled.status, 'active')
     assert.equal(enabled.streamEpoch, 2)
-    assert.equal(enabled.ackedCursor, removedHighCursor.cursor)
+    assert.equal(enabled.ackedCursor, retainedTail.cursor)
     assert.equal(enabled.scannedCursor, removedHighCursor.cursor)
 
     const resumedToken = lease(db, subscription.subscriptionKey, {
+      userId: 'tenant-b',
       owner: 'worker-b',
       now: 1_008,
     })
@@ -626,8 +663,6 @@ test('unknown subscription state prohibits retention and DLQ does not duplicate 
       subscription.subscriptionKey,
       { db },
     )).includes('tenant-a'), false)
-    db.prepare('DELETE FROM users WHERE id = ?').run('tenant-a')
-    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM agent_event_outbox').get().count, 0)
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM agent_event_subscription_dlq').get().count, 1)
 
     db.pragma('ignore_check_constraints = ON')

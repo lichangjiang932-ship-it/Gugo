@@ -49,6 +49,7 @@ const REQUIRED_TABLE_COLUMNS = Object.freeze({
   agent_event_stream_metadata: ['stream_key', 'epoch', 'truncated_through'],
   agent_event_subscriptions: [
     'subscription_key',
+    'user_id',
     'publisher_id',
     'publisher_key_id',
     'package_digest',
@@ -235,7 +236,7 @@ export const REQUIRED_UNIQUE_KEYS = Object.freeze({
 const REQUIRED_KEY_MINIMUM_SCHEMA_VERSIONS = Object.freeze({
   agent_event_outbox: 113,
   agent_event_stream_metadata: 113,
-  agent_event_subscriptions: 114,
+  agent_event_subscriptions: 115,
   agent_event_subscription_dlq: 114,
 })
 
@@ -310,6 +311,8 @@ const REQUIRED_INDEXES = Object.freeze({
   idx_turn_events_replay: { table: 'turn_events', columns: ['user_id', 'session_id', 'turn_id', 'sequence'] },
   idx_agent_event_outbox_user_cursor: { table: 'agent_event_outbox', columns: ['user_id', 'cursor'] },
   idx_agent_event_outbox_type_cursor: { table: 'agent_event_outbox', columns: ['event_type', 'cursor'] },
+  idx_agent_event_outbox_user_type_cursor: { table: 'agent_event_outbox', columns: ['user_id', 'event_type', 'cursor'] },
+  idx_agent_event_subscriptions_user_status: { table: 'agent_event_subscriptions', columns: ['user_id', 'status', 'subscription_key'] },
   idx_agent_event_subscriptions_retention: {
     table: 'agent_event_subscriptions',
     columns: ['status', 'stream_epoch', 'scanned_cursor'],
@@ -366,6 +369,7 @@ const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { table: 'turn_events', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
   { table: 'turn_events', from: 'session_id', target: 'sessions', to: 'token', onDelete: 'CASCADE' },
   { table: 'agent_event_outbox', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
+  { table: 'agent_event_subscriptions', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
   {
     table: 'agent_event_subscription_dlq',
     from: 'subscription_key',

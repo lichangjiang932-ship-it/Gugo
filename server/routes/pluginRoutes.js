@@ -366,7 +366,8 @@ export async function handlePluginRequest(req, res, {
     /^\/api\/plugins\/runtime\/([a-z0-9][a-z0-9-]*)\/config\/reload$/i,
   )
   if (url.pathname === '/api/plugins/runtime' || runtimeAction || runtimeConfigReload) {
-    if (!authorizeRuntimeControl(req, res, env)) return
+    const runtimeOwnerId = authorizeRuntimeControl(req, res, env)
+    if (!runtimeOwnerId) return
     if (url.pathname === '/api/plugins/runtime') {
       if (req.method !== 'GET') {
         return sendJson(res, 405, {
@@ -429,6 +430,7 @@ export async function handlePluginRequest(req, res, {
       const action = runtimeAction[2].toLowerCase()
       const plugin = action === 'enable'
         ? await enableRuntimePlugin(runtimeAction[1], {
+            ownerUserId: runtimeOwnerId,
             permissionApproval: runtimePermissionApproval(req),
             resetDurableAgentEventSubscriptions: runtimeAgentEventResetToCurrent(req),
           })

@@ -170,6 +170,12 @@ export function createRuntimePluginAgentEventRegistry({
         'durable agent event subscriptions require a verified publisher Release identity',
       )
     }
+    if (contractVersion === durableHost.contractVersion && !record.durableOwnerUserId) {
+      throw registryError(
+        'PLUGIN_AGENT_EVENT_DURABLE_OWNER_REQUIRED',
+        'durable agent event subscriptions require a host-authenticated owner',
+      )
+    }
 
     const contribution = Object.freeze({
       id: contractVersion === host.contractVersion
@@ -212,6 +218,7 @@ export function createRuntimePluginAgentEventRegistry({
             }
           : {
               ...contribution.durableIdentity,
+              userId: record.durableOwnerUserId,
               subscriptionId: contribution.subscriptionId,
               eventType: contribution.eventType,
               contractVersion: contribution.contractVersion,

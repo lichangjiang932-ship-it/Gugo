@@ -69,6 +69,7 @@ function normalizeBinding(input = {}) {
     )
   }
   return Object.freeze({
+    userId: requiredString(input.userId, 'userId', 256),
     publisherId: requiredString(input.publisherId, 'publisherId', 128, LOCAL_ID_RE),
     publisherKeyId: requiredString(input.publisherKeyId, 'publisherKeyId', 256),
     packageDigest: requiredString(
@@ -103,6 +104,7 @@ function canonicalBinding(binding) {
   return JSON.stringify([
     'gugo-agent-event-durable-subscription',
     binding.contractVersion,
+    binding.userId,
     binding.publisherId,
     binding.publisherKeyId,
     binding.packageDigest,
@@ -144,6 +146,7 @@ export function mapSubscription(row) {
   if (!row) return null
   return Object.freeze({
     subscriptionKey: row.subscription_key,
+    userId: row.user_id,
     publisherId: row.publisher_id,
     publisherKeyId: row.publisher_key_id,
     packageDigest: row.package_digest,
@@ -206,6 +209,7 @@ export function inImmediateTransaction(db, operation) {
 
 function assertBindingMatches(row, binding, subscriptionKey) {
   const storedBinding = normalizeBinding({
+    userId: row.user_id,
     publisherId: row.publisher_id,
     publisherKeyId: row.publisher_key_id,
     packageDigest: row.package_digest,
@@ -244,7 +248,7 @@ export function ensureAgentEventSubscription({
     const stream = readStreamMetadata(db)
     db.prepare(`
       INSERT INTO agent_event_subscriptions (
-        subscription_key, publisher_id, publisher_key_id, package_digest,
+        subscription_key, user_id, publisher_id, publisher_key_id, package_digest,
         publication_digest, release_id,
         release_content_digest, release_digest_version, plugin_id, plugin_version,
         subscription_id, event_type, contract_version, status,
@@ -254,11 +258,12 @@ export function ensureAgentEventSubscription({
         retry_max_attempts, retry_base_delay_ms, retry_max_delay_ms,
         created_at, updated_at
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active',
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active',
         ?, ?, ?, NULL, 0, NULL, NULL, 0, NULL, ?, ?, ?, ?, ?
       ) ON CONFLICT(subscription_key) DO NOTHING
     `).run(
       subscriptionKey,
+      binding.userId,
       binding.publisherId,
       binding.publisherKeyId,
       binding.packageDigest,
@@ -399,9 +404,10 @@ export function deleteAgentEventSubscription(subscriptionKey, { db = getDb() } =
   })
 }
 
-export function normalizeLeaseToken({ subscriptionKey, owner, generation } = {}) {
+export function normalizeLeaseToken({ subscriptionKey, userId, owner, generation } = {}) {
   return Object.freeze({
     subscriptionKey: normalizeSubscriptionKey(subscriptionKey),
+    userId: requiredString(userId, 'userId', 256),
     owner: requiredString(owner, 'owner', 256),
     generation: positiveInteger(generation, 'generation'),
   })
@@ -410,6 +416,7 @@ export function normalizeLeaseToken({ subscriptionKey, owner, generation } = {})
 export function assertActiveLease(db, token, now) {
   const row = requireSubscription(db, token.subscriptionKey)
   if (row.status !== 'active'
+    || row.user_id !== token.userId
     || row.lease_owner !== token.owner
     || row.lease_generation !== token.generation
     || !Number.isSafeInteger(row.lease_expires_at)
@@ -430,12 +437,14 @@ export function assertActiveLease(db, token, now) {
 }
 
 export function acquireAgentEventSubscriptionLease(subscriptionKey, {
+  userId,
   owner,
   now = Date.now(),
   leaseDurationMs,
   db = getDb(),
 } = {}) {
   const key = normalizeSubscriptionKey(subscriptionKey)
+  const subscriptionOwner = requiredString(userId, 'userId', 256)
   const leaseOwner = requiredString(owner, 'owner', 256)
   const timestamp = nonNegativeInteger(now, 'now')
   const duration = positiveInteger(leaseDurationMs, 'leaseDurationMs', MAX_LEASE_DURATION_MS)
@@ -444,7 +453,7 @@ export function acquireAgentEventSubscriptionLease(subscriptionKey, {
   return inImmediateTransaction(db, () => {
     const row = requireSubscription(db, key)
     const stream = readStreamMetadata(db)
-    if (row.status !== 'active') return null
+    if (row.status !== 'active' || row.user_id !== subscriptionOwner) return null
     if (row.stream_epoch !== stream.epoch || row.scanned_cursor < stream.truncatedThrough) {
       throw subscriptionError(
         'AGENT_EVENT_SUBSCRIPTION_STATE_UNKNOWN',
@@ -455,13 +464,14 @@ export function acquireAgentEventSubscriptionLease(subscriptionKey, {
       UPDATE agent_event_subscriptions
       SET lease_owner = ?, lease_generation = lease_generation + 1,
           lease_expires_at = ?, updated_at = ?
-      WHERE subscription_key = ? AND status = 'active'
+      WHERE subscription_key = ? AND user_id = ? AND status = 'active'
         AND (lease_owner IS NULL OR lease_expires_at <= ? OR lease_owner = ?)
-    `).run(leaseOwner, expiresAt, timestamp, key, timestamp, leaseOwner)
+    `).run(leaseOwner, expiresAt, timestamp, key, subscriptionOwner, timestamp, leaseOwner)
     if (result.changes !== 1) return null
     const acquired = requireSubscription(db, key)
     return Object.freeze({
       subscriptionKey: key,
+      userId: subscriptionOwner,
       owner: leaseOwner,
       generation: acquired.lease_generation,
       expiresAt: acquired.lease_expires_at,

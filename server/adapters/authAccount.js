@@ -168,15 +168,19 @@ export function resolveAuthMode(env = process.env) {
   throw new Error('AUTH_MODE must be local or multi_user')
 }
 
+export function getLocalOwnerUserId(env = process.env) {
+  if (resolveAuthMode(env) !== 'local') return null
+  const configuredId = String(env.LOCAL_USER_ID || '').trim()
+  if (configuredId) return getUserById(configuredId)?.id || null
+  const storedOwnerId = String(getDb().prepare(
+    'SELECT value FROM meta WHERE key = ?',
+  ).get(LOCAL_OWNER_META_KEY)?.value || '').trim()
+  return storedOwnerId && getUserById(storedOwnerId) ? storedOwnerId : null
+}
+
 export function isLocalOwnerUser(userId, env = process.env) {
   const normalizedUserId = String(userId || '').trim()
-  if (!normalizedUserId || resolveAuthMode(env) !== 'local') return false
-  const configuredId = String(env.LOCAL_USER_ID || '').trim()
-  if (configuredId) return configuredId === normalizedUserId
-  const storedOwnerId = getDb().prepare(
-    'SELECT value FROM meta WHERE key = ?',
-  ).get(LOCAL_OWNER_META_KEY)?.value
-  return String(storedOwnerId || '').trim() === normalizedUserId
+  return Boolean(normalizedUserId && getLocalOwnerUserId(env) === normalizedUserId)
 }
 
 function rememberLocalOwner(userId) {
