@@ -11,6 +11,7 @@ import {
 const WORKER_ENTRY = new URL('./offlineEvalCaseWorker.mjs', import.meta.url)
 const WINDOWS_WORKER_STARTUP_TIMEOUT_MS = 30_000
 const DEFAULT_WORKER_STARTUP_TIMEOUT_MS = 10_000
+const WINDOWS_DEFAULT_WORKER_HARD_TIMEOUT_MS = 15_000
 const MIN_WORKER_HARD_TIMEOUT_GRACE_MS = 1_500
 const MAX_WORKER_HARD_TIMEOUT_GRACE_MS = 4_000
 const WORKER_NATURAL_EXIT_GRACE_MS = 1_000
@@ -33,13 +34,16 @@ function caseTimeoutMs(evalCase) {
   return evalCase.timeoutMs || DEFAULT_OFFLINE_EVAL_CASE_TIMEOUT_MS
 }
 
-export function offlineEvalCaseWorkerDeadlineMs(evalCase) {
+export function offlineEvalCaseWorkerDeadlineMs(evalCase, { platform = process.platform } = {}) {
   const timeoutMs = caseTimeoutMs(evalCase)
   const startupGraceMs = Math.min(
     MAX_WORKER_HARD_TIMEOUT_GRACE_MS,
     Math.max(MIN_WORKER_HARD_TIMEOUT_GRACE_MS, Math.ceil(timeoutMs * 0.8)),
   )
-  return timeoutMs + startupGraceMs
+  const deadlineMs = timeoutMs + startupGraceMs
+  return platform === 'win32' && !evalCase?.timeoutMs
+    ? Math.max(WINDOWS_DEFAULT_WORKER_HARD_TIMEOUT_MS, deadlineMs)
+    : deadlineMs
 }
 
 export function offlineEvalCaseWorkerStartupDeadlineMs({ platform = process.platform } = {}) {
@@ -50,7 +54,7 @@ export function offlineEvalCaseWorkerStartupDeadlineMs({ platform = process.plat
 
 export function offlineEvalCaseTestDeadlineMs(evalCase, options = {}) {
   return offlineEvalCaseWorkerStartupDeadlineMs(options)
-    + offlineEvalCaseWorkerDeadlineMs(evalCase)
+    + offlineEvalCaseWorkerDeadlineMs(evalCase, options)
     + WORKER_NATURAL_EXIT_GRACE_MS
     + WORKER_TERMINATE_GRACE_MS
     + OFFLINE_EVAL_TEST_TIMEOUT_GRACE_MS

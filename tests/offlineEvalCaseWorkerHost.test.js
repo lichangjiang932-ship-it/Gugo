@@ -15,13 +15,18 @@ import {
 } from './helpers/offlineEvalCaseWorkerHost.js'
 
 test('offline eval worker deadlines preserve short fixtures and bound cold-start grace', () => {
-  assert.equal(offlineEvalCaseWorkerDeadlineMs({ timeoutMs: 20 }), 1_520)
-  assert.equal(offlineEvalCaseWorkerDeadlineMs({}), 9_000)
-  assert.equal(offlineEvalCaseWorkerDeadlineMs({ timeoutMs: 20_000 }), 24_000)
+  assert.equal(offlineEvalCaseWorkerDeadlineMs({ timeoutMs: 20 }, { platform: 'win32' }), 1_520)
+  assert.equal(offlineEvalCaseWorkerDeadlineMs({}, { platform: 'linux' }), 9_000)
+  assert.equal(offlineEvalCaseWorkerDeadlineMs({}, { platform: 'win32' }), 15_000)
+  assert.equal(
+    offlineEvalCaseWorkerDeadlineMs({ timeoutMs: 20_000 }, { platform: 'win32' }),
+    24_000,
+  )
   assert.equal(offlineEvalCaseWorkerStartupDeadlineMs({ platform: 'win32' }), 30_000)
   assert.equal(offlineEvalCaseWorkerStartupDeadlineMs({ platform: 'linux' }), 10_000)
   assert.equal(offlineEvalCaseTestDeadlineMs({ timeoutMs: 20 }, { platform: 'win32' }), 35_520)
   assert.equal(offlineEvalCaseTestDeadlineMs({}, { platform: 'linux' }), 23_000)
+  assert.equal(offlineEvalCaseTestDeadlineMs({}, { platform: 'win32' }), 49_000)
   assert.equal(
     offlineEvalCaseTestDeadlineMs({ timeoutMs: 20_000 }, { platform: 'win32' }),
     58_000,
