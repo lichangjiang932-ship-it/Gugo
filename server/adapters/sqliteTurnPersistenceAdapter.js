@@ -24,7 +24,8 @@ import {
   getTurnCheckpoint,
   saveTurnCheckpoint,
 } from '../services/turnCheckpointStore.js'
-import { SQLITE_TURN_PERSISTENCE_TRANSACTIONS } from '../services/sqliteTurnPersistenceTransactions.js'
+import { bindManagedAttachmentsToMessage } from '../services/managedAttachmentStore.js'
+import { createSqliteTurnPersistenceTransactions } from '../services/sqliteTurnPersistenceTransactions.js'
 import {
   claimTurnExecutionLease,
   getTurnExecutionLease,
@@ -61,6 +62,11 @@ import { SQLITE_SESSION_ADMIN_PORT } from '../services/sqliteSessionAdminPort.js
 import { TURN_PERSISTENCE_ADAPTER_CONTRACT_VERSION } from '../core/turnPersistenceAdapter.js'
 
 export const SQLITE_TURN_PERSISTENCE_ADAPTER_ID = 'builtin.sqlite'
+
+const SQLITE_TURN_PERSISTENCE_TRANSACTIONS = createSqliteTurnPersistenceTransactions({
+  // The binder is injected only by the concrete adapter that owns the same DB.
+  bindAttachments: bindManagedAttachmentsToMessage,
+})
 
 export const SQLITE_TURN_PERSISTENCE_ADAPTER = Object.freeze({
   id: SQLITE_TURN_PERSISTENCE_ADAPTER_ID,

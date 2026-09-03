@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
 import { getDb } from '../db.js'
-import { bindManagedAttachmentsToMessage } from './managedAttachmentStore.js'
 import {
   getMessage,
   getSession,
@@ -245,7 +244,7 @@ export function createSqliteTurnPersistenceTransactions({
   readMessage = getMessage,
   writeSession = upsertSessionForAtomicCommit,
   writeMessage = upsertMessage,
-  bindAttachments = bindManagedAttachmentsToMessage,
+  bindAttachments = null,
   appendEventsInTransaction = appendTurnEventsInTransaction,
   publishEvents = publishCommittedTurnEvents,
   notifySession = notifySessionStarted,
@@ -327,6 +326,12 @@ export function createSqliteTurnPersistenceTransactions({
             throw persistenceError(
               'TURN_ATTACHMENT_ATOMIC_BINDING_UNAUTHORIZED',
               'SQLite turn start requires host authorization for its attachment transaction domain',
+            )
+          }
+          if (typeof bindAttachments !== 'function') {
+            throw persistenceError(
+              'TURN_ATTACHMENT_ATOMIC_BINDING_UNAVAILABLE',
+              'SQLite turn start has no attachment binder for its transaction domain',
             )
           }
           bindAttachments(binding)
@@ -566,5 +571,3 @@ export function createSqliteTurnPersistenceTransactions({
     },
   })
 }
-
-export const SQLITE_TURN_PERSISTENCE_TRANSACTIONS = createSqliteTurnPersistenceTransactions()

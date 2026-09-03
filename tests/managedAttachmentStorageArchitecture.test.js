@@ -27,13 +27,13 @@ test('managed attachment storage core port never selects an adapter, service, DB
   assert.doesNotMatch(contents, /from ['"]node:(?:fs|path)(?:\/promises)?['"]/u)
 })
 
-test('attachment binding remains inside the SQLite turn-start transaction', () => {
+test('attachment binding remains atomic while the concrete SQLite adapter owns selection', () => {
   const contents = source('server/services/sqliteTurnPersistenceTransactions.js')
-  assert.match(
-    contents,
-    /import \{ bindManagedAttachmentsToMessage \} from ['"]\.\/managedAttachmentStore\.js['"]/u,
-  )
-  assert.match(contents, /bindAttachments\s*=\s*bindManagedAttachmentsToMessage/u)
+  const adapter = source('server/adapters/sqliteTurnPersistenceAdapter.js')
+  assert.doesNotMatch(contents, /from ['"].*managedAttachmentStore\.js['"]/u)
+  assert.match(contents, /bindAttachments\s*=\s*null/u)
+  assert.match(adapter, /import \{ bindManagedAttachmentsToMessage \} from ['"]\.\.\/services\/managedAttachmentStore\.js['"]/u)
+  assert.match(adapter, /bindAttachments:\s*bindManagedAttachmentsToMessage/u)
   assert.match(contents, /attachmentBindingAuthorized\s*=\s*false/u)
 
   const transactionStart = contents.indexOf('db.transaction(() => {', contents.indexOf('commitTurnStart'))

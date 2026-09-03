@@ -114,9 +114,11 @@ the route receives only validated public attachment receipts and path-free
 readable capabilities. Content opening binds response metadata to the
 authoritative opened receipt, verifies the full SHA-256 from that opened file
 descriptor before streaming, and revokes the readable capability on client
-disconnect. The separate Turn runtime port and existing SQLite aggregate
-transaction continue to own validation/materialization and atomic message
-binding respectively.
+disconnect. The Turn runtime port owns validation/materialization. The SQLite
+aggregate transaction no longer imports the attachment store: its concrete
+adapter injects the binder while the binding remains inside the same atomic
+turn-start commit. Only attachment filesystem preview/staging/recovery/cleanup
+inside bulk user-data governance remains transition debt.
 
 **Exit criteria:** Close only after every linked transition row is either
 removed with evidence that its required boundary has been reached or moved to
