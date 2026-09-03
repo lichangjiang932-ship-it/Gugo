@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.51] - 2026-09-03
+
 ### Security
 
 - Scoped durable Agent Event subscriptions to the host-authenticated owner so plugins cannot receive another user's conversation, reasoning, tool, or local-file event payloads.
