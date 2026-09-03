@@ -109,38 +109,44 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.doesNotMatch(main, /showMessageBox/)
 })
 
-test('every desktop main-process local module import is packed into the app.asar', () => {
+test('every desktop entry import closure is packed into the app.asar', () => {
   const config = read('electron-builder.yml')
-  const packedDesktopFiles = new Set(
-    [...config.matchAll(/^\s*-\s+(desktop\/[A-Za-z0-9._-]+\.js)\s*$/gm)]
-      .map((match) => match[1]),
-  )
-  const localImports = new Set()
-  const collectImports = (file) => {
-    const source = read(file)
-    for (const match of source.matchAll(/from\s+['"]\.\/([A-Za-z0-9._-]+\.js)['"]/g)) {
-      localImports.add(match[1])
+  const files = [...config.matchAll(/^\s*-\s+(\S+)\s*$/gm)].map((match) => match[1])
+  const explicit = new Set(files.filter((file) => !file.includes('*')))
+  // `dir/**/*` covers everything under dir, so a glob prefix covers any file it starts with.
+  const globPrefixes = files
+    .filter((file) => file.includes('**'))
+    .map((file) => file.split('/**')[0])
+  const covered = (relPath) => explicit.has(relPath)
+    || globPrefixes.some((prefix) => relPath === prefix || relPath.startsWith(`${prefix}/`))
+
+  const resolvedImports = new Set()
+  const collect = (fromFile) => {
+    const source = read(fromFile)
+    for (const match of source.matchAll(/from\s+['"](\.(?:\.\/|[^'"]+))['"]/g)) {
+      const target = match[1]
+      if (!target.startsWith('./') && !target.startsWith('../')) continue
+      const base = path.posix.dirname(fromFile)
+      const resolved = path.posix.normalize(path.posix.join(base, target)).replace(/^\.\//, '')
+      if (/^\.\.\//.test(resolved)) continue // outside repo, e.g. node_modules
+      resolvedImports.add(resolved)
     }
   }
-  // main.js is the build entry; resolve its import closure transitively so a
-  // missing local module (referenced but never listed) fails here instead of
-  // at runtime with ERR_MODULE_NOT_FOUND from inside app.asar.
-  collectImports('desktop/main.js')
-  for (const moduleName of [...localImports]) {
-    collectImports(`desktop/${moduleName}`)
+  collect('desktop/main.js')
+  for (const resolved of [...resolvedImports]) {
+    collect(resolved)
   }
-  assert.ok(localImports.size > 0, 'main.js must import local desktop modules')
-  for (const moduleName of localImports) {
-    const relPath = `desktop/${moduleName}`
+  assert.ok(resolvedImports.size > 0, 'main.js must import local modules')
+  for (const relPath of resolvedImports) {
     assert.equal(
       fs.existsSync(new URL(`../${relPath}`, import.meta.url)),
       true,
       `${relPath} must exist on disk`,
     )
     assert.equal(
-      packedDesktopFiles.has(relPath),
+      covered(relPath),
       true,
-      `${relPath} is imported by the desktop entry but is not listed in electron-builder files`,
+      `${relPath} is imported by the desktop entry but is not included by electron-builder files/globs; it would be missing from app.asar`,
     )
   }
 })
