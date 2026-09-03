@@ -7,9 +7,10 @@
 
 import { sendJson } from '../utils.js'
 import { getAgentTemplate, listAgentTemplates } from '../services/agentTemplates.js'
+import { normalizeProductLanguage } from '../../shared/productLanguage.js'
 
 function readLang(url) {
-  return url.searchParams.get('lang') === 'en' ? 'en' : 'zh'
+  return normalizeProductLanguage(url.searchParams.get('lang'), 'zh')
 }
 
 export async function handleAgentTemplateRequest(req, res) {

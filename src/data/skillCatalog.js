@@ -118,6 +118,69 @@ export const SKILLS = [
   },
 ]
 
+export const BUILTIN_SKILL_ENGLISH_COPY = Object.freeze({
+  ppt: {
+    name: 'Presentation Design',
+    desc: 'Create structured, consulting-grade slide decks with polished visual storytelling.',
+    perms: ['Content generation'],
+  },
+  webpage: {
+    name: 'Premium Webpage',
+    desc: 'Create polished single-file HTML pages inspired by Linear, Stripe, and Vercel.',
+    perms: ['Content generation'],
+  },
+  doc: {
+    name: 'Document Editing',
+    desc: 'Summarize, polish, rewrite, and structure long-form documents.',
+    perms: ['Content generation'],
+  },
+  excel: {
+    name: 'Spreadsheet Analysis',
+    desc: 'Clean data, analyze pivot tables, and recommend formulas.',
+    perms: ['Content analysis'],
+  },
+  mail: {
+    name: 'Email Drafting',
+    desc: 'Draft business emails, notices, and invitations.',
+    perms: ['Content generation'],
+  },
+  finance: {
+    name: 'Financial Analysis',
+    desc: 'Reconcile figures, analyze variances, and interpret metrics.',
+    perms: ['Content analysis'],
+  },
+  code: {
+    name: 'Code Generation',
+    desc: 'Generate, refactor, and optimize code.',
+    perms: ['Content generation'],
+  },
+  review: {
+    name: 'Code Review',
+    desc: 'Find bugs and assess security and performance.',
+    perms: ['Content analysis'],
+  },
+  test: {
+    name: 'Test Generation',
+    desc: 'Create unit, integration, and boundary tests.',
+    perms: ['Content generation'],
+  },
+  translate: {
+    name: 'Translation & Editing',
+    desc: 'Translate between Chinese and English while preserving tone and terminology.',
+    perms: ['Content generation'],
+  },
+  research: {
+    name: 'Research & Analysis',
+    desc: 'Research industries, compare competitors, and evaluate trends.',
+    perms: ['Content analysis'],
+  },
+  plan: {
+    name: 'Project Planning',
+    desc: 'Break down tasks, define milestones, and prepare for risks.',
+    perms: ['Content analysis'],
+  },
+})
+
 const SHARED_SKILL_GUARDRAILS = String.raw`## Shared operating rules
 - Match the user's language unless they explicitly request another language.
 - Treat the user's source material, requested format, repository conventions, and available tools as the authority.

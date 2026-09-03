@@ -9,13 +9,11 @@ import path from 'node:path'
 const BASELINE = {
   'src/components/GlobalShortcuts.jsx': 13,
   'src/components/SkillCommandsSync.jsx': 8,
-  'src/components/ToolApprovalCard.jsx': 9,
   'src/lib/accessCatalog.js': 2,
   'src/lib/accountClient.js': 4,
   'src/lib/approvalClient.js': 4,
   'src/lib/attachments.js': 35,
   'src/lib/localSkills.js': 12,
-  'src/lib/loginCountdown.js': 9,
   'src/lib/officeExtract.js': 59,
   'src/lib/pptCore.js': 102,
   'src/lib/presentationPlanner.js': 1670,
@@ -24,7 +22,6 @@ const BASELINE = {
   'src/lib/skillCommands.js': 120,
   'src/lib/toolPermissionClient.js': 22,
   'src/pages/DeskView.jsx': 81,
-  'src/pages/ReasonixWorkspace.jsx': 276,
   'src/store/AppContext.jsx': 5,
   'src/store/exportSchema.js': 109,
   'src/store/taskStatus.js': 15,
@@ -100,8 +97,11 @@ test('frontend hardcoded Chinese cannot increase beyond the migration baseline',
     'src/components/ChoicePicker.jsx',
     'src/components/FileExplorer.jsx',
     'src/components/FullscreenMediaModal.jsx',
+    'src/components/ToolApprovalCard.jsx',
+    'src/lib/loginCountdown.js',
     'src/pages/ChatSplit/ChatMessages.jsx',
     'src/pages/HistoryView.jsx',
+    'src/pages/ReasonixWorkspace.jsx',
   ]) {
     assert.equal(current[migrated] || 0, 0, `${migrated} must remain fully migrated`)
   }

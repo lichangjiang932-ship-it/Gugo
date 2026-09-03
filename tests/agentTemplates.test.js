@@ -48,6 +48,25 @@ test('GET /api/agent-templates/:id returns localized five-section detail', async
   })
 })
 
+test('legacy and regional template locales follow the global English fallback rule', async () => {
+  await withServer(async (base) => {
+    for (const locale of ['en-US', 'ja', 'ko', 'zh-TW']) {
+      const res = await fetch(`${base}/api/agent-templates/hanako?lang=${encodeURIComponent(locale)}`)
+      assert.equal(res.status, 200)
+      const body = await res.json()
+      assert.equal(body.template.lang, 'en', locale)
+      assert.equal(body.template.sections[0].title, 'MOOD', locale)
+    }
+
+    const res = await fetch(`${base}/api/agent-templates/hanako?lang=zh-CN`)
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.template.lang, 'zh')
+    assert.equal(body.template.label, '温柔学姐型')
+    assert.match(body.template.systemPrompt, /思考与心境/)
+  })
+})
+
 test('GET /api/agent-templates/:id returns 404 for unknown template', async () => {
   await withServer(async (base) => {
     const res = await fetch(`${base}/api/agent-templates/unknown`)

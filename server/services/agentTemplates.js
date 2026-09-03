@@ -1,15 +1,15 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { normalizeProductLanguage } from '../../shared/productLanguage.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const TEMPLATE_DIR = path.resolve(__dirname, '../data/agent_templates')
 const TEMPLATE_IDS = ['hanako', 'butter', 'ming', 'kong']
 const TEMPLATE_ID_RE = /^[a-z0-9_-]+$/i
-const SUPPORTED_LANGS = new Set(['zh', 'en'])
 
 function normalizeLang(lang) {
-  return SUPPORTED_LANGS.has(lang) ? lang : 'zh'
+  return normalizeProductLanguage(lang, 'zh')
 }
 
 function parseFrontmatter(text) {

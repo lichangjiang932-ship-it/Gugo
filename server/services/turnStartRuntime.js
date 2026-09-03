@@ -60,6 +60,12 @@ function normalizeAttachmentIds(values) {
   return normalized
 }
 
+function attachmentOnlyPrompt(locale) {
+  return normalizeTurnLocale(locale) === 'zh'
+    ? '请分析附件内容。'
+    : 'Please analyze the attached content.'
+}
+
 function attachmentTurnError(error) {
   if (error instanceof TurnEngineError) return error
   const wrapped = new TurnEngineError(
@@ -176,11 +182,12 @@ export function createTurnStartRuntime({
       const rawText = String(content || '').trim()
       const normalizedAttachmentIds = normalizeAttachmentIds(attachments)
       const resolvedSkill = resolveSkillPrefixFromContent(rawText, skillIds)
-      const text = resolvedSkill.content || (normalizedAttachmentIds.length ? '请分析附件内容。' : '')
-      const displayText = String(displayContent ?? rawText ?? '').trim() || text
       const normalizedLocale = locale === null || locale === undefined || locale === ''
         ? null
         : normalizeTurnLocale(locale)
+      const text = resolvedSkill.content
+        || (normalizedAttachmentIds.length ? attachmentOnlyPrompt(normalizedLocale) : '')
+      const displayText = String(displayContent ?? rawText ?? '').trim() || text
       if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
       if (!sessionId) throw new TurnEngineError('SESSION_REQUIRED', 'sessionId is required')
       if (!text) throw new TurnEngineError('CONTENT_REQUIRED', 'content is required')

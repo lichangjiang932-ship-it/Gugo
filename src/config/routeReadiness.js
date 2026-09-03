@@ -32,7 +32,7 @@ export const ROUTE_READINESS = Object.freeze({
   '/approvals': 'stable',     // ApprovalsInbox
 
   // ---- preview: 主流程能跑，但 i18n / UX 还粗糙 ----
-  '/reasonix': 'preview',     // ReasonixWorkspace：硬编码 zh，记忆/TODO 雏形
+  '/reasonix': 'preview',     // ReasonixWorkspace：记忆/TODO 雏形
 })
 
 // 渲染用：

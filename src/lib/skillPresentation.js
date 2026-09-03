@@ -1,4 +1,5 @@
 import { normalizeUiLanguage } from '../i18n/translations.js'
+import { BUILTIN_SKILL_ENGLISH_COPY } from '../data/skillCatalog.js'
 
 const ZH_SKILL_COPY = {
   brainstorming: ['创意构思', '在开始创作或功能设计前梳理目标、需求、约束与候选方案。'],
@@ -126,7 +127,20 @@ function genericChineseDescription(skill, title) {
 }
 
 export function getPresentedSkill(skill, lang = 'zh') {
-  if (!skill || normalizeUiLanguage(lang) !== 'zh') return skill
+  if (!skill) return skill
+  if (normalizeUiLanguage(lang) === 'en') {
+    const copy = isUserManagedSkill(skill) ? null : BUILTIN_SKILL_ENGLISH_COPY[skill.id]
+    if (!copy) return skill
+    const perms = [...copy.perms]
+    return {
+      ...skill,
+      name: copy.name,
+      desc: copy.desc,
+      description: copy.desc,
+      perms,
+      permissions: perms,
+    }
+  }
   if (containsChinese(skill.name) && containsChinese(skill.desc)) return skill
 
   const originalName = rawSkillName(skill)

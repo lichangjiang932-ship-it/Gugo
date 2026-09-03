@@ -14,6 +14,7 @@ export function useChatSendActions({
   input,
   inputRef,
   isGenerating,
+  lang,
   messageEdit,
   modelReadiness,
   navigateInputHistory,
@@ -101,7 +102,7 @@ export function useChatSendActions({
       }
     }
     await triggerSendFlow(
-      typedContent || describeAttachmentPrompt(currentAttachments),
+      typedContent || describeAttachmentPrompt(currentAttachments, lang),
       currentAttachments,
       replayDraft?.historyLimit ?? null,
       ({ sessionId: acceptedSessionId } = {}) => {

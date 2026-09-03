@@ -56,6 +56,7 @@ import routeReadiness from './routeReadiness.js'
 import chat from './chat.js'
 import foundation from './foundation.js'
 import settingsTools from './settingsTools.js'
+import reasonix from './reasonix.js'
 
 const domains = [
   ['webSearch', webSearch],
@@ -116,6 +117,7 @@ const domains = [
   ['chat', chat],
   ['foundation', foundation],
   ['settingsTools', settingsTools],
+  ['reasonix', reasonix],
 ]
 
 export const translations = { zh: {}, en: {} }

@@ -5,7 +5,9 @@ const translations = {
     "allowOnce": "允许一次",
     "alwaysAllow": "总是允许",
     "deny": "拒绝",
-    "hint": "Enter 允许 · Esc 拒绝"
+    "hint": "Enter 允许 · Esc 拒绝",
+    "unknownPath": "未知路径",
+    "moreFiles": "…还有 {count} 个文件"
   },
   "en": {
     "title": "Needs your approval",
@@ -13,7 +15,9 @@ const translations = {
     "allowOnce": "Allow once",
     "alwaysAllow": "Always allow",
     "deny": "Deny",
-    "hint": "Enter to allow · Esc to deny"
+    "hint": "Enter to allow · Esc to deny",
+    "unknownPath": "Unknown path",
+    "moreFiles": "…and {count} more files"
   }
 }
 

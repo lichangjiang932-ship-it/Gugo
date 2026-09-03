@@ -38,7 +38,7 @@ test('chat drafts persist while user edit, failure resend, and copy actions stay
   assert.match(lifecycleSource, /if \(!preserveAttachments\) setAttachments\(nextDraft\.attachments\)/)
   assert.match(
     chatSendActionsSource,
-    /await triggerSendFlow\([\s\S]{0,120}typedContent \|\| describeAttachmentPrompt\(currentAttachments\),[\s\S]{0,80}currentAttachments,[\s\S]{0,120}\(\{ sessionId: acceptedSessionId \}/,
+    /await triggerSendFlow\([\s\S]{0,120}typedContent \|\| describeAttachmentPrompt\(currentAttachments, lang\),[\s\S]{0,80}currentAttachments,[\s\S]{0,120}\(\{ sessionId: acceptedSessionId \}/,
   )
   assert.match(chatSource, /handleEditMessage/)
   assert.doesNotMatch(chatSource, /handleRegenerateMessage|canRegenerateAssistantMessage|onRegenerateMessage/)
