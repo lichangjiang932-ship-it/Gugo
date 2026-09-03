@@ -26,6 +26,34 @@ const tickDependenciesSource = readFileSync(
   new URL('../server/services/jobRuntimeTickDependencies.js', import.meta.url),
   'utf8',
 )
+const defaultPlannerSource = readFileSync(
+  new URL('../server/services/jobRuntimeDefaultPlanner.js', import.meta.url),
+  'utf8',
+)
+
+test('job runtime delegates default planning composition to a focused provider', () => {
+  assert.match(jobRuntimeSource, /createDefaultJobPlanner\(\)/u)
+  assert.doesNotMatch(defaultPlannerSource, /from ['"]\.\/jobRuntime\.js['"]/u)
+
+  for (const concreteDependency of [
+    './jobPlanner.js',
+    './jobPlanningExplorationRuntime.js',
+    './jobModelExecutionRuntime.js',
+  ]) {
+    assert.equal(
+      jobRuntimeSource.split(/\r?\n/u).some((line) => (
+        line.startsWith('import ') && line.includes(concreteDependency)
+      )),
+      false,
+      `jobRuntime.js must not directly import planner dependency: ${concreteDependency}`,
+    )
+    assert.equal(
+      defaultPlannerSource.includes(concreteDependency),
+      true,
+      `default planner provider must retain composition: ${concreteDependency}`,
+    )
+  }
+})
 
 test('job runtime delegates concrete tick dependencies to a focused provider', () => {
   assert.equal(

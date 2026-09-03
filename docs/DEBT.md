@@ -64,6 +64,9 @@ owns the recovery transaction. Owner lookup caching, tenant-scoped delivery,
 subscription cleanup, listener-failure isolation, and terminal owner eviction
 now live in `jobRuntimeEventHub.js`; creation, recovery, and wake paths populate
 that boundary before emitting instead of reaching into a facade-owned Map.
+Default planning composition now lives in `jobRuntimeDefaultPlanner.js`, which
+binds exploration and model execution behind the planner port while the Job
+facade retains only the injected planner capability.
 
 Runtime plugin installation and uninstall settlement now live in
 `runtimePluginInstallController.js` and `runtimePluginUninstallController.js`.

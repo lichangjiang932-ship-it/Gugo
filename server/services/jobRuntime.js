@@ -1,12 +1,10 @@
-import { buildExploredPlan } from './jobPlanner.js'
 import { getJob as getJobRow } from './jobStore.js'
 import { applyRuntimeTaskPlanGuard } from './taskPlanGuard.js'
 import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
 import { createJobExecutionLeaseCoordinator } from './jobExecutionLeaseRuntime.js'
 import { createJobRuntimeCore } from './runtimeCore.js'
 import { resolveAgentModelRuntimeBinding } from './modelReadinessService.js'
-import { runPlanningExploration } from './jobPlanningExplorationRuntime.js'
-import { runDefaultJobModel } from './jobModelExecutionRuntime.js'
+import { createDefaultJobPlanner } from './jobRuntimeDefaultPlanner.js'
 import { createDefaultExecuteStep } from './jobStepExecutionRuntime.js'
 import { runJobRuntimeTick } from './jobRuntimeTick.js'
 import { DEFAULT_JOB_RUNTIME_TICK_DEPENDENCIES } from './jobRuntimeTickDependencies.js'
@@ -33,11 +31,7 @@ export { runPlanningExploration, selectPlanningToolSpecs } from './jobPlanningEx
 export { createDefaultExecuteStep }
 export class JobRuntime {
   constructor({
-    planner = (prompt, { userId, modelName, modelEnv } = {}) => buildExploredPlan(prompt, {
-      userId,
-      exploreModel: ({ messages }) => runPlanningExploration({ prompt, messages, userId, modelName, modelEnv }),
-      runModel: ({ messages }) => runDefaultJobModel({ messages, userId, modelName, modelEnv }),
-    }),
+    planner = createDefaultJobPlanner(),
     executeStep = null,
     tickMs = 250,
     maxConcurrency = process.env.JOB_RUNTIME_CONCURRENCY,
