@@ -328,7 +328,7 @@ npm run serve
 
 生产环境应先停止旧进程再启动新版本。数据库迁移会在首次启动时自动执行；迁移前备份数据目录，启动后检查 `/api/health` 和“系统诊断”。若仓库有本地改动，不要直接覆盖，先提交到自己的分支或手工合并。
 
-v0.11.51 首次启动会把数据库升级到 schema v115。v113 创建带全局单调游标与持久 stream epoch 的 Agent Event outbox；v114 新增 durable subscription、租约/fencing、持久 ACK、有界重试/DLQ 和安全裁剪状态；v115 将每个 durable subscription 绑定到宿主认证的本地 owner，并在 SQL 层按 `user_id + event_type` 隔离投递。由于 v114 订阅没有可信 owner，升级时会 fail-closed 丢弃其 cursor/DLQ，已启用插件随后会为当前本地 owner 创建新订阅。v114 及更旧的二进制会拒绝打开 v115 数据库；不要把旧程序直接指向已升级的数据目录。若必须回滚，请停止服务，恢复升级前完整备份的 `APP_DATA_DIR`（以及匹配的凭据密钥），再启动旧版本。本版本不提供 v115 的原地降级迁移。
+v0.11.52 首次启动会把数据库升级到 schema v115。v113 创建带全局单调游标与持久 stream epoch 的 Agent Event outbox；v114 新增 durable subscription、租约/fencing、持久 ACK、有界重试/DLQ 和安全裁剪状态；v115 将每个 durable subscription 绑定到宿主认证的本地 owner，并在 SQL 层按 `user_id + event_type` 隔离投递。由于 v114 订阅没有可信 owner，升级时会 fail-closed 丢弃其 cursor/DLQ，已启用插件随后会为当前本地 owner 创建新订阅。v114 及更旧的二进制会拒绝打开 v115 数据库；不要把旧程序直接指向已升级的数据目录。若必须回滚，请停止服务，恢复升级前完整备份的 `APP_DATA_DIR`（以及匹配的凭据密钥），再启动旧版本。本版本不提供 v115 的原地降级迁移。
 
 Docker 升级：
 
