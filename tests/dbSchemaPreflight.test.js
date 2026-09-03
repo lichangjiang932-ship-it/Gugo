@@ -244,7 +244,7 @@ test('a new empty database still initializes normally', () => {
   assert.ok(empty.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'").get())
 })
 
-test('current-version databases with a missing critical column or index fail closed without mutation', () => {
+test('current-version databases with a missing critical column, index, or autoincrement key fail closed without mutation', () => {
   const cases = [
     {
       label: 'missing-column',
@@ -262,6 +262,37 @@ test('current-version databases with a missing critical column or index fail clo
         db.exec('DROP INDEX idx_turn_artifacts_turn')
       },
       expectedMissing: 'index:idx_turn_artifacts_turn',
+    },
+    {
+      label: 'missing-agent-event-autoincrement',
+      mutate(db) {
+        db.exec(`
+          DROP TABLE agent_event_outbox;
+          CREATE TABLE agent_event_outbox (
+            cursor INTEGER PRIMARY KEY CHECK (
+              typeof(cursor) = 'integer' AND cursor > 0
+            ),
+            event_id TEXT NOT NULL UNIQUE CHECK (length(event_id) BETWEEN 1 AND 512),
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 128),
+            envelope_json TEXT NOT NULL CHECK (
+              json_valid(envelope_json) AND json_type(envelope_json) = 'object'
+            ),
+            event_fingerprint TEXT NOT NULL CHECK (
+              length(event_fingerprint) = 64
+              AND event_fingerprint NOT GLOB '*[^0-9a-f]*'
+            ),
+            created_at INTEGER NOT NULL CHECK (
+              typeof(created_at) = 'integer' AND created_at >= 0
+            )
+          );
+          CREATE INDEX idx_agent_event_outbox_user_cursor
+            ON agent_event_outbox(user_id, cursor);
+          CREATE INDEX idx_agent_event_outbox_type_cursor
+            ON agent_event_outbox(event_type, cursor);
+        `)
+      },
+      expectedMissing: 'autoincrement-primary-key:agent_event_outbox.cursor',
     },
   ]
 

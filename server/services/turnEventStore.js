@@ -6,6 +6,7 @@ import {
   projectTurnEventForClient,
 } from '../../shared/turnEventProjection.js'
 import { publishAgentEventEnvelope } from '../core/agentEventConsumerRuntime.js'
+import { enqueueAgentEventOutboxInDb } from './agentEventOutboxStore.js'
 import { saveTurnCheckpoint } from './turnCheckpointStore.js'
 import { replayTurnEventWriteFailure as replayStoredTurnEventWriteFailure } from './turnEventWriteFailureStore.js'
 import {
@@ -418,11 +419,12 @@ export function appendTurnEventsInTransaction(entries = [], db, {
       if (value.type === 'turn.checkpoint') {
         deleteOlderCheckpoints.run(userId, value.sessionId, value.turnId, value.sequence)
       }
-    insertedEvents.push({ userId, event: mapped })
-  }
+      enqueueAgentEventOutboxInDb(db, { userId, event: mapped })
+      insertedEvents.push({ userId, event: mapped })
+    }
 
-  return { stored, insertedEvents }
-}
+    return { stored, insertedEvents }
+  }
 
 /** Publish only events whose owning transaction has committed. */
 export function publishCommittedTurnEvents(insertedEvents = []) {

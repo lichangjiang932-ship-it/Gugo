@@ -754,7 +754,7 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION }, (_, index) => index + 1),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 112)
+  assert.equal(LATEST_SCHEMA_VERSION, 113)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
 })
@@ -945,6 +945,148 @@ test('v112 rolls back its claim column when schema-version persistence fails', (
     )
   } finally {
     db.close()
+  }
+})
+
+test('v113 rolls back durable Agent Event capture when schema-version persistence fails', () => {
+  const db = new Database(':memory:')
+  try {
+    assert.equal(migrateThroughVersion(db, 112), 112)
+    assert.equal(db.prepare(`
+      SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_event_outbox'
+    `).get(), undefined)
+    assert.equal(db.prepare(`
+      SELECT 1 FROM sqlite_master
+      WHERE type = 'table' AND name = 'agent_event_stream_metadata'
+    `).get(), undefined)
+    db.exec(`
+      CREATE TRIGGER fail_v113_schema_version
+      BEFORE UPDATE OF value ON meta
+      WHEN OLD.key = 'schema_version' AND NEW.value = '113'
+      BEGIN
+        SELECT RAISE(ABORT, 'reject v113 schema version');
+      END;
+    `)
+
+    assert.throws(() => runSchemaMigrations(db), /reject v113 schema version/u)
+    assert.equal(db.prepare(`
+      SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_event_outbox'
+    `).get(), undefined)
+    assert.equal(db.prepare(`
+      SELECT 1 FROM sqlite_master
+      WHERE type = 'table' AND name = 'agent_event_stream_metadata'
+    `).get(), undefined)
+    assert.equal(db.prepare(`
+      SELECT 1 FROM sqlite_master
+      WHERE type = 'index' AND name LIKE 'idx_agent_event_outbox_%'
+    `).get(), undefined)
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '112',
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v113 rejects malformed pre-existing stream objects without advancing the version', () => {
+  const scenarios = [
+    {
+      name: 'outbox cursor without AUTOINCREMENT',
+      missing: 'autoincrement-primary-key:agent_event_outbox.cursor',
+      prepare(db) {
+        db.exec(`
+          CREATE TABLE agent_event_outbox (
+            cursor INTEGER PRIMARY KEY,
+            event_id TEXT NOT NULL UNIQUE,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            envelope_json TEXT NOT NULL,
+            event_fingerprint TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+          );
+        `)
+      },
+      assertRollback(db) {
+        assert.equal(db.prepare(`
+          SELECT 1 FROM sqlite_schema
+          WHERE type = 'table' AND name = 'agent_event_stream_metadata'
+        `).get(), undefined)
+        assert.equal(db.prepare(`
+          SELECT 1 FROM sqlite_schema
+          WHERE type = 'index' AND name LIKE 'idx_agent_event_outbox_%'
+        `).get(), undefined)
+      },
+    },
+    {
+      name: 'metadata table without singleton value constraints',
+      missing: 'constraints:agent_event_stream_metadata',
+      prepare(db) {
+        db.exec(`
+          CREATE TABLE agent_event_stream_metadata (
+            stream_key TEXT PRIMARY KEY NOT NULL,
+            epoch INTEGER NOT NULL,
+            truncated_through INTEGER NOT NULL
+          ) WITHOUT ROWID;
+          INSERT INTO agent_event_stream_metadata (
+            stream_key, epoch, truncated_through
+          ) VALUES ('global', 1, 0);
+        `)
+      },
+      assertRollback(db) {
+        assert.equal(db.prepare(`
+          SELECT 1 FROM sqlite_schema
+          WHERE type = 'table' AND name = 'agent_event_outbox'
+        `).get(), undefined)
+        assert.deepEqual(db.prepare(`
+          SELECT stream_key, epoch, truncated_through
+          FROM agent_event_stream_metadata
+        `).all(), [{ stream_key: 'global', epoch: 1, truncated_through: 0 }])
+      },
+    },
+    {
+      name: 'required outbox index name owned by another table',
+      missing: 'index:idx_agent_event_outbox_user_cursor',
+      prepare(db) {
+        db.exec(`
+          CREATE INDEX idx_agent_event_outbox_user_cursor
+          ON turn_events(user_id, sequence);
+        `)
+      },
+      assertRollback(db) {
+        assert.equal(db.prepare(`
+          SELECT 1 FROM sqlite_schema
+          WHERE type = 'table' AND name = 'agent_event_outbox'
+        `).get(), undefined)
+        assert.equal(db.prepare(`
+          SELECT tbl_name AS tableName FROM sqlite_schema
+          WHERE type = 'index' AND name = 'idx_agent_event_outbox_user_cursor'
+        `).get().tableName, 'turn_events')
+      },
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    const db = new Database(':memory:')
+    try {
+      assert.equal(migrateThroughVersion(db, 112), 112)
+      scenario.prepare(db)
+      assert.throws(
+        () => runSchemaMigrations(db),
+        (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+          && error?.details?.stage === 'migration-v113'
+          && error?.details?.missing?.includes(scenario.missing),
+        scenario.name,
+      )
+      assert.equal(
+        db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+        '112',
+        scenario.name,
+      )
+      scenario.assertRollback(db)
+    } finally {
+      db.close()
+    }
   }
 })
 

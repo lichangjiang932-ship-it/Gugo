@@ -49,7 +49,7 @@ function assertUnifiedBootstrapSchema(db) {
       if (!actual.has(column)) missing.push(`column:${table}.${column}`)
     }
   }
-  missing.push(...collectMissingRequiredKeyConstraints(db))
+  missing.push(...collectMissingRequiredKeyConstraints(db, { expectedVersion: VERSION }))
   if (hasColumn(db, 'session_meters', 'cost_credits')) {
     missing.push('retired-column:session_meters.cost_credits')
   }

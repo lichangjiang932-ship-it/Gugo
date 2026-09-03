@@ -90,7 +90,9 @@ retryable: false
 
 交付边界是“持久化成功之后”：内置 SQLite 从事务提交点发布，回滚不会泄露事件，幂等重写也不会重复通知；emitter 只在 adapter 返回权威 stored event 或与整个 write-behind batch 一一对应的权威回执后补发。自定义 v6 adapter 缺少可校验的逐项 batch 回执时会安全降级为不补发，而不会把请求快照冒充成已提交事实。
 
-当前契约只是 **best-effort、进程内、提交后 live observer**，不是 reliable queue、exactly-once stream 或跨重启订阅。进程内有界 event identity 去重只用于抑制 Store 与 emitter 双入口，不承诺缓存淘汰后或进程重启后不重复；跨进程写入、进程崩溃窗口和历史事件均可能不可见。v1 API 也不暴露权威 replay/cursor，因此插件不能声称可从该接口恢复状态。可靠 v2 需要独立于 retention-pruned `turn_events` 的宿主 outbox、全局单调 cursor、稳定 subscription ID、持久 ACK、retry/backoff、DLQ 及 truncation watermark。卸载或热重载会先移除订阅可见性，再排空卸载前已经接受的 callback。
+内置 SQLite 的 v113 schema 已完成 **durable capture**：每个新插入的 Turn Event 都在写入 `turn_events` 的同一同步事务内写入 `agent_event_outbox`，保存不含 `userId` 的 v1 transport envelope，并取得宿主全局单调 cursor。该 outbox 不依赖 Session/Turn 外键，因此不会随 `turn_events` retention 裁剪丢失；schema 还持久化初始 `epoch=1`、`truncatedThrough=0`，宿主 reader 会返回这组 stream metadata，并在请求 cursor 落后于水位时 fail closed。reader 条目含内部 `userId`，只供宿主编排，不能直接暴露给插件或公共 API。此能力只保证已提交事件可供未来消费，并未把历史 replay 接到当前 plugin listener。
+
+因此当前 `context.agentEvents` v1 契约仍只是 **best-effort、进程内、提交后 live observer**，不是 reliable queue、exactly-once stream 或跨重启订阅。进程内有界 event identity 去重只用于抑制 Store 与 emitter 双入口，不承诺缓存淘汰后或进程重启后不重复；跨进程写入、进程崩溃窗口和历史事件仍可能对 v1 listener 不可见。v1 API 不暴露权威 replay/cursor，也没有稳定 subscription ID、持久 ACK、consumer lease/fencing、retry/backoff 或 DLQ；现有初始 truncation metadata 也没有安全推进水位、原子裁剪并向插件发布的生产协议。因此不能从该接口恢复状态，也不能宣称 reliable v2。上述消费协议落地前，`agent_event_outbox` 不能安全裁剪，并会持续增长。卸载或热重载会先移除订阅可见性，再排空卸载前已经接受的 callback。
 
 `context.tools.register()` 的 `name/spec/exec` 与 `context.prompts.register()` 的 `id/render` 必须是定义对象自己的 data property。宿主在注册时通过 descriptor 一次捕获所需值；getter 不执行，prototype property 被拒绝，注册后的 callback/schema/id swap 不改变已安装 contribution。非法定义以 `PLUGIN_CONTRIBUTION_DEFINITION_INVALID`、`retryable=false` 在可见副作用前失败。
 

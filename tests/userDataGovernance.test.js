@@ -15,6 +15,9 @@ process.env.ARTIFACT_DIR = artifactDir
 process.env.CREDENTIAL_KEY_PATH = path.join(dataDir, '.credentials.key')
 
 const { closeDb, createUser, getDb } = await import('../server/db.js')
+const {
+  enqueueAgentEventOutboxInDb,
+} = await import('../server/services/agentEventOutboxStore.js')
 const { createManagedAttachment } = await import('../server/services/managedAttachmentStore.js')
 const { appendJobArtifact } = await import('../server/services/jobStore.js')
 const { appendTurnArtifact } = await import('../server/services/turnArtifactStore.js')
@@ -46,6 +49,7 @@ const {
   createAuthoritativeUserDataArchive,
 } = await import('../server/services/userDataGovernanceService.js')
 const { acquireCompactionArchivePort } = await import('../server/core/compactionArchivePort.js')
+const { createTurnEvent } = await import('../shared/turnEvents.js')
 const {
   activateTestCompactionArchivePort,
 } = await import('./helpers/testCompactionArchivePort.js')
@@ -330,6 +334,59 @@ test('authoritative export includes all owned relational rows and managed file b
   assert.doesNotMatch(readme, /Retired legacy internal tables and fields|ledger|credits|accounting/i)
   assert.equal(await zip.file('attachments/attachment-a-0001/attachment-a.txt').async('string'), 'attachment-content-a')
   assert.equal(await zip.file('artifacts/artifact-a.txt').async('string'), 'artifact-content-a')
+})
+
+test('authoritative governance exports and clears durable Agent Events for only the selected user', () => {
+  const userA = 'user-agent-event-governance-a'
+  const userB = 'user-agent-event-governance-b'
+  insertUserFixture(userA, 'agent-event-governance-a')
+  insertUserFixture(userB, 'agent-event-governance-b')
+  const capture = (userId, marker) => db.transaction(() => enqueueAgentEventOutboxInDb(db, {
+    userId,
+    event: createTurnEvent({
+      id: `agent-event-governance-${marker}`,
+      sessionId: `chat-agent-event-governance-${marker}`,
+      turnId: `turn-agent-event-governance-${marker}`,
+      sequence: 0,
+      type: 'turn.started',
+      payload: {},
+      createdAt: now,
+    }),
+  }))()
+  capture(userA, 'a')
+  capture(userB, 'b')
+
+  const snapshot = buildAuthoritativeUserDataSnapshot({
+    userId: userA,
+    db,
+    env: process.env,
+  })
+  assert.deepEqual(
+    snapshot.manifest.database.tables.agent_event_outbox.map((row) => row.event_id),
+    ['agent-event-governance-a'],
+  )
+  assert.equal(
+    JSON.stringify(snapshot.manifest).includes('agent-event-governance-b'),
+    false,
+  )
+
+  const result = clearAuthoritativeUserData({
+    userId: userA,
+    confirmation: USER_DATA_CLEAR_CONFIRMATION,
+    db,
+    env: process.env,
+  })
+  assert.equal(result.deleted.agent_event_outbox, 1)
+  assert.equal(
+    db.prepare('SELECT COUNT(*) AS count FROM agent_event_outbox WHERE user_id = ?')
+      .get(userA).count,
+    0,
+  )
+  assert.equal(
+    db.prepare('SELECT COUNT(*) AS count FROM agent_event_outbox WHERE user_id = ?')
+      .get(userB).count,
+    1,
+  )
 })
 
 test('file-backed compaction archives export verified bodies and clear only the selected user bucket', async () => {

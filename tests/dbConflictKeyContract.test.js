@@ -24,9 +24,11 @@ const LEGACY_CONFLICT_WRITE_TEST_PATTERN = /\b(?:INSERT\s+OR\s+(?:ROLLBACK|ABORT
 const ON_CONFLICT_PATTERN = /\bON\s+CONFLICT\b/gi
 const ON_CONFLICT_TEST_PATTERN = /\bON\s+CONFLICT\b/i
 const ON_CONFLICT_TARGET_PATTERN = /^\s*\(([^)]*)\)/
-const EXPECTED_RUNTIME_ON_CONFLICT_CALLS = 59
-const EXPECTED_RUNTIME_ON_CONFLICT_TARGETS = 50
+const EXPECTED_RUNTIME_ON_CONFLICT_CALLS = 60
+const EXPECTED_RUNTIME_ON_CONFLICT_TARGETS = 51
 const REQUIRED_NON_RUNTIME_KEY_IDS = new Set([
+  'agent_event_outbox.cursor',
+  'agent_event_stream_metadata.stream_key',
   'pinned_memories.id',
   'session_meters.session_id',
   'todos.id',

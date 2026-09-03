@@ -42,6 +42,8 @@ const REQUIRED_TABLE_COLUMNS = Object.freeze({
     'readiness_json',
   ],
   turn_events: ['id', 'user_id', 'session_id', 'turn_id', 'sequence', 'type', 'payload_json', 'created_at'],
+  agent_event_outbox: ['cursor', 'event_id', 'user_id', 'event_type', 'envelope_json', 'event_fingerprint', 'created_at'],
+  agent_event_stream_metadata: ['stream_key', 'epoch', 'truncated_through'],
   turn_artifacts: ['id', 'user_id', 'session_id', 'turn_id', 'type', 'title', 'url', 'filename', 'created_at'],
   session_meters: ['session_id', 'user_id', 'tokens_in', 'tokens_out', 'tokens_cached', 'turns', 'updated_at'],
   subagent_runs: ['id', 'user_id', 'status', 'model_provider_id', 'model_config_revision'],
@@ -133,6 +135,8 @@ export const REQUIRED_PRIMARY_KEYS = Object.freeze({
   todos: ['id'],
   effort_settings: ['user_id'],
   turn_events: ['id'],
+  agent_event_outbox: ['cursor'],
+  agent_event_stream_metadata: ['stream_key'],
   session_meters: ['session_id'],
   memory_links: ['from_id', 'to_slug'],
   side_effect_executions: ['owner_id', 'scope_key', 'tool_call_id'],
@@ -178,13 +182,29 @@ export const REQUIRED_UNIQUE_KEYS = Object.freeze({
   evolution_promotion_rollbacks: [['promotion_id']],
   side_effect_executions: [['owner_id', 'scope_key', 'idempotency_key']],
   turn_events: [['user_id', 'session_id', 'turn_id', 'sequence']],
+  agent_event_outbox: [['event_id']],
   session_content_outbox: [['event_id']],
 })
 
 /** Return exact PK/UNIQUE conflicts that would make a runtime UPSERT unsafe. */
-export function collectMissingRequiredKeyConstraints(db) {
+const REQUIRED_KEY_MINIMUM_SCHEMA_VERSIONS = Object.freeze({
+  agent_event_outbox: 113,
+  agent_event_stream_metadata: 113,
+})
+
+const REQUIRED_AUTOINCREMENT_PRIMARY_KEYS = Object.freeze({
+  agent_event_outbox: 'cursor',
+})
+
+function keyConstraintApplies(table, expectedVersion) {
+  const minimumVersion = REQUIRED_KEY_MINIMUM_SCHEMA_VERSIONS[table] || 1
+  return expectedVersion === null || expectedVersion >= minimumVersion
+}
+
+export function collectMissingRequiredKeyConstraints(db, { expectedVersion = null } = {}) {
   const missing = []
   for (const [table, expectedColumns] of Object.entries(REQUIRED_PRIMARY_KEYS)) {
+    if (!keyConstraintApplies(table, expectedVersion)) continue
     const actualColumns = db.prepare('SELECT name, pk FROM pragma_table_info(?)').all(table)
       .filter((row) => Number(row.pk) > 0)
       .sort((left, right) => Number(left.pk) - Number(right.pk))
@@ -196,6 +216,7 @@ export function collectMissingRequiredKeyConstraints(db) {
   }
 
   for (const [table, expectedKeys] of Object.entries(REQUIRED_UNIQUE_KEYS)) {
+    if (!keyConstraintApplies(table, expectedVersion)) continue
     const indexes = db.prepare(`
       SELECT name, "unique" AS is_unique, partial
       FROM pragma_index_list(?)
@@ -215,6 +236,17 @@ export function collectMissingRequiredKeyConstraints(db) {
   return missing
 }
 
+function hasInlineAutoincrementPrimaryKey(db, table, column) {
+  const source = db.prepare(`
+    SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?
+  `).get(table)?.sql || ''
+  const escapedColumn = column.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+  return new RegExp(
+    `(?:\\(|,)\\s*(?:"${escapedColumn}"|${escapedColumn})\\s+INTEGER\\s+PRIMARY\\s+KEY\\s+AUTOINCREMENT\\b`,
+    'iu',
+  ).test(source)
+}
+
 const REQUIRED_INDEXES = Object.freeze({
   idx_sessions_user: { table: 'sessions', columns: ['user_id'] },
   idx_sessions_expires: { table: 'sessions', columns: ['expires_at'] },
@@ -228,6 +260,8 @@ const REQUIRED_INDEXES = Object.freeze({
   idx_memories_user_agent: { table: 'memories', columns: ['user_id', 'agent_id', 'pinned', 'last_used_at'] },
   idx_model_providers_user: { table: 'model_providers', columns: ['user_id', 'enabled', 'provider_key'] },
   idx_turn_events_replay: { table: 'turn_events', columns: ['user_id', 'session_id', 'turn_id', 'sequence'] },
+  idx_agent_event_outbox_user_cursor: { table: 'agent_event_outbox', columns: ['user_id', 'cursor'] },
+  idx_agent_event_outbox_type_cursor: { table: 'agent_event_outbox', columns: ['event_type', 'cursor'] },
   idx_turn_artifacts_turn: { table: 'turn_artifacts', columns: ['user_id', 'session_id', 'turn_id', 'created_at'] },
   idx_turn_artifacts_filename: { table: 'turn_artifacts', columns: ['filename'], unique: true },
   idx_runtime_plugin_mutation_barriers_heartbeat: {
@@ -271,6 +305,7 @@ const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { table: 'memories', from: 'agent_id', target: 'agents', to: 'id', onDelete: 'SET NULL' },
   { table: 'turn_events', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
   { table: 'turn_events', from: 'session_id', target: 'sessions', to: 'token', onDelete: 'CASCADE' },
+  { table: 'agent_event_outbox', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
   { table: 'turn_artifacts', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
   { table: 'turn_artifacts', from: 'session_id', target: 'sessions', to: 'token', onDelete: 'CASCADE' },
   {
@@ -415,7 +450,14 @@ export function assertCurrentSchemaContract(db, expectedVersion, { stage = 'post
     }
   }
 
-  missing.push(...collectMissingRequiredKeyConstraints(db))
+  missing.push(...collectMissingRequiredKeyConstraints(db, { expectedVersion }))
+
+  for (const [table, column] of Object.entries(REQUIRED_AUTOINCREMENT_PRIMARY_KEYS)) {
+    if (!keyConstraintApplies(table, expectedVersion)) continue
+    if (!hasInlineAutoincrementPrimaryKey(db, table, column)) {
+      missing.push(`autoincrement-primary-key:${table}.${column}`)
+    }
+  }
 
   for (const [table, forbiddenColumns] of Object.entries(FORBIDDEN_TABLE_COLUMNS)) {
     const columns = new Set(
