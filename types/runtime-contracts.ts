@@ -11,6 +11,11 @@ import {
   createCompactionArchivePort,
 } from '../server/core/compactionArchivePort.js'
 import {
+  MANAGED_ATTACHMENT_GOVERNANCE_METHODS,
+  MANAGED_ATTACHMENT_GOVERNANCE_PORT_VERSION,
+  createManagedAttachmentGovernancePort,
+} from '../server/core/managedAttachmentGovernancePort.js'
+import {
   MANAGED_ATTACHMENT_RUNTIME_PORT_METHODS,
   MANAGED_ATTACHMENT_RUNTIME_PORT_VERSION,
   prepareManagedAttachmentRuntimePort,
@@ -48,6 +53,9 @@ export type TurnEventPayload<Type extends TurnEventType> =
 
 /** Stable runtime-port types are derived from their checked implementation factories. */
 export type CompactionArchivePort = ReturnType<typeof createCompactionArchivePort>
+export type ManagedAttachmentGovernancePort =
+  ReturnType<typeof createManagedAttachmentGovernancePort>
+  & RuntimePortMethods<typeof MANAGED_ATTACHMENT_GOVERNANCE_METHODS>
 export type ManagedAttachmentRuntimePort = ReturnType<typeof prepareManagedAttachmentRuntimePort>
 export type ManagedAttachmentStoragePort =
   ReturnType<typeof createManagedAttachmentStoragePort>
@@ -57,12 +65,17 @@ export type SubagentRunPersistencePort = ReturnType<typeof prepareSubagentRunPer
 
 export const RUNTIME_CONTRACT_VERSIONS = Object.freeze({
   compactionArchive: COMPACTION_ARCHIVE_PORT_VERSION,
+  managedAttachmentGovernance: MANAGED_ATTACHMENT_GOVERNANCE_PORT_VERSION,
   managedAttachmentRuntime: MANAGED_ATTACHMENT_RUNTIME_PORT_VERSION,
   managedAttachmentStorage: MANAGED_ATTACHMENT_STORAGE_PORT_VERSION,
   sessionAdmin: SESSION_ADMIN_PORT_CONTRACT_VERSION,
   subagentRunPersistence: SUBAGENT_RUN_PERSISTENCE_PORT_CONTRACT_VERSION,
 })
 
+type _ManagedAttachmentGovernanceMethods = Assert<CoversMethods<
+  ManagedAttachmentGovernancePort,
+  typeof MANAGED_ATTACHMENT_GOVERNANCE_METHODS
+>>
 type _ManagedAttachmentRuntimeMethods = Assert<CoversMethods<
   ManagedAttachmentRuntimePort,
   typeof MANAGED_ATTACHMENT_RUNTIME_PORT_METHODS
@@ -78,6 +91,7 @@ type _SubagentPersistenceMethods = Assert<CoversMethods<
 >>
 
 export type RuntimeContractCoverage = {
+  managedAttachmentGovernance: _ManagedAttachmentGovernanceMethods
   managedAttachmentRuntime: _ManagedAttachmentRuntimeMethods
   managedAttachmentStorage: _ManagedAttachmentStorageMethods
   sessionAdmin: _SessionAdminMethods
