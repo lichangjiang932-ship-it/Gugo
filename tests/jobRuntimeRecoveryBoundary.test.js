@@ -30,9 +30,49 @@ const defaultPlannerSource = readFileSync(
   new URL('../server/services/jobRuntimeDefaultPlanner.js', import.meta.url),
   'utf8',
 )
+const defaultPolicyCapabilitiesSource = readFileSync(
+  new URL('../server/services/jobRuntimeDefaultPolicyCapabilities.js', import.meta.url),
+  'utf8',
+)
+
+test('job runtime delegates default policy capability composition to a focused provider', () => {
+  assert.ok(
+    jobRuntimeSource.trimEnd().split(/\r?\n/u).length <= 300,
+    'Keep the Job runtime compatibility facade below 300 lines',
+  )
+  assert.match(jobRuntimeSource, /createDefaultJobRuntimePolicyCapabilities\(\{/u)
+  assert.doesNotMatch(
+    defaultPolicyCapabilitiesSource,
+    /from ['"]\.\/jobRuntime\.js['"]/u,
+  )
+  assert.match(
+    defaultPolicyCapabilitiesSource,
+    /createDefaultExecuteStep\(\{ runtimeCore: resolvedRuntimeCore \}\)/u,
+  )
+
+  for (const concreteDependency of [
+    './taskPlanGuard.js',
+    './jobExecutionLeaseRuntime.js',
+    './jobRuntimeDefaultPlanner.js',
+    './jobStepExecutionRuntime.js',
+    './modelReadinessService.js',
+    './runtimeCore.js',
+  ]) {
+    assert.equal(
+      jobRuntimeSource.includes(concreteDependency),
+      false,
+      `jobRuntime.js must not directly compose policy dependency: ${concreteDependency}`,
+    )
+    assert.equal(
+      defaultPolicyCapabilitiesSource.includes(concreteDependency),
+      true,
+      `default policy provider must retain composition: ${concreteDependency}`,
+    )
+  }
+})
 
 test('job runtime delegates default planning composition to a focused provider', () => {
-  assert.match(jobRuntimeSource, /createDefaultJobPlanner\(\)/u)
+  assert.match(defaultPolicyCapabilitiesSource, /createDefaultJobPlanner\(\)/u)
   assert.doesNotMatch(defaultPlannerSource, /from ['"]\.\/jobRuntime\.js['"]/u)
 
   for (const concreteDependency of [

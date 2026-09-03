@@ -66,7 +66,11 @@ now live in `jobRuntimeEventHub.js`; creation, recovery, and wake paths populate
 that boundary before emitting instead of reaching into a facade-owned Map.
 Default planning composition now lives in `jobRuntimeDefaultPlanner.js`, which
 binds exploration and model execution behind the planner port while the Job
-facade retains only the injected planner capability.
+facade retains only the injected planner capability. Default planner, execution
+lease/core, step executor, task-plan guard, and model-binding capabilities are
+now assembled into an immutable per-runtime snapshot by
+`jobRuntimeDefaultPolicyCapabilities.js`; the facade preserves its existing
+constructor overrides without importing those concrete policy dependencies.
 
 Runtime plugin installation and uninstall settlement now live in
 `runtimePluginInstallController.js` and `runtimePluginUninstallController.js`.
@@ -108,6 +112,8 @@ boundary, while `tests/jobRuntimeRecoveryBoundary.test.js` prevents recovery
 persistence from returning to the Job facade and
 `tests/jobRuntimeEventHub.test.js` and the Job recovery boundary test preserve
 tenant isolation and prevent direct owner-cache access, while
+`tests/jobRuntimeDefaultPolicyCapabilities.test.js` preserves immutable,
+per-runtime default capability snapshots and explicit override identity, while
 `tests/modelInvocationRuntimeBoundary.test.js` prevents model invocation logic
 from returning to the proxy facade, and `tests/artifactGenBoundary.test.js`
 protects the settled artifact facade/service direction. The focused
@@ -217,20 +223,24 @@ previews, and streaming updates.
 
 ## DEBT-TYPE-001 — Runtime contract type coverage
 
-**Status:** Closed
+**Status:** Open
 **Priority:** P2  
 **Area:** Type safety
 
-**Evidence / reproduction:** Runtime ports and event contracts are primarily
-JavaScript. Zod protects serialized boundaries, but internal adapter and service
-composition still relies on runtime failures for many shape mismatches.
+**Evidence / reproduction:** Runtime ports and event contracts remain
+JavaScript. Zod schemas and the existing event, adapter, and persistence
+contract suites protect serialized and runtime boundaries, but the repository
+has no checked-in static contract declarations, type-check command, or required
+CI type-check step. Internal adapter and service composition therefore still
+relies on runtime failures for many shape mismatches.
 
 **Exit criteria:** Stable kernel ports, shared event payloads, and persistence
 adapter contracts have generated or native static types checked in CI; migration
 must be incremental and must not create a second event schema.
 
-**Verification:** type-check CI plus the existing event, adapter, and persistence
-contract suites.
+**Verification:** The existing event, adapter, and persistence contract suites
+are the runtime baseline. Closure additionally requires a checked-in type-check
+command and a required CI step that executes it.
 
 ## DEBT-RELEASE-001 — Desktop signing and provenance
 

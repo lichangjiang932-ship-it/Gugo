@@ -1,11 +1,9 @@
 import { getJob as getJobRow } from './jobStore.js'
-import { applyRuntimeTaskPlanGuard } from './taskPlanGuard.js'
 import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
-import { createJobExecutionLeaseCoordinator } from './jobExecutionLeaseRuntime.js'
-import { createJobRuntimeCore } from './runtimeCore.js'
-import { resolveAgentModelRuntimeBinding } from './modelReadinessService.js'
-import { createDefaultJobPlanner } from './jobRuntimeDefaultPlanner.js'
-import { createDefaultExecuteStep } from './jobStepExecutionRuntime.js'
+import {
+  createDefaultExecuteStep,
+  createDefaultJobRuntimePolicyCapabilities,
+} from './jobRuntimeDefaultPolicyCapabilities.js'
 import { runJobRuntimeTick } from './jobRuntimeTick.js'
 import { DEFAULT_JOB_RUNTIME_TICK_DEPENDENCIES } from './jobRuntimeTickDependencies.js'
 import { recoverRuntimeJobs } from './jobRuntimeRecovery.js'
@@ -31,20 +29,28 @@ export { runPlanningExploration, selectPlanningToolSpecs } from './jobPlanningEx
 export { createDefaultExecuteStep }
 export class JobRuntime {
   constructor({
-    planner = createDefaultJobPlanner(),
-    executeStep = null,
+    planner,
+    executeStep,
     tickMs = 250,
     maxConcurrency = process.env.JOB_RUNTIME_CONCURRENCY,
-    executionLeases = createJobExecutionLeaseCoordinator(),
-    runtimeCore = null,
-    taskPlanGuard = applyRuntimeTaskPlanGuard,
-    modelBindingResolver = resolveAgentModelRuntimeBinding,
+    executionLeases,
+    runtimeCore,
+    taskPlanGuard,
+    modelBindingResolver,
   } = {}) {
-    this.planner = planner
-    this.taskPlanGuard = taskPlanGuard
-    this.resolveModelBinding = modelBindingResolver
-    this.runtimeCore = runtimeCore || createJobRuntimeCore({ executionLeases })
-    this.executeStep = executeStep || createDefaultExecuteStep({ runtimeCore: this.runtimeCore })
+    const policyCapabilities = createDefaultJobRuntimePolicyCapabilities({
+      planner,
+      executeStep,
+      executionLeases,
+      runtimeCore,
+      taskPlanGuard,
+      modelBindingResolver,
+    })
+    this.planner = policyCapabilities.planner
+    this.taskPlanGuard = policyCapabilities.taskPlanGuard
+    this.resolveModelBinding = policyCapabilities.modelBindingResolver
+    this.runtimeCore = policyCapabilities.runtimeCore
+    this.executeStep = policyCapabilities.executeStep
     this.activeControllers = new Map()
     this.activeJobIds = new Set()
     this.activeTicks = new Set()
