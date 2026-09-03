@@ -51,6 +51,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Static runtime contract types
+        run: npm run typecheck
+
       - name: Offline agent capability gate
         env:
           TEST_CONCURRENCY: 1

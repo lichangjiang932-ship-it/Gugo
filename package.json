@@ -58,7 +58,8 @@
     "desktop:publish": "node scripts/release/block-direct-desktop-publish.mjs",
     "preview": "vite preview --configLoader runner",
     "seed:skills": "node server/seedSystemSkills.js",
-    "cli": "node bin/yma-cli.js"
+    "cli": "node bin/yma-cli.js",
+    "typecheck": "tsc -p tsconfig.contracts.json"
   },
   "dependencies": {
     "@e965/xlsx": "^0.20.3",
@@ -109,6 +110,7 @@
     "postcss": "^8.5.25",
     "sucrase": "^3.35.1",
     "tailwindcss": "^3.4.19",
+    "typescript": "5.9.3",
     "vite": "^8.2.0"
   },
   "overrides": {
