@@ -6,6 +6,20 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.52] - 2026-09-03
+
+### Added
+
+- Incremental static contract types derived from authoritative Turn Event Zod schemas and kernel port factories, enforced by an unconditional cross-platform CI typecheck.
+- `ManagedAttachmentGovernancePort v1` for owner-scoped user-data clear preview, staging, rollback, recovery, and cleanup.
+
+### Changed
+
+- Split the monolithic Job runtime tick into focused wake, claim, preparation, completion, and step-execution runtimes.
+- Reduced the runtime plugin registry to a bounded composition host by extracting lifecycle policy and plugin-context projection.
+- Moved atomic attachment binder selection into the concrete SQLite adapter while preserving one turn-start transaction.
+- Retired all remaining kernel transition rows and closed `DEBT-ARCH-002` and `DEBT-TYPE-001`.
+
 ## [0.11.51] - 2026-09-03
 
 ### Security
