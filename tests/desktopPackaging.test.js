@@ -69,6 +69,8 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.match(config, /^afterPack:\s+scripts\/verify-desktop-package\.cjs\s*$/m)
   assert.match(config, /^\s*-\s+desktop\/petDrag\.js\s*$/m)
   assert.match(config, /^\s*-\s+desktop\/updateRuntime\.js\s*$/m)
+  assert.match(config, /^\s*-\s+desktop\/mainWindowSecurity\.js\s*$/m)
+  assert.match(config, /^\s*-\s+desktop\/updateSetup\.js\s*$/m)
   assert.match(config, /npmRebuild:\s*false/)
   assert.match(config, /asarUnpack:[\s\S]*node_modules\/sharp\/\*\*\/\*/)
   assert.match(config, /asarUnpack:[\s\S]*node_modules\/@img\/\*\*\/\*/)
@@ -105,6 +107,42 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.doesNotMatch(config, /publisherName|certificateFile|certificatePassword/)
   assert.doesNotMatch(config, /verifyUpdateCodeSignature:\s*false/)
   assert.doesNotMatch(main, /showMessageBox/)
+})
+
+test('every desktop main-process local module import is packed into the app.asar', () => {
+  const config = read('electron-builder.yml')
+  const packedDesktopFiles = new Set(
+    [...config.matchAll(/^\s*-\s+(desktop\/[A-Za-z0-9._-]+\.js)\s*$/gm)]
+      .map((match) => match[1]),
+  )
+  const localImports = new Set()
+  const collectImports = (file) => {
+    const source = read(file)
+    for (const match of source.matchAll(/from\s+['"]\.\/([A-Za-z0-9._-]+\.js)['"]/g)) {
+      localImports.add(match[1])
+    }
+  }
+  // main.js is the build entry; resolve its import closure transitively so a
+  // missing local module (referenced but never listed) fails here instead of
+  // at runtime with ERR_MODULE_NOT_FOUND from inside app.asar.
+  collectImports('desktop/main.js')
+  for (const moduleName of [...localImports]) {
+    collectImports(`desktop/${moduleName}`)
+  }
+  assert.ok(localImports.size > 0, 'main.js must import local desktop modules')
+  for (const moduleName of localImports) {
+    const relPath = `desktop/${moduleName}`
+    assert.equal(
+      fs.existsSync(new URL(`../${relPath}`, import.meta.url)),
+      true,
+      `${relPath} must exist on disk`,
+    )
+    assert.equal(
+      packedDesktopFiles.has(relPath),
+      true,
+      `${relPath} is imported by the desktop entry but is not listed in electron-builder files`,
+    )
+  }
 })
 
 test('desktop ASAR verifier normalizes package paths and covers the backend entry dependency closure', () => {
