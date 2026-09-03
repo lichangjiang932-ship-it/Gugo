@@ -16,6 +16,8 @@ export function createRuntimePluginRecordFactory() {
     configRevision,
     state,
     deferVisibility,
+    durableIdentity = null,
+    resetDurableAgentEventSubscriptions = false,
     installedAt = null,
   }) => ({
     manifest,
@@ -25,6 +27,8 @@ export function createRuntimePluginRecordFactory() {
     configRevision,
     state,
     deferVisibility,
+    durableIdentity,
+    resetDurableAgentEventSubscriptions,
     cancelRequested: false,
     installedAt,
     sequence: ++installSequence,

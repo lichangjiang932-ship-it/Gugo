@@ -1,3 +1,6 @@
+import { collectAgentEventOutboxSchemaProblems } from './agentEventOutboxSchemaContract.js'
+import { collectAgentEventSubscriptionSchemaProblems } from './agentEventSubscriptionSchemaContract.js'
+
 const REQUIRED_TABLE_COLUMNS = Object.freeze({
   meta: ['key', 'value'],
   users: ['id', 'email', 'created_at', 'updated_at', 'password_hash', 'password_salt', 'password_set_at'],
@@ -44,6 +47,45 @@ const REQUIRED_TABLE_COLUMNS = Object.freeze({
   turn_events: ['id', 'user_id', 'session_id', 'turn_id', 'sequence', 'type', 'payload_json', 'created_at'],
   agent_event_outbox: ['cursor', 'event_id', 'user_id', 'event_type', 'envelope_json', 'event_fingerprint', 'created_at'],
   agent_event_stream_metadata: ['stream_key', 'epoch', 'truncated_through'],
+  agent_event_subscriptions: [
+    'subscription_key',
+    'publisher_id',
+    'publisher_key_id',
+    'package_digest',
+    'publication_digest',
+    'release_id',
+    'release_content_digest',
+    'release_digest_version',
+    'plugin_id',
+    'plugin_version',
+    'subscription_id',
+    'event_type',
+    'contract_version',
+    'status',
+    'acked_cursor',
+    'scanned_cursor',
+    'stream_epoch',
+    'lease_owner',
+    'lease_generation',
+    'lease_expires_at',
+    'retry_cursor',
+    'retry_attempts',
+    'retry_not_before',
+    'retry_max_attempts',
+    'retry_base_delay_ms',
+    'retry_max_delay_ms',
+    'created_at',
+    'updated_at',
+  ],
+  agent_event_subscription_dlq: [
+    'dlq_id',
+    'subscription_key',
+    'cursor',
+    'event_type',
+    'failure_code',
+    'attempts',
+    'failed_at',
+  ],
   turn_artifacts: ['id', 'user_id', 'session_id', 'turn_id', 'type', 'title', 'url', 'filename', 'created_at'],
   session_meters: ['session_id', 'user_id', 'tokens_in', 'tokens_out', 'tokens_cached', 'turns', 'updated_at'],
   subagent_runs: ['id', 'user_id', 'status', 'model_provider_id', 'model_config_revision'],
@@ -137,6 +179,8 @@ export const REQUIRED_PRIMARY_KEYS = Object.freeze({
   turn_events: ['id'],
   agent_event_outbox: ['cursor'],
   agent_event_stream_metadata: ['stream_key'],
+  agent_event_subscriptions: ['subscription_key'],
+  agent_event_subscription_dlq: ['dlq_id'],
   session_meters: ['session_id'],
   memory_links: ['from_id', 'to_slug'],
   side_effect_executions: ['owner_id', 'scope_key', 'tool_call_id'],
@@ -183,6 +227,7 @@ export const REQUIRED_UNIQUE_KEYS = Object.freeze({
   side_effect_executions: [['owner_id', 'scope_key', 'idempotency_key']],
   turn_events: [['user_id', 'session_id', 'turn_id', 'sequence']],
   agent_event_outbox: [['event_id']],
+  agent_event_subscription_dlq: [['subscription_key', 'cursor']],
   session_content_outbox: [['event_id']],
 })
 
@@ -190,10 +235,13 @@ export const REQUIRED_UNIQUE_KEYS = Object.freeze({
 const REQUIRED_KEY_MINIMUM_SCHEMA_VERSIONS = Object.freeze({
   agent_event_outbox: 113,
   agent_event_stream_metadata: 113,
+  agent_event_subscriptions: 114,
+  agent_event_subscription_dlq: 114,
 })
 
 const REQUIRED_AUTOINCREMENT_PRIMARY_KEYS = Object.freeze({
   agent_event_outbox: 'cursor',
+  agent_event_subscription_dlq: 'dlq_id',
 })
 
 function keyConstraintApplies(table, expectedVersion) {
@@ -262,6 +310,18 @@ const REQUIRED_INDEXES = Object.freeze({
   idx_turn_events_replay: { table: 'turn_events', columns: ['user_id', 'session_id', 'turn_id', 'sequence'] },
   idx_agent_event_outbox_user_cursor: { table: 'agent_event_outbox', columns: ['user_id', 'cursor'] },
   idx_agent_event_outbox_type_cursor: { table: 'agent_event_outbox', columns: ['event_type', 'cursor'] },
+  idx_agent_event_subscriptions_retention: {
+    table: 'agent_event_subscriptions',
+    columns: ['status', 'stream_epoch', 'scanned_cursor'],
+  },
+  idx_agent_event_subscriptions_lease: {
+    table: 'agent_event_subscriptions',
+    columns: ['status', 'lease_expires_at', 'subscription_key'],
+  },
+  idx_agent_event_subscription_dlq_time: {
+    table: 'agent_event_subscription_dlq',
+    columns: ['subscription_key', 'failed_at', 'dlq_id'],
+  },
   idx_turn_artifacts_turn: { table: 'turn_artifacts', columns: ['user_id', 'session_id', 'turn_id', 'created_at'] },
   idx_turn_artifacts_filename: { table: 'turn_artifacts', columns: ['filename'], unique: true },
   idx_runtime_plugin_mutation_barriers_heartbeat: {
@@ -306,6 +366,13 @@ const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { table: 'turn_events', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
   { table: 'turn_events', from: 'session_id', target: 'sessions', to: 'token', onDelete: 'CASCADE' },
   { table: 'agent_event_outbox', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
+  {
+    table: 'agent_event_subscription_dlq',
+    from: 'subscription_key',
+    target: 'agent_event_subscriptions',
+    to: 'subscription_key',
+    onDelete: 'CASCADE',
+  },
   { table: 'turn_artifacts', from: 'user_id', target: 'users', to: 'id', onDelete: 'CASCADE' },
   { table: 'turn_artifacts', from: 'session_id', target: 'sessions', to: 'token', onDelete: 'CASCADE' },
   {
@@ -516,6 +583,11 @@ export function assertCurrentSchemaContract(db, expectedVersion, { stage = 'post
     if (!row || row.tableName !== table || !String(row.sql || '').trim()) {
       missing.push(`trigger:${trigger}`)
     }
+  }
+
+  if (expectedVersion >= 113) missing.push(...collectAgentEventOutboxSchemaProblems(db))
+  if (expectedVersion >= 114) {
+    missing.push(...collectAgentEventSubscriptionSchemaProblems(db))
   }
 
   if (missing.length > 0) {

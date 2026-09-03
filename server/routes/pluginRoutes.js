@@ -14,6 +14,7 @@
 import {
   getPlugin,
   listPlugins,
+  listRuntimePluginAgentEventResetAudit,
   listRuntimePluginConfigReloadAudit,
   listRuntimePluginEffectiveConfigs,
   listRuntimePluginHttpCapabilityAudit,
@@ -63,6 +64,7 @@ const SANDBOX_INPUT_LIMIT = 64 * 1024
 const RELEASE_GC_BODY_LIMIT = 8 * 1024
 const CONFIG_RELOAD_BODY_LIMIT = 1024
 const RUNTIME_PLUGIN_PERMISSION_APPROVAL_HEADER = 'x-gugo-plugin-permission-approval'
+const RUNTIME_PLUGIN_AGENT_EVENT_RESET_HEADER = 'x-gugo-agent-event-reset-to-current'
 const RELEASE_GC_PATH = '/api/plugins/runtime/releases/gc'
 const RELEASE_GC_CONFIRMATION = 'delete_eligible_releases'
 const RELEASE_GC_BODY_FIELDS = new Set(['dryRun', 'confirm', 'policy', 'previewRunId'])
@@ -184,6 +186,23 @@ function runtimePermissionApproval(req) {
   const value = req.headers?.[RUNTIME_PLUGIN_PERMISSION_APPROVAL_HEADER]
   if (Array.isArray(value)) return value[0] || null
   return typeof value === 'string' ? value : null
+}
+
+function runtimeAgentEventResetToCurrent(req) {
+  const value = req.headers?.[RUNTIME_PLUGIN_AGENT_EVENT_RESET_HEADER]
+  if (value === undefined) return false
+  if (Array.isArray(value) ? value.length !== 1 : typeof value !== 'string') {
+    const error = new TypeError('agent event reset confirmation header is invalid')
+    error.code = 'PLUGIN_AGENT_EVENT_RESET_CONFIRMATION_INVALID'
+    error.statusCode = 400
+    throw error
+  }
+  const normalized = String(Array.isArray(value) ? value[0] : value).trim().toLowerCase()
+  if (normalized === 'true') return true
+  const error = new TypeError('agent event reset confirmation must be true')
+  error.code = 'PLUGIN_AGENT_EVENT_RESET_CONFIRMATION_INVALID'
+  error.statusCode = 400
+  throw error
 }
 
 function gcErrorBody(code, message) {
@@ -362,6 +381,7 @@ export async function handlePluginRequest(req, res, {
         plugins: listRuntimePluginInventory(),
         effectiveConfigs: listRuntimePluginEffectiveConfigs(),
         configReloadAudit: listRuntimePluginConfigReloadAudit(),
+        agentEventResetAudit: listRuntimePluginAgentEventResetAudit(),
         httpCapabilities: listRuntimePluginHttpCapabilities(),
         httpCapabilityAudit: listRuntimePluginHttpCapabilityAudit(),
         runtimeCapabilities: listRuntimeCapabilities(),
@@ -410,6 +430,7 @@ export async function handlePluginRequest(req, res, {
       const plugin = action === 'enable'
         ? await enableRuntimePlugin(runtimeAction[1], {
             permissionApproval: runtimePermissionApproval(req),
+            resetDurableAgentEventSubscriptions: runtimeAgentEventResetToCurrent(req),
           })
         : action === 'reload'
           ? await reloadRuntimePlugin(runtimeAction[1], {

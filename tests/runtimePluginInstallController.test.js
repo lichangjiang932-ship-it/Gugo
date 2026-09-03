@@ -81,6 +81,7 @@ test('install controller revalidates after setup and only removes its own failed
       plugins.set(manifest.id, replacement)
     },
     sealConfigLayerSources: () => order.push('seal-config'),
+    snapshotDurableIdentity: (identity) => identity,
     snapshotPlugin: () => {
       snapshotCalls += 1
     },

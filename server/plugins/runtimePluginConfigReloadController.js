@@ -146,6 +146,7 @@ export function createRuntimePluginConfigReloadController({
           configRevision: nextRevision,
           state: 'staging',
           deferVisibility: true,
+          durableIdentity: oldRecord.durableIdentity,
           installedAt: oldRecord.installedAt,
         })
         stagingRecords.add(candidate)

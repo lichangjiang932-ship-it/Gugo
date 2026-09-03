@@ -166,7 +166,7 @@ test('legacy import rejects an adapter whose catalog fingerprint is unknown', as
   assert.equal(calls, 0)
 })
 
-test('first import commits once and a retry preserves the exact server revision and transcript', async () => {
+test('same content is idempotent while changed content is recovered under stable ids', async () => {
   const id = 'legacy-idempotent'
   const workspacePath = path.join(tempDir, 'legacy-workspace')
   const body = {
@@ -189,6 +189,7 @@ test('first import commits once and a retry preserves the exact server revision 
   assert.equal(first.statusCode, 200)
   assert.equal(first.json().importedCount, 1)
   assert.equal(first.json().results[0].status, 'imported')
+  assert.equal(first.json().results[0].sessionId, id)
   assert.equal(first.json().results[0].session.workspacePath, workspacePath)
 
   const before = getDb().prepare(`
@@ -201,16 +202,28 @@ test('first import commits once and a retry preserves the exact server revision 
   `).all(id)
   assert.deepEqual(JSON.parse(messagesBefore[1].model_context_json), { turnId: 'turn-1' })
 
-  const second = await invoke({ token: owner.token, body: {
+  const sameContentRetry = await invoke({ token: owner.token, body })
+  assert.equal(sameContentRetry.statusCode, 200)
+  assert.equal(sameContentRetry.json().serverAuthoritativeCount, 1)
+  assert.equal(sameContentRetry.json().results[0].status, 'server_authoritative')
+  assert.equal(sameContentRetry.json().results[0].sessionId, id)
+
+  const changedBody = {
     sessions: [legacySession(id, {
       title: 'must not overwrite',
       workspacePath: path.join(tempDir, 'must-not-overwrite'),
       messages: [message('different', 'different')],
     })],
-  } })
-  assert.equal(second.statusCode, 200)
-  assert.equal(second.json().serverAuthoritativeCount, 1)
-  assert.equal(second.json().results[0].status, 'server_authoritative')
+  }
+  const recovered = await invoke({ token: owner.token, body: changedBody })
+  assert.equal(recovered.statusCode, 200)
+  assert.equal(recovered.json().importedCount, 1)
+  assert.equal(recovered.json().results[0].status, 'imported')
+  assert.equal(recovered.json().results[0].id, id)
+  const recoveryId = recovered.json().results[0].sessionId
+  assert.match(recoveryId, /^legacy-recovery-[a-f0-9]{64}$/u)
+  assert.notEqual(recoveryId, id)
+  assert.equal(recovered.json().results[0].session.id, recoveryId)
   assert.deepEqual(
     getDb().prepare(`
       SELECT title, revision, updated_at, workspace_path
@@ -222,6 +235,25 @@ test('first import commits once and a retry preserves the exact server revision 
     SELECT id, role, content, model_context_json, created_at, updated_at
     FROM messages WHERE session_id = ? ORDER BY created_at, rowid
   `).all(id), messagesBefore)
+
+  const recoveredMessages = getDb().prepare(`
+    SELECT id, role, content
+    FROM messages WHERE session_id = ? ORDER BY rowid
+  `).all(recoveryId)
+  assert.equal(recoveredMessages.length, 1)
+  assert.equal(recoveredMessages[0].content, 'different')
+  assert.match(recoveredMessages[0].id, /^legacy-recovery-message-[a-f0-9]{64}$/u)
+  assert.notEqual(recoveredMessages[0].id, 'different')
+
+  const recoveredRetry = await invoke({ token: owner.token, body: changedBody })
+  assert.equal(recoveredRetry.statusCode, 200)
+  assert.equal(recoveredRetry.json().serverAuthoritativeCount, 1)
+  assert.equal(recoveredRetry.json().results[0].status, 'server_authoritative')
+  assert.equal(recoveredRetry.json().results[0].sessionId, recoveryId)
+  assert.equal(
+    getDb().prepare('SELECT COUNT(*) AS count FROM sessions WHERE token = ?').get(recoveryId).count,
+    1,
+  )
 })
 
 test('empty legacy sessions remain visible after import', async () => {
@@ -304,7 +336,7 @@ test('workspace updates are owner-scoped, authorized, canonical, and explicitly 
   )
 })
 
-test('same-user, cross-user, and auth-token ids are all server authoritative without owner disclosure', async () => {
+test('same-user, cross-user, and auth-token collisions recover without owner disclosure', async () => {
   const db = getDb()
   const other = createOtherUser()
   const sameId = 'authoritative-same-owner'
@@ -318,31 +350,48 @@ test('same-user, cross-user, and auth-token ids are all server authoritative wit
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).run(crossId, crossId, other.userId, 'cross owner secret', Number.MAX_SAFE_INTEGER, 1, 1)
 
+  const body = {
+    sessions: [
+      legacySession(sameId),
+      legacySession(crossId),
+      legacySession(other.token),
+    ],
+  }
   const response = await invoke({
     token: owner.token,
-    body: {
-      sessions: [
-        legacySession(sameId),
-        legacySession(crossId),
-        legacySession(other.token),
-      ],
-    },
+    body,
   })
   assert.equal(response.statusCode, 200)
   const result = response.json()
-  assert.equal(result.importedCount, 0)
-  assert.deepEqual(result.results.map(({ status }) => status), [
-    'server_authoritative',
-    'server_authoritative',
-    'server_authoritative',
-  ])
-  assert.equal(result.results[0].session.title, 'same owner original')
-  assert.equal(result.results[1].session, null)
-  assert.equal(result.results[2].session, null)
+  assert.equal(result.importedCount, 3)
+  assert.deepEqual(result.results.map(({ status }) => status), Array(3).fill('imported'))
+  assert.equal(new Set(result.results.map(({ sessionId }) => sessionId)).size, 3)
+  for (const [index, sourceId] of [sameId, crossId, other.token].entries()) {
+    const entry = result.results[index]
+    assert.equal(entry.id, sourceId)
+    assert.notEqual(entry.sessionId, sourceId)
+    assert.match(entry.sessionId, /^legacy-recovery-[a-f0-9]{64}$/u)
+    assert.equal(entry.session.id, entry.sessionId)
+    assert.equal(
+      db.prepare('SELECT content FROM messages WHERE session_id = ?').get(entry.sessionId).content,
+      'history',
+    )
+  }
+  assert.equal(db.prepare('SELECT title FROM sessions WHERE token = ?').get(sameId).title, 'same owner original')
+  assert.equal(db.prepare('SELECT title FROM sessions WHERE token = ?').get(crossId).title, 'cross owner secret')
   assert.doesNotMatch(JSON.stringify(result), /cross owner secret|user_id|userId/u)
+
+  const retry = await invoke({ token: owner.token, body })
+  assert.equal(retry.statusCode, 200)
+  assert.equal(retry.json().serverAuthoritativeCount, 3)
+  assert.deepEqual(
+    retry.json().results.map(({ sessionId }) => sessionId),
+    result.results.map(({ sessionId }) => sessionId),
+  )
+  assert.doesNotMatch(JSON.stringify(retry.json()), /cross owner secret|user_id|userId/u)
 })
 
-test('invalid entries and database message collisions roll back the complete batch', async () => {
+test('invalid entries roll back while message-id collisions are deterministically recovered', async () => {
   const invalidFirst = 'invalid-batch-first'
   const invalidSecond = 'invalid-batch-second'
   const invalid = await invoke({
@@ -379,9 +428,21 @@ test('invalid entries and database message collisions roll back the complete bat
       ],
     },
   })
-  assert.equal(collision.statusCode, 409)
-  assert.equal(collision.json().error.code, 'LEGACY_SESSION_IMPORT_CONFLICT')
-  assert.equal(getDb().prepare('SELECT 1 FROM sessions WHERE token IN (?, ?)').get(...collisionIds), undefined)
+  assert.equal(collision.statusCode, 200)
+  assert.equal(collision.json().importedCount, 2)
+  assert.equal(collision.json().results[0].sessionId, collisionIds[0])
+  const recoveredCollisionId = collision.json().results[1].sessionId
+  assert.notEqual(recoveredCollisionId, collisionIds[1])
+  assert.match(recoveredCollisionId, /^legacy-recovery-[a-f0-9]{64}$/u)
+  assert.equal(
+    getDb().prepare('SELECT content FROM messages WHERE id = ?').get('occupied-message-id').content,
+    'source',
+  )
+  const recoveredCollisionMessage = getDb().prepare(`
+    SELECT id, content FROM messages WHERE session_id = ?
+  `).get(recoveredCollisionId)
+  assert.equal(recoveredCollisionMessage.content, 'history')
+  assert.notEqual(recoveredCollisionMessage.id, 'occupied-message-id')
 })
 
 test('legacy import enforces session, message, content, and HTTP body limits before writes', async () => {

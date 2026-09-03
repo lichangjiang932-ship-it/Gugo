@@ -6,6 +6,7 @@ import {
   projectTurnEventForClient,
 } from '../../shared/turnEventProjection.js'
 import { publishAgentEventEnvelope } from '../core/agentEventConsumerRuntime.js'
+import { notifyAgentEventDurableConsumers } from './agentEventDurableConsumerRuntime.js'
 import { enqueueAgentEventOutboxInDb } from './agentEventOutboxStore.js'
 import { saveTurnCheckpoint } from './turnCheckpointStore.js'
 import { replayTurnEventWriteFailure as replayStoredTurnEventWriteFailure } from './turnEventWriteFailureStore.js'
@@ -438,6 +439,7 @@ export function publishCommittedTurnEvents(insertedEvents = []) {
         createTurnEventTransportEnvelope(clientEvent),
         { userId: entry.userId },
       )
+      notifyAgentEventDurableConsumers(clientEvent.type)
       if (delivery && typeof delivery.catch === 'function') delivery.catch(() => {})
     } catch {
       // A consumer host failure is observability debt, never a reason to make a

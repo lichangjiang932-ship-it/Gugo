@@ -52,7 +52,7 @@ export function WorkspaceOnboardingSection({ controller, t }) {
 
   return (
     <>
-      <SectionTitle eyebrow="QUICK START" title={t('permissionsDashboard.onboardingTitle')} />
+      <SectionTitle eyebrow={t('permissionsDashboard.workspaceEyebrow')} title={t('permissionsDashboard.onboardingTitle')} />
       <form onSubmit={submit} className="mb-6 overflow-hidden rounded-md border border-ink/30" data-testid="workspace-onboarding">
         <div className={`flex items-start gap-3 border-b border-dashed px-4 py-3 ${onboarding?.complete ? 'border-success/30 bg-success/50' : 'border-warning/40 bg-warning/60'}`}>
           {onboarding?.complete

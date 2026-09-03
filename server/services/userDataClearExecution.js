@@ -2,6 +2,9 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 
 import { getDb } from '../db.js'
+import {
+  settleDeletedUserAgentEventRetriesInTransaction,
+} from './agentEventSubscriptionStore.js'
 import { acquireCompactionArchiveGovernanceLease } from './compactionArchiveGovernanceRuntime.js'
 import {
   buildManagedUserFileCatalog,
@@ -262,6 +265,11 @@ export function clearAuthoritativeUserData({
         catalogByName,
         userId: safeUserId,
         entries: managed.deletion.artifacts.entries,
+      })
+      settleDeletedUserAgentEventRetriesInTransaction({
+        userId: safeUserId,
+        now: Date.now(),
+        db,
       })
       const counts = {}
       for (const name of unownedDeletionOrder) {

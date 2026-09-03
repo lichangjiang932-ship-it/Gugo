@@ -91,7 +91,7 @@ target kernel:
 | File | Current role | Required direction | Canonical debt |
 |---|---|---|---|
 | `server/services/jobRuntime.js` | Job command facade; scheduler ownership, tick tracking, bounded draining, and shutdown are delegated to `jobRuntimeLoopHost.js`, default policy capability composition to `jobRuntimeDefaultPolicyCapabilities.js`, planning details to `jobRuntimeDefaultPlanner.js`, crash recovery to `jobRuntimeRecovery.js`, and owner-aware event delivery plus terminal-evicted owner caching to `jobRuntimeEventHub.js` | Keep extracting independent services and capability providers without moving loop lifecycle, default capability composition, planning details, recovery persistence, or event routing back into the facade | `DEBT-ARCH-002` |
-| `server/plugins/runtimePluginRegistry.js` | Inventory, capability wiring, and facade composition; configuration-source initialization/sealing, installation settlement/rollback, uninstall deactivation/cleanup, release deadlock fencing/shutdown, record construction, bounded audit storage, contribution transactions, Prompt, Tool, Loop-hook, and read-only Agent Event hosting are delegated to focused modules | Finish splitting inventory/loading from activation/execution; connect the v113 durable capture to a versioned replay consumer contract with stable subscription identity, durable ACK, lease/fencing, retry/backoff, and DLQ; add safe watermark advancement, atomic outbox pruning, and plugin truncation publication; and keep configuration-source state, installation, uninstall, release, and contribution transactions behind their focused controllers | `DEBT-ARCH-002` |
+| `server/plugins/runtimePluginRegistry.js` | Inventory, capability wiring, and facade composition; configuration-source initialization/sealing, installation settlement/rollback, uninstall deactivation/cleanup, release deadlock fencing/shutdown, record construction, bounded audit storage, contribution transactions, Prompt, Tool, Loop-hook, best-effort Agent Event v1, and durable Agent Event v2 hosting are delegated to focused modules | Finish splitting inventory/loading from activation/execution, and keep configuration-source state, installation, uninstall, release, contribution transactions, durable subscription delivery, and retention behind their focused controllers | `DEBT-ARCH-002` |
 | Managed attachment governance, artifacts, verified-file projections, and data governance | Turn validation and model materialization cross `ManagedAttachmentRuntimePort v1`; HTTP upload, metadata, deletion, and authoritative content streaming cross `ManagedAttachmentStoragePort v1` without exposing host paths. Bulk user-data governance and the atomic SQLite turn-start binding still assume host-owned transaction domains | Move the remaining aggregate operations behind backend-neutral governance capabilities without weakening ownership checks or splitting the existing atomic turn-start commit | `DEBT-ARCH-002` |
 
 The repository's 600-line preference applies to implementation files under
@@ -139,17 +139,22 @@ add another concern.
   logic. The plugin-facing Agent Event v1 stream is a separate, read-only,
   versioned adapter over the shared vocabulary. It remains a post-commit,
   process-local best-effort observer, not a durable subscription. The built-in
-  SQLite v113 schema now captures every newly inserted Turn Event in the same
+  SQLite v113 schema captures every newly inserted Turn Event in the same
   synchronous transaction into a host-owned `agent_event_outbox`, with a
   globally monotonic cursor and an envelope independent of retention-pruned
   `turn_events` rows. The schema also persists the initial stream metadata
   (`epoch=1`, `truncatedThrough=0`); the host reader returns it and fails closed
-  when a requested cursor is behind that watermark. This is durable capture
-  only: the current plugin listener is not wired to replay that outbox. Stable
-  subscription identity, durable ACK, consumer lease/fencing, retry/backoff,
-  and DLQ are still absent, as are production protocols to advance the
-  watermark safely, prune rows atomically, and publish truncation to plugins.
-  This is therefore not reliable v2, and the outbox cannot yet be pruned safely.
+  when a requested cursor is behind that watermark. SQLite v114 adds the
+  durable Agent Event v2 subscription and DLQ contract. Verified immutable
+  plugin Releases may register a stable publisher/release/plugin/subscription/
+  event identity; the focused consumer host replays detached envelopes with
+  exclusive fenced leases, durable cursor ACK, bounded retry/backoff, and
+  atomic dead-letter transitions. Retention computes the minimum scanned
+  cursor across active subscriptions and advances the stream epoch, subscriber
+  epochs, truncation watermark, and outbox deletion in one IMMEDIATE
+  transaction. Unknown or incomplete subscription state fails closed. v1
+  remains the explicitly best-effort live observer and is not upgraded by
+  implication; v2 is at-least-once and listeners must remain idempotent.
 - `runtimePluginContributionCoordinator.js` is the sole transaction owner for
   contribution activation, rollback, revocation, and retirement. Leaf
   registries must never decide plugin record state or discard retained or

@@ -148,6 +148,8 @@ export async function finalizeRuntime(s) {
   }
   const blocked = await finishUnsatisfiedTerminalGate(s)
   if (blocked) return blocked
+  const sourceHandoffFiltered = s.requiresSourceHandoffProtection
+    && Boolean(s.d.sourceHandoffViolation(s.finalText))
   s.finalText = protectTerminalCandidate(s, s.finalText, { incomplete: true })
   if (iterationLimitReached) {
     // Every allowed iteration ended with another tool batch. The wrap-up text
@@ -156,6 +158,7 @@ export async function finalizeRuntime(s) {
     return s.finishIncomplete({
       text: s.finalText,
       reason: 'iteration_limit_reached',
+      sourceHandoffFiltered,
     })
   }
   if (emptyModelResponse) {

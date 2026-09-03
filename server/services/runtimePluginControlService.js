@@ -210,7 +210,10 @@ export function listRuntimePluginInventory() {
   return inventory.sort((left, right) => left.id.localeCompare(right.id))
 }
 
-export function enableRuntimePlugin(pluginId, { permissionApproval = null } = {}) {
+export function enableRuntimePlugin(pluginId, {
+  permissionApproval = null,
+  resetDurableAgentEventSubscriptions = false,
+} = {}) {
   const id = String(pluginId || '').trim()
   return serializePluginOperation(id, async () => {
     const definition = requireTransformerPluginDefinition(id)
@@ -259,7 +262,9 @@ export function enableRuntimePlugin(pluginId, { permissionApproval = null } = {}
         permissionApproval,
       })
       const { release, permissionRequest, persistPermissionGrant } = prepared
-      const installation = await installTransformerRelease(release)
+      const installation = await installTransformerRelease(release, {
+        resetDurableAgentEventSubscriptions,
+      })
       try {
         const state = activateRuntimePluginRelease({
           pluginId: id,

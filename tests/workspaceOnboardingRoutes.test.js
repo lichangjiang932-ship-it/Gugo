@@ -218,3 +218,25 @@ test('an existing workspace choice is not replaced after the current-folder gran
     fs.realpathSync(alternativeWorkspace),
   )
 })
+
+test('completed onboarding adopts a new safe launch folder as a writable trusted workspace', () => {
+  const nextWorkspace = path.join(tempDir, 'next-launch-workspace')
+  fs.mkdirSync(nextWorkspace)
+
+  const result = ensureDefaultLocalWorkspace({
+    userId: localOwner.user.id,
+    cwd: nextWorkspace,
+    env: process.env,
+    authorizeLocalOwner: () => true,
+  })
+
+  assert.equal(fs.realpathSync(result.defaultWorkspacePath), fs.realpathSync(nextWorkspace))
+  const grant = result.grants.find((entry) => (
+    fs.realpathSync(entry.path) === fs.realpathSync(nextWorkspace)
+  ))
+  assert.equal(grant?.accessMode, 'read_write')
+  const trust = result.trustedWorkspaces.find((entry) => (
+    fs.realpathSync(entry.rootPath) === fs.realpathSync(nextWorkspace)
+  ))
+  assert.equal(trust?.trusted, true)
+})

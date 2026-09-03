@@ -22,6 +22,7 @@ import { createRuntimePluginConfigSourceController } from './runtimePluginConfig
 import { createRuntimePluginContributionCoordinator } from './runtimePluginContributionCoordinator.js'
 import { assertNoRuntimePluginDependents } from './runtimePluginDependencyGuard.js'
 import { createRuntimePluginAgentEventRegistry } from './runtimePluginAgentEventRegistry.js'
+import { snapshotTrustedRuntimePluginDurableIdentity } from './runtimePluginDurableIdentity.js'
 import { createRuntimePluginEventRegistry } from './runtimePluginEventRegistry.js'
 import { createRuntimePluginInstallController } from './runtimePluginInstallController.js'
 import { createRuntimePluginServiceRegistry } from './runtimePluginServiceRegistry.js'
@@ -47,6 +48,7 @@ export function createRuntimePluginRegistry(options = {}) {
     isRuntimeCapabilitySlotActive,
     registerHttpCapability,
     agentEventConsumerHost,
+    durableAgentEventConsumerHost,
     audit,
   } = snapshotRuntimePluginHostOptions(options)
   const supportsRuntimeCapabilityReplacement = (
@@ -132,8 +134,12 @@ export function createRuntimePluginRegistry(options = {}) {
     emitAudit,
   })
 
-  const { registerAgentEventContribution } = createRuntimePluginAgentEventRegistry({
+  const {
+    registerAgentEventContribution,
+    listAgentEventResetAudit,
+  } = createRuntimePluginAgentEventRegistry({
     host: agentEventConsumerHost,
+    durableHost: durableAgentEventConsumerHost,
     assertPluginWritable,
     assertContributionDeclared,
     createManagedContribution,
@@ -254,6 +260,7 @@ export function createRuntimePluginRegistry(options = {}) {
     revokeVisibleEffects,
     sealConfigLayerSources: configSourceController.seal,
     snapshotPlugin: snapshotRuntimePlugin,
+    snapshotDurableIdentity: snapshotTrustedRuntimePluginDurableIdentity,
   })
 
   const {
@@ -329,6 +336,7 @@ export function createRuntimePluginRegistry(options = {}) {
     getPlugin: (id) => snapshotRuntimePlugin(plugins.get(normalizeRuntimePluginId(id))),
     listEffectiveConfigs: () => listRuntimePluginEffectiveConfigs(plugins.values()),
     listConfigReloadAudit,
+    listAgentEventResetAudit,
     hasService,
     invokeService,
     renderPromptBlocks,

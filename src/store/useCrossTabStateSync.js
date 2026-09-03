@@ -13,6 +13,18 @@ import {
   persistedSnapshotsEqual, readPersistedPayload,
 } from './stateSync.js'
 
+export function createCrossTabClearReset() {
+  const initialState = createInitialState()
+  const persistedSnapshot = selectPersistedSnapshot(initialState)
+  return {
+    persistedSnapshot,
+    localState: {
+      ...persistedSnapshot,
+      pendingLegacySessions: initialState.pendingLegacySessions,
+    },
+  }
+}
+
 export default function useCrossTabStateSync(options) {
   const {
     backendRef, channelRef, clearGenerationRef, dispatch, enqueueIndexedDbWrite, hydrated,
@@ -28,7 +40,13 @@ export default function useCrossTabStateSync(options) {
     if (lastClearedAtRef.current > 0 && remoteWrittenAt <= lastClearedAtRef.current) return
     const currentSnapshot = selectPersistedSnapshot(stateRef.current)
     const normalizedRemote = completeSnapshot(remote.snapshot)
-    const merged = mergePersistedSnapshots(currentSnapshot, syncMetaRef.current, normalizedRemote, remote.meta, { preserveLocalFields: ['activeSessionId'] })
+    const merged = mergePersistedSnapshots(
+      currentSnapshot,
+      syncMetaRef.current,
+      normalizedRemote,
+      remote.meta,
+      { preserveLocalFields: ['activeSessionId', 'pendingLegacySessions'] },
+    )
     const stateChanged = !persistedSnapshotsEqual(currentSnapshot, merged.snapshot)
     const needsConvergenceWrite = forceConvergence
       || !!remote.retiredAccountFieldsRemoved
@@ -63,7 +81,7 @@ export default function useCrossTabStateSync(options) {
       try { clearLocalPersistence(storage, { preserveClearEpoch: true }) } catch (error) { console.warn('[AppContext] local clear failed:', error?.name || error) }
     }
     const previousSnapshot = selectPersistedSnapshot(stateRef.current)
-    const resetSnapshot = selectPersistedSnapshot(createInitialState())
+    const { persistedSnapshot: resetSnapshot, localState: resetState } = createCrossTabClearReset()
     const clearMeta = buildSyncMetadata(resetSnapshot, previousSnapshot, syncMetaRef.current, { source: tabIdRef.current, now: lastClearedAtRef.current })
     lastClearedAtRef.current = Math.max(lastClearedAtRef.current, clearMeta.writtenAt)
     if (storage) {
@@ -72,8 +90,8 @@ export default function useCrossTabStateSync(options) {
     lastSnapshotRef.current = resetSnapshot
     syncMetaRef.current = clearMeta
     skipPersistSnapshotRef.current = resetSnapshot
-    stateRef.current = { ...stateRef.current, ...resetSnapshot }
-    dispatch({ type: 'MERGE_EXTERNAL_STATE', payload: resetSnapshot })
+    stateRef.current = { ...stateRef.current, ...resetState }
+    dispatch({ type: 'HYDRATE_LOCAL_PERSISTED_STATE', payload: resetState })
   }
 
   useEffect(() => {

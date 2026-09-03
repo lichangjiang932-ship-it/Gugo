@@ -16,15 +16,33 @@ export function createRuntimePluginInstallController({
   revokeVisibleEffects,
   sealConfigLayerSources,
   snapshotPlugin,
+  snapshotDurableIdentity,
 }) {
-  const registerPlugin = async (manifest, setup) => {
+  const registerPlugin = async (
+    manifest,
+    setup,
+    durableIdentity = null,
+    { resetDurableAgentEventSubscriptions = false } = {},
+  ) => {
     if (isShuttingDown()) {
       const error = new Error('runtime plugin registry is shutting down')
       error.code = 'PLUGIN_REGISTRY_SHUTTING_DOWN'
       throw error
     }
     const normalized = normalizeManifest(manifest)
+    const trustedDurableIdentity = snapshotDurableIdentity(durableIdentity)
+    if (trustedDurableIdentity
+      && (trustedDurableIdentity.pluginId !== normalized.id
+        || trustedDurableIdentity.pluginVersion !== normalized.version)) {
+      const error = new TypeError('runtime plugin durable identity does not match the manifest')
+      error.code = 'PLUGIN_RELEASE_IDENTITY_MISMATCH'
+      error.retryable = false
+      throw error
+    }
     if (typeof setup !== 'function') throw new TypeError('plugin setup must be a function')
+    if (typeof resetDurableAgentEventSubscriptions !== 'boolean') {
+      throw new TypeError('resetDurableAgentEventSubscriptions must be a boolean')
+    }
     if (hasPlugin(normalized.id)) throw new Error(`plugin already registered: ${normalized.id}`)
     assertManifestCompatible(normalized)
     sealConfigLayerSources()
@@ -39,6 +57,8 @@ export function createRuntimePluginInstallController({
       configRevision: 1,
       state: 'installing',
       deferVisibility: false,
+      durableIdentity: trustedDurableIdentity,
+      resetDurableAgentEventSubscriptions,
     })
     record.installSettled = new Promise((resolve) => {
       record.resolveInstallSettled = resolve

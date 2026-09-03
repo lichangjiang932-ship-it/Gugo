@@ -1,5 +1,8 @@
+import { createHash } from 'node:crypto'
 import { getDb } from '../db.js'
 import { enqueueSessionContentEventInDb } from './sessionContentOutboxStore.js'
+
+const RECOVERY_ID_ATTEMPTS = 32
 
 const EPHEMERAL_MODEL_CONTEXT_KEYS = Object.freeze([
   'clarification',
@@ -39,6 +42,67 @@ function stableModelContext(value) {
   return context
 }
 
+function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+    .join(',')}}`
+}
+
+function sha256(value) {
+  return createHash('sha256').update(canonicalJson(value)).digest('hex')
+}
+
+function importShape(session) {
+  return {
+    title: session.title || 'Untitled',
+    workspacePath: session.workspacePath || null,
+    lastViewedAt: session.lastViewedAt ?? null,
+    archivedAt: session.archivedAt ?? null,
+    pinnedAt: session.pinnedAt ?? null,
+    messages: session.messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      modelContext: stableModelContext(message.modelContext),
+    })),
+  }
+}
+
+function recoverySessionId({ userId, session, attempt }) {
+  return `legacy-recovery-${sha256({
+    version: 1,
+    userId,
+    sourceSessionId: session.id,
+    content: importShape(session),
+    attempt,
+  })}`
+}
+
+function recoveryMessageId({ userId, sessionId, message, index }) {
+  return `legacy-recovery-message-${sha256({
+    version: 1,
+    userId,
+    sessionId,
+    sourceMessageId: message.id,
+    index,
+  })}`
+}
+
+function recoveryCandidate(session, { userId, attempt }) {
+  const id = recoverySessionId({ userId, session, attempt })
+  return {
+    ...session,
+    id,
+    messages: session.messages.map((message, index) => ({
+      ...message,
+      id: recoveryMessageId({ userId, sessionId: id, message, index }),
+    })),
+  }
+}
+
 function mapSession(row) {
   if (!row) return null
   return {
@@ -64,6 +128,47 @@ function visibleSession(db, { userId, sessionId }) {
     FROM sessions
     WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).get(userId, sessionId))
+}
+
+function storedImportShape(db, { userId, sessionId }) {
+  const row = db.prepare(`
+    SELECT id, user_id, title, last_viewed_at, archived_at, pinned_at, workspace_path
+    FROM sessions
+    WHERE token = ?
+  `).get(sessionId)
+  if (!row || row.user_id !== userId || (row.id == null && row.title == null)) return null
+  const messages = db.prepare(`
+    SELECT id, role, content, model_context_json
+    FROM messages
+    WHERE session_id = ?
+    ORDER BY rowid
+  `).all(sessionId).map((message) => {
+    let modelContext
+    try {
+      modelContext = stableModelContext(JSON.parse(message.model_context_json || '{}'))
+    } catch {
+      modelContext = null
+    }
+    return {
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      modelContext,
+    }
+  })
+  return {
+    title: row.title || 'Untitled',
+    workspacePath: row.workspace_path || null,
+    lastViewedAt: row.last_viewed_at ?? null,
+    archivedAt: row.archived_at ?? null,
+    pinnedAt: row.pinned_at ?? null,
+    messages,
+  }
+}
+
+function storedImportMatches(db, { userId, candidate }) {
+  const stored = storedImportShape(db, { userId, sessionId: candidate.id })
+  return stored !== null && canonicalJson(stored) === canonicalJson(importShape(candidate))
 }
 
 function normalizeForInsert(session, now) {
@@ -102,31 +207,6 @@ export function importLegacySessions({ userId, sessions } = {}, {
   const transaction = db.transaction(() => {
     const occupiedStatement = db.prepare('SELECT 1 FROM sessions WHERE token = ?')
     const messageOccupiedStatement = db.prepare('SELECT 1 FROM messages WHERE id = ?')
-    const candidates = []
-    const statuses = new Map()
-
-    for (const session of normalizedSessions) {
-      if (occupiedStatement.get(session.id)) {
-        statuses.set(session.id, {
-          id: session.id,
-          status: 'server_authoritative',
-          session: visibleSession(db, { userId, sessionId: session.id }),
-        })
-      } else {
-        candidates.push(session)
-      }
-    }
-
-    // Check the complete batch before the first write so a message-id collision
-    // cannot leave a prefix of the batch committed.
-    for (const session of candidates) {
-      for (const message of session.messages) {
-        if (messageOccupiedStatement.get(message.id)) {
-          throw new LegacySessionImportConflictError()
-        }
-      }
-    }
-
     const insertSession = db.prepare(`
       INSERT INTO sessions
         (token, id, user_id, title, expires_at, created_at, updated_at,
@@ -141,7 +221,10 @@ export function importLegacySessions({ userId, sessions } = {}, {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
 
-    for (const session of candidates) {
+    const messagesAvailable = (session) => session.messages.every(
+      (message) => !messageOccupiedStatement.get(message.id),
+    )
+    const insert = (session) => {
       insertSession.run(
         session.id,
         session.id,
@@ -185,14 +268,57 @@ export function importLegacySessions({ userId, sessions } = {}, {
         payload: { messages: contentSnapshots },
         createdAt: normalizedNow,
       })
-      statuses.set(session.id, {
-        id: session.id,
-        status: 'imported',
-        session: visibleSession(db, { userId, sessionId: session.id }),
-      })
     }
 
-    const results = normalizedSessions.map((session) => statuses.get(session.id))
+    const results = normalizedSessions.map((sourceSession) => {
+      let candidate = sourceSession
+      if (occupiedStatement.get(candidate.id)) {
+        if (storedImportMatches(db, { userId, candidate })) {
+          return {
+            id: sourceSession.id,
+            sessionId: candidate.id,
+            status: 'server_authoritative',
+            session: visibleSession(db, { userId, sessionId: candidate.id }),
+          }
+        }
+      } else if (messagesAvailable(candidate)) {
+        insert(candidate)
+        return {
+          id: sourceSession.id,
+          sessionId: candidate.id,
+          status: 'imported',
+          session: visibleSession(db, { userId, sessionId: candidate.id }),
+        }
+      }
+
+      for (let attempt = 0; attempt < RECOVERY_ID_ATTEMPTS; attempt += 1) {
+        candidate = recoveryCandidate(sourceSession, { userId, attempt })
+        if (occupiedStatement.get(candidate.id)) {
+          if (storedImportMatches(db, { userId, candidate })) {
+            return {
+              id: sourceSession.id,
+              sessionId: candidate.id,
+              status: 'server_authoritative',
+              session: visibleSession(db, { userId, sessionId: candidate.id }),
+            }
+          }
+          continue
+        }
+        if (!messagesAvailable(candidate)) continue
+        insert(candidate)
+        return {
+          id: sourceSession.id,
+          sessionId: candidate.id,
+          status: 'imported',
+          session: visibleSession(db, { userId, sessionId: candidate.id }),
+        }
+      }
+      throw new LegacySessionImportConflictError('legacy session recovery ids are exhausted')
+    })
+
+    for (const result of results) {
+      if (!result.session) throw new LegacySessionImportConflictError()
+    }
     const importedCount = results.filter((result) => result.status === 'imported').length
     return {
       results,

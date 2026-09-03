@@ -3,7 +3,7 @@ import { useT } from '../../i18n/I18nProvider.jsx'
 import SlashCommandMenu from './SlashCommandMenu.jsx'
 import ComposerActions from './chatComposer/ComposerActions.jsx'
 import ComposerAttachments from './chatComposer/ComposerAttachments.jsx'
-import WorkspaceProjectPicker from './chatMessages/WorkspaceProjectPicker.jsx'
+import ComposerContextHeader from './chatComposer/ComposerContextHeader.jsx'
 import {
   Paperclip,
 } from 'lucide-react'
@@ -11,17 +11,9 @@ import { getClipboardFiles } from '../../lib/chatAttachmentFiles.js'
 import { attachmentSendState } from '../../lib/chatAttachmentUpload.js'
 import { buildAttachmentPreviewArtifact } from '../../lib/attachmentPreview.js'
 import { resolveSlashMenuKey } from '../../lib/slashMenuNavigation.js'
+import { splitLeadingSkillCommand } from './chatComposer/skillCommand.js'
 
 const COMPOSER_INTERACTIVE_SELECTOR = 'button, input, textarea, select, option, a, label, [role="button"], [role="menuitem"], [role="option"], [contenteditable="true"]'
-
-function splitLeadingSkillCommand(value, skillIds = []) {
-  const raw = String(value || '')
-  const match = raw.match(/^\/([a-z0-9_-]+)\s([\s\S]*)$/i)
-  if (!match) return { command: '', body: raw }
-  const known = new Set((Array.isArray(skillIds) ? skillIds : []).map((id) => String(id).toLowerCase()))
-  if (!known.has(match[1].toLowerCase())) return { command: '', body: raw }
-  return { command: `/${match[1]}`, body: match[2] }
-}
 
 export default function ChatComposer({
   input,
@@ -190,34 +182,18 @@ export default function ChatComposer({
             }}
           />
         )}
-        {editingMessageId && (
-          <div
-            className="chat-message-edit-banner mb-2 flex items-center gap-3 px-1 text-xs text-ink-soft"
-            data-testid="message-edit-banner"
-          >
-            <span className="min-w-0 flex-1 truncate">{t('chatMessages.editResend')}</span>
-            <button
-              type="button"
-              onClick={onCancelMessageEdit}
-              className="chat-chrome-button rounded-control px-2 py-1 text-ink-fade hover:text-ink"
-            >
-              {t('common.cancel')}
-            </button>
-          </div>
-        )}
-        {showWorkspacePicker && (
-          <div className="chat-composer-project-strip" data-testid="chat-composer-project-strip">
-            <WorkspaceProjectPicker
-              onClearWorkspace={onClearWorkspace}
-              onSelectWorkspace={onSelectWorkspace}
-              recentWorkspaces={recentWorkspaces}
-              selectedWorkspacePath={selectedWorkspacePath}
-              t={t}
-              workspaceBusy={workspaceBusy}
-              workspaceError={workspaceError}
-            />
-          </div>
-        )}
+        <ComposerContextHeader
+          editingMessageId={editingMessageId}
+          onCancelMessageEdit={onCancelMessageEdit}
+          onClearWorkspace={onClearWorkspace}
+          onSelectWorkspace={onSelectWorkspace}
+          recentWorkspaces={recentWorkspaces}
+          selectedWorkspacePath={selectedWorkspacePath}
+          showWorkspacePicker={showWorkspacePicker}
+          t={t}
+          workspaceBusy={workspaceBusy}
+          workspaceError={workspaceError}
+        />
         <div
           data-testid="chat-composer-surface"
           onClick={(event) => {

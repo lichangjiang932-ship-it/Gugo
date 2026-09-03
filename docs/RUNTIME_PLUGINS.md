@@ -82,7 +82,7 @@ code: PLUGIN_CONTRIBUTION_UNDECLARED
 retryable: false
 ```
 
-### 只读 Agent Events（API 1.1）
+### 只读 Agent Events（API 1.1 / durable v2）
 
 `context.agentEvents.subscribe(eventType, listener, { contractVersion: 1 })` 消费 `shared/turnEvents.js` 的权威 `TURN_EVENT_TYPES`，用于观测已经持久化的 Turn 生命周期。它与 `context.events.on()` 完全独立：后者是 Agent Loop 内部 hook，部分事件允许受限改写请求；Agent Events 永远只读，listener 返回值被忽略，不能改变模型请求、工具调用、checkpoint 或终态。
 
@@ -90,9 +90,11 @@ retryable: false
 
 交付边界是“持久化成功之后”：内置 SQLite 从事务提交点发布，回滚不会泄露事件，幂等重写也不会重复通知；emitter 只在 adapter 返回权威 stored event 或与整个 write-behind batch 一一对应的权威回执后补发。自定义 v6 adapter 缺少可校验的逐项 batch 回执时会安全降级为不补发，而不会把请求快照冒充成已提交事实。
 
-内置 SQLite 的 v113 schema 已完成 **durable capture**：每个新插入的 Turn Event 都在写入 `turn_events` 的同一同步事务内写入 `agent_event_outbox`，保存不含 `userId` 的 v1 transport envelope，并取得宿主全局单调 cursor。该 outbox 不依赖 Session/Turn 外键，因此不会随 `turn_events` retention 裁剪丢失；schema 还持久化初始 `epoch=1`、`truncatedThrough=0`，宿主 reader 会返回这组 stream metadata，并在请求 cursor 落后于水位时 fail closed。reader 条目含内部 `userId`，只供宿主编排，不能直接暴露给插件或公共 API。此能力只保证已提交事件可供未来消费，并未把历史 replay 接到当前 plugin listener。
+内置 SQLite 的 v113 schema 完成 **durable capture**：每个新插入的 Turn Event 都在写入 `turn_events` 的同一同步事务内写入 `agent_event_outbox`，保存不含 `userId` 的 transport envelope，并取得宿主全局单调 cursor。该 outbox 不依赖 Session/Turn 外键，因此不会随 `turn_events` retention 裁剪丢失；schema 还持久化初始 `epoch=1`、`truncatedThrough=0`，宿主 reader 会返回这组 stream metadata，并在请求 cursor 落后于水位时 fail closed。reader 条目含内部 `userId`，只供宿主编排，不能直接暴露给插件或公共 API。
 
-因此当前 `context.agentEvents` v1 契约仍只是 **best-effort、进程内、提交后 live observer**，不是 reliable queue、exactly-once stream 或跨重启订阅。进程内有界 event identity 去重只用于抑制 Store 与 emitter 双入口，不承诺缓存淘汰后或进程重启后不重复；跨进程写入、进程崩溃窗口和历史事件仍可能对 v1 listener 不可见。v1 API 不暴露权威 replay/cursor，也没有稳定 subscription ID、持久 ACK、consumer lease/fencing、retry/backoff 或 DLQ；现有初始 truncation metadata 也没有安全推进水位、原子裁剪并向插件发布的生产协议。因此不能从该接口恢复状态，也不能宣称 reliable v2。上述消费协议落地前，`agent_event_outbox` 不能安全裁剪，并会持续增长。卸载或热重载会先移除订阅可见性，再排空卸载前已经接受的 callback。
+v114 增加 durable v2：已验证、不可变的 plugin Release 可以使用 `context.agentEvents.subscribe(eventType, listener, { contractVersion: 2, subscriptionId })`。宿主将 publisher、release、plugin、subscriptionId 和 event type 绑定为稳定订阅身份，并持久化扫描/ACK cursor、独占 lease 与单调 fencing generation。listener 失败按有界指数 backoff 重试，耗尽后以同一事务记录脱敏 DLQ 且推进 cursor；安全裁剪只使用所有 active 订阅的最小 scanned cursor，并在一个 IMMEDIATE 事务内推进 stream epoch/水位、同步订阅 epoch 和删除 outbox 前缀；任何未知状态均 fail closed。v2 是 at-least-once，listener 必须幂等，不宣称 exactly-once。
+
+v1 仍只是 **best-effort、进程内、提交后 live observer**，不会因 v2 存在而隐式升级。进程内有界 event identity 去重只用于抑制 Store 与 emitter 双入口，不承诺缓存淘汰后或进程重启后不重复；需要跨重启 replay 的插件必须显式选择 v2。卸载或热重载会先移除订阅可见性，再排空卸载前已经接受的 callback。
 
 `context.tools.register()` 的 `name/spec/exec` 与 `context.prompts.register()` 的 `id/render` 必须是定义对象自己的 data property。宿主在注册时通过 descriptor 一次捕获所需值；getter 不执行，prototype property 被拒绝，注册后的 callback/schema/id swap 不改变已安装 contribution。非法定义以 `PLUGIN_CONTRIBUTION_DEFINITION_INVALID`、`retryable=false` 在可见副作用前失败。
 

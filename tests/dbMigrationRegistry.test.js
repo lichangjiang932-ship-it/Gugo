@@ -754,7 +754,7 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION }, (_, index) => index + 1),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 113)
+  assert.equal(LATEST_SCHEMA_VERSION, 114)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
 })
@@ -990,7 +990,68 @@ test('v113 rolls back durable Agent Event capture when schema-version persistenc
 })
 
 test('v113 rejects malformed pre-existing stream objects without advancing the version', () => {
+  const outboxCheckScenarios = [
+    {
+      name: 'outbox cursor without integer guard',
+      pattern: /CHECK \(\s*typeof\(cursor\) = 'integer' AND cursor > 0\s*\)/u,
+    },
+    {
+      name: 'outbox event id without length guard',
+      pattern: /CHECK \(length\(event_id\) BETWEEN 1 AND 512\)/u,
+    },
+    {
+      name: 'outbox event type without length guard',
+      pattern: /CHECK \(length\(event_type\) BETWEEN 1 AND 128\)/u,
+    },
+    {
+      name: 'outbox envelope without JSON object guard',
+      pattern: /CHECK \(\s*json_valid\(envelope_json\) AND json_type\(envelope_json\) = 'object'\s*\)/u,
+    },
+    {
+      name: 'outbox fingerprint without digest guard',
+      pattern: /CHECK \(\s*length\(event_fingerprint\) = 64\s*AND event_fingerprint NOT GLOB '\*\[\^0-9a-f\]\*'\s*\)/u,
+    },
+    {
+      name: 'outbox timestamp without integer guard',
+      pattern: /CHECK \(\s*typeof\(created_at\) = 'integer' AND created_at >= 0\s*\)/u,
+    },
+  ].map(({ name, pattern }) => ({
+    name,
+    missing: 'constraints:agent_event_outbox',
+    prepare(db) {
+      const canonical = `
+        CREATE TABLE agent_event_outbox (
+          cursor INTEGER PRIMARY KEY AUTOINCREMENT CHECK (
+            typeof(cursor) = 'integer' AND cursor > 0
+          ),
+          event_id TEXT NOT NULL UNIQUE CHECK (length(event_id) BETWEEN 1 AND 512),
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          event_type TEXT NOT NULL CHECK (length(event_type) BETWEEN 1 AND 128),
+          envelope_json TEXT NOT NULL CHECK (
+            json_valid(envelope_json) AND json_type(envelope_json) = 'object'
+          ),
+          event_fingerprint TEXT NOT NULL CHECK (
+            length(event_fingerprint) = 64
+            AND event_fingerprint NOT GLOB '*[^0-9a-f]*'
+          ),
+          created_at INTEGER NOT NULL CHECK (
+            typeof(created_at) = 'integer' AND created_at >= 0
+          )
+        );
+      `
+      const weakened = canonical.replace(pattern, '')
+      assert.notEqual(weakened, canonical, name)
+      db.exec(weakened)
+    },
+    assertRollback(db) {
+      assert.equal(db.prepare(`
+        SELECT 1 FROM sqlite_schema
+        WHERE type = 'table' AND name = 'agent_event_stream_metadata'
+      `).get(), undefined)
+    },
+  }))
   const scenarios = [
+    ...outboxCheckScenarios,
     {
       name: 'outbox cursor without AUTOINCREMENT',
       missing: 'autoincrement-primary-key:agent_event_outbox.cursor',
@@ -1087,6 +1148,127 @@ test('v113 rejects malformed pre-existing stream objects without advancing the v
     } finally {
       db.close()
     }
+  }
+})
+
+test('v114 rolls back durable Agent Event subscriptions when schema-version persistence fails', () => {
+  const db = new Database(':memory:')
+  try {
+    assert.equal(migrateThroughVersion(db, 113), 113)
+    db.exec(`
+      CREATE TRIGGER fail_v114_schema_version
+      BEFORE UPDATE OF value ON meta
+      WHEN OLD.key = 'schema_version' AND NEW.value = '114'
+      BEGIN
+        SELECT RAISE(ABORT, 'reject v114 schema version');
+      END;
+    `)
+
+    assert.throws(() => runSchemaMigrations(db), /reject v114 schema version/u)
+    for (const table of ['agent_event_subscriptions', 'agent_event_subscription_dlq']) {
+      assert.equal(db.prepare(`
+        SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?
+      `).get(table), undefined)
+    }
+    assert.equal(db.prepare(`
+      SELECT 1 FROM sqlite_schema
+      WHERE type = 'index' AND name LIKE 'idx_agent_event_subscription%'
+    `).get(), undefined)
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '113',
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v114 rejects malformed pre-existing subscription objects without advancing the version', () => {
+  const scenarios = [
+    {
+      name: 'malformed subscription table',
+      missing: 'table-shape:agent_event_subscriptions',
+      prepare(db) {
+        db.exec(`
+          CREATE TABLE agent_event_subscriptions (
+            subscription_key TEXT PRIMARY KEY NOT NULL
+          );
+        `)
+      },
+      preserved: { type: 'table', name: 'agent_event_subscriptions' },
+    },
+    {
+      name: 'malformed dead-letter table',
+      missing: 'table-shape:agent_event_subscription_dlq',
+      prepare(db) {
+        db.exec(`
+          CREATE TABLE agent_event_subscription_dlq (
+            dlq_id INTEGER PRIMARY KEY
+          );
+        `)
+      },
+      preserved: { type: 'table', name: 'agent_event_subscription_dlq' },
+    },
+    {
+      name: 'required subscription index name owned by another table',
+      missing: 'index:idx_agent_event_subscriptions_retention',
+      prepare(db) {
+        db.exec(`
+          CREATE INDEX idx_agent_event_subscriptions_retention
+          ON turn_events(user_id, sequence);
+        `)
+      },
+      preserved: { type: 'index', name: 'idx_agent_event_subscriptions_retention' },
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    const db = new Database(':memory:')
+    try {
+      assert.equal(migrateThroughVersion(db, 113), 113)
+      scenario.prepare(db)
+      assert.throws(
+        () => runSchemaMigrations(db),
+        (error) => error?.code === 'DB_SCHEMA_INCOMPLETE'
+          && error?.details?.stage === 'migration-v114'
+          && error?.details?.missing?.includes(scenario.missing),
+        scenario.name,
+      )
+      assert.equal(
+        db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+        '113',
+        scenario.name,
+      )
+      assert.ok(db.prepare(`
+        SELECT 1 FROM sqlite_schema WHERE type = ? AND name = ?
+      `).get(scenario.preserved.type, scenario.preserved.name), scenario.name)
+    } finally {
+      db.close()
+    }
+  }
+})
+
+test('v114 upgrades a v113 database idempotently', () => {
+  const db = new Database(':memory:')
+  try {
+    assert.equal(migrateThroughVersion(db, 113), 113)
+    assert.equal(runSchemaMigrations(db), 114)
+    assert.equal(runSchemaMigrations(db), 114)
+    assert.equal(
+      db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
+      '114',
+    )
+    for (const table of ['agent_event_subscriptions', 'agent_event_subscription_dlq']) {
+      assert.ok(db.prepare(`
+        SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?
+      `).get(table), table)
+    }
+    assert.equal(db.prepare(`
+      SELECT COUNT(*) AS count FROM sqlite_schema
+      WHERE type = 'index' AND name LIKE 'idx_agent_event_subscription%'
+    `).get().count, 3)
+  } finally {
+    db.close()
   }
 })
 

@@ -310,6 +310,36 @@ test('catalog preserves the transcript just imported by this browser at its cano
   assert.equal(result.sessions[0].updatedAt, 20)
 })
 
+test('catalog remaps a recovered legacy session and hydrates its re-keyed transcript', () => {
+  const result = reconcileServerSessionCatalog({
+    activeSessionId: 'occupied-id',
+    sessionDrafts: { 'occupied-id': 'keep this draft' },
+    sessions: [{
+      id: 'occupied-id',
+      title: 'Local recovered history',
+      messages: [{ id: 'old-message-id', role: 'user', content: 'must survive' }],
+    }],
+  }, [{
+    id: 'legacy-recovery-stable',
+    title: 'Local recovered history',
+    revision: 0,
+    createdAt: 10,
+    updatedAt: 20,
+  }], {
+    importedSessionIds: ['legacy-recovery-stable'],
+    legacySessionIdMappings: [{
+      sourceSessionId: 'occupied-id',
+      sessionId: 'legacy-recovery-stable',
+    }],
+  })
+
+  assert.equal(result.activeSessionId, 'legacy-recovery-stable')
+  assert.deepEqual(result.sessionDrafts, { 'legacy-recovery-stable': 'keep this draft' })
+  assert.equal(result.sessions[0].id, 'legacy-recovery-stable')
+  assert.equal(result.sessions[0].serverRevision, 0)
+  assert.deepEqual(result.sessions[0].messages, [])
+})
+
 test('multi-user session catalog does not retain browser-local sessions from another account', () => {
   const result = reconcileServerSessionCatalog({
     activeSessionId: 'local-only',
@@ -401,6 +431,27 @@ test('catalog reconciliation records a visible mismatch when backend or workspac
 
   assert.deepEqual(state.sessionCatalogSource, current)
   assert.deepEqual(state.sessionCatalogSourceMismatch, { previous, current })
+})
+
+test('catalog reconciliation clears staged legacy history only with an explicit success signal', () => {
+  const pendingLegacySessions = [{ id: 'legacy', messages: [{ id: 'message', content: 'keep' }] }]
+  const base = {
+    activeSessionId: null,
+    pendingLegacySessions,
+    sessionDrafts: {},
+    sessions: [],
+  }
+  const retained = reduceServerSessionState(base, {
+    type: 'RECONCILE_SERVER_SESSION_CATALOG',
+    payload: { sessions: [] },
+  })
+  assert.strictEqual(retained.pendingLegacySessions, pendingLegacySessions)
+
+  const cleared = reduceServerSessionState(base, {
+    type: 'RECONCILE_SERVER_SESSION_CATALOG',
+    payload: { sessions: [], clearPendingLegacySessions: true },
+  })
+  assert.deepEqual(cleared.pendingLegacySessions, [])
 })
 
 test('server-authoritative ids remove invisible owner collisions from the local catalog', () => {

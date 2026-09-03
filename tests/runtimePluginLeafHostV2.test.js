@@ -24,6 +24,7 @@ import {
 } from '../server/plugins/runtimePluginHostOptions.js'
 import { createRuntimePluginContributionLifecycle } from '../server/plugins/runtimePluginContributionLifecycle.js'
 import { createLoopEvents } from '../server/services/loop/events.js'
+import { durableAgentEventConsumerHost } from '../server/services/agentEventDurableConsumerRuntime.js'
 import {
   getDynamicTool,
   registerDynamicTool,
@@ -157,6 +158,46 @@ test('default compatibility hosts produce a fully revocable v2 contribution set'
   const standalone = compatibilityRuntimeCapabilityHost()
   assertReceipt(assertRevocationHandle(standalone)(), 'revoked')
   assert.equal(standalone(), false)
+})
+
+test('runtime plugin host options expose an independent durable Agent Event v2 host snapshot', () => {
+  const options = snapshotRuntimePluginHostOptions({})
+  assert.equal(options.agentEventConsumerHost.contractVersion, 1)
+  assert.equal(options.durableAgentEventConsumerHost.contractVersion, 2)
+  assert.equal(options.durableAgentEventConsumerHost.register, durableAgentEventConsumerHost.register)
+  assert.equal(Object.isFrozen(options.durableAgentEventConsumerHost), true)
+
+  const register = () => Object.freeze({ revoke: async () => true })
+  const explicit = snapshotRuntimePluginHostOptions({
+    durableAgentEventConsumerHost: Object.freeze({ contractVersion: 2, register }),
+  })
+  assert.notEqual(explicit.durableAgentEventConsumerHost, durableAgentEventConsumerHost)
+  assert.deepEqual(explicit.durableAgentEventConsumerHost, { contractVersion: 2, register })
+  assert.equal(Object.isFrozen(explicit.durableAgentEventConsumerHost), true)
+})
+
+test('durable Agent Event host snapshots reject Proxies, wrong versions, and unsafe register fields', () => {
+  const invalidHosts = [
+    new Proxy({ contractVersion: 2, register() {} }, {}),
+    { contractVersion: 1, register() {} },
+    { contractVersion: 2, register: new Proxy(() => {}, {}) },
+    Object.create({ register() {} }, {
+      contractVersion: { value: 2, enumerable: true },
+    }),
+    Object.defineProperty({ contractVersion: 2 }, 'register', {
+      enumerable: true,
+      get() { throw new Error('register getter must not run') },
+    }),
+  ]
+
+  for (const durableHost of invalidHosts) {
+    assert.throws(
+      () => snapshotRuntimePluginHostOptions({ durableAgentEventConsumerHost: durableHost }),
+      (error) => error?.code === 'PLUGIN_HOST_ADAPTER_INVALID'
+        && error?.retryable === false
+        && /durableAgentEventConsumerHost/u.test(error?.message || ''),
+    )
+  }
 })
 
 test('explicit capability binding retains removal atomically and the same handle can retry', async () => {

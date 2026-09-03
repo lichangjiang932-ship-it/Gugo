@@ -204,6 +204,8 @@ export async function initializeExecution(s) {
        ))) {
       if (!s.restoredLocalHtmlDeliveryFailure) {
         const restoredClarification = s.protectClarification(s.restoredState.final.clarification)
+        const rawIncompleteReason = String(s.restoredState.final.reason || '').trim()
+        const hasStructuredIncompleteReason = /^[a-z][a-z0-9_]{1,95}$/iu.test(rawIncompleteReason)
         const restoredTerminalText = s.restoredState.final.paused === true && restoredClarification
           ? restoredClarification.question || restoredClarification.message
           : s.d.formatIncompleteTerminalText(s.restoredState.final.reason, {
@@ -211,6 +213,9 @@ export async function initializeExecution(s) {
               fallbackText: s.restoredState.final.text,
               hasVerificationTools: s.availableVerificationToolNames?.length > 0,
               maxIterations: s.maxIters,
+              preserveFallbackText: s.restoredState.final.budgetExceeded === true
+                || s.restoredState.final.noProgress === true
+                || !hasStructuredIncompleteReason,
             })
         return { kind: 'return', value: s.emitTurnStopping({
           ...s.restoredState.final,

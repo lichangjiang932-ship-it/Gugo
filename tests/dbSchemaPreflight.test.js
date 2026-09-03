@@ -92,6 +92,187 @@ function schemaSnapshot(filePath) {
   }
 }
 
+function tableSchemaSql(db, table) {
+  const sql = db.prepare(`
+    SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?
+  `).get(table)?.sql
+  assert.ok(sql, `${table} schema must exist`)
+  return sql
+}
+
+function explicitIndexSql(db, tables) {
+  return db.prepare(`
+    SELECT sql FROM sqlite_schema
+    WHERE type = 'index' AND tbl_name IN (${tables.map(() => '?').join(', ')})
+      AND sql IS NOT NULL
+    ORDER BY name
+  `).all(...tables).map((row) => row.sql)
+}
+
+const V113_OUTBOX_CHECK_MUTATIONS = Object.freeze([
+  {
+    label: 'cursor',
+    pattern: /cursor INTEGER PRIMARY KEY AUTOINCREMENT CHECK \(\s*typeof\(cursor\) = 'integer' AND cursor > 0\s*\)/u,
+    replacement: 'cursor INTEGER PRIMARY KEY AUTOINCREMENT',
+  },
+  {
+    label: 'event-id',
+    pattern: /event_id TEXT NOT NULL UNIQUE CHECK \(length\(event_id\) BETWEEN 1 AND 512\)/u,
+    replacement: 'event_id TEXT NOT NULL UNIQUE',
+  },
+  {
+    label: 'event-type',
+    pattern: /event_type TEXT NOT NULL CHECK \(length\(event_type\) BETWEEN 1 AND 128\)/u,
+    replacement: 'event_type TEXT NOT NULL',
+  },
+  {
+    label: 'envelope-json',
+    pattern: /envelope_json TEXT NOT NULL CHECK \(\s*json_valid\(envelope_json\) AND json_type\(envelope_json\) = 'object'\s*\)/u,
+    replacement: 'envelope_json TEXT NOT NULL',
+  },
+  {
+    label: 'event-fingerprint',
+    pattern: /event_fingerprint TEXT NOT NULL CHECK \(\s*length\(event_fingerprint\) = 64\s*AND event_fingerprint NOT GLOB '\*\[\^0-9a-f\]\*'\s*\)/u,
+    replacement: 'event_fingerprint TEXT NOT NULL',
+  },
+  {
+    label: 'created-at',
+    pattern: /created_at INTEGER NOT NULL CHECK \(\s*typeof\(created_at\) = 'integer' AND created_at >= 0\s*\)/u,
+    replacement: 'created_at INTEGER NOT NULL',
+  },
+])
+
+const V113_STREAM_CHECK_MUTATIONS = Object.freeze([
+  {
+    label: 'stream-key',
+    pattern: /stream_key TEXT PRIMARY KEY NOT NULL CHECK \(stream_key = 'global'\)/u,
+    replacement: 'stream_key TEXT PRIMARY KEY NOT NULL',
+  },
+  {
+    label: 'epoch',
+    pattern: /epoch INTEGER NOT NULL CHECK \(\s*typeof\(epoch\) = 'integer' AND epoch >= 1\s*\)/u,
+    replacement: 'epoch INTEGER NOT NULL',
+  },
+  {
+    label: 'truncated-through',
+    pattern: /truncated_through INTEGER NOT NULL CHECK \(\s*typeof\(truncated_through\) = 'integer' AND truncated_through >= 0\s*\)/u,
+    replacement: 'truncated_through INTEGER NOT NULL',
+  },
+  {
+    label: 'without-rowid',
+    pattern: /\)\s+WITHOUT ROWID\s*$/u,
+    replacement: ')',
+  },
+])
+
+function rebuildV113Table(db, table, { pattern, replacement }) {
+  const sourceSql = tableSchemaSql(db, table)
+  const indexes = explicitIndexSql(db, [table])
+  const weakened = sourceSql.replace(pattern, replacement)
+  assert.notEqual(weakened, sourceSql)
+  db.pragma('foreign_keys = OFF')
+  db.transaction(() => {
+    db.exec(`DROP TABLE ${table}`)
+    db.exec(weakened)
+    for (const sql of indexes) db.exec(sql)
+    if (table === 'agent_event_stream_metadata') {
+      db.exec(`
+        INSERT INTO agent_event_stream_metadata (
+          stream_key, epoch, truncated_through
+        ) VALUES ('global', 1, 0)
+      `)
+    }
+  }).immediate()
+}
+
+const V114_SUBSCRIPTION_CHECK_MUTATIONS = Object.freeze([
+  {
+    label: 'publisher-id',
+    pattern: /publisher_id TEXT NOT NULL CHECK \(length\(publisher_id\) BETWEEN 1 AND 128\)/u,
+    replacement: 'publisher_id TEXT NOT NULL',
+  },
+  {
+    label: 'publisher-key-id',
+    pattern: /publisher_key_id TEXT NOT NULL CHECK \(length\(publisher_key_id\) BETWEEN 1 AND 256\)/u,
+    replacement: 'publisher_key_id TEXT NOT NULL',
+  },
+  {
+    label: 'release-id',
+    pattern: /release_id TEXT NOT NULL CHECK \(length\(release_id\) BETWEEN 1 AND 128\)/u,
+    replacement: 'release_id TEXT NOT NULL',
+  },
+  {
+    label: 'release-digest-version',
+    pattern: /release_digest_version INTEGER NOT NULL CHECK \(\s*typeof\(release_digest_version\) = 'integer' AND release_digest_version >= 1\s*\)/u,
+    replacement: 'release_digest_version INTEGER NOT NULL',
+  },
+  {
+    label: 'plugin-id',
+    pattern: /plugin_id TEXT NOT NULL CHECK \(length\(plugin_id\) BETWEEN 1 AND 80\)/u,
+    replacement: 'plugin_id TEXT NOT NULL',
+  },
+  {
+    label: 'plugin-version',
+    pattern: /plugin_version TEXT NOT NULL CHECK \(length\(plugin_version\) BETWEEN 1 AND 128\)/u,
+    replacement: 'plugin_version TEXT NOT NULL',
+  },
+  {
+    label: 'subscription-id',
+    pattern: /subscription_id TEXT NOT NULL CHECK \(length\(subscription_id\) BETWEEN 1 AND 128\)/u,
+    replacement: 'subscription_id TEXT NOT NULL',
+  },
+  {
+    label: 'retry-attempts',
+    pattern: /retry_attempts INTEGER NOT NULL CHECK \(\s*typeof\(retry_attempts\) = 'integer' AND retry_attempts >= 0\s*\)/u,
+    replacement: 'retry_attempts INTEGER NOT NULL',
+  },
+  {
+    label: 'created-at',
+    pattern: /created_at INTEGER NOT NULL CHECK \(\s*typeof\(created_at\) = 'integer' AND created_at >= 0\s*\)/u,
+    replacement: 'created_at INTEGER NOT NULL',
+  },
+  {
+    label: 'updated-at',
+    pattern: /updated_at INTEGER NOT NULL CHECK \(\s*typeof\(updated_at\) = 'integer' AND updated_at >= created_at\s*\)/u,
+    replacement: 'updated_at INTEGER NOT NULL',
+  },
+])
+
+function weakenSubscriptionCheck(db, { pattern, replacement }) {
+  const subscriptionSql = tableSchemaSql(db, 'agent_event_subscriptions')
+  const dlqSql = tableSchemaSql(db, 'agent_event_subscription_dlq')
+  const indexes = explicitIndexSql(db, [
+    'agent_event_subscriptions',
+    'agent_event_subscription_dlq',
+  ])
+  const weakened = subscriptionSql.replace(pattern, replacement)
+  assert.notEqual(weakened, subscriptionSql)
+  db.pragma('foreign_keys = OFF')
+  db.transaction(() => {
+    db.exec('DROP TABLE agent_event_subscription_dlq')
+    db.exec('DROP TABLE agent_event_subscriptions')
+    db.exec(weakened)
+    db.exec(dlqSql)
+    for (const sql of indexes) db.exec(sql)
+  }).immediate()
+}
+
+function weakenDlqAutoincrement(db) {
+  const dlqSql = tableSchemaSql(db, 'agent_event_subscription_dlq')
+  const indexes = explicitIndexSql(db, ['agent_event_subscription_dlq'])
+  const weakened = dlqSql.replace(
+    /INTEGER PRIMARY KEY AUTOINCREMENT/u,
+    'INTEGER PRIMARY KEY',
+  )
+  assert.notEqual(weakened, dlqSql)
+  db.pragma('foreign_keys = OFF')
+  db.transaction(() => {
+    db.exec('DROP TABLE agent_event_subscription_dlq')
+    db.exec(weakened)
+    for (const sql of indexes) db.exec(sql)
+  }).immediate()
+}
+
 function rebuildSessionsWithoutPrimaryKey(db) {
   const tableSql = db.prepare(`
     SELECT sql FROM sqlite_schema
@@ -293,6 +474,73 @@ test('current-version databases with a missing critical column, index, or autoin
         `)
       },
       expectedMissing: 'autoincrement-primary-key:agent_event_outbox.cursor',
+    },
+    ...V113_OUTBOX_CHECK_MUTATIONS.map((mutation) => ({
+      label: `missing-agent-event-outbox-${mutation.label}-check`,
+      mutate(db) {
+        rebuildV113Table(db, 'agent_event_outbox', mutation)
+      },
+      expectedMissing: 'constraints:agent_event_outbox',
+    })),
+    ...V113_STREAM_CHECK_MUTATIONS.map((mutation) => ({
+      label: `missing-agent-event-stream-${mutation.label}-constraint`,
+      mutate(db) {
+        rebuildV113Table(db, 'agent_event_stream_metadata', mutation)
+      },
+      expectedMissing: 'constraints:agent_event_stream_metadata',
+    })),
+    {
+      label: 'invalid-agent-event-stream-table-shape',
+      mutate(db) {
+        rebuildV113Table(db, 'agent_event_stream_metadata', {
+          pattern: /epoch INTEGER NOT NULL/u,
+          replacement: 'epoch BLOB NOT NULL',
+        })
+      },
+      expectedMissing: 'table-shape:agent_event_stream_metadata',
+    },
+    {
+      label: 'non-singleton-agent-event-stream-metadata',
+      mutate(db) {
+        db.pragma('ignore_check_constraints = ON')
+        db.prepare(`
+          INSERT INTO agent_event_stream_metadata (
+            stream_key, epoch, truncated_through
+          ) VALUES ('unexpected', 1, 0)
+        `).run()
+      },
+      expectedMissing: 'singleton:agent_event_stream_metadata.global',
+    },
+    {
+      label: 'missing-subscription-contract-check',
+      mutate(db) {
+        weakenSubscriptionCheck(db, {
+          pattern: /contract_version INTEGER NOT NULL CHECK \(\s*typeof\(contract_version\) = 'integer' AND contract_version = 2\s*\)/u,
+          replacement: 'contract_version INTEGER NOT NULL',
+        })
+      },
+      expectedMissing: 'constraints:agent_event_subscriptions',
+    },
+    ...V114_SUBSCRIPTION_CHECK_MUTATIONS.map((mutation) => ({
+      label: `missing-subscription-${mutation.label}-check`,
+      mutate(db) {
+        weakenSubscriptionCheck(db, mutation)
+      },
+      expectedMissing: 'constraints:agent_event_subscriptions',
+    })),
+    {
+      label: 'missing-subscription-index',
+      mutate(db) {
+        db.exec('DROP INDEX idx_agent_event_subscriptions_lease')
+      },
+      expectedMissing: 'index:idx_agent_event_subscriptions_lease',
+    },
+    {
+      label: 'missing-subscription-dlq-autoincrement',
+      mutate(db) {
+        weakenDlqAutoincrement(db)
+      },
+      expectedMissing: 'autoincrement-primary-key:agent_event_subscription_dlq.dlq_id',
     },
   ]
 

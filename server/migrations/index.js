@@ -83,8 +83,9 @@ import { migrateToV110 } from './v110JobAutoRetry.js'
 import { migrateToV111 } from './v111JobEventLocalization.js'
 import { migrateToV112 } from './v112JobAutoRetryWakeClaims.js'
 import { migrateToV113 } from './v113AgentEventOutbox.js'
+import { migrateToV114 } from './v114AgentEventSubscriptions.js'
 
-export { migrateToV1, migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56, migrateToV57, migrateToV58, migrateToV59, migrateToV60, migrateToV61, migrateToV62, migrateToV63, migrateToV64, migrateToV65, migrateToV66, migrateToV67, migrateToV68, migrateToV69, migrateToV70, migrateToV71, migrateToV72, migrateToV73, migrateToV74, migrateToV75, migrateToV76, migrateToV77, migrateToV78, migrateToV79, migrateToV80, migrateToV81, migrateToV82, migrateToV83, migrateToV84, migrateToV85, migrateToV86, migrateToV87, migrateToV88, migrateToV89, migrateToV90, migrateToV91, migrateToV92, migrateToV93, migrateToV94, migrateToV95, migrateToV96, migrateToV97, migrateToV98, migrateToV99, migrateToV100, migrateToV101, migrateToV102, migrateToV103, migrateToV104, migrateToV105, migrateToV106, migrateToV107, migrateToV108, migrateToV109, migrateToV110, migrateToV111, migrateToV112, migrateToV113 }
+export { migrateToV1, migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56, migrateToV57, migrateToV58, migrateToV59, migrateToV60, migrateToV61, migrateToV62, migrateToV63, migrateToV64, migrateToV65, migrateToV66, migrateToV67, migrateToV68, migrateToV69, migrateToV70, migrateToV71, migrateToV72, migrateToV73, migrateToV74, migrateToV75, migrateToV76, migrateToV77, migrateToV78, migrateToV79, migrateToV80, migrateToV81, migrateToV82, migrateToV83, migrateToV84, migrateToV85, migrateToV86, migrateToV87, migrateToV88, migrateToV89, migrateToV90, migrateToV91, migrateToV92, migrateToV93, migrateToV94, migrateToV95, migrateToV96, migrateToV97, migrateToV98, migrateToV99, migrateToV100, migrateToV101, migrateToV102, migrateToV103, migrateToV104, migrateToV105, migrateToV106, migrateToV107, migrateToV108, migrateToV109, migrateToV110, migrateToV111, migrateToV112, migrateToV113, migrateToV114 }
 
 /**
  * V2-V30 remain isolated behind the legacy compatibility adapter. The primary
@@ -174,6 +175,7 @@ export const schemaMigrations = Object.freeze([
   { version: 111, up: migrateToV111, atomicWithVersion: true },
   { version: 112, up: migrateToV112, atomicWithVersion: true },
   { version: 113, up: migrateToV113, atomicWithVersion: true },
+  { version: 114, up: migrateToV114, atomicWithVersion: true },
 ])
 
 export const LATEST_SCHEMA_VERSION = schemaMigrations.at(-1)?.version || 30

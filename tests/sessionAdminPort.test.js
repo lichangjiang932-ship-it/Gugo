@@ -127,6 +127,62 @@ test('SessionAdmin optional workspace mutation normalizes selections and explici
   }
 })
 
+test('SessionAdmin legacy import projects recovered ids and rejects mismatched recovery sessions', () => {
+  const input = {
+    userId: 'user-1',
+    sessions: [{
+      id: 'occupied-id',
+      title: 'Recovered history',
+      messages: [{ id: 'message-1', role: 'user', content: 'keep this' }],
+    }],
+  }
+  const port = prepareSessionAdminPort(portDefinition({
+    importLegacySessions() {
+      return {
+        results: [{
+          id: 'occupied-id',
+          sessionId: 'legacy-recovery-stable',
+          status: 'imported',
+          session: { id: 'legacy-recovery-stable', revision: 0 },
+        }],
+        importedCount: 1,
+        serverAuthoritativeCount: 0,
+      }
+    },
+  }))
+
+  assert.deepEqual(port.importLegacySessions(input), {
+    results: [{
+      id: 'occupied-id',
+      sessionId: 'legacy-recovery-stable',
+      status: 'imported',
+      session: { id: 'legacy-recovery-stable', revision: 0 },
+    }],
+    importedCount: 1,
+    serverAuthoritativeCount: 0,
+  })
+
+  const invalid = prepareSessionAdminPort(portDefinition({
+    importLegacySessions() {
+      return {
+        results: [{
+          id: 'occupied-id',
+          sessionId: 'legacy-recovery-stable',
+          status: 'imported',
+          session: { id: 'wrong-id', revision: 0 },
+        }],
+        importedCount: 1,
+        serverAuthoritativeCount: 0,
+      }
+    },
+  }))
+  assert.throws(
+    () => invalid.importLegacySessions(input),
+    (error) => error?.code === 'SESSION_ADMIN_RESULT_INVALID'
+      && /session\.id must match/.test(error.message),
+  )
+})
+
 test('SessionAdmin v2 rejects invalid inputs before backend invocation', () => {
   let calls = 0
   const port = prepareSessionAdminPort(portDefinition({

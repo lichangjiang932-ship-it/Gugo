@@ -206,7 +206,7 @@ test('session catalog client rejects malformed server results', async () => {
   )
 })
 
-test('legacy import candidates include every local session and omit transient messages', () => {
+test('legacy import candidates preserve pending visible content without portable Turn state', () => {
   const sessions = [
     {
       id: 'legacy-history',
@@ -215,8 +215,27 @@ test('legacy import candidates include every local session and omit transient me
       updatedAt: 20,
       messages: [
         { id: 'stable', role: 'user', content: 'keep', timestamp: 11 },
-        { id: 'streaming', role: 'assistant', content: 'partial', meta: { streaming: true } },
-        { id: 'pending', role: 'assistant', content: 'pending', meta: { pendingServerSync: true } },
+        {
+          id: 'pending',
+          role: 'user',
+          content: 'pending user text',
+          timestamp: 12,
+          modelContext: { turnId: 'unstable-turn', privateCheckpoint: 'discard' },
+          meta: { pendingServerSync: true, serverTurnId: 'unstable-turn' },
+        },
+        {
+          id: 'streaming',
+          role: 'assistant',
+          content: 'visible partial answer',
+          timestamp: 13,
+          modelContext: { turnId: 'unstable-turn', toolTrace: [{ role: 'tool', content: 'partial' }] },
+          meta: {
+            streaming: true,
+            serverTurnId: 'unstable-turn',
+            serverConnectionState: 'connected',
+            toolCalls: [{ id: 'partial-call', name: 'read_file', result: 'partial' }],
+          },
+        },
       ],
     },
     { id: 'local-empty', messages: [] },
@@ -225,15 +244,20 @@ test('legacy import candidates include every local session and omit transient me
   const original = structuredClone(sessions)
 
   const candidates = selectLegacySessionImportCandidates(sessions)
+  const repeated = selectLegacySessionImportCandidates(sessions)
 
   assert.deepEqual(candidates.map(({ id }) => id), ['legacy-history', 'local-empty'])
-  assert.deepEqual(candidates[0].messages, [{
-    id: 'stable',
-    role: 'user',
-    content: 'keep',
-    createdAt: 11,
-  }])
+  assert.deepEqual(candidates[0].messages, [
+    { id: 'stable', role: 'user', content: 'keep', createdAt: 11 },
+    { id: 'pending', role: 'user', content: 'pending user text', createdAt: 12 },
+    { id: 'streaming', role: 'assistant', content: 'visible partial answer', createdAt: 13 },
+  ])
   assert.deepEqual(candidates[1].messages, [])
+  assert.deepEqual(repeated, candidates)
+  assert.deepEqual(
+    repeated[0].messages.map(({ id }) => id),
+    ['stable', 'pending', 'streaming'],
+  )
   assert.deepEqual(sessions, original)
 })
 
@@ -254,6 +278,7 @@ test('legacy import client batches requests and leaves caller-owned sessions unt
       return response({
         results: body.sessions.map((session) => ({
           id: session.id,
+          sessionId: session.id,
           status: 'imported',
           session: { id: session.id, revision: 1 },
         })),
@@ -276,6 +301,7 @@ test('legacy import client batches requests and leaves caller-owned sessions unt
         return response({
           results: Array.from({ length: 20 }, (_, index) => ({
             id: `legacy-${index}`,
+            sessionId: `legacy-${index}`,
             status: 'imported',
             session: { id: `legacy-${index}`, revision: 1 },
           })),
@@ -288,6 +314,79 @@ test('legacy import client batches requests and leaves caller-owned sessions unt
   )
   assert.equal(calls, 2)
   assert.deepEqual(sessions, original)
+})
+
+test('legacy import client rejects incomplete, duplicated, or inconsistent acknowledgements', async () => {
+  const sessions = [
+    { id: 'legacy-a', messages: [] },
+    { id: 'legacy-b', messages: [] },
+  ]
+  const acknowledged = (id, overrides = {}) => ({
+    id,
+    sessionId: id,
+    status: 'imported',
+    session: { id },
+    ...overrides,
+  })
+  const invalidResults = [
+    {
+      results: [acknowledged('legacy-a')],
+      importedCount: 1,
+      serverAuthoritativeCount: 0,
+    },
+    {
+      results: [
+        acknowledged('legacy-a'),
+        acknowledged('legacy-a', { status: 'server_authoritative' }),
+      ],
+      importedCount: 1,
+      serverAuthoritativeCount: 1,
+    },
+    {
+      results: [
+        acknowledged('legacy-a'),
+        acknowledged('legacy-b', { status: 'ignored' }),
+      ],
+      importedCount: 1,
+      serverAuthoritativeCount: 1,
+    },
+    {
+      results: [
+        acknowledged('legacy-a'),
+        acknowledged('legacy-b', { status: 'server_authoritative' }),
+      ],
+      importedCount: 2,
+      serverAuthoritativeCount: 0,
+    },
+    {
+      results: [
+        acknowledged('legacy-a', {
+          sessionId: 'recovered-a',
+          session: { id: 'wrong-recovery-id' },
+        }),
+        acknowledged('legacy-b'),
+      ],
+      importedCount: 2,
+      serverAuthoritativeCount: 0,
+    },
+    {
+      results: [
+        acknowledged('legacy-a', { sessionId: 'same-target', session: { id: 'same-target' } }),
+        acknowledged('legacy-b', { sessionId: 'same-target', session: { id: 'same-target' } }),
+      ],
+      importedCount: 2,
+      serverAuthoritativeCount: 0,
+    },
+  ]
+
+  for (const body of invalidResults) {
+    await assert.rejects(
+      importAllLegacySessionsRemote(sessions, {
+        fetchImpl: async () => response(body),
+      }),
+      (error) => error?.code === 'INVALID_LEGACY_SESSION_IMPORT_RESULT',
+    )
+  }
 })
 
 test('session message DTO keeps timestamps and restores UI tool context', () => {

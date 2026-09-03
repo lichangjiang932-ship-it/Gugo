@@ -2,16 +2,13 @@ import {
   missingRequirementsForIncompleteReason,
   normalizeIncompleteReason,
 } from '../turnTerminalProjection.js'
-import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
-
-function terminalTextMatchesLocale(text, locale) {
-  const normalizedText = String(text || '').trim()
-  if (!normalizedText) return false
-  return Boolean(localizedTerminalModelText(locale, normalizedText, { strictLocale: true }))
-}
 
 export function installTerminalCompletion(s) {
-  const { MAX_LOCAL_HTML_DELIVERY_RETRIES, formatIncompleteTerminalText } = s.d
+  const {
+    MAX_LOCAL_HTML_DELIVERY_RETRIES,
+    formatIncompleteTerminalText,
+    sourceHandoffViolation,
+  } = s.d
 
   s.finishIncomplete = async ({
     text,
@@ -22,6 +19,7 @@ export function installTerminalCompletion(s) {
     manualRetryable,
     taskVerification = null,
     steeringLeaseId = null,
+    sourceHandoffFiltered = false,
   }) => {
     const incompleteReason = normalizeIncompleteReason(reason)
     const normalizedMissingRequirements = [...new Set((Array.isArray(missingRequirements)
@@ -39,14 +37,15 @@ export function installTerminalCompletion(s) {
       ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),
       ...(taskVerification ? { taskVerification } : {}),
     }
-    const localizedText = formatIncompleteTerminalText(incompleteReason, {
-      locale: s.locale,
-      fallbackText: text,
-      hasVerificationTools: s.availableVerificationToolNames?.length > 0,
-      maxIterations: s.maxIters,
-      preserveFallbackText: incompleteReason === 'iteration_limit_reached'
-        && terminalTextMatchesLocale(text, s.locale),
-    })
+    const localizedText = sourceHandoffFiltered
+      ? s.protectTerminalText(text, { incomplete: true })
+      : formatIncompleteTerminalText(incompleteReason, {
+          locale: s.locale,
+          fallbackText: text,
+          hasVerificationTools: s.availableVerificationToolNames?.length > 0,
+          maxIterations: s.maxIters,
+          preserveFallbackText: incompleteReason === 'iteration_limit_reached',
+        })
     const safePartialResult = s.partialResultFallback.apply({
       text: localizedText,
       incomplete: true,
@@ -124,7 +123,15 @@ export function installTerminalCompletion(s) {
     finalMetadata = {},
     appendTextToConversation = true,
   } = {}) => {
-    result = s.partialResultFallback.apply(result)
+    const sourceHandoffFiltered = result?.incomplete === true
+      && s.requiresSourceHandoffProtection
+      && Boolean(sourceHandoffViolation(result?.text))
+    const sourceSafeText = sourceHandoffFiltered
+      ? s.protectTerminalText(result?.text, { incomplete: true })
+      : ''
+    const preserveFallbackText = sourceHandoffFiltered
+      || result?.budgetExceeded === true
+      || result?.noProgress === true
     let incompleteMetadata = {}
     if (result?.incomplete === true) {
       const incompleteReason = normalizeIncompleteReason(
@@ -154,10 +161,20 @@ export function installTerminalCompletion(s) {
       }
       result = {
         ...result,
+        text: sourceHandoffFiltered
+          ? sourceSafeText
+          : formatIncompleteTerminalText(incompleteReason, {
+              locale: s.locale,
+              fallbackText: result?.text,
+              hasVerificationTools: s.availableVerificationToolNames?.length > 0,
+              maxIterations: s.maxIters,
+              preserveFallbackText,
+            }),
         reason: incompleteReason,
         ...incompleteMetadata,
       }
     }
+    result = s.partialResultFallback.apply(result)
     const terminalIsIncomplete = result?.incomplete === true
       || result?.paused === true
       || result?.interrupted === true

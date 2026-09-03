@@ -116,15 +116,21 @@ export function ensureDefaultLocalWorkspace({
     path.resolve(String(env.WORKSPACE_ROOT || '').trim() || cwd),
   )
   const onboarding = getWorkspaceOnboardingStatus({ userId, cwd, env })
+  const selectedDefault = selectDefaultWorkspacePath({
+    userId,
+    onboarding,
+    preferredRoot: rootPath,
+  })
+  const preferredRootTrusted = getWorkspaceTrustStatus({ userId, rootPath }).trusted
   if (onboarding.completedAt) {
-    return {
-      ...getLocalFileAccessStatus({ userId }),
-      onboarding,
-      defaultWorkspacePath: selectDefaultWorkspacePath({
-        userId,
+    if ((selectedDefault && samePath(selectedDefault, rootPath))
+      || preferredRootTrusted
+      || isFilesystemRoot(rootPath)) {
+      return {
+        ...getLocalFileAccessStatus({ userId }),
         onboarding,
-        preferredRoot: rootPath,
-      }),
+        defaultWorkspacePath: selectedDefault,
+      }
     }
   }
   if (isFilesystemRoot(rootPath)) {
@@ -135,14 +141,17 @@ export function ensureDefaultLocalWorkspace({
     )
   }
 
-  const features = Object.fromEntries(Object.keys(onboarding.features).map((name) => [name, true]))
+  const features = Object.fromEntries(Object.entries(onboarding.features).map(([name, state]) => (
+    [name, onboarding.completedAt ? state.enabled : true]
+  )))
+  const approvalMode = onboarding.completedAt ? onboarding.approvalMode : 'normal'
   const configured = configureWorkspaceOnboarding({
     userId,
     rootPath,
     features,
-    approvalMode: onboarding.complete ? onboarding.approvalMode : 'normal',
+    approvalMode,
     confirmation: 'ENABLE_WORKSPACE_CAPABILITIES',
-    ...(onboarding.approvalMode === 'bypass'
+    ...(approvalMode === 'bypass'
       ? { bypassConfirmation: 'BYPASS_ALL_APPROVALS' }
       : {}),
     preserveDeploymentLocks: true,

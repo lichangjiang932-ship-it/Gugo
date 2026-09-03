@@ -1,3 +1,4 @@
+import { hasAgentEventOutboxChecks } from '../agentEventOutboxSchemaContract.js'
 import { databaseSchemaIncompleteError } from '../dbSchemaContract.js'
 
 const VERSION = 113
@@ -97,6 +98,9 @@ function assertV113Schema(db, { initialized = false } = {}) {
   `).get()?.sql || ''
   if (!/(?:\(|,)\s*cursor\s+INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b/iu.test(outboxSql)) {
     missing.push('autoincrement-primary-key:agent_event_outbox.cursor')
+  }
+  if (!hasAgentEventOutboxChecks(outboxSql)) {
+    missing.push('constraints:agent_event_outbox')
   }
   if (!hasExactUniqueKey(db, 'agent_event_outbox', ['event_id'])) {
     missing.push('unique-key:agent_event_outbox.event_id')

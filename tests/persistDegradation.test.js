@@ -11,14 +11,20 @@ function quotaError() {
 
 test('persistWithDegradation writes a full snapshot when capacity is available', () => {
   const stored = new Map()
-  const snapshot = { sessions: [{ id: 's1', messages: [{ id: 'm1', role: 'user', content: 'hello' }] }] }
+  const snapshot = {
+    sessions: [{ id: 's1', messages: [{ id: 'm1', role: 'user', content: 'hello' }] }],
+    theme: 'dark',
+  }
   const result = persistWithDegradation(snapshot, (key, value) => stored.set(key, value))
   assert.equal(result.ok, true)
   assert.equal(result.level, 'full')
-  assert.equal(JSON.parse([...stored.values()][0]).sessions[0].messages[0].content, 'hello')
+  const saved = JSON.parse([...stored.values()][0])
+  assert.equal(saved.theme, 'dark')
+  assert.equal(Object.hasOwn(saved, 'sessions'), false)
+  assert.doesNotMatch(JSON.stringify(saved), /hello/)
 })
 
-test('localStorage fallback writes strip only retired account fields', () => {
+test('localStorage fallback strips every retired browser field and keeps settings', () => {
   const stored = new Map()
   const result = persistWithDegradation({
     user: { plan: 'legacy' },
@@ -35,24 +41,18 @@ test('localStorage fallback writes strip only retired account fields', () => {
   assert.equal(Object.hasOwn(saved, 'isLoggedIn'), false)
   assert.equal(Object.hasOwn(saved.__sync.fields, 'user'), false)
   assert.equal(Object.hasOwn(saved.__sync.fields, 'isLoggedIn'), false)
-  assert.equal(saved.sessions[0].messages[0].content, 'keep')
+  assert.equal(Object.hasOwn(saved.__sync.fields, 'sessions'), false)
+  assert.equal(Object.hasOwn(saved, 'sessions'), false)
   assert.deepEqual(saved.toolsConfig, { fetch_url: false })
   assert.deepEqual(saved.customSetting, { keep: true })
 })
 
-test('quota fallback only compacts regenerable metadata and keeps every session and message body', () => {
+test('quota fallback compacts regenerable metadata without recreating browser sessions', () => {
   const stored = new Map()
   let calls = 0
   const snapshot = {
-    sessions: Array.from({ length: 7 }, (_, sessionIndex) => ({
-      id: `s${sessionIndex}`,
-      messages: Array.from({ length: 75 }, (_, messageIndex) => ({
-        id: `${sessionIndex}-${messageIndex}`,
-        role: messageIndex % 2 ? 'assistant' : 'user',
-        content: `message-${sessionIndex}-${messageIndex}`,
-        meta: { dataUrl: `data:image/png;base64,${'x'.repeat(4_000)}` },
-      })),
-    })),
+    sessions: [{ id: 'retired', messages: [{ content: 'must-not-persist' }] }],
+    tasks: [{ id: 't1', label: 'keep', meta: { dataUrl: `data:image/png;base64,${'x'.repeat(4_000)}` } }],
   }
   const result = persistWithDegradation(snapshot, (key, value) => {
     calls += 1
@@ -64,14 +64,14 @@ test('quota fallback only compacts regenerable metadata and keeps every session 
   assert.equal(result.level, 'compact-metadata')
   assert.equal(result.requiresUserAction, true)
   const saved = JSON.parse([...stored.values()][0])
-  assert.equal(saved.sessions.length, 7)
-  assert.equal(saved.sessions.every((item) => item.messages.length === 75), true)
-  assert.equal(saved.sessions[6].messages[74].content, 'message-6-74')
-  assert.match(saved.sessions[0].messages[0].meta.dataUrl, /OMITTED/)
+  assert.equal(Object.hasOwn(saved, 'sessions'), false)
+  assert.equal(saved.tasks[0].label, 'keep')
+  assert.match(saved.tasks[0].meta.dataUrl, /OMITTED/)
+  assert.doesNotMatch(JSON.stringify(saved), /must-not-persist/)
 })
 
 test('when compact metadata still exceeds quota the previous successful snapshot is left untouched', () => {
-  const stored = new Map([['your-model-atelier:state:v1', JSON.stringify({ sessions: [{ id: 'safe' }] })]])
+  const stored = new Map([['your-model-atelier:state:v1', JSON.stringify({ theme: 'light' })]])
   const result = persistWithDegradation(
     { sessions: [{ id: 'current', messages: [{ id: 'm', role: 'user', content: 'current' }] }] },
     () => { throw quotaError() },
@@ -79,7 +79,7 @@ test('when compact metadata still exceeds quota the previous successful snapshot
   assert.equal(result.ok, false)
   assert.equal(result.level, 'quota')
   assert.equal(result.requiresUserAction, true)
-  assert.deepEqual(JSON.parse(stored.get('your-model-atelier:state:v1')), { sessions: [{ id: 'safe' }] })
+  assert.deepEqual(JSON.parse(stored.get('your-model-atelier:state:v1')), { theme: 'light' })
 })
 
 test('non-quota storage errors do not trigger fallback writes', () => {

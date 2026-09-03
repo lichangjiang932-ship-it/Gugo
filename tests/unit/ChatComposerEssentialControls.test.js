@@ -47,6 +47,6 @@ test('project selection remains available until the first message is sent', () =
     chatSplitViewSource,
     /showWorkspacePicker=\{messages\.length === 0\}/,
   )
-  assert.match(chatComposerSource, /\{showWorkspacePicker && \(/)
+  assert.match(composerSource, /\{showWorkspacePicker && \(/)
   assert.doesNotMatch(chatComposerSource, /!String\(selectedWorkspacePath/)
 })

@@ -114,19 +114,28 @@ test('IndexedDB session snapshot constants are stable', () => {
 
 test('persisted snapshot APIs atomically round-trip, estimate, and clear the complete payload', async () => {
   const factory = createFakeIndexedDB()
-  const payload = {
+  const input = {
     sessions: [{ id: 's1', messages: [{ id: 'm1', content: 'hello' }] }],
+    pendingLegacySessions: [{ id: 'legacy-1', messages: [{ id: 'old-1', content: 'migrate me' }] }],
     tasks: [{ id: 't1', status: 'running' }],
     history: [{ id: 'h1', name: 'task' }],
     sessionDrafts: { s1: 'draft' },
     activeSessionId: 's1',
     __sync: { version: 1, writtenAt: 123456, fields: { activeSessionId: 123456 } },
   }
+  const payload = {
+    pendingLegacySessions: input.pendingLegacySessions,
+    tasks: input.tasks,
+    history: input.history,
+    sessionDrafts: input.sessionDrafts,
+    activeSessionId: input.activeSessionId,
+    __sync: input.__sync,
+  }
   const bytes = new TextEncoder().encode(JSON.stringify(payload)).byteLength
 
-  const write = await writePersistedSnapshot(payload, { factory, now: () => 123456 })
+  const write = await writePersistedSnapshot(input, { factory, now: () => 123456 })
   assert.deepEqual(write, { ok: true, status: 'ok', payload, updatedAt: 123456, bytes })
-  assert.equal(write.payload, payload)
+  assert.equal(Object.hasOwn(write.payload, 'sessions'), false)
   assert.deepEqual(await readPersistedSnapshot({ factory }), { ok: true, status: 'ok', payload, updatedAt: 123456 })
   assert.deepEqual(await estimatePersistedSnapshotBytes({ factory }), { ok: true, status: 'ok', bytes })
   assert.deepEqual(await clearPersistedSnapshot({ factory }), { ok: true, status: 'ok' })
@@ -140,7 +149,7 @@ test('persisted snapshot APIs atomically round-trip, estimate, and clear the com
   assert.deepEqual(factory.stats.transactions.map(({ mode }) => mode), ['readwrite', 'readonly', 'readonly', 'readwrite', 'readonly'])
 })
 
-test('IndexedDB writes remove retired account fields without changing sessions or settings', async () => {
+test('IndexedDB writes remove retired browser fields without changing settings', async () => {
   const factory = createFakeIndexedDB()
   const result = await writePersistedSnapshot({
     user: { plan: 'legacy' },
@@ -156,13 +165,15 @@ test('IndexedDB writes remove retired account fields without changing sessions o
   assert.equal(Object.hasOwn(result.payload, 'isLoggedIn'), false)
   assert.equal(Object.hasOwn(result.payload.__sync.fields, 'user'), false)
   assert.equal(Object.hasOwn(result.payload.__sync.fields, 'isLoggedIn'), false)
-  assert.equal(result.payload.sessions[0].messages[0].content, 'keep')
+  assert.equal(Object.hasOwn(result.payload.__sync.fields, 'sessions'), false)
+  assert.equal(Object.hasOwn(result.payload, 'sessions'), false)
+  assert.equal(Object.hasOwn(result.payload, 'pendingLegacySessions'), false)
   assert.deepEqual(result.payload.toolsConfig, { fetch_url: false })
   assert.deepEqual(result.payload.customSetting, { keep: true })
   assert.deepEqual(factory.records.get(SESSION_SNAPSHOT_RECORD_KEY).payload, result.payload)
 })
 
-test('IndexedDB reads rewrite legacy records in place and preserve their timestamp and current data', async () => {
+test('IndexedDB reads rewrite legacy records in place and preserve timestamp and settings', async () => {
   const factory = createFakeIndexedDB()
   await estimatePersistedSnapshotBytes({ factory })
   factory.records.set(SESSION_SNAPSHOT_RECORD_KEY, {
@@ -182,17 +193,23 @@ test('IndexedDB reads rewrite legacy records in place and preserve their timesta
   const result = await readPersistedSnapshot({ factory })
   assert.equal(result.ok, true)
   assert.equal(result.updatedAt, 77)
-  assert.deepEqual(result.retiredAccountFieldsRemoved.sort(), ['isLoggedIn', 'user'])
+  assert.deepEqual(result.retiredAccountFieldsRemoved.sort(), ['isLoggedIn', 'sessions', 'user'])
   assert.equal(Object.hasOwn(result.payload, 'user'), false)
   assert.equal(Object.hasOwn(result.payload, 'isLoggedIn'), false)
-  assert.equal(result.payload.sessions[0].messages[0].content, 'keep')
+  assert.equal(Object.hasOwn(result.payload, 'sessions'), false)
+  assert.deepEqual(result.payload.pendingLegacySessions, [{
+    id: 'safe',
+    messages: [{ id: 'm1', content: 'keep' }],
+  }])
   assert.deepEqual(result.payload.toolsConfig, { fetch_url: false })
 
   const stored = factory.records.get(SESSION_SNAPSHOT_RECORD_KEY)
   assert.equal(stored.updatedAt, 77)
   assert.equal(Object.hasOwn(stored.payload, 'user'), false)
   assert.equal(Object.hasOwn(stored.payload, 'isLoggedIn'), false)
-  assert.equal(stored.payload.sessions[0].messages[0].content, 'keep')
+  assert.equal(Object.hasOwn(stored.payload, 'sessions'), false)
+  assert.deepEqual(stored.payload.pendingLegacySessions, result.payload.pendingLegacySessions)
+  assert.equal(Object.hasOwn(stored.payload.__sync.fields, 'sessions'), false)
 })
 
 test('IndexedDB read failures never expose retired fields and request a later cleanup write', async () => {
@@ -212,7 +229,8 @@ test('IndexedDB read failures never expose retired fields and request a later cl
   assert.equal(result.cleanupError?.name, 'UnknownError')
   assert.equal(Object.hasOwn(result.payload, 'user'), false)
   assert.equal(Object.hasOwn(result.payload, 'isLoggedIn'), false)
-  assert.deepEqual(result.payload.sessions, [{ id: 'safe' }])
+  assert.equal(Object.hasOwn(result.payload, 'sessions'), false)
+  assert.deepEqual(result.payload.pendingLegacySessions, [{ id: 'safe' }])
 })
 
 test('StrictMode-style concurrent calls share one IndexedDB open request', async () => {
@@ -229,8 +247,9 @@ test('StrictMode-style concurrent calls share one IndexedDB open request', async
 test('session snapshot facade maps to the direct persisted snapshot APIs', async () => {
   const indexedDBFactory = createFakeIndexedDB()
   const store = createSessionSnapshotStore({ indexedDBFactory, now: () => 42 })
-  const payload = { sessions: [], tasks: [], history: [], sessionDrafts: {}, __sync: { version: 1 } }
-  assert.equal((await store.writeSnapshot(payload)).updatedAt, 42)
+  const input = { sessions: [], tasks: [], history: [], sessionDrafts: {}, __sync: { version: 1 } }
+  const payload = { tasks: [], history: [], sessionDrafts: {}, __sync: { version: 1 } }
+  assert.equal((await store.writeSnapshot(input)).updatedAt, 42)
   assert.deepEqual((await store.readSnapshot()).payload, payload)
   assert.equal((await store.estimateBytes()).bytes, new TextEncoder().encode(JSON.stringify(payload)).byteLength)
   assert.equal((await store.clearSnapshot()).ok, true)

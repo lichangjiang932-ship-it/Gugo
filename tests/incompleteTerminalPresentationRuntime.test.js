@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 
 import { startServerTurn } from '../src/lib/turnClient/turnRequests.js'
@@ -13,6 +16,10 @@ import {
 import { taskVerificationRepairBlockerText } from '../server/services/loop/taskVerificationRepair.js'
 import { runToolLoop } from '../server/services/loop/index.js'
 import { normalizeTurnLocale } from '../shared/turnLocale.js'
+
+const testDataDir = mkdtempSync(path.join(os.tmpdir(), 'gugo-incomplete-terminal-'))
+process.env.APP_DATA_DIR = testDataDir
+process.env.APP_DB_PATH = path.join(testDataDir, 'app.db')
 
 const CJK_TEXT = /[\u3400-\u9fff]/u
 
@@ -94,6 +101,19 @@ test('incomplete terminal copy is stable in Chinese and English', () => {
   assert.doesNotMatch(en, CJK_TEXT)
   assert.equal(fallback, en)
   assert.match(en, /execution evidence/i)
+})
+
+test('unknown incomplete reasons use fixed copy instead of French or German model prose', () => {
+  const expected = formatIncompleteTerminalText('turn_incomplete', { locale: 'en' })
+  for (const fallbackText of [
+    'La tâche reste incomplète. Veuillez réessayer.',
+    'Die Aufgabe ist noch nicht abgeschlossen. Bitte erneut versuchen.',
+  ]) {
+    assert.equal(formatIncompleteTerminalText('provider_specific_failure', {
+      locale: 'en',
+      fallbackText,
+    }), expected)
+  }
 })
 
 test('strict Chinese terminal text rejects English prose but preserves commands and identifiers', () => {
@@ -265,6 +285,24 @@ test('iteration-limit completion follows the turn locale and persists the locali
     assert.doesNotMatch(result.text, /[\u3040-\u30ff\uac00-\ud7af]/u)
     assert.match(result.text, /tool-call limit/i)
     assert.equal(checkpoint.final.text, result.text)
+  })
+
+  await t.test('English rejects French and German wrap-up text', async () => {
+    for (const wrapUpText of [
+      'La tâche reste incomplète. Veuillez réessayer.',
+      'Die Aufgabe ist noch nicht abgeschlossen. Bitte erneut versuchen.',
+    ]) {
+      const { checkpoint, result } = await runIterationLimitScenario({
+        locale: 'en',
+        wrapUpText,
+      })
+
+      assert.equal(result.incomplete, true)
+      assert.equal(result.reason, 'iteration_limit_reached')
+      assert.match(result.text, /tool-call limit/i)
+      assert.doesNotMatch(result.text, new RegExp(wrapUpText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+      assert.equal(checkpoint.final.text, result.text)
+    }
   })
 
   await t.test('English rejects a wrap-up containing full-width punctuation', async () => {

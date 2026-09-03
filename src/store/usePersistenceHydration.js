@@ -32,7 +32,9 @@ export default function usePersistenceHydration(options) {
     let migrationFailed = false
     if (durable.ok && durable.payload && clearedAt > 0) {
       try {
-        const candidate = readPersistedPayload(durable.payload, durable.updatedAt || 0)
+        const candidate = readPersistedPayload(durable.payload, durable.updatedAt || 0, {
+          preservePendingLegacySessions: true,
+        })
         if ((Number(candidate.meta?.writtenAt) || 0) <= clearedAt) {
           const staleClear = await clearPersistedSnapshot()
           if (!staleClear.ok && staleClear.status !== 'unavailable') console.warn('[AppContext] stale IndexedDB snapshot cleanup failed:', staleClear.error?.name || staleClear.status)
@@ -44,7 +46,9 @@ export default function usePersistenceHydration(options) {
     if (durable.ok && !durable.payload && !bootstrap.legacy && hasMigrationMarker) durable = await readPersistedSnapshot()
     if (durable.ok && durable.payload) {
       try {
-        const parsed = readPersistedPayload(durable.payload, durable.updatedAt || 0)
+        const parsed = readPersistedPayload(durable.payload, durable.updatedAt || 0, {
+          preservePendingLegacySessions: true,
+        })
         const durableSource = { ...(bootstrap.settings?.snapshot || {}), ...parsed.snapshot }
         const durableNeedsToolsConfigMigration = needsToolsConfigSchemaMigration(durableSource)
         const durableSnapshot = completeSnapshot(durableSource)
@@ -119,7 +123,7 @@ export default function usePersistenceHydration(options) {
       syncMetaRef.current = result.meta
       skipPersistSnapshotRef.current = result.skipInitialWrite ? result.snapshot : null
       stateRef.current = { ...stateRef.current, ...result.snapshot }
-      dispatch({ type: 'MERGE_EXTERNAL_STATE', payload: result.snapshot })
+      dispatch({ type: 'HYDRATE_LOCAL_PERSISTED_STATE', payload: result.snapshot })
       if (result.unavailable) dispatch({ type: 'SET_PERSISTENCE_NOTICE', payload: { level: 'unavailable' } })
       setHydrated(true)
     }).catch((error) => {

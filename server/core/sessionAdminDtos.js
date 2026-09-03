@@ -418,11 +418,18 @@ function legacyImportResultDto(value, fail, input) {
       if (!['imported', 'server_authoritative'].includes(status)) {
         fail(`${label}.status is invalid`)
       }
+      const rawSessionId = own(item, 'sessionId', label, fail, { optional: true })
+      const sessionId = rawSessionId === undefined
+        ? id
+        : text(rawSessionId, `${label}.sessionId`, fail, { max: 512, empty: false })
       const rawSession = own(item, 'session', label, fail)
       const session = rawSession === null ? null : sessionDto(rawSession, `${label}.session`, fail)
-      if (session && session.id !== id) fail(`${label}.session.id must match ${label}.id`)
+      if (session && session.id !== sessionId) {
+        fail(`${label}.session.id must match ${label}.sessionId`)
+      }
       if (status === 'imported' && !session) fail(`${label}.session is required for imported sessions`)
-      return Object.freeze({ id, status, session })
+      if (sessionId !== id && !session) fail(`${label}.session is required for recovered sessions`)
+      return Object.freeze({ id, sessionId, status, session })
     },
     { max: input.sessions.length },
   )

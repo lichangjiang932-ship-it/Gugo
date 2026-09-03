@@ -41,10 +41,27 @@ const TEST_SUBAGENT_RUN_PERSISTENCE_PORT = Object.freeze({
   interruptRunningRun: ({ userId, id }) => ({ userId, id, interrupted: false }),
 })
 
+const TEST_COMPACTION_ARCHIVE_PORT = Object.freeze({
+  apiVersion: 1,
+  id: 'test.compaction-archive',
+  create: (input) => ({
+    id: input.id || 'test-archive',
+    userId: input.userId,
+    sessionId: input.sessionId,
+    replacedMessageCount: input.archivedMessages.length,
+    archivedMessages: input.archivedMessages,
+    summaryText: input.summaryText,
+    createdAt: 1,
+  }),
+  get: () => null,
+  cleanup: () => ({ removed: 0 }),
+})
+
 function createNoopLifecycleAdapters() {
   const noop = () => {}
   return {
     closeDb: noop,
+    createCompactionArchiveAdapter: () => TEST_COMPACTION_ARCHIVE_PORT,
     recoverPendingSessionDeletion: noop,
     startSessionContentMaterializerRuntime: noop,
     closeSessionContentMaterializerRuntime: noop,
@@ -68,6 +85,8 @@ function createNoopLifecycleAdapters() {
     startSocialIntegration: noop,
     stopSocialBridges: noop,
     shutdownRuntimePlugins: noop,
+    startAgentEventDurableConsumerRuntime: noop,
+    closeAgentEventDurableConsumerRuntime: noop,
     closeShellSessions: noop,
     closeJobRuntime: noop,
     startEvolutionOperationSweeperRuntime: noop,
@@ -143,6 +162,7 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
   let visionResolver = null
   const adapters = {
     closeDb: () => { events.push('stop:database') },
+    createCompactionArchiveAdapter: () => TEST_COMPACTION_ARCHIVE_PORT,
     recoverPendingSessionDeletion: () => { events.push('start:session-deletion-recovery') },
     startSessionContentMaterializerRuntime: () => {},
     closeSessionContentMaterializerRuntime: () => {},
@@ -194,6 +214,8 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
     },
     stopSocialBridges: () => { events.push('stop:social') },
     shutdownRuntimePlugins: () => { events.push('stop:runtime-plugins') },
+    startAgentEventDurableConsumerRuntime: () => { events.push('start:agent-event-consumers') },
+    closeAgentEventDurableConsumerRuntime: () => { events.push('stop:agent-event-consumers') },
     closeShellSessions: () => { events.push('stop:shell-sessions') },
     closeJobRuntime: () => { events.push('stop:jobs') },
     startEvolutionOperationSweeperRuntime: () => { events.push('start:evolution-operation-sweeper') },
@@ -241,6 +263,7 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
     'start:social:alpha',
     'start:social:beta',
     'start:lsp',
+    'start:agent-event-consumers',
     'start:evolution-operation-sweeper',
     'start:evolution-online-grader',
     'start:turn-recovery',
@@ -254,7 +277,7 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
 
   const stopped = await graph.stopAll()
   assert.equal(stopped.exitCode, 0)
-  assert.deepEqual(events.slice(-14), [
+  assert.deepEqual(events.slice(-15), [
     'stop:cron',
     'stop:turn-recovery',
     'stop:turn-engine',
@@ -262,6 +285,7 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
     'stop:jobs',
     'stop:shell-sessions',
     'stop:evolution-operation-sweeper',
+    'stop:agent-event-consumers',
     'stop:lsp',
     'stop:runtime-plugins',
     'stop:social',
@@ -273,6 +297,8 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
 
   const ids = BUILTIN_LIFECYCLE_CAPABILITY_IDS
   assert.ok(started.order.indexOf(ids.runtimePlugins) < started.order.indexOf(ids.lsp))
+  assert.ok(started.order.indexOf(ids.runtimePlugins) < started.order.indexOf(ids.agentEventConsumers))
+  assert.ok(started.order.indexOf(ids.agentEventConsumers) < started.order.indexOf(ids.toolLoop))
   assert.ok(stopped.order.indexOf(ids.turnEngine) < stopped.order.indexOf(ids.jobs))
   assert.ok(stopped.order.indexOf(ids.turnEngine) < stopped.order.indexOf(ids.evolutionOnlineGrader))
   assert.ok(stopped.order.indexOf(ids.evolutionOnlineGrader) < stopped.order.indexOf(ids.jobs))
@@ -282,6 +308,8 @@ test('builtin lifecycle assembly preserves legacy startup and shutdown ordering'
   assert.ok(stopped.order.indexOf(ids.evolutionOperationSweeper) < stopped.order.indexOf(ids.runtimePlugins))
   assert.ok(stopped.order.indexOf(ids.jobs) < stopped.order.indexOf(ids.runtimePlugins))
   assert.ok(stopped.order.indexOf(ids.lsp) < stopped.order.indexOf(ids.runtimePlugins))
+  assert.ok(stopped.order.indexOf(ids.toolLoop) < stopped.order.indexOf(ids.agentEventConsumers))
+  assert.ok(stopped.order.indexOf(ids.agentEventConsumers) < stopped.order.indexOf(ids.runtimePlugins))
   assert.ok(stopped.order.indexOf(ids.runtimePlugins) < stopped.order.indexOf(ids.socialBridges))
   assert.ok(stopped.order.indexOf(ids.managedAttachments) < stopped.order.indexOf(ids.database))
   assert.equal(registry.get(ids.turnEngine).stopFailure, 'fail')
@@ -720,7 +748,7 @@ test('fatal replacement stop preserves host controllers until the unresolved bra
   assert.equal(getToolLoopAdapterStatus().configured, true)
   assert.equal(getTurnPersistenceAdapterStatus().configured, true)
   assert.ok(first.skipped.some((entry) => (
-    entry.capability.slotId === BUILTIN_LIFECYCLE_CAPABILITY_IDS.runtimePlugins
+    entry.capability.slotId === BUILTIN_LIFECYCLE_CAPABILITY_IDS.agentEventConsumers
     && entry.blockingCapabilityIds.includes('test.failing-tool-loop-replacement')
   )))
 
@@ -851,6 +879,7 @@ test('pre-bootstrap inspection does not consume custom default runtime options',
   const noop = () => {}
   const adapters = {
     closeDb: noop,
+    createCompactionArchiveAdapter: () => TEST_COMPACTION_ARCHIVE_PORT,
     recoverPendingSessionDeletion: noop,
     startSessionContentMaterializerRuntime: noop,
     closeSessionContentMaterializerRuntime: noop,
@@ -872,6 +901,8 @@ test('pre-bootstrap inspection does not consume custom default runtime options',
     startSocialIntegration: noop,
     stopSocialBridges: noop,
     shutdownRuntimePlugins: noop,
+    startAgentEventDurableConsumerRuntime: noop,
+    closeAgentEventDurableConsumerRuntime: noop,
     closeShellSessions: noop,
     closeJobRuntime: noop,
     startEvolutionOperationSweeperRuntime: noop,

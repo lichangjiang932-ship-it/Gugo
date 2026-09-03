@@ -90,6 +90,15 @@ retains inventory, capability wiring, and public facade composition.
 pre-installation source replacement, the installation-time seal, and resolver
 publication after a validated reload.
 
+Durable Agent Event delivery now crosses the v2 host exposed by
+`runtimePluginHostOptions.js`. Verified immutable Releases bind publisher,
+release, plugin, subscription, and event identities before registration.
+`durableAgentEventConsumerHost.js` owns replay orchestration and drain ordering,
+while the focused subscription stores own cursor ACK, exclusive lease fencing,
+bounded retry/backoff, atomic DLQ transitions, safe-watermark calculation, and
+IMMEDIATE-transaction outbox truncation. The registry retains only contribution
+composition and cannot bypass those durable state boundaries.
+
 Managed attachment HTTP operations now cross the host-created
 `ManagedAttachmentStoragePort v1`. Its default SQLite/file adapter owns concrete
 store calls, file descriptors, consistency checks, and stream construction;
@@ -129,7 +138,12 @@ revalidation before cleanup, and `tests/runtimePluginReleaseController.test.js`
 locks release ordering, callback-deadlock fencing, shutdown coalescing, and the
 one-way registry-to-controller dependency. The focused
 `tests/runtimePluginConfigSourceController.test.js` locks configuration-source
-initialization, sealing, resolver replacement, and registry delegation. Managed attachment storage port and
+initialization, sealing, resolver replacement, and registry delegation.
+`tests/agentEventSubscriptionStore.test.js`,
+`tests/durableAgentEventConsumerHost.test.js`, and
+`tests/runtimePluginDurableAgentEvents.test.js` preserve the durable v2 identity,
+delivery, fencing, retry/DLQ, retention, lifecycle, and plugin-host boundaries.
+Managed attachment storage port and
 architecture tests preserve DTO identity, path opacity, authoritative content
 opening, and the one-way route-to-port-to-adapter dependency.
 Boundary-specific changes also run the Turn, persistence, model proxy,

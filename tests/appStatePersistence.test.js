@@ -96,7 +96,7 @@ test('current persisted permission opt-outs remain explicit', () => {
   assert.equal(normalized.permissions.find((permission) => permission.id === 'notify')?.enabled, true)
 })
 
-test('lightweight local snapshot excludes sessions and other large state', () => {
+test('browser snapshots exclude the server session catalog and other large local state', () => {
   const snapshot = {
     user: { name: 'Ada' },
     sessions: [{ id: 's1', messages: [{ content: 'large' }] }],
@@ -105,7 +105,9 @@ test('lightweight local snapshot excludes sessions and other large state', () =>
     sessionDrafts: { s1: 'draft' },
     theme: 'dark',
   }
-  assert.deepEqual(selectPersistedSnapshot(snapshot).sessions, snapshot.sessions)
+  const persisted = selectPersistedSnapshot(snapshot)
+  assert.equal(Object.hasOwn(persisted, 'sessions'), false)
+  assert.doesNotMatch(JSON.stringify(persisted), /large/)
   assert.deepEqual(selectLightweightSnapshot(snapshot), {
     activeSessionId: undefined,
     permissions: undefined,
@@ -121,16 +123,15 @@ test('lightweight local snapshot excludes sessions and other large state', () =>
   })
 })
 
-test('server-backed sessions persist metadata without duplicating transcript messages', () => {
+test('browser persistence excludes both server-backed and legacy session transcripts', () => {
   const snapshot = selectPersistedSnapshot({
     sessions: [
       { id: 'server', serverRevision: 7, messages: [{ id: 'm1', content: 'server copy' }] },
       { id: 'legacy', messages: [{ id: 'm2', content: 'local only' }] },
     ],
   })
-  assert.deepEqual(snapshot.sessions[0].messages, [])
-  assert.equal(snapshot.sessions[0].serverRevision, 7)
-  assert.equal(snapshot.sessions[1].messages[0].content, 'local only')
+  assert.equal(Object.hasOwn(snapshot, 'sessions'), false)
+  assert.doesNotMatch(JSON.stringify(snapshot), /server copy|local only/)
 })
 
 test('tool defaults migrate to the complete execution loop while current explicit disables are preserved', () => {
@@ -288,7 +289,7 @@ test('tool defaults migrate to the complete execution loop while current explici
   assert.equal(v11.toolsConfig.bash_exec, false)
 })
 
-test('server-backed persistence keeps one redacted active-turn stub for crash recovery', () => {
+test('browser persistence never retains active-turn content or recovery stubs', () => {
   const snapshot = selectPersistedSnapshot({
     sessions: [{
       id: 'server',
@@ -320,14 +321,26 @@ test('server-backed persistence keeps one redacted active-turn stub for crash re
     }],
   })
 
-  assert.deepEqual(snapshot.sessions[0].messages, [{
-    id: 'active-2',
-    role: 'assistant',
-    content: '',
-    timestamp: 20,
-    meta: { streaming: true, serverTurnId: 'turn-2', serverLastSequence: -1 },
-  }])
+  assert.equal(Object.hasOwn(snapshot, 'sessions'), false)
   assert.doesNotMatch(JSON.stringify(snapshot), /SECRET|\.docx/)
+})
+
+test('hydration ignores retired catalogs while preserving the staged local migration queue', () => {
+  const saved = {
+    sessions: [{ id: 'browser-a', messages: [{ content: 'stale A' }] }],
+    pendingLegacySessions: [{ id: 'browser-b', messages: [{ content: 'stale B' }] }],
+    theme: 'dark',
+  }
+
+  const normalized = normalizePersistedFields(saved)
+  const completed = completeSnapshot(saved)
+  assert.equal(Object.hasOwn(normalized, 'sessions'), false)
+  assert.deepEqual(normalized.pendingLegacySessions, saved.pendingLegacySessions)
+  assert.equal(Object.hasOwn(completed, 'sessions'), false)
+  assert.deepEqual(completed.pendingLegacySessions, saved.pendingLegacySessions)
+  assert.equal(completed.theme, 'dark')
+  assert.doesNotMatch(JSON.stringify(completed), /stale A/)
+  assert.match(JSON.stringify(completed), /stale B/)
 })
 
 test('bootstrap reads new settings and a legacy full snapshot independently', () => {
@@ -337,7 +350,54 @@ test('bootstrap reads new settings and a legacy full snapshot independently', ()
   ])
   const result = readBootstrapPayloads(storage, 123)
   assert.equal(result.settings.snapshot.theme, 'dark')
-  assert.equal(result.legacy.snapshot.sessions[0].id, 'legacy')
+  assert.equal(result.legacy.snapshot.theme, 'light')
+  assert.equal(Object.hasOwn(result.legacy.snapshot, 'sessions'), false)
+  assert.deepEqual(result.legacy.snapshot.pendingLegacySessions, [{ id: 'legacy' }])
+  assert.deepEqual(result.legacy.retiredAccountFieldsRemoved, ['sessions'])
+})
+
+test('bootstrap losslessly merges same-id staged and legacy transcripts before cleanup', () => {
+  const pendingLegacySessions = [{
+    id: 'same-session',
+    title: 'Staged copy wins metadata',
+    messages: [
+      { id: 'shared-message', role: 'user', content: 'staged body' },
+      { id: 'staged-tail', role: 'assistant', content: 'staged tail' },
+    ],
+  }]
+  const sessions = [{
+    id: 'same-session',
+    title: 'Legacy copy',
+    messages: [
+      { id: 'shared-message', role: 'user', content: 'legacy body' },
+      { id: 'legacy-tail', role: 'assistant', content: 'legacy tail' },
+    ],
+  }]
+  const storage = createStorage([[
+    LEGACY_STATE_STORAGE_KEY,
+    JSON.stringify({ pendingLegacySessions, sessions, theme: 'dark' }),
+  ]])
+
+  const first = readBootstrapPayloads(storage, 123)
+  const [merged] = first.legacy.snapshot.pendingLegacySessions
+  assert.equal(Object.hasOwn(first.legacy.snapshot, 'sessions'), false)
+  assert.equal(merged.title, 'Staged copy wins metadata')
+  assert.deepEqual(
+    new Set(merged.messages.map(({ content }) => content)),
+    new Set(['staged body', 'staged tail', 'legacy body', 'legacy tail']),
+  )
+  assert.equal(new Set(merged.messages.map(({ id }) => id)).size, 4)
+  assert.ok(merged.messages.some(({ id }) => /^shared-message~legacy-[a-f0-9]{8}(?:-\d+)?$/u.test(id)))
+
+  const cleaned = JSON.parse(storage.values.get(LEGACY_STATE_STORAGE_KEY))
+  assert.equal(Object.hasOwn(cleaned, 'sessions'), false)
+  assert.deepEqual(cleaned.pendingLegacySessions, first.legacy.snapshot.pendingLegacySessions)
+
+  const repeated = readBootstrapPayloads(storage, 456)
+  assert.deepEqual(
+    repeated.legacy.snapshot.pendingLegacySessions,
+    first.legacy.snapshot.pendingLegacySessions,
+  )
 })
 
 test('bootstrap physically removes retired browser fields without changing active settings', () => {
@@ -377,7 +437,9 @@ test('bootstrap physically removes retired browser fields without changing activ
   assert.equal(Object.hasOwn(result.settings.meta.fields, 'isLoggedIn'), false)
   assert.deepEqual(result.settings.snapshot.toolsConfig, { fetch_url: false })
   assert.deepEqual(result.settings.snapshot.customSetting, { keep: true })
-  assert.equal(result.legacy.snapshot.sessions[0].messages[0].content, 'keep-message')
+  assert.equal(Object.hasOwn(result.legacy.snapshot, 'sessions'), false)
+  assert.deepEqual(result.legacy.snapshot.pendingLegacySessions, legacyPayload.sessions)
+  assert.deepEqual(result.legacy.retiredAccountFieldsRemoved.sort(), ['isLoggedIn', 'sessions', 'user'])
   assert.equal(result.legacy.snapshot.modelConfig.model, 'local-model')
 
   const cleanedSettings = JSON.parse(storage.values.get(SETTINGS_STORAGE_KEY))
@@ -390,7 +452,8 @@ test('bootstrap physically removes retired browser fields without changing activ
   assert.equal(Object.hasOwn(cleanedSettings.__sync.fields, 'user'), false)
   assert.equal(Object.hasOwn(cleanedSettings.__sync.fields, 'isLoggedIn'), false)
   assert.equal(Object.hasOwn(cleanedSettings.__sync.fields, 'strongAccent'), false)
-  assert.equal(cleanedLegacy.sessions[0].messages[0].content, 'keep-message')
+  assert.equal(Object.hasOwn(cleanedLegacy, 'sessions'), false)
+  assert.deepEqual(cleanedLegacy.pendingLegacySessions, legacyPayload.sessions)
   assert.equal(cleanedLegacy.modelConfig.baseUrl, 'http://localhost:11434')
 })
 
@@ -410,7 +473,9 @@ test('blocked localStorage rewrites still expose a clean snapshot and request a 
   assert.equal(result.legacy.cleanupNeeded, true)
   assert.equal(Object.hasOwn(result.legacy.snapshot, 'user'), false)
   assert.equal(Object.hasOwn(result.legacy.snapshot, 'isLoggedIn'), false)
-  assert.deepEqual(result.legacy.snapshot.sessions, [{ id: 'safe' }])
+  assert.equal(Object.hasOwn(result.legacy.snapshot, 'sessions'), false)
+  assert.deepEqual(result.legacy.snapshot.pendingLegacySessions, [{ id: 'safe' }])
+  assert.deepEqual(result.legacy.retiredAccountFieldsRemoved.sort(), ['isLoggedIn', 'sessions', 'user'])
   assert.equal(result.legacy.snapshot.theme, 'dark')
 })
 

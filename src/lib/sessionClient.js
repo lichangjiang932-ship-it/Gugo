@@ -123,18 +123,32 @@ export async function searchSessionMessages({ query, sessionId, limit = 20, offs
 
 export const LEGACY_SESSION_IMPORT_BATCH_SIZE = 20
 
-function isStableLegacyMessage(message) {
+function hasUnstableLegacyTurnState(message) {
   const meta = message?.meta && typeof message.meta === 'object' ? message.meta : {}
-  return meta.streaming !== true && meta.pendingServerSync !== true
+  return meta.streaming === true || meta.pendingServerSync === true
+}
+
+function normalizeLegacySessionMessagesForServer(messages) {
+  if (!Array.isArray(messages)) return []
+  return messages.map((message) => {
+    const [normalized] = normalizeSessionMessagesForServer([message])
+    if (!hasUnstableLegacyTurnState(message)) return normalized
+
+    // A browser may have staged the final user row or a visible assistant
+    // partial while a server Turn was still in flight. Preserve that text as
+    // recovery history, but sever its non-portable Turn/tool lifecycle so the
+    // imported snapshot cannot masquerade as a completed or resumable Turn.
+    const recovered = { ...normalized }
+    delete recovered.modelContext
+    return recovered
+  })
 }
 
 export function selectLegacySessionImportCandidates(sessions) {
   if (!Array.isArray(sessions)) return []
   return sessions.flatMap((session) => {
     if (!session?.id || Number.isInteger(session.serverRevision)) return []
-    const messages = normalizeSessionMessagesForServer(
-      (Array.isArray(session.messages) ? session.messages : []).filter(isStableLegacyMessage),
-    )
+    const messages = normalizeLegacySessionMessagesForServer(session.messages)
     return [{
       id: session.id,
       title: session.title || 'Untitled',
@@ -168,9 +182,43 @@ export async function importLegacySessionsRemote(sessions, {
     signal,
   })
   const result = await parseResponse(response)
-  if (!Array.isArray(result?.results)
+  const requestedIds = new Set((Array.isArray(sessions) ? sessions : []).map((session) => session?.id))
+  const resultIds = new Set()
+  const targetIds = new Set()
+  const validResults = Array.isArray(result?.results)
+    && result.results.length === requestedIds.size
+    && result.results.every((entry) => {
+      const id = entry?.id
+      const sessionId = entry?.sessionId
+      const status = entry?.status
+      const session = entry?.session
+      if (!requestedIds.has(id)
+        || resultIds.has(id)
+        || typeof sessionId !== 'string'
+        || !sessionId
+        || sessionId.length > 512
+        || targetIds.has(sessionId)
+        || !['imported', 'server_authoritative'].includes(status)
+        || (session !== null && (
+          !session
+          || typeof session !== 'object'
+          || Array.isArray(session)
+          || session.id !== sessionId
+        ))
+        || (status === 'imported' && session === null)
+        || (sessionId !== id && session === null)) return false
+      resultIds.add(id)
+      targetIds.add(sessionId)
+      return true
+    })
+  const importedCount = validResults
+    ? result.results.filter((entry) => entry.status === 'imported').length
+    : -1
+  if (!validResults
     || !Number.isInteger(result?.importedCount)
-    || !Number.isInteger(result?.serverAuthoritativeCount)) {
+    || !Number.isInteger(result?.serverAuthoritativeCount)
+    || result.importedCount !== importedCount
+    || result.serverAuthoritativeCount !== result.results.length - importedCount) {
     const error = new Error('Legacy Session import returned an invalid result')
     error.name = 'SessionRequestError'
     error.code = 'INVALID_LEGACY_SESSION_IMPORT_RESULT'

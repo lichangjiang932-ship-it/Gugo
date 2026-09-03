@@ -17,6 +17,11 @@ import {
   releasePluginSnapshotFromDefinition,
   runtimeTransformerToolName,
 } from '../plugins/pluginDefinition.js'
+import {
+  createRuntimePluginDurableIdentity,
+  trustVerifiedRuntimePluginRelease,
+} from '../plugins/runtimePluginDurableIdentity.js'
+import { verifyRuntimePluginReleaseContentIdentity } from '../plugins/runtimePluginReleaseIdentity.js'
 import { verifyPluginEntryIntegrity } from '../plugins/pluginIntegrity.js'
 import { readPluginEntryFile } from '../plugins/pluginEntryFile.js'
 import {
@@ -193,24 +198,25 @@ function newReleaseCandidate(definition, source) {
 
 export function hydrateStoredRelease(row) {
   if (!row) return null
-  const plugin = row.plugin
+  const verified = verifyRuntimePluginReleaseContentIdentity(row)
+  const plugin = verified.plugin
   if (!plugin || typeof plugin !== 'object' || Array.isArray(plugin)
-    || plugin.id !== row.pluginId || plugin.type !== 'transformer') {
+    || plugin.id !== verified.pluginId || plugin.type !== 'transformer') {
     throw serviceError('PLUGIN_RELEASE_CORRUPT', '插件 Release 身份不匹配', 500)
   }
-  return deepFreeze({
-    releaseId: row.releaseId,
-    pluginId: row.pluginId,
-    sourceDigest: row.sourceDigest,
-    releaseContentDigest: row.releaseContentDigest,
-    digestVersion: row.digestVersion,
-    source: row.source,
+  return trustVerifiedRuntimePluginRelease(deepFreeze({
+    releaseId: verified.releaseId,
+    pluginId: verified.pluginId,
+    sourceDigest: verified.sourceDigest,
+    releaseContentDigest: verified.releaseContentDigest,
+    digestVersion: verified.digestVersion,
+    source: verified.source,
     plugin,
-    validationStatus: row.validationStatus,
-    healthStatus: row.healthStatus,
-    failure: row.failure,
-    createdAt: row.createdAt,
-  })
+    validationStatus: verified.validationStatus,
+    healthStatus: verified.healthStatus,
+    failure: verified.failure,
+    createdAt: verified.createdAt,
+  }))
 }
 
 function persistCandidate(candidate, { validationStatus, healthStatus, failure = null }) {
@@ -351,8 +357,11 @@ function runtimeStateConflict() {
   return serviceError('PLUGIN_RUNTIME_STATE_CONFLICT', '同 ID runtime 不属于目标 transformer Release', 409)
 }
 
-export async function installTransformerRelease(release) {
+export async function installTransformerRelease(release, {
+  resetDurableAgentEventSubscriptions = false,
+} = {}) {
   const plugin = release.plugin
+  const durableIdentity = createRuntimePluginDurableIdentity(release)
   const existing = getRuntimePlugin(plugin.id)
   const ownedSlot = activeTransformerSlots.get(plugin.id)
   if (existing?.state === 'active'
@@ -361,7 +370,9 @@ export async function installTransformerRelease(release) {
   }
   if (existing || ownedSlot) throw runtimeStateConflict()
 
-  const definition = createDistributedPluginDefinition(plugin)
+  const definition = createDistributedPluginDefinition(plugin, {
+    distribution: plugin.distribution || null,
+  })
   const toolName = runtimeTransformerToolName(plugin.id)
   const slot = Object.seal({ release, ownershipToken: Symbol(plugin.id) })
   activeTransformerSlots.set(plugin.id, slot)
@@ -389,7 +400,7 @@ export async function installTransformerRelease(release) {
           })
         },
       })
-    })
+    }, durableIdentity, { resetDurableAgentEventSubscriptions })
     return Object.freeze({ runtime, slot, installed: true })
   } catch (error) {
     if (activeTransformerSlots.get(plugin.id) === slot) activeTransformerSlots.delete(plugin.id)

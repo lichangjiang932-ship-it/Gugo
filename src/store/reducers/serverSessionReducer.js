@@ -97,9 +97,28 @@ export function reconcileServerSessionCatalog(
     serverAuthoritativeIds = [],
     importedSessionIds = [],
     preserveSessionIds = [],
+    legacySessionIdMappings = [],
   } = {},
 ) {
-  const localSessions = Array.isArray(state?.sessions) ? state.sessions : []
+  const idMappings = new Map()
+  for (const mapping of Array.isArray(legacySessionIdMappings) ? legacySessionIdMappings : []) {
+    const sourceSessionId = String(mapping?.sourceSessionId || '').trim()
+    const sessionId = String(mapping?.sessionId || '').trim()
+    if (sourceSessionId && sessionId && sourceSessionId !== sessionId) {
+      idMappings.set(sourceSessionId, sessionId)
+    }
+  }
+  const localSessions = (Array.isArray(state?.sessions) ? state.sessions : []).map((session) => {
+    const sessionId = idMappings.get(session?.id)
+    if (!sessionId) return session
+    return {
+      ...session,
+      id: sessionId,
+      // Recovery copies use deterministically re-keyed message ids. Force one
+      // canonical snapshot read instead of retaining incompatible browser ids.
+      messages: [],
+    }
+  })
   const localById = new Map(localSessions.map((session) => [session.id, session]))
   const serverIds = new Set()
   const authoritativeIds = new Set(Array.isArray(serverAuthoritativeIds) ? serverAuthoritativeIds : [])
@@ -134,13 +153,16 @@ export function reconcileServerSessionCatalog(
     && !Number.isInteger(session.serverRevision)
   ))
   const sessions = [...localOnly, ...serverSessions]
-  const activeSessionId = sessions.some((session) => session.id === state.activeSessionId)
-    ? state.activeSessionId
+  const mappedActiveSessionId = idMappings.get(state.activeSessionId) || state.activeSessionId
+  const activeSessionId = sessions.some((session) => session.id === mappedActiveSessionId)
+    ? mappedActiveSessionId
     : sessions.find((session) => !session.archivedAt)?.id ?? sessions[0]?.id ?? null
   const retainedIds = new Set(sessions.map((session) => session.id))
-  const sessionDrafts = Object.fromEntries(Object.entries(state.sessionDrafts || {}).filter(
-    ([sessionId]) => retainedIds.has(sessionId),
-  ))
+  const sessionDrafts = {}
+  for (const [sourceSessionId, draft] of Object.entries(state.sessionDrafts || {})) {
+    const sessionId = idMappings.get(sourceSessionId) || sourceSessionId
+    if (retainedIds.has(sessionId)) sessionDrafts[sessionId] = draft
+  }
 
   return { ...state, sessions, activeSessionId, sessionDrafts }
 }
@@ -156,13 +178,17 @@ export function reduceServerSessionState(state, action) {
           serverAuthoritativeIds: action.payload?.serverAuthoritativeIds,
           importedSessionIds: action.payload?.importedSessionIds,
           preserveSessionIds: action.payload?.preserveSessionIds,
+          legacySessionIdMappings: action.payload?.legacySessionIdMappings,
         },
       )
-      if (!Object.prototype.hasOwnProperty.call(action.payload || {}, 'source')) return reconciled
+      const migrated = action.payload?.clearPendingLegacySessions === true
+        ? { ...reconciled, pendingLegacySessions: [] }
+        : reconciled
+      if (!Object.prototype.hasOwnProperty.call(action.payload || {}, 'source')) return migrated
       const source = action.payload?.source ?? null
       const changed = catalogSourceChanged(state.sessionCatalogSource, source)
       return {
-        ...reconciled,
+        ...migrated,
         sessionCatalogSource: source,
         sessionCatalogSourceMismatch: changed
           ? { previous: state.sessionCatalogSource, current: source }

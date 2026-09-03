@@ -352,8 +352,8 @@ export function createRuntimePluginContributionLifecycle(inputParts) {
     const attempted = []
     const cleanupTasks = []
     for (const part of [...parts].reverse()) {
-      if (part.state === 'revoked') continue
-      if (!['active', 'retained', 'indeterminate'].includes(part.state)) continue
+      if (part.state === 'revoked' && part.cleanupState !== 'failed') continue
+      if (!['active', 'retained', 'indeterminate', 'revoked'].includes(part.state)) continue
       const receipt = beginPartRevoke(part)
       part.state = receipt.visibility
       if (receipt.cleanup) {

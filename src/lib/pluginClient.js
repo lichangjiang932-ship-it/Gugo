@@ -258,6 +258,7 @@ const RUNTIME_PLUGIN_ACTIONS = Object.freeze([
 const RUNTIME_PLUGIN_APPROVABLE_ACTIONS = Object.freeze(['enable', 'reload'])
 const RUNTIME_PLUGIN_PERMISSION_CONTRACT_VERSION = 1
 const RUNTIME_PLUGIN_PERMISSION_APPROVAL_HEADER = 'X-Gugo-Plugin-Permission-Approval'
+const RUNTIME_PLUGIN_AGENT_EVENT_RESET_HEADER = 'X-Gugo-Agent-Event-Reset-To-Current'
 const SHA256_DIGEST_RE = /^sha256-[a-f0-9]{64}$/
 
 export function runtimePluginPermissionChallenge(error, { pluginId, action } = {}) {
@@ -302,7 +303,10 @@ export function runtimePluginPermissionChallenge(error, { pluginId, action } = {
  * 对本机 owner 可见的 transformer 插件执行运行时控制。
  * 仅接受白名单动作；非 loopback 或非本机 owner 时服务端返回 403。
  */
-export async function runtimePluginActionApi(pluginId, action, { approvalDigest } = {}) {
+export async function runtimePluginActionApi(pluginId, action, {
+  approvalDigest,
+  resetAgentEventSubscriptions = false,
+} = {}) {
   const id = String(pluginId || '').trim()
   const safeAction = String(action || '').toLowerCase()
   if (!RUNTIME_PLUGIN_ACTIONS.includes(safeAction)) {
@@ -313,11 +317,18 @@ export async function runtimePluginActionApi(pluginId, action, { approvalDigest 
   if (includeApproval && !SHA256_DIGEST_RE.test(approval)) {
     throw new TypeError('invalid runtime plugin permission approval digest')
   }
+  if (typeof resetAgentEventSubscriptions !== 'boolean'
+    || (resetAgentEventSubscriptions && safeAction !== 'enable')) {
+    throw new TypeError('agent event reset is supported only by the enable action')
+  }
   const resp = await fetch(`/api/plugins/runtime/${encodeURIComponent(id)}/${safeAction}`, {
     method: 'POST',
     headers: {
       ...authHeaders(),
       ...(includeApproval ? { [RUNTIME_PLUGIN_PERMISSION_APPROVAL_HEADER]: approval } : {}),
+      ...(resetAgentEventSubscriptions
+        ? { [RUNTIME_PLUGIN_AGENT_EVENT_RESET_HEADER]: 'true' }
+        : {}),
     },
   })
   return jsonOk(resp)
