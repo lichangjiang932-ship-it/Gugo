@@ -40,9 +40,8 @@ export default function ChatSplit() {
   const { t, lang } = useT()
   const { activeAgentId: globalActiveAgentId } = useActiveAgent()
   const initialSessionDraft = readSessionDraft((state.sessionDrafts || {})[state.activeSessionId])
-  const [input, setInput] = useState(() => (
-    state.activeSessionId ? initialSessionDraft.text : String(state.draftInput || '')
-  ))
+  const [input, setInput] = useState(() => (state.activeSessionId
+    ? initialSessionDraft.text : String(state.draftInput || '')))
   const [workbenchMessage, setWorkbenchMessage] = useState('')
   const [attachments, setAttachments] = useState(() => initialSessionDraft.attachments)
   const [isGenerating, setIsGenerating] = useState(false)
@@ -69,8 +68,7 @@ export default function ChatSplit() {
   const {
     activeSession, activeSessionId, contextToolSpecs, effectiveAgentId,
     effectiveSelectedModel, effectiveSelectedModelProviderId, messages,
-    modelOptions, modelReadiness, reloadModels, runtimeSkills, selectedContextWindow,
-    selectedContextWindowAuthoritative,
+    modelOptions, modelReadiness, reloadModels, runtimeSkills, selectedContextWindow, selectedContextWindowAuthoritative,
     selectedModel, selectedModelProviderId, setSelectedModel, slashRegistry,
   } = useChatCatalogState({
     authoritativeModelFailure, globalActiveAgentId, lang, state, t,
