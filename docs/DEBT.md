@@ -242,24 +242,27 @@ previews, and streaming updates.
 
 ## DEBT-TYPE-001 — Runtime contract type coverage
 
-**Status:** Open
+**Status:** Closed
 **Priority:** P2  
 **Area:** Type safety
 
-**Evidence / reproduction:** Runtime ports and event contracts remain
-JavaScript. Zod schemas and the existing event, adapter, and persistence
-contract suites protect serialized and runtime boundaries, but the repository
-has no checked-in static contract declarations, type-check command, or required
-CI type-check step. Internal adapter and service composition therefore still
-relies on runtime failures for many shape mismatches.
+**Evidence / reproduction:** Runtime ports and event contracts previously had
+runtime validation only, with no checked-in static declarations or CI typecheck.
 
-**Exit criteria:** Stable kernel ports, shared event payloads, and persistence
-adapter contracts have generated or native static types checked in CI; migration
-must be incremental and must not create a second event schema.
+**Exit criteria:** Stable event payload and kernel-port types are derived from
+their existing authorities and checked by an unconditional required CI step,
+without creating a second event schema.
 
-**Verification:** The existing event, adapter, and persistence contract suites
-are the runtime baseline. Closure additionally requires a checked-in type-check
-command and a required CI step that executes it.
+**Resolution:** `types/runtime-contracts.ts` derives Turn Event and payload types
+directly from the authoritative Zod schemas and derives stable kernel port types
+from their implementation factories and method constants. This avoids a second
+event schema while adding compile-time method coverage for attachment, Session,
+compaction, and subagent persistence boundaries. `tsconfig.contracts.json` keeps
+the migration incremental instead of enabling repository-wide `checkJs`.
+
+**Verification:** `npm run typecheck` is an unconditional required CI step on
+the cross-platform Node 22 test matrix. Existing event, adapter, persistence,
+and code-debt suites remain the runtime baseline.
 
 ## DEBT-RELEASE-001 — Desktop signing and provenance
 
