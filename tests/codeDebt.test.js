@@ -5,6 +5,7 @@ import path from 'node:path'
 
 const RUNTIME_IMPLEMENTATION_LINE_LIMIT = 600
 const RUNTIME_LARGE_FILE_DEBT_ID = 'DEBT-SIZE-001'
+const TYPE_COVERAGE_DEBT_ID = 'DEBT-TYPE-001'
 const GOVERNED_IMPLEMENTATION_ROOTS = Object.freeze(['bin', 'desktop', 'server', 'shared'])
 const GOVERNED_IMPLEMENTATION_PATH_PATTERN = /^(?:bin|desktop|server|shared)\/.+\.(?:[cm]?[jt]s|[jt]sx)$/
 const FRONTEND_IMPLEMENTATION_LINE_LIMIT = 600
@@ -443,6 +444,40 @@ test('kernel transition debt rows reference open canonical debt records', () => 
       debtStatuses.get(debtIds[0]),
       'Open',
       `Kernel transition debt ${row[0]} must reference an open canonical debt record`,
+    )
+  }
+})
+
+test('type coverage debt cannot close before static type checking is required in CI', () => {
+  const debtSource = readFileSync('docs/DEBT.md', 'utf8')
+  const sectionStart = debtSource.indexOf(`## ${TYPE_COVERAGE_DEBT_ID}`)
+  const sectionEnd = debtSource.indexOf('\n## ', sectionStart + 1)
+  assert.notEqual(sectionStart, -1, `${TYPE_COVERAGE_DEBT_ID} must remain in the debt register`)
+  const section = debtSource.slice(sectionStart, sectionEnd >= 0 ? sectionEnd : undefined)
+  const status = section.match(/^\*\*Status:\*\* (Open|Closed)\b/m)?.[1] ?? null
+
+  const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
+  const typecheckScript = packageJson.scripts?.typecheck
+  const hasTypecheckScript = typeof typecheckScript === 'string' && typecheckScript.trim().length > 0
+
+  const ciSource = readFileSync('.github/workflows/ci.yml', 'utf8')
+  const typecheckRunIndex = ciSource.search(/^\s+run:\s+npm run typecheck\s*$/m)
+  const stepStart = typecheckRunIndex < 0
+    ? -1
+    : ciSource.lastIndexOf('\n      - ', typecheckRunIndex)
+  const stepEnd = stepStart < 0 ? -1 : ciSource.indexOf('\n      - ', typecheckRunIndex)
+  const stepSource = stepStart < 0
+    ? ''
+    : ciSource.slice(stepStart, stepEnd >= 0 ? stepEnd : undefined)
+  const hasRequiredCiStep = typecheckRunIndex >= 0
+    && !/^\s+if:/m.test(stepSource)
+    && !/^\s+continue-on-error:\s*true\s*$/m.test(stepSource)
+
+  if (!hasTypecheckScript || !hasRequiredCiStep) {
+    assert.equal(
+      status,
+      'Open',
+      `${TYPE_COVERAGE_DEBT_ID} cannot close without a typecheck script and unconditional CI step`,
     )
   }
 })
