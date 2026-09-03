@@ -41,6 +41,8 @@ files:
   - src/lib/presentationExport/presentationParseHelpers.js
   - src/lib/presentationExport/presentationParser.js
   - desktop/main.js
+  - desktop/mainWindowSecurity.js
+  - desktop/updateSetup.js
   - desktop/petDrag.js
   - desktop/preload.cjs
   - desktop/runtime.js

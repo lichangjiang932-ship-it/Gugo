@@ -69,6 +69,8 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.match(config, /^afterPack:\s+scripts\/verify-desktop-package\.cjs\s*$/m)
   assert.match(config, /^\s*-\s+desktop\/petDrag\.js\s*$/m)
   assert.match(config, /^\s*-\s+desktop\/updateRuntime\.js\s*$/m)
+  assert.match(config, /^\s*-\s+desktop\/mainWindowSecurity\.js\s*$/m)
+  assert.match(config, /^\s*-\s+desktop\/updateSetup\.js\s*$/m)
   assert.match(config, /npmRebuild:\s*false/)
   assert.match(config, /asarUnpack:[\s\S]*node_modules\/sharp\/\*\*\/\*/)
   assert.match(config, /asarUnpack:[\s\S]*node_modules\/@img\/\*\*\/\*/)
@@ -105,6 +107,48 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.doesNotMatch(config, /publisherName|certificateFile|certificatePassword/)
   assert.doesNotMatch(config, /verifyUpdateCodeSignature:\s*false/)
   assert.doesNotMatch(main, /showMessageBox/)
+})
+
+test('every desktop entry import closure is packed into the app.asar', () => {
+  const config = read('electron-builder.yml')
+  const files = [...config.matchAll(/^\s*-\s+(\S+)\s*$/gm)].map((match) => match[1])
+  const explicit = new Set(files.filter((file) => !file.includes('*')))
+  // `dir/**/*` covers everything under dir, so a glob prefix covers any file it starts with.
+  const globPrefixes = files
+    .filter((file) => file.includes('**'))
+    .map((file) => file.split('/**')[0])
+  const covered = (relPath) => explicit.has(relPath)
+    || globPrefixes.some((prefix) => relPath === prefix || relPath.startsWith(`${prefix}/`))
+
+  const resolvedImports = new Set()
+  const collect = (fromFile) => {
+    const source = read(fromFile)
+    for (const match of source.matchAll(/from\s+['"](\.(?:\.\/|[^'"]+))['"]/g)) {
+      const target = match[1]
+      if (!target.startsWith('./') && !target.startsWith('../')) continue
+      const base = path.posix.dirname(fromFile)
+      const resolved = path.posix.normalize(path.posix.join(base, target)).replace(/^\.\//, '')
+      if (/^\.\.\//.test(resolved)) continue // outside repo, e.g. node_modules
+      resolvedImports.add(resolved)
+    }
+  }
+  collect('desktop/main.js')
+  for (const resolved of [...resolvedImports]) {
+    collect(resolved)
+  }
+  assert.ok(resolvedImports.size > 0, 'main.js must import local modules')
+  for (const relPath of resolvedImports) {
+    assert.equal(
+      fs.existsSync(new URL(`../${relPath}`, import.meta.url)),
+      true,
+      `${relPath} must exist on disk`,
+    )
+    assert.equal(
+      covered(relPath),
+      true,
+      `${relPath} is imported by the desktop entry but is not included by electron-builder files/globs; it would be missing from app.asar`,
+    )
+  }
 })
 
 test('desktop ASAR verifier normalizes package paths and covers the backend entry dependency closure', () => {
