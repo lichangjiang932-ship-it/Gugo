@@ -12,6 +12,14 @@ const releaseControllerSource = readFileSync(
   new URL('../server/plugins/runtimePluginReleaseController.js', import.meta.url),
   'utf8',
 )
+const registryPolicySource = readFileSync(
+  new URL('../server/plugins/runtimePluginRegistryPolicy.js', import.meta.url),
+  'utf8',
+)
+const contextFactorySource = readFileSync(
+  new URL('../server/plugins/runtimePluginContextFactory.js', import.meta.url),
+  'utf8',
+)
 
 function pluginRecord(id, sequence) {
   return { manifest: { id }, sequence }
@@ -186,10 +194,10 @@ test('release controller fails callback-owned release operations before calling 
   }
 })
 
-test('runtime plugin registry delegates release state and orchestration to the focused controller', () => {
+test('runtime plugin registry is a bounded composition host with one-way policy boundaries', () => {
   assert.ok(
-    registrySource.split(/\r?\n/u).length <= 360,
-    'Keep the runtime plugin registry composition host below 360 lines',
+    registrySource.split(/\r?\n/u).length <= 300,
+    'Keep the runtime plugin registry composition host below 300 lines',
   )
   assert.match(
     registrySource,
@@ -197,8 +205,10 @@ test('runtime plugin registry delegates release state and orchestration to the f
   )
   assert.doesNotMatch(registrySource, /let shuttingDown\b|let shutdownPromise\b/u)
   assert.doesNotMatch(registrySource, /Promise\.allSettled\(pendingReloads\)/u)
-  assert.doesNotMatch(
-    releaseControllerSource,
-    /from ['"]\.\/runtimePluginRegistry\.js['"]/u,
-  )
+  assert.doesNotMatch(registrySource, /PLUGIN_CONFIG_HEALTH_CHECK_INVALID|PLUGIN_CONTRIBUTION_UNDECLARED/u)
+  for (const focusedSource of [releaseControllerSource, registryPolicySource, contextFactorySource]) {
+    assert.doesNotMatch(focusedSource, /from ['"]\.\/runtimePluginRegistry\.js['"]/u)
+  }
+  assert.match(registrySource, /createRuntimePluginRegistryPolicy\(\{ plugins, stagingRecords \}\)/u)
+  assert.match(registrySource, /createRuntimePluginContextForRecord\(record, \{/u)
 })
