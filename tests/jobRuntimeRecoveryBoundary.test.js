@@ -47,6 +47,11 @@ const loopHostSource = readFileSync(
   'utf8',
 )
 
+test('job runtime remains a bounded command and composition facade', () => {
+  assert.ok(jobRuntimeSource.split(/\r?\n/u).length <= 300)
+  assert.doesNotMatch(jobRuntimeSource, /runJobRuntimeTick|claimDueJobWakes|runJobRuntimeStepExecution/u)
+})
+
 test('job runtime delegates scheduler and tick lifecycle to a focused loop host', () => {
   assert.match(jobRuntimeSource, /createJobRuntimeLoopHost\(\{/u)
   assert.doesNotMatch(loopHostSource, /from ['"]\.\/jobRuntime\.js['"]/u)

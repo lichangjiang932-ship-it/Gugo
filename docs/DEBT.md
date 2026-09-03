@@ -31,7 +31,7 @@ evidence settlement, and lease cleanup.
 **Area:** Runtime architecture
 
 **Evidence / reproduction:** The `Current transition debt` table in
-`docs/KERNEL_BOUNDARY.md` still lists three host compatibility and composition
+`docs/KERNEL_BOUNDARY.md` still lists two host compatibility and composition
 surfaces outside the target minimal kernel. The former `TurnEngine.js` row was
 retired after `DEBT-ARCH-001` recorded its focused execution runtimes and stable
 runtime-port rules. The `turnEngineHost.js` row was retired after its transitive
@@ -72,8 +72,11 @@ now assembled into an immutable per-runtime snapshot by
 `jobRuntimeDefaultPolicyCapabilities.js`; the facade preserves its existing
 constructor overrides without importing those concrete policy dependencies.
 Scheduler ownership, tick tracking, bounded draining, and coalesced shutdown now
-live in `jobRuntimeLoopHost.js`; the facade delegates lifecycle calls while
-preserving its compatibility observations.
+live in `jobRuntimeLoopHost.js`; wake processing, lease claim/cleanup,
+preparation/recovery, terminal completion, and step execution now live in focused
+tick runtimes. `jobRuntime.js` is a 220-line command/composition facade, and its
+boundary tests prohibit concrete loop, planner, policy, recovery, and event-store
+responsibilities from returning. The Job transition row is therefore retired.
 
 Runtime plugin installation and uninstall settlement now live in
 `runtimePluginInstallController.js` and `runtimePluginUninstallController.js`.
