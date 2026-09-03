@@ -6,6 +6,13 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.53] - 2026-09-03
+
+### Fixed
+
+- Packed `desktop/mainWindowSecurity.js` and `desktop/updateSetup.js` into the production desktop `app.asar`; `main.js` imported them but the explicit electron-builder `files` list omitted them, which crashed the installed app with `ERR_MODULE_NOT_FOUND` at main-process startup.
+- Added a regression guard that derives the desktop entry import closure and asserts every local module (desktop, shared, and server) is included by electron-builder `files`/globs.
+
 ## [0.11.52] - 2026-09-03
 
 ### Added

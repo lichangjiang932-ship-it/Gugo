@@ -1,7 +1,7 @@
 # Gugo Plugin Compatibility Contract v1
 
 Status: public, versioned local-interchange contract. This document describes
-what Gugo 0.11.52 accepts. “MUST”, “MUST NOT”, and “SHOULD” are normative.
+what Gugo 0.11.53 accepts. “MUST”, “MUST NOT”, and “SHOULD” are normative.
 
 This contract covers immutable disk packages, offline Marketplace metadata,
 publisher identity, and compatibility gates. It does not turn process-local
@@ -12,7 +12,7 @@ define a remote store.
 
 - Contract version: `1`.
 - Current plugin API: `1.1.0`.
-- Current host version: `0.11.52`.
+- Current host version: `0.11.53`.
 - `apiVersion` is compatible when its major version matches the host API and it
   is not newer than the host API. For `0.x`, the minor version must also match.
 - `hostVersion` and `dependencyVersions` use the supported semver comparators
