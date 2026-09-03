@@ -7,7 +7,11 @@ import test from 'node:test'
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-vision-status-tests', String(process.pid))
 
 const { createAppServer } = await import('../server/appServer.js')
-const { upsertIntegration } = await import('../server/services/integrationsStore.js')
+const { getDb } = await import('../server/db.js')
+const {
+  getEnabledIntegrationCredentials,
+  upsertIntegration,
+} = await import('../server/services/integrationsStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 async function withServer(getEnv, fn) {
@@ -26,6 +30,68 @@ test('GET /api/integrations/vision_assist/status rejects unauthenticated request
     const res = await fetch(`${baseUrl}/api/integrations/vision_assist/status`)
     assert.equal(res.status, 401)
   })
+})
+
+test('POST /api/integrations canonicalizes unsupported vision-assist languages', async () => {
+  const { token, userId } = issueTestSession()
+
+  await withServer(() => ({}), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/integrations`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        provider: 'vision_assist',
+        name: 'Canonical Vision Copilot',
+        enabled: true,
+        config: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          modelName: 'llava',
+          language: 'ja',
+        },
+        secret: {},
+      }),
+    })
+
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.integration.config.language, 'en')
+    const stored = getDb().prepare(`
+      SELECT config_json FROM integrations WHERE user_id = ? AND provider = 'vision_assist'
+    `).get(userId)
+    assert.equal(JSON.parse(stored.config_json).language, 'en')
+  })
+})
+
+test('reading legacy vision-assist storage projects a canonical language without mutating it', () => {
+  const { userId } = issueTestSession()
+  const integration = upsertIntegration({
+    userId,
+    provider: 'vision_assist',
+    name: 'Legacy Vision Copilot',
+    enabled: true,
+    config: {
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      modelName: 'llava',
+      language: 'zh',
+    },
+    secret: {},
+  })
+  const legacyConfig = {
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    modelName: 'llava',
+    language: 'ko',
+  }
+  getDb().prepare('UPDATE integrations SET config_json = ? WHERE id = ?')
+    .run(JSON.stringify(legacyConfig), integration.id)
+
+  const credentials = getEnabledIntegrationCredentials({ userId, provider: 'vision_assist' })
+  assert.equal(credentials.config.language, 'en')
+  const stored = getDb().prepare('SELECT config_json FROM integrations WHERE id = ?')
+    .get(integration.id)
+  assert.equal(JSON.parse(stored.config_json).language, 'ko')
 })
 
 test('GET /api/integrations/vision_assist/status uses the saved BYOK model without an env whitelist', async () => {

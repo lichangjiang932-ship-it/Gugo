@@ -9,6 +9,7 @@
 
 import crypto from 'node:crypto'
 import { getDb } from '../db.js'
+import { normalizeProductLanguage } from '../../shared/productLanguage.js'
 import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
 import {
   BROWSER_CONNECTOR_TOOLS,
@@ -27,6 +28,20 @@ function newId() {
 function parseJson(value, fallback) {
   if (value == null || value === '') return fallback
   try { return JSON.parse(value) } catch { return fallback }
+}
+
+function normalizeIntegrationConfig(provider, config) {
+  if (provider !== 'vision_assist') return config
+  const normalized = config && typeof config === 'object' && !Array.isArray(config)
+    ? { ...config }
+    : {}
+  normalized.language = normalizeProductLanguage(normalized.language, 'zh')
+  return normalized
+}
+
+function readIntegrationConfig(row) {
+  const stored = parseJson(row?.config_json, {})
+  return normalizeIntegrationConfig(row?.provider, stored)
 }
 
 function readIntegrationSecret(row) {
@@ -72,7 +87,7 @@ function row2integration(row) {
     provider: row.provider,
     name: row.name || '',
     enabled: row.enabled === 1,
-    config: parseJson(row.config_json, {}),
+    config: readIntegrationConfig(row),
     // 仅返回脱敏视图；如需读取真实值请用 getIntegrationSecret
     secret: maskSecret(readIntegrationSecret(row)),
     lastTest: row.last_test_at ? {
@@ -94,7 +109,7 @@ function row2integrationCredentials(row) {
     provider: row.provider,
     name: row.name || '',
     enabled: row.enabled === 1,
-    config: parseJson(row.config_json, {}),
+    config: readIntegrationConfig(row),
     secret: readIntegrationSecret(row),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -161,10 +176,10 @@ function findByProvider({ userId, provider }) {
 }
 
 function getIntegrationSecretInternal({ userId, id }) {
-  const row = getDb().prepare('SELECT id, secret_json, config_json FROM integrations WHERE user_id = ? AND id = ?').get(userId, id)
+  const row = getDb().prepare('SELECT id, provider, secret_json, config_json FROM integrations WHERE user_id = ? AND id = ?').get(userId, id)
   if (!row) return null
   return {
-    config: parseJson(row.config_json, {}),
+    config: readIntegrationConfig(row),
     secret: readIntegrationSecret(row),
   }
 }
@@ -184,7 +199,7 @@ export function getEnabledIntegrationCredentials({ userId, provider }) {
   const row = findByProvider({ userId, provider })
   if (!row || row.enabled !== 1) return null
   return {
-    config: parseJson(row.config_json, {}),
+    config: readIntegrationConfig(row),
     secret: readIntegrationSecret(row),
   }
 }
@@ -217,7 +232,10 @@ export function upsertIntegration({ userId, id, provider, name, enabled, config,
   }
 
   const nextEnabled = enabled === undefined ? (row ? row.enabled === 1 : true) : !!enabled
-  const nextConfig = config === undefined ? parseJson(row?.config_json, {}) : (config || {})
+  const nextConfig = normalizeIntegrationConfig(
+    provider,
+    config === undefined ? parseJson(row?.config_json, {}) : (config || {}),
+  )
   const existingSecret = readIntegrationSecret(row)
   const nextSecret = mergeSecret(existingSecret, secret || {})
   const nextName = name === undefined ? (row?.name || meta.label) : (name || meta.label)
