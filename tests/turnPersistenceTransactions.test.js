@@ -33,8 +33,10 @@ const {
 } = await import('../server/services/sessionStore.js')
 const {
   createSqliteTurnPersistenceTransactions,
-  SQLITE_TURN_PERSISTENCE_TRANSACTIONS,
 } = await import('../server/services/sqliteTurnPersistenceTransactions.js')
+const SQLITE_TURN_PERSISTENCE_TRANSACTIONS = createSqliteTurnPersistenceTransactions({
+  bindAttachments: bindManagedAttachmentsToMessage,
+})
 const {
   appendTurnEvent,
   appendTurnEvents,

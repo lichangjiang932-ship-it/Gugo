@@ -90,7 +90,7 @@ target kernel:
 
 | File | Current role | Required direction | Canonical debt |
 |---|---|---|---|
-| Managed attachment governance, artifacts, verified-file projections, and data governance | Turn validation and model materialization cross `ManagedAttachmentRuntimePort v1`; HTTP upload, metadata, deletion, and authoritative content streaming cross `ManagedAttachmentStoragePort v1` without exposing host paths. Bulk user-data governance and the atomic SQLite turn-start binding still assume host-owned transaction domains | Move the remaining aggregate operations behind backend-neutral governance capabilities without weakening ownership checks or splitting the existing atomic turn-start commit | `DEBT-ARCH-002` |
+| Managed attachment user-data governance | Turn validation/model materialization cross `ManagedAttachmentRuntimePort v1`; HTTP storage crosses `ManagedAttachmentStoragePort v1`; the SQLite turn-start transaction receives its attachment binder only from the concrete SQLite adapter and retains one atomic commit. Bulk user-data clear still stages attachment filesystem buckets directly | Move attachment preview, staging, rollback, recovery, and cleanup behind a backend-neutral governance capability without weakening snapshot or lease checks | `DEBT-ARCH-002` |
 
 The repository's 600-line preference applies to implementation files under
 `server/`, `shared/`, `desktop/`, and `bin/`. `DEBT-SIZE-001` is the executable
