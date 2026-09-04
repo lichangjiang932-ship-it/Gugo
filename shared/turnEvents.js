@@ -75,16 +75,16 @@ const taskVerificationCheckSchema = z.object({
   commandScope: z.string().max(1_000),
   coverage: z.enum(['cwd', 'targeted']),
   code: z.string().min(1).max(128).regex(/^[A-Z][A-Z0-9_]*$/u),
-  failures: z.number().int().min(0).max(3),
+  failures: z.number().int().min(0).max(5),
   requiredEpoch: z.number().int().nonnegative(),
   mutationTargets: z.array(z.string().min(1).max(2_000)).max(16).optional(),
   diagnostic: z.string().min(1).max(1_200).optional(),
 }).strict()
 const taskVerificationSchema = z.object({
   version: z.literal(1),
-  maxFailures: z.number().int().min(1).max(3),
-  consecutiveFailures: z.number().int().min(0).max(3),
-  checks: z.array(taskVerificationCheckSchema).min(1).max(9),
+  maxFailures: z.number().int().min(1).max(5),
+  consecutiveFailures: z.number().int().min(0).max(5),
+  checks: z.array(taskVerificationCheckSchema).min(1).max(64),
 }).strict()
 const turnFailureSchema = toolFailureSchema.extend({
   // New terminal projections are code-only. `message` and `hint` remain
