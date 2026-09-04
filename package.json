@@ -34,6 +34,7 @@
     "dev": "vite --configLoader native",
     "build": "vite build --configLoader runner",
     "audit:prod": "node scripts/audit-production.mjs",
+    "audit:functions": "node scripts/audit-function-length.cjs",
     "lint": "eslint .",
     "test": "node scripts/run-tests.js",
     "eval:offline": "node scripts/run-tests.js offline-eval",
