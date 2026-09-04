@@ -177,6 +177,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
       disabled: z.array(z.string()).optional(),
     }).strict().optional(),
     intentMode: z.enum(['auto', 'answer', 'execute']).optional(),
+    locale: z.enum(['zh', 'en']).optional(),
     approvalMode: z.enum(['normal', 'acceptEdits', 'plan', 'bypass']).optional(),
     workspacePath: nullableText,
     projectDirectory: nullableText,

@@ -330,6 +330,7 @@ test('TurnEngine rejects an ambiguous model name and accepts an explicit Provide
     content: 'use the selected provider',
     modelName,
     modelProviderId: providers[1].id,
+    locale: 'zh-CN',
   })
   await engine.waitForTurn({
     userId,
@@ -339,6 +340,7 @@ test('TurnEngine rejects an ambiguous model name and accepts an explicit Provide
   const started = events('turn-explicit-provider-uuid').find((event) => event.type === 'turn.started')
   assert.equal(started.payload.modelProviderId, providers[1].id)
   assert.equal(started.payload.modelName, modelName)
+  assert.equal(started.payload.locale, 'zh')
 })
 
 test('TurnEngine persists chat-only mode and never exposes tools to the loop', async () => {

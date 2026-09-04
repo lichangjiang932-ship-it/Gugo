@@ -627,10 +627,11 @@ test('an authoritative preflight 401 refreshes local auth and retries only the r
   }
 })
 
-test('a pre-start Turn 401 refreshes local auth but never replays the create request', async () => {
+test('a pre-start Turn 401 refreshes local auth and safely retries the same Turn once', async () => {
   const dom = setupDom()
   const actions = []
   const rejected = []
+  const turnIds = []
   const root = createRoot(document.getElementById('root'))
   let triggerSend = null
   let turnCalls = 0
@@ -646,26 +647,31 @@ test('a pre-start Turn 401 refreshes local auth but never replays the create req
           setAuthToken('fresh-local-token')
           return { mode: 'local', authenticated: true, user: { email: 'local@gugo' } }
         },
-        runChatTurn: async () => {
+        runChatTurn: async ({ onTurnAccepted, turnId }) => {
           turnCalls += 1
-          return {
-            failed: true,
-            rejectedBeforeStart: true,
-            error: Object.assign(new Error('expired login'), { status: 401 }),
+          turnIds.push(turnId)
+          if (turnCalls === 1) {
+            return {
+              failed: true,
+              rejectedBeforeStart: true,
+              error: Object.assign(new Error('expired login'), { status: 401 }),
+            }
           }
+          onTurnAccepted?.({ turnId })
+          return { completed: true }
         },
       }))
     })
 
     let accepted
-    await act(async () => { accepted = await triggerSend('keep this draft for explicit retry') })
+    await act(async () => { accepted = await triggerSend('send after refreshing local auth') })
 
-    assert.equal(accepted, false)
-    assert.equal(turnCalls, 1)
+    assert.equal(accepted, true)
+    assert.equal(turnCalls, 2)
+    assert.equal(turnIds[0], turnIds[1])
     assert.equal(getAuthToken(), 'fresh-local-token')
-    assert.equal(rejected.length, 1)
-    assert.deepEqual(rejected[0].options, { authenticationRefreshed: true })
-    assert.deepEqual(actions, [])
+    assert.deepEqual(rejected, [])
+    assert.equal(actions.some((action) => action.type === 'SEND_MESSAGE'), true)
   } finally {
     setAuthToken('')
     await act(async () => root.unmount())

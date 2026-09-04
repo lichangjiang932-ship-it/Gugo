@@ -225,7 +225,7 @@ export default function useChatSendFlow({
         dispatch({ type: 'UPDATE_SESSION_TITLE_FOR', payload: { sessionId, title: fallback.length > 15 ? `${fallback.slice(0, 15)}…` : fallback } })
       }
     }
-    const turnResult = await runChatTurn({
+    const turnRequest = {
       abortCtrlRef,
       agentId: effectiveAgentId,
       attachments,
@@ -257,25 +257,33 @@ export default function useChatSendFlow({
       turnId,
       userPrompt: parsedSkill.skillId && skill ? parsedSkill.userPrompt : content,
       workspacePath,
-    })
+    }
+    let turnResult = await runChatTurn(turnRequest)
+    if (turnResult?.rejectedBeforeStart && Number(turnResult.error?.status) === 401) {
+      const refreshed = typeof refreshAuth === 'function'
+        ? await refreshAuth({ retryDelays: [0] })
+        : null
+      if (refreshed?.authenticated === true && isLoggedInLocally()) {
+        // A 401 is a definitive pre-execution rejection. Reusing the same
+        // turnId also makes the retry safe if an intermediary misreported the
+        // response: the Turn client recovers TURN_EXISTS instead of creating a
+        // duplicate operation.
+        turnResult = await runChatTurn(turnRequest)
+      } else {
+        setAuthToken('')
+        dispatch({ type: 'LOGOUT' })
+        onAuthenticationRequired?.()
+        return false
+      }
+    }
     if (turnResult?.rejectedBeforeStart) {
       if (isModelSetupFailure(turnResult.error)) {
         onModelCatalogChanged?.()
         onModelUnavailable?.({ kind: 'provider-changed', canSend: false, authoritative: true })
       } else if (Number(turnResult.error?.status) === 401) {
-        const refreshed = typeof refreshAuth === 'function'
-          ? await refreshAuth({ retryDelays: [0] })
-          : null
-        if (refreshed?.authenticated === true && isLoggedInLocally()) {
-          // The create-Turn POST may have reached the server. Never replay it
-          // automatically; tell the user that credentials are fresh and let
-          // them explicitly send the preserved draft again.
-          onSendRejected?.(turnResult.error, { authenticationRefreshed: true })
-        } else {
-          setAuthToken('')
-          dispatch({ type: 'LOGOUT' })
-          onAuthenticationRequired?.()
-        }
+        setAuthToken('')
+        dispatch({ type: 'LOGOUT' })
+        onAuthenticationRequired?.()
       } else {
         onSendRejected?.(turnResult.error)
       }

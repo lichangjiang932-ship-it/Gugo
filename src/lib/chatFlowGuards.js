@@ -389,6 +389,13 @@ export function buildChatFailureDisplayKey(turnId, error) {
 export function getVisibleModelErrorMessage(error, t) {
   if (error?.code === 'EMPTY_MODEL_RESPONSE_LENGTH') return t('errors.emptyModelResponseLength')
   if (error?.code === 'EMPTY_MODEL_RESPONSE') return t('errors.emptyModelResponse')
+  const code = failureCode(error)
+  const status = Number(error?.status)
+  if (status === 401 || code === 'UNAUTHORIZED') return translated(t, 'errors.sessionExpired')
+  if (['TURN_REQUEST_FAILED', 'TURN_REQUEST_UNCONFIRMED'].includes(code)) {
+    return translated(t, 'errors.networkFailed')
+  }
+  if (Number.isInteger(status) && status >= 500) return translated(t, 'errors.serverError')
   // A turn can be marked `interrupted` for either a model interruption or a
   // local-runtime shutdown. Prefer the durable cause code before interpreting
   // the generic lifecycle flag, otherwise MODEL_CALL_INTERRUPTED is presented
