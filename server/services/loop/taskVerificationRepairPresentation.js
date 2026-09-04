@@ -3,9 +3,22 @@ import { redactSensitiveText } from '../../utils/toolCallHarness.js'
 import { normalizeTurnLocale } from '../../../shared/turnLocale.js'
 
 export const TASK_VERIFICATION_REPAIR_MARKER = '[TASK VERIFICATION REPAIR REQUIRED]'
-export const MAX_TASK_VERIFICATION_FAILURES = 3
 
-const MAX_TERMINAL_CHECKS = 9
+function boundedPositiveInteger(value, fallback, maximum) {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(maximum, parsed) : fallback
+}
+
+export function resolveTaskVerificationLimits(env = process.env) {
+  return Object.freeze({
+    maxFailures: boundedPositiveInteger(env.TASK_VERIFICATION_MAX_FAILURES, 3, 5),
+    maxTerminalChecks: boundedPositiveInteger(env.TASK_VERIFICATION_MAX_TERMINAL_CHECKS, 9, 64),
+  })
+}
+
+const TASK_VERIFICATION_LIMITS = resolveTaskVerificationLimits()
+export const MAX_TASK_VERIFICATION_FAILURES = TASK_VERIFICATION_LIMITS.maxFailures
+export const MAX_TERMINAL_CHECKS = TASK_VERIFICATION_LIMITS.maxTerminalChecks
 const FAILURE_PENDING_REASON = 'verification_failed'
 const STALE_SUCCESS_PENDING_REASON = 'mutation_after_success'
 const GENERIC_VERIFICATION_DIAGNOSTICS = new Set([

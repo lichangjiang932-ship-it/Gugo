@@ -95,34 +95,61 @@ export function inspectProductionAudit(report, lock, now = new Date()) {
   }
 }
 
-function runAudit() {
+function runAuditCommand() {
   const npmCli = process.env.npm_execpath
   const command = npmCli ? process.execPath : 'npm'
   const args = npmCli
     ? [npmCli, 'audit', '--omit=dev', '--audit-level=high', '--json']
     : ['audit', '--omit=dev', '--audit-level=high', '--json']
-  const result = spawnSync(command, args, {
+  return spawnSync(command, args, {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
+    timeout: 600_000,
     shell: !npmCli && process.platform === 'win32',
   })
+}
+
+function parseAuditResult(result) {
   let report
   try {
-    report = JSON.parse(result.stdout || '')
+    report = JSON.parse(result?.stdout || '')
   } catch {
-    const detail = String(result.stderr || result.stdout || 'npm audit returned no JSON').trim()
+    const detail = String(result?.stderr || result?.error?.message || result?.stdout || 'npm audit returned no JSON').trim()
     throw new Error(`Production dependency audit could not run: ${detail}`)
   }
   if (report.error) {
-    throw new Error(`Production dependency audit could not run: ${report.error.summary || report.error.message}`)
+    const detail = report.error.summary || report.error.message || report.error.code || 'unknown npm audit error'
+    throw new Error(`Production dependency audit could not run: ${detail}`)
   }
   return report
 }
 
+function blockingSleep(ms) {
+  if (ms <= 0) return
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+export function runProductionAudit({
+  run = runAuditCommand,
+  sleep = blockingSleep,
+  delays = [0, 30_000, 60_000],
+} = {}) {
+  let lastError = null
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (attempt > 0) sleep(delays[attempt])
+    try {
+      return parseAuditResult(run())
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw lastError
+}
+
 function main() {
   const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'))
-  const result = inspectProductionAudit(runAudit(), lock)
+  const result = inspectProductionAudit(runProductionAudit(), lock)
   if (result.problems.length > 0) {
     console.error('Production dependency audit failed:')
     for (const problem of result.problems) console.error(`- ${problem}`)
