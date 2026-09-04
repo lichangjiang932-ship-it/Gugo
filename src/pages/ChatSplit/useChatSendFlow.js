@@ -79,10 +79,10 @@ export default function useChatSendFlow({
     let sessionId = state.activeSessionId || String(state.draftSessionId || '').trim() || null
     let activeSession = state.sessions.find((session) => session.id === sessionId)
     const storedWorkspacePath = String(activeSession?.workspacePath || '').trim()
-    const fallbackWorkspacePath = activeSession
-      ? String(state.defaultWorkspacePath || '').trim()
-      : String(draftWorkspacePath || state.defaultWorkspacePath || '').trim()
-    let workspacePath = storedWorkspacePath || fallbackWorkspacePath
+    // Never attach an unscoped/legacy conversation to the global default
+    // workspace. Only explicit draft or persisted Session project membership
+    // may enter a Turn request.
+    let workspacePath = storedWorkspacePath || (!activeSession ? String(draftWorkspacePath || '').trim() : '')
     const storedSelection = readStoredModelSelection()
     const modelSelection = resolveSessionModelSelection(modelOptions, {
       sessionModel: activeSession?.modelName,
@@ -292,6 +292,6 @@ export default function useChatSendFlow({
     ensureLocalPathAccess, isGenerating, lang, modelOptions, modelReadiness, onAuthenticationRequired, onModelCatalogChanged, onModelUnavailable, onSendBlocked, onSendRejected, onTurnResult, onTurnStart, onWorkspaceUnavailable, preflightModelSelection, probeLocalPathAccess, requestServerToolApproval,
     refreshAuth, resolveToolApprovalForOwner, runChatTurn, runtimeSkills, selectedModel, selectedModelProviderId,
     setContextSystemPrompts, clearToolApprovalForOwner,
-    state.activeSessionId, state.agentMode, state.defaultWorkspacePath, state.draftSessionId, state.sessions, state.skillConfigs, state.toolsConfig, t,
+    state.activeSessionId, state.agentMode, state.draftSessionId, state.sessions, state.skillConfigs, state.toolsConfig, t,
   ])
 }

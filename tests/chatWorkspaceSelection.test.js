@@ -298,7 +298,7 @@ test('normal and project new-chat actions remain drafts until an accepted send c
   assert.equal(accepted.draftWorkspacePath, '')
 })
 
-test('new drafts inherit the server default workspace unless a project is explicit', () => {
+test('new drafts stay unscoped unless a project is explicit', () => {
   const base = {
     sessions: [],
     activeSessionId: null,
@@ -309,7 +309,7 @@ test('new drafts inherit the server default workspace unless a project is explic
     sessionDrafts: {},
   }
   const defaultDraft = reduceSessionLifecycleState(base, { type: 'START_NEW_DRAFT' })
-  assert.equal(defaultDraft.draftWorkspacePath, 'D:\\Current\\repo')
+  assert.equal(defaultDraft.draftWorkspacePath, '')
 
   const explicitDraft = reduceSessionLifecycleState(defaultDraft, {
     type: 'START_NEW_DRAFT',

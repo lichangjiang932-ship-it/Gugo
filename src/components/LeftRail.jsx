@@ -11,7 +11,6 @@ import AccountArea from './leftRail/AccountArea.jsx'
 import LoginModal from './leftRail/LoginModal.jsx'
 import SessionList from './leftRail/SessionList.jsx'
 import useLeftRailController from './leftRail/useLeftRailController.js'
-import { presentSessionCatalogSource } from './leftRail/sessionCatalogSourcePresentation.js'
 
 const COLLAPSED_KEY = 'gugo:left-rail-collapsed'
 const NARROW_RAIL_QUERY = '(max-width: 959px)'
@@ -41,11 +40,6 @@ export default function LeftRail() {
       ? 'w-[min(320px,calc(100vw-60px))] min-w-0 max-w-[320px] px-2.5 py-2.5'
       : 'w-[clamp(280px,20vw,320px)] min-w-[280px] max-w-[320px] px-2.5 py-2.5'
   const sessions = state.sessions.filter((session) => !session.archivedAt)
-  const catalogSource = presentSessionCatalogSource(
-    state.sessionCatalogSource,
-    state.sessionCatalogSourceMismatch,
-    t,
-  )
 
   useEffect(() => {
     const media = window.matchMedia?.(NARROW_RAIL_QUERY)
@@ -67,6 +61,10 @@ export default function LeftRail() {
     try { window.localStorage?.setItem(COLLAPSED_KEY, next ? '1' : '0') } catch { /* storage is optional */ }
   }
   const handleNewChat = () => { controller.closeSessionMenu(); closeMobileRail(); dispatch({ type: 'START_NEW_DRAFT' }); navigate('/chat') }
+  const handleProjectToggle = (_project, { expanded } = {}) => {
+    if (!expanded) return
+    window.dispatchEvent(new CustomEvent('chat-workbench:open-files'))
+  }
   const handleNewChatInProject = (project) => {
     controller.closeSessionMenu()
     closeMobileRail()
@@ -143,21 +141,9 @@ export default function LeftRail() {
         {collapsed && navButton(Search, t('nav.searchPlaceholder'), handleSearch)}
       </div>
 
-      {!collapsed && catalogSource && (
-        <div
-          className={`mt-2 truncate rounded-control border px-2.5 py-1 text-xs ${catalogSource.changed ? 'border-warning/50 bg-warning/10 text-warning' : 'border-ink/10 bg-ink/[0.025] text-ink-fade'}`}
-          data-testid="session-catalog-source"
-          data-source-changed={catalogSource.changed ? 'true' : 'false'}
-          role={catalogSource.changed ? 'alert' : 'status'}
-          title={catalogSource.title}
-        >
-          {catalogSource.changed ? '⚠ ' : ''}{catalogSource.label}
-        </div>
-      )}
-
-      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onNewInProject={handleNewChatInProject} onSearch={handleSearch} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>}
+      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onNewInProject={handleNewChatInProject} onNewRecent={handleNewChat} onProjectToggle={handleProjectToggle} onSearch={handleSearch} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>}
       {collapsed && <div className="min-h-0 flex-1" />}
-      <AccountArea compact={collapsed} accountMenuOpen={controller.accountMenuOpen} accountMenuRef={controller.accountMenuRef} user={state.user} pendingApprovals={controller.pendingApprovals} onToggle={() => { controller.closeSessionMenu(); controller.setAccountMenuOpen((open) => !open) }} onNavigate={(item) => { closeMobileRail(); controller.navigateItem(item) }} t={t} />
+      <AccountArea compact={collapsed} accountMenuOpen={controller.accountMenuOpen} accountMenuRef={controller.accountMenuRef} user={state.user} onToggle={() => { controller.closeSessionMenu(); controller.setAccountMenuOpen((open) => !open) }} onNavigate={(item) => { closeMobileRail(); controller.navigateItem(item) }} t={t} />
     </aside>
     {state.authMode !== 'local' && <LoginModal login={controller.login} onChange={controller.updateLogin} onClose={() => controller.updateLogin({ open: false, target: null })} onSendCode={controller.sendCode} onVerify={controller.verify} t={t} />}
   </>

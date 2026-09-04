@@ -91,9 +91,6 @@ export default function PermissionModeSwitcher({ mode = 'normal', onChange, disa
               </button>
             )
           })}
-          <div className="px-3 py-1.5 border-t border-ink/10 font-mono text-[9px] text-ink-fade">
-            Shift + Tab
-          </div>
         </div>
       )}
     </div>

@@ -96,12 +96,10 @@ export async function importLegacySessionsAndRefresh(state, catalog, {
   }
 }
 
-export function defaultWorkspacePathForDraft(localFileAccess, state) {
-  const workspacePath = String(localFileAccess?.defaultWorkspacePath || '').trim()
-  if (!workspacePath || state?.activeSessionId || String(state?.draftWorkspacePath || '').trim()) {
-    return ''
-  }
-  return workspacePath
+export function defaultWorkspacePathForDraft() {
+  // New drafts intentionally start unscoped. The server default remains a
+  // file-access convenience and must not silently turn Recent chats into a project.
+  return ''
 }
 
 export function hasSessionCatalogSourceChanged(previous, current) {
@@ -243,16 +241,7 @@ export default function useAuthBootstrap({ dispatch, hydrated, mountedRef, state
             payload: { workspacePath: defaultWorkspacePath },
           })
         }
-        const draftDefaultWorkspacePath = defaultWorkspacePathForDraft(
-          { defaultWorkspacePath },
-          stateRef.current,
-        )
-        if (draftDefaultWorkspacePath) {
-          dispatch({
-            type: 'SET_DRAFT_WORKSPACE',
-            payload: { workspacePath: draftDefaultWorkspacePath },
-          })
-        }
+
       }
       return result
     } catch (error) {

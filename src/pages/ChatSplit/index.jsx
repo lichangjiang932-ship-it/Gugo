@@ -29,9 +29,8 @@ import { useChatReplayActions } from './chatReplayActions.js'
 import { useChatSendActions } from './chatSendActions.js'
 import useChatTurnRecovery from './useChatTurnRecovery.js'
 import useChatWorkspaceState from './useChatWorkspaceState.js'
-
+import useProjectFilesWorkbench from './useProjectFilesWorkbench.js'
 const CHAT_MODEL_SETTINGS_PATH = settingsPathForSection(SETTINGS_TAB_MODELS, [], { returnTo: '/chat' })
-
 export default function ChatSplit() {
   const location = useLocation()
   const navigate = useNavigate()
@@ -60,6 +59,7 @@ export default function ChatSplit() {
   const resumingTurnIdsRef = useRef(new Set())
   const stateRef = useRef(state)
   useEffect(() => { stateRef.current = state }, [state])
+  useProjectFilesWorkbench({ setWorkbenchOpen, setWorkbenchTab })
   useEffect(() => {
     if (!workbenchMessage) return undefined
     const timer = setTimeout(() => setWorkbenchMessage(''), 5000)

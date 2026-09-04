@@ -373,7 +373,7 @@ test('a project draft stays out of the sidebar until ACK and commits its workspa
   }
 })
 
-test('switching from a project draft to a workspace-less session sends from the server default', async () => {
+test('switching from a project draft to a workspace-less session stays unscoped', async () => {
   const dom = setupDom()
   const actions = []
   const activations = []
@@ -429,8 +429,8 @@ test('switching from a project draft to a workspace-less session sends from the 
     await act(async () => { accepted = await triggerSend('continue in the default project') })
 
     assert.equal(accepted, true)
-    assert.deepEqual(activations, [defaultWorkspacePath])
-    assert.equal(turnRequests[0].workspacePath, defaultWorkspacePath)
+    assert.deepEqual(activations, [])
+    assert.equal(turnRequests[0].workspacePath, '')
     assert.equal(activations.includes(projectDraftPath), false)
     assert.equal(turnRequests.some((request) => request.workspacePath === projectDraftPath), false)
     assert.equal(actions.some((action) => action.payload?.workspacePath === projectDraftPath), false)
