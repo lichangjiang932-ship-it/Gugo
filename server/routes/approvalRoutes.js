@@ -47,6 +47,64 @@ function sendSse(res, event, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`)
 }
 
+async function updateApprovalSettings(req, res, userId) {
+  const body = await readJson(req)
+  let modeTransition = null
+  if (body?.mode !== undefined) {
+    try {
+      const requestedMode = String(body.mode)
+      const prepared = preparePermissionModeChange({
+        userId,
+        mode: requestedMode,
+        justification: body.justification,
+      })
+      if (!prepared.changed) {
+        modeTransition = prepared
+      } else if (prepared.widened) {
+        if (body.approveEscalation !== true) {
+          const error = new Error('放宽权限需要明确批准')
+          error.code = 'PERMISSION_ESCALATION_REQUIRED'
+          error.statusCode = 409
+          error.currentMode = prepared.previousMode
+          error.requestedMode = requestedMode
+          throw error
+        }
+        modeTransition = changeApprovalMode({
+          userId,
+          mode: requestedMode,
+          approveEscalation: true,
+          justification: body.justification,
+        })
+      } else {
+        modeTransition = changeApprovalMode({
+          userId,
+          mode: requestedMode,
+          justification: body.justification,
+        })
+      }
+    } catch (err) {
+      return sendJson(res, err?.statusCode || 400, {
+        error: {
+          code: err?.code || 'bad_request',
+          message: err?.message || '非法模式',
+          currentMode: err?.currentMode,
+          requestedMode: err?.requestedMode,
+        },
+      })
+    }
+  }
+  if (body?.forgetTool) forgetTool({ userId, toolName: String(body.forgetTool) })
+  if (body?.clearRemembered) clearRememberedTools({ userId })
+  if (body?.riskOverride && typeof body.riskOverride === 'object') {
+    setRiskOverride({
+      userId,
+      toolName: body.riskOverride.toolName,
+      riskClass: body.riskOverride.riskClass,
+    })
+  }
+  return sendJson(res, 200, { ...getApprovalSettings({ userId }), modeTransition })
+}
+
 export async function handleApprovalRequest(req, res) {
   const url = new URL(req.url, 'http://localhost')
   const { pathname } = url
@@ -89,65 +147,7 @@ export async function handleApprovalRequest(req, res) {
     }
 
     if (req.method === 'POST' && pathname === '/api/approvals/settings') {
-      const body = await readJson(req)
-      let modeTransition = null
-      let responseStatus = 200
-      if (body?.mode !== undefined) {
-        try {
-          const requestedMode = String(body.mode)
-          const prepared = preparePermissionModeChange({
-            userId,
-            mode: requestedMode,
-            justification: body.justification,
-          })
-          if (!prepared.changed) {
-            modeTransition = prepared
-          } else if (prepared.widened) {
-            if (body.approveEscalation !== true) {
-              const error = new Error('放宽权限需要明确批准')
-              error.code = 'PERMISSION_ESCALATION_REQUIRED'
-              error.statusCode = 409
-              error.currentMode = prepared.previousMode
-              error.requestedMode = requestedMode
-              throw error
-            }
-            // 用户已在风险确认弹窗中明确批准：立即切换并记录历史，不再创建
-            // 审批收件箱条目。modeHistory 仍保留审计痕迹。
-            modeTransition = changeApprovalMode({
-              userId,
-              mode: requestedMode,
-              approveEscalation: true,
-              justification: body.justification,
-            })
-          } else {
-            modeTransition = changeApprovalMode({
-              userId,
-              mode: requestedMode,
-              justification: body.justification,
-            })
-          }
-        } catch (err) {
-          return sendJson(res, err?.statusCode || 400, {
-            error: {
-              code: err?.code || 'bad_request',
-              message: err?.message || '非法模式',
-              currentMode: err?.currentMode,
-              requestedMode: err?.requestedMode,
-            },
-          })
-        }
-      }
-      // 允许一次请求里同时改档位和撤销某个「总是允许」
-      if (body?.forgetTool) forgetTool({ userId, toolName: String(body.forgetTool) })
-      if (body?.clearRemembered) clearRememberedTools({ userId })
-      if (body?.riskOverride && typeof body.riskOverride === 'object') {
-        setRiskOverride({
-          userId,
-          toolName: body.riskOverride.toolName,
-          riskClass: body.riskOverride.riskClass,
-        })
-      }
-      return sendJson(res, responseStatus, { ...getApprovalSettings({ userId }), modeTransition })
+      return updateApprovalSettings(req, res, userId)
     }
 
     if (req.method === 'GET' && pathname === '/api/approvals') {
