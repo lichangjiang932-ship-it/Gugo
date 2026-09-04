@@ -290,55 +290,7 @@ export function listEvolutionPromotionOnlineGradeBacklog({ limit = 100 } = {}) {
   `).all(numericLimit)
 }
 
-export async function runEvolutionPromotionOnlineGrade({
-  userId,
-  promotionId,
-  outcomeId,
-  now = Date.now(),
-  signal,
-  runModel = ({ messages, userId: owner, providerId, runtimeProviderId, runtimeEnv, modelName, signal: abortSignal }) => (
-    callEvolutionBackgroundModel({
-      messages,
-      userId: owner,
-      providerId,
-      runtimeProviderId,
-      runtimeEnv,
-      modelName,
-      signal: abortSignal,
-      envOverrides: {
-        MODEL_STRICT_SELECTION: '1',
-        MODEL_FAILOVER_CROSS_MODEL: '0',
-        MODEL_TEMPERATURE: '0',
-        MODEL_MAX_TOKENS: '1024',
-      },
-    })
-  ),
-} = {}) {
-  const owner = ownerId(userId)
-  const promotion = promotionRow(owner, promotionId)
-  const outcome = outcomeRow(owner, promotion.id, outcomeId)
-  const existing = getDb().prepare(`
-    SELECT * FROM evolution_promotion_online_grades WHERE outcome_id = ?
-  `).get(outcome.id)
-  if (existing) return gradeView(existing)
-  const policy = policyRow(promotion.canary_release_id)
-  if (!promotion.is_active || !policy || policy.production_monitoring_enabled !== 1) return null
-  const rollbackPolicy = rollbackPolicyRow(promotion.canary_release_id)
-  const baselineGuard = baselineGuardRow(promotion)
-  const createdAt = timestamp(now)
-  const fail = (code, message, statusCode = 502) => {
-    persistGradeAndEvaluateGuard({
-      userId: owner,
-      promotion,
-      policy,
-      rollbackPolicy,
-      baselineGuard,
-      outcome,
-      errorCode: code,
-      now: createdAt,
-    })
-    throw serviceError(code, message, statusCode)
-  }
+function validateOnlineGradeIdentity({ owner, promotion, outcome, policy, baselineGuard, fail }) {
   if (promotion.online_grader_policy_fingerprint !== policy.policy_fingerprint) {
     return fail(
       'EVOLUTION_PROMOTION_GRADER_POLICY_CHANGED',
@@ -392,6 +344,66 @@ export async function runEvolutionPromotionOnlineGrade({
       409,
     )
   }
+  return identity
+}
+
+export async function runEvolutionPromotionOnlineGrade({
+  userId,
+  promotionId,
+  outcomeId,
+  now = Date.now(),
+  signal,
+  runModel = ({ messages, userId: owner, providerId, runtimeProviderId, runtimeEnv, modelName, signal: abortSignal }) => (
+    callEvolutionBackgroundModel({
+      messages,
+      userId: owner,
+      providerId,
+      runtimeProviderId,
+      runtimeEnv,
+      modelName,
+      signal: abortSignal,
+      envOverrides: {
+        MODEL_STRICT_SELECTION: '1',
+        MODEL_FAILOVER_CROSS_MODEL: '0',
+        MODEL_TEMPERATURE: '0',
+        MODEL_MAX_TOKENS: '1024',
+      },
+    })
+  ),
+} = {}) {
+  const owner = ownerId(userId)
+  const promotion = promotionRow(owner, promotionId)
+  const outcome = outcomeRow(owner, promotion.id, outcomeId)
+  const existing = getDb().prepare(`
+    SELECT * FROM evolution_promotion_online_grades WHERE outcome_id = ?
+  `).get(outcome.id)
+  if (existing) return gradeView(existing)
+  const policy = policyRow(promotion.canary_release_id)
+  if (!promotion.is_active || !policy || policy.production_monitoring_enabled !== 1) return null
+  const rollbackPolicy = rollbackPolicyRow(promotion.canary_release_id)
+  const baselineGuard = baselineGuardRow(promotion)
+  const createdAt = timestamp(now)
+  const fail = (code, message, statusCode = 502) => {
+    persistGradeAndEvaluateGuard({
+      userId: owner,
+      promotion,
+      policy,
+      rollbackPolicy,
+      baselineGuard,
+      outcome,
+      errorCode: code,
+      now: createdAt,
+    })
+    throw serviceError(code, message, statusCode)
+  }
+  const identity = validateOnlineGradeIdentity({
+    owner,
+    promotion,
+    outcome,
+    policy,
+    baselineGuard,
+    fail,
+  })
   let response
   try {
     response = await runModel({
