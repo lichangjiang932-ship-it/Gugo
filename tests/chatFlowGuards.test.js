@@ -48,10 +48,32 @@ const COPY = {
   'errors.modelEndpointTimeout': '连接模型服务超时。',
   'errors.modelEndpointUnavailable': '当前无法连接模型服务。',
   'errors.modelConfigurationAction': '请前往“设置 → 模型”检查配置。',
+  'errors.networkFailed': '无法连接 Gugo 服务端。',
+  'errors.sessionExpired': '会话已过期。',
+  'errors.serverError': 'Gugo 服务端发生错误。',
   'errors.emptyModelResponse': 'translated:errors.emptyModelResponse',
   'errors.emptyModelResponseLength': 'translated:errors.emptyModelResponseLength',
 }
 const t = (key) => COPY[key] || key
+
+test('pre-start transport and authentication failures do not blame model tool support', () => {
+  assert.equal(
+    getVisibleModelErrorMessage({ code: 'TURN_REQUEST_FAILED' }, t),
+    COPY['errors.networkFailed'],
+  )
+  assert.equal(
+    getVisibleModelErrorMessage({ code: 'TURN_REQUEST_UNCONFIRMED', retryable: true }, t),
+    COPY['errors.networkFailed'],
+  )
+  assert.equal(
+    getVisibleModelErrorMessage({ code: 'UNAUTHORIZED', status: 401 }, t),
+    COPY['errors.sessionExpired'],
+  )
+  assert.equal(
+    getVisibleModelErrorMessage({ code: 'TURN_REQUEST_FAILED', status: 503 }, t),
+    COPY['errors.networkFailed'],
+  )
+})
 
 test('chat failure copy does not blame env config for a generic invalid request', () => {
   const text = buildChatFailureMessage('请求参数无效：请检查消息内容或当前模型兼容性。', t)

@@ -1,6 +1,7 @@
 import { authenticateRequest } from '../middleware.js'
 import { resolveAuthMode } from '../adapters/authAccount.js'
 import { readJson, sendJson } from '../utils.js'
+import { logWarn } from '../utils/logger.js'
 import { TurnEngineError } from '../services/turnResolutionRuntime.js'
 import { getTurnEngine } from '../services/turnEngineHost.js'
 import { describeTurnEngineHostUnavailableError } from '../services/turnEngineHostErrorContract.js'
@@ -559,6 +560,12 @@ export async function handleTurnEventRequest(
 
     return sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' } })
   } catch (error) {
+    logWarn('turn.request_rejected', error, {
+      method: req.method,
+      pathname: url.pathname,
+      code: error?.code || 'INVALID_TURN_REQUEST',
+      status: error?.status ?? error?.statusCode ?? 400,
+    })
     return sendError(res, error)
   }
 }

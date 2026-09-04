@@ -23,6 +23,7 @@ test('turn event protocol accepts known events and rejects protocol drift', () =
     id: 'e1', sessionId: 's1', turnId: 't1', sequence: 0, type: 'turn.started', createdAt: 1,
     payload: {
       model: 'test',
+      locale: 'zh',
       approvalMode: 'acceptEdits',
       skillIds: ['local-writer'],
       skillDefinitions: [{
@@ -36,12 +37,17 @@ test('turn event protocol accepts known events and rejects protocol drift', () =
   })
   assert.equal(event.type, 'turn.started')
   assert.equal(event.payload.approvalMode, 'acceptEdits')
+  assert.equal(event.payload.locale, 'zh')
   assert.equal(event.payload.skillDefinitions[0].id, 'local-writer')
   assert.throws(() => parseTurnEvent({ ...event, type: 'text' }))
   assert.throws(() => parseTurnEvent({ ...event, sequence: -1 }))
   assert.throws(() => parseTurnEvent({
     ...event,
     payload: { ...event.payload, approvalMode: 'unsafe' },
+  }))
+  assert.throws(() => parseTurnEvent({
+    ...event,
+    payload: { ...event.payload, locale: 'fr' },
   }))
   assert.equal(canAdvanceTurnEventCursor({ sequence: 2, compactedThrough: 3 }, 0), true)
   assert.equal(canAdvanceTurnEventCursor({ sequence: 4, compactedThrough: 3 }, 0), false)
