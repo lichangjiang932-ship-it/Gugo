@@ -18,16 +18,17 @@ import {
   normalizeProviderReadiness,
   normalizeReadinessEntry,
   parseModels,
-  parseSubmittedModelProviderInteger,
   positiveInteger,
   PROVIDER_KEY_RE,
   providerRevisionConflict,
   readTribool,
   REDACTED_VALUE,
   removeModelProviderHeaders,
-  VALID_KINDS,
-  writeTribool,
 } from './modelProviderConfig.js'
+import {
+  assertProviderKeyAvailable,
+  resolveProviderRuntimeOptions,
+} from './modelProviderUpsertSupport.js'
 
 export {
   normalizeModelProviderBaseUrl,
@@ -266,58 +267,13 @@ export function recordModelProviderReadiness({
   return mapRow(savedRow)
 }
 
-export function upsertModelProvider({ userId, provider = {}, env = process.env } = {}) {
-  if (!userId) throw new Error('userId required')
-  const key = String(provider.key || '').trim().toLowerCase()
-  if (!PROVIDER_KEY_RE.test(key)) throw new Error('Provider ID 需以字母开头，只能包含小写字母、数字、_、-')
-  const label = String(provider.label || key).trim().slice(0, 80)
-  if (!label) throw new Error('Provider 名称不能为空')
-  const baseUrl = normalizeModelProviderBaseUrl(provider.baseUrl)
-  const models = parseModels(provider.models)
-  if (!models.length) throw new Error('至少配置一个模型名称')
-  const defaultModel = String(provider.defaultModel || models[0]).trim()
-  if (!models.includes(defaultModel)) throw new Error('默认模型必须在模型列表中')
-
-  const db = getDb()
-  const existing = provider.id ? getRow(userId, provider.id) : null
-  if (provider.id && !existing) {
-    throw providerRevisionConflict({
-      id: provider.id,
-      expectedConfigRevision: provider.expectedConfigRevision ?? provider.configRevision ?? null,
-      actualConfigRevision: null,
-    })
-  }
-  const expectedConfigRevision = existing ? expectedProviderRevision(provider, existing) : null
-  const sameKey = db.prepare('SELECT * FROM model_providers WHERE user_id = ? AND provider_key = ?').get(userId, key)
-  if (sameKey && sameKey.id !== existing?.id) throw new Error(`Provider ID ${key} 已存在`)
-  const runtimePrefix = envPrefix(key)
-  const prefixConflict = db.prepare('SELECT id, provider_key FROM model_providers WHERE user_id = ?')
-    .all(userId)
-    .find((row) => row.id !== existing?.id && envPrefix(row.provider_key) === runtimePrefix)
-  if (prefixConflict) {
-    throw Object.assign(
-      new Error(`Provider ID ${key} 与 ${prefixConflict.provider_key} 会映射到同一运行时标识，请更换 ID。`),
-      { code: 'MODEL_PROVIDER_KEY_COLLISION', statusCode: 409, field: 'key' },
-    )
-  }
-  const environmentKeyConflict = String(env?.MODEL_PROVIDERS || '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .find((environmentKey) => environmentKey !== key && envPrefix(environmentKey) === runtimePrefix)
-  if (environmentKeyConflict) {
-    throw Object.assign(
-      new Error(`Provider ID ${key} 与环境配置 ${environmentKeyConflict} 会映射到同一运行时标识，请更换 ID。`),
-      {
-        code: 'MODEL_PROVIDER_ENV_KEY_COLLISION',
-        statusCode: 409,
-        field: 'key',
-        conflictingProviderKey: environmentKeyConflict,
-      },
-    )
-  }
-  const previousSecret = existing ? readCredentialColumn(existing, 'secret_json', MODEL_SECRET_PURPOSE) : {}
-  const previousHeaders = existing ? readCredentialColumn(existing, 'headers_json', MODEL_HEADERS_PURPOSE) : {}
+function resolveProviderCredentials(provider, existing) {
+  const previousSecret = existing
+    ? readCredentialColumn(existing, 'secret_json', MODEL_SECRET_PURPOSE)
+    : {}
+  const previousHeaders = existing
+    ? readCredentialColumn(existing, 'headers_json', MODEL_HEADERS_PURPOSE)
+    : {}
   const submittedApiKey = String(provider.apiKey || '').trim()
   const clearApiKey = provider.clearApiKey === true
   if (clearApiKey && submittedApiKey) throw new Error('清除 API Key 时不能同时提交新 Key')
@@ -325,9 +281,7 @@ export function upsertModelProvider({ userId, provider = {}, env = process.env }
   const replacesHeaders = provider.headers !== undefined
   const patchesHeaders = provider.headerUpdates !== undefined
   const removesHeaders = Object.hasOwn(provider, 'removeHeaderKeys')
-  if (replacesHeaders && patchesHeaders) {
-    throw new Error('不能同时替换和增量更新自定义 Header')
-  }
+  if (replacesHeaders && patchesHeaders) throw new Error('不能同时替换和增量更新自定义 Header')
   if (replacesHeaders && removesHeaders) {
     throw modelProviderHeaderError(
       'MODEL_PROVIDER_HEADERS_CONFLICT',
@@ -350,41 +304,55 @@ export function upsertModelProvider({ userId, provider = {}, env = process.env }
     name,
     value === REDACTED_VALUE && Object.hasOwn(previousHeaders, name) ? previousHeaders[name] : value,
   ]))
+  return { apiKey, headers, previousSecret, previousHeaders }
+}
+
+export function upsertModelProvider({ userId, provider = {}, env = process.env } = {}) {
+  if (!userId) throw new Error('userId required')
+  const key = String(provider.key || '').trim().toLowerCase()
+  if (!PROVIDER_KEY_RE.test(key)) throw new Error('Provider ID 需以字母开头，只能包含小写字母、数字、_、-')
+  const label = String(provider.label || key).trim().slice(0, 80)
+  if (!label) throw new Error('Provider 名称不能为空')
+  const baseUrl = normalizeModelProviderBaseUrl(provider.baseUrl)
+  const models = parseModels(provider.models)
+  if (!models.length) throw new Error('至少配置一个模型名称')
+  const defaultModel = String(provider.defaultModel || models[0]).trim()
+  if (!models.includes(defaultModel)) throw new Error('默认模型必须在模型列表中')
+
+  const db = getDb()
+  const existing = provider.id ? getRow(userId, provider.id) : null
+  if (provider.id && !existing) {
+    throw providerRevisionConflict({
+      id: provider.id,
+      expectedConfigRevision: provider.expectedConfigRevision ?? provider.configRevision ?? null,
+      actualConfigRevision: null,
+    })
+  }
+  const expectedConfigRevision = existing ? expectedProviderRevision(provider, existing) : null
+  assertProviderKeyAvailable({ db, userId, key, existing, env })
+  const { apiKey, headers, previousSecret, previousHeaders } = resolveProviderCredentials(
+    provider,
+    existing,
+  )
   const id = existing?.id || randomUUID()
   const now = Date.now()
   const enabled = provider.enabled !== false
   const isDefault = provider.isDefault === true || !db.prepare('SELECT 1 FROM model_providers WHERE user_id = ? LIMIT 1').get(userId)
 
-  // ★ v28 能力字段。未提交的字段沿用旧值(而不是清空)——
-  // 前端只改一个开关时不该把其它配置一起抹掉。
-  const pick = (field, column, writer) => (
-    !Object.hasOwn(provider, field) ? (existing?.[column] ?? null) : writer(provider[field])
-  )
-  const pickNumeric = (field, column) => pick(
-    field,
-    column,
-    (value) => parseSubmittedModelProviderInteger(value, field),
-  )
-  const kindRaw = provider.kind === undefined
-    ? (existing?.kind ?? null)
-    : (VALID_KINDS.has(String(provider.kind)) ? String(provider.kind) : null)
-  const contextWindow = pickNumeric('contextWindow', 'context_window')
-  const supportsTools = pick('supportsTools', 'supports_tools', writeTribool)
-  const supportsStreaming = pick('supportsStreaming', 'supports_streaming', writeTribool)
-  const supportsVision = pick('supportsVision', 'supports_vision', writeTribool)
-  const supportsPdf = pick('supportsPdf', 'supports_pdf', writeTribool)
-  const firstTokenTimeoutMs = pickNumeric('firstTokenTimeoutMs', 'first_token_timeout_ms')
-  const idleTimeoutMs = pickNumeric('idleTimeoutMs', 'idle_timeout_ms')
-  const failoverEnabled = pick('failoverEnabled', 'failover_enabled', writeTribool)
-  const keepAlive = provider.keepAlive === undefined
-    ? (existing?.keep_alive ?? null)
-    : (String(provider.keepAlive || '').trim() || null)
-  const modelProfiles = provider.modelProfiles === undefined
-    ? normalizeModelProfiles(existing?.model_profiles_json, models)
-    : normalizeModelProfiles(provider.modelProfiles, models, { strictNumeric: true })
-  const previousModels = existing ? (() => {
-    try { return parseModels(JSON.parse(existing.models_json || '[]')) } catch { return [] }
-  })() : []
+  const {
+    kindRaw,
+    contextWindow,
+    supportsTools,
+    supportsStreaming,
+    supportsVision,
+    supportsPdf,
+    firstTokenTimeoutMs,
+    idleTimeoutMs,
+    failoverEnabled,
+    keepAlive,
+    modelProfiles,
+    previousModels,
+  } = resolveProviderRuntimeOptions(provider, existing, models)
   const runtimeConfig = {
     key,
     baseUrl,
