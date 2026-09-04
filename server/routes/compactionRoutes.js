@@ -163,6 +163,76 @@ export function resolveCompactionModelContext({
   }
 }
 
+async function applySemanticCompaction({ result, body, modelContext, userId, compactPrompt }) {
+  if (body.semantic === false) {
+    return {
+      result,
+      telemetry: {
+        attempted: false,
+        used: false,
+        modelCalls: 0,
+        batchCount: 0,
+        truncatedMessageCount: 0,
+        fallbackReason: 'disabled',
+      },
+    }
+  }
+  const semantic = await addSemanticCompactionSummary({
+    result,
+    callModel: modelContext.callModel,
+    contextWindow: modelContext.contextWindow,
+    userId,
+    customPrompt: compactPrompt,
+  })
+  return { result: semantic.result, telemetry: semantic.telemetry }
+}
+
+function sendCompactionError(res, err) {
+  if (isModelReadinessError(err)) {
+    const failure = describeModelReadinessFailure(err)
+    return sendJson(res, failure.statusCode, { ok: false, error: failure.error })
+  }
+  return sendJson(res, err?.statusCode || 400, { ok: false, error: err?.message || String(err) })
+}
+
+function convergeManualCompaction({ result, inputMessages, body, modelContext, semanticSummary }) {
+  let convergencePasses = 1
+  let fit = fitManualCompactionResult(result, {
+    tools: Array.isArray(body.tools) ? body.tools : [],
+    contextWindow: modelContext.contextWindow,
+  })
+  if (!fit.ok) {
+    // A large retained tail cannot be fixed by shortening the summary. Retry
+    // once with the smallest legal tail, matching automatic convergence.
+    const retry = buildCompaction({
+      messages: inputMessages,
+      keepMessages: 1,
+      force: true,
+    })
+    if (retry.ok && retry.compacted && retry.replacedMessageCount > 0) {
+      convergencePasses = 2
+      result = retry
+      fit = fitManualCompactionResult(result, {
+        tools: Array.isArray(body.tools) ? body.tools : [],
+        contextWindow: modelContext.contextWindow,
+      })
+      if (semanticSummary.used) {
+        semanticSummary = {
+          ...semanticSummary,
+          used: false,
+          fallbackReason: 'semantic_summary_replaced_for_convergence',
+        }
+      }
+    }
+  }
+  return {
+    result: fit.ok ? fit.result : result,
+    fit,
+    semanticSummary,
+    convergencePasses,
+  }
+}
+
 export async function handleCompactionRequest(req, res, {
   compactionArchivePort,
   acquireCompactionArchivePort = acquireActiveCompactionArchivePort,
@@ -240,56 +310,26 @@ export async function handleCompactionRequest(req, res, {
         modelProviderId: body.modelProviderId,
         modelConfigRevision: body.modelConfigRevision,
       })
-      let semanticSummary = {
-        attempted: false,
-        used: false,
-        modelCalls: 0,
-        batchCount: 0,
-        truncatedMessageCount: 0,
-        fallbackReason: body.semantic === false ? 'disabled' : null,
-      }
-      if (body.semantic !== false) {
-        const semantic = await addSemanticCompactionSummary({
-          result,
-          callModel: modelContext.callModel,
-          contextWindow: modelContext.contextWindow,
-          userId,
-          customPrompt: compactPrompt,
-        })
-        result = semantic.result
-        semanticSummary = semantic.telemetry
-      }
-
-      let convergencePasses = 1
-      let fit = fitManualCompactionResult(result, {
-        tools: Array.isArray(body.tools) ? body.tools : [],
-        contextWindow: modelContext.contextWindow,
+      const semantic = await applySemanticCompaction({
+        result,
+        body,
+        modelContext,
+        userId,
+        compactPrompt,
       })
-      if (!fit.ok) {
-        // A large retained tail cannot be fixed by shortening the summary.
-        // Retry once with the smallest legal tail, matching automatic
-        // compaction's convergence strategy.
-        const retry = buildCompaction({
-          messages: inputMessages,
-          keepMessages: 1,
-          force: true,
-        })
-        if (retry.ok && retry.compacted && retry.replacedMessageCount > 0) {
-          convergencePasses = 2
-          result = retry
-          fit = fitManualCompactionResult(result, {
-            tools: Array.isArray(body.tools) ? body.tools : [],
-            contextWindow: modelContext.contextWindow,
-          })
-          if (semanticSummary.used) {
-            semanticSummary = {
-              ...semanticSummary,
-              used: false,
-              fallbackReason: 'semantic_summary_replaced_for_convergence',
-            }
-          }
-        }
-      }
+      result = semantic.result
+      let semanticSummary = semantic.telemetry
+
+      const convergence = convergeManualCompaction({
+        result,
+        inputMessages,
+        body,
+        modelContext,
+        semanticSummary,
+      })
+      result = convergence.result
+      semanticSummary = convergence.semanticSummary
+      const { fit, convergencePasses } = convergence
       if (!fit.ok) {
         return sendJson(res, 422, {
           ok: false,
@@ -300,7 +340,6 @@ export async function handleCompactionRequest(req, res, {
           convergencePasses,
         })
       }
-      result = fit.result
 
       const archive = await createCompactionArchive({
         userId,
@@ -339,14 +378,7 @@ export async function handleCompactionRequest(req, res, {
 
     return sendJson(res, 404, { ok: false, error: 'unknown compaction route' })
   } catch (err) {
-    if (isModelReadinessError(err)) {
-      const failure = describeModelReadinessFailure(err)
-      return sendJson(res, failure.statusCode, {
-        ok: false,
-        error: failure.error,
-      })
-    }
-    return sendJson(res, err?.statusCode || 400, { ok: false, error: err?.message || String(err) })
+    return sendCompactionError(res, err)
   } finally {
     compactionArchiveLease?.release()
   }

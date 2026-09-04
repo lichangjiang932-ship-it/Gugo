@@ -100,21 +100,25 @@ function sendSessionError(res, error) {
   throw error
 }
 
-export async function handleSessionRequest(
-  req,
-  res,
-  engine = null,
-  sessionAdmin = null,
-  env = process.env,
-  cwd = process.cwd(),
-) {
-  const userId = authenticateRequest(req)
-  if (!userId) return unauthorized(res)
-  try {
-  const admin = sessionAdmin || await resolveSessionAdminPort()
-  const url = new URL(req.url, 'http://localhost')
-  const parts = routeParts(url.pathname)
+const SESSION_METADATA_ACTIONS = Object.freeze({
+  archive: 'archiveSession',
+  pin: 'pinSession',
+  unarchive: 'unarchiveSession',
+  unpin: 'unpinSession',
+})
 
+async function handleSessionMetadataAction(res, { admin, parts, userId }) {
+  const method = SESSION_METADATA_ACTIONS[parts[3]]
+  const session = await admin[method]({
+    userId,
+    sessionId: decodeURIComponent(parts[2]),
+  })
+  return session
+    ? sendJson(res, 200, { ok: true, session })
+    : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
+}
+
+async function handleSessionCollectionRequest(req, res, { admin, url, userId, env, cwd }) {
   if (req.method === 'POST' && url.pathname === '/api/sessions/import') {
     if (resolveAuthMode(env) !== 'local'
       || !isLoopbackRequest(req)
@@ -156,7 +160,6 @@ export async function handleSessionRequest(
     })
     return sendJson(res, 200, { results })
   }
-
   if (req.method === 'GET' && url.pathname === '/api/sessions') {
     const sessions = await admin.listSessions({
       userId,
@@ -168,6 +171,27 @@ export async function handleSessionRequest(
       sessions,
       source: describeSessionCatalogSource({ cwd, env, sessionAdmin: admin }),
     })
+  }
+  return sendJson(res, 404, { error: 'not found' })
+}
+
+export async function handleSessionRequest(
+  req,
+  res,
+  engine = null,
+  sessionAdmin = null,
+  env = process.env,
+  cwd = process.cwd(),
+) {
+  const userId = authenticateRequest(req)
+  if (!userId) return unauthorized(res)
+  try {
+  const admin = sessionAdmin || await resolveSessionAdminPort()
+  const url = new URL(req.url, 'http://localhost')
+  const parts = routeParts(url.pathname)
+
+  if (['/api/sessions', '/api/sessions/import', '/api/sessions/search'].includes(url.pathname)) {
+    return await handleSessionCollectionRequest(req, res, { admin, url, userId, env, cwd })
   }
 
   if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2]
@@ -272,48 +296,13 @@ export async function handleSessionRequest(
       : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
   }
 
-  if (req.method === 'POST' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2]
-    && parts[3] === 'archive' && parts.length === 4) {
-    const session = await admin.archiveSession({
-      userId,
-      sessionId: decodeURIComponent(parts[2]),
-    })
-    return session
-      ? sendJson(res, 200, { ok: true, session })
-      : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
-  }
-
-  if (req.method === 'POST' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2]
-    && parts[3] === 'unarchive' && parts.length === 4) {
-    const session = await admin.unarchiveSession({
-      userId,
-      sessionId: decodeURIComponent(parts[2]),
-    })
-    return session
-      ? sendJson(res, 200, { ok: true, session })
-      : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
-  }
-
-  if (req.method === 'POST' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2]
-    && parts[3] === 'pin' && parts.length === 4) {
-    const session = await admin.pinSession({
-      userId,
-      sessionId: decodeURIComponent(parts[2]),
-    })
-    return session
-      ? sendJson(res, 200, { ok: true, session })
-      : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
-  }
-
-  if (req.method === 'POST' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2]
-    && parts[3] === 'unpin' && parts.length === 4) {
-    const session = await admin.unpinSession({
-      userId,
-      sessionId: decodeURIComponent(parts[2]),
-    })
-    return session
-      ? sendJson(res, 200, { ok: true, session })
-      : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
+  if (req.method === 'POST'
+    && parts[0] === 'api'
+    && parts[1] === 'sessions'
+    && parts[2]
+    && SESSION_METADATA_ACTIONS[parts[3]]
+    && parts.length === 4) {
+    return await handleSessionMetadataAction(res, { admin, parts, userId })
   }
 
   return sendJson(res, 404, { error: 'not found' })

@@ -341,6 +341,93 @@ async function handleReleaseGcRequest(req, res, { url, env }) {
   }
 }
 
+async function handleRuntimePluginControl(req, res, {
+  url,
+  env,
+  runtimeAction,
+  runtimeConfigReload,
+}) {
+  const runtimeOwnerId = authorizeRuntimeControl(req, res, env)
+  if (!runtimeOwnerId) return undefined
+  if (url.pathname === '/api/plugins/runtime') {
+    if (req.method !== 'GET') {
+      return sendJson(res, 405, {
+        ok: false,
+        error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' },
+      })
+    }
+    res.setHeader?.('Cache-Control', 'private, no-store')
+    return sendJson(res, 200, {
+      ok: true,
+      schemaVersion: 8,
+      plugins: listRuntimePluginInventory(),
+      effectiveConfigs: listRuntimePluginEffectiveConfigs(),
+      configReloadAudit: listRuntimePluginConfigReloadAudit(),
+      agentEventResetAudit: listRuntimePluginAgentEventResetAudit(),
+      httpCapabilities: listRuntimePluginHttpCapabilities(),
+      httpCapabilityAudit: listRuntimePluginHttpCapabilityAudit(),
+      runtimeCapabilities: listRuntimeCapabilities(),
+      effectiveCapabilityBindings: listRuntimeCapabilityBindings(),
+      runtimeCapabilityAudit: listRuntimeCapabilityAudit(),
+      runtimeCapabilityConfigFingerprint: runtimeCapabilityConfigFingerprint(),
+    })
+  }
+  if (req.method !== 'POST') {
+    return sendJson(res, 405, {
+      ok: false,
+      error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' },
+    })
+  }
+  if (runtimeConfigReload) {
+    let body
+    try {
+      body = await readJson(req, { maxBytes: CONFIG_RELOAD_BODY_LIMIT })
+      if (!isPlainObject(body)) throw new TypeError('request body must be a JSON object')
+      assertOnlyFields(body, new Set(['expectedRevision']), 'request body')
+      if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 1) {
+        throw new TypeError('expectedRevision must be a positive safe integer')
+      }
+    } catch (error) {
+      return sendJson(res, Number(error?.statusCode) || 400, {
+        ok: false,
+        error: {
+          code: error?.statusCode === 413
+            ? 'REQUEST_TOO_LARGE'
+            : error instanceof SyntaxError ? 'INVALID_JSON' : 'PLUGIN_CONFIG_RELOAD_REQUEST_INVALID',
+          message: error?.message || '配置重载请求无效',
+        },
+      })
+    }
+    try {
+      const plugin = await reloadRuntimePluginConfig(runtimeConfigReload[1], {
+        expectedRevision: body.expectedRevision,
+      })
+      return sendJson(res, 200, { ok: true, schemaVersion: 1, plugin })
+    } catch (error) {
+      return runtimeControlError(res, error)
+    }
+  }
+  try {
+    const action = runtimeAction[2].toLowerCase()
+    const plugin = action === 'enable'
+      ? await enableRuntimePlugin(runtimeAction[1], {
+          ownerUserId: runtimeOwnerId,
+          permissionApproval: runtimePermissionApproval(req),
+          resetDurableAgentEventSubscriptions: runtimeAgentEventResetToCurrent(req),
+        })
+      : action === 'reload'
+        ? await reloadRuntimePlugin(runtimeAction[1], {
+            permissionApproval: runtimePermissionApproval(req),
+          })
+        : action === 'revoke-permissions'
+          ? await revokeRuntimePluginPermissions(runtimeAction[1])
+          : await disableRuntimePlugin(runtimeAction[1])
+    return sendJson(res, 200, { ok: true, plugin })
+  } catch (error) {
+    return runtimeControlError(res, error)
+  }
+}
+
 export async function handlePluginRequest(req, res, {
   env = process.env,
   localPluginPackageService = DEFAULT_LOCAL_PLUGIN_PACKAGE_SERVICE,
@@ -366,85 +453,12 @@ export async function handlePluginRequest(req, res, {
     /^\/api\/plugins\/runtime\/([a-z0-9][a-z0-9-]*)\/config\/reload$/i,
   )
   if (url.pathname === '/api/plugins/runtime' || runtimeAction || runtimeConfigReload) {
-    const runtimeOwnerId = authorizeRuntimeControl(req, res, env)
-    if (!runtimeOwnerId) return
-    if (url.pathname === '/api/plugins/runtime') {
-      if (req.method !== 'GET') {
-        return sendJson(res, 405, {
-          ok: false,
-          error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' },
-        })
-      }
-      res.setHeader?.('Cache-Control', 'private, no-store')
-      return sendJson(res, 200, {
-        ok: true,
-        schemaVersion: 8,
-        plugins: listRuntimePluginInventory(),
-        effectiveConfigs: listRuntimePluginEffectiveConfigs(),
-        configReloadAudit: listRuntimePluginConfigReloadAudit(),
-        agentEventResetAudit: listRuntimePluginAgentEventResetAudit(),
-        httpCapabilities: listRuntimePluginHttpCapabilities(),
-        httpCapabilityAudit: listRuntimePluginHttpCapabilityAudit(),
-        runtimeCapabilities: listRuntimeCapabilities(),
-        effectiveCapabilityBindings: listRuntimeCapabilityBindings(),
-        runtimeCapabilityAudit: listRuntimeCapabilityAudit(),
-        runtimeCapabilityConfigFingerprint: runtimeCapabilityConfigFingerprint(),
-      })
-    }
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, {
-        ok: false,
-        error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' },
-      })
-    }
-    if (runtimeConfigReload) {
-      let body
-      try {
-        body = await readJson(req, { maxBytes: CONFIG_RELOAD_BODY_LIMIT })
-        if (!isPlainObject(body)) throw new TypeError('request body must be a JSON object')
-        assertOnlyFields(body, new Set(['expectedRevision']), 'request body')
-        if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 1) {
-          throw new TypeError('expectedRevision must be a positive safe integer')
-        }
-      } catch (error) {
-        return sendJson(res, Number(error?.statusCode) || 400, {
-          ok: false,
-          error: {
-            code: error?.statusCode === 413
-              ? 'REQUEST_TOO_LARGE'
-              : error instanceof SyntaxError ? 'INVALID_JSON' : 'PLUGIN_CONFIG_RELOAD_REQUEST_INVALID',
-            message: error?.message || '配置重载请求无效',
-          },
-        })
-      }
-      try {
-        const plugin = await reloadRuntimePluginConfig(runtimeConfigReload[1], {
-          expectedRevision: body.expectedRevision,
-        })
-        return sendJson(res, 200, { ok: true, schemaVersion: 1, plugin })
-      } catch (error) {
-        return runtimeControlError(res, error)
-      }
-    }
-    try {
-      const action = runtimeAction[2].toLowerCase()
-      const plugin = action === 'enable'
-        ? await enableRuntimePlugin(runtimeAction[1], {
-            ownerUserId: runtimeOwnerId,
-            permissionApproval: runtimePermissionApproval(req),
-            resetDurableAgentEventSubscriptions: runtimeAgentEventResetToCurrent(req),
-          })
-        : action === 'reload'
-          ? await reloadRuntimePlugin(runtimeAction[1], {
-              permissionApproval: runtimePermissionApproval(req),
-            })
-          : action === 'revoke-permissions'
-            ? await revokeRuntimePluginPermissions(runtimeAction[1])
-            : await disableRuntimePlugin(runtimeAction[1])
-      return sendJson(res, 200, { ok: true, plugin })
-    } catch (error) {
-      return runtimeControlError(res, error)
-    }
+    return handleRuntimePluginControl(req, res, {
+      url,
+      env,
+      runtimeAction,
+      runtimeConfigReload,
+    })
   }
 
   // POST /api/plugins/:id/run-sandbox — 仅本机 owner，可运行已明确授权的 transformer
