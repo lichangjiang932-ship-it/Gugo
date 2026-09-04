@@ -1,12 +1,6 @@
 /**
- * server/plugins/pluginLoader.js
- *
- * 同步扫描 plugins/ 顶层目录，每个子目录尝试读 plugin.json → validate →
- * 解析 entry 文件存在性。失败不抛，错误收集到 errors[]。
- *
- * 严格只读：本阶段（v0.1）从不执行任何 plugin 代码，entry 只是登记为资源路径。
+ * 同步扫描 plugins/ 顶层目录；严格只读，不执行 plugin entry。
  */
-
 import fs from 'node:fs'
 import path from 'node:path'
 import { assertPluginCompatibility } from '../../shared/pluginCompatibility.js'
@@ -27,10 +21,99 @@ function isWithinDirectory(directory, candidate) {
   )
 }
 
-/**
- * @param {{ rootDir?: string, resolveDependencies?: boolean, includeDirectories?: string[] | null }} [opts]
- * @returns {{ plugins: object[], errors: { dir: string, message: string }[] }}
- */
+function recordPluginError(errors, dir, message) {
+  errors.push({ dir, message })
+  return null
+}
+
+function loadPluginDirectory({ canonicalRoot, entry, errors, seenIds, hostVersion, apiVersion }) {
+  const pluginDir = path.join(canonicalRoot, entry.name)
+  let canonicalPluginDir
+  try {
+    canonicalPluginDir = canonicalPath(pluginDir)
+  } catch (error) {
+    return recordPluginError(errors, entry.name, `plugin directory realpath failed: ${error.message}`)
+  }
+  if (!isWithinDirectory(canonicalRoot, canonicalPluginDir)) {
+    return recordPluginError(errors, entry.name, 'plugin directory escapes plugin root')
+  }
+  const manifestPath = path.join(pluginDir, 'plugin.json')
+  if (!fs.existsSync(manifestPath)) return recordPluginError(errors, entry.name, 'plugin.json missing')
+
+  let canonicalManifestPath
+  try {
+    canonicalManifestPath = canonicalPath(manifestPath)
+  } catch (error) {
+    return recordPluginError(errors, entry.name, `read manifest failed: ${error.message}`)
+  }
+  if (!isWithinDirectory(canonicalPluginDir, canonicalManifestPath)) {
+    return recordPluginError(errors, entry.name, 'plugin.json escapes plugin directory')
+  }
+
+  let parsed
+  try {
+    parsed = JSON.parse(fs.readFileSync(canonicalManifestPath, 'utf8'))
+  } catch (error) {
+    const kind = error instanceof SyntaxError ? 'manifest is not valid JSON' : 'read manifest failed'
+    return recordPluginError(errors, entry.name, `${kind}: ${error.message}`)
+  }
+  const validated = validateManifest(parsed)
+  if (!validated.ok) {
+    return recordPluginError(errors, entry.name, `manifest invalid: ${validated.errors.join('; ')}`)
+  }
+  const { manifest } = validated
+  if (seenIds.has(manifest.id)) {
+    return recordPluginError(errors, entry.name, `duplicate plugin id: ${manifest.id}`)
+  }
+
+  const entryAbs = path.resolve(canonicalPluginDir, manifest.entry)
+  if (!isWithinDirectory(canonicalPluginDir, entryAbs)) {
+    return recordPluginError(errors, entry.name, 'entry escapes plugin directory')
+  }
+  let canonicalEntryPath
+  try {
+    canonicalEntryPath = canonicalPath(entryAbs)
+  } catch {
+    return recordPluginError(errors, entry.name, `entry file not found: ${manifest.entry}`)
+  }
+  if (!isWithinDirectory(canonicalPluginDir, canonicalEntryPath)) {
+    return recordPluginError(errors, entry.name, 'entry escapes plugin directory through symlink')
+  }
+  if (!fs.statSync(canonicalEntryPath).isFile()) {
+    return recordPluginError(errors, entry.name, `entry file not found: ${manifest.entry}`)
+  }
+  if (manifest.integrity) {
+    try {
+      verifyPluginEntryIntegrity({
+        integrity: manifest.integrity,
+        bytes: fs.readFileSync(canonicalEntryPath),
+      })
+    } catch (error) {
+      return recordPluginError(
+        errors,
+        entry.name,
+        `entry integrity check failed [${error.code || 'PLUGIN_INTEGRITY_FAILED'}]: ${error.message}`,
+      )
+    }
+  }
+  try {
+    assertPluginCompatibility(manifest, { hostVersion, apiVersion, checkDependencies: false })
+  } catch (error) {
+    return recordPluginError(
+      errors,
+      entry.name,
+      `plugin compatibility check failed [${error.code || 'PLUGIN_COMPATIBILITY_FAILED'}]: ${error.message}`,
+    )
+  }
+  seenIds.add(manifest.id)
+  return {
+    ...manifest,
+    dir: entry.name,
+    rootDir: canonicalPluginDir,
+    entryPath: canonicalEntryPath,
+  }
+}
+
 export function loadPlugins({
   rootDir = './plugins',
   hostVersion = PLUGIN_HOST_VERSION,
@@ -41,163 +124,44 @@ export function loadPlugins({
   const plugins = []
   const errors = []
   const seenIds = new Set()
-  if (
-    includeDirectories !== null
-    && (
-      !Array.isArray(includeDirectories)
-      || includeDirectories.some((entry) => typeof entry !== 'string' || !entry)
-    )
-  ) {
+  if (includeDirectories !== null && (
+    !Array.isArray(includeDirectories)
+    || includeDirectories.some((entry) => typeof entry !== 'string' || !entry)
+  )) {
     throw new TypeError('plugin loader includeDirectories must be null or an array of names')
   }
-  const includedDirectorySet = includeDirectories === null
-    ? null
-    : new Set(includeDirectories)
-
+  const includedDirectorySet = includeDirectories === null ? null : new Set(includeDirectories)
   const abs = path.resolve(rootDir)
-  if (!fs.existsSync(abs)) {
-    return { plugins, errors }
-  }
+  if (!fs.existsSync(abs)) return { plugins, errors }
 
   let canonicalRoot
   try {
     canonicalRoot = canonicalPath(abs)
-  } catch (err) {
-    errors.push({ dir: abs, message: `realpath failed: ${err.message}` })
+  } catch (error) {
+    errors.push({ dir: abs, message: `realpath failed: ${error.message}` })
     return { plugins, errors }
   }
-
   let entries
   try {
     entries = fs.readdirSync(canonicalRoot, { withFileTypes: true })
-  } catch (err) {
-    errors.push({ dir: canonicalRoot, message: `readdir failed: ${err.message}` })
+  } catch (error) {
+    errors.push({ dir: canonicalRoot, message: `readdir failed: ${error.message}` })
     return { plugins, errors }
   }
-  entries.sort((left, right) => {
-    if (left.name === right.name) return 0
-    return left.name < right.name ? -1 : 1
-  })
-
-  for (const ent of entries) {
-    if (includedDirectorySet && !includedDirectorySet.has(ent.name)) continue
-    if (!ent.isDirectory()) continue
-    const pluginDir = path.join(canonicalRoot, ent.name)
-    let canonicalPluginDir
-    try {
-      canonicalPluginDir = canonicalPath(pluginDir)
-    } catch (err) {
-      errors.push({ dir: ent.name, message: `plugin directory realpath failed: ${err.message}` })
-      continue
-    }
-    if (!isWithinDirectory(canonicalRoot, canonicalPluginDir)) {
-      errors.push({ dir: ent.name, message: 'plugin directory escapes plugin root' })
-      continue
-    }
-    const manifestPath = path.join(pluginDir, 'plugin.json')
-
-    if (!fs.existsSync(manifestPath)) {
-      errors.push({ dir: ent.name, message: 'plugin.json missing' })
-      continue
-    }
-
-    let canonicalManifestPath
-    try {
-      canonicalManifestPath = canonicalPath(manifestPath)
-    } catch (err) {
-      errors.push({ dir: ent.name, message: `read manifest failed: ${err.message}` })
-      continue
-    }
-    if (!isWithinDirectory(canonicalPluginDir, canonicalManifestPath)) {
-      errors.push({ dir: ent.name, message: 'plugin.json escapes plugin directory' })
-      continue
-    }
-
-    let raw
-    try {
-      raw = fs.readFileSync(canonicalManifestPath, 'utf8')
-    } catch (err) {
-      errors.push({ dir: ent.name, message: `read manifest failed: ${err.message}` })
-      continue
-    }
-
-    let parsed
-    try {
-      parsed = JSON.parse(raw)
-    } catch (err) {
-      errors.push({ dir: ent.name, message: `manifest is not valid JSON: ${err.message}` })
-      continue
-    }
-
-    const { ok, errors: vErrs, manifest } = validateManifest(parsed)
-    if (!ok) {
-      errors.push({ dir: ent.name, message: `manifest invalid: ${vErrs.join('; ')}` })
-      continue
-    }
-
-    if (seenIds.has(manifest.id)) {
-      errors.push({ dir: ent.name, message: `duplicate plugin id: ${manifest.id}` })
-      continue
-    }
-
-    const entryAbs = path.resolve(canonicalPluginDir, manifest.entry)
-    // 防越界
-    if (!isWithinDirectory(canonicalPluginDir, entryAbs)) {
-      errors.push({ dir: ent.name, message: 'entry escapes plugin directory' })
-      continue
-    }
-    let canonicalEntryPath
-    try {
-      canonicalEntryPath = canonicalPath(entryAbs)
-    } catch {
-      errors.push({ dir: ent.name, message: `entry file not found: ${manifest.entry}` })
-      continue
-    }
-    if (!isWithinDirectory(canonicalPluginDir, canonicalEntryPath)) {
-      errors.push({ dir: ent.name, message: 'entry escapes plugin directory through symlink' })
-      continue
-    }
-    if (!fs.statSync(canonicalEntryPath).isFile()) {
-      errors.push({ dir: ent.name, message: `entry file not found: ${manifest.entry}` })
-      continue
-    }
-    if (manifest.integrity) {
-      try {
-        verifyPluginEntryIntegrity({
-          integrity: manifest.integrity,
-          bytes: fs.readFileSync(canonicalEntryPath),
-        })
-      } catch (err) {
-        errors.push({
-          dir: ent.name,
-          message: `entry integrity check failed [${err.code || 'PLUGIN_INTEGRITY_FAILED'}]: ${err.message}`,
-        })
-        continue
-      }
-    }
-    try {
-      assertPluginCompatibility(manifest, {
-        hostVersion,
-        apiVersion,
-        checkDependencies: false,
-      })
-    } catch (err) {
-      errors.push({
-        dir: ent.name,
-        message: `plugin compatibility check failed [${err.code || 'PLUGIN_COMPATIBILITY_FAILED'}]: ${err.message}`,
-      })
-      continue
-    }
-
-    seenIds.add(manifest.id)
-    plugins.push({
-      ...manifest,
-      dir: ent.name,
-      rootDir: canonicalPluginDir,
-      entryPath: canonicalEntryPath,
+  entries.sort((left, right) => left.name === right.name ? 0 : left.name < right.name ? -1 : 1)
+  for (const entry of entries) {
+    if (includedDirectorySet && !includedDirectorySet.has(entry.name)) continue
+    if (!entry.isDirectory()) continue
+    const plugin = loadPluginDirectory({
+      canonicalRoot,
+      entry,
+      errors,
+      seenIds,
+      hostVersion,
+      apiVersion,
     })
+    if (plugin) plugins.push(plugin)
   }
-
   if (!resolveDependencies) return { plugins, errors }
   const resolved = resolvePluginDependencyCompatibility(plugins, { hostVersion, apiVersion })
   errors.push(...resolved.errors.map(({ dir, message }) => ({ dir, message })))
@@ -220,17 +184,16 @@ export function resolvePluginDependencyCompatibility(plugins, {
           apiVersion,
           resolveDependencyVersion: (dependencyId) => compatible.get(dependencyId)?.version || null,
         })
-      } catch (err) {
+      } catch (error) {
         compatible.delete(plugin.id)
         errors.push({
           pluginId: plugin.id,
           dir: plugin.dir,
-          message: `plugin compatibility check failed [${err.code || 'PLUGIN_COMPATIBILITY_FAILED'}]: ${err.message}`,
+          message: `plugin compatibility check failed [${error.code || 'PLUGIN_COMPATIBILITY_FAILED'}]: ${error.message}`,
         })
         changed = true
       }
     }
   }
-
   return { plugins: plugins.filter((plugin) => compatible.has(plugin.id)), errors }
 }
