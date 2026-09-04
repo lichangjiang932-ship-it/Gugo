@@ -331,7 +331,7 @@ function beginPartRevoke(part) {
   }
 }
 
-export function createRuntimePluginContributionLifecycle(inputParts) {
+function normalizeLifecycleParts(inputParts) {
   if (!Array.isArray(inputParts) || inputParts.length === 0) {
     throw new TypeError('plugin contribution lifecycle requires at least one part')
   }
@@ -339,6 +339,11 @@ export function createRuntimePluginContributionLifecycle(inputParts) {
   if (new Set(parts.map((part) => part.id)).size !== parts.length) {
     throw new TypeError('plugin contribution part ids must be unique')
   }
+  return parts
+}
+
+export function createRuntimePluginContributionLifecycle(inputParts) {
+  const parts = normalizeLifecycleParts(inputParts)
   let retired = false
   let activeCleanup = null
 

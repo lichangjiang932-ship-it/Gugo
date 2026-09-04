@@ -101,16 +101,11 @@ function registrationHandle(registration) {
   return attachRuntimePluginBeginRevoke(dispose, beginRevoke)
 }
 
-export function createRuntimePluginAgentEventRegistry({
+function validateAgentEventRegistryDependencies({
   host,
   durableHost,
-  assertPluginWritable,
-  assertContributionDeclared,
-  createManagedContribution,
-  invokePluginCallback,
-  emitAudit,
-} = {}) {
-  const resetAudit = []
+  dependencies,
+}) {
   if (!host || typeof host.register !== 'function') {
     throw registryError(
       'PLUGIN_AGENT_EVENT_HOST_INVALID',
@@ -123,20 +118,57 @@ export function createRuntimePluginAgentEventRegistry({
       'runtime plugin agent event registry requires a durable consumer host',
     )
   }
-  for (const [name, dependency] of Object.entries({
-    assertPluginWritable,
-    assertContributionDeclared,
-    createManagedContribution,
-    invokePluginCallback,
-    emitAudit,
-  })) {
-    if (typeof dependency !== 'function') {
-      throw registryError(
-        'PLUGIN_AGENT_EVENT_REGISTRY_DEPENDENCY_INVALID',
-        `runtime plugin agent event registry requires ${name}`,
-      )
-    }
+  for (const [name, dependency] of Object.entries(dependencies)) {
+    if (typeof dependency === 'function') continue
+    throw registryError(
+      'PLUGIN_AGENT_EVENT_REGISTRY_DEPENDENCY_INVALID',
+      `runtime plugin agent event registry requires ${name}`,
+    )
   }
+}
+
+function recordSubscriptionReset({ registration, contribution, resetAudit, emitAudit }) {
+  if (!registration.reset) return
+  const reset = registration.reset
+  const details = Object.freeze({
+    pluginId: contribution.pluginId,
+    subscriptionKey: registration.subscriptionKey,
+    previousStreamEpoch: reset.previousStreamEpoch,
+    streamEpoch: reset.streamEpoch,
+    truncatedThrough: reset.truncatedThrough,
+    previousScannedCursor: reset.previousScannedCursor,
+    scannedCursor: reset.scannedCursor,
+  })
+  resetAudit.push(Object.freeze({
+    event: 'plugin.agent_event_subscription_reset',
+    at: new Date().toISOString(),
+    ...details,
+  }))
+  if (resetAudit.length > MAX_AGENT_EVENT_RESET_AUDIT_EVENTS) resetAudit.shift()
+  emitAudit('plugin.agent_event_subscription_reset', details)
+}
+
+export function createRuntimePluginAgentEventRegistry({
+  host,
+  durableHost,
+  assertPluginWritable,
+  assertContributionDeclared,
+  createManagedContribution,
+  invokePluginCallback,
+  emitAudit,
+} = {}) {
+  const resetAudit = []
+  validateAgentEventRegistryDependencies({
+    host,
+    durableHost,
+    dependencies: {
+      assertPluginWritable,
+      assertContributionDeclared,
+      createManagedContribution,
+      invokePluginCallback,
+      emitAudit,
+    },
+  })
 
   const registerAgentEventContribution = (record, eventType, listener, options = undefined) => {
     assertPluginWritable(record)
@@ -230,25 +262,7 @@ export function createRuntimePluginAgentEventRegistry({
             ? { resetToCurrent: record.resetDurableAgentEventSubscriptions === true }
             : undefined,
         )
-        if (registration.reset) {
-          const reset = registration.reset
-          const details = Object.freeze({
-            pluginId: contribution.pluginId,
-            subscriptionKey: registration.subscriptionKey,
-            previousStreamEpoch: reset.previousStreamEpoch,
-            streamEpoch: reset.streamEpoch,
-            truncatedThrough: reset.truncatedThrough,
-            previousScannedCursor: reset.previousScannedCursor,
-            scannedCursor: reset.scannedCursor,
-          })
-          resetAudit.push(Object.freeze({
-            event: 'plugin.agent_event_subscription_reset',
-            at: new Date().toISOString(),
-            ...details,
-          }))
-          if (resetAudit.length > MAX_AGENT_EVENT_RESET_AUDIT_EVENTS) resetAudit.shift()
-          emitAudit('plugin.agent_event_subscription_reset', details)
-        }
+        recordSubscriptionReset({ registration, contribution, resetAudit, emitAudit })
         return registrationHandle(registration)
       },
       parts: (handle) => [{

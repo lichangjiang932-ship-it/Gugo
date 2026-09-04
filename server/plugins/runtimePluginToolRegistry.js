@@ -47,6 +47,24 @@ function assertHostBoundExecutionToolNotReplaced(name, builtinCapabilityId) {
   throw error
 }
 
+function validateToolRegistryDependencies(dependencies, supportsRuntimeCapabilityReplacement) {
+  for (const [name, dependency] of Object.entries(dependencies)) {
+    if (typeof dependency === 'function') continue
+    const error = new TypeError(`runtime plugin Tool registry dependency must be a function: ${name}`)
+    error.code = 'PLUGIN_TOOL_REGISTRY_DEPENDENCY_INVALID'
+    error.retryable = false
+    throw error
+  }
+  if (typeof supportsRuntimeCapabilityReplacement !== 'boolean') {
+    const error = new TypeError(
+      'runtime plugin Tool registry dependency must be a boolean: supportsRuntimeCapabilityReplacement',
+    )
+    error.code = 'PLUGIN_TOOL_REGISTRY_DEPENDENCY_INVALID'
+    error.retryable = false
+    throw error
+  }
+}
+
 export function createRuntimePluginToolRegistry({
   assertPluginWritable,
   assertContributionDeclared,
@@ -64,21 +82,7 @@ export function createRuntimePluginToolRegistry({
     registerTool,
     registerRuntimeCapability,
   }
-  for (const [name, dependency] of Object.entries(dependencies)) {
-    if (typeof dependency === 'function') continue
-    const error = new TypeError(`runtime plugin Tool registry dependency must be a function: ${name}`)
-    error.code = 'PLUGIN_TOOL_REGISTRY_DEPENDENCY_INVALID'
-    error.retryable = false
-    throw error
-  }
-  if (typeof supportsRuntimeCapabilityReplacement !== 'boolean') {
-    const error = new TypeError(
-      'runtime plugin Tool registry dependency must be a boolean: supportsRuntimeCapabilityReplacement',
-    )
-    error.code = 'PLUGIN_TOOL_REGISTRY_DEPENDENCY_INVALID'
-    error.retryable = false
-    throw error
-  }
+  validateToolRegistryDependencies(dependencies, supportsRuntimeCapabilityReplacement)
 
   const registerToolContribution = (record, definition) => {
     assertPluginWritable(record)

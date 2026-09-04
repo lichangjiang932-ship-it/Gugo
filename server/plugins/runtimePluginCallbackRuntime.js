@@ -14,6 +14,50 @@ import {
 // callback/setup/cleanup scopes can misattribute an inner frame to an outer one.
 const lifecycleScope = new AsyncLocalStorage()
 
+function callbackDrainDeadlockError(
+  operation,
+  invocation,
+  targetPluginId = '',
+  targetRegistryToken = null,
+) {
+  const { record } = invocation
+  const pluginId = record.manifest.id
+  const normalizedTargetId = typeof targetPluginId === 'string' ? targetPluginId.trim() : ''
+  const crossRegistry = invocation.registryToken !== targetRegistryToken
+  const samePlugin = !crossRegistry && normalizedTargetId === pluginId
+  const selfUnregister = operation === 'unregister' && samePlugin
+  let message
+  let code
+  if (operation === 'unregister') {
+    message = selfUnregister
+      ? `plugin callback cannot unregister its own plugin before returning because that would deadlock callback drain: ${pluginId}`
+      : `plugin callback cannot unregister another plugin before returning because that would deadlock callback drain: ${pluginId} -> ${normalizedTargetId || '(invalid)'}`
+    code = selfUnregister
+      ? 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK'
+      : 'PLUGIN_CALLBACK_UNREGISTER_DEADLOCK'
+  } else if (operation === 'reload') {
+    message = samePlugin
+      ? 'plugin callback cannot reload its own configuration before returning'
+      : `plugin callback cannot reload another plugin before returning because that would deadlock callback drain: ${pluginId} -> ${normalizedTargetId || '(invalid)'}`
+    code = 'PLUGIN_CONFIG_RELOAD_CALLBACK_DEADLOCK'
+  } else {
+    message = crossRegistry
+      ? `plugin callback cannot shut down another runtime plugin registry before returning because that would deadlock callback drain: ${pluginId}`
+      : `plugin callback cannot shut down the runtime plugin registry before returning because that would deadlock callback drain: ${pluginId}`
+    code = 'PLUGIN_CALLBACK_SHUTDOWN_DEADLOCK'
+  }
+  const error = new Error(message)
+  error.code = code
+  error.retryable = false
+  error.pluginId = pluginId
+  error.phase = invocation.kind
+  error.operation = operation
+  error.crossRegistry = crossRegistry
+  if (normalizedTargetId) error.targetPluginId = normalizedTargetId
+  if (operation === 'reload') error.statusCode = 409
+  return error
+}
+
 export function createRuntimePluginCallbackRuntime(registryToken) {
   const finishCallback = (record) => {
     record.activeCallbacks -= 1
@@ -74,50 +118,6 @@ export function createRuntimePluginCallbackRuntime(registryToken) {
       invocation.active = false
       finishCallback(record)
     }
-  }
-
-  const callbackDrainDeadlockError = (
-    operation,
-    invocation,
-    targetPluginId = '',
-    targetRegistryToken = null,
-  ) => {
-    const { record } = invocation
-    const pluginId = record.manifest.id
-    const normalizedTargetId = typeof targetPluginId === 'string' ? targetPluginId.trim() : ''
-    const crossRegistry = invocation.registryToken !== targetRegistryToken
-    const samePlugin = !crossRegistry && normalizedTargetId === pluginId
-    const selfUnregister = operation === 'unregister' && samePlugin
-    let message
-    let code
-    if (operation === 'unregister') {
-      message = selfUnregister
-        ? `plugin callback cannot unregister its own plugin before returning because that would deadlock callback drain: ${pluginId}`
-        : `plugin callback cannot unregister another plugin before returning because that would deadlock callback drain: ${pluginId} -> ${normalizedTargetId || '(invalid)'}`
-      code = selfUnregister
-        ? 'PLUGIN_CALLBACK_SELF_UNREGISTER_DEADLOCK'
-        : 'PLUGIN_CALLBACK_UNREGISTER_DEADLOCK'
-    } else if (operation === 'reload') {
-      message = samePlugin
-        ? 'plugin callback cannot reload its own configuration before returning'
-        : `plugin callback cannot reload another plugin before returning because that would deadlock callback drain: ${pluginId} -> ${normalizedTargetId || '(invalid)'}`
-      code = 'PLUGIN_CONFIG_RELOAD_CALLBACK_DEADLOCK'
-    } else {
-      message = crossRegistry
-        ? `plugin callback cannot shut down another runtime plugin registry before returning because that would deadlock callback drain: ${pluginId}`
-        : `plugin callback cannot shut down the runtime plugin registry before returning because that would deadlock callback drain: ${pluginId}`
-      code = 'PLUGIN_CALLBACK_SHUTDOWN_DEADLOCK'
-    }
-    const error = new Error(message)
-    error.code = code
-    error.retryable = false
-    error.pluginId = pluginId
-    error.phase = invocation.kind
-    error.operation = operation
-    error.crossRegistry = crossRegistry
-    if (normalizedTargetId) error.targetPluginId = normalizedTargetId
-    if (operation === 'reload') error.statusCode = 409
-    return error
   }
 
   const activeCallbackInvocation = () => {
