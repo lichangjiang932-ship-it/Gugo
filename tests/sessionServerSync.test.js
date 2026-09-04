@@ -83,13 +83,48 @@ test('server session catalog makes browser histories converge without dropping l
     'known-session',
     'new-from-other-browser',
   ])
-  assert.equal(result.activeSessionId, 'local-draft')
+  assert.equal(result.activeSessionId, null)
   assert.deepEqual(result.sessionDrafts, { 'local-draft': 'keep' })
   assert.equal(result.sessions[1].title, 'Canonical title')
   assert.equal(result.sessions[1].serverRevision, 3)
   assert.equal(result.sessions[1].messages[0].id, 'pending')
   assert.equal(result.sessions[1].serverTranscriptStale, true)
   assert.deepEqual(result.sessions[2].messages, [])
+})
+
+test('background catalog refresh never opens a historical session over a new-chat draft', () => {
+  const result = reconcileServerSessionCatalog({
+    activeSessionId: null,
+    draftSessionId: null,
+    draftWorkspacePath: '',
+    newDraftVersion: 4,
+    sessionDrafts: {},
+    sessions: [{ id: 'existing-session', title: 'Existing', messages: [], serverRevision: 1 }],
+  }, [
+    { id: 'existing-session', title: 'Existing', revision: 1 },
+    { id: 'newer-history', title: 'Newer history', revision: 1 },
+  ])
+
+  assert.equal(result.activeSessionId, null)
+  assert.deepEqual(result.sessions.map((session) => session.id), [
+    'existing-session',
+    'newer-history',
+  ])
+})
+
+test('remote deletion of the current session enters a draft instead of another history', () => {
+  const result = reduceServerSessionState({
+    activeSessionId: 'current',
+    sessionDrafts: { current: 'discarded', other: 'keep' },
+    sessions: [{ id: 'current' }, { id: 'other' }],
+  }, {
+    type: 'APPLY_SERVER_SESSION_DELETE',
+    payload: { sessionId: 'current' },
+  })
+
+  assert.equal(result.activeSessionId, null)
+  assert.deepEqual(result.sessions, [{ id: 'other' }])
+  assert.deepEqual(result.sessionDrafts, { other: 'keep' })
 })
 
 test('server workspace metadata restores canonical paths and removes stale browser-local paths', () => {
@@ -354,7 +389,7 @@ test('multi-user session catalog does not retain browser-local sessions from ano
   }])
 
   assert.deepEqual(result.sessions.map(({ id }) => id), ['server-owned'])
-  assert.equal(result.activeSessionId, 'server-owned')
+  assert.equal(result.activeSessionId, null)
   assert.deepEqual(result.sessionDrafts, {})
 })
 

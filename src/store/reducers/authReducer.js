@@ -2,9 +2,11 @@ export function reduceAuthState(state, action) {
   switch (action.type) {
     case 'LOGIN': {
       const payload = action.payload ?? {}
+      // Authentication refresh must not navigate. Preserve a valid explicit
+      // selection; otherwise remain on the new-chat draft.
       const nextActiveId = state.sessions.some((session) => session.id === state.activeSessionId)
         ? state.activeSessionId
-        : state.sessions[0]?.id ?? null
+        : null
       return {
         ...state,
         user: {

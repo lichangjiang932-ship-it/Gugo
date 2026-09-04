@@ -298,6 +298,22 @@ test('normal and project new-chat actions remain drafts until an accepted send c
   assert.equal(accepted.draftWorkspacePath, '')
 })
 
+test('deleting the active session returns to a draft instead of opening another history', () => {
+  const state = {
+    sessions: [{ id: 'current', messages: [] }, { id: 'other', messages: [] }],
+    activeSessionId: 'current',
+    sessionDrafts: { current: 'discard', other: 'keep' },
+  }
+  const deleted = reduceSessionLifecycleState(state, {
+    type: 'DELETE_SESSION',
+    payload: 'current',
+  })
+
+  assert.equal(deleted.activeSessionId, null)
+  assert.deepEqual(deleted.sessions.map((session) => session.id), ['other'])
+  assert.deepEqual(deleted.sessionDrafts, { other: 'keep' })
+})
+
 test('new drafts stay unscoped unless a project is explicit', () => {
   const base = {
     sessions: [],

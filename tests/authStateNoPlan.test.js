@@ -4,6 +4,29 @@ import test from 'node:test'
 import { createInitialState } from '../src/store/appStateBootstrap.js'
 import { reduceAuthState } from '../src/store/reducers/authReducer.js'
 
+test('authentication refresh preserves drafts and valid explicit session selections', () => {
+  const sessions = [{ id: 'history-a' }, { id: 'history-b' }]
+  const draft = reduceAuthState({
+    ...createInitialState(),
+    sessions,
+    activeSessionId: null,
+  }, {
+    type: 'LOGIN',
+    payload: { name: 'Local user', email: 'local@example.test' },
+  })
+  assert.equal(draft.activeSessionId, null)
+
+  const selected = reduceAuthState({
+    ...createInitialState(),
+    sessions,
+    activeSessionId: 'history-b',
+  }, {
+    type: 'LOGIN',
+    payload: { name: 'Local user', email: 'local@example.test' },
+  })
+  assert.equal(selected.activeSessionId, 'history-b')
+})
+
 test('authentication state has no subscription plan field', () => {
   const initial = createInitialState()
   assert.equal(Object.hasOwn(initial.user, 'plan'), false)
