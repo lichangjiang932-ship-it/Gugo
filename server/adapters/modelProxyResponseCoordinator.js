@@ -85,6 +85,37 @@ function scheduleBoundAutoMemory({
   })
 }
 
+function openModelSse(req, res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  })
+  res.flushHeaders?.()
+  const controller = new AbortController()
+  let clientGone = false
+  const disposeDisconnectListener = bindSseClientDisconnect(req, res, () => {
+    clientGone = true
+    controller.abort()
+  })
+  const safeWrite = (payload) => {
+    if (clientGone || res.writableEnded || res.destroyed) return false
+    return res.write(payload)
+  }
+  const heartbeat = setInterval(() => safeWrite(': keepalive\n\n'), 15_000)
+  heartbeat.unref?.()
+  return {
+    signal: controller.signal,
+    safeWrite,
+    clientGone: () => clientGone,
+    close() {
+      clearInterval(heartbeat)
+      disposeDisconnectListener()
+    },
+  }
+}
+
 export async function handleStreamingModelProxyResponse({
   req,
   res,
@@ -101,28 +132,8 @@ export async function handleStreamingModelProxyResponse({
   autoMemorySourceMessages,
   createBackgroundModelCaller,
 }) {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  })
-  if (typeof res.flushHeaders === 'function') res.flushHeaders()
-
-  const sseAbort = new AbortController()
-  let clientGone = false
-  const disposeDisconnectListener = bindSseClientDisconnect(req, res, () => {
-    clientGone = true
-    sseAbort.abort()
-  })
-  const safeWrite = (payload) => {
-    if (clientGone || res.writableEnded || res.destroyed) return false
-    return res.write(payload)
-  }
-  const heartbeat = setInterval(() => {
-    safeWrite(': keepalive\n\n')
-  }, 15_000)
-  if (typeof heartbeat.unref === 'function') heartbeat.unref()
+  const sse = openModelSse(req, res)
+  const { safeWrite } = sse
   safeWrite(`data: ${JSON.stringify({ ok: true, phase: 'connecting' })}\n\n`)
 
   const started = Date.now()
@@ -143,7 +154,7 @@ export async function handleStreamingModelProxyResponse({
         messages,
         tools: body.tools,
         toolChoice: body.tool_choice,
-        externalSignal: sseAbort.signal,
+        externalSignal: sse.signal,
         env: runtimeEnv,
         onFirstByte: () => {
           if (firstByteAt) return
@@ -155,9 +166,9 @@ export async function handleStreamingModelProxyResponse({
           })}\n\n`)
         },
       }),
-      { signal: sseAbort.signal },
+      { signal: sse.signal },
     )) {
-      if (clientGone) break
+      if (sse.clientGone()) break
       if (!activeProviderResolved) {
         activeStreamModel = activeConfig.modelName
         activeStreamProviderId = String(activeConfig.providerId || '').trim()
@@ -188,10 +199,10 @@ export async function handleStreamingModelProxyResponse({
         recordUsage(activeStreamModel, event.usage, { ownerId: requestUserId })
       }
     }
-    if (!clientGone && !assistantText.trim() && !streamHadToolCalls) {
+    if (!sse.clientGone() && !assistantText.trim() && !streamHadToolCalls) {
       throw createEmptyModelResponseError(streamFinishReason)
     }
-    if (!clientGone) {
+    if (!sse.clientGone()) {
       dispatchStopHook({ session, body, hookRequestId, started, stream: true })
       safeWrite(`data: ${JSON.stringify({
         ok: true,
@@ -204,7 +215,7 @@ export async function handleStreamingModelProxyResponse({
       streamCompleted = true
     }
   } catch (error) {
-    if (!clientGone && error?.name !== 'AbortError') {
+    if (!sse.clientGone() && error?.name !== 'AbortError') {
       safeWrite(`data: ${JSON.stringify({
         ok: false,
         error: formatProxyError(error),
@@ -214,15 +225,14 @@ export async function handleStreamingModelProxyResponse({
       })}\n\n`)
     }
   } finally {
-    clearInterval(heartbeat)
-    disposeDisconnectListener()
+    sse.close()
   }
   if (!res.writableEnded) res.end()
 
   const autoMemorySessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
   if (shouldScheduleStreamAutoMemory({
     streamCompleted,
-    clientGone,
+    clientGone: sse.clientGone(),
     streamHadToolCalls,
     assistantText,
     userId: session?.user_id,
