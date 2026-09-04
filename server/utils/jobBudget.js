@@ -173,7 +173,7 @@ export async function runWithModelBudget(budget, run, {
   return result
 }
 
-export function createJobBudget(options = {}) {
+function normalizeJobBudgetOptions(options) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
     throw new TypeError('job budget options must be an object')
   }
@@ -185,20 +185,42 @@ export function createJobBudget(options = {}) {
     error.statusCode = 400
     throw error
   }
+  return {
+    maxTotalCalls: options.maxTotalCalls ?? DEFAULT_MAX_CALLS,
+    maxWallMs: options.maxWallMs ?? DEFAULT_MAX_WALL_MS,
+    maxModelCalls: options.maxModelCalls ?? DEFAULT_MAX_MODEL_CALLS,
+    maxModelTokens: options.maxModelTokens ?? DEFAULT_MAX_MODEL_TOKENS,
+    initialUsed: options.initialUsed ?? 0,
+    initialElapsedMs: options.initialElapsedMs ?? 0,
+    initialModelMs: options.initialModelMs ?? 0,
+    initialModelCalls: options.initialModelCalls ?? 0,
+    initialModelTokens: options.initialModelTokens ?? 0,
+    initialCostUsd: options.initialCostUsd,
+    initialCostEvidenceComplete: options.initialCostEvidenceComplete,
+    now: options.now ?? (() => Date.now()),
+  }
+}
+
+function restoredCostEvidenceIsComplete({
+  initialCostEvidenceComplete,
+  restoredCostUsd,
+  hasHistoricalModelUsage,
+  initialCostUsd,
+}) {
+  if (initialCostEvidenceComplete === false) return false
+  if (initialCostEvidenceComplete === true) {
+    return restoredCostUsd !== null || (!hasHistoricalModelUsage && initialCostUsd === undefined)
+  }
+  return !hasHistoricalModelUsage
+    && (initialCostUsd === undefined || restoredCostUsd !== null)
+}
+
+export function createJobBudget(options = {}) {
   const {
-    maxTotalCalls = DEFAULT_MAX_CALLS,
-    maxWallMs = DEFAULT_MAX_WALL_MS,
-    maxModelCalls = DEFAULT_MAX_MODEL_CALLS,
-    maxModelTokens = DEFAULT_MAX_MODEL_TOKENS,
-    initialUsed = 0,
-    initialElapsedMs = 0,
-    initialModelMs = 0,
-    initialModelCalls = 0,
-    initialModelTokens = 0,
-    initialCostUsd,
-    initialCostEvidenceComplete,
-    now = () => Date.now(),
-  } = options
+    maxTotalCalls, maxWallMs, maxModelCalls, maxModelTokens,
+    initialUsed, initialElapsedMs, initialModelMs, initialModelCalls,
+    initialModelTokens, initialCostUsd, initialCostEvidenceComplete, now,
+  } = normalizeJobBudgetOptions(options)
   const initialWorkingMs = Math.max(0, Number(initialElapsedMs) || 0)
   let used = Math.max(0, Number(initialUsed) || 0)
   // 花在等模型上的时间。从墙钟里扣掉 —— 见 trackModelMs。
@@ -217,12 +239,12 @@ export function createJobBudget(options = {}) {
   // valid cumulative value (zero is valid). Older checkpoints predate the
   // evidence marker, so their historical zero cannot be distinguished from
   // the old "unknown => 0" fallback and must remain unknown.
-  let costEvidenceComplete = initialCostEvidenceComplete === false
-    ? false
-    : initialCostEvidenceComplete === true
-      ? restoredCostUsd !== null || (!hasHistoricalModelUsage && initialCostUsd === undefined)
-      : !hasHistoricalModelUsage
-        && (initialCostUsd === undefined || restoredCostUsd !== null)
+  let costEvidenceComplete = restoredCostEvidenceIsComplete({
+    initialCostEvidenceComplete,
+    restoredCostUsd,
+    hasHistoricalModelUsage,
+    initialCostUsd,
+  })
 
   const exposedCostUsd = () => (costEvidenceComplete ? costUsd : null)
 

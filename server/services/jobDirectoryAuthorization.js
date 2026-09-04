@@ -62,6 +62,65 @@ function matchingResumeEvent(events, { authorizedPath, accessMode }) {
     )) || null
 }
 
+function buildDirectoryResumeCheckpoint({
+  checkpoint,
+  latestSuspension,
+  stepId,
+  submittedPath,
+  submittedMode,
+  grant,
+}) {
+  const marker = `${JOB_DIRECTORY_RESOLUTION_MARKER}${latestSuspension.id}]`
+  const resolution = {
+    type: 'directory_authorization',
+    approved: true,
+    path: submittedPath,
+    access_mode: submittedMode,
+    resource_type: 'directory',
+    awaiting_event_id: latestSuspension.id,
+    step_id: stepId,
+    grant_id: grant.id,
+    authorization_scope: grant.scope,
+  }
+  const resolutions = mergeDirectoryAuthorizationResolutions(
+    checkpoint.state.directoryAuthorizationResolution,
+    resolution,
+  )
+  const messages = Array.isArray(checkpoint.state.messages)
+    ? checkpoint.state.messages.map((message) => ({ ...message }))
+    : []
+  if (!messages.some((message) => (
+    message?.role === 'system' && String(message.content || '').includes(marker)
+  ))) {
+    messages.push({
+      role: 'system',
+      content: directoryResolutionPrompt({
+        path: submittedPath,
+        accessMode: submittedMode,
+        eventId: latestSuspension.id,
+      }),
+    })
+  }
+  return { messages, resolutions }
+}
+
+function resolvedNonWaitingDirectoryResume(job, submittedPath, submittedMode) {
+  if (job.status === 'waiting') return null
+  const resumedEvent = matchingResumeEvent(job.events, {
+    authorizedPath: submittedPath,
+    accessMode: submittedMode,
+  })
+  if (resumedEvent) {
+    return {
+      resumed: true,
+      idempotent: true,
+      awaitingEventId: resumedEvent.payload?.awaitingEventId || null,
+      job,
+    }
+  }
+  return { resumed: false, error: 'job is not waiting for directory authorization', job }
+}
+
 export function resumeJobDirectoryAuthorization({
   jobId,
   userId,
@@ -76,21 +135,8 @@ export function resumeJobDirectoryAuthorization({
   const submittedPath = String(authorizedPath || '').trim()
   const submittedMode = String(accessMode || '').trim()
   const latestSuspension = latestSuspensionEvent(job.events)
-  if (job.status !== 'waiting') {
-    const resumedEvent = matchingResumeEvent(job.events, {
-      authorizedPath: submittedPath,
-      accessMode: submittedMode,
-    })
-    if (resumedEvent) {
-      return {
-        resumed: true,
-        idempotent: true,
-        awaitingEventId: resumedEvent.payload?.awaitingEventId || null,
-        job,
-      }
-    }
-    return { resumed: false, error: 'job is not waiting for directory authorization', job }
-  }
+  const priorResolution = resolvedNonWaitingDirectoryResume(job, submittedPath, submittedMode)
+  if (priorResolution) return priorResolution
   const clarification = latestSuspension?.payload?.clarification || null
   if (latestSuspension?.type !== 'awaiting_user' || clarification?.request_type !== 'directory') {
     return { resumed: false, error: 'job is not waiting for directory authorization', job }
@@ -110,31 +156,17 @@ export function resumeJobDirectoryAuthorization({
   const stepId = latestSuspension.stepId || job.steps.find((step) => step.status === 'queued')?.id || null
   const checkpoint = stepId ? getJobTurnCheckpoint({ jobId, stepId, userId }) : null
   if (!checkpoint?.state || !stepId) return { resumed: false, error: 'the paused job checkpoint is unavailable', job }
-  const marker = `${JOB_DIRECTORY_RESOLUTION_MARKER}${latestSuspension.id}]`
-  const directoryAuthorizationResolution = {
-    type: 'directory_authorization',
-    approved: true,
-    path: submittedPath,
-    access_mode: submittedMode,
-    resource_type: 'directory',
-    awaiting_event_id: latestSuspension.id,
-    step_id: stepId,
-    grant_id: grant.id,
-    authorization_scope: grant.scope,
-  }
-  const directoryAuthorizationResolutions = mergeDirectoryAuthorizationResolutions(
-    checkpoint.state.directoryAuthorizationResolution,
-    directoryAuthorizationResolution,
-  )
-  const messages = Array.isArray(checkpoint.state.messages)
-    ? checkpoint.state.messages.map((message) => ({ ...message }))
-    : []
-  if (!messages.some((message) => message?.role === 'system' && String(message.content || '').includes(marker))) {
-    messages.push({
-      role: 'system',
-      content: directoryResolutionPrompt({ path: submittedPath, accessMode: submittedMode, eventId: latestSuspension.id }),
-    })
-  }
+  const {
+    messages,
+    resolutions: directoryAuthorizationResolutions,
+  } = buildDirectoryResumeCheckpoint({
+    checkpoint,
+    latestSuspension,
+    stepId,
+    submittedPath,
+    submittedMode,
+    grant,
+  })
   const db = getDb()
   let transition
   try {

@@ -139,6 +139,58 @@ async function retryFencedTerminalWrite({
  * only renews the exact owner/token proof and aborts the supplied controller
  * as soon as that proof can no longer be established.
  */
+function initializeHubLeaseProof({ job, ownerId, leaseMs, renewJobLease, now }) {
+  const duration = hubLeaseDuration(leaseMs)
+  const leaseToken = job?.leaseToken
+  if (!ownerId || job?.leaseOwner !== ownerId || !hasLeaseToken(leaseToken)) {
+    throw leaseProofError('claimed Hub job is missing its owner/token lease proof')
+  }
+  if (typeof renewJobLease !== 'function') {
+    throw leaseProofError('Hub job lease renewal is unavailable')
+  }
+  const expiresAt = timestamp(job?.leaseExpiresAt)
+  const startedAt = timestamp(now())
+  if (startedAt === null || expiresAt === null || expiresAt <= startedAt) {
+    throw leaseProofError('claimed Hub job has no active lease expiration')
+  }
+  return {
+    duration,
+    heartbeatMs: Math.max(1, Math.floor(duration / 3)),
+    busyRetryMs: Math.max(25, Math.min(250, Math.floor(duration / 12))),
+    leaseToken,
+    expiresAt,
+  }
+}
+
+function observeHubLeaseClock(now, loseLease) {
+  const observedAt = timestamp(now())
+  if (observedAt === null) {
+    loseLease(leaseProofError('Hub lease clock returned an invalid timestamp'))
+    return null
+  }
+  return observedAt
+}
+
+function createHubLeaseMonitorResult({
+  controller,
+  lease,
+  lost,
+  stopMonitoring,
+}) {
+  return Object.freeze({
+    signal: controller.signal,
+    lease,
+    get lost() {
+      return lost()
+    },
+    stop: stopMonitoring,
+    abort(reason = hubRuntimeShutdownError()) {
+      if (!controller.signal.aborted) controller.abort(reason)
+      else stopMonitoring()
+    },
+  })
+}
+
 export function holdHubJobLease({
   job,
   ownerId,
@@ -149,22 +201,9 @@ export function holdHubJobLease({
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
 } = {}) {
-  const duration = hubLeaseDuration(leaseMs)
-  const heartbeatMs = Math.max(1, Math.floor(duration / 3))
-  const busyRetryMs = Math.max(25, Math.min(250, Math.floor(duration / 12)))
-  const leaseToken = job?.leaseToken
-  if (!ownerId || job?.leaseOwner !== ownerId || !hasLeaseToken(leaseToken)) {
-    throw leaseProofError('claimed Hub job is missing its owner/token lease proof')
-  }
-  if (typeof renewJobLease !== 'function') {
-    throw leaseProofError('Hub job lease renewal is unavailable')
-  }
-
-  let expiresAt = timestamp(job?.leaseExpiresAt)
-  const startedAt = timestamp(now())
-  if (startedAt === null || expiresAt === null || expiresAt <= startedAt) {
-    throw leaseProofError('claimed Hub job has no active lease expiration')
-  }
+  const initialized = initializeHubLeaseProof({ job, ownerId, leaseMs, renewJobLease, now })
+  const { duration, heartbeatMs, busyRetryMs, leaseToken } = initialized
+  let { expiresAt } = initialized
 
   let stopped = false
   let lost = false
@@ -193,14 +232,7 @@ export function holdHubJobLease({
     clearTimers()
     if (!controller.signal.aborted) controller.abort(hubLeaseLostError(cause))
   }
-  const observeNow = () => {
-    const observedAt = timestamp(now())
-    if (observedAt === null) {
-      loseLease(leaseProofError('Hub lease clock returned an invalid timestamp'))
-      return null
-    }
-    return observedAt
-  }
+  const observeNow = () => observeHubLeaseClock(now, loseLease)
   const scheduleExpiry = () => {
     clearTimer('expiry')
     if (stopped || controller.signal.aborted) return
@@ -297,17 +329,11 @@ export function holdHubJobLease({
     },
   })
 
-  return Object.freeze({
-    signal: controller.signal,
+  return createHubLeaseMonitorResult({
+    controller,
     lease,
-    get lost() {
-      return lost
-    },
-    stop: stopMonitoring,
-    abort(reason = hubRuntimeShutdownError()) {
-      if (!controller.signal.aborted) controller.abort(reason)
-      else stopMonitoring()
-    },
+    lost: () => lost,
+    stopMonitoring,
   })
 }
 

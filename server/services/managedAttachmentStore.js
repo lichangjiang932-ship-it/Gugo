@@ -63,6 +63,31 @@ async function writeChunk(file, chunk) {
   }
 }
 
+function resolveAttachmentBinding(db, { userId, sessionId, messageId }) {
+  let resolvedSessionId = sessionId
+  if (resolvedSessionId) {
+    const session = db.prepare(`
+      SELECT user_id FROM sessions
+      WHERE token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+    `).get(resolvedSessionId)
+    if (session && session.user_id !== userId) {
+      throw attachmentError('会话不存在或无权访问', 404, 'ATTACHMENT_SESSION_NOT_FOUND')
+    }
+  }
+  if (!messageId) return { sessionId: resolvedSessionId, messageId }
+  const message = db.prepare(
+    'SELECT user_id, session_id FROM messages WHERE id = ?',
+  ).get(messageId)
+  if (!message || message.user_id !== userId) {
+    throw attachmentError('消息不存在或无权访问', 404, 'ATTACHMENT_MESSAGE_NOT_FOUND')
+  }
+  if (resolvedSessionId && message.session_id !== resolvedSessionId) {
+    throw attachmentError('消息不属于指定会话', 409, 'ATTACHMENT_SESSION_CONFLICT')
+  }
+  resolvedSessionId = message.session_id
+  return { sessionId: resolvedSessionId, messageId }
+}
+
 export async function createManagedAttachment({
   userId,
   name,
@@ -83,32 +108,16 @@ export async function createManagedAttachment({
   const safeId = normalizeAttachmentId(id)
   const safeName = normalizeAttachmentName(name)
   const claimedMimeType = normalizeAttachmentMimeType(mimeType)
-  let safeSessionId = String(sessionId || '').trim().slice(0, 512) || null
-  const safeMessageId = String(messageId || '').trim().slice(0, 512) || null
+  const requestedSessionId = String(sessionId || '').trim().slice(0, 512) || null
+  const requestedMessageId = String(messageId || '').trim().slice(0, 512) || null
   const db = getDb()
   assertUserDataMutationAllowed(db, userId, 'Attachments cannot change while local data is being cleared')
   cleanupManagedAttachments({ userId, now, env })
-  if (safeSessionId) {
-    const session = db.prepare(`
-      SELECT user_id FROM sessions
-      WHERE token = ? AND (id IS NOT NULL OR title IS NOT NULL)
-    `).get(safeSessionId)
-    if (session && session.user_id !== userId) {
-      throw attachmentError('会话不存在或无权访问', 404, 'ATTACHMENT_SESSION_NOT_FOUND')
-    }
-  }
-  if (safeMessageId) {
-    const message = db.prepare(
-      'SELECT user_id, session_id FROM messages WHERE id = ?',
-    ).get(safeMessageId)
-    if (!message || message.user_id !== userId) {
-      throw attachmentError('消息不存在或无权访问', 404, 'ATTACHMENT_MESSAGE_NOT_FOUND')
-    }
-    if (safeSessionId && message.session_id !== safeSessionId) {
-      throw attachmentError('消息不属于指定会话', 409, 'ATTACHMENT_SESSION_CONFLICT')
-    }
-    safeSessionId = message.session_id
-  }
+  const { sessionId: safeSessionId, messageId: safeMessageId } = resolveAttachmentBinding(db, {
+    userId,
+    sessionId: requestedSessionId,
+    messageId: requestedMessageId,
+  })
   const maxPerTurn = configuredMaxPerTurn(env)
   if (safeMessageId || safeSessionId) {
     const count = safeMessageId
