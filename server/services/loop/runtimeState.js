@@ -4,6 +4,7 @@ import {
   extractMutationTargets,
   isLocalMutationCall,
   isMutationExecutionCall,
+  isReadOnlyPowerShellVerificationCall,
   isSuccessfulToolResult,
   looksLikeDeletionCommand,
   staticDeletionTargets,
@@ -198,6 +199,60 @@ export function isLocalMutationContinuationRequest(value, previousValue = '', { 
     || shouldInheritExecutionIntent(text, previous, { intentMode })
 }
 
+function pairedHistoricalToolCalls(messages) {
+  const callsById = new Map()
+  const resultsById = new Map()
+  const duplicateCallIds = new Set()
+  const duplicateResultIds = new Set()
+  for (const message of messages) {
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const rawCall of message.tool_calls) {
+        const id = String(rawCall?.id || '').trim()
+        const name = String(rawCall?.function?.name || rawCall?.name || '').trim()
+        const args = parseHistoricalToolObject(rawCall?.function?.arguments ?? rawCall?.arguments ?? rawCall?.args)
+        if (!id || !name || !args) continue
+        if (callsById.has(id)) duplicateCallIds.add(id)
+        else callsById.set(id, { id, name, args })
+      }
+    } else if (message?.role === 'tool') {
+      const id = String(message?.tool_call_id || '').trim()
+      const result = parseHistoricalToolObject(message.content)
+      if (!id || !result) continue
+      if (resultsById.has(id)) duplicateResultIds.add(id)
+      else resultsById.set(id, { name: String(message?.name || '').trim(), result })
+    }
+  }
+  return [...callsById].flatMap(([id, call]) => {
+    const paired = resultsById.get(id)
+    return duplicateCallIds.has(id)
+      || duplicateResultIds.has(id)
+      || !paired
+      || paired.name !== call.name
+      ? []
+      : [{ call, result: paired.result }]
+  })
+}
+
+const LEGACY_DOTNET_FILE_READ = /\[System\.IO\.File\]::ReadAll(?:Bytes|Text|Lines)\(/i
+
+export function shouldRepairLegacyWorkspaceMutationCheckpoint(messages) {
+  const history = Array.isArray(messages) ? messages : []
+  const currentUserIndex = history.findLastIndex((message) => message?.role === 'user')
+  if (currentUserIndex < 0) return false
+  let legacyReadObserved = false
+  let mutationObserved = false
+  for (const { call, result } of pairedHistoricalToolCalls(history.slice(currentUserIndex + 1))) {
+    if (result?.ok !== true || !isSuccessfulToolResult(result)) continue
+    const command = String(call?.args?.command || '')
+    if (LEGACY_DOTNET_FILE_READ.test(command) && isReadOnlyPowerShellVerificationCall(call)) {
+      legacyReadObserved = true
+    } else if (isMutationExecutionCall(call, result?.artifactId)) {
+      mutationObserved = true
+    }
+  }
+  return legacyReadObserved && !mutationObserved
+}
+
 export function recoverPriorLocalMutationTargets(messages, currentUserMessage, { intentMode = 'auto' } = {}) {
   const history = Array.isArray(messages) ? messages : []
   const currentUserIndex = history.lastIndexOf(currentUserMessage)
@@ -218,48 +273,22 @@ export function recoverPriorLocalMutationTargets(messages, currentUserMessage, {
     return { mutationTargets: [], deletionTargets: [] }
   }
 
-  const callsById = new Map()
-  const resultsById = new Map()
-  const duplicateCallIds = new Set()
-  const duplicateResultIds = new Set()
-  for (const message of history.slice(priorUserIndex + 1, currentUserIndex)) {
-    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
-      for (const rawCall of message.tool_calls) {
-        const id = String(rawCall?.id || '').trim()
-        const name = String(rawCall?.function?.name || rawCall?.name || '').trim()
-        const args = parseHistoricalToolObject(rawCall?.function?.arguments ?? rawCall?.arguments ?? rawCall?.args)
-        if (!id || !name || !args) continue
-        if (callsById.has(id)) duplicateCallIds.add(id)
-        else callsById.set(id, { id, name, args })
-      }
-    } else if (message?.role === 'tool') {
-      const id = String(message?.tool_call_id || '').trim()
-      const result = parseHistoricalToolObject(message.content)
-      if (!id || !result) continue
-      if (resultsById.has(id)) duplicateResultIds.add(id)
-      else resultsById.set(id, { name: String(message?.name || '').trim(), result })
-    }
-  }
-
   const mutationTargets = new Set()
   const deletionTargets = new Set()
-  for (const [id, call] of callsById) {
-    if (duplicateCallIds.has(id)
-      || duplicateResultIds.has(id)
-      || !isMutationExecutionCall(call)
-      || !isLocalMutationCall(call)) continue
-    const paired = resultsById.get(id)
-    if (!paired
-      || paired.name !== call.name
-      || paired.result?.ok !== true
-      || !isSuccessfulToolResult(paired.result)) continue
+  for (const { call, result } of pairedHistoricalToolCalls(
+    history.slice(priorUserIndex + 1, currentUserIndex),
+  )) {
+    if (!isMutationExecutionCall(call)
+      || !isLocalMutationCall(call)
+      || result?.ok !== true
+      || !isSuccessfulToolResult(result)) continue
     const deleted = looksLikeDeletionCommand(call?.args?.command)
-      ? staticDeletionTargets(call, paired.result)
+      ? staticDeletionTargets(call, result)
       : null
     if (deleted?.size) {
       for (const target of deleted) deletionTargets.add(target)
     } else {
-      for (const target of extractMutationTargets(call, paired.result)) mutationTargets.add(target)
+      for (const target of extractMutationTargets(call, result)) mutationTargets.add(target)
     }
   }
   return { mutationTargets: [...mutationTargets], deletionTargets: [...deletionTargets] }
