@@ -287,6 +287,61 @@ export function resolveApprovalTimeoutMs(env = process.env) {
  * @param {object[]} [options.rememberedGrants] 参数范围化的常驻授权规则
  * @returns {{ needsApproval: boolean, risk: 'low'|'medium'|'high', reason: string|null, denied?: boolean }}
  */
+function applyArgumentRisk(name, safeArgs, initialRisk, initialReason) {
+  let risk = initialRisk
+  let reason = initialReason
+  if (SHELL_TOOLS.has(name)) {
+    const danger = checkBashCommandDanger(str(safeArgs.command))
+    const envKeys = Array.isArray(safeArgs.env_keys)
+      ? safeArgs.env_keys.map((key) => str(key).trim()).filter(Boolean).slice(0, 32)
+      : []
+    reason = danger
+      ? `危险命令:${danger.reason}`
+      : envKeys.length > 0
+        ? `执行代码或 shell 命令，并注入宿主环境变量: ${envKeys.join(', ')}`
+        : (name === 'bash_exec' ? '执行 shell 命令' : '执行代码或 shell 命令')
+    risk = danger ? 'high' : risk
+  } else if (name === 'write_file' || name === 'edit_file' || name === 'file_download') {
+    if (isOutsideWorkspacePath(str(safeArgs.path))) {
+      risk = higher(risk, 'high')
+      reason = '写入工作区之外的路径'
+    } else {
+      reason = reason || '修改文件'
+    }
+  } else if (name === 'apply_patch' || name === 'patch_file') {
+    const count = Array.isArray(safeArgs.changes) ? safeArgs.changes.length : 0
+    reason = count ? `原子修改 ${count} 个文件` : '原子修改文件'
+    if (count > 5) risk = higher(risk, 'high')
+  } else if (name === 'fetch_url') {
+    const method = str(safeArgs.method).toUpperCase() || 'GET'
+    risk = higher(risk, 'medium')
+    reason = `对外发起 ${method} 请求`
+  } else if (['browser_click', 'browser_type', 'browser_select', 'browser_press'].includes(name)) {
+    reason = '在已登录的浏览器会话中代为操作'
+  } else if (name === 'browser_open_url' || name === 'browser_navigate' || name === 'connected_app_open') {
+    reason = '打开外部应用'
+  } else if (name === 'qq_mail_send') {
+    reason = '发送外部邮件'
+  }
+  return { risk, reason }
+}
+
+function forcedPerCallApproval(name, mode, risk, reason) {
+  if (!requiresPerCallApproval(name)) return null
+  const resolvedReason = reason || (name === 'run_code'
+    ? '执行模型生成的受限代码，每次调用都需要明确批准'
+    : '查询外部 Codex app-server 模型目录，每次调用都需要明确批准')
+  if (mode !== 'off') return { needsApproval: true, risk: higher(risk, 'high'), reason: resolvedReason }
+  return {
+    needsApproval: false,
+    denied: true,
+    risk: higher(risk, 'high'),
+    reason: name === 'run_code'
+      ? '审批队列已关闭，run_code 必须逐次批准，因此已保守拒绝。请开启审批后重试。'
+      : '审批队列已关闭，codex_models 必须逐次批准，因此已保守拒绝。请开启审批后重试。',
+  }
+}
+
 export function classifyToolRisk(toolName, args = {}, options = {}) {
   const name = str(toolName).trim()
   // options 显式传 null 时 default 参数不生效,这里兜一道 —— 本模块在 prompt/工具
@@ -370,59 +425,9 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     }
   }
 
-  // ── 参数敏感度加权 ──
-  if (SHELL_TOOLS.has(name)) {
-    const danger = checkBashCommandDanger(str(safeArgs.command))
-    const envKeys = Array.isArray(safeArgs.env_keys)
-      ? safeArgs.env_keys.map((key) => str(key).trim()).filter(Boolean).slice(0, 32)
-      : []
-    reason = danger
-      ? `危险命令:${danger.reason}`
-      : envKeys.length > 0
-        ? `执行代码或 shell 命令，并注入宿主环境变量: ${envKeys.join(', ')}`
-        : (name === 'bash_exec' ? '执行 shell 命令' : '执行代码或 shell 命令')
-    risk = danger ? 'high' : risk
-  } else if (name === 'write_file' || name === 'edit_file' || name === 'file_download') {
-    const p = str(safeArgs.path)
-    if (isOutsideWorkspacePath(p)) {
-      risk = higher(risk, 'high')
-      reason = '写入工作区之外的路径'
-    } else {
-      reason = reason || '修改文件'
-    }
-  } else if (name === 'apply_patch' || name === 'patch_file') {
-    const count = Array.isArray(safeArgs.changes) ? safeArgs.changes.length : 0
-    reason = count ? `原子修改 ${count} 个文件` : '原子修改文件'
-    if (count > 5) risk = higher(risk, 'high')
-  } else if (name === 'fetch_url') {
-    const method = str(safeArgs.method).toUpperCase() || 'GET'
-    risk = higher(risk, 'medium')
-    reason = `对外发起 ${method} 请求`
-  } else if (['browser_click', 'browser_type', 'browser_select', 'browser_press'].includes(name)) {
-    reason = '在已登录的浏览器会话中代为操作'
-  } else if (name === 'browser_open_url' || name === 'browser_navigate' || name === 'connected_app_open') {
-    reason = '打开外部应用'
-  } else if (name === 'qq_mail_send') {
-    reason = '发送外部邮件'
-  }
-
-  if (requiresPerCallApproval(name)) {
-    risk = higher(risk, 'high')
-    reason = reason || (name === 'run_code'
-      ? '执行模型生成的受限代码，每次调用都需要明确批准'
-      : '查询外部 Codex app-server 模型目录，每次调用都需要明确批准')
-    if (mode === 'off') {
-      return {
-        needsApproval: false,
-        denied: true,
-        risk,
-        reason: name === 'run_code'
-          ? '审批队列已关闭，run_code 必须逐次批准，因此已保守拒绝。请开启审批后重试。'
-          : '审批队列已关闭，codex_models 必须逐次批准，因此已保守拒绝。请开启审批后重试。',
-      }
-    }
-    return { needsApproval: true, risk, reason }
-  }
+  ;({ risk, reason } = applyArgumentRisk(name, safeArgs, risk, reason))
+  const forcedApproval = forcedPerCallApproval(name, mode, risk, reason)
+  if (forcedApproval) return forcedApproval
 
   // Cron/task grants are narrower than remembered or global policies and win
   // when their exact target matches. Local writes are rejected by the grant

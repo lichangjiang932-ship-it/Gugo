@@ -91,41 +91,17 @@ function groupEvidenceForBudget(evidenceSummaries, inputTokenBudget) {
   return groups
 }
 
-export async function addSemanticCompactionSummary({
-  result,
-  callModel,
-  contextWindow = DEFAULT_CONTEXT_WINDOW,
-  signal,
-  userId = null,
+function createSemanticSummaryInvoker({
+  telemetry,
+  plan,
   consumeBudget,
-  audit = writeToolAudit,
-  customPrompt = '',
-} = {}) {
-  const telemetry = {
-    attempted: false,
-    used: false,
-    modelCalls: 0,
-    batchCount: 0,
-    truncatedMessageCount: 0,
-    outputTruncatedCount: 0,
-    fallbackReason: null,
-  }
-  if (!result?.compacted || typeof callModel !== 'function') return { result, telemetry }
-  telemetry.attempted = true
-  const inputTokenBudget = Math.min(
-    MAX_SEMANTIC_SUMMARY_INPUT_TOKENS,
-    Math.max(2_048, Math.floor(Number(contextWindow || DEFAULT_CONTEXT_WINDOW) * 0.5)),
-  )
-  const outputTokenLimit = getCompactionSummaryTokenLimit(contextWindow)
-  telemetry.outputTokenLimit = outputTokenLimit
-  const plan = buildCompactionSummaryBatches({
-    archivedMessages: result.archivedMessages,
-    inputTokenBudget,
-  })
-  telemetry.batchCount = plan.batches.length
-  telemetry.truncatedMessageCount = plan.truncatedMessageCount
-
-  const invoke = async (messages, stage, index) => {
+  callModel,
+  outputTokenLimit,
+  signal,
+  audit,
+  userId,
+}) {
+  return async (messages, stage, index) => {
     const budgetResult = typeof consumeBudget === 'function' ? consumeBudget(1) : { ok: true }
     if (budgetResult?.ok === false) {
       const error = new Error(budgetResult.reason || 'semantic-summary model budget exceeded')
@@ -167,6 +143,52 @@ export async function addSemanticCompactionSummary({
       throw error
     }
   }
+}
+
+export async function addSemanticCompactionSummary({
+  result,
+  callModel,
+  contextWindow = DEFAULT_CONTEXT_WINDOW,
+  signal,
+  userId = null,
+  consumeBudget,
+  audit = writeToolAudit,
+  customPrompt = '',
+} = {}) {
+  const telemetry = {
+    attempted: false,
+    used: false,
+    modelCalls: 0,
+    batchCount: 0,
+    truncatedMessageCount: 0,
+    outputTruncatedCount: 0,
+    fallbackReason: null,
+  }
+  if (!result?.compacted || typeof callModel !== 'function') return { result, telemetry }
+  telemetry.attempted = true
+  const inputTokenBudget = Math.min(
+    MAX_SEMANTIC_SUMMARY_INPUT_TOKENS,
+    Math.max(2_048, Math.floor(Number(contextWindow || DEFAULT_CONTEXT_WINDOW) * 0.5)),
+  )
+  const outputTokenLimit = getCompactionSummaryTokenLimit(contextWindow)
+  telemetry.outputTokenLimit = outputTokenLimit
+  const plan = buildCompactionSummaryBatches({
+    archivedMessages: result.archivedMessages,
+    inputTokenBudget,
+  })
+  telemetry.batchCount = plan.batches.length
+  telemetry.truncatedMessageCount = plan.truncatedMessageCount
+
+  const invoke = createSemanticSummaryInvoker({
+    telemetry,
+    plan,
+    consumeBudget,
+    callModel,
+    outputTokenLimit,
+    signal,
+    audit,
+    userId,
+  })
 
   try {
     let digests = []
