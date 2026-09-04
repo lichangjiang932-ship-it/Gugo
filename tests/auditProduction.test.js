@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   AUDIT_EXCEPTIONS,
   inspectProductionAudit,
+  runProductionAudit,
 } from '../scripts/audit-production.mjs'
 
 const allowedUrls = Object.keys(AUDIT_EXCEPTIONS)
@@ -30,6 +31,38 @@ function report(urls = allowedUrls) {
     },
   }
 }
+
+test('production audit retries transport failures but returns the first valid JSON report', () => {
+  const sleeps = []
+  let calls = 0
+  const valid = { vulnerabilities: {} }
+  const result = runProductionAudit({
+    delays: [0, 5, 15],
+    sleep: (delay) => sleeps.push(delay),
+    run: () => {
+      calls += 1
+      if (calls === 1) return { stdout: '', stderr: 'registry timeout' }
+      if (calls === 2) return { stdout: JSON.stringify({ error: { code: 'EAI_AGAIN' } }) }
+      return { stdout: JSON.stringify(valid) }
+    },
+  })
+  assert.deepEqual(result, valid)
+  assert.equal(calls, 3)
+  assert.deepEqual(sleeps, [5, 15])
+})
+
+test('production audit remains fail closed after bounded transport retries', () => {
+  let calls = 0
+  assert.throws(() => runProductionAudit({
+    delays: [0, 0, 0],
+    sleep: () => {},
+    run: () => {
+      calls += 1
+      return { stdout: '', stderr: 'registry unavailable' }
+    },
+  }), /registry unavailable/)
+  assert.equal(calls, 3)
+})
 
 test('production audit permits only the reviewed image-size advisories', () => {
   const result = inspectProductionAudit(report(), lock(), new Date('2026-08-08T00:00:00Z'))
