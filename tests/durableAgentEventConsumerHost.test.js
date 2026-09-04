@@ -40,6 +40,8 @@ function createMemoryStore({
   emptyBacklogPages = 0,
   renewFailures = 0,
   retentionFailures = 0,
+  scanFailures = 0,
+  scanFailureCode = 'AGENT_EVENT_STORE_UNAVAILABLE',
 } = {}) {
   const state = {
     entries: [...entries],
@@ -60,6 +62,8 @@ function createMemoryStore({
     renewCalls: 0,
     renewFailures,
     scanCalls: 0,
+    scanFailures,
+    scanFailureCode,
     retentionCalls: [],
     retentionFailures,
   }
@@ -138,6 +142,10 @@ function createMemoryStore({
     scanAgentEventSubscription(token, { now }) {
       assertLease(token, now)
       state.scanCalls += 1
+      if (state.scanFailures > 0) {
+        state.scanFailures -= 1
+        throw storeFailure(state.scanFailureCode)
+      }
       if (state.retryAt !== null && state.retryAt > now) {
         return Object.freeze({ entry: null, retryAt: state.retryAt, hasMore: true })
       }
@@ -562,6 +570,65 @@ test('shutdown abandons a hanging listener at the drain deadline and restart rep
   assert.deepEqual(memory.state.acknowledged, [1])
   assert.equal(await second.shutdown(), true)
   assert.equal(clock.pending(), 0)
+})
+
+test('infrastructure failures back off exponentially and open a persistent disable circuit', async () => {
+  const clock = createControlledClock()
+  const failures = []
+  const memory = createMemoryStore({ scanFailures: 5 })
+  const host = createDurableAgentEventConsumerHost({
+    store: memory.store,
+    idlePollMs: 10,
+    leaseDurationMs: 1_000,
+    retentionIntervalMs: 10_000,
+    now: clock.now,
+    random: () => 0.5,
+    schedule: clock.schedule,
+    cancelSchedule: clock.cancelSchedule,
+    onHostError: (failure) => failures.push(failure),
+  })
+  host.register(registration(() => {}))
+  host.start()
+  await clock.flush()
+  for (const delay of [10, 20, 40, 80]) {
+    assert.equal(failures.at(-1).retryInMs, delay)
+    await clock.advanceBy(delay)
+  }
+  assert.equal(failures.length, 5)
+  assert.equal(failures.at(-1).phase, 'consume-circuit-open')
+  assert.equal(failures.at(-1).retryInMs, null)
+  assert.equal(memory.state.status, 'disabled')
+  assert.equal(memory.state.disableCalls, 1)
+  await host.shutdown()
+})
+
+test('a corrupt outbox event disables its subscription immediately instead of pinning retention', async () => {
+  const clock = createControlledClock()
+  const failures = []
+  const memory = createMemoryStore({
+    scanFailures: 1,
+    scanFailureCode: 'AGENT_EVENT_OUTBOX_CORRUPT',
+  })
+  const host = createDurableAgentEventConsumerHost({
+    store: memory.store,
+    idlePollMs: 10,
+    leaseDurationMs: 1_000,
+    retentionIntervalMs: 10_000,
+    now: clock.now,
+    random: () => 0.5,
+    schedule: clock.schedule,
+    cancelSchedule: clock.cancelSchedule,
+    onHostError: (failure) => failures.push(failure),
+  })
+  host.register(registration(() => {}))
+  host.start()
+  await clock.flush()
+  assert.equal(memory.state.scanCalls, 1)
+  assert.equal(memory.state.status, 'disabled')
+  assert.equal(memory.state.disableCalls, 1)
+  assert.equal(failures[0].phase, 'poison-event')
+  assert.equal(failures[0].retryInMs, null)
+  await host.shutdown()
 })
 
 test('registration explicitly re-enables a disabled subscription without resetting its cursor', async () => {
