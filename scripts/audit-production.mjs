@@ -105,7 +105,7 @@ function runAuditCommand() {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
-    timeout: 120_000,
+    timeout: 600_000,
     shell: !npmCli && process.platform === 'win32',
   })
 }
@@ -133,7 +133,7 @@ function blockingSleep(ms) {
 export function runProductionAudit({
   run = runAuditCommand,
   sleep = blockingSleep,
-  delays = [0, 5_000, 15_000],
+  delays = [0, 30_000, 60_000],
 } = {}) {
   let lastError = null
   for (let attempt = 0; attempt < delays.length; attempt += 1) {
