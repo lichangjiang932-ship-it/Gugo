@@ -36,6 +36,101 @@ function contentDisposition(filename) {
   return `inline; filename="${safe}"`
 }
 
+async function handleNetworkPolicy(req, res, { userId, cwd, env }) {
+  if (!isLocalOwnerUser(userId, env)) {
+    return sendJson(res, 403, {
+      ok: false,
+      error: {
+        code: 'LOCAL_OWNER_ONLY',
+        message: 'Outbound network policy can only be managed by the local owner.',
+      },
+    })
+  }
+  try {
+    if (req.method === 'GET') {
+      return sendJson(
+        res,
+        200,
+        { ok: true, policy: getOutboundNetworkPolicy({ userId, cwd, env }) },
+        { 'Cache-Control': 'private, no-store', Pragma: 'no-cache' },
+      )
+    }
+    if (req.method === 'PATCH') {
+      const body = await readJson(req, { maxBytes: 16 * 1024 })
+      const policy = updateOutboundNetworkPolicy({ userId, pureLocal: body.pureLocal, cwd, env })
+      if (policy.pureLocal) enforcePureLocalMcpPolicy()
+      return sendJson(res, 200, { ok: true, policy })
+    }
+    return sendJson(res, 405, {
+      ok: false,
+      error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' },
+    })
+  } catch (error) {
+    return sendJson(res, error?.statusCode || 500, {
+      ok: false,
+      error: {
+        code: error?.code || 'OUTBOUND_NETWORK_POLICY_ERROR',
+        message: error?.message || 'Unable to update outbound network policy',
+        ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}),
+        ...(Array.isArray(error?.locks) ? { locks: error.locks } : {}),
+      },
+    })
+  }
+}
+
+function handleUserDataExport(req, res, { userId, env, createUserDataArchive }) {
+  let archive = null
+  let exportDisposed = false
+  const disposeExport = () => {
+    if (!archive || exportDisposed) return false
+    exportDisposed = true
+    return archive.dispose()
+  }
+  try {
+    archive = createUserDataArchive({ userId, env })
+    res.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${archive.filename}"`,
+      'Cache-Control': 'private, no-store',
+      'Content-Security-Policy': "sandbox; default-src 'none'",
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      'X-Content-Type-Options': 'nosniff',
+    })
+    archive.stream.once('error', (error) => {
+      if (!res.destroyed) res.destroy(error)
+    })
+    const abortExport = () => {
+      try { disposeExport() } catch (error) { if (!res.destroyed) res.destroy(error) }
+    }
+    req.once('aborted', abortExport)
+    res.once('close', () => { if (!res.writableEnded) abortExport() })
+    archive.stream.pipe(res)
+    return undefined
+  } catch (error) {
+    let terminalError = error
+    try {
+      disposeExport()
+    } catch (cleanupError) {
+      terminalError = new AggregateError(
+        [error, cleanupError],
+        'User-data export failed and its resources could not be released',
+        { cause: error },
+      )
+    }
+    if (res.headersSent || res.writableEnded || res.destroyed) {
+      if (!res.destroyed) res.destroy(terminalError)
+      return undefined
+    }
+    return sendJson(res, error?.statusCode || 500, {
+      ok: false,
+      error: {
+        code: error?.code || 'USER_DATA_EXPORT_FAILED',
+        message: error?.message || 'Unable to export user data',
+      },
+    })
+  }
+}
+
 export async function handleRuntimeConfigRequest(
   req,
   res,
@@ -65,112 +160,11 @@ export async function handleRuntimeConfigRequest(
 
   const url = new URL(req.url, 'http://localhost')
   if (url.pathname === '/api/system/network-policy') {
-    if (!isLocalOwnerUser(userId, env)) {
-      return sendJson(res, 403, {
-        ok: false,
-        error: {
-          code: 'LOCAL_OWNER_ONLY',
-          message: 'Outbound network policy can only be managed by the local owner.',
-        },
-      })
-    }
-    try {
-      if (req.method === 'GET') {
-        return sendJson(
-          res,
-          200,
-          { ok: true, policy: getOutboundNetworkPolicy({ userId, cwd, env }) },
-          { 'Cache-Control': 'private, no-store', Pragma: 'no-cache' },
-        )
-      }
-      if (req.method === 'PATCH') {
-        const body = await readJson(req, { maxBytes: 16 * 1024 })
-        const policy = updateOutboundNetworkPolicy({
-          userId,
-          pureLocal: body.pureLocal,
-          cwd,
-          env,
-        })
-        if (policy.pureLocal) enforcePureLocalMcpPolicy()
-        return sendJson(res, 200, {
-          ok: true,
-          policy,
-        })
-      }
-      return sendJson(res, 405, {
-        ok: false,
-        error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' },
-      })
-    } catch (error) {
-      return sendJson(res, error?.statusCode || 500, {
-        ok: false,
-        error: {
-          code: error?.code || 'OUTBOUND_NETWORK_POLICY_ERROR',
-          message: error?.message || 'Unable to update outbound network policy',
-          ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}),
-          ...(Array.isArray(error?.locks) ? { locks: error.locks } : {}),
-        },
-      })
-    }
+    return handleNetworkPolicy(req, res, { userId, cwd, env })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/system/user-data/export') {
-    let archive = null
-    let exportDisposed = false
-    const disposeExport = () => {
-      if (!archive || exportDisposed) return false
-      exportDisposed = true
-      return archive.dispose()
-    }
-    try {
-      archive = createUserDataArchive({ userId, env })
-      res.writeHead(200, {
-        'Content-Type': 'application/zip',
-        'Content-Disposition': `attachment; filename="${archive.filename}"`,
-        'Cache-Control': 'private, no-store',
-        'Content-Security-Policy': "sandbox; default-src 'none'",
-        'Cross-Origin-Resource-Policy': 'same-origin',
-        'X-Content-Type-Options': 'nosniff',
-      })
-      archive.stream.once('error', (error) => {
-        if (!res.destroyed) res.destroy(error)
-      })
-      const abortExport = () => {
-        try {
-          disposeExport()
-        } catch (error) {
-          if (!res.destroyed) res.destroy(error)
-        }
-      }
-      req.once('aborted', abortExport)
-      res.once('close', () => {
-        if (!res.writableEnded) abortExport()
-      })
-      archive.stream.pipe(res)
-      return
-    } catch (error) {
-      let terminalError = error
-      try {
-        disposeExport()
-      } catch (cleanupError) {
-        terminalError = new AggregateError(
-          [error, cleanupError],
-          'User-data export failed and its resources could not be released',
-          { cause: error },
-        )
-      }
-      if (res.headersSent || res.writableEnded || res.destroyed) {
-        if (!res.destroyed) res.destroy(terminalError)
-        return
-      }
-      return sendJson(res, error?.statusCode || 500, {
-        ok: false,
-        error: {
-          code: error?.code || 'USER_DATA_EXPORT_FAILED',
-          message: error?.message || 'Unable to export user data',
-        },
-      })
-    }
+    return handleUserDataExport(req, res, { userId, env, createUserDataArchive })
   }
 
   if (req.method === 'GET' && url.pathname === '/api/system/user-data/preview') {

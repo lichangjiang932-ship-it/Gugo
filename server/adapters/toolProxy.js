@@ -335,6 +335,102 @@ function authToken(req) {
   return auth.slice(7).trim()
 }
 
+async function authorizeToolRequest({ req, res, token, toolName, initialArgs, hookRequestId }) {
+  const session = getSessionByToken(token)
+  const userId = session?.user_id
+  if (!userId) return { userId: null, toolArgs: initialArgs, hookToolCallId: null }
+  const toolCallId = randomUUID()
+  const hookScope = {
+    userId,
+    origin: 'chat',
+    jobId: null,
+    stepId: null,
+    sessionId: null,
+    requestId: toolCallId,
+    toolCallId,
+    toolName,
+  }
+  const pre = await dispatchHooks({
+    userId,
+    event: 'pre_tool_use',
+    tool: toolName,
+    args: initialArgs,
+    origin: hookScope.origin,
+    jobId: hookScope.jobId,
+    stepId: hookScope.stepId,
+    sessionId: hookScope.sessionId,
+    requestId: hookScope.requestId,
+    toolCallId: hookScope.toolCallId,
+    hookInvocationId: `${hookRequestId}:pre_tool_use`,
+  })
+  if (!pre.allow) {
+    sendJson(res, 403, { ok: false, error: pre.reason || 'hook 拒绝该工具调用' })
+    return null
+  }
+  let toolArgs = pre.replacementArgs && typeof pre.replacementArgs === 'object'
+    ? pre.replacementArgs
+    : initialArgs
+  const abortController = new AbortController()
+  const abort = () => abortController.abort()
+  const abortOnClose = () => { if (!res.writableEnded) abort() }
+  if (typeof req.once === 'function') req.once('aborted', abort)
+  if (typeof res.once === 'function') res.once('close', abortOnClose)
+  let gate
+  try {
+    gate = await requestApproval({
+      userId,
+      origin: 'chat',
+      toolName,
+      args: toolArgs,
+      signal: abortController.signal,
+      forceApproval: pre.permissionDecision === 'ask',
+      forceApprovalReason: pre.reason,
+      hookAuthorizationProvenance: pre.hookAuthorizationProvenance || null,
+      requestId: hookScope.requestId,
+      toolCallId: hookScope.toolCallId,
+    })
+  } finally {
+    if (typeof req.off === 'function') req.off('aborted', abort)
+    if (typeof res.off === 'function') res.off('close', abortOnClose)
+  }
+  if (abortController.signal.aborted || res.destroyed) return null
+  if (!gate.proceed) {
+    sendJson(res, 403, { ok: false, error: gate.reason || '该工具调用未获批准' })
+    return null
+  }
+  toolArgs = gate.args ?? toolArgs
+  let verifiedHookAuthorization = false
+  if (gate.hookAuthorized) {
+    const finalHookAuthorization = revalidateHookAuthorization({
+      provenance: gate.hookAuthorizationProvenance,
+      ...hookScope,
+      args: toolArgs,
+      requireLive: true,
+    })
+    if (!finalHookAuthorization.proceed) {
+      sendJson(res, 403, {
+        ok: false,
+        error: finalHookAuthorization.reason || 'Hook 授权已失效',
+      })
+      return null
+    }
+    verifiedHookAuthorization = true
+  }
+  const finalPolicy = revalidateToolPermission({
+    userId,
+    origin: 'chat',
+    toolName,
+    args: toolArgs,
+    expectedPolicyProvenance: gate.policyProvenance,
+    allowAsk: Boolean(gate.approvalId || verifiedHookAuthorization),
+  })
+  if (!finalPolicy.proceed) {
+    sendJson(res, 403, { ok: false, error: finalPolicy.reason || '当前策略拒绝该工具调用' })
+    return null
+  }
+  return { userId, toolArgs, hookToolCallId: toolCallId }
+}
+
 export async function handleToolProxyRequest(req, res) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { ok: false, error: '仅支持 POST' })
@@ -367,6 +463,7 @@ export async function handleToolProxyRequest(req, res) {
     let toolName
     let toolArgs = body
     let hookToolCallId = null
+    let userId = null
     const requestIdHeader = req.headers?.['idempotency-key']
     const hookRequestId = String(
       (Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader) || randomUUID(),
@@ -380,108 +477,16 @@ export async function handleToolProxyRequest(req, res) {
       return
     }
 
-    // Feature 7: pre_tool_use hook —  可拒绝或重写 args
-    const session = getSessionByToken(token)
-    const userId = session?.user_id
-    if (userId) {
-      const toolCallId = randomUUID()
-      hookToolCallId = toolCallId
-      const hookScope = {
-        userId,
-        origin: 'chat',
-        jobId: null,
-        stepId: null,
-        sessionId: null,
-        requestId: toolCallId,
-        toolCallId,
-        toolName,
-      }
-      const pre = await dispatchHooks({
-        userId,
-        event: 'pre_tool_use',
-        tool: toolName,
-        args: toolArgs,
-        origin: hookScope.origin,
-        jobId: hookScope.jobId,
-        stepId: hookScope.stepId,
-        sessionId: hookScope.sessionId,
-        requestId: hookScope.requestId,
-        toolCallId: hookScope.toolCallId,
-        hookInvocationId: `${hookRequestId}:pre_tool_use`,
-      })
-      if (!pre.allow) {
-        sendJson(res, 403, { ok: false, error: pre.reason || 'hook 拒绝该工具调用' })
-        return
-      }
-      if (pre.replacementArgs && typeof pre.replacementArgs === 'object') {
-        toolArgs = pre.replacementArgs
-      }
-      const abortController = new AbortController()
-      const abort = () => abortController.abort()
-      const abortOnClose = () => {
-        if (!res.writableEnded) abort()
-      }
-      if (typeof req.once === 'function') req.once('aborted', abort)
-      if (typeof res.once === 'function') res.once('close', abortOnClose)
-      let gate
-      try {
-        gate = await requestApproval({
-          userId,
-          origin: 'chat',
-          toolName,
-          args: toolArgs,
-          signal: abortController.signal,
-          forceApproval: pre.permissionDecision === 'ask',
-          forceApprovalReason: pre.reason,
-          hookAuthorizationProvenance: pre.hookAuthorizationProvenance || null,
-          requestId: hookScope.requestId,
-          toolCallId: hookScope.toolCallId,
-        })
-      } finally {
-        if (typeof req.off === 'function') req.off('aborted', abort)
-        if (typeof res.off === 'function') res.off('close', abortOnClose)
-      }
-      if (abortController.signal.aborted || res.destroyed) return
-      if (!gate.proceed) {
-        sendJson(res, 403, { ok: false, error: gate.reason || '该工具调用未获批准' })
-        return
-      }
-      toolArgs = gate.args ?? toolArgs
-
-      let verifiedHookAuthorization = false
-      if (gate.hookAuthorized) {
-        const finalHookAuthorization = revalidateHookAuthorization({
-          provenance: gate.hookAuthorizationProvenance,
-          ...hookScope,
-          args: toolArgs,
-          requireLive: true,
-        })
-        if (!finalHookAuthorization.proceed) {
-          sendJson(res, 403, {
-            ok: false,
-            error: finalHookAuthorization.reason || 'Hook 授权已失效',
-          })
-          return
-        }
-        verifiedHookAuthorization = true
-      }
-
-      // `await requestApproval()` is a scheduling boundary. Re-check the exact
-      // policy identity immediately before the outbound effect so a hot swap
-      // or uninstall cannot consume an authorization from the old binding.
-      const finalPolicy = revalidateToolPermission({
-        userId,
-        origin: 'chat',
-        toolName,
-        args: toolArgs,
-        expectedPolicyProvenance: gate.policyProvenance,
-        allowAsk: Boolean(gate.approvalId || verifiedHookAuthorization),
-      })
-      if (!finalPolicy.proceed) {
-        sendJson(res, 403, { ok: false, error: finalPolicy.reason || '当前策略拒绝该工具调用' })
-        return
-      }
-    }
+    const authorization = await authorizeToolRequest({
+      req,
+      res,
+      token,
+      toolName,
+      initialArgs: toolArgs,
+      hookRequestId,
+    })
+    if (!authorization) return
+    ;({ userId, toolArgs, hookToolCallId } = authorization)
 
     if (toolName === 'web_search') {
       result = await searchWeb({
