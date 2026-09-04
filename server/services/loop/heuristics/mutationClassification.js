@@ -62,6 +62,8 @@ export function powerShellCommandScript(call) {
   return script
 }
 
+const POWERSHELL_DOTNET_FILE_READ = /^\[System\.IO\.File\]::ReadAll(?:Bytes|Text|Lines)\(\s*(?:'[^'\r\n]*'|"[^"$`\r\n]*")\s*\)(?:\s*\[\s*\d+\s*(?:\.\.\s*\d+)?\s*\])?(?:\s+-join\s+(?:'[^'\r\n]*'|"[^"$`\r\n]*"))?\s*$/i
+
 export function isReadOnlyPowerShellVerificationCall(call) {
   const script = powerShellCommandScript(call)
   if (!script
@@ -69,6 +71,7 @@ export function isReadOnlyPowerShellVerificationCall(call) {
     || POWERSHELL_MUTATION_COMMAND.test(script)) {
     return false
   }
+  if (POWERSHELL_DOTNET_FILE_READ.test(script)) return true
   const pipeline = script.split('|').map((part) => part.trim()).filter(Boolean)
   if (!pipeline.length || !/^\(?\s*(?:Get-Content|Get-FileHash|Get-ChildItem|Get-Item|Test-Path|Select-String|Compare-Object)\b/i.test(pipeline[0])) {
     return false

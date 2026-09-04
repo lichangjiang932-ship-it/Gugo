@@ -2710,12 +2710,28 @@ test('PowerShell verification classification rejects mixed read and write script
     name: 'bash_exec',
     args: { command: "powershell -NoProfile -Command \"Get-Content -Path 'result.txt'; Set-Content -Path 'result.txt' -Value changed\"" },
   }
+  const dotNetReadOnly = {
+    name: 'bash_exec',
+    args: {
+      command: "powershell -NoProfile -Command \"[System.IO.File]::ReadAllBytes('D:\\\\docs\\\\result.md')[0..2] -join ','\"",
+    },
+  }
+  const dotNetMutation = {
+    name: 'bash_exec',
+    args: {
+      command: "powershell -NoProfile -Command \"[System.IO.File]::WriteAllBytes('D:\\\\docs\\\\result.md', [byte[]](1,2,3))\"",
+    },
+  }
   const aliasMutation = {
     name: 'bash_exec',
     args: { command: "powershell -NoProfile -Command \"Get-Content -Path 'result.txt' | sc 'copy.txt'\"" },
   }
   assert.equal(isReadOnlyPowerShellVerificationCall(readOnly), true)
   assert.equal(isLocalMutationCall(readOnly), false)
+  assert.equal(isReadOnlyPowerShellVerificationCall(dotNetReadOnly), true)
+  assert.equal(isLocalMutationCall(dotNetReadOnly), false)
+  assert.equal(isReadOnlyPowerShellVerificationCall(dotNetMutation), false)
+  assert.equal(isLocalMutationCall(dotNetMutation), true)
   assert.equal(isReadOnlyPowerShellVerificationCall(mixed), false)
   assert.equal(isLocalMutationCall(mixed), true)
   assert.equal(isReadOnlyPowerShellVerificationCall(aliasMutation), false)
