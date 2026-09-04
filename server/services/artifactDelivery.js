@@ -257,6 +257,44 @@ export async function renderArtifactPreviewPng({ artifactPath, page = 1, userId 
   }
 }
 
+function handleArtifactAssetDownload(req, res, artifact, assetId) {
+  if (String(artifact.type || '').toLowerCase() !== 'html') {
+    res.statusCode = 404; res.end('not found'); return
+  }
+  let asset
+  try {
+    asset = getHtmlArtifactAsset({ artifactDirectory: ensureArtifactDir(), artifactId: artifact.id, assetId })
+  } catch {
+    res.statusCode = 404; res.end('not found'); return
+  }
+  if (!asset) { res.statusCode = 404; res.end('not found'); return }
+  const requestedRange = req.headers.range
+  const range = requestedRange ? parseArtifactRange(requestedRange, asset.size) : null
+  if (requestedRange && !range) {
+    res.writeHead(416, { 'Content-Range': `bytes */${asset.size}`, 'Accept-Ranges': 'bytes' })
+    res.end()
+    return
+  }
+  const headers = {
+    'Content-Type': asset.mimeType,
+    'Content-Disposition': artifactContentDisposition('inline', asset.filename),
+    'Content-Length': range ? range.end - range.start + 1 : asset.size,
+    'Cache-Control': 'private, no-store',
+    'Accept-Ranges': 'bytes',
+    'X-Content-Type-Options': 'nosniff',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+  }
+  if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${asset.size}`
+  res.writeHead(range ? 206 : 200, headers)
+  if (req.method === 'HEAD') { res.end(); return }
+  const stream = fs.createReadStream(asset.fullPath, range || undefined)
+  stream.on('error', (error) => {
+    console.error('[artifactGen] asset read stream error:', error?.message)
+    if (!res.headersSent) { res.statusCode = 500; res.end('read error') }
+  })
+  stream.pipe(res)
+}
+
 export function handleArtifactDownload(req, res) {
   if (!['GET', 'HEAD'].includes(String(req.method || 'GET').toUpperCase())) {
     res.writeHead(405, { Allow: 'GET, HEAD' }); res.end('method not allowed'); return
@@ -288,44 +326,7 @@ export function handleArtifactDownload(req, res) {
     res.statusCode = 404; res.end('not found'); return
   }
 
-  if (assetId) {
-    if (String(artifact.type || '').toLowerCase() !== 'html') {
-      res.statusCode = 404; res.end('not found'); return
-    }
-    let asset
-    try {
-      asset = getHtmlArtifactAsset({ artifactDirectory: ensureArtifactDir(), artifactId: artifact.id, assetId })
-    } catch {
-      res.statusCode = 404; res.end('not found'); return
-    }
-    if (!asset) { res.statusCode = 404; res.end('not found'); return }
-    const requestedRange = req.headers.range
-    const range = requestedRange ? parseArtifactRange(requestedRange, asset.size) : null
-    if (requestedRange && !range) {
-      res.writeHead(416, { 'Content-Range': `bytes */${asset.size}`, 'Accept-Ranges': 'bytes' })
-      res.end()
-      return
-    }
-    const headers = {
-      'Content-Type': asset.mimeType,
-      'Content-Disposition': artifactContentDisposition('inline', asset.filename),
-      'Content-Length': range ? range.end - range.start + 1 : asset.size,
-      'Cache-Control': 'private, no-store',
-      'Accept-Ranges': 'bytes',
-      'X-Content-Type-Options': 'nosniff',
-      'Cross-Origin-Resource-Policy': 'same-origin',
-    }
-    if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${asset.size}`
-    res.writeHead(range ? 206 : 200, headers)
-    if (req.method === 'HEAD') { res.end(); return }
-    const stream = fs.createReadStream(asset.fullPath, range || undefined)
-    stream.on('error', (error) => {
-      console.error('[artifactGen] asset read stream error:', error?.message)
-      if (!res.headersSent) { res.statusCode = 500; res.end('read error') }
-    })
-    stream.pipe(res)
-    return
-  }
+  if (assetId) return handleArtifactAssetDownload(req, res, artifact, assetId)
 
   ensureArtifactDir()
   let full = path.join(ARTIFACT_DIR, filename)

@@ -359,6 +359,57 @@ function disabledSemanticTelemetry() {
   }
 }
 
+async function runCompactionPasses({
+  preparedMessages,
+  initialKeepMessages,
+  semanticSummary,
+  callModel,
+  contextWindow,
+  signal,
+  userId,
+  consumeBudget,
+  tools,
+  threshold,
+  summaryTokenLimit,
+}) {
+  let result = null
+  let semanticTelemetry = disabledSemanticTelemetry()
+  let fit = null
+  let passes = 0
+  let buildError = null
+  for (let pass = 0; pass < MAX_COMPACTION_PASSES; pass += 1) {
+    passes = pass + 1
+    const keepMessages = pass === 0 ? initialKeepMessages : 1
+    let candidate = buildCompaction({ messages: preparedMessages, keepMessages, force: true })
+    if (!candidate.ok || !candidate.compacted || candidate.replacedMessageCount === 0) {
+      buildError = candidate.error || 'compaction did not replace any messages'
+      break
+    }
+    if (pass === 0 && semanticSummary) {
+      const semantic = await addSemanticCompactionSummary({
+        result: candidate,
+        callModel,
+        contextWindow,
+        signal,
+        userId,
+        consumeBudget,
+      })
+      candidate = semantic.result
+      semanticTelemetry = semantic.telemetry
+    } else if (pass > 0 && semanticTelemetry.used) {
+      semanticTelemetry = {
+        ...semanticTelemetry,
+        used: false,
+        fallbackReason: 'semantic_summary_replaced_for_convergence',
+      }
+    }
+    fit = fitCompactionResult(candidate, { tools, threshold, summaryTokenLimit })
+    result = fit.result
+    if (fit.ok) break
+  }
+  return { result, semanticTelemetry, fit, passes, buildError }
+}
+
 export async function compactForModel({
   messages = [],
   tools = [],
@@ -431,50 +482,21 @@ export async function compactForModel({
 
   const initialKeepMessages = strategy.keepMessages
   const summaryTokenLimit = getCompactionSummaryTokenLimit(contextWindow, activeContextTokens)
-  let result = null
-  let semanticTelemetry = disabledSemanticTelemetry()
-  let fit = null
-  let passes = 0
-  let buildError = null
-
-  for (let pass = 0; pass < MAX_COMPACTION_PASSES; pass += 1) {
-    passes = pass + 1
-    const keepMessages = pass === 0 ? initialKeepMessages : 1
-    let candidate = buildCompaction({
-      messages: preparedMessages,
-      keepMessages,
-      force: true,
-    })
-    if (!candidate.ok || !candidate.compacted || candidate.replacedMessageCount === 0) {
-      buildError = candidate.error || 'compaction did not replace any messages'
-      break
-    }
-    if (pass === 0 && semanticSummary) {
-      const semantic = await addSemanticCompactionSummary({
-        result: candidate,
-        callModel,
-        contextWindow,
-        signal,
-        userId,
-        consumeBudget,
-      })
-      candidate = semantic.result
-      semanticTelemetry = semantic.telemetry
-    } else if (pass > 0 && semanticTelemetry.used) {
-      semanticTelemetry = {
-        ...semanticTelemetry,
-        used: false,
-        fallbackReason: 'semantic_summary_replaced_for_convergence',
-      }
-    }
-    fit = fitCompactionResult(candidate, {
-      tools,
-      threshold,
-      summaryTokenLimit,
-    })
-    result = fit.result
-    if (fit.ok) break
-  }
+  const convergence = await runCompactionPasses({
+    preparedMessages,
+    initialKeepMessages,
+    semanticSummary,
+    callModel,
+    contextWindow,
+    signal,
+    userId,
+    consumeBudget,
+    tools,
+    threshold,
+    summaryTokenLimit,
+  })
+  let { result } = convergence
+  const { semanticTelemetry, fit, passes, buildError } = convergence
 
   if (!result || (!fit?.ok && !fit?.reduced)) {
     const failedMessages = result?.outboundMessages || preparedMessages
