@@ -33,13 +33,10 @@ export function reduceSessionLifecycleState(state, action) {
     }
 
     case 'START_NEW_DRAFT': {
-      const hasExplicitWorkspace = Object.prototype.hasOwnProperty.call(
-        action.payload || {},
-        'workspacePath',
-      )
-      const workspacePath = normalizeWorkspacePath(
-        hasExplicitWorkspace ? action.payload.workspacePath : state.defaultWorkspacePath,
-      )
+      const hasExplicitWorkspace = Object.prototype.hasOwnProperty.call(action.payload || {}, 'workspacePath')
+      // A global default is a file-access convenience, not implicit project
+      // membership. Ordinary new chats must start in Recent with no project.
+      const workspacePath = normalizeWorkspacePath(hasExplicitWorkspace ? action.payload.workspacePath : '')
       return {
         ...state,
         activeSessionId: null,

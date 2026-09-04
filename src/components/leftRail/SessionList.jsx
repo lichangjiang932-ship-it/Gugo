@@ -53,6 +53,8 @@ export default function SessionList({
   onMenuToggle,
   onMenuClose,
   onNewInProject,
+  onNewRecent,
+  onProjectToggle,
   onSearch,
   onOpen,
   onFork,
@@ -193,6 +195,7 @@ export default function SessionList({
           type="button"
           onClick={() => {
             onMenuClose()
+            onProjectToggle?.(project, { expanded: isCollapsed })
             setCollapsedProjectKeys((current) => {
               const next = new Set(current)
               if (next.has(project.key)) next.delete(project.key)
@@ -240,6 +243,9 @@ export default function SessionList({
         </span>
         <button type="button" onClick={() => { onMenuClose(); onSearch?.() }} title={t('nav.searchPlaceholder')} aria-label={t('nav.searchPlaceholder')} className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-fade hover:bg-ink/[0.04] hover:text-ink-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30">
           <Search className="h-3.5 w-3.5" />
+        </button>
+        <button type="button" onClick={() => { onMenuClose(); onNewRecent?.() }} title={t('nav.newChat')} aria-label={t('nav.newChat')} className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ink-fade hover:bg-ink/[0.04] hover:text-ink-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30" data-new-recent-chat>
+          <SquarePen className="h-3.5 w-3.5" />
         </button>
       </div>
       {orderedSessions.length

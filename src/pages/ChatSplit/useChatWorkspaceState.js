@@ -18,12 +18,9 @@ export default function useChatWorkspaceState({
     draftVersion: state.newDraftVersion,
     message: '',
   }))
-  const defaultWorkspacePath = normalizeChatWorkspacePath(state.defaultWorkspacePath)
-  const draftWorkspacePath = normalizeChatWorkspacePath(
-    state.draftWorkspacePath || defaultWorkspacePath,
-  )
+  const draftWorkspacePath = normalizeChatWorkspacePath(state.draftWorkspacePath)
   const selectedWorkspacePath = normalizeChatWorkspacePath(
-    activeSession?.workspacePath || (!activeSessionId ? draftWorkspacePath : defaultWorkspacePath),
+    activeSession?.workspacePath || (!activeSessionId ? draftWorkspacePath : ''),
   )
   const activeSessionServerRevision = activeSession?.serverRevision
   const recentWorkspaces = useMemo(
@@ -103,9 +100,9 @@ export default function useChatWorkspaceState({
     } else if (activeSessionId) {
       dispatch({ type: 'SET_SESSION_WORKSPACE', payload: { sessionId: activeSessionId, workspacePath: '' } })
     } else {
-      dispatch({ type: 'SET_DRAFT_WORKSPACE', payload: { workspacePath: defaultWorkspacePath } })
+      dispatch({ type: 'SET_DRAFT_WORKSPACE', payload: { workspacePath: '' } })
     }
-  }, [activeSessionId, activeSessionServerRevision, defaultWorkspacePath, dispatch, state.newDraftVersion, t])
+  }, [activeSessionId, activeSessionServerRevision, dispatch, state.newDraftVersion, t])
 
   return {
     activateWorkspaceForTurn,

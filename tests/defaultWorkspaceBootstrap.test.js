@@ -16,13 +16,13 @@ function catalogSource(backend = 'sqlite:one', workspace = 'workspace:one') {
   }
 }
 
-test('new drafts use the server-declared default workspace', () => {
+test('new drafts do not inherit the server default workspace', () => {
   assert.equal(
     defaultWorkspacePathForDraft(
       { defaultWorkspacePath: 'D:\\work\\current-project' },
       { activeSessionId: null, draftWorkspacePath: '' },
     ),
-    'D:\\work\\current-project',
+    '',
   )
 })
 

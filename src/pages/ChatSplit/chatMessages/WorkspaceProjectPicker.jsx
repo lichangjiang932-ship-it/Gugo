@@ -136,7 +136,7 @@ export default function WorkspaceProjectPicker({
     setSourcePickerBusy(true)
     setCreateError('')
     try {
-      const result = await pickSourceDirectory(sourcePath || selectedWorkspacePath)
+      const result = await pickSourceDirectory(sourcePath)
       if (result?.supported) {
         if (!result.canceled && result.path) setSourcePath(String(result.path).trim())
         return
@@ -234,7 +234,6 @@ export default function WorkspaceProjectPicker({
         directoryOpen={directoryOpen}
         projectName={projectName}
         projectNameRef={projectNameRef}
-        selectedWorkspacePath={selectedWorkspacePath}
         setDirectoryOpen={setDirectoryOpen}
         setProjectName={setProjectName}
         setSourcePath={setSourcePath}

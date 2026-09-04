@@ -154,7 +154,6 @@ export function WorkspaceProjectCreateModal({
   directoryOpen,
   projectName,
   projectNameRef,
-  selectedWorkspacePath,
   setDirectoryOpen,
   setProjectName,
   setSourcePath,
@@ -217,7 +216,7 @@ export function WorkspaceProjectCreateModal({
           </div>
           {directoryOpen ? (
             <DirectoryBrowser
-              initialPath={sourcePath || selectedWorkspacePath}
+              initialPath={sourcePath}
               onSelect={(path) => {
                 setSourcePath(String(path || '').trim())
                 setDirectoryOpen(false)
