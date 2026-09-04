@@ -55,6 +55,49 @@ async function terminateChild(child, terminate) {
   try { await terminate({ pid: child.pid, child }) } catch { /* best effort */ }
 }
 
+function createDocumentSynchronizer(documents, getRpc) {
+  let syncTail = Promise.resolve()
+  const synchronize = (document, languageId, signal) => {
+    const operation = syncTail.then(async () => {
+      if (signal?.aborted) throw lspSignalError(signal)
+      const uri = pathToFileURL(document.fileReal).href
+      const current = documents.get(uri)
+      if (!current) {
+        const next = {
+          version: 1,
+          text: document.source,
+          languageId,
+          snapshotSequence: document.snapshotSequence,
+        }
+        await getRpc().notify('textDocument/didOpen', {
+          textDocument: { uri, languageId, version: next.version, text: next.text },
+        })
+        documents.set(uri, next)
+      } else if (document.snapshotSequence < current.snapshotSequence) {
+        return uri
+      } else if (current.text !== document.source) {
+        const next = {
+          ...current,
+          version: current.version + 1,
+          text: document.source,
+          snapshotSequence: document.snapshotSequence,
+        }
+        await getRpc().notify('textDocument/didChange', {
+          textDocument: { uri, version: next.version },
+          contentChanges: [{ text: next.text }],
+        })
+        documents.set(uri, next)
+      } else {
+        documents.set(uri, { ...current, snapshotSequence: document.snapshotSequence })
+      }
+      return uri
+    })
+    syncTail = operation.catch(() => {})
+    return operation
+  }
+  return { synchronize, drain: () => syncTail.catch(() => {}) }
+}
+
 function createWorkspaceSession({
   config,
   rootReal,
@@ -67,7 +110,6 @@ function createWorkspaceSession({
   const rootUri = pathToFileURL(rootReal).href
   const lifecycle = new AbortController()
   const documents = new Map()
-  let syncTail = Promise.resolve()
   let child = null
   let rpc = null
   let initialized = false
@@ -127,48 +169,11 @@ function createWorkspaceSession({
     }
   })()
 
-  const synchronizeDocument = (document, languageId, signal) => {
-    const operation = syncTail.then(async () => {
-      if (signal?.aborted) throw lspSignalError(signal)
-      const uri = pathToFileURL(document.fileReal).href
-      const current = documents.get(uri)
-      if (!current) {
-        const next = {
-          version: 1,
-          text: document.source,
-          languageId,
-          snapshotSequence: document.snapshotSequence,
-        }
-        await rpc.notify('textDocument/didOpen', {
-          textDocument: { uri, languageId, version: next.version, text: next.text },
-        })
-        documents.set(uri, next)
-      } else if (document.snapshotSequence < current.snapshotSequence) {
-        return uri
-      } else if (current.text !== document.source) {
-        const next = {
-          ...current,
-          version: current.version + 1,
-          text: document.source,
-          snapshotSequence: document.snapshotSequence,
-        }
-        await rpc.notify('textDocument/didChange', {
-          textDocument: { uri, version: next.version },
-          contentChanges: [{ text: next.text }],
-        })
-        documents.set(uri, next)
-      } else {
-        documents.set(uri, { ...current, snapshotSequence: document.snapshotSequence })
-      }
-      return uri
-    })
-    syncTail = operation.catch(() => {})
-    return operation
-  }
+  const documentSync = createDocumentSynchronizer(documents, () => rpc)
 
   const execute = async (document, request, method, signal) => {
     await waitWithSignal(startPromise, signal)
-    const documentUri = await synchronizeDocument(document, request.languageId, signal)
+    const documentUri = await documentSync.synchronize(document, request.languageId, signal)
     return rpc.request(method, {
       textDocument: { uri: documentUri },
       position: request.position,
@@ -191,7 +196,7 @@ function createWorkspaceSession({
           await terminateChild(child, terminateProcessTreeFn)
           return
         }
-        await syncTail.catch(() => {})
+        await documentSync.drain()
         for (const uri of documents.keys()) {
           await rpc.notify('textDocument/didClose', { textDocument: { uri } }).catch(() => {})
         }

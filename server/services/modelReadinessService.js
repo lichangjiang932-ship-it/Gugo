@@ -172,18 +172,7 @@ function environmentConfigRevision({ provider, config, env }) {
  * Legacy .env-only setups remain compatible and use the endpoint profile as the
  * capability source because they have no provider row on which to persist a probe.
  */
-export function assertAgentModelReady({
-  userId,
-  providerId = '',
-  modelName = '',
-  configRevision = null,
-  env = process.env,
-  requireAgent = true,
-} = {}) {
-  const requestedProviderId = String(providerId || '').trim()
-  const requestedModel = String(modelName || '').trim()
-  const expectedRevision = Number(configRevision)
-  const hasExpectedRevision = Number.isInteger(expectedRevision) && expectedRevision > 0
+function resolveRequestedProvider({ userId, requestedProviderId, requestedModel, runtimeEnv }) {
   let provider
   try {
     provider = resolveUserModelProvider({
@@ -200,7 +189,6 @@ export function assertAgentModelReady({
     }
     throw error
   }
-  const runtimeEnv = buildUserModelEnv({ userId, env })
   const requestedEnvironmentProvider = !provider && requestedProviderId
     ? getModelProviders(runtimeEnv).find((item) => item.id === requestedProviderId) || null
     : null
@@ -208,6 +196,28 @@ export function assertAgentModelReady({
     && (!requestedModel || requestedEnvironmentProvider.models.includes(requestedModel))
     ? requestedEnvironmentProvider
     : null
+  return { provider, requestedEnvironmentProvider, environmentProvider }
+}
+
+export function assertAgentModelReady({
+  userId,
+  providerId = '',
+  modelName = '',
+  configRevision = null,
+  env = process.env,
+  requireAgent = true,
+} = {}) {
+  const requestedProviderId = String(providerId || '').trim()
+  const requestedModel = String(modelName || '').trim()
+  const expectedRevision = Number(configRevision)
+  const hasExpectedRevision = Number.isInteger(expectedRevision) && expectedRevision > 0
+  const runtimeEnv = buildUserModelEnv({ userId, env })
+  const { provider, requestedEnvironmentProvider, environmentProvider } = resolveRequestedProvider({
+    userId,
+    requestedProviderId,
+    requestedModel,
+    runtimeEnv,
+  })
 
   if (requestedProviderId && !provider && !environmentProvider) {
     const persistedProviders = listModelProviders({ userId })
