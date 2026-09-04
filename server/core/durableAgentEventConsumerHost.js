@@ -12,6 +12,7 @@ import {
   snapshotDurableAgentEventStore,
 } from './durableAgentEventConsumerHostSupport.js'
 import { createDurableAgentEventRetentionScheduler } from './durableAgentEventRetentionScheduler.js'
+import { createDurableAgentEventConsumerRunner } from './durableAgentEventConsumerRunner.js'
 
 const DEFAULT_LEASE_DURATION_MS = 30_000
 const DEFAULT_IDLE_POLL_MS = 1_000
@@ -71,6 +72,7 @@ export function createDurableAgentEventConsumerHost({
   listenerDrainTimeoutMs = DEFAULT_LISTENER_DRAIN_TIMEOUT_MS,
   retentionIntervalMs = DEFAULT_RETENTION_INTERVAL_MS,
   now = Date.now,
+  random = Math.random,
   schedule = setTimeout,
   cancelSchedule = clearTimeout,
   onDeliveryFailure = null,
@@ -98,7 +100,7 @@ export function createDurableAgentEventConsumerHost({
     'retentionIntervalMs',
     MAX_AGENT_EVENT_HOST_DELAY_MS,
   )
-  for (const [field, value] of Object.entries({ now, schedule, cancelSchedule })) {
+  for (const [field, value] of Object.entries({ now, random, schedule, cancelSchedule })) {
     if (typeof value !== 'function' || utilTypes.isProxy(value)) {
       throw durableHostError('AGENT_EVENT_DURABLE_HOST_INVALID', `${field} must be a function`)
     }
@@ -321,114 +323,23 @@ export function createDurableAgentEventConsumerHost({
     }
   }
 
-  const runRecord = async (record) => {
-    while (started && !closed && !record.stopping && !record.abandoned) {
-      let nextDelay = pollMs
-      try {
-        record.lease = await operations.acquireAgentEventSubscriptionLease(
-          record.subscriptionKey,
-          { userId: record.userId, owner, now: now(), leaseDurationMs: leaseMs },
-        )
-        if (!record.lease) {
-          await waitForWake(record, pollMs)
-          continue
-        }
-
-        while (started && !closed && !record.stopping && !record.abandoned) {
-          const token = await renewLeaseIfNeeded(record)
-          const page = await operations.scanAgentEventSubscription(token, {
-            now: now(),
-            limit: pageLimit,
-          })
-          if (!page?.entry) {
-            if (page?.retryAt == null && page?.hasMore === true) {
-              // scannedCursor already advanced past this page. Continue under
-              // the same lease instead of adding one idle poll per unrelated
-              // page in a large global backlog.
-              continue
-            }
-            nextDelay = page?.retryAt == null
-              ? pollMs
-              : boundedAgentEventHostDelay(Number(page.retryAt) - now(), pollMs)
-            break
-          }
-
-          const entry = page.entry
-          const { listenerFailure, leaseFailure, abandoned } = await invokeListenerWithLeaseHeartbeat(
-            record,
-            entry.envelope,
-          )
-          if (abandoned) {
-            record.abandoned = true
-            record.disableRequested = true
-            markStopping(record)
-            observeAgentEventHost(onHostError, {
-              code: 'AGENT_EVENT_LISTENER_DRAIN_TIMEOUT',
-              phase: 'drain',
-              subscriptionKey: record.subscriptionKey,
-            })
-            break
-          }
-          if (leaseFailure) throw leaseFailure
-          if (listenerFailure) {
-            const failureCode = safeAgentEventFailureCode(listenerFailure)
-            const failed = await operations.failAgentEventSubscription(record.lease, {
-              cursor: entry.cursor,
-              failureCode,
-              now: now(),
-            })
-            observeAgentEventHost(onDeliveryFailure, {
-              code: 'AGENT_EVENT_DURABLE_DELIVERY_FAILED',
-              failureCode,
-              subscriptionKey: record.subscriptionKey,
-              eventId: entry.eventId,
-              eventType: entry.eventType,
-              cursor: entry.cursor,
-              attempt: failed.attempt,
-              deadLettered: failed.deadLettered === true,
-            })
-            if (!failed.deadLettered) {
-              nextDelay = boundedAgentEventHostDelay(Number(failed.retryAt) - now(), pollMs)
-              break
-            }
-            continue
-          }
-          // ACK errors (especially a fenced lease) deliberately escape to the
-          // outer host boundary. Recording them as listener failures could
-          // consume or dead-letter an event whose callback actually succeeded.
-          await operations.acknowledgeAgentEventSubscription(record.lease, {
-            cursor: entry.cursor,
-            now: now(),
-          })
-        }
-      } catch (error) {
-        observeAgentEventHost(onHostError, {
-          code: safeAgentEventFailureCode(error),
-          phase: 'consume',
-          subscriptionKey: record.subscriptionKey,
-        })
-      } finally {
-        await releaseLease(record)
-      }
-      if (record.abandoned && record.disableRequested) {
-        try {
-          await operations.disableAgentEventSubscription(record.subscriptionKey, { now: now() })
-          record.disableRequested = false
-        } catch (error) {
-          observeAgentEventHost(onHostError, {
-            code: safeAgentEventFailureCode(error, 'AGENT_EVENT_SUBSCRIPTION_DISABLE_FAILED'),
-            phase: 'abandon-disable',
-            subscriptionKey: record.subscriptionKey,
-          })
-        }
-      }
-      if (started && !closed && !record.stopping && !record.abandoned) {
-        await waitForWake(record, nextDelay)
-      }
-    }
-    await releaseLease(record)
-    return true
-  }
+  const runRecord = createDurableAgentEventConsumerRunner({
+    operations,
+    owner,
+    leaseMs,
+    pollMs,
+    pageLimit,
+    now,
+    random,
+    isRunning: (record) => started && !closed && !record.stopping && !record.abandoned,
+    waitForWake,
+    renewLeaseIfNeeded,
+    invokeListenerWithLeaseHeartbeat,
+    releaseLease,
+    markStopping,
+    onDeliveryFailure,
+    onHostError,
+  })
 
   const launch = (record) => {
     if (!started || closed || record.stopping || record.abandoned || record.runPromise) return
@@ -513,6 +424,7 @@ export function createDurableAgentEventConsumerHost({
       revokePromise: null,
       revoked: false,
       disableRequested: false,
+      infrastructureFailures: 0,
       stopping: false,
       stoppingAt: null,
       abandoned: false,
