@@ -51,20 +51,40 @@ function resolveRuntimeProviderId({ userId, requestedProviderId }) {
   return provider?.key || requested
 }
 
-/**
- * Own the legacy HTTP compatibility surface without importing the modelProxy
- * facade. The facade injects its background caller so this leaf cannot form a
- * reverse dependency on the execution module.
- */
-export function createModelProxyHttpAdapter({ createBackgroundModelCaller } = {}) {
-  if (typeof createBackgroundModelCaller !== 'function') {
-    throw new TypeError('createBackgroundModelCaller must be a function')
+function authorizeModelProxyRequest(req, res, testMode) {
+  const userId = authenticateRequest(req)
+  if (!userId) {
+    sendJson(res, 401, { ok: false, error: 'Unauthorized' })
+    return null
   }
+  if (!testMode) return userId
+  const maxRequests = Math.max(1, Math.min(60, Number(process.env.MODEL_TEST_RATE_MAX) || 10))
+  const rate = checkRateLimit({
+    key: `model_test:${userId}`,
+    windowMs: 60 * 1000,
+    maxRequests,
+  })
+  res.setHeader('X-RateLimit-Limit', String(maxRequests))
+  res.setHeader('X-RateLimit-Remaining', String(rate.remaining))
+  if (rate.allowed) return userId
+  sendJson(res, 429, { ok: false, error: 'Too many model test requests' })
+  return null
+}
 
-  async function handleModelProxyRequest(req, res, {
-    compactionArchivePort,
-    acquireCompactionArchivePort = acquireActiveCompactionArchivePort,
-  } = {}) {
+function validateModelMessages(res, messages, testMode) {
+  if (testMode) return true
+  const validated = MESSAGES_SCHEMA.safeParse(messages)
+  if (validated.success) return true
+  const issues = validated.error.issues.map((issue) => (
+    `${issue.path.join('.')}: ${issue.message}`
+  )).join('; ')
+  sendJson(res, 400, { ok: false, error: `messages 格式无效: ${issues}` })
+  return false
+}
+
+async function handleModelProxyRequestRuntime(req, res, {
+  createBackgroundModelCaller, compactionArchivePort, acquireCompactionArchivePort = acquireActiveCompactionArchivePort,
+} = {}) {
     if (req.method !== 'POST') {
       sendJson(res, 405, { error: '仅支持 POST 请求。' })
       return
@@ -74,25 +94,8 @@ export function createModelProxyHttpAdapter({ createBackgroundModelCaller } = {}
     let requestCompactionArchivePort = compactionArchivePort
     try {
       const testMode = req.url?.startsWith('/api/model/test')
-      const requestUserId = authenticateRequest(req)
-      if (!requestUserId) {
-        sendJson(res, 401, { ok: false, error: 'Unauthorized' })
-        return
-      }
-      if (testMode) {
-        const maxRequests = Math.max(1, Math.min(60, Number(process.env.MODEL_TEST_RATE_MAX) || 10))
-        const rate = checkRateLimit({
-          key: `model_test:${requestUserId}`,
-          windowMs: 60 * 1000,
-          maxRequests,
-        })
-        res.setHeader('X-RateLimit-Limit', String(maxRequests))
-        res.setHeader('X-RateLimit-Remaining', String(rate.remaining))
-        if (!rate.allowed) {
-          sendJson(res, 429, { ok: false, error: 'Too many model test requests' })
-          return
-        }
-      }
+      const requestUserId = authorizeModelProxyRequest(req, res, testMode)
+      if (!requestUserId) return
       const body = await readJson(req)
       const idempotencyHeader = req.headers?.['idempotency-key']
       const hookRequestId = String(
@@ -118,16 +121,7 @@ export function createModelProxyHttpAdapter({ createBackgroundModelCaller } = {}
         : body.messages
       let autoMemorySourceMessages = []
 
-      if (!testMode) {
-        const validated = MESSAGES_SCHEMA.safeParse(messages)
-        if (!validated.success) {
-          const issues = validated.error.issues.map((issue) => (
-            `${issue.path.join('.')}: ${issue.message}`
-          )).join('; ')
-          sendJson(res, 400, { ok: false, error: `messages 格式无效: ${issues}` })
-          return
-        }
-      }
+      if (!validateModelMessages(res, messages, testMode)) return
       if (!requestCompactionArchivePort) {
         compactionArchiveLease = acquireCompactionArchivePort()
         requestCompactionArchivePort = compactionArchiveLease.port
@@ -239,7 +233,7 @@ export function createModelProxyHttpAdapter({ createBackgroundModelCaller } = {}
     }
   }
 
-  async function handleModelStatusRequest(req, res) {
+async function handleModelStatusRequestRuntime(req, res) {
     if (req.method !== 'GET') {
       sendJson(res, 405, { error: '仅支持 GET 请求。' })
       return
@@ -271,7 +265,7 @@ export function createModelProxyHttpAdapter({ createBackgroundModelCaller } = {}
     sendJson(res, 200, status)
   }
 
-  async function handleSystemDiagnosticsRequest(req, res, {
+async function handleSystemDiagnosticsRequestRuntime(req, res, {
     readRuntimeDiagnostics = readUnavailableRuntimeHostDiagnostics,
   } = {}) {
     if (req.method !== 'GET') {
@@ -294,23 +288,44 @@ export function createModelProxyHttpAdapter({ createBackgroundModelCaller } = {}
     }))
   }
 
-  function modelProxyPlugin({
-    readRuntimeDiagnostics = readUnavailableRuntimeHostDiagnostics,
-  } = {}) {
-    return {
-      name: 'local-model-proxy',
-      configureServer(server) {
-        server.middlewares.use(
-          '/api/system/diagnostics',
-          (req, res) => handleSystemDiagnosticsRequest(req, res, { readRuntimeDiagnostics }),
-        )
-        server.middlewares.use('/api/model/status', handleModelStatusRequest)
-        server.middlewares.use('/api/model/test', handleModelProxyRequest)
-        server.middlewares.use('/api/model/chat', handleModelProxyRequest)
-      },
-    }
+function createModelProxyPlugin({
+  handleModelProxyRequest,
+  handleModelStatusRequest,
+  handleSystemDiagnosticsRequest,
+  readRuntimeDiagnostics,
+}) {
+  return {
+    name: 'local-model-proxy',
+    configureServer(server) {
+      server.middlewares.use(
+        '/api/system/diagnostics',
+        (req, res) => handleSystemDiagnosticsRequest(req, res, { readRuntimeDiagnostics }),
+      )
+      server.middlewares.use('/api/model/status', handleModelStatusRequest)
+      server.middlewares.use('/api/model/test', handleModelProxyRequest)
+      server.middlewares.use('/api/model/chat', handleModelProxyRequest)
+    },
   }
+}
 
+/** Bind facade-owned model execution without forming a reverse dependency. */
+export function createModelProxyHttpAdapter({ createBackgroundModelCaller } = {}) {
+  if (typeof createBackgroundModelCaller !== 'function') {
+    throw new TypeError('createBackgroundModelCaller must be a function')
+  }
+  const handleModelProxyRequest = (req, res, options = {}) => (
+    handleModelProxyRequestRuntime(req, res, { ...options, createBackgroundModelCaller })
+  )
+  const handleModelStatusRequest = handleModelStatusRequestRuntime
+  const handleSystemDiagnosticsRequest = handleSystemDiagnosticsRequestRuntime
+  const modelProxyPlugin = ({
+    readRuntimeDiagnostics = readUnavailableRuntimeHostDiagnostics,
+  } = {}) => createModelProxyPlugin({
+    handleModelProxyRequest,
+    handleModelStatusRequest,
+    handleSystemDiagnosticsRequest,
+    readRuntimeDiagnostics,
+  })
   return Object.freeze({
     handleModelProxyRequest,
     handleModelStatusRequest,
