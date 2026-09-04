@@ -129,7 +129,7 @@ function snapshotStreamState(value) {
   return state
 }
 
-export function snapshotRuntimeModelProvider({ record, kind, adapter, invokeSync, invokeAsync }) {
+function snapshotProviderDefinition(adapter, invokeAsync) {
   if (!adapter || typeof adapter !== 'object' || Array.isArray(adapter)) {
     throw providerDefinitionError('model provider adapter must be an object')
   }
@@ -184,7 +184,14 @@ export function snapshotRuntimeModelProvider({ record, kind, adapter, invokeSync
     }
     requestReconciler = { authority: MODEL_REQUEST_RECONCILER_AUTHORITY, reconcile }
   }
+  return { callbacks, reconcilerDefinition, requestReconciler }
+}
 
+export function snapshotRuntimeModelProvider({ record, kind, adapter, invokeSync, invokeAsync }) {
+  const { callbacks, reconcilerDefinition, requestReconciler } = snapshotProviderDefinition(
+    adapter,
+    invokeAsync,
+  )
   const streamStates = new WeakMap()
   const assertAvailable = (method) => {
     if (record.state !== 'active') throw unavailableError(record, kind, method)
