@@ -1,9 +1,115 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { FALSE_SUCCESS_STATUS } from '../server/services/loop/runtimeState.js'
+import {
+  FALSE_SUCCESS_STATUS,
+  shouldRepairLegacyWorkspaceMutationCheckpoint,
+} from '../server/services/loop/runtimeState.js'
 
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
+
+test('legacy workspace debt is repairable only for a successful .NET read without real mutations', () => {
+  const dotNetRead = {
+    role: 'assistant',
+    content: '',
+    tool_calls: [{
+      id: 'read-prefix',
+      type: 'function',
+      function: {
+        name: 'bash_exec',
+        arguments: JSON.stringify({
+          command: "powershell -NoProfile -Command \"[System.IO.File]::ReadAllBytes('D:\\\\docs\\\\result.md')[0..2] -join ','\"",
+        }),
+      },
+    }],
+  }
+  const readResult = {
+    role: 'tool',
+    tool_call_id: 'read-prefix',
+    name: 'bash_exec',
+    content: JSON.stringify({ ok: true, exitCode: 0, stdout: '35,32,71' }),
+  }
+  const messages = [{ role: 'user', content: 'Why is this garbled?' }, dotNetRead, readResult]
+  assert.equal(shouldRepairLegacyWorkspaceMutationCheckpoint(messages), true)
+
+  const writeCall = {
+    role: 'assistant',
+    content: '',
+    tool_calls: [{
+      id: 'real-write',
+      type: 'function',
+      function: {
+        name: 'write_file',
+        arguments: JSON.stringify({ path: 'docs/result.md', content: 'changed' }),
+      },
+    }],
+  }
+  const writeResult = {
+    role: 'tool',
+    tool_call_id: 'real-write',
+    name: 'write_file',
+    content: JSON.stringify({ ok: true, path: 'docs/result.md', changed: true }),
+  }
+  assert.equal(
+    shouldRepairLegacyWorkspaceMutationCheckpoint([...messages, writeCall, writeResult]),
+    false,
+  )
+})
+
+test('a restored false workspace debt from .NET file inspection no longer blocks completion', async () => {
+  const command = "powershell -NoProfile -Command \"[System.IO.File]::ReadAllBytes('D:\\\\docs\\\\result.md')[0..2] -join ','\""
+  const messages = [
+    { role: 'user', content: 'Why is this file garbled?' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'legacy-read-prefix',
+        type: 'function',
+        function: {
+          name: 'bash_exec',
+          arguments: JSON.stringify({ command }),
+        },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'legacy-read-prefix',
+      name: 'bash_exec',
+      content: JSON.stringify({ ok: true, exitCode: 0, stdout: '35,32,71' }),
+    },
+  ]
+  const checkpoint = {
+    messages,
+    iterations: 1,
+    completionGuards: {
+      executionEvidenceObserved: true,
+      mutationExecutionObserved: true,
+      pendingMutationVerification: true,
+      pendingMutationTargets: ['<workspace>'],
+      pendingDeletionTargets: [],
+    },
+  }
+  const result = await runToolsLoop({
+    job: {
+      id: 'legacy-dotnet-read-checkpoint',
+      userId: null,
+      origin: 'chat',
+      prompt: 'Why is this file garbled?',
+    },
+    step: { id: 'legacy-dotnet-read-checkpoint', kind: 'chat' },
+    messages,
+    intentMode: 'execute',
+    toolSpecs: [],
+    maxIters: 3,
+    enableToolHooks: false,
+    loadCheckpoint: async () => structuredClone(checkpoint),
+    runModel: async () => ({ content: 'The file is valid UTF-8.', toolCalls: [] }),
+  })
+
+  assert.equal(result.incomplete, undefined)
+  assert.equal(result.text, 'The file is valid UTF-8.')
+})
 
 test('explicit English completion confirmations are recognized', () => {
   for (const text of [
