@@ -86,6 +86,55 @@ function normalizeRollbackPolicy(value, existing) {
   return result
 }
 
+function resolveAutoLoopModels({ input, existing, owner }) {
+  const requested = {
+    generator: modelInput(input, 'generator', existing),
+    replay: modelInput(input, 'replay', existing),
+    evaluator: modelInput(input, 'evaluator', existing),
+  }
+  for (const [label, selection] of Object.entries(requested)) {
+    if (!selection.providerId || !selection.modelName) {
+      throw serviceError('EVOLUTION_AUTO_CONFIG_INVALID', `${label} Provider and model are required`)
+    }
+  }
+  const generator = resolveEvolutionModelIdentity({ userId: owner, ...requested.generator })
+  const replay = resolveEvolutionModelIdentity({ userId: owner, ...requested.replay })
+  const evaluator = resolveEvolutionModelIdentity({ userId: owner, ...requested.evaluator })
+  if (replay.providerId === evaluator.providerId && replay.modelName === evaluator.modelName) {
+    throw serviceError(
+      'EVOLUTION_AUTO_EVALUATOR_NOT_INDEPENDENT',
+      'evaluator Provider and model must differ from replay identity',
+      409,
+    )
+  }
+  return { generator, replay, evaluator }
+}
+
+function resolveAutoLoopLimits(input, existing) {
+  return {
+    minimumSignalCount: boundedInteger(
+      input.minimumSignalCount, 'minimumSignalCount', 1, 50, existing?.minimum_signal_count ?? 3,
+    ),
+    maximumSourceRecords: boundedInteger(
+      input.maximumSourceRecords, 'maximumSourceRecords', 1, 10, existing?.maximum_source_records ?? 10,
+    ),
+    cooldownMs: boundedInteger(
+      input.cooldownMs, 'cooldownMs', 60_000, 2_592_000_000, existing?.cooldown_ms ?? 86_400_000,
+    ),
+    trafficPercent: boundedInteger(
+      input.trafficPercent, 'trafficPercent', 1, 10, existing?.traffic_percent ?? 5,
+    ),
+    canaryMaxOutcomes: boundedInteger(
+      input.canaryMaxOutcomes, 'canaryMaxOutcomes', 6, 200, existing?.canary_max_outcomes ?? 20,
+    ),
+    canaryMaxAgeMs: boundedInteger(
+      input.canaryMaxAgeMs, 'canaryMaxAgeMs', 300_000, 2_592_000_000,
+      existing?.canary_max_age_ms ?? 604_800_000,
+    ),
+    rollbackPolicy: normalizeRollbackPolicy(input.rollbackPolicy, existing),
+  }
+}
+
 export async function configureEvolutionAutoLoop({
   userId,
   input = {},
@@ -119,28 +168,7 @@ export async function configureEvolutionAutoLoop({
     2_000,
     existing?.objective || DEFAULT_OBJECTIVE,
   )
-  const requestedGenerator = modelInput(input, 'generator', existing)
-  const requestedReplay = modelInput(input, 'replay', existing)
-  const requestedEvaluator = modelInput(input, 'evaluator', existing)
-  for (const [label, selection] of Object.entries({
-    generator: requestedGenerator,
-    replay: requestedReplay,
-    evaluator: requestedEvaluator,
-  })) {
-    if (!selection.providerId || !selection.modelName) {
-      throw serviceError('EVOLUTION_AUTO_CONFIG_INVALID', `${label} Provider and model are required`)
-    }
-  }
-  const generator = resolveEvolutionModelIdentity({ userId: owner, ...requestedGenerator })
-  const replay = resolveEvolutionModelIdentity({ userId: owner, ...requestedReplay })
-  const evaluator = resolveEvolutionModelIdentity({ userId: owner, ...requestedEvaluator })
-  if (replay.providerId === evaluator.providerId && replay.modelName === evaluator.modelName) {
-    throw serviceError(
-      'EVOLUTION_AUTO_EVALUATOR_NOT_INDEPENDENT',
-      'evaluator Provider and model must differ from replay identity',
-      409,
-    )
-  }
+  const { generator, replay, evaluator } = resolveAutoLoopModels({ input, existing, owner })
   const sessionIds = await resolveAutomaticSessionIds({ userId: owner, readSession })
   if (!sessionIds.length) {
     throw serviceError(
@@ -149,49 +177,15 @@ export async function configureEvolutionAutoLoop({
       409,
     )
   }
-  const minimumSignalCount = boundedInteger(
-    input.minimumSignalCount,
-    'minimumSignalCount',
-    1,
-    50,
-    existing?.minimum_signal_count ?? 3,
-  )
-  const maximumSourceRecords = boundedInteger(
-    input.maximumSourceRecords,
-    'maximumSourceRecords',
-    1,
-    10,
-    existing?.maximum_source_records ?? 10,
-  )
-  const cooldownMs = boundedInteger(
-    input.cooldownMs,
-    'cooldownMs',
-    60_000,
-    2_592_000_000,
-    existing?.cooldown_ms ?? 86_400_000,
-  )
-  const trafficPercent = boundedInteger(
-    input.trafficPercent,
-    'trafficPercent',
-    1,
-    10,
-    existing?.traffic_percent ?? 5,
-  )
-  const canaryMaxOutcomes = boundedInteger(
-    input.canaryMaxOutcomes,
-    'canaryMaxOutcomes',
-    6,
-    200,
-    existing?.canary_max_outcomes ?? 20,
-  )
-  const canaryMaxAgeMs = boundedInteger(
-    input.canaryMaxAgeMs,
-    'canaryMaxAgeMs',
-    300_000,
-    2_592_000_000,
-    existing?.canary_max_age_ms ?? 604_800_000,
-  )
-  const rollbackPolicy = normalizeRollbackPolicy(input.rollbackPolicy, existing)
+  const {
+    minimumSignalCount,
+    maximumSourceRecords,
+    cooldownMs,
+    trafficPercent,
+    canaryMaxOutcomes,
+    canaryMaxAgeMs,
+    rollbackPolicy,
+  } = resolveAutoLoopLimits(input, existing)
   const revision = (existing?.config_revision || 0) + 1
   const createdAt = existing?.created_at ?? updatedAt
   getDb().prepare(`

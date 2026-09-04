@@ -37,30 +37,7 @@ function isRetryableRenewalError(error) {
   return code.startsWith('SQLITE_BUSY') || code === 'EVOLUTION_OPERATION_IN_PROGRESS'
 }
 
-export function holdEvolutionOperationLease({
-  userId,
-  id,
-  workerToken,
-  leaseOwnerId,
-  leaseExpiresAt,
-  leaseMs = DEFAULT_EVOLUTION_OPERATION_LEASE_MS,
-  signal,
-  now = Date.now,
-  monotonicNow = monotonicClockNow,
-  renewLease = renewEvolutionOperationLease,
-  setTimeoutFn = setTimeout,
-  clearTimeoutFn = clearTimeout,
-} = {}) {
-  const duration = evolutionOperationLeaseDuration(leaseMs)
-  const heartbeatDelay = Math.max(250, Math.floor(duration / 3))
-  const retryDelay = Math.max(25, Math.min(250, Math.floor(duration / 12)))
-  const controller = new AbortController()
-  const forwardAbort = () => controller.abort(signal?.reason)
-  if (signal?.aborted) forwardAbort()
-  else signal?.addEventListener?.('abort', forwardAbort, { once: true })
-
-  let stopped = false
-  let timer = null
+function initializeLeaseClock({ now, monotonicNow, leaseExpiresAt, duration }) {
   const startedAt = clockTimestamp(now())
   if (startedAt === null) {
     throw leaseRuntimeInputError(
@@ -91,9 +68,46 @@ export function holdEvolutionOperationLease({
   }
   const wallLeaseDeadline = suppliedLeaseDeadline ?? fallbackLeaseDeadline
   const initialRemaining = Math.max(0, Math.min(duration, wallLeaseDeadline - startedAt))
-  let localLeaseDeadline = monotonicStartedAt + initialRemaining
-  let lastObservedAt = startedAt
-  let lastMonotonicObservedAt = monotonicStartedAt
+  return {
+    startedAt,
+    monotonicStartedAt,
+    localLeaseDeadline: monotonicStartedAt + initialRemaining,
+  }
+}
+
+export function holdEvolutionOperationLease({
+  userId,
+  id,
+  workerToken,
+  leaseOwnerId,
+  leaseExpiresAt,
+  leaseMs = DEFAULT_EVOLUTION_OPERATION_LEASE_MS,
+  signal,
+  now = Date.now,
+  monotonicNow = monotonicClockNow,
+  renewLease = renewEvolutionOperationLease,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
+} = {}) {
+  const duration = evolutionOperationLeaseDuration(leaseMs)
+  const heartbeatDelay = Math.max(250, Math.floor(duration / 3))
+  const retryDelay = Math.max(25, Math.min(250, Math.floor(duration / 12)))
+  const controller = new AbortController()
+  const forwardAbort = () => controller.abort(signal?.reason)
+  if (signal?.aborted) forwardAbort()
+  else signal?.addEventListener?.('abort', forwardAbort, { once: true })
+
+  let stopped = false
+  let timer = null
+  const initializedClock = initializeLeaseClock({
+    now,
+    monotonicNow,
+    leaseExpiresAt,
+    duration,
+  })
+  let localLeaseDeadline = initializedClock.localLeaseDeadline
+  let lastObservedAt = initializedClock.startedAt
+  let lastMonotonicObservedAt = initializedClock.monotonicStartedAt
 
   const abortLease = (reason = leaseLostError()) => {
     if (timer !== null) {
