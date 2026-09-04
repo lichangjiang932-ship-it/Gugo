@@ -167,10 +167,7 @@ export function reduceSessionLifecycleState(state, action) {
     case 'DELETE_SESSION': {
       const id = action.payload
       const filtered = state.sessions.filter((s) => s.id !== id)
-      let nextActiveId = state.activeSessionId
-      if (state.activeSessionId === id) {
-        nextActiveId = filtered[0]?.id ?? null
-      }
+      const nextActiveId = state.activeSessionId === id ? null : state.activeSessionId
       // \u540c\u6b65\u6e05\u6389\u8fd9\u4e2a\u4f1a\u8bdd\u7684\u8349\u7a3f,\u514d\u5f97 sessionDrafts \u8d8a\u79ef\u8d8a\u591a
       const nextDrafts = { ...(state.sessionDrafts || {}) }
       delete nextDrafts[id]

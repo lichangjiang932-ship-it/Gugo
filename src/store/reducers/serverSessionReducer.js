@@ -154,9 +154,12 @@ export function reconcileServerSessionCatalog(
   ))
   const sessions = [...localOnly, ...serverSessions]
   const mappedActiveSessionId = idMappings.get(state.activeSessionId) || state.activeSessionId
+  // Catalog refresh is background synchronization, not navigation. If the
+  // current session disappeared—or the user explicitly started a draft—stay
+  // on the blank draft instead of opening an unrelated historical session.
   const activeSessionId = sessions.some((session) => session.id === mappedActiveSessionId)
     ? mappedActiveSessionId
-    : sessions.find((session) => !session.archivedAt)?.id ?? sessions[0]?.id ?? null
+    : null
   const retainedIds = new Set(sessions.map((session) => session.id))
   const sessionDrafts = {}
   for (const [sourceSessionId, draft] of Object.entries(state.sessionDrafts || {})) {
@@ -269,7 +272,7 @@ export function reduceServerSessionState(state, action) {
         ...state,
         sessions,
         activeSessionId: state.activeSessionId === sessionId
-          ? sessions[0]?.id ?? null
+          ? null
           : state.activeSessionId,
         sessionDrafts,
       }
