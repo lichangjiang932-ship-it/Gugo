@@ -90,6 +90,36 @@ export function isInsideDirectory(filePath, directoryPath) {
   return filePath === directoryPath || filePath.startsWith(directoryPath + path.sep)
 }
 
+async function publishNewGeneratedArtifact({ name, artifact, args, job, step }) {
+  let assetStage = null
+  let assetTransaction = null
+  try {
+    if (name === 'create_html_app') {
+      assetStage = await stageHtmlArtifactAssets({
+        artifactDirectory: getArtifactDir(),
+        artifactId: artifact.id,
+        parentFilename: artifact.filename,
+        requiredAssetIds: args?._htmlAssetIds || [],
+        sources: args?._htmlAssetSources || [],
+      })
+      assetTransaction = beginHtmlArtifactAssetInstall(assetStage)
+    }
+    writeArtifactSourceSnapshot({ artifactId: artifact.id, toolName: name, args })
+    persistGeneratedArtifact({ artifact, args, job, step })
+    finishHtmlArtifactAssetInstall(assetTransaction)
+    return artifact
+  } catch (error) {
+    rollbackHtmlArtifactAssetInstall(assetTransaction)
+    discardStagedHtmlArtifactAssets(assetStage)
+    deleteArtifactSourceSnapshot(artifact.id)
+    discardInvalidGeneratedArtifactFile({
+      filePath: artifact?.fullPath,
+      artifactDirectory: getArtifactDir(),
+    })
+    throw error
+  }
+}
+
 /**
  * Publish a generated artifact, or replace one explicitly authorized managed
  * artifact in place. The original database identity and filename remain
@@ -113,35 +143,7 @@ export async function publishGeneratedArtifact({ name, artifact, args, job, step
     }
   }
   const replacementId = String(args?.replace_artifact_id || '').trim()
-  if (!replacementId) {
-    let assetStage = null
-    let assetTransaction = null
-    try {
-      if (name === 'create_html_app') {
-        assetStage = await stageHtmlArtifactAssets({
-          artifactDirectory: getArtifactDir(),
-          artifactId: artifact.id,
-          parentFilename: artifact.filename,
-          requiredAssetIds: args?._htmlAssetIds || [],
-          sources: args?._htmlAssetSources || [],
-        })
-        assetTransaction = beginHtmlArtifactAssetInstall(assetStage)
-      }
-      writeArtifactSourceSnapshot({ artifactId: artifact.id, toolName: name, args })
-      persistGeneratedArtifact({ artifact, args, job, step })
-      finishHtmlArtifactAssetInstall(assetTransaction)
-      return artifact
-    } catch (error) {
-      rollbackHtmlArtifactAssetInstall(assetTransaction)
-      discardStagedHtmlArtifactAssets(assetStage)
-      deleteArtifactSourceSnapshot(artifact.id)
-      discardInvalidGeneratedArtifactFile({
-        filePath: artifact?.fullPath,
-        artifactDirectory: getArtifactDir(),
-      })
-      throw error
-    }
-  }
+  if (!replacementId) return publishNewGeneratedArtifact({ name, artifact, args, job, step })
   if (job?.origin !== 'chat' || !job?.userId || !job?.sessionId) {
     throw artifactReplacementError(
       'artifact_replacement_scope_unavailable',

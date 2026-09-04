@@ -1,43 +1,45 @@
-export async function initializeInputs(s) {
-  const { DEFAULT_MODEL_PHASE_HEARTBEAT_MS, MANAGED_ATTACHMENT_MARKER, MAX_ITERS, SERVER_TOOL_SPECS, STATUS_INQUIRY_PROMPT, allowedArtifactTools, createArtifactReplacementGuard, createLoopEvents, executeServerTool, findAdjacentDeliveredArtifacts, findContinuableArtifactTargets, findExplicitlyReferencedDeliveredArtifacts, isArtifactRevisionRequest, isExplicitCodeSnippetRequest, latestPriorTurnOutcome, normalizeTurnLocale, parseSkillIdFromPrompt, requestApproval, resolveArtifactDeliveryTargets, resolveArtifactRevisionMode, resolveSideEffectExecutionLedger, selectJobToolSpecs } = s.d
+function bindRuntimeInputs(s) {
+  const {
+    DEFAULT_MODEL_PHASE_HEARTBEAT_MS,
+    MAX_ITERS,
+    createLoopEvents,
+    executeServerTool,
+    normalizeTurnLocale,
+    requestApproval,
+    resolveSideEffectExecutionLedger,
+  } = s.d
   ;({ job: s.job, step: s.step, messages: s.messages, signal: s.signal } = s.context.input)
   s.locale = normalizeTurnLocale(s.job?.locale)
   ;({ run: s.runModel, reconcileRequest: s.reconcileModelRequest = null, compactionArchivePort: s.compactionArchivePort = null, contextWindow: s.contextWindow, onPhase: s.onModelPhase = null, onDelta: s.onModelDelta = null, onReasoningDelta: s.onReasoningDelta = null } = s.context.model)
   ;({ specs: s.toolSpecs, fallbackSpecs: s.fallbackToolSpecs, config: s.toolsConfig = null, resolutionDecision: s.toolResolutionDecision = null, onProgress: s.onProgress = null, onCall: s.onToolCall = null, onStarted: s.onToolStarted = null, onCompleted: s.onToolCompleted = null } = s.context.tools)
-  s.executeTool = s.context.tools.execute === undefined
-      ? executeServerTool
-      : s.context.tools.execute
+  s.executeTool = s.context.tools.execute === undefined ? executeServerTool : s.context.tools.execute
   s.sideEffectLedger = resolveSideEffectExecutionLedger({
     configuredLedger: s.context.tools.sideEffectLedger,
     usesDefaultExecutor: s.context.tools.execute === undefined,
     getDefaultLedger: s.d.getSideEffectExecutionLedger,
   })
-  s.enableToolHooks = s.context.tools.enableHooks === undefined
-      ? true
-      : s.context.tools.enableHooks
-  s.toolRetryMaxAttempts = s.context.tools.retryMaxAttempts === undefined
-      ? 3
-      : s.context.tools.retryMaxAttempts
-  s.toolRetryBaseDelayMs = s.context.tools.retryBaseDelayMs === undefined
-      ? 120
-      : s.context.tools.retryBaseDelayMs
+  s.enableToolHooks = s.context.tools.enableHooks === undefined ? true : s.context.tools.enableHooks
+  s.toolRetryMaxAttempts = s.context.tools.retryMaxAttempts === undefined ? 3 : s.context.tools.retryMaxAttempts
+  s.toolRetryBaseDelayMs = s.context.tools.retryBaseDelayMs === undefined ? 120 : s.context.tools.retryBaseDelayMs
   ;({ onPending: s.onApprovalPending = null, onResolved: s.onApprovalResolved = null, sessionId: s.approvalSessionId = null, mode: s.approvalMode = null, context: s.approvalContext = null, principal: s.approvalPrincipal = null } = s.context.approvals)
-  s.approvalOrigin = s.context.approvals.origin === undefined
-      ? 'job'
-      : s.context.approvals.origin
+  s.approvalOrigin = s.context.approvals.origin === undefined ? 'job' : s.context.approvals.origin
   s.requestToolApproval = s.context.approvals.request === undefined
-      ? requestApproval
-      : s.context.approvals.request
+    ? requestApproval
+    : s.context.approvals.request
   ;({ claim: s.claimSteering = null, acknowledge: s.acknowledgeSteering = null, release: s.releaseSteering = null, beforeFinalCompletion: s.beforeFinalCompletion = null } = s.context.steering)
   ;({ load: s.loadCheckpoint = null, save: s.saveCheckpoint = null } = s.context.checkpoint)
   s.skillId = s.context.artifact.skillId
   s.runtimeBudget = s.context.limits.runtimeBudget ?? null
   s.executionGuardMode = s.context.limits.executionGuardMode ?? 'standard'
   s.intentMode = s.context.limits.intentMode ?? 'auto'
-  s.modelHeartbeatIntervalMs = s.context.model.heartbeatIntervalMs
-      ?? DEFAULT_MODEL_PHASE_HEARTBEAT_MS
+  s.modelHeartbeatIntervalMs = s.context.model.heartbeatIntervalMs ?? DEFAULT_MODEL_PHASE_HEARTBEAT_MS
   s.maxIters = s.context.limits.maxIterations ?? MAX_ITERS
   s.activeLoopEvents = s.context.events || createLoopEvents()
+}
+
+export async function initializeInputs(s) {
+  const { MANAGED_ATTACHMENT_MARKER, SERVER_TOOL_SPECS, STATUS_INQUIRY_PROMPT, allowedArtifactTools, createArtifactReplacementGuard, findAdjacentDeliveredArtifacts, findContinuableArtifactTargets, findExplicitlyReferencedDeliveredArtifacts, isArtifactRevisionRequest, isExplicitCodeSnippetRequest, latestPriorTurnOutcome, parseSkillIdFromPrompt, resolveArtifactDeliveryTargets, resolveArtifactRevisionMode, selectJobToolSpecs } = s.d
+  bindRuntimeInputs(s)
   s.eligibleFallbackToolSpecs = Array.isArray(s.fallbackToolSpecs)
       ? s.fallbackToolSpecs
       : Array.isArray(s.toolSpecs)

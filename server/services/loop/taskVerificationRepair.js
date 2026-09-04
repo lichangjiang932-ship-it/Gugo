@@ -277,6 +277,32 @@ export function observeTaskVerificationRepair(state, call, result, {
   }
 }
 
+function recordMutationEpochAndTargets(state, normalizedTargets, targetsOverflowed) {
+  const previousEpoch = normalizeEpoch(state.mutationEpoch)
+  if (previousEpoch >= MAX_TASK_VERIFICATION_EPOCH) {
+    // Never wrap: stale verification must not clear newer debt.
+    markVerificationOverflow(state)
+    state.mutationEpoch = MAX_TASK_VERIFICATION_EPOCH
+  } else {
+    state.mutationEpoch = previousEpoch + 1
+  }
+  const currentEpoch = state.mutationEpoch
+  if (targetsOverflowed || state.mutationTargets.has(PROJECT_SCOPE_TARGET)) {
+    state.mutationTargets.clear()
+    state.mutationTargets.set(PROJECT_SCOPE_TARGET, currentEpoch)
+    return currentEpoch
+  }
+  for (const target of normalizedTargets) {
+    state.mutationTargets.delete(target)
+    state.mutationTargets.set(target, currentEpoch)
+  }
+  if (state.mutationTargets.size > MAX_TASK_VERIFICATION_MUTATION_TARGETS) {
+    state.mutationTargets.clear()
+    state.mutationTargets.set(PROJECT_SCOPE_TARGET, currentEpoch)
+  }
+  return currentEpoch
+}
+
 export function observeTaskVerificationMutation(state, targets, { workspaceRoot = '' } = {}) {
   if (!(state?.pending instanceof Map)
     || !(state?.candidates instanceof Map)
@@ -297,30 +323,11 @@ export function observeTaskVerificationMutation(state, targets, { workspaceRoot 
     return { changed: false, promoted: [], invalidated: [] }
   }
 
-  const previousEpoch = normalizeEpoch(state.mutationEpoch)
-  if (previousEpoch >= MAX_TASK_VERIFICATION_EPOCH) {
-    // Epoch ordering is no longer representable exactly. Keep the last safe
-    // value and leave a permanent fail-closed sentinel instead of wrapping to
-    // zero, which could otherwise let stale verification clear newer debt.
-    markVerificationOverflow(state)
-    state.mutationEpoch = MAX_TASK_VERIFICATION_EPOCH
-  } else {
-    state.mutationEpoch = previousEpoch + 1
-  }
-  const currentEpoch = state.mutationEpoch
-  if (mutationTargetsOverflowed || state.mutationTargets.has(PROJECT_SCOPE_TARGET)) {
-    state.mutationTargets.clear()
-    state.mutationTargets.set(PROJECT_SCOPE_TARGET, currentEpoch)
-  } else {
-    for (const target of normalizedTargets) {
-      state.mutationTargets.delete(target)
-      state.mutationTargets.set(target, currentEpoch)
-    }
-    if (state.mutationTargets.size > MAX_TASK_VERIFICATION_MUTATION_TARGETS) {
-      state.mutationTargets.clear()
-      state.mutationTargets.set(PROJECT_SCOPE_TARGET, currentEpoch)
-    }
-  }
+  const currentEpoch = recordMutationEpochAndTargets(
+    state,
+    normalizedTargets,
+    mutationTargetsOverflowed,
+  )
 
   const promoted = []
   for (const candidate of [...state.candidates.values()]) {
