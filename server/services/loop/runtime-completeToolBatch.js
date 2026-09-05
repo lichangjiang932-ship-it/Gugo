@@ -1,21 +1,22 @@
 import { assertRuntimeStage } from './runtimeContract.js'
 
-export async function completeToolBatch(s) {
-  assertRuntimeStage(s, 'complete-tool-batch')
-  const i = s.iteration
-  const { EXECUTION_CONVERGENCE_MARKER, EXECUTION_CONVERGENCE_ROUND_THRESHOLD, JOB_READ_CONCURRENCY, REPEAT_CALL_GUARD_MARKER, buildToolResultMessage, getToolMetadata, isCommandExecutionTool, mapWithConcurrency, recordToolProgress, resolveToolResultMaxChars } = s.d
+async function initializeToolBatch(s, i) {
+  const {
+    buildToolResultMessage,
+    getToolMetadata,
+    isCommandExecutionTool,
+    recordToolProgress,
+    resolveToolResultMaxChars,
+  } = s.d
   i.pendingToolResultCount = Math.max(
-        1,
-        i.toolCalls.filter((call) => call.checkpointStatus !== 'completed').length,
-      )
+    1,
+    i.toolCalls.filter((call) => call.checkpointStatus !== 'completed').length,
+  )
   i.toolResultMaxChars = resolveToolResultMaxChars({
-        contextWindow: s.contextWindow,
-        resultCount: i.pendingToolResultCount,
-      })
-  i.convergenceBatch = {
-        exploratorySuccess: false,
-        productiveSuccess: false,
-      }
+    contextWindow: s.contextWindow,
+    resultCount: i.pendingToolResultCount,
+  })
+  i.convergenceBatch = { exploratorySuccess: false, productiveSuccess: false }
   i.deferredPostBatchMessages = []
   i.deferredEphemeralToolMessages = []
   i.taskVerificationBatchId = [
@@ -23,104 +24,89 @@ export async function completeToolBatch(s) {
     ...i.toolCalls.map((call) => String(call?.id || '').trim()),
   ].join('\u0000').slice(0, 2_000)
   i.isParallelReadCall = (call) => {
-        const metadata = getToolMetadata(call.name, {
-          args: call.args,
-          userId: s.job?.userId || null,
-        })
-        // Concurrency safety only describes whether two calls may overlap; it
-        // is not proof that a side effect can be replayed after a crash. Keep
-        // every mutation on the durable serial path even when a dynamic/MCP
-        // tool explicitly declares itself concurrency-safe.
-        return metadata.executionMode === 'parallel'
-          && metadata.isReadOnly === true
-          && metadata.isConcurrencySafe === true
-      }
+    const metadata = getToolMetadata(call.name, { args: call.args, userId: s.job?.userId || null })
+    return metadata.executionMode === 'parallel'
+      && metadata.isReadOnly === true
+      && metadata.isConcurrencySafe === true
+  }
   i.requiresPreExecutionSteeringCheck = (call) => {
-        if (!call) return false
-        const metadata = getToolMetadata(call.name, {
-          args: call.args,
-          userId: s.job?.userId || null,
-        })
-        // Command tools remain conservatively guarded even when static analysis
-        // classifies a particular command as read-only. Every other built-in,
-        // MCP, or plugin tool is governed by its canonical side-effect metadata.
-        return isCommandExecutionTool(call) || metadata.isReadOnly !== true
-      }
+    if (!call) return false
+    const metadata = getToolMetadata(call.name, { args: call.args, userId: s.job?.userId || null })
+    return isCommandExecutionTool(call) || metadata.isReadOnly !== true
+  }
   i.shouldStopBatch = () => Boolean(
-        i.noProgressReason || i.budgetExceeded || i.pausedByClarification,
-      )
+    i.noProgressReason || i.budgetExceeded || i.pausedByClarification,
+  )
   i.skipRemainingCalls = async (startIndex) => {
-        // If the batch must stop, every unanswered tool_call still needs a tool
-        // result before the conversation can be sent back to the model.
-        for (const skipped of i.toolCalls.slice(startIndex)) {
-          if (skipped.checkpointStatus === 'completed') continue
-          const skippedResult = {
-            ok: false,
-            code: 'tool_execution_skipped',
-            error: i.noProgressReason || i.budgetExceeded || '当前轮已暂停',
-            retryable: false,
-          }
-          s.convo.push(buildToolResultMessage(skipped, skippedResult))
-          Object.assign(skipped, {
-            checkpointStatus: 'completed',
-            checkpointResult: skippedResult,
-          })
-          recordToolProgress(s.progressState, { call: skipped, succeeded: false })
-        }
-        await s.persistTurn()
+    for (const skipped of i.toolCalls.slice(startIndex)) {
+      if (skipped.checkpointStatus === 'completed') continue
+      const skippedResult = {
+        ok: false,
+        code: 'tool_execution_skipped',
+        error: i.noProgressReason || i.budgetExceeded || '当前轮已暂停',
+        retryable: false,
       }
+      s.convo.push(buildToolResultMessage(skipped, skippedResult))
+      Object.assign(skipped, { checkpointStatus: 'completed', checkpointResult: skippedResult })
+      recordToolProgress(s.progressState, { call: skipped, succeeded: false })
+    }
+    await s.persistTurn()
+  }
   i.supersedeRemainingCalls = (startIndex) => {
-        for (const superseded of i.toolCalls.slice(startIndex)) {
-          if (superseded.checkpointStatus === 'completed') continue
-          const supersededResult = {
-            ok: false,
-            code: 'tool_execution_superseded_by_steering',
-            error: 'This unstarted tool call was skipped because newer user steering superseded the current tool-call batch.',
-            retryable: false,
-            superseded: true,
-            executed: false,
-          }
-          s.convo.push(buildToolResultMessage(
-            superseded,
-            supersededResult,
-            { maxChars: i.toolResultMaxChars },
-          ))
-          Object.assign(superseded, {
-            checkpointStatus: 'completed',
-            checkpointResult: supersededResult,
-            checkpointArtifactId: null,
-          })
-          // Superseded calls count as protocol-complete progress, but they never
-          // enter failure recovery, convergence, loop-guard, or tool-failure UI.
-          recordToolProgress(s.progressState, { call: superseded, succeeded: false })
-        }
+    for (const superseded of i.toolCalls.slice(startIndex)) {
+      if (superseded.checkpointStatus === 'completed') continue
+      const result = {
+        ok: false,
+        code: 'tool_execution_superseded_by_steering',
+        error: 'This unstarted tool call was skipped because newer user steering superseded the current tool-call batch.',
+        retryable: false,
+        superseded: true,
+        executed: false,
       }
+      s.convo.push(buildToolResultMessage(superseded, result, { maxChars: i.toolResultMaxChars }))
+      Object.assign(superseded, {
+        checkpointStatus: 'completed', checkpointResult: result, checkpointArtifactId: null,
+      })
+      recordToolProgress(s.progressState, { call: superseded, succeeded: false })
+    }
+  }
   i.claimSteeringAtToolBoundary = async (startIndex) => {
-        if (startIndex >= i.toolCalls.length) return false
-        const claimed = await s.steeringController.claimFresh(s.appliedSteeringIds)
-        if (claimed.messages.length === 0) return false
-
-        i.supersedeRemainingCalls(startIndex)
-        // Keep every tool response in the assistant batch contiguous before
-        // adding screenshot context or the newer user direction.
-        s.convo.push(...i.deferredPostBatchMessages)
-        i.deferredPostBatchMessages.length = 0
-        s.pendingEphemeralToolMessages.push(...i.deferredEphemeralToolMessages)
-        i.deferredEphemeralToolMessages.length = 0
-        s.appendSteeringMessages(claimed.messages)
-        await s.steeringController.persistAndAcknowledge(claimed.leaseId)
-        if (s.iter + 1 >= s.maxIters) s.maxIters = s.iter + 2
-        return true
-      }
+    if (startIndex >= i.toolCalls.length) return false
+    const claimed = await s.steeringController.claimFresh(s.appliedSteeringIds)
+    if (claimed.messages.length === 0) return false
+    i.supersedeRemainingCalls(startIndex)
+    s.convo.push(...i.deferredPostBatchMessages)
+    i.deferredPostBatchMessages.length = 0
+    s.pendingEphemeralToolMessages.push(...i.deferredEphemeralToolMessages)
+    i.deferredEphemeralToolMessages.length = 0
+    s.appendSteeringMessages(claimed.messages)
+    await s.steeringController.persistAndAcknowledge(claimed.leaseId)
+    if (s.iter + 1 >= s.maxIters) s.maxIters = s.iter + 2
+    return true
+  }
   i.callIndex = 0
   i.batchSupersededBySteering = false
   i.firstPendingCallIndex = i.toolCalls.findIndex((call) => call.checkpointStatus !== 'completed')
   i.firstPendingCall = i.firstPendingCallIndex >= 0 ? i.toolCalls[i.firstPendingCallIndex] : null
   if (i.modelMutationBatchScheduled
-        && i.requiresPreExecutionSteeringCheck(i.firstPendingCall)
-        && await i.claimSteeringAtToolBoundary(i.firstPendingCallIndex)) {
-        i.batchSupersededBySteering = true
-      }
+    && i.requiresPreExecutionSteeringCheck(i.firstPendingCall)
+    && await i.claimSteeringAtToolBoundary(i.firstPendingCallIndex)) {
+    i.batchSupersededBySteering = true
+  }
+}
+
+export async function completeToolBatch(s) {
+  assertRuntimeStage(s, 'complete-tool-batch')
+  const i = s.iteration
+  const {
+    EXECUTION_CONVERGENCE_MARKER,
+    EXECUTION_CONVERGENCE_ROUND_THRESHOLD,
+    JOB_READ_CONCURRENCY,
+    REPEAT_CALL_GUARD_MARKER,
+    getToolMetadata,
+    mapWithConcurrency,
+  } = s.d
+  await initializeToolBatch(s, i)
   while (!i.batchSupersededBySteering && i.callIndex < i.toolCalls.length) {
         const call = i.toolCalls[i.callIndex]
         if (call.checkpointStatus === 'completed') {

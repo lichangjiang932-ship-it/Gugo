@@ -79,6 +79,105 @@ async function cancellingProjection(getTurn, scope) {
   return settledStatus ? { ...turn, status: settledStatus } : { ...turn, status: 'cancelling' }
 }
 
+async function cancelWithExecutionLease(ports, scope, cancellationLease) {
+  const { userId, sessionId, turnId } = scope
+  try {
+    try { await ports.requestCancellation(scope) } catch { /* lease ownership is authoritative */ }
+    try { await ports.closeSteeringInbox(scope) } catch { /* terminal fence remains authoritative */ }
+    ports.releaseApproval(scope)
+    const fencedLast = await ports.lastEvent(scope)
+    if (!fencedLast) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
+    if (settledTurnStatus(fencedLast)) return await ports.getTurn(scope)
+
+    const replayedEvents = await replayPersistedTurnEvents(ports.replayEvents, scope)
+    const checkpoint = storedCheckpointEvent(await ports.loadCheckpoint(scope))
+      || replayedEvents.filter((event) => (
+        event.type === 'turn.checkpoint' && isRecord(event.payload?.state)
+      )).at(-1)
+      || null
+    const checkpointState = isRecord(checkpoint?.payload?.state) ? checkpoint.payload.state : null
+    const started = replayedEvents.find((event) => event.type === 'turn.started') || null
+    const checkpointMessages = checkpointMessagesForTurn(checkpointState, {
+      content: started?.payload?.content,
+    })
+    const partialText = publicIncompleteText(
+      replayedAssistantText(replayedEvents)
+        || checkpointAssistantText(checkpointState, checkpointMessages),
+      '',
+    )
+    const baselineToolCallIds = new Set()
+    const cancelledAt = ports.now()
+    const verifiedLocalFiles = mergeLocalFileReceipts(
+      extractVerifiedLocalFiles(checkpointMessages, { userId, baselineToolCallIds, verifiedAt: cancelledAt }),
+      await latestVerifiedLocalFiles(ports.replayEvents, scope),
+    )
+    const retainedLocalFiles = excludeVerifiedLocalFiles(mergeLocalFileReceipts(
+      extractRetainedLocalFiles(checkpointMessages, { userId, baselineToolCallIds, retainedAt: cancelledAt }),
+      await latestRetainedLocalFiles(ports.replayEvents, scope),
+    ), verifiedLocalFiles)
+    const artifactIds = normalizeArtifactIds(checkpointState?.artifactIds)
+    const deliveryArtifactIds = optionalDeliveryArtifactIds(checkpointState, [])
+    const iterations = Math.max(0, Number(checkpointState?.iterations) || 0)
+    const latestModelUsage = normalizeModelUsage(checkpointState?.latestModelUsage)
+    const turnModelUsage = normalizeModelUsage(checkpointState?.turnModelUsage) || latestModelUsage
+    const latestEstimatedPromptTokens = normalizePromptTokenEstimate(
+      checkpointState?.latestEstimatedPromptTokens,
+    )
+    const context = buildAssistantModelContext({
+      turnId,
+      checkpointMessages,
+      baselineToolCallIds,
+      userId,
+      verifiedLocalFiles,
+      retainedLocalFiles,
+      artifactIds,
+      deliveryArtifactIds,
+      iterations,
+      compactionRecovery: checkpointState?.recovery || null,
+      usage: latestModelUsage,
+      turnModelUsage,
+      estimatedPromptTokens: latestEstimatedPromptTokens,
+      turnStartedAt: started?.createdAt,
+      turnCompletedAt: cancelledAt,
+    })
+    const cancellationMessage = {
+      id: `${turnId}:assistant`, userId, sessionId, role: 'assistant', content: partialText,
+      modelContext: { ...context, turnEvidence: true, evidenceState: 'cancelled' },
+      createdAt: cancelledAt, updatedAt: cancelledAt,
+    }
+    const atomicTurnBoundary = !!ports.commitTurnBoundary
+    const emit = ports.createEmitter({
+      userId, sessionId, turnId, sequence: fencedLast.sequence + 1,
+    })
+    if (cancellationLease.executionLease) emit.bindExecutionLease?.(cancellationLease.executionLease)
+    try {
+      await emit('turn.cancelled', {
+        code: 'TURN_CANCELLED', partialText, artifactIds, deliveryArtifactIds,
+        verifiedLocalFiles, retainedLocalFiles, iterations,
+        ...(latestModelUsage ? { usage: latestModelUsage } : {}),
+        ...(turnModelUsage ? { turnModelUsage } : {}),
+        ...(latestEstimatedPromptTokens !== null
+          ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
+      }, {
+        commitEvent: atomicTurnBoundary
+          ? ({ event }) => ports.commitTurnBoundary({
+              userId, event, message: cancellationMessage,
+              executionLease: cancellationLease.executionLease,
+            })
+          : null,
+        afterAppend: atomicTurnBoundary ? null : async () => {
+          try { await ports.writeMessage(cancellationMessage) } catch { /* event remains authoritative */ }
+        },
+      })
+    } finally {
+      await emit.close()
+    }
+  } finally {
+    await cancellationLease.release()
+  }
+  return ports.getTurn(scope)
+}
+
 /**
  * Own the complete cancellation transition for a durable turn.
  *
@@ -170,142 +269,7 @@ export function createTurnCancellationRuntime({
         throw error
       }
 
-      try {
-        try { await ports.requestCancellation(scope) } catch { /* lease ownership is authoritative */ }
-        try { await ports.closeSteeringInbox(scope) } catch { /* terminal fence remains authoritative */ }
-        ports.releaseApproval(scope)
-        const fencedLast = await ports.lastEvent(scope)
-        if (!fencedLast) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
-        if (settledTurnStatus(fencedLast)) return await ports.getTurn(scope)
-
-        const replayedEvents = await replayPersistedTurnEvents(ports.replayEvents, scope)
-        const checkpoint = storedCheckpointEvent(await ports.loadCheckpoint(scope))
-          || replayedEvents
-            .filter((event) => event.type === 'turn.checkpoint' && isRecord(event.payload?.state))
-            .at(-1)
-          || null
-        const checkpointState = isRecord(checkpoint?.payload?.state) ? checkpoint.payload.state : null
-        const started = replayedEvents.find((event) => event.type === 'turn.started') || null
-        const checkpointMessages = checkpointMessagesForTurn(checkpointState, {
-          content: started?.payload?.content,
-        })
-        const partialText = publicIncompleteText(
-          replayedAssistantText(replayedEvents)
-            || checkpointAssistantText(checkpointState, checkpointMessages),
-          '',
-        )
-        const baselineToolCallIds = new Set()
-        const cancelledAt = ports.now()
-        const checkpointVerifiedLocalFiles = extractVerifiedLocalFiles(checkpointMessages, {
-          userId,
-          baselineToolCallIds,
-          verifiedAt: cancelledAt,
-        })
-        const verifiedLocalFiles = mergeLocalFileReceipts(
-          checkpointVerifiedLocalFiles,
-          await latestVerifiedLocalFiles(ports.replayEvents, scope),
-        )
-        const checkpointRetainedLocalFiles = extractRetainedLocalFiles(checkpointMessages, {
-          userId,
-          baselineToolCallIds,
-          retainedAt: cancelledAt,
-        })
-        const retainedLocalFiles = excludeVerifiedLocalFiles(mergeLocalFileReceipts(
-          checkpointRetainedLocalFiles,
-          await latestRetainedLocalFiles(ports.replayEvents, scope),
-        ), verifiedLocalFiles)
-        const artifactIds = normalizeArtifactIds(checkpointState?.artifactIds)
-        const deliveryArtifactIds = optionalDeliveryArtifactIds(checkpointState, [])
-        const iterations = Math.max(0, Number(checkpointState?.iterations) || 0)
-        const startedAt = started?.createdAt
-        const latestModelUsage = normalizeModelUsage(checkpointState?.latestModelUsage)
-        const turnModelUsage = normalizeModelUsage(checkpointState?.turnModelUsage) || latestModelUsage
-        const latestEstimatedPromptTokens = normalizePromptTokenEstimate(
-          checkpointState?.latestEstimatedPromptTokens,
-        )
-        const cancellationMessage = {
-          id: `${turnId}:assistant`,
-          userId,
-          sessionId,
-          role: 'assistant',
-          // Cancellation status is carried by the terminal event/context.
-          // Assistant content remains reserved for model-authored output.
-          content: partialText,
-          modelContext: {
-            ...buildAssistantModelContext({
-              turnId,
-              checkpointMessages,
-              baselineToolCallIds,
-              userId,
-              verifiedLocalFiles,
-              retainedLocalFiles,
-              artifactIds,
-              deliveryArtifactIds,
-              iterations,
-              compactionRecovery: checkpointState?.recovery || null,
-              usage: latestModelUsage,
-              turnModelUsage,
-              estimatedPromptTokens: latestEstimatedPromptTokens,
-              turnStartedAt: startedAt,
-              turnCompletedAt: cancelledAt,
-            }),
-            turnEvidence: true,
-            evidenceState: 'cancelled',
-          },
-          createdAt: cancelledAt,
-          updatedAt: cancelledAt,
-        }
-        const atomicTurnBoundary = !!ports.commitTurnBoundary
-        const emit = ports.createEmitter({
-          userId,
-          sessionId,
-          turnId,
-          sequence: fencedLast.sequence + 1,
-        })
-        if (cancellationLease.executionLease) {
-          emit.bindExecutionLease?.(cancellationLease.executionLease)
-        }
-        try {
-          await emit('turn.cancelled', {
-            code: 'TURN_CANCELLED',
-            partialText,
-            artifactIds,
-            deliveryArtifactIds,
-            verifiedLocalFiles,
-            retainedLocalFiles,
-            iterations,
-            ...(latestModelUsage ? { usage: latestModelUsage } : {}),
-            ...(turnModelUsage ? { turnModelUsage } : {}),
-            ...(latestEstimatedPromptTokens !== null
-              ? { estimatedPromptTokens: latestEstimatedPromptTokens }
-              : {}),
-          }, {
-            commitEvent: atomicTurnBoundary
-              ? ({ event }) => ports.commitTurnBoundary({
-                  userId,
-                  event,
-                  message: cancellationMessage,
-                  executionLease: cancellationLease.executionLease,
-                })
-              : null,
-            afterAppend: atomicTurnBoundary
-              ? null
-              : async () => {
-                  try {
-                    await ports.writeMessage(cancellationMessage)
-                  } catch {
-                    // The terminal event remains authoritative and snapshot recovery
-                    // can reconstruct the evidence message from its payload.
-                  }
-                },
-          })
-        } finally {
-          await emit.close()
-        }
-      } finally {
-        await cancellationLease.release()
-      }
-      return await ports.getTurn(scope)
+      return cancelWithExecutionLease(ports, scope, cancellationLease)
     },
   })
 }
