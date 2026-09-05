@@ -217,6 +217,338 @@ function sendError(res, error) {
   return sendJson(res, projected.status, projected.payload)
 }
 
+function createTurnRouteRuntime(engine, resolveEngine) {
+  let activeEngine = engine
+  const requireEngine = () => {
+    if (!activeEngine) activeEngine = resolveEngine()
+    return activeEngine
+  }
+  return {
+    requireEngine,
+    readTurnEvents(options) {
+      const selectedEngine = requireEngine()
+      return typeof selectedEngine?.listEvents === 'function'
+        ? selectedEngine.listEvents(options)
+        : listTurnEvents(options)
+    },
+  }
+}
+
+function handleTurnWriteFailureRoute(req, res, url, parts, userId) {
+  if (req.method === 'GET' && url.pathname === '/api/turns/event-write-failures') {
+    const failures = listTurnEventWriteFailures({
+      userId,
+      sessionId: url.searchParams.get('sessionId'),
+      turnId: url.searchParams.get('turnId'),
+      beforeId: url.searchParams.get('beforeId'),
+      limit: url.searchParams.get('limit'),
+    })
+    return sendJson(res, 200, {
+      failures,
+      nextBeforeId: failures.length > 0 ? failures.at(-1).id : null,
+    })
+  }
+  if (parts[0] !== 'api' || parts[1] !== 'turns'
+    || parts[2] !== 'event-write-failures' || !parts[3] || parts.length < 4) return null
+  const failureId = decodeURIComponent(parts[3])
+  if (req.method === 'POST' && parts[4] === 'replay' && parts.length === 5) {
+    const replayed = replayTurnEventWriteFailure({ userId, id: failureId })
+    return replayed
+      ? sendJson(res, 200, { replayed })
+      : sendJson(res, 404, {
+          error: {
+            code: 'TURN_EVENT_WRITE_FAILURE_NOT_FOUND',
+            message: 'event write failure not found',
+          },
+        })
+  }
+  if (req.method === 'DELETE' && parts.length === 4) {
+    const acknowledged = acknowledgeTurnEventWriteFailure({ userId, id: failureId })
+    return acknowledged
+      ? sendJson(res, 200, { acknowledged: true })
+      : sendJson(res, 404, {
+          error: {
+            code: 'TURN_EVENT_WRITE_FAILURE_NOT_FOUND',
+            message: 'event write failure not found',
+          },
+        })
+  }
+  return null
+}
+
+async function openTurnEventStream(req, res, url, runtime, userId) {
+  const sessionId = url.searchParams.get('sessionId')
+  const turnId = url.searchParams.get('turnId')
+  if (!sessionId || !turnId) {
+    return sendJson(res, 400, {
+      error: { code: 'TURN_STREAM_TARGET_REQUIRED', message: 'sessionId and turnId are required' },
+    })
+  }
+  const versionRequested = url.searchParams.has(TURN_EVENT_TRANSPORT_QUERY_PARAM)
+  const requestedVersion = url.searchParams.get(TURN_EVENT_TRANSPORT_QUERY_PARAM)
+  if (versionRequested && requestedVersion !== String(TURN_EVENT_TRANSPORT_VERSION)) {
+    return sendJson(res, 400, {
+      error: {
+        code: 'TURN_EVENT_TRANSPORT_VERSION_UNSUPPORTED',
+        message: `Turn event transport v${TURN_EVENT_TRANSPORT_VERSION} is required`,
+        expectedVersion: TURN_EVENT_TRANSPORT_VERSION,
+        receivedVersion: requestedVersion,
+      },
+    })
+  }
+  const state = {
+    lastSequence: parseAfter(url.searchParams.get('after')),
+    replaying: true,
+    closed: false,
+    pending: [],
+    pendingActivities: [],
+    heartbeat: null,
+    databasePoll: null,
+    pollQueued: false,
+    deliveryTail: Promise.resolve(),
+    unsubscribeEvents: () => {},
+    unsubscribeActivities: () => {},
+  }
+  const cleanup = () => {
+    if (state.closed) return
+    state.closed = true
+    if (state.heartbeat) clearInterval(state.heartbeat)
+    if (state.databasePoll) clearInterval(state.databasePoll)
+    state.unsubscribeEvents()
+    state.unsubscribeActivities()
+  }
+  const failStream = async (error) => {
+    if (state.closed) return
+    try {
+      const projected = publicTurnErrorProjection(error)
+      await sendSse(res, 'error', projected.payload)
+    } finally {
+      cleanup()
+      if (!res.writableEnded) res.end()
+    }
+  }
+  const sendEvent = async (event) => {
+    if (state.closed || event.sequence <= state.lastSequence) return false
+    const expectedSequence = state.lastSequence + 1
+    if (!canAdvanceTurnEventCursor(event, state.lastSequence)) {
+      throw new TurnEventSequenceGapError({
+        userId, sessionId, turnId, expectedSequence, actualSequence: event.sequence,
+      })
+    }
+    const clientEvent = turnEventForClient(event)
+    const payload = versionRequested ? createTurnEventTransportEnvelope(clientEvent) : clientEvent
+    await sendSse(res, 'turn_event', payload, event.sequence)
+    if (state.closed) return false
+    state.lastSequence = event.sequence
+    if (STREAM_END_EVENTS.has(event.type)) {
+      cleanup()
+      res.end()
+    }
+    return true
+  }
+  const sendActivity = async (activity) => {
+    if (!state.closed) await sendSse(res, 'turn_activity', activity)
+  }
+  const drainDurableEvents = async () => {
+    let page
+    do {
+      page = await runtime.readTurnEvents({
+        userId, sessionId, turnId, after: state.lastSequence, limit: 2000,
+      })
+      for (const event of page) {
+        await sendEvent(event)
+        if (state.closed) break
+      }
+    } while (!state.closed && page.length === 2000)
+  }
+  const queueDelivery = (operation) => {
+    const queued = state.deliveryTail.then(operation)
+    state.deliveryTail = queued.catch(failStream)
+    return queued
+  }
+  state.unsubscribeEvents = subscribeTurnEvents({ userId, sessionId, turnId }, (event) => {
+    if (state.replaying) state.pending.push(event)
+    else {
+      queueDelivery(async () => {
+        if (state.closed || event.sequence <= state.lastSequence) return
+        await drainDurableEvents()
+        if (!state.closed && event.sequence > state.lastSequence) await sendEvent(event)
+      }).catch(() => {})
+    }
+  })
+  state.unsubscribeActivities = subscribeTurnActivities({ userId, sessionId, turnId }, (activity) => {
+    if (state.replaying) state.pendingActivities.push(activity)
+    else queueDelivery(() => sendActivity(activity)).catch(() => {})
+  })
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    ...(versionRequested
+      ? { 'X-Gugo-Turn-Event-Version': String(TURN_EVENT_TRANSPORT_VERSION) }
+      : {}),
+  })
+  res.flushHeaders?.()
+  res.write('retry: 1000\n\n')
+  req.on('close', cleanup)
+  res.on?.('close', cleanup)
+  try {
+    await sendSse(res, 'ready', { phase: 'connecting', after: state.lastSequence })
+    await drainDurableEvents()
+    while (!state.closed && state.pending.length > 0) {
+      const buffered = state.pending.splice(0).sort((a, b) => a.sequence - b.sequence)
+      await drainDurableEvents()
+      for (const event of buffered) {
+        if (event.sequence <= state.lastSequence) continue
+        await drainDurableEvents()
+        if (!state.closed && event.sequence > state.lastSequence) await sendEvent(event)
+      }
+    }
+    state.replaying = false
+    for (const activity of state.pendingActivities.splice(0)) await sendActivity(activity)
+  } catch (error) {
+    await failStream(error)
+  }
+  if (!state.closed) {
+    state.databasePoll = setInterval(() => {
+      if (state.closed || state.pollQueued) return
+      state.pollQueued = true
+      queueDelivery(drainDurableEvents).catch(() => {}).finally(() => { state.pollQueued = false })
+    }, resolveTurnEventStreamPollInterval(runtime.env))
+    state.databasePoll.unref?.()
+    state.heartbeat = setInterval(() => {
+      if (!res.destroyed && !res.writableEnded) res.write(': keepalive\n\n')
+    }, 15_000)
+    state.heartbeat.unref?.()
+  }
+  return undefined
+}
+
+async function handleTurnCollection(req, res, url, runtime, userId) {
+  if (req.method === 'GET' && url.pathname === '/api/turns/events') {
+    const events = await runtime.readTurnEvents({
+      userId,
+      sessionId: url.searchParams.get('sessionId'),
+      turnId: url.searchParams.get('turnId'),
+      after: url.searchParams.get('after'),
+      limit: url.searchParams.get('limit'),
+    })
+    return sendJson(res, 200, { events: events.map(turnEventForClient) })
+  }
+  if (req.method === 'POST' && url.pathname === '/api/turns/run') {
+    const body = await readJson(req, { maxBytes: MAX_TURN_RUN_BODY_BYTES })
+    const turn = await runtime.requireEngine().startTurn({
+      userId,
+      sessionId: body.sessionId,
+      turnId: body.turnId || undefined,
+      content: body.content,
+      displayContent: body.displayContent,
+      workspacePath: body.workspacePath,
+      locale: body.locale,
+      modelName: body.modelName || null,
+      modelProviderId: body.modelProviderId || null,
+      modelConfigRevision: body.modelConfigRevision ?? null,
+      modelMode: body.modelMode,
+      history: body.history,
+      agentId: body.agentId || null,
+      skillIds: body.skillIds,
+      skillDefinitions: body.skillDefinitions,
+      toolsConfig: body.toolsConfig,
+      intentMode: body.intentMode,
+      attachments: body.attachments,
+      authMode: resolveAuthMode(runtime.env),
+    })
+    return sendJson(res, 202, { turn })
+  }
+  return null
+}
+
+async function handleTurnResource(req, res, url, parts, runtime, userId) {
+  if (parts[0] !== 'api' || parts[1] !== 'turns' || !parts[2] || parts.length < 3) return null
+  const turnId = decodeURIComponent(parts[2])
+  if (req.method === 'GET' && parts[3] === 'model-request-recovery' && parts.length === 4) {
+    const recovery = await runtime.requireEngine().getPendingModelRequestRecovery({
+      userId, sessionId: url.searchParams.get('sessionId'), turnId,
+    })
+    return recovery
+      ? sendJson(res, 200, { recovery })
+      : sendJson(res, 404, {
+          error: {
+            code: 'MODEL_REQUEST_RECOVERY_NOT_FOUND',
+            message: 'model request recovery was not found',
+          },
+        })
+  }
+  if (req.method === 'POST' && parts[3] === 'model-request-recovery'
+    && parts[4] === 'resolve' && parts.length === 5) {
+    const body = await readJson(req)
+    const recovery = await runtime.requireEngine().resolvePendingModelRequest({
+      userId,
+      sessionId: body.sessionId,
+      turnId,
+      expectedCheckpointSequence: body.checkpointSequence,
+      modelRequestId: body.modelRequestId,
+      requestFingerprint: body.requestFingerprint,
+      providerId: body.providerId,
+      modelName: body.modelName,
+      configRevision: body.configRevision,
+      idempotencyKey: body.idempotencyKey,
+      confirmModelRequestId: body.confirmModelRequestId,
+      verificationConfirmed: body.verificationConfirmed,
+      resolution: body.resolution,
+      response: body.response,
+      receipt: body.receipt,
+      note: body.note,
+    })
+    return sendJson(res, 200, {
+      recovery,
+      resume: {
+        ready: ['not_sent', 'completed'].includes(recovery.resolution),
+        sessionId: body.sessionId,
+        turnId,
+      },
+    })
+  }
+  if (req.method === 'GET' && parts.length === 3) {
+    const turn = await runtime.requireEngine().getTurn({
+      userId, sessionId: url.searchParams.get('sessionId'), turnId,
+    })
+    return turn
+      ? sendJson(res, 200, { turn })
+      : sendJson(res, 404, { error: { code: 'TURN_NOT_FOUND', message: 'turn not found' } })
+  }
+  if (req.method === 'POST' && parts[3] === 'steer' && parts.length === 4) {
+    const body = await readJson(req)
+    const steering = await runtime.requireEngine().steerTurn({
+      userId,
+      sessionId: body.sessionId,
+      turnId,
+      content: body.content,
+      clientRequestId: body.clientRequestId,
+      authMode: resolveAuthMode(runtime.env),
+    })
+    return sendJson(res, 202, { steering })
+  }
+  if (req.method === 'POST'
+    && (parts[3] === 'cancel' || parts[3] === 'resume')
+    && parts.length === 4) {
+    const body = await readJson(req)
+    const action = parts[3] === 'cancel' ? 'cancelTurn' : 'resumeTurn'
+    const turn = await runtime.requireEngine()[action]({
+      userId,
+      sessionId: body.sessionId,
+      turnId,
+      ...(parts[3] === 'resume' ? { resolution: body.resolution ?? null } : {}),
+      ...(parts[3] === 'resume' ? { retryRecovery: body.retryRecovery === true } : {}),
+      ...(parts[3] === 'resume' ? { retryFailed: body.retryFailed === true } : {}),
+      authMode: resolveAuthMode(runtime.env),
+    })
+    return sendJson(res, parts[3] === 'resume' ? 202 : 200, { turn })
+  }
+  return null
+}
+
 export async function handleTurnEventRequest(
   req,
   res,
@@ -227,338 +559,20 @@ export async function handleTurnEventRequest(
   if (!userId) return sendJson(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } })
   const url = new URL(req.url, 'http://localhost')
   const parts = routeParts(url.pathname)
-  let activeEngine = engine
-  const requireEngine = () => {
-    if (!activeEngine) activeEngine = resolveEngine()
-    return activeEngine
-  }
-  const readTurnEvents = (options) => {
-    const selectedEngine = requireEngine()
-    return typeof selectedEngine?.listEvents === 'function'
-      ? selectedEngine.listEvents(options)
-      : listTurnEvents(options)
-  }
+  const runtime = { ...createTurnRouteRuntime(engine, resolveEngine), env }
   try {
-    if (req.method === 'GET' && url.pathname === '/api/turns/event-write-failures') {
-      const failures = listTurnEventWriteFailures({
-        userId,
-        sessionId: url.searchParams.get('sessionId'),
-        turnId: url.searchParams.get('turnId'),
-        beforeId: url.searchParams.get('beforeId'),
-        limit: url.searchParams.get('limit'),
-      })
-      return sendJson(res, 200, {
-        failures,
-        nextBeforeId: failures.length > 0 ? failures.at(-1).id : null,
-      })
-    }
-
-    if (parts[0] === 'api' && parts[1] === 'turns' && parts[2] === 'event-write-failures'
-      && parts[3] && parts.length >= 4) {
-      const failureId = decodeURIComponent(parts[3])
-      if (req.method === 'POST' && parts[4] === 'replay' && parts.length === 5) {
-        const replayed = replayTurnEventWriteFailure({ userId, id: failureId })
-        return replayed
-          ? sendJson(res, 200, { replayed })
-          : sendJson(res, 404, { error: { code: 'TURN_EVENT_WRITE_FAILURE_NOT_FOUND', message: 'event write failure not found' } })
-      }
-      if (req.method === 'DELETE' && parts.length === 4) {
-        const acknowledged = acknowledgeTurnEventWriteFailure({ userId, id: failureId })
-        return acknowledged
-          ? sendJson(res, 200, { acknowledged: true })
-          : sendJson(res, 404, { error: { code: 'TURN_EVENT_WRITE_FAILURE_NOT_FOUND', message: 'event write failure not found' } })
-      }
-    }
-
+    const failureResponse = handleTurnWriteFailureRoute(req, res, url, parts, userId)
+    if (failureResponse !== null) return failureResponse
     if (req.method === 'GET' && url.pathname === '/api/turns/stream') {
-      const sessionId = url.searchParams.get('sessionId')
-      const turnId = url.searchParams.get('turnId')
-      if (!sessionId || !turnId) {
-        return sendJson(res, 400, { error: { code: 'TURN_STREAM_TARGET_REQUIRED', message: 'sessionId and turnId are required' } })
-      }
-      const eventVersionWasRequested = url.searchParams.has(TURN_EVENT_TRANSPORT_QUERY_PARAM)
-      const requestedEventVersion = url.searchParams.get(TURN_EVENT_TRANSPORT_QUERY_PARAM)
-      const useVersionedEventEnvelope = eventVersionWasRequested
-      if (useVersionedEventEnvelope
-        && requestedEventVersion !== String(TURN_EVENT_TRANSPORT_VERSION)) {
-        return sendJson(res, 400, {
-          error: {
-            code: 'TURN_EVENT_TRANSPORT_VERSION_UNSUPPORTED',
-            message: `Turn event transport v${TURN_EVENT_TRANSPORT_VERSION} is required`,
-            expectedVersion: TURN_EVENT_TRANSPORT_VERSION,
-            receivedVersion: requestedEventVersion,
-          },
-        })
-      }
-
-      let lastSequence = parseAfter(url.searchParams.get('after'))
-      let replaying = true
-      let closed = false
-      const pending = []
-      const pendingActivities = []
-      let heartbeat = null
-      let databasePoll = null
-      let pollQueued = false
-      let deliveryTail = Promise.resolve()
-      let unsubscribeEvents = () => {}
-      let unsubscribeActivities = () => {}
-      const cleanup = () => {
-        if (closed) return
-        closed = true
-        if (heartbeat) clearInterval(heartbeat)
-        if (databasePoll) clearInterval(databasePoll)
-        unsubscribeEvents()
-        unsubscribeActivities()
-      }
-      const failStream = async (error) => {
-        if (closed) return
-        try {
-          const projected = publicTurnErrorProjection(error)
-          await sendSse(res, 'error', projected.payload)
-        } finally {
-          cleanup()
-          if (!res.writableEnded) res.end()
-        }
-      }
-      const sendEvent = async (event) => {
-        if (closed || event.sequence <= lastSequence) return false
-        const expectedSequence = lastSequence + 1
-        if (!canAdvanceTurnEventCursor(event, lastSequence)) {
-          throw new TurnEventSequenceGapError({
-            userId,
-            sessionId,
-            turnId,
-            expectedSequence,
-            actualSequence: event.sequence,
-          })
-        }
-        const clientEvent = turnEventForClient(event)
-        const payload = useVersionedEventEnvelope
-          ? createTurnEventTransportEnvelope(clientEvent)
-          : clientEvent
-        await sendSse(res, 'turn_event', payload, event.sequence)
-        if (closed) return false
-        lastSequence = event.sequence
-        if (STREAM_END_EVENTS.has(event.type)) {
-          cleanup()
-          res.end()
-        }
-        return true
-      }
-      const sendActivity = async (activity) => {
-        if (closed) return
-        // Live activities are intentionally id-less and do not move the
-        // durable sequence cursor used for replay/reconnect.
-        await sendSse(res, 'turn_activity', activity)
-      }
-      const drainDurableEvents = async () => {
-        let page
-        do {
-          page = await readTurnEvents({ userId, sessionId, turnId, after: lastSequence, limit: 2000 })
-          for (const event of page) {
-            await sendEvent(event)
-            if (closed) break
-          }
-        } while (!closed && page.length === 2000)
-      }
-      const queueDelivery = (operation) => {
-        const queued = deliveryTail.then(operation)
-        deliveryTail = queued.catch(failStream)
-        return queued
-      }
-
-      unsubscribeEvents = subscribeTurnEvents({ userId, sessionId, turnId }, (event) => {
-        if (replaying) pending.push(event)
-        else {
-          queueDelivery(async () => {
-            if (closed || event.sequence <= lastSequence) return
-            await drainDurableEvents()
-            if (!closed && event.sequence > lastSequence) await sendEvent(event)
-          }).catch(() => {})
-        }
-      })
-      unsubscribeActivities = subscribeTurnActivities({ userId, sessionId, turnId }, (activity) => {
-        if (replaying) pendingActivities.push(activity)
-        else queueDelivery(() => sendActivity(activity)).catch(() => {})
-      })
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-        ...(useVersionedEventEnvelope
-          ? { 'X-Gugo-Turn-Event-Version': String(TURN_EVENT_TRANSPORT_VERSION) }
-          : {}),
-      })
-      res.flushHeaders?.()
-      res.write('retry: 1000\n\n')
-      req.on('close', cleanup)
-      res.on?.('close', cleanup)
-      try {
-        await sendSse(res, 'ready', { phase: 'connecting', after: lastSequence })
-        await drainDurableEvents()
-        while (!closed && pending.length > 0) {
-          const buffered = pending.splice(0).sort((a, b) => a.sequence - b.sequence)
-          await drainDurableEvents()
-          for (const event of buffered) {
-            if (event.sequence <= lastSequence) continue
-            await drainDurableEvents()
-            if (!closed && event.sequence > lastSequence) await sendEvent(event)
-          }
-        }
-        replaying = false
-        for (const activity of pendingActivities.splice(0)) await sendActivity(activity)
-      } catch (error) {
-        await failStream(error)
-      }
-      if (!closed) {
-        // The in-memory subscription only observes events appended by this
-        // process. Polling the shared database keeps SSE streams live when a
-        // different application instance owns the turn. sendEvent's sequence
-        // cursor merges both sources without emitting an event twice.
-        databasePoll = setInterval(() => {
-          if (closed || pollQueued) return
-          pollQueued = true
-          queueDelivery(drainDurableEvents)
-            .catch(() => {})
-            .finally(() => { pollQueued = false })
-        }, resolveTurnEventStreamPollInterval(env))
-        databasePoll.unref?.()
-        heartbeat = setInterval(() => {
-          if (!res.destroyed && !res.writableEnded) res.write(': keepalive\n\n')
-        }, 15_000)
-        heartbeat.unref?.()
-      }
-      return
+      return await openTurnEventStream(req, res, url, runtime, userId)
     }
-
-    if (req.method === 'GET' && url.pathname === '/api/turns/events') {
-      const events = await readTurnEvents({
-        userId,
-        sessionId: url.searchParams.get('sessionId'),
-        turnId: url.searchParams.get('turnId'),
-        after: url.searchParams.get('after'),
-        limit: url.searchParams.get('limit'),
-      })
-      return sendJson(res, 200, { events: events.map(turnEventForClient) })
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/turns/run') {
-      // The first server-owned turn may import the complete legacy browser
-      // transcript. Keep this endpoint larger than ordinary JSON routes while
-      // retaining a finite cap against accidental or hostile payloads.
-      const body = await readJson(req, { maxBytes: MAX_TURN_RUN_BODY_BYTES })
-      const turn = await requireEngine().startTurn({
-        userId,
-        sessionId: body.sessionId,
-        turnId: body.turnId || undefined,
-        content: body.content,
-        displayContent: body.displayContent,
-        workspacePath: body.workspacePath,
-        locale: body.locale,
-        modelName: body.modelName || null,
-        modelProviderId: body.modelProviderId || null,
-        modelConfigRevision: body.modelConfigRevision ?? null,
-        modelMode: body.modelMode,
-        history: body.history,
-        agentId: body.agentId || null,
-        skillIds: body.skillIds,
-        skillDefinitions: body.skillDefinitions,
-        toolsConfig: body.toolsConfig,
-        intentMode: body.intentMode,
-        attachments: body.attachments,
-        authMode: resolveAuthMode(env),
-      })
-      return sendJson(res, 202, { turn })
-    }
-
-    if (parts[0] === 'api' && parts[1] === 'turns' && parts[2] && parts.length >= 3) {
-      const turnId = decodeURIComponent(parts[2])
-      if (req.method === 'GET' && parts[3] === 'model-request-recovery' && parts.length === 4) {
-        const recovery = await requireEngine().getPendingModelRequestRecovery({
-          userId,
-          sessionId: url.searchParams.get('sessionId'),
-          turnId,
-        })
-        return recovery
-          ? sendJson(res, 200, { recovery })
-          : sendJson(res, 404, {
-              error: {
-                code: 'MODEL_REQUEST_RECOVERY_NOT_FOUND',
-                message: 'model request recovery was not found',
-              },
-            })
-      }
-      if (req.method === 'POST' && parts[3] === 'model-request-recovery'
-        && parts[4] === 'resolve' && parts.length === 5) {
-        const body = await readJson(req)
-        const recovery = await requireEngine().resolvePendingModelRequest({
-          userId,
-          sessionId: body.sessionId,
-          turnId,
-          expectedCheckpointSequence: body.checkpointSequence,
-          modelRequestId: body.modelRequestId,
-          requestFingerprint: body.requestFingerprint,
-          providerId: body.providerId,
-          modelName: body.modelName,
-          configRevision: body.configRevision,
-          idempotencyKey: body.idempotencyKey,
-          confirmModelRequestId: body.confirmModelRequestId,
-          verificationConfirmed: body.verificationConfirmed,
-          resolution: body.resolution,
-          response: body.response,
-          receipt: body.receipt,
-          note: body.note,
-        })
-        const ready = ['not_sent', 'completed'].includes(recovery.resolution)
-        return sendJson(res, 200, {
-          recovery,
-          resume: {
-            ready,
-            sessionId: body.sessionId,
-            turnId,
-          },
-        })
-      }
-      if (req.method === 'GET' && parts.length === 3) {
-        const turn = await requireEngine().getTurn({
-          userId,
-          sessionId: url.searchParams.get('sessionId'),
-          turnId,
-        })
-        return turn
-          ? sendJson(res, 200, { turn })
-          : sendJson(res, 404, { error: { code: 'TURN_NOT_FOUND', message: 'turn not found' } })
-      }
-      if (req.method === 'POST' && parts[3] === 'steer' && parts.length === 4) {
-        const body = await readJson(req)
-        const steering = await requireEngine().steerTurn({
-          userId,
-          sessionId: body.sessionId,
-          turnId,
-          content: body.content,
-          clientRequestId: body.clientRequestId,
-          authMode: resolveAuthMode(env),
-        })
-        return sendJson(res, 202, { steering })
-      }
-      if (req.method === 'POST' && (parts[3] === 'cancel' || parts[3] === 'resume') && parts.length === 4) {
-        const body = await readJson(req)
-        const action = parts[3] === 'cancel' ? 'cancelTurn' : 'resumeTurn'
-        const turn = await requireEngine()[action]({
-          userId,
-          sessionId: body.sessionId,
-          turnId,
-          ...(parts[3] === 'resume' ? { resolution: body.resolution ?? null } : {}),
-          ...(parts[3] === 'resume' ? { retryRecovery: body.retryRecovery === true } : {}),
-          ...(parts[3] === 'resume' ? { retryFailed: body.retryFailed === true } : {}),
-          authMode: resolveAuthMode(env),
-        })
-        return sendJson(res, parts[3] === 'resume' ? 202 : 200, { turn })
-      }
-    }
-
-    return sendJson(res, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' } })
+    const collectionResponse = await handleTurnCollection(req, res, url, runtime, userId)
+    if (collectionResponse !== null) return collectionResponse
+    const resourceResponse = await handleTurnResource(req, res, url, parts, runtime, userId)
+    if (resourceResponse !== null) return resourceResponse
+    return sendJson(res, 405, {
+      error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' },
+    })
   } catch (error) {
     logWarn('turn.request_rejected', error, {
       method: req.method,

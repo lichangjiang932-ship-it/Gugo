@@ -1,10 +1,3 @@
-/**
- * 隔离子代理运行时的稳定入口。
- *
- * 策略、工具循环、持久化状态和批处理编排分别位于相邻模块；这里保留
- * 工具派发、单次运行编排以及向后兼容的公共导出。
- */
-
 import {
   callBackgroundModel,
   callBackgroundModelWithTools,
@@ -80,7 +73,6 @@ import {
 } from './subagentRunState.js'
 import { runSubagentToolLoop } from './subagentToolLoop.js'
 import { searchWeb } from './webSearchService.js'
-
 export {
   SUBAGENT_TYPES,
   configureSubagentLoopRunner,
@@ -91,11 +83,9 @@ export {
   rememberApprovedSubagentCall,
   runSubagentBatch,
 }
-
 export function listSubagentTypes() {
   return Object.entries(SUBAGENT_TYPES).map(([id, info]) => ({ id, label: info.label }))
 }
-
 /** 在子代理隔离上下文中派发一个工具调用。 */
 async function executeSubagentTool(toolName, args, {
   userId = null,
@@ -188,11 +178,9 @@ async function executeSubagentTool(toolName, args, {
       return { ok: false, error: `unknown subagent tool: ${toolName}` }
   }
 }
-
 executeSubagentTool.supportsIdempotentResume = ({ name, idempotencyKey } = {}) => (
   name === 'write_file' && Boolean(idempotencyKey)
 )
-
 async function subagentToolsLoop(options = {}) {
   return runSubagentToolLoop({
     ...options,
@@ -202,362 +190,395 @@ async function subagentToolsLoop(options = {}) {
       : options.runToolLoop,
   })
 }
-
-/** 运行一个隔离子代理。 */
-export async function runSubagent({
-  id = newSubagentRunId(),
-  userId,
-  type = 'general',
-  prompt,
-  description = '',
-  agentId = null,
-  skillIds = [],
-  skillDefinitions = [],
-  team = null,
-  parentSessionId = null,
-  parentMessageId = null,
-  modelName,
-  modelProviderId = null,
-  modelConfigRevision = null,
-  locale = 'zh',
-  signal,
-  depth = 0,
-  budget = null,
-  approvalContext = null,
-  callModel = callBackgroundModelWithTools,
-  executeTool = executeSubagentTool,
-  approveTool = requestApproval,
-  preparePromptContext,
-  runToolLoop = getDefaultSubagentLoopRunner(),
-  sideEffectLedger = null,
-  persistencePort = null,
-  resolveModelBinding = resolveSubagentModelBinding,
-  invokeSubagentProvider = invokeRuntimeSubagentProvider,
-  resumeBlocked = false,
-} = {}) {
-  if (!userId) throw new Error('userId is required')
-  if (!prompt || !String(prompt).trim()) throw new Error('prompt is required')
-  if (!SUBAGENT_TYPES[type]) throw new Error(`unknown subagent type: ${type}`)
-  if (!Number.isInteger(depth) || depth < 0 || depth > MAX_SUBAGENT_DEPTH) {
+function normalizeSubagentInput(options = {}) {
+  const input = {
+    id: options.id || newSubagentRunId(),
+    userId: options.userId,
+    type: options.type || 'general',
+    prompt: options.prompt,
+    description: options.description || '',
+    agentId: options.agentId || null,
+    skillIds: options.skillIds || [],
+    skillDefinitions: options.skillDefinitions || [],
+    team: options.team || null,
+    parentSessionId: options.parentSessionId || null,
+    parentMessageId: options.parentMessageId || null,
+    modelName: options.modelName,
+    modelProviderId: options.modelProviderId || null,
+    modelConfigRevision: options.modelConfigRevision ?? null,
+    locale: options.locale || 'zh',
+    signal: options.signal,
+    depth: options.depth ?? 0,
+    budget: options.budget || null,
+    approvalContext: options.approvalContext || null,
+    callModel: options.callModel || callBackgroundModelWithTools,
+    executeTool: options.executeTool || executeSubagentTool,
+    approveTool: options.approveTool || requestApproval,
+    preparePromptContext: options.preparePromptContext,
+    runToolLoop: options.runToolLoop || getDefaultSubagentLoopRunner(),
+    sideEffectLedger: options.sideEffectLedger || null,
+    persistencePort: options.persistencePort || null,
+    resolveModelBinding: options.resolveModelBinding || resolveSubagentModelBinding,
+    invokeSubagentProvider: options.invokeSubagentProvider || invokeRuntimeSubagentProvider,
+    resumeBlocked: options.resumeBlocked === true,
+  }
+  if (!input.userId) throw new Error('userId is required')
+  if (!input.prompt || !String(input.prompt).trim()) throw new Error('prompt is required')
+  if (!SUBAGENT_TYPES[input.type]) throw new Error(`unknown subagent type: ${input.type}`)
+  if (!Number.isInteger(input.depth) || input.depth < 0 || input.depth > MAX_SUBAGENT_DEPTH) {
     throw new Error(`subagent depth must be between 0 and ${MAX_SUBAGENT_DEPTH}`)
   }
-  const normalizedPrompt = String(prompt).trim()
-  const runPersistence = resolveRunPersistencePort(persistencePort)
-
-  const storedRun = await runPersistence.getRun({ id, userId })
+  input.normalizedPrompt = String(input.prompt).trim()
+  return input
+}
+async function prepareSubagentRuntime(input) {
+  const runPersistence = resolveRunPersistencePort(input.persistencePort)
+  const storedRun = await runPersistence.getRun({ id: input.id, userId: input.userId })
   const storedTrace = storedRun ? parseTrace(storedRun.trace) : []
   const normalizedLocale = normalizeTurnLocale(
-    storedTrace.find((event) => event?.type === 'start')?.locale || locale,
+    storedTrace.find((event) => event?.type === 'start')?.locale || input.locale,
   )
   const explicitBlockedResume = storedRun?.status === SUBAGENT_NEEDS_VERIFICATION
-    && resumeBlocked === true
+    && input.resumeBlocked
   if (storedRun) {
-    if (storedRun.agentType !== type || storedRun.prompt !== normalizedPrompt) {
+    if (storedRun.agentType !== input.type || storedRun.prompt !== input.normalizedPrompt) {
       throw new Error('subagent run id belongs to a different task')
     }
     if (!RESUMABLE_SUBAGENT_STATUSES.has(storedRun.status) && !explicitBlockedResume) {
       if (storedRun.status === 'running') throw new Error('subagent run is already running')
-      return toRun(storedRun)
+      return { terminal: toRun(storedRun) }
     }
   }
-
-  // 恢复时只信任创建运行时持久化的不可变模型快照。
-  const requestedModelName = String(storedRun ? (storedRun.modelName || '') : (modelName || '')).trim() || null
-  const requestedProviderId = String(storedRun ? (storedRun.modelProviderId || '') : (modelProviderId || '')).trim() || null
-  const requestedConfigRevision = Number(storedRun ? storedRun.modelConfigRevision : modelConfigRevision)
-  const normalizedConfigRevision = Number.isInteger(requestedConfigRevision) && requestedConfigRevision > 0
-    ? requestedConfigRevision
+  const requestedModelName = String(
+    storedRun ? (storedRun.modelName || '') : (input.modelName || ''),
+  ).trim() || null
+  const requestedProviderId = String(
+    storedRun ? (storedRun.modelProviderId || '') : (input.modelProviderId || ''),
+  ).trim() || null
+  const requestedRevision = Number(
+    storedRun ? storedRun.modelConfigRevision : input.modelConfigRevision,
+  )
+  const normalizedConfigRevision = Number.isInteger(requestedRevision) && requestedRevision > 0
+    ? requestedRevision
     : null
-  const modelBinding = resolveModelBinding({
-    userId,
+  const modelBinding = input.resolveModelBinding({
+    userId: input.userId,
     providerId: requestedProviderId || '',
     modelName: requestedModelName || '',
     configRevision: normalizedConfigRevision,
     requirePersistedBinding: Boolean(storedRun),
   })
   if (storedRun) {
-    const callerProviderId = String(modelProviderId || '').trim()
-    const callerModelName = String(modelName || '').trim()
+    const callerProviderId = String(input.modelProviderId || '').trim()
+    const callerModelName = String(input.modelName || '').trim()
     if ((callerProviderId && callerProviderId !== requestedProviderId)
       || (callerModelName && callerModelName !== requestedModelName)
-      || (modelConfigRevision != null && Number(modelConfigRevision) !== normalizedConfigRevision)) {
+      || (input.modelConfigRevision != null
+        && Number(input.modelConfigRevision) !== normalizedConfigRevision)) {
       throw new Error('subagent run model binding does not match the persisted snapshot')
     }
   }
-
-  const slotLease = createSlotLease(userId)
-  await slotLease.acquire(signal)
-  const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
-  const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
-
+  const slotLease = createSlotLease(input.userId)
+  await slotLease.acquire(input.signal)
   const trace = storedRun
     ? storedTrace
     : [
-        { type: 'start', description, locale: normalizedLocale, at: now() },
-        ...(team ? [{ type: 'team', team, at: now() }] : []),
+        { type: 'start', description: input.description, locale: normalizedLocale, at: now() },
+        ...(input.team ? [{ type: 'team', team: input.team, at: now() }] : []),
       ]
   if (storedRun) trace.push({ type: 'resume', fromStatus: storedRun.status, at: now() })
-  const onTranscriptEvent = (event) => trace.push({ ...event, type: 'transcript', eventType: event.type })
-  let checkpointState = checkpointFromTrace(trace)
-  let ownsRunAttempt = false
-  let terminalWriteStarted = false
-
-  try {
-    if (storedRun) await markRunRunning(runPersistence, { id, userId, trace })
-    else await insertRun(runPersistence, {
-      id,
-      userId,
-      type,
-      prompt: normalizedPrompt,
-      parentSessionId,
-      parentMessageId,
+  const state = {
+    checkpointState: checkpointFromTrace(trace),
+    ownsRunAttempt: false,
+    terminalWriteStarted: false,
+  }
+  return {
+    input,
+    runPersistence,
+    storedRun,
+    normalizedLocale,
+    explicitBlockedResume,
+    modelBinding,
+    slotLease,
+    effectiveBudget: input.budget || createJobBudget({ ...SUBAGENT_BUDGET }),
+    effectiveApprovalContext: input.approvalContext || createSubagentApprovalContext(),
+    trace,
+    state,
+    onTranscriptEvent(event) {
+      trace.push({ ...event, type: 'transcript', eventType: event.type })
+    },
+  }
+}
+function dispatchSubagentStop(runtime, status, args) {
+  const { input } = runtime
+  void dispatchHooks({
+    userId: input.userId,
+    event: 'subagent_stop',
+    tool: input.type,
+    args,
+    sessionId: input.parentSessionId || null,
+    requestId: input.id,
+    hookInvocationId: `subagent:${input.id}:stop:${status}`,
+  }).catch(() => { /* subagent_stop hook is best-effort */ })
+}
+async function persistSubagentRunStart(runtime) {
+  const { input, storedRun, runPersistence, trace, modelBinding, state } = runtime
+  if (storedRun) {
+    await markRunRunning(runPersistence, { id: input.id, userId: input.userId, trace })
+  } else {
+    await insertRun(runPersistence, {
+      id: input.id,
+      userId: input.userId,
+      type: input.type,
+      prompt: input.normalizedPrompt,
+      parentSessionId: input.parentSessionId,
+      parentMessageId: input.parentMessageId,
       modelName: modelBinding.modelName || null,
       modelProviderId: modelBinding.providerId || null,
       modelConfigRevision: modelBinding.configRevision || null,
       trace,
     })
-    ownsRunAttempt = true
-
-    if (!explicitBlockedResume) {
-      const previousProvider = providerProvenanceFromTrace(trace)
-      appendProviderProvenance(trace, { decision: 'invoking' })
-      await saveRunTrace(runPersistence, { id, userId, trace })
-      let providerResolution
-      try {
-        const initialDescription = storedRun
-          ? parseTrace(storedRun.trace).find((event) => event?.type === 'start')?.description
-          : description
-        const initialTeam = storedRun
-          ? parseTrace(storedRun.trace).find((event) => event?.type === 'team')?.team
-          : team
-        providerResolution = await invokeSubagentProvider({
-          runId: id,
-          resume: Boolean(storedRun),
-          type,
-          prompt: normalizedPrompt,
-          description: initialDescription || '',
-          depth,
-          model: {
-            name: modelBinding.modelName || null,
-            providerId: modelBinding.providerId || null,
-            configRevision: modelBinding.configRevision || null,
-          },
-          team: initialTeam || null,
-        }, {
-          signal,
-          timeoutMs: SUBAGENT_BUDGET.maxWallMs,
-        })
-        const providerDecision = providerResolution?.provenance?.decision
-        const validBuiltin = providerResolution?.kind === 'builtin'
-          && (providerDecision === 'absent' || providerDecision === 'decline')
-        const validHandled = providerResolution?.kind === 'handled'
-          && providerDecision === 'handled'
-          && providerResolution.terminal
-          && typeof providerResolution.terminal === 'object'
-        if (!validBuiltin && !validHandled) {
-          throw subagentProviderError(
-            'SUBAGENT_PROVIDER_RESULT_INVALID',
-            'runtime subagent provider returned an invalid resolution',
-          )
-        }
-        if (storedRun
-          && (previousProvider?.decision === 'handled' || previousProvider?.decision === 'invoking')
-          && providerResolution.kind === 'builtin'
-          && providerDecision === 'absent') {
-          throw subagentProviderError(
-            'SUBAGENT_PROVIDER_UNAVAILABLE',
-            'runtime subagent provider is unavailable for this durable run',
-            previousProvider,
-          )
-        }
-      } catch (error) {
-        appendProviderProvenance(trace, error?.providerProvenance || {
-          decision: 'error',
-          error: error?.code || 'SUBAGENT_PROVIDER_INVOCATION_FAILED',
-        })
-        throw error
-      }
-      appendProviderProvenance(trace, providerResolution?.provenance)
-      if (providerResolution?.kind === 'handled') {
-        const status = providerResolution.terminal.status
-        const reason = providerResolution.terminal.reason
-        const resultText = providerResolution.terminal.text || reason || ''
-        trace.push({
-          type: status === 'completed' ? 'done' : status,
-          ...(reason ? { reason } : {}),
-          at: now(),
-        })
-        void dispatchHooks({
-          userId,
-          event: 'subagent_stop',
-          tool: type,
-          args: { resultText: boundedTranscriptValue(resultText), status },
-          sessionId: parentSessionId || null,
-          requestId: id,
-          hookInvocationId: `subagent:${id}:stop:${status}`,
-        }).catch(() => { /* subagent_stop hook is best-effort */ })
-        terminalWriteStarted = true
-        return await updateRun(runPersistence, {
-          id,
-          userId,
-          status,
-          resultText,
-          trace,
-        })
-      }
-    }
-    const { system, tools } = SUBAGENT_TYPES[type]
-    const effectiveTools = tools.filter((spec) => (
-      spec?.function?.name !== 'lsp' || hasConfiguredLspProvider()
-    ))
-    const promptContextMessages = prepareOptionalPromptContext({
-      preparePromptContext,
-      input: {
-        userId,
-        agentId,
-        skillIds: normalizePromptContextIds(skillIds),
-        skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
-        query: normalizedPrompt,
+  }
+  state.ownsRunAttempt = true
+}
+async function invokeSubagentProviderPhase(runtime) {
+  const { input, storedRun, trace, modelBinding, runPersistence } = runtime
+  if (runtime.explicitBlockedResume) return null
+  const previousProvider = providerProvenanceFromTrace(trace)
+  appendProviderProvenance(trace, { decision: 'invoking' })
+  await saveRunTrace(runPersistence, { id: input.id, userId: input.userId, trace })
+  let resolution
+  try {
+    const initialDescription = storedRun
+      ? parseTrace(storedRun.trace).find((event) => event?.type === 'start')?.description
+      : input.description
+    const initialTeam = storedRun
+      ? parseTrace(storedRun.trace).find((event) => event?.type === 'team')?.team
+      : input.team
+    resolution = await input.invokeSubagentProvider({
+      runId: input.id,
+      resume: Boolean(storedRun),
+      type: input.type,
+      prompt: input.normalizedPrompt,
+      description: initialDescription || '',
+      depth: input.depth,
+      model: {
+        name: modelBinding.modelName || null,
+        providerId: modelBinding.providerId || null,
+        configRevision: modelBinding.configRevision || null,
       },
-      scope: 'subagent.prompt',
-    }).messages
-    const messages = [
+      team: initialTeam || null,
+    }, { signal: input.signal, timeoutMs: SUBAGENT_BUDGET.maxWallMs })
+    const decision = resolution?.provenance?.decision
+    const validBuiltin = resolution?.kind === 'builtin'
+      && (decision === 'absent' || decision === 'decline')
+    const validHandled = resolution?.kind === 'handled'
+      && decision === 'handled'
+      && resolution.terminal
+      && typeof resolution.terminal === 'object'
+    if (!validBuiltin && !validHandled) {
+      throw subagentProviderError(
+        'SUBAGENT_PROVIDER_RESULT_INVALID',
+        'runtime subagent provider returned an invalid resolution',
+      )
+    }
+    if (storedRun
+      && (previousProvider?.decision === 'handled' || previousProvider?.decision === 'invoking')
+      && resolution.kind === 'builtin'
+      && decision === 'absent') {
+      throw subagentProviderError(
+        'SUBAGENT_PROVIDER_UNAVAILABLE',
+        'runtime subagent provider is unavailable for this durable run',
+        previousProvider,
+      )
+    }
+  } catch (error) {
+    appendProviderProvenance(trace, error?.providerProvenance || {
+      decision: 'error',
+      error: error?.code || 'SUBAGENT_PROVIDER_INVOCATION_FAILED',
+    })
+    throw error
+  }
+  appendProviderProvenance(trace, resolution?.provenance)
+  if (resolution?.kind !== 'handled') return null
+  const status = resolution.terminal.status
+  const reason = resolution.terminal.reason
+  const resultText = resolution.terminal.text || reason || ''
+  trace.push({ type: status === 'completed' ? 'done' : status, ...(reason ? { reason } : {}), at: now() })
+  dispatchSubagentStop(runtime, status, { resultText: boundedTranscriptValue(resultText), status })
+  runtime.state.terminalWriteStarted = true
+  return updateRun(runPersistence, {
+    id: input.id, userId: input.userId, status, resultText, trace,
+  })
+}
+function buildSubagentMessages(runtime) {
+  const { input } = runtime
+  const { system, tools } = SUBAGENT_TYPES[input.type]
+  const effectiveTools = tools.filter((spec) => (
+    spec?.function?.name !== 'lsp' || hasConfiguredLspProvider()
+  ))
+  const promptContextMessages = prepareOptionalPromptContext({
+    preparePromptContext: input.preparePromptContext,
+    input: {
+      userId: input.userId,
+      agentId: input.agentId,
+      skillIds: normalizePromptContextIds(input.skillIds),
+      skillDefinitions: prepareInlineSkillsForPrompt({
+        skillIds: input.skillIds,
+        skillDefinitions: input.skillDefinitions,
+      }),
+      query: input.normalizedPrompt,
+    },
+    scope: 'subagent.prompt',
+  }).messages
+  return {
+    effectiveTools,
+    messages: [
       { role: 'system', content: buildSafetyBlock().text },
       ...promptContextMessages,
       {
         role: 'system',
-        content: type === 'general'
+        content: input.type === 'general'
           ? `${system}\nYou may call Agent with up to ${SUBAGENT_MAX_PER_BATCH} independent tasks to run them in parallel. Nested delegation is bounded to ${MAX_SUBAGENT_DEPTH} levels.`
           : system,
       },
-      ...(team ? [{
+      ...(input.team ? [{
         role: 'system',
-        content: `# Team Context\nTeam: ${team.name} (${team.id})\nMode: ${team.mode}\nYour role: ${team.role || description || type}\nWork only on your assigned scope. Your transcript is isolated from other members; return a concise result for the leader to merge.`,
+        content: `# Team Context\nTeam: ${input.team.name} (${input.team.id})\nMode: ${input.team.mode}\nYour role: ${input.team.role || input.description || input.type}\nWork only on your assigned scope. Your transcript is isolated from other members; return a concise result for the leader to merge.`,
       }] : []),
-      { role: 'user', content: normalizedPrompt },
-    ]
-
-    if (storedRun && checkpointState) {
-      checkpointState = makeCheckpointResumable(checkpointState)
-      const resumedTrace = traceWithCheckpoint(trace, checkpointState)
-      trace.splice(0, trace.length, ...resumedTrace)
-      await saveRunTrace(runPersistence, { id, userId, trace })
-    }
-    const loopResult = effectiveTools.length
-      ? await subagentToolsLoop({
-          messages,
-          tools: effectiveTools,
-          signal,
-          userId,
-          modelName: modelBinding.modelName || undefined,
-          modelProviderId: modelBinding.providerId || null,
-          modelConfigRevision: modelBinding.configRevision || null,
-          modelRuntimeEnv: modelBinding.env || null,
-          locale: normalizedLocale,
-          skillIds: normalizePromptContextIds(skillIds),
-          skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
-          sessionId: `subagent:${id}`,
-          runId: id,
-          depth,
-          budget: effectiveBudget,
-          approvalContext: effectiveApprovalContext,
-          slotLease,
-          callModel,
-          executeTool,
-          approveTool,
-          runToolLoop,
-          sideEffectLedger,
-          onTranscriptEvent,
-          loadCheckpoint: () => checkpointState ? { state: checkpointState } : null,
-          saveCheckpoint: async (state) => {
-            const saved = await saveRunCheckpoint(runPersistence, { id, userId, trace, state })
-            if (saved?.state) checkpointState = saved.state
-            return saved
-          },
-        })
-      : await callBackgroundModel({
-          modelName: modelBinding.modelName || undefined,
-          modelProviderId: modelBinding.env ? undefined : (modelBinding.providerId || undefined),
-          signal,
-          messages,
-          userId: modelBinding.env ? null : userId,
-          usageOwnerId: userId,
-          ...(modelBinding.env ? { env: modelBinding.env } : {}),
-        }).then((result) => {
-          onTranscriptEvent({ type: 'model_response', content: boundedTranscriptValue(result), at: now() })
-          return { text: result }
-        })
-
-    const status = subagentStatusForLoopResult(loopResult)
-    const resultText = String(loopResult?.text || '')
-    if (status === 'interrupted' && checkpointState) {
-      checkpointState = makeCheckpointResumable(checkpointState)
-      await saveRunCheckpoint(runPersistence, { id, userId, trace, state: checkpointState })
-    }
-    trace.push({
-      type: status === 'completed' ? 'done' : status,
-      ...(loopResult?.reason ? { reason: loopResult.reason } : {}),
-      at: now(),
-    })
-    void dispatchHooks({
-      userId,
-      event: 'subagent_stop',
-      tool: type,
-      args: { resultText: boundedTranscriptValue(resultText), status },
-      sessionId: parentSessionId || null,
-      requestId: id,
-      hookInvocationId: `subagent:${id}:stop:${status}`,
-    }).catch(() => { /* subagent_stop hook is best-effort */ })
-    terminalWriteStarted = true
-    return await updateRun(runPersistence, {
-      id,
-      userId,
-      status,
-      resultText,
-      trace,
-    })
-  } catch (err) {
-    if (!ownsRunAttempt || terminalWriteStarted) throw err
-    const recovery = sideEffectRecoveryFields(err, { runId: id, checkpointState })
-    const status = recovery
-      ? SUBAGENT_NEEDS_VERIFICATION
-      : err?.name === 'AbortError' ? 'interrupted' : 'failed'
-    trace.push(recovery
-      ? { type: SUBAGENT_RECOVERY_EVENT, ...recovery, at: now() }
-      : { type: 'error', error: err?.message || String(err), at: now() })
-    const publicError = recovery ? sideEffectRecoveryError(recovery) : err
-    void dispatchHooks({
-      userId,
-      event: 'subagent_stop',
-      tool: type,
-      args: recovery
-        ? { status, ...recovery }
-        : { error: err?.message || String(err), status },
-      sessionId: parentSessionId || null,
-      requestId: id,
-      hookInvocationId: `subagent:${id}:stop:${status}`,
-    }).catch(() => { /* subagent_stop hook is best-effort */ })
-    try {
-      terminalWriteStarted = true
-      await updateRun(runPersistence, { id, userId, status, resultText: publicError.message, trace })
-    } catch (persistenceError) {
-      const aggregate = new AggregateError(
-        [publicError, persistenceError],
-        'Subagent failed and its terminal state could not be persisted',
-        { cause: publicError },
-      )
-      aggregate.code = 'SUBAGENT_TERMINAL_PERSISTENCE_FAILED'
-      aggregate.retryable = false
-      throw aggregate
-    }
-    throw publicError
-  } finally {
-    slotLease.release()
+      { role: 'user', content: input.normalizedPrompt },
+    ],
   }
 }
-
+async function executeBuiltinSubagent(runtime) {
+  const { input, modelBinding, state, trace, runPersistence } = runtime
+  const { effectiveTools, messages } = buildSubagentMessages(runtime)
+  if (runtime.storedRun && state.checkpointState) {
+    state.checkpointState = makeCheckpointResumable(state.checkpointState)
+    trace.splice(0, trace.length, ...traceWithCheckpoint(trace, state.checkpointState))
+    await saveRunTrace(runPersistence, { id: input.id, userId: input.userId, trace })
+  }
+  const loopResult = effectiveTools.length
+    ? await subagentToolsLoop({
+        messages,
+        tools: effectiveTools,
+        signal: input.signal,
+        userId: input.userId,
+        modelName: modelBinding.modelName || undefined,
+        modelProviderId: modelBinding.providerId || null,
+        modelConfigRevision: modelBinding.configRevision || null,
+        modelRuntimeEnv: modelBinding.env || null,
+        locale: runtime.normalizedLocale,
+        skillIds: normalizePromptContextIds(input.skillIds),
+        skillDefinitions: prepareInlineSkillsForPrompt({
+          skillIds: input.skillIds,
+          skillDefinitions: input.skillDefinitions,
+        }),
+        sessionId: `subagent:${input.id}`,
+        runId: input.id,
+        depth: input.depth,
+        budget: runtime.effectiveBudget,
+        approvalContext: runtime.effectiveApprovalContext,
+        slotLease: runtime.slotLease,
+        callModel: input.callModel,
+        executeTool: input.executeTool,
+        approveTool: input.approveTool,
+        runToolLoop: input.runToolLoop,
+        sideEffectLedger: input.sideEffectLedger,
+        onTranscriptEvent: runtime.onTranscriptEvent,
+        loadCheckpoint: () => state.checkpointState ? { state: state.checkpointState } : null,
+        saveCheckpoint: async (checkpoint) => {
+          const saved = await saveRunCheckpoint(runPersistence, {
+            id: input.id, userId: input.userId, trace, state: checkpoint,
+          })
+          if (saved?.state) state.checkpointState = saved.state
+          return saved
+        },
+      })
+    : await callBackgroundModel({
+        modelName: modelBinding.modelName || undefined,
+        modelProviderId: modelBinding.env ? undefined : (modelBinding.providerId || undefined),
+        signal: input.signal,
+        messages,
+        userId: modelBinding.env ? null : input.userId,
+        usageOwnerId: input.userId,
+        ...(modelBinding.env ? { env: modelBinding.env } : {}),
+      }).then((result) => {
+        runtime.onTranscriptEvent({
+          type: 'model_response', content: boundedTranscriptValue(result), at: now(),
+        })
+        return { text: result }
+      })
+  const status = subagentStatusForLoopResult(loopResult)
+  const resultText = String(loopResult?.text || '')
+  if (status === 'interrupted' && state.checkpointState) {
+    state.checkpointState = makeCheckpointResumable(state.checkpointState)
+    await saveRunCheckpoint(runPersistence, {
+      id: input.id, userId: input.userId, trace, state: state.checkpointState,
+    })
+  }
+  trace.push({
+    type: status === 'completed' ? 'done' : status,
+    ...(loopResult?.reason ? { reason: loopResult.reason } : {}),
+    at: now(),
+  })
+  dispatchSubagentStop(runtime, status, { resultText: boundedTranscriptValue(resultText), status })
+  state.terminalWriteStarted = true
+  return updateRun(runPersistence, {
+    id: input.id, userId: input.userId, status, resultText, trace,
+  })
+}
+async function handleSubagentFailure(runtime, error) {
+  const { input, state, trace, runPersistence } = runtime
+  if (!state.ownsRunAttempt || state.terminalWriteStarted) throw error
+  const recovery = sideEffectRecoveryFields(error, {
+    runId: input.id,
+    checkpointState: state.checkpointState,
+  })
+  const status = recovery
+    ? SUBAGENT_NEEDS_VERIFICATION
+    : error?.name === 'AbortError' ? 'interrupted' : 'failed'
+  trace.push(recovery
+    ? { type: SUBAGENT_RECOVERY_EVENT, ...recovery, at: now() }
+    : { type: 'error', error: error?.message || String(error), at: now() })
+  const publicError = recovery ? sideEffectRecoveryError(recovery) : error
+  dispatchSubagentStop(runtime, status, recovery
+    ? { status, ...recovery }
+    : { error: error?.message || String(error), status })
+  try {
+    state.terminalWriteStarted = true
+    await updateRun(runPersistence, {
+      id: input.id, userId: input.userId, status, resultText: publicError.message, trace,
+    })
+  } catch (persistenceError) {
+    const aggregate = new AggregateError(
+      [publicError, persistenceError],
+      'Subagent failed and its terminal state could not be persisted',
+      { cause: publicError },
+    )
+    aggregate.code = 'SUBAGENT_TERMINAL_PERSISTENCE_FAILED'
+    aggregate.retryable = false
+    throw aggregate
+  }
+  throw publicError
+}
+/** Run one isolated subagent with durable recovery and bounded delegation. */
+export async function runSubagent(options = {}) {
+  const input = normalizeSubagentInput(options)
+  const runtime = await prepareSubagentRuntime(input)
+  if (runtime.terminal) return runtime.terminal
+  try {
+    await persistSubagentRunStart(runtime)
+    const providerResult = await invokeSubagentProviderPhase(runtime)
+    if (providerResult) return providerResult
+    return await executeBuiltinSubagent(runtime)
+  } catch (error) {
+    return handleSubagentFailure(runtime, error)
+  } finally {
+    runtime.slotLease.release()
+  }
+}
 configureSubagentBatchRunner(runSubagent)
-
 // 保持测试注入 API 不变，避免拆分影响调用方。
 export const _testing = {
   subagentToolsLoop,
