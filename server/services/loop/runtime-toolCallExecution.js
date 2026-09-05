@@ -149,20 +149,69 @@ export function createToolAuthorizationContext({
   }
 }
 
-export async function executeAuthorizedTool({
-  state,
+async function blockedFinalAuthorization({
+  finalAuthorizationCheck,
+  sideEffectInput,
+  preparedSideEffect,
+  sideEffectExecution,
+}) {
+  if (typeof finalAuthorizationCheck !== 'function') return null
+  let authorization
+  try {
+    authorization = await finalAuthorizationCheck()
+  } catch {
+    authorization = {
+      proceed: false,
+      code: 'hook_authorization_verification_failed',
+      reason: 'Hook 授权验证失败，已保守拒绝执行',
+    }
+  }
+  if (authorization?.proceed) return null
+  const result = {
+    ok: false,
+    code: authorization?.code || 'hook_authorization_provenance_invalid',
+    error: authorization?.reason || 'Hook 授权已失效，工具未执行',
+    systemFailure: true,
+    retryable: false,
+  }
+  if (sideEffectInput) {
+    if (preparedSideEffect.resumedExecuting) {
+      sideEffectExecution.blockResumedExecution()
+    } else {
+      sideEffectExecution.markExecuting(sideEffectInput)
+      sideEffectExecution.finish(sideEffectInput, result, () => false)
+    }
+  }
+  return result
+}
+
+async function markDurableToolExecuting({
+  durableExecution,
   iteration,
   call,
-  toolName,
-  executionArgs,
   gate,
-  durableExecution,
   checkpointPolicyProvenance,
-  resumedExecutingSideEffect,
-  sideEffectExecution,
-  expectedDynamicRegistrationId,
-  finalAuthorizationCheck = null,
-  dependencies,
+  executionArgs,
+  executionMetadata,
+}) {
+  if (!durableExecution) return
+  await iteration.markCall(call, {
+    checkpointStatus: 'executing',
+    checkpointApprovalId: gate.approvalId || call.checkpointApprovalId || null,
+    checkpointPolicyProvenance: gate.policyProvenance ?? checkpointPolicyProvenance ?? null,
+    checkpointHookAuthorizationProvenance: gate.hookAuthorized
+      ? gate.hookAuthorizationProvenance || null
+      : null,
+    checkpointExecutionArgs: executionArgs,
+    checkpointReadOnly: executionMetadata.isReadOnly === true,
+    idempotencyKey: call.idempotencyKey,
+  })
+}
+
+export async function executeAuthorizedTool({
+  state, iteration, call, toolName, executionArgs, gate, durableExecution,
+  checkpointPolicyProvenance, resumedExecutingSideEffect, sideEffectExecution,
+  expectedDynamicRegistrationId, finalAuthorizationCheck = null, dependencies,
 }) {
   const {
     CHECKPOINT_FLUSH_ERROR_CODE,
@@ -194,19 +243,15 @@ export async function executeAuthorizedTool({
     userId: state.job?.userId || null,
   })
   const abortScope = createToolAbortScope(state.signal, executionMetadata.interruptBehavior)
-  if (durableExecution) {
-    await iteration.markCall(call, {
-      checkpointStatus: 'executing',
-      checkpointApprovalId: gate.approvalId || call.checkpointApprovalId || null,
-      checkpointPolicyProvenance: gate.policyProvenance ?? checkpointPolicyProvenance ?? null,
-      checkpointHookAuthorizationProvenance: gate.hookAuthorized
-        ? gate.hookAuthorizationProvenance || null
-        : null,
-      checkpointExecutionArgs: executionArgs,
-      checkpointReadOnly: executionMetadata.isReadOnly === true,
-      idempotencyKey: call.idempotencyKey,
-    })
-  }
+  await markDurableToolExecuting({
+    durableExecution,
+    iteration,
+    call,
+    gate,
+    checkpointPolicyProvenance,
+    executionArgs,
+    executionMetadata,
+  })
 
   let result
   let sideEffectStarted = false
@@ -236,36 +281,15 @@ export async function executeAuthorizedTool({
           checkpointFailure = error
           throw error
         }
-        if (typeof finalAuthorizationCheck === 'function') {
-          let authorization
-          try {
-            authorization = await finalAuthorizationCheck()
-          } catch {
-            authorization = {
-              proceed: false,
-              code: 'hook_authorization_verification_failed',
-              reason: 'Hook 授权验证失败，已保守拒绝执行',
-            }
-          }
-          if (!authorization?.proceed) {
-            authorizationBlocked = true
-            const blockedResult = {
-              ok: false,
-              code: authorization?.code || 'hook_authorization_provenance_invalid',
-              error: authorization?.reason || 'Hook 授权已失效，工具未执行',
-              systemFailure: true,
-              retryable: false,
-            }
-            if (sideEffectInput) {
-              if (preparedSideEffect.resumedExecuting) {
-                sideEffectExecution.blockResumedExecution()
-              } else {
-                sideEffectExecution.markExecuting(sideEffectInput)
-                sideEffectExecution.finish(sideEffectInput, blockedResult, () => false)
-              }
-            }
-            return blockedResult
-          }
+        const blockedResult = await blockedFinalAuthorization({
+          finalAuthorizationCheck,
+          sideEffectInput,
+          preparedSideEffect,
+          sideEffectExecution,
+        })
+        if (blockedResult) {
+          authorizationBlocked = true
+          return blockedResult
         }
         if (sideEffectInput && !preparedSideEffect.resumedExecuting) {
           sideEffectExecution.markExecuting(sideEffectInput)

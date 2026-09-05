@@ -23,6 +23,68 @@ function checkpointToolSpecs(executionEnvironment) {
   return specs
 }
 
+function projectHostToolCatalog({
+  resolvedToolSpecs,
+  directoryAuthorizationCatalogNames,
+  toolResolutionDecision,
+  userId,
+  effectiveToolsConfig,
+  effectiveApprovalMode,
+  modelToolFileAccessStatus,
+}) {
+  const hostExcluded = []
+  let resolverSpecs = Array.isArray(resolvedToolSpecs) ? resolvedToolSpecs : []
+  if (directoryAuthorizationCatalogNames) {
+    resolverSpecs = resolverSpecs.filter((spec) => {
+      const name = String(spec?.function?.name || '').trim()
+      if (directoryAuthorizationCatalogNames.has(name)) return true
+      if (name) {
+        hostExcluded.push({
+          name,
+          stage: 'permission',
+          reason: 'directory_authorization_catalog_frozen',
+        })
+      }
+      return false
+    })
+  }
+  const projected = projectToolSpecsForRuntimePolicy(resolverSpecs, {
+    userId,
+    toolsConfig: effectiveToolsConfig,
+    permissionMode: effectiveApprovalMode,
+    fileAccessStatus: modelToolFileAccessStatus,
+    onExcluded: (entry) => hostExcluded.push(entry),
+  })
+  const eligibleToolNames = projected
+    .map((spec) => String(spec?.function?.name || '').trim())
+    .filter(Boolean)
+    .sort()
+    .slice(0, 256)
+  const existingExcluded = Array.isArray(toolResolutionDecision?.excludedTools)
+    ? toolResolutionDecision.excludedTools
+    : []
+  const excludedTools = []
+  const excludedKeys = new Set()
+  for (const entry of [...existingExcluded, ...hostExcluded]) {
+    const key = `${String(entry?.name || '')}\u0000${String(entry?.stage || '')}\u0000${String(entry?.reason || '')}`
+    if (!entry?.name || excludedKeys.has(key)) continue
+    excludedKeys.add(key)
+    excludedTools.push(entry)
+  }
+  return {
+    resolvedToolSpecs: projected,
+    toolResolutionDecision: {
+      version: 1,
+      ...toolResolutionDecision,
+      eligibleToolNames,
+      excludedTools,
+      discoveryIssues: Array.isArray(toolResolutionDecision?.discoveryIssues)
+        ? toolResolutionDecision.discoveryIssues
+        : [],
+    },
+  }
+}
+
 /**
  * Resolve the host-owned tool and permission context passed to one Turn loop.
  *
@@ -139,54 +201,15 @@ export function createTurnExecutionToolContextRuntime({
         }
       }
       if (!chatOnlyMode) {
-        const hostExcluded = []
-        let resolverSpecs = Array.isArray(resolvedToolSpecs) ? resolvedToolSpecs : []
-        if (directoryAuthorizationCatalogNames) {
-          resolverSpecs = resolverSpecs.filter((spec) => {
-            const name = String(spec?.function?.name || '').trim()
-            if (directoryAuthorizationCatalogNames.has(name)) return true
-            if (name) {
-              hostExcluded.push({
-                name,
-                stage: 'permission',
-                reason: 'directory_authorization_catalog_frozen',
-              })
-            }
-            return false
-          })
-        }
-        resolvedToolSpecs = projectToolSpecsForRuntimePolicy(resolverSpecs, {
+        ;({ resolvedToolSpecs, toolResolutionDecision } = projectHostToolCatalog({
+          resolvedToolSpecs,
+          directoryAuthorizationCatalogNames,
+          toolResolutionDecision,
           userId,
-          toolsConfig: effectiveToolsConfig,
-          permissionMode: effectiveApprovalMode,
-          fileAccessStatus: modelToolFileAccessStatus,
-          onExcluded: (entry) => hostExcluded.push(entry),
-        })
-        const eligibleToolNames = resolvedToolSpecs
-          .map((spec) => String(spec?.function?.name || '').trim())
-          .filter(Boolean)
-          .sort()
-          .slice(0, 256)
-        const existingExcluded = Array.isArray(toolResolutionDecision?.excludedTools)
-          ? toolResolutionDecision.excludedTools
-          : []
-        const excludedTools = []
-        const excludedKeys = new Set()
-        for (const entry of [...existingExcluded, ...hostExcluded]) {
-          const key = `${String(entry?.name || '')}\u0000${String(entry?.stage || '')}\u0000${String(entry?.reason || '')}`
-          if (!entry?.name || excludedKeys.has(key)) continue
-          excludedKeys.add(key)
-          excludedTools.push(entry)
-        }
-        toolResolutionDecision = {
-          version: 1,
-          ...toolResolutionDecision,
-          eligibleToolNames,
-          excludedTools,
-          discoveryIssues: Array.isArray(toolResolutionDecision?.discoveryIssues)
-            ? toolResolutionDecision.discoveryIssues
-            : [],
-        }
+          effectiveToolsConfig,
+          effectiveApprovalMode,
+          modelToolFileAccessStatus,
+        }))
       }
       return {
         normalizedModelMode,
