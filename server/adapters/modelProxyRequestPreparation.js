@@ -37,6 +37,93 @@ function frozenPreparation(value) {
   })
 }
 
+async function applyVisionPreparation({
+  req,
+  res,
+  testMode,
+  runtimeEnv,
+  selectedModel,
+  requestProfile,
+  resolvedCandidates,
+  messages,
+  hasVisionContent,
+}) {
+  const hasVisionCandidate = resolvedCandidates.some((candidate) => (
+    profileForConfig(candidate, runtimeEnv).supportsVision
+  ))
+  if (testMode || !hasVisionContent(messages)
+    || requestProfile.supportsVision || hasVisionCandidate) return messages
+  const token = authToken(req)
+  const session = token ? getSessionByToken(token) : null
+  const userId = session?.user_id || null
+  if (hasVisionAssistConfigured({ userId, env: runtimeEnv })) {
+    try {
+      const assist = await attachVisionDescriptions({ messages, userId, env: runtimeEnv })
+      res.setHeader('X-Vision-Assist-Count', String(assist.assistCount))
+      if (assist.failures.length) res.setHeader('X-Vision-Assist-Failures', String(assist.failures.length))
+      return assist.messages
+    } catch (error) {
+      logWarn('vision.assist', error, { userId, modelName: selectedModel })
+      const fallback = replaceUnsupportedVisionContent({ messages, modelName: selectedModel })
+      res.setHeader('X-Vision-Fallback-Count', String(fallback.replacementCount))
+      res.setHeader('X-Vision-Fallback-Reason', 'assist_failed')
+      return fallback.messages
+    }
+  }
+  const fallback = replaceUnsupportedVisionContent({ messages, modelName: selectedModel })
+  res.setHeader('X-Vision-Fallback-Count', String(fallback.replacementCount))
+  res.setHeader('X-Vision-Fallback-Reason', 'assist_unavailable')
+  return fallback.messages
+}
+
+async function compileRequestSystemPrompt({ session, body, compactionArchivePort }) {
+  const messages = []
+  const safety = buildSafetyBlock()
+  messages.push({ role: 'system', content: safety.text })
+  const fingerprints = { identity: 'empty', ishiki: 'empty', skills: 'empty', sessions: 'empty' }
+  let injectedAgentId = null
+  try {
+    if (getRuntimeEnv().AGENT_INJECT_ENABLED !== '0') {
+      const requestedAgentId = typeof body.agentId === 'string' ? body.agentId : null
+      let agent = requestedAgentId ? getAgent({ userId: session.user_id, id: requestedAgentId }) : null
+      if (!agent) agent = ensureDefaultAgent({ userId: session.user_id })
+      const identity = buildIdentityBlock({ agent })
+      const ishiki = buildIshikiBlock({ agent })
+      fingerprints.identity = identity.fingerprint
+      fingerprints.ishiki = ishiki.fingerprint
+      if (identity.text) messages.push({ role: 'system', content: identity.text })
+      if (ishiki.text) messages.push({ role: 'system', content: ishiki.text })
+      if (identity.text || ishiki.text) injectedAgentId = agent.id
+    }
+  } catch (error) {
+    logWarn('agent.inject', error, { userId: session.user_id })
+  }
+  try {
+    const skills = buildSkillsBlock({
+      userId: session.user_id,
+      agentId: injectedAgentId,
+      skillIds: Array.isArray(body.skillIds) ? body.skillIds : [],
+    })
+    fingerprints.skills = skills.fingerprint
+    if (skills.text) messages.push({ role: 'system', content: skills.text })
+  } catch (error) {
+    if (process.env.NODE_ENV !== 'production') console.warn('[skills] prompt compile failed:', error?.message || error)
+  }
+  try {
+    const sessions = await buildSessionsBlock({
+      userId: session.user_id,
+      sessionId: typeof body.sessionId === 'string' ? body.sessionId : null,
+      recentMessages: Array.isArray(body.recentMessages) ? body.recentMessages : [],
+      compactionArchivePort,
+    })
+    fingerprints.sessions = sessions.fingerprint
+    if (sessions.text) messages.push({ role: 'system', content: sessions.text })
+  } catch (error) {
+    if (process.env.NODE_ENV !== 'production') console.warn('[sessions] prompt compile failed:', error?.message || error)
+  }
+  return { messages, injectedAgentId, compilerFingerprints: fingerprints }
+}
+
 /**
  * Prepare one legacy HTTP model request without owning its transport or leases.
  *
@@ -61,51 +148,17 @@ export async function prepareModelProxyRequest({
   messages,
   hasVisionContent,
 }) {
-  let preparedMessages = messages
-  const hasVisionCandidate = resolvedCandidates.some((candidate) => (
-    profileForConfig(candidate, runtimeEnv).supportsVision
-  ))
-  if (
-    !testMode
-    && hasVisionContent(preparedMessages)
-    && !requestProfile.supportsVision
-    && !hasVisionCandidate
-  ) {
-    const token = authToken(req)
-    const sessionForAssist = token ? getSessionByToken(token) : null
-    const userIdForAssist = sessionForAssist?.user_id || null
-    if (hasVisionAssistConfigured({ userId: userIdForAssist, env: runtimeEnv })) {
-      try {
-        const assistResult = await attachVisionDescriptions({
-          messages: preparedMessages,
-          userId: userIdForAssist,
-          env: runtimeEnv,
-        })
-        preparedMessages = assistResult.messages
-        res.setHeader('X-Vision-Assist-Count', String(assistResult.assistCount))
-        if (assistResult.failures.length) {
-          res.setHeader('X-Vision-Assist-Failures', String(assistResult.failures.length))
-        }
-      } catch (assistError) {
-        logWarn('vision.assist', assistError, { userId: userIdForAssist, modelName: selectedModel })
-        const fallback = replaceUnsupportedVisionContent({
-          messages: preparedMessages,
-          modelName: selectedModel,
-        })
-        preparedMessages = fallback.messages
-        res.setHeader('X-Vision-Fallback-Count', String(fallback.replacementCount))
-        res.setHeader('X-Vision-Fallback-Reason', 'assist_failed')
-      }
-    } else {
-      const fallback = replaceUnsupportedVisionContent({
-        messages: preparedMessages,
-        modelName: selectedModel,
-      })
-      preparedMessages = fallback.messages
-      res.setHeader('X-Vision-Fallback-Count', String(fallback.replacementCount))
-      res.setHeader('X-Vision-Fallback-Reason', 'assist_unavailable')
-    }
-  }
+  let preparedMessages = await applyVisionPreparation({
+    req,
+    res,
+    testMode,
+    runtimeEnv,
+    selectedModel,
+    requestProfile,
+    resolvedCandidates,
+    messages,
+    hasVisionContent,
+  })
 
   const token = authToken(req)
   let session
@@ -113,11 +166,8 @@ export async function prepareModelProxyRequest({
   let injectedMemoryIds = []
   let injectedAgentId = null
   let promptSystemBlockCount = 0
-  const compilerFingerprints = {
-    identity: 'empty',
-    ishiki: 'empty',
-    skills: 'empty',
-    sessions: 'empty',
+  let compilerFingerprints = {
+    identity: 'empty', ishiki: 'empty', skills: 'empty', sessions: 'empty',
   }
 
   if (testMode) {
@@ -151,62 +201,12 @@ export async function prepareModelProxyRequest({
   }
 
   if (session?.user_id) {
-    const compiledSystemMessages = []
-    const safety = buildSafetyBlock()
-    compiledSystemMessages.push({ role: 'system', content: safety.text })
-    try {
-      if (getRuntimeEnv().AGENT_INJECT_ENABLED !== '0') {
-        let agent = null
-        const requestedAgentId = typeof body.agentId === 'string' ? body.agentId : null
-        if (requestedAgentId) {
-          const found = getAgent({ userId: session.user_id, id: requestedAgentId })
-          if (found) agent = found
-        }
-        if (!agent) agent = ensureDefaultAgent({ userId: session.user_id })
-        const identity = buildIdentityBlock({ agent })
-        const ishiki = buildIshikiBlock({ agent })
-        compilerFingerprints.identity = identity.fingerprint
-        compilerFingerprints.ishiki = ishiki.fingerprint
-        if (identity.text) compiledSystemMessages.push({ role: 'system', content: identity.text })
-        if (ishiki.text) compiledSystemMessages.push({ role: 'system', content: ishiki.text })
-        if (identity.text || ishiki.text) injectedAgentId = agent.id
-      }
-    } catch (error) {
-      logWarn('agent.inject', error, { userId: session?.user_id })
-    }
-
-    try {
-      const skills = buildSkillsBlock({
-        userId: session.user_id,
-        agentId: injectedAgentId,
-        skillIds: Array.isArray(body.skillIds) ? body.skillIds : [],
-      })
-      compilerFingerprints.skills = skills.fingerprint
-      if (skills.text) compiledSystemMessages.push({ role: 'system', content: skills.text })
-    } catch (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.warn('[skills] prompt compile failed:', error?.message || error)
-      }
-    }
-
-    try {
-      const sessions = await buildSessionsBlock({
-        userId: session.user_id,
-        sessionId: typeof body.sessionId === 'string' ? body.sessionId : null,
-        recentMessages: Array.isArray(body.recentMessages) ? body.recentMessages : [],
-        compactionArchivePort,
-      })
-      compilerFingerprints.sessions = sessions.fingerprint
-      if (sessions.text) compiledSystemMessages.push({ role: 'system', content: sessions.text })
-    } catch (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.warn('[sessions] prompt compile failed:', error?.message || error)
-      }
-    }
-
-    if (compiledSystemMessages.length) {
-      preparedMessages = [...compiledSystemMessages, ...preparedMessages]
-      promptSystemBlockCount = compiledSystemMessages.length
+    const compiled = await compileRequestSystemPrompt({ session, body, compactionArchivePort })
+    injectedAgentId = compiled.injectedAgentId
+    compilerFingerprints = compiled.compilerFingerprints
+    if (compiled.messages.length) {
+      preparedMessages = [...compiled.messages, ...preparedMessages]
+      promptSystemBlockCount = compiled.messages.length
     }
   }
 

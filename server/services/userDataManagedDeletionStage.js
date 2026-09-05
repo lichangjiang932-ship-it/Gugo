@@ -211,6 +211,109 @@ function removeTree(fileSystem, target) {
   }
 }
 
+function createManagedStageControls({
+  resolvedRoot,
+  stagePath,
+  domain,
+  entries,
+  movedEntries,
+  expectedSnapshot,
+  fileSystem,
+}) {
+  const snapshotSelections = (sourceEntries, staged = false) => sourceEntries.map((entry) => ({
+    fullPath: staged ? entry.stagedPath : entry.fullPath,
+    type: entry.type,
+    logicalPath: path.relative(
+      resolvedRoot,
+      staged ? entry.activePath : entry.fullPath,
+    ).split(path.sep).join('/'),
+  }))
+  const capture = (sourceEntries, staged) => captureUserDataFileSnapshot({
+    root: staged ? payloadPath(stagePath) : resolvedRoot,
+    selections: snapshotSelections(sourceEntries, staged),
+    namespace: domain,
+    fileSystem,
+    code: 'USER_DATA_CLEAR_PREVIEW_CHANGED',
+    message: staged
+      ? 'Managed local files changed while they were being staged'
+      : 'Managed local files changed after the impact preview',
+  })
+  const assertStable = () => {
+    if (!expectedSnapshot) return true
+    if (entries.some((entry) => pathExists(fileSystem, entry.fullPath))) {
+      throw managedError(
+        'USER_DATA_CLEAR_PREVIEW_CHANGED',
+        'Managed local files changed while they were being staged',
+        409,
+        null,
+        { incomplete: false, databaseCleared: false, cleanupPending: false },
+      )
+    }
+    assertUserDataFileSnapshot(expectedSnapshot, capture(movedEntries, true))
+    return true
+  }
+  const rollback = () => {
+    for (const entry of [...movedEntries].reverse()) {
+      if (!pathExists(fileSystem, entry.stagedPath)) continue
+      if (pathExists(fileSystem, entry.activePath)) {
+        throw managedError(
+          'USER_DATA_CLEAR_FILESYSTEM_INCOMPLETE',
+          'A managed file could not be restored after a failed clear',
+          500,
+          null,
+          { incomplete: true, databaseCleared: false },
+        )
+      }
+      ensureSafeParentDirectory({
+        root: resolvedRoot,
+        fullPath: entry.activePath,
+        code: 'USER_DATA_CLEAR_FILESYSTEM_INCOMPLETE',
+        message: 'A managed file restore destination is unsafe',
+        fileSystem,
+      })
+      fileSystemMethod(fileSystem, 'renameSync')(entry.stagedPath, entry.activePath)
+    }
+    removeTree(fileSystem, stagePath)
+    return true
+  }
+  return {
+    assertStable,
+    rollback,
+    captureActiveSnapshot: () => capture(entries, false),
+  }
+}
+
+function initializeManagedDeletionStage({
+  resolvedRoot,
+  stagePath,
+  domain,
+  operationId,
+  userId,
+  serializedEntries,
+  fileSystem,
+}) {
+  fileSystemMethod(fileSystem, 'mkdirSync')(resolvedRoot, { recursive: true })
+  ensureSafeParentDirectory({
+    root: resolvedRoot,
+    fullPath: stagePath,
+    code: 'USER_DATA_CLEAR_JOURNAL_INVALID',
+    message: 'A user-data clear staging destination is unsafe',
+    fileSystem,
+  })
+  fileSystemMethod(fileSystem, 'mkdirSync')(stagePath, { recursive: false })
+  fileSystemMethod(fileSystem, 'mkdirSync')(payloadPath(stagePath), { recursive: false })
+  const temporaryManifest = path.join(stagePath, STAGING_MANIFEST_TEMP)
+  fileSystemMethod(fileSystem, 'writeFileSync')(temporaryManifest, JSON.stringify({
+    format: STAGING_FORMAT,
+    version: STAGING_VERSION,
+    domain,
+    operationId,
+    userToken: storageToken(userId, 32),
+    entries: serializedEntries,
+  }), { flag: 'wx', mode: 0o600 })
+  fileSystemMethod(fileSystem, 'renameSync')(temporaryManifest, manifestPath(stagePath))
+}
+
 export function stageManagedDeletionDomain({
   root,
   stagePath,
@@ -256,92 +359,32 @@ export function stageManagedDeletionDomain({
   }
   const serializedEntries = entries.map((entry) => manifestEntry(resolvedRoot, entry))
   const movedEntries = []
-  const snapshotSelections = (sourceEntries, staged = false) => sourceEntries.map((entry) => ({
-    fullPath: staged ? entry.stagedPath : entry.fullPath,
-    type: entry.type,
-    logicalPath: path.relative(
-      resolvedRoot,
-      staged ? entry.activePath : entry.fullPath,
-    ).split(path.sep).join('/'),
-  }))
-  const captureActiveSnapshot = () => captureUserDataFileSnapshot({
-    root: resolvedRoot,
-    selections: snapshotSelections(entries),
-    namespace: domain,
+  const {
+    assertStable,
+    rollback,
+    captureActiveSnapshot,
+  } = createManagedStageControls({
+    resolvedRoot,
+    stagePath,
+    domain,
+    entries,
+    movedEntries,
+    expectedSnapshot,
     fileSystem,
-    code: 'USER_DATA_CLEAR_PREVIEW_CHANGED',
-    message: 'Managed local files changed after the impact preview',
   })
-  const captureStagedSnapshot = () => captureUserDataFileSnapshot({
-    root: payloadPath(stagePath),
-    selections: snapshotSelections(movedEntries, true),
-    namespace: domain,
-    fileSystem,
-    code: 'USER_DATA_CLEAR_PREVIEW_CHANGED',
-    message: 'Managed local files changed while they were being staged',
-  })
-  const assertStable = () => {
-    if (!expectedSnapshot) return true
-    if (entries.some((entry) => pathExists(fileSystem, entry.fullPath))) {
-      throw managedError(
-        'USER_DATA_CLEAR_PREVIEW_CHANGED',
-        'Managed local files changed while they were being staged',
-        409,
-        null,
-        { incomplete: false, databaseCleared: false, cleanupPending: false },
-      )
-    }
-    assertUserDataFileSnapshot(expectedSnapshot, captureStagedSnapshot())
-    return true
-  }
-  const rollback = () => {
-    for (const entry of [...movedEntries].reverse()) {
-      if (!pathExists(fileSystem, entry.stagedPath)) continue
-      if (pathExists(fileSystem, entry.activePath)) {
-        throw managedError(
-          'USER_DATA_CLEAR_FILESYSTEM_INCOMPLETE',
-          'A managed file could not be restored after a failed clear',
-          500,
-          null,
-          { incomplete: true, databaseCleared: false },
-        )
-      }
-      ensureSafeParentDirectory({
-        root: resolvedRoot,
-        fullPath: entry.activePath,
-        code: 'USER_DATA_CLEAR_FILESYSTEM_INCOMPLETE',
-        message: 'A managed file restore destination is unsafe',
-        fileSystem,
-      })
-      fileSystemMethod(fileSystem, 'renameSync')(entry.stagedPath, entry.activePath)
-    }
-    removeTree(fileSystem, stagePath)
-    return true
-  }
   try {
     if (expectedSnapshot) {
       assertUserDataFileSnapshot(expectedSnapshot, captureActiveSnapshot())
     }
-    fileSystemMethod(fileSystem, 'mkdirSync')(resolvedRoot, { recursive: true })
-    ensureSafeParentDirectory({
-      root: resolvedRoot,
-      fullPath: stagePath,
-      code: 'USER_DATA_CLEAR_JOURNAL_INVALID',
-      message: 'A user-data clear staging destination is unsafe',
-      fileSystem,
-    })
-    fileSystemMethod(fileSystem, 'mkdirSync')(stagePath, { recursive: false })
-    fileSystemMethod(fileSystem, 'mkdirSync')(payloadPath(stagePath), { recursive: false })
-    const temporaryManifest = path.join(stagePath, STAGING_MANIFEST_TEMP)
-    fileSystemMethod(fileSystem, 'writeFileSync')(temporaryManifest, JSON.stringify({
-      format: STAGING_FORMAT,
-      version: STAGING_VERSION,
+    initializeManagedDeletionStage({
+      resolvedRoot,
+      stagePath,
       domain,
       operationId,
-      userToken: storageToken(userId, 32),
-      entries: serializedEntries,
-    }), { flag: 'wx', mode: 0o600 })
-    fileSystemMethod(fileSystem, 'renameSync')(temporaryManifest, manifestPath(stagePath))
+      userId,
+      serializedEntries,
+      fileSystem,
+    })
     for (let index = 0; index < entries.length; index += 1) {
       const entry = entries[index]
       const serialized = serializedEntries[index]
