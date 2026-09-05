@@ -18,6 +18,12 @@ import {
   publicCodexAppServerSnapshot,
 } from './codexAppServerContracts.js'
 import {
+  discoverCodexExecutableStage,
+  readCodexVersionStage,
+  spawnCodexRuntimeStage,
+  verifyCodexExecutableStage,
+} from './codexAppServerStartStages.js'
+import {
   createCodexCliExecutableSnapshotAsync,
   isNativeCodexExecutablePath,
   readCodexCliVersion,
@@ -123,21 +129,46 @@ function beginRuntimeFatalHandling(runtime, reason) {
   })
 }
 
-async function runStartAttempt(attempt, {
-  cwd,
-  env,
-  explicitPath,
-  platform,
-  resolveExecutable,
-  snapshotExecutable,
-  verifySignature,
-  readVersion,
-  spawnImpl,
+async function settleCodexStartFailure({
+  error,
+  stage,
+  state,
+  runtime,
+  attempt,
   terminate,
-  handshakeTimeoutMs,
-  signatureTimeoutMs,
-  versionTimeoutMs,
   exitTimeoutMs,
+}) {
+  const reason = knownCodexReason(error?.code, fallbackCodexReasonForStage(stage))
+  const failureStage = reason === CODEX_APP_SERVER_REASON.SPAWN_FAILED ? 'spawn' : stage
+  let stopped = true
+  if (runtime) {
+    stopped = await disposeCodexAppServerRuntime(runtime, { terminate, exitTimeoutMs })
+    if (stopped) attempt.runtime = null
+    else currentRuntime = runtime
+  }
+  if (!stopped) {
+    return publish({
+      ...state,
+      ready: false,
+      failureStage: 'shutdown',
+      reasonCode: CODEX_APP_SERVER_REASON.TERMINATION_FAILED,
+    })
+  }
+  if (attempt.stopRequested) {
+    return publish({
+      ...state,
+      ready: false,
+      failureStage: null,
+      reasonCode: CODEX_APP_SERVER_REASON.STOPPED,
+    })
+  }
+  return publish({ ...state, ready: false, failureStage, reasonCode: reason })
+}
+
+async function runStartAttempt(attempt, {
+  cwd, env, explicitPath, platform, resolveExecutable, snapshotExecutable,
+  verifySignature, readVersion, spawnImpl, terminate, handshakeTimeoutMs,
+  signatureTimeoutMs, versionTimeoutMs, exitTimeoutMs,
 }) {
   const signal = attempt.controller.signal
   const state = {
@@ -153,19 +184,16 @@ async function runStartAttempt(attempt, {
   let executableSnapshot = null
   try {
     assertCodexStartActive(signal)
-    const resolved = await runBoundedCodexStartStage(
-      (stageSignal) => resolveExecutable({
-        explicitPath,
-        env,
-        platform,
-        signal: stageSignal,
-      }),
-      {
-        signal,
-        timeoutMs: signatureTimeoutMs,
-        timeoutReason: CODEX_APP_SERVER_REASON.CLI_NOT_FOUND,
-      },
-    )
+    const resolved = await discoverCodexExecutableStage({
+      signal,
+      explicitPath,
+      env,
+      platform,
+      timeoutMs: signatureTimeoutMs,
+      resolveExecutable,
+      runStage: runBoundedCodexStartStage,
+      notFoundReason: CODEX_APP_SERVER_REASON.CLI_NOT_FOUND,
+    })
     assertCodexStartActive(signal)
     state.configured = resolved?.configured === true || state.configured
     if (!resolved?.found || !resolved.path) {
@@ -181,39 +209,25 @@ async function runStartAttempt(attempt, {
     state.discovered = true
 
     stage = 'signature'
-    executableSnapshot = await runBoundedCodexStartStage(
-      (stageSignal) => snapshotExecutable(resolved.path, {
-        platform,
-        signal: stageSignal,
-      }),
-      {
-        signal,
-        timeoutMs: signatureTimeoutMs,
-        timeoutReason: CODEX_APP_SERVER_REASON.CLI_SIGNATURE_INVALID,
-        onLateValue: (lateSnapshot) => cleanupCodexExecutableSnapshot(lateSnapshot, exitTimeoutMs),
-      },
-    )
-    assertCodexStartActive(signal)
-    if (!executableSnapshot
-      || !isNativeCodexExecutablePath(executableSnapshot.path, platform)
-      || typeof executableSnapshot.cleanup !== 'function') {
-      throw createCodexRuntimeError(CODEX_APP_SERVER_REASON.CLI_SIGNATURE_INVALID)
-    }
+    const verified = await verifyCodexExecutableStage({
+      resolvedPath: resolved.path,
+      signal,
+      env,
+      platform,
+      timeoutMs: signatureTimeoutMs,
+      exitTimeoutMs,
+      snapshotExecutable,
+      verifySignature,
+      runStage: runBoundedCodexStartStage,
+      assertActive: assertCodexStartActive,
+      cleanupSnapshot: cleanupCodexExecutableSnapshot,
+      isNativePath: isNativeCodexExecutablePath,
+      createRuntimeError: createCodexRuntimeError,
+      invalidSignatureReason: CODEX_APP_SERVER_REASON.CLI_SIGNATURE_INVALID,
+    })
+    executableSnapshot = verified.snapshot
     const trustedExecutable = executableSnapshot.path
-    const signatureValid = await runBoundedCodexStartStage(
-      (stageSignal) => verifySignature(trustedExecutable, {
-        env,
-        platform,
-        signal: stageSignal,
-        timeoutMs: signatureTimeoutMs,
-      }),
-      {
-        signal,
-        timeoutMs: signatureTimeoutMs,
-        timeoutReason: CODEX_APP_SERVER_REASON.CLI_SIGNATURE_INVALID,
-      },
-    )
-    assertCodexStartActive(signal)
+    const { signatureValid } = verified
     if (signatureValid !== true) {
       return publish({
         ...state,
@@ -224,20 +238,17 @@ async function runStartAttempt(attempt, {
     state.signatureValid = true
 
     stage = 'version'
-    const version = await runBoundedCodexStartStage(
-      (stageSignal) => readVersion(trustedExecutable, {
-        env,
-        platform,
-        signal: stageSignal,
-        timeoutMs: versionTimeoutMs,
-      }),
-      {
-        signal,
-        timeoutMs: versionTimeoutMs,
-        timeoutReason: CODEX_APP_SERVER_REASON.CLI_VERSION_INVALID,
-      },
-    )
-    assertCodexStartActive(signal)
+    const version = await readCodexVersionStage({
+      executablePath: trustedExecutable,
+      signal,
+      env,
+      platform,
+      timeoutMs: versionTimeoutMs,
+      readVersion,
+      runStage: runBoundedCodexStartStage,
+      assertActive: assertCodexStartActive,
+      invalidVersionReason: CODEX_APP_SERVER_REASON.CLI_VERSION_INVALID,
+    })
     if (typeof version !== 'string' || !/^[0-9][0-9A-Za-z.+-]{0,63}$/u.test(version)) {
       return publish({
         ...state,
@@ -248,49 +259,33 @@ async function runStartAttempt(attempt, {
     state.version = version
 
     stage = 'spawn'
-    let child
-    try {
-      child = spawnImpl(trustedExecutable, ['app-server'], {
-        cwd,
-        env: codexAppServerChildEnvironment(env, platform),
-        stdio: ['pipe', 'pipe', 'pipe'],
-        shell: false,
-        windowsHide: true,
-        detached: true,
-      })
-    } catch {
-      throw createCodexRuntimeError(CODEX_APP_SERVER_REASON.SPAWN_FAILED)
-    }
-    runtime = {
-      child,
+    runtime = await spawnCodexRuntimeStage({
+      executablePath: trustedExecutable,
+      executableSnapshot,
       configured: state.configured,
       version,
-      ready: false,
-      closed: false,
-      disposing: null,
-      fatalHandling: null,
-      phase: 'starting',
+      cwd,
+      env,
+      platform,
+      spawnImpl,
       terminate,
-      observer: null,
-      executableSnapshot,
-    }
-    executableSnapshot = null
-    attempt.runtime = runtime
-    runtime.observer = createProcessObserver(child, {
-      onFatal: (reason) => beginRuntimeFatalHandling(runtime, reason),
-    })
-
-    stage = 'handshake'
-    await performInitializeHandshake(runtime, {
-      timeoutMs: handshakeTimeoutMs,
+      childEnvironment: codexAppServerChildEnvironment,
+      createObserver: createProcessObserver,
+      onFatal: beginRuntimeFatalHandling,
+      onSpawned: (value) => {
+        runtime = value
+        executableSnapshot = null
+        attempt.runtime = value
+        stage = 'handshake'
+      },
+      performHandshake: performInitializeHandshake,
+      handshakeTimeoutMs,
       signal,
+      assertActive: assertCodexStartActive,
+      createRuntimeError: createCodexRuntimeError,
+      spawnFailedReason: CODEX_APP_SERVER_REASON.SPAWN_FAILED,
+      processExitedReason: CODEX_APP_SERVER_REASON.PROCESS_EXITED,
     })
-    assertCodexStartActive(signal)
-    if (runtime.observer.fatalReason || runtime.observer.exited) {
-      throw createCodexRuntimeError(
-        runtime.observer.fatalReason || CODEX_APP_SERVER_REASON.PROCESS_EXITED,
-      )
-    }
 
     runtime.ready = true
     runtime.phase = 'ready'
@@ -303,35 +298,14 @@ async function runStartAttempt(attempt, {
       reasonCode: CODEX_APP_SERVER_REASON.READY,
     })
   } catch (error) {
-    const reason = knownCodexReason(error?.code, fallbackCodexReasonForStage(stage))
-    const failureStage = reason === CODEX_APP_SERVER_REASON.SPAWN_FAILED ? 'spawn' : stage
-    let stopped = true
-    if (runtime) {
-      stopped = await disposeCodexAppServerRuntime(runtime, { terminate, exitTimeoutMs })
-      if (stopped) attempt.runtime = null
-      else currentRuntime = runtime
-    }
-    if (!stopped) {
-      return publish({
-        ...state,
-        ready: false,
-        failureStage: 'shutdown',
-        reasonCode: CODEX_APP_SERVER_REASON.TERMINATION_FAILED,
-      })
-    }
-    if (attempt.stopRequested) {
-      return publish({
-        ...state,
-        ready: false,
-        failureStage: null,
-        reasonCode: CODEX_APP_SERVER_REASON.STOPPED,
-      })
-    }
-    return publish({
-      ...state,
-      ready: false,
-      failureStage,
-      reasonCode: reason,
+    return settleCodexStartFailure({
+      error,
+      stage,
+      state,
+      runtime,
+      attempt,
+      terminate,
+      exitTimeoutMs,
     })
   } finally {
     await cleanupCodexExecutableSnapshot(executableSnapshot, exitTimeoutMs)
