@@ -37,281 +37,297 @@ function requireFunction(value, name) {
   return value
 }
 
-/**
- * Isolated Hub runtime factory. Production uses the singleton below; tests and
- * embedders can inject a queue, registry, clock, and timers without sharing
- * process-global runtime state.
- */
-export function createHubRuntime(dependencies = {}) {
-  const database = dependencies.db || hubDb
-  const registry = dependencies.registry || jobRegistry
-  const loggerImpl = dependencies.logger || logger
-  const closeDatabase = dependencies.closeDb || closeDb
-  const now = dependencies.now || Date.now
-  const setTimeoutFn = dependencies.setTimeoutFn || setTimeout
-  const clearTimeoutFn = dependencies.clearTimeoutFn || clearTimeout
-  const makeOwnerId = dependencies.createOwnerId || createOwnerId
-  const configuredShutdownTimeout = dependencies.shutdownTimeoutMs
-  const configuredShutdownPoll = dependencies.shutdownPollMs
-  const sessionDeletionRecoveryBarrier = dependencies.sessionDeletionRecoveryBarrier || null
+function hubLog(runtime, ...args) {
+  runtime.logger.info('[hub]', ...args)
+}
 
-  let tickTimer = null
-  let shutdownTimer = null
-  let running = false
-  let started = false
-  let shuttingDown = false
-  let runtimeEnv = process.env
-  let shutdownPromise = null
-  let ownerId = null
-  let activeExecution = null
-  let sessionDeletionRecoveryReady = false
+function hubLogError(runtime, ...args) {
+  runtime.logger.error('[hub]', ...args)
+}
 
-  const log = (...args) => loggerImpl.info('[hub]', ...args)
-  const logErr = (...args) => loggerImpl.error('[hub]', ...args)
-  const getTickMs = () => positiveInteger(runtimeEnv.HUB_TICK_MS, DEFAULT_TICK_MS, 100)
-  const getLeaseMs = () => hubLeaseDuration(runtimeEnv.HUB_LEASE_MS || DEFAULT_HUB_LEASE_MS)
-  const getShutdownTimeoutMs = () => positiveInteger(
-    configuredShutdownTimeout ?? runtimeEnv.HUB_SHUTDOWN_TIMEOUT_MS,
+function hubTickMs(runtime) {
+  return positiveInteger(runtime.state.env.HUB_TICK_MS, DEFAULT_TICK_MS, 100)
+}
+
+function hubLeaseMs(runtime) {
+  return hubLeaseDuration(runtime.state.env.HUB_LEASE_MS || DEFAULT_HUB_LEASE_MS)
+}
+
+function hubShutdownTimeoutMs(runtime) {
+  return positiveInteger(
+    runtime.configuredShutdownTimeout ?? runtime.state.env.HUB_SHUTDOWN_TIMEOUT_MS,
     DEFAULT_SHUTDOWN_TIMEOUT_MS,
   )
-  const getShutdownPollMs = () => positiveInteger(
-    configuredShutdownPoll,
-    DEFAULT_SHUTDOWN_POLL_MS,
-  )
-  const ensureOwnerId = () => {
-    ownerId ||= String(makeOwnerId())
-    if (!ownerId) {
-      const error = new Error('Hub runtime owner identity is unavailable')
-      error.code = 'HUB_RUNTIME_OWNER_UNAVAILABLE'
-      throw error
-    }
-    return ownerId
-  }
-  const clearTickTimer = () => {
-    if (tickTimer !== null) clearTimeoutFn(tickTimer)
-    tickTimer = null
-  }
-  const ensureSessionDeletionRecovery = () => {
-    if (!sessionDeletionRecoveryBarrier || sessionDeletionRecoveryReady) return false
-    requireFunction(
-      sessionDeletionRecoveryBarrier.start,
-      'sessionDeletionRecoveryBarrier.start',
-    )({ env: runtimeEnv })
-    sessionDeletionRecoveryReady = true
-    return true
-  }
-  const releaseSessionDeletionRecovery = () => {
-    if (!sessionDeletionRecoveryBarrier || !sessionDeletionRecoveryReady) return false
-    requireFunction(
-      sessionDeletionRecoveryBarrier.stop,
-      'sessionDeletionRecoveryBarrier.stop',
-    )()
-    sessionDeletionRecoveryReady = false
-    return true
-  }
+}
 
-  /** Run at most one claimed Hub job. */
-  const runOnce = async () => {
-    if (running || shuttingDown) return false
-    running = true
-    try {
-      ensureSessionDeletionRecovery()
-      const workerId = ensureOwnerId()
-      const leaseMs = getLeaseMs()
-      const claimNextPending = requireFunction(database.claimNextPending, 'claimNextPending')
-      const job = claimNextPending({ ownerId: workerId, now, leaseMs })
-      if (!job) return false
+function hubShutdownPollMs(runtime) {
+  return positiveInteger(runtime.configuredShutdownPoll, DEFAULT_SHUTDOWN_POLL_MS)
+}
 
-      const handler = requireFunction(registry.getHandler, 'getHandler')(job.name)
-      if (!handler) {
-        const error = new Error(`no handler registered for "${job.name}"`)
-        try {
-          requireFunction(database.recordJobFailure, 'recordJobFailure')(job.id, {
-            ownerId: workerId,
-            leaseToken: job.leaseToken,
-            retryable: false,
-            errorMessage: error.message,
-            now,
-          })
-          logErr(`job ${job.id} (${job.name}) failed: no handler`)
-        } catch (writeError) {
-          if (writeError?.code !== 'HUB_JOB_LEASE_LOST') throw writeError
-          logErr(`job ${job.id} (${job.name}) lost its lease before handler rejection`)
-        }
-        return true
-      }
+function ensureHubOwnerId(runtime) {
+  runtime.state.ownerId ||= String(runtime.makeOwnerId())
+  if (!runtime.state.ownerId) {
+    const error = new Error('Hub runtime owner identity is unavailable')
+    error.code = 'HUB_RUNTIME_OWNER_UNAVAILABLE'
+    throw error
+  }
+  return runtime.state.ownerId
+}
 
-      const outcome = await executeLeasedHubJob({
-        job,
-        handler,
-        ownerId: workerId,
-        leaseMs,
-        renewJobLease: requireFunction(database.renewJobLease, 'renewJobLease'),
-        markDone: requireFunction(database.markDone, 'markDone'),
-        recordJobFailure: requireFunction(database.recordJobFailure, 'recordJobFailure'),
-        retryBackoffMs: hubRetryBackoffMs(job.attemptCount),
-        now,
-        setTimeoutFn,
-        clearTimeoutFn,
-        onActive(execution) {
-          activeExecution = execution
-        },
-        onInactive(execution) {
-          if (activeExecution === execution) activeExecution = null
-        },
-      })
-      if (outcome.status === 'done') {
-        log(`job ${job.id} (${job.name}) done`)
-      } else if (outcome.status === 'failed') {
-        logErr(`job ${job.id} (${job.name}) failed:`, outcome.error?.message || outcome.error)
-      } else {
-        logErr(`job ${job.id} (${job.name}) stopped:`, outcome.error?.message || outcome.error)
+function clearHubTickTimer(runtime) {
+  if (runtime.state.tickTimer !== null) runtime.clearTimeoutFn(runtime.state.tickTimer)
+  runtime.state.tickTimer = null
+}
+
+function ensureSessionDeletionRecovery(runtime) {
+  if (!runtime.sessionDeletionRecoveryBarrier
+    || runtime.state.sessionDeletionRecoveryReady) return false
+  requireFunction(
+    runtime.sessionDeletionRecoveryBarrier.start,
+    'sessionDeletionRecoveryBarrier.start',
+  )({ env: runtime.state.env })
+  runtime.state.sessionDeletionRecoveryReady = true
+  return true
+}
+
+function releaseSessionDeletionRecovery(runtime) {
+  if (!runtime.sessionDeletionRecoveryBarrier
+    || !runtime.state.sessionDeletionRecoveryReady) return false
+  requireFunction(
+    runtime.sessionDeletionRecoveryBarrier.stop,
+    'sessionDeletionRecoveryBarrier.stop',
+  )()
+  runtime.state.sessionDeletionRecoveryReady = false
+  return true
+}
+
+async function runHubJobOnce(runtime) {
+  const { state, database, registry, now, setTimeoutFn, clearTimeoutFn } = runtime
+  if (state.running || state.shuttingDown) return false
+  state.running = true
+  try {
+    ensureSessionDeletionRecovery(runtime)
+    const workerId = ensureHubOwnerId(runtime)
+    const leaseMs = hubLeaseMs(runtime)
+    const claimNextPending = requireFunction(database.claimNextPending, 'claimNextPending')
+    const job = claimNextPending({ ownerId: workerId, now, leaseMs })
+    if (!job) return false
+    const handler = requireFunction(registry.getHandler, 'getHandler')(job.name)
+    if (!handler) {
+      const error = new Error(`no handler registered for "${job.name}"`)
+      try {
+        requireFunction(database.recordJobFailure, 'recordJobFailure')(job.id, {
+          ownerId: workerId,
+          leaseToken: job.leaseToken,
+          retryable: false,
+          errorMessage: error.message,
+          now,
+        })
+        hubLogError(runtime, `job ${job.id} (${job.name}) failed: no handler`)
+      } catch (writeError) {
+        if (writeError?.code !== 'HUB_JOB_LEASE_LOST') throw writeError
+        hubLogError(runtime, `job ${job.id} (${job.name}) lost its lease before handler rejection`)
       }
       return true
-    } finally {
-      running = false
     }
+    const outcome = await executeLeasedHubJob({
+      job,
+      handler,
+      ownerId: workerId,
+      leaseMs,
+      renewJobLease: requireFunction(database.renewJobLease, 'renewJobLease'),
+      markDone: requireFunction(database.markDone, 'markDone'),
+      recordJobFailure: requireFunction(database.recordJobFailure, 'recordJobFailure'),
+      retryBackoffMs: hubRetryBackoffMs(job.attemptCount),
+      now,
+      setTimeoutFn,
+      clearTimeoutFn,
+      onActive(execution) { state.activeExecution = execution },
+      onInactive(execution) {
+        if (state.activeExecution === execution) state.activeExecution = null
+      },
+    })
+    if (outcome.status === 'done') {
+      hubLog(runtime, `job ${job.id} (${job.name}) done`)
+    } else if (outcome.status === 'failed') {
+      hubLogError(runtime, `job ${job.id} (${job.name}) failed:`, outcome.error?.message || outcome.error)
+    } else {
+      hubLogError(runtime, `job ${job.id} (${job.name}) stopped:`, outcome.error?.message || outcome.error)
+    }
+    return true
+  } finally {
+    state.running = false
   }
+}
 
-  const tick = async () => {
-    tickTimer = null
-    if (shuttingDown) return
-    try {
-      const recovery = requireFunction(database.recoverStaleJobs, 'recoverStaleJobs')({ now })
-      if (recovery?.recovered > 0) {
-        log(
-          `recovered ${recovery.recovered} stale job(s), `
+async function tickHubRuntime(runtime) {
+  const { state, database, now, setTimeoutFn } = runtime
+  state.tickTimer = null
+  if (state.shuttingDown) return
+  try {
+    const recovery = requireFunction(database.recoverStaleJobs, 'recoverStaleJobs')({ now })
+    if (recovery?.recovered > 0) {
+      hubLog(
+        runtime,
+        `recovered ${recovery.recovered} stale job(s), `
           + `requeued=${recovery.requeued || 0}, deadLettered=${recovery.deadLettered || 0}`,
+      )
+    }
+    let processed = 0
+    while (!state.shuttingDown && await runHubJobOnce(runtime)) {
+      processed += 1
+      if (processed >= MAX_JOBS_PER_TICK) break
+    }
+  } catch (error) {
+    hubLogError(runtime, 'tick error:', error?.message || error)
+  } finally {
+    if (!state.shuttingDown) state.tickTimer = setTimeoutFn(runtime.tick, hubTickMs(runtime))
+  }
+}
+
+function startHubRuntime(runtime, { env = process.env } = {}) {
+  const { state, registry, database, now, setTimeoutFn } = runtime
+  if (state.started || state.running || state.shuttingDown) {
+    const error = new Error('Hub runtime is already started or shutting down')
+    error.code = 'HUB_RUNTIME_STATE_CONFLICT'
+    throw error
+  }
+  state.env = env
+  ensureHubOwnerId(runtime)
+  const handlers = requireFunction(registry.listHandlers, 'listHandlers')()
+  let barrierActivated = false
+  try {
+    barrierActivated = ensureSessionDeletionRecovery(runtime)
+    requireFunction(database.runHubMigrations, 'runHubMigrations')()
+    const recovery = requireFunction(database.recoverStaleJobs, 'recoverStaleJobs')({ now })
+    state.tickTimer = setTimeoutFn(runtime.tick, 0)
+    hubLog(
+      runtime,
+      `booted, owner=${state.ownerId}, handlers=[${handlers.join(', ')}], `
+        + `tick=${hubTickMs(runtime)}ms, lease=${hubLeaseMs(runtime)}ms, recovered=${recovery?.recovered || 0}`,
+    )
+    state.started = true
+    return true
+  } catch (error) {
+    clearHubTickTimer(runtime)
+    if (barrierActivated) {
+      try {
+        releaseSessionDeletionRecovery(runtime)
+      } catch (releaseError) {
+        throw new AggregateError(
+          [error, releaseError],
+          'Hub startup failed and its session deletion recovery barrier could not be released',
+          { cause: releaseError },
         )
       }
-      let processed = 0
-      while (!shuttingDown && await runOnce()) {
-        processed += 1
-        if (processed >= MAX_JOBS_PER_TICK) break
-      }
-    } catch (error) {
-      logErr('tick error:', error?.message || error)
-    } finally {
-      if (!shuttingDown) tickTimer = setTimeoutFn(tick, getTickMs())
     }
+    throw error
   }
+}
 
-  const startHub = ({ env = process.env } = {}) => {
-    if (started || running || shuttingDown) {
-      const error = new Error('Hub runtime is already started or shutting down')
-      error.code = 'HUB_RUNTIME_STATE_CONFLICT'
-      throw error
+function finishHubShutdown(runtime, resolve, finishState, exitCode) {
+  if (finishState.finished) return
+  finishState.finished = true
+  if (runtime.state.shutdownTimer !== null) runtime.clearTimeoutFn(runtime.state.shutdownTimer)
+  runtime.state.shutdownTimer = null
+  let resolvedExitCode = exitCode
+  try {
+    releaseSessionDeletionRecovery(runtime)
+  } catch (error) {
+    resolvedExitCode = 1
+    hubLogError(runtime, 'session deletion recovery barrier release failed:', error?.message || error)
+  }
+  try { runtime.closeDatabase() } catch { /* best effort after queue stopped accepting work */ }
+  runtime.state.started = false
+  hubLog(runtime, 'shutdown complete')
+  resolve(resolvedExitCode)
+}
+
+function waitForHubShutdown(runtime, resolve, finishState, startedAt) {
+  const { state, now, setTimeoutFn } = runtime
+  state.shutdownTimer = null
+  if (!state.running) {
+    finishHubShutdown(runtime, resolve, finishState, 0)
+    return
+  }
+  if (now() - startedAt >= hubShutdownTimeoutMs(runtime)) {
+    hubLogError(runtime, 'forced shutdown (timeout)')
+    const expiringExecution = state.activeExecution
+    const leaseExpiresAt = Number(expiringExecution?.lease?.expiresAt)
+    expiringExecution?.abort(hubRuntimeShutdownError())
+    expiringExecution?.stop()
+    const waitForFenceExpiry = () => {
+      state.shutdownTimer = null
+      const remaining = leaseExpiresAt - now()
+      if (!Number.isFinite(remaining) || remaining <= 0) {
+        finishHubShutdown(runtime, resolve, finishState, 1)
+        return
+      }
+      state.shutdownTimer = setTimeoutFn(waitForFenceExpiry, remaining)
     }
-    runtimeEnv = env
-    ensureOwnerId()
-    const handlers = requireFunction(registry.listHandlers, 'listHandlers')()
-    let barrierActivated = false
-    try {
-      barrierActivated = ensureSessionDeletionRecovery()
-      requireFunction(database.runHubMigrations, 'runHubMigrations')()
-      const recovery = requireFunction(database.recoverStaleJobs, 'recoverStaleJobs')({ now })
-      tickTimer = setTimeoutFn(tick, 0)
-      log(
-        `booted, owner=${ownerId}, handlers=[${handlers.join(', ')}], `
-        + `tick=${getTickMs()}ms, lease=${getLeaseMs()}ms, recovered=${recovery?.recovered || 0}`,
-      )
-      started = true
-      return true
-    } catch (error) {
-      clearTickTimer()
-      if (barrierActivated) {
-        try {
-          releaseSessionDeletionRecovery()
-        } catch (releaseError) {
-          throw new AggregateError(
-            [error, releaseError],
-            'Hub startup failed and its session deletion recovery barrier could not be released',
-            { cause: releaseError },
-          )
-        }
-      }
-      throw error
-    }
+    waitForFenceExpiry()
+    return
   }
+  state.shutdownTimer = setTimeoutFn(
+    () => waitForHubShutdown(runtime, resolve, finishState, startedAt),
+    hubShutdownPollMs(runtime),
+  )
+}
 
-  const shutdownHub = () => {
-    if (shutdownPromise) return shutdownPromise
-    shuttingDown = true
-    log('shutdown signal received')
-    clearTickTimer()
+function shutdownHubRuntime(runtime) {
+  const { state, now } = runtime
+  if (state.shutdownPromise) return state.shutdownPromise
+  state.shuttingDown = true
+  hubLog(runtime, 'shutdown signal received')
+  clearHubTickTimer(runtime)
+  state.shutdownPromise = new Promise((resolve) => {
+    waitForHubShutdown(runtime, resolve, { finished: false }, now())
+  })
+  return state.shutdownPromise
+}
 
-    shutdownPromise = new Promise((resolve) => {
-      const startedAt = now()
-      let finished = false
-      const finish = (exitCode) => {
-        if (finished) return
-        finished = true
-        if (shutdownTimer !== null) clearTimeoutFn(shutdownTimer)
-        shutdownTimer = null
-        let resolvedExitCode = exitCode
-        try {
-          releaseSessionDeletionRecovery()
-        } catch (error) {
-          resolvedExitCode = 1
-          logErr('session deletion recovery barrier release failed:', error?.message || error)
-        }
-        try {
-          closeDatabase()
-        } catch {
-          // Best effort after the queue has stopped accepting work.
-        }
-        started = false
-        log('shutdown complete')
-        resolve(resolvedExitCode)
-      }
-      const waitForActiveJob = () => {
-        shutdownTimer = null
-        if (!running) {
-          finish(0)
-          return
-        }
-        if (now() - startedAt >= getShutdownTimeoutMs()) {
-          logErr('forced shutdown (timeout)')
-          const expiringExecution = activeExecution
-          const leaseExpiresAt = Number(expiringExecution?.lease?.expiresAt)
-          expiringExecution?.abort(hubRuntimeShutdownError())
-          expiringExecution?.stop()
-
-          // There is intentionally no unfenced "release" mutation. Once the
-          // heartbeat stops, wait until the last authoritative proof expires
-          // before closing the DB. A late handler then cannot reopen the DB
-          // and commit with a token that was still valid at forced shutdown.
-          const waitForFenceExpiry = () => {
-            shutdownTimer = null
-            const remaining = leaseExpiresAt - now()
-            if (!Number.isFinite(remaining) || remaining <= 0) {
-              finish(1)
-              return
-            }
-            shutdownTimer = setTimeoutFn(waitForFenceExpiry, remaining)
-          }
-          waitForFenceExpiry()
-          return
-        }
-        shutdownTimer = setTimeoutFn(waitForActiveJob, getShutdownPollMs())
-      }
-      waitForActiveJob()
-    })
-    return shutdownPromise
+/** Isolated Hub runtime factory with injectable queue, registry, clock, and timers. */
+export function createHubRuntime(dependencies = {}) {
+  const state = {
+    tickTimer: null,
+    shutdownTimer: null,
+    running: false,
+    started: false,
+    shuttingDown: false,
+    env: process.env,
+    shutdownPromise: null,
+    ownerId: null,
+    activeExecution: null,
+    sessionDeletionRecoveryReady: false,
   }
-
+  const runtime = {
+    database: dependencies.db || hubDb,
+    registry: dependencies.registry || jobRegistry,
+    logger: dependencies.logger || logger,
+    closeDatabase: dependencies.closeDb || closeDb,
+    now: dependencies.now || Date.now,
+    setTimeoutFn: dependencies.setTimeoutFn || setTimeout,
+    clearTimeoutFn: dependencies.clearTimeoutFn || clearTimeout,
+    makeOwnerId: dependencies.createOwnerId || createOwnerId,
+    configuredShutdownTimeout: dependencies.shutdownTimeoutMs,
+    configuredShutdownPoll: dependencies.shutdownPollMs,
+    sessionDeletionRecoveryBarrier: dependencies.sessionDeletionRecoveryBarrier || null,
+    state,
+    tick: null,
+  }
+  runtime.tick = () => tickHubRuntime(runtime)
   return Object.freeze({
-    runOnce,
-    startHub,
-    shutdownHub,
+    runOnce: () => runHubJobOnce(runtime),
+    startHub: (options) => startHubRuntime(runtime, options),
+    shutdownHub: () => shutdownHubRuntime(runtime),
     inspect() {
       return Object.freeze({
-        activeJobId: activeExecution?.job?.id || null,
-        ownerId,
-        running,
-        shuttingDown,
-        started,
-        sessionDeletionRecoveryReady,
+        activeJobId: state.activeExecution?.job?.id || null,
+        ownerId: state.ownerId,
+        running: state.running,
+        shuttingDown: state.shuttingDown,
+        started: state.started,
+        sessionDeletionRecoveryReady: state.sessionDeletionRecoveryReady,
       })
     },
   })

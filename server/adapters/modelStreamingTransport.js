@@ -58,6 +58,154 @@ async function abortRunawayReasoning({ reader, controller, limit, native }) {
   throw error
 }
 
+async function* consumeStreamingResponse({
+  response,
+  profile,
+  providerRequest,
+  providerAdapter,
+  onFirstByte,
+  env,
+  tools,
+  toolChoice,
+  controller,
+  armTimer,
+}) {
+  const jsonEvents = await readJsonModelResponseEvents(response, profile, {
+    onFirstByte,
+    providerRequest,
+  })
+  if (jsonEvents) {
+    yield* jsonEvents
+    return
+  }
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('无法读取流式响应')
+  const toolCallAcc = new Map()
+  const readyToolCallIndexes = new Set()
+  const nativeStreamState = providerAdapter || isNativeProviderKind(profile.kind)
+    ? createNativeProviderStreamState(profile.kind, providerAdapter)
+    : null
+  const compatibleStreamState = createCompatibleModelStreamState()
+  const reasoningCharLimit = reasoningLimitFor({ env, tools, toolChoice })
+  let finishReason = null
+  let reasoningChars = 0
+  let lastUsage = null
+  let sawProviderEvent = false
+  let sawTerminal = false
+  for await (const line of readModelSseLines(reader, {
+    onFirstByte,
+    onChunk: () => armTimer('idle', profile.timeouts.idleMs),
+  })) {
+    const decoded = decodeModelStreamLine(line)
+    if (!decoded) continue
+    sawProviderEvent = true
+    if (decoded.done) {
+      if (nativeStreamState) {
+        yield* finishNativeProviderStream(nativeStreamState, { requireFinishReason: true })
+        return
+      }
+      if (toolCallAcc.size > 0) {
+        const calls = [...toolCallAcc.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([, value]) => value)
+        yield {
+          type: 'tool_calls', toolCalls: calls,
+          finishReason: finishReason || 'tool_calls', usage: lastUsage,
+        }
+      } else {
+        yield { type: 'finish', finishReason: finishReason || 'stop', usage: lastUsage }
+      }
+      return
+    }
+    const chunk = decoded.data
+    const responseError = extractModelResponseError(chunk)
+    if (responseError) throw responseError
+    if (nativeStreamState) {
+      const nativeEvents = consumeNativeProviderStreamPayload(chunk, nativeStreamState)
+      for (const event of nativeEvents) {
+        if (event.type === 'reasoning' && event.delta) {
+          reasoningChars += event.delta.length
+          if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
+            await abortRunawayReasoning({
+              reader, controller, limit: reasoningCharLimit, native: true,
+            })
+          }
+        }
+        yield event
+      }
+      if (nativeStreamState.finished) return
+      continue
+    }
+    const frame = normalizeCompatibleModelStreamPayload(chunk, compatibleStreamState)
+    const chunkUsage = extractUsage(chunk)
+    if (chunkUsage) {
+      lastUsage = chunkUsage
+      yield { type: 'usage', usage: chunkUsage }
+    }
+    if (frame.finishReason) finishReason = frame.finishReason
+    if (frame.reasoning) {
+      reasoningChars += frame.reasoning.length
+      if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
+        await abortRunawayReasoning({
+          reader, controller, limit: reasoningCharLimit, native: false,
+        })
+      }
+      yield { type: 'reasoning', delta: frame.reasoning }
+    }
+    if (frame.text) yield { type: 'text', delta: frame.text }
+    for (const delta of frame.toolCallDeltas) {
+      const index = delta.index ?? 0
+      const existing = toolCallAcc.get(index) || { id: '', name: '', arguments: '' }
+      if (delta.id) existing.id = delta.id
+      if (delta.name) existing.name = delta.name
+      if (delta.argumentsMode === 'replace') existing.arguments = delta.arguments
+      else if (delta.arguments) existing.arguments += delta.arguments
+      if (!existing.id && existing.name) existing.id = `call-${index}-${existing.name}`
+      toolCallAcc.set(index, existing)
+      if (!readyToolCallIndexes.has(index) && existing.name && existing.arguments.trim()) {
+        try {
+          JSON.parse(existing.arguments)
+          readyToolCallIndexes.add(index)
+          yield { type: 'tool_call_ready', toolCall: { ...existing }, index }
+        } catch { /* arguments are still partial */ }
+      }
+    }
+    if (frame.terminal) {
+      sawTerminal = true
+      break
+    }
+  }
+  if (!sawProviderEvent) {
+    const error = new Error('模型流在返回任何有效事件前已结束。')
+    error.code = 'MODEL_STREAM_TRUNCATED'
+    throw error
+  }
+  if (nativeStreamState) {
+    for (const event of finishNativeProviderStream(nativeStreamState)) {
+      yield sawTerminal || !['tool_calls', 'finish'].includes(event?.type)
+        ? event
+        : { ...event, finishReason: 'truncated' }
+    }
+    return
+  }
+  if (toolCallAcc.size > 0) {
+    const calls = [...toolCallAcc.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, value]) => value)
+    yield {
+      type: 'tool_calls', toolCalls: calls,
+      finishReason: sawTerminal ? finishReason || 'tool_calls' : 'truncated',
+      usage: lastUsage,
+    }
+    return
+  }
+  yield {
+    type: 'finish',
+    finishReason: sawTerminal ? finishReason || 'stop' : 'truncated',
+    usage: lastUsage,
+  }
+}
+
 /**
  * Provider transport boundary for streaming model events.
  *
@@ -173,153 +321,18 @@ export async function* streamModelProviderEvents({
       throw error
     }
 
-    const jsonEvents = await readJsonModelResponseEvents(response, profile, { onFirstByte, providerRequest })
-    if (jsonEvents) {
-      yield* jsonEvents
-      return
-    }
-
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error('无法读取流式响应')
-
-    const toolCallAcc = new Map()
-    const readyToolCallIndexes = new Set()
-    const nativeStreamState = providerAdapter || isNativeProviderKind(profile.kind)
-      ? createNativeProviderStreamState(profile.kind, providerAdapter)
-      : null
-    const compatibleStreamState = createCompatibleModelStreamState()
-    const reasoningCharLimit = reasoningLimitFor({ env, tools, toolChoice })
-    let finishReason = null
-    let reasoningChars = 0
-    let lastUsage = null
-    let sawProviderEvent = false
-    let sawTerminal = false
-
-    for await (const line of readModelSseLines(reader, {
+    yield* consumeStreamingResponse({
+      response,
+      profile,
+      providerRequest,
+      providerAdapter,
       onFirstByte,
-      onChunk: () => armTimer('idle', profile.timeouts.idleMs),
-    })) {
-      const decoded = decodeModelStreamLine(line)
-      if (!decoded) continue
-      sawProviderEvent = true
-      if (decoded.done) {
-        sawTerminal = true
-        if (nativeStreamState) {
-          for (const event of finishNativeProviderStream(nativeStreamState, { requireFinishReason: true })) yield event
-          return
-        }
-        if (toolCallAcc.size > 0) {
-          const calls = [...toolCallAcc.entries()]
-            .sort((a, b) => a[0] - b[0])
-            .map(([, value]) => value)
-          yield { type: 'tool_calls', toolCalls: calls, finishReason: finishReason || 'tool_calls', usage: lastUsage }
-        } else {
-          yield { type: 'finish', finishReason: finishReason || 'stop', usage: lastUsage }
-        }
-        return
-      }
-
-      const chunk = decoded.data
-      const responseError = extractModelResponseError(chunk)
-      if (responseError) throw responseError
-
-      if (nativeStreamState) {
-        const nativeEvents = consumeNativeProviderStreamPayload(chunk, nativeStreamState)
-        for (const event of nativeEvents) {
-          if (event.type === 'reasoning' && event.delta) {
-            reasoningChars += event.delta.length
-            if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
-              await abortRunawayReasoning({
-                reader,
-                controller,
-                limit: reasoningCharLimit,
-                native: true,
-              })
-            }
-          }
-          yield event
-        }
-        if (nativeStreamState.finished) return
-        continue
-      }
-
-      const frame = normalizeCompatibleModelStreamPayload(chunk, compatibleStreamState)
-      const chunkUsage = extractUsage(chunk)
-      if (chunkUsage) {
-        lastUsage = chunkUsage
-        yield { type: 'usage', usage: chunkUsage }
-      }
-      if (frame.finishReason) finishReason = frame.finishReason
-      if (frame.reasoning) {
-        reasoningChars += frame.reasoning.length
-        if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
-          await abortRunawayReasoning({
-            reader,
-            controller,
-            limit: reasoningCharLimit,
-            native: false,
-          })
-        }
-        yield { type: 'reasoning', delta: frame.reasoning }
-      }
-      if (frame.text) yield { type: 'text', delta: frame.text }
-
-      for (const delta of frame.toolCallDeltas) {
-        const index = delta.index ?? 0
-        const existing = toolCallAcc.get(index) || { id: '', name: '', arguments: '' }
-        if (delta.id) existing.id = delta.id
-        if (delta.name) existing.name = delta.name
-        if (delta.argumentsMode === 'replace') existing.arguments = delta.arguments
-        else if (delta.arguments) existing.arguments += delta.arguments
-        if (!existing.id && existing.name) existing.id = `call-${index}-${existing.name}`
-        toolCallAcc.set(index, existing)
-        if (!readyToolCallIndexes.has(index) && existing.name && existing.arguments.trim()) {
-          try {
-            JSON.parse(existing.arguments)
-            readyToolCallIndexes.add(index)
-            yield { type: 'tool_call_ready', toolCall: { ...existing }, index }
-          } catch {
-            // Arguments are still partial; keep accumulating.
-          }
-        }
-      }
-      if (frame.terminal) {
-        sawTerminal = true
-        break
-      }
-    }
-
-    if (!sawProviderEvent) {
-      const error = new Error('模型流在返回任何有效事件前已结束。')
-      error.code = 'MODEL_STREAM_TRUNCATED'
-      throw error
-    }
-
-    if (nativeStreamState) {
-      for (const event of finishNativeProviderStream(nativeStreamState)) {
-        yield sawTerminal || !['tool_calls', 'finish'].includes(event?.type)
-          ? event
-          : { ...event, finishReason: 'truncated' }
-      }
-      return
-    }
-    if (toolCallAcc.size > 0) {
-      const calls = [...toolCallAcc.entries()]
-        .sort((a, b) => a[0] - b[0])
-        .map(([, value]) => value)
-      yield {
-        type: 'tool_calls',
-        toolCalls: calls,
-        finishReason: sawTerminal ? finishReason || 'tool_calls' : 'truncated',
-        usage: lastUsage,
-      }
-      return
-    }
-    yield {
-      type: 'finish',
-      finishReason: sawTerminal ? finishReason || 'stop' : 'truncated',
-      usage: lastUsage,
-    }
+      env,
+      tools,
+      toolChoice,
+      controller,
+      armTimer,
+    })
   } catch (error) {
     if (error?.name === 'AbortError' && !externalSignal?.aborted) {
       const phase = timedOutPhase || 'request'
