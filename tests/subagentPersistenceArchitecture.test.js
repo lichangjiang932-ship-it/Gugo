@@ -22,6 +22,10 @@ const appServerSource = readFileSync(
   new URL('../server/appServer.js', import.meta.url),
   'utf8',
 )
+const appServerStartSupportSource = readFileSync(
+  new URL('../server/appServerStartSupport.js', import.meta.url),
+  'utf8',
+)
 
 test('subagent runtime owns no concrete database or subagent_runs SQL dependency', () => {
   const runtimeBoundarySource = `${runtimeSource}\n${runStateSource}`
@@ -49,7 +53,7 @@ test('trusted startup selects one subagent adapter and passes it through the app
     /bootstrap\(\{[\s\S]*?subagentRunPersistenceAdapter,[\s\S]*?\}\)/u,
   )
   assert.match(
-    appServerSource,
+    appServerStartSupportSource,
     /APP_SUBAGENT_RUN_PERSISTENCE_BOOTSTRAP_REQUIRED/u,
   )
 })

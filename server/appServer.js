@@ -4,6 +4,11 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { logger, newTraceId, withLogContext } from './utils/logger.js'
 import {
+  createAppServerListeningReady,
+  validateAppServerStartOptions,
+} from './appServerStartSupport.js'
+import { createRuntimePluginStartupReady } from './appServerPluginStartup.js'
+import {
   corsMiddleware,
   securityHeaders,
   errorBoundary,
@@ -350,35 +355,16 @@ export async function completeRuntimeStartup({
 }
 
 export function startAppServer({
-  turnPersistenceAdapter,
-  managedAttachmentRuntimeAdapter,
-  subagentRunPersistenceAdapter,
-  compactionArchiveAdapter,
-  toolLoopAdapter,
+  turnPersistenceAdapter, managedAttachmentRuntimeAdapter, subagentRunPersistenceAdapter,
+  compactionArchiveAdapter, toolLoopAdapter,
   startBackgroundRuntimes = startBuiltinBackgroundRuntimes,
-  cwd = process.cwd(),
-  env = process.env,
-  runtimeEnv: preflightRuntimeEnv = null,
+  cwd = process.cwd(), env = process.env, runtimeEnv: preflightRuntimeEnv = null,
 } = {}) {
-  if (typeof startBackgroundRuntimes !== 'function') {
-    throw new TypeError('startBackgroundRuntimes must be a function')
-  }
-  if (!turnPersistenceAdapter) {
-    const error = new Error(
-      'Turn persistence must be selected by trusted runtime bootstrap before the app server starts',
-    )
-    error.code = 'APP_TURN_PERSISTENCE_BOOTSTRAP_REQUIRED'
-    error.retryable = false
-    throw error
-  }
-  if (!subagentRunPersistenceAdapter) {
-    const error = new Error(
-      'Subagent run persistence must be selected by trusted runtime bootstrap before the app server starts',
-    )
-    error.code = 'APP_SUBAGENT_RUN_PERSISTENCE_BOOTSTRAP_REQUIRED'
-    error.retryable = false
-    throw error
-  }
+  validateAppServerStartOptions({
+    startBackgroundRuntimes,
+    turnPersistenceAdapter,
+    subagentRunPersistenceAdapter,
+  })
   if (!fs.existsSync(path.join(distDir, 'index.html'))) {
     console.error('dist/index.html 不存在，请先运行 npm run build。')
     process.exitCode = 1
@@ -409,31 +395,15 @@ export function startAppServer({
     runtimeCwd: cwd,
   })
 
-  const listeningReady = new Promise((resolve, reject) => {
-    let settled = false
-    const onError = (error) => {
-      if (settled) return
-      settled = true
-      reject(error)
-    }
-    server.once('error', onError)
-    server.listen(port, host, () => {
-      server.off('error', onError)
-      if (settled) return
-      try {
-        startupAbortGuard.assertNotRequested()
-      } catch (error) {
-        settled = true
-        void gracefulShutdownProxy(server, { exit: false }).then(
-          () => reject(error),
-          () => reject(error),
-        )
-        return
-      }
-      settled = true
-      if (process.env.NODE_ENV !== 'production') logger.info(`Gugo running at http://${host}:${port}/`)
-      resolve()
-    })
+  const listeningReady = createAppServerListeningReady({
+    server,
+    port,
+    host,
+    startupAbortGuard,
+    shutdown: (target) => gracefulShutdownProxy(target, { exit: false }),
+    onReady: process.env.NODE_ENV !== 'production'
+      ? () => logger.info(`Gugo running at http://${host}:${port}/`)
+      : null,
   })
 
   // ★ 启动时由 lifecycle.bootstrap 统一编排 (包含 seedSystemSkills 等)
@@ -452,61 +422,25 @@ export function startAppServer({
     }
     throw startupError
   }
-  const runtimePluginStartupReady = listeningReady.then(async () => {
-    let compactionArchiveController = null
-    let persistenceLease = null
-    let persistenceFinalizerRegistered = false
-    try {
-      startupAbortGuard.assertNotRequested()
-      compactionArchiveController = createCompactionArchivePortController(
-        compactionArchiveAdapter || createSqliteFileCompactionArchiveAdapter({ env: runtimeEnv }),
-        { source: 'app.server' },
-      )
-      compactionArchiveController.activate()
-      recoverPendingSessionDeletion()
-      startupAbortGuard.assertNotRequested()
-      initializeRuntimePluginConfig({ cwd, env: runtimeEnv })
-      persistenceLease = acquireHostTurnPersistenceCapability(turnPersistenceAdapter)
-      registerServerShutdownFinalizer(server, () => persistenceLease.release())
-      persistenceFinalizerRegistered = true
-      const discovery = initPlugins({
-        rootDir: runtimePluginRoot,
-        silent: process.env.NODE_ENV === 'production',
-        includeManaged: true,
-        cwd,
-        env: runtimeEnv,
-      })
-      const restored = await restoreEnabledRuntimePlugins({ env: runtimeEnv })
-      for (const result of restored || []) {
-        if (!result?.ok) {
-          logger.warn(
-            `[plugins] runtime restore failed for ${result?.pluginId}: ${result?.error?.message || result?.error}`,
-          )
-        }
-      }
-      startupAbortGuard.assertNotRequested()
-      return Object.freeze({
-        compactionArchiveController,
-        discovery,
-        restored: Object.freeze([...(restored || [])]),
-      })
-    } catch (error) {
-      if (persistenceLease && !persistenceFinalizerRegistered) {
-        try {
-          persistenceLease.release()
-        } catch (releaseError) {
-          return releasePreparedCompactionArchive(
-            compactionArchiveController,
-            new AggregateError(
-              [error, releaseError],
-              'application startup failed and the host persistence lease could not be released',
-              { cause: releaseError },
-            ),
-          )
-        }
-      }
-      return releasePreparedCompactionArchive(compactionArchiveController, error)
-    }
+  const runtimePluginStartupReady = createRuntimePluginStartupReady({
+    listeningReady,
+    startupAbortGuard,
+    createCompactionArchiveController: createCompactionArchivePortController,
+    compactionArchiveAdapter,
+    createDefaultCompactionArchiveAdapter: createSqliteFileCompactionArchiveAdapter,
+    runtimeEnv,
+    recoverPendingSessionDeletion,
+    initializeRuntimePluginConfig,
+    cwd,
+    acquireHostTurnPersistenceCapability,
+    turnPersistenceAdapter,
+    registerServerShutdownFinalizer,
+    server,
+    initPlugins,
+    runtimePluginRoot,
+    restoreEnabledRuntimePlugins,
+    logger,
+    releasePreparedCompactionArchive,
   })
   const runtimeStartupReady = runtimePluginStartupReady.then(async (pluginStartup) => {
     try {
