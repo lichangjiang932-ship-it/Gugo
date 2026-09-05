@@ -8,6 +8,7 @@ import {
   resolveApprovalMode,
 } from '../utils/approvalPolicy.js'
 import { getApprovalSettings } from './approvalSettingsStore.js'
+import { enforceMandatoryPerCallApproval } from './approvalGateAuthorizationSupport.js'
 import { getHook } from './hooksService.js'
 import { validateHookAuthorizationProvenance } from './hookAuthorizationProvenance.js'
 import { getDynamicTool, getToolMetadata } from './toolRegistry.js'
@@ -473,40 +474,14 @@ export function authorizeApprovalRequest({
   })
   let verdict = classified.decision
   const policyProvenance = classified.policyProvenance
-  if (verdict?.failure) {
-    return { gate: policyFailureResult(verdict, policyProvenance) }
-  }
-  // Requiring a fresh human decision for model-authored code is owned by the
-  // host. Runtime policy plugins may make the classification stricter, but a
-  // permissive replacement must never weaken this boundary.
-  if (requiresPerCallApproval(toolName) && verdict?.decision !== 'deny') {
-    verdict = effectiveMode === 'off'
-      ? {
-          ...verdict,
-          decision: 'deny',
-          risk: 'high',
-          reason: toolName === 'run_code'
-            ? '审批队列已关闭，run_code 必须逐次批准，因此已保守拒绝。请开启审批后重试。'
-            : `审批队列已关闭，${toolName} 必须逐次批准，因此已保守拒绝。请开启审批后重试。`,
-        }
-      : settings.mode === 'plan'
-        ? {
-            ...verdict,
-            decision: 'deny',
-            risk: 'high',
-            reason: toolName === 'run_code'
-              ? '当前是计划模式，run_code 不允许执行。请切换到正常模式后再逐次批准。'
-              : `当前是计划模式，${toolName} 不允许执行。请切换到正常模式后再逐次批准。`,
-          }
-        : {
-            ...verdict,
-            decision: 'ask',
-            risk: 'high',
-            reason: verdict?.reason || (toolName === 'run_code'
-              ? '执行模型生成的受限代码，每次调用都需要明确批准'
-              : `执行 ${toolName}，每次调用都需要明确批准`),
-          }
-  }
+  if (verdict?.failure) return { gate: policyFailureResult(verdict, policyProvenance) }
+  // Runtime policies may tighten this host boundary, never weaken it.
+  verdict = enforceMandatoryPerCallApproval({
+    toolName,
+    effectiveMode,
+    permissionMode: settings.mode,
+    verdict,
+  })
   // plan 档位:直接拒,不排队等人 —— 用户要的就是「只看不动」
   if (verdict?.decision === 'deny') {
     return {
