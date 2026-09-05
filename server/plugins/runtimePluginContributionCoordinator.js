@@ -9,164 +9,165 @@ import {
   createRuntimePluginRevokeReceipt,
 } from './runtimePluginContributionLifecycle.js'
 
+function removeManagedContribution(record, contribution, onDispose) {
+  if (contribution.disposed) return false
+  contribution.disposed = true
+  contribution.active = false
+  contribution.hostValue = null
+  const index = record.managedContributions.indexOf(contribution)
+  if (index >= 0) record.managedContributions.splice(index, 1)
+  if (contribution.tracked) {
+    record.visibleEffects.delete(contribution.tracked)
+    record.effects.markDisposed(contribution.tracked)
+  }
+  onDispose?.(false)
+  return true
+}
+
+function trustedSyncContributionPart(deactivate, hostValue) {
+  if (typeof deactivate !== 'function') {
+    throw new TypeError('managed contribution must define deactivate or parts')
+  }
+  const dispose = () => deactivate(hostValue)
+  return {
+    id: 'primary',
+    handle: attachRuntimePluginBeginRevoke(dispose, () => {
+      const result = deactivate(hostValue)
+      assertLoopCleanupSynchronous(result)
+      return createRuntimePluginRevokeReceipt('revoked')
+    }),
+  }
+}
+
+function createManagedContributionRuntime(record, {
+  activate,
+  deactivate = null,
+  parts = null,
+  activationFailureParts = null,
+  activateImmediately = !record.deferVisibility,
+  onDispose = null,
+  onRevoke = null,
+}) {
+  const removeContribution = (contribution) => removeManagedContribution(
+    record,
+    contribution,
+    onDispose,
+  )
+  const contribution = {
+    active: false,
+    disposed: false,
+    hostValue: null,
+    lifecycle: null,
+    tracked: null,
+    activate() {
+      if (contribution.disposed || contribution.active) return false
+      const priorState = contribution.lifecycle?.snapshot().state
+      if (priorState && !['revoked', 'retired'].includes(priorState)) {
+        const error = new Error(
+          `plugin contribution cannot be restored from ${priorState}: ${record.manifest.id}`,
+        )
+        error.code = 'PLUGIN_CONTRIBUTION_RESTORE_UNSAFE'
+        error.retryable = true
+        throw error
+      }
+      try {
+        contribution.hostValue = activate()
+        const lifecycleParts = typeof parts === 'function'
+          ? parts(contribution.hostValue)
+          : [trustedSyncContributionPart(deactivate, contribution.hostValue)]
+        contribution.lifecycle = createRuntimePluginContributionLifecycle(lifecycleParts)
+        contribution.active = true
+        return true
+      } catch (error) {
+        if (typeof activationFailureParts === 'function') {
+          try {
+            const recoveryParts = activationFailureParts(contribution.hostValue)
+            if (recoveryParts.length > 0) {
+              contribution.lifecycle = createRuntimePluginContributionLifecycle(recoveryParts)
+              contribution.active = true
+            } else removeContribution(contribution)
+          } catch (recoveryError) {
+            removeContribution(contribution)
+            throw new AggregateError(
+              [error, recoveryError],
+              `plugin contribution activation recovery failed: ${record.manifest.id}`,
+              { cause: recoveryError },
+            )
+          }
+        } else removeContribution(contribution)
+        throw error
+      }
+    },
+    beginRevoke() {
+      if (contribution.disposed || !contribution.lifecycle) return null
+      const receipt = contribution.lifecycle.beginRevoke()
+      contribution.active = receipt.visibility !== 'revoked'
+      try { onRevoke?.(receipt) } catch { /* audit must not change lifecycle */ }
+      const cleanup = (async () => {
+        await receipt.cleanup
+        if (receipt.visibility !== 'revoked') {
+          const error = new Error(
+            `plugin contribution visibility is ${receipt.visibility}: ${record.manifest.id}`,
+          )
+          error.code = receipt.visibility === 'retained'
+            ? 'PLUGIN_CONTRIBUTION_RETAINED'
+            : 'PLUGIN_CONTRIBUTION_VISIBILITY_INDETERMINATE'
+          error.retryable = true
+          throw error
+        }
+        return true
+      })()
+      suppressNativePromiseRejection(cleanup)
+      return Object.freeze({ visibility: receipt.visibility, cleanup, snapshot: receipt.snapshot })
+    },
+    deactivate() {
+      const receipt = contribution.beginRevoke()
+      if (!receipt) return false
+      const cleanup = (async () => {
+        await receipt.cleanup
+        if (!contribution.retire()) {
+          const error = new Error(
+            `plugin contribution cleanup debt prevents retirement: ${record.manifest.id}`,
+          )
+          error.code = 'PLUGIN_CONTRIBUTION_CLEANUP_DEBT'
+          error.retryable = true
+          throw error
+        }
+        return true
+      })()
+      suppressNativePromiseRejection(cleanup)
+      return cleanup
+    },
+    discardInactive() {
+      if (contribution.active || contribution.lifecycle) return false
+      return removeContribution(contribution)
+    },
+    retire() {
+      if (contribution.disposed) return true
+      if (!contribution.lifecycle?.retire()) return false
+      return removeContribution(contribution)
+    },
+    snapshot() {
+      return contribution.lifecycle?.snapshot()
+        || Object.freeze({ state: 'inactive', parts: Object.freeze([]) })
+    },
+  }
+  record.managedContributions.push(contribution)
+  const tracked = record.effects.track(() => contribution.deactivate())
+  contribution.tracked = tracked
+  record.visibleEffects.add(tracked)
+  if (activateImmediately) contribution.activate()
+  return tracked
+}
+
 export function createRuntimePluginContributionCoordinator({ invokePluginCleanup }) {
   if (typeof invokePluginCleanup !== 'function') {
     throw new TypeError('runtime plugin contribution coordinator requires invokePluginCleanup')
   }
 
-  const createManagedContribution = (record, {
-    activate,
-    deactivate = null,
-    parts = null,
-    activationFailureParts = null,
-    activateImmediately = !record.deferVisibility,
-    onDispose = null,
-    onRevoke = null,
-  }) => {
-    const removeContribution = (contribution) => {
-      if (contribution.disposed) return false
-      contribution.disposed = true
-      contribution.active = false
-      contribution.hostValue = null
-      const index = record.managedContributions.indexOf(contribution)
-      if (index >= 0) record.managedContributions.splice(index, 1)
-      if (contribution.tracked) {
-        record.visibleEffects.delete(contribution.tracked)
-        record.effects.markDisposed(contribution.tracked)
-      }
-      onDispose?.(false)
-      return true
-    }
-
-    const trustedSyncPart = (hostValue) => {
-      if (typeof deactivate !== 'function') {
-        throw new TypeError('managed contribution must define deactivate or parts')
-      }
-      const dispose = () => deactivate(hostValue)
-      return {
-        id: 'primary',
-        handle: attachRuntimePluginBeginRevoke(dispose, () => {
-          const result = deactivate(hostValue)
-          assertLoopCleanupSynchronous(result)
-          return createRuntimePluginRevokeReceipt('revoked')
-        }),
-      }
-    }
-
-    const contribution = {
-      active: false,
-      disposed: false,
-      hostValue: null,
-      lifecycle: null,
-      tracked: null,
-      activate() {
-        if (contribution.disposed || contribution.active) return false
-        const priorState = contribution.lifecycle?.snapshot().state
-        if (priorState && !['revoked', 'retired'].includes(priorState)) {
-          const error = new Error(
-            `plugin contribution cannot be restored from ${priorState}: ${record.manifest.id}`,
-          )
-          error.code = 'PLUGIN_CONTRIBUTION_RESTORE_UNSAFE'
-          error.retryable = true
-          throw error
-        }
-        try {
-          contribution.hostValue = activate()
-          const lifecycleParts = typeof parts === 'function'
-            ? parts(contribution.hostValue)
-            : [trustedSyncPart(contribution.hostValue)]
-          contribution.lifecycle = createRuntimePluginContributionLifecycle(lifecycleParts)
-          contribution.active = true
-          return true
-        } catch (error) {
-          if (typeof activationFailureParts === 'function') {
-            try {
-              const recoveryParts = activationFailureParts(contribution.hostValue)
-              if (recoveryParts.length > 0) {
-                contribution.lifecycle = createRuntimePluginContributionLifecycle(recoveryParts)
-                contribution.active = true
-              } else {
-                removeContribution(contribution)
-              }
-            } catch (recoveryError) {
-              removeContribution(contribution)
-              throw new AggregateError(
-                [error, recoveryError],
-                `plugin contribution activation recovery failed: ${record.manifest.id}`,
-                { cause: recoveryError },
-              )
-            }
-          } else {
-            removeContribution(contribution)
-          }
-          throw error
-        }
-      },
-      beginRevoke() {
-        if (contribution.disposed || !contribution.lifecycle) return null
-        const receipt = contribution.lifecycle.beginRevoke()
-        contribution.active = receipt.visibility !== 'revoked'
-        try { onRevoke?.(receipt) } catch { /* audit must not change lifecycle */ }
-        const cleanup = (async () => {
-          await receipt.cleanup
-          if (receipt.visibility !== 'revoked') {
-            const error = new Error(
-              `plugin contribution visibility is ${receipt.visibility}: ${record.manifest.id}`,
-            )
-            error.code = receipt.visibility === 'retained'
-              ? 'PLUGIN_CONTRIBUTION_RETAINED'
-              : 'PLUGIN_CONTRIBUTION_VISIBILITY_INDETERMINATE'
-            error.retryable = true
-            throw error
-          }
-          return true
-        })()
-        suppressNativePromiseRejection(cleanup)
-        return Object.freeze({
-          visibility: receipt.visibility,
-          cleanup,
-          snapshot: receipt.snapshot,
-        })
-      },
-      deactivate() {
-        const receipt = contribution.beginRevoke()
-        if (!receipt) return false
-        const cleanup = (async () => {
-          await receipt.cleanup
-          if (!contribution.retire()) {
-            const error = new Error(
-              `plugin contribution cleanup debt prevents retirement: ${record.manifest.id}`,
-            )
-            error.code = 'PLUGIN_CONTRIBUTION_CLEANUP_DEBT'
-            error.retryable = true
-            throw error
-          }
-          return true
-        })()
-        suppressNativePromiseRejection(cleanup)
-        return cleanup
-      },
-      discardInactive() {
-        if (contribution.active || contribution.lifecycle) return false
-        return removeContribution(contribution)
-      },
-      retire() {
-        if (contribution.disposed) return true
-        if (!contribution.lifecycle?.retire()) return false
-        return removeContribution(contribution)
-      },
-      snapshot() {
-        return contribution.lifecycle?.snapshot()
-          || Object.freeze({ state: 'inactive', parts: Object.freeze([]) })
-      },
-    }
-    record.managedContributions.push(contribution)
-    const tracked = record.effects.track(() => contribution.deactivate())
-    contribution.tracked = tracked
-    record.visibleEffects.add(tracked)
-    if (activateImmediately) contribution.activate()
-    return tracked
-  }
+  const createManagedContribution = (record, options) => (
+    createManagedContributionRuntime(record, options)
+  )
 
   const beginManagedContributionDeactivation = (record, contributions = null) => {
     const errors = []
