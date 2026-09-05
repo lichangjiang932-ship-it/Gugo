@@ -37,6 +37,105 @@ export {
   serializeTaskVerificationRepair,
 } from './taskVerificationRepairState.js'
 
+function recordSuccessfulVerification(state, scopes, currentEpoch, workspaceRoot) {
+  const cleared = []
+  let indeterminateCleared = false
+  let overflowCleared = false
+  for (const scope of scopes) {
+    overflowCleared = clearCoveredVerificationOverflow(state, scope, workspaceRoot) || overflowCleared
+    for (const [candidateKey, candidate] of [...state.candidates]) {
+      if (verificationScopeCovers(scope, candidate, workspaceRoot)) state.candidates.delete(candidateKey)
+    }
+    for (const [pendingKey, pending] of [...state.pending]) {
+      if (currentEpoch >= pending.requiredEpoch
+        && verificationScopeCovers(scope, pending, workspaceRoot)) {
+        state.pending.delete(pendingKey)
+        cleared.push(pending)
+      }
+    }
+    for (const [verifiedKey, verified] of [...state.verified]) {
+      if (verificationScopeCovers(scope, verified, workspaceRoot)) state.verified.delete(verifiedKey)
+    }
+    const verified = normalizeVerified({ ...scope, verifiedEpoch: currentEpoch })
+    if (verified) {
+      if (!state.verified.has(verified.scope)
+        && state.verified.size >= MAX_TASK_VERIFICATION_VERIFIED) {
+        markVerificationOverflow(state, verified)
+      } else {
+        state.verified.set(verified.scope, verified)
+      }
+    }
+    for (const [key, indeterminate] of [...state.indeterminate]) {
+      if (verificationScopeCovers(scope, indeterminate, workspaceRoot)) {
+        state.indeterminate.delete(key)
+        indeterminateCleared = true
+      }
+    }
+  }
+  syncLastIndeterminate(state)
+  if ((cleared.length > 0 || indeterminateCleared || overflowCleared)
+    && state.pending.size === 0
+    && state.indeterminate.size === 0
+    && !state.verificationOverflowed) {
+    state.consecutiveFailures = 0
+    state.lastFailureBatchId = ''
+  }
+  return {
+    changed: cleared.length > 0 || indeterminateCleared || overflowCleared,
+    failed: false,
+    cleared,
+  }
+}
+
+function recordIndeterminateVerification({
+  state, scopes, projectedResult, currentEpoch, mutationObserved, workspaceRoot, call,
+}) {
+  const recordedMutationTargets = [...state.mutationTargets.keys()]
+  const relatedScopes = (mutationObserved || currentEpoch > 0)
+    ? relatedVerificationScopes(scopes, recordedMutationTargets, workspaceRoot)
+    : []
+  if (relatedScopes.length === 0) {
+    return { changed: false, failed: false, indeterminate: true, cleared: [] }
+  }
+  const tool = String(call?.name || '').trim()
+  const code = String(projectedResult.code
+    || (projectedResult.timedOut ? 'COMMAND_TIMEOUT' : '')
+    || (projectedResult.cancelled ? 'COMMAND_CANCELLED' : '')
+    || 'VERIFICATION_INDETERMINATE')
+  const message = compactVerificationFailure(
+    projectedResult,
+    'The verification environment did not produce a conclusive result.',
+  )
+  let recorded = false
+  for (const scope of relatedScopes) {
+    const indeterminate = normalizeIndeterminate({
+      ...scope,
+      requiredEpoch: currentEpoch,
+      mutationTargets: scope.mutationTargets,
+      tool,
+      code,
+      message,
+    })
+    if (!indeterminate) continue
+    if (!state.indeterminate.has(indeterminate.scope)
+      && state.indeterminate.size >= MAX_TASK_VERIFICATION_INDETERMINATES) {
+      markVerificationOverflow(state, indeterminate)
+      continue
+    }
+    state.indeterminate.delete(indeterminate.scope)
+    state.indeterminate.set(indeterminate.scope, indeterminate)
+    recorded = true
+  }
+  syncLastIndeterminate(state)
+  return {
+    changed: recorded,
+    failed: false,
+    indeterminate: true,
+    cleared: [],
+    kinds: relatedScopes.map(({ kind }) => kind),
+  }
+}
+
 export function observeTaskVerificationRepair(state, call, result, {
   mutationObserved = false,
   batchId = '',
@@ -66,107 +165,18 @@ export function observeTaskVerificationRepair(state, call, result, {
   const projectedResult = { ...(result || {}), ...projectVerificationFields(result) }
 
   if (isDeterministicVerificationSuccess(projectedResult)) {
-    const cleared = []
-    let indeterminateCleared = false
-    let overflowCleared = false
-    for (const scope of scopes) {
-      overflowCleared = clearCoveredVerificationOverflow(state, scope, workspaceRoot)
-        || overflowCleared
-      for (const [candidateKey, candidate] of [...state.candidates]) {
-        if (verificationScopeCovers(scope, candidate, workspaceRoot)) {
-          state.candidates.delete(candidateKey)
-        }
-      }
-      for (const [pendingKey, pending] of [...state.pending]) {
-        if (currentEpoch >= pending.requiredEpoch
-          && verificationScopeCovers(scope, pending, workspaceRoot)) {
-          state.pending.delete(pendingKey)
-          cleared.push(pending)
-        }
-      }
-      for (const [verifiedKey, verified] of [...state.verified]) {
-        if (verificationScopeCovers(scope, verified, workspaceRoot)) {
-          state.verified.delete(verifiedKey)
-        }
-      }
-      const verified = normalizeVerified({
-        ...scope,
-        verifiedEpoch: currentEpoch,
-      })
-      if (verified) {
-        if (!state.verified.has(verified.scope)
-          && state.verified.size >= MAX_TASK_VERIFICATION_VERIFIED) {
-          markVerificationOverflow(state, verified)
-        } else {
-          state.verified.set(verified.scope, verified)
-        }
-      }
-      for (const [indeterminateKey, indeterminate] of [...state.indeterminate]) {
-        if (verificationScopeCovers(scope, indeterminate, workspaceRoot)) {
-          state.indeterminate.delete(indeterminateKey)
-          indeterminateCleared = true
-        }
-      }
-    }
-    syncLastIndeterminate(state)
-    if ((cleared.length > 0 || indeterminateCleared || overflowCleared)
-      && state.pending.size === 0
-      && state.indeterminate.size === 0
-      && !state.verificationOverflowed) {
-      state.consecutiveFailures = 0
-      state.lastFailureBatchId = ''
-    }
-    return {
-      changed: cleared.length > 0 || indeterminateCleared || overflowCleared,
-      failed: false,
-      cleared,
-    }
+    return recordSuccessfulVerification(state, scopes, currentEpoch, workspaceRoot)
   }
   if (!isDeterministicVerificationFailure(projectedResult)) {
-    const recordedMutationTargets = [...state.mutationTargets.keys()]
-    const relatedScopes = (mutationObserved || currentEpoch > 0)
-      ? relatedVerificationScopes(scopes, recordedMutationTargets, workspaceRoot)
-      : []
-    if (relatedScopes.length === 0) {
-      return { changed: false, failed: false, indeterminate: true, cleared: [] }
-    }
-    const tool = String(call?.name || '').trim()
-    const code = String(projectedResult.code
-      || (projectedResult.timedOut ? 'COMMAND_TIMEOUT' : '')
-      || (projectedResult.cancelled ? 'COMMAND_CANCELLED' : '')
-      || 'VERIFICATION_INDETERMINATE')
-    const message = compactVerificationFailure(
+    return recordIndeterminateVerification({
+      state,
+      scopes,
       projectedResult,
-      'The verification environment did not produce a conclusive result.',
-    )
-    let recorded = false
-    for (const scope of relatedScopes) {
-      const indeterminate = normalizeIndeterminate({
-        ...scope,
-        requiredEpoch: currentEpoch,
-        mutationTargets: scope.mutationTargets,
-        tool,
-        code,
-        message,
-      })
-      if (!indeterminate) continue
-      if (!state.indeterminate.has(indeterminate.scope)
-        && state.indeterminate.size >= MAX_TASK_VERIFICATION_INDETERMINATES) {
-        markVerificationOverflow(state, indeterminate)
-        continue
-      }
-      state.indeterminate.delete(indeterminate.scope)
-      state.indeterminate.set(indeterminate.scope, indeterminate)
-      recorded = true
-    }
-    syncLastIndeterminate(state)
-    return {
-      changed: recorded,
-      failed: false,
-      indeterminate: true,
-      cleared: [],
-      kinds: relatedScopes.map(({ kind }) => kind),
-    }
+      currentEpoch,
+      mutationObserved,
+      workspaceRoot,
+      call,
+    })
   }
 
   const tool = String(call?.name || '').trim()
