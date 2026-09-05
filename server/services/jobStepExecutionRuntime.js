@@ -47,6 +47,152 @@ import {
 } from './jobModelExecutionRuntime.js'
 import { filterLiveJobDirectoryAuthorizationCheckpoint } from './jobCheckpointAuthorizationRuntime.js'
 
+async function executeFinalizeJobStep({
+  job,
+  step,
+  createDocxImpl,
+  validateGeneratedArtifact,
+  discardInvalidGeneratedArtifact,
+  artifactDirectory,
+}) {
+  let finalOutput = buildFinalOutput(job)
+  const generatedTexts = (job.steps || [])
+    .filter((item) => ['execute', 'batch_item'].includes(item.kind))
+    .map((item) => item.output?.text)
+    .filter(Boolean)
+  const hasOwnedDocxArtifact = (Array.isArray(job.artifacts) ? job.artifacts : []).some((artifact) => (
+    artifact?.jobId === job.id
+    && artifact?.userId === job.userId
+    && String(artifact?.type || '').trim().toLowerCase() === 'docx'
+  ))
+  if (generatedTexts.length && shouldCompileDocx(job.prompt) && !hasOwnedDocxArtifact) {
+    const artifact = await createDocxImpl({
+      title: job.title,
+      paragraphs: generatedTexts.map((text, index) => ({ heading: index === 0 ? 1 : 2, text })),
+    })
+    try {
+      await validateGeneratedArtifact({
+        filePath: artifact?.fullPath,
+        filename: artifact?.filename,
+        toolName: 'create_docx',
+        artifactType: artifact?.type || 'docx',
+      })
+    } catch (error) {
+      try { discardInvalidGeneratedArtifact({ filePath: artifact?.fullPath, artifactDirectory }) }
+      catch { /* cleanup must not replace validation failure */ }
+      throw error
+    }
+    appendJobArtifact({
+      id: artifact.id, jobId: job.id, userId: job.userId, stepId: step.id,
+      type: artifact.type, title: artifact.title || job.title,
+      url: artifact.url, filename: artifact.filename,
+    })
+    const refreshedJob = getJobWithChildren(job.id) || {
+      ...job,
+      artifacts: [...(job.artifacts || []), artifact],
+    }
+    finalOutput = buildFinalOutput(refreshedJob)
+  }
+  return {
+    ok: finalOutput.complete !== false,
+    error: finalOutput.complete === false ? finalOutput.summary : null,
+    acceptance: finalOutput.acceptance || null,
+    output: { phase: 'finalize', ...finalOutput },
+  }
+}
+
+async function resolveJobToolCatalog({ enableServerTools, job, skillId }) {
+  const artifactTools = allowedArtifactTools(job.prompt, { skillId })
+  if (!enableServerTools) return { artifactTools, jobToolSpecs: [] }
+  const { specs: mcpToolSpecs } = await listUserToolSpecs(job.userId)
+  const browserToolSpecs = listRegisteredBrowserToolSpecs()
+  const runtimeToolSpecs = listAllSpecs({ userId: job.userId })
+    .filter((entry) => entry?.origin === 'plugin')
+    .map((entry) => entry?.tool)
+  const visible = [...new Map(
+    [...SERVER_TOOL_SPECS, ...mcpToolSpecs, ...browserToolSpecs, ...runtimeToolSpecs]
+      .filter((spec) => spec?.function?.name)
+      .map((spec) => [spec.function.name, spec]),
+  ).values()]
+  const policyVisible = projectToolSpecsForRuntimePolicy(visible, { userId: job.userId })
+  return {
+    artifactTools,
+    jobToolSpecs: selectToolSpecs({
+      prompt: job.prompt, skillId, specs: policyVisible, userId: job.userId,
+    }),
+  }
+}
+
+async function executeJobToolStep({
+  job,
+  step,
+  messages,
+  jobToolSpecs,
+  selectedModel,
+  modelEnv,
+  runModelWithTools,
+  readModelRequestResolution,
+  reconcileModelRequest,
+  signal,
+  claimSteering,
+  acknowledgeSteering,
+  releaseSteering,
+  runtimeCore,
+  commitCheckpoint,
+  evaluateCurrentStep,
+}) {
+  const checkpointEnabled = !!(
+    job?.id && job?.userId && step?.id && getJobRow(job.id, { userId: job.userId })
+  )
+  const loopModel = createJobLoopModelBridge({
+    job, step, selectedModel, modelEnv, runModelWithTools,
+    readModelRequestResolution, reconcileModelRequest,
+  })
+  const result = await runToolLoop({
+    job,
+    step,
+    messages,
+    toolSpecs: jobToolSpecs,
+    intentMode: ['execute', 'batch_item'].includes(step.kind) ? 'execute' : 'auto',
+    runModel: loopModel.run,
+    reconcileModelRequest: loopModel.reconcile,
+    signal,
+    onApprovalPending: (approval) => markJobAwaitingApproval(job, step, approval),
+    onApprovalResolved: (decision) => markJobRunningAgain(job, step, decision),
+    claimSteering,
+    acknowledgeSteering,
+    releaseSteering,
+    loadCheckpoint: checkpointEnabled
+      ? async () => filterLiveJobDirectoryAuthorizationCheckpoint(
+          await runtimeCore.checkpoint.load({ jobId: job.id, stepId: step.id, userId: job.userId }),
+          { userId: job.userId },
+        )
+      : null,
+    saveCheckpoint: checkpointEnabled
+      ? (state, metadata = {}) => {
+          const save = () => runtimeCore.checkpoint.save(
+            { jobId: job.id, stepId: step.id, userId: job.userId },
+            state,
+            { checkpointWriteSequence: metadata.checkpointWriteSequence },
+          )
+          return typeof commitCheckpoint === 'function' ? commitCheckpoint(save) : save()
+        }
+      : null,
+    contextWindow: getModelContextWindow({
+      modelName: selectedModel,
+      env: modelEnv || buildUserModelEnv({ userId: job.userId }),
+    }),
+  })
+  if (result.paused && checkpointEnabled) {
+    const makeResumable = () => runtimeCore.checkpoint.makeResumable({
+      jobId: job.id, stepId: step.id, userId: job.userId,
+    })
+    const saved = typeof commitCheckpoint === 'function' ? commitCheckpoint(makeResumable) : makeResumable()
+    if (!saved) throw new Error('Failed to persist resumable job turn checkpoint')
+  }
+  return buildToolStepResult({ job, step, result, taskEvaluator: evaluateCurrentStep })
+}
+
 export function createDefaultExecuteStep({
   runModel = runDefaultJobModel,
   runModelWithTools = runDefaultJobModelWithTools,
@@ -87,64 +233,14 @@ export function createDefaultExecuteStep({
     }
 
     if (step.kind === 'finalize') {
-      let finalOutput = buildFinalOutput(job)
-      const generatedTexts = (job.steps || [])
-        .filter((item) => ['execute', 'batch_item'].includes(item.kind))
-        .map((item) => item.output?.text)
-        .filter(Boolean)
-      const hasOwnedDocxArtifact = (Array.isArray(job.artifacts) ? job.artifacts : []).some((artifact) => (
-        artifact?.jobId === job.id
-        && artifact?.userId === job.userId
-        && String(artifact?.type || '').trim().toLowerCase() === 'docx'
-      ))
-      if (generatedTexts.length && shouldCompileDocx(job.prompt) && !hasOwnedDocxArtifact) {
-        const artifact = await createDocxImpl({
-          title: job.title,
-          paragraphs: generatedTexts.map((text, index) => ({
-            heading: index === 0 ? 1 : 2,
-            text,
-          })),
-        })
-        try {
-          await validateGeneratedArtifact({
-            filePath: artifact?.fullPath,
-            filename: artifact?.filename,
-            toolName: 'create_docx',
-            artifactType: artifact?.type || 'docx',
-          })
-        } catch (error) {
-          try {
-            discardInvalidGeneratedArtifact({
-              filePath: artifact?.fullPath,
-              artifactDirectory,
-            })
-          } catch {
-            // Cleanup is best-effort and must not replace the validation error.
-          }
-          throw error
-        }
-        appendJobArtifact({
-          id: artifact.id,
-          jobId: job.id,
-          userId: job.userId,
-          stepId: step.id,
-          type: artifact.type,
-          title: artifact.title || job.title,
-          url: artifact.url,
-          filename: artifact.filename,
-        })
-        const refreshedJob = getJobWithChildren(job.id) || {
-          ...job,
-          artifacts: [...(job.artifacts || []), artifact],
-        }
-        finalOutput = buildFinalOutput(refreshedJob)
-      }
-      return {
-        ok: finalOutput.complete !== false,
-        error: finalOutput.complete === false ? finalOutput.summary : null,
-        acceptance: finalOutput.acceptance || null,
-        output: { phase: 'finalize', ...finalOutput },
-      }
+      return executeFinalizeJobStep({
+        job,
+        step,
+        createDocxImpl,
+        validateGeneratedArtifact,
+        discardInvalidGeneratedArtifact,
+        artifactDirectory,
+      })
     }
 
     const { skillId, userPrompt, skill } = resolveJobSkillContext({ prompt: job.prompt, userId: job.userId })
@@ -154,31 +250,10 @@ export function createDefaultExecuteStep({
     //   以前这段提示词无条件注入 —— 修 bug 的任务里也常驻 7 条「PPT 必守规则」
     //   外加一句「不要把内容写成纯文本回答」,等于在推模型把中期汇报做成 PPT。
     //   现在:用户没要文件,就一个字都不提文件工具;要了哪种,才注入哪种的规则。
-    const artifactTools = allowedArtifactTools(job.prompt, { skillId })
-    const { specs: mcpToolSpecs } = enableServerTools
-      ? await listUserToolSpecs(job.userId)
-      : { specs: [] }
-    const browserToolSpecs = enableServerTools ? listRegisteredBrowserToolSpecs() : []
-    const runtimeToolSpecs = enableServerTools
-      ? listAllSpecs({ userId: job.userId }).filter((entry) => entry?.origin === 'plugin').map((entry) => entry?.tool) : []
-    const visibleJobToolSpecs = [...new Map(
-      [...SERVER_TOOL_SPECS, ...mcpToolSpecs, ...browserToolSpecs, ...runtimeToolSpecs]
-        .filter((spec) => spec?.function?.name)
-        .map((spec) => [spec.function.name, spec]),
-    ).values()]
-    // Background jobs do not carry TurnEngine's file-access snapshot, but they
-    // must still honor the same deployment and per-user capability policy
-    // before a schema reaches the model. With no snapshot, workspace tools keep
-    // their existing Job behavior while run_code uses the authoritative runtime
-    // trust predicate and every explicit user tool override remains enforced.
-    const policyVisibleJobToolSpecs = projectToolSpecsForRuntimePolicy(visibleJobToolSpecs, {
-      userId: job.userId,
-    })
-    const jobToolSpecs = selectToolSpecs({
-      prompt: job.prompt,
+    const { artifactTools, jobToolSpecs } = await resolveJobToolCatalog({
+      enableServerTools,
+      job,
       skillId,
-      specs: policyVisibleJobToolSpecs,
-      userId: job.userId,
     })
     let outputDirectoryContext = {}
     try {
@@ -222,71 +297,24 @@ export function createDefaultExecuteStep({
     messages.push({ role: 'user', content: finalPrompt })
 
     if (enableServerTools) {
-      const checkpointEnabled = !!(
-        job?.id
-        && job?.userId
-        && step?.id
-        && getJobRow(job.id, { userId: job.userId })
-      )
-      const loopModel = createJobLoopModelBridge({
-        job, step, selectedModel, modelEnv, runModelWithTools,
-        readModelRequestResolution, reconcileModelRequest,
-      })
-      const result = await runToolLoop({
+      return executeJobToolStep({
         job,
         step,
         messages,
-        // 提示词分支和工具集裁剪必须用同一份判定,否则会出现
-        // 「提示词说没有文件工具、工具列表里却还躺着 create_pptx」的错位。
-        toolSpecs: jobToolSpecs,
-        // Planner step kinds are already a trusted execution decision. Do not
-        // send execute/batch work back through a verb heuristic: prompts such
-        // as "send a Slack message" otherwise accept prose as completion even
-        // though no tool ever ran.
-        intentMode: ['execute', 'batch_item'].includes(step.kind) ? 'execute' : 'auto',
-        runModel: loopModel.run,
-        reconcileModelRequest: loopModel.reconcile,
+        jobToolSpecs,
+        selectedModel,
+        modelEnv,
+        runModelWithTools,
+        readModelRequestResolution,
+        reconcileModelRequest,
         signal,
-        onApprovalPending: (approval) => markJobAwaitingApproval(job, step, approval),
-        onApprovalResolved: (decision) => markJobRunningAgain(job, step, decision),
         claimSteering,
         acknowledgeSteering,
         releaseSteering,
-        loadCheckpoint: checkpointEnabled
-          ? async () => filterLiveJobDirectoryAuthorizationCheckpoint(
-              await runtimeCore.checkpoint.load({ jobId: job.id, stepId: step.id, userId: job.userId }),
-              { userId: job.userId },
-            )
-          : null,
-        saveCheckpoint: checkpointEnabled
-          ? (state, metadata = {}) => {
-              const save = () => runtimeCore.checkpoint.save(
-                { jobId: job.id, stepId: step.id, userId: job.userId },
-                state,
-                { checkpointWriteSequence: metadata.checkpointWriteSequence },
-              )
-              return typeof commitCheckpoint === 'function' ? commitCheckpoint(save) : save()
-            }
-          : null,
-        contextWindow: getModelContextWindow({
-          modelName: selectedModel,
-          env: modelEnv || buildUserModelEnv({ userId: job.userId }),
-        }),
+        runtimeCore,
+        commitCheckpoint,
+        evaluateCurrentStep,
       })
-      // ★ 修:以前这里只取 text/artifactIds/iterations,把 paused / budgetExceeded
-      // 静默丢掉 → 被澄清打断或预算耗尽的截断运行会上报 ok:true 假装成功。
-      // 现在如实透传,截断就是截断。
-      //
-      // interrupted = the model failed after partial progress; the shared loop returned a safe partial result.
-      // 同样算截断,但**不算 failed** —— 用户能看到已经做完的部分。
-      if (result.paused && checkpointEnabled) {
-        const makeResumable = () => runtimeCore.checkpoint.makeResumable({
-          jobId: job.id, stepId: step.id, userId: job.userId,
-        })
-        const saved = typeof commitCheckpoint === 'function' ? commitCheckpoint(makeResumable) : makeResumable()
-        if (!saved) throw new Error('Failed to persist resumable job turn checkpoint')
-      }
-      return buildToolStepResult({ job, step, result, taskEvaluator: evaluateCurrentStep })
     }
 
     // 兼容路径:enableServerTools=false 时退回纯文本(老行为)

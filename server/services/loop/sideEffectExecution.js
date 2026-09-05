@@ -25,6 +25,133 @@ export function markSideEffectOutcomeKnownFailed(error, { code, retryable = fals
  * Identity construction and all recovery decisions stay centralized so the
  * loop cannot accidentally replay an uncertain side effect.
  */
+function recoverDurableSideEffect(context, checkpointArgs, { allowIdempotentResume = false } = {}) {
+  const { call, ledger, inputFor, toolName, recoveryBlock, conflictCode, unknownCode, state } = context
+  if (call.checkpointStatus !== 'executing') return { resumedPrepared: false, result: null }
+  if (!ledger) return { resumedPrepared: false, result: null }
+  const input = inputFor(checkpointArgs, { requireCurrentSideEffect: false })
+  const existing = ledger.read(input)
+  if (!existing) {
+    if (call.checkpointReadOnly === true) return { resumedPrepared: false, result: null }
+    throw recoveryBlock(
+      unknownCode,
+      `The service restarted while ${toolName} was executing, but the checkpoint has no durable side-effect record and was not explicitly read-only. Verify local state before retrying.`,
+    )
+  }
+  if (existing.status === 'executing') {
+    if (allowIdempotentResume === true) {
+      state.resumedExecutingInput = input
+      return { resumedPrepared: false, resumedExecuting: true, result: null }
+    }
+    const unknown = ledger.markUnknown(input)
+    throw recoveryBlock(
+      unknownCode,
+      `The service restarted while ${toolName} was executing. Its outcome is unknown and it was not replayed.`,
+      unknown,
+    )
+  }
+  if (existing.status === 'unknown') {
+    throw recoveryBlock(
+      unknownCode,
+      `The outcome of ${toolName} still requires manual verification and was not replayed.`,
+      existing,
+    )
+  }
+  if (existing.status === 'prepared') return { resumedPrepared: true, result: null }
+  if (existing.status === 'committed' || existing.status === 'failed') {
+    return { resumedPrepared: false, result: ledger.parseOutcome(existing) }
+  }
+  throw recoveryBlock(
+    conflictCode,
+    `The durable side-effect record for ${toolName} has an invalid state and execution was blocked.`,
+    existing,
+  )
+}
+
+function prepareDurableSideEffect(context, args, { resumeExecuting = false } = {}) {
+  const { ledger, inputFor, toolName, recoveryBlock, conflictCode, unknownCode, state } = context
+  const input = inputFor(args)
+  if (!input) return { input: null, replayed: false, result: null }
+  const record = resumeExecuting === true && state.resumedExecutingInput
+    ? ledger.read(input)
+    : ledger.prepare(input)
+  if (!record) {
+    throw recoveryBlock(
+      conflictCode,
+      `The durable side-effect record for ${toolName} is missing and execution was blocked.`,
+    )
+  }
+  if (record.status === 'executing') {
+    if (resumeExecuting === true && state.resumedExecutingInput) {
+      return { input, replayed: false, resumedExecuting: true, result: null }
+    }
+    const unknown = ledger.markUnknown(input)
+    throw recoveryBlock(
+      unknownCode,
+      `A prior ${toolName} execution did not record a final outcome and was not replayed.`,
+      unknown,
+    )
+  }
+  if (record.status === 'unknown') {
+    throw recoveryBlock(
+      unknownCode,
+      `The outcome of ${toolName} requires manual verification and was not replayed.`,
+      record,
+    )
+  }
+  if (record.status === 'committed' || record.status === 'failed') {
+    return { input, replayed: true, result: ledger.parseOutcome(record) }
+  }
+  if (record.status !== 'prepared') {
+    throw recoveryBlock(
+      conflictCode,
+      `The durable side-effect record for ${toolName} could not be prepared safely.`,
+      record,
+    )
+  }
+  return { input, replayed: false, result: null }
+}
+
+function rethrowSideEffectExecutionError(context, {
+  error,
+  input,
+  started,
+  returned,
+  result,
+  checkpointFlushErrorCode,
+}) {
+  const { ledger, toolName, recoveryBlock, unknownCode } = context
+  if (input && started && !returned) {
+    const knownFailedOutcome = knownFailedSideEffectOutcomes.get(error)
+    if (knownFailedOutcome) {
+      let persistedKnownFailure = false
+      try {
+        const record = ledger.finish(input, { status: 'failed', outcome: knownFailedOutcome })
+        persistedKnownFailure = record?.status === 'failed'
+      } catch { /* fail closed as unknown below */ }
+      if (persistedKnownFailure) throw error
+    }
+    let unknown = null
+    try { unknown = ledger.markUnknown(input) } catch { /* fail closed below */ }
+    throw recoveryBlock(
+      unknownCode,
+      `${toolName} raised an error after crossing the side-effect boundary. It may have partially completed and was not replayed.`,
+      unknown,
+    )
+  }
+  if (input && returned && error?.code !== checkpointFlushErrorCode) {
+    if (error?.unsafeToReplay === true) throw error
+    let unknown = null
+    try { unknown = ledger.markUnknown(input, { outcome: result }) } catch { /* fail closed below */ }
+    throw recoveryBlock(
+      unknownCode,
+      `The returned outcome of ${toolName} could not be persisted safely. Verify local state before retrying.`,
+      unknown,
+    )
+  }
+  throw error
+}
+
 export function createSideEffectExecution({
   ledger,
   durableToolNames,
@@ -40,7 +167,7 @@ export function createSideEffectExecution({
   conflictCode,
   unknownCode,
 }) {
-  let resumedExecutingInput = null
+  const executionState = { resumedExecutingInput: null }
 
   const enabledFor = (args) => Boolean(ledger) && (
     typeof isDurableSideEffect === 'function'
@@ -66,105 +193,16 @@ export function createSideEffectExecution({
     }
   }
 
-  const recover = (checkpointArgs, { allowIdempotentResume = false } = {}) => {
-    if (call.checkpointStatus !== 'executing') {
-      return { resumedPrepared: false, result: null }
-    }
-    // Durable history is authoritative during recovery. Current tool metadata
-    // may have drifted since the checkpoint and cannot erase an old barrier.
-    if (!ledger) {
-      // Injected executors may intentionally run without a ledger. Their
-      // explicit idempotency contract and the persisted read-only bit are
-      // evaluated by the caller; every other replay remains blocked there.
-      return { resumedPrepared: false, result: null }
-    }
-    const input = inputFor(checkpointArgs, { requireCurrentSideEffect: false })
-    const existing = ledger.read(input)
-    if (!existing) {
-      if (call.checkpointReadOnly === true) return { resumedPrepared: false, result: null }
-      throw recoveryBlock(
-        unknownCode,
-        `The service restarted while ${toolName} was executing, but the checkpoint has no durable side-effect record and was not explicitly read-only. Verify local state before retrying.`,
-      )
-    }
-    if (existing.status === 'executing') {
-      if (allowIdempotentResume === true) {
-        // The caller has verified an explicit executor contract for this exact
-        // persisted call identity. Reuse the original claim: claiming it a
-        // second time would turn a safe idempotent resume into an artificial
-        // outcome-unknown failure.
-        resumedExecutingInput = input
-        return { resumedPrepared: false, resumedExecuting: true, result: null }
-      }
-      const unknown = ledger.markUnknown(input)
-      throw recoveryBlock(
-        unknownCode,
-        `The service restarted while ${toolName} was executing. Its outcome is unknown and it was not replayed.`,
-        unknown,
-      )
-    }
-    if (existing.status === 'unknown') {
-      throw recoveryBlock(
-        unknownCode,
-        `The outcome of ${toolName} still requires manual verification and was not replayed.`,
-        existing,
-      )
-    }
-    if (existing.status === 'prepared') {
-      return { resumedPrepared: true, result: null }
-    }
-    if (existing.status === 'committed' || existing.status === 'failed') {
-      return { resumedPrepared: false, result: ledger.parseOutcome(existing) }
-    }
-    throw recoveryBlock(
-      conflictCode,
-      `The durable side-effect record for ${toolName} has an invalid state and execution was blocked.`,
-      existing,
-    )
+  const executionContext = {
+    call, ledger, inputFor, toolName, recoveryBlock, conflictCode, unknownCode,
+    state: executionState,
   }
-
-  const prepare = (args, { resumeExecuting = false } = {}) => {
-    const input = inputFor(args)
-    if (!input) return { input: null, replayed: false, result: null }
-    const record = resumeExecuting === true && resumedExecutingInput
-      ? ledger.read(input)
-      : ledger.prepare(input)
-    if (!record) {
-      throw recoveryBlock(
-        conflictCode,
-        `The durable side-effect record for ${toolName} is missing and execution was blocked.`,
-      )
-    }
-    if (record.status === 'executing') {
-      if (resumeExecuting === true && resumedExecutingInput) {
-        return { input, replayed: false, resumedExecuting: true, result: null }
-      }
-      const unknown = ledger.markUnknown(input)
-      throw recoveryBlock(
-        unknownCode,
-        `A prior ${toolName} execution did not record a final outcome and was not replayed.`,
-        unknown,
-      )
-    }
-    if (record.status === 'unknown') {
-      throw recoveryBlock(
-        unknownCode,
-        `The outcome of ${toolName} requires manual verification and was not replayed.`,
-        record,
-      )
-    }
-    if (record.status === 'committed' || record.status === 'failed') {
-      return { input, replayed: true, result: ledger.parseOutcome(record) }
-    }
-    if (record.status !== 'prepared') {
-      throw recoveryBlock(
-        conflictCode,
-        `The durable side-effect record for ${toolName} could not be prepared safely.`,
-        record,
-      )
-    }
-    return { input, replayed: false, result: null }
-  }
+  const recover = (checkpointArgs, options) => recoverDurableSideEffect(
+    executionContext,
+    checkpointArgs,
+    options,
+  )
+  const prepare = (args, options) => prepareDurableSideEffect(executionContext, args, options)
 
   const markExecuting = (input) => {
     const claim = ledger.claimExecution(input)
@@ -178,9 +216,9 @@ export function createSideEffectExecution({
   }
 
   const blockResumedExecution = () => {
-    if (!resumedExecutingInput) return null
-    const input = resumedExecutingInput
-    resumedExecutingInput = null
+    if (!executionState.resumedExecutingInput) return null
+    const input = executionState.resumedExecutingInput
+    executionState.resumedExecutingInput = null
     const unknown = ledger.markUnknown(input)
     if (unknown?.status !== 'unknown') {
       throw recoveryBlock(
@@ -229,51 +267,16 @@ export function createSideEffectExecution({
         outcome: result,
       })
     }
-    resumedExecutingInput = null
+    executionState.resumedExecutingInput = null
     return record
   }
 
-  const rethrowExecutionError = ({
-    error,
-    input,
-    started,
-    returned,
-    result,
-    checkpointFlushErrorCode,
-  }) => {
-    if (input && started && !returned) {
-      const knownFailedOutcome = knownFailedSideEffectOutcomes.get(error)
-      if (knownFailedOutcome) {
-        let persistedKnownFailure = false
-        try {
-          const record = ledger.finish(input, {
-            status: 'failed',
-            outcome: knownFailedOutcome,
-          })
-          persistedKnownFailure = record?.status === 'failed'
-        } catch { /* fail closed as unknown below */ }
-        if (persistedKnownFailure) throw error
-      }
-      let unknown = null
-      try { unknown = ledger.markUnknown(input) } catch { /* fail closed below */ }
-      throw recoveryBlock(
-        unknownCode,
-        `${toolName} raised an error after crossing the side-effect boundary. It may have partially completed and was not replayed.`,
-        unknown,
-      )
-    }
-    if (input && returned && error?.code !== checkpointFlushErrorCode) {
-      if (error?.unsafeToReplay === true) throw error
-      let unknown = null
-      try { unknown = ledger.markUnknown(input, { outcome: result }) } catch { /* fail closed below */ }
-      throw recoveryBlock(
-        unknownCode,
-        `The returned outcome of ${toolName} could not be persisted safely. Verify local state before retrying.`,
-        unknown,
-      )
-    }
-    throw error
-  }
+  const rethrowExecutionError = (details) => rethrowSideEffectExecutionError({
+    ledger,
+    toolName,
+    recoveryBlock,
+    unknownCode,
+  }, details)
 
   return Object.freeze({
     enabledFor,

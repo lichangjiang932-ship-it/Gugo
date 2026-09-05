@@ -128,6 +128,150 @@ function auditExecution(userId, args, status, durationMs) {
   })
 }
 
+async function finalizeShellExecution({
+  rawResult,
+  sensitiveEnvValues,
+  startedAt,
+  command,
+  displayCwd,
+  sessionMode,
+  inheritedEnvKeys,
+  expectedTargets,
+  inferredTargets,
+  timeout,
+  userId,
+}) {
+  const result = redactProcessOutput(rawResult, sensitiveEnvValues)
+  const durationMs = Date.now() - startedAt
+  const auditArgs = {
+    command,
+    cwd: displayCwd,
+    ...(sessionMode === 'reuse' ? { session: 'reuse' } : {}),
+    ...(inheritedEnvKeys.length > 0 ? { env_keys: inheritedEnvKeys } : {}),
+    ...(expectedTargets.length > 0
+      ? { expected_outputs: expectedTargets.map((target) => target.path) }
+      : {}),
+  }
+  const outputVerification = expectedTargets.length > 0
+    ? await verifyExpectedOutputs(expectedTargets)
+    : null
+  const inferredVerification = inferredTargets.length > 0
+    ? await verifyExpectedOutputs(inferredTargets)
+    : null
+  const inferredChanges = inferredVerification?.changedPaths?.length > 0
+    ? {
+        verifiedOutputs: inferredVerification.verifiedOutputs,
+        changedPaths: inferredVerification.changedPaths,
+      }
+    : null
+  const verificationFields = outputVerification || inferredChanges || {}
+  const failureHint = codeExecutionFailureHint(command, {
+    platform: process.platform,
+    stderr: result.stderr,
+  })
+  const executionMetadata = {
+    durationMs,
+    ...(sessionMode === 'reuse' ? {
+      session: 'reuse',
+      ...(result.sessionRecovered ? { sessionRecovered: true } : {}),
+    } : {}),
+    ...(result.truncated ? {
+      truncated: true,
+      totalOutputBytes: result.totalOutputBytes,
+      ...(result.fullOutputPath ? { fullOutputPath: result.fullOutputPath } : {}),
+      outputNotice: result.fullOutputPath
+        ? '输出过长，已保留尾部；完整日志已写入 fullOutputPath。'
+        : sensitiveEnvValues.length > 0
+          ? '输出过长，已保留并脱敏尾部；为避免凭据写入磁盘，完整日志未落盘。'
+          : '输出过长，已保留尾部；完整日志写入失败。',
+    } : {}),
+    ...(result.sensitiveOutputRedacted ? { sensitiveOutputRedacted: true } : {}),
+    ...(result.outputLogError ? { outputLogError: result.outputLogError } : {}),
+  }
+  const boundaryFailure = processExecutionBoundaryFailure(
+    result, { cwd: displayCwd, executionMetadata, verificationFields },
+  )
+  if (boundaryFailure) {
+    auditExecution(userId, auditArgs, 'error', durationMs)
+    return boundaryFailure
+  }
+  const common = {
+    stdout: result.stdout,
+    stderr: result.stderr,
+    cwd: displayCwd,
+    ...executionMetadata,
+    ...verificationFields,
+  }
+  if (result.sessionBoundaryViolation) {
+    auditExecution(userId, auditArgs, 'error', durationMs)
+    return {
+      ok: false,
+      ...infrastructureFailureFields('SHELL_SESSION_BOUNDARY_VIOLATION'),
+      error: result.error || '持久 Shell 当前目录越出授权根，会话已重置',
+      ...common,
+    }
+  }
+  if (result.aborted) {
+    auditExecution(userId, auditArgs, 'cancelled', durationMs)
+    return {
+      ok: false,
+      cancelled: true,
+      error: sessionMode === 'reuse' ? '命令已取消，持久 Shell 可继续使用' : '命令已取消，进程组已清理',
+      ...common,
+      ...(failureHint ? { hint: failureHint } : {}),
+    }
+  }
+  if (result.timedOut) {
+    auditExecution(userId, auditArgs, 'timeout', durationMs)
+    return {
+      ok: false,
+      timedOut: true,
+      error: sessionMode === 'reuse'
+        ? `命令超时(${timeout}ms)，当前命令已中断，持久 Shell 可继续使用`
+        : `命令超时(${timeout}ms),进程组已被清理`,
+      ...common,
+      ...(failureHint ? { hint: failureHint } : {}),
+    }
+  }
+  if (result.sessionCrashed) {
+    auditExecution(userId, auditArgs, 'error', durationMs)
+    return {
+      ok: false,
+      ...infrastructureFailureFields('SHELL_SESSION_CRASHED'),
+      exitCode: result.code,
+      signal: result.signal,
+      error: result.error || '持久 Shell 已退出；下次调用将自动重建',
+      ...common,
+    }
+  }
+  if (result.code !== 0) {
+    auditExecution(userId, auditArgs, 'error', durationMs)
+    return {
+      ok: false,
+      exitCode: result.code,
+      signal: result.signal,
+      error: `命令退出码 ${result.code}${result.signal ? ` (signal=${result.signal})` : ''}`,
+      ...common,
+    }
+  }
+  if (outputVerification?.unverifiedOutputs.length > 0) {
+    auditExecution(userId, auditArgs, 'error', durationMs)
+    const failures = outputVerification.unverifiedOutputs
+      .map((output) => `${output.path} (${output.status})`).join('、')
+    return {
+      ok: false,
+      exitCode: 0,
+      code: 'EXPECTED_OUTPUT_VERIFICATION_FAILED',
+      verificationFailed: true,
+      retryable: true,
+      error: `命令退出成功，但 expected_outputs 未创建或未发生变化：${failures}`,
+      ...common,
+    }
+  }
+  auditExecution(userId, auditArgs, 'ok', durationMs)
+  return { ok: true, exitCode: 0, ...common }
+}
+
 export async function bashExecTool({
   command,
   cwd: rawCwd,
@@ -230,160 +374,17 @@ export async function bashExecTool({
       onOutput,
     })
   }
-  const result = redactProcessOutput(rawResult, sensitiveEnvValues)
-  const durationMs = Date.now() - startedAt
-  const auditArgs = {
+  return finalizeShellExecution({
+    rawResult,
+    sensitiveEnvValues,
+    startedAt,
     command,
-    cwd: displayCwd,
-    ...(sessionMode === 'reuse' ? { session: 'reuse' } : {}),
-    ...(inheritedEnvKeys.length > 0 ? { env_keys: inheritedEnvKeys } : {}),
-    ...(expectedTargets.length > 0
-      ? { expected_outputs: expectedTargets.map((target) => target.path) }
-      : {}),
-  }
-  const outputVerification = expectedTargets.length > 0
-    ? await verifyExpectedOutputs(expectedTargets)
-    : null
-  const inferredVerification = inferredTargets.length > 0
-    ? await verifyExpectedOutputs(inferredTargets)
-    : null
-  const inferredChanges = inferredVerification?.changedPaths?.length > 0
-    ? {
-        verifiedOutputs: inferredVerification.verifiedOutputs,
-        changedPaths: inferredVerification.changedPaths,
-      }
-    : null
-  const verificationFields = outputVerification || inferredChanges || {}
-  const failureHint = codeExecutionFailureHint(command, {
-    platform: process.platform,
-    stderr: result.stderr,
+    displayCwd,
+    sessionMode,
+    inheritedEnvKeys,
+    expectedTargets,
+    inferredTargets,
+    timeout,
+    userId,
   })
-  const executionMetadata = {
-    durationMs,
-    ...(sessionMode === 'reuse' ? {
-      session: 'reuse',
-      ...(result.sessionRecovered ? { sessionRecovered: true } : {}),
-    } : {}),
-    ...(result.truncated ? {
-      truncated: true,
-      totalOutputBytes: result.totalOutputBytes,
-      ...(result.fullOutputPath ? { fullOutputPath: result.fullOutputPath } : {}),
-      outputNotice: result.fullOutputPath
-        ? '输出过长，已保留尾部；完整日志已写入 fullOutputPath。'
-        : sensitiveEnvValues.length > 0
-          ? '输出过长，已保留并脱敏尾部；为避免凭据写入磁盘，完整日志未落盘。'
-          : '输出过长，已保留尾部；完整日志写入失败。',
-    } : {}),
-    ...(result.sensitiveOutputRedacted ? { sensitiveOutputRedacted: true } : {}),
-    ...(result.outputLogError ? { outputLogError: result.outputLogError } : {}),
-  }
-
-  const boundaryFailure = processExecutionBoundaryFailure(
-    result, { cwd: displayCwd, executionMetadata, verificationFields },
-  )
-  if (boundaryFailure) {
-    auditExecution(userId, auditArgs, 'error', durationMs)
-    return boundaryFailure
-  }
-  if (result.sessionBoundaryViolation) {
-    auditExecution(userId, auditArgs, 'error', durationMs)
-    return {
-      ok: false,
-      ...infrastructureFailureFields('SHELL_SESSION_BOUNDARY_VIOLATION'),
-      error: result.error || '持久 Shell 当前目录越出授权根，会话已重置',
-      stdout: result.stdout,
-      stderr: result.stderr,
-      cwd: displayCwd,
-      ...executionMetadata,
-      ...verificationFields,
-    }
-  }
-  if (result.aborted) {
-    auditExecution(userId, auditArgs, 'cancelled', durationMs)
-    return {
-      ok: false,
-      cancelled: true,
-      error: sessionMode === 'reuse' ? '命令已取消，持久 Shell 可继续使用' : '命令已取消，进程组已清理',
-      stdout: result.stdout,
-      stderr: result.stderr,
-      cwd: displayCwd,
-      ...executionMetadata,
-      ...(failureHint ? { hint: failureHint } : {}),
-      ...verificationFields,
-    }
-  }
-  if (result.timedOut) {
-    auditExecution(userId, auditArgs, 'timeout', durationMs)
-    return {
-      ok: false,
-      timedOut: true,
-      error: sessionMode === 'reuse'
-        ? `命令超时(${timeout}ms)，当前命令已中断，持久 Shell 可继续使用`
-        : `命令超时(${timeout}ms),进程组已被清理`,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      cwd: displayCwd,
-      ...executionMetadata,
-      ...(failureHint ? { hint: failureHint } : {}),
-      ...verificationFields,
-    }
-  }
-  if (result.sessionCrashed) {
-    auditExecution(userId, auditArgs, 'error', durationMs)
-    return {
-      ok: false,
-      ...infrastructureFailureFields('SHELL_SESSION_CRASHED'),
-      exitCode: result.code,
-      signal: result.signal,
-      error: result.error || '持久 Shell 已退出；下次调用将自动重建',
-      stdout: result.stdout,
-      stderr: result.stderr,
-      cwd: displayCwd,
-      ...executionMetadata,
-      ...verificationFields,
-    }
-  }
-  if (result.code !== 0) {
-    auditExecution(userId, auditArgs, 'error', durationMs)
-    return {
-      ok: false,
-      exitCode: result.code,
-      signal: result.signal,
-      error: `命令退出码 ${result.code}${result.signal ? ` (signal=${result.signal})` : ''}`,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      cwd: displayCwd,
-      ...executionMetadata,
-      ...verificationFields,
-    }
-  }
-  if (outputVerification?.unverifiedOutputs.length > 0) {
-    auditExecution(userId, auditArgs, 'error', durationMs)
-    const failures = outputVerification.unverifiedOutputs
-      .map((output) => `${output.path} (${output.status})`)
-      .join('、')
-    return {
-      ok: false,
-      exitCode: 0,
-      code: 'EXPECTED_OUTPUT_VERIFICATION_FAILED',
-      verificationFailed: true,
-      retryable: true,
-      error: `命令退出成功，但 expected_outputs 未创建或未发生变化：${failures}`,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      cwd: displayCwd,
-      ...executionMetadata,
-      ...verificationFields,
-    }
-  }
-  auditExecution(userId, auditArgs, 'ok', durationMs)
-  return {
-    ok: true,
-    exitCode: 0,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    cwd: displayCwd,
-    ...executionMetadata,
-    ...verificationFields,
-  }
 }
