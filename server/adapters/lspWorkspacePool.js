@@ -220,6 +220,150 @@ function createWorkspaceSession({
   return session
 }
 
+function createLspPoolEntry({
+  key,
+  rootReal,
+  config,
+  spawnImpl,
+  terminateProcessTreeFn,
+  platform,
+  childEnv,
+  entries,
+  isClosed,
+  nextSequence,
+  recordCrash,
+  scheduleIdle,
+}) {
+  let resolveReady
+  let rejectReady
+  const entry = {
+    key,
+    rootReal,
+    active: 0,
+    lastUsed: nextSequence(),
+    idleTimer: null,
+    session: null,
+    evicted: false,
+    crashRecorded: false,
+    stopPromise: null,
+    cleanupPromise: null,
+    ready: new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject }),
+    startTask: null,
+  }
+  entries.set(key, entry)
+  entry.startTask = (async () => {
+    if (isClosed() || entry.evicted) {
+      throw lspStdioError('LSP_DISPOSED', `LSP provider ${config.id} is closed`)
+    }
+    entry.session = createWorkspaceSession({
+      config,
+      rootReal,
+      spawnImpl,
+      terminateProcessTreeFn,
+      platform,
+      childEnv,
+      onCrash: () => recordCrash(entry),
+    })
+    await entry.session.startPromise
+    resolveReady(entry.session)
+    scheduleIdle(entry)
+  })().catch((cause) => {
+    recordCrash(entry)
+    rejectReady(cause)
+    throw cause
+  })
+  entry.startTask.catch(() => {})
+  return entry
+}
+
+async function acquireLspPoolSession({
+  rootReal,
+  signal,
+  config,
+  platform,
+  now,
+  entries,
+  crashes,
+  retiringEntries,
+  retirementByKey,
+  maxProcesses,
+  isClosed,
+  stopEntry,
+  createEntry,
+  scheduleIdle,
+  nextSequence,
+}) {
+  const key = platform === 'win32' ? rootReal.toLowerCase() : rootReal
+  let entry = null
+  while (!entry) {
+    if (isClosed()) throw lspStdioError('LSP_DISPOSED', `LSP provider ${config.id} is closed`)
+    entry = entries.get(key) || null
+    if (entry) break
+    const crash = crashes.get(key)
+    if (crash && crash.retryAt > now()) {
+      throw lspStdioError(
+        'LSP_PROCESS_BACKOFF',
+        `LSP provider ${config.id} is backing off after a workspace server crash`,
+        undefined,
+        true,
+      )
+    }
+    const sameKeyRetirement = retirementByKey.get(key)
+    if (sameKeyRetirement) {
+      await waitWithSignal(sameKeyRetirement.catch(() => {}), signal)
+      continue
+    }
+    if (entries.size + retiringEntries.size >= maxProcesses) {
+      const victim = [...entries.values()]
+        .filter((candidate) => candidate.active === 0 && !candidate.evicted)
+        .sort((left, right) => left.lastUsed - right.lastUsed)[0] || null
+      if (victim) {
+        await waitWithSignal(stopEntry(victim).catch(() => {}), signal)
+        continue
+      }
+      const retiring = [...retiringEntries]
+        .sort((left, right) => left.lastUsed - right.lastUsed)[0]
+      const retirement = retiring?.stopPromise || retiring?.cleanupPromise
+      if (retirement) {
+        await waitWithSignal(retirement.catch(() => {}), signal)
+        continue
+      }
+      throw lspStdioError(
+        'LSP_BUSY',
+        `LSP provider ${config.id} reached its workspace process limit`,
+        undefined,
+        true,
+      )
+    }
+    entry = createEntry(key, rootReal)
+  }
+  clearTimeout(entry.idleTimer)
+  entry.idleTimer = null
+  entry.active += 1
+  entry.lastUsed = nextSequence()
+  try {
+    const session = await waitWithSignal(entry.ready, signal)
+    return Object.freeze({
+      rootUri: session.rootUri,
+      async execute(...args) {
+        try { return await session.execute(...args) }
+        catch (cause) { await entry.cleanupPromise?.catch(() => {}); throw cause }
+      },
+      markHealthy() { crashes.delete(key) },
+      release() {
+        if (entry.active > 0) entry.active -= 1
+        entry.lastUsed = nextSequence()
+        scheduleIdle(entry)
+      },
+    })
+  } catch (cause) {
+    if (entry.active > 0) entry.active -= 1
+    scheduleIdle(entry)
+    await entry.cleanupPromise?.catch(() => {})
+    throw cause
+  }
+}
+
 export function createLspWorkspacePool({
   config,
   spawnImpl,
@@ -310,122 +454,39 @@ export function createLspWorkspacePool({
     entry.idleTimer.unref?.()
   }
 
-  const createEntry = (key, rootReal) => {
-    let resolveReady
-    let rejectReady
-    const entry = {
-      key,
-      rootReal,
-      active: 0,
-      lastUsed: ++sequence,
-      idleTimer: null,
-      session: null,
-      evicted: false,
-      crashRecorded: false,
-      stopPromise: null,
-      cleanupPromise: null,
-      ready: new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject }),
-      startTask: null,
-    }
-    entries.set(key, entry)
-    entry.startTask = (async () => {
-      if (closed || entry.evicted) throw lspStdioError('LSP_DISPOSED', `LSP provider ${config.id} is closed`)
-      entry.session = createWorkspaceSession({
-        config,
-        rootReal,
-        spawnImpl,
-        terminateProcessTreeFn,
-        platform,
-        childEnv,
-        onCrash: () => recordCrash(entry),
-      })
-      await entry.session.startPromise
-      resolveReady(entry.session)
-      scheduleIdle(entry)
-    })().catch((cause) => {
-      recordCrash(entry)
-      rejectReady(cause)
-      throw cause
-    })
-    entry.startTask.catch(() => {})
-    return entry
-  }
+  const nextSequence = () => ++sequence
+  const createEntry = (key, rootReal) => createLspPoolEntry({
+    key,
+    rootReal,
+    config,
+    spawnImpl,
+    terminateProcessTreeFn,
+    platform,
+    childEnv,
+    entries,
+    isClosed: () => closed,
+    nextSequence,
+    recordCrash,
+    scheduleIdle,
+  })
 
-  const acquire = async (rootReal, signal) => {
-    const key = platform === 'win32' ? rootReal.toLowerCase() : rootReal
-    let entry = null
-    while (!entry) {
-      if (closed) throw lspStdioError('LSP_DISPOSED', `LSP provider ${config.id} is closed`)
-      entry = entries.get(key) || null
-      if (entry) break
-      const crash = crashes.get(key)
-      if (crash && crash.retryAt > now()) {
-        throw lspStdioError(
-          'LSP_PROCESS_BACKOFF',
-          `LSP provider ${config.id} is backing off after a workspace server crash`,
-          undefined,
-          true,
-        )
-      }
-      const sameKeyRetirement = retirementByKey.get(key)
-      if (sameKeyRetirement) {
-        await waitWithSignal(sameKeyRetirement.catch(() => {}), signal)
-        continue
-      }
-      if (entries.size + retiringEntries.size >= maxProcesses) {
-        const victim = [...entries.values()]
-          .filter((candidate) => candidate.active === 0 && !candidate.evicted)
-          .sort((left, right) => left.lastUsed - right.lastUsed)[0] || null
-        if (victim) {
-          await waitWithSignal(stopEntry(victim).catch(() => {}), signal)
-          continue
-        }
-        const retiring = [...retiringEntries]
-          .sort((left, right) => left.lastUsed - right.lastUsed)[0]
-        const retirement = retiring?.stopPromise || retiring?.cleanupPromise
-        if (retirement) {
-          await waitWithSignal(retirement.catch(() => {}), signal)
-          continue
-        }
-        throw lspStdioError(
-          'LSP_BUSY',
-          `LSP provider ${config.id} reached its workspace process limit`,
-          undefined,
-          true,
-        )
-      }
-      entry = createEntry(key, rootReal)
-    }
-    clearTimeout(entry.idleTimer)
-    entry.idleTimer = null
-    entry.active += 1
-    entry.lastUsed = ++sequence
-    try {
-      const session = await waitWithSignal(entry.ready, signal)
-      return Object.freeze({
-        rootUri: session.rootUri,
-        async execute(...args) {
-          try {
-            return await session.execute(...args)
-          } catch (cause) {
-            await entry.cleanupPromise?.catch(() => {})
-            throw cause
-          }
-        },
-        markHealthy() { crashes.delete(key) },
-        release() {
-          if (entry.active > 0) entry.active -= 1
-          entry.lastUsed = ++sequence
-          scheduleIdle(entry)
-        },
-      })
-    } catch (cause) {
-      if (entry.active > 0) entry.active -= 1
-      scheduleIdle(entry)
-      await entry.cleanupPromise?.catch(() => {})
-      throw cause
-    }
-  }
+  const acquire = (rootReal, signal) => acquireLspPoolSession({
+    rootReal,
+    signal,
+    config,
+    platform,
+    now,
+    entries,
+    crashes,
+    retiringEntries,
+    retirementByKey,
+    maxProcesses,
+    isClosed: () => closed,
+    stopEntry,
+    createEntry,
+    scheduleIdle,
+    nextSequence,
+  })
 
   const close = () => {
     if (closePromise) return closePromise
