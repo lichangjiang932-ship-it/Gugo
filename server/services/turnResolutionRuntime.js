@@ -92,6 +92,104 @@ export function filterAuthorizedDirectoryResolutions(value, grants, {
     .filter((resolution) => hasMatchingDirectoryGrant(grants, resolution, normalizePath))
 }
 
+function normalizeTurnResolution(value) {
+  if (!isRecord(value)) {
+    throw new TurnEngineError('TURN_RESOLUTION_INVALID', 'resolution must be a structured object', 400)
+  }
+  const pausedSequence = Number(value.paused_sequence ?? value.pausedSequence)
+  if (!Number.isInteger(pausedSequence) || pausedSequence < 0) {
+    throw new TurnEngineError(
+      'TURN_RESOLUTION_SEQUENCE_REQUIRED',
+      'resolution must include the pending turn.paused sequence',
+      400,
+    )
+  }
+  const type = String(value.type || '').trim()
+  const rawPath = String(value.path || '').trim()
+  const resourceType = String(value.resource_type || value.resourceType || '').trim()
+  const directoryResolution = type === 'directory_authorization'
+    || resourceType === 'directory'
+    || !!rawPath
+  if (!directoryResolution) {
+    const response = String(value.response ?? value.answer ?? value.content ?? '').trim()
+    if (!response) {
+      throw new TurnEngineError('TURN_RESOLUTION_RESPONSE_REQUIRED', 'clarification resolution requires a response', 400)
+    }
+    return { type: type || 'clarification_response', response, paused_sequence: pausedSequence }
+  }
+  const accessMode = String(value.access_mode || value.accessMode || '').trim()
+  const authorizationScope = String(
+    value.authorization_scope || value.authorizationScope || '',
+  ).trim()
+  const grantId = String(value.grant_id || value.grantId || '').trim()
+  if (type && type !== 'directory_authorization') {
+    throw new TurnEngineError('TURN_RESOLUTION_INVALID', 'directory resolution type must be directory_authorization', 400)
+  }
+  if (value.approved !== true) {
+    throw new TurnEngineError('TURN_RESOLUTION_NOT_APPROVED', 'directory authorization must be explicitly approved', 400)
+  }
+  if (!rawPath || (!path.win32.isAbsolute(rawPath) && !path.posix.isAbsolute(rawPath))) {
+    throw new TurnEngineError('TURN_RESOLUTION_PATH_REQUIRED', 'directory authorization requires an absolute path', 400)
+  }
+  if (!['read_only', 'read_write'].includes(accessMode)) {
+    throw new TurnEngineError('TURN_RESOLUTION_ACCESS_MODE_INVALID', 'directory authorization requires read_only or read_write access_mode', 400)
+  }
+  if (!['session', 'persistent'].includes(authorizationScope)) {
+    throw new TurnEngineError(
+      'TURN_RESOLUTION_AUTHORIZATION_SCOPE_INVALID',
+      'directory authorization requires session or persistent authorization_scope',
+      400,
+    )
+  }
+  if (!grantId) {
+    throw new TurnEngineError(
+      'TURN_RESOLUTION_GRANT_ID_REQUIRED',
+      'directory authorization requires the persisted grant id',
+      400,
+    )
+  }
+  return {
+    type: 'directory_authorization',
+    approved: true,
+    path: rawPath,
+    access_mode: accessMode,
+    authorization_scope: authorizationScope,
+    grant_id: grantId,
+    resource_type: 'directory',
+    paused_sequence: pausedSequence,
+    ...(String(value.purpose || '').trim() ? { purpose: String(value.purpose).trim() } : {}),
+  }
+}
+
+function validateResolutionForPause(resolution, pausedEvent) {
+  if (resolution.paused_sequence !== pausedEvent.sequence) {
+    throw new TurnEngineError('TURN_RESOLUTION_STALE', 'resolution does not match the latest pending pause', 409)
+  }
+  const clarification = pausedEvent.payload?.clarification
+  const requestType = isRecord(clarification)
+    ? String(clarification.request_type || clarification.requestType || '').trim()
+    : ''
+  const directoryRequest = requestType === 'directory'
+  if (directoryRequest !== (resolution.type === 'directory_authorization')) {
+    throw new TurnEngineError(
+      'TURN_RESOLUTION_TYPE_MISMATCH',
+      'resolution type does not match the pending clarification',
+      409,
+    )
+  }
+  if (!directoryRequest) return
+  const requiredMode = String(
+    clarification.access_mode || clarification.accessMode || 'read_only',
+  ).trim()
+  if (resolution.access_mode !== requiredMode) {
+    throw new TurnEngineError(
+      'TURN_RESOLUTION_ACCESS_MODE_MISMATCH',
+      'directory resolution access mode does not match the pending request',
+      409,
+    )
+  }
+}
+
 /**
  * Pure pause/resume policy for a Turn.
  *
@@ -102,109 +200,6 @@ export function filterAuthorizedDirectoryResolutions(value, grants, {
 export function createTurnResolutionRuntime({ normalizePath } = {}) {
   if (typeof normalizePath !== 'function') {
     throw new TypeError('normalizePath is required')
-  }
-
-  const normalizeResolution = (value) => {
-    if (!isRecord(value)) {
-      throw new TurnEngineError('TURN_RESOLUTION_INVALID', 'resolution must be a structured object', 400)
-    }
-    const pausedSequence = Number(value.paused_sequence ?? value.pausedSequence)
-    if (!Number.isInteger(pausedSequence) || pausedSequence < 0) {
-      throw new TurnEngineError(
-        'TURN_RESOLUTION_SEQUENCE_REQUIRED',
-        'resolution must include the pending turn.paused sequence',
-        400,
-      )
-    }
-    const type = String(value.type || '').trim()
-    const rawPath = String(value.path || '').trim()
-    const resourceType = String(value.resource_type || value.resourceType || '').trim()
-    const directoryResolution = type === 'directory_authorization'
-      || resourceType === 'directory'
-      || !!rawPath
-    if (directoryResolution) {
-      const accessMode = String(value.access_mode || value.accessMode || '').trim()
-      const authorizationScope = String(
-        value.authorization_scope || value.authorizationScope || '',
-      ).trim()
-      const grantId = String(value.grant_id || value.grantId || '').trim()
-      if (type && type !== 'directory_authorization') {
-        throw new TurnEngineError('TURN_RESOLUTION_INVALID', 'directory resolution type must be directory_authorization', 400)
-      }
-      if (value.approved !== true) {
-        throw new TurnEngineError('TURN_RESOLUTION_NOT_APPROVED', 'directory authorization must be explicitly approved', 400)
-      }
-      if (!rawPath || (!path.win32.isAbsolute(rawPath) && !path.posix.isAbsolute(rawPath))) {
-        throw new TurnEngineError('TURN_RESOLUTION_PATH_REQUIRED', 'directory authorization requires an absolute path', 400)
-      }
-      if (!['read_only', 'read_write'].includes(accessMode)) {
-        throw new TurnEngineError('TURN_RESOLUTION_ACCESS_MODE_INVALID', 'directory authorization requires read_only or read_write access_mode', 400)
-      }
-      if (!['session', 'persistent'].includes(authorizationScope)) {
-        throw new TurnEngineError(
-          'TURN_RESOLUTION_AUTHORIZATION_SCOPE_INVALID',
-          'directory authorization requires session or persistent authorization_scope',
-          400,
-        )
-      }
-      if (!grantId) {
-        throw new TurnEngineError(
-          'TURN_RESOLUTION_GRANT_ID_REQUIRED',
-          'directory authorization requires the persisted grant id',
-          400,
-        )
-      }
-      return {
-        type: 'directory_authorization',
-        approved: true,
-        path: rawPath,
-        access_mode: accessMode,
-        authorization_scope: authorizationScope,
-        grant_id: grantId,
-        resource_type: 'directory',
-        paused_sequence: pausedSequence,
-        ...(String(value.purpose || '').trim() ? { purpose: String(value.purpose).trim() } : {}),
-      }
-    }
-    const response = String(value.response ?? value.answer ?? value.content ?? '').trim()
-    if (!response) {
-      throw new TurnEngineError('TURN_RESOLUTION_RESPONSE_REQUIRED', 'clarification resolution requires a response', 400)
-    }
-    return { type: type || 'clarification_response', response, paused_sequence: pausedSequence }
-  }
-
-  const validateForPause = (resolution, pausedEvent) => {
-    if (resolution.paused_sequence !== pausedEvent.sequence) {
-      throw new TurnEngineError(
-        'TURN_RESOLUTION_STALE',
-        'resolution does not match the latest pending pause',
-        409,
-      )
-    }
-    const clarification = pausedEvent.payload?.clarification
-    const requestType = isRecord(clarification)
-      ? String(clarification.request_type || clarification.requestType || '').trim()
-      : ''
-    const directoryRequest = requestType === 'directory'
-    const directoryResolution = resolution.type === 'directory_authorization'
-    if (directoryRequest !== directoryResolution) {
-      throw new TurnEngineError(
-        'TURN_RESOLUTION_TYPE_MISMATCH',
-        'resolution type does not match the pending clarification',
-        409,
-      )
-    }
-    if (!directoryRequest) return
-    const requiredMode = String(
-      clarification.access_mode || clarification.accessMode || 'read_only',
-    ).trim()
-    if (resolution.access_mode !== requiredMode) {
-      throw new TurnEngineError(
-        'TURN_RESOLUTION_ACCESS_MODE_MISMATCH',
-        'directory resolution access mode does not match the pending request',
-        409,
-      )
-    }
   }
 
   const hasSufficientDirectoryGrant = (grants, resolution) => (
@@ -290,9 +285,9 @@ export function createTurnResolutionRuntime({ normalizePath } = {}) {
   return Object.freeze({
     applyToCheckpoint,
     hasSufficientDirectoryGrant,
-    normalizeResolution,
+    normalizeResolution: normalizeTurnResolution,
     pauseState,
     publicStatus,
-    validateForPause,
+    validateForPause: validateResolutionForPause,
   })
 }

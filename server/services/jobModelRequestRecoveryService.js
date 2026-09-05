@@ -303,7 +303,7 @@ export function readJobModelRequestRecoveryResolution({
   }
 }
 
-export function resolvePendingJobModelRequest({
+function normalizePendingJobModelResolution({
   userId,
   jobId,
   stepId,
@@ -311,13 +311,12 @@ export function resolvePendingJobModelRequest({
   verificationConfirmed,
   confirmModelRequestId,
   resolution,
-  response = null,
-  receipt = null,
-  note = null,
-  db = getDb(),
-  now = Date.now,
-  ...identityInput
-} = {}) {
+  response,
+  receipt,
+  note,
+  now,
+  identityInput,
+}) {
   const ownerId = requiredText(userId, 'userId')
   const normalizedJobId = requiredText(jobId, 'jobId')
   const normalizedStepId = requiredText(stepId, 'stepId')
@@ -352,77 +351,177 @@ export function resolvePendingJobModelRequest({
   if (normalizedNote && normalizedNote.length > MAX_NOTE_LENGTH) {
     throw recoveryError('JOB_MODEL_REQUEST_RECOVERY_INVALID', 'note is too long', 400)
   }
-  const responseJson = normalizedResolution === 'completed'
-    ? boundedModelResponse(response)
-    : null
-  const receiptJson = boundedJson(receipt, {
-    name: 'receipt',
-    maxBytes: MAX_RECEIPT_BYTES,
-    required: normalizedResolution === 'completed',
+  return {
+    ownerId,
+    normalizedJobId,
+    normalizedStepId,
+    expected,
+    checkpointRevision,
+    normalizedResolution,
+    normalizedNote,
+    responseJson: normalizedResolution === 'completed' ? boundedModelResponse(response) : null,
+    receiptJson: boundedJson(receipt, {
+      name: 'receipt',
+      maxBytes: MAX_RECEIPT_BYTES,
+      required: normalizedResolution === 'completed',
+    }),
+    resolvedAt: Math.max(0, Number(now()) || Date.now()),
+  }
+}
+
+function loadPendingJobModelRequestState({
+  db,
+  ownerId,
+  jobId,
+  stepId,
+  resolvedAt,
+  checkpointRevision,
+  expected,
+}) {
+  const checkpoint = rawCheckpoint(db, { userId: ownerId, jobId, stepId })
+  if (!checkpoint) {
+    throw recoveryError(
+      'JOB_MODEL_REQUEST_RECOVERY_NOT_FOUND',
+      'job model request recovery was not found',
+      404,
+    )
+  }
+  const activeLease = db.prepare(`
+    SELECT owner_id, expires_at FROM job_execution_leases
+    WHERE job_id = ? AND expires_at > ?
+  `).get(jobId, resolvedAt)
+  if (activeLease) {
+    throw recoveryError(
+      'JOB_MODEL_REQUEST_RECOVERY_EXECUTION_ACTIVE',
+      'The job is still executing. Wait for its execution lease to end before resolving the model request.',
+      409,
+    )
+  }
+  if (checkpoint.revision !== checkpointRevision) {
+    throw recoveryError('JOB_MODEL_REQUEST_RECOVERY_CONFLICT', 'job checkpoint advanced before confirmation', 409)
+  }
+  const invocation = checkpointInvocation(checkpoint)
+  if (!invocation) {
+    throw recoveryError('JOB_MODEL_REQUEST_RECOVERY_CONFLICT', 'job model request is no longer in flight', 409)
+  }
+  assertExactIdentity(invocation, expected)
+  const existing = resolutionRow(db, {
+    userId: ownerId,
+    jobId,
+    stepId,
+    modelRequestId: expected.modelRequestId,
   })
-  const resolvedAt = Math.max(0, Number(now()) || Date.now())
+  if (existing && !rowMatchesInvocation(existing, invocation)) {
+    throw recoveryError(
+      'JOB_MODEL_REQUEST_RECOVERY_CONFLICT',
+      'stored job model request resolution identity drifted',
+      409,
+    )
+  }
+  if (existing && existing.resolution !== 'unknown') {
+    throw recoveryError(
+      'JOB_MODEL_REQUEST_RECOVERY_CONFLICT',
+      'job model request was already resolved',
+      409,
+    )
+  }
+  return { checkpoint, invocation, existing }
+}
+
+function materializeResolvedJobCheckpoint({
+  db,
+  checkpoint,
+  stored,
+  invocation,
+  ownerId,
+  jobId,
+  stepId,
+  checkpointRevision,
+  resolvedAt,
+}) {
+  if (!['completed', 'not_sent'].includes(stored?.resolution)) {
+    return recordForClient({ checkpoint, invocation, row: stored })
+  }
+  const nextState = {
+    ...checkpoint.state,
+    modelInvocation: materializedInvocation(stored, invocation),
+  }
+  const updated = db.prepare(`
+    UPDATE job_turn_checkpoints
+       SET state_json = ?, updated_at = ?, revision = revision + 1
+     WHERE user_id = ? AND job_id = ? AND step_id = ?
+       AND revision = ? AND state_json = ?
+  `).run(
+    JSON.stringify(nextState), resolvedAt,
+    ownerId, jobId, stepId,
+    checkpointRevision, checkpoint.stateJson,
+  )
+  if (updated.changes !== 1) {
+    throw recoveryError(
+      'JOB_MODEL_REQUEST_RECOVERY_CONFLICT',
+      'job model request checkpoint lost its CAS race',
+      409,
+    )
+  }
+  const materialized = rawCheckpoint(db, { userId: ownerId, jobId, stepId })
+  return recordForClient({
+    checkpoint: materialized,
+    invocation: checkpointInvocation(materialized, { includeMaterialized: true }),
+    row: stored,
+  })
+}
+
+export function resolvePendingJobModelRequest({
+  userId,
+  jobId,
+  stepId,
+  expectedCheckpointRevision,
+  verificationConfirmed,
+  confirmModelRequestId,
+  resolution,
+  response = null,
+  receipt = null,
+  note = null,
+  db = getDb(),
+  now = Date.now,
+  ...identityInput
+} = {}) {
+  const {
+    ownerId,
+    normalizedJobId,
+    normalizedStepId,
+    expected,
+    checkpointRevision,
+    normalizedResolution,
+    normalizedNote,
+    responseJson,
+    receiptJson,
+    resolvedAt,
+  } = normalizePendingJobModelResolution({
+    userId,
+    jobId,
+    stepId,
+    expectedCheckpointRevision,
+    verificationConfirmed,
+    confirmModelRequestId,
+    resolution,
+    response,
+    receipt,
+    note,
+    now,
+    identityInput,
+  })
 
   return db.transaction(() => {
-    const checkpoint = rawCheckpoint(db, {
-      userId: ownerId,
+    const { checkpoint, invocation, existing } = loadPendingJobModelRequestState({
+      db,
+      ownerId,
       jobId: normalizedJobId,
       stepId: normalizedStepId,
+      resolvedAt,
+      checkpointRevision,
+      expected,
     })
-    if (!checkpoint) {
-      throw recoveryError(
-        'JOB_MODEL_REQUEST_RECOVERY_NOT_FOUND',
-        'job model request recovery was not found',
-        404,
-      )
-    }
-    const activeLease = db.prepare(`
-      SELECT owner_id, expires_at
-        FROM job_execution_leases
-       WHERE job_id = ? AND expires_at > ?
-    `).get(normalizedJobId, resolvedAt)
-    if (activeLease) {
-      throw recoveryError(
-        'JOB_MODEL_REQUEST_RECOVERY_EXECUTION_ACTIVE',
-        'The job is still executing. Wait for its execution lease to end before resolving the model request.',
-        409,
-      )
-    }
-    if (checkpoint.revision !== checkpointRevision) {
-      throw recoveryError(
-        'JOB_MODEL_REQUEST_RECOVERY_CONFLICT',
-        'job checkpoint advanced before confirmation',
-        409,
-      )
-    }
-    const invocation = checkpointInvocation(checkpoint)
-    if (!invocation) {
-      throw recoveryError(
-        'JOB_MODEL_REQUEST_RECOVERY_CONFLICT',
-        'job model request is no longer in flight',
-        409,
-      )
-    }
-    assertExactIdentity(invocation, expected)
-    const existing = resolutionRow(db, {
-      userId: ownerId,
-      jobId: normalizedJobId,
-      stepId: normalizedStepId,
-      modelRequestId: expected.modelRequestId,
-    })
-    if (existing && !rowMatchesInvocation(existing, invocation)) {
-      throw recoveryError(
-        'JOB_MODEL_REQUEST_RECOVERY_CONFLICT',
-        'stored job model request resolution identity drifted',
-        409,
-      )
-    }
-    if (existing && existing.resolution !== 'unknown') {
-      throw recoveryError(
-        'JOB_MODEL_REQUEST_RECOVERY_CONFLICT',
-        'job model request was already resolved',
-        409,
-      )
-    }
 
     if (!existing) {
       db.prepare(`
@@ -466,39 +565,16 @@ export function resolvePendingJobModelRequest({
       stepId: normalizedStepId,
       modelRequestId: expected.modelRequestId,
     })
-    if (['completed', 'not_sent'].includes(stored?.resolution)) {
-      const nextState = {
-        ...checkpoint.state,
-        modelInvocation: materializedInvocation(stored, invocation),
-      }
-      const updated = db.prepare(`
-        UPDATE job_turn_checkpoints
-           SET state_json = ?, updated_at = ?, revision = revision + 1
-         WHERE user_id = ? AND job_id = ? AND step_id = ?
-           AND revision = ? AND state_json = ?
-      `).run(
-        JSON.stringify(nextState), resolvedAt,
-        ownerId, normalizedJobId, normalizedStepId,
-        checkpointRevision, checkpoint.stateJson,
-      )
-      if (updated.changes !== 1) {
-        throw recoveryError(
-          'JOB_MODEL_REQUEST_RECOVERY_CONFLICT',
-          'job model request checkpoint lost its CAS race',
-          409,
-        )
-      }
-      const materialized = rawCheckpoint(db, {
-        userId: ownerId,
-        jobId: normalizedJobId,
-        stepId: normalizedStepId,
-      })
-      return recordForClient({
-        checkpoint: materialized,
-        invocation: checkpointInvocation(materialized, { includeMaterialized: true }),
-        row: stored,
-      })
-    }
-    return recordForClient({ checkpoint, invocation, row: stored })
+    return materializeResolvedJobCheckpoint({
+      db,
+      checkpoint,
+      stored,
+      invocation,
+      ownerId,
+      jobId: normalizedJobId,
+      stepId: normalizedStepId,
+      checkpointRevision,
+      resolvedAt,
+    })
   }).immediate()
 }
