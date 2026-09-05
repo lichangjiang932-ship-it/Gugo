@@ -30,6 +30,185 @@ export {
   compactionGovernanceError,
   compactionGovernancePayloadName,
 } from './sqliteFileCompactionArchiveGovernanceManifest.js'
+function beginDeletionStage(runtime, { userId, scope, operationId, expectedDigest }) {
+  const { read, assertMutationAllowed, env, fileSystem, nextStageToken, now } = runtime
+  const current = read({ userId, operationId })
+  if (current.manifest) return current
+  assertMutationAllowed({ userId, sessionId: scope.sessionId })
+  const paths = { ...storagePaths({ userId, operationId, env }), env }
+  ensureUserRoot(paths, fileSystem)
+  try {
+    method(fileSystem, 'mkdirSync')(paths.operationRoot, { recursive: false, mode: 0o700 })
+    assertDirectory(fileSystem, paths.root, paths.operationRoot)
+    method(fileSystem, 'mkdirSync')(paths.payloadRoot, { recursive: false, mode: 0o700 })
+    assertDirectory(fileSystem, paths.root, paths.payloadRoot)
+  } catch (cause) {
+    if (cause?.code === 'EEXIST') return read({ userId, operationId })
+    throw cause
+  }
+  const context = {
+    paths,
+    manifest: {
+      version: 1, userId, operationId, stageToken: nextStageToken(), scope,
+      digest: expectedDigest, records: [], files: [], alreadyMissing: 0,
+      totalBytes: 0, state: 'staging', createdAt: now(),
+    },
+  }
+  writeManifest(paths, context.manifest, fileSystem, { create: true })
+  try {
+    assertMutationAllowed({ userId, sessionId: scope.sessionId }, { excludeOperationId: operationId })
+  } catch (cause) {
+    updateContext(context, 'rolled_back', fileSystem, now)
+    throw cause
+  }
+  return context
+}
+
+function stageDeletionFiles({ fileSystem, now }, context) {
+  const moved = []
+  try {
+    for (const entry of resolvedFiles(context, fileSystem)) {
+      if (!exists(fileSystem, entry.source.fullPath)) {
+        throw compactionGovernanceError(
+          'COMPACTION_ARCHIVE_GOVERNANCE_PREVIEW_CHANGED',
+          'A compaction archive disappeared while deletion was staged',
+        )
+      }
+      verifyRegularFile(fileSystem, entry.source.fullPath, entry.file)
+      if (exists(fileSystem, entry.stagedPath)) {
+        throw compactionGovernanceError(
+          'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CHANGED',
+          'A compaction archive deletion payload already exists',
+        )
+      }
+      method(fileSystem, 'renameSync')(entry.source.fullPath, entry.stagedPath)
+      syncDirectory(fileSystem, entry.source.bucketPath)
+      syncDirectory(fileSystem, context.paths.payloadRoot)
+      moved.push(entry)
+    }
+    updateContext(context, 'staged', fileSystem, now)
+    return context
+  } catch (cause) {
+    for (const entry of moved.reverse()) {
+      if (exists(fileSystem, entry.stagedPath) && !exists(fileSystem, entry.source.fullPath)) {
+        assertDirectory(fileSystem, context.paths.root, entry.source.bucketPath)
+        method(fileSystem, 'renameSync')(entry.stagedPath, entry.source.fullPath)
+        syncDirectory(fileSystem, entry.source.bucketPath)
+        syncDirectory(fileSystem, context.paths.payloadRoot)
+      }
+    }
+    updateContext(context, 'rolled_back', fileSystem, now)
+    throw cause
+  }
+}
+
+function assertDeletionFilesStaged({ fileSystem }, context) {
+  if (context.manifest.state !== 'staged') {
+    throw compactionGovernanceError(
+      'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_STALE',
+      'The compaction archive deletion stage is not stable',
+    )
+  }
+  for (const entry of resolvedFiles(context, fileSystem)) {
+    if (exists(fileSystem, entry.source.fullPath) || !exists(fileSystem, entry.stagedPath)) {
+      throw compactionGovernanceError(
+        'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CHANGED',
+        'A staged compaction archive changed before commit',
+      )
+    }
+    verifyRegularFile(fileSystem, entry.stagedPath, entry.file)
+  }
+  return true
+}
+
+function commitDeletionFiles(runtime, context, input) {
+  const { fileSystem, now } = runtime
+  assertReceipt(context, input)
+  if (context.manifest.state === 'committed') return context
+  if (context.manifest.state === 'rolled_back' || context.manifest.state === 'rolling_back') {
+    throw compactionGovernanceError(
+      'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_STALE',
+      'A rolled-back compaction archive deletion cannot be committed',
+    )
+  }
+  const entries = resolvedFiles(context, fileSystem)
+  if (context.manifest.state === 'staged') assertDeletionFilesStaged(runtime, context)
+  if (!['staged', 'committing'].includes(context.manifest.state)) {
+    throw compactionGovernanceError(
+      'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_STALE',
+      'The compaction archive deletion cannot be committed from its current state',
+    )
+  }
+  updateContext(context, 'committing', fileSystem, now)
+  for (const entry of entries) {
+    if (exists(fileSystem, entry.source.fullPath)) {
+      throw compactionGovernanceError(
+        'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CHANGED',
+        'A staged compaction archive unexpectedly reappeared',
+      )
+    }
+    if (!exists(fileSystem, entry.stagedPath)) continue
+    verifyRegularFile(fileSystem, entry.stagedPath, entry.file)
+    method(fileSystem, 'unlinkSync')(entry.stagedPath)
+  }
+  syncDirectory(fileSystem, context.paths.payloadRoot)
+  updateContext(context, 'committed', fileSystem, now)
+  if (exists(fileSystem, context.paths.payloadRoot)
+    && method(fileSystem, 'readdirSync')(context.paths.payloadRoot).length === 0) {
+    method(fileSystem, 'rmdirSync')(context.paths.payloadRoot)
+  }
+  return context
+}
+
+function rollbackDeletionFiles({ fileSystem, now }, context, input = null) {
+  if (input) assertReceipt(context, input)
+  if (context.manifest.state === 'rolled_back') return context
+  if (context.manifest.state === 'committed' || context.manifest.state === 'committing') {
+    throw compactionGovernanceError(
+      'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_STALE',
+      'A committed compaction archive deletion cannot be rolled back',
+    )
+  }
+  if (!['staging', 'staged', 'rolling_back'].includes(context.manifest.state)) {
+    throw compactionGovernanceError(
+      'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_STALE',
+      'The compaction archive deletion cannot be rolled back from its current state',
+    )
+  }
+  const entries = resolvedFiles(context, fileSystem)
+  updateContext(context, 'rolling_back', fileSystem, now)
+  for (const entry of entries.reverse()) {
+    const sourceExists = exists(fileSystem, entry.source.fullPath)
+    const stagedExists = exists(fileSystem, entry.stagedPath)
+    if (sourceExists && stagedExists) {
+      throw compactionGovernanceError(
+        'COMPACTION_ARCHIVE_GOVERNANCE_ROLLBACK_CONFLICT',
+        'A compaction archive exists in both staged and managed storage',
+      )
+    }
+    if (!sourceExists && !stagedExists) {
+      throw compactionGovernanceError(
+        'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CHANGED',
+        'A compaction archive disappeared during rollback',
+      )
+    }
+    if (sourceExists) {
+      verifyRegularFile(fileSystem, entry.source.fullPath, entry.file)
+      continue
+    }
+    verifyRegularFile(fileSystem, entry.stagedPath, entry.file)
+    assertDirectory(fileSystem, context.paths.root, entry.source.bucketPath)
+    method(fileSystem, 'renameSync')(entry.stagedPath, entry.source.fullPath)
+    syncDirectory(fileSystem, entry.source.bucketPath)
+  }
+  updateContext(context, 'rolled_back', fileSystem, now)
+  if (exists(fileSystem, context.paths.payloadRoot)
+    && method(fileSystem, 'readdirSync')(context.paths.payloadRoot).length === 0) {
+    method(fileSystem, 'rmdirSync')(context.paths.payloadRoot)
+  }
+  return context
+}
+
 export function createSqliteFileCompactionArchiveGovernanceStorage({
   db,
   env = process.env,
@@ -98,194 +277,14 @@ export function createSqliteFileCompactionArchiveGovernanceStorage({
     fileSystem,
   })
 
-  const beginStage = ({ userId, scope, operationId, expectedDigest }) => {
-    const current = read({ userId, operationId })
-    if (current.manifest) return current
-    assertMutationAllowed({ userId, sessionId: scope.sessionId })
-    const paths = { ...storagePaths({ userId, operationId, env }), env }
-    ensureUserRoot(paths, fileSystem)
-    try {
-      method(fileSystem, 'mkdirSync')(paths.operationRoot, { recursive: false, mode: 0o700 })
-      assertDirectory(fileSystem, paths.root, paths.operationRoot)
-      method(fileSystem, 'mkdirSync')(paths.payloadRoot, { recursive: false, mode: 0o700 })
-      assertDirectory(fileSystem, paths.root, paths.payloadRoot)
-    } catch (cause) {
-      if (cause?.code === 'EEXIST') return read({ userId, operationId })
-      throw cause
-    }
-    const context = {
-      paths,
-      manifest: {
-        version: 1,
-        userId,
-        operationId,
-        stageToken: nextStageToken(),
-        scope,
-        digest: expectedDigest,
-        records: [],
-        files: [],
-        alreadyMissing: 0,
-        totalBytes: 0,
-        state: 'staging',
-        createdAt: now(),
-      },
-    }
-    writeManifest(paths, context.manifest, fileSystem, { create: true })
-    try {
-      assertMutationAllowed(
-        { userId, sessionId: scope.sessionId },
-        { excludeOperationId: operationId },
-      )
-    } catch (cause) {
-      updateContext(context, 'rolled_back', fileSystem, now)
-      throw cause
-    }
-    return context
+  const runtime = {
+    db, env, fileSystem, now, nextStageToken, read, assertMutationAllowed,
   }
-
-  const stageFiles = (context) => {
-    const moved = []
-    try {
-      for (const entry of resolvedFiles(context, fileSystem)) {
-        if (!exists(fileSystem, entry.source.fullPath)) {
-          throw compactionGovernanceError(
-            'COMPACTION_ARCHIVE_GOVERNANCE_PREVIEW_CHANGED',
-            'A compaction archive disappeared while deletion was staged',
-          )
-        }
-        verifyRegularFile(fileSystem, entry.source.fullPath, entry.file)
-        if (exists(fileSystem, entry.stagedPath)) {
-          throw compactionGovernanceError(
-            'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CHANGED',
-            'A compaction archive deletion payload already exists',
-          )
-        }
-        method(fileSystem, 'renameSync')(entry.source.fullPath, entry.stagedPath)
-        syncDirectory(fileSystem, entry.source.bucketPath)
-        syncDirectory(fileSystem, context.paths.payloadRoot)
-        moved.push(entry)
-      }
-      updateContext(context, 'staged', fileSystem, now)
-      return context
-    } catch (cause) {
-      for (const entry of moved.reverse()) {
-        if (exists(fileSystem, entry.stagedPath) && !exists(fileSystem, entry.source.fullPath)) {
-          assertDirectory(fileSystem, context.paths.root, entry.source.bucketPath)
-          method(fileSystem, 'renameSync')(entry.stagedPath, entry.source.fullPath)
-          syncDirectory(fileSystem, entry.source.bucketPath)
-          syncDirectory(fileSystem, context.paths.payloadRoot)
-        }
-      }
-      updateContext(context, 'rolled_back', fileSystem, now)
-      throw cause
-    }
-  }
-
-  const assertFilesStaged = (context) => {
-    if (context.manifest.state !== 'staged') {
-      throw compactionGovernanceError(
-        'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_STALE',
-        'The compaction archive deletion stage is not stable',
-      )
-    }
-    for (const entry of resolvedFiles(context, fileSystem)) {
-      if (exists(fileSystem, entry.source.fullPath) || !exists(fileSystem, entry.stagedPath)) {
-        throw compactionGovernanceError(
-          'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CHANGED',
-          'A staged compaction archive changed before commit',
-        )
-      }
-      verifyRegularFile(fileSystem, entry.stagedPath, entry.file)
-    }
-    return true
-  }
-
-  const commitFiles = (context, input) => {
-    assertReceipt(context, input)
-    if (context.manifest.state === 'committed') return context
-    if (context.manifest.state === 'rolled_back' || context.manifest.state === 'rolling_back') {
-      throw compactionGovernanceError(
-        'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_STALE',
-        'A rolled-back compaction archive deletion cannot be committed',
-      )
-    }
-    const entries = resolvedFiles(context, fileSystem)
-    if (context.manifest.state === 'staged') assertFilesStaged(context)
-    if (!['staged', 'committing'].includes(context.manifest.state)) {
-      throw compactionGovernanceError(
-        'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_STALE',
-        'The compaction archive deletion cannot be committed from its current state',
-      )
-    }
-    updateContext(context, 'committing', fileSystem, now)
-    for (const entry of entries) {
-      if (exists(fileSystem, entry.source.fullPath)) {
-        throw compactionGovernanceError(
-          'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CHANGED',
-          'A staged compaction archive unexpectedly reappeared',
-        )
-      }
-      if (!exists(fileSystem, entry.stagedPath)) continue
-      verifyRegularFile(fileSystem, entry.stagedPath, entry.file)
-      method(fileSystem, 'unlinkSync')(entry.stagedPath)
-    }
-    syncDirectory(fileSystem, context.paths.payloadRoot)
-    updateContext(context, 'committed', fileSystem, now)
-    if (exists(fileSystem, context.paths.payloadRoot)
-      && method(fileSystem, 'readdirSync')(context.paths.payloadRoot).length === 0) {
-      method(fileSystem, 'rmdirSync')(context.paths.payloadRoot)
-    }
-    return context
-  }
-
-  const rollbackFiles = (context, input = null) => {
-    if (input) assertReceipt(context, input)
-    if (context.manifest.state === 'rolled_back') return context
-    if (context.manifest.state === 'committed' || context.manifest.state === 'committing') {
-      throw compactionGovernanceError(
-        'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_STALE',
-        'A committed compaction archive deletion cannot be rolled back',
-      )
-    }
-    if (!['staging', 'staged', 'rolling_back'].includes(context.manifest.state)) {
-      throw compactionGovernanceError(
-        'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_STALE',
-        'The compaction archive deletion cannot be rolled back from its current state',
-      )
-    }
-    const entries = resolvedFiles(context, fileSystem)
-    updateContext(context, 'rolling_back', fileSystem, now)
-    for (const entry of entries.reverse()) {
-      const sourceExists = exists(fileSystem, entry.source.fullPath)
-      const stagedExists = exists(fileSystem, entry.stagedPath)
-      if (sourceExists && stagedExists) {
-        throw compactionGovernanceError(
-          'COMPACTION_ARCHIVE_GOVERNANCE_ROLLBACK_CONFLICT',
-          'A compaction archive exists in both staged and managed storage',
-        )
-      }
-      if (!sourceExists && !stagedExists) {
-        throw compactionGovernanceError(
-          'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CHANGED',
-          'A compaction archive disappeared during rollback',
-        )
-      }
-      if (sourceExists) {
-        verifyRegularFile(fileSystem, entry.source.fullPath, entry.file)
-        continue
-      }
-      verifyRegularFile(fileSystem, entry.stagedPath, entry.file)
-      assertDirectory(fileSystem, context.paths.root, entry.source.bucketPath)
-      method(fileSystem, 'renameSync')(entry.stagedPath, entry.source.fullPath)
-      syncDirectory(fileSystem, entry.source.bucketPath)
-    }
-    updateContext(context, 'rolled_back', fileSystem, now)
-    if (exists(fileSystem, context.paths.payloadRoot)
-      && method(fileSystem, 'readdirSync')(context.paths.payloadRoot).length === 0) {
-      method(fileSystem, 'rmdirSync')(context.paths.payloadRoot)
-    }
-    return context
-  }
+  const beginStage = (input) => beginDeletionStage(runtime, input)
+  const stageFiles = (context) => stageDeletionFiles(runtime, context)
+  const assertFilesStaged = (context) => assertDeletionFilesStaged(runtime, context)
+  const commitFiles = (context, input) => commitDeletionFiles(runtime, context, input)
+  const rollbackFiles = (context, input = null) => rollbackDeletionFiles(runtime, context, input)
 
   return Object.freeze({
     assertMutationAllowed,

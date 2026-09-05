@@ -309,6 +309,154 @@ function rollbackOutput(manifest) {
   }
 }
 
+function createArchiveExportSnapshot(runtime, { userId }) {
+  const { db, env, fileSystem, nextToken, exportSnapshots } = runtime
+  const entries = rowsForScope(db, userId, { kind: 'user' }).map((row) => {
+    const body = readCompactionArchiveBody({ row, userId, env, fileSystem })
+    return {
+      descriptor: {
+        id: String(row.id), userId, sessionId: String(row.session_id),
+        contentToken: nextToken(), sizeBytes: body.sizeBytes, sha256: body.sha256,
+      },
+      bytes: Buffer.from(body.bytes),
+    }
+  })
+  const snapshotToken = nextToken()
+  exportSnapshots.set(snapshotToken, { userId, entries })
+  return { userId, snapshotToken, entryCount: entries.length }
+}
+
+function readArchiveExportChunk(runtime, { userId, snapshotToken, contentToken, offset, maxBytes }) {
+  const snapshot = runtime.requireSnapshot(userId, snapshotToken)
+  const entry = snapshot.entries.find((candidate) => candidate.descriptor.contentToken === contentToken)
+  if (!entry) {
+    throw compactionGovernanceError(
+      'COMPACTION_ARCHIVE_EXPORT_CONTENT_NOT_FOUND',
+      'The compaction archive export content is unavailable',
+    )
+  }
+  const end = Math.min(entry.bytes.length, offset + maxBytes)
+  const bytes = entry.bytes.subarray(offset, end)
+  return {
+    userId, snapshotToken, contentToken, dataBase64: bytes.toString('base64'),
+    byteLength: bytes.length, nextOffset: offset + bytes.length,
+    done: offset + bytes.length >= entry.bytes.length,
+  }
+}
+
+function releaseArchiveExportSnapshot(runtime, { userId, snapshotToken }) {
+  const { exportSnapshots, issuedTokens } = runtime
+  const snapshot = exportSnapshots.get(snapshotToken)
+  const released = !!snapshot && snapshot.userId === userId
+  if (released) {
+    exportSnapshots.delete(snapshotToken)
+    issuedTokens.delete(snapshotToken)
+    for (const entry of snapshot.entries) issuedTokens.delete(entry.descriptor.contentToken)
+  }
+  return { userId, snapshotToken, released }
+}
+
+function stageArchiveDeletion(runtime, { userId, scope, operationId, expectedDigest }) {
+  const { storage, db, env, fileSystem } = runtime
+  let context = storage.read({ userId, operationId })
+  if (context.manifest) {
+    if (context.manifest.digest === expectedDigest
+      && sameScope(context.manifest.scope, scope)
+      && context.manifest.state === 'staged') return stageOutput(context.manifest)
+    throw compactionGovernanceError(
+      'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CONFLICT',
+      'A different or completed compaction archive deletion uses this operation',
+    )
+  }
+  context = storage.beginStage({ userId, scope, operationId, expectedDigest })
+  if (context.manifest.state !== 'staging') {
+    throw compactionGovernanceError(
+      'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CONFLICT',
+      'A compaction archive deletion operation changed while its fence was established',
+    )
+  }
+  try {
+    const state = collectDeletionState({ db, userId, scope, env, fileSystem })
+    if (state.digest !== expectedDigest) {
+      storage.rollbackFiles(context)
+      throw compactionGovernanceError(
+        'COMPACTION_ARCHIVE_GOVERNANCE_PREVIEW_CHANGED',
+        'Compaction archives changed after deletion preview',
+      )
+    }
+    storage.save(context, {
+      ...context.manifest,
+      records: state.records,
+      files: state.files,
+      alreadyMissing: state.alreadyMissing,
+      totalBytes: state.totalBytes,
+    })
+    storage.stageFiles(context)
+    return stageOutput(context.manifest)
+  } catch (cause) {
+    if (['staging', 'staged'].includes(context.manifest.state)) {
+      try { storage.rollbackFiles(context) }
+      catch (rollbackCause) {
+        throw new AggregateError(
+          [cause, rollbackCause],
+          'Compaction archive staging failed',
+          { cause: rollbackCause },
+        )
+      }
+    }
+    throw cause
+  }
+}
+
+function assertArchiveDeletionStable(runtime, input) {
+  const { readContext, storage, env, fileSystem, db } = runtime
+  const context = readContext(input)
+  assertReceipt(context, input)
+  storage.assertFilesStaged(context)
+  if (context.manifest.scope.kind === 'user') {
+    assertUserBucketEmpty({ userId: input.userId, env, fileSystem })
+  }
+  const records = rowsForScope(db, input.userId, context.manifest.scope)
+    .map((row) => normalizedRecord(row, input.userId, env))
+  if (JSON.stringify(records) !== JSON.stringify(context.manifest.records)) {
+    throw compactionGovernanceError(
+      'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CHANGED',
+      'Compaction archive metadata changed before database commit',
+    )
+  }
+  return { ...input, state: 'staged', stable: true }
+}
+
+function recoverArchiveDeletion(runtime, {
+  userId,
+  operationId,
+  databaseCommitted,
+  expectedDigest,
+  expectedStageToken,
+}) {
+  const { storage } = runtime
+  const context = storage.read({ userId, operationId })
+  if (!context.manifest) {
+    return { userId, operationId, recovered: false, state: 'none', digest: null, stageToken: null }
+  }
+  if (context.manifest.digest !== expectedDigest
+    || (expectedStageToken !== null && context.manifest.stageToken !== expectedStageToken)) {
+    throw compactionGovernanceError(
+      'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_STALE',
+      'The compaction archive recovery receipt does not match its durable journal',
+    )
+  }
+  if (!['committed', 'rolled_back'].includes(context.manifest.state)) {
+    const input = operationInput(context.manifest)
+    if (databaseCommitted) storage.commitFiles(context, input)
+    else storage.rollbackFiles(context, input)
+  }
+  return {
+    userId, operationId, recovered: true, state: context.manifest.state,
+    digest: context.manifest.digest, stageToken: context.manifest.stageToken,
+  }
+}
+
 export function createSqliteFileCompactionArchiveGovernance({
   db = getDb(),
   env = process.env,
@@ -364,210 +512,41 @@ export function createSqliteFileCompactionArchiveGovernance({
     return context
   }
 
+  const runtime = {
+    db, env, fileSystem, storage, exportSnapshots, issuedTokens,
+    nextToken, requireSnapshot, readContext,
+  }
   return Object.freeze({
     assertMutationAllowed: storage.assertMutationAllowed,
-
-    createExportSnapshot({ userId }) {
-      const entries = rowsForScope(db, userId, { kind: 'user' }).map((row) => {
-        const body = readCompactionArchiveBody({ row, userId, env, fileSystem })
-        return {
-          descriptor: {
-            id: String(row.id),
-            userId,
-            sessionId: String(row.session_id),
-            contentToken: nextToken(),
-            sizeBytes: body.sizeBytes,
-            sha256: body.sha256,
-          },
-          bytes: Buffer.from(body.bytes),
-        }
-      })
-      const snapshotToken = nextToken()
-      exportSnapshots.set(snapshotToken, { userId, entries })
-      return { userId, snapshotToken, entryCount: entries.length }
-    },
-
+    createExportSnapshot: (input) => createArchiveExportSnapshot(runtime, input),
     listExportEntries({ userId, snapshotToken }) {
       const snapshot = requireSnapshot(userId, snapshotToken)
       return {
-        userId,
-        snapshotToken,
+        userId, snapshotToken,
         entries: snapshot.entries.map(({ descriptor }) => ({ ...descriptor })),
       }
     },
-
-    readExportChunk({ userId, snapshotToken, contentToken, offset, maxBytes }) {
-      const snapshot = requireSnapshot(userId, snapshotToken)
-      const entry = snapshot.entries.find((candidate) => (
-        candidate.descriptor.contentToken === contentToken
-      ))
-      if (!entry) {
-        throw compactionGovernanceError(
-          'COMPACTION_ARCHIVE_EXPORT_CONTENT_NOT_FOUND',
-          'The compaction archive export content is unavailable',
-        )
-      }
-      const end = Math.min(entry.bytes.length, offset + maxBytes)
-      const bytes = entry.bytes.subarray(offset, end)
-      return {
-        userId,
-        snapshotToken,
-        contentToken,
-        dataBase64: bytes.toString('base64'),
-        byteLength: bytes.length,
-        nextOffset: offset + bytes.length,
-        done: offset + bytes.length >= entry.bytes.length,
-      }
-    },
-
-    releaseExportSnapshot({ userId, snapshotToken }) {
-      const snapshot = exportSnapshots.get(snapshotToken)
-      const released = !!snapshot && snapshot.userId === userId
-      if (released) {
-        exportSnapshots.delete(snapshotToken)
-        issuedTokens.delete(snapshotToken)
-        for (const entry of snapshot.entries) {
-          issuedTokens.delete(entry.descriptor.contentToken)
-        }
-      }
-      return { userId, snapshotToken, released }
-    },
-
+    readExportChunk: (input) => readArchiveExportChunk(runtime, input),
+    releaseExportSnapshot: (input) => releaseArchiveExportSnapshot(runtime, input),
     previewDeletion({ userId, scope }) {
       const state = collectDeletionState({ db, userId, scope, env, fileSystem })
       return {
-        userId,
-        scope,
-        digest: state.digest,
-        fileCount: state.fileCount,
-        totalBytes: state.totalBytes,
-        alreadyMissing: state.alreadyMissing,
+        userId, scope, digest: state.digest, fileCount: state.fileCount,
+        totalBytes: state.totalBytes, alreadyMissing: state.alreadyMissing,
       }
     },
-
-    stageDeletion({ userId, scope, operationId, expectedDigest }) {
-      let context = storage.read({ userId, operationId })
-      if (context.manifest) {
-        if (context.manifest.digest === expectedDigest
-          && sameScope(context.manifest.scope, scope)
-          && context.manifest.state === 'staged') {
-          return stageOutput(context.manifest)
-        }
-        throw compactionGovernanceError(
-          'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CONFLICT',
-          'A different or completed compaction archive deletion uses this operation',
-        )
-      }
-      context = storage.beginStage({ userId, scope, operationId, expectedDigest })
-      if (context.manifest.state !== 'staging') {
-        throw compactionGovernanceError(
-          'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CONFLICT',
-          'A compaction archive deletion operation changed while its fence was established',
-        )
-      }
-      try {
-        const state = collectDeletionState({ db, userId, scope, env, fileSystem })
-        if (state.digest !== expectedDigest) {
-          storage.rollbackFiles(context)
-          throw compactionGovernanceError(
-            'COMPACTION_ARCHIVE_GOVERNANCE_PREVIEW_CHANGED',
-            'Compaction archives changed after deletion preview',
-          )
-        }
-        storage.save(context, {
-          ...context.manifest,
-          records: state.records,
-          files: state.files,
-          alreadyMissing: state.alreadyMissing,
-          totalBytes: state.totalBytes,
-        })
-        storage.stageFiles(context)
-        return stageOutput(context.manifest)
-      } catch (cause) {
-        if (['staging', 'staged'].includes(context.manifest.state)) {
-          try {
-            storage.rollbackFiles(context)
-          } catch (rollbackCause) {
-            throw new AggregateError(
-              [cause, rollbackCause],
-              'Compaction archive staging failed',
-              { cause: rollbackCause },
-            )
-          }
-        }
-        throw cause
-      }
-    },
-
-    assertDeletionStable(input) {
-      const context = readContext(input)
-      assertReceipt(context, input)
-      storage.assertFilesStaged(context)
-      if (context.manifest.scope.kind === 'user') {
-        assertUserBucketEmpty({ userId: input.userId, env, fileSystem })
-      }
-      const records = rowsForScope(db, input.userId, context.manifest.scope)
-        .map((row) => normalizedRecord(row, input.userId, env))
-      if (JSON.stringify(records) !== JSON.stringify(context.manifest.records)) {
-        throw compactionGovernanceError(
-          'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_CHANGED',
-          'Compaction archive metadata changed before database commit',
-        )
-      }
-      return { ...input, state: 'staged', stable: true }
-    },
-
+    stageDeletion: (input) => stageArchiveDeletion(runtime, input),
+    assertDeletionStable: (input) => assertArchiveDeletionStable(runtime, input),
     commitDeletion(input) {
       const context = readContext(input)
       storage.commitFiles(context, input)
       return commitOutput(context.manifest)
     },
-
     rollbackDeletion(input) {
       const context = readContext(input)
       storage.rollbackFiles(context, input)
       return rollbackOutput(context.manifest)
     },
-
-    recoverDeletion({
-      userId,
-      operationId,
-      databaseCommitted,
-      expectedDigest,
-      expectedStageToken,
-    }) {
-      const context = storage.read({ userId, operationId })
-      if (!context.manifest) {
-        return {
-          userId,
-          operationId,
-          recovered: false,
-          state: 'none',
-          digest: null,
-          stageToken: null,
-        }
-      }
-      if (context.manifest.digest !== expectedDigest
-        || (expectedStageToken !== null
-          && context.manifest.stageToken !== expectedStageToken)) {
-        throw compactionGovernanceError(
-          'COMPACTION_ARCHIVE_GOVERNANCE_STAGE_STALE',
-          'The compaction archive recovery receipt does not match its durable journal',
-        )
-      }
-      if (!['committed', 'rolled_back'].includes(context.manifest.state)) {
-        const input = operationInput(context.manifest)
-        if (databaseCommitted) storage.commitFiles(context, input)
-        else storage.rollbackFiles(context, input)
-      }
-      return {
-        userId,
-        operationId,
-        recovered: true,
-        state: context.manifest.state,
-        digest: context.manifest.digest,
-        stageToken: context.manifest.stageToken,
-      }
-    },
+    recoverDeletion: (input) => recoverArchiveDeletion(runtime, input),
   })
 }
