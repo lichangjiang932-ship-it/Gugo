@@ -3,14 +3,18 @@ import {
   normalizeIncompleteReason,
 } from '../turnTerminalProjection.js'
 
-export function installTerminalCompletion(s) {
-  const {
-    MAX_LOCAL_HTML_DELIVERY_RETRIES,
-    formatIncompleteTerminalText,
-    sourceHandoffViolation,
-  } = s.d
+function normalizedRequirements(reason, provided) {
+  const requirements = [...new Set((Array.isArray(provided)
+    ? provided
+    : missingRequirementsForIncompleteReason(reason))
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter((value) => /^[a-z][a-z0-9_]{1,95}$/u.test(value)))]
+  if (requirements.length === 0) requirements.push('remaining_task_steps')
+  return requirements
+}
 
-  s.finishIncomplete = async ({
+function createFinishIncomplete(s, formatIncompleteTerminalText) {
+  return async ({
     text,
     reason,
     code = null,
@@ -22,17 +26,9 @@ export function installTerminalCompletion(s) {
     sourceHandoffFiltered = false,
   }) => {
     const incompleteReason = normalizeIncompleteReason(reason)
-    const normalizedMissingRequirements = [...new Set((Array.isArray(missingRequirements)
-      ? missingRequirements
-      : missingRequirementsForIncompleteReason(incompleteReason))
-      .map((value) => String(value || '').trim().toLowerCase())
-      .filter((value) => /^[a-z][a-z0-9_]{1,95}$/u.test(value)))]
-    if (normalizedMissingRequirements.length === 0) {
-      normalizedMissingRequirements.push('remaining_task_steps')
-    }
     const terminalMetadata = {
       ...(code ? { code: String(code) } : {}),
-      missingRequirements: normalizedMissingRequirements,
+      missingRequirements: normalizedRequirements(incompleteReason, missingRequirements),
       ...(typeof retryable === 'boolean' ? { retryable } : {}),
       ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),
       ...(taskVerification ? { taskVerification } : {}),
@@ -88,17 +84,15 @@ export function installTerminalCompletion(s) {
       recovery: s.recovery,
     })
   }
+}
 
-  s.handleLocalHtmlDeliveryFailure = async ({
-    failure,
-    content = '',
-    steeringLeaseId = null,
-  }) => {
+function createLocalHtmlFailureHandler(s, maximumRetries) {
+  return async ({ failure, content = '', steeringLeaseId = null }) => {
     if (!failure) {
       s.localHtmlDeliveryRetries = 0
       return { scheduled: false, result: null }
     }
-    if (s.localHtmlDeliveryRetries >= MAX_LOCAL_HTML_DELIVERY_RETRIES) {
+    if (s.localHtmlDeliveryRetries >= maximumRetries) {
       return {
         scheduled: false,
         result: await s.finishIncomplete({
@@ -109,16 +103,15 @@ export function installTerminalCompletion(s) {
     }
     s.localHtmlDeliveryRetries += 1
     s.appendLocalHtmlDeliveryRepairPrompt(failure, content)
-    // A normal correction uses one model round to write, one to read back,
-    // and one to make the completion claim. Keep the extension bounded by the
-    // four validation retries while allowing that complete repair sequence.
     if (s.iter + 1 >= s.maxIters) s.maxIters = s.iter + 3
     await s.persistTurn()
     await s.steeringController.acknowledge(steeringLeaseId)
     return { scheduled: true, result: null }
   }
+}
 
-  s.finishTerminalResult = async (result, {
+function createFinishTerminalResult(s, { formatIncompleteTerminalText, sourceHandoffViolation }) {
+  return async (result, {
     steeringLeaseId = null,
     finalMetadata = {},
     appendTextToConversation = true,
@@ -143,16 +136,8 @@ export function installTerminalCompletion(s) {
               ? 'reasoning_runaway'
               : result.reason,
       )
-      const normalizedMissingRequirements = [...new Set((Array.isArray(result.missingRequirements)
-        ? result.missingRequirements
-        : missingRequirementsForIncompleteReason(incompleteReason))
-        .map((value) => String(value || '').trim().toLowerCase())
-        .filter((value) => /^[a-z][a-z0-9_]{1,95}$/u.test(value)))]
-      if (normalizedMissingRequirements.length === 0) {
-        normalizedMissingRequirements.push('remaining_task_steps')
-      }
       incompleteMetadata = {
-        missingRequirements: normalizedMissingRequirements,
+        missingRequirements: normalizedRequirements(incompleteReason, result.missingRequirements),
         ...(typeof result.retryable === 'boolean' ? { retryable: result.retryable } : {}),
         ...(typeof result.manualRetryable === 'boolean'
           ? { manualRetryable: result.manualRetryable }
@@ -207,4 +192,21 @@ export function installTerminalCompletion(s) {
     s.finalCheckpointPersisted = Boolean(text.trim())
     return s.emitTurnStopping({ ...result, text, ...s.deliverySelectionFields() })
   }
+}
+
+export function installTerminalCompletion(s) {
+  const {
+    MAX_LOCAL_HTML_DELIVERY_RETRIES,
+    formatIncompleteTerminalText,
+    sourceHandoffViolation,
+  } = s.d
+  s.finishIncomplete = createFinishIncomplete(s, formatIncompleteTerminalText)
+  s.handleLocalHtmlDeliveryFailure = createLocalHtmlFailureHandler(
+    s,
+    MAX_LOCAL_HTML_DELIVERY_RETRIES,
+  )
+  s.finishTerminalResult = createFinishTerminalResult(s, {
+    formatIncompleteTerminalText,
+    sourceHandoffViolation,
+  })
 }
