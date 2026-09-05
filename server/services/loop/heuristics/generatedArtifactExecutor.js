@@ -49,6 +49,116 @@ export function isGeneratedArtifactTool(name) {
   return GENERATED_ARTIFACT_TOOL_NAMES.has(name)
 }
 
+async function executeRenderedPdfPages({
+  name,
+  args,
+  job,
+  step,
+  signal,
+  requiresLocalArtifactDelivery,
+}) {
+  const rendered = await dispatchPdfTool(name, args || {}, {
+    userId: job?.userId || null,
+    signal,
+  })
+  if (String(args?.replace_artifact_id || '').trim() && rendered.pages.length !== 1) {
+    throw artifactReplacementError(
+      'artifact_replacement_requires_single_page',
+      'Replacing one existing image requires exactly one rendered PDF page.',
+    )
+  }
+  const inputName = path.basename(String(rendered.input || args?.input || 'document.pdf'))
+  const baseTitle = String(args?.title || path.parse(inputName).name || 'PDF-page').trim()
+  const stagedPages = []
+  try {
+    for (const page of rendered.pages) {
+      const pageTitle = rendered.pages.length === 1 && args?.title
+        ? String(args.title)
+        : `${baseTitle}-page-${page.page}`
+      const pageArgs = { ...args, title: pageTitle, pages: [page.page] }
+      const artifact = createImageArtifact({
+        title: pageTitle,
+        buffer: page.buffer,
+        mimeType: page.mimeType,
+      })
+      stagedPages.push({
+        page,
+        artifact,
+        args: pageArgs,
+        extra: {
+          page: page.page, width: page.width, height: page.height,
+          dpi: page.dpi, imageMime: page.mimeType,
+        },
+      })
+    }
+  } catch (error) {
+    cleanupGeneratedArtifactBatch({ artifacts: stagedPages.map(({ artifact }) => artifact) })
+    throw error
+  }
+  let publishedPages
+  if (String(args?.replace_artifact_id || '').trim()) {
+    const [{ page, artifact: stagedArtifact, args: pageArgs, extra }] = stagedPages
+    const artifact = await publishGeneratedArtifact({
+      name, artifact: stagedArtifact, args: pageArgs, job, step,
+    })
+    const delivery = publishedArtifactResult({
+      name, artifact, args: pageArgs, job, requiresLocalArtifactDelivery, extra,
+    })
+    publishedPages = [{ page, artifact, delivery }]
+  } else {
+    let deliveries
+    try {
+      deliveries = await publishGeneratedArtifactBatch({
+        name, entries: stagedPages, job, step, requiresLocalArtifactDelivery,
+      })
+    } catch (error) {
+      cleanupGeneratedArtifactBatch({ artifacts: stagedPages.map(({ artifact }) => artifact) })
+      throw error
+    }
+    publishedPages = stagedPages.map(({ page, artifact }, index) => ({
+      page, artifact, delivery: deliveries[index],
+    }))
+  }
+  const artifacts = publishedPages.map(({ page, artifact, delivery }) => ({
+    id: artifact.id,
+    artifactId: artifact.id,
+    filename: artifact.filename,
+    url: artifact.url,
+    type: artifact.type,
+    page: page.page,
+    width: page.width,
+    height: page.height,
+    dpi: page.dpi,
+    mimeType: page.mimeType,
+    replaced: artifact.replaced === true,
+    deliveryStatus: delivery.deliveryStatus,
+    ...(delivery.path ? { path: delivery.path, localPath: delivery.localPath } : {}),
+  }))
+  const failedDelivery = publishedPages.find(({ delivery }) => delivery.ok !== true)?.delivery
+  const result = {
+    ok: !failedDelivery,
+    ...(failedDelivery
+      ? { code: failedDelivery.code, error: failedDelivery.error, retryable: false }
+      : {}),
+    artifactId: artifacts[0]?.id || null,
+    artifactIds: artifacts.map((artifact) => artifact.id),
+    artifacts,
+    input: rendered.input,
+    pageCount: rendered.pageCount,
+    renderedPageCount: rendered.renderedPageCount,
+    pages: artifacts,
+    format: rendered.format,
+    dpi: rendered.dpi,
+    imageMime: rendered.mimeType,
+    totalBytes: rendered.totalBytes,
+  }
+  return attachVisionFeedback({
+    name,
+    result,
+    buffer: publishedPages[0]?.page?.buffer || null,
+  })
+}
+
 export async function executeGeneratedArtifactTool({
   name,
   args,
@@ -82,128 +192,8 @@ export async function executeGeneratedArtifactTool({
     })
   }
   if (name === 'render_pdf_pages') {
-    const rendered = await dispatchPdfTool(name, args || {}, {
-      userId: job?.userId || null,
-      signal,
-    })
-    if (String(args?.replace_artifact_id || '').trim() && rendered.pages.length !== 1) {
-      throw artifactReplacementError(
-        'artifact_replacement_requires_single_page',
-        'Replacing one existing image requires exactly one rendered PDF page.',
-      )
-    }
-    const inputName = path.basename(String(rendered.input || args?.input || 'document.pdf'))
-    const baseTitle = String(args?.title || path.parse(inputName).name || 'PDF-page').trim()
-    const stagedPages = []
-    try {
-      for (const page of rendered.pages) {
-        const pageTitle = rendered.pages.length === 1 && args?.title
-          ? String(args.title)
-          : `${baseTitle}-page-${page.page}`
-        const pageArgs = { ...args, title: pageTitle, pages: [page.page] }
-        const artifact = createImageArtifact({
-          title: pageTitle,
-          buffer: page.buffer,
-          mimeType: page.mimeType,
-        })
-        stagedPages.push({
-          page,
-          artifact,
-          args: pageArgs,
-          extra: {
-            page: page.page,
-            width: page.width,
-            height: page.height,
-            dpi: page.dpi,
-            imageMime: page.mimeType,
-          },
-        })
-      }
-    } catch (error) {
-      cleanupGeneratedArtifactBatch({ artifacts: stagedPages.map(({ artifact }) => artifact) })
-      throw error
-    }
-
-    let publishedPages
-    if (String(args?.replace_artifact_id || '').trim()) {
-      const [{ page, artifact: stagedArtifact, args: pageArgs, extra }] = stagedPages
-      const artifact = await publishGeneratedArtifact({
-        name,
-        artifact: stagedArtifact,
-        args: pageArgs,
-        job,
-        step,
-      })
-      const delivery = publishedArtifactResult({
-        name,
-        artifact,
-        args: pageArgs,
-        job,
-        requiresLocalArtifactDelivery,
-        extra,
-      })
-      publishedPages = [{ page, artifact, delivery }]
-    } else {
-      let deliveries
-      try {
-        deliveries = await publishGeneratedArtifactBatch({
-          name,
-          entries: stagedPages,
-          job,
-          step,
-          requiresLocalArtifactDelivery,
-        })
-      } catch (error) {
-        cleanupGeneratedArtifactBatch({ artifacts: stagedPages.map(({ artifact }) => artifact) })
-        throw error
-      }
-      publishedPages = stagedPages.map(({ page, artifact }, index) => ({
-        page,
-        artifact,
-        delivery: deliveries[index],
-      }))
-    }
-    const artifacts = publishedPages.map(({ page, artifact, delivery }) => ({
-      id: artifact.id,
-      artifactId: artifact.id,
-      filename: artifact.filename,
-      url: artifact.url,
-      type: artifact.type,
-      page: page.page,
-      width: page.width,
-      height: page.height,
-      dpi: page.dpi,
-      mimeType: page.mimeType,
-      replaced: artifact.replaced === true,
-      deliveryStatus: delivery.deliveryStatus,
-      ...(delivery.path ? { path: delivery.path, localPath: delivery.localPath } : {}),
-    }))
-    const failedDelivery = publishedPages.find(({ delivery }) => delivery.ok !== true)?.delivery
-    const result = {
-      ok: !failedDelivery,
-      ...(failedDelivery
-        ? {
-            code: failedDelivery.code,
-            error: failedDelivery.error,
-            retryable: false,
-          }
-        : {}),
-      artifactId: artifacts[0]?.id || null,
-      artifactIds: artifacts.map((artifact) => artifact.id),
-      artifacts,
-      input: rendered.input,
-      pageCount: rendered.pageCount,
-      renderedPageCount: rendered.renderedPageCount,
-      pages: artifacts,
-      format: rendered.format,
-      dpi: rendered.dpi,
-      imageMime: rendered.mimeType,
-      totalBytes: rendered.totalBytes,
-    }
-    return await attachVisionFeedback({
-      name,
-      result,
-      buffer: publishedPages[0]?.page?.buffer || null,
+    return executeRenderedPdfPages({
+      name, args, job, step, signal, requiresLocalArtifactDelivery,
     })
   }
   if (name === 'create_pptx') {
