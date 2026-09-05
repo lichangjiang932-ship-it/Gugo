@@ -12,15 +12,166 @@ import {
   createRuntimePluginRevokeReceipt,
 } from './runtimePluginContributionLifecycle.js'
 
+function bindingError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  error.retryable = true
+  return error
+}
+
+function drainBindingErrors(binding) {
+  return binding.cleanupErrors.splice(0).map((entry) => entry.error)
+}
+
+function attachPluginEventContribution(binding, contribution, rollbackUntrackedAttachment) {
+  if (binding.closing || binding.detached || binding.attachments.has(contribution)) return
+  let dispose
+  try {
+    dispose = binding.events.on(contribution.event, contribution.listener)
+  } catch (error) {
+    rollbackUntrackedAttachment(binding, contribution, error)
+  }
+  if (typeof dispose !== 'function') {
+    rollbackUntrackedAttachment(
+      binding,
+      contribution,
+      new TypeError('loop event registration must return a disposer'),
+    )
+  }
+  let handle = dispose
+  if (!nodeTypes.isProxy(dispose)) {
+    const descriptor = Object.getOwnPropertyDescriptor(dispose, 'beginRevoke')
+    if (!descriptor) {
+      const legacyDispose = () => dispose()
+      handle = attachRuntimePluginBeginRevoke(legacyDispose, () => {
+        assertLoopCleanupSynchronous(dispose())
+        return createRuntimePluginRevokeReceipt('revoked')
+      })
+    }
+  }
+  try {
+    binding.attachments.set(contribution, {
+      lifecycle: createRuntimePluginContributionLifecycle([{ id: 'listener', handle }]),
+    })
+  } catch (error) {
+    rollbackUntrackedAttachment(binding, contribution, error)
+  }
+}
+
+function bindRuntimePluginLoopEvents(runtime, events) {
+  const {
+    bindings, listActiveContributions, attachContribution, detachBinding,
+    drainBindingErrors, finishDetachedBinding, bindingError,
+  } = runtime
+  const binding = {
+    events: snapshotLoopEventBus(events),
+    attachments: new Map(),
+    pendingCleanups: new Set(),
+    cleanupErrors: [],
+    closing: false,
+    detached: false,
+  }
+  bindings.add(binding)
+  try {
+    for (const contribution of listActiveContributions()) attachContribution(binding, contribution)
+  } catch (error) {
+    detachBinding(binding)
+    const rollbackErrors = drainBindingErrors(binding)
+    if (binding.attachments.size > 0) {
+      rollbackErrors.push(bindingError(
+        'PLUGIN_EVENT_BIND_ROLLBACK_INCOMPLETE',
+        'loop event binding rollback retained one or more plugin attachments',
+      ))
+    }
+    if (rollbackErrors.length > 0) {
+      const failure = new AggregateError(
+        [error, ...rollbackErrors],
+        'loop event binding failed and rollback remains incomplete',
+        { cause: error },
+      )
+      failure.code = 'PLUGIN_EVENT_BIND_ROLLBACK_INCOMPLETE'
+      failure.retryable = true
+      throw failure
+    }
+    throw error
+  }
+  let disposed = false
+  return () => {
+    if (disposed) return false
+    const detached = detachBinding(binding)
+    const errors = drainBindingErrors(binding)
+    if (errors.length > 0) {
+      if (finishDetachedBinding(binding)) disposed = true
+      const failure = new AggregateError(errors, 'loop event binding cleanup failed')
+      failure.code = 'PLUGIN_EVENT_BINDING_CLEANUP_FAILED'
+      failure.retryable = true
+      throw failure
+    }
+    if (detached) disposed = true
+    return detached
+  }
+}
+
+async function detachAllRuntimePluginBindings(runtime) {
+  const { bindings, detachBinding, drainBindingErrors, finishDetachedBinding, bindingError } = runtime
+  const owned = [...bindings]
+  for (const binding of owned) {
+    for (const cleanup of [...binding.pendingCleanups]) await cleanup
+  }
+  for (const binding of owned) detachBinding(binding)
+  for (const binding of owned) {
+    for (const cleanup of [...binding.pendingCleanups]) await cleanup
+  }
+  const errors = []
+  for (const binding of owned) {
+    errors.push(...drainBindingErrors(binding))
+    if (binding.attachments.size > 0) {
+      errors.push(bindingError(
+        'PLUGIN_EVENT_BINDING_REVOKE_INCOMPLETE',
+        'loop event binding still owns retained or indeterminate plugin attachments',
+      ))
+    }
+    finishDetachedBinding(binding)
+  }
+  if (errors.length > 0) {
+    const failure = new AggregateError(errors, 'runtime plugin event binding cleanup failed')
+    failure.code = 'PLUGIN_EVENT_BINDING_CLEANUP_FAILED'
+    failure.retryable = true
+    throw failure
+  }
+  return true
+}
+
+function beginPluginEventContributionRevoke({ bindings, beginAttachmentRevoke }, contribution) {
+  const cleanups = []
+  let visibility = 'revoked'
+  for (const binding of [...bindings]) {
+    const attachment = binding.attachments.get(contribution)
+    if (!attachment) continue
+    try {
+      const receipt = beginAttachmentRevoke(binding, contribution, attachment)
+      cleanups.push(receipt.cleanup)
+      if (receipt.visibility === 'indeterminate') visibility = 'indeterminate'
+      else if (receipt.visibility === 'retained' && visibility !== 'indeterminate') {
+        visibility = 'retained'
+      }
+    } catch (error) {
+      visibility = 'indeterminate'
+      cleanups.push(createHandledRejectedPromise(error))
+    }
+  }
+  const cleanup = cleanups.length > 0
+    ? (async () => {
+        for (const pending of cleanups) await pending
+        return true
+      })()
+    : null
+  if (cleanup) suppressNativePromiseRejection(cleanup)
+  return createRuntimePluginRevokeReceipt(visibility, cleanup)
+}
+
 export function createRuntimePluginEventBindings({ listActiveContributions }) {
   const bindings = new Set()
-
-  const bindingError = (code, message) => {
-    const error = new Error(message)
-    error.code = code
-    error.retryable = true
-    return error
-  }
 
   const recordBindingCleanupError = (binding, error, {
     attachment = null,
@@ -28,10 +179,6 @@ export function createRuntimePluginEventBindings({ listActiveContributions }) {
   } = {}) => {
     binding.cleanupErrors.push({ attachment, error, supersedable })
   }
-
-  const drainBindingErrors = (binding) => (
-    binding.cleanupErrors.splice(0).map((entry) => entry.error)
-  )
 
   const discardSupersededCleanupErrors = (binding, attachment) => {
     binding.cleanupErrors = binding.cleanupErrors.filter((entry) => (
@@ -118,71 +265,16 @@ export function createRuntimePluginEventBindings({ listActiveContributions }) {
     throw error
   }
 
-  const attachContribution = (binding, contribution) => {
-    if (binding.closing || binding.detached) return
-    if (binding.attachments.has(contribution)) return
-    let dispose
-    try {
-      dispose = binding.events.on(contribution.event, contribution.listener)
-    } catch (error) {
-      rollbackUntrackedAttachment(binding, contribution, error)
-    }
-    if (typeof dispose !== 'function') {
-      rollbackUntrackedAttachment(
-        binding,
-        contribution,
-        new TypeError('loop event registration must return a disposer'),
-      )
-    }
-    let handle = dispose
-    if (!nodeTypes.isProxy(dispose)) {
-      const descriptor = Object.getOwnPropertyDescriptor(dispose, 'beginRevoke')
-      if (!descriptor) {
-        const legacyDispose = () => dispose()
-        handle = attachRuntimePluginBeginRevoke(legacyDispose, () => {
-          assertLoopCleanupSynchronous(dispose())
-          return createRuntimePluginRevokeReceipt('revoked')
-        })
-      }
-    }
-    try {
-      binding.attachments.set(contribution, {
-        lifecycle: createRuntimePluginContributionLifecycle([
-          { id: 'listener', handle },
-        ]),
-      })
-    } catch (error) {
-      rollbackUntrackedAttachment(binding, contribution, error)
-    }
-  }
+  const attachContribution = (binding, contribution) => attachPluginEventContribution(
+    binding,
+    contribution,
+    rollbackUntrackedAttachment,
+  )
 
-  const beginContributionRevoke = (contribution) => {
-    const cleanups = []
-    let visibility = 'revoked'
-    for (const binding of [...bindings]) {
-      const attachment = binding.attachments.get(contribution)
-      if (!attachment) continue
-      try {
-        const receipt = beginAttachmentRevoke(binding, contribution, attachment)
-        cleanups.push(receipt.cleanup)
-        if (receipt.visibility === 'indeterminate') visibility = 'indeterminate'
-        else if (receipt.visibility === 'retained' && visibility !== 'indeterminate') {
-          visibility = 'retained'
-        }
-      } catch (error) {
-        visibility = 'indeterminate'
-        cleanups.push(createHandledRejectedPromise(error))
-      }
-    }
-    const cleanup = cleanups.length > 0
-      ? (async () => {
-          for (const pending of cleanups) await pending
-          return true
-        })()
-      : null
-    if (cleanup) suppressNativePromiseRejection(cleanup)
-    return createRuntimePluginRevokeReceipt(visibility, cleanup)
-  }
+  const beginContributionRevoke = (contribution) => beginPluginEventContributionRevoke(
+    { bindings, beginAttachmentRevoke },
+    contribution,
+  )
 
   const createContributionHandle = (contribution) => attachRuntimePluginBeginRevoke(
     () => {
@@ -205,89 +297,17 @@ export function createRuntimePluginEventBindings({ listActiveContributions }) {
     return true
   }
 
-  const bindLoopEvents = (events) => {
-    const binding = {
-      events: snapshotLoopEventBus(events),
-      attachments: new Map(),
-      pendingCleanups: new Set(),
-      cleanupErrors: [],
-      closing: false,
-      detached: false,
-    }
-    bindings.add(binding)
-    try {
-      for (const contribution of listActiveContributions()) {
-        attachContribution(binding, contribution)
-      }
-    } catch (error) {
-      detachBinding(binding)
-      const rollbackErrors = drainBindingErrors(binding)
-      if (binding.attachments.size > 0) {
-        rollbackErrors.push(bindingError(
-          'PLUGIN_EVENT_BIND_ROLLBACK_INCOMPLETE',
-          'loop event binding rollback retained one or more plugin attachments',
-        ))
-      }
-      if (rollbackErrors.length > 0) {
-        const failure = new AggregateError(
-          [error, ...rollbackErrors],
-          'loop event binding failed and rollback remains incomplete',
-          { cause: error },
-        )
-        failure.code = 'PLUGIN_EVENT_BIND_ROLLBACK_INCOMPLETE'
-        failure.retryable = true
-        throw failure
-      }
-      throw error
-    }
-    let disposed = false
-    return () => {
-      if (disposed) return false
-      const detached = detachBinding(binding)
-      const errors = drainBindingErrors(binding)
-      if (errors.length > 0) {
-        if (finishDetachedBinding(binding)) disposed = true
-        const failure = new AggregateError(errors, 'loop event binding cleanup failed')
-        failure.code = 'PLUGIN_EVENT_BINDING_CLEANUP_FAILED'
-        failure.retryable = true
-        throw failure
-      }
-      if (detached) disposed = true
-      return detached
-    }
+  const runtime = {
+    bindings,
+    listActiveContributions,
+    attachContribution,
+    detachBinding,
+    drainBindingErrors,
+    finishDetachedBinding,
+    bindingError,
   }
-
-  const detachAllBindings = async () => {
-    const owned = [...bindings]
-    // A prior bind/unbind attempt may still be settling. Wait for that exact
-    // receipt before retrying, otherwise the lifecycle returns the same
-    // retained receipt and no new revoke attempt is made.
-    for (const binding of owned) {
-      for (const cleanup of [...binding.pendingCleanups]) await cleanup
-    }
-    for (const binding of owned) detachBinding(binding)
-    for (const binding of owned) {
-      for (const cleanup of [...binding.pendingCleanups]) await cleanup
-    }
-    const errors = []
-    for (const binding of owned) {
-      errors.push(...drainBindingErrors(binding))
-      if (binding.attachments.size > 0) {
-        errors.push(bindingError(
-          'PLUGIN_EVENT_BINDING_REVOKE_INCOMPLETE',
-          'loop event binding still owns retained or indeterminate plugin attachments',
-        ))
-      }
-      finishDetachedBinding(binding)
-    }
-    if (errors.length > 0) {
-      const failure = new AggregateError(errors, 'runtime plugin event binding cleanup failed')
-      failure.code = 'PLUGIN_EVENT_BINDING_CLEANUP_FAILED'
-      failure.retryable = true
-      throw failure
-    }
-    return true
-  }
+  const bindLoopEvents = (events) => bindRuntimePluginLoopEvents(runtime, events)
+  const detachAllBindings = () => detachAllRuntimePluginBindings(runtime)
 
   return Object.freeze({
     activateContribution,
