@@ -36,6 +36,86 @@ function writeMessage(child, message) {
   })
 }
 
+function consumeLspFrames(inputBuffer, dispatch) {
+  let buffer = inputBuffer
+  if (buffer.length > MAX_LSP_MESSAGE_BYTES + MAX_LSP_HEADER_BYTES) {
+    throw lspStdioError('LSP_RESPONSE_TOO_LARGE', 'LSP response buffer exceeded its limit')
+  }
+  while (buffer.length > 0) {
+    const headerEnd = buffer.indexOf('\r\n\r\n')
+    if (headerEnd < 0) {
+      if (buffer.length > MAX_LSP_HEADER_BYTES) {
+        throw lspStdioError('LSP_MALFORMED_RESPONSE', 'LSP header exceeded its limit')
+      }
+      return buffer
+    }
+    if (headerEnd > MAX_LSP_HEADER_BYTES) {
+      throw lspStdioError('LSP_MALFORMED_RESPONSE', 'LSP header exceeded its limit')
+    }
+    const headers = buffer.subarray(0, headerEnd).toString('ascii').split('\r\n')
+    const lengthHeader = headers.find((line) => /^content-length\s*:/iu.test(line))
+    const length = Number(lengthHeader?.split(':', 2)[1]?.trim())
+    if (!Number.isSafeInteger(length) || length < 0 || length > MAX_LSP_MESSAGE_BYTES) {
+      throw lspStdioError('LSP_MALFORMED_RESPONSE', 'LSP Content-Length is invalid')
+    }
+    const messageEnd = headerEnd + 4 + length
+    if (buffer.length < messageEnd) return buffer
+    const body = buffer.subarray(headerEnd + 4, messageEnd).toString('utf8')
+    buffer = buffer.subarray(messageEnd)
+    let message
+    try { message = JSON.parse(body) } catch (cause) {
+      throw lspStdioError('LSP_MALFORMED_RESPONSE', 'LSP server sent invalid JSON', cause)
+    }
+    dispatch(message)
+  }
+  return buffer
+}
+
+function createLspMessageDispatcher({ rootUri, pending, settle, send }) {
+  const respondToServer = (message) => {
+    let result
+    if (message.method === 'workspace/configuration') {
+      const count = Array.isArray(message.params?.items) ? message.params.items.length : 0
+      result = Array.from({ length: count }, () => null)
+    } else if (message.method === 'workspace/workspaceFolders') {
+      result = [{ uri: rootUri, name: path.basename(new URL(rootUri).pathname) || 'workspace' }]
+    } else {
+      void send({
+        jsonrpc: '2.0',
+        id: message.id,
+        error: {
+          code: -32601,
+          message: `Unsupported server request: ${String(message.method || '')}`,
+        },
+      }).catch(() => {})
+      return
+    }
+    void send({ jsonrpc: '2.0', id: message.id, result }).catch(() => {})
+  }
+  return (message) => {
+    if (!isRecord(message)) {
+      throw lspStdioError('LSP_MALFORMED_RESPONSE', 'LSP server sent a non-object message')
+    }
+    if (message.id !== undefined && message.method) {
+      respondToServer(message)
+      return
+    }
+    if (message.id === undefined || !pending.has(message.id)) return
+    if (message.error) {
+      settle(message.id, 'reject', lspStdioError(
+        'LSP_SERVER_ERROR',
+        typeof message.error.message === 'string'
+          ? message.error.message
+          : 'LSP server returned an error',
+        undefined,
+        true,
+      ))
+    } else {
+      settle(message.id, 'resolve', message.result)
+    }
+  }
+}
+
 export function createLspStdioRpc(child, { rootUri, onFatal = () => {} }) {
   let buffer = Buffer.alloc(0)
   let nextId = 1
@@ -85,84 +165,13 @@ export function createLspStdioRpc(child, { rootUri, onFatal = () => {} }) {
     }
   }
 
-  const respondToServer = (message) => {
-    let result
-    if (message.method === 'workspace/configuration') {
-      const count = Array.isArray(message.params?.items) ? message.params.items.length : 0
-      result = Array.from({ length: count }, () => null)
-    } else if (message.method === 'workspace/workspaceFolders') {
-      result = [{ uri: rootUri, name: path.basename(new URL(rootUri).pathname) || 'workspace' }]
-    } else {
-      void send({
-        jsonrpc: '2.0',
-        id: message.id,
-        error: {
-          code: -32601,
-          message: `Unsupported server request: ${String(message.method || '')}`,
-        },
-      }).catch(() => {})
-      return
-    }
-    void send({ jsonrpc: '2.0', id: message.id, result }).catch(() => {})
-  }
-
-  const dispatch = (message) => {
-    if (!isRecord(message)) {
-      throw lspStdioError('LSP_MALFORMED_RESPONSE', 'LSP server sent a non-object message')
-    }
-    if (message.id !== undefined && message.method) {
-      respondToServer(message)
-      return
-    }
-    if (message.id === undefined || !pending.has(message.id)) return
-    if (message.error) {
-      settle(message.id, 'reject', lspStdioError(
-        'LSP_SERVER_ERROR',
-        typeof message.error.message === 'string'
-          ? message.error.message
-          : 'LSP server returned an error',
-        undefined,
-        true,
-      ))
-    } else {
-      settle(message.id, 'resolve', message.result)
-    }
-  }
+  const dispatch = createLspMessageDispatcher({ rootUri, pending, settle, send })
 
   function onData(chunk) {
     if (closed) return
     try {
-      buffer = Buffer.concat([buffer, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)])
-      if (buffer.length > MAX_LSP_MESSAGE_BYTES + MAX_LSP_HEADER_BYTES) {
-        throw lspStdioError('LSP_RESPONSE_TOO_LARGE', 'LSP response buffer exceeded its limit')
-      }
-      while (buffer.length > 0) {
-        const headerEnd = buffer.indexOf('\r\n\r\n')
-        if (headerEnd < 0) {
-          if (buffer.length > MAX_LSP_HEADER_BYTES) {
-            throw lspStdioError('LSP_MALFORMED_RESPONSE', 'LSP header exceeded its limit')
-          }
-          return
-        }
-        if (headerEnd > MAX_LSP_HEADER_BYTES) {
-          throw lspStdioError('LSP_MALFORMED_RESPONSE', 'LSP header exceeded its limit')
-        }
-        const headers = buffer.subarray(0, headerEnd).toString('ascii').split('\r\n')
-        const lengthHeader = headers.find((line) => /^content-length\s*:/iu.test(line))
-        const length = Number(lengthHeader?.split(':', 2)[1]?.trim())
-        if (!Number.isSafeInteger(length) || length < 0 || length > MAX_LSP_MESSAGE_BYTES) {
-          throw lspStdioError('LSP_MALFORMED_RESPONSE', 'LSP Content-Length is invalid')
-        }
-        const messageEnd = headerEnd + 4 + length
-        if (buffer.length < messageEnd) return
-        const body = buffer.subarray(headerEnd + 4, messageEnd).toString('utf8')
-        buffer = buffer.subarray(messageEnd)
-        let message
-        try { message = JSON.parse(body) } catch (cause) {
-          throw lspStdioError('LSP_MALFORMED_RESPONSE', 'LSP server sent invalid JSON', cause)
-        }
-        dispatch(message)
-      }
+      const incoming = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      buffer = consumeLspFrames(Buffer.concat([buffer, incoming]), dispatch)
     } catch (cause) {
       fail(cause instanceof LspError
         ? cause

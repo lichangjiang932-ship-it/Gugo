@@ -277,6 +277,66 @@ export function maybePruneSideEffectExecutions({ db = getDb(), now = Date.now() 
   }
 }
 
+function prepareDurableSideEffectRecovery({ db, now, read, input, plan }) {
+  const identity = normalizeIdentity(input)
+  const recoveryJson = canonicalRecoveryJson(plan)
+  const record = read(input)
+  if (!record) {
+    throw sideEffectRecoveryBlock(
+      SIDE_EFFECT_LEDGER_CONFLICT,
+      'The executing side-effect record is missing, so its recovery plan cannot be prepared.',
+    )
+  }
+  if (record.recoveryJson !== null && record.recoveryJson !== undefined) {
+    if (record.recoveryJson === recoveryJson && record.recovery) return record.recovery
+    throw sideEffectRecoveryBlock(
+      SIDE_EFFECT_LEDGER_CONFLICT,
+      'The durable side-effect recovery plan changed for this execution. Recovery was blocked.',
+      record,
+    )
+  }
+  if (record.status !== 'executing') {
+    throw sideEffectRecoveryBlock(
+      SIDE_EFFECT_LEDGER_CONFLICT,
+      'A side-effect recovery plan can only be prepared while the execution is in progress.',
+      record,
+    )
+  }
+  const timestamp = Number(now()) || Date.now()
+  const updated = db.prepare(`UPDATE side_effect_executions
+    SET recovery_json = ?, updated_at = ?
+    WHERE owner_id = ? AND scope_key = ? AND tool_call_id = ?
+      AND status = 'executing' AND recovery_json IS NULL`)
+    .run(
+      recoveryJson,
+      timestamp,
+      identity.ownerId,
+      identity.scopeKey,
+      identity.toolCallId,
+    )
+  const current = read(input)
+  if (updated.changes === 1 && current?.recoveryJson === recoveryJson && current.recovery) {
+    return current.recovery
+  }
+  if (current?.recoveryJson === recoveryJson && current.recovery) return current.recovery
+  throw sideEffectRecoveryBlock(
+    SIDE_EFFECT_LEDGER_CONFLICT,
+    'The side-effect recovery plan could not be prepared without overwriting concurrent state.',
+    current,
+  )
+}
+
+function readDurableSideEffectRecovery(read, input) {
+  const record = read(input)
+  if (!record || record.recoveryJson === null || record.recoveryJson === undefined) return null
+  if (record.recovery) return record.recovery
+  throw sideEffectRecoveryBlock(
+    SIDE_EFFECT_LEDGER_CONFLICT,
+    'The durable side-effect recovery plan is unreadable. Recovery was blocked.',
+    record,
+  )
+}
+
 export function createSideEffectExecutionLedger({
   db = getDb(),
   now = Date.now,
@@ -326,65 +386,15 @@ export function createSideEffectExecutionLedger({
     return record ? assertSameIdentity(record, identity) : null
   }
 
-  const readRecovery = (input) => {
-    const record = read(input)
-    if (!record || record.recoveryJson === null || record.recoveryJson === undefined) return null
-    if (record.recovery) return record.recovery
-    throw sideEffectRecoveryBlock(
-      SIDE_EFFECT_LEDGER_CONFLICT,
-      'The durable side-effect recovery plan is unreadable. Recovery was blocked.',
-      record,
-    )
-  }
+  const readRecovery = (input) => readDurableSideEffectRecovery(read, input)
 
-  const prepareRecovery = (input, plan) => {
-    const identity = normalizeIdentity(input)
-    const recoveryJson = canonicalRecoveryJson(plan)
-    const record = read(input)
-    if (!record) {
-      throw sideEffectRecoveryBlock(
-        SIDE_EFFECT_LEDGER_CONFLICT,
-        'The executing side-effect record is missing, so its recovery plan cannot be prepared.',
-      )
-    }
-    if (record.recoveryJson !== null && record.recoveryJson !== undefined) {
-      if (record.recoveryJson === recoveryJson && record.recovery) return record.recovery
-      throw sideEffectRecoveryBlock(
-        SIDE_EFFECT_LEDGER_CONFLICT,
-        'The durable side-effect recovery plan changed for this execution. Recovery was blocked.',
-        record,
-      )
-    }
-    if (record.status !== 'executing') {
-      throw sideEffectRecoveryBlock(
-        SIDE_EFFECT_LEDGER_CONFLICT,
-        'A side-effect recovery plan can only be prepared while the execution is in progress.',
-        record,
-      )
-    }
-    const timestamp = Number(now()) || Date.now()
-    const updated = db.prepare(`UPDATE side_effect_executions
-      SET recovery_json = ?, updated_at = ?
-      WHERE owner_id = ? AND scope_key = ? AND tool_call_id = ?
-        AND status = 'executing' AND recovery_json IS NULL`)
-      .run(
-        recoveryJson,
-        timestamp,
-        identity.ownerId,
-        identity.scopeKey,
-        identity.toolCallId,
-      )
-    const current = read(input)
-    if (updated.changes === 1 && current?.recoveryJson === recoveryJson && current.recovery) {
-      return current.recovery
-    }
-    if (current?.recoveryJson === recoveryJson && current.recovery) return current.recovery
-    throw sideEffectRecoveryBlock(
-      SIDE_EFFECT_LEDGER_CONFLICT,
-      'The side-effect recovery plan could not be prepared without overwriting concurrent state.',
-      current,
-    )
-  }
+  const prepareRecovery = (input, plan) => prepareDurableSideEffectRecovery({
+    db,
+    now,
+    read,
+    input,
+    plan,
+  })
 
   const claimExecution = (input) => {
     const identity = normalizeIdentity(input)
