@@ -10,6 +10,7 @@ import {
   requestTurnExecutionCancellation,
   tryCloseTurnSteeringInbox,
 } from './turnExecutionLeaseStore.js'
+import { holdTurnExecutionLease } from './turnExecutionLeaseMonitor.js'
 
 function abortReason(code, message) {
   return Object.assign(new Error(message), { name: 'AbortError', code })
@@ -20,8 +21,6 @@ function scopeKey({ userId, sessionId, turnId } = {}) {
     ? `${userId}\u0000${sessionId}\u0000${turnId}`
     : null
 }
-
-const RENEWAL_WAIT_CANCELLED = Symbol('turn-lease-renewal-wait-cancelled')
 
 function positiveInteger(value, fallback) {
   const parsed = Math.floor(Number(value))
@@ -107,173 +106,22 @@ export function createTurnExecutionLeaseCoordinator({
       return closeSteeringInbox({ ...scope, ownerId, fencingToken: proof?.fencingToken })
     },
     hold(scope, controller) {
-      let stopped = false
-      let releasePromise = null
-      let monitoringStopped = false
-      let renewal = null
-      let authoritativeProof = readProof(scope)
-      let heartbeatTimer = null
-      let expiryTimer = null
-      let renewalDeadlineTimer = null
-      let cancelRenewalWait = null
-
-      const clearScheduledTimer = (name) => {
-        const timer = name === 'heartbeat'
-          ? heartbeatTimer
-          : name === 'expiry'
-            ? expiryTimer
-            : renewalDeadlineTimer
-        if (timer !== null) clearTimer(timer)
-        if (name === 'heartbeat') heartbeatTimer = null
-        else if (name === 'expiry') expiryTimer = null
-        else renewalDeadlineTimer = null
-      }
-      const stopMonitoring = () => {
-        if (monitoringStopped) return
-        monitoringStopped = true
-        clearScheduledTimer('heartbeat')
-        clearScheduledTimer('expiry')
-        clearScheduledTimer('renewal')
-        cancelRenewalWait?.()
-        cancelRenewalWait = null
-      }
-      const abortLease = (reason, { forget = true } = {}) => {
-        if (stopped || controller?.signal?.aborted) {
-          stopMonitoring()
-          return
-        }
-        if (forget) forgetProof(scope, authoritativeProof)
-        stopMonitoring()
-        controller?.abort(reason)
-      }
-      const timer = (callback, delayMs) => {
-        const handle = setTimer(callback, Math.max(0, Math.floor(delayMs)))
-        handle?.unref?.()
-        return handle
-      }
-      const scheduleExpiryWatchdog = () => {
-        clearScheduledTimer('expiry')
-        if (stopped || monitoringStopped || controller?.signal?.aborted) return
-        const expiresAt = Number(authoritativeProof?.expiresAt)
-        const remaining = expiresAt - now()
-        if (!Number.isFinite(remaining) || remaining <= 0) {
-          abortLease(abortReason('TURN_LEASE_LOST', 'Turn execution lease expired locally'))
-          return
-        }
-        expiryTimer = timer(() => {
-          expiryTimer = null
-          if (stopped || monitoringStopped || controller?.signal?.aborted) return
-          if (Number(authoritativeProof?.expiresAt) > now()) {
-            scheduleExpiryWatchdog()
-            return
-          }
-          abortLease(abortReason('TURN_LEASE_LOST', 'Turn execution lease expired locally'))
-        }, remaining)
-      }
-      const waitForRenewalOperation = (operation, deadlineAt) => {
-        let settleCancellation
-        const cancellation = new Promise((resolve) => { settleCancellation = resolve })
-        cancelRenewalWait = () => settleCancellation(RENEWAL_WAIT_CANCELLED)
-        const operationPromise = Promise.resolve().then(operation)
-        const remaining = Math.max(0, deadlineAt - now())
-        const deadline = new Promise((_, reject) => {
-          renewalDeadlineTimer = timer(() => {
-            renewalDeadlineTimer = null
-            reject(abortReason('TURN_LEASE_RENEWAL_TIMEOUT', 'Turn execution lease renewal timed out'))
-          }, remaining)
-        })
-        return Promise.race([operationPromise, deadline, cancellation]).finally(() => {
-          clearScheduledTimer('renewal')
-          cancelRenewalWait = null
-        })
-      }
-      const scheduleHeartbeat = (tick) => {
-        clearScheduledTimer('heartbeat')
-        if (stopped || monitoringStopped || controller?.signal?.aborted) return
-        heartbeatTimer = timer(() => {
-          heartbeatTimer = null
-          tick()
-        }, heartbeatMs)
-      }
-      const runRenewal = async () => {
-        const renewalStartedAt = now()
-        const deadlineAt = Math.min(
-          renewalStartedAt + renewalDeadlineMs,
-          Number(authoritativeProof?.expiresAt) || renewalStartedAt,
-        )
-        try {
-          const state = await waitForRenewalOperation(() => renewLease({
-            ...scope,
-            ownerId,
-            fencingToken: authoritativeProof?.fencingToken,
-            leaseMs: duration,
-          }), deadlineAt)
-          if (state === RENEWAL_WAIT_CANCELLED || stopped || monitoringStopped) return
-          if (!state?.renewed) {
-            abortLease(abortReason('TURN_LEASE_LOST', 'Turn execution lease was lost'))
-            return
-          }
-          if (state.cancelRequested) {
-            abortLease(abortReason('TURN_CANCEL_REQUESTED', 'Cancelled by user'), { forget: false })
-            return
-          }
-          const lease = await waitForRenewalOperation(() => readLease(scope), deadlineAt)
-          if (lease === RENEWAL_WAIT_CANCELLED || stopped || monitoringStopped) return
-          const expiresAt = Number(lease?.expiresAt)
-          if (lease?.ownerId !== ownerId
-            || lease?.fencingToken !== authoritativeProof?.fencingToken
-            || !Number.isSafeInteger(expiresAt)
-            || expiresAt <= now()) {
-            abortLease(abortReason('TURN_LEASE_LOST', 'Renewed Turn execution lease proof is unavailable'))
-            return
-          }
-          authoritativeProof = { ownerId, fencingToken: lease.fencingToken, expiresAt }
-          proofs.set(scopeKey(scope), authoritativeProof)
-          scheduleExpiryWatchdog()
-        } catch {
-          // Once ownership cannot be proven, continuing could duplicate side
-          // effects on a different instance. Stop without writing a terminal
-          // event so a later resume can recover from the last checkpoint.
-          abortLease(abortReason('TURN_LEASE_LOST', 'Turn execution lease could not be renewed'))
-        }
-      }
-      const tick = () => {
-        if (stopped || monitoringStopped || controller?.signal?.aborted || renewal) return
-        const currentRenewal = runRenewal()
-        renewal = currentRenewal
-        currentRenewal.finally(() => {
-          if (renewal === currentRenewal) renewal = null
-          scheduleHeartbeat(tick)
-        })
-      }
-
-      const onAbort = () => stopMonitoring()
-      controller?.signal?.addEventListener?.('abort', onAbort, { once: true })
-      scheduleExpiryWatchdog()
-      tick()
-      return async () => {
-        if (stopped) return false
-        if (releasePromise) return await releasePromise
-        stopMonitoring()
-        controller?.signal?.removeEventListener?.('abort', onAbort)
-        const proofAtRelease = authoritativeProof
-        const attempt = (async () => {
-          const result = await releaseLease({
-            ...scope,
-            ownerId,
-            fencingToken: proofAtRelease?.fencingToken,
-          })
-          stopped = true
-          forgetProof(scope, proofAtRelease)
-          return result
-        })()
-        releasePromise = attempt
-        try {
-          return await attempt
-        } finally {
-          if (releasePromise === attempt) releasePromise = null
-        }
-      }
+      return holdTurnExecutionLease({
+        ownerId,
+        duration,
+        heartbeatMs,
+        renewalDeadlineMs,
+        proofs,
+        scopeKey,
+        readProof,
+        forgetProof,
+        renewLease,
+        readLease,
+        releaseLease,
+        now,
+        setTimer,
+        clearTimer,
+      }, scope, controller)
     },
   }
 }
