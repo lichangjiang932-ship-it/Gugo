@@ -355,29 +355,13 @@ function normalizedEntryPath(entry) {
   return String(entry || '').replaceAll('\\', '/')
 }
 
-/**
- * Capture a bounded, deterministic snapshot of a local plugin directory.
- * No plugin code is imported or executed. Buffers are retained only when
- * captureBytes=true so the installer copies the exact bytes that were hashed.
- */
-export function snapshotLocalPluginPackage(sourceDir, {
-  captureBytes = false,
-  receiptMode = 'reject',
-  limits = LOCAL_PLUGIN_PACKAGE_LIMITS,
-} = {}) {
+function resolveSnapshotRoot(sourceDir) {
   if (typeof sourceDir !== 'string' || !sourceDir.trim()) {
     throw packageSnapshotError(
       'PLUGIN_PACKAGE_SOURCE_INVALID',
       'plugin package source must be a non-empty directory path',
     )
   }
-  if (receiptMode !== 'reject' && receiptMode !== 'exclude') {
-    throw packageSnapshotError(
-      'PLUGIN_PACKAGE_SOURCE_INVALID',
-      'plugin package receipt mode is invalid',
-    )
-  }
-
   const resolvedRoot = path.resolve(sourceDir)
   let rootStat
   try {
@@ -400,8 +384,78 @@ export function snapshotLocalPluginPackage(sourceDir, {
       'plugin package source must be a directory',
     )
   }
+  return canonicalPath(resolvedRoot)
+}
 
-  const canonicalRoot = canonicalPath(resolvedRoot)
+function finalizePluginPackageSnapshot({
+  canonicalRoot,
+  limits,
+  initialTreeIdentity,
+  files,
+  directories,
+  totalBytes,
+}) {
+  const finalTreeIdentity = rescanTreeIdentity(canonicalRoot, limits)
+  if (finalTreeIdentity.size !== initialTreeIdentity.size
+    || [...initialTreeIdentity].some(([entry, identity]) => finalTreeIdentity.get(entry) !== identity)) {
+    throw packageSnapshotError(
+      'PLUGIN_PACKAGE_SOURCE_CHANGED',
+      'plugin package directory changed while it was being captured',
+    )
+  }
+  const manifestFile = files.find((file) => file.relativePath === 'plugin.json')
+  if (!manifestFile) {
+    throw packageSnapshotError('PLUGIN_PACKAGE_MANIFEST_MISSING', 'plugin package must contain plugin.json')
+  }
+  if (manifestFile.sizeBytes > limits.maxManifestBytes) {
+    throw packageSnapshotError(
+      'PLUGIN_PACKAGE_MANIFEST_TOO_LARGE',
+      `plugin.json exceeds ${limits.maxManifestBytes} bytes`,
+    )
+  }
+  const validated = validateManifest(strictJsonObject(manifestFile.bytes))
+  if (!validated.ok) {
+    throw packageSnapshotError(
+      'PLUGIN_PACKAGE_MANIFEST_INVALID',
+      `plugin.json is invalid: ${validated.errors.join('; ')}`,
+    )
+  }
+  const entryPath = normalizedEntryPath(validated.manifest.entry)
+  if (!files.some((file) => file.relativePath === entryPath)) {
+    throw packageSnapshotError(
+      'PLUGIN_PACKAGE_ENTRY_MISSING',
+      `plugin package entry file is missing: ${validated.manifest.entry}`,
+    )
+  }
+  return {
+    sourceRoot: canonicalRoot,
+    manifest: validated.manifest,
+    files,
+    directories,
+    fileCount: files.length,
+    totalBytes,
+    packageDigest: packageDigest(files, directories),
+  }
+}
+
+/**
+ * Capture a bounded, deterministic snapshot of a local plugin directory.
+ * No plugin code is imported or executed. Buffers are retained only when
+ * captureBytes=true so the installer copies the exact bytes that were hashed.
+ */
+export function snapshotLocalPluginPackage(sourceDir, {
+  captureBytes = false,
+  receiptMode = 'reject',
+  limits = LOCAL_PLUGIN_PACKAGE_LIMITS,
+} = {}) {
+  if (receiptMode !== 'reject' && receiptMode !== 'exclude') {
+    throw packageSnapshotError(
+      'PLUGIN_PACKAGE_SOURCE_INVALID',
+      'plugin package receipt mode is invalid',
+    )
+  }
+
+  const canonicalRoot = resolveSnapshotRoot(sourceDir)
   const files = []
   const directories = []
   const portablePaths = new Set()
@@ -518,50 +572,12 @@ export function snapshotLocalPluginPackage(sourceDir, {
   files.sort((left, right) => compareUtf8(left.relativePath, right.relativePath))
   directories.sort(compareUtf8)
 
-  const finalTreeIdentity = rescanTreeIdentity(canonicalRoot, limits)
-  if (
-    finalTreeIdentity.size !== initialTreeIdentity.size
-    || [...initialTreeIdentity].some(([entry, identity]) => finalTreeIdentity.get(entry) !== identity)
-  ) {
-    throw packageSnapshotError(
-      'PLUGIN_PACKAGE_SOURCE_CHANGED',
-      'plugin package directory changed while it was being captured',
-    )
-  }
-
-  const manifestFile = files.find((file) => file.relativePath === 'plugin.json')
-  if (!manifestFile) {
-    throw packageSnapshotError('PLUGIN_PACKAGE_MANIFEST_MISSING', 'plugin package must contain plugin.json')
-  }
-  if (manifestFile.sizeBytes > limits.maxManifestBytes) {
-    throw packageSnapshotError(
-      'PLUGIN_PACKAGE_MANIFEST_TOO_LARGE',
-      `plugin.json exceeds ${limits.maxManifestBytes} bytes`,
-    )
-  }
-  const rawManifest = strictJsonObject(manifestFile.bytes)
-  const validated = validateManifest(rawManifest)
-  if (!validated.ok) {
-    throw packageSnapshotError(
-      'PLUGIN_PACKAGE_MANIFEST_INVALID',
-      `plugin.json is invalid: ${validated.errors.join('; ')}`,
-    )
-  }
-  const entryPath = normalizedEntryPath(validated.manifest.entry)
-  if (!files.some((file) => file.relativePath === entryPath)) {
-    throw packageSnapshotError(
-      'PLUGIN_PACKAGE_ENTRY_MISSING',
-      `plugin package entry file is missing: ${validated.manifest.entry}`,
-    )
-  }
-
-  return {
-    sourceRoot: canonicalRoot,
-    manifest: validated.manifest,
+  return finalizePluginPackageSnapshot({
+    canonicalRoot,
+    limits,
+    initialTreeIdentity,
     files,
     directories,
-    fileCount: files.length,
     totalBytes,
-    packageDigest: packageDigest(files, directories),
-  }
+  })
 }
