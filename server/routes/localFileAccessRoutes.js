@@ -159,83 +159,254 @@ function streamLocalFile(res, fullPath, range) {
   return stream
 }
 
+function isLocalPreviewResource(req, url) {
+  return ['GET', 'HEAD'].includes(req.method)
+    && url.pathname.startsWith('/api/local-files/previews/')
+}
+
+function serveLocalHtmlPreview(req, res, url) {
+  try {
+    const prefix = '/api/local-files/previews/'
+    const remainder = url.pathname.slice(prefix.length)
+    const separator = remainder.indexOf('/')
+    if (separator <= 0) {
+      const error = new Error('网页预览地址无效')
+      error.statusCode = 404
+      error.code = 'LOCAL_HTML_PREVIEW_URL_INVALID'
+      throw error
+    }
+    const ticket = decodeURIComponent(remainder.slice(0, separator))
+    const resourcePath = remainder.slice(separator + 1)
+    const file = getLocalHtmlPreviewResource({ ticket, resourcePath })
+    const securityHeaders = localHtmlPreviewSecurityHeaders(req, file.mimeType, ticket, file)
+    if (file.isFrameTarget && !file.isEntryDocument) res.removeHeader('X-Frame-Options')
+    if (req.headers['if-none-match'] === file.etag) {
+      res.writeHead(304, {
+        ETag: file.etag,
+        'Cache-Control': 'private, no-cache',
+        'Access-Control-Allow-Origin': '*',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
+        ...securityHeaders,
+      })
+      return res.end()
+    }
+    const requestedRange = req.headers.range
+    const range = requestedRange ? parseRange(requestedRange, file.size) : null
+    if (requestedRange && !range) {
+      res.writeHead(416, {
+        'Content-Range': `bytes */${file.size}`,
+        'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
+        ...securityHeaders,
+      })
+      return res.end()
+    }
+    res.writeHead(range ? 206 : 200, {
+      'Content-Type': file.mimeType,
+      'Content-Length': String(range ? range.end - range.start + 1 : file.size),
+      'Content-Disposition': contentDisposition('inline', file.filename),
+      'Cache-Control': 'private, no-cache',
+      'Accept-Ranges': 'bytes',
+      ETag: file.etag,
+      'X-Content-Type-Options': 'nosniff',
+      'Access-Control-Allow-Origin': '*',
+      'Cross-Origin-Resource-Policy': 'cross-origin',
+      ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${file.size}` } : {}),
+      ...securityHeaders,
+    })
+    if (req.method === 'HEAD') return res.end()
+    return streamLocalFile(res, file.fullPath, range)
+  } catch (error) {
+    return sendError(res, error)
+  }
+}
+
+function receiptFileMatch(req, url) {
+  if (!['GET', 'HEAD'].includes(req.method)) return null
+  return url.pathname.match(/^\/api\/local-files\/(verified|retained)\/([^/]+)\/?$/)
+}
+
+function serveReceiptFile(req, res, url, userId, match) {
+  const receiptKind = match[1]
+  const fileId = decodeURIComponent(match[2])
+  const file = (receiptKind === 'retained' ? getRetainedLocalFile : getVerifiedLocalFile)({
+    userId,
+    sessionId: url.searchParams.get('sessionId'),
+    turnId: url.searchParams.get('turnId'),
+    fileId,
+  })
+  const preview = url.searchParams.get('preview') === '1'
+  if (preview && url.searchParams.has('token') && /^text\/html/i.test(file.mimeType)) {
+    const error = new Error('本地 HTML 必须通过隔离预览会话打开')
+    error.statusCode = 400
+    error.code = 'LOCAL_HTML_QUERY_TOKEN_PREVIEW_FORBIDDEN'
+    throw error
+  }
+  const securityHeaders = previewSecurityHeaders(preview, file.mimeType)
+  if (req.headers['if-none-match'] === file.etag) {
+    res.writeHead(304, { ETag: file.etag, 'Cache-Control': 'private, no-cache', ...securityHeaders })
+    return res.end()
+  }
+  const requestedRange = req.headers.range
+  const range = requestedRange ? parseRange(requestedRange, file.size) : null
+  if (requestedRange && !range) {
+    res.writeHead(416, {
+      'Content-Range': `bytes */${file.size}`,
+      'Accept-Ranges': 'bytes',
+      ...securityHeaders,
+    })
+    return res.end()
+  }
+  res.writeHead(range ? 206 : 200, {
+    'Content-Type': file.mimeType,
+    'Content-Length': String(range ? range.end - range.start + 1 : file.size),
+    'Content-Disposition': contentDisposition(preview ? 'inline' : 'attachment', file.filename),
+    'Cache-Control': 'private, no-cache',
+    'Accept-Ranges': 'bytes',
+    ETag: file.etag,
+    'X-Content-Type-Options': 'nosniff',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+    ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${file.size}` } : {}),
+    ...securityHeaders,
+  })
+  if (req.method === 'HEAD') return res.end()
+  return streamLocalFile(res, file.fullPath, range)
+}
+
+async function handleLocalFileManagement(req, res, { url, userId, cwd, env, nativeDirectoryPicker }) {
+  const previewRevokeMatch = req.method === 'DELETE'
+    ? url.pathname.match(/^\/api\/local-files\/previews\/([^/]+)\/?$/)
+    : null
+  if (previewRevokeMatch) {
+    revokeLocalHtmlPreviewSession({ userId, ticket: decodeURIComponent(previewRevokeMatch[1]) })
+    res.writeHead(204)
+    return res.end()
+  }
+  const previewSessionMatch = req.method === 'POST'
+    ? url.pathname.match(/^\/api\/local-files\/(verified|retained)\/([^/]+)\/preview-session\/?$/)
+    : null
+  if (previewSessionMatch) {
+    const previewSession = await createLocalHtmlPreviewSession({
+      userId,
+      sessionId: url.searchParams.get('sessionId'),
+      turnId: url.searchParams.get('turnId'),
+      fileId: decodeURIComponent(previewSessionMatch[2]),
+      receiptKind: previewSessionMatch[1],
+    })
+    return sendJson(res, 200, { ok: true, ...previewSession })
+  }
+  const fileMatch = receiptFileMatch(req, url)
+  if (fileMatch) return serveReceiptFile(req, res, url, userId, fileMatch)
+  if (req.method === 'GET' && url.pathname === '/api/local-files') {
+    const localFiles = isLoopbackRequest(req) && isLocalOwnerUser(userId, env)
+      ? ensureDefaultLocalWorkspace({ userId, cwd, env, authorizeLocalOwner: isLocalOwnerUser })
+      : {
+          ...getLocalFileAccessStatus({ userId }),
+          onboarding: getWorkspaceOnboardingStatus({ userId, cwd, env }),
+        }
+    return sendJson(res, 200, { ok: true, ...localFiles })
+  }
+  if (req.method === 'POST' && url.pathname === '/api/local-files/onboarding') {
+    if (!isLoopbackRequest(req) || !isLocalOwnerUser(userId, env)) {
+      return sendJson(res, 403, {
+        ok: false,
+        error: {
+          code: 'LOCAL_OWNER_ONLY',
+          message: 'Workspace onboarding can only be changed by the local owner on the service host.',
+        },
+      })
+    }
+    const body = await readJson(req)
+    return sendJson(res, 200, {
+      ok: true,
+      ...configureWorkspaceOnboarding({
+        userId, rootPath: body.path, features: body.features,
+        approvalMode: body.approvalMode, confirmation: body.confirmation,
+        bypassConfirmation: body.bypassConfirmation, cwd, env,
+      }),
+    })
+  }
+  if (req.method === 'POST' && url.pathname === '/api/local-files/grants') {
+    const body = await readJson(req)
+    const grant = grantLocalPath({
+      userId, rootPath: body.path, accessMode: body.accessMode, scope: body.scope,
+    })
+    return sendJson(res, 200, { ok: true, grant, ...getLocalFileAccessStatus({ userId }) })
+  }
+  if (req.method === 'DELETE' && url.pathname.startsWith('/api/local-files/grants/')) {
+    const id = decodeURIComponent(url.pathname.slice('/api/local-files/grants/'.length))
+    if (!revokeLocalPath({ userId, id })) {
+      return sendJson(res, 404, {
+        ok: false, error: { code: 'GRANT_NOT_FOUND', message: '授权不存在' },
+      })
+    }
+    return sendJson(res, 200, { ok: true, ...getLocalFileAccessStatus({ userId }) })
+  }
+  if (req.method === 'POST' && url.pathname === '/api/local-files/all-access') {
+    const body = await readJson(req)
+    const status = setAllFilesAccess({
+      userId, enabled: !!body.enabled, confirmation: body.confirmation,
+    })
+    return sendJson(res, 200, { ok: true, ...status })
+  }
+  if (req.method === 'POST' && url.pathname === '/api/local-files/workspace-trust') {
+    const body = await readJson(req)
+    const trusted = body.trusted === true
+    let rootPath = body.path
+    if (trusted) {
+      rootPath = resolveAuthorizedLocalPath({
+        userId, rawPath: rootPath, allowWorkspace: true,
+      }).fullPath
+    }
+    const trust = setWorkspaceTrust({
+      userId, rootPath, trusted, confirmation: body.confirmation, scope: body.scope,
+    })
+    return sendJson(res, 200, { ok: true, trust, ...getLocalFileAccessStatus({ userId }) })
+  }
+  if (req.method === 'POST' && url.pathname === '/api/local-files/browse-directories') {
+    if (!isLoopbackRequest(req)) {
+      return sendJson(res, 403, {
+        ok: false, error: { code: 'LOCAL_ONLY', message: '目录浏览只能从运行服务的本机使用' },
+      })
+    }
+    const body = await readJson(req)
+    const directory = browseLocalDirectories({ userId, rawPath: body.path })
+    return sendJson(res, 200, { ok: true, directory })
+  }
+  if (req.method === 'POST' && url.pathname === '/api/local-files/select-directory') {
+    if (!isLoopbackRequest(req)) {
+      return sendJson(res, 403, {
+        ok: false, error: { code: 'LOCAL_ONLY', message: '系统目录选择器只能从运行服务的本机使用' },
+      })
+    }
+    const body = await readJson(req)
+    const selection = await nativeDirectoryPicker({ defaultPath: body.defaultPath }, { env })
+    return sendJson(res, 200, { ok: true, ...selection })
+  }
+  if (req.method === 'POST' && url.pathname === '/api/local-files/projects') {
+    const body = await readJson(req)
+    const project = createManagedProjectDirectory({ userId, name: body.name })
+    return sendJson(res, 201, { ok: true, project })
+  }
+  if (req.method === 'POST' && url.pathname === '/api/local-files/default-output-directory') {
+    const body = await readJson(req)
+    const status = setDefaultOutputDirectory({ userId, rootPath: body.path })
+    return sendJson(res, 200, { ok: true, ...status })
+  }
+  return sendJson(res, 405, {
+    ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' },
+  })
+}
+
 export async function handleLocalFileAccessRequest(req, res, {
   cwd = process.cwd(),
   env = process.env,
   nativeDirectoryPicker = selectNativeDirectory,
 } = {}) {
   const url = new URL(req.url, 'http://localhost')
-  const localPreviewPrefix = '/api/local-files/previews/'
-  const localPreviewResource = ['GET', 'HEAD'].includes(req.method)
-    && url.pathname.startsWith(localPreviewPrefix)
-
-  // The unguessable preview ticket is a short-lived, read-only capability
-  // scoped to one verified HTML entry and its statically validated dependency
-  // graph. Keeping it in the path lets nested CSS/JS/font/image URLs resolve
-  // naturally without exposing the user's account token to the sandbox.
-  if (localPreviewResource) {
-    try {
-      const remainder = url.pathname.slice(localPreviewPrefix.length)
-      const separator = remainder.indexOf('/')
-      if (separator <= 0) {
-        const error = new Error('网页预览地址无效')
-        error.statusCode = 404
-        error.code = 'LOCAL_HTML_PREVIEW_URL_INVALID'
-        throw error
-      }
-      const ticket = decodeURIComponent(remainder.slice(0, separator))
-      const resourcePath = remainder.slice(separator + 1)
-      const file = getLocalHtmlPreviewResource({ ticket, resourcePath })
-      const securityHeaders = localHtmlPreviewSecurityHeaders(req, file.mimeType, ticket, file)
-      if (file.isFrameTarget && !file.isEntryDocument) res.removeHeader('X-Frame-Options')
-      if (req.headers['if-none-match'] === file.etag) {
-        res.writeHead(304, {
-          ETag: file.etag,
-          'Cache-Control': 'private, no-cache',
-          'Access-Control-Allow-Origin': '*',
-          'Cross-Origin-Resource-Policy': 'cross-origin',
-          ...securityHeaders,
-        })
-        return res.end()
-      }
-      const requestedRange = req.headers.range
-      const range = requestedRange ? parseRange(requestedRange, file.size) : null
-      if (requestedRange && !range) {
-        res.writeHead(416, {
-          'Content-Range': `bytes */${file.size}`,
-          'Accept-Ranges': 'bytes',
-          'Access-Control-Allow-Origin': '*',
-          'Cross-Origin-Resource-Policy': 'cross-origin',
-          ...securityHeaders,
-        })
-        return res.end()
-      }
-      res.writeHead(range ? 206 : 200, {
-        'Content-Type': file.mimeType,
-        'Content-Length': String(range ? range.end - range.start + 1 : file.size),
-        'Content-Disposition': contentDisposition('inline', file.filename),
-        'Cache-Control': 'private, no-cache',
-        'Accept-Ranges': 'bytes',
-        ETag: file.etag,
-        'X-Content-Type-Options': 'nosniff',
-        'Access-Control-Allow-Origin': '*',
-        'Cross-Origin-Resource-Policy': 'cross-origin',
-        ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${file.size}` } : {}),
-        ...securityHeaders,
-      })
-      if (req.method === 'HEAD') return res.end()
-      return streamLocalFile(res, file.fullPath, range)
-    } catch (error) {
-      return sendError(res, error)
-    }
-  }
-
-  const receiptFileDownload = ['GET', 'HEAD'].includes(req.method)
-    && /^\/api\/local-files\/(?:verified|retained)\//.test(url.pathname)
-  const downloadToken = receiptFileDownload ? url.searchParams.get('token') : ''
-  // Browser links and embedded previews cannot attach an Authorization header.
-  // Match persisted artifact downloads, but scope query-token auth strictly to
-  // the read-only verified/retained receipt endpoints.
+  if (isLocalPreviewResource(req, url)) return serveLocalHtmlPreview(req, res, url)
+  const downloadToken = receiptFileMatch(req, url) ? url.searchParams.get('token') : ''
   if (downloadToken && !req.headers.authorization) {
     req.headers.authorization = `Bearer ${downloadToken}`
   }
@@ -243,230 +414,12 @@ export async function handleLocalFileAccessRequest(req, res, {
   if (!userId) {
     return sendJson(res, 401, { ok: false, error: { code: 'UNAUTHORIZED', message: '请先登录' } })
   }
-
   try {
-    const previewRevokeMatch = req.method === 'DELETE'
-      ? url.pathname.match(/^\/api\/local-files\/previews\/([^/]+)\/?$/)
-      : null
-    if (previewRevokeMatch) {
-      revokeLocalHtmlPreviewSession({
-        userId,
-        ticket: decodeURIComponent(previewRevokeMatch[1]),
-      })
-      res.writeHead(204)
-      return res.end()
-    }
-
-    const previewSessionMatch = req.method === 'POST'
-      ? url.pathname.match(/^\/api\/local-files\/(verified|retained)\/([^/]+)\/preview-session\/?$/)
-      : null
-    if (previewSessionMatch) {
-      const receiptKind = previewSessionMatch[1]
-      const fileId = decodeURIComponent(previewSessionMatch[2])
-      const previewSession = await createLocalHtmlPreviewSession({
-        userId,
-        sessionId: url.searchParams.get('sessionId'),
-        turnId: url.searchParams.get('turnId'),
-        fileId,
-        receiptKind,
-      })
-      return sendJson(res, 200, { ok: true, ...previewSession })
-    }
-
-    const receiptFileMatch = ['GET', 'HEAD'].includes(req.method)
-      ? url.pathname.match(/^\/api\/local-files\/(verified|retained)\/([^/]+)\/?$/)
-      : null
-    if (receiptFileMatch) {
-      const receiptKind = receiptFileMatch[1]
-      const fileId = decodeURIComponent(receiptFileMatch[2])
-      const file = (receiptKind === 'retained' ? getRetainedLocalFile : getVerifiedLocalFile)({
-        userId,
-        sessionId: url.searchParams.get('sessionId'),
-        turnId: url.searchParams.get('turnId'),
-        fileId,
-      })
-      const preview = url.searchParams.get('preview') === '1'
-      if (
-        preview
-        && url.searchParams.has('token')
-        && /^text\/html/i.test(file.mimeType)
-      ) {
-        const error = new Error('本地 HTML 必须通过隔离预览会话打开')
-        error.statusCode = 400
-        error.code = 'LOCAL_HTML_QUERY_TOKEN_PREVIEW_FORBIDDEN'
-        throw error
-      }
-      const securityHeaders = previewSecurityHeaders(preview, file.mimeType)
-      if (req.headers['if-none-match'] === file.etag) {
-        res.writeHead(304, {
-          ETag: file.etag,
-          'Cache-Control': 'private, no-cache',
-          ...securityHeaders,
-        })
-        return res.end()
-      }
-      const requestedRange = req.headers.range
-      const range = requestedRange ? parseRange(requestedRange, file.size) : null
-      if (requestedRange && !range) {
-        res.writeHead(416, {
-          'Content-Range': `bytes */${file.size}`,
-          'Accept-Ranges': 'bytes',
-          ...securityHeaders,
-        })
-        return res.end()
-      }
-      res.writeHead(range ? 206 : 200, {
-        'Content-Type': file.mimeType,
-        'Content-Length': String(range ? range.end - range.start + 1 : file.size),
-        'Content-Disposition': contentDisposition(preview ? 'inline' : 'attachment', file.filename),
-        'Cache-Control': 'private, no-cache',
-        'Accept-Ranges': 'bytes',
-        ETag: file.etag,
-        'X-Content-Type-Options': 'nosniff',
-        'Cross-Origin-Resource-Policy': 'same-origin',
-        ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${file.size}` } : {}),
-        ...securityHeaders,
-      })
-      if (req.method === 'HEAD') return res.end()
-      return streamLocalFile(res, file.fullPath, range)
-    }
-
-    if (req.method === 'GET' && url.pathname === '/api/local-files') {
-      const localFiles = isLoopbackRequest(req) && isLocalOwnerUser(userId, env)
-        ? ensureDefaultLocalWorkspace({
-            userId,
-            cwd,
-            env,
-            authorizeLocalOwner: isLocalOwnerUser,
-          })
-        : {
-            ...getLocalFileAccessStatus({ userId }),
-            onboarding: getWorkspaceOnboardingStatus({ userId, cwd, env }),
-          }
-      return sendJson(res, 200, {
-        ok: true,
-        ...localFiles,
-      })
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/local-files/onboarding') {
-      if (!isLoopbackRequest(req) || !isLocalOwnerUser(userId, env)) {
-        return sendJson(res, 403, {
-          ok: false,
-          error: {
-            code: 'LOCAL_OWNER_ONLY',
-            message: 'Workspace onboarding can only be changed by the local owner on the service host.',
-          },
-        })
-      }
-      const body = await readJson(req)
-      return sendJson(res, 200, {
-        ok: true,
-        ...configureWorkspaceOnboarding({
-          userId,
-          rootPath: body.path,
-          features: body.features,
-          approvalMode: body.approvalMode,
-          confirmation: body.confirmation,
-          bypassConfirmation: body.bypassConfirmation,
-          cwd,
-          env,
-        }),
-      })
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/local-files/grants') {
-      const body = await readJson(req)
-      const grant = grantLocalPath({
-        userId,
-        rootPath: body.path,
-        accessMode: body.accessMode,
-        scope: body.scope,
-      })
-      return sendJson(res, 200, { ok: true, grant, ...getLocalFileAccessStatus({ userId }) })
-    }
-
-    if (req.method === 'DELETE' && url.pathname.startsWith('/api/local-files/grants/')) {
-      const id = decodeURIComponent(url.pathname.slice('/api/local-files/grants/'.length))
-      if (!revokeLocalPath({ userId, id })) {
-        return sendJson(res, 404, { ok: false, error: { code: 'GRANT_NOT_FOUND', message: '授权不存在' } })
-      }
-      return sendJson(res, 200, { ok: true, ...getLocalFileAccessStatus({ userId }) })
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/local-files/all-access') {
-      const body = await readJson(req)
-      const status = setAllFilesAccess({
-        userId,
-        enabled: !!body.enabled,
-        confirmation: body.confirmation,
-      })
-      return sendJson(res, 200, { ok: true, ...status })
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/local-files/workspace-trust') {
-      const body = await readJson(req)
-      const trusted = body.trusted === true
-      let rootPath = body.path
-      if (trusted) {
-        const resolved = resolveAuthorizedLocalPath({
-          userId,
-          rawPath: rootPath,
-          allowWorkspace: true,
-        })
-        rootPath = resolved.fullPath
-      }
-      const trust = setWorkspaceTrust({
-        userId,
-        rootPath,
-        trusted,
-        confirmation: body.confirmation,
-        scope: body.scope,
-      })
-      return sendJson(res, 200, {
-        ok: true,
-        trust,
-        ...getLocalFileAccessStatus({ userId }),
-      })
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/local-files/browse-directories') {
-      if (!isLoopbackRequest(req)) {
-        return sendJson(res, 403, { ok: false, error: { code: 'LOCAL_ONLY', message: '目录浏览只能从运行服务的本机使用' } })
-      }
-      const body = await readJson(req)
-      const directory = browseLocalDirectories({ userId, rawPath: body.path })
-      return sendJson(res, 200, { ok: true, directory })
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/local-files/select-directory') {
-      if (!isLoopbackRequest(req)) {
-        return sendJson(res, 403, {
-          ok: false,
-          error: { code: 'LOCAL_ONLY', message: '系统目录选择器只能从运行服务的本机使用' },
-        })
-      }
-      const body = await readJson(req)
-      const selection = await nativeDirectoryPicker(
-        { defaultPath: body.defaultPath },
-        { env },
-      )
-      return sendJson(res, 200, { ok: true, ...selection })
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/local-files/projects') {
-      const body = await readJson(req)
-      const project = createManagedProjectDirectory({ userId, name: body.name })
-      return sendJson(res, 201, { ok: true, project })
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/local-files/default-output-directory') {
-      const body = await readJson(req)
-      const status = setDefaultOutputDirectory({ userId, rootPath: body.path })
-      return sendJson(res, 200, { ok: true, ...status })
-    }
-
-    return sendJson(res, 405, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' } })
+    return await handleLocalFileManagement(
+      req,
+      res,
+      { url, userId, cwd, env, nativeDirectoryPicker },
+    )
   } catch (error) {
     return sendError(res, error)
   }
