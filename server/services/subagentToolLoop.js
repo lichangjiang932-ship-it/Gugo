@@ -61,6 +61,92 @@ function subagentTerminalCopy(locale) {
  * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
  * @returns {Promise<Object>} 保留 completed / paused / interrupted / incomplete 等终态的 loop 结果
  */
+function createSubagentToolExecutor({
+  executeTool,
+  userId,
+  selectedModel,
+  modelProviderId,
+  modelConfigRevision,
+  normalizedLocale,
+  skillIds,
+  skillDefinitions,
+  depth,
+  runId,
+  sessionId,
+  effectiveApprovalContext,
+  slotLease,
+  approveTool,
+  runToolLoop,
+  effectiveSideEffectLedger,
+}) {
+  const executeLoopTool = ({
+    name, args, signal, budget, toolCallId, idempotencyKey, idempotentResume,
+    sideEffectRecoveryPlan,
+  }) => executeTool(name, args, {
+    userId,
+    modelName: selectedModel,
+    modelProviderId,
+    modelConfigRevision,
+    locale: normalizedLocale,
+    skillIds: normalizePromptContextIds(skillIds),
+    skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
+    depth,
+    parentRunId: runId,
+    parentSessionId: sessionId,
+    signal,
+    budget,
+    approvalContext: effectiveApprovalContext,
+    slotLease,
+    approveTool,
+    runToolLoop,
+    sideEffectLedger: effectiveSideEffectLedger,
+    toolCallId,
+    idempotencyKey,
+    idempotentResume,
+    sideEffectRecoveryPlan,
+  })
+  executeLoopTool.supportsIdempotentResume = (callContext) => {
+    const capability = executeTool?.supportsIdempotentResume
+    if (typeof capability === 'function') return capability(callContext) === true
+    return capability === true
+  }
+  return executeLoopTool
+}
+
+function presentPausedSubagentResult(result, normalizedLocale, terminalCopy) {
+  if (!result.paused || !result.clarification) return null
+  const clarification = result.clarification
+  const blockerKind = localizedTerminalModelText(
+    normalizedLocale,
+    clarification.blocker_kind,
+    { strictLocale: true },
+  ) || terminalCopy.defaultBlockerKind
+  const question = localizedTerminalModelText(
+    normalizedLocale,
+    clarification.question,
+    { strictLocale: true },
+  ) || terminalCopy.defaultQuestion
+  const options = (Array.isArray(clarification.options) ? clarification.options : [])
+    .map((option) => localizedTerminalModelText(normalizedLocale, option, { strictLocale: true }))
+    .filter(Boolean)
+  const why = localizedTerminalModelText(
+    normalizedLocale,
+    clarification.why,
+    { strictLocale: true },
+  )
+  const zh = normalizeTurnLocale(normalizedLocale) === 'zh'
+  return {
+    ...result,
+    text: zh
+      ? `${terminalCopy.clarificationPrefix}(${blockerKind}):${question}`
+        + (options.length ? `\n${terminalCopy.optionsLabel}:${options.join(' / ')}` : '')
+        + (why ? `\n${terminalCopy.reasonLabel}:${why}` : '')
+      : `${terminalCopy.clarificationPrefix} (${blockerKind}): ${question}`
+        + (options.length ? `\n${terminalCopy.optionsLabel}: ${options.join(' / ')}` : '')
+        + (why ? `\n${terminalCopy.reasonLabel}: ${why}` : ''),
+  }
+}
+
 export async function runSubagentToolLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, modelProviderId = null, modelConfigRevision = null, modelRuntimeEnv = null, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, locale = 'zh', callModel = callBackgroundModelWithTools, executeTool = undefined, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, runToolLoop = undefined, sideEffectLedger = null, onTranscriptEvent = null, loadCheckpoint = null, saveCheckpoint = null }) {
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
@@ -98,43 +184,24 @@ export async function runSubagentToolLoop({ messages, tools, signal, maxIters = 
     locale: normalizedLocale,
   }
   const loopStep = { id: runId || 'subagent-step' }
-  const executeLoopTool = ({
-    name,
-    args,
-    signal: toolSignal,
-    budget: loopBudget,
-    toolCallId,
-    idempotencyKey,
-    idempotentResume,
-    sideEffectRecoveryPlan,
-  }) => executeTool(name, args, {
+  const executeLoopTool = createSubagentToolExecutor({
+    executeTool,
     userId,
-    modelName: selectedModel,
+    selectedModel,
     modelProviderId,
     modelConfigRevision,
-    locale: normalizedLocale,
-    skillIds: normalizePromptContextIds(skillIds),
-    skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
+    normalizedLocale,
+    skillIds,
+    skillDefinitions,
     depth,
-    parentRunId: runId,
-    parentSessionId: sessionId,
-    signal: toolSignal,
-    budget: loopBudget,
-    approvalContext: effectiveApprovalContext,
+    runId,
+    sessionId,
+    effectiveApprovalContext,
     slotLease,
     approveTool,
     runToolLoop,
-    sideEffectLedger: effectiveSideEffectLedger,
-    toolCallId,
-    idempotencyKey,
-    idempotentResume,
-    sideEffectRecoveryPlan,
+    effectiveSideEffectLedger,
   })
-  executeLoopTool.supportsIdempotentResume = (callContext) => {
-    const capability = executeTool?.supportsIdempotentResume
-    if (typeof capability === 'function') return capability(callContext) === true
-    return capability === true
-  }
   const result = await runToolLoop({
     job: loopJob,
     step: loopStep,
@@ -207,42 +274,6 @@ export async function runSubagentToolLoop({ messages, tools, signal, maxIters = 
     },
   })
 
-  if (result.paused && result.clarification) {
-    const clarification = result.clarification
-    const blockerKind = localizedTerminalModelText(
-      normalizedLocale,
-      clarification.blocker_kind,
-      { strictLocale: true },
-    )
-      || terminalCopy.defaultBlockerKind
-    const question = localizedTerminalModelText(
-      normalizedLocale,
-      clarification.question,
-      { strictLocale: true },
-    )
-      || terminalCopy.defaultQuestion
-    const options = (Array.isArray(clarification.options) ? clarification.options : [])
-      .map((option) => localizedTerminalModelText(
-        normalizedLocale,
-        option,
-        { strictLocale: true },
-      ))
-      .filter(Boolean)
-    const why = localizedTerminalModelText(
-      normalizedLocale,
-      clarification.why,
-      { strictLocale: true },
-    )
-    return {
-      ...result,
-      text: normalizeTurnLocale(normalizedLocale) === 'zh'
-        ? `${terminalCopy.clarificationPrefix}(${blockerKind}):${question}` +
-          (options.length ? `\n${terminalCopy.optionsLabel}:${options.join(' / ')}` : '') +
-          (why ? `\n${terminalCopy.reasonLabel}:${why}` : '')
-        : `${terminalCopy.clarificationPrefix} (${blockerKind}): ${question}` +
-          (options.length ? `\n${terminalCopy.optionsLabel}: ${options.join(' / ')}` : '') +
-          (why ? `\n${terminalCopy.reasonLabel}: ${why}` : ''),
-    }
-  }
-  return partialResultFallback.apply(result)
+  const paused = presentPausedSubagentResult(result, normalizedLocale, terminalCopy)
+  return paused || partialResultFallback.apply(result)
 }

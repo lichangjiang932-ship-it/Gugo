@@ -136,6 +136,55 @@ function mayReplaceRunningTrace(currentTrace, nextTrace, requested) {
     && isAppendOnlyTraceExtension(publicTrace(currentTrace), publicTrace(nextTrace))
 }
 
+function insertSubagentRun(getDb, getRun, {
+  id,
+  userId,
+  parentSessionId = null,
+  parentMessageId = null,
+  agentType,
+  prompt,
+  modelName = null,
+  modelProviderId = null,
+  modelConfigRevision = null,
+  trace = [],
+  createdAt = Date.now(),
+}) {
+  getDb().prepare(`
+    INSERT INTO subagent_runs (
+      id, user_id, parent_session_id, parent_message_id, agent_type, prompt,
+      model_name, model_provider_id, model_config_revision, status, trace_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
+  `).run(
+    id, userId, parentSessionId, parentMessageId, agentType, prompt,
+    modelName, modelProviderId, modelConfigRevision, traceJson(trace), createdAt,
+  )
+  return getRun({ userId, id })
+}
+
+function markSubagentRunRunning(getDb, getRun, {
+  userId,
+  id,
+  trace,
+  startedAt = null,
+}) {
+  const changed = getDb().prepare(`
+    UPDATE subagent_runs
+    SET status = 'running', trace_json = ?, finished_at = NULL,
+        created_at = COALESCE(created_at, ?)
+    WHERE id = ? AND user_id = ?
+      AND status IN ('interrupted', 'needs_verification')
+  `).run(traceJson(trace), startedAt, id, userId).changes
+  if (!changed) {
+    const current = getRun({ userId, id })
+    if (!current) throw new Error('subagent run not found')
+    throw Object.assign(new Error('subagent run is not claimable'), {
+      code: 'SUBAGENT_RUN_NOT_CLAIMABLE',
+      status: current.status,
+    })
+  }
+  return getRun({ userId, id })
+}
+
 export function createSqliteSubagentRunPersistenceAdapter({ getDb } = {}) {
   if (typeof getDb !== 'function') {
     throw new TypeError('sqlite subagent run persistence adapter requires getDb')
@@ -153,61 +202,14 @@ export function createSqliteSubagentRunPersistenceAdapter({ getDb } = {}) {
     apiVersion: 1,
     id: 'builtin.sqlite',
 
-    createRun({
-      id,
-      userId,
-      parentSessionId = null,
-      parentMessageId = null,
-      agentType,
-      prompt,
-      modelName = null,
-      modelProviderId = null,
-      modelConfigRevision = null,
-      trace = [],
-      createdAt = Date.now(),
-    }) {
-      getDb().prepare(`
-        INSERT INTO subagent_runs (
-          id, user_id, parent_session_id, parent_message_id, agent_type, prompt,
-          model_name, model_provider_id, model_config_revision, status, trace_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
-      `).run(
-        id,
-        userId,
-        parentSessionId,
-        parentMessageId,
-        agentType,
-        prompt,
-        modelName,
-        modelProviderId,
-        modelConfigRevision,
-        traceJson(trace),
-        createdAt,
-      )
-      return getRun({ userId, id })
+    createRun(input) {
+      return insertSubagentRun(getDb, getRun, input)
     },
 
     getRun,
 
-    markRunning({ userId, id, trace, startedAt = null }) {
-      const changed = getDb().prepare(`
-        UPDATE subagent_runs
-        SET status = 'running',
-            trace_json = ?,
-            finished_at = NULL,
-            created_at = COALESCE(created_at, ?)
-        WHERE id = ? AND user_id = ?
-          AND status IN ('interrupted', 'needs_verification')
-      `).run(traceJson(trace), startedAt, id, userId).changes
-      if (!changed) {
-        const current = getRun({ userId, id })
-        if (!current) throw new Error('subagent run not found')
-        throw Object.assign(new Error('subagent run is not claimable'), {
-          code: 'SUBAGENT_RUN_NOT_CLAIMABLE',
-          status: current.status,
-        })
-      }
-      return getRun({ userId, id })
+    markRunning(input) {
+      return markSubagentRunRunning(getDb, getRun, input)
     },
 
     saveRunningTrace({ userId, id, trace, checkpointWriteSequence = null }) {

@@ -108,6 +108,134 @@ export function recoverCompactionArchiveDeletion({
   return result
 }
 
+function recoverStagedClearOperation({
+  operation,
+  userId,
+  compactionArchivePort,
+  compactionBinding,
+  paths,
+  fileSystem,
+  attachmentGovernancePort,
+  env,
+  cwd,
+  tempDir,
+  renewLease,
+  db,
+}) {
+  try {
+    renewLease()
+    recoverCompactionArchiveDeletion({
+      port: compactionArchivePort,
+      userId,
+      operationId: operation.operation_id,
+      binding: compactionBinding,
+      databaseCommitted: false,
+    })
+    renewLease()
+    for (const [root, stagePath, domain] of [
+      [paths.dataRoot, paths.dataStagePath, 'data'],
+      [paths.artifactRoot, paths.artifactStagePath, 'artifacts'],
+    ]) {
+      rollbackManagedDeletionStage({
+        root, stagePath, domain, operationId: operation.operation_id, userId, fileSystem,
+      })
+      renewLease()
+    }
+    attachmentGovernancePort.rollbackUserClear({ userId, operationId: operation.operation_id })
+    renewLease()
+    recoverTurnEmergencyFailureUserClear({
+      operationId: operation.operation_id,
+      committed: false,
+      env,
+      cwd,
+      tempDir,
+      fileSystem,
+    })
+    renewLease()
+    deleteClearOperation(db, {
+      operationId: operation.operation_id,
+      userId,
+      status: CLEAR_OPERATION_STAGING,
+    })
+    return { recovered: 'rolled_back', operationId: operation.operation_id }
+  } catch (cause) {
+    if (cause?.code?.startsWith('USER_DATA_')) throw cause
+    throw governanceError(
+      'USER_DATA_CLEAR_RECOVERY_INCOMPLETE',
+      'A staged user-data clear could not be restored',
+      500,
+      cause,
+      { incomplete: true, databaseCleared: false, cleanupPending: true },
+    )
+  }
+}
+
+function recoverCommittedClearOperation({
+  operation,
+  userId,
+  compactionArchivePort,
+  compactionBinding,
+  paths,
+  fileSystem,
+  attachmentGovernancePort,
+  env,
+  cwd,
+  tempDir,
+  renewLease,
+  db,
+}) {
+  try {
+    renewLease()
+    recoverCompactionArchiveDeletion({
+      port: compactionArchivePort,
+      userId,
+      operationId: operation.operation_id,
+      binding: compactionBinding,
+      databaseCommitted: true,
+    })
+    renewLease()
+    recoverTurnEmergencyFailureUserClear({
+      operationId: operation.operation_id,
+      committed: true,
+      env,
+      cwd,
+      tempDir,
+      fileSystem,
+    })
+    renewLease()
+    cleanupCommittedClearOperation({
+      paths,
+      userId,
+      operationId: operation.operation_id,
+      fileSystem,
+      attachmentGovernancePort,
+      renewLease,
+    })
+    renewLease()
+    checkpointUserDataWal(db)
+    renewLease()
+    deleteClearOperation(db, {
+      operationId: operation.operation_id,
+      userId,
+      status: CLEAR_OPERATION_COMMITTED,
+    })
+    return { recovered: 'cleanup_completed', operationId: operation.operation_id }
+  } catch (cause) {
+    if (cause?.code?.startsWith('USER_DATA_')) {
+      cause.databaseCleared = true
+      cause.cleanupPending = true
+      throw cause
+    }
+    throw governanceError(
+      'USER_DATA_CLEAR_FILESYSTEM_INCOMPLETE',
+      'Committed user data is no longer active, but physical file cleanup is still pending',
+      500,
+      cause,
+      { incomplete: true, databaseCleared: true, cleanupPending: true },
+    )
+  }
+}
+
 export function recoverPendingClearOperation({
   db,
   userId,
@@ -168,64 +296,20 @@ export function recoverPendingClearOperation({
   renewLease()
   const paths = clearOperationPaths({ userId, operationId: operation.operation_id, env })
   if (operation.status === CLEAR_OPERATION_STAGING) {
-    try {
-      renewLease()
-      recoverCompactionArchiveDeletion({
-        port: compactionArchivePort,
-        userId,
-        operationId: operation.operation_id,
-        binding: compactionBinding,
-        databaseCommitted: false,
-      })
-      renewLease()
-      rollbackManagedDeletionStage({
-        root: paths.dataRoot,
-        stagePath: paths.dataStagePath,
-        domain: 'data',
-        operationId: operation.operation_id,
-        userId,
-        fileSystem,
-      })
-      renewLease()
-      rollbackManagedDeletionStage({
-        root: paths.artifactRoot,
-        stagePath: paths.artifactStagePath,
-        domain: 'artifacts',
-        operationId: operation.operation_id,
-        userId,
-        fileSystem,
-      })
-      renewLease()
-      attachmentGovernancePort.rollbackUserClear({
-        userId,
-        operationId: operation.operation_id,
-      })
-      renewLease()
-      recoverTurnEmergencyFailureUserClear({
-        operationId: operation.operation_id,
-        committed: false,
-        env,
-        cwd,
-        tempDir,
-        fileSystem,
-      })
-      renewLease()
-      deleteClearOperation(db, {
-        operationId: operation.operation_id,
-        userId,
-        status: CLEAR_OPERATION_STAGING,
-      })
-      return { recovered: 'rolled_back', operationId: operation.operation_id }
-    } catch (cause) {
-      if (cause?.code?.startsWith('USER_DATA_')) throw cause
-      throw governanceError(
-        'USER_DATA_CLEAR_RECOVERY_INCOMPLETE',
-        'A staged user-data clear could not be restored',
-        500,
-        cause,
-        { incomplete: true, databaseCleared: false, cleanupPending: true },
-      )
-    }
+    return recoverStagedClearOperation({
+      operation,
+      userId,
+      compactionArchivePort,
+      compactionBinding,
+      paths,
+      fileSystem,
+      attachmentGovernancePort,
+      env,
+      cwd,
+      tempDir,
+      renewLease,
+      db,
+    })
   }
   if (operation.status !== CLEAR_OPERATION_COMMITTED) {
     throw governanceError(
@@ -236,54 +320,18 @@ export function recoverPendingClearOperation({
       { incomplete: true, cleanupPending: true },
     )
   }
-  try {
-    renewLease()
-    recoverCompactionArchiveDeletion({
-      port: compactionArchivePort,
-      userId,
-      operationId: operation.operation_id,
-      binding: compactionBinding,
-      databaseCommitted: true,
-    })
-    renewLease()
-    recoverTurnEmergencyFailureUserClear({
-      operationId: operation.operation_id,
-      committed: true,
-      env,
-      cwd,
-      tempDir,
-      fileSystem,
-    })
-    renewLease()
-    cleanupCommittedClearOperation({
-      paths,
-      userId,
-      operationId: operation.operation_id,
-      fileSystem,
-      attachmentGovernancePort,
-      renewLease,
-    })
-    renewLease()
-    checkpointUserDataWal(db)
-    renewLease()
-    deleteClearOperation(db, {
-      operationId: operation.operation_id,
-      userId,
-      status: CLEAR_OPERATION_COMMITTED,
-    })
-    return { recovered: 'cleanup_completed', operationId: operation.operation_id }
-  } catch (cause) {
-    if (cause?.code?.startsWith('USER_DATA_')) {
-      cause.databaseCleared = true
-      cause.cleanupPending = true
-      throw cause
-    }
-    throw governanceError(
-      'USER_DATA_CLEAR_FILESYSTEM_INCOMPLETE',
-      'Committed user data is no longer active, but physical file cleanup is still pending',
-      500,
-      cause,
-      { incomplete: true, databaseCleared: true, cleanupPending: true },
-    )
-  }
+  return recoverCommittedClearOperation({
+    operation,
+    userId,
+    compactionArchivePort,
+    compactionBinding,
+    paths,
+    fileSystem,
+    attachmentGovernancePort,
+    env,
+    cwd,
+    tempDir,
+    renewLease,
+    db,
+  })
 }
