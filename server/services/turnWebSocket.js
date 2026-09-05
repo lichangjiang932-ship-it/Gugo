@@ -304,6 +304,240 @@ export async function subscribeTurnSubscription({
   }
 }
 
+function handleTurnWebSocketUpgrade(runtime, request, socket, head) {
+  const { server, webSocketServer, isRuntimeReady, getRuntimeReadinessState } = runtime
+  if (!isRuntimeReady()) {
+    const state = getRuntimeReadinessState()
+    const body = JSON.stringify({
+      ok: false,
+      error: { code: 'RUNTIME_NOT_READY', message: runtimeNotReadyMessage(state) },
+    })
+    const response = (
+      'HTTP/1.1 503 Service Unavailable\r\n'
+      + 'Connection: close\r\n'
+      + 'Content-Type: application/json; charset=utf-8\r\n'
+      + 'Cache-Control: no-store\r\n'
+      + 'Retry-After: 1\r\n'
+      + `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n`
+      + body
+    )
+    try { socket.end(response) } catch { socket.destroy() }
+    return
+  }
+  const url = new URL(request.url, 'http://localhost')
+  if (url.pathname !== '/api/realtime') return
+  if (isHttpServerDraining(server)) {
+    socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nRetry-After: 1\r\n\r\n')
+    socket.destroy()
+    return
+  }
+  if (!isAllowedTurnWebSocketOrigin(request)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
+    socket.destroy()
+    return
+  }
+  if (url.searchParams.has('token')) {
+    socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
+    socket.destroy()
+    return
+  }
+  const token = tokenFromRequest(request)
+  const session = token ? getSessionByToken(token) : null
+  if (!session?.user_id) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+    socket.destroy()
+    return
+  }
+  request.userId = session.user_id
+  webSocketServer.handleUpgrade(request, socket, head, (client) => {
+    webSocketServer.emit('connection', client, request)
+  })
+}
+
+function createTurnSocketClientMessageHandler(context) {
+  const { socket, request, subscriptions, subscriptionLimit, sendFrame, deliver,
+    deliverActivity, listEvents, failSubscription } = context
+  return async (raw) => {
+    if (context.connectionClosed || socket.readyState !== socket.OPEN) return
+    const validation = parseTurnWebSocketClientFrame(raw, { userId: request.userId })
+    if (!validation.ok) {
+      sendFrame({
+        type: 'error',
+        code: validation.code,
+        ...(validation.code === 'VERSION_MISMATCH'
+          ? { expectedVersion: validation.expectedVersion, receivedVersion: validation.receivedVersion }
+          : {}),
+      })
+      return
+    }
+    const message = validation.value
+    if (message?.type === 'subscribe.turn') {
+      const sessionId = String(message.sessionId || '')
+      const turnId = String(message.turnId || '')
+      const after = Number.isFinite(Number(message.after)) ? Math.floor(Number(message.after)) : -1
+      if (!sessionId || !turnId) {
+        sendFrame({ type: 'error', code: 'TURN_TARGET_REQUIRED' })
+        return
+      }
+      const key = `${sessionId}\u0000${turnId}`
+      if (!subscriptions.has(key) && subscriptions.size >= subscriptionLimit) {
+        sendFrame({ type: 'error', code: 'TURN_SUBSCRIPTION_LIMIT' })
+        closeSocket(socket, 1008, 'Too many turn subscriptions')
+        return
+      }
+      try {
+        const subscription = await subscribeTurnSubscription({
+          subscriptions, key, userId: request.userId, sessionId, turnId, after,
+          deliver, deliverActivity, listEvents,
+          onError: (error, failedSubscription) => failSubscription(
+            error,
+            failedSubscription,
+            { fallbackCode: 'TURN_SUBSCRIBE_FAILED' },
+          ),
+        })
+        if (!subscription.active || subscriptions.get(key) !== subscription) return
+      } catch (error) {
+        console.error(`[realtime] failed to subscribe turn ${turnId}:`, error?.stack || error)
+        const hostUnavailable = describeTurnEngineHostUnavailableError(error)
+        sendFrame({
+          type: 'error',
+          code: hostUnavailable?.error?.code || error?.code || 'TURN_SUBSCRIBE_FAILED',
+          ...(hostUnavailable?.error?.action ? { action: hostUnavailable.error.action } : {}),
+          ...publicTurnFailureFrameFields(error),
+          sessionId,
+          turnId,
+        })
+        try { socket.close(1011, 'Turn subscription failed') } catch { /* already closed */ }
+        return
+      }
+      sendFrame({ type: 'subscribed.turn', sessionId, turnId })
+      return
+    }
+    if (message?.type === 'approval.decide') {
+      const id = String(message.approvalId || '')
+      const decision = String(message.decision || '')
+      if (!id || !VALID_DECISIONS.has(decision)) {
+        sendFrame({ type: 'error', code: 'INVALID_APPROVAL_DECISION' })
+        return
+      }
+      try {
+        const result = decideApprovalRequest({
+          userId: request.userId,
+          id,
+          decision,
+          editedArgs: decision === 'edit' ? message.args : null,
+          decidedBy: request.userId,
+        })
+        sendFrame({ type: 'approval.resolved', approvalId: id, result })
+      } catch (error) {
+        sendFrame({ type: 'error', code: error?.code || 'APPROVAL_DECISION_FAILED' })
+      }
+    }
+  }
+}
+
+function attachTurnWebSocketConnection(runtime, socket, request) {
+  const subscriptions = new Map()
+  const subscriptionLimit = Math.max(
+    1,
+    Number(runtime.maxSubscriptions) || MAX_SUBSCRIPTIONS_PER_SOCKET,
+  )
+  const rateLimiter = createTurnWebSocketRateLimiter({
+    capacity: runtime.messageRateCapacity,
+    refillPerSecond: runtime.messageRateRefillPerSecond,
+  })
+  const sendFrame = (value) => send(socket, value, { maxBufferedBytes: runtime.maxBufferedBytes })
+  const deliver = (subscription, event) => {
+    if (!event || event.sequence <= subscription.cursor) return
+    const expectedSequence = subscription.cursor + 1
+    if (!canAdvanceTurnEventCursor(event, subscription.cursor)) {
+      throw new TurnEventSequenceGapError({
+        userId: request.userId,
+        sessionId: subscription.sessionId,
+        turnId: subscription.turnId,
+        expectedSequence,
+        actualSequence: event.sequence,
+      })
+    }
+    subscription.cursor = event.sequence
+    sendFrame({ type: 'turn.event', event: turnEventForClient(event) })
+  }
+  const deliverActivity = (_subscription, activity) => {
+    if (activity) sendFrame({ type: 'turn.activity', activity })
+  }
+  const failSubscription = (error, subscription, { fallbackCode }) => {
+    const hostUnavailable = describeTurnEngineHostUnavailableError(error)
+    if (hostUnavailable) {
+      try { subscription?.unsubscribe() } catch { /* best-effort cleanup */ }
+      for (const [key, current] of subscriptions) {
+        if (current === subscription) subscriptions.delete(key)
+      }
+    }
+    sendFrame({
+      type: 'error',
+      code: hostUnavailable?.error?.code || error?.code || fallbackCode,
+      ...(hostUnavailable?.error?.action ? { action: hostUnavailable.error.action } : {}),
+      ...publicTurnFailureFrameFields(error),
+      sessionId: subscription.sessionId,
+      turnId: subscription.turnId,
+    })
+    try { socket.close(1011, 'Turn subscription failed') } catch { /* already closed */ }
+  }
+  const context = {
+    socket, request, subscriptions, subscriptionLimit, sendFrame, deliver,
+    deliverActivity, listEvents: runtime.listEvents, failSubscription,
+    connectionClosed: false,
+  }
+  let pollInFlight = false
+  const pollSubscriptions = () => {
+    if (pollInFlight) return
+    pollInFlight = true
+    void pollTurnSubscriptions({
+      subscriptions,
+      userId: request.userId,
+      deliver,
+      listEvents: runtime.listEvents,
+      onError: (error, subscription) => failSubscription(
+        error,
+        subscription,
+        { fallbackCode: 'TURN_SUBSCRIPTION_POLL_FAILED' },
+      ),
+    }).catch((error) => {
+      console.error('[realtime] failed to poll turn subscriptions:', error?.stack || error)
+    }).finally(() => { pollInFlight = false })
+  }
+  const pollTimer = setInterval(pollSubscriptions, CROSS_PROCESS_POLL_MS)
+  pollTimer.unref?.()
+  const clearSubscriptions = () => {
+    if (context.connectionClosed) return
+    context.connectionClosed = true
+    clearInterval(pollTimer)
+    for (const subscription of subscriptions.values()) subscription.unsubscribe()
+    subscriptions.clear()
+  }
+  sendFrame({ type: 'ready' })
+  const handleClientMessage = createTurnSocketClientMessageHandler(context)
+  let messageChain = Promise.resolve()
+  socket.on('message', (raw, isBinary) => {
+    if (context.connectionClosed) return
+    if (isBinary) {
+      closeSocket(socket, 1003, 'Binary realtime frames are not supported')
+      return
+    }
+    if (!rateLimiter.take()) {
+      closeSocket(socket, 1008, 'Realtime message rate exceeded')
+      return
+    }
+    messageChain = messageChain.then(() => handleClientMessage(raw)).catch((error) => {
+      console.error('[realtime] failed to process client frame:', error?.stack || error)
+      sendFrame({ type: 'error', code: 'REALTIME_FRAME_PROCESSING_FAILED' })
+      closeSocket(socket, 1011, 'Realtime frame processing failed')
+    })
+  })
+  socket.on('close', clearSubscriptions)
+  socket.on('error', clearSubscriptions)
+}
+
 export function attachTurnWebSocketServer(server, {
   isRuntimeReady = () => true,
   getRuntimeReadinessState = () => (isRuntimeReady() ? 'ready' : 'starting'),
@@ -329,249 +563,22 @@ export function attachTurnWebSocketServer(server, {
     handleProtocols: (protocols) => protocols.has('gugo.realtime') ? 'gugo.realtime' : false,
   })
 
+  const runtime = {
+    server,
+    webSocketServer,
+    isRuntimeReady,
+    getRuntimeReadinessState,
+    listEvents,
+    maxSubscriptions,
+    maxBufferedBytes,
+    messageRateCapacity,
+    messageRateRefillPerSecond,
+  }
   server.on('upgrade', (request, socket, head) => {
-    if (!isRuntimeReady()) {
-      const state = getRuntimeReadinessState()
-      const body = JSON.stringify({
-        ok: false,
-        error: {
-          code: 'RUNTIME_NOT_READY',
-          message: runtimeNotReadyMessage(state),
-        },
-      })
-      const response = (
-        'HTTP/1.1 503 Service Unavailable\r\n'
-        + 'Connection: close\r\n'
-        + 'Content-Type: application/json; charset=utf-8\r\n'
-        + 'Cache-Control: no-store\r\n'
-        + 'Retry-After: 1\r\n'
-        + `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n`
-        + body
-      )
-      try {
-        socket.end(response)
-      } catch {
-        socket.destroy()
-      }
-      return
-    }
-    const url = new URL(request.url, 'http://localhost')
-    if (url.pathname !== '/api/realtime') return
-    if (isHttpServerDraining(server)) {
-      socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nRetry-After: 1\r\n\r\n')
-      socket.destroy()
-      return
-    }
-    if (!isAllowedTurnWebSocketOrigin(request)) {
-      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
-      socket.destroy()
-      return
-    }
-    if (url.searchParams.has('token')) {
-      socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
-      socket.destroy()
-      return
-    }
-    const token = tokenFromRequest(request)
-    const session = token ? getSessionByToken(token) : null
-    if (!session?.user_id) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
-      socket.destroy()
-      return
-    }
-    request.userId = session.user_id
-    webSocketServer.handleUpgrade(request, socket, head, (client) => {
-      webSocketServer.emit('connection', client, request)
-    })
+    handleTurnWebSocketUpgrade(runtime, request, socket, head)
   })
-
   webSocketServer.on('connection', (socket, request) => {
-    const subscriptions = new Map()
-    const subscriptionLimit = Math.max(1, Number(maxSubscriptions) || MAX_SUBSCRIPTIONS_PER_SOCKET)
-    const rateLimiter = createTurnWebSocketRateLimiter({
-      capacity: messageRateCapacity,
-      refillPerSecond: messageRateRefillPerSecond,
-    })
-    const sendFrame = (value) => send(socket, value, { maxBufferedBytes })
-    const deliver = (subscription, event) => {
-      if (!event || event.sequence <= subscription.cursor) return
-      const expectedSequence = subscription.cursor + 1
-      if (!canAdvanceTurnEventCursor(event, subscription.cursor)) {
-        throw new TurnEventSequenceGapError({
-          userId: request.userId,
-          sessionId: subscription.sessionId,
-          turnId: subscription.turnId,
-          expectedSequence,
-          actualSequence: event.sequence,
-        })
-      }
-      subscription.cursor = event.sequence
-      sendFrame({ type: 'turn.event', event: turnEventForClient(event) })
-    }
-    const deliverActivity = (_subscription, activity) => {
-      if (activity) sendFrame({ type: 'turn.activity', activity })
-    }
-    const failSubscription = (error, subscription, { fallbackCode }) => {
-      const hostUnavailable = describeTurnEngineHostUnavailableError(error)
-      if (hostUnavailable) {
-        try { subscription?.unsubscribe() } catch { /* best-effort cleanup */ }
-        for (const [key, current] of subscriptions) {
-          if (current === subscription) subscriptions.delete(key)
-        }
-      }
-      sendFrame({
-        type: 'error',
-        code: hostUnavailable?.error?.code || error?.code || fallbackCode,
-        ...(hostUnavailable?.error?.action ? { action: hostUnavailable.error.action } : {}),
-        ...publicTurnFailureFrameFields(error),
-        sessionId: subscription.sessionId,
-        turnId: subscription.turnId,
-      })
-      try { socket.close(1011, 'Turn subscription failed') } catch { /* already closed */ }
-    }
-    let pollInFlight = false
-    const pollSubscriptions = () => {
-      if (pollInFlight) return
-      pollInFlight = true
-      void pollTurnSubscriptions({
-        subscriptions,
-        userId: request.userId,
-        deliver,
-        listEvents,
-        onError: (error, subscription) => {
-          failSubscription(error, subscription, {
-            fallbackCode: 'TURN_SUBSCRIPTION_POLL_FAILED',
-          })
-        },
-      }).catch((error) => {
-        console.error('[realtime] failed to poll turn subscriptions:', error?.stack || error)
-      }).finally(() => {
-        pollInFlight = false
-      })
-    }
-    const pollTimer = setInterval(pollSubscriptions, CROSS_PROCESS_POLL_MS)
-    pollTimer.unref?.()
-    let connectionClosed = false
-    const clearSubscriptions = () => {
-      if (connectionClosed) return
-      connectionClosed = true
-      clearInterval(pollTimer)
-      for (const subscription of subscriptions.values()) subscription.unsubscribe()
-      subscriptions.clear()
-    }
-    sendFrame({ type: 'ready' })
-
-    const handleClientMessage = async (raw) => {
-      if (connectionClosed || socket.readyState !== socket.OPEN) return
-      const validation = parseTurnWebSocketClientFrame(raw, { userId: request.userId })
-      if (!validation.ok) {
-        sendFrame({
-          type: 'error',
-          code: validation.code,
-          ...(validation.code === 'VERSION_MISMATCH'
-            ? {
-                expectedVersion: validation.expectedVersion,
-                receivedVersion: validation.receivedVersion,
-              }
-            : {}),
-        })
-        return
-      }
-      const message = validation.value
-      if (message?.type === 'subscribe.turn') {
-        const sessionId = String(message.sessionId || '')
-        const turnId = String(message.turnId || '')
-        const after = Number.isFinite(Number(message.after)) ? Math.floor(Number(message.after)) : -1
-        if (!sessionId || !turnId) {
-          sendFrame({ type: 'error', code: 'TURN_TARGET_REQUIRED' })
-          return
-        }
-        const key = `${sessionId}\u0000${turnId}`
-        if (!subscriptions.has(key) && subscriptions.size >= subscriptionLimit) {
-          sendFrame({ type: 'error', code: 'TURN_SUBSCRIPTION_LIMIT' })
-          closeSocket(socket, 1008, 'Too many turn subscriptions')
-          return
-        }
-        try {
-          const subscription = await subscribeTurnSubscription({
-            subscriptions,
-            key,
-            userId: request.userId,
-            sessionId,
-            turnId,
-            after,
-            deliver,
-            deliverActivity,
-            listEvents,
-            onError: (error, failedSubscription) => {
-              failSubscription(error, failedSubscription, {
-                fallbackCode: 'TURN_SUBSCRIBE_FAILED',
-              })
-            },
-          })
-          if (!subscription.active || subscriptions.get(key) !== subscription) return
-        } catch (error) {
-          console.error(`[realtime] failed to subscribe turn ${turnId}:`, error?.stack || error)
-          const hostUnavailable = describeTurnEngineHostUnavailableError(error)
-          sendFrame({
-            type: 'error',
-            code: hostUnavailable?.error?.code || error?.code || 'TURN_SUBSCRIBE_FAILED',
-            ...(hostUnavailable?.error?.action ? { action: hostUnavailable.error.action } : {}),
-            ...publicTurnFailureFrameFields(error),
-            sessionId,
-            turnId,
-          })
-          try { socket.close(1011, 'Turn subscription failed') } catch { /* already closed */ }
-          return
-        }
-        sendFrame({ type: 'subscribed.turn', sessionId, turnId })
-        return
-      }
-      if (message?.type === 'approval.decide') {
-        const id = String(message.approvalId || '')
-        const decision = String(message.decision || '')
-        if (!id || !VALID_DECISIONS.has(decision)) {
-          sendFrame({ type: 'error', code: 'INVALID_APPROVAL_DECISION' })
-          return
-        }
-        try {
-          const result = decideApprovalRequest({
-            userId: request.userId,
-            id,
-            decision,
-            editedArgs: decision === 'edit' ? message.args : null,
-            decidedBy: request.userId,
-          })
-          sendFrame({ type: 'approval.resolved', approvalId: id, result })
-        } catch (error) {
-          sendFrame({
-            type: 'error',
-            code: error?.code || 'APPROVAL_DECISION_FAILED',
-          })
-        }
-      }
-    }
-    let messageChain = Promise.resolve()
-    socket.on('message', (raw, isBinary) => {
-      if (connectionClosed) return
-      if (isBinary) {
-        closeSocket(socket, 1003, 'Binary realtime frames are not supported')
-        return
-      }
-      if (!rateLimiter.take()) {
-        closeSocket(socket, 1008, 'Realtime message rate exceeded')
-        return
-      }
-      messageChain = messageChain
-        .then(() => handleClientMessage(raw))
-        .catch((error) => {
-          console.error('[realtime] failed to process client frame:', error?.stack || error)
-          sendFrame({ type: 'error', code: 'REALTIME_FRAME_PROCESSING_FAILED' })
-          closeSocket(socket, 1011, 'Realtime frame processing failed')
-        })
-    })
-    socket.on('close', clearSubscriptions)
-    socket.on('error', clearSubscriptions)
+    attachTurnWebSocketConnection(runtime, socket, request)
   })
 
   server.once('close', () => webSocketServer.close())
