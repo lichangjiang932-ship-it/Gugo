@@ -149,6 +149,301 @@ function updateBridgeSessionTouch({ sessionId, externalUserId, senderName }) {
   `).run(externalUserId || null, senderName || null, now(), sessionId)
 }
 
+function resolveBridgeAgent(runtime, { userId, config }) {
+  const wanted = cleanString(config?.defaultAgentId || config?.agentId)
+  if (wanted) {
+    const agent = getAgent({ userId, id: wanted })
+    if (agent) return agent
+  }
+  return ensureDefaultAgent({ userId })
+}
+
+function ensureBridgeSession(runtime, {
+  integration,
+  provider,
+  chatId,
+  chatType,
+  externalUserId,
+  senderName,
+  isGroup,
+}) {
+  const userId = integrationUserId(integration)
+  if (!userId) throw new Error('integration userId required')
+  const integrationId = integration.id
+  const existing = getSessionByExternal({ userId, integrationId, provider, chatId })
+  if (existing && getChannel({ userId, channelId: existing.channelId })) {
+    updateBridgeSessionTouch({ sessionId: existing.id, externalUserId, senderName })
+    return existing
+  }
+  const config = integrationConfig(integration)
+  const agent = resolveBridgeAgent(runtime, { userId, config })
+  const channel = createChannel({
+    userId,
+    name: [platformLabel(provider), isGroup ? 'group' : 'dm', senderName || chatId]
+      .filter(Boolean).join(' / '),
+    kind: isGroup ? 'group' : 'dm',
+    agentIds: [agent.id],
+    defaultAgentId: agent.id,
+  })
+  return insertBridgeSession({
+    userId, integrationId, provider, chatId, chatType,
+    externalUserId, senderName, channelId: channel.id,
+  })
+}
+
+async function buildInboundText(runtime, {
+  userId,
+  integrationId,
+  provider,
+  text,
+  attachments = [],
+}) {
+  const base = cleanString(text)
+  const images = attachments.filter(isImageAttachment)
+  if (!images.length) return base
+  const entry = runtime.adapters.get(adapterKey(provider, integrationId))
+  const resolveAttachment = typeof entry?.adapter?.resolveAttachment === 'function'
+    ? (attachment) => entry.adapter.resolveAttachment(attachment)
+    : null
+  let descriptions
+  try {
+    descriptions = await runtime.describeAttachments({
+      userId,
+      attachments: images,
+      ...(resolveAttachment ? { resolveAttachment } : {}),
+    })
+  } catch (error) {
+    descriptions = images.map((_, index) => ({
+      index, ok: false, error: error?.message || String(error),
+    }))
+  }
+  const blocks = descriptions.map((item, offset) => {
+    const index = Number.isInteger(item?.index) ? item.index + 1 : offset + 1
+    const body = item?.ok === false
+      ? `failed: ${item.error || item.message || 'unknown error'}`
+      : cleanString(item?.description || item?.text)
+    return `[Image ${index} description]\n${body || '(empty)'}`
+  })
+  return [base, ...blocks].filter(Boolean).join('\n\n')
+}
+
+function waitForAgentReply(runtime, { channelId, parentMessageId }) {
+  const existing = getDb().prepare(`
+    SELECT content, sender_kind AS senderKind, parent_message_id AS parentMessageId
+    FROM channel_messages
+    WHERE channel_id = ? AND sender_kind = 'agent' AND parent_message_id = ?
+    ORDER BY created_at ASC
+    LIMIT 1
+  `).get(channelId, parentMessageId)
+  if (existing) return Promise.resolve(existing)
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (message = null) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      unsubscribe()
+      resolve(message)
+    }
+    const unsubscribe = subscribeChannelMessages(channelId, (message) => {
+      if (message?.senderKind === 'agent' && message.parentMessageId === parentMessageId) {
+        finish(message)
+      }
+    })
+    const timer = setTimeout(() => finish(null), runtime.replyTimeoutMs)
+  })
+}
+
+async function stopBridgeIntegration(runtime, integrationId, provider = null) {
+  const keys = []
+  for (const key of runtime.adapters.keys()) {
+    if (key.endsWith(`:${integrationId}`)
+      && (!provider || key.startsWith(`${provider}:`))) keys.push(key)
+  }
+  for (const key of keys) {
+    const entry = runtime.adapters.get(key)
+    try { await entry?.adapter?.stop?.() } catch { /* best effort */ }
+    runtime.adapters.delete(key)
+  }
+  runtime.integrations.delete(integrationId)
+}
+
+async function startBridgeIntegration(runtime, integration) {
+  if (!integration?.id) throw new Error('integration required')
+  const provider = integration.provider
+  const key = adapterKey(provider, integration.id)
+  await stopBridgeIntegration(runtime, integration.id, provider)
+  runtime.integrations.set(integration.id, integration)
+  const factory = runtime.adapterFactories[provider]
+  if (!factory) {
+    runtime.adapters.set(key, { status: 'configured', adapter: null, error: null })
+    return { ok: true, status: 'configured' }
+  }
+  const entry = { status: 'starting', adapter: null, error: null }
+  runtime.adapters.set(key, entry)
+  try {
+    const adapter = await factory({
+      integration,
+      onMessage: (message) => receiveExternalMessage(runtime, {
+        ...message, integrationId: integration.id, provider,
+      }),
+    })
+    entry.adapter = adapter
+    await adapter?.start?.()
+    entry.status = 'connected'
+    return { ok: true, status: entry.status }
+  } catch (error) {
+    entry.status = 'error'
+    entry.error = error?.message || String(error)
+    return { ok: false, status: entry.status, error: entry.error }
+  }
+}
+
+async function sendBridgeReply(runtime, { integrationId, provider, chatId, text, context = {} }) {
+  const entry = runtime.adapters.get(adapterKey(provider, integrationId))
+  if (!entry?.adapter?.sendMessage) return { ok: false, error: 'adapter is not running' }
+  await entry.adapter.sendMessage({ chatId, text, context })
+  return { ok: true }
+}
+
+async function receiveExternalMessage(runtime, message = {}) {
+  const integrationId = cleanString(message.integrationId)
+  const provider = cleanString(message.provider)
+  const chatId = cleanString(message.chatId)
+  if (!integrationId || !provider || !chatId) {
+    throw new Error('integrationId + provider + chatId required')
+  }
+  const integration = runtime.integrations.get(integrationId)
+  if (!integration) throw new Error('integration is not running')
+  const userId = integrationUserId(integration)
+  const externalUserId = cleanString(message.externalUserId || message.userId || chatId)
+  const senderName = cleanString(message.senderName)
+  const config = integrationConfig(integration)
+  const contact = getBridgeContact({ userId, integrationId, provider, externalUserId })
+  const inboundPolicy = cleanString(config?.inboundPolicy || 'contacts')
+  if (message.__bypassParking !== true && inboundPolicy !== 'open' && contact?.status !== 'allowed') {
+    if (contact?.status === 'blocked') {
+      return { ok: true, blocked: true, parked: false, replied: false }
+    }
+    const parked = parkBridgeMessage({
+      userId, integrationId, provider, chatId, externalUserId, senderName,
+      payload: sanitizedInboundPayload(message, provider),
+    })
+    try {
+      createNotification({
+        userId,
+        kind: 'approval',
+        title: `New ${platformLabel(provider)} contact`,
+        body: `${senderName || externalUserId} sent a message. Allow and deliver it?`,
+        link: `/access?bridgeParkingId=${encodeURIComponent(parked.id)}`,
+        data: { bridgeParkingId: parked.id, integrationId, provider, externalUserId },
+      })
+    } catch (error) {
+      console.error('[bridge] parking notification failed:', error?.stack || error)
+    }
+    return { ok: true, parked: true, parkingId: parked.id, replied: false }
+  }
+  const bridgeSession = ensureBridgeSession(runtime, {
+    integration,
+    provider,
+    chatId,
+    chatType: message.isGroup ? 'group' : 'dm',
+    externalUserId,
+    senderName,
+    isGroup: !!message.isGroup,
+  })
+  const text = await buildInboundText(runtime, {
+    userId, integrationId, provider, text: message.text, attachments: message.attachments || [],
+  })
+  const dispatch = await dispatchUserMessage({ channelId: bridgeSession.channelId, userId, text })
+  const reply = await waitForAgentReply(runtime, {
+    channelId: bridgeSession.channelId,
+    parentMessageId: dispatch.messageId,
+  })
+  if (reply?.content) {
+    await sendBridgeReply(runtime, {
+      integrationId, provider, chatId, text: reply.content, context: message,
+    })
+  }
+  return {
+    ok: true,
+    channelId: bridgeSession.channelId,
+    messageId: dispatch.messageId,
+    replied: !!reply?.content,
+  }
+}
+
+async function allowAndDeliver(runtime, { userId, parkingId } = {}) {
+  const parked = getParkedBridgeMessage({ userId, id: parkingId })
+  if (!parked) return null
+  if (parked.status === 'delivered') return { ok: true, parked, alreadyDelivered: true }
+  if (parked.status !== 'parked' && parked.status !== 'failed') {
+    return { ok: false, parked, error: `message is ${parked.status}` }
+  }
+  setBridgeContactStatus({
+    userId,
+    integrationId: parked.integrationId,
+    provider: parked.provider,
+    externalUserId: parked.externalUserId,
+    displayName: parked.senderName,
+    status: 'allowed',
+  })
+  const claimed = transitionParkedBridgeMessage({
+    userId, id: parkingId, from: parked.status, to: 'delivering',
+  })
+  if (!claimed) return { ok: false, error: 'message state changed; refresh and retry' }
+  try {
+    const delivered = await receiveExternalMessage(runtime, {
+      ...parked.payload,
+      integrationId: parked.integrationId,
+      provider: parked.provider,
+      chatId: parked.chatId,
+      externalUserId: parked.externalUserId,
+      senderName: parked.senderName,
+      __bypassParking: true,
+    })
+    const updated = transitionParkedBridgeMessage({
+      userId, id: parkingId, from: 'delivering', to: 'delivered',
+    })
+    return { ok: true, delivered, parked: updated }
+  } catch (error) {
+    transitionParkedBridgeMessage({
+      userId, id: parkingId, from: 'delivering', to: 'failed',
+      error: error?.message || String(error),
+    })
+    throw error
+  }
+}
+
+function rejectParked(runtime, { userId, parkingId } = {}) {
+  const parked = getParkedBridgeMessage({ userId, id: parkingId })
+  if (!parked) return null
+  if (parked.status !== 'parked') {
+    return { ok: false, parked, error: `message is ${parked.status}` }
+  }
+  setBridgeContactStatus({
+    userId,
+    integrationId: parked.integrationId,
+    provider: parked.provider,
+    externalUserId: parked.externalUserId,
+    displayName: parked.senderName,
+    status: 'blocked',
+  })
+  const updated = transitionParkedBridgeMessage({
+    userId, id: parkingId, from: 'parked', to: 'rejected',
+  })
+  return { ok: true, parked: updated }
+}
+
+function stopAllBridges(runtime) {
+  const operations = [...runtime.adapters.keys()].map(async (key) => {
+    const entry = runtime.adapters.get(key)
+    try { await entry?.adapter?.stop?.() } catch { /* best effort */ }
+    runtime.adapters.delete(key)
+  })
+  return Promise.all(operations).then(() => { runtime.integrations.clear() })
+}
+
 export function createSocialBridgeManager({
   adapterFactories = {
     telegram: createTelegramBridgeAdapter,
@@ -160,367 +455,28 @@ export function createSocialBridgeManager({
   describeAttachments = describeImageAttachments || noopDescribeAttachments,
   replyTimeoutMs = 60_000,
 } = {}) {
-  const adapters = new Map()
-  const integrations = new Map()
-
-  function resolveAgent({ userId, config }) {
-    const wanted = cleanString(config?.defaultAgentId || config?.agentId)
-    if (wanted) {
-      const agent = getAgent({ userId, id: wanted })
-      if (agent) return agent
-    }
-    return ensureDefaultAgent({ userId })
+  const runtime = {
+    adapterFactories,
+    describeAttachments,
+    replyTimeoutMs,
+    adapters: new Map(),
+    integrations: new Map(),
   }
-
-  function ensureBridgeSession({
-    integration,
-    provider,
-    chatId,
-    chatType,
-    externalUserId,
-    senderName,
-    isGroup,
-  }) {
-    const userId = integrationUserId(integration)
-    if (!userId) throw new Error('integration userId required')
-    const integrationId = integration.id
-    const existing = getSessionByExternal({ userId, integrationId, provider, chatId })
-    if (existing && getChannel({ userId, channelId: existing.channelId })) {
-      updateBridgeSessionTouch({ sessionId: existing.id, externalUserId, senderName })
-      return existing
-    }
-
-    const config = integrationConfig(integration)
-    const agent = resolveAgent({ userId, config })
-    const nameBits = [
-      platformLabel(provider),
-      isGroup ? 'group' : 'dm',
-      senderName || chatId,
-    ].filter(Boolean)
-    const channel = createChannel({
-      userId,
-      name: nameBits.join(' / '),
-      kind: isGroup ? 'group' : 'dm',
-      agentIds: [agent.id],
-      defaultAgentId: agent.id,
-    })
-    return insertBridgeSession({
-      userId,
-      integrationId,
-      provider,
-      chatId,
-      chatType,
-      externalUserId,
-      senderName,
-      channelId: channel.id,
-    })
-  }
-
-  async function buildInboundText({ userId, integrationId, provider, text, attachments = [] }) {
-    const base = cleanString(text)
-    const images = attachments.filter(isImageAttachment)
-    if (!images.length) return base
-    const entry = adapters.get(adapterKey(provider, integrationId))
-    const resolveAttachment = typeof entry?.adapter?.resolveAttachment === 'function'
-      ? (attachment) => entry.adapter.resolveAttachment(attachment)
-      : null
-    let descriptions
-    try {
-      descriptions = await describeAttachments({
-        userId,
-        attachments: images,
-        ...(resolveAttachment ? { resolveAttachment } : {}),
-      })
-    } catch (err) {
-      descriptions = images.map((_, index) => ({
-        index,
-        ok: false,
-        error: err?.message || String(err),
-      }))
-    }
-    const blocks = descriptions.map((item, i) => {
-      const index = Number.isInteger(item?.index) ? item.index + 1 : i + 1
-      const body = item?.ok === false
-        ? `failed: ${item.error || item.message || 'unknown error'}`
-        : cleanString(item?.description || item?.text)
-      return `[Image ${index} description]\n${body || '(empty)'}`
-    })
-    return [base, ...blocks].filter(Boolean).join('\n\n')
-  }
-
-  function waitForAgentReply({ channelId, parentMessageId }) {
-    const existing = getDb().prepare(`
-      SELECT content, sender_kind AS senderKind, parent_message_id AS parentMessageId
-      FROM channel_messages
-      WHERE channel_id = ? AND sender_kind = 'agent' AND parent_message_id = ?
-      ORDER BY created_at ASC
-      LIMIT 1
-    `).get(channelId, parentMessageId)
-    if (existing) return Promise.resolve(existing)
-
-    return new Promise((resolve) => {
-      let done = false
-      const finish = (message = null) => {
-        if (done) return
-        done = true
-        clearTimeout(timer)
-        unsubscribe()
-        resolve(message)
-      }
-      const unsubscribe = subscribeChannelMessages(channelId, (message) => {
-        if (message?.senderKind !== 'agent') return
-        if (message.parentMessageId !== parentMessageId) return
-        finish(message)
-      })
-      const timer = setTimeout(() => finish(null), replyTimeoutMs)
-    })
-  }
-
-  async function startIntegration(integration) {
-    if (!integration?.id) throw new Error('integration required')
-    const provider = integration.provider
-    const key = adapterKey(provider, integration.id)
-    await stopIntegration(integration.id, provider)
-    integrations.set(integration.id, integration)
-    const factory = adapterFactories[provider]
-    if (!factory) {
-      adapters.set(key, { status: 'configured', adapter: null, error: null })
-      return { ok: true, status: 'configured' }
-    }
-    const entry = { status: 'starting', adapter: null, error: null }
-    adapters.set(key, entry)
-    try {
-      const adapter = await factory({
-        integration,
-        onMessage: (message) => receiveExternalMessage({ ...message, integrationId: integration.id, provider }),
-      })
-      entry.adapter = adapter
-      await adapter?.start?.()
-      entry.status = 'connected'
-      return { ok: true, status: entry.status }
-    } catch (err) {
-      entry.status = 'error'
-      entry.error = err?.message || String(err)
-      return { ok: false, status: entry.status, error: entry.error }
-    }
-  }
-
-  function hasIntegration(integrationId) {
-    return integrations.has(integrationId)
-  }
-
-  async function stopIntegration(integrationId, provider = null) {
-    const keys = []
-    for (const key of adapters.keys()) {
-      if (key.endsWith(`:${integrationId}`) && (!provider || key.startsWith(`${provider}:`))) keys.push(key)
-    }
-    for (const key of keys) {
-      const entry = adapters.get(key)
-      try { await entry?.adapter?.stop?.() } catch { /* best effort */ }
-      adapters.delete(key)
-    }
-    integrations.delete(integrationId)
-  }
-
-  async function sendReply({ integrationId, provider, chatId, text, context = {} }) {
-    const entry = adapters.get(adapterKey(provider, integrationId))
-    if (!entry?.adapter?.sendMessage) return { ok: false, error: 'adapter is not running' }
-    await entry.adapter.sendMessage({ chatId, text, context })
-    return { ok: true }
-  }
-
-  async function receiveExternalMessage(message = {}) {
-    const integrationId = cleanString(message.integrationId)
-    const provider = cleanString(message.provider)
-    const chatId = cleanString(message.chatId)
-    if (!integrationId || !provider || !chatId) throw new Error('integrationId + provider + chatId required')
-    const integration = integrations.get(integrationId)
-    if (!integration) throw new Error('integration is not running')
-    const userId = integrationUserId(integration)
-    const externalUserId = cleanString(message.externalUserId || message.userId || chatId)
-    const senderName = cleanString(message.senderName)
-    const config = integrationConfig(integration)
-    const contact = getBridgeContact({ userId, integrationId, provider, externalUserId })
-    const inboundPolicy = cleanString(config?.inboundPolicy || 'contacts')
-    const bypassParking = message.__bypassParking === true
-    if (!bypassParking && inboundPolicy !== 'open' && contact?.status !== 'allowed') {
-      if (contact?.status === 'blocked') {
-        return { ok: true, blocked: true, parked: false, replied: false }
-      }
-      const parked = parkBridgeMessage({
-        userId,
-        integrationId,
-        provider,
-        chatId,
-        externalUserId,
-        senderName,
-        payload: sanitizedInboundPayload(message, provider),
-      })
-      try {
-        createNotification({
-          userId,
-          kind: 'approval',
-          title: `New ${platformLabel(provider)} contact`,
-          body: `${senderName || externalUserId} sent a message. Allow and deliver it?`,
-          link: `/access?bridgeParkingId=${encodeURIComponent(parked.id)}`,
-          data: {
-            bridgeParkingId: parked.id,
-            integrationId,
-            provider,
-            externalUserId,
-          },
-        })
-      } catch (error) {
-        console.error('[bridge] parking notification failed:', error?.stack || error)
-      }
-      return { ok: true, parked: true, parkingId: parked.id, replied: false }
-    }
-    const bridgeSession = ensureBridgeSession({
-      integration,
-      provider,
-      chatId,
-      chatType: message.isGroup ? 'group' : 'dm',
-      externalUserId,
-      senderName,
-      isGroup: !!message.isGroup,
-    })
-    const text = await buildInboundText({
-      userId,
-      integrationId,
-      provider,
-      text: message.text,
-      attachments: message.attachments || [],
-    })
-    const dispatch = await dispatchUserMessage({
-      channelId: bridgeSession.channelId,
-      userId,
-      text,
-    })
-    const reply = await waitForAgentReply({
-      channelId: bridgeSession.channelId,
-      parentMessageId: dispatch.messageId,
-    })
-    if (reply?.content) {
-      await sendReply({
-        integrationId,
-        provider,
-        chatId,
-        text: reply.content,
-        context: message,
-      })
-    }
-    return {
-      ok: true,
-      channelId: bridgeSession.channelId,
-      messageId: dispatch.messageId,
-      replied: !!reply?.content,
-    }
-  }
-
-  async function allowAndDeliver({ userId, parkingId } = {}) {
-    const parked = getParkedBridgeMessage({ userId, id: parkingId })
-    if (!parked) return null
-    if (parked.status === 'delivered') return { ok: true, parked, alreadyDelivered: true }
-    if (parked.status !== 'parked' && parked.status !== 'failed') {
-      return { ok: false, parked, error: `message is ${parked.status}` }
-    }
-    setBridgeContactStatus({
-      userId,
-      integrationId: parked.integrationId,
-      provider: parked.provider,
-      externalUserId: parked.externalUserId,
-      displayName: parked.senderName,
-      status: 'allowed',
-    })
-    const claimed = transitionParkedBridgeMessage({
-      userId,
-      id: parkingId,
-      from: parked.status,
-      to: 'delivering',
-    })
-    if (!claimed) return { ok: false, error: 'message state changed; refresh and retry' }
-    try {
-      const delivered = await receiveExternalMessage({
-        ...parked.payload,
-        integrationId: parked.integrationId,
-        provider: parked.provider,
-        chatId: parked.chatId,
-        externalUserId: parked.externalUserId,
-        senderName: parked.senderName,
-        __bypassParking: true,
-      })
-      const updated = transitionParkedBridgeMessage({
-        userId,
-        id: parkingId,
-        from: 'delivering',
-        to: 'delivered',
-      })
-      return { ok: true, delivered, parked: updated }
-    } catch (error) {
-      transitionParkedBridgeMessage({
-        userId,
-        id: parkingId,
-        from: 'delivering',
-        to: 'failed',
-        error: error?.message || String(error),
-      })
-      throw error
-    }
-  }
-
-  function rejectParked({ userId, parkingId } = {}) {
-    const parked = getParkedBridgeMessage({ userId, id: parkingId })
-    if (!parked) return null
-    if (parked.status !== 'parked') return { ok: false, parked, error: `message is ${parked.status}` }
-    setBridgeContactStatus({
-      userId,
-      integrationId: parked.integrationId,
-      provider: parked.provider,
-      externalUserId: parked.externalUserId,
-      displayName: parked.senderName,
-      status: 'blocked',
-    })
-    const updated = transitionParkedBridgeMessage({
-      userId,
-      id: parkingId,
-      from: 'parked',
-      to: 'rejected',
-    })
-    return { ok: true, parked: updated }
-  }
-
-  function getStatus() {
-    return [...adapters.entries()].map(([key, entry]) => {
-      const [provider, integrationId] = key.split(':')
-      return {
-        integrationId,
-        provider,
-        status: entry.status,
-        error: entry.error || null,
-      }
-    })
-  }
-
-  async function stopAll() {
-    const keys = [...adapters.keys()]
-    for (const key of keys) {
-      const entry = adapters.get(key)
-      try { await entry?.adapter?.stop?.() } catch { /* best effort */ }
-      adapters.delete(key)
-    }
-    integrations.clear()
-  }
-
   return {
-    startIntegration,
-    hasIntegration,
-    stopIntegration,
-    stopAll,
-    receiveExternalMessage,
-    allowAndDeliver,
-    rejectParked,
-    sendReply,
-    getStatus,
+    startIntegration: (integration) => startBridgeIntegration(runtime, integration),
+    hasIntegration: (integrationId) => runtime.integrations.has(integrationId),
+    stopIntegration: (integrationId, provider = null) => (
+      stopBridgeIntegration(runtime, integrationId, provider)
+    ),
+    stopAll: () => stopAllBridges(runtime),
+    receiveExternalMessage: (message) => receiveExternalMessage(runtime, message),
+    allowAndDeliver: (input) => allowAndDeliver(runtime, input),
+    rejectParked: (input) => rejectParked(runtime, input),
+    sendReply: (input) => sendBridgeReply(runtime, input),
+    getStatus: () => [...runtime.adapters.entries()].map(([key, entry]) => {
+      const [provider, integrationId] = key.split(':')
+      return { integrationId, provider, status: entry.status, error: entry.error || null }
+    }),
   }
 }
 
