@@ -47,6 +47,167 @@ function isExpectedShutdownAbort(error, signal) {
   )
 }
 
+function onlineGraderLimits({ concurrency, queueLimit, retryBaseMs, retryMaxMs }) {
+  const workerCount = boundedInteger(concurrency, DEFAULT_CONCURRENCY, 1, MAX_CONCURRENCY)
+  const pendingLimit = boundedInteger(queueLimit, DEFAULT_QUEUE_LIMIT, 1, MAX_QUEUE_LIMIT)
+  const retryBase = boundedInteger(retryBaseMs, DEFAULT_RETRY_BASE_MS, 1, MAX_RETRY_MS)
+  const retryMaximum = Math.max(
+    retryBase,
+    boundedInteger(retryMaxMs, DEFAULT_RETRY_MAX_MS, 1, MAX_RETRY_MS),
+  )
+  return { workerCount, pendingLimit, retryBase, retryMaximum }
+}
+
+function schedulePump(runtime) {
+  queueMicrotask(() => pump(runtime))
+}
+
+function clearRetryTimer(runtime) {
+  if (!runtime.retryTimer) return
+  clearTimeout(runtime.retryTimer)
+  runtime.retryTimer = null
+}
+
+function scheduleRetry(runtime) {
+  if (runtime.closing || runtime.retryTimer || !runtime.started) return
+  const delay = Math.min(
+    runtime.retryMaximum,
+    runtime.retryBase * (2 ** Math.min(runtime.retryAttempt, 20)),
+  )
+  runtime.retryAttempt += 1
+  runtime.retryTimer = setTimeout(() => {
+    runtime.retryTimer = null
+    if (!runtime.closing) void refill(runtime)
+  }, delay)
+  runtime.retryTimer.unref?.()
+}
+
+function add(runtime, value, { internal = false } = {}) {
+  const task = normalizeTask(value)
+  if (!task || runtime.closing || (!internal && !runtime.accepting)) return false
+  const key = taskKey(task)
+  if (runtime.known.has(key)) return true
+  if (runtime.pending.length >= runtime.pendingLimit) {
+    runtime.needsBackfill = true
+    return false
+  }
+  runtime.known.add(key)
+  runtime.pending.push(task)
+  schedulePump(runtime)
+  return true
+}
+
+async function refill(runtime) {
+  if (runtime.closing || runtime.refillPromise || !runtime.started) return runtime.refillPromise
+  if (runtime.retryTimer) return null
+  const available = runtime.pendingLimit - runtime.pending.length
+  if (available <= 0) {
+    runtime.needsBackfill = true
+    return null
+  }
+  runtime.refillPromise = Promise.resolve()
+    .then(() => runtime.listBacklog({
+      limit: Math.min(MAX_QUEUE_LIMIT, available + runtime.known.size + 1),
+      signal: runtime.shutdownController.signal,
+    }))
+    .then((rows) => {
+      if (runtime.closing) return 0
+      let added = 0
+      for (const row of rows || []) {
+        if (runtime.pending.length >= runtime.pendingLimit) break
+        if (add(runtime, row, { internal: true })) added += 1
+      }
+      runtime.needsBackfill = (rows?.length || 0) > added
+      runtime.retryAttempt = 0
+      return added
+    })
+    .catch((error) => {
+      if (!runtime.closing) {
+        runtime.needsBackfill = true
+        try { runtime.onError(error, null) } catch { /* diagnostics cannot break retry scheduling */ }
+        scheduleRetry(runtime)
+      }
+      return 0
+    })
+    .finally(() => {
+      runtime.refillPromise = null
+      if (!runtime.closing) schedulePump(runtime)
+    })
+  return runtime.refillPromise
+}
+
+function maybeFinishClose(runtime) {
+  if (!runtime.closing || runtime.pending.length || runtime.active.size) return
+  runtime.resolveClose?.()
+  runtime.resolveClose = null
+}
+
+function pump(runtime) {
+  while (!runtime.canceling
+    && runtime.active.size < runtime.workerCount
+    && runtime.pending.length) {
+    const task = runtime.pending.shift()
+    const key = taskKey(task)
+    const promise = Promise.resolve()
+      .then(() => runtime.runGrade({ ...task, signal: runtime.shutdownController.signal }))
+      .catch((error) => {
+        if (!isExpectedShutdownAbort(error, runtime.shutdownController.signal)) {
+          runtime.onError(error, task)
+        }
+      })
+      .finally(() => {
+        runtime.active.delete(key)
+        runtime.known.delete(key)
+        if (!runtime.closing && runtime.needsBackfill
+          && runtime.pending.length < runtime.pendingLimit) void refill(runtime)
+        schedulePump(runtime)
+      })
+    runtime.active.set(key, promise)
+  }
+  maybeFinishClose(runtime)
+}
+
+function startRuntime(runtime) {
+  if (runtime.closing) return Promise.reject(new Error('evolution online grader runtime is closing'))
+  if (runtime.startPromise) return runtime.startPromise
+  runtime.started = true
+  runtime.accepting = true
+  runtime.startPromise = Promise.resolve(refill(runtime)).then(() => undefined)
+  return runtime.startPromise
+}
+
+function closeRuntime(runtime, { signal = null } = {}) {
+  if (runtime.closePromise) return runtime.closePromise
+  runtime.accepting = false
+  runtime.closing = true
+  runtime.needsBackfill = false
+  clearRetryTimer(runtime)
+  // Lifecycle shutdown supplies a bounded signal and cancels immediately;
+  // direct close remains a graceful queue flush boundary.
+  if (signal) {
+    runtime.canceling = true
+    runtime.pending.length = 0
+    runtime.known.clear()
+    runtime.shutdownController.abort(signal.aborted ? signal.reason : runtimeClosingError())
+  }
+  runtime.closePromise = new Promise((resolve) => { runtime.resolveClose = resolve })
+  schedulePump(runtime)
+  return runtime.closePromise
+}
+
+function runtimeState(runtime) {
+  return {
+    started: runtime.started,
+    accepting: runtime.accepting,
+    closing: runtime.closing,
+    pending: runtime.pending.length,
+    active: runtime.active.size,
+    needsBackfill: runtime.needsBackfill,
+    concurrency: runtime.workerCount,
+    queueLimit: runtime.pendingLimit,
+  }
+}
+
 export function createEvolutionOnlineGraderRuntime({
   concurrency = process.env.EVOLUTION_ONLINE_GRADER_CONCURRENCY,
   queueLimit = process.env.EVOLUTION_ONLINE_GRADER_QUEUE_LIMIT,
@@ -59,175 +220,34 @@ export function createEvolutionOnlineGraderRuntime({
     error?.code || error?.message || error,
   ),
 } = {}) {
-  const workerCount = boundedInteger(concurrency, DEFAULT_CONCURRENCY, 1, MAX_CONCURRENCY)
-  const pendingLimit = boundedInteger(queueLimit, DEFAULT_QUEUE_LIMIT, 1, MAX_QUEUE_LIMIT)
-  const retryBase = boundedInteger(retryBaseMs, DEFAULT_RETRY_BASE_MS, 1, MAX_RETRY_MS)
-  const retryMaximum = Math.max(
-    retryBase,
-    boundedInteger(retryMaxMs, DEFAULT_RETRY_MAX_MS, 1, MAX_RETRY_MS),
-  )
-  const pending = []
-  const known = new Set()
-  const active = new Map()
-  const shutdownController = new AbortController()
-  let started = false
-  let accepting = false
-  let closing = false
-  let canceling = false
-  let needsBackfill = false
-  let refillPromise = null
-  let retryTimer = null
-  let retryAttempt = 0
-  let startPromise = null
-  let closePromise = null
-  let resolveClose = null
-
-  const schedulePump = () => queueMicrotask(pump)
-
-  function clearRetryTimer() {
-    if (!retryTimer) return
-    clearTimeout(retryTimer)
-    retryTimer = null
+  const limits = onlineGraderLimits({ concurrency, queueLimit, retryBaseMs, retryMaxMs })
+  const runtime = {
+    ...limits,
+    runGrade,
+    listBacklog,
+    onError,
+    pending: [],
+    known: new Set(),
+    active: new Map(),
+    shutdownController: new AbortController(),
+    started: false,
+    accepting: false,
+    closing: false,
+    canceling: false,
+    needsBackfill: false,
+    refillPromise: null,
+    retryTimer: null,
+    retryAttempt: 0,
+    startPromise: null,
+    closePromise: null,
+    resolveClose: null,
   }
-
-  function scheduleRetry() {
-    if (closing || retryTimer || !started) return
-    const delay = Math.min(retryMaximum, retryBase * (2 ** Math.min(retryAttempt, 20)))
-    retryAttempt += 1
-    retryTimer = setTimeout(() => {
-      retryTimer = null
-      if (!closing) void refill()
-    }, delay)
-    retryTimer.unref?.()
-  }
-
-  function add(value, { internal = false } = {}) {
-    const task = normalizeTask(value)
-    if (!task || closing || (!internal && !accepting)) return false
-    const key = taskKey(task)
-    if (known.has(key)) return true
-    if (pending.length >= pendingLimit) {
-      needsBackfill = true
-      return false
-    }
-    known.add(key)
-    pending.push(task)
-    schedulePump()
-    return true
-  }
-
-  async function refill() {
-    if (closing || refillPromise || !started) return refillPromise
-    if (retryTimer) return null
-    const available = pendingLimit - pending.length
-    if (available <= 0) {
-      needsBackfill = true
-      return null
-    }
-    refillPromise = Promise.resolve()
-      .then(() => listBacklog({
-        limit: Math.min(MAX_QUEUE_LIMIT, available + known.size + 1),
-        signal: shutdownController.signal,
-      }))
-      .then((rows) => {
-        if (closing) return 0
-        let added = 0
-        for (const row of rows || []) {
-          if (pending.length >= pendingLimit) break
-          if (add(row, { internal: true })) added += 1
-        }
-        needsBackfill = (rows?.length || 0) > added
-        retryAttempt = 0
-        return added
-      })
-      .catch((error) => {
-        if (!closing) {
-          needsBackfill = true
-          try { onError(error, null) } catch { /* diagnostics cannot break retry scheduling */ }
-          scheduleRetry()
-        }
-        return 0
-      })
-      .finally(() => {
-        refillPromise = null
-        if (!closing) schedulePump()
-      })
-    return refillPromise
-  }
-
-  function maybeFinishClose() {
-    if (!closing || pending.length || active.size) return
-    resolveClose?.()
-    resolveClose = null
-  }
-
-  function pump() {
-    while (!canceling && active.size < workerCount && pending.length) {
-      const task = pending.shift()
-      const key = taskKey(task)
-      const promise = Promise.resolve()
-        .then(() => runGrade({ ...task, signal: shutdownController.signal }))
-        .catch((error) => {
-          if (!isExpectedShutdownAbort(error, shutdownController.signal)) onError(error, task)
-        })
-        .finally(() => {
-          active.delete(key)
-          known.delete(key)
-          if (!closing && needsBackfill && pending.length < pendingLimit) void refill()
-          schedulePump()
-        })
-      active.set(key, promise)
-    }
-    maybeFinishClose()
-  }
-
-  function start() {
-    if (closing) return Promise.reject(new Error('evolution online grader runtime is closing'))
-    if (startPromise) return startPromise
-    started = true
-    accepting = true
-    startPromise = Promise.resolve(refill()).then(() => undefined)
-    return startPromise
-  }
-
-  function enqueue(value) {
-    return add(value)
-  }
-
-  function close({ signal = null } = {}) {
-    if (closePromise) return closePromise
-    accepting = false
-    closing = true
-    needsBackfill = false
-    clearRetryTimer()
-    // Direct callers use close() as a graceful flush boundary. Lifecycle
-    // shutdown always supplies its bounded signal and must stop model work
-    // immediately so a replacement runtime cannot overlap the old one.
-    if (signal) {
-      canceling = true
-      pending.length = 0
-      known.clear()
-      shutdownController.abort(signal.aborted ? signal.reason : runtimeClosingError())
-    }
-    closePromise = new Promise((resolve) => { resolveClose = resolve })
-    schedulePump()
-    return closePromise
-  }
-
-  function state() {
-    return {
-      started,
-      accepting,
-      closing,
-      pending: pending.length,
-      active: active.size,
-      needsBackfill,
-      concurrency: workerCount,
-      queueLimit: pendingLimit,
-    }
-  }
-
-  return Object.freeze({ start, enqueue, close, state })
+  return Object.freeze({
+    start: () => startRuntime(runtime),
+    enqueue: (value) => add(runtime, value),
+    close: (options) => closeRuntime(runtime, options),
+    state: () => runtimeState(runtime),
+  })
 }
 
 let singletonRuntime = null
