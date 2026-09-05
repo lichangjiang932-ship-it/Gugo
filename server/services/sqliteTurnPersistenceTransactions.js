@@ -33,7 +33,6 @@ const TURN_BOUNDARY_TYPES = new Set([
   'turn.interrupted',
   'turn.blocked',
 ])
-
 function persistenceError(code, message) {
   const error = new Error(message)
   error.code = code
@@ -238,6 +237,324 @@ function assertAttachmentOperationIdentity(binding, event) {
  * production instance always uses the single process database and never mixes
  * another Session/Event implementation into this transaction.
  */
+function commitTurnTransaction(runtime, {
+  userId,
+  event,
+  checkpointState = null,
+  mutate = null,
+  executionLease,
+}) {
+  const db = runtime.openDatabase()
+  let committed
+  let mutationResult
+  db.transaction(() => {
+    assertLiveTurnExecutionLease(db, {
+      userId, event, executionLease, now: runtime.now(),
+    })
+    mutationResult = mutate?.({ db })
+    committed = runtime.appendEventsInTransaction([{ userId, event, checkpointState }], db)
+  }).immediate()
+  runtime.publishEvents(committed.insertedEvents)
+  return {
+    event: committed.stored[0],
+    inserted: committed.insertedEvents.length > 0,
+    mutationResult,
+  }
+}
+
+function commitTurnStartTransaction(runtime, {
+  userId,
+  session = null,
+  messages = [],
+  attachmentBinding = null,
+  attachmentBindingAuthorized = false,
+  event,
+} = {}) {
+  assertEventScope({ userId, event, type: 'turn.started' })
+  if (event.sequence !== 0) {
+    throw persistenceError('TURN_STORAGE_SEQUENCE_INVALID', 'turn.started must use sequence 0')
+  }
+  const sessionId = event.sessionId
+  const scopedMessages = Array.isArray(messages) ? messages : []
+  for (const message of scopedMessages) assertMessageScope(message, { userId, sessionId })
+  const binding = normalizeAttachmentBinding(attachmentBinding, { userId, sessionId })
+  assertAttachmentOperationIdentity(binding, event)
+  let createdSession = false
+  let committed
+  const db = runtime.openDatabase()
+  db.transaction(() => {
+    let currentSession = runtime.readSession({ userId, sessionId })
+    if (!currentSession && session) {
+      if (session.userId !== userId || session.id !== sessionId) {
+        throw persistenceError(
+          'TURN_STORAGE_SCOPE_MISMATCH',
+          'session scope does not match event scope',
+        )
+      }
+      currentSession = runtime.writeSession(session)
+      createdSession = true
+    }
+    if (!currentSession) throw new Error('session not found')
+    committed = runtime.appendEventsInTransaction([{ userId, event, checkpointState: null }], db)
+    const inserted = committed.insertedEvents.length > 0
+    if (inserted && Object.hasOwn(event.payload || {}, 'workspacePath')) {
+      const updated = runtime.writeSessionWorkspace({
+        userId, sessionId, workspacePath: event.payload.workspacePath,
+      })
+      if (!updated) {
+        throw persistenceError(
+          'TURN_STORAGE_SCOPE_MISMATCH',
+          'session workspace scope does not match event scope',
+        )
+      }
+    }
+    for (const message of scopedMessages) {
+      if (inserted) runtime.writeMessage(message)
+      assertExistingMessage(runtime.readMessage, message)
+    }
+    if (binding && inserted) {
+      if (attachmentBindingAuthorized !== true) {
+        throw persistenceError(
+          'TURN_ATTACHMENT_ATOMIC_BINDING_UNAUTHORIZED',
+          'SQLite turn start requires host authorization for its attachment transaction domain',
+        )
+      }
+      if (typeof runtime.bindAttachments !== 'function') {
+        throw persistenceError(
+          'TURN_ATTACHMENT_ATOMIC_BINDING_UNAVAILABLE',
+          'SQLite turn start has no attachment binder for its transaction domain',
+        )
+      }
+      runtime.bindAttachments(binding)
+    }
+  })()
+  runtime.publishEvents(committed.insertedEvents)
+  if (createdSession) {
+    runtime.notifySession({ userId, sessionId, title: session?.title || 'Untitled' })
+  }
+  return committed.stored[0]
+}
+
+function commitTurnBoundaryTransaction(runtime, {
+  userId,
+  event,
+  message = null,
+  executionLease,
+} = {}) {
+  assertEventScope({ userId, event })
+  if (!TURN_BOUNDARY_TYPES.has(event.type)) {
+    throw persistenceError('TURN_STORAGE_EVENT_TYPE_INVALID', 'event is not a Turn boundary')
+  }
+  if (message) assertMessageScope(message, { userId, sessionId: event.sessionId })
+  const db = runtime.openDatabase()
+  let committed
+  db.transaction(() => {
+    assertLiveTurnExecutionLease(db, {
+      userId, event, executionLease, now: runtime.now(),
+    })
+    committed = runtime.appendEventsInTransaction([{ userId, event, checkpointState: null }], db)
+    if (message) {
+      if (committed.insertedEvents.length > 0) runtime.writeMessage(message)
+      assertExistingMessage(runtime.readMessage, message, { ignoreCreatedAt: true })
+    }
+  }).immediate()
+  runtime.publishEvents(committed.insertedEvents)
+  return committed.stored[0]
+}
+
+function assertFailedRetryProjection(message, event) {
+  const valid = message.id === `${event.turnId}:assistant`
+    && message.role === 'assistant'
+    && message.content === event.payload.assistantText
+    && message.modelContext?.turnId === event.turnId
+    && message.modelContext?.turnEvidence === true
+    && message.modelContext?.evidenceState === 'retrying'
+    && message.modelContext?.serverLastSequence === event.sequence
+    && message.updatedAt === event.createdAt
+  if (!valid) {
+    throw persistenceError(
+      'TURN_FAILED_RETRY_PROJECTION_INVALID',
+      'failed Turn retry projection does not match the retry attempt',
+    )
+  }
+}
+
+function commitTurnFailedRetryTransaction(runtime, { userId, event, message } = {}) {
+  assertEventScope({ userId, event, type: 'turn.attempt' })
+  if (event.payload?.reason !== 'failed_retry' || event.payload?.resetStreaming !== true) {
+    throw persistenceError(
+      'TURN_FAILED_RETRY_EVENT_INVALID',
+      'failed Turn retry requires a resetStreaming failed_retry attempt event',
+    )
+  }
+  assertMessageScope(message, { userId, sessionId: event.sessionId })
+  assertFailedRetryProjection(message, event)
+  const db = runtime.openDatabase()
+  let committed
+  db.transaction(() => {
+    const checkpoint = db.prepare(`SELECT event_sequence, state_json FROM turn_checkpoints
+      WHERE user_id = ? AND session_id = ? AND turn_id = ?`).get(
+      userId, event.sessionId, event.turnId,
+    )
+    const checkpointState = parseJsonRecord(checkpoint?.state_json)
+    if (!checkpointState || !Number.isInteger(checkpoint?.event_sequence)) {
+      throw persistenceError(
+        'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
+        'a durable Turn checkpoint is required before retrying a failed Turn',
+      )
+    }
+    const eventRows = db.prepare(`SELECT * FROM turn_events
+      WHERE user_id = ? AND session_id = ? AND turn_id = ?
+      ORDER BY sequence ASC`).all(userId, event.sessionId, event.turnId)
+    const persistedEvents = eventRows.map(storedTurnEvent)
+    const existingRetry = db.prepare(`SELECT * FROM turn_events
+      WHERE user_id = ? AND session_id = ? AND turn_id = ? AND sequence = ?
+      LIMIT 1`).get(userId, event.sessionId, event.turnId, event.sequence)
+    const latest = eventRows.at(-1)
+    const failureRow = existingRetry
+      ? eventRows.find((row) => row.sequence === event.sequence - 1)
+      : latest
+    const failureEvent = storedTurnEvent(failureRow)
+    if (!failureEvent || failureEvent.type !== 'turn.failed') {
+      throw persistenceError(
+        'TURN_FAILED_RETRY_CONFLICT',
+        'the Turn is no longer at a failed terminal boundary',
+      )
+    }
+    const expectedPayload = failedRetryAttemptPayload(
+      persistedEvents,
+      failureEvent,
+      { eventSequence: checkpoint.event_sequence },
+    )
+    assertFailedRetryPayload(event.payload, expectedPayload)
+    if (existingRetry) {
+      assertStoredFailedRetryEvent(existingRetry, { userId, event, expectedPayload })
+      assertExistingMessage(runtime.readMessage, {
+        ...message, updatedAt: existingRetry.created_at,
+      }, { ignoreCreatedAt: true })
+      committed = { stored: [storedTurnEvent(existingRetry)], insertedEvents: [] }
+      return
+    }
+    const failure = parseJsonRecord(latest.payload_json)
+    if (!failureAllowsFailedRetry(failure, event.payload)) {
+      throw persistenceError(
+        'TURN_FAILED_RETRY_NOT_ALLOWED',
+        'the failed Turn does not authorize this retry mode',
+      )
+    }
+    if (event.sequence !== latest.sequence + 1) {
+      throw persistenceError(
+        'TURN_FAILED_RETRY_CONFLICT',
+        'the failed Turn retry sequence is stale',
+      )
+    }
+    if (event.payload.checkpointSequence !== checkpoint.event_sequence) {
+      throw persistenceError(
+        'TURN_FAILED_RETRY_CHECKPOINT_CONFLICT',
+        'the failed Turn checkpoint changed before retry',
+      )
+    }
+    const checkpointUpdate = db.prepare(`UPDATE turn_checkpoints
+      SET state_json = ?, updated_at = ?
+      WHERE user_id = ? AND session_id = ? AND turn_id = ? AND event_sequence = ?`).run(
+      JSON.stringify({
+        ...failedRetryCheckpointState(checkpointState, event.payload),
+        checkpointVersion: 1,
+      }),
+      event.createdAt,
+      userId,
+      event.sessionId,
+      event.turnId,
+      checkpoint.event_sequence,
+    )
+    if (checkpointUpdate.changes !== 1) {
+      throw persistenceError(
+        'TURN_FAILED_RETRY_CHECKPOINT_CONFLICT',
+        'the failed Turn checkpoint could not be atomically updated',
+      )
+    }
+    committed = runtime.appendEventsInTransaction(
+      [{ userId, event, checkpointState: null }],
+      db,
+      { allowFailedRetry: true },
+    )
+    if (committed.insertedEvents.length !== 1) {
+      throw persistenceError(
+        'TURN_FAILED_RETRY_CONFLICT',
+        'the failed Turn retry attempt was already committed',
+      )
+    }
+    runtime.writeMessage(message)
+    assertExistingMessage(runtime.readMessage, message, { ignoreCreatedAt: true })
+  }).immediate()
+  runtime.publishEvents(committed.insertedEvents)
+  return committed.stored[0]
+}
+
+function assertFailedRetryRejectionProjection(message, failureEvent) {
+  const rejection = message.modelContext?.failedRetryRejection
+  const valid = message.id === `${failureEvent.turnId}:assistant`
+    && message.role === 'assistant'
+    && message.modelContext?.turnEvidence === true
+    && message.modelContext?.evidenceState === 'failed'
+    && message.modelContext?.serverLastSequence === failureEvent.sequence
+    && message.modelContext?.error?.retryable === false
+    && rejection?.failureSequence === failureEvent.sequence
+    && rejection?.code === message.modelContext?.error?.code
+    && isPermanentFailedRetryRejectionCode(rejection?.code)
+  if (!valid) {
+    throw persistenceError(
+      'TURN_FAILED_RETRY_REJECTION_PROJECTION_INVALID',
+      'failed Turn retry rejection projection does not match the terminal failure',
+    )
+  }
+}
+
+function commitTurnFailedRetryRejectionTransaction(runtime, {
+  userId,
+  failureEvent,
+  message,
+} = {}) {
+  assertEventScope({ userId, event: failureEvent, type: 'turn.failed' })
+  assertMessageScope(message, { userId, sessionId: failureEvent.sessionId })
+  assertFailedRetryRejectionProjection(message, failureEvent)
+  const db = runtime.openDatabase()
+  db.transaction(() => {
+    const latest = db.prepare(`SELECT id, sequence, type, payload_json FROM turn_events
+      WHERE user_id = ? AND session_id = ? AND turn_id = ?
+      ORDER BY sequence DESC LIMIT 1`).get(
+      userId, failureEvent.sessionId, failureEvent.turnId,
+    )
+    if (!latest
+      || latest.id !== failureEvent.id
+      || latest.sequence !== failureEvent.sequence
+      || latest.type !== 'turn.failed') {
+      throw persistenceError(
+        'TURN_FAILED_RETRY_REJECTION_CONFLICT',
+        'the Turn is no longer at the failed terminal being rejected',
+      )
+    }
+    const failure = parseJsonRecord(latest.payload_json)
+    const retryLimitReached = message.modelContext.failedRetryRejection.code
+      === 'TURN_FAILED_RETRY_LIMIT_REACHED'
+      && failedRetryAttemptCount(db, {
+        userId, sessionId: failureEvent.sessionId, turnId: failureEvent.turnId,
+      }) >= MAX_FAILED_TURN_RETRIES
+    const retryNotAllowed = message.modelContext.failedRetryRejection.code
+      === 'TURN_FAILED_RETRY_NOT_ALLOWED'
+      && !failureSupportsFailedRetry(failure)
+    if (!failureSupportsFailedRetry(failure) && !retryLimitReached && !retryNotAllowed) {
+      throw persistenceError(
+        'TURN_FAILED_RETRY_REJECTION_CONFLICT',
+        'the terminal failure is no longer eligible for failed retry rejection',
+      )
+    }
+    runtime.writeMessage(message)
+    assertExistingMessage(runtime.readMessage, message, { ignoreCreatedAt: true })
+  }).immediate()
+  return message
+}
+
 export function createSqliteTurnPersistenceTransactions({
   openDatabase = getDb,
   readSession = getSession,
@@ -251,323 +568,33 @@ export function createSqliteTurnPersistenceTransactions({
   writeSessionWorkspace = setSessionWorkspacePathForAtomicCommit,
   now = Date.now,
 } = {}) {
-  const commit = ({
-    userId,
-    event,
-    checkpointState = null,
-    mutate = null,
-    executionLease,
-  }) => {
-    const db = openDatabase()
-    let committed
-    let mutationResult
-    db.transaction(() => {
-      assertLiveTurnExecutionLease(db, { userId, event, executionLease, now: now() })
-      mutationResult = mutate?.({ db })
-      committed = appendEventsInTransaction([{ userId, event, checkpointState }], db)
-    }).immediate()
-    publishEvents(committed.insertedEvents)
-    return { event: committed.stored[0], inserted: committed.insertedEvents.length > 0, mutationResult }
+  const runtime = {
+    openDatabase,
+    readSession,
+    readMessage,
+    writeSession,
+    writeMessage,
+    bindAttachments,
+    appendEventsInTransaction,
+    publishEvents,
+    notifySession,
+    writeSessionWorkspace,
+    now,
   }
-
   return Object.freeze({
-    async commitTurnStart({
-      userId,
-      session = null,
-      messages = [],
-      attachmentBinding = null,
-      attachmentBindingAuthorized = false,
-      event,
-    } = {}) {
-      assertEventScope({ userId, event, type: 'turn.started' })
-      if (event.sequence !== 0) {
-        throw persistenceError('TURN_STORAGE_SEQUENCE_INVALID', 'turn.started must use sequence 0')
-      }
-      const sessionId = event.sessionId
-      const scopedMessages = Array.isArray(messages) ? messages : []
-      for (const message of scopedMessages) assertMessageScope(message, { userId, sessionId })
-      const binding = normalizeAttachmentBinding(attachmentBinding, { userId, sessionId })
-      assertAttachmentOperationIdentity(binding, event)
-      let createdSession = false
-      let committed
-      const db = openDatabase()
-      db.transaction(() => {
-        let currentSession = readSession({ userId, sessionId })
-        if (!currentSession && session) {
-          if (session.userId !== userId || session.id !== sessionId) {
-            throw persistenceError('TURN_STORAGE_SCOPE_MISMATCH', 'session scope does not match event scope')
-          }
-          currentSession = writeSession(session)
-          createdSession = true
-        }
-        if (!currentSession) throw new Error('session not found')
-
-        committed = appendEventsInTransaction([{ userId, event, checkpointState: null }], db)
-        const inserted = committed.insertedEvents.length > 0
-        if (inserted && Object.hasOwn(event.payload || {}, 'workspacePath')) {
-          const updated = writeSessionWorkspace({
-            userId,
-            sessionId,
-            workspacePath: event.payload.workspacePath,
-          })
-          if (!updated) {
-            throw persistenceError(
-              'TURN_STORAGE_SCOPE_MISMATCH',
-              'session workspace scope does not match event scope',
-            )
-          }
-        }
-        for (const message of scopedMessages) {
-          if (inserted) writeMessage(message)
-          assertExistingMessage(readMessage, message)
-        }
-        if (binding && inserted) {
-          if (attachmentBindingAuthorized !== true) {
-            throw persistenceError(
-              'TURN_ATTACHMENT_ATOMIC_BINDING_UNAUTHORIZED',
-              'SQLite turn start requires host authorization for its attachment transaction domain',
-            )
-          }
-          if (typeof bindAttachments !== 'function') {
-            throw persistenceError(
-              'TURN_ATTACHMENT_ATOMIC_BINDING_UNAVAILABLE',
-              'SQLite turn start has no attachment binder for its transaction domain',
-            )
-          }
-          bindAttachments(binding)
-        }
-      })()
-      publishEvents(committed.insertedEvents)
-      if (createdSession) {
-        notifySession({ userId, sessionId, title: session?.title || 'Untitled' })
-      }
-      return committed.stored[0]
-    },
-
-    async commitTurnCheckpoint({ userId, event, checkpointState, executionLease } = {}) {
+    commitTurnStart: async (input) => commitTurnStartTransaction(runtime, input),
+    commitTurnCheckpoint: async ({ userId, event, checkpointState, executionLease } = {}) => {
       assertEventScope({ userId, event, type: 'turn.checkpoint' })
       if (!checkpointState || typeof checkpointState !== 'object' || Array.isArray(checkpointState)) {
         throw new TypeError('checkpointState must be an object')
       }
-      return commit({ userId, event, checkpointState, executionLease }).event
+      return commitTurnTransaction(runtime, {
+        userId, event, checkpointState, executionLease,
+      }).event
     },
-
-    async commitTurnBoundary({ userId, event, message = null, executionLease } = {}) {
-      assertEventScope({ userId, event })
-      if (!TURN_BOUNDARY_TYPES.has(event.type)) {
-        throw persistenceError('TURN_STORAGE_EVENT_TYPE_INVALID', 'event is not a Turn boundary')
-      }
-      if (message) assertMessageScope(message, { userId, sessionId: event.sessionId })
-      const db = openDatabase()
-      let committed
-      db.transaction(() => {
-        assertLiveTurnExecutionLease(db, { userId, event, executionLease, now: now() })
-        committed = appendEventsInTransaction([{ userId, event, checkpointState: null }], db)
-        if (message) {
-          if (committed.insertedEvents.length > 0) writeMessage(message)
-          // Boundary transitions intentionally reuse `${turnId}:assistant`.
-          // SQLite preserves the first projection's created_at on upsert, so
-          // paused/blocked evidence can advance without weakening the exact
-          // comparison of mutable content, context, and updated_at.
-          assertExistingMessage(readMessage, message, { ignoreCreatedAt: true })
-        }
-      }).immediate()
-      publishEvents(committed.insertedEvents)
-      return committed.stored[0]
-    },
-
-    async commitTurnFailedRetry({ userId, event, message } = {}) {
-      assertEventScope({ userId, event, type: 'turn.attempt' })
-      if (event.payload?.reason !== 'failed_retry' || event.payload?.resetStreaming !== true) {
-        throw persistenceError(
-          'TURN_FAILED_RETRY_EVENT_INVALID',
-          'failed Turn retry requires a resetStreaming failed_retry attempt event',
-        )
-      }
-      assertMessageScope(message, { userId, sessionId: event.sessionId })
-      if (message.id !== `${event.turnId}:assistant`
-        || message.role !== 'assistant'
-        || message.content !== event.payload.assistantText
-        || message.modelContext?.turnId !== event.turnId
-        || message.modelContext?.turnEvidence !== true
-        || message.modelContext?.evidenceState !== 'retrying'
-        || message.modelContext?.serverLastSequence !== event.sequence
-        || message.updatedAt !== event.createdAt) {
-        throw persistenceError(
-          'TURN_FAILED_RETRY_PROJECTION_INVALID',
-          'failed Turn retry projection does not match the retry attempt',
-        )
-      }
-
-      const db = openDatabase()
-      let committed
-      db.transaction(() => {
-        const checkpoint = db.prepare(`SELECT event_sequence, state_json FROM turn_checkpoints
-          WHERE user_id = ? AND session_id = ? AND turn_id = ?`).get(
-          userId,
-          event.sessionId,
-          event.turnId,
-        )
-        const checkpointState = parseJsonRecord(checkpoint?.state_json)
-        if (!checkpointState || !Number.isInteger(checkpoint?.event_sequence)) {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_CHECKPOINT_REQUIRED',
-            'a durable Turn checkpoint is required before retrying a failed Turn',
-          )
-        }
-
-        const eventRows = db.prepare(`SELECT * FROM turn_events
-          WHERE user_id = ? AND session_id = ? AND turn_id = ?
-          ORDER BY sequence ASC`).all(userId, event.sessionId, event.turnId)
-        const persistedEvents = eventRows.map(storedTurnEvent)
-        const existingRetry = db.prepare(`SELECT * FROM turn_events
-          WHERE user_id = ? AND session_id = ? AND turn_id = ? AND sequence = ?
-          LIMIT 1`).get(userId, event.sessionId, event.turnId, event.sequence)
-        const latest = eventRows.at(-1)
-        const failureRow = existingRetry
-          ? eventRows.find((row) => row.sequence === event.sequence - 1)
-          : latest
-        const failureEvent = storedTurnEvent(failureRow)
-        if (!failureEvent || failureEvent.type !== 'turn.failed') {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_CONFLICT',
-            'the Turn is no longer at a failed terminal boundary',
-          )
-        }
-        const expectedPayload = failedRetryAttemptPayload(
-          persistedEvents,
-          failureEvent,
-          { eventSequence: checkpoint.event_sequence },
-        )
-        assertFailedRetryPayload(event.payload, expectedPayload)
-
-        if (existingRetry) {
-          assertStoredFailedRetryEvent(existingRetry, { userId, event, expectedPayload })
-          assertExistingMessage(readMessage, {
-            ...message,
-            updatedAt: existingRetry.created_at,
-          }, { ignoreCreatedAt: true })
-          committed = {
-            stored: [storedTurnEvent(existingRetry)],
-            insertedEvents: [],
-          }
-          return
-        }
-        const failure = parseJsonRecord(latest.payload_json)
-        if (!failureAllowsFailedRetry(failure, event.payload)) {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_NOT_ALLOWED',
-            'the failed Turn does not authorize this retry mode',
-          )
-        }
-        if (event.sequence !== latest.sequence + 1) {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_CONFLICT',
-            'the failed Turn retry sequence is stale',
-          )
-        }
-
-        if (event.payload.checkpointSequence !== checkpoint.event_sequence) {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_CHECKPOINT_CONFLICT',
-            'the failed Turn checkpoint changed before retry',
-          )
-        }
-
-        const checkpointUpdate = db.prepare(`UPDATE turn_checkpoints
-          SET state_json = ?, updated_at = ?
-          WHERE user_id = ? AND session_id = ? AND turn_id = ? AND event_sequence = ?`).run(
-          JSON.stringify({
-            ...failedRetryCheckpointState(checkpointState, event.payload),
-            checkpointVersion: 1,
-          }),
-          event.createdAt,
-          userId,
-          event.sessionId,
-          event.turnId,
-          checkpoint.event_sequence,
-        )
-        if (checkpointUpdate.changes !== 1) {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_CHECKPOINT_CONFLICT',
-            'the failed Turn checkpoint could not be atomically updated',
-          )
-        }
-
-        committed = appendEventsInTransaction(
-          [{ userId, event, checkpointState: null }],
-          db,
-          { allowFailedRetry: true },
-        )
-        if (committed.insertedEvents.length !== 1) {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_CONFLICT',
-            'the failed Turn retry attempt was already committed',
-          )
-        }
-        writeMessage(message)
-        assertExistingMessage(readMessage, message, { ignoreCreatedAt: true })
-      }).immediate()
-      publishEvents(committed.insertedEvents)
-      return committed.stored[0]
-    },
-
-    async commitTurnFailedRetryRejection({ userId, failureEvent, message } = {}) {
-      assertEventScope({ userId, event: failureEvent, type: 'turn.failed' })
-      assertMessageScope(message, { userId, sessionId: failureEvent.sessionId })
-      const rejection = message.modelContext?.failedRetryRejection
-      if (message.id !== `${failureEvent.turnId}:assistant`
-        || message.role !== 'assistant'
-        || message.modelContext?.turnEvidence !== true
-        || message.modelContext?.evidenceState !== 'failed'
-        || message.modelContext?.serverLastSequence !== failureEvent.sequence
-        || message.modelContext?.error?.retryable !== false
-        || rejection?.failureSequence !== failureEvent.sequence
-        || rejection?.code !== message.modelContext?.error?.code
-        || !isPermanentFailedRetryRejectionCode(rejection?.code)) {
-        throw persistenceError(
-          'TURN_FAILED_RETRY_REJECTION_PROJECTION_INVALID',
-          'failed Turn retry rejection projection does not match the terminal failure',
-        )
-      }
-
-      const db = openDatabase()
-      db.transaction(() => {
-        const latest = db.prepare(`SELECT id, sequence, type, payload_json FROM turn_events
-          WHERE user_id = ? AND session_id = ? AND turn_id = ?
-          ORDER BY sequence DESC LIMIT 1`).get(
-          userId,
-          failureEvent.sessionId,
-          failureEvent.turnId,
-        )
-        if (!latest
-          || latest.id !== failureEvent.id
-          || latest.sequence !== failureEvent.sequence
-          || latest.type !== 'turn.failed') {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_REJECTION_CONFLICT',
-            'the Turn is no longer at the failed terminal being rejected',
-          )
-        }
-        const failure = parseJsonRecord(latest.payload_json)
-        const retryLimitReached = rejection.code === 'TURN_FAILED_RETRY_LIMIT_REACHED'
-          && failedRetryAttemptCount(db, {
-            userId,
-            sessionId: failureEvent.sessionId,
-            turnId: failureEvent.turnId,
-          }) >= MAX_FAILED_TURN_RETRIES
-        const retryNotAllowed = rejection.code === 'TURN_FAILED_RETRY_NOT_ALLOWED'
-          && !failureSupportsFailedRetry(failure)
-        if (!failureSupportsFailedRetry(failure) && !retryLimitReached && !retryNotAllowed) {
-          throw persistenceError(
-            'TURN_FAILED_RETRY_REJECTION_CONFLICT',
-            'the terminal failure is no longer eligible for failed retry rejection',
-          )
-        }
-        writeMessage(message)
-        assertExistingMessage(readMessage, message, { ignoreCreatedAt: true })
-      }).immediate()
-      return message
-    },
+    commitTurnBoundary: async (input) => commitTurnBoundaryTransaction(runtime, input),
+    commitTurnFailedRetry: async (input) => commitTurnFailedRetryTransaction(runtime, input),
+    commitTurnFailedRetryRejection: async (input) =>
+      commitTurnFailedRetryRejectionTransaction(runtime, input),
   })
 }

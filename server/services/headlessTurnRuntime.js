@@ -166,24 +166,15 @@ function resultForLastEvent({ sessionId, turnId, lastEvent }) {
  * Dependencies are injectable for CLI contract tests; production defaults are
  * the active host persistence adapter and shared TurnEngine singleton.
  */
-export async function runHeadlessTurn({
-  prompt = '',
-  model = null,
-  modelProviderId = null,
-  mode = null,
-  cwd = process.cwd(),
-  workspaceCwd = null,
-  sessionId = null,
-  resumeTurnId = null,
-  token = '',
-  interactive = false,
-  onEvent = () => {},
-  onApproval = null,
-  onToken = () => {},
-  onDiagnostic = () => {},
-  signal = null,
-  env = process.env,
-} = {}, dependencies = {}) {
+function normalizeHeadlessTurnInput(input = {}) {
+  const options = {
+    prompt: '', model: null, modelProviderId: null, mode: null,
+    cwd: process.cwd(), workspaceCwd: null, sessionId: null, resumeTurnId: null,
+    token: '', interactive: false, onEvent: () => {}, onApproval: null,
+    onToken: () => {}, onDiagnostic: () => {}, signal: null, env: process.env,
+    ...input,
+  }
+  const { signal, model, modelProviderId, mode, resumeTurnId } = options
   if (signal !== null && signal !== undefined && (
     typeof signal?.aborted !== 'boolean'
     || typeof signal?.addEventListener !== 'function'
@@ -223,12 +214,20 @@ export async function runHeadlessTurn({
       2,
     )
   }
-  const permissionMode = resumeTurnId ? null : normalizeMode(mode)
-  const executionEnv = Object.isExtensible(env) ? env : { ...env }
+  return {
+    ...options,
+    normalizedModel,
+    normalizedModelProviderId,
+    permissionMode: resumeTurnId ? null : normalizeMode(mode),
+  }
+}
+
+async function prepareHeadlessTurn(input, dependencies) {
+  const executionEnv = Object.isExtensible(input.env) ? input.env : { ...input.env }
   const configure = dependencies.configureWorkspace || configureWorkspace
-  const workspace = configure(workspaceCwd || cwd, executionEnv)
+  const workspace = configure(input.workspaceCwd || input.cwd, executionEnv)
   const authenticate = dependencies.bootstrapAuth || bootstrapAuth
-  const auth = await authenticate({ token, env: executionEnv })
+  const auth = await authenticate({ token: input.token, env: executionEnv })
   if (!auth?.authenticated || !auth?.user?.id) {
     throw new HeadlessTurnError(
       'AUTH_REQUIRED',
@@ -236,20 +235,16 @@ export async function runHeadlessTurn({
       2,
     )
   }
-  if (auth.token && auth.token !== token) await onToken(auth.token)
-
+  if (auth.token && auth.token !== input.token) await input.onToken(auth.token)
   const userId = auth.user.id
   const authMode = auth.mode || resolveAuthMode(executionEnv)
-  const turnId = String(resumeTurnId || dependencies.idFactory?.() || randomUUID())
-  const engine = dependencies.engine
-    || await (dependencies.getEngine || getTurnEngine)()
+  const turnId = String(input.resumeTurnId || dependencies.idFactory?.() || randomUUID())
+  const engine = dependencies.engine || await (dependencies.getEngine || getTurnEngine)()
   const startTurn = requireFunction(engine, 'startTurn', 'headless TurnEngine')
   const recoverTurn = requireFunction(engine, 'recoverTurn', 'headless TurnEngine')
-  const resumeTurn = typeof engine?.resumeTurn === 'function'
-    ? engine.resumeTurn.bind(engine)
-    : null
+  const resumeTurn = typeof engine?.resumeTurn === 'function' ? engine.resumeTurn.bind(engine) : null
   const waitForTurn = requireFunction(engine, 'waitForTurn', 'headless TurnEngine')
-  const cancelTurn = signal
+  const cancelTurn = input.signal
     ? requireFunction(engine, 'cancelTurn', 'headless TurnEngine')
     : null
   const listEvents = dependencies.listEvents
@@ -260,68 +255,84 @@ export async function runHeadlessTurn({
       const { getActiveTurnPersistenceAdapter } = await import('../core/turnPersistenceAdapter.js')
       return getActiveTurnPersistenceAdapter()
     }))()
-  const resolvedSessionId = String(sessionId || (
-    resumeTurnId
+  const resolvedSessionId = String(input.sessionId || (
+    input.resumeTurnId
       ? await resolveResumeSessionId({ persistenceAdapter, userId, turnId })
       : dependencies.idFactory?.() || randomUUID()
   ))
-  const subscribeEvents = dependencies.subscribeEvents || null
-  const decide = dependencies.decideApproval || decideApproval
-  const release = dependencies.releaseApproval || releaseApproval
-  const scope = { userId, sessionId: resolvedSessionId, turnId }
-  const handledApprovalIds = new Set()
-  const pendingApprovalTasks = new Set()
-  let cursor = -1
-  let lastEvent = null
-  let turnReadyForCancellation = Boolean(resumeTurnId)
-  let cancellationRequested = false
-  let cancellationStarted = false
-  let cancellationError = null
-  let cancellationTask = null
+  return {
+    input,
+    dependencies,
+    executionEnv,
+    workspace,
+    authMode,
+    scope: { userId, sessionId: resolvedSessionId, turnId },
+    startTurn,
+    recoverTurn,
+    resumeTurn,
+    waitForTurn,
+    cancelTurn,
+    listEvents,
+    decide: dependencies.decideApproval || decideApproval,
+    release: dependencies.releaseApproval || releaseApproval,
+    subscribeEvents: dependencies.subscribeEvents || null,
+    wait: dependencies.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
+  }
+}
 
+function createHeadlessEventController(runtime) {
+  const { input, scope } = runtime
+  const state = {
+    handledApprovalIds: new Set(),
+    pendingApprovalTasks: new Set(),
+    cursor: -1,
+    lastEvent: null,
+    turnReadyForCancellation: Boolean(input.resumeTurnId),
+    cancellationRequested: false,
+    cancellationStarted: false,
+    cancellationError: null,
+    cancellationTask: null,
+  }
   const resolveApproval = async (event) => {
     const approvalId = String(event?.payload?.approvalId || '')
-    if (!approvalId || handledApprovalIds.has(approvalId)) return
-    handledApprovalIds.add(approvalId)
+    if (!approvalId || state.handledApprovalIds.has(approvalId)) return
+    state.handledApprovalIds.add(approvalId)
     let decision = 'deny'
-    if (interactive && typeof onApproval === 'function') {
+    if (input.interactive && typeof input.onApproval === 'function') {
       try {
-        decision = normalizeApprovalDecision(await onApproval(event))
+        decision = normalizeApprovalDecision(await input.onApproval(event))
       } catch (error) {
-        onDiagnostic(`approval prompt failed; denied ${approvalId}: ${error?.message || error}`)
+        input.onDiagnostic(`approval prompt failed; denied ${approvalId}: ${error?.message || error}`)
       }
     }
     try {
-      await decide({
-        userId,
+      await runtime.decide({
+        userId: scope.userId,
         id: approvalId,
         decision,
-        decidedBy: userId,
+        decidedBy: scope.userId,
       })
     } finally {
-      await release(approvalId)
+      await runtime.release(approvalId)
     }
   }
-
   const queueApproval = (event) => {
     const task = Promise.resolve()
       .then(() => resolveApproval(event))
-      .catch((error) => onDiagnostic(`approval decision failed: ${error?.message || error}`))
-      .finally(() => pendingApprovalTasks.delete(task))
-    pendingApprovalTasks.add(task)
+      .catch((error) => input.onDiagnostic(`approval decision failed: ${error?.message || error}`))
+      .finally(() => state.pendingApprovalTasks.delete(task))
+    state.pendingApprovalTasks.add(task)
   }
-
   const deliver = (event) => {
-    if (!event || !Number.isInteger(event.sequence) || event.sequence <= cursor) return
-    cursor = event.sequence
-    lastEvent = event
-    onEvent(turnEventForClient(event))
+    if (!event || !Number.isInteger(event.sequence) || event.sequence <= state.cursor) return
+    state.cursor = event.sequence
+    state.lastEvent = event
+    input.onEvent(turnEventForClient(event))
     if (event.type === 'approval.required') queueApproval(event)
   }
-
   const drainPersistedEvents = async () => {
     while (true) {
-      const page = await listEvents({ ...scope, after: cursor, limit: 2_000 })
+      const page = await runtime.listEvents({ ...scope, after: state.cursor, limit: 2_000 })
       if (!Array.isArray(page)) {
         throw new HeadlessTurnError(
           'TURN_PERSISTENCE_ADAPTER_INVALID',
@@ -329,39 +340,138 @@ export async function runHeadlessTurn({
         )
       }
       if (page.length === 0) break
-      const before = cursor
+      const before = state.cursor
       for (const event of page) deliver(event)
-      if (cursor <= before || page.length < 2_000) break
+      if (state.cursor <= before || page.length < 2_000) break
     }
   }
-
-  const wait = dependencies.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
-  let unsubscribe = () => {}
-  let removeAbortListener = () => {}
   const requestCancellation = () => {
-    cancellationRequested = true
-    if (!turnReadyForCancellation || cancellationStarted || !cancelTurn) return
-    cancellationStarted = true
-    cancellationTask = Promise.resolve()
-      .then(() => cancelTurn({ ...scope, authMode }))
+    state.cancellationRequested = true
+    if (!state.turnReadyForCancellation || state.cancellationStarted || !runtime.cancelTurn) return
+    state.cancellationStarted = true
+    state.cancellationTask = Promise.resolve()
+      .then(() => runtime.cancelTurn({ ...scope, authMode: runtime.authMode }))
       .catch((error) => {
-        cancellationError = error
-        onDiagnostic(`turn cancellation failed: ${error?.message || error}`)
+        state.cancellationError = error
+        input.onDiagnostic(`turn cancellation failed: ${error?.message || error}`)
       })
   }
   const throwCancellationError = () => {
-    if (cancellationError) throw cancellationError
+    if (state.cancellationError) throw state.cancellationError
   }
-  try {
-    if (signal) {
-      const onAbort = () => requestCancellation()
-      signal.addEventListener('abort', onAbort, { once: true })
-      removeAbortListener = () => signal.removeEventListener('abort', onAbort)
-      if (signal.aborted) onAbort()
+  return {
+    state,
+    deliver,
+    drainPersistedEvents,
+    requestCancellation,
+    throwCancellationError,
+  }
+}
+
+async function startOrRecoverHeadlessTurn(runtime, controller) {
+  const { input, scope } = runtime
+  if (input.resumeTurnId) {
+    await controller.drainPersistedEvents()
+    await Promise.all([...controller.state.pendingApprovalTasks])
+    if (runtime.resumeTurn) {
+      const resumedTurn = await runtime.resumeTurn({
+        ...scope, authMode: runtime.authMode, retryRecovery: true,
+      })
+      return {
+        turn: resumedTurn,
+        terminal: ['completed', 'failed', 'cancelled'].includes(resumedTurn?.status),
+        paused: resumedTurn?.status === 'paused',
+        locallyActive: false,
+      }
     }
-    if (subscribeEvents) {
-      const subscribe = requireFunction(dependencies, 'subscribeEvents', 'headless dependencies')
-      const subscribed = await subscribe(scope, deliver)
+    return runtime.recoverTurn({ ...scope, authMode: runtime.authMode })
+  }
+  const content = String(input.prompt || '').trim()
+  if (!content) throw new HeadlessTurnError('PROMPT_REQUIRED', 'prompt is required', 2)
+  await runtime.startTurn({
+    ...scope,
+    content,
+    modelName: input.normalizedModel,
+    modelProviderId: input.normalizedModelProviderId,
+    intentMode: input.permissionMode === 'plan' ? 'answer' : 'auto',
+    approvalMode: input.permissionMode,
+    authMode: runtime.authMode,
+  })
+  controller.state.turnReadyForCancellation = true
+  if (controller.state.cancellationRequested) controller.requestCancellation()
+  return null
+}
+
+async function waitForHeadlessTurn(runtime, controller, recoveryOutcome) {
+  const { input, scope } = runtime
+  const { state } = controller
+  while (input.resumeTurnId
+    && recoveryOutcome
+    && !recoveryOutcome.terminal
+    && !recoveryOutcome.paused
+    && recoveryOutcome.locallyActive === false
+    && !STOP_EVENT_TYPES.has(state.lastEvent?.type)) {
+    await runtime.wait(250)
+    await controller.drainPersistedEvents()
+    controller.throwCancellationError()
+    if (STOP_EVENT_TYPES.has(state.lastEvent?.type)) break
+    recoveryOutcome = await runtime.recoverTurn({ ...scope, authMode: runtime.authMode })
+  }
+  let engineWaitSettled = false
+  let engineWaitError = null
+  const engineWait = Promise.resolve()
+    .then(() => runtime.waitForTurn(scope))
+    .then(
+      () => { engineWaitSettled = true },
+      (error) => {
+        engineWaitError = error
+        engineWaitSettled = true
+      },
+    )
+  while (!engineWaitSettled && !STOP_EVENT_TYPES.has(state.lastEvent?.type)) {
+    await controller.drainPersistedEvents()
+    await Promise.all([...state.pendingApprovalTasks])
+    controller.throwCancellationError()
+    if (engineWaitSettled || STOP_EVENT_TYPES.has(state.lastEvent?.type)) break
+    await Promise.race([engineWait, runtime.wait(250)])
+  }
+  if (!STOP_EVENT_TYPES.has(state.lastEvent?.type)) await engineWait
+  if (engineWaitSettled && engineWaitError) throw engineWaitError
+  controller.throwCancellationError()
+  await controller.drainPersistedEvents()
+  await Promise.all([...state.pendingApprovalTasks])
+  await controller.drainPersistedEvents()
+  while (!STOP_EVENT_TYPES.has(state.lastEvent?.type)) {
+    await runtime.wait(250)
+    await controller.drainPersistedEvents()
+    controller.throwCancellationError()
+  }
+  if (state.cancellationTask) await state.cancellationTask
+  controller.throwCancellationError()
+  return {
+    ...resultForLastEvent({
+      sessionId: scope.sessionId,
+      turnId: scope.turnId,
+      lastEvent: state.lastEvent,
+    }),
+    workspace: runtime.workspace,
+  }
+}
+
+async function executeHeadlessTurn(runtime) {
+  const controller = createHeadlessEventController(runtime)
+  let unsubscribe = () => {}
+  let removeAbortListener = () => {}
+  try {
+    if (runtime.input.signal) {
+      const onAbort = () => controller.requestCancellation()
+      runtime.input.signal.addEventListener('abort', onAbort, { once: true })
+      removeAbortListener = () => runtime.input.signal.removeEventListener('abort', onAbort)
+      if (runtime.input.signal.aborted) onAbort()
+    }
+    if (runtime.subscribeEvents) {
+      const subscribe = requireFunction(runtime.dependencies, 'subscribeEvents', 'headless dependencies')
+      const subscribed = await subscribe(runtime.scope, controller.deliver)
       if (typeof subscribed !== 'function') {
         throw new HeadlessTurnError(
           'TURN_PERSISTENCE_ADAPTER_INVALID',
@@ -370,104 +480,17 @@ export async function runHeadlessTurn({
       }
       unsubscribe = subscribed
     }
-    let recoveryOutcome = null
-    if (resumeTurnId) {
-      await drainPersistedEvents()
-      // A recovered checkpoint may already be waiting on an approval. Resolve
-      // replayed approval events before the loop re-enters its durable waiter.
-      await Promise.all([...pendingApprovalTasks])
-      // `gugo run --resume` is an explicit user recovery action. Route it
-      // through the public engine gate so a dead-letter is cleared deliberately
-      // instead of bypassing recovery policy through the internal worker API.
-      // Older injected engines only expose recoverTurn; keep that compatibility
-      // path for adapters that predate the public resume entry point.
-      if (resumeTurn) {
-        const resumedTurn = await resumeTurn({ ...scope, authMode, retryRecovery: true })
-        recoveryOutcome = {
-          turn: resumedTurn,
-          terminal: ['completed', 'failed', 'cancelled'].includes(resumedTurn?.status),
-          paused: resumedTurn?.status === 'paused',
-          locallyActive: false,
-        }
-      } else {
-        recoveryOutcome = await recoverTurn({ ...scope, authMode })
-      }
-    } else {
-      const content = String(prompt || '').trim()
-      if (!content) throw new HeadlessTurnError('PROMPT_REQUIRED', 'prompt is required', 2)
-      await startTurn({
-        ...scope,
-        content,
-        modelName: normalizedModel,
-        modelProviderId: normalizedModelProviderId,
-        intentMode: permissionMode === 'plan' ? 'answer' : 'auto',
-        approvalMode: permissionMode,
-        authMode,
-      })
-      turnReadyForCancellation = true
-      if (cancellationRequested) requestCancellation()
-    }
-
-    // A crashed process may leave a still-valid durable execution lease. The
-    // first recovery attempt must not steal it, but a headless invocation has
-    // no background recovery worker to retry after that lease expires. Keep
-    // re-entering the atomic recovery path until this process owns the turn or
-    // another process writes a durable stop event.
-    while (
-      resumeTurnId
-      && recoveryOutcome
-      && !recoveryOutcome.terminal
-      && !recoveryOutcome.paused
-      && recoveryOutcome.locallyActive === false
-      && !STOP_EVENT_TYPES.has(lastEvent?.type)
-    ) {
-      await wait(250)
-      await drainPersistedEvents()
-      throwCancellationError()
-      if (STOP_EVENT_TYPES.has(lastEvent?.type)) break
-      recoveryOutcome = await recoverTurn({ ...scope, authMode })
-    }
-
-    let engineWaitSettled = false
-    let engineWaitError = null
-    const engineWait = Promise.resolve()
-      .then(() => waitForTurn(scope))
-      .then(
-        () => { engineWaitSettled = true },
-        (error) => {
-          engineWaitError = error
-          engineWaitSettled = true
-        },
-      )
-    while (!engineWaitSettled && !STOP_EVENT_TYPES.has(lastEvent?.type)) {
-      await drainPersistedEvents()
-      await Promise.all([...pendingApprovalTasks])
-      throwCancellationError()
-      if (engineWaitSettled || STOP_EVENT_TYPES.has(lastEvent?.type)) break
-      await Promise.race([engineWait, wait(250)])
-    }
-    // The durable terminal event is authoritative. A custom or externally
-    // owned engine may leave waitForTurn pending after that event is written;
-    // waiting for it here would hang an otherwise safely stopped CLI turn.
-    if (!STOP_EVENT_TYPES.has(lastEvent?.type)) await engineWait
-    if (engineWaitSettled && engineWaitError) throw engineWaitError
-    throwCancellationError()
-    await drainPersistedEvents()
-    await Promise.all([...pendingApprovalTasks])
-    await drainPersistedEvents()
-
-    // A different process may own the execution lease. Its events are durable
-    // but are not published through this process's in-memory subscription.
-    while (!STOP_EVENT_TYPES.has(lastEvent?.type)) {
-      await wait(250)
-      await drainPersistedEvents()
-      throwCancellationError()
-    }
-    if (cancellationTask) await cancellationTask
-    throwCancellationError()
-    return { ...resultForLastEvent({ sessionId: resolvedSessionId, turnId, lastEvent }), workspace }
+    const recoveryOutcome = await startOrRecoverHeadlessTurn(runtime, controller)
+    return await waitForHeadlessTurn(runtime, controller, recoveryOutcome)
   } finally {
     removeAbortListener()
     await unsubscribe()
   }
+}
+
+/** Run or recover one durable TurnEngine turn without an HTTP server/browser. */
+export async function runHeadlessTurn(input = {}, dependencies = {}) {
+  const normalizedInput = normalizeHeadlessTurnInput(input)
+  const runtime = await prepareHeadlessTurn(normalizedInput, dependencies)
+  return executeHeadlessTurn(runtime)
 }
