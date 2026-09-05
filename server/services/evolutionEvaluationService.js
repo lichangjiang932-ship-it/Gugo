@@ -295,6 +295,134 @@ function evaluationView(row, { includeDetails = false } = {}) {
   }
 }
 
+async function runEvaluationModelCheckpoint({
+  operation,
+  owner,
+  replay,
+  suite,
+  candidate,
+  durableEvaluatorProvider,
+  evaluatorIdentity,
+  evaluatorModel,
+  signal,
+  runModel,
+}) {
+  let normalized = operation.checkpoint?.normalized || null
+  let resultId = operation.checkpoint?.resultId || null
+  if (normalized) return { operation, normalized, resultId }
+  const modelClaim = claimEvolutionOperation({
+    userId: owner,
+    id: operation.id,
+    stage: 'evaluation:model_call',
+  })
+  const modelLease = holdEvolutionOperationLease({
+    userId: owner,
+    id: operation.id,
+    workerToken: modelClaim.workerToken,
+    leaseOwnerId: modelClaim.leaseOwnerId,
+    leaseExpiresAt: modelClaim.leaseExpiresAt,
+    signal,
+  })
+  let response
+  try {
+    response = await runModel({
+      messages: evaluationMessages({ replay, suite, candidate }),
+      userId: owner,
+      providerId: durableEvaluatorProvider,
+      runtimeProviderId: evaluatorIdentity.runtimeProviderId,
+      runtimeEnv: evaluatorIdentity.runtimeEnv,
+      configRevision: evaluatorIdentity.configRevision,
+      modelName: evaluatorModel,
+      signal: modelLease.signal,
+    })
+  } catch (error) {
+    const failure = error?.name === 'AbortError' || error?.code
+      ? error
+      : serviceError('EVOLUTION_EVALUATOR_MODEL_FAILED', 'independent evaluator model failed', 502)
+    try {
+      blockEvolutionOperation({
+        userId: owner,
+        id: operation.id,
+        workerToken: modelClaim.workerToken,
+        leaseOwnerId: modelClaim.leaseOwnerId,
+        error: failure,
+      })
+    } finally {
+      modelLease.stop()
+    }
+    throw attachEvolutionOperationError(failure, operation.id)
+  }
+  try {
+    const actualProvider = String(response?.providerId || '').trim()
+    const actualModel = String(response?.modelName || '').trim()
+    if (actualProvider !== durableEvaluatorProvider || actualModel !== evaluatorModel) {
+      throw serviceError('EVOLUTION_EVALUATOR_MODEL_MISMATCH', 'evaluation did not use the selected Provider and model', 502)
+    }
+    if (actualProvider === replay.providerId && actualModel === replay.modelName) {
+      throw serviceError('EVOLUTION_EVALUATOR_NOT_INDEPENDENT', 'actual evaluator identity was not independent', 409)
+    }
+    normalized = normalizeAssessments(response?.content ?? response, replay, suite)
+    assertEvolutionModelIdentityCurrent({ userId: owner, identity: evaluatorIdentity })
+    resultId = randomUUID()
+    operation = checkpointEvolutionOperation({
+      userId: owner,
+      id: operation.id,
+      workerToken: modelClaim.workerToken,
+      leaseOwnerId: modelClaim.leaseOwnerId,
+      stage: 'evaluation:model_response_checkpointed',
+      checkpoint: {
+        modelResponseStored: true,
+        resultId,
+        normalized,
+        progress: { modelResponseStored: true },
+      },
+    })
+  } catch (error) {
+    try {
+      if (error?.code !== 'EVOLUTION_OPERATION_IN_PROGRESS') {
+        failEvolutionOperation({
+          userId: owner,
+          id: operation.id,
+          workerToken: modelClaim.workerToken,
+          leaseOwnerId: modelClaim.leaseOwnerId,
+          error,
+        })
+      }
+    } finally {
+      modelLease.stop()
+    }
+    throw attachEvolutionOperationError(error, operation.id)
+  }
+  modelLease.stop()
+  return { operation, normalized, resultId }
+}
+
+function defaultEvaluationModelRunner({
+  messages,
+  userId,
+  providerId,
+  runtimeProviderId,
+  runtimeEnv,
+  modelName,
+  signal,
+}) {
+  return callEvolutionBackgroundModel({
+    messages,
+    userId,
+    providerId,
+    runtimeProviderId,
+    modelName,
+    signal,
+    runtimeEnv,
+    envOverrides: {
+      MODEL_STRICT_SELECTION: '1',
+      MODEL_FAILOVER_CROSS_MODEL: '0',
+      MODEL_TEMPERATURE: '0',
+      MODEL_MAX_TOKENS: '2048',
+    },
+  })
+}
+
 export async function evaluateEvolutionReplay({
   userId,
   replayId,
@@ -304,23 +432,7 @@ export async function evaluateEvolutionReplay({
   operationId,
   now = Date.now(),
   signal,
-  runModel = ({ messages, userId: owner, providerId, runtimeProviderId, runtimeEnv, modelName, signal: abortSignal }) => (
-    callEvolutionBackgroundModel({
-      messages,
-      userId: owner,
-      providerId,
-      runtimeProviderId,
-      modelName,
-      signal: abortSignal,
-      runtimeEnv,
-      envOverrides: {
-        MODEL_STRICT_SELECTION: '1',
-        MODEL_FAILOVER_CROSS_MODEL: '0',
-        MODEL_TEMPERATURE: '0',
-        MODEL_MAX_TOKENS: '2048',
-      },
-    })
-  ),
+  runModel = defaultEvaluationModelRunner,
 } = {}) {
   const owner = String(userId || '').trim()
   if (!owner) throw serviceError('EVOLUTION_USER_REQUIRED', 'userId is required')
@@ -376,94 +488,20 @@ export async function evaluateEvolutionReplay({
   }
   assertEvolutionOperationRunnable(operation)
 
-  let normalized = operation.checkpoint?.normalized || null
-  let resultId = operation.checkpoint?.resultId || null
-  if (!normalized) {
-    const modelClaim = claimEvolutionOperation({
-      userId: owner,
-      id: operation.id,
-      stage: 'evaluation:model_call',
-    })
-    const modelLease = holdEvolutionOperationLease({
-      userId: owner,
-      id: operation.id,
-      workerToken: modelClaim.workerToken,
-      leaseOwnerId: modelClaim.leaseOwnerId,
-      leaseExpiresAt: modelClaim.leaseExpiresAt,
-      signal,
-    })
-    let response
-    try {
-      response = await runModel({
-        messages: evaluationMessages({ replay, suite, candidate }),
-        userId: owner,
-        providerId: durableEvaluatorProvider,
-        runtimeProviderId: evaluatorIdentity.runtimeProviderId,
-        runtimeEnv: evaluatorIdentity.runtimeEnv,
-        configRevision: evaluatorIdentity.configRevision,
-        modelName: evaluatorModel,
-        signal: modelLease.signal,
-      })
-    } catch (error) {
-      const failure = error?.name === 'AbortError' || error?.code
-        ? error
-        : serviceError('EVOLUTION_EVALUATOR_MODEL_FAILED', 'independent evaluator model failed', 502)
-      try {
-        blockEvolutionOperation({
-          userId: owner,
-          id: operation.id,
-          workerToken: modelClaim.workerToken,
-          leaseOwnerId: modelClaim.leaseOwnerId,
-          error: failure,
-        })
-      } finally {
-        modelLease.stop()
-      }
-      throw attachEvolutionOperationError(failure, operation.id)
-    }
-    try {
-      const actualProvider = String(response?.providerId || '').trim()
-      const actualModel = String(response?.modelName || '').trim()
-      if (actualProvider !== durableEvaluatorProvider || actualModel !== evaluatorModel) {
-        throw serviceError('EVOLUTION_EVALUATOR_MODEL_MISMATCH', 'evaluation did not use the selected Provider and model', 502)
-      }
-      if (actualProvider === replay.providerId && actualModel === replay.modelName) {
-        throw serviceError('EVOLUTION_EVALUATOR_NOT_INDEPENDENT', 'actual evaluator identity was not independent', 409)
-      }
-      normalized = normalizeAssessments(response?.content ?? response, replay, suite)
-      assertEvolutionModelIdentityCurrent({ userId: owner, identity: evaluatorIdentity })
-      resultId = randomUUID()
-      operation = checkpointEvolutionOperation({
-        userId: owner,
-        id: operation.id,
-        workerToken: modelClaim.workerToken,
-        leaseOwnerId: modelClaim.leaseOwnerId,
-        stage: 'evaluation:model_response_checkpointed',
-        checkpoint: {
-          modelResponseStored: true,
-          resultId,
-          normalized,
-          progress: { modelResponseStored: true },
-        },
-      })
-    } catch (error) {
-      try {
-        if (error?.code !== 'EVOLUTION_OPERATION_IN_PROGRESS') {
-          failEvolutionOperation({
-            userId: owner,
-            id: operation.id,
-            workerToken: modelClaim.workerToken,
-            leaseOwnerId: modelClaim.leaseOwnerId,
-            error,
-          })
-        }
-      } finally {
-        modelLease.stop()
-      }
-      throw attachEvolutionOperationError(error, operation.id)
-    }
-    modelLease.stop()
-  }
+  const evaluated = await runEvaluationModelCheckpoint({
+    operation,
+    owner,
+    replay,
+    suite,
+    candidate,
+    durableEvaluatorProvider,
+    evaluatorIdentity,
+    evaluatorModel,
+    signal,
+    runModel,
+  })
+  operation = evaluated.operation
+  const { normalized, resultId } = evaluated
 
   const metrics = buildMetrics(replay, candidate, normalized.assessments)
   const policy = policyVerdict(metrics)

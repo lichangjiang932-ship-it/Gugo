@@ -277,90 +277,24 @@ async function replayOne({ runModel, userId, providerId, runtimeProviderId, runt
   }
 }
 
-export async function runEvolutionReplay({
-  userId,
-  suiteId,
-  candidateId,
-  baselineContent,
-  providerId,
-  modelName,
-  parameters: parametersValue,
-  idempotencyKey,
-  operationId,
-  now = Date.now(),
+async function runReplayCaseCheckpoints({
+  operation,
+  suite,
+  candidate,
+  owner,
+  durableProvider,
+  modelIdentity,
+  fixedModel,
+  parameters,
+  baseline,
   signal,
-  runModel = ({ messages, userId: owner, providerId: fixedProvider, runtimeProviderId, runtimeEnv, modelName: fixedModel, parameters, signal: abortSignal }) => (
-    callEvolutionBackgroundModel({
-      messages,
-      userId: owner,
-      providerId: fixedProvider,
-      runtimeProviderId,
-      modelName: fixedModel,
-      signal: abortSignal,
-      runtimeEnv,
-      envOverrides: {
-        MODEL_STRICT_SELECTION: '1',
-        MODEL_FAILOVER_CROSS_MODEL: '0',
-        MODEL_TEMPERATURE: String(parameters.temperature),
-        MODEL_MAX_TOKENS: String(parameters.maxTokens),
-      },
-    })
-  ),
-} = {}) {
-  const owner = String(userId || '').trim()
-  if (!owner) throw serviceError('EVOLUTION_USER_REQUIRED', 'userId is required')
-  const suite = getEvolutionReplaySuite({ userId: owner, id: suiteId })
-  const candidate = getEvolutionCandidate({ userId: owner, id: candidateId })
-  if (candidate.kind !== 'prompt') {
-    throw serviceError('EVOLUTION_REPLAY_KIND_UNSUPPORTED', 'only prompt candidates can be replayed safely', 409)
-  }
-  if (candidate.provenance.datasetFingerprint !== suite.datasetFingerprint) {
-    throw serviceError('EVOLUTION_REPLAY_PROVENANCE_MISMATCH', 'candidate and replay suite use different datasets', 409)
-  }
-  const baseline = inputText(
-    baselineContent,
-    24_000,
-    'EVOLUTION_REPLAY_BASELINE_INVALID',
-    'baselineContent',
-  )
-  const fixedProvider = inputText(providerId, 512, 'EVOLUTION_REPLAY_PROVIDER_INVALID', 'providerId')
-  const fixedModel = inputText(modelName, 512, 'EVOLUTION_REPLAY_MODEL_INVALID', 'modelName')
-  const modelIdentity = resolveEvolutionModelIdentity({
-    userId: owner,
-    providerId: fixedProvider,
-    modelName: fixedModel,
-  })
-  const durableProvider = modelIdentity.providerId
-  const parameters = replayParameters(parametersValue)
-  const createdAt = timestamp(now)
-  let operation = openEvolutionOperation({
-    userId: owner,
-    kind: 'replay',
-    idempotencyKey,
-    operationId,
-    request: {
-      suiteId: suite.id,
-      suiteFingerprint: suite.suiteFingerprint,
-      candidateId: candidate.id,
-      candidateSha256: candidate.contentSha256,
-      baselineContent: baseline,
-      providerId: durableProvider,
-      modelName: fixedModel,
-      configRevision: modelIdentity.configRevision,
-      parameters,
-    },
-    now: createdAt,
-  })
-  if (operation.state === 'completed') {
-    return getEvolutionReplayRun({ userId: owner, id: operation.result.id })
-  }
-  assertEvolutionOperationRunnable(operation)
-
+  runModel,
+}) {
   const storedResults = Array.isArray(operation.checkpoint?.results)
     ? operation.checkpoint.results
     : []
   const results = storedResults.map((result) => ({ ...result }))
-  let resultId = operation.checkpoint?.resultId || randomUUID()
+  const resultId = operation.checkpoint?.resultId || randomUUID()
   for (let caseIndex = 0; caseIndex < suite.cases.length; caseIndex += 1) {
     const replayCase = suite.cases[caseIndex]
     let result = results[caseIndex]
@@ -371,7 +305,6 @@ export async function runEvolutionReplay({
       result = { caseId: replayCase.id }
       results[caseIndex] = result
     }
-
     for (const side of ['baseline', 'candidate']) {
       if (result[side]) continue
       const modelClaim = claimEvolutionOperation({
@@ -461,6 +394,114 @@ export async function runEvolutionReplay({
       modelLease.stop()
     }
   }
+  return { operation, results, resultId }
+}
+
+function defaultReplayModelRunner({
+  messages,
+  userId,
+  providerId,
+  runtimeProviderId,
+  runtimeEnv,
+  modelName,
+  parameters,
+  signal,
+}) {
+  return callEvolutionBackgroundModel({
+    messages,
+    userId,
+    providerId,
+    runtimeProviderId,
+    modelName,
+    signal,
+    runtimeEnv,
+    envOverrides: {
+      MODEL_STRICT_SELECTION: '1',
+      MODEL_FAILOVER_CROSS_MODEL: '0',
+      MODEL_TEMPERATURE: String(parameters.temperature),
+      MODEL_MAX_TOKENS: String(parameters.maxTokens),
+    },
+  })
+}
+
+export async function runEvolutionReplay({
+  userId,
+  suiteId,
+  candidateId,
+  baselineContent,
+  providerId,
+  modelName,
+  parameters: parametersValue,
+  idempotencyKey,
+  operationId,
+  now = Date.now(),
+  signal,
+  runModel = defaultReplayModelRunner,
+} = {}) {
+  const owner = String(userId || '').trim()
+  if (!owner) throw serviceError('EVOLUTION_USER_REQUIRED', 'userId is required')
+  const suite = getEvolutionReplaySuite({ userId: owner, id: suiteId })
+  const candidate = getEvolutionCandidate({ userId: owner, id: candidateId })
+  if (candidate.kind !== 'prompt') {
+    throw serviceError('EVOLUTION_REPLAY_KIND_UNSUPPORTED', 'only prompt candidates can be replayed safely', 409)
+  }
+  if (candidate.provenance.datasetFingerprint !== suite.datasetFingerprint) {
+    throw serviceError('EVOLUTION_REPLAY_PROVENANCE_MISMATCH', 'candidate and replay suite use different datasets', 409)
+  }
+  const baseline = inputText(
+    baselineContent,
+    24_000,
+    'EVOLUTION_REPLAY_BASELINE_INVALID',
+    'baselineContent',
+  )
+  const fixedProvider = inputText(providerId, 512, 'EVOLUTION_REPLAY_PROVIDER_INVALID', 'providerId')
+  const fixedModel = inputText(modelName, 512, 'EVOLUTION_REPLAY_MODEL_INVALID', 'modelName')
+  const modelIdentity = resolveEvolutionModelIdentity({
+    userId: owner,
+    providerId: fixedProvider,
+    modelName: fixedModel,
+  })
+  const durableProvider = modelIdentity.providerId
+  const parameters = replayParameters(parametersValue)
+  const createdAt = timestamp(now)
+  let operation = openEvolutionOperation({
+    userId: owner,
+    kind: 'replay',
+    idempotencyKey,
+    operationId,
+    request: {
+      suiteId: suite.id,
+      suiteFingerprint: suite.suiteFingerprint,
+      candidateId: candidate.id,
+      candidateSha256: candidate.contentSha256,
+      baselineContent: baseline,
+      providerId: durableProvider,
+      modelName: fixedModel,
+      configRevision: modelIdentity.configRevision,
+      parameters,
+    },
+    now: createdAt,
+  })
+  if (operation.state === 'completed') {
+    return getEvolutionReplayRun({ userId: owner, id: operation.result.id })
+  }
+  assertEvolutionOperationRunnable(operation)
+
+  const replayed = await runReplayCaseCheckpoints({
+    operation,
+    suite,
+    candidate,
+    owner,
+    durableProvider,
+    modelIdentity,
+    fixedModel,
+    parameters,
+    baseline,
+    signal,
+    runModel,
+  })
+  operation = replayed.operation
+  const { results, resultId } = replayed
 
   const baselineSha256 = sha256(baseline)
   const runFingerprint = sha256({
