@@ -85,27 +85,8 @@ function publicEntry(record) {
  * previous record, which lets plugin reload/unload roll back without rebuilding
  * the process-wide router.
  */
-export function createHttpCapabilityRegistry({
-  audit = null,
-  now = () => Date.now(),
-  auditLimit = DEFAULT_AUDIT_LIMIT,
-} = {}) {
-  if (audit !== null && typeof audit !== 'function') {
-    throw registryError('HTTP_CAPABILITY_INVALID', 'HTTP capability audit must be a function or null')
-  }
-  if (typeof now !== 'function') {
-    throw registryError('HTTP_CAPABILITY_INVALID', 'HTTP capability now must be a function')
-  }
-  if (!Number.isSafeInteger(auditLimit) || auditLimit < 1 || auditLimit > 10_000) {
-    throw registryError('HTTP_CAPABILITY_INVALID', 'HTTP capability auditLimit must be 1..10000')
-  }
-
-  const activeById = new Map()
-  const reservedIds = new Map()
-  const auditEvents = []
-  let sequence = 0
-
-  const emitAudit = (event, record, details = {}) => {
+function createHttpCapabilityAuditEmitter({ audit, now, auditLimit, auditEvents }) {
+  return (event, record, details = {}) => {
     const entry = Object.freeze({
       event,
       capabilityId: record.definition.id,
@@ -118,13 +99,123 @@ export function createHttpCapabilityRegistry({
     auditEvents.push(entry)
     if (auditEvents.length > auditLimit) auditEvents.splice(0, auditEvents.length - auditLimit)
     if (audit) {
-      try {
-        audit(entry)
-      } catch {
-        // Observability adapters must never make the router unavailable.
-      }
+      try { audit(entry) } catch { /* observability cannot break the router */ }
     }
   }
+}
+
+function unregisterHttpCapability(record, { activeById, release, emitAudit }) {
+  if (record.disposed) return false
+  if (!record.active || activeById.get(record.definition.id) !== record) {
+    throw registryError(
+      'HTTP_CAPABILITY_REPLACEMENT_ACTIVE',
+      `HTTP capability ${record.definition.id} cannot unload while its replacement is active`,
+    )
+  }
+  activeById.delete(record.definition.id)
+  record.active = false
+  record.disposed = true
+  release(record.definition.id)
+  emitAudit('http_capability.unregistered', record)
+  const replaced = record.replacedRecord
+  if (replaced && !replaced.disposed) {
+    if (activeById.has(replaced.definition.id)) {
+      throw registryError(
+        'HTTP_CAPABILITY_RESTORE_CONFLICT',
+        `HTTP capability ${replaced.definition.id} cannot be restored because its id is active`,
+      )
+    }
+    replaced.active = true
+    activeById.set(replaced.definition.id, replaced)
+    emitAudit('http_capability.restored', replaced, {
+      removedCapabilityId: record.definition.id,
+    })
+  }
+  return true
+}
+
+function registerHttpCapabilityBatch(definitions, register) {
+  if (!Array.isArray(definitions)) {
+    throw registryError('HTTP_CAPABILITY_INVALID', 'HTTP capabilities must be an array')
+  }
+  const disposers = []
+  try {
+    for (const definition of definitions) disposers.push(register(definition))
+  } catch (error) {
+    const rollbackErrors = []
+    for (const dispose of [...disposers].reverse()) {
+      try { dispose() } catch (rollbackError) { rollbackErrors.push(rollbackError) }
+    }
+    if (rollbackErrors.length > 0) {
+      const failure = new AggregateError(
+        [error, ...rollbackErrors],
+        'HTTP capability batch registration rollback failed',
+        { cause: error },
+      )
+      failure.code = 'HTTP_CAPABILITY_ROLLBACK_FAILED'
+      failure.retryable = false
+      throw failure
+    }
+    throw error
+  }
+  const entries = disposers.map((handle) => ({ handle, revoked: false }))
+  let disposed = false
+  const dispose = () => {
+    if (disposed) return false
+    for (const entry of [...entries].reverse()) {
+      if (entry.revoked) continue
+      entry.handle()
+      entry.revoked = true
+    }
+    disposed = true
+    return true
+  }
+  return attachRuntimePluginBeginRevoke(dispose, () => {
+    if (disposed) return createRuntimePluginRevokeReceipt('revoked')
+    const cleanups = []
+    let visibility = 'revoked'
+    for (const entry of [...entries].reverse()) {
+      if (entry.revoked) continue
+      const receipt = entry.handle.beginRevoke()
+      if (receipt.visibility === 'revoked') entry.revoked = true
+      else if (receipt.visibility === 'indeterminate') visibility = 'indeterminate'
+      else if (visibility !== 'indeterminate') visibility = 'retained'
+      if (receipt.cleanup) cleanups.push(receipt.cleanup)
+    }
+    if (entries.every((entry) => entry.revoked)) {
+      visibility = 'revoked'
+      disposed = true
+    }
+    const cleanup = cleanups.length > 0 ? Promise.all(cleanups).then(() => true) : null
+    return createRuntimePluginRevokeReceipt(visibility, cleanup)
+  })
+}
+
+function validateHttpRegistryOptions({ audit, now, auditLimit }) {
+  if (audit !== null && typeof audit !== 'function') {
+    throw registryError('HTTP_CAPABILITY_INVALID', 'HTTP capability audit must be a function or null')
+  }
+  if (typeof now !== 'function') {
+    throw registryError('HTTP_CAPABILITY_INVALID', 'HTTP capability now must be a function')
+  }
+  if (!Number.isSafeInteger(auditLimit) || auditLimit < 1 || auditLimit > 10_000) {
+    throw registryError('HTTP_CAPABILITY_INVALID', 'HTTP capability auditLimit must be 1..10000')
+  }
+}
+
+export function createHttpCapabilityRegistry({
+  audit = null,
+  now = () => Date.now(),
+  auditLimit = DEFAULT_AUDIT_LIMIT,
+} = {}) {
+  validateHttpRegistryOptions({ audit, now, auditLimit })
+
+  const activeById = new Map()
+  const reservedIds = new Map()
+  const auditEvents = []
+  let sequence = 0
+
+  const emitAudit = createHttpCapabilityAuditEmitter({ audit, now, auditLimit, auditEvents })
 
   const reserve = (id) => reservedIds.set(id, (reservedIds.get(id) || 0) + 1)
   const release = (id) => {
@@ -133,37 +224,11 @@ export function createHttpCapabilityRegistry({
     else reservedIds.set(id, count - 1)
   }
 
-  const unregisterRecord = (record) => {
-    if (record.disposed) return false
-    if (!record.active || activeById.get(record.definition.id) !== record) {
-      throw registryError(
-        'HTTP_CAPABILITY_REPLACEMENT_ACTIVE',
-        `HTTP capability ${record.definition.id} cannot unload while its replacement is active`,
-      )
-    }
-
-    activeById.delete(record.definition.id)
-    record.active = false
-    record.disposed = true
-    release(record.definition.id)
-    emitAudit('http_capability.unregistered', record)
-
-    const replaced = record.replacedRecord
-    if (replaced && !replaced.disposed) {
-      if (activeById.has(replaced.definition.id)) {
-        throw registryError(
-          'HTTP_CAPABILITY_RESTORE_CONFLICT',
-          `HTTP capability ${replaced.definition.id} cannot be restored because its id is active`,
-        )
-      }
-      replaced.active = true
-      activeById.set(replaced.definition.id, replaced)
-      emitAudit('http_capability.restored', replaced, {
-        removedCapabilityId: record.definition.id,
-      })
-    }
-    return true
-  }
+  const unregisterRecord = (record) => unregisterHttpCapability(record, {
+    activeById,
+    release,
+    emitAudit,
+  })
 
   const register = (input) => {
     const definition = normalizeDefinition(input)
@@ -240,68 +305,7 @@ export function createHttpCapabilityRegistry({
     })
   }
 
-  const registerAll = (definitions) => {
-    if (!Array.isArray(definitions)) {
-      throw registryError('HTTP_CAPABILITY_INVALID', 'HTTP capabilities must be an array')
-    }
-    const disposers = []
-    try {
-      for (const definition of definitions) disposers.push(register(definition))
-    } catch (error) {
-      const rollbackErrors = []
-      for (const dispose of [...disposers].reverse()) {
-        try {
-          dispose()
-        } catch (rollbackError) {
-          rollbackErrors.push(rollbackError)
-        }
-      }
-      if (rollbackErrors.length > 0) {
-        const failure = new AggregateError(
-          [error, ...rollbackErrors],
-          'HTTP capability batch registration rollback failed',
-          { cause: error },
-        )
-        failure.code = 'HTTP_CAPABILITY_ROLLBACK_FAILED'
-        failure.retryable = false
-        throw failure
-      }
-      throw error
-    }
-    const entries = disposers.map((handle) => ({ handle, revoked: false }))
-    let disposed = false
-    const dispose = () => {
-      if (disposed) return false
-      for (const entry of [...entries].reverse()) {
-        if (entry.revoked) continue
-        entry.handle()
-        entry.revoked = true
-      }
-      disposed = true
-      return true
-    }
-    return attachRuntimePluginBeginRevoke(dispose, () => {
-      if (disposed) return createRuntimePluginRevokeReceipt('revoked')
-      const cleanups = []
-      let visibility = 'revoked'
-      for (const entry of [...entries].reverse()) {
-        if (entry.revoked) continue
-        const receipt = entry.handle.beginRevoke()
-        if (receipt.visibility === 'revoked') entry.revoked = true
-        else if (receipt.visibility === 'indeterminate') visibility = 'indeterminate'
-        else if (visibility !== 'indeterminate') visibility = 'retained'
-        if (receipt.cleanup) cleanups.push(receipt.cleanup)
-      }
-      if (entries.every((entry) => entry.revoked)) {
-        visibility = 'revoked'
-        disposed = true
-      }
-      const cleanup = cleanups.length > 0
-        ? Promise.all(cleanups).then(() => true)
-        : null
-      return createRuntimePluginRevokeReceipt(visibility, cleanup)
-    })
-  }
+  const registerAll = (definitions) => registerHttpCapabilityBatch(definitions, register)
 
   const orderedRecords = () => [...activeById.values()].sort((left, right) => (
     right.definition.priority - left.definition.priority

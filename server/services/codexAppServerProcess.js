@@ -57,9 +57,112 @@ export function joinCodexStartAttempt(attempt, signal, snapshot) {
   })
 }
 
-export function createProcessObserver(child, { onFatal }) {
+function createCodexProtocolLineReader({ emitMessage, fail }) {
   let pendingBuffer = null
   let pendingBytes = 0
+  const acceptLine = (lineBuffer) => {
+    let normalized = lineBuffer
+    if (normalized.length > 0 && normalized[normalized.length - 1] === 0x0d) {
+      normalized = normalized.subarray(0, normalized.length - 1)
+    }
+    if (normalized.length === 0) return fail(CODEX_APP_SERVER_REASON.PROTOCOL_INVALID)
+    let line
+    try { line = new TextDecoder('utf-8', { fatal: true }).decode(normalized) }
+    catch { return fail(CODEX_APP_SERVER_REASON.PROTOCOL_INVALID) }
+    let message
+    try { message = JSON.parse(line) }
+    catch { return fail(CODEX_APP_SERVER_REASON.PROTOCOL_INVALID) }
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      return fail(CODEX_APP_SERVER_REASON.PROTOCOL_INVALID)
+    }
+    emitMessage(message)
+  }
+  const appendPending = (chunk, start, end) => {
+    const segmentBytes = end - start
+    const requiredBytes = pendingBytes + segmentBytes
+    if (requiredBytes > MAX_PROTOCOL_LINE_BYTES) return false
+    if (segmentBytes === 0) return true
+    if (!pendingBuffer || pendingBuffer.length < requiredBytes) {
+      let capacity = pendingBuffer?.length || 4096
+      while (capacity < requiredBytes) capacity = Math.min(MAX_PROTOCOL_LINE_BYTES, capacity * 2)
+      const grown = Buffer.allocUnsafe(capacity)
+      if (pendingBytes > 0) pendingBuffer.copy(grown, 0, 0, pendingBytes)
+      pendingBuffer = grown
+    }
+    chunk.copy(pendingBuffer, pendingBytes, start, end)
+    pendingBytes = requiredBytes
+    return true
+  }
+  const onData = (value) => {
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
+    let offset = 0
+    while (offset < chunk.length) {
+      const newline = chunk.indexOf(0x0a, offset)
+      const end = newline < 0 ? chunk.length : newline
+      if (!appendPending(chunk, offset, end)) return fail(CODEX_APP_SERVER_REASON.PROTOCOL_INVALID)
+      if (newline < 0) return
+      const line = pendingBuffer ? pendingBuffer.subarray(0, pendingBytes) : Buffer.alloc(0)
+      pendingBytes = 0
+      acceptLine(line)
+      offset = newline + 1
+    }
+  }
+  return { onData, clear() { pendingBuffer = null; pendingBytes = 0 } }
+}
+
+function createMessageWaiter({ getFatalReason, messageWaiters }) {
+  return (predicate, {
+    timeoutMs,
+    signal,
+    timeoutReason = CODEX_APP_SERVER_REASON.HANDSHAKE_TIMEOUT,
+  }) => new Promise((resolve, reject) => {
+    const fatalReason = getFatalReason()
+    if (fatalReason) return reject(createCodexRuntimeError(fatalReason))
+    let timer = null
+    const waiter = {
+      predicate,
+      resolve: (message) => { cleanup(); resolve(message) },
+      reject: (error) => { cleanup(); reject(error) },
+    }
+    const onAbort = () => waiter.reject(createCodexRuntimeError(CODEX_APP_SERVER_REASON.START_ABORTED))
+    const cleanup = () => {
+      if (timer) clearTimeout(timer)
+      messageWaiters.delete(waiter)
+      signal?.removeEventListener?.('abort', onAbort)
+    }
+    if (signal?.aborted) return waiter.reject(createCodexRuntimeError(CODEX_APP_SERVER_REASON.START_ABORTED))
+    messageWaiters.add(waiter)
+    signal?.addEventListener?.('abort', onAbort, { once: true })
+    timer = setTimeout(
+      () => waiter.reject(createCodexRuntimeError(timeoutReason)),
+      normalizeCodexStageTimeout(timeoutMs, DEFAULT_HANDSHAKE_TIMEOUT_MS, MAX_HANDSHAKE_TIMEOUT_MS),
+    )
+  })
+}
+
+function createFatalRace({ getFatalReason, fatalWaiters }) {
+  return (operation) => new Promise((resolve, reject) => {
+    let settled = false
+    const waiter = { reject: (error) => finish(error) }
+    const finish = (error = null, value) => {
+      if (settled) return
+      settled = true
+      fatalWaiters.delete(waiter)
+      if (error) reject(error)
+      else resolve(value)
+    }
+    Promise.resolve(operation).then(
+      (value) => finish(null, value),
+      (error) => finish(error),
+    )
+    const fatalReason = getFatalReason()
+    if (fatalReason) finish(createCodexRuntimeError(fatalReason))
+    else fatalWaiters.add(waiter)
+  })
+}
+
+export function createProcessObserver(child, { onFatal }) {
+  let lineReader = null
   let fatalReason = null
   let exited = false
   let unspawnedFailure = false
@@ -78,8 +181,7 @@ export function createProcessObserver(child, { onFatal }) {
   const fail = (reason) => {
     if (fatalReason) return
     fatalReason = reason
-    pendingBuffer = null
-    pendingBytes = 0
+    lineReader?.clear()
     rejectMessageWaiters(reason)
     rejectFatalWaiters(reason)
     try {
@@ -98,73 +200,9 @@ export function createProcessObserver(child, { onFatal }) {
     }
   }
 
-  const acceptLine = (lineBuffer) => {
-    let normalized = lineBuffer
-    if (normalized.length > 0 && normalized[normalized.length - 1] === 0x0d) {
-      normalized = normalized.subarray(0, normalized.length - 1)
-    }
-    if (normalized.length === 0) {
-      fail(CODEX_APP_SERVER_REASON.PROTOCOL_INVALID)
-      return
-    }
-    let line
-    try {
-      line = new TextDecoder('utf-8', { fatal: true }).decode(normalized)
-    } catch {
-      fail(CODEX_APP_SERVER_REASON.PROTOCOL_INVALID)
-      return
-    }
-    let message
-    try { message = JSON.parse(line) } catch {
-      fail(CODEX_APP_SERVER_REASON.PROTOCOL_INVALID)
-      return
-    }
-    if (!message || typeof message !== 'object' || Array.isArray(message)) {
-      fail(CODEX_APP_SERVER_REASON.PROTOCOL_INVALID)
-      return
-    }
-    emitMessage(message)
-  }
-
-  const appendPending = (chunk, start, end) => {
-    const segmentBytes = end - start
-    const requiredBytes = pendingBytes + segmentBytes
-    if (requiredBytes > MAX_PROTOCOL_LINE_BYTES) return false
-    if (segmentBytes === 0) return true
-
-    if (!pendingBuffer || pendingBuffer.length < requiredBytes) {
-      let capacity = pendingBuffer?.length || 4096
-      while (capacity < requiredBytes) {
-        capacity = Math.min(MAX_PROTOCOL_LINE_BYTES, capacity * 2)
-      }
-      const grown = Buffer.allocUnsafe(capacity)
-      if (pendingBytes > 0) pendingBuffer.copy(grown, 0, 0, pendingBytes)
-      pendingBuffer = grown
-    }
-    chunk.copy(pendingBuffer, pendingBytes, start, end)
-    pendingBytes = requiredBytes
-    return true
-  }
-
+  lineReader = createCodexProtocolLineReader({ emitMessage, fail })
   const onStdoutData = (value) => {
-    if (fatalReason) return
-    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
-    let offset = 0
-    while (offset < chunk.length && !fatalReason) {
-      const newline = chunk.indexOf(0x0a, offset)
-      const end = newline < 0 ? chunk.length : newline
-      if (!appendPending(chunk, offset, end)) {
-        fail(CODEX_APP_SERVER_REASON.PROTOCOL_INVALID)
-        return
-      }
-      if (newline < 0) return
-      const line = pendingBuffer
-        ? pendingBuffer.subarray(0, pendingBytes)
-        : Buffer.alloc(0)
-      pendingBytes = 0
-      acceptLine(line)
-      offset = newline + 1
-    }
+    if (!fatalReason) lineReader.onData(value)
   }
 
   const markExited = () => {
@@ -198,47 +236,9 @@ export function createProcessObserver(child, { onFatal }) {
   child?.stderr?.on?.('error', onStreamError)
   child?.stderr?.resume?.()
 
-  const waitForMessage = (predicate, {
-    timeoutMs,
-    signal,
-    timeoutReason = CODEX_APP_SERVER_REASON.HANDSHAKE_TIMEOUT,
-  }) => new Promise((resolve, reject) => {
-    if (fatalReason) {
-      reject(createCodexRuntimeError(fatalReason))
-      return
-    }
-    let timer = null
-    const waiter = {
-      predicate,
-      resolve: (message) => {
-        cleanup()
-        resolve(message)
-      },
-      reject: (error) => {
-        cleanup()
-        reject(error)
-      },
-    }
-    const onAbort = () => waiter.reject(createCodexRuntimeError(CODEX_APP_SERVER_REASON.START_ABORTED))
-    const cleanup = () => {
-      if (timer) clearTimeout(timer)
-      messageWaiters.delete(waiter)
-      signal?.removeEventListener?.('abort', onAbort)
-    }
-    if (signal?.aborted) {
-      waiter.reject(createCodexRuntimeError(CODEX_APP_SERVER_REASON.START_ABORTED))
-      return
-    }
-    messageWaiters.add(waiter)
-    signal?.addEventListener?.('abort', onAbort, { once: true })
-    timer = setTimeout(
-      () => waiter.reject(createCodexRuntimeError(timeoutReason)),
-      normalizeCodexStageTimeout(
-        timeoutMs,
-        DEFAULT_HANDSHAKE_TIMEOUT_MS,
-        MAX_HANDSHAKE_TIMEOUT_MS,
-      ),
-    )
+  const waitForMessage = createMessageWaiter({
+    getFatalReason: () => fatalReason,
+    messageWaiters,
   })
 
   const waitForExit = (timeoutMs = DEFAULT_EXIT_TIMEOUT_MS) => {
@@ -258,34 +258,15 @@ export function createProcessObserver(child, { onFatal }) {
     })
   }
 
-  const raceWithFatal = (operation) => new Promise((resolve, reject) => {
-    let settled = false
-    const waiter = {
-      reject: (error) => finish(error),
-    }
-    const finish = (error = null, value) => {
-      if (settled) return
-      settled = true
-      fatalWaiters.delete(waiter)
-      if (error) reject(error)
-      else resolve(value)
-    }
-
-    // Observe the operation before checking fatalReason so an already-rejected
-    // write can never become an unhandled rejection when a protocol fatal wins.
-    Promise.resolve(operation).then(
-      (value) => finish(null, value),
-      (error) => finish(error),
-    )
-    if (fatalReason) finish(createCodexRuntimeError(fatalReason))
-    else fatalWaiters.add(waiter)
+  const raceWithFatal = createFatalRace({
+    getFatalReason: () => fatalReason,
+    fatalWaiters,
   })
 
   const cleanup = () => {
     rejectMessageWaiters(CODEX_APP_SERVER_REASON.PROCESS_EXITED)
     rejectFatalWaiters(CODEX_APP_SERVER_REASON.PROCESS_EXITED)
-    pendingBuffer = null
-    pendingBytes = 0
+    lineReader.clear()
     child?.off?.('error', onChildError)
     child?.off?.('exit', onChildExit)
     child?.off?.('close', onChildClose)
