@@ -83,6 +83,65 @@ export function resolveLifecycleShutdownTimeoutMs({ timeoutMs, capabilities = []
   )
 }
 
+function createHostLifecycleControllers({
+  inertHostAdapters,
+  hostAdapterSource,
+  turnPersistenceAdapter,
+  subagentRunPersistenceAdapter,
+  toolLoopAdapter,
+  toolLoopBinding,
+}) {
+  const source = hostAdapterSource.trim()
+  if (inertHostAdapters) {
+    return {
+      turnPersistenceController: INERT_HOST_ADAPTER_CONTROLLER,
+      subagentRunPersistenceController: INERT_HOST_ADAPTER_CONTROLLER,
+      toolLoopController: INERT_HOST_ADAPTER_CONTROLLER,
+    }
+  }
+  return {
+    turnPersistenceController: createTurnPersistenceAdapterController(
+      turnPersistenceAdapter,
+      { source },
+    ),
+    subagentRunPersistenceController: createSubagentRunPersistencePortController(
+      subagentRunPersistenceAdapter,
+      { source },
+    ),
+    toolLoopController: toolLoopBinding !== undefined
+      ? createToolLoopAdapterController(toolLoopBinding)
+      : createToolLoopAdapterController(toolLoopAdapter, { source }),
+  }
+}
+
+function validateLifecycleRuntimeOptions({
+  includeBuiltins,
+  capabilities,
+  hostAdapterSource,
+  toolLoopAdapter,
+  toolLoopBinding,
+}) {
+  if (typeof includeBuiltins !== 'boolean') throw new TypeError('includeBuiltins must be a boolean')
+  if (!Array.isArray(capabilities)) throw new TypeError('Lifecycle capability overrides must be an array')
+  if (typeof hostAdapterSource !== 'string' || !hostAdapterSource.trim()) {
+    throw new TypeError('hostAdapterSource must be a non-empty string')
+  }
+  if (toolLoopAdapter !== undefined && toolLoopBinding !== undefined) {
+    throw new TypeError('toolLoopAdapter and toolLoopBinding are mutually exclusive')
+  }
+}
+
+function createLifecycleDefinitions({
+  includeBuiltins,
+  capabilities,
+  builtinOptions,
+}) {
+  return [
+    ...(includeBuiltins ? createBuiltinLifecycleCapabilities(builtinOptions) : []),
+    ...capabilities,
+  ]
+}
+
 function createLifecycleRuntimeInternal({
   silent = process.env.NODE_ENV === 'production',
   includeBuiltins = true,
@@ -105,59 +164,46 @@ function createLifecycleRuntimeInternal({
 } = {}, {
   inertHostAdapters = false,
 } = {}) {
-  if (typeof includeBuiltins !== 'boolean') {
-    throw new TypeError('includeBuiltins must be a boolean')
-  }
-  if (!Array.isArray(capabilities)) {
-    throw new TypeError('Lifecycle capability overrides must be an array')
-  }
-  if (typeof hostAdapterSource !== 'string' || !hostAdapterSource.trim()) {
-    throw new TypeError('hostAdapterSource must be a non-empty string')
-  }
-  if (toolLoopAdapter !== undefined && toolLoopBinding !== undefined) {
-    throw new TypeError('toolLoopAdapter and toolLoopBinding are mutually exclusive')
-  }
-  const turnPersistenceController = inertHostAdapters
-    ? INERT_HOST_ADAPTER_CONTROLLER
-    : createTurnPersistenceAdapterController(turnPersistenceAdapter, {
-      source: hostAdapterSource.trim(),
-    })
-  const subagentRunPersistenceController = inertHostAdapters
-    ? INERT_HOST_ADAPTER_CONTROLLER
-    : createSubagentRunPersistencePortController(subagentRunPersistenceAdapter, {
-      source: hostAdapterSource.trim(),
-    })
-  const toolLoopController = inertHostAdapters
-    ? INERT_HOST_ADAPTER_CONTROLLER
-    : toolLoopBinding !== undefined
-      ? createToolLoopAdapterController(toolLoopBinding)
-      : createToolLoopAdapterController(toolLoopAdapter, {
-        source: hostAdapterSource.trim(),
-      })
+  validateLifecycleRuntimeOptions({
+    includeBuiltins,
+    capabilities,
+    hostAdapterSource,
+    toolLoopAdapter,
+    toolLoopBinding,
+  })
+  const {
+    turnPersistenceController,
+    subagentRunPersistenceController,
+    toolLoopController,
+  } = createHostLifecycleControllers({
+    inertHostAdapters,
+    hostAdapterSource,
+    turnPersistenceAdapter,
+    subagentRunPersistenceAdapter,
+    toolLoopAdapter,
+    toolLoopBinding,
+  })
   const registry = createLifecycleCapabilityRegistry({ audit, ...(now ? { now } : {}) })
-  const definitions = [
-    ...(includeBuiltins
-      ? createBuiltinLifecycleCapabilities({
-        silent,
-        adapters,
-        pluginRoot,
-        turnPersistenceController,
-        managedAttachmentRuntimeAdapter,
-        managedAttachmentRuntimeController: inertHostAdapters
-          ? INERT_HOST_ADAPTER_CONTROLLER
-          : null,
-        subagentRunPersistenceController,
-        compactionArchiveAdapter,
-        compactionArchiveController: inertHostAdapters
-          ? INERT_HOST_ADAPTER_CONTROLLER
-          : compactionArchiveController,
-        toolLoopController,
-        runtimeEnv,
-        cwd,
-      })
-      : []),
-    ...capabilities,
-  ]
+  const definitions = createLifecycleDefinitions({
+    includeBuiltins,
+    capabilities,
+    builtinOptions: {
+      silent,
+      adapters,
+      pluginRoot,
+      turnPersistenceController,
+      managedAttachmentRuntimeAdapter,
+      managedAttachmentRuntimeController: inertHostAdapters ? INERT_HOST_ADAPTER_CONTROLLER : null,
+      subagentRunPersistenceController,
+      compactionArchiveAdapter,
+      compactionArchiveController: inertHostAdapters
+        ? INERT_HOST_ADAPTER_CONTROLLER
+        : compactionArchiveController,
+      toolLoopController,
+      runtimeEnv,
+      cwd,
+    },
+  })
   registry.registerAll(definitions)
   const graph = createLifecycleCapabilityGraph({ registry, onError })
   let startRun = null

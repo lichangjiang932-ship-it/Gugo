@@ -146,29 +146,8 @@ export function registryState(registry) {
   return state
 }
 
-export function createLifecycleCapabilityRegistry({
-  audit = null,
-  now = () => Date.now(),
-  auditLimit = DEFAULT_AUDIT_LIMIT,
-} = {}) {
-  if (audit !== null && typeof audit !== 'function') {
-    throw lifecycleError('LIFECYCLE_REGISTRY_INVALID', 'Lifecycle audit must be a function or null')
-  }
-  if (typeof now !== 'function') {
-    throw lifecycleError('LIFECYCLE_REGISTRY_INVALID', 'Lifecycle now must be a function')
-  }
-  if (!Number.isSafeInteger(auditLimit) || auditLimit < 1 || auditLimit > 10_000) {
-    throw lifecycleError('LIFECYCLE_REGISTRY_INVALID', 'Lifecycle auditLimit must be 1..10000')
-  }
-
-  const activeBySlot = new Map()
-  const activeById = new Map()
-  const reservedIds = new Map()
-  const auditEvents = []
-  let sequence = 0
-  let locked = false
-
-  const emit = (event, record, details = {}) => {
+function createLifecycleAuditEmitter({ audit, now, auditLimit, auditEvents }) {
+  return (event, record, details = {}) => {
     const entry = Object.freeze({
       event,
       capabilityId: record.definition.id,
@@ -185,6 +164,90 @@ export function createLifecycleCapabilityRegistry({
       try { audit(entry) } catch { /* observability cannot break lifecycle */ }
     }
   }
+}
+
+function unregisterLifecycleRecord(record, state) {
+  const { assertUnlocked, activeBySlot, activeById, release, emit } = state
+  assertUnlocked()
+  if (record.disposed) return false
+  if (!record.active || activeBySlot.get(record.slotId) !== record) {
+    throw lifecycleError(
+      'LIFECYCLE_REPLACEMENT_ACTIVE',
+      `Lifecycle capability ${record.definition.id} cannot unload while its replacement is active`,
+    )
+  }
+  activeBySlot.delete(record.slotId)
+  activeById.delete(record.definition.id)
+  record.active = false
+  record.disposed = true
+  release(record.definition.id)
+  emit('lifecycle_capability.unregistered', record)
+  const replaced = record.replacedRecord
+  if (replaced && !replaced.disposed) {
+    if (activeBySlot.has(replaced.slotId) || activeById.has(replaced.definition.id)) {
+      throw lifecycleError(
+        'LIFECYCLE_RESTORE_CONFLICT',
+        `Lifecycle capability ${replaced.definition.id} cannot be restored`,
+      )
+    }
+    replaced.active = true
+    activeBySlot.set(replaced.slotId, replaced)
+    activeById.set(replaced.definition.id, replaced)
+    emit('lifecycle_capability.restored', replaced, {
+      removedCapabilityId: record.definition.id,
+    })
+  }
+  return true
+}
+
+function registerLifecycleDefinitions(definitions, { assertUnlocked, register }) {
+  assertUnlocked()
+  if (!Array.isArray(definitions)) {
+    throw lifecycleError('LIFECYCLE_CAPABILITY_INVALID', 'Lifecycle capabilities must be an array')
+  }
+  const disposers = []
+  try {
+    for (const definition of definitions) disposers.push(register(definition))
+  } catch (error) {
+    for (const dispose of disposers.reverse()) dispose()
+    throw error
+  }
+  let disposed = false
+  return () => {
+    if (disposed) return false
+    for (const dispose of [...disposers].reverse()) dispose()
+    disposed = true
+    return true
+  }
+}
+
+function validateLifecycleRegistryOptions({ audit, now, auditLimit }) {
+  if (audit !== null && typeof audit !== 'function') {
+    throw lifecycleError('LIFECYCLE_REGISTRY_INVALID', 'Lifecycle audit must be a function or null')
+  }
+  if (typeof now !== 'function') {
+    throw lifecycleError('LIFECYCLE_REGISTRY_INVALID', 'Lifecycle now must be a function')
+  }
+  if (!Number.isSafeInteger(auditLimit) || auditLimit < 1 || auditLimit > 10_000) {
+    throw lifecycleError('LIFECYCLE_REGISTRY_INVALID', 'Lifecycle auditLimit must be 1..10000')
+  }
+}
+
+export function createLifecycleCapabilityRegistry({
+  audit = null,
+  now = () => Date.now(),
+  auditLimit = DEFAULT_AUDIT_LIMIT,
+} = {}) {
+  validateLifecycleRegistryOptions({ audit, now, auditLimit })
+
+  const activeBySlot = new Map()
+  const activeById = new Map()
+  const reservedIds = new Map()
+  const auditEvents = []
+  let sequence = 0
+  let locked = false
+
+  const emit = createLifecycleAuditEmitter({ audit, now, auditLimit, auditEvents })
   const assertUnlocked = () => {
     if (locked) {
       throw lifecycleError(
@@ -200,39 +263,13 @@ export function createLifecycleCapabilityRegistry({
     else reservedIds.set(id, count - 1)
   }
 
-  const unregisterRecord = (record) => {
-    assertUnlocked()
-    if (record.disposed) return false
-    if (!record.active || activeBySlot.get(record.slotId) !== record) {
-      throw lifecycleError(
-        'LIFECYCLE_REPLACEMENT_ACTIVE',
-        `Lifecycle capability ${record.definition.id} cannot unload while its replacement is active`,
-      )
-    }
-    activeBySlot.delete(record.slotId)
-    activeById.delete(record.definition.id)
-    record.active = false
-    record.disposed = true
-    release(record.definition.id)
-    emit('lifecycle_capability.unregistered', record)
-
-    const replaced = record.replacedRecord
-    if (replaced && !replaced.disposed) {
-      if (activeBySlot.has(replaced.slotId) || activeById.has(replaced.definition.id)) {
-        throw lifecycleError(
-          'LIFECYCLE_RESTORE_CONFLICT',
-          `Lifecycle capability ${replaced.definition.id} cannot be restored`,
-        )
-      }
-      replaced.active = true
-      activeBySlot.set(replaced.slotId, replaced)
-      activeById.set(replaced.definition.id, replaced)
-      emit('lifecycle_capability.restored', replaced, {
-        removedCapabilityId: record.definition.id,
-      })
-    }
-    return true
-  }
+  const unregisterRecord = (record) => unregisterLifecycleRecord(record, {
+    assertUnlocked,
+    activeBySlot,
+    activeById,
+    release,
+    emit,
+  })
 
   const register = (input) => {
     assertUnlocked()
@@ -303,26 +340,10 @@ export function createLifecycleCapabilityRegistry({
     }
   }
 
-  const registerAll = (definitions) => {
-    assertUnlocked()
-    if (!Array.isArray(definitions)) {
-      throw lifecycleError('LIFECYCLE_CAPABILITY_INVALID', 'Lifecycle capabilities must be an array')
-    }
-    const disposers = []
-    try {
-      for (const definition of definitions) disposers.push(register(definition))
-    } catch (error) {
-      for (const dispose of disposers.reverse()) dispose()
-      throw error
-    }
-    let disposed = false
-    return () => {
-      if (disposed) return false
-      for (const dispose of [...disposers].reverse()) dispose()
-      disposed = true
-      return true
-    }
-  }
+  const registerAll = (definitions) => registerLifecycleDefinitions(definitions, {
+    assertUnlocked,
+    register,
+  })
 
   const registry = Object.freeze({
     register,

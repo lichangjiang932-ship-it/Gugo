@@ -207,20 +207,8 @@ function healthCheckError(record, reason = '') {
   return error
 }
 
-export function createRuntimeCapabilityRegistry({ audit = null, now = () => Date.now() } = {}) {
-  if (audit !== null && typeof audit !== 'function') {
-    throw capabilityError('RUNTIME_CAPABILITY_REGISTRY_INVALID', 'runtime capability audit must be a function or null')
-  }
-  if (typeof now !== 'function') {
-    throw capabilityError('RUNTIME_CAPABILITY_REGISTRY_INVALID', 'runtime capability now must be a function')
-  }
-  const recordsById = new Map()
-  const activeBySlot = new Map()
-  const auditEvents = []
-  let sequence = 0
-  let generation = 0
-
-  const emit = (event, record, details = {}) => {
+function createCapabilityAuditEmitter({ audit, now, auditEvents }) {
+  return (event, record, details = {}) => {
     const entry = Object.freeze({
       event,
       capabilityId: record.definition.id,
@@ -235,6 +223,62 @@ export function createRuntimeCapabilityRegistry({ audit = null, now = () => Date
     if (auditEvents.length > MAX_AUDIT_EVENTS) auditEvents.shift()
     try { audit?.(entry) } catch { /* observability is non-authoritative */ }
   }
+}
+
+function createCapabilitySnapshot({ selection, provenance, generation }) {
+  const { requested, ordered } = selection
+  const effectiveBindings = Object.freeze(ordered.map(([key, record]) => Object.freeze({
+    ...publicContribution(record),
+    binding: key,
+    source: typeof provenance[key] === 'string'
+      ? provenance[key]
+      : requested.has(key) ? 'runtime_config' : 'registry_default',
+    generation,
+  })))
+  const implementations = new Map(
+    ordered.map(([key, record]) => [key, record.definition.implementation]),
+  )
+  return Object.freeze({
+    generation,
+    effectiveBindings,
+    get(typeValue, slotValue = null) {
+      const type = normalizeType(typeValue)
+      const slot = slotValue === null ? type : normalizeSlot(slotValue)
+      return implementations.get(bindingKey(type, slot)) || null
+    },
+  })
+}
+
+async function resolveHealthyCapabilitySelection(selection, provenance, createSnapshot) {
+  for (const [, record] of selection.ordered) {
+    if (!record.definition.healthCheck) continue
+    let result
+    try {
+      result = await record.definition.healthCheck(record.definition.implementation)
+    } catch (error) {
+      throw healthCheckError(record, String(error?.code || 'check threw').slice(0, 80))
+    }
+    if (result === false || result?.ok === false) {
+      throw healthCheckError(record, String(result?.code || '').slice(0, 80))
+    }
+  }
+  return createSnapshot(selection, provenance)
+}
+
+export function createRuntimeCapabilityRegistry({ audit = null, now = () => Date.now() } = {}) {
+  if (audit !== null && typeof audit !== 'function') {
+    throw capabilityError('RUNTIME_CAPABILITY_REGISTRY_INVALID', 'runtime capability audit must be a function or null')
+  }
+  if (typeof now !== 'function') {
+    throw capabilityError('RUNTIME_CAPABILITY_REGISTRY_INVALID', 'runtime capability now must be a function')
+  }
+  const recordsById = new Map()
+  const activeBySlot = new Map()
+  const auditEvents = []
+  let sequence = 0
+  let generation = 0
+
+  const emit = createCapabilityAuditEmitter({ audit, now, auditEvents })
 
   const register = (input) => {
     const replacesValue = ownValue(input, 'replaces')
@@ -332,45 +376,15 @@ export function createRuntimeCapabilityRegistry({ audit = null, now = () => Date
     return { requested, ordered: [...selected.entries()].sort(([left], [right]) => left.localeCompare(right)) }
   }
 
-  const createSnapshot = ({ requested, ordered }, provenance = {}) => {
-    const snapshotGeneration = ++generation
-    const effectiveBindings = Object.freeze(ordered.map(([key, record]) => Object.freeze({
-      ...publicContribution(record),
-      binding: key,
-      source: typeof provenance[key] === 'string'
-        ? provenance[key]
-        : requested.has(key) ? 'runtime_config' : 'registry_default',
-      generation: snapshotGeneration,
-    })))
-    const implementations = new Map(ordered.map(([key, record]) => [key, record.definition.implementation]))
-    return Object.freeze({
-      generation: snapshotGeneration,
-      effectiveBindings,
-      get(typeValue, slotValue = null) {
-        const type = normalizeType(typeValue)
-        const slot = slotValue === null ? type : normalizeSlot(slotValue)
-        return implementations.get(bindingKey(type, slot)) || null
-      },
-    })
-  }
+  const createSnapshot = (selection, provenance = {}) => createCapabilitySnapshot({
+    selection,
+    provenance,
+    generation: ++generation,
+  })
 
-  const resolve = async (bindings = {}, { provenance = {} } = {}) => {
-    const selection = select(bindings)
-    const { ordered } = selection
-    for (const [, record] of ordered) {
-      if (!record.definition.healthCheck) continue
-      let result
-      try {
-        result = await record.definition.healthCheck(record.definition.implementation)
-      } catch (error) {
-        throw healthCheckError(record, String(error?.code || 'check threw').slice(0, 80))
-      }
-      if (result === false || result?.ok === false) {
-        throw healthCheckError(record, String(result?.code || '').slice(0, 80))
-      }
-    }
-    return createSnapshot(selection, provenance)
-  }
+  const resolve = async (bindings = {}, { provenance = {} } = {}) => (
+    resolveHealthyCapabilitySelection(select(bindings), provenance, createSnapshot)
+  )
 
   return Object.freeze({
     register,
