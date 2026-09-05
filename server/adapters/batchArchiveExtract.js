@@ -94,6 +94,47 @@ async function extractZipToStage(archivePath, archive, stageRoot, signal) {
   }
 }
 
+function validateRarExtraction({ result, archive, stageRoot, statesByRawName, seenByRawName, signal }) {
+  const entriesByRawName = new Map(archive.entries.map((entry) => [entry.rawName, entry]))
+  for (const extracted of result.files) {
+    throwIfAborted(signal)
+    const rawName = String(extracted.fileHeader?.name || '')
+    const entry = entriesByRawName.get(rawName)
+    if (!entry || Boolean(extracted.fileHeader?.flags?.directory) !== entry.directory) {
+      throw toolError(`RAR 解压返回了未请求的条目：${rawName}`, 422, 'ARCHIVE_HEADER_MISMATCH')
+    }
+    seenByRawName.set(rawName, (seenByRawName.get(rawName) || 0) + 1)
+  }
+  for (const entry of archive.entries) {
+    if (seenByRawName.get(entry.rawName) !== 1) {
+      throw toolError(`RAR 条目未被完整且唯一地解压：${entry.name}`, 422, 'ARCHIVE_ENTRY_EXTRACT_FAILED')
+    }
+    if (entry.directory) continue
+    const state = statesByRawName.get(entry.rawName)
+    const target = path.join(stageRoot, ...entry.name.split('/'))
+    const stat = fs.lstatSync(target)
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw toolError(`拒绝 RAR 链接或特殊文件条目：${entry.name}`, 422, 'BATCH_FILE_SYMLINK_UNSUPPORTED')
+    }
+    const actualCrc32 = (state.crcValue ^ 0xffffffff) >>> 0
+    if (stat.size === entry.uncompressedSize
+      && state.actualSize === entry.uncompressedSize
+      && actualCrc32 === entry.crc32) continue
+    throw toolError(
+      `RAR 条目的大小或 CRC 与头部声明不一致：${entry.name}`,
+      422,
+      'ARCHIVE_INTEGRITY_FAILED',
+      {
+        entry: entry.name,
+        declaredBytes: entry.uncompressedSize,
+        actualBytes: stat.size,
+        declaredCrc32: entry.crc32.toString(16).padStart(8, '0'),
+        actualCrc32: actualCrc32.toString(16).padStart(8, '0'),
+      },
+    )
+  }
+}
+
 async function extractRarToStage(archivePath, archive, stageRoot, signal) {
   const entriesByRawName = new Map(archive.entries.map((entry) => [entry.rawName, entry]))
   const statesByRawName = new Map(archive.entries
@@ -198,45 +239,15 @@ async function extractRarToStage(archivePath, archive, stageRoot, signal) {
         return true
       },
     })
-    for (const extracted of result.files) {
-      throwIfAborted(signal)
-      const rawName = String(extracted.fileHeader?.name || '')
-      const entry = entriesByRawName.get(rawName)
-      if (!entry || Boolean(extracted.fileHeader?.flags?.directory) !== entry.directory) {
-        throw toolError(`RAR 解压返回了未请求的条目：${rawName}`, 422, 'ARCHIVE_HEADER_MISMATCH')
-      }
-      seenByRawName.set(rawName, (seenByRawName.get(rawName) || 0) + 1)
-    }
     if (writeViolation) throw writeViolation
-    for (const entry of archive.entries) {
-      if (seenByRawName.get(entry.rawName) !== 1) {
-        throw toolError(`RAR 条目未被完整且唯一地解压：${entry.name}`, 422, 'ARCHIVE_ENTRY_EXTRACT_FAILED')
-      }
-      if (entry.directory) continue
-      const state = statesByRawName.get(entry.rawName)
-      const target = path.join(stageRoot, ...entry.name.split('/'))
-      const stat = fs.lstatSync(target)
-      if (stat.isSymbolicLink() || !stat.isFile()) {
-        throw toolError(`拒绝 RAR 链接或特殊文件条目：${entry.name}`, 422, 'BATCH_FILE_SYMLINK_UNSUPPORTED')
-      }
-      const actualCrc32 = (state.crcValue ^ 0xffffffff) >>> 0
-      if (stat.size !== entry.uncompressedSize
-        || state.actualSize !== entry.uncompressedSize
-        || actualCrc32 !== entry.crc32) {
-        throw toolError(
-          `RAR 条目的大小或 CRC 与头部声明不一致：${entry.name}`,
-          422,
-          'ARCHIVE_INTEGRITY_FAILED',
-          {
-            entry: entry.name,
-            declaredBytes: entry.uncompressedSize,
-            actualBytes: stat.size,
-            declaredCrc32: entry.crc32.toString(16).padStart(8, '0'),
-            actualCrc32: actualCrc32.toString(16).padStart(8, '0'),
-          },
-        )
-      }
-    }
+    validateRarExtraction({
+      result,
+      archive,
+      stageRoot,
+      statesByRawName,
+      seenByRawName,
+      signal,
+    })
   } catch (cause) {
     if (writeViolation) throw writeViolation
     if (signal?.aborted) throwIfAborted(signal)
