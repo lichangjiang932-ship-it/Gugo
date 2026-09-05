@@ -154,6 +154,93 @@ function toolFailure(result) {
   }
 }
 
+function createTurnLoopEventCallbacks({ emitter, state }) {
+  return {
+    onModelPhase: async ({ phase, iteration, usage, modelName, error }) => {
+      const normalizedUsage = phase === 'completed' ? normalizeModelUsage(usage) : null
+      if (normalizedUsage) {
+        state.latestModelUsage = normalizedUsage
+        state.turnModelUsage = addTurnModelUsage(state.turnModelUsage, normalizedUsage)
+      }
+      await emitter('model.phase', {
+        phase, iteration, usage: normalizedUsage || usage, modelName, error,
+      })
+    },
+    onModelDelta: async ({ text, iteration, modelName }) => {
+      state.streamedAssistantText += String(text || '')
+      await emitter('assistant.delta', { text, iteration, modelName })
+    },
+    onReasoningDelta: async ({ text, iteration, modelName }) => {
+      await emitter('reasoning.delta', { text, iteration, modelName })
+    },
+    onProgress: async ({
+      completed, total, iteration, filesChanged, additions, deletions, phase,
+    } = {}) => emitter('turn.progress', {
+      ...(completed !== undefined ? { completed } : {}),
+      ...(total !== undefined ? { total } : {}),
+      ...(iteration !== undefined ? { iteration } : {}),
+      ...(filesChanged !== undefined ? { filesChanged } : {}),
+      ...(additions !== undefined ? { additions } : {}),
+      ...(deletions !== undefined ? { deletions } : {}),
+      ...(phase !== undefined ? { phase } : {}),
+    }),
+    onToolCall: async (call) => emitter('tool.call', {
+      toolCallId: call.id, name: call.name, args: call.args,
+    }),
+    onToolStarted: async (call) => emitter('tool.started', {
+      toolCallId: call.id, name: call.name, args: call.args, outputReplay: 'live_only',
+    }),
+    onToolCompleted: async (outcome) => emitter('tool.completed', {
+      toolCallId: outcome.call.id,
+      name: outcome.call.name,
+      args: outcome.executionArgs ?? outcome.call.args,
+      result: outcome.result,
+      error: toolFailure(outcome.result),
+      artifactId: outcome.artifactId || null,
+      artifacts: Array.isArray(outcome.artifacts) ? outcome.artifacts : [],
+    }),
+    onApprovalPending: async (approval) => emitter('approval.required', {
+      approvalId: approval.id, toolName: approval.toolName, args: approval.args,
+      risk: approval.risk, metadataSource: approval.metadataSource,
+      reason: approval.reason, expiresAt: approval.expiresAt,
+    }),
+    onApprovalResolved: async (decision) => emitter('approval.resolved', {
+      approvalId: decision.approvalId || null,
+      proceed: !!decision.proceed,
+      edited: !!decision.edited,
+      args: decision.args ?? null,
+      reason: decision.reason || null,
+    }),
+  }
+}
+
+function createTurnSteeringOptions({ deps, scope, steeringOwnerId, steeringScope }) {
+  if (!steeringOwnerId) {
+    return {
+      claimSteering: null,
+      acknowledgeSteering: null,
+      releaseSteering: null,
+      beforeFinalCompletion: null,
+    }
+  }
+  return {
+    claimSteering: async () => deps.claimSteering({ ...steeringScope, now: deps.now() }),
+    acknowledgeSteering: async (leaseId) => deps.acknowledgeSteering({
+      ...steeringScope, leaseId, now: deps.now(),
+    }),
+    releaseSteering: async (leaseId) => deps.releaseSteering({
+      ...steeringScope, leaseId, now: deps.now(),
+    }),
+    beforeFinalCompletion: async () => {
+      const decision = await deps.runtimeCore.lease.closeSteeringInbox(scope)
+      if (!decision?.closed && decision?.reason !== 'pending') {
+        throw abortError('TURN_LEASE_LOST', 'Turn execution lease was lost before completion')
+      }
+      return decision
+    },
+  }
+}
+
 export function createTurnLoopExecutionRuntime({ deps }) {
   return async function runTurnLoopExecution({
     scope,
@@ -240,6 +327,10 @@ export function createTurnLoopExecutionRuntime({ deps }) {
       executionLease,
       state,
     })
+    const eventCallbacks = createTurnLoopEventCallbacks({ emitter, state })
+    const steeringOptions = createTurnSteeringOptions({
+      deps, scope, steeringOwnerId, steeringScope,
+    })
     return deps.runLoop({
       job: {
         id: turnId,
@@ -280,112 +371,12 @@ export function createTurnLoopExecutionRuntime({ deps }) {
       approvalOrigin: 'chat',
       approvalSessionId: sessionId,
       approvalMode: effectiveApprovalMode,
-      claimSteering: steeringOwnerId
-        ? async () => deps.claimSteering({ ...steeringScope, now: deps.now() })
-        : null,
-      acknowledgeSteering: steeringOwnerId
-        ? async (leaseId) => deps.acknowledgeSteering({
-            ...steeringScope,
-            leaseId,
-            now: deps.now(),
-          })
-        : null,
-      releaseSteering: steeringOwnerId
-        ? async (leaseId) => deps.releaseSteering({
-            ...steeringScope,
-            leaseId,
-            now: deps.now(),
-          })
-        : null,
-      beforeFinalCompletion: steeringOwnerId
-        ? async () => {
-            const decision = await deps.runtimeCore.lease.closeSteeringInbox(scope)
-            if (!decision?.closed && decision?.reason !== 'pending') {
-              throw abortError('TURN_LEASE_LOST', 'Turn execution lease was lost before completion')
-            }
-            return decision
-          }
-        : null,
+      ...steeringOptions,
       loadCheckpoint: async () => restoredCheckpointState || null,
       reconcileModelRequest,
       saveCheckpoint,
       runModel: runTurnModelRequest,
-      onModelPhase: async ({ phase, iteration, usage, modelName: activeModel, error }) => {
-        const normalizedUsage = phase === 'completed' ? normalizeModelUsage(usage) : null
-        if (normalizedUsage) {
-          state.latestModelUsage = normalizedUsage
-          state.turnModelUsage = addTurnModelUsage(state.turnModelUsage, normalizedUsage)
-        }
-        await emitter('model.phase', {
-          phase,
-          iteration,
-          usage: normalizedUsage || usage,
-          modelName: activeModel,
-          error,
-        })
-      },
-      onModelDelta: async ({ text: delta, iteration, modelName: activeModel }) => {
-        state.streamedAssistantText += String(delta || '')
-        await emitter('assistant.delta', { text: delta, iteration, modelName: activeModel })
-      },
-      onReasoningDelta: async ({ text: delta, iteration, modelName: activeModel }) => {
-        await emitter('reasoning.delta', { text: delta, iteration, modelName: activeModel })
-      },
-      onProgress: async ({
-        completed,
-        total,
-        iteration,
-        filesChanged,
-        additions,
-        deletions,
-        phase,
-      } = {}) => {
-        await emitter('turn.progress', {
-          ...(completed !== undefined ? { completed } : {}),
-          ...(total !== undefined ? { total } : {}),
-          ...(iteration !== undefined ? { iteration } : {}),
-          ...(filesChanged !== undefined ? { filesChanged } : {}),
-          ...(additions !== undefined ? { additions } : {}),
-          ...(deletions !== undefined ? { deletions } : {}),
-          ...(phase !== undefined ? { phase } : {}),
-        })
-      },
-      onToolCall: async (call) => emitter('tool.call', {
-        toolCallId: call.id,
-        name: call.name,
-        args: call.args,
-      }),
-      onToolStarted: async (call) => emitter('tool.started', {
-        toolCallId: call.id,
-        name: call.name,
-        args: call.args,
-        outputReplay: 'live_only',
-      }),
-      onToolCompleted: async (outcome) => emitter('tool.completed', {
-        toolCallId: outcome.call.id,
-        name: outcome.call.name,
-        args: outcome.executionArgs ?? outcome.call.args,
-        result: outcome.result,
-        error: toolFailure(outcome.result),
-        artifactId: outcome.artifactId || null,
-        artifacts: Array.isArray(outcome.artifacts) ? outcome.artifacts : [],
-      }),
-      onApprovalPending: async (approval) => emitter('approval.required', {
-        approvalId: approval.id,
-        toolName: approval.toolName,
-        args: approval.args,
-        risk: approval.risk,
-        metadataSource: approval.metadataSource,
-        reason: approval.reason,
-        expiresAt: approval.expiresAt,
-      }),
-      onApprovalResolved: async (decision) => emitter('approval.resolved', {
-        approvalId: decision.approvalId || null,
-        proceed: !!decision.proceed,
-        edited: !!decision.edited,
-        args: decision.args ?? null,
-        reason: decision.reason || null,
-      }),
+      ...eventCallbacks,
     })
   }
 }
