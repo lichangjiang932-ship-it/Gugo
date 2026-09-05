@@ -134,60 +134,17 @@ export class EventWriteBehindError extends Error {
  * all failures accumulated before it; later writes may then start a new ordered
  * generation, which lets the caller persist a structured failed terminal event.
  */
-export function createEventWriteBehind({
+function createEventBatchWriter({
   writeBatch,
-  writeBatchSync = null,
-  recordFailure = null,
-  recordEmergencyFailure = null,
-  logger = console,
-  clone = null,
-  maxDelayMs = DEFAULT_EVENT_WRITE_MAX_DELAY_MS,
-  maxQueueSize = DEFAULT_EVENT_WRITE_MAX_QUEUE_SIZE,
-  maxAttempts = DEFAULT_EVENT_WRITE_MAX_ATTEMPTS,
-  now = Date.now,
-  setTimer = setTimeout,
-  clearTimer = clearTimeout,
-} = {}) {
-  if (typeof writeBatch !== 'function') throw new TypeError('writeBatch is required')
-  const safeDelayMs = boundedInteger(maxDelayMs, DEFAULT_EVENT_WRITE_MAX_DELAY_MS, { min: 0, max: 60_000 })
-  const safeMaxQueueSize = boundedInteger(
-    maxQueueSize,
-    DEFAULT_EVENT_WRITE_MAX_QUEUE_SIZE,
-    { min: 1, max: 1_000_000 },
-  )
-  const safeMaxAttempts = boundedInteger(
-    maxAttempts,
-    DEFAULT_EVENT_WRITE_MAX_ATTEMPTS,
-    { min: 1, max: 20 },
-  )
-  let pending = []
-  let timer = null
-  let tail = Promise.resolve()
-  let closed = false
-  let activeFlush = null
-  let closePromise = null
+  recordFailure,
+  recordEmergencyFailure,
+  logger,
+  safeMaxAttempts,
+  now,
+  stats,
+}) {
   let barrierFailure = null
   let committedSinceBarrier = []
-  const stats = {
-    enqueued: 0,
-    written: 0,
-    batches: 0,
-    retries: 0,
-    failedEvents: 0,
-    failedBatches: 0,
-    overflowFlushes: 0,
-    lastFailureAt: null,
-    lastError: null,
-  }
-
-  const snapshotStats = () => ({ ...stats, pending: pending.length })
-
-  const clearScheduledFlush = () => {
-    if (timer === null) return
-    clearTimer(timer)
-    timer = null
-  }
-
   const reportFailure = async (batch, error, { attempts = safeMaxAttempts, blocked = false } = {}) => {
     const failedAt = Math.max(0, Math.floor(Number(now()) || Date.now()))
     const underlyingError = error?.cause || error
@@ -195,37 +152,24 @@ export function createEventWriteBehind({
     stats.failedBatches += 1
     stats.lastFailureAt = failedAt
     stats.lastError = errorMessage(underlyingError)
-    if (barrierFailure) {
-      barrierFailure.include(batch, { blocked })
-    } else {
+    if (barrierFailure) barrierFailure.include(batch, { blocked })
+    else {
       barrierFailure = new EventWriteBehindError({
-        batch,
-        cause: underlyingError,
-        attempts: Math.max(1, attempts),
-        failedAt,
+        batch, cause: underlyingError, attempts: Math.max(1, attempts), failedAt,
       })
       if (blocked) barrierFailure.blockedEventCount += batch.length
     }
     try {
       await recordFailure?.({
-        batch,
-        error: underlyingError,
-        errorMessage: stats.lastError,
-        attempts: Math.max(1, attempts),
-        failedAt,
-        blocked,
+        batch, error: underlyingError, errorMessage: stats.lastError,
+        attempts: Math.max(1, attempts), failedAt, blocked,
       })
     } catch (recordError) {
       logger?.error?.('[event-write-behind] failed to persist write failure:', errorMessage(recordError))
       try {
         await recordEmergencyFailure?.({
-          batch,
-          error: underlyingError,
-          errorMessage: stats.lastError,
-          attempts: Math.max(1, attempts),
-          failedAt,
-          blocked,
-          journalError: recordError,
+          batch, error: underlyingError, errorMessage: stats.lastError,
+          attempts: Math.max(1, attempts), failedAt, blocked, journalError: recordError,
         })
       } catch (emergencyError) {
         logger?.error?.(
@@ -240,11 +184,7 @@ export function createEventWriteBehind({
     )
     return barrierFailure
   }
-
   const writeWithRetry = async (batch, writer = writeBatch) => {
-    // Once an earlier ordered batch is missing, later batches in the same
-    // generation must not leapfrog it. The next explicit flush observes and
-    // clears the generation failure before any new generation can be written.
     if (barrierFailure) {
       if (findTurnEventFenceError(barrierFailure)) {
         barrierFailure.include(batch, { blocked: true })
@@ -270,12 +210,7 @@ export function createEventWriteBehind({
           stats.failedBatches += 1
           stats.lastFailureAt = failedAt
           stats.lastError = errorMessage(fence)
-          barrierFailure = new EventWriteBehindError({
-            batch,
-            cause: fence,
-            attempts: attempt,
-            failedAt,
-          })
+          barrierFailure = new EventWriteBehindError({ batch, cause: fence, attempts: attempt, failedAt })
           barrierFailure.retryable = false
           return { ok: false, error: barrierFailure, attempts: attempt }
         }
@@ -285,9 +220,96 @@ export function createEventWriteBehind({
     const failure = await reportFailure(batch, lastError)
     return { ok: false, error: failure, attempts: safeMaxAttempts }
   }
+  return {
+    writeWithRetry,
+    consumeFailure(statsSnapshot) {
+      if (!barrierFailure) return null
+      const failure = barrierFailure
+      barrierFailure = null
+      committedSinceBarrier = []
+      failure.stats = statsSnapshot
+      return failure
+    },
+    consumeCommitted() {
+      const entries = committedSinceBarrier
+      committedSinceBarrier = []
+      return entries
+    },
+  }
+}
+
+function normalizeWriteBehindLimits({ writeBatch, maxDelayMs, maxQueueSize, maxAttempts }) {
+  if (typeof writeBatch !== 'function') throw new TypeError('writeBatch is required')
+  return {
+    safeDelayMs: boundedInteger(maxDelayMs, DEFAULT_EVENT_WRITE_MAX_DELAY_MS, { min: 0, max: 60_000 }),
+    safeMaxQueueSize: boundedInteger(
+      maxQueueSize, DEFAULT_EVENT_WRITE_MAX_QUEUE_SIZE, { min: 1, max: 1_000_000 },
+    ),
+    safeMaxAttempts: boundedInteger(
+      maxAttempts, DEFAULT_EVENT_WRITE_MAX_ATTEMPTS, { min: 1, max: 20 },
+    ),
+  }
+}
+
+function createWriteBehindStats() {
+  return {
+    enqueued: 0,
+    written: 0,
+    batches: 0,
+    retries: 0,
+    failedEvents: 0,
+    failedBatches: 0,
+    overflowFlushes: 0,
+    lastFailureAt: null,
+    lastError: null,
+  }
+}
+
+export function createEventWriteBehind({
+  writeBatch,
+  writeBatchSync = null,
+  recordFailure = null,
+  recordEmergencyFailure = null,
+  logger = console,
+  clone = null,
+  maxDelayMs = DEFAULT_EVENT_WRITE_MAX_DELAY_MS,
+  maxQueueSize = DEFAULT_EVENT_WRITE_MAX_QUEUE_SIZE,
+  maxAttempts = DEFAULT_EVENT_WRITE_MAX_ATTEMPTS,
+  now = Date.now,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+} = {}) {
+  const { safeDelayMs, safeMaxQueueSize, safeMaxAttempts } = normalizeWriteBehindLimits({
+    writeBatch, maxDelayMs, maxQueueSize, maxAttempts,
+  })
+  let pending = []
+  let timer = null
+  let tail = Promise.resolve()
+  let closed = false
+  let activeFlush = null
+  let closePromise = null
+  const stats = createWriteBehindStats()
+
+  const snapshotStats = () => ({ ...stats, pending: pending.length })
+
+  const clearScheduledFlush = () => {
+    if (timer === null) return
+    clearTimer(timer)
+    timer = null
+  }
+
+  const batchWriter = createEventBatchWriter({
+    writeBatch,
+    recordFailure,
+    recordEmergencyFailure,
+    logger,
+    safeMaxAttempts,
+    now,
+    stats,
+  })
 
   const queueBatch = (batch, writer = writeBatch) => {
-    const operation = tail.then(() => writeWithRetry(batch, writer))
+    const operation = tail.then(() => batchWriter.writeWithRetry(batch, writer))
     tail = operation.then(() => undefined, () => undefined)
     return operation
   }
@@ -329,17 +351,9 @@ export function createEventWriteBehind({
       await tail
     }
     await tail
-    if (barrierFailure) {
-      const failure = barrierFailure
-      barrierFailure = null
-      // A failed ordered generation is not a safe live-delivery boundary,
-      // even if an earlier sub-batch happened to reach storage.
-      committedSinceBarrier = []
-      failure.stats = snapshotStats()
-      throw failure
-    }
-    const committedEntries = committedSinceBarrier
-    committedSinceBarrier = []
+    const failure = batchWriter.consumeFailure(snapshotStats())
+    if (failure) throw failure
+    const committedEntries = batchWriter.consumeCommitted()
     return { ...snapshotStats(), committedEntries }
   }
 
