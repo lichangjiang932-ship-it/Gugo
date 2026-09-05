@@ -77,11 +77,6 @@ function attachmentTurnError(error) {
   return wrapped
 }
 
-/**
- * Resolve a server-side `/skill` prefix when the caller did not provide an
- * explicit skill list. Display content remains unchanged; only model content
- * has the prefix removed.
- */
 function resolveSkillPrefixFromContent(content, skillIds) {
   const normalized = normalizeTurnIds(skillIds)
   if (normalized.length) return { skillIds: normalized, content }
@@ -112,13 +107,288 @@ function requirePort(name, value) {
   return value
 }
 
-/**
- * Persist the durable beginning of a Turn.
- *
- * This runtime ends after `turn.started` is committed and before an execution
- * lease is acquired. Storage is available only through the injected narrow
- * ports; the runtime has no knowledge of SQLite or the active adapter.
- */
+function normalizeTurnStartRequest(input = {}) {
+  const {
+    userId, sessionId, turnId, content, displayContent = null, workspacePath = '',
+    locale = null, modelName = null, modelProviderId = null, modelConfigRevision = null,
+    modelMode = 'agent', history = [], agentId = null, skillIds = [],
+    skillDefinitions = [], toolsConfig = null, intentMode = 'auto', approvalMode = null,
+    attachments = [], authMode = null,
+  } = input
+  const rawText = String(content || '').trim()
+  const normalizedAttachmentIds = normalizeAttachmentIds(attachments)
+  const resolvedSkill = resolveSkillPrefixFromContent(rawText, skillIds)
+  const normalizedLocale = locale === null || locale === undefined || locale === ''
+    ? null
+    : normalizeTurnLocale(locale)
+  const text = resolvedSkill.content
+    || (normalizedAttachmentIds.length ? attachmentOnlyPrompt(normalizedLocale) : '')
+  const displayText = String(displayContent ?? rawText ?? '').trim() || text
+  if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
+  if (!sessionId) throw new TurnEngineError('SESSION_REQUIRED', 'sessionId is required')
+  if (!text) throw new TurnEngineError('CONTENT_REQUIRED', 'content is required')
+  return {
+    userId, sessionId, turnId, text, displayText, workspacePath, modelName,
+    authMode, history, normalizedAttachmentIds, normalizedLocale,
+    normalizedApprovalMode: normalizeTurnApprovalMode(approvalMode),
+    normalizedModelConfigRevision: normalizeTurnModelConfigRevision(modelConfigRevision),
+    normalizedModelProviderId: normalizeTurnOptionalId(modelProviderId),
+    normalizedModelMode: normalizeTurnModelMode(modelMode),
+    normalizedAgentId: normalizeTurnOptionalId(agentId),
+    normalizedSkillIds: normalizeTurnIds(resolvedSkill.skillIds),
+    skillDefinitions,
+    normalizedToolsConfig: normalizeServerToolsConfig(toolsConfig),
+    normalizedIntentMode: normalizeTurnIntentMode(intentMode),
+  }
+}
+
+async function prepareTurnStartSession(ports, request) {
+  const { userId, sessionId, turnId, authMode } = request
+  let session = await ports.readSession({ userId, sessionId })
+  const occupied = !session && await ports.sessionIdOccupied({ sessionId })
+  if (!session && occupied && authMode !== 'local') {
+    throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
+  }
+  if (!occupied) {
+    const existing = await ports.lastEvent({ userId, sessionId, turnId })
+    if (existing) throw new TurnEngineError('TURN_EXISTS', 'turn already exists; use resume', 409)
+  }
+  const modelBinding = await ports.resolveModelBinding({
+    userId,
+    modelName: request.modelName,
+    modelProviderId: request.normalizedModelProviderId,
+    modelConfigRevision: request.normalizedModelConfigRevision,
+    modelMode: request.normalizedModelMode,
+    requirePersistedBinding: false,
+  })
+  const turnDirectory = await ports.resolveProjectDirectory({
+    userId,
+    workspacePath: request.workspacePath,
+  }) || {}
+  const normalizedWorkspacePath = String(turnDirectory.workspacePath || '').trim() || null
+  const projectDirectory = String(turnDirectory.projectDirectory || '').trim() || null
+  const defaultOutputDirectory = String(
+    turnDirectory.defaultOutputDirectory || projectDirectory || '',
+  ).trim() || null
+  if (!session && occupied) {
+    session = await ports.claimLegacySession({ userId, sessionId, authMode })
+    if (!session) throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
+    const existing = await ports.lastEvent({ userId, sessionId, turnId })
+    if (existing) throw new TurnEngineError('TURN_EXISTS', 'turn already exists; use resume', 409)
+  }
+  const createdAt = ports.now()
+  const pendingSession = !session ? {
+    id: sessionId,
+    userId,
+    title: request.displayText.slice(0, 80) || 'Untitled',
+    createdAt,
+    ...(projectDirectory ? { workspacePath: normalizedWorkspacePath } : {}),
+  } : null
+  const atomicTurnStart = !!ports.commitTurnStart
+  if (pendingSession && !atomicTurnStart) {
+    try {
+      session = await ports.writeSession(pendingSession)
+    } catch (error) {
+      if (error?.code === 'SESSION_OWNERSHIP_CONFLICT') {
+        throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
+      }
+      const wrapped = new TurnEngineError('SESSION_CREATE_FAILED', 'failed to create session', 500)
+      wrapped.cause = error
+      throw wrapped
+    }
+  }
+  return {
+    session, modelBinding, normalizedWorkspacePath, projectDirectory,
+    defaultOutputDirectory, createdAt, pendingSession, atomicTurnStart,
+  }
+}
+
+async function prepareTurnStartMessages(ports, request, prepared) {
+  const { userId, sessionId, turnId } = request
+  let managedAttachments
+  try {
+    managedAttachments = await ports.validateAttachments({
+      userId,
+      sessionId,
+      attachmentIds: request.normalizedAttachmentIds,
+    })
+  } catch (error) {
+    throw attachmentTurnError(error)
+  }
+  const existingMessages = await ports.readMessages({ userId, sessionId, limit: 1 })
+  const safeHistory = existingMessages.length === 0 && Array.isArray(request.history)
+    ? request.history.slice()
+    : []
+  const stagedMessages = []
+  safeHistory.forEach((message, index) => {
+    const sourceRole = ['user', 'assistant', 'system', 'tool'].includes(message?.role)
+      ? message.role
+      : null
+    const role = sourceRole === 'tool' && !message?.tool_call_id ? 'system' : sourceRole
+    if (!role || typeof message?.content !== 'string') return
+    stagedMessages.push({
+      id: `${turnId}:history:${index}`,
+      userId,
+      sessionId,
+      role,
+      modelContext: importedMessageContext(message, sourceRole),
+      content: sourceRole === 'tool' ? `[历史工具结果]\n${message.content}` : message.content,
+      createdAt: prepared.createdAt - safeHistory.length + index,
+      updatedAt: prepared.createdAt,
+    })
+  })
+  const userMessageId = `${turnId}:user`
+  stagedMessages.push({
+    id: userMessageId,
+    userId,
+    sessionId,
+    role: 'user',
+    content: request.displayText,
+    modelContext: {
+      version: 1,
+      turnId,
+      modelContent: request.text,
+      attachments: managedAttachments,
+    },
+    createdAt: prepared.createdAt,
+    updatedAt: prepared.createdAt,
+  })
+  return { managedAttachments, safeHistory, stagedMessages, userMessageId }
+}
+
+async function persistNonAtomicTurnMessages(ports, request, prepared, messages) {
+  const stagedMessageIds = []
+  const rollback = async () => {
+    for (const messageId of stagedMessageIds.reverse()) {
+      try { await ports.removeMessage({ userId: request.userId, messageId }) }
+      catch { /* best-effort compensation */ }
+    }
+  }
+  if (prepared.atomicTurnStart) return rollback
+  for (const message of messages.stagedMessages) {
+    await ports.writeMessage(message)
+    stagedMessageIds.push(message.id)
+  }
+  try {
+    await ports.bindAttachments({
+      userId: request.userId,
+      sessionId: request.sessionId,
+      messageId: messages.userMessageId,
+      attachmentIds: request.normalizedAttachmentIds,
+      now: prepared.createdAt,
+    })
+  } catch (error) {
+    await rollback()
+    throw attachmentTurnError(error)
+  }
+  return rollback
+}
+
+function turnStartedPayload(request, prepared, messages) {
+  const normalizedSkillDefinitions = prepareInlineSkillsForPrompt({
+    skillIds: request.normalizedSkillIds,
+    skillDefinitions: request.skillDefinitions,
+  })
+  const payload = {
+    content: request.text,
+    displayContent: request.displayText,
+    modelName: prepared.modelBinding.modelName,
+    modelProviderId: prepared.modelBinding.modelProviderId,
+    modelConfigRevision: prepared.modelBinding.modelConfigRevision,
+    modelMode: request.normalizedModelMode,
+    agentId: request.normalizedAgentId,
+    skillIds: request.normalizedSkillIds,
+    skillDefinitions: normalizedSkillDefinitions,
+    toolsConfig: request.normalizedToolsConfig,
+    intentMode: request.normalizedIntentMode,
+    ...(request.normalizedLocale ? { locale: request.normalizedLocale } : {}),
+    ...(request.normalizedApprovalMode ? { approvalMode: request.normalizedApprovalMode } : {}),
+    ...(prepared.projectDirectory ? {
+      workspacePath: prepared.normalizedWorkspacePath,
+      projectDirectory: prepared.projectDirectory,
+    } : {}),
+    userMessageId: messages.userMessageId,
+    attachments: messages.managedAttachments,
+    importedHistoryCount: messages.safeHistory.length,
+  }
+  return { payload, normalizedSkillDefinitions }
+}
+
+async function initializeTurnStart(ports, input) {
+  const request = normalizeTurnStartRequest(input)
+  const prepared = await prepareTurnStartSession(ports, request)
+  const messages = await prepareTurnStartMessages(ports, request, prepared)
+  const rollbackStagedMessages = await persistNonAtomicTurnMessages(ports, request, prepared, messages)
+  const emitter = ports.createEmitter({
+    userId: request.userId,
+    sessionId: request.sessionId,
+    turnId: request.turnId,
+    sequence: 0,
+  })
+  const { payload, normalizedSkillDefinitions } = turnStartedPayload(request, prepared, messages)
+  try {
+    await emitter('turn.started', payload, {
+      commitEvent: prepared.atomicTurnStart
+        ? ({ event }) => ports.commitTurnStart({
+            userId: request.userId,
+            session: prepared.pendingSession,
+            messages: messages.stagedMessages,
+            attachmentBinding: request.normalizedAttachmentIds.length > 0 ? {
+              userId: request.userId,
+              sessionId: request.sessionId,
+              messageId: messages.userMessageId,
+              attachmentIds: request.normalizedAttachmentIds,
+              now: prepared.createdAt,
+            } : null,
+            event,
+          })
+        : null,
+    })
+  } catch (error) {
+    try { await emitter.close() } catch { /* preserve the authoritative start failure */ }
+    if (!prepared.atomicTurnStart) await rollbackStagedMessages()
+    throw error
+  }
+  if (prepared.atomicTurnStart) {
+    const session = await ports.readSession({ userId: request.userId, sessionId: request.sessionId })
+    if (!session) {
+      try { await emitter.close() } catch { /* preserve the authoritative read failure */ }
+      throw new TurnEngineError(
+        'TURN_START_COMMIT_UNVERIFIED',
+        'turn start commit completed without a readable session',
+        503,
+      )
+    }
+  }
+  return {
+    scope: { userId: request.userId, sessionId: request.sessionId, turnId: request.turnId },
+    emitter,
+    execution: {
+      userId: request.userId,
+      sessionId: request.sessionId,
+      turnId: request.turnId,
+      turnStartedAt: prepared.createdAt,
+      content: request.text,
+      displayContent: request.displayText,
+      modelName: prepared.modelBinding.modelName,
+      modelProviderId: prepared.modelBinding.modelProviderId,
+      modelConfigRevision: prepared.modelBinding.modelConfigRevision,
+      modelRuntimeEnv: prepared.modelBinding.env,
+      modelMode: request.normalizedModelMode,
+      agentId: request.normalizedAgentId,
+      skillIds: request.normalizedSkillIds,
+      skillDefinitions: normalizedSkillDefinitions,
+      toolsConfig: request.normalizedToolsConfig,
+      intentMode: request.normalizedIntentMode,
+      ...(request.normalizedLocale ? { locale: request.normalizedLocale } : {}),
+      approvalMode: request.normalizedApprovalMode,
+      projectDirectory: prepared.projectDirectory,
+      defaultOutputDirectory: prepared.defaultOutputDirectory,
+    },
+  }
+}
+
+/** Persist the durable beginning of a Turn before an execution lease is acquired. */
 export function createTurnStartRuntime({
   readSession,
   sessionIdOccupied,
@@ -155,267 +425,5 @@ export function createTurnStartRuntime({
     createEmitter: requirePort('createEmitter', createEmitter),
     commitTurnStart: typeof commitTurnStart === 'function' ? commitTurnStart : null,
   }
-
-  return Object.freeze({
-    async initialize({
-      userId,
-      sessionId,
-      turnId,
-      content,
-      displayContent = null,
-      workspacePath = '',
-      locale = null,
-      modelName = null,
-      modelProviderId = null,
-      modelConfigRevision = null,
-      modelMode = 'agent',
-      history = [],
-      agentId = null,
-      skillIds = [],
-      skillDefinitions = [],
-      toolsConfig = null,
-      intentMode = 'auto',
-      approvalMode = null,
-      attachments = [],
-      authMode = null,
-    } = {}) {
-      const rawText = String(content || '').trim()
-      const normalizedAttachmentIds = normalizeAttachmentIds(attachments)
-      const resolvedSkill = resolveSkillPrefixFromContent(rawText, skillIds)
-      const normalizedLocale = locale === null || locale === undefined || locale === ''
-        ? null
-        : normalizeTurnLocale(locale)
-      const text = resolvedSkill.content
-        || (normalizedAttachmentIds.length ? attachmentOnlyPrompt(normalizedLocale) : '')
-      const displayText = String(displayContent ?? rawText ?? '').trim() || text
-      if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
-      if (!sessionId) throw new TurnEngineError('SESSION_REQUIRED', 'sessionId is required')
-      if (!text) throw new TurnEngineError('CONTENT_REQUIRED', 'content is required')
-      const normalizedApprovalMode = normalizeTurnApprovalMode(approvalMode)
-      const normalizedModelConfigRevision = normalizeTurnModelConfigRevision(modelConfigRevision)
-
-      let session = await ports.readSession({ userId, sessionId })
-      const occupied = !session && await ports.sessionIdOccupied({ sessionId })
-      if (!session && occupied && authMode !== 'local') {
-        throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
-      }
-      if (!occupied) {
-        const existing = await ports.lastEvent({ userId, sessionId, turnId })
-        if (existing) {
-          throw new TurnEngineError('TURN_EXISTS', 'turn already exists; use resume', 409)
-        }
-      }
-
-      // Readiness is resolved before any durable session/message/event state is
-      // created so rejected configuration never leaves an empty conversation.
-      const normalizedAgentId = normalizeTurnOptionalId(agentId)
-      const normalizedModelProviderId = normalizeTurnOptionalId(modelProviderId)
-      const normalizedModelMode = normalizeTurnModelMode(modelMode)
-      const modelBinding = await ports.resolveModelBinding({
-        userId,
-        modelName,
-        modelProviderId: normalizedModelProviderId,
-        modelConfigRevision: normalizedModelConfigRevision,
-        modelMode: normalizedModelMode,
-        requirePersistedBinding: false,
-      })
-      const turnDirectory = await ports.resolveProjectDirectory({ userId, workspacePath }) || {}
-      const normalizedWorkspacePath = String(turnDirectory.workspacePath || '').trim() || null
-      const projectDirectory = String(turnDirectory.projectDirectory || '').trim() || null
-      const defaultOutputDirectory = String(
-        turnDirectory.defaultOutputDirectory || projectDirectory || '',
-      ).trim() || null
-      // A local-auth caller may still own a chat created under its legacy user
-      // identity. Claiming it rewrites ownership and enqueues content outbox
-      // events, so it must happen only after the model binding preflight has
-      // accepted this Turn. The earlier occupancy read remains side-effect free.
-      if (!session && occupied) {
-        session = await ports.claimLegacySession({ userId, sessionId, authMode })
-        if (!session) {
-          throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
-        }
-        const existing = await ports.lastEvent({ userId, sessionId, turnId })
-        if (existing) {
-          throw new TurnEngineError('TURN_EXISTS', 'turn already exists; use resume', 409)
-        }
-      }
-      const createdAt = ports.now()
-      const pendingSession = !session ? {
-        id: sessionId,
-        userId,
-        title: displayText.slice(0, 80) || 'Untitled',
-        createdAt,
-        ...(projectDirectory ? { workspacePath: normalizedWorkspacePath } : {}),
-      } : null
-      const atomicTurnStart = !!ports.commitTurnStart
-      if (pendingSession && !atomicTurnStart) {
-        try {
-          session = await ports.writeSession(pendingSession)
-        } catch (error) {
-          if (error?.code === 'SESSION_OWNERSHIP_CONFLICT') {
-            throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
-          }
-          const wrapped = new TurnEngineError('SESSION_CREATE_FAILED', 'failed to create session', 500)
-          wrapped.cause = error
-          throw wrapped
-        }
-      }
-
-      const normalizedSkillIds = normalizeTurnIds(resolvedSkill.skillIds)
-      const normalizedSkillDefinitions = prepareInlineSkillsForPrompt({
-        skillIds: normalizedSkillIds,
-        skillDefinitions,
-      })
-      const normalizedToolsConfig = normalizeServerToolsConfig(toolsConfig)
-      const normalizedIntentMode = normalizeTurnIntentMode(intentMode)
-      let managedAttachments
-      try {
-        managedAttachments = await ports.validateAttachments({
-          userId,
-          sessionId,
-          attachmentIds: normalizedAttachmentIds,
-        })
-      } catch (error) {
-        throw attachmentTurnError(error)
-      }
-      const existingMessages = await ports.readMessages({ userId, sessionId, limit: 1 })
-      const safeHistory = existingMessages.length === 0 && Array.isArray(history) ? history.slice() : []
-      const stagedMessages = []
-      safeHistory.forEach((message, index) => {
-        const sourceRole = ['user', 'assistant', 'system', 'tool'].includes(message?.role) ? message.role : null
-        const role = sourceRole === 'tool' && !message?.tool_call_id ? 'system' : sourceRole
-        if (!role || typeof message?.content !== 'string') return
-        stagedMessages.push({
-          id: `${turnId}:history:${index}`,
-          userId,
-          sessionId,
-          role,
-          modelContext: importedMessageContext(message, sourceRole),
-          content: sourceRole === 'tool' ? `[历史工具结果]\n${message.content}` : message.content,
-          createdAt: createdAt - safeHistory.length + index,
-          updatedAt: createdAt,
-        })
-      })
-      const userMessageId = `${turnId}:user`
-      stagedMessages.push({
-        id: userMessageId,
-        userId,
-        sessionId,
-        role: 'user',
-        content: displayText,
-        modelContext: { version: 1, turnId, modelContent: text, attachments: managedAttachments },
-        createdAt,
-        updatedAt: createdAt,
-      })
-
-      const stagedMessageIds = []
-      const rollbackStagedMessages = async () => {
-        for (const messageId of stagedMessageIds.reverse()) {
-          try { await ports.removeMessage({ userId, messageId }) } catch { /* best-effort compensation */ }
-        }
-      }
-      if (!atomicTurnStart) {
-        for (const message of stagedMessages) {
-          await ports.writeMessage(message)
-          stagedMessageIds.push(message.id)
-        }
-        try {
-          await ports.bindAttachments({
-            userId,
-            sessionId,
-            messageId: userMessageId,
-            attachmentIds: normalizedAttachmentIds,
-            now: createdAt,
-          })
-        } catch (error) {
-          await rollbackStagedMessages()
-          throw attachmentTurnError(error)
-        }
-      }
-
-      const emitter = ports.createEmitter({ userId, sessionId, turnId, sequence: 0 })
-      try {
-        await emitter('turn.started', {
-          content: text,
-          displayContent: displayText,
-          modelName: modelBinding.modelName,
-          modelProviderId: modelBinding.modelProviderId,
-          modelConfigRevision: modelBinding.modelConfigRevision,
-          modelMode: normalizedModelMode,
-          agentId: normalizedAgentId,
-          skillIds: normalizedSkillIds,
-          skillDefinitions: normalizedSkillDefinitions,
-          toolsConfig: normalizedToolsConfig,
-          intentMode: normalizedIntentMode,
-          ...(normalizedLocale ? { locale: normalizedLocale } : {}),
-          ...(normalizedApprovalMode ? { approvalMode: normalizedApprovalMode } : {}),
-          ...(projectDirectory ? {
-            workspacePath: normalizedWorkspacePath,
-            projectDirectory,
-          } : {}),
-          userMessageId,
-          attachments: managedAttachments,
-          importedHistoryCount: safeHistory.length,
-        }, {
-          commitEvent: atomicTurnStart
-            ? ({ event }) => ports.commitTurnStart({
-                userId,
-                session: pendingSession,
-                messages: stagedMessages,
-                attachmentBinding: normalizedAttachmentIds.length > 0 ? {
-                  userId,
-                  sessionId,
-                  messageId: userMessageId,
-                  attachmentIds: normalizedAttachmentIds,
-                  now: createdAt,
-                } : null,
-                event,
-              })
-            : null,
-        })
-      } catch (error) {
-        try { await emitter.close() } catch { /* preserve the authoritative start failure */ }
-        if (!atomicTurnStart) await rollbackStagedMessages()
-        throw error
-      }
-      if (atomicTurnStart) {
-        session = await ports.readSession({ userId, sessionId })
-        if (!session) {
-          try { await emitter.close() } catch { /* preserve the authoritative read failure */ }
-          throw new TurnEngineError(
-            'TURN_START_COMMIT_UNVERIFIED',
-            'turn start commit completed without a readable session',
-            503,
-          )
-        }
-      }
-
-      return {
-        scope: { userId, sessionId, turnId },
-        emitter,
-        execution: {
-          userId,
-          sessionId,
-          turnId,
-          turnStartedAt: createdAt,
-          content: text,
-          displayContent: displayText,
-          modelName: modelBinding.modelName,
-          modelProviderId: modelBinding.modelProviderId,
-          modelConfigRevision: modelBinding.modelConfigRevision,
-          modelRuntimeEnv: modelBinding.env,
-          modelMode: normalizedModelMode,
-          agentId: normalizedAgentId,
-          skillIds: normalizedSkillIds,
-          skillDefinitions: normalizedSkillDefinitions,
-          toolsConfig: normalizedToolsConfig,
-          intentMode: normalizedIntentMode,
-          ...(normalizedLocale ? { locale: normalizedLocale } : {}),
-          approvalMode: normalizedApprovalMode,
-          projectDirectory,
-          defaultOutputDirectory,
-        },
-      }
-    },
-  })
+  return Object.freeze({ initialize: (input) => initializeTurnStart(ports, input) })
 }

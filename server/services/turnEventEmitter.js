@@ -245,6 +245,219 @@ function authoritativeDeferredEntries(result, requestedBatch) {
   return committed
 }
 
+function publishLiveEvent(runtime, entry) {
+  try {
+    const delivery = runtime.publishCommittedEvent(entry)
+    if (delivery && typeof delivery.catch === 'function') delivery.catch(() => {})
+  } catch {
+    // Live observers are non-authoritative and cannot change persistence ACKs.
+  }
+}
+
+async function journalReportedFailure(runtime, failure) {
+  if (findTurnEventFenceError(failure)) return
+  const batch = Array.isArray(failure?.failedEntries) ? failure.failedEntries : []
+  const failedAt = Number.isInteger(failure?.failedAt) ? failure.failedAt : runtime.now()
+  let journalError = null
+  try {
+    await runtime.recordEventWriteFailure?.({
+      batch,
+      error: failure?.cause || failure,
+      errorMessage: String(failure?.message || failure || 'event append failed').slice(0, 2_000),
+      attempts: Math.max(1, Math.floor(Number(failure?.attempts) || 1)),
+      failedAt,
+    })
+  } catch (error) {
+    journalError = error
+    try { runtime.warn?.('turn.event.failure_journal', error, runtime.scope) }
+    catch { /* diagnostic journal remains best-effort */ }
+  }
+  if (!journalError) return
+  try {
+    await runtime.recordEmergencyFailure?.({
+      batch,
+      error: failure?.cause || failure,
+      errorMessage: String(failure?.message || failure || 'event append failed').slice(0, 2_000),
+      attempts: Math.max(1, Math.floor(Number(failure?.attempts) || 1)),
+      failedAt,
+      journalError,
+    })
+  } catch (error) {
+    try { runtime.warn?.('turn.event.emergency_failure_journal', error, runtime.scope) }
+    catch { /* no further durable fallback is available */ }
+  }
+}
+
+async function drainEventWriter(runtime, method = 'flush') {
+  const { state, eventWriteBehind } = runtime
+  try {
+    const result = await eventWriteBehind[method]()
+    const resultSignal = failureSignal(result)
+    const statsSignal = failureSignal(writerStats(eventWriteBehind))
+    const currentFailureSignal = statsSignal || resultSignal
+    const failureAdvanced = currentFailureSignal?.hasFailure === true
+      && currentFailureSignal.key !== state.observedFailureSignal?.key
+    state.observedFailureSignal = currentFailureSignal || state.observedFailureSignal
+    const deferredBatch = state.deferredSinceBarrier
+    state.deferredSinceBarrier = []
+    if (result?.ok === false || failureAdvanced) {
+      const failure = reportedBarrierFailure(result, deferredBatch, runtime.now)
+      await journalReportedFailure(runtime, failure)
+      throw failure
+    }
+    for (const entry of authoritativeDeferredEntries(result, deferredBatch)) {
+      publishLiveEvent(runtime, entry)
+    }
+    return result
+  } catch (error) {
+    state.observedFailureSignal = failureSignal(writerStats(eventWriteBehind))
+      || state.observedFailureSignal
+    const deferredBatch = state.deferredSinceBarrier
+    state.deferredSinceBarrier = []
+    let persistenceFailure = findEventPersistenceFailure(error)
+    if (!persistenceFailure) {
+      persistenceFailure = reportedBarrierFailure({ error }, deferredBatch, runtime.now)
+      await journalReportedFailure(runtime, persistenceFailure)
+    }
+    if (persistenceFailure
+      && persistenceFailure.firstFailedSequence === null
+      && deferredBatch.length > 0
+      && typeof persistenceFailure.include === 'function') {
+      persistenceFailure.include(deferredBatch)
+    }
+    const firstFailedSequence = Number(persistenceFailure?.firstFailedSequence)
+    if (String(persistenceFailure?.code || '').trim().toUpperCase() === TURN_EVENT_PERSISTENCE_FAILURE_CODE
+      && Number.isInteger(firstFailedSequence)
+      && firstFailedSequence >= 0) {
+      state.nextSequence = Math.min(state.nextSequence, firstFailedSequence)
+    }
+    throw persistenceFailure
+  }
+}
+
+async function appendTurnEvent(runtime, type, payload, options) {
+  const { state } = runtime
+  const { beforeAppend, afterAppend, checkpointState = null, commitEvent = null } = options
+  const event = createTurnEvent({
+    id: runtime.idFactory(),
+    sessionId: runtime.scope.sessionId,
+    turnId: runtime.scope.turnId,
+    sequence: state.nextSequence,
+    type,
+    payload: incompleteBoundaryPayload(type, payload),
+    createdAt: runtime.now(),
+  })
+  await beforeAppend?.(event)
+  let stored
+  if (DEFERRED_EVENT_TYPES.has(type) && checkpointState === null && !commitEvent) {
+    const entry = { userId: runtime.scope.userId, event, checkpointState, executionLease: state.executionLease }
+    const queued = runtime.eventWriteBehind.enqueue(entry)
+    state.deferredSinceBarrier.push(queued?.event ? queued : entry)
+    stored = queued?.event || event
+  } else {
+    await drainEventWriter(runtime, 'flush')
+    try {
+      stored = commitEvent
+        ? await commitEvent({ userId: runtime.scope.userId, event, checkpointState })
+        : await runtime.appendEvent({
+            userId: runtime.scope.userId,
+            event,
+            checkpointState,
+            executionLease: state.executionLease,
+          })
+      if (isDurableTurnBoundaryEventType(type)) {
+        const verification = await runtime.verifyEventCommit({
+          userId: runtime.scope.userId,
+          event,
+          storedEvent: stored,
+        })
+        if (verification?.committed !== true || !verification?.receipt) {
+          throw unverifiedCommitError(event, verification)
+        }
+      }
+    } catch (error) {
+      const fenceError = findTurnEventFenceError(error)
+      if (fenceError) throw fenceError
+      const failedAt = runtime.now()
+      const failedEntry = {
+        userId: runtime.scope.userId,
+        event,
+        checkpointState,
+        executionLease: state.executionLease,
+      }
+      let journalError = null
+      try {
+        await runtime.recordEventWriteFailure?.({
+          batch: [failedEntry], error,
+          errorMessage: String(error?.message || error || 'event append failed').slice(0, 2_000),
+          attempts: 1, failedAt,
+        })
+      } catch (writeFailureJournalError) {
+        journalError = writeFailureJournalError
+        try {
+          runtime.warn?.('turn.event.failure_journal', writeFailureJournalError, {
+            ...runtime.scope, eventType: type, eventSequence: event.sequence,
+          })
+        } catch { /* diagnostic journal remains best-effort */ }
+      }
+      if (journalError) {
+        try {
+          await runtime.recordEmergencyFailure?.({
+            batch: [failedEntry], error,
+            errorMessage: String(error?.message || error || 'event append failed').slice(0, 2_000),
+            attempts: 1, failedAt, journalError,
+          })
+        } catch (emergencyError) {
+          try {
+            runtime.warn?.('turn.event.emergency_failure_journal', emergencyError, {
+              ...runtime.scope, eventType: type, eventSequence: event.sequence,
+            })
+          } catch { /* no further durable fallback is available */ }
+        }
+      }
+      if (isDurableTurnBoundaryEventType(type)) {
+        const failure = createTerminalPersistenceFailure(error, type)
+        failure.eventId = event.id
+        failure.eventSequence = event.sequence
+        failure.failedAt = failedAt
+        throw failure
+      }
+      throw new EventWriteBehindError({ batch: [failedEntry], cause: error, attempts: 1, failedAt })
+    }
+  }
+  if (!(DEFERRED_EVENT_TYPES.has(type) && checkpointState === null && !commitEvent)) {
+    await afterAppend?.(stored, event)
+    publishLiveEvent(runtime, { userId: runtime.scope.userId, event: stored })
+  }
+  state.nextSequence += 1
+  return stored
+}
+
+function emitTurnEvent(runtime, type, payload = {}, options = {}) {
+  const { state } = runtime
+  if (state.closed) return Promise.reject(runtime.createClosedError())
+  if (type === 'turn.completed' && !isSuccessfulTurnCompletedEvent({ type, payload })) {
+    return Promise.reject(Object.assign(
+      new Error('turn.completed payload contains incomplete terminal evidence'),
+      { code: 'TURN_COMPLETION_INVALID', status: 409, retryable: false },
+    ))
+  }
+  if (options.commitEvent !== null && options.commitEvent !== undefined
+    && typeof options.commitEvent !== 'function') {
+    return Promise.reject(new TypeError('commitEvent must be a function or null'))
+  }
+  if (options.commitEvent && options.beforeAppend) {
+    return Promise.reject(new TypeError('commitEvent and beforeAppend are mutually exclusive'))
+  }
+  if (options.afterAppend !== undefined && options.afterAppend !== null
+    && typeof options.afterAppend !== 'function') {
+    return Promise.reject(new TypeError('afterAppend must be a function when provided'))
+  }
+  const pending = state.appendQueue.then(() => appendTurnEvent(runtime, type, payload, options))
+  state.appendQueue = pending.catch(() => {})
+  return pending
+}
+
 /**
  * Ordered Session Log writer for one Turn.
  *
@@ -282,12 +495,15 @@ export function createTurnEventEmitter({
   if (typeof createEventWriteBehind !== 'function') throw new TypeError('createEventWriteBehind is required')
   if (typeof publishCommittedEvent !== 'function') throw new TypeError('publishCommittedEvent must be a function')
 
-  let nextSequence = sequence
-  let appendQueue = Promise.resolve()
-  let closed = false
-  let closePromise = null
-  let deferredSinceBarrier = []
-  let executionLease = null
+  const state = {
+    nextSequence: sequence,
+    appendQueue: Promise.resolve(),
+    closed: false,
+    closePromise: null,
+    deferredSinceBarrier: [],
+    executionLease: null,
+    observedFailureSignal: null,
+  }
   const eventWriteBehind = createEventWriteBehind()
   if (!eventWriteBehind
     || typeof eventWriteBehind.enqueue !== 'function'
@@ -295,251 +511,39 @@ export function createTurnEventEmitter({
     throw new TypeError('eventWriteBehindFactory must return an event write-behind queue')
   }
   onWriterOpen?.(eventWriteBehind)
-  let observedFailureSignal = failureSignal(writerStats(eventWriteBehind))
-
-  const publishLiveEvent = (entry) => {
-    try {
-      const delivery = publishCommittedEvent(entry)
-      if (delivery && typeof delivery.catch === 'function') delivery.catch(() => {})
-    } catch {
-      // Live observers are non-authoritative and cannot change persistence ACKs.
-    }
+  state.observedFailureSignal = failureSignal(writerStats(eventWriteBehind))
+  const runtime = {
+    scope: { userId, sessionId, turnId },
+    state,
+    idFactory,
+    now,
+    appendEvent,
+    verifyEventCommit,
+    eventWriteBehind,
+    recordEventWriteFailure,
+    recordEmergencyFailure,
+    createClosedError,
+    publishCommittedEvent,
+    warn,
   }
-
-  const journalReportedFailure = async (failure) => {
-    if (findTurnEventFenceError(failure)) return
-    const batch = Array.isArray(failure?.failedEntries) ? failure.failedEntries : []
-    const failedAt = Number.isInteger(failure?.failedAt) ? failure.failedAt : now()
-    let journalError = null
-    try {
-      await recordEventWriteFailure?.({
-        batch,
-        error: failure?.cause || failure,
-        errorMessage: String(failure?.message || failure || 'event append failed').slice(0, 2_000),
-        attempts: Math.max(1, Math.floor(Number(failure?.attempts) || 1)),
-        failedAt,
-      })
-    } catch (error) {
-      journalError = error
-      try {
-        warn?.('turn.event.failure_journal', error, { userId, sessionId, turnId })
-      } catch { /* diagnostic journal remains best-effort */ }
-    }
-    if (!journalError) return
-    try {
-      await recordEmergencyFailure?.({
-        batch,
-        error: failure?.cause || failure,
-        errorMessage: String(failure?.message || failure || 'event append failed').slice(0, 2_000),
-        attempts: Math.max(1, Math.floor(Number(failure?.attempts) || 1)),
-        failedAt,
-        journalError,
-      })
-    } catch (error) {
-      try {
-        warn?.('turn.event.emergency_failure_journal', error, { userId, sessionId, turnId })
-      } catch { /* no further durable fallback is available */ }
-    }
-  }
-
-  const drainWriter = async (method = 'flush') => {
-    try {
-      const result = await eventWriteBehind[method]()
-      const resultSignal = failureSignal(result)
-      const statsSignal = failureSignal(writerStats(eventWriteBehind))
-      // A writer that exposes getStats() owns the canonical counter shape.
-      // Mixing its reduced snapshot with a richer flush result (for example a
-      // lastError field) would make the same historical failure look new at
-      // every later barrier.
-      const currentFailureSignal = statsSignal || resultSignal
-      const failureAdvanced = currentFailureSignal?.hasFailure === true
-        && currentFailureSignal.key !== observedFailureSignal?.key
-      observedFailureSignal = currentFailureSignal || observedFailureSignal
-      const deferredBatch = deferredSinceBarrier
-      deferredSinceBarrier = []
-      if (result?.ok === false || failureAdvanced) {
-        const failure = reportedBarrierFailure(result, deferredBatch, now)
-        await journalReportedFailure(failure)
-        throw failure
-      }
-      for (const entry of authoritativeDeferredEntries(result, deferredBatch)) {
-        publishLiveEvent(entry)
-      }
-      return result
-    } catch (error) {
-      observedFailureSignal = failureSignal(writerStats(eventWriteBehind)) || observedFailureSignal
-      const deferredBatch = deferredSinceBarrier
-      deferredSinceBarrier = []
-      let persistenceFailure = findEventPersistenceFailure(error)
-      if (!persistenceFailure) {
-        // Custom writer implementations are allowed at this seam and do not
-        // necessarily throw EventWriteBehindError themselves. Normalize every
-        // rejected durability barrier so callers cannot continue with a raw
-        // error, skip the missing sequence, and append a contradictory later
-        // terminal event.
-        persistenceFailure = reportedBarrierFailure({ error }, deferredBatch, now)
-        await journalReportedFailure(persistenceFailure)
-      }
-      if (persistenceFailure
-        && persistenceFailure.firstFailedSequence === null
-        && deferredBatch.length > 0
-        && typeof persistenceFailure.include === 'function') {
-        persistenceFailure.include(deferredBatch)
-      }
-      const sequenceFailure = persistenceFailure
-      const firstFailedSequence = Number(sequenceFailure?.firstFailedSequence)
-      if (String(sequenceFailure?.code || '').trim().toUpperCase() === TURN_EVENT_PERSISTENCE_FAILURE_CODE
-        && Number.isInteger(firstFailedSequence)
-        && firstFailedSequence >= 0) {
-        // The queued event was never durable. Reuse its sequence for the
-        // structured failed terminal so the log remains contiguous.
-        nextSequence = Math.min(nextSequence, firstFailedSequence)
-      }
-      throw persistenceFailure
-    }
-  }
-
-  const emit = (type, payload = {}, {
-    beforeAppend,
-    afterAppend,
-    checkpointState = null,
-    commitEvent = null,
-  } = {}) => {
-    if (closed) return Promise.reject(createClosedError())
-    if (type === 'turn.completed'
-      && !isSuccessfulTurnCompletedEvent({ type, payload })) {
-      return Promise.reject(Object.assign(new Error('turn.completed payload contains incomplete terminal evidence'), {
-        code: 'TURN_COMPLETION_INVALID',
-        status: 409,
-        retryable: false,
-      }))
-    }
-    if (commitEvent !== null && typeof commitEvent !== 'function') {
-      return Promise.reject(new TypeError('commitEvent must be a function or null'))
-    }
-    if (commitEvent && beforeAppend) {
-      return Promise.reject(new TypeError('commitEvent and beforeAppend are mutually exclusive'))
-    }
-    if (afterAppend !== undefined && afterAppend !== null && typeof afterAppend !== 'function') {
-      return Promise.reject(new TypeError('afterAppend must be a function when provided'))
-    }
-    const pending = appendQueue.then(async () => {
-      const event = createTurnEvent({
-        id: idFactory(),
-        sessionId,
-        turnId,
-        sequence: nextSequence,
-        type,
-        payload: incompleteBoundaryPayload(type, payload),
-        createdAt: now(),
-      })
-      await beforeAppend?.(event)
-      let stored
-      if (DEFERRED_EVENT_TYPES.has(type) && checkpointState === null && !commitEvent) {
-        const entry = { userId, event, checkpointState, executionLease }
-        const queued = eventWriteBehind.enqueue(entry)
-        deferredSinceBarrier.push(queued?.event ? queued : entry)
-        stored = queued?.event || event
-      } else {
-        await drainWriter('flush')
-        try {
-          stored = commitEvent
-            ? await commitEvent({ userId, event, checkpointState })
-            : await appendEvent({ userId, event, checkpointState, executionLease })
-          if (isDurableTurnBoundaryEventType(type)) {
-            const verification = await verifyEventCommit({ userId, event, storedEvent: stored })
-            if (verification?.committed !== true || !verification?.receipt) {
-              throw unverifiedCommitError(event, verification)
-            }
-          }
-        } catch (error) {
-          const fenceError = findTurnEventFenceError(error)
-          if (fenceError) throw fenceError
-          const failedAt = now()
-          const failedEntry = { userId, event, checkpointState, executionLease }
-          let journalError = null
-          try {
-            await recordEventWriteFailure?.({
-              batch: [failedEntry],
-              error,
-              errorMessage: String(error?.message || error || 'event append failed').slice(0, 2_000),
-              attempts: 1,
-              failedAt,
-            })
-          } catch (writeFailureJournalError) {
-            journalError = writeFailureJournalError
-            try {
-              warn?.('turn.event.failure_journal', writeFailureJournalError, {
-                userId,
-                sessionId,
-                turnId,
-                eventType: type,
-                eventSequence: event.sequence,
-              })
-            } catch { /* diagnostic journal remains best-effort */ }
-          }
-          if (journalError) {
-            try {
-              await recordEmergencyFailure?.({
-                batch: [failedEntry],
-                error,
-                errorMessage: String(error?.message || error || 'event append failed').slice(0, 2_000),
-                attempts: 1,
-                failedAt,
-                journalError,
-              })
-            } catch (emergencyError) {
-              try {
-                warn?.('turn.event.emergency_failure_journal', emergencyError, {
-                  userId,
-                  sessionId,
-                  turnId,
-                  eventType: type,
-                  eventSequence: event.sequence,
-                })
-              } catch { /* no further durable fallback is available */ }
-            }
-          }
-          if (isDurableTurnBoundaryEventType(type)) {
-            const failure = createTerminalPersistenceFailure(error, type)
-            failure.eventId = event.id
-            failure.eventSequence = event.sequence
-            failure.failedAt = failedAt
-            throw failure
-          }
-          throw new EventWriteBehindError({
-            batch: [failedEntry],
-            cause: error,
-            attempts: 1,
-            failedAt,
-          })
-        }
-      }
-      if (!(DEFERRED_EVENT_TYPES.has(type) && checkpointState === null && !commitEvent)) {
-        await afterAppend?.(stored, event)
-        // A transaction helper may coalesce a concurrent/idempotent request
-        // onto an event that was committed by another writer. Publish the
-        // authoritative persistence result, never the losing request event.
-        publishLiveEvent({ userId, event: stored })
-      }
-      nextSequence += 1
-      return stored
-    })
-    // One rejected append must not poison the queue used to persist a later
-    // structured failure terminal.
-    appendQueue = pending.catch(() => {})
-    return pending
-  }
-
+  const emit = (type, payload = {}, options = {}) => emitTurnEvent(
+    runtime,
+    type,
+    payload,
+    options,
+  )
   emit.close = () => {
-    if (closePromise) return closePromise
-    closed = true
-    closePromise = (async () => {
-      await appendQueue
-      await drainWriter(typeof eventWriteBehind.close === 'function' ? 'close' : 'flush')
+    if (state.closePromise) return state.closePromise
+    state.closed = true
+    state.closePromise = (async () => {
+      await state.appendQueue
+      await drainEventWriter(
+        runtime,
+        typeof eventWriteBehind.close === 'function' ? 'close' : 'flush',
+      )
       onWriterClose?.(eventWriteBehind)
     })()
-    return closePromise
+    return state.closePromise
   }
   emit.bindExecutionLease = (proof) => {
     const ownerId = String(proof?.ownerId || '').trim()
@@ -547,12 +551,13 @@ export function createTurnEventEmitter({
     if (!ownerId || !Number.isSafeInteger(fencingToken) || fencingToken <= 0) {
       throw new TypeError('a valid execution lease proof is required')
     }
-    if (executionLease
-      && (executionLease.ownerId !== ownerId || executionLease.fencingToken !== fencingToken)) {
+    if (state.executionLease
+      && (state.executionLease.ownerId !== ownerId
+        || state.executionLease.fencingToken !== fencingToken)) {
       throw new Error('turn event emitter execution lease is already bound')
     }
-    executionLease = Object.freeze({ ownerId, fencingToken })
-    return executionLease
+    state.executionLease = Object.freeze({ ownerId, fencingToken })
+    return state.executionLease
   }
   emit.writer = eventWriteBehind
   return emit
