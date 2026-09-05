@@ -40,9 +40,6 @@ function stableValue(value) {
 
 function callSignature(call) {
   const args = call?.args ?? call?.argumentsText ?? ''
-  // Checkpoints persist the last signature so a process restart cannot reset a
-  // repeated-call fuse. Store only a digest: commands and tool arguments may
-  // contain credentials or large inline file contents.
   return createHash('sha256')
     .update(`${call?.name || '<missing>'}:${safeStringify(stableValue(args))}`)
     .digest('hex')
@@ -53,14 +50,8 @@ function observationSignature(call, result) {
   if (!OBSERVATION_TOOL_NAMES.has(name) || result?.ok !== true) return null
   const args = call?.args && typeof call.args === 'object' ? call.args : {}
   const target = String(
-    result?.path
-    || result?.filePath
-    || result?.file_path
-    || args.path
-    || args.filePath
-    || args.file_path
-    || args.cwd
-    || '<default>',
+    result?.path || result?.filePath || result?.file_path || args.path
+    || args.filePath || args.file_path || args.cwd || '<default>',
   ).trim().replace(/\\/g, '/').toLowerCase()
   const omitEchoFields = new Set([
     'createdAt', 'durationMs', 'elapsedMs', 'end', 'endLine', 'filePath', 'file_path',
@@ -78,9 +69,7 @@ function observationSignature(call, result) {
   const bounded = serialized.length <= 131_072
     ? serialized
     : `${serialized.slice(0, 65_536)}:${serialized.slice(-65_536)}`
-  return createHash('sha256')
-    .update(`${name}:${target}:${bounded}`)
-    .digest('hex')
+  return createHash('sha256').update(`${name}:${target}:${bounded}`).digest('hex')
 }
 
 function restoredCounter(value) {
@@ -96,8 +85,7 @@ const MODEL_AUTHORING_ERROR_CODES = new Set([
 ])
 
 function isModelAuthoringError(result) {
-  const code = String(result?.code || '')
-  return MODEL_AUTHORING_ERROR_CODES.has(code)
+  return MODEL_AUTHORING_ERROR_CODES.has(String(result?.code || ''))
 }
 
 function sameToolFailureAdvisory({ tool, count, level }) {
@@ -111,11 +99,231 @@ function sameToolFailureAdvisory({ tool, count, level }) {
     tool,
     count,
     level,
-    content: 'Tool ' + tool + ' has failed ' + count + ' times without recovering. ' + guidance,
+    content: `Tool ${tool} has failed ${count} times without recovering. ${guidance}`,
   }
 }
 
-/** 无进展熔断：同一调用反复出现，或工具连续失败时停止继续烧 token。 */
+function restoreAdvisoryThresholds(value, hardLimit) {
+  return new Map(
+    Object.entries(value && typeof value === 'object' ? value : {})
+      .map(([name, threshold]) => [String(name || '').trim(), restoredCounter(threshold)])
+      .filter(([name, threshold]) => name && threshold > 0 && threshold < hardLimit),
+  )
+}
+
+function resetToolLoopRepetition(state) {
+  state.lastSignature = null
+  state.repeatedCallStreak = 0
+  state.recentSignatures.length = 0
+  state.recentObservationSignatures.length = 0
+}
+
+function beforeToolCall(state, call) {
+  const signature = callSignature(call)
+  state.seenSignatures.add(signature)
+  state.recentSignatures.push(signature)
+  if (state.recentSignatures.length > state.safeWindowSize) state.recentSignatures.shift()
+  const windowOccurrences = state.recentSignatures.reduce(
+    (count, candidate) => count + (candidate === signature ? 1 : 0),
+    0,
+  )
+  if (signature === state.lastSignature) state.repeatedCallStreak += 1
+  else {
+    state.lastSignature = signature
+    state.repeatedCallStreak = 1
+  }
+  if (state.repeatedCallStreak > state.maxRepeatedCalls) {
+    const reason = `同一工具调用已连续重复 ${state.repeatedCallStreak} 次，未取得新进展`
+    return {
+      ok: false,
+      reason,
+      result: toolError('repeated_tool_call', reason, {
+        retryable: false,
+        hint: '请停止重复调用，改用已有结果收尾或换一种方法。',
+      }),
+    }
+  }
+  if (windowOccurrences > state.safeWindowRepeatLimit) {
+    const reason = `同一工具调用在最近 ${state.recentSignatures.length} 次调用中已重复 ${windowOccurrences} 次，未取得实质进展`
+    return {
+      ok: false,
+      reason,
+      result: toolError('repeated_tool_call_window', reason, {
+        retryable: false,
+        hint: '请停止交替重复读取或搜索，改用已有结果执行修改、完成验证或明确报告一个具体阻塞。',
+      }),
+    }
+  }
+  if (state.consecutiveErrors >= state.maxConsecutiveErrors) {
+    const reason = `工具已连续失败 ${state.consecutiveErrors} 次`
+    return { ok: false, reason, result: toolError('tool_error_streak', reason, { retryable: false }) }
+  }
+  if (state.consecutiveAuthoringErrors >= state.maxAuthoringErrors) {
+    const reason = `模型已连续 ${state.consecutiveAuthoringErrors} 次写出不合法的工具参数`
+    return {
+      ok: false,
+      reason,
+      result: toolError('tool_error_streak', reason, {
+        retryable: false,
+        hint: '当前模型可能不擅长 function calling，可在 provider 设置里关闭该模型的工具支持，或换一个更大的模型。',
+      }),
+    }
+  }
+  return { ok: true }
+}
+
+function afterToolResult(state, result, call = null) {
+  const normalized = normalizeToolResult(result)
+  if (normalized.ok !== false) {
+    if (!call || isSubstantiveToolCall(call)) {
+      state.consecutiveErrors = 0
+      state.consecutiveAuthoringErrors = 0
+    }
+    return { ok: true }
+  }
+  if (isModelAuthoringError(normalized)) {
+    state.consecutiveAuthoringErrors += 1
+    if (state.consecutiveAuthoringErrors >= state.maxAuthoringErrors) {
+      const reason = `模型已连续 ${state.consecutiveAuthoringErrors} 次写出不合法的工具参数`
+      return { ok: false, reason, result: toolError('tool_error_streak', reason, { retryable: false }) }
+    }
+    return { ok: true }
+  }
+  state.consecutiveErrors += 1
+  if (state.consecutiveErrors >= state.maxConsecutiveErrors) {
+    const reason = `工具已连续失败 ${state.consecutiveErrors} 次`
+    return { ok: false, reason, result: toolError('tool_error_streak', reason, { retryable: false }) }
+  }
+  return { ok: true }
+}
+
+function recordToolObservation(state, call, normalized) {
+  const name = String(call?.name || '').trim()
+  const observation = observationSignature(call, normalized)
+  if (!observation) return null
+  state.recentObservationSignatures.push(observation)
+  if (state.recentObservationSignatures.length > state.safeObservationWindowSize) {
+    state.recentObservationSignatures.shift()
+  }
+  const occurrences = state.recentObservationSignatures.reduce(
+    (count, candidate) => count + (candidate === observation ? 1 : 0),
+    0,
+  )
+  if (occurrences <= state.safeObservationRepeatLimit) return null
+  const reason = `工具 ${name} 在最近 ${state.recentObservationSignatures.length} 次观察中重复返回相同状态 ${occurrences} 次，未取得新进展`
+  return {
+    ok: false,
+    reason,
+    result: toolError('repeated_tool_observation', reason, {
+      retryable: false,
+      hint: '停止继续改变无关参数；请使用已有观察结果执行下一步、验证交付，或报告一个具体阻塞。',
+    }),
+  }
+}
+
+function afterToolCall(state, call, result) {
+  const name = String(call?.name || '').trim()
+  if (!name) return { ok: true }
+  const normalized = normalizeToolResult(result)
+  if (normalized.ok !== false) {
+    const observationFailure = recordToolObservation(state, call, normalized)
+    if (observationFailure) return observationFailure
+    if (isSubstantiveToolCall(call)) {
+      state.failedToolCounts.delete(name)
+      state.firedToolAdvisoryThresholds.delete(name)
+      state.pendingToolAdvisoryThresholds.delete(name)
+    }
+    return { ok: true }
+  }
+  if (isModelAuthoringError(normalized)) return { ok: true }
+  const count = (state.failedToolCounts.get(name) || 0) + 1
+  state.failedToolCounts.set(name, count)
+  if (count >= state.sameToolFailureHardLimit) {
+    const reason = `工具 ${name} 已连续失败 ${count} 次，达到无进展硬上限`
+    return {
+      ok: false,
+      reason,
+      result: toolError('tool_no_progress_hard_limit', reason, {
+        retryable: false,
+        hint: '停止继续猜测参数；请基于已有结果简短收尾，或明确说明唯一缺失条件。',
+      }),
+    }
+  }
+  let threshold = 0
+  let level = 0
+  for (let index = 0; index < state.advisoryThresholds.length; index += 1) {
+    if (count < state.advisoryThresholds[index]) break
+    threshold = state.advisoryThresholds[index]
+    level = index + 1
+  }
+  const knownThreshold = Math.max(
+    state.firedToolAdvisoryThresholds.get(name) || 0,
+    state.pendingToolAdvisoryThresholds.get(name) || 0,
+  )
+  if (threshold <= knownThreshold) return { ok: true }
+  state.pendingToolAdvisoryThresholds.set(name, threshold)
+  return { ok: true, advisory: sameToolFailureAdvisory({ tool: name, count, level }) }
+}
+
+function pendingToolAdvisories(state) {
+  return [...state.pendingToolAdvisoryThresholds.entries()].map(([tool, threshold]) => {
+    const configuredIndex = state.advisoryThresholds.indexOf(threshold)
+    const level = configuredIndex >= 0
+      ? configuredIndex + 1
+      : Math.max(1, state.advisoryThresholds.filter((value) => value <= threshold).length)
+    return sameToolFailureAdvisory({
+      tool,
+      level,
+      count: state.failedToolCounts.get(tool) || threshold,
+    })
+  })
+}
+
+function commitPendingToolAdvisories(state) {
+  for (const [tool, threshold] of state.pendingToolAdvisoryThresholds) {
+    state.firedToolAdvisoryThresholds.set(
+      tool,
+      Math.max(state.firedToolAdvisoryThresholds.get(tool) || 0, threshold),
+    )
+  }
+  state.pendingToolAdvisoryThresholds.clear()
+}
+
+function markToolLoopProgress(state, call = null) {
+  if (!call) {
+    resetToolLoopRepetition(state)
+    return
+  }
+  const signature = callSignature(call)
+  const currentStreak = signature === state.lastSignature
+    ? Math.max(1, state.repeatedCallStreak)
+    : 1
+  state.lastSignature = signature
+  state.repeatedCallStreak = currentStreak
+  state.recentSignatures.splice(
+    0,
+    state.recentSignatures.length,
+    ...Array(currentStreak).fill(signature).slice(-state.safeWindowSize),
+  )
+  state.recentObservationSignatures.length = 0
+}
+
+function snapshotToolLoopGuard(state) {
+  return {
+    consecutiveErrors: state.consecutiveErrors,
+    consecutiveAuthoringErrors: state.consecutiveAuthoringErrors,
+    uniqueCalls: state.seenSignatures.size,
+    repeatedCallStreak: state.repeatedCallStreak,
+    lastSignature: state.lastSignature,
+    recentSignatures: [...state.recentSignatures],
+    recentObservationSignatures: [...state.recentObservationSignatures],
+    failedTools: Object.fromEntries(state.failedToolCounts),
+    firedToolAdvisoryThresholds: Object.fromEntries(state.firedToolAdvisoryThresholds),
+    pendingToolAdvisoryThresholds: Object.fromEntries(state.pendingToolAdvisoryThresholds),
+  }
+}
+
+/** No-progress circuit breaker for repeated calls and consecutive failures. */
 export function createToolLoopGuard({
   maxRepeatedCalls = 3,
   maxWindowRepeatedCalls = 6,
@@ -133,293 +341,71 @@ export function createToolLoopGuard({
     ? Math.max(1, Math.floor(Number(maxSameToolFailures)))
     : 20
   const advisoryThresholds = [...new Set(
-    Array.isArray(sameToolFailureAdvisoryThresholds)
-      ? sameToolFailureAdvisoryThresholds
-      : [],
+    Array.isArray(sameToolFailureAdvisoryThresholds) ? sameToolFailureAdvisoryThresholds : [],
   )]
-    .filter((value) => Number.isInteger(value)
-      && value >= 1
-      && value < sameToolFailureHardLimit)
+    .filter((value) => Number.isInteger(value) && value >= 1 && value < sameToolFailureHardLimit)
     .sort((left, right) => left - right)
-  const restoreAdvisoryThresholds = (value) => new Map(
-    Object.entries(value && typeof value === 'object' ? value : {})
-      .map(([name, threshold]) => [
-        String(name || '').trim(),
-        restoredCounter(threshold),
-      ])
-      .filter(([name, threshold]) => (
-        name && threshold > 0 && threshold < sameToolFailureHardLimit
-      )),
-  )
-  const seenSignatures = new Set()
-  const failedToolCounts = new Map(
-    Object.entries(restored.failedTools && typeof restored.failedTools === 'object'
-      ? restored.failedTools
-      : {})
-      .map(([name, count]) => [String(name || '').trim(), restoredCounter(count)])
-      .filter(([name, count]) => name && count > 0),
-  )
   const firedToolAdvisoryThresholds = restoreAdvisoryThresholds(
     restored.firedToolAdvisoryThresholds,
+    sameToolFailureHardLimit,
   )
   const pendingToolAdvisoryThresholds = restoreAdvisoryThresholds(
     restored.pendingToolAdvisoryThresholds,
+    sameToolFailureHardLimit,
   )
   for (const [name, threshold] of pendingToolAdvisoryThresholds) {
     if (threshold <= (firedToolAdvisoryThresholds.get(name) || 0)) {
       pendingToolAdvisoryThresholds.delete(name)
     }
   }
-  let consecutiveErrors = restoredCounter(restored.consecutiveErrors)
-  let consecutiveAuthoringErrors = restoredCounter(restored.consecutiveAuthoringErrors)
-  let lastSignature = /^[a-f0-9]{64}$/u.test(String(restored.lastSignature || ''))
+  const lastSignature = /^[a-f0-9]{64}$/u.test(String(restored.lastSignature || ''))
     ? String(restored.lastSignature)
     : null
-  let repeatedCallStreak = lastSignature ? restoredCounter(restored.repeatedCallStreak) : 0
   const safeWindowSize = Math.max(2, Math.floor(Number(repeatWindowSize) || 24))
-  const safeWindowRepeatLimit = Math.max(
-    Math.floor(Number(maxRepeatedCalls) || 3) + 1,
-    Math.floor(Number(maxWindowRepeatedCalls) || 6),
-  )
-  const recentSignatures = Array.isArray(restored.recentSignatures)
-    ? restored.recentSignatures
-        .map((value) => String(value || ''))
-        .filter((value) => /^[a-f0-9]{64}$/u.test(value))
-        .slice(-safeWindowSize)
-    : []
-  const safeObservationWindowSize = Math.max(
-    2,
-    Math.floor(Number(observationWindowSize) || 24),
-  )
-  const safeObservationRepeatLimit = Math.max(
-    2,
-    Math.floor(Number(maxRepeatedObservations) || 6),
-  )
-  const recentObservationSignatures = Array.isArray(restored.recentObservationSignatures)
-    ? restored.recentObservationSignatures
-        .map((value) => String(value || ''))
-        .filter((value) => /^[a-f0-9]{64}$/u.test(value))
-        .slice(-safeObservationWindowSize)
-    : []
-
-  const resetRepetition = () => {
-    lastSignature = null
-    repeatedCallStreak = 0
-    recentSignatures.length = 0
-    recentObservationSignatures.length = 0
+  const state = {
+    maxRepeatedCalls,
+    maxConsecutiveErrors,
+    maxAuthoringErrors,
+    sameToolFailureHardLimit,
+    advisoryThresholds,
+    safeWindowSize,
+    safeWindowRepeatLimit: Math.max(
+      Math.floor(Number(maxRepeatedCalls) || 3) + 1,
+      Math.floor(Number(maxWindowRepeatedCalls) || 6),
+    ),
+    safeObservationWindowSize: Math.max(2, Math.floor(Number(observationWindowSize) || 24)),
+    safeObservationRepeatLimit: Math.max(2, Math.floor(Number(maxRepeatedObservations) || 6)),
+    seenSignatures: new Set(),
+    failedToolCounts: new Map(
+      Object.entries(restored.failedTools && typeof restored.failedTools === 'object'
+        ? restored.failedTools
+        : {})
+        .map(([name, count]) => [String(name || '').trim(), restoredCounter(count)])
+        .filter(([name, count]) => name && count > 0),
+    ),
+    firedToolAdvisoryThresholds,
+    pendingToolAdvisoryThresholds,
+    consecutiveErrors: restoredCounter(restored.consecutiveErrors),
+    consecutiveAuthoringErrors: restoredCounter(restored.consecutiveAuthoringErrors),
+    lastSignature,
+    repeatedCallStreak: lastSignature ? restoredCounter(restored.repeatedCallStreak) : 0,
+    recentSignatures: Array.isArray(restored.recentSignatures)
+      ? restored.recentSignatures.map(String).filter((value) => /^[a-f0-9]{64}$/u.test(value)).slice(-safeWindowSize)
+      : [],
+    recentObservationSignatures: Array.isArray(restored.recentObservationSignatures)
+      ? restored.recentObservationSignatures.map(String)
+          .filter((value) => /^[a-f0-9]{64}$/u.test(value))
+          .slice(-Math.max(2, Math.floor(Number(observationWindowSize) || 24)))
+      : [],
   }
-
   return {
-    before(call) {
-      const signature = callSignature(call)
-      seenSignatures.add(signature)
-      recentSignatures.push(signature)
-      if (recentSignatures.length > safeWindowSize) recentSignatures.shift()
-      const windowOccurrences = recentSignatures.reduce(
-        (count, candidate) => count + (candidate === signature ? 1 : 0),
-        0,
-      )
-      if (signature === lastSignature) repeatedCallStreak += 1
-      else {
-        lastSignature = signature
-        repeatedCallStreak = 1
-      }
-      if (repeatedCallStreak > maxRepeatedCalls) {
-        const reason = `同一工具调用已连续重复 ${repeatedCallStreak} 次，未取得新进展`
-        return {
-          ok: false,
-          reason,
-          result: toolError('repeated_tool_call', reason, {
-            retryable: false,
-            hint: '请停止重复调用，改用已有结果收尾或换一种方法。',
-          }),
-        }
-      }
-      if (windowOccurrences > safeWindowRepeatLimit) {
-        const reason = `同一工具调用在最近 ${recentSignatures.length} 次调用中已重复 ${windowOccurrences} 次，未取得实质进展`
-        return {
-          ok: false,
-          reason,
-          result: toolError('repeated_tool_call_window', reason, {
-            retryable: false,
-            hint: '请停止交替重复读取或搜索，改用已有结果执行修改、完成验证或明确报告一个具体阻塞。',
-          }),
-        }
-      }
-      if (consecutiveErrors >= maxConsecutiveErrors) {
-        const reason = `工具已连续失败 ${consecutiveErrors} 次`
-        return {
-          ok: false,
-          reason,
-          result: toolError('tool_error_streak', reason, { retryable: false }),
-        }
-      }
-      if (consecutiveAuthoringErrors >= maxAuthoringErrors) {
-        const reason = `模型已连续 ${consecutiveAuthoringErrors} 次写出不合法的工具参数`
-        return {
-          ok: false,
-          reason,
-          result: toolError('tool_error_streak', reason, {
-            retryable: false,
-            hint: '当前模型可能不擅长 function calling，可在 provider 设置里关闭该模型的工具支持，或换一个更大的模型。',
-          }),
-        }
-      }
-      return { ok: true }
-    },
-    after(result, call = null) {
-      const normalized = normalizeToolResult(result)
-      const failed = normalized.ok === false
-      if (!failed) {
-        // Reflection, planning, waiting, and clarification do not prove that
-        // a failed execution path made progress. Keep the real error streak.
-        if (!call || isSubstantiveToolCall(call)) {
-          consecutiveErrors = 0
-          consecutiveAuthoringErrors = 0
-        }
-        return { ok: true }
-      }
-      if (isModelAuthoringError(normalized)) {
-        consecutiveAuthoringErrors += 1
-        if (consecutiveAuthoringErrors >= maxAuthoringErrors) {
-          const reason = '模型已连续 ' + consecutiveAuthoringErrors + ' 次写出不合法的工具参数'
-          return {
-            ok: false,
-            reason,
-            result: toolError('tool_error_streak', reason, { retryable: false }),
-          }
-        }
-        return { ok: true }
-      }
-      consecutiveErrors += 1
-      if (consecutiveErrors >= maxConsecutiveErrors) {
-        const reason = '工具已连续失败 ' + consecutiveErrors + ' 次'
-        return {
-          ok: false,
-          reason,
-          result: toolError('tool_error_streak', reason, { retryable: false }),
-        }
-      }
-      return { ok: true }
-    },
-    afterCall(call, result) {
-      const name = String(call?.name || '').trim()
-      if (!name) return { ok: true }
-      const normalized = normalizeToolResult(result)
-      const failed = normalized.ok === false
-      if (!failed) {
-        const observation = observationSignature(call, normalized)
-        if (observation) {
-          recentObservationSignatures.push(observation)
-          if (recentObservationSignatures.length > safeObservationWindowSize) {
-            recentObservationSignatures.shift()
-          }
-          const occurrences = recentObservationSignatures.reduce(
-            (count, candidate) => count + (candidate === observation ? 1 : 0),
-            0,
-          )
-          if (occurrences > safeObservationRepeatLimit) {
-            const reason = `工具 ${name} 在最近 ${recentObservationSignatures.length} 次观察中重复返回相同状态 ${occurrences} 次，未取得新进展`
-            return {
-              ok: false,
-              reason,
-              result: toolError('repeated_tool_observation', reason, {
-                retryable: false,
-                hint: '停止继续改变无关参数；请使用已有观察结果执行下一步、验证交付，或报告一个具体阻塞。',
-              }),
-            }
-          }
-        }
-        if (isSubstantiveToolCall(call)) {
-          failedToolCounts.delete(name)
-          firedToolAdvisoryThresholds.delete(name)
-          pendingToolAdvisoryThresholds.delete(name)
-        }
-        return { ok: true }
-      }
-      if (isModelAuthoringError(normalized)) return { ok: true }
-      const count = (failedToolCounts.get(name) || 0) + 1
-      failedToolCounts.set(name, count)
-      if (count >= sameToolFailureHardLimit) {
-        const reason = '工具 ' + name + ' 已连续失败 ' + count + ' 次，达到无进展硬上限'
-        return {
-          ok: false,
-          reason,
-          result: toolError('tool_no_progress_hard_limit', reason, {
-            retryable: false,
-            hint: '停止继续猜测参数；请基于已有结果简短收尾，或明确说明唯一缺失条件。',
-          }),
-        }
-      }
-      let threshold = 0
-      let level = 0
-      for (let index = 0; index < advisoryThresholds.length; index += 1) {
-        if (count < advisoryThresholds[index]) break
-        threshold = advisoryThresholds[index]
-        level = index + 1
-      }
-      const knownThreshold = Math.max(
-        firedToolAdvisoryThresholds.get(name) || 0,
-        pendingToolAdvisoryThresholds.get(name) || 0,
-      )
-      if (threshold <= knownThreshold) return { ok: true }
-      pendingToolAdvisoryThresholds.set(name, threshold)
-      return { ok: true, advisory: sameToolFailureAdvisory({ tool: name, count, level }) }
-    },
-    pendingAdvisories() {
-      return [...pendingToolAdvisoryThresholds.entries()].map(([tool, threshold]) => {
-        const configuredIndex = advisoryThresholds.indexOf(threshold)
-        const level = configuredIndex >= 0
-          ? configuredIndex + 1
-          : Math.max(1, advisoryThresholds.filter((value) => value <= threshold).length)
-        return sameToolFailureAdvisory({
-          tool,
-          level,
-          count: failedToolCounts.get(tool) || threshold,
-        })
-      })
-    },
-    commitPendingAdvisories() {
-      for (const [tool, threshold] of pendingToolAdvisoryThresholds) {
-        firedToolAdvisoryThresholds.set(
-          tool,
-          Math.max(firedToolAdvisoryThresholds.get(tool) || 0, threshold),
-        )
-      }
-      pendingToolAdvisoryThresholds.clear()
-    },
-    markProgress(call = null) {
-      if (!call) {
-        resetRepetition()
-        return
-      }
-      const signature = callSignature(call)
-      const currentStreak = signature === lastSignature
-        ? Math.max(1, repeatedCallStreak)
-        : 1
-      lastSignature = signature
-      repeatedCallStreak = currentStreak
-      recentSignatures.splice(
-        0,
-        recentSignatures.length,
-        ...Array(currentStreak).fill(signature).slice(-safeWindowSize),
-      )
-      recentObservationSignatures.length = 0
-    },
-    resetRepetition,
-    snapshot() {
-      return {
-        consecutiveErrors,
-        consecutiveAuthoringErrors,
-        uniqueCalls: seenSignatures.size,
-        repeatedCallStreak,
-        lastSignature,
-        recentSignatures: [...recentSignatures],
-        recentObservationSignatures: [...recentObservationSignatures],
-        failedTools: Object.fromEntries(failedToolCounts),
-        firedToolAdvisoryThresholds: Object.fromEntries(firedToolAdvisoryThresholds),
-        pendingToolAdvisoryThresholds: Object.fromEntries(pendingToolAdvisoryThresholds),
-      }
-    },
+    before: (call) => beforeToolCall(state, call),
+    after: (result, call = null) => afterToolResult(state, result, call),
+    afterCall: (call, result) => afterToolCall(state, call, result),
+    pendingAdvisories: () => pendingToolAdvisories(state),
+    commitPendingAdvisories: () => commitPendingToolAdvisories(state),
+    markProgress: (call = null) => markToolLoopProgress(state, call),
+    resetRepetition: () => resetToolLoopRepetition(state),
+    snapshot: () => snapshotToolLoopGuard(state),
   }
 }
