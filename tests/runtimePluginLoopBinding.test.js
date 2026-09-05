@@ -460,10 +460,13 @@ test('Loop setup failure and invalid replacement declarations leave the builtin 
 
 test('app server restores runtime plugins before resolving and activating the Loop snapshot', () => {
   const source = fs.readFileSync(new URL('../server/appServer.js', import.meta.url), 'utf8')
-  const restoreIndex = source.indexOf('restoreEnabledRuntimePlugins({ env: runtimeEnv })')
+  const pluginStartup = fs.readFileSync(new URL('../server/appServerPluginStartup.js', import.meta.url), 'utf8')
+  const restoreIndex = pluginStartup.indexOf('restoreEnabledRuntimePlugins({ env: runtimeEnv })')
+  const startupChainIndex = source.indexOf('const runtimeStartupReady = runtimePluginStartupReady.then')
   const snapshotIndex = source.indexOf('prepareRuntimeCapabilitySnapshot({ env: runtimeEnv, cwd })')
   const bootstrapIndex = source.indexOf('const startup = bootstrap({')
   assert.ok(restoreIndex >= 0)
-  assert.ok(snapshotIndex > restoreIndex)
+  assert.ok(startupChainIndex >= 0)
+  assert.ok(snapshotIndex > startupChainIndex)
   assert.ok(bootstrapIndex > snapshotIndex)
 })
