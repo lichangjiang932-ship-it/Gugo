@@ -152,19 +152,13 @@ function publicFinalResult(result) {
   return Object.freeze(terminal)
 }
 
-/**
- * Bind one prepared Loop runtime to a deliberately narrow model capability.
- * Provider selection, credentials, transcript, tools, budget, checkpointing,
- * reconciliation, and compaction remain owned by the host runtime.
- */
-export function createCanonicalHarnessModelBroker(prepared) {
+function claimPreparedRuntime(prepared) {
   if (!prepared || typeof prepared !== 'object' || claimedPreparedRuntimes.has(prepared)) {
     throw brokerError(
       CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.INVALID,
       'A fresh prepared Tools Loop runtime is required',
     )
   }
-
   let runtimeState
   try {
     accessPreparedToolsLoopRuntime(prepared, (state) => {
@@ -188,344 +182,345 @@ export function createCanonicalHarnessModelBroker(prepared) {
     )
   }
   claimedPreparedRuntimes.add(prepared)
+  return runtimeState
+}
 
-  let phase = 'idle'
-  let pendingRequest = null
-  let activeRequestToken = null
-  let requestAbortScope = null
-  let abortPromise = null
-  let responseCheckpointPending = false
-  let committedResponseText = null
-  let committedAnswerReviewDigest = null
-  let preRequestDeliveryState = null
+function restorePreRequestDeliveryState(runtime) {
+  const { runtimeState, state } = runtime
+  if (!state.preRequestDeliveryState) return
+  runtimeState.deliveryArtifactIds = [...state.preRequestDeliveryState.deliveryArtifactIds]
+  runtimeState.deliveryArtifactSelectionArtifactIds = [
+    ...state.preRequestDeliveryState.deliveryArtifactSelectionArtifactIds,
+  ]
+  runtimeState.deliveryArtifactSelectionExplicit = state.preRequestDeliveryState
+    .deliveryArtifactSelectionExplicit
+  runtimeState.deliverableSelectionRetries = state.preRequestDeliveryState
+    .deliverableSelectionRetries
+}
 
-  const restorePreRequestDeliveryState = () => {
-    if (!preRequestDeliveryState) return
-    runtimeState.deliveryArtifactIds = [...preRequestDeliveryState.deliveryArtifactIds]
-    runtimeState.deliveryArtifactSelectionArtifactIds = [
-      ...preRequestDeliveryState.deliveryArtifactSelectionArtifactIds,
-    ]
-    runtimeState.deliveryArtifactSelectionExplicit = preRequestDeliveryState.deliveryArtifactSelectionExplicit
-    runtimeState.deliverableSelectionRetries = preRequestDeliveryState.deliverableSelectionRetries
+async function runCanonicalModelRequest(runtime, request) {
+  const { state, runtimeState } = runtime
+  assertEmptyRequest(request)
+  if (state.phase === 'in_flight') {
+    throw brokerError(
+      CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.BUSY,
+      'Canonical Harness model request is already in flight',
+    )
   }
-
-  const modelRequest = async (request) => {
-    assertEmptyRequest(request)
-    if (phase === 'in_flight') {
-      throw brokerError(
-        CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.BUSY,
-        'Canonical Harness model request is already in flight',
-      )
+  if (state.phase !== 'idle') {
+    throw brokerError(
+      CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.ALREADY_USED,
+      'Canonical Harness model request has already been used',
+    )
+  }
+  const requestToken = {
+    revoked: false,
+    error: brokerError(
+      CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.LIFECYCLE_INVALID,
+      'Canonical Harness model request is no longer owned by this run',
+    ),
+  }
+  const abortScope = createRequestAbortScope(runtimeState.signal)
+  const assertRequestActive = () => {
+    if (state.activeRequestToken !== requestToken
+      || requestToken.revoked
+      || abortScope.signal.aborted) {
+      requestToken.revoked = true
+      throw requestToken.error
     }
-    if (phase !== 'idle') {
-      throw brokerError(
-        CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.ALREADY_USED,
-        'Canonical Harness model request has already been used',
-      )
-    }
-
-    const requestToken = {
-      revoked: false,
-      error: brokerError(
-        CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.LIFECYCLE_INVALID,
-        'Canonical Harness model request is no longer owned by this run',
-      ),
-    }
-    const abortScope = createRequestAbortScope(runtimeState.signal)
-    const assertRequestActive = () => {
-      if (activeRequestToken !== requestToken
-        || requestToken.revoked
-        || abortScope.signal.aborted) {
-        requestToken.revoked = true
-        throw requestToken.error
+  }
+  state.phase = 'in_flight'
+  state.activeRequestToken = requestToken
+  state.requestAbortScope = abortScope
+  state.pendingRequest = (async () => {
+    if (runtimeState.needsDeliverableSelection?.()) {
+      const deliveryState = {
+        deliveryArtifactIds: [...runtimeState.deliveryArtifactIds],
+        deliveryArtifactSelectionArtifactIds: [
+          ...runtimeState.deliveryArtifactSelectionArtifactIds,
+        ],
+        deliveryArtifactSelectionExplicit: runtimeState.deliveryArtifactSelectionExplicit,
+        deliverableSelectionRetries: runtimeState.deliverableSelectionRetries,
+      }
+      if (runtimeState.applySafeDeliverableFallback?.()) {
+        state.preRequestDeliveryState = deliveryState
       }
     }
-
-    phase = 'in_flight'
-    activeRequestToken = requestToken
-    requestAbortScope = abortScope
-    pendingRequest = (async () => {
-      // Canonical adapters receive one host-owned model response. Resolve a
-      // safe deliverable fallback before that request so the final answer can
-      // review the exact selection that will be returned to the user.
-      if (runtimeState.needsDeliverableSelection?.()) {
-        const deliveryState = {
-          deliveryArtifactIds: [...runtimeState.deliveryArtifactIds],
-          deliveryArtifactSelectionArtifactIds: [
-            ...runtimeState.deliveryArtifactSelectionArtifactIds,
-          ],
-          deliveryArtifactSelectionExplicit: runtimeState.deliveryArtifactSelectionExplicit,
-          deliverableSelectionRetries: runtimeState.deliverableSelectionRetries,
-        }
-        if (runtimeState.applySafeDeliverableFallback?.()) {
-          preRequestDeliveryState = deliveryState
-        }
-      }
-      runtimeState.prepareFinalAnswerEvidenceReview?.()
-      const answerReviewDigest = runtimeState.hasCurrentFinalAnswerEvidenceReview?.()
-        ? runtimeState.currentFinalAnswerEvidenceDigest()
-        : null
-      const tracked = await runtimeState.callTrackedModel({
-        messages: runtimeState.convo,
-        tools: [],
-        toolChoice: 'none',
-        allowOverBudget: false,
-        consumeBudget: (cost) => runtimeState.budget.consume(cost),
-        requestSignal: abortScope.signal,
-        assertRequestActive,
-      })
-      assertRequestActive()
-      runtimeState.convo.splice(0, runtimeState.convo.length, ...tracked.messages)
-      runtimeState.recovery = runtimeState.d.mergeCompactionRecovery(
-        runtimeState.recovery,
-        tracked.recovery,
-      )
-      assertRequestActive()
-      // Keep the completed invocation in this checkpoint. It is the replay
-      // fence when the adapter crashes after the provider response arrives.
-      responseCheckpointPending = true
-      try {
-        await runtimeState.persistTurn({ boundary: 'harness-model-response' })
-      } finally {
-        responseCheckpointPending = false
-      }
-      assertRequestActive()
-      const response = publicModelResult(tracked.response)
-      committedResponseText = response.content
-      committedAnswerReviewDigest = answerReviewDigest
-      return response
-    })()
-
+    runtimeState.prepareFinalAnswerEvidenceReview?.()
+    const answerReviewDigest = runtimeState.hasCurrentFinalAnswerEvidenceReview?.()
+      ? runtimeState.currentFinalAnswerEvidenceDigest()
+      : null
+    const tracked = await runtimeState.callTrackedModel({
+      messages: runtimeState.convo,
+      tools: [],
+      toolChoice: 'none',
+      allowOverBudget: false,
+      consumeBudget: (cost) => runtimeState.budget.consume(cost),
+      requestSignal: abortScope.signal,
+      assertRequestActive,
+    })
+    assertRequestActive()
+    runtimeState.convo.splice(0, runtimeState.convo.length, ...tracked.messages)
+    runtimeState.recovery = runtimeState.d.mergeCompactionRecovery(
+      runtimeState.recovery,
+      tracked.recovery,
+    )
+    assertRequestActive()
+    state.responseCheckpointPending = true
     try {
-      const response = await pendingRequest
-      assertRequestActive()
-      if (phase === 'in_flight') phase = 'response_committed'
-      return response
-    } catch (error) {
-      // A failed attempt is still consumed. In particular, an unresolved
-      // provider outcome must never be converted into a successful terminal
-      // result merely because an adapter catches the public broker error.
-      if (phase === 'in_flight') phase = 'request_failed'
-      throw error
+      await runtimeState.persistTurn({ boundary: 'harness-model-response' })
     } finally {
-      if (activeRequestToken === requestToken && phase !== 'aborting') {
-        activeRequestToken = null
-        requestAbortScope = null
-      }
-      if (phase !== 'aborting') abortScope.dispose()
+      state.responseCheckpointPending = false
     }
+    assertRequestActive()
+    const response = publicModelResult(tracked.response)
+    state.committedResponseText = response.content
+    state.committedAnswerReviewDigest = answerReviewDigest
+    return response
+  })()
+  try {
+    const response = await state.pendingRequest
+    assertRequestActive()
+    if (state.phase === 'in_flight') state.phase = 'response_committed'
+    return response
+  } catch (error) {
+    if (state.phase === 'in_flight') state.phase = 'request_failed'
+    throw error
+  } finally {
+    if (state.activeRequestToken === requestToken && state.phase !== 'aborting') {
+      state.activeRequestToken = null
+      state.requestAbortScope = null
+    }
+    if (state.phase !== 'aborting') abortScope.dispose()
   }
+}
 
-  const finalize = async (result) => {
-    if (phase === 'in_flight') {
-      throw brokerError(
-        CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.BUSY,
-        'Canonical Harness model request must settle before finalization',
-      )
-    }
-    if (phase === 'finalized' || phase === 'aborted' || phase === 'finalizing') {
+function captureBrokerFinalization(runtime) {
+  const r = runtime.runtimeState
+  return {
+    phase: runtime.state.phase,
+    modelInvocation: r.modelInvocation,
+    restoredModelInvocation: r.restoredModelInvocation,
+    conversationLength: r.convo.length,
+    finalText: r.finalText,
+    finalCheckpointPersisted: r.finalCheckpointPersisted,
+    finalLocalHtmlDeliveryFailure: r.finalLocalHtmlDeliveryFailure,
+    localHtmlDeliveryRetries: r.localHtmlDeliveryRetries,
+    localHtmlDeliveryValidationPending: r.localHtmlDeliveryValidationPending,
+    deliveryArtifactIds: [...r.deliveryArtifactIds],
+    deliveryArtifactSelectionArtifactIds: [...r.deliveryArtifactSelectionArtifactIds],
+    deliveryArtifactSelectionExplicit: r.deliveryArtifactSelectionExplicit,
+    deliverableSelectionRetries: r.deliverableSelectionRetries,
+  }
+}
+
+function restoreBrokerFinalization(runtime, previous) {
+  const { runtimeState, state } = runtime
+  runtimeState.modelInvocation = previous.modelInvocation
+  runtimeState.restoredModelInvocation = previous.restoredModelInvocation
+  runtimeState.convo.splice(previous.conversationLength)
+  runtimeState.finalText = previous.finalText
+  runtimeState.finalCheckpointPersisted = previous.finalCheckpointPersisted
+  runtimeState.finalLocalHtmlDeliveryFailure = previous.finalLocalHtmlDeliveryFailure
+  runtimeState.localHtmlDeliveryRetries = previous.localHtmlDeliveryRetries
+  runtimeState.localHtmlDeliveryValidationPending = previous.localHtmlDeliveryValidationPending
+  if (state.preRequestDeliveryState) restorePreRequestDeliveryState(runtime)
+  else {
+    runtimeState.deliveryArtifactIds = previous.deliveryArtifactIds
+    runtimeState.deliveryArtifactSelectionArtifactIds = previous.deliveryArtifactSelectionArtifactIds
+    runtimeState.deliveryArtifactSelectionExplicit = previous.deliveryArtifactSelectionExplicit
+    runtimeState.deliverableSelectionRetries = previous.deliverableSelectionRetries
+  }
+  state.phase = previous.phase
+}
+
+async function finishCanonicalTerminalGate(runtime) {
+  const { runtimeState, state } = runtime
+  const blocked = await finishUnsatisfiedTerminalGate(runtimeState)
+  if (blocked) {
+    if (blocked.deferredForSteering === true) {
       throw brokerError(
         CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.LIFECYCLE_INVALID,
-        'Canonical Harness broker lifecycle is already closed',
+        'Canonical Harness finalization was deferred by the host',
       )
     }
-    if (phase !== 'response_committed') {
+    state.finalCheckpointPersisted = runtimeState.finalCheckpointPersisted === true
+    state.phase = 'finalized'
+    return publicFinalResult(blocked)
+  }
+  if (runtimeState.requiresFinalAnswerEvidenceReview()
+    && (!state.committedAnswerReviewDigest
+      || !runtimeState.hasCurrentFinalAnswerEvidenceReview(state.committedAnswerReviewDigest))) {
+    const incomplete = await runtimeState.finishIncomplete({
+      text: '',
+      reason: 'final_answer_evidence_review_missing',
+    })
+    if (incomplete?.deferredForSteering === true) {
       throw brokerError(
         CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.LIFECYCLE_INVALID,
-        'Canonical Harness model response must commit before finalization',
+        'Canonical Harness finalization was deferred by the host',
       )
     }
-    const adapterText = ownText(result)
-    const previousPhase = phase
-    const previousModelInvocation = runtimeState.modelInvocation
-    const previousRestoredModelInvocation = runtimeState.restoredModelInvocation
-    const previousConversationLength = runtimeState.convo.length
-    const previousFinalText = runtimeState.finalText
-    const previousFinalCheckpointPersisted = runtimeState.finalCheckpointPersisted
-    const previousFinalLocalHtmlDeliveryFailure = runtimeState.finalLocalHtmlDeliveryFailure
-    const previousLocalHtmlDeliveryRetries = runtimeState.localHtmlDeliveryRetries
-    const previousLocalHtmlDeliveryValidationPending = runtimeState.localHtmlDeliveryValidationPending
-    const previousDeliveryArtifactIds = [...runtimeState.deliveryArtifactIds]
-    const previousDeliveryArtifactSelectionArtifactIds = [
-      ...runtimeState.deliveryArtifactSelectionArtifactIds,
-    ]
-    const previousDeliveryArtifactSelectionExplicit = runtimeState.deliveryArtifactSelectionExplicit
-    const previousDeliverableSelectionRetries = runtimeState.deliverableSelectionRetries
-    let finalCheckpointPersisted = false
-    phase = 'finalizing'
-    try {
-      const blocked = await finishUnsatisfiedTerminalGate(runtimeState)
-      if (blocked) {
-        if (blocked.deferredForSteering === true) {
-          throw brokerError(
-            CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.LIFECYCLE_INVALID,
-            'Canonical Harness finalization was deferred by the host',
-          )
-        }
-        finalCheckpointPersisted = runtimeState.finalCheckpointPersisted === true
-        phase = 'finalized'
-        return publicFinalResult(blocked)
-      }
+    state.finalCheckpointPersisted = runtimeState.finalCheckpointPersisted === true
+    state.phase = 'finalized'
+    return publicFinalResult(incomplete)
+  }
+  return null
+}
 
-      if (runtimeState.requiresFinalAnswerEvidenceReview()
-        && (!committedAnswerReviewDigest
-          || !runtimeState.hasCurrentFinalAnswerEvidenceReview(committedAnswerReviewDigest))) {
-        const incomplete = await runtimeState.finishIncomplete({
-          text: '',
-          reason: 'final_answer_evidence_review_missing',
+async function finalizeCanonicalBroker(runtime, result) {
+  const { state, runtimeState } = runtime
+  if (state.phase === 'in_flight') {
+    throw brokerError(
+      CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.BUSY,
+      'Canonical Harness model request must settle before finalization',
+    )
+  }
+  if (['finalized', 'aborted', 'finalizing'].includes(state.phase)) {
+    throw brokerError(
+      CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.LIFECYCLE_INVALID,
+      'Canonical Harness broker lifecycle is already closed',
+    )
+  }
+  if (state.phase !== 'response_committed') {
+    throw brokerError(
+      CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.LIFECYCLE_INVALID,
+      'Canonical Harness model response must commit before finalization',
+    )
+  }
+  const adapterText = ownText(result)
+  const previous = captureBrokerFinalization(runtime)
+  state.finalCheckpointPersisted = false
+  state.phase = 'finalizing'
+  try {
+    const blocked = await finishCanonicalTerminalGate(runtime)
+    if (blocked) return blocked
+    const candidate = runtimeState.requiresFinalAnswerEvidenceReview()
+      ? state.committedResponseText
+      : adapterText
+    const protectedText = protectTerminalCandidate(runtimeState, candidate)
+    const emptyModelResponse = !protectedText.trim()
+    const terminalText = emptyModelResponse
+      ? protectTerminalCandidate(
+          runtimeState,
+          runtimeState.d.formatIncompleteTerminalText(EMPTY_MODEL_RESPONSE_REASON, {
+            locale: runtimeState.locale,
+          }),
+          { incomplete: true },
+        )
+      : protectedText
+    const terminalReceipt = {
+      text: terminalText,
+      iterations: Math.max(1, Number(runtimeState.iter) + 1 || 1),
+      incomplete: emptyModelResponse,
+      reason: emptyModelResponse ? EMPTY_MODEL_RESPONSE_REASON : null,
+    }
+    const completion = await runtimeState.steeringController.prepareCompletion({
+      text: terminalReceipt.text,
+      incomplete: terminalReceipt.incomplete,
+      reason: terminalReceipt.reason,
+    })
+    if (!completion.closed) {
+      throw brokerError(
+        CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.LIFECYCLE_INVALID,
+        'Canonical Harness finalization was deferred by the host',
+      )
+    }
+    if (terminalReceipt.incomplete) runtimeState.suppressTerminalArtifacts()
+    if (!completion.prepared && terminalReceipt.text) {
+      runtimeState.convo.push({ role: 'assistant', content: terminalReceipt.text })
+    }
+    runtimeState.modelInvocation = null
+    runtimeState.restoredModelInvocation = null
+    await runtimeState.persistTurn({
+      boundary: 'harness-model-final',
+      final: { ...terminalReceipt, harnessAdapter: true },
+    })
+    state.finalCheckpointPersisted = true
+    runtimeState.finalCheckpointPersisted = true
+    state.phase = 'finalized'
+    const selection = runtimeState.deliverySelectionFields()
+    const terminal = publicFinalResult({
+      ...terminalReceipt,
+      artifactIds: runtimeState.artifactIds,
+      deliveryArtifactIds: selection.deliveryArtifactIds,
+    })
+    await runtimeState.emitTurnStopping(terminal)
+    return terminal
+  } catch (error) {
+    if (!state.finalCheckpointPersisted && runtimeState.finalCheckpointPersisted !== true) {
+      restoreBrokerFinalization(runtime, previous)
+    } else {
+      state.phase = 'finalized'
+    }
+    throw error
+  }
+}
+
+function abortCanonicalBroker(runtime) {
+  const { state, runtimeState } = runtime
+  if (state.phase === 'finalized' || state.phase === 'aborted') return
+  if (state.abortPromise) return state.abortPromise
+  if (state.phase === 'finalizing') {
+    return Promise.reject(brokerError(
+      CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.BUSY,
+      'Canonical Harness broker is finalizing',
+    ))
+  }
+  state.abortPromise = (async () => {
+    state.phase = 'aborting'
+    const requestToken = state.activeRequestToken
+    if (requestToken) {
+      requestToken.revoked = true
+      state.requestAbortScope?.abort(requestToken.error)
+    }
+    let pendingRequestSettled = true
+    const repairLateResponseCheckpoint = Boolean(state.responseCheckpointPending)
+    if (state.pendingRequest && requestToken) {
+      pendingRequestSettled = await waitForSettlement(
+        state.pendingRequest,
+        CANONICAL_HARNESS_ABORT_GRACE_MS,
+      )
+    }
+    state.requestAbortScope?.dispose()
+    restorePreRequestDeliveryState(runtime)
+    await runtimeState.persistTurn({ boundary: 'harness-adapter-aborted' })
+    state.phase = 'aborted'
+    if (!pendingRequestSettled && repairLateResponseCheckpoint) {
+      void Promise.resolve(state.pendingRequest)
+        .catch(() => undefined)
+        .then(async () => {
+          if (state.phase === 'aborted') {
+            await runtimeState.persistTurn({ boundary: 'harness-adapter-aborted' })
+          }
         })
-        if (incomplete?.deferredForSteering === true) {
-          throw brokerError(
-            CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.LIFECYCLE_INVALID,
-            'Canonical Harness finalization was deferred by the host',
-          )
-        }
-        finalCheckpointPersisted = runtimeState.finalCheckpointPersisted === true
-        phase = 'finalized'
-        return publicFinalResult(incomplete)
-      }
-
-      // Contract v3 keeps its historical conversational projection: an
-      // adapter may compose the broker response when there is no host evidence
-      // contract to protect. Once execution or deliverable evidence exists,
-      // only the digest-bound Provider response may become terminal; adapter
-      // text has not itself passed that review and cannot strengthen claims.
-      const terminalCandidate = runtimeState.requiresFinalAnswerEvidenceReview()
-        ? committedResponseText
-        : adapterText
-      const protectedText = protectTerminalCandidate(runtimeState, terminalCandidate)
-      const emptyModelResponse = !protectedText.trim()
-      const terminalText = emptyModelResponse
-        ? protectTerminalCandidate(
-            runtimeState,
-            runtimeState.d.formatIncompleteTerminalText(EMPTY_MODEL_RESPONSE_REASON, {
-              locale: runtimeState.locale,
-            }),
-            { incomplete: true },
-          )
-        : protectedText
-      const terminalReceipt = {
-        text: terminalText,
-        iterations: Math.max(1, Number(runtimeState.iter) + 1 || 1),
-        incomplete: emptyModelResponse,
-        reason: emptyModelResponse ? EMPTY_MODEL_RESPONSE_REASON : null,
-      }
-      // Completion gates can persist a deferred candidate. Keep the completed
-      // model invocation installed until the gate has closed so every such
-      // checkpoint still carries the replay fence.
-      const completion = await runtimeState.steeringController.prepareCompletion({
-        text: terminalReceipt.text,
-        incomplete: terminalReceipt.incomplete,
-        reason: terminalReceipt.reason,
-      })
-      if (!completion.closed) {
-        throw brokerError(
-          CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.LIFECYCLE_INVALID,
-          'Canonical Harness finalization was deferred by the host',
-        )
-      }
-      if (terminalReceipt.incomplete) runtimeState.suppressTerminalArtifacts()
-      if (!completion.prepared && terminalReceipt.text) {
-        runtimeState.convo.push({ role: 'assistant', content: terminalReceipt.text })
-      }
-
-      // This is the second phase of the model-response commit: clear the
-      // completed invocation only in the same snapshot that makes the final
-      // assistant text terminal. Any failed flush restores both in-memory
-      // fields before the outer adapter path can persist an abort checkpoint.
-      runtimeState.modelInvocation = null
-      runtimeState.restoredModelInvocation = null
-      await runtimeState.persistTurn({
-        boundary: 'harness-model-final',
-        final: {
-          ...terminalReceipt,
-          harnessAdapter: true,
-        },
-      })
-      finalCheckpointPersisted = true
-      runtimeState.finalCheckpointPersisted = true
-      phase = 'finalized'
-      const deliverySelection = runtimeState.deliverySelectionFields()
-      const terminal = publicFinalResult({
-        ...terminalReceipt,
-        artifactIds: runtimeState.artifactIds,
-        deliveryArtifactIds: deliverySelection.deliveryArtifactIds,
-      })
-      await runtimeState.emitTurnStopping(terminal)
-      return terminal
-    } catch (error) {
-      if (!finalCheckpointPersisted && runtimeState.finalCheckpointPersisted !== true) {
-        runtimeState.modelInvocation = previousModelInvocation
-        runtimeState.restoredModelInvocation = previousRestoredModelInvocation
-        runtimeState.convo.splice(previousConversationLength)
-        runtimeState.finalText = previousFinalText
-        runtimeState.finalCheckpointPersisted = previousFinalCheckpointPersisted
-        runtimeState.finalLocalHtmlDeliveryFailure = previousFinalLocalHtmlDeliveryFailure
-        runtimeState.localHtmlDeliveryRetries = previousLocalHtmlDeliveryRetries
-        runtimeState.localHtmlDeliveryValidationPending = previousLocalHtmlDeliveryValidationPending
-        if (preRequestDeliveryState) {
-          restorePreRequestDeliveryState()
-        } else {
-          runtimeState.deliveryArtifactIds = previousDeliveryArtifactIds
-          runtimeState.deliveryArtifactSelectionArtifactIds = previousDeliveryArtifactSelectionArtifactIds
-          runtimeState.deliveryArtifactSelectionExplicit = previousDeliveryArtifactSelectionExplicit
-          runtimeState.deliverableSelectionRetries = previousDeliverableSelectionRetries
-        }
-        phase = previousPhase
-      } else {
-        // A host terminal result is authoritative once its final checkpoint is
-        // durable. A failing turn-stopping observer must not reopen the broker
-        // and let the adapter's cleanup path overwrite it with an abort.
-        phase = 'finalized'
-      }
-      throw error
+        .catch(() => undefined)
     }
-  }
+  })()
+  return state.abortPromise
+}
 
-  const abort = () => {
-    if (phase === 'finalized' || phase === 'aborted') return
-    if (abortPromise) return abortPromise
-    if (phase === 'finalizing') {
-      return Promise.reject(brokerError(
-        CANONICAL_HARNESS_MODEL_BROKER_ERROR_CODES.BUSY,
-        'Canonical Harness broker is finalizing',
-      ))
-    }
-    abortPromise = (async () => {
-      phase = 'aborting'
-      const requestToken = activeRequestToken
-      if (requestToken) {
-        requestToken.revoked = true
-        requestAbortScope?.abort(requestToken.error)
-      }
-      let pendingRequestSettled = true
-      const repairLateResponseCheckpoint = Boolean(responseCheckpointPending)
-      if (pendingRequest && requestToken) {
-        pendingRequestSettled = await waitForSettlement(
-          pendingRequest,
-          CANONICAL_HARNESS_ABORT_GRACE_MS,
-        )
-      }
-      requestAbortScope?.dispose()
-      restorePreRequestDeliveryState()
-      await runtimeState.persistTurn({ boundary: 'harness-adapter-aborted' })
-      phase = 'aborted'
-      if (!pendingRequestSettled && repairLateResponseCheckpoint) {
-        // Some embedded checkpoint stores cannot cancel an in-flight write.
-        // Reassert the terminal abort after that stale write settles. Durable
-        // built-in stores additionally reject it through their monotonic CAS.
-        void Promise.resolve(pendingRequest)
-          .catch(() => undefined)
-          .then(async () => {
-            if (phase === 'aborted') {
-              await runtimeState.persistTurn({ boundary: 'harness-adapter-aborted' })
-            }
-          })
-          .catch(() => undefined)
-      }
-    })()
-    return abortPromise
+/** Bind one prepared Loop runtime to a deliberately narrow model capability. */
+export function createCanonicalHarnessModelBroker(prepared) {
+  const runtimeState = claimPreparedRuntime(prepared)
+  const runtime = {
+    runtimeState,
+    state: {
+      phase: 'idle',
+      pendingRequest: null,
+      activeRequestToken: null,
+      requestAbortScope: null,
+      abortPromise: null,
+      responseCheckpointPending: false,
+      committedResponseText: null,
+      committedAnswerReviewDigest: null,
+      preRequestDeliveryState: null,
+      finalCheckpointPersisted: false,
+    },
   }
-
-  return Object.freeze({ modelRequest, finalize, abort })
+  return Object.freeze({
+    modelRequest: (request) => runCanonicalModelRequest(runtime, request),
+    finalize: (result) => finalizeCanonicalBroker(runtime, result),
+    abort: () => abortCanonicalBroker(runtime),
+  })
 }
