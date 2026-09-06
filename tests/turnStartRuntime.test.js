@@ -72,6 +72,79 @@ const BASE_INPUT = Object.freeze({
   content: 'hello',
 })
 
+async function assertPersistedIntent(input, expectedMode) {
+  let aggregate = null
+  const { ports } = createPorts({
+    ports: {
+      commitTurnStart: async (command) => { aggregate = structuredClone(command) },
+    },
+  })
+  const result = await createTurnStartRuntime(ports).initialize({ ...BASE_INPUT, ...input })
+  try {
+    assert.equal(aggregate.event.type, 'turn.started')
+    assert.equal(aggregate.event.payload.intentMode, expectedMode)
+    assert.equal(result.execution.intentMode, expectedMode)
+    assert.equal(aggregate.event.payload.approvalMode, input.approvalMode)
+    assert.equal(aggregate.event.payload.importedHistoryCount, input.history?.length || 0)
+  } finally {
+    await result.emitter.close()
+  }
+}
+
+test('turn start persists stale chat-client execute as auto for ordinary conversation', async (t) => {
+  for (const content of [
+    'hi',
+    '你好',
+    '解释这个函数的作用。',
+    'Explain how this code works.',
+    '修复了吗？',
+    'What is the status?',
+    'Can you explain this function?',
+    '能否介绍一下这个项目？',
+  ]) {
+    await t.test(content, () => assertPersistedIntent({
+      content, intentMode: 'execute', approvalMode: 'acceptEdits',
+    }, 'auto'))
+  }
+})
+
+test('turn start preserves explicit execution confirmations after a plan', async (t) => {
+  const history = [
+    { role: 'user', content: '请先规划修复 app.js 的步骤，暂不执行。' },
+    { role: 'assistant', content: '计划：1. 修复 app.js。2. 运行回归测试。等待执行确认。' },
+  ]
+  for (const content of ['执行', '继续', '按上述计划执行。', 'Continue.']) {
+    await t.test(content, () => assertPersistedIntent({
+      content, history, intentMode: 'execute', approvalMode: 'acceptEdits',
+    }, 'execute'))
+  }
+})
+
+test('turn start preserves execute for real mutations and mixed query-plus-work requests', async (t) => {
+  for (const content of [
+    '请修复 app.js。',
+    'Delete obsolete.json.',
+    'Update package.json to add the test script.',
+    'Can you fix the bug?',
+    '能否修复这个问题？',
+    '为什么失败？请修复。',
+    'Explain the bug and fix it.',
+    '解释这段代码并删除无用分支。',
+  ]) {
+    await t.test(content, () => assertPersistedIntent({
+      content, intentMode: 'execute', approvalMode: 'normal',
+    }, 'execute'))
+  }
+})
+
+test('turn start does not promote explicit answer or auto modes into execution', async (t) => {
+  for (const intentMode of ['answer', 'auto']) {
+    await t.test(intentMode, () => assertPersistedIntent({
+      content: 'Please fix app.js.', intentMode, approvalMode: 'plan',
+    }, intentMode))
+  }
+})
+
 test('turn start rejects a foreign occupied session before model readiness or durable writes', async () => {
   let modelReads = 0
   let durableWrites = 0

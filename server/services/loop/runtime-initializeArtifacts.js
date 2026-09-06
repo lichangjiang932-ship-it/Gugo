@@ -1,3 +1,5 @@
+import { normalizeChatTurnIntentMode } from '../../utils/executionIntent.js'
+
 function initializeArtifactContracts(s) {
   const {
     SERVER_TOOL_SPECS,
@@ -151,6 +153,9 @@ function initializeExecutionIntent(s) {
       || s.job?.prompt
       || '',
   )
+  if (s.job?.origin === 'chat') {
+    s.intentMode = normalizeChatTurnIntentMode(s.intentMode, s.executionIntentText)
+  }
   s.explicitReadOnlyConstraint = hasEffectiveReadOnlyBoundary(
     s.executionIntentText,
     s.previousUserPrompt,
@@ -214,7 +219,8 @@ function initializeExecutionIntent(s) {
     || s.inheritedLocalMutationContinuation
     || s.inheritedCapabilityChallenge
   )
-  s.textDeliverableOnly = isTextDeliverableRequest(s.executionIntentText)
+  s.textDeliverableOnly = !s.requiresPersistedArtifact
+    && isTextDeliverableRequest(s.executionIntentText)
   s.mutationExecutionRequested = !s.textDeliverableOnly && (
     s.requiresPersistedArtifact
     || (s.directExecutionRequested && (

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { authorizeChatDirectoryRequest } from '../../lib/chatDirectoryRequest.js'
 import {
   buildServerTurnResumeMeta,
@@ -10,8 +10,9 @@ import {
   buildStreamResumeStateFromMessages,
   getStreamResumeStateForSession,
   isStreamResumeStateForSession,
+  latestStreamResumeMessage,
+  streamResumeDismissalKey,
   updateStreamResumeStates,
-  updateStreamResumeStatesFromTurnResult,
 } from './streamResumeState.js'
 import { cancelTurnRun } from './turnRunRegistry.js'
 import useManualRecoveryRouteResume from './useManualRecoveryRouteResume.js'
@@ -34,6 +35,7 @@ export default function useChatTurnRecovery({
 }) {
   const [resumeStates, setResumeStates] = useState({})
   const [failedTurnRetry, setFailedTurnRetry] = useState(null)
+  const dismissedResumeKeysRef = useRef(new Set())
   const resumeState = getStreamResumeStateForSession(resumeStates, activeSessionId)
   const latestServerAssistant = [...messages].reverse().find((message) => (
     message?.role === 'assistant' && message?.meta?.serverTurnId
@@ -48,13 +50,28 @@ export default function useChatTurnRecovery({
     latestServerAssistant?.meta?.serverResumeResolution ? 'resolution' : '',
   ].join(':')
 
-  const handleTurnStart = useCallback(({ sessionId }) => {
+  const dismissSessionResume = useCallback((sessionId) => {
+    const session = stateRef.current.sessions.find((item) => item.id === sessionId)
+    const key = streamResumeDismissalKey(latestStreamResumeMessage(session?.messages), { sessionId })
+    if (key) dismissedResumeKeysRef.current.add(key)
     setResumeStates((current) => updateStreamResumeStates(current, sessionId, null))
-  }, [])
+    setFailedTurnRetry((current) => current?.sessionId === sessionId ? null : current)
+  }, [stateRef])
+  const handleTurnStart = useCallback(({ sessionId }) => {
+    dismissSessionResume(sessionId)
+  }, [dismissSessionResume])
   const handleTurnResult = useCallback(({ sessionId, turnId, result }) => {
-    const nextResumeState = buildStreamResumeState(result, { sessionId, turnId })
+    const session = stateRef.current.sessions.find((item) => item.id === sessionId)
+    const message = latestStreamResumeMessage(session?.messages)
+    // A late completion from an earlier turn must not replace the current
+    // turn's recovery state. Pending message updates will rebuild it below.
+    if (message?.meta?.serverTurnId !== turnId) return
+    const key = streamResumeDismissalKey(message, { sessionId })
+    const nextResumeState = dismissedResumeKeysRef.current.has(key)
+      ? null
+      : buildStreamResumeState(result, { sessionId, turnId })
     setResumeStates((current) => updateStreamResumeStates(current, sessionId, nextResumeState))
-  }, [])
+  }, [stateRef])
   const showPendingDirectoryGuidance = useCallback((content = '') => {
     const current = stateRef.current
     const session = current.sessions.find((item) => item.id === current.activeSessionId)
@@ -110,9 +127,7 @@ export default function useChatTurnRecovery({
         : current
     ))
   }, [])
-  const onFailedTurnRetrySettled = useCallback((outcome) => {
-    setResumeStates((current) => updateStreamResumeStatesFromTurnResult(current, outcome))
-  }, [])
+  const onFailedTurnRetrySettled = handleTurnResult
   useServerTurnResume({
     abortCtrlRef,
     dispatch,
@@ -133,7 +148,10 @@ export default function useChatTurnRecovery({
   })
   useEffect(() => {
     if (!activeSessionId) return
-    const rebuilt = buildStreamResumeStateFromMessages(messages, { sessionId: activeSessionId })
+    const rebuilt = buildStreamResumeStateFromMessages(messages, {
+      sessionId: activeSessionId,
+      dismissedKeys: dismissedResumeKeysRef.current,
+    })
     const retryPending = rebuilt && (
       failedTurnRetry?.sessionId === rebuilt.sessionId
       && failedTurnRetry?.turnId === rebuilt.turnId
@@ -148,16 +166,13 @@ export default function useChatTurnRecovery({
 
   const handleAbort = useCallback(() => {
     if (activeSessionId) {
-      setResumeStates((current) => updateStreamResumeStates(current, activeSessionId, null))
-      setFailedTurnRetry((current) => current?.sessionId === activeSessionId ? null : current)
+      dismissSessionResume(activeSessionId)
     }
     if (!cancelTurnRun(activeSessionId)) abortCtrlRef.current?.abort()
-  }, [abortCtrlRef, activeSessionId])
+  }, [abortCtrlRef, activeSessionId, dismissSessionResume])
   const handleDismissResume = useCallback(() => {
-    if (activeSessionId) {
-      setResumeStates((current) => updateStreamResumeStates(current, activeSessionId, null))
-    }
-  }, [activeSessionId])
+    if (activeSessionId) dismissSessionResume(activeSessionId)
+  }, [activeSessionId, dismissSessionResume])
   const resumeAvailable = isStreamResumeStateForSession(resumeState, activeSessionId)
     && (resumeState.code === 'TURN_INCOMPLETE' || resumeState.manualRetryable === true)
   const manualRetryAvailable = resumeAvailable && resumeState.manualRetryable === true

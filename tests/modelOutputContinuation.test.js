@@ -145,23 +145,35 @@ test('new steering discards obsolete partial prose but retains the bounded retry
 
 test('unknown in-flight writes are not replayed by a pending output continuation', async () => {
   const push = SERVER_TOOL_SPECS.find((spec) => spec.function?.name === 'git_push')
+  const prompt = 'Push the explicitly approved change.'
+  const unsupportedSuccess = 'The approved changes were pushed successfully.'
   let executions = 0
+  const outcomes = []
   const result = await run({
-    job: { id: 'unknown-output-write', userId: 'output-continuation-user', origin: 'chat', prompt: 'Push the explicitly approved change.' },
+    job: { id: 'unknown-output-write', userId: 'output-continuation-user', origin: 'chat', prompt, userPrompt: prompt },
+    messages: [{ role: 'user', content: prompt }],
     toolSpecs: [push], intentMode: 'execute',
     requestToolApproval: async ({ args }) => ({ proceed: true, args, approvalId: 'test-only-approval' }),
     loadCheckpoint: async () => ({
       iterations: 1,
       messages: [
-        { role: 'user', content: 'Push the explicitly approved change.' },
+        { role: 'user', content: prompt },
         { role: 'assistant', content: '', tool_calls: [{ id: 'unknown-push', function: { name: 'git_push', arguments: '{}' } }] },
       ],
       toolCalls: [{ id: 'unknown-push', name: 'git_push', args: {}, argumentsText: '{}', checkpointStatus: 'executing' }],
       completionGuards: { outputContinuation: { version: 1, attempts: 1, prefix: 'Earlier partial answer.' } },
     }),
-    runModel: async () => ({ content: 'The task is still blocked.', toolCalls: [] }),
+    onToolCompleted: async (outcome) => outcomes.push(outcome.result),
+    runModel: async () => ({ content: unsupportedSuccess, toolCalls: [] }),
     executeTool: async () => { executions += 1; return { ok: true } },
   })
   assert.equal(executions, 0)
+  assert.equal(outcomes.length, 1)
+  assert.equal(outcomes[0].code, 'tool_execution_outcome_unknown')
+  assert.equal(outcomes[0].retryable, false)
+  assert.equal(outcomes[0].requiresUserVerification, true)
   assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'execution_evidence_missing')
+  assert.ok(result.missingRequirements.includes('execution_evidence'))
+  assert.notEqual(result.text, unsupportedSuccess)
 })

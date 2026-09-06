@@ -55,7 +55,14 @@ test('plan confirmation persists permission before changing the agent mode used 
 
   assert.deepEqual(result, { proceed: true, applied: true })
   assert.deepEqual(calls, ['permission:acceptEdits', 'agent:code'])
-  assert.equal(intentModeForAgentMode(confirmation.agentMode), 'execute')
+  assert.equal(confirmation.intentMode, 'execute', 'the explicit confirmation applies to this send')
+  assert.equal(intentModeForAgentMode(confirmation.agentMode), 'auto', 'later sends must not inherit an execution mandate')
+})
+
+test('ordinary chat and code-mode messages infer intent instead of forcing execution', () => {
+  assert.equal(intentModeForAgentMode('chat'), 'auto')
+  assert.equal(intentModeForAgentMode('code'), 'auto')
+  assert.equal(intentModeForAgentMode('plan'), 'answer')
 })
 
 test('failed permission persistence stops the execution confirmation', async () => {
