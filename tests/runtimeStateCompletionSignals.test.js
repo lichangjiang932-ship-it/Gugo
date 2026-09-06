@@ -3,10 +3,31 @@ import test from 'node:test'
 
 import {
   FALSE_SUCCESS_STATUS,
+  MUTATION_VERIFICATION_CHECKPOINT_VERSION,
   shouldRepairLegacyWorkspaceMutationCheckpoint,
 } from '../server/services/loop/runtimeState.js'
 
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
+
+function historicalToolPair(id, name, args, result) {
+  return [
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+    },
+    { role: 'tool', tool_call_id: id, name, content: JSON.stringify(result) },
+  ]
+}
+
+function legacyReadHistory() {
+  return [
+    { role: 'user', content: 'Inspect the file encoding.' },
+    ...historicalToolPair('inspect-encoding', 'bash_exec', {
+      command: 'powershell -NoProfile -Command "[System.IO.File]::ReadAllBytes(\'result.md\')[0..2] -join \',\'"',
+    }, { ok: true, exitCode: 0, stdout: '35,32,71' }),
+  ]
+}
 
 test('legacy workspace debt is repairable only for a successful .NET read without real mutations', () => {
   const dotNetRead = {
@@ -109,6 +130,103 @@ test('a restored false workspace debt from .NET file inspection no longer blocks
 
   assert.equal(result.incomplete, undefined)
   assert.equal(result.text, 'The file is valid UTF-8.')
+})
+
+test('live steering never hides earlier mutation or uncertain tool evidence from legacy debt repair', () => {
+  const [request, ...readPair] = legacyReadHistory()
+  const steering = [
+    { role: 'system', content: '[LIVE STEERING UPDATE CONTRACT]' },
+    { role: 'user', content: 'Also explain its encoding.' },
+  ]
+  for (const mutationResult of [
+    { ok: true, exitCode: 0 },
+    { ok: false, exitCode: 1, error: 'Script failed after writing some files.' },
+  ]) {
+    const writes = historicalToolPair('real-script-write', 'bash_exec', {
+      command: 'node update-project.js',
+    }, mutationResult)
+    assert.equal(shouldRepairLegacyWorkspaceMutationCheckpoint([
+      request, ...writes, ...steering, ...readPair,
+    ]), false)
+  }
+  assert.equal(shouldRepairLegacyWorkspaceMutationCheckpoint([
+    request, ...steering, ...readPair,
+  ]), true, 'complete read-only steering history remains repairable')
+})
+
+test('legacy debt repair is fail-closed for partial, ambiguous, compacted, and versioned checkpoints', () => {
+  const history = legacyReadHistory()
+  const unknownWrite = historicalToolPair('unknown-write', 'write_file', {
+    path: 'result.md', content: 'changed',
+  }, { ok: true })
+  for (const messages of [
+    [...history, unknownWrite[0]],
+    [...history, unknownWrite[1]],
+    [...history, { ...unknownWrite[0], tool_calls: [{ id: 'bad-json', function: { name: 'write_file', arguments: '{' } }] }],
+    [...history, history[1]],
+    [...history, history[2]],
+    history.slice(1),
+    [history[0], { role: 'assistant', content: 'Previous work summarized.', meta: { type: 'context_summary' } }, ...history.slice(1)],
+  ]) {
+    assert.equal(shouldRepairLegacyWorkspaceMutationCheckpoint(messages), false)
+  }
+  for (const checkpoint of [
+    { recovery: { archiveId: 'compacted-history' } },
+    { toolCalls: [{ id: 'write-still-in-flight', checkpointStatus: 'in_flight' }] },
+    { progress: { completedCallIds: ['missing-earlier-write'] } },
+    { progress: { observedCallIds: ['missing-earlier-write'] } },
+    { progress: { changedFiles: ['result.md'] } },
+    { progress: { additions: 1 } },
+    { progress: { deletions: 1 } },
+    { completionGuards: { mutationVerificationVersion: MUTATION_VERIFICATION_CHECKPOINT_VERSION } },
+    { completionGuards: { mutationVerificationVersion: MUTATION_VERIFICATION_CHECKPOINT_VERSION + 1 } },
+  ]) {
+    assert.equal(shouldRepairLegacyWorkspaceMutationCheckpoint(history, checkpoint), false)
+  }
+})
+
+test('checkpoint recovery retains real workspace verification debt from before live steering', async () => {
+  const [request, ...readPair] = legacyReadHistory()
+  const messages = [
+    request,
+    ...historicalToolPair('project-mutation-before-steering', 'bash_exec', {
+      command: 'node update-project.js',
+    }, { ok: true, exitCode: 0 }),
+    { role: 'system', content: '[LIVE STEERING UPDATE CONTRACT]' },
+    { role: 'user', content: 'Also inspect the encoding.' },
+    ...readPair,
+  ]
+  let checkpoint = {
+    messages,
+    iterations: 2,
+    appliedSteeringIds: ['encoding-steering'],
+    completionGuards: {
+      executionEvidenceObserved: true,
+      mutationExecutionObserved: true,
+      pendingMutationVerification: true,
+      pendingMutationTargets: ['<workspace>'],
+      pendingDeletionTargets: [],
+    },
+  }
+  const result = await runToolsLoop({
+    job: { id: 'steered-workspace-debt', userId: null, origin: 'chat', prompt: request.content },
+    step: { id: 'steered-workspace-debt', kind: 'chat' },
+    messages,
+    intentMode: 'execute',
+    toolSpecs: [],
+    maxIters: 3,
+    enableToolHooks: false,
+    loadCheckpoint: async () => structuredClone(checkpoint),
+    saveCheckpoint: async (state) => { checkpoint = structuredClone(state); return true },
+    runModel: async () => ({ content: 'Everything is complete.', toolCalls: [] }),
+  })
+
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'post_mutation_verification_missing')
+  assert.deepEqual(checkpoint.completionGuards.pendingMutationTargets, ['<workspace>'])
+  assert.equal(checkpoint.completionGuards.pendingMutationVerification, true)
+  assert.equal(checkpoint.completionGuards.mutationVerificationVersion, MUTATION_VERIFICATION_CHECKPOINT_VERSION)
+  assert.equal(checkpoint.final.incomplete, true)
 })
 
 test('explicit English completion confirmations are recognized', () => {

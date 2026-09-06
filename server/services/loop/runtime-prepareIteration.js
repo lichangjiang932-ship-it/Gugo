@@ -2,6 +2,7 @@ export async function prepareIteration(s) {
   const i = s.iteration
   const { DIRECTORY_REVIEW_GUARD_MARKER, MAX_ARTIFACT_DELIVERY_RETRIES, buildAssistantToolCallsMessage, buildJobToolIdempotencyKey, normalizeToolCalls, observeToolCalls, runPreStep } = s.d
   if (s.artifactRecoveryActive()
+        && !s.completionDeferredForSteering
         && s.artifactDeliveryRetries >= MAX_ARTIFACT_DELIVERY_RETRIES
         && !s.hasRequiredArtifacts()) {
         return { kind: 'return', value: s.finishIncomplete(s.missingArtifactBlocker()) }

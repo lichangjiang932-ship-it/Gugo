@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks'
 import { types as nodeTypes } from 'node:util'
 import { PLUGIN_CAPABILITIES } from './pluginManifest.js'
 import { snapshotPluginData } from './pluginServiceData.js'
+import { encodeSandboxInput, SANDBOX_INPUT_BOOTSTRAP_SOURCE } from './pluginSandboxInput.js'
 import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
 import { readPluginEntryFile } from './pluginEntryFile.js'
 import { verifyPluginEntryIntegrity } from './pluginIntegrity.js'
@@ -137,8 +138,13 @@ function stableErrorCode(err) {
 }
 
 try {
-  const { source, input, capabilities, validateOnly } = workerData
-  const context = vm.createContext(Object.create(null))
+  const { source, inputWire, capabilities, validateOnly } = workerData
+  const context = vm.createContext(Object.create(null), {
+    codeGeneration: { strings: false, wasm: false },
+  })
+  context.__gugoInputWire = inputWire
+  vm.runInContext(${JSON.stringify(SANDBOX_INPUT_BOOTSTRAP_SOURCE)}, context)
+  const plainObjectPrototype = vm.runInContext('Object.prototype', context)
   vm.runInContext(
     "globalThis.module = Object.create(null); globalThis.module.exports = undefined; globalThis.exports = Object.create(null); Object.defineProperty(globalThis, 'console', { value: undefined, writable: false, configurable: true });",
     context,
@@ -152,15 +158,16 @@ try {
   vm.runInContext(source + "\\n;module.exports = transform;", context, {
     filename: 'plugin-transformer.js',
   })
-  const transform = vm.runInContext('module.exports', context)
-  const plainObjectPrototype = vm.runInContext('Object.prototype', context)
-  if (typeof transform !== 'function') {
+  if (!vm.runInContext("typeof module.exports === 'function'", context)) {
     throw new Error('transform must be a function')
   }
   if (validateOnly) {
     parentPort.postMessage({ ok: true })
   } else {
-    const output = snapshotOutput(transform(input), plainObjectPrototype)
+    // Invoke inside the VM as well: plugin code must not receive worker-realm
+    // arguments or callbacks, including through the call boundary itself.
+    const result = vm.runInContext('(0, module.exports)(__gugoSandboxInput)', context)
+    const output = snapshotOutput(result, plainObjectPrototype)
     parentPort.postMessage({ ok: true, output })
   }
 } catch (err) {
@@ -342,6 +349,7 @@ async function runTransformerWorker(options, validateOnly) {
     ...SANDBOX_DATA_LIMITS,
   })
   const allowedCapabilities = sanitizeCapabilities(capabilities)
+  const inputWire = encodeSandboxInput(isolatedInput)
   const startedAt = performance.now()
 
   return await new Promise((resolve) => {
@@ -350,7 +358,7 @@ async function runTransformerWorker(options, validateOnly) {
     const worker = new Worker(WORKER_SOURCE, {
       eval: true,
       env: sanitizeChildEnv(),
-      workerData: { source, input: isolatedInput, capabilities: allowedCapabilities, validateOnly },
+      workerData: { source, inputWire, capabilities: allowedCapabilities, validateOnly },
       resourceLimits: { maxOldGenerationSizeMb: memoryLimitMb },
     })
 

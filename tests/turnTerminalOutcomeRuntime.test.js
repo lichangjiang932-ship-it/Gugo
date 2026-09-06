@@ -27,6 +27,7 @@ function completedEvidence(order) {
     atomicTurnBoundary: false,
     verifiedLocalFilesAt: () => [{ id: 'verified-1' }],
     retainedLocalFilesAt: () => [{ id: 'retained-1' }],
+    boundaryOptions: () => ({}),
     emitter: async (type, payload, options = {}) => {
       const event = { sequence: 3, type, payload }
       await options.beforeAppend?.(event)
@@ -124,4 +125,31 @@ test('completed outcome contains an asynchronously rejected notification hook', 
     evidence: completedEvidence([]),
     recordCanaryTerminal: async () => {},
   }))
+})
+
+test('an internal steering deferral is rejected as a completed loop result by the host', async () => {
+  const events = []
+  const canaries = []
+  let memoryCalls = 0
+  const runtime = createTurnTerminalOutcomeRuntime({
+    now: () => 2_000,
+    writeMessage: async () => {},
+    scheduleMemoryExtraction: () => { memoryCalls += 1 },
+    runMemoryModel: async () => ({ text: 'memory' }),
+  })
+  await runtime.settleResult({
+    scope,
+    signal: new AbortController().signal,
+    result: { deferredForSteering: true },
+    state: { ...completedState(), checkpointIterations: 1 },
+    evidence: completedEvidence(events),
+    recordCanaryTerminal: async (...args) => { canaries.push(args) },
+  })
+
+  assert.equal(events.length, 1)
+  assert.equal(events[0][1], 'turn.failed')
+  assert.equal(events[0][2].code, 'TURN_INCOMPLETE')
+  assert.equal(events[0][2].incompleteReason, 'turn_incomplete')
+  assert.equal(canaries[0][0], 'failed')
+  assert.equal(memoryCalls, 0)
 })

@@ -30,7 +30,7 @@ const RESUMABLE_SUBAGENT_STATUSES = new Set(['interrupted'])
 /**
  * 独立跑的子代理默认预算。
  * ★ 120 次 / 10 分钟 → 1000 次 / 2 小时,和 job 侧的放宽保持同一口径。
- * 墙钟同样不含模型延迟(见 jobBudget.trackModelMs)。
+ * 墙钟扣除共享模型等待区间的并集(见 jobBudget.beginModelWait)，重叠等待不重复扣除。
  */
 const SUBAGENT_BUDGET = Object.freeze({
   maxTotalCalls: envInt('SUBAGENT_MAX_TOOL_CALLS', 1000),

@@ -23,6 +23,7 @@ async function prepareModelRequestIteration(s) {
     i.steeringLeaseId = claimed.leaseId
     s.appendSteeringMessages(claimed.messages)
   }
+  s.completionDeferredForSteering = false
   i.modelResult = undefined
   i.responseTextPublished = false
   i.finalAnswerEvidenceReviewDigest = s.hasCurrentFinalAnswerEvidenceReview()

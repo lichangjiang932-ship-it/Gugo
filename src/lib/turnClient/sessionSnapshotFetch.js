@@ -69,6 +69,9 @@ export async function fetchServerSessionSnapshotPages({
           revision,
           ...(turnEventRevision !== null ? { turnEventRevision } : {}),
           totalMessages: totalMessages ?? messages.length,
+          ...(Number.isInteger(page.durableTotalMessages)
+            ? { durableMessageCount: page.durableTotalMessages }
+            : {}),
           offset: 0,
           nextOffset: null,
           complete: true,

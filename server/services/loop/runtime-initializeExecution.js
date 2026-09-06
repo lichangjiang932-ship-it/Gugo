@@ -1,6 +1,7 @@
 import { observeLoopEvent } from './eventIsolation.js'
 import { assertRuntimeStage } from './runtimeContract.js'
 import { restoreModelInvocationCheckpoint } from './modelInvocationCheckpoint.js'
+import { MUTATION_VERIFICATION_CHECKPOINT_VERSION } from './runtimeState.js'
 
 function initializeExecutionState(s) {
   const { MAX_ITERS, normalizeCompactionRecovery, resolveIterationWindow } = s.d
@@ -316,6 +317,7 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
       sourceHandoffRetries: s.sourceHandoffRetries,
       directoryResumeRetries: s.directoryResumeRetries,
       pendingMutationVerification: s.hasPendingMutationVerification(),
+      mutationVerificationVersion: MUTATION_VERIFICATION_CHECKPOINT_VERSION,
       pendingMutationTargets: [...s.pendingMutationTargets],
       pendingDeletionTargets: [...s.pendingDeletionTargets],
       auxiliaryMutationTargets: [...s.auxiliaryMutationTargets],
@@ -361,6 +363,9 @@ function installCheckpointRuntime(s) {
     appendAssistant: (text) => s.convo.push({ role: 'assistant', content: text }),
     beforeFinalCompletion: s.beforeFinalCompletion,
     onCompletionDeferred: () => {
+      s.finalText = ''
+      s.finalCheckpointPersisted = false
+      s.completionDeferredForSteering = true
       if (s.iter + 1 >= s.maxIters) s.maxIters = s.iter + 2
     },
   })

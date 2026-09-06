@@ -330,7 +330,8 @@ function activeTurnRecoveryStub(rawMessages) {
     }
   }
 
-  if (!latestCanonicalUser || assistantTurnIds.has(latestCanonicalUser.turnId)) return null
+  if (!latestCanonicalUser || assistantTurnIds.has(latestCanonicalUser.turnId)
+    || latestCanonicalUser.message.modelContext?.turnRecoverySuppressed === true) return null
   const { message, turnId } = latestCanonicalUser
   return {
     id: `${turnId}:assistant`,

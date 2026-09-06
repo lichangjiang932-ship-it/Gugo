@@ -16,21 +16,50 @@ import {
 const MAX_BRANCH_DEPTH = 5
 const MAX_BRANCH_TREE_NODES = 1_000
 
-function forkSafeModelContext(value) {
+function forkSafeModelContext(value, { sessionId, messageId }) {
   if (!value) return '{}'
   try {
     const context = JSON.parse(value)
     if (!context || typeof context !== 'object' || Array.isArray(context)) return '{}'
+    const historyFields = [
+      'turnId', 'turnEvidence', 'evidenceState', 'error', 'recovery',
+      'failedRetryRejection', 'clarification', 'serverLastSequence',
+    ]
+    const historicalTurn = Object.fromEntries(historyFields
+      .filter((key) => Object.hasOwn(context, key))
+      .map((key) => [key, context[key]]))
+    if (Object.keys(historicalTurn).length > 0) {
+      // A fork copies history, not the source Turn's event/checkpoint identity.
+      // Keep diagnostics as provenance; client projection only reads the live
+      // top-level fields and must never resume these in the new session.
+      context.forkSource = { sessionId, messageId, ...historicalTurn }
+    }
     for (const key of [
+      ...historyFields,
+      'cancelled',
       'clarification',
+      'clientRequestId',
       'directoryAuthorizationPending',
+      'failed',
       'interrupted',
       'liveSteering',
       'paused',
       'pausedSequence',
+      'paused_sequence',
       'serverConnectionState',
+      'serverFailure',
+      'serverRecoveryActionPath',
+      'serverRecoveryBlocked',
+      'serverRecoveryKind',
+      'serverRecoveryModelRequestId',
+      'serverRecoveryStub',
+      'serverRecoveryToolCallId',
       'serverResumeResolution',
+      'serverTurnId',
+      'steering',
+      'steeringClientRequestId',
       'streaming',
+      'turnRecoverySuppressed',
     ]) delete context[key]
     return JSON.stringify(context)
   } catch {
@@ -127,7 +156,7 @@ export function forkSession({
     )
 
     const sourceMessages = db.prepare(`
-      SELECT role, content, model_context_json, created_at, updated_at, rowid
+      SELECT id, role, content, model_context_json, created_at, updated_at, rowid
       FROM messages
       WHERE user_id = ? AND session_id = ?
       ORDER BY created_at ASC, rowid ASC
@@ -145,7 +174,10 @@ export function forkSession({
         table: 'messages',
         used: usedMessageIds,
       })
-      const modelContextJson = forkSafeModelContext(message.model_context_json)
+      const modelContextJson = forkSafeModelContext(message.model_context_json, {
+        sessionId: source.token,
+        messageId: message.id,
+      })
       insertMessage.run(
         messageId,
         forkedSessionId,

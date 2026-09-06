@@ -1,5 +1,9 @@
 import { collectAgentEventOutboxSchemaProblems } from './agentEventOutboxSchemaContract.js'
 import { collectAgentEventSubscriptionSchemaProblems } from './agentEventSubscriptionSchemaContract.js'
+import { collectSessionTranscriptRecoverySchemaProblems } from './sessionTranscriptRecoverySchemaContract.js'
+import { databaseSchemaIncompleteError } from './dbSchemaErrors.js'
+
+export { databaseSchemaIncompleteError } from './dbSchemaErrors.js'
 
 const REQUIRED_TABLE_COLUMNS = Object.freeze({
   meta: ['key', 'value'],
@@ -178,6 +182,7 @@ export const REQUIRED_PRIMARY_KEYS = Object.freeze({
   todos: ['id'],
   effort_settings: ['user_id'],
   turn_events: ['id'],
+  session_transcript_recovery_fences: ['user_id', 'session_id', 'turn_id'],
   agent_event_outbox: ['cursor'],
   agent_event_stream_metadata: ['stream_key'],
   agent_event_subscriptions: ['subscription_key'],
@@ -234,6 +239,7 @@ export const REQUIRED_UNIQUE_KEYS = Object.freeze({
 
 /** Return exact PK/UNIQUE conflicts that would make a runtime UPSERT unsafe. */
 const REQUIRED_KEY_MINIMUM_SCHEMA_VERSIONS = Object.freeze({
+  session_transcript_recovery_fences: 116,
   agent_event_outbox: 113,
   agent_event_stream_metadata: 113,
   agent_event_subscriptions: 115,
@@ -471,23 +477,6 @@ function hasHistoricalLedgerSchema(db) {
     && foreignKeys[0].on_delete === 'CASCADE'
 }
 
-export function databaseSchemaIncompleteError({ expectedVersion, stage, missing }) {
-  return Object.assign(
-    new Error(
-      `Database schema is incomplete for version ${expectedVersion}: ${missing.join(', ')}.`,
-    ),
-    {
-      code: 'DB_SCHEMA_INCOMPLETE',
-      retryable: false,
-      details: {
-        expectedVersion,
-        stage,
-        missing: [...missing],
-      },
-    },
-  )
-}
-
 /**
  * Verify stable schema sentinels and every runtime UPSERT key. This is
  * intentionally read-only: a database that claims the current version must
@@ -593,6 +582,7 @@ export function assertCurrentSchemaContract(db, expectedVersion, { stage = 'post
   if (expectedVersion >= 114) {
     missing.push(...collectAgentEventSubscriptionSchemaProblems(db))
   }
+  if (expectedVersion >= 116) missing.push(...collectSessionTranscriptRecoverySchemaProblems(db))
 
   if (missing.length > 0) {
     throw databaseSchemaIncompleteError({ expectedVersion, stage, missing })

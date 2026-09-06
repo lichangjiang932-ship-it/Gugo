@@ -127,13 +127,15 @@ export function isSuccessfulTurnCompletedEvent(event) {
     || payload.cancelled === true
     || payload.paused === true
     || payload.interrupted === true
+    || payload.deferredForSteering === true
     || error.complete === false
     || error.completed === false
     || error.incomplete === true
     || error.blocked === true
     || error.cancelled === true
     || error.paused === true
-    || error.interrupted === true) return false
+    || error.interrupted === true
+    || error.deferredForSteering === true) return false
   const status = String(payload.status || error.status || '').trim().toLowerCase()
   if (INCOMPLETE_COMPLETION_STATUSES.has(status)) return false
   if (String(payload.incompleteReason || error.incompleteReason || '').trim()) return false

@@ -151,7 +151,7 @@ function initializeMutationVerification(s) {
   const repairedLegacyDebt = rawTargets.length === 1
     && normalizeMutationTarget(rawTargets[0]) === PROJECT_SCOPE_TARGET
     && !(s.restoredState?.completionGuards?.pendingDeletionTargets || []).length
-    && shouldRepairLegacyWorkspaceMutationCheckpoint(s.restoredState?.messages)
+    && shouldRepairLegacyWorkspaceMutationCheckpoint(s.restoredState?.messages, s.restoredState)
   s.restoredMutationTargets = repairedLegacyDebt ? [] : rawTargets
   s.recoveredHistoricalTargets = s.recoveredPriorLocalTargets
   s.pendingMutationTargets = new Set([

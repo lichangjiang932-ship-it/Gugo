@@ -11,6 +11,7 @@ process.env.APPROVAL_MODE = 'off'
 const { closeDb, createUser } = await import('../server/db.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
 const { runToolLoop } = await import('../server/services/loop/index.js')
+const { SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
 const { createTurnExecutionLeaseCoordinator } = await import(
   '../server/services/turnExecutionLeaseRuntime.js'
 )
@@ -154,4 +155,77 @@ test('TurnEngine applies live steering once before completing the active model t
   assert.equal(cancellationRequests, 0)
   assert.equal(toolExecutions, 0)
   assert.equal(modelRequests.length, 2, 'steering must not force a redundant third model round')
+})
+
+test('TurnEngine consumes steering arriving at the iteration limit before emitting completion', async () => {
+  const userId = 'turn-engine-limit-steering-user'
+  const sessionId = 'turn-engine-limit-steering-session'
+  const turnId = 'turn-engine-limit-steering-turn'
+  const steeringContent = 'Revise the conclusion using the existing notes.'
+  createUser({ id: userId, email: 'turn-engine-limit-steering@example.com' })
+  upsertSession({ id: sessionId, userId, title: 'Iteration-limit steering' })
+  const readFile = SERVER_TOOL_SPECS.find((spec) => spec.function?.name === 'read_file')
+  let notifyWrapUp
+  let releaseWrapUp
+  const wrapUpStarted = new Promise((resolve) => { notifyWrapUp = resolve })
+  const wrapUpGate = new Promise((resolve) => { releaseWrapUp = resolve })
+  let toolExecutions = 0
+  let modelCalls = 0
+  const engine = new TurnEngine({
+    runLoop: (options) => runToolLoop({ ...options, maxIters: 1, enableToolHooks: false }),
+    toolSpecs: [readFile],
+    resolveToolSpecs: async () => [readFile],
+    readApprovalMode: () => 'off',
+    getContextWindow: () => 8_192,
+    scheduleMemoryExtraction: () => {},
+    executeTool: async () => {
+      toolExecutions += 1
+      return { ok: true, path: 'README.md', content: 'Existing project notes.' }
+    },
+    runModel: async ({ messages, toolChoice }) => {
+      modelCalls += 1
+      if (toolChoice === 'none') {
+        notifyWrapUp()
+        await wrapUpGate
+        return { content: 'The notes were read, but the task is incomplete.', toolCalls: [] }
+      }
+      if (messages.some((message) => message.role === 'user' && message.content === steeringContent)) {
+        return { content: 'Revised conclusion using the existing notes.', toolCalls: [] }
+      }
+      return {
+        content: '',
+        toolCalls: [{
+          id: 'iteration-limit-read',
+          type: 'function',
+          function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+        }],
+      }
+    },
+  })
+  await engine.startTurn({
+    userId, sessionId, turnId,
+    content: 'Read the project notes.',
+    intentMode: 'answer',
+    locale: 'en',
+  })
+  await wrapUpStarted
+  await engine.steerTurn({
+    userId, sessionId, turnId,
+    content: steeringContent,
+    clientRequestId: 'limit-steering-request',
+  })
+  releaseWrapUp()
+  await engine.waitForTurn({ userId, sessionId, turnId })
+
+  const events = listTurnEvents({ userId, sessionId, turnId, limit: 2_000 })
+  const completed = events.filter((event) => event.type === 'turn.completed')
+  assert.equal(completed.length, 1)
+  assert.equal(completed[0].payload.text, 'Revised conclusion using the existing notes.')
+  assert.equal(events.some((event) => event.type === 'turn.failed'), false)
+  assert.equal(listTurnSteering({ userId, sessionId, turnId })[0].status, 'consumed')
+  const assistant = listMessages({ userId, sessionId, limit: 100 })
+    .find((message) => message.id === `${turnId}:assistant`)
+  assert.equal(assistant.content, completed[0].payload.text)
+  assert.equal(toolExecutions, 1)
+  assert.equal(modelCalls, 3)
 })

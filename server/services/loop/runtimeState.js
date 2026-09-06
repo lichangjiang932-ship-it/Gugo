@@ -235,22 +235,51 @@ function pairedHistoricalToolCalls(messages) {
 
 const LEGACY_DOTNET_FILE_READ = /\[System\.IO\.File\]::ReadAll(?:Bytes|Text|Lines)\(/i
 
-export function shouldRepairLegacyWorkspaceMutationCheckpoint(messages) {
+export const MUTATION_VERIFICATION_CHECKPOINT_VERSION = 1
+
+function completeLegacyToolHistory(history, checkpoint) {
+  // A user message is not a turn boundary: live steering is also persisted as
+  // role=user. Old checkpoints have no trustworthy boundary/version, so only
+  // a complete, read-only history can prove that their workspace debt is false.
+  if (history.find((message) => message?.role !== 'system')?.role !== 'user'
+    || checkpoint.recovery
+    || checkpoint.toolCalls?.length
+    || history.some((message) => message?.meta?.compaction
+      || message?.meta?.type === 'context_summary'
+      || (message?.tool_calls != null && !Array.isArray(message.tool_calls)))) return null
+  const pairs = pairedHistoricalToolCalls(history)
+  const callCount = history.reduce((count, message) => (
+    count + (message?.role === 'assistant' ? message.tool_calls?.length || 0 : 0)
+  ), 0)
+  const resultCount = history.filter((message) => message?.role === 'tool').length
+  if (pairs.length !== callCount || pairs.length !== resultCount) return null
+  const pairedIds = new Set(pairs.map(({ call }) => call.id))
+  const progress = checkpoint.progress || {}
+  if ([...(progress.observedCallIds || []), ...(progress.completedCallIds || [])]
+    .some((id) => !pairedIds.has(String(id || '').trim()))
+    || progress.changedFiles?.length
+    || Number(progress.additions) > 0
+    || Number(progress.deletions) > 0) return null
+  return pairs
+}
+
+export function shouldRepairLegacyWorkspaceMutationCheckpoint(messages, checkpoint = {}) {
+  if (Object.hasOwn(checkpoint.completionGuards || {}, 'mutationVerificationVersion')) return false
   const history = Array.isArray(messages) ? messages : []
-  const currentUserIndex = history.findLastIndex((message) => message?.role === 'user')
-  if (currentUserIndex < 0) return false
+  const pairs = completeLegacyToolHistory(history, checkpoint)
+  if (!pairs) return false
   let legacyReadObserved = false
-  let mutationObserved = false
-  for (const { call, result } of pairedHistoricalToolCalls(history.slice(currentUserIndex + 1))) {
-    if (result?.ok !== true || !isSuccessfulToolResult(result)) continue
+  for (const { call, result } of pairs) {
+    // Failed or incomplete mutations can still have changed files. Never use
+    // their result status to discard a checkpoint's outstanding verification.
+    if (isMutationExecutionCall(call, result?.artifactId)) return false
     const command = String(call?.args?.command || '')
-    if (LEGACY_DOTNET_FILE_READ.test(command) && isReadOnlyPowerShellVerificationCall(call)) {
+    if (result?.ok === true && isSuccessfulToolResult(result)
+      && LEGACY_DOTNET_FILE_READ.test(command) && isReadOnlyPowerShellVerificationCall(call)) {
       legacyReadObserved = true
-    } else if (isMutationExecutionCall(call, result?.artifactId)) {
-      mutationObserved = true
     }
   }
-  return legacyReadObserved && !mutationObserved
+  return legacyReadObserved
 }
 
 export function recoverPriorLocalMutationTargets(messages, currentUserMessage, { intentMode = 'auto' } = {}) {

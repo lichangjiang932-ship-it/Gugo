@@ -754,7 +754,7 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION }, (_, index) => index + 1),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 115)
+  assert.equal(LATEST_SCHEMA_VERSION, 116)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
 })
@@ -1252,11 +1252,11 @@ test('v115 replaces ownerless v114 subscriptions and upgrades idempotently', () 
   const db = new Database(':memory:')
   try {
     assert.equal(migrateThroughVersion(db, 114), 114)
-    assert.equal(runSchemaMigrations(db), 115)
-    assert.equal(runSchemaMigrations(db), 115)
+    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
     assert.equal(
       db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get().value,
-      '115',
+      String(LATEST_SCHEMA_VERSION),
     )
     for (const table of ['agent_event_subscriptions', 'agent_event_subscription_dlq']) {
       assert.ok(db.prepare(`
@@ -1269,6 +1269,32 @@ test('v115 replaces ownerless v114 subscriptions and upgrades idempotently', () 
     `).get().count, 4)
     assert.ok(db.prepare(`
       SELECT 1 FROM pragma_table_info('agent_event_subscriptions') WHERE name = 'user_id'
+    `).get())
+  } finally {
+    db.close()
+  }
+})
+
+test('v116 rolls back transcript recovery fences when schema-version persistence fails', () => {
+  const db = new Database(':memory:')
+  try {
+    assert.equal(migrateThroughVersion(db, 115), 115)
+    db.exec(`
+      CREATE TRIGGER fail_v116_schema_version
+      BEFORE UPDATE OF value ON meta
+      WHEN OLD.key = 'schema_version' AND NEW.value = '116'
+      BEGIN SELECT RAISE(ABORT, 'reject v116 schema version'); END;
+    `)
+    const before = migrationDatabaseSnapshot(db)
+    assert.throws(() => runSchemaMigrations(db), /reject v116 schema version/u)
+    assert.deepEqual(migrationDatabaseSnapshot(db), before)
+    assert.equal(db.prepare(`
+      SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_transcript_recovery_fences'
+    `).get(), undefined)
+    db.exec('DROP TRIGGER fail_v116_schema_version')
+    assert.equal(runSchemaMigrations(db), LATEST_SCHEMA_VERSION)
+    assert.ok(db.prepare(`
+      SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_transcript_recovery_fences'
     `).get())
   } finally {
     db.close()

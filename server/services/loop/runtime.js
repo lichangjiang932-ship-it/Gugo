@@ -387,6 +387,12 @@ const runtimeDependencies = {
 
 async function runPhase(phase, state) {
   const outcome = await phase(state)
+  if (outcome?.kind === 'return') {
+    const value = await outcome.value
+    return value?.deferredForSteering === true
+      ? { kind: 'continue' }
+      : { ...outcome, value }
+  }
   return outcome || { kind: 'next' }
 }
 
@@ -495,7 +501,7 @@ export function consumePreparedToolsLoopTerminalOutcome(prepared) {
   return result
 }
 
-async function runPreparedToolsLoopState(s) {
+async function runPreparedToolsLoopWindow(s) {
   for (; s.iter < s.maxIters; s.iter += 1) {
     s.iteration = {}
     let outcome = await runPhase(prepareIteration, s)
@@ -525,6 +531,16 @@ async function runPreparedToolsLoopState(s) {
     if (outcome?.kind === 'continue') continue
   }
   return finalizeRuntime(s)
+}
+
+async function runPreparedToolsLoopState(s) {
+  for (;;) {
+    const result = await runPreparedToolsLoopWindow(s)
+    // Closing the inbox can race with a new steering message even after the
+    // final allowed tool batch. The controller extends the window and clears
+    // the obsolete terminal candidate; consume its control signal locally.
+    if (result?.deferredForSteering !== true) return result
+  }
 }
 
 /** Execute exactly once from a module-branded prepared runtime handle. */

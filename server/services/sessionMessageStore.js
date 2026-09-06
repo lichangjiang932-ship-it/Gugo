@@ -2,11 +2,16 @@ import { getDb } from '../db.js'
 import { listSessionTurnArtifacts } from './turnArtifactStore.js'
 import { enqueueSessionContentEventInDb } from './sessionContentOutboxStore.js'
 import {
+  fenceSessionTranscriptRecovery,
+  suppressedTranscriptRecoveryTurnIds,
+} from './sessionTranscriptRecoveryFenceStore.js'
+import {
   latestTurnBoundaries,
   loadIncompleteCheckpointMetadata,
   recoverTerminalEvidenceMessages,
   withRecoveredIncompleteFailure,
   withRecoveredVerifiedLocalFiles,
+  withTranscriptRecoveryFence,
 } from './sessionSnapshotRecovery.js'
 import {
   normalizeSessionExpectedRevision,
@@ -204,12 +209,14 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
       })
       artifactsByTurn.set(artifact.turnId, entries)
     }
+    const suppressedTurnIds = suppressedTranscriptRecoveryTurnIds(db, { userId, sessionId })
     const storedMessages = listMessages({ userId, sessionId, limit: safeLimit, offset: safeOffset })
       .map(withRecoveredVerifiedLocalFiles)
+      .map((message) => withTranscriptRecoveryFence(message, suppressedTurnIds))
     const allTerminalBoundaries = latestTurnBoundaries(db, {
       userId,
       sessionId,
-    })
+    }).filter((row) => !suppressedTurnIds.has(row.turn_id))
     const pageMessageIds = new Set(storedMessages.map((message) => message?.id).filter(Boolean))
     const pageTurnIds = new Set(storedMessages
       .map((message) => String(message?.modelContext?.turnId || '').trim())
@@ -266,6 +273,8 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
       revision: session.revision,
       turnEventRevision,
       totalMessages: snapshotTotalMessages,
+      durableMessageCount: storedMessages.length,
+      durableTotalMessages: totalMessages,
       complete,
       // Virtual terminal rows are returned beside their unique durable anchor
       // but never consume an OFFSET position in the messages table.
@@ -295,12 +304,26 @@ export function replaceSessionMessages({
       throw new SessionRevisionConflictError(session.revision)
     }
 
-    const existingContexts = new Map(db.prepare(`
-      SELECT id, model_context_json
+    const existingMessages = db.prepare(`
+      SELECT id, session_id, user_id, role, content, model_context_json, created_at, updated_at
       FROM messages
       WHERE user_id = ? AND session_id = ?
-    `).all(userId, sessionId).map((row) => [row.id, row.model_context_json || '{}']))
+      ORDER BY created_at ASC, rowid ASC
+    `).all(userId, sessionId).map(mapMessage)
+    const suppressedTurnIds = suppressedTranscriptRecoveryTurnIds(db, { userId, sessionId })
+    const currentBoundaries = latestTurnBoundaries(db, { userId, sessionId })
+      .filter((row) => !suppressedTurnIds.has(row.turn_id))
+    // Preserve the currently visible evidence before fencing old events. UI
+    // edits carry only partial context; a prior failed message write must not
+    // make editing the answer discard its recovered receipts or final state.
+    const currentEvidence = recoverTerminalEvidenceMessages(
+      existingMessages, currentBoundaries, { userId, sessionId }, { synthesizeMissing: true },
+    )
+    const existingContexts = new Map(currentEvidence.messages.map((message) => [
+      message.id, serializeSessionModelContext(message.modelContext),
+    ]))
     const normalized = normalizeSessionReplacementMessages(messages, existingContexts, now)
+    fenceSessionTranscriptRecovery(db, { userId, sessionId })
     db.prepare('DELETE FROM messages WHERE user_id = ? AND session_id = ?').run(userId, sessionId)
     const insert = db.prepare(`
       INSERT INTO messages
@@ -354,9 +377,18 @@ export function deleteMessage({ userId, messageId }) {
   if (!userId || !messageId) return false
   const db = getDb()
   return db.transaction(() => {
-    const row = db.prepare('SELECT session_id FROM messages WHERE user_id = ? AND id = ?')
+    const row = db.prepare(`
+      SELECT session_id, role, model_context_json FROM messages WHERE user_id = ? AND id = ?
+    `)
       .get(userId, messageId)
     if (!row) return false
+    if (row.role === 'assistant') {
+      const turnIds = [parseModelContext(row.model_context_json)?.turnId]
+      if (String(messageId).endsWith(':assistant')) {
+        turnIds.push(String(messageId).slice(0, -':assistant'.length))
+      }
+      fenceSessionTranscriptRecovery(db, { userId, sessionId: row.session_id, turnIds })
+    }
     const result = db.prepare('DELETE FROM messages WHERE user_id = ? AND id = ?').run(userId, messageId)
     if (result.changes > 0) {
       enqueueSessionContentEventInDb(db, {

@@ -40,6 +40,7 @@ const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
 const SESSION_SCOPED_TABLES = [
   ['messages', 'session_id'],
   ['turn_events', 'session_id'],
+  ['session_transcript_recovery_fences', 'session_id'],
   ['turn_artifacts', 'session_id'],
   ['pending_approvals', 'session_id'],
   ['session_meters', 'session_id'],

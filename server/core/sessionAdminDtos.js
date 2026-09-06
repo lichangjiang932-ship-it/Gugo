@@ -289,16 +289,34 @@ function messageDto(value, label, fail, input) {
   return Object.freeze(projected)
 }
 
+function snapshotDurablePageCounts(source, totalMessages, fail, input) {
+  const rawCount = own(source, 'durableMessageCount', 'result', fail, { optional: true })
+  const rawTotal = own(source, 'durableTotalMessages', 'result', fail, { optional: true })
+  if (rawCount === undefined && rawTotal === undefined) return null
+  return {
+    durableMessageCount: integer(rawCount, 'result.durableMessageCount', fail, { max: input.limit }),
+    durableTotalMessages: integer(rawTotal, 'result.durableTotalMessages', fail, { max: totalMessages }),
+  }
+}
+
 function snapshotDto(value, fail, input) {
   const source = record(value, 'result', fail)
   const session = sessionDto(own(source, 'session', 'result', fail), 'result.session', fail)
   if (session.id !== input.sessionId) fail('result.session.id does not match the requested session')
+  const rawMessages = own(source, 'messages', 'result', fail)
+  const totalMessages = integer(
+    own(source, 'totalMessages', 'result', fail),
+    'result.totalMessages',
+    fail,
+  )
+  const durableCounts = snapshotDurablePageCounts(source, totalMessages, fail, input)
+  const virtualTotal = durableCounts ? totalMessages - durableCounts.durableTotalMessages : 0
   const messages = array(
-    own(source, 'messages', 'result', fail),
+    rawMessages,
     'result.messages',
     fail,
     (message, index) => messageDto(message, `result.messages[${index}]`, fail, input),
-    { max: input.limit },
+    { max: Math.min(totalMessages, input.limit + virtualTotal) },
   )
   const seen = new Set()
   for (const message of messages) {
@@ -311,11 +329,6 @@ function snapshotDto(value, fail, input) {
   const turnEventRevision = rawTurnEventRevision === undefined
     ? undefined
     : integer(rawTurnEventRevision, 'result.turnEventRevision', fail)
-  const totalMessages = integer(
-    own(source, 'totalMessages', 'result', fail),
-    'result.totalMessages',
-    fail,
-  )
   const complete = boolean(own(source, 'complete', 'result', fail), 'result.complete', fail)
   const nextOffset = integer(
     own(source, 'nextOffset', 'result', fail),
@@ -323,19 +336,24 @@ function snapshotDto(value, fail, input) {
     fail,
     { nullable: true },
   )
-  if (messages.length > totalMessages
-    || (input.offset <= totalMessages && input.offset + messages.length > totalMessages)
-    || (input.offset > totalMessages && messages.length > 0)) {
+  // Recovered terminal rows are anchored beside durable rows but do not occupy
+  // an OFFSET position. Legacy adapters without these counts retain the exact
+  // message-based pagination contract.
+  const pageCount = durableCounts?.durableMessageCount ?? messages.length
+  const pageTotal = durableCounts?.durableTotalMessages ?? totalMessages
+  if (pageCount > messages.length || messages.length - pageCount > virtualTotal
+    || (input.offset <= pageTotal && input.offset + pageCount > pageTotal)
+    || (input.offset > pageTotal && messages.length > 0)) {
     fail('result.messages conflicts with result.totalMessages')
   }
   if (complete) {
     if (nextOffset !== null
-      || (input.offset <= totalMessages && input.offset + messages.length !== totalMessages)) {
+      || (input.offset <= pageTotal && input.offset + pageCount !== pageTotal)) {
       fail('completed snapshot pagination is inconsistent')
     }
-  } else if (messages.length === 0
-    || nextOffset !== input.offset + messages.length
-    || nextOffset > totalMessages) {
+  } else if (pageCount === 0
+    || nextOffset !== input.offset + pageCount
+    || nextOffset > pageTotal) {
     fail('incomplete snapshot pagination is inconsistent')
   }
   return Object.freeze({
@@ -344,6 +362,7 @@ function snapshotDto(value, fail, input) {
     revision,
     ...(turnEventRevision === undefined ? {} : { turnEventRevision }),
     totalMessages,
+    ...(durableCounts || {}),
     complete,
     nextOffset,
   })
