@@ -2,6 +2,7 @@ import { observeLoopEvent } from './eventIsolation.js'
 import { assertRuntimeStage } from './runtimeContract.js'
 import { restoreModelInvocationCheckpoint } from './modelInvocationCheckpoint.js'
 import { MUTATION_VERIFICATION_CHECKPOINT_VERSION } from './runtimeState.js'
+import { restoreOutputContinuation } from './outputContinuation.js'
 
 function initializeExecutionState(s) {
   const { MAX_ITERS, normalizeCompactionRecovery, resolveIterationWindow } = s.d
@@ -13,6 +14,7 @@ function initializeExecutionState(s) {
   )
   s.finalText = ''
   s.finalCheckpointPersisted = false
+  s.outputContinuation = restoreOutputContinuation(s.restoredState?.completionGuards?.outputContinuation)
   s.pendingEphemeralToolMessages = []
   s.restoredModelInvocation = restoreModelInvocationCheckpoint(
     s.restoredState?.modelInvocation,
@@ -283,6 +285,7 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
       : {}),
     completionGuards: {
       partialResultEntries: s.partialResultFallback.snapshot(),
+      outputContinuation: { ...s.outputContinuation },
       representativeReadsInjected: s.representativeReadsInjected,
       activeArtifactTools: [...s.authorizedArtifactTools],
       requiredArtifactTools: [...s.expectedArtifactTools],

@@ -8,6 +8,7 @@ import {
 } from './modelInvocationCheckpoint.js'
 import { installArtifactSteeringContract } from './runtime-initializeArtifactSteering.js'
 import { installTerminalCompletion } from './runtime-initializeTerminalCompletion.js'
+import { discardContinuedAnswer } from './outputContinuation.js'
 
 export function resolveExecutionBudgetOptions(job, restoredBudget) {
   if (!restoredBudget || typeof restoredBudget !== 'object') return restoredBudget
@@ -21,6 +22,7 @@ function installSteeringMessageRuntime(s) {
     requestedArtifactOutputDirective } = s.d
   s.appendSteeringMessages = (messages = []) => {
     if (!messages.length) return 0
+    discardContinuedAnswer(s)
     s.repeatCallGuard.reset()
     s.loopGuard.resetRepetition?.()
     s.pendingRepeatCallReminder = null
@@ -370,6 +372,7 @@ async function callTrackedModel(s, options) {
       callModel: (modelRequest) => invokeModelWithCompatibilityFallback(s, context, modelRequest),
       isContextLengthError,
       contextWindow: s.contextWindow,
+      locale: s.job?.locale,
       semanticSummary: s.semanticSummary,
       signal: requestSignal,
       userId: s.job?.userId || null,

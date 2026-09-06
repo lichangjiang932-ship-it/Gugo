@@ -35,10 +35,10 @@ test('session history is one continuous newest-first list', () => {
 
 test('session rows stay single-line and keep quiet selection while project groups retain disclosure controls', () => {
   assert.match(sessionListSource, /orderedSessions\.map\(\(session, index\) => renderSession\(session, index\)\)/)
-  assert.match(sessionListSource, /truncate text-\[13px\] leading-5/)
+  assert.match(sessionListSource, /truncate text-ui leading-5/)
   assert.match(sessionListSource, /title=\{sessionTooltip\(session\)\}/)
   assert.doesNotMatch(sessionListSource, /formatSessionRelativeTime|Intl\.RelativeTimeFormat|bg-accent/)
-  assert.match(leftRailStyles, /\.left-rail-session-row\s*\{[^}]*min-height: 36px;/)
+  assert.match(leftRailStyles, /\.left-rail-session-row\s*\{[^}]*min-height: 38px;/)
   assert.match(leftRailStyles, /\.left-rail-session-row\[data-active="true"\][\s\S]*?--color-ink-rgb/)
   assert.match(sessionListSource, /isCollapsed \? Folder : FolderOpen/)
   assert.equal((sessionListSource.match(/\{session\.title\}/g) || []).length, 1)

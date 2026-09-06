@@ -171,7 +171,7 @@ export default function SessionList({
         title={sessionTooltip(session)}
         className="left-rail-session-open"
       >
-        <span className={`block min-w-0 flex-1 truncate text-[13px] leading-5 ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{session.title}</span>
+        <span className={`block min-w-0 flex-1 truncate text-ui leading-5 ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{session.title}</span>
       </button>
       <button
         type="button"
@@ -246,7 +246,7 @@ export default function SessionList({
           data-project-toggle={project.path}
         >
           <ProjectIcon data-project-state-icon={isCollapsed ? 'collapsed' : 'expanded'} className="h-4 w-4 shrink-0 text-ink-fade" aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-[18px] text-ink" title={project.path}>{project.name}</span>
+          <span className="min-w-0 flex-1 truncate text-ui font-medium leading-5 text-ink" title={project.path}>{project.name}</span>
         </button>
         <button
           type="button"
@@ -288,7 +288,7 @@ export default function SessionList({
       </div>
       {orderedSessions.length
         ? <div>{orderedSessions.map((session, index) => renderSession(session, index))}</div>
-        : <div className="px-2 py-1 text-[13px] leading-[18px] text-ink-fade">{t('nav.emptyTitle')}</div>}
+        : <div className="px-2 py-1 text-ui leading-5 text-ink-fade">{t('nav.emptyTitle')}</div>}
     </section>
   </div>
 }

@@ -1,3 +1,4 @@
+// @ts-check
 const KIB = 1024
 
 /**
@@ -18,14 +19,20 @@ export const INLINE_SKILL_DEFINITION_LIMITS = Object.freeze({
 
 const encoder = new TextEncoder()
 
+/** @param {unknown} value */
 export function unicodeCharacterLength(value) {
   return Array.from(String(value ?? '')).length
 }
 
+/** @param {unknown} value */
 export function utf8ByteLength(value) {
   return encoder.encode(String(value ?? '')).byteLength
 }
 
+/**
+ * @param {unknown} value
+ * @param {{ maxCharacters?: number, maxUtf8Bytes?: number }} [limits]
+ */
 export function truncateInlineSkillText(value, {
   maxCharacters = Number.POSITIVE_INFINITY,
   maxUtf8Bytes = Number.POSITIVE_INFINITY,

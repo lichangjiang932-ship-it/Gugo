@@ -51,7 +51,13 @@ export type TurnEventType = keyof typeof TURN_EVENT_PAYLOAD_SCHEMAS
 export type TurnEventPayload<Type extends TurnEventType> =
   z.infer<(typeof TURN_EVENT_PAYLOAD_SCHEMAS)[Type]>
 
-/** Stable runtime-port types are derived from their checked implementation factories. */
+/**
+ * Legacy structural index, derived from implementation factories. These port
+ * implementations are not yet in the strict checkJs pilot; some still infer
+ * broad return types. This index is not an end-to-end type-safety guarantee.
+ * Real checked protocol implementations/callers live in turn-protocol.ts and
+ * tsconfig.protocol-pilot.json, with positive and negative compile fixtures.
+ */
 export type CompactionArchivePort = ReturnType<typeof createCompactionArchivePort>
 export type ManagedAttachmentGovernancePort =
   ReturnType<typeof createManagedAttachmentGovernancePort>

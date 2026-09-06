@@ -83,8 +83,6 @@ test('compatible response parsing normalizes Ollama native content and object to
     promptTokens: 12,
     completionTokens: 7,
     totalTokens: 19,
-    cacheHitTokens: 0,
-    cacheMissTokens: 12,
   })
 })
 
@@ -105,8 +103,6 @@ test('compatible usage requires an explicit non-empty prompt token count', () =>
     promptTokens: 0,
     completionTokens: 2,
     totalTokens: 2,
-    cacheHitTokens: 0,
-    cacheMissTokens: 0,
   })
 })
 

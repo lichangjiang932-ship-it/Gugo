@@ -3,7 +3,7 @@ import {
   isNativeProviderKind,
   parseNativeProviderResponse,
 } from './nativeModelProviders.js'
-import { normalizeModelUsage, normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
+import { normalizeCacheReadUsage, normalizeModelUsage, normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 import { createEmptyModelResponseError } from './sseLifecycle.js'
 
 export function stripEmbeddedReasoning(value) {
@@ -159,17 +159,28 @@ export function extractUsage(data) {
     usage?.prompt_cache_hit_tokens
       ?? usage?.prompt_tokens_details?.cached_tokens
       ?? usage?.input_tokens_details?.cached_tokens
-  ) ?? 0
+  )
   const totalTokens = normalizeOptionalUsageNumber(usage?.total_tokens)
     ?? promptTokens + completionTokens
-  const cacheMissTokens = normalizeOptionalUsageNumber(usage?.prompt_cache_miss_tokens)
-    ?? Math.max(0, promptTokens - cacheHitTokens)
+  const cacheReadUsage = normalizeCacheReadUsage({
+    promptTokens,
+    cacheHitTokens,
+    cacheMissTokens: usage?.prompt_cache_miss_tokens,
+  })
+  const writes = normalizeOptionalUsageNumber(
+    usage?.prompt_tokens_details?.cache_write_tokens ?? usage?.input_tokens_details?.cache_write_tokens,
+  )
+  const cacheCreationTokens = writes !== null && writes <= (cacheReadUsage.cacheMissTokens ?? promptTokens)
+    ? Math.floor(writes) : null
+  const uncachedInputTokens = cacheCreationTokens !== null && cacheReadUsage.cacheMissTokens !== undefined
+    ? cacheReadUsage.cacheMissTokens - cacheCreationTokens : null
   return normalizeModelUsage({
     promptTokens,
     completionTokens,
     totalTokens,
-    cacheHitTokens,
-    cacheMissTokens,
+    ...cacheReadUsage,
+    ...(cacheCreationTokens !== null ? { cacheCreationTokens } : {}),
+    ...(uncachedInputTokens !== null ? { uncachedInputTokens } : {}),
   })
 }
 

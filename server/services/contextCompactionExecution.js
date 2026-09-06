@@ -8,18 +8,17 @@ import {
   createCompactionArchive,
   isValidSemanticCompactionSummary,
   replaceCompactionSummary,
-  validateToolCallChain,
 } from './compactionService.js'
 import { writeToolAudit } from '../utils/audit.js'
 import { storedMessageSourceId } from './turnMessageContext.js'
 import { resolveRuntimeContextCompactionStrategy } from './contextCompactionStrategy.js'
+import { assertContextRecoveryActive, withCanonicalContext } from './contextCompactionState.js'
+import { fitCompactionResult } from './contextCompactionFit.js'
 import {
-  COMPACTION_ARCHIVE_METADATA_RESERVE_TOKENS,
   DEFAULT_ACTIVE_CONTEXT_TOKENS,
   DEFAULT_CONTEXT_WINDOW,
   MAX_COMPACTION_PASSES,
   MAX_SEMANTIC_SUMMARY_INPUT_TOKENS,
-  MIN_COMPACTION_SUMMARY_TOKENS,
   applyRollingToolResultBudget,
   boundCompactionSummary,
   estimateContextTokens,
@@ -102,6 +101,7 @@ function createSemanticSummaryInvoker({
   userId,
 }) {
   return async (messages, stage, index) => {
+    assertContextRecoveryActive(signal)
     const budgetResult = typeof consumeBudget === 'function' ? consumeBudget(1) : { ok: true }
     if (budgetResult?.ok === false) {
       const error = new Error(budgetResult.reason || 'semantic-summary model budget exceeded')
@@ -284,7 +284,8 @@ async function archiveCompaction(result, { userId, sessionId, compactionArchiveP
       archivedMessages: result.archivedMessages,
       summaryText: result.summaryText,
     }, { compactionArchivePort })
-  } catch {
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error
     return null
   }
 }
@@ -303,71 +304,6 @@ function compactionMessageBoundary(result) {
   }
 }
 
-function archivedTokenCount(result) {
-  return (Array.isArray(result?.archivedMessages) ? result.archivedMessages : [])
-    .reduce((total, message) => total + 6 + textTokens(message), 0)
-}
-
-function fitCompactionResult(result, {
-  tools,
-  threshold,
-  summaryTokenLimit,
-  reserveTokens = COMPACTION_ARCHIVE_METADATA_RESERVE_TOKENS,
-} = {}) {
-  const archivedTokens = archivedTokenCount(result)
-  const emptySummaryTokens = 6 + textTokens({ ...result.summaryMessage, content: '' })
-  let budget = Math.min(
-    summaryTokenLimit,
-    Math.max(0, archivedTokens - emptySummaryTokens - 1),
-  )
-  const target = Math.max(1, threshold - Math.max(0, reserveTokens))
-  let bestResult = result
-  let bestEstimate = estimateContextTokens(result.outboundMessages, tools)
-  let truncated = false
-
-  for (let attempt = 0; attempt < 5 && budget >= MIN_COMPACTION_SUMMARY_TOKENS; attempt += 1) {
-    const summaryText = boundCompactionSummary(result.summaryText, { maxTokens: budget })
-    const candidate = replaceCompactionSummary(result, summaryText)
-    const estimatedTokens = estimateContextTokens(candidate.outboundMessages, tools)
-    const summaryTokens = 6 + textTokens(candidate.summaryMessage)
-    const chain = validateToolCallChain(candidate.outboundMessages)
-    if (estimatedTokens < bestEstimate) {
-      bestResult = candidate
-      bestEstimate = estimatedTokens
-    }
-    truncated ||= summaryText !== result.summaryText
-    if (chain.ok && estimatedTokens < target && summaryTokens < archivedTokens) {
-      return {
-        ok: true,
-        result: candidate,
-        estimatedTokens,
-        summaryTokens,
-        summaryTruncated: truncated,
-      }
-    }
-    const overflow = Math.max(
-      1,
-      estimatedTokens - target + 1,
-      summaryTokens - archivedTokens + 1,
-    )
-    budget = Math.floor(budget - overflow - 4)
-  }
-
-  return {
-    ok: false,
-    reduced: (() => {
-      const summaryTokens = 6 + textTokens(bestResult.summaryMessage)
-      return validateToolCallChain(bestResult.outboundMessages).ok && summaryTokens < archivedTokens
-    })(),
-    result: bestResult,
-    estimatedTokens: bestEstimate,
-    summaryTokens: 6 + textTokens(bestResult.summaryMessage),
-    summaryTruncated: truncated,
-    error: bestEstimate >= target
-      ? `compacted outbound context still needs ${bestEstimate} tokens (budget ${target})`
-      : 'compaction summary was not smaller than the archived surface',
-  }
-}
 
 function disabledSemanticTelemetry() {
   return {
@@ -400,6 +336,7 @@ async function runCompactionPasses({
   let passes = 0
   let buildError = null
   for (let pass = 0; pass < MAX_COMPACTION_PASSES; pass += 1) {
+    assertContextRecoveryActive(signal)
     passes = pass + 1
     const keepMessages = pass === 0 ? initialKeepMessages : 1
     let candidate = buildCompaction({ messages: preparedMessages, keepMessages, force: true })
@@ -432,6 +369,65 @@ async function runCompactionPasses({
   return { result, semanticTelemetry, fit, passes, buildError }
 }
 
+async function finalizeCompactionResult(convergence, {
+  sourceMessages,
+  tools,
+  contextWindow,
+  activeContextTokens,
+  threshold,
+  estimatedTokens,
+  userId,
+  sessionId,
+  compactionArchivePort,
+  signal,
+  strategy,
+}) {
+  let { result } = convergence
+  const { fit, passes, semanticTelemetry } = convergence
+  const messageBoundary = compactionMessageBoundary(result)
+  const archive = await archiveCompaction(result, {
+    userId,
+    sessionId,
+    compactionArchivePort,
+  })
+  assertContextRecoveryActive(signal)
+  if (archive) {
+    const summaryIndex = result.outboundMessages.indexOf(result.summaryMessage)
+    if (summaryIndex >= 0) {
+      const outbound = [...result.outboundMessages]
+      outbound[summaryIndex] = {
+        ...result.summaryMessage,
+        meta: { ...result.summaryMessage.meta, archiveId: archive.id },
+      }
+      const summaryMessage = outbound[summaryIndex]
+      result = { ...result, summaryMessage, outboundMessages: outbound, messages: outbound }
+    }
+  }
+  const outbound = applyRollingToolResultBudget(result.outboundMessages, { contextWindow, activeContextTokens })
+  const postCompactionEstimatedTokens = estimateContextTokens(outbound.messages, tools)
+  const withinThreshold = postCompactionEstimatedTokens < threshold
+  return withCanonicalContext({
+    messages: outbound.messages,
+    compacted: true,
+    converged: withinThreshold,
+    thresholdExceeded: !withinThreshold,
+    estimatedTokens,
+    postCompactionEstimatedTokens,
+    threshold,
+    convergencePasses: passes,
+    summaryTokens: fit.summaryTokens,
+    summaryTruncated: fit.summaryTruncated,
+    replacedMessageCount: result.replacedMessageCount,
+    archiveId: archive?.id || null,
+    archivePersisted: Boolean(archive),
+    compactCheckpointSource: result.summaryMessage?.meta?.compactCheckpointSource || null,
+    ...messageBoundary,
+    semanticSummary: semanticTelemetry,
+    rollingToolResultsCompacted: outbound.compactedCount,
+    runtimeStrategy: strategy.provenance,
+  }, archive ? result.outboundMessages : sourceMessages)
+}
+
 export async function compactForModel({
   messages = [],
   tools = [],
@@ -446,7 +442,10 @@ export async function compactForModel({
   activeContextTokens,
   compactionStrategyResolver = resolveRuntimeContextCompactionStrategy,
   compactionArchivePort,
+  maxRetainedMessages,
 } = {}) {
+  assertContextRecoveryActive(signal)
+  const sourceMessages = Array.isArray(messages) ? messages : []
   const threshold = getAutoCompactionThreshold(contextWindow, activeContextTokens)
   const rollingToolResults = applyRollingToolResultBudget(messages, {
     contextWindow,
@@ -454,13 +453,15 @@ export async function compactForModel({
   })
   const preparedMessages = rollingToolResults.messages
   const estimatedTokens = estimateContextTokens(preparedMessages, tools)
-  const messageEstimatedTokens = estimateContextTokens(preparedMessages, [])
+  const messageEstimatedTokens = estimateContextTokens(sourceMessages, [])
   const overMessageLimit = preparedMessages.length > MAX_OUTBOUND_MESSAGES
   const nonSystemCount = preparedMessages.filter((message) => message?.role !== 'system').length
-  const adaptiveTail = chooseTailSize(preparedMessages, threshold)
-  const defaultKeepMessages = force && nonSystemCount > 1
+  const adaptiveTail = chooseTailSize(sourceMessages, threshold)
+  const desiredKeepMessages = force && nonSystemCount > 1
     ? Math.min(adaptiveTail, Math.max(1, Math.floor(nonSystemCount / 2)))
     : adaptiveTail
+  const defaultKeepMessages = Number.isSafeInteger(maxRetainedMessages) && maxRetainedMessages > 0
+    ? Math.min(desiredKeepMessages, maxRetainedMessages) : desiredKeepMessages
   const hostCompactionRequired = force || overMessageLimit || messageEstimatedTokens >= threshold
   const configuredActiveContextTokens = Number(activeContextTokens)
   const activeContextTokenLimit = Number.isFinite(configuredActiveContextTokens)
@@ -485,12 +486,13 @@ export async function compactForModel({
     maxKeepMessages: defaultKeepMessages,
     rollingToolResultsCompacted: rollingToolResults.compactedCount,
   })
+  assertContextRecoveryActive(signal)
   // Tool schemas are a fixed capability surface: compacting conversation
   // history cannot make them smaller. Let a real provider overflow trigger the
   // forced recovery path instead of deleting a fresh, protocol-linked tool
   // batch merely because the selected schema set is large.
   if (!strategy.shouldCompact) {
-    return {
+    return withCanonicalContext({
       messages: preparedMessages,
       compacted: false,
       estimatedTokens,
@@ -499,13 +501,13 @@ export async function compactForModel({
       threshold,
       rollingToolResultsCompacted: rollingToolResults.compactedCount,
       runtimeStrategy: strategy.provenance,
-    }
+    }, sourceMessages)
   }
 
   const initialKeepMessages = strategy.keepMessages
   const summaryTokenLimit = getCompactionSummaryTokenLimit(contextWindow, activeContextTokens)
   const convergence = await runCompactionPasses({
-    preparedMessages,
+    preparedMessages: sourceMessages,
     initialKeepMessages,
     semanticSummary,
     callModel,
@@ -517,13 +519,14 @@ export async function compactForModel({
     threshold,
     summaryTokenLimit,
   })
-  let { result } = convergence
+  const { result } = convergence
+  assertContextRecoveryActive(signal)
   const { semanticTelemetry, fit, passes, buildError } = convergence
 
   if (!result || (!fit?.ok && !fit?.reduced)) {
-    const failedMessages = result?.outboundMessages || preparedMessages
+    const failedMessages = preparedMessages
     const postCompactionEstimatedTokens = estimateContextTokens(failedMessages, tools)
-    return {
+    return withCanonicalContext({
       messages: failedMessages,
       compacted: false,
       attemptedCompaction: true,
@@ -538,45 +541,19 @@ export async function compactForModel({
       semanticSummary: semanticTelemetry,
       rollingToolResultsCompacted: rollingToolResults.compactedCount,
       runtimeStrategy: strategy.provenance,
-    }
+    }, sourceMessages)
   }
-  const messageBoundary = compactionMessageBoundary(result)
-  const archive = await archiveCompaction(result, {
+  return finalizeCompactionResult(convergence, {
+    sourceMessages,
+    tools,
+    contextWindow,
+    activeContextTokens,
+    threshold,
+    estimatedTokens,
     userId,
     sessionId,
     compactionArchivePort,
+    signal,
+    strategy,
   })
-  if (archive) {
-    const summaryIndex = result.outboundMessages.indexOf(result.summaryMessage)
-    if (summaryIndex >= 0) {
-      const outbound = [...result.outboundMessages]
-      outbound[summaryIndex] = {
-        ...result.summaryMessage,
-        meta: { ...result.summaryMessage.meta, archiveId: archive.id },
-      }
-      const summaryMessage = outbound[summaryIndex]
-      result = { ...result, summaryMessage, outboundMessages: outbound, messages: outbound }
-    }
-  }
-  const postCompactionEstimatedTokens = estimateContextTokens(result.outboundMessages, tools)
-  const withinThreshold = postCompactionEstimatedTokens < threshold
-  return {
-    messages: result.outboundMessages,
-    compacted: true,
-    converged: withinThreshold,
-    thresholdExceeded: !withinThreshold,
-    estimatedTokens,
-    postCompactionEstimatedTokens,
-    threshold,
-    convergencePasses: passes,
-    summaryTokens: fit.summaryTokens,
-    summaryTruncated: fit.summaryTruncated,
-    replacedMessageCount: result.replacedMessageCount,
-    archiveId: archive?.id || null,
-    compactCheckpointSource: result.summaryMessage?.meta?.compactCheckpointSource || null,
-    ...messageBoundary,
-    semanticSummary: semanticTelemetry,
-    rollingToolResultsCompacted: rollingToolResults.compactedCount,
-    runtimeStrategy: strategy.provenance,
-  }
 }

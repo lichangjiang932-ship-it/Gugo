@@ -60,7 +60,7 @@
     "preview": "vite preview --configLoader runner",
     "seed:skills": "node server/seedSystemSkills.js",
     "cli": "node bin/yma-cli.js",
-    "typecheck": "tsc -p tsconfig.contracts.json"
+    "typecheck": "tsc -p tsconfig.contracts.json && tsc -p tsconfig.protocol-pilot.json && node scripts/check-protocol-type-fixtures.mjs"
   },
   "dependencies": {
     "@e965/xlsx": "^0.20.3",

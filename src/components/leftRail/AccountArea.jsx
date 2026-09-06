@@ -38,7 +38,7 @@ export default function AccountArea({ compact = false, accountMenuOpen, accountM
     <DesktopUpdateCard compact={compact} />
     <button ref={triggerRef} type="button" data-settings-focus-return onClick={onToggle} title={compact ? (user.name || t('settings.account')) : undefined} aria-label={user.name || t('settings.account')} aria-expanded={accountMenuOpen} className={`flex h-11 w-full items-center rounded-control text-left transition-colors hover:bg-paper-2 ${compact ? 'justify-center px-0' : 'gap-2.5 px-2'}`}>
       <BrandMark className="h-8 w-8 shrink-0 text-accent-ink" />
-      {!compact && <><span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-medium text-ink">{user.name || t('settings.account')}</span>{user.email && <span className="block truncate text-xs text-ink-fade">{user.email}</span>}</span><ChevronUp className={`h-4 w-4 text-ink-fade transition-transform ${accountMenuOpen ? '' : 'rotate-180'}`} /></>}
+      {!compact && <><span className="min-w-0 flex-1"><span className="block truncate text-ui font-medium text-ink">{user.name || t('settings.account')}</span>{user.email && <span className="block truncate text-xs text-ink-fade">{user.email}</span>}</span><ChevronUp className={`h-4 w-4 text-ink-fade transition-transform ${accountMenuOpen ? '' : 'rotate-180'}`} /></>}
     </button>
   </div>
 }

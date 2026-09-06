@@ -271,7 +271,7 @@ test('non-converging oversized dynamic text fails before any main-model request'
   assert.equal(calls, 0)
 })
 
-test('400 recovery force-compacts once, then trims oldest 10% for the final retry', async () => {
+test('400 recovery uses one bounded aggressive compaction for the final retry without trimming canonical history', async () => {
   const messages = Array.from({ length: 40 }, (_, index) => ({
     role: index % 2 ? 'assistant' : 'user',
     content: `message ${index}`,
@@ -295,8 +295,11 @@ test('400 recovery force-compacts once, then trims oldest 10% for the final retr
   assert.equal(result.response.content, 'recovered')
   assert.equal(mainRequestSizes.length, 3)
   assert.ok(mainRequestSizes[1] < mainRequestSizes[0], 'forced compaction must reduce the retry payload')
-  assert.ok(mainRequestSizes[2] < mainRequestSizes[1], 'last retry must trim the oldest context')
-  assert.equal(result.recovery.trimmed, true)
+  assert.ok(mainRequestSizes[2] < mainRequestSizes[1], 'last retry must reduce the retained tail through real compaction')
+  assert.equal(result.recovery.trimmed, undefined)
+  assert.equal(result.recovery.compacted, true)
+  assert.equal(result.recovery.recoveryStage, 'aggressive_compaction')
+  assert.deepEqual(result.messages, messages, 'without a persisted archive, checkpoint history remains complete')
 })
 
 test('overflow trimming preserves the latest user objective and latest tool chain', () => {
@@ -329,7 +332,7 @@ test('overflow trimming preserves the latest user objective and latest tool chai
   assert.equal(validateToolCallChain(trimmed).ok, true)
 })
 
-test('third-stage recovery keeps the latest objective when forced compaction is refused', async () => {
+test('refused compaction never deletes a broken tool chain to manufacture a successful recovery', async () => {
   const staleObjective = 'Explain an unrelated topic from an earlier turn.'
   const objective = 'Build the webpage now and verify every requested step.'
   const latestCall = {
@@ -339,7 +342,7 @@ test('third-stage recovery keeps the latest objective when forced compaction is 
   }
   const latestResult = { role: 'tool', tool_call_id: 'latest-write', name: 'write_file', content: '{"ok":true}' }
   const requests = []
-  const result = await callModelWithContextRecovery({
+  await assert.rejects(() => callModelWithContextRecovery({
     messages: [
       { role: 'system', content: 'system' },
       { role: 'user', content: staleObjective },
@@ -360,14 +363,15 @@ test('third-stage recovery keeps the latest objective when forced compaction is 
       if (requests.length < 3) throw contextError()
       return { content: 'recovered with objective', toolCalls: [] }
     },
-  })
+  }), (error) => error.code === 'CONTEXT_UNRECOVERABLE' && /orphaned-old-call/.test(error.compactionError))
 
   const finalRequest = requests.at(-1)
-  assert.equal(result.response.content, 'recovered with objective')
+  assert.equal(requests.length, 1, 'do not make another provider request with a fabricated history')
   assert.ok(finalRequest.some((message) => message?.role === 'user' && message.content === objective))
   assert.ok(finalRequest.includes(latestCall))
   assert.ok(finalRequest.includes(latestResult))
-  assert.equal(validateToolCallChain(finalRequest).ok, true)
+  assert.equal(validateToolCallChain(finalRequest).ok, false)
+  assert.ok(finalRequest.some((message) => message.tool_call_id === 'orphaned-old-call'))
 })
 
 test('semantic compaction map-reduces large archives, preserves user text, audits, and consumes budget', async () => {

@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.contracts.json",
+  "compilerOptions": {
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true
+  },
+  "files": [
+    "shared/inlineSkillDefinitions.js",
+    "shared/turnActivity.js",
+    "shared/turnEvents.js",
+    "shared/turnEventTransport.js",
+    "shared/turnWebSocketProtocol.js",
+    "server/core/turnWebSocketFrameCodec.js",
+    "types/turn-protocol.ts",
+    "types/fixtures/protocol.valid.ts"
+  ],
+  "include": []
+}

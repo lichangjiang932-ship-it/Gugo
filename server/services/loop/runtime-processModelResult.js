@@ -1,3 +1,5 @@
+import { processOutputContinuation } from './outputContinuation.js'
+
 async function persistContinuation(s, content, steeringLeaseId, options = {}) {
   if (content) s.convo.push({ role: 'assistant', content })
   if (options.systemContent) s.convo.push({ role: 'system', content: options.systemContent })
@@ -371,6 +373,8 @@ export async function processModelResult(s) {
   ;({ content: i.content, toolCalls: i.rawToolCalls } = i.modelResult)
   s.modelInvocation = null
   s.restoredModelInvocation = null
+  const continuation = await processOutputContinuation(s)
+  if (continuation) return continuation
   if (!i.rawToolCalls || i.rawToolCalls.length === 0) return processCompletionResponse(s)
   return scheduleModelToolCalls(s)
 }

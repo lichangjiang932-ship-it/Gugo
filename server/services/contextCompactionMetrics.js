@@ -1,4 +1,5 @@
 import { DEFAULT_CLOUD_CONTEXT_WINDOW } from '../utils/endpointProfile.js'
+import { compactionDirectionSection } from './contextCompactionDirections.js'
 
 export const DEFAULT_ACTIVE_CONTEXT_TOKENS = 128_000
 export const MAX_AUTO_COMPACTION_TOKENS = DEFAULT_ACTIVE_CONTEXT_TOKENS
@@ -23,7 +24,7 @@ const DATA_IMAGE_URL_PATTERN = /data:image\/[a-z0-9.+-]+(?:;[^,\s]*)?;base64,[a-
 const SUMMARY_TRUNCATION_MARKER = [
   '',
   '[Compaction checkpoint shortened to fit the active context budget.',
-  'Exact prior content remains available in the canonical compaction archive.]',
+  'Exact prior content remains in canonical history or its persisted compaction archive.]',
   '',
 ].join('\n')
 
@@ -124,7 +125,7 @@ function truncateHeadAndTailByChars(value, maxChars) {
  * Bound a checkpoint while retaining both its opening objective and its most
  * recent continuation state. The canonical archive remains lossless.
  */
-export function boundCompactionSummary(value, {
+function boundSummaryText(value, {
   maxTokens = MAX_COMPACTION_SUMMARY_TOKENS,
   maxChars = MAX_COMPACTION_SUMMARY_CHARS,
 } = {}) {
@@ -145,6 +146,23 @@ export function boundCompactionSummary(value, {
   text = `${takePrefixToTokenBudget(text, prefixTokens)}${SUMMARY_TRUNCATION_MARKER}${takeSuffixToTokenBudget(text, suffixTokens)}`
   if (textTokens(text) <= tokenLimit) return text
   return takePrefixToTokenBudget(text, tokenLimit)
+}
+
+export function boundCompactionSummary(value, options = {}) {
+  const text = String(value || '').trim()
+  const tokenLimit = Math.max(1, Math.floor(Number(options.maxTokens ?? MAX_COMPACTION_SUMMARY_TOKENS) || 1))
+  const charLimit = Math.max(1, Math.floor(Number(options.maxChars ?? MAX_COMPACTION_SUMMARY_CHARS) || 1))
+  if (textTokens(text) <= tokenLimit && text.length <= charLimit) return text
+  const direction = compactionDirectionSection(text)
+  if (direction) {
+    const prefix = direction.prefix + '\n\n'
+    const remainingTokens = tokenLimit - textTokens(prefix) - 2
+    const remainingChars = charLimit - prefix.length
+    if (remainingTokens >= 64 && remainingChars >= 256) {
+      return prefix + boundSummaryText(direction.remainder, { maxTokens: remainingTokens, maxChars: remainingChars })
+    }
+  }
+  return boundSummaryText(text, { maxTokens: tokenLimit, maxChars: charLimit })
 }
 
 const TOOL_RESULT_CONTEXT_RATIO = 0.25
@@ -218,12 +236,14 @@ export function applyRollingToolResultBudget(messages = [], {
   let remainingTokens = budgetTokens
   let retainedFullCount = 0
   let compactedCount = 0
+  const latestBatch = source.findLast((message) => message?.role === 'assistant' && message.tool_calls?.length)
+  const latestBatchIds = new Set((latestBatch?.tool_calls || []).map((call) => call?.id).filter(Boolean))
 
   for (let index = source.length - 1; index >= 0; index -= 1) {
     const message = source[index]
     if (message?.role !== 'tool') continue
     const originalTokens = 6 + textTokens(message.content)
-    if (originalTokens <= remainingTokens || retainedFullCount === 0) {
+    if (originalTokens <= remainingTokens || retainedFullCount === 0 || latestBatchIds.has(message.tool_call_id)) {
       remainingTokens = Math.max(0, remainingTokens - originalTokens)
       retainedFullCount += 1
       continue

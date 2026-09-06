@@ -113,6 +113,7 @@ export default function ChatSplitView({
       serverEstimatedPromptTokens,
     }),
     cumulativeTokens: sumSessionModelUsage(messages),
+    modelUsage: latestAssistantMessage?.meta?.modelUsage,
     contextWindowAuthoritative,
   }
   const toggleContextPanel = () => setShowContextPanel((current) => !current)

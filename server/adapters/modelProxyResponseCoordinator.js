@@ -22,7 +22,9 @@ function sendJson(res, statusCode, body) {
 export async function* streamOpenAICompatible(args = {}) {
   yield* streamModelProviderEvents({
     ...args,
-    buildRequest: buildModelProviderRequest,
+    // Transport fallbacks preserve the trusted owner even when they rebuild
+    // the request with only their own provider/stream arguments.
+    buildRequest: (requestArgs) => buildModelProviderRequest({ ...requestArgs, cacheOwnerId: args.cacheOwnerId }),
   })
 }
 
@@ -156,6 +158,7 @@ export async function handleStreamingModelProxyResponse({
         toolChoice: body.tool_choice,
         externalSignal: sse.signal,
         env: runtimeEnv,
+        cacheOwnerId: requestUserId,
         onFirstByte: () => {
           if (firstByteAt) return
           firstByteAt = Date.now()
@@ -277,6 +280,7 @@ export async function handleNonStreamingModelProxyResponse({
       messages,
       env: runtimeEnv,
       profile: candidateProfile,
+      cacheOwnerId: requestUserId,
     })
     const { url, init } = providerRequest
     const data = await withRedactedModelErrors(candidate, () => withRetry(async () => {

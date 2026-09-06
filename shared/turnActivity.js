@@ -1,6 +1,7 @@
+// @ts-check
 import { z } from 'zod'
 
-export const TURN_ACTIVITY_KINDS = Object.freeze(['tool_call_ready', 'tool_output_delta'])
+export const TURN_ACTIVITY_KINDS = Object.freeze(/** @type {const} */ (['tool_call_ready', 'tool_output_delta']))
 
 export const TurnActivitySchema = z.object({
   sessionId: z.string().min(1).max(160),
@@ -14,10 +15,12 @@ export const TurnActivitySchema = z.object({
   createdAt: z.number().int().nonnegative(),
 }).strict()
 
+/** @param {unknown} value */
 export function parseTurnActivity(value) {
   return TurnActivitySchema.parse(value)
 }
 
+/** @param {import('../types/turn-protocol.js').CreateTurnActivityInput} input */
 export function createTurnActivity({
   sessionId,
   turnId,
@@ -29,6 +32,7 @@ export function createTurnActivity({
   chunk = null,
   createdAt = Date.now(),
 }) {
+  /** @type {import('../types/turn-protocol.js').TurnActivity} */
   const activity = { sessionId, turnId, kind, toolName, createdAt }
   if (modelName != null) activity.modelName = modelName
   if (toolCallId != null) activity.toolCallId = toolCallId

@@ -144,28 +144,12 @@ function removeOrphanToolResults(messages = []) {
 }
 
 function appendEphemeralContext(messages, ephemeralContext) {
-  const context = String(ephemeralContext || '').trim()
-  if (!context) return messages
-  let target = -1
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === 'user') {
-      target = index
-      break
-    }
-  }
-  if (target < 0) return messages
-  const next = messages.slice()
-  const message = next[target]
-  if (Array.isArray(message.content)) {
-    next[target] = {
-      ...message,
-      content: [...message.content, { type: 'text', text: context }],
-    }
-  } else {
-    const content = String(message.content || '')
-    next[target] = { ...message, content: [content, context].filter(Boolean).join('\n\n') }
-  }
-  return next
+  const context = String(ephemeralContext ?? '')
+  if (!context.trim() || !messages.some((message) => message?.role === 'user')) return messages
+  // Runtime hints belong after the existing history, never inside an earlier
+  // user message. Changing a clock/budget must not rewrite the reusable prefix.
+  // A user-role suffix is also accepted by native/local alternating-role APIs.
+  return [...messages, { role: 'user', content: context }]
 }
 
 /**

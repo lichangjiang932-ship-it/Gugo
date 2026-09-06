@@ -17,7 +17,7 @@
 .left-rail-session-list {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
   padding-bottom: 8px;
 }
 
@@ -28,7 +28,7 @@
   gap: 2px;
   padding: 0 6px;
   color: rgb(var(--color-ink-fade-rgb));
-  font-size: 12px;
+  font-size: var(--type-meta);
   font-weight: 500;
 }
 
@@ -60,7 +60,7 @@
 .left-rail-session-row {
   position: relative;
   display: grid;
-  min-height: 36px;
+  min-height: 38px;
   grid-template-columns: minmax(0, 1fr) 28px;
   align-items: center;
   padding-right: 4px;
@@ -80,7 +80,7 @@
 .left-rail-session-open {
   display: flex;
   min-width: 0;
-  min-height: 36px;
+  min-height: 38px;
   align-items: center;
   padding: 7px 8px;
   border-radius: var(--radius-control);
@@ -118,6 +118,8 @@
   width: min(176px, calc(100vw - 16px));
   max-height: calc(100dvh - 16px);
   overflow-y: auto;
+  box-shadow: 0 8px 28px rgb(var(--color-shadow-rgb) / 0.12),
+    0 1px 3px rgb(var(--color-shadow-rgb) / 0.06);
 }
 
 @media (hover: none), (pointer: coarse) {

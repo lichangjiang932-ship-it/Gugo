@@ -1,3 +1,5 @@
+import { canonicalizeModelTools } from './modelRequestCache.js'
+
 function json(value, fallback = {}) {
   if (value && typeof value === 'object') return value
   try { return JSON.parse(String(value || '')) } catch { return fallback }
@@ -237,7 +239,8 @@ function buildGeminiRequest({ config, messages, stream, tools, toolChoice, profi
 }
 
 export function buildBuiltInNativeProviderRequest(args = {}) {
-  if (args.profile?.kind === 'anthropic') return buildAnthropicRequest(args)
-  if (args.profile?.kind === 'gemini') return buildGeminiRequest(args)
+  const prepared = { ...args, tools: canonicalizeModelTools(args.tools) }
+  if (args.profile?.kind === 'anthropic') return buildAnthropicRequest(prepared)
+  if (args.profile?.kind === 'gemini') return buildGeminiRequest(prepared)
   throw new Error(`Unsupported native provider kind: ${args.profile?.kind || 'unknown'}`)
 }

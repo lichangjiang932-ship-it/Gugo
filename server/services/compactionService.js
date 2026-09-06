@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { withCompactionArchivePort } from './compactionArchiveRuntime.js'
+import { inheritedCompactionDirections } from './contextCompactionDirections.js'
 
 const COMMAND_EXECUTION_TOOL_NAMES = new Set(['bash_exec', 'run_command'])
 
@@ -188,6 +189,7 @@ export function extractCompactionState(messages = []) {
       if (content) userMessages.push(content)
     }
     if (message?.role === 'assistant') {
+      userMessages.push(...inheritedCompactionDirections(message))
       const content = textOf(message)
       if (content) assistantProgress.push(content)
       for (const call of Array.isArray(message.tool_calls) ? message.tool_calls : []) {
@@ -343,7 +345,7 @@ export function buildCompaction({
   }
 
   const allSystem = messages.filter((message) => message.role === 'system')
-  const system = allSystem.slice(-Math.min(32, maxMessages - 2))
+  const system = allSystem
   const nonSystem = messages.filter((message) => message.role !== 'system')
   const effectiveKeep = Math.max(1, Math.min(requestedKeep, maxMessages - system.length - 2))
   let tailStart = Math.max(0, nonSystem.length - effectiveKeep)
@@ -371,39 +373,7 @@ export function buildCompaction({
   }
 
   const tail = nonSystem.slice(tailStart)
-  let head = nonSystem.slice(0, tailStart)
-
-  const tailToolCallIds = new Set()
-  const satisfiedInTail = new Set()
-  for (const message of tail) {
-    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
-      for (const call of message.tool_calls) {
-        if (call?.id) satisfiedInTail.add(call.id)
-      }
-    }
-    if (message?.role === 'tool' && message.tool_call_id) {
-      tailToolCallIds.add(message.tool_call_id)
-    }
-  }
-
-  const hoisted = []
-  const hoistedIndexes = new Set()
-  for (const id of tailToolCallIds) {
-    if (satisfiedInTail.has(id)) continue
-    const idx = head.findIndex((message) =>
-      message?.role === 'assistant' &&
-      Array.isArray(message.tool_calls) &&
-      message.tool_calls.some((call) => call?.id === id)
-    )
-    if (idx >= 0 && !hoistedIndexes.has(idx)) {
-      hoisted.push({
-        ...head[idx],
-        tool_calls: head[idx].tool_calls.filter((call) => tailToolCallIds.has(call?.id)),
-      })
-      hoistedIndexes.add(idx)
-    }
-  }
-  head = head.filter((_, index) => !hoistedIndexes.has(index))
+  const head = nonSystem.slice(0, tailStart)
 
   const checkpointSource = createCompactCheckpointSource(head)
   if (!checkpointSource.ok) {
@@ -423,7 +393,7 @@ export function buildCompaction({
       forced: messages.length > maxMessages || allSystem.length !== system.length,
     },
   }
-  const compactedMessages = [...system, summaryMessage, ...hoisted, ...tail]
+  const compactedMessages = [...system, summaryMessage, ...tail]
   const compactedChain = toolPairingBalanced(compactedMessages)
   if (!compactedChain.ok) {
     return { ok: false, error: compactedChain.error }

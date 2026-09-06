@@ -9,9 +9,7 @@ const ESTIMATED_CONTEXT_WINDOW_SOURCES = new Set(['cloud_default', 'local_defaul
 
 export function normalizeOptionalTokenCount(value) {
   if (
-    value === null
-    || value === undefined
-    || typeof value === 'boolean'
+    !['number', 'string'].includes(typeof value)
     || (typeof value === 'string' && value.trim() === '')
   ) return null
 

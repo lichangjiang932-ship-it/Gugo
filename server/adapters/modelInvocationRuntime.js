@@ -104,6 +104,7 @@ export async function callBackgroundModel({
       env: runtimeEnv,
       profile,
       modelRequestId,
+      cacheOwnerId: usageOwnerId,
     })
     const { url, init } = providerRequest
     return withRetry(() => withRedactedModelErrors(candidate, async () => {
@@ -242,6 +243,7 @@ export async function callBackgroundModelWithTools({
       env: runtimeEnv,
       profile,
       modelRequestId,
+      cacheOwnerId: usageOwnerId,
     })
     const { url, init } = providerRequest
     return withRetry(() => withRedactedModelErrors(candidate, async () => {
@@ -389,6 +391,7 @@ export async function callStreamingModelWithTools({
       externalSignal: signal,
       env: runtimeEnv,
       modelRequestId,
+      cacheOwnerId: usageOwnerId,
       onProviderAttempt: trackProviderAttempt,
     }),
     { signal, onFailover, onRetry },

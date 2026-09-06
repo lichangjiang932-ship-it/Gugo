@@ -319,6 +319,34 @@ test('test runner prints a clear final success result', () => {
   assert.doesNotMatch(output, /final failure/u)
 })
 
+test('failing TAP cannot be masked by a zero process exit code in either execution lane', () => {
+  const output = 'TAP version 13\nnot ok 1 - masked failing assertion\n1..1\n# tests 1\n# pass 0\n# fail 1\n'
+  for (const file of [ISOLATED_PROBE, 'tests/codeDebt.test.js']) {
+    const result = runRunner([file], {
+      preloadSource: fakeSpawnPreload({ status: 0, output }),
+    })
+    assert.equal(result.status, 1, file)
+    assert.match(combinedOutput(result), /tapFailures=masked failing assertion/u)
+    assert.match(combinedOutput(result), /final result: FAIL/u)
+    assert.doesNotMatch(combinedOutput(result), /retrying/u)
+  }
+})
+
+test('real failed assertions cannot be hidden by an exit callback that overwrites the code', () => {
+  const mask = dataImport([
+    "import test from 'node:test'",
+    "import assert from 'node:assert/strict'",
+    "process.on('exit', () => { process.exitCode = 0 })",
+    "test('masked real assertion', () => assert.fail('expected probe failure'))",
+  ].join('\n'))
+  for (const file of [ISOLATED_PROBE, 'tests/contextUsage.test.js']) {
+    const result = runRunner([`--import=${mask}`, file], { timeout: 15_000 })
+    assert.equal(result.status, 1, combinedOutput(result))
+    assert.match(combinedOutput(result), /not ok \d+ - masked real assertion/u)
+    assert.match(combinedOutput(result), /final result: FAIL/u)
+  }
+})
+
 test('normal test mode continues to honor the configured batch size', () => {
   const result = runRunner([
     'tests/codeDebt.test.js',

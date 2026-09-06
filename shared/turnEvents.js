@@ -1,3 +1,4 @@
+// @ts-check
 import { z } from 'zod'
 import {
   INLINE_SKILL_DEFINITION_LIMITS,
@@ -11,14 +12,18 @@ export {
   createTurnActivity,
   parseTurnActivity,
 } from './turnActivity.js'
+export {
+  canAdvanceTurnEventCursor, createTurnEventTransportEnvelope,
+  parseTurnEventTransportEnvelope, parseTurnEventTransportPayload,
+} from './turnEventTransport.js'
 
-export const TURN_EVENT_TYPES = Object.freeze([
+export const TURN_EVENT_TYPES = Object.freeze(/** @type {const} */ ([
   'turn.started', 'turn.attempt', 'model.phase', 'model.failover', 'assistant.delta', 'reasoning.delta',
   'tool.call', 'tool.started', 'tool.completed', 'turn.progress', 'approval.required',
   'approval.resolved', 'turn.checkpoint', 'turn.interrupted', 'turn.blocked', 'turn.paused', 'turn.resumed',
   'turn.completed', 'turn.cancelled',
   'turn.failed', 'heartbeat',
-])
+]))
 
 export const TURN_EVENT_TRANSPORT_VERSION = 1
 export const TURN_EVENT_TRANSPORT_TYPE = 'turn.event'
@@ -114,6 +119,7 @@ const completedArtifactSchema = z.object({
   title: z.string().optional(),
   mimeType: z.string().min(1).optional(),
 }).strict()
+/** @param {{ maxCharacters?: number | null, maxUtf8Bytes?: number | null, minCharacters?: number }} [options] */
 function inlineSkillTextSchema({ maxCharacters = null, maxUtf8Bytes = null, minCharacters = 0 } = {}) {
   return z.string().superRefine((value, context) => {
     const characterLength = unicodeCharacterLength(value)
@@ -322,7 +328,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     retainedLocalFiles: retainedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
   }).strict().superRefine((payload, context) => {
-    if (['side_effect_unknown', 'side_effect_outcome_unknown', 'model_request_outcome_unknown'].includes(payload.recoveryKind)
+    if (payload.recoveryKind && ['side_effect_unknown', 'side_effect_outcome_unknown', 'model_request_outcome_unknown'].includes(payload.recoveryKind)
       && !payload.recoveryAction) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -331,7 +337,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
       })
     }
     if (payload.recoveryKind === 'side_effect_outcome_unknown') {
-      for (const key of ['turnId', 'toolCallId', 'requiresUserVerification']) {
+      for (const key of /** @type {const} */ (['turnId', 'toolCallId', 'requiresUserVerification'])) {
         if (payload[key]) continue
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -341,7 +347,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
       }
     }
     if (payload.recoveryKind === 'model_request_outcome_unknown') {
-      for (const key of ['turnId', 'modelRequestId', 'requiresUserVerification']) {
+      for (const key of /** @type {const} */ (['turnId', 'modelRequestId', 'requiresUserVerification'])) {
         if (payload[key]) continue
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -468,6 +474,7 @@ const CODE_ONLY_TERMINAL_EVENT_TYPES = new Set([
   'turn.cancelled',
   'turn.failed',
 ])
+/** @type {Readonly<Partial<Record<keyof typeof TURN_EVENT_PAYLOAD_SCHEMAS, readonly string[]>>>} */
 const LEGACY_PRESENTATION_FIELDS = Object.freeze({
   'turn.interrupted': ['message', 'hint', 'reason'],
   'turn.blocked': ['message', 'hint', 'reason'],
@@ -513,46 +520,19 @@ export const TurnEventTransportEnvelopeSchema = z.object({
   event: TurnEventSchema,
 }).strict()
 
+/** @param {unknown} value */
 export function parseTurnEvent(value) {
   return TurnEventSchema.parse(value)
 }
 
-/** Read-only compatibility parser for events persisted by pre-code-only runtimes. */
+/** Read-only compatibility parser for events persisted by pre-code-only runtimes.
+ * @param {unknown} value
+ */
 export function parsePersistedTurnEvent(value) {
   return PersistedTurnEventSchema.parse(value)
 }
 
-export function parseTurnEventTransportEnvelope(value) {
-  return TurnEventTransportEnvelopeSchema.parse(value)
-}
-
-export function createTurnEventTransportEnvelope(event) {
-  return parseTurnEventTransportEnvelope({
-    v: TURN_EVENT_TRANSPORT_VERSION,
-    type: TURN_EVENT_TRANSPORT_TYPE,
-    event: parseTurnEvent(event),
-  })
-}
-
-/**
- * Decode the versioned transport envelope while retaining the pre-v1 SSE
- * payload as an explicit compatibility path. Invalid envelope-like values do
- * not fall back to a bare event, so a version mismatch remains fail closed.
- */
-export function parseTurnEventTransportPayload(value) {
-  const envelopeLike = value !== null
-    && typeof value === 'object'
-    && !Array.isArray(value)
-    && (
-      value.type === TURN_EVENT_TRANSPORT_TYPE
-      || Object.prototype.hasOwnProperty.call(value, 'v')
-      || Object.prototype.hasOwnProperty.call(value, 'event')
-    )
-  return envelopeLike
-    ? parseTurnEventTransportEnvelope(value).event
-    : parsePersistedTurnEvent(value)
-}
-
+/** @param {import('../types/turn-protocol.js').CreateTurnEventInput} input */
 export function createTurnEvent({
   id,
   sessionId,
@@ -573,14 +553,4 @@ export function createTurnEvent({
     payload,
     createdAt,
   })
-}
-
-export function canAdvanceTurnEventCursor(event, after = -1) {
-  const cursor = Number.isInteger(after) ? after : Math.max(-1, Math.floor(Number(after) || 0))
-  const expectedSequence = cursor + 1
-  if (event?.sequence === expectedSequence) return true
-  return Number.isInteger(event?.sequence)
-    && event.sequence > expectedSequence
-    && Number.isInteger(event.compactedThrough)
-    && event.sequence <= event.compactedThrough
 }

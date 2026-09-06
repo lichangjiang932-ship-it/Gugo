@@ -1,4 +1,4 @@
-import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
+import { normalizeCacheReadUsage, normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 import {
   getBoundRuntimeProvider,
   getBoundRuntimeProviderProvenance,
@@ -117,11 +117,8 @@ function commonUsage({ prompt, completion, total, cached } = {}, { allowPartial 
   else if (promptTokens !== null) {
     normalized.totalTokens = Math.floor(promptTokens + (completionTokens ?? 0))
   }
-  if (cacheHitTokens !== null) normalized.cacheHitTokens = Math.floor(cacheHitTokens)
-  else if (promptTokens !== null) normalized.cacheHitTokens = 0
-  if (promptTokens !== null) {
-    normalized.cacheMissTokens = Math.max(0, Math.floor(promptTokens - (cacheHitTokens ?? 0)))
-  }
+  if (promptTokens !== null) Object.assign(normalized, normalizeCacheReadUsage({ promptTokens, cacheHitTokens }))
+  else if (cacheHitTokens !== null) normalized.cacheHitTokens = Math.floor(cacheHitTokens)
   return normalized
 }
 
@@ -142,10 +139,11 @@ function anthropicUsage(usage, { allowPartial = false } = {}) {
     const cached = Math.floor(cacheHitTokens ?? 0)
     const created = Math.floor(cacheCreationTokens ?? 0)
     normalized.promptTokens = uncached + cached + created
-    normalized.cacheHitTokens = cached
-    normalized.cacheCreationTokens = created
-    normalized.uncachedInputTokens = uncached
-    normalized.cacheMissTokens = uncached + created
+    if (cacheHitTokens !== null) Object.assign(normalized, normalizeCacheReadUsage({
+      promptTokens: normalized.promptTokens, cacheHitTokens: cached,
+    }))
+    if (cacheCreationTokens !== null) normalized.cacheCreationTokens = created
+    if (uncachedInputTokens !== null) normalized.uncachedInputTokens = uncached
   }
   if (completionTokens !== null) normalized.completionTokens = Math.floor(completionTokens)
   else if (hasPromptUsage) normalized.completionTokens = 0
@@ -322,7 +320,9 @@ function mergeUsage(previous, current) {
   if (cacheCreationTokens !== undefined) merged.cacheCreationTokens = cacheCreationTokens
   if (uncachedInputTokens !== undefined) merged.uncachedInputTokens = uncachedInputTokens
   if (cacheMissTokens !== undefined) merged.cacheMissTokens = cacheMissTokens
-  else if (promptTokens !== undefined) merged.cacheMissTokens = Math.max(0, promptTokens - (cacheHitTokens ?? 0))
+  else if (promptTokens !== undefined && cacheHitTokens !== undefined) {
+    Object.assign(merged, normalizeCacheReadUsage({ promptTokens, cacheHitTokens }))
+  }
   return merged
 }
 

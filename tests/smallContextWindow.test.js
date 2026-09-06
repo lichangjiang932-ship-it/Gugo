@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { isContextLengthError } from '../server/adapters/modelProxy.js'
+import { runToolLoop } from '../server/services/loop/index.js'
 import {
   callModelWithContextRecovery,
   getAutoCompactionThreshold,
@@ -97,6 +98,7 @@ test('第一次溢出后强制压缩重试,成功就正常返回', async () => {
 })
 
 test('三级全部失败时给出可操作的说明,而不是上游原文', async () => {
+  const upstreamError = contextError()
   await assert.rejects(
     () => callModelWithContextRecovery({
       messages: [
@@ -107,16 +109,63 @@ test('三级全部失败时给出可操作的说明,而不是上游原文', asyn
       contextWindow: 2048,
       isContextLengthError,
       // 无论压缩成什么样都塞不下 —— 模拟「工具 schema 本身就超窗」
-      callModel: async () => { throw contextError() },
+      callModel: async () => { throw upstreamError },
     }),
     (error) => {
       assert.equal(error.code, 'CONTEXT_UNRECOVERABLE')
       // ★ 原实现第三级没有 catch,冒上去的是 "the request exceeds..." 这种
       // 用户完全不知道该做什么的原文。
       assert.match(error.message, /上下文窗口|工具/)
+      assert.match(error.message, /请确认服务提供商的上下文窗口配置/)
+      assert.match(error.message, /缩短本轮输入/)
+      assert.match(error.message, /上下文窗口更大的模型/)
+      assert.strictEqual(error.cause, upstreamError)
       return true
     },
   )
+})
+
+test('tool loop context recovery preserves localized advice and the original failure evidence', async (t) => {
+  const cases = [
+    {
+      locale: 'zh',
+      advice: [/请确认服务提供商的上下文窗口配置/, /缩短本轮输入/, /上下文窗口更大的模型/],
+      rejected: /Context recovery/,
+    },
+    {
+      locale: 'en',
+      advice: [/Check that the provider's context-window configuration/, /shorten this turn's input/, /model with a larger context window/],
+      rejected: /[\u3400-\u9fff]/u,
+    },
+  ]
+  for (const { locale, advice, rejected } of cases) {
+    await t.test(locale, async () => {
+      const upstreamError = contextError()
+      let attempts = 0
+      await assert.rejects(() => runToolLoop({
+        job: { id: `context-advice-${locale}`, userId: `context-advice-${locale}-user`, origin: 'chat', locale, prompt: 'Answer briefly.' },
+        step: { id: `context-advice-${locale}`, kind: 'chat' },
+        messages: [{ role: 'user', content: 'Answer briefly.' }],
+        toolSpecs: [], intentMode: 'answer', maxIters: 1, enableToolHooks: false,
+        contextWindow: 2048,
+        runModel: async (request) => {
+          attempts += 1
+          assert.equal(Object.hasOwn(request, 'locale'), false, 'presentation locale must not leak into model options')
+          throw upstreamError
+        },
+      }), (error) => {
+        assert.equal(error.code, 'CONTEXT_UNRECOVERABLE')
+        assert.strictEqual(error.cause, upstreamError)
+        assert.equal(error.compactionErrorCode, 'CONTEXT_COMPACTION_REFUSED')
+        assert.equal(typeof error.compactionError, 'string')
+        assert.ok(error.compactionError.length > 0)
+        for (const expected of advice) assert.match(error.message, expected)
+        assert.doesNotMatch(error.message, rejected)
+        return true
+      })
+      assert.equal(attempts, 3, 'localized advice must not change the bounded retry count')
+    })
+  }
 })
 
 test('非上下文错误不走恢复流程,原样上抛', async () => {

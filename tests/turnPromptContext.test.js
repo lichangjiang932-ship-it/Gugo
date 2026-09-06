@@ -50,9 +50,9 @@ test('turn prompt keeps compiled blocks in stable order before dynamic context',
   assert.match(contents[0], /^# Agent: Stable Agent/)
   assert.match(contents[1], /## SOUL/)
   assert.match(contents[2], /^# Skills/)
-  assert.match(contents[3], /^# Session Context/)
-  assert.match(contents[4], /^# Long-term memory/)
-  assert.match(contents[5], /^# Workspace instructions/)
+  assert.match(contents[3], /^# Workspace instructions/)
+  assert.match(contents[4], /^# Session Context/)
+  assert.match(contents[5], /^# Long-term memory/)
 })
 test('trusted runtime prompt blocks use a fixed additive slot and receive only frozen scope metadata', () => {
   const observedScopes = []
@@ -96,7 +96,7 @@ test('trusted runtime prompt blocks use a fixed additive slot and receive only f
 
   assert.equal(memoryIndex >= 0, true)
   assert.equal(pluginIndex, memoryIndex + 1)
-  assert.equal(workspaceIndex, pluginIndex + 1)
+  assert.ok(workspaceIndex < memoryIndex)
   assert.match(contents[pluginIndex], /Source: trusted-project-plugin/)
   assert.deepEqual(prepared.pluginPromptBlockIds, ['trusted-project-plugin:project-hints'])
   assert.deepEqual(observedScopes, [{
@@ -117,16 +117,41 @@ test('changing workspace instructions preserves compiled block cache hits and co
   const afterSecond = getPromptCompilerStats()
 
   assert.deepEqual(
-    second.messages.slice(0, 4),
-    first.messages.slice(0, 4),
-    'dynamic workspace text must not alter the four compiled blocks',
+    [0, 1, 2, 4].map((index) => second.messages[index]),
+    [0, 1, 2, 4].map((index) => first.messages[index]),
+    'changed workspace text must not alter the four compiled blocks',
   )
   for (const type of ['identity', 'ishiki', 'skills', 'sessions']) {
     assert.equal(afterFirst[type].misses, 1)
     assert.equal(afterSecond[type].hits, 1)
     assert.equal(afterSecond[type].misses, 1)
   }
-  assert.notEqual(second.messages.at(-1).content, first.messages.at(-1).content)
+  assert.notEqual(second.messages[3].content, first.messages[3].content)
+})
+
+test('changing session, memory and runtime hints never moves ahead of stable instructions', () => {
+  const instruction = '# Workspace instructions\nKeep every instruction exactly.  \n'
+  const prepareDynamic = (version) => prepareTurnPromptContext({
+    userId: 'dynamic-context-owner', agentId: AGENT.id, skillIds: [SKILL.id], sessionId: 'dynamic-context-session',
+  }, {
+    getAgent: () => AGENT,
+    prepareSkillsForPrompt: () => [SKILL],
+    prepareSkillCatalogForPrompt: () => [],
+    readWorkspaceInstructions: () => ({ text: instruction }),
+    buildSessionsBlock: () => ({ text: `Session evidence ${version}`, sources: { archiveId: `archive-${version}` } }),
+    prepareMemoryInjectionContext: () => ({ text: `Memory evidence ${version}`, memoryIds: [`memory-${version}`] }),
+    renderRuntimePromptBlocks: () => ({ blocks: [{ id: 'hints', pluginId: 'fixture', text: `Runtime evidence ${version}` }], errors: [] }),
+  })
+  const first = prepareDynamic('one')
+  const second = prepareDynamic('two')
+  assert.deepEqual(first.messages.slice(0, 4), second.messages.slice(0, 4))
+  assert.equal(second.messages[3].content, instruction)
+  assert.deepEqual(second.messages.slice(4).map((message) => message.content), [
+    'Session evidence two', 'Memory evidence two', '# Runtime Plugin Context: hints\nSource: fixture\n\nRuntime evidence two',
+  ])
+  assert.equal(second.compactionArchiveId, 'archive-two')
+  assert.deepEqual(second.memoryIds, ['memory-two'])
+  assert.deepEqual(second.pluginPromptBlockIds, ['fixture:hints'])
 })
 
 test('turn prompt executes an unknown local skill definition with the quality contract', () => {
