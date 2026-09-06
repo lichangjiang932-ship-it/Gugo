@@ -1,24 +1,3 @@
-/**
- * 进程组安全执行(M3.5)。
- *
- * 标准 child_process.execFile 的 timeout 行为:
- *   - 仅向 child 发 SIGTERM(可被忽略)
- *   - child 的 child(孙进程)成孤儿,继续占资源
- *
- * 本模块用 detached + process group 做正确的清理:
- *   - 创建独立进程组(setsid 行为):options.detached=true → spawn 返回的 pid 也是 pgid
- *   - 到点先发 SIGTERM 给整个进程组(`-pid` 表示 group),给 2s grace period
- *   - 仍未退出则 SIGKILL 整个组,确保孙进程也被收
- *
- * 限制:
- *   - 仅 POSIX(win32 退化为旧行为,平台限制)
- *   - 仅适合执行明确受控的命令,不替代真正的 OS 级 sandbox(那是 M4)
- *
- * 返回结构与 execFile 兼容:{ stdout, stderr, code, signal, timedOut, killed, truncated }
- * 可选 controlPipe 会把 fd3 作为独立的原始二进制控制管道，并返回
- * { control, controlError, controlTruncated, controlTotalBytes }。
- */
-
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
@@ -39,8 +18,10 @@ import {
   terminateWindowsProcessTree,
   windowsTreeKillTesting,
 } from './windowsTreeKillRuntime.js'
+
 const GRACE_MS = 2_000
 const WINDOWS_TREE_HANDLE_DRAIN_MS = 250
+
 function utf8Tail(value, maxBytes) {
   const source = Buffer.from(String(value || ''), 'utf8')
   if (source.length <= maxBytes) return source.toString('utf8')
@@ -50,13 +31,474 @@ function utf8Tail(value, maxBytes) {
 }
 
 export { terminateProcessTree }
+
 export function runProcessWithGroup(options, { spawnProcessFn = spawn } = {}) {
   const startExecution = (startedOptions) => runProcessWithGroupStarted(startedOptions, { spawnProcessFn })
-  if (process.platform === 'win32') {
-    return prepareWindowsProcessExecution(options, startExecution)
-  }
-  return startExecution(options)
+  return process.platform === 'win32'
+    ? prepareWindowsProcessExecution(options, startExecution)
+    : startExecution(options)
 }
+
+function createProcessRuntime(options, spawnProcessFn, resolve) {
+  const hasControlPipe = options.controlPipe === true
+  const hasStdinInput = typeof options.stdinInput === 'string' || Buffer.isBuffer(options.stdinInput)
+  const requestedControlMaxBuffer = Number(options.controlMaxBuffer)
+  const controlMaxBuffer = Number.isFinite(requestedControlMaxBuffer)
+    ? Math.max(0, Math.floor(requestedControlMaxBuffer))
+    : 256 * 1024
+  const isWin = process.platform === 'win32'
+  const targetEnv = sanitizeChildEnv({}, {
+    sourceEnv: options.env || process.env,
+    inheritKeys: options.inheritEnvKeys,
+  })
+  const useWindowsProcessGate = isWin
+  const child = spawnProcessFn(
+    useWindowsProcessGate ? process.execPath : options.shellPath,
+    useWindowsProcessGate ? [WINDOWS_PROCESS_GATE_PATH] : options.shellArgs,
+    {
+      cwd: useWindowsProcessGate ? path.dirname(process.execPath) : options.cwd,
+      env: useWindowsProcessGate ? windowsProcessGateEnv(targetEnv) : targetEnv,
+      windowsHide: options.windowsHide,
+      windowsVerbatimArguments: useWindowsProcessGate ? false : options.windowsVerbatimArguments,
+      detached: !isWin,
+      stdio: hasControlPipe
+        ? [hasStdinInput ? 'pipe' : 'ignore', 'pipe', 'pipe', 'pipe', ...(useWindowsProcessGate ? ['ipc'] : [])]
+        : [hasStdinInput ? 'pipe' : 'ignore', 'pipe', 'pipe', ...(useWindowsProcessGate ? ['ipc'] : [])],
+    },
+  )
+  return {
+    ...options,
+    spawnProcessFn,
+    resolve,
+    hasControlPipe,
+    hasStdinInput,
+    controlMaxBuffer,
+    isWin,
+    targetEnv,
+    useWindowsProcessGate,
+    child,
+    state: {
+      windowsBindController: isWin ? new AbortController() : null,
+      windowsBindError: null,
+      stdoutBuf: '', stderrBuf: '', controlChunks: [], controlBufferedBytes: 0,
+      controlTotalBytes: 0, controlTruncated: false, controlError: null,
+      outputEvents: [], bufferedOutputBytes: 0, totalOutputBytes: 0,
+      truncated: false, timedOut: false, aborted: false, killed: false,
+      settled: false, finalizing: false, killTimer: null, sigkillTimer: null,
+      abortListener: null, windowsTreeKillPromise: null, posixTreeKillPromise: null,
+      outputLogStream: null, outputLogOwned: false, outputLogError: null,
+      windowsGateStarted: !useWindowsProcessGate,
+      windowsStartRequestMayHaveArrived: false,
+      processStartFailed: false, processStartError: null,
+      processIsolationFailed: false, processIsolationError: null,
+      windowsGateReadySettled: !useWindowsProcessGate,
+      resolveWindowsGateReady: null,
+      windowsGateReadyPromise: null,
+      streamsPausedForLog: new Set(),
+    },
+  }
+}
+
+function hasTerminalIntent(runtime) {
+  const s = runtime.state
+  return s.finalizing || s.timedOut || s.aborted || s.killed || s.settled
+}
+
+function settleWindowsGateReady(runtime, ready) {
+  const state = runtime.state
+  if (state.windowsGateReadySettled) return
+  state.windowsGateReadySettled = true
+  state.resolveWindowsGateReady?.(ready === true)
+}
+
+function stopBuffering(runtime) {
+  const { child, controlStream, state } = runtime
+  try { child.stdout?.destroy() } catch { /* noop */ }
+  try { child.stderr?.destroy() } catch { /* noop */ }
+  if (controlStream && !controlStream.readableEnded && !controlStream.destroyed) {
+    state.controlTruncated = true
+  }
+  try { controlStream?.destroy() } catch { /* noop */ }
+}
+
+function killProcessTree(runtime, signal, { markKilled = true, stopOutput = true } = {}) {
+  const { state, child } = runtime
+  if (state.settled || child.pid == null) return
+  if (markKilled) state.killed = true
+  if (stopOutput) stopBuffering(runtime)
+  try {
+    if (runtime.isWin) {
+      if (!state.windowsTreeKillPromise) {
+        if (runtime.useWindowsProcessGate
+          && !state.windowsStartRequestMayHaveArrived
+          && !state.windowsGateStarted) {
+          settleWindowsGateReady(runtime, false)
+          state.windowsBindController?.abort()
+          void releaseWindowsProcessTree(state.windowsTreeLeasePromise)
+          const exited = child.exitCode != null || child.signalCode != null
+          try { state.windowsTreeKillPromise = Promise.resolve(exited || child.kill('SIGKILL') === true) }
+          catch { state.windowsTreeKillPromise = Promise.resolve(false) }
+          return
+        }
+        state.windowsTreeKillPromise = terminateWindowsProcessTree({
+          pid: child.pid,
+          child,
+          killRootOnFailure: true,
+          leasePromise: state.windowsTreeLeasePromise,
+        })
+      }
+    } else if (!state.posixTreeKillPromise) {
+      state.posixTreeKillPromise = terminateProcessTree({ pid: child.pid, child })
+    }
+  } catch { /* process may already have exited */ }
+}
+
+function configureWindowsProcessGate(runtime) {
+  const { state, child } = runtime
+  if (!runtime.useWindowsProcessGate) return
+  state.windowsGateReadyPromise = new Promise((resolve) => { state.resolveWindowsGateReady = resolve })
+  child.once('error', () => settleWindowsGateReady(runtime, false))
+  child.once('exit', () => settleWindowsGateReady(runtime, false))
+  state.windowsTreeLeasePromise = state.windowsGateReadyPromise.then((ready) => {
+    if (ready !== true) return null
+    return bindWindowsProcessTree({
+      pid: child.pid,
+      child,
+      signal: state.windowsBindController.signal,
+      sealedJob: true,
+    })
+  }).catch((error) => {
+    if (!hasTerminalIntent(runtime)) state.windowsBindError = error
+    return null
+  })
+  child.on('message', (message) => {
+    if (message?.protocol !== WINDOWS_PROCESS_GATE_PROTOCOL) return
+    if (message?.operation === 'READY') {
+      settleWindowsGateReady(runtime, true)
+      return
+    }
+    if (message?.operation === 'START_FAILED'
+      && !state.windowsGateStarted && !hasTerminalIntent(runtime)) {
+      state.processStartFailed = true
+      state.processStartError = typeof message.error === 'string' && message.error
+        ? message.error
+        : 'Windows target process failed to start'
+      return
+    }
+    if (message?.operation !== 'STARTED' || state.windowsGateStarted || hasTerminalIntent(runtime)) return
+    state.windowsGateStarted = true
+    try {
+      runtime.onSpawn?.(child, {
+        targetPid: Number.isSafeInteger(message.pid) && message.pid > 0 ? message.pid : null,
+        supervisor: 'windows-process-gate',
+      })
+    } catch { /* observer must not affect execution */ }
+    if (hasTerminalIntent(runtime)) return
+    if (runtime.hasStdinInput) child.stdin?.end(runtime.stdinInput)
+  })
+  void Promise.all([state.windowsTreeLeasePromise, state.windowsGateReadyPromise])
+    .then(([lease, ready]) => {
+      if (hasTerminalIntent(runtime)) return
+      if (!lease || ready !== true) {
+        state.processIsolationFailed = true
+        state.processIsolationError = state.windowsBindError
+          ? (state.windowsBindError?.message || String(state.windowsBindError))
+          : 'Windows process isolation could not be established before execution'
+        if (state.windowsBindError) state.stderrBuf += state.windowsBindError?.message || String(state.windowsBindError)
+        killProcessTree(runtime, 'SIGKILL', { markKilled: false })
+        return
+      }
+      if (hasTerminalIntent(runtime)) return
+      try {
+        state.windowsStartRequestMayHaveArrived = true
+        child.send({
+          protocol: WINDOWS_PROCESS_GATE_PROTOCOL,
+          operation: 'START',
+          shellPath: runtime.shellPath,
+          shellArgs: runtime.shellArgs,
+          cwd: runtime.cwd,
+          env: runtime.targetEnv,
+          hasStdinInput: runtime.hasStdinInput,
+          hasControlPipe: runtime.hasControlPipe,
+          windowsHide: runtime.windowsHide,
+          windowsVerbatimArguments: runtime.windowsVerbatimArguments,
+        }, (error) => {
+          if (!error || hasTerminalIntent(runtime)) return
+          state.processIsolationFailed = true
+          state.processIsolationError = error?.message || String(error)
+          state.stderrBuf += error?.message || String(error)
+          killProcessTree(runtime, 'SIGKILL', { markKilled: false })
+        })
+      } catch (error) {
+        if (hasTerminalIntent(runtime)) return
+        state.processIsolationFailed = true
+        state.processIsolationError = error?.message || String(error)
+        state.stderrBuf += error?.message || String(error)
+        killProcessTree(runtime, 'SIGKILL', { markKilled: false })
+      }
+    })
+}
+
+function configureOutputLog(runtime) {
+  if (runtime.overflowMode !== 'tail' || !runtime.fullOutputPath) return
+  const { state } = runtime
+  try {
+    fs.mkdirSync(path.dirname(runtime.fullOutputPath), { recursive: true })
+    state.outputLogStream = fs.createWriteStream(runtime.fullOutputPath, { flags: 'wx' })
+    state.outputLogStream.once('open', () => { state.outputLogOwned = true })
+    state.outputLogStream.on('drain', () => {
+      for (const stream of state.streamsPausedForLog) stream.resume?.()
+      state.streamsPausedForLog.clear()
+    })
+    state.outputLogStream.on('error', (error) => {
+      state.outputLogError = error
+      for (const stream of state.streamsPausedForLog) stream.resume?.()
+      state.streamsPausedForLog.clear()
+    })
+  } catch (error) { state.outputLogError = error }
+}
+
+function collectControlOutput(runtime) {
+  const { state, controlStream } = runtime
+  if (runtime.hasControlPipe && !controlStream) state.controlError = 'control pipe fd3 is unavailable'
+  controlStream?.on('error', (error) => {
+    if (!state.controlError) state.controlError = error?.message || String(error)
+  })
+  controlStream?.on('data', (chunk) => {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    state.controlTotalBytes += bytes.length
+    const remaining = runtime.controlMaxBuffer - state.controlBufferedBytes
+    if (remaining <= 0) {
+      if (bytes.length > 0) state.controlTruncated = true
+      return
+    }
+    const kept = bytes.length > remaining ? bytes.subarray(0, remaining) : bytes
+    if (kept.length > 0) {
+      state.controlChunks.push(Buffer.from(kept))
+      state.controlBufferedBytes += kept.length
+    }
+    if (kept.length < bytes.length) state.controlTruncated = true
+  })
+}
+
+function trimTailBuffer(runtime) {
+  const { state } = runtime
+  while (state.bufferedOutputBytes > runtime.maxBuffer && state.outputEvents.length > 0) {
+    state.truncated = true
+    const first = state.outputEvents[0]
+    const overflow = state.bufferedOutputBytes - runtime.maxBuffer
+    if (first.bytes <= overflow) {
+      state.outputEvents.shift()
+      state.bufferedOutputBytes -= first.bytes
+      continue
+    }
+    const kept = utf8Tail(first.text, first.bytes - overflow)
+    const keptBytes = Buffer.byteLength(kept, 'utf8')
+    state.bufferedOutputBytes -= first.bytes - keptBytes
+    first.text = kept
+    first.bytes = keptBytes
+  }
+}
+
+function collectProcessOutput(runtime, stream, which) {
+  const { state } = runtime
+  stream?.setEncoding('utf8')
+  stream?.on('error', () => {})
+  stream?.on('data', (chunk) => {
+    const text = String(chunk)
+    const bytes = Buffer.byteLength(text, 'utf8')
+    state.totalOutputBytes += bytes
+    try { runtime.onOutput?.({ stream: which === 'out' ? 'stdout' : 'stderr', chunk: text }) }
+    catch { /* best-effort */ }
+    if (state.outputLogStream && !state.outputLogStream.destroyed) {
+      try {
+        if (!state.outputLogStream.write(text)) {
+          stream.pause?.()
+          state.streamsPausedForLog.add(stream)
+        }
+      } catch (error) {
+        state.outputLogError = error
+        stream.resume?.()
+        state.streamsPausedForLog.delete(stream)
+      }
+    }
+    if (runtime.overflowMode === 'tail') {
+      state.outputEvents.push({ which, text, bytes })
+      state.bufferedOutputBytes += bytes
+      trimTailBuffer(runtime)
+      return
+    }
+    if (state.truncated) return
+    const remaining = runtime.maxBuffer - state.stdoutBuf.length - state.stderrBuf.length
+    if (remaining <= 0) {
+      state.truncated = true
+      stopBuffering(runtime)
+      killProcessTree(runtime, 'SIGTERM')
+      return
+    }
+    const slice = text.length > remaining ? text.slice(0, remaining) : text
+    if (which === 'out') state.stdoutBuf += slice
+    else state.stderrBuf += slice
+    if (text.length > remaining) {
+      state.truncated = true
+      stopBuffering(runtime)
+      killProcessTree(runtime, 'SIGTERM')
+    }
+  })
+}
+
+async function closeOutputLog(runtime) {
+  const stream = runtime.state.outputLogStream
+  if (!stream || stream.destroyed) return
+  await new Promise((resolve) => {
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      resolve()
+    }
+    stream.once('finish', finish)
+    stream.once('close', finish)
+    stream.once('error', finish)
+    stream.end()
+  })
+}
+
+async function finalizeProcess(runtime, code, exitSignal) {
+  const { state } = runtime
+  if (state.settled || state.finalizing) return
+  state.finalizing = true
+  if (state.killTimer) clearTimeout(state.killTimer)
+  if (state.sigkillTimer) clearTimeout(state.sigkillTimer)
+  if (state.abortListener) runtime.signal?.removeEventListener('abort', state.abortListener)
+  let processTreeCleanupFailed = false
+  if (runtime.isWin && state.windowsTreeKillPromise) {
+    processTreeCleanupFailed = !(await state.windowsTreeKillPromise)
+    if (state.processIsolationFailed
+      && !state.windowsStartRequestMayHaveArrived
+      && !state.windowsGateStarted) processTreeCleanupFailed = false
+    if (state.timedOut || state.aborted || state.killed) {
+      await new Promise((resolve) => setTimeout(resolve, WINDOWS_TREE_HANDLE_DRAIN_MS))
+    }
+  } else if (runtime.isWin && state.windowsTreeLeasePromise) {
+    await releaseWindowsProcessTree(state.windowsTreeLeasePromise)
+  } else if (state.posixTreeKillPromise) {
+    processTreeCleanupFailed = !(await state.posixTreeKillPromise)
+  }
+  await closeOutputLog(runtime)
+  if (runtime.overflowMode === 'tail') {
+    state.stdoutBuf = state.outputEvents.filter((entry) => entry.which === 'out')
+      .map((entry) => entry.text).join('')
+    state.stderrBuf = state.outputEvents.filter((entry) => entry.which === 'err')
+      .map((entry) => entry.text).join('')
+  }
+  let persistedFullOutputPath = null
+  if (runtime.overflowMode === 'tail' && state.truncated && runtime.fullOutputPath
+    && state.outputLogOwned && !state.outputLogError) {
+    persistedFullOutputPath = runtime.fullOutputPath
+  } else if (runtime.overflowMode === 'tail' && runtime.fullOutputPath && state.outputLogOwned) {
+    try { await fs.promises.rm(runtime.fullOutputPath, { force: true }) } catch { /* cleanup */ }
+  }
+  if (runtime.useWindowsProcessGate && !state.windowsGateStarted
+    && !state.processIsolationFailed && !state.aborted && !state.timedOut) {
+    state.processStartFailed = true
+    if (!state.processStartError) {
+      state.processStartError = state.stderrBuf.trim() || 'Windows target process failed to start'
+    }
+  }
+  state.settled = true
+  runtime.resolve({
+    stdout: state.stdoutBuf,
+    stderr: state.stderrBuf,
+    code: state.processStartFailed || state.processIsolationFailed
+      ? null
+      : typeof code === 'number' ? code : null,
+    signal: exitSignal || null,
+    timedOut: state.timedOut,
+    killed: state.killed,
+    processStartFailed: state.processStartFailed,
+    processStartError: state.processStartError,
+    processIsolationFailed: state.processIsolationFailed,
+    processIsolationError: state.processIsolationError,
+    processTreeCleanupFailed,
+    truncated: state.truncated,
+    aborted: state.aborted,
+    totalOutputBytes: state.totalOutputBytes,
+    ...(runtime.hasControlPipe ? {
+      control: Buffer.concat(state.controlChunks, state.controlBufferedBytes),
+      controlError: state.controlError,
+      controlTruncated: state.controlTruncated,
+      controlTotalBytes: state.controlTotalBytes,
+    } : {}),
+    ...(persistedFullOutputPath ? { fullOutputPath: persistedFullOutputPath } : {}),
+    ...(state.outputLogError
+      ? { outputLogError: state.outputLogError?.message || String(state.outputLogError) }
+      : {}),
+  })
+}
+
+function attachProcessLifecycle(runtime) {
+  const { state, child } = runtime
+  child.stdin?.on('error', () => {})
+  child.once('spawn', () => {
+    if (runtime.useWindowsProcessGate) return
+    try { runtime.onSpawn?.(child) } catch { /* observer must not affect execution */ }
+    if (runtime.hasStdinInput) child.stdin?.end(runtime.stdinInput)
+  })
+  collectControlOutput(runtime)
+  collectProcessOutput(runtime, child.stdout, 'out')
+  collectProcessOutput(runtime, child.stderr, 'err')
+  const scheduleForceKill = () => {
+    if (state.sigkillTimer) clearTimeout(state.sigkillTimer)
+    state.sigkillTimer = setTimeout(() => killProcessTree(runtime, 'SIGKILL'), GRACE_MS)
+  }
+  if (runtime.signal) {
+    state.abortListener = () => {
+      if (hasTerminalIntent(runtime)) return
+      state.aborted = true
+      killProcessTree(runtime, 'SIGTERM')
+      scheduleForceKill()
+    }
+    runtime.signal.addEventListener('abort', state.abortListener, { once: true })
+    if (runtime.signal.aborted) state.abortListener()
+  }
+  state.killTimer = setTimeout(() => {
+    if (hasTerminalIntent(runtime)) return
+    state.timedOut = true
+    killProcessTree(runtime, 'SIGTERM')
+    scheduleForceKill()
+  }, runtime.timeout)
+  child.on('error', (error) => {
+    if (runtime.useWindowsProcessGate && hasTerminalIntent(runtime)) {
+      state.windowsBindController?.abort()
+      void finalizeProcess(runtime, null, null)
+      return
+    }
+    const message = error?.message || String(error)
+    state.stderrBuf += message
+    if (runtime.useWindowsProcessGate) {
+      settleWindowsGateReady(runtime, false)
+      state.processIsolationFailed = true
+      state.processIsolationError = message
+    } else {
+      state.processStartFailed = true
+      state.processStartError = message
+    }
+    state.windowsBindController?.abort()
+    void finalizeProcess(runtime, null, null)
+  })
+  child.on('exit', () => {
+    if (runtime.isWin && (runtime.cleanupWindowsTreeOnExit || state.windowsTreeLeasePromise)) {
+      killProcessTree(runtime, 'SIGTERM', { markKilled: false, stopOutput: false })
+    }
+    state.windowsBindController?.abort()
+  })
+  child.on('close', (code, signal) => {
+    state.resolveWindowsGateReady?.(false)
+    void finalizeProcess(runtime, code, signal)
+  })
+}
+
 function runProcessWithGroupStarted({
   shellPath,
   shellArgs,
@@ -77,498 +519,23 @@ function runProcessWithGroupStarted({
   controlPipe = false,
   controlMaxBuffer = 256 * 1024,
 }, { spawnProcessFn = spawn } = {}) {
-  const hasControlPipe = controlPipe === true
-  const hasStdinInput = typeof stdinInput === 'string' || Buffer.isBuffer(stdinInput)
-  const requestedControlMaxBuffer = Number(controlMaxBuffer)
-  const normalizedControlMaxBuffer = Number.isFinite(requestedControlMaxBuffer)
-    ? Math.max(0, Math.floor(requestedControlMaxBuffer))
-    : 256 * 1024
   if (signal?.aborted) {
     return Promise.resolve(processExecutionNotStartedResult({
-      controlPipe: hasControlPipe,
+      controlPipe: controlPipe === true,
       aborted: true,
     }))
   }
   return new Promise((resolve) => {
-    const isWin = process.platform === 'win32'
-    const targetEnv = sanitizeChildEnv({}, {
-      sourceEnv: env || process.env,
-      inheritKeys: inheritEnvKeys,
-    })
-    const useWindowsProcessGate = isWin
-    const child = spawnProcessFn(
-      useWindowsProcessGate ? process.execPath : shellPath,
-      useWindowsProcessGate ? [WINDOWS_PROCESS_GATE_PATH] : shellArgs,
-      {
-        cwd: useWindowsProcessGate ? path.dirname(process.execPath) : cwd,
-        env: useWindowsProcessGate ? windowsProcessGateEnv(targetEnv) : targetEnv,
-        windowsHide,
-        windowsVerbatimArguments: useWindowsProcessGate ? false : windowsVerbatimArguments,
-        // ★ POSIX:detached=true → 子进程成为新进程组 leader,pgid === child.pid
-        detached: !isWin,
-        stdio: hasControlPipe
-          ? [hasStdinInput ? 'pipe' : 'ignore', 'pipe', 'pipe', 'pipe', ...(useWindowsProcessGate ? ['ipc'] : [])]
-          : [hasStdinInput ? 'pipe' : 'ignore', 'pipe', 'pipe', ...(useWindowsProcessGate ? ['ipc'] : [])],
-      },
-    )
-
-    const windowsBindController = isWin
-      ? new AbortController()
-      : null
-    let windowsBindError = null
-
-    child.stdin?.on('error', () => { /* child may exit before consuming trusted input */ })
-    child.once('spawn', () => {
-      if (useWindowsProcessGate) return
-      try { onSpawn?.(child) } catch { /* observer must not affect execution */ }
-      if (hasStdinInput) child.stdin?.end(stdinInput)
-    })
-
-    let stdoutBuf = ''
-    let stderrBuf = ''
-    const controlChunks = []
-    let controlBufferedBytes = 0
-    let controlTotalBytes = 0
-    let controlTruncated = false
-    let controlError = null
-    const controlStream = hasControlPipe ? child.stdio?.[3] : null
-    const tailMode = overflowMode === 'tail'
-    const outputEvents = []
-    let bufferedOutputBytes = 0
-    let totalOutputBytes = 0
-    let truncated = false
-    let timedOut = false
-    let aborted = false
-    let killed = false
-    let settled = false
-    let killTimer = null
-    let sigkillTimer = null
-    let abortListener = null
-    let finalizing = false
-    let windowsTreeKillPromise = null
-    let posixTreeKillPromise = null
-    let outputLogStream = null
-    let outputLogOwned = false
-    let outputLogError = null
-    let windowsGateStarted = !useWindowsProcessGate
-    let windowsStartRequestMayHaveArrived = false
-    let processStartFailed = false
-    let processStartError = null
-    let processIsolationFailed = false
-    let processIsolationError = null
-    let resolveWindowsGateReady
-    let windowsGateReadySettled = !useWindowsProcessGate
-    const windowsGateReadyPromise = useWindowsProcessGate
-      ? new Promise((resolveReady) => { resolveWindowsGateReady = resolveReady })
-      : null
-    const settleWindowsGateReady = (ready) => {
-      if (windowsGateReadySettled) return
-      windowsGateReadySettled = true
-      resolveWindowsGateReady?.(ready === true)
-    }
-    const hasTerminalIntent = () => finalizing || timedOut || aborted || killed || settled
-    child.once('error', () => settleWindowsGateReady(false))
-    child.once('exit', () => settleWindowsGateReady(false))
-    // READY is an IPC proof from this exact, still-inert gate. Only after that
-    // proof do we capture the identity cutoff and bind the Job Object. This
-    // avoids Windows clock-granularity races without adding a PID-reuse
-    // tolerance; START remains impossible until the bind succeeds.
-    const windowsTreeLeasePromise = windowsBindController
-      ? windowsGateReadyPromise.then((gateReady) => {
-          if (gateReady !== true) return null
-          return bindWindowsProcessTree({
-            pid: child.pid,
-            child,
-            signal: windowsBindController.signal,
-            sealedJob: true,
-          })
-        }).catch((error) => {
-          if (!hasTerminalIntent()) windowsBindError = error
-          return null
-        })
-      : null
-    const streamsPausedForLog = new Set()
-
-    if (useWindowsProcessGate) {
-      child.on('message', (message) => {
-        if (message?.protocol !== WINDOWS_PROCESS_GATE_PROTOCOL) return
-        if (message?.operation === 'READY') {
-          settleWindowsGateReady(true)
-          return
-        }
-        if (message?.operation === 'START_FAILED' && !windowsGateStarted && !hasTerminalIntent()) {
-          processStartFailed = true
-          processStartError = typeof message.error === 'string' && message.error
-            ? message.error
-            : 'Windows target process failed to start'
-          return
-        }
-        if (message?.operation !== 'STARTED' || windowsGateStarted || hasTerminalIntent()) return
-        windowsGateStarted = true
-        if (settled || finalizing || timedOut || aborted || killed) return
-        try {
-          onSpawn?.(child, {
-            targetPid: Number.isSafeInteger(message.pid) && message.pid > 0 ? message.pid : null,
-            supervisor: 'windows-process-gate',
-          })
-        } catch { /* observer must not affect execution */ }
-        if (settled || finalizing || timedOut || aborted || killed) return
-        if (hasStdinInput) child.stdin?.end(stdinInput)
-      })
-      void Promise.all([windowsTreeLeasePromise, windowsGateReadyPromise]).then(([lease, gateReady]) => {
-        if (hasTerminalIntent()) return
-        if (!lease || gateReady !== true) {
-          processIsolationFailed = true
-          processIsolationError = windowsBindError
-            ? (windowsBindError?.message || String(windowsBindError))
-            : 'Windows process isolation could not be established before execution'
-          if (windowsBindError) stderrBuf += windowsBindError?.message || String(windowsBindError)
-          killTree('SIGKILL', { markKilled: false })
-          return
-        }
-        if (settled || finalizing || timedOut || aborted || killed) return
-        try {
-          windowsStartRequestMayHaveArrived = true
-          child.send({
-            protocol: WINDOWS_PROCESS_GATE_PROTOCOL,
-            operation: 'START',
-            shellPath,
-            shellArgs,
-            cwd,
-            env: targetEnv,
-            hasStdinInput,
-            hasControlPipe,
-            windowsHide,
-            windowsVerbatimArguments,
-          }, (error) => {
-            if (!error || hasTerminalIntent()) return
-            processIsolationFailed = true
-            processIsolationError = error?.message || String(error)
-            stderrBuf += error?.message || String(error)
-            killTree('SIGKILL', { markKilled: false })
-          })
-        } catch (error) {
-          if (hasTerminalIntent()) return
-          processIsolationFailed = true
-          processIsolationError = error?.message || String(error)
-          stderrBuf += error?.message || String(error)
-          killTree('SIGKILL', { markKilled: false })
-        }
-      })
-    }
-
-    if (tailMode && fullOutputPath) {
-      try {
-        fs.mkdirSync(path.dirname(fullOutputPath), { recursive: true })
-        outputLogStream = fs.createWriteStream(fullOutputPath, { flags: 'wx' })
-        outputLogStream.once('open', () => { outputLogOwned = true })
-        outputLogStream.on('drain', () => {
-          for (const stream of streamsPausedForLog) stream.resume?.()
-          streamsPausedForLog.clear()
-        })
-        outputLogStream.on('error', (error) => {
-          outputLogError = error
-          for (const stream of streamsPausedForLog) stream.resume?.()
-          streamsPausedForLog.clear()
-        })
-      } catch (error) {
-        outputLogError = error
-      }
-    }
-
-    const stopBuffering = () => {
-      try { child.stdout?.destroy() } catch { /* noop */ }
-      try { child.stderr?.destroy() } catch { /* noop */ }
-      if (controlStream && !controlStream.readableEnded && !controlStream.destroyed) {
-        controlTruncated = true
-      }
-      try { controlStream?.destroy() } catch { /* noop */ }
-    }
-
-    if (hasControlPipe && !controlStream) {
-      controlError = 'control pipe fd3 is unavailable'
-    }
-    controlStream?.on('error', (error) => {
-      if (!controlError) controlError = error?.message || String(error)
-    })
-    controlStream?.on('data', (chunk) => {
-      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-      controlTotalBytes += bytes.length
-      const remaining = normalizedControlMaxBuffer - controlBufferedBytes
-      if (remaining <= 0) {
-        if (bytes.length > 0) controlTruncated = true
-        return
-      }
-      const kept = bytes.length > remaining ? bytes.subarray(0, remaining) : bytes
-      if (kept.length > 0) {
-        controlChunks.push(Buffer.from(kept))
-        controlBufferedBytes += kept.length
-      }
-      if (kept.length < bytes.length) controlTruncated = true
-    })
-
-    const trimTailBuffer = () => {
-      while (bufferedOutputBytes > maxBuffer && outputEvents.length > 0) {
-        truncated = true
-        const first = outputEvents[0]
-        const overflow = bufferedOutputBytes - maxBuffer
-        if (first.bytes <= overflow) {
-          outputEvents.shift()
-          bufferedOutputBytes -= first.bytes
-          continue
-        }
-        const kept = utf8Tail(first.text, first.bytes - overflow)
-        const keptBytes = Buffer.byteLength(kept, 'utf8')
-        bufferedOutputBytes -= first.bytes - keptBytes
-        first.text = kept
-        first.bytes = keptBytes
-      }
-    }
-
-    const collect = (stream, which) => {
-      stream?.setEncoding('utf8')
-      // ★ Lens-3 fix: child 还在写时 destroy 会触发 EPIPE,静默吃掉避免日志噪
-      stream?.on('error', () => { /* ignore EPIPE after destroy */ })
-      stream?.on('data', (chunk) => {
-        const text = String(chunk)
-        const bytes = Buffer.byteLength(text, 'utf8')
-        totalOutputBytes += bytes
-        if (typeof onOutput === 'function') {
-          // Live output is best-effort: a slow or throwing subscriber must
-          // never stall the child process or its buffer management.
-          try { onOutput({ stream: which === 'out' ? 'stdout' : 'stderr', chunk: text }) } catch { /* best-effort */ }
-        }
-        if (outputLogStream && !outputLogStream.destroyed) {
-          try {
-            if (!outputLogStream.write(text)) {
-              stream.pause?.()
-              streamsPausedForLog.add(stream)
-            }
-          } catch (error) {
-            outputLogError = error
-            stream.resume?.()
-            streamsPausedForLog.delete(stream)
-          }
-        }
-        if (tailMode) {
-          outputEvents.push({ which, text, bytes })
-          bufferedOutputBytes += bytes
-          trimTailBuffer()
-          return
-        }
-        if (truncated) return
-        const total = stdoutBuf.length + stderrBuf.length
-        const remaining = maxBuffer - total
-        if (remaining <= 0) { truncated = true; stopBuffering(); killTree('SIGTERM'); return }
-        const slice = text.length > remaining ? text.slice(0, remaining) : text
-        if (which === 'out') stdoutBuf += slice
-        else stderrBuf += slice
-        if (text.length > remaining) { truncated = true; stopBuffering(); killTree('SIGTERM') }
-      })
-    }
-    collect(child.stdout, 'out')
-    collect(child.stderr, 'err')
-
-    function killTree(signal, { markKilled = true, stopOutput = true } = {}) {
-      if (settled || child.pid == null) return
-      if (markKilled) killed = true
-      // Descendants can inherit the root process' stdout/stderr handles. On
-      // Windows that keeps ChildProcess `close` pending even after cmd.exe was
-      // killed, so stop reading before terminating the tree.
-      if (stopOutput) stopBuffering()
-      try {
-        if (isWin) {
-          // The bound native lease may still be walking descendants after the
-          // root emits `close`; finalization waits for its identity-safe proof.
-          if (!windowsTreeKillPromise) {
-            if (useWindowsProcessGate && !windowsStartRequestMayHaveArrived && !windowsGateStarted) {
-              settleWindowsGateReady(false)
-              windowsBindController?.abort()
-              void releaseWindowsProcessTree(windowsTreeLeasePromise)
-              const gateAlreadyExited = child.exitCode != null || child.signalCode != null
-              try {
-                windowsTreeKillPromise = Promise.resolve(gateAlreadyExited || child.kill('SIGKILL') === true)
-              } catch { windowsTreeKillPromise = Promise.resolve(false) }
-              return
-            }
-            // Once BIND succeeds for the original identity, the worker holds
-            // that root handle so later PID reuse cannot redirect cleanup.
-            windowsTreeKillPromise = terminateWindowsProcessTree({
-              pid: child.pid,
-              child,
-              killRootOnFailure: true,
-              leasePromise: windowsTreeLeasePromise,
-            })
-          }
-        } else {
-          // Hold one cleanup proof across root `close`. Otherwise a root that
-          // accepts SIGTERM can finalize and clear the SIGKILL timer while an
-          // ignoring descendant remains in the detached process group.
-          if (!posixTreeKillPromise) {
-            posixTreeKillPromise = terminateProcessTree({ pid: child.pid, child })
-          }
-        }
-      } catch { /* 进程可能已退出 */ }
-    }
-
-    const scheduleForceKill = () => {
-      if (sigkillTimer) clearTimeout(sigkillTimer)
-      sigkillTimer = setTimeout(() => killTree('SIGKILL'), GRACE_MS)
-    }
-
-    if (signal) {
-      abortListener = () => {
-        if (hasTerminalIntent()) return
-        aborted = true
-        killTree('SIGTERM')
-        scheduleForceKill()
-      }
-      signal.addEventListener('abort', abortListener, { once: true })
-      if (signal.aborted) abortListener()
-    }
-
-    killTimer = setTimeout(() => {
-      if (hasTerminalIntent()) return
-      timedOut = true
-      killTree('SIGTERM')
-      scheduleForceKill()
-    }, timeout)
-
-    const finalize = async (code, exitSignal) => {
-      if (settled || finalizing) return
-      finalizing = true
-      if (killTimer) clearTimeout(killTimer)
-      if (sigkillTimer) clearTimeout(sigkillTimer)
-      if (abortListener) signal?.removeEventListener('abort', abortListener)
-      let processTreeCleanupFailed = false
-      if (isWin && windowsTreeKillPromise) {
-        processTreeCleanupFailed = !(await windowsTreeKillPromise)
-        if (processIsolationFailed && !windowsStartRequestMayHaveArrived && !windowsGateStarted) {
-          processTreeCleanupFailed = false
-        }
-        // Even after every captured PID is gone, Windows can retain a closing
-        // cwd handle for a few scheduler ticks. Cancellation must not return
-        // until that handle has drained. A normal exit has already crossed the
-        // worker's two stable empty snapshots and does not need this extra
-        // cancellation-only fence.
-        if (timedOut || aborted || killed) {
-          await new Promise((resolveDrain) => {
-            setTimeout(resolveDrain, WINDOWS_TREE_HANDLE_DRAIN_MS)
-          })
-        }
-      } else if (isWin && windowsTreeLeasePromise) {
-        await releaseWindowsProcessTree(windowsTreeLeasePromise)
-      } else if (posixTreeKillPromise) {
-        processTreeCleanupFailed = !(await posixTreeKillPromise)
-      }
-      if (outputLogStream && !outputLogStream.destroyed) {
-        await new Promise((resolveLog) => {
-          let done = false
-          const finish = () => {
-            if (done) return
-            done = true
-            resolveLog()
-          }
-          outputLogStream.once('finish', finish)
-          outputLogStream.once('close', finish)
-          outputLogStream.once('error', finish)
-          outputLogStream.end()
-        })
-      }
-      if (tailMode) {
-        stdoutBuf = outputEvents
-          .filter((entry) => entry.which === 'out')
-          .map((entry) => entry.text)
-          .join('')
-        stderrBuf = outputEvents
-          .filter((entry) => entry.which === 'err')
-          .map((entry) => entry.text)
-          .join('')
-      }
-      let persistedFullOutputPath = null
-      if (tailMode && truncated && fullOutputPath && outputLogOwned && !outputLogError) {
-        persistedFullOutputPath = fullOutputPath
-      } else if (tailMode && fullOutputPath && outputLogOwned) {
-        try { await fs.promises.rm(fullOutputPath, { force: true }) } catch { /* best-effort cleanup */ }
-      }
-      if (
-        useWindowsProcessGate
-        && !windowsGateStarted
-        && !processIsolationFailed
-        && !aborted
-        && !timedOut
-      ) {
-        processStartFailed = true
-        if (!processStartError) {
-          processStartError = stderrBuf.trim() || 'Windows target process failed to start'
-        }
-      }
-      settled = true
-      // ★ Lens-2 fix: 不再无条件给已退出 child 的 pgid 再发 SIGTERM
-      // 原因:child.pid 在 close 后可能被 OS 复用,主动 kill(-pid) 会误杀别人。
-      // 只在 timedOut 路径杀进程组(那时仍然 alive,killTree 内已处理)。
-      // 孤儿孙进程的清理由 timedOut 分支负责,正常退出场景假定 child 自己已带走孙
-      // (POSIX 下 detached + setsid 不会自动带,但 detached process 退出后 init 收;
-      //  这是 trade-off:可控误杀风险 vs. 罕见孤儿。选可控。)
-      resolve({
-        stdout: stdoutBuf,
-        stderr: stderrBuf,
-        code: processStartFailed || processIsolationFailed
-          ? null
-          : (typeof code === 'number' ? code : null),
-        signal: exitSignal || null,
-        timedOut,
-        killed,
-        processStartFailed,
-        processStartError,
-        processIsolationFailed,
-        processIsolationError,
-        processTreeCleanupFailed,
-        truncated,
-        aborted,
-        totalOutputBytes,
-        ...(hasControlPipe
-          ? {
-              control: Buffer.concat(controlChunks, controlBufferedBytes),
-              controlError,
-              controlTruncated,
-              controlTotalBytes,
-            }
-          : {}),
-        ...(persistedFullOutputPath ? { fullOutputPath: persistedFullOutputPath } : {}),
-        ...(outputLogError ? { outputLogError: outputLogError?.message || String(outputLogError) } : {}),
-      })
-    }
-
-    child.on('error', (err) => {
-      if (useWindowsProcessGate && hasTerminalIntent()) {
-        windowsBindController?.abort()
-        void finalize(null, null)
-        return
-      }
-      const message = err?.message || String(err)
-      stderrBuf = (stderrBuf || '') + message
-      if (useWindowsProcessGate) {
-        settleWindowsGateReady(false)
-        processIsolationFailed = true
-        processIsolationError = message
-      } else {
-        processStartFailed = true
-        processStartError = message
-      }
-      windowsBindController?.abort()
-      void finalize(null, null)
-    })
-    child.on('exit', () => {
-      if (isWin && (cleanupWindowsTreeOnExit || windowsTreeLeasePromise)) {
-        killTree('SIGTERM', { markKilled: false, stopOutput: false })
-      }
-      windowsBindController?.abort()
-    })
-    child.on('close', (code, signal) => {
-      resolveWindowsGateReady?.(false)
-      void finalize(code, signal)
-    })
+    const runtime = createProcessRuntime({
+      shellPath, shellArgs, cwd, env, inheritEnvKeys, timeout, maxBuffer,
+      windowsHide, windowsVerbatimArguments, signal, overflowMode,
+      fullOutputPath, onOutput, stdinInput, onSpawn, cleanupWindowsTreeOnExit,
+      controlPipe, controlMaxBuffer,
+    }, spawnProcessFn, resolve)
+    runtime.controlStream = runtime.hasControlPipe ? runtime.child.stdio?.[3] : null
+    configureWindowsProcessGate(runtime)
+    configureOutputLog(runtime)
+    attachProcessLifecycle(runtime)
   })
 }
 

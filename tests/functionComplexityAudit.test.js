@@ -25,11 +25,11 @@ const schemaTable = {
   assert.equal(records[0].bodyLines, 3)
 })
 
-test('function audit parses the server tree and excludes generated worker source templates', () => {
+test('function audit enforces zero complex violations and excludes generated worker source templates', () => {
   const result = auditFunctionLengths()
   assert.deepEqual(result.parseErrors, [])
   assert.equal(result.totalFunctions > 7_000, true)
-  assert.equal(result.violations.length > 0, true)
+  assert.equal(result.violations.length, 0)
   assert.equal(result.violations.some((item) => /WorkerSource\.js$/u.test(item.file)), false)
 
   const schemaSource = fs.readFileSync(

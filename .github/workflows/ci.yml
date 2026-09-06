@@ -54,6 +54,10 @@ jobs:
       - name: Static runtime contract types
         run: npm run typecheck
 
+      - name: Function complexity gate
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '22.x'
+        run: npm run audit:functions -- --check
+
       - name: Offline agent capability gate
         env:
           TEST_CONCURRENCY: 1
