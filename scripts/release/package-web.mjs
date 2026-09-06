@@ -24,6 +24,7 @@ export const WEB_RELEASE_ENTRIES = Object.freeze([
   'scripts/healthcheck.js',
   'src/data.js',
   'src/data/skillCatalog.js',
+  'src/i18n/domains/skillsMarket.js',
   'src/lib/officeExport/documentExport.js',
   'src/lib/officeExport/officeCommon.js',
   'src/lib/officeExport/spreadsheetExport.js',

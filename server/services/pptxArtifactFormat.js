@@ -1,28 +1,22 @@
 import { officeImageSize } from './officeImageLayout.js'
 import { validatePreparedOfficeImages } from './officePreparedImageValidation.js'
 import {
-  addFooter,
-  renderBullets,
-  renderChart,
-  renderCover,
-  renderEnd,
-  renderKpi,
-  renderProcess,
-  renderQuote,
-  renderSection,
-  renderSplit,
-  renderStatement,
+  addFooter, renderBullets, renderChart, renderCover, renderEnd, renderKpi,
+  renderProcess, renderQuote, renderSection, renderSplit, renderStatement, renderTable,
 } from './pptxArtifactSlideRendering.js'
+import { injectEaFontWithReceipt } from '../../src/lib/pptCore.js'
+import { PPTX_LIMITS } from './pptxArtifactContract.js'
+import { applyPptxRunFonts, resolvePptxDesign, slidePptxDesign } from './pptxArtifactDesign.js'
+import { addPreparedPptxImage, renderPptxElements } from './pptxArtifactElements.js'
 import {
-  HEAD_FONT, BODY_FONT, CJK_FONT,
-  PREMIUM_THEMES, resolvePremiumTheme,
-  normalizeBullets, injectEaFontWithReceipt,
-} from '../../src/lib/pptCore.js'
+  fullPptxBullets, fullPptxKpis, invalidPptx, normalizePptxChart, pptxText,
+} from './pptxArtifactValidation.js'
 
-/* ════════════════════════ PPTX (premium) ════════════════════════ */
-// fonts / themes / shape helper / normalizeBullets 均来自 src/lib/pptCore.js
-const THEMES = PREMIUM_THEMES
-const resolvePptxTheme = resolvePremiumTheme
+const RENDERERS = Object.freeze({
+  cover: renderCover, section: renderSection, kpi: renderKpi, chart: renderChart,
+  table: renderTable, statement: renderStatement, split: renderSplit,
+  process: renderProcess, quote: renderQuote, bullets: renderBullets, end: renderEnd,
+})
 
 function resolveGeneratedAt(value) {
   const date = value == null ? new Date() : new Date(value)
@@ -30,7 +24,7 @@ function resolveGeneratedAt(value) {
   return date
 }
 
-async function normalizePptxPackage(buffer, generatedAt) {
+async function normalizePptxPackage(buffer, generatedAt, design) {
   const JSZip = (await import('jszip')).default
   const zip = await JSZip.loadAsync(buffer)
   const coreFile = zip.file('docProps/core.xml')
@@ -38,233 +32,200 @@ async function normalizePptxPackage(buffer, generatedAt) {
     const iso = generatedAt.toISOString().replace(/\.\d{3}Z$/, 'Z')
     const core = await coreFile.async('string')
     zip.file('docProps/core.xml', core
-      .replace(/(<dcterms:created\b[^>]*>)[^<]*(<\/dcterms:created>)/, `$1${iso}$2`)
-      .replace(/(<dcterms:modified\b[^>]*>)[^<]*(<\/dcterms:modified>)/, `$1${iso}$2`))
+      .replace(/(<dcterms:created\b[^>]*>)[^<]*(<\/dcterms:created>)/, '$1' + iso + '$2')
+      .replace(/(<dcterms:modified\b[^>]*>)[^<]*(<\/dcterms:modified>)/, '$1' + iso + '$2'))
+  }
+  for (const entry of Object.values(zip.files)) {
+    if (/^ppt\/(?:slides|charts|notesSlides)\/[^/]+\.xml$/u.test(entry.name)) {
+      const xml = await entry.async('string')
+      const rewritten = applyPptxRunFonts(xml, design)
+      if (rewritten !== xml) zip.file(entry.name, rewritten)
+    }
   }
   for (const entry of Object.values(zip.files)) entry.date = new Date(generatedAt.getTime())
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
 }
 
-function normalizeKpis(slide = {}) {
-  const raw = Array.isArray(slide.kpi) ? slide.kpi : Array.isArray(slide.kpis) ? slide.kpis : []
-  return raw
-    .filter((k) => k && (k.value != null))
-    .slice(0, 4)
-    .map((k) => ({
-      value: String(k.value),
-      label: String(k.label || ''),
-      delta: k.delta ? String(k.delta) : '',
-      unit: k.unit ? String(k.unit) : '',
-    }))
-}
-
-function normalizeChart(slide = {}) {
-  const c = slide.chart
-  if (!c || typeof c !== 'object') return null
-  const type = ['bar', 'bar-stacked', 'line', 'pie'].includes(c.type) ? c.type : 'bar'
-  const categories = Array.isArray(c.categories) ? c.categories.map((x) => String(x)) : []
-  const seriesRaw = Array.isArray(c.series) ? c.series : []
-  const series = seriesRaw
-    .map((s) => ({
-      name: String(s?.name || ''),
-      values: Array.isArray(s?.values) ? s.values.map(Number).filter((n) => Number.isFinite(n)) : [],
-    }))
-    .filter((s) => s.values.length > 0)
-  if (!series.length) return null
-  return { type, categories, series }
-}
-
-function requireExplicitChart(slide, slideIndex) {
-  const chart = slide?.chart
-  const path = `slides[${slideIndex}].chart`
+function requireExplicitChart(slide, path) {
+  const chart = slide.chart
   if (!chart || typeof chart !== 'object' || Array.isArray(chart)) {
-    throw new TypeError(`${path} must be an object when layout is "chart"`)
+    throw new TypeError(path + '.chart must be an object when layout is "chart"')
   }
   if (!Array.isArray(chart.series) || chart.series.length === 0) {
-    throw new TypeError(`${path}.series must contain at least one series`)
+    throw new TypeError(path + '.chart.series must contain at least one series')
   }
-  chart.series.forEach((series, seriesIndex) => {
+  chart.series.forEach((series, index) => {
     if (!series || typeof series !== 'object' || Array.isArray(series)) {
-      throw new TypeError(`${path}.series[${seriesIndex}] must be an object`)
+      throw new TypeError(path + '.chart.series[' + index + '] must be an object')
     }
     if (!Array.isArray(series.values) || series.values.length === 0) {
-      throw new TypeError(`${path}.series[${seriesIndex}].values must contain at least one finite number`)
-    }
-    if (!series.values.some((value) => Number.isFinite(Number(value)))) {
-      throw new TypeError(`${path}.series[${seriesIndex}].values must contain at least one finite number`)
+      throw new TypeError(path + '.chart.series[' + index + '].values must contain at least one finite number')
     }
   })
-  return normalizeChart(slide)
+  return normalizePptxChart({ type: 'bar', ...chart }, path + '.chart')
 }
 
-function requireExplicitLayoutContent({ layout, slideIndex, bullets, kpis }) {
+function legacyContent(source, index, subtitle) {
+  const path = 'slides[' + index + ']'
+  const layout = String(source.layout || '').toLowerCase()
+  const bullets = fullPptxBullets(source, path)
+  const kpis = fullPptxKpis(source, path)
   if (layout === 'kpi' && kpis.length === 0) {
-    throw new TypeError(
-      `slides[${slideIndex}].kpi must contain at least one item with a value when layout is "kpi"`,
-    )
+    throw new TypeError(path + '.kpi must contain at least one item with a value when layout is "kpi"')
   }
   if (['process', 'bullets', 'split'].includes(layout) && bullets.length === 0) {
-    throw new TypeError(
-      `slides[${slideIndex}].bullets or body must contain at least one non-empty item when layout is "${layout}"`,
-    )
+    throw new TypeError(path + '.bullets or body must contain at least one non-empty item when layout is "' + layout + '"')
+  }
+  const chart = layout === 'chart' ? requireExplicitChart(source, path)
+    : source.chart ? normalizePptxChart({ type: 'bar', ...source.chart }, path + '.chart') : null
+  const subtitleText = pptxText(source.subtitle ?? (index === 0 ? subtitle : ''), path + '.subtitle')
+  const quote = source.quote
+  if (quote !== undefined) {
+    if (typeof quote === 'string') pptxText(quote, path + '.quote')
+    else if (quote && typeof quote === 'object') {
+      pptxText(quote.text, path + '.quote.text')
+      if (quote.source !== undefined) pptxText(quote.source, path + '.quote.source', 500)
+    } else invalidPptx(path + '.quote', 'must contain text')
+  }
+  return {
+    path, bullets, kpis, chart, quote, table: source.table,
+    subtitle: subtitleText,
+    titleText: pptxText(source.title ?? 'Slide ' + (index + 1), path + '.title'),
+    eyebrow: pptxText(source.eyebrow ?? '', path + '.eyebrow', 500),
   }
 }
 
-function imageAltText(image, imageIndex) {
-  const preferred = String(image?.alt || '').trim()
-  const fallback = String(image?.sourceName || '').trim() || `Image ${imageIndex + 1}`
-  return Array.from(preferred || fallback, (character) => {
+function pickLayout(source, content) {
+  const explicit = String(source.layout || '').toLowerCase()
+  if (explicit) {
+    if (!Object.hasOwn(RENDERERS, explicit)) invalidPptx(content.path + '.layout', 'is not supported')
+    return explicit
+  }
+  if (content.chart) return 'chart'
+  if (content.table) return 'table'
+  if (content.kpis.length) return 'kpi'
+  if (content.quote) return 'quote'
+  return content.bullets.length > 1 ? 'bullets' : 'statement'
+}
+
+function validateLayoutEvidence(layout, content) {
+  for (const [present, expected, field] of [
+    [Boolean(content.chart), 'chart', 'chart'],
+    [Boolean(content.table), 'table', 'table'],
+    [content.kpis.length > 0, 'kpi', 'kpi'],
+    [Boolean(content.quote), 'quote', 'quote'],
+  ]) {
+    if (present && layout !== expected) {
+      invalidPptx(content.path + '.' + field, 'requires layout="' + expected + '" or a canvas element, so evidence is not discarded')
+    }
+  }
+}
+
+function imageAltText(image, index) {
+  const text = String(image.alt || image.sourceName || 'Image ' + (index + 1))
+  return Array.from(text, (character) => {
     const code = character.charCodeAt(0)
     return code <= 0x1f || code === 0x7f ? ' ' : character
   }).join('').trim().slice(0, 500)
 }
 
-/* ── Layout picker（内容感知）── */
-
-function pickLayout(slide, i, total) {
-  const explicit = String(slide?.layout || '').toLowerCase()
-  if (explicit && ['cover', 'section', 'kpi', 'statement', 'split', 'process', 'chart', 'quote', 'bullets', 'end'].includes(explicit)) {
-    return explicit
-  }
-  if (i === 0) return 'cover'
-  if (i === total - 1 && /thank|感谢|结束|结语|致谢|q\s*&\s*a/i.test(slide?.title || '')) return 'end'
-  if (normalizeChart(slide)) return 'chart'
-  if (normalizeKpis(slide).length) return 'kpi'
-  if (slide?.quote) return 'quote'
-  const bullets = normalizeBullets(slide)
-  if (bullets.length === 0) return 'statement'
-  if (bullets.length === 1) return 'statement'
-  if (bullets.length === 2 && bullets.every((b) => b.length < 30)) return 'split'
-  if (bullets.some((b) => /^\d+[.、]|→|⇒|步骤|阶段/.test(b)) && bullets.length <= 5) return 'process'
-  return 'bullets'
+function prepareImages(images, total) {
+  return validatePreparedOfficeImages(images, { targetCount: total, targetKind: 'slide deck' })
+    .map((image, index) => Object.freeze({
+      ...image,
+      alt: imageAltText(image, index),
+      dataUri: 'data:' + (image.extension === 'jpg' ? 'image/jpeg' : 'image/png')
+        + ';base64,' + image.buffer.toString('base64'),
+    }))
 }
 
-/* ── 主入口 ── */
+function legacyImagesForSlide(images, index, total) {
+  return images.filter((image, imageIndex) => (
+    (image.targetIndex || ((imageIndex % total) + 1)) === index + 1
+  ))
+}
 
-export async function buildPptxArtifactBuffer({ title = 'Presentation', subtitle = '', theme: themeName, brand = 'Gugo', slides = [], preparedImages = [], generatedAt = null } = {}) {
-  if (!Array.isArray(slides) || slides.length === 0) {
-    throw new Error('slides 不能为空')
-  }
-  const total = slides.length
-  const resolvedGeneratedAt = resolveGeneratedAt(generatedAt)
-  const officeImages = validatePreparedOfficeImages(preparedImages, {
-    targetCount: total,
-    targetKind: 'slide deck',
-  }).map((image) => Object.freeze({
-    ...image,
-    mimeType: image.extension === 'jpg' ? 'image/jpeg' : 'image/png',
-    dataUri: `data:${image.extension === 'jpg' ? 'image/jpeg' : 'image/png'};base64,${image.buffer.toString('base64')}`,
-  }))
-  const PptxGen = (await import('pptxgenjs')).default
-  const pptx = new PptxGen()
-  pptx.layout = 'LAYOUT_WIDE'   // 13.333 x 7.5 in
-  pptx.title = title
-  pptx.author = brand
-  pptx.lang = 'zh-CN'
-  pptx.subject = title
-  pptx.company = brand
-  pptx.theme = {
-    headFontFace: HEAD_FONT,
-    bodyFontFace: BODY_FONT,
-    lang: 'zh-CN',
-  }
-
-  const explicit = Object.hasOwn(THEMES, themeName) ? THEMES[themeName] : null
-  const theme = explicit || resolvePptxTheme(`${title} ${subtitle} ${slides.map((s) => s?.title || '').join(' ')}`)
-
-  let sectionCounter = 0
-
-  for (let i = 0; i < slides.length; i++) {
-    const s = slides[i] || {}
-    const slide = pptx.addSlide()
-    const explicitLayout = String(s.layout || '').toLowerCase()
-    const layout = pickLayout(s, i, total)
-    const titleText = String(s.title || `Slide ${i + 1}`)
-    const eyebrow = s.eyebrow
-    const bullets = normalizeBullets(s)
-    const kpis = normalizeKpis(s)
-    requireExplicitLayoutContent({ layout: explicitLayout, slideIndex: i, bullets, kpis })
-    const chart = explicitLayout === 'chart'
-      ? requireExplicitChart(s, i)
-      : normalizeChart(s)
-
-    switch (layout) {
-      case 'cover':
-        renderCover(slide, pptx, theme, {
-          deckTitle: title,
-          subtitle: subtitle || s.subtitle || bullets[0] || '',
-          brand,
-          generatedAt: resolvedGeneratedAt,
-        })
-        break
-      case 'section':
-        sectionCounter += 1
-        renderSection(slide, pptx, theme, { titleText, eyebrow, index: sectionCounter, brand })
-        break
-      case 'statement':
-        renderStatement(slide, pptx, theme, { titleText, bullets, brand })
-        break
-      case 'split':
-        renderSplit(slide, pptx, theme, { titleText, bullets, eyebrow })
-        break
-      case 'process':
-        renderProcess(slide, pptx, theme, { titleText, bullets, eyebrow })
-        break
-      case 'kpi':
-        renderKpi(slide, pptx, theme, { titleText, kpis, eyebrow })
-        break
-      case 'chart':
-        renderChart(slide, pptx, theme, { titleText, chart, eyebrow })
-        break
-      case 'quote':
-        renderQuote(slide, pptx, theme, { titleText, quote: s.quote, eyebrow })
-        break
-      case 'end':
-        renderEnd(slide, pptx, theme, { titleText, bullets, brand })
-        break
-      case 'bullets':
-      default:
-        renderBullets(slide, pptx, theme, { titleText, bullets, eyebrow, brand })
-        break
+function renderLegacyImages(slide, images, design, path) {
+  const automatic = images.filter((image) => image.x === undefined || image.y === undefined)
+  for (const image of images) {
+    let box
+    if (image.x !== undefined && image.y !== undefined) {
+      const size = officeImageSize(image, { defaultWidth: design.width * 0.3, maxWidth: design.width, maxHeight: design.height })
+      box = { x: image.x, y: image.y, w: size.width, h: size.height }
+    } else {
+      const slot = automatic.indexOf(image)
+      box = {
+        x: image.x ?? design.width * 0.60,
+        y: image.y ?? design.height * (0.10 + slot * 0.80 / automatic.length),
+        w: design.width * 0.34,
+        h: design.height * 0.74 / automatic.length,
+      }
     }
-
-    // cover / end / section 不画 footer，节奏更稳
-    if (!['cover', 'end', 'section'].includes(layout)) {
-      addFooter(slide, pptx, theme, i, total, brand)
+    if (box.x + box.w > design.width + 1e-9 || box.y + box.h > design.height + 1e-9) {
+      invalidPptx(path + '.images', 'must fit inside the chosen slide size')
     }
-
-    const slideImages = officeImages.filter((image, imageIndex) => (
-      (image.targetIndex || ((imageIndex % total) + 1)) === i + 1
-    ))
-    slideImages.forEach((image, imageIndex) => {
-      const size = officeImageSize(image, { defaultWidth: 4.1, maxWidth: 11.8, maxHeight: 5.8 })
-      const x = image.x ?? Math.max(0.75, 12.55 - size.width - (imageIndex * 0.18))
-      const y = image.y ?? Math.max(0.9, 6.55 - size.height - (imageIndex * 0.18))
-      slide.addImage({
-        data: image.dataUri,
-        x,
-        y,
-        w: size.width,
-        h: size.height,
-        altText: imageAltText(image, imageIndex),
-      })
+    addPreparedPptxImage(slide, image, box, {
+      fit: image.x !== undefined && image.y !== undefined ? 'stretch' : 'contain',
     })
   }
-
-  let buffer = await pptx.write({ outputType: 'nodebuffer' })
-
-  // 后处理 theme.xml 注入 east-asia 字体，保证 Win/Mac Office 中文字形一致
-  const injection = await injectEaFontWithReceipt(buffer, CJK_FONT)
-  buffer = await normalizePptxPackage(Buffer.from(injection.bytes), resolvedGeneratedAt)
-
-  return {
-    buffer,
-    themeName: explicit ? themeName : undefined,
-    generatedAt: resolvedGeneratedAt.toISOString(),
-    fontInjection: Object.freeze({ status: injection.status, font: CJK_FONT, ...(injection.warning ? { warning: injection.warning } : {}) }),
-  }
 }
 
-/* ── 注入 east-asia 字体（让 CJK 渲染稳定） ──
- * 实现已下沉到 src/lib/pptCore.js#injectEaFont
- */
+function renderSlide(pptx, source, index, inputs) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) invalidPptx('slides[' + index + ']', 'must be an object')
+  const path = 'slides[' + index + ']'
+  const design = slidePptxDesign(inputs.design, source, path)
+  const slide = pptx.addSlide()
+  slide.background = { color: design.theme.bg }
+  if (Object.hasOwn(source, 'elements') || source.layout === 'canvas') {
+    renderPptxElements(slide, pptx, source, design, inputs.images, index)
+  } else {
+    const content = legacyContent(source, index, inputs.subtitle)
+    const layout = pickLayout(source, content)
+    validateLayoutEvidence(layout, content)
+    if (layout !== 'cover' && content.subtitle) content.bullets.unshift(content.subtitle)
+    const images = legacyImagesForSlide(inputs.images, index, inputs.total)
+    const automaticImages = images.some((image) => image.x === undefined || image.y === undefined)
+    const textDesign = automaticImages ? { ...design, width: design.width * 0.56 } : design
+    RENDERERS[layout](slide, pptx, textDesign, content)
+    renderLegacyImages(slide, images, design, path)
+  }
+  if (source.notes !== undefined) slide.addNotes(pptxText(source.notes, path + '.notes'))
+  addFooter(slide, pptx, design, index, inputs.total, inputs.brand, inputs.generatedAt)
+}
+
+export async function buildPptxArtifactBuffer({
+  title = 'Presentation', subtitle = '', theme, design, brand = '',
+  slides = [], preparedImages = [], generatedAt = null,
+} = {}) {
+  if (!Array.isArray(slides) || slides.length === 0) throw new Error('slides 不能为空')
+  if (slides.length > PPTX_LIMITS.slides) invalidPptx('slides', 'must contain at most ' + PPTX_LIMITS.slides + ' slides')
+  pptxText(title, 'title')
+  pptxText(subtitle, 'subtitle')
+  pptxText(brand, 'brand', 500)
+  const resolvedGeneratedAt = resolveGeneratedAt(generatedAt)
+  const resolvedDesign = resolvePptxDesign({ title, subtitle, slides, theme, design })
+  const images = prepareImages(preparedImages, slides.length)
+  const PptxGen = (await import('pptxgenjs')).default
+  const pptx = new PptxGen()
+  pptx.defineLayout({ name: 'GUGO_DESIGN', width: resolvedDesign.width, height: resolvedDesign.height })
+  pptx.layout = 'GUGO_DESIGN'
+  pptx.title = title
+  pptx.author = brand
+  pptx.company = brand
+  pptx.subject = title
+  pptx.lang = 'zh-CN'
+  pptx.theme = { headFontFace: resolvedDesign.headingFont, bodyFontFace: resolvedDesign.bodyFont, lang: 'zh-CN' }
+  const inputs = { design: resolvedDesign, images, total: slides.length, subtitle, brand, generatedAt: resolvedGeneratedAt }
+  slides.forEach((slide, index) => renderSlide(pptx, slide, index, inputs))
+  const buffer = await pptx.write({ outputType: 'nodebuffer' })
+  const injection = await injectEaFontWithReceipt(buffer, resolvedDesign.eastAsianFont)
+  return {
+    buffer: await normalizePptxPackage(Buffer.from(injection.bytes), resolvedGeneratedAt, resolvedDesign),
+    themeName: resolvedDesign.themeName,
+    generatedAt: resolvedGeneratedAt.toISOString(),
+    fontInjection: Object.freeze({
+      status: injection.status, font: resolvedDesign.eastAsianFont,
+      ...(injection.warning ? { warning: injection.warning } : {}),
+    }),
+  }
+}

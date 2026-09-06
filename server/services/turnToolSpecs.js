@@ -87,9 +87,8 @@ function toolName(spec) {
   return String(spec?.function?.name || '')
 }
 
-// When no workspace/local-path authority is active, the model receives only
-// controls that can ask for that authority or safely manage the current turn.
-// Everything else is restored from the real persisted access state below.
+// Local tools require workspace/path authority. Turn controls and standalone
+// web research do not; their independent execution policies still apply.
 const WORKSPACE_INDEPENDENT_CONTROL_TOOLS = new Set([
   'manage_todos',
   'read_artifact_source',
@@ -100,6 +99,7 @@ const WORKSPACE_INDEPENDENT_CONTROL_TOOLS = new Set([
   'sleep_until',
 ])
 const WORKSPACE_INDEPENDENT_CONNECTOR_TOOLS = new Set(CONNECTOR_TOOL_NAMES)
+const WORKSPACE_INDEPENDENT_WEB_TOOLS = new Set(['web_search', 'fetch_url'])
 const DIRECTORY_READ_TOOLS = new Set([
   'list_directory', 'grep_code', 'find_symbol', 'list_imports',
 ])
@@ -199,6 +199,8 @@ function workspaceToolVisible(spec, capabilities, {
   if (SHELL_TOOLS.has(name)) return capabilities.shell || capabilities.shellRequestable
   if (GIT_READ_TOOLS.has(name)) return capabilities.git
   if (GIT_WRITE_TOOLS.has(name)) return capabilities.gitWrite
+  // Standalone web research retains turn, URL and approval policies without filesystem authority.
+  if (WORKSPACE_INDEPENDENT_WEB_TOOLS.has(name)) return true
   // Non-local dynamic capability providers and connected apps own their own
   // capability and approval boundaries; workspace grants are unrelated.
   const dynamicState = dynamicToolSpecRegistrationState(spec, { userId })

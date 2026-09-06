@@ -166,8 +166,8 @@ test('composer keeps restrained elevation while tool rows stay grounded', () => 
   assert.match(composerSource, /min-h-\[108px\][\s\S]{0,120}rounded-\[22px\]/)
   assert.match(composerSource, /chat-composer-surface/)
   assert.doesNotMatch(composerSource, /focus-within:-translate-y-px|focus-within:border-blue/)
-  assert.match(cssRule('.chat-composer-surface'), /box-shadow:[\s\S]*?0 12px 32px/)
-  assert.match(cssRule('.chat-composer-surface:focus-within'), /box-shadow:[\s\S]*?0 14px 38px/)
+  assert.match(cssRule('.chat-composer-surface'), /box-shadow:[\s\S]*?0 4px 16px/)
+  assert.match(cssRule('.chat-composer-surface:focus-within'), /box-shadow:[\s\S]*?0 6px 20px/)
   assert.match(cssRule('.chat-composer-project-strip'), /width:\s*fit-content/)
   assert.match(cssRule('.chat-composer-project-strip'), /margin-bottom:\s*0\.5rem/)
 

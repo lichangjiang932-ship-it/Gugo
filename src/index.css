@@ -575,8 +575,8 @@ html[data-animations="false"] *::after {
   border-color: rgb(var(--color-ink-rgb) / 0.085);
   background: rgb(var(--color-paper-rgb) / 0.985);
   box-shadow:
-    0 12px 32px rgb(var(--color-ink-rgb) / 0.075),
-    0 1px 2px rgb(var(--color-ink-rgb) / 0.04);
+    0 4px 16px rgb(var(--color-ink-rgb) / 0.045),
+    0 1px 2px rgb(var(--color-ink-rgb) / 0.035);
   transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
 }
 
@@ -598,12 +598,12 @@ html[data-animations="false"] *::after {
 }
 
 .chat-composer-surface:focus-within {
-  border-color: rgb(var(--color-accent-rgb) / 0.55);
+  border-color: rgb(var(--color-focus-rgb) / 0.45);
   background: rgb(var(--color-paper-rgb));
   box-shadow:
-    0 0 0 3px rgb(var(--color-accent-rgb) / 0.08),
-    0 14px 38px rgb(var(--color-ink-rgb) / 0.095),
-    0 1px 3px rgb(var(--color-ink-rgb) / 0.045);
+    0 0 0 3px rgb(var(--color-focus-rgb) / 0.07),
+    0 6px 20px rgb(var(--color-ink-rgb) / 0.055),
+    0 1px 2px rgb(var(--color-ink-rgb) / 0.035);
 }
 
 .chat-composer-input {
@@ -619,6 +619,27 @@ html[data-animations="false"] *::after {
 
 .chat-composer-primary-action {
   box-shadow: 0 2px 7px rgb(var(--color-ink-rgb) / 0.16);
+}
+
+.chat-scroll-region {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--color-ink-rgb) / 0.2) transparent;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .chat-composer-action-button,
+  .chat-composer-primary-action,
+  .chat-composer [data-testid="composer-stop-action"] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-composer-surface,
+  .chat-chrome-button {
+    transition: none;
+  }
 }
 
 .chat-chrome-button {

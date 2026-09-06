@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback } from 'react'
 import { PanelLeftClose, PanelLeftOpen, Plus, Search } from 'lucide-react'
 import { useLocation, useNavigate } from '../lib/router.jsx'
 import { useAppContext } from '../store/AppContext'
@@ -11,17 +11,10 @@ import AccountArea from './leftRail/AccountArea.jsx'
 import LoginModal from './leftRail/LoginModal.jsx'
 import SessionList from './leftRail/SessionList.jsx'
 import useLeftRailController from './leftRail/useLeftRailController.js'
+import useLeftRailDisclosure from './leftRail/useLeftRailDisclosure.js'
+import './leftRail/LeftRail.css'
 
-const COLLAPSED_KEY = 'gugo:left-rail-collapsed'
 const NARROW_RAIL_QUERY = '(max-width: 959px)'
-
-function initialCollapsed() {
-  try { return window.localStorage?.getItem(COLLAPSED_KEY) === '1' } catch { return false }
-}
-
-function initialNarrowViewport() {
-  try { return window.matchMedia?.(NARROW_RAIL_QUERY).matches === true } catch { return false }
-}
 
 export default function LeftRail() {
   const navigate = useNavigate()
@@ -30,10 +23,18 @@ export default function LeftRail() {
   const { t } = useT()
   const toast = useToast()
   const controller = useLeftRailController({ authMode: state.authMode, dispatch, location, navigate, t, toast })
-  const [collapsedPreference, setCollapsedPreference] = useState(initialCollapsed)
-  const [narrowViewport, setNarrowViewport] = useState(initialNarrowViewport)
-  const [mobileExpanded, setMobileExpanded] = useState(false)
-  const collapsed = narrowViewport ? !mobileExpanded : collapsedPreference
+  const { closeSessionMenu, setAccountMenuOpen } = controller
+  const closeRailMenus = useCallback(() => {
+    closeSessionMenu()
+    setAccountMenuOpen(false)
+  }, [closeSessionMenu, setAccountMenuOpen])
+  const {
+    collapsed, closeMobileRail, mobileExpanded, narrowViewport, railRef, setRailCollapsed, toggleRef,
+  } = useLeftRailDisclosure({
+    mediaQuery: NARROW_RAIL_QUERY,
+    onCollapse: closeRailMenus,
+    hasOpenMenu: controller.openMenuId !== null || controller.accountMenuOpen,
+  })
   const railWidthClass = collapsed
     ? 'w-[60px] max-w-full px-2 py-2.5'
     : narrowViewport
@@ -41,25 +42,6 @@ export default function LeftRail() {
       : 'w-[clamp(280px,20vw,320px)] min-w-[280px] max-w-[320px] px-2.5 py-2.5'
   const sessions = state.sessions.filter((session) => !session.archivedAt)
 
-  useEffect(() => {
-    const media = window.matchMedia?.(NARROW_RAIL_QUERY)
-    if (!media) return undefined
-    const onChange = (event) => {
-      setNarrowViewport(event.matches)
-      setMobileExpanded(false)
-    }
-    media.addEventListener?.('change', onChange)
-    return () => media.removeEventListener?.('change', onChange)
-  }, [])
-
-  const closeMobileRail = () => { if (narrowViewport) setMobileExpanded(false) }
-  const setRailCollapsed = (next) => {
-    controller.closeSessionMenu()
-    controller.setAccountMenuOpen(false)
-    if (narrowViewport) { setMobileExpanded(!next); return }
-    setCollapsedPreference(next)
-    try { window.localStorage?.setItem(COLLAPSED_KEY, next ? '1' : '0') } catch { /* storage is optional */ }
-  }
   const handleNewChat = () => { controller.closeSessionMenu(); closeMobileRail(); dispatch({ type: 'START_NEW_DRAFT' }); navigate('/chat') }
   const handleProjectToggle = (_project, { expanded } = {}) => {
     if (!expanded) return
@@ -126,22 +108,22 @@ export default function LeftRail() {
     }
   }
 
-  const navButton = (Icon, label, onClick, active = false) => <button type="button" onClick={onClick} title={collapsed ? label : undefined} aria-label={label} className={`flex h-9 w-full items-center rounded-control text-[13px] transition-colors ${collapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} ${active ? 'bg-ink/[0.065] font-medium text-ink' : 'text-ink-soft hover:bg-ink/[0.045] hover:text-ink'}`}><Icon className="h-[18px] w-[18px] shrink-0" />{!collapsed && <span className="truncate">{label}</span>}</button>
+  const navButton = (Icon, label, onClick, active = false) => <button type="button" onClick={onClick} title={collapsed ? label : undefined} aria-label={label} className={`left-rail-nav-button flex h-9 w-full items-center rounded-control text-[13px] transition-colors ${collapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} ${active ? 'bg-ink/[0.065] font-medium text-ink' : 'text-ink-soft hover:bg-ink/[0.045] hover:text-ink'}`}><Icon className="h-[18px] w-[18px] shrink-0" />{!collapsed && <span className="truncate">{label}</span>}</button>
 
   return <>
-    {narrowViewport && mobileExpanded && <button type="button" aria-label={t('chatMessages.hideSidebar')} onClick={() => setMobileExpanded(false)} className="fixed inset-0 z-40 cursor-default bg-ink/20" />}
-    <aside role="navigation" aria-label={`Gugo · ${t('nav.chat')}`} data-collapsed={collapsed ? 'true' : 'false'} className={`flex h-full shrink-0 flex-col border-r border-ink/[0.07] bg-paper transition-[width] duration-200 ${railWidthClass} ${narrowViewport && mobileExpanded ? 'fixed inset-y-0 left-0 z-50 shadow-2xl' : ''}`}>
+    {narrowViewport && mobileExpanded && <button type="button" data-left-rail-backdrop aria-hidden="true" tabIndex={-1} aria-label={t('chatMessages.hideSidebar')} onClick={() => closeMobileRail({ restoreFocus: true })} className="fixed inset-0 z-40 cursor-default bg-ink/20" />}
+    <aside ref={railRef} role={narrowViewport && mobileExpanded ? 'dialog' : 'navigation'} aria-modal={narrowViewport && mobileExpanded ? true : undefined} aria-label={`Gugo · ${t('nav.chat')}`} tabIndex={-1} data-collapsed={collapsed ? 'true' : 'false'} className={`left-rail flex h-full shrink-0 flex-col border-r border-ink/[0.07] bg-paper transition-[width] duration-200 ${railWidthClass} ${narrowViewport && mobileExpanded ? 'fixed inset-y-0 left-0 z-50 shadow-2xl' : ''}`}>
       <header className={`flex h-10 items-center ${collapsed ? 'justify-center' : 'gap-2 px-1'}`}>
-        {!collapsed && <button type="button" onClick={() => { controller.closeSessionMenu(); closeMobileRail(); navigate('/chat') }} aria-label="Gugo" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"><BrandMark className="h-7 w-7 shrink-0 text-accent-ink" /><span className="min-w-0"><span className="block truncate text-[14px] font-semibold leading-4 text-ink">Gugo</span><span className="block truncate text-xs leading-4 text-ink-fade">{t('nav.chat')}</span></span></button>}
-        <button type="button" onClick={() => setRailCollapsed(!collapsed)} title={collapsed ? t('chatMessages.showSidebar') : t('chatMessages.hideSidebar')} aria-label={collapsed ? t('chatMessages.showSidebar') : t('chatMessages.hideSidebar')} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/[0.05] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30">{collapsed ? <PanelLeftOpen className="h-[18px] w-[18px]" /> : <PanelLeftClose className="h-[18px] w-[18px]" />}</button>
+        {!collapsed && <button type="button" onClick={() => { controller.closeSessionMenu(); closeMobileRail(); navigate('/chat') }} aria-label="Gugo" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30"><BrandMark className="h-7 w-7 shrink-0 text-accent-ink" /><span className="truncate text-[14px] font-semibold leading-5 text-ink">Gugo</span></button>}
+        <button ref={toggleRef} type="button" onClick={() => setRailCollapsed(!collapsed)} title={collapsed ? t('chatMessages.showSidebar') : t('chatMessages.hideSidebar')} aria-label={collapsed ? t('chatMessages.showSidebar') : t('chatMessages.hideSidebar')} aria-expanded={!collapsed} aria-controls="left-rail-history" className="left-rail-toggle flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/[0.05] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30">{collapsed ? <PanelLeftOpen className="h-[18px] w-[18px]" /> : <PanelLeftClose className="h-[18px] w-[18px]" />}</button>
       </header>
 
       <div className="mt-2 flex flex-col gap-0.5">
-        <button type="button" onClick={handleNewChat} title={collapsed ? t('nav.newChat') : undefined} aria-label={t('nav.newChat')} className={`flex h-9 w-full items-center rounded-control bg-ink/[0.065] text-[13px] font-medium text-ink transition-colors hover:bg-ink/[0.1] ${collapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'}`}><Plus className="h-[18px] w-[18px] shrink-0" />{!collapsed && <span>{t('nav.newChat')}</span>}</button>
+        <button type="button" onClick={handleNewChat} title={collapsed ? t('nav.newChat') : undefined} aria-label={t('nav.newChat')} className={`left-rail-nav-button flex h-9 w-full items-center rounded-control bg-ink/[0.055] text-[13px] font-medium text-ink transition-colors hover:bg-ink/[0.085] ${collapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'}`}><Plus className="h-[18px] w-[18px] shrink-0" />{!collapsed && <span>{t('nav.newChat')}</span>}</button>
         {collapsed && navButton(Search, t('nav.searchPlaceholder'), handleSearch)}
       </div>
 
-      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onNewInProject={handleNewChatInProject} onNewRecent={handleNewChat} onProjectToggle={handleProjectToggle} onSearch={handleSearch} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>}
+      <div id="left-rail-history" hidden={collapsed} className="left-rail-history mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onNewInProject={handleNewChatInProject} onNewRecent={handleNewChat} onProjectToggle={handleProjectToggle} onSearch={handleSearch} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>
       {collapsed && <div className="min-h-0 flex-1" />}
       <AccountArea compact={collapsed} accountMenuOpen={controller.accountMenuOpen} accountMenuRef={controller.accountMenuRef} user={state.user} onToggle={() => { controller.closeSessionMenu(); controller.setAccountMenuOpen((open) => !open) }} onNavigate={(item) => { closeMobileRail(); controller.navigateItem(item) }} t={t} />
     </aside>

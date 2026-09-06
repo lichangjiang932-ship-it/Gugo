@@ -202,6 +202,7 @@ export async function executeGeneratedArtifactTool({
       title: resolvedArgs.title,
       subtitle: resolvedArgs.subtitle,
       theme: resolvedArgs.theme,
+      design: resolvedArgs.design,
       brand: resolvedArgs.brand,
       slides: pptxSlidesFromArtifactArgs(resolvedArgs),
       images: resolvedArgs._officeImages,

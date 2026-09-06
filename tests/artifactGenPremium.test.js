@@ -1,8 +1,8 @@
 /**
  * G1.2 验收: createPptx premium pipeline
  *   - layout 选择正确（chart/kpi/section/cover/end）
- *   - bullets 自动截断
- *   - cover 用 deck title 而不是 slide.title
+ *   - bullets 完整保留，放不下时明确失败
+ *   - cover 尊重 slide.title，显式设计决定可选页脚
  *   - theme.xml 注入了 east-asia 字体 (Microsoft YaHei)
  *   - 字体不再依赖 Aptos（避免跨端 fallback 灾难）
  */
@@ -34,20 +34,20 @@ async function loadTheme(filename) {
   return zip.file('ppt/theme/theme1.xml').async('string')
 }
 
-test('cover 用 deck title，而不是 slide[0].title', async () => {
+test('explicit cover honors the authored slide title and retains the supplied subtitle', async () => {
   const r = await createPptx({
     title: '2026 增长策略',
     subtitle: '从规模到效率',
     slides: [
-      { title: '封面' }, // 故意叫"封面"，cover 应该用 deck title
+      { title: '用户指定的第一页标题', layout: 'cover' },
       { title: '现状', bullets: ['MAU 320万', 'ARR 增长 47%'] },
     ],
   })
   const [slide1] = await loadSlides(r.fullPath)
-  assert.ok(slide1.includes('2026 增长策略'), 'cover 应渲染 deck title')
+  assert.ok(slide1.includes('<a:t>用户指定的第一页标题</a:t>'), 'cover must preserve the authored title')
+  assert.ok(!slide1.includes('<a:t>2026 增长策略</a:t>'), 'deck metadata must not overwrite the authored title')
   assert.ok(slide1.includes('从规模到效率'), 'cover 应渲染 subtitle')
-  // "封面"这俩字不应该作为大标题出现
-  assert.ok(!/sz="5600"[^<]*<a:t>封面/.test(slide1.replace(/\s+/g, '')), 'cover 不应把 slide.title="封面" 当大字')
+  assert.equal((await loadSlides(r.fullPath)).length, 2, 'no extra title page may be inserted')
 })
 
 test('layout=kpi 时渲染数字卡而非 bullet', async () => {
@@ -95,8 +95,8 @@ test('layout=chart 时真的画了 chart（pptxgenjs 会生成 ppt/charts/chart1
   assert.ok(chartFiles.length >= 1, `chart layout 应生成至少 1 个 chart xml，实际 ${chartFiles.length}`)
 })
 
-test('bullets 过长自动截断（不会把 200 字塞进一行）', async () => {
-  const longBullet = '这是一条非常非常非常长的 bullet，它会被自动截断到 60 字符以内，'.repeat(5)
+test('long paragraphs are preserved as editable wrapping text or rejected when they cannot fit', async () => {
+  const longBullet = '这是一条完整的长段落，需要保留每一处文字及其中的业务证据。'.repeat(5) + '完整尾部 END'
   const r = await createPptx({
     title: '测试',
     slides: [
@@ -105,9 +105,14 @@ test('bullets 过长自动截断（不会把 200 字塞进一行）', async () =
     ],
   })
   const slides = await loadSlides(r.fullPath)
-  // 检查渲染出来的字符串不应该把整段 longBullet 完整放进去
-  assert.ok(!slides[1].includes(longBullet), 'bullet 应被截断，不能完整出现')
-  assert.ok(slides[1].includes('…'), '应包含省略号')
+  assert.ok(slides[1].includes(longBullet), 'every character and the final evidence marker must survive')
+  assert.ok(slides[1].includes('wrap="square"'), 'the native editable text box must allow wrapping')
+  assert.ok(!slides[1].includes('…'), 'the renderer must not insert a truncation marker')
+  assert.ok(!slides[1].includes('<p:pic>'), 'body text must not become a screenshot')
+  await assert.rejects(() => createPptx({
+    title: 'Cannot fit',
+    slides: [{ title: '全部保留或报错', layout: 'bullets', bullets: ['完整正文'.repeat(2000)] }],
+  }), (error) => error.code === 'PPTX_CONTENT_OVERFLOW')
 })
 
 test('字体不再依赖 Aptos（避免 Mac/Linux Office fallback 灾难）', async () => {
@@ -130,19 +135,26 @@ test('theme.xml 注入了 Microsoft YaHei 作为 east-asia 字体', async () => 
   assert.ok(/typeface="Microsoft YaHei"/.test(themeXml), 'theme1.xml 应注入 Microsoft YaHei 作为 ea')
 })
 
-test('end layout 不画 footer（节奏更稳）', async () => {
-  const r = await createPptx({
+test('page numbers and brand appear only when explicitly requested, including the ending slide', async () => {
+  const input = {
     title: '测试',
+    brand: '用户品牌',
     slides: [
       { title: '封面' },
       { title: '内容', bullets: ['一条'] },
       { title: '感谢观看', layout: 'end' },
     ],
-  })
+  }
+  const r = await createPptx(input)
   const slides = await loadSlides(r.fullPath)
-  // 中间那页（content）应该有页码 "02 / 03"；end 页（最后）不应该有
-  assert.ok(slides[1].includes('02 / 03'), '中间页应有页码')
-  assert.ok(!slides[2].includes('03 / 03'), 'end 页不应渲染页码')
+  for (const xml of slides) assert.doesNotMatch(xml, /0[123] \/ 03|<a:t>用户品牌<\/a:t>/)
+  const explicit = await createPptx({ ...input, design: { show_page_numbers: true, show_brand: true } })
+  const numbered = await loadSlides(explicit.fullPath)
+  assert.equal(numbered.length, 3)
+  numbered.forEach((xml, index) => {
+    assert.ok(xml.includes('0' + (index + 1) + ' / 03'))
+    assert.ok(xml.includes('<a:t>用户品牌</a:t>'))
+  })
 })
 
 test('内容感知 layout 自动选择: 单 bullet → statement', async () => {

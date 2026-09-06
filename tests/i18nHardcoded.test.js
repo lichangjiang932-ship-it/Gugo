@@ -16,7 +16,7 @@ const BASELINE = {
   'src/lib/localSkills.js': 12,
   'src/lib/officeExtract.js': 59,
   'src/lib/pptCore.js': 102,
-  'src/lib/presentationPlanner.js': 1670,
+  'src/lib/presentationPlanner.js': 1644,
   'src/lib/reasonixClient.js': 4,
   'src/lib/sessionExport.js': 60,
   'src/lib/skillCommands.js': 120,

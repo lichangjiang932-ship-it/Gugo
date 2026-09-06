@@ -34,6 +34,14 @@ export async function resolve(specifier, context, nextResolve) {
 }
 
 export async function load(url, context, nextLoad) {
+  if (url.startsWith('file:') && url.endsWith('.css')) {
+    // Component logic tests run without Vite's style pipeline. Preserve real
+    // side-effect stylesheet imports without pretending JSDOM applies them;
+    // browser/build checks still validate CSS. Read first so missing assets
+    // remain failures. Value imports (?inline/?raw) are deliberately not stubbed.
+    await readFile(fileURLToPath(url), 'utf8')
+    return { format: 'module', shortCircuit: true, source: 'export {}' }
+  }
   if (!url.endsWith('.jsx')) return nextLoad(url, context)
   const source = await readFile(fileURLToPath(url), 'utf8')
   const result = transform(source, {

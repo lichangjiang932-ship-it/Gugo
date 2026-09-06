@@ -96,6 +96,121 @@ const FILE_REQUEST = {
   preview: null,
 }
 
+async function renderKeyboardApproval(context, { busy = false, request = FILE_REQUEST } = {}) {
+  const dom = setupDom()
+  const decisions = []
+  const view = await renderInto(dom, (
+    <ToolApprovalCard open request={request} busy={busy} onDecide={(decision) => decisions.push(decision)} />
+  ))
+  context.after(async () => {
+    await view.cleanup()
+    dom.window.close()
+  })
+  return { dom, decisions }
+}
+
+async function pressApprovalKey(dom, target, options, prevented = false) {
+  const event = new dom.window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...options })
+  if (prevented) event.preventDefault()
+  await act(async () => target.dispatchEvent(event))
+  return event
+}
+
+test('approval shortcuts ignore consumed, composing, repeated, and modified keyboard events', async (context) => {
+  const { dom, decisions } = await renderKeyboardApproval(context)
+  for (const options of [
+    { key: 'Enter', isComposing: true },
+    { key: 'Enter', keyCode: 229 },
+    { key: 'Enter', which: 229 },
+    { key: 'Enter', repeat: true },
+    { key: 'Enter', shiftKey: true },
+    { key: 'Enter', ctrlKey: true },
+    { key: 'Enter', altKey: true },
+    { key: 'Enter', metaKey: true },
+    { key: 'Escape', isComposing: true },
+  ]) {
+    await pressApprovalKey(dom, dom.window.document.body, options)
+    assert.deepEqual(decisions, [], JSON.stringify(options))
+  }
+  for (const key of ['Enter', 'Escape']) {
+    await pressApprovalKey(dom, dom.window.document.body, { key }, true)
+    assert.deepEqual(decisions, [], `consumed ${key}`)
+  }
+})
+
+test('typing and editing controls never decide an unrelated tool approval', async (context) => {
+  const { dom, decisions } = await renderKeyboardApproval(context)
+  const controls = [
+    ['input', {}], ['textarea', {}], ['select', {}],
+    ['div', { contenteditable: 'true' }],
+    ['div', { contenteditable: 'plaintext-only' }],
+    ['div', { role: 'textbox' }],
+    ['div', { role: 'combobox' }],
+  ]
+  for (const [tag, attributes] of controls) {
+    const control = dom.window.document.createElement(tag)
+    for (const [key, value] of Object.entries(attributes)) control.setAttribute(key, value)
+    dom.window.document.body.appendChild(control)
+    const target = tag === 'div' ? control.appendChild(dom.window.document.createElement('span')) : control
+    for (const key of ['Enter', 'Escape']) await pressApprovalKey(dom, target, { key })
+    assert.deepEqual(decisions, [], `${tag} ${JSON.stringify(attributes)}`)
+    control.remove()
+  }
+})
+
+test('global key events also respect the focused chat editor', async (context) => {
+  const { dom, decisions } = await renderKeyboardApproval(context)
+  const editor = dom.window.document.createElement('textarea')
+  dom.window.document.body.appendChild(editor)
+  editor.focus()
+  for (const key of ['Enter', 'Escape']) await pressApprovalKey(dom, dom.window, { key })
+  assert.deepEqual(decisions, [])
+})
+
+test('keyboard use of other page controls does not decide the tool approval', async (context) => {
+  const { dom, decisions } = await renderKeyboardApproval(context)
+  for (const tag of ['button', 'a']) {
+    const control = dom.window.document.createElement(tag)
+    if (tag === 'a') control.href = '#other-control'
+    dom.window.document.body.appendChild(control)
+    for (const key of ['Enter', 'Escape']) await pressApprovalKey(dom, control, { key })
+    assert.deepEqual(decisions, [], tag)
+    control.remove()
+  }
+})
+
+test('approval action buttons keep their native Enter activation instead of globally approving', async (context) => {
+  const { dom, decisions } = await renderKeyboardApproval(context)
+  const buttons = [...dom.window.document.querySelector('[data-testid="tool-approval-actions"]').querySelectorAll('button')]
+  const expected = [{ approved: true }, { approved: true, remember: true }, { approved: false }]
+  for (const [index, button] of buttons.entries()) {
+    const event = await pressApprovalKey(dom, button, { key: 'Enter' })
+    assert.equal(event.defaultPrevented, false, 'native button activation stays available')
+    assert.equal(decisions.length, index, 'keydown must not submit a second or different decision')
+    await act(async () => button.click())
+    assert.deepEqual(decisions[index], expected[index])
+  }
+})
+
+test('unmodified page shortcuts and Escape within the approval card remain usable', async (context) => {
+  const { dom, decisions } = await renderKeyboardApproval(context)
+  const enter = await pressApprovalKey(dom, dom.window.document.body, { key: 'Enter' })
+  assert.equal(enter.defaultPrevented, true)
+  assert.deepEqual(decisions, [{ approved: true }])
+  const button = dom.window.document.querySelector('[data-testid="tool-approval-actions"] button')
+  const escape = await pressApprovalKey(dom, button, { key: 'Escape' })
+  assert.equal(escape.defaultPrevented, true)
+  assert.deepEqual(decisions, [{ approved: true }, { approved: false }])
+})
+
+for (const options of [{ busy: true }, { request: null }]) {
+  test(`approval shortcuts do nothing without an actionable request: ${JSON.stringify(options)}`, async (context) => {
+    const { dom, decisions } = await renderKeyboardApproval(context, options)
+    for (const key of ['Enter', 'Escape']) await pressApprovalKey(dom, dom.window.document.body, { key })
+    assert.deepEqual(decisions, [])
+  })
+}
+
 test('shell approval never offers a standing-rule action', async () => {
   const dom = setupDom()
   const view = await renderInto(dom, <ToolApprovalCard open request={SHELL_REQUEST} onDecide={() => {}} busy={false} />)

@@ -11,7 +11,7 @@ const MODES = [
 
 /**
  * 权限档位切换器。对齐 Claude Code:随时能改「我要被问到什么程度」,
- * 而不是把审批堆到一个单独页面里。Shift+Tab 循环切换。
+ * 而不是把审批堆到一个单独页面里。在聊天输入框内用 Shift+Tab 循环切换。
  */
 export default function PermissionModeSwitcher({ mode = 'normal', onChange, disabled }) {
   const { t } = useT()
@@ -35,17 +35,22 @@ export default function PermissionModeSwitcher({ mode = 'normal', onChange, disa
     }
   }, [open])
 
-  // Shift+Tab 循环切档(Claude Code 手感)
+  // Only the focused composer owns this shortcut. Elsewhere Shift+Tab must
+  // retain native backwards navigation, especially in dialogs and the rail.
   useEffect(() => {
     if (disabled) return undefined
     const onKey = (e) => {
-      if (e.key !== 'Tab' || !e.shiftKey) return
-      const tag = String(e.target?.tagName || '').toLowerCase()
-      const typing = tag === 'input' || tag === 'select' || e.target?.isContentEditable
-      // textarea 里也允许切档 —— 聊天输入框就是 textarea,不放行就等于没有快捷键
-      if (typing) return
+      if (e.defaultPrevented || e.key !== 'Tab' || !e.shiftKey
+        || e.ctrlKey || e.altKey || e.metaKey || e.repeat
+        || e.isComposing || e.keyCode === 229 || e.which === 229) return
+      const composer = ref.current?.closest('.chat-composer')
+      const target = e.target
+      if (!composer || target !== document.activeElement
+        || !target?.matches?.('textarea.chat-composer-input')
+        || !composer.contains(target)
+        || target.closest('[inert], [hidden], [aria-hidden="true"]')) return
       e.preventDefault()
-      const idx = MODES.findIndex((m) => m.id === mode)
+      const idx = Math.max(0, MODES.findIndex((m) => m.id === mode))
       onChange?.(MODES[(idx + 1) % MODES.length].id)
     }
     window.addEventListener('keydown', onKey)
@@ -58,6 +63,7 @@ export default function PermissionModeSwitcher({ mode = 'normal', onChange, disa
         type="button"
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
         title={t(`approvals.mode.${current.id}Hint`)}
         className={`h-7 px-2 rounded-md border border-ink-fade/50 hover:border-ink-fade transition-colors flex items-center gap-1.5 text-xs disabled:opacity-50 ${current.tone}`}
       >
@@ -67,7 +73,7 @@ export default function PermissionModeSwitcher({ mode = 'normal', onChange, disa
       </button>
 
       {open && (
-        <div className="absolute bottom-full mb-1.5 left-0 z-40 w-72 rounded-md border border-ink/20 bg-paper shadow-lg overflow-hidden">
+        <div data-testid="permission-mode-popover" className="fixed bottom-24 left-3 right-3 z-40 max-h-[60dvh] overflow-y-auto rounded-control border border-ink/20 bg-paper shadow-lg lg:absolute lg:bottom-full lg:left-0 lg:right-auto lg:mb-1.5 lg:w-72">
           {MODES.map((m) => {
             const MIcon = m.icon
             const active = m.id === mode

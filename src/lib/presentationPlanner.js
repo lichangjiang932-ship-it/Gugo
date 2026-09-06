@@ -1,19 +1,9 @@
-const MIN_SLIDES = 4
-const MAX_SLIDES = 16
+import { inferPresentationSlideCount } from '../../shared/presentationPromptPolicy.js'
 
-const CHINESE_NUMERAL_MAP = {
-  一: 1,
-  二: 2,
-  两: 2,
-  三: 3,
-  四: 4,
-  五: 5,
-  六: 6,
-  七: 7,
-  八: 8,
-  九: 9,
-  十: 10,
-}
+// Only the explicitly invoked compatibility blueprint allocates pages. Its
+// bound matches the file tool; excess requests fail clearly instead of being
+// silently shortened. Default prompt construction never expands a template.
+const MAX_BLUEPRINT_SLIDES = 100
 
 function slot(type, intent, title, content, visual, htmlClass = type) {
   return { type, intent, title, content, visual, htmlClass }
@@ -112,23 +102,12 @@ export const PRESENTATION_TEMPLATES = [
   },
 ]
 
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value))
-}
-
 function normalizeText(text = '') {
   return String(text || '').toLowerCase()
 }
 
 export function inferRequestedSlideCount(prompt = '') {
-  const text = String(prompt || '')
-  const digitMatch = text.match(/(?:^|[^\d])(\d{1,2})\s*(?:页|頁|slides?|pages?)/i)
-  if (digitMatch) return clamp(Number(digitMatch[1]), MIN_SLIDES, MAX_SLIDES)
-
-  const chineseMatch = text.match(/([一二两三四五六七八九十])\s*(?:页|頁)/)
-  if (chineseMatch) return clamp(CHINESE_NUMERAL_MAP[chineseMatch[1]], MIN_SLIDES, MAX_SLIDES)
-
-  return null
+  return inferPresentationSlideCount(prompt)
 }
 
 export function selectPresentationTemplate(topic = '') {
@@ -145,6 +124,7 @@ export function selectPresentationTemplate(topic = '') {
 }
 
 function expandSlots(template, count) {
+  if (count === 1) return [template.slots[0] || slot('content', 'one requested slide', '', '', '')]
   const middleSlots = template.slots.filter((item) => item.type !== 'cover' && item.type !== 'end')
   const needed = Math.max(0, count - 2)
   const selected = []
@@ -160,34 +140,19 @@ function expandSlots(template, count) {
 
 export function buildSlideBlueprint(template, requestedCount) {
   const safeTemplate = template || selectPresentationTemplate('')
-  const count = clamp(Number(requestedCount) || safeTemplate.defaultSlideCount || 8, MIN_SLIDES, MAX_SLIDES)
+  const count = Number(requestedCount ?? safeTemplate.defaultSlideCount ?? 8)
+  if (!Number.isSafeInteger(count) || count < 1 || count > MAX_BLUEPRINT_SLIDES) {
+    throw new RangeError(`Explicit presentation blueprints support 1-${MAX_BLUEPRINT_SLIDES} total slides; the requested count was not changed.`)
+  }
   return expandSlots(safeTemplate, count).map((item, index) => ({
     ...item,
     page: index + 1,
   }))
 }
 
-function markdownTypeLine(type) {
-  return `<!-- ${type} -->`
-}
-
-function formatBlueprintLine(slotItem, skillId) {
-  const page = String(slotItem.page).padStart(2, '0')
-  if (skillId === 'htmlppt') {
-    return `- Page ${page}: <section class="slide ${slotItem.htmlClass}" data-slide="${slotItem.page}"> | intent: ${slotItem.intent} | title: ${slotItem.title} | content: ${slotItem.content} | visual: ${slotItem.visual}`
-  }
-  return `- Page ${page}: ${markdownTypeLine(slotItem.type)} | intent: ${slotItem.intent} | title: ${slotItem.title} | content: ${slotItem.content} | visual: ${slotItem.visual}`
-}
-
-export function buildPresentationPlannerPrompt(topic = '', { skillId = 'ppt' } = {}) {
-  const template = selectPresentationTemplate(topic)
-  const slideCount = inferRequestedSlideCount(topic) || template.defaultSlideCount
-  const blueprint = buildSlideBlueprint(template, slideCount)
-  const library = PRESENTATION_TEMPLATES.map((item) => `${item.id}=${item.label}`).join('; ')
-  const syntaxRule = skillId === 'htmlppt'
-    ? 'Use exactly one top-level section per planned page. Keep data-slide numbers continuous, render every page on a fixed 16:9 canvas, keep primary content inside an equal 6% horizontal / 8% vertical safe area, and expose window.__ymaDeck navigation.'
-    : 'Use exactly one Markdown slide per planned page. The second line of every slide must be the planned <!-- type --> tag.'
-
-  return `\n\n## Template library planner\n- Template library: ${library}\n- Selected template: ${template.id} (${template.label})\n- Visual theme: ${template.theme}\n- Strict slide count: ${blueprint.length}\n- Do not add, remove, merge, or reorder pages unless the user explicitly asks.\n- ${syntaxRule}\n- Every non-cover/end page must contain real argument depth: claim; evidence/mechanism/impact; metric or tradeoff.\n\n### Page-by-page blueprint\n${blueprint.map((item) => formatBlueprintLine(item, skillId)).join('\n')}\n\n### Content density rules\n- Write from the slot intent, not from a generic outline.\n- Each content card must include a causal mechanism, proof point, risk, or action implication.\n- If a factual metric is unknown, mark it as replaceable data instead of inventing a source.\n- Avoid decorative filler such as "future outlook" unless the slot asks for a roadmap or closing thesis.`
-    + (skillId === 'htmlppt' ? `\n- Use at least 64px for the deck title, 48px for slide titles, 28px for subheads, and 22px for body copy on the 1920×1080 canvas.\n- Never duplicate visible text with pseudo-elements, text-shadow, filters, or stacked DOM copies; decorations may not overlap the primary copy.` : '')
+export function buildPresentationPlannerPrompt(topic = '') {
+  const request = String(topic ?? '')
+  // Legacy callers may still pass skillId options. They do not authorize a
+  // different template, count, output syntax, font or color scheme.
+  return request.trim() ? `\n\n## User presentation request\n${request}` : ''
 }
