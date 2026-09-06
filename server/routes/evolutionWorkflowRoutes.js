@@ -21,10 +21,7 @@ import {
   listEvolutionExclusions,
   setEvolutionEvidenceExcluded,
 } from '../services/evolutionDatasetService.js'
-import {
-  appendEvolutionFeedback,
-  listEvolutionEvidence,
-} from '../services/evolutionEvidenceStore.js'
+import { appendEvolutionFeedback, listEvolutionEvidence } from '../services/evolutionEvidenceStore.js'
 import {
   evaluateEvolutionReplay,
   getEvolutionEvaluation,
@@ -52,93 +49,57 @@ import {
   runEvolutionReplay,
 } from '../services/evolutionReplayService.js'
 import { readJson, sendJson } from '../utils.js'
-import {
-  errorBody,
-  operationForResult,
-  requestIdempotencyKey,
-} from './evolutionRouteSupport.js'
+import { errorBody, operationForResult, requestIdempotencyKey } from './evolutionRouteSupport.js'
 
-export async function handleEvolutionWorkflowRequest(req, res, {
-  env,
-  userId,
-  url,
-  matches,
-  readCanarySession,
-  evaluatorProviderId,
-  evaluatorModelName,
-  runCandidateModel,
-  runEvaluationModel,
-  runOnlineGraderModel,
-  runReplayModel,
-}) {
-  const {
-    approvalReviewMatch,
-    approvalMatch,
-    canaryPolicyMatch,
-    canaryGraderPolicyMatch,
-    canaryGradesMatch,
-    canaryStartMatch,
-    canaryStopMatch,
-    promotionReviewMatch,
-    canaryMatch,
-    promotionRevokeMatch,
-    promotionMatch,
-  } = matches
+function methodError(res, allowed) {
+  sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', `仅支持 ${allowed}`))
+  return true
+}
+
+async function handleEvidenceAndCandidateRoutes(req, res, runtime) {
+  const { url, userId, runCandidateModel } = runtime
   if (url.pathname === '/api/evolution/feedback') {
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
-    }
+    if (req.method !== 'POST') return methodError(res, 'POST')
     const body = await readJson(req, { maxBytes: 16 * 1024 })
     const evidence = appendEvolutionFeedback({
-      userId,
-      sessionId: body.sessionId,
-      feedback: body.feedback,
+      userId, sessionId: body.sessionId, feedback: body.feedback,
     })
-    return sendJson(res, 201, { ok: true, evidence })
+    sendJson(res, 201, { ok: true, evidence })
+    return true
   }
   if (url.pathname === '/api/evolution/evidence') {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
-    const evidence = listEvolutionEvidence({
-      userId,
-      limit: url.searchParams.get('limit'),
-    })
-    return sendJson(res, 200, { ok: true, schemaVersion: 1, evidence })
+    if (req.method !== 'GET') return methodError(res, 'GET')
+    const evidence = listEvolutionEvidence({ userId, limit: url.searchParams.get('limit') })
+    sendJson(res, 200, { ok: true, schemaVersion: 1, evidence })
+    return true
   }
   if (url.pathname === '/api/evolution/dataset') {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
+    if (req.method !== 'GET') return methodError(res, 'GET')
     const dataset = buildEvolutionDataset({
-      userId,
-      limit: url.searchParams.get('limit') || undefined,
+      userId, limit: url.searchParams.get('limit') || undefined,
     })
-    return sendJson(res, 200, { ok: true, dataset })
+    sendJson(res, 200, { ok: true, dataset })
+    return true
   }
   if (url.pathname === '/api/evolution/exclusions') {
     if (req.method === 'GET') {
-      return sendJson(res, 200, { ok: true, exclusions: listEvolutionExclusions({ userId }) })
+      sendJson(res, 200, { ok: true, exclusions: listEvolutionExclusions({ userId }) })
+      return true
     }
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET 或 POST'))
-    }
+    if (req.method !== 'POST') return methodError(res, 'GET 或 POST')
     const body = await readJson(req, { maxBytes: 8 * 1024 })
     if (typeof body.excluded !== 'boolean') {
-      return sendJson(res, 400, errorBody('EVOLUTION_EXCLUDED_FLAG_INVALID', 'excluded must be boolean'))
+      sendJson(res, 400, errorBody('EVOLUTION_EXCLUDED_FLAG_INVALID', 'excluded must be boolean'))
+      return true
     }
     const exclusion = setEvolutionEvidenceExcluded({
-      userId,
-      evidenceId: body.evidenceId,
-      excluded: body.excluded,
-      reason: body.reason,
+      userId, evidenceId: body.evidenceId, excluded: body.excluded, reason: body.reason,
     })
-    return sendJson(res, 200, { ok: true, exclusion })
+    sendJson(res, 200, { ok: true, exclusion })
+    return true
   }
   if (url.pathname === '/api/evolution/candidates/generate') {
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
-    }
+    if (req.method !== 'POST') return methodError(res, 'POST')
     const body = await readJson(req, { maxBytes: 16 * 1024 })
     const candidate = await generateEvolutionCandidate({
       userId,
@@ -153,44 +114,38 @@ export async function handleEvolutionWorkflowRequest(req, res, {
       ...(typeof runCandidateModel === 'function' ? { runModel: runCandidateModel } : {}),
     })
     const operation = operationForResult(res, {
-      userId,
-      resultType: 'candidate',
-      resultId: candidate.id,
+      userId, resultType: 'candidate', resultId: candidate.id,
     })
-    return sendJson(res, 201, { ok: true, candidate, operation })
+    sendJson(res, 201, { ok: true, candidate, operation })
+    return true
   }
   if (url.pathname === '/api/evolution/candidates') {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
-    const candidates = listEvolutionCandidates({
-      userId,
-      limit: url.searchParams.get('limit'),
-    })
-    return sendJson(res, 200, { ok: true, schemaVersion: 1, candidates })
+    if (req.method !== 'GET') return methodError(res, 'GET')
+    const candidates = listEvolutionCandidates({ userId, limit: url.searchParams.get('limit') })
+    sendJson(res, 200, { ok: true, schemaVersion: 1, candidates })
+    return true
   }
-  const candidateMatch = url.pathname.match(/^\/api\/evolution\/candidates\/([^/]+)$/u)
-  if (candidateMatch) {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
-    const candidate = getEvolutionCandidate({
-      userId,
-      id: decodeURIComponent(candidateMatch[1]),
-    })
-    return sendJson(res, 200, { ok: true, candidate })
-  }
+  const match = url.pathname.match(/^\/api\/evolution\/candidates\/([^/]+)$/u)
+  if (!match) return false
+  if (req.method !== 'GET') return methodError(res, 'GET')
+  const candidate = getEvolutionCandidate({ userId, id: decodeURIComponent(match[1]) })
+  sendJson(res, 200, { ok: true, candidate })
+  return true
+}
+
+async function handleReplayAndEvaluationRoutes(req, res, runtime) {
+  const { url, userId, evaluatorProviderId, evaluatorModelName,
+    runReplayModel, runEvaluationModel } = runtime
   if (url.pathname === '/api/evolution/replay-suites') {
     if (req.method === 'GET') {
-      return sendJson(res, 200, {
+      sendJson(res, 200, {
         ok: true,
         schemaVersion: 1,
         suites: listEvolutionReplaySuites({ userId, limit: url.searchParams.get('limit') }),
       })
+      return true
     }
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET 或 POST'))
-    }
+    if (req.method !== 'POST') return methodError(res, 'GET 或 POST')
     const body = await readJson(req, { maxBytes: 64 * 1024 })
     const suite = createEvolutionReplaySuite({
       userId,
@@ -198,20 +153,18 @@ export async function handleEvolutionWorkflowRequest(req, res, {
       datasetFingerprint: body.datasetFingerprint,
       cases: body.cases,
     })
-    return sendJson(res, 201, { ok: true, suite })
+    sendJson(res, 201, { ok: true, suite })
+    return true
   }
   const suiteMatch = url.pathname.match(/^\/api\/evolution\/replay-suites\/([^/]+)$/u)
   if (suiteMatch) {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
+    if (req.method !== 'GET') return methodError(res, 'GET')
     const suite = getEvolutionReplaySuite({ userId, id: decodeURIComponent(suiteMatch[1]) })
-    return sendJson(res, 200, { ok: true, suite })
+    sendJson(res, 200, { ok: true, suite })
+    return true
   }
   if (url.pathname === '/api/evolution/replays/run') {
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
-    }
+    if (req.method !== 'POST') return methodError(res, 'POST')
     const body = await readJson(req, { maxBytes: 48 * 1024 })
     const replay = await runEvolutionReplay({
       userId,
@@ -224,98 +177,83 @@ export async function handleEvolutionWorkflowRequest(req, res, {
       idempotencyKey: requestIdempotencyKey(req, body),
       ...(typeof runReplayModel === 'function' ? { runModel: runReplayModel } : {}),
     })
-    const operation = operationForResult(res, {
-      userId,
-      resultType: 'replay',
-      resultId: replay.id,
-    })
-    return sendJson(res, 201, { ok: true, replay, operation })
+    const operation = operationForResult(res, { userId, resultType: 'replay', resultId: replay.id })
+    sendJson(res, 201, { ok: true, replay, operation })
+    return true
   }
   if (url.pathname === '/api/evolution/replays') {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
-    return sendJson(res, 200, {
+    if (req.method !== 'GET') return methodError(res, 'GET')
+    sendJson(res, 200, {
       ok: true,
       schemaVersion: 1,
       replays: listEvolutionReplayRuns({ userId, limit: url.searchParams.get('limit') }),
     })
+    return true
   }
   const replayMatch = url.pathname.match(/^\/api\/evolution\/replays\/([^/]+)$/u)
   if (replayMatch) {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
+    if (req.method !== 'GET') return methodError(res, 'GET')
     const replay = getEvolutionReplayRun({ userId, id: decodeURIComponent(replayMatch[1]) })
-    return sendJson(res, 200, { ok: true, replay })
+    sendJson(res, 200, { ok: true, replay })
+    return true
   }
   if (url.pathname === '/api/evolution/evaluations') {
     if (req.method === 'GET') {
-      return sendJson(res, 200, {
+      sendJson(res, 200, {
         ok: true,
         schemaVersion: 1,
         evaluations: listEvolutionEvaluations({ userId, limit: url.searchParams.get('limit') }),
       })
+      return true
     }
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET 或 POST'))
-    }
+    if (req.method !== 'POST') return methodError(res, 'GET 或 POST')
     const body = await readJson(req, { maxBytes: 8 * 1024 })
     const evaluation = await evaluateEvolutionReplay({
       userId,
       replayId: body.replayId,
       ...(body.evaluatorProviderId !== undefined
         ? { evaluatorProviderId: body.evaluatorProviderId }
-        : evaluatorProviderId !== undefined
-          ? { evaluatorProviderId }
-          : {}),
+        : evaluatorProviderId !== undefined ? { evaluatorProviderId } : {}),
       ...(body.evaluatorModelName !== undefined
         ? { evaluatorModelName: body.evaluatorModelName }
-        : evaluatorModelName !== undefined
-          ? { evaluatorModelName }
-          : {}),
+        : evaluatorModelName !== undefined ? { evaluatorModelName } : {}),
       idempotencyKey: requestIdempotencyKey(req, body),
       ...(typeof runEvaluationModel === 'function' ? { runModel: runEvaluationModel } : {}),
     })
     const operation = operationForResult(res, {
-      userId,
-      resultType: 'evaluation',
-      resultId: evaluation.id,
+      userId, resultType: 'evaluation', resultId: evaluation.id,
     })
-    return sendJson(res, 201, { ok: true, evaluation, operation })
+    sendJson(res, 201, { ok: true, evaluation, operation })
+    return true
   }
   const evaluationMatch = url.pathname.match(/^\/api\/evolution\/evaluations\/([^/]+)$/u)
-  if (evaluationMatch) {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
-    const evaluation = getEvolutionEvaluation({
-      userId,
-      id: decodeURIComponent(evaluationMatch[1]),
-    })
-    return sendJson(res, 200, { ok: true, evaluation })
-  }
-  if (approvalReviewMatch) {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
+  if (!evaluationMatch) return false
+  if (req.method !== 'GET') return methodError(res, 'GET')
+  const evaluation = getEvolutionEvaluation({ userId, id: decodeURIComponent(evaluationMatch[1]) })
+  sendJson(res, 200, { ok: true, evaluation })
+  return true
+}
+
+async function handleApprovalRoutes(req, res, runtime) {
+  const { url, userId, matches } = runtime
+  if (matches.approvalReviewMatch) {
+    if (req.method !== 'GET') return methodError(res, 'GET')
     const review = buildEvolutionApprovalReview({
-      userId,
-      evaluationId: decodeURIComponent(approvalReviewMatch[1]),
+      userId, evaluationId: decodeURIComponent(matches.approvalReviewMatch[1]),
     })
-    return sendJson(res, 200, { ok: true, review })
+    sendJson(res, 200, { ok: true, review })
+    return true
   }
   if (url.pathname === '/api/evolution/approvals') {
     if (req.method === 'GET') {
-      return sendJson(res, 200, {
+      sendJson(res, 200, {
         ok: true,
         schemaVersion: 1,
         approvals: listEvolutionApprovalDecisions({ userId, limit: url.searchParams.get('limit') }),
       })
+      return true
     }
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET 或 POST'))
-    }
+    if (req.method !== 'POST') return methodError(res, 'GET 或 POST')
     const body = await readJson(req, { maxBytes: 16 * 1024 })
     const approval = decideEvolutionApproval({
       userId,
@@ -324,29 +262,30 @@ export async function handleEvolutionWorkflowRequest(req, res, {
       reason: body.reason,
       confirmations: body.confirmations,
     })
-    return sendJson(res, 201, { ok: true, approval })
+    sendJson(res, 201, { ok: true, approval })
+    return true
   }
-  if (approvalMatch) {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
-    const approval = getEvolutionApprovalDecision({
-      userId,
-      id: decodeURIComponent(approvalMatch[1]),
-    })
-    return sendJson(res, 200, { ok: true, approval })
-  }
+  if (!matches.approvalMatch) return false
+  if (req.method !== 'GET') return methodError(res, 'GET')
+  const approval = getEvolutionApprovalDecision({
+    userId, id: decodeURIComponent(matches.approvalMatch[1]),
+  })
+  sendJson(res, 200, { ok: true, approval })
+  return true
+}
+
+async function handleCanaryRoutes(req, res, runtime) {
+  const { url, userId, matches, env, readCanarySession, runOnlineGraderModel } = runtime
   if (url.pathname === '/api/evolution/canaries') {
     if (req.method === 'GET') {
-      return sendJson(res, 200, {
+      sendJson(res, 200, {
         ok: true,
         schemaVersion: 1,
         canaries: listEvolutionCanaries({ userId, limit: url.searchParams.get('limit') }),
       })
+      return true
     }
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET 或 POST'))
-    }
+    if (req.method !== 'POST') return methodError(res, 'GET 或 POST')
     const body = await readJson(req, { maxBytes: 16 * 1024 })
     const canary = await createEvolutionCanary({
       userId,
@@ -357,50 +296,46 @@ export async function handleEvolutionWorkflowRequest(req, res, {
       readSession: readCanarySession,
       env,
     })
-    return sendJson(res, 201, { ok: true, canary })
+    sendJson(res, 201, { ok: true, canary })
+    return true
   }
-  if (canaryPolicyMatch) {
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
-    }
+  if (matches.canaryPolicyMatch) {
+    if (req.method !== 'POST') return methodError(res, 'POST')
     const body = await readJson(req, { maxBytes: 16 * 1024 })
     const policy = createEvolutionCanaryRollbackPolicy({
       userId,
-      releaseId: decodeURIComponent(canaryPolicyMatch[1]),
+      releaseId: decodeURIComponent(matches.canaryPolicyMatch[1]),
       policy: body.policy,
       reason: body.reason,
     })
-    return sendJson(res, 201, { ok: true, policy })
+    sendJson(res, 201, { ok: true, policy })
+    return true
   }
-  if (canaryGraderPolicyMatch) {
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
-    }
+  if (matches.canaryGraderPolicyMatch) {
+    if (req.method !== 'POST') return methodError(res, 'POST')
     const body = await readJson(req, { maxBytes: 16 * 1024 })
     const policy = createEvolutionCanaryGraderPolicy({
       userId,
-      releaseId: decodeURIComponent(canaryGraderPolicyMatch[1]),
+      releaseId: decodeURIComponent(matches.canaryGraderPolicyMatch[1]),
       graderProviderId: body.graderProviderId,
       graderModelName: body.graderModelName,
       graderModelRevision: body.graderModelRevision,
       policy: body.policy,
       reason: body.reason,
     })
-    return sendJson(res, 201, { ok: true, policy })
+    sendJson(res, 201, { ok: true, policy })
+    return true
   }
-  if (canaryGradesMatch) {
-    const releaseId = decodeURIComponent(canaryGradesMatch[1])
+  if (matches.canaryGradesMatch) {
+    const releaseId = decodeURIComponent(matches.canaryGradesMatch[1])
     if (req.method === 'GET') {
       const state = getEvolutionCanaryOnlineGradeState({
-        userId,
-        releaseId,
-        limit: url.searchParams.get('limit') || 100,
+        userId, releaseId, limit: url.searchParams.get('limit') || 100,
       })
-      return sendJson(res, 200, { ok: true, state })
+      sendJson(res, 200, { ok: true, state })
+      return true
     }
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET 或 POST'))
-    }
+    if (req.method !== 'POST') return methodError(res, 'GET 或 POST')
     const body = await readJson(req, { maxBytes: 8 * 1024 })
     const grade = await runEvolutionCanaryOnlineGrade({
       userId,
@@ -408,62 +343,46 @@ export async function handleEvolutionWorkflowRequest(req, res, {
       outcomeId: body.outcomeId,
       ...(typeof runOnlineGraderModel === 'function' ? { runModel: runOnlineGraderModel } : {}),
     })
-    return sendJson(res, 201, { ok: true, grade })
+    sendJson(res, 201, { ok: true, grade })
+    return true
   }
-  if (canaryStartMatch) {
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
-    }
+  if (matches.canaryStartMatch || matches.canaryStopMatch) {
+    if (req.method !== 'POST') return methodError(res, 'POST')
     const body = await readJson(req, { maxBytes: 8 * 1024 })
-    const canary = startEvolutionCanary({
-      userId,
-      id: decodeURIComponent(canaryStartMatch[1]),
-      reason: body.reason,
-      env,
-    })
-    return sendJson(res, 200, { ok: true, canary })
+    const match = matches.canaryStartMatch || matches.canaryStopMatch
+    const canary = matches.canaryStartMatch
+      ? startEvolutionCanary({ userId, id: decodeURIComponent(match[1]), reason: body.reason, env })
+      : stopEvolutionCanary({ userId, id: decodeURIComponent(match[1]), reason: body.reason })
+    sendJson(res, 200, { ok: true, canary })
+    return true
   }
-  if (canaryStopMatch) {
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
-    }
-    const body = await readJson(req, { maxBytes: 8 * 1024 })
-    const canary = stopEvolutionCanary({
-      userId,
-      id: decodeURIComponent(canaryStopMatch[1]),
-      reason: body.reason,
-    })
-    return sendJson(res, 200, { ok: true, canary })
-  }
-  if (promotionReviewMatch) {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
+  if (matches.promotionReviewMatch) {
+    if (req.method !== 'GET') return methodError(res, 'GET')
     const review = buildEvolutionPromotionReview({
-      userId,
-      canaryReleaseId: decodeURIComponent(promotionReviewMatch[1]),
-      env,
+      userId, canaryReleaseId: decodeURIComponent(matches.promotionReviewMatch[1]), env,
     })
-    return sendJson(res, 200, { ok: true, review })
+    sendJson(res, 200, { ok: true, review })
+    return true
   }
-  if (canaryMatch) {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
-    const canary = getEvolutionCanary({ userId, id: decodeURIComponent(canaryMatch[1]) })
-    return sendJson(res, 200, { ok: true, canary })
-  }
+  if (!matches.canaryMatch) return false
+  if (req.method !== 'GET') return methodError(res, 'GET')
+  const canary = getEvolutionCanary({ userId, id: decodeURIComponent(matches.canaryMatch[1]) })
+  sendJson(res, 200, { ok: true, canary })
+  return true
+}
+
+async function handlePromotionRoutes(req, res, runtime) {
+  const { url, userId, matches, env } = runtime
   if (url.pathname === '/api/evolution/promotions') {
     if (req.method === 'GET') {
-      return sendJson(res, 200, {
+      sendJson(res, 200, {
         ok: true,
         schemaVersion: 1,
         promotions: listEvolutionPromotions({ userId, limit: url.searchParams.get('limit') }),
       })
+      return true
     }
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET 或 POST'))
-    }
+    if (req.method !== 'POST') return methodError(res, 'GET 或 POST')
     const body = await readJson(req, { maxBytes: 16 * 1024 })
     const promotion = createEvolutionPromotion({
       userId,
@@ -472,29 +391,32 @@ export async function handleEvolutionWorkflowRequest(req, res, {
       confirmations: body.confirmations,
       env,
     })
-    return sendJson(res, 201, { ok: true, promotion })
+    sendJson(res, 201, { ok: true, promotion })
+    return true
   }
-  if (promotionRevokeMatch) {
-    if (req.method !== 'POST') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
-    }
+  if (matches.promotionRevokeMatch) {
+    if (req.method !== 'POST') return methodError(res, 'POST')
     const body = await readJson(req, { maxBytes: 8 * 1024 })
     const promotion = revokeEvolutionPromotion({
-      userId,
-      id: decodeURIComponent(promotionRevokeMatch[1]),
-      reason: body.reason,
+      userId, id: decodeURIComponent(matches.promotionRevokeMatch[1]), reason: body.reason,
     })
-    return sendJson(res, 200, { ok: true, promotion })
+    sendJson(res, 200, { ok: true, promotion })
+    return true
   }
-  if (promotionMatch) {
-    if (req.method !== 'GET') {
-      return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
-    }
-    const promotion = getEvolutionPromotion({
-      userId,
-      id: decodeURIComponent(promotionMatch[1]),
-    })
-    return sendJson(res, 200, { ok: true, promotion })
-  }
+  if (!matches.promotionMatch) return false
+  if (req.method !== 'GET') return methodError(res, 'GET')
+  const promotion = getEvolutionPromotion({
+    userId, id: decodeURIComponent(matches.promotionMatch[1]),
+  })
+  sendJson(res, 200, { ok: true, promotion })
+  return true
+}
+
+export async function handleEvolutionWorkflowRequest(req, res, runtime) {
+  if (await handleEvidenceAndCandidateRoutes(req, res, runtime)) return
+  if (await handleReplayAndEvaluationRoutes(req, res, runtime)) return
+  if (await handleApprovalRoutes(req, res, runtime)) return
+  if (await handleCanaryRoutes(req, res, runtime)) return
+  if (await handlePromotionRoutes(req, res, runtime)) return
   return sendJson(res, 404, errorBody('NOT_FOUND', '证据端点不存在'))
 }
