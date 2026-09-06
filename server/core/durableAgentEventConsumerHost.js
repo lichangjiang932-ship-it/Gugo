@@ -29,9 +29,8 @@ function resetToCurrentRegistrationOption(options) {
     )
   }
   let keys
-  try {
-    keys = Reflect.ownKeys(options)
-  } catch {
+  try { keys = Reflect.ownKeys(options) }
+  catch {
     throw durableHostError(
       'AGENT_EVENT_DURABLE_HOST_INVALID',
       'durable Agent Event registration options cannot be inspected safely',
@@ -54,15 +53,331 @@ function resetToCurrentRegistrationOption(options) {
   return descriptor.value
 }
 
-/**
- * Host for the v2 durable Agent Event contract.
- *
- * The host owns only orchestration. The injected store remains the sole
- * authority for immutable subscription identity, cursor state, fencing,
- * retries, DLQ transitions, and retention. A listener receives only the
- * detached plugin-safe transport envelope; tenant identity stays inside the
- * host/store boundary.
- */
+function wakeRecord(record) {
+  const waiter = record.wake
+  record.wake = null
+  waiter?.()
+}
+
+function markRecordStopping(runtime, record) {
+  if (record.stopping) return false
+  record.stopping = true
+  record.stoppingAt = runtime.now()
+  const signalStopping = record.signalStopping
+  record.signalStopping = null
+  signalStopping?.()
+  wakeRecord(record)
+  return true
+}
+
+function waitForRecordWake(runtime, record, delayMs) {
+  if (record.stopping || runtime.state.closed || !runtime.state.started) {
+    return Promise.resolve(false)
+  }
+  return new Promise((resolve) => {
+    let settled = false
+    let timer = null
+    const finish = (value) => {
+      if (settled) return
+      settled = true
+      if (timer !== null) runtime.cancelSchedule(timer)
+      if (record.wake === wakeNow) record.wake = null
+      resolve(value)
+    }
+    const wakeNow = () => finish(true)
+    record.wake = wakeNow
+    timer = runtime.schedule(
+      () => finish(false),
+      boundedAgentEventHostDelay(delayMs, runtime.pollMs),
+    )
+  })
+}
+
+function scheduledWait(runtime, delayMs) {
+  let settled = false
+  let timer = null
+  let settle
+  const promise = new Promise((resolve) => {
+    settle = resolve
+    timer = runtime.schedule(() => {
+      if (settled) return
+      settled = true
+      resolve(true)
+    }, boundedAgentEventHostDelay(delayMs, runtime.pollMs))
+  })
+  return Object.freeze({
+    promise,
+    cancel() {
+      if (settled) return false
+      settled = true
+      if (timer !== null) {
+        try { runtime.cancelSchedule(timer) } catch { /* best-effort timer cancellation */ }
+      }
+      settle(false)
+      return true
+    },
+  })
+}
+
+function reportRetentionError(runtime, error) {
+  observeAgentEventHost(runtime.onHostError, {
+    code: safeAgentEventFailureCode(error, 'AGENT_EVENT_RETENTION_FAILED'),
+    phase: 'retention',
+    subscriptionKey: null,
+  })
+}
+
+async function releaseRecordLease(runtime, record) {
+  const token = record.lease
+  record.lease = null
+  if (!token) return false
+  try {
+    await runtime.operations.releaseAgentEventSubscriptionLease(token, { now: runtime.now() })
+    return true
+  } catch (error) {
+    observeAgentEventHost(runtime.onHostError, {
+      code: safeAgentEventFailureCode(error),
+      phase: 'release',
+      subscriptionKey: record.subscriptionKey,
+    })
+    return false
+  }
+}
+
+async function renewRecordLease(runtime, record) {
+  const token = record.lease
+  if (!token) return null
+  const timestamp = runtime.now()
+  if (Number(token.expiresAt) - timestamp > Math.floor(runtime.leaseMs / 2)) return token
+  record.lease = await runtime.operations.renewAgentEventSubscriptionLease(token, {
+    now: timestamp,
+    leaseDurationMs: runtime.leaseMs,
+  })
+  return record.lease
+}
+
+async function invokeListenerWithHeartbeat(runtime, record, envelope) {
+  let completion
+  try { completion = record.listener(envelope) }
+  catch (error) { return Object.freeze({ listenerFailure: error, leaseFailure: null }) }
+  if (!utilTypes.isPromise(completion)) {
+    return Object.freeze({ listenerFailure: null, leaseFailure: null })
+  }
+  const listenerOutcome = Promise.prototype.then.call(
+    completion,
+    () => Object.freeze({ listenerFailure: null }),
+    (error) => Object.freeze({ listenerFailure: error }),
+  )
+  const stoppingOutcome = Promise.prototype.then.call(
+    record.stoppingPromise,
+    () => Object.freeze({ kind: 'stopping', error: null }),
+  )
+  let drain = null
+  let leaseFailure = null
+  let heartbeat = null
+  while (true) {
+    heartbeat = leaseFailure
+      ? null
+      : heartbeat || scheduledWait(runtime, Math.max(
+          1,
+          Math.floor(Math.max(1, Number(record.lease?.expiresAt) - runtime.now()) / 2),
+        ))
+    const outcomes = [
+      listenerOutcome.then((result) => Object.freeze({ kind: 'listener', result })),
+    ]
+    if (heartbeat) {
+      outcomes.push(heartbeat.promise.then(
+        () => Object.freeze({ kind: 'heartbeat', error: null }),
+        (error) => Object.freeze({ kind: 'heartbeat', error }),
+      ))
+    }
+    if (drain) {
+      outcomes.push(drain.promise.then(
+        () => Object.freeze({ kind: 'drain-timeout', error: null }),
+        (error) => Object.freeze({ kind: 'drain-timeout', error }),
+      ))
+    } else outcomes.push(stoppingOutcome)
+    const outcome = await Promise.race(outcomes)
+    if (outcome.kind === 'listener') {
+      heartbeat?.cancel()
+      drain?.cancel()
+      return Object.freeze({
+        listenerFailure: outcome.result.listenerFailure,
+        leaseFailure,
+        abandoned: false,
+      })
+    }
+    if (outcome.kind === 'stopping') {
+      const elapsed = Math.max(0, runtime.now() - Number(record.stoppingAt ?? runtime.now()))
+      drain ||= scheduledWait(runtime, Math.max(0, runtime.drainMs - elapsed))
+      continue
+    }
+    if (outcome.kind === 'drain-timeout') {
+      heartbeat?.cancel()
+      return Object.freeze({ listenerFailure: null, leaseFailure, abandoned: true })
+    }
+    if (outcome.error) {
+      leaseFailure ||= outcome.error
+      drain ||= scheduledWait(runtime, runtime.drainMs)
+      continue
+    }
+    heartbeat = null
+    try {
+      record.lease = await runtime.operations.renewAgentEventSubscriptionLease(record.lease, {
+        now: runtime.now(),
+        leaseDurationMs: runtime.leaseMs,
+      })
+    } catch (error) {
+      leaseFailure ||= error
+      drain ||= scheduledWait(runtime, runtime.drainMs)
+    }
+  }
+}
+
+function launchRecord(runtime, record) {
+  if (!runtime.state.started || runtime.state.closed
+    || record.stopping || record.abandoned || record.runPromise) return
+  record.runPromise = runtime.runRecord(record).finally(() => { record.runPromise = null })
+}
+
+function revokeRecord(runtime, record, { disable = true } = {}) {
+  if (record.revokePromise) return record.revokePromise
+  if (record.revoked) return Promise.resolve(true)
+  if (disable && !runtime.state.closed) record.disableRequested = true
+  markRecordStopping(runtime, record)
+  const operation = (async () => {
+    await record.runPromise
+    await releaseRecordLease(runtime, record)
+    if (record.disableRequested) {
+      await runtime.operations.disableAgentEventSubscription(record.subscriptionKey, {
+        now: runtime.now(),
+      })
+    }
+    return true
+  })()
+  record.revokePromise = operation.then((value) => {
+    record.revoked = true
+    if (runtime.records.get(record.subscriptionKey) === record) {
+      runtime.records.delete(record.subscriptionKey)
+    }
+    return value
+  }, (error) => {
+    record.revokePromise = null
+    throw error
+  })
+  return record.revokePromise
+}
+
+function registerConsumer(runtime, definition = {}, options = undefined) {
+  if (runtime.state.closed) {
+    throw durableHostError(
+      'AGENT_EVENT_DURABLE_HOST_CLOSED',
+      'durable Agent Event consumer host is closed',
+    )
+  }
+  const resetToCurrent = resetToCurrentRegistrationOption(options)
+  const listener = normalizeDurableAgentEventListener(definition.listener)
+  let subscription = runtime.operations.ensureAgentEventSubscription(definition)
+  const subscriptionKey = subscription?.subscriptionKey
+  const subscriptionUserId = subscription?.userId
+  if (typeof subscriptionKey !== 'string' || !/^[a-f0-9]{64}$/u.test(subscriptionKey)) {
+    throw durableHostError(
+      'AGENT_EVENT_DURABLE_STORE_INVALID',
+      'durable Agent Event store returned an invalid subscription key',
+    )
+  }
+  if (typeof subscriptionUserId !== 'string' || !subscriptionUserId) {
+    throw durableHostError(
+      'AGENT_EVENT_DURABLE_STORE_INVALID',
+      'durable Agent Event store returned a subscription without an owner',
+    )
+  }
+  if (subscription.status === 'disabled') {
+    subscription = runtime.operations.enableAgentEventSubscription(subscriptionKey, {
+      now: runtime.now(), resetToCurrent,
+    })
+  }
+  if (runtime.records.has(subscriptionKey)) {
+    throw durableHostError(
+      'AGENT_EVENT_DURABLE_CONSUMER_DUPLICATE',
+      `durable Agent Event subscription ${subscriptionKey} is already registered`,
+    )
+  }
+  let signalStopping
+  const stoppingPromise = new Promise((resolve) => { signalStopping = resolve })
+  const record = {
+    subscriptionKey,
+    userId: subscriptionUserId,
+    eventType: subscription.eventType,
+    listener,
+    lease: null,
+    runPromise: null,
+    revokePromise: null,
+    revoked: false,
+    disableRequested: false,
+    infrastructureFailures: 0,
+    stopping: false,
+    stoppingAt: null,
+    abandoned: false,
+    stoppingPromise,
+    signalStopping,
+    wake: null,
+  }
+  runtime.records.set(subscriptionKey, record)
+  launchRecord(runtime, record)
+  return Object.freeze({
+    subscriptionKey,
+    contractVersion: subscription.contractVersion,
+    eventType: subscription.eventType,
+    ...(subscription.reset ? { reset: subscription.reset } : {}),
+    revoke: () => revokeRecord(runtime, record),
+  })
+}
+
+function startHost(runtime) {
+  if (runtime.state.closed) {
+    throw durableHostError(
+      'AGENT_EVENT_DURABLE_HOST_CLOSED',
+      'durable Agent Event consumer host is closed',
+    )
+  }
+  if (runtime.state.started) return false
+  runtime.state.started = true
+  runtime.retentionScheduler.start()
+  for (const record of runtime.records.values()) launchRecord(runtime, record)
+  return true
+}
+
+function notifyConsumers(runtime, eventType = null) {
+  if (!runtime.state.started || runtime.state.closed) return 0
+  let notified = 0
+  for (const record of runtime.records.values()) {
+    if (eventType === null || record.eventType === eventType) {
+      notified += 1
+      wakeRecord(record)
+      launchRecord(runtime, record)
+    }
+  }
+  return notified
+}
+
+function shutdownHost(runtime) {
+  if (runtime.state.shutdownPromise) return runtime.state.shutdownPromise
+  runtime.state.closed = true
+  runtime.state.started = false
+  runtime.retentionScheduler.stop()
+  const operation = Promise.all([...runtime.records.values()].map((record) => (
+    revokeRecord(runtime, record, { disable: false })
+  ))).then(() => true)
+  const tracked = operation.catch((error) => {
+    if (runtime.state.shutdownPromise === tracked) runtime.state.shutdownPromise = null
+    throw error
+  })
+  runtime.state.shutdownPromise = tracked
+  return tracked
+}
+
+/** Host for the v2 durable Agent Event contract. */
 export function createDurableAgentEventConsumerHost({
   store,
   ownerId = `agent-event-consumer:${process.pid}:${randomUUID()}`,
@@ -84,21 +399,13 @@ export function createDurableAgentEventConsumerHost({
   }
   const owner = ownerId.trim()
   const leaseMs = positiveHostInteger(leaseDurationMs, 'leaseDurationMs', 3_600_000)
-  const pollMs = positiveHostInteger(
-    idlePollMs,
-    'idlePollMs',
-    MAX_AGENT_EVENT_HOST_DELAY_MS,
-  )
+  const pollMs = positiveHostInteger(idlePollMs, 'idlePollMs', MAX_AGENT_EVENT_HOST_DELAY_MS)
   const pageLimit = positiveHostInteger(scanLimit, 'scanLimit', 1_000)
   const drainMs = positiveHostInteger(
-    listenerDrainTimeoutMs,
-    'listenerDrainTimeoutMs',
-    MAX_AGENT_EVENT_HOST_DELAY_MS,
+    listenerDrainTimeoutMs, 'listenerDrainTimeoutMs', MAX_AGENT_EVENT_HOST_DELAY_MS,
   )
   const retentionMs = positiveHostInteger(
-    retentionIntervalMs,
-    'retentionIntervalMs',
-    MAX_AGENT_EVENT_HOST_DELAY_MS,
+    retentionIntervalMs, 'retentionIntervalMs', MAX_AGENT_EVENT_HOST_DELAY_MS,
   )
   for (const [field, value] of Object.entries({ now, random, schedule, cancelSchedule })) {
     if (typeof value !== 'function' || utilTypes.isProxy(value)) {
@@ -113,217 +420,23 @@ export function createDurableAgentEventConsumerHost({
       )
     }
   }
-
-  const records = new Map()
-  let started = false
-  let closed = false
-  let shutdownPromise = null
-
-  const wake = (record) => {
-    const waiter = record.wake
-    record.wake = null
-    waiter?.()
+  const runtime = {
+    operations, owner, leaseMs, pollMs, pageLimit, drainMs, now, random,
+    schedule, cancelSchedule, onDeliveryFailure, onHostError,
+    records: new Map(),
+    state: { started: false, closed: false, shutdownPromise: null },
+    retentionScheduler: null,
+    runRecord: null,
   }
-
-  const markStopping = (record) => {
-    if (record.stopping) return false
-    record.stopping = true
-    record.stoppingAt = now()
-    const signalStopping = record.signalStopping
-    record.signalStopping = null
-    signalStopping?.()
-    wake(record)
-    return true
-  }
-
-  const waitForWake = (record, delayMs) => {
-    if (record.stopping || closed || !started) return Promise.resolve(false)
-    return new Promise((resolve) => {
-      let settled = false
-      let timer = null
-      const finish = (value) => {
-        if (settled) return
-        settled = true
-        if (timer !== null) cancelSchedule(timer)
-        if (record.wake === wakeNow) record.wake = null
-        resolve(value)
-      }
-      const wakeNow = () => finish(true)
-      record.wake = wakeNow
-      timer = schedule(() => finish(false), boundedAgentEventHostDelay(delayMs, pollMs))
-    })
-  }
-
-  const scheduledWait = (delayMs) => {
-    let settled = false
-    let timer = null
-    let settle
-    const promise = new Promise((resolve) => {
-      settle = resolve
-      timer = schedule(() => {
-        if (settled) return
-        settled = true
-        resolve(true)
-      }, boundedAgentEventHostDelay(delayMs, pollMs))
-    })
-    return Object.freeze({
-      promise,
-      cancel() {
-        if (settled) return false
-        settled = true
-        if (timer !== null) {
-          try {
-            cancelSchedule(timer)
-          } catch {
-            // Cancelling an already-settled heartbeat is best effort only.
-          }
-        }
-        settle(false)
-        return true
-      },
-    })
-  }
-
-  const reportRetentionError = (error) => {
-    observeAgentEventHost(onHostError, {
-      code: safeAgentEventFailureCode(error, 'AGENT_EVENT_RETENTION_FAILED'),
-      phase: 'retention',
-      subscriptionKey: null,
-    })
-  }
-  const retentionScheduler = createDurableAgentEventRetentionScheduler({
+  runtime.retentionScheduler = createDurableAgentEventRetentionScheduler({
     truncate: operations.truncateAgentEventOutboxToSafeWatermark,
     now,
     schedule,
     cancelSchedule,
     intervalMs: retentionMs,
-    onError: reportRetentionError,
+    onError: (error) => reportRetentionError(runtime, error),
   })
-
-  const releaseLease = async (record) => {
-    const token = record.lease
-    record.lease = null
-    if (!token) return false
-    try {
-      await operations.releaseAgentEventSubscriptionLease(token, { now: now() })
-      return true
-    } catch (error) {
-      // An expired/fenced token is already unusable. Report it without
-      // replacing a more useful listener or scan failure.
-      observeAgentEventHost(onHostError, {
-        code: safeAgentEventFailureCode(error),
-        phase: 'release',
-        subscriptionKey: record.subscriptionKey,
-      })
-      return false
-    }
-  }
-
-  const renewLeaseIfNeeded = async (record) => {
-    const token = record.lease
-    if (!token) return null
-    const timestamp = now()
-    if (Number(token.expiresAt) - timestamp > Math.floor(leaseMs / 2)) return token
-    record.lease = await operations.renewAgentEventSubscriptionLease(token, {
-      now: timestamp,
-      leaseDurationMs: leaseMs,
-    })
-    return record.lease
-  }
-
-  const invokeListenerWithLeaseHeartbeat = async (record, envelope) => {
-    let completion
-    try {
-      completion = record.listener(envelope)
-    } catch (error) {
-      return Object.freeze({ listenerFailure: error, leaseFailure: null })
-    }
-    if (!utilTypes.isPromise(completion)) {
-      return Object.freeze({ listenerFailure: null, leaseFailure: null })
-    }
-
-    // Attach both handlers before starting the heartbeat so a plugin Promise
-    // can never surface as an unhandled rejection while a renewal is pending.
-    const listenerOutcome = Promise.prototype.then.call(
-      completion,
-      () => Object.freeze({ listenerFailure: null }),
-      (error) => Object.freeze({ listenerFailure: error }),
-    )
-    const stoppingOutcome = Promise.prototype.then.call(
-      record.stoppingPromise,
-      () => Object.freeze({ kind: 'stopping', error: null }),
-    )
-    let drain = null
-    let leaseFailure = null
-    let heartbeat = null
-    while (true) {
-      heartbeat = leaseFailure
-        ? null
-        : heartbeat || scheduledWait(Math.max(
-          1,
-          Math.floor(Math.max(1, Number(record.lease?.expiresAt) - now()) / 2),
-        ))
-      const outcomes = [
-        listenerOutcome.then((result) => Object.freeze({ kind: 'listener', result })),
-      ]
-      if (heartbeat) {
-        outcomes.push(heartbeat.promise.then(
-          () => Object.freeze({ kind: 'heartbeat', error: null }),
-          (error) => Object.freeze({ kind: 'heartbeat', error }),
-        ))
-      }
-      if (drain) {
-        outcomes.push(drain.promise.then(
-          () => Object.freeze({ kind: 'drain-timeout', error: null }),
-          (error) => Object.freeze({ kind: 'drain-timeout', error }),
-        ))
-      } else {
-        outcomes.push(stoppingOutcome)
-      }
-      const outcome = await Promise.race(outcomes)
-      if (outcome.kind === 'listener') {
-        heartbeat?.cancel()
-        drain?.cancel()
-        return Object.freeze({
-          listenerFailure: outcome.result.listenerFailure,
-          leaseFailure,
-          abandoned: false,
-        })
-      }
-      if (outcome.kind === 'stopping') {
-        const elapsed = Math.max(0, now() - Number(record.stoppingAt ?? now()))
-        drain ||= scheduledWait(Math.max(0, drainMs - elapsed))
-        continue
-      }
-      if (outcome.kind === 'drain-timeout') {
-        heartbeat?.cancel()
-        return Object.freeze({
-          listenerFailure: null,
-          leaseFailure,
-          abandoned: true,
-        })
-      }
-      if (outcome.error) {
-        leaseFailure ||= outcome.error
-        drain ||= scheduledWait(drainMs)
-        continue
-      }
-      heartbeat = null
-      try {
-        record.lease = await operations.renewAgentEventSubscriptionLease(record.lease, {
-          now: now(),
-          leaseDurationMs: leaseMs,
-        })
-      } catch (error) {
-        // The callback cannot be cancelled safely. Stop renewing and give it
-        // the same bounded drain window before the event becomes replayable.
-        leaseFailure ||= error
-        drain ||= scheduledWait(drainMs)
-      }
-    }
-  }
-
-  const runRecord = createDurableAgentEventConsumerRunner({
+  runtime.runRecord = createDurableAgentEventConsumerRunner({
     operations,
     owner,
     leaseMs,
@@ -331,177 +444,31 @@ export function createDurableAgentEventConsumerHost({
     pageLimit,
     now,
     random,
-    isRunning: (record) => started && !closed && !record.stopping && !record.abandoned,
-    waitForWake,
-    renewLeaseIfNeeded,
-    invokeListenerWithLeaseHeartbeat,
-    releaseLease,
-    markStopping,
+    isRunning: (record) => runtime.state.started
+      && !runtime.state.closed && !record.stopping && !record.abandoned,
+    waitForWake: (record, delay) => waitForRecordWake(runtime, record, delay),
+    renewLeaseIfNeeded: (record) => renewRecordLease(runtime, record),
+    invokeListenerWithLeaseHeartbeat: (record, envelope) => (
+      invokeListenerWithHeartbeat(runtime, record, envelope)
+    ),
+    releaseLease: (record) => releaseRecordLease(runtime, record),
+    markStopping: (record) => markRecordStopping(runtime, record),
     onDeliveryFailure,
     onHostError,
   })
-
-  const launch = (record) => {
-    if (!started || closed || record.stopping || record.abandoned || record.runPromise) return
-    record.runPromise = runRecord(record).finally(() => {
-      record.runPromise = null
-    })
-  }
-
-  const revokeRecord = (record, { disable = true } = {}) => {
-    if (record.revokePromise) return record.revokePromise
-    if (record.revoked) return Promise.resolve(true)
-    // Once an explicit uninstall starts, shutdown cannot downgrade it into a
-    // process-only drain. Retain this intent across cleanup failures/retries.
-    if (disable && !closed) record.disableRequested = true
-    markStopping(record)
-    const operation = (async () => {
-      await record.runPromise
-      await releaseLease(record)
-      if (record.disableRequested) {
-        await operations.disableAgentEventSubscription(record.subscriptionKey, { now: now() })
-      }
-      return true
-    })()
-    record.revokePromise = operation.then((value) => {
-      record.revoked = true
-      if (records.get(record.subscriptionKey) === record) records.delete(record.subscriptionKey)
-      return value
-    }, (error) => {
-      record.revokePromise = null
-      throw error
-    })
-    return record.revokePromise
-  }
-
-  const register = (definition = {}, options = undefined) => {
-    if (closed) {
-      throw durableHostError(
-        'AGENT_EVENT_DURABLE_HOST_CLOSED',
-        'durable Agent Event consumer host is closed',
-      )
-    }
-    const resetToCurrent = resetToCurrentRegistrationOption(options)
-    const listener = normalizeDurableAgentEventListener(definition.listener)
-    let subscription = operations.ensureAgentEventSubscription(definition)
-    const subscriptionKey = subscription?.subscriptionKey
-    const subscriptionUserId = subscription?.userId
-    if (typeof subscriptionKey !== 'string' || !/^[a-f0-9]{64}$/u.test(subscriptionKey)) {
-      throw durableHostError(
-        'AGENT_EVENT_DURABLE_STORE_INVALID',
-        'durable Agent Event store returned an invalid subscription key',
-      )
-    }
-    if (typeof subscriptionUserId !== 'string' || !subscriptionUserId) {
-      throw durableHostError(
-        'AGENT_EVENT_DURABLE_STORE_INVALID',
-        'durable Agent Event store returned a subscription without an owner',
-      )
-    }
-    if (subscription.status === 'disabled') {
-      subscription = operations.enableAgentEventSubscription(subscriptionKey, {
-        now: now(),
-        resetToCurrent,
-      })
-    }
-    if (records.has(subscriptionKey)) {
-      throw durableHostError(
-        'AGENT_EVENT_DURABLE_CONSUMER_DUPLICATE',
-        `durable Agent Event subscription ${subscriptionKey} is already registered`,
-      )
-    }
-    let signalStopping
-    const stoppingPromise = new Promise((resolve) => {
-      signalStopping = resolve
-    })
-    const record = {
-      subscriptionKey,
-      userId: subscriptionUserId,
-      eventType: subscription.eventType,
-      listener,
-      lease: null,
-      runPromise: null,
-      revokePromise: null,
-      revoked: false,
-      disableRequested: false,
-      infrastructureFailures: 0,
-      stopping: false,
-      stoppingAt: null,
-      abandoned: false,
-      stoppingPromise,
-      signalStopping,
-      wake: null,
-    }
-    records.set(subscriptionKey, record)
-    launch(record)
-    return Object.freeze({
-      subscriptionKey,
-      contractVersion: subscription.contractVersion,
-      eventType: subscription.eventType,
-      ...(subscription.reset ? { reset: subscription.reset } : {}),
-      revoke: () => revokeRecord(record),
-    })
-  }
-
-  const start = () => {
-    if (closed) {
-      throw durableHostError(
-        'AGENT_EVENT_DURABLE_HOST_CLOSED',
-        'durable Agent Event consumer host is closed',
-      )
-    }
-    if (started) return false
-    started = true
-    retentionScheduler.start()
-    for (const record of records.values()) launch(record)
-    return true
-  }
-
-  const notify = (eventType = null) => {
-    if (!started || closed) return 0
-    let notified = 0
-    for (const record of records.values()) {
-      if (eventType === null || record.eventType === eventType) {
-        notified += 1
-        wake(record)
-        launch(record)
-      }
-    }
-    return notified
-  }
-
-  const listConsumers = () => Object.freeze([...records.values()]
-    .filter((record) => !record.stopping)
-    .map((record) => Object.freeze({
-      subscriptionKey: record.subscriptionKey,
-      eventType: record.eventType,
-      running: Boolean(record.runPromise),
-      leased: Boolean(record.lease),
-    })))
-
-  const shutdown = () => {
-    if (shutdownPromise) return shutdownPromise
-    closed = true
-    started = false
-    retentionScheduler.stop()
-    const active = [...records.values()]
-    const operation = Promise.all(active.map((record) => (
-      revokeRecord(record, { disable: false })
-    ))).then(() => true)
-    const tracked = operation.catch((error) => {
-      if (shutdownPromise === tracked) shutdownPromise = null
-      throw error
-    })
-    shutdownPromise = tracked
-    return shutdownPromise
-  }
-
   return Object.freeze({
     contractVersion: 2,
-    register,
-    start,
-    notify,
-    listConsumers,
-    shutdown,
+    register: (definition, options) => registerConsumer(runtime, definition, options),
+    start: () => startHost(runtime),
+    notify: (eventType = null) => notifyConsumers(runtime, eventType),
+    listConsumers: () => Object.freeze([...runtime.records.values()]
+      .filter((record) => !record.stopping)
+      .map((record) => Object.freeze({
+        subscriptionKey: record.subscriptionKey,
+        eventType: record.eventType,
+        running: Boolean(record.runPromise),
+        leased: Boolean(record.lease),
+      }))),
+    shutdown: () => shutdownHost(runtime),
   })
 }
