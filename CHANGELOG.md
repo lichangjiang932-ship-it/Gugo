@@ -6,6 +6,24 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.54] - 2026-09-06
+
+### Added
+
+- Added an Acorn-based function-complexity audit and a CI gate that rejects every genuine server function over 150 lines while retaining explicit low-density declarative exclusions.
+
+### Changed
+
+- Split all 122 genuine oversized server functions into focused execution, recovery, persistence, routing, lifecycle, plugin, artifact, and verification stages without weakening ownership, CAS, fencing, checkpoint, or fail-closed boundaries.
+- Hardened durable Agent Event delivery with bounded exponential backoff, jitter, poison-event quarantine, consumer disablement, and retention-safe shutdown behavior.
+- Made task-verification retry and diagnostic limits configurable while retaining bounded production-audit timeouts.
+
+### Fixed
+
+- Kept new chats outside projects and prevented background catalog, authentication, cross-tab, and deletion synchronization from navigating blank drafts into existing conversations.
+- Accepted persisted browser-turn locales, retried stale local-token authorization safely with the same Turn ID, and removed the real web-send `INVALID_TURN_REQUEST` failure.
+- Prevented read-only PowerShell byte inspection from creating false mutation-verification debt and added self-healing for affected historical checkpoints.
+
 ## [0.11.53] - 2026-09-03
 
 ### Fixed
