@@ -49,6 +49,7 @@ files:
   - desktop/runtime.js
   - desktop/security.js
   - desktop/updateRuntime.js
+  - desktop/updateSignature.js
   - build/icon.ico
   - package.json
 win:

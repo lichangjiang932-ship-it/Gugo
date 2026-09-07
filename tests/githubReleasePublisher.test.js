@@ -37,6 +37,7 @@ function createGitHubApi({
   replaceReleaseIdOnRead = 0,
   tagCommit = COMMIT,
   annotatedTag = false,
+  expectedReleaseNotes = null,
 } = {}) {
   const state = {
     release: release ? { ...release } : null,
@@ -126,8 +127,11 @@ function createGitHubApi({
       return jsonResponse(204)
     }
     if (url.pathname === `/repos/${REPOSITORY}/releases/42` && method === 'PATCH') {
-      assert.deepEqual(JSON.parse(init.body), { draft: false, prerelease: false })
-      state.release = { ...state.release, draft: false, prerelease: false }
+      const publication = JSON.parse(init.body)
+      assert.deepEqual(publication, { draft: false, prerelease: false,
+        ...(expectedReleaseNotes == null ? {} : { name: TAG, target_commitish: COMMIT, body: expectedReleaseNotes }),
+      })
+      state.release = { ...state.release, ...publication }
       return jsonResponse(200, state.release)
     }
     return jsonResponse(404, { message: `Unhandled ${method} ${url.pathname}` })
@@ -175,6 +179,28 @@ test('GitHub REST publisher creates a draft, verifies assets, then publishes it'
   assert.ok(create >= 0 && create < firstUpload)
   assert.ok(firstUpload < secondAssetRead)
   assert.ok(secondAssetRead < publish)
+})
+
+test('declared unsigned notes replace a stale blocked draft only when verified assets are published', async (t) => {
+  const notes = 'Windows build: unsigned. Verify checksums and provenance; these are not a signing certificate.'
+  const api = createGitHubApi({
+    release: { id: 42, tag_name: TAG, draft: true, prerelease: false, body: 'Draft blocked by missing certificate', target_commitish: 'old-main' },
+    expectedReleaseNotes: notes,
+  })
+  await publishGitHubRelease({ ...publishOptions(t, api), releaseNotes: notes })
+  assert.equal(api.state.release.body, notes)
+  assert.equal(api.state.release.target_commitish, COMMIT)
+  const patch = api.state.calls.findIndex(call => call.method === 'PATCH')
+  const verification = api.state.calls.findLastIndex(call => call.method === 'GET' && call.url.includes('/assets?'))
+  assert.ok(patch > verification && verification >= 0)
+})
+
+test('invalid release notes are rejected before any GitHub mutation', async (t) => {
+  for (const releaseNotes of ['', ' ', {}, 'x'.repeat(24_001)]) {
+    const api = createGitHubApi()
+    await assert.rejects(publishGitHubRelease({ ...publishOptions(t, api), releaseNotes }), /release notes must/)
+    assert.deepEqual(api.state.calls, [])
+  }
 })
 
 test('GitHub REST publisher resumes a draft by replacing conflicting named assets', async (t) => {

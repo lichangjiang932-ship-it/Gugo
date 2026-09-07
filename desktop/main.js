@@ -98,6 +98,7 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
 function sendUpdateStatus(status, details = {}) {
+  if (status !== 'ready') updateReady = false
   if (!mainWindow || mainWindow.isDestroyed()) return
   mainWindow.webContents.send('desktop:update-status', { status, ...details })
 }
@@ -435,7 +436,11 @@ function registerDesktopIpc() {
   })
   ipcMain.handle('desktop:install-update', async (event) => {
     assertTrustedIpc(event)
-    if (!updateReady) return { ready: false }
+    if (!updateReady || !desktopUpdateRuntime || desktopUpdateRuntime.downloading
+      || !autoUpdater.installerPath || !autoUpdater.downloadedUpdateHelper?.downloadedFileInfo) {
+      updateReady = false
+      return { ready: false }
+    }
     sendUpdateStatus('installing')
     try {
       await stopBackend()

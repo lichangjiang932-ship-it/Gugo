@@ -51,7 +51,13 @@ jobs:
           node-version: 22.x
           cache: npm
 
+      - name: Resolve version-bound Windows signing policy
+        id: release_policy
+        shell: pwsh
+        run: node scripts/release/releasePolicy.mjs --github-output "$env:GITHUB_OUTPUT"
+
       - name: Require Windows code-signing credentials
+        if: steps.release_policy.outputs.windows_signing == 'signed'
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:CSC_LINK)) {
@@ -107,57 +113,19 @@ jobs:
           $version = node -p "require('./package.json').version"
           scripts/release/verify-web-release.ps1 -ArchivePath "gugo-$version-web.tar.gz"
 
-      - name: Package Windows desktop installer
+      - name: Package signed Windows desktop installer
+        if: steps.release_policy.outputs.windows_signing == 'signed'
         run: npm run desktop:package:signed
 
-      - name: Verify Windows installer signature
+      - name: Package explicitly unsigned Windows desktop installer
+        if: steps.release_policy.outputs.windows_signing == 'unsigned'
+        run: npm run desktop:package:unsigned
+
+      - name: Verify Windows installer signing policy
         shell: pwsh
-        run: |
-          $version = node -p "require('./package.json').version"
-          $expectedInstallerName = "Gugo-Setup-$version-x64.exe"
-          $installers = @(Get-ChildItem -LiteralPath release -Filter 'Gugo-Setup-*.exe' -File)
-          if ($installers.Count -ne 1 -or $installers[0].Name -cne $expectedInstallerName) {
-            throw "Expected exactly one Windows installer named $expectedInstallerName"
-          }
-          $packagedExecutable = (Resolve-Path 'release/win-unpacked/Gugo.exe').Path
-          $signedExecutables = @($installers[0].FullName, $packagedExecutable)
-          $signerThumbprint = $null
-          $signerName = $null
-          foreach ($executable in $signedExecutables) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $executable
-            if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate) {
-              throw "Executable signature is not valid: $executable ($($signature.Status))"
-            }
-            if ($null -eq $signature.TimeStamperCertificate) {
-              throw "Executable signature is missing a trusted timestamp: $executable"
-            }
-            if ($null -eq $signerThumbprint) {
-              $signerThumbprint = $signature.SignerCertificate.Thumbprint
-              $signerName = $signature.SignerCertificate.GetNameInfo(
-                [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
-                $false
-              )
-            } elseif ($signature.SignerCertificate.Thumbprint -ne $signerThumbprint) {
-              throw "Packaged executables were signed by different certificates: $executable"
-            }
-          }
-          if ([string]::IsNullOrWhiteSpace($signerName)) {
-            throw 'The signing certificate has no publisher name'
-          }
-          if ($signerName -cne $env:WINDOWS_PUBLISHER_NAME) {
-            throw "Signer $signerName does not match configured WINDOWS_PUBLISHER_NAME"
-          }
-          $updateConfigPath = 'release/win-unpacked/resources/app-update.yml'
-          if (-not (Test-Path -LiteralPath $updateConfigPath -PathType Leaf)) {
-            throw 'Packaged app-update.yml is missing'
-          }
-          $updateConfig = Get-Content -LiteralPath $updateConfigPath -Raw
-          if ($updateConfig -notmatch '(?m)^publisherName:[ \t]*(?:\S.*|\r?\n[ \t]+-[ \t]+\S.*)$') {
-            throw 'Packaged app-update.yml has no publisherName for update signature verification'
-          }
-          if (-not $updateConfig.Contains($signerName)) {
-            throw "Packaged updater publisherName does not match signer $signerName"
-          }
+        env:
+          WINDOWS_SIGNING_MODE: ${{ steps.release_policy.outputs.windows_signing }}
+        run: scripts/release/verify-windows-signing.ps1 -Mode $env:WINDOWS_SIGNING_MODE
 
       - name: Create release checksum manifest
         shell: pwsh

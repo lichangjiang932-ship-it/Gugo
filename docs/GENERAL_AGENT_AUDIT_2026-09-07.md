@@ -97,24 +97,34 @@ OpenAI 的 [Compaction 文档](https://developers.openai.com/api/docs/guides/com
 | 技能插件 | 已选技能的资源可以被实际工具读取，schema 变化能到达执行器 | 任意二进制模板的安全物化/执行仍需独立能力；不自动执行第三方脚本 |
 | 本地优先 | 相同明确数据目录对应同一数据源；应用控制的出网经过服务端政策 | 任意 Shell、可信插件和 MCP stdio 不构成 OS 级网络隔离，严格 air-gap 需要经验证的系统边界 |
 | 工程可持续 | 类型试点继续覆盖关键实现与调用方；能力用例持续增长 | 全仓类型迁移尚未完成；不把静态 aliases 当作实现检查 |
-| 正式分发 | 验证过的主分支提交、匹配版本/标签、签名、校验和与来源证明 | Windows 签名配置目前是外部阻碍，不可绕过 |
+| 正式分发 | 验证过的主分支提交、匹配版本/标签及显式签名策略、完整资产、校验和与来源证明 | 0.11.55 明确选择未签名，接受缺少 Windows 发布者身份的风险；不能伪称证书或签名保证已补齐 |
 
 已有历史记忆的含混旧链接不会被猜测性重写；新的稳定链接策略负责阻止新增歧义。公开 Marketplace 自动分发也属于独立的信任与产品决策，不应为追求“完全插件化”绕过验证安装。
 
 ## 发布预检
 
-仓库最新稳定版本为 `v0.11.54`。其 [Release run 34021618396](https://github.com/lichangjiang932-ship-it/Gugo/actions/runs/34021618396) 在 `Require Windows code-signing credentials` 步骤失败。本轮读取仓库 Secret/Variable 元数据，确认以下配置未提供：
+发布预检时仓库最新稳定版本为 `v0.11.54`。其 [Release run 34021618396](https://github.com/lichangjiang932-ship-it/Gugo/actions/runs/34021618396) 在当时仅允许签名分发的 `Require Windows code-signing credentials` 步骤失败。本轮当时读取仓库 Secret/Variable 元数据，确认以下配置未提供：
 
 - Secrets：`WINDOWS_CSC_LINK`、`WINDOWS_CSC_KEY_PASSWORD`。
 - Variable：`WINDOWS_PUBLISHER_NAME`，必须与签名证书发布者一致。
 
-这说明“发布脚本具有安全门禁”与“生产签名已配置并成功发布”是两个状态。不会删除既有正式资产、覆盖旧标签或降低签名门禁。后续代码、CI 和网页包可以先验证；正式 Windows Release 必须等待有效配置。
+这说明“发布脚本具有安全门禁”与“生产签名已配置并成功发布”是两个状态。上述缺证书导致失败的历史事实仍然成立，不会通过修改报告、删除既有正式资产或覆盖旧标签抹去。
+
+用户随后明确选择“不配置签名发布”。因此 0.11.55 通过已提交的 `scripts/release/policy.json` 将 `version: "0.11.55"` 与 `windowsSigning: "unsigned"` 绑定。这是经明确选择的分发策略，不是因缺少 Secret 自动降级。后续升级版本也必须同步审查策略版本；策略缺失、无效或版本不一致均停止发布。选择 `signed` 的版本仍要求完整证书、时间戳、发布者与更新器配置验证，失败不转未签名。
+
+未签名路径使用 `npm run desktop:package:unsigned`，禁止 executable signing 但保留图标和版本资源，验证安装器与打包主程序均为 `NotSigned`。CI、完整五资产、SHA-256 校验清单、GitHub 构建来源证明及已发布资产不可变约束全部保留。校验和与来源证明不是 Authenticode，也不能给未签名安装包补上 Windows 发布者身份或保证其安全。因此相关签名债务保持开放并记录显式接受的风险，当前符合已提交未签名策略的发布不再仅因缺证书而阻塞。
+
+Windows/SmartScreen 仍可能提示未知发布者，不建议关闭系统或组织保护。更新器在 SHA-512 校验后、提交缓存和报告 ready 前仍调用当前 `NsisUpdater.verifySignature`，不全局禁用签名校验。正确执行发布者校验的签名客户端会拒绝未签名更新，需用户核对风险与下载校验后显式手动迁移；新代码不能追溯修复已分发的旧客户端。操作与限制见 [DESKTOP_RELEASES.md](DESKTOP_RELEASES.md)。
+
+本次说明补记时，未签名构建已走过配置结构校验，但本机实际打包在 Electron 解压后的 `rename` 阶段遇到 `EPERM`。尚无本轮新安装包完成产物验收的证据，不能把配置检查写成安装包验证或发布成功。构建成功后仍需执行 `powershell -NoProfile -File scripts/release/verify-windows-signing.ps1 -Mode unsigned`，确认安装器与主程序均为 `NotSigned`，且真实 YAML 更新元数据不声明证书发布者；隔离输出通过 `-ReleaseDirectory` 指定。
+
+本次策略调整的提交前回归覆盖发布策略、来源校验、桌面更新与安装入口、进程清理、崩溃恢复：10 个测试文件，174 项通过、2 项平台跳过、0 失败；lint、类型检查与大小门禁通过。还修正了合并后 CI 暴露的两处测试前置条件：实际崩溃后先等待持久租约到期，线程池压力目标使用真实 sealed Job。未修改产品租约或 PID 身份门禁，也不声称已追溯出历史 CI 的具体 Win32 错误码。最终安装包与正式发布结果仍以新提交的 Release 工作流为准。
 
 生产依赖审计另有两项 `image-size@1.2.1` 的版本锁定临时例外，过期日为 2026-11-06。审计通过不代表不存在任何已知漏洞；其边界和到期条件继续由 `scripts/audit-production.mjs` 验证。
 
 ## 最终验证
 
-本轮实际执行记录如下；未结束的门禁不记为通过。审计前版本的 794 个测试文件与 61 项离线评测通过记录，不作为本轮修改后的通过证明。
+以下是未签名分发策略调整前的通用 Agent 修复验收记录；未结束的门禁不记为通过。后续发布策略与更新器变更必须针对最终提交独立验证，不能直接继承下表的通过结论。审计前版本的 794 个测试文件与 61 项离线评测通过记录，不作为本轮修改后的通过证明。
 
 | 检查 | 当前结果 |
 |---|---|

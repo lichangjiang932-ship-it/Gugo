@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
+import { suspendInstallerRegistration, verifyInstallerSignature } from './updateSignature.js'
 
 export const DEFAULT_UPDATE_CHUNK_SIZE = 2 * 1024 * 1024
 export const MIN_UPDATE_CHUNK_SIZE = 1 * 1024 * 1024
@@ -522,6 +523,7 @@ export function createDesktopUpdateRuntime({
     downloadPromise = (async () => {
       const fileInfo = selectInstallerFile(updater, updateInfo)
       const helper = await updater.getOrCreateDownloadHelper()
+      suspendInstallerRegistration(updater)
       const pendingDirectory = helper.cacheDirForPendingUpdate
       const installerName = path.basename(decodeURIComponent(fileInfo.url.pathname))
       const destinationPath = path.join(pendingDirectory, installerName)
@@ -557,6 +559,10 @@ export function createDesktopUpdateRuntime({
         requestHeaders,
         onStatus: (status) => onStatus({ ...status, version: updateInfo.version }),
       })
+      // The custom downloader bypasses NsisUpdater.doDownloadUpdate, so perform
+      // its signature gate here for both fresh downloads and reused cache hits,
+      // before registering an installable file or dispatching a ready event.
+      await verifyInstallerSignature(updater, destinationPath)
       await fs.promises.mkdir(pendingDirectory, { recursive: true })
       if (newBlockMapBuffer) {
         const pendingBlockMapPath = path.join(pendingDirectory, 'current.blockmap')
@@ -564,6 +570,7 @@ export function createDesktopUpdateRuntime({
         await fs.promises.copyFile(pendingBlockMapPath, path.join(helper.cacheDir, 'current.blockmap'))
       }
       await helper.setDownloadedFile(destinationPath, null, updateInfo, fileInfo, installerName, true)
+      updater.downloadedUpdateHelper = helper
       updater.dispatchUpdateDownloaded({ ...updateInfo, downloadedFile: destinationPath })
       updater.addQuitHandler()
       return result

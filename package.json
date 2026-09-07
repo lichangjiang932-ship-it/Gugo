@@ -55,6 +55,7 @@
     "desktop:media-sidecars": "node scripts/prepare-media-sidecars.mjs",
     "desktop:package": "npm run desktop:media-sidecars && electron-builder --win nsis --publish never && npm run desktop:smoke-package",
     "desktop:package:signed": "npm run desktop:media-sidecars && electron-builder --win nsis --publish never -c.forceCodeSigning=true && npm run desktop:smoke-package",
+    "desktop:package:unsigned": "npm run desktop:media-sidecars && node scripts/release/package-unsigned-windows.mjs && npm run desktop:smoke-package",
     "desktop:dist": "npm run build && npm run desktop:check && npm run desktop:package",
     "desktop:publish": "node scripts/release/block-direct-desktop-publish.mjs",
     "preview": "vite preview --configLoader runner",

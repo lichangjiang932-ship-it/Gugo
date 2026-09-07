@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,6 +16,8 @@ import {
 } from '../desktop/updateRuntime.js'
 
 const MIB = 1024 * 1024
+const { NsisUpdater } = createRequire(import.meta.url)('electron-updater/out/NsisUpdater.js')
+const { BaseUpdater } = createRequire(import.meta.url)('electron-updater/out/BaseUpdater.js')
 
 function sha512(value) {
   return createHash('sha512').update(value).digest('base64')
@@ -241,7 +244,7 @@ test('custom runtime registers the verified installer with electron-updater for 
     url: new URL('https://downloads.example/Gugo-Setup-9.9.9-x64.exe'),
     info: { size: payload.length, sha512: sha512(payload) },
   }
-  const calls = { downloaded: [], dispatched: [], feed: [], quit: 0 }
+  const calls = { downloaded: [], dispatched: [], feed: [], verified: [], quit: 0 }
   const helper = {
     cacheDir: directory,
     cacheDirForPendingUpdate: pendingDirectory,
@@ -253,6 +256,12 @@ test('custom runtime registers the verified installer with electron-updater for 
     setFeedURL(value) { calls.feed.push(value) },
     async getOrCreateDownloadHelper() { return helper },
     computeRequestHeaders() { return { authorization: 'Bearer test' } },
+    async verifySignature(filePath) {
+      calls.verified.push(filePath)
+      assert.equal(calls.downloaded.length, 0)
+      assert.equal(calls.dispatched.length, 0)
+      return null
+    },
     dispatchUpdateDownloaded(value) { calls.dispatched.push(value) },
     addQuitHandler() { calls.quit += 1 },
   }
@@ -278,7 +287,154 @@ test('custom runtime registers the verified installer with electron-updater for 
   assert.equal(registeredFile, fileInfo)
   assert.equal(installerName, 'Gugo-Setup-9.9.9-x64.exe')
   assert.equal(saveCache, true)
+  assert.deepEqual(calls.verified, [downloadedPath])
   assert.equal(calls.dispatched[0].downloadedFile, downloadedPath)
   assert.equal(calls.quit, 1)
   assert.ok(statuses.some((status) => status.mode === 'full' && status.version === '9.9.9'))
+})
+
+function signatureFixture(t, options = {}) {
+  const directory = temporaryDirectory(t)
+  const pendingDirectory = path.join(directory, 'pending')
+  const payload = Buffer.from('synthetic installer bytes; never execute')
+  const installerName = 'Gugo-Setup-signature-fixture.exe'
+  const installerPath = path.join(pendingDirectory, installerName)
+  const updateInfo = { version: '9.9.9', publisherName: null }
+  const fileInfo = {
+    url: new URL(`https://downloads.example/${installerName}`),
+    info: { size: payload.length, sha512: options.sha512 || sha512(payload) },
+  }
+  if (options.cached || options.previouslyReady) {
+    fs.mkdirSync(pendingDirectory)
+    fs.writeFileSync(installerPath, options.cached ? payload : Buffer.from('previous verified fixture bytes'))
+  }
+  const calls = { events: [], nativeSignature: [], downloads: 0, installs: 0 }
+  const helper = {
+    cacheDir: directory,
+    cacheDirForPendingUpdate: pendingDirectory,
+    file: options.previouslyReady ? installerPath : null,
+    downloadedFileInfo: options.previouslyReady ? { isAdminRightsRequired: false } : null,
+    async setDownloadedFile(filePath) {
+      calls.events.push('cache')
+      assert.equal(filePath, installerPath)
+      assert.equal(updater.downloadedUpdateHelper, null, 'cache registration cannot expose the candidate early')
+      this.file = filePath
+      this.downloadedFileInfo = { isAdminRightsRequired: false }
+      if (options.registrationError) throw options.registrationError
+    },
+  }
+  // Use the installed BaseUpdater installerPath/install implementation without
+  // invoking its constructor, Electron app lifecycle, or any real installer.
+  const updater = Object.assign(Object.create(BaseUpdater.prototype), {
+    downloadedUpdateHelper: options.previouslyReady ? helper : null,
+    quitAndInstallCalled: false,
+    _logger: { info() {}, warn() {} },
+    dispatchError() {},
+    doInstall() { calls.installs += 1; return true },
+    configOnDisk: { value: Promise.resolve(options.publisherName == null ? {} : { publisherName: options.publisherName }) },
+    updateInfoAndProvider: { provider: { resolveFiles: () => [fileInfo] }, info: updateInfo },
+    async getOrCreateDownloadHelper() { this.downloadedUpdateHelper = helper; return helper },
+    async verifySignature(filePath) {
+      calls.events.push('verify')
+      assert.equal(filePath, installerPath)
+      await options.onVerify?.({ updater, helper })
+      if (options.verifierError) throw options.verifierError
+      return NsisUpdater.prototype.verifySignature.call(this, filePath)
+    },
+    async _verifyUpdateCodeSignature(publisherNames, filePath) {
+      calls.nativeSignature.push({ publisherNames, filePath })
+      return Object.hasOwn(options, 'signatureResult') ? options.signatureResult : null
+    },
+    dispatchUpdateDownloaded() { calls.events.push('ready') },
+    addQuitHandler() { calls.events.push('install-handler') },
+  })
+  if (options.missingVerifier) delete updater.verifySignature
+  const statuses = []
+  const runtime = createDesktopUpdateRuntime({
+    updater,
+    maxAttempts: 1,
+    fetchImpl: async () => new Response('missing blockmap', { status: 404 }),
+    fetchRange: async ({ start, end }) => {
+      calls.downloads += 1
+      await options.onDownload?.({ updater, helper })
+      return payload.subarray(start, end)
+    },
+    onStatus: (status) => statuses.push(status),
+  })
+  return { runtime, updateInfo, calls, installerPath, statuses, updater, helper, payload }
+}
+
+for (const cached of [false, true]) {
+  const source = cached ? 'cached' : 'fresh'
+  test(`the ${source} installer follows the current unsigned installation policy`, async (t) => {
+    const fixture = signatureFixture(t, { cached })
+    const result = await fixture.runtime.startDownload(fixture.updateInfo)
+    assert.equal(result.resumed, cached)
+    assert.equal(fixture.calls.downloads, cached ? 0 : 1)
+    assert.deepEqual(fixture.calls.nativeSignature, [])
+    assert.deepEqual(fixture.calls.events, ['verify', 'cache', 'ready', 'install-handler'])
+  })
+
+  test(`the ${source} installer retains the current signed installation publisher policy`, async (t) => {
+    const fixture = signatureFixture(t, { cached, publisherName: 'Fixture Publisher' })
+    await fixture.runtime.startDownload(fixture.updateInfo)
+    assert.equal(fixture.calls.downloads, cached ? 0 : 1)
+    assert.deepEqual(fixture.calls.nativeSignature, [{ publisherNames: ['Fixture Publisher'], filePath: fixture.installerPath }])
+    assert.deepEqual(fixture.calls.events, ['verify', 'cache', 'ready', 'install-handler'])
+  })
+
+  for (const [failure, options, code] of [
+    ['unsigned installer', { signatureResult: 'fixture installer is not signed' }, 'UPDATE_SIGNATURE_INVALID'],
+    ['mismatched signer', { signatureResult: 'fixture signer is a different publisher' }, 'UPDATE_SIGNATURE_INVALID'],
+    ['undefined verifier result', { signatureResult: undefined }, 'UPDATE_SIGNATURE_INVALID'],
+    ['missing verifier', { missingVerifier: true }, 'UPDATE_SIGNATURE_VERIFIER_UNAVAILABLE'],
+    ['verification error', { verifierError: new Error('synthetic verification failure') }, 'UPDATE_SIGNATURE_VERIFICATION_FAILED'],
+  ]) {
+    test(`the ${source} installer cannot become installable after ${failure}`, async (t) => {
+      const fixture = signatureFixture(t, { cached, previouslyReady: true, publisherName: ['Fixture Publisher'], ...options })
+      assert.equal(fixture.updater.installerPath, fixture.installerPath)
+      await assert.rejects(fixture.runtime.startDownload(fixture.updateInfo), { code })
+      assert.equal(fixture.calls.downloads, cached ? 0 : 1)
+      assert.deepEqual(fixture.calls.events, options.missingVerifier ? [] : ['verify'])
+      assert.equal(fixture.statuses.at(-1).code, code)
+      assert.equal(fixture.runtime.downloading, false)
+      assert.equal(fixture.updater.downloadedUpdateHelper, null)
+      assert.equal(BaseUpdater.prototype.install.call(fixture.updater), false)
+      assert.equal(fixture.calls.installs, 0)
+      assert.deepEqual(fs.readFileSync(fixture.installerPath), fixture.payload, 'rejected bytes remain reusable but not installable')
+    })
+  }
+
+  test(`a previous ready helper is suspended during ${source} verification and restored only on success`, async (t) => {
+    const assertCannotInstall = ({ updater }) => {
+      assert.equal(updater.downloadedUpdateHelper, null)
+      assert.equal(BaseUpdater.prototype.install.call(updater), false)
+    }
+    const fixture = signatureFixture(t, {
+      cached, previouslyReady: true, publisherName: ['Fixture Publisher'],
+      onDownload: assertCannotInstall, onVerify: assertCannotInstall,
+    })
+    assert.equal(fixture.updater.installerPath, fixture.installerPath)
+    await fixture.runtime.startDownload(fixture.updateInfo)
+    assert.equal(fixture.updater.downloadedUpdateHelper, fixture.helper)
+    assert.equal(BaseUpdater.prototype.install.call(fixture.updater), true)
+    assert.equal(fixture.calls.installs, 1, 'only the fake installer is called, after verification and cache registration')
+  })
+}
+
+test('a cache-registration error never restores a previous ready installer helper', async (t) => {
+  const error = new Error('synthetic cache registration failure')
+  const fixture = signatureFixture(t, { previouslyReady: true, registrationError: error })
+  await assert.rejects(fixture.runtime.startDownload(fixture.updateInfo), error)
+  assert.deepEqual(fixture.calls.events, ['verify', 'cache'])
+  assert.equal(fixture.updater.downloadedUpdateHelper, null)
+  assert.equal(BaseUpdater.prototype.install.call(fixture.updater), false)
+  assert.equal(fixture.calls.installs, 0)
+})
+
+test('SHA-512 must succeed before checking the installer signature or marking it ready', async (t) => {
+  const fixture = signatureFixture(t, { publisherName: ['Fixture Publisher'], sha512: sha512(Buffer.from('other bytes')) })
+  await assert.rejects(fixture.runtime.startDownload(fixture.updateInfo), { code: 'UPDATE_INTEGRITY_MISMATCH' })
+  assert.deepEqual(fixture.calls.events, [])
+  assert.deepEqual(fixture.calls.nativeSignature, [])
 })
