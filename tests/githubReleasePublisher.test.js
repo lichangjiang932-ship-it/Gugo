@@ -1,168 +1,7 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
 import test from 'node:test'
-
 import { publishGitHubRelease } from '../scripts/release/publish-github-release.mjs'
-
-const API_BASE_URL = 'https://api.github.test'
-const UPLOADS_BASE_URL = 'https://uploads.github.test'
-const REPOSITORY = 'gugo-tests/release-fixture'
-const TAG = 'v1.2.3'
-const COMMIT = '0123456789abcdef0123456789abcdef01234567'
-const ANNOTATED_TAG_SHA = 'abcdefabcdefabcdefabcdefabcdefabcdefabcd'
-
-function jsonResponse(status, value) {
-  if (status === 204) return new Response(null, { status })
-  return new Response(JSON.stringify(value), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  })
-}
-
-async function readRequestBody(body) {
-  if (typeof body === 'string') return Buffer.from(body)
-  const chunks = []
-  for await (const chunk of body || []) chunks.push(Buffer.from(chunk))
-  return Buffer.concat(chunks)
-}
-
-function createGitHubApi({
-  release = null,
-  assets = [],
-  corruptVerification = false,
-  omitVerificationState = false,
-  publishOnReleaseRead = 0,
-  replaceReleaseIdOnRead = 0,
-  tagCommit = COMMIT,
-  annotatedTag = false,
-  expectedReleaseNotes = null,
-} = {}) {
-  const state = {
-    release: release ? { ...release } : null,
-    assets: assets.map((asset) => ({ state: 'uploaded', ...asset })),
-    calls: [],
-    nextAssetId: 100,
-    assetListReads: 0,
-    releaseReads: 0,
-  }
-
-  const fetchImpl = async (input, init = {}) => {
-    const url = new URL(input)
-    const method = init.method || 'GET'
-    const authorization = new Headers(init.headers).get('Authorization')
-    assert.equal(authorization, 'Bearer release-test-token')
-    state.calls.push({ method, url: url.href, body: typeof init.body === 'string' ? init.body : null })
-
-    if (url.origin === UPLOADS_BASE_URL && method === 'POST') {
-      const bytes = await readRequestBody(init.body)
-      const asset = {
-        id: state.nextAssetId++,
-        name: url.searchParams.get('name'),
-        size: bytes.length,
-        state: 'uploaded',
-      }
-      state.assets.push(asset)
-      return jsonResponse(201, asset)
-    }
-
-    if (url.pathname === `/repos/${REPOSITORY}/git/ref/tags/${TAG}` && method === 'GET') {
-      return tagCommit
-        ? jsonResponse(200, {
-          ref: `refs/tags/${TAG}`,
-          object: annotatedTag
-            ? { type: 'tag', sha: ANNOTATED_TAG_SHA }
-            : { type: 'commit', sha: tagCommit },
-        })
-        : jsonResponse(404, { message: 'Not Found' })
-    }
-    if (url.pathname === `/repos/${REPOSITORY}/git/tags/${ANNOTATED_TAG_SHA}` && method === 'GET') {
-      return annotatedTag
-        ? jsonResponse(200, { object: { type: 'commit', sha: tagCommit } })
-        : jsonResponse(404, { message: 'Not Found' })
-    }
-
-    const tagPath = `/repos/${REPOSITORY}/releases/tags/${TAG}`
-    if (url.pathname === tagPath && method === 'GET') {
-      state.releaseReads += 1
-      if (state.release && state.releaseReads === publishOnReleaseRead) {
-        state.release = { ...state.release, draft: false }
-      }
-      if (state.release && state.releaseReads === replaceReleaseIdOnRead) {
-        state.release = { ...state.release, id: 43 }
-      }
-      return state.release
-        ? jsonResponse(200, state.release)
-        : jsonResponse(404, { message: 'Not Found' })
-    }
-    if (url.pathname === `/repos/${REPOSITORY}/releases` && method === 'POST') {
-      const body = JSON.parse(init.body)
-      assert.deepEqual(body, {
-        tag_name: TAG,
-        target_commitish: COMMIT,
-        name: TAG,
-        draft: true,
-        prerelease: false,
-        generate_release_notes: true,
-      })
-      state.release = { id: 42, tag_name: TAG, draft: true, prerelease: false }
-      return jsonResponse(201, state.release)
-    }
-    if (url.pathname === `/repos/${REPOSITORY}/releases/42/assets` && method === 'GET') {
-      state.assetListReads += 1
-      const visibleAssets = state.assets.map((asset) => ({ ...asset }))
-      if (corruptVerification && state.assetListReads > 1 && visibleAssets[0]) {
-        visibleAssets[0].size += 1
-      }
-      if (omitVerificationState && state.assetListReads > 1 && visibleAssets[0]) {
-        delete visibleAssets[0].state
-      }
-      return jsonResponse(200, visibleAssets)
-    }
-    const assetDelete = new RegExp(`^/repos/${REPOSITORY}/releases/assets/(\\d+)$`).exec(url.pathname)
-    if (assetDelete && method === 'DELETE') {
-      const id = Number(assetDelete[1])
-      state.assets = state.assets.filter((asset) => asset.id !== id)
-      return jsonResponse(204)
-    }
-    if (url.pathname === `/repos/${REPOSITORY}/releases/42` && method === 'PATCH') {
-      const publication = JSON.parse(init.body)
-      assert.deepEqual(publication, { draft: false, prerelease: false,
-        ...(expectedReleaseNotes == null ? {} : { name: TAG, target_commitish: COMMIT, body: expectedReleaseNotes }),
-      })
-      state.release = { ...state.release, ...publication }
-      return jsonResponse(200, state.release)
-    }
-    return jsonResponse(404, { message: `Unhandled ${method} ${url.pathname}` })
-  }
-
-  return { state, fetchImpl }
-}
-
-function createAssets(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-release-publisher-'))
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
-  const installer = path.join(root, 'Gugo-Setup-1.2.3-x64.exe')
-  const updater = path.join(root, 'latest.yml')
-  fs.writeFileSync(installer, Buffer.from([0, 1, 2, 3]))
-  fs.writeFileSync(updater, 'version: 1.2.3\n')
-  return { root, files: [installer, updater] }
-}
-
-function publishOptions(t, api) {
-  const fixture = createAssets(t)
-  return {
-    repository: REPOSITORY,
-    tag: TAG,
-    commit: COMMIT,
-    files: fixture.files,
-    token: 'release-test-token',
-    fetchImpl: api.fetchImpl,
-    apiBaseUrl: API_BASE_URL,
-    uploadsBaseUrl: UPLOADS_BASE_URL,
-  }
-}
+import { ANNOTATED_TAG_SHA, COMMIT, REPOSITORY, TAG, UPLOADS_BASE_URL, createGitHubApi, publishOptions } from './helpers/githubReleasePublisherFixture.js'
 
 test('GitHub REST publisher creates a draft, verifies assets, then publishes it', async (t) => {
   const api = createGitHubApi()
@@ -249,7 +88,7 @@ test('GitHub REST publisher rechecks draft state before every mutation stage', a
   const scenarios = [
     {
       name: 'first upload',
-      apiOptions: { publishOnReleaseRead: 2 },
+      apiOptions: { publishOnReleaseRead: 1 },
       expectedUploads: 0,
       expectedDeletes: 0,
     },
@@ -258,20 +97,20 @@ test('GitHub REST publisher rechecks draft state before every mutation stage', a
       apiOptions: {
         release: { id: 42, tag_name: TAG, draft: true, prerelease: false },
         assets: [{ id: 7, name: 'Gugo-Setup-1.2.3-x64.exe', size: 1 }],
-        publishOnReleaseRead: 2,
+        publishOnReleaseRead: 1,
       },
       expectedUploads: 0,
       expectedDeletes: 0,
     },
     {
       name: 'later upload',
-      apiOptions: { publishOnReleaseRead: 3 },
+      apiOptions: { publishOnReleaseRead: 2 },
       expectedUploads: 1,
       expectedDeletes: 0,
     },
     {
       name: 'final publish',
-      apiOptions: { publishOnReleaseRead: 4 },
+      apiOptions: { publishOnReleaseRead: 3 },
       expectedUploads: 2,
       expectedDeletes: 0,
     },
@@ -297,7 +136,7 @@ test('GitHub REST publisher rechecks draft state before every mutation stage', a
 })
 
 test('GitHub REST publisher stops if the draft identity changes during publication', async (t) => {
-  const api = createGitHubApi({ replaceReleaseIdOnRead: 2 })
+  const api = createGitHubApi({ replaceReleaseIdOnRead: 1 })
   await assert.rejects(
     publishGitHubRelease(publishOptions(t, api)),
     /identity changed during publication/,

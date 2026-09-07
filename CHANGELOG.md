@@ -6,19 +6,22 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Preparing 0.11.56. Tag `v0.11.55` remains at main commit `3a6c161264ad8b5579b5171e46e3d30111203663` as the record of a failed publication attempt. Its CI, unsigned packaging, `NotSigned` verification, checksum and attestation stages succeeded, but the publisher failed at the draft Release API stage; no public Release or release assets were published for that tag. The tag is not moved or reused, and 0.11.56 requires its own release verification.
+
 ### Added
 
 - Provider-neutral, on-demand semantic context compaction with complete input chunking, bounded map/reduce calls, cancellation, visible fallback, and separately checkpointed summary requests. See `docs/CONTEXT_COMPACTION.md` for controls and limitations.
 - Owner-scoped `read_skill_resource` access to text references and scripts in selected skills. Resources are read-only; binary templates and automatic script execution are not implicitly enabled.
-- A current general-agent audit with concrete capability gaps and release prerequisites in `docs/GENERAL_AGENT_AUDIT_2026-09-07.md`. This work prepares version 0.11.55; preparation is not proof that a new desktop release has been published.
+- A current general-agent audit with concrete capability gaps and release prerequisites in `docs/GENERAL_AGENT_AUDIT_2026-09-07.md`. This work now prepares version 0.11.56; preparation is not proof that a new desktop release has been published.
 
 ### Changed
 
-- Explicitly selected unsigned Windows distribution for 0.11.55 through the committed, version-bound `scripts/release/policy.json`. Future version bumps must update the policy; missing credentials or failed signature verification never trigger an automatic downgrade. Both modes retain CI, all five release assets, checksums, GitHub attestations, and immutable published assets.
+- Explicitly retained unsigned Windows distribution for 0.11.56 through the committed, version-bound `scripts/release/policy.json`, continuing the decision first made for 0.11.55 without configuring certificates. Future version bumps must update the policy; missing credentials or failed signature verification never trigger an automatic downgrade. Both modes retain CI, all five release assets, checksums, GitHub attestations, and immutable published assets.
 - Added the separate `desktop:package:unsigned` path, preserving icon/version resources while disabling executable signing and requiring `NotSigned` on both installer and packaged application. The signed path keeps its certificate, timestamp, and publisher checks.
 
 ### Fixed
 
+- Fixed draft Release discovery when the public tag lookup returns 404 by scanning authenticated, bounded, paginated release listings. Recheck the exact numeric Release ID, tag, and mutable draft state before asset changes and publication; reject ambiguous matches or changed identities. Published releases remain immutable and remote tag-to-commit verification stays required.
 - Kept the newest typed/multimodal user request authoritative instead of inheriting an earlier task, while preserving its original attachments.
 - Preserved Gemini native call IDs, thought signatures, and signed text through execution, continuation, and checkpoint replay, with exact provider/model/endpoint binding and separate executable arguments.
 - Recovered manually reconciled summary requests in their original invocation slot, reused archives and completed stages, and accounted for model calls and tokens once without exposing summaries as final answers.

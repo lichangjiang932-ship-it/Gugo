@@ -305,7 +305,8 @@ installer and packaged application, and matching publisher/updater identities.
 It still fails closed when signing prerequisites or checks fail.
 
 On 2026-09-07 the user explicitly selected unsigned Windows distribution for
-0.11.55. The committed `scripts/release/policy.json` binds that version to
+0.11.55. Version 0.11.56 explicitly retains that choice without configuring
+certificates. The current `scripts/release/policy.json` binds 0.11.56 to
 `windowsSigning: "unsigned"`; missing credentials do not select or downgrade
 the mode. Unsigned builds require `NotSigned` on the installer and application,
 retain icon/version resources, and preserve CI, the complete five-asset set,
@@ -761,7 +762,9 @@ credentials were later supplied or that signed distribution now works.
 
 **Current release decision:** The user subsequently chose not to configure
 signing for 0.11.55 and explicitly accepted unsigned distribution through the
-version-bound release policy. This open operations risk does not block that
+version-bound release policy; 0.11.56 explicitly retains that decision. The
+0.11.55 draft-publication failure did not configure or validate production
+certificates. This open operations risk does not block the current
 unsigned release when its CI, `NotSigned`, asset, checksum and provenance gates
 pass. It still blocks any selected signed release until the prerequisites are
 met. Future versions must explicitly review and update the policy version;
