@@ -5,3 +5,8 @@ c93fd0c74f8240cd03ac5661941974039b72a090:docs/OPERATION_GUIDE.md:generic-api-key
 bc4b8a250e3b24d584ccfaa28f29070d011afc7d:tests/runtimeReadiness.test.js:generic-api-key:86
 bc4b8a250e3b24d584ccfaa28f29070d011afc7d:tests/evolutionOperations.test.js:generic-api-key:1322
 bc4b8a250e3b24d584ccfaa28f29070d011afc7d:tests/shellSession.test.js:generic-api-key:351
+# Historical synthetic redaction fixtures: both used the same literal alphabet
+# payload, were never issued credentials, and now assemble their shape at runtime.
+# These exact historical findings do not exempt the file or any future token.
+82dbeceb872f324628d410f3421e2037d3a810e0:tests/toolCallSecretRedaction.test.js:stripe-access-token:11
+82dbeceb872f324628d410f3421e2037d3a810e0:tests/toolCallSecretRedaction.test.js:stripe-access-token:12

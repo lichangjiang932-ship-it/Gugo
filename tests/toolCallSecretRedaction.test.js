@@ -8,8 +8,8 @@ test('explicit credential prefixes remain redacted in tool errors', () => {
     'ghp_abcdefghijklmnopqrstuv',
     'github_pat_abcdefghijklmnopqrstuv_123456',
     'github_pat_this-secret-must-never-persist',
-    'sk_live_abcdefghijklmnopqrstuv',
-    'sk_test_abcdefghijklmnopqrstuv',
+    ['sk', 'live', 'abcdefghijklmnopqrstuv'].join('_'),
+    ['sk', 'test', 'abcdefghijklmnopqrstuv'].join('_'),
   ]) {
     assert.equal(redactSensitiveText(token), '[REDACTED]')
     assert.equal(normalizeToolError(new Error('request failed: ' + token)).error, 'request failed: [REDACTED]')
