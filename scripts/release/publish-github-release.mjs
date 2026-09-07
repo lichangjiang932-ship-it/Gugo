@@ -10,6 +10,8 @@ const API_VERSION = '2022-11-28'
 const DEFAULT_API_BASE_URL = 'https://api.github.com'
 const DEFAULT_UPLOADS_BASE_URL = 'https://uploads.github.com'
 const MAX_RELEASE_ASSETS = 128
+const MAX_RELEASE_PAGES = 20
+const RELEASES_PER_PAGE = 100
 const MAX_ASSET_PAGES = 20
 const ASSETS_PER_PAGE = 100
 const MAX_TAG_INDIRECTIONS = 8
@@ -139,17 +141,65 @@ async function getReleaseByTag({ fetchImpl, apiBaseUrl, repository, tag, headers
 }
 
 async function assertDraftReleaseCurrent(options, expectedReleaseId) {
-  const release = await getReleaseByTag(options)
-  if (!release) {
+  // GitHub's tag endpoint may hide drafts. Pin subsequent reads to the ID
+  // returned by draft discovery/creation, never interpret a tag 404 as deletion.
+  const { fetchImpl, apiBaseUrl, repository, tag, headers } = options
+  const response = await requestJson(fetchImpl, `${apiBaseUrl}/repos/${repository}/releases/${expectedReleaseId}`, {
+    headers,
+    expectedStatuses: [200, 404],
+    context: `read draft GitHub Release ${tag} by ID`,
+  })
+  if (response.status === 404) {
     throw new Error(`Draft GitHub Release ${options.tag} no longer exists`)
   }
+  const release = assertRelease(response.data, tag)
   if (release.id !== expectedReleaseId) {
     throw new Error(`GitHub Release ${options.tag} identity changed during publication`)
   }
-  if (!release.draft) {
+  if (!release.draft || release.immutable === true) {
     throw new Error(`Published GitHub Release ${options.tag} already exists and is immutable`)
   }
+  const discovered = await findReleaseForPublication(options)
+  if (!discovered || discovered.id !== expectedReleaseId) {
+    throw new Error(`GitHub Release ${tag} identity changed during publication`)
+  }
   return release
+}
+
+async function findReleaseForPublication(options) {
+  const visible = await getReleaseByTag(options)
+  if (visible && (!visible.draft || visible.immutable === true)) {
+    throw new Error(`Published GitHub Release ${options.tag} already exists and is immutable`)
+  }
+  const { fetchImpl, apiBaseUrl, repository, tag, headers } = options
+  let match = null
+  for (let page = 1; page <= MAX_RELEASE_PAGES; page += 1) {
+    const url = `${apiBaseUrl}/repos/${repository}/releases?per_page=${RELEASES_PER_PAGE}&page=${page}`
+    const response = await requestJson(fetchImpl, url, {
+      headers,
+      context: `list GitHub Releases for tag ${tag}`,
+    })
+    if (!Array.isArray(response.data) || response.data.length > RELEASES_PER_PAGE) {
+      throw new Error(`GitHub returned an invalid release list for tag ${tag}`)
+    }
+    for (const candidate of response.data) {
+      if (candidate?.tag_name !== tag) continue
+      const release = assertRelease(candidate, tag)
+      if (!release.draft || release.immutable === true) {
+        throw new Error(`Published GitHub Release ${tag} already exists and is immutable`)
+      }
+      if (match) throw new Error(`GitHub returned multiple releases for tag ${tag}`)
+      match = release
+    }
+    if (response.data.length < RELEASES_PER_PAGE) {
+      if (visible && visible.id !== match?.id) {
+        throw new Error(`GitHub Release ${tag} identity changed during publication`)
+      }
+      return match
+    }
+  }
+  // Finish the bounded scan even after a match: a later page may be ambiguous.
+  throw new Error(`GitHub has too many releases to verify tag ${tag} safely`)
 }
 
 async function createDraftRelease({
@@ -328,6 +378,9 @@ async function publishDraft({ fetchImpl, apiBaseUrl, repository, release, tag, c
     },
   )
   const published = assertRelease(response.data, tag)
+  if (published.id !== release.id) {
+    throw new Error(`GitHub Release ${tag} identity changed during publication`)
+  }
   if (published.draft || published.prerelease) {
     throw new Error(`GitHub Release ${tag} did not become a stable published release`)
   }
@@ -367,10 +420,7 @@ export async function publishGitHubRelease({
   const tagOptions = { fetchImpl, apiBaseUrl, repository, tag, headers }
   const releaseOptions = { fetchImpl, apiBaseUrl, repository, tag, headers }
   await assertRemoteTagCommit(tagOptions, commit)
-  let release = await getReleaseByTag(releaseOptions)
-  if (release && !release.draft) {
-    throw new Error(`Published GitHub Release ${tag} already exists and is immutable`)
-  }
+  let release = await findReleaseForPublication(releaseOptions)
   release ||= await createDraftRelease({
     fetchImpl,
     apiBaseUrl,
