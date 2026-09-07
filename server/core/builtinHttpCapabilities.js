@@ -251,7 +251,7 @@ export function createBuiltinHttpCapabilities({
     capability(
       'builtin.media',
       (req) => req.url?.startsWith('/api/media/'),
-      (req, res) => handleMediaRequest(req, res),
+      (req, res) => handleMediaRequest(req, res, { env: getEnv() }),
     ),
     capability(
       'builtin.attachments',

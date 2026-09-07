@@ -2828,9 +2828,9 @@ test('a verification-only continuation ignores injected mutation wording and com
 test('explicit execute mode cannot claim completion when no substantive tool is available', async () => {
   let modelCalls = 0
   const result = await runToolsLoop({
-    job: { id: 'job-explicit-execute-no-tools', userId: null, origin: 'chat', prompt: 'Explain the current state.' },
+    job: { id: 'job-explicit-execute-no-tools', userId: null, origin: 'chat', prompt: 'Inspect the current workspace files.' },
     step: { id: 'step-explicit-execute-no-tools', kind: 'chat' },
-    messages: [{ role: 'user', content: 'Explain the current state.' }],
+    messages: [{ role: 'user', content: 'Inspect the current workspace files.' }],
     intentMode: 'execute',
     toolSpecs: [],
     maxIters: 1,

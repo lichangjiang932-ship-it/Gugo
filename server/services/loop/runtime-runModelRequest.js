@@ -1,5 +1,6 @@
 import { normalizeOptionalUsageNumber } from '../../../shared/modelUsage.js'
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
+import { modelAssistantHistoryMessage } from './modelAssistantHistory.js'
 
 function modelPhaseUsage(result) {
   const usage = result?.usage
@@ -23,6 +24,7 @@ async function prepareModelRequestIteration(s) {
     i.steeringLeaseId = claimed.leaseId
     s.appendSteeringMessages(claimed.messages)
   }
+  s.completionDeferredForSteering = false
   i.modelResult = undefined
   i.responseTextPublished = false
   i.finalAnswerEvidenceReviewDigest = s.hasCurrentFinalAnswerEvidenceReview()
@@ -47,11 +49,39 @@ async function prepareModelRequestIteration(s) {
 }
 
 function normalizeCompatibilityToolCalls(result, extractTextToolCalls) {
+  if (result?.nativeContent === true || result?.providerReplay) return result
   if (Array.isArray(result?.toolCalls) && result.toolCalls.length > 0) return result
   const compatibilityCall = extractTextToolCalls(result?.content)
   return compatibilityCall.detected
     ? { ...result, content: compatibilityCall.content, toolCalls: compatibilityCall.toolCalls }
     : result
+}
+
+async function requireNativeRepresentativeRead(s, i, returnedToolCalls) {
+  if (!(i.modelResult?.nativeContent || i.modelResult?.providerReplay)
+    || !s.requiresRepresentativeRead || s.hasSuccessfulRepresentativeRead || returnedToolCalls.length > 0) return null
+  if (i.modelResult.content) s.convo.push(modelAssistantHistoryMessage(i.modelResult.content, i.modelResult))
+  s.modelInvocation = null
+  s.restoredModelInvocation = null
+  if (s.iter + 1 >= s.maxIters) {
+    const result = await s.finishIncomplete({
+      text: s.locale === 'zh' ? '项目审查尚未完成：还没有成功读取代表性文件。' : 'Project review is incomplete: representative files have not been read successfully.',
+      reason: 'directory_review_evidence_missing', code: 'DIRECTORY_REVIEW_EVIDENCE_MISSING',
+      missingRequirements: ['representative_file_read'], steeringLeaseId: i.steeringLeaseId,
+    })
+    return result.deferredForSteering ? { kind: 'continue' } : { kind: 'return', value: result }
+  }
+  s.representativeReadsInjected = true
+  s.convo.push({ role: 'system', content: [
+    s.d.DIRECTORY_REVIEW_GUARD_MARKER,
+    'A directory listing is discovery evidence only; no representative file has been read successfully.',
+    'Use a real native read_file function call before completing this review. Do not claim completion from the listing.',
+    `Representative read arguments (data): ${JSON.stringify(s.representativeReadCalls.map((call) => call.function?.arguments || '{}'))}`,
+  ].join(' ') })
+  await s.persistTurn({ boundary: 'native-directory-review-evidence' })
+  await s.steeringController.acknowledge(i.steeringLeaseId)
+  i.steeringLeaseId = null
+  return { kind: 'continue' }
 }
 
 async function executeModelRequestRound(s, context) {
@@ -74,6 +104,7 @@ async function executeModelRequestRound(s, context) {
     consumeBudget: (cost) => s.budget.consume(cost),
     onTextDelta: async (text, metadata = {}) => {
       if (!text || s.requiresSourceHandoffProtection) return
+      if (s.requiresRepresentativeRead && !s.hasSuccessfulRepresentativeRead) return
       if (!s.hasRequiredArtifacts() && !s.codeSnippetRequested) return
       if (s.requiresExecutionEvidence && !s.hasRequiredExecutionEvidence()) return
       if (context.modelMayRequestMutation || !context.hasCurrentAnswerReview()) return
@@ -92,6 +123,8 @@ async function executeModelRequestRound(s, context) {
   s.recovery = mergeCompactionRecovery(s.recovery, request.recovery)
   i.modelResult = normalizeCompatibilityToolCalls(request.response, extractTextToolCalls)
   const returnedToolCalls = Array.isArray(i.modelResult?.toolCalls) ? i.modelResult.toolCalls : []
+  const representativeRead = await requireNativeRepresentativeRead(s, i, returnedToolCalls)
+  if (representativeRead) return representativeRead
   if (s.requiresRepresentativeRead
     && !s.hasSuccessfulRepresentativeRead
     && !s.representativeReadsInjected
@@ -258,8 +291,7 @@ async function handleModelRequestFailure(s, error, context) {
 export async function runModelRequest(s) {
   const context = await prepareModelRequestIteration(s)
   try {
-    await executeModelRequestRound(s, context)
-    return { kind: 'next' }
+    return await executeModelRequestRound(s, context) || { kind: 'next' }
   } catch (error) {
     return handleModelRequestFailure(s, error, context)
   }

@@ -60,6 +60,28 @@ function normalizeMessageContent(value) {
   try { return JSON.stringify(value) } catch { return String(value) }
 }
 
+function replacementModelContextJson(provided, existingJson) {
+  if (!provided || typeof provided !== 'object') return existingJson || '{}'
+  // An explicit empty context still clears it. Otherwise the browser sends a
+  // partial model context, so preserve server evidence for the same identity.
+  if (Array.isArray(provided) || Object.keys(provided).length === 0) {
+    return serializeSessionModelContext(provided)
+  }
+  let existing = null
+  try { existing = JSON.parse(existingJson || '{}') } catch { /* Legacy invalid JSON has no evidence. */ }
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing)
+    || (provided.turnId && existing.turnId && provided.turnId !== existing.turnId)) {
+    return serializeSessionModelContext(provided)
+  }
+  const merged = { ...existing, ...provided }
+  // A canonical trace replaces imported standalone call declarations; keeping
+  // both would replay the same tool call twice after a browser round trip.
+  if (Object.hasOwn(provided, 'toolTrace') && !Object.hasOwn(provided, 'toolCalls')) {
+    delete merged.toolCalls
+  }
+  return serializeSessionModelContext(merged)
+}
+
 export function normalizeSessionReplacementMessages(messages, existingContexts, now) {
   if (!Array.isArray(messages)) {
     throw new SessionMutationValidationError('messages must be an array')
@@ -85,14 +107,11 @@ export function normalizeSessionReplacementMessages(messages, existingContexts, 
     const updatedAtValue = Number(message?.updatedAt)
     const createdAt = Number.isFinite(createdAtValue) ? Math.floor(createdAtValue) : now + index
     const updatedAt = Number.isFinite(updatedAtValue) ? Math.floor(updatedAtValue) : createdAt
-    const providedContext = message?.modelContext && typeof message.modelContext === 'object'
-      ? serializeSessionModelContext(message.modelContext)
-      : null
     return {
       id,
       role,
       content: normalizeMessageContent(message?.content),
-      modelContextJson: providedContext || existingContexts.get(id) || '{}',
+      modelContextJson: replacementModelContextJson(message?.modelContext, existingContexts.get(id)),
       createdAt,
       updatedAt,
     }

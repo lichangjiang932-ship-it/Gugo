@@ -189,3 +189,99 @@ test('curated plugins expose trusted provenance without making incompatible skil
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('a changed Codex skill body is reclassified before any ready prompt is loaded', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-codex-ready-drift-'))
+  try {
+    const pluginRoot = writePlugin(root, 'ready-drift')
+    const skillPath = path.join(pluginRoot, 'skills', 'ready-drift', 'SKILL.md')
+    const discovered = initCodexPluginSkills({ roots: [root] }).skills[0]
+    assert.equal(getCodexPluginSkill(discovered.id, { runnableOnly: true, loadPrompt: true }).runnable, true)
+    fs.writeFileSync(skillPath, '---\nname: ready-drift\ndescription: changed\n---\nRead references/rules.md and run scripts/action.js.')
+    assert.equal(getCodexPluginSkill(discovered.id, { runnableOnly: true, loadPrompt: true }), null)
+    const current = listCodexPluginSkills()[0]
+    assert.equal(current.compatibility, 'needs-runtime')
+    assert.deepEqual(current.requirements.runtime, ['resource:references', 'resource:scripts'])
+    assert.deepEqual(prepareSkillsForPrompt({ skillIds: [discovered.id] }), [])
+    assert.equal(getCodexPluginDiscovery().skills[0].runnable, false)
+    assert.doesNotMatch(JSON.stringify(getCodexPluginDiscovery()), /Read references\/rules/)
+  } finally {
+    _resetCodexPluginSkillsForTests()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('cached Codex skill bytes do not hide added or removed runtime directories', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-codex-runtime-drift-'))
+  try {
+    const pluginRoot = writePlugin(root, 'runtime-drift')
+    const skillRoot = path.join(pluginRoot, 'skills', 'runtime-drift')
+    const id = initCodexPluginSkills({ roots: [root] }).skills[0].id
+    assert.ok(getCodexPluginSkill(id, { runnableOnly: true, loadPrompt: true }))
+    fs.mkdirSync(path.join(skillRoot, 'scripts'))
+    fs.writeFileSync(path.join(skillRoot, 'scripts', 'never-run.js'), 'throw new Error("must not run")')
+    assert.equal(getCodexPluginSkill(id, { runnableOnly: true, loadPrompt: true }), null)
+    fs.renameSync(path.join(skillRoot, 'scripts'), path.join(skillRoot, 'inactive-fixture'))
+    assert.equal(getCodexPluginSkill(id, { runnableOnly: true, loadPrompt: true }).compatibility, 'ready')
+  } finally {
+    _resetCodexPluginSkillsForTests()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('an incompatible Codex skill becomes usable after its body no longer needs resources', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-codex-restored-ready-'))
+  try {
+    const pluginRoot = writePlugin(root, 'restored-ready', {}, { skillBody: 'Read references/rules.md first.' })
+    const id = initCodexPluginSkills({ roots: [root] }).skills[0].id
+    assert.equal(getCodexPluginSkill(id, { runnableOnly: true, loadPrompt: true }), null)
+    fs.writeFileSync(path.join(pluginRoot, 'skills', 'restored-ready', 'SKILL.md'), '---\nname: restored-ready\ndescription: prompt only\n---\nAnswer from the current user text.')
+    const loaded = getCodexPluginSkill(id, { runnableOnly: true, loadPrompt: true })
+    assert.equal(loaded.compatibility, 'ready')
+    assert.equal(loaded.systemPrompt, 'Answer from the current user text.')
+  } finally {
+    _resetCodexPluginSkillsForTests()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('Codex skill readiness follows current manifest dependencies', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-codex-manifest-drift-'))
+  try {
+    const pluginRoot = writePlugin(root, 'manifest-drift')
+    const manifestPath = path.join(pluginRoot, '.codex-plugin', 'plugin.json')
+    const original = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+    const id = initCodexPluginSkills({ roots: [root] }).skills[0].id
+    assert.ok(getCodexPluginSkill(id, { runnableOnly: true, loadPrompt: true }))
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...original, mcpServers: './mcp.json' }))
+    assert.equal(getCodexPluginSkill(id, { runnableOnly: true, loadPrompt: true }), null)
+    assert.equal(listCodexPluginSkills()[0].compatibility, 'needs-mcp')
+    fs.writeFileSync(manifestPath, JSON.stringify(original))
+    assert.equal(getCodexPluginSkill(id, { runnableOnly: true, loadPrompt: true }).compatibility, 'ready')
+  } finally {
+    _resetCodexPluginSkillsForTests()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('unchanged Codex skill loads reuse bounded source bytes while keeping metadata prompt-free', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-codex-source-cache-'))
+  const originalRead = fs.readSync
+  let reads = 0
+  try {
+    writePlugin(root, 'cache-probe')
+    const id = initCodexPluginSkills({ roots: [root] }).skills[0].id
+    fs.readSync = function (...args) { reads += 1; return originalRead.apply(this, args) }
+    const first = getCodexPluginSkill(id, { runnableOnly: true, loadPrompt: true })
+    const initialReads = reads
+    assert.ok(initialReads > 0)
+    const second = getCodexPluginSkill(id, { runnableOnly: true, loadPrompt: true })
+    assert.equal(second.systemPrompt, first.systemPrompt)
+    assert.equal(reads, initialReads)
+    assert.equal(Object.hasOwn(listCodexPluginSkills()[0], 'systemPrompt'), false)
+  } finally {
+    fs.readSync = originalRead
+    _resetCodexPluginSkillsForTests()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

@@ -55,6 +55,10 @@ export function reduceSessionLifecycleState(state, action) {
     }
 
     case 'SET_DRAFT_WORKSPACE': {
+      if (Object.prototype.hasOwnProperty.call(action.payload || {}, 'expectedDraftVersion')
+        && (state.activeSessionId || action.payload.expectedDraftVersion !== state.newDraftVersion)) {
+        return state
+      }
       return {
         ...state,
         draftWorkspacePath: normalizeWorkspacePath(action.payload?.workspacePath ?? action.payload),

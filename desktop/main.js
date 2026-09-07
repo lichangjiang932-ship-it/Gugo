@@ -103,7 +103,10 @@ function sendUpdateStatus(status, details = {}) {
 }
 
 function configureDesktopRuntime() {
-  const paths = resolveDesktopDataPaths(app.getPath('userData'))
+  const paths = resolveDesktopDataPaths(app.getPath('userData'), {
+    env: process.env,
+    cwd: app.getAppPath(),
+  })
   const port = resolveDesktopPort(process.env.GUGO_DESKTOP_PORT)
   const pluginRoots = resolveDesktopPluginRoots({
     configured: process.env.CODEX_PLUGIN_ROOTS,
@@ -121,9 +124,9 @@ function configureDesktopRuntime() {
   process.env.GUGO_SQLITE_DRIVER = 'node'
   process.env.SERVER_HOST = '127.0.0.1'
   process.env.SERVER_PORT = String(port)
-  process.env.APP_DATA_DIR ||= paths.dataDir
-  process.env.APP_DB_PATH ||= paths.database
-  process.env.ARTIFACT_DIR ||= paths.artifacts
+  process.env.APP_DATA_DIR = paths.dataDir
+  process.env.APP_DB_PATH = paths.database
+  process.env.ARTIFACT_DIR = paths.artifacts
   const defaultWorkspaceRoot = path.join(app.getPath('documents'), 'Gugo')
   mkdirSync(defaultWorkspaceRoot, { recursive: true })
   process.env.WORKSPACE_ROOT ||= defaultWorkspaceRoot
@@ -415,7 +418,11 @@ function registerDesktopIpc() {
     if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
       throw new Error('desktop runtime config is only available to the main window')
     }
-    const configPath = ensureDesktopRuntimeConfigFile({ userData: app.getPath('userData') })
+    const configPath = ensureDesktopRuntimeConfigFile({
+      userData: app.getPath('userData'),
+      env: process.env,
+      cwd: app.getAppPath(),
+    })
     const openError = await shell.openPath(configPath)
     if (openError) throw new Error(`unable to open desktop runtime config: ${openError}`)
     return { opened: true }

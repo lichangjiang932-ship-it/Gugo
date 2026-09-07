@@ -6,7 +6,7 @@ import { DocxPreview, PptxPreview, SourceView, XlsxPreview } from './ArtifactRen
 import { InteractiveHtmlFilePreview } from './HtmlFilePreview.jsx'
 import { NativePreviewRenderer, WorkbookPreview } from './NativePreviewRenderers.jsx'
 import { OpenOriginalLink, PreviewFallbackActions, PreviewStatus } from './PreviewPrimitives.jsx'
-import { previewRendererRegistry } from './previewRendererRegistry.js'
+import { BUILTIN_PREVIEW_RENDERER_OWNER, previewRendererRegistry } from './previewRendererRegistry.js'
 import { withPreviewRetry } from './previewUrl.js'
 
 export { DirectHtmlUrlPreview } from './HtmlFilePreview.jsx'
@@ -104,7 +104,10 @@ function UnsupportedFileRenderer({ file, t, url }) {
   />
 }
 
-const builtInPreviewRendererCleanups = [
+// Built-ins live with the registry. Keep the previous renderer available while
+// HMR asynchronously loads a replacement (or if that load fails); registerOwned
+// atomically replaces this owner's entry when the new module is ready.
+const builtInPreviewRenderers = [
   ['image', { component: NativePreviewRenderer }],
   ['pdf', { component: NativePreviewRenderer }],
   ['audio', { component: NativePreviewRenderer }],
@@ -120,10 +123,8 @@ const builtInPreviewRendererCleanups = [
   ['code', { component: SourceFileRenderer, needsFetch: true }],
   ['text', { component: SourceFileRenderer, needsFetch: true }],
   ['unsupported', { component: UnsupportedFileRenderer }],
-].map(([kind, descriptor]) => previewRendererRegistry.register(kind, descriptor))
+]
 
-if (import.meta.hot) {
-  import.meta.hot.dispose(() => {
-    for (const unregister of builtInPreviewRendererCleanups) unregister()
-  })
+for (const [kind, descriptor] of builtInPreviewRenderers) {
+  previewRendererRegistry.registerOwned(BUILTIN_PREVIEW_RENDERER_OWNER, kind, descriptor)
 }

@@ -2,6 +2,7 @@ import { ensureApiVersionPath, profileForConfig } from './modelEndpoint.js'
 import { attachModelRequestIdentity } from './modelRequestIdentity.js'
 import { prepareOutboundMessages, retainReasoningForEnv } from './outboundMessagePipeline.js'
 import { buildNativeProviderRequest, isNativeProviderKind } from './nativeModelProviders.js'
+import { canonicalizeModelTools, promptCacheKeyFor } from './modelRequestCache.js'
 
 export function normalizeOpenAICompatibleUrl(rawUrl = '') {
   const trimmed = rawUrl.trim().replace(/\/+$/, '')
@@ -86,6 +87,7 @@ export function buildOpenAICompatibleRequest({
   env = process.env,
   profile = null,
   ephemeralContext = '',
+  cacheOwnerId = null,
 }) {
   const endpoint = profile || profileForConfig(config || {}, env)
   const model = config?.modelName
@@ -129,16 +131,18 @@ export function buildOpenAICompatibleRequest({
     throw error
   }
   if (Array.isArray(tools) && tools.length > 0) {
-    body.tools = tools
+    body.tools = canonicalizeModelTools(tools)
     if (toolChoice) body.tool_choice = toolChoice
     if (endpoint.supportsParallelTools) body.parallel_tool_calls = true
   }
   if (endpoint.keepAlive) {
     body.keep_alive = endpoint.keepAlive
   }
-  if (stream && supportsStreamUsage(config)) {
+  if (stream && supportsStreamUsage(config, env)) {
     body.stream_options = { include_usage: true }
   }
+  const promptCacheKey = promptCacheKeyFor({ config, profile: endpoint, ownerId: cacheOwnerId })
+  if (promptCacheKey) body.prompt_cache_key = promptCacheKey
 
   return {
     url: normalizeOpenAICompatibleUrl(config?.baseUrl),

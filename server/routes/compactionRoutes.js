@@ -155,10 +155,11 @@ export function resolveCompactionModelContext({
     modelProviderId: binding.providerId || null,
     modelConfigRevision: binding.configRevision ?? null,
     contextWindow: resolveContextWindow(runtimeRequest),
-    callModel: ({ messages, signal }) => invokeModel({
+    callModel: ({ messages, signal, maxTokens }) => invokeModel({
       ...runtimeRequest,
       messages,
       signal,
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
     }),
   }
 }

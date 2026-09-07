@@ -1,4 +1,5 @@
 import { assertRuntimeStage } from './runtimeContract.js'
+import { withProviderExecutionArguments } from '../../adapters/providerReplayState.js'
 
 async function publishLocalArtifacts(s, outcome, executedCall, succeeded) {
   const { isCommandExecutionTool, persistLocalToolArtifactsAsync } = s.d
@@ -337,7 +338,8 @@ function appendToolOutcomeMessages(s, outcome, executedCall, succeeded) {
     isCommandExecutionTool, replaceRuntimeCapabilityBlock,
     shouldRequirePdfLayoutVerification, toolNameFromSpec } = s.d
   if (executedCall?.name === 'read_file' && succeeded) s.hasSuccessfulRepresentativeRead = true
-  const bundle = buildToolResultMessageBundle(outcome.call, outcome.result, {
+  const visibleResult = withProviderExecutionArguments(s.convo, executedCall, outcome.result)
+  const bundle = buildToolResultMessageBundle(outcome.call, visibleResult, {
     maxChars: i.toolResultMaxChars,
   })
   if (bundle.ephemeralMessages.length > 0 && outcome.result?.image?.data) {

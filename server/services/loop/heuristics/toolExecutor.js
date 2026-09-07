@@ -10,6 +10,7 @@ import { dispatchGitTool } from '../../../adapters/gitWorkbench.js'
 import { dispatchImageTool } from '../../../adapters/imageTools.js'
 import { dispatchMediaTool } from '../../../adapters/mediaTools.js'
 import { dispatchMemoryTool } from '../../../utils/memoryTools.js'
+import { dispatchSkillResourceTool, SKILL_RESOURCE_TOOL_NAME } from '../../../utils/skillResourceTools.js'
 import { dispatchPdfTool } from '../../../adapters/pdfTools.js'
 import { executeBrowserTool } from '../../browserToolExecutor.js'
 import { executeSubagentBatch } from '../../subagentBatchBridge.js'
@@ -311,7 +312,11 @@ function normalizedTodos(args) {
 async function executeAgentOrExternalTool(context, registeredTool) {
   const { name, args, job, step, signal, budget, skillId,
     approvalContext, toolCallId, idempotencyKey, dynamicToolRegistrationId } = context
-  if (name === 'remember') return dispatchMemoryTool(name, args || {}, { userId: job?.userId || null })
+  if (name === 'remember') return dispatchMemoryTool(name, args || {}, {
+    userId: job?.userId || null,
+    agentId: job?.agentId || null,
+    sessionId: job?.sessionId || null,
+  })
   if (['reflect', 'request_clarification', 'request_directory', 'sleep_until'].includes(name)) {
     try {
       const result = await dispatchAgenticTool(name, args || {}, { userId: job?.userId || null })
@@ -429,6 +434,7 @@ export async function executeServerTool(context) {
     }
     return executeBoundTool(context, boundTool)
   }
+  if (name === SKILL_RESOURCE_TOOL_NAME) return dispatchSkillResourceTool(args || {}, context)
   for (const execute of [executeProcessOrSourceTool, executeFileOrMediaTool]) {
     const result = await execute(context)
     if (result !== UNHANDLED) return result

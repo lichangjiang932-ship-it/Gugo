@@ -1,6 +1,7 @@
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
 import { generateImage, transcribeAudio } from '../services/mediaModelService.js'
+import { handleRemoteMarkdownImageRequest } from './remoteMarkdownImageRoute.js'
 
 async function readBinary(req, maxBytes = 25 * 1024 * 1024) {
   const chunks = []
@@ -13,10 +14,13 @@ async function readBinary(req, maxBytes = 25 * 1024 * 1024) {
   return Buffer.concat(chunks)
 }
 
-export async function handleMediaRequest(req, res) {
+export async function handleMediaRequest(req, res, options = {}) {
   const userId = authenticateRequest(req)
   if (!userId) return sendJson(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } })
   const url = new URL(req.url, 'http://localhost')
+  if (req.method === 'POST' && url.pathname === '/api/media/remote-image') {
+    return handleRemoteMarkdownImageRequest(req, res, options)
+  }
   try {
     if (req.method === 'POST' && url.pathname === '/api/media/transcribe') {
       const result = await transcribeAudio({

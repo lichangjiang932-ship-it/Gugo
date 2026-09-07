@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | **English**
 
-Gugo is a self-hosted AI workspace for agents, tools, memory, background jobs,
+Gugo is a local-first, general-purpose agent workspace for tools, memory, background jobs,
 subagents, MCP integrations, and generated artifacts. It is available as both
 a browser application and a Windows Electron desktop app, backed by Node.js and SQLite.
 
@@ -11,6 +11,13 @@ your own model endpoint and API key in Settings after startup.
 
 > Gugo is under active development. Back up your data before upgrading, and
 > review the trust model before enabling powerful local tools.
+
+The architectural references are Pi's small kernel, Codex's execution loop,
+OpenWorker's local state ownership, and DeepSeek Harness's plugin boundaries.
+WorkBuddy is a skill/plugin reference only, not the task-completion controller.
+See the [general-agent audit and acceptance record](docs/GENERAL_AGENT_AUDIT_2026-09-07.md)
+for evidence and remaining gaps. Application-level offline restrictions are not
+an OS network sandbox for arbitrary scripts or trusted third-party processes.
 
 ## Highlights
 

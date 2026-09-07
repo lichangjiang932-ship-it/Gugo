@@ -225,7 +225,9 @@ function registerToolEntry(userId, source, entry) {
   }
 }
 
-export function synchronizeToolsForConnection(userId, server, previousConnection, connection) {
+export function synchronizeToolsForConnection(userId, server, previousConnection, connection, {
+  replacingConnection = Boolean(previousConnection && previousConnection !== connection),
+} = {}) {
   const source = mcpToolSource(userId, server.id)
   const previousEntries = toolRegistrationEntries(server, previousConnection?.tools || [])
   const nextEntries = toolRegistrationEntries(server, connection?.tools || [])
@@ -237,7 +239,6 @@ export function synchronizeToolsForConnection(userId, server, previousConnection
   const removed = []
   const updated = []
   const blockedByForeignRegistration = new Set()
-  const replacingConnection = Boolean(previousConnection && previousConnection !== connection)
 
   for (const [name, previousEntry] of previousEntries) {
     const nextEntry = nextEntries.get(name)

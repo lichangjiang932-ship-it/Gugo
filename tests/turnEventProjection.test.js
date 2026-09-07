@@ -2,10 +2,30 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  isSuccessfulTurnCompletedEvent,
   normalizePublicFailureCode,
   projectTurnEventForClient,
 } from '../shared/turnEventProjection.js'
 import { normalizeTurnFailure } from '../server/services/turnTerminalProjection.js'
+
+test('steering deferrals are never projected as completed events, including legacy nested payloads', () => {
+  for (const payload of [
+    { deferredForSteering: true },
+    { text: 'Obsolete candidate.', deferredForSteering: true },
+    { error: { deferredForSteering: true } },
+  ]) {
+    const event = { type: 'turn.completed', payload }
+    assert.equal(isSuccessfulTurnCompletedEvent(event), false)
+    const projected = projectTurnEventForClient(event)
+    assert.equal(projected.type, 'turn.failed')
+    assert.equal(projected.payload.code, 'TURN_INCOMPLETE')
+    assert.equal(Object.hasOwn(projected.payload, 'deferredForSteering'), false)
+    assert.deepEqual(projectTurnEventForClient(projected), projected)
+  }
+  const compatible = { type: 'turn.completed', payload: { text: 'Completed normally.' } }
+  assert.equal(isSuccessfulTurnCompletedEvent(compatible), true)
+  assert.deepEqual(projectTurnEventForClient(compatible), compatible)
+})
 
 test('public failure codes are uppercase, bounded, and restricted to stable identifiers', () => {
   assert.equal(normalizePublicFailureCode(' model_http_503 '), 'MODEL_HTTP_503')

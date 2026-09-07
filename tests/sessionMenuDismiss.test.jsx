@@ -105,7 +105,7 @@ test('recent sessions stay in one compact title-only list without metadata', asy
   const datedSessions = sessions.map((session, index) => ({
     ...session,
     totalMessages: index + 7,
-    updatedAt: new Date(Date.now() - index * 60_000).toISOString(),
+    updatedAt: index === 0 ? Date.now() : new Date(Date.now() - index * 60_000).toISOString(),
   }))
 
   try {
@@ -117,6 +117,9 @@ test('recent sessions stay in one compact title-only list without metadata', asy
     assert.match(recentSection.textContent, /chatMessages\.workspaceRecent/)
     assert.equal(sessionButtons[0].textContent.trim(), 'Session one')
     assert.equal(sessionButtons[1].textContent.trim(), 'Session two')
+    assert.ok(sessionButtons[0].title.startsWith('Session one\n'))
+    assert.ok(sessionButtons[1].title.startsWith('Session two\n'))
+    assert.equal(rootElement.querySelector('[data-compact-numeric-badge]'), null)
     assert.doesNotMatch(rootElement.textContent, /Gugo|此刻|分钟/)
     assert.doesNotMatch(rootElement.textContent, /nav\.groupToday|nav\.groupYesterday|nav\.groupWeek|nav\.groupEarlier/)
     assert.doesNotMatch(rootElement.textContent, /nav\.filterActive|history\.messageCount|\d{2}:\d{2}/)
@@ -154,11 +157,15 @@ test('project sessions render under their project with an explicit inherited-wor
     assert.match(rootElement.querySelector('section[aria-label="chatMessages.workspaceRecent"]').textContent, /Session two/)
 
     assert.equal(projectToggle.getAttribute('aria-expanded'), 'true')
+    assert.equal(projectToggle.querySelector('svg').classList.contains('lucide-folder-open'), true)
+    assert.equal(projectToggle.getAttribute('aria-controls'), projectSessions.id)
     await act(async () => projectToggle.click())
     assert.equal(projectToggle.getAttribute('aria-expanded'), 'false')
-    assert.equal(rootElement.querySelector('[data-project-sessions]'), null)
+    assert.equal(rootElement.querySelector('[data-project-sessions]').hidden, true)
+    assert.equal(projectToggle.querySelector('svg').classList.contains('lucide-folder'), true)
     await act(async () => projectToggle.click())
     assert.equal(projectToggle.getAttribute('aria-expanded'), 'true')
+    assert.equal(rootElement.querySelector('[data-project-sessions]').hidden, false)
     assert.match(rootElement.querySelector('[data-project-sessions]').textContent, /Session one/)
 
     await act(async () => newChat.click())
@@ -293,6 +300,37 @@ test('right click opens the shared session menu at the pointer and Escape closes
       shiftKey: true,
     })))
     assert.ok(rootElement.querySelector('[role="menu"]'))
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('normal session menu uses fixed viewport-bounded placement and restores its own trigger', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const calls = { opened: [], pinned: [], archived: [], deleted: [] }
+  Object.defineProperty(dom.window, 'innerWidth', { configurable: true, value: 280 })
+  Object.defineProperty(dom.window, 'innerHeight', { configurable: true, value: 200 })
+  try {
+    await act(async () => root.render(<MenuHarness calls={calls} />))
+    const trigger = rootElement.querySelector('[data-session-row="session-two"] [aria-haspopup="menu"]')
+    trigger.getBoundingClientRect = () => ({ left: 244, right: 272, top: 166, bottom: 194, width: 28, height: 28 })
+    await act(async () => trigger.click())
+    const menu = rootElement.querySelector('[role="menu"]')
+    assert.ok(menu.classList.contains('fixed'))
+    assert.ok(Number.parseFloat(menu.style.left) >= 8)
+    assert.ok(Number.parseFloat(menu.style.left) + 176 <= 272)
+    assert.ok(Number.parseFloat(menu.style.top) >= 8)
+    assert.ok(Number.parseFloat(menu.style.top) + 160 <= 192)
+    await act(async () => menu.dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+      key: 'Escape', bubbles: true, cancelable: true,
+    })))
+    assert.equal(document.activeElement, trigger)
+    await act(async () => trigger.click())
+    await act(async () => rootElement.dispatchEvent(new dom.window.Event('scroll', { bubbles: true })))
+    assert.equal(rootElement.querySelector('[role="menu"]'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

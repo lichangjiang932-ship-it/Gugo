@@ -183,9 +183,14 @@ export function prepareTurnPromptContext({
   )
   const finalize = (resolvedSessions) => {
     const blocks = []
-    for (const block of [identity, ishiki, skills, resolvedSessions]) {
+    for (const block of [identity, ishiki, skills]) {
       if (block?.text) blocks.push({ role: 'system', content: block.text })
     }
+    // Preserve the stable instructions before changing session, memory and
+    // plugin context. A changed instruction still takes effect immediately;
+    // none of the context is frozen, omitted or rewritten to force a hit.
+    if (instructions?.text) blocks.push({ role: 'system', content: instructions.text })
+    if (resolvedSessions?.text) blocks.push({ role: 'system', content: resolvedSessions.text })
     if (memory.text) blocks.push({ role: 'system', content: memory.text })
     for (const error of runtimePrompts.errors || []) {
       try {
@@ -201,11 +206,6 @@ export function prepareTurnPromptContext({
         content: `# Runtime Plugin Context: ${block.id}\nSource: ${block.pluginId}\n\n${block.text}`,
       })
     }
-    // Keep the four compiled blocks as one stable prefix. Workspace instructions
-    // may change independently while a task is running, so placing them before
-    // identity would invalidate the provider-side prefix cache for every block.
-    if (instructions?.text) blocks.push({ role: 'system', content: instructions.text })
-
     return {
       messages: blocks,
       effectiveAgentId,

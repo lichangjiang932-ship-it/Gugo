@@ -31,6 +31,9 @@ html[data-theme="light"] {
   /* RGB-channel variables for Tailwind opacity modifiers */
   --color-paper-rgb: 247 248 250;
   --color-paper-2-rgb: 238 240 243;
+  --color-sidebar-rgb: 241 243 245;
+  --color-surface-rgb: 255 255 255;
+  --color-shadow-rgb: 20 24 31;
   --color-paper-dark-rgb: 17 24 39;
   --color-ink-rgb: 31 41 55;
   --color-ink-soft-rgb: 75 85 99;
@@ -75,8 +78,8 @@ html[data-theme="light"] {
   --color-neutral-800-rgb: 31 41 55;
   --color-neutral-900-rgb: 17 24 39;
 
-  --radius-card: 12px;
-  --radius-control: 8px;
+  --radius-card: 16px;
+  --radius-control: 10px;
   --radius-pill: 999px;
 
   /* Accent color tokens (动态写入 by ThemeWrapper / applyAccent) */
@@ -95,8 +98,9 @@ html[data-theme="light"] {
   --type-page: 28px;
   --type-section: 20px;
   --type-body: 15px;
-  --type-ui: 13px;
-  --type-meta: 11px;
+  --type-ui: 14px;
+  --type-meta: 12px;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: "JetBrains Mono", "Noto Sans Mono CJK SC", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
@@ -126,6 +130,9 @@ html[data-theme="dark"] {
 
   --color-paper-rgb: 24 24 27;
   --color-paper-2-rgb: 39 39 42;
+  --color-sidebar-rgb: 29 29 32;
+  --color-surface-rgb: 33 33 37;
+  --color-shadow-rgb: 0 0 0;
   --color-paper-dark-rgb: 250 250 250;
   --color-ink-rgb: 244 244 245;
   --color-ink-soft-rgb: 212 212 216;
@@ -195,6 +202,9 @@ html[data-theme="white"] {
 
   --color-paper-rgb: 255 255 255;
   --color-paper-2-rgb: 245 246 248;
+  --color-sidebar-rgb: 247 247 246;
+  --color-surface-rgb: 255 255 255;
+  --color-shadow-rgb: 20 24 31;
   --color-paper-dark-rgb: 23 23 23;
   --color-ink-rgb: 23 23 23;
   --color-ink-soft-rgb: 75 85 99;
@@ -260,7 +270,7 @@ html[data-theme="white"] {
     margin: 0;
     background: var(--color-paper);
     color: var(--color-ink);
-    font-family: "Inter", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+    font-family: var(--font-ui);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     line-height: 1.55;
@@ -402,15 +412,13 @@ html[data-animations="false"] *::after {
 
 /* Chat output: a quiet, document-like reading surface. */
 .chat-main-pane {
-  background:
-    linear-gradient(to bottom, rgb(var(--color-paper-rgb)), rgb(var(--color-paper-2-rgb) / 0.16)),
-    rgb(var(--color-paper-rgb));
+  background: rgb(var(--color-paper-rgb));
 }
 
 .chat-session-header {
   border-bottom: 0;
   background: rgb(var(--color-paper-rgb) / 0.92);
-  box-shadow: inset 0 -1px rgb(var(--color-ink-rgb) / 0.055);
+  box-shadow: inset 0 -1px rgb(var(--color-ink-rgb) / 0.045);
 }
 
 .chat-scroll-region {
@@ -573,10 +581,10 @@ html[data-animations="false"] *::after {
   position: relative;
   z-index: 2;
   border-color: rgb(var(--color-ink-rgb) / 0.085);
-  background: rgb(var(--color-paper-rgb) / 0.985);
+  background: rgb(var(--color-surface-rgb));
   box-shadow:
-    0 12px 32px rgb(var(--color-ink-rgb) / 0.075),
-    0 1px 2px rgb(var(--color-ink-rgb) / 0.04);
+    0 4px 16px rgb(var(--color-shadow-rgb) / 0.06),
+    0 1px 2px rgb(var(--color-shadow-rgb) / 0.04);
   transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
 }
 
@@ -598,12 +606,12 @@ html[data-animations="false"] *::after {
 }
 
 .chat-composer-surface:focus-within {
-  border-color: rgb(var(--color-accent-rgb) / 0.55);
-  background: rgb(var(--color-paper-rgb));
+  border-color: rgb(var(--color-focus-rgb) / 0.45);
+  background: rgb(var(--color-surface-rgb));
   box-shadow:
-    0 0 0 3px rgb(var(--color-accent-rgb) / 0.08),
-    0 14px 38px rgb(var(--color-ink-rgb) / 0.095),
-    0 1px 3px rgb(var(--color-ink-rgb) / 0.045);
+    0 0 0 3px rgb(var(--color-focus-rgb) / 0.07),
+    0 6px 20px rgb(var(--color-shadow-rgb) / 0.07),
+    0 1px 2px rgb(var(--color-shadow-rgb) / 0.04);
 }
 
 .chat-composer-input {
@@ -618,7 +626,28 @@ html[data-animations="false"] *::after {
 }
 
 .chat-composer-primary-action {
-  box-shadow: 0 2px 7px rgb(var(--color-ink-rgb) / 0.16);
+  box-shadow: 0 2px 7px rgb(var(--color-shadow-rgb) / 0.16);
+}
+
+.chat-scroll-region {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--color-ink-rgb) / 0.2) transparent;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .chat-composer-action-button,
+  .chat-composer-primary-action,
+  .chat-composer [data-testid="composer-stop-action"] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-composer-surface,
+  .chat-chrome-button {
+    transition: none;
+  }
 }
 
 .chat-chrome-button {

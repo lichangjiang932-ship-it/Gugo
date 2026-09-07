@@ -9,7 +9,7 @@ import { createRuntimePluginToolExecutor } from './pluginToolInvocation.js'
 import { snapshotPluginToolSpec } from './runtimePluginToolSpec.js'
 
 const CONNECTOR_TOOL_NAME_SET = new Set(CONNECTOR_TOOL_NAMES)
-const HOST_BOUND_EXECUTION_TOOL_NAMES = new Set(['run_code'])
+const HOST_BOUND_EXECUTION_TOOL_NAMES = new Set(['run_code', 'read_skill_resource'])
 const PLUGIN_CAPABILITY_ID_RE = /^[a-z0-9][a-z0-9._:-]{0,127}$/
 const PLUGIN_TOOL_RISK_METADATA = Object.freeze({
   riskClass: 'external',

@@ -5,17 +5,19 @@ const MAX_ERROR_TEXT_CHARS = 2_000
 
 export function redactSensitiveText(value) {
   return String(value ?? '').replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/giu, 'Bearer [REDACTED]')
-    .replace(/\b(?:sk|ghp|github_pat)-?[A-Za-z0-9_-]{12,}\b/giu, '[REDACTED]')
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|sk_(?:live|test)_[A-Za-z0-9]{12,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_-]{12,})\b/giu, '[REDACTED]')
     .replace(/\b(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|token|password|passwd|secret)\s*[=:]\s*[^\s,;]+/giu, '$1=[REDACTED]')
     .replace(/([?&](?:api[_-]?key|access[_-]?token|token|password|secret)=)[^&#\s]+/giu, '$1[REDACTED]')
 }
 
 function safeErrorText(value, fallback = '') {
-  const text = String(value ?? fallback).slice(0, MAX_ERROR_TEXT_CHARS)
+  const text = String(value ?? fallback)
   // Tool/provider errors can contain request headers or URLs. Preserve the
   // actionable message while ensuring credentials never enter checkpoints,
   // turn events, model context, or the browser state.
-  return redactSensitiveText(text)
+  // Redact before truncating: a token crossing the display boundary must not
+  // survive as a prefix too short for the credential detector to recognize.
+  return redactSensitiveText(text).slice(0, MAX_ERROR_TEXT_CHARS)
 }
 
 function normalizedStatus(value) {

@@ -2,6 +2,7 @@ import { SKILLS } from '../../src/data.js'
 import { canonicalizeSkillId, PPT_SKILL_ID_ALIASES } from '../../shared/artifactIntent.js'
 import { getCodexPluginSkill, listCodexPluginSkills } from '../adapters/codexPluginSkills.js'
 import { getImportedSkill, listAllSkillIds, listImportedSkills } from './skillStore.js'
+import { getSkillResourceManifest } from './skillResourceRuntime.js'
 
 const SKILL_CATALOG_DESCRIPTION_CHARACTERS = 500
 
@@ -105,7 +106,10 @@ export function getRuntimeSkill(id, { userId } = {}) {
       .filter((skill) => canonicalizeSkillId(skill.id) === skill.id)
       .map(mapImportedSkill),
   ].find((skill) => skill.id === canonicalId)
-  if (primary) return primary
+  if (primary) {
+    const resourceManifest = getSkillResourceManifest(canonicalId, { userId })
+    return resourceManifest ? { ...primary, resourceManifest } : primary
+  }
   return getCodexPluginSkill(canonicalId, { runnableOnly: true, loadPrompt: true })
 }
 

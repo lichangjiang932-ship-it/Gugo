@@ -1,10 +1,12 @@
 import { logWarn } from '../utils/logger.js'
+import { normalizeTurnLocale } from '../../shared/turnLocale.js'
 import { resolveRuntimeContextCompactionStrategy } from './contextCompactionStrategy.js'
 import { compactForModel } from './contextCompactionExecution.js'
+import { toolPairingBalanced } from './compactionService.js'
+import { assertContextRecoveryActive, canonicalContextMessages } from './contextCompactionState.js'
 import {
   DEFAULT_ACTIVE_CONTEXT_TOKENS,
   DEFAULT_CONTEXT_WINDOW,
-  getAutoCompactionThreshold,
   textTokens,
 } from './contextCompactionMetrics.js'
 
@@ -25,6 +27,7 @@ export {
   getCompactionSummaryTokenLimit,
 } from './contextCompactionMetrics.js'
 
+// Compatibility-only lossy view helper; never use it for automatic recovery or checkpoints.
 export function trimOldestContext(messages = [], fraction = 0.1) {
   const system = messages.filter((message) => message?.role === 'system')
   const nonSystem = messages.filter((message) => message?.role !== 'system')
@@ -137,6 +140,19 @@ function assertPreparedDynamicContextFits(prepared, contextWindow, activeContext
   throw error
 }
 
+function unrecoverableContextError(cause, prepared, contextWindow, locale) {
+  const message = normalizeTurnLocale(locale) === 'en'
+    ? `Context recovery could not fit the current task within the configured ${contextWindow}-token window without discarding instructions or tool history. `
+      + "Check that the provider's context-window configuration matches the model's supported limit, then shorten this turn's input or use a model with a larger context window."
+    : `上下文恢复未能在保留指令和工具历史的前提下适配当前 ${contextWindow} token 的上下文窗口。`
+      + '请确认服务提供商的上下文窗口配置与模型实际支持范围一致，并缩短本轮输入，或改用上下文窗口更大的模型。'
+  const error = new Error(message, { cause })
+  error.code = 'CONTEXT_UNRECOVERABLE'
+  if (prepared.errorCode) error.compactionErrorCode = prepared.errorCode
+  if (prepared.error) error.compactionError = prepared.error
+  return error
+}
+
 export async function callModelWithContextRecovery({
   messages = [],
   ephemeralMessages = [],
@@ -144,7 +160,11 @@ export async function callModelWithContextRecovery({
   callModel,
   isContextLengthError,
   contextWindow = DEFAULT_CONTEXT_WINDOW,
-  semanticSummary = false,
+  locale = 'zh',
+  semanticSummary = 'auto',
+  callSummaryModel = callModel,
+  onCompactionProgress,
+  recoveryCheckpoint,
   signal,
   userId = null,
   sessionId = null,
@@ -155,101 +175,67 @@ export async function callModelWithContextRecovery({
   ...modelOptions
 } = {}) {
   if (typeof callModel !== 'function') throw new Error('callModel is required')
-  // Ephemeral media is a provider-call suffix, never conversation history.
-  // Keeping it outside compactForModel prevents an earlier item in the same
-  // screenshot batch from being summarized or written to the canonical
-  // archive during a convergence pass. The stable local copy is deliberately
-  // reused by every context-length retry for this one logical model call.
+  assertContextRecoveryActive(signal)
+  // Provider-only media and rolling reductions never become checkpoint history.
   const ephemeralSuffix = Array.isArray(ephemeralMessages) ? [...ephemeralMessages] : []
-  let prepared = await compactForModel({
-    messages,
-    tools,
-    contextWindow,
-    semanticSummary,
-    callModel,
-    signal,
-    userId,
-    sessionId,
-    consumeBudget,
-    activeContextTokens,
-    compactionStrategyResolver,
-    compactionArchivePort,
-  })
-  const invoke = () => {
-    const requestMessages = ephemeralSuffix.length > 0
-      ? [...prepared.messages, ...ephemeralSuffix]
-      : prepared.messages
-    assertPreparedDynamicContextFits(
-      { ...prepared, messages: requestMessages },
-      contextWindow,
-      activeContextTokens,
-    )
-    return callModel({ ...modelOptions, messages: requestMessages, tools, signal })
+  const compactionOptions = {
+    tools, contextWindow, semanticSummary, callModel: callSummaryModel, signal, userId, sessionId,
+    consumeBudget, activeContextTokens, compactionStrategyResolver, compactionArchivePort,
+    onCompactionProgress,
   }
-  try {
-    return { response: await invoke(), messages: prepared.messages, recovery: prepared }
-  } catch (error) {
-    if (!isContextLengthError?.(error)) throw error
-  }
-
-  prepared = await compactForModel({
-    messages: prepared.messages,
-    tools,
-    contextWindow,
-    force: true,
-    semanticSummary,
-    callModel,
-    signal,
-    userId,
-    sessionId,
-    consumeBudget,
-    activeContextTokens,
-    compactionStrategyResolver,
-    compactionArchivePort,
-  })
-  // ★ compactForModel 拒绝压缩时会带一个 error 说明原因(工具调用链断了之类),
-  // 而原来**每个调用方都把它丢掉** —— 于是「压缩没生效」和「压缩成功了」
-  // 走一模一样的后续路径:原样再发一次,再次以同样的方式失败,
-  // 日志里一个字都没有。至少要让这个原因跟着最终错误一起冒上去。
-  if (!prepared.compacted && prepared.error) {
-    logWarn('compaction.refused', new Error(prepared.error), {
-      userId,
-      sessionId,
-      estimatedTokens: prepared.estimatedTokens,
-      threshold: prepared.threshold,
-    })
-  }
-  try {
-    return { response: await invoke(), messages: prepared.messages, recovery: { ...prepared, forced: true } }
-  } catch (error) {
-    if (!isContextLengthError?.(error)) throw error
-  }
-
-  const runtimeStrategy = prepared.runtimeStrategy
-  prepared = {
-    messages: trimOldestContext(prepared.messages, 0.1),
-    compacted: true,
-    forced: true,
-    trimmed: true,
-    threshold: getAutoCompactionThreshold(contextWindow, activeContextTokens),
-    ...(runtimeStrategy ? { runtimeStrategy } : {}),
-  }
-  try {
-    return { response: await invoke(), messages: prepared.messages, recovery: prepared }
-  } catch (error) {
-    // ★ 第三级也失败 = 这个上下文在当前窗口下无论如何都塞不下。
-    // 原来这里没有 catch,抛出去的是上游那句看不懂的原文。
-    // 给一句能操作的话:多半是窗口配小了、或者工具 schema 本身就超窗。
-    if (isContextLengthError?.(error)) {
-      const hint = new Error(
-        `上下文经过三级压缩后仍然超出模型窗口（当前按 ${contextWindow} token 计算）。`
-        + `如果这个模型的实际窗口更大，请在 provider 设置里把「上下文窗口」调大；`
-        + `如果窗口确实很小，请减少启用的工具或换一个窗口更大的模型。`,
-      )
-      hint.cause = error
-      hint.code = 'CONTEXT_UNRECOVERABLE'
-      throw hint
+  const resumeAttempt = recoveryCheckpoint?.begin({ messages, tools, contextWindow, activeContextTokens, semanticSummary }) || 0
+  let prepared
+  let sourceMessages = messages
+  let lastError = null
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const restored = recoveryCheckpoint?.restorePrepared(attempt, sourceMessages, { contextWindow, activeContextTokens })
+    if (attempt < resumeAttempt) {
+      if (!restored) throw Object.assign(new Error('Missing prepared compaction state during recovery'), { code: 'MODEL_REQUEST_CONTEXT_DRIFT', retryable: false })
+      sourceMessages = canonicalContextMessages(restored)
+      continue
     }
-    throw error
+    recoveryCheckpoint?.enterAttempt(attempt)
+    prepared = restored || await compactForModel({
+        ...compactionOptions,
+        ...recoveryCheckpoint?.preparationOptions?.(),
+        messages: sourceMessages,
+        force: attempt > 0,
+        priorArchive: recoveryCheckpoint?.priorArchive(attempt),
+        ...(attempt === 2 ? { maxRetainedMessages: 1 } : {}),
+      })
+    if (!restored) await recoveryCheckpoint?.savePrepared(attempt, prepared)
+    if (attempt > 0) {
+      if (!prepared.compacted && prepared.error) {
+        logWarn('compaction.refused', new Error(prepared.error), {
+          userId, sessionId, estimatedTokens: prepared.estimatedTokens, threshold: prepared.threshold,
+        })
+        if (!toolPairingBalanced(canonicalContextMessages(prepared)).ok) {
+          throw unrecoverableContextError(lastError, prepared, contextWindow, locale)
+        }
+      }
+    }
+    assertContextRecoveryActive(signal)
+    const requestMessages = ephemeralSuffix.length
+      ? [...prepared.messages, ...ephemeralSuffix] : prepared.messages
+    assertPreparedDynamicContextFits({ messages: requestMessages }, contextWindow, activeContextTokens)
+    try {
+      const response = await callModel({ ...modelOptions, messages: requestMessages, tools, signal })
+      assertContextRecoveryActive(signal)
+      return {
+        response,
+        messages: canonicalContextMessages(prepared),
+        recovery: {
+          ...prepared,
+          ...(attempt > 0 ? { forced: true } : {}),
+          ...(attempt === 2 ? { recoveryStage: 'aggressive_compaction' } : {}),
+        },
+      }
+    } catch (error) {
+      if (signal?.aborted) throw error
+      if (!isContextLengthError?.(error)) throw error
+      lastError = error
+      sourceMessages = canonicalContextMessages(prepared)
+    }
   }
+  throw unrecoverableContextError(lastError, prepared, contextWindow, locale)
 }

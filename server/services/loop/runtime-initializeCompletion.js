@@ -151,7 +151,7 @@ function initializeMutationVerification(s) {
   const repairedLegacyDebt = rawTargets.length === 1
     && normalizeMutationTarget(rawTargets[0]) === PROJECT_SCOPE_TARGET
     && !(s.restoredState?.completionGuards?.pendingDeletionTargets || []).length
-    && shouldRepairLegacyWorkspaceMutationCheckpoint(s.restoredState?.messages)
+    && shouldRepairLegacyWorkspaceMutationCheckpoint(s.restoredState?.messages, s.restoredState)
   s.restoredMutationTargets = repairedLegacyDebt ? [] : rawTargets
   s.recoveredHistoricalTargets = s.recoveredPriorLocalTargets
   s.pendingMutationTargets = new Set([
@@ -368,7 +368,7 @@ function installCompletionPrompts(s) {
       ? '[ARTIFACT SOURCE DELIVERY POLICY] The user explicitly requested a code snippet, so you may include the specifically requested snippet in the answer. If the user also requested a downloadable artifact, the snippet does not replace the required successful artifact tool call.'
       : '[ARTIFACT SOURCE DELIVERY POLICY] The user did not explicitly request a code snippet. Never output complete source code, a large code block, copy/paste instructions, or directions telling the user to create, save, rename, or convert the file manually. This remains true after malformed arguments, a failed artifact tool call, retries, missing capabilities, or exhausted execution budget. Correct and retry with tools when safe; otherwise report one concise blocker without source code.' })
   }
-  if ((s.directExecutionRequested || s.requiresPersistedArtifact)
+  if ((s.requiresExecutionEvidence || s.requiresPersistedArtifact)
     && !s.hasRuntimeMarker(AVAILABLE_TOOL_CAPABILITIES_MARKER)) {
     const activeNames = s.activeToolSpecs.map(toolNameFromSpec).filter(Boolean)
     const commandNames = activeNames.filter(isCommandExecutionTool)
@@ -387,7 +387,7 @@ function installCompletionPrompts(s) {
       'Do not call request_clarification merely to claim that a listed capability is missing; correct the arguments or use another listed tool and continue.',
     ].filter(Boolean).join(' ') })
   }
-  if ((s.directExecutionRequested || s.requiresPersistedArtifact)
+  if ((s.requiresExecutionEvidence || s.requiresPersistedArtifact)
     && !s.hasRuntimeMarker('[DIRECT EXECUTION REQUIRED]')) {
     s.convo.push({ role: 'system', content: '[DIRECT EXECUTION REQUIRED] The user asked for concrete work, not instructions for doing it later. Use the available tools now, follow the supplied steps, create or modify the requested deliverable, and verify the result before answering. Do not merely print a script or tell the user to run commands. If execution is genuinely blocked, report the concise blocker; full source is allowed only when the artifact source-delivery policy confirms that the user explicitly requested a code snippet. Keep internal deliberation brief; report the completed result or one concise, specific blocker.' })
   }

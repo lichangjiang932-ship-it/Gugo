@@ -86,7 +86,7 @@ test('outbound pipeline re-evaluates vision and PDF content for the target profi
   assert.deepEqual(messages, original)
 })
 
-test('ephemeral context is appended only to the final user message', () => {
+test('ephemeral context is appended after the history without rewriting the final user message', () => {
   const outbound = prepareOutboundMessages({
     messages: [
       { role: 'user', content: 'first' },
@@ -101,8 +101,8 @@ test('ephemeral context is appended only to the final user message', () => {
   assert.equal(outbound[0].content, 'first')
   assert.deepEqual(outbound[2].content, [
     { type: 'text', text: 'last' },
-    { type: 'text', text: '[RUNTIME CONTEXT]\nworkspace=D:/repo' },
   ])
+  assert.deepEqual(outbound.at(-1), { role: 'user', content: '[RUNTIME CONTEXT]\nworkspace=D:/repo' })
   assert.equal(outbound.filter((message) => message.role === 'system').length, 0)
 })
 

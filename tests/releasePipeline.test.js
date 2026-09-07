@@ -4,7 +4,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
 import { stageWebRelease, WEB_RELEASE_ENTRIES } from '../scripts/release/package-web.mjs'
+import { collectStaticModuleGraph } from './helpers/staticModuleGraph.js'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'utf8')
@@ -57,6 +59,9 @@ test('Web release staging contains a complete runnable distribution and is repea
   assert.match(readFrom(first.stageDir, 'README-WEB.md'), /node bin\/yma-cli\.js --help/)
   assert.equal(fs.existsSync(path.join(first.stageDir, 'bin', 'yma-cli.js')), true)
   assert.equal(fs.existsSync(path.join(first.stageDir, 'docs', 'CLI.md')), true)
+  assert.equal(fs.existsSync(path.join(first.stageDir, 'docs', 'CONTEXT_COMPACTION.md')), true)
+  assert.match(readFrom(first.stageDir, 'README-WEB.md'), /docs\/CONTEXT_COMPACTION\.md/)
+  assert.match(readFrom(first.stageDir, 'README-WEB.md'), /lossy continuation aids/)
   assert.equal(execFileSync(process.execPath, [path.join(first.stageDir, 'bin', 'yma-cli.js'), '--version'], {
     encoding: 'utf8',
   }).trim(), '1.2.3')
@@ -245,23 +250,59 @@ test('Release secret scanning cannot pass without scanning an explicit checkout 
   }
 })
 
-test('Web release includes the server parser dependency closure without browser barrels', () => {
-  const runtimeParserEntries = [
+test('Web release includes the transitive artifact and skill runtime closure without browser barrels', async (t) => {
+  const runtimeFrontendEntries = [
+    'src/data.js',
+    'src/data/skillCatalog.js',
+    'src/i18n/domains/skillsMarket.js',
     'src/lib/officeExport/documentExport.js',
     'src/lib/officeExport/officeCommon.js',
     'src/lib/officeExport/spreadsheetExport.js',
+    'src/lib/pptCore.js',
     'src/lib/presentationExport/presentationParseHelpers.js',
     'src/lib/presentationExport/presentationParser.js',
+    'src/lib/presentationPlanner.js',
   ]
-  for (const entry of runtimeParserEntries) {
+  for (const entry of runtimeFrontendEntries) {
     assert.equal(WEB_RELEASE_ENTRIES.includes(entry), true, `missing runtime parser dependency ${entry}`)
   }
+  const roots = ['server/services/loop/heuristics/artifactPublishing.js', 'server/services/skillRegistry.js']
+  const graphs = roots.map((entry) => collectStaticModuleGraph(path.join(ROOT, entry)))
+  const relative = (file, root = ROOT) => path.relative(root, file).split(path.sep).join('/')
+  const files = new Set(graphs.flatMap((graph) => [...graph.files].map((file) => relative(file))))
+  for (const graph of graphs) assert.deepEqual(graph.unresolvedLocalModules, [])
+  assert.deepEqual([...files].filter((file) => file.startsWith('src/')).sort(), [...runtimeFrontendEntries].sort())
+  for (const module of ['pptxMarkdownCompatibility', 'pptxMarkdownSource', 'pptxMarkdownChart']) {
+    assert.equal(files.has(`server/services/${module}.js`), true, `${module} must be reachable through publishing`)
+  }
+  for (const file of files) {
+    assert.equal(WEB_RELEASE_ENTRIES.some((entry) => file === entry || file.startsWith(`${entry}/`)), true,
+      `runtime dependency is not packed: ${file}`)
+  }
+  const forbidden = ['src', 'src/lib', 'src/i18n', 'src/i18n/domains', 'src/lib/officeExport.js', 'src/lib/presentationExport.js', 'src/i18n/translations.js']
+  for (const entry of forbidden) assert.equal(WEB_RELEASE_ENTRIES.includes(entry), false, `overbroad runtime entry: ${entry}`)
 
-  const heuristics = read('server/services/loop/heuristics/artifactPublishing.js')
-  assert.match(heuristics, /officeExport\/documentExport\.js/)
-  assert.match(heuristics, /officeExport\/spreadsheetExport\.js/)
-  assert.match(heuristics, /presentationExport\/presentationParser\.js/)
-  assert.doesNotMatch(heuristics, /from ['"]\.\.\/\.\.\/src\/lib\/(?:officeExport|presentationExport)\.js['"]/)
+  const rootDir = createReleaseFixture(t)
+  for (const file of files) {
+    const target = path.join(rootDir, file)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.copyFileSync(path.join(ROOT, file), target)
+  }
+  const { stageDir } = stageWebRelease({ rootDir, outputDir: path.join(rootDir, 'output') })
+  for (const [index, entry] of roots.entries()) {
+    const staged = collectStaticModuleGraph(path.join(stageDir, entry))
+    assert.deepEqual(staged.unresolvedLocalModules, [])
+    assert.deepEqual([...staged.files].map((file) => relative(file, stageDir)).sort(),
+      [...graphs[index].files].map((file) => relative(file)).sort())
+  }
+  for (const entry of forbidden.filter((entry) => entry.endsWith('.js'))) {
+    assert.equal(fs.existsSync(path.join(stageDir, entry)), false, `browser barrel leaked into the release: ${entry}`)
+  }
+  const compatibility = await import(pathToFileURL(path.join(stageDir, 'server/services/pptxMarkdownCompatibility.js')).href)
+  assert.deepEqual(compatibility.canonicalPptxMarkdownSlides('# Ordinary page\n- Complete evidence')[0].bullets, ['Complete evidence'])
+  const skills = await import(pathToFileURL(path.join(stageDir, 'src/data/skillCatalog.js')).href)
+  const copy = (await import(pathToFileURL(path.join(stageDir, 'src/i18n/domains/skillsMarket.js')).href)).default
+  assert.equal(skills.SKILLS.find((skill) => skill.id === 'ppt').desc, copy.zh.builtInPptDescription)
 })
 
 function readFrom(rootDir, relativePath) {

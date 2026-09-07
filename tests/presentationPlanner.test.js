@@ -8,7 +8,7 @@ import {
   selectPresentationTemplate,
 } from '../src/lib/presentationPlanner.js'
 
-test('presentation planner routes AI model topics to a technology blueprint', () => {
+test('explicit legacy template helpers still support a technology blueprint', () => {
   const template = selectPresentationTemplate('/ppt 做一个关于 DeepSeek V4 Pro 的 ppt5页，高级感，内容充实')
   const blueprint = buildSlideBlueprint(template, 5)
 
@@ -20,7 +20,7 @@ test('presentation planner routes AI model topics to a technology blueprint', ()
   assert.ok(blueprint.some((slot) => /system|architecture|mechanism/i.test(slot.intent)))
 })
 
-test('presentation planner chooses fundraising slots for investor pitch topics', () => {
+test('explicit legacy template helpers still support investor pitch topics', () => {
   const template = selectPresentationTemplate('帮我做一份 A 轮融资路演 deck，讲 TAM、商业模式、资金用途')
   const blueprint = buildSlideBlueprint(template, 8)
 
@@ -30,27 +30,41 @@ test('presentation planner chooses fundraising slots for investor pitch topics',
   assert.ok(blueprint.some((slot) => /funding|use of funds/i.test(slot.intent)))
 })
 
-test('presentation planner extracts requested slide counts and clamps unsafe values', () => {
-  assert.equal(inferRequestedSlideCount('做一个5页ppt'), 5)
-  assert.equal(inferRequestedSlideCount('make a 9 page pitch deck'), 9)
-  assert.equal(inferRequestedSlideCount('做一个99页ppt'), 16)
+test('requested slide counts remain exact instead of being clamped to a preset range', () => {
+  for (const count of [1, 2, 3, 5, 9, 20, 99, 100, 101]) {
+    assert.equal(inferRequestedSlideCount(`做一个${count}页ppt，不要封面`), count)
+    assert.equal(inferRequestedSlideCount(`make a ${count}-page deck`), count)
+  }
+  assert.equal(inferRequestedSlideCount('做一个二十页演示'), 20)
+  assert.equal(inferRequestedSlideCount('做一个九十九页演示'), 99)
+  assert.equal(inferRequestedSlideCount('做一个一页演示'), 1)
   assert.equal(inferRequestedSlideCount('随便做个ppt'), null)
 })
 
-test('planner prompt injects a strict page-by-page slot plan for ppt and htmlppt', () => {
-  const pptPrompt = buildPresentationPlannerPrompt('DeepSeek V4 Pro ppt5页', { skillId: 'ppt' })
-  const htmlPrompt = buildPresentationPlannerPrompt('DeepSeek V4 Pro html ppt5页', { skillId: 'htmlppt' })
+test('explicit blueprint expansion preserves small and large counts and rejects unsupported counts openly', () => {
+  const template = selectPresentationTemplate('technology')
+  for (const count of [1, 2, 20, 99, 100]) {
+    const blueprint = buildSlideBlueprint(template, count)
+    assert.equal(blueprint.length, count)
+    assert.deepEqual(blueprint.map((item) => item.page), Array.from({ length: count }, (_, index) => index + 1))
+  }
+  for (const count of [0, -1, 1.5, 101]) {
+    assert.throws(() => buildSlideBlueprint(template, count), RangeError)
+  }
+})
 
-  assert.match(pptPrompt, /Template library planner/)
-  assert.match(pptPrompt, /Selected template: technology/)
-  assert.match(pptPrompt, /Strict slide count: 5/)
-  assert.match(pptPrompt, /Page 03/)
-  assert.match(pptPrompt, /<!-- data -->|<!-- chart -->/)
+test('default planner forwards the user request verbatim without injecting template slots or design defaults', () => {
+  const request = '制作 1 页诗歌赏析，不要封面、目录或结束页。\n用 4:3、宋体、淡绿色；正文逐字保留，不加图表。'
+  const expected = `\n\n## User presentation request\n${request}`
+  for (const skillId of ['ppt', 'htmlppt']) {
+    const prompt = buildPresentationPlannerPrompt(request, { skillId })
+    assert.equal(prompt, expected)
+    assert.doesNotMatch(prompt, /Template library|Selected template|Page-by-page blueprint|Page 0|fixed 16:9|64px/)
+  }
+})
 
-  assert.match(htmlPrompt, /Selected template: technology/)
-  assert.match(htmlPrompt, /section class="slide/)
-  assert.match(htmlPrompt, /data-slide="3"/)
-  assert.match(htmlPrompt, /fixed 16:9 canvas/)
-  assert.match(htmlPrompt, /64px for the deck title/)
-  assert.match(htmlPrompt, /Never duplicate visible text/)
+test('unspecified page count or style does not create a default storyline or an extra configuration step', () => {
+  const request = '做一份儿童绘本风格的演示'
+  assert.equal(buildPresentationPlannerPrompt(request), `\n\n## User presentation request\n${request}`)
+  assert.equal(buildPresentationPlannerPrompt(''), '')
 })

@@ -98,8 +98,8 @@ test('page shells render the left rail only through AppLayout', () => {
 })
 
 test('UI radius system exposes exactly the card, control, and pill tiers', () => {
-  assert.match(stylesSource, /--radius-card:\s*12px/)
-  assert.match(stylesSource, /--radius-control:\s*8px/)
+  assert.match(stylesSource, /--radius-card:\s*16px/)
+  assert.match(stylesSource, /--radius-control:\s*10px/)
   assert.match(stylesSource, /--radius-pill:\s*999px/)
   assert.match(tailwindSource, /card:\s*'var\(--radius-card\)'/)
   assert.match(tailwindSource, /control:\s*'var\(--radius-control\)'/)
@@ -111,8 +111,8 @@ test('global typography has one five-tier scale and one shared CJK-capable mono 
     page: '28px',
     section: '20px',
     body: '15px',
-    ui: '13px',
-    meta: '11px',
+    ui: '14px',
+    meta: '12px',
   }
   const declarations = [...stylesSource.matchAll(/--type-([\w-]+):\s*([^;]+);/g)]
   assert.deepEqual(Object.fromEntries(declarations.map(([, name, value]) => [name, value.trim()])), expectedScale)
@@ -166,8 +166,8 @@ test('composer keeps restrained elevation while tool rows stay grounded', () => 
   assert.match(composerSource, /min-h-\[108px\][\s\S]{0,120}rounded-\[22px\]/)
   assert.match(composerSource, /chat-composer-surface/)
   assert.doesNotMatch(composerSource, /focus-within:-translate-y-px|focus-within:border-blue/)
-  assert.match(cssRule('.chat-composer-surface'), /box-shadow:[\s\S]*?0 12px 32px/)
-  assert.match(cssRule('.chat-composer-surface:focus-within'), /box-shadow:[\s\S]*?0 14px 38px/)
+  assert.match(cssRule('.chat-composer-surface'), /box-shadow:[\s\S]*?0 4px 16px/)
+  assert.match(cssRule('.chat-composer-surface:focus-within'), /box-shadow:[\s\S]*?0 6px 20px/)
   assert.match(cssRule('.chat-composer-project-strip'), /width:\s*fit-content/)
   assert.match(cssRule('.chat-composer-project-strip'), /margin-bottom:\s*0\.5rem/)
 

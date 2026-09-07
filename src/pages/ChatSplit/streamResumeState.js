@@ -44,11 +44,42 @@ export function buildStreamResumeState(result, { sessionId = null, turnId = null
   }
 }
 
-export function buildStreamResumeStateFromMessages(messages, { sessionId = null } = {}) {
-  const latestServerAssistant = [...(Array.isArray(messages) ? messages : [])]
-    .reverse()
-    .find((message) => message?.role === 'assistant' && nonEmptyString(message?.meta?.serverTurnId))
-  if (!latestServerAssistant?.meta?.failed) return null
+export function latestStreamResumeMessage(messages) {
+  const history = Array.isArray(messages) ? messages : []
+  let steeringTurnId = null
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index]
+    if (message?.role === 'assistant') {
+      return !steeringTurnId || message.meta?.serverTurnId === steeringTurnId ? message : null
+    }
+    if (message?.role !== 'user') continue
+    const turnId = nonEmptyString(message.meta?.serverTurnId)
+    // Steering belongs to the existing turn; an ordinary user message starts a
+    // new conversation boundary even before its assistant placeholder exists.
+    if (message.meta?.steering !== true || !turnId || steeringTurnId && steeringTurnId !== turnId) return null
+    steeringTurnId = turnId
+  }
+  return null
+}
+
+export function streamResumeDismissalKey(message, { sessionId = null } = {}) {
+  const meta = message?.meta
+  const normalizedSessionId = nonEmptyString(sessionId)
+  const turnId = nonEmptyString(meta?.serverTurnId)
+  if (!normalizedSessionId || !turnId || meta?.failed !== true) return null
+  const boundary = Number.isInteger(meta.serverLastSequence) && meta.serverLastSequence >= 0
+    ? ['sequence', meta.serverLastSequence]
+    : ['completedAt', meta.turnCompletedAt ?? null]
+  return JSON.stringify([normalizedSessionId, turnId, boundary, meta.serverFailure?.code || ''])
+}
+
+export function buildStreamResumeStateFromMessages(
+  messages,
+  { sessionId = null, dismissedKeys = null } = {},
+) {
+  const latestServerAssistant = latestStreamResumeMessage(messages)
+  const dismissalKey = streamResumeDismissalKey(latestServerAssistant, { sessionId })
+  if (!dismissalKey || dismissedKeys?.has(dismissalKey)) return null
 
   const failure = latestServerAssistant.meta.serverFailure
   if (!failure || typeof failure !== 'object') return null

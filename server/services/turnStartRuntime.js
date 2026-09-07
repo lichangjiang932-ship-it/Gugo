@@ -1,6 +1,6 @@
 import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
 import { normalizeTurnLocale } from '../../shared/turnLocale.js'
-import { normalizeTurnIntentMode } from '../utils/executionIntent.js'
+import { normalizeChatTurnIntentMode } from '../utils/executionIntent.js'
 import { PERMISSION_MODES } from '../utils/approvalPolicy.js'
 import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
 import { TurnEngineError } from './turnResolutionRuntime.js'
@@ -138,7 +138,7 @@ function normalizeTurnStartRequest(input = {}) {
     normalizedSkillIds: normalizeTurnIds(resolvedSkill.skillIds),
     skillDefinitions,
     normalizedToolsConfig: normalizeServerToolsConfig(toolsConfig),
-    normalizedIntentMode: normalizeTurnIntentMode(intentMode),
+    normalizedIntentMode: normalizeChatTurnIntentMode(intentMode, displayText || text),
   }
 }
 

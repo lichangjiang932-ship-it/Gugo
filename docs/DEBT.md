@@ -249,27 +249,47 @@ previews, and streaming updates.
 
 ## DEBT-TYPE-001 — Runtime contract type coverage
 
-**Status:** Closed
+**Status:** Open
 **Priority:** P2  
 **Area:** Type safety
 
-**Evidence / reproduction:** Runtime ports and event contracts previously had
-runtime validation only, with no checked-in static declarations or CI typecheck.
+**Evidence / reproduction:** The original `types/runtime-contracts.ts` remains a
+useful schema-derived event/payload index and structural port-method check, but
+`tsconfig.contracts.json` has `checkJs: false`: it did not check the JavaScript
+implementations end-to-end. Compiler inspection also finds `any` return types
+for the unchecked SessionAdmin, managed-attachment-runtime and subagent ports.
+Before the pilot, the Turn Event discriminator widened to `string`; its opaque
+JSON payload intentionally remains `Record<string, unknown>` after parsing.
 
-**Exit criteria:** Stable event payload and kernel-port types are derived from
-their existing authorities and checked by an unconditional required CI step,
-without creating a second event schema.
+**Exit criteria:** Incrementally check the stable event/protocol and kernel-port
+implementations together with their production callers, deriving their types
+from the existing runtime authorities. Each covered boundary must have positive
+calls and negative compile fixtures; unsafe port inference and uncovered callers
+must remain explicitly tracked before this debt can close.
 
-**Resolution:** `types/runtime-contracts.ts` derives Turn Event and payload types
-directly from the authoritative Zod schemas and derives stable kernel port types
-from their implementation factories and method constants. This avoids a second
-event schema while adding compile-time method coverage for attachment, Session,
-compaction, and subagent persistence boundaries. `tsconfig.contracts.json` keeps
-the migration incremental instead of enabling repository-wide `checkJs`.
+**Progress:** `tsconfig.protocol-pilot.json` enables `checkJs: true`, `strict` and
+`noEmit` for six real runtime modules: inline-skill bounds, Turn Activity, Turn
+Events, SSE transport, WebSocket protocol and the server WebSocket frame codec.
+Their JSDoc imports use `types/turn-protocol.ts`, derived from the same Zod
+schemas. Literal event/activity kinds, type-dependent constructor payloads and
+validation-result narrowing are checked. The production WebSocket service now
+uses the checked codec; v1 SSE/WS and durable Agent Event v2 retain their separate
+authorities. No repository-wide switch or diagnostic-suppression directive is used.
 
-**Verification:** `npm run typecheck` is an unconditional required CI step on
-the cross-platform Node 22 test matrix. Existing event, adapter, persistence,
-and code-debt suites remain the runtime baseline.
+**Remaining scope:** The complete WebSocket service, kernel-port factories and
+their other callers, UI, model invocation and persistence modules are not covered
+by this pilot. Legacy structural aliases are not a substitute for migrating these
+implementations; the debt is deliberately open rather than claiming whole-repo
+type safety.
+
+**Verification:** The existing unconditional CI `npm run typecheck` now runs the
+original index, the strict implementation pilot and 11 registered negative call
+fixtures. Every negative fixture must fail with its intended TypeScript error;
+unresolved imports or unrelated errors cannot count as a successful check.
+`tests/protocolTypecheck.test.js` also injects a wrong protocol version into the
+real codec in an in-memory compiler host and requires an implementation error,
+without changing the file. Protocol, codec and real WebSocket tests remain the
+runtime regression baseline.
 
 ## DEBT-RELEASE-001 — Desktop signing and provenance
 
@@ -685,6 +705,50 @@ intentional temporary exception requires a separately reviewed debt record.
 **Verification:** `npm run debt:check` discovers JavaScript and TypeScript
 implementation files under `server/`, `shared/`, `desktop/`, and `bin/`; rejects
 new oversized files and requires the closed inventory to remain empty.
+
+## DEBT-NET-002 — OS-level isolation for arbitrary external code
+
+**Status:** Open
+**Priority:** P2
+**Area:** Local-first execution
+
+**Evidence / reproduction:** `server/utils/shellPolicy.js` explicitly implements
+an application-level command tripwire, not a security sandbox. Arbitrary Node,
+Python or PowerShell programs, trusted runtime plugins and MCP stdio processes
+can use networking outside the guarded HTTP APIs. Windows process-tree binding
+controls lifecycle and cancellation, not network access. Renderer image proxy
+and CSP enforcement close application-controlled resource bypasses but do not
+make arbitrary external code air-gapped.
+
+**Exit criteria:** A supported, explicitly selected execution backend enforces
+and verifies OS/container network isolation for every relevant process and
+plugin boundary, with clear unsupported-platform behavior and preserved local
+tool functionality. No expansion of lexical blacklists alone can close this item.
+
+**Verification:** Current `tests/shellPolicy.test.js`, outbound-policy and
+remote-image tests verify the narrower application policy. Closure also requires
+real network-canary tests for inline/encoded programs, explicit executable paths,
+background children and stdio/plugin execution under the selected sandbox.
+
+## DEBT-RELEASE-002 — Production signing configuration is absent
+
+**Status:** Open
+**Priority:** P1
+**Area:** Release operations
+
+**Evidence / reproduction:** On 2026-09-07 the repository Secrets and Variables
+metadata lists were empty. Release run `34021618396` failed at `Require Windows
+code-signing credentials`. The signing/provenance code gate in
+`DEBT-RELEASE-001` exists, but deployment prerequisites are not configured.
+
+**Exit criteria:** Configure `WINDOWS_CSC_LINK`, `WINDOWS_CSC_KEY_PASSWORD` and
+the matching `WINDOWS_PUBLISHER_NAME`, then produce a verified main-line release
+with valid timestamped signatures, the complete asset set, checksums and GitHub
+build provenance. Published tags/assets must remain immutable.
+
+**Verification:** Repository configuration metadata, a successful Release run,
+Authenticode verification and independent `gh attestation verify`. A draft or
+unsigned local installer is not proof that this item is closed.
 
 ## Maintenance rules
 

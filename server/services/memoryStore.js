@@ -10,7 +10,7 @@
  */
 
 import { getDb } from '../db.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 const ALLOWED_TYPES = ['user', 'feedback', 'project', 'reference']
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -23,12 +23,23 @@ const MAX_LINK_DEPTH = 5
 const MAX_LINK_NODES = 200
 
 function normalizeSlug(s) {
-  return String(s || '')
+  return Array.from(String(s || '')
+    .normalize('NFKC')
     .trim()
     .toLowerCase()
     .replace(/\s+/g, '-')
-    .replace(/[^a-z0-9_-]/g, '')
-    .slice(0, 80) || 'memory'
+    .replace(/[^\p{L}\p{N}_-]/gu, ''))
+    .slice(0, 80).join('') || 'memory'
+}
+
+function allocateMemorySlug(db, userId, title, memoryId) {
+  const base = normalizeSlug(title)
+  const exists = db.prepare('SELECT 1 FROM memories WHERE user_id = ? AND slug = ? LIMIT 1')
+  if (!exists.get(userId, base)) return base
+  const suffix = createHash('sha256').update(String(memoryId)).digest('hex').slice(0, 16)
+  const slug = `${Array.from(base).slice(0, 63).join('')}-${suffix}`
+  if (exists.get(userId, slug)) throw new Error('Memory link identity conflicts with an existing memory')
+  return slug
 }
 
 function row2memory(row) {
@@ -217,36 +228,47 @@ export function upsertMemory({ id, userId, type, title, body, frontmatter = {}, 
   const db = getDb()
   const now = Date.now()
   const memoryId = id || randomUUID()
-  const slug = normalizeSlug(title)
   const frontmatterJson = JSON.stringify(frontmatter || {})
 
-  const existing = db.prepare('SELECT id FROM memories WHERE user_id = ? AND id = ?').get(userId, memoryId)
-  if (existing) {
-    db.prepare(
-      `UPDATE memories SET type=?, title=?, slug=?, body=?, frontmatter_json=?, pinned=?, agent_id=?, updated_at=? WHERE id=?`
-    ).run(type, title.trim(), slug, body.trim(), frontmatterJson, pinned ? 1 : 0, agentId || null, now, memoryId)
-  } else {
-    db.prepare(
-      `INSERT INTO memories (id, user_id, type, title, slug, body, frontmatter_json, pinned, source_session_id, source_message_id, agent_id, created_at, updated_at, last_used_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
-    ).run(memoryId, userId, type, title.trim(), slug, body.trim(), frontmatterJson, pinned ? 1 : 0, sourceSessionId, sourceMessageId, agentId || null, now, now)
-  }
+  return db.transaction(() => {
+    const existing = db.prepare('SELECT id, slug, source_session_id, source_message_id FROM memories WHERE user_id = ? AND id = ?').get(userId, memoryId)
+    // Slugs are stable identities, not a projection that changes with a title.
+    // Preserve legacy links instead of ambiguously rewriting historical data.
+    const slug = existing?.slug || allocateMemorySlug(db, userId, title, memoryId)
+    if (existing) {
+      const sourceProvided = sourceSessionId != null || sourceMessageId != null
+      const nextSession = sourceProvided ? sourceSessionId : existing.source_session_id
+      const nextMessage = sourceProvided ? sourceMessageId : existing.source_message_id
+      db.prepare(
+        `UPDATE memories SET type=?, title=?, slug=?, body=?, frontmatter_json=?, pinned=?, agent_id=?, updated_at=?,
+         source_session_id=?, source_message_id=?
+         WHERE id=? AND user_id=?`
+      ).run(type, title.trim(), slug, body.trim(), frontmatterJson, pinned ? 1 : 0, agentId || null, now,
+        nextSession, nextMessage, memoryId, userId)
+    } else {
+      db.prepare(
+        `INSERT INTO memories (id, user_id, type, title, slug, body, frontmatter_json, pinned, source_session_id, source_message_id, agent_id, created_at, updated_at, last_used_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
+      ).run(memoryId, userId, type, title.trim(), slug, body.trim(), frontmatterJson, pinned ? 1 : 0, sourceSessionId, sourceMessageId, agentId || null, now, now)
+    }
 
-  // 重新计算 [[slug]] 链
-  db.prepare('DELETE FROM memory_links WHERE from_id = ?').run(memoryId)
-  const links = new Set()
-  const linkPattern = /\[\[([a-z0-9_-]+)\]\]/gi
-  let m
-  while ((m = linkPattern.exec(body)) !== null) {
-    links.add(normalizeSlug(m[1]))
-  }
-  const insLink = db.prepare(`
-    INSERT INTO memory_links (from_id, to_slug) VALUES (?, ?)
-    ON CONFLICT(from_id, to_slug) DO NOTHING
-  `)
-  for (const s of links) insLink.run(memoryId, s)
+    // The memory body, attribution and linked graph are one atomic mutation.
+    db.prepare('DELETE FROM memory_links WHERE from_id = ?').run(memoryId)
+    const links = new Set()
+    const linkPattern = /\[\[([\p{L}\p{N}_-]+)\]\]/giu
+    let m
+    const canonicalLinkText = body.normalize('NFKC')
+    while ((m = linkPattern.exec(canonicalLinkText)) !== null) {
+      links.add(normalizeSlug(m[1]))
+    }
+    const insLink = db.prepare(`
+      INSERT INTO memory_links (from_id, to_slug) VALUES (?, ?)
+      ON CONFLICT(from_id, to_slug) DO NOTHING
+    `)
+    for (const s of links) insLink.run(memoryId, s)
 
-  return getMemory(userId, memoryId)
+    return getMemory(userId, memoryId)
+  })()
 }
 
 export function deleteMemory(userId, id) {

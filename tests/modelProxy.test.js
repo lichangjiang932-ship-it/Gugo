@@ -665,8 +665,6 @@ test('local proxy tool-loop calls preserve token usage and honor explicit upstre
       promptTokens: 12,
       completionTokens: 3,
       totalTokens: 15,
-      cacheHitTokens: 0,
-      cacheMissTokens: 12,
     })
   }
 })

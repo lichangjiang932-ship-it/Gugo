@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { installSkill } from './skillStore.js'
+import { normalizeSkillResourcePath } from '../../shared/skillResourcePaths.js'
 
 export const SKILL_PACK_LIMITS = Object.freeze({
   maxFiles: 128,
@@ -30,15 +31,7 @@ const manifestSchema = z.object({
 }).passthrough()
 
 function normalizePackPath(value) {
-  if (typeof value !== 'string' || !value || value.length > SKILL_PACK_LIMITS.maxPathLength) return null
-  if (value.includes('\\') || value.includes('\0') || value.startsWith('/') || /^[a-z]:/i.test(value)) return null
-  if ([...value].some((character) => {
-    const code = character.charCodeAt(0)
-    return code < 32 || code === 127
-  })) return null
-  const segments = value.split('/')
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) return null
-  return segments.join('/')
+  return normalizeSkillResourcePath(value, { maxLength: SKILL_PACK_LIMITS.maxPathLength })
 }
 
 function validatePackFiles(files) {

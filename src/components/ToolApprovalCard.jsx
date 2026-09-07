@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, CheckCheck, ChevronDown, ChevronRight, Terminal, FilePen, FileText, Globe, MousePointerClick, X } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider.jsx'
 
@@ -28,6 +28,28 @@ const TOOL_ICON = {
 
 const SHELL_TOOL_NAMES = new Set(['bash_exec', 'run_command', 'run_test', 'docker_exec'])
 const ONE_TIME_APPROVAL_TOOL_NAMES = new Set([...SHELL_TOOL_NAMES, 'run_code'])
+const EDITABLE_TARGETS = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="searchbox"]'
+const INTERACTIVE_TARGETS = 'button, a[href], summary, [role="button"], [role="menuitem"], [role="option"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"]'
+
+function closestKeyboardTarget(target, selector) {
+  const element = typeof target?.closest === 'function' ? target : target?.parentElement
+  return element?.closest?.(selector) || null
+}
+
+function ignoreApprovalShortcut(event, card) {
+  if (event.defaultPrevented || event.isComposing || event.repeat
+    || Number(event.keyCode) === 229 || Number(event.which) === 229
+    || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return true
+  const targets = [event.target, window.document.activeElement]
+  if (targets.some((target) => closestKeyboardTarget(target, EDITABLE_TARGETS))) return true
+  return targets.some((target) => {
+    const control = closestKeyboardTarget(target, INTERACTIVE_TARGETS)
+    // Enter belongs to the focused control's native activation, particularly
+    // the deny/remember buttons. Escape only applies to this approval's own
+    // controls, not another picker or toolbar elsewhere on the page.
+    return control && (event.key === 'Enter' || !card.contains(control))
+  })
+}
 
 /** bash_exec 的命令、write_file 的路径 —— 一眼能看懂的主参数 */
 function headline(name, args) {
@@ -95,20 +117,22 @@ function DiffPreview({ changes, t }) {
  */
 export default function ToolApprovalCard({ open, request, onDecide, busy }) {
   const { t } = useT()
+  const approvalRef = useRef(null)
   // 用 request 做 key 让 React 自然重置展开态,不必在 effect 里 setState
   const [expandedFor, setExpandedFor] = useState(null)
   const expanded = expandedFor === request
 
   useEffect(() => {
-    if (!open || busy) return undefined
+    if (!open || !request || busy) return undefined
     const onKey = (e) => {
-      if (e.key === 'Escape') onDecide?.({ approved: false })
-      // Claude Code 手感:回车 = 允许一次
-      if (e.key === 'Enter' && !e.shiftKey) onDecide?.({ approved: true })
+      const card = approvalRef.current
+      if (!card || !['Enter', 'Escape'].includes(e.key) || ignoreApprovalShortcut(e, card)) return
+      e.preventDefault()
+      onDecide?.({ approved: e.key === 'Enter' })
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, busy, onDecide])
+  }, [open, request, busy, onDecide])
 
   if (!open || !request) return null
 
@@ -120,7 +144,7 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
   const canRemember = !ONE_TIME_APPROVAL_TOOL_NAMES.has(name)
 
   return (
-    <div className={`rounded-md border ${tone.border} ${tone.bg} p-3.5`} data-testid="tool-approval-card">
+    <div ref={approvalRef} className={`rounded-md border ${tone.border} ${tone.bg} p-3.5`} data-testid="tool-approval-card">
       <div className="flex items-start gap-2.5">
         <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${tone.text}`} />
         <div className="min-w-0 flex-1">

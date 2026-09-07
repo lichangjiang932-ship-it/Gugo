@@ -34,6 +34,7 @@ function buildBuiltinToolMetadata(codexModelsToolName) {
     web_search: builtinMetadata('read', true),
     fetch_url: builtinMetadata('read', true),
     read_file: builtinMetadata('read', true),
+    read_skill_resource: builtinMetadata('read', true),
     write_file: builtinMetadata('write_local', false),
     edit_file: builtinMetadata('write_local', false),
     bash_exec: builtinMetadata('exec', false),
@@ -106,6 +107,7 @@ function buildBuiltinToolMetadata(codexModelsToolName) {
 }
 
 const READ_ONLY_MODE_TOOLS = new Set([
+  'read_skill_resource',
   'read_artifact_source',
   'list_directory',
   'web_search',
@@ -130,6 +132,7 @@ const READ_ONLY_MODE_TOOLS = new Set([
 ])
 
 const BUILTIN_CONCURRENCY_SAFE_TOOLS = new Set([
+  'read_skill_resource',
   'read_artifact_source',
   'web_search',
   'fetch_url',

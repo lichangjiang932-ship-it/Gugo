@@ -173,7 +173,11 @@ test('semantic summary input is split into bounded batches instead of serializin
   const plan = buildCompactionSummaryBatches({ archivedMessages, inputTokenBudget: 4096 })
 
   assert.ok(plan.batches.length > 1)
-  assert.equal(plan.truncatedMessageCount, 24)
+  assert.equal(plan.truncatedMessageCount, 0)
+  assert.equal(plan.splitMessageCount, 24)
+  for (const [index, message] of archivedMessages.entries()) {
+    assert.equal(plan.batches.flat().filter((part) => part.index === index).map((part) => part.content || '').join(''), message.content)
+  }
   for (const batch of plan.batches) {
     const request = buildCompactionEvidenceMessages({ serializedMessages: batch })
     assert.ok(estimatedTokens(request) <= 4096, `batch exceeded budget: ${estimatedTokens(request)}`)

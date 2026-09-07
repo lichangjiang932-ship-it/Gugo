@@ -16,15 +16,11 @@
  *   - 每次调用走 tool_audit
  */
 
-import { StdioTransport } from './mcpTransportStdio.js'
-import { SseTransport } from './mcpTransportSse.js'
+import { startMcpConnection, assertMcpTransportAllowed } from './mcpConnectionBootstrap.js'
+import { createMcpToolCatalogRefresh } from './mcpToolCatalogRefresh.js'
 import {
-  buildInitializeRequest,
-  buildInitializedNotification,
   buildToolsListRequest,
   buildToolsCallRequest,
-  buildResourcesListRequest,
-  buildPromptsListRequest,
   buildResourceReadRequest,
   buildPromptGetRequest,
 } from './mcpJsonRpc.js'
@@ -51,34 +47,16 @@ import { isPureLocalModeEnabled } from '../utils/outboundNetworkGuard.js'
 
 export { onMcpEvent, onMcpToolsChange }
 
-const DEFAULT_ALLOWED_COMMANDS = ['npx', 'node', 'uvx', 'python', 'python3']
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000
 const MIN_IDLE_SWEEP_MS = 30 * 1000
 const MAX_IDLE_SWEEP_MS = 5 * 60 * 1000
-
-function getAllowedCommands() {
-  const raw = (process.env.MCP_STDIO_ALLOWED_COMMANDS || '').trim()
-  if (!raw) return DEFAULT_ALLOWED_COMMANDS
-  return raw.split(',').map((s) => s.trim()).filter(Boolean)
-}
-
-function stdioEnabled(env = process.env) {
-  return env.MCP_STDIO_ENABLED !== '0'
-}
-
-function assertMcpTransportAllowed(server, env = process.env) {
-  if (server?.transport !== 'stdio' || !isPureLocalModeEnabled(env)) return
-  const error = new Error('MCP stdio is disabled by pure-local mode')
-  error.code = 'OUTBOUND_PURE_LOCAL_DENIED'
-  error.retryable = false
-  throw error
-}
 
 /**
  * 每个用户 → Map<serverId, Connection>
  *   Connection: { server, transport, tools, resources?, prompts?, status, lastError, startedAt }
  */
 const userConnections = new Map() // userId → Map<serverId, Connection>
+const catalogRefreshers = new WeakMap()
 
 let idleSweepTimer = null
 
@@ -107,89 +85,54 @@ function getUserMap(userId) {
   return userConnections.get(userId)
 }
 
-async function startConnection(userId, server) {
-  let transport
-  if (server.transport === 'stdio') {
-    assertMcpTransportAllowed(server)
-    if (!stdioEnabled()) throw new Error('MCP stdio 已被环境禁用 (MCP_STDIO_ENABLED=0)')
-    const allowed = getAllowedCommands()
-    const base = String(server.command || '').replace(/\.cmd$/i, '').replace(/\.exe$/i, '')
-    if (!allowed.includes(base)) {
-      throw new Error(`命令 "${server.command}" 不在白名单。允许: ${allowed.join(', ')}`)
-    }
-    transport = new StdioTransport({
-      command: server.command,
-      args: server.args || [],
-      cwd: server.cwd || process.cwd(),
-      env: server.env || {},
-      label: server.name,
-    })
-    transport.start()
-  } else if (server.transport === 'sse' || server.transport === 'http') {
-    transport = new SseTransport({
-      url: server.url,
-      headers: server.headers || {},
-      getHeaders: () => getMcpOAuthHeaders(userId, server.id),
-      label: server.name,
-    })
-    transport.start()
-  } else {
-    throw new Error(`未知 transport: ${server.transport}`)
-  }
+function disposeCatalogRefresh(connection) {
+  if (!connection) return
+  const refresher = catalogRefreshers.get(connection)
+  catalogRefreshers.delete(connection)
+  refresher?.dispose()
+}
 
-  try {
-    // initialize 握手
-    await transport.request(buildInitializeRequest(), { timeoutMs: 20000 })
-    await transport.send(buildInitializedNotification())
-  } catch (err) {
-    await transport.stop()
-    throw new Error(`MCP initialize failed: ${err.message}`, { cause: err })
-  }
+function attachCatalogRefresh(userId, server, connection) {
+  const refresher = createMcpToolCatalogRefresh({
+    transport: connection.transport,
+    isCurrent: () => userConnections.get(userId)?.get(server.id) === connection
+      && connection.status === 'connected' && connection.transport.isAlive(),
+    getServer: () => getServer(userId, server.id),
+    readTools: ({ signal }) => connection.transport.request(buildToolsListRequest(), { timeoutMs: 15000, signal }),
+    applyTools: (currentServer, tools) => {
+      const next = { ...connection, tools }
+      synchronizeToolsForConnection(userId, currentServer, connection, next, { replacingConnection: false })
+      connection.tools = tools
+      connection._mcpToolRegistrations = next._mcpToolRegistrations
+    },
+    onSuccess: () => { connection.toolCatalogError = null },
+    onError: (error) => {
+      connection.toolCatalogError = {
+        serverId: server.id, name: server.name, code: 'MCP_TOOL_CATALOG_REFRESH_FAILED',
+        error: String(error?.message || error).slice(0, 1000), retryable: true,
+      }
+    },
+  })
+  catalogRefreshers.set(connection, refresher)
+  return () => disposeCatalogRefresh(connection)
+}
 
-  // tools/list
-  let tools = []
-  try {
-    const result = await transport.request(buildToolsListRequest(), { timeoutMs: 15000 })
-    tools = Array.isArray(result?.tools) ? result.tools : []
-  } catch (err) {
-    // 没有 tools 能力的 server 不报致命错
-    if (!/method not found/i.test(err.message)) {
-      if (process.env.NODE_ENV !== 'production') console.warn(`[mcp] ${server.name} tools/list 错误:`, err.message)
-    }
-  }
-  // resources/list（可选）
-  let resources = []
-  try {
-    const result = await transport.request(buildResourcesListRequest(), { timeoutMs: 8000 })
-    resources = Array.isArray(result?.resources) ? result.resources : []
-  } catch { /* not supported */ }
-  // prompts/list（可选）
-  let prompts = []
-  try {
-    const result = await transport.request(buildPromptsListRequest(), { timeoutMs: 8000 })
-    prompts = Array.isArray(result?.prompts) ? result.prompts : []
-  } catch { /* not supported */ }
-
-  try {
-    // Re-check after handshake so a pure-local toggle racing an in-flight
-    // startup cannot leave a newly connected child process behind.
-    assertMcpTransportAllowed(server)
-  } catch (error) {
-    await transport.stop()
-    throw error
-  }
-
-  const startedAt = Date.now()
-  return { transport, tools, resources, prompts, startedAt, lastUsedAt: startedAt }
+function startConnection(userId, server) {
+  return startMcpConnection(userId, server, {
+    getOAuthHeaders: getMcpOAuthHeaders,
+    attachCatalogRefresh: (connection) => attachCatalogRefresh(userId, server, connection),
+  })
 }
 
 function installConnection({ userId, server, connection, previousConnection }) {
   const map = getUserMap(userId)
   const previous = map.get(server.id) || previousConnection || null
+  if (previous && previous !== connection) disposeCatalogRefresh(previous)
   connection.status = 'connected'
   connection.lastError = null
   map.set(server.id, connection)
   synchronizeToolsForConnection(userId, server, previous, connection)
+  catalogRefreshers.get(connection)?.activate()
   ensureIdleSweeper()
   if (previous && previous !== connection) {
     try { previous.transport?.stop?.() } catch { /* best effort */ }
@@ -201,12 +144,14 @@ const connectionSupervisor = createMcpConnectionSupervisor({
   onConnected: installConnection,
   onConnectionLost: ({ connection, error }) => {
     if (!connection) return
+    disposeCatalogRefresh(connection)
     connection.status = 'reconnecting'
     connection.lastError = error?.message || String(error || '')
   },
   onStateChange: (state) => {
     const connection = userConnections.get(state.userId)?.get(state.serverId)
     if (!connection) return
+    if (state.status !== 'connected') disposeCatalogRefresh(connection)
     connection.status = state.status
     connection.reconnectAttempt = state.attempt
     connection.lastError = state.lastError
@@ -270,6 +215,7 @@ export async function listUserToolSpecs(userId, { connect = true } = {}) {
   const discoveryErrors = [...(connectionResult.errors || [])]
   for (const server of listEnabledServers(userId)) {
     const conn = map.get(server.id)
+    if (conn?.toolCatalogError) discoveryErrors.push({ ...conn.toolCatalogError })
     const state = connectionSupervisor.getState(userId, server.id)
     if (!conn || (!conn.transport?.isAlive?.() && state?.status !== 'reconnecting')) continue
     for (const tool of conn.tools || []) {
@@ -460,6 +406,7 @@ export async function testServer(userId, server) {
       prompts: conn.prompts.map((p) => ({ name: p.name, description: p.description })),
     }
   } finally {
+    disposeCatalogRefresh(conn)
     try { conn.transport.stop() } catch { /* ignore */ }
   }
 }
@@ -478,7 +425,8 @@ export function getUserCatalog(userId) {
       connected: state?.status === 'connected' && !!conn?.transport?.isAlive?.(),
       status: state?.status || 'disconnected',
       reconnectAttempt: state?.attempt || 0,
-      lastError: state?.lastError || null,
+      lastError: state?.lastError || conn?.toolCatalogError?.error || null,
+      toolCatalogError: conn?.toolCatalogError ? { ...conn.toolCatalogError } : null,
       tools: conn?.tools || [],
       resources: conn?.resources || [],
       prompts: conn?.prompts || [],
@@ -504,6 +452,7 @@ export async function getPrompt({ userId, serverId, name, args }) {
 export function disconnectServer(userId, serverId) {
   const map = userConnections.get(userId)
   const conn = map?.get(serverId) || null
+  disposeCatalogRefresh(conn)
   const supervised = connectionSupervisor.disconnect(userId, serverId)
   if (!conn && !supervised) return false
   map?.delete(serverId)
@@ -514,6 +463,7 @@ export function disconnectServer(userId, serverId) {
 
 export function disconnectUser(userId) {
   const map = userConnections.get(userId)
+  for (const connection of map?.values() || []) disposeCatalogRefresh(connection)
   const supervised = connectionSupervisor.disconnectUser(userId)
   if (!map) {
     unregisterAllMcpToolsForUser(userId)
@@ -564,6 +514,7 @@ export async function shutdownAll() {
   const transports = []
   for (const map of userConnections.values()) {
     for (const conn of map.values()) {
+      disposeCatalogRefresh(conn)
       if (conn?.transport) transports.push(conn.transport)
     }
   }

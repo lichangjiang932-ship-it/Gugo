@@ -1,3 +1,6 @@
+import { normalizeChatTurnIntentMode } from '../../utils/executionIntent.js'
+import { userMessageText } from './userMessageText.js'
+
 function initializeArtifactContracts(s) {
   const {
     SERVER_TOOL_SPECS,
@@ -145,12 +148,12 @@ function initializeExecutionIntent(s) {
     shouldRequireExecution,
   } = s.d
   s.generatedWorkflowStep = ['plan', 'verify', 'finalize'].includes(String(s.step?.kind || ''))
-  s.executionIntentText = String(
-    s.job?.userPrompt
-      || (s.generatedWorkflowStep ? s.job?.prompt : s.currentUserMessage?.content)
-      || s.job?.prompt
-      || '',
-  )
+  s.executionIntentText = userMessageText(s.job?.userPrompt)
+    || (s.generatedWorkflowStep ? userMessageText(s.job?.prompt) : s.currentUserText)
+    || userMessageText(s.job?.prompt)
+  if (s.job?.origin === 'chat') {
+    s.intentMode = normalizeChatTurnIntentMode(s.intentMode, s.executionIntentText)
+  }
   s.explicitReadOnlyConstraint = hasEffectiveReadOnlyBoundary(
     s.executionIntentText,
     s.previousUserPrompt,
@@ -214,7 +217,8 @@ function initializeExecutionIntent(s) {
     || s.inheritedLocalMutationContinuation
     || s.inheritedCapabilityChallenge
   )
-  s.textDeliverableOnly = isTextDeliverableRequest(s.executionIntentText)
+  s.textDeliverableOnly = !s.requiresPersistedArtifact
+    && isTextDeliverableRequest(s.executionIntentText)
   s.mutationExecutionRequested = !s.textDeliverableOnly && (
     s.requiresPersistedArtifact
     || (s.directExecutionRequested && (

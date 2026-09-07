@@ -45,6 +45,19 @@ export function withRecoveredVerifiedLocalFiles(message) {
   }
 }
 
+export function withTranscriptRecoveryFence(message, suppressedTurnIds) {
+  const context = message?.modelContext
+  if (message?.role !== 'user' || !context || typeof context !== 'object') return message
+  const suppressed = suppressedTurnIds.has(String(context.turnId || '').trim())
+  if (!suppressed && !Object.hasOwn(context, 'turnRecoverySuppressed')) return message
+  const modelContext = { ...context }
+  // This is a current server projection, never a persisted/client-controlled
+  // veto: a genuine event beyond the fence must enable recovery again.
+  delete modelContext.turnRecoverySuppressed
+  if (suppressed) modelContext.turnRecoverySuppressed = true
+  return { ...message, modelContext }
+}
+
 function incompleteCheckpointMetadata(stateJson) {
   const state = parseModelContext(stateJson)
   const final = state?.final

@@ -1,5 +1,9 @@
+import { processOutputContinuation } from './outputContinuation.js'
+import { modelAssistantHistoryMessage } from './modelAssistantHistory.js'
+import { restoreCompactionCheckpoint } from './compactionCheckpoint.js'
+
 async function persistContinuation(s, content, steeringLeaseId, options = {}) {
-  if (content) s.convo.push({ role: 'assistant', content })
+  if (content) s.convo.push(modelAssistantHistoryMessage(content, s.iteration?.modelResult))
   if (options.systemContent) s.convo.push({ role: 'system', content: options.systemContent })
   if (options.extendWindow && s.iter + 1 >= s.maxIters) s.maxIters = s.iter + 2
   await s.persistTurn(options.persistOptions)
@@ -48,7 +52,7 @@ async function handleDirectoryAndArtifactCompletion(s) {
   if (s.hasRequiredArtifacts()) return null
   const missing = s.missingArtifactTools()
   if (s.artifactRecoveryPhase === ARTIFACT_RECOVERY_PHASE_DIAGNOSE && s.forcedArtifactToolName) {
-    if (i.content) s.convo.push({ role: 'assistant', content: i.content })
+    if (i.content) s.convo.push(modelAssistantHistoryMessage(i.content, i.modelResult))
     s.appendForcedArtifactPrompt(s.forcedArtifactToolName)
     s.scheduleForcedArtifactAttempt(s.forcedArtifactToolName)
     return persistContinuation(s, '', i.steeringLeaseId)
@@ -59,7 +63,7 @@ async function handleDirectoryAndArtifactCompletion(s) {
     if (s.artifactDeliveryRetries >= MAX_ARTIFACT_DELIVERY_RETRIES) {
       return incompleteResult(s, { ...s.missingArtifactBlocker(), steeringLeaseId: i.steeringLeaseId })
     }
-    if (i.content) s.convo.push({ role: 'assistant', content: i.content })
+    if (i.content) s.convo.push(modelAssistantHistoryMessage(i.content, i.modelResult))
     s.appendForcedArtifactPrompt(s.forcedArtifactToolName)
     s.scheduleForcedArtifactAttempt(s.forcedArtifactToolName)
     return persistContinuation(s, '', i.steeringLeaseId)
@@ -275,12 +279,14 @@ async function handleDeliveryAndFinalAnswer(s) {
       text: acceptedContent, iteration: s.iter, modelName: i.modelResult?.modelName || null,
     })
   }
+  const assistantMessage = modelAssistantHistoryMessage(acceptedContent, i.modelResult)
   const completion = await s.steeringController.prepareCompletion({
     text: acceptedContent, leaseId: i.steeringLeaseId,
+    assistantMessage,
   })
   if (!completion.closed) return { kind: 'continue' }
   s.finalText = acceptedContent
-  if (!completion.prepared) s.convo.push({ role: 'assistant', content: s.finalText })
+  if (!completion.prepared) s.convo.push(assistantMessage)
   try {
     const hasFinalText = Boolean(s.finalText.trim())
     await s.persistTurn(hasFinalText
@@ -347,8 +353,13 @@ async function scheduleModelToolCalls(s) {
   i.checkpointContent = s.requiresSourceHandoffProtection && sourceHandoffViolation(i.content)
     ? ''
     : i.content
-  s.convo.push(buildAssistantToolCallsMessage(i.toolCalls, i.checkpointContent, {
+  const providerReplay = i.modelResult?.providerReplay
+  // Signed native history is immutable. Executable calls independently carry
+  // schema defaults, authorized replacement targets and later approval edits.
+  const historyCalls = providerReplay ? normalizeToolCalls(i.scopedToolCalls) : i.toolCalls
+  s.convo.push(buildAssistantToolCallsMessage(historyCalls, providerReplay ? i.content : i.checkpointContent, {
     reasoning: typeof i.modelResult?.reasoning === 'string' ? i.modelResult.reasoning : '',
+    providerReplay,
   }))
   try {
     await s.persistTurn()
@@ -371,6 +382,9 @@ export async function processModelResult(s) {
   ;({ content: i.content, toolCalls: i.rawToolCalls } = i.modelResult)
   s.modelInvocation = null
   s.restoredModelInvocation = null
+  s.compactionCheckpoint = restoreCompactionCheckpoint()
+  const continuation = await processOutputContinuation(s)
+  if (continuation) return continuation
   if (!i.rawToolCalls || i.rawToolCalls.length === 0) return processCompletionResponse(s)
   return scheduleModelToolCalls(s)
 }

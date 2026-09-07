@@ -17,10 +17,11 @@ export function* modelProviderResponseEvents(data, profile, options = {}) {
       toolCalls: parsed.toolCalls,
       finishReason: parsed.finishReason || 'tool_calls',
       usage: parsed.usage,
+      ...(parsed.providerReplay ? { providerReplay: parsed.providerReplay } : {}),
     }
     return
   }
-  yield { type: 'finish', finishReason: parsed.finishReason || 'stop', usage: parsed.usage }
+  yield { type: 'finish', finishReason: parsed.finishReason || 'stop', usage: parsed.usage, ...(parsed.providerReplay ? { providerReplay: parsed.providerReplay } : {}) }
 }
 
 async function fetchTextWithTimeout(fetchImpl, url, init, {

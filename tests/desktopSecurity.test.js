@@ -93,6 +93,41 @@ test('desktop runtime config is a fixed regular file inside application data', (
   }), (error) => error?.code === 'INVALID_RUNTIME_CONFIG_FILE')
 })
 
+test('a desktop data-root override relocates database, artifacts, and editable config together', () => {
+  const userData = path.resolve('desktop-fixture-user')
+  const cwd = path.resolve('desktop-fixture-install')
+  const options = { cwd, env: { APP_DATA_DIR: 'custom-data' } }
+  const dataDir = path.join(cwd, 'custom-data')
+  assert.deepEqual(resolveDesktopDataPaths(userData, options), {
+    dataDir,
+    database: path.join(dataDir, 'app.db'),
+    artifacts: path.join(dataDir, 'artifacts'),
+  })
+  assert.equal(resolveDesktopRuntimeConfigPath(userData, options), path.join(dataDir, 'runtime.json'))
+  const writes = []
+  assert.equal(ensureDesktopRuntimeConfigFile({
+    userData, ...options,
+    mkdirSync: () => {},
+    writeFileSync: (filePath) => writes.push(filePath),
+    lstatSync: () => ({ isFile: () => true, isSymbolicLink: () => false }),
+  }), path.join(dataDir, 'runtime.json'))
+  assert.deepEqual(writes, [path.join(dataDir, 'runtime.json')])
+})
+
+test('desktop storage keeps explicit database and artifact overrides anchored to the install root', () => {
+  const cwd = path.resolve('desktop-fixture-install')
+  const env = { APP_DATA_DIR: 'data', APP_DB_PATH: 'db/custom.db', ARTIFACT_DIR: 'files' }
+  assert.deepEqual(resolveDesktopDataPaths('desktop-fixture-user', { env, cwd }), {
+    dataDir: path.join(cwd, 'data'),
+    database: path.join(cwd, 'db', 'custom.db'),
+    artifacts: path.join(cwd, 'files'),
+  })
+  assert.deepEqual(env, { APP_DATA_DIR: 'data', APP_DB_PATH: 'db/custom.db', ARTIFACT_DIR: 'files' })
+  assert.throws(() => resolveDesktopDataPaths('desktop-fixture-user', {
+    cwd, env: { APP_DB_PATH: 'undefined' },
+  }), (error) => error?.code === 'RUNTIME_STORAGE_PATH_INVALID')
+})
+
 test('desktop plugin discovery only returns existing, de-duplicated roots', () => {
   const existing = new Set([
     path.resolve('D:/destok/codex-plugins').toLowerCase(),

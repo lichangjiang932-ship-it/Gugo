@@ -146,7 +146,7 @@ export default function ModelPicker({
   }
 
   return (
-    <div ref={pickerRef} className="relative flex flex-col-reverse items-end gap-1">
+    <div ref={pickerRef} className="relative flex min-w-0 max-w-full flex-col-reverse items-end gap-1">
       <button
         ref={triggerRef}
         type="button"
@@ -155,7 +155,7 @@ export default function ModelPicker({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
-        className={`inline-flex h-7 max-w-44 items-center gap-1 rounded-control border border-transparent px-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 ${open ? 'bg-ink/[0.06] text-ink' : readiness.canSend ? 'text-ink-soft hover:bg-ink/[0.045] hover:text-ink' : 'text-danger hover:bg-danger/5'}`}
+        className={`inline-flex h-7 max-w-full items-center gap-1 rounded-control border border-transparent px-1.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/30 sm:max-w-44 ${open ? 'bg-ink/[0.06] text-ink' : readiness.canSend ? 'text-ink-soft hover:bg-ink/[0.045] hover:text-ink' : 'text-danger hover:bg-danger/5'}`}
         title={triggerModelLabel || t('chat.modelPicker.open')}
         data-testid="model-picker-trigger"
       >

@@ -47,7 +47,7 @@ export const MEMORY_TOOL_SPECS = [
   },
 ]
 
-export function dispatchMemoryTool(name, args = {}, { userId = null, sessionId = null } = {}) {
+export function dispatchMemoryTool(name, args = {}, { userId = null, sessionId = null, agentId = null } = {}) {
   if (name !== 'remember') throw new Error(`unknown memory tool: ${name}`)
   if (!userId) return { ok: false, error: '未登录,无法写入记忆' }
 
@@ -62,14 +62,12 @@ export function dispatchMemoryTool(name, args = {}, { userId = null, sessionId =
   if (!body) return { ok: false, error: 'body 不能为空' }
 
   try {
-    // 同名覆盖:按标题精确查现有条目。
-    // 注意不能用 findBySlug —— slug 会把中文全部剥掉,
-    // 「money 项目路径」和「技术栈」都会归一成同一个 'memory',
-    // 用它查重会把不相干的记忆互相覆盖。这里直接比对 title。
+    // Deduplicate by host scope, type and exact title, never by a display link.
+    // Legacy slugs may collide and another agent's memory is a different record.
     let existingId = null
     try {
-      const existing = listMemories({ userId, limit: 500 })
-        .find((m) => String(m.title || '').trim() === title)
+      const existing = listMemories({ userId, limit: 500, agentFilter: agentId || '__global__' })
+        .find((m) => m.type === type && String(m.title || '').trim() === title)
       if (existing?.id) existingId = existing.id
     } catch {
       // 查重失败就当新建,不阻断
@@ -80,6 +78,7 @@ export function dispatchMemoryTool(name, args = {}, { userId = null, sessionId =
       type,
       title,
       body,
+      agentId: agentId || null,
       sourceSessionId: sessionId || null,
     })
     return {

@@ -72,6 +72,112 @@ test('an open completion gate defers completion and applies steering claimed on 
   assert.deepEqual(acknowledged, ['lease-next-round'])
 })
 
+test('steering at iteration exhaustion resumes the loop before returning a terminal result', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'read_file')
+  const requests = []
+  const checkpoints = []
+  const acknowledged = []
+  let pending = false
+  let completionChecks = 0
+  const result = await baseRun({
+    maxIters: 1,
+    enableToolHooks: false,
+    toolSpecs: [readFile],
+    claimSteering: async () => pending
+      ? { leaseId: 'limit-steering-lease', messages: [{ id: 'limit-steering', content: 'Use the revised conclusion.' }] }
+      : { leaseId: null, messages: [] },
+    acknowledgeSteering: async (leaseId) => {
+      assert.ok(checkpoints.at(-1).appliedSteeringIds.includes('limit-steering'))
+      acknowledged.push(leaseId)
+      pending = false
+    },
+    beforeFinalCompletion: async () => {
+      completionChecks += 1
+      if (completionChecks === 1) pending = true
+      return { closed: !pending }
+    },
+    saveCheckpoint: async (state) => { checkpoints.push(structuredClone(state)); return true },
+    executeTool: async () => ({ ok: true, path: 'README.md', content: 'Project notes' }),
+    runModel: async ({ messages, toolChoice }) => {
+      requests.push(structuredClone(messages))
+      if (toolChoice === 'none') return { content: 'Old partial conclusion.', toolCalls: [] }
+      if (messages.some((message) => message.role === 'user' && message.content === 'Use the revised conclusion.')) {
+        return { content: 'Revised conclusion after steering.', toolCalls: [] }
+      }
+      return {
+        content: '',
+        toolCalls: [{ id: 'limit-read', function: { name: 'read_file', arguments: '{"path":"README.md"}' } }],
+      }
+    },
+  })
+
+  assert.equal(result.text, 'Revised conclusion after steering.')
+  assert.equal(result.deferredForSteering, undefined)
+  assert.equal(result.incomplete, undefined)
+  assert.equal(requests.length, 3)
+  assert.equal(completionChecks, 2)
+  assert.deepEqual(acknowledged, ['limit-steering-lease'])
+  assert.equal(checkpoints.at(-1).final.text, result.text)
+  assert.equal(checkpoints.some((state) => state.final?.text === 'Old partial conclusion.'), false)
+})
+
+test('a deferred wrap-up cannot become the final text after steering consumes the extended window', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'read_file')
+  let pending = false
+  let checks = 0
+  let reads = 0
+  let wrapUps = 0
+  const result = await baseRun({
+    job: {
+      id: 'extended-steering-loop', userId: 'turn-steering-user',
+      origin: 'chat', locale: 'en', prompt: 'Inspect the project notes.',
+    },
+    maxIters: 1,
+    enableToolHooks: false,
+    toolSpecs: [readFile],
+    claimSteering: async () => pending
+      ? { leaseId: 'extended-steering-lease', messages: [{ id: 'extended-steering', content: 'Inspect the other files too.' }] }
+      : { leaseId: null, messages: [] },
+    acknowledgeSteering: async () => { pending = false },
+    saveCheckpoint: async () => true,
+    beforeFinalCompletion: async () => {
+      checks += 1
+      if (checks === 1) pending = true
+      return { closed: !pending }
+    },
+    executeTool: async ({ args }) => ({ ok: true, path: args.path, content: 'Project notes' }),
+    runModel: async ({ messages, toolChoice }) => {
+      if (toolChoice === 'none') {
+        wrapUps += 1
+        const steered = messages.some((message) => message.content === 'Inspect the other files too.')
+        return {
+          content: steered
+            ? 'Updated partial conclusion: the task is incomplete.'
+            : 'Obsolete partial conclusion: the task is incomplete.',
+          toolCalls: [],
+        }
+      }
+      reads += 1
+      return {
+        content: '',
+        toolCalls: [{
+          id: `extended-read-${reads}`,
+          function: { name: 'read_file', arguments: JSON.stringify({ path: `notes-${reads}.md` }) },
+        }],
+      }
+    },
+  })
+
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'iteration_limit_reached')
+  assert.match(result.text, /Updated partial conclusion/)
+  assert.doesNotMatch(result.text, /Obsolete partial conclusion/)
+  assert.equal(result.deferredForSteering, undefined)
+  assert.equal(wrapUps, 2)
+  assert.equal(reads, 3)
+  assert.equal(pending, false)
+})
+
 test('a steering checkpoint persists applied ids before acknowledging its lease', async () => {
   const events = []
 

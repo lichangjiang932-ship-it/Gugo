@@ -542,6 +542,29 @@ test('current-version databases with a missing critical column, index, or autoin
       },
       expectedMissing: 'autoincrement-primary-key:agent_event_subscription_dlq.dlq_id',
     },
+    {
+      label: 'missing-transcript-recovery-fences',
+      mutate(db) {
+        db.exec('DROP TABLE session_transcript_recovery_fences')
+      },
+      expectedMissing: 'table-shape:session_transcript_recovery_fences',
+    },
+    {
+      label: 'malformed-transcript-recovery-fences',
+      mutate(db) {
+        db.exec(`
+          DROP TABLE session_transcript_recovery_fences;
+          CREATE TABLE session_transcript_recovery_fences (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            session_id TEXT NOT NULL REFERENCES sessions(token) ON DELETE CASCADE,
+            turn_id TEXT NOT NULL,
+            suppressed_through_sequence INTEGER NOT NULL,
+            PRIMARY KEY (user_id, session_id, turn_id)
+          );
+        `)
+      },
+      expectedMissing: 'constraints:session_transcript_recovery_fences',
+    },
   ]
 
   for (const entry of cases) {

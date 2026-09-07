@@ -22,7 +22,7 @@ const MUTATION_EXECUTION_INTENT = /\b(?:implement|integrate|enable|apply|fix|han
 const NEGATED_MUTATION_CLAUSE = /(?:(?:\b(?:do\s+not|don't|never|without|no\s+need\s+to|must\s+not)\b)|(?:\u4e0d\u8981|\u65e0\u9700|\u4e0d\u5fc5|\u4e0d\u5f97|\u7981\u6b62))[^,.;\uff0c\u3002\uff1b\r\n]{0,120}?(?:\b(?:re-?generate|regenerate|rewrite|implement|integrate|enable|apply|fix|create|generate|build|write|edit|change|adjust|tweak|revise|replace|overwrite|save|export|install|remove|delete|rename|move|copy|update|modify|patch|refactor|improve|optimize)(?:s|d|ed|ing)?\b|(?:\u5b9e\u73b0|\u96c6\u6210|\u63a5\u5165|\u542f\u7528|\u4fee\u6539|\u7f16\u8f91|\u6539\u4e00\u4e0b|\u6539\u597d|\u6539\u6210|\u6539\u52a8|\u4fee\u590d|\u4fee\u597d|\u8c03\u6574|\u5904\u7406|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u6784\u5efa|\u5199\u5165|\u4fdd\u5b58|\u8986\u76d6|\u66ff\u6362|\u53bb\u6389|\u79fb\u9664|\u5bfc\u51fa|\u5b89\u88c5|\u5220\u9664|\u91cd\u547d\u540d|\u79fb\u52a8|\u590d\u5236|\u66f4\u65b0|\u6253\u8865\u4e01|\u91cd\u6784|\u4f18\u5316|\u505a\u6210|\u6539\u9020(?:\u6210|\u4e3a)?))[^,.;\uff0c\u3002\uff1b\r\n]{0,120}/giu
 const NEGATED_ROUTING_MUTATION_CLAUSE = /(?:\u4e0d\u8981|\u65e0\u9700|\u4e0d\u5fc5|\u4e0d\u5f97|\u7981\u6b62)[^,.;\uff0c\u3002\uff1b\r\n]{0,120}?(?:\u6dfb\u52a0|\u589e\u52a0|\u8865\u4e0a|(?:\u6309\u9700)?\u6302\u8f7d|\u5206\u914d)[^,.;\uff0c\u3002\uff1b\r\n]{0,120}/giu
 const NEGATED_REWIND_MUTATION_CLAUSE = /(?:(?:\b(?:do\s+not|don't|never|without|must\s+not)\b)|(?:\u4e0d\u8981|\u65e0\u9700|\u4e0d\u5fc5|\u4e0d\u5f97|\u7981\u6b62))(?:\.(?=[a-z0-9]{1,12}\b)|[^,.;\uff0c\u3002\uff1b\r\n]){0,120}?(?:\b(?:revert|undo|rollback|restore)\b|(?:\u56de\u6eda|\u64a4\u9500|\u6062\u590d\u539f\u72b6|\u8fd8\u539f))(?:\.(?=[a-z0-9]{1,12}\b)|[^,.;\uff0c\u3002\uff1b\r\n]){0,120}/giu
-const FILE_TARGET_REFERENCE = /(?:^|[\s"'`(])(?:[a-z]:[\\/]|\.\.?[\\/]|\/)?(?:[\p{L}\p{N}_@%+.,()[\]{} -]+[\\/])*[\p{L}\p{N}_@%+.,()[\]{} -]+\.[a-z0-9]{1,12}(?=$|[\s"'`),;:，。；：！？])/iu
+const FILE_TARGET_REFERENCE = /(?:^|[\s"'`(])(?:[a-z]:[\\/]|\.\.?[\\/]|\/)?(?:[\p{L}\p{N}_@%+.,()[\]{} -]+[\\/])*[\p{L}\p{N}_@%+.,()[\]{} -]+\.[a-z0-9]{1,12}(?=$|[\s"'`),.;:!?，。；：！？])/iu
 const INSPECTION_TARGET_REFERENCE = /\b(?:files?|folders?|director(?:y|ies)|repos?|repositories|workspaces?|projects?|codebases?|source\s+trees?|working\s+trees?|logs?)\b|(?:文件|文件夹|目录|仓库|工作区|项目|代码库|源码|日志)/i
 const DIRECT_INSPECTION_ORDER = /(?:^|[,.!?;，。！？；]\s*)(?:(?:please|directly|now|first|then|just|only|can\s+you|could\s+you|would\s+you|help\s+(?:me\s+)?|请|先|现在|直接|只|仅|帮我|替我|麻烦(?:你)?|你能|你可以|能否|可以)[\s,，]*){0,4}(?:read|open|inspect|examine|check|review|view|list|search|scan|look\s+(?:at|through)|读取|读一下|打开|查看|看一下|检查|排查|审查|浏览|列出|搜索)(?=$|[\s,，。！？；:：]|[\p{Script=Han}])/iu
 const OBJECT_FIRST_INSPECTION_ORDER = /(?:^|[,.!?;，。！？；]\s*)(?:(?:请|先|现在|直接|只|仅|帮我|替我|麻烦(?:你)?)[\s,，]*)*(?:把|将)[^。！？!?\n]{1,120}?(?:读取|读一下|打开|查看|看一下|检查|排查|审查|浏览|列出)/iu
@@ -31,7 +31,13 @@ const OBJECT_FIRST_INSPECTION_ORDER = /(?:^|[,.!?;，。！？；]\s*)(?:(?:请|
 // 要求工具执行证据 —— 否则纯文本任务永远以 execution_evidence_missing 收尾。
 // 注意不要包含「内容/说明/报告」这类可能出现在动作句里的宽泛词
 // (如「写入内容」「检查结果」是动作,不是文本交付物)。
-const TEXT_DELIVERABLE_TARGET = /(?:\u5468\u62a5|\u65e5\u62a5|\u6708\u62a5|\u603b\u7ed3\u62a5\u544a|\u5de5\u4f5c\u603b\u7ed3|\u603b\u7ed3|\u6982\u8981|\u6587\u6848|\u6587\u7ae0|\u6f14\u8bb2\u7a3f|\u90ae\u4ef6|\u7b80\u5386|\u65b9\u6848|\u8ba1\u5212|\u63d0\u7eb2|\u5927\u7eb2|\u6807\u9898|\u53e3\u53f7|\u6545\u4e8b|\u8bd7\u6b4c|\u8bfb\u4e66\u7b14\u8bb0|\u5fc3\u5f97\u4f53\u4f1a)/i
+const TEXT_DELIVERABLE_TARGET = /(?:\u5468\u62a5|\u65e5\u62a5|\u6708\u62a5|\u603b\u7ed3\u62a5\u544a|\u5de5\u4f5c\u603b\u7ed3|\u603b\u7ed3|\u6982\u8981|\u6587\u6848|\u6587\u7ae0|\u6f14\u8bb2\u7a3f|\u90ae\u4ef6|\u7b80\u5386|\u65b9\u6848|\u8ba1\u5212|\u63d0\u7eb2|\u5927\u7eb2|\u6807\u9898|\u53e3\u53f7|\u6545\u4e8b|\u8bd7\u6b4c|\u8bfb\u4e66\u7b14\u8bb0|\u5fc3\u5f97\u4f53\u4f1a)|\b(?:reports?|summary|summaries|articles?|stories|story|poems?|emails?|outlines?|plans?|headlines?|slogans?|resumes?|speeches|speech|essays?)\b/i
+const TEXT_DELIVERABLE_ORDER = new RegExp(
+  String.raw`(?:(?:please|help\s+(?:me\s+)?|can\s+you|could\s+you|请|先|帮我|给我|直接)\s*){0,4}(?:\b(?:write|draft|compose|generate|create)\b|写|撰写|起草|编写|拟定|生成|创建|列出|给出|整理)[^,.;，。；!?！？\r\n]{0,64}?(?:${TEXT_DELIVERABLE_TARGET.source})`,
+  'iu',
+)
+const NON_TEXT_DELIVERABLE_SUFFIX = /^(?:\s+(?:files?|folders?|director(?:y|ies)|accounts?|mailboxes?|databases?|tables?|apps?|applications?|plugins?|repos?|repositories)\b|(?:文件|文件夹|目录|账号|账户|数据库))/iu
+const TEXT_PERSISTENCE_REQUEST = /\b(?:to|into)\s+(?:the\s+)?(?:disk|drive|files?|folders?|director(?:y|ies)|database|filesystem|file\s+system)\b|\bon\s+(?:the\s+)?disk(?:\s*[.!?]|$)|(?:写到|存到|保存到|输出到|导出到)(?:[^,。；\r\n]{0,32})(?:文件|目录|磁盘|硬盘|桌面)/iu
 const IMPERATIVE_EXECUTION_INTENT = /(?:^|[\s,，。；;!！])(?:(?:please\s+|continue\s+|go\s+ahead\s+|help\s+(?:me\s+)?|\u8bf7|\u7ee7\u7eed|\u76f4\u63a5|\u5e2e\u6211|\u628a|\u5c06|\u7ed9\u6211|\u518d)\s*){0,3}(?:implement|integrate|enable|wire\s+in|fix|optimize|improve|finish|complete|update|modify|edit|change|adjust|tweak|revise|replace|overwrite|refactor|build|create|generate|write|save|export|run|execute|apply|install|remove|delete|rename|move|upload|publish|deploy|commit|push|\u5b8c\u5584|\u4f18\u5316|\u4fee\u590d|\u4fee\u597d|\u5904\u7406|\u7f16\u8f91|\u6539\u597d|\u6539\u4e00\u4e0b|\u6539\u6210|\u6539\u52a8|\u5b9e\u73b0|\u96c6\u6210|\u63a5\u5165|\u542f\u7528|\u8865\u5168|\u8865\u4e0a|\u89e3\u51b3|\u641e\u5b9a|\u68c0\u67e5|\u6392\u67e5|\u8c03\u6574|\u66f4\u65b0|\u5347\u7ea7|\u91cd\u6784|\u6574\u7406|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u6784\u5efa|\u5199\u5165|\u4fdd\u5b58|\u8986\u76d6|\u66ff\u6362|\u53bb\u6389|\u79fb\u9664|\u5bfc\u51fa|\u6267\u884c|\u8fd0\u884c|\u5b89\u88c5|\u5220\u9664|\u91cd\u547d\u540d|\u79fb\u52a8|\u4e0a\u4f20|\u53d1\u5e03|\u90e8\u7f72|\u63d0\u4ea4|\u63a8\u9001)/i
 const OBJECT_FIRST_EXECUTION_INTENT = /(?:^|[\s,，。；;!！])(?:\u8bf7|\u5e2e\u6211|\u7ee7\u7eed|\u76f4\u63a5)?\s*(?:\u628a|\u5c06).{1,80}(?:\u5904\u7406\u597d|\u6539\u597d|\u6539\u4e00\u4e0b|\u6539\u6210|\u6539\u52a8|\u5b8c\u5584|\u4f18\u5316|\u4fee\u590d|\u4fee\u597d|\u4fee\u6539|\u7f16\u8f91|\u5b9e\u73b0|\u96c6\u6210|\u63a5\u5165|\u542f\u7528|\u8865\u5168|\u89e3\u51b3|\u641e\u5b9a|\u8c03\u6574|\u66f4\u65b0|\u5347\u7ea7|\u91cd\u6784|\u6574\u7406|\u521b\u5efa|\u65b0\u5efa|\u751f\u6210|\u6784\u5efa|\u8986\u76d6|\u66ff\u6362|\u53bb\u6389|\u79fb\u9664|\u5220\u9664|\u91cd\u547d\u540d|\u79fb\u52a8|\u4e0a\u4f20|\u53d1\u5e03|\u90e8\u7f72|\u63d0\u4ea4|\u63a8\u9001)/i
 const OBJECT_TRANSFORMATION_EXECUTION_INTENT = /(?:^|[\s,，。；;!！])(?:\u8bf7|\u5e2e\u6211|\u7ee7\u7eed|\u76f4\u63a5)?\s*(?:\u628a|\u5c06)[^\u3002\uff01\uff1f!?\n]{1,96}?(?:\u505a\u6210|\u6539\u6210|\u6539\u4e3a|\u6539\u9020(?:\u6210|\u4e3a)|\u53d8\u6210|\u8f6c\u6210|\u8f6c\u4e3a)/i
@@ -41,7 +47,9 @@ const REWIND_MUTATION_INTENT = /\b(?:rewrite|revert|undo|rollback)\b|\brestore\b
 const REWIND_IMPERATIVE_EXECUTION_INTENT = /(?:^|[\s,\uff0c\u3002\uff1b;!\uff01])(?:(?:please|directly|now|then|\u8bf7|\u76f4\u63a5|\u73b0\u5728|\u7136\u540e|\u7ee7\u7eed)\s*){0,3}(?:(?:rewrite|revert|undo|rollback)\b|(?:\u56de\u6eda|\u64a4\u9500|\u6062\u590d\u539f\u72b6|\u8fd8\u539f))/i
 const ANSWER_ONLY_LEAD = /^\s*(?:(?:\u6211(?:\u53ea\u662f)?\u60f3(?:\u77e5\u9053|\u4e86\u89e3|\u95ee(?:\u4e00\u4e0b)?)|\u53ea\u662f\u60f3(?:\u77e5\u9053|\u4e86\u89e3))\s*[,\uff0c\uff1a:]?\s*|(?:\u8bf7)?(?:\u89e3\u91ca|\u8bf4\u660e|\u4ecb\u7ecd|\u544a\u8bc9\u6211|\u6bd4\u8f83)|(?:\u4ec0\u4e48\u662f|\u4e3a\u4ec0\u4e48|\u4e3a\u4f55|\u5982\u4f55|\u600e\u4e48|\u80fd\u5426|\u662f\u5426)|(?:what|why|how|explain|describe|compare|tell\s+me|can\s+you|could\s+you)\b)/i
 const EXPLANATION_ONLY_LEAD = /^\s*(?:(?:\u6211(?:\u53ea\u662f)?\u60f3(?:\u77e5\u9053|\u4e86\u89e3|\u95ee(?:\u4e00\u4e0b)?)|\u53ea\u662f\u60f3(?:\u77e5\u9053|\u4e86\u89e3))\s*[,\uff0c\uff1a:]?\s*|(?:\u8bf7)?(?:\u89e3\u91ca|\u8bf4\u660e|\u4ecb\u7ecd|\u544a\u8bc9\u6211|\u6bd4\u8f83)|(?:\u4ec0\u4e48\u662f|\u4e3a\u4ec0\u4e48|\u4e3a\u4f55|\u5982\u4f55|\u600e\u4e48)|(?:what|why|how|explain|describe|compare|tell\s+me)\b)/i
-const FOLLOW_UP_EXECUTION = /(?:\u5e76\u4e14|\u5e76|\u7136\u540e|\u540c\u65f6|\u987a\u4fbf|and\s+then|then|also).{0,48}(?:(?:\u8bf7|\u5e2e\u6211|please|help\s+(?:me\s+)?)\s*)?(?:\u5b8c\u5584|\u4f18\u5316|\u4fee\u590d|\u5904\u7406|\u4fee\u6539|\u5b9e\u73b0|\u89e3\u51b3|\u6267\u884c|\u521b\u5efa|\u751f\u6210|fix|implement|apply|update|create|run)/i
+const FOLLOW_UP_CLAUSE_BOUNDARY = /[?？!！;；。\r\n]+|\.(?:\s+|$)|[,，]\s*|\b(?:and(?:\s+then)?|then|also)\s+|(?:并且|然后|同时|顺便|并)/giu
+const FOLLOW_UP_DISCOURSE_LEAD = /^(?:(?:and(?:\s+then)?|then|also|now|first|directly)\s+|(?:并且|然后|同时|顺便|现在|并|先)\s*)+/iu
+const POLITE_EXPLANATION_LEAD = /^(?:(?:can|could|would)\s+you\s+(?:please\s+)?(?:explain|describe|tell\s+me|compare)\b|(?:(?:请|麻烦)?你?(?:能|可以|能否|可否)?\s*)(?:解释|说明|介绍|告诉我|比较))/iu
 const STATUS_FOLLOW_UP_CONNECTOR = /\b(?:if\s+not|otherwise|and\s+(?:then|please)|then|also)\b|[,;]\s*(?=(?:please|also|then)\b)|(?:如果(?:没有|还没|未|不)|否则|然后(?:请)?|并且请)/i
 const DELEGATED_EXECUTION_INTENT = /^(?:please\s+)?(?:handle|resolve|finish|complete|take\s+care\s+of|sort\s+out)\b|(?:\u4f60\u6765|\u4ea4\u7ed9\u4f60|\u7531\u4f60|\u9ebb\u70e6\u4f60|\u52b3\u70e6\u4f60|\u8bf7\u4f60|\u4f60(?:\u6839\u636e.{0,32})?\u6765(?:\u8fdb\u884c)?|\u4f60(?:\u76f4\u63a5|\u73b0\u5728\u5c31|\u8d1f\u8d23|\u8fdb\u884c)).{0,80}(?:\u5904\u7406\u597d|\u6539\u597d|\u5b8c\u5584|\u4f18\u5316|\u4fee\u590d|\u4fee\u6539|\u5b9e\u73b0|\u8865\u5168|\u89e3\u51b3|\u641e\u5b9a|\u8c03\u6574|\u66f4\u65b0|\u91cd\u6784|\u521b\u5efa|\u751f\u6210|\u6267\u884c)/i
 const LOCAL_FILE_REQUIREMENTS_LEAD = /(?:\u73b0\u5728|\u63a5\u4e0b\u6765|\u53e6\u5916|\u6b64\u5916|\u7136\u540e)?\s*(?:\u6211\s*)?(?:\u8fd8\s*)?(?:\u6709|\u8865\u5145|\u63d0\u51fa)\s*(?:\u51e0\u4e2a|\u4ee5\u4e0b|\u8fd9\u4e9b|\u5982\u4e0b)?\s*(?:\u9700\u6c42|\u8981\u6c42|\u6539\u52a8|\u8c03\u6574)|(?:\u9700\u6c42|\u8981\u6c42|\u6539\u52a8|\u8c03\u6574)\s*(?:\u5982\u4e0b|\u6709)/i
@@ -61,6 +69,14 @@ const ENGLISH_MUTATION_CAPABILITY = /\b(?:edit|modify|change|fix|write|save|over
 const ENGLISH_ASSISTANT_CAPABILITY_REFERENT = /\b(?:you|yourself|tool|capability|environment|available)\b/i
 const ENGLISH_THIRD_PARTY_SUBJECT = /\b(?:users?|visitors?|admins?|administrators?|members?|customers?|employees?|students?|developers?)\b/i
 const ENGLISH_NON_ASSISTANT_CAPABILITY_SUBJECT = /\b(?:(?:the|a|an)\s+)?(?:(?:current|this|that)\s+)?(?:users?|visitors?|admins?|administrators?|members?|customers?|employees?|students?|developers?|systems?|pages?|apps?|applications?|sites?|fields?|forms?)\b[^.!?\r\n]{0,40}\b(?:cannot|can't|couldn't|won't|unable|not\s+able)\b/i
+const FOLLOW_UP_WORK_ORDERS = [
+  IMPERATIVE_EXECUTION_INTENT, OBJECT_FIRST_EXECUTION_INTENT,
+  OBJECT_TRANSFORMATION_EXECUTION_INTENT, OBJECT_TAIL_EXECUTION_INTENT,
+  ROUTING_IMPERATIVE_EXECUTION_INTENT, REWIND_IMPERATIVE_EXECUTION_INTENT,
+  DELEGATED_EXECUTION_INTENT, EXTERNAL_ACTION_ORDER,
+].map((pattern) => new RegExp(`^(?:${pattern.source})`, pattern.flags))
+const FOLLOW_UP_INSPECTION_ORDERS = [DIRECT_INSPECTION_ORDER, OBJECT_FIRST_INSPECTION_ORDER]
+  .map((pattern) => new RegExp(`^(?:${pattern.source})`, pattern.flags))
 
 function hasStatusFollowUpExecution(text) {
   const prompt = String(text || '')
@@ -91,11 +107,11 @@ export function hasActionableNumberedSteps(text) {
 
 function hasDelegatedLocalFileRequirements(text) {
   const prompt = String(text || '').trim()
-  if (!prompt || !FILE_TARGET_REFERENCE.test(prompt) || LOCAL_FILE_REQUIREMENTS_READ_ONLY.test(prompt)) {
+  if (!prompt || LOCAL_FILE_REQUIREMENTS_READ_ONLY.test(prompt)) {
     return false
   }
   const lead = LOCAL_FILE_REQUIREMENTS_LEAD.exec(prompt)
-  if (!lead) return false
+  if (!lead || !FILE_TARGET_REFERENCE.test(prompt)) return false
   const requirementText = prompt.slice(lead.index + lead[0].length)
   const numberedItems = requirementText.match(NUMBERED_REQUIREMENT_ITEM) || []
   return numberedItems.length >= 2
@@ -104,10 +120,36 @@ function hasDelegatedLocalFileRequirements(text) {
 
 function hasDirectInspectionExecutionIntent(text) {
   const prompt = String(text || '').trim()
-  if (!prompt || (!FILE_TARGET_REFERENCE.test(prompt) && !INSPECTION_TARGET_REFERENCE.test(prompt))) {
+  if (!prompt || (!DIRECT_INSPECTION_ORDER.test(prompt) && !OBJECT_FIRST_INSPECTION_ORDER.test(prompt))) {
     return false
   }
-  return DIRECT_INSPECTION_ORDER.test(prompt) || OBJECT_FIRST_INSPECTION_ORDER.test(prompt)
+  return INSPECTION_TARGET_REFERENCE.test(prompt) || FILE_TARGET_REFERENCE.test(prompt)
+}
+
+function hasFollowUpExecutionOrder(text) {
+  // Keep positions intact, but never split a quoted example into work orders.
+  const unquoted = text.replace(/```[\s\S]*?```|`[^`\r\n]*`|"[^"\r\n]*"|(?<![\p{L}\p{N}])'[^'\r\n]*'|“[^”\r\n]*”|‘[^’\r\n]*’|「[^」\r\n]*」/gu,
+    (quote) => ' '.repeat(quote.length))
+  const proceduralAt = unquoted.search(/\bhow\s+(?:to|do|can|should|could|would)\b|(?:如何|怎么)/iu)
+  const descriptiveWhyAt = unquoted.search(/\b(?:explain|describe)\s+why\s+(?:I|we|you|they|he|she)\b|(?:解释|说明)为什么(?:我|我们|你|你们|他们)/iu)
+  const questionLead = /^(?:what|why|how)\b|^(?:什么是|为什么|为何|如何|怎么|我(?:只是)?想(?:知道|了解|问)|只是想(?:知道|了解))/iu.test(unquoted)
+  for (const boundary of unquoted.matchAll(FOLLOW_UP_CLAUSE_BOUNDARY)) {
+    const clauseStart = boundary.index + boundary[0].length
+    const clause = text.slice(clauseStart, clauseStart + 512).trim()
+      .replace(FOLLOW_UP_DISCOURSE_LEAD, '')
+    const independentSentence = /[?？!！;；。\r\n]|\.(?:\s|$)/u.test(boundary[0])
+    const explanatorySequence = questionLead || proceduralAt >= 0 && proceduralAt < boundary.index
+      || descriptiveWhyAt >= 0 && descriptiveWhyAt < boundary.index
+        && /\band\b|并/iu.test(boundary[0])
+    const delegatedOrder = /^(?:please\b|help\s+me\b|(?:can|could|would)\s+you\b|请|帮我|替我|麻烦你|你来|直接)/iu.test(clause)
+    // "How do I read files, write changes, and save them?" describes steps.
+    // A separate sentence or an explicit delegation still authorizes action.
+    if (!independentSentence && explanatorySequence && !delegatedOrder) continue
+    if (FOLLOW_UP_WORK_ORDERS.some((pattern) => pattern.test(clause))) return true
+    if (FOLLOW_UP_INSPECTION_ORDERS.some((pattern) => pattern.test(clause))
+      && hasDirectInspectionExecutionIntent(clause)) return true
+  }
+  return false
 }
 
 export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) {
@@ -117,6 +159,7 @@ export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) 
 
   const prompt = String(text || '').trim()
   if (!prompt) return false
+  if (/^(?:自动模式执行|正常模式执行)[。.!！]*$/u.test(prompt)) return true
   if (STATUS_INQUIRY_PROMPT.test(prompt) && !hasStatusFollowUpExecution(prompt)) return false
   // Mutation verbs inside an explicit prohibition are constraints, not work
   // orders. Strip only the negated clause so mixed prompts remain executable:
@@ -127,30 +170,18 @@ export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) 
     .replace(NEGATED_REWIND_MUTATION_CLAUSE, ' ')
     .trim()
   if (!actionablePrompt) return false
+  const hasFollowUpExecution = hasFollowUpExecutionOrder(actionablePrompt)
   // A capability challenge is not a fresh standalone write order. The chat
   // router and tool loop may inherit execution from the immediately preceding
   // mutation request, but lexical fragments such as "write the file" must not
   // make the question executable without that context.
-  if (isExecutionCapabilityChallenge(actionablePrompt)) return false
+  if (isExecutionCapabilityChallenge(actionablePrompt) && !hasFollowUpExecution) return false
   // Conversational Chinese often names a concrete file and directly lists
   // requested changes without repeating the verb "modify".
   if (hasDelegatedLocalFileRequirements(actionablePrompt)) return true
   // Explanation questions may contain a filename and mutation terminology,
   // but those words describe the topic rather than an instruction. A distinct
   // later work order still wins ("Why...? Please fix it now.").
-  const firstBoundary = actionablePrompt.search(/[?\uff1f.!\u3002;\uff1b\n]/)
-  const laterClause = firstBoundary >= 0 ? actionablePrompt.slice(firstBoundary + 1).trim() : ''
-  const hasLaterExecutionOrder = Boolean(laterClause) && (
-    IMPERATIVE_EXECUTION_INTENT.test(laterClause)
-    || hasDirectInspectionExecutionIntent(laterClause)
-    || OBJECT_FIRST_EXECUTION_INTENT.test(laterClause)
-    || OBJECT_TRANSFORMATION_EXECUTION_INTENT.test(laterClause)
-    || OBJECT_TAIL_EXECUTION_INTENT.test(laterClause)
-    || ROUTING_IMPERATIVE_EXECUTION_INTENT.test(laterClause)
-    || REWIND_IMPERATIVE_EXECUTION_INTENT.test(laterClause)
-    || DELEGATED_EXECUTION_INTENT.test(laterClause)
-  )
-  const hasFollowUpExecution = FOLLOW_UP_EXECUTION.test(actionablePrompt) || hasLaterExecutionOrder
   if (EXPLANATION_ONLY_LEAD.test(actionablePrompt) && !hasFollowUpExecution) return false
   if (hasActionableNumberedSteps(actionablePrompt)) return true
   if (hasDirectInspectionExecutionIntent(actionablePrompt)) return true
@@ -191,6 +222,23 @@ export function hasMutationExecutionIntent(text = '') {
     || OBJECT_TRANSFORMATION_EXECUTION_INTENT.test(prompt)
     || OBJECT_TAIL_EXECUTION_INTENT.test(prompt)
     || REWIND_MUTATION_INTENT.test(prompt)
+}
+
+/** Old chat clients used the persistent code-mode preference as an execution
+ * mandate. It must not turn a greeting or a plain question into a tool task.
+ * Keep explicit work orders and contextual confirmations on their existing path.
+ */
+export function normalizeChatTurnIntentMode(value, text = '') {
+  const mode = normalizeTurnIntentMode(value)
+  if (mode !== 'execute') return mode
+  const prompt = String(text || '').trim()
+  if (isTextDeliverableRequest(prompt)) return 'auto'
+  if (shouldRequireExecution({ intentMode: 'auto', text: prompt })
+    || isExecutionCapabilityChallenge(prompt)) return mode
+  const greeting = /^(?:hi|hello|hey|hiya|good\s+(?:morning|afternoon|evening)|thanks|thank\s+you|你好|您好|嗨|在吗|谢谢)(?:[\s!！?？。.,，~～]*)$/iu.test(prompt)
+  const introduction = /^(?:你是谁|你能做什么|你可以做什么|你有什么(?:能力|功能)|你会什么|who\s+are\s+you|what\s+can\s+you\s+do)(?:[\s!！?？。.]*)$/iu.test(prompt)
+  return greeting || introduction || EXPLANATION_ONLY_LEAD.test(prompt) || POLITE_EXPLANATION_LEAD.test(prompt)
+    || STATUS_INQUIRY_PROMPT.test(prompt) ? 'auto' : mode
 }
 
 /**
@@ -245,7 +293,13 @@ export function hasFileTargetReference(text = '') {
  */
 export function isTextDeliverableRequest(text = '') {
   const prompt = String(text || '').trim()
-  return Boolean(prompt)
-    && TEXT_DELIVERABLE_TARGET.test(prompt)
-    && !hasFileTargetReference(prompt)
+  if (!prompt) return false
+  const order = TEXT_DELIVERABLE_ORDER.exec(prompt)
+  if (!order || hasFileTargetReference(prompt)) return false
+  const suffix = prompt.slice(order.index + order[0].length)
+  if (NON_TEXT_DELIVERABLE_SUFFIX.test(suffix) || TEXT_PERSISTENCE_REQUEST.test(prompt)) return false
+  // Writing a plan/email is a text answer; executing a plan or sending an
+  // email is real work. A later explicit work order also keeps its guard.
+  const remaining = `${prompt.slice(0, order.index)} ${suffix}`
+  return !shouldRequireExecution({ text: remaining })
 }

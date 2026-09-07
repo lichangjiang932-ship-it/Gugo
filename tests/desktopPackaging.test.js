@@ -3,6 +3,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
+import { createPackage } from '@electron/asar'
+import { collectStaticModuleGraph } from './helpers/staticModuleGraph.js'
 import {
   DEFAULT_DESKTOP_PET_LAYOUT,
   resolveDesktopPetLayout,
@@ -22,6 +25,7 @@ const {
   REQUIRED_DESKTOP_ASAR_FILES,
   normalizeAsarEntry,
   resolveAsarPath,
+  verifyDesktopAsar,
 } = desktopPackageVerifier
 
 const read = (relativePath) => fs.readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8')
@@ -161,15 +165,66 @@ test('desktop ASAR verifier normalizes package paths and covers the backend entr
     'server/core/turnPersistenceBootstrap.js',
     'server/services/desktopParentGuard.js',
     'server/services/runtimeServerStartup.js',
+    'server/services/pptxMarkdownCompatibility.js',
+    'server/services/pptxMarkdownSource.js',
+    'server/services/pptxMarkdownChart.js',
+    'server/services/pptxArtifactContract.js',
+    'server/services/pptxArtifactValidation.js',
     'server/utils/windowsProcessGateChild.js',
     'server/utils/windowsProcessGateRuntime.js',
     'shared/runtimeConfigRecoveryProtocol.js',
+    'src/i18n/domains/skillsMarket.js',
     'src/lib/officeExport/documentExport.js',
     'src/lib/officeExport/officeCommon.js',
     'src/lib/officeExport/spreadsheetExport.js',
     'src/lib/presentationExport/presentationParseHelpers.js',
     'src/lib/presentationExport/presentationParser.js',
   ])
+})
+
+test('desktop packaging covers the transitive artifact parsers and minimal skill localization runtime', () => {
+  const root = fileURLToPath(new URL('../', import.meta.url))
+  const config = read('electron-builder.yml')
+  const fileSection = config.match(/^files:\s*\r?\n((?:[ \t]+[^\r\n]*(?:\r?\n|$))*)/m)?.[1] || ''
+  const patterns = [...fileSection.matchAll(/^\s*-\s+(\S+)\s*$/gm)].map((match) => match[1])
+  const matches = (file, pattern) => file === pattern
+    || (pattern.endsWith('/**/*') && file.startsWith(pattern.slice(0, -4)))
+  for (const entry of ['server/services/loop/heuristics/artifactPublishing.js', 'server/services/skillRegistry.js']) {
+    const graph = collectStaticModuleGraph(path.join(root, entry))
+    assert.deepEqual(graph.unresolvedLocalModules, [])
+    for (const file of graph.files) {
+      const relative = path.relative(root, file).split(path.sep).join('/')
+      assert.equal(patterns.some((pattern) => !pattern.startsWith('!') && matches(relative, pattern)), true,
+        `ASAR runtime dependency is not packed: ${relative}`)
+      assert.equal(patterns.some((pattern) => pattern.startsWith('!') && matches(relative, pattern.slice(1))), false,
+        `ASAR runtime dependency is excluded: ${relative}`)
+      assert.doesNotMatch(relative, /src\/(?:lib\/(?:officeExport|presentationExport)\.js|i18n\/(?:translations\.js|domains\/index\.js))$/u)
+    }
+  }
+  assert.equal(patterns.includes('src/i18n/domains/skillsMarket.js'), true)
+  for (const broad of ['src/**/*', 'src/lib/**/*', 'src/i18n/**/*', 'src/i18n/domains/**/*']) {
+    assert.equal(patterns.includes(broad), false, `runtime packaging must not expand to ${broad}`)
+  }
+})
+
+test('desktop ASAR verification catches a missing skill copy or PPT compatibility module', async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-asar-runtime-'))
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
+  const fixture = path.join(rootDir, 'app')
+  for (const file of REQUIRED_DESKTOP_ASAR_FILES) {
+    const target = path.join(fixture, file)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.copyFileSync(new URL(`../${file}`, import.meta.url), target)
+  }
+  const complete = path.join(rootDir, 'complete.asar')
+  await createPackage(fixture, complete)
+  assert.deepEqual(verifyDesktopAsar(complete).checkedFiles, [...REQUIRED_DESKTOP_ASAR_FILES])
+  for (const [index, file] of ['src/i18n/domains/skillsMarket.js', 'server/services/pptxMarkdownCompatibility.js'].entries()) {
+    fs.rmSync(path.join(fixture, file))
+    const incomplete = path.join(rootDir, `incomplete-${index}.asar`)
+    await createPackage(fixture, incomplete)
+    assert.throws(() => verifyDesktopAsar(incomplete), (error) => error.message.includes(file))
+  }
 })
 
 test('desktop media sidecars are staged, packaged, and documented', () => {
@@ -378,7 +433,7 @@ test('desktop opens only its fixed runtime configuration through trusted IPC', (
   assert.match(preload, /openConfigFile:\s*\(\) => ipcRenderer\.invoke\('desktop:open-config-file'\)/)
   assert.match(handler, /assertTrustedIpc\(event\)/)
   assert.match(handler, /event\.sender !== mainWindow\.webContents/)
-  assert.match(handler, /ensureDesktopRuntimeConfigFile\(\{ userData: app\.getPath\('userData'\) \}\)/)
+  assert.match(handler, /ensureDesktopRuntimeConfigFile\(\{\s*userData: app\.getPath\('userData'\),\s*env: process\.env,\s*cwd: app\.getAppPath\(\),\s*\}\)/)
   assert.match(handler, /await shell\.openPath\(configPath\)/)
   assert.match(handler, /if \(openError\) throw/)
   assert.doesNotMatch(handler, /event,\s*(?:file)?path|payload|request/)

@@ -1,13 +1,16 @@
+import { PRESENTATION_PROMPT_POLICY, PRESENTATION_VISUAL_POLICY } from '../../shared/presentationPromptPolicy.js'
+import skillsMarketCopy from '../i18n/domains/skillsMarket.js'
+
 export const SKILLS = [
   {
     id: 'ppt',
     icon: '',
     name: '\u5236\u4f5c PPT',
-    desc: 'MBB \u54a8\u8be2\u7ea7\u6f14\u793a\u6587\u7a3f\uff0c\u7ed3\u6784\u5316\u751f\u6210',
+    desc: skillsMarketCopy.zh.builtInPptDescription,
     perms: ['\u5185\u5bb9\u751f\u6210'],
     recommended: true,
     systemPrompt:
-      "\u4f60\u662f\u9876\u7ea7\u5546\u4e1a\u6f14\u793a\u5bfc\u6f14\u3001MBB \u54a8\u8be2\u987e\u95ee\u548c PowerPoint \u4fe1\u606f\u8bbe\u8ba1\u5e08\u3002\u8bf7\u751f\u6210\u53ef\u76f4\u63a5\u5bfc\u51fa\u4e3a PPTX \u7684\u9ad8\u8d28\u91cf Markdown \u5e7b\u706f\u7247\u3002\u53ea\u8f93\u51fa Markdown \u6b63\u6587\uff0c\u4e0d\u8981\u524d\u8a00\u3001\u540e\u8a00\u6216\u89e3\u91ca\u3002\n\n## \u8f93\u51fa\u683c\u5f0f\u786c\u89c4\u5219\n- \u6bcf\u9875\u7528 `---` \u5206\u9694\u3002\n- \u6bcf\u9875\u7b2c\u4e00\u884c\u5fc5\u987b\u662f `# \u7ed3\u8bba\u5f0f\u6807\u9898`\uff0c\u7b2c\u4e8c\u884c\u5fc5\u987b\u662f\u9875\u9762\u7c7b\u578b\u6ce8\u91ca\u3002\n- \u9875\u9762\u7c7b\u578b\u53ea\u80fd\u4f7f\u7528\uff1a`<!-- cover -->`\u3001`<!-- toc -->`\u3001`<!-- section -->`\u3001`<!-- data -->`\u3001`<!-- chart -->`\u3001`<!-- table -->`\u3001`<!-- split -->`\u3001`<!-- process -->`\u3001`<!-- quote -->`\u3001`<!-- content -->`\u3001`<!-- end -->`\u3002\n- \u7981\u6b62\u8f93\u51fa\u201c\u4ee5\u4e0b\u662f\u4e00\u4efd\u65b9\u6848\u201d\u201c\u53ef\u6309\u6b64\u5236\u4f5c PPT\u201d\u7b49\u8bf4\u660e\u6587\u5b57\u3002\n\n## \u8d28\u91cf\u76ee\u6807\n- \u4e0d\u662f\u5927\u7eb2\uff0c\u662f\u53ef\u4ea4\u4ed8 deck\uff1a\u6bcf\u9875\u90fd\u8981\u6709\u660e\u786e take-away\u3001\u53ef\u89c6\u5316\u610f\u56fe\u548c\u8282\u594f\u53d8\u5316\u3002\n- \u6807\u9898\u5199\u7ed3\u8bba\uff0c\u4e0d\u5199\u680f\u76ee\u540d\u3002\u4f8b\u5982\u5199\u201c\u590d\u8d2d\u7387\u63d0\u5347 18% \u6765\u81ea\u4f1a\u5458\u5206\u5c42\u201d\uff0c\u4e0d\u8981\u5199\u201c\u7528\u6237\u5206\u6790\u201d\u3002\n- \u7528\u6237\u8981\u6c42\u9875\u6570\u65f6\u5fc5\u987b\u4e25\u683c\u6309\u7528\u6237\u8981\u6c42\u9875\u6570\u751f\u6210\uff1b\u672a\u6307\u5b9a\u9875\u6570\u65f6\u9ed8\u8ba4 8-12 \u9875\u3002\u5c11\u4e8e 6 \u9875\u65f6\u4e5f\u5fc5\u987b\u5305\u542b cover / section \u6216 toc / data \u6216 chart / end\u3002\n- \u5185\u5bb9\u8981\u6df1\uff0c\u4e0d\u8981\u7a7a\u6cdb\u5f62\u5bb9\u8bcd\uff1b\u6bcf\u9875\u81f3\u5c11\u5305\u542b\u673a\u5236\u3001\u8bc1\u636e\u3001\u6743\u8861\u3001\u98ce\u9669\u6216\u884c\u52a8\u4e4b\u4e00\u3002\n\n## \u4fe1\u606f\u67b6\u6784\n1. \u5f00\u7bc7 1 \u9875\u7ed9\u6838\u5fc3\u5224\u65ad\uff1b\u540e\u7eed\u6309\u201c\u7ed3\u8bba \u2192 \u8bc1\u636e \u2192 \u884c\u52a8\u201d\u63a8\u8fdb\u3002\n2. \u540c\u7ea7\u89c2\u70b9 MECE\uff0c\u907f\u514d\u91cd\u590d\u8868\u8fbe\u3002\n3. \u5185\u5bb9\u9875\u6bcf\u9875 3-4 \u6761\u89c2\u70b9\u5361\uff1b\u6bcf\u6761\u7528 `\u4e3b\u5f20\uff1b\u8bc1\u636e/\u673a\u5236/\u5f71\u54cd\uff1a\u5177\u4f53\u4e8b\u5b9e\u3001\u6307\u6807\u3001\u56e0\u679c\u94fe\u6216\u884c\u52a8\u542b\u4e49`\uff0c\u4e0d\u8981\u53ea\u5199\u77ed\u53e3\u53f7\u3002\n4. \u6bcf 2-3 \u9875\u5fc5\u987b\u5207\u6362\u9875\u9762\u7c7b\u578b\uff0c\u4e25\u7981\u8fde\u7eed 3 \u9875 `<!-- content -->`\u3002\n5. \u5c3d\u91cf\u7ed9\u6570\u5b57\uff1a\u767e\u5206\u6bd4\u3001\u91d1\u989d\u3001\u500d\u6570\u3001\u65f6\u95f4\u3001\u6392\u540d\u3002\u6ca1\u6709\u771f\u5b9e\u6570\u636e\u65f6\u7528\u201c\u53ef\u66ff\u6362\u6570\u636e\u201d\u6807\u660e\uff0c\u522b\u7f16\u9020\u6765\u6e90\u3002\n6. \u91cd\u8981\u4e3b\u9898\u5fc5\u987b\u8865\u201c\u4e3a\u4ec0\u4e48\u91cd\u8981 / \u4e3a\u4ec0\u4e48\u73b0\u5728 / \u4e0b\u4e00\u6b65\u600e\u4e48\u505a\u201d\uff0c\u907f\u514d\u53ea\u7f57\u5217\u529f\u80fd\u3002\n\n## \u89c6\u89c9\u7cfb\u7edf\n- \u6bcf\u4efd deck \u5fc5\u987b\u9009\u62e9\u4e00\u79cd\u4e3b\u9898\u8272\u5e76\u8d2f\u7a7f\uff1a\u79d1\u6280\u84dd\u7d2b\u3001\u91d1\u878d\u58a8\u7eff\u3001\u6d88\u8d39\u73ca\u745a\u3001\u6587\u5316\u6696\u91d1\u6216\u6781\u7b80\u9ed1\u767d\u3002\n- \u6bcf 2-3 \u9875\u5207\u6362\u89c6\u89c9\u951a\u70b9\uff1a\u6e10\u53d8\u573a\u3001\u5149\u6655\u3001\u51e0\u4f55\u5207\u7247\u3001KPI \u5361\u3001\u6d41\u7a0b\u3001\u56fe\u8868\u3001\u5f15\u7528\u3001\u77e9\u9635\u5361\u7247\u3002\n- \u5c01\u9762\u3001\u7ae0\u8282\u9875\u3001\u6570\u636e\u9875\u3001\u5185\u5bb9\u9875\u5fc5\u987b\u660e\u663e\u4e0d\u540c\u3002\n\n## \u89c6\u89c9\u89c4\u5212\u5199\u6cd5\n- \u5728\u6bcf\u9875 bullet \u4e2d\u52a0\u5165\u53ef\u88ab\u6e32\u67d3\u5668\u8bc6\u522b\u7684\u77ed\u53e5\uff1aKPI\u3001\u5bf9\u6bd4\u3001\u6d41\u7a0b\u3001\u8868\u683c\u3001\u56fe\u8868\u6216\u91d1\u53e5\u3002\n- `<!-- data -->` \u9875\u9762\u7528 `\u6307\u6807: \u6570\u503c` \u6216 `\u6570\u503c | \u6307\u6807`\u3002\n- `<!-- split -->` \u9875\u9762\u7528\u4e24\u4e2a\u52a0\u7c97\u5c0f\u6807\u9898\uff1a`**\u65b9\u6848 A**` / `**\u65b9\u6848 B**`\u3002\n- `<!-- process -->` \u9875\u9762\u7528\u7f16\u53f7\u6b65\u9aa4\u3002\n- `<!-- chart -->` \u9875\u9762\u5fc5\u987b\u7ed9 fenced chart \u5757\uff1a\n```chart\ntype: bar|line|pie\ncategories: A, B, C\nseries:\n  \u7cfb\u5217\u540d: 12, 24, 36\n```\n\n## \u8282\u594f\u6a21\u677f\n\u5c01\u9762 \u2192 \u76ee\u5f55/\u7ae0\u8282 \u2192 \u6838\u5fc3\u5224\u65ad \u2192 \u8bc1\u636e\u9875 \u2192 \u6570\u636e/\u56fe\u8868 \u2192 \u5bf9\u6bd4/\u6d41\u7a0b \u2192 \u884c\u52a8\u5efa\u8bae \u2192 \u7ed3\u675f\u3002\n\n\u73b0\u5728\u6839\u636e\u7528\u6237\u4e3b\u9898\u751f\u6210\u4e00\u4efd\u89c6\u89c9\u4e30\u5bcc\u3001\u5185\u5bb9\u5145\u5b9e\u3001\u53ef\u76f4\u63a5\u5bfc\u51fa PPTX \u7684 Markdown deck\u3002",
+      PRESENTATION_PROMPT_POLICY,
   },
   {
     id: 'webpage',
@@ -121,7 +124,7 @@ export const SKILLS = [
 export const BUILTIN_SKILL_ENGLISH_COPY = Object.freeze({
   ppt: {
     name: 'Presentation Design',
-    desc: 'Create structured, consulting-grade slide decks with polished visual storytelling.',
+    desc: skillsMarketCopy.en.builtInPptDescription,
     perms: ['Content generation'],
   },
   webpage: {
@@ -188,13 +191,7 @@ const SHARED_SKILL_GUARDRAILS = String.raw`## Shared operating rules
 - Ask one focused question only when a missing choice would materially change the result; otherwise state a reasonable assumption and proceed.
 - Produce the requested artifact directly. Keep explanations proportional and include a compact verification note when correctness or rendering matters.`
 
-const PPT_VISUAL_GUARDRAILS = String.raw`## Visual delivery contract
-- Design every slide on a fixed 16:9 canvas. Keep primary content inside a 6% horizontal and 8% vertical safe area so export never clips titles, labels, page numbers, or citations.
-- Use a deliberate type hierarchy: the deck title must dominate, slide titles must be clearly distinct from subheads, body copy must remain readable at presentation distance, and captions must never carry essential conclusions.
-- Vary the composition every 2-3 pages across evidence-led patterns such as a hero statement, KPI field, comparison, process, chart, table, quote, or matrix. Never repeat the same card grid for the whole deck.
-- Keep every meaningful word as editable text. Do not rasterize body copy, chart labels, or core numbers into decorative graphics.
-- Never duplicate visible text layers or apply text-shadow. Prevent ghosting by using one text element for each visible label and preserve sufficient contrast against every background.
-- Before delivery, check slide count, 16:9 bounds, safe-area overflow, font hierarchy, layout diversity, editable text, chart-label legibility, and absence of clipping or ghosting.`
+const PPT_VISUAL_GUARDRAILS = PRESENTATION_VISUAL_POLICY
 
 const SKILL_PROMPT_OVERRIDES = {
   webpage: String.raw`You are a product designer and front-end engineer. Build a polished, complete, single-file HTML page from the user's content.

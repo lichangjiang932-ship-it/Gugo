@@ -34,14 +34,15 @@ async function loadPackage(options) {
   return { ...result, zip: await JSZip.loadAsync(result.buffer) }
 }
 
-test('PPTX format leaf preserves layout, theme receipt, footer, and CJK contracts', async () => {
+test('PPTX format leaf honors slide titles, opt-in chrome, theme receipt, and CJK contracts', async () => {
   const { buffer, themeName, zip } = await loadPackage({
     title: 'Deck title',
     subtitle: 'Deck subtitle',
     theme: 'ocean',
     brand: 'Leaf',
+    design: { show_page_numbers: true, show_brand: true },
     slides: [
-      { title: 'Ignored cover title', layout: 'cover' },
+      { title: 'Authored cover title', layout: 'cover' },
       { title: 'First section', layout: 'section' },
       { title: 'A&B <body>', layout: 'bullets', bullets: ['One', 'Two'] },
       { title: 'Finish', layout: 'end' },
@@ -60,21 +61,22 @@ test('PPTX format leaf preserves layout, theme receipt, footer, and CJK contract
   const slide2 = await zip.file('ppt/slides/slide2.xml').async('string')
   const slide3 = await zip.file('ppt/slides/slide3.xml').async('string')
   const slide4 = await zip.file('ppt/slides/slide4.xml').async('string')
-  assert.match(slide1, /<a:t>Deck title<\/a:t>/)
-  assert.doesNotMatch(slide1, /Ignored cover title/)
-  assert.match(slide2, /<a:t>CHAPTER 01<\/a:t>/)
+  assert.match(slide1, /<a:t>Authored cover title<\/a:t>/)
+  assert.doesNotMatch(slide1, /<a:t>Deck title<\/a:t>/)
+  assert.match(slide2, /<a:t>First section<\/a:t>/)
+  assert.doesNotMatch(slide2, /CHAPTER 01/)
   assert.match(slide3, /<a:t>A&amp;B &lt;body&gt;<\/a:t>/)
   assert.match(slide3, /<a:t>03 \/ 04<\/a:t>/)
-  assert.doesNotMatch(slide1, /01 \/ 04/)
-  assert.doesNotMatch(slide2, /02 \/ 04/)
-  assert.doesNotMatch(slide4, /04 \/ 04/)
+  assert.match(slide1, /01 \/ 04/)
+  assert.match(slide2, /02 \/ 04/)
+  assert.match(slide4, /04 \/ 04/)
 
   const theme = await zip.file('ppt/theme/theme1.xml').async('string')
   assert.equal(countMatches(theme, /<a:ea typeface="Microsoft YaHei"\/>/g), 2)
 })
 
 test('PPTX format leaf reproduces bytes for an explicit generatedAt', async () => {
-  const options = { title: 'Reproducible', generatedAt: '2024-05-06T07:08:09.000Z', slides: [{ title: 'Cover', layout: 'cover' }] }
+  const options = { title: 'Reproducible', design: { show_date: true }, generatedAt: '2024-05-06T07:08:09.000Z', slides: [{ title: 'Cover', layout: 'cover' }] }
   const first = await buildPptxArtifactBuffer(options)
   const second = await buildPptxArtifactBuffer(options)
   assert.equal(first.buffer.equals(second.buffer), true)
@@ -84,7 +86,7 @@ test('PPTX format leaf reproduces bytes for an explicit generatedAt', async () =
   const core = await zip.file('docProps/core.xml').async('string')
   const cover = await zip.file('ppt/slides/slide1.xml').async('string')
   assert.equal((core.match(/2024-05-06T07:08:09Z/g) || []).length, 2)
-  assert.match(cover, /2024年5月/)
+  assert.match(cover, /2024-05-06/)
 })
 
 test('PPTX format leaf snapshots image bytes and preserves global rotation and zero coordinates', async () => {
@@ -125,7 +127,7 @@ test('PPTX format leaf snapshots image bytes and preserves global rotation and z
 test('PPTX canonical schema exposes stacked charts with bounded chart collections', () => {
   const parameters = BUILTIN_ARTIFACT_TOOL_SPECS.create_pptx.function.parameters
   const chart = parameters.properties.slides.items.properties.chart
-  assert.deepEqual(chart.properties.type.enum, ['bar', 'bar-stacked', 'line', 'pie'])
+  assert.deepEqual(chart.properties.type.enum, ['bar', 'bar-stacked', 'bar-horizontal', 'line', 'area', 'pie', 'doughnut'])
   assert.equal(parameters.properties.slides.minItems, 1)
   assert.equal(parameters.properties.slides.maxItems, 100)
   assert.equal(chart.properties.categories.maxItems, 200)
@@ -134,8 +136,8 @@ test('PPTX canonical schema exposes stacked charts with bounded chart collection
   assert.equal(chart.properties.series.items.properties.values.minItems, 1)
   assert.equal(chart.properties.series.items.properties.values.maxItems, 200)
   const slide = parameters.properties.slides.items.properties
-  assert.equal(slide.bullets.maxItems, 5)
-  assert.equal(slide.bullets.items.maxLength, 60)
+  assert.equal(slide.bullets.maxItems, 24)
+  assert.equal(slide.bullets.items.maxLength, 16000)
   assert.equal(slide.kpi.maxItems, 4)
 })
 
@@ -237,7 +239,7 @@ test('PPTX format leaf fails closed for malformed prepared images and out-of-ran
   )
 })
 
-test('PPTX format leaf reports only an exact explicit theme and keeps inference local', async () => {
+test('PPTX format leaf reports only an exact explicit theme and never infers style from the subject', async () => {
   const explicit = await buildPptxArtifactBuffer({
     title: 'Neutral',
     theme: 'forest',
@@ -253,7 +255,8 @@ test('PPTX format leaf reports only an exact explicit theme and keeps inference 
     })
     assert.equal(inferred.themeName, undefined, invalidTheme)
     const slide = await inferred.zip.file('ppt/slides/slide1.xml').async('string')
-    assert.match(slide, /<a:srgbClr val="0B1A2A"\/>/, invalidTheme)
+    assert.match(slide, /<a:srgbClr val="FFFFFF"\/>/, invalidTheme)
+    assert.doesNotMatch(slide, /<a:srgbClr val="0B1A2A"\/>/, invalidTheme)
   }
 })
 
@@ -263,6 +266,10 @@ test('PPTX format leaf has an explicit pure dependency boundary and artifactGen 
   const allowedInternalFiles = new Set([
     entry,
     fileURLToPath(new URL('../server/services/pptxArtifactSlideRendering.js', import.meta.url)),
+    fileURLToPath(new URL('../server/services/pptxArtifactContract.js', import.meta.url)),
+    fileURLToPath(new URL('../server/services/pptxArtifactDesign.js', import.meta.url)),
+    fileURLToPath(new URL('../server/services/pptxArtifactElements.js', import.meta.url)),
+    fileURLToPath(new URL('../server/services/pptxArtifactValidation.js', import.meta.url)),
     fileURLToPath(new URL('../server/services/officeImageLayout.js', import.meta.url)),
     fileURLToPath(new URL('../server/services/officePreparedImageValidation.js', import.meta.url)),
     fileURLToPath(new URL('../src/lib/pptCore.js', import.meta.url)),

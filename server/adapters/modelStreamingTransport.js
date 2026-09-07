@@ -1,3 +1,5 @@
+import { getProviderReplayContext } from './providerReplayState.js'
+
 import {
   consumeNativeProviderStreamPayload,
   createNativeProviderStreamState,
@@ -83,7 +85,7 @@ async function* consumeStreamingResponse({
   const toolCallAcc = new Map()
   const readyToolCallIndexes = new Set()
   const nativeStreamState = providerAdapter || isNativeProviderKind(profile.kind)
-    ? createNativeProviderStreamState(profile.kind, providerAdapter)
+    ? createNativeProviderStreamState(profile.kind, providerAdapter, getProviderReplayContext(providerRequest))
     : null
   const compatibleStreamState = createCompatibleModelStreamState()
   const reasoningCharLimit = reasoningLimitFor({ env, tools, toolChoice })

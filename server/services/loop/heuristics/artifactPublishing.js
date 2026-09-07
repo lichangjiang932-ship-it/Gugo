@@ -30,9 +30,7 @@ import {
 import {
   parseMarkdownDocument,
 } from '../../../../src/lib/officeExport/documentExport.js'
-import {
-  parseMarkdownSlides,
-} from '../../../../src/lib/presentationExport/presentationParser.js'
+import { canonicalPptxMarkdownSlides } from '../../pptxMarkdownCompatibility.js'
 import {
   parseSpreadsheetRows,
 } from '../../../../src/lib/officeExport/spreadsheetExport.js'
@@ -251,11 +249,7 @@ export async function publishGeneratedArtifact({ name, artifact, args, job, step
 
 export function pptxSlidesFromArtifactArgs(args = {}) {
   if (Array.isArray(args.slides) && args.slides.length > 0) return args.slides
-  const parsed = parseMarkdownSlides(String(args.markdown || ''))
-  return parsed.map((slide) => ({
-    ...slide,
-    ...(slide.layout ? {} : slide.type === 'cover' ? { layout: 'cover' } : {}),
-  }))
+  return canonicalPptxMarkdownSlides(args.markdown ?? '')
 }
 
 export function docxParagraphsFromArtifactArgs(args = {}) {

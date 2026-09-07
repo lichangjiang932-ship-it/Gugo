@@ -1,4 +1,3 @@
-import { Folder, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import AppLayout from '../../components/AppLayout.jsx'
 import DirectoryApprovalModal from '../../components/DirectoryApprovalModal.jsx'
 import ToolApprovalCard from '../../components/ToolApprovalCard.jsx'
@@ -7,6 +6,7 @@ import ChatComposer from './ChatComposer'
 import ChatMessages from './ChatMessages'
 import DesktopPet from './DesktopPet.jsx'
 import ChatRightPanels from './chatSplitView/ChatRightPanels.jsx'
+import { ChatSessionHeading, ChatWorkbenchToggle } from './chatSplitView/ChatSessionHeader.jsx'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
 import { estimateClientContextUsage, sumSessionModelUsage } from '../../lib/contextUsage.js'
 
@@ -113,34 +113,26 @@ export default function ChatSplitView({
       serverEstimatedPromptTokens,
     }),
     cumulativeTokens: sumSessionModelUsage(messages),
+    modelUsage: latestAssistantMessage?.meta?.modelUsage,
     contextWindowAuthoritative,
   }
   const toggleContextPanel = () => setShowContextPanel((current) => !current)
+  const hasWorkspace = Boolean(selectedWorkspacePath || activeSession?.workspacePath)
 
   return (
     <AppLayout className="flex h-screen min-w-0 overflow-hidden bg-paper">
       <div className="chat-main-pane flex min-w-0 flex-[1_1_640px] flex-col overflow-hidden">
-        <header className="chat-session-header flex h-12 shrink-0 items-center gap-3 px-4 backdrop-blur-sm">
-          <Folder className="h-4 w-4 shrink-0 text-ink-fade" aria-hidden="true" />
-          <h1
-            className="min-w-0 flex-1 truncate text-[14px] font-semibold tracking-[-0.01em] text-ink"
-            data-testid="chat-session-title"
-            title={activeSession?.title || t('nav.newChat')}
-          >
-            {activeSession?.title || t('nav.newChat')}
-          </h1>
-          <button
-            type="button"
+        <header className="chat-session-header flex h-12 shrink-0 items-center gap-2.5 px-4 backdrop-blur-sm" data-chat-context={hasWorkspace ? 'project' : 'conversation'}>
+          <ChatSessionHeading hasWorkspace={hasWorkspace} title={activeSession?.title || t('nav.newChat')} data-testid="chat-session-title" />
+          <ChatWorkbenchToggle
+            open={workbenchOpen}
             onClick={onWorkbenchToggle}
-            className="chat-chrome-button inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:text-ink"
             title={t(workbenchOpen ? 'workbench.hide' : 'workbench.show')}
             aria-label={t(workbenchOpen ? 'workbench.hide' : 'workbench.show')}
             aria-controls="right-workbench"
             aria-expanded={workbenchOpen}
             data-testid="workbench-toggle"
-          >
-            {workbenchOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
-          </button>
+          />
         </header>
         <ChatMessages
           key={activeSessionId || '__draft__'}
@@ -190,7 +182,7 @@ export default function ChatSplitView({
         )}
         {(state.permRequest || toolApproval.open) && (
           <div
-            className="mx-auto flex w-full min-w-0 max-w-[min(780px,calc(100vw-320px))] flex-col gap-2 px-4 pb-2"
+            className="chat-notice-dock mx-auto flex w-full min-w-0 max-w-[780px] flex-col gap-2 px-4 pb-2 sm:px-6"
             data-testid="chat-approval-dock"
           >
             <PermissionRequestCard
@@ -209,9 +201,9 @@ export default function ChatSplitView({
           </div>
         )}
         {resumeAvailable && !isGenerating && (
-          <div className="mx-auto w-full min-w-0 max-w-[min(780px,calc(100vw-320px))] px-4 pb-1.5">
-            <div className="flex items-center gap-2 rounded-md border border-ink/10 border-l-2 border-l-warning/55 bg-paper-2/45 px-3 py-2 text-xs">
-              <span className="flex-1 text-ink-soft">{t(manualRetryAvailable
+          <div className="chat-notice-dock mx-auto w-full min-w-0 max-w-[780px] px-4 pb-1.5 sm:px-6" data-testid="chat-resume-dock">
+            <div className="flex flex-wrap items-center gap-2 rounded-control border border-ink/10 border-l-2 border-l-warning/55 bg-paper-2/45 px-3 py-2 text-xs">
+              <span className="min-w-0 basis-48 flex-1 leading-relaxed text-ink-soft">{t(manualRetryAvailable
                 ? 'toast.chatTaskRetryHint'
                 : 'toast.chatResumeHint')}</span>
               <button type="button" onClick={onResume} className="h-7 px-3 rounded-md bg-accent text-accent-contrast">

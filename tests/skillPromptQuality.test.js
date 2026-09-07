@@ -16,30 +16,32 @@ test('built-in catalog exposes one canonical presentation skill', () => {
   assert.equal(presentationSkills[0].recommended, true)
 })
 
-test('ppt prompts require exportable slide structure and no useless tail text', () => {
+test('ppt skill requests real file delivery while honoring outline-only or source-only requests', () => {
   const prompt = promptOf('ppt')
-  assert.match(prompt, /第二行必须是页面类型注释/)
-  assert.match(prompt, /严禁连续 3 页/)
-  assert.match(prompt, /禁止输出“以下是一份方案”/)
-  assert.match(prompt, /可直接导出 PPTX/)
+  assert.match(prompt, /create_pptx/)
+  assert.match(prompt, /outline or source only/)
+  assert.match(prompt, /user's actual prompt/)
+  assert.doesNotMatch(prompt, /只输出 Markdown 正文|第二行必须是页面类型注释|严禁连续 3 页|MBB/)
 })
 
-test('ppt prompt requires evidence-rich content instead of thin bullets', () => {
+test('ppt skill preserves requested content, total count and factual evidence without a fixed genre', () => {
   const prompt = promptOf('ppt')
-  assert.match(prompt, /主张；证据/)
-  assert.match(prompt, /用户要求页数/)
-  assert.match(prompt, /不要空泛形容词/)
+  assert.match(prompt, /N total slides/)
+  assert.match(prompt, /without a cover/)
+  assert.match(prompt, /Do not invent data/)
+  assert.match(prompt, /Do not truncate/)
+  assert.doesNotMatch(prompt, /尽量给数字|默认 8-12 页|节奏模板|商业演示导演/)
 })
 
-test('canonical ppt prompt enforces renderer-neutral visual quality', () => {
+test('canonical ppt prompt gives the model native design controls without a mandatory layout preset', () => {
   const prompt = promptOf('ppt')
-  assert.match(prompt, /fixed 16:9 canvas/)
-  assert.match(prompt, /6% horizontal and 8% vertical safe area/)
-  assert.match(prompt, /deliberate type hierarchy/)
-  assert.match(prompt, /Vary the composition every 2-3 pages/)
+  for (const field of ['background', 'heading_font', 'body_font', 'east_asian_font', 'aspect_ratio', 'show_page_numbers', 'show_brand', 'show_date']) {
+    assert.ok(prompt.includes(field), field)
+  }
+  assert.match(prompt, /slides\[\]\.elements/)
   assert.match(prompt, /editable text/)
-  assert.match(prompt, /Never duplicate visible text layers or apply text-shadow/)
-  assert.match(prompt, /absence of clipping or ghosting/)
+  assert.match(prompt, /clipping|overflow/)
+  assert.doesNotMatch(prompt, /fixed 16:9 canvas|6% horizontal and 8% vertical safe area|Vary the composition every 2-3 pages/)
 })
 
 test('every built-in skill is unique, bounded, language-aware, and fact-safe', () => {

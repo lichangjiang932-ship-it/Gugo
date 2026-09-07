@@ -7,6 +7,7 @@ import FullscreenMediaModal from './FullscreenMediaModal.jsx'
 import { findArtifactReferenceByHref, findArtifactReferenceByLocalPath, normalizeArtifactLocalPath, remarkArtifactReferences, remarkLocalPathLinks } from '../lib/artifactReferences.js'
 import { CodeBlock, SelectableFileLink } from './markdown/MarkdownControls.jsx'
 import { nodeText } from './markdown/markdownUtils.js'
+import { MarkdownImageProvider, MarkdownImageRenderer } from './markdown/MarkdownImage.jsx'
 
 /**
  * MarkdownRenderer —— 安全渲染 Markdown + 代码高亮
@@ -71,6 +72,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
 
   return (
     <div className={`chat-markdown prose prose-sm max-w-none leading-[1.75] ${streaming ? 'chat-markdown-streaming' : ''} ${className}`}>
+      <MarkdownImageProvider loadRemote={!streaming} onOpen={setFullscreen}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, [remarkArtifactReferences, { references: artifactReferences }], remarkLocalPathLinks]}
         urlTransform={markdownUrlTransform}
@@ -165,15 +167,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
             )
           },
           // 图片：点击进入全屏查看器
-          img: ({ src, alt, ...props }) => (
-            <img
-              {...props}
-              src={src}
-              alt={alt || ''}
-              className="h-auto max-w-full cursor-zoom-in rounded-control border border-ink-fade/30"
-              onClick={() => src && setFullscreen({ src, alt: alt || '' })}
-            />
-          ),
+          img: MarkdownImageRenderer,
           // 引用块
           blockquote: ({ children, ...props }) => (
             <blockquote className="my-3 rounded-r-control border-l-2 border-ink/15 bg-paper-2/60 py-2 pl-3.5 pr-3 text-ink-soft" {...props}>
@@ -200,6 +194,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
       >
         {children || ''}
       </ReactMarkdown>
+      </MarkdownImageProvider>
       {fullscreen && (
         <FullscreenMediaModal
           src={fullscreen.src}

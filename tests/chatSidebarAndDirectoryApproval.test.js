@@ -100,11 +100,10 @@ test('narrow chat layout lets the conversation and workbench shrink without hori
   const rail = read('../src/components/LeftRail.jsx')
 
   assert.match(view, /flex min-w-0 flex-\[1_1_640px\] flex-col overflow-hidden/)
-  assert.equal(
-    (view.match(/max-w-\[min\(780px,calc\(100vw-320px\)\)\]/g) || []).length,
-    2,
-  )
-  assert.doesNotMatch(view, /max-w-\[780px\]/)
+  const notices = [...view.matchAll(/className="(chat-notice-dock[^"]+)"/g)]
+  assert.equal(notices.length, 2)
+  for (const [, classes] of notices) assert.match(classes, /w-full min-w-0 max-w-\[780px\]/)
+  assert.doesNotMatch(view, /calc\(100vw-320px\)/)
   assert.match(workbench, /h-full min-w-0 max-w-\[calc\(100vw-60px\)\] shrink flex-col overflow-hidden/)
   assert.doesNotMatch(workbench, /h-full shrink-0 flex-col/)
   assert.match(rail, /NARROW_RAIL_QUERY = '\(max-width: 959px\)'/)

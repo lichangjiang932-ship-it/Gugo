@@ -445,6 +445,46 @@ test('SessionAdmin v2 enforces snapshot pagination invariants', () => {
   }
 })
 
+test('SessionAdmin v2 accepts virtual evidence rows without treating them as durable offset positions', () => {
+  const message = (id) => ({
+    id, userId: 'user-1', sessionId: 'session-1', role: 'assistant', content: id,
+    createdAt: 1, updatedAt: 1,
+  })
+  const snapshot = {
+    session: { id: 'session-1', revision: 0 },
+    messages: [message('durable'), message('virtual')],
+    revision: 0,
+    totalMessages: 4,
+    durableMessageCount: 1,
+    durableTotalMessages: 3,
+    complete: false,
+    nextOffset: 2,
+  }
+  const input = { userId: 'user-1', sessionId: 'session-1', offset: 1, limit: 1 }
+  const port = prepareSessionAdminPort(portDefinition({ getSessionSnapshot: () => snapshot }))
+  const result = port.getSessionSnapshot(input)
+  assert.equal(result.messages.length, 2)
+  assert.equal(result.nextOffset, 2)
+  assert.equal(result.durableMessageCount, 1)
+  assert.equal(result.durableTotalMessages, 3)
+
+  for (const change of [
+    { durableMessageCount: undefined },
+    { durableTotalMessages: undefined },
+    { durableMessageCount: 2 },
+    { durableTotalMessages: 5 },
+    { nextOffset: 3 },
+    { totalMessages: 3 },
+    { complete: true, nextOffset: null },
+  ]) {
+    const invalid = prepareSessionAdminPort(portDefinition({
+      getSessionSnapshot: () => ({ ...snapshot, ...change }),
+    }))
+    assert.throws(() => invalid.getSessionSnapshot(input),
+      (error) => error.code === 'SESSION_ADMIN_RESULT_INVALID')
+  }
+})
+
 test('SessionAdmin v2 accepts structured CAS mutation results', () => {
   const port = prepareSessionAdminPort(portDefinition({
     replaceSessionMessages: (input) => ({

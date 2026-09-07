@@ -67,8 +67,10 @@ test('ChatComposer opens image attachment thumbnails in the right preview pane',
 })
 
 test('MarkdownRenderer wires <img> click to FullscreenMediaModal', () => {
-  const source = fs.readFileSync(markdownPath, 'utf8')
+  const source = fs.readFileSync(markdownPath, 'utf8') + readSourceTree('../src/components/markdown/')
   assert.match(source, /FullscreenMediaModal/)
   assert.match(source, /cursor-zoom-in/)
   assert.match(source, /setFullscreen/)
+  assert.match(source, /img: MarkdownImageRenderer/)
+  assert.match(source, /onOpen=\{setFullscreen\}/)
 })

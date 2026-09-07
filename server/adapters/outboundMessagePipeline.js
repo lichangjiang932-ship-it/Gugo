@@ -1,5 +1,6 @@
 import { normalizeModelContentForEndpoint } from '../utils/modelContentCapabilities.js'
 import { replaceUnsupportedVisionContent } from './visionAssist.js'
+import { matchingProviderReplay, providerReplayContext } from './providerReplayState.js'
 
 // Anthropic/Gemini express reasoning as thinking/thought blocks and reject the
 // OpenAI-compatible `reasoning_content` field. Retention must stay off for
@@ -20,6 +21,7 @@ const INTERNAL_KEYS = new Set([
   'modelContext',
   'modelVisible',
   'providerSidecars',
+  'providerReplay',
   'reasoning',
   'reasoning_content',
   'source',
@@ -108,17 +110,20 @@ function sanitizeToolCalls(toolCalls = []) {
   })
 }
 
-function sanitizeMessage(message, providerKeys, { retainReasoning = false } = {}) {
+function sanitizeMessage(message, providerKeys, { retainReasoning = false, replayContext = null } = {}) {
+  const providerReplay = message.role === 'assistant' ? matchingProviderReplay(message.providerReplay, replayContext) : null
   const clean = {
     role: message.role,
     ...(Object.hasOwn(message, 'content') ? { content: cloneValue(message.content) } : {}),
     ...(typeof message.name === 'string' ? { name: message.name } : {}),
     ...(typeof message.tool_call_id === 'string' ? { tool_call_id: message.tool_call_id } : {}),
+    ...(providerReplay ? { providerReplay } : {}),
     // Opt-in chain-of-thought replay (MODEL_REASONING_RETENTION=1). Only the
     // assistant's own retained reasoning travels back, and only to the same
     // request pipeline that produced it; every other consumer keeps the
     // historical strip-everything behavior.
     ...(retainReasoning
+      && !message.providerReplay
       && message.role === 'assistant'
       && typeof message.reasoning_content === 'string'
       && message.reasoning_content.trim()
@@ -144,28 +149,12 @@ function removeOrphanToolResults(messages = []) {
 }
 
 function appendEphemeralContext(messages, ephemeralContext) {
-  const context = String(ephemeralContext || '').trim()
-  if (!context) return messages
-  let target = -1
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === 'user') {
-      target = index
-      break
-    }
-  }
-  if (target < 0) return messages
-  const next = messages.slice()
-  const message = next[target]
-  if (Array.isArray(message.content)) {
-    next[target] = {
-      ...message,
-      content: [...message.content, { type: 'text', text: context }],
-    }
-  } else {
-    const content = String(message.content || '')
-    next[target] = { ...message, content: [content, context].filter(Boolean).join('\n\n') }
-  }
-  return next
+  const context = String(ephemeralContext ?? '')
+  if (!context.trim() || !messages.some((message) => message?.role === 'user')) return messages
+  // Runtime hints belong after the existing history, never inside an earlier
+  // user message. Changing a clock/budget must not rewrite the reusable prefix.
+  // A user-role suffix is also accepted by native/local alternating-role APIs.
+  return [...messages, { role: 'user', content: context }]
 }
 
 /**
@@ -179,13 +168,15 @@ export function prepareOutboundMessages({
   modelName = '',
   providerKind = '',
   providerId = '',
+  baseUrl = '',
   ephemeralContext = '',
   retainReasoning = false,
 } = {}) {
   const providerKeys = activeProviderKeys({ profile, providerKind, providerId })
+  const replayContext = providerReplayContext({ config: { modelName, providerId, baseUrl }, profile })
   const sanitized = removeOrphanToolResults((Array.isArray(messages) ? messages : [])
     .filter((message) => message && typeof message === 'object' && !isDisplayOnly(message))
-    .map((message) => sanitizeMessage(message, providerKeys, { retainReasoning })))
+    .map((message) => sanitizeMessage(message, providerKeys, { retainReasoning, replayContext })))
   const withContext = appendEphemeralContext(sanitized, ephemeralContext)
   const visionSafe = profile?.supportsVision === true
     ? withContext

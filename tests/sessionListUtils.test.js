@@ -17,6 +17,10 @@ const leftRailSource = fs.readFileSync(
   new URL('../src/components/LeftRail.jsx', import.meta.url),
   'utf8',
 )
+const leftRailStyles = fs.readFileSync(
+  new URL('../src/components/leftRail/LeftRail.css', import.meta.url),
+  'utf8',
+)
 
 test('session history is one continuous newest-first list', () => {
   const sessions = [
@@ -29,15 +33,14 @@ test('session history is one continuous newest-first list', () => {
   assert.deepEqual(sortSessions([]), [])
 })
 
-test('session rows are two-line editorial entries while workspace sessions can render under project groups', () => {
+test('session rows stay single-line and keep quiet selection while project groups retain disclosure controls', () => {
   assert.match(sessionListSource, /orderedSessions\.map\(\(session, index\) => renderSession\(session, index\)\)/)
-  // Two-line entry: 13px title + 11px relative-time subtitle.
-  assert.match(sessionListSource, /block truncate text-\[13px\] leading-\[18px\]/)
-  assert.match(sessionListSource, /text-\[11px\] leading-\[14px\] text-ink-fade/)
-  assert.match(sessionListSource, /formatSessionRelativeTime\(session\.updatedAt\)/)
-  // Rows grow to fit both lines; active session gets a brand-green anchor bar.
-  assert.match(sessionListSource, /min-h-\[2\.75rem\] items-stretch/)
-  assert.match(sessionListSource, /h-4 w-\[2\.5px\][^"']*bg-accent/)
+  assert.match(sessionListSource, /truncate text-ui leading-5/)
+  assert.match(sessionListSource, /title=\{sessionTooltip\(session\)\}/)
+  assert.doesNotMatch(sessionListSource, /formatSessionRelativeTime|Intl\.RelativeTimeFormat|bg-accent/)
+  assert.match(leftRailStyles, /\.left-rail-session-row\s*\{[^}]*min-height: 38px;/)
+  assert.match(leftRailStyles, /\.left-rail-session-row\[data-active="true"\][\s\S]*?--color-ink-rgb/)
+  assert.match(sessionListSource, /isCollapsed \? Folder : FolderOpen/)
   assert.equal((sessionListSource.match(/\{session\.title\}/g) || []).length, 1)
   assert.match(sessionListSource, /data-session-project/)
   assert.match(sessionListSource, /data-project-toggle/)
@@ -45,6 +48,16 @@ test('session rows are two-line editorial entries while workspace sessions can r
   assert.match(sessionListSource, /chatMessages\.workspaceProjects/)
   assert.match(sessionListSource, /chatMessages\.workspaceRecent/)
   assert.doesNotMatch(sessionListSource, /setExpanded|nav\.history/)
+})
+
+test('sidebar hover actions remain available to keyboard and touch and history survives whole-rail collapse', () => {
+  assert.match(leftRailStyles, /\.left-rail-action-scope:focus-within \.left-rail-action/)
+  assert.match(leftRailStyles, /\.left-rail-action\[aria-expanded="true"\]/)
+  assert.match(leftRailStyles, /@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.left-rail-action\s*\{[^}]*opacity: 1;[^}]*pointer-events: auto;/)
+  assert.match(leftRailSource, /id="left-rail-history" hidden=\{collapsed\}/)
+  assert.doesNotMatch(leftRailSource, /!collapsed && <div[^>]*><SessionList/)
+  assert.match(sessionListSource, /left-rail-session-menu fixed/)
+  assert.doesNotMatch(sessionListSource, /absolute right-0 top-9/)
 })
 
 test('workspace sessions group by normalized path while plain sessions remain in history', () => {

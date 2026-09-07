@@ -1,4 +1,5 @@
 import { XLSX_LIMITS } from './xlsxArtifactContract.js'
+import { PPTX_DESIGN_SCHEMA, PPTX_SLIDE_SCHEMA, PPTX_LIMITS } from './pptxArtifactContract.js'
 
 /**
  * Canonical model-facing schemas for managed artifacts.
@@ -98,13 +99,14 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
     type: 'function',
     function: {
       name: 'create_pptx',
-      description: 'Create a polished PowerPoint (.pptx) artifact from structured slides. Use concise conclusion-style titles and choose a layout for each slide.',
+      description: 'Create an editable PowerPoint (.pptx) directly from the user request. Respect the requested slide count, language, content, colors, fonts and layout. Author design and native slide elements yourself when a preset layout does not express the request; never make the user select or configure a template. No implicit cover, closing page, brand, or date is added.',
       parameters: {
         type: 'object',
         properties: {
           title: { type: 'string' },
           subtitle: { type: 'string' },
           theme: { type: 'string', enum: ['noir', 'paper', 'ocean', 'forest'] },
+          design: PPTX_DESIGN_SCHEMA,
           brand: { type: 'string' },
           output_directory: OUTPUT_DIRECTORY_PROPERTY,
           images: OFFICE_IMAGES_PROPERTY,
@@ -112,77 +114,8 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
           slides: {
             type: 'array',
             minItems: 1,
-            maxItems: 100,
-            items: {
-              type: 'object',
-              properties: {
-                title: { type: 'string' },
-                layout: { type: 'string', enum: ['cover', 'section', 'kpi', 'chart', 'statement', 'split', 'process', 'quote', 'bullets', 'end'] },
-                eyebrow: { type: 'string' },
-                bullets: {
-                  type: 'array',
-                  maxItems: 5,
-                  items: { type: 'string', maxLength: 60 },
-                },
-                body: { type: 'string' },
-                subtitle: { type: 'string' },
-                kpi: {
-                  type: 'array',
-                  maxItems: 4,
-                  items: {
-                    type: 'object',
-                    properties: {
-                      value: { type: 'string', maxLength: 120 },
-                      label: { type: 'string', maxLength: 200 },
-                      unit: { type: 'string', maxLength: 80 },
-                      delta: { type: 'string', maxLength: 120 },
-                    },
-                    required: ['value'],
-                  },
-                },
-                chart: {
-                  type: 'object',
-                  properties: {
-                    type: { type: 'string', enum: ['bar', 'bar-stacked', 'line', 'pie'] },
-                    categories: {
-                      type: 'array',
-                      maxItems: 200,
-                      items: { type: 'string', maxLength: 200 },
-                    },
-                    series: {
-                      type: 'array',
-                      minItems: 1,
-                      maxItems: 20,
-                      items: {
-                        type: 'object',
-                        properties: {
-                          name: { type: 'string', maxLength: 200 },
-                          values: {
-                            type: 'array',
-                            minItems: 1,
-                            maxItems: 200,
-                            items: { type: 'number' },
-                          },
-                        },
-                        required: ['values'],
-                      },
-                    },
-                  },
-                  required: ['type', 'series'],
-                },
-                quote: {
-                  oneOf: [
-                    { type: 'string' },
-                    {
-                      type: 'object',
-                      properties: { text: { type: 'string' }, source: { type: 'string' } },
-                      required: ['text'],
-                    },
-                  ],
-                },
-              },
-              required: ['title'],
-            },
+            maxItems: PPTX_LIMITS.slides,
+            items: PPTX_SLIDE_SCHEMA,
           },
         },
         required: ['title', 'slides'],

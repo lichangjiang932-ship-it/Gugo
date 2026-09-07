@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { availableParallelism, tmpdir } from 'node:os'
+import { availableParallelism, tmpdir, totalmem } from 'node:os'
 import { join, normalize } from 'node:path'
 import { spawn } from 'node:child_process'
 
@@ -16,6 +16,7 @@ import {
   writeOfflineEvalJson,
 } from './offlineEvalCli.js'
 import { sanitizeChildEnv } from '../server/utils/sensitiveEnv.js'
+import { runTestProcessQueue } from './testProcessQueue.mjs'
 
 const rawArgs = process.argv.slice(2)
 let testArgs
@@ -72,6 +73,9 @@ function positiveIntegerEnv(name, fallback) {
 
 const batchTimeoutMs = positiveIntegerEnv('TEST_BATCH_TIMEOUT_MS', DEFAULT_BATCH_TIMEOUT_MS)
 const isolatedTimeoutMs = positiveIntegerEnv('TEST_ISOLATED_TIMEOUT_MS', DEFAULT_ISOLATED_TIMEOUT_MS)
+const isolatedCapacity = Math.max(1, Math.min(2, availableParallelism(), Math.floor(totalmem() / (3 * 1024 ** 3))))
+const isolatedConcurrency = Math.min(isolatedCapacity,
+  positiveIntegerEnv('TEST_ISOLATED_CONCURRENCY', isolatedCapacity))
 const batchNodeArgs = nodeArgs.some((arg) => arg.startsWith('--test-concurrency'))
   ? nodeArgs
   : [`--test-concurrency=${testConcurrency}`, ...nodeArgs]
@@ -337,7 +341,8 @@ if (batchFiles.length) {
     if (coverageMode) forwardCapturedOutput(result)
     reportProcessError(result, label, batchTimeoutMs)
     console.log(`[run-tests] finished ${label} in ${Date.now() - startedAt}ms; status=${result.status ?? 'none'}`)
-    if ((result.status ?? 1) !== 0) {
+    if ((result.status ?? 1) !== 0 || hasTapFailure(result)
+      || (coverageMode && coverageThresholdFailures(result).length > 0)) {
       failed = true
       const coverageOnlyFailure = coverageMode
         && !hasTapFailure(result)
@@ -398,7 +403,8 @@ function forwardCapturedOutput(result) {
   if (result.stderr?.length) process.stderr.write(result.stderr)
 }
 
-for (const file of isolatedFiles) {
+async function runIsolatedTest(file) {
+  const startedAt = Date.now()
   let passed = false
   let lastFailureSummary = null
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -419,7 +425,7 @@ for (const file of isolatedFiles) {
     forwardCapturedOutput(result)
     reportProcessError(result, label, isolatedTimeoutMs)
 
-    if (result.status === 0) {
+    if (result.status === 0 && !hasTapFailure(result)) {
       passed = true
       break
     }
@@ -434,6 +440,18 @@ for (const file of isolatedFiles) {
     failed = true
     rememberFailure(lastFailureSummary || `isolated test ${file}; status=failed; exitCode=unknown`)
   }
+  console.log(`[run-tests] finished isolated test ${file} in ${Date.now() - startedAt}ms; status=${passed ? 0 : 1}`)
+}
+
+if (isolatedFiles.length) {
+  const startedAt = Date.now()
+  console.log(`[run-tests] isolated process pool: concurrency=${isolatedConcurrency}; files=${isolatedFiles.length}`)
+  await runTestProcessQueue(isolatedFiles, {
+    concurrency: isolatedConcurrency,
+    isExclusive: (file) => viteWrapperTests.has(normalize(file)) || /MessageRowActivity[.\\/]/u.test(file),
+    run: runIsolatedTest,
+  })
+  console.log(`[run-tests] isolated phase finished in ${Date.now() - startedAt}ms`)
 }
 
 if (offlineEvalMode) {

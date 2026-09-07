@@ -142,7 +142,9 @@ test('forkSession copies only persisted transcript with fresh message ids and sa
   const copied = listMessages({ userId: owner.userId, sessionId: 'branch-copy' })
   assert.deepEqual(copied.map(({ id }) => id), ['branch-user-copy', 'branch-assistant-copy'])
   assert.deepEqual(copied.map(({ content }) => content), ['try another route', 'persisted answer'])
-  assert.equal(copied[1].modelContext.turnId, 'turn-source')
+  assert.equal(copied[1].modelContext.turnId, undefined)
+  assert.equal(copied[1].modelContext.forkSource.turnId, 'turn-source')
+  assert.equal(copied[1].modelContext.forkSource.sessionId, 'branch-source')
   assert.deepEqual(copied[1].modelContext.toolTrace, [{ role: 'assistant', content: 'kept trace' }])
   for (const key of ['paused', 'clarification', 'pausedSequence', 'serverConnectionState']) {
     assert.equal(Object.hasOwn(copied[1].modelContext, key), false)

@@ -3,8 +3,9 @@ import {
   isNativeProviderKind,
   parseNativeProviderResponse,
 } from './nativeModelProviders.js'
-import { normalizeModelUsage, normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
+import { normalizeCacheReadUsage, normalizeModelUsage, normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 import { createEmptyModelResponseError } from './sseLifecycle.js'
+import { getProviderReplayContext } from './providerReplayState.js'
 
 export function stripEmbeddedReasoning(value) {
   const text = String(value || '')
@@ -159,17 +160,28 @@ export function extractUsage(data) {
     usage?.prompt_cache_hit_tokens
       ?? usage?.prompt_tokens_details?.cached_tokens
       ?? usage?.input_tokens_details?.cached_tokens
-  ) ?? 0
+  )
   const totalTokens = normalizeOptionalUsageNumber(usage?.total_tokens)
     ?? promptTokens + completionTokens
-  const cacheMissTokens = normalizeOptionalUsageNumber(usage?.prompt_cache_miss_tokens)
-    ?? Math.max(0, promptTokens - cacheHitTokens)
+  const cacheReadUsage = normalizeCacheReadUsage({
+    promptTokens,
+    cacheHitTokens,
+    cacheMissTokens: usage?.prompt_cache_miss_tokens,
+  })
+  const writes = normalizeOptionalUsageNumber(
+    usage?.prompt_tokens_details?.cache_write_tokens ?? usage?.input_tokens_details?.cache_write_tokens,
+  )
+  const cacheCreationTokens = writes !== null && writes <= (cacheReadUsage.cacheMissTokens ?? promptTokens)
+    ? Math.floor(writes) : null
+  const uncachedInputTokens = cacheCreationTokens !== null && cacheReadUsage.cacheMissTokens !== undefined
+    ? cacheReadUsage.cacheMissTokens - cacheCreationTokens : null
   return normalizeModelUsage({
     promptTokens,
     completionTokens,
     totalTokens,
-    cacheHitTokens,
-    cacheMissTokens,
+    ...cacheReadUsage,
+    ...(cacheCreationTokens !== null ? { cacheCreationTokens } : {}),
+    ...(uncachedInputTokens !== null ? { uncachedInputTokens } : {}),
   })
 }
 
@@ -207,8 +219,12 @@ export function parseModelProviderResponse(data, profile = {}, { providerRequest
   if (responseError) throw responseError
   const adapterSnapshot = getNativeProviderRequestAdapter(providerRequest)
   if (adapterSnapshot || isNativeProviderKind(profile.kind)) {
-    const parsed = parseNativeProviderResponse(data, profile.kind, adapterSnapshot)
-    return { ...parsed, content: stripEmbeddedReasoning(parsed?.content) }
+    const parsed = parseNativeProviderResponse(data, profile.kind, adapterSnapshot, getProviderReplayContext(providerRequest))
+    // Only a provider-bound replay record requires byte-faithful text. Older
+    // unsigned native endpoints may still return embedded/orphaned think
+    // traces; retain their established cleanup contract. nativeContent marks
+    // the native tool protocol, not permission to bypass content cleanup.
+    return { ...parsed, content: parsed.providerReplay ? parsed.content : stripEmbeddedReasoning(parsed?.content), nativeContent: true }
   }
   const toolCalls = extractCompatibleToolCalls(data)
   const responseStatus = data?.status || data?.response?.status

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { resolveTurnToolSpecs } from '../server/services/turnToolSpecs.js'
+import { projectToolSpecsForRuntimePolicy, resolveTurnToolSpecs } from '../server/services/turnToolSpecs.js'
+import { classifyToolRisk } from '../server/utils/approvalPolicy.js'
+import { assertSafeOutboundUrl } from '../server/utils/outboundNetworkGuard.js'
 
 const spec = (name) => ({
   type: 'function',
@@ -101,6 +103,69 @@ test('unauthorized plan mode exposes only the directory authorization entry poin
   })
 
   assert.deepEqual(namesOf(resolved), ['request_directory'])
+})
+
+for (const permissionMode of ['normal', 'acceptEdits', 'bypass']) {
+  test(`${permissionMode} web research does not require an unrelated local directory grant`, async () => {
+    const resolved = await resolveTurnToolSpecs({
+      userId: null,
+      baseSpecs: BASE_SPECS,
+      permissionMode,
+      fileAccessStatus: { grants: [], workspace: {}, runtime: {} },
+      enabledConnectorTools: [],
+      prompt: 'Search the web and read the source pages.',
+    })
+    const names = namesOf(resolved)
+    assert.ok(names.includes('web_search'))
+    assert.ok(names.includes('fetch_url'))
+    assert.ok(names.includes('request_directory'))
+    for (const localName of ['read_file', 'write_file', 'list_directory', 'bash_exec', 'git_status']) {
+      assert.equal(names.includes(localName), false, `${localName} still needs local authority`)
+    }
+  })
+}
+
+test('workspace-independent web schemas still honor turn and per-user disabling', () => {
+  const excluded = []
+  const webSpecs = [spec('web_search'), spec('fetch_url')]
+  const firstUser = projectToolSpecsForRuntimePolicy(webSpecs, {
+    userId: 'web-disabled-user',
+    permissionMode: 'normal',
+    fileAccessStatus: { grants: [] },
+    toolsConfig: { disabled: ['web_search'] },
+    userToolPermissions: { fetch_url: false },
+    onExcluded: (value) => excluded.push(value),
+  })
+  assert.deepEqual(namesOf(firstUser), [])
+  assert.deepEqual(excluded.map(({ name, reason }) => ({ name, reason })), [
+    { name: 'web_search', reason: 'tool_disabled' },
+    { name: 'fetch_url', reason: 'user_tool_disabled' },
+  ])
+  const secondUser = projectToolSpecsForRuntimePolicy(webSpecs, {
+    userId: 'web-enabled-user',
+    permissionMode: 'normal',
+    fileAccessStatus: { grants: [] },
+    userToolPermissions: {},
+  })
+  assert.deepEqual(namesOf(secondUser), ['web_search', 'fetch_url'])
+})
+
+test('web visibility does not relax plan mode, external-write approval, or pure-local outbound policy', async () => {
+  const projected = projectToolSpecsForRuntimePolicy([spec('web_search'), spec('fetch_url')], {
+    permissionMode: 'plan', fileAccessStatus: { grants: [] }, userToolPermissions: {},
+  })
+  assert.deepEqual(projected, [])
+  assert.equal(classifyToolRisk('fetch_url', { method: 'POST', url: 'https://example.com' }, {
+    permissionMode: 'normal', mode: 'unattended', origin: 'chat',
+  }).needsApproval, true)
+  await assert.rejects(
+    assertSafeOutboundUrl('https://93.184.216.34/', { env: { GUGO_PURE_LOCAL_MODE: '1' } }),
+    (error) => error.code === 'OUTBOUND_PURE_LOCAL_DENIED',
+  )
+  await assert.rejects(
+    assertSafeOutboundUrl('http://169.254.169.254/latest/meta-data'),
+    (error) => error.code === 'OUTBOUND_ADDRESS_DENIED',
+  )
 })
 
 test('normal mode keeps shell requestable after an exact file grant', async () => {

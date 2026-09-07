@@ -7,7 +7,7 @@ const MIN_CONFIDENCE = 0.78
 const RUNTIME_CAPABILITY_SUBJECT = /(?:workspace[_\s-]*fs(?:[_\s-]*enabled)?|local\s+(?:file(?:system)?|path)|file(?:system)?\s+(?:access|permission)|list_directory|read_file|tool\s+(?:access|availability|permission)|permission|authori[sz](?:e|ed|ation)|grant|runtime|environment\s+variable|env(?:ironment)?\s+setting|\u672c\u5730\u6587\u4ef6(?:\u7cfb\u7edf)?|\u6587\u4ef6\u7cfb\u7edf|\u5de5\u5177|\u6743\u9650|\u6388\u6743|\u8fd0\u884c\u65f6|\u73af\u5883\u53d8\u91cf)/iu
 const RUNTIME_CAPABILITY_STATE = /(?:unavailable|available|disabled|enabled|not\s+enabled|cannot|can't|failed|failure|timeout|timed\s+out|denied|allowed|read[-\s]*only|read\s+and\s+write|must\s+(?:paste|provide)|\u4e0d\u53ef\u7528|\u53ef\u7528|\u672a\u542f\u7528|\u5df2\u542f\u7528|\u7981\u7528|\u65e0\u6cd5|\u4e0d\u80fd|\u5931\u8d25|\u8d85\u65f6|\u62d2\u7edd|\u5141\u8bb8|\u5df2\u6388\u6743|\u53ea\u8bfb|\u8bfb\u5199|\u7c98\u8d34|\u63d0\u4f9b\u6587\u672c)/iu
 const SIMPLE_GREETING = /^(?:hi|hello|hey|你好|您好|嗨|谢谢|多谢|ok|okay)[.!！。?？\s]*$/iu
-const SENSITIVE_VALUE = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._~-]{12,}|\bsk-[A-Za-z0-9_-]{12,}|(?:api[_ -]?key|password|passwd|secret|access[_ -]?token|refresh[_ -]?token)\s*[:=]\s*\S+)/iu
+const SENSITIVE_VALUE = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._~-]{12,}|\bsk-[A-Za-z0-9_-]{12,}|\b(?:ghp_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255}|glpat-[A-Za-z0-9_-]{20,255}|xox[baprs]-[A-Za-z0-9-]{12,255})\b|(?:api[_ -]?key|password|passwd|secret|access[_ -]?token|refresh[_ -]?token)\s*[:=]\s*\S+)/iu
 
 function textOfContent(content) {
   if (typeof content === 'string') return content
@@ -61,6 +61,7 @@ export function isTransientRuntimeMemoryCandidate(candidate) {
 
 function normalizedCandidate(candidate) {
   const type = String(candidate?.type || '').trim()
+  if (SENSITIVE_VALUE.test(`${String(candidate?.title || '')}\n${String(candidate?.body || '')}`)) return null
   const title = String(candidate?.title || '').trim().slice(0, 120)
   const body = String(candidate?.body || '').trim().slice(0, 4000)
   const confidence = Number(candidate?.confidence)
@@ -122,18 +123,26 @@ export async function extractAndStoreAutoMemories({
     .filter(Boolean)
   if (!candidates.length) return { attempted: true, stored: [], skipped: false }
 
-  const existing = listMemories({ userId, limit: 500 })
+  const memoryScope = agentId || null
+  const existing = listMemories({ userId, limit: 500, agentFilter: memoryScope || '__global__' })
+  // Global manual preferences still apply to an agent, but automatic entries
+  // belong to exactly one scope and must never be moved by deduplication.
+  const globalManual = memoryScope
+    ? listMemories({ userId, limit: 500, agentFilter: '__global__' })
+      .filter((memory) => memory.frontmatter?.source !== 'auto_chat')
+    : []
   const stored = []
   for (const candidate of candidates) {
     const titleKey = normalizeForMatch(candidate.title)
     const bodyKey = normalizeForMatch(candidate.body)
-    const matchingManual = existing.find((memory) =>
+    const matchingManual = [...existing, ...globalManual].find((memory) =>
       memory.frontmatter?.source !== 'auto_chat'
       && normalizeForMatch(memory.title) === titleKey
     )
     if (matchingManual) continue
     const matchingAuto = existing.find((memory) =>
       memory.frontmatter?.source === 'auto_chat'
+      && (memory.agentId || null) === memoryScope
       && memory.type === candidate.type
       && (normalizeForMatch(memory.title) === titleKey || normalizeForMatch(memory.body) === bodyKey)
     )
@@ -151,10 +160,12 @@ export async function extractAndStoreAutoMemories({
       pinned: matchingAuto?.pinned || false,
       sourceSessionId: sessionId,
       sourceMessageId: sourceMessage?.id || null,
-      agentId,
+      agentId: memoryScope,
     })
     stored.push(memory)
-    if (!matchingAuto) existing.push(memory)
+    const existingIndex = existing.findIndex((entry) => entry.id === memory.id)
+    if (existingIndex < 0) existing.push(memory)
+    else existing[existingIndex] = memory
   }
   return { attempted: true, stored, skipped: false }
 }

@@ -8,6 +8,58 @@ import { setTimeout as delay } from 'node:timers/promises'
 
 const LOOPBACK_HOST = '127.0.0.1'
 const DEFAULT_TIMEOUT_MS = 60_000
+const SMOKE_INHERITED_ENVIRONMENT_KEYS = new Set([
+  'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'SYSTEMDRIVE', 'OS',
+  'PROCESSOR_ARCHITECTURE', 'PROCESSOR_IDENTIFIER', 'NUMBER_OF_PROCESSORS',
+  'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH',
+  'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMW6432', 'PROGRAMDATA', 'ALLUSERSPROFILE',
+])
+
+export function createDesktopSmokeEnvironment({
+  sourceEnv = process.env,
+  smokeRoot,
+  appOutDir,
+  port,
+} = {}) {
+  if (typeof smokeRoot !== 'string' || !path.isAbsolute(smokeRoot)
+    || typeof appOutDir !== 'string' || !path.isAbsolute(appOutDir)) {
+    throw new TypeError('Desktop smoke roots must be explicit absolute paths')
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new TypeError('Desktop smoke port must be between 1 and 65535')
+  }
+  const resolvedSmokeRoot = path.resolve(smokeRoot)
+  const resolvedAppOutDir = path.resolve(appOutDir)
+  // Never copy deployment configuration or startup hooks into the smoke child.
+  // Canonical keys also prevent Windows case aliases from overriding isolation.
+  const inherited = Object.fromEntries(Object.entries(sourceEnv)
+    .filter(([key, value]) => SMOKE_INHERITED_ENVIRONMENT_KEYS.has(key.toUpperCase())
+      && typeof value === 'string')
+    .map(([key, value]) => [key.toUpperCase(), value]))
+  return {
+    ...inherited,
+    ELECTRON_RUN_AS_NODE: '1',
+    NODE_ENV: 'production',
+    GUGO_LOAD_DOTENV: '0',
+    GUGO_PURE_LOCAL_MODE: '1',
+    GUGO_SQLITE_DRIVER: 'node',
+    SERVER_HOST: LOOPBACK_HOST,
+    SERVER_PORT: String(port),
+    APP_DATA_DIR: resolvedSmokeRoot,
+    APP_DB_PATH: path.join(resolvedSmokeRoot, 'app.db'),
+    APP_CONFIG_PATH: path.join(resolvedSmokeRoot, 'runtime.json'),
+    ARTIFACT_DIR: path.join(resolvedSmokeRoot, 'artifacts'),
+    WORKSPACE_ROOT: path.join(resolvedSmokeRoot, 'workspace'),
+    TEMP: path.join(resolvedSmokeRoot, 'tmp'),
+    TMP: path.join(resolvedSmokeRoot, 'tmp'),
+    TMPDIR: path.join(resolvedSmokeRoot, 'tmp'),
+    CODEX_PLUGIN_ROOTS: '[]',
+    CODEX_APP_SERVER_ENABLED: '0',
+    MCP_STDIO_ENABLED: '0',
+    GUGO_FFMPEG_PATH: path.join(resolvedAppOutDir, 'resources', 'bin', 'ffmpeg.exe'),
+    GUGO_FFPROBE_PATH: path.join(resolvedAppOutDir, 'resources', 'bin', 'ffprobe.exe'),
+  }
+}
 
 function reserveFreePort() {
   return new Promise((resolve, reject) => {
@@ -55,30 +107,17 @@ export async function smokeTestDesktopPackage({
   const smokeRoot = await fs.mkdtemp(path.join(tempBase, 'gugo-desktop-smoke-'))
   const artifactsDir = path.join(smokeRoot, 'artifacts')
   const workspaceRoot = path.join(smokeRoot, 'workspace')
+  const temporaryDir = path.join(smokeRoot, 'tmp')
   await Promise.all([
     fs.mkdir(artifactsDir, { recursive: true }),
     fs.mkdir(workspaceRoot, { recursive: true }),
+    fs.mkdir(temporaryDir, { recursive: true }),
   ])
 
   const port = await reserveFreePort()
   const origin = `http://${LOOPBACK_HOST}:${port}`
   const entryPath = path.join(asarPath, 'server', 'start.js')
-  const env = {
-    ...process.env,
-    ELECTRON_RUN_AS_NODE: '1',
-    NODE_ENV: 'production',
-    GUGO_LOAD_DOTENV: '0',
-    GUGO_SQLITE_DRIVER: 'node',
-    SERVER_HOST: LOOPBACK_HOST,
-    SERVER_PORT: String(port),
-    APP_DATA_DIR: smokeRoot,
-    APP_DB_PATH: path.join(smokeRoot, 'app.db'),
-    ARTIFACT_DIR: artifactsDir,
-    WORKSPACE_ROOT: workspaceRoot,
-    CODEX_PLUGIN_ROOTS: '[]',
-    GUGO_FFMPEG_PATH: path.join(resolvedAppOutDir, 'resources', 'bin', 'ffmpeg.exe'),
-    GUGO_FFPROBE_PATH: path.join(resolvedAppOutDir, 'resources', 'bin', 'ffprobe.exe'),
-  }
+  const env = createDesktopSmokeEnvironment({ smokeRoot, appOutDir: resolvedAppOutDir, port })
 
   let stdout = ''
   let stderr = ''
