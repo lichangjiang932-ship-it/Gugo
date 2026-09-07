@@ -176,6 +176,7 @@ function normalizeSkill(skill, maxPromptBytes = SKILL_PROMPT_LIMITS.maxPromptByt
     permissions: Array.isArray(skill.permissions) ? [...skill.permissions].sort() : [],
     systemPrompt: prompt.text,
     promptTruncated: prompt.truncated,
+    ...(skill.resourceManifest ? { resourceManifest: skill.resourceManifest } : {}),
   }
 }
 
@@ -183,6 +184,16 @@ function renderSkillHeader(skill, equivalentIds = []) {
   const lines = [`## ${skill.name || skill.id} (${skill.id})`]
   if (skill.description) lines.push(skill.description)
   if (skill.permissions.length) lines.push(`Permissions: ${skill.permissions.join(', ')}`)
+  if (skill.resourceManifest) {
+    const resources = skill.resourceManifest
+    lines.push(`Resource base: ${resources.base} (host-managed, read-only; not a filesystem mount).`)
+    lines.push(`Use read_skill_resource with skill_id=${JSON.stringify(skill.id)} and a manifest path to read text; omit path to list all resources. Scripts are text only. Execution still requires the existing write/shell permission and approval gates.`)
+    for (const file of resources.files.slice(0, 8)) {
+      lines.push(`- ${file.path} | ${file.readable ? 'text-readable' : file.reason} | stored bytes: ${file.storedBytes}`)
+    }
+    const more = Math.max(0, resources.files.length - 8) + resources.omittedFiles
+    if (more) lines.push(`${more} additional resources: list them through read_skill_resource before use.`)
+  }
   if (equivalentIds.length) lines.push(`Equivalent selected IDs (same instructions): ${equivalentIds.join(', ')}`)
   return lines.join('\n')
 }
@@ -258,7 +269,10 @@ export function prepareSkillsForPrompt({ userId, skillIds = [] } = {}) {
 }
 
 function skillPromptDigest(skill) {
-  return crypto.createHash('sha256').update(String(skill.systemPrompt || ''), 'utf8').digest('hex').slice(0, 16)
+  const input = skill.resourceManifest
+    ? JSON.stringify({ systemPrompt: skill.systemPrompt || '', resources: skill.resourceManifest })
+    : String(skill.systemPrompt || '')
+  return crypto.createHash('sha256').update(input, 'utf8').digest('hex').slice(0, 16)
 }
 
 function renderSkillCatalog(skills) {
@@ -362,7 +376,7 @@ export function buildSkillsBlockFromPrepared({
     skillIds: selected.map((skill) => String(skill.id)),
     catalogSkillIds: catalog.map((skill) => skill.id),
     promptDigests: groups.map((group) => group.digest),
-    fields: ['catalog.id', 'catalog.name', 'catalog.description', 'selected.systemPrompt'],
+    fields: ['catalog.id', 'catalog.name', 'catalog.description', 'selected.systemPrompt', 'selected.resourceManifest'],
   }
   return cachedBuild('skills', input, sources, () => rendered)
 }

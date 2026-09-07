@@ -3,6 +3,7 @@ import { assertRuntimeStage } from './runtimeContract.js'
 import { restoreModelInvocationCheckpoint } from './modelInvocationCheckpoint.js'
 import { MUTATION_VERIFICATION_CHECKPOINT_VERSION } from './runtimeState.js'
 import { restoreOutputContinuation } from './outputContinuation.js'
+import { restoreCompactionCheckpoint, snapshotCompactionCheckpoint } from './compactionCheckpoint.js'
 
 function initializeExecutionState(s) {
   const { MAX_ITERS, normalizeCompactionRecovery, resolveIterationWindow } = s.d
@@ -26,6 +27,10 @@ function initializeExecutionState(s) {
     },
   )
   s.modelInvocation = s.restoredModelInvocation
+  s.compactionCheckpoint = restoreCompactionCheckpoint(s.restoredState?.compactionCheckpoint, {
+    stepId: s.step?.id, modelProviderId: s.job?.modelProviderId,
+    modelName: s.job?.modelName, modelConfigRevision: s.job?.modelConfigRevision,
+  })
   s.iter = Math.max(0, Number(s.restoredState?.iterations) || 0)
   s.loopEventContext = (extra = {}) => Object.freeze({
     userId: String(s.job?.userId || '').trim() || null,
@@ -280,6 +285,7 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
     loopGuard: s.loopGuard.snapshot(),
     capabilityDecision: s.capabilityDecisionSnapshot(),
     ...(s.modelInvocation ? { modelInvocation: s.modelInvocation } : {}),
+    ...(s.compactionCheckpoint?.fingerprint ? { compactionCheckpoint: snapshotCompactionCheckpoint(s.compactionCheckpoint) } : {}),
     ...(s.directoryAuthorizationResolutions.length > 0
       ? { directoryAuthorizationResolution: s.directoryAuthorizationResolutions }
       : {}),
@@ -363,7 +369,7 @@ function installCheckpointRuntime(s) {
     acknowledge: s.acknowledgeSteering,
     release: s.releaseSteering,
     persist: s.persistTurn,
-    appendAssistant: (text) => s.convo.push({ role: 'assistant', content: text }),
+    appendAssistant: (text, message) => s.convo.push(message || { role: 'assistant', content: text }),
     beforeFinalCompletion: s.beforeFinalCompletion,
     onCompletionDeferred: () => {
       s.finalText = ''

@@ -6,6 +6,27 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Provider-neutral, on-demand semantic context compaction with complete input chunking, bounded map/reduce calls, cancellation, visible fallback, and separately checkpointed summary requests. See `docs/CONTEXT_COMPACTION.md` for controls and limitations.
+- Owner-scoped `read_skill_resource` access to text references and scripts in selected skills. Resources are read-only; binary templates and automatic script execution are not implicitly enabled.
+- A current general-agent audit with concrete capability gaps and release prerequisites in `docs/GENERAL_AGENT_AUDIT_2026-09-07.md`. This work prepares version 0.11.55; a signed desktop release is not yet published.
+
+### Fixed
+
+- Kept the newest typed/multimodal user request authoritative instead of inheriting an earlier task, while preserving its original attachments.
+- Preserved Gemini native call IDs, thought signatures, and signed text through execution, continuation, and checkpoint replay, with exact provider/model/endpoint binding and separate executable arguments.
+- Recovered manually reconciled summary requests in their original invocation slot, reused archives and completed stages, and accounted for model calls and tokens once without exposing summaries as final answers.
+- Refreshed MCP tool catalogs on declared change notifications, fenced stale lifecycle disposers, and rechecked Codex skill readiness when its source changes.
+- Isolated automatic and explicit memories by Agent scope; updated content, provenance, and links atomically; retained Unicode and stable link identities; excluded recognized credentials from automatic extraction.
+- Honored desktop data-directory overrides consistently and persisted scoped recovery-prompt dismissals across navigation, reloads, and browser windows without suppressing new failures.
+
+### Security
+
+- Blocked junction/symlink escapes in plugin skill imports and bound resource reads to the authenticated owner and host-selected skills.
+- Routed remote Markdown images through authenticated, size-limited, SSRF-checked server loading and enforced application-level pure-local policy and preview restrictions. Arbitrary local code still requires an OS boundary for genuine network isolation.
+- Isolated Web release verification before subprocesses run: database, configuration, workspace, temporary files, and package caches stay inside a unique verification directory; inherited credentials and runtime injections are removed and the caller environment is restored even on failure.
+
 ## [0.11.54] - 2026-09-06
 
 ### Added

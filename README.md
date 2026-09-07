@@ -13,7 +13,7 @@ Gugo 是开源 BYOK（Bring Your Own Key）项目：不内置支付、充值、�
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
   <a href="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml"><img src="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/release-v0.11.54-blue" alt="v0.11.54" />
+  <a href="https://github.com/lichangjiang932-ship-it/Gugo/releases"><img src="https://img.shields.io/github/v/release/lichangjiang932-ship-it/Gugo" alt="Latest release" /></a>
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
 
@@ -21,24 +21,21 @@ Gugo 是开源 BYOK（Bring Your Own Key）项目：不内置支付、充值、�
 
 ## 这是什么
 
-一个**完整的 AI Agent 工作平台**，跟你熟悉的 Claude Code、Cursor、Cherry Studio、LobeChat、openhanako 是同一品类，同时提供浏览器版本和 Windows Electron 桌面应用。
+一个**本地优先的通用 Agent 工作台**，同时提供浏览器版本和 Windows Electron 桌面应用。既能回答和处理文本，也能通过经过授权的工具完成文件、代码、资料和产物任务；任务完成以真实执行与验证为依据。
 
 Windows 安装包与自动更新元数据见 [GitHub Releases](https://github.com/lichangjiang932-ship-it/Gugo/releases)。
 
-| 维度 | Gugo | openhanako | Claude Code |
-|---|---|---|---|
-| 形态 | Web（浏览器即用）+ Windows Electron 桌面 | Electron 桌面 | CLI |
-| 部署 | 单 Node 进程 + SQLite | 多端打包 | 终端 |
-| 使用模式 | 默认本机单用户免登录；可选多用户认证与隔离 | 单机 | 单机 |
-| Artifact 实时预览 | PPT / Word / Excel / React / HTML Deck | 不支持 | 不支持 |
-| 知识图谱 | entity / relation / observation 三要素 + 图搜索 | 无 | 无 |
-| 后台作业 | 完整生命周期（创建/入队/重试/取消/步骤追踪） | 简化 | 无 |
-| MCP | stdio + SSE | 是 | 是 |
-| 子代理 | 独立上下文 + 工具白名单 | 是 | 是 |
-| Skill 系统 | 内置 + 可导入 + 内置 SQLite 系统库 | 是 | 是 |
-| 独立 Hub | 队列运行骨架（`HUB_ENABLED=1`，当前仅内置 `echo` 验证任务） | 是 | 无 |
-| 跨平台 Bridge | 飞书 / 微信 / Telegram 等（v0.10） | Telegram/飞书/微信/QQ | 无 |
-| 审批门控 | 服务端 pause/resume + 收件箱 + 单次调用批准/拒绝/改参数 | 无 | 权限提示 |
+设计方向是 Pi 式的清晰内核、Codex 式的执行循环、OpenWorker 式的本地状态归属，以及 DeepSeek Harness 式的插件扩展。WorkBuddy 仅作为技能/插件使用方式的参考，不作为任务完成控制的依据。
+
+| 边界 | Gugo 的职责 |
+|---|---|
+| 极简内核 | 版本化 loop、事件与工具执行契约；应用功能由宿主能力组合 |
+| 任务闭环 | 流式输出、工具执行、审批、验证、检查点、恢复与有界重试 |
+| 技能插件 | 可发现的能力和资源、权限范围、生命周期与兼容性检查 |
+| 本地优先 | 本地数据与明确目录身份；应用控制的出网经过统一政策 |
+| 界面 | 让用户看见进度、结果、阻碍和下一步，不用内部成功文案冒充验证 |
+
+实际能力、已确认缺陷及仍未达到的目标见 [通用 Agent 审计与验收记录](docs/GENERAL_AGENT_AUDIT_2026-09-07.md)。本地优先不等于任意脚本已经具备 OS 级网络隔离；也不保证所有模型都能无监督完成任意任务。
 
 ---
 
@@ -330,6 +327,11 @@ Gugo/
 
 本项目在架构上**借鉴**了：
 
+- [Pi](https://github.com/earendil-works/pi) — 小型循环、模型消息转换与扩展边界
+- [OpenAI Codex](https://github.com/openai/codex) — Agent 执行、工具协议、恢复和上下文管理
+- [OpenWorker](https://github.com/andrewyng/openworker) — 本地优先、工作目录与状态归属
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — 插件、工具发现与技能资源组织
+- WorkBuddy — 仅技能/插件的复用方式，不采用其任务完成控制设计
 - [openhanako](https://github.com/liliMozi/openhanako) — Manager facade、独立 Hub、Plugin SDK、SessionFile sidecar
 - Claude Code、Cursor、OpenAI Codex CLI — Agent 工作流、apply_patch、reflect 节奏
 - [Reasonix](https://github.com/esengine/DeepSeek-Reasonix) — 钉记忆、TODO、effort 滑块、session meter

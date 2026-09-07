@@ -1,4 +1,5 @@
 import { MEMORY_TOOL_SPECS } from './memoryTools.js'
+import { SKILL_RESOURCE_TOOL_SPECS } from './skillResourceToolSpecs.js'
 import { BUILTIN_ARTIFACT_TOOL_SPECS } from '../services/builtinArtifactToolSpecs.js'
 import { IMAGE_TOOL_SPECS } from '../adapters/imageTools.js'
 import { MEDIA_TOOL_SPECS } from '../adapters/mediaTools.js'
@@ -508,6 +509,7 @@ export const BUILTIN_TOOL_SCHEMA_CATALOG = {
   ...specsByName(RUN_CODE_TOOL_SPECS),
   ...specsByName(CODEX_APP_SERVER_TOOL_SPECS),
   ...specsByName(MEMORY_TOOL_SPECS),
+  ...specsByName(SKILL_RESOURCE_TOOL_SPECS),
 }
 
 const {

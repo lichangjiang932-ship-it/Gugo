@@ -193,6 +193,8 @@ export async function dispatchTurnEvent(sourceEvent, {
       streaming: 'Receiving model output',
       idle: 'Model output paused; task is still running',
       retrying: 'Retrying model call',
+      compacting: 'Compacting conversation context',
+      compaction_fallback: 'Using a mechanical context summary',
       failed: 'Model call failed',
       completed: 'Model response completed',
     }
@@ -208,7 +210,7 @@ export async function dispatchTurnEvent(sourceEvent, {
         ...streamCursor,
       })
       cursorCommitted = true
-    } else if (['started', 'waiting_first_token', 'idle', 'retrying'].includes(payload.phase)) {
+    } else if (['started', 'waiting_first_token', 'idle', 'retrying', 'compacting', 'compaction_fallback'].includes(payload.phase)) {
       dispatchMessage({
         type: 'UPDATE_LAST_MESSAGE_META',
         payload: { progress: null, modelActivity: { kind: 'model', phase: payload.phase, iteration: payload.iteration } },

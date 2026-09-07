@@ -161,7 +161,10 @@ export async function callModelWithContextRecovery({
   isContextLengthError,
   contextWindow = DEFAULT_CONTEXT_WINDOW,
   locale = 'zh',
-  semanticSummary = false,
+  semanticSummary = 'auto',
+  callSummaryModel = callModel,
+  onCompactionProgress,
+  recoveryCheckpoint,
   signal,
   userId = null,
   sessionId = null,
@@ -176,19 +179,32 @@ export async function callModelWithContextRecovery({
   // Provider-only media and rolling reductions never become checkpoint history.
   const ephemeralSuffix = Array.isArray(ephemeralMessages) ? [...ephemeralMessages] : []
   const compactionOptions = {
-    tools, contextWindow, semanticSummary, callModel, signal, userId, sessionId,
+    tools, contextWindow, semanticSummary, callModel: callSummaryModel, signal, userId, sessionId,
     consumeBudget, activeContextTokens, compactionStrategyResolver, compactionArchivePort,
+    onCompactionProgress,
   }
-  let prepared = await compactForModel({ ...compactionOptions, messages })
+  const resumeAttempt = recoveryCheckpoint?.begin({ messages, tools, contextWindow, activeContextTokens, semanticSummary }) || 0
+  let prepared
+  let sourceMessages = messages
   let lastError = null
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (attempt > 0) {
-      prepared = await compactForModel({
+    const restored = recoveryCheckpoint?.restorePrepared(attempt, sourceMessages, { contextWindow, activeContextTokens })
+    if (attempt < resumeAttempt) {
+      if (!restored) throw Object.assign(new Error('Missing prepared compaction state during recovery'), { code: 'MODEL_REQUEST_CONTEXT_DRIFT', retryable: false })
+      sourceMessages = canonicalContextMessages(restored)
+      continue
+    }
+    recoveryCheckpoint?.enterAttempt(attempt)
+    prepared = restored || await compactForModel({
         ...compactionOptions,
-        messages: canonicalContextMessages(prepared),
-        force: true,
+        ...recoveryCheckpoint?.preparationOptions?.(),
+        messages: sourceMessages,
+        force: attempt > 0,
+        priorArchive: recoveryCheckpoint?.priorArchive(attempt),
         ...(attempt === 2 ? { maxRetainedMessages: 1 } : {}),
       })
+    if (!restored) await recoveryCheckpoint?.savePrepared(attempt, prepared)
+    if (attempt > 0) {
       if (!prepared.compacted && prepared.error) {
         logWarn('compaction.refused', new Error(prepared.error), {
           userId, sessionId, estimatedTokens: prepared.estimatedTokens, threshold: prepared.threshold,
@@ -218,6 +234,7 @@ export async function callModelWithContextRecovery({
       if (signal?.aborted) throw error
       if (!isContextLengthError?.(error)) throw error
       lastError = error
+      sourceMessages = canonicalContextMessages(prepared)
     }
   }
   throw unrecoverableContextError(lastError, prepared, contextWindow, locale)

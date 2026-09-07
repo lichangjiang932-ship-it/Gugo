@@ -5,6 +5,7 @@ import {
 } from './nativeModelProviders.js'
 import { normalizeCacheReadUsage, normalizeModelUsage, normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 import { createEmptyModelResponseError } from './sseLifecycle.js'
+import { getProviderReplayContext } from './providerReplayState.js'
 
 export function stripEmbeddedReasoning(value) {
   const text = String(value || '')
@@ -218,8 +219,12 @@ export function parseModelProviderResponse(data, profile = {}, { providerRequest
   if (responseError) throw responseError
   const adapterSnapshot = getNativeProviderRequestAdapter(providerRequest)
   if (adapterSnapshot || isNativeProviderKind(profile.kind)) {
-    const parsed = parseNativeProviderResponse(data, profile.kind, adapterSnapshot)
-    return { ...parsed, content: stripEmbeddedReasoning(parsed?.content) }
+    const parsed = parseNativeProviderResponse(data, profile.kind, adapterSnapshot, getProviderReplayContext(providerRequest))
+    // Only a provider-bound replay record requires byte-faithful text. Older
+    // unsigned native endpoints may still return embedded/orphaned think
+    // traces; retain their established cleanup contract. nativeContent marks
+    // the native tool protocol, not permission to bypass content cleanup.
+    return { ...parsed, content: parsed.providerReplay ? parsed.content : stripEmbeddedReasoning(parsed?.content), nativeContent: true }
   }
   const toolCalls = extractCompatibleToolCalls(data)
   const responseStatus = data?.status || data?.response?.status

@@ -134,7 +134,7 @@ export function registerDynamicTool({
     if (restore) map.set(name, restore)
     else map.delete(name)
     const scope = normalizeUserScope(userId)
-    if (scope && map.size === 0) userDynamicTools.delete(scope)
+    if (scope && map.size === 0 && userDynamicTools.get(scope) === map) userDynamicTools.delete(scope)
     return true
   }
   return attachRuntimePluginBeginRevoke(dispose, () => {
@@ -177,6 +177,8 @@ export function unregisterUserDynamicTools(userId) {
   const map = userDynamicTools.get(scope)
   if (!map) return 0
   const removed = map.size
+  for (const registration of map.values()) deactivateRegistration(registration)
+  map.clear()
   userDynamicTools.delete(scope)
   return removed
 }

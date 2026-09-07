@@ -99,7 +99,7 @@ export default function useLeftRailController({ authMode, dispatch, location, na
     event.preventDefault(); updateLogin({ loading: true, message: '' })
     try {
       const data = login.mode === 'password' ? await loginWithPassword({ email: login.email, password: login.password }) : await verifyLoginCode({ email: login.email, code: login.code })
-      dispatch({ type: 'LOGIN', payload: { name: data.user.email.split('@')[0], email: data.user.email, avatar: null } })
+      dispatch({ type: 'LOGIN', payload: { id: data.user.id, name: data.user.email.split('@')[0], email: data.user.email, avatar: null } })
       const defaultPath = settingsPathAfterLogin(data.user)
       navigate(data.user.hasPassword === false ? defaultPath : (login.target || defaultPath))
       setLogin(EMPTY_LOGIN)

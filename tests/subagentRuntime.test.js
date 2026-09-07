@@ -864,7 +864,7 @@ test('stale running subagent is marked interrupted and resumes completed tool ou
       return { ok: true }
     },
   })
-  assert.equal(resumed.status, 'completed')
+  assert.equal(resumed.status, 'completed', JSON.stringify({ resultText: resumed.resultText, trace: resumed.trace }))
   assert.equal(resumed.resultText, 'resumed and completed')
   assert.equal(resumedModelCalls, 1)
   assert.equal(toolCalls, 1, 'a completed checkpointed tool must not be replayed')

@@ -66,6 +66,8 @@ function activityLabel(meta, toolCalls, t) {
     return t('chatMessages.toolCallReady', { name: activity.toolName || t('chatMessages.toolUnknown') })
   }
   if (activity?.kind === 'reasoning') return t('chatMessages.activityReasoning')
+  if (activity?.kind === 'model' && activity.phase === 'compacting') return t('chatMessages.activityCompacting')
+  if (activity?.kind === 'model' && activity.phase === 'compaction_fallback') return t('chatMessages.activityCompactionFallback')
   if (activity?.kind === 'model' && activity.phase === 'started') return t('chatMessages.activityModelConnecting')
   if (activity?.kind === 'model' && activity.phase === 'waiting_first_token') return t('chatMessages.activityWaitingFirstOutput')
   if (activity?.kind === 'model' && activity.phase === 'idle') return t('chatMessages.activityModelPaused')

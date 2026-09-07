@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { isPlainObject, safeStringify, toolError } from './toolCallPrimitives.js'
+import { cloneProviderReplay, geminiReplayParts } from '../adapters/providerReplayState.js'
 
 function createCallId() {
   return `call-${randomUUID()}`
@@ -380,13 +381,15 @@ export function validateToolCall(call, toolSpecs = [], { allowUnknown = false } 
   return null
 }
 
-export function buildAssistantToolCallsMessage(calls, content = '', { reasoning = '' } = {}) {
-  return {
+export function buildAssistantToolCallsMessage(calls, content = '', { reasoning = '', providerReplay: replayState = null } = {}) {
+  const providerReplay = cloneProviderReplay(replayState)
+  const message = {
     role: 'assistant',
     content: content || null,
+    ...(providerReplay ? { providerReplay } : {}),
     // Replayed by default for OpenAI-compatible providers; Anthropic/Gemini keep it
     // stripped unless the deployment explicitly sets MODEL_REASONING_RETENTION=1.
-    ...(typeof reasoning === 'string' && reasoning.trim() ? { reasoning_content: reasoning } : {}),
+    ...(!providerReplay && typeof reasoning === 'string' && reasoning.trim() ? { reasoning_content: reasoning } : {}),
     tool_calls: calls.map((call) => ({
       id: call.id,
       type: 'function',
@@ -396,4 +399,9 @@ export function buildAssistantToolCallsMessage(calls, content = '', { reasoning 
       },
     })),
   }
+  // Validate before execution, not after a side effect has already occurred.
+  // Provider-signed history must contain the model's original arguments;
+  // schema defaults and approval edits belong to the execution record.
+  if (providerReplay) geminiReplayParts(message, providerReplay)
+  return message
 }

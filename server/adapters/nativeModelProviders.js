@@ -5,6 +5,7 @@ import {
 } from '../core/runtimeCapabilityState.js'
 import { prepareOutboundMessages, retainReasoningForEnv } from './outboundMessagePipeline.js'
 import { buildBuiltInNativeProviderRequest } from './nativeModelProviderRequests.js'
+import { appendGeminiReplayParts, bindProviderReplayContext, captureGeminiReplay, createGeminiReplayCollector, finishGeminiReplay } from './providerReplayState.js'
 import {
   getModelProviderAdapter,
   hasModelProviderAdapter,
@@ -86,6 +87,7 @@ export function buildNativeProviderRequest(args = {}) {
     modelName: args.config?.modelName,
     providerKind: args.profile?.kind,
     providerId: args.config?.providerId,
+    baseUrl: args.config?.baseUrl,
     ephemeralContext: args.ephemeralContext,
     retainReasoning: retainReasoningForEnv(args.env, { providerKind: args.profile?.kind }),
   })
@@ -93,7 +95,7 @@ export function buildNativeProviderRequest(args = {}) {
   const prepared = { ...args, messages }
   const adapter = getEffectiveModelProviderAdapter(args.profile?.kind)
   if (adapter) return captureRequestAdapter(adapter.buildRequest(prepared), adapter)
-  return buildBuiltInNativeProviderRequest(prepared)
+  return bindProviderReplayContext(buildBuiltInNativeProviderRequest(prepared), prepared)
 }
 
 function commonUsage({ prompt, completion, total, cached } = {}, { allowPartial = false } = {}) {
@@ -245,7 +247,7 @@ export function normalizeNativeProviderFinishReason(kind, value, {
   throw providerStopReasonError(providerKind, raw)
 }
 
-export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = null) {
+export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = null, replayContext = null) {
   const adapter = adapterSnapshot || getEffectiveModelProviderAdapter(kind)
   if (adapter) return adapter.parseResponse(data, { kind })
   if (kind === 'anthropic') {
@@ -265,12 +267,14 @@ export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = n
   if (kind !== 'gemini') throw new Error(`Unsupported native provider kind: ${kind || 'unknown'}`)
   const candidate = data?.candidates?.[0]
   const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : []
+  const providerReplay = captureGeminiReplay(parts, replayContext)
   const toolCalls = parts.filter((part) => part?.functionCall).map((part, index) => normalizedToolCall({
     id: part.functionCall.id, name: part.functionCall.name, args: part.functionCall.args,
   }, index))
   return {
     content: parts.filter((part) => typeof part?.text === 'string' && !part.thought).map((part) => part.text).join(''),
     toolCalls,
+    ...(providerReplay ? { providerReplay } : {}),
     usage: extractNativeProviderUsage(data, kind),
     finishReason: normalizeNativeProviderFinishReason(
       kind,
@@ -280,7 +284,7 @@ export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = n
   }
 }
 
-export function createNativeProviderStreamState(kind = '', adapterSnapshot = null) {
+export function createNativeProviderStreamState(kind = '', adapterSnapshot = null, replayContext = null) {
   const adapter = adapterSnapshot || getEffectiveModelProviderAdapter(kind)
   if (adapter) {
     if (typeof adapter.createStreamState !== 'function') {
@@ -295,6 +299,7 @@ export function createNativeProviderStreamState(kind = '', adapterSnapshot = nul
     return state
   }
   const state = { kind, toolCalls: new Map(), usage: null, finishReason: null, finished: false }
+  if (kind === 'gemini') state.replayCollector = createGeminiReplayCollector(replayContext)
   Object.defineProperty(state, CUSTOM_STREAM_ADAPTER, { value: null })
   return state
 }
@@ -333,14 +338,16 @@ function finishEvents(state, { requireFinishReason = false } = {}) {
   }
   state.finished = true
   const toolCalls = [...state.toolCalls.values()]
+  const providerReplay = state.kind === 'gemini' ? finishGeminiReplay(state.replayCollector) : null
   return toolCalls.length
     ? [{
         type: 'tool_calls',
         toolCalls,
         finishReason: state.finishReason === 'length' ? 'length' : 'tool_calls',
         usage: state.usage,
+        ...(providerReplay ? { providerReplay } : {}),
       }]
-    : [{ type: 'finish', finishReason: state.finishReason || 'stop', usage: state.usage }]
+    : [{ type: 'finish', finishReason: state.finishReason || 'stop', usage: state.usage, ...(providerReplay ? { providerReplay } : {}) }]
 }
 
 export function consumeNativeProviderStreamPayload(data, state) {
@@ -404,13 +411,14 @@ export function consumeNativeProviderStreamPayload(data, state) {
     events.push({ type: 'usage', usage: state.usage })
   }
   const parts = data?.candidates?.[0]?.content?.parts || []
+  appendGeminiReplayParts(state.replayCollector, parts)
   for (const part of parts) {
     if (part.thought && part.text) events.push({ type: 'reasoning', delta: part.text })
     else if (part.text) events.push({ type: 'text', delta: part.text })
   }
   const toolCalls = parts.filter((part) => part?.functionCall).map((part, index) => normalizedToolCall({
     id: part.functionCall.id, name: part.functionCall.name, args: part.functionCall.args,
-  }, index))
+  }, state.toolCalls.size + index))
   for (const call of toolCalls) {
     const index = state.toolCalls.size
     state.toolCalls.set(index, call)

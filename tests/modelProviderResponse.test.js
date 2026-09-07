@@ -9,6 +9,9 @@ import {
 } from '../server/adapters/modelProxy.js'
 import { modelRequestOutcomeUnknown } from '../server/adapters/modelRequestOutcome.js'
 import { isRetryableError } from '../server/utils/modelRetry.js'
+import { buildModelProviderRequest } from '../server/adapters/modelRequestBuilder.js'
+import { modelAssistantHistoryMessage } from '../server/services/loop/modelAssistantHistory.js'
+import { callStreamingModelWithTools } from '../server/adapters/modelInvocationRuntime.js'
 
 test('parseModelProviderResponse removes complete embedded think blocks from compatible responses', () => {
   const parsed = parseModelProviderResponse({
@@ -47,6 +50,111 @@ test('parseModelProviderResponse removes orphaned closing think traces from nati
   assert.equal(parsed.finishReason, 'stop')
   assert.equal(parsed.usage.totalTokens, 13)
 })
+
+test('unsigned native thought blocks stay separate and do not disable legacy text cleanup', () => {
+  const responses = [
+    [{ kind: 'anthropic' }, { content: [
+      { type: 'thinking', thinking: 'PRIVATE_NATIVE_THOUGHT' },
+      { type: 'text', text: 'orphaned private trace\n</think>\nPublic answer.' },
+    ], stop_reason: 'end_turn' }],
+    [{ kind: 'gemini' }, { candidates: [{ content: { parts: [
+      { text: 'PRIVATE_NATIVE_THOUGHT', thought: true },
+      { text: 'orphaned private trace\n</think>\nPublic answer.' },
+    ] }, finishReason: 'STOP' }] }],
+  ]
+  for (const [profile, data] of responses) {
+    const parsed = parseModelProviderResponse(data, profile)
+    assert.equal(parsed.content, 'Public answer.')
+    assert.equal(parsed.providerReplay, undefined)
+    assert.equal(parsed.reasoning_content, undefined)
+  }
+})
+
+test('a request-bound Gemini signature preserves literal think text while native thought remains in its own part', () => {
+  const config = { baseUrl: 'https://generativelanguage.googleapis.com/v1beta', modelName: 'gemini-3-pro-preview', providerId: 'offline-fixture' }
+  const profile = { kind: 'gemini', supportsTools: true }
+  const user = { role: 'user', content: 'Explain this parser example.' }
+  const literal = 'Literal parser example: </think> keep this whole explanation.'
+  const parts = [
+    { text: 'PRIVATE_NATIVE_THOUGHT', thought: true, thoughtSignature: 'SYNTHETIC_THOUGHT_SIGNATURE' },
+    { text: literal, thoughtSignature: 'SYNTHETIC_LITERAL_SIGNATURE' },
+  ]
+  const providerRequest = buildModelProviderRequest({ config, profile, messages: [user] })
+  const parsed = parseModelProviderResponse({ candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP' }] }, profile, { providerRequest })
+  assert.equal(parsed.content, literal)
+  assert.deepEqual(parsed.providerReplay.parts, parts)
+  assert.equal(parsed.reasoning_content, undefined)
+  const assistant = modelAssistantHistoryMessage(parsed.content, parsed)
+  const replay = JSON.parse(buildModelProviderRequest({ config, profile, messages: [user, assistant, { role: 'user', content: 'Continue.' }] }).init.body)
+  assert.deepEqual(replay.contents.find((entry) => entry.role === 'model').parts, parts)
+})
+
+for (const kind of ['anthropic', 'gemini']) {
+  test(`unsigned ${kind} stream retains legacy terminal cleanup and separates structured native thought`, async () => {
+    const text = []
+    const reasoning = []
+    const frames = kind === 'anthropic' ? [
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'PRIVATE_NATIVE_THOUGHT' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'orphaned private trace\n</thi' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'nk>\nPublic answer.' } },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' } }, { type: 'message_stop' },
+    ] : [
+      { candidates: [{ content: { parts: [{ text: 'PRIVATE_NATIVE_THOUGHT', thought: true }] } }] },
+      { candidates: [{ content: { parts: [{ text: 'orphaned private trace\n</thi' }] } }] },
+      { candidates: [{ content: { parts: [{ text: 'nk>\nPublic answer.' }] }, finishReason: 'STOP' }] },
+    ]
+    const response = await callStreamingModelWithTools({
+      messages: [{ role: 'user', content: 'Reply publicly.' }], tools: [], userId: null,
+      env: { MODEL_BASE_URL: kind === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://generativelanguage.googleapis.com/v1beta', MODEL_NAME: kind === 'anthropic' ? 'claude-fixture' : 'gemini-3-pro-preview', MODEL_API_KEY: 'offline-fixture-only' },
+      fetchImpl: async () => new Response(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } }),
+      onTextDelta: (delta) => text.push(delta), onReasoningDelta: (delta) => reasoning.push(delta),
+    })
+    assert.equal(response.content, 'Public answer.')
+    assert.equal(text.join('').includes('PRIVATE_NATIVE_THOUGHT'), false)
+    assert.equal(text.join('').endsWith('Public answer.'), true)
+    assert.deepEqual(reasoning, ['PRIVATE_NATIVE_THOUGHT'])
+    assert.equal(response.reasoning, undefined)
+    assert.equal(response.providerReplay, undefined)
+  })
+}
+
+for (const kind of ['anthropic', 'gemini']) {
+  test(`${kind} native text arrives before the terminal frame and signed literal text stays exact`, async () => {
+    const first = kind === 'anthropic' ? 'Hello ' : 'Literal </think> '
+    const last = kind === 'anthropic' ? 'world.' : 'kept.'
+    let controller
+    let terminalSent = false
+    let receivedBeforeTerminal = false
+    const stream = new ReadableStream({ start(value) { controller = value } })
+    const frame = (value) => new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`)
+    const finish = () => {
+      if (terminalSent) return
+      terminalSent = true
+      for (const value of kind === 'anthropic' ? [
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: last } },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' } }, { type: 'message_stop' },
+      ] : [{ candidates: [{ content: { parts: [{ text: last, thoughtSignature: 'SYNTHETIC_LATE_SIGNATURE' }] }, finishReason: 'STOP' }] }]) controller.enqueue(frame(value))
+      controller.close()
+    }
+    // A terminal-buffering regression still terminates this offline fixture,
+    // but fails the assertion that the first text arrived beforehand.
+    const timer = setTimeout(finish, 5_000)
+    controller.enqueue(frame(kind === 'anthropic'
+      ? { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: first } }
+      : { candidates: [{ content: { parts: [{ text: first }] } }] }))
+    try {
+      const response = await callStreamingModelWithTools({
+        messages: [{ role: 'user', content: 'Stream an answer.' }], tools: [], userId: null,
+        env: { MODEL_BASE_URL: kind === 'anthropic' ? 'https://api.anthropic.com/v1' : 'https://generativelanguage.googleapis.com/v1beta', MODEL_NAME: kind === 'anthropic' ? 'claude-fixture' : 'gemini-3-pro-preview', MODEL_API_KEY: 'offline-fixture-only' },
+        fetchImpl: async () => new Response(stream, { headers: { 'content-type': 'text/event-stream' } }),
+        onTextDelta: (delta) => { if (!terminalSent) { assert.equal(delta, first); receivedBeforeTerminal = true; finish() } },
+      })
+      assert.equal(receivedBeforeTerminal, true)
+      assert.equal(response.content, first + last)
+      if (kind === 'gemini') assert.equal(response.providerReplay.parts[0].text, first + last)
+    } finally { clearTimeout(timer) }
+  })
+}
 
 test('compatible response parsing accepts content arrays and Responses-style output', () => {
   assert.equal(parseOpenAICompatibleResponse({

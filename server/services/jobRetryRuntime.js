@@ -1,15 +1,9 @@
-import {
-  assertModelInvocationRetrySafe,
-  normalizeModelInvocation,
-} from './loop/modelInvocationCheckpoint.js'
+import { assertModelInvocationRetrySafe } from './loop/modelInvocationCheckpoint.js'
+import { isManuallyResolvedModelInvocation, readModelInvocationSlots } from './modelRequestInvocationSlots.js'
 
 function mustPreserveBudgetForManualModelResolution(checkpoint) {
-  const invocation = normalizeModelInvocation(checkpoint?.state?.modelInvocation)
-  return Boolean(
-    ['completed', 'not_sent'].includes(invocation?.status)
-    && invocation.reconciliation?.source === 'manual'
-    && invocation.reconciliation.outcome === invocation.status
-  )
+  return readModelInvocationSlots(checkpoint?.state)
+    .some(({ invocation }) => isManuallyResolvedModelInvocation(invocation))
 }
 
 export function loadRetryCheckpoint({
@@ -20,10 +14,10 @@ export function loadRetryCheckpoint({
   modelSnapshot,
 }) {
   const checkpoint = runtimeCore.checkpoint.load({ jobId, stepId, userId })
-  assertModelInvocationRetrySafe(checkpoint?.state?.modelInvocation, {
-    stepId,
-    ...modelSnapshot,
-  })
+  const binding = { stepId, ...modelSnapshot }
+  for (const { invocation } of readModelInvocationSlots(checkpoint?.state, binding)) {
+    assertModelInvocationRetrySafe(invocation, binding)
+  }
   return checkpoint
 }
 

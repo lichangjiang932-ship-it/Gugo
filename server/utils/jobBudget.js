@@ -131,11 +131,12 @@ function mustStopForModelBudget(status, allowOverBudget) {
 /** Account for one real provider request recovered from an in-flight checkpoint. */
 export function recordRecoveredModelResult(budget, result, {
   allowOverBudget = false,
+  modelCallAlreadyCounted = false,
 } = {}) {
   // A recovered response proves the provider call already happened. Account
   // for it even when it crosses a configured limit, then surface the limit as
   // a terminal error carrying the authoritative partial result.
-  const callStatus = budget?.consumeModelCall?.({ allowOverBudget: true }) || { ok: true }
+  const callStatus = modelCallAlreadyCounted ? { ok: true } : budget?.consumeModelCall?.({ allowOverBudget: true }) || { ok: true }
   const usageStatus = budget?.trackModelUsage?.(result?.usage, result?.costUsd) || { ok: true }
   const exceededStatuses = [callStatus, usageStatus].filter((status) => status?.ok === false)
   const exceeded = exceededStatuses[0]

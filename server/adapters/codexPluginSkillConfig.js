@@ -34,4 +34,4 @@ export const RUNTIME_MARKERS = Object.freeze([
   'scripts', 'commands', 'bin', 'preflight', 'workflows', 'hooks.json',
 ])
 export const RUNTIME_MARKER_SET = new Set(RUNTIME_MARKERS)
-export const SKILL_RESOURCE_REFERENCE_RE = /(?:^|[\s("'`<[])(?:\.\.?[\\/])?(references?|assets|templates)[\\/]/gim
+export const SKILL_RESOURCE_REFERENCE_RE = /(?:^|[\s("'`<[])(?:\.\.?[\\/])?(references?|assets|templates|scripts|commands|bin|preflight|workflows)[\\/]/gim

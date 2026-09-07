@@ -1,4 +1,5 @@
 import { normalizeChatTurnIntentMode } from '../../utils/executionIntent.js'
+import { userMessageText } from './userMessageText.js'
 
 function initializeArtifactContracts(s) {
   const {
@@ -147,12 +148,9 @@ function initializeExecutionIntent(s) {
     shouldRequireExecution,
   } = s.d
   s.generatedWorkflowStep = ['plan', 'verify', 'finalize'].includes(String(s.step?.kind || ''))
-  s.executionIntentText = String(
-    s.job?.userPrompt
-      || (s.generatedWorkflowStep ? s.job?.prompt : s.currentUserMessage?.content)
-      || s.job?.prompt
-      || '',
-  )
+  s.executionIntentText = userMessageText(s.job?.userPrompt)
+    || (s.generatedWorkflowStep ? userMessageText(s.job?.prompt) : s.currentUserText)
+    || userMessageText(s.job?.prompt)
   if (s.job?.origin === 'chat') {
     s.intentMode = normalizeChatTurnIntentMode(s.intentMode, s.executionIntentText)
   }

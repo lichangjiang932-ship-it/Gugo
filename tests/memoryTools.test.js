@@ -55,8 +55,8 @@ test('★ 同标题覆盖而不是堆重复条目', () => {
 })
 
 test('中文标题不会因为 slug 归一而互相覆盖', () => {
-  // slug 会把中文全剥掉 → 这些标题都会变成同一个 'memory'。
-  // 用 slug 查重会让它们互相覆盖,必须按标题精确比对。
+  // Old databases may still contain colliding 'memory' slugs. Write identity
+  // follows scope/type/title, not the display link used to read a memory.
   write('用户偏好', 'A')
   write('项目背景', 'B')
   write('参考资料', 'C')

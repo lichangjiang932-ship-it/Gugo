@@ -9,6 +9,9 @@ import {
 import { installArtifactSteeringContract } from './runtime-initializeArtifactSteering.js'
 import { installTerminalCompletion } from './runtime-initializeTerminalCompletion.js'
 import { discardContinuedAnswer } from './outputContinuation.js'
+import { assertContextRecoveryActive } from '../contextCompactionState.js'
+import { SEMANTIC_SUMMARY_CACHE_HIT, semanticSummaryError } from '../contextSemanticSummaryPolicy.js'
+import { assertCompactionRequestSettled, assertMainRequestSettled, cachedCompactionResponse, cacheCompactionResponse, compactionInvocationState, createCompactionRecoveryCheckpoint, restoreCompactionCheckpoint } from './compactionCheckpoint.js'
 
 export function resolveExecutionBudgetOptions(job, restoredBudget) {
   if (!restoredBudget || typeof restoredBudget !== 'object') return restoredBudget
@@ -104,7 +107,7 @@ async function prepareTrackedInvocation(s, context, preparedRequest, attempt) {
     s.modelInvocation = resolution.invocation || null
     let recoveredBudgetError = null
     if (resolution.kind === 'replay' && resolution.invocation?.usageApplied === false) {
-      try { recordRecoveredModelResult(s.budget, resolution.response, context.budgetOptions) }
+      try { recordRecoveredModelResult(s.budget, resolution.response, { ...context.budgetOptions, modelCallAlreadyCounted: resolution.invocation.callBudgetApplied === true }) }
       catch (error) { recoveredBudgetError = error }
       s.modelInvocation = { ...resolution.invocation, usageApplied: true }
     }
@@ -195,10 +198,15 @@ async function executeTrackedInvocation(s, context, preparedRequest) {
   }
   const invocation = context.preparedInvocation?.invocation
   try {
+    const summaryBudget = context.consumeSummaryBudget?.(1)
+    if (summaryBudget?.ok === false) {
+      throw Object.assign(semanticSummaryError('SUMMARY_BUDGET_EXCEEDED', summaryBudget.reason || 'Semantic summary budget exceeded'), { modelRequestOutcome: 'not_sent' })
+    }
     const response = await runWithModelBudget(
       s.budget,
       () => {
         context.assertActive()
+        s.modelInvocation = { ...s.modelInvocation, callBudgetApplied: true }
         return s.runModel(preparedRequest)
       },
       context.budgetOptions,
@@ -369,7 +377,25 @@ async function callTrackedModel(s, options) {
       messages,
       ephemeralMessages,
       tools,
-      callModel: (modelRequest) => invokeModelWithCompatibilityFallback(s, context, modelRequest),
+      callModel: (modelRequest) => {
+        assertCompactionRequestSettled(s)
+        return invokeModelWithCompatibilityFallback(s, context, modelRequest)
+      },
+      callSummaryModel: async (modelRequest) => {
+        const assertSummaryActive = () => { assertActive(); assertContextRecoveryActive(modelRequest.signal) }
+        assertSummaryActive()
+        const cached = cachedCompactionResponse(s, modelRequest)
+        if (cached) return { ...cached, [SEMANTIC_SUMMARY_CACHE_HIT]: true }
+        assertMainRequestSettled(s)
+        const summaryContext = { ...context, assertActive: assertSummaryActive, budgetOptions: { allowOverBudget: false }, consumeSummaryBudget: consumeBudget, preparedInvocation: null, forcedFallbackUsed: false, heartbeat: { beginRequest: async () => {} } }
+        const response = await invokeModelWithCompatibilityFallback(compactionInvocationState(s), summaryContext, modelRequest)
+        assertSummaryActive()
+        await cacheCompactionResponse(s, modelRequest, response)
+        assertSummaryActive()
+        return summaryContext.preparedInvocation?.cached ? { ...response, [SEMANTIC_SUMMARY_CACHE_HIT]: true } : response
+      },
+      recoveryCheckpoint: createCompactionRecoveryCheckpoint(s),
+      onCompactionProgress: (progress) => s.onModelPhase?.({ phase: progress.phase === 'fallback' ? 'compaction_fallback' : 'compacting', iteration: s.iter, compaction: progress }),
       isContextLengthError,
       contextWindow: s.contextWindow,
       locale: s.job?.locale,
@@ -378,7 +404,6 @@ async function callTrackedModel(s, options) {
       userId: s.job?.userId || null,
       sessionId: s.recoverySessionId,
       compactionArchivePort: s.compactionArchivePort,
-      ...(typeof consumeBudget === 'function' ? { consumeBudget } : {}),
       ...(toolChoice !== undefined ? { toolChoice } : {}),
       onTextDelta: async (text, metadata = {}) => {
         if (text) await heartbeat.recordDelta()
@@ -399,6 +424,9 @@ async function callTrackedModel(s, options) {
       })
       assertActive()
     }
+    // The completed model-response checkpoint already contains the recipe.
+    // A subsequent logical request in this live iteration starts a new scope.
+    s.compactionCheckpoint = restoreCompactionCheckpoint()
     return { ...request, messages: stripEphemeralToolMediaMessages(request.messages) }
   } finally {
     await heartbeat.stop()

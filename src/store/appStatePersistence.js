@@ -1,6 +1,7 @@
 import { DEFAULT_STORAGE_KEY, sanitizeForPersist } from './persistDegradation.js'
 import { readPersistedPayload } from './stateSync.js'
 import { sanitizeRetiredBrowserAccountFields } from './browserSnapshotSanitizer.js'
+import { STREAM_RESUME_DISMISSALS_KEY } from '../lib/streamResumeDismissals.js'
 
 export const LEGACY_STATE_STORAGE_KEY = DEFAULT_STORAGE_KEY
 export const SETTINGS_STORAGE_KEY = 'your-model-atelier:settings:v2'
@@ -175,6 +176,7 @@ export function readStateSyncSignal(raw) {
 }
 
 export function clearLocalPersistence(storage, { preserveClearEpoch = false } = {}) {
+  storage.removeItem(STREAM_RESUME_DISMISSALS_KEY)
   storage.removeItem(SETTINGS_STORAGE_KEY)
   storage.removeItem(LEGACY_STATE_STORAGE_KEY)
   storage.removeItem(STATE_SYNC_SIGNAL_KEY)

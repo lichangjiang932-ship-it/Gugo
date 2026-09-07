@@ -143,6 +143,7 @@ export function fingerprintModelRequest(request = {}, {
     maxTokens: request.maxTokens ?? request.max_tokens ?? null,
     responseFormat: request.responseFormat ?? request.response_format ?? null,
     parameters: request.parameters ?? null,
+    ...(request.requestPurpose ? { requestPurpose: String(request.requestPurpose) } : {}),
   }
   return createHash('sha256').update(stableJson(projection)).digest('hex')
 }
@@ -166,6 +167,10 @@ export function normalizeModelInvocation(value) {
     iteration: Math.max(0, Number(value.iteration) || 0),
     attempt: Math.max(1, Number(value.attempt) || 1),
     status,
+  }
+  if (Object.hasOwn(value, 'callBudgetApplied')) {
+    if (typeof value.callBudgetApplied !== 'boolean') return null
+    normalized.callBudgetApplied = value.callBudgetApplied
   }
   if (version >= 2) {
     const idempotencyKey = String(value.idempotencyKey || '').trim()

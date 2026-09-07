@@ -1,4 +1,5 @@
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
+import { resolveSemanticSummaryPolicy } from '../contextSemanticSummaryPolicy.js'
 
 // Exact legacy host records, not a substring/marker match: quoted examples,
 // user content and other system safety instructions must survive recovery.
@@ -31,7 +32,7 @@ function initializeConversationContext(s) {
     : s.job?.id && s.step?.id
       ? `job:${s.job.id}:${s.step.id}`
       : null
-  s.semanticSummary = false
+  s.semanticSummary = resolveSemanticSummaryPolicy(s.context.model.semanticSummary, process.env)
   s.outputDirectoryContext = {}
   try {
     s.outputDirectoryContext = {

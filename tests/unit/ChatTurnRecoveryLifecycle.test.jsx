@@ -6,6 +6,8 @@ import { createRoot } from 'react-dom/client'
 
 import { HashRouter } from '../../src/lib/router.jsx'
 import useChatTurnRecovery from '../../src/pages/ChatSplit/useChatTurnRecovery.js'
+import { STREAM_RESUME_DISMISSALS_KEY, STREAM_RESUME_DISMISSAL_TTL_MS, streamResumeOwnerScope, writeStreamResumeDismissal } from '../../src/lib/streamResumeDismissals.js'
+import { streamResumeDismissalKey } from '../../src/pages/ChatSplit/streamResumeState.js'
 
 const noop = () => {}
 const translate = (key) => key
@@ -30,8 +32,11 @@ function failureMessage(turnId = 'turn-a', sequence = 7, meta = {}) {
   }
 }
 
-function snapshot(messages, { sessionId = 'session-a', otherSessions = [] } = {}) {
+function snapshot(messages, { sessionId = 'session-a', otherSessions = [], userId = 'user-a', backendId = 'sqlite:audit' } = {}) {
   return {
+    isLoggedIn: true,
+    user: { id: userId },
+    sessionCatalogSource: { backendInstanceId: backendId },
     activeSessionId: sessionId,
     sessions: [{ id: sessionId, messages }, ...otherSessions],
   }
@@ -101,6 +106,16 @@ async function mountRecovery(context, initialState) {
   return {
     render,
     abortCtrlRef,
+    get recovery() { return recovery },
+    async remount() {
+      await act(async () => root.render(<div>Another route</div>))
+      await render(stateRef.current)
+    },
+    async notifyStorage() {
+      await act(async () => window.dispatchEvent(new dom.window.StorageEvent('storage', {
+        key: STREAM_RESUME_DISMISSALS_KEY,
+      })))
+    },
     get available() { return recovery.resumeAvailable },
     get manualRetryAvailable() { return recovery.manualRetryAvailable },
     async call(method, ...args) { await act(async () => recovery[method](...args)) },
@@ -199,4 +214,65 @@ test('manual recovery without partial output remains visible for the latest fail
   assert.equal(view.available, false)
   await view.render(snapshot([{ ...message, meta: { ...message.meta, serverLastSequence: 14 } }]))
   assert.equal(view.manualRetryAvailable, true)
+})
+
+test('dismissal survives route remount and refresh while account and server-source boundaries stay isolated', async (context) => {
+  const initial = snapshot([failureMessage()])
+  const view = await mountRecovery(context, initial)
+  await view.call('handleDismissResume')
+  await view.remount()
+  assert.equal(view.available, false)
+  const oldHandler = view.recovery.handleTurnResult
+  await view.render(snapshot([failureMessage()], { userId: 'user-b' }))
+  assert.equal(view.available, true)
+  await act(async () => oldHandler({ sessionId: 'session-a', turnId: 'turn-a', result: {} }))
+  assert.equal(view.available, true, 'an old account callback cannot clear the new account state')
+  await view.render(snapshot([failureMessage()], { backendId: 'sqlite:other-install' }))
+  assert.equal(view.available, true)
+  await view.render(structuredClone(initial))
+  assert.equal(view.available, false)
+  await view.render(snapshot([failureMessage('turn-a', 8)]))
+  assert.equal(view.available, true)
+})
+
+test('another window can dismiss the same failure without remounting this chat', async (context) => {
+  const state = snapshot([failureMessage()])
+  const view = await mountRecovery(context, state)
+  assert.equal(view.available, true)
+  writeStreamResumeDismissal(window.localStorage, {
+    scope: streamResumeOwnerScope(state),
+    key: streamResumeDismissalKey(state.sessions[0].messages[0], { sessionId: state.activeSessionId }),
+  })
+  await view.notifyStorage()
+  assert.equal(view.available, false)
+  window.localStorage.removeItem(STREAM_RESUME_DISMISSALS_KEY)
+  await view.notifyStorage()
+  assert.equal(view.available, true)
+})
+
+test('a dismissal expires even when the same chat remains mounted', async (context) => {
+  let now = 1_000_000
+  let expire
+  const expiryTimer = {}
+  const originalTimeout = globalThis.setTimeout
+  const originalClear = globalThis.clearTimeout
+  context.mock.method(Date, 'now', () => now)
+  context.mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
+    if (delay > 10_000) {
+      assert.ok(delay <= 2_147_483_647)
+      expire = callback
+      return expiryTimer
+    }
+    return originalTimeout(callback, delay, ...args)
+  })
+  context.mock.method(globalThis, 'clearTimeout', (timer) => {
+    if (timer !== expiryTimer) originalClear(timer)
+  })
+  const view = await mountRecovery(context, snapshot([failureMessage()]))
+  await view.call('handleDismissResume')
+  assert.equal(view.available, false)
+  assert.equal(typeof expire, 'function')
+  now += STREAM_RESUME_DISMISSAL_TTL_MS + 1
+  await act(async () => expire())
+  assert.equal(view.available, true)
 })

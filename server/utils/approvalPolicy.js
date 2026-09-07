@@ -141,6 +141,7 @@ const NEVER = new Set(NEVER_APPROVE_TOOLS)
 // model. Network/connector/dynamic tools fail closed even when they describe
 // themselves as read-only. The same allowlist is also enforced at execution.
 const PLAN_LOCAL_READ_TOOLS = new Set([
+  'read_skill_resource',
   'reflect',
   'request_clarification',
   'request_directory',

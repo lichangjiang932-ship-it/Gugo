@@ -59,6 +59,9 @@ test('Web release staging contains a complete runnable distribution and is repea
   assert.match(readFrom(first.stageDir, 'README-WEB.md'), /node bin\/yma-cli\.js --help/)
   assert.equal(fs.existsSync(path.join(first.stageDir, 'bin', 'yma-cli.js')), true)
   assert.equal(fs.existsSync(path.join(first.stageDir, 'docs', 'CLI.md')), true)
+  assert.equal(fs.existsSync(path.join(first.stageDir, 'docs', 'CONTEXT_COMPACTION.md')), true)
+  assert.match(readFrom(first.stageDir, 'README-WEB.md'), /docs\/CONTEXT_COMPACTION\.md/)
+  assert.match(readFrom(first.stageDir, 'README-WEB.md'), /lossy continuation aids/)
   assert.equal(execFileSync(process.execPath, [path.join(first.stageDir, 'bin', 'yma-cli.js'), '--version'], {
     encoding: 'utf8',
   }).trim(), '1.2.3')

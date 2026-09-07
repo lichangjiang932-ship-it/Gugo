@@ -16,6 +16,7 @@ export const WEB_RELEASE_ENTRIES = Object.freeze([
   'bin',
   'dist',
   'docs/CLI.md',
+  'docs/CONTEXT_COMPACTION.md',
   'server',
   'shared',
   'seed',
@@ -61,6 +62,12 @@ release directory:
 
 See \`docs/CLI.md\` for authentication, service commands, headless Agent runs,
 output formats, and exit codes.
+
+## Long conversations
+
+See \`docs/CONTEXT_COMPACTION.md\` for on-demand semantic summaries, their model
+costs and budgets, opt-out controls, cancellation, and checkpoint recovery.
+Summaries are lossy continuation aids, not an unlimited-memory guarantee.
 
 Runtime data is created outside the release files according to \`APP_DATA_DIR\`
 and \`APP_DB_PATH\`. Do not put credentials into this archive.

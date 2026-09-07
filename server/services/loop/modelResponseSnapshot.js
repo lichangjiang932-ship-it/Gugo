@@ -1,5 +1,6 @@
 import { normalizeOptionalUsageNumber } from '../../../shared/modelUsage.js'
 import { normalizeToolLoopModelResponse } from '../../core/toolLoopModelResponse.js'
+import { cloneProviderReplay } from '../../adapters/providerReplayState.js'
 
 function cloneJson(value, fallback) {
   try { return JSON.parse(JSON.stringify(value)) } catch { return fallback }
@@ -11,9 +12,12 @@ export function snapshotModelResponse(response) {
   }
   response = normalizeToolLoopModelResponse(response)
   const costUsd = normalizeOptionalUsageNumber(response.costUsd)
+  const providerReplay = cloneProviderReplay(response.providerReplay)
   return {
     content: String(response.content ?? ''),
     toolCalls: cloneJson(Array.isArray(response.toolCalls) ? response.toolCalls : [], []),
+    ...(providerReplay ? { providerReplay } : {}),
+    ...(response.nativeContent === true ? { nativeContent: true } : {}),
     ...(response.usage && typeof response.usage === 'object'
       ? { usage: cloneJson(response.usage, null) }
       : {}),

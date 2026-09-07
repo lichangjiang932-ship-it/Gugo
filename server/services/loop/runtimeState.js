@@ -1,4 +1,5 @@
 import { shouldInheritExecutionIntent } from '../chatToolSelection.js'
+import { userMessageText } from './userMessageText.js'
 import { STATUS_INQUIRY_PROMPT } from '../../utils/executionIntent.js'
 import {
   extractMutationTargets,
@@ -150,6 +151,9 @@ export function synchronizeCheckpointToolCallMessages(messages, calls) {
   if (argumentsById.size === 0) return messages
   return (Array.isArray(messages) ? messages : []).map((message) => {
     if (message?.role !== 'assistant' || !Array.isArray(message.tool_calls)) return message
+    // A signature authenticates the provider's original message, not the
+    // effective execution arguments. Keep those in the tool checkpoint/result.
+    if (message.providerReplay) return message
     let changed = false
     const toolCalls = message.tool_calls.map((toolCall) => {
       const argumentsText = argumentsById.get(String(toolCall?.id || '').trim())
@@ -176,15 +180,7 @@ function parseHistoricalToolObject(value) {
 }
 
 export function normalizeRepeatedUserRequest(value) {
-  const text = typeof value === 'string'
-    ? value
-    : Array.isArray(value)
-      ? value
-          .filter((part) => ['text', 'input_text'].includes(part?.type) && typeof part?.text === 'string')
-          .map((part) => part.text)
-          .join('\n')
-      : ''
-  return text.trim().replace(/\s+/g, ' ')
+  return userMessageText(value).trim().replace(/\s+/g, ' ')
 }
 
 export function isExplicitLocalMutationRetryRequest(value) {
@@ -329,6 +325,14 @@ export function normalizeCompactionRecovery(value) {
   const firstKeptMessageId = String(value?.firstKeptMessageId || '').trim()
   const lastCompactedMessageId = String(value?.lastCompactedMessageId || '').trim()
   const compactCheckpointSource = value?.compactCheckpointSource
+  const semantic = value?.semanticSummary
+  const semanticSummary = semantic && typeof semantic === 'object' ? {
+    attempted: semantic.attempted === true,
+    used: semantic.used === true,
+    ...Object.fromEntries(['modelCalls', 'cachedCalls', 'batchCount', 'splitMessageCount', 'truncatedMessageCount', 'outputTruncatedCount']
+      .map((key) => [key, Math.max(0, Math.min(1_000_000, Math.floor(Number(semantic[key]) || 0)))])),
+    fallbackReason: typeof semantic.fallbackReason === 'string' ? semantic.fallbackReason.slice(0, 200) : null,
+  } : null
   return {
     archiveId,
     ...(firstKeptMessageId ? { firstKeptMessageId } : {}),
@@ -336,6 +340,7 @@ export function normalizeCompactionRecovery(value) {
     ...(compactCheckpointSource && typeof compactCheckpointSource === 'object'
       ? { compactCheckpointSource }
       : {}),
+    ...(semanticSummary ? { semanticSummary } : {}),
   }
 }
 

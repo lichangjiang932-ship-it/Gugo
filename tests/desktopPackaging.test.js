@@ -433,7 +433,7 @@ test('desktop opens only its fixed runtime configuration through trusted IPC', (
   assert.match(preload, /openConfigFile:\s*\(\) => ipcRenderer\.invoke\('desktop:open-config-file'\)/)
   assert.match(handler, /assertTrustedIpc\(event\)/)
   assert.match(handler, /event\.sender !== mainWindow\.webContents/)
-  assert.match(handler, /ensureDesktopRuntimeConfigFile\(\{ userData: app\.getPath\('userData'\) \}\)/)
+  assert.match(handler, /ensureDesktopRuntimeConfigFile\(\{\s*userData: app\.getPath\('userData'\),\s*env: process\.env,\s*cwd: app\.getAppPath\(\),\s*\}\)/)
   assert.match(handler, /await shell\.openPath\(configPath\)/)
   assert.match(handler, /if \(openError\) throw/)
   assert.doesNotMatch(handler, /event,\s*(?:file)?path|payload|request/)

@@ -121,7 +121,7 @@ test('proactive waterline compacts before the engine model request', async () =>
   assert.match(sentMessages.find((message) => message?.meta?.compaction)?.content || '', /User direction/)
 })
 
-test('automatic compaction never makes hidden semantic-summary model calls', async () => {
+test('explicitly disabled semantic compaction makes no summary-model calls', async () => {
   const messages = Array.from({ length: 30 }, (_, index) => ({
     role: index % 2 ? 'assistant' : 'user',
     content: `${index}:${'x'.repeat(1200)}`,
@@ -131,6 +131,7 @@ test('automatic compaction never makes hidden semantic-summary model calls', asy
     messages,
     tools: TOOLS,
     contextWindow: 4096,
+    semanticSummary: false,
     isContextLengthError: () => false,
     callModel: async (request) => {
       requests.push(request)
@@ -139,7 +140,7 @@ test('automatic compaction never makes hidden semantic-summary model calls', asy
   })
 
   assert.equal(result.response.content, 'done')
-  assert.equal(requests.length, 1, 'automatic recovery must not block on extra map/reduce calls')
+  assert.equal(requests.length, 1, 'the off policy must not make map/reduce calls')
   assert.equal(requests[0].tools.length, 1)
   assert.equal(result.recovery.semanticSummary.modelCalls, 0)
   assert.equal(result.recovery.semanticSummary.fallbackReason, 'disabled_for_automatic_compaction')
@@ -225,6 +226,10 @@ test('two ephemeral screenshots survive a context retry but never enter second-p
     contextWindow: 4_096,
     userId,
     sessionId,
+    callSummaryModel: async ({ messages: summaryInput }) => {
+      assert.doesNotMatch(JSON.stringify(summaryInput), /data:image|base64|SCREENSHOT_BYTES/u)
+      return { content: '' }
+    },
     isContextLengthError: (error) => error?.code === 'context_length_exceeded',
     callModel: async ({ messages: outbound }) => {
       requests.push(structuredClone(outbound))

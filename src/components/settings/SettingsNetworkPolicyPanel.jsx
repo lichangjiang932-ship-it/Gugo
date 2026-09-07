@@ -62,6 +62,7 @@ export default function SettingsNetworkPolicyPanel({ t }) {
           onChange={(enabled) => void update(enabled)}
         />
       </SettingsRow>
+      <p className="settings-inline-status px-4 py-2">{t('settings.pureLocalModeBoundary')}</p>
       {message ? <p className="settings-inline-status px-4 py-2" role="status">{message}</p> : null}
     </SettingsGroup>
   )

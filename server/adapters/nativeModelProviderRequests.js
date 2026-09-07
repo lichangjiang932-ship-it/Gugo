@@ -1,4 +1,5 @@
 import { canonicalizeModelTools } from './modelRequestCache.js'
+import { geminiReplayParts, providerReplayContext } from './providerReplayState.js'
 
 function json(value, fallback = {}) {
   if (value && typeof value === 'object') return value
@@ -165,13 +166,17 @@ function geminiPart(part) {
   return null
 }
 
-function geminiMessages(messages = []) {
+function geminiMessages(messages = [], replayContext = null) {
   const system = []
   const out = []
   const toolNames = new Map()
   for (const message of messages) {
+    const replayParts = message?.role === 'assistant' ? geminiReplayParts(message, replayContext) : null
     if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
-      for (const call of message.tool_calls) toolNames.set(call.id, call.function?.name || '')
+      const nativeCalls = replayParts?.filter((part) => part.functionCall) || []
+      for (const [index, call] of message.tool_calls.entries()) toolNames.set(call.id, {
+        name: call.function?.name || '', nativeId: nativeCalls[index]?.functionCall?.id,
+      })
     }
     if (message?.role === 'system') {
       const text = openAiParts(message.content).filter((part) => part?.type === 'text').map((part) => part.text).join('\n')
@@ -179,8 +184,13 @@ function geminiMessages(messages = []) {
       continue
     }
     if (message?.role === 'tool') {
-      const name = message.name || toolNames.get(message.tool_call_id) || 'tool'
-      out.push({ role: 'user', content: [{ functionResponse: { name, response: geminiToolResult(message.content) } }] })
+      const reference = toolNames.get(message.tool_call_id)
+      const name = message.name || reference?.name || 'tool'
+      out.push({ role: 'user', content: [{ functionResponse: { name, ...(reference?.nativeId ? { id: reference.nativeId } : {}), response: geminiToolResult(message.content) } }] })
+      continue
+    }
+    if (replayParts) {
+      out.push({ role: 'model', content: replayParts })
       continue
     }
     const content = openAiParts(message?.content).map(geminiPart).filter(Boolean)
@@ -204,7 +214,7 @@ function geminiToolMode(toolChoice) {
 }
 
 function buildGeminiRequest({ config, messages, stream, tools, toolChoice, profile }) {
-  const converted = geminiMessages(messages)
+  const converted = geminiMessages(messages, providerReplayContext({ config, profile }))
   const headers = { 'Content-Type': 'application/json', ...(config?.headers || {}) }
   if (config?.apiKey && !headers['x-goog-api-key'] && !headers.Authorization) headers['x-goog-api-key'] = config.apiKey
   const body = {

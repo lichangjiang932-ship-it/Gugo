@@ -4,7 +4,7 @@ import { withRetry } from '../utils/modelRetry.js'
 import { buildUserModelEnv } from '../services/modelProviderStore.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { fetchWithEnvProxy } from './proxyFetch.js'
-import { getEffectiveModelProviderProvenance } from './nativeModelProviders.js'
+import { getEffectiveModelProviderProvenance, isNativeProviderKind } from './nativeModelProviders.js'
 import {
   parseModelProviderResponse,
   stripEmbeddedReasoning,
@@ -40,6 +40,13 @@ import {
 } from './modelRuntimeCatalog.js'
 import { canonicalStreamToolCalls } from './modelStreamToolCalls.js'
 
+function withOutputTokenLimit(config, requestedLimit) {
+  const requested = Math.floor(Number(requestedLimit))
+  if (!Number.isFinite(requested) || requested <= 0) return config
+  const configured = Math.floor(Number(config.maxTokens))
+  return { ...config, maxTokens: configured > 0 ? Math.min(configured, requested) : requested }
+}
+
 function createProviderAttemptTracker(candidates, onProviderAttempt) {
   if (typeof onProviderAttempt !== 'function') return null
   const providerAttempts = new Map()
@@ -71,6 +78,7 @@ function createProviderAttemptTracker(candidates, onProviderAttempt) {
 
 export async function callBackgroundModel({
   messages,
+  maxTokens,
   modelName,
   modelProviderId = '',
   userId,
@@ -93,7 +101,7 @@ export async function callBackgroundModel({
     modelName: selectedModel,
     providerId: modelProviderId,
     env: runtimeEnv,
-  })
+  }).map((candidate) => withOutputTokenLimit(candidate, maxTokens))
   const trackProviderAttempt = createProviderAttemptTracker(candidates, onProviderAttempt)
   return runWithProviderFailover(candidates, async (candidate) => {
     const profile = profileForConfig(candidate, runtimeEnv)
@@ -206,6 +214,7 @@ export function createBoundBackgroundModelCaller({
  */
 export async function callBackgroundModelWithTools({
   messages,
+  maxTokens,
   tools,
   toolChoice,
   modelName,
@@ -230,7 +239,7 @@ export async function callBackgroundModelWithTools({
     modelName: selectedModel,
     providerId: modelProviderId,
     env: runtimeEnv,
-  })
+  }).map((candidate) => withOutputTokenLimit(candidate, maxTokens))
   const trackProviderAttempt = createProviderAttemptTracker(candidates, onProviderAttempt)
   return runWithProviderFailover(candidates, async (candidate) => {
     const profile = profileForConfig(candidate, runtimeEnv)
@@ -295,7 +304,7 @@ export async function callBackgroundModelWithTools({
         })
       }
       const parsed = parseModelProviderResponse(data, profile, { providerRequest })
-      const compatibilityCall = parsed.toolCalls?.length ? null : extractTextToolCalls(parsed.content)
+      const compatibilityCall = parsed.nativeContent || parsed.toolCalls?.length ? null : extractTextToolCalls(parsed.content)
       const usage = parsed.usage
       const costUsd = calculateModelCostUsd({
         providerId: candidate.providerId,
@@ -310,6 +319,8 @@ export async function callBackgroundModelWithTools({
         toolCalls: compatibilityCall?.toolCalls?.length ? compatibilityCall.toolCalls : parsed.toolCalls,
         usage,
         finishReason: parsed.finishReason,
+        ...(parsed.providerReplay ? { providerReplay: parsed.providerReplay } : {}),
+        ...(parsed.nativeContent ? { nativeContent: true } : {}),
         modelName: candidate.modelName,
         providerId: candidate.providerId,
         ...(costUsd !== null ? { costUsd } : {}),
@@ -333,6 +344,7 @@ export async function callBackgroundModelWithTools({
  */
 export async function callStreamingModelWithTools({
   messages,
+  maxTokens,
   tools,
   toolChoice,
   modelName,
@@ -364,19 +376,21 @@ export async function callStreamingModelWithTools({
       modelName: selectedModel,
       providerId: modelProviderId,
       env: runtimeEnv,
-    }),
+    }).map((candidate) => withOutputTokenLimit(candidate, maxTokens)),
     requiresVision: hasVisionContent(messages),
     supportsVision: (candidate) => profileForConfig(candidate, runtimeEnv).supportsVision,
     userId, env: runtimeEnv, fetchImpl, modelName: selectedModel,
     onAssistError: (error) => logWarn('vision.assist.tool_loop', error, { userId, modelName: selectedModel }),
   })
   let activeConfig = candidates[0] || null
+  let nativeContent = isNativeProviderKind(profileForConfig(activeConfig || config, runtimeEnv).kind)
   let content = ''
   let reasoningText = ''
   let reasoningChars = 0
   let toolCalls = []
   let usage = null
   let finishReason = null
+  let providerReplay = null
   const textToolCallFilter = createTextToolCallDeltaFilter()
   const trackProviderAttempt = createProviderAttemptTracker(candidates, onProviderAttempt)
 
@@ -396,16 +410,20 @@ export async function callStreamingModelWithTools({
     }),
     { signal, onFailover, onRetry },
   )) {
-    activeConfig = streamed.config
+    if (activeConfig !== streamed.config) {
+      activeConfig = streamed.config
+      nativeContent = isNativeProviderKind(profileForConfig(activeConfig, runtimeEnv).kind)
+    }
     const event = streamed.event
     if (event?.usage) usage = event.usage
     if (event?.finishReason) finishReason = event.finishReason
+    if (event?.providerReplay) providerReplay = event.providerReplay
 
     if (event?.type === 'text' && event.delta) {
       const delta = String(event.delta)
       content += delta
       if (typeof onTextDelta === 'function') {
-        const visibleDelta = textToolCallFilter.push(delta)
+        const visibleDelta = nativeContent ? delta : textToolCallFilter.push(delta)
         if (visibleDelta) await onTextDelta(visibleDelta, { modelName: activeConfig.modelName })
       }
     } else if (event?.type === 'reasoning' && event.delta) {
@@ -432,11 +450,11 @@ export async function callStreamingModelWithTools({
   }
 
   const resolvedConfig = activeConfig || config
-  const cleanedContent = stripEmbeddedReasoning(content)
-  const compatibilityCall = toolCalls.length ? null : extractTextToolCalls(cleanedContent)
+  const cleanedContent = providerReplay ? content : stripEmbeddedReasoning(content)
+  const compatibilityCall = nativeContent || toolCalls.length ? null : extractTextToolCalls(cleanedContent)
   const filteredContent = compatibilityCall?.detected ? compatibilityCall.content : cleanedContent
   const filteredToolCalls = compatibilityCall?.toolCalls?.length ? compatibilityCall.toolCalls : toolCalls
-  if (typeof onTextDelta === 'function') {
+  if (!nativeContent && typeof onTextDelta === 'function') {
     const tail = textToolCallFilter.finish({ discardProtocol: Boolean(compatibilityCall?.detected) })
     if (tail) await onTextDelta(tail, { modelName: resolvedConfig.modelName })
   }
@@ -453,6 +471,8 @@ export async function callStreamingModelWithTools({
     toolCalls: filteredToolCalls,
     usage,
     finishReason,
+    ...(providerReplay ? { providerReplay } : {}),
+    ...(nativeContent ? { nativeContent: true } : {}),
     modelName: resolvedConfig.modelName,
     providerId: resolvedConfig.providerId,
     ...(costUsd !== null ? { costUsd } : {}),
@@ -461,6 +481,8 @@ export async function callStreamingModelWithTools({
     // Retained chain-of-thought for the current turn. This is delivered to the
     // client for inline display; outbound replay is governed by
     // retainReasoningForEnv ( default-on for OpenAI-compatible ).
-    ...(reasoningText ? { reasoning: reasoningText } : {}),
+    // Native thought is displayed through the callback, but can only be
+    // replayed via its provider-bound opaque parts, never an unbound field.
+    ...(reasoningText && !nativeContent ? { reasoning: reasoningText } : {}),
   }
 }

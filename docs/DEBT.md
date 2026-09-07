@@ -706,6 +706,50 @@ intentional temporary exception requires a separately reviewed debt record.
 implementation files under `server/`, `shared/`, `desktop/`, and `bin/`; rejects
 new oversized files and requires the closed inventory to remain empty.
 
+## DEBT-NET-002 — OS-level isolation for arbitrary external code
+
+**Status:** Open
+**Priority:** P2
+**Area:** Local-first execution
+
+**Evidence / reproduction:** `server/utils/shellPolicy.js` explicitly implements
+an application-level command tripwire, not a security sandbox. Arbitrary Node,
+Python or PowerShell programs, trusted runtime plugins and MCP stdio processes
+can use networking outside the guarded HTTP APIs. Windows process-tree binding
+controls lifecycle and cancellation, not network access. Renderer image proxy
+and CSP enforcement close application-controlled resource bypasses but do not
+make arbitrary external code air-gapped.
+
+**Exit criteria:** A supported, explicitly selected execution backend enforces
+and verifies OS/container network isolation for every relevant process and
+plugin boundary, with clear unsupported-platform behavior and preserved local
+tool functionality. No expansion of lexical blacklists alone can close this item.
+
+**Verification:** Current `tests/shellPolicy.test.js`, outbound-policy and
+remote-image tests verify the narrower application policy. Closure also requires
+real network-canary tests for inline/encoded programs, explicit executable paths,
+background children and stdio/plugin execution under the selected sandbox.
+
+## DEBT-RELEASE-002 — Production signing configuration is absent
+
+**Status:** Open
+**Priority:** P1
+**Area:** Release operations
+
+**Evidence / reproduction:** On 2026-09-07 the repository Secrets and Variables
+metadata lists were empty. Release run `34021618396` failed at `Require Windows
+code-signing credentials`. The signing/provenance code gate in
+`DEBT-RELEASE-001` exists, but deployment prerequisites are not configured.
+
+**Exit criteria:** Configure `WINDOWS_CSC_LINK`, `WINDOWS_CSC_KEY_PASSWORD` and
+the matching `WINDOWS_PUBLISHER_NAME`, then produce a verified main-line release
+with valid timestamped signatures, the complete asset set, checksums and GitHub
+build provenance. Published tags/assets must remain immutable.
+
+**Verification:** Repository configuration metadata, a successful Release run,
+Authenticode verification and independent `gh attestation verify`. A draft or
+unsigned local installer is not proof that this item is closed.
+
 ## Maintenance rules
 
 - Add an entry before intentionally accepting a known defect or architectural

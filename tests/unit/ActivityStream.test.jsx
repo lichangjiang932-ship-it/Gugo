@@ -75,6 +75,15 @@ test('model heartbeat phases explain cold start and temporary stream idle', () =
   assert.match(idle, /still running/)
 })
 
+test('semantic compaction and its degraded fallback are visible without exposing summary contents', () => {
+  const compacting = render({ meta: { streaming: true, modelActivity: { kind: 'model', phase: 'compacting' } } })
+  assert.match(compacting, /Compacting the conversation/)
+  const fallback = render({ meta: { streaming: true, modelActivity: { kind: 'model', phase: 'compaction_fallback' } } })
+  assert.match(fallback, /mechanical summary/)
+  const localized = render({ meta: { streaming: true, modelActivity: { kind: 'model', phase: 'compacting' } } }, 'zh')
+  assert.match(localized, /正在压缩长对话/)
+})
+
 test('running tool activity is rendered only by the durable tool timeline', () => {
   const markup = render({
     meta: {

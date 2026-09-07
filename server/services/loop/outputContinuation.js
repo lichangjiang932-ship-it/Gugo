@@ -1,5 +1,6 @@
 import { inspectToolLoopModelResponse } from '../../core/toolLoopModelResponse.js'
 import { assertContextRecoveryActive } from '../contextCompactionState.js'
+import { modelAssistantHistoryMessage } from './modelAssistantHistory.js'
 
 export const MAX_OUTPUT_CONTINUATIONS = 2
 const MAX_CONTINUED_TEXT_CHARS = 128_000
@@ -51,7 +52,7 @@ export async function processOutputContinuation(s) {
   const combined = joinContinuedText(state.prefix, content)
   const withinTextLimit = combined.length <= MAX_CONTINUED_TEXT_CHARS
   if (withinTextLimit) state.prefix = combined
-  if (content) s.convo.push({ role: 'assistant', content, meta: { type: 'incomplete_model_output' } })
+  if (content) s.convo.push(modelAssistantHistoryMessage(content, i.modelResult, { meta: { type: 'incomplete_model_output' } }))
   if (inspection.finishReason === 'length' && withinTextLimit
     && state.attempts < MAX_OUTPUT_CONTINUATIONS && s.iter + 1 < s.maxIters) {
     state.attempts += 1

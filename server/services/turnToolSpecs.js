@@ -1,12 +1,9 @@
-import { listUserToolSpecs } from '../mcp/mcpManager.js'
-import { listRegisteredBrowserToolSpecs } from './browserTools.js'
 import { CONNECTOR_TOOL_NAMES } from './connectorTools.js'
 import { listEnabledIntegrationToolNames } from './integrationsStore.js'
 import {
   getBuiltinSpec,
   getDynamicToolSpecRegistrationId,
   inheritDynamicToolSpecRegistration,
-  listAllSpecs,
   matchesDynamicToolRegistration,
 } from './toolRegistry.js'
 import { getUserToolPermissions } from '../db.js'
@@ -18,6 +15,7 @@ import {
 } from './codexAppServerTool.js'
 import { isCodexAppServerModelCatalogAvailable } from './codexAppServerRuntime.js'
 import { normalizeDirectoryAuthorizationResolutions } from './turnResolutionRuntime.js'
+import { discoverTurnToolResources, SKILL_RESOURCE_TOOL_NAME } from './turnToolResourceDiscovery.js'
 
 function normalizeNames(values, limit = 256) {
   return [...new Set((Array.isArray(values) ? values : []).map(String).map((name) => name.trim()).filter(Boolean))]
@@ -201,6 +199,7 @@ function workspaceToolVisible(spec, capabilities, {
   if (GIT_WRITE_TOOLS.has(name)) return capabilities.gitWrite
   // Standalone web research retains turn, URL and approval policies without filesystem authority.
   if (WORKSPACE_INDEPENDENT_WEB_TOOLS.has(name)) return true
+  if (name === SKILL_RESOURCE_TOOL_NAME) return true
   // Non-local dynamic capability providers and connected apps own their own
   // capability and approval boundaries; workspace grants are unrelated.
   const dynamicState = dynamicToolSpecRegistrationState(spec, { userId })
@@ -514,38 +513,11 @@ export async function resolveTurnToolSpecs({
   onDecision = null,
 } = {}) {
   const policy = resolveTurnToolPolicy({ prompt, messages, skillIds })
-  const discoveryIssues = []
-  let mcpSpecs = []
-  try {
-    const result = await listUserToolSpecs(userId)
-    mcpSpecs = Array.isArray(result?.specs) ? result.specs : []
-  } catch {
-    // Optional MCP discovery must not block the chat turn.
-    discoveryIssues.push({ source: 'mcp', reason: 'discovery_failed' })
-  }
-  let browserSpecs = []
-  try {
-    browserSpecs = listRegisteredBrowserToolSpecs()
-  } catch {
-    discoveryIssues.push({ source: 'browser', reason: 'discovery_failed' })
-  }
-  let runtimeSpecs = []
-  try {
-    // listUserToolSpecs above connects any enabled MCP servers first. Read the
-    // canonical registry afterwards so every reversible runtime contribution
-    // (including global and user-scoped plugin tools) reaches the real turn.
-    // Builtins remain caller-owned through baseSpecs; only dynamic entries are
-    // merged here so narrow catalog consumers do not unexpectedly expand.
-    runtimeSpecs = listAllSpecs({ userId })
-      .filter((entry) => entry?.origin === 'plugin')
-      .map((entry) => entry?.tool)
-      .filter(Boolean)
-  } catch {
-    discoveryIssues.push({ source: 'runtime_registry', reason: 'discovery_failed' })
-  }
+  const { mcpSpecs, browserSpecs, runtimeSpecs, skillResourceSpec, discoveryIssues } =
+    await discoverTurnToolResources({ userId, skillIds })
   const merged = new Map()
   const deliveryControlSpec = getBuiltinSpec('set_deliverables')
-  for (const spec of [...baseSpecs, deliveryControlSpec, ...mcpSpecs, ...browserSpecs, ...runtimeSpecs]) {
+  for (const spec of [...baseSpecs, deliveryControlSpec, skillResourceSpec, ...mcpSpecs, ...browserSpecs, ...runtimeSpecs]) {
     const name = String(spec?.function?.name || '')
     if (name === 'lsp' && !hasConfiguredLspProvider()) continue
     if (name) merged.set(name, spec)
@@ -568,6 +540,9 @@ export async function resolveTurnToolSpecs({
   }
   const readySpecs = [...merged.values()].filter((spec) => {
     const name = toolName(spec)
+    if (name === SKILL_RESOURCE_TOOL_NAME && !skillResourceSpec) {
+      return exclude(name, 'skill_resource_not_selected')
+    }
     if (connectorNames.has(name)) {
       if (!enabledConnectorNames.has(name)) return exclude(name, 'integration_disabled')
     }
