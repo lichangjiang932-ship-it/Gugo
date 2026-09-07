@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
+import { readFileSync } from 'node:fs'
+import vm from 'node:vm'
+import { parse } from 'acorn'
 import {
   isLoopbackHostname,
   isSafeExternalUrl,
@@ -241,4 +244,127 @@ test('desktop runtime probe rejects HTML, forged recovery responses, and network
   assert.equal(await probeDesktopRuntimeMode('http://127.0.0.1:5180', {
     fetchImpl: async () => { throw new TypeError('offline') },
   }), null)
+})
+
+function desktopUpdateBoundarySources() {
+  const source = readFileSync(new URL('../desktop/main.js', import.meta.url), 'utf8')
+  const program = parse(source, { ecmaVersion: 'latest', sourceType: 'module' })
+  const statusFunction = program.body.find((node) => node.type === 'FunctionDeclaration' && node.id.name === 'sendUpdateStatus')
+  const registerIpc = program.body.find((node) => node.type === 'FunctionDeclaration' && node.id.name === 'registerDesktopIpc')
+  const installerRegistration = registerIpc.body.body.find((node) => {
+    const call = node.expression
+    return call?.type === 'CallExpression' && call.callee?.object?.name === 'ipcMain'
+      && call.callee?.property?.name === 'handle' && call.arguments[0]?.value === 'desktop:install-update'
+  })
+  assert.ok(statusFunction)
+  assert.ok(installerRegistration)
+  const handler = installerRegistration.expression.arguments[1]
+  return { status: source.slice(statusFunction.start, statusFunction.end), install: source.slice(handler.start, handler.end) }
+}
+
+function desktopUpdateBoundaryFixture(options = {}) {
+  const sources = desktopUpdateBoundarySources()
+  const calls = { sent: [], stopped: 0, installed: 0, scheduled: [], order: [] }
+  const context = vm.createContext({
+    updateReady: options.ready ?? true,
+    allowQuit: false,
+    desktopUpdateRuntime: options.missingRuntime ? null : { downloading: options.downloading ?? false },
+    autoUpdater: {
+      installerPath: options.missingInstaller ? null : 'synthetic-verified-installer.exe',
+      downloadedUpdateHelper: options.missingHelper ? null : {
+        downloadedFileInfo: options.missingMetadata ? null : { isAdminRightsRequired: false },
+      },
+      quitAndInstall() { calls.installed += 1; calls.order.push('install') },
+    },
+    mainWindow: options.noWindow ? null : {
+      isDestroyed: () => Boolean(options.destroyedWindow),
+      webContents: { send: (_channel, payload) => { calls.sent.push(payload); calls.order.push(payload.status) } },
+    },
+    assertTrustedIpc() {
+      calls.order.push('trusted-ipc')
+      if (options.untrusted) throw new Error('synthetic untrusted IPC')
+    },
+    async stopBackend() {
+      calls.stopped += 1
+      calls.order.push('stop-backend')
+      if (options.stopError) throw options.stopError
+    },
+    setImmediate(callback) { calls.scheduled.push(callback) },
+  })
+  // Execute only the actual status function and IPC callback in an isolated
+  // context. Never import main.js, instantiate Electron, or stop a real backend.
+  vm.runInContext(`${sources.status}\nthis.installUpdate = (${sources.install});`, context)
+  return { context, calls }
+}
+
+test('non-ready update statuses revoke stale readiness even without a live window', () => {
+  for (const status of ['checking', 'available', 'downloading', 'error', 'current', 'installing']) {
+    for (const windowState of [{}, { noWindow: true }, { destroyedWindow: true }]) {
+      const { context, calls } = desktopUpdateBoundaryFixture(windowState)
+      context.sendUpdateStatus(status)
+      assert.equal(context.updateReady, false, status)
+      assert.equal(calls.sent.length, windowState.noWindow || windowState.destroyedWindow ? 0 : 1)
+    }
+  }
+})
+
+test('a ready status cannot manufacture installer readiness without the verified event', () => {
+  for (const ready of [false, true]) {
+    const { context } = desktopUpdateBoundaryFixture({ ready })
+    context.sendUpdateStatus('ready')
+    assert.equal(context.updateReady, ready)
+  }
+})
+
+test('the install IPC rejects stale or incomplete readiness before stopping the backend', async () => {
+  for (const options of [
+    { ready: false }, { missingRuntime: true }, { downloading: true },
+    { missingInstaller: true }, { missingHelper: true }, { missingMetadata: true },
+  ]) {
+    const { context, calls } = desktopUpdateBoundaryFixture(options)
+    const result = await context.installUpdate({})
+    assert.equal(result.ready, false)
+    assert.equal(context.updateReady, false)
+    assert.equal(context.allowQuit, false)
+    assert.equal(calls.stopped, 0)
+    assert.equal(calls.installed, 0)
+    assert.equal(calls.scheduled.length, 0)
+    assert.deepEqual(calls.order, ['trusted-ipc'])
+  }
+})
+
+test('the install IPC still checks the sender before any shutdown or installation', async () => {
+  const { context, calls } = desktopUpdateBoundaryFixture({ untrusted: true })
+  await assert.rejects(context.installUpdate({}), /synthetic untrusted IPC/)
+  assert.equal(calls.stopped, 0)
+  assert.equal(calls.installed, 0)
+  assert.equal(calls.scheduled.length, 0)
+})
+
+test('only a verified idle update can stop the backend and schedule one installer', async () => {
+  const { context, calls } = desktopUpdateBoundaryFixture()
+  const result = await context.installUpdate({})
+  assert.equal(result.ready, true)
+  assert.equal(context.updateReady, false, 'installing must revoke the duplicate-click latch')
+  assert.equal(context.allowQuit, true)
+  assert.equal(calls.stopped, 1)
+  assert.equal(calls.installed, 0)
+  assert.equal(calls.scheduled.length, 1)
+  assert.deepEqual(calls.order, ['trusted-ipc', 'installing', 'stop-backend'])
+  assert.equal((await context.installUpdate({})).ready, false)
+  assert.equal(calls.stopped, 1)
+  calls.scheduled[0]()
+  assert.equal(calls.installed, 1, 'the fixture calls a mock installer only')
+})
+
+test('a backend shutdown failure leaves no stale ready flag or scheduled installation', async () => {
+  const { context, calls } = desktopUpdateBoundaryFixture({ stopError: new Error('synthetic stop failure') })
+  const result = await context.installUpdate({})
+  assert.equal(result.ready, false)
+  assert.equal(context.updateReady, false)
+  assert.equal(context.allowQuit, false)
+  assert.equal(calls.stopped, 1)
+  assert.equal(calls.installed, 0)
+  assert.equal(calls.scheduled.length, 0)
+  assert.equal(calls.sent.at(-1).status, 'error')
 })

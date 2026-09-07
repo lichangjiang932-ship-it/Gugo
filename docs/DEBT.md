@@ -293,27 +293,43 @@ runtime regression baseline.
 
 ## DEBT-RELEASE-001 — Desktop signing and provenance
 
-**Status:** Closed
+**Status:** Open
 **Priority:** P1  
 **Area:** Distribution
 
-**Evidence / reproduction:** The Windows release job now requires code-signing
-secrets before packaging, enables electron-builder `forceCodeSigning`, verifies
-timestamped signatures from one certificate on both the installer and packaged
-application, pins that signer to the configured production publisher identity,
-and requires the same certificate-derived updater publisher identity. Direct
-publishing is blocked and published tag assets cannot be overwritten.
-It also publishes a deterministic `SHA256SUMS.txt` and creates GitHub build
-provenance for every published release asset. Missing credentials, invalid
-signatures, checksum generation failures, or attestation failures stop the
-release before upload.
+**Evidence / reproduction:** This item was previously marked closed for the
+implementation of a strict signed-release pipeline, not evidence of configured
+production certificates. That path still requires credentials, electron-builder
+`forceCodeSigning`, valid timestamped signatures from one certificate on the
+installer and packaged application, and matching publisher/updater identities.
+It still fails closed when signing prerequisites or checks fail.
 
-**Exit criteria:** Production desktop artifacts are signed, CI fails closed when
-credentials or signature verification are unavailable, and published checksums
-and provenance are independently verifiable.
+On 2026-09-07 the user explicitly selected unsigned Windows distribution for
+0.11.55. The committed `scripts/release/policy.json` binds that version to
+`windowsSigning: "unsigned"`; missing credentials do not select or downgrade
+the mode. Unsigned builds require `NotSigned` on the installer and application,
+retain icon/version resources, and preserve CI, the complete five-asset set,
+checksums, GitHub attestations, and immutable published assets. These controls
+do not satisfy the original Authenticode publisher-identity exit criterion,
+so this item is open rather than claiming signing safety is complete.
 
-**Verification:** `tests/desktopPackaging.test.js`, release-pipeline tests, and a
-signature verification smoke test against the produced installer.
+**Current release decision:** The absence of publisher identity is an explicitly
+accepted risk for this version, not a blocker for a release that passes the
+committed unsigned policy. SmartScreen/unknown-publisher warnings remain possible;
+disabling OS protection is not a mitigation. A correctly enforcing signed client
+rejects unsigned updates and requires a deliberate manual migration. The updater
+retains its configured signature check after SHA-512 verification and before
+cache/ready state; historical distributed clients cannot be repaired retroactively.
+
+**Exit criteria:** A version explicitly selects the signed policy and provides
+verified production artifacts with valid timestamped publisher signatures;
+signature/publisher failures remain fail-closed in both release and update paths.
+Checksums and provenance remain independently verifiable, but cannot substitute
+for Authenticode identity or establish an unsigned binary's safety.
+
+**Verification:** `tests/desktopPackaging.test.js`, release-policy/pipeline and
+updater regressions, plus policy-specific checks against the actual installer
+and packaged application. A successful unsigned build does not close this item.
 
 ## DEBT-EXEC-001 — Code-mode reachability and authorization parity
 
@@ -739,7 +755,18 @@ background children and stdio/plugin execution under the selected sandbox.
 **Evidence / reproduction:** On 2026-09-07 the repository Secrets and Variables
 metadata lists were empty. Release run `34021618396` failed at `Require Windows
 code-signing credentials`. The signing/provenance code gate in
-`DEBT-RELEASE-001` exists, but deployment prerequisites are not configured.
+`DEBT-RELEASE-001` exists, but deployment prerequisites were not configured.
+This remains the historical signed-path failure; it is not evidence that
+credentials were later supplied or that signed distribution now works.
+
+**Current release decision:** The user subsequently chose not to configure
+signing for 0.11.55 and explicitly accepted unsigned distribution through the
+version-bound release policy. This open operations risk does not block that
+unsigned release when its CI, `NotSigned`, asset, checksum and provenance gates
+pass. It still blocks any selected signed release until the prerequisites are
+met. Future versions must explicitly review and update the policy version;
+absence of secrets is never an implicit fallback. See `docs/DESKTOP_RELEASES.md`
+for the missing publisher identity, SmartScreen and manual-migration limitations.
 
 **Exit criteria:** Configure `WINDOWS_CSC_LINK`, `WINDOWS_CSC_KEY_PASSWORD` and
 the matching `WINDOWS_PUBLISHER_NAME`, then produce a verified main-line release

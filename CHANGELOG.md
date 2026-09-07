@@ -10,7 +10,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 - Provider-neutral, on-demand semantic context compaction with complete input chunking, bounded map/reduce calls, cancellation, visible fallback, and separately checkpointed summary requests. See `docs/CONTEXT_COMPACTION.md` for controls and limitations.
 - Owner-scoped `read_skill_resource` access to text references and scripts in selected skills. Resources are read-only; binary templates and automatic script execution are not implicitly enabled.
-- A current general-agent audit with concrete capability gaps and release prerequisites in `docs/GENERAL_AGENT_AUDIT_2026-09-07.md`. This work prepares version 0.11.55; a signed desktop release is not yet published.
+- A current general-agent audit with concrete capability gaps and release prerequisites in `docs/GENERAL_AGENT_AUDIT_2026-09-07.md`. This work prepares version 0.11.55; preparation is not proof that a new desktop release has been published.
+
+### Changed
+
+- Explicitly selected unsigned Windows distribution for 0.11.55 through the committed, version-bound `scripts/release/policy.json`. Future version bumps must update the policy; missing credentials or failed signature verification never trigger an automatic downgrade. Both modes retain CI, all five release assets, checksums, GitHub attestations, and immutable published assets.
+- Added the separate `desktop:package:unsigned` path, preserving icon/version resources while disabling executable signing and requiring `NotSigned` on both installer and packaged application. The signed path keeps its certificate, timestamp, and publisher checks.
 
 ### Fixed
 
@@ -23,6 +28,7 @@ follow [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- Restored the updater's configured publisher verification after SHA-512 validation and before cache/ready state, without globally disabling signature checks. Correctly enforcing signed clients reject unsigned updates and require an explicit manual migration; old distributed clients cannot be retroactively fixed. Unsigned releases provide no Authenticode publisher identity, and checksums/provenance do not replace it. See `docs/DESKTOP_RELEASES.md` for SmartScreen and migration limitations.
 - Blocked junction/symlink escapes in plugin skill imports and bound resource reads to the authenticated owner and host-selected skills.
 - Routed remote Markdown images through authenticated, size-limited, SSRF-checked server loading and enforced application-level pure-local policy and preview restrictions. Arbitrary local code still requires an OS boundary for genuine network isolation.
 - Isolated Web release verification before subprocesses run: database, configuration, workspace, temporary files, and package caches stay inside a unique verification directory; inherited credentials and runtime injections are removed and the caller environment is restored even on failure.

@@ -4,6 +4,7 @@ import { createReadStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readReleasePolicy, releasePolicyNotes } from './releasePolicy.mjs'
 
 const API_VERSION = '2022-11-28'
 const DEFAULT_API_BASE_URL = 'https://api.github.com'
@@ -312,20 +313,28 @@ function assertNoUnexpectedAssets(remoteAssets, expectedNames) {
   throw new Error(`Draft GitHub Release contains unexpected assets: ${names}`)
 }
 
-async function publishDraft({ fetchImpl, apiBaseUrl, repository, release, tag, headers }) {
+async function publishDraft({ fetchImpl, apiBaseUrl, repository, release, tag, commit, headers, releaseNotes }) {
   const response = await requestJson(
     fetchImpl,
     `${apiBaseUrl}/repos/${repository}/releases/${release.id}`,
     {
       method: 'PATCH',
       headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ draft: false, prerelease: false }),
+      body: JSON.stringify({
+        draft: false, prerelease: false,
+        ...(releaseNotes == null ? {} : { name: tag, target_commitish: commit, body: releaseNotes }),
+      }),
       context: `publish draft GitHub Release ${tag}`,
     },
   )
   const published = assertRelease(response.data, tag)
   if (published.draft || published.prerelease) {
     throw new Error(`GitHub Release ${tag} did not become a stable published release`)
+  }
+  // GitHub may normalize Markdown line endings. The resolved Git tag, not the
+  // advisory target_commitish field (ignored for existing tags), binds source.
+  if (releaseNotes != null && String(published.body || '').replace(/\r\n?/gu, '\n') !== releaseNotes.replace(/\r\n?/gu, '\n')) {
+    throw new Error(`GitHub Release ${tag} publication metadata did not match its declared policy`)
   }
   return published
 }
@@ -336,6 +345,7 @@ export async function publishGitHubRelease({
   commit,
   files,
   token,
+  releaseNotes = null,
   cwd = process.cwd(),
   fetchImpl = globalThis.fetch,
   apiBaseUrl = DEFAULT_API_BASE_URL,
@@ -344,6 +354,9 @@ export async function publishGitHubRelease({
   assertRepository(repository)
   assertReleaseTag(tag)
   assertCommitSha(commit)
+  if (releaseNotes != null && (typeof releaseNotes !== 'string' || !releaseNotes.trim() || releaseNotes.length > 24_000)) {
+    throw new Error('release notes must be a non-empty string no longer than 24000 characters')
+  }
   if (typeof token !== 'string' || !token.trim()) {
     throw new Error('GITHUB_TOKEN is required for GitHub Release publication')
   }
@@ -406,7 +419,7 @@ export async function publishGitHubRelease({
   verifyRemoteAssets(uploadedAssets, assets)
   await assertRemoteTagCommit(tagOptions, commit)
   release = await assertDraftReleaseCurrent(releaseOptions, release.id)
-  release = await publishDraft({ fetchImpl, apiBaseUrl, repository, release, tag, headers })
+  release = await publishDraft({ fetchImpl, apiBaseUrl, repository, release, tag, commit, headers, releaseNotes })
   return Object.freeze({
     releaseId: release.id,
     tag,
@@ -443,8 +456,14 @@ export function parseArgs(argv) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
+  const policy = readReleasePolicy()
+  if (args.tag !== `v${policy.version}`) throw new Error('Publication tag does not match the declared release policy')
+  const changelog = await fs.readFile(new URL('../../CHANGELOG.md', import.meta.url), 'utf8')
+  const changes = changelog.match(/^## \[Unreleased\]\r?\n([\s\S]*?)(?=^## \[|$(?![\s\S]))/m)?.[1]?.trim() || ''
+  const releaseNotes = `${releasePolicyNotes(policy)}\n\n${changes}\n\nBuild commit: ${args.commit}`
   const result = await publishGitHubRelease({
     ...args,
+    releaseNotes,
     token: process.env.GITHUB_TOKEN,
   })
   process.stdout.write(`Published ${result.tag} with ${result.assets.length} verified assets through GitHub REST API\n`)
