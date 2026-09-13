@@ -49,12 +49,26 @@ async function prepareModelRequestIteration(s) {
   return { hasCurrentAnswerReview, modelMayRequestMutation }
 }
 
-function normalizeCompatibilityToolCalls(result, extractTextToolCalls) {
+function compatibilityToolNameAllowlist(s) {
+  const specs = Array.isArray(s.activeToolSpecs) ? s.activeToolSpecs : []
+  const names = []
+  for (const spec of specs) {
+    const name = s.d.toolNameFromSpec(spec)
+    if (name) names.push(name)
+  }
+  return names
+}
+
+function normalizeCompatibilityToolCalls(result, extractTextToolCalls, salvageBareJsonToolCall, allowedToolNames) {
   if (result?.nativeContent === true || result?.providerReplay) return result
   if (Array.isArray(result?.toolCalls) && result.toolCalls.length > 0) return result
   const compatibilityCall = extractTextToolCalls(result?.content)
-  return compatibilityCall.detected
-    ? { ...result, content: compatibilityCall.content, toolCalls: compatibilityCall.toolCalls }
+  if (compatibilityCall.detected) {
+    return { ...result, content: compatibilityCall.content, toolCalls: compatibilityCall.toolCalls }
+  }
+  const salvaged = salvageBareJsonToolCall(result?.content, { allowedToolNames })
+  return salvaged.detected
+    ? { ...result, content: salvaged.content, toolCalls: salvaged.toolCalls }
     : result
 }
 
@@ -91,6 +105,7 @@ async function executeModelRequestRound(s, context) {
     DIRECTORY_REVIEW_GUARD_MARKER,
     extractTextToolCalls,
     mergeCompactionRecovery,
+    salvageBareJsonToolCall,
     sourceHandoffViolation,
   } = s.d
   let streamedText = false
@@ -122,7 +137,12 @@ async function executeModelRequestRound(s, context) {
   })
   s.convo.splice(0, s.convo.length, ...request.messages)
   s.recovery = mergeCompactionRecovery(s.recovery, request.recovery)
-  i.modelResult = normalizeCompatibilityToolCalls(request.response, extractTextToolCalls)
+  i.modelResult = normalizeCompatibilityToolCalls(
+    request.response,
+    extractTextToolCalls,
+    salvageBareJsonToolCall,
+    compatibilityToolNameAllowlist(s),
+  )
   const returnedToolCalls = Array.isArray(i.modelResult?.toolCalls) ? i.modelResult.toolCalls : []
   const representativeRead = await requireNativeRepresentativeRead(s, i, returnedToolCalls)
   if (representativeRead) return representativeRead
@@ -233,10 +253,12 @@ async function finishReasoningRunaway(s, error) {
 
 async function handleModelRequestFailure(s, error, context) {
   const i = s.iteration
-  const { extractTextToolCalls } = s.d
+  const { extractTextToolCalls, salvageBareJsonToolCall } = s.d
   const recoverableModelResult = normalizeCompatibilityToolCalls(
     error?.partialModelResult,
     extractTextToolCalls,
+    salvageBareJsonToolCall,
+    compatibilityToolNameAllowlist(s),
   )
   const recoverableToolCalls = Array.isArray(recoverableModelResult?.toolCalls)
     ? recoverableModelResult.toolCalls

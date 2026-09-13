@@ -71,13 +71,18 @@ export function extractTextToolCalls(value) {
     TOOL_CALL_CLOSE.lastIndex = TOOL_CALL_OPEN.lastIndex
     const close = TOOL_CALL_CLOSE.exec(text)
     const bodyEnd = close ? close.index : text.length
-    const parsed = parseCallBody(text.slice(TOOL_CALL_OPEN.lastIndex, bodyEnd))
+    const body = text.slice(TOOL_CALL_OPEN.lastIndex, bodyEnd)
+    const parsed = parseCallBody(body)
     if (parsed) {
       calls.push({
         id: `text-tool-${calls.length + 1}`,
         type: 'function',
         function: parsed,
       })
+    } else {
+      // A malformed protocol body must stay visible: dropping it silently would
+      // leave the model believing it issued a call the host never answered.
+      kept.push(body)
     }
     cursor = close ? TOOL_CALL_CLOSE.lastIndex : text.length
     TOOL_CALL_OPEN.lastIndex = cursor
@@ -121,5 +126,62 @@ export function createTextToolCallDeltaFilter() {
       return visible
     },
     get suppressing() { return suppressing },
+  }
+}
+
+const FENCED_JSON_PATTERN = /^```(?:json|jsonc|json5)?[ \t]*\r?\n([\s\S]*?)\r?\n?[ \t]*```$/i
+const BARE_JSON_MARKER = '<tool_call'
+
+function normalizeAllowedToolNames(allowedToolNames) {
+  if (!Array.isArray(allowedToolNames)) return []
+  return allowedToolNames
+    .map((name) => String(name || '').trim())
+    .filter((name) => name.length > 0)
+}
+
+/**
+ * Controlled salvage for local models that emit a bare JSON tool call with no
+ * protocol markers. Accepted only when the whole response is a single JSON
+ * object whose name exactly matches one of the tool names actually offered
+ * this turn; mixed prose and JSON never salvages. Execution still crosses the
+ * ordinary schema, approval and trust gates, so this adds no authorization.
+ */
+export function salvageBareJsonToolCall(value, { allowedToolNames } = {}) {
+  const notDetected = (content = String(value || '')) => ({ detected: false, content, toolCalls: [] })
+  const names = normalizeAllowedToolNames(allowedToolNames)
+  if (names.length === 0) return notDetected()
+
+  const text = String(value || '')
+  if (text.toLowerCase().includes(BARE_JSON_MARKER)) return notDetected(text)
+
+  const trimmed = text.trim()
+  if (!trimmed) return notDetected('')
+  const fenced = trimmed.match(FENCED_JSON_PATTERN)
+  const candidate = (fenced ? fenced[1] : trimmed).trim()
+  if (!candidate.startsWith('{') || !candidate.endsWith('}')) return notDetected(text)
+
+  let parsed
+  try {
+    parsed = JSON.parse(candidate)
+  } catch {
+    return notDetected(text)
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return notDetected(text)
+
+  const name = String(parsed.function?.name || parsed.name || '').trim()
+  if (!name || !names.includes(name)) return notDetected(text)
+
+  const args = parsed.function?.arguments ?? parsed.arguments ?? parsed.parameters
+  if (args === undefined || args === null) return notDetected(text)
+  if (typeof args !== 'object' && (typeof args !== 'string' || !args.trim())) return notDetected(text)
+
+  return {
+    detected: true,
+    content: '',
+    toolCalls: [{
+      id: 'text-tool-1',
+      type: 'function',
+      function: { name, arguments: typeof args === 'string' ? args : JSON.stringify(args) },
+    }],
   }
 }

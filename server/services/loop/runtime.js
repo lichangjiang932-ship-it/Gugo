@@ -27,7 +27,7 @@ import { allowedArtifactTools, findAdjacentDeliveredArtifacts, findContinuableAr
 import { restoreDirectoryAuthorizationToolSpecs } from '../turnToolSpecs.js'
 import { createSubagentApprovalContext, rememberApprovedSubagentCall } from '../subagentApprovalContext.js'
 import { buildAssistantToolCallsMessage, buildToolResultMessage, buildToolResultMessageBundle, createToolLoopGuard, executeToolWithRetry, isSubstantiveToolCall, mapWithConcurrency, normalizeToolError, normalizeToolResult, normalizeToolCalls, resolveToolResultMaxChars, stripEphemeralToolMediaMessages, validateToolCall } from '../../utils/toolCallHarness.js'
-import { extractTextToolCalls } from '../../utils/textToolCalls.js'
+import { extractTextToolCalls, salvageBareJsonToolCall } from '../../utils/textToolCalls.js'
 import { replaceRuntimeCapabilityBlock } from '../runtimeCapabilities.js'
 import { hasMutationExecutionIntent, isExecutionCapabilityChallenge, isTextDeliverableRequest, shouldRequireExecution } from '../../utils/executionIntent.js'
 import { observeToolCalls, recordToolProgress, restoreToolProgress, serializeToolProgress, toolProgressPayload } from '../../utils/toolProgress.js'
@@ -177,6 +177,7 @@ const runtimeDependencies = {
   createTruncatedToolCallResult,
   executeServerTool,
   executeToolWithRetry,
+  extractTextToolCalls,
   formatDeniedToolResult,
   formatIncompleteTerminalText,
   getSideEffectExecutionLedger,
@@ -205,6 +206,7 @@ const runtimeDependencies = {
   revalidateToolPermission,
   runPostTool,
   runPreTool,
+  salvageBareJsonToolCall,
   sideEffectRecoveryBlock,
   sourceHandoffViolation,
   supportsIdempotentResume,

@@ -82,6 +82,7 @@ function makeRunModelRequestState({ locale = 'en', wrapUpText = '' } = {}) {
       DIRECTORY_REVIEW_GUARD_MARKER: '[directory-review]',
       budgetExceededCopy,
       extractTextToolCalls: () => ({ detected: false }),
+      salvageBareJsonToolCall: () => ({ detected: false }),
       filterCurrentDynamicToolSpecs: (specs) => specs,
       formatIncompleteTerminalText: () => '',
       getToolMetadata: () => ({ isReadOnly: true }),
