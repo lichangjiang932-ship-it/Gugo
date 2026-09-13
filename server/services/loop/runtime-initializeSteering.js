@@ -10,6 +10,7 @@ import { installArtifactSteeringContract } from './runtime-initializeArtifactSte
 import { installTerminalCompletion } from './runtime-initializeTerminalCompletion.js'
 import { discardContinuedAnswer } from './outputContinuation.js'
 import { assertContextRecoveryActive } from '../contextCompactionState.js'
+import { publicModelRequestDiagnostics, snapshotInterruptedModelRequest } from './modelGenerationRecovery.js'
 import { SEMANTIC_SUMMARY_CACHE_HIT, semanticSummaryError } from '../contextSemanticSummaryPolicy.js'
 import { assertCompactionRequestSettled, assertMainRequestSettled, cachedCompactionResponse, cacheCompactionResponse, compactionInvocationState, createCompactionRecoveryCheckpoint, restoreCompactionCheckpoint } from './compactionCheckpoint.js'
 
@@ -207,7 +208,13 @@ async function executeTrackedInvocation(s, context, preparedRequest) {
       () => {
         context.assertActive()
         s.modelInvocation = { ...s.modelInvocation, callBudgetApplied: true }
-        return s.runModel(preparedRequest)
+        return s.runModel({
+          ...preparedRequest,
+          onToolCallProgress: async (progress) => {
+            context.assertActive()
+            await context.heartbeat.recordToolProgress?.(progress)
+          },
+        })
       },
       context.budgetOptions,
     )
@@ -232,6 +239,23 @@ async function executeTrackedInvocation(s, context, preparedRequest) {
     if (context.requestFenceFailures.has(error)) throw error
     context.assertActive()
     const checkpointed = s.modelInvocation?.id === invocation.id ? s.modelInvocation : invocation
+    if (error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN') {
+      // Diagnostics are not a response or proof of non-execution. Keep the
+      // invocation unknown/in-flight and all existing reconciliation fences.
+      if (s.signal?.aborted || preparedRequest.signal?.aborted) throw error
+      const diagnostics = checkpointed.status === 'in_flight' ? snapshotInterruptedModelRequest(checkpointed, error) : null
+      if (diagnostics) {
+        context.assertActive()
+        s.modelInvocation = { ...checkpointed, modelRequestDiagnostics: diagnostics }
+        await s.checkpointBarrier.flush({ meta: {
+          boundary: 'model-request-diagnostics', iteration: s.iter,
+          attempt: invocation.attempt, modelRequestId: invocation.id,
+        } })
+        context.assertActive()
+        try { error.modelRequestDiagnostics = publicModelRequestDiagnostics(diagnostics) } catch { /* retain frozen primary error */ }
+      }
+      throw error
+    }
     if (error?.partialModelResult) {
       s.modelInvocation = {
         ...checkpointed,
@@ -406,11 +430,11 @@ async function callTrackedModel(s, options) {
       compactionArchivePort: s.compactionArchivePort,
       ...(toolChoice !== undefined ? { toolChoice } : {}),
       onTextDelta: async (text, metadata = {}) => {
-        if (text) await heartbeat.recordDelta()
+        if (typeof text === 'string' && text.trim()) await heartbeat.recordDelta()
         if (typeof onTextDelta === 'function') await onTextDelta(text, metadata)
       },
       onReasoningDelta: async (text, metadata = {}) => {
-        if (text) await heartbeat.recordDelta()
+        if (typeof text === 'string' && text.trim()) await heartbeat.recordDelta()
         if (typeof onReasoningDelta === 'function') await onReasoningDelta(text, metadata)
       },
     })

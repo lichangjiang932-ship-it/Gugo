@@ -11,6 +11,7 @@ import {
   utf8ByteLength,
 } from '../shared/inlineSkillDefinitions.js'
 import { setAuthToken } from '../src/lib/accountClient.js'
+import { cancelServerTurn } from '../src/lib/turnClient/turnRequests.js'
 import {
   dispatchTurnActivity,
   dispatchTurnEvent,
@@ -31,6 +32,37 @@ import { mergeServerSessionMessages } from '../src/store/sessionServerSync.js'
 function response(body, status = 200, headers) {
   return { ok: status >= 200 && status < 300, status, headers, json: async () => body }
 }
+
+test('directory rejection forwards its exact pause sequence while ordinary cancel stays unchanged', async () => {
+  const calls = []
+  const controller = new AbortController()
+  const turn = { sessionId: 'directory-session', turnId: 'directory-turn', status: 'cancelled' }
+  const fetchImpl = async (url, options) => { calls.push({ url, options }); return response({ turn }) }
+  for (const directoryPausedSequence of [undefined, 0, 19]) {
+    assert.deepEqual(await cancelServerTurn({
+      sessionId: turn.sessionId, turnId: turn.turnId, directoryPausedSequence,
+      signal: controller.signal, fetchImpl,
+    }), turn)
+  }
+  assert.deepEqual(calls.map(call => JSON.parse(call.options.body)), [
+    { sessionId: turn.sessionId },
+    { sessionId: turn.sessionId, directoryPausedSequence: 0 },
+    { sessionId: turn.sessionId, directoryPausedSequence: 19 },
+  ])
+  assert.ok(calls.every(call => call.url === '/api/turns/directory-turn/cancel'
+    && call.options.method === 'POST' && call.options.signal === controller.signal))
+})
+
+test('invalid directory rejection sequences never reach the cancel transport', async () => {
+  let fetches = 0
+  for (const directoryPausedSequence of [null, -1, 0.2, '2', NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, true, {}, []]) {
+    await assert.rejects(cancelServerTurn({
+      sessionId: 'session', turnId: 'turn', directoryPausedSequence,
+      fetchImpl: async () => { fetches += 1; return response({}) },
+    }), error => error.code === 'TURN_DIRECTORY_PAUSE_SEQUENCE_INVALID' && error.status === 400)
+  }
+  assert.equal(fetches, 0)
+})
 
 function sseResponse(events) {
   const encoder = new TextEncoder()
@@ -1894,7 +1926,7 @@ test('model heartbeat phases keep visible activity before and between streamed c
     [
       'Waiting for model output',
       'Receiving model output',
-      'Model output paused; task is still running',
+      'Waiting for the model to continue',
       'Receiving model output',
     ],
   )
@@ -2045,7 +2077,7 @@ test('side-effect blocked events normalize legacy and canonical recovery kinds f
     assert.equal(meta.serverRecoveryBlocked, true)
     assert.equal(meta.serverRecoveryKind, 'side_effect_outcome_unknown')
     assert.equal(meta.serverRecoveryToolCallId, 'write-1')
-    assert.equal(meta.serverRecoveryActionPath, '/settings?tab=recovery')
+    assert.equal(meta.serverRecoveryActionPath, null)
   }
 })
 
@@ -3357,7 +3389,7 @@ test('server snapshot restores only whitelisted side-effect recovery metadata af
   assert.equal(meta.serverRecoveryBlocked, true)
   assert.equal(meta.serverRecoveryKind, 'side_effect_outcome_unknown')
   assert.equal(meta.serverRecoveryToolCallId, 'write-1')
-  assert.equal(meta.serverRecoveryActionPath, '/settings?tab=recovery')
+  assert.equal(meta.serverRecoveryActionPath, null)
   assert.equal(meta.serverPartialText, '')
   assert.doesNotMatch(JSON.stringify(meta), /must-not-project/u)
 })

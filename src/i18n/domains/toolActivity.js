@@ -1,0 +1,28 @@
+export default {
+  zh: {
+    readArtifactSource: '读取可编辑源稿',
+    sourceContent: '已有产物的可编辑内容',
+    sourceOffset: '源稿 · 从第 {offset} 个字符读取',
+    preparingArguments: '正在为「{name}」生成参数…',
+    argumentsReceived: '已接收 {count} 个字符，工具尚未执行',
+    waitingForModel: '等待模型继续输出…',
+    lastOutputAgo: '已有 {seconds} 秒未收到新内容',
+    publicActivity: '当前执行状态',
+    requestElapsed: '本次模型调用耗时',
+    pptxFrameOverflow: '第 {slide} 页的第 {element} 个元素空间不足，需要调整布局。',
+    summaryUnavailable: '暂无参数摘要',
+  },
+  en: {
+    readArtifactSource: 'Read editable source',
+    sourceContent: 'Editable content of an existing artifact',
+    sourceOffset: 'Source · reading from character {offset}',
+    preparingArguments: 'Preparing arguments for {name}…',
+    argumentsReceived: '{count} characters received; the tool has not run yet',
+    waitingForModel: 'Waiting for the model to continue…',
+    lastOutputAgo: 'No new content for {seconds} seconds',
+    publicActivity: 'Current execution status',
+    requestElapsed: 'Time elapsed in this model request',
+    pptxFrameOverflow: 'Slide {slide}, element {element} needs more space for its content.',
+    summaryUnavailable: 'No argument summary available',
+  },
+}

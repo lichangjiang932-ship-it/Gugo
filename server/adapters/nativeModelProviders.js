@@ -155,8 +155,14 @@ function anthropicUsage(usage, { allowPartial = false } = {}) {
   return normalized
 }
 
-export function extractNativeProviderUsage(data, kind = '', options = {}, adapterSnapshot = null) {
-  const adapter = adapterSnapshot || getEffectiveModelProviderAdapter(kind)
+// Undefined keeps the standalone helper's dynamic lookup. Explicit null is a
+// captured builtin selection and must survive later provider registrations.
+function resolveResponseAdapter(kind, adapterSnapshot) {
+  return adapterSnapshot === undefined ? getEffectiveModelProviderAdapter(kind) : adapterSnapshot
+}
+
+export function extractNativeProviderUsage(data, kind = '', options = {}, adapterSnapshot = undefined) {
+  const adapter = resolveResponseAdapter(kind, adapterSnapshot)
   if (adapter?.extractUsage) return adapter.extractUsage(data, options)
   if (kind === 'anthropic') {
     const usage = data?.usage
@@ -247,8 +253,8 @@ export function normalizeNativeProviderFinishReason(kind, value, {
   throw providerStopReasonError(providerKind, raw)
 }
 
-export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = null, replayContext = null) {
-  const adapter = adapterSnapshot || getEffectiveModelProviderAdapter(kind)
+export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = undefined, replayContext = null) {
+  const adapter = resolveResponseAdapter(kind, adapterSnapshot)
   if (adapter) return adapter.parseResponse(data, { kind })
   if (kind === 'anthropic') {
     const blocks = Array.isArray(data?.content) ? data.content : []
@@ -258,7 +264,7 @@ export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = n
     return {
       content: blocks.filter((part) => part?.type === 'text').map((part) => part.text || '').join(''),
       toolCalls,
-      usage: extractNativeProviderUsage(data, kind),
+      usage: extractNativeProviderUsage(data, kind, {}, null),
       finishReason: normalizeNativeProviderFinishReason(kind, data?.stop_reason, {
         hasToolCalls: toolCalls.length > 0,
       }),
@@ -275,7 +281,7 @@ export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = n
     content: parts.filter((part) => typeof part?.text === 'string' && !part.thought).map((part) => part.text).join(''),
     toolCalls,
     ...(providerReplay ? { providerReplay } : {}),
-    usage: extractNativeProviderUsage(data, kind),
+    usage: extractNativeProviderUsage(data, kind, {}, null),
     finishReason: normalizeNativeProviderFinishReason(
       kind,
       data?.promptFeedback?.blockReason ?? candidate?.finishReason,
@@ -284,8 +290,8 @@ export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = n
   }
 }
 
-export function createNativeProviderStreamState(kind = '', adapterSnapshot = null, replayContext = null) {
-  const adapter = adapterSnapshot || getEffectiveModelProviderAdapter(kind)
+export function createNativeProviderStreamState(kind = '', adapterSnapshot = undefined, replayContext = null) {
+  const adapter = resolveResponseAdapter(kind, adapterSnapshot)
   if (adapter) {
     if (typeof adapter.createStreamState !== 'function') {
       throw new Error(`Native provider does not support streaming: ${kind}`)
@@ -368,6 +374,7 @@ export function consumeNativeProviderStreamPayload(data, state) {
       { usage: data?.message?.usage || data?.usage },
       'anthropic',
       { allowPartial: true },
+      null,
     )
     if (usage) {
       state.usage = mergeUsage(state.usage, usage)
@@ -405,7 +412,7 @@ export function consumeNativeProviderStreamPayload(data, state) {
     return events
   }
 
-  const streamedUsage = extractNativeProviderUsage(data, 'gemini', { allowPartial: true })
+  const streamedUsage = extractNativeProviderUsage(data, 'gemini', { allowPartial: true }, null)
   if (streamedUsage) {
     state.usage = mergeUsage(state.usage, streamedUsage)
     events.push({ type: 'usage', usage: state.usage })

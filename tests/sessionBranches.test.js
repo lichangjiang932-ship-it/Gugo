@@ -165,6 +165,173 @@ test('forkSession copies only persisted transcript with fresh message ids and sa
   assert.equal(getSession({ userId: other.userId, sessionId: 'branch-copy' }), null)
 })
 
+test('forkSession can branch through an owned user or assistant message without copying the abandoned suffix', () => {
+  const owner = issueTestSession({ email: `branch-node-owner-${process.pid}@example.com` })
+  upsertSession({ id: 'branch-node-source', userId: owner.userId, title: 'Node source' })
+  for (const [id, role, content, createdAt] of [
+    ['node-user-1', 'user', 'first prompt', 10],
+    ['node-assistant-1', 'assistant', 'first answer', 20],
+    ['node-user-2', 'user', 'second prompt', 30],
+    ['node-assistant-2', 'assistant', 'abandoned answer', 40],
+  ]) {
+    upsertMessage({ id, userId: owner.userId, sessionId: 'branch-node-source', role, content, createdAt })
+  }
+  const ids = ['branch-node-copy', 'copy-user-1', 'copy-assistant-1', 'copy-user-2']
+  const result = forkSession({
+    userId: owner.userId,
+    sessionId: 'branch-node-source',
+    throughMessageId: 'node-user-2',
+    label: 'Retry second prompt',
+    idFactory: () => ids.shift(),
+  })
+  assert.equal(result.totalMessages, 3)
+  assert.deepEqual(
+    listMessages({ userId: owner.userId, sessionId: result.session.id }).map(({ role, content }) => [role, content]),
+    [['user', 'first prompt'], ['assistant', 'first answer'], ['user', 'second prompt']],
+  )
+  const assistantIds = ['branch-assistant-copy', 'copy-user-before-assistant', 'copy-assistant-boundary']
+  const assistantResult = forkSession({
+    userId: owner.userId,
+    sessionId: 'branch-node-source',
+    throughMessageId: 'node-assistant-1',
+    label: 'Continue after first answer',
+    idFactory: () => assistantIds.shift(),
+  })
+  assert.equal(assistantResult.totalMessages, 2)
+  assert.deepEqual(
+    listMessages({ userId: owner.userId, sessionId: assistantResult.session.id })
+      .map(({ role, content }) => [role, content]),
+    [['user', 'first prompt'], ['assistant', 'first answer']],
+  )
+  const branchSummaries = getSessionBranches({
+    userId: owner.userId,
+    sessionId: assistantResult.session.id,
+  }).branches.map(({ branchLabel, branchSummary, branchTipRole, messageCount }) => ({
+    branchLabel, branchSummary, branchTipRole, messageCount,
+  }))
+  assert.deepEqual(branchSummaries, [
+    { branchLabel: null, branchSummary: 'abandoned answer', branchTipRole: 'assistant', messageCount: 4 },
+    { branchLabel: 'Retry second prompt', branchSummary: 'second prompt', branchTipRole: 'user', messageCount: 3 },
+    { branchLabel: 'Continue after first answer', branchSummary: 'first answer', branchTipRole: 'assistant', messageCount: 2 },
+  ])
+
+  assert.throws(
+    () => forkSession({
+      userId: owner.userId,
+      sessionId: 'branch-node-source',
+      throughMessageId: 'missing-message',
+      idFactory: () => 'invalid-missing-message',
+    }),
+    (error) => error?.code === 'INVALID_SESSION_MUTATION'
+      && /user or assistant message in the source Session/.test(error.message),
+  )
+  assert.equal(getSession({ userId: owner.userId, sessionId: 'invalid-missing-message' }), null)
+})
+
+test('branch file-operation summaries use successful durable evidence and exclude copied history', () => {
+  const owner = issueTestSession({ email: `branch-files-owner-${process.pid}@example.com` })
+  upsertSession({ id: 'branch-files-root', userId: owner.userId, title: 'File evidence' })
+  upsertMessage({
+    id: 'branch-files-root-answer',
+    userId: owner.userId,
+    sessionId: 'branch-files-root',
+    role: 'assistant',
+    content: 'root operation',
+    modelContext: {
+      toolTrace: [
+        { role: 'assistant', tool_calls: [{
+          id: 'root-write', type: 'function',
+          function: { name: 'write_file', arguments: '{"path":"workspace/root.txt"}' },
+        }] },
+        { role: 'tool', tool_call_id: 'root-write', name: 'write_file', content: JSON.stringify({
+          ok: true,
+          changedPaths: ['workspace/root.txt'],
+          verifiedOutputs: [{ path: 'workspace/root.txt', status: 'modified', type: 'file' }],
+        }) },
+      ],
+    },
+  })
+  const ids = ['branch-files-child', 'branch-files-copied-answer']
+  forkSession({
+    userId: owner.userId,
+    sessionId: 'branch-files-root',
+    label: 'Different implementation',
+    idFactory: () => ids.shift(),
+  })
+  upsertMessage({
+    id: 'branch-files-child-answer',
+    userId: owner.userId,
+    sessionId: 'branch-files-child',
+    role: 'assistant',
+    content: 'child operation; prose says workspace/fake.txt changed',
+    modelContext: {
+      toolTrace: [
+        { role: 'assistant', tool_calls: [
+          { id: 'child-download', type: 'function', function: { name: 'browser_download', arguments: '{}' } },
+          { id: 'root-write', type: 'function', function: { name: 'write_file', arguments: '{}' } },
+          { id: 'failed-write', type: 'function', function: { name: 'write_file', arguments: '{}' } },
+        ] },
+        { role: 'tool', tool_call_id: 'child-download', name: 'browser_download', content: JSON.stringify({
+          ok: true,
+          changedPaths: ['workspace/child.txt'],
+          verifiedOutputs: [{ path: 'workspace/child.txt', status: 'created', type: 'file' }],
+        }) },
+        { role: 'tool', tool_call_id: 'root-write', name: 'write_file', content: JSON.stringify({
+          ok: true,
+          changedPaths: ['workspace/root.txt'],
+          verifiedOutputs: [{ path: 'workspace/root.txt', status: 'modified', type: 'file' }],
+        }) },
+        { role: 'tool', tool_call_id: 'failed-write', name: 'write_file', content: JSON.stringify({
+          ok: false,
+          changedPaths: ['workspace/failed.txt'],
+        }) },
+      ],
+    },
+  })
+
+  const branches = getSessionBranches({
+    userId: owner.userId,
+    sessionId: 'branch-files-child',
+  }).branches
+  assert.deepEqual(branches.map((branch) => ({
+    id: branch.id,
+    fileOperations: branch.fileOperations,
+    fileOperationsTruncated: branch.fileOperationsTruncated,
+  })), [
+    {
+      id: 'branch-files-root',
+      fileOperations: [{ path: 'workspace/root.txt', action: 'modified', toolName: 'write_file' }],
+      fileOperationsTruncated: false,
+    },
+    {
+      id: 'branch-files-child',
+      fileOperations: [
+        { path: 'workspace/child.txt', action: 'created', toolName: 'browser_download' },
+        { path: 'workspace/root.txt', action: 'modified', toolName: 'write_file' },
+      ],
+      fileOperationsTruncated: false,
+    },
+  ])
+
+  const nestedIds = [
+    'branch-files-grandchild',
+    'branch-files-grandchild-root-copy',
+    'branch-files-grandchild-child-copy',
+  ]
+  forkSession({
+    userId: owner.userId,
+    sessionId: 'branch-files-child',
+    label: 'Nested alternative',
+    idFactory: () => nestedIds.shift(),
+  })
+  const grandchild = getSessionBranches({
+    userId: owner.userId,
+    sessionId: 'branch-files-grandchild',
+  }).branches.find((branch) => branch.id === 'branch-files-grandchild')
+  assert.deepEqual(grandchild.fileOperations, [])
+  assert.equal(grandchild.fileOperationsTruncated, false)
+})
+
 test('branch lineage enforces depth five, stays user scoped, and survives parent deletion', () => {
   const owner = issueTestSession({ email: `depth-owner-${process.pid}@example.com` })
   const other = issueTestSession({ email: `depth-other-${process.pid}@example.com` })
@@ -226,6 +393,13 @@ test('fork and branch routes isolate users and reject an active source with 409'
     role: 'user',
     content: 'persist me',
   })
+  upsertMessage({
+    id: 'route-source-answer',
+    userId: owner.userId,
+    sessionId: 'route-branch-source',
+    role: 'assistant',
+    content: 'do not copy this suffix',
+  })
   let active = false
   const engine = { hasActiveSession: () => active }
   const persistence = createTurnPersistenceAdapterController(SQLITE_TURN_PERSISTENCE_ADAPTER, {
@@ -243,7 +417,10 @@ test('fork and branch routes isolate users and reject an active source with 409'
       const forked = await fetch(`${baseUrl}/api/sessions/route-branch-source/fork`, {
         method: 'POST',
         headers: ownerHeaders,
-        body: JSON.stringify({ label: 'Route alternative' }),
+        body: JSON.stringify({
+          label: 'Route alternative',
+          throughMessageId: 'route-source-message',
+        }),
       })
       assert.equal(forked.status, 201)
       const forkedBody = await forked.json()

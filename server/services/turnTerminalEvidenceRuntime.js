@@ -23,6 +23,7 @@ import {
   publicIncompleteText,
 } from './turnTerminalProjection.js'
 import { logWarn } from '../utils/logger.js'
+import { createTurnBinaryArtifactEvidence } from './turnBinaryArtifactEvidence.js'
 
 function requirePort(name, value) {
   if (typeof value !== 'function') throw new TypeError(`${name} is required`)
@@ -79,6 +80,7 @@ function verifiedLocalFilesAt(runtime, verifiedAt = runtime.ports.now()) {
   const state = stateSnapshot(runtime)
   return extractVerifiedLocalFiles(state.checkpointMessages, {
     userId: runtime.scope.userId,
+    binaryArtifactEvidence: createTurnBinaryArtifactEvidence({ scope: runtime.scope, replayEvents: runtime.ports.replayEvents }),
     baselineToolCallIds: state.baselineToolCallIds,
     verifiedAt,
   })
@@ -320,7 +322,7 @@ async function emitBlocked(runtime, sourceError) {
       requiresUserVerification: true,
       recoveryKind: 'side_effect_outcome_unknown',
       ...(recoveryToolCallId ? { toolCallId: recoveryToolCallId } : {}),
-      recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
+      recoveryAction: { kind: 'confirm_side_effect' },
     } : {}),
     ...(modelRequestUnknown ? {
       turnId: runtime.scope.turnId,
@@ -356,6 +358,7 @@ export function createTurnTerminalEvidenceRuntime({
   commitTurnBoundary = null,
   recordCanaryTerminal,
   readState,
+  replayEvents = null,
 } = {}) {
   const { userId, sessionId, turnId } = scope || {}
   if (!userId || !sessionId || !turnId) {
@@ -369,6 +372,7 @@ export function createTurnTerminalEvidenceRuntime({
     commitTurnBoundary: typeof commitTurnBoundary === 'function' ? commitTurnBoundary : null,
     recordCanaryTerminal: requirePort('recordCanaryTerminal', recordCanaryTerminal),
     readState: requirePort('readState', readState),
+    replayEvents: typeof replayEvents === 'function' ? replayEvents : null,
   }
   const runtime = { scope: { userId, sessionId, turnId }, ports, executionLease }
   runtime.atomicTurnBoundary = !!ports.commitTurnBoundary

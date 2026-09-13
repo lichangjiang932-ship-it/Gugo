@@ -888,15 +888,15 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
 }
 
 .chat-tool-step[data-status="success"] .chat-tool-step-marker {
-  border-color: rgb(var(--color-cyan-rgb) / 0.35);
-  background: rgb(var(--color-cyan-rgb) / 0.055);
-  color: rgb(var(--color-cyan-rgb));
+  border-color: rgb(var(--color-success-rgb) / 0.35);
+  background: rgb(var(--color-success-rgb) / 0.055);
+  color: rgb(var(--color-success-rgb));
 }
 
 .chat-tool-step[data-status="error"] .chat-tool-step-marker {
-  border-color: rgb(var(--color-accent-rgb) / 0.42);
-  background: rgb(var(--color-accent-rgb) / 0.055);
-  color: rgb(var(--color-accent-rgb));
+  border-color: rgb(var(--color-danger-rgb) / 0.42);
+  background: rgb(var(--color-danger-rgb) / 0.055);
+  color: rgb(var(--color-danger-rgb));
 }
 
 .chat-tool-step[data-status="cancelled"] .chat-tool-step-marker {
@@ -967,11 +967,19 @@ html[data-animations="false"] .chat-markdown-streaming > :last-child::after {
 }
 
 .chat-tool-step[data-status="success"] .chat-tool-status {
-  color: rgb(var(--color-cyan-rgb));
+  color: rgb(var(--color-success-rgb));
 }
 
 .chat-tool-step[data-status="error"] .chat-tool-status {
-  color: rgb(var(--color-accent-rgb));
+  color: rgb(var(--color-danger-rgb));
+}
+
+.chat-tool-failure-summary {
+  margin: 0.15rem 1.5rem 0.45rem 1.4rem;
+  color: rgb(var(--color-danger-rgb));
+  font-size: var(--type-meta);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .chat-tool-step[data-status="cancelled"] .chat-tool-status {
@@ -1443,19 +1451,24 @@ html[data-animations="false"] .chat-run-timeline::before {
 .chat-run-timeline .chat-tool-label {
   flex: none;
   color: rgb(var(--color-ink-rgb));
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 12.5px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .chat-run-timeline .chat-tool-summary {
   min-width: 0;
   overflow: hidden;
   color: rgb(var(--color-ink-fade-rgb));
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   font-size: 12.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-run-timeline .chat-tool-summary[data-technical="true"],
+.chat-run-timeline .chat-tool-summary-button {
+  font-family: var(--font-mono);
 }
 
 .chat-run-timeline .chat-tool-summary::before {
@@ -1488,6 +1501,9 @@ html[data-animations="false"] .chat-run-timeline::before {
 
 .chat-inline-file-reference .chat-output-file-name {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   user-select: text;
   -webkit-user-select: text;
 }
@@ -1646,16 +1662,38 @@ html[data-animations="false"] .chat-run-timeline::before {
 
 .chat-thinking-line {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.36rem;
   min-height: 1.65rem;
   margin: 0.05rem 0 0.4rem;
   color: rgb(var(--color-ink-soft-rgb));
   font-size: var(--type-ui);
+  max-width: 100%;
+}
+
+/* Typography's decorative code ticks are not part of a verified file label. */
+.chat-inline-file-reference .chat-output-file-name code::before,
+.chat-inline-file-reference .chat-output-file-name code::after {
+  content: none;
+}
+
+.chat-thinking-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow-wrap: anywhere;
+}
+
+.chat-thinking-detail {
+  color: rgb(var(--color-ink-fade-rgb));
+  font-size: var(--type-meta);
+  line-height: 1.6;
 }
 
 .chat-thinking-line svg {
   color: rgb(var(--color-running-rgb));
+  flex-shrink: 0;
+  margin-top: 0.22rem;
 }
 
 .chat-tool-elapsed,
@@ -1820,9 +1858,7 @@ html[data-animations="false"] .chat-run-timeline .chat-tool-step[data-status="ru
   background-color: var(--chat-code-deletion-bg);
 }
 
-/* Keep the conversation readable when a preview is opened on tablets or phones.
- * On desktop it remains a resizable adjacent pane; on narrower screens it becomes
- * an overlay instead of consuming the chat column. */
+/* Pane mode follows the measured main area after the navigation rail. */
 .chat-preview-pane {
   min-height: 0;
   container: chat-preview / inline-size;
@@ -1832,6 +1868,24 @@ html[data-animations="false"] .chat-run-timeline .chat-tool-step[data-status="ru
 .chat-preview-backdrop {
   pointer-events: none;
   background: transparent;
+}
+
+.chat-preview-backdrop[data-preview-overlay="true"] {
+  pointer-events: auto;
+  background: rgb(var(--color-ink-rgb) / 0.2);
+}
+
+.chat-preview-pane-focused {
+  border-left: 0;
+}
+
+.chat-preview-tab-item {
+  width: max-content;
+  max-width: min(14rem, 100%);
+}
+
+.chat-preview-tabs > :only-child {
+  flex-shrink: 1;
 }
 
 .chat-preview-resize-handle::after {
@@ -1862,33 +1916,14 @@ html[data-animations="false"] .chat-run-timeline .chat-tool-step[data-status="ru
   box-shadow: none;
 }
 
-@media (max-width: 1023px) {
-  .chat-preview-backdrop {
-    pointer-events: auto;
-    background: rgb(var(--color-ink-rgb) / 0.2);
-  }
-
-  .chat-preview-pane {
-    position: fixed;
-    inset: 0;
-    width: 100vw !important;
-    border-left: 0;
-    box-shadow: 0 0 2rem rgb(var(--color-ink-rgb) / 0.18);
-  }
-
-  .chat-preview-maximize-toggle {
-    display: none;
-  }
-
-  .chat-preview-resize-handle {
-    display: none;
-  }
-}
-
 /* Preview controls should reflow rather than forcing a horizontal scroll. */
 .chat-preview-toolbar,
 .chat-preview-toolbar-actions {
   flex-wrap: wrap;
+}
+
+.chat-direct-file-toolbar {
+  flex-wrap: nowrap;
 }
 
 @container chat-preview (max-width: 680px) {
@@ -1902,7 +1937,11 @@ html[data-animations="false"] .chat-run-timeline .chat-tool-step[data-status="ru
   }
 }
 
-@media (max-width: 480px) {
+@container chat-preview (max-width: 480px) {
+  .chat-preview-back-label {
+    display: none;
+  }
+
   .chat-preview-header,
   .chat-preview-toolbar {
     padding-inline: 0.625rem;
@@ -1915,6 +1954,10 @@ html[data-animations="false"] .chat-run-timeline .chat-tool-step[data-status="ru
   .chat-preview-toolbar-actions {
     width: 100%;
     justify-content: flex-end;
+  }
+
+  .chat-direct-file-toolbar {
+    align-items: center;
   }
 }
 

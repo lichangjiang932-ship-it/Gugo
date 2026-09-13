@@ -30,25 +30,35 @@ export async function* readModelSseLines(reader, { onFirstByte, onChunk } = {}) 
   const decoder = new TextDecoder()
   let buffer = ''
   let sawFirstChunk = false
+  let reachedEof = false
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) {
-      buffer += decoder.decode()
-      if (buffer) buffer += '\n'
-    } else {
-      if (!sawFirstChunk) {
-        sawFirstChunk = true
-        notifyObserver(onFirstByte)
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) {
+        reachedEof = true
+        buffer += decoder.decode()
+        if (buffer) buffer += '\n'
+      } else {
+        if (!sawFirstChunk) {
+          sawFirstChunk = true
+          notifyObserver(onFirstByte)
+        }
+        if (typeof onChunk === 'function') onChunk()
+        buffer += decoder.decode(value, { stream: true })
       }
-      if (typeof onChunk === 'function') onChunk()
-      buffer += decoder.decode(value, { stream: true })
-    }
 
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    yield* lines
-    if (done) return
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      yield* lines
+      if (done) return
+    }
+  } finally {
+    // Protocol completion can precede HTTP EOF. Cancel only when the owner
+    // leaves this iterator, so trailing keepalives cannot retain an open body.
+    // Cleanup must not replace a verified terminal or the original failure.
+    if (!reachedEof) try { await reader.cancel?.() } catch { /* best-effort body disposal */ }
+    try { reader.releaseLock?.() } catch { /* already released or failed reader */ }
   }
 }
 
@@ -76,7 +86,8 @@ export function decodeModelStreamLine(line) {
     error.type = 'provider_error'
     error.fromUpstream = true
     error.retryable = false
-    error.modelRequestOutcome = 'failed'
+    // Malformed bytes are not a verifiable upstream outcome. A tracked request
+    // remains unknown; untracked callers still receive this protocol error.
     throw error
   }
 }

@@ -1,7 +1,6 @@
 import { useCallback, useEffect } from 'react'
-import { authorizeChatDirectoryRequest } from '../../lib/chatDirectoryRequest.js'
+import { decideChatDirectory } from './chatDirectoryDecisions.js'
 import {
-  buildServerTurnResumeMeta,
   isResumeNudge,
   resolvePendingDirectorySend,
 } from './pausedTurnResume.js'
@@ -14,12 +13,36 @@ import {
   streamResumeDismissalKey,
   updateStreamResumeStates,
 } from './streamResumeState.js'
-import { cancelTurnRun } from './turnRunRegistry.js'
+import { cancelTurnRun, hasTurnRun } from './turnRunRegistry.js'
 import useManualRecoveryRouteResume from './useManualRecoveryRouteResume.js'
 import useServerTurnResume from './useServerTurnResume.js'
 import { streamResumeOwnerScope } from '../../lib/streamResumeDismissals.js'
 import useStreamResumeDismissals from './useStreamResumeDismissals.js'
 import useScopedChatRecoveryState from './useScopedChatRecoveryState.js'
+import { safeSideEffectResumeDescriptor } from '../../lib/sideEffectRecoveryClient.js'
+import { matchesManualRecoveryResume } from './serverTurnResumePolicy.js'
+
+export function inlineSideEffectResumeForCurrentMessage({
+  state, ownerScope, submittedOwnerScope, message, record, resume, running = false,
+}) {
+  if (!ownerScope || ownerScope !== streamResumeOwnerScope(state)
+    || submittedOwnerScope !== ownerScope || running
+    || !['committed', 'failed'].includes(record?.status)
+    || record.scopeKey !== JSON.stringify(['turn', record.sessionId, record.turnId])
+    || !/^[a-f0-9]{64}$/u.test(record.argsDigest || '')
+    || typeof message?.id !== 'string' || !message.id) return null
+  const descriptor = safeSideEffectResumeDescriptor(record, resume)
+  if (!descriptor || descriptor.kind !== 'turn' || state?.activeSessionId !== descriptor.sessionId) return null
+  const session = state.sessions?.find((item) => item.id === descriptor.sessionId)
+  const currentMessage = session?.messages?.find((item) => item.id === message?.id && item.role === 'assistant')
+  if (!currentMessage || currentMessage.meta?.cancelled === true || currentMessage.meta?.streaming === true
+    || !Number.isSafeInteger(currentMessage.meta?.serverLastSequence) || currentMessage.meta.serverLastSequence < 0
+    || currentMessage.meta?.serverLastSequence !== message?.meta?.serverLastSequence
+    || !matchesManualRecoveryResume(session, currentMessage, descriptor)) return null
+  return { ...descriptor, inlineGuard: {
+    ownerScope, messageId: currentMessage.id, sequence: currentMessage.meta.serverLastSequence,
+  } }
+}
 
 export default function useChatTurnRecovery({
   abortCtrlRef,
@@ -82,9 +105,10 @@ export default function useChatTurnRecovery({
     const session = current.sessions.find((item) => item.id === current.activeSessionId)
     const pending = resolvePendingDirectorySend(session?.messages)
     if (!pending) return false
+    if (pending.message.meta?.cancelled === true) return false
     setWorkbenchMessage(t(pending.state === 'resuming'
       ? 'chatSteering.directoryResumePending'
-      : 'chatSteering.directoryAuthorizationRequired'))
+      : 'taskSteering.directoryDecisionRequired'))
     if (isResumeNudge(content)) {
       setInput('')
       dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: current.activeSessionId, text: '' } })
@@ -96,35 +120,22 @@ export default function useChatTurnRecovery({
     })
     return true
   }, [dispatch, setInput, setWorkbenchMessage, stateRef, t])
-  const handleAuthorizeDirectoryRequest = useCallback(async ({
-    message,
-    path,
-    accessMode,
-    authorizationScope,
-  }) => {
-    const sessionId = stateRef.current.activeSessionId
-    const turnId = message?.meta?.serverTurnId
-    const clarification = message?.meta?.serverClarification || {}
-    const result = await authorizeChatDirectoryRequest({
-      sessionId,
-      turnId,
-      pausedSequence: message?.meta?.serverLastSequence,
-      path,
-      accessMode,
-      scope: authorizationScope,
-      purpose: clarification.purpose || clarification.why || '',
-    })
-    dispatch({
-      type: 'UPDATE_LAST_MESSAGE_META',
-      sessionId,
-      messageId: message.id,
-      payload: buildServerTurnResumeMeta(result.resolution),
-    })
-    toast.success({ title: t('taskSteering.directoryGranted'), body: result.path })
-    return result
-  }, [dispatch, stateRef, t, toast])
+  const handleAuthorizeDirectoryRequest = useCallback((input) => decideChatDirectory({
+    kind: 'grant', input, stateRef, ownerScope, dispatch, toast, t,
+  }), [dispatch, ownerScope, stateRef, t, toast])
+  const handleRejectDirectoryRequest = useCallback((input) => decideChatDirectory({
+    kind: 'reject', input, stateRef, ownerScope, dispatch, toast, t,
+  }), [dispatch, ownerScope, stateRef, t, toast])
 
-  const { manualRecoveryResume, onManualRecoveryConsumed } = useManualRecoveryRouteResume()
+  const { manualRecoveryResume, onManualRecoveryConsumed, requestManualRecoveryResume } = useManualRecoveryRouteResume()
+  const handleSideEffectResolved = useCallback((input) => {
+    const descriptor = inlineSideEffectResumeForCurrentMessage({
+      ...input, state: stateRef.current, ownerScope, submittedOwnerScope: input?.ownerScope,
+      running: Boolean(abortCtrlRef.current) || hasTurnRun(input?.record?.sessionId)
+        || resumingTurnIdsRef.current.has(`${input?.record?.sessionId}\u0000${input?.record?.turnId}`),
+    })
+    return descriptor ? requestManualRecoveryResume(descriptor) : false
+  }, [abortCtrlRef, ownerScope, requestManualRecoveryResume, resumingTurnIdsRef, stateRef])
   const onFailedTurnRetryConsumed = useCallback((consumed) => {
     if (streamResumeOwnerScope(stateRef.current) !== ownerScope) return
     setFailedTurnRetry((current) => (
@@ -193,6 +204,9 @@ export default function useChatTurnRecovery({
   return {
     handleAbort,
     handleAuthorizeDirectoryRequest,
+    handleRejectDirectoryRequest,
+    handleSideEffectResolved,
+    recoveryOwnerScope: ownerScope,
     handleDismissResume,
     handleResume,
     handleTurnResult,

@@ -1,11 +1,14 @@
 import {
   getNativeProviderRequestAdapter,
   isNativeProviderKind,
+  NATIVE_PROVIDER_KINDS,
   parseNativeProviderResponse,
 } from './nativeModelProviders.js'
 import { normalizeCacheReadUsage, normalizeModelUsage, normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 import { createEmptyModelResponseError } from './sseLifecycle.js'
 import { getProviderReplayContext } from './providerReplayState.js'
+import { normalizeModelProviderStopDiagnostic } from '../../shared/modelProviderStopDiagnostic.js'
+import { redactModelConfigSecrets } from './modelProxyErrors.js'
 
 export function stripEmbeddedReasoning(value) {
   const text = String(value || '')
@@ -185,7 +188,38 @@ export function extractUsage(data) {
   })
 }
 
-export function normalizeCompatibleFinishReason(value, hasToolCalls = false) {
+function publicCompatibleDiagnosticText(value, depth = 0) {
+  if (depth > 4) return ''
+  if (typeof value === 'string') return value.length <= 128_000 ? value : ''
+  if (Array.isArray(value)) {
+    return value.slice(0, 32).map((item) => publicCompatibleDiagnosticText(item, depth + 1)).join('')
+  }
+  if (!value || typeof value !== 'object' || value.thought === true
+    || (value.type && !['text', 'output_text', 'refusal', 'message'].includes(value.type))
+    || (value.role && value.role !== 'assistant')) return ''
+  return publicCompatibleDiagnosticText(value.refusal ?? value.text ?? value.content, depth + 1)
+}
+
+function compatibleStopDiagnostic(data, providerRequest) {
+  const message = data?.choices?.[0]?.message
+  const candidates = [
+    message?.refusal, message?.content, message?.text, data?.choices?.[0]?.text,
+    data?.message?.refusal, data?.message?.content, data?.message?.text,
+    data?.output_text, data?.output, data?.response?.output, data?.content,
+  ]
+  const headers = Object.fromEntries(new Headers(providerRequest?.init?.headers || {}).entries())
+  const apiKey = String(headers.authorization || '').replace(/^(?:Bearer|Basic)\s+/iu, '')
+  for (const candidate of candidates) {
+    // Request-bound secrets must be removed before clipping; otherwise a key
+    // crossing the length boundary could survive as an unmatchable fragment.
+    const text = redactModelConfigSecrets(publicCompatibleDiagnosticText(candidate), { apiKey, headers })
+    const diagnostic = normalizeModelProviderStopDiagnostic(text)
+    if (diagnostic) return diagnostic
+  }
+  return ''
+}
+
+export function normalizeCompatibleFinishReason(value, hasToolCalls = false, { response, providerRequest } = {}) {
   const raw = Array.from(String(value ?? ''), (character) => {
     const code = character.charCodeAt(0)
     return code < 0x20 || code === 0x7f ? ' ' : character
@@ -211,14 +245,34 @@ export function normalizeCompatibleFinishReason(value, hasToolCalls = false) {
   error.fromUpstream = true
   error.retryable = false
   error.modelRequestOutcome = 'failed'
+  const diagnostic = compatibleStopDiagnostic(response, providerRequest)
+  // Keep the stable message free of provider prose: context-recovery heuristics
+  // inspect it, while reason is an explicitly allowlisted display-only channel.
+  if (diagnostic) error.reason = diagnostic
   throw error
+}
+
+function compatibleResponseStatus(data) {
+  for (const source of [data, data?.response]) {
+    const status = source?.status
+    if (status == null || status === '') continue
+    const normalized = typeof status === 'string' ? status.trim().toLowerCase() : ''
+    // Ordinary compatible wrappers use status=200/success as transport metadata.
+    // Only a formal Responses object owns arbitrary protocol statuses; retain
+    // explicit failure/truncation states for older wrappers without that marker.
+    if (source?.object === 'response' || ['failed', 'cancelled', 'incomplete'].includes(normalized)) return status
+  }
+  return null
 }
 
 export function parseModelProviderResponse(data, profile = {}, { providerRequest = null } = {}) {
   const responseError = extractModelResponseError(data)
   if (responseError) throw responseError
-  const adapterSnapshot = getNativeProviderRequestAdapter(providerRequest)
-  if (adapterSnapshot || isNativeProviderKind(profile.kind)) {
+  // A request captures its parser, including a builtin (null) selection. Only
+  // legacy callers without a request may discover the current registry.
+  const adapterSnapshot = providerRequest == null ? undefined : getNativeProviderRequestAdapter(providerRequest)
+  const nativeKind = providerRequest == null ? isNativeProviderKind(profile.kind) : NATIVE_PROVIDER_KINDS.has(profile.kind)
+  if (adapterSnapshot || nativeKind) {
     const parsed = parseNativeProviderResponse(data, profile.kind, adapterSnapshot, getProviderReplayContext(providerRequest))
     // Only a provider-bound replay record requires byte-faithful text. Older
     // unsigned native endpoints may still return embedded/orphaned think
@@ -227,19 +281,19 @@ export function parseModelProviderResponse(data, profile = {}, { providerRequest
     return { ...parsed, content: parsed.providerReplay ? parsed.content : stripEmbeddedReasoning(parsed?.content), nativeContent: true }
   }
   const toolCalls = extractCompatibleToolCalls(data)
-  const responseStatus = data?.status || data?.response?.status
+  const responseStatus = compatibleResponseStatus(data)
   const incompleteReason = data?.incomplete_details?.reason
     || data?.response?.incomplete_details?.reason
   const rawFinishReason = incompleteReason
     || data?.choices?.[0]?.finish_reason
     || data?.done_reason
     || data?.stop_reason
-    || (String(responseStatus || '').toLowerCase() === 'incomplete' ? 'incomplete' : null)
+    || responseStatus
     || null
   return {
     content: stripEmbeddedReasoning(extractModelResponseText(data)),
     toolCalls,
     usage: extractUsage(data),
-    finishReason: normalizeCompatibleFinishReason(rawFinishReason, toolCalls.length > 0),
+    finishReason: normalizeCompatibleFinishReason(rawFinishReason, toolCalls.length > 0, { response: data, providerRequest }),
   }
 }

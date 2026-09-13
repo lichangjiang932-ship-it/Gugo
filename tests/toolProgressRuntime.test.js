@@ -101,6 +101,7 @@ test('tool loop reports executor-derived progress and real file changes', async 
 test('bash expected-output evidence drives progress and the exact verification target', async () => {
   const progress = []
   const requests = []
+  const executions = []
   let modelCalls = 0
   const result = await runToolsLoop({
     job: {
@@ -139,33 +140,33 @@ test('bash expected-output evidence drives progress and the exact verification t
         }] }
       }
       if (modelCalls === 3) return { content: 'Report complete.', toolCalls: [] }
-      if (modelCalls === 4) {
-        return { content: '', toolCalls: [{
-          id: 'read-actual-path',
-          type: 'function',
-          function: { name: 'read_file', arguments: '{"path":"actual/report.pdf"}' },
-        }] }
-      }
       return { content: 'Report generated and verified.', toolCalls: [] }
     },
-    executeTool: async ({ name, args }) => name === 'bash_exec'
-      ? {
+    executeTool: async ({ name, args, toolCallId }) => {
+      executions.push({ name, args: structuredClone(args), toolCallId })
+      return name === 'bash_exec' ? {
           ok: true,
           exitCode: 0,
           changedPaths: ['actual/report.pdf'],
           verifiedOutputs: [{ path: 'actual/report.pdf', status: 'created' }],
           unverifiedOutputs: [],
         }
-      : { ok: true, path: args.path, content: 'report' },
+        : { ok: true, path: args.path, content: 'report' }
+    },
     onProgress: async (value) => progress.push(value),
   })
 
-  const guardedRequest = requests[3]
-    .filter((message) => message.role === 'system')
-    .map((message) => message.content)
-    .join('\n')
-  assert.match(guardedRequest, /Pending changed targets: actual\/report\.pdf/)
-  assert.doesNotMatch(guardedRequest, /requested\/report\.pdf/)
+  // Reading the model-declared path cannot verify a different executor-reported
+  // output. The host must read that exact output before accepting completion,
+  // even when the model never requests the corrective read itself.
+  const reads = executions.filter((call) => call.name === 'read_file')
+  assert.deepEqual(reads.map((call) => call.args.path), ['requested/report.pdf', 'actual/report.pdf'])
+  assert.equal(reads[0].toolCallId, 'read-requested-path')
+  assert.match(reads[1].toolCallId, /^host_verify_/)
+  assert.equal(executions.filter((call) => call.name === 'bash_exec').length, 1)
+  assert.ok(requests.some((messages) => messages.some((message) => (
+    message.role === 'tool' && message.tool_call_id === reads[1].toolCallId
+  ))), 'the model must receive the host readback result before the final answer')
   assert.equal(progress.at(-1).filesChanged, 1)
   assert.equal(result.text, 'Report generated and verified.')
 })

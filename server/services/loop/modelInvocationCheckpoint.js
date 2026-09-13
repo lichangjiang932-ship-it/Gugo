@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { assertValidCompletedModelResponse } from '../../utils/modelResponseValidation.js'
 import { snapshotModelResponse } from './modelResponseSnapshot.js'
+import { normalizeStoredModelRequestDiagnostics, publicModelRequestDiagnostics } from './modelGenerationRecovery.js'
 export { snapshotModelResponse } from './modelResponseSnapshot.js'
 
 export const MODEL_REQUEST_OUTCOME_UNKNOWN = 'MODEL_REQUEST_OUTCOME_UNKNOWN'
@@ -214,6 +215,8 @@ export function normalizeModelInvocation(value) {
       : !isLegacyManualCompletion
   }
   if (status === 'failed' && value.errorCode) normalized.errorCode = String(value.errorCode)
+  const diagnostics = normalizeStoredModelRequestDiagnostics(value.modelRequestDiagnostics, normalized)
+  if (diagnostics) normalized.modelRequestDiagnostics = diagnostics
   if (value.reconciliation && typeof value.reconciliation === 'object'
     && !Array.isArray(value.reconciliation)) {
     const outcome = String(value.reconciliation.outcome || '')
@@ -303,6 +306,8 @@ function recoveryError(code, message, invocation) {
   error.retryable = false
   error.modelRequestId = invocation?.id || null
   error.modelInvocation = invocation ? cloneJson(invocation, null) : null
+  const diagnostics = publicModelRequestDiagnostics(invocation?.modelRequestDiagnostics)
+  if (diagnostics) error.modelRequestDiagnostics = diagnostics
   error.unsafeToReplay = true
   return error
 }

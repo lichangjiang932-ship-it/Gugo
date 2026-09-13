@@ -18,6 +18,7 @@ import { buildXlsxArtifactBuffer } from './xlsxArtifactFormat.js'
 import { snapshotXlsxSheets } from './xlsxArtifactContract.js'
 import { writeGeneratedArtifactAtomically } from './artifactAtomicWriter.js'
 import { artifactNameExists } from './artifactLocalPublicationPaths.js'
+import { markSideEffectOutcomeKnownFailed } from './loop/sideEffectExecution.js'
 import {
   ensureArtifactDir,
   hasWindowsReservedDeviceBasename,
@@ -132,29 +133,43 @@ export async function createPptx({
   userId = null,
   generatedAt = null,
 } = {}) {
-  if (!Array.isArray(slides) || slides.length === 0) {
-    throw new Error('slides 不能为空')
+  let officeImages
+  let encoded
+  try {
+    if (!Array.isArray(slides) || slides.length === 0) {
+      throw new Error('slides 不能为空')
+    }
+    officeImages = await prepareOfficeArtifactImages(images, { userId })
+    if (officeImages.some((image) => image.targetIndex && image.targetIndex > slides.length)) {
+      throw new Error(`image target_index exceeds the ${slides.length}-slide deck`)
+    }
+    const resolvedGeneratedAt = generatedAt == null ? new Date().toISOString() : generatedAt
+    encoded = await buildPptxArtifactBuffer({
+      title,
+      subtitle,
+      theme: themeName,
+      design,
+      brand,
+      slides,
+      preparedImages: officeImages,
+      generatedAt: resolvedGeneratedAt,
+    })
+  } catch (error) {
+    // Input preparation and in-memory encoding have not published any output.
+    // Keep the actual file writer outside this proof boundary: a write error
+    // can leave an output whose result still requires conservative recovery.
+    throw markSideEffectOutcomeKnownFailed(error, {
+      code: error?.code,
+      message: error?.message,
+      retryable: error?.retryable === true,
+    })
   }
-  const officeImages = await prepareOfficeArtifactImages(images, { userId })
-  if (officeImages.some((image) => image.targetIndex && image.targetIndex > slides.length)) {
-    throw new Error(`image target_index exceeds the ${slides.length}-slide deck`)
-  }
-  const resolvedGeneratedAt = generatedAt == null ? new Date().toISOString() : generatedAt
   const {
     buffer,
     themeName: resolvedThemeName,
     generatedAt: receiptGeneratedAt,
     fontInjection,
-  } = await buildPptxArtifactBuffer({
-    title,
-    subtitle,
-    theme: themeName,
-    design,
-    brand,
-    slides,
-    preparedImages: officeImages,
-    generatedAt: resolvedGeneratedAt,
-  })
+  } = encoded
   const artifactPath = writeNewArtifact(title, 'pptx', buffer, null, userId)
   return {
     ...artifactPath,

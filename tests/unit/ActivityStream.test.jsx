@@ -34,7 +34,7 @@ test('readiness shows the tool being prepared without creating a tool trace', ()
     },
   })
   assert.match(markup, /data-testid="model-activity"/)
-  assert.match(markup, /bash_exec/)
+  assert.match(markup, /Run command/)
 })
 
 test('pure reasoning keeps a compact status and never exposes raw text', () => {
@@ -71,8 +71,8 @@ test('model heartbeat phases explain cold start and temporary stream idle', () =
   const idle = render({
     meta: { streaming: true, modelActivity: { kind: 'model', phase: 'idle' } },
   })
-  assert.match(idle, /output paused/)
-  assert.match(idle, /still running/)
+  assert.match(idle, /Waiting for the model to continue/)
+  assert.doesNotMatch(idle, /still running/)
 })
 
 test('semantic compaction and its degraded fallback are visible without exposing summary contents', () => {

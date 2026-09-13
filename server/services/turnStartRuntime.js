@@ -1,4 +1,5 @@
 import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
+import { inferBuiltinSkillIdFromPrompt } from '../../shared/skillIntent.js'
 import { normalizeTurnLocale } from '../../shared/turnLocale.js'
 import { normalizeChatTurnIntentMode } from '../utils/executionIntent.js'
 import { PERMISSION_MODES } from '../utils/approvalPolicy.js'
@@ -80,12 +81,17 @@ function attachmentTurnError(error) {
 function resolveSkillPrefixFromContent(content, skillIds) {
   const normalized = normalizeTurnIds(skillIds)
   if (normalized.length) return { skillIds: normalized, content }
-  const match = String(content || '').trim().match(/^\/([a-z0-9_-]+)(?:\s|$)/i)
-  if (!match) return { skillIds: normalized, content }
-  return {
-    skillIds: [match[1].toLowerCase()],
-    content: String(content || '').trim().slice(match[0].length).trim(),
+  const prompt = String(content || '').trim()
+  const match = prompt.match(/^\/([a-z0-9_-]+)(?:\s|$)/i)
+  if (match) {
+    return {
+      skillIds: [match[1].toLowerCase()],
+      content: prompt.slice(match[0].length).trim(),
+    }
   }
+  const inferred = inferBuiltinSkillIdFromPrompt(prompt)
+  return { skillIds: inferred ? [inferred] : normalized, content }
+
 }
 
 function importedMessageContext(message, sourceRole) {

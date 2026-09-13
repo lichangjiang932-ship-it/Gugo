@@ -172,71 +172,17 @@ async function requestTreeApproval({ context, approveTool = requestApproval, ...
  * 只读工具规格 — 用于 explore/plan 类型（不能修改文件）。
  */
 const READONLY_TOOL_SPECS = [
-  {
-    type: 'function',
-    function: {
-      name: 'web_search',
-      description: '搜索互联网，获取最新信息。',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: '搜索关键词' },
-          maxResults: { type: 'number', description: '返回结果数量（默认 5）' },
-        },
-        required: ['query'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fetch_url',
-      description: '抓取 URL 内容并提取正文为 Markdown。',
-      parameters: {
-        type: 'object',
-        properties: {
-          url: { type: 'string', description: '要抓取的网页 URL' },
-        },
-        required: ['url'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'list_directory',
-      description: '列出目录内容。探索一个陌生项目时先用它看结构,再决定读哪些文件。',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '目录路径(绝对路径,或已授权的本地路径)' },
-          limit: { type: 'number', description: '最多返回多少项(默认 200)' },
-        },
-        required: ['path'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'read_file',
-      description: '读取工作区文件。',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '文件路径' },
-        },
-        required: ['path'],
-      },
-    },
-  },
+  // Keep the policy's existing allowlist, but publish the exact contracts
+  // consumed by the shared validator and filesystem/web dispatchers.
+  getBuiltinSpec('web_search'),
+  getBuiltinSpec('fetch_url'),
+  getBuiltinSpec('list_directory'),
+  getBuiltinSpec('read_file'),
   // ★ M1:代码搜索三件套(全只读,适合 explore/plan)
   ...CODE_SEARCH_TOOL_SPECS,
   ...LSP_TOOL_SPECS,
   // ★ M3:反思 / 请求澄清(纯思维型,无副作用)
   ...AGENTIC_TOOL_SPECS,
-  // ★ 长期记忆:探索到的项目背景值得跨会话留下来
-  ...MEMORY_TOOL_SPECS,
 ]
 
 /**
@@ -244,37 +190,20 @@ const READONLY_TOOL_SPECS = [
  */
 const FULL_TOOL_SPECS = [
   ...READONLY_TOOL_SPECS,
-  {
-    type: 'function',
-    function: {
-      name: 'write_file',
-      description: '写文件到工作区。',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '文件路径' },
-          content: { type: 'string', description: '文件内容' },
-        },
-        required: ['path', 'content'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'edit_file',
-      description: '编辑文件中的指定内容（SEARCH/REPLACE）。',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '文件路径' },
-          oldText: { type: 'string', description: '要替换的原文' },
-          newText: { type: 'string', description: '替换后的新内容' },
-        },
-        required: ['path', 'oldText', 'newText'],
-      },
-    },
-  },
+  // Durable memory is a write. Only a general worker may request it, and the
+  // normal external-side-effect approval policy remains authoritative.
+  ...MEMORY_TOOL_SPECS,
+  getBuiltinSpec('write_file'),
+  getBuiltinSpec('edit_file'),
+  // General workers may complete the same inspect → change → verify cycle as
+  // their parent. Every command still passes the normal directory, approval,
+  // checkpoint and side-effect boundaries.
+  getBuiltinSpec('bash_exec'),
+  getBuiltinSpec('run_command'),
+  getBuiltinSpec('run_test'),
+  getBuiltinSpec('run_project_check'),
+  getBuiltinSpec('git_status'),
+  getBuiltinSpec('git_diff'),
   // ★ M2: Codex 风格多文件原子 patch
   ...APPLY_PATCH_TOOL_SPECS,
   getBuiltinSpec('Agent'),

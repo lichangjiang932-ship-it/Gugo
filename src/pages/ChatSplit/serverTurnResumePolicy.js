@@ -119,14 +119,22 @@ function sameNonEmptyId(left, right) {
     && left === right
 }
 
-export function matchesManualRecoveryResume(session, message, resume) {
-  return resume?.kind === 'turn'
+export function matchesManualRecoveryResume(session, message, resume, { ownerScope = null } = {}) {
+  const matches = resume?.kind === 'turn'
     && sameNonEmptyId(resume.sessionId, session?.id)
     && sameNonEmptyId(resume.turnId, message?.meta?.serverTurnId)
     && sameNonEmptyId(resume.toolCallId, message?.meta?.serverRecoveryToolCallId)
     && message?.meta?.serverRecoveryBlocked === true
     && isSideEffectOutcomeUnknownRecoveryKind(message?.meta?.serverRecoveryKind)
     && message?.meta?.serverConnectionState === 'blocked'
+  if (!matches || !Object.hasOwn(resume, 'inlineGuard')) return matches
+  const guard = resume.inlineGuard
+  return Boolean(guard && typeof guard === 'object' && !Array.isArray(guard)
+    && sameNonEmptyId(guard.ownerScope, ownerScope)
+    && sameNonEmptyId(guard.messageId, message?.id)
+    && Number.isSafeInteger(guard.sequence) && guard.sequence >= 0
+    && message?.meta?.serverLastSequence === guard.sequence
+    && message?.meta?.cancelled !== true && message?.meta?.streaming !== true)
 }
 
 export function matchesFailedTurnRetryResume(session, message, retry) {

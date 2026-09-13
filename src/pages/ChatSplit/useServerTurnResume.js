@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { appendServerArtifact } from '../../lib/serverArtifactRevisions.js'
 import { createBufferedTurnActivityDispatcher, dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
 import {
   createTurnFailureError,
@@ -18,6 +19,7 @@ import {
 import { isUserStopped, terminalFailureEvidenceMeta, turnEventTimestamp } from './serverTurnFlow.js'
 import { registerTurnRun, unregisterTurnRun } from './turnRunRegistry.js'
 import { mergeAssistantText, missingAssistantTextSuffix } from '../../lib/assistantTextContinuity.js'
+import { streamResumeOwnerScope } from '../../lib/streamResumeDismissals.js'
 import {
   claimServerTurnResume,
   failedRetryFailureFromError,
@@ -63,13 +65,13 @@ export default function useServerTurnResume({
   onFailedTurnRetrySettled,
 }) {
   useEffect(() => {
-    if (abortCtrlRef.current) return
     const current = stateRef.current
     const session = current.sessions.find((item) => item.id === current.activeSessionId)
     const message = manualRecoveryResume?.kind === 'turn'
       ? [...(session?.messages || [])].reverse().find((item) => (
           item.role === 'assistant' && item.meta?.serverTurnId === manualRecoveryResume.turnId
           && item.meta?.serverRecoveryToolCallId === manualRecoveryResume.toolCallId
+          && (!manualRecoveryResume.inlineGuard || item.id === manualRecoveryResume.inlineGuard.messageId)
         ))
       : failedTurnRetry?.sessionId === session?.id
         ? [...(session?.messages || [])].reverse().find((item) => (
@@ -77,7 +79,18 @@ export default function useServerTurnResume({
           ))
       : [...(session?.messages || [])].reverse().find((item) => item.role === 'assistant')
     const turnId = message?.meta?.serverTurnId
-    const manualRecovery = matchesManualRecoveryResume(session, message, manualRecoveryResume)
+    const manualRecovery = matchesManualRecoveryResume(session, message, manualRecoveryResume, {
+      ownerScope: streamResumeOwnerScope(current),
+    })
+    if (manualRecoveryResume?.inlineGuard && !manualRecovery) {
+      onManualRecoveryConsumed?.(manualRecoveryResume)
+      return
+    }
+    if (abortCtrlRef.current) return
+    // Removing a stale inline marker must not fall through to an automatic
+    // reconnect while contradictory old streaming/blocked flags coexist.
+    if (!manualRecovery && message?.meta?.serverRecoveryBlocked === true
+      && isSideEffectOutcomeUnknownRecoveryKind(message.meta.serverRecoveryKind)) return
     const failedRetry = matchesFailedTurnRetryResume(session, message, failedTurnRetry)
     if (
       !session?.id
@@ -96,7 +109,12 @@ export default function useServerTurnResume({
       return
     }
     abortCtrlRef.current = controller
-    if (manualRecovery) onManualRecoveryConsumed?.()
+    if (manualRecovery && onManualRecoveryConsumed?.(manualRecoveryResume) === false) {
+      unregisterTurnRun({ sessionId: session.id, turnId, controller })
+      releaseServerTurnResume(resumingTurnIdsRef.current, session.id, turnId)
+      if (abortCtrlRef.current === controller) abortCtrlRef.current = null
+      return
+    }
     if (failedRetry) onFailedTurnRetryConsumed?.(failedTurnRetry)
     const taskId = `resume-${turnId}`
     const serverArtifacts = [...(message.meta?.serverArtifacts || [])]
@@ -190,14 +208,7 @@ export default function useServerTurnResume({
           messageTarget,
           flushToolOutput: turnActivityDispatcher.flush,
           onApproval: (request) => requestServerToolApproval(request, owner),
-          onArtifact: (artifact) => {
-            const filename = artifact.filename || 'artifact'
-            const type = filename.includes('.') ? filename.split('.').pop().toLowerCase() : 'file'
-            if (!serverArtifacts.some((item) => item.id === artifact.id)) {
-              serverArtifacts.push({ ...artifact, filename, type })
-              dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverArtifacts: [...serverArtifacts] })
-            }
-          },
+          onArtifact: (artifact) => appendServerArtifact(artifact, serverArtifacts, dispatchMessage),
         })
         if (!dispatchResult?.cursorCommitted) {
           dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverLastSequence: event.sequence })

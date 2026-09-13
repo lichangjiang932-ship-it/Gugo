@@ -455,7 +455,9 @@ test('style-only live steering preserves every existing artifact deliverable', a
               id: 'style-pptx-create',
               function: {
                 name: 'create_pptx',
-                arguments: JSON.stringify({ title: 'Style deck', slides: [{ title: 'Style' }] }),
+                arguments: JSON.stringify({ title: 'Style deck', slides: [{ title: 'Style', elements: [
+                  { type: 'text', text: 'Style', x: 0.1, y: 0.15, w: 0.8, h: 0.3 },
+                ] }] }),
               },
             },
           ],

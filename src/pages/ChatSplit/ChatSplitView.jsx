@@ -7,6 +7,7 @@ import ChatMessages from './ChatMessages'
 import DesktopPet from './DesktopPet.jsx'
 import ChatRightPanels from './chatSplitView/ChatRightPanels.jsx'
 import { ChatSessionHeading, ChatWorkbenchToggle } from './chatSplitView/ChatSessionHeader.jsx'
+import SessionBranchNavigator from './chatSplitView/SessionBranchNavigator.jsx'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
 import { estimateClientContextUsage, sumSessionModelUsage } from '../../lib/contextUsage.js'
 
@@ -14,6 +15,8 @@ export { ChatRightPanels }
 export default function ChatSplitView({
   activeSession,
   activeSessionId,
+  recoveryOwnerScope,
+  onSideEffectResolved,
   approvalMode,
   attachments,
   contextSystemPrompt,
@@ -31,6 +34,7 @@ export default function ChatSplitView({
   onApprovalModeChange,
   onClearWorkspace,
   onAuthorizeDirectoryRequest,
+  onRejectDirectoryRequest,
   onAuthorizeDirectory,
   onCancelMessageEdit,
   onCloseDesktopPet,
@@ -41,6 +45,8 @@ export default function ChatSplitView({
   onDirectoryReject,
   onDismissResume,
   onEditMessage,
+  onForkMessage,
+  forkingMessageId,
   onExpandCompaction,
   onFileChange,
   onGoalsChange,
@@ -55,6 +61,7 @@ export default function ChatSplitView({
   onOpenArtifact,
   onOpenInPreview,
   onOpenModelPicker,
+  onOpenSessionBranch,
   onPermAllow,
   onPermDeny,
   onPreviewMessage,
@@ -98,10 +105,8 @@ export default function ChatSplitView({
   workspaceBusy,
   workspaceError,
 }) {
-  const latestAssistantMessage = [...messages].reverse()
-    .find((message) => message?.role === 'assistant')
-  const actualPromptTokens = latestAssistantMessage?.meta?.actualPromptTokens
-  const serverEstimatedPromptTokens = latestAssistantMessage?.meta?.serverEstimatedPromptTokens
+  const latestAssistantMessage = [...messages].reverse().find((message) => message?.role === 'assistant')
+  const actualPromptTokens = latestAssistantMessage?.meta?.actualPromptTokens, serverEstimatedPromptTokens = latestAssistantMessage?.meta?.serverEstimatedPromptTokens
   // 优先显示服务端真实 usage；缺失时用服务端最终请求估算，避免压缩后按完整 UI 历史高估。
   const contextUsage = {
     ...estimateClientContextUsage({
@@ -120,10 +125,12 @@ export default function ChatSplitView({
   const hasWorkspace = Boolean(selectedWorkspacePath || activeSession?.workspacePath)
 
   return (
-    <AppLayout className="flex h-screen min-w-0 overflow-hidden bg-paper">
+    <AppLayout className="flex h-screen min-w-0 overflow-hidden bg-paper" mainAs="main" mainClassName="relative flex min-w-0 flex-1 overflow-hidden" mainProps={{ 'data-chat-main-area': true }}>
       <div className="chat-main-pane flex min-w-0 flex-[1_1_640px] flex-col overflow-hidden">
         <header className="chat-session-header flex h-12 shrink-0 items-center gap-2.5 px-4 backdrop-blur-sm" data-chat-context={hasWorkspace ? 'project' : 'conversation'}>
           <ChatSessionHeading hasWorkspace={hasWorkspace} title={activeSession?.title || t('nav.newChat')} data-testid="chat-session-title" />
+          <SessionBranchNavigator key={activeSessionId || '__draft_branch__'} sessionId={activeSessionId}
+            onOpenSession={onOpenSessionBranch} t={t} />
           <ChatWorkbenchToggle
             open={workbenchOpen}
             onClick={onWorkbenchToggle}
@@ -134,13 +141,15 @@ export default function ChatSplitView({
             data-testid="workbench-toggle"
           />
         </header>
-        <ChatMessages
-          key={activeSessionId || '__draft__'}
+        <ChatMessages key={JSON.stringify([recoveryOwnerScope, activeSessionId || '__draft__'])}
+          sessionId={activeSessionId} recoveryOwnerScope={recoveryOwnerScope}
+          onSideEffectResolved={onSideEffectResolved}
           messages={messages} routeHash={messageRouteHash}
-          workbenchMessage={workbenchMessage}
-          isGenerating={isGenerating}
-          onEditMessage={onEditMessage}
+          workbenchMessage={workbenchMessage} isGenerating={isGenerating}
+          onEditMessage={onEditMessage} onForkMessage={onForkMessage}
+          forkingMessageId={forkingMessageId}
           onAuthorizeDirectoryRequest={onAuthorizeDirectoryRequest}
+          onRejectDirectoryRequest={onRejectDirectoryRequest}
           onManageModels={onManageModels}
           onQuoteSelection={onQuoteSelection}
           onRetryModelFailure={onRetryModelFailure}

@@ -1,4 +1,4 @@
-import { grantLocalPathApi } from './localFileAccessClient.js'
+import { grantTurnDirectoryApi } from './localFileAccessClient.js'
 
 const VALID_ACCESS_MODES = new Set(['read_only', 'read_write'])
 const VALID_SCOPES = new Set(['session', 'persistent'])
@@ -11,12 +11,13 @@ export async function authorizeChatDirectoryRequest({
   accessMode = 'read_only',
   scope = 'session',
   purpose = '',
+  signal,
 } = {}, {
-  grantPath = grantLocalPathApi,
+  grantPath = grantTurnDirectoryApi,
 } = {}) {
   if (!sessionId) throw new Error('sessionId is required')
   if (!turnId) throw new Error('turnId is required')
-  if (!Number.isInteger(pausedSequence) || pausedSequence < 0) {
+  if (!Number.isSafeInteger(pausedSequence) || pausedSequence < 0) {
     throw new Error('pausedSequence is required')
   }
   if (!VALID_ACCESS_MODES.has(accessMode)) throw new Error('invalid directory access mode')
@@ -25,10 +26,14 @@ export async function authorizeChatDirectoryRequest({
   const selectedPath = String(path || '').trim()
   if (!selectedPath) throw new Error('directory path is required')
 
-  const grantResult = await grantPath({ path: selectedPath, accessMode, scope })
+  const grantResult = await grantPath({
+    sessionId, turnId, pausedSequence, path: selectedPath, accessMode, scope,
+  }, { signal })
+  if (signal?.aborted) throw signal.reason || Object.assign(new Error('Directory confirmation was cancelled.'), { name: 'AbortError' })
   const grant = grantResult?.grant
   const grantedPath = String(grant?.path || selectedPath).trim()
-  const grantedAccessMode = grant?.accessMode === 'read_write' ? 'read_write' : accessMode
+  // A stronger pre-existing grant must not rewrite this pause's requested mode.
+  const grantedAccessMode = accessMode
   const grantId = String(grant?.id || '').trim()
   if (!grantId) throw new Error('directory grant id is required')
 

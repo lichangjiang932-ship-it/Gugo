@@ -1,6 +1,7 @@
 import { processOutputContinuation } from './outputContinuation.js'
 import { modelAssistantHistoryMessage } from './modelAssistantHistory.js'
 import { restoreCompactionCheckpoint } from './compactionCheckpoint.js'
+import { scheduleMutationVerificationRecovery } from './mutationVerificationRecovery.js'
 
 async function persistContinuation(s, content, steeringLeaseId, options = {}) {
   if (content) s.convo.push(modelAssistantHistoryMessage(content, s.iteration?.modelResult))
@@ -89,6 +90,9 @@ async function handleDirectoryAndArtifactCompletion(s) {
 
 async function handleExecutionVerificationCompletion(s) {
   const i = s.iteration
+  if (await scheduleMutationVerificationRecovery(s, { content: i.content, steeringLeaseId: i.steeringLeaseId })) {
+    return { kind: 'continue' }
+  }
   const {
     EXECUTION_EVIDENCE_GUARD_MARKER,
     MAX_EXECUTION_EVIDENCE_RETRIES,

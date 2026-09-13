@@ -46,6 +46,11 @@ test('认得各家本地推理服务器的上下文溢出文案', () => {
     // OpenAI 原本就认得的,不能回归
     { status: 400, message: 'context_length_exceeded' },
     { status: 400, message: 'Please reduce the length of the messages' },
+    { status: 400, message: 'prompt too long; exceeded max context length by 1234 tokens' },
+    { status: 413, message: 'prompt too long' },
+    { status: 400, message: 'Trying to keep the first 4096 tokens when context overflows' },
+    { status: 400, message: 'The input token count (300000) exceeds the maximum number of tokens allowed' },
+    { status: 422, message: 'maximum context length is 32768 tokens' },
   ]
   for (const error of cases) {
     assert.equal(isContextLengthError(error), true, `应识别: ${error.message}`)
@@ -59,6 +64,14 @@ test('不把无关错误误判成上下文溢出', () => {
     { status: 400, message: 'invalid tool_choice value' },
     { status: 429, message: 'rate limit exceeded' },
     { status: 500, message: 'internal server error' },
+    { status: 400, message: 'context field is required' },
+    { status: 413, message: 'request body too large' },
+    { status: 422, message: 'invalid tool schema' },
+    { status: 500, message: 'could not create inference context' },
+    { status: 400, message: 'The output token count exceeds the maximum number of tokens allowed' },
+    { status: 429, message: 'The input token count exceeds the maximum number of tokens allowed per minute' },
+    { status: 403, message: 'maximum context length is not available for this credential' },
+    { status: 503, message: 'prompt too long' },
     {},
     null,
   ]

@@ -1,3 +1,4 @@
+import '../scripts/testEnvironment.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -7,7 +8,7 @@ import { buildPresentationPlannerPrompt } from '../src/lib/presentationPlanner.j
 import { buildArtifactPrompt } from '../server/services/jobPromptBlocks.js'
 import { getRuntimeSkill } from '../server/services/skillRegistry.js'
 import { buildSkillsBlockFromPrepared, prepareSkillsForPrompt } from '../server/services/promptCompiler.js'
-import { PPTX_DESIGN_SCHEMA } from '../server/services/pptxArtifactContract.js'
+import { PPTX_AUTHORING_DESIGN_SCHEMA } from '../server/services/pptxArtifactContract.js'
 import { closeDb } from '../server/db.js'
 
 test.after(() => closeDb())
@@ -43,7 +44,7 @@ test('the actual runtime registry and prompt compiler load the updated canonical
 })
 
 test('presentation authoring guidance uses real design fields and authorized native elements', () => {
-  for (const field of Object.keys(PPTX_DESIGN_SCHEMA.properties)) {
+  for (const field of Object.keys(PPTX_AUTHORING_DESIGN_SCHEMA.properties)) {
     assert.ok(PRESENTATION_VISUAL_POLICY.includes(field), `missing native design field: ${field}`)
   }
   assert.match(PRESENTATION_VISUAL_POLICY, /slides\[\]\.elements/)
@@ -54,7 +55,9 @@ test('presentation authoring guidance uses real design fields and authorized nat
   assert.match(PRESENTATION_VISUAL_POLICY, /image_index/)
   assert.match(PRESENTATION_VISUAL_POLICY, /authorized by the host/)
   assert.match(PRESENTATION_VISUAL_POLICY, /Never inject raw file paths, URLs, data URIs or executable code/)
-  assert.match(PRESENTATION_VISUAL_POLICY, /optional compatibility helpers/)
+  assert.match(PRESENTATION_VISUAL_POLICY, /Every submitted slide must have slides\[\]\.elements/)
+  assert.match(PRESENTATION_VISUAL_POLICY, /has no theme or layout presets and no legacy content slots/)
+  assert.doesNotMatch(PRESENTATION_VISUAL_POLICY, /optional compatibility helpers|optional theme is a compatibility palette/)
 })
 
 test('custom instructions and complete multiline user content survive for 1, 20 and 99 total pages', () => {
@@ -77,6 +80,27 @@ test('PPT freedom does not loosen factual, output-format, or permission boundari
   assert.match(PRESENTATION_PROMPT_POLICY, /do not bypass filesystem, network, tool or external-action approval boundaries/)
   assert.match(PRESENTATION_PROMPT_POLICY, /actual tool evidence/)
   assert.match(PRESENTATION_VISUAL_POLICY, /state any checks that could not be completed/)
+})
+
+test('presentation revisions change conflicting old styling instead of only renaming a theme', () => {
+  assert.match(PRESENTATION_VISUAL_POLICY, /read_artifact_source/)
+  assert.match(PRESENTATION_VISUAL_POLICY, /latest requested style and revision scope take priority/)
+  assert.match(PRESENTATION_VISUAL_POLICY, /override top-level design/)
+  assert.match(PRESENTATION_VISUAL_POLICY, /update or remove the old overrides that conflict/)
+  assert.match(PRESENTATION_VISUAL_POLICY, /recomposing the affected slides/)
+  assert.match(PRESENTATION_VISUAL_POLICY, /Preserve unchanged content, facts, page count/)
+  assert.match(PRESENTATION_VISUAL_POLICY, /convert every submitted legacy slide into elements/)
+  assert.match(PRESENTATION_VISUAL_POLICY, /never discard old content just to make the new schema pass/)
+  assert.match(PRESENTATION_VISUAL_POLICY, /no automatic footer\/chrome switches/)
+})
+
+test('advanced PPT authoring uses authorized file tools without bypassing delivery verification', () => {
+  assert.match(PRESENTATION_PROMPT_POLICY, /available authorized run_command or bash_exec/)
+  assert.match(PRESENTATION_PROMPT_POLICY, /final \.pptx path in expected_outputs/)
+  assert.match(PRESENTATION_PROMPT_POLICY, /format, provenance and delivery checks/)
+  assert.match(PRESENTATION_PROMPT_POLICY, /successful command alone is not delivery evidence/)
+  assert.match(PRESENTATION_PROMPT_POLICY, /run_code has no filesystem or library bindings/)
+  assert.match(PRESENTATION_PROMPT_POLICY, /Do not replace the requested file with a Markdown\/HTML deck/)
 })
 
 test('count extraction neither infers missing counts nor turns ordinals or invalid numbers into totals', () => {

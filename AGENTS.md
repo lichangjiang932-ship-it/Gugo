@@ -1,357 +1,107 @@
 # AGENTS.md
 
-> Codex / Claude Code 进项目第一件事：**读完本文档，再动手**。
-> 这是项目主人沉淀的偏好、红线和约定。违背它写代码 = 我会让你重写。
+进入项目后先读本文。它约束工程协作，不代替真实代码、协议和测试；用户当前明确要求优先于本文中的历史约定。
 
----
+## 1. 产品定位与边界
 
-## 一、项目是什么
+Gugo 是**开源、免费、本地优先、自托管的 Agent 工作台**，不是收费 SaaS。技术栈为 React SPA、Node.js HTTP 和 SQLite。
 
-**Gugo**（yma）—— 浏览器即用的本地/内网 Web AI 工作台。React 19 SPA + Node.js HTTP（**零框架**） + SQLite（better-sqlite3, WAL）。和 Claude Code / Cursor / Cherry Studio / openhanako 同品类，但走 Web 路线。
+- 默认 AUTH_MODE=local：本机打开即可使用，不要求注册、登录、验证码或首次账户配置。内部本地身份、token 和 userId 用于数据归属与接口隔离，不等于要求用户登录。
+- 不新增支付、充值、余额、套餐、订阅、积分、付费解锁、按量收费或美元预算停机门槛。
+- 用户自行配置本地模型或第三方模型/连接器。上游供应商可能收费，不是 Gugo 收费；可选本地费用估算不能影响功能、权限或任务是否执行。
+- 现有显式 multi_user 部署是兼容的可选网络访问模式，不是默认产品主线。不要为修复本地 Agent 能力而增加登录要求，也不要擅自删除旧用户数据或破坏已有可选部署。
+- 免登录不等于取消安全边界：保留可信本机监听、目录授权、工具权限、审批、凭据保护、CSP 和出站策略。不得把本机免登录模式直接放宽为公网匿名文件/Shell 访问。
+- 审查结论必须写清默认本机、显式网络部署、人工操作、模型调用各自的触发条件，不能混成一个威胁模型。
 
-当前：v0.11.54 · DB schema **v115** · **767 个默认 test 文件 + 1 个离线 eval** · 零后端框架依赖。
+当前版本以 package.json 为准；DB 版本从 server/migrations/index.js 派生；测试数量和门禁状态以本次实际命令输出为准。不要在这里维护容易失真的固定计数。
 
----
+## 2. 工作方式与授权
 
-## 二、给 AI 助手的核心规则（违反 = 重做）
+- 默认中文沟通，先说结果；长任务只报重要进展、范围变化和阻塞，不倾倒工具日志。表格只在确实更清楚时使用。
+- 区分“审查/诊断”与“实现”：前者不擅自修改业务行为；用户要求修改后，完成代码、相关测试和必要文档，不只给建议。
+- 保护用户已有的 dirty 改动和未跟踪文件。先看状态，只改本任务范围；不重置、覆盖、删除或顺手整理无关改动。
+- 不因“测试通过”自动 commit、push、创建 PR、merge、发版、部署、修改远程数据或运行收费服务。这些操作需要用户授权。
+- 依真实职责拆分工作，不为了凑批次或压低行数拆文件。并行子任务必须明确文件所有权，交付前统一核验。
+- 同一失败原因反复出现且没有新证据时停止重复尝试，说明原因和可行选项；不同回归失败不等于整个任务必须在第三次停止。
+- 可逆且局部的实现细节自行完成。涉及权限放宽、数据删除、默认产品行为改变或不可逆迁移时，先确认范围。
 
-### 2.1 沟通方式（中文项目，回话也用中文）
+## 3. 架构与数据
 
-- **只给结果，别给过程**。不要"我做了 1/2/3..."，不要"主要变化"，不要"下一步建议"。merge 完只汇报当前真实测试数。
-- **能用表就用表**，别写散段。状态汇报固定格式：
-
-  ```
-  | 批 | 状态 | 备注 |
-  |---|---|---|
-  | C1 | ✅ 合 main | 全量测试通过 |
-  | C2 | 🔄 跑中 | feat/c2-xxx |
-  ```
-
-- **群里克制**。这是用户群聊环境，多余的话是噪音。
-
-### 2.2 任务连续失败 3 次 → 立即停下汇报
-
-不要无限重试。不要静默换方案。**汇报失败原因 + 已试方案 + 等用户决定**。
-
-### 2.3 后端 PR 不要等前端
-
-后端能力闭环（schema + service + route + adapter）先**独立**合 main。前端 UI 走后续 PR。**不要**为了"一次交付完整功能"把后端阻塞在长 PR 里。后端只要 `node --check` + 相关 test 绿就该 commit/push/PR/merge。
-
-### 2.4 不要瞎拆 batch、不要瞎合 batch
-
-- 一个**真 bug 在 leaf 文件**（一个组件/一个函数）+ 一个**改 build 链/runtime infra** = **拆两个 batch**。前者 30 分钟落地，别拖在后者卡点里。
-- 文档 + i18n + 测试是**顺手**的事，不要单独开 batch 浪费 review 配额。codex 一次性带上。
-
-### 2.5 不准做的事
-
-1. **不要改 `server/db.js` 的旧 migration 函数**。新 schema 变更写到 `server/migrations/vN*.js`，并在 `server/migrations/index.js` 顺序注册；`LATEST_SCHEMA_VERSION` 和 `DB_SCHEMA_VERSION` 会从注册表末项派生，禁止手改版本常量。
-2. **不要把 SOUL/IDENTITY 直接塞 messages[0]**，那是 `promptCompiler.js` 的活，走 4-block 编译路径。
-3. **不要在 prompt 注入路径里 throw**。沿用现有 try/catch 吞错 + 不阻断 chat 的策略。
-4. **不要新增后端框架依赖**（express/fastify/koa 都不要）。本项目是零框架 HTTP，手写 router + middleware 是设计选择，不是"还没来得及迁"。
-5. **不要在 chat handler 里同步跑慢 I/O**。耗时 > 50ms 的活进 `jobRuntime` / `subagentRuntime`。
-6. **不要 import `lucide-react` 里的 `Github`**（这个包没有 `Github` 这个 named export，会构建失败）。要 GitHub 图标用 inline SVG 或换 `GitBranch`。
-7. **不要新增 `console.log`**。统一走现有的日志路径。debug 用 `console.error` 临时打，PR 前清干净。
-
----
-
-## 三、目录约定（别走错门）
-
-```
-server/
-├── adapters/       # 上游/外部协议适配（modelProxy, visionAssist, social/*）
-├── core/           # lifecycle 启动序列、plugin/cron/integration bootstrap
-├── managers/       # facade（薄壳，转发到 services/）
-├── services/       # 业务逻辑 + SQLite（所有 store 都在这）
-├── routes/         # HTTP 路由（薄壳，参数校验 + 调 service + 写 response）
-├── plugins/        # plugin loader / registry / sandbox / manifest
-├── mcp/            # MCP 客户端（stdio + SSE）
-├── hub/            # 独立 Hub 进程入口（HUB_ENABLED=1）
-├── utils/          # 纯函数工具，不能 import services/
-├── migrations/     # v31+ 独立 migration + 唯一版本注册表
-├── db.js           # DB bootstrap + v2-v30 兼容层；新 migration 不写这里
-├── middleware.js   # 安全头/CORS/CSP/鉴权
-└── appServer.js    # HTTP 入口
-src/
-├── pages/          # 顶层页面（AgentList/ChannelsPage/ChatSplit/...）
-├── components/     # 可复用组件
-├── lib/            # 客户端 REST helper、纯工具
-├── store/          # AppContext + reducer + localStorage 持久化
-├── agents/         # ActiveAgentProvider + context
-└── i18n/           # 中英文入口 translations.js + domains/ 分域数据 + I18nProvider.jsx
-tests/              # node:test，每个 .test.js 对应一个 service/route
-scripts/
-└── run-tests.js    # node --test 包装；npm test 走这里
-```
-
-**分层红线**：
-- `routes/` 只做"HTTP ↔ service"翻译。**不准**写业务逻辑。
-- `services/` 是业务 + DB，不准 import `routes/` 或 react 任何东西。
-- `managers/` 是 facade，**禁止**在 manager 里写新业务——直接转 services 就行（保持文件薄）。
-- `utils/` 必须纯函数，无副作用，无 DB，无 IO。
-
----
-
-## 四、加新功能的标准动作
-
-### 4.1 后端新能力
-
-1. **DB schema 改动**：`server/migrations/vNFeatureName.js`
-   - 导出 `migrateToVN(db)`，保持幂等（`IF NOT EXISTS` / `hasColumn` 守门）
-   - 在 `server/migrations/index.js` 导入并按连续版本顺序追加到 `schemaMigrations`
-   - migration 只负责 schema/data 变换；runner 会在同一迁移流程中写入 schema 版本
-   - 不要手改 `DB_SCHEMA_VERSION`、`LATEST_SCHEMA_VERSION`，也不要把 v31+ migration 塞回 `server/db.js`
-   - 跨表 FK 用 `ON DELETE SET NULL`（任务/记忆）或 `ON DELETE CASCADE`（强从属）。**不要默认 RESTRICT**。
-2. **业务逻辑**：`server/services/xxxStore.js` (或 `xxxService.js`)
-   - 所有函数签名带 `userId`（强制隔离），不准跨用户写
-   - 用 better-sqlite3 prepared statement，不要拼字符串
-3. **HTTP route**：`server/routes/xxxRoutes.js`
-   - 路径前缀 `/api/xxx`
-   - 401 未登录 / 404 资源不存在或跨用户 / 405 方法不支持 / 400 业务异常 / 500 内部
-   - 错误返回 JSON `{ error: { code, message } }`
-4. **manager facade**（如果有跨 service 协调）：`server/managers/XxxManager.js`，薄壳
-5. **测试**：`tests/xxxStore.test.js` + `tests/xxxRoutes.test.js`
-   - store 必测：CRUD / 用户隔离 / 边界 / 输入校验
-   - route 必测：401 / 完整路径 happy-path / 错误码
-   - 用 `mkdtempSync(...)` 隔离 DB；每个 test 用不同 email 避免 user 串载
-
-### 4.2 前端新页面
-
-1. `src/pages/XxxView.jsx`（或子目录如 `ChatSplit/index.jsx`）
-2. `src/lib/xxxClient.js` REST 调用
-3. 在 `src/i18n/domains/` 对应分域模块同步添加中英文 key（zh/en）—— **两种语言必须都加**，不准只加中文
-4. `src/store/` 里如果要持久化，走现有的 AppContext reducer pattern
-5. 导航入口：`src/components/LeftRail.jsx`
-
-### 4.3 plugin 新类型
-
-`server/plugins/pluginManifest.js` 加进 `PLUGIN_TYPES` 枚举（已有 5 种：ppt-theme / prompt-template / asset-pack / agent-template / skill-bundle）。**必须有真消费方**（参考 agent-template 接到 AgentList "Templates" 按钮），不要做 PPT 展示。
-
----
-
-## 五、测试 / lint / build
-
-```bash
-npm run lint          # ESLint，必须 --max-warnings 0 通过
-npm test              # node:test，全量用例必须全绿
-npm run build         # vite build，生成 dist/
-npm run dev           # vite HMR :5175
-npm run serve         # 仅启动 node 后端（需先 build）
-npm run local         # build + serve
-```
-
-**CI 矩阵**：`.github/workflows/ci.yml` 以 Node 22 跑 `ubuntu-latest` + `windows-latest` required gate，并在 Ubuntu 上对 Node 20.19 与 Node 24 跑原生 SQLite/服务端运行时兼容门禁。任何 PR 必须全部通过才能合。
-
-**Windows pitfall**：
-- `worker_threads` 冷启动 ~1000–1100ms。任何 sandbox/plugin/timeout 默认值 `< 5000ms` 都会在 windows runner 上 flake。默认设 5000ms。
-- `path.join` 用 `path.posix.join` 处理 URL 类路径（CSP nonce / artifact 路径）。
-- `\r\n` 换行：测试比对字符串前 `.replace(/\r\n/g, '\n')`。
-
-**CI 跑 test 前不会 build**：测试如果依赖 `dist/index.html` 存在，**测试自己**要写一个占位 + cleanup，不要去改 workflow 顺序。
-
----
-
-## 六、Git / PR / commit 约定
-
-### 6.1 分支命名
-
-| 前缀 | 用途 | 例 |
-|---|---|---|
-| `feat/<batch>-<slug>` | 新功能 | `feat/c1-patch-approval-vision` |
-| `fix/<batch>-<slug>` | bug 修复 | `fix/f4-markdown-sanitize-csp-nonce` |
-| `chore/<batch>-<slug>` | 杂项（CI/依赖/配置） | `chore/f7-windows-required-gate` |
-| `docs/<slug>` | 纯文档 | `docs/progress-sync-v010` |
-
-batch id 约定（用户分配）：`S1..S6` / `A1..A6` / `B*` / `C1..Cn` / `F1..Fn` / `U1..Un` / `P0..Pn`。
-
-### 6.2 commit message
-
-格式：`<type>(<scope>): <短描述>`
-- 例：`feat(channels): add v11 channel store`、`fix(f6): Windows CI green (19 → 0 fail)`
-- 顺手提交的文档/i18n：加 `(C1 顺手)` 后缀，例 `docs(readme): 标 Hub 已实现 (C1 顺手)`
-- 中文 OK，英文 OK，**别混**。一个 commit 选一种语言。
-
-### 6.3 PR 标题
-
-跟随 commit。**不要写 Co-Authored-By: Claude / Generated by Codex** 这类标注。
-
-### 6.4 merge 策略
-
-- 默认 `--no-ff`（保留分支历史）
-- `main` 不直接 push；走 PR + squash 或 PR + merge commit（看 PR 大小）
-- merge 前 verify：`npm run lint && npm test`，windows CI 绿
-
----
-
-## 七、I18n
-
-**2 语言**：`zh / en`。`src/i18n/translations.js` 是公共入口，翻译数据以 `src/i18n/domains/` 为单一来源；历史 `ja / ko / zh-TW` 设置统一回退到英文。
-
-新 UI 加新 key 必须同时填写中英文。**别留 TODO/占位**，也不要重新引入第三套翻译表。
-
-key 命名：`<domain>.<feature>.<element>`，例 `channels.list.empty`、`agents.editor.saveButton`。
-
----
-
-## 八、环境变量
-
-完整列表见 `.env.example`。核心：
-
-| 变量 | 必填 | 说明 |
-|---|---|---|
-| `MODEL_BASE_URL` / `MODEL_NAME` / `MODEL_API_KEY` | 是 | 单 provider 模式 |
-| `MODEL_PROVIDERS` | 否 | 多 provider 路由（如 `deepseek,mimo`），启用后用 `MODEL_PROVIDER_<ID>_*` |
-| `MODEL_NAMES_VISION` | 否 | 视觉模型名（逗号分隔） |
-| `AGENT_INJECT_ENABLED` | 否 | `0` 关闭 agent persona 注入 |
-| `WORKSPACE_FS_ENABLED` / `WORKSPACE_SHELL_ENABLED` / `WORKSPACE_GIT_ENABLED` | 否 | 文件/Shell/Git 工具开关 |
-| `MCP_STDIO_ALLOWED_COMMANDS` | 否 | MCP stdio 命令白名单 |
-| `APP_DATA_DIR` / `APP_DB_PATH` | 否 | 数据目录 / SQLite 路径 |
-| `PORT` | 否 | HTTP 端口，默认 5175 |
-| `HUB_ENABLED` | 否 | `1` 启用独立 Hub |
-
-**新加 env 必须同步改 `.env.example`**，否则用户拿不到。
-
----
-
-## 九、Prompt Compiler（chat 注入路径，改这里要谨慎）
-
-`server/services/promptCompiler.js` 把 chat 前置上下文拆成 **4 个独立 system block**：
-
-| block | 内容 | 缓存 fingerprint 来源 |
-|---|---|---|
-| `identity` | agent name / IDENTITY.md / persona template | agent.id+name+identityMd+avatarUrl+personaTemplate |
-| `ishiki` | SOUL.md + 收尾约束 | agent.id+soulMd+personaTemplate |
-| `skills` | 用户 runtime skills + skillIds | skill manifest hash |
-| `sessions` | 最近消息 tail + compaction archive | sessionId+recentMessages+archiveId |
-
-每块独立 fingerprint（sha256 前 16 hex），独立 LRU（各 64 项）。这是**性能关键路径**，不要：
-- 把 block 合并成一个大字符串（破坏缓存隔离）
-- 把易变字段（时间戳、随机数）塞进 fingerprint 输入
-- 在 compile 时同步跑 DB 查询（先在 caller 把数据查好传进来）
-
-注入顺序：`identity → ishiki → skills → sessions → memory → ...rest`。**别改顺序**。
-
----
-
-## 十、和 openhanako 对标的功能映射
-
-我们项目对标 openhanako（Electron 桌面 AI 工作台），实现路径不同但能力对齐：
-
-| openhanako 能力 | yma 实现 |
+| 位置 | 职责 |
 |---|---|
-| Manager facade | `server/managers/*` |
-| 独立 Hub | `server/hub/` + `HUB_ENABLED=1` |
-| Plugin SDK | `server/plugins/` + `docs/PLUGIN_SDK.md`（已删，等下个 PR 重写） |
-| SessionFile sidecar | `sessionStore` + `compaction_archive` 表 |
-| 角色卡 | agent + `.agent.md` 导出 / zip 导入（v0.9） |
-| 跨平台 bridge | `server/adapters/social/*` + `integrations` 表（v0.10） |
-| 视觉副驾 | `visionAssist.js`（无视觉模型时图→文回退） |
+| server/routes/ | HTTP 参数/身份边界、调用服务、响应映射；不堆业务流程 |
+| server/services/ | 业务逻辑、状态机、存储协调；不依赖 React 或路由实现 |
+| server/adapters/ | 文件、进程、模型、浏览器等外部协议与 I/O 边界 |
+| server/core/ | 生命周期、运行时契约、能力注册 |
+| server/managers/ | 兼容 facade，保持薄，不新增核心业务 |
+| server/utils/、shared/ | 可复用且可测试的基础逻辑；纯函数保持无 I/O/DB/服务依赖 |
+| src/lib/、src/store/、src/pages/ | 客户端协议、状态、页面；避免跨层复制同一业务规则 |
 
-不要在 PR 描述里写"对标 openhanako 的 XX 功能"——直接描述能力即可。
+- 不新增 Express/Fastify/Koa 等后端框架。沿用现有 HTTP 和错误响应契约。
+- 新 DB schema 变更写独立 migration 并顺序注册；不改旧 migration，不手改派生版本常量。删除策略按数据生命周期选择，不一概规定 CASCADE 或 SET NULL。
+- 保持 userId/owner 归属校验，包括本机自动身份。SQL 使用参数绑定；不得拼接用户输入或复用跨用户查询状态。
+- 昂贵 I/O 进入现有异步运行边界；不要把依赖外部服务的工作同步塞进 HTTP 参数处理。
+- 复用工具 catalog、endpoint profile、授权 gate、Turn 事件等已有单一来源，避免为子代理/前端另抄一份容易漂移的契约。
+- 历史层次问题按本次修改范围逐步收敛，不借小修复进行全仓架构重写。
+- 文件大时优先检查职责耦合。行数/复杂度门禁不是鼓励压缩语句、长行、改写函数形式或添加豁免来绕过检查。
 
----
+## 4. Agent 执行、工具与完成证据
 
-## 十一、常见踩坑（按出现频次排）
+- 工具 schema、参数规范化、实际 dispatcher 和前端错误展示应一致；改契约时补真实分发路径的行为测试。
+- 区分静态候选 catalog 与模型实际收到的工具集合。过滤只能作用于已授权能力；诊断日志不等于策略生效。
+- 子代理继承正确的执行目录、适用项目指令及授权上下文；不得通过加工具绕过主代理的权限、审批或副作用恢复。
+- 项目指令必须与本轮实际工作目录一致。项目资料和模型可修改内容不能自动获得更高信任级别；不要把任意 README 内容当作安全策略。
+- 明确的客户端任务/只读意图优先。词法规则只是 fallback，不能凭命中动作词授权写操作，也不能因语言未识别就把无证据的工作声明标为完成。
+- 完成状态依据真实工具结果、目标匹配、必要验证和交付证据；模型说“完成”不是证据，纯文本回答也不应被无条件要求写文件。
+- 保留 checkpoint、lease/fencing、审批和副作用幂等语义。遇到未知结果先核对，不自动重放可能已完成的写入、发送或模型请求。
+- 取消、拒绝、截断、额度耗尽、失败和成功必须有不同且可解释的终态。保留已确认进展；不能把部分响应标为完整交付。
+- 普通收尾需要模型时可用无工具请求。**用户取消、请求结果未知或权限被拒绝时，不为了满足“必须收尾”再次调用模型或工具。**
 
-1. **改了 service 忘改 route 的 response 字段** → route 测试里 `assert.equal(body.field, ...)` 会挂。先跑相关 test 文件。
-2. **加 DB 字段忘改 prepared statement 的 column 列表** → SQL 报 `no such column` 或 silent skip。grep `INSERT INTO <table>` 全文找补。
-3. **i18n 只改了中文或英文一侧** → 两侧 key 不对称，UI 可能显示成 `channels.list.empty`。`npm run i18n:check` 会报 missing key。
-4. **frontend `useEffect` 缺依赖** → eslint-plugin-react-hooks 会报，**不要** `// eslint-disable-next-line`，是真有 bug。
-5. **better-sqlite3 prepared statement 跨 user 复用** → 不准。每次操作都要把 `userId` 当 param 传进去。
-6. **写 plugin 忘加 manifest type 校验** → loader silently skip。`pluginManifest.js` 的 `PLUGIN_TYPES` 是 source of truth。
-7. **CSP nonce 拼错** → `script-src 'nonce-...' 'strict-dynamic'`，不要 `'unsafe-inline'` 回退。`tests/cspNonce.test.js` 守这条。
-8. **给模型调用加"整请求超时"** → 见下面第十二节。本地模型正在正常吐字也会被砍断。要加只能加 idle 超时。
-9. **测试里走真 planner / 真模型** → 单个用例几十秒、要配 key、断言随模型措辞变化随机变红。用 `planner:` / `runModel:` 注入 stub，见 `tests/jobRuntime.test.js`。
+## 5. Prompt、错误与语言
 
----
+- 身份、技能、会话等上下文沿用 promptCompiler.js 和现有分块/缓存边界；不要临时把 SOUL/IDENTITY 绕过编译器塞进首条消息。
+- 可选上下文加载失败可以降级，但要留下可诊断且不泄露凭据的记录；身份、授权、协议完整性和持久化失败不能一律吞掉。
+- 不新增散落的 console.log。使用现有日志工具，临时诊断交付前清理；日志和错误不得包含密钥、验证码或完整敏感环境。
+- UI 维护 zh/en 两套翻译。新增或修改 UI 文案同时更新两种语言，不新增第三套 UI 翻译表。
+- UI 语言范围不等于用户任务只能用两种语言。模型正文不应仅因未命中硬编码英文词表而被丢弃；语言兜底不能掩盖真实失败原因。
+- 不用只断言源码含某个字符串代替用户可见行为测试。新控件有可访问名称，避免嵌套主地标，尊重减少动画等系统偏好。
 
-## 十二、本地模型支持约定（改模型链路前必读）
+## 6. 本地模型与资源护栏
 
-本项目要同时支持 **Ollama / LM Studio / llama.cpp / vLLM / 云端自定义 API**。本地推理和云端 API 的性能特征完全不同，下面这些是踩过坑之后定下的规矩。
+- 端点类型、上下文、工具/流式能力统一由 server/utils/endpointProfile.js 解析；探测 I/O 留在 adapter，结果作为 profile 输入。
+- 上下文预算依据**服务实际有效窗口**。模型训练上限不等于端点运行窗口；未知时使用保守且可配置的本地默认，不猜大数。
+- 流式调用使用首个有效输出与 idle 双轨超时，收到有效进展后续期；不以短整请求墙钟截断仍在正常输出的本地模型。非流式/探测请求使用各自明确且可配置的截止策略。
+- 超时、取消和未知请求结果分别处理。不要为超时随意附加触发 failover 的 HTTP 状态；本地端点不默认转移到云端。
+- 兼容协议默认不主动发送紧的输出 token 上限；用户显式配置应被尊重。原生协议若要求输出上限字段，按该协议和端点能力处理，不能机械套用“不许发任何 max_tokens”。
+- 安全边界与工作量护栏分开：资源使用限制不能变成收费或付费解锁。空白/无效 env 应回到明确默认值；只有显式且被文档支持的值才能关闭限制。
+- 不靠盲目降低调用数、轮数或输出预算修复无进展问题。根据实际进展收敛，并在确实触及护栏时呈现原因和可恢复状态。
+- 工作墙钟排除模型等待和任务计划挂起时间；暂停/重启/恢复前后使用一致的累计口径，不重置已发生的工具、模型调用和 token 消耗。
+- SSE 保留连接阶段信息、心跳和代理缓冲控制。EOF/finish reason 的语义必须一路传到 Turn 终态，不能只检查底层是否发了 done 帧。
 
-### 12.1 唯一的能力判断入口：`server/utils/endpointProfile.js`
+## 7. 验证与交付
 
-「这个端点是什么、能干什么、该给多少耐心」全部由 `resolveEndpointProfile()` 回答。**不要**在别处重新猜端点类型、上下文窗口、是否支持工具。纯函数、无 IO，探测结果作为 `overrides` 传进去。
+常用入口以 package.json 为准：
 
-```js
-resolveEndpointProfile({ baseUrl, modelName, env, overrides }) → {
-  kind, isLocal, timeouts: { probeMs, firstTokenMs, idleMs, requestMs, backgroundMs },
-  contextWindow, supportsTools, supportsStreaming, supportsVision, failoverEligible, keepAlive,
-}
-```
+    npm run lint                         # 零 warning 门禁
+    npm run audit:functions -- --check    # 现有复杂度规则
+    node scripts/run-tests.js tests/xxx.test.js
+    npm test                             # 默认全量回归
+    npm run eval:offline                  # 确定性离线契约场景
+    npm run typecheck
+    npm run build
 
-adapters 层用 `profileForConfig(config, env)` 拿画像。
+- 先复现，再修根因并补回归；测试要覆盖失败输入、正常输入和相关权限/恢复边界。不删断言、不降低门槛、不把有副作用的实际失败改成成功来消红灯。
+- 错误码/校验顺序变化先核对公共契约。旧 fixture 若无法通过新 schema，应构造真正到达被测分支的有效输入，而不是断言一个更早失败的无关错误。
+- 日常测试默认离线，注入确定性 model/planner/网络依赖，使用隔离临时 DB 和产物目录；不要加载用户真实配置、密钥或数据。
+- 真实模型任务基准使用独立、显式启用的入口，先明确目标模型、任务集、权限和资源预算；不得用真实收费请求混入默认测试。
+- 报告区分：静态核验、模拟调用链、定向测试、全量回归、真实模型结果。脚本化场景通过不等于模型任务成功率，也不能推出对 Pi 等产品的百分比优劣。
+- 按风险跑相关检查，再跑可行的全量门禁和构建；没有运行的项目明确说明。已有无关失败单独记录，不伪称全绿。
+- Windows 注意 worker 冷启动、CRLF、URL 的 POSIX 路径；避免用固定短 sleep 同步异步测试，优先事件/可控时钟。测试不依赖开发者已有 dist 或真实模型服务。
+- 提交前查看差异，确认无无关格式化、敏感数据、临时调试和测试产物。最终汇报实际改动、测试结果及剩余限制；不宣称未执行的提交、合并或发布。
 
-### 12.2 超时必须是「首 token + idle」双轨，绝不能是整请求超时
+## 8. 审查报告如何落地
 
-- **首 token 超时**：从发请求到第一个字。本地加载几个 G 的权重可能要几分钟。本地默认 10 分钟。
-- **idle 超时**：两个 chunk 之间的最大间隔，**每收到一个 chunk 就重置**。含义是「N 秒一个字节都没有 = 连接死了」。
-
-只要模型还在吐字，就永远不该有上限 —— CPU 上 1 tok/s 也要让它跑完。`tests/modelProxyTimeout.test.js` 守这条。
-
-### 12.3 超时错误**不准带 `status`**
-
-用 `modelTimeoutError()` 造，它给 `code: 'MODEL_TIMEOUT'` 但不给 status。原因：曾经把超时伪装成 `status: 504`，而 `isProviderFailoverError` 判定 `>= 500` 可转移 —— 结果「本地模型慢了一下」= **静默切到云端 provider 并产生意外的上游 API 成本**，用户既不知道换了模型，也无法控制预算。
-
-同理 `modelRetry.js` 里 `MODEL_TIMEOUT` 不重试：对着单槽推理服务器重试 3 次只会更慢。
-
-### 12.4 本地端点默认不参与 failover
-
-`resolveModelFailoverConfigs` 在主 provider 是本地时只返回它自己。用户要这个行为可以在 provider 设置里显式打开 `failover_enabled`。
-
-### 12.5 SSE 必须有心跳
-
-`flushHeaders()` + `X-Accel-Buffering: no` + 每 15s 一个 `: keepalive` 注释帧。本地模型冷启动时几十秒一个字节都没有，任何中间层（nginx 默认 60s）都会掐断。另外首 token 前要发 `phase: 'connecting'` 帧，否则界面全白，用户只会以为卡死了。
-
-### 12.6 前端必须能区分「截断」和「正常结束」
-
-`callModelThroughProxyStream` 跟踪 `sawDone`。reader 结束但没见过 done 帧 → 抛 `StreamTruncatedError`（带 `partialText`）。**不准**静默 `return` —— 那样用户看到半句话却没有任何提示。截断后要给「继续生成」入口，不要让用户整轮重发（本地慢模型上代价极大）。
-
-### 12.7 agent 循环任何退出路径都不准返回空文本
-
-预算耗尽 / 达到轮数上限 / 无进展，**每一条**都要做一次 `toolChoice: 'none'` 的收尾调用，拿不到就给兜底文案。模型中途报错且已经跑过至少一轮 → 降级返回已收集的工具结果，**不要** throw 掉整个 step（那会连 checkpoint 一起删掉，前面几十轮全白干）。
-
-「做到一半就没有后续」几乎都是这里出的问题。`tests/jobLoopContinuity.test.js` 守这条。
-
-### 12.8 上下文窗口不准默认成一个大数
-
-本地模型常见 4k–8k。默认值给大了 → 压缩阈值算成几十万 → 主动压缩永远不触发 → 每个长对话都撞上游 400。本地默认 8192，且允许配到 1024（不要再加 `>= 4096` 这种下限）。
-
-`isContextLengthError` 要认各家的说法（llama.cpp 说 `exceeds the available context size`、有的返 413/500），别只认 OpenAI 那套文案。
-
-### 12.9 本地模型不产生上游 API 成本
-
-本地端点不应计入可选的上游 API 美元成本预算。`isLocalEndpoint` 认回环 + RFC1918 私网段 + Tailscale + `.local`/`.lan`，别只认 `127.0.0.1`。
-
-### 12.10 不准给「工作量」设紧上限
-
-这条是反复踩坑之后的硬规矩。项目里所有 `MAX_*` 常量分两类，改之前先想清楚自己在改哪一类：
-
-| 类型 | 例子 | 该怎么设 |
-|---|---|---|
-| **安全上限** | 单文件 5MB、patch 30 个操作、登录尝试 5 次 | 保持紧，这些防的是攻击和资源耗尽 |
-| **工作量护栏** | 工具轮数、累积调用数、墙钟、子代理并发 | 给到正常任务**碰不到**的量级，并且可配 |
-
-第二类给紧了，症状永远是同一个：**任务做到一半停下，用户看到半成品**。而且往往看不出是撞了限制——所以每一条退出路径都必须说清楚原因（见 12.7）。
-
-当前默认值（全部可用 env 覆盖，见 `.env.example`）：
-
-- `max_tokens`：**不限制**（不发这个字段）。填数字对推理模型是灾难——思考和正文共用预算。
-- Job 单步轮数 2000 / 累积调用 2000 / 墙钟 6 小时（**不含等模型的时间**）
-- 子代理 1000 轮 / 1000 次 / 2 小时，深度 3，并发 8，每批 8
-- 规划探索 40 轮，工具结果回喂 24000 字符
-
-`TOOL_MAX_ROUNDS` 默认 0 = 不限制，循环靠模型自己停。
-
-**墙钟必须排除模型延迟**（`jobBudget.trackModelMs`）。把等模型的时间算进墙钟，等于「模型越慢能做的事越少」——方向完全反了，本地模型慢是常态，不是失控信号。
-
----
-
-## 十三、给"主人"的话
-
-我（项目主人）习惯：
-- **直接告诉我结果**。"合了"、"挂了第 23 行"，不要"我先 ... 然后 ... 最后 ..."。
-- 改完用一下，**自己跑一遍**。光跑测试通过不算完。
-- 遇到自己不确定的设计取舍，**列两个方案**让我拍，不要自己拍完闷头改。
-- **保持文件薄**。一个 service 超过 600 行就该拆。一个 component 超过 300 行就该拆。
-
-如果违反本文档，我会让你重写。读完了再动手。
+- 审查提供线索，不是不可推翻的指令。沿真实 consumer 和完整调用链复核；被反证的结论不做“修复”。
+- 区分实现 bug、默认产品范围、刻意授权策略、文档漂移和未来能力建设。免费开源、免登录、可选上游费用估算本身不是缺陷。
+- 优先修复已复现的契约、目录错位、恢复/完成证据、上下文预算和门禁问题。工具扩权、自动 Skill 激活、完整浏览器工作流等架构变化单独说明取舍，不能借审查无声扩大权限。
+- 更新必要的测试和文档，但保留审查时的历史基线；新增修复状态和当前验证结果，不把原始未通过记录改写成当时已通过。

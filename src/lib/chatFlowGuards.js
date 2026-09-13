@@ -1,4 +1,5 @@
 import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
+import { modelProviderStopDiagnostic } from '../../shared/modelProviderStopDiagnostic.js'
 
 const SKILL_ARTIFACT_TYPES = {
   ppt: 'pptx',
@@ -390,6 +391,10 @@ export function getVisibleModelErrorMessage(error, t) {
   if (error?.code === 'EMPTY_MODEL_RESPONSE_LENGTH') return t('errors.emptyModelResponseLength')
   if (error?.code === 'EMPTY_MODEL_RESPONSE') return t('errors.emptyModelResponse')
   const code = failureCode(error)
+  const providerFailure = error?.meta?.serverFailure || error?.serverFailure
+    || error?.error || error?.payload?.error || error
+  const providerDiagnostic = modelProviderStopDiagnostic(providerFailure)
+  if (providerDiagnostic) return providerDiagnostic
   const status = Number(error?.status)
   if (status === 401 || code === 'UNAUTHORIZED') return translated(t, 'errors.sessionExpired')
   if (['TURN_REQUEST_FAILED', 'TURN_REQUEST_UNCONFIRMED'].includes(code)) {

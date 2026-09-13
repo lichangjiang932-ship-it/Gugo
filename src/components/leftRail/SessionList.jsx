@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Archive, ArchiveRestore, Folder, FolderOpen, GitFork, MoreHorizontal, Pin, PinOff, Search, SquarePen, X } from 'lucide-react'
-import { groupSessionsByProject, timestampOf } from './sessionListUtils.js'
+import { groupSessionsByProject, pinnedTimestampOf, sessionTimePresentation } from './sessionListUtils.js'
 
 const CONTEXT_MENU_WIDTH = 176
 const CONTEXT_MENU_HEIGHT = 160
@@ -31,17 +31,8 @@ function triggerMenuPosition(element, measured = {}) {
   return clampMenuPosition(bounds.right - width, top, measured)
 }
 
-let timestampFormatter = null
-function sessionTooltip(session) {
-  const title = String(session.title || '')
-  const timestamp = timestampOf(session)
-  if (timestamp <= 0) return title
-  try {
-    timestampFormatter ||= new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
-    return `${title}\n${timestampFormatter.format(timestamp)}`
-  } catch {
-    return title
-  }
+function sessionTooltip(title, time) {
+  return time ? `${title}\n${time.full}` : title
 }
 
 function moveMenuFocus(event) {
@@ -73,12 +64,16 @@ export default function SessionList({
   onArchiveToggle,
   onDelete,
   storedProjects = [],
+  showSearchAction = true,
+  locale = 'zh',
   t,
 }) {
+  const listRef = useRef(null)
   const menuRef = useRef(null)
   const menuOriginRef = useRef(null)
   const menuOriginIdRef = useRef(null)
   const menuTriggersRef = useRef(new Map())
+  const restoreMenuFocusRef = useRef(null)
   const [contextMenu, setContextMenu] = useState(null)
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState(() => new Set())
   const { projects, ungrouped: orderedSessions } = useMemo(
@@ -115,7 +110,17 @@ export default function SessionList({
   }, [onMenuClose, openMenuId])
 
   useLayoutEffect(() => {
-    if (openMenuId == null) return
+    if (openMenuId == null) {
+      const request = restoreMenuFocusRef.current
+      if (!request) return
+      restoreMenuFocusRef.current = null
+      const rows = [...(listRef.current?.querySelectorAll('[data-session-open]') || [])]
+        .filter((element) => !element.closest('[hidden]'))
+      const target = request.origin?.isConnected && !request.origin.closest('[hidden]') ? request.origin
+        : rows[Math.min(Math.max(request.index, 0), rows.length - 1)] || listRef.current
+      target?.focus?.({ preventScroll: true })
+      return
+    }
     if (menuOriginIdRef.current !== openMenuId) {
       menuOriginIdRef.current = openMenuId
       menuOriginRef.current = menuTriggersRef.current.get(openMenuId)
@@ -133,9 +138,31 @@ export default function SessionList({
     menuRef.current?.querySelector('[role="menuitem"]')?.focus({ preventScroll: true })
   }, [openMenuId, contextMenu])
 
+  const closeMenuAfterAction = () => {
+    const origin = menuOriginRef.current
+    const rows = [...(listRef.current?.querySelectorAll('[data-session-row]') || [])]
+      .filter((element) => !element.closest('[hidden]'))
+    restoreMenuFocusRef.current = { origin, index: rows.indexOf(origin?.closest('[data-session-row]')) }
+    onMenuClose()
+  }
+
+  const handleMenuKeyDown = (event) => {
+    if (event.key === 'Tab') {
+      onMenuClose()
+      // Let the browser continue Tab traversal from the opener once the menu
+      // is gone; do not override a mobile drawer's existing focus fence.
+      if (!event.defaultPrevented) menuOriginRef.current?.focus?.({ preventScroll: true })
+      return
+    }
+    moveMenuFocus(event)
+  }
+
   const renderSession = (session, index) => {
     const isActive = session.id === activeSessionId
     const isMenuOpen = openMenuId === session.id
+    const isPinned = pinnedTimestampOf(session) > 0
+    const title = String(session.title || '').trim() || t('nav.untitledSession')
+    const time = sessionTimePresentation(session, { locale })
     const contextPosition = contextMenu?.sessionId === session.id ? contextMenu : null
     const menuId = `session-actions-${session.id}`
     return <div
@@ -143,6 +170,7 @@ export default function SessionList({
       className="left-rail-session-row left-rail-action-scope"
       data-session-row={session.id}
       data-active={isActive ? 'true' : 'false'}
+      data-pinned={isPinned ? 'true' : 'false'}
       onContextMenu={(event) => {
         if (menuRef.current?.contains(event.target)) return
         event.preventDefault()
@@ -167,11 +195,14 @@ export default function SessionList({
           onMenuOpen(session.id)
         }}
         aria-current={isActive ? 'page' : undefined}
+        aria-label={isPinned ? `${title} · ${t('nav.pinnedSession')}` : title}
         aria-keyshortcuts="Shift+F10"
-        title={sessionTooltip(session)}
+        title={sessionTooltip(title, time)}
         className="left-rail-session-open"
       >
-        <span className={`block min-w-0 flex-1 truncate text-ui leading-5 ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{session.title}</span>
+        {isPinned && <span title={t('nav.pinnedSession')} className="left-rail-session-pin" aria-hidden="true"><Pin data-session-pinned className="h-3 w-3" strokeWidth={1.65} /></span>}
+        <span data-session-title className={`block min-w-0 flex-1 truncate text-ui leading-5 ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{title}</span>
+        {time && <time className="left-rail-session-time" dateTime={time.dateTime} aria-hidden="true">{time.compact}</time>}
       </button>
       <button
         type="button"
@@ -187,35 +218,35 @@ export default function SessionList({
           onMenuToggle(session.id)
         }}
         title={t('nav.sessionMenu')}
-        aria-label={t('nav.sessionMenu')}
+        aria-label={t('nav.sessionMenuFor', { title })}
         aria-haspopup="menu"
         aria-expanded={isMenuOpen}
         aria-controls={isMenuOpen ? menuId : undefined}
         className="left-rail-action"
       >
-        <MoreHorizontal className="h-4 w-4" />
+        <MoreHorizontal className="h-4 w-4" strokeWidth={1.65} aria-hidden="true" />
       </button>
       {isMenuOpen && <div
         ref={menuRef}
         id={menuId}
         role="menu"
-        aria-label={t('nav.sessionMenu')}
-        onKeyDown={moveMenuFocus}
+        aria-label={t('nav.sessionMenuFor', { title })}
+        onKeyDown={handleMenuKeyDown}
         style={contextPosition ? { left: contextPosition.left, top: contextPosition.top } : undefined}
         className="left-rail-session-menu fixed z-50 rounded-card border border-ink/10 bg-paper p-1.5 shadow-xl"
       >
-        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onPinToggle(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
-          {session.pinnedAt ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-          {session.pinnedAt ? t('nav.unpinSession') : t('nav.pinSession')}
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); closeMenuAfterAction(); onPinToggle(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+          {isPinned ? <PinOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Pin className="h-3.5 w-3.5" aria-hidden="true" />}
+          {isPinned ? t('nav.unpinSession') : t('nav.pinSession')}
         </button>
-        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onArchiveToggle(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); closeMenuAfterAction(); onArchiveToggle(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
           {session.archivedAt ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
           {session.archivedAt ? t('nav.unarchiveSession') : t('nav.archiveSession')}
         </button>
-        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onFork?.(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); closeMenuAfterAction(); onFork?.(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
           <GitFork className="h-3.5 w-3.5" />{t('nav.forkSession')}
         </button>
-        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onDelete(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); closeMenuAfterAction(); onDelete(session) }} className="left-rail-menu-danger flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs focus:outline-none">
           <X className="h-3.5 w-3.5" />{t('nav.deleteSession')}
         </button>
       </div>}
@@ -242,11 +273,14 @@ export default function SessionList({
           }}
           aria-expanded={!isCollapsed}
           aria-controls={regionId}
+          aria-label={t(isCollapsed ? 'nav.expandProject' : 'nav.collapseProject', { project: project.name, count: project.sessions.length })}
+          title={`${t(isCollapsed ? 'nav.expandProject' : 'nav.collapseProject', { project: project.name, count: project.sessions.length })}\n${project.path}`}
           className="left-rail-project-toggle"
           data-project-toggle={project.path}
         >
-          <ProjectIcon data-project-state-icon={isCollapsed ? 'collapsed' : 'expanded'} className="h-4 w-4 shrink-0 text-ink-fade" aria-hidden="true" />
+          <ProjectIcon data-project-state-icon={isCollapsed ? 'collapsed' : 'expanded'} className="left-rail-folder-icon h-4 w-4 shrink-0 text-ink-fade" strokeWidth={1.45} fill="currentColor" fillOpacity={0.1} aria-hidden="true" />
           <span className="min-w-0 flex-1 truncate text-ui font-medium leading-5 text-ink" title={project.path}>{project.name}</span>
+          <span className="left-rail-project-count" aria-hidden="true">{project.sessions.length}</span>
         </button>
         <button
           type="button"
@@ -259,15 +293,14 @@ export default function SessionList({
           <SquarePen className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       </div>
-      {project.sessions.length > 0 && (
-        <div id={regionId} hidden={isCollapsed} className="left-rail-project-sessions" data-project-sessions={project.path}>
-          {project.sessions.map((session, index) => renderSession(session, index))}
-        </div>
-      )}
+      <div id={regionId} hidden={isCollapsed} className="left-rail-project-sessions" data-project-sessions={project.path}>
+        {project.sessions.length ? project.sessions.map((session, index) => renderSession(session, index))
+          : <p className="px-2 py-2 text-xs text-ink-fade">{t('nav.emptyProject')}</p>}
+      </div>
     </section>
   })
 
-  return <div className="left-rail-session-list">
+  return <div ref={listRef} tabIndex={-1} className="left-rail-session-list">
     {projects.length > 0 && <section aria-label={t('chatMessages.workspaceProjects')}>
       <div className="left-rail-section-heading">
         {t('chatMessages.workspaceProjects')}
@@ -279,9 +312,9 @@ export default function SessionList({
         <span className="min-w-0 flex-1">
           {t('chatMessages.workspaceRecent')}
         </span>
-        <button type="button" onClick={() => { onMenuClose(); onSearch?.() }} title={t('nav.searchPlaceholder')} aria-label={t('nav.searchPlaceholder')} className="left-rail-action">
+        {showSearchAction && <button type="button" onClick={() => { onMenuClose(); onSearch?.() }} title={t('nav.searchPlaceholder')} aria-label={t('nav.searchPlaceholder')} className="left-rail-action">
           <Search className="h-3.5 w-3.5" />
-        </button>
+        </button>}
         <button type="button" onClick={() => { onMenuClose(); onNewRecent?.() }} title={t('nav.newChat')} aria-label={t('nav.newChat')} className="left-rail-action" data-new-recent-chat>
           <SquarePen className="h-3.5 w-3.5" />
         </button>

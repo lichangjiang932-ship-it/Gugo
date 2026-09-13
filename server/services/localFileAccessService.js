@@ -52,6 +52,13 @@ const MANAGED_PROJECTS_DIRECTORY = 'Gugo Projects'
 const DEFAULT_MANAGED_PROJECT_DIRECTORY = 'Default'
 const turnProjectDirectoryContext = new AsyncLocalStorage()
 
+/** Read only the current Turn's scope; never infer one from saved grants. */
+export function getScopedTurnProjectDirectory({ userId } = {}) {
+  if (typeof userId !== 'string' || !userId.trim()) return null
+  const scoped = turnProjectDirectoryContext.getStore()
+  return scoped?.userId === userId ? scoped.projectDirectory || null : null
+}
+
 export function getProjectDirectory({ userId } = {}) {
   const scoped = turnProjectDirectoryContext.getStore()
   if (scoped?.projectDirectory && (!userId || scoped.userId === userId)) {

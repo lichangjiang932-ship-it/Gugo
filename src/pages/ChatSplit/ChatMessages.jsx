@@ -7,11 +7,17 @@ import useChatMessageViewport from './chatMessages/useChatMessageViewport.js'
 
 export default function ChatMessages({
   messages,
+  sessionId,
+  recoveryOwnerScope,
+  onSideEffectResolved,
   workbenchMessage,
   isGenerating = false,
   onEditMessage,
+  onForkMessage,
+  forkingMessageId = '',
   onManageModels,
   onAuthorizeDirectoryRequest,
+  onRejectDirectoryRequest,
   onOpenArtifact,
   onOpenInPreview,
   onExpandCompaction,
@@ -60,17 +66,23 @@ export default function ChatMessages({
               <MessageRow
                 key={msg.id ?? hiddenCount + index}
                 msg={msg}
+                sessionId={sessionId}
+                recoveryOwnerScope={recoveryOwnerScope}
+                onSideEffectResolved={onSideEffectResolved}
                 rowKey={msg.id ?? hiddenCount + index}
                 turnIndex={hiddenCount + index}
                 generatingMessageId={generatingMessageId}
                 lang={lang}
                 isLatestUserMessage={msg.id === latestUserMessageId}
+                isForkingMessage={msg.id === forkingMessageId}
                 onAuthorizeDirectoryRequest={onAuthorizeDirectoryRequest}
+                onRejectDirectoryRequest={onRejectDirectoryRequest}
                 onExpandCompaction={onExpandCompaction}
                 onOpenArtifact={onOpenArtifact}
                 onOpenInPreview={onOpenInPreview}
                 onManageModels={onManageModels}
                 onEditMessage={onEditMessage}
+                onForkMessage={sessionId && !isGenerating ? onForkMessage : null}
                 onRetryModelFailure={onRetryModelFailure}
                 t={t}
               />

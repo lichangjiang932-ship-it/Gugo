@@ -120,11 +120,20 @@ export async function getServerTurn({ sessionId, turnId, signal, fetchImpl = fet
   return (await parseResponse(response)).turn
 }
 
-export async function cancelServerTurn({ sessionId, turnId, signal, fetchImpl = fetch }) {
+export async function cancelServerTurn({ sessionId, turnId, directoryPausedSequence, signal, fetchImpl = fetch }) {
+  if (directoryPausedSequence !== undefined
+    && (!Number.isSafeInteger(directoryPausedSequence) || directoryPausedSequence < 0)) {
+    throw Object.assign(new Error('directoryPausedSequence must be a non-negative safe integer'), {
+      code: 'TURN_DIRECTORY_PAUSE_SEQUENCE_INVALID', status: 400,
+    })
+  }
   const response = await fetchImpl(`/api/turns/${encodeURIComponent(turnId)}/cancel`, {
     method: 'POST',
     headers: headers(true),
-    body: JSON.stringify({ sessionId }),
+    body: JSON.stringify({
+      sessionId,
+      ...(directoryPausedSequence === undefined ? {} : { directoryPausedSequence }),
+    }),
     signal,
   })
   return (await parseResponse(response)).turn

@@ -182,7 +182,7 @@ Compose 默认只把端口绑定到宿主机 `127.0.0.1`。若要从局域网或
 
 默认本地模式下可直接在「设置 → 模型」新增模型 Provider。模型配置会自动用于聊天、诊断、后台任务和子代理；留空 API Key 可保留原密钥。启用 `AUTH_MODE=multi_user` 后，各用户登录后分别配置自己的 Provider。
 
-Browser 工具需要受支持的 Node.js 版本（`^20.19.0`、`^22.13.0` 或 `>=24.0.0`）以及已安装的 Edge/Chrome。默认自动探测浏览器，也可在 `.env` 设置 `BROWSER_EXECUTABLE_PATH`；仅受限 CI/沙箱环境才使用 `BROWSER_NO_SANDBOX=1`。
+Browser 工具需要受支持的 Node.js 版本（`^20.19.0`、`^22.13.0` 或 `>=24.0.0`）以及已安装的 Edge/Chrome。默认自动探测浏览器，也可在 `.env` 设置 `BROWSER_EXECUTABLE_PATH`；仅受限 CI/沙箱环境才使用 `BROWSER_NO_SANDBOX=1`。普通 snapshot 会有界遍历 open Shadow DOM 与同源 iframe；跨源 iframe 必须先调用 `browser_frames`，再用返回的 `frameId` 调用 `browser_switch_frame`。宿主会在创建独立 CDP isolated world 前重新验证 frame URL 与当前用户的 connected-app 所有权；frame 导航后旧 context 立即失效，必须重新列举和切换。
 
 视频/音频剪辑、转码、抽帧、拼接、音量调整和降噪需要 `ffmpeg` 与 `ffprobe`。官方 Windows 桌面包从 Electron `resources/bin` 自带 sidecar；源码或自托管部署可将它们加入 `PATH`，或用 `GUGO_FFMPEG_PATH` / `GUGO_FFPROBE_PATH` 指向绝对路径。详见 [配置说明](docs/CONFIGURATION.md#媒体工具可执行文件)。
 
@@ -230,6 +230,8 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 | `MAIL_SERVER/MAIL_PORT/MAIL_USERNAME/MAIL_PASSWORD` | 多用户部署必填 | 邮箱验证码服务；本地模式不需要 | — |
 | `WORKSPACE_FS_ENABLED` | 否 | 工作区文件工具开关；在「本地文件」显式授权的路径不受此开关限制 | `0` |
 | `WORKSPACE_SHELL_ENABLED` | 否 | 共享 `WORKSPACE_ROOT` 的 Shell 工具开关 | `0` |
+| `SHELL_SANDBOX_MODE` | 否 | `host` 或固定、无网络、限资源的逐调用 Docker 隔离 | `host` |
+| `SHELL_REQUIRE_OS_ISOLATION` | 否 | 设为 `1` 后拒绝 host Shell，隔离配置缺失时 fail closed | `0` |
 | `LOCAL_CODE_EXECUTION_ENABLED` | 否 | 用户授权 `read_write` 目录的代码执行开关；本机回环模式默认开启，远程/多人默认关闭 | 自动 |
 | `CODEX_APP_SERVER_ENABLED` | 否 | 仅精确值 `1` 启动外部 OpenAI Codex CLI `app-server` 子进程；该 CLI 可能按自身配置联网 | `0` |
 | `WORKSPACE_GIT_ENABLED` | 否 | Git 工具开关 | `0` |
@@ -258,7 +260,7 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 
 > ⚠ `AUTH_MODE=local` 不提供网络访问控制，只适合绑定 `127.0.0.1` 的可信本机。任何局域网或公网监听都必须使用 `AUTH_MODE=multi_user`；公网还需要 HTTPS、SMTP、防火墙和反向代理限流。
 
-> ⚠ **Shell 信任模型**：开启共享工作区的 `WORKSPACE_SHELL_ENABLED=1`，或在本机回环模式下把目录以 `read_write` 授权给代码执行，都等同于**完全信任**能调用 `bash_exec` 的用户——该用户可在 server 进程权限下执行命令。`server/utils/bashGuard.js` 的危险命令黑名单**只防手滑 / prompt-injection 一行 payload，不是安全边界**（变量拼接 / base64 管道 / `python -c` / `$()` 命令替换均可平凡绕过）。若需对不可信用户开放 Shell，必须上 OS 级隔离（容器 / nsjail / seccomp），不要依赖黑名单。
+> ⚠ **Shell 信任模型**：默认 `SHELL_SANDBOX_MODE=host`。开启共享工作区的 `WORKSPACE_SHELL_ENABLED=1`，或在本机回环模式下把目录以 `read_write` 授权给代码执行，都等同于**完全信任**能调用 `bash_exec` 的用户——该用户可在 server 进程权限下执行命令。`server/utils/bashGuard.js` 的危险命令黑名单**只防手滑 / prompt-injection 一行 payload，不是安全边界**。若需容器隔离，可配置固定 Docker CLI/镜像并设 `SHELL_SANDBOX_MODE=docker` 与 `SHELL_REQUIRE_OS_ISOLATION=1`；Gugo 会禁网、禁 pull、使用只读 rootfs、降权并限制资源，并在取消/超时/异常后按宿主生成的随机容器名显式清理；清理失败会 fail closed。安全仍取决于 Docker daemon、镜像与宿主内核。
 
 共享工作区的写入、Shell 与 Git 需要用户信任，并受相应全局开关限制。独立的本地文件授权中，只有明确授予 `read_write` 的目录可用于代码执行；单文件、只读和“全部文件”授权都不会获得 Shell 权限。写入型 Shell 命令仍逐次审批。`WORKSPACE_SHARED_TRUSTED=1` 仅适用于单机可信用户，不是安全沙箱。
 
@@ -273,6 +275,9 @@ npm run serve    # 仅启动后端（需先 build）
 npm run local    # build + 启动
 npm run lint     # ESLint
 npm test         # 全量自动化测试
+npm run eval:offline  # 确定性运行时契约评测
+# 显式授权后运行真实模型任务集；格式与隔离边界见 docs/LIVE_AGENT_EVALS.md
+GUGO_LIVE_EVAL=1 npm run eval:live -- --dataset ./evals/tasks.json
 ```
 
 ---
@@ -292,6 +297,7 @@ Gugo/
 │   ├── utils/             # 路径、网络与安全通用工具
 │   └── mcp/               # MCP 客户端与服务端
 ├── shared/                # 前后端共享的事件契约
+├── sdk/                   # 无内部 service 依赖的 JavaScript / Python HTTP SDK
 ├── src/
 │   ├── pages/             # 页面与工作区视图
 │   ├── components/        # 可复用组件
@@ -304,6 +310,7 @@ Gugo/
 │   ├── CONFIGURATION.md   # 配置参考
 │   ├── KERNEL_BOUNDARY.md # 极简内核边界与完成标准
 │   ├── OPERATION_GUIDE.md # 部署与运维
+│   ├── SDK.md             # 外部宿主 HTTP SDK v1
 │   └── SCHEDULING.md      # Cron / 调度说明
 └── .github/workflows/
     └── ci.yml             # 测试、覆盖率、安全扫描与镜像构建
@@ -315,7 +322,7 @@ Gugo/
 
 见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
-插件作者可参阅公开的 [Plugin Compatibility Contract v1](./docs/PLUGIN_COMPATIBILITY_V1.md)，其中包含离线 Marketplace 布局、Ed25519 publisher 签名、兼容/升级政策和可执行夹具。
+外部宿主可使用不导入内部 service 的 [Gugo HTTP SDK v1](./docs/SDK.md) JavaScript / Python 客户端启动、查询、跟踪、引导、取消和恢复 Turn。插件作者可参阅公开的 [Plugin Compatibility Contract v1](./docs/PLUGIN_COMPATIBILITY_V1.md)，其中包含离线 Marketplace 布局、Ed25519 publisher 签名、兼容/升级政策和可执行夹具。
 
 报告安全问题见 [SECURITY.md](./SECURITY.md)，行为准则见 [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)。
 

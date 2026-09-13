@@ -1,3 +1,5 @@
+import { hasKnownLanguageFileRepairIntent } from './knownLanguageFileRepairIntent.js'
+
 export const TURN_INTENT_MODES = Object.freeze(['auto', 'answer', 'execute'])
 
 const ENGLISH_STATUS_SUBJECT = String.raw`[^?？!！;；\r\n]{1,160}?`
@@ -161,6 +163,9 @@ export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) 
   if (!prompt) return false
   if (/^(?:自动模式执行|正常模式执行)[。.!！]*$/u.test(prompt)) return true
   if (STATUS_INQUIRY_PROMPT.test(prompt) && !hasStatusFollowUpExecution(prompt)) return false
+  // Evaluate the original complete clause: stripping a prohibition first
+  // must not turn a mixed/read-only request into an affirmative repair.
+  if (hasKnownLanguageFileRepairIntent(prompt, hasFileTargetReference)) return true
   // Mutation verbs inside an explicit prohibition are constraints, not work
   // orders. Strip only the negated clause so mixed prompts remain executable:
   // "do not edit A; create B" still retains the affirmative second clause.
@@ -206,6 +211,7 @@ export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) 
 }
 
 export function hasMutationExecutionIntent(text = '') {
+  if (hasKnownLanguageFileRepairIntent(text, hasFileTargetReference)) return true
   // A verification-only follow-up often says "do not regenerate/write". The
   // mutation words inside that prohibition are constraints, not a fresh write
   // order. Clause boundaries keep mixed requests safe: "do not edit A; create

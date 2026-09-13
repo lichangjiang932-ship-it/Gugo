@@ -174,8 +174,9 @@ export function createWorkspaceTargetGuard({
   return Object.freeze({ validate })
 }
 
-export function createDisabledToolGuard({ toolsConfig, restoredDisabledToolNames = [] } = {}) {
+export function createDisabledToolGuard({ toolsConfig, restoredDisabledToolNames = [], locale = 'zh' } = {}) {
   const hasCurrentConfig = toolsConfig && typeof toolsConfig === 'object'
+  const isZh = locale === 'zh'
   const executionToolsConfig = normalizeServerToolsConfig(
     hasCurrentConfig ? toolsConfig : { disabled: restoredDisabledToolNames },
   )
@@ -191,17 +192,22 @@ export function createDisabledToolGuard({ toolsConfig, restoredDisabledToolNames
       denied: true,
       policyDenied: true,
       code: 'tool_disabled_by_config',
-      error: `工具 ${normalizedName} 已加载，但在当前工具配置中被禁用，因此本次调用被策略拒绝。`,
+      error: isZh
+        ? `工具 ${normalizedName} 已加载，但在当前工具配置中被禁用，因此本次调用被策略拒绝。`
+        : `The tool ${normalizedName} is loaded but disabled in the current tool configuration, so this call was rejected by policy.`,
       retryable: false,
       tool: normalizedName,
-      hint: '如需执行，请先在工具设置中启用该工具；不要把此结果描述为工具不存在或本轮不可用。',
+      hint: isZh
+        ? '如需执行，请先在工具设置中启用该工具；不要把此结果描述为工具不存在或本轮不可用。'
+        : 'Enable the tool in tool settings before running it; do not describe this result as the tool being missing or unavailable this round.',
     }
   }
 
   return Object.freeze({ disabledToolNames, validate })
 }
 
-export function createExplicitReadOnlyGuard({ enabled = false, userId = null } = {}) {
+export function createExplicitReadOnlyGuard({ enabled = false, userId = null, locale = 'zh' } = {}) {
+  const isZh = locale === 'zh'
   function validate(name, args) {
     if (!enabled) return null
     const metadata = getToolMetadata(name, { args, userId })
@@ -211,9 +217,13 @@ export function createExplicitReadOnlyGuard({ enabled = false, userId = null } =
       denied: true,
       policyDenied: true,
       code: 'explicit_read_only_constraint',
-      error: '用户明确要求本轮只读。该工具已加载，但这次调用可能修改数据或产生副作用，因此已被策略拒绝；这不是缺少写入或执行工具。',
+      error: isZh
+        ? '用户明确要求本轮只读。该工具已加载，但这次调用可能修改数据或产生副作用，因此已被策略拒绝；这不是缺少写入或执行工具。'
+        : 'The user explicitly requested a read-only round. This tool is loaded, but this call may modify data or cause side effects, so it was rejected by policy; this is not a missing write or execution tool.',
       retryable: false,
-      hint: '本轮仅使用只读检查工具。需要修改时，请让用户在新的消息中明确授权执行。',
+      hint: isZh
+        ? '本轮仅使用只读检查工具。需要修改时，请让用户在新的消息中明确授权执行。'
+        : 'Use only read-only inspection tools this round. To modify anything, ask the user to explicitly authorize execution in a new message.',
     }
   }
 
@@ -224,7 +234,9 @@ export function createRedundantImageGuard({
   patchOnlyWorkspaceIntent = false,
   independentImageCreationRequested = false,
   hasSuccessfulExpectedPathWrite = () => false,
+  locale = 'zh',
 } = {}) {
+  const isZh = locale === 'zh'
   function validate(name) {
     return name === 'generate_image'
       && hasSuccessfulExpectedPathWrite()
@@ -233,10 +245,14 @@ export function createRedundantImageGuard({
       ? {
           ok: false,
           code: 'image_generation_not_requested_after_file_patch',
-          error: '已有修复写入成功，无需重新生成图像。',
+          error: isZh
+            ? '已有修复写入成功，无需重新生成图像。'
+            : 'A fix has already been written successfully; no need to regenerate the image.',
           retryable: false,
           suppressed: true,
-          hint: '继续验证用户指定的已修改文件，或直接说明修复已完成；不要创建无关的新图片。',
+          hint: isZh
+            ? '继续验证用户指定的已修改文件，或直接说明修复已完成；不要创建无关的新图片。'
+            : 'Continue verifying the user-specified modified file, or state that the fix is complete; do not create an unrelated new image.',
         }
       : null
   }

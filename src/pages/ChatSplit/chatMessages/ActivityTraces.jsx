@@ -6,7 +6,7 @@ import LiveElapsed from '../../../components/LiveElapsed.jsx'
 import { useT } from '../../../i18n/I18nProvider.jsx'
 import { UiContributionRenderer, useUiContributions } from '../../../plugins/uiContributionRegistry.js'
 
-export function ReasoningTrace({ text = '', streaming = false, completed = false, label = '', testId }) {
+export function ReasoningTrace({ text = '', streaming = false, completed = false, label = '', detail = '', startedAt, testId }) {
   const { t } = useT()
   // Providers can stream very large private reasoning payloads. Rendering that
   // payload makes the answer harder to follow and can freeze long chats. Keep
@@ -24,8 +24,11 @@ export function ReasoningTrace({ text = '', streaming = false, completed = false
       {streaming
         ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
         : <Check className="h-3.5 w-3.5" aria-hidden="true" />}
-      <span>{label || (streaming ? t('chatMessages.reasoningActive') : t('chatMessages.reasoningCompleted'))}</span>
-      {streaming && <LiveElapsed className="chat-thinking-elapsed" />}
+      <span className="chat-thinking-copy">
+        <span>{label || (streaming ? t('chatMessages.reasoningActive') : t('chatMessages.reasoningCompleted'))}</span>
+        {streaming && detail && <span className="chat-thinking-detail" data-testid="model-activity-detail">{detail}</span>}
+      </span>
+      {streaming && <LiveElapsed className="chat-thinking-elapsed" startedAt={startedAt} title={startedAt ? t('toolActivity.requestElapsed') : undefined} />}
     </div>
   )
 }

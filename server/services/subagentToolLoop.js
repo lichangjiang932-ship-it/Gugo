@@ -5,6 +5,7 @@ import {
   getModelContextWindow,
 } from '../adapters/modelProxy.js'
 import { createJobBudget } from '../utils/jobBudget.js'
+import { validateToolCall } from '../utils/toolCallArguments.js'
 import { getSideEffectExecutionLedger } from './sideEffectExecutionLedger.js'
 import { buildUserModelEnv } from './modelProviderStore.js'
 import {
@@ -63,6 +64,7 @@ function subagentTerminalCopy(locale) {
  */
 function createSubagentToolExecutor({
   executeTool,
+  authorizedToolSpecs,
   userId,
   selectedModel,
   modelProviderId,
@@ -82,7 +84,7 @@ function createSubagentToolExecutor({
   const executeLoopTool = ({
     name, args, signal, budget, toolCallId, idempotencyKey, idempotentResume,
     sideEffectRecoveryPlan,
-  }) => executeTool(name, args, {
+  }) => validateToolCall({ name, args }, authorizedToolSpecs) || executeTool(name, args, {
     userId,
     modelName: selectedModel,
     modelProviderId,
@@ -148,6 +150,9 @@ function presentPausedSubagentResult(result, normalizedLocale, terminalCopy) {
 }
 
 export async function runSubagentToolLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, modelProviderId = null, modelConfigRevision = null, modelRuntimeEnv = null, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, locale = 'zh', callModel = callBackgroundModelWithTools, executeTool = undefined, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, runToolLoop = undefined, sideEffectLedger = null, onTranscriptEvent = null, loadCheckpoint = null, saveCheckpoint = null }) {
+  // The caller has already filtered this run's tools. Do not consult the
+  // broader type catalog or let an injected loop executor widen this snapshot.
+  const authorizedToolSpecs = structuredClone(Array.isArray(tools) ? tools : [])
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
   const effectiveSideEffectLedger = sideEffectLedger
@@ -186,6 +191,7 @@ export async function runSubagentToolLoop({ messages, tools, signal, maxIters = 
   const loopStep = { id: runId || 'subagent-step' }
   const executeLoopTool = createSubagentToolExecutor({
     executeTool,
+    authorizedToolSpecs,
     userId,
     selectedModel,
     modelProviderId,
@@ -219,15 +225,19 @@ export async function runSubagentToolLoop({ messages, tools, signal, maxIters = 
     loadCheckpoint,
     saveCheckpoint,
     enableToolHooks: false,
-    requestToolApproval: ({ toolName, args, signal: approvalSignal }) => requestTreeApproval({
-      context: effectiveApprovalContext,
-      approveTool,
-      userId,
-      origin: 'subagent',
-      toolName,
-      args,
-      signal: approvalSignal,
-    }),
+    requestToolApproval: async ({ toolName, args, signal: approvalSignal }) => {
+      const invalid = validateToolCall({ name: toolName, args }, authorizedToolSpecs)
+      if (invalid) throw Object.assign(new Error(invalid.error), invalid)
+      return requestTreeApproval({
+        context: effectiveApprovalContext,
+        approveTool,
+        userId,
+        origin: 'subagent',
+        toolName,
+        args,
+        signal: approvalSignal,
+      })
+    },
     runModel: (request) => callModel({
       ...request,
       userId: modelRuntimeEnv ? null : userId,

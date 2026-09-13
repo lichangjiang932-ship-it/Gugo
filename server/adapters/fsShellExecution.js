@@ -31,6 +31,10 @@ import {
   resolveShellCwdForCommand,
 } from './fsShellSupport.js'
 import {
+  cleanupDockerShellSandbox,
+  resolveDockerShellSandbox,
+} from './shellDockerSandbox.js'
+import {
   assertShellCommandPathsAuthorized,
   prepareExpectedOutputs,
   verifyExpectedOutputs,
@@ -128,6 +132,33 @@ function auditExecution(userId, args, status, durationMs) {
   })
 }
 
+function dockerCleanupRequired(result) {
+  return result?.aborted === true
+    || result?.timedOut === true
+    || result?.killed === true
+    || result?.processTreeCleanupFailed === true
+    || result?.processIsolationFailed === true
+    || result?.processStartFailed === true
+    || result?.code !== 0
+}
+
+async function applyDockerCleanup(result, sandbox, cleanupDockerShellSandboxFn) {
+  if (!sandbox || !dockerCleanupRequired(result)) return result
+  let cleanup
+  try {
+    cleanup = await cleanupDockerShellSandboxFn(sandbox)
+  } catch (error) {
+    cleanup = { ok: false, error: error?.message || String(error) }
+  }
+  if (cleanup?.ok === true) return result
+  return {
+    ...result,
+    processTreeCleanupFailed: true,
+    dockerCleanupFailed: true,
+    dockerCleanupError: String(cleanup?.error || 'Docker container cleanup failed.').slice(0, 1_000),
+  }
+}
+
 async function finalizeShellExecution({
   rawResult,
   sensitiveEnvValues,
@@ -140,6 +171,7 @@ async function finalizeShellExecution({
   inferredTargets,
   timeout,
   userId,
+  isolation = null,
 }) {
   const result = redactProcessOutput(rawResult, sensitiveEnvValues)
   const durationMs = Date.now() - startedAt
@@ -171,6 +203,7 @@ async function finalizeShellExecution({
   })
   const executionMetadata = {
     durationMs,
+    ...(isolation ? { isolation } : {}),
     ...(sessionMode === 'reuse' ? {
       session: 'reuse',
       ...(result.sessionRecovered ? { sessionRecovered: true } : {}),
@@ -283,7 +316,9 @@ export async function bashExecTool({
   signal = null,
   onOutput = null,
 }, {
-  permissionToolName = 'bash_exec', runProcessWithGroupFn = runProcessWithGroup,
+  permissionToolName = 'bash_exec',
+  runProcessWithGroupFn = runProcessWithGroup,
+  cleanupDockerShellSandboxFn = cleanupDockerShellSandbox,
 } = {}) {
   assertToolPermitted(userId, effectivePermissionToolName(permissionToolName, 'bash_exec'))
   if (typeof command !== 'string' || !command.trim()) throw badReq('command 必填')
@@ -311,6 +346,17 @@ export async function bashExecTool({
   const cwd = resolvedCwd.fullPath
   let displayCwd = resolvedCwd.displayPath
   if (!fs.statSync(cwd).isDirectory()) throw badReq('cwd 不是目录')
+  const sandbox = resolveDockerShellSandbox({
+    command,
+    cwd,
+    rootPath: resolvedCwd.rootPath || cwd,
+    inheritedEnvKeys,
+  })
+  if (sandbox && sessionMode === 'reuse') {
+    const error = badReq('Docker-isolated Shell does not support persistent session reuse.', 400)
+    error.code = 'SHELL_SANDBOX_SESSION_REUSE_UNSUPPORTED'
+    throw error
+  }
   let expectedTargets = []
   let inferredTargets = []
 
@@ -356,8 +402,8 @@ export async function bashExecTool({
     if (rawResult.currentCwd) displayCwd = displayShellCwd(resolvedCwd, rawResult.currentCwd)
   } else {
     await prepareExecution(cwd)
-    const shellPath = isWin ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh'
-    const shellArgs = isWin ? ['/d', '/s', '/c', command] : ['-c', command]
+    const shellPath = sandbox?.shellPath || (isWin ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh')
+    const shellArgs = sandbox?.shellArgs || (isWin ? ['/d', '/s', '/c', command] : ['-c', command])
     rawResult = await runProcessWithGroupFn({
       shellPath,
       shellArgs,
@@ -367,12 +413,17 @@ export async function bashExecTool({
       timeout,
       maxBuffer: SHELL_MAX_OUTPUT,
       windowsHide: true,
-      windowsVerbatimArguments: isWin,
+      windowsVerbatimArguments: sandbox?.windowsVerbatimArguments ?? isWin,
       signal,
       overflowMode: 'tail',
       fullOutputPath: outputLogPath,
       onOutput,
     })
+    rawResult = await applyDockerCleanup(
+      rawResult,
+      sandbox,
+      cleanupDockerShellSandboxFn,
+    )
   }
   return finalizeShellExecution({
     rawResult,
@@ -386,5 +437,6 @@ export async function bashExecTool({
     inferredTargets,
     timeout,
     userId,
+    isolation: sandbox?.isolation || null,
   })
 }

@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, FileText } from 'lucide-react'
 import DirectoryRequestCard from '../../../taskRun/DirectoryRequestCard.jsx'
 import {
@@ -59,31 +59,56 @@ export function UserBubble({ attachments, command, content, onOpenAttachment, t 
   )
 }
 
-export function InlineDirectoryRequestCard({ msg, onAuthorize, t }) {
-  const [busy, setBusy] = useState('')
-  const [error, setError] = useState('')
+export function InlineDirectoryRequestCard({ msg, sessionId, ownerScope, onAuthorize, onReject, t }) {
+  const key = JSON.stringify([ownerScope, sessionId, msg.id, msg.meta?.serverTurnId, msg.meta?.serverLastSequence])
+  const valid = typeof ownerScope === 'string' && !!ownerScope && typeof sessionId === 'string' && !!sessionId
+    && !!msg.id && !!msg.meta?.serverTurnId && Number.isSafeInteger(msg.meta?.serverLastSequence) && msg.meta.serverLastSequence >= 0
+  const [stored, setStored] = useState({ key, busy: '', error: '' })
+  const active = useRef(null)
   const request = msg.meta?.serverClarification || {}
   const pending = msg.meta?.directoryAuthorizationPending === true
 
-  const authorize = async (decision) => {
-    if (pending || busy || typeof onAuthorize !== 'function') return
-    setBusy('grant')
-    setError('')
+  const state = stored.key === key ? stored : { busy: '', error: '' }
+  useLayoutEffect(() => {
+    const run = { key, alive: true, request: null }
+    active.current = run
+    return () => { run.alive = false; run.request?.controller.abort(); if (active.current === run) active.current = null }
+  }, [key])
+  const decide = async (kind, decision = {}) => {
+    const run = active.current
+    const callback = kind === 'grant' ? onAuthorize : onReject
+    if (!valid || pending || run?.key !== key || !run.alive || typeof callback !== 'function') return
+    if (run.request) {
+      if (kind !== 'reject' || run.request.kind !== 'grant') return
+      run.request.controller.abort()
+    }
+    const operation = { kind, controller: new AbortController() }
+    run.request = operation
+    setStored({ key, busy: kind, error: '' })
     try {
-      await onAuthorize({ message: msg, ...decision })
+      await callback({ message: msg, sessionId, ownerScope, signal: operation.controller.signal, ...decision })
     } catch (reason) {
-      setError(reason?.message || t('taskSteering.directoryGrantFailed'))
+      if (run.alive && active.current === run && run.request === operation && !operation.controller.signal.aborted) {
+        setStored({ key, busy: kind, error: t(reason?.status === 409 || reason?.code === 'TURN_DIRECTORY_PAUSE_STALE'
+          ? 'taskSteering.directoryRequestChanged'
+          : kind === 'reject' ? 'taskSteering.directoryCancelFailed' : 'taskSteering.directoryGrantFailed') })
+      }
     } finally {
-      setBusy('')
+      if (run.alive && active.current === run && run.request === operation) {
+        run.request = null
+        setStored((current) => current.key === key ? { ...current, busy: '' } : current)
+      }
     }
   }
 
   return (
     <DirectoryRequestCard
       request={request}
-      busy={pending ? 'grant' : busy}
-      error={error || msg.meta?.directoryAuthorizationError || ''}
-      onAuthorize={authorize}
+      busy={!valid ? 'unavailable' : pending ? 'grant' : state.busy}
+      error={state.error || msg.meta?.directoryAuthorizationError || ''}
+      onAuthorize={(decision) => decide('grant', decision)}
+      onReject={typeof onReject === 'function' ? () => decide('reject') : undefined}
+      lockAccessMode
       t={t}
     />
   )

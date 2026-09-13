@@ -18,6 +18,7 @@ import approvals from './approvals.js'
 import toolApproval from './toolApproval.js'
 import access from './access.js'
 import chatMessages from './chatMessages.js'
+import toolActivity from './toolActivity.js'
 import history from './history.js'
 import hooks from './hooks.js'
 import workbench from './workbench.js'
@@ -79,6 +80,7 @@ const domains = [
   ['toolApproval', toolApproval],
   ['access', access],
   ['chatMessages', chatMessages],
+  ['toolActivity', toolActivity],
   ['history', history],
   ['hooks', hooks],
   ['workbench', workbench],

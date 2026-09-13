@@ -337,6 +337,7 @@ test('explore and plan types have read-only tools', () => {
     assert.ok(names.includes('fetch_url'), `${typeId} should have fetch_url`)
     assert.ok(names.includes('read_file'), `${typeId} should have read_file`)
     assert.ok(!names.includes('write_file'), `${typeId} should NOT have write_file`)
+    assert.ok(!names.includes('remember'), `${typeId} should NOT have durable memory writes`)
   }
 })
 
@@ -345,6 +346,7 @@ test('general type has full read-write tools', () => {
   assert.ok(names.includes('web_search'))
   assert.ok(names.includes('write_file'))
   assert.ok(names.includes('edit_file'))
+  assert.ok(names.includes('remember'))
   assert.ok(names.includes('Agent'))
 })
 

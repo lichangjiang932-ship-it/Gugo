@@ -83,7 +83,7 @@ export function prepareBackgroundPromptContext({
     tokenCap: Number.isFinite(tokenCap) ? tokenCap : 800,
   }), warn)
   const messages = []
-  const instructions = safeStep('workspace instructions failed', null, () => readInstructions({ env }), warn)
+  const instructions = safeStep('workspace instructions failed', null, () => readInstructions({ userId, env }), warn)
   if (instructions?.text) messages.push({ role: 'system', content: instructions.text })
   if (skills?.text) messages.push({ role: 'system', content: skills.text })
   if (memory?.text) messages.push({ role: 'system', content: memory.text })
@@ -146,7 +146,7 @@ export function prepareTurnPromptContext({
     : null
   const instructions = canaryPrompt
     ? { text: canaryPrompt.promptContent.trim() }
-    : safeStep('workspace instructions failed', null, () => readInstructions({ env }), warn)
+    : safeStep('workspace instructions failed', null, () => readInstructions({ userId, env }), warn)
   const identity = safeStep('identity block failed', null, () => buildIdentityBlock({ agent }), warn)
   const ishiki = safeStep('ishiki block failed', null, () => buildIshikiBlock({ agent }), warn)
   const skills = safeStep('skills block failed', null, () => buildSkillsBlockFromPrepared({

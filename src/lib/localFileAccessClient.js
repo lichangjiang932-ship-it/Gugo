@@ -64,6 +64,47 @@ export async function grantLocalPathApi({ path, accessMode, scope = 'persistent'
   }, options))
 }
 
+export async function grantTurnDirectoryApi({
+  sessionId, turnId, pausedSequence, path, accessMode, scope = 'session',
+}, options = {}) {
+  if (![sessionId, turnId].every(value => typeof value === 'string' && value && value === value.trim())
+    || !Number.isSafeInteger(pausedSequence) || pausedSequence < 0
+    || typeof path !== 'string' || !path.trim()
+    || !['read_only', 'read_write'].includes(accessMode) || !['session', 'persistent'].includes(scope)) {
+    throw Object.assign(new Error('Directory authorization requires the exact current task and requested access.'), {
+      code: 'TURN_DIRECTORY_AUTHORIZATION_INVALID',
+    })
+  }
+  const result = await parse(await fetchWithTimeout('/api/local-files/grants/turn', {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ sessionId, turnId, pausedSequence, path, accessMode, scope }),
+  }, options))
+  const grant = result?.grant
+  const prior = result?.preexistingPermission
+  const reusedPersistent = scope === 'session' && grant?.scope === 'persistent'
+    && prior && typeof prior === 'object' && !Array.isArray(prior)
+    && prior.id === grant.id && prior.path === grant.path
+    && prior.accessMode === grant.accessMode && prior.scope === 'persistent'
+  const matchingScope = grant?.scope === scope || reusedPersistent
+  const matchingMode = grant?.accessMode === accessMode
+    || (reusedPersistent && accessMode === 'read_only' && grant.accessMode === 'read_write')
+  if (result?.ok !== true || result.interaction?.sessionId !== sessionId
+    || result.interaction?.turnId !== turnId || result.interaction?.pausedSequence !== pausedSequence
+    || result.interaction?.requestedPath !== path.trim() || result.interaction?.canonicalPath !== grant?.path
+    || result.interaction?.accessMode !== accessMode || result.interaction?.scope !== scope
+    || result.boundary?.type !== 'turn.paused' || result.boundary.sequence !== pausedSequence
+    || typeof result.boundary.id !== 'string' || !result.boundary.id
+    || !grant || Array.isArray(grant) || !matchingScope
+    || typeof grant.id !== 'string' || !grant.id || typeof grant.path !== 'string' || !grant.path
+    || grant.resourceType !== 'directory' || !['read_only', 'read_write'].includes(grant.accessMode) || !matchingMode) {
+    throw Object.assign(new Error('The directory confirmation did not match the current task. Refresh its state.'), {
+      code: 'TURN_DIRECTORY_AUTHORIZATION_RESPONSE_INVALID',
+    })
+  }
+  return result
+}
+
 export async function revokeLocalPathApi(id) {
   return parse(await fetch(`/api/local-files/grants/${encodeURIComponent(id)}`, {
     method: 'DELETE',

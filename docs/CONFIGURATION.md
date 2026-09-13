@@ -194,6 +194,10 @@ Provider 还可指定绝对目录 `cwd` 和小型字符串 `env` 对象。已知
 }
 ```
 
+## Browser frame 自动化
+
+普通 `browser_snapshot` 会在 100 个 DOM root / 10,000 个检查节点的上限内遍历 open Shadow DOM 与同源 iframe。跨源 iframe 不能由顶层页面 JavaScript 读取；应先调用 `browser_frames` 列出当前 tab 的有界 frame tree，再将返回的精确 `frameId` 交给 `browser_switch_frame`。宿主会在 `Page.createIsolatedWorld` 前重新执行 URL/SSRF 校验和当前用户的 connected-app 所有权校验；未连接的受管应用 frame 只返回脱敏占位，不暴露 URL。切换后 `browser_snapshot`、click/type/select/press、上传和下载只作用于该隔离 execution context。frame 导航或消失会撤销旧 context，并以 `BROWSER_FRAME_CONTEXT_STALE` 要求重新列举/切换；顶层导航和 tab 切换也会清空 frame context。该能力不绕过 Browser 出站代理、逐次审批或本地文件授权。
+
 ## 专用文件处理与产物通道
 
 普通 `read_file` 仍只用于不超过 5 MB 的 UTF-8 文本。图片、音视频、PDF 和 ZIP 不应先编码成文本或 Base64：`image_info` / `image_transform`、`media_probe` / `media_transform`、`pdf_info` / `pdf_text` / `pdf_transform` 与批量文件工具直接使用工作区路径、用户已授权路径或其规格允许的受管附件 URI，并分别执行像素、字节数、页码范围、处理时长或解压膨胀等限制。
@@ -242,8 +246,9 @@ PDF 专用通道默认允许 256 MB 输入和 512 MB 输出，可通过 `PDF_TOO
 `LOCAL_CODE_EXECUTION_ENABLED=1` 才会开启；设为 `0` 可在本机模式下也彻底关闭。写入型 Shell
 命令始终需要单次审批，不能建立永久放行规则。
 
-本地代码执行和共享工作区 Shell 都不是 OS 级沙箱。若服务会被不可信用户访问，应保持代码执行
-关闭，或部署到容器/nsjail/seccomp 等真正的隔离环境中。
+默认的本地代码执行和共享工作区 Shell 使用 `SHELL_SANDBOX_MODE=host`，不是 OS 级沙箱。若服务会被不可信用户访问，应保持代码执行关闭，或使用受审计的容器/nsjail/seccomp 隔离。
+
+可选的 `SHELL_SANDBOX_MODE=docker` 会把每次非持久 `bash_exec` 固定封装为 `docker run`：禁止自动拉取和网络，rootfs 只读，丢弃 capabilities，启用 `no-new-privileges`，限制 CPU/内存/PID，仅将当前已授权根挂载到 `/workspace`。必须同时配置绝对本机 Docker CLI 路径 `SHELL_SANDBOX_DOCKER_BIN` 和带非 `latest` 显式 tag 或 SHA-256 digest 的现有受审计镜像 `SHELL_SANDBOX_DOCKER_IMAGE`。Docker CLI 由固定 `--host` 绑定本地 Unix socket 或 Windows named pipe；`SHELL_SANDBOX_DOCKER_HOST` 不接受 TCP/SSH daemon。镜像 ENTRYPOINT 会被固定 `/bin/sh` 覆盖。每次调用使用宿主生成的随机容器名；取消、超时、启动/隔离异常或非零退出后会通过同一本地 daemon 显式 `docker rm --force`，清理失败以 `PROCESS_TREE_CLEANUP_FAILED` fail closed，不能伪报安全取消。命令使用工作区相对路径；`session=reuse` 在此模式下被拒绝。设置 `SHELL_REQUIRE_OS_ISOLATION=1` 后，任何 host 模式调用都会以 `SHELL_OS_ISOLATION_REQUIRED` fail closed，且镜像必须改用 `name@sha256:<digest>`，普通 tag 会被拒绝。该层仍依赖 Docker daemon、内核和镜像本身的安全，不等同于对容器逃逸的形式化保证。
 
 ## OAuth 公网地址与反向代理
 

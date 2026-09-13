@@ -1,3 +1,5 @@
+import { CONNECTOR_TOOL_NAMES } from './connectorTools.js'
+import { getDynamicToolSpecRegistrationId } from './toolRegistry.js'
 import {
   hasMutationExecutionIntent,
   isExecutionCapabilityChallenge,
@@ -7,7 +9,8 @@ import {
 
 const EXPLICIT_READ_ONLY = /\b(?:read[- ]only|no[- ]write)\b|\b(?:do not|don't|never|without)\b.{0,24}\b(?:change|modify|edit|write|delete|remove|rename|move|patch|mutate)\b|\u53ea\u8bfb|\u4ec5(?:\u67e5\u770b|\u5206\u6790|\u68c0\u67e5)|\u4e0d\u8981.{0,16}(?:\u4fee\u6539|\u7f16\u8f91|\u5199\u5165|\u5220\u9664|\u79fb\u9664|\u91cd\u547d\u540d|\u79fb\u52a8|\u6253\u8865\u4e01|\u6539\u52a8|\u53d8\u66f4|\u4fee\u590d)/i
 const ANALYSIS_ONLY_REQUEST = /^\s*(?:\u8bf7)?\s*(?:\u5206\u6790|\u89e3\u91ca|\u8bf4\u660e|\u8bc4\u4f30|\u5ba1\u67e5|\u8ba8\u8bba|\u68b3\u7406|\u603b\u7ed3|\u5217\u51fa|\u8bc6\u522b)/i
-const LOCAL_FILE_TARGET_REFERENCE = /(?:^|[\s"'`(])(?:[a-z]:[\\/]|\.\.?[\\/]|\/)(?:[^\r\n"'`]+[\\/])*[^\r\n"'`]+\.[a-z0-9]{1,12}(?=$|[\s"'`),;:\uff0c\u3002\uff1b\uff1a\uff01\uff1f])/iu
+const LOCAL_FILE_TARGET_REFERENCE = /(?:^|[\s"'`(])(?:[a-z]:[\\/]|\.\.?[\\/]|\/)(?:[^\r\n"'`]+[\\/])*[^\r\n"'`]+\.[a-z0-9]{1,12}(?=$|[\s"'`),.;:\uff0c\u3002\uff1b\uff1a\uff01\uff1f])/iu
+const LOCAL_FILE_MUTATION_DIRECTIVE = /\b(?:write|save|create|edit|modify|update|patch|fix|delete|remove|rename|move)\b|(?:写入|保存|创建|新建|编辑|修改|更新|修复|删除|移除|重命名|移动)/i
 const LOCAL_LAYOUT_WRITE_BOUNDARY = /\b(?:do not|don't|never)\s+write\s+(?:below|above|outside|past|beyond|within|inside|in|on)\b[^\r\n.!?]{0,80}\b(?:line|margin|box|area|region|field|space|page|section)\b[^\r\n.!?]*/gi
 const SCOPED_READ_ONLY_VERIFIER = /(?:\b(?:separate|independent)\s+)?\bread[- ]only\b(?=\s+(?:(?:verification|validation|checker|validator|script|tool)\b|[\w.-]*(?:verify|validat|check)[\w.-]*\.(?:py|js|ts|mjs|cjs|sh|ps1)\b))|(?:\u53e6\u5199|\u53e6\u5efa|\u5355\u72ec|\u72ec\u7acb|\u53e6\u5916)?\s*\u53ea\u8bfb(?=\s*(?:(?:\u9a8c\u8bc1|\u6821\u9a8c|\u68c0\u67e5)(?:\u811a\u672c|\u5668|\u7a0b\u5e8f|\u5de5\u5177)?|[\w.-]*(?:verify|validat|check)[\w.-]*\.(?:py|js|ts|mjs|cjs|sh|ps1)\b))/gi
 const GLOBAL_READ_ONLY = /\b(?:do not|don't|never)\b[^\r\n.!?;]{0,48}\b(?:change|modify|edit|write|delete|remove|rename|move|patch|mutate)\b[^\r\n.!?;]{0,32}\b(?:any|all)\s+(?:files?|documents?|artifacts?)\b|\b(?:read[- ]only|no[- ]write)\b[^\r\n.!?;]{0,32}\b(?:entire|whole|all)\s+(?:project|repository|repo|workspace)\b|\b(?:entire|whole)\s+(?:project|repository|repo|workspace)\b[^\r\n.!?;]{0,32}\b(?:read[- ]only|no[- ]write)\b|(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,32}(?:\u4fee\u6539|\u7f16\u8f91|\u5199\u5165|\u5220\u9664|\u79fb\u52a8|\u91cd\u547d\u540d)[^\r\n\u3002\uff1b]{0,24}(?:\u4efb\u4f55|\u6240\u6709)(?:\u6587\u4ef6|\u6587\u6863|\u4ea7\u7269)|(?:\u6574\u4e2a|\u5168\u90e8)(?:\u9879\u76ee|\u4ed3\u5e93|\u5de5\u4f5c\u533a)[^\r\n\u3002\uff1b]{0,24}(?:\u53ea\u8bfb|\u4ec5\u67e5\u770b|\u4ec5\u5206\u6790|\u4e0d\u8981\u4fee\u6539)/i
@@ -15,7 +18,7 @@ const SCOPED_SOURCE_READ_ONLY_BOUNDARY = /\b(?:do not|don't|never)\b[^\r\n.!?;]{
 const SCOPED_CONTENT_PRESERVATION_BOUNDARY = /\b(?:do not|don't|never)\b[^\r\n.!?;]{0,40}\b(?:change|modify|edit|rewrite|alter)\b[^\r\n.!?;]{0,24}\b(?:the\s+|this\s+)?(?:article(?:'s)?(?:\s+(?:content|text|wording))?|body(?:\s+(?:content|text))?|copy|wording|text\s+content)\b|(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,24}(?:\u4fee\u6539|\u7f16\u8f91|\u6539\u52a8|\u53d8\u66f4|\u6539\u5199)[^\r\n\u3002\uff1b]{0,20}(?:(?:\u8fd9\u7bc7|\u8be5\u7bc7|\u539f\u59cb|\u6e90)?\u6587\u7ae0(?:\u7684)?(?:\u5185\u5bb9|\u6587\u5b57|\u63aa\u8f9e)?|\u6b63\u6587(?:\u7684)?(?:\u5185\u5bb9|\u6587\u5b57|\u63aa\u8f9e)?|\u539f\u6587(?:\u7684)?(?:\u5185\u5bb9|\u6587\u5b57|\u63aa\u8f9e)?|\u6587\u672c\u5185\u5bb9|\u6587\u5b57\u5185\u5bb9|\u6587\u6848|\u63aa\u8f9e)/i
 const SCOPED_CONTENT_FIDELITY_BOUNDARY = /\b(?:preserve|keep|retain)\b[^\r\n.!?;]{0,80}\b(?:article|body|text|wording|content)\b[^\r\n.!?;]{0,80}\b(?:do not|don't|never)\b[^\r\n.!?;]{0,32}\b(?:change|modify|edit|polish|delete|remove|add|rewrite|alter)\b[^\r\n.!?;]{0,32}\b(?:content|text|wording|paragraphs?|spelling|grammar|punctuation)\b|(?:\u4fdd\u7559|\u4fdd\u6301)[^\r\n\u3002\uff1b]{0,80}(?:\u6587\u7ae0|\u6b63\u6587|\u539f\u6587)[^\r\n\u3002\uff1b]{0,80}(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,32}(?:\u4fee\u6539|\u7f16\u8f91|\u6da6\u8272|\u5220\u51cf|\u589e\u52a0|\u6539\u5199)[^\r\n\u3002\uff1b]{0,24}(?:\u5185\u5bb9|\u6587\u5b57|\u6bb5\u843d|\u62fc\u5199|\u8bed\u6cd5|\u6807\u70b9)/i
 const READ_ONLY_EXPLANATION_QUESTION = /^(?:(?:\u8bf7)?(?:\u89e3\u91ca|\u8bf4\u660e)?\s*(?:\u4e3a\u4ec0\u4e48|\u4e3a\u4f55|\u600e\u4e48)|(?:can\s+you\s+)?(?:explain\s+)?(?:why|how)).*(?:\u53ea\u8bfb|read[- ]only).*[?\uff1f]\s*$/iu
-const EXECUTION_CONTINUATION = /^(?:continue(?:\s+(?:with\s+)?(?:it|this|the\s+(?:work|changes?|implementation)))?|go\s+ahead|proceed|approved?|i\s+(?:approve|authorize\s+you)(?:\s+to\s+(?:continue|proceed|execute|make\s+the\s+changes?))?|\u7ee7\u7eed(?:\u6267\u884c|\u5904\u7406|\u4fee\u6539|\u5b8c\u6210|\u505a|\u4e0b\u53bb)?(?:\u5427)?|\u6211(?:\u540c\u610f|\u6279\u51c6|\u6388\u6743\u7ed9\u4f60)(?:[\s,\uff0c]*(?:\u7ee7\u7eed|\u6267\u884c|\u4fee\u6539|\u5904\u7406|\u64cd\u4f5c))?|\u6388\u6743\u7ed9\u4f60(?:[\s,\uff0c]*(?:\u7ee7\u7eed|\u6267\u884c|\u4fee\u6539|\u5904\u7406|\u64cd\u4f5c))?)[.!?\u3002\uff01\uff1f\s]*$/i
+const EXECUTION_CONTINUATION = /^(?:continue(?:\s+(?:with\s+)?(?:it|this|the\s+(?:work|changes?|implementation)))?|go\s+ahead|proceed|approved?|i\s+(?:approve|authorize\s+you)(?:\s+to\s+(?:continue|proceed|execute|make\s+the\s+changes?))?|\u7ee7\u7eed(?:\u6267\u884c|\u5904\u7406|\u4fee\u6539|\u5b8c\u6210|\u505a|\u4e0b\u53bb)?(?:\u5427)?|\u6211(?:\u540c\u610f|\u6279\u51c6|\u6388\u6743\u7ed9\u4f60)(?:[\s,\uff0c]*(?:\u7ee7\u7eed|\u6267\u884c|\u4fee\u6539|\u5904\u7406|\u64cd\u4f5c))?|\u6388\u6743\u7ed9\u4f60(?:[\s,\uff0c]*(?:\u7ee7\u7eed|\u6267\u884c|\u4fee\u6539|\u5904\u7406|\u64cd\u4f5c))?|\u4f60\u6765(?:\u64cd\u4f5c|\u5904\u7406|\u5b8c\u6210|\u4fee\u590d))[.!?\u3002\uff01\uff1f\s]*$/i
 const EXECUTION_REVISION = /^(?:(?:(?:\u628a|\u5c06)?(?:\u5b83|\u8fd9\u4e2a|\u8be5)?(?:\u9875\u9762|\u7f51\u7ad9|\u7f51\u9875|\u6587\u4ef6|\u56fe\u7247|\u80cc\u666f|\u989c\u8272|\u5b57\u4f53|\u5e03\u5c40|\u52a8\u753b|\u6548\u679c|\u5361\u7247)?\s*(?:\u518d|\u7a0d\u5fae|\u66f4|\u6709\u70b9)(?:\u6df1|\u6d45|\u5927|\u5c0f|\u4eae|\u6697|\u5feb|\u6162|\u7acb\u4f53|\u5706\u6da6|\u7d27\u51d1|\u6e05\u6670|\u660e\u663e|\u7a81\u51fa|\u73b0\u4ee3|\u7b80\u6d01)(?:\u4e00\u70b9|\u4e00\u4e9b|\u70b9|\u4e9b)?|(?:\u628a|\u5c06)?(?:\u5b83|\u8fd9\u4e2a|\u8be5)?(?:\u9875\u9762|\u7f51\u7ad9|\u7f51\u9875|\u6587\u4ef6|\u56fe\u7247|\u80cc\u666f|\u989c\u8272|\u5b57\u4f53|\u5e03\u5c40|\u52a8\u753b|\u6548\u679c|\u5361\u7247)?\s*(?:\u6362\u6210|\u6539\u6210|\u8c03\u6210|\u505a\u6210|\u52a0\u6df1|\u8c03\u6697|\u589e\u52a0|\u6dfb\u52a0|\u52a0\u4e0a|\u53bb\u6389|\u5220\u9664|\u79fb\u9664|\u8c03\u6574|\u4f18\u5316|\u5b8c\u5584|\u4fee\u6539|\u4fee\u590d|\u66ff\u6362).{0,100})|(?:(?:make|change|turn|set)\s+(?:it|this|the\s+(?:page|site|file|image|background|color|layout))\b.{0,100}|(?:a\s+(?:little|bit)\s+)?(?:darker|lighter|bigger|smaller|faster|slower|clearer|rounder|more\s+(?:dynamic|compact|modern|prominent|three-dimensional))|(?:add|remove|delete|replace|adjust|tweak|revise|update)\b.{0,100}))[.!?\u3002\uff01\uff1f\s]*$/iu
 // Follow-up revisions are often phrased as an invariant instead of an edit
 // command (for example, "no matter how I rotate it, every image must keep
@@ -48,27 +51,53 @@ const CODE_EXECUTION_INTENT = new RegExp(
 // small and stable: inspect, change, and verify. Upstream permission/config
 // filtering still wins, so this selector never recreates an explicitly
 // disabled tool.
-const LOCAL_MUTATION_REQUIRED_TOOL_NAMES = new Set([
+const BASE_DISCOVERY_TOOL_NAMES = new Set([
+  'load_skill',
+  'request_clarification',
+  'search_tools',
+  'set_deliverables',
+])
+const LOCAL_READ_CORE_TOOL_NAMES = new Set([
+  ...BASE_DISCOVERY_TOOL_NAMES,
+  'request_directory',
   'list_directory',
   'read_file',
-  'read_artifact_source',
   'grep_code',
-  'find_symbol',
-  'list_imports',
+  'git_diff',
+])
+const LOCAL_MUTATION_REQUIRED_TOOL_NAMES = new Set([
+  ...LOCAL_READ_CORE_TOOL_NAMES,
   'write_file',
   'edit_file',
   'apply_patch',
-  'patch_file',
   'bash_exec',
   'run_command',
   'run_project_check',
-  'run_test',
-  'git_status',
-  'git_diff',
-  'request_directory',
-  'request_clarification',
-  'reflect',
   'set_deliverables',
+])
+const CONNECTOR_TOOL_NAME_SET = new Set(CONNECTOR_TOOL_NAMES)
+const GENERATOR_TOOL_NAMES = new Set([
+  'create_docx', 'create_html_app', 'create_pdf', 'create_pptx', 'create_xlsx',
+  'generate_image', 'render_pdf_pages',
+])
+const LOCAL_CONTEXT_REFERENCE = /(?:网页|网站|页面|幻灯片|演示文稿|文档|表格|工作簿|图片|图像|视频|音频|压缩包|文件|目录|文件夹|项目|代码|源码)|\b(?:website|webpage|html|css|javascript|typescript|react|vue|frontend|pptx?|powerpoint|slides?|docx?|xlsx?|spreadsheet|pdf|image|video|audio|archive|zip|file|folder|directory|project|repository|repo|workspace|codebase|source code)\b/i
+const ARTIFACT_SOURCE_REFERENCE = /(?:当前|已有|先前|之前).{0,24}(?:产物|文档|文件)|\b(?:current|existing|previous|prior|generated)\b.{0,24}\b(?:artifact|document|file|output)\b/i
+const MCP_INTENT = /(?:模型上下文协议)|\bmcp\b/i
+const RUNTIME_PLUGIN_INTENT = /(?:运行时插件|插件工具)|\b(?:runtime plugin|plugin tool)s?\b/i
+const CONNECTOR_PROVIDERS = [
+  'microsoft_teams', 'google_calendar', 'google_sheets', 'google_drive', 'connected_app',
+  'qq_mail', 'salesforce', 'confluence', 'dropbox', 'onedrive', 'todoist', 'zendesk',
+  'hubspot', 'airtable', 'clickup', 'gitlab', 'github', 'notion', 'slack', 'discord',
+  'linear', 'trello', 'asana', 'monday', 'jira', 'mail',
+]
+const CONNECTOR_PROVIDER_ALIASES = new Map([
+  ['microsoft_teams', ['microsoft teams', 'ms teams', '微软 teams']],
+  ['google_calendar', ['google calendar', '谷歌日历']],
+  ['google_sheets', ['google sheets', '谷歌表格']],
+  ['google_drive', ['google drive', '谷歌云端硬盘', '谷歌云盘']],
+  ['connected_app', ['connected app', 'connected apps', '已连接应用', '连接的应用']],
+  ['qq_mail', ['qq mail', 'qq email', 'qq 邮箱', 'qq邮箱']],
+  ['mail', ['mail', 'email', '邮箱', '邮件']],
 ])
 const REMOTE_MUTATION_INTENT = /(?:^|[\s,\uff0c\u3002\uff1b;!\uff01])(?:(?:please|directly|now|help\s+(?:me\s+)?|\u8bf7|\u76f4\u63a5|\u73b0\u5728|\u7acb\u5373|\u5e2e\u6211|\u7ed9\u6211)\s*){0,3}(?:send|notify|post|publish|email)\b|(?:^|[\s,\uff0c\u3002\uff1b;!\uff01])(?:(?:\u8bf7|\u76f4\u63a5|\u73b0\u5728|\u7acb\u5373|\u5e2e\u6211|\u7ed9\u6211)\s*){0,3}(?:\u53d1\u9001|\u901a\u77e5(?!\s*(?:\u9875\u9762|\u8bbe\u7f6e|\u914d\u7f6e|\u9762\u677f|\u6837\u5f0f|\u7ec4\u4ef6))|\u53d1\u5e03(?=[^\uff0c\u3002\uff1b\r\n]{0,20}(?:\u901a\u77e5|\u6d88\u606f|\u516c\u544a|\u5e16\u5b50|\u5230|\u81f3)))|\b(?:create|update|delete|add)\b[^.!?\r\n]{0,48}\b(?:slack|notion|airtable|jira|salesforce|asana|trello|discord|calendar)\b|(?:slack|notion|airtable|jira|salesforce|asana|trello|discord|\u90ae\u7bb1|\u65e5\u5386)[^\uff0c\u3002\uff1b\r\n]{0,32}(?:\u53d1\u9001|\u53d1\u5e03|\u521b\u5efa|\u65b0\u5efa|\u66f4\u65b0|\u5220\u9664|\u6dfb\u52a0)/i
 const GIT_MUTATION_INTENT = /\bgit\s+(?:commit|push|revert|rollback)\b|\b(?:commit|push)\b|(?:\u63d0\u4ea4|\u63a8\u9001|\u56de\u6eda).{0,12}(?:\u4ee3\u7801|\u4ed3\u5e93|\u5206\u652f|git)/i
@@ -157,10 +186,13 @@ export function shouldInheritExecutionIntent(userPrompt, previousUserPrompt, { i
 function localMutationIntentSource({ userPrompt, previousUserPrompt, intentMode }) {
   const current = String(userPrompt || '').trim()
   const previous = String(previousUserPrompt || '').trim()
+  const hasDirectFileMutation = (value) => (
+    LOCAL_FILE_TARGET_REFERENCE.test(value) && LOCAL_FILE_MUTATION_DIRECTIVE.test(value)
+  )
   if (current && !isExecutionCapabilityChallenge(current)
-    && hasMutationExecutionIntent(current)) return current
+    && (hasMutationExecutionIntent(current) || hasDirectFileMutation(current))) return current
   if (shouldInheritExecutionIntent(current, previous, { intentMode })
-    && hasMutationExecutionIntent(previous)) return previous
+    && (hasMutationExecutionIntent(previous) || hasDirectFileMutation(previous))) return previous
   return ''
 }
 
@@ -180,6 +212,9 @@ export function resolveRequiredChatToolNames({
   const source = localMutationIntentSource({ userPrompt, previousUserPrompt, intentMode })
   if (executionRequired && !LOCAL_FILE_TARGET_REFERENCE.test(source)) return null
   if (!source || REMOTE_MUTATION_INTENT.test(source)) return null
+  if (WEB_LOOKUP_INTENT.test(source)
+    && !LOCAL_CONTEXT_REFERENCE.test(source)
+    && !LOCAL_FILE_TARGET_REFERENCE.test(source)) return null
 
   const required = new Set(LOCAL_MUTATION_REQUIRED_TOOL_NAMES)
   if (GIT_MUTATION_INTENT.test(source)) {
@@ -233,6 +268,105 @@ function stableUniqueSpecs(specs) {
   return [...byName.values()]
 }
 
+function connectorProviderForTool(name) {
+  return CONNECTOR_PROVIDERS.find((provider) => (
+    name === provider || name.startsWith(`${provider}_`)
+  )) || ''
+}
+
+function explicitConnectorProviders(text) {
+  const normalized = String(text || '').toLowerCase()
+  const providers = new Set()
+  for (const provider of CONNECTOR_PROVIDERS) {
+    const aliases = CONNECTOR_PROVIDER_ALIASES.get(provider)
+      || [provider, provider.replaceAll('_', ' ')]
+    if (aliases.some((alias) => normalized.includes(alias))) providers.add(provider)
+  }
+  return providers
+}
+
+function addMatchingNames(target, specs, predicate) {
+  for (const spec of specs) {
+    const name = toolName(spec)
+    if (name && predicate(name, spec)) target.add(name)
+  }
+}
+
+function specializedControlNames(text) {
+  const names = new Set()
+  if (/\b(?:agent|subagent|delegate)\b|(?:子代理|委派)/i.test(text)) names.add('Agent')
+  if (/\b(?:remember|memory)\b|(?:记住|记忆)/i.test(text)) names.add('remember')
+  if (/\b(?:todo|task list|checklist)\b|(?:待办|任务清单)/i.test(text)) names.add('manage_todos')
+  if (/\b(?:wait|sleep until|schedule)\b|(?:等待|定时)/i.test(text)) names.add('sleep_until')
+  return names
+}
+
+function compactSelectedToolNames({
+  stableSpecs,
+  userPrompt,
+  previousUserPrompt,
+  intentMode,
+  executionRequired,
+  capabilityMode,
+  explicitReadOnly,
+  requiredNames,
+}) {
+  const current = String(userPrompt || '')
+  const inherited = shouldInheritExecutionIntent(current, previousUserPrompt, { intentMode })
+  const sourceText = `${current}\n${inherited ? previousUserPrompt : ''}`
+  // A catalog without search_tools has no safe recovery path for a deferred
+  // capability. Preserve that legacy/custom catalog in full rather than
+  // stranding the model with tools it cannot discover.
+  if (!stableSpecs.some((spec) => toolName(spec) === 'search_tools')) {
+    return new Set(stableSpecs.map(toolName))
+  }
+  const selected = new Set(BASE_DISCOVERY_TOOL_NAMES)
+  const connectorProviders = explicitConnectorProviders(sourceText)
+  const browserIntent = BROWSER_EXECUTION_INTENT.test(sourceText)
+  const webIntent = WEB_LOOKUP_INTENT.test(sourceText)
+  const remoteIntent = REMOTE_MUTATION_INTENT.test(sourceText) || connectorProviders.size > 0
+  const localContext = LOCAL_CONTEXT_REFERENCE.test(sourceText)
+  const localExecution = !explicitReadOnly && (
+    requiredNames !== null
+    || (capabilityMode === 'execute' && !remoteIntent && !browserIntent && !webIntent)
+    || (executionRequired && !remoteIntent)
+  )
+
+  if (localExecution) {
+    for (const name of requiredNames || LOCAL_MUTATION_REQUIRED_TOOL_NAMES) selected.add(name)
+  } else if (localContext || explicitReadOnly || browserIntent) {
+    for (const name of LOCAL_READ_CORE_TOOL_NAMES) selected.add(name)
+  }
+  if (ARTIFACT_SOURCE_REFERENCE.test(sourceText)) selected.add('read_artifact_source')
+  if (WEB_LOOKUP_INTENT.test(sourceText)) {
+    selected.add('web_search')
+    selected.add('fetch_url')
+  }
+  if (browserIntent) {
+    addMatchingNames(selected, stableSpecs, (name) => name.startsWith('browser_'))
+  }
+  if (MCP_INTENT.test(sourceText)) {
+    addMatchingNames(selected, stableSpecs, (name) => name.startsWith('mcp__'))
+  }
+  if (RUNTIME_PLUGIN_INTENT.test(sourceText)) {
+    addMatchingNames(selected, stableSpecs, (_name, spec) => Boolean(
+      getDynamicToolSpecRegistrationId(spec),
+    ))
+  }
+  addMatchingNames(selected, stableSpecs, (name) => (
+    CONNECTOR_TOOL_NAME_SET.has(name)
+      && connectorProviders.has(connectorProviderForTool(name))
+  ))
+  const artifactRequested = stableSpecs.some((spec) => GENERATOR_TOOL_NAMES.has(toolName(spec)))
+  addMatchingNames(selected, stableSpecs, (name) => (
+    GENERATOR_TOOL_NAMES.has(name)
+      || name === 'read_skill_resource'
+      || (artifactRequested && ['image_info', 'image_transform', 'read_artifact_source'].includes(name))
+  ))
+  for (const name of specializedControlNames(sourceText)) selected.add(name)
+  return selected
+}
+
 /**
  * Classify the turn for completion-policy diagnostics. This result never
  * changes the model-visible tool catalog; execution gates remain authoritative.
@@ -260,9 +394,10 @@ export function resolveChatCapabilityMode({
 }
 
 /**
- * Return one canonical, deterministic catalog for every chat round. Intent and
- * read-only classification are retained as diagnostics and execution-policy
- * inputs only; neither may remove a registered schema.
+ * Return a deterministic, task-focused initial catalog. The complete
+ * host-authorized catalog remains available to search_tools as deferred specs;
+ * reducing initial schemas never grants execution authority or bypasses
+ * approval, workspace, integration, or artifact gates.
  */
 export function selectChatToolSpecs({
   prompt = '',
@@ -282,7 +417,6 @@ export function selectChatToolSpecs({
     executionRequired,
   })
   const stableSpecs = stableUniqueSpecs(specs)
-  const selectedSpecs = stableSpecs
   const requiredNames = resolveRequiredChatToolNames({
     userPrompt,
     previousUserPrompt,
@@ -290,6 +424,18 @@ export function selectChatToolSpecs({
     executionRequired,
     specs: stableSpecs,
   })
+  const selectedNames = compactSelectedToolNames({
+    stableSpecs,
+    userPrompt,
+    previousUserPrompt,
+    intentMode,
+    executionRequired,
+    capabilityMode,
+    explicitReadOnly,
+    requiredNames,
+  })
+  const selectedSpecs = stableSpecs.filter((spec) => selectedNames.has(toolName(spec)))
+  const selectedToolNames = new Set(selectedSpecs.map(toolName))
   const intentToolNames = requiredNames ? [...requiredNames].sort().slice(0, 256) : []
   emitSelectionDecision(onDecision, {
     version: 1,
@@ -297,8 +443,12 @@ export function selectChatToolSpecs({
     explicitReadOnly,
     intentToolNames,
     eligibleToolNames: stableSpecs.map(toolName).filter(Boolean).sort().slice(0, 256),
-    selectedToolNames: selectedSpecs.map(toolName).filter(Boolean).sort().slice(0, 256),
-    excludedTools: [],
+    selectedToolNames: [...selectedToolNames].sort().slice(0, 256),
+    excludedTools: stableSpecs
+      .map((spec) => toolName(spec))
+      .filter((name) => name && !selectedToolNames.has(name))
+      .map((name) => ({ name, stage: 'initial_disclosure', reason: 'deferred_until_requested' }))
+      .slice(0, 256),
   })
   return selectedSpecs
 }

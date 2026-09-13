@@ -17,6 +17,9 @@ const runtimeFiles = [
   'shared/turnEventTransport.js',
   'shared/turnWebSocketProtocol.js',
   'server/core/turnWebSocketFrameCodec.js',
+  'server/core/managedAttachmentGovernancePort.js',
+  'server/core/loopHostCapability.js',
+  'server/core/durableAgentEventConsumerHostSupport.js',
 ]
 const relative = (file) => path.relative(root, file).split(path.sep).join('/')
 const diagnosticsText = (diagnostics) => diagnostics.map((diagnostic) =>
@@ -33,10 +36,15 @@ test('the strict pilot checks real JavaScript modules and a correctly typed prod
   assert.deepEqual(diagnostics, [], diagnosticsText(diagnostics))
   const checked = program.getSourceFiles().filter((file) => !file.isDeclarationFile && file.fileName.endsWith('.js'))
     .map((file) => relative(file.fileName)).sort()
-  assert.deepEqual(checked, [...runtimeFiles].sort())
+  // checkJs also follows production imports. New checked dependencies must
+  // not make the pilot fail merely because its coverage has expanded.
+  for (const file of runtimeFiles) assert.ok(checked.includes(file), `pilot omitted ${file}`)
   for (const file of runtimeFiles) {
     const source = fs.readFileSync(path.join(root, file), 'utf8')
     assert.match(source, /^\/\/ @ts-check/u, file)
+  }
+  for (const file of checked) {
+    const source = fs.readFileSync(path.join(root, file), 'utf8')
     assert.doesNotMatch(source, /@ts-(?:nocheck|ignore|expect-error)\b/u, file)
     assert.doesNotMatch(source, /@(?:param|returns|type|typedef)\b[^\n]*\{[^}\n]*\bany\b/u, file)
   }
@@ -48,8 +56,8 @@ test('the strict pilot checks real JavaScript modules and a correctly typed prod
 
 test('wrong fields, versions, parameter types and un-narrowed results fail for their intended type errors', () => {
   const result = verifyProtocolTypeFixtures()
-  assert.equal(result.fixtureCount, 11)
-  assert.equal(result.diagnosticCount, 11)
+  assert.equal(result.fixtureCount, 14)
+  assert.equal(result.diagnosticCount, 14)
   for (const name of Object.keys(PROTOCOL_NEGATIVE_FIXTURES)) {
     const source = fs.readFileSync(path.join(root, 'types/fixtures/protocol-invalid', name), 'utf8')
     assert.doesNotMatch(source, /@ts-(?:nocheck|ignore|expect-error)\b/u, name)

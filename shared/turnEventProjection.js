@@ -1,3 +1,5 @@
+import { modelProviderStopDiagnostic } from './modelProviderStopDiagnostic.js'
+
 const PUBLIC_FAILURE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/u
 const INCOMPLETE_COMPLETION_STATUSES = new Set([
   'blocked', 'cancelled', 'failed', 'incomplete', 'interrupted', 'paused',
@@ -27,6 +29,27 @@ export function normalizePublicFailureCode(value, fallback = 'TURN_FAILED') {
     || 'TURN_FAILED'
 }
 
+/** Public model-request diagnostics contain metadata, never response text or authority. */
+export function normalizePublicModelRequestDiagnostics(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || value.code !== 'MODEL_REQUEST_OUTCOME_UNKNOWN') return null
+  const upstreamCode = normalizedCodeCandidate(value.upstreamCode)
+  const phase = (input) => typeof input === 'string' && /^[a-z][a-z0-9_-]{0,47}$/u.test(input) ? input : null
+  const partialContentChars = Number.isSafeInteger(value.partialContentChars)
+    && value.partialContentChars >= 0 && value.partialContentChars <= 128_000 ? value.partialContentChars : 0
+  return {
+    code: 'MODEL_REQUEST_OUTCOME_UNKNOWN',
+    ...(upstreamCode ? { upstreamCode } : {}),
+    ...(Number.isInteger(value.upstreamStatus) && value.upstreamStatus >= 100 && value.upstreamStatus <= 599
+      ? { upstreamStatus: value.upstreamStatus } : {}),
+    ...Object.fromEntries(['transportPhase', 'timeoutPhase'].flatMap((key) => phase(value[key]) ? [[key, value[key]]] : [])),
+    ...(Number.isSafeInteger(value.timeoutMs) && value.timeoutMs > 0 && value.timeoutMs <= 86_400_000
+      ? { timeoutMs: value.timeoutMs } : {}),
+    partialContentChars,
+    contentRetained: value.contentRetained === true && partialContentChars > 0,
+  }
+}
+
 function completionRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
@@ -37,6 +60,8 @@ function stablePublicFailureRecord(value, seen = new Set()) {
   seen.add(value)
   const failure = { ...value }
   for (const field of ['message', 'hint', 'reason']) delete failure[field]
+  const providerDiagnostic = modelProviderStopDiagnostic(value)
+  if (providerDiagnostic) failure.reason = providerDiagnostic
   for (const field of ['error', 'cause']) {
     if (!Object.hasOwn(failure, field)) continue
     if (failure[field] && typeof failure[field] === 'object' && !Array.isArray(failure[field])) {

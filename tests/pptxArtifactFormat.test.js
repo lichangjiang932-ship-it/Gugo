@@ -126,7 +126,9 @@ test('PPTX format leaf snapshots image bytes and preserves global rotation and z
 
 test('PPTX canonical schema exposes stacked charts with bounded chart collections', () => {
   const parameters = BUILTIN_ARTIFACT_TOOL_SPECS.create_pptx.function.parameters
-  const chart = parameters.properties.slides.items.properties.chart
+  const slide = parameters.properties.slides.items
+  const elements = slide.properties.elements
+  const chart = elements.items.oneOf.find((variant) => variant.properties.type.const === 'chart').properties.chart
   assert.deepEqual(chart.properties.type.enum, ['bar', 'bar-stacked', 'bar-horizontal', 'line', 'area', 'pie', 'doughnut'])
   assert.equal(parameters.properties.slides.minItems, 1)
   assert.equal(parameters.properties.slides.maxItems, 100)
@@ -135,10 +137,11 @@ test('PPTX canonical schema exposes stacked charts with bounded chart collection
   assert.equal(chart.properties.series.maxItems, 20)
   assert.equal(chart.properties.series.items.properties.values.minItems, 1)
   assert.equal(chart.properties.series.items.properties.values.maxItems, 200)
-  const slide = parameters.properties.slides.items.properties
-  assert.equal(slide.bullets.maxItems, 24)
-  assert.equal(slide.bullets.items.maxLength, 16000)
-  assert.equal(slide.kpi.maxItems, 4)
+  assert.ok(slide.required.includes('elements'))
+  assert.equal(elements.maxItems, 128)
+  for (const legacy of ['layout', 'bullets', 'kpi', 'chart', 'table', 'body', 'subtitle', 'quote']) {
+    assert.equal(Object.hasOwn(slide.properties, legacy), false)
+  }
 })
 
 test('PPTX format leaf rejects incomplete explicit chart layouts with stable contract errors', async () => {
@@ -269,6 +272,8 @@ test('PPTX format leaf has an explicit pure dependency boundary and artifactGen 
     fileURLToPath(new URL('../server/services/pptxArtifactContract.js', import.meta.url)),
     fileURLToPath(new URL('../server/services/pptxArtifactDesign.js', import.meta.url)),
     fileURLToPath(new URL('../server/services/pptxArtifactElements.js', import.meta.url)),
+    fileURLToPath(new URL('../server/services/pptxCanvasPreflight.js', import.meta.url)),
+    fileURLToPath(new URL('../server/services/pptxPreflightDiagnostics.js', import.meta.url)),
     fileURLToPath(new URL('../server/services/pptxArtifactValidation.js', import.meta.url)),
     fileURLToPath(new URL('../server/services/officeImageLayout.js', import.meta.url)),
     fileURLToPath(new URL('../server/services/officePreparedImageValidation.js', import.meta.url)),

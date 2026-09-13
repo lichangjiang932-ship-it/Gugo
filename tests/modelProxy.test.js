@@ -439,9 +439,10 @@ test('streamed tool inputs become ready before the canonical tool_calls batch', 
     fetchImpl: async () => new Response(body, { status: 200 }),
   })) events.push(event)
 
-  assert.deepEqual(events.map((event) => event.type), ['tool_call_ready', 'tool_calls'])
-  assert.deepEqual(JSON.parse(events[0].toolCall.arguments), { path: 'README.md' })
-  assert.equal(events[1].toolCalls[0].id, 'read-1')
+  assert.deepEqual(events.map((event) => event.type), ['tool_call_progress', 'tool_call_progress', 'tool_call_ready', 'tool_calls'])
+  assert.deepEqual(events.slice(0, 2).map((event) => event.toolArgumentsChars), [8, 20])
+  assert.deepEqual(JSON.parse(events[2].toolCall.arguments), { path: 'README.md' })
+  assert.equal(events[3].toolCalls[0].id, 'read-1')
 })
 
 test('stream parser accepts SSE data fields without a space after the colon', async () => {

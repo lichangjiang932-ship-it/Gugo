@@ -139,6 +139,13 @@ test('localized terminal model text enforces both locales when strict terminal c
   )
 })
 
+test('strict English presentation preserves short replies and unfamiliar Latin-script terms', () => {
+  for (const value of ['All set.', 'Everything succeeded.', 'Authentication restored.', 'Résumé export succeeded.']) {
+    assert.equal(localizedTerminalModelText('en', value, { strictLocale: true }), value)
+  }
+  assert.equal(localizedTerminalModelText('en', '12345', { strictLocale: true }), '')
+})
+
 test('partial-result defaults, redaction, and path arrays follow the locale', () => {
   const english = createPartialResultFallback({ locale: 'en' })
   english.record({

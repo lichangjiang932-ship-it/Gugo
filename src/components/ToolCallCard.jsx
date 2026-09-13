@@ -2,6 +2,8 @@ import { memo, useId } from 'react'
 import { Check, ChevronDown, CircleStop, Copy, FileText, Loader2, X } from 'lucide-react'
 import { findToolCallArtifacts } from '../lib/toolCallArtifacts.js'
 import { parseToolArgs, summarizeToolArgs, toolCallLabel } from '../lib/toolCallPresentation.js'
+import { toolFailureFacts, toolFailureSummary } from '../lib/toolFailurePresentation.js'
+import { redactSensitiveText } from '../../shared/sensitiveText.js'
 import { copyTextToClipboard } from '../lib/clipboard.js'
 import { withDownloadToken } from '../lib/jobClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
@@ -41,9 +43,9 @@ function exactSummaryArtifact(name, args, artifacts) {
 function formatDetails(value, fallback) {
   if (value == null || value === '') return fallback
   if (typeof value !== 'string') {
-    try { return JSON.stringify(value, null, 2).slice(0, 12000) } catch { return String(value).slice(0, 12000) }
+    try { return redactSensitiveText(JSON.stringify(value, null, 2)).slice(0, 12000) } catch { return redactSensitiveText(value).slice(0, 12000) }
   }
-  try { return JSON.stringify(JSON.parse(value), null, 2).slice(0, 12000) } catch { return value.slice(0, 12000) }
+  try { return redactSensitiveText(JSON.stringify(JSON.parse(value), null, 2)).slice(0, 12000) } catch { return redactSensitiveText(value).slice(0, 12000) }
 }
 
 function authorizationLabel(authorization, t) {
@@ -85,20 +87,15 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact, expand
   const detailsId = `tool-step-details-${useId().replace(/:/g, '')}`
   const label = toolCallLabel(call.name, t)
   const args = parseToolArgs(call.arguments)
-  const summary = summarizeToolArgs(call.name, args, t)
+  const rawSummary = summarizeToolArgs(call.name, args, t)
+  const summary = redactSensitiveText(rawSummary === t('chatMessages.toolEmptyValue') ? t('toolActivity.summaryUnavailable') : rawSummary)
   const matchedArtifacts = findToolCallArtifacts(call, artifacts).filter(isManagedArtifact)
   const summaryArtifact = exactSummaryArtifact(call.name, args, matchedArtifacts)
   const summaryCanOpen = Boolean(summaryArtifact && typeof onOpenArtifact === 'function')
   const commandArtifacts = COMMAND_ARTIFACT_TOOLS.has(call.name) && typeof onOpenArtifact === 'function' ? matchedArtifacts : []
   const authorization = authorizationLabel(call.approvalAuthorization, t)
-  const errorFacts = call.status === 'error'
-    ? [...new Set([
-        call.errorCode,
-        Number.isInteger(Number(call.errorStatus)) ? `HTTP ${Number(call.errorStatus)}` : '',
-        Number.isInteger(Number(call.attempts)) && Number(call.attempts) > 0 ? `${Number(call.attempts)}x` : '',
-        call.retryable ? t('chatMessages.toolRetry') : '',
-      ].filter(Boolean))]
-    : []
+  const errorFacts = toolFailureFacts(call, t)
+  const failureSummary = toolFailureSummary(call, t)
 
   let StatusIcon = Loader2
   let statusText = t('chatMessages.toolRunning')
@@ -123,14 +120,18 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact, expand
             <span className="chat-tool-label">{label}</span>
             {summaryCanOpen ? (
               <a href={managedArtifactHref(summaryArtifact)} target="_blank" rel="noopener noreferrer" className="chat-tool-summary chat-tool-summary-button text-left underline decoration-current/30 underline-offset-2 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/45" title={summary} data-testid="tool-summary-open" onClick={(event) => openArtifactLink(event, onOpenArtifact, summaryArtifact, call)}>{summary}</a>
-            ) : <span className="chat-tool-summary" title={summary}>{summary}</span>}
+            ) : <span className="chat-tool-summary" data-technical={FILE_PATH_SUMMARY_TOOLS.has(call.name) || COMMAND_ARTIFACT_TOOLS.has(call.name) || undefined} title={summary}>{summary}</span>}
           </span>
-          <span className="chat-tool-status">
+          <span className="chat-tool-status" data-status={call.status || 'running'}>
             {call.status === 'success' ? <span className="sr-only">{statusText}</span> : <span>{statusText}</span>}
-            {call.status === 'running' && <LiveElapsed className="chat-tool-elapsed" />}
+            {call.status === 'running' && <LiveElapsed className="chat-tool-elapsed" startedAt={call.startedAt} />}
           </span>
           <button type="button" className="chat-tool-step-toggle" data-testid="tool-step-toggle" aria-expanded={isExpanded} aria-controls={detailsId} aria-label={isExpanded ? t('chatMessages.collapseToolDetails') : t('chatMessages.expandToolDetails')} onClick={(event) => { event.stopPropagation(); onToggle?.() }}><ChevronDown aria-hidden="true" /></button>
         </header>
+
+        {failureSummary && (
+          <p className="chat-tool-failure-summary" data-testid="tool-failure-summary">{failureSummary}</p>
+        )}
 
         {commandArtifacts.length > 0 && (
           <div className="chat-tool-artifact-links" data-testid="tool-artifact-links">

@@ -19,7 +19,6 @@ const BASELINE = {
   'src/lib/presentationPlanner.js': 1644,
   'src/lib/reasonixClient.js': 4,
   'src/lib/sessionExport.js': 60,
-  'src/lib/skillCommands.js': 120,
   'src/lib/toolPermissionClient.js': 22,
   'src/pages/DeskView.jsx': 81,
   'src/store/AppContext.jsx': 5,

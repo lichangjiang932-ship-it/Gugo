@@ -13,6 +13,9 @@ import {
   selectedToolLoopBinding,
 } from '../core/runtimeCapabilityHost.js'
 import { getDb } from '../db.js'
+import { SQLITE_TURN_PERSISTENCE_ADAPTER } from './sqliteTurnPersistenceAdapter.js'
+import { isBuiltinSqliteTurnPersistenceProvenance } from './builtinSqliteTurnPersistenceBootstrap.js'
+import { HEADLESS_TURN_RECOVERY_PORTS } from './headlessTurnRecoveryPorts.js'
 import { runHeadlessTurn } from '../services/headlessTurnRuntime.js'
 import { runRuntimeConfigStartupPreflight } from '../services/runtimeConfigStartupService.js'
 import { createSqliteFileCompactionArchiveAdapter } from '../services/sqliteFileCompactionArchiveAdapter.js'
@@ -162,6 +165,11 @@ export async function runBuiltinHeadlessTurn(options = {}, dependencies = {}) {
     }, {
       ...dependencies,
       persistenceAdapter: persistenceLease.adapter,
+      interactionPorts: Object.hasOwn(dependencies, 'interactionPorts')
+        ? dependencies.interactionPorts
+        : (turnPersistenceAdapter === SQLITE_TURN_PERSISTENCE_ADAPTER
+          || isBuiltinSqliteTurnPersistenceProvenance(options.turnPersistenceProvenance, turnPersistenceAdapter))
+          ? HEADLESS_TURN_RECOVERY_PORTS : null,
     })
   } catch (error) {
     runError = error

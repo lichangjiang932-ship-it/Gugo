@@ -47,6 +47,19 @@ export const PPTX_DESIGN_SCHEMA = Object.freeze({
   },
 })
 
+// New authoring never selects a preset or an automatically positioned footer.
+// Keep the legacy design contract above for reading and rendering older files.
+export const PPTX_AUTHORING_DESIGN_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  description: 'Free canvas colors, typography and dimensions authored from the user request. There is no theme or automatic footer selection. Place requested dates, brands and page numbers yourself as native elements.',
+  properties: Object.freeze(Object.fromEntries([
+    'background', 'foreground', 'accent', 'secondary', 'muted',
+    'heading_font', 'body_font', 'east_asian_font', 'heading_font_size', 'body_font_size',
+    'aspect_ratio', 'width', 'height',
+  ].map((name) => [name, PPTX_DESIGN_SCHEMA.properties[name]]))),
+})
+
 export const PPTX_CHART_TYPES = Object.freeze([
   'bar', 'bar-stacked', 'bar-horizontal', 'line', 'area', 'pie', 'doughnut',
 ])
@@ -200,4 +213,44 @@ export const PPTX_SLIDE_SCHEMA = Object.freeze({
     },
   },
   required: ['title'],
+})
+
+/** Model-facing authoring is separate from historical Markdown/source slots. */
+export const PPTX_AUTHORING_SLIDE_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  description: 'A free canvas composed entirely of native elements. Every visible title, word, image, chart and table must be an element. No preset page type, implicit content block, cover or closing page is available.',
+  properties: {
+    title: { ...TEXT, description: 'Optional slide metadata only; it is not rendered. Put any visible title in a text element.' },
+    background: COLOR,
+    notes: TEXT,
+    elements: PPTX_SLIDE_SCHEMA.properties.elements,
+  },
+  required: ['elements'],
+})
+
+export const PPTX_REPAIR_PARAMETERS = Object.freeze({
+  type: 'object', additionalProperties: false,
+  properties: {
+    repair_from_tool_call_id: { type: 'string', minLength: 1, maxLength: 200, description: 'Exact create_pptx tool-call ID from this same turn that returned a repairable native preflight failure. Never use an artifact ID, another turn, or an unknown execution.' },
+    base_digest: { type: 'string', pattern: '^[a-f0-9]{64}$', description: 'Copy the exact base_digest from that failed call\'s pptx_preflight receipt. The host verifies it against the original complete authoring arguments.' },
+    edits: {
+      type: 'array', minItems: 1, maxItems: PPTX_LIMITS.elements,
+      description: 'Only change existing native-element geometry. Do not resend slide text. No insertion, deletion, font changes, arbitrary paths or executable patches are allowed.',
+      items: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          slide_index: { type: 'integer', minimum: 0, maximum: PPTX_LIMITS.slides - 1 },
+          element_index: { type: 'integer', minimum: 0, maximum: PPTX_LIMITS.elements - 1 },
+          set: {
+            type: 'object', additionalProperties: false,
+            properties: { x: FRACTION, y: FRACTION, w: FRACTION, h: FRACTION },
+            anyOf: ['x', 'y', 'w', 'h'].map((name) => ({ required: [name] })),
+          },
+        },
+        required: ['slide_index', 'element_index', 'set'],
+      },
+    },
+  },
+  required: ['repair_from_tool_call_id', 'base_digest', 'edits'],
 })

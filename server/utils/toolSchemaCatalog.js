@@ -41,6 +41,37 @@ function specsByName(specs) {
  */
 
 export const BUILTIN_TOOL_SCHEMA_CATALOG = {
+  load_skill: {
+    type: 'function',
+    function: {
+      name: 'load_skill',
+      description: 'Load one exact skill from the current user-visible skill catalog. The host validates ownership and injects the full instructions as trusted system context for the next model response. Use only a skill ID shown in the catalog.',
+      parameters: {
+        type: 'object',
+        properties: {
+          skill_id: { type: 'string', minLength: 1, maxLength: 128 },
+        },
+        required: ['skill_id'],
+        additionalProperties: false,
+      },
+    },
+  },
+  search_tools: {
+    type: 'function',
+    function: {
+      name: 'search_tools',
+      description: 'Search the current turn\'s authorized deferred tool catalog and activate the best matching tools for the next model response. Use this when the visible tools cannot perform a browser, connected-app, MCP, plugin, or specialized task.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', minLength: 1, maxLength: 500 },
+          limit: { type: 'integer', minimum: 1, maximum: 20, default: 8 },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      },
+    },
+  },
   list_directory: {
     type: 'function',
     function: {

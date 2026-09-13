@@ -287,7 +287,7 @@ test('iteration-limit completion follows the turn locale and persists the locali
     assert.equal(checkpoint.final.text, result.text)
   })
 
-  await t.test('English rejects French and German wrap-up text', async () => {
+  await t.test('Latin-script explanations survive without weakening the incomplete status', async () => {
     for (const wrapUpText of [
       'La tâche reste incomplète. Veuillez réessayer.',
       'Die Aufgabe ist noch nicht abgeschlossen. Bitte erneut versuchen.',
@@ -299,9 +299,9 @@ test('iteration-limit completion follows the turn locale and persists the locali
 
       assert.equal(result.incomplete, true)
       assert.equal(result.reason, 'iteration_limit_reached')
-      assert.match(result.text, /tool-call limit/i)
-      assert.doesNotMatch(result.text, new RegExp(wrapUpText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+      assert.ok(result.text.includes(wrapUpText), 'model diagnostics must not depend on a fixed English vocabulary')
       assert.equal(checkpoint.final.text, result.text)
+      assert.equal(checkpoint.final.reason, 'iteration_limit_reached')
     }
   })
 

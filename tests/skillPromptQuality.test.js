@@ -33,13 +33,16 @@ test('ppt skill preserves requested content, total count and factual evidence wi
   assert.doesNotMatch(prompt, /尽量给数字|默认 8-12 页|节奏模板|商业演示导演/)
 })
 
-test('canonical ppt prompt gives the model native design controls without a mandatory layout preset', () => {
+test('canonical ppt prompt gives the model native design controls without preset layouts or automatic chrome', () => {
   const prompt = promptOf('ppt')
-  for (const field of ['background', 'heading_font', 'body_font', 'east_asian_font', 'aspect_ratio', 'show_page_numbers', 'show_brand', 'show_date']) {
+  for (const field of ['background', 'heading_font', 'body_font', 'east_asian_font', 'aspect_ratio', 'heading_font_size', 'body_font_size']) {
     assert.ok(prompt.includes(field), field)
   }
   assert.match(prompt, /slides\[\]\.elements/)
   assert.match(prompt, /editable text/)
+  assert.match(prompt, /has no theme or layout presets and no legacy content slots/)
+  assert.match(prompt, /no automatic footer\/chrome switches/)
+  assert.doesNotMatch(prompt, /show_page_numbers|show_brand|show_date/)
   assert.match(prompt, /clipping|overflow/)
   assert.doesNotMatch(prompt, /fixed 16:9 canvas|6% horizontal and 8% vertical safe area|Vary the composition every 2-3 pages/)
 })

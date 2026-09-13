@@ -124,7 +124,9 @@ test('chat chrome stays focused on conversations and essential composer controls
 
   assert.match(rail, /<SessionList/)
   assert.match(rail, /onSearch=\{handleSearch\}/)
-  assert.match(rail, /collapsed && navButton\(Search/)
+  assert.match(rail, /data-sidebar-search/)
+  assert.match(rail, /aria-keyshortcuts="Control\+k Meta\+k"/)
+  assert.match(rail, /showSearchAction=\{false\}/)
   assert.doesNotMatch(rail, /navButton\(Wrench|path: '\/skills'/)
   assert.match(sessions, /aria-label=\{t\('nav\.searchPlaceholder'\)\}/)
   assert.match(account, /accountMenuOpen/)
@@ -165,10 +167,14 @@ test('chat supporting panels preserve a readable transcript on narrow screens', 
   const preview = read('../src/pages/ChatSplit/RightPreviewPane.jsx')
   const previewChrome = read('../src/pages/ChatSplit/preview/PreviewChrome.jsx')
   const styles = read('../src/index.css')
+  const containerWidth = read('../src/pages/ChatSplit/preview/usePreviewContainerWidth.js')
 
   assert.match(preview, /chat-preview-pane/)
   assert.match(previewChrome, /chat-preview-toolbar-actions/)
-  assert.match(styles, /@media \(max-width: 1023px\)[\s\S]*?\.chat-preview-pane[\s\S]*?position: fixed;[\s\S]*?width: 100vw !important;/)
+  assert.match(containerWidth, /closest\('\[data-chat-main-area\]'\)/)
+  assert.match(containerWidth, /ResizeObserver/)
+  assert.match(preview, /chat-preview-pane-focused absolute inset-0 w-full/)
+  assert.match(styles, /\.chat-preview-pane-focused\s*\{\s*border-left: 0;/)
   assert.match(styles, /\.chat-preview-toolbar,\s*\.chat-preview-toolbar-actions\s*\{\s*flex-wrap: wrap;/)
 })
 

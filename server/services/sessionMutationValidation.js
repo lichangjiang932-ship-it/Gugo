@@ -41,6 +41,20 @@ export function normalizeSessionBranchLabel(value) {
   return label
 }
 
+export function normalizeSessionForkMessageId(value) {
+  if (value == null) return null
+  if (typeof value !== 'string') {
+    throw new SessionMutationValidationError('throughMessageId must be a string or null')
+  }
+  const messageId = value.trim()
+  if (!messageId || messageId.length > 512) {
+    throw new SessionMutationValidationError(
+      'throughMessageId must be a non-empty string of at most 512 characters',
+    )
+  }
+  return messageId
+}
+
 export function normalizeSessionExpectedRevision(value) {
   const revision = Number(value)
   if (!Number.isSafeInteger(revision) || revision < 0) {

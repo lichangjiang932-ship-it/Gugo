@@ -431,9 +431,11 @@ function normalizeInput(method, input) {
   }
   if (method === 'forkSession') {
     const source = inputRecord(method, input)
+    const label = optionalString(method, source, 'label', { max: 120, trim: true })
     return {
       ...sessionInput(method, source),
-      label: optionalString(method, source, 'label', { max: 120, trim: true }),
+      label: label ? label.replace(/\s+/gu, ' ') : null,
+      throughMessageId: optionalString(method, source, 'throughMessageId', { max: 512, trim: true }),
     }
   }
   if (method === 'replaceSessionMessages') {

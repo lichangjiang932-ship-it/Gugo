@@ -146,7 +146,7 @@ test('malformed model data frames fail closed while SSE metadata remains ignorab
       (error) => error?.code === 'MODEL_STREAM_MALFORMED_FRAME'
         && error?.fromUpstream === true
         && error?.retryable === false
-        && error?.modelRequestOutcome === 'failed',
+        && error?.modelRequestOutcome === undefined,
       line,
     )
   }
@@ -166,9 +166,29 @@ test('a malformed frame before done rejects without a canonical terminal event',
     },
     (error) => error?.code === 'MODEL_STREAM_MALFORMED_FRAME'
       && error?.retryable === false
-      && error?.modelRequestOutcome === 'failed',
+      && error?.modelRequestOutcome === undefined,
   )
 
+  assert.deepEqual(events, [])
+})
+
+test('a tracked malformed response has an unknown outcome and cannot authorize replay', async () => {
+  let requests = 0
+  const events = []
+  await assert.rejects(async () => {
+    for await (const event of streamOpenAICompatible({
+      config: { baseUrl: 'https://example.test/v1', apiKey: 'fixture-only', modelName: 'compatible-model' },
+      messages: [{ role: 'user', content: 'hi' }],
+      modelRequestId: 'mr_malformed_response', env: {},
+      fetchImpl: async () => {
+        requests += 1
+        return new Response('data: null\n\ndata: [DONE]\n\n', { status: 200 })
+      },
+    })) events.push(event)
+  }, (error) => error.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+    && error.cause?.code === 'MODEL_STREAM_MALFORMED_FRAME'
+    && error.retryable === false && error.unsafeToReplay === true)
+  assert.equal(requests, 1)
   assert.deepEqual(events, [])
 })
 

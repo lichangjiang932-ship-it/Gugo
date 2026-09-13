@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 import { readSourceTree } from './sourceTree.js'
+import { toolFailureFacts, toolFailureSummary } from '../src/lib/toolFailurePresentation.js'
+import { toolCallLabel } from '../src/lib/toolCallPresentation.js'
 
 const composerSource = readSourceTree('../src/pages/ChatSplit/chatComposer/') + fs.readFileSync(new URL('../src/pages/ChatSplit/ChatComposer.jsx', import.meta.url), 'utf8')
 const messagesSource = readSourceTree('../src/pages/ChatSplit/chatMessages/') + fs.readFileSync(new URL('../src/pages/ChatSplit/ChatMessages.jsx', import.meta.url), 'utf8')
@@ -126,16 +128,27 @@ test('composer sends steering drafts while preserving an independent stop action
 test('transient tool readiness is visible in the streaming assistant without creating a tool trace', () => {
   assert.match(activityStreamSource, /activity\?\.kind === 'tool_call_ready'/)
   assert.match(activityStreamSource, /chatMessages\.toolCallReady/)
-  assert.match(activityStreamSource, /chatMessages\.toolUnknown/)
+  const t = (key) => key
+  assert.equal(toolCallLabel('', t), 'chatMessages.toolUnknown')
+  assert.equal(toolCallLabel('bash_exec', t), 'chatMessages.toolBashExec')
+  assert.equal(toolCallLabel('custom_tool', t), 'custom_tool')
+  assert.match(activityStreamSource, /toolCallLabel\(activity\.toolName, t\)/)
   assert.match(activityStreamSource, /testId="model-activity"/)
 })
 
 test('tool failures expose status, retryability, attempts, and recovery hints', () => {
-  assert.match(toolCardSource, /call\.errorCode/)
-  assert.match(toolCardSource, /call\.errorStatus/)
-  assert.match(toolCardSource, /call\.retryable/)
-  assert.match(toolCardSource, /call\.attempts/)
-  assert.match(toolCardSource, /call\.errorHint/)
+  const call = {
+    status: 'error', errorCode: 'RATE_LIMIT', errorStatus: 429,
+    retryable: true, attempts: 2, errorHint: 'Wait before retrying.',
+  }
+  const t = (key) => key === 'chatMessages.toolRetry' ? 'Retry' : key
+  assert.deepEqual(toolFailureFacts(call, t), ['RATE_LIMIT', 'HTTP 429', '2x', 'Retry'])
+  assert.equal(toolFailureSummary(call, t), 'Wait before retrying.')
+  assert.deepEqual(toolFailureFacts({ ...call, errorStatus: null, retryable: false, attempts: 0 }, t), ['RATE_LIMIT'])
+  // The JSX behavior tests exercise rendering; these checks only guard the
+  // component's connection to the shared presentation helpers.
+  assert.match(toolCardSource, /toolFailureFacts\(call, t\)/)
+  assert.match(toolCardSource, /toolFailureSummary\(call, t\)/)
 })
 
 test('selected slash skill renders as a quiet inline tag inside the composer', () => {

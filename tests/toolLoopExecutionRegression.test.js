@@ -1310,7 +1310,9 @@ test('artifact delivery rejects a fake missing-capability clarification and cont
             type: 'function',
             function: {
               name: 'create_pptx',
-              arguments: JSON.stringify({ title: 'Q3 strategy', slides: [{ title: 'Priorities' }] }),
+              arguments: JSON.stringify({ title: 'Q3 strategy', slides: [{ title: 'Priorities', elements: [
+                { type: 'text', text: 'Priorities', x: 0.08, y: 0.15, w: 0.84, h: 0.3 },
+              ] }] }),
             },
           }],
         }
@@ -1463,7 +1465,7 @@ test('refreshed terse chat keeps the same local write catalog on every model rou
     specs: SERVER_TOOL_SPECS,
     prompt,
     userPrompt: prompt,
-    previousUserPrompt: '请说明上一轮的处理结果。',
+    previousUserPrompt: '请修复这个项目并验证结果。',
   })
   const catalogs = []
   let modelCalls = 0
@@ -1478,7 +1480,7 @@ test('refreshed terse chat keeps the same local write catalog on every model rou
     },
     step: { id: 'step-refreshed-terse-local-catalog', kind: 'chat' },
     messages: [
-      { role: 'user', content: '请说明上一轮的处理结果。' },
+      { role: 'user', content: '请修复这个项目并验证结果。' },
       { role: 'assistant', content: '上一轮回答。' },
       { role: 'user', content: prompt },
     ],
@@ -1509,10 +1511,12 @@ test('refreshed terse chat keeps the same local write catalog on every model rou
   assert.equal(modelCalls, 3)
   assert.deepEqual(catalogs[1], catalogs[0])
   assert.deepEqual(catalogs[2], catalogs[0])
-  for (const name of ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'bash_exec', 'run_command', 'run_project_check', 'run_test']) {
+  for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec', 'run_command', 'run_project_check', 'search_tools']) {
     assert.ok(catalogs[0].includes(name), name)
   }
-  assert.equal(catalogs[0].includes('slack_send_message'), true)
+  assert.equal(catalogs[0].includes('patch_file'), false)
+  assert.equal(catalogs[0].includes('run_test'), false)
+  assert.equal(catalogs[0].includes('slack_send_message'), false)
   assert.equal(result.text, '已检查当前状态。')
 })
 
@@ -2481,7 +2485,8 @@ test('a continuation turn remounts execution tools, preserves the canonical file
     onApprovalPending: async () => assert.fail('bypass mode must not enter approval pending'),
     requestToolApproval: async (request) => {
       approvalRequests.push(request)
-      assert.equal(request.mode, 'bypass')
+      // Permission modes no longer occupy the deployment approval-queue field.
+      assert.equal(request.mode, undefined)
       return {
         proceed: true,
         args: request.args,
@@ -3031,6 +3036,7 @@ test('shell writes stay pending until the matching target is read back', async (
   const observedRequests = []
   const executed = []
   let modelCalls = 0
+  let checkpoint = null
   const result = await runToolsLoop({
     job: {
       id: 'job-shell-target-verification',
@@ -3043,6 +3049,7 @@ test('shell writes stay pending until the matching target is read back', async (
     toolSpecs: [bashExec, readFile],
     maxIters: 8,
     enableToolHooks: false,
+    saveCheckpoint: async (state) => { checkpoint = structuredClone(state); return true },
     runModel: async ({ messages }) => {
       modelCalls += 1
       observedRequests.push(structuredClone(messages))
@@ -3056,10 +3063,11 @@ test('shell writes stay pending until the matching target is read back', async (
           }],
         }
       }
-      if (modelCalls === 2 || modelCalls === 4) {
+      if (modelCalls === 3) {
+        assert.deepEqual(checkpoint.completionGuards.pendingMutationTargets, ['result.txt'], 'an unrelated read must not verify the output')
         return { content: 'The file has been created.', toolCalls: [] }
       }
-      if (modelCalls === 3) {
+      if (modelCalls === 2) {
         return {
           content: '',
           toolCalls: [{
@@ -3069,16 +3077,7 @@ test('shell writes stay pending until the matching target is read back', async (
           }],
         }
       }
-      if (modelCalls === 5) {
-        return {
-          content: '',
-          toolCalls: [{
-            id: 'read-right-target',
-            type: 'function',
-            function: { name: 'read_file', arguments: JSON.stringify({ path: 'result.txt' }) },
-          }],
-        }
-      }
+      assert.deepEqual(checkpoint.completionGuards.pendingMutationTargets, [], 'host readback must finish before the final answer')
       return { content: 'Created and verified result.txt.', toolCalls: [] }
     },
     executeTool: async ({ name, args }) => {
@@ -3099,10 +3098,9 @@ test('shell writes stay pending until the matching target is read back', async (
     'read_file:README.md',
     'read_file:result.txt',
   ])
-  const firstGuard = observedRequests[2].filter((item) => item.role === 'system').map((item) => item.content).join('\n')
-  const secondGuard = observedRequests[4].filter((item) => item.role === 'system').map((item) => item.content).join('\n')
-  assert.match(firstGuard, /Pending changed targets: result\.txt/)
-  assert.match(secondGuard, /Pending changed targets: result\.txt/)
+  const guard = observedRequests[3].filter((item) => item.role === 'system').map((item) => item.content).join('\n')
+  assert.match(guard, /HOST POST-MUTATION READBACK/)
+  assert.match(guard, /result\.txt/)
 })
 
 test('a compound generation and project-check command remains a pending mutation', async () => {
@@ -3950,16 +3948,6 @@ test('local file mutations require a successful verification before completion',
         }
       }
       if (modelCalls === 2) return { content: '文件已经创建完成。', toolCalls: [] }
-      if (modelCalls === 3) {
-        return {
-          content: '',
-          toolCalls: [{
-            id: 'verify-result',
-            type: 'function',
-            function: { name: 'read_file', arguments: JSON.stringify({ path: 'result.txt' }) },
-          }],
-        }
-      }
       return { content: '文件已创建并读回验证。', toolCalls: [] }
     },
     executeTool: async ({ name }) => {
@@ -3971,14 +3959,14 @@ test('local file mutations require a successful verification before completion',
   })
 
   assert.deepEqual(executed, ['write_file', 'read_file'])
-  assert.equal(modelCalls, 4)
+  assert.equal(modelCalls, 3)
   assert.equal(result.text, '文件已创建并读回验证。')
   const correction = observedRequests[2]
     .filter((item) => item.role === 'system')
     .map((item) => item.content)
     .join('\n')
   assert.match(correction, /\[POST-MUTATION VERIFICATION REQUIRED\]/)
-  const finalReview = observedRequests[3]
+  const finalReview = observedRequests[2]
     .filter((item) => item.role === 'system')
     .map((item) => item.content)
     .join('\n')

@@ -949,6 +949,8 @@ test('a paused assistant message renders a camelCase directory request inline', 
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
   const authorizations = []
+  const sessionId = 'paused-directory-session'
+  const ownerScope = '["artifact-test-backend","directory-owner"]'
   const msg = {
     id: 'paused-directory-message',
     role: 'assistant',
@@ -957,6 +959,7 @@ test('a paused assistant message renders a camelCase directory request inline', 
     meta: {
       paused: true,
       serverTurnId: 'turn-paused',
+      serverLastSequence: 7,
       serverClarification: {
         requestType: 'directory',
         accessMode: 'read_write',
@@ -971,6 +974,8 @@ test('a paused assistant message renders a camelCase directory request inline', 
       <MessageRow
         msg={msg}
         rowKey={msg.id}
+        sessionId={sessionId}
+        recoveryOwnerScope={ownerScope}
         generatingMessageId=""
         lang="zh"
         onAuthorizeDirectoryRequest={(decision) => authorizations.push(decision)}
@@ -982,14 +987,22 @@ test('a paused assistant message renders a camelCase directory request inline', 
     assert.ok(card)
     assert.equal(card.querySelector('input').value, 'D:\\destok')
     assert.equal(card.querySelector('select').value, 'read_write')
+    assert.equal(card.querySelector('select').disabled, true, 'chat grants stay bound to the requested mode')
     const grantButton = [...card.querySelectorAll('button')]
       .find((button) => button.textContent.includes('taskSteering.authorizeDirectory'))
+    assert.ok(grantButton)
+    assert.equal(grantButton.disabled, false)
     await act(async () => {
       grantButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
       await Promise.resolve()
     })
     assert.equal(authorizations.length, 1)
     assert.equal(authorizations[0].message, msg)
+    assert.equal(authorizations[0].sessionId, sessionId)
+    assert.equal(authorizations[0].ownerScope, ownerScope)
+    assert.equal(authorizations[0].message.meta.serverLastSequence, 7)
+    assert.equal(authorizations[0].authorizationScope, 'session')
+    assert.equal(authorizations[0].signal.aborted, false)
     assert.deepEqual({
       path: authorizations[0].path,
       accessMode: authorizations[0].accessMode,
@@ -997,6 +1010,62 @@ test('a paused assistant message renders a camelCase directory request inline', 
       path: 'D:\\destok',
       accessMode: 'read_write',
     })
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('an inline directory request without a complete owner/session/pause scope cannot authorize', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const authorizations = []
+  const validScope = { sessionId: 'paused-directory-session', ownerScope: '["artifact-test-backend","directory-owner"]', sequence: 7 }
+  const missingScopes = [
+    { label: 'missing owner', ownerScope: undefined },
+    { label: 'missing session', sessionId: undefined },
+    { label: 'missing pause sequence', sequence: undefined },
+    { label: 'negative pause sequence', sequence: -1 },
+    { label: 'non-numeric pause sequence', sequence: '7' },
+  ]
+
+  try {
+    for (const missing of missingScopes) {
+      const scope = { ...validScope, ...missing }
+      const msg = {
+        id: `directory-${missing.label}`, role: 'assistant', content: '', timestamp: Date.now(),
+        meta: {
+          paused: true, serverTurnId: 'turn-paused', serverLastSequence: scope.sequence,
+          serverClarification: {
+            requestType: 'directory', accessMode: 'read_write', suggestedPath: 'D:\\destok',
+            purpose: 'Keep the directory request visible without granting an unbound action.',
+          },
+        },
+      }
+      await act(async () => root.render(
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          sessionId={scope.sessionId}
+          recoveryOwnerScope={scope.ownerScope}
+          generatingMessageId=""
+          lang="zh"
+          onAuthorizeDirectoryRequest={(decision) => authorizations.push(decision)}
+          t={(key) => key}
+        />,
+      ))
+      const card = rootElement.querySelector('[data-testid="directory-request-card"]')
+      assert.ok(card, missing.label)
+      const grantButton = [...card.querySelectorAll('button')]
+        .find((button) => button.textContent.includes('taskSteering.authorizeDirectory'))
+      assert.equal(grantButton?.disabled, true, missing.label)
+      assert.equal(card.querySelector('input').disabled, true, missing.label)
+      await act(async () => {
+        grantButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      assert.equal(authorizations.length, 0, missing.label)
+    }
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

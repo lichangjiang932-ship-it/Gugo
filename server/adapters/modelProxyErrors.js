@@ -1,14 +1,19 @@
 export const MODEL_CONFIG_MISSING_CODE = 'MODEL_CONFIG_MISSING'
 export const MODEL_CONFIG_MISSING_MESSAGE = '模型服务尚未配置，请先在设置中添加并启用模型 Provider。'
 
+const CONTEXT_LENGTH_PATTERNS = [
+  /context_length|context window|context size|token.?limit|maximum context|reduce the length|too many tokens|exceeds?\s+the\s+(available\s+)?context|n_ctx|kv cache|input is too long|too long for the model/i,
+  /\bprompt(?:\s+is)?\s+too\s+long\b|\bcontext\s+overflows?\b/i,
+  /\binput\s+token\s+count\b[^.\r\n]*\bexceeds?\s+(?:the\s+)?maximum\s+number\s+of\s+tokens\b/i,
+]
+
 export function isContextLengthError(error) {
   const detail = [error?.message, error?.code, error?.type].filter(Boolean).join(' ')
   if (!detail) return false
   const status = Number(error?.status)
-  const statusLooksRight = status === 400 || status === 413 || status === 500 || !Number.isFinite(status)
+  const statusLooksRight = status === 400 || status === 413 || status === 422 || status === 500 || !Number.isFinite(status)
   if (!statusLooksRight) return false
-  return /context_length|context window|context size|token.?limit|maximum context|reduce the length|too many tokens|exceeds?\s+the\s+(available\s+)?context|n_ctx|prompt is too long|kv cache|input is too long|too long for the model/i
-    .test(detail)
+  return CONTEXT_LENGTH_PATTERNS.some((pattern) => pattern.test(detail))
 }
 
 export function formatProxyError(error) {
@@ -84,7 +89,7 @@ export function redactModelConfigSecrets(value, config = {}) {
 
 export function redactModelError(error, config = {}) {
   if (!error || (typeof error !== 'object' && typeof error !== 'function')) return error
-  for (const field of ['message', 'code', 'type', 'responseBody']) {
+  for (const field of ['message', 'code', 'type', 'responseBody', 'reason']) {
     if (error[field] == null) continue
     const redacted = redactModelConfigSecrets(error[field], config)
     try { error[field] = redacted } catch { /* immutable upstream error */ }

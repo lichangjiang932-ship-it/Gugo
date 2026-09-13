@@ -42,7 +42,7 @@ test('PPT job instructions follow user-defined design and real file delivery wit
 test('citation prompt guides the model to emit clickable links', () => {
   const citation = buildCitationPrompt()
   assert.match(citation, /Markdown 链接/)
-  assert.match(citation, /相对工作区路径/)
+  assert.match(citation, /工具验证并返回的准确 URL 或绝对路径/)
   assert.match(citation, /完整 URL/)
 })
 

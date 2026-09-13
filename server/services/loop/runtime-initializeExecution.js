@@ -49,6 +49,9 @@ function initializeExecutionState(s) {
   })
   s.iterationWindowStart = s.iterationWindow.start
   s.maxIters = s.iterationWindow.limit
+  if (Array.isArray(s.restoredState?.toolCalls) && s.restoredState.toolCalls.some((call) => call.verificationRecoveryKey)) {
+    s.maxIters = Math.max(s.maxIters, Math.min(s.iter + 2, s.mutationVerificationRecovery.iterationLimit))
+  }
 }
 
 function installArtifactRecoveryRuntime(s) {
@@ -319,6 +322,7 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
       mutationExecutionObserved: s.mutationExecutionObserved,
       priorOutcomeMutationObserved: s.priorOutcomeMutationObserved,
       dynamicallyMountedToolNames: [...s.dynamicallyMountedToolNames],
+      dynamicallyLoadedSkillIds: [...s.dynamicallyLoadedSkillIds],
       verifiedRecoveredMutationObserved: s.verifiedRecoveredMutationObserved,
       mutationSteeringPending: s.mutationSteeringPending,
       executionEvidenceRetries: s.executionEvidenceRetries,
@@ -331,6 +335,7 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
       pendingDeletionTargets: [...s.pendingDeletionTargets],
       auxiliaryMutationTargets: [...s.auxiliaryMutationTargets],
       mutationVerificationRetries: s.mutationVerificationRetries,
+      mutationVerificationRecovery: structuredClone(s.mutationVerificationRecovery),
       taskVerificationRepair: serializeTaskVerificationRepair(s.taskVerificationRepair),
       localHtmlDeliveryTargets: [...s.localHtmlDeliveryTargets],
       localHtmlDeliveryRetries: s.localHtmlDeliveryRetries,

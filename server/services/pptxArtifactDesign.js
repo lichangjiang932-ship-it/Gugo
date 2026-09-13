@@ -84,7 +84,7 @@ function characterWidth(character) {
   return character.codePointAt(0) > 0x2FF ? 1 : 0.6
 }
 
-function estimatedTextLines(text, width, fontSize) {
+export function estimatedTextLines(text, width, fontSize) {
   const capacity = width * 72 / fontSize * 0.92
   if (capacity <= 0) return Infinity
   return text.split(/\r?\n/u).reduce((lines, line) => {
@@ -93,13 +93,19 @@ function estimatedTextLines(text, width, fontSize) {
   }, 0)
 }
 
+export const PPTX_LINE_HEIGHT_FACTOR = 1.3
+
 export function fittingPptxFont(text, { w, h }, requestedSize, path, { minimum = 12, allowShrink = true } = {}) {
   const lowerBound = allowShrink ? Math.min(requestedSize, minimum) : requestedSize
   for (let size = requestedSize; ; size = Math.max(lowerBound, size - 1)) {
-    if (estimatedTextLines(text, w, size) * size / 72 * 1.3 <= h) return size
+    if (estimatedTextLines(text, w, size) * size / 72 * PPTX_LINE_HEIGHT_FACTOR <= h) return size
     if (size === lowerBound) break
   }
-  invalidPptx(path, 'does not fit its text box without unreadable text; enlarge the box, use a more suitable layout, or split the content', 'PPTX_CONTENT_OVERFLOW')
+  const lines = estimatedTextLines(text, w, lowerBound)
+  const requiredHeight = lines * lowerBound / 72 * PPTX_LINE_HEIGHT_FACTOR
+  invalidPptx(path, `does not fit its text box without unreadable text; ${lowerBound}pt needs at least ${requiredHeight.toFixed(6)}in height at the current width (${lines} estimated line(s), available ${h.toFixed(6)}in). Preserve the text and requested font; enlarge or reposition the affected box.`, 'PPTX_CONTENT_OVERFLOW', {
+    textFit: { font_size: lowerBound, estimated_lines: lines, available_w_inches: w, available_h_inches: h, required_h_inches: requiredHeight, text_characters: text.length },
+  })
 }
 
 export function addPptxText(slide, text, box, design, options = {}, path = 'slide.text') {

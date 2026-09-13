@@ -17,20 +17,18 @@ function setupDom() {
   return dom
 }
 
-async function renderProgress(rootElement, progress) {
-  const root = createRoot(rootElement)
+async function renderProgress(root, progress) {
   await act(async () => {
     root.render(<TaskProgressTable progress={progress} />)
   })
-  return root
 }
 
 test('renders one structured row per present progress field', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
-  let root
+  const root = createRoot(rootElement)
   try {
-    root = await renderProgress(rootElement, {
+    await renderProgress(root, {
       phase: 'research',
       completed: 3,
       total: 8,
@@ -50,7 +48,7 @@ test('renders one structured row per present progress field', async () => {
     assert.match(table.textContent, /120/)
     assert.match(table.textContent, /30/)
   } finally {
-    if (root) await act(async () => root.unmount())
+    await act(async () => root.unmount())
     dom.window.close()
   }
 })
@@ -58,16 +56,16 @@ test('renders one structured row per present progress field', async () => {
 test('omits rows whose fields are absent and prefers combined step counter', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
-  let root
+  const root = createRoot(rootElement)
   try {
-    root = await renderProgress(rootElement, { completed: 5 })
+    await renderProgress(root, { completed: 5 })
     const table = rootElement.querySelector('[data-testid="task-progress-table"]')
     assert.ok(table)
     assert.equal(table.querySelector('[data-testid="task-progress-row-steps"]'), null)
     assert.ok(table.querySelector('[data-testid="task-progress-row-completed"]'))
     assert.equal(table.querySelector('[data-testid="task-progress-row-phase"]'), null)
   } finally {
-    if (root) await act(async () => root.unmount())
+    await act(async () => root.unmount())
     dom.window.close()
   }
 })
@@ -75,16 +73,15 @@ test('omits rows whose fields are absent and prefers combined step counter', asy
 test('renders nothing without structured progress data', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
-  let root
+  const root = createRoot(rootElement)
   try {
     for (const progress of [null, undefined, {}, { phase: undefined }]) {
       assert.equal(hasStructuredProgress(progress), false)
-      root = await renderProgress(rootElement, progress)
+      await renderProgress(root, progress)
       assert.equal(rootElement.querySelector('[data-testid="task-progress-table"]'), null)
-      rootElement.innerHTML = '<div id="root"></div>'
     }
   } finally {
-    if (root) await act(async () => root.unmount())
+    await act(async () => root.unmount())
     dom.window.close()
   }
 })

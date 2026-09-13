@@ -25,6 +25,7 @@ const APPROVED_DIRECT_LOADS = Object.freeze([
   './artifactStorage.js',
   './docxArtifactFormat.js',
   './htmlArtifactFormat.js',
+  './loop/sideEffectExecution.js',
   './officeArtifactImages.js',
   './pdfArtifactFormat.js',
   './pptxArtifactFormat.js',

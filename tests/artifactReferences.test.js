@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  artifactReferenceOpenPayload,
   buildArtifactReferenceIdentity,
   buildMessageArtifactPreview,
   buildServerArtifactReferences,
@@ -9,6 +10,20 @@ import {
   normalizeArtifactLocalPath,
   normalizeArtifactReferenceType,
 } from '../src/lib/artifactReferences.js'
+import { createPreviewTabState, upsertPreviewTab } from '../src/pages/ChatSplit/preview/previewTabs.js'
+
+test('same-file preview updates retain the cache revision without creating a duplicate tab', () => {
+  const reference = { id: 'same-deck', filename: 'deck.pptx', type: 'pptx', url: '/api/artifacts/deck.pptx', previewRevision: 'first' }
+  const first = artifactReferenceOpenPayload(reference, 'message-1')
+  const second = artifactReferenceOpenPayload({ ...reference, previewRevision: 'second' }, 'message-2')
+  assert.equal(first.directFile.previewRevision, 'first')
+  assert.equal(second.directFile.previewRevision, 'second')
+  const state = createPreviewTabState(first)
+  const updated = upsertPreviewTab(state, second)
+  assert.equal(updated.tabs.length, 1)
+  assert.equal(updated.activeId, state.activeId)
+  assert.equal(updated.tabs[0].artifact.directFile.previewRevision, 'second')
+})
 
 test('artifact references normalize file extensions and attach matching previews', () => {
   assert.equal(normalizeArtifactReferenceType({ filename: 'demo.htm' }), 'html')

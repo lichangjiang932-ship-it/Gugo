@@ -1,5 +1,6 @@
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
 import { removeVerifiedLocalFilesFromRetained } from '../localFileReferences.js'
+import { normalizeModelRequestDiagnostics } from '../modelRequestDiagnostics.js'
 
 export const SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND = 'side_effect_outcome_unknown'
 export const MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND = 'model_request_outcome_unknown'
@@ -131,6 +132,8 @@ export function normalizeTurnFailurePayload(payload = {}, {
   const reason = String(reasonSource?.reason || '').trim()
   const nextAction = String(nextActionSource?.nextAction || '').trim()
   const legacyMessage = String(nested.message || payload.message || reason).trim()
+  const diagnosticsSource = terminalEvidenceSource(payload, nested, 'modelRequestDiagnostics')
+  const modelRequestDiagnostics = normalizeModelRequestDiagnostics(diagnosticsSource?.modelRequestDiagnostics)
   const error = {
     code: String(nested.code || payload.code || fallbackCode).trim() || fallbackCode,
     ...(legacyMessage ? { message: legacyMessage } : {}),
@@ -145,6 +148,7 @@ export function normalizeTurnFailurePayload(payload = {}, {
     ...((nested.hint || payload.hint) ? { hint: String(nested.hint || payload.hint) } : {}),
     ...(attempts !== undefined ? { attempts } : {}),
     ...(recoverySource ? { recovery: { ...recoverySource } } : {}),
+    ...(modelRequestDiagnostics ? { modelRequestDiagnostics } : {}),
   }
   const incompleteReasonSource = terminalEvidenceSource(payload, nested, 'incompleteReason')
   const incompleteReason = String(incompleteReasonSource?.incompleteReason || '').trim()

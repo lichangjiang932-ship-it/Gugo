@@ -97,6 +97,24 @@ export function stripRemoteUrlReferences(prompt = '') {
   return stripped
 }
 
+const ARTIFACT_INSTRUCTION_REFERENCE = /```[\s\S]*?(?:```|(?![\s\S]))|~~~[\s\S]*?(?:~~~|(?![\s\S]))|^\s*>[^\n]*|`[^`\n]*`|“[^”]*”|「[^」]*」|『[^』]*』|"[^"\n]*"|(?<![\p{L}\p{N}])'[^'\n]*'/gmu
+const QUOTED_ARTIFACT_ACTION = /(?:重做|重制|重新|再做|修改|编辑|生成|创建|制作|导出|\b(?:redo|remake|rebuild|recreate|regenerate|redesign|revise|edit|make|create|generate|export)\b)/i
+
+// Quoted instructions and code are input, not a new authorization. Keep
+// quoted format names and exact filenames intact ("PPT", `slides.pptx`),
+// and mask references at equal length so file/format offsets stay valid.
+export function artifactInstructionText(prompt = '') {
+  return String(prompt || '').replace(ARTIFACT_INSTRUCTION_REFERENCE, (reference) => {
+    if (/^(?:```|~~~|\s*>)/.test(reference)) return reference.replace(/[^\r\n]/g, ' ')
+    const content = reference.slice(1, -1)
+    const { references } = extractFileTargetReferences(content)
+    if (references.length === 1 && references[0].raw === content) return reference
+    return reference.startsWith('`') || QUOTED_ARTIFACT_ACTION.test(content)
+      ? reference.replace(/[^\r\n]/g, ' ')
+      : reference
+  })
+}
+
 function normalizeFileTargetPath(value = '') {
   const raw = String(value || '').trim()
   if (!raw) return ''

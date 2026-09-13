@@ -17,13 +17,20 @@ test('session branch clients encode ids and keep label payloads structured', asy
     return response({ ok: true, session: { id: 'forked' }, branches: [] }, 201)
   }
 
-  await forkSessionRemote('session/one', { label: 'Alternative', fetchImpl })
+  await forkSessionRemote('session/one', {
+    label: 'Alternative',
+    throughMessageId: 'message/two',
+    fetchImpl,
+  })
   await getSessionBranchesRemote('session/one', { fetchImpl })
 
   assert.equal(requests[0].url, '/api/sessions/session%2Fone/fork')
   assert.equal(requests[0].options.method, 'POST')
   assert.equal(requests[0].options.headers['Content-Type'], 'application/json')
-  assert.deepEqual(JSON.parse(requests[0].options.body), { label: 'Alternative' })
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    label: 'Alternative',
+    throughMessageId: 'message/two',
+  })
   assert.equal(requests[1].url, '/api/sessions/session%2Fone/branches')
   assert.equal(requests[1].options.method, undefined)
 })

@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../db.js'
+import { branchFileOperationSummaries } from './sessionBranchFileOperations.js'
 import { enqueueSessionContentEventInDb } from './sessionContentOutboxStore.js'
 import {
   normalizeSessionBranchLabel,
+  normalizeSessionForkMessageId,
   SessionMutationValidationError,
 } from './sessionMutationValidation.js'
 import {
@@ -28,11 +30,30 @@ function forkSafeModelContext(value, { sessionId, messageId }) {
     const historicalTurn = Object.fromEntries(historyFields
       .filter((key) => Object.hasOwn(context, key))
       .map((key) => [key, context[key]]))
-    if (Object.keys(historicalTurn).length > 0) {
+    const priorForkSource = context.forkSource && typeof context.forkSource === 'object'
+      && !Array.isArray(context.forkSource)
+      ? context.forkSource
+      : null
+    const priorSessionId = String(priorForkSource?.sessionId || '').trim()
+    const priorMessageId = String(priorForkSource?.messageId || '').trim()
+    const priorHistory = priorForkSource
+      ? Object.fromEntries(historyFields
+          .filter((key) => Object.hasOwn(priorForkSource, key))
+          .map((key) => [key, priorForkSource[key]]))
+      : {}
+    if ((priorSessionId && priorMessageId)
+      || Object.keys(historicalTurn).length > 0
+      || Array.isArray(context.toolTrace)) {
       // A fork copies history, not the source Turn's event/checkpoint identity.
-      // Keep diagnostics as provenance; client projection only reads the live
-      // top-level fields and must never resume these in the new session.
-      context.forkSource = { sessionId, messageId, ...historicalTurn }
+      // Preserve the first durable message provenance across nested forks so
+      // branch file-operation diffs can distinguish inherited and new calls
+      // even when a Provider reuses tool-call ids.
+      context.forkSource = {
+        sessionId: priorSessionId || sessionId,
+        messageId: priorMessageId || messageId,
+        ...priorHistory,
+        ...historicalTurn,
+      }
     }
     for (const key of [
       ...historyFields,
@@ -106,6 +127,7 @@ export function forkSession({
   userId,
   sessionId,
   label = null,
+  throughMessageId = null,
   now = Date.now(),
   idFactory = randomUUID,
 } = {}) {
@@ -114,6 +136,7 @@ export function forkSession({
     throw new SessionMutationValidationError('idFactory must be a function')
   }
   const branchLabel = normalizeSessionBranchLabel(label)
+  const forkThroughMessageId = normalizeSessionForkMessageId(throughMessageId)
   const db = getDb()
   return db.transaction(() => {
     const source = db.prepare(`
@@ -161,6 +184,17 @@ export function forkSession({
       WHERE user_id = ? AND session_id = ?
       ORDER BY created_at ASC, rowid ASC
     `).all(userId, source.token)
+    let messagesToFork = sourceMessages
+    if (forkThroughMessageId) {
+      const boundaryIndex = sourceMessages.findIndex((message) => message.id === forkThroughMessageId)
+      const boundaryRole = sourceMessages[boundaryIndex]?.role
+      if (boundaryIndex < 0 || !['user', 'assistant'].includes(boundaryRole)) {
+        throw new SessionMutationValidationError(
+          'throughMessageId must identify a user or assistant message in the source Session',
+        )
+      }
+      messagesToFork = sourceMessages.slice(0, boundaryIndex + 1)
+    }
     const insertMessage = db.prepare(`
       INSERT INTO messages
         (id, session_id, user_id, role, content, session_title,
@@ -168,7 +202,7 @@ export function forkSession({
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     const forkedMessages = []
-    for (const message of sourceMessages) {
+    for (const message of messagesToFork) {
       const messageId = uniqueGeneratedId(db, {
         factory: idFactory,
         table: 'messages',
@@ -208,7 +242,7 @@ export function forkSession({
 
     return {
       session: getSessionRecord({ userId, sessionId: forkedSessionId }),
-      totalMessages: sourceMessages.length,
+      totalMessages: messagesToFork.length,
     }
   })()
 }
@@ -240,7 +274,16 @@ export function getSessionBranches({ userId, sessionId } = {}) {
         AND (child.id IS NOT NULL OR child.title IS NOT NULL)
         AND branch_tree.depth < @maxDepth
     )
-    SELECT * FROM branch_tree
+    SELECT branch_tree.*,
+      (SELECT message.role FROM messages AS message
+        WHERE message.user_id = @userId AND message.session_id = branch_tree.token
+        ORDER BY message.created_at DESC, message.rowid DESC LIMIT 1) AS branch_tip_role,
+      (SELECT message.content FROM messages AS message
+        WHERE message.user_id = @userId AND message.session_id = branch_tree.token
+        ORDER BY message.created_at DESC, message.rowid DESC LIMIT 1) AS branch_tip_content,
+      (SELECT COUNT(*) FROM messages AS message
+        WHERE message.user_id = @userId AND message.session_id = branch_tree.token) AS message_count
+    FROM branch_tree
     ORDER BY depth ASC, COALESCE(forked_at, created_at) ASC, token ASC
     LIMIT @limit
   `).all({
@@ -250,11 +293,22 @@ export function getSessionBranches({ userId, sessionId } = {}) {
     limit: MAX_BRANCH_TREE_NODES + 1,
   })
   const truncated = rows.length > MAX_BRANCH_TREE_NODES
+  const branches = rows.slice(0, MAX_BRANCH_TREE_NODES).map((row) => ({
+    ...mapSession(row),
+    depth: Number(row.depth) || 0,
+    branchSummary: String(row.branch_tip_content || '').replace(/\s+/gu, ' ').trim().slice(0, 500),
+    branchTipRole: ['user', 'assistant'].includes(row.branch_tip_role) ? row.branch_tip_role : null,
+    messageCount: Math.max(0, Number(row.message_count) || 0),
+  }))
+  const fileOperationSummaries = branchFileOperationSummaries(db, { userId, branches })
   return {
     rootSessionId,
-    branches: rows.slice(0, MAX_BRANCH_TREE_NODES).map((row) => ({
-      ...mapSession(row),
-      depth: Number(row.depth) || 0,
+    branches: branches.map((branch) => ({
+      ...branch,
+      ...(fileOperationSummaries.get(branch.id) || {
+        fileOperations: [],
+        fileOperationsTruncated: true,
+      }),
     })),
     truncated,
   }

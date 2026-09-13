@@ -23,6 +23,7 @@ export function buildRuntimeCapabilityBlock({
   approvalMode = null,
   defaultOutputDirectory = '',
   projectDirectory = '',
+  shellIsolation = process.env.SHELL_SANDBOX_MODE || 'host',
 } = {}) {
   const names = toolNames(toolSpecs)
   const isPlanMode = approvalMode === 'plan'
@@ -42,6 +43,8 @@ export function buildRuntimeCapabilityBlock({
 
   add(lines, hasAny(names, ['list_directory', 'read_file']),
     '- Files: inspect authorized workspace/local files with list_directory and read_file.')
+  add(lines, names.has('read_file'),
+    '- Office inspection: read_file extracts DOCX/PPTX/XLSX text and returns formatValidated for local files up to 5 MB. Read the exact final .pptx path to check its text and structure; PDF tools do not inspect PPTX. This is read-only, not visual layout verification.')
   add(lines, hasAny(names, ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'multi_edit']),
     isPlanMode
       ? '- File changes: unavailable while plan mode is active. Ask to switch modes before execution.'
@@ -49,7 +52,9 @@ export function buildRuntimeCapabilityBlock({
   add(lines, hasAny(names, ['bash_exec', 'run_command', 'run_project_check', 'run_test', 'docker_exec']),
     isPlanMode
       ? '- Code and automation: unavailable while plan mode is active.'
-      : '- Code and automation: run shell commands for builds, tests, scripts, and specialized local tooling; declare expected output files.')
+      : String(shellIsolation).toLowerCase() === 'docker'
+        ? '- Code and automation: commands run in a fresh no-network Docker sandbox with a read-only rootfs and only the authorized root mounted at /workspace. Use workspace-relative paths, declare expected outputs, and do not request persistent session reuse.'
+        : '- Code and automation: run shell commands for builds, tests, scripts, and specialized local tooling; declare expected output files. Host mode is not an OS sandbox.')
   add(lines, hasAny(names, ['git_status', 'git_diff', 'git_commit', 'git_push', 'git_rollback', 'git_write']),
     '- Git: inspect repository state and use only the exact Git mutation tools that are exposed.')
   add(lines, names.has('media_probe') || names.has('media_transform'),
@@ -69,13 +74,17 @@ export function buildRuntimeCapabilityBlock({
   add(lines, names.has('file_download'),
     '- Downloads: stream public HTTP/HTTPS binary files into authorized local paths with size and optional SHA-256 verification.')
   add(lines, [...names].some((name) => name.startsWith('browser_')),
-    '- Browser: use browser_navigate, then browser_snapshot, then browser_click/browser_type/browser_select/browser_press. Take a fresh snapshot after navigation or major DOM changes because element refs can become stale; use screenshots for visual evidence.')
+    '- Browser: use browser_navigate, then browser_snapshot, then browser_click/browser_type/browser_select/browser_press. Snapshots and refs traverse open Shadow DOM and same-origin iframes within bounded limits. For a cross-origin iframe, call browser_frames, then browser_switch_frame with an authorized frameId before taking a fresh snapshot; switch back to the main frame when finished. Use browser_tabs to discover popups or new tabs and browser_switch_tab before interacting with one. Use browser_upload_file only with an authorized local path and an explicit file-input ref; it requires approval because page handlers may transmit the file. Use browser_download with a download-element ref and an authorized destination path; it publishes only one completed bounded file and rejects partial or ambiguous downloads. Take a fresh snapshot after navigation, tab switches, or major DOM changes because element refs can become stale; use screenshots for visual evidence.')
   add(lines, [...names].some((name) => name.startsWith('mcp__')),
     '- MCP: connected MCP tools are callable by their exact exposed names.')
   add(lines, [...names].some((name) => /^(?:connected_app_|notion_|github_|google_|slack_|jira_|linear_|mail_)/u.test(name)),
     '- Connected apps: use only the exposed connector tools and respect approval before external writes.')
   add(lines, names.has('Agent'),
     '- Delegation: use Agent for independent, bounded subtasks that benefit from parallel work.')
+  add(lines, names.has('load_skill'),
+    '- Skills: the system catalog contains metadata only. When one listed Skill clearly fits the task and is not already loaded, call load_skill with its exact ID. Continue only after the host injects the validated instructions as a separate system block.')
+  add(lines, names.has('search_tools'),
+    '- Deferred tools: when the visible schemas cannot perform a browser, connected-app, MCP, plugin, or specialized action, call search_tools with a concrete capability query. The host may add already-authorized matching schemas for the next response; activation never approves their execution.')
   add(lines, names.has('manage_todos'),
     '- Planning: keep multi-step execution visible with manage_todos and update statuses as work progresses.')
   add(lines, names.has('request_directory') && approvalMode !== 'bypass',
@@ -108,12 +117,19 @@ export function buildRuntimeCapabilityBlock({
 }
 
 export function replaceRuntimeCapabilityBlock(messages, options = {}) {
-  const filtered = (Array.isArray(messages) ? messages : []).filter((message) => !(
-    message?.role === 'system'
-      && String(message?.content || '').includes(RUNTIME_CAPABILITIES_MARKER)
-  ))
   const block = buildRuntimeCapabilityBlock(options)
-  if (block) {
+  const filtered = []
+  let replaced = false
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const owned = message?.role === 'system'
+      && String(message?.content || '').includes(RUNTIME_CAPABILITIES_MARKER)
+    if (!owned) { filtered.push(message); continue }
+    // Keep the recorded position. Moving this block after later system
+    // guidance changes an in-flight model/compaction request's exact digest.
+    if (!replaced && block) filtered.push({ ...message, content: block })
+    replaced = true
+  }
+  if (block && !replaced) {
     let insertAt = 0
     while (filtered[insertAt]?.role === 'system') insertAt += 1
     filtered.splice(insertAt, 0, { role: 'system', content: block })

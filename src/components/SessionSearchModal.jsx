@@ -3,9 +3,9 @@ import { useNavigate } from '../lib/router.jsx'
 import { Bot, Search, User, X } from 'lucide-react'
 import { useAppContext } from '../store/AppContext.jsx'
 import { getAuthToken } from '../lib/accountClient.js'
-import { searchSessionMessages } from '../lib/sessionClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import Modal from './Modal.jsx'
+import useSessionSearchResults from './leftRail/useSessionSearchResults.js'
 
 function messageText(content) {
   if (typeof content === 'string') return content
@@ -52,18 +52,6 @@ function buildLocalResults(sessions, query) {
   return results
 }
 
-function mergeResults(primary, fallback) {
-  const seen = new Set()
-  const merged = []
-  for (const result of [...(primary || []), ...(fallback || [])]) {
-    const key = `${result.sessionId}:${result.messageId || ''}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    merged.push(result)
-  }
-  return merged
-}
-
 function HighlightedSnippet({ value }) {
   const parts = String(value || '').split(/(<mark>|<\/mark>)/g)
   const segments = parts.reduce((acc, part) => {
@@ -90,11 +78,8 @@ export default function SessionSearchModal() {
   const inputRef = useRef(null)
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
   const localResults = useMemo(() => buildLocalResults(state.sessions, query), [state.sessions, query])
+  const { results, loading, error } = useSessionSearchResults({ open, query, localResults, t })
 
   useEffect(() => {
     const openSearch = (event) => {
@@ -124,40 +109,6 @@ export default function SessionSearchModal() {
     window.setTimeout(() => inputRef.current?.focus(), 0)
   }, [open])
 
-  useEffect(() => {
-    if (!open) return undefined
-    const trimmed = query.trim()
-    if (!trimmed) {
-      const timer = window.setTimeout(() => {
-        setResults([])
-        setError('')
-        setLoading(false)
-      }, 0)
-      return () => window.clearTimeout(timer)
-    }
-
-    const timer = window.setTimeout(async () => {
-      if (!getAuthToken()) {
-        setResults(localResults)
-        setError('')
-        return
-      }
-      setLoading(true)
-      setError('')
-      try {
-        const data = await searchSessionMessages({ query: trimmed, limit: 50 })
-        setResults(mergeResults(Array.isArray(data.results) ? data.results : [], localResults).slice(0, 50))
-      } catch (err) {
-        setResults(localResults)
-        setError(err?.message || t('sessionSearch.failed'))
-      } finally {
-        setLoading(false)
-      }
-    }, 250)
-
-    return () => window.clearTimeout(timer)
-  }, [open, query, localResults, t])
-
   if (!open) return null
 
   const shownResults = query.trim() && !getAuthToken() ? localResults : results
@@ -182,17 +133,21 @@ export default function SessionSearchModal() {
           <Search className="w-4 h-4 text-ink-fade" />
           <input
             ref={inputRef}
+            type="search"
+            aria-label={t('sessionSearch.placeholder')}
+            autoComplete="off"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t('sessionSearch.placeholder')}
             className="flex-1 h-full bg-transparent outline-none text-sm text-ink placeholder:text-ink-fade"
           />
-          <span className="font-mono text-[10px] text-ink-fade border border-ink-fade/40 rounded px-1.5 py-0.5">Esc</span>
+          <span className="font-mono text-xs text-ink-fade border border-ink-fade/40 rounded px-1.5 py-0.5" aria-hidden="true">Esc</span>
           <button
             type="button"
             onClick={() => setOpen(false)}
-            className="p-1 rounded hover:bg-paper-2 text-ink-fade hover:text-ink"
+            className="flex h-9 w-9 items-center justify-center rounded-control hover:bg-paper-2 text-ink-fade hover:text-ink"
             title={t('common.cancel')}
+            aria-label={t('common.cancel')}
           >
             <X className="w-4 h-4" />
           </button>

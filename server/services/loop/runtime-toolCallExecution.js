@@ -208,10 +208,36 @@ async function markDurableToolExecuting({
   })
 }
 
+function authorizedToolInput({
+  state, call, toolName, executionArgs, signal, preparedSideEffect,
+  sideEffectInput, sideEffectExecution, expectedDynamicRegistrationId,
+}) {
+  return {
+    name: toolName,
+    args: executionArgs,
+    job: state.activeArtifactOutputPrompt ? { ...state.job, userPrompt: state.activeArtifactOutputPrompt } : state.job,
+    step: state.step,
+    signal,
+    budget: state.budget,
+    skillId: state.explicitSkillId || null,
+    toolCallId: call.id,
+    idempotencyKey: call.idempotencyKey,
+    idempotentResume: preparedSideEffect.resumedExecuting === true,
+    sideEffectRecoveryPlan: sideEffectInput ? Object.freeze({
+      prepare: (plan) => sideEffectExecution.prepareRecoveryPlan(sideEffectInput, plan),
+      read: () => sideEffectExecution.readRecoveryPlan(sideEffectInput),
+    }) : null,
+    approvalContext: state.subagentApprovalContext,
+    allowedArtifactTools: state.stepArtifactTools,
+    requiresLocalArtifactDelivery: state.requiresLocalArtifactDelivery,
+    dynamicToolRegistrationId: expectedDynamicRegistrationId,
+  }
+}
+
 export async function executeAuthorizedTool({
   state, iteration, call, toolName, executionArgs, gate, durableExecution,
   checkpointPolicyProvenance, resumedExecutingSideEffect, sideEffectExecution,
-  expectedDynamicRegistrationId, finalAuthorizationCheck = null, dependencies,
+  expectedDynamicRegistrationId, finalAuthorizationCheck = null, finalVerificationCheck = null, dependencies,
 }) {
   const {
     CHECKPOINT_FLUSH_ERROR_CODE,
@@ -291,32 +317,25 @@ export async function executeAuthorizedTool({
           authorizationBlocked = true
           return blockedResult
         }
+        if (abortScope.signal?.aborted) {
+          throw abortScope.signal.reason instanceof Error ? abortScope.signal.reason
+            : Object.assign(new Error('Tool execution cancelled'), { name: 'AbortError' })
+        }
+        // No asynchronous boundary may reopen a host readback's binding/args
+        // after this live check and before the canonical tool dispatch.
+        const verificationBlocked = finalVerificationCheck?.()
+        if (verificationBlocked) {
+          authorizationBlocked = true
+          return verificationBlocked
+        }
         if (sideEffectInput && !preparedSideEffect.resumedExecuting) {
           sideEffectExecution.markExecuting(sideEffectInput)
         }
         if (sideEffectInput) sideEffectStarted = true
-        const toolResult = await state.executeTool({
-          name: toolName,
-          args: executionArgs,
-          job: state.activeArtifactOutputPrompt
-            ? { ...state.job, userPrompt: state.activeArtifactOutputPrompt }
-            : state.job,
-          step: state.step,
-          signal: abortScope.signal,
-          budget: state.budget,
-          skillId: state.explicitSkillId || null,
-          toolCallId: call.id,
-          idempotencyKey: call.idempotencyKey,
-          idempotentResume: preparedSideEffect.resumedExecuting === true,
-          sideEffectRecoveryPlan: sideEffectInput ? Object.freeze({
-            prepare: (plan) => sideEffectExecution.prepareRecoveryPlan(sideEffectInput, plan),
-            read: () => sideEffectExecution.readRecoveryPlan(sideEffectInput),
-          }) : null,
-          approvalContext: state.subagentApprovalContext,
-          allowedArtifactTools: state.stepArtifactTools,
-          requiresLocalArtifactDelivery: state.requiresLocalArtifactDelivery,
-          dynamicToolRegistrationId: expectedDynamicRegistrationId,
-        })
+        const toolResult = await state.executeTool(authorizedToolInput({
+          state, call, toolName, executionArgs, signal: abortScope.signal,
+          preparedSideEffect, sideEffectInput, sideEffectExecution, expectedDynamicRegistrationId,
+        }))
         toolReturned = true
         return toolResult
       },

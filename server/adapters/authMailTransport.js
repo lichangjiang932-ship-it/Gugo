@@ -105,8 +105,10 @@ export async function sendEmailCode({ env, email, code }, dependencies = {}) {
   if (String(env.AUTH_DEV_CODES).toLowerCase() === 'true') {
     return { sent: false, devCode: code }
   }
-  if (!env.MAIL_SERVER || !env.MAIL_USERNAME || !env.MAIL_PASSWORD) {
-    return { sent: false, devCode: code }
+  if (['MAIL_SERVER', 'MAIL_USERNAME', 'MAIL_PASSWORD'].some((key) => !String(env[key] || '').trim())) {
+    throw Object.assign(new Error('邮件验证码未配置。默认本机模式无需登录；可选多用户邮件登录需要配置 SMTP。'), {
+      code: 'AUTH_MAIL_NOT_CONFIGURED', statusCode: 503,
+    })
   }
 
   const port = Number(env.MAIL_PORT || 587)
@@ -168,9 +170,8 @@ export async function sendEmailCode({ env, email, code }, dependencies = {}) {
 
 export function buildSendCodeResponse({ issued, delivery, env }) {
   const response = { ok: true, email: issued.email, expiresIn: issued.expiresIn }
-  const exposeDevCode =
-    delivery?.sent === false ||
-    String(env.AUTH_DEV_CODES).toLowerCase() === 'true'
+  const exposeDevCode = delivery?.sent === false
+    && String(env.AUTH_DEV_CODES).toLowerCase() === 'true'
   if (exposeDevCode) response.devCode = issued.devCode
   return response
 }

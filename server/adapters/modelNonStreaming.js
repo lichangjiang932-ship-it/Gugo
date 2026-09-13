@@ -132,6 +132,8 @@ export async function* requestNonStreamingAsEvents({
     const message = data?.error?.message || data?.message || text.slice(0, 240) || response.statusText
     const error = new Error(message)
     error.status = response.status
+    error.code = data?.error?.code || data?.code || ''
+    error.type = data?.error?.type || data?.type || ''
     error.fromUpstream = true
     error.retryAfter = response.headers?.get?.('retry-after') ?? null
     throw modelRequestOutcomeUnknown(error, {

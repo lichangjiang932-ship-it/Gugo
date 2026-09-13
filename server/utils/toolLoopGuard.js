@@ -4,6 +4,8 @@ import { normalizeToolResult } from './toolCallErrors.js'
 import { isPlainObject, safeStringify, toolError } from './toolCallPrimitives.js'
 
 const NON_SUBSTANTIVE_TOOL_NAMES = new Set([
+  'load_skill',
+  'search_tools',
   'manage_todos',
   'reflect',
   'request_clarification',

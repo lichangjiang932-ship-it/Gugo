@@ -3,7 +3,7 @@ import { getBoundTurnToolSpecs, runBoundTurnLoop } from './turnLoopBindingRuntim
 import { prepareBoundInlineSkillsForPrompt } from './inlineSkillPromptBindingRuntime.js'
 import { publishTurnActivity } from './turnActivityBus.js'
 import { dispatchHooks as dispatchHooksService } from './hooksService.js'
-import { getApprovalMode } from './approvalSettingsStore.js'
+import { getEffectiveApprovalMode, withTurnApprovalMode } from './approvalSettingsStore.js'
 import { recordEvolutionCanaryOutcome, resolveEvolutionCanaryAssignment } from './evolutionCanaryService.js'
 import { createTurnExecutionToolContextRuntime } from './turnExecutionToolContextRuntime.js'
 import { createTurnCancellationRuntime } from './turnCancellationRuntime.js'
@@ -57,7 +57,8 @@ export class TurnEngine {
     now = Date.now,
     toolSpecs = getBoundTurnToolSpecs(),
     directoryAuthorizationToolSpecs = toolSpecs,
-    readApprovalMode = getApprovalMode,
+    readApprovalMode = getEffectiveApprovalMode,
+    runWithApprovalMode = withTurnApprovalMode,
     readRuntimePolicyProvenance = getActiveRuntimePolicyProvenance,
     preparePromptContext = missingTurnPromptRuntime,
     prepareInlineSkills = prepareBoundInlineSkillsForPrompt,
@@ -97,7 +98,7 @@ export class TurnEngine {
       readMessages: persistenceDeps.readMessages,
       readPreviousUserMessage: persistenceDeps.readPreviousUserMessage,
       writeMessage: persistenceDeps.writeMessage, idFactory, now, toolSpecs, directoryAuthorizationToolSpecs,
-      readApprovalMode, readRuntimePolicyProvenance, preparePromptContext, prepareInlineSkills,
+      readApprovalMode, runWithApprovalMode, readRuntimePolicyProvenance, preparePromptContext, prepareInlineSkills,
       resolveCanaryAssignment, recordCanaryOutcome,
       resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
       getContextWindow, readFileAccessStatus, resolveProjectDirectory, runWithProjectDirectory,
@@ -143,6 +144,9 @@ export class TurnEngine {
     this.startIdleWaiters = new Set()
     this.closing = false
     this.closePromise = null
+    // Optional post-turn work belongs to the engine lifetime, not the turn
+    // checkpoint. Headless shutdown must not leave a detached model request.
+    this.autoMemoryController = new AbortController()
     this.executionToolContextRuntime = createTurnExecutionToolContextRuntime({
       readApprovalMode: (input) => this.deps.readApprovalMode(input),
       readFileAccessStatus: (input) => this.deps.readFileAccessStatus(input),
@@ -194,8 +198,18 @@ export class TurnEngine {
       writeMessage: this.deps.writeMessage,
       commitTurnBoundary: this.deps.commitTurnBoundary,
       dispatchHooks: this.deps.dispatchHooks,
-      scheduleMemoryExtraction: this.deps.scheduleMemoryExtraction,
-      runMemoryModel: this.deps.runMemoryModel,
+      scheduleMemoryExtraction: (input) => {
+        if (this.autoMemoryController.signal.aborted) return
+        return this.deps.scheduleMemoryExtraction({
+          ...input, signal: this.autoMemoryController.signal,
+        })
+      },
+      runMemoryModel: (input) => {
+        this.autoMemoryController.signal.throwIfAborted()
+        return this.deps.runMemoryModel({
+          ...input, signal: this.autoMemoryController.signal,
+        })
+      },
     })
     this.executionRuntime = createTurnExecutionRuntime({
       deps: this.deps,
@@ -230,7 +244,10 @@ export class TurnEngine {
   }
 
   shutdown() {
-    return this.shutdownRuntime()
+    const closing = this.shutdownRuntime()
+    // Publish the shared close barrier before abort listeners can re-enter.
+    this.autoMemoryController.abort()
+    return closing
   }
 
   async getTurn({ userId, sessionId, turnId }) {
@@ -418,8 +435,11 @@ export class TurnEngine {
     return this.resumeRuntime.resumeTurn(scope)
   }
 
-  async cancelTurn({ userId, sessionId, turnId, authMode = null }) {
-    return this.cancellationRuntime.cancel({ userId, sessionId, turnId, authMode })
+  async cancelTurn({ userId, sessionId, turnId, authMode = null, directoryPausedSequence }) {
+    return this.cancellationRuntime.cancel({
+      userId, sessionId, turnId, authMode,
+      ...(directoryPausedSequence === undefined ? {} : { directoryPausedSequence }),
+    })
   }
 
   waitForTurn({ userId, sessionId, turnId }) {

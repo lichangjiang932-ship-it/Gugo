@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createTurnTerminalOutcomeRuntime } from '../server/services/turnTerminalOutcomeRuntime.js'
+import { flushCheckpoint } from '../server/services/loop/checkpoint.js'
 
 const scope = { userId: 'user-1', sessionId: 'session-1', turnId: 'turn-1' }
 
@@ -152,4 +153,93 @@ test('an internal steering deferral is rejected as a completed loop result by th
   assert.equal(events[0][2].incompleteReason, 'turn_incomplete')
   assert.equal(canaries[0][0], 'failed')
   assert.equal(memoryCalls, 0)
+})
+
+function noWriteTerminalRuntime() {
+  const unexpectedWrite = () => assert.fail('a fenced execution must not project a terminal outcome')
+  return {
+    runtime: createTurnTerminalOutcomeRuntime({
+      now: unexpectedWrite,
+      writeMessage: unexpectedWrite,
+      commitTurnBoundary: unexpectedWrite,
+      scheduleMemoryExtraction: unexpectedWrite,
+      runMemoryModel: unexpectedWrite,
+    }),
+    context: {
+      scope,
+      emitter: unexpectedWrite,
+      evidence: {
+        emitter: unexpectedWrite,
+        emitFailed: unexpectedWrite,
+        emitBlocked: unexpectedWrite,
+        verifiedLocalFilesAt: unexpectedWrite,
+        retainedLocalFilesAt: unexpectedWrite,
+        boundaryOptions: unexpectedWrite,
+      },
+      state: completedState(),
+      recordCanaryTerminal: unexpectedWrite,
+    },
+  }
+}
+
+test('a checkpoint stale-owner fence is propagated without writing a failed terminal', async () => {
+  const fence = Object.assign(new Error('execution lease expired'), {
+    code: 'TURN_EXECUTION_LEASE_STALE',
+  })
+  let checkpointError
+  await assert.rejects(flushCheckpoint({
+    saveCheckpoint: async () => { throw fence },
+    state: { toolCallStates: [{ status: 'completed' }] },
+  }), (error) => {
+    checkpointError = error
+    return error.code === 'CHECKPOINT_FLUSH_FAILED' && error.cause === fence
+  })
+  const { runtime, context } = noWriteTerminalRuntime()
+  await assert.rejects(runtime.settleError({
+    ...context,
+    signal: new AbortController().signal,
+    error: checkpointError,
+  }), (error) => error === checkpointError && error.cause === fence)
+})
+
+for (const code of ['TURN_LEASE_LOST', 'TURN_EXECUTION_LEASE_STALE', 'TURN_ENGINE_SHUTDOWN', 'TURN_ALREADY_TERMINAL']) {
+  test(`a ${code} abort remains observable at every terminal entry point`, async () => {
+    const reason = Object.assign(new Error(code), { code })
+    const controller = new AbortController()
+    controller.abort(reason)
+    const { runtime, context } = noWriteTerminalRuntime()
+
+    await assert.rejects(runtime.cancelBeforeExecution({
+      ...context, signal: controller.signal, turnStartedAt: 1_000,
+    }), (error) => error === reason)
+    await assert.rejects(runtime.settleResult({
+      ...context, signal: controller.signal, result: { text: 'must not complete' },
+    }), (error) => error === reason)
+    await assert.rejects(runtime.settleError({
+      ...context, signal: controller.signal, error: new Error('tool aborted'),
+    }), (error) => error === reason)
+  })
+}
+
+test('explicit user cancellation still persists a cancelled boundary', async () => {
+  const events = []
+  const controller = new AbortController()
+  controller.abort(Object.assign(new Error('user stopped'), { code: 'TURN_CANCEL_REQUESTED' }))
+  const runtime = createTurnTerminalOutcomeRuntime({
+    now: () => 2_000,
+    writeMessage: async () => {},
+    scheduleMemoryExtraction: () => {},
+    runMemoryModel: async () => ({}),
+  })
+  await runtime.settleError({
+    scope,
+    signal: controller.signal,
+    error: controller.signal.reason,
+    state: { ...completedState(), checkpointIterations: 1, streamedAssistantText: 'partial' },
+    evidence: completedEvidence(events),
+    recordCanaryTerminal: async () => {},
+  })
+  assert.equal(events.length, 1)
+  assert.equal(events[0][1], 'turn.cancelled')
+  assert.equal(events[0][2].code, 'TURN_CANCELLED')
 })

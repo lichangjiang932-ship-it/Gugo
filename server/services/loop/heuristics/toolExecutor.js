@@ -312,6 +312,12 @@ function normalizedTodos(args) {
 async function executeAgentOrExternalTool(context, registeredTool) {
   const { name, args, job, step, signal, budget, skillId,
     approvalContext, toolCallId, idempotencyKey, dynamicToolRegistrationId } = context
+  if (name === 'search_tools') {
+    return { ok: true, query: String(args?.query || '').trim(), requestedLimit: args?.limit }
+  }
+  if (name === 'load_skill') {
+    return { ok: true, requestedSkillId: String(args?.skill_id || '').trim() }
+  }
   if (name === 'remember') return dispatchMemoryTool(name, args || {}, {
     userId: job?.userId || null,
     agentId: job?.agentId || null,
@@ -420,7 +426,7 @@ export async function executeServerTool(context) {
   }
   if (isGeneratedArtifactTool(name)) {
     return executeGeneratedArtifactTool({
-      name, args, job, step, signal, requiresLocalArtifactDelivery,
+      name, args, job, step, signal, requiresLocalArtifactDelivery, toolCallId: context.toolCallId,
     })
   }
   const boundTool = getBoundRuntimeTool(name)

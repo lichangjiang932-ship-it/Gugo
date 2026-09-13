@@ -1,6 +1,7 @@
 import { TOOL_CALL_STATUS } from '../../../store/taskStatus.js'
 import { useT } from '../../../i18n/I18nProvider.jsx'
 import { ReasoningTrace } from './ActivityTraces.jsx'
+import { toolCallLabel } from '../../../lib/toolCallPresentation.js'
 
 /**
  * 降级链路可视化:provider 重试 / 切换以一条 amber 文字行透出,
@@ -10,6 +11,7 @@ function fallbackNotice(meta, t) {
   const fb = meta?.modelFallback
   if (!fb) return null
   const retry = fb.kind === 'retry'
+  if (retry && !meta.streaming) return null
   return (
     <div className="chat-activity-line chat-activity-line-fallback" data-testid="model-fallback">
       <span className="chat-activity-mark chat-activity-mark-fallback" aria-hidden="true">{retry ? '\u21bb' : '\u21c4'}</span>
@@ -52,6 +54,8 @@ export default function ActivityStream({ msg }) {
         streaming={!!meta.streaming}
         completed={!meta.streaming && hasReasoningSummary}
         label={meta.streaming ? activityLabel(meta, toolCalls, t) : t('chatMessages.reasoningCompleted')}
+        detail={meta.streaming && !connectionNeedsAttention ? activityDetail(meta.modelActivity, t) : ''}
+        startedAt={meta.modelActivity?.startedAt}
         testId="model-activity"
       />
     </>
@@ -63,7 +67,10 @@ function activityLabel(meta, toolCalls, t) {
   if (meta?.serverConnectionState === 'cancelling') return t('chatMessages.cancellingTask')
   const activity = meta?.modelActivity
   if (activity?.kind === 'tool_call_ready') {
-    return t('chatMessages.toolCallReady', { name: activity.toolName || t('chatMessages.toolUnknown') })
+    return t('chatMessages.toolCallReady', { name: toolCallLabel(activity.toolName, t) })
+  }
+  if (activity?.kind === 'tool_arguments' || activity?.phase === 'tool_arguments') {
+    return t('toolActivity.preparingArguments', { name: toolCallLabel(activity.toolName, t) })
   }
   if (activity?.kind === 'reasoning') return t('chatMessages.activityReasoning')
   if (activity?.kind === 'model' && activity.phase === 'compacting') return t('chatMessages.activityCompacting')
@@ -85,4 +92,17 @@ function activityLabel(meta, toolCalls, t) {
   }
   if (toolCalls.length > 0) return t('chatMessages.continuingTask')
   return t('chatMessages.preparingTask')
+}
+
+function activityDetail(activity, t) {
+  if (!activity) return ''
+  const parts = []
+  if (['tool_arguments', 'idle'].includes(activity.phase) && Number.isSafeInteger(activity.toolArgumentsChars)
+    && activity.toolArgumentsChars >= 0) {
+    parts.push(t('toolActivity.argumentsReceived', { count: activity.toolArgumentsChars.toLocaleString() }))
+  }
+  if (['idle', 'waiting_first_token'].includes(activity.phase) && Number.isFinite(activity.idleMs) && activity.idleMs >= 1000) {
+    parts.push(t('toolActivity.lastOutputAgo', { seconds: Math.floor(activity.idleMs / 1000) }))
+  }
+  return parts.join(' · ')
 }

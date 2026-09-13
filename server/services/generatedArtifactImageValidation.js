@@ -24,7 +24,13 @@ export function crc32(bytes) {
   return (crc ^ 0xffffffff) >>> 0
 }
 
-function validatePng(bytes) {
+function enforceImageLimits(width, height, limits) {
+  if (limits && (width > limits.maxDimension || height > limits.maxDimension || width * height > limits.maxPixels)) {
+    invalid('ARTIFACT_FORMAT_IMAGE_LIMIT_EXCEEDED', 'The image exceeds the caller-specific dimension limit.')
+  }
+}
+
+function validatePng(bytes, limits) {
   const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
   if (bytes.length < 33 || !bytes.subarray(0, 8).equals(signature)) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The PNG signature is invalid.')
   let offset = 8
@@ -52,6 +58,7 @@ function validatePng(bytes) {
       sawHeader = true
       width = payload.readUInt32BE(0)
       height = payload.readUInt32BE(4)
+      enforceImageLimits(width, height, limits)
       bitDepth = payload[8]
       colorType = payload[9]
       interlace = payload[12]
@@ -80,7 +87,7 @@ function validatePng(bytes) {
   return { width, height }
 }
 
-function validateJpeg(bytes) {
+function validateJpeg(bytes, limits) {
   if (bytes.length < 12 || bytes.readUInt16BE(0) !== 0xffd8) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The JPEG signature is invalid.')
   let offset = 2
   let width = 0
@@ -103,6 +110,7 @@ function validateJpeg(bytes) {
       if (length < 8) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The JPEG frame header is invalid.')
       height = bytes.readUInt16BE(offset + 3)
       width = bytes.readUInt16BE(offset + 5)
+      enforceImageLimits(width, height, limits)
       if (!width || !height || width * height > MAX_IMAGE_PIXELS) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The JPEG dimensions are invalid.')
     }
     offset += length
@@ -122,7 +130,7 @@ function validateJpeg(bytes) {
   invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The JPEG end marker is missing.')
 }
 
-function validateWebp(bytes) {
+function validateWebp(bytes, limits) {
   if (bytes.length < 30 || bytes.toString('ascii', 0, 4) !== 'RIFF'
     || bytes.toString('ascii', 8, 12) !== 'WEBP' || bytes.readUInt32LE(4) + 8 !== bytes.length) {
     invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The WebP RIFF container is invalid.')
@@ -150,28 +158,37 @@ function validateWebp(bytes) {
     }
     offset = end + (length % 2)
   }
+  enforceImageLimits(width, height, limits)
   if (offset !== bytes.length || !width || !height || width * height > MAX_IMAGE_PIXELS) {
     invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The WebP bitstream or dimensions are invalid.')
   }
   return { width, height }
 }
 
-export async function validateGeneratedArtifactImage(bytes, extension) {
+export async function validateGeneratedArtifactImage(bytes, extension, requestedLimits = null) {
+  const limits = requestedLimits ? {
+    maxDimension: Math.min(Number.MAX_SAFE_INTEGER, Number(requestedLimits.maxDimension ?? Number.MAX_SAFE_INTEGER)),
+    maxPixels: Math.min(MAX_IMAGE_PIXELS, Number(requestedLimits.maxPixels ?? MAX_IMAGE_PIXELS)),
+  } : null
+  if (limits && Object.values(limits).some(value => !Number.isSafeInteger(value) || value <= 0)) {
+    invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'Image validation limits must be positive bounded integers.')
+  }
   const expectedFormat = extension === 'jpg' || extension === 'jpeg' ? 'jpeg' : extension
-  const structure = extension === 'png' ? validatePng(bytes)
-    : extension === 'jpg' || extension === 'jpeg' ? validateJpeg(bytes)
-      : extension === 'webp' ? validateWebp(bytes)
+  const structure = extension === 'png' ? validatePng(bytes, limits)
+    : extension === 'jpg' || extension === 'jpeg' ? validateJpeg(bytes, limits)
+      : extension === 'webp' ? validateWebp(bytes, limits)
         : invalid('ARTIFACT_FORMAT_UNSUPPORTED', 'Only generated PNG, JPEG, and WebP images are supported.')
   try {
     const options = {
       animated: true,
       failOn: 'error',
-      limitInputPixels: MAX_IMAGE_PIXELS,
+      limitInputPixels: limits?.maxPixels || MAX_IMAGE_PIXELS,
     }
     const metadata = await sharp(bytes, options).metadata()
     const width = Number(metadata.width)
     const height = Number(metadata.pageHeight || metadata.height)
     const pages = Number(metadata.pages || 1)
+    enforceImageLimits(width, height * pages, limits)
     if (metadata.format !== expectedFormat || !Number.isSafeInteger(width) || !Number.isSafeInteger(height)
       || !Number.isSafeInteger(pages) || width <= 0 || height <= 0 || pages <= 0
       || width * height * pages > MAX_IMAGE_PIXELS) {

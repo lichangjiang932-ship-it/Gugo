@@ -26,6 +26,8 @@ import {
 } from './turnEnginePolicy.js'
 import { resetManualRetryVerificationBudget } from './turnFailedRetryPolicy.js'
 import { filterAuthorizedDirectoryResolutions } from './turnResolutionRuntime.js'
+import { normalizeTurnApprovalMode } from './turnStartRuntime.js'
+import { PERMISSION_MODES } from '../utils/approvalPolicy.js'
 
 export function checkpointStateForFailedRetry(state, { manualRetry = false } = {}) {
   if (!state || typeof state !== 'object') return state || null
@@ -101,7 +103,7 @@ async function loadTurnExecutionRecovery(runtime, input) {
   }
 }
 
-async function prepareTurnPromptAndTools(runtime, input, recovery) {
+async function prepareTurnPromptAndTools(runtime, input, recovery, configuredApprovalMode) {
   const { deps, executionToolContextRuntime } = runtime
   const { userId, sessionId, turnId, content, agentId, skillIds, skillDefinitions } = input
   const restoredSnapshot = normalizePromptContextSnapshot(
@@ -176,6 +178,7 @@ async function prepareTurnPromptAndTools(runtime, input, recovery) {
     toolsConfig: input.toolsConfig,
     intentMode: input.intentMode,
     approvalMode: input.approvalMode,
+    configuredApprovalMode,
     resumeResolution: input.resumeContext?.resolution,
     restoredCheckpointState: recovery.restoredCheckpointState,
     fileAccessStatus: recovery.fileAccessStatus,
@@ -259,6 +262,7 @@ async function executePreparedTurn(runtime, input, recovery, prepared, signal) {
     commitTurnBoundary: deps.commitTurnBoundary,
     recordCanaryTerminal: execution.recordCanaryTerminal,
     readState: execution.readTerminalState,
+    replayEvents: deps.replayEvents,
   })
   let contextWindow
   try {
@@ -387,7 +391,27 @@ export function createTurnExecutionRuntime({
       return
     }
     const recovery = await loadTurnExecutionRecovery(runtime, input)
-    const prepared = await prepareTurnPromptAndTools(runtime, input, recovery)
-    await executePreparedTurn(runtime, input, recovery, prepared, signal)
+    // Preserve the unscoped observed mode for recovery drift checks. A narrower
+    // executable scope must never rewrite a conflicting stored environment.
+    const configuredApprovalMode = String(deps.readApprovalMode({ userId: input.userId }) || '').trim()
+    const checkpointMode = normalizeTurnApprovalMode(recovery.restoredCheckpointState?.approvalMode)
+    const permissionMode = checkpointMode || normalizeTurnApprovalMode(input.approvalMode)
+      || (PERMISSION_MODES.includes(configuredApprovalMode) ? configuredApprovalMode : null)
+    const run = async () => {
+      try { recovery.fileAccessStatus = deps.readFileAccessStatus({ userId: input.userId }) }
+      catch { recovery.fileAccessStatus = null }
+      const prepared = await prepareTurnPromptAndTools(runtime, input, recovery, configuredApprovalMode)
+      await executePreparedTurn(runtime, input, recovery, prepared, signal)
+    }
+    // Older injected runLoop hosts use off/unattended/all as deployment queue
+    // modes. Keep that contract without treating them as user permission grants.
+    if (!permissionMode || typeof deps.runWithApprovalMode !== 'function') return run()
+    await deps.runWithApprovalMode({
+      ...scope,
+      permissionMode,
+      checkpointMode,
+      restored: recovery.restoredCheckpointState?.turnPermissionContext || null,
+      resuming: Boolean(recovery.checkpoint),
+    }, run)
   }
 }

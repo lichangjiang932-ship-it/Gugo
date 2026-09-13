@@ -2,6 +2,7 @@ import {
   cancelledArtifactToolsFromSteering,
   steeringDefinesExclusiveArtifactContract,
 } from './steeringArtifactContract.js'
+import { synchronizePresentationPromptContext } from './presentationPromptContext.js'
 
 export function installArtifactSteeringContract(s) {
   const {
@@ -123,6 +124,7 @@ export function installArtifactSteeringContract(s) {
       approvalMode: s.approvalMode,
       ...s.outputDirectoryContext,
     })
+    synchronizePresentationPromptContext(s)
     const removed = [...previousAuthorizedTools]
       .filter((name) => !s.authorizedArtifactTools.has(name))
     const added = [...s.expectedArtifactTools]

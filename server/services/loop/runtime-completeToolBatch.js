@@ -43,7 +43,8 @@ async function initializeToolBatch(s, i) {
       const skippedResult = {
         ok: false,
         code: 'tool_execution_skipped',
-        error: i.noProgressReason || i.budgetExceeded || '当前轮已暂停',
+        error: i.noProgressReason || i.budgetExceeded
+          || (s.locale === 'zh' ? '当前轮已暂停' : 'The current round was paused.'),
         retryable: false,
       }
       s.convo.push(buildToolResultMessage(skipped, skippedResult))
@@ -103,6 +104,7 @@ export async function completeToolBatch(s) {
     EXECUTION_CONVERGENCE_ROUND_THRESHOLD,
     JOB_READ_CONCURRENCY,
     REPEAT_CALL_GUARD_MARKER,
+    TOOL_FAILURE_STRATEGY_MARKER,
     getToolMetadata,
     mapWithConcurrency,
   } = s.d
@@ -165,14 +167,18 @@ export async function completeToolBatch(s) {
           break
         }
       }
+  const deferredSystemContextCount = i.deferredPostBatchMessages.length
   s.convo.push(...i.deferredPostBatchMessages)
   s.pendingEphemeralToolMessages.push(...i.deferredEphemeralToolMessages)
+  if (deferredSystemContextCount > 0) {
+    await s.persistTurn({ boundary: 'post-tool-system-context' })
+  }
   i.failureStrategyAdvisories = s.loopGuard.pendingAdvisories?.() || []
   for (const advisory of i.failureStrategyAdvisories) {
         s.convo.push({
           role: 'system',
           content: [
-            '[TOOL FAILURE STRATEGY REQUIRED]',
+            TOOL_FAILURE_STRATEGY_MARKER,
             'code=' + advisory.code,
             'level=' + advisory.level,
             'tool=' + advisory.tool,

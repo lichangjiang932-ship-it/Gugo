@@ -25,6 +25,7 @@ function checkpointToolSpecs(executionEnvironment) {
 
 function projectHostToolCatalog({
   resolvedToolSpecs,
+  deferredToolSpecs,
   directoryAuthorizationCatalogNames,
   toolResolutionDecision,
   userId,
@@ -33,9 +34,10 @@ function projectHostToolCatalog({
   modelToolFileAccessStatus,
 }) {
   const hostExcluded = []
-  let resolverSpecs = Array.isArray(resolvedToolSpecs) ? resolvedToolSpecs : []
-  if (directoryAuthorizationCatalogNames) {
-    resolverSpecs = resolverSpecs.filter((spec) => {
+  const filterFrozenCatalog = (specs) => {
+    const source = Array.isArray(specs) ? specs : []
+    if (!directoryAuthorizationCatalogNames) return source
+    return source.filter((spec) => {
       const name = String(spec?.function?.name || '').trim()
       if (directoryAuthorizationCatalogNames.has(name)) return true
       if (name) {
@@ -48,13 +50,15 @@ function projectHostToolCatalog({
       return false
     })
   }
-  const projected = projectToolSpecsForRuntimePolicy(resolverSpecs, {
+  const project = (specs) => projectToolSpecsForRuntimePolicy(filterFrozenCatalog(specs), {
     userId,
     toolsConfig: effectiveToolsConfig,
     permissionMode: effectiveApprovalMode,
     fileAccessStatus: modelToolFileAccessStatus,
     onExcluded: (entry) => hostExcluded.push(entry),
   })
+  const projected = project(resolvedToolSpecs)
+  const projectedDeferred = project(deferredToolSpecs)
   const eligibleToolNames = projected
     .map((spec) => String(spec?.function?.name || '').trim())
     .filter(Boolean)
@@ -73,6 +77,7 @@ function projectHostToolCatalog({
   }
   return {
     resolvedToolSpecs: projected,
+    deferredToolSpecs: projectedDeferred,
     toolResolutionDecision: {
       version: 1,
       ...toolResolutionDecision,
@@ -84,6 +89,7 @@ function projectHostToolCatalog({
     },
   }
 }
+
 
 /**
  * Resolve the host-owned tool and permission context passed to one Turn loop.
@@ -105,6 +111,7 @@ export function createTurnExecutionToolContextRuntime({
       toolsConfig,
       intentMode,
       approvalMode,
+      configuredApprovalMode: suppliedApprovalMode = undefined,
       resumeResolution = null,
       restoredCheckpointState = null,
       fileAccessStatus = undefined,
@@ -129,7 +136,8 @@ export function createTurnExecutionToolContextRuntime({
       const effectiveSkillIds = preparedSkillIds.length
         ? preparedSkillIds
         : normalizeTurnIds(fallbackSkillIds)
-      const configuredApprovalMode = String(readApprovalMode({ userId }) || '').trim()
+      const configuredApprovalMode = String(suppliedApprovalMode === undefined
+        ? readApprovalMode({ userId }) || '' : suppliedApprovalMode || '').trim()
       const turnApprovalMode = normalizeTurnApprovalMode(approvalMode)
       const checkpointApprovalMode = normalizeTurnApprovalMode(
         restoredCheckpointState?.approvalMode,
@@ -143,6 +151,7 @@ export function createTurnExecutionToolContextRuntime({
         || configuredApprovalMode
         || 'normal'
       let resolvedToolSpecs = chatOnlyMode ? [] : baseToolSpecs
+      let deferredToolSpecs = chatOnlyMode ? [] : null
       let directoryAuthorizationCatalogNames = null
       let toolResolutionDecision = chatOnlyMode ? {
         version: 1,
@@ -188,11 +197,18 @@ export function createTurnExecutionToolContextRuntime({
           messages: toolResolutionMessages,
           skillIds: effectiveSkillIds,
           onDecision: (decision) => { toolResolutionDecision = decision },
+          onDeferredSpecs: (specs) => {
+            if (Array.isArray(specs)) deferredToolSpecs = specs
+          },
         })
-        if (Array.isArray(resolved)) resolvedToolSpecs = resolved
+        if (Array.isArray(resolved)) {
+          resolvedToolSpecs = resolved
+          if (!Array.isArray(deferredToolSpecs)) deferredToolSpecs = resolved
+        }
       } catch {
         // MCP/browser discovery is optional. The host-level permission projection
         // below still applies when discovery itself fails.
+        deferredToolSpecs = resolvedToolSpecs
         toolResolutionDecision = {
           version: 1,
           eligibleToolNames: [],
@@ -201,8 +217,10 @@ export function createTurnExecutionToolContextRuntime({
         }
       }
       if (!chatOnlyMode) {
-        ;({ resolvedToolSpecs, toolResolutionDecision } = projectHostToolCatalog({
+        if (!Array.isArray(deferredToolSpecs)) deferredToolSpecs = resolvedToolSpecs
+        ;({ resolvedToolSpecs, deferredToolSpecs, toolResolutionDecision } = projectHostToolCatalog({
           resolvedToolSpecs,
+          deferredToolSpecs,
           directoryAuthorizationCatalogNames,
           toolResolutionDecision,
           userId,
@@ -221,6 +239,7 @@ export function createTurnExecutionToolContextRuntime({
         currentApprovalMode,
         effectiveApprovalMode,
         resolvedToolSpecs,
+        deferredToolSpecs,
         toolResolutionDecision,
         modelToolFileAccessStatus,
       }

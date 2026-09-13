@@ -11,17 +11,7 @@ const ENGLISH_PROSE_WORDS = new Set([
   'that', 'the', 'then', 'this', 'to', 'was', 'we', 'were', 'what', 'when',
   'where', 'which', 'will', 'with', 'you', 'your',
 ])
-const ENGLISH_TERMINAL_WORDS = new Set([
-  ...ENGLISH_PROSE_WORDS,
-  'after', 'api', 'blocked', 'budget', 'build', 'call', 'calls', 'cancelled',
-  'checkpoint', 'complete', 'completed', 'continue', 'directory', 'done', 'durable',
-  'error', 'evidence', 'exhausted', 'failed', 'failure', 'file', 'files', 'finished',
-  'fuse', 'generated', 'green', 'information', 'interrupted', 'key', 'limit', 'missing',
-  'model', 'partial', 'pending', 'permission', 'progress', 'remaining', 'required',
-  'response', 'retry', 'saved', 'stopped', 'task', 'test', 'tests', 'tool', 'tools',
-  'unverified', 'validation', 'verified', 'work', 'wrap',
-])
-const NON_ASCII_LATIN_LETTER = /[\u00c0-\u024f]/u
+const LATIN_TEXT = /\p{Script=Latin}/u
 
 function containsEnglishProseSegment(text) {
   return String(text || '').split(/[\n\u3002\uff01\uff1f!?]+/u).some((segment) => {
@@ -35,17 +25,6 @@ function containsEnglishProseSegment(text) {
     const hanCharacters = (segment.match(HAN_CHARACTER) || []).length
     return latinLetters > Math.max(12, hanCharacters * 2)
   })
-}
-
-function containsEnglishTerminalText(text) {
-  const value = String(text || '')
-  if (NON_ASCII_LATIN_LETTER.test(value)) return false
-  const words = (value.match(LATIN_WORD) || []).map((word) => word.toLowerCase())
-  if (words.length === 0) return false
-  const signals = words.reduce((count, word) => (
-    count + (ENGLISH_TERMINAL_WORDS.has(word) ? 1 : 0)
-  ), 0)
-  return signals >= Math.min(2, words.length)
 }
 
 function localizedReason(locale, reason, fallback) {
@@ -63,7 +42,10 @@ export function localizedTerminalModelText(locale, value, { strictLocale = false
     return strictLocale && (!HAN_TEXT.test(text) || containsEnglishProseSegment(text)) ? '' : text
   }
   if (EAST_ASIAN_TERMINAL_MARKER.test(text)) return ''
-  return strictLocale && !containsEnglishTerminalText(text) ? '' : text
+  // A vocabulary whitelist cannot identify English: it also drops legitimate
+  // short replies and technical terms. Preserve Latin-script explanations;
+  // the host's structured status, not this prose, decides task completion.
+  return strictLocale && !LATIN_TEXT.test(text) ? '' : text
 }
 
 const COPY = Object.freeze({

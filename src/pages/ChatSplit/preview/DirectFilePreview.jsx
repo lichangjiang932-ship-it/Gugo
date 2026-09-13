@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, FileText, LoaderCircle } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import { classifyDirectFile, loadDirectFilePreview } from '../../../lib/directFilePreview.js'
-import { DocxPreview, PptxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
+import { DocxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
+import PptxFilePreview from './PptxFilePreview.jsx'
 import { InteractiveHtmlFilePreview } from './HtmlFilePreview.jsx'
 import { NativePreviewRenderer, WorkbookPreview } from './NativePreviewRenderers.jsx'
 import { OpenOriginalLink, PreviewFallbackActions, PreviewStatus } from './PreviewPrimitives.jsx'
@@ -12,7 +13,8 @@ import { withPreviewRetry } from './previewUrl.js'
 export { DirectHtmlUrlPreview } from './HtmlFilePreview.jsx'
 
 function directFilePreviewIdentity(file = {}, url = '') {
-  return [file.id, file.filename, file.title, file.type, file.mimeType, file.path, url]
+  return [file.id, file.filename, file.title, file.type, file.mimeType, file.path, url,
+    file.previewRevision, file.revision, file.updatedAt, file.digest, file.contentDigest, file.sha256, file.lastModified]
     .map((value) => String(value || ''))
     .join('\u0000')
 }
@@ -64,7 +66,7 @@ function DirectFilePreviewRequest({ file, url, t }) {
   />
   const descriptor = previewRendererRegistry.resolve(preview?.kind) || previewRendererRegistry.resolve('unsupported')
   const Renderer = descriptor.component
-  return <Renderer preview={preview} file={file} url={url} t={t} />
+  return <Renderer preview={preview} file={file} url={url} t={t} onReload={() => setRetryAttempt((value) => value + 1)} />
 }
 
 function HtmlPreviewRenderer({ file, t, url }) {
@@ -75,8 +77,8 @@ function DocxFileRenderer({ preview }) {
   return <DocxPreview blocks={preview.blocks || []} title={preview.title} />
 }
 
-function PptxFileRenderer({ preview }) {
-  return <PptxPreview content={preview.content || ''} />
+function PptxFileRenderer(props) {
+  return <PptxFilePreview {...props} />
 }
 
 function WorkbookFileRenderer({ preview }) {

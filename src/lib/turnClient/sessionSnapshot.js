@@ -206,8 +206,10 @@ function turnEvidenceMeta(message) {
   const modelRequestUnknown = state === 'blocked'
     && recovery?.requiresUserVerification === true
     && recovery?.recoveryKind === 'model_request_outcome_unknown'
-  const recoveryToolCallId = sideEffectUnknown
-    ? String(recovery?.toolCallId || '').trim().slice(0, 200)
+  const recoveryToolCallId = sideEffectUnknown && typeof recovery?.toolCallId === 'string'
+    && recovery.toolCallId.length <= 256 && !/\s/u.test(recovery.toolCallId)
+    && !Array.from(recovery.toolCallId).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+    ? recovery.toolCallId
     : ''
   const recoveryModelRequestId = modelRequestUnknown
     ? String(recovery?.modelRequestId || '').trim().slice(0, 200)
@@ -258,7 +260,7 @@ function turnEvidenceMeta(message) {
                 : modelRequestUnknown ? 'model_request_outcome_unknown' : null,
               serverRecoveryToolCallId: recoveryToolCallId || null,
               ...(recoveryModelRequestId ? { serverRecoveryModelRequestId: recoveryModelRequestId } : {}),
-              serverRecoveryActionPath: (sideEffectUnknown || modelRequestUnknown)
+              serverRecoveryActionPath: modelRequestUnknown
                 && recovery?.recoveryAction?.kind === 'open_settings'
                 && recovery?.recoveryAction?.path === '/settings?tab=recovery'
                 ? '/settings?tab=recovery'

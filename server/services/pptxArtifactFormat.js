@@ -8,6 +8,7 @@ import { injectEaFontWithReceipt } from '../../src/lib/pptCore.js'
 import { PPTX_LIMITS } from './pptxArtifactContract.js'
 import { applyPptxRunFonts, resolvePptxDesign, slidePptxDesign } from './pptxArtifactDesign.js'
 import { addPreparedPptxImage, renderPptxElements } from './pptxArtifactElements.js'
+import { preflightPptxCanvas } from './pptxCanvasPreflight.js'
 import {
   fullPptxBullets, fullPptxKpis, invalidPptx, normalizePptxChart, pptxText,
 } from './pptxArtifactValidation.js'
@@ -205,6 +206,7 @@ export async function buildPptxArtifactBuffer({
   const resolvedGeneratedAt = resolveGeneratedAt(generatedAt)
   const resolvedDesign = resolvePptxDesign({ title, subtitle, slides, theme, design })
   const images = prepareImages(preparedImages, slides.length)
+  preflightPptxCanvas(slides, resolvedDesign, images)
   const PptxGen = (await import('pptxgenjs')).default
   const pptx = new PptxGen()
   pptx.defineLayout({ name: 'GUGO_DESIGN', width: resolvedDesign.width, height: resolvedDesign.height })

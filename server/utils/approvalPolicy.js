@@ -80,8 +80,12 @@ export const APPROVAL_REQUIRED_TOOLS = Object.freeze({
   // 浏览器自动化:能在已登录的会话里代替用户点按钮 = 可发消息/可下单
   browser_click: 'medium',
   browser_type: 'medium',
+  browser_upload_file: 'high',
+  browser_download: 'high',
   browser_select: 'medium',
   browser_press: 'medium',
+  browser_switch_tab: 'low',
+  browser_switch_frame: 'low',
   browser_open_url: 'low',
   browser_navigate: 'low',
   // 连接器:打开外部应用
@@ -95,6 +99,8 @@ const ALWAYS_CONFIRM_TOOLS = CONNECTOR_WRITE_TOOL_SET
 
 /** 一望即知无副作用的读类工具,永不审批(白名单优先于上表)。 */
 export const NEVER_APPROVE_TOOLS = Object.freeze([
+  'load_skill',
+  'search_tools',
   'reflect',
   'request_clarification',
   'request_directory',
@@ -116,6 +122,8 @@ export const NEVER_APPROVE_TOOLS = Object.freeze([
   'file_hash_manifest',
   'web_search',
   'browser_state',
+  'browser_tabs',
+  'browser_frames',
   'browser_snapshot',
   'browser_console',
   'browser_screenshot',
@@ -141,6 +149,8 @@ const NEVER = new Set(NEVER_APPROVE_TOOLS)
 // model. Network/connector/dynamic tools fail closed even when they describe
 // themselves as read-only. The same allowlist is also enforced at execution.
 const PLAN_LOCAL_READ_TOOLS = new Set([
+  'load_skill',
+  'search_tools',
   'read_skill_resource',
   'reflect',
   'request_clarification',
@@ -317,8 +327,18 @@ function applyArgumentRisk(name, safeArgs, initialRisk, initialReason) {
     const method = str(safeArgs.method).toUpperCase() || 'GET'
     risk = higher(risk, 'medium')
     reason = `对外发起 ${method} 请求`
+  } else if (name === 'browser_upload_file') {
+    risk = higher(risk, 'high')
+    reason = '把已授权的本地文件提交给当前网页'
+  } else if (name === 'browser_download') {
+    risk = higher(risk, 'high')
+    reason = '从已登录网页下载并写入已授权的本地路径'
   } else if (['browser_click', 'browser_type', 'browser_select', 'browser_press'].includes(name)) {
     reason = '在已登录的浏览器会话中代为操作'
+  } else if (name === 'browser_switch_tab') {
+    reason = '切换到另一个浏览器标签页或弹窗'
+  } else if (name === 'browser_switch_frame') {
+    reason = '切换到另一个已授权浏览器框架'
   } else if (name === 'browser_open_url' || name === 'browser_navigate' || name === 'connected_app_open') {
     reason = '打开外部应用'
   } else if (name === 'qq_mail_send') {

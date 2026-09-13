@@ -8,6 +8,7 @@ import { findArtifactReferenceByHref, findArtifactReferenceByLocalPath, normaliz
 import { CodeBlock, SelectableFileLink } from './markdown/MarkdownControls.jsx'
 import { nodeText } from './markdown/markdownUtils.js'
 import { MarkdownImageProvider, MarkdownImageRenderer } from './markdown/MarkdownImage.jsx'
+import remarkInlineWebLinks from './markdown/remarkInlineWebLinks.js'
 
 /**
  * MarkdownRenderer —— 安全渲染 Markdown + 代码高亮
@@ -49,11 +50,11 @@ function markdownUrlTransform(value) {
   return isLocalPathHref(value) ? value : defaultUrlTransform(value)
 }
 
-function isManagedArtifactHref(href = '') {
+function isProtectedArtifactHref(href = '') {
   try {
-    return new URL(String(href || ''), 'http://artifact.local').pathname.startsWith('/api/artifacts/')
+    return /^\/api\/(?:artifacts|local-files)\//.test(new URL(String(href || ''), 'http://artifact.local').pathname)
   } catch {
-    return String(href || '').startsWith('/api/artifacts/')
+    return /^\/api\/(?:artifacts|local-files)\//.test(String(href || ''))
   }
 }
 
@@ -74,7 +75,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
     <div className={`chat-markdown prose prose-sm max-w-none leading-[1.75] ${streaming ? 'chat-markdown-streaming' : ''} ${className}`}>
       <MarkdownImageProvider loadRemote={!streaming} onOpen={setFullscreen}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, [remarkArtifactReferences, { references: artifactReferences }], remarkLocalPathLinks]}
+        remarkPlugins={[remarkGfm, [remarkArtifactReferences, { references: artifactReferences }], remarkLocalPathLinks, remarkInlineWebLinks]}
         urlTransform={markdownUrlTransform}
         rehypePlugins={[
           [rehypeSanitize, sanitizeSchema],
@@ -92,7 +93,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
             const trustedLocalPath = referenceLocalPath(artifactReference)
             const anchorProps = { ...props }
             delete anchorProps.node
-            if (!isArtifactReference && isManagedArtifactHref(href)) {
+            if (!isArtifactReference && isProtectedArtifactHref(href)) {
               return <span {...anchorProps} data-testid="blocked-artifact-link">{children}</span>
             }
             if (isLocalPath && !isArtifactReference) {
@@ -139,7 +140,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
                 data-testid={isLocalPath ? 'inline-local-path-link' : undefined}
                 className={isLocalPath
                     ? 'inline-flex rounded-control border border-ink/10 bg-paper-2 px-1.5 py-0.5 font-medium text-[0.88em] text-ink-soft no-underline hover:border-accent/40 hover:text-accent-ink'
-                    : anchorProps.className}
+                    : `break-words decoration-current/45 underline-offset-4 hover:decoration-current ${anchorProps.className || ''}`}
                 onClick={(event) => {
                   if (isLocalPath) event.preventDefault()
                   if (onLinkClick?.(href, event)) event.preventDefault()
@@ -181,15 +182,17 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
             </div>
           ),
           th: ({ children, ...props }) => (
-            <th className="border-b border-r border-ink/10 bg-paper-2 px-3 py-2 text-left font-semibold last:border-r-0" {...props}>
+            <th className="whitespace-nowrap border-b border-r border-ink/10 bg-paper-2 px-3 py-2 text-left font-semibold last:border-r-0" {...props}>
               {children}
             </th>
           ),
-          td: ({ children, ...props }) => (
-            <td className="border-b border-r border-ink/10 px-3 py-2 align-top last:border-r-0" {...props}>
+          td: ({ children, ...props }) => {
+            const text = nodeText(children).trim()
+            const compact = text.length <= 12 && !text.includes('\n')
+            return <td className={`border-b border-r border-ink/10 px-3 py-2 align-top last:border-r-0 ${compact ? 'whitespace-nowrap' : ''}`} {...props}>
               {children}
             </td>
-          ),
+          },
         }}
       >
         {children || ''}

@@ -1,6 +1,7 @@
 import { normalizeOptionalUsageNumber } from '../../../shared/modelUsage.js'
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
 import { modelAssistantHistoryMessage } from './modelAssistantHistory.js'
+import { MODEL_PROVIDER_STOP_REASON_ERROR_CODE } from '../../../shared/modelProviderStopDiagnostic.js'
 
 function modelPhaseUsage(result) {
   const usage = result?.usage
@@ -271,7 +272,7 @@ async function handleModelRequestFailure(s, error, context) {
     if (typeof s.releaseSteering === 'function') await s.releaseSteering(i.steeringLeaseId)
     i.steeringLeaseId = null
   }
-  if (error?.name === 'AbortError' || s.iter === 0) throw error
+  if (error?.name === 'AbortError' || s.iter === 0 || error?.code === MODEL_PROVIDER_STOP_REASON_ERROR_CODE) throw error
   const terminal = await s.finishTerminalResult(s.partialResultFallback.apply({
     text: '',
     artifactIds: s.artifactIds,
@@ -280,6 +281,7 @@ async function handleModelRequestFailure(s, error, context) {
     code: error?.code || 'MODEL_CALL_INTERRUPTED',
     reason: error?.message || String(error),
     recovery: s.recovery,
+    ...(error.modelRequestDiagnostics ? { modelRequestDiagnostics: error.modelRequestDiagnostics } : {}),
   }), {
     steeringLeaseId: i.steeringLeaseId,
     appendTextToConversation: false,

@@ -5,9 +5,9 @@ import { assertPptxSchema, invalidPptx, normalizePptxChart, normalizePptxTable, 
 
 function elementBox(element, design, path) {
   if (element.x + element.w > 1 + 1e-9 || element.y + element.h > 1 + 1e-9) {
-    invalidPptx(path, 'must stay inside the slide (x+w <= 1 and y+h <= 1)')
+    invalidPptx(path, 'must stay inside the slide (x+w <= 1 and y+h <= 1)', 'PPTX_CONTENT_INVALID', { geometry: true })
   }
-  if (element.w === 0 && element.h === 0) invalidPptx(path, 'must have a non-zero line length')
+  if (element.w === 0 && element.h === 0) invalidPptx(path, 'must have a non-zero line length', 'PPTX_CONTENT_INVALID', { geometry: true })
   return {
     x: element.x * design.width, y: element.y * design.height,
     w: element.w * design.width, h: element.h * design.height,
@@ -162,7 +162,7 @@ function canvasImage(element, images, slideIndex, path) {
   return image
 }
 
-export function renderPptxElements(slide, pptx, source, design, images, slideIndex) {
+export function renderPptxElements(slide, pptx, source, design, images, slideIndex, { elementIndexOffset = 0 } = {}) {
   const path = `slides[${slideIndex}].elements`
   if (!Array.isArray(source.elements) || source.elements.length === 0
     || source.elements.length > PPTX_LIMITS.elements) {
@@ -174,7 +174,7 @@ export function renderPptxElements(slide, pptx, source, design, images, slideInd
     }
   }
   source.elements.forEach((element, index) => {
-    const elementPath = `${path}[${index}]`
+    const elementPath = `${path}[${index + elementIndexOffset}]`
     assertPptxSchema(element, PPTX_ELEMENT_SCHEMA, elementPath)
     const box = elementBox(element, design, elementPath)
     switch (element.type) {

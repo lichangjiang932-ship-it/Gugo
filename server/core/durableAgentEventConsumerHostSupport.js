@@ -1,7 +1,16 @@
+// @ts-check
+
 import { types as utilTypes } from 'node:util'
+
+/** @typedef {import('../../types/kernel-ports.js').DurableAgentEventHostError} DurableAgentEventHostError */
+/** @typedef {import('../../types/kernel-ports.js').DurableAgentEventListener} DurableAgentEventListener */
+/** @typedef {import('../../types/kernel-ports.js').DurableAgentEventObserver} DurableAgentEventObserver */
+/** @typedef {import('../../types/kernel-ports.js').DurableAgentEventStore} DurableAgentEventStore */
+/** @typedef {import('../../types/kernel-ports.js').DurableAgentEventStoreSnapshot} DurableAgentEventStoreSnapshot */
 
 export const MAX_AGENT_EVENT_HOST_DELAY_MS = 2_147_483_647
 
+/** @type {readonly (keyof DurableAgentEventStore)[]} */
 const REQUIRED_STORE_METHODS = Object.freeze([
   'ensureAgentEventSubscription',
   'enableAgentEventSubscription',
@@ -15,10 +24,12 @@ const REQUIRED_STORE_METHODS = Object.freeze([
   'truncateAgentEventOutboxToSafeWatermark',
 ])
 
+/** @param {string} code @param {string} message @returns {DurableAgentEventHostError} */
 export function durableHostError(code, message) {
-  return Object.assign(new TypeError(message), { code, retryable: false })
+  return Object.assign(new TypeError(message), { code, retryable: /** @type {const} */ (false) })
 }
 
+/** @param {unknown} value @param {string} field @param {number} [maximum] */
 export function positiveHostInteger(value, field, maximum = Number.MAX_SAFE_INTEGER) {
   const number = Number(value)
   if (!Number.isSafeInteger(number) || number < 1 || number > maximum) {
@@ -30,6 +41,7 @@ export function positiveHostInteger(value, field, maximum = Number.MAX_SAFE_INTE
   return number
 }
 
+/** @param {DurableAgentEventStore} store @returns {DurableAgentEventStoreSnapshot} */
 export function snapshotDurableAgentEventStore(store) {
   if (!store || typeof store !== 'object' || Array.isArray(store) || utilTypes.isProxy(store)) {
     throw durableHostError(
@@ -37,7 +49,7 @@ export function snapshotDurableAgentEventStore(store) {
       'durable Agent Event consumer host requires a non-Proxy store',
     )
   }
-  const snapshot = {}
+  const snapshot = /** @type {Partial<DurableAgentEventStore>} */ ({})
   for (const name of REQUIRED_STORE_METHODS) {
     let descriptor
     try {
@@ -56,9 +68,10 @@ export function snapshotDurableAgentEventStore(store) {
     }
     snapshot[name] = descriptor.value
   }
-  return Object.freeze(snapshot)
+  return Object.freeze(/** @type {DurableAgentEventStore} */ (snapshot))
 }
 
+/** @param {unknown} value @returns {DurableAgentEventListener} */
 export function normalizeDurableAgentEventListener(value) {
   if (typeof value !== 'function' || utilTypes.isProxy(value)) {
     throw durableHostError(
@@ -66,9 +79,10 @@ export function normalizeDurableAgentEventListener(value) {
       'durable Agent Event listener must be a non-Proxy function',
     )
   }
-  return value
+  return /** @type {DurableAgentEventListener} */ (value)
 }
 
+/** @param {unknown} error @param {string} [fallback] @returns {string} */
 export function safeAgentEventFailureCode(error, fallback = 'AGENT_EVENT_DELIVERY_FAILED') {
   if (!error || (typeof error !== 'object' && typeof error !== 'function')
     || utilTypes.isProxy(error)) return fallback
@@ -85,6 +99,7 @@ export function safeAgentEventFailureCode(error, fallback = 'AGENT_EVENT_DELIVER
   }
 }
 
+/** @param {DurableAgentEventObserver} callback @param {Record<string, unknown>} entry */
 export function observeAgentEventHost(callback, entry) {
   if (!callback) return
   try {
@@ -97,6 +112,7 @@ export function observeAgentEventHost(callback, entry) {
   }
 }
 
+/** @param {unknown} value @param {number} fallback @returns {number} */
 export function boundedAgentEventHostDelay(value, fallback) {
   const number = Number(value)
   if (!Number.isFinite(number)) return fallback

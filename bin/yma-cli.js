@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 import { CliError, CliUsageError } from './cli/errors.js'
+import { createRunRecoveryPrompts } from './cli/runRecoveryPrompts.js'
 import {
   createRunOutputFormatter,
   formatRunError,
@@ -314,6 +315,7 @@ export async function cmdRun(argv, {
       : signal
     const runtime = runTurn || await loadBuiltinHeadlessRuntime({ runtimeCwd, env })
     const interactive = stdin.isTTY === true && stderr.isTTY === true
+    const recoveryPrompts = createRunRecoveryPrompts(stdin, stderr, { signal: runtimeSignal })
     const runtimeOptions = { ...options }
     delete runtimeOptions.outputFormat
     delete runtimeOptions.timeoutMs
@@ -328,6 +330,7 @@ export async function cmdRun(argv, {
       onToken: () => {},
       onDiagnostic: (message) => stderr.write(`${message}\n`),
       onApproval: createApprovalPrompt(stdin, stderr, runtimeSignal),
+      ...recoveryPrompts,
     })
     if (timeoutTriggered) {
       await output.writeError(timeoutError)

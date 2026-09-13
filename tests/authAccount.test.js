@@ -160,7 +160,7 @@ test('send-code response only exposes a development code when appropriate', () =
   assert.deepEqual(buildSendCodeResponse({
     issued: { ok: true, email: 'local@example.com', expiresIn: 600, devCode: '123456' },
     delivery: { sent: false, devCode: '123456' },
-    env: {},
+    env: { AUTH_DEV_CODES: 'true' },
   }), { ok: true, email: 'local@example.com', expiresIn: 600, devCode: '123456' })
 
   assert.deepEqual(buildSendCodeResponse({
@@ -168,6 +168,28 @@ test('send-code response only exposes a development code when appropriate', () =
     delivery: { sent: true },
     env: { AUTH_DEV_CODES: 'false' },
   }), { ok: true, email: 'mail@example.com', expiresIn: 600 })
+})
+
+test('unsent mail never opts into exposing a development code', () => {
+  for (const env of [{}, { AUTH_DEV_CODES: 'false' }, { AUTH_MODE: 'multi_user', AUTH_DEV_CODES: 'false' }]) {
+    const result = buildSendCodeResponse({
+      issued: { email: 'fixture@example.invalid', expiresIn: 600, devCode: '123456' },
+      delivery: { sent: false, devCode: '123456' },
+      env,
+    })
+    assert.equal(Object.hasOwn(result, 'devCode'), false)
+  }
+})
+
+test('missing SMTP fails explicitly without changing default no-login local bootstrap', async () => {
+  for (const env of [{ AUTH_DEV_CODES: 'false' }, { MAIL_SERVER: ' ', MAIL_USERNAME: ' ', MAIL_PASSWORD: ' ' }]) {
+    await assert.rejects(sendEmailCode({ env, email: 'fixture@example.invalid', code: '123456' }),
+      (error) => error.code === 'AUTH_MAIL_NOT_CONFIGURED' && error.statusCode === 503)
+    const local = bootstrapAuth({ env })
+    assert.equal(local.mode, 'local')
+    assert.equal(local.authenticated, true)
+    assert.ok(local.token)
+  }
 })
 
 test('AUTH_DEV_CODES skips SMTP even when mail is configured', async () => {

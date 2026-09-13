@@ -46,7 +46,7 @@ test('explicit read-only metadata is preserved', () => {
 
 test('every builtin spec carries a complete explicit risk declaration', () => {
   const names = listBuiltinNames()
-  assert.equal(names.length, 59)
+  assert.equal(names.length, 61)
   for (const name of names) {
     const spec = getBuiltinSpec(name)
     assert.ok(spec?.metadata, `${name} metadata`)
@@ -55,6 +55,18 @@ test('every builtin spec carries a complete explicit risk declaration', () => {
     assert.ok(['read', 'write_local', 'exec', 'external'].includes(spec.metadata.category), `${name} category`)
     assert.equal(typeof spec.metadata.isConcurrencySafe, 'boolean', `${name} concurrency`)
     assert.equal(getToolMetadata(name).source, 'declared', `${name} source`)
+  }
+})
+
+test('skill and tool discovery controls are read-only and never grant execution approval', () => {
+  for (const name of ['load_skill', 'search_tools']) {
+    const metadata = getToolMetadata(name)
+    assert.equal(metadata.source, 'declared')
+    assert.equal(metadata.riskClass, 'read')
+    assert.equal(metadata.requiredApproval, false)
+    assert.equal(metadata.isReadOnly, true)
+    assert.equal(metadata.isDestructive, false)
+    assert.equal(metadata.isConcurrencySafe, false)
   }
 })
 

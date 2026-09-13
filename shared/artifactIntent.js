@@ -1,6 +1,7 @@
 import {
   ARTIFACT_DELIVERY_TARGETS,
   ARTIFACT_TERMS,
+  artifactInstructionText,
   extractFileTargetReferences,
   filenameEquals,
   intentTypes,
@@ -9,6 +10,11 @@ import {
   SKILL_PREFIX,
   typeForArtifactTool,
 } from './artifactIntentSupport.js'
+import {
+  ARTIFACT_FILE_OUTPUT_DENIAL, ARTIFACT_REDO_VERB,
+  ARTIFACT_SOFTWARE_SUBJECT_AFTER, ARTIFACT_REDO_DISCUSSION,
+  artifactMentionsBetween, hasDirectArtifactRedo,
+} from './artifactRedoIntent.js'
 
 export {
   PPT_SKILL_ID_ALIASES,
@@ -95,7 +101,7 @@ const ARTIFACT_CREATION_DENIAL_CLAUSE = /(?:不是|并非|没有|没|未)(?:让|
 const EXPLICIT_IMAGE_CREATION = /(?:(?:生成|创建|制作|设计|画|绘制)\s*(?:一|1)?(?:张|幅|个)?[^。！？!?\n]{0,16}(?:图|图片|图像|照片|海报|插图|插画|徽标|标志|logo)|(?:generate|create|make|design|draw)\s+(?:an?\s+)?[^.!?\n]{0,16}(?:image|picture|photo|poster|illustration|logo|graphic))/i
 
 function hasUnnegatedExplicitImageCreation(prompt = '') {
-  const text = String(prompt || '')
+  const text = artifactInstructionText(prompt)
   const matcher = new RegExp(EXPLICIT_IMAGE_CREATION.source, 'gi')
   for (const match of text.matchAll(matcher)) {
     const before = text.slice(Math.max(0, match.index - 32), match.index)
@@ -135,7 +141,7 @@ function isExistingAssetPlacement(text = '') {
   }
   return false
 }
-const ARTIFACT_REVISION_DENIAL = /(?:不要|不用|无需|别|禁止|停止|取消)[^，,；;：:。！？!?\n]{0,20}(?:修改|编辑|更新|优化|调整|重做|生成|导出)|(?:do\s+not|don't|dont|never|stop|cancel)[^,;:.!?\n]{0,24}(?:revise|edit|update|change|generate|export)/i
+const ARTIFACT_REVISION_DENIAL = /(?:不要|不用|无需|别|禁止|停止|取消)[^，,；;：:。！？!?\n]{0,20}(?:修改|编辑|更新|优化|调整|重做|重制|重新(?:做|制作|生成|创建|设计)|再做|生成|导出)|(?:do\s+not|don't|dont|never|stop|cancel)[^,;:.!?\n]{0,24}(?:revise|edit|update|change|generate|export|redo|remake|rebuild|recreate|regenerate|redesign)/i
 const ARTIFACT_REVISION_DISCUSSION = /^(?:(?:我想|我只是想|只是想)?(?:知道|了解|问(?:一下)?)?\s*[,，：:]?\s*(?:为什么|为何|怎么|如何)|请?(?:解释|说明|分析|讨论)|告诉我)[^。！？!?\n]{0,80}|(?:修改|编辑|调整|优化|改|换)[^。！？!?\n]{0,10}(?:是什么|什么意思|含义|原则|方法|逻辑|代码|工具)/i
 const ARTIFACT_REVISION_EXPLANATION_QUESTION = /^\s*(?:我(?:只是)?想(?:知道|了解|问(?:一下)?)|只是想(?:知道|了解))[^。！？!?\n]{0,120}(?:怎么|如何|为什么|为何)[^。！？!?\n]*[?？]\s*$/i
 // Once a deliverable is immediately adjacent, users often describe only the
@@ -178,7 +184,7 @@ export function resolveArtifactDeliveryTargets(prompt = '', {
   hasExplicitManagedArtifactReference = false,
   skillId = undefined,
 } = {}) {
-  const source = String(prompt || '').trim()
+  const source = artifactInstructionText(prompt).trim()
   const { text, references } = extractFileTargetReferences(source)
   const prior = Array.isArray(priorArtifacts) ? priorArtifacts : []
   const hasPriorArtifactContext = prior.length > 0
@@ -298,7 +304,7 @@ export function resolveArtifactDeliveryTarget(prompt = '', options = {}) {
 }
 
 export function resolveArtifactRevisionMode(prompt = '') {
-  const text = String(prompt || '').trim()
+  const text = artifactInstructionText(prompt).trim()
   if (!text) return 'unspecified'
   ARTIFACT_FILENAME_PRESERVATION.lastIndex = 0
   const preserveFilename = ARTIFACT_FILENAME_PRESERVATION.test(text)
@@ -323,16 +329,25 @@ export function resolveArtifactRevisionMode(prompt = '') {
 }
 
 export function isArtifactRevisionRequest(prompt = '', { hasPriorArtifact = false } = {}) {
-  const text = String(prompt || '').trim()
+  const text = artifactInstructionText(prompt).trim()
   if (!text
     || GLOBAL_DENIAL.test(text)
+    || ARTIFACT_FILE_OUTPUT_DENIAL.test(text)
+    || ARTIFACT_REDO_DISCUSSION.test(text)
     || ARTIFACT_REVISION_DENIAL.test(text)
     || ARTIFACT_REVISION_DISCUSSION.test(text)
     || ARTIFACT_REVISION_EXPLANATION_QUESTION.test(text)) return false
   const existingAssetPlacement = isExistingAssetPlacement(text)
   const actionText = text.replace(ARTIFACT_REVISION_SHORT_DENIAL, ' ')
   ARTIFACT_REVISION_SHORT_DENIAL.lastIndex = 0
-  const explicitRevision = ARTIFACT_REVISION_ACTION.test(actionText)
+  // Route redo verbs through the command-boundary parser, including the older
+  // redo/redesign aliases; their appearance in a question/denial is not consent.
+  const nonRedoActionText = actionText.replace(new RegExp(ARTIFACT_REDO_VERB.source, 'gi'), ' ')
+    // These compound words discuss tools/work, not the short visual-edit verb
+    // “调”. Keep explicit edits elsewhere in the same instruction detectable.
+    .replace(/调(?:用|试|查|研|度|取)/g, ' ')
+  const explicitRevision = ARTIFACT_REVISION_ACTION.test(nonRedoActionText)
+    || hasDirectArtifactRedo(actionText)
     || ARTIFACT_OBJECT_TRANSFORMATION.test(actionText)
     || existingAssetPlacement
     || resolveArtifactRevisionMode(text) !== 'unspecified'
@@ -406,17 +421,6 @@ function artifactMentionIsInputMaterial(text, match, type) {
   return !directProduction
 }
 
-function artifactMentionsBetween(text, start, end) {
-  const mentions = []
-  for (const [type, matcher] of Object.entries(ARTIFACT_TERMS)) {
-    const probe = new RegExp(matcher.source, matcher.flags.includes('g') ? matcher.flags : `${matcher.flags}g`)
-    for (const mention of text.slice(start, end).matchAll(probe)) {
-      mentions.push({ type, index: start + mention.index })
-    }
-  }
-  return mentions.sort((left, right) => left.index - right.index)
-}
-
 /**
  * Bind a generic correction such as “I never asked it to generate that” to
  * the closest artifact mention instead of denying every format in the turn.
@@ -465,6 +469,7 @@ function occurrenceIsExplicitRequest(text, match, type) {
   const identifierPrefix = text.slice(Math.max(0, match.index - 16), match.index)
 
   if (ARTIFACT_CREATION_DENIAL_CLAUSE.test(clauseAroundOccurrence(text, match))) return false
+  if (ARTIFACT_REDO_VERB.test(text) && ARTIFACT_SOFTWARE_SUBJECT_AFTER.test(after)) return false
 
   if (/(?:create|generate)[_-]$/i.test(identifierPrefix)) return false
   if (/^(?:报告|report)$/i.test(match[0])
@@ -479,21 +484,24 @@ function occurrenceIsExplicitRequest(text, match, type) {
       || IMAGE_STATE_RESULT_AFTER.test(after)
       || IMAGE_REUSE_EXISTING_BEFORE.test(before))) return false
 
+  const redoRequested = hasDirectArtifactRedo(text, match, type)
   const requested = BEFORE_ACTION.test(before)
     || ARTIFACT_OUTPUT_RELATION_BEFORE.test(before)
     || AFTER_ACTION.test(after)
+    || redoRequested
   if (!requested) return false
   if (META_QUESTION.test(before) && !/(?:帮我|请|麻烦|给我|我要|我需要|我想要|make|create|generate|export|give\s+me|i\s+(?:want|need))[^。！？!?\n]{0,24}$/i.test(before)) {
     return false
   }
-  if (META_AFTER.test(after) && !/(?:修改|编辑|更新|优化|润色|重做|edit|update|revise|redesign)[^。！？!?\n]{0,20}$/i.test(before)) {
+  if (META_AFTER.test(after) && !redoRequested
+    && !/(?:修改|编辑|更新|优化|润色|重做|edit|update|revise|redesign)[^。！？!?\n]{0,20}$/i.test(before)) {
     return false
   }
   return true
 }
 
 function hasExplicitArtifactCreationRequest(prompt = '', type) {
-  const text = String(prompt || '').trim()
+  const text = artifactInstructionText(prompt).trim()
   const matcher = ARTIFACT_TERMS[type]
   if (!text || !matcher) return false
   matcher.lastIndex = 0
@@ -507,9 +515,10 @@ function hasExplicitArtifactCreationRequest(prompt = '', type) {
 }
 
 export function hasExplicitArtifactRequest(prompt = '', type) {
-  const text = String(prompt || '').trim()
+  const text = artifactInstructionText(prompt).trim()
   const matcher = ARTIFACT_TERMS[type]
-  if (!text || !matcher || ARTIFACT_REVISION_EXPLANATION_QUESTION.test(text)) return false
+  if (!text || !matcher || ARTIFACT_REVISION_EXPLANATION_QUESTION.test(text)
+    || ARTIFACT_FILE_OUTPUT_DENIAL.test(text) || ARTIFACT_REDO_DISCUSSION.test(text)) return false
   // Denials are scoped to each concrete format occurrence below. Treating a
   // sentence-wide denial as universal would turn “continue the website, but
   // do not generate a new image” into no artifact intent at all. The image
@@ -527,7 +536,7 @@ function detectArtifactIntentRaw(prompt = '', {
   priorArtifactTypes = [],
   hasPriorArtifact = false,
 } = {}) {
-  const text = String(prompt || '')
+  const text = artifactInstructionText(prompt)
   const revisionRequest = isArtifactRevisionRequest(text, {
     hasPriorArtifact: hasPriorArtifact || priorArtifactTypes.length > 0,
   })

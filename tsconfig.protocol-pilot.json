@@ -12,7 +12,11 @@
     "shared/turnEventTransport.js",
     "shared/turnWebSocketProtocol.js",
     "server/core/turnWebSocketFrameCodec.js",
+    "server/core/managedAttachmentGovernancePort.js",
+    "server/core/loopHostCapability.js",
+    "server/core/durableAgentEventConsumerHostSupport.js",
     "types/turn-protocol.ts",
+    "types/kernel-ports.ts",
     "types/fixtures/protocol.valid.ts"
   ],
   "include": []

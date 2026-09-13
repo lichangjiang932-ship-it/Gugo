@@ -21,6 +21,7 @@ function initializeArtifactContracts(s) {
     patchOnlyWorkspaceIntent: s.patchOnlyWorkspaceIntent,
     independentImageCreationRequested: s.independentImageCreationRequested,
     hasSuccessfulExpectedPathWrite: () => s.successfulExpectedPathWriteObserved,
+    locale: s.locale,
   }).validate
   s.restoredDisabledToolNames = Array.isArray(s.restoredState?.completionGuards?.disabledToolNames)
     ? s.restoredState.completionGuards.disabledToolNames
@@ -28,6 +29,7 @@ function initializeArtifactContracts(s) {
   s.disabledToolGuard = createDisabledToolGuard({
     toolsConfig: s.toolsConfig,
     restoredDisabledToolNames: s.restoredDisabledToolNames,
+    locale: s.locale,
   })
   s.disabledToolNames = s.disabledToolGuard.disabledToolNames
   s.disabledToolValidationError = s.disabledToolGuard.validate
@@ -161,6 +163,7 @@ function initializeExecutionIntent(s) {
   s.explicitReadOnlyValidationError = createExplicitReadOnlyGuard({
     enabled: s.explicitReadOnlyConstraint,
     userId: s.job?.userId || null,
+    locale: s.locale,
   }).validate
   s.enforceExecutionIntent = s.executionGuardMode !== 'read_only_exploration'
   s.recoveredPriorLocalTargets = recoverPriorLocalMutationTargets(
@@ -229,6 +232,22 @@ function initializeExecutionIntent(s) {
   )
 }
 
+function restoreDynamicSkills(s) {
+  const initialSkillIds = (Array.isArray(s.job?.skillIds) ? s.job.skillIds : [])
+    .map((id) => String(id || '').trim())
+    .filter((id) => id && id.length <= 128)
+  const restoredSkillIds = (Array.isArray(s.restoredState?.completionGuards?.dynamicallyLoadedSkillIds)
+    ? s.restoredState.completionGuards.dynamicallyLoadedSkillIds
+    : [])
+    .map((id) => String(id || '').trim())
+    .filter((id) => id && id.length <= 128
+      && s.d.hasRuntimeSkillActivationBlock(s.restoredState?.messages, id))
+    .slice(0, s.d.MAX_DYNAMIC_SKILLS_PER_TURN)
+  s.dynamicallyLoadedSkillIds = new Set(restoredSkillIds)
+  s.loadedSkillIds = new Set([...initialSkillIds, ...restoredSkillIds])
+  s.job = { ...s.job, skillIds: [...s.loadedSkillIds] }
+}
+
 function restoreDynamicExecutionTools(s) {
   const {
     DYNAMIC_EXECUTION_TOOL_NAMES,
@@ -248,13 +267,24 @@ function restoreDynamicExecutionTools(s) {
       && message.tool_calls.some((call) => DYNAMIC_MUTATION_TOOL_NAMES.has(String(
         call?.function?.name || call?.name || '',
       ).trim())))
+  const deferredToolNames = new Set(
+    s.eligibleFallbackToolSpecs.map(toolNameFromSpec).filter(Boolean),
+  )
   s.restoredDynamicToolNames = new Set(
     (Array.isArray(s.restoredState?.completionGuards?.dynamicallyMountedToolNames)
       ? s.restoredState.completionGuards.dynamicallyMountedToolNames
       : []).map((name) => String(name || '').trim())
-      .filter((name) => DYNAMIC_EXECUTION_TOOL_NAMES.has(name)),
+      .filter((name) => name && name !== 'search_tools' && deferredToolNames.has(name))
+      .slice(0, 64),
   )
   s.dynamicallyMountedToolNames = new Set(s.restoredDynamicToolNames)
+  if (s.restoredDynamicToolNames.size > 0) {
+    s.activeToolSpecs = restoreNamedToolSpecs(
+      s.activeToolSpecs,
+      s.eligibleFallbackToolSpecs,
+      s.restoredDynamicToolNames,
+    )
+  }
   s.dynamicExecutionRecoverySignatures = new Set()
   s.capabilityMode = resolveChatCapabilityMode({
     prompt: s.intentText,
@@ -277,7 +307,7 @@ function restoreDynamicExecutionTools(s) {
     s.activeToolSpecs = restoreNamedToolSpecs(
       s.activeToolSpecs,
       s.eligibleFallbackToolSpecs,
-      new Set([...DYNAMIC_EXECUTION_TOOL_NAMES, ...s.restoredDynamicToolNames]),
+      DYNAMIC_EXECUTION_TOOL_NAMES,
     )
     for (const spec of s.activeToolSpecs) {
       const name = toolNameFromSpec(spec)
@@ -396,6 +426,8 @@ function installCapabilityDecision(s) {
       selectedTools,
       dynamicallyMountedTools: [...s.dynamicallyMountedToolNames]
         .sort().slice(0, MAX_CAPABILITY_TOOL_NAMES),
+      dynamicallyLoadedSkills: [...s.dynamicallyLoadedSkillIds]
+        .sort().slice(0, s.d.MAX_DYNAMIC_SKILLS_PER_TURN),
       excludedTools,
       discoveryIssues: Array.isArray(s.toolResolutionDecision?.discoveryIssues)
         ? s.toolResolutionDecision.discoveryIssues
@@ -415,6 +447,7 @@ export async function initializeArtifacts(s) {
   initializeArtifactContracts(s)
   initializeArtifactToolVisibility(s)
   initializeExecutionIntent(s)
+  restoreDynamicSkills(s)
   restoreDynamicExecutionTools(s)
   installCapabilityDecision(s)
   return { kind: 'next' }

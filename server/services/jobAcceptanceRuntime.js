@@ -267,9 +267,10 @@ export async function runVerificationRepairLoop({
     && !result?.truncated
     && result?.acceptance?.verdict === 'needs_user'
   ) {
+    // Waiting for clarification continues this job; only an explicit retry
+    // may reset its accumulated tool/model usage and iteration allowance.
     checkpoint.makeResumable(
       { jobId: job.id, stepId: nextStep.id, userId: job.userId },
-      { resetBudget: true },
     )
     result = {
       ...result,

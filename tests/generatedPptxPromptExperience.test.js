@@ -202,6 +202,59 @@ test('reading and updating the real source replaces the same PPTX while retainin
   assert.equal(listSessionTurnArtifacts(current).length, 1)
 })
 
+test('a visual redesign changes the actual PPTX colors, typography, dimensions and placement without replacing its identity or text', async () => {
+  const current = scope('visual redesign')
+  const firstSource = {
+    title: 'Editable design example',
+    design: { background: '07121F', foreground: 'E6F7FF', accent: '38BDF8',
+      heading_font: 'Arial', body_font: 'Arial', heading_font_size: 40, body_font_size: 22,
+      aspect_ratio: '16:9', show_brand: false, show_date: false, show_page_numbers: false },
+    slides: [{ title: 'Editable design example', layout: 'canvas', elements: [
+      { type: 'text', role: 'heading', text: 'Same content, a different composition',
+        x: 0.07, y: 0.14, w: 0.80, h: 0.28, color: '38BDF8', bold: true },
+      { type: 'text', text: 'The design changes while every supplied word stays editable.',
+        x: 0.07, y: 0.58, w: 0.72, h: 0.25, font_face: 'Arial', font_size: 22 },
+    ] }],
+  }
+  const first = await generate(current, firstSource)
+  assert.equal(first.ok, true, JSON.stringify(first))
+  const firstBytes = fs.readFileSync(first.path)
+  const firstPkg = await inspectPptx(first.path)
+  const revised = await readSourceThroughTool(current, first.artifactId)
+  revised.design = { ...revised.design, background: 'FFF6E5', foreground: '5B2F26', accent: '9A3412',
+    heading_font: 'Georgia', body_font: 'Georgia', heading_font_size: 34, body_font_size: 20, aspect_ratio: '4:3' }
+  revised.slides[0].elements = revised.slides[0].elements.map((element, index) => {
+    const next = { ...element, x: 0.12, y: index === 0 ? 0.32 : 0.65, w: 0.76, h: index === 0 ? 0.27 : 0.22, align: 'center' }
+    for (const override of ['color', 'font_face', 'font_size']) delete next[override]
+    return next
+  })
+  const job = turnJob(current.userId, current.sessionId,
+    '将原PPT改为暖色纸张感和居中排版，4:3，Georgia字体，保留全部原文，不保留之前的逐元素颜色和字体覆盖。')
+  const result = await generate(current, { ...revised, replace_artifact_id: first.artifactId }, job)
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.replaced, true)
+  for (const key of ['artifactId', 'filename', 'url', 'path']) assert.equal(result[key], first[key])
+  assert.equal(fs.readFileSync(result.path).equals(firstBytes), false)
+  const after = await inspectPptx(result.path)
+  const texts = pkg => nodes(pkg.slide, DRAWING_NS, 't').map(node => node.textContent)
+  assert.deepEqual(texts(after), texts(firstPkg))
+  const background = pkg => nodes(nodes(pkg.slide, PRESENTATION_NS, 'bg')[0], DRAWING_NS, 'srgbClr')[0].getAttribute('val')
+  assert.equal(background(firstPkg), '07121F')
+  assert.equal(background(after), 'FFF6E5')
+  const size = nodes(after.presentation, PRESENTATION_NS, 'sldSz')[0]
+  assert.equal(Number(size.getAttribute('cx')) / Number(size.getAttribute('cy')), 4 / 3)
+  for (const font of nodes(after.slide, DRAWING_NS, 'latin')) assert.equal(font.getAttribute('typeface'), 'Georgia')
+  for (const node of nodes(after.slide, DRAWING_NS, 't')) {
+    const properties = nodes(node.parentElement, DRAWING_NS, 'rPr')[0]
+    assert.equal(nodes(properties, DRAWING_NS, 'srgbClr')[0].getAttribute('val'), '5B2F26')
+  }
+  const offsets = pkg => nodes(pkg.slide, DRAWING_NS, 'off').map(node => [node.getAttribute('x'), node.getAttribute('y')])
+  assert.notDeepEqual(offsets(after), offsets(firstPkg))
+  assert.equal(nodes(after.slide, PRESENTATION_NS, 'pic').length, 0, 'meaningful words must remain native editable text')
+  assert.deepEqual(await readSourceThroughTool(current, result.artifactId), revised)
+  assert.equal(listSessionTurnArtifacts(current).length, 1)
+})
+
 const invalidCases = [
   { label: 'overflowing element geometry', mutate: (args) => { args.slides[0].elements[0].x = 0.8 }, code: 'PPTX_CONTENT_INVALID' },
   { label: 'unequal table rows', mutate: (args) => { args.slides[0].elements[1].table.rows[1].pop() }, code: 'PPTX_CONTENT_INVALID' },

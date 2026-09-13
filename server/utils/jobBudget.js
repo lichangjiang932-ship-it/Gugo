@@ -9,13 +9,13 @@ export const RETIRED_DOLLAR_BUDGET_ERROR_CODE = 'JOB_BUDGET_DOLLAR_GATE_RETIRED'
 /**
  * 任务级工具预算(M3.5)。
  *
- * runToolsLoop 已经有 maxIters=6,但每 iter 可以请求 N 个 tool calls,
- * 加上 Agent 工具能 spawn 子代理(子代理又有自己的 8 iter),
+ * runToolsLoop 每 iter 可以请求 N 个 tool calls,
+ * 加上 Agent 工具能 spawn 子代理(子代理又有自己的循环),
  * 一个失控 job 实际可以炸到几百个工具调用 → token 烧爆.
  *
  * 本模块给 job 一个累积预算:
- *   - maxTotalCalls(默认 80):整个 job 所有 step + 所有子代理总和工具调用数
- *   - maxWallMs(默认 10 分钟):job 总挂钟时间
+ *   - maxTotalCalls(默认 2000):整个 job 所有 step + 所有子代理总和工具调用数
+ *   - maxWallMs(默认 6 小时):累计工作墙钟,不含模型等待和持久化的计划挂起
  *   - 任一超限 → 后续 executeTool 直接拒绝返回 { ok:false, error:'budget exceeded' }
  *
  * 由 jobRuntime 在 job 启动时 createJobBudget,挂在 job 上;
@@ -28,20 +28,22 @@ export const RETIRED_DOLLAR_BUDGET_ERROR_CODE = 'JOB_BUDGET_DOLLAR_GATE_RETIRED'
 // 光探索就可能几十次,真正改代码又是几十次,还要验证。碰到上限
 // 用户看到的就是「做到一半没后续」。用 JOB_MAX_TOOL_CALLS 可覆盖。
 function envLimit(env, name, fallback) {
-  const raw = Number(env?.[name])
+  const value = env?.[name]
+  if ((typeof value !== 'string' && typeof value !== 'number') || String(value).trim() === '') {
+    return fallback
+  }
+  const raw = Number(value)
   return Number.isFinite(raw) && raw >= 0 ? raw : fallback
 }
 
 export function resolveJobBudgetDefaults(env = process.env) {
-  const rawToolCalls = Number(env?.JOB_MAX_TOOL_CALLS)
-  const rawWallMs = Number(env?.JOB_MAX_WALL_MS)
+  const rawToolCalls = envLimit(env, 'JOB_MAX_TOOL_CALLS', 2000)
+  const rawWallMs = envLimit(env, 'JOB_MAX_WALL_MS', 6 * 60 * 60 * 1000)
   return {
-    maxTotalCalls: Number.isFinite(rawToolCalls) && rawToolCalls > 0
+    maxTotalCalls: rawToolCalls > 0
       ? Math.floor(rawToolCalls)
       : 2000,
-    maxWallMs: Number.isFinite(rawWallMs) && rawWallMs >= 0
-      ? Math.floor(rawWallMs)
-      : 6 * 60 * 60 * 1000,
+    maxWallMs: Math.floor(rawWallMs),
     maxModelCalls: envLimit(env, 'JOB_MAX_MODEL_CALLS', 2000),
     maxModelTokens: envLimit(env, 'JOB_MAX_MODEL_TOKENS', 0),
   }

@@ -79,13 +79,90 @@ async function cancellingProjection(getTurn, scope) {
   return settledStatus ? { ...turn, status: settledStatus } : { ...turn, status: 'cancelling' }
 }
 
-async function cancelWithExecutionLease(ports, scope, cancellationLease) {
+export function validateDirectoryPausedSequence(value) {
+  if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+    const error = new TurnEngineError(
+      'TURN_DIRECTORY_PAUSE_SEQUENCE_INVALID',
+      'directoryPausedSequence must be a non-negative safe integer',
+      400,
+    )
+    error.retryable = false
+    throw error
+  }
+  return value
+}
+
+function assertDirectoryPause(event, scope, sequence) {
+  const clarification = event?.payload?.clarification
+  if (event?.sessionId !== scope.sessionId || event?.turnId !== scope.turnId
+    || (event.userId !== undefined && event.userId !== scope.userId)
+    || event.type !== 'turn.paused' || event.sequence !== sequence
+    || !isRecord(clarification)
+    || (clarification.request_type || clarification.requestType) !== 'directory') {
+    const error = new TurnEngineError(
+      'TURN_DIRECTORY_PAUSE_STALE',
+      'The directory request is no longer the current pending pause.',
+      409,
+    )
+    error.retryable = false
+    throw error
+  }
+}
+
+function directoryCancellationConflict() {
+  const error = new TurnEngineError(
+    'TURN_CANCELLATION_CONFLICT',
+    'directory cancellation could not acquire an idle execution fence',
+    409,
+  )
+  error.retryable = true
+  return error
+}
+
+async function assertFencedDirectoryPause(ports, scope, lease, sequence) {
+  const latest = await ports.lastEvent(scope)
+  assertDirectoryPause(latest, scope, sequence)
+  if (ports.readActiveTurn(scope) || lease.controller?.signal?.aborted) {
+    throw directoryCancellationConflict()
+  }
+  return latest
+}
+
+async function cancelDirectoryPause(ports, scope, sequence) {
+  validateDirectoryPausedSequence(sequence)
+  if (!Object.values(scope).every((value) => (
+    typeof value === 'string' && value.length > 0 && value.length <= 500 && value === value.trim()
+  ))) {
+    throw new TurnEngineError('TURN_DIRECTORY_CANCELLATION_SCOPE_INVALID', 'An exact owner, session and turn are required.', 400)
+  }
+  const session = await ports.readSession({ userId: scope.userId, sessionId: scope.sessionId })
+  // A stale card is not authority to claim a legacy session or cancel another
+  // owner's work. This guarded path never reaches the ordinary abort/request flow.
+  // The session port is queried with userId; production intentionally omits
+  // owner fields from its public DTO. Reject an explicit conflicting owner.
+  if (session?.id !== scope.sessionId
+    || (session.userId !== undefined && session.userId !== scope.userId)) {
+    throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
+  }
+  assertDirectoryPause(await ports.lastEvent(scope), scope, sequence)
+  if (ports.readActiveTurn(scope)) throw directoryCancellationConflict()
+  const lease = await ports.acquireLease(scope)
+  if (!lease) throw directoryCancellationConflict()
+  return cancelWithExecutionLease(ports, scope, lease, sequence)
+}
+
+async function cancelWithExecutionLease(ports, scope, cancellationLease, directoryPausedSequence) {
   const { userId, sessionId, turnId } = scope
+  const guarded = directoryPausedSequence !== undefined
   try {
-    try { await ports.requestCancellation(scope) } catch { /* lease ownership is authoritative */ }
-    try { await ports.closeSteeringInbox(scope) } catch { /* terminal fence remains authoritative */ }
-    ports.releaseApproval(scope)
-    const fencedLast = await ports.lastEvent(scope)
+    if (!guarded) {
+      try { await ports.requestCancellation(scope) } catch { /* lease ownership is authoritative */ }
+      try { await ports.closeSteeringInbox(scope) } catch { /* terminal fence remains authoritative */ }
+      ports.releaseApproval(scope)
+    }
+    const fencedLast = guarded
+      ? await assertFencedDirectoryPause(ports, scope, cancellationLease, directoryPausedSequence)
+      : await ports.lastEvent(scope)
     if (!fencedLast) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
     if (settledTurnStatus(fencedLast)) return await ports.getTurn(scope)
 
@@ -145,6 +222,9 @@ async function cancelWithExecutionLease(ports, scope, cancellationLease) {
       modelContext: { ...context, turnEvidence: true, evidenceState: 'cancelled' },
       createdAt: cancelledAt, updatedAt: cancelledAt,
     }
+    if (guarded) {
+      await assertFencedDirectoryPause(ports, scope, cancellationLease, directoryPausedSequence)
+    }
     const atomicTurnBoundary = !!ports.commitTurnBoundary
     const emit = ports.createEmitter({
       userId, sessionId, turnId, sequence: fencedLast.sequence + 1,
@@ -171,6 +251,12 @@ async function cancelWithExecutionLease(ports, scope, cancellationLease) {
       })
     } finally {
       await emit.close()
+    }
+    if (guarded) {
+      // Only a durably cancelled turn permits ancillary cleanup. In particular
+      // never mark a possibly superseding worker's lease cancellation_requested.
+      try { await ports.closeSteeringInbox(scope) } catch { /* the terminal event is authoritative */ }
+      ports.releaseApproval(scope)
     }
   } finally {
     await cancellationLease.release()
@@ -223,8 +309,11 @@ export function createTurnCancellationRuntime({
   }
 
   return Object.freeze({
-    async cancel({ userId, sessionId, turnId, authMode = null }) {
+    async cancel({ userId, sessionId, turnId, authMode = null, directoryPausedSequence }) {
       const scope = { userId, sessionId, turnId }
+      if (directoryPausedSequence !== undefined) {
+        return cancelDirectoryPause(ports, scope, directoryPausedSequence)
+      }
       if (!await ports.readSession({ userId, sessionId }) && authMode === 'local') {
         await ports.claimLegacySession({ userId, sessionId, authMode })
       }

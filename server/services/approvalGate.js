@@ -27,10 +27,90 @@ import {
 } from './approvalGateAuthorization.js'
 
 export {
-  formatDeniedToolResult,
   revalidateHookAuthorization,
   revalidateToolPermission,
 } from './approvalGateAuthorization.js'
+
+function localized(locale, zh, en) {
+  return locale === 'zh' ? zh : en
+}
+
+/**
+ * 把 gate 的拒绝结果翻译成给模型看的工具结果。
+ * 关键是让模型能区分用户拒绝 / 系统故障 / 超时取消并采取不同行动。
+ */
+export function formatDeniedToolResult(gate, locale = 'zh') {
+  const base = { ok: false, denied: true, error: gate?.reason || localized(locale, '调用未获批准', 'The call was not approved') }
+  if (gate?.systemFailure) {
+    const retryable = gate.retryable !== false
+    return {
+      ...base,
+      denied: false, // 不是「被拒绝」,是没走成
+      systemFailure: true,
+      retryable,
+      error: retryable
+        ? localized(locale,
+          `${gate.reason || '审批系统暂时不可用'}。这是系统故障,不是用户拒绝 —— 可以稍后重试,不要因此放弃任务或要求用户手动操作。`,
+          `${gate.reason || 'The approval system is temporarily unavailable'}. This is a system failure, not a user rejection — you can retry later; do not abandon the task or ask the user to act manually.`)
+        : localized(locale,
+          `${gate.reason || '授权已失效'}。这是安全校验失败,不是用户拒绝；必须重新发起工具调用获取新的授权。`,
+          `${gate.reason || 'The authorization is no longer valid'}. This is a security check failure, not a user rejection; you must re-issue the tool call to obtain a fresh authorization.`),
+    }
+  }
+  if (gate?.expired) {
+    return {
+      ...base,
+      expired: true,
+      error: localized(locale,
+        `${gate.reason}。用户可能不在,可以先做不需要批准的部分。`,
+        `${gate.reason}. The user may be away; you can proceed with parts that do not need approval.`),
+    }
+  }
+  if (gate?.cancelled) {
+    return { ...base, cancelled: true, error: gate.reason }
+  }
+  if (gate?.approvalRequired) {
+    return {
+      ...base,
+      denied: false,
+      code: 'approval_required',
+      approvalRequired: true,
+      retryable: true,
+      permissionMode: gate.permissionMode || null,
+      suggestedPermissionMode: gate.suggestedPermissionMode || 'normal',
+      error: localized(locale,
+        `${gate.reason || '本次工具调用尚未获得批准'}。请重新发起该工具调用以创建新的逐次审批请求；获得用户批准后再继续。`,
+        `${gate.reason || 'This tool call has not been approved yet'}. Re-issue the tool call to create a new per-call approval request; continue after the user approves.`),
+    }
+  }
+  if (gate?.policyDenied) {
+    const currentMode = gate.permissionMode === 'plan'
+      ? localized(locale, '计划模式', 'Plan mode')
+      : String(gate.permissionMode || localized(locale, '当前模式', 'the current mode'))
+    const suggestedMode = gate.suggestedPermissionMode === 'acceptEdits'
+      ? localized(locale, '自动接受编辑模式', 'auto-accept edits mode')
+      : localized(locale, '正常模式', 'normal mode')
+    return {
+      ...base,
+      code: gate.permissionMode === 'plan'
+        ? 'policy_denied_plan_mode'
+        : 'policy_denied_permission_mode',
+      policyDenied: true,
+      permissionMode: gate.permissionMode || null,
+      suggestedPermissionMode: gate.suggestedPermissionMode || 'normal',
+      error: localized(locale,
+        `该工具存在，但操作在${currentMode}下被策略禁止。请切换到${suggestedMode}后继续；不要将此解释为缺少写入或执行工具。`,
+        `The tool exists, but the operation is forbidden by policy under ${currentMode}. Switch to ${suggestedMode} and continue; do not interpret this as a missing write or execution tool.`),
+    }
+  }
+  return {
+    ...base,
+    deniedByUser: true,
+    error: localized(locale,
+      `${gate?.reason || '用户拒绝了这次调用'}。请换一个方案,不要重复请求同一个操作。`,
+      `${gate?.reason || 'The user rejected this call'}. Try a different approach; do not repeat the same operation.`),
+  }
+}
 
 /** approvalId → Set<resolve>。同进程决策时立刻唤醒等待者。 */
 const waiters = new Map()
@@ -93,6 +173,7 @@ export function enqueueApprovalRequest({
   notificationTitle = null,
   notificationBody = null,
   notificationData = jobApprovalNotificationData({ origin, jobId }),
+  locale = 'zh',
 } = {}) {
   const approval = createPendingApproval({
     userId,
@@ -113,8 +194,8 @@ export function enqueueApprovalRequest({
     createNotification({
       userId,
       kind: 'approval',
-      title: notificationTitle || `需要批准:${toolName}`,
-      body: notificationBody || reason || '有一个操作等待你的批准',
+      title: notificationTitle || localized(locale, `需要批准:${toolName}`, `Approval required: ${toolName}`),
+      body: notificationBody || reason || localized(locale, '有一个操作等待你的批准', 'There is an operation waiting for your approval'),
       link: `/approvals?id=${encodeURIComponent(approval.id)}`,
       data: {
         ...(notificationData && typeof notificationData === 'object' ? notificationData : {}),
@@ -156,6 +237,7 @@ export async function requestApproval({
   requestId = null,
   toolCallId = null,
   taskGrants = [],
+  locale = 'zh',
 } = {}) {
   const authorization = authorizeApprovalRequest({
     userId,
@@ -173,6 +255,7 @@ export async function requestApproval({
     requestId,
     toolCallId,
     taskGrants,
+    locale,
   })
   if (authorization.gate) return authorization.gate
   const {
@@ -197,6 +280,7 @@ export async function requestApproval({
       policyProvenance,
       reason,
       expiresAt: Date.now() + resolveApprovalTimeoutMs(),
+      locale,
     })
   } catch (err) {
     // 写不进审批表 = 无法保证门控 → 保守拒绝,不静默放行。
@@ -204,7 +288,7 @@ export async function requestApproval({
     console.error('[approval] 创建审批失败,保守拒绝:', err?.stack || err)
     return {
       proceed: false,
-      reason: '审批系统暂时不可用,已保守拒绝',
+      reason: localized(locale, '审批系统暂时不可用,已保守拒绝', 'The approval system is temporarily unavailable; execution was conservatively rejected.'),
       systemFailure: true,
       retryable: true,
       policyProvenance,
@@ -232,6 +316,7 @@ export async function requestApproval({
       toolName,
       policyProvenance,
     },
+    locale,
   })
 }
 
@@ -244,6 +329,7 @@ export function waitForDecision({
   pollIntervalMs = POLL_INTERVAL_MS,
   cancelOnAbort = null,
   expectedApprovalContext = null,
+  locale = 'zh',
 } = {}) {
   return new Promise((resolve) => {
     let settled = false
@@ -289,7 +375,7 @@ export function waitForDecision({
         if (consecutiveReadFailures >= MAX_READ_FAILURES) {
           settle({
             proceed: false,
-            reason: '审批系统读取持续失败,已保守拒绝',
+            reason: localized(locale, '审批系统读取持续失败,已保守拒绝', 'The approval system read kept failing; execution was conservatively rejected.'),
             approvalId,
             systemFailure: true,
             retryable: true,
@@ -297,7 +383,7 @@ export function waitForDecision({
         }
         return
       }
-      const decision = terminalDecisionForCurrentMode(approval, expectedApprovalContext)
+      const decision = terminalDecisionForCurrentMode(approval, expectedApprovalContext, locale)
       if (decision) settle(decision)
     }
 
@@ -314,7 +400,7 @@ export function waitForDecision({
           console.error('[approval] 取消断连审批失败:', err?.stack || err)
         }
       }
-      settle({ proceed: false, reason: '任务已中止', approvalId, cancelled: true })
+      settle({ proceed: false, reason: localized(locale, '任务已中止', 'The task was aborted'), approvalId, cancelled: true })
     }
 
     if (signal?.aborted) {
@@ -344,11 +430,12 @@ export function resumePersistedApproval({
   signal = null,
   expectedApprovalContext = null,
   requireTerminal = false,
+  locale = 'zh',
 } = {}) {
   if (!approvalId) {
     return Promise.resolve({
       proceed: false,
-      reason: 'Missing persisted approval id',
+      reason: localized(locale, '缺少已持久化的审批 ID', 'Missing persisted approval id'),
       systemFailure: true,
       retryable: true,
     })
@@ -357,11 +444,14 @@ export function resumePersistedApproval({
   const decision = terminalDecisionForCurrentMode(
     approval,
     expectedApprovalContext,
+    locale,
   )
   if (!decision && requireTerminal) {
     return Promise.resolve({
       proceed: false,
-      reason: '执行快照引用的审批仍未完成，已保守拒绝恢复执行',
+      reason: localized(locale,
+        '执行快照引用的审批仍未完成，已保守拒绝恢复执行',
+        'The approval referenced by the execution snapshot is still pending; resumption was conservatively rejected.'),
       code: 'approval_not_terminal',
       approvalContextMismatch: true,
       retryable: false,
@@ -371,7 +461,7 @@ export function resumePersistedApproval({
   }
   return decision
     ? Promise.resolve(decision)
-    : waitForDecision({ approvalId, signal, expectedApprovalContext })
+    : waitForDecision({ approvalId, signal, expectedApprovalContext, locale })
 }
 
 /** 测试用:清空内存等待者,避免用例间串扰。 */

@@ -88,12 +88,14 @@ export async function extractAndStoreAutoMemories({
   messages = [],
   assistantText = '',
   callModel,
+  signal = null,
 } = {}) {
-  if (!userId || typeof callModel !== 'function' || !shouldExtractAutoMemory(messages, assistantText)) {
+  if (signal?.aborted || !userId || typeof callModel !== 'function' || !shouldExtractAutoMemory(messages, assistantText)) {
     return { attempted: false, stored: [], skipped: true }
   }
   const { message: sourceMessage, text: userText } = latestUserMessage(messages)
   const response = await callModel({
+    ...(signal ? { signal } : {}),
     messages: [
       {
         role: 'system',
@@ -116,6 +118,9 @@ export async function extractAndStoreAutoMemories({
       },
     ],
   })
+  // A provider or injected adapter may settle after cancellation. Never
+  // reopen persistence or write optional memories after the engine closes.
+  if (signal?.aborted) return { attempted: true, stored: [], skipped: true }
   const parsed = parseJsonObject(response)
   const candidates = (Array.isArray(parsed?.memories) ? parsed.memories : [])
     .slice(0, MAX_MEMORIES_PER_TURN)
@@ -133,6 +138,7 @@ export async function extractAndStoreAutoMemories({
     : []
   const stored = []
   for (const candidate of candidates) {
+    if (signal?.aborted) break
     const titleKey = normalizeForMatch(candidate.title)
     const bodyKey = normalizeForMatch(candidate.body)
     const matchingManual = [...existing, ...globalManual].find((memory) =>
@@ -171,12 +177,22 @@ export async function extractAndStoreAutoMemories({
 }
 
 export function scheduleAutoMemoryExtraction(options = {}) {
-  setImmediate(() => {
+  const { signal } = options
+  if (signal?.aborted) return
+  const cancelQueuedExtraction = () => {
+    clearImmediate(task)
+    signal?.removeEventListener('abort', cancelQueuedExtraction)
+  }
+  const task = setImmediate(() => {
+    signal?.removeEventListener('abort', cancelQueuedExtraction)
+    if (signal?.aborted) return
     extractAndStoreAutoMemories(options).catch((error) => {
+      if (signal?.aborted) return
       logWarn('memory.auto_extract', error?.message || error, {
         userId: options.userId || null,
         sessionId: options.sessionId || null,
       })
     })
   })
+  signal?.addEventListener('abort', cancelQueuedExtraction, { once: true })
 }

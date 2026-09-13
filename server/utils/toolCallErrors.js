@@ -1,14 +1,9 @@
 import { isPlainObject, toolError } from './toolCallPrimitives.js'
+import { redactSensitiveText } from '../../shared/sensitiveText.js'
+export { redactSensitiveText } from '../../shared/sensitiveText.js'
 
 const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 const MAX_ERROR_TEXT_CHARS = 2_000
-
-export function redactSensitiveText(value) {
-  return String(value ?? '').replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/giu, 'Bearer [REDACTED]')
-    .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|sk_(?:live|test)_[A-Za-z0-9]{12,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_-]{12,})\b/giu, '[REDACTED]')
-    .replace(/\b(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|token|password|passwd|secret)\s*[=:]\s*[^\s,;]+/giu, '$1=[REDACTED]')
-    .replace(/([?&](?:api[_-]?key|access[_-]?token|token|password|secret)=)[^&#\s]+/giu, '$1[REDACTED]')
-}
 
 function safeErrorText(value, fallback = '') {
   const text = String(value ?? fallback)

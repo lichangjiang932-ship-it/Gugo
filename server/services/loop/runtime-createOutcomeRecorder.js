@@ -1,5 +1,121 @@
 import { assertRuntimeStage } from './runtimeContract.js'
 import { withProviderExecutionArguments } from '../../adapters/providerReplayState.js'
+import { recordMutationVerificationRecoveryOutcome } from './mutationVerificationRecovery.js'
+import { artifactPreviewIdentity } from '../artifactPreviewIdentity.js'
+
+function toolSearchScore(spec, query) {
+  const name = String(spec?.function?.name || '').trim().toLowerCase()
+  const description = String(spec?.function?.description || '').trim().toLowerCase()
+  const normalizedQuery = String(query || '').trim().toLowerCase()
+  if (!name || !normalizedQuery) return 0
+  const compactQuery = normalizedQuery.replace(/[\s-]+/gu, '_')
+  let score = name === compactQuery ? 100 : name.includes(compactQuery) ? 50 : 0
+  const terms = [...new Set(normalizedQuery.match(/[\p{L}\p{N}_-]+/gu) || [])]
+  for (const term of terms) {
+    if (term.length < 2) continue
+    if (name.includes(term)) score += 12
+    else if (description.includes(term)) score += 3
+  }
+  return score
+}
+
+function activateSearchedTools(s, outcome, executedCall) {
+  if (executedCall?.name !== 'search_tools' || outcome.result?.ok !== true) return
+  const { VERIFICATION_TOOLS, isCommandExecutionTool, isFileArtifactTool,
+    replaceRuntimeCapabilityBlock, toolNameFromSpec } = s.d
+  const query = String(executedCall.args?.query || '').trim()
+  const limit = Math.max(1, Math.min(20, Math.floor(Number(executedCall.args?.limit) || 8)))
+  const activeNames = new Set(s.activeToolSpecs.map(toolNameFromSpec).filter(Boolean))
+  const matches = s.eligibleFallbackToolSpecs
+    .map((spec) => ({ spec, name: toolNameFromSpec(spec), score: toolSearchScore(spec, query) }))
+    .filter(({ name, score }) => name && name !== 'search_tools' && score > 0
+      && (!isFileArtifactTool(name) || s.authorizedArtifactTools.has(name)))
+    .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name, 'en'))
+    .slice(0, limit)
+  const activated = []
+  for (const { spec, name } of matches) {
+    if (activeNames.has(name)) continue
+    s.activeToolSpecs.push(spec)
+    activeNames.add(name)
+    activated.push(name)
+    s.dynamicallyMountedToolNames.add(name)
+  }
+  outcome.result = {
+    ok: true,
+    query,
+    matches: matches.map(({ spec, name }) => ({
+      name,
+      description: String(spec?.function?.description || '').trim().slice(0, 500),
+      activated: activeNames.has(name),
+    })),
+    activatedToolNames: activated,
+  }
+  if (!activated.length) return
+  s.convo = replaceRuntimeCapabilityBlock(s.convo, {
+    toolSpecs: s.activeToolSpecs,
+    approvalMode: s.approvalMode,
+    ...s.outputDirectoryContext,
+  })
+  s.availableVerificationToolNames = s.activeToolSpecs.map(toolNameFromSpec)
+    .filter((name) => VERIFICATION_TOOLS.has(name) || isCommandExecutionTool(name))
+  s.iteration.deferredPostBatchMessages.push({
+    role: 'system',
+    content: `[AUTHORIZED TOOL SEARCH RESULT] The host activated these already-authorized tools for the next response: ${activated.join(', ')}. Use only the supplied schemas and continue the original task; activation does not grant approval for execution.`,
+  })
+}
+
+function activateRequestedSkill(s, outcome, executedCall) {
+  if (executedCall?.name !== 'load_skill' || outcome.result?.ok !== true) return
+  const skillId = String(executedCall.args?.skill_id || '').trim()
+  if (s.loadedSkillIds.has(skillId)) {
+    outcome.result = { ok: true, skillId, activated: false, alreadyLoaded: true }
+    return
+  }
+  if (s.dynamicallyLoadedSkillIds.size >= s.d.MAX_DYNAMIC_SKILLS_PER_TURN) {
+    outcome.result = {
+      ok: false,
+      code: 'dynamic_skill_limit_reached',
+      error: `At most ${s.d.MAX_DYNAMIC_SKILLS_PER_TURN} skills may be loaded dynamically in one turn.`,
+      retryable: false,
+    }
+    return
+  }
+  let activation
+  try {
+    activation = s.d.prepareRuntimeSkillActivation({
+      userId: s.job?.userId || null,
+      skillId,
+    })
+  } catch {
+    activation = {
+      ok: false,
+      code: 'skill_activation_failed',
+      error: 'The host could not safely resolve the requested skill.',
+    }
+  }
+  if (activation?.ok !== true) {
+    outcome.result = {
+      ok: false,
+      code: String(activation?.code || 'skill_activation_failed'),
+      error: String(activation?.error || 'The requested skill could not be loaded.'),
+      retryable: false,
+    }
+    return
+  }
+  s.loadedSkillIds.add(activation.skillId)
+  s.dynamicallyLoadedSkillIds.add(activation.skillId)
+  s.job = { ...s.job, skillIds: [...s.loadedSkillIds] }
+  outcome.result = {
+    ok: true,
+    skillId: activation.skillId,
+    name: activation.name,
+    activated: true,
+  }
+  s.iteration.deferredPostBatchMessages.push({
+    role: 'system',
+    content: activation.promptBlock,
+  })
+}
 
 async function publishLocalArtifacts(s, outcome, executedCall, succeeded) {
   const { isCommandExecutionTool, persistLocalToolArtifactsAsync } = s.d
@@ -29,6 +145,7 @@ async function publishLocalArtifacts(s, outcome, executedCall, succeeded) {
     outcome.artifactIds = localArtifacts.map((artifact) => artifact.id)
     outcome.artifacts = localArtifacts.map(({ id, filename, type, url }) => ({
       id, filename, type, url,
+      ...artifactPreviewIdentity({ filename, type }),
     }))
     outcome.result = {
       ...outcome.result,
@@ -267,7 +384,7 @@ function recordMutationExecution(s, outcome, executedCall, succeeded, execution)
 function recordVerificationObservations(s, outcome, executedCall, succeeded) {
   const { isSuccessfulPdfLayoutVerification, normalizeMutationTarget, targetsMatch } = s.d
   const observation = s.observeTaskVerificationRepair(executedCall, outcome.result)
-  if (observation.changed && !observation.failed) {
+  if (observation.changed && !observation.failed && !observation.indeterminate) {
     s.loopGuard.markProgress?.()
     s.mutationVerificationRetries = 0
   }
@@ -334,7 +451,7 @@ function recordArtifactOutcome(s, outcome, succeeded) {
 function appendToolOutcomeMessages(s, outcome, executedCall, succeeded) {
   const i = s.iteration
   const { AVAILABLE_TOOL_CAPABILITIES_MARKER, COMMAND_EXECUTION_TOOL_NAMES,
-    VERIFICATION_TOOLS, buildToolResultMessageBundle, hasCommandExecutionTool,
+    DIRECTORY_AUTHORIZATION_REFRESH_MARKER, VERIFICATION_TOOLS, buildToolResultMessageBundle, hasCommandExecutionTool,
     isCommandExecutionTool, replaceRuntimeCapabilityBlock,
     shouldRequirePdfLayoutVerification, toolNameFromSpec } = s.d
   if (executedCall?.name === 'read_file' && succeeded) s.hasSuccessfulRepresentativeRead = true
@@ -382,7 +499,7 @@ function appendToolOutcomeMessages(s, outcome, executedCall, succeeded) {
   i.deferredPostBatchMessages.push({
     role: 'system',
     content: [
-      '[DIRECTORY AUTHORIZATION TOOL REFRESH]',
+      DIRECTORY_AUTHORIZATION_REFRESH_MARKER,
       `The persisted ${accessMode} directory grant has been verified by the runtime.`,
       `The callable tools for the next response are now: ${s.activeToolSpecs.map(toolNameFromSpec).filter(Boolean).join(', ')}.`,
       `Use the exact authorized directory ${JSON.stringify(outcome.result.authorization.path)} and continue the original task without requesting authorization again.`,
@@ -426,10 +543,12 @@ async function recordOutcome(s, outcome) {
   const i = s.iteration
   const { isSuccessfulToolResult } = s.d
   outcome.result = s.d.normalizeToolResult(outcome.result)
-  const succeeded = isSuccessfulToolResult(outcome.result)
   const executedCall = outcome.executionArgs === outcome.call?.args
     ? outcome.call
     : { ...outcome.call, args: outcome.executionArgs }
+  activateSearchedTools(s, outcome, executedCall)
+  activateRequestedSkill(s, outcome, executedCall)
+  const succeeded = isSuccessfulToolResult(outcome.result)
   await publishLocalArtifacts(s, outcome, executedCall, succeeded)
   const execution = recordExecutionProgress(s, outcome, executedCall, succeeded)
   recordDynamicFailureRecovery(s, outcome, executedCall, succeeded)
@@ -445,6 +564,7 @@ async function recordOutcome(s, outcome) {
   recordMutationExecution(s, outcome, executedCall, succeeded, execution)
   recordVerificationObservations(s, outcome, executedCall, succeeded)
   recordArtifactOutcome(s, outcome, succeeded)
+  recordMutationVerificationRecoveryOutcome(s, executedCall, outcome.result)
   appendToolOutcomeMessages(s, outcome, executedCall, succeeded)
   recordNoProgressAndSignals(s, outcome, executedCall)
   await i.markCall(outcome.call, {

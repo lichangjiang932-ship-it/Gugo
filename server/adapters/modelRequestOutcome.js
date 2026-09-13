@@ -1,3 +1,5 @@
+import { isContextLengthError } from './modelProxyErrors.js'
+
 export const MODEL_REQUEST_OUTCOME_UNKNOWN_CODE = 'MODEL_REQUEST_OUTCOME_UNKNOWN'
 
 const OUTCOME_UNKNOWN_MESSAGE = '模型请求可能已被上游接受，但没有取得可验证的最终结果。为避免再次请求并产生额外的上游模型供应商费用，系统已停止自动重试；请核对上游请求记录后再恢复。'
@@ -49,7 +51,7 @@ export function modelRequestOutcomeUnknown(error, {
   phase = 'request',
   responseReceived = false,
   externalAborted = false,
-  requestStarted = false,
+  requestStarted = null,
 } = {}) {
   // Untracked probes and compatibility routes have no durable invocation to
   // reconcile. Preserve their legacy error contract rather than advertising a
@@ -63,6 +65,8 @@ export function modelRequestOutcomeUnknown(error, {
   const cancellationObserved = externalAborted === true || error?.name === 'AbortError'
   if (cancellationObserved) {
     if (!physicalRequestStarted) return markModelRequestNotSent(error)
+  } else if (requestStarted === false && !responseReceived) {
+    return markModelRequestNotSent(error)
   } else if (!responseReceived && isDefinitelyNotSentModelRequestError(error)) {
     // Connection/DNS failures remain authoritative pre-send outcomes even
     // though the fetch implementation was entered. No HTTP request reached
@@ -71,12 +75,15 @@ export function modelRequestOutcomeUnknown(error, {
   }
 
   const status = Number(error?.status ?? error?.statusCode)
-  if (Number.isFinite(status)
-    && status >= 400
-    && status < 500
-    && ![408, 409, 425, 429].includes(status)) {
-    // Authentication, validation and missing-model responses are explicit
-    // terminal rejections rather than ambiguous transport outcomes.
+  const rateLimitRejected = error?.fromUpstream === true && status === 429
+    && [error?.code, error?.type].some((value) => /^(?:rate_limit_exceeded|rate_limit_error|too_many_requests|resource_exhausted)$/i.test(String(value || '')))
+  const definiteClientRejection = Number.isFinite(status) && status >= 400 && status < 500
+    && ![408, 409, 425, 429].includes(status)
+  if (!cancellationObserved && (definiteClientRejection || rateLimitRejected)) {
+    // Generic 408/5xx/gateway/SSE failures do not prove the request was rejected.
+    // A structured rate-limit rejection can use the normal bounded backoff.
+    if (rateLimitRejected) error.modelRequestOutcome = 'rejected'
+    if (isContextLengthError(error)) error.retryable = false
     return error
   }
   if (error?.code === 'REASONING_RUNAWAY') return error
@@ -91,6 +98,8 @@ export function modelRequestOutcomeUnknown(error, {
   unknown.action = 'verify_model_request'
   unknown.modelRequestId = requestId
   unknown.transportPhase = String(phase || 'request')
+  const upstreamCode = String(error?.code || error?.cause?.code || '').trim()
+  if (/^[A-Za-z0-9_-]{1,96}$/.test(upstreamCode)) unknown.upstreamCode = upstreamCode
   if (Number.isFinite(status) && status > 0) unknown.upstreamStatus = status
   if (error?.timeoutPhase) unknown.timeoutPhase = String(error.timeoutPhase)
   if (Number.isFinite(Number(error?.timeoutMs))) unknown.timeoutMs = Number(error.timeoutMs)

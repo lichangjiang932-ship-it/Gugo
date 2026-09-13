@@ -7,6 +7,7 @@ import { decideApproval } from './approvalStore.js'
 import { releaseApproval } from './approvalGate.js'
 import { turnEventForClient } from './turnEventStore.js'
 import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
+import { createHeadlessTurnInteractions } from './headlessTurnInteractions.js'
 
 const PERMISSION_MODES = new Set(['normal', 'acceptEdits', 'plan', 'bypass'])
 const STOP_EVENT_TYPES = new Set([
@@ -171,6 +172,7 @@ function normalizeHeadlessTurnInput(input = {}) {
     prompt: '', model: null, modelProviderId: null, mode: null,
     cwd: process.cwd(), workspaceCwd: null, sessionId: null, resumeTurnId: null,
     token: '', interactive: false, onEvent: () => {}, onApproval: null,
+    onDirectoryRequest: null, onSideEffectRecovery: null,
     onToken: () => {}, onDiagnostic: () => {}, signal: null, env: process.env,
     ...input,
   }
@@ -276,6 +278,7 @@ async function prepareHeadlessTurn(input, dependencies) {
     decide: dependencies.decideApproval || decideApproval,
     release: dependencies.releaseApproval || releaseApproval,
     subscribeEvents: dependencies.subscribeEvents || null,
+    interactionPorts: dependencies.interactionPorts || null,
     wait: dependencies.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
   }
 }
@@ -283,6 +286,7 @@ async function prepareHeadlessTurn(input, dependencies) {
 function createHeadlessEventController(runtime) {
   const { input, scope } = runtime
   const state = {
+    closed: false,
     handledApprovalIds: new Set(),
     pendingApprovalTasks: new Set(),
     cursor: -1,
@@ -305,6 +309,7 @@ function createHeadlessEventController(runtime) {
         input.onDiagnostic(`approval prompt failed; denied ${approvalId}: ${error?.message || error}`)
       }
     }
+    if (state.closed) return
     try {
       await runtime.decide({
         userId: scope.userId,
@@ -324,7 +329,7 @@ function createHeadlessEventController(runtime) {
     state.pendingApprovalTasks.add(task)
   }
   const deliver = (event) => {
-    if (!event || !Number.isInteger(event.sequence) || event.sequence <= state.cursor) return
+    if (state.closed || !event || !Number.isInteger(event.sequence) || event.sequence <= state.cursor) return
     state.cursor = event.sequence
     state.lastEvent = event
     input.onEvent(turnEventForClient(event))
@@ -368,15 +373,25 @@ function createHeadlessEventController(runtime) {
   }
 }
 
-async function startOrRecoverHeadlessTurn(runtime, controller) {
+async function startOrRecoverHeadlessTurn(runtime, controller, interactions) {
   const { input, scope } = runtime
   if (input.resumeTurnId) {
     await controller.drainPersistedEvents()
     await Promise.all([...controller.state.pendingApprovalTasks])
+    // Existing pauses/unknown effects must be shown before retryRecovery can
+    // clear their recovery state or schedule any continuation.
+    if (interactions.canHandle(controller.state.lastEvent)) {
+      return { terminal: false, paused: true, locallyActive: false }
+    }
     if (runtime.resumeTurn) {
+      const previousSequence = controller.state.lastEvent?.sequence
       const resumedTurn = await runtime.resumeTurn({
         ...scope, authMode: runtime.authMode, retryRecovery: true,
       })
+      if (controller.state.lastEvent?.sequence === previousSequence
+        && !['completed', 'failed', 'cancelled', 'paused', 'blocked'].includes(resumedTurn?.status)) {
+        controller.state.lastEvent = null
+      }
       return {
         turn: resumedTurn,
         terminal: ['completed', 'failed', 'cancelled'].includes(resumedTurn?.status),
@@ -403,10 +418,9 @@ async function startOrRecoverHeadlessTurn(runtime, controller) {
 }
 
 async function waitForHeadlessTurn(runtime, controller, recoveryOutcome) {
-  const { input, scope } = runtime
+  const { scope } = runtime
   const { state } = controller
-  while (input.resumeTurnId
-    && recoveryOutcome
+  while (recoveryOutcome
     && !recoveryOutcome.terminal
     && !recoveryOutcome.paused
     && recoveryOutcome.locallyActive === false
@@ -430,21 +444,27 @@ async function waitForHeadlessTurn(runtime, controller, recoveryOutcome) {
     )
   while (!engineWaitSettled && !STOP_EVENT_TYPES.has(state.lastEvent?.type)) {
     await controller.drainPersistedEvents()
-    await Promise.all([...state.pendingApprovalTasks])
+    await Promise.race([engineWait, Promise.all([...state.pendingApprovalTasks])])
     controller.throwCancellationError()
     if (engineWaitSettled || STOP_EVENT_TYPES.has(state.lastEvent?.type)) break
     await Promise.race([engineWait, runtime.wait(250)])
   }
   if (!STOP_EVENT_TYPES.has(state.lastEvent?.type)) await engineWait
-  if (engineWaitSettled && engineWaitError) throw engineWaitError
   controller.throwCancellationError()
   await controller.drainPersistedEvents()
-  await Promise.all([...state.pendingApprovalTasks])
+  if (!STOP_EVENT_TYPES.has(state.lastEvent?.type)) {
+    await Promise.race([engineWait, Promise.all([...state.pendingApprovalTasks])])
+  }
   await controller.drainPersistedEvents()
-  while (!STOP_EVENT_TYPES.has(state.lastEvent?.type)) {
-    await runtime.wait(250)
-    await controller.drainPersistedEvents()
-    controller.throwCancellationError()
+  if (!STOP_EVENT_TYPES.has(state.lastEvent?.type)) {
+    // The local execution handle has settled and its writes have been drained.
+    // A stale owner must not invent a durable failure, nor leave the CLI polling
+    // forever. Remote-owner resume waits stay in the recovery loop above.
+    if (engineWaitError) throw engineWaitError
+    throw new HeadlessTurnError(
+      'TURN_TERMINAL_EVENT_MISSING',
+      `turn execution ended without a persisted terminal event: ${scope.turnId}`,
+    )
   }
   if (state.cancellationTask) await state.cancellationTask
   controller.throwCancellationError()
@@ -460,6 +480,9 @@ async function waitForHeadlessTurn(runtime, controller, recoveryOutcome) {
 
 async function executeHeadlessTurn(runtime) {
   const controller = createHeadlessEventController(runtime)
+  const interactions = createHeadlessTurnInteractions({
+    input: runtime.input, scope: runtime.scope, ports: runtime.interactionPorts, workspace: runtime.workspace,
+  })
   let unsubscribe = () => {}
   let removeAbortListener = () => {}
   try {
@@ -480,11 +503,43 @@ async function executeHeadlessTurn(runtime) {
       }
       unsubscribe = subscribed
     }
-    const recoveryOutcome = await startOrRecoverHeadlessTurn(runtime, controller)
-    return await waitForHeadlessTurn(runtime, controller, recoveryOutcome)
+    let recoveryOutcome = await startOrRecoverHeadlessTurn(runtime, controller, interactions)
+    while (true) {
+      const result = await waitForHeadlessTurn(runtime, controller, recoveryOutcome)
+      if (!interactions.canHandle(result.lastEvent)) return result
+      if (!runtime.resumeTurn) {
+        throw new HeadlessTurnError('CLI_INTERACTIVE_RESUME_UNSUPPORTED', 'This runtime cannot continue the current turn interactively.')
+      }
+      // Finish the old execution handle and its recovery-state writes before
+      // recording a user decision or resuming the exact same durable turn.
+      await runtime.waitForTurn(runtime.scope)
+      const resume = await interactions.prepareResume(result.lastEvent)
+      if (!resume || runtime.input.signal?.aborted) {
+        if (controller.state.cancellationTask) await controller.state.cancellationTask
+        controller.throwCancellationError()
+        await controller.drainPersistedEvents()
+        return { ...resultForLastEvent({ ...runtime.scope, lastEvent: controller.state.lastEvent }), workspace: runtime.workspace }
+      }
+      controller.state.lastEvent = null
+      const resumedTurn = await runtime.resumeTurn({ ...runtime.scope, authMode: runtime.authMode, ...resume })
+      recoveryOutcome = {
+        turn: resumedTurn, terminal: ['completed', 'failed', 'cancelled'].includes(resumedTurn?.status),
+        paused: resumedTurn?.status === 'paused', locallyActive: false,
+      }
+      await controller.drainPersistedEvents()
+    }
   } finally {
     removeAbortListener()
-    await unsubscribe()
+    try {
+      if (controller.state.cancellationTask) {
+        await controller.state.cancellationTask
+        controller.throwCancellationError()
+        await controller.drainPersistedEvents()
+      }
+    } finally {
+      controller.state.closed = true
+      await unsubscribe()
+    }
   }
 }
 

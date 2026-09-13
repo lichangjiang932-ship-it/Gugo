@@ -1,3 +1,4 @@
+import { normalizeModelPhaseProgress } from '../../shared/modelPhaseProgress.js'
 import { normalizeModelUsage } from '../../shared/modelUsage.js'
 import {
   checkpointMessagesForTurn,
@@ -15,6 +16,7 @@ import { createChatOnlyToolExecutionError } from './turnModelRequestRuntime.js'
 import { TurnEngineError } from './turnResolutionRuntime.js'
 import { normalizeTurnOptionalId } from './turnStartRuntime.js'
 import { abortError, normalizePositiveInteger } from './turnEnginePolicy.js'
+import { getTurnPermissionContextSnapshot } from './turnPermissionContext.js'
 
 const ATOMIC_CHECKPOINT_UNSUPPORTED_CODE = 'TURN_ATOMIC_CHECKPOINT_UNSUPPORTED'
 const ATOMIC_CHECKPOINT_COMMIT_MISMATCH_CODE = 'TURN_ATOMIC_CHECKPOINT_COMMIT_MISMATCH'
@@ -73,6 +75,7 @@ function createCheckpointWriter({
     const checkpointState = {
       ...checkpoint,
       approvalMode: effectiveApprovalMode,
+      turnPermissionContext: getTurnPermissionContextSnapshot(scope),
       modelMode: normalizedModelMode,
       executionEnvironment: effectiveExecutionEnvironment,
       promptContextSnapshot,
@@ -156,7 +159,7 @@ function toolFailure(result) {
 
 function createTurnLoopEventCallbacks({ emitter, state }) {
   return {
-    onModelPhase: async ({ phase, iteration, usage, modelName, error }) => {
+    onModelPhase: async ({ phase, iteration, usage, modelName, error, ...progress }) => {
       const normalizedUsage = phase === 'completed' ? normalizeModelUsage(usage) : null
       if (normalizedUsage) {
         state.latestModelUsage = normalizedUsage
@@ -164,6 +167,7 @@ function createTurnLoopEventCallbacks({ emitter, state }) {
       }
       await emitter('model.phase', {
         phase, iteration, usage: normalizedUsage || usage, modelName, error,
+        ...normalizeModelPhaseProgress(progress),
       })
     },
     onModelDelta: async ({ text, iteration, modelName }) => {
@@ -258,6 +262,7 @@ export function createTurnLoopExecutionRuntime({ deps }) {
     pendingRecoveryAttempt,
     effectiveIntentMode,
     resolvedToolSpecs,
+    deferredToolSpecs = resolvedToolSpecs,
     effectiveToolsConfig,
     toolResolutionDecision,
     activeSkillId,
@@ -362,7 +367,7 @@ export function createTurnLoopExecutionRuntime({ deps }) {
       signal,
       toolSpecs: resolvedToolSpecs,
       toolsConfig: effectiveToolsConfig,
-      fallbackToolSpecs: resolvedToolSpecs,
+      fallbackToolSpecs: deferredToolSpecs,
       toolResolutionDecision,
       skillId: activeSkillId,
       executeTool: chatOnlyMode

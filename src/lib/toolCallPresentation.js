@@ -10,6 +10,7 @@
  */
 
 export const TOOL_LABEL_KEYS = {
+  load_skill: 'chatMessages.toolLoadSkill',
   web_search: 'chatMessages.toolWebSearch',
   fetch_url: 'chatMessages.toolFetchUrl',
   create_pptx: 'chatMessages.toolCreatePptx',
@@ -24,6 +25,7 @@ export const TOOL_LABEL_KEYS = {
   create_html_app: 'chatMessages.toolCreateHtmlApp',
   Agent: 'chatMessages.toolAgent',
   read_file: 'chatMessages.toolReadFile',
+  read_artifact_source: 'toolActivity.readArtifactSource',
   write_file: 'chatMessages.toolWriteFile',
   edit_file: 'chatMessages.toolEditFile',
   multi_edit: 'chatMessages.toolMultiEdit',
@@ -58,6 +60,7 @@ export function toolCallLabel(name, t) {
 // ★ 执行过程(工具卡片 / 活动流 / 进度条)按用户要求用全英文技术标签,
 // 与界面语言无关 —— 执行轨迹属于技术事实,不随 UI 语言翻译。
 export const TOOL_LABELS_EN = {
+  load_skill: 'Load skill',
   web_search: 'Web search',
   fetch_url: 'Fetch URL',
   create_pptx: 'Create PowerPoint',
@@ -72,6 +75,7 @@ export const TOOL_LABELS_EN = {
   create_html_app: 'Create HTML app',
   Agent: 'Subagent',
   read_file: 'Read file',
+  read_artifact_source: 'Read editable source',
   write_file: 'Write file',
   edit_file: 'Edit file',
   multi_edit: 'Multi edit',
@@ -105,6 +109,9 @@ export function toolCallLabelEn(name) {
 /** 执行过程专用的英文参数摘要(与 summarizeToolArgs 同结构,不依赖 i18n)。 */
 export function summarizeToolArgsEn(name, args) {
   const empty = '(empty)'
+  if (name === 'read_artifact_source') return Number(args.offset) > 0
+    ? `Source · reading from character ${Number(args.offset)}` : 'Editable content of an existing artifact'
+  if (name === 'load_skill') return args.skill_id || empty
   if (name === 'web_search') return args.query || empty
   if (name === 'fetch_url') return args.url || empty
   if (name === 'read_file' || name === 'write_file' || name === 'edit_file') return args.path || empty
@@ -153,6 +160,9 @@ export function parseToolArgs(argsJson) {
 
 export function summarizeToolArgs(name, args, t) {
   const empty = t('chatMessages.toolEmptyValue')
+  if (name === 'read_artifact_source') return Number(args.offset) > 0
+    ? t('toolActivity.sourceOffset', { offset: Number(args.offset) }) : t('toolActivity.sourceContent')
+  if (name === 'load_skill') return args.skill_id || empty
   if (name === 'web_search') return args.query || empty
   if (name === 'fetch_url') return args.url || empty
   if (name === 'read_file' || name === 'write_file' || name === 'edit_file') return args.path || empty

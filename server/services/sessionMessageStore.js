@@ -206,6 +206,7 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
         url: artifact.url,
         filename: artifact.filename,
         createdAt: artifact.createdAt,
+        ...(artifact.previewRevision ? { previewRevision: artifact.previewRevision } : {}),
       })
       artifactsByTurn.set(artifact.turnId, entries)
     }

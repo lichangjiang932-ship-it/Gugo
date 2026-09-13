@@ -228,7 +228,12 @@ export async function handleSessionRequest(
         error: { code: 'SESSION_ACTIVE', message: 'session has an active turn' },
       })
     }
-    const result = await admin.forkSession({ userId, sessionId, label: body.label })
+    const result = await admin.forkSession({
+      userId,
+      sessionId,
+      label: body.label,
+      throughMessageId: body.throughMessageId,
+    })
     return result
       ? sendJson(res, 201, { ...result, ok: true })
       : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })

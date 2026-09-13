@@ -60,6 +60,11 @@ async function runScenario({ prompt, turns }) {
       modelCalls += 1
       return turn()
     },
+    requestToolApproval: async ({ args }) => ({
+      proceed: true,
+      args,
+      approvalId: 'offline-reasoning-approved',
+    }),
     executeTool: async (request) => {
       executions.push(request.name)
       return { ok: true, echoed: request.args?.text ?? null }
@@ -93,7 +98,7 @@ const TASKS = [
     'chain-of-thought captured on a tool-call turn persists in checkpoint conversation state',
     async () => {
       const reasoningText = 'I should echo the text back before answering.'
-      const { result, checkpoints, modelCalls } = await runScenario({
+      const { result, checkpoints, executions, modelCalls } = await runScenario({
         prompt: 'echo hello then answer',
         turns: [
           () => ({
@@ -106,6 +111,7 @@ const TASKS = [
       })
 
       assert.equal(modelCalls, 2)
+      assert.deepEqual(executions, ['echo_tool'])
       assert.equal(result?.finalText || result?.text || '', 'done')
 
       const withReasoning = assistantMessages(checkpoints)

@@ -26,29 +26,37 @@ import {
 import AssistantAnswer from './messageRow/AssistantAnswer.jsx'
 import CollapsedArtifactContent from './messageRow/CollapsedArtifactContent.jsx'
 import { SideEffectRecoveryCard } from './messageRow/FailureCards.jsx'
+import InlineSideEffectRecoveryCard from './messageRow/InlineSideEffectRecoveryCard.jsx'
 import IncompleteTaskNotice from './messageRow/IncompleteTaskNotice.jsx'
 import { normalizeIncompleteReasonCode } from './messageRow/incompleteTaskPresentation.js'
 import { AssistantMeta, UserMeta } from './messageRow/MetaActions.jsx'
 import { InlineDirectoryRequestCard, UserBubble } from './messageRow/UserBubble.jsx'
+import { isPausedDirectoryMessage } from '../chatDirectoryDecisions.js'
 
 export default function MessageRow({
   msg,
+  sessionId,
+  recoveryOwnerScope,
+  onSideEffectResolved,
   rowKey,
   turnIndex,
   generatingMessageId,
   isLatestUserMessage = false,
+  isForkingMessage = false,
   lang,
   onExpandCompaction,
   onAuthorizeDirectoryRequest,
+  onRejectDirectoryRequest,
   onOpenArtifact,
   onOpenInPreview,
   onManageModels,
   onEditMessage,
+  onForkMessage,
   onRetryModelFailure,
   t,
 }) {
   const serverClarification = msg.meta?.serverClarification
-  const isDirectoryRequest = (serverClarification?.request_type || serverClarification?.requestType) === 'directory'
+  const isDirectoryRequest = isPausedDirectoryMessage(msg)
   const directoryRequestKey = [
     msg.meta?.serverTurnId || '',
     msg.meta?.serverLastSequence ?? '',
@@ -131,6 +139,9 @@ export default function MessageRow({
     && isModelRequestOutcomeUnknownRecoveryKind(msg.meta?.serverRecoveryKind)
     && msg.meta?.serverConnectionState === 'blocked'
   const serverFailure = msg.meta?.serverFailure
+  const hasFileOrVerificationEvidence = verifiedLocalFileReferences.length > 0
+    || retainedLocalFileReferences.length > 0
+    || (Array.isArray(serverFailure?.taskVerification?.checks) && serverFailure.taskVerification.checks.length > 0)
   const hasIncompleteEvidence = expectsFileReceipt
     || verifiedLocalFileReferences.length > 0
     || retainedLocalFileReferences.length > 0
@@ -140,6 +151,8 @@ export default function MessageRow({
     || (Array.isArray(serverFailure?.taskVerification?.checks)
       && serverFailure.taskVerification.checks.length > 0)
   const showIncompleteTaskNotice = msg.role === 'assistant'
+    && !showSideEffectRecoveryCard
+    && (!showModelRequestRecoveryCard || hasFileOrVerificationEvidence)
     && hasTerminalOutcome
     && (msg.meta?.serverConnectionState === 'blocked' || hasIncompleteEvidence)
     && msg.meta?.serverConnectionState !== 'reconnecting'
@@ -200,25 +213,38 @@ export default function MessageRow({
             t={t}
           />
         )}
-        {showSideEffectRecoveryCard || showModelRequestRecoveryCard ? (
-          <SideEffectRecoveryCard modelRequest={showModelRequestRecoveryCard} msg={msg} t={t} />
-        ) : null}
+        {showSideEffectRecoveryCard ? (
+          <InlineSideEffectRecoveryCard sessionId={sessionId} msg={msg} ownerScope={recoveryOwnerScope}
+            onResolved={onSideEffectResolved} t={t} />
+        ) : showModelRequestRecoveryCard ? <SideEffectRecoveryCard modelRequest msg={msg} t={t} /> : null}
         {msg.role === 'assistant' && isDirectoryRequest && (
           <InlineDirectoryRequestCard
             key={directoryRequestKey}
             msg={msg}
             onAuthorize={onAuthorizeDirectoryRequest}
+            sessionId={sessionId}
+            ownerScope={recoveryOwnerScope}
+            onReject={onRejectDirectoryRequest}
             t={t}
           />
         )}
         {msg.role === 'user' && (
-          <UserMeta lang={lang} msg={msg} onEditMessage={isLatestUserMessage ? onEditMessage : null} t={t} />
+          <UserMeta
+            forking={isForkingMessage}
+            lang={lang}
+            msg={msg}
+            onEditMessage={isLatestUserMessage ? onEditMessage : null}
+            onForkMessage={onForkMessage}
+            t={t}
+          />
         )}
         {msg.role === 'assistant' && (
           <AssistantMeta
+            forking={isForkingMessage}
             isCurrentStreamingMessage={isCurrentStreamingMessage}
             lang={lang}
             msg={msg}
+            onForkMessage={onForkMessage}
             onRetryModelFailure={isModelPreExecutionFailure(msg) ? onRetryModelFailure : null}
             showArtifactPreview={showArtifactPreview}
             t={t}

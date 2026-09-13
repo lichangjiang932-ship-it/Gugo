@@ -94,6 +94,7 @@ test('TurnEngine exposes only structured recovery metadata for unknown side effe
   assert.equal(blocked.payload.toolCallId, toolCallId)
   assert.equal(blocked.payload.requiresUserVerification, true)
   assert.equal(blocked.payload.recoveryKind, 'side_effect_outcome_unknown')
+  assert.deepEqual(blocked.payload.recoveryAction, { kind: 'confirm_side_effect' })
   assert.equal(blocked.payload.retryable, false)
   assert.equal(events(turnId).some((event) => event.type === 'turn.failed'), false)
   assert.doesNotMatch(
@@ -122,6 +123,37 @@ test('TurnEngine exposes only structured recovery metadata for unknown side effe
     (error) => error?.code === 'TURN_RECOVERY_DEAD_LETTER',
   )
   assert.equal(loopCalls, 1)
+})
+
+test('TurnEngine keeps model-request unknown recovery separate from side-effect confirmation', async () => {
+  const turnId = 'turn-model-unknown-action'
+  const modelRequestId = 'model-request-unknown-action'
+  const engine = createTestEngine({
+    runLoop: async () => {
+      throw Object.assign(new Error('model outcome must be verified separately'), {
+        code: 'MODEL_REQUEST_OUTCOME_UNKNOWN',
+        retryable: false,
+        unsafeToReplay: true,
+        requiresUserVerification: true,
+        modelRequestId,
+        sideEffectExecution: { toolCallId: 'must-not-be-confirmed' },
+      })
+    },
+  })
+  await engine.startTurn({
+    userId, sessionId: 'turn-engine-session', turnId, content: 'check the model outcome',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  const blocked = events(turnId).at(-1)
+  assert.equal(blocked.type, 'turn.blocked')
+  assert.equal(blocked.payload.recoveryKind, 'model_request_outcome_unknown')
+  assert.equal(blocked.payload.modelRequestId, modelRequestId)
+  assert.equal(blocked.payload.toolCallId, undefined)
+  assert.equal(blocked.payload.requiresUserVerification, true)
+  assert.equal(blocked.payload.retryable, false)
+  assert.deepEqual(blocked.payload.recoveryAction, {
+    kind: 'open_settings', path: '/settings?tab=recovery',
+  })
 })
 
 test('TurnEngine does not reopen an ordinary failed turn for blocked-recovery retry', async () => {
@@ -2231,6 +2263,34 @@ test('TurnEngine reads the user approval mode once and shares it with discovery 
   assert.equal(loopOptions.job.origin, 'chat')
 })
 
+test('TurnEngine passes only selected schemas to the model and the host-projected deferred catalog to the loop', async () => {
+  const turnId = `turn-deferred-tool-catalog-${Date.now()}`
+  const searchTools = SERVER_TOOL_SPECS.find((spec) => spec.function.name === 'search_tools')
+  const slackSend = SERVER_TOOL_SPECS.find((spec) => spec.function.name === 'slack_send_message')
+  let loopOptions = null
+  const engine = createTestEngine({
+    toolSpecs: [searchTools, slackSend],
+    resolveToolSpecs: async (request) => {
+      request.onDeferredSpecs([searchTools, slackSend])
+      return [searchTools]
+    },
+    runLoop: async (options) => {
+      loopOptions = options
+      return { text: 'ready', artifactIds: [], iterations: 0 }
+    },
+  })
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Explain the local project.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  const namesOf = (specs) => specs.map((spec) => spec.function.name)
+  assert.deepEqual(namesOf(loopOptions.toolSpecs), ['search_tools'])
+  assert.deepEqual(namesOf(loopOptions.fallbackToolSpecs), ['search_tools', 'slack_send_message'])
+})
+
 test('TurnEngine host projects custom resolver schemas before model and loop access in plan mode', async () => {
   const turnId = `turn-plan-host-projection-${Date.now()}`
   const resolverSpecs = ['read_file', 'write_file', 'bash_exec'].map((name) => ({
@@ -3743,6 +3803,50 @@ test('TurnEngine pauses at approval and resumes after the persisted decision', a
   assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-approval' })).status, 'completed')
 })
 
+test('TurnEngine cancels an exact directory pause durably without replaying work or dropping delivery evidence', async () => {
+  const turnId = 'turn-directory-paused-rejection'
+  const scope = { userId, sessionId: 'turn-engine-session', turnId }
+  const clarification = { request_type: 'directory', access_mode: 'read_write', question: 'Select an output directory.' }
+  let loopCalls = 0
+  const engine = createTestEngine({
+    runLoop: async ({ saveCheckpoint }) => {
+      loopCalls += 1
+      await saveCheckpoint({
+        messages: [{ role: 'user', content: 'Keep the existing artifact and request a directory.' }],
+        toolCalls: [], artifactIds: ['existing-delivery'], deliveryArtifactIds: ['existing-delivery'],
+        iterations: 1, final: { paused: true, clarification, text: clarification.question },
+      })
+      return {
+        paused: true, clarification, text: clarification.question, iterations: 1,
+        artifactIds: ['existing-delivery'], deliveryArtifactIds: ['existing-delivery'],
+      }
+    },
+  })
+  await engine.startTurn({ ...scope, content: 'Keep the existing artifact and request a directory.' })
+  await engine.waitForTurn(scope)
+  const pause = events(turnId).at(-1)
+  assert.equal(pause.type, 'turn.paused')
+  await assert.rejects(engine.cancelTurn({ ...scope, directoryPausedSequence: pause.sequence - 1 }),
+    error => error.code === 'TURN_DIRECTORY_PAUSE_STALE')
+  await assert.rejects(engine.cancelTurn({ ...scope, userId: 'another-owner', directoryPausedSequence: pause.sequence }),
+    error => error.code === 'TURN_NOT_FOUND')
+  assert.equal(events(turnId).at(-1).id, pause.id)
+  const result = await engine.cancelTurn({ ...scope, directoryPausedSequence: pause.sequence })
+  assert.equal(result.status, 'cancelled')
+  assert.equal(result.lastEvent.type, 'turn.cancelled')
+  assert.equal(result.lastEvent.sequence, pause.sequence + 1)
+  assert.deepEqual(result.lastEvent.payload.artifactIds, ['existing-delivery'])
+  assert.deepEqual(result.lastEvent.payload.deliveryArtifactIds, ['existing-delivery'])
+  const checkpoint = getTurnCheckpoint(scope)
+  assert.deepEqual(checkpoint.state.artifactIds, ['existing-delivery'])
+  const message = getMessage({ userId, sessionId: scope.sessionId, messageId: turnId + ':assistant' })
+  assert.equal(message.modelContext.evidenceState, 'cancelled')
+  await assert.rejects(engine.cancelTurn({ ...scope, directoryPausedSequence: pause.sequence }),
+    error => error.code === 'TURN_DIRECTORY_PAUSE_STALE')
+  assert.equal(events(turnId).filter(event => event.type === 'turn.cancelled').length, 1)
+  assert.equal(loopCalls, 1)
+})
+
 test('TurnEngine aborts an active model request with an explicit cancelled event', async () => {
   const engine = createTestEngine({
     runModel: ({ signal }) => new Promise((resolve, reject) => {
@@ -5007,7 +5111,19 @@ test('I1: startTurn resolves /skill-prefix when caller omits skillIds', async ()
   const startedExplicit = events('turn-skill-explicit').find((event) => event.type === 'turn.started')
   assert.deepEqual(startedExplicit.payload.skillIds, ['skill-review'])
 
-  // 无前缀的普通文本不误解析
+  // 服务端 Headless/API 调用与浏览器使用同一套内置技能推断。
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId: 'turn-inferred-ppt',
+    content: '帮我做一份 5 页产品介绍 PPT',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-inferred-ppt' })
+  const startedInferred = events('turn-inferred-ppt').find((event) => event.type === 'turn.started')
+  assert.deepEqual(startedInferred.payload.skillIds, ['ppt'])
+  assert.equal(promptRequest.query, '帮我做一份 5 页产品介绍 PPT')
+
+  // 无前缀且没有高置信度内置技能意图的普通文本不误解析。
   await engine.startTurn({
     userId,
     sessionId: 'turn-engine-session',

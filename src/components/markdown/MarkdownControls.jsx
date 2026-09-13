@@ -33,6 +33,7 @@ export function SelectableFileLink({
         target="_blank"
         rel="noopener noreferrer"
         data-testid="inline-artifact-link"
+        title={anchorProps?.title || nodeText(children)}
         className="chat-output-file-name font-semibold decoration-current/45 underline-offset-4 hover:decoration-current"
         onClick={(event) => {
           if (selectedTextIntersects(event.currentTarget)) {

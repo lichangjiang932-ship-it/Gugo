@@ -1,7 +1,8 @@
 import {
   TURN_EVENT_PERSISTENCE_FAILURE_CODE,
 } from './turnEventEmitter.js'
-import { normalizePublicFailureCode } from '../../shared/turnEventProjection.js'
+import { normalizePublicFailureCode, normalizePublicModelRequestDiagnostics } from '../../shared/turnEventProjection.js'
+import { modelProviderStopDiagnostic } from '../../shared/modelProviderStopDiagnostic.js'
 
 export const ARTIFACT_DELIVERY_INCOMPLETE_REASON = 'artifact_delivery_not_converged'
 
@@ -187,8 +188,14 @@ export function normalizeTurnFailure(error, {
       ? error.retryable
       : (typeof retryable === 'boolean' ? retryable : inferredRetryable),
   }
+  const providerDiagnostic = modelProviderStopDiagnostic({ code: normalizedCode, reason: error?.reason })
+  if (providerDiagnostic) failure.reason = providerDiagnostic
   if (typeof error?.manualRetryable === 'boolean') {
     failure.manualRetryable = error.manualRetryable
+  }
+  const modelRequestDiagnostics = normalizePublicModelRequestDiagnostics(error?.modelRequestDiagnostics)
+  if (normalizedCode === 'MODEL_REQUEST_OUTCOME_UNKNOWN' && modelRequestDiagnostics) {
+    failure.modelRequestDiagnostics = modelRequestDiagnostics
   }
   const rawNextAction = String(error?.nextAction || '').trim().toLowerCase().slice(0, 80)
   if (/^[a-z][a-z0-9_]{0,79}$/u.test(rawNextAction)) failure.nextAction = rawNextAction

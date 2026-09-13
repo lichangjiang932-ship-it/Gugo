@@ -38,6 +38,7 @@ export const LOCAL_MUTATION_TOOLS = new Set([
   'patch_file',
   'multi_edit',
   'file_download',
+  'browser_download',
   'image_transform',
   'media_transform',
   'pdf_transform',
@@ -82,6 +83,7 @@ export const FILE_WRITE_TOOL_NAMES = new Set([
   'edit_file',
   'apply_patch',
   'multi_edit',
+  'browser_download',
   'image_transform',
   'media_transform',
   'pdf_transform',
@@ -111,6 +113,12 @@ export const FAILURE_RECOVERY_MARKER = '[TOOL FAILURE RECOVERY REQUIRED]'
 export const FAILURE_RECOVERY_THRESHOLD = 2
 export const EXECUTION_CONVERGENCE_MARKER = '[EXECUTION CONVERGENCE REQUIRED]'
 export const REPEAT_CALL_GUARD_MARKER = '[REPEAT CALL GUARD]'
+export const TOOL_FAILURE_STRATEGY_MARKER = '[TOOL FAILURE STRATEGY REQUIRED]'
+export const DIRECTORY_AUTHORIZATION_REFRESH_MARKER = '[DIRECTORY AUTHORIZATION TOOL REFRESH]'
+export const MANAGED_ATTACHMENT_EXECUTION_MARKER = '[MANAGED ATTACHMENT EXECUTION CONTRACT]'
+export const ADJACENT_ARTIFACT_REVISION_MARKER = '[ADJACENT ARTIFACT REVISION CONTRACT]'
+export const ARTIFACT_SOURCE_DELIVERY_POLICY_MARKER = '[ARTIFACT SOURCE DELIVERY POLICY]'
+export const DIRECT_EXECUTION_REQUIRED_MARKER = '[DIRECT EXECUTION REQUIRED]'
 export const EXECUTION_CONVERGENCE_ROUND_THRESHOLD = 3
 export const MAX_INSTALL_ATTEMPT_SIGNATURES = 24
 export const PROBE_SCRIPT_PATH = /(?:^|[\\/])(?:[._-]?(?:inspect|probe|diagnos(?:e|tic)|debug[-_]?env|check[-_]?env|env[-_]?check|test[-_]?(?:import|dependency)))(?:[-_.0-9][^\\/]*)?\.(?:py|m?js|cjs|ts|ps1|sh|cmd|bat)$/i

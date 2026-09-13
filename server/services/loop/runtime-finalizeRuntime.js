@@ -1,4 +1,5 @@
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
+import { scheduleMutationVerificationRecovery } from './mutationVerificationRecovery.js'
 
 /**
  * Apply the host-owned terminal gates in their canonical priority order.
@@ -99,6 +100,9 @@ function iterationLimitWrapUpPrompt(locale, maxIterations) {
 
 export async function finalizeRuntime(s) {
   const { mergeCompactionRecovery, writeToolAudit } = s.d
+  if (await scheduleMutationVerificationRecovery(s, { atBoundary: true })) {
+    return { deferredForVerification: true }
+  }
   // A normal no-tool response can be accepted on the final dynamically
   // extended recovery iteration. In that case processModelResult has already
   // persisted the final checkpoint, so the iteration counter alone must not

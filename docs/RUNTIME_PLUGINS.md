@@ -118,7 +118,9 @@ registry constructor 的 `config/registerTool/registerModelProvider/registerRunt
 
 应用服务器在同一次启动中先完成 plugin discovery 和持久化 runtime plugin restore，再解析 capability snapshot，最后才把选中的 Loop 交给 lifecycle controller。恢复节点在 lifecycle 中消费这次预恢复结果，不会二次安装。停机顺序固定为 Turn/Job/恢复消费者先停止，随后释放 Loop，最后卸载 runtime plugins。已激活的 plugin Loop 禁止配置热重载或卸载，返回 `PLUGIN_LOOP_CAPABILITY_IN_USE`；停止宿主 Loop 后卸载会原子恢复内置 binding。setup、健康检查或 capability 注册失败均撤销 plugin record 和注册副作用。
 
-第三方 Loop 不获得宿主私有执行权限。`run()` 只接收 detached、冻结的输入数据和独立事件总线；模型调用、工具执行、approval、checkpoint、steering、side-effect ledger、进度/终态 callback 均被移除或 fail closed。其返回值只能贡献有界文本，宿主会丢弃 artifact ID、delivery receipt、paused/interrupted、iteration 和其他终态声明。因此 Loop 替换不能绕过权威 tool pipeline、持久化边界或伪造本地文件回执；在宿主提供可审计 broker 契约前，外部 Loop 也不能直接发起模型或有副作用工具调用。
+第三方 Loop 不获得宿主私有执行权限。旧版契约及未启用 broker 的 `run()` 只接收 detached、冻结的输入数据和独立事件总线；模型调用、工具执行、approval、checkpoint、steering、side-effect ledger、进度/终态 callback 均被移除或 fail closed。其返回值只能贡献有界文本，不能自行声明 artifact ID、delivery receipt 或权威终态。
+
+当前 v3 契约可显式声明 `hostCapabilities.loopBroker = 1`。宿主同时提供模型执行 bridge 时，外部 Loop 能通过受管 model-request broker 请求模型，预算、请求记录和持久化仍由宿主处理；缺少 bridge 时继续 fail closed。当前内置 broker 固定 `tools: []`、`toolChoice: 'none'`，不开放工具执行 broker，也不授予 approval、checkpoint 或 side-effect ledger 的直接访问。因此不能再笼统声称外部 Loop 完全不能调用模型，但它仍不能绕过权威工具 pipeline 或伪造本地文件回执。
 
 ## Loop event boundaries
 

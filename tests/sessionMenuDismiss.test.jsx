@@ -80,12 +80,14 @@ test('session menu closes on an outside pointer without swallowing menu item cli
     const archiveButton = findButton(rootElement, 'nav.archiveSession')
     assert.ok(archiveButton)
 
-    await act(async () => {
-      archiveButton.dispatchEvent(new dom.window.Event('pointerdown', { bubbles: true }))
-      archiveButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-    })
+    await act(async () => archiveButton.dispatchEvent(new dom.window.Event('pointerdown', { bubbles: true })))
+    assert.ok(findButton(rootElement, 'nav.archiveSession'), 'pointerdown inside the menu must preserve the pending action')
+    await act(async () => archiveButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.deepEqual(calls.archived, ['session-one'])
-    assert.ok(findButton(rootElement, 'nav.archiveSession'), 'menu item pointerdown must not dismiss the menu before click')
+    assert.equal(findButton(rootElement, 'nav.archiveSession'), undefined, 'the completed action closes its menu')
+    const trigger = rootElement.querySelector('[data-session-row="session-one"] [aria-haspopup="menu"]')
+    assert.equal(document.activeElement, trigger)
+    await act(async () => trigger.click())
 
     await act(async () => {
       rootElement.querySelector('[data-testid="outside"]').dispatchEvent(new dom.window.Event('pointerdown', { bubbles: true }))
@@ -97,7 +99,7 @@ test('session menu closes on an outside pointer without swallowing menu item cli
   }
 })
 
-test('recent sessions stay in one compact title-only list without metadata', async () => {
+test('recent sessions retain a single-line title with a quiet absolute time and complete tooltip', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -115,14 +117,17 @@ test('recent sessions stay in one compact title-only list without metadata', asy
 
     assert.ok(recentSection)
     assert.match(recentSection.textContent, /chatMessages\.workspaceRecent/)
-    assert.equal(sessionButtons[0].textContent.trim(), 'Session one')
-    assert.equal(sessionButtons[1].textContent.trim(), 'Session two')
+    assert.equal(sessionButtons[0].querySelector('[data-session-title]').textContent, 'Session one')
+    assert.equal(sessionButtons[1].querySelector('[data-session-title]').textContent, 'Session two')
+    assert.equal(sessionButtons[0].getAttribute('aria-label'), 'Session one')
+    assert.match(sessionButtons[0].querySelector('time').textContent, /\d{2}:\d{2}/)
+    assert.ok(sessionButtons[0].querySelector('time').getAttribute('datetime'))
     assert.ok(sessionButtons[0].title.startsWith('Session one\n'))
     assert.ok(sessionButtons[1].title.startsWith('Session two\n'))
     assert.equal(rootElement.querySelector('[data-compact-numeric-badge]'), null)
     assert.doesNotMatch(rootElement.textContent, /Gugo|此刻|分钟/)
     assert.doesNotMatch(rootElement.textContent, /nav\.groupToday|nav\.groupYesterday|nav\.groupWeek|nav\.groupEarlier/)
-    assert.doesNotMatch(rootElement.textContent, /nav\.filterActive|history\.messageCount|\d{2}:\d{2}/)
+    assert.doesNotMatch(rootElement.textContent, /nav\.filterActive|history\.messageCount/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -287,8 +292,12 @@ test('right click opens the shared session menu at the pointer and Escape closes
 
     await act(async () => findButton(rootElement, 'nav.pinSession').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.deepEqual(calls.pinned, ['session-two'])
+    assert.equal(rootElement.querySelector('[role="menu"]'), null)
+    assert.equal(document.activeElement, findButton(rootElement, 'Session two'))
+    await act(async () => findButton(rootElement, 'Session two').dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true, clientX: 140, clientY: 90 })))
     await act(async () => findButton(rootElement, 'nav.archiveSession').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.deepEqual(calls.archived, ['session-two'])
+    await act(async () => findButton(rootElement, 'Session two').dispatchEvent(new dom.window.MouseEvent('contextmenu', { bubbles: true, clientX: 140, clientY: 90 })))
 
     await act(async () => document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { bubbles: true, key: 'Escape' })))
     assert.equal(rootElement.querySelector('[role="menu"]'), null)

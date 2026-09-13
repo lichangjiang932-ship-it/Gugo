@@ -49,7 +49,7 @@ async function cancelBeforeExecution(runtime, {
   turnStartedAt,
 }) {
   if (!signal?.aborted) return false
-  if (lostTurnLease(signal)) return true
+  if (lostTurnLease(signal)) throw signal.reason
   const { userId, sessionId, turnId } = scope
   const cancelledAt = runtime.ports.now()
   const message = createInitialCancellationMessage({
@@ -141,6 +141,7 @@ async function settleInterruptedResult(runtime, context) {
     : missingRequirementsForIncompleteReason(incompleteReason)
   const failure = normalizeTurnFailure({
     code: result.code,
+    modelRequestDiagnostics: result.modelRequestDiagnostics,
     incompleteReason,
     missingRequirements,
     retryable: true,
@@ -342,7 +343,7 @@ async function settleCompletedResult(runtime, context) {
 
 async function settleResult(runtime, context) {
   if (context.signal.aborted) {
-    if (lostTurnLease(context.signal)) return
+    if (lostTurnLease(context.signal)) throw context.signal.reason
     return settleCancelledResult(runtime, context)
   }
   context.result = normalizedIncompleteResult(context.result)
@@ -354,8 +355,16 @@ async function settleResult(runtime, context) {
 
 async function settleError(runtime, context) {
   const { signal, error, state, evidence, recordCanaryTerminal } = context
-  if (lostTurnLease(signal, error)) return
-  if (isManualRecoveryBlock(error)) return evidence.emitBlocked(error)
+  // A fenced owner cannot write a terminal event, but local callers still need
+  // the execution failure. Preserve its identity and any checkpoint cause chain.
+  if (lostTurnLease(signal, error)) throw lostTurnLease(null, error) ? error : signal.reason
+  // Cancelling the user's task does not settle the upstream model request.
+  // Only an explicit abort of this host's controller may change the terminal
+  // presentation; the UNKNOWN error and in-flight checkpoint remain intact.
+  const cancelledModelRequest = signal?.aborted === true
+    && ['TURN_CANCEL_REQUESTED', 'USER_STOPPED'].includes(String(signal.reason?.code || '').trim().toUpperCase())
+    && String(error?.code || '').trim().toUpperCase() === 'MODEL_REQUEST_OUTCOME_UNKNOWN'
+  if (isManualRecoveryBlock(error) && !cancelledModelRequest) return evidence.emitBlocked(error)
   if (String(error?.code || '').trim().toUpperCase() === TURN_TERMINAL_PERSISTENCE_FAILURE_CODE) {
     throw error
   }

@@ -53,10 +53,12 @@ export type TurnEventPayload<Type extends TurnEventType> =
 
 /**
  * Legacy structural index, derived from implementation factories. These port
- * implementations are not yet in the strict checkJs pilot; some still infer
- * broad return types. This index is not an end-to-end type-safety guarantee.
- * Real checked protocol implementations/callers live in turn-protocol.ts and
- * tsconfig.protocol-pilot.json, with positive and negative compile fixtures.
+ * implementations mostly remain outside the strict checkJs pilot; some still
+ * infer broad return types. ManagedAttachmentGovernancePort is now a checked
+ * exception with its contract in kernel-ports.ts. This index is not an
+ * end-to-end type-safety guarantee. Real checked implementations/callers live
+ * in turn-protocol.ts, kernel-ports.ts and tsconfig.protocol-pilot.json, with
+ * positive and negative compile fixtures.
  */
 export type CompactionArchivePort = ReturnType<typeof createCompactionArchivePort>
 export type ManagedAttachmentGovernancePort =

@@ -92,7 +92,7 @@ test('turn.started enforces inline prompts by UTF-8 bytes, not JavaScript string
   }))
 })
 
-test('model tool readiness is a strict non-durable activity', () => {
+test('model tool readiness stays non-durable while durable argument progress contains metadata only', () => {
   const activity = createTurnActivity({
     sessionId: 's1',
     turnId: 't1',
@@ -110,12 +110,15 @@ test('model tool readiness is a strict non-durable activity', () => {
     id: 'model-tool-ready', sessionId: 's1', turnId: 't1', sequence: 1,
     type: 'model.activity', payload: activity, createdAt: 2,
   }))
-  assert.throws(() => createTurnEvent({
+  const progress = createTurnEvent({
     id: 'model-phase-with-tool', sessionId: 's1', turnId: 't1', sequence: 1,
     type: 'model.phase',
-    payload: { phase: 'completed', modelName: 'test-model', toolName: 'write_file' },
+    payload: { phase: 'tool_arguments', modelName: 'test-model', toolName: 'write_file', toolArgumentsChars: 4 },
     createdAt: 2,
-  }))
+  })
+  assert.equal(progress.payload.toolName, 'write_file')
+  assert.throws(() => parseTurnEvent({ ...progress, payload: { ...progress.payload, args: { path: 'secret.txt' } } }))
+  assert.throws(() => parseTurnEvent({ ...progress, payload: { ...progress.payload, result: { ok: true } } }))
 })
 
 test('model failover events surface a bounded provider/retry fallback', () => {
@@ -204,6 +207,110 @@ test('turn interrupted events are strict resumable attempt boundaries', () => {
     id: 'interrupted-drift',
     payload: { ...interrupted.payload, completed: true },
   }))
+})
+
+function sideEffectConfirmationEvent() {
+  return {
+    id: 'side-effect-confirmation', sessionId: 's1', turnId: 't1',
+    sequence: 5, type: 'turn.blocked', createdAt: 6,
+    payload: {
+      code: 'SIDE_EFFECT_OUTCOME_UNKNOWN', retryable: false, manualRetryable: true,
+      recoveryStatus: 'dead_letter', recoveryKind: 'side_effect_outcome_unknown',
+      turnId: 't1', toolCallId: 'call-1', requiresUserVerification: true,
+      recoveryAction: { kind: 'confirm_side_effect' },
+    },
+  }
+}
+
+test('side-effect confirmation is a strict destination-free recovery action', () => {
+  const event = createTurnEvent(sideEffectConfirmationEvent())
+  assert.deepEqual(event.payload.recoveryAction, { kind: 'confirm_side_effect' })
+  assert.deepEqual(parsePersistedTurnEvent(event), event)
+  assert.deepEqual(parseTurnEventTransportPayload(createTurnEventTransportEnvelope(event)), event)
+  assert.deepEqual(projectTurnEventForClient(event).payload.recoveryAction, { kind: 'confirm_side_effect' })
+  assert.equal(event.payload.toolCallId, 'call-1')
+  assert.equal(event.payload.requiresUserVerification, true)
+  assert.equal(event.payload.retryable, false)
+})
+
+test('side-effect confirmation rejects destinations, wrong recovery kinds, missing identity and scope drift', () => {
+  const event = sideEffectConfirmationEvent()
+  const invalid = [
+    { recoveryAction: { kind: 'confirm_side_effect', path: '/settings?tab=recovery' } },
+    { recoveryAction: { kind: 'confirm_side_effect', url: 'https://example.test/' } },
+    { recoveryAction: { kind: 'confirm_side_effect', href: 'javascript:alert(1)' } },
+    { recoveryAction: { kind: 'confirm_side_effect', resolution: 'committed' } },
+    { recoveryAction: { kind: 'open_url', url: 'https://example.test/' } },
+    { recoveryAction: { kind: 'open_settings', path: 'https://example.test/' } },
+    { recoveryAction: { kind: 'open_settings', path: '/settings?tab=other' } },
+    { recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery', url: 'https://example.test/' } },
+    { recoveryKind: 'side_effect_unknown' },
+    { recoveryKind: 'model_request_outcome_unknown', modelRequestId: 'request-1' },
+    { recoveryKind: undefined },
+    { code: 'MODEL_REQUEST_OUTCOME_UNKNOWN' },
+    { code: 'TURN_RECOVERY_BLOCKED' },
+    { modelRequestId: 'request-1' },
+    { error: { code: 'MODEL_REQUEST_OUTCOME_UNKNOWN', retryable: false } },
+    { error: { code: 'SIDE_EFFECT_OUTCOME_UNKNOWN', retryable: true } },
+    { toolCallId: undefined },
+    { toolCallId: '' },
+    { toolCallId: ' ' },
+    { toolCallId: 'call 1' },
+    { toolCallId: ' call-1' },
+    { toolCallId: 'call-1\n' },
+    { toolCallId: 'call\u0000id' },
+    { toolCallId: 'call\u001fid' },
+    { turnId: undefined },
+    { turnId: 'other-turn' },
+    { turnId: ' t1' },
+    { requiresUserVerification: undefined },
+    { requiresUserVerification: false },
+    { retryable: true },
+  ]
+  for (const payload of invalid) {
+    const invalidEvent = { ...event, payload: { ...event.payload, ...payload } }
+    assert.throws(() => parseTurnEvent(invalidEvent), JSON.stringify(payload))
+    assert.throws(() => parsePersistedTurnEvent(invalidEvent), JSON.stringify(payload))
+  }
+})
+
+test('persisted legacy settings actions remain readable for both side-effect formats', () => {
+  const event = sideEffectConfirmationEvent()
+  const recoveryAction = { kind: 'open_settings', path: '/settings?tab=recovery' }
+  const legacy = {
+    ...event,
+    payload: { ...event.payload, recoveryAction, message: 'legacy recovery presentation' },
+  }
+  assert.deepEqual(parsePersistedTurnEvent(legacy).payload.recoveryAction, recoveryAction)
+  const oldPayload = { ...legacy.payload }
+  delete oldPayload.turnId
+  delete oldPayload.toolCallId
+  delete oldPayload.requiresUserVerification
+  const old = parsePersistedTurnEvent({
+    ...legacy, payload: { ...oldPayload, recoveryKind: 'side_effect_unknown' },
+  })
+  assert.deepEqual(old.payload.recoveryAction, recoveryAction)
+  assert.equal(old.payload.toolCallId, undefined)
+})
+
+test('model-request unknown retains its legacy action and cannot use side-effect confirmation', () => {
+  const event = sideEffectConfirmationEvent()
+  const payload = {
+    code: 'MODEL_REQUEST_OUTCOME_UNKNOWN',
+    retryable: false, manualRetryable: true, recoveryStatus: 'dead_letter',
+    recoveryKind: 'model_request_outcome_unknown', turnId: 't1',
+    modelRequestId: 'request-1', requiresUserVerification: true,
+    recoveryAction: { kind: 'open_settings', path: '/settings?tab=recovery' },
+  }
+  const model = createTurnEvent({ ...event, payload })
+  assert.deepEqual(parsePersistedTurnEvent(model), model)
+  assert.deepEqual(model.payload.recoveryAction, payload.recoveryAction)
+  for (const fields of [{}, { toolCallId: 'call-1' }, { recoveryKind: 'side_effect_outcome_unknown', toolCallId: 'call-1' }]) {
+    assert.throws(() => createTurnEvent({
+      ...event,
+      payload: { ...payload, ...fields, recoveryAction: { kind: 'confirm_side_effect' } },
+    }))
+  }
 })
 
 test('turn event transport envelope is versioned and decodes legacy SSE payloads explicitly', () => {

@@ -74,6 +74,51 @@ test('ordinary questions retain the complete stable tool catalog', () => {
   assert.ok(ANSWER_NAMES.includes('Agent'))
 })
 
+test('production chat uses a compact recoverable initial catalog', () => {
+  const selectProduction = (prompt, options = {}) => {
+    let decision = null
+    const selected = selectJobToolSpecs({
+      origin: 'chat',
+      specs: SERVER_TOOL_SPECS.filter((item) => item?.function?.name !== 'read_skill_resource'),
+      prompt,
+      userPrompt: prompt,
+      onDecision: (value) => { decision = value },
+      ...options,
+    })
+    return { names: namesOf(selected), decision }
+  }
+
+  const answer = selectProduction('Explain OAuth refresh-token rotation.')
+  assert.deepEqual(answer.names, [
+    'load_skill', 'request_clarification', 'search_tools', 'set_deliverables',
+  ])
+
+  const coding = selectProduction('Fix the failing tests in this project and verify the result.')
+  assert.equal(coding.names.length, 15)
+  for (const name of [
+    'read_file', 'grep_code', 'write_file', 'edit_file', 'apply_patch',
+    'bash_exec', 'run_command', 'run_project_check', 'git_diff', 'search_tools',
+  ]) assert.ok(coding.names.includes(name), name)
+  for (const name of ['Agent', 'archive_extract', 'run_test', 'slack_send_message', 'web_search']) {
+    assert.equal(coding.names.includes(name), false, name)
+    assert.deepEqual(coding.decision.excludedTools.find((entry) => entry.name === name), {
+      name, stage: 'initial_disclosure', reason: 'deferred_until_requested',
+    })
+  }
+
+  assert.deepEqual(selectProduction('Search the web for the current Node.js LTS.').names, [
+    'fetch_url', 'load_skill', 'request_clarification', 'search_tools',
+    'set_deliverables', 'web_search',
+  ])
+  const combined = selectProduction(String.raw`Search the web, then write D:\demo\result.txt.`).names
+  for (const name of ['web_search', 'fetch_url', 'write_file', 'run_project_check']) {
+    assert.ok(combined.includes(name), name)
+  }
+  const slack = selectProduction('Send a release notice to Slack.').names
+  assert.ok(slack.includes('slack_send_message'))
+  assert.equal(slack.includes('notion_search'), false)
+})
+
 test('refreshed conversations and terse follow-ups retain authorized local tools on every new turn', () => {
   for (const userPrompt of [
     '你来操作',
@@ -172,7 +217,8 @@ test('an exact local file path does not alter the stable catalog', () => {
   }))
   assert.ok(localNames.includes('read_file'))
   assert.ok(localNames.includes('write_file'))
-  assert.equal(localNames.includes('read_artifact_source'), true)
+  assert.equal(localNames.includes('read_artifact_source'), false)
+  assert.equal(localNames.includes('search_tools'), true)
 
   const currentArtifactNames = namesOf(selectChatToolSpecs({
     prompt: '修改当前已生成产物的颜色。',

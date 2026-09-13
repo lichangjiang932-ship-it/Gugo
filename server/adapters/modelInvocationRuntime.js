@@ -1,3 +1,4 @@
+import { normalizeModelPhaseProgress } from '../../shared/modelPhaseProgress.js'
 import { prepareToolLoopVision } from './modelToolLoopVision.js'
 import { logWarn } from '../utils/logger.js'
 import { withRetry } from '../utils/modelRetry.js'
@@ -334,14 +335,34 @@ export async function callBackgroundModelWithTools({
   }, { signal })
 }
 
-/**
- * Chat tool-loop model call with the same stable result shape as
- * callBackgroundModelWithTools, but backed by the provider streaming adapter.
- *
- * Text and reasoning are delivered while the provider is still generating;
- * the canonical tool_calls batch is retained until the stream finishes so the
- * durable tool-loop checkpoint remains identical to the non-streaming path.
- */
+/** Publish advisory activity without dispatching an unfinished tool batch. */
+async function publishStreamingToolActivity(event, config, { onToolCallReady, onToolCallProgress }) {
+  if (event?.type === 'tool_call_progress' && typeof onToolCallProgress === 'function') {
+    await onToolCallProgress(normalizeModelPhaseProgress(event))
+  } else if (event?.type === 'tool_call_ready' && typeof onToolCallReady === 'function') {
+    // Activity is advisory. Execution waits for the complete canonical batch.
+    const readyCall = canonicalStreamToolCalls([event.toolCall])[0]
+    if (readyCall?.function?.name) {
+      await onToolCallReady(readyCall, { index: event.index, modelName: config.modelName })
+    }
+  }
+}
+
+function retainInterruptedGeneration(error, { nativeContent, content, usage, config, fallbackConfig, signal }) {
+  if (error?.code !== 'MODEL_REQUEST_OUTCOME_UNKNOWN' || signal?.aborted) return
+  // Diagnostic text is not a confirmed response or permission to replay a call.
+  const partialText = nativeContent ? content : stripEmbeddedReasoning(content)
+  const partialCall = nativeContent ? null : extractTextToolCalls(partialText)
+  error.partialGeneration = {
+    content: partialCall?.detected ? partialCall.content : partialText,
+    usage,
+    modelName: config?.modelName || fallbackConfig.modelName,
+    providerId: config?.providerId || fallbackConfig.providerId,
+    streamed: true,
+  }
+}
+
+/** Stream progress while retaining complete tool batches for the durable loop. */
 export async function callStreamingModelWithTools({
   messages,
   maxTokens,
@@ -357,6 +378,7 @@ export async function callStreamingModelWithTools({
   onTextDelta,
   onReasoningDelta,
   onToolCallReady,
+  onToolCallProgress,
   onFailover,
   onRetry,
   modelRequestId,
@@ -394,59 +416,57 @@ export async function callStreamingModelWithTools({
   const textToolCallFilter = createTextToolCallDeltaFilter()
   const trackProviderAttempt = createProviderAttemptTracker(candidates, onProviderAttempt)
 
-  for await (const streamed of streamWithProviderFailover(
-    candidates,
-    (candidate) => streamOpenAICompatible({
-      config: candidate,
-      messages: preparedMessages,
-      fetchImpl,
-      tools,
-      toolChoice,
-      externalSignal: signal,
-      env: runtimeEnv,
-      modelRequestId,
-      cacheOwnerId: usageOwnerId,
-      onProviderAttempt: trackProviderAttempt,
-    }),
-    { signal, onFailover, onRetry },
-  )) {
-    if (activeConfig !== streamed.config) {
-      activeConfig = streamed.config
-      nativeContent = isNativeProviderKind(profileForConfig(activeConfig, runtimeEnv).kind)
-    }
-    const event = streamed.event
-    if (event?.usage) usage = event.usage
-    if (event?.finishReason) finishReason = event.finishReason
-    if (event?.providerReplay) providerReplay = event.providerReplay
+  try {
+    for await (const streamed of streamWithProviderFailover(
+      candidates,
+      (candidate) => streamOpenAICompatible({
+        config: candidate,
+        messages: preparedMessages,
+        fetchImpl,
+        tools,
+        toolChoice,
+        externalSignal: signal,
+        env: runtimeEnv,
+        modelRequestId,
+        cacheOwnerId: usageOwnerId,
+        onProviderAttempt: trackProviderAttempt,
+      }),
+      { signal, onFailover, onRetry },
+    )) {
+      if (activeConfig !== streamed.config) {
+        activeConfig = streamed.config
+        nativeContent = isNativeProviderKind(profileForConfig(activeConfig, runtimeEnv).kind)
+      }
+      const event = streamed.event
+      if (event?.usage) usage = event.usage
+      if (event?.finishReason) finishReason = event.finishReason
+      if (event?.providerReplay) providerReplay = event.providerReplay
 
-    if (event?.type === 'text' && event.delta) {
-      const delta = String(event.delta)
-      content += delta
-      if (typeof onTextDelta === 'function') {
-        const visibleDelta = nativeContent ? delta : textToolCallFilter.push(delta)
-        if (visibleDelta) await onTextDelta(visibleDelta, { modelName: activeConfig.modelName })
+      if (event?.type === 'text' && event.delta) {
+        const delta = String(event.delta)
+        content += delta
+        if (typeof onTextDelta === 'function') {
+          const visibleDelta = nativeContent ? delta : textToolCallFilter.push(delta)
+          if (visibleDelta) await onTextDelta(visibleDelta, { modelName: activeConfig.modelName })
+        }
+      } else if (event?.type === 'reasoning' && event.delta) {
+        const delta = String(event.delta)
+        reasoningText += delta
+        reasoningChars += delta.length
+        if (typeof onReasoningDelta === 'function') {
+          await onReasoningDelta(delta, { modelName: activeConfig.modelName })
+        }
+      } else if (event?.type === 'tool_calls') {
+        toolCalls = canonicalStreamToolCalls(event.toolCalls)
+      } else if (event?.type === 'tool_call_progress' || event?.type === 'tool_call_ready') {
+        await publishStreamingToolActivity(event, activeConfig, { onToolCallReady, onToolCallProgress })
       }
-    } else if (event?.type === 'reasoning' && event.delta) {
-      const delta = String(event.delta)
-      reasoningText += delta
-      reasoningChars += delta.length
-      if (typeof onReasoningDelta === 'function') {
-        await onReasoningDelta(delta, { modelName: activeConfig.modelName })
-      }
-    } else if (event?.type === 'tool_call_ready') {
-      // This is activity evidence only. The canonical tool_calls batch remains
-      // buffered until the provider finishes, so checkpointing and execution
-      // still happen exactly once through the normal tool-loop path.
-      const readyCall = canonicalStreamToolCalls([event.toolCall])[0]
-      if (readyCall?.function?.name && typeof onToolCallReady === 'function') {
-        await onToolCallReady(readyCall, {
-          index: event.index,
-          modelName: activeConfig.modelName,
-        })
-      }
-    } else if (event?.type === 'tool_calls') {
-      toolCalls = canonicalStreamToolCalls(event.toolCalls)
     }
+  } catch (error) {
+    retainInterruptedGeneration(error, {
+      nativeContent, content, usage, config: activeConfig, fallbackConfig: config, signal,
+    })
+    throw error
   }
 
   const resolvedConfig = activeConfig || config

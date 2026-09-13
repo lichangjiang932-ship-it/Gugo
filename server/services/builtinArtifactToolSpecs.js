@@ -1,5 +1,5 @@
 import { XLSX_LIMITS } from './xlsxArtifactContract.js'
-import { PPTX_DESIGN_SCHEMA, PPTX_SLIDE_SCHEMA, PPTX_LIMITS } from './pptxArtifactContract.js'
+import { PPTX_AUTHORING_DESIGN_SCHEMA, PPTX_AUTHORING_SLIDE_SCHEMA, PPTX_LIMITS, PPTX_REPAIR_PARAMETERS } from './pptxArtifactContract.js'
 
 /**
  * Canonical model-facing schemas for managed artifacts.
@@ -41,6 +41,19 @@ const OFFICE_IMAGES_PROPERTY = Object.freeze({
     },
     required: ['path'],
   },
+})
+
+export const PPTX_FULL_AUTHORING_PARAMETERS = Object.freeze({
+  type: 'object', additionalProperties: false,
+  properties: {
+    title: { type: 'string' },
+    design: PPTX_AUTHORING_DESIGN_SCHEMA,
+    output_directory: OUTPUT_DIRECTORY_PROPERTY,
+    images: OFFICE_IMAGES_PROPERTY,
+    replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
+    slides: { type: 'array', minItems: 1, maxItems: PPTX_LIMITS.slides, items: PPTX_AUTHORING_SLIDE_SCHEMA },
+  },
+  required: ['title', 'slides'],
 })
 
 export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
@@ -99,26 +112,12 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
     type: 'function',
     function: {
       name: 'create_pptx',
-      description: 'Create an editable PowerPoint (.pptx) directly from the user request. Respect the requested slide count, language, content, colors, fonts and layout. Author design and native slide elements yourself when a preset layout does not express the request; never make the user select or configure a template. No implicit cover, closing page, brand, or date is added.',
+      description: 'Create an editable PowerPoint (.pptx) using a free native-element canvas for every slide. Author colors, typography, placement and composition from the current user request. Every new slide must supply elements; there are no theme, preset layout or legacy content-slot parameters. After a repairable native preflight failure, use repair_from_tool_call_id, base_digest and small geometry edits instead of resending the full deck; the host preserves the source and repeats all validation. Read old source before revising and convert every submitted slide to native elements without losing required content. Never ask the user to select a template. No implicit cover, closing page, brand, date or page number is added.',
       parameters: {
         type: 'object',
-        properties: {
-          title: { type: 'string' },
-          subtitle: { type: 'string' },
-          theme: { type: 'string', enum: ['noir', 'paper', 'ocean', 'forest'] },
-          design: PPTX_DESIGN_SCHEMA,
-          brand: { type: 'string' },
-          output_directory: OUTPUT_DIRECTORY_PROPERTY,
-          images: OFFICE_IMAGES_PROPERTY,
-          replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
-          slides: {
-            type: 'array',
-            minItems: 1,
-            maxItems: PPTX_LIMITS.slides,
-            items: PPTX_SLIDE_SCHEMA,
-          },
-        },
-        required: ['title', 'slides'],
+        additionalProperties: false,
+        properties: { ...PPTX_FULL_AUTHORING_PARAMETERS.properties, ...PPTX_REPAIR_PARAMETERS.properties },
+        oneOf: [PPTX_FULL_AUTHORING_PARAMETERS, PPTX_REPAIR_PARAMETERS],
       },
     },
   },

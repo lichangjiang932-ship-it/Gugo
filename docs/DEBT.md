@@ -268,22 +268,28 @@ calls and negative compile fixtures; unsafe port inference and uncovered callers
 must remain explicitly tracked before this debt can close.
 
 **Progress:** `tsconfig.protocol-pilot.json` enables `checkJs: true`, `strict` and
-`noEmit` for six real runtime modules: inline-skill bounds, Turn Activity, Turn
-Events, SSE transport, WebSocket protocol and the server WebSocket frame codec.
-Their JSDoc imports use `types/turn-protocol.ts`, derived from the same Zod
-schemas. Literal event/activity kinds, type-dependent constructor payloads and
-validation-result narrowing are checked. The production WebSocket service now
-uses the checked codec; v1 SSE/WS and durable Agent Event v2 retain their separate
-authorities. No repository-wide switch or diagnostic-suppression directive is used.
+`noEmit` for nine real runtime modules: inline-skill bounds, Turn Activity, Turn
+Events, SSE transport, WebSocket protocol, the server WebSocket frame codec,
+the managed-attachment governance port, the Loop host capability handshake and
+durable Agent Event consumer host support. Protocol JSDoc imports use
+`types/turn-protocol.ts`, derived from the same Zod schemas; checked core ports
+use `types/kernel-ports.ts`. Literal event/activity kinds, type-dependent
+constructor payloads, validation-result narrowing, governance adapter shape and
+owner/operation inputs, the Loop v2/v3 broker capability declaration, and the
+durable store/listener support boundary are checked. The production WebSocket
+service uses the checked codec, while user-data clearing consumes the checked
+governance port;
+v1 SSE/WS and durable Agent Event v2 retain their separate authorities. No
+repository-wide switch or diagnostic-suppression directive is used.
 
-**Remaining scope:** The complete WebSocket service, kernel-port factories and
-their other callers, UI, model invocation and persistence modules are not covered
-by this pilot. Legacy structural aliases are not a substitute for migrating these
-implementations; the debt is deliberately open rather than claiming whole-repo
-type safety.
+**Remaining scope:** The complete WebSocket service, remaining kernel-port
+factories and their other callers, UI, model invocation and persistence modules
+are not covered by this pilot. Legacy structural aliases are not a substitute
+for migrating these implementations; the debt is deliberately open rather than
+claiming whole-repo type safety.
 
 **Verification:** The existing unconditional CI `npm run typecheck` now runs the
-original index, the strict implementation pilot and 11 registered negative call
+original index, the strict implementation pilot and 14 registered negative call
 fixtures. Every negative fixture must fail with its intended TypeScript error;
 unresolved imports or unrelated errors cannot count as a successful check.
 `tests/protocolTypecheck.test.js` also injects a wrong protocol version into the

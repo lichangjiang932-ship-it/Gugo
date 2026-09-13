@@ -240,7 +240,10 @@ test('test runner reports an isolated process that exits non-zero after green TA
   const output = combinedOutput(result)
 
   assert.equal(result.status, 1)
-  assert.match(output, /# pass 2/u)
+  const total = Number(output.match(/^# tests (\d+)$/mu)?.[1])
+  const passed = Number(output.match(/^# pass (\d+)$/mu)?.[1])
+  assert.ok(Number.isSafeInteger(total) && total > 0, 'the isolated probe must actually run tests')
+  assert.equal(passed, total, 'the TAP test cases pass even though their process exit is a failure')
   assert.match(output, /# fail 0/u)
   assert.match(
     output,

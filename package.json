@@ -26,6 +26,9 @@
   },
   "type": "module",
   "main": "desktop/main.js",
+  "exports": {
+    "./sdk": "./sdk/index.js"
+  },
   "bin": {
     "gugo": "./bin/yma-cli.js",
     "yma-cli": "./bin/yma-cli.js"
@@ -35,9 +38,10 @@
     "build": "vite build --configLoader runner",
     "audit:prod": "node scripts/audit-production.mjs",
     "audit:functions": "node scripts/audit-function-length.cjs",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "test": "node scripts/run-tests.js",
     "eval:offline": "node scripts/run-tests.js offline-eval",
+    "eval:live": "node scripts/run-live-agent-evals.mjs",
     "test:coverage": "node scripts/run-tests.js --coverage",
     "i18n:check": "node --test tests/i18nHardcoded.test.js tests/i18n.test.js",
     "debt:check": "node --test tests/codeDebt.test.js",
@@ -88,7 +92,7 @@
     "rehype-highlight": "^7.0.2",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
-    "sharp": "^0.35.3",
+    "sharp": "^0.35.4",
     "undici": "7.29.0",
     "ws": "^8.21.2",
     "zod": "^4.4.3"
@@ -119,6 +123,7 @@
     "brace-expansion": "5.0.9",
     "minimatch": "10.2.6",
     "nanoid": "3.3.17",
-    "undici": "7.29.0"
+    "undici": "7.29.0",
+    "js-yaml": "4.3.2"
   }
 }

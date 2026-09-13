@@ -30,6 +30,8 @@ function builtinMetadata(category, isConcurrencySafe, overrides = {}) {
 
 function buildBuiltinToolMetadata(codexModelsToolName) {
   return Object.freeze({
+    load_skill: builtinMetadata('read', false),
+    search_tools: builtinMetadata('read', false),
     list_directory: builtinMetadata('read', true),
     web_search: builtinMetadata('read', true),
     fetch_url: builtinMetadata('read', true),
@@ -107,6 +109,8 @@ function buildBuiltinToolMetadata(codexModelsToolName) {
 }
 
 const READ_ONLY_MODE_TOOLS = new Set([
+  'load_skill',
+  'search_tools',
   'read_skill_resource',
   'read_artifact_source',
   'list_directory',

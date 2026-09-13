@@ -18,6 +18,7 @@ const { upsertSession } = await import('../server/services/sessionStore.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
 const { getBuiltinSpec, registerDynamicTool } = await import('../server/services/toolRegistry.js')
 const { resolveTurnToolSpecs } = await import('../server/services/turnToolSpecs.js')
+const { selectJobToolSpecs } = await import('../server/services/toolLoopRuntime.js')
 const { createTestTurnEnginePersistence } = await import('./helpers/turnEnginePersistence.js')
 
 const OWNER = 'plugin-discovery-owner'
@@ -171,6 +172,37 @@ test('production turn discovery does not inject unrelated dynamic registry origi
     enabledConnectorTools: [],
   }))
   assert.equal(names.has('foreign_dynamic_probe'), false)
+})
+
+test('explicit runtime-plugin intent survives deferred discovery and compact chat selection', async () => {
+  await installDiscoveryPlugin('explicit-plugin-selection')
+  const searchTools = getBuiltinSpec('search_tools')
+  let deferred = []
+  const ordinary = await resolveTurnToolSpecs({
+    userId: OWNER,
+    baseSpecs: [searchTools],
+    enabledConnectorTools: [],
+    prompt: 'Explain this local project.',
+    onDeferredSpecs: (specs) => { deferred = specs },
+  })
+  assert.equal(namesOf(ordinary).has('plugin_global_discovery'), false)
+  assert.equal(namesOf(deferred).has('plugin_global_discovery'), true)
+
+  const explicitPrompt = 'Use the runtime plugin tool for this task.'
+  const explicit = await resolveTurnToolSpecs({
+    userId: OWNER,
+    baseSpecs: [searchTools],
+    enabledConnectorTools: [],
+    prompt: explicitPrompt,
+  })
+  const selected = selectJobToolSpecs({
+    origin: 'chat',
+    specs: explicit,
+    prompt: explicitPrompt,
+    userPrompt: explicitPrompt,
+  })
+  assert.equal(namesOf(selected).has('plugin_global_discovery'), true)
+  assert.equal(namesOf(selected).has('plugin_scoped_discovery'), true)
 })
 
 test('TurnEngine passes visible runtime plugin tools to the real loop input', async () => {

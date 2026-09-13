@@ -89,6 +89,13 @@ export default function useLeftRailDisclosure({ mediaQuery, onCollapse, hasOpenM
     }
     const onKeyDown = (event) => {
       if (event.defaultPrevented) return
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        // The global search dialog has its own focus fence. Release this
+        // drawer's fence first and leave a visible return-focus target.
+        closeMobileRail()
+        toggleRef.current?.focus?.({ preventScroll: true })
+        return
+      }
       if (event.key === 'Escape') {
         // A nested menu owns the first Escape. Its own handler restores its
         // trigger; a subsequent Escape closes the navigation drawer.

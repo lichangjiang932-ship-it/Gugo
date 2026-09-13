@@ -1,5 +1,7 @@
 import crypto from 'node:crypto'
 import { getDb } from '../db.js'
+import { sideEffectRecoveryRowToRecord as rowToRecord } from './sideEffectRecoveryRecords.js'
+import { sanitizeSideEffectFailure } from './sideEffectExecutionSerialization.js'
 import {
   encodeSideEffectOutcome,
   maybePruneSideEffectExecutions,
@@ -290,32 +292,6 @@ function safeIntentSummary(record) {
   }
 }
 
-function rowToRecord(row) {
-  if (!row) return null
-  return {
-    ownerId: row.owner_id,
-    scopeKind: row.scope_kind,
-    scopeKey: row.scope_key,
-    sessionId: row.session_id,
-    turnId: row.turn_id,
-    jobId: row.job_id,
-    stepId: row.step_id,
-    toolCallId: row.tool_call_id,
-    idempotencyKey: row.idempotency_key,
-    toolName: row.tool_name,
-    argsDigest: row.args_digest,
-    intent: decodeOutcome(row.intent_json),
-    status: row.status,
-    outcome: decodeOutcome(row.outcome_json),
-    audit: decodeOutcome(row.audit_json),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    preparedAt: row.prepared_at,
-    executingAt: row.executing_at,
-    finishedAt: row.finished_at,
-  }
-}
-
 export function sideEffectRecoveryRecordForClient(record, { includeScopeKey = true } = {}) {
   if (!record) return null
   const intentSummary = safeIntentSummary(record)
@@ -332,6 +308,7 @@ export function sideEffectRecoveryRecordForClient(record, { includeScopeKey = tr
     status: record.status,
     intentSummary,
     evidence: recoveryEvidence(record.outcome, intentSummary),
+    ...(record.outcome?.failure ? { failure: sanitizeSideEffectFailure(record.outcome.failure) } : {}),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     preparedAt: record.preparedAt,
@@ -378,6 +355,23 @@ export function sideEffectResumeDescriptor(record) {
     return { kind: 'job', jobId: record.jobId, stepId: record.stepId }
   }
   return null
+}
+
+/** Read one pending operation for the active turn, without listing other tasks or pruning data. */
+export function getUnknownSideEffectForTurn({ userId, sessionId, turnId, toolCallId, db } = {}) {
+  const scope = { userId, sessionId, turnId, toolCallId }
+  for (const [name, value] of Object.entries(scope)) {
+    if (typeof value !== 'string' || value !== value.trim()) {
+      throw recoveryError('SIDE_EFFECT_RECOVERY_INVALID', `${name} must be an exact identifier`, 400)
+    }
+    requiredText(value, name, 500)
+  }
+  const scopeKey = JSON.stringify(['turn', sessionId, turnId])
+  const row = (db || getDb()).prepare(`SELECT * FROM side_effect_executions
+    WHERE owner_id = ? AND scope_kind = 'turn' AND scope_key = ?
+      AND session_id = ? AND turn_id = ? AND tool_call_id = ? AND status = 'unknown'`)
+    .get(userId, scopeKey, sessionId, turnId, toolCallId)
+  return sideEffectRecoveryRecordForClient(rowToRecord(row))
 }
 
 export function listUnknownSideEffects({

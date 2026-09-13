@@ -7,7 +7,8 @@
  *   1. **上下文窗口**。兼容层的 `/v1/models` 只回模型名,不回 context_length。
  *      于是用户必须自己猜「我这个模型窗口多大」并手填 —— 猜错了(或者干脆不填,
  *      用了 1,000,000 的默认值)压缩就永远不触发,每个长对话必然撞 400。
- *      Ollama 原生的 `/api/show` 直接给出真实的 context_length。
+ *      `/api/ps` 给出当前模型运行窗口,未加载时可读取 `/api/show` 的 num_ctx。
+ *      `model_info` 中的 context_length 只是训练元数据,不能当作有效运行窗口。
  *
  *   2. **keep_alive**。Ollama 默认 5 分钟就把模型从显存里卸载,下一次请求
  *      要重新加载几个 G 的权重 —— 这正是「本地模型延迟太大」最常见的来源。
@@ -120,7 +121,7 @@ export async function listOllamaModels({
 }
 
 /**
- * 从 `model_info` 里找出上下文长度。
+ * 从 `model_info` 里找出训练上下文上限,不用于推断端点的有效运行窗口。
  *
  * Ollama 的键名带家族前缀,如 `llama.context_length`、`qwen2.context_length`、
  * `gemma2.context_length` —— 不能写死,只能按后缀匹配。
@@ -134,6 +135,56 @@ export function extractContextLength(showResponse) {
     if (Number.isFinite(num) && num > 0) return Math.floor(num)
   }
   return null
+}
+
+function positiveContextWindow(value) {
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+function configuredContextWindow(showResponse) {
+  const parameters = showResponse?.parameters
+  if (parameters && typeof parameters === 'object' && !Array.isArray(parameters)) {
+    return positiveContextWindow(parameters.num_ctx)
+  }
+  if (typeof parameters !== 'string') return null
+  const windows = [...parameters.matchAll(/^[\t ]*num_ctx[\t ]+([^\r\n]*)$/gm)]
+    .map((match) => positiveContextWindow(match[1].trim()))
+  if (!windows.length || windows.some((value) => value === null)) return null
+  return Math.min(...windows)
+}
+
+function canonicalOllamaModelName(value) {
+  const name = String(value || '').trim()
+  if (!name) return ''
+  return name.slice(name.lastIndexOf('/') + 1).includes(':') ? name : `${name}:latest`
+}
+
+function runningContextWindow(runningModels, modelName) {
+  const entries = runningModels.map((model) => ({
+    name: String(model?.name || model?.model || '').trim(),
+    contextWindow: positiveContextWindow(model?.context_length),
+  }))
+  const exact = entries.filter((entry) => entry.name === modelName)
+  const matches = exact.length ? exact : entries.filter((entry) => (
+    canonicalOllamaModelName(entry.name) === canonicalOllamaModelName(modelName)
+  ))
+  const windows = matches.map((entry) => entry.contextWindow).filter((value) => value !== null)
+  // Duplicate runtime records must not inflate a shared budget. Do not match
+  // by digest, strip namespaces, or borrow another tag's loaded context.
+  return windows.length ? Math.min(...windows) : null
+}
+
+async function listRunningOllamaModels(origin, options) {
+  try {
+    const data = await fetchJson(`${origin}/api/ps`, options)
+    return Array.isArray(data?.models) ? data.models : []
+  } catch {
+    // Older/proxied endpoints may not expose /api/ps. Missing runtime metadata
+    // permits only an explicit num_ctx fallback, never the training ceiling.
+    return []
+  }
 }
 
 /** 这个模型支不支持 function calling —— Ollama 的 template 里会引用 .Tools。 */
@@ -158,12 +209,13 @@ export function extractSupportsVision(showResponse) {
 }
 
 /**
- * 探测单个模型的真实能力(`POST /api/show`)。
+ * 探测单个模型的能力和有效上下文窗口(`/api/show` + `/api/ps`)。
  *
  * 返回的东西直接就是 endpointProfile 的 overrides 形状,
  * 可以原样存进 model_providers 的 v28 列。
  *
- * @returns {Promise<{contextWindow:number|null, supportsTools:boolean|null, supportsVision:boolean|null}>}
+ * 未知窗口保持 null,交由 endpointProfile 使用显式配置或保守本地默认。
+ * @returns {Promise<{contextWindow:number|null, supportsTools:boolean|null, supportsVision:boolean|null, source?:string}>}
  */
 export async function probeOllamaModel({
   baseUrl,
@@ -172,22 +224,25 @@ export async function probeOllamaModel({
   timeoutMs = 30_000,
   headers = {},
   apiKey = '',
+  runningModels,
 } = {}) {
   const origin = ollamaOrigin(baseUrl)
   const name = String(modelName || '').trim()
   if (!origin || !name) return { contextWindow: null, supportsTools: null, supportsVision: null }
-  const data = await fetchJson(`${origin}/api/show`, {
-    fetchImpl,
-    timeoutMs,
-    method: 'POST',
-    body: { model: name },
-    headers,
-    apiKey,
-  })
+  const options = { fetchImpl, timeoutMs, headers, apiKey }
+  const [data, loadedModels] = await Promise.all([
+    fetchJson(`${origin}/api/show`, {
+      ...options, method: 'POST', body: { model: name },
+    }),
+    Array.isArray(runningModels) ? runningModels : listRunningOllamaModels(origin, options),
+  ])
+  const runtimeWindow = runningContextWindow(loadedModels, name)
+  const contextWindow = runtimeWindow ?? configuredContextWindow(data)
   return {
-    contextWindow: extractContextLength(data),
+    contextWindow,
     supportsTools: extractSupportsTools(data),
     supportsVision: extractSupportsVision(data),
+    ...(contextWindow ? { source: runtimeWindow ? 'ollama-api-ps' : 'ollama-api-show' } : {}),
   }
 }
 
@@ -235,6 +290,9 @@ export async function discoverOllamaEndpoint({
   const target = String(modelName || '').trim() || result.models[0]?.name || ''
   if (!target) return result
   try {
+    const runningModels = await listRunningOllamaModels(ollamaOrigin(baseUrl), {
+      fetchImpl, timeoutMs, headers, apiKey,
+    })
     const names = result.models.map((model) => model.name).filter(Boolean).slice(0, 100)
     const resolvedTarget = names.includes(target)
       ? target
@@ -255,6 +313,7 @@ export async function discoverOllamaEndpoint({
             timeoutMs,
             headers,
             apiKey,
+            runningModels,
           })
           probed[index] = [name, profile]
         } catch {
@@ -265,7 +324,7 @@ export async function discoverOllamaEndpoint({
     await Promise.all(workers)
     for (const [name, profile] of probed) {
       if (profile && Object.values(profile).some((value) => value !== null)) {
-        result.modelProfiles[name] = { ...profile, source: 'ollama-api-show' }
+        result.modelProfiles[name] = { ...profile, source: profile.source || 'ollama-api-show' }
       }
     }
     result.models = result.models.map((model) => ({

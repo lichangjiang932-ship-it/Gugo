@@ -23,6 +23,11 @@ import {
   createSideEffectExecution,
   markSideEffectOutcomeKnownFailed,
 } from '../server/services/loop/sideEffectExecution.js'
+import {
+  encodeSideEffectOutcome,
+  sanitizeSideEffectFailure,
+  sanitizeSideEffectFailureText,
+} from '../server/services/sideEffectExecutionSerialization.js'
 import { listUnknownSideEffects } from '../server/services/sideEffectRecoveryService.js'
 import {
   getToolMetadata,
@@ -66,6 +71,25 @@ function ledgerContractStub() {
     'finish',
     'parseOutcome',
   ].map((name) => [name, () => null]))
+}
+
+function loopExecutionFor(ledger, input, checkpointStatus = 'pending') {
+  return createSideEffectExecution({
+    ledger,
+    durableToolNames: new Set([input.toolName]),
+    toolName: input.toolName,
+    call: {
+      id: input.toolCallId, idempotencyKey: input.idempotencyKey, checkpointStatus,
+      checkpointReadOnly: false,
+    },
+    job: { id: input.scope.jobId, userId: input.scope.ownerId },
+    step: { id: input.scope.stepId },
+    approvalOrigin: 'job',
+    createScope: createSideEffectScope,
+    recoveryBlock: sideEffectRecoveryBlock,
+    conflictCode: SIDE_EFFECT_LEDGER_CONFLICT,
+    unknownCode: SIDE_EFFECT_OUTCOME_UNKNOWN,
+  })
 }
 
 test('durable ledger resolution is explicit and never invents an anonymous owner', () => {
@@ -620,6 +644,7 @@ test('a returned tool result is retained when final ledger persistence becomes u
     assert.equal(unknown.status, 'unknown')
     assert.deepEqual(ledger.parseOutcome(unknown), {
       ...returned,
+      failure: { code: 'TOOL_EXECUTION_FAILED', message: 'final ledger update failed' },
       sideEffectLedgerReplay: true,
     })
   } finally {
@@ -730,4 +755,198 @@ test('committed history replays safe outcome without local audit after metadata 
   } finally {
     db.close()
   }
+})
+
+test('unknown tool failures persist their safe cause and stay blocked across a cold ledger read', () => {
+  const { db, ledger, input } = fixture()
+  input.toolName = 'create_pptx'
+  try {
+    const execution = loopExecutionFor(ledger, input)
+    const prepared = execution.prepare(input.args)
+    execution.markExecuting(prepared.input)
+    const sourceError = Object.assign(new Error('slides[7].bullets or body must contain an item'), {
+      code: 'PPTX_CONTENT_INVALID',
+      cause: Object.assign(new Error('process layout needs body content'), { code: 'PPTX_LAYOUT_INVALID' }),
+      args: { private: 'ARGUMENTS_MUST_NOT_ESCAPE' },
+      request: { headers: { Authorization: 'Bearer DO_NOT_EXPOSE_REQUEST' } },
+      stack: 'STACK_MUST_NOT_ESCAPE',
+      sideEffectOutcomeKnownFailed: true,
+    })
+    const expectedFailure = {
+      code: 'PPTX_CONTENT_INVALID',
+      message: 'slides[7].bullets or body must contain an item',
+      cause: { code: 'PPTX_LAYOUT_INVALID', message: 'process layout needs body content' },
+    }
+    assert.throws(() => execution.rethrowExecutionError({
+      error: sourceError, input: prepared.input, started: true, returned: false,
+      checkpointFlushErrorCode: 'CHECKPOINT_FLUSH_FAILED',
+    }), (error) => {
+      assert.equal(error.code, SIDE_EFFECT_OUTCOME_UNKNOWN)
+      assert.equal(error.unsafeToReplay, true)
+      assert.equal(error.requiresUserVerification, true)
+      assert.equal(error.retryable, false)
+      assert.notEqual(error.cause, sourceError)
+      assert.deepEqual(error.cause, expectedFailure)
+      assert.match(error.message, /PPTX_CONTENT_INVALID: slides\[7\]\.bullets/)
+      return true
+    })
+    const row = ledger.read(input)
+    assert.equal(row.status, 'unknown', 'a validation-looking code is not a rollback proof')
+    assert.deepEqual(JSON.parse(row.outcomeJson), {
+      ok: false, code: SIDE_EFFECT_OUTCOME_UNKNOWN,
+      error: expectedFailure.message, retryable: false, requiresUserVerification: true,
+      failure: expectedFailure,
+    })
+    assert.doesNotMatch(row.outcomeJson, /ARGUMENTS_MUST_NOT_ESCAPE|DO_NOT_EXPOSE_REQUEST|STACK_MUST_NOT_ESCAPE/)
+    const coldLedger = createSideEffectExecutionLedger({ db })
+    const recovered = loopExecutionFor(coldLedger, input, 'executing')
+    for (const resume of [
+      () => recovered.recover(input.args),
+      () => recovered.prepare(input.args),
+    ]) {
+      assert.throws(resume, (error) => {
+        assert.equal(error.code, SIDE_EFFECT_OUTCOME_UNKNOWN)
+        assert.equal(error.unsafeToReplay, true)
+        assert.deepEqual(error.cause, expectedFailure)
+        return true
+      })
+    }
+    assert.equal(coldLedger.claimExecution(input).claimed, false, 'an unknown operation must never be reclaimed')
+    assert.equal(coldLedger.read(input).outcomeJson, row.outcomeJson)
+  } finally {
+    db.close()
+  }
+})
+
+test('known-failed proofs may retain explicit actionable diagnostics without trusting raw error fields', () => {
+  const { db, ledger, input } = fixture()
+  try {
+    const execution = loopExecutionFor(ledger, input)
+    const prepared = execution.prepare(input.args)
+    execution.markExecuting(prepared.input)
+    const source = markSideEffectOutcomeKnownFailed(
+      Object.assign(new Error('raw args={"secret":"DO_NOT_PUBLISH"}'), { code: 'UNTRUSTED_RAW_CODE' }),
+      {
+        code: 'PPTX_CONTENT_INVALID',
+        message: 'slides[8].bullets or body must contain text when layout is "split"',
+        hint: 'Add the missing body. api_key="SYNTHETIC_PRIVATE_VALUE"',
+        causeCode: 'PPTX_LAYOUT_INVALID',
+      },
+    )
+    assert.throws(() => execution.rethrowExecutionError({
+      error: source, input: prepared.input, started: true, returned: false,
+      checkpointFlushErrorCode: 'CHECKPOINT_FLUSH_FAILED',
+    }), (error) => error === source)
+    const row = ledger.read(input)
+    assert.equal(row.status, 'failed')
+    const result = ledger.parseOutcome(row)
+    assert.equal(result.code, 'PPTX_CONTENT_INVALID')
+    assert.equal(result.error, 'slides[8].bullets or body must contain text when layout is "split"')
+    assert.match(result.hint, /Add the missing body/)
+    assert.deepEqual(result.cause, { code: 'PPTX_LAYOUT_INVALID' })
+    assert.doesNotMatch(row.outcomeJson, /SYNTHETIC_PRIVATE_VALUE|DO_NOT_PUBLISH|UNTRUSTED_RAW_CODE/)
+    assert.equal(result.sideEffectLedgerReplay, true)
+  } finally {
+    db.close()
+  }
+})
+
+test('safe failure diagnostics redact credentials, request bodies and secret-bearing URLs before truncation', () => {
+  const cases = [
+    ['render rejected Bearer SYNTHETIC_BEARER_VALUE_1234', 'SYNTHETIC_BEARER_VALUE_1234'],
+    ['render rejected password="SYNTHETIC PASSWORD VALUE"', 'SYNTHETIC PASSWORD VALUE'],
+    ['render rejected MODEL_API_KEY=SYNTHETIC_ENV_CREDENTIAL', 'SYNTHETIC_ENV_CREDENTIAL'],
+    ['render rejected https://user:SYNTHETIC_URL_PASSWORD@example.test/path?key=SYNTHETIC_QUERY', 'SYNTHETIC_'],
+    ['render rejected https://hooks.slack.com/services/SYNTHETIC_WEBHOOK_SECRET', 'SYNTHETIC_WEBHOOK_SECRET'],
+    ['render rejected Cookie: session=SYNTHETIC_SESSION_VALUE', 'SYNTHETIC_SESSION_VALUE'],
+    ['render rejected {"args":{"content":"SYNTHETIC_PRIVATE_CONTENT"}}', 'SYNTHETIC_PRIVATE_CONTENT'],
+    ['render rejected args: content=SYNTHETIC_RAW_ARGS', 'SYNTHETIC_RAW_ARGS'],
+    ['render rejected ["SYNTHETIC_RAW_ARRAY"]', 'SYNTHETIC_RAW_ARRAY'],
+    ['render rejected github_pat_SYNTHETIC_GITHUB_PAT_1234567890', 'SYNTHETIC_GITHUB_PAT'],
+    ['render rejected sk_test_SYNTHETIC_STRIPE_VALUE_1234567890', 'SYNTHETIC_STRIPE_VALUE'],
+    ['render rejected eyJzdWIiOiIxMjM0NTY3ODkwIn0.eyJyb2xlIjoiYWRtaW4ifQ.SYNTHETIC_SIGNATURE', 'SYNTHETIC_SIGNATURE'],
+    ['render rejected -----BEGIN PRIVATE KEY----- SYNTHETIC_PRIVATE_KEY -----END PRIVATE KEY-----', 'SYNTHETIC_PRIVATE_KEY'],
+    ['x'.repeat(990) + ' password=SYNTHETIC_BOUNDARY_SECRET', 'SYNTHETIC_BOUNDARY_SECRET'.slice(0, 4)],
+  ]
+  for (const [message, sensitive] of cases) {
+    const failure = sanitizeSideEffectFailure({ code: 'PPTX_CONTENT_INVALID', message })
+    assert.equal(failure.code, 'PPTX_CONTENT_INVALID')
+    assert.equal(JSON.stringify(failure).includes(sensitive), false, message)
+    assert.ok(failure.message.length <= 1_000)
+  }
+  assert.equal(
+    sanitizeSideEffectFailureText('slides[7].bullets or body must contain text when layout is "process"'),
+    'slides[7].bullets or body must contain text when layout is "process"',
+  )
+})
+
+test('safe failure cause projection is bounded and does not invoke hostile error getters', () => {
+  let getterCalls = 0
+  const hostile = Object.create(null, {
+    message: { get() { getterCalls += 1; throw new Error('private getter') } },
+    code: { get() { getterCalls += 1; throw new Error('private code getter') } },
+    cause: { get() { getterCalls += 1; throw new Error('private cause getter') } },
+  })
+  assert.deepEqual(sanitizeSideEffectFailure(hostile), {
+    code: 'TOOL_EXECUTION_FAILED', message: 'Tool execution failed.',
+  })
+  assert.equal(getterCalls, 0)
+  const revoked = Proxy.revocable({}, {})
+  revoked.revoke()
+  assert.doesNotThrow(() => sanitizeSideEffectFailure(revoked.proxy))
+  const cyclic = Object.assign(new Error('root'), { code: 'ROOT' })
+  cyclic.cause = cyclic
+  assert.deepEqual(sanitizeSideEffectFailure(cyclic), { code: 'ROOT', message: 'root' })
+  const chain = { code: 'FIRST', message: 'first', cause: {
+    code: 'SECOND', message: 'second', cause: {
+      code: 'THIRD', message: 'third', cause: { code: 'FOURTH', message: 'omit this' },
+    },
+  } }
+  const failure = sanitizeSideEffectFailure(chain)
+  assert.equal(failure.cause.cause.code, 'THIRD')
+  assert.equal(failure.cause.cause.cause, undefined)
+  assert.equal(sanitizeSideEffectFailure({ message: 'x'.repeat(16_385) }).message, 'Tool execution failed.')
+})
+
+test('unknown failure diagnostics remain visible even when marking the ledger unknown fails', () => {
+  const { db, ledger, input } = fixture()
+  try {
+    ledger.prepare(input)
+    ledger.claimExecution(input)
+    const execution = loopExecutionFor({
+      ...ledger,
+      markUnknown: () => { throw new Error('ledger temporarily unavailable') },
+    }, input)
+    assert.throws(() => execution.rethrowExecutionError({
+      error: Object.assign(new Error('archive write failed'), { code: 'EIO' }),
+      input, started: true, returned: false,
+      checkpointFlushErrorCode: 'CHECKPOINT_FLUSH_FAILED',
+    }), (error) => error.code === SIDE_EFFECT_OUTCOME_UNKNOWN
+      && error.unsafeToReplay === true
+      && error.sideEffectExecution === null
+      && error.cause?.code === 'EIO'
+      && error.cause?.message === 'archive write failed')
+    assert.equal(ledger.read(input).status, 'executing')
+    assert.equal(ledger.claimExecution(input).claimed, false)
+  } finally {
+    db.close()
+  }
+})
+
+test('oversized returned outcomes retain bounded safe failure evidence', () => {
+  const failure = {
+    code: 'SQLITE_IOERR', message: 'ledger flush failed',
+    cause: { code: 'EIO', message: 'disk unavailable', headers: { private: 'HIDDEN_PRIVATE_HEADER' } },
+  }
+  const encoded = encodeSideEffectOutcome({
+    ok: true, stdout: 'x'.repeat(256 * 1024), artifactIds: ['artifact-after-failure'], failure,
+  })
+  assert.ok(Buffer.byteLength(encoded) <= 128 * 1024)
+  const result = JSON.parse(encoded)
+  assert.deepEqual(result.failure, {
+    code: failure.code, message: failure.message,
+    cause: { code: 'EIO', message: 'disk unavailable' },
+  })
+  assert.deepEqual(result.artifactIds, ['artifact-after-failure'])
+  assert.doesNotMatch(encoded, /HIDDEN_PRIVATE_HEADER/)
 })

@@ -2,6 +2,7 @@ import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
 import { projectTurnEventForClient } from '../../../shared/turnEventProjection.js'
 import { createToolOutputBuffer } from './toolOutputBuffer.js'
+import { modelActivityFromPhase } from './modelActivityProgress.js'
 import {
   CLEARED_SERVER_FAILURE_META,
   CLEARED_SERVER_RECOVERY_META,
@@ -191,7 +192,8 @@ export async function dispatchTurnEvent(sourceEvent, {
       started: 'Calling model',
       waiting_first_token: 'Waiting for model output',
       streaming: 'Receiving model output',
-      idle: 'Model output paused; task is still running',
+      tool_arguments: 'Receiving tool arguments; the tool has not run yet',
+      idle: 'Waiting for the model to continue',
       retrying: 'Retrying model call',
       compacting: 'Compacting conversation context',
       compaction_fallback: 'Using a mechanical context summary',
@@ -203,17 +205,17 @@ export async function dispatchTurnEvent(sourceEvent, {
     const modelUsage = payload.phase === 'completed'
       ? normalizeModelUsage(payload.usage)
       : null
-    if (payload.phase === 'streaming') {
+    if (payload.phase === 'streaming' || payload.phase === 'tool_arguments') {
       dispatchMessage({
         type: 'UPDATE_LAST_MESSAGE_META',
-        payload: { progress: null, modelActivity: { kind: 'responding', phase: payload.phase, iteration: payload.iteration } },
+        payload: { progress: null, modelActivity: modelActivityFromPhase(payload, event.createdAt) },
         ...streamCursor,
       })
       cursorCommitted = true
     } else if (['started', 'waiting_first_token', 'idle', 'retrying', 'compacting', 'compaction_fallback'].includes(payload.phase)) {
       dispatchMessage({
         type: 'UPDATE_LAST_MESSAGE_META',
-        payload: { progress: null, modelActivity: { kind: 'model', phase: payload.phase, iteration: payload.iteration } },
+        payload: { progress: null, modelActivity: modelActivityFromPhase(payload, event.createdAt) },
         ...streamCursor,
       })
       cursorCommitted = true
@@ -273,6 +275,7 @@ export async function dispatchTurnEvent(sourceEvent, {
         name: payload.name,
         ...(payload.args !== undefined ? { arguments: JSON.stringify(payload.args) } : {}),
         ...(payload.outputReplay ? { outputReplay: payload.outputReplay } : {}),
+        ...(event.type === 'tool.started' ? { startedAt: event.createdAt } : {}),
         status: TOOL_CALL_STATUS.RUNNING,
       },
       meta: { modelActivity: null },
@@ -318,6 +321,7 @@ export async function dispatchTurnEvent(sourceEvent, {
               id: payload.artifactId || payload.result.artifactId,
               filename: payload.result?.filename || '',
               url: payload.result?.url || '',
+              ...(payload.result?.previewRevision ? { previewRevision: payload.result.previewRevision } : {}),
             }]
           : []
     for (const artifact of completedArtifacts) {
@@ -440,6 +444,10 @@ export async function dispatchTurnEvent(sourceEvent, {
         interrupted: false,
         paused: false,
         serverConnectionState: 'cancelled',
+        serverClarification: null,
+        serverResumeResolution: null,
+        directoryAuthorizationPending: false,
+        directoryAuthorizationError: null,
         ...(artifactIds?.length > 0 ? { serverArtifactIds: artifactIds } : {}),
         serverDeliveryArtifactIds: deliveryArtifactIds || [],
         ...(partialText ? { serverPartialText: partialText } : {}),
@@ -510,9 +518,7 @@ export async function dispatchTurnEvent(sourceEvent, {
                 ...(sideEffectUnknown ? {
                   serverRecoveryKind: SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND,
                   serverRecoveryToolCallId: typeof payload.toolCallId === 'string' ? payload.toolCallId : null,
-                  serverRecoveryActionPath: payload.recoveryAction?.path === '/settings?tab=recovery'
-                    ? payload.recoveryAction.path
-                    : '/settings?tab=recovery',
+                  serverRecoveryActionPath: null,
                 } : {}),
                 ...(modelRequestUnknown ? {
                   serverRecoveryKind: MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND,

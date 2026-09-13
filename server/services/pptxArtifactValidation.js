@@ -1,7 +1,11 @@
 import { PPTX_CHART_SCHEMA, PPTX_LIMITS, PPTX_TABLE_SCHEMA } from './pptxArtifactContract.js'
 
-export function invalidPptx(path, message, code = 'PPTX_CONTENT_INVALID') {
-  throw Object.assign(new TypeError(`${path} ${message}`), { code, retryable: true })
+export function invalidPptx(path, message, code = 'PPTX_CONTENT_INVALID', details = {}) {
+  throw Object.assign(new TypeError(`${path} ${message}`), {
+    code, retryable: true,
+    ...(details.textFit ? { pptxTextFit: details.textFit } : {}),
+    ...(details.geometry ? { pptxGeometry: true } : {}),
+  })
 }
 
 function propertyValue(value, key, path) {

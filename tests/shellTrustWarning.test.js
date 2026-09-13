@@ -8,6 +8,18 @@ test('shellTrustWarning returns a message when WORKSPACE_SHELL_ENABLED=1', () =>
   assert.match(msg, /信任|trust/i)
 })
 
+test('shellTrustWarning distinguishes host execution from Docker isolation', () => {
+  const host = shellTrustWarning({ WORKSPACE_SHELL_ENABLED: '1' })
+  const docker = shellTrustWarning({
+    WORKSPACE_SHELL_ENABLED: '1',
+    SHELL_SANDBOX_MODE: 'docker',
+  })
+  assert.match(host, /host.*完全信任/iu)
+  assert.match(host, /SHELL_REQUIRE_OS_ISOLATION/)
+  assert.match(docker, /Docker.*禁网/iu)
+  assert.doesNotMatch(docker, /完全信任/)
+})
+
 test('shellTrustWarning returns null when shell disabled', () => {
   assert.equal(shellTrustWarning({}), null)
   assert.equal(shellTrustWarning({ WORKSPACE_SHELL_ENABLED: '0' }), null)

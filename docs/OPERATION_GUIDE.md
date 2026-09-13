@@ -123,7 +123,12 @@ Gugo 默认没有任何被动出网链路。所有会访问外部网络的通道
 | `APPROVAL_MODE` | `unattended` | 审批队列策略：`off` 保守拒绝未授权危险操作，`unattended` / `all` 启用逐次审批；用户 `bypass` 档位才会全放行 |
 | `WORKSPACE_ROOT` | 仓库启动目录 | 文件、Shell 和 Git 工具允许访问的根目录 |
 | `WORKSPACE_FS_ENABLED` | `0` | 开启工作区文件工具 |
-| `WORKSPACE_SHELL_ENABLED` | `0` | 开启共享 `WORKSPACE_ROOT` 的 Shell；等同授予服务器进程权限 |
+| `WORKSPACE_SHELL_ENABLED` | `0` | 开启共享 `WORKSPACE_ROOT` 的 Shell；host 模式等同授予服务器进程权限 |
+| `SHELL_SANDBOX_MODE` | `host` | 可选 `docker`：每次非持久命令使用无网络、只读 rootfs、降权且限资源的新容器 |
+| `SHELL_REQUIRE_OS_ISOLATION` | `0` | 设为 `1` 后拒绝 host Shell；Docker 配置缺失或镜像不是 sha256 digest 也 fail closed |
+| `SHELL_SANDBOX_DOCKER_BIN` | 空 | Docker 模式要求绝对、可执行的本机 Docker CLI 路径 |
+| `SHELL_SANDBOX_DOCKER_HOST` | 本机 socket/named pipe | 只允许本地 Unix socket 或 Windows named pipe；拒绝 TCP/SSH daemon |
+| `SHELL_SANDBOX_DOCKER_IMAGE` | 空 | Docker 模式要求已存在且受审计的显式非-latest tag 或 sha256 digest；强制隔离时必须用 digest；不会自动拉取 |
 | `LOCAL_CODE_EXECUTION_ENABLED` | 本机回环模式为 `1`，其余为 `0` | 控制用户已授权 `read_write` 目录中的代码执行；显式 `0` 可关闭 |
 | `CODEX_APP_SERVER_ENABLED` | `0` | 仅精确值 `1` 启动外部 OpenAI Codex CLI `app-server` 子进程；就绪后逐次审批的 `codex_models` 可发出固定 `model/list`，该 CLI 可能按自身配置联网 |
 | `WORKSPACE_GIT_ENABLED` | `0` | 开启 Git 读取工具 |
@@ -379,7 +384,7 @@ npm run serve
 
 ### Browser 工具不可用
 
-确认正在使用受支持的 Node.js 版本（`^20.19.0`、`^22.13.0` 或 `>=24.0.0`）并已安装 Edge/Chrome；必要时设置 `BROWSER_EXECUTABLE_PATH`。普通桌面环境不要设置 `BROWSER_NO_SANDBOX=1`。容器中还需自行安装浏览器及其系统依赖。
+确认正在使用受支持的 Node.js 版本（`^20.19.0`、`^22.13.0` 或 `>=24.0.0`）并已安装 Edge/Chrome；必要时设置 `BROWSER_EXECUTABLE_PATH`。普通桌面环境不要设置 `BROWSER_NO_SANDBOX=1`。容器中还需自行安装浏览器及其系统依赖。跨源 iframe 必须先 `browser_frames`，再 `browser_switch_frame`；如果 frame 导航后返回 `BROWSER_FRAME_CONTEXT_STALE`，重新列举并切换，不要改用页面脚本绕过同源策略。未授权 connected-app frame 会被脱敏，必须先在 Access 中由当前用户连接对应应用。
 
 ### 媒体工具提示 `MEDIA_BINARY_NOT_FOUND`
 
@@ -402,7 +407,7 @@ docker compose logs app
 ## 10. 安全注意事项
 
 - `AUTH_MODE=local` 没有网络访问控制，只能用于绑定 `127.0.0.1` 的可信本机。局域网或公网部署必须使用 `AUTH_MODE=multi_user`；Docker 还需显式设置 `DOCKER_BIND_ADDRESS=0.0.0.0` 才会对外发布。
-- Gugo 的 Shell 工具不是安全沙箱。共享工作区的 `WORKSPACE_SHELL_ENABLED=1`，以及本机回环模式下对 `read_write` 目录默认开放的代码执行，都允许受信用户用服务器进程权限运行命令；不要向不可信用户开放。
+- 默认 `SHELL_SANDBOX_MODE=host` 不是安全沙箱。共享工作区的 `WORKSPACE_SHELL_ENABLED=1`，以及本机回环模式下对 `read_write` 目录默认开放的代码执行，都允许受信用户用服务器进程权限运行命令；不要向不可信用户开放。需要容器隔离时配置 `SHELL_SANDBOX_MODE=docker`、绝对 Docker CLI、受审计的固定镜像，并设置 `SHELL_REQUIRE_OS_ISOLATION=1` 防止回退。此模式禁网、禁 pull、降权并限制资源；每次调用使用随机容器名，取消、超时和异常后显式执行本地 `docker rm --force`，清理失败以 `PROCESS_TREE_CLEANUP_FAILED` fail closed。其安全仍取决于 Docker daemon、镜像和宿主内核。
 - 未信任工作区默认只读。不要为了省事在多人或公网部署中设置 `WORKSPACE_SHARED_TRUSTED=1`。
 - 局域网部署必须配置 SMTP、防火墙和可信网络边界；公网部署还必须使用 HTTPS、强密码、反向代理限流，并设置固定 `APP_PUBLIC_URL`。
 - 只有反向代理已经清除客户端伪造的转发头时才设置 `TRUST_PROXY=1`。

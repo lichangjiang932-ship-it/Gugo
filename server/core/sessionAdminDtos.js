@@ -1,3 +1,5 @@
+import { projectSessionBranchesDto } from './sessionAdminBranchDtos.js'
+
 const SESSION_TIME_FIELDS = Object.freeze(['createdAt', 'updatedAt'])
 const SESSION_NULLABLE_TIME_FIELDS = Object.freeze([
   'lastViewedAt',
@@ -369,52 +371,15 @@ function snapshotDto(value, fail, input) {
 }
 
 function branchesDto(value, fail) {
-  const source = record(value, 'result', fail)
-  const rootSessionId = text(
-    own(source, 'rootSessionId', 'result', fail),
-    'result.rootSessionId',
-    fail,
-    { max: 512, empty: false },
-  )
-  const branches = array(
-    own(source, 'branches', 'result', fail),
-    'result.branches',
-    fail,
-    (branch, index) => {
-      const projected = sessionDto(branch, `result.branches[${index}]`, fail)
-      const depth = integer(
-        own(branch, 'depth', `result.branches[${index}]`, fail),
-        `result.branches[${index}].depth`,
-        fail,
-        { max: 5 },
-      )
-      return Object.freeze({ ...projected, depth })
-    },
-    { max: 1000 },
-  )
-  if (!branches.length || branches[0].id !== rootSessionId || branches[0].depth !== 0) {
-    fail('result.branches must begin with the root session at depth 0')
-  }
-  const byId = new Map()
-  let previousDepth = -1
-  for (const branch of branches) {
-    if (byId.has(branch.id)) fail(`duplicate branch id: ${branch.id}`)
-    if (branch.depth < previousDepth) fail('result.branches must be ordered by non-decreasing depth')
-    if (branch.depth === 0) {
-      if (branch.id !== rootSessionId || branch.parentSessionId !== null) {
-        fail('result root branch is inconsistent')
-      }
-    } else {
-      const parent = byId.get(branch.parentSessionId)
-      if (!parent || parent.depth + 1 !== branch.depth) {
-        fail(`branch ${branch.id} has an invalid parent or depth`)
-      }
-    }
-    byId.set(branch.id, branch)
-    previousDepth = branch.depth
-  }
-  const truncated = boolean(own(source, 'truncated', 'result', fail), 'result.truncated', fail)
-  return Object.freeze({ rootSessionId, branches, truncated })
+  return projectSessionBranchesDto(value, fail, {
+    record,
+    own,
+    text,
+    integer,
+    boolean,
+    array,
+    sessionDto,
+  })
 }
 
 function legacyImportResultDto(value, fail, input) {

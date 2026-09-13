@@ -1,4 +1,7 @@
+import { normalizeModelPhaseProgress } from '../../shared/modelPhaseProgress.js'
+
 export const DEFAULT_MODEL_PHASE_HEARTBEAT_MS = 15_000
+const TOOL_PROGRESS_INTERVAL_MS = 1000
 
 function normalizedInterval(value) {
   const interval = Number(value)
@@ -19,6 +22,7 @@ export function createModelPhaseHeartbeat({
   intervalMs = DEFAULT_MODEL_PHASE_HEARTBEAT_MS,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
+  now = Date.now,
 } = {}) {
   const interval = normalizedInterval(intervalMs)
   let timer = null
@@ -26,10 +30,18 @@ export function createModelPhaseHeartbeat({
   let sawDelta = false
   let currentPhase = null
   let emissions = Promise.resolve()
+  let requestStartedAt = now()
+  let lastProgressAt = requestStartedAt
+  let lastToolEmissionAt = 0
+  let toolProgress = null
 
-  const emit = (phase) => {
+  const emit = (phase, timestamp = now()) => {
     if (stopped || typeof onPhase !== 'function') return Promise.resolve()
-    emissions = emissions.then(() => onPhase({ phase, iteration }))
+    const metadata = normalizeModelPhaseProgress({
+      ...(toolProgress || {}), elapsedMs: Math.max(0, timestamp - requestStartedAt),
+      idleMs: Math.max(0, timestamp - lastProgressAt),
+    })
+    emissions = emissions.then(() => onPhase({ phase, iteration, ...metadata }))
     // Timer callbacks are deliberately detached. Attach a rejection handler so
     // an emitter failure is observed later by stop() without becoming an
     // unhandled rejection in the meantime.
@@ -59,19 +71,43 @@ export function createModelPhaseHeartbeat({
     async beginRequest() {
       if (stopped) return
       sawDelta = false
+      requestStartedAt = now()
+      lastProgressAt = requestStartedAt
+      lastToolEmissionAt = 0
+      toolProgress = null
       currentPhase = 'waiting_first_token'
       cancelTimer()
-      await emit(currentPhase)
+      await emit(currentPhase, requestStartedAt)
       schedule()
     },
 
     async recordDelta() {
       if (stopped) return
       sawDelta = true
+      lastProgressAt = now()
+      toolProgress = null
       cancelTimer()
       if (currentPhase !== 'streaming') {
         currentPhase = 'streaming'
-        await emit(currentPhase)
+        await emit(currentPhase, lastProgressAt)
+      }
+      schedule()
+    },
+
+    async recordToolProgress(progress) {
+      if (stopped) return
+      const safe = normalizeModelPhaseProgress(progress)
+      if (!Number.isSafeInteger(safe.toolArgumentsChars)) return
+      const timestamp = now()
+      const switched = toolProgress?.toolCallId !== safe.toolCallId || toolProgress?.toolName !== safe.toolName
+      sawDelta = true
+      lastProgressAt = timestamp
+      toolProgress = safe
+      cancelTimer()
+      if (currentPhase !== 'tool_arguments' || switched || timestamp - lastToolEmissionAt >= TOOL_PROGRESS_INTERVAL_MS) {
+        currentPhase = 'tool_arguments'
+        lastToolEmissionAt = timestamp
+        await emit(currentPhase, timestamp)
       }
       schedule()
     },

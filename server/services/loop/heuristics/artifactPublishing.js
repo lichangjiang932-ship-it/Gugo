@@ -31,6 +31,7 @@ import {
   parseMarkdownDocument,
 } from '../../../../src/lib/officeExport/documentExport.js'
 import { canonicalPptxMarkdownSlides } from '../../pptxMarkdownCompatibility.js'
+import { artifactPreviewIdentity } from '../../artifactPreviewIdentity.js'
 import {
   parseSpreadsheetRows,
 } from '../../../../src/lib/officeExport/spreadsheetExport.js'
@@ -290,6 +291,7 @@ export function publishedArtifactResult({
     url: artifact.url,
     replaced: artifact.replaced === true,
     ...extra,
+    ...artifactPreviewIdentity(artifact),
   }
   try {
     // The latest user instruction is authoritative. A model can accidentally

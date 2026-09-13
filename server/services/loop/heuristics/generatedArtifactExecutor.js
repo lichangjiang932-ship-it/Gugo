@@ -34,6 +34,7 @@ import {
 import {
   markSideEffectOutcomeKnownFailed,
 } from '../sideEffectExecution.js'
+import { nativePptxPreflightResult } from '../../pptxPreflightResult.js'
 
 const GENERATED_ARTIFACT_TOOL_NAMES = new Set([
   'generate_image',
@@ -166,6 +167,7 @@ export async function executeGeneratedArtifactTool({
   step,
   signal,
   requiresLocalArtifactDelivery,
+  toolCallId,
 }) {
   if (name === 'generate_image') {
     const generated = await generateImage({ userId: job.userId, ...args })
@@ -197,17 +199,40 @@ export async function executeGeneratedArtifactTool({
     })
   }
   if (name === 'create_pptx') {
-    const resolvedArgs = resolveOfficeArtifactArgs(args, { userId: job?.userId || null })
-    const generatedArtifact = await createPptx({
-      title: resolvedArgs.title,
-      subtitle: resolvedArgs.subtitle,
-      theme: resolvedArgs.theme,
-      design: resolvedArgs.design,
-      brand: resolvedArgs.brand,
-      slides: pptxSlidesFromArtifactArgs(resolvedArgs),
-      images: resolvedArgs._officeImages,
-      userId: job?.userId || null,
-    })
+    let resolvedArgs
+    let slides
+    try {
+      resolvedArgs = resolveOfficeArtifactArgs(args, { userId: job?.userId || null })
+      slides = pptxSlidesFromArtifactArgs(resolvedArgs)
+    } catch (error) {
+      throw markSideEffectOutcomeKnownFailed(error, {
+        code: error?.code,
+        message: error?.message,
+        retryable: error?.retryable === true,
+      })
+    }
+    let generatedArtifact
+    try {
+      generatedArtifact = await createPptx({
+        title: resolvedArgs.title,
+        subtitle: resolvedArgs.subtitle,
+        theme: resolvedArgs.theme,
+        design: resolvedArgs.design,
+        brand: resolvedArgs.brand,
+        slides,
+        images: resolvedArgs._officeImages,
+        userId: job?.userId || null,
+      })
+    } catch (error) {
+      const preflight = nativePptxPreflightResult(error, args, toolCallId)
+      if (preflight) {
+        throw markSideEffectOutcomeKnownFailed(error, {
+          code: preflight.code, retryable: true, message: preflight.error, hint: preflight.hint,
+          metadata: { pptx_preflight: preflight.pptx_preflight },
+        })
+      }
+      throw error
+    }
     const artifact = await publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
     return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
   }

@@ -149,6 +149,28 @@ test('a session menu owns the first Escape and the second closes the mobile draw
   })
 })
 
+test('global search shortcut releases the mobile drawer focus fence without overwriting desktop preference', async () => {
+  await withHarness({ narrow: true, savedCollapsed: '1' }, async ({ dom, rootElement }) => {
+    const toggle = rootElement.querySelector('[data-toggle]')
+    await act(async () => { toggle.focus(); toggle.click() })
+    const menuTrigger = rootElement.querySelector('[data-session-row="recent-session"] [aria-haspopup="menu"]')
+    await act(async () => menuTrigger.click())
+    assert.ok(rootElement.querySelector('[role="menu"]'))
+    const event = new dom.window.KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true })
+    let searchReceived = false
+    const openSearch = () => { searchReceived = true }
+    dom.window.addEventListener('keydown', openSearch, { once: true })
+    await act(async () => document.activeElement.dispatchEvent(event))
+    assert.equal(searchReceived, true, 'the shortcut still reaches the existing search handler')
+    assert.equal(event.defaultPrevented, false)
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    assert.equal(rootElement.querySelector('[role="menu"]'), null)
+    assert.equal(rootElement.querySelector('[data-background]').hasAttribute('inert'), false)
+    assert.equal(dom.window.localStorage.getItem('gugo:left-rail-collapsed'), '1')
+    assert.equal(document.activeElement, toggle)
+  })
+})
+
 test('project disclosure survives whole-rail collapse and does not duplicate Recent entries', async () => {
   await withHarness({}, async ({ rootElement }) => {
     const projectToggle = rootElement.querySelector('[data-project-toggle]')

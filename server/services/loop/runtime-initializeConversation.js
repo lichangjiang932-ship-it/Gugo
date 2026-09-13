@@ -1,5 +1,7 @@
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
 import { resolveSemanticSummaryPolicy } from '../contextSemanticSummaryPolicy.js'
+import { synchronizePresentationPromptContext } from './presentationPromptContext.js'
+import { withAssistantCommunicationPolicy } from '../../../shared/assistantCommunicationPolicy.js'
 
 // Exact legacy host records, not a substring/marker match: quoted examples,
 // user content and other system safety instructions must survive recovery.
@@ -75,6 +77,10 @@ function initializeConversationContext(s) {
     approvalMode: s.approvalMode,
     ...s.outputDirectoryContext,
   })
+  synchronizePresentationPromptContext(s)
+  // A resumed model/compaction request owns its exact recorded prompt digest.
+  // New guidance applies to new turns, never by rewriting an in-flight request.
+  if (!isRestoredConversation) s.convo = withAssistantCommunicationPolicy(s.convo)
   if (s.shouldRestoreExecutionTools
     && s.recoveredPriorLocalTargetPaths.length > 0
     && !s.convo.some((message) => message?.role === 'system'

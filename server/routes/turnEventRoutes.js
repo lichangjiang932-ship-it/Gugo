@@ -3,6 +3,7 @@ import { resolveAuthMode } from '../adapters/authAccount.js'
 import { readJson, sendJson } from '../utils.js'
 import { logWarn } from '../utils/logger.js'
 import { TurnEngineError } from '../services/turnResolutionRuntime.js'
+import { validateDirectoryPausedSequence } from '../services/turnCancellationRuntime.js'
 import { getTurnEngine } from '../services/turnEngineHost.js'
 import { describeTurnEngineHostUnavailableError } from '../services/turnEngineHostErrorContract.js'
 import {
@@ -535,10 +536,14 @@ async function handleTurnResource(req, res, url, parts, runtime, userId) {
     && parts.length === 4) {
     const body = await readJson(req)
     const action = parts[3] === 'cancel' ? 'cancelTurn' : 'resumeTurn'
+    const directoryPausedSequence = parts[3] === 'cancel' && Object.hasOwn(body, 'directoryPausedSequence')
+      ? validateDirectoryPausedSequence(body.directoryPausedSequence)
+      : undefined
     const turn = await runtime.requireEngine()[action]({
       userId,
       sessionId: body.sessionId,
       turnId,
+      ...(directoryPausedSequence === undefined ? {} : { directoryPausedSequence }),
       ...(parts[3] === 'resume' ? { resolution: body.resolution ?? null } : {}),
       ...(parts[3] === 'resume' ? { retryRecovery: body.retryRecovery === true } : {}),
       ...(parts[3] === 'resume' ? { retryFailed: body.retryFailed === true } : {}),

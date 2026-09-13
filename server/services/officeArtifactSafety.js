@@ -1,3 +1,10 @@
+import {
+  isPptxPassiveMetadataPart,
+  OFFICE_THUMBNAIL_RELATIONSHIP,
+  PPTX_PRINTER_CONTENT_TYPE,
+  validateOfficePassiveMetadataBindings,
+} from './officePassiveMetadata.js'
+
 const OFFICE_RELATIONSHIP_PREFIXES = Object.freeze([
   'http://schemas.openxmlformats.org/officeDocument/2006/relationships/',
   'http://purl.oclc.org/ooxml/officeDocument/relationships/',
@@ -24,6 +31,7 @@ const SAFE_CONTENT_TYPES = Object.freeze({
   ]),
   pptx: new Set([
     ...COMMON_CONTENT_TYPES,
+    PPTX_PRINTER_CONTENT_TYPE,
     'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml',
     'application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml',
     'application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml',
@@ -122,6 +130,8 @@ const SAFE_RELATIONSHIP_KINDS = Object.freeze({
     'image',
     'chart',
     'package',
+    'printerSettings',
+    'thumbnail',
   ]),
   xlsx: new Set([
     'officeDocument',
@@ -189,6 +199,7 @@ function relationshipSource(name) {
 
 function relationshipKind(type) {
   if (type === CORE_PROPERTIES_RELATIONSHIP) return 'core-properties'
+  if (type === OFFICE_THUMBNAIL_RELATIONSHIP) return 'thumbnail'
   for (const prefix of OFFICE_RELATIONSHIP_PREFIXES) {
     if (type.startsWith(prefix) && type.length > prefix.length) return type.slice(prefix.length)
   }
@@ -196,7 +207,8 @@ function relationshipKind(type) {
 }
 
 function matchesSafePart(name, format) {
-  return SAFE_PART_PATTERNS[format].some((pattern) => pattern.test(name))
+  return (format === 'pptx' && isPptxPassiveMetadataPart(name))
+    || SAFE_PART_PATTERNS[format].some((pattern) => pattern.test(name))
 }
 
 export function assertSafeOfficeEntryNames({ entries, format, reject }) {
@@ -308,6 +320,7 @@ export function validateOfficeArtifactSafety({
     }
     validateChartWorkbookBindings({ documents, relationshipSets, targets: embeddedWorkbooks, reject })
   }
+  validateOfficePassiveMetadataBindings({ entries, contentTypes, relationshipSets, format, reject })
   validateXmlSafety({ documents, format, reject })
   return Object.freeze([...embeddedWorkbooks])
 }

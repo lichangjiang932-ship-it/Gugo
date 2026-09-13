@@ -2,7 +2,6 @@ import {
   callBackgroundModel,
   callBackgroundModelWithTools,
 } from '../adapters/modelProxy.js'
-import { dispatchFsShellTool } from '../adapters/fsShellTools.js'
 import { fetchAndExtract } from '../adapters/toolProxy.js'
 import { dispatchAgenticTool } from '../utils/agenticTools.js'
 import { dispatchApplyPatchTool } from '../utils/applyPatch.js'
@@ -71,6 +70,7 @@ import {
   traceWithCheckpoint,
   updateRun,
 } from './subagentRunState.js'
+import { dispatchSubagentExecutionTool } from './subagentExecutionTools.js'
 import { runSubagentToolLoop } from './subagentToolLoop.js'
 import { searchWeb } from './webSearchService.js'
 export {
@@ -110,23 +110,15 @@ async function executeSubagentTool(toolName, args, {
   idempotentResume = false,
   sideEffectRecoveryPlan = null,
 } = {}) {
+  const execution = dispatchSubagentExecutionTool(toolName, args, {
+    userId, signal, toolCallId, idempotencyKey, idempotentResume, sideEffectRecoveryPlan,
+  })
+  if (execution !== undefined) return execution
   switch (toolName) {
     case 'web_search':
       return searchWeb({ userId, query: args.query, maxResults: args.max_results ?? args.maxResults })
     case 'fetch_url':
       return fetchAndExtract({ url: args.url })
-    case 'read_file':
-    case 'list_directory':
-    case 'write_file':
-    case 'edit_file':
-      return dispatchFsShellTool(toolName, args, {
-        userId,
-        signal,
-        toolCallId,
-        idempotencyKey,
-        idempotentResume,
-        sideEffectRecoveryPlan,
-      })
     case 'grep_code':
     case 'find_symbol':
     case 'list_imports':

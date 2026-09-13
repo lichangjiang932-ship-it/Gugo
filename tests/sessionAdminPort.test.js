@@ -127,6 +127,86 @@ test('SessionAdmin optional workspace mutation normalizes selections and explici
   }
 })
 
+test('SessionAdmin normalizes message-node fork boundaries before backend invocation', () => {
+  let received = null
+  const port = prepareSessionAdminPort(portDefinition({
+    forkSession(input) {
+      received = input
+      return null
+    },
+  }))
+  assert.equal(port.forkSession({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    label: '  Alternative   path ',
+    throughMessageId: '  message-2  ',
+  }), null)
+  assert.deepEqual(received, {
+    userId: 'user-1',
+    sessionId: 'session-1',
+    label: 'Alternative path',
+    throughMessageId: 'message-2',
+  })
+  for (const throughMessageId of [42, 'x'.repeat(513)]) {
+    assert.throws(
+      () => port.forkSession({ userId: 'user-1', sessionId: 'session-1', throughMessageId }),
+      (error) => error?.code === 'SESSION_ADMIN_INPUT_INVALID',
+    )
+  }
+})
+
+test('SessionAdmin branch DTO exposes only bounded durable file-operation evidence', () => {
+  const result = {
+    rootSessionId: 'root-session',
+    truncated: false,
+    branches: [{
+      id: 'root-session',
+      revision: 1,
+      depth: 0,
+      parentSessionId: null,
+      fileOperations: [{
+        path: 'workspace/result.txt',
+        action: 'created',
+        toolName: 'write_file',
+        toolCallId: 'must-not-cross-the-port',
+        privateReceipt: 'hidden',
+      }],
+      fileOperationsTruncated: false,
+    }],
+  }
+  const port = prepareSessionAdminPort(portDefinition({ getSessionBranches: () => result }))
+  const projected = port.getSessionBranches({ userId: 'user-1', sessionId: 'root-session' })
+  assert.deepEqual(projected.branches[0].fileOperations, [{
+    path: 'workspace/result.txt',
+    action: 'created',
+    toolName: 'write_file',
+  }])
+  assert.equal(Object.isFrozen(projected.branches[0].fileOperations), true)
+  assert.equal(Object.isFrozen(projected.branches[0].fileOperations[0]), true)
+
+  for (const fileOperations of [
+    [{ path: 'workspace/a.txt', action: 'invented', toolName: 'write_file' }],
+    Array.from({ length: 9 }, (_, index) => ({
+      path: `workspace/${index}.txt`, action: 'changed', toolName: 'write_file',
+    })),
+  ]) {
+    const invalid = prepareSessionAdminPort(portDefinition({
+      getSessionBranches: () => ({
+        rootSessionId: 'root-session',
+        truncated: false,
+        branches: [{
+          id: 'root-session', revision: 1, depth: 0, parentSessionId: null,
+          fileOperations, fileOperationsTruncated: false,
+        }],
+      }),
+    }))
+    assert.throws(
+      () => invalid.getSessionBranches({ userId: 'user-1', sessionId: 'root-session' }),
+      (error) => error?.code === 'SESSION_ADMIN_RESULT_INVALID',
+    )
+  }
+})
+
 test('SessionAdmin legacy import projects recovered ids and rejects mismatched recovery sessions', () => {
   const input = {
     userId: 'user-1',

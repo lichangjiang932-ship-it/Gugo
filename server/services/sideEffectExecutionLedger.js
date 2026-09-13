@@ -12,6 +12,7 @@ import {
   DEFAULT_MAX_OUTCOME_BYTES,
   encodeSideEffectOutcome,
   requiredText,
+  sanitizeSideEffectFailure,
 } from './sideEffectExecutionSerialization.js'
 
 export {
@@ -113,14 +114,21 @@ function rowToRecord(row) {
   }
 }
 
-export function sideEffectRecoveryBlock(code, message, record = null) {
-  return Object.assign(new Error(message), {
+export function sideEffectRecoveryBlock(code, message, record = null, { failure = null } = {}) {
+  const sourceFailure = failure || decodeJsonObject(record?.outcomeJson)?.failure
+  const safeFailure = code === SIDE_EFFECT_OUTCOME_UNKNOWN && sourceFailure
+    ? sanitizeSideEffectFailure(sourceFailure)
+    : null
+  return Object.assign(new Error(safeFailure
+    ? message + ' Cause: ' + safeFailure.code + ': ' + safeFailure.message
+    : message), {
     name: 'SideEffectRecoveryError',
     code,
     retryable: false,
     unsafeToReplay: true,
     requiresUserVerification: true,
     sideEffectExecution: record,
+    ...(safeFailure ? { cause: safeFailure } : {}),
   })
 }
 

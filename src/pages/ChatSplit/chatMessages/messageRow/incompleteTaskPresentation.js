@@ -1,5 +1,7 @@
 import { getVisibleModelErrorMessage } from '../../../../lib/chatFlowGuards.js'
 import { normalizePublicFailureCode } from '../../../../../shared/turnEventProjection.js'
+import { modelRequestFailureCopy } from '../../../../lib/modelRequestDiagnostics.js'
+import { modelProviderStopDiagnostic } from '../../../../../shared/modelProviderStopDiagnostic.js'
 
 // Validate the original text before case normalization. Unicode case folding can
 // otherwise turn confusables such as `K` into an apparently valid ASCII code.
@@ -198,11 +200,11 @@ export function buildIncompleteTaskPresentation(msg, t, {
     && localizedFailureReason !== translated(t, 'errors.chatFailure')
       ? localizedFailureReason
       : ''
-  const reason = reasonKey
+  const reason = modelProviderStopDiagnostic(failure) || (reasonCode === 'model_request_outcome_unknown' ? modelRequestFailureCopy(failure, t).reason : reasonKey
     ? translated(t, reasonKey, { attempts: Number(failure.attempts) || 0 })
     : specificFailureReason || translated(t, recordedUnknownReason
       ? 'chatMessages.incompleteReasonRecordedCode'
-      : 'chatMessages.incompleteReasonFallback', { code: reasonCode.toUpperCase() })
+      : 'chatMessages.incompleteReasonFallback', { code: reasonCode.toUpperCase() }))
   const rawRequirements = Array.isArray(failure.missingRequirements)
     ? failure.missingRequirements
     : []
@@ -213,7 +215,8 @@ export function buildIncompleteTaskPresentation(msg, t, {
     .filter((value) => /^[a-z][a-z0-9_]{1,95}$/u.test(value)))]
   const missing = requirementCodes.length > 0
     ? requirementCodes.map((code) => (
-        REQUIREMENT_KEYS[code]
+        reasonCode === 'model_request_outcome_unknown' && code === 'operation_outcome_verification'
+          ? translated(t, 'modelRequestRecovery.verifyModelOutcome') : REQUIREMENT_KEYS[code]
           ? translated(t, REQUIREMENT_KEYS[code])
           : translated(t, 'chatMessages.incompleteRequirementRecordedCode', {
               code: code.toUpperCase(),
@@ -238,7 +241,7 @@ export function buildIncompleteTaskPresentation(msg, t, {
     code: incompleteReasonCode.toUpperCase()
       || normalizePublicFailureCode(failure.code, 'TURN_INCOMPLETE'),
     missing,
-    nextStep: translated(t, verificationNextStepKey || (retryable
+    nextStep: translated(t, (reasonCode === 'model_request_outcome_unknown' ? 'modelRequestRecovery.nextVerifyModel' : verificationNextStepKey) || (retryable
       ? 'chatMessages.incompleteNextRetry'
       : manualRetryable
         ? 'chatMessages.incompleteNextManualRecovery'
