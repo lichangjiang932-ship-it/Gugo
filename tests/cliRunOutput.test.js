@@ -3,8 +3,10 @@ import { EventEmitter } from 'node:events'
 import { Writable } from 'node:stream'
 import test from 'node:test'
 
+import { createSerializedWriter } from '../bin/cli/runOutputStream.js'
 import {
   createRunOutputFormatter,
+  formatProgressEvent,
   formatRunEvent,
   formatRunError,
   normalizeRunOutputFormat,
@@ -21,6 +23,100 @@ function capture() {
       },
     }),
   }
+}
+
+for (const [channel, format, liveText] of [['text', 'text', false], ['chat', 'text', true], ['jsonl', 'jsonl', false]]) {
+  for (const status of ['completed', 'failed']) {
+    for (const phase of ['waiting', 'awaiting_approval', 'paused', 'blocked']) {
+      test(`${channel} keeps ${status} projection when a later ${phase} event is not a new attempt`, async () => {
+        const stdout = capture()
+        const stderr = capture()
+        const formatter = createRunOutputFormatter({ format, liveText, stdout: stdout.stream, stderr: stderr.stream })
+        const lastEvent = status === 'completed'
+          ? { type: 'turn.completed', payload: { text: 'confirmed answer' } }
+          : { type: 'turn.failed', payload: { code: 'SPECIFIC_FAILURE' } }
+        const lateEvent = { type: `turn.${phase}`, payload: { code: 'LATE_NONFINAL_STATE' } }
+        const result = { status, exitCode: status === 'completed' ? 0 : 1, lastEvent }
+        try {
+          if (liveText) await formatter.onEvent({ type: 'assistant.delta', payload: { text: 'confirmed ' } })
+          await formatter.onEvent(lastEvent)
+          await formatter.onEvent(lateEvent)
+          await formatter.finish(result)
+          assert.equal(formatter.resolveExitCode(result), result.exitCode)
+          if (format === 'jsonl') {
+            assert.deepEqual(stdout.chunks.join('').trim().split('\n').map((line) => JSON.parse(line)), [lastEvent, lateEvent])
+          } else if (status === 'completed') {
+            assert.match(stdout.chunks.join(''), /confirmed answer/u)
+            assert.equal((stdout.chunks.join('').match(/confirmed answer/gu) || []).length, 1)
+            if (liveText) assert.match(stdout.chunks.join(''), /\[assistant confirmed\]/u)
+            assert.equal(stderr.chunks.join(''), '')
+          } else {
+            assert.match(stderr.chunks.join(''), /SPECIFIC_FAILURE/u)
+            assert.doesNotMatch(stderr.chunks.join(''), /LATE_NONFINAL_STATE/u)
+            if (liveText) assert.match(stdout.chunks.join(''), /\[assistant not confirmed\]/u)
+            else assert.equal(stdout.chunks.join(''), '')
+          }
+        } finally { await formatter.dispose() }
+      })
+    }
+  }
+
+  test(`${channel} resets both final evidence and its pending projection at an explicit new attempt`, async () => {
+    const stdout = capture()
+    const stderr = capture()
+    const formatter = createRunOutputFormatter({ format, liveText, stdout: stdout.stream, stderr: stderr.stream })
+    const lastEvent = { type: 'turn.completed', payload: { text: 'new attempt answer' } }
+    try {
+      await formatter.onEvent({ type: 'turn.completed', payload: { text: 'old attempt answer' } })
+      await formatter.onEvent({ type: 'turn.blocked', payload: { code: 'OLD_NONFINAL' } })
+      await formatter.onEvent({ type: 'turn.attempt', payload: { resetStreaming: true } })
+      await formatter.onEvent({ type: 'turn.awaiting_approval', payload: { code: 'NEW_NONFINAL' } })
+      await formatter.onEvent(lastEvent)
+      await formatter.finish({ status: 'completed', exitCode: 0, lastEvent })
+      assert.equal(formatter.resolveExitCode({ status: 'completed', exitCode: 0, lastEvent }), 0)
+      if (format === 'text') assert.equal(stdout.chunks.join(''), 'new attempt answer\n')
+      else assert.deepEqual(JSON.parse(stdout.chunks.at(-1)), lastEvent)
+      assert.doesNotMatch(stderr.chunks.join(''), /CLI_RUN_OUTCOME_CONFLICT|NONFINAL/u)
+    } finally { await formatter.dispose() }
+  })
+}
+
+for (const format of ['text', 'jsonl']) {
+  test(`${format} formatter rejects conflicting final observations while retaining legacy status-only compatibility`, async () => {
+    const stdout = capture()
+    const stderr = capture()
+    const formatter = createRunOutputFormatter({ format, stdout: stdout.stream, stderr: stderr.stream })
+    const lastEvent = { type: 'turn.completed', payload: { text: 'conflicting answer' } }
+    try {
+      await formatter.onEvent({ type: 'turn.failed', payload: { code: 'TURN_PERSISTENCE_FAILED' } })
+      await formatter.onEvent(lastEvent)
+      await formatter.finish({ status: 'completed', exitCode: 0, lastEvent })
+      assert.equal(formatter.resolveExitCode({ status: 'completed', exitCode: 0, lastEvent }), 1)
+      assert.match(stderr.chunks.join(''), /CLI_RUN_OUTCOME_CONFLICT.*TURN_PERSISTENCE_FAILED/u)
+      if (format === 'text') assert.equal(stdout.chunks.join(''), '')
+      else assert.equal(JSON.parse(stdout.chunks.at(-1)).error.code, 'CLI_RUN_OUTCOME_CONFLICT')
+    } finally { await formatter.dispose() }
+    const legacy = createRunOutputFormatter({ format, stdout: stdout.stream, stderr: stderr.stream })
+    try { assert.equal(legacy.resolveExitCode({ status: 'completed', exitCode: 0 }), 0) }
+    finally { await legacy.dispose() }
+  })
+
+  test(`${format} formatter resets final evidence only at an explicit replay attempt boundary`, async () => {
+    const stdout = capture()
+    const stderr = capture()
+    const formatter = createRunOutputFormatter({ format, stdout: stdout.stream, stderr: stderr.stream })
+    const lastEvent = { type: 'turn.completed', payload: { text: 'recovered answer' } }
+    try {
+      await formatter.onEvent({ type: 'turn.failed', payload: { code: 'TURN_FAILED' } })
+      await formatter.onEvent({ type: 'turn.attempt', payload: { resetStreaming: true } })
+      await formatter.onEvent({ type: 'turn.interrupted', payload: {} })
+      await formatter.onEvent(lastEvent)
+      await formatter.finish({ status: 'completed', exitCode: 0, lastEvent })
+      assert.equal(formatter.resolveExitCode({ status: 'completed', exitCode: 0, lastEvent }), 0)
+      assert.doesNotMatch(stderr.chunks.join(''), /CLI_RUN_OUTCOME_CONFLICT/u)
+      if (format === 'text') assert.equal(stdout.chunks.join(''), 'recovered answer\n')
+    } finally { await formatter.dispose() }
+  })
 }
 
 function controlledBackpressureStream() {
@@ -50,6 +146,53 @@ function controlledBackpressureStream() {
 function waitForTurn() {
   return new Promise((resolve) => setImmediate(resolve))
 }
+
+test('formatProgressEvent renders only factual turn activity', () => {
+  assert.equal(formatProgressEvent({ type: 'turn.started', payload: {} }), 'turn started')
+  assert.equal(formatProgressEvent({ type: 'model.phase', payload: { phase: 'thinking' } }), 'model thinking')
+  assert.equal(
+    formatProgressEvent({ type: 'model.phase', payload: { phase: 'completed', usage: { promptTokens: 1200, cacheHitTokens: 900, completionTokens: 40 } } }),
+    'model completed (prompt 1200, cached 900, completion 40)',
+  )
+  assert.equal(formatProgressEvent({ type: 'model.phase', payload: { phase: 'completed', usage: null } }), 'model completed')
+  assert.equal(formatProgressEvent({ type: 'tool.started', payload: { name: 'read_file' } }), 'tool read_file started')
+  assert.equal(formatProgressEvent({ type: 'tool.completed', payload: { name: 'read_file', error: null } }), 'tool read_file finished')
+  assert.equal(formatProgressEvent({ type: 'tool.completed', payload: { name: 'bash_exec', error: { code: 'X' } } }), 'tool bash_exec failed')
+  assert.equal(formatProgressEvent({ type: 'turn.progress', payload: { completed: 2, total: 5 } }), 'progress 2/5')
+  assert.equal(formatProgressEvent({ type: 'approval.required', payload: { toolName: 'bash_exec' } }), 'approval required: bash_exec')
+  assert.equal(formatProgressEvent({ type: 'approval.resolved', payload: { proceed: false } }), 'approval denied')
+  // Terminal events are explained by the terminal diagnostic, not duplicated here.
+  assert.equal(formatProgressEvent({ type: 'turn.completed', payload: { text: 'done' } }), null)
+  assert.equal(formatProgressEvent({ type: 'failed', jobId: 'job-1', payload: {} }), null)
+  assert.equal(formatProgressEvent({ type: 'turn.checkpoint', payload: {} }), null)
+})
+
+test('progress writes factual stderr lines and keeps stdout pure JSONL', async () => {
+  const stdout = capture()
+  const stderr = capture()
+  const formatter = createRunOutputFormatter({
+    format: 'jsonl', progress: true, stdout: stdout.stream, stderr: stderr.stream,
+  })
+  for (const event of [
+    { type: 'turn.started', turnId: 'turn-1', payload: {} },
+    { type: 'tool.started', turnId: 'turn-1', payload: { name: 'read_file' } },
+    { type: 'tool.completed', turnId: 'turn-1', payload: { name: 'read_file', error: null } },
+    { type: 'approval.required', turnId: 'turn-1', payload: { toolName: 'bash_exec' } },
+  ]) {
+    await formatter.onEvent(event)
+  }
+  await formatter.flush()
+
+  const progress = stderr.chunks.join('')
+  assert.match(progress, /\[gugo\] turn started/u)
+  assert.match(progress, /\[gugo\] tool read_file started/u)
+  assert.match(progress, /\[gugo\] tool read_file finished/u)
+  assert.match(progress, /\[gugo\] approval required: bash_exec/u)
+  // Every stdout line must still be a complete, parseable event.
+  const lines = stdout.chunks.join('').split('\n').filter(Boolean)
+  assert.equal(lines.length, 4)
+  for (const line of lines) assert.equal(typeof JSON.parse(line).type, 'string')
+})
 
 test('run output defaults to JSONL and preserves each event', async () => {
   const stdout = capture()
@@ -84,6 +227,64 @@ test('text output writes only completed text to stdout', async () => {
   await formatter.finish({ status: 'completed', exitCode: 0 })
   assert.equal(stdout.chunks.join(''), 'readable result\n')
   assert.equal(stderr.chunks.join(''), '')
+})
+
+test('chat live text is provisional until finish and does not duplicate the successful answer', async () => {
+  const stdout = capture()
+  const stderr = capture()
+  const formatter = createRunOutputFormatter({ format: 'text', liveText: true, stdout: stdout.stream, stderr: stderr.stream })
+  try {
+    await formatter.onEvent({ type: 'assistant.delta', payload: { text: 'Hello' } })
+    assert.match(stdout.chunks.join(''), /\[assistant provisional\]\nHello$/u)
+    await formatter.onEvent({ type: 'reasoning.delta', payload: { text: 'private reasoning' } })
+    await formatter.onEvent({ type: 'assistant.delta', payload: { text: ' world' } })
+    await formatter.onEvent({ type: 'turn.completed', payload: { text: 'Hello world!' } })
+    assert.doesNotMatch(stdout.chunks.join(''), /confirmed|private reasoning/u)
+    await formatter.finish({ status: 'completed', exitCode: 0 })
+    await formatter.finish({ status: 'completed', exitCode: 0 })
+    assert.equal(stdout.chunks.join(''), '[assistant provisional]\nHello world!\n[assistant confirmed]\n')
+  } finally { await formatter.dispose() }
+})
+
+test('chat provisional text stays explicitly unconfirmed on failed, cancelled and shutdown outcomes', async () => {
+  for (const status of ['failed', 'cancelled', 'shutdown']) {
+    const stdout = capture()
+    const stderr = capture()
+    const formatter = createRunOutputFormatter({ format: 'text', liveText: true, stdout: stdout.stream, stderr: stderr.stream })
+    try {
+      await formatter.onEvent({ type: 'assistant.delta', payload: { text: 'partial answer' } })
+      await formatter.onEvent({ type: 'turn.completed', payload: { text: 'partial answer plus final' } })
+      if (status === 'shutdown') await formatter.writeError(new Error('shutdown failed'))
+      else await formatter.finish({ status, exitCode: 1 })
+      assert.equal(stdout.chunks.join(''), '[assistant provisional]\npartial answer\n[assistant not confirmed]\n')
+      assert.doesNotMatch(stdout.chunks.join(''), /plus final|assistant confirmed/u)
+    } finally { await formatter.dispose() }
+  }
+})
+
+test('chat final replacement is labelled when the host revises provisional text', async () => {
+  const stdout = capture()
+  const formatter = createRunOutputFormatter({ format: 'text', liveText: true, stdout: stdout.stream, stderr: capture().stream })
+  try {
+    await formatter.onEvent({ type: 'assistant.delta', payload: { text: 'draft answer' } })
+    await formatter.onEvent({ type: 'turn.completed', payload: { text: 'corrected answer' } })
+    await formatter.finish({ status: 'completed', exitCode: 0 })
+    assert.equal(stdout.chunks.join(''), '[assistant provisional]\ndraft answer\n[assistant final; replaces provisional text]\ncorrected answer\n')
+  } finally { await formatter.dispose() }
+})
+
+test('run text ignores assistant deltas and remains final-success-only', async () => {
+  for (const status of ['completed', 'failed', 'cancelled']) {
+    const stdout = capture()
+    const formatter = createRunOutputFormatter({ format: 'text', stdout: stdout.stream, stderr: capture().stream })
+    try {
+      await formatter.onEvent({ type: 'assistant.delta', payload: { text: 'not final' } })
+      await formatter.onEvent({ type: 'turn.completed', payload: { text: 'final answer' } })
+      assert.equal(stdout.chunks.join(''), '')
+      await formatter.finish({ status, exitCode: status === 'completed' ? 0 : 1 })
+      assert.equal(stdout.chunks.join(''), status === 'completed' ? 'final answer\n' : '')
+    } finally { await formatter.dispose() }
+  }
 })
 
 test('text terminal failures stay out of stdout and use stderr diagnostics', () => {
@@ -195,6 +396,54 @@ test('unknown run output format fails with a stable usage error', () => {
     () => normalizeRunOutputFormat('yaml'),
     (error) => error?.code === 'CLI_OUTPUT_INVALID' && error?.exitCode === 2,
   )
+})
+
+test('writer disposal waits for in-flight output and removes only owned listeners', async () => {
+  const output = controlledBackpressureStream()
+  const externalError = () => {}
+  const externalClose = () => {}
+  output.stream.on('error', externalError)
+  output.stream.on('close', externalClose)
+  const writer = createSerializedWriter(output.stream, 'test')
+  const pending = writer.write('queued')
+  await waitForTurn()
+  let disposed = false
+  const disposal = writer.dispose().then(() => { disposed = true })
+  await waitForTurn()
+  assert.equal(disposed, false)
+  await assert.rejects(writer.write('late'), { code: 'CLI_OUTPUT_WRITER_DISPOSED' })
+  output.release()
+  await Promise.all([pending, disposal, writer.dispose()])
+  assert.deepEqual(output.chunks, ['queued'])
+  assert.deepEqual(output.stream.listeners('error'), [externalError])
+  assert.deepEqual(output.stream.listeners('close'), [externalClose])
+  assert.equal(output.stream.listenerCount('drain'), 0)
+})
+
+test('writer disposal settles after EPIPE without suppressing the original write error', async () => {
+  const output = controlledBackpressureStream()
+  const writer = createSerializedWriter(output.stream, 'test')
+  const pending = writer.write('queued')
+  await waitForTurn()
+  const disposal = writer.dispose()
+  output.stream.emit('error', Object.assign(new Error('broken pipe'), { code: 'EPIPE' }))
+  await assert.rejects(pending, { code: 'CLI_OUTPUT_WRITE_FAILED', causeCode: 'EPIPE' })
+  await disposal
+  assert.equal(output.stream.listenerCount('error'), 0)
+  assert.equal(output.stream.listenerCount('close'), 0)
+  assert.equal(output.stream.listenerCount('drain'), 0)
+})
+
+test('repeated formatter disposal does not accumulate shared stream listeners', async () => {
+  const output = capture()
+  for (let index = 0; index < 12; index += 1) {
+    const formatter = createRunOutputFormatter({ stdout: output.stream, stderr: output.stream })
+    await formatter.onEvent({ type: 'turn.started', sequence: index })
+    await formatter.dispose()
+    await formatter.dispose()
+    assert.equal(output.stream.listenerCount('error'), 0)
+    assert.equal(output.stream.listenerCount('close'), 0)
+  }
 })
 
 test('formatter serializes writes and waits for drain after backpressure', async () => {
@@ -334,4 +583,24 @@ test('formatter reports a stream close while a write is pending', async () => {
     formatter.finish({ status: 'completed', exitCode: 0 }),
     (error) => error?.code === 'CLI_OUTPUT_STREAM_CLOSED',
   )
+})
+
+test('terminal diagnostics surface exhausted completion policies', () => {
+  const policies = [{ id: 'mutation_verification', attempts: 2, limit: 2, exhausted: true }]
+  const rendered = formatRunEvent({
+    type: 'turn.failed',
+    payload: { code: 'TURN_INCOMPLETE', incompleteReason: 'post_mutation_verification_missing', completionPolicies: policies },
+  }, { format: 'text' })
+  assert.equal(rendered.stdout, null)
+  assert.match(rendered.stderr, /Completion policies: mutation_verification 2\/2 \(exhausted\)/u)
+
+  const error = Object.assign(new Error('incomplete'), {
+    code: 'TURN_INCOMPLETE',
+    completionPolicies: policies,
+  })
+  const jsonl = formatRunError(error, { format: 'jsonl' })
+  assert.match(jsonl.stdout, /"completionPolicies"/u)
+  assert.match(jsonl.stderr, /Completion policies: mutation_verification 2\/2 \(exhausted\)/u)
+  const event = JSON.parse(jsonl.stdout.trim())
+  assert.deepEqual(event.error.completionPolicies, policies)
 })

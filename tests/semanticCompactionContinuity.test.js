@@ -220,7 +220,9 @@ test('a semantic summary cannot grant writes against the live read-only task sta
     },
   })
   assert.equal(executed, 0)
-  assert.equal(result.text, 'Read-only analysis completed.')
+  assert.equal(result.code, 'explicit_read_only_constraint')
+  assert.equal(result.incomplete, true)
+  assert.equal(answerRequests, 1, 'a summary cannot authorize a wrap-up request after the refusal')
 })
 
 test('summary requests preserve the first user attachment, recovery event, and visible prompt estimate', async () => {

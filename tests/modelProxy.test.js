@@ -1395,6 +1395,8 @@ test('extractUsage 对缺失/畸形输入返回 null 且不抛', () => {
 test('supportsStreamUsage 只对已知端点开启,未知端点保持关闭', () => {
   assert.equal(supportsStreamUsage({ baseUrl: 'https://api.deepseek.com' }, {}), true)
   assert.equal(supportsStreamUsage({ baseUrl: 'https://api.openai.com/v1' }, {}), true)
+  assert.equal(supportsStreamUsage({ baseUrl: 'http://127.0.0.1:1234/v1' }, {}), true)
+  assert.equal(supportsStreamUsage({ baseUrl: 'http://127.0.0.1:1234/v1', profileOverrides: { supportsStreamUsage: false } }, {}), false)
   // 未知端点默认不发 stream_options,避免上游 400
   assert.equal(supportsStreamUsage({ baseUrl: 'https://unknown.example.com/v1' }, {}), false)
   assert.equal(supportsStreamUsage({ baseUrl: '' }, {}), false)
@@ -1409,6 +1411,9 @@ test('流式请求对支持的端点带上 stream_options.include_usage', () => 
     buildOpenAICompatibleRequest({ config, messages: [{ role: 'user', content: 'hi' }], stream: true }).init.body
   )
   assert.deepEqual(streamed.stream_options, { include_usage: true })
+  const local = JSON.parse(buildOpenAICompatibleRequest({ config: { ...config, baseUrl: 'http://127.0.0.1:1234/v1' },
+    messages: [{ role: 'user', content: 'hi' }], stream: true, env: {} }).init.body)
+  assert.deepEqual(local.stream_options, { include_usage: true })
 
   // 非流式不该带
   const nonStream = JSON.parse(
@@ -1744,7 +1749,7 @@ test('单个 system 消息保持原样', () => {
   assert.equal(body.messages.length, 2)
 })
 
-test('对话中间穿插的 system 不动 —— 那是工具循环的收尾指令', () => {
+test('本地模板保留中途控制指令的位置而不将它提升到静态 system 前缀', () => {
   const body = JSON.parse(buildOpenAICompatibleRequest({
     config: { baseUrl: 'http://127.0.0.1:1234/v1', modelName: 'm' },
     messages: [
@@ -1756,10 +1761,10 @@ test('对话中间穿插的 system 不动 —— 那是工具循环的收尾指�
       { role: 'user', content: 'q2' },
     ],
   }).init.body)
-  // 开头两条合并成一条,中间那条原样保留
+  // 只合并开头两条；中途控制保留原位置，并使用本地模板支持的角色。
   assert.equal(body.messages.length, 5)
   assert.equal(body.messages[0].content, 'a\n\nb')
-  assert.equal(body.messages[3].role, 'system')
+  assert.equal(body.messages[3].role, 'user')
   assert.equal(body.messages[3].content, '别再调工具了')
 })
 

@@ -36,6 +36,7 @@ test('verification command parser recognizes supported project checks conservati
     ['./gradlew check', 'check'],
     ['make build', 'build'],
     ['npm test -- --watch=false', 'test'],
+    ['npm test 2>&1', 'test'],
   ])
   for (const [command, kind] of cases) {
     assert.deepEqual(
@@ -390,7 +391,7 @@ test('verification command parser rejects compound, mutating, and output-produci
     'npm test; del victim.txt',
     'npm test | tee report.txt',
     'npm test > report.txt',
-    'npm test 2>&1',
+    'npm test 2>&1 > results.log',
     'npm test & del victim.txt',
     'echo npm test',
     'sh -c "npm test"',

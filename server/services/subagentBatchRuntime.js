@@ -19,6 +19,7 @@ import {
   SUBAGENT_TYPES,
 } from './subagentRuntimePolicy.js'
 import { boundedRecoveryId } from './subagentRunState.js'
+import { subagentTasks, subagentTaskType } from '../utils/subagentTaskPolicy.js'
 
 let runSubagentImpl = null
 
@@ -30,14 +31,12 @@ export function configureSubagentBatchRunner(runSubagent) {
 }
 
 function normalizeSubagentTasks(request = {}) {
-  const rawTasks = Array.isArray(request?.tasks) && request.tasks.length
-    ? request.tasks
-    : [request]
+  const rawTasks = subagentTasks(request)
   if (rawTasks.length > SUBAGENT_MAX_PER_BATCH) {
     throw new Error(`a subagent batch may contain at most ${SUBAGENT_MAX_PER_BATCH} tasks`)
   }
   return rawTasks.map((task, index) => {
-    const type = String(task?.subagent_type || task?.type || 'general').trim()
+    const type = subagentTaskType(task)
     const prompt = String(task?.prompt || '').trim()
     const description = String(task?.description || `subtask ${index + 1}`).trim().slice(0, 120)
     if (!SUBAGENT_TYPES[type]) throw new Error(`unknown subagent type: ${type}`)

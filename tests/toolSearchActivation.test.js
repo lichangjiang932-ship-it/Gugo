@@ -155,21 +155,25 @@ test('tool search never mounts an unrequested artifact generator from the deferr
   const createPdf = getBuiltinSpec('create_pdf')
   let secondTools = null
   let calls = 0
+  const executed = []
   await runToolsLoop({
-    job: { id: 'tool-search-artifact', userId: null, origin: 'chat', prompt: 'Find a PDF tool.', userPrompt: 'Find a PDF tool.' },
+    job: { id: 'tool-search-artifact', userId: 'tool-search-artifact-user', origin: 'chat', prompt: 'Find a PDF tool.', userPrompt: 'Find a PDF tool.' },
     step: { id: 'tool-search-artifact', kind: 'chat' },
     messages: [{ role: 'user', content: 'Find a PDF tool.' }],
     toolSpecs: [SEARCH_TOOLS],
     fallbackToolSpecs: [SEARCH_TOOLS, createPdf],
     maxIters: 3,
     enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args, approvalId: 'artifact-search-only' }),
     runModel: async ({ tools }) => {
       calls += 1
       if (calls === 1) return { content: '', toolCalls: [call('search-pdf', 'search_tools', { query: 'create PDF' })] }
       secondTools = tools.map((spec) => spec.function.name)
       return { content: 'No authorized generator was mounted.', toolCalls: [] }
     },
-    executeTool: async () => ({ ok: true }),
+    executeTool: async ({ name }) => { executed.push(name); return { ok: true } },
   })
+  assert.deepEqual(executed, ['search_tools'])
+  assert.equal(calls, 2)
   assert.equal(secondTools.includes('create_pdf'), false)
 })

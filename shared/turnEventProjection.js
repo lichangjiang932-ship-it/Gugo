@@ -117,6 +117,12 @@ function failedTaskVerification(payload, error) {
   return failed ? verification : null
 }
 
+/** Preserve the bounded completion-policy diagnostic across the projection. */
+function completionPoliciesField(payload, error) {
+  const source = payload?.completionPolicies ?? error?.completionPolicies
+  return Array.isArray(source) && source.length > 0 ? { completionPolicies: source } : {}
+}
+
 function normalizedIncompleteReason(payload, error, fallback) {
   const value = String(payload.incompleteReason || error.incompleteReason || '').trim().toLowerCase()
   return /^[a-z][a-z0-9_]{0,95}$/u.test(value) ? value : fallback
@@ -205,6 +211,7 @@ function projectInvalidCompletedEvent(event) {
         ...(failedTaskVerification(payload, error)
           ? { taskVerification: failedTaskVerification(payload, error) }
           : {}),
+        ...completionPoliciesField(payload, error),
         ...evidence,
       },
     }
@@ -229,6 +236,7 @@ function projectInvalidCompletedEvent(event) {
           ['user_clarification'],
         ),
         nextAction: normalizedNextAction(payload, error, 'provide_input'),
+        ...completionPoliciesField(payload, error),
         ...evidence,
       },
     }
@@ -265,6 +273,7 @@ function projectInvalidCompletedEvent(event) {
       missingRequirements,
       nextAction,
       ...(failedVerification ? { taskVerification: failedVerification } : {}),
+      ...completionPoliciesField(payload, error),
       error: {
         code,
         retryable,
@@ -272,6 +281,7 @@ function projectInvalidCompletedEvent(event) {
         missingRequirements,
         nextAction,
         ...(failedVerification ? { taskVerification: failedVerification } : {}),
+        ...completionPoliciesField(payload, error),
       },
       partialText: String(payload.partialText || payload.text || ''),
       ...evidence,

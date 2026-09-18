@@ -5,6 +5,7 @@ import {
   createRuntimePluginRevokeReceipt,
 } from '../plugins/runtimePluginContributionLifecycle.js'
 import { normalizeToolRiskMetadata } from './toolRiskMetadata.js'
+import { validateToolSchemaDefinition } from './toolJsonSchema.js'
 
 // 动态注册的工具表：name → { origin, source, spec, exec? }
 // origin: 'mcp' | 'skill' | 'subagent'
@@ -90,6 +91,20 @@ function getDynamicToolMap(userId, { create = false } = {}) {
   return scoped || null
 }
 
+function snapshotToolParameters(parameters) {
+  const snapshot = structuredClone(parameters)
+  const pending = [snapshot]
+  // Validation already bounded this JSON tree. Freeze only the host-owned copy:
+  // structuredClone detaches caller mutation but does not retain frozen flags.
+  while (pending.length) {
+    const value = pending.pop()
+    if (!value || typeof value !== 'object' || Object.isFrozen(value)) continue
+    Object.freeze(value)
+    pending.push(...Object.values(value))
+  }
+  return snapshot
+}
+
 export function registerDynamicTool({
   name,
   origin,
@@ -100,17 +115,21 @@ export function registerDynamicTool({
   userId = null,
 }) {
   if (!name || !spec) throw new Error('registerDynamicTool 缺少 name/spec')
+  const schemaError = validateToolSchemaDefinition(spec.function?.parameters)
+  if (schemaError) throw Object.assign(new Error(schemaError.error), schemaError)
   const map = getDynamicToolMap(userId, { create: true })
   const previous = map.get(name)
   const registrationId = newDynamicRegistrationId()
   // Every registration receives its own outer identity. This lets unloading a
   // shadow registration restore the exact previous registration.
-  const registeredSpec = bindToolSpecRegistration({
+  const registeredSpec = bindToolSpecRegistration(Object.freeze({
     ...spec,
     ...(spec?.function && typeof spec.function === 'object'
-      ? { function: { ...spec.function } }
+      ? { function: Object.freeze({ ...spec.function,
+          ...(spec.function.parameters === undefined ? {} : { parameters: snapshotToolParameters(spec.function.parameters) }),
+        }) }
       : {}),
-  }, registrationId)
+  }), registrationId)
   const registration = {
     registrationId,
     origin,

@@ -1,5 +1,7 @@
 import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
+import { modelContextDiagnosticsSchema } from '../../../shared/modelContextDiagnostics.js'
+import { modelWireDiagnosticsSchema } from '../../../shared/modelWireDiagnostics.js'
 import { projectTurnEventForClient } from '../../../shared/turnEventProjection.js'
 import { createToolOutputBuffer } from './toolOutputBuffer.js'
 import { modelActivityFromPhase } from './modelActivityProgress.js'
@@ -47,6 +49,24 @@ const TERMINAL_TOOL_CALL_STATUS = new Map([
   ['turn.blocked', TOOL_CALL_STATUS.CANCELLED],
   ['turn.failed', TOOL_CALL_STATUS.ERROR],
 ])
+
+const CLEARED_MODEL_DIAGNOSTICS = Object.freeze({
+  modelContextDiagnostics: null, modelWireDiagnostics: null,
+  modelRequestId: null, modelPhysicalAttempt: null, modelUsage: null,
+})
+
+function preparedModelDiagnostics(payload) {
+  const context = payload.phase === 'context_prepared'
+  const parsed = (context ? modelContextDiagnosticsSchema : modelWireDiagnosticsSchema)
+    .safeParse(context ? payload.contextDiagnostics : payload.wireDiagnostics)
+  return {
+    ...(context ? CLEARED_MODEL_DIAGNOSTICS : { modelUsage: null }),
+    [context ? 'modelContextDiagnostics' : 'modelWireDiagnostics']: parsed.success ? parsed.data : null,
+    modelRequestId: typeof payload.modelRequestId === 'string' && /^[A-Za-z0-9._:-]{1,200}$/u.test(payload.modelRequestId)
+      ? payload.modelRequestId : null,
+    modelPhysicalAttempt: Number.isSafeInteger(payload.physicalAttempt) && payload.physicalAttempt > 0 ? payload.physicalAttempt : null,
+  }
+}
 
 function dispatchToolOutput(activity, { dispatch, messageTarget } = {}) {
   if (!activity?.toolCallId || typeof activity.chunk !== 'string' || !activity.chunk) return false
@@ -161,6 +181,7 @@ export async function dispatchTurnEvent(sourceEvent, {
         ...CLEARED_SERVER_RECOVERY_META,
         ...CLEARED_SERVER_FAILURE_META,
         ...CLEARED_TERMINAL_STATE_META,
+        ...CLEARED_MODEL_DIAGNOSTICS,
         streaming: true,
         turnCompletedAt: null,
         latency: null,
@@ -188,6 +209,10 @@ export async function dispatchTurnEvent(sourceEvent, {
     })
     cursorCommitted = true
   } else if (event.type === 'model.phase') {
+    if (payload.phase === 'context_prepared' || payload.phase === 'wire_prepared') {
+      dispatchMessage({ type: 'UPDATE_LAST_MESSAGE_META', payload: preparedModelDiagnostics(payload), ...streamCursor })
+      return { cursorCommitted: true }
+    }
     const labels = {
       started: 'Calling model',
       waiting_first_token: 'Waiting for model output',

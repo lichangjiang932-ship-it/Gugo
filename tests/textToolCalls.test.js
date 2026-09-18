@@ -36,6 +36,71 @@ test('stream filter withholds a tool marker split across deltas', () => {
   assert.equal(filter.suppressing, true)
 })
 
+test('stream filter resumes normal text after a closed tool block', () => {
+  const filter = createTextToolCallDeltaFilter()
+  const chunks = [
+    '先说明：',
+    '<tool_call>{"name":"read_file","arguments":{"path":"a"}}</tool_call>',
+    '\n现在总结结果。',
+  ]
+  const visible = chunks.map((chunk) => filter.push(chunk)).join('') + filter.finish()
+  assert.equal(visible, '先说明：\n现在总结结果。')
+  assert.equal(filter.suppressing, true)
+})
+
+test('stream filter closes a tool block whose tags are split across chunks', () => {
+  const filter = createTextToolCallDeltaFilter()
+  const chunks = ['A', '<tool_call>', '{"name":"x"}', '</tool', '_call>', 'B']
+  const visible = chunks.map((chunk) => filter.push(chunk)).join('') + filter.finish()
+  assert.equal(visible, 'AB')
+})
+
+test('stream filter handles multiple tool blocks in a single chunk', () => {
+  const filter = createTextToolCallDeltaFilter()
+  const visible = filter.push(
+    'start'
+    + '<tool_call>{"name":"a"}</tool_call>'
+    + 'middle'
+    + '<tool_call>{"name":"b"}</tool_call>'
+    + 'end',
+  ) + filter.finish()
+  assert.equal(visible, 'startmiddleend')
+})
+
+test('stream filter keeps a malformed protocol body visible like the full parser', () => {
+  const raw = 'worked<tool_call>{"name":"read_file","arguments":{"path": }}</tool_call>done'
+  const full = extractTextToolCalls(raw)
+  assert.equal(full.toolCalls.length, 0)
+  const filter = createTextToolCallDeltaFilter()
+  const streamed = filter.push(raw) + filter.finish()
+  assert.equal(streamed, full.content)
+})
+
+test('stream filter treats near-miss tags as literal content', () => {
+  for (const text of ['<tool_calls>{"name":"x"}</tool_calls>', '<tool_caller> hi', 'use <tool_call maybe later']) {
+    const filter = createTextToolCallDeltaFilter()
+    const visible = filter.push(text) + filter.finish()
+    assert.equal(visible, text)
+  }
+})
+
+test('stream filter is idempotent across repeated finish and rejects late pushes', () => {
+  const filter = createTextToolCallDeltaFilter()
+  assert.equal(filter.push('hello'), 'hello')
+  assert.equal(filter.finish(), '')
+  assert.equal(filter.finish(), '')
+  assert.equal(filter.push('late'), '')
+})
+
+test('stream filter fails open with a bounded buffer for an unterminated block', () => {
+  const filter = createTextToolCallDeltaFilter()
+  const oversized = 'x'.repeat(512 * 1024 + 16)
+  const first = filter.push(`<tool_call>${oversized}`)
+  assert.ok(first.includes('x'.repeat(1024)), 'oversized protocol body is released, not buffered forever')
+  // After fail-open the remaining close tag is ordinary text, not protocol.
+  assert.ok(filter.push('</tool_call>tail').endsWith('tail'))
+})
+
 test('keeps a malformed protocol body visible instead of silently dropping it', () => {
   const parsed = extractTextToolCalls('好的。<tool_call>{"name": "read_file", "arguments": {"path": }</tool_call>')
   assert.equal(parsed.detected, true)

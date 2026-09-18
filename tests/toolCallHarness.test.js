@@ -324,6 +324,32 @@ test('validateToolCall enforces composed, range, length, pattern, and closed-obj
   assert.equal(validateToolCall(valid, specs), null)
 })
 
+test('validateToolCall requires exactly one matching oneOf branch and preserves anyOf semantics', () => {
+  const validate = (keyword, value) => {
+    const specs = [{
+      type: 'function',
+      function: {
+        name: 'numeric_choice',
+        parameters: {
+          type: 'object',
+          properties: {
+            value: { [keyword]: [{ type: 'number' }, { type: 'integer' }] },
+          },
+          required: ['value'],
+        },
+      },
+    }]
+    const [call] = normalizeToolCalls([{ name: 'numeric_choice', arguments: JSON.stringify({ value }) }])
+    return validateToolCall(call, specs)
+  }
+
+  assert.equal(validate('oneOf', 1.5), null)
+  assert.equal(validate('oneOf', 'text')?.code, 'tool_arguments_validation_failed')
+  assert.equal(validate('oneOf', 1)?.code, 'tool_arguments_validation_failed')
+  assert.equal(validate('anyOf', 1), null)
+  assert.equal(validate('anyOf', 'text')?.code, 'tool_arguments_validation_failed')
+})
+
 test('validateToolCall applies item schemas without requiring a redundant array type', () => {
   const specs = [{
     type: 'function',
@@ -611,6 +637,29 @@ test('mapWithConcurrency 保持结果顺序并限制并发数', async () => {
 
   assert.deepEqual(result, [0, 1, 2, 3])
   assert.equal(maxActive, 2)
+})
+
+test('mapWithConcurrency stops claims and drains active workers before rejecting', async () => {
+  const started = []
+  let release
+  const pending = new Promise((resolve) => { release = resolve })
+  const failure = new Error('mapper failed')
+  let settled = false
+  const run = mapWithConcurrency([0, 1, 2, 3], async (value) => {
+    started.push(value)
+    if (value === 0) throw failure
+    await pending
+    return value
+  }, { concurrency: 2 })
+  const rejected = assert.rejects(run, (error) => error === failure)
+  run.then(() => { settled = true }, () => { settled = true })
+  await new Promise((resolve) => setImmediate(resolve))
+  const settledBeforeDrain = settled
+  release()
+  await rejected
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(settledBeforeDrain, false)
+  assert.deepEqual(started, [0, 1])
 })
 
 test('tool result batch budget follows the context window without penalizing large-window models', () => {

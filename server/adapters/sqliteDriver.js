@@ -1,5 +1,8 @@
 function toPlainRow(row) {
-  return row && typeof row === 'object' ? { ...row } : row
+  if (!row || typeof row !== 'object') return row
+  return Object.fromEntries(Object.entries(row).map(([key, value]) => [key,
+    value instanceof Uint8Array && !Buffer.isBuffer(value) ? Buffer.from(value) : value,
+  ]))
 }
 
 function wrapStatement(statement) {
@@ -16,7 +19,10 @@ function wrapStatement(statement) {
 export function createNodeSqliteDatabase(DatabaseSync) {
   return class NodeSqliteDatabase {
     constructor(filename, options = {}) {
-      this.database = new DatabaseSync(filename, options)
+      const { readonly, fileMustExist, ...nodeOptions } = options
+      if (fileMustExist && filename !== ':memory:') fs.accessSync(filename, fs.constants.F_OK)
+      if (readonly !== undefined && nodeOptions.readOnly === undefined) nodeOptions.readOnly = readonly
+      this.database = new DatabaseSync(filename, nodeOptions)
       this.savepointId = 0
       this.transactionDepth = 0
     }
@@ -101,3 +107,4 @@ async function resolveDatabaseDriver() {
 const Database = await resolveDatabaseDriver()
 
 export default Database
+import fs from 'node:fs'

@@ -754,7 +754,7 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION }, (_, index) => index + 1),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 116)
+  assert.equal(LATEST_SCHEMA_VERSION, 120)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
 })
@@ -4426,6 +4426,158 @@ test('schema migration registry upgrades a v30 database through every registered
     ]) {
       assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table), table)
     }
+  } finally {
+    db.close()
+  }
+})
+
+test('v117 adds the optional memory embedding index with a fingerprint', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    assert.equal(migrateThroughVersion(db, 116), 116)
+    assert.equal(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_embeddings'").get(),
+      undefined,
+    )
+    assert.equal(migrateThroughVersion(db, 117), 117)
+    const columns = db.prepare('PRAGMA table_info(memory_embeddings)').all().map((row) => row.name)
+    assert.deepEqual(columns, [
+      'memory_id', 'user_id', 'model', 'dimensions', 'vector', 'content_fingerprint', 'updated_at',
+    ])
+    // Vector byte length must match the declared dimension.
+    db.prepare(`
+      INSERT INTO users (id, email, created_at, updated_at) VALUES ('u1', 'u1@example.com', 1, 1)
+    `).run()
+    db.prepare(`
+      INSERT INTO memories (id, user_id, type, title, slug, body, frontmatter_json, created_at, updated_at)
+      VALUES ('m1', 'u1', 'user', 't', 't', 'b', '{}', 1, 1)
+    `).run()
+    const insert = db.prepare(`
+      INSERT INTO memory_embeddings (memory_id, user_id, model, dimensions, vector, content_fingerprint, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `)
+    assert.throws(() => insert.run('m1', 'u1', 'demo', 2, Buffer.alloc(4), 'a'.repeat(64), 1))
+    insert.run('m1', 'u1', 'demo', 2, Buffer.alloc(8), 'a'.repeat(64), 1)
+    // Deleting the memory cascades to its vector.
+    db.prepare('DELETE FROM memories WHERE id = ?').run('m1')
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM memory_embeddings').get().n, 0)
+  } finally {
+    db.close()
+  }
+})
+
+test('v118 adds versioned goal plans with step evidence columns', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    assert.equal(migrateThroughVersion(db, 117), 117)
+    assert.equal(migrateThroughVersion(db, 118), 118)
+    for (const table of ['goal_plans', 'goal_plan_steps', 'goal_plan_events']) {
+      assert.ok(
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table),
+        table,
+      )
+    }
+    const stepColumns = db.prepare('PRAGMA table_info(goal_plan_steps)').all().map((row) => row.name)
+    assert.ok(stepColumns.includes('evidence_json'))
+    assert.ok(stepColumns.includes('evidence_verified'))
+    assert.ok(stepColumns.includes('acceptance_json'))
+    assert.ok(stepColumns.includes('evidence_turn_id'))
+    assert.ok(stepColumns.includes('evidence_tool_call_id'))
+    const planColumns = db.prepare('PRAGMA table_info(goal_plans)').all().map((row) => row.name)
+    assert.ok(planColumns.includes('version'), 'optimistic-lock counter')
+    assert.ok(planColumns.includes('approved_by'), 'approval attribution')
+    const evidenceIndex = db.prepare("PRAGMA index_list('goal_plan_steps')").all()
+      .find((row) => row.name === 'idx_goal_plan_steps_evidence')
+    assert.ok(evidenceIndex, 'evidence reuse guard index exists')
+    assert.equal(Number(evidenceIndex.unique), 1)
+    assert.equal(Number(evidenceIndex.partial), 1)
+
+    db.prepare("INSERT INTO users (id, email, created_at, updated_at) VALUES ('u1', 'u1@e.test', 1, 1)").run()
+    db.prepare(`
+      INSERT INTO goal_plans (id, user_id, objective, status, revision, created_at, updated_at)
+      VALUES ('p1', 'u1', 'obj', 'approved', 1, 1, 1)
+    `).run()
+    const insertStep = db.prepare(`
+      INSERT INTO goal_plan_steps
+        (id, plan_id, user_id, ordinal, title, status, created_at, updated_at)
+      VALUES (?, 'p1', 'u1', ?, ?, 'pending', 1, 1)
+    `)
+    insertStep.run('s1', 0, 'first')
+    // (plan_id, ordinal) must be unique.
+    assert.throws(() => insertStep.run('s2', 0, 'duplicate ordinal'))
+    // Invalid status and unverified evidence shape are rejected by the schema.
+    assert.throws(() => db.prepare(`
+      INSERT INTO goal_plan_steps (id, plan_id, user_id, ordinal, title, status, created_at, updated_at)
+      VALUES ('s3', 'p1', 'u1', 1, 'bad', 'maybe', 1, 1)
+    `).run())
+    assert.throws(() => db.prepare(`
+      INSERT INTO goal_plan_steps
+        (id, plan_id, user_id, ordinal, title, status, evidence_verified, created_at, updated_at)
+      VALUES ('s4', 'p1', 'u1', 2, 'bad flag', 'done', 2, 1, 1)
+    `).run())
+    // `draft` is not reachable from any code path and is rejected outright.
+    assert.throws(() => db.prepare(`
+      INSERT INTO goal_plans (id, user_id, objective, status, created_at, updated_at)
+      VALUES ('p2', 'u1', 'obj', 'draft', 1, 1)
+    `).run())
+    // One tool call cannot be cited as evidence by two steps.
+    db.prepare(`
+      UPDATE goal_plan_steps
+      SET evidence_turn_id = 't1', evidence_tool_call_id = 'c1'
+      WHERE id = 's1'
+    `).run()
+    assert.throws(() => db.prepare(`
+      INSERT INTO goal_plan_steps
+        (id, plan_id, user_id, ordinal, title, status, evidence_turn_id, evidence_tool_call_id,
+         created_at, updated_at)
+      VALUES ('s9', 'p1', 'u1', 9, 'other', 'pending', 't1', 'c1', 1, 1)
+    `).run())
+    // A turn without a tool call can still support more than one step.
+    insertStep.run('s5', 5, 'fifth')
+    db.prepare("UPDATE goal_plan_steps SET evidence_turn_id = 't2' WHERE id = 's1'").run()
+    db.prepare("UPDATE goal_plan_steps SET evidence_turn_id = 't2' WHERE id = 's5'").run()
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS n FROM goal_plan_steps WHERE evidence_turn_id = 't2'").get().n,
+      2,
+    )
+    // Deleting the plan cascades to steps and events.
+    db.prepare("INSERT INTO goal_plan_events (plan_id, user_id, revision, type, payload_json, created_at) VALUES ('p1', 'u1', 1, 'plan.created', '{}', 1)").run()
+    db.prepare("DELETE FROM goal_plans WHERE id = 'p1'").run()
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM goal_plan_steps').get().n, 0)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM goal_plan_events').get().n, 0)
+  } finally {
+    db.close()
+  }
+})
+
+test('v119 records an embedding-space identity and marks legacy rows', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    // Stop at 118 so the row predates the new column, exactly like a database
+    // that has been running since before embedding spaces existed.
+    assert.equal(migrateThroughVersion(db, 118), 118)
+    db.prepare("INSERT INTO users (id, email, created_at, updated_at) VALUES ('u1', 'u1@e.test', 1, 1)").run()
+    db.prepare("INSERT INTO memories (id, user_id, slug, type, title, body, frontmatter_json, created_at, updated_at) VALUES ('m1', 'u1', 'slug-m1', 'project', 't', 'b', '{}', 1, 1)").run()
+    db.prepare(`
+      INSERT INTO memory_embeddings (memory_id, user_id, model, dimensions, vector, content_fingerprint, updated_at)
+      VALUES ('m1', 'u1', 'legacy-model', 2, X'0000803F0000803F', '${'a'.repeat(64)}', 1)
+    `).run()
+
+    assert.equal(migrateThroughVersion(db, 119), 119)
+    const columns = db.prepare('PRAGMA table_info(memory_embeddings)').all().map((row) => row.name)
+    assert.ok(columns.includes('embedding_space'), 'the space identity is persisted')
+    assert.ok(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_memory_embeddings_space'").get(),
+      'the space index exists',
+    )
+    // A pre-existing vector must never look comparable to a real space.
+    assert.equal(
+      db.prepare("SELECT embedding_space FROM memory_embeddings WHERE memory_id = 'm1'").get().embedding_space,
+      'unknown',
+    )
   } finally {
     db.close()
   }

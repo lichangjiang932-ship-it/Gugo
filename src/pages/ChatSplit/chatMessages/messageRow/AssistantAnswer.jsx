@@ -81,6 +81,8 @@ export default function AssistantAnswer({
   const hasExecution = isCurrentStreamingMessage || presentation.execution.length > 0
   const hasReasoningSummary = Boolean(String(msg.meta?.reasoning || '').trim())
   const hasProcessSummary = hasExecution || hasReasoningSummary
+    || Boolean(msg.meta?.modelContextDiagnostics || msg.meta?.modelWireDiagnostics
+      || msg.meta?.serverFailure?.completionPolicies?.length)
   const preExecutionFailure = isPreExecutionFailure(msg)
   const { modelSetupFailure, runtimeRestartRequired } = failurePresentation(msg)
   const failedRetryRejection = hasStructuredFailure

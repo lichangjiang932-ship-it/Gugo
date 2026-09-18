@@ -784,7 +784,7 @@ test('★ 系统故障标记为 retryable,且明确告诉模型这不是用户�
   assert.match(out.error, /重试/)
 })
 
-test('★ 用户拒绝不标 retryable,并提示模型换方案', () => {
+test('★ 用户拒绝不标 retryable,并等待用户明确下一步', () => {
   const out = formatDeniedToolResult({
     proceed: false,
     reason: '用户拒绝了这次调用',
@@ -795,7 +795,8 @@ test('★ 用户拒绝不标 retryable,并提示模型换方案', () => {
   assert.equal(out.deniedByUser, true)
   assert.notEqual(out.retryable, true, '用户说不,重试是骚扰')
   assert.notEqual(out.systemFailure, true)
-  assert.match(out.error, /换一个方案/)
+  assert.match(out.error, /本轮已停止/)
+  assert.equal(out.code, 'approval_denied')
 })
 
 test('计划模式拒绝返回稳定策略码且不伪装成工具缺失', () => {

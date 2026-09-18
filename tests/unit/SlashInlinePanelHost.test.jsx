@@ -62,27 +62,127 @@ test.skip('feedback panel validates and submits without rewriting the composer',
   } finally { await cleanup(view) }
 })
 
-test.skip('goals panel adds, completes, and removes compatible todo items', async () => {
-  let todos = [{ id: 'one', content: 'Inspect status', status: 'pending' }]
-  const changes = []
-  const view = await renderPanel({ panel: 'goals', todos, onGoalsChange: (next) => { todos = next; changes.push(next) } })
-  try {
-    const panel = view.element.querySelector('[data-testid="slash-goals-panel"]')
-    const toggle = [...panel.querySelectorAll('button')].find((button) => /标记|Mark/.test(button.getAttribute('aria-label') || ''))
-    await act(async () => toggle.dispatchEvent(new view.dom.window.MouseEvent('click', { bubbles: true })))
-    assert.equal(changes[0][0].status, 'completed')
-    const input = panel.querySelector('input')
-    await changeValue(view.dom, input, 'Ship the redesign')
-    const add = [...panel.querySelectorAll('button')].find((button) => /添加|Add/.test(button.textContent))
-    await act(async () => add.dispatchEvent(new view.dom.window.MouseEvent('click', { bubbles: true })))
-    assert.equal(changes.at(-1).at(-1).text, 'Ship the redesign')
-  } finally { await cleanup(view) }
-})
-
 test('persistSlashGoals creates a chat when goals are added from a draft', () => {
   const actions = []
   persistSlashGoals((action) => actions.push(action), null, [{ id: 'g1', text: 'Finish', done: false }], 'Goals')
   assert.equal(actions[0].type, 'NEW_SESSION')
   assert.equal(actions[1].type, 'SET_TODOS')
   assert.equal(actions[0].payload.id, actions[1].payload.sessionId)
+})
+
+function jsonResponse(body, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    async text() { return JSON.stringify(body) },
+    async json() { return body },
+  }
+}
+
+function planFixture(overrides = {}) {
+  return {
+    id: 'plan-1',
+    objective: 'Fix the counter',
+    status: 'awaiting_approval',
+    revision: 1,
+    version: 3,
+    steps: [
+      { id: 's1', ordinal: 0, title: 'Reproduce', status: 'pending', evidenceVerified: false },
+      { id: 's2', ordinal: 1, title: 'Fix it', status: 'done', evidenceVerified: true },
+    ],
+    ...overrides,
+  }
+}
+
+function stubGoalApi({ plan = planFixture(), calls = [] } = {}) {
+  const original = globalThis.fetch
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url)
+    calls.push({ url: target, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null })
+    if (target.startsWith('/api/goals/list')) {
+      return jsonResponse({ ok: true, plans: plan ? [plan] : [] })
+    }
+    if (target.startsWith('/api/goals/show')) {
+      return jsonResponse({ ok: true, plan, events: [] })
+    }
+    if (target.startsWith('/api/goals/approve')) {
+      return jsonResponse({ ok: true, plan: { ...plan, status: 'approved', version: plan.version + 1 } })
+    }
+    if (target.startsWith('/api/goals/step')) {
+      return jsonResponse({ ok: true, plan })
+    }
+    return jsonResponse({ ok: false, error: 'unexpected' }, 400)
+  }
+  return { restore: () => { globalThis.fetch = original }, calls }
+}
+
+test('goals panel shows the host-persisted plan and its verified steps', async () => {
+  const api = stubGoalApi()
+  const view = await renderPanel({ panel: 'goals', sessionId: 's1' })
+  try {
+    const panel = view.element.querySelector('[data-testid="slash-goals-panel"]')
+    assert.ok(panel, 'panel renders')
+    const plan = view.element.querySelector('[data-testid="slash-goals-plan"]')
+    assert.ok(plan, 'server plan section renders')
+    assert.match(plan.textContent, /Fix the counter/)
+    assert.match(plan.textContent, /Reproduced|Reproduce/)
+    assert.match(view.element.querySelector('[data-testid="slash-goals-plan-status"]').textContent, /awaiting|等待/u)
+    assert.equal(view.element.querySelectorAll('[data-testid^="slash-goals-step-"]').length, 2)
+    // The panel must say that only the agent can finish a step.
+    assert.match(plan.textContent, /agent|宿主/u)
+  } finally {
+    api.restore()
+    await cleanup(view)
+  }
+})
+
+test('goals panel approves with the version it read, and never marks a step done', async () => {
+  const api = stubGoalApi()
+  const view = await renderPanel({ panel: 'goals', sessionId: 's1' })
+  try {
+    const approve = [...view.element.querySelectorAll('button')]
+      .find((button) => /批准|Approve/.test(button.textContent))
+    assert.ok(approve, 'an approve control is offered for an unapproved plan')
+    await act(async () => approve.dispatchEvent(new view.dom.window.MouseEvent('click', { bubbles: true })))
+    const approval = api.calls.find((call) => call.url.startsWith('/api/goals/approve'))
+    assert.ok(approval, 'approve was sent to the server')
+    assert.deepEqual(approval.body, { planId: 'plan-1', expectedVersion: 3 })
+
+    // Every step control the UI exposes must avoid `done`: completion needs
+    // host-verifiable evidence that only the agent can cite.
+    const stepCalls = api.calls.filter((call) => call.url.startsWith('/api/goals/step'))
+    for (const call of stepCalls) assert.notEqual(call.body?.status, 'done')
+  } finally {
+    api.restore()
+    await cleanup(view)
+  }
+})
+
+test('goals panel surfaces a load failure instead of showing an empty plan', async () => {
+  const original = globalThis.fetch
+  globalThis.fetch = async () => jsonResponse({ ok: false, error: 'unauthorized' }, 401)
+  const view = await renderPanel({ panel: 'goals', sessionId: 's1' })
+  try {
+    const error = view.element.querySelector('[data-testid="slash-goals-error"]')
+    assert.ok(error, 'the failure is visible')
+    assert.equal(view.element.querySelector('[data-testid="slash-goals-plan"]'), null)
+  } finally {
+    globalThis.fetch = original
+    await cleanup(view)
+  }
+})
+
+test('legacy chat goals still render when a session has them', async () => {
+  const api = stubGoalApi({ plan: null })
+  const todos = [{ id: 'one', content: 'Inspect status', status: 'pending' }]
+  const view = await renderPanel({ panel: 'goals', sessionId: 's1', todos, onGoalsChange: () => {} })
+  try {
+    const legacy = view.element.querySelector('[data-testid="slash-goals-legacy"]')
+    assert.ok(legacy, 'legacy goals are preserved, not dropped')
+    assert.match(legacy.textContent, /Inspect status/)
+    assert.equal(view.element.querySelector('[data-testid="slash-goals-plan"]'), null)
+  } finally {
+    api.restore()
+    await cleanup(view)
+  }
 })

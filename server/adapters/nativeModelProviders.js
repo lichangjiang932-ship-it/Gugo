@@ -81,6 +81,7 @@ export function buildNativeProviderRequest(args = {}) {
     error.retryable = false
     throw error
   }
+  const adapter = getEffectiveModelProviderAdapter(args.profile?.kind)
   const messages = prepareOutboundMessages({
     messages: args.messages,
     profile: args.profile,
@@ -90,10 +91,10 @@ export function buildNativeProviderRequest(args = {}) {
     baseUrl: args.config?.baseUrl,
     ephemeralContext: args.ephemeralContext,
     retainReasoning: retainReasoningForEnv(args.env, { providerKind: args.profile?.kind }),
+    retainPromptStability: !adapter && args.profile?.kind === 'anthropic',
   })
   if (messages.length === 0) throw new Error('消息不能为空。')
   const prepared = { ...args, messages }
-  const adapter = getEffectiveModelProviderAdapter(args.profile?.kind)
   if (adapter) return captureRequestAdapter(adapter.buildRequest(prepared), adapter)
   return bindProviderReplayContext(buildBuiltInNativeProviderRequest(prepared), prepared)
 }

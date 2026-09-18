@@ -8,6 +8,7 @@ import { releaseApproval } from './approvalGate.js'
 import { turnEventForClient } from './turnEventStore.js'
 import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 import { createHeadlessTurnInteractions } from './headlessTurnInteractions.js'
+import { startHeadlessWithAttachments } from './headlessAttachmentStart.js'
 
 const PERMISSION_MODES = new Set(['normal', 'acceptEdits', 'plan', 'bypass'])
 const STOP_EVENT_TYPES = new Set([
@@ -41,7 +42,7 @@ function normalizeMode(value) {
   return mode
 }
 
-function configureWorkspace(rawCwd, env = process.env) {
+function configureWorkspace(rawCwd, env = process.env, { explicit = false } = {}) {
   const cwd = path.resolve(String(rawCwd || process.cwd()))
   let stat
   try {
@@ -60,6 +61,10 @@ function configureWorkspace(rawCwd, env = process.env) {
     WORKSPACE_ROOT: cwd,
     WORKSPACE_FS_ENABLED: env.WORKSPACE_FS_ENABLED ?? '1',
     WORKSPACE_SHARED_TRUSTED: '1',
+    // An explicit --cwd also decides the turn's project directory (and thus
+    // which project instructions apply), instead of letting a configured
+    // default output directory take over the workspace role.
+    ...(explicit ? { GUGO_CLI_WORKSPACE_ROOT: cwd } : {}),
   }
   Object.assign(env, workspaceEnv)
   if (env !== process.env) Object.assign(process.env, workspaceEnv)
@@ -177,6 +182,13 @@ function normalizeHeadlessTurnInput(input = {}) {
     ...input,
   }
   const { signal, model, modelProviderId, mode, resumeTurnId } = options
+  if (options.attachmentRequests !== undefined && (!Array.isArray(options.attachmentRequests)
+    || options.attachmentRequests.length > 8 || options.attachmentRequests.some((request) => (
+      !request || typeof request.path !== 'string' || !request.path.trim() || !['auto', 'image'].includes(request.kind || 'auto')
+    )))) throw new HeadlessTurnError('CLI_ATTACHMENT_INVALID', 'attachments require at most eight explicit file requests', 2)
+  if (resumeTurnId && options.attachmentRequests?.length) {
+    throw new HeadlessTurnError('CLI_RESUME_ATTACHMENT_CONFLICT', 'attachments cannot be combined with resume', 2)
+  }
   if (signal !== null && signal !== undefined && (
     typeof signal?.aborted !== 'boolean'
     || typeof signal?.addEventListener !== 'function'
@@ -227,7 +239,9 @@ function normalizeHeadlessTurnInput(input = {}) {
 async function prepareHeadlessTurn(input, dependencies) {
   const executionEnv = Object.isExtensible(input.env) ? input.env : { ...input.env }
   const configure = dependencies.configureWorkspace || configureWorkspace
-  const workspace = configure(input.workspaceCwd || input.cwd, executionEnv)
+  const workspace = configure(input.workspaceCwd || input.cwd, executionEnv, {
+    explicit: input.workspaceExplicit === true,
+  })
   const authenticate = dependencies.bootstrapAuth || bootstrapAuth
   const auth = await authenticate({ token: input.token, env: executionEnv })
   if (!auth?.authenticated || !auth?.user?.id) {
@@ -401,16 +415,16 @@ async function startOrRecoverHeadlessTurn(runtime, controller, interactions) {
     }
     return runtime.recoverTurn({ ...scope, authMode: runtime.authMode })
   }
-  const content = String(input.prompt || '').trim()
+  const content = String(input.prompt || '').trim() || (input.attachmentRequests?.length ? '请分析附件内容。' : '')
   if (!content) throw new HeadlessTurnError('PROMPT_REQUIRED', 'prompt is required', 2)
-  await runtime.startTurn({
-    ...scope,
-    content,
-    modelName: input.normalizedModel,
-    modelProviderId: input.normalizedModelProviderId,
-    intentMode: input.permissionMode === 'plan' ? 'answer' : 'auto',
-    approvalMode: input.permissionMode,
-    authMode: runtime.authMode,
+  await startHeadlessWithAttachments(runtime, {
+      ...scope,
+      content,
+      modelName: input.normalizedModel,
+      modelProviderId: input.normalizedModelProviderId,
+      intentMode: input.permissionMode === 'plan' ? 'answer' : 'auto',
+      approvalMode: input.permissionMode,
+      authMode: runtime.authMode,
   })
   controller.state.turnReadyForCancellation = true
   if (controller.state.cancellationRequested) controller.requestCancellation()

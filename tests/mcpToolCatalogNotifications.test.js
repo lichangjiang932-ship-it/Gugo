@@ -30,7 +30,13 @@ lines.on('line', (line) => {
       failNext = false
       process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32603, message: 'catalog temporarily unavailable' } }) + '\n')
     } else {
-      send(request.id, { tools: catalog() })
+      const paginated = process.env.PAGINATED_CATALOG === '1'
+      const cursor = request.params.cursor
+      if (!paginated) send(request.id, { tools: catalog() })
+      else if (cursor === undefined) send(request.id, { tools: catalog().slice(0, 2), nextCursor: 'tail' })
+      else if (revision && process.env.CURSOR_FAILURE === 'cycle') send(request.id, { tools: catalog().slice(2), nextCursor: 'tail' })
+      else if (revision && process.env.CURSOR_FAILURE === 'limit') send(request.id, { tools: [], nextCursor: 'page-' + lists })
+      else send(request.id, { tools: catalog().slice(2) })
       if (lists === 1 && process.env.STARTUP_CATALOG_CHANGE === '1') { revision = 1; notify() }
     }
   } else if (request.method === 'resources/list') send(request.id, { resources: [] })
@@ -111,6 +117,36 @@ test('MCP catalog refresh errors remain visible while the last good schema stays
   const recovered = await listUserToolSpecs(userId, { connect: false })
   assert.equal(recovered.errors.some((error) => error.serverId === s.id), false)
 })
+
+test('paginated notification refresh publishes the complete catalog atomically', async (t) => {
+  const s = server(t, { PAGINATED_CATALOG: '1' })
+  await ensureServerConnected(userId, s)
+  const before = (await listUserToolSpecs(userId, { connect: false })).specs
+  assert.ok(named(before, 'removed'))
+  const keepId = getDynamicToolSpecRegistrationId(named(before, 'keep'))
+  await control(s, { action: 'change' })
+  await until(async () => named((await listUserToolSpecs(userId, { connect: false })).specs, 'added'))
+  const after = (await listUserToolSpecs(userId, { connect: false })).specs
+  assert.equal(named(after, 'removed'), undefined)
+  assert.equal(getDynamicToolSpecRegistrationId(named(after, 'keep')), keepId)
+  assert.equal(JSON.parse((await control(s, { action: 'stats' })).content[0].text).lists, 4)
+})
+
+for (const failure of ['cycle', 'limit']) {
+  test(`paginated refresh ${failure} retains the last complete catalog and reports failure`, async (t) => {
+    const s = server(t, { PAGINATED_CATALOG: '1', CURSOR_FAILURE: failure })
+    await ensureServerConnected(userId, s)
+    const before = getUserCatalog(userId).find((row) => row.serverId === s.id).tools
+    await control(s, { action: 'change' })
+    await until(() => getUserCatalog(userId).find((row) => row.serverId === s.id)?.toolCatalogError)
+    const after = getUserCatalog(userId).find((row) => row.serverId === s.id)
+    assert.deepEqual(after.tools, before)
+    assert.match(after.toolCatalogError.error, new RegExp(failure))
+    const specs = (await listUserToolSpecs(userId, { connect: false })).specs
+    assert.ok(named(specs, 'removed'))
+    assert.equal(named(specs, 'added'), undefined)
+  })
+}
 
 test('catalog changes during the initial handshake survive until the connection is installed', async (t) => {
   const s = server(t, { STARTUP_CATALOG_CHANGE: '1' })

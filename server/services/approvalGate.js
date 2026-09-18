@@ -7,8 +7,7 @@
  *   - 内存 Map 是快路径(同进程内决策毫秒级唤醒),DB 轮询是兜底(进程重启后仍能 resume)。
  *     决策的权威永远是 DB,内存只是通知渠道。
  *   - 尊重 AbortSignal:job 被取消时立刻解除等待,不泄漏 timer。
- *   - 不 throw 打断 agent 循环:被拒绝返回 { proceed:false },由 caller 把拒绝结果
- *     喂回模型让它改道,而不是硬失败(AGENTS.md 2.5.3 的精神)。
+ *   - 拒绝返回 { proceed:false }；循环保留已确认进展并停止本轮，不再为收尾请求模型。
  */
 import {
   cancelApprovalsForJob,
@@ -46,6 +45,8 @@ export function formatDeniedToolResult(gate, locale = 'zh') {
     return {
       ...base,
       denied: false, // 不是「被拒绝」,是没走成
+      authorizationFailure: true,
+      code: gate.code || 'approval_system_failed',
       systemFailure: true,
       retryable,
       error: retryable
@@ -61,13 +62,15 @@ export function formatDeniedToolResult(gate, locale = 'zh') {
     return {
       ...base,
       expired: true,
+      code: 'approval_expired',
+      retryable: false,
       error: localized(locale,
-        `${gate.reason}。用户可能不在,可以先做不需要批准的部分。`,
-        `${gate.reason}. The user may be away; you can proceed with parts that do not need approval.`),
+        `${gate.reason || '审批已过期'}。用户可能不在，本轮已停止；请返回后重新确认。`,
+        `${gate.reason || 'Approval expired'}. The user may be away; this turn stopped and needs renewed confirmation.`),
     }
   }
   if (gate?.cancelled) {
-    return { ...base, cancelled: true, error: gate.reason }
+    return { ...base, code: 'turn_cancelled', cancelled: true, retryable: false, error: gate.reason }
   }
   if (gate?.approvalRequired) {
     return {
@@ -105,10 +108,12 @@ export function formatDeniedToolResult(gate, locale = 'zh') {
   }
   return {
     ...base,
+    code: 'approval_denied',
     deniedByUser: true,
+    retryable: false,
     error: localized(locale,
-      `${gate?.reason || '用户拒绝了这次调用'}。请换一个方案,不要重复请求同一个操作。`,
-      `${gate?.reason || 'The user rejected this call'}. Try a different approach; do not repeat the same operation.`),
+      `${gate?.reason || '用户拒绝了这次调用'}。本轮已停止；请由用户明确选择其他方案后再继续。`,
+      `${gate?.reason || 'The user rejected this call'}. This turn stopped; wait for the user to choose how to continue.`),
   }
 }
 

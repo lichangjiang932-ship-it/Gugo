@@ -289,6 +289,21 @@ async function requestApi(path, {
     if (controller.signal.aborted) {
       throw new CliError('REQUEST_TIMEOUT', `request timed out after ${timeoutMs}ms`)
     }
+    // A bare `fetch failed` is the single most common first-run error and it
+    // tells the user nothing. Name the URL, the cause, and the two ways out.
+    const cause = String(err?.cause?.code || err?.code || '').trim()
+    const refused = ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'EHOSTUNREACH'].includes(cause)
+    if (refused || /fetch failed/iu.test(String(err?.message || ''))) {
+      const base = resolveServerUrl(env)
+      throw new CliError(
+        'SERVER_UNREACHABLE',
+        [
+          `cannot reach the Gugo server at ${base}${cause ? ` (${cause})` : ''}.`,
+          'Start it with `npm run dev` (or point GUGO_SERVER_URL at a running instance),',
+          'or use an offline command such as `gugo doctor --headless` / `gugo goal list`.',
+        ].join(' '),
+      )
+    }
     throw new CliError('REQUEST_FAILED', err?.message || String(err))
   } finally {
     clearTimeout(timeout)

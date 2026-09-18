@@ -13,6 +13,7 @@ import { createRateLimitStore } from './services/rateLimitStore.js'
 import { createUserAccountStore } from './services/userAccountStore.js'
 import { createUserToolPermissionStore } from './services/userToolPermissionStore.js'
 import { validateRuntimeStoragePath } from './utils/runtimeStoragePath.js'
+import { getDiagnosticRuntimeScope } from './core/diagnosticRuntimeScope.js'
 
 export const DB_SCHEMA_VERSION = LATEST_SCHEMA_VERSION
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
@@ -39,6 +40,8 @@ function ensureDataDir() {
 }
 
 export function getDb() {
+  const diagnostic = getDiagnosticRuntimeScope()
+  if (diagnostic) return diagnostic.database
   if (_db) return _db
   ensureDataDir()
   const db = new Database(getDbPath())
@@ -97,6 +100,9 @@ export function getDbStatus() {
 }
 
 export function closeDb() {
+  // Diagnostic connections belong to their lexical owner; do not close the
+  // normal runtime singleton from a concurrent asynchronous diagnostic.
+  if (getDiagnosticRuntimeScope()) return
   if (_db) {
     _db.close()
     _db = null

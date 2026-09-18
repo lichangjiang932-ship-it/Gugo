@@ -400,8 +400,28 @@ function commandPrelude(segment) {
   return null
 }
 
-export function commandCheckDescriptors(command) {
+function withoutDiagnosticDescriptorMerge(command) {
   const value = String(command || '').trim()
+  const suffix = /\s+2>&1$/u.exec(value)
+  if (!suffix) return value
+  const prefix = value.slice(0, suffix.index)
+  let quote = ''
+  for (let index = 0; index < prefix.length; index += 1) {
+    const character = prefix[index]
+    // Avoid guessing cross-shell escaping rules. These remain conservative
+    // non-verdict commands, as do unbalanced quotes and all file redirections.
+    if (character === '^' || character === '`'
+      || (character === '\\' && ['"', "'"].includes(prefix[index + 1]))) return value
+    if (quote) { if (character === quote) quote = '' }
+    else if (character === '"' || character === "'") quote = character
+  }
+  return quote ? value : prefix.trimEnd()
+}
+
+export function commandCheckDescriptors(command) {
+  // Merging stderr into captured stdout does not mutate files or mask the
+  // check's exit status. It must not create a fresh workspace mutation debt.
+  const value = withoutDiagnosticDescriptorMerge(command)
   if (!value || /[|;<>`\r\n]/u.test(value) || /\|\||\$\(/u.test(value)) return []
   const segments = value.split(/\s*&&\s*/u).map((segment) => segment.trim()).filter(Boolean)
   if (segments.length === 0
@@ -447,8 +467,14 @@ export function isTaskVerificationCommand(command) {
   return commandCheckDescriptors(command).length > 0
 }
 
+function projectCheckWasNotConfigured(call, result) {
+  return call?.name === 'run_project_check' && result?.ok === false && result.executed === false
+    && result.code === 'PROJECT_CHECK_NOT_CONFIGURED' && result.check === call.args?.check
+}
+
 export function taskVerificationKinds(call, result = null) {
   const name = String(call?.name || '').trim()
+  if (projectCheckWasNotConfigured(call, result)) return []
   if (!isTaskVerificationTool(name)) return []
   if (name === 'run_project_check') {
     const kind = normalizeCheckKind(result?.check || call?.args?.check)
@@ -479,6 +505,7 @@ function scopePathWithSuffix(base, suffix) {
 
 export function taskVerificationScopes(call, result) {
   const name = String(call?.name || '').trim()
+  if (projectCheckWasNotConfigured(call, result)) return []
   if (!isTaskVerificationTool(name)) return []
   const cwd = normalizeScopePath(result?.cwd || call?.args?.cwd)
   let descriptors = []

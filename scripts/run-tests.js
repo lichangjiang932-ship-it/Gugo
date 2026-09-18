@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { availableParallelism, tmpdir, totalmem } from 'node:os'
-import { join, normalize } from 'node:path'
+import { isAbsolute, join, normalize } from 'node:path'
 import { spawn } from 'node:child_process'
 
 import {
@@ -17,6 +17,7 @@ import {
 } from './offlineEvalCli.js'
 import { sanitizeChildEnv } from '../server/utils/sensitiveEnv.js'
 import { runTestProcessQueue } from './testProcessQueue.mjs'
+import { TestSelectorUsageError, validateSelectedTestFiles } from './testSelectors.js'
 
 const rawArgs = process.argv.slice(2)
 let testArgs
@@ -31,6 +32,19 @@ try {
   if (!(error instanceof OfflineEvalUsageError)) throw error
   console.error(`[run-tests] ${error.message}`)
   process.exit(error.exitCode)
+}
+
+const coverageMode = testArgs.includes('--coverage')
+const selectors = testArgs.filter((arg) => !arg.startsWith('-'))
+const nodeArgs = testArgs.filter((arg) => arg.startsWith('-') && arg !== '--run' && arg !== '--coverage')
+let files
+try {
+  files = validateSelectedTestFiles(selectors.length ? selectors.flatMap(resolveSelector) : allTestFiles())
+} catch (error) {
+  const code = error instanceof TestSelectorUsageError ? error.code : 'TEST_SELECTOR_DISCOVERY_FAILED'
+  const message = error instanceof TestSelectorUsageError ? error.message : 'Unable to discover the requested test files'
+  console.error(`[run-tests] ${code}: ${message}`)
+  process.exit(2)
 }
 
 const testDataRoot = mkdtempSync(join(tmpdir(), 'yma-test-run-'))
@@ -54,9 +68,6 @@ const testSetupArgs = [
   './scripts/testEnvironment.mjs',
   ...(offlineEvalMode ? ['--import', './scripts/offlineEvalNetworkGuard.mjs'] : []),
 ]
-const coverageMode = testArgs.includes('--coverage')
-const selectors = testArgs.filter((arg) => !arg.startsWith('-'))
-const nodeArgs = testArgs.filter((arg) => arg.startsWith('-') && arg !== '--run' && arg !== '--coverage')
 const configuredConcurrency = Number(process.env.TEST_CONCURRENCY)
 const defaultConcurrency = Math.max(1, Math.min(4, availableParallelism()))
 const testConcurrency = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
@@ -113,18 +124,16 @@ function allTestFiles() {
 }
 
 function resolveSelector(selector) {
+  selector = selector.replaceAll('\\', '/').replace(/^(?:\.\/)+/u, '')
   if (selector === 'i18n') return ['tests/i18n.test.js']
   if (selector === 'offline-eval') return ['tests/offlineCapabilityEval.test.js']
+  if (isAbsolute(selector)) return [selector]
   if (selector.startsWith('tests/')) return [selector]
   if (selector.endsWith('.test.js') || selector.endsWith('.test.jsx')) {
     return [`tests/${selector}`]
   }
   return [`tests/${selector}.test.js`]
 }
-
-const files = selectors.length
-  ? selectors.flatMap(resolveSelector)
-  : allTestFiles()
 
 // These tests load rolldown either through the JSX hook or a Vite test
 // wrapper. On Windows, running many rolldown instances in node:test workers

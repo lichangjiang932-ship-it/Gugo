@@ -156,6 +156,72 @@ test('onRetry 回调抛错不影响重试本身', async () => {
   assert.equal(result, 'ok')
 })
 
+test('已取消的调用不会发起首次模型请求', async () => {
+  const controller = new AbortController()
+  controller.abort()
+  let calls = 0
+  await assert.rejects(() => withRetry(async () => { calls += 1 }, {
+    signal: controller.signal,
+  }), { name: 'AbortError' })
+  assert.equal(calls, 0)
+})
+
+test('发送前取消保留原始原因和未发送状态', async () => {
+  const controller = new AbortController()
+  const reason = Object.assign(new Error('user stopped'), { name: 'AbortError', code: 'TURN_CANCEL_REQUESTED' })
+  controller.abort(reason)
+  await assert.rejects(() => withRetry(async () => assert.fail('must not dispatch'), {
+    signal: controller.signal,
+  }), (error) => error === reason && error.modelRequestOutcome === 'not_sent')
+})
+
+test('退避结束前取消不会再次发起模型请求', async () => {
+  const controller = new AbortController()
+  let calls = 0
+  await assert.rejects(() => withRetry(async () => {
+    calls += 1
+    throw Object.assign(new Error('unavailable'), { status: 503 })
+  }, {
+    signal: controller.signal,
+    sleepImpl: async () => { controller.abort() },
+  }), { name: 'AbortError' })
+  assert.equal(calls, 1)
+})
+
+test('明确的业务状态码不被错误正文中的重试关键词覆盖', () => {
+  for (const status of [400, 401, 403, 404, 422]) {
+    assert.equal(isRetryableError({ status, message: 'provider returned error: try request again' }), false)
+  }
+})
+
+test('上游等待时间可以超过本地指数退避上限', async () => {
+  const { delays, sleepImpl } = makeSleepSpy()
+  let calls = 0
+  await withRetry(async () => {
+    calls += 1
+    if (calls === 1) throw Object.assign(new Error('rate limited'), { status: 429, retryAfter: '30' })
+  }, { sleepImpl, maxMs: 8000 })
+  assert.deepEqual(delays, [30000])
+})
+
+test('非法毫秒等待值不会被部分解析或变成负数零延迟', () => {
+  for (const retryAfterMs of ['1250junk', '-1', 'Infinity']) {
+    assert.equal(parseRetryDelayMs({ retryAfterMs, retryAfter: '2' }), 2000)
+  }
+})
+
+test('超出定时器范围的等待不提前重试', async () => {
+  const { delays, sleepImpl } = makeSleepSpy()
+  const error = Object.assign(new Error('rate limited'), { status: 429, retryAfterMs: 2147483648 })
+  let calls = 0
+  await assert.rejects(() => withRetry(async () => {
+    calls += 1
+    throw error
+  }, { sleepImpl }), (value) => value === error)
+  assert.equal(calls, 1)
+  assert.deepEqual(delays, [])
+})
+
 test('结果未知的模型请求绝不自动重试', async () => {
   const { delays, sleepImpl } = makeSleepSpy()
   let attempts = 0

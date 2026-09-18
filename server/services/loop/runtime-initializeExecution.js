@@ -1,4 +1,6 @@
 import { observeLoopEvent } from './eventIsolation.js'
+import { installGoalPlanExecutionGate } from '../goalPlanExecutionPolicy.js'
+import { COMPLETION_POLICY_VERSION } from './completionPolicy.js'
 import { assertRuntimeStage } from './runtimeContract.js'
 import { restoreModelInvocationCheckpoint } from './modelInvocationCheckpoint.js'
 import { MUTATION_VERIFICATION_CHECKPOINT_VERSION } from './runtimeState.js'
@@ -15,6 +17,7 @@ function initializeExecutionState(s) {
   )
   s.finalText = ''
   s.finalCheckpointPersisted = false
+  s.runtimePromptFingerprint = s.restoredState?.runtimePromptFingerprint || null
   s.outputContinuation = restoreOutputContinuation(s.restoredState?.completionGuards?.outputContinuation)
   s.pendingEphemeralToolMessages = []
   s.restoredModelInvocation = restoreModelInvocationCheckpoint(
@@ -287,12 +290,15 @@ function buildExecutionCheckpointState(s, { final = null, checkpointWriteSequenc
     failureRecovery: serializeFailureRecovery(s.failureRecovery),
     loopGuard: s.loopGuard.snapshot(),
     capabilityDecision: s.capabilityDecisionSnapshot(),
+    ...(s.goalPlanBinding ? { goalPlanBinding: { ...s.goalPlanBinding } } : {}),
+    ...(s.runtimePromptFingerprint ? { runtimePromptFingerprint: { ...s.runtimePromptFingerprint } } : {}),
     ...(s.modelInvocation ? { modelInvocation: s.modelInvocation } : {}),
     ...(s.compactionCheckpoint?.fingerprint ? { compactionCheckpoint: snapshotCompactionCheckpoint(s.compactionCheckpoint) } : {}),
     ...(s.directoryAuthorizationResolutions.length > 0
       ? { directoryAuthorizationResolution: s.directoryAuthorizationResolutions }
       : {}),
     completionGuards: {
+      completionPolicyVersion: COMPLETION_POLICY_VERSION,
       partialResultEntries: s.partialResultFallback.snapshot(),
       outputContinuation: { ...s.outputContinuation },
       representativeReadsInjected: s.representativeReadsInjected,
@@ -387,6 +393,7 @@ function installCheckpointRuntime(s) {
 
 export async function initializeExecution(s) {
   initializeExecutionState(s)
+  installGoalPlanExecutionGate(s)
   installArtifactRecoveryRuntime(s)
   restoreExecutionProgress(s)
   const restored = await restoreTerminalExecution(s)

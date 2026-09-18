@@ -23,6 +23,7 @@ import {
   buildToolsCallRequest,
   buildResourceReadRequest,
   buildPromptGetRequest,
+  readMcpList,
 } from './mcpJsonRpc.js'
 import { listEnabledServers, getServer } from './mcpStore.js'
 import {
@@ -98,7 +99,7 @@ function attachCatalogRefresh(userId, server, connection) {
     isCurrent: () => userConnections.get(userId)?.get(server.id) === connection
       && connection.status === 'connected' && connection.transport.isAlive(),
     getServer: () => getServer(userId, server.id),
-    readTools: ({ signal }) => connection.transport.request(buildToolsListRequest(), { timeoutMs: 15000, signal }),
+    readTools: ({ signal }) => readMcpList(connection.transport, buildToolsListRequest, 'tools', { timeoutMs: 15000, signal }),
     applyTools: (currentServer, tools) => {
       const next = { ...connection, tools }
       synchronizeToolsForConnection(userId, currentServer, connection, next, { replacingConnection: false })

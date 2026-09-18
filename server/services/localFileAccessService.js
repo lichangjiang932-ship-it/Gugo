@@ -306,6 +306,12 @@ export function withTurnProjectDirectory({
   }), operation)
 }
 
+/** Explicit headless CLI workspace root (`--cwd`), or empty when unset. */
+function cliExplicitWorkspaceRoot() {
+  const configured = String(process.env.GUGO_CLI_WORKSPACE_ROOT || '').trim()
+  return configured ? path.resolve(configured) : ''
+}
+
 /**
  * Resolve the effective directory before any Turn state is persisted. An
  * explicitly selected project must still be writable, authorized and trusted
@@ -315,8 +321,15 @@ export function withTurnProjectDirectory({
 export function resolveTurnProjectDirectory({ userId, workspacePath = '' } = {}) {
   if (!userId) throw serviceError('userId 必填', 400, 'USER_REQUIRED')
   const selectedPath = stripPairedOuterQuotes(workspacePath)
+  // A headless CLI run selects its workspace explicitly as --cwd. That choice
+  // must decide the project directory (and the applicable project
+  // instructions) instead of a configured default output directory taking over
+  // the workspace role. The default output directory still controls where new
+  // files are written.
+  const cliWorkspace = selectedPath ? '' : cliExplicitWorkspaceRoot()
   const configuredPath = configuredOutputDirectory(userId)
   let requestedPath = selectedPath
+    || cliWorkspace
     || configuredPath
     || isolatedTestOutputDirectory()
     || workspaceRoot()
@@ -368,7 +381,9 @@ export function resolveTurnProjectDirectory({ userId, workspacePath = '' } = {})
   return {
     workspacePath: selectedPath ? canonicalPath : null,
     projectDirectory: canonicalPath,
-    defaultOutputDirectory: canonicalPath,
+    defaultOutputDirectory: cliWorkspace
+      ? (configuredPath || isolatedTestOutputDirectory() || canonicalPath)
+      : canonicalPath,
   }
 }
 

@@ -16,6 +16,7 @@ import { getDb } from '../db.js'
 import { SQLITE_TURN_PERSISTENCE_ADAPTER } from './sqliteTurnPersistenceAdapter.js'
 import { isBuiltinSqliteTurnPersistenceProvenance } from './builtinSqliteTurnPersistenceBootstrap.js'
 import { HEADLESS_TURN_RECOVERY_PORTS } from './headlessTurnRecoveryPorts.js'
+import { prepareHeadlessAttachments } from './headlessAttachmentPreparation.js'
 import { runHeadlessTurn } from '../services/headlessTurnRuntime.js'
 import { runRuntimeConfigStartupPreflight } from '../services/runtimeConfigStartupService.js'
 import { createSqliteFileCompactionArchiveAdapter } from '../services/sqliteFileCompactionArchiveAdapter.js'
@@ -29,6 +30,17 @@ function releasePersistenceLease(lease) {
     throw error
   }
   return true
+}
+
+function attachmentPreparer(options, dependencies, persistence) {
+  if (dependencies.prepareAttachments) return dependencies.prepareAttachments
+  if (!options.managedAttachmentRuntimeAdapter && !dependencies.managedAttachmentRuntimeAdapter
+    && (persistence === SQLITE_TURN_PERSISTENCE_ADAPTER
+      || isBuiltinSqliteTurnPersistenceProvenance(options.turnPersistenceProvenance, persistence))) return prepareHeadlessAttachments
+  return async () => {
+    throw Object.assign(new Error('the selected persistence/attachment adapters need an explicit compatible upload port'),
+      { code: 'HEADLESS_ATTACHMENTS_UNSUPPORTED', retryable: false })
+  }
 }
 
 function createHeadlessAggregateError(primaryError, cleanupError, message, code) {
@@ -164,6 +176,7 @@ export async function runBuiltinHeadlessTurn(options = {}, dependencies = {}) {
       env: runtimeEnv,
     }, {
       ...dependencies,
+      prepareAttachments: attachmentPreparer(options, dependencies, turnPersistenceAdapter),
       persistenceAdapter: persistenceLease.adapter,
       interactionPorts: Object.hasOwn(dependencies, 'interactionPorts')
         ? dependencies.interactionPorts

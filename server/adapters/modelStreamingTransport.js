@@ -1,4 +1,5 @@
 import { getProviderReplayContext } from './providerReplayState.js'
+import { getModelWireDiagnostics } from './modelWireDiagnostics.js'
 
 import {
   consumeNativeProviderStreamPayload,
@@ -32,6 +33,7 @@ import {
 import { fetchWithEnvProxy } from './proxyFetch.js'
 import { createToolArgumentProgressTracker, hasModelContentProgress } from './modelStreamProgress.js'
 import { modelToolArgumentsIdleMs } from './modelStreamTiming.js'
+import { createUsageTrailerReader, requestsCompatibleUsageTrailer } from './modelStreamUsageTrailer.js'
 
 function reasoningLimitFor({ env, tools, toolChoice }) {
   const executionWithTools = Array.isArray(tools)
@@ -102,6 +104,7 @@ async function* consumeStreamingResponse({
   toolChoice,
   controller,
   armTimer,
+  clearTimer,
 }) {
   const jsonEvents = await readJsonModelResponseEvents(response, profile, {
     onFirstByte,
@@ -128,9 +131,9 @@ async function* consumeStreamingResponse({
   const argumentProgress = createToolArgumentProgressTracker()
   const recordProgress = (kind) => armTimer('idle', kind === 'tool_arguments'
     ? modelToolArgumentsIdleMs(profile.timeouts.idleMs) : profile.timeouts.idleMs)
-  for await (const line of readModelSseLines(reader, {
-    onFirstByte,
-  })) {
+  const usageTrailer = createUsageTrailerReader(reader, controller.signal)
+  const lines = readModelSseLines(reader, { onFirstByte, onChunk: usageTrailer.onChunk })
+  for await (const line of lines) {
     const decoded = decodeModelStreamLine(line)
     if (!decoded) continue
     sawProviderEvent = true
@@ -200,6 +203,11 @@ async function* consumeStreamingResponse({
     }
     if (frame.terminal) {
       sawTerminal = true
+      clearTimer()
+      if (!lastUsage && requestsCompatibleUsageTrailer(providerRequest, chunk)) {
+        lastUsage = await usageTrailer.read(lines)
+        if (lastUsage) yield { type: 'usage', usage: lastUsage }
+      }
       break
     }
   }
@@ -291,13 +299,15 @@ export async function* streamModelProviderEvents({
     toolChoice,
     profile,
     modelRequestId,
+    env,
   })
   const { url, init } = providerRequest
   const providerAdapter = getNativeProviderRequestAdapter(providerRequest)
   throwIfModelRequestAbortedBeforeSend(externalSignal)
   if (typeof onProviderAttempt === 'function') {
-    await onProviderAttempt({ config, profile, requestUrl: url })
+    await onProviderAttempt({ config, profile, requestUrl: url, wireDiagnostics: getModelWireDiagnostics(providerRequest) })
   }
+  throwIfModelRequestAbortedBeforeSend(externalSignal)
   const controller = new AbortController()
 
   let timedOutPhase = null
@@ -345,6 +355,7 @@ export async function* streamModelProviderEvents({
       toolChoice,
       controller,
       armTimer,
+      clearTimer,
     })
   } catch (error) {
     if (error?.name === 'AbortError' && !externalSignal?.aborted) {

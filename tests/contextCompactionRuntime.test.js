@@ -447,3 +447,36 @@ test('semantic compaction exposes audited fallback when the summarizer fails', a
   assert.match(semantic.telemetry.fallbackReason, /summarizer unavailable/)
   assert.ok(audits.some((entry) => entry.toolName === 'semantic_summary_fallback' && entry.status === 'error'))
 })
+
+test('fixed instructions and tools are priced in the failure instead of being silently ignored', async () => {
+  // A configured window may be a local estimate, so an impossible fixed
+  // context must not fail before the provider is asked. But when recovery does
+  // fail, the unshrinkable part has to be visible: that is usually the real
+  // reason, and it cannot be fixed by compacting history.
+  let calls = 0
+  const hugeTools = [{
+    type: 'function',
+    function: { name: 'huge_tool', description: 'x'.repeat(40_000), parameters: { type: 'object' } },
+  }]
+  await assert.rejects(
+    () => callModelWithContextRecovery({
+      messages: [
+        { role: 'system', content: 'instructions '.repeat(2_000) },
+        { role: 'user', content: 'do the thing' },
+      ],
+      tools: hugeTools,
+      contextWindow: 2048,
+      isContextLengthError: (error) => error?.code === 'context_length_exceeded',
+      callModel: async () => { calls += 1; throw contextError() },
+    }),
+    (error) => {
+      assert.equal(error.code, 'CONTEXT_UNRECOVERABLE')
+      assert.ok(error.fixedTokens >= 2048, 'the fixed part is reported')
+      assert.match(error.message, /固定指令与工具定义/u)
+      assert.match(error.message, /2048/u)
+      return true
+    },
+  )
+  // Exactly one request: the retry would have been identical, so it is not sent.
+  assert.equal(calls, 1)
+})

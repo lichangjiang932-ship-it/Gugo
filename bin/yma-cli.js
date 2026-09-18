@@ -11,8 +11,8 @@ import { cmdMemory } from './cli/memoryCommand.js'
 import { startInteractiveSession } from './cli/interactiveSession.js'
 import { loadBuiltinHeadlessRuntime } from './cli/headlessRuntimeLoader.js'
 import { createRunInteractionPorts } from './cli/runInteractionPorts.js'
-import { terminalDescriptor } from './cli/runDiagnostics.js'
-import { timeoutReplacesResult } from './cli/runDeadline.js'
+import { createRunTerminalObserver } from './cli/runDiagnostics.js'
+import { resolveRunDeadlineOutcome } from './cli/runDeadline.js'
 import {
   createRunOutputFormatter,
   formatRunError,
@@ -308,7 +308,7 @@ export async function cmdRun(argv, {
   let timeoutTimer = null
   let timeoutTriggered = false
   let timeoutError = null
-  let observedTerminal = null
+  const terminalObserver = createRunTerminalObserver()
   try {
     const options = parseRunArgs(argv)
     const stdinPrompt = stdin.isTTY === true ? '' : await readPromptFromStdin(stdin)
@@ -365,7 +365,7 @@ export async function cmdRun(argv, {
     // Raw flags are replaced by the bounded, explicit attachment request list.
     delete runtimeOptions.files
     delete runtimeOptions.images
-    const result = await runtime({
+    let result = await runtime({
       ...runtimeOptions,
       // HTTP credentials belong to a server URL. Headless execution binds to
       // the local runtime/database and must never consume a remote token.
@@ -373,7 +373,7 @@ export async function cmdRun(argv, {
       interactive,
       signal: runtimeSignal,
       onEvent: (event) => {
-        if (event?.type?.startsWith('turn.') && (event.type === 'turn.completed' || terminalDescriptor(event))) observedTerminal = event
+        terminalObserver.observe(event)
         return output.onEvent(event)
       },
       onToken: () => {},
@@ -381,19 +381,29 @@ export async function cmdRun(argv, {
       ...interactionPorts,
     })
     if (timeoutTimer) clearTimeout(timeoutTimer)
-    if (timeoutTriggered && timeoutReplacesResult(result, observedTerminal)) {
-      await output.writeError(timeoutError)
-      return timeoutError.exitCode
+    if (timeoutTriggered) {
+      const outcome = resolveRunDeadlineOutcome({ result, timeoutError,
+        observedTerminal: terminalObserver.terminal, terminalConflict: terminalObserver.conflict })
+      if (Object.hasOwn(outcome, 'error')) throw outcome.error
+      result = outcome.result
     }
-    if (timeoutTriggered) stderr.write('[CLI_RUN_TIMEOUT elapsed; preserving the runtime outcome]\n')
+    if (timeoutTriggered) stderr.write('[deadline elapsed; preserving the runtime outcome]\n')
     await output.finish(result)
     return output.resolveExitCode(result)
   } catch (error) {
     if (timeoutTimer) clearTimeout(timeoutTimer)
     // A deadline requests cooperative cancellation; it cannot prove that a
     // concurrent persistence, output or unknown-result failure was cancelled.
-    await output.writeError(error)
-    return Number.isInteger(error?.exitCode) ? error.exitCode : 1
+    const outcome = timeoutTriggered
+      ? resolveRunDeadlineOutcome({ error, didThrow: true, timeoutError,
+        observedTerminal: terminalObserver.terminal, terminalConflict: terminalObserver.conflict }) : { error }
+    if (Object.hasOwn(outcome, 'result')) {
+      stderr.write('[deadline elapsed; preserving the runtime outcome]\n')
+      await output.finish(outcome.result)
+      return output.resolveExitCode(outcome.result)
+    }
+    await output.writeError(outcome.error)
+    return Number.isInteger(outcome.error?.exitCode) ? outcome.error.exitCode : 1
   } finally {
     if (timeoutTimer) clearTimeout(timeoutTimer)
     await output.dispose()

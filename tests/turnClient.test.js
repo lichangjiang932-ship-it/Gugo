@@ -2821,12 +2821,29 @@ test('dispatchTurnEvent atomically maps a recovery attempt to stream reset and c
       serverPartialText: '',
       serverArtifactIds: [],
       modelActivity: null,
+      modelContextDiagnostics: null,
+      modelWireDiagnostics: null,
+      modelRequestId: null,
+      modelPhysicalAttempt: null,
+      modelUsage: null,
     },
     serverTurnId: 't',
     serverSequence: 9,
     sessionId: 's',
     messageId: 'assistant-1',
   }])
+})
+
+test('completion-policy UI diagnostics accept only the bounded typed public contract', () => {
+  const policy = { id: 'mutation_verification', attempts: 2, limit: 2, exhausted: true }
+  assert.deepEqual(normalizeTurnFailurePayload({ code: 'TURN_INCOMPLETE', completionPolicies: [policy] })
+    .error.completionPolicies, [policy])
+  for (const completionPolicies of [[{ ...policy, prompt: 'PRIVATE_PROMPT' }],
+    [{ ...policy, attempts: -1 }], Array.from({ length: 17 }, () => policy)]) {
+    const failure = normalizeTurnFailurePayload({ code: 'TURN_INCOMPLETE', completionPolicies })
+    assert.equal(failure.error.completionPolicies, undefined)
+    assert.doesNotMatch(JSON.stringify(failure), /PRIVATE_PROMPT/u)
+  }
 })
 
 test('fetchServerSessionSnapshot aggregates every page before normalizing messages', async () => {

@@ -1,5 +1,12 @@
 import { ARTIFACT_DELIVERY_INCOMPLETE_REASON } from '../turnTerminalProjection.js'
+import { restoreCompletionPolicyState } from './completionPolicy.js'
 import { restoreMutationVerificationRecovery } from './mutationVerificationRecovery.js'
+
+/** Restored completion-policy counters, memoized on the loop state when present. */
+function completionPolicyCounters(s) {
+  return s.completionPolicyState?.counters
+    || restoreCompletionPolicyState(s.restoredState?.completionGuards).counters
+}
 
 const MISSING_ARTIFACT_BLOCKER = Object.freeze({ reason: ARTIFACT_DELIVERY_INCOMPLETE_REASON })
 const ARTIFACT_REQUIREMENT_BY_TOOL = Object.freeze({
@@ -32,10 +39,7 @@ function initializeArtifactCompletionState(s) {
     hasSuccessfulLocalPreflightRead,
     isCommandExecutionTool,
   } = s.d
-  s.artifactDeliveryRetries = Math.max(
-    0,
-    Number(s.restoredState?.completionGuards?.artifactDeliveryRetries) || 0,
-  )
+  s.artifactDeliveryRetries = completionPolicyCounters(s).artifactDeliveryRetries || 0
   s.forcedArtifactToolName = s.expectedArtifactTools.has(
     String(s.restoredState?.completionGuards?.forcedArtifactToolName || '').trim(),
   ) ? String(s.restoredState.completionGuards.forcedArtifactToolName).trim() : ''
@@ -139,10 +143,11 @@ function initializeMutationVerification(s) {
       : []
     return priorOutcomeStatusCopy(s.locale, { blocker, verifiedFiles })
   }
+  const restoredPolicies = completionPolicyCounters(s)
   for (const name of [
     'executionEvidenceRetries', 'executionReasoningRetries',
     'sourceHandoffRetries', 'directoryResumeRetries',
-  ]) s[name] = Math.max(0, Number(s.restoredState?.completionGuards?.[name]) || 0)
+  ]) s[name] = restoredPolicies[name] || 0
   s.hasVerifiedDirectoryResolution = s.directoryAuthorizationResolutions.some(
     (resolution) => resolution?.type === 'directory_authorization' && resolution?.approved === true,
   )
@@ -175,18 +180,14 @@ function initializeMutationVerification(s) {
     s.restoredState?.completionGuards?.verifiedRecoveredMutationObserved,
   )
   s.mutationSteeringPending = Boolean(s.restoredState?.completionGuards?.mutationSteeringPending)
-  s.mutationVerificationRetries = Math.max(
-    0, Number(s.restoredState?.completionGuards?.mutationVerificationRetries) || 0,
-  )
+  s.mutationVerificationRetries = restoredPolicies.mutationVerificationRetries || 0
   s.mutationVerificationRecovery = restoreMutationVerificationRecovery(
     s.restoredState?.completionGuards?.mutationVerificationRecovery,
   )
   s.pdfLayoutVerificationObserved = Boolean(
     s.restoredState?.completionGuards?.pdfLayoutVerificationObserved,
   )
-  s.pdfLayoutVerificationRetries = Math.max(
-    0, Number(s.restoredState?.completionGuards?.pdfLayoutVerificationRetries) || 0,
-  )
+  s.pdfLayoutVerificationRetries = restoredPolicies.pdfLayoutVerificationRetries || 0
 }
 
 function installLocalHtmlVerification(s) {
@@ -207,9 +208,7 @@ function installLocalHtmlVerification(s) {
   ].map(normalizeMutationTarget).filter(s.isLocalHtmlTarget))
   s.localHtmlReadSources = new Map()
   s.localHtmlDeliveryValidationPending = s.localHtmlDeliveryTargets.size > 0
-  s.localHtmlDeliveryRetries = Math.max(
-    0, Number(s.restoredState?.completionGuards?.localHtmlDeliveryRetries) || 0,
-  )
+  s.localHtmlDeliveryRetries = completionPolicyCounters(s).localHtmlDeliveryRetries || 0
   s.absoluteLocalHtmlPath = (target) => {
     const normalized = normalizeMutationTarget(target)
     if (!normalized || normalized === PROJECT_SCOPE_TARGET) return ''

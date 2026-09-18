@@ -13,6 +13,8 @@ import {
   SUBAGENT_RECOVERY_EVENT,
   SUBAGENT_SIDE_EFFECT_RECOVERY_KIND,
 } from './subagentRuntimePolicy.js'
+import { getSubagentExecutionPolicy, restoreSubagentApprovalContext, SUBAGENT_EXECUTION_POLICY_EVENT } from './subagentExecutionPolicy.js'
+import { createSubagentApprovalContext } from './subagentApprovalContext.js'
 
 function now() {
   return Date.now()
@@ -31,7 +33,8 @@ function parseTrace(value) {
 }
 
 function publicTrace(trace) {
-  return parseTrace(trace).filter((event) => event?.type !== SUBAGENT_CHECKPOINT_EVENT)
+  return parseTrace(trace).filter((event) => event?.type !== SUBAGENT_CHECKPOINT_EVENT
+    && event?.type !== SUBAGENT_EXECUTION_POLICY_EVENT)
 }
 
 function providerProvenanceFromTrace(trace) {
@@ -127,9 +130,24 @@ function checkpointFromTrace(trace) {
 
 function traceWithCheckpoint(trace, state) {
   return [
-    ...publicTrace(trace),
+    ...parseTrace(trace).filter((event) => event?.type !== SUBAGENT_CHECKPOINT_EVENT),
     { type: SUBAGENT_CHECKPOINT_EVENT, state, at: now() },
   ]
+}
+
+function inheritedSubagentContext(input, storedTrace) {
+  let context = input.approvalContext || createSubagentApprovalContext()
+  const storedPolicy = storedTrace.findLast((event) => event?.type === SUBAGENT_EXECUTION_POLICY_EVENT)
+  if (storedPolicy) context = restoreSubagentApprovalContext(context, storedPolicy.policy, { userId: input.userId })
+  const checkpoint = checkpointFromTrace(storedTrace)
+  return restoreSubagentApprovalContext(context, checkpoint?.subagentExecutionPolicy, { userId: input.userId })
+}
+
+function retainSubagentPolicyTrace(trace, context, userId) {
+  const policy = getSubagentExecutionPolicy(context, { userId })
+  if (!policy) return
+  const retained = trace.filter((event) => event?.type !== SUBAGENT_EXECUTION_POLICY_EVENT)
+  trace.splice(0, trace.length, ...retained, { type: SUBAGENT_EXECUTION_POLICY_EVENT, policy, at: now() })
 }
 
 function subagentStatusForLoopResult(result) {
@@ -300,6 +318,7 @@ export {
   appendProviderProvenance,
   boundedRecoveryId,
   checkpointFromTrace,
+  inheritedSubagentContext,
   insertRun,
   makeCheckpointResumable,
   markRunRunning,
@@ -309,6 +328,7 @@ export {
   publicTrace,
   recoveryFieldsFromTrace,
   resolveRunPersistencePort,
+  retainSubagentPolicyTrace,
   saveRunCheckpoint,
   saveRunTrace,
   sideEffectRecoveryError,

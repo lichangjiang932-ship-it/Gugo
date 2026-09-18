@@ -62,6 +62,11 @@ export function normalizeModelProfiles(value, allowedModels = [], { strictNumeri
       const normalized = writeTribool(rawProfile[field])
       if (normalized !== null) profile[field] = normalized !== 0
     }
+    // This legacy protocol switch is an explicit JSON boolean, not a truthy
+    // capability hint. Preserve false as well as true across DB round trips.
+    if (Object.hasOwn(rawProfile, 'requiresPromptCacheTtlBeta') && typeof rawProfile.requiresPromptCacheTtlBeta === 'boolean') {
+      profile.requiresPromptCacheTtlBeta = rawProfile.requiresPromptCacheTtlBeta
+    }
     const source = String(rawProfile.source || '').trim().slice(0, 80)
     if (source) profile.source = source
     if (Object.keys(profile).length) output[name] = profile

@@ -1,3 +1,5 @@
+import { bindSubagentExecutionPolicy } from '../subagentExecutionPolicy.js'
+
 export function createToolAuditLifecycle({
   state,
   call,
@@ -35,6 +37,29 @@ export function createToolAuditLifecycle({
     return 'error'
   }
   return { auditStage, auditOutcomeStatus }
+}
+
+/** A truncated proposal has an audited outcome but must never reach execution. */
+export function truncatedToolOutcome(s, call) {
+  const { name, args } = call
+  const result = s.d.createTruncatedToolCallResult(call, {
+    reason: call.modelOutputTruncationReason,
+  })
+  const { auditStage, auditOutcomeStatus } = createToolAuditLifecycle({
+    state: s, call, toolName: name, args, writeToolAudit: s.d.writeToolAudit,
+  })
+  auditStage('proposed')
+  auditStage('filtered', { auditResult: result, status: auditOutcomeStatus(result) })
+  return {
+    call,
+    executionArgs: args,
+    result,
+    artifactId: null,
+    artifactIds: [],
+    clarification: null,
+    budgetExceeded: null,
+    noProgressReason: null,
+  }
 }
 
 export function createDynamicRegistrationGuard({
@@ -149,6 +174,21 @@ export function createToolAuthorizationContext({
   }
 }
 
+function blockedResumedOutcome(sideEffectExecution, args, blockedResult) {
+  const cause = blockedResult.goalPlanBlocked ? { goalPlanCauseCode: blockedResult.code } : {}
+  try {
+    sideEffectExecution.blockResumedExecution()
+    const recovery = sideEffectExecution.recover(args, { allowIdempotentResume: false })
+    return { ...blockedResult, ...recovery?.result, ...cause, ok: false,
+      code: 'SIDE_EFFECT_OUTCOME_UNKNOWN', retryable: false, requiresUserVerification: true }
+  } catch (error) {
+    // The real ledger throws here. Retain its primary safety error and attach
+    // only the host's bounded plan cause, never replace unknown with denial.
+    if (error?.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN' && Object.isExtensible(error)) Object.assign(error, cause)
+    throw error
+  }
+}
+
 async function blockedFinalAuthorization({
   finalAuthorizationCheck,
   sideEffectInput,
@@ -172,11 +212,12 @@ async function blockedFinalAuthorization({
     code: authorization?.code || 'hook_authorization_provenance_invalid',
     error: authorization?.reason || 'Hook 授权已失效，工具未执行',
     systemFailure: true,
+    authorizationFailure: true,
     retryable: false,
   }
   if (sideEffectInput) {
     if (preparedSideEffect.resumedExecuting) {
-      sideEffectExecution.blockResumedExecution()
+      return blockedResumedOutcome(sideEffectExecution, sideEffectInput.args, result)
     } else {
       sideEffectExecution.markExecuting(sideEffectInput)
       sideEffectExecution.finish(sideEffectInput, result, () => false)
@@ -210,8 +251,15 @@ async function markDurableToolExecuting({
 
 function authorizedToolInput({
   state, call, toolName, executionArgs, signal, preparedSideEffect,
-  sideEffectInput, sideEffectExecution, expectedDynamicRegistrationId,
+  sideEffectInput, sideEffectExecution, expectedDynamicRegistrationId, executionMetadata,
 }) {
+  const approvalContext = toolName === 'Agent' && state.job?.userId && state.goalPlanBinding
+    ? bindSubagentExecutionPolicy(state.subagentApprovalContext, {
+      userId: state.job.userId,
+      sessionId: state.job.sessionId || null,
+      goalPlanBinding: state.goalPlanBinding,
+      readOnly: state.explicitReadOnlyConstraint || state.approvalMode === 'plan' || executionMetadata?.isReadOnly === true,
+    }) : state.subagentApprovalContext
   return {
     name: toolName,
     args: executionArgs,
@@ -227,7 +275,7 @@ function authorizedToolInput({
       prepare: (plan) => sideEffectExecution.prepareRecoveryPlan(sideEffectInput, plan),
       read: () => sideEffectExecution.readRecoveryPlan(sideEffectInput),
     }) : null,
-    approvalContext: state.subagentApprovalContext,
+    approvalContext,
     allowedArtifactTools: state.stepArtifactTools,
     requiresLocalArtifactDelivery: state.requiresLocalArtifactDelivery,
     dynamicToolRegistrationId: expectedDynamicRegistrationId,
@@ -321,6 +369,16 @@ export async function executeAuthorizedTool({
           throw abortScope.signal.reason instanceof Error ? abortScope.signal.reason
             : Object.assign(new Error('Tool execution cancelled'), { name: 'AbortError' })
         }
+        // Keep this synchronous and after the checkpoint/approval awaits.
+        // A plan rewrite must not reopen an obsolete operation at dispatch.
+        const planBlocked = state.goalExecutionValidationError?.(toolName, executionArgs)
+        if (planBlocked) {
+          authorizationBlocked = true
+          if (preparedSideEffect.resumedExecuting) {
+            return blockedResumedOutcome(sideEffectExecution, executionArgs, planBlocked)
+          }
+          return planBlocked
+        }
         // No asynchronous boundary may reopen a host readback's binding/args
         // after this live check and before the canonical tool dispatch.
         const verificationBlocked = finalVerificationCheck?.()
@@ -334,7 +392,7 @@ export async function executeAuthorizedTool({
         if (sideEffectInput) sideEffectStarted = true
         const toolResult = await state.executeTool(authorizedToolInput({
           state, call, toolName, executionArgs, signal: abortScope.signal,
-          preparedSideEffect, sideEffectInput, sideEffectExecution, expectedDynamicRegistrationId,
+          preparedSideEffect, sideEffectInput, sideEffectExecution, expectedDynamicRegistrationId, executionMetadata,
         }))
         toolReturned = true
         return toolResult
@@ -393,7 +451,7 @@ export async function finalizeToolCallOutcome({
   if (resumedExecutingSideEffect && !toolExecutionAttempted) {
     // A current policy/configuration/validation gate rejected the recovery. The
     // old attempt still has no proven outcome, so never leave it resumable.
-    sideEffectExecution.blockResumedExecution()
+    result = blockedResumedOutcome(sideEffectExecution, call.checkpointExecutionArgs ?? executionArgs, result)
   }
 
   try {

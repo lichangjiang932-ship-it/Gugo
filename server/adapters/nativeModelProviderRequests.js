@@ -1,4 +1,4 @@
-import { ANTHROPIC_CACHE_TTL_BETA_HEADERS, anthropicPromptCacheControl, canonicalizeModelToolSet } from './modelRequestCache.js'
+import { anthropicCacheHeaders, anthropicPromptCacheControl, canonicalizeModelToolSet } from './modelRequestCache.js'
 import { geminiReplayParts, providerReplayContext } from './providerReplayState.js'
 
 function json(value, fallback = {}) {
@@ -180,19 +180,22 @@ function anthropicToolChoice(toolChoice) {
 }
 
 function applyAnthropicCacheControl(body, converted, cacheControl, lastBaseToolIndex) {
-  if (!cacheControl) return
+  if (!cacheControl) return false
+  let applied = false
   if (Array.isArray(body.system)) {
     const lastIndex = body.system.findLastIndex((block) => converted.cacheableBlocks.has(block))
-    body.system = body.system.map((block, index) => (
-      index === lastIndex || index === converted.lastStableSystemIndex
-        ? { ...block, cache_control: cacheControl } : block
-    ))
+    body.system = body.system.map((block, index) => {
+      if (index !== lastIndex && index !== converted.lastStableSystemIndex) return block
+      applied = true
+      return { ...block, cache_control: cacheControl }
+    })
   }
   if (body.tools?.length) {
     // Dynamic tools are appended after the base set. Keep the base breakpoint
     // identical when they appear; an all-dynamic catalog has no earlier anchor.
     const index = lastBaseToolIndex >= 0 ? lastBaseToolIndex : body.tools.length - 1
     body.tools[index].cache_control = cacheControl
+    applied = true
   }
   for (let messageIndex = body.messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
     const content = body.messages[messageIndex].content
@@ -200,9 +203,10 @@ function applyAnthropicCacheControl(body, converted, cacheControl, lastBaseToolI
       const block = content[blockIndex]
       if (!converted.cacheableBlocks.has(block)) continue
       content[blockIndex] = { ...block, cache_control: cacheControl }
-      return
+      return true
     }
   }
+  return applied
 }
 
 function buildAnthropicRequest({ config, messages, stream, tools, toolChoice, profile, env, lastBaseToolIndex }) {
@@ -214,15 +218,6 @@ function buildAnthropicRequest({ config, messages, stream, tools, toolChoice, pr
     ...(config?.headers || {}),
   }
   if (config?.apiKey && !headers['x-api-key'] && !headers.Authorization) headers['x-api-key'] = config.apiKey
-  // The 1h cache ttl is gated upstream: without this beta the API rejects the
-  // request even though the body serializes fine. Merge with (never replace) a
-  // caller-provided anthropic-beta value; Anthropic accepts a comma list.
-  const cacheBeta = ANTHROPIC_CACHE_TTL_BETA_HEADERS[cacheControl?.ttl]
-  if (cacheBeta) {
-    const declared = String(headers['anthropic-beta'] || '')
-      .split(',').map((value) => value.trim()).filter(Boolean)
-    if (!declared.includes(cacheBeta)) headers['anthropic-beta'] = [...declared, cacheBeta].join(',')
-  }
   const body = {
     model: config.modelName,
     messages: converted.messages,
@@ -239,10 +234,11 @@ function buildAnthropicRequest({ config, messages, stream, tools, toolChoice, pr
     }))
     body.tool_choice = anthropicToolChoice(toolChoice)
   }
-  applyAnthropicCacheControl(body, converted, cacheControl, lastBaseToolIndex)
+  const cacheApplied = applyAnthropicCacheControl(body, converted, cacheControl, lastBaseToolIndex)
+  const wireHeaders = cacheApplied ? anthropicCacheHeaders(headers, cacheControl, profile) : headers
   const base = normalizeBase(config.baseUrl)
   const url = /\/v1\/messages$/i.test(base) ? base : `${base.replace(/\/v1$/i, '')}/v1/messages`
-  return { url, init: { method: 'POST', headers, body: JSON.stringify(body) } }
+  return { url, init: { method: 'POST', headers: wireHeaders, body: JSON.stringify(body) } }
 }
 
 function geminiPart(part) {

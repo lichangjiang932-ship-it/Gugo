@@ -3,6 +3,7 @@ import {
   steeringDefinesExclusiveArtifactContract,
 } from './steeringArtifactContract.js'
 import { synchronizePresentationPromptContext } from './presentationPromptContext.js'
+import { messageTextContent } from './userMessageText.js'
 
 export function installArtifactSteeringContract(s) {
   const {
@@ -113,7 +114,7 @@ export function installArtifactSteeringContract(s) {
     s.invalidateDeliverableSelection()
     s.convo = s.convo.filter((message) => {
       if (message?.role !== 'system') return true
-      const content = String(message?.content || '')
+      const content = messageTextContent(message?.content)
       return !content.includes(ARTIFACT_DELIVERY_GUARD_MARKER)
         && !content.includes(ARTIFACT_RECOVERY_DIAGNOSIS_MARKER)
         && !content.includes(ARTIFACT_RECOVERY_FORCE_MARKER)

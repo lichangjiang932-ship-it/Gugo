@@ -5,8 +5,8 @@
  * 子进程 stderr 进 server 日志，不当协议消息。
  *
  * Windows 适配：
- *   - npx / npm 是 .cmd shim, spawn(.cmd, {shell:false}) 直接报 ENOENT
- *   - 解决: detect win32 + 命令无扩展时，让 spawn 走 .cmd（execFile/spawn 都接受）
+ *   - 原生 node / python / uvx 解析到可信本机 .exe，不追加 .cmd。
+ *   - npm/npx 用本机 Node + npm-cli.js/npx-cli.js 启动，绝不通过 cmd.exe。
  *   - 进程终止: child.kill() 在 Windows 对部分 Node 子进程无效 → 3s 后 taskkill /T /F /PID
  *
  * 安全：
@@ -20,6 +20,7 @@
 import { spawn } from 'node:child_process'
 import { Buffer } from 'node:buffer'
 import { terminateProcessTree } from '../utils/processGroup.js'
+import { resolveMcpStdioCommand } from './mcpStdioCommand.js'
 
 const STDOUT_BUFFER_LIMIT = 1024 * 1024 // 1MB
 const WINDOWS_FORCE_KILL_DELAY_MS = 3_000
@@ -28,9 +29,17 @@ const STOP_WAIT_MS = 18_000
 // ★ P0:与 fsShellTools / gitWorkbench 共用统一规则(覆盖所有 *_API_KEY / *_TOKEN / *_SECRET / *_PASSWORD)
 import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
 
-function sanitizeEnv(extra = {}) {
+function sanitizeEnv(extra = {}, options = {}) {
   const explicitKeys = extra && typeof extra === 'object' ? Object.keys(extra) : []
-  return sanitizeChildEnv(extra, { allowExtraKeys: explicitKeys })
+  return sanitizeChildEnv(extra, { ...options, allowExtraKeys: explicitKeys })
+}
+
+function startupError(error) {
+  if (String(error?.code || '').startsWith('MCP_STDIO_')) return error
+  const systemCode = /^[A-Z0-9_]+$/u.test(String(error?.code || '')) ? String(error.code) : 'UNKNOWN'
+  return Object.assign(new Error(`MCP stdio could not start (${systemCode}); check the executable, working directory and local installation.`), {
+    code: 'MCP_STDIO_START_FAILED', systemCode, retryable: false,
+  })
 }
 
 function hasChildExited(child) {
@@ -42,13 +51,17 @@ export class StdioTransport {
     { command, args = [], cwd = process.cwd(), env = {}, label = 'mcp' },
     {
       platform = process.platform,
+      spawnFn = spawn,
+      resolveCommandFn = resolveMcpStdioCommand,
+      sourceEnv = process.env,
+      executablePath = process.execPath,
       terminateProcessTreeFn = terminateProcessTree,
       forceKillDelayMs = WINDOWS_FORCE_KILL_DELAY_MS,
       stopWaitMs = STOP_WAIT_MS,
     } = {},
   ) {
     this.command = command
-    this.args = Array.isArray(args) ? args : []
+    this.args = args
     this.cwd = cwd
     this.env = env
     this.label = label
@@ -66,6 +79,12 @@ export class StdioTransport {
     this.closeEmitted = false
     this.exitEmitted = false
     this.platform = platform
+    this.spawnFn = spawnFn
+    this.resolveCommandFn = resolveCommandFn
+    this.sourceEnv = sourceEnv
+    this.executablePath = executablePath
+    this.spawned = false
+    this.startError = null
     this.terminateProcessTreeFn = terminateProcessTreeFn
     this.forceKillDelayMs = forceKillDelayMs
     this.stopWaitMs = stopWaitMs
@@ -75,21 +94,27 @@ export class StdioTransport {
 
   start() {
     if (this.child) return
-    const useWindowsShim = process.platform === 'win32' && /^(npx|npm|node|uvx|python|python3)$/i.test(this.command)
-    // 关键: 即便有 .cmd shim 也用 shell:false。
-    // Node spawn 在 Windows 上看到 .cmd 自动用 cmd.exe /d /s /c 包装，但参数仍是数组——不会走 shell 解析。
-    const finalCommand = useWindowsShim && !/\.[a-z]+$/i.test(this.command)
-      ? `${this.command}.cmd`
-      : this.command
-    this.child = spawn(finalCommand, this.args, {
-      cwd: this.cwd,
-      env: sanitizeEnv(this.env),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: false,
-      windowsHide: true,
-    })
+    if (this.closed) throw this.startError || new Error('MCP stdio transport is closed')
+    try {
+      const resolved = this.resolveCommandFn({ command: this.command, args: this.args }, {
+        platform: this.platform, executablePath: this.executablePath,
+        sourceEnv: this.sourceEnv, cwd: this.cwd,
+      })
+      this.child = this.spawnFn(resolved.command, resolved.args, {
+        cwd: this.cwd,
+        env: sanitizeEnv(this.env, { sourceEnv: this.sourceEnv, platform: this.platform }),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        shell: false,
+        windowsHide: true,
+      })
+    } catch (error) {
+      const failure = this._failStartup(error)
+      throw failure
+    }
 
+    this.child.once('spawn', () => { this.spawned = true })
     this.child.on('error', (err) => {
+      if (!this.spawned) { this._failStartup(err); return }
       this._emitError(err)
       this._rejectAll(err)
     })
@@ -105,11 +130,15 @@ export class StdioTransport {
     this.child.on('close', (code, signal) => {
       this._clearForceKillTimer()
       this.closed = true
-      const reason = new Error(`MCP server "${this.label}" 已关闭 (code=${code}, signal=${signal})`)
+      const reason = this.startError || new Error(`MCP server "${this.label}" 已关闭 (code=${code}, signal=${signal})`)
+      this._rejectAll(reason)
       this._emitClose({ code, signal, reason, intentional: this.intentionalStop })
     })
 
     this.child.stdout.setEncoding('utf8')
+    for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) {
+      stream.on('error', (error) => this._handleStreamError(error))
+    }
     this.child.stdout.on('data', (chunk) => this._handleStdout(chunk))
     this.child.stderr.setEncoding('utf8')
     this.child.stderr.on('data', (chunk) => {
@@ -117,6 +146,26 @@ export class StdioTransport {
       // 限制 stderr 缓冲
       if (this.stderr.length > 16 * 1024) this.stderr = this.stderr.slice(-16 * 1024)
     })
+  }
+
+  _failStartup(error) {
+    if (this.startError) return this.startError
+    this.startError = startupError(error)
+    this.closed = true
+    this._rejectAll(this.startError)
+    this._emitError(this.startError)
+    this._emitClose({ code: null, signal: null, reason: this.startError, intentional: false })
+    return this.startError
+  }
+
+  _handleStreamError(error) {
+    if (!this.spawned) { this._failStartup(error); return }
+    const detail = startupError(error)
+    const failure = Object.assign(new Error(`MCP stdio pipe failed (${detail.systemCode || 'UNKNOWN'}).`), {
+      code: 'MCP_STDIO_IO_FAILED', systemCode: detail.systemCode,
+    })
+    this._rejectAll(failure)
+    this._emitError(failure)
   }
 
   _handleStdout(chunk) {
@@ -161,7 +210,7 @@ export class StdioTransport {
         clearTimeout(entry.timer)
         entry.cleanup?.()
         if (msg.error) {
-          entry.reject(new Error(msg.error.message || 'MCP error'))
+          entry.reject(Object.assign(new Error(msg.error.message || 'MCP error'), { code: msg.error.code }))
         } else {
           entry.resolve(msg.result)
         }
@@ -229,7 +278,7 @@ export class StdioTransport {
 
   send(message) {
     if (!this.child || this.closed) {
-      return Promise.reject(new Error(`MCP "${this.label}" 已关闭`))
+      return Promise.reject(this.startError || new Error(`MCP "${this.label}" 已关闭`))
     }
     const line = JSON.stringify(message) + '\n'
     return new Promise((resolve, reject) => {

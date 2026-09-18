@@ -40,6 +40,7 @@ import {
   pickAllowedModel,
 } from './modelRuntimeCatalog.js'
 import { canonicalStreamToolCalls } from './modelStreamToolCalls.js'
+import { getModelWireDiagnostics } from './modelWireDiagnostics.js'
 
 function withOutputTokenLimit(config, requestedLimit) {
   const requested = Math.floor(Number(requestedLimit))
@@ -48,11 +49,22 @@ function withOutputTokenLimit(config, requestedLimit) {
   return { ...config, maxTokens: configured > 0 ? Math.min(configured, requested) : requested }
 }
 
+function providerAttemptNotSent(error) {
+  try { error.unsafeToReplay = true; error.retryable = false; error.modelRequestOutcome = 'not_sent' } catch { /* immutable error */ }
+  if (error?.name === 'AbortError' || (error?.unsafeToReplay === true && error?.retryable === false
+    && error?.modelRequestOutcome === 'not_sent')) return error
+  // A frozen persistence error must not regain retryability merely because
+  // host observers cannot annotate it. Preserve cancellation identity above.
+  const failure = new Error('Provider attempt observation could not be persisted before send.', { cause: error })
+  failure.code = /^[A-Z0-9_]{1,96}$/u.test(String(error?.code || '')) ? error.code : 'MODEL_PROVIDER_ATTEMPT_OBSERVER_FAILED'
+  return Object.assign(failure, { unsafeToReplay: true, retryable: false, modelRequestOutcome: 'not_sent' })
+}
+
 function createProviderAttemptTracker(candidates, onProviderAttempt) {
   if (typeof onProviderAttempt !== 'function') return null
   const providerAttempts = new Map()
   let physicalAttempt = 0
-  return async ({ config, profile, requestUrl }) => {
+  return async ({ config, profile, requestUrl, wireDiagnostics }) => {
     physicalAttempt += 1
     const providerAttempt = (providerAttempts.get(config) || 0) + 1
     providerAttempts.set(config, providerAttempt)
@@ -67,12 +79,11 @@ function createProviderAttemptTracker(candidates, onProviderAttempt) {
       failoverIndex,
     })
     try {
-      await onProviderAttempt(attempt)
+      await onProviderAttempt(wireDiagnostics ? { ...attempt, wireDiagnostics } : attempt)
     } catch (error) {
       // The host checkpoint is the write-ahead record for this network side
       // effect. If it cannot be persisted, no retry/failover may bypass it.
-      try { error.unsafeToReplay = true } catch { /* immutable error */ }
-      throw error
+      throw providerAttemptNotSent(error)
     }
   }
 }
@@ -118,7 +129,8 @@ export async function callBackgroundModel({
     const { url, init } = providerRequest
     return withRetry(() => withRedactedModelErrors(candidate, async () => {
       throwIfModelRequestAbortedBeforeSend(signal)
-      await trackProviderAttempt?.({ config: candidate, profile, requestUrl: url })
+      await trackProviderAttempt?.({ config: candidate, profile, requestUrl: url, wireDiagnostics: getModelWireDiagnostics(providerRequest) })
+      throwIfModelRequestAbortedBeforeSend(signal)
       // ★ 原来这里完全没有超时 —— 一个挂死的本地端点会让 job 永远卡在
       // running,不发事件、不发通知,只能重启进程。
       let response
@@ -258,7 +270,8 @@ export async function callBackgroundModelWithTools({
     const { url, init } = providerRequest
     return withRetry(() => withRedactedModelErrors(candidate, async () => {
       throwIfModelRequestAbortedBeforeSend(signal)
-      await trackProviderAttempt?.({ config: candidate, profile, requestUrl: url })
+      await trackProviderAttempt?.({ config: candidate, profile, requestUrl: url, wireDiagnostics: getModelWireDiagnostics(providerRequest) })
+      throwIfModelRequestAbortedBeforeSend(signal)
       let response
       let text
       let requestStarted = false

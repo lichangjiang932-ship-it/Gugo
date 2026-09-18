@@ -1,4 +1,5 @@
 import { parseModelProviderResponse } from './modelProviderResponse.js'
+import { getModelWireDiagnostics } from './modelWireDiagnostics.js'
 import {
   modelRequestOutcomeUnknown,
   throwIfModelRequestAbortedBeforeSend,
@@ -100,8 +101,9 @@ export async function* requestNonStreamingAsEvents({
   const { url, init } = providerRequest
   throwIfModelRequestAbortedBeforeSend(externalSignal)
   if (typeof onProviderAttempt === 'function') {
-    await onProviderAttempt({ config, profile, requestUrl: url })
+    await onProviderAttempt({ config, profile, requestUrl: url, wireDiagnostics: getModelWireDiagnostics(providerRequest) })
   }
+  throwIfModelRequestAbortedBeforeSend(externalSignal)
   let responseReceived = false
   let response
   let text

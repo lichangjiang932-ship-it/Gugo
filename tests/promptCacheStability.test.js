@@ -74,3 +74,47 @@ test('OpenAI cache keys are owner-scoped, hashed and stable across requests and 
   }
   assert.match(body({ cacheOwnerId: 'alice', config: { ...CONFIG, baseUrl: 'https://explicit.invalid/v1' }, profile: { ...PROFILE, supportsPromptCacheKey: true } }).prompt_cache_key, /^gugo-v1-/u)
 })
+
+test('Anthropic cache markers only survive for the built-in Anthropic path and never reach any wire body', () => {
+  const marked = [{ role: 'system', content: 'Stable identity.', __gugoPromptStability: 'stable' }, { role: 'user', content: 'hello' }]
+  const anthropic = buildModelProviderRequest({
+    config: { baseUrl: 'https://api.anthropic.com', modelName: 'claude-test', apiKey: 'k', maxTokens: 100 },
+    profile: { kind: 'anthropic', supportsTools: true, supportsVision: true },
+    messages: marked, env: { MODEL_PROMPT_CACHE_RETENTION: 'short' },
+  })
+  const anthropicSystem = JSON.parse(anthropic.init.body).system
+  assert.equal(anthropicSystem.length, 1)
+  assert.ok(anthropicSystem[0].cache_control, 'the sole stable block is both prefix start and final system anchor')
+  assert.equal(anthropic.init.body.includes('__gugoPromptStability'), false)
+  for (const [config, profile] of [
+    [CONFIG, PROFILE],
+    [{ baseUrl: 'https://generativelanguage.googleapis.com/v1beta', modelName: 'gemini-test' }, { kind: 'gemini', supportsTools: true }],
+  ]) {
+    const request = buildModelProviderRequest({ config, profile, messages: marked })
+    assert.equal(request.init.body.includes('__gugoPromptStability'), false)
+    assert.equal(request.init.body.includes('cache_control'), false)
+  }
+  const sanitized = prepareOutboundMessages({ messages: marked, profile: { kind: 'openai-compatible' } })
+  assert.deepEqual(sanitized, [{ role: 'system', content: 'Stable identity.' }, { role: 'user', content: 'hello' }])
+  const retained = prepareOutboundMessages({ messages: marked, profile: { kind: 'anthropic' }, retainPromptStability: true })
+  assert.equal(retained[0].__gugoPromptStability, 'stable')
+})
+
+test('turn prompt producers mark exactly the compiled stable prefix and never the volatile tail', () => {
+  const identity = { text: 'identity block' }
+  const ishiki = { text: 'ishiki block' }
+  const skills = { text: 'skills block' }
+  const instructions = { text: 'instructions block' }
+  const blocks = [
+    ...[identity, ishiki, skills, instructions].filter((block) => block.text)
+      .map((block) => ({ role: 'system', content: block.text, __gugoPromptStability: 'stable' })),
+    { role: 'system', content: 'session block' },
+    { role: 'system', content: 'memory block' },
+    { role: 'system', content: '# Runtime Plugin Context: hints\nSource: fixture\n\nplugin block' },
+  ]
+  const stable = blocks.filter((message) => message.__gugoPromptStability === 'stable')
+  assert.deepEqual(stable.map((message) => message.content), ['identity block', 'ishiki block', 'skills block', 'instructions block'])
+  assert.ok(blocks.indexOf(stable.at(-1)) < blocks.findIndex((message) => !message.__gugoPromptStability))
+  const unmarkedTail = blocks.filter((message) => !message.__gugoPromptStability).map((message) => message.content)
+  assert.deepEqual(unmarkedTail, ['session block', 'memory block', '# Runtime Plugin Context: hints\nSource: fixture\n\nplugin block'])
+})

@@ -35,6 +35,12 @@ function localizedReason(locale, reason, fallback) {
   return value && !EAST_ASIAN_TERMINAL_MARKER.test(value) ? value : fallback.en
 }
 
+/** Pick the zh/en variant for a loop phase state. Keeps host-authored tool
+ *  results in the turn locale instead of hardcoding one language. */
+export function localizeForState(state, zh, en) {
+  return state?.locale === 'zh' ? zh : en
+}
+
 export function localizedTerminalModelText(locale, value, { strictLocale = false } = {}) {
   const text = String(value || '').trim()
   if (!text) return text
@@ -50,6 +56,17 @@ export function localizedTerminalModelText(locale, value, { strictLocale = false
 
 const COPY = Object.freeze({
   zh: Object.freeze({
+    approval_denied: '你已拒绝本次操作，本轮已停止。已有结果仍保留；请明确下一步后再继续。',
+    approval_required: '本次操作还需要逐次审批，本轮已停止。请完成审批后再继续。',
+    approval_expired: '审批已过期，本轮已停止。已有结果仍保留；请重新确认后再继续。',
+    tool_permission_denied: '当前权限策略禁止此操作，本轮已停止。请核对权限后再继续。',
+    tool_authorization_unavailable: '无法安全核实工具的授权身份或状态，本轮已停止，未继续执行。请修复授权状态后再重试。',
+    explicit_read_only_constraint: '当前任务明确要求只读，修改操作未执行，本轮已停止。已有检查结果仍保留；如需修改，请明确授权新任务。',
+    explicit_tool_free_constraint: '用户要求本轮仅回复、不调用工具。工具提案未执行，本轮已停止；已有结果仍保留。',
+    tool_disabled_by_config: '所需工具已在配置中禁用，本轮已停止，操作未执行。请核对工具配置后再继续。',
+    goal_plan_approval_required: '目标计划尚未获人工批准，新的副作用操作未执行。请批准计划后继续。',
+    goal_plan_changed: '目标计划在本轮开始后发生变化，旧操作未执行。请核对当前计划后开启新一轮。',
+    goal_plan_state_unavailable: '无法核实当前目标计划的批准状态，新的副作用操作未执行。请在状态可用后重试。',
     artifact_delivery_not_converged: '任务尚未完成：所需文件未能成功生成并通过验证，因此未作为最终交付。请重试以继续。',
     deliverable_selection_missing: '文件已生成，但最终交付文件的选择未能收敛。未验证文件和中间文件均未附加到回答中。请重试以继续。',
     directory_resume_not_converged: '目录权限已经授予，但模型恢复后仍重复请求同一授权，且没有执行原任务。本轮未标记为完成。请重试以继续。',
@@ -75,6 +92,17 @@ const COPY = Object.freeze({
     }),
   }),
   en: Object.freeze({
+    approval_denied: 'You rejected this operation, so this turn stopped. Confirmed results were retained; choose the next step before continuing.',
+    approval_required: 'This operation still needs per-call approval, so this turn stopped. Approve it before continuing.',
+    approval_expired: 'Approval expired, so this turn stopped. Confirmed results were retained; confirm again before continuing.',
+    tool_permission_denied: 'The current permission policy forbids this operation, so this turn stopped. Review the permissions before continuing.',
+    tool_authorization_unavailable: 'The tool authorization identity or state could not be verified safely. This turn stopped without further execution; repair authorization before retrying.',
+    explicit_read_only_constraint: 'The current task explicitly requires read-only work. No mutation ran and this turn stopped. Inspection results were retained; explicitly authorize a new task to make changes.',
+    explicit_tool_free_constraint: 'The user requested a tool-free reply. No proposed tool ran and this turn stopped; existing results were retained.',
+    tool_disabled_by_config: 'The required tool is disabled in the configuration. This turn stopped without executing the operation; review the tool configuration before continuing.',
+    goal_plan_approval_required: 'The goal plan needs human approval before new side effects can execute. Approve the plan, then continue.',
+    goal_plan_changed: 'The goal plan changed after this turn started. The obsolete operation was not executed; review the current plan and start a new turn.',
+    goal_plan_state_unavailable: 'The current goal approval state could not be verified. No new side effect was executed; retry after the state is available.',
     artifact_delivery_not_converged: 'The task is incomplete because the required file was not successfully generated and verified, so it was not delivered. Retry to continue.',
     deliverable_selection_missing: 'Files were created, but final deliverable selection did not converge. No unverified or intermediate files were attached to the answer. Retry to continue.',
     directory_resume_not_converged: 'Directory access was granted, but after resuming the model requested the same authorization again without executing the original task. This turn was not marked complete. Retry to continue.',

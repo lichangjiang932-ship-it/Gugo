@@ -20,6 +20,7 @@ import { handleAgentRequest } from '../routes/agentRoutes.js'
 import { handleAgentTemplateRequest } from '../routes/agentTemplateRoutes.js'
 import { handleToolSpecsRequest } from '../services/toolRegistry.js'
 import { handleMemoryRequest } from '../routes/memoryRoutes.js'
+import { handleGoalRequest } from '../routes/goalRoutes.js'
 import { handleHooksRequest } from '../routes/hooksRoutes.js'
 import { handleMcpRequest } from '../routes/mcpRoutes.js'
 import { handleSubagentRequest } from '../routes/subagentRoutes.js'
@@ -116,6 +117,7 @@ export const BUILTIN_HTTP_CAPABILITY_CATALOG = Object.freeze([
   descriptor('builtin.agent-templates', 6_600, ['/api/agent-templates']),
   descriptor('builtin.agents', 6_500, ['/api/agents']),
   descriptor('builtin.memory', 6_400, ['/api/memory']),
+  descriptor('builtin.goals', 6_350, ['/api/goals']),
   descriptor('builtin.hooks', 6_300, ['/api/hooks']),
   descriptor('builtin.subagent', 6_100, ['/api/subagent']),
   descriptor('builtin.compaction', 6_000, ['/api/compaction']),
@@ -387,6 +389,11 @@ export function createBuiltinHttpCapabilities({
       'builtin.memory',
       (req) => req.url?.startsWith('/api/memory/'),
       (req, res) => handleMemoryRequest(req, res),
+    ),
+    capability(
+      'builtin.goals',
+      (req) => req.url?.startsWith('/api/goals/'),
+      (req, res) => handleGoalRequest(req, res),
     ),
     capability(
       'builtin.hooks',

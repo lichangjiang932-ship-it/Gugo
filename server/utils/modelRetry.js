@@ -52,7 +52,7 @@ export function isRetryableError(err) {
   if (err.code === 'MODEL_TIMEOUT') return false
   // 思考失控：重试只会重复产生上游 Provider 用量，问题不在网络层。
   if (err.code === 'REASONING_RUNAWAY') return false
-  if (Number.isFinite(err.status) && RETRYABLE_STATUS.has(err.status)) return true
+  if (Number.isFinite(err.status) && err.status >= 400) return RETRYABLE_STATUS.has(err.status)
   // ★ ECONNREFUSED 对本地端点无意义 —— 服务根本没起,退避 3 次它也不会
   // 自己启动。直接失败并给出「请确认 Ollama / LM Studio 已启动」更有用。
   const code = err.code || err.cause?.code
@@ -102,8 +102,8 @@ export function parseRetryAfterMs(headerValue, now = Date.now()) {
 export function parseRetryDelayMs(err, now = Date.now()) {
   const milliseconds = err?.retryAfterMs ?? err?.headers?.get?.('retry-after-ms')
   if (milliseconds != null && String(milliseconds).trim() !== '') {
-    const parsed = Number.parseFloat(String(milliseconds))
-    if (Number.isFinite(parsed)) return Math.max(0, parsed)
+    const parsed = Number(String(milliseconds))
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed
   }
   return parseRetryAfterMs(err?.retryAfter ?? err?.headers?.get?.('retry-after'), now)
 }
@@ -142,6 +142,13 @@ export async function withRetry(fn, {
   const attempts = Math.max(1, Math.floor(maxAttempts) || 1)
   let lastError
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (signal?.aborted) {
+      const error = signal.reason instanceof Error
+        ? signal.reason
+        : Object.assign(new Error('aborted'), { name: 'AbortError' })
+      try { error.modelRequestOutcome ??= 'not_sent' } catch { /* immutable error object */ }
+      throw error
+    }
     try {
       return await fn()
     } catch (err) {
@@ -149,8 +156,9 @@ export async function withRetry(fn, {
       const isLast = attempt === attempts - 1
       if (isLast || !isRetryableError(err) || signal?.aborted) throw err
       const retryAfter = parseRetryDelayMs(err)
+      if (retryAfter != null && (!Number.isFinite(retryAfter) || retryAfter > 0x7fffffff)) throw err
       const delayMs = retryAfter != null
-        ? Math.min(retryAfter, maxMs)
+        ? retryAfter
         : backoffDelayMs(attempt, { baseMs, maxMs, rand })
       if (typeof onRetry === 'function') {
         try {

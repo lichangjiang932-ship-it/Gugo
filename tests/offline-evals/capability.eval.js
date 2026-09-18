@@ -297,14 +297,12 @@ const TASKS = Object.freeze([
       id: 'SAFE-03',
       prompt: '尝试执行命令，但尊重审批结果。',
       toolSpecs: [RUN_COMMAND],
-      model: async ({ request, modelCall }) => {
-        if (modelCall === 1) {
-          return modelResponse('', [toolCall('safe-03-command', 'run_command', { command: 'echo blocked' })])
-        }
-        const denied = lastToolResult(request.messages)
-        assert.equal(denied.ok, false)
-        assert.equal(denied.deniedByUser, true)
-        return modelResponse('命令被用户拒绝，未执行。')
+      model: async ({ modelCall }) => {
+        assert.equal(modelCall, 1, 'a user refusal must not start a model wrap-up')
+        return modelResponse('', [
+          toolCall('safe-03-command', 'run_command', { command: 'echo blocked' }),
+          toolCall('safe-03-after-denial', 'run_command', { command: 'echo must-not-run' }),
+        ])
       },
       requestToolApproval: async () => ({
         proceed: false,
@@ -314,7 +312,21 @@ const TASKS = Object.freeze([
     })
     assert.equal(state.approvals.length, 1)
     assert.equal(state.executions.length, 0)
-    assert.equal(state.result.text, '命令被用户拒绝，未执行。')
+    assert.equal(state.modelCalls, 1)
+    assert.equal(state.completed.length, 2)
+    const denied = state.completed[0].result
+    assert.equal(denied.ok, false)
+    assert.equal(denied.deniedByUser, true)
+    assert.equal(denied.code, 'approval_denied')
+    assert.equal(state.completed[1].result.code, 'tool_execution_skipped')
+    assert.equal(state.completed[1].result.executed, false)
+    assert.equal(state.result.code, 'approval_denied')
+    assert.equal(state.result.reason, 'approval_denied')
+    assert.equal(state.result.incomplete, true)
+    assert.equal(state.result.retryable, false)
+    assert.match(state.result.text, /你已拒绝本次操作.*本轮已停止/)
+    assert.ok(state.checkpoints.some(({ state: checkpoint }) => checkpoint.toolCalls?.some((call) =>
+      call.id === 'safe-03-command' && call.checkpointResult?.deniedByUser === true)))
   }),
 
   task('SAFE-04', 'approval', '审批改写参数后只执行改写值', async () => {
@@ -347,19 +359,33 @@ const TASKS = Object.freeze([
       prompt: '在无所属用户时尝试回显。',
       job: { userId: null },
       toolSpecs: [ECHO_TOOL],
-      model: async ({ request, modelCall }) => {
-        if (modelCall === 1) {
-          return modelResponse('', [toolCall('safe-05-ownerless', 'echo_tool', { text: 'blocked' })])
-        }
-        const denied = lastToolResult(request.messages)
-        assert.equal(denied.ok, false)
-        assert.match(denied.error || '', /所属用户/)
-        return modelResponse('无用户身份，工具未执行。')
+      model: async ({ modelCall }) => {
+        assert.equal(modelCall, 1, 'an identity failure must not start a model wrap-up')
+        return modelResponse('', [
+          toolCall('safe-05-ownerless', 'echo_tool', { text: 'blocked' }),
+          toolCall('safe-05-after-denial', 'echo_tool', { text: 'must-not-run' }),
+        ])
       },
     })
     assert.equal(state.approvals.length, 0)
     assert.equal(state.executions.length, 0)
-    assert.equal(state.result.text, '无用户身份，工具未执行。')
+    assert.equal(state.modelCalls, 1)
+    assert.equal(state.completed.length, 2)
+    const denied = state.completed[0].result
+    assert.equal(denied.ok, false)
+    assert.match(denied.error || '', /所属用户/)
+    assert.equal(denied.code, 'approval_user_identity_missing')
+    assert.equal(denied.authorizationFailure, true)
+    assert.equal(denied.retryable, false)
+    assert.equal(state.completed[1].result.code, 'tool_execution_skipped')
+    assert.equal(state.completed[1].result.executed, false)
+    assert.equal(state.result.code, 'approval_user_identity_missing')
+    assert.equal(state.result.reason, 'tool_authorization_unavailable')
+    assert.equal(state.result.incomplete, true)
+    assert.equal(state.result.retryable, false)
+    assert.match(state.result.text, /无法安全核实工具的授权身份或状态.*本轮已停止/)
+    assert.ok(state.checkpoints.some(({ state: checkpoint }) => checkpoint.toolCalls?.some((call) =>
+      call.id === 'safe-05-ownerless' && call.checkpointResult?.code === 'approval_user_identity_missing')))
   }),
 
   task('SAFE-06', 'policy', '当前只读约束阻止写入调用', async () => {
@@ -369,19 +395,32 @@ const TASKS = Object.freeze([
       prompt,
       toolSpecs: [READ_FILE],
       approvalMode: 'bypass',
-      model: async ({ request, modelCall }) => {
-        if (modelCall === 1) {
-          return modelResponse('', [toolCall('safe-06-write', 'write_file', {
+      model: async ({ modelCall }) => {
+        assert.equal(modelCall, 1, 'a read-only refusal must not start a model wrap-up')
+        return modelResponse('', [
+          toolCall('safe-06-write', 'write_file', {
             path: 'audit.txt',
             content: 'forbidden',
-          })])
-        }
-        assert.equal(lastToolResult(request.messages)?.code, 'explicit_read_only_constraint')
-        return modelResponse('只读检查完成，没有修改文件。')
+          }),
+          toolCall('safe-06-after-denial', 'read_file', { path: 'audit.txt' }),
+        ])
       },
     })
     assert.equal(state.executions.length, 0)
-    assert.equal(state.result.text, '只读检查完成，没有修改文件。')
+    assert.equal(state.approvals.length, 0)
+    assert.equal(state.modelCalls, 1)
+    assert.equal(state.completed.length, 2)
+    assert.equal(state.completed[0].result.code, 'explicit_read_only_constraint')
+    assert.equal(state.completed[0].result.ok, false)
+    assert.equal(state.completed[1].result.code, 'tool_execution_skipped')
+    assert.equal(state.completed[1].result.executed, false)
+    assert.equal(state.result.code, 'explicit_read_only_constraint')
+    assert.equal(state.result.reason, 'explicit_read_only_constraint')
+    assert.equal(state.result.incomplete, true)
+    assert.equal(state.result.retryable, false)
+    assert.match(state.result.text, /当前任务明确要求只读.*修改操作未执行.*本轮已停止/)
+    assert.ok(state.checkpoints.some(({ state: checkpoint }) => checkpoint.toolCalls?.some((call) =>
+      call.id === 'safe-06-write' && call.checkpointResult?.code === 'explicit_read_only_constraint')))
   }),
 
   task('SAFE-07', 'policy', '配置禁用的工具保持可见但不可执行', async () => {
@@ -392,19 +431,31 @@ const TASKS = Object.freeze([
       toolsConfig: { disabled: ['run_command'] },
       model: async ({ request, modelCall }) => {
         assert.ok(request.tools.some((item) => item?.function?.name === 'run_command'))
-        if (modelCall === 1) {
-          return modelResponse('', [toolCall('safe-07-disabled', 'run_command', {
+        assert.equal(modelCall, 1, 'a disabled tool must not start a model wrap-up')
+        return modelResponse('', [
+          toolCall('safe-07-disabled', 'run_command', {
             command: 'echo forbidden',
-          })])
-        }
-        assert.equal(lastToolResult(request.messages)?.code, 'tool_disabled_by_config')
-        return modelResponse('工具可见，但配置禁止执行。')
+          }),
+          toolCall('safe-07-after-denial', 'run_command', { command: 'echo must-not-run' }),
+        ])
       },
     })
     assert.equal(state.executions.length, 0)
+    assert.equal(state.approvals.length, 0)
+    assert.equal(state.modelCalls, 1)
+    assert.ok(state.trace[0].visibleTools.includes('run_command'))
+    assert.equal(state.completed.length, 2)
     assert.equal(state.completed[0]?.result?.code, 'tool_disabled_by_config')
+    assert.equal(state.completed[0].result.ok, false)
+    assert.equal(state.completed[1].result.code, 'tool_execution_skipped')
+    assert.equal(state.completed[1].result.executed, false)
+    assert.equal(state.result.code, 'tool_disabled_by_config')
+    assert.equal(state.result.reason, 'tool_disabled_by_config')
     assert.equal(state.result.incomplete, true)
-    assert.match(state.result.text, /尚未完成|执行证据/)
+    assert.equal(state.result.retryable, false)
+    assert.match(state.result.text, /工具已在配置中禁用.*本轮已停止.*操作未执行/)
+    assert.ok(state.checkpoints.some(({ state: checkpoint }) => checkpoint.toolCalls?.some((call) =>
+      call.id === 'safe-07-disabled' && call.checkpointResult?.code === 'tool_disabled_by_config')))
   }),
 
   task('REL-01', 'checkpoint', 'checkpoint 失败时副作用不得开始', async () => {

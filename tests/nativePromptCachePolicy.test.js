@@ -76,9 +76,9 @@ test('long retention uses a uniform one-hour ttl and keeps breakpoint count boun
     ...Array.from({ length: 30 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `message ${index}` })),
   ]
   const built = request('long', { messages, tools: Array.from({ length: 40 }, (_, index) => tool(`tool_${index}`)), stream: true })
-  // The 1h ttl is gated upstream by this beta header; serializing the body is
-  // not enough for the real Anthropic API to accept it.
-  assert.equal(built.init.headers['anthropic-beta'], 'extended-cache-ttl-2025-04-11')
+  // Anthropic's 2025-08-13 release notes made 1h TTL generally available.
+  // Do not opt every current endpoint into a historical beta implicitly.
+  assert.equal(built.init.headers['anthropic-beta'], undefined)
   const cached = JSON.parse(built.init.body)
   assert.deepEqual(controls(cached), Array.from({ length: 3 }, () => ({ type: 'ephemeral', ttl: '1h' })))
   assert.equal(cached.messages.length, 30)
@@ -86,18 +86,45 @@ test('long retention uses a uniform one-hour ttl and keeps breakpoint count boun
   assert.equal(cached.stream, true)
 })
 
-test('only cache ttls that require the beta header send one, and caller values are merged', () => {
+test('current cache TTLs do not auto-enable betas and explicit caller beta headers are retained', () => {
   assert.equal(request('short').init.headers['anthropic-beta'], undefined)
   assert.equal(request(undefined).init.headers['anthropic-beta'], undefined)
+  assert.equal(request('long').init.headers['anthropic-beta'], undefined)
   const merged = request('long', {
     config: { ...ANTHROPIC_CONFIG, headers: { 'anthropic-beta': 'context-management-2025-06-27' } },
   })
-  const declared = merged.init.headers['anthropic-beta'].split(',').map((value) => value.trim())
-  assert.deepEqual(declared, ['context-management-2025-06-27', 'extended-cache-ttl-2025-04-11'])
-  const deduplicated = request('long', {
-    config: { ...ANTHROPIC_CONFIG, headers: { 'anthropic-beta': 'extended-cache-ttl-2025-04-11' } },
+  assert.equal(merged.init.headers['anthropic-beta'], 'context-management-2025-06-27')
+  const explicit = request('long', {
+    config: { ...ANTHROPIC_CONFIG, headers: { 'Anthropic-Beta': 'extended-cache-ttl-2025-04-11' } },
   })
-  assert.equal(deduplicated.init.headers['anthropic-beta'], 'extended-cache-ttl-2025-04-11')
+  assert.equal(new Headers(explicit.init.headers).get('anthropic-beta'), 'extended-cache-ttl-2025-04-11')
+})
+
+test('a legacy endpoint opts into the old TTL beta and merges field names case-insensitively', () => {
+  const legacy = { ...ANTHROPIC_PROFILE, requiresPromptCacheTtlBeta: true }
+  const config = freezeDeep({ ...ANTHROPIC_CONFIG, headers: {
+    'Anthropic-Beta': 'context-management-2025-06-27, extended-cache-ttl-2025-04-11',
+    'ANTHROPIC-BETA': 'context-management-2025-06-27, another-feature',
+    'X-Caller-Metadata': 'keep-this',
+  } })
+  const before = JSON.stringify(config)
+  const built = request('long', { config, profile: legacy })
+  const betaNames = Object.keys(built.init.headers).filter((key) => key.toLowerCase() === 'anthropic-beta')
+  assert.deepEqual(betaNames, ['anthropic-beta'])
+  assert.deepEqual(new Headers(built.init.headers).get('anthropic-beta').split(',').map((value) => value.trim()),
+    ['context-management-2025-06-27', 'extended-cache-ttl-2025-04-11', 'another-feature'])
+  assert.equal(built.init.headers['X-Caller-Metadata'], 'keep-this')
+  assert.equal(JSON.stringify(config), before)
+  assert.equal(request('long', { profile: legacy }).init.headers['anthropic-beta'], 'extended-cache-ttl-2025-04-11')
+  assert.equal(request('short', { profile: legacy }).init.headers['anthropic-beta'], undefined)
+  assert.equal(request('none', { profile: legacy }).init.headers['anthropic-beta'], undefined)
+})
+
+test('a legacy beta is not added when no eligible 1h cache target reaches the wire', () => {
+  const built = request('long', { profile: { ...ANTHROPIC_PROFILE, requiresPromptCacheTtlBeta: true },
+    messages: [{ role: 'system', content: '  ' }], tools: [], toolChoice: 'none' })
+  assert.equal(controls(JSON.parse(built.init.body)).length, 0)
+  assert.equal(built.init.headers['anthropic-beta'], undefined)
 })
 
 test('stable leading system prefixes have their own cache write before volatile context', () => {

@@ -45,8 +45,8 @@ export function buildInitializedNotification() {
   return { jsonrpc: '2.0', method: 'notifications/initialized', params: {} }
 }
 
-export function buildToolsListRequest() {
-  return { jsonrpc: '2.0', id: nextRequestId(), method: 'tools/list', params: {} }
+export function buildToolsListRequest(cursor) {
+  return { jsonrpc: '2.0', id: nextRequestId(), method: 'tools/list', params: cursor === undefined ? {} : { cursor } }
 }
 
 export function buildToolsCallRequest(name, args, { idempotencyKey, toolCallId } = {}) {
@@ -66,12 +66,43 @@ export function buildToolsCallRequest(name, args, { idempotencyKey, toolCallId }
   }
 }
 
-export function buildResourcesListRequest() {
-  return { jsonrpc: '2.0', id: nextRequestId(), method: 'resources/list', params: {} }
+export function buildResourcesListRequest(cursor) {
+  return { jsonrpc: '2.0', id: nextRequestId(), method: 'resources/list', params: cursor === undefined ? {} : { cursor } }
 }
 
-export function buildPromptsListRequest() {
-  return { jsonrpc: '2.0', id: nextRequestId(), method: 'prompts/list', params: {} }
+export function buildPromptsListRequest(cursor) {
+  return { jsonrpc: '2.0', id: nextRequestId(), method: 'prompts/list', params: cursor === undefined ? {} : { cursor } }
+}
+
+export async function readMcpList(transport, buildRequest, key, { timeoutMs = 15000, signal, optional = false } = {}) {
+  const items = []
+  const cursors = new Set()
+  const deadline = Date.now() + timeoutMs
+  let cursor
+  for (let page = 0; page < 100; page += 1) {
+    if (signal?.aborted) throw signal.reason || new DOMException('MCP list cancelled', 'AbortError')
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) throw new Error(`MCP ${key}/list pagination time limit exceeded`)
+    let result
+    try {
+      result = await transport.request(buildRequest(cursor), { timeoutMs: remaining, signal })
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason || error
+      if (optional && page === 0 && (error?.code === -32601 || /^method not found$/i.test(error?.message))) return { [key]: [] }
+      throw new Error(`MCP ${key}/list pagination request failed`, { cause: error })
+    }
+    if (signal?.aborted) throw signal.reason || new DOMException('MCP list cancelled', 'AbortError')
+    if (Date.now() > deadline) throw new Error(`MCP ${key}/list pagination time limit exceeded`)
+    if (!Array.isArray(result?.[key])) throw new Error(`MCP ${key}/list returned an invalid catalog page`)
+    if (items.length + result[key].length > 10000) throw new Error(`MCP ${key}/list pagination item limit exceeded`)
+    for (const item of result[key]) items.push(item)
+    if (result.nextCursor === undefined) return { [key]: items }
+    if (typeof result.nextCursor !== 'string') throw new Error(`MCP ${key}/list returned an invalid cursor`)
+    if (cursors.has(result.nextCursor)) throw new Error(`MCP ${key}/list pagination cursor cycle detected`)
+    cursors.add(result.nextCursor)
+    cursor = result.nextCursor
+  }
+  throw new Error(`MCP ${key}/list pagination page limit exceeded`)
 }
 
 export function buildResourceReadRequest(uri) {

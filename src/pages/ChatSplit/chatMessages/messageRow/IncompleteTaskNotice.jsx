@@ -46,7 +46,7 @@ export default function IncompleteTaskNotice({
         <div className="min-w-0 flex-1 space-y-1.5 leading-5">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <strong className="font-semibold" data-testid="reply-completion-state">
-              {t('chatMessages.incompleteTitle')}
+              {t(presentation.titleKey)}
             </strong>
             <code className="rounded bg-ink/5 px-1.5 py-0.5 text-xs text-ink-fade">
               {presentation.code}

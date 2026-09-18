@@ -165,6 +165,7 @@ async function finalizeShellExecution({
   startedAt,
   command,
   displayCwd,
+  executionCwd,
   sessionMode,
   inheritedEnvKeys,
   expectedTargets,
@@ -203,6 +204,9 @@ async function finalizeShellExecution({
   })
   const executionMetadata = {
     durationMs,
+    // This is the host-validated directory before this command, not the
+    // display-relative path or the persistent shell's location after `cd`.
+    ...(executionCwd ? { executionCwd } : {}),
     ...(isolation ? { isolation } : {}),
     ...(sessionMode === 'reuse' ? {
       session: 'reuse',
@@ -359,6 +363,7 @@ export async function bashExecTool({
   }
   let expectedTargets = []
   let inferredTargets = []
+  let executionCwd = null
 
   const prepareExecution = async (effectiveCwd) => {
     if (!fs.statSync(effectiveCwd).isDirectory()) throw badReq('持久 Shell 当前 cwd 不是目录')
@@ -370,6 +375,9 @@ export async function bashExecTool({
       userId,
       expectedTargets: [...expectedTargets, ...inferredTargets],
     })
+    // In reuse mode this callback runs when the queued command is admitted,
+    // after earlier commands have updated the live session cwd.
+    executionCwd = path.resolve(effectiveCwd)
   }
 
   const timeout = Math.min(
@@ -431,6 +439,7 @@ export async function bashExecTool({
     startedAt,
     command,
     displayCwd,
+    executionCwd,
     sessionMode,
     inheritedEnvKeys,
     expectedTargets,

@@ -11,7 +11,7 @@ const { getDb } = await import('../server/db.js')
 const { createAgent } = await import('../server/services/agentStore.js')
 const { dispatchMemoryTool } = await import('../server/utils/memoryTools.js')
 const { extractAndStoreAutoMemories } = await import('../server/services/autoMemoryService.js')
-const { buildMemoryIndex, findBySlug, getMemory, listMemories, traverseMemoryLinks, upsertMemory } = await import('../server/services/memoryStore.js')
+const { buildMemoryIndex, findBySlug, findMatchingMemory, getMemory, listMemories, traverseMemoryLinks, upsertMemory } = await import('../server/services/memoryStore.js')
 const db = getDb()
 let fixtureId = 0
 
@@ -195,6 +195,188 @@ test('canonically equivalent Unicode wikilinks resolve without changing the stor
   const source = upsertMemory({ userId, type: 'reference', title: 'Unicode links', body })
   assert.equal(source.body, body)
   assert.equal(traverseMemoryLinks({ userId, seedIds: [source.id], direction: 'outgoing' }).links[0]?.toId, target.id)
+})
+
+function fillRecentMemories(userId, agentId = null, count = 520) {
+  db.transaction(() => {
+    for (let index = 0; index < count; index += 1) {
+      upsertMemory({ userId, agentId, type: 'project', title: `Recent ${agentId || 'global'} ${index}`, body: `Unrelated fact ${index}.`, pinned: true })
+    }
+  })()
+}
+
+function memoryCount(userId) {
+  return db.prepare('SELECT COUNT(*) AS total FROM memories WHERE user_id = ?').get(userId).total
+}
+
+test('remember finds older exact title and type beyond 500 without crossing owners or scopes', () => {
+  const { userId, first, second } = scope()
+  const other = scope()
+  for (const agentId of [null, first.id]) {
+    const title = `Stable title ${agentId || 'global'}`
+    const original = upsertMemory({ userId, agentId, type: 'project', title, body: 'Original fact.' })
+    const foreign = [
+      upsertMemory({ userId: other.userId, type: 'project', title, body: 'Other owner.' }),
+      upsertMemory({ userId, agentId: second.id, type: 'project', title, body: 'Other agent.' }),
+      upsertMemory({ userId, agentId, type: 'user', title, body: 'Other type.' }),
+      upsertMemory({ userId, agentId, type: 'project', title: title.toUpperCase(), body: 'Other case.' }),
+    ]
+    fillRecentMemories(userId, agentId)
+    assert.ok(!listMemories({ userId, agentFilter: agentId || '__global__', limit: 500 }).some((m) => m.id === original.id))
+    const before = memoryCount(userId)
+    const result = dispatchMemoryTool('remember', { type: 'project', title: `\t${title}\u00a0`, body: 'Updated fact.' }, { userId, agentId })
+    assert.equal(result.ok, true)
+    assert.equal(result.id, original.id)
+    assert.equal(result.updated, true)
+    assert.equal(memoryCount(userId), before)
+    for (const [index, memory] of foreign.entries()) assert.deepEqual(getMemory(index === 0 ? other.userId : userId, memory.id), memory)
+  }
+})
+
+test('automatic title and body matches beyond 500 preserve normalization and exact scope', async () => {
+  const { userId, first, second } = scope()
+  const other = scope()
+  for (const agentId of [null, first.id]) {
+    fillRecentMemories(userId, agentId)
+    for (const match of ['title', 'body']) {
+      const title = `Durable ${match} ${agentId || 'global'}`
+      const body = `Keep durable ${match} facts for ${agentId || 'global'}.`
+      const original = upsertMemory({ userId, agentId, type: 'project', title: title.toUpperCase().replaceAll(' ', '\t'), body: body.toUpperCase().replaceAll(' ', '\n'), frontmatter: { source: 'auto_chat', retained: true } })
+      const foreign = [
+        upsertMemory({ userId: other.userId, type: 'project', title, body: 'Other owner manual.' }),
+        upsertMemory({ userId, agentId: second.id, type: 'project', title, body: 'Other agent manual.' }),
+        upsertMemory({ userId, agentId: agentId ? null : first.id, type: 'project', title, body, frontmatter: { source: 'auto_chat' } }),
+        upsertMemory({ userId, agentId, type: 'user', title, body, frontmatter: { source: 'auto_chat' } }),
+      ]
+      const before = memoryCount(userId)
+      const result = await remember({ userId, agentId, title: match === 'title' ? title : `Renamed ${title}`, body: match === 'body' ? body : 'Updated stable fact.' })
+      assert.equal(result.stored[0]?.id, original.id)
+      assert.equal(result.stored[0].frontmatter.retained, true)
+      assert.equal(memoryCount(userId), before)
+      for (const [index, memory] of foreign.entries()) assert.deepEqual(getMemory(index === 0 ? other.userId : userId, memory.id), memory)
+    }
+  }
+})
+
+test('manual preferences beyond 500 suppress automatic updates in local and inherited global scope', async () => {
+  const { userId, first } = scope()
+  fillRecentMemories(userId)
+  fillRecentMemories(userId, first.id)
+  for (const agentId of [null, first.id]) {
+    const title = `Reply preference ${agentId || 'global'}`
+    const manual = upsertMemory({ userId, agentId, type: 'user', title: title.toUpperCase().replaceAll(' ', '\t'), body: 'Keep explicit preference.' })
+    const auto = upsertMemory({ userId, agentId: first.id, type: 'project', title, body: 'Original automatic fact.', frontmatter: { source: 'auto_chat' } })
+    const before = memoryCount(userId)
+    const result = await remember({ userId, agentId: first.id, title, body: 'Changed automatic fact.' })
+    assert.equal(result.stored.length, 0)
+    assert.equal(memoryCount(userId), before)
+    assert.deepEqual(getMemory(userId, manual.id), manual)
+    assert.deepEqual(getMemory(userId, auto.id), auto)
+    if (!agentId) assert.equal((await remember({ userId, title, body: 'Global override.' })).stored.length, 0)
+  }
+})
+
+test('automatic matching does not add Unicode compatibility normalization', async () => {
+  const { userId } = scope()
+  fillRecentMemories(userId)
+  const original = upsertMemory({ userId, type: 'project', title: 'Ｆｕｌｌｗｉｄｔｈ', body: 'Ｋｅｅｐ', frontmatter: { source: 'auto_chat' } })
+  const result = await remember({ userId, title: 'Fullwidth', body: 'Keep' })
+  assert.equal(result.stored.length, 1)
+  assert.notEqual(result.stored[0].id, original.id)
+  assert.deepEqual(getMemory(userId, original.id), original)
+})
+
+test('remember lookup failure fails closed without writing a duplicate', (t) => {
+  const { userId } = scope()
+  fillRecentMemories(userId)
+  const before = memoryCount(userId)
+  const prepare = db.prepare.bind(db)
+  let failed = false
+  const mocked = t.mock.method(db, 'prepare', (sql) => {
+    if (!failed && /SELECT .* FROM memories WHERE user_id/i.test(sql)) {
+      failed = true
+      throw new Error('fixture lookup unavailable')
+    }
+    return prepare(sql)
+  })
+  let result
+  try {
+    result = dispatchMemoryTool('remember', { type: 'project', title: 'New convention', body: 'Do not write.' }, { userId })
+  } finally { mocked.mock.restore() }
+  assert.equal(result.ok, false)
+  assert.match(result.error, /fixture lookup unavailable/)
+  assert.equal(memoryCount(userId), before)
+})
+
+test('automatic indexed lookup failure after the manual check fails closed before persistence', async (t) => {
+  const { userId } = scope()
+  fillRecentMemories(userId)
+  const before = memoryCount(userId)
+  const prepare = db.prepare.bind(db)
+  let reads = 0
+  const mocked = t.mock.method(db, 'prepare', (sql) => {
+    const statement = prepare(sql)
+    if (/FROM memory_search_index i/i.test(sql)) {
+      const get = statement.get.bind(statement)
+      statement.get = (...args) => {
+        reads += 1
+        if (reads === 2) throw new Error('fixture later lookup unavailable')
+        return get(...args)
+      }
+    }
+    return statement
+  })
+  try {
+    await assert.rejects(remember({ userId, title: 'New convention', body: 'Do not write.' }), /fixture later lookup unavailable/)
+  } finally { mocked.mock.restore() }
+  assert.equal(memoryCount(userId), before)
+})
+
+test('memory index reports owner total separately from its capped displayed subset', () => {
+  const { userId } = scope()
+  const other = scope()
+  fillRecentMemories(userId)
+  fillRecentMemories(other.userId)
+  const index = buildMemoryIndex(userId)
+  assert.match(index, /本用户共 520 条记忆/)
+  assert.match(index, /展示 500 条/)
+  assert.equal(index.split('\n').filter((line) => line.startsWith('- ')).length, 500)
+})
+
+test('scoped matching pages bounded reads without loading the whole owner history', (t) => {
+  const { userId, first, second } = scope()
+  const other = scope()
+  const staleTarget = upsertMemory({ userId, agentId: first.id, type: 'project', title: 'Old stable', body: 'Buried fact.' })
+  for (const agentId of [null, second.id]) fillRecentMemories(userId, agentId)
+  fillRecentMemories(userId, first.id)
+  const prepare = db.prepare.bind(db)
+  const pageLengths = []
+  const mocked = t.mock.method(db, 'prepare', (sql) => {
+    const statement = prepare(sql)
+    if (/SELECT .* FROM memories WHERE user_id/i.test(sql)) {
+      const all = statement.all.bind(statement)
+      statement.all = (...args) => {
+        const rows = all(...args)
+        pageLengths.push(rows.length)
+        assert.ok(rows.length <= 200)
+        return rows
+      }
+    }
+    return statement
+  })
+  try {
+    let visited = 0
+    const matched = findMatchingMemory({ userId, agentId: first.id, type: 'project' }, (memory) => {
+      visited += 1
+      assert.equal(memory.agentId, first.id)
+      return memory.id === staleTarget.id
+    })
+    assert.equal(matched.id, staleTarget.id)
+    assert.equal(visited, 521)
+    assert.deepEqual(pageLengths, [200, 200, 121])
+    assert.equal(findMatchingMemory({ userId, agentId: first.id, type: 'user' }, () => true), null)
+    assert.equal(findMatchingMemory({ userId: other.userId, type: 'project' }, () => true), null)
+  } finally { mocked.mock.restore() }
 })
 
 test('candidate secrets are rejected before truncation can hide their recognizable prefix', async () => {

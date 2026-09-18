@@ -103,7 +103,7 @@ async function loadTurnExecutionRecovery(runtime, input) {
   }
 }
 
-async function prepareTurnPromptAndTools(runtime, input, recovery, configuredApprovalMode) {
+async function prepareTurnPromptAndTools(runtime, input, recovery, configuredApprovalMode, signal) {
   const { deps, executionToolContextRuntime } = runtime
   const { userId, sessionId, turnId, content, agentId, skillIds, skillDefinitions } = input
   const restoredSnapshot = normalizePromptContextSnapshot(
@@ -129,14 +129,32 @@ async function prepareTurnPromptAndTools(runtime, input, recovery, configuredApp
       try { logWarn('evolution.canary.resolve', error, recovery.scope) } catch { /* optional */ }
     }
     try {
+      // Optional semantic memory recall. Both calls are best-effort and only
+      // active when embeddings are explicitly configured; a failure degrades to
+      // the lexical path instead of blocking the turn.
+      let memoryQueryVector = null
+      if (typeof deps.prepareMemoryQueryVector === 'function') {
+        try {
+          memoryQueryVector = await deps.prepareMemoryQueryVector({ query: content, env: deps.env, signal })
+        } catch { memoryQueryVector = null }
+      }
       promptContext = await deps.preparePromptContext({
         userId, agentId, skillIds, skillDefinitions, sessionId,
         recentMessages: recovery.storedMessages,
         includeRecentTranscript: false,
         query: content,
+        memoryQueryVector,
+        signal,
         canaryAssignment,
         env: deps.env,
       }) || promptContext
+      if (typeof deps.indexMemoryEmbeddings === 'function') {
+        try {
+          const indexing = deps.indexMemoryEmbeddings({ userId,
+            agentId: promptContext.effectiveAgentId || agentId || null, env: deps.env, signal })
+          if (indexing && typeof indexing.catch === 'function') indexing.catch(() => {})
+        } catch { /* optional memory indexing cannot fail the task */ }
+      }
     } catch (error) {
       if (String(error?.code || '').trim() !== 'TURN_PROMPT_RUNTIME_NOT_CONFIGURED') {
         logWarn('turn.optional_prompt_context', error, recovery.scope)
@@ -400,7 +418,7 @@ export function createTurnExecutionRuntime({
     const run = async () => {
       try { recovery.fileAccessStatus = deps.readFileAccessStatus({ userId: input.userId }) }
       catch { recovery.fileAccessStatus = null }
-      const prepared = await prepareTurnPromptAndTools(runtime, input, recovery, configuredApprovalMode)
+      const prepared = await prepareTurnPromptAndTools(runtime, input, recovery, configuredApprovalMode, signal)
       await executePreparedTurn(runtime, input, recovery, prepared, signal)
     }
     // Older injected runLoop hosts use off/unattended/all as deployment queue

@@ -1,5 +1,6 @@
 import { logWarn } from '../utils/logger.js'
-import { prepareBackgroundPromptContext } from './turnPromptContext.js'
+import { prepareBackgroundPromptContext, prepareBackgroundPromptContextAsync } from './turnPromptContext.js'
+import { assertPromptContextActive, promptMemoryDiagnostics } from './backgroundMemoryQuery.js'
 
 export function normalizePromptContextIds(values, limit = 32) {
   return [...new Set((Array.isArray(values) ? values : [])
@@ -9,25 +10,41 @@ export function normalizePromptContextIds(values, limit = 32) {
     .slice(0, limit)
 }
 
+function normalizeOptionalContext(context = {}) {
+  return {
+    messages: Array.isArray(context.messages) ? context.messages.filter((message) => (
+      message?.role === 'system' && typeof message.content === 'string' && message.content
+    )) : [],
+    skillIds: normalizePromptContextIds(context.skillIds),
+    ...(Array.isArray(context.memoryIds) ? { memoryIds: normalizePromptContextIds(context.memoryIds) } : {}),
+    ...(context.memoryDiagnostics ? { memoryDiagnostics: promptMemoryDiagnostics(context.memoryDiagnostics) } : {}),
+  }
+}
+
+function optionalFailure(scope, signal) {
+  assertPromptContextActive(signal)
+  try { logWarn(scope, 'optional prompt context failed (PROMPT_CONTEXT_UNAVAILABLE)') } catch { /* optional logging */ }
+  return { messages: [], skillIds: [], memoryIds: [], memoryDiagnostics: { failed: true } }
+}
+
 export function prepareOptionalPromptContext({
   preparePromptContext = prepareBackgroundPromptContext,
   input = {},
   scope = 'prompt.context',
 } = {}) {
   try {
-    const context = preparePromptContext(input) || {}
-    return {
-      messages: Array.isArray(context.messages)
-        ? context.messages.filter((message) => (
-            message?.role === 'system'
-            && typeof message.content === 'string'
-            && message.content
-          ))
-        : [],
-      skillIds: normalizePromptContextIds(context.skillIds),
-    }
-  } catch (error) {
-    try { logWarn(scope, `optional prompt context failed: ${error?.message || error}`) } catch { /* optional logging */ }
-    return { messages: [], skillIds: [] }
-  }
+    assertPromptContextActive(input.signal)
+    return normalizeOptionalContext(preparePromptContext(input) || {})
+  } catch { return optionalFailure(scope, input.signal) }
+}
+
+export async function prepareOptionalPromptContextAsync({
+  preparePromptContext = prepareBackgroundPromptContextAsync, input = {}, scope = 'prompt.context',
+} = {}) {
+  assertPromptContextActive(input.signal)
+  try {
+    const context = await preparePromptContext(input)
+    assertPromptContextActive(input.signal)
+    return normalizeOptionalContext(context || {})
+  } catch { return optionalFailure(scope, input.signal) }
 }

@@ -17,6 +17,7 @@ import { TurnEngineError } from './turnResolutionRuntime.js'
 import { normalizeTurnOptionalId } from './turnStartRuntime.js'
 import { abortError, normalizePositiveInteger } from './turnEnginePolicy.js'
 import { getTurnPermissionContextSnapshot } from './turnPermissionContext.js'
+import { optionalContextDiagnostics, optionalWireDiagnostics, requireContextDiagnosticDurability } from './loop/runtimeContextDiagnostics.js'
 
 const ATOMIC_CHECKPOINT_UNSUPPORTED_CODE = 'TURN_ATOMIC_CHECKPOINT_UNSUPPORTED'
 const ATOMIC_CHECKPOINT_COMMIT_MISMATCH_CODE = 'TURN_ATOMIC_CHECKPOINT_COMMIT_MISMATCH'
@@ -157,19 +158,26 @@ function toolFailure(result) {
   }
 }
 
-function createTurnLoopEventCallbacks({ emitter, state }) {
+function createTurnLoopEventCallbacks({ emitter, state, memoryDiagnostics = null }) {
+  let memoryReported = false
   return {
-    onModelPhase: async ({ phase, iteration, usage, modelName, error, ...progress }) => {
+    onModelPhase: requireContextDiagnosticDurability(async ({ phase, iteration, usage, modelName, error, contextDiagnostics, wireDiagnostics, modelRequestId, physicalAttempt, ...progress }) => {
       const normalizedUsage = phase === 'completed' ? normalizeModelUsage(usage) : null
       if (normalizedUsage) {
         state.latestModelUsage = normalizedUsage
         state.turnModelUsage = addTurnModelUsage(state.turnModelUsage, normalizedUsage)
       }
+      const diagnostics = contextDiagnostics ? optionalContextDiagnostics({ ...contextDiagnostics,
+        ...(memoryDiagnostics && !memoryReported ? { memory: memoryDiagnostics } : {}) }) : null
+      const wire = wireDiagnostics ? optionalWireDiagnostics(wireDiagnostics) : null
       await emitter('model.phase', {
         phase, iteration, usage: normalizedUsage || usage, modelName, error,
+        ...(diagnostics ? { contextDiagnostics: diagnostics } : {}),
+        ...(wire ? { wireDiagnostics: wire, modelRequestId, physicalAttempt } : {}),
         ...normalizeModelPhaseProgress(progress),
       })
-    },
+      if (diagnostics && memoryDiagnostics) memoryReported = true
+    }),
     onModelDelta: async ({ text, iteration, modelName }) => {
       state.streamedAssistantText += String(text || '')
       await emitter('assistant.delta', { text, iteration, modelName })
@@ -332,7 +340,8 @@ export function createTurnLoopExecutionRuntime({ deps }) {
       executionLease,
       state,
     })
-    const eventCallbacks = createTurnLoopEventCallbacks({ emitter, state })
+    const eventCallbacks = createTurnLoopEventCallbacks({ emitter, state,
+      memoryDiagnostics: promptContext?.memoryDiagnostics || null })
     const steeringOptions = createTurnSteeringOptions({
       deps, scope, steeringOwnerId, steeringScope,
     })

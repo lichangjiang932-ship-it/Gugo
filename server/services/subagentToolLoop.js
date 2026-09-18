@@ -17,6 +17,13 @@ import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
 import { requestApproval } from './approvalGate.js'
 import { createSubagentApprovalContext } from './subagentApprovalContext.js'
 import {
+  getSubagentExecutionPolicy,
+  restoreSubagentApprovalContext,
+  subagentCallApprovalContext,
+  withSubagentExecutionPolicyCheckpoint,
+} from './subagentExecutionPolicy.js'
+import { getToolMetadata } from '../utils/toolSchemaCatalog.js'
+import {
   SUBAGENT_BUDGET,
   SUBAGENT_MAX_ITERS,
   boundedTranscriptValue,
@@ -83,8 +90,15 @@ function createSubagentToolExecutor({
 }) {
   const executeLoopTool = ({
     name, args, signal, budget, toolCallId, idempotencyKey, idempotentResume,
-    sideEffectRecoveryPlan,
-  }) => validateToolCall({ name, args }, authorizedToolSpecs) || executeTool(name, args, {
+    sideEffectRecoveryPlan, approvalContext: callApprovalContext,
+  }) => {
+    const approvalContext = subagentCallApprovalContext(callApprovalContext, effectiveApprovalContext, { userId })
+    if (getSubagentExecutionPolicy(approvalContext, { userId })?.readOnly
+        && getToolMetadata(name, { args, userId }).isReadOnly !== true) {
+      return { ok: false, denied: true, policyDenied: true, executed: false,
+        code: 'explicit_read_only_constraint', error: 'The parent requires read-only subagent execution.', retryable: false }
+    }
+    return validateToolCall({ name, args }, authorizedToolSpecs) || executeTool(name, args, {
     userId,
     modelName: selectedModel,
     modelProviderId,
@@ -97,7 +111,7 @@ function createSubagentToolExecutor({
     parentSessionId: sessionId,
     signal,
     budget,
-    approvalContext: effectiveApprovalContext,
+    approvalContext,
     slotLease,
     approveTool,
     runToolLoop,
@@ -106,7 +120,8 @@ function createSubagentToolExecutor({
     idempotencyKey,
     idempotentResume,
     sideEffectRecoveryPlan,
-  })
+    })
+  }
   executeLoopTool.supportsIdempotentResume = (callContext) => {
     const capability = executeTool?.supportsIdempotentResume
     if (typeof capability === 'function') return capability(callContext) === true
@@ -149,12 +164,29 @@ function presentPausedSubagentResult(result, normalizedLocale, terminalCopy) {
   }
 }
 
-export async function runSubagentToolLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, modelProviderId = null, modelConfigRevision = null, modelRuntimeEnv = null, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, locale = 'zh', callModel = callBackgroundModelWithTools, executeTool = undefined, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, runToolLoop = undefined, sideEffectLedger = null, onTranscriptEvent = null, loadCheckpoint = null, saveCheckpoint = null }) {
+async function prepareSubagentLoopPolicy({ loadCheckpoint, approvalContext, userId, tools }) {
+  // Resolve host-owned checkpoint policy before any model/provider work. The
+  // loop receives the same loaded snapshot, not a second mutable read.
+  const loadedCheckpoint = typeof loadCheckpoint === 'function' ? await loadCheckpoint() : null
+  const checkpointState = loadedCheckpoint?.state || loadedCheckpoint
+  const effectiveApprovalContext = restoreSubagentApprovalContext(
+    approvalContext || createSubagentApprovalContext(), checkpointState?.subagentExecutionPolicy, { userId },
+  )
+  const inheritedPolicy = getSubagentExecutionPolicy(effectiveApprovalContext, { userId })
   // The caller has already filtered this run's tools. Do not consult the
   // broader type catalog or let an injected loop executor widen this snapshot.
-  const authorizedToolSpecs = structuredClone(Array.isArray(tools) ? tools : [])
+  const effectiveToolSpecs = (Array.isArray(tools) ? tools : [])
+    .filter((spec) => !inheritedPolicy?.readOnly
+      || getToolMetadata(spec?.function?.name, { userId }).isReadOnly === true)
+  const authorizedToolSpecs = structuredClone(effectiveToolSpecs)
+  return { loadedCheckpoint, effectiveApprovalContext, effectiveToolSpecs, authorizedToolSpecs }
+}
+
+export async function runSubagentToolLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, modelProviderId = null, modelConfigRevision = null, modelRuntimeEnv = null, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, locale = 'zh', callModel = callBackgroundModelWithTools, executeTool = undefined, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, runToolLoop = undefined, sideEffectLedger = null, onTranscriptEvent = null, loadCheckpoint = null, saveCheckpoint = null }) {
+  const { loadedCheckpoint, effectiveApprovalContext, effectiveToolSpecs, authorizedToolSpecs } = await prepareSubagentLoopPolicy({
+    loadCheckpoint, approvalContext, userId, tools,
+  })
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
-  const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
   const effectiveSideEffectLedger = sideEffectLedger
     || getSideEffectExecutionLedger()
   const selectedModel = String(modelName || '').trim() || undefined
@@ -212,7 +244,9 @@ export async function runSubagentToolLoop({ messages, tools, signal, maxIters = 
     job: loopJob,
     step: loopStep,
     messages,
-    toolSpecs: tools,
+    // Preserve registry WeakMap identities on the shown schemas; admission
+    // still uses the detached private snapshot above.
+    toolSpecs: effectiveToolSpecs,
     signal,
     maxIters,
     contextWindow,
@@ -222,8 +256,10 @@ export async function runSubagentToolLoop({ messages, tools, signal, maxIters = 
     approvalOrigin: 'subagent',
     approvalSessionId: sessionId,
     sideEffectLedger: effectiveSideEffectLedger,
-    loadCheckpoint,
-    saveCheckpoint,
+    loadCheckpoint: typeof loadCheckpoint === 'function' ? () => loadedCheckpoint : null,
+    saveCheckpoint: typeof saveCheckpoint === 'function' ? (checkpoint) => saveCheckpoint(
+      withSubagentExecutionPolicyCheckpoint(checkpoint, effectiveApprovalContext, { userId }),
+    ) : null,
     enableToolHooks: false,
     requestToolApproval: async ({ toolName, args, signal: approvalSignal }) => {
       const invalid = validateToolCall({ name: toolName, args }, authorizedToolSpecs)

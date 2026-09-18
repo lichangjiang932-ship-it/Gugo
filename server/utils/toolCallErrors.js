@@ -31,7 +31,9 @@ export function normalizeToolError(error, {
     ? source.retryable
     : RETRYABLE_HTTP_STATUSES.has(status)
   const code = safeErrorText(source.code || fallbackCode, fallbackCode).slice(0, 160)
-  const message = safeErrorText(source.message || error || fallbackMessage, fallbackMessage)
+  const rawMessage = typeof source.message === 'string' && source.message.trim() ? source.message
+    : typeof error === 'string' && error.trim() ? error : fallbackMessage
+  const message = safeErrorText(rawMessage, fallbackMessage)
   const hint = source.hint == null ? '' : safeErrorText(source.hint)
   const errorPath = source.path == null ? '' : safeErrorText(source.path)
   const suggestGrantPath = source.suggestGrantPath == null
@@ -64,8 +66,34 @@ export function normalizeToolError(error, {
  * objects remain failures, while empty or ambiguous values must never be
  * mistaken for successful execution.
  */
+function cleanFailureFields(value, ancestors = new Set(), depth = 0) {
+  if (typeof value === 'string') return redactSensitiveText(value)
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return value
+  if (typeof value !== 'object') return undefined
+  if (ancestors.has(value)) return '[Circular]'
+  if (depth > 32) return '[Depth limit]'
+  const next = new Set(ancestors).add(value)
+  const cleaned = Array.isArray(value) ? [] : {}
+  for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
+    if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) continue
+    if (/^(?:stack|stacktrace|diagnostic|__proto__|constructor|prototype)$/iu.test(key)) continue
+    const credential = /^(?:authorization|proxy[-_]?authorization|api[-_]?key|access[-_]?token|refresh[-_]?token|password|passwd|secret|cookie|set[-_]?cookie)$/iu.test(key)
+    const entry = credential ? '[REDACTED]' : cleanFailureFields(descriptor.value, next, depth + 1)
+    if (entry !== undefined) Object.defineProperty(cleaned, key, { value: entry, enumerable: true, writable: true, configurable: true })
+  }
+  return cleaned
+}
+
 export function normalizeToolResult(result) {
   if (isPlainObject(result)) {
+    const ok = Object.getOwnPropertyDescriptor(result, 'ok')?.value
+    const verification = Object.getOwnPropertyDescriptor(result, 'requiresUserVerification')
+    if (ok !== true || (verification && verification.value !== false)) result = cleanFailureFields(result)
+    if (result.requiresUserVerification === true) {
+      result = { ...result, ok: false, retryable: false,
+        code: result.code || 'tool_execution_outcome_unknown',
+        error: result.error || 'The tool outcome requires independent verification before continuing.' }
+    }
     if (result.ok === true) return result
     if (result.ok === false || result.error) {
       const normalized = normalizeToolError({
@@ -163,25 +191,29 @@ export async function executeToolWithRetry({
   return result
 }
 
-/**
- * 有界并发映射，输出顺序始终与输入一致。
- * mapper 抛错时保持 Promise.all 语义向上抛，由调用方决定如何降级。
- */
 export async function mapWithConcurrency(items, mapper, { concurrency = 4 } = {}) {
   const input = Array.isArray(items) ? items : []
   if (input.length === 0) return []
   const width = Math.max(1, Math.min(input.length, Math.floor(Number(concurrency) || 1)))
   const output = new Array(input.length)
   let cursor = 0
+  let failed = false
+  let failure
 
   const workers = Array.from({ length: width }, async () => {
-    while (true) {
+    while (!failed) {
       const index = cursor
       cursor += 1
       if (index >= input.length) return
-      output[index] = await mapper(input[index], index)
+      try {
+        output[index] = await mapper(input[index], index)
+      } catch (error) {
+        if (!failed) failure = error
+        failed = true
+      }
     }
   })
   await Promise.all(workers)
+  if (failed) throw failure
   return output
 }

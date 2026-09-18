@@ -59,7 +59,9 @@ export function latestPriorTurnOutcome(messages = []) {
   const turnStart = previousUserIndex + 1
   for (let index = currentUserIndex - 1; index >= turnStart; index -= 1) {
     const message = history[index]
-    const content = String(message?.content || '')
+    // Read authored text parts only: a typed-content array must not hide the
+    // trusted prior-turn marker, and file/image metadata must not spoof it.
+    const content = userMessageText(message?.content)
     if (message?.role !== 'system' || !content.startsWith(PRIOR_TURN_OUTCOME_MARKER)) continue
     const jsonLine = content.split(/\r?\n/, 3)[1]
     try {

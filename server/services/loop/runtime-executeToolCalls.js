@@ -1,5 +1,7 @@
 import { assertRuntimeStage } from './runtimeContract.js'
 import { captureMutationVerificationIntent } from './mutationVerificationRecovery.js'
+import { localizeForState as localize } from './incompleteTerminalPresentation.js'
+import { toolFreeResponseError, toolStopBoundary } from './runtimeToolStop.js'
 import { pptxExecutionInputError, preparePptxRepairToolInput, withNativePptxPreflightReceipt } from './pptxRepairRuntime.js'
 import {
   createCallSideEffectBoundary,
@@ -8,31 +10,8 @@ import {
   createToolAuditLifecycle,
   executeAuthorizedTool,
   finalizeToolCallOutcome,
+  truncatedToolOutcome,
 } from './runtime-toolCallExecution.js'
-
-const localize = (s, zh, en) => (s.locale === 'zh' ? zh : en)
-
-function truncatedToolOutcome(s, call) {
-  const { name, args } = call
-  const result = s.d.createTruncatedToolCallResult(call, {
-    reason: call.modelOutputTruncationReason,
-  })
-  const { auditStage, auditOutcomeStatus } = createToolAuditLifecycle({
-    state: s, call, toolName: name, args, writeToolAudit: s.d.writeToolAudit,
-  })
-  auditStage('proposed')
-  auditStage('filtered', { auditResult: result, status: auditOutcomeStatus(result) })
-  return {
-    call,
-    executionArgs: args,
-    result,
-    artifactId: null,
-    artifactIds: [],
-    clarification: null,
-    budgetExceeded: null,
-    noProgressReason: null,
-  }
-}
 
 async function prepareToolCallExecution(s, call) {
   if (s.signal?.aborted) {
@@ -40,10 +19,10 @@ async function prepareToolCallExecution(s, call) {
     error.name = 'AbortError'
     throw error
   }
-  const inputResolutionError = call.parseError || preparePptxRepairToolInput(s, call)
+  const inputResolutionError = call.parseError || (s.explicitToolFree ? null : preparePptxRepairToolInput(s, call))
   const automaticVerification = Boolean(call.verificationRecoveryKey)
   const verificationIntentError = captureMutationVerificationIntent(call, s)
-  const preparedCall = inputResolutionError ? call : await s.d.runPreTool({
+  const preparedCall = inputResolutionError || s.explicitToolFree ? call : await s.d.runPreTool({
     loopEvents: s.activeLoopEvents,
     call,
     context: s.loopEventContext({ phase: 'pre-tool' }),
@@ -113,6 +92,7 @@ async function prepareToolCallExecution(s, call) {
       .includes(name),
     audit,
   }
+  if (s.explicitToolFree && !recovery.result) context.result = toolFreeResponseError(s, context)
   if (!context.result) {
     context.result = validateRegistrationAndIntent(checkpointExecutionArgs)
       || s.disabledToolValidationError(name)
@@ -445,6 +425,14 @@ function revalidateAuthorization(s, context, authorization, effectiveArgs, gate)
 }
 
 async function authorizeAndExecuteTool(s, i, context, durableExecution) {
+  // Ledger recovery ran before this point. Never replace its completed or
+  // unknown outcome with a new plan decision.
+  const planBlock = !context.resumedExecutingSideEffect
+    ? s.goalExecutionValidationError?.(context.name, context.args) : null
+  if (planBlock) {
+    context.result = planBlock
+    return
+  }
   const authorization = createToolAuthorizationContext({
     state: s,
     call: context.call,
@@ -584,6 +572,10 @@ export async function executeToolCalls(s) {
   assertRuntimeStage(s, 'execute-tool-calls')
   const i = s.iteration
   i.pausedByClarification = null
+  i.goalPlanBlocked = i.toolCalls.find((call) => call.checkpointStatus === 'completed'
+    && call.checkpointResult?.goalPlanBlocked === true)?.checkpointResult || null
+  i.toolStop = i.toolCalls.filter((call) => call.checkpointStatus === 'completed')
+    .map((call) => toolStopBoundary(call.checkpointResult, call.id)).find(Boolean) || null
   i.budgetExceededByCompletedModelResponse = s.modelBudgetExceededAfterResponse
   s.modelBudgetExceededAfterResponse = null
   i.budgetExceeded = i.budgetExceededByCompletedModelResponse

@@ -8,6 +8,7 @@ import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
 import { assertGitToolPermitted, runAuditedProjectCheckHttp } from './gitWorkbenchPolicy.js'
 import { runProjectCheckTool } from './gitWorkbenchProjectCheck.js'
+import { gitDiffFailure } from './gitWorkbenchDiagnostics.js'
 import {
   changedPathsBetweenGitRevisions,
   runGitWorkspaceChange,
@@ -230,16 +231,25 @@ export async function gitDiffTool({ path: rawPath, cwd: rawCwd, staged = false, 
   if (staged) args.push('--cached')
   if (repoPath) args.push('--', repoPath)
   const diff = await runGit(args, { cwd: root, rejectOnError: false })
+  const context = { cwd: root, path: repoPath || null, staged: Boolean(staged) }
+  if (!diff.ok) {
+    // Outside a repository, --cached can produce "unknown option" instead of
+    // the usual repository diagnostic. Verify that failure before suggesting
+    // a different command; never initialize a repository as a side effect.
+    const repository = await runGit(['rev-parse', '--show-toplevel'], { cwd: root, rejectOnError: false })
+    return { ...context, ...gitDiffFailure(repository.ok ? diff : repository) }
+  }
   const statArgs = ['diff', '--stat', '--no-ext-diff', '--no-color']
   if (staged) statArgs.push('--cached')
   if (repoPath) statArgs.push('--', repoPath)
   const stat = await runGit(statArgs, { cwd: root, rejectOnError: false })
+  if (!stat.ok) return { ...context, ...gitDiffFailure(stat) }
   return {
     ok: diff.ok,
     path: repoPath || null,
     staged: Boolean(staged),
-    stat: clip(stat.stdout || stat.stderr, 80_000),
-    diff: clip(diff.stdout || diff.stderr),
+    stat: clip(stat.stdout, 80_000),
+    diff: clip(diff.stdout),
     exitCode: diff.exitCode,
   }
 }

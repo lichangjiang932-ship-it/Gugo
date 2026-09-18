@@ -29,6 +29,12 @@ process.env.TMP = workerDir
 process.env.TEMP = workerDir
 process.env.APP_DATA_DIR = workerDir
 process.env.APP_DB_PATH = path.join(workerDir, 'app.db')
+// Verification tools invoke npm even in offline tests. Keep their debug cache
+// and config lookup away from the developer's real npmrc and user cache.
+process.env.npm_config_cache = path.join(workerDir, 'npm-cache')
+process.env.npm_config_userconfig = path.join(workerDir, 'empty-user.npmrc')
+process.env.npm_config_globalconfig = path.join(workerDir, 'empty-global.npmrc')
+process.env.npm_config_update_notifier = 'false'
 // Real artifact executors are exercised by several integration tests. Keep
 // both their managed copies and default-output copies out of the checkout,
 // including when a test imports this setup without the npm test wrapper.

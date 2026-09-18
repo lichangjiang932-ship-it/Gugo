@@ -147,6 +147,7 @@ test('TurnEngine keeps model-request unknown recovery separate from side-effect 
   const blocked = events(turnId).at(-1)
   assert.equal(blocked.type, 'turn.blocked')
   assert.equal(blocked.payload.recoveryKind, 'model_request_outcome_unknown')
+  assert.equal(blocked.payload.error.nextAction, 'verify_model_request')
   assert.equal(blocked.payload.modelRequestId, modelRequestId)
   assert.equal(blocked.payload.toolCallId, undefined)
   assert.equal(blocked.payload.requiresUserVerification, true)
@@ -1070,6 +1071,28 @@ test('TurnEngine journals a direct non-terminal append failure and emits a struc
   assert.equal(journals.length, 1)
   assert.equal(journals[0].batch[0].event.type, 'tool.started')
   assert.equal(journals[0].batch[0].event.sequence, failed.sequence)
+})
+
+test('TurnEngine does not start a model when context diagnostic event persistence fails', async () => {
+  const turnId = 'turn-context-event-append-failure'
+  let modelCalls = 0
+  const engine = createTestEngine({
+    appendEvent: async (entry) => {
+      if (entry.event.type === 'model.phase' && entry.event.payload.phase === 'context_prepared') {
+        throw new Error('context event store unavailable')
+      }
+      return appendTurnEvent(entry)
+    },
+    runModel: async () => { modelCalls += 1; return { content: 'unreachable', toolCalls: [] } },
+  })
+  await engine.startTurn({ userId, sessionId: 'turn-engine-session', turnId, content: 'Hello.' })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  assert.equal(modelCalls, 0)
+  const failed = events(turnId).at(-1)
+  assert.equal(failed.type, 'turn.failed')
+  assert.equal(failed.payload.code, 'TURN_EVENT_PERSISTENCE_FAILED')
+  assert.deepEqual(failed.payload.error.persistence.failedEventTypes, ['model.phase'])
+  assert.equal(events(turnId).some((event) => event.type === 'turn.completed'), false)
 })
 
 test('TurnEngine isolates deferred event queues across concurrent turns', async () => {
@@ -2166,12 +2189,15 @@ test('TurnEngine owns a text turn and persists the final assistant message', asy
 
   assert.equal((await engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-text' })).status, 'completed')
   assert.deepEqual(events('turn-text').map((event) => event.type), [
-    'turn.started', 'model.phase', 'model.phase', 'model.phase', 'assistant.delta', 'turn.checkpoint', 'turn.completed',
+    'turn.started', 'model.phase', 'model.phase', 'model.phase', 'model.phase', 'assistant.delta', 'turn.checkpoint', 'turn.completed',
   ])
   assert.deepEqual(
     events('turn-text').filter((event) => event.type === 'model.phase').map((event) => event.payload.phase),
-    ['started', 'waiting_first_token', 'completed'],
+    ['context_prepared', 'started', 'waiting_first_token', 'completed'],
   )
+  const contextEvent = events('turn-text').find((event) => event.payload.phase === 'context_prepared')
+  assert.equal(contextEvent.payload.contextDiagnostics.stage, 'pre_compaction')
+  assert.equal(contextEvent.payload.contextDiagnostics.version, 1)
   assert.equal(listMessages({ userId, sessionId: 'turn-engine-session' }).at(-1).content, '服务端完成。')
 })
 

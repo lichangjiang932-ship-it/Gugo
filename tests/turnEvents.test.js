@@ -788,3 +788,62 @@ test('turn event store is append-only, idempotent, ordered, and user isolated', 
   }
   assert.equal(process.env.APP_DB_PATH, oldPath)
 })
+
+test('terminal events carry bounded completion-policy diagnostics', () => {
+  const base = {
+    sessionId: 's1', turnId: 't1', sequence: 3, createdAt: 5,
+  }
+  const accepted = createTurnEvent({
+    ...base,
+    id: 'completion-policy-ok',
+    type: 'turn.failed',
+    payload: {
+      code: 'TURN_INCOMPLETE',
+      completionPolicies: [
+        { id: 'mutation_verification', attempts: 2, limit: 2, exhausted: true },
+        { id: 'local_html_delivery', attempts: 1, limit: 4, exhausted: false },
+      ],
+    },
+  })
+  assert.equal(accepted.payload.completionPolicies.length, 2)
+  assert.equal(
+    createTurnEvent({
+      ...base,
+      id: 'completion-policy-completed',
+      type: 'turn.completed',
+      payload: { text: 'partial', completionPolicies: [{ id: 'source_handoff', attempts: 1, limit: 1, exhausted: true }] },
+    }).payload.completionPolicies.length,
+    1,
+  )
+  for (const invalid of [
+    [{ id: 'BadId', attempts: 1, limit: 1, exhausted: false }],
+    [{ id: 'ok', attempts: -1, limit: 1, exhausted: false }],
+    [{ id: 'ok', attempts: 1, limit: null, exhausted: false, extra: true }],
+    [{ id: 'ok', attempts: 1, limit: 0, exhausted: false }],
+  ]) {
+    assert.throws(
+      () => createTurnEvent({ ...base, id: 'completion-policy-bad', type: 'turn.failed', payload: {
+        code: 'TURN_INCOMPLETE', completionPolicies: invalid,
+      } }),
+      `invalid completionPolicies must be rejected: ${JSON.stringify(invalid)}`,
+    )
+  }
+})
+
+test('the client projection preserves completion-policy diagnostics', () => {
+  const event = createTurnEvent({
+    id: 'completion-policy-projection',
+    sessionId: 's1', turnId: 't1', sequence: 3, createdAt: 5,
+    type: 'turn.failed',
+    payload: {
+      code: 'TURN_INCOMPLETE',
+      incompleteReason: 'task_verification_repair_exhausted',
+      completionPolicies: [{ id: 'mutation_verification', attempts: 2, limit: 2, exhausted: true }],
+    },
+  })
+  const projected = projectTurnEventForClient(event)
+  assert.deepEqual(
+    projected.payload.completionPolicies,
+    [{ id: 'mutation_verification', attempts: 2, limit: 2, exhausted: true }],
+  )
+})

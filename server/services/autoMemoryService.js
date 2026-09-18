@@ -1,4 +1,4 @@
-import { listMemories, upsertMemory } from './memoryStore.js'
+import { findExactMemory, upsertMemory, withMemoryMatchTransaction } from './memoryStore.js'
 import { logWarn } from '../utils/logger.js'
 
 const ALLOWED_TYPES = new Set(['user', 'feedback', 'project', 'reference'])
@@ -48,10 +48,6 @@ function parseJsonObject(value) {
     }
   }
   return null
-}
-
-function normalizeForMatch(value) {
-  return String(value || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ')
 }
 
 export function isTransientRuntimeMemoryCandidate(candidate) {
@@ -129,49 +125,35 @@ export async function extractAndStoreAutoMemories({
   if (!candidates.length) return { attempted: true, stored: [], skipped: false }
 
   const memoryScope = agentId || null
-  const existing = listMemories({ userId, limit: 500, agentFilter: memoryScope || '__global__' })
-  // Global manual preferences still apply to an agent, but automatic entries
-  // belong to exactly one scope and must never be moved by deduplication.
-  const globalManual = memoryScope
-    ? listMemories({ userId, limit: 500, agentFilter: '__global__' })
-      .filter((memory) => memory.frontmatter?.source !== 'auto_chat')
-    : []
+
   const stored = []
   for (const candidate of candidates) {
     if (signal?.aborted) break
-    const titleKey = normalizeForMatch(candidate.title)
-    const bodyKey = normalizeForMatch(candidate.body)
-    const matchingManual = [...existing, ...globalManual].find((memory) =>
-      memory.frontmatter?.source !== 'auto_chat'
-      && normalizeForMatch(memory.title) === titleKey
-    )
-    if (matchingManual) continue
-    const matchingAuto = existing.find((memory) =>
-      memory.frontmatter?.source === 'auto_chat'
-      && (memory.agentId || null) === memoryScope
-      && memory.type === candidate.type
-      && (normalizeForMatch(memory.title) === titleKey || normalizeForMatch(memory.body) === bodyKey)
-    )
-    const memory = upsertMemory({
-      id: matchingAuto?.id,
-      userId,
-      type: candidate.type,
-      title: candidate.title,
-      body: candidate.body,
-      frontmatter: {
-        ...(matchingAuto?.frontmatter || {}),
-        source: 'auto_chat',
-        confidence: candidate.confidence,
-      },
-      pinned: matchingAuto?.pinned || false,
-      sourceSessionId: sessionId,
-      sourceMessageId: sourceMessage?.id || null,
-      agentId: memoryScope,
+    const memory = withMemoryMatchTransaction({ userId, agentId: memoryScope, includeGlobal: true, signal }, () => {
+      const matchingManual = findExactMemory({ userId, agentId: memoryScope, includeGlobal: true,
+        title: candidate.title, mode: 'automatic', source: 'manual', signal })
+      if (matchingManual) return null
+      const matchingAuto = findExactMemory({ userId, agentId: memoryScope, type: candidate.type,
+        title: candidate.title, body: candidate.body, mode: 'automatic', source: 'auto', signal })
+      return upsertMemory({
+        id: matchingAuto?.id,
+        userId,
+        type: candidate.type,
+        title: candidate.title,
+        body: candidate.body,
+        frontmatter: {
+          ...(matchingAuto?.frontmatter || {}),
+          source: 'auto_chat',
+          confidence: candidate.confidence,
+        },
+        pinned: matchingAuto?.pinned || false,
+        sourceSessionId: sessionId,
+        sourceMessageId: sourceMessage?.id || null,
+        agentId: memoryScope,
+      })
     })
-    stored.push(memory)
-    const existingIndex = existing.findIndex((entry) => entry.id === memory.id)
-    if (existingIndex < 0) existing.push(memory)
-    else existing[existingIndex] = memory
+    if (memory) stored.push(memory)
+
   }
   return { attempted: true, stored, skipped: false }
 }
@@ -191,6 +173,9 @@ export function scheduleAutoMemoryExtraction(options = {}) {
       logWarn('memory.auto_extract', error?.message || error, {
         userId: options.userId || null,
         sessionId: options.sessionId || null,
+        code: error?.code || null,
+        indexCode: error?.diagnostics?.code || null,
+        indexed: Number(error?.diagnostics?.indexed) || 0,
       })
     })
   })

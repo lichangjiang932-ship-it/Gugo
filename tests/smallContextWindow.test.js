@@ -174,9 +174,14 @@ test('tool loop context recovery preserves localized advice and the original fai
         assert.ok(error.compactionError.length > 0)
         for (const expected of advice) assert.match(error.message, expected)
         assert.doesNotMatch(error.message, rejected)
+        assert.equal(error.noProgress, true, 'the failure explains that the retry would be identical')
         return true
       })
-      assert.equal(attempts, 3, 'localized advice must not change the bounded retry count')
+      // Reported defect: with nothing left to compact, the recovery loop sent
+      // the identical request three times. The retry is now suppressed, and the
+      // error says so. Localization still must not change the behaviour, which
+      // is why both locales assert the same count.
+      assert.equal(attempts, 1, 'an identical retry must not be re-sent')
     })
   }
 })

@@ -16,6 +16,9 @@ const {
   buildProviderProfileOverrides,
   validateProviderToolProbe,
 } = await import('../server/routes/modelProviderRoutes.js')
+const { buildProviderTestEnv } = await import('../server/services/modelProviderDiagnosticService.js')
+const { resolveModelConfigForModel } = await import('../server/adapters/modelProviderConfig.js')
+const { profileForConfig } = await import('../server/adapters/modelEndpoint.js')
 const {
   recordModelProviderReadiness,
   upsertModelProvider,
@@ -48,6 +51,10 @@ test('provider diagnostics prefer the selected model profile over provider fallb
     contextWindow: 128000,
     supportsTools: undefined,
     supportsStreaming: undefined,
+    supportsNamedToolChoice: undefined,
+    supportsMidConversationSystem: undefined,
+    supportsStreamUsage: undefined,
+    requiresUserMessage: undefined,
     supportsVision: undefined,
     supportsPdf: undefined,
     firstTokenTimeoutMs: undefined,
@@ -56,6 +63,24 @@ test('provider diagnostics prefer the selected model profile over provider fallb
     keepAlive: undefined,
     models: { small: { contextWindow: 8192, supportsTools: false } },
   })
+})
+
+test('diagnostic environment serialization preserves per-model wire capabilities and fallback booleans', () => {
+  const capabilities = ['supportsNamedToolChoice', 'supportsMidConversationSystem', 'supportsStreamUsage', 'requiresUserMessage']
+  for (const value of [true, false]) {
+    const selected = Object.fromEntries(capabilities.map((key) => [key, value]))
+    const fallback = Object.fromEntries(capabilities.map((key) => [key, !value]))
+    const provider = { baseUrl: 'http://127.0.0.1:1234/v1', apiKey: '', models: ['selected-model', 'fallback-model'],
+      ...fallback, modelProfiles: { 'selected-model': selected } }
+    for (const modelName of provider.models) {
+      const env = buildProviderTestEnv(provider, modelName, {})
+      const config = resolveModelConfigForModel({ modelName, env })
+      const profile = profileForConfig(config, env)
+      for (const key of capabilities) {
+        assert.equal(profile[key], modelName === 'selected-model' ? value : !value, `${modelName}:${key}`)
+      }
+    }
+  }
 })
 
 test('provider tool probe rejects text-only and malformed function-call responses', () => {

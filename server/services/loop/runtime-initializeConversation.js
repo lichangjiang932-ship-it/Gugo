@@ -2,6 +2,8 @@ import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
 import { resolveSemanticSummaryPolicy } from '../contextSemanticSummaryPolicy.js'
 import { synchronizePresentationPromptContext } from './presentationPromptContext.js'
 import { withAssistantCommunicationPolicy } from '../../../shared/assistantCommunicationPolicy.js'
+import { messageTextContent } from './userMessageText.js'
+import { completionPolicyAttempts } from './completionPolicy.js'
 
 // Exact legacy host records, not a substring/marker match: quoted examples,
 // user content and other system safety instructions must survive recovery.
@@ -84,7 +86,7 @@ function initializeConversationContext(s) {
   if (s.shouldRestoreExecutionTools
     && s.recoveredPriorLocalTargetPaths.length > 0
     && !s.convo.some((message) => message?.role === 'system'
-      && String(message?.content || '').includes(DYNAMIC_EXECUTION_TARGET_MARKER))) {
+      && messageTextContent(message?.content).includes(DYNAMIC_EXECUTION_TARGET_MARKER))) {
     s.convo.push({
       role: 'system',
       content: [
@@ -95,12 +97,12 @@ function initializeConversationContext(s) {
     })
   }
   s.hasRuntimeMarker = (marker) => s.convo.some((message) => (
-    message?.role === 'system' && String(message?.content || '').includes(marker)
+    message?.role === 'system' && messageTextContent(message?.content).includes(marker)
   ))
   s.representativeReadsInjected = Boolean(
     s.restoredState?.completionGuards?.representativeReadsInjected,
   ) || s.convo.some((message) => message?.role === 'system'
-    && String(message?.content || '').includes(DIRECTORY_REVIEW_GUARD_MARKER))
+    && messageTextContent(message?.content).includes(DIRECTORY_REVIEW_GUARD_MARKER))
   s.hasSuccessfulRepresentativeRead = successfulReadFileInMessages(s.convo)
 }
 
@@ -219,9 +221,9 @@ function initializeDeliverableSelection(s) {
     s.deliveryArtifactIds = []
     s.deliveryArtifactSelectionArtifactIds = []
   }
-  s.deliverableSelectionRetries = Math.max(
-    0,
-    Number(s.restoredState?.completionGuards?.deliverableSelectionRetries) || 0,
+  s.deliverableSelectionRetries = completionPolicyAttempts(
+    s.restoredState?.completionGuards,
+    'deliverableSelectionRetries',
   )
   s.hasCurrentDeliverableSelection = () => s.deliveryArtifactSelectionExplicit
     && sameArtifactIdList(s.deliveryArtifactSelectionArtifactIds, s.artifactIds)

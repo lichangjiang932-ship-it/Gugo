@@ -6,6 +6,7 @@ import {
   buildToolsListRequest,
   buildResourcesListRequest,
   buildPromptsListRequest,
+  readMcpList,
 } from './mcpJsonRpc.js'
 import { isPureLocalModeEnabled } from '../utils/outboundNetworkGuard.js'
 
@@ -57,24 +58,15 @@ export async function startMcpConnection(userId, server, { getOAuthHeaders, atta
       await transport.request(buildInitializeRequest(), { timeoutMs: 20000 })
       await transport.send(buildInitializedNotification())
     } catch (error) {
-      throw new Error(`MCP initialize failed: ${error.message}`, { cause: error })
+      const failure = new Error(`MCP initialize failed: ${error.message}`, { cause: error })
+      if (error?.code) failure.code = error.code
+      if (error?.systemCode) failure.systemCode = error.systemCode
+      if (typeof error?.retryable === 'boolean') failure.retryable = error.retryable
+      throw failure
     }
-    try {
-      const result = await transport.request(buildToolsListRequest(), { timeoutMs: 15000 })
-      connection.tools = Array.isArray(result?.tools) ? result.tools : []
-    } catch (error) {
-      if (!/method not found/i.test(error.message) && process.env.NODE_ENV !== 'production') {
-        console.warn(`[mcp] ${server.name} tools/list 错误:`, error.message)
-      }
-    }
-    try {
-      const result = await transport.request(buildResourcesListRequest(), { timeoutMs: 8000 })
-      connection.resources = Array.isArray(result?.resources) ? result.resources : []
-    } catch { /* optional capability */ }
-    try {
-      const result = await transport.request(buildPromptsListRequest(), { timeoutMs: 8000 })
-      connection.prompts = Array.isArray(result?.prompts) ? result.prompts : []
-    } catch { /* optional capability */ }
+    Object.assign(connection, await readMcpList(transport, buildToolsListRequest, 'tools', { timeoutMs: 15000, optional: true }))
+    Object.assign(connection, await readMcpList(transport, buildResourcesListRequest, 'resources', { timeoutMs: 8000, optional: true }))
+    Object.assign(connection, await readMcpList(transport, buildPromptsListRequest, 'prompts', { timeoutMs: 8000, optional: true }))
     assertMcpTransportAllowed(server)
     const startedAt = Date.now()
     return Object.assign(connection, { startedAt, lastUsedAt: startedAt })

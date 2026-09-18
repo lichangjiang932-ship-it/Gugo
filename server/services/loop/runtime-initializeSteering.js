@@ -1,4 +1,5 @@
 import { observeLoopEvent } from './eventIsolation.js'
+import { emitWirePreparation } from './runtimeContextDiagnostics.js'
 import {
   appendModelProviderAttempt,
   createModelInvocation,
@@ -186,6 +187,11 @@ async function prepareTrackedInvocation(s, context, preparedRequest, attempt) {
         },
       })
       context.assertActive()
+      if (providerAttempt.wireDiagnostics) {
+        await emitWirePreparation(s, { wireDiagnostics: providerAttempt.wireDiagnostics,
+          modelRequestId: invocation.id, physicalAttempt: providerAttempt.sequence, configRevision: invocation.configRevision })
+      }
+      context.assertActive()
     },
   }
 }
@@ -362,6 +368,16 @@ async function callTrackedModel(s, options) {
   } = options
   if (assertRequestActive !== null && typeof assertRequestActive !== 'function') {
     throw new TypeError('assertRequestActive must be a function or null')
+  }
+  // A cancelled turn must not start another model request, not even for a
+  // wrap-up answer. Fail before the heartbeat, budget or message preparation so
+  // cancellation never re-enters the model transport.
+  if (requestSignal?.aborted) {
+    const reason = requestSignal.reason
+    if (reason instanceof Error) throw reason
+    const error = new Error('Turn cancelled')
+    error.name = 'AbortError'
+    throw error
   }
   const requestFenceFailures = new Set()
   const assertActive = () => {

@@ -1,14 +1,24 @@
 const TOOL_CALL_OPEN = /<tool_call\b[^>]*>/ig
+const TOOL_CALL_OPEN_AT_START = /^<tool_call\b[^>]*>/i
 const TOOL_CALL_CLOSE = /<\/tool_call\s*>/ig
 const TOOL_CALL_MARKER = '<tool_call'
+const TOOL_CALL_CLOSE_MARKER = '</tool_call'
+// Bounded fail-open cap: a stream that never closes its tool block must not
+// grow the filter buffer without limit. Beyond this the buffered protocol text
+// is emitted and the filter returns to normal passthrough.
+const MAX_TOOL_CALL_BODY_CHARS = 512 * 1024
 
-function markerPrefixSuffixLength(value) {
+function markerSuffixLength(value, marker) {
   const text = String(value || '').toLowerCase()
-  const max = Math.min(text.length, TOOL_CALL_MARKER.length - 1)
+  const max = Math.min(text.length, marker.length - 1)
   for (let length = max; length > 0; length -= 1) {
-    if (TOOL_CALL_MARKER.startsWith(text.slice(-length))) return length
+    if (marker.startsWith(text.slice(-length))) return length
   }
   return 0
+}
+
+function markerPrefixSuffixLength(value) {
+  return markerSuffixLength(value, TOOL_CALL_MARKER)
 }
 
 function parseJsonCall(body) {
@@ -97,35 +107,135 @@ export function extractTextToolCalls(value) {
 }
 
 /**
- * Keep a marker-sized suffix while streaming so a split `<tool_call>` token
- * is never painted into the chat before it can be recognized at completion.
+ * Incremental filter that hides the text tool protocol from live output while
+ * keeping every non-protocol character in order.
+ *
+ * It mirrors `extractTextToolCalls`:
+ * - a complete block with a parseable body is withheld;
+ * - a block whose body fails to parse stays visible (the model must see its
+ *   own malformed output);
+ * - text before, between and after blocks is emitted unchanged.
+ *
+ * Once a block closes, normal text resumes. Buffer growth is bounded; an
+ * unterminated block is handled at `finish()`, and `finish()` is idempotent.
  */
 export function createTextToolCallDeltaFilter() {
   let pending = ''
-  let suppressing = false
+  let body = ''
+  let inside = false
+  let sawProtocol = false
+  let finished = false
+
+  const flushBuffer = () => {
+    // Keep only a marker-sized suffix so a split `<tool_call>` is never painted.
+    const keep = markerPrefixSuffixLength(pending)
+    const visible = pending.slice(0, pending.length - keep)
+    pending = pending.slice(pending.length - keep)
+    return visible
+  }
+
+  const resolveBlock = (out) => {
+    const parsed = parseCallBody(body)
+    // Malformed bodies stay visible, matching the full-response parser.
+    const visible = parsed ? out : out + body
+    body = ''
+    inside = false
+    return visible
+  }
 
   return {
     push(delta) {
-      pending += String(delta || '')
-      if (suppressing) return ''
-      const markerAt = pending.toLowerCase().indexOf(TOOL_CALL_MARKER)
-      if (markerAt >= 0) {
-        const visible = pending.slice(0, markerAt)
-        pending = pending.slice(markerAt)
-        suppressing = true
-        return visible
-      }
-      const safeLength = pending.length - markerPrefixSuffixLength(pending)
-      const visible = pending.slice(0, safeLength)
-      pending = pending.slice(safeLength)
-      return visible
-    },
-    finish({ discardProtocol = suppressing } = {}) {
-      const visible = discardProtocol && suppressing ? '' : pending
+      if (finished) return ''
+      let buffer = pending + String(delta || '')
       pending = ''
-      return visible
+      let out = ''
+      for (;;) {
+        if (!inside) {
+          const markerAt = buffer.toLowerCase().indexOf(TOOL_CALL_MARKER)
+          if (markerAt < 0) {
+            pending = buffer
+            out += flushBuffer()
+            break
+          }
+          const rest = buffer.slice(markerAt)
+          const open = TOOL_CALL_OPEN_AT_START.exec(rest)
+          if (!open) {
+            if (!rest.includes('>')) {
+              // Possibly a truncated open tag; wait for more input.
+              out += buffer.slice(0, markerAt)
+              pending = rest
+              break
+            }
+            // Near-miss text such as `<tool_calls>` is literal content.
+            out += buffer.slice(0, markerAt + 1)
+            buffer = buffer.slice(markerAt + 1)
+            continue
+          }
+          out += buffer.slice(0, markerAt)
+          buffer = rest.slice(open[0].length)
+          inside = true
+          sawProtocol = true
+          body = ''
+          continue
+        }
+        const closeAt = buffer.toLowerCase().indexOf(TOOL_CALL_CLOSE_MARKER)
+        if (closeAt < 0) {
+          const keep = markerSuffixLength(buffer, TOOL_CALL_CLOSE_MARKER)
+          body += buffer.slice(0, buffer.length - keep)
+          pending = buffer.slice(buffer.length - keep)
+          if (body.length <= MAX_TOOL_CALL_BODY_CHARS) break
+          out += body
+          body = ''
+          inside = false
+          buffer = pending
+          pending = ''
+          continue
+        }
+        const closeEnd = buffer.indexOf('>', closeAt + TOOL_CALL_CLOSE_MARKER.length)
+        if (closeEnd < 0) {
+          body += buffer.slice(0, closeAt)
+          pending = buffer.slice(closeAt)
+          if (body.length <= MAX_TOOL_CALL_BODY_CHARS) break
+          out += body
+          body = ''
+          inside = false
+          buffer = pending
+          pending = ''
+          continue
+        }
+        body += buffer.slice(0, closeAt)
+        buffer = buffer.slice(closeEnd + 1)
+        if (body.length > MAX_TOOL_CALL_BODY_CHARS) {
+          // Fail open with a bounded buffer; the following text is normal again.
+          out += body
+          body = ''
+          inside = false
+          continue
+        }
+        out = resolveBlock(out)
+        continue
+      }
+      return out
     },
-    get suppressing() { return suppressing },
+    finish({ discardProtocol = false } = {}) {
+      if (finished) return ''
+      finished = true
+      let out = ''
+      if (inside) {
+        if (body.length > MAX_TOOL_CALL_BODY_CHARS) out += body
+        else if (!parseCallBody(body) && !discardProtocol) out += body
+        body = ''
+        inside = false
+      }
+      // A partial marker that never completed is literal text; the full parser
+      // leaves it in content, so keep it visible unless explicitly discarded.
+      if (pending && !(discardProtocol && pending.toLowerCase().startsWith(TOOL_CALL_MARKER))) {
+        out += pending
+      }
+      pending = ''
+      return out
+    },
+    get suppressing() { return sawProtocol || inside },
   }
 }
 

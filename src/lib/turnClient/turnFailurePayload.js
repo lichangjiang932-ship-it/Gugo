@@ -1,6 +1,7 @@
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
 import { removeVerifiedLocalFilesFromRetained } from '../localFileReferences.js'
 import { normalizeModelRequestDiagnostics } from '../modelRequestDiagnostics.js'
+import { completionPoliciesSchema } from '../../../shared/turnFailureSchemas.js'
 
 export const SIDE_EFFECT_OUTCOME_UNKNOWN_RECOVERY_KIND = 'side_effect_outcome_unknown'
 export const MODEL_REQUEST_OUTCOME_UNKNOWN_RECOVERY_KIND = 'model_request_outcome_unknown'
@@ -177,6 +178,9 @@ export function normalizeTurnFailurePayload(payload = {}, {
       : null
   const taskVerification = payloadTaskVerification || nestedTaskVerification
   if (taskVerification) error.taskVerification = taskVerification
+  const policySource = terminalEvidenceSource(payload, nested, 'completionPolicies')
+  const policies = completionPoliciesSchema.safeParse(policySource?.completionPolicies)
+  if (policies.success && policies.data) error.completionPolicies = policies.data
   const iterations = optionalInteger(
     terminalEvidenceSource(payload, nested, 'iterations')?.iterations,
     0,

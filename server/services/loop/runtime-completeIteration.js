@@ -1,5 +1,6 @@
 import { normalizeTurnLocale } from '../../../shared/turnLocale.js'
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
+import { finishToolStop } from './runtimeToolStop.js'
 
 const HAN_TEXT = /[\u3400-\u9fff]/u
 
@@ -294,6 +295,19 @@ async function finishNoProgress(s) {
 
 export async function completeIteration(s) {
   const i = s.iteration
+  if (i.toolStop) return finishToolStop(s)
+  if (i.goalPlanBlocked && !i.batchSupersededBySteering) {
+    s.checkpointCalls = null
+    const result = i.goalPlanBlocked
+    const terminal = await s.finishIncomplete({
+      text: result.error, reason: String(result.code || 'GOAL_PLAN_STATE_UNAVAILABLE').toLowerCase(),
+      code: result.code, retryable: false, manualRetryable: true,
+      missingRequirements: result.requiresUserVerification
+        ? ['side_effect_outcome_verification', 'goal_plan_approval'] : ['goal_plan_approval'],
+      steeringLeaseId: i.steeringLeaseId,
+    })
+    return terminal?.deferredForSteering ? { kind: 'continue' } : { kind: 'return', value: terminal }
+  }
   updateArtifactRecovery(s)
   s.checkpointCalls = null
   await s.persistTurn()

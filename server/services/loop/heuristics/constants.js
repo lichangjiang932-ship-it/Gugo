@@ -2,10 +2,24 @@
 // 是够不到的:光探索就可能几十轮,真正动手改又是几十轮,
 // 中间还要穿插验证。碰到上限时用户看到的是「做到一半停了」。
 // 2000 是任何正常任务都碰不到、但仍能兜住死循环的量级。
-export const MAX_ITERS = (() => {
-  const raw = Number(process.env.JOB_MAX_ITERS)
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 2000
-})()
+//
+// 作用范围：所有共享 tool-loop 回合（网页交互、Job、CLI Headless），
+// 不只是 Job。
+// 变量优先级：GUGO_MAX_ITERS > JOB_MAX_ITERS > 默认 2000。
+// JOB_MAX_ITERS 是历史名称，行为完全保留；两个变量都无效（缺失、非数字、
+// <=0）时回退默认值，不会因此悄悄收紧或放宽有效轮数。
+export function resolveMaxIters(env = process.env) {
+  const readPositive = (value) => {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null
+  }
+  const explicit = readPositive(env.GUGO_MAX_ITERS)
+  if (explicit !== null) return explicit
+  const legacy = readPositive(env.JOB_MAX_ITERS)
+  return legacy !== null ? legacy : 2000
+}
+
+export const MAX_ITERS = resolveMaxIters()
 export const JOB_READ_CONCURRENCY = 3
 export const ARTIFACT_DELIVERY_GUARD_MARKER = '[PERSISTED ARTIFACT DELIVERY REQUIRED]'
 // A completion guard must actively recover the requested file instead of
@@ -15,7 +29,6 @@ export const ARTIFACT_DELIVERY_GUARD_MARKER = '[PERSISTED ARTIFACT DELIVERY REQU
 // room to repair malformed arguments after the first forced call.
 export const MAX_ARTIFACT_DELIVERY_RETRIES = 4
 export const EXECUTION_EVIDENCE_GUARD_MARKER = '[EXECUTION EVIDENCE REQUIRED]'
-export const EXECUTION_REASONING_RECOVERY_MARKER = '[EXECUTION REASONING RECOVERY REQUIRED]'
 export const DIRECTORY_RESUME_GUARD_MARKER = '[VERIFIED DIRECTORY RESUME REQUIRED]'
 export const AVAILABLE_TOOL_CAPABILITIES_MARKER = '[AVAILABLE TOOL CAPABILITIES]'
 export const POST_MUTATION_VERIFICATION_GUARD_MARKER = '[POST-MUTATION VERIFICATION REQUIRED]'
@@ -23,10 +36,12 @@ export const PDF_LAYOUT_EXECUTION_CONTRACT_MARKER = '[PDF LAYOUT EXECUTION CONTR
 export const PDF_LAYOUT_VERIFICATION_GUARD_MARKER = '[PDF LAYOUT VERIFICATION REQUIRED]'
 export const PDF_LAYOUT_VERIFICATION_OK = 'PDF_LAYOUT_VERIFICATION_OK'
 export const MAX_EXECUTION_EVIDENCE_RETRIES = 1
-export const MAX_EXECUTION_REASONING_RETRIES = 2
 export const MAX_DIRECTORY_RESUME_RETRIES = 2
 export const MAX_MUTATION_VERIFICATION_RETRIES = 2
 export const MAX_PDF_LAYOUT_VERIFICATION_RETRIES = 2
+export const MAX_DELIVERABLE_SELECTION_RETRIES = 2
+export const MAX_SOURCE_HANDOFF_RETRIES = 1
+export const MAX_LOCAL_HTML_DELIVERY_RETRIES = 4
 export const VERIFIED_DIRECTORY_RESOLUTION = /\[(?:TURN|JOB_DIRECTORY)_RESOLUTION:[^\]]+\][^\r\n]*local directory authorization is already persisted and verified\./i
 export const DIRECTORY_AUTHORIZATION_WAIT_CLAIM = /(?:please\s+(?:choose|select|authorize|grant)[\s\S]{0,100}(?:directory|folder)|(?:i(?:'m| am)?\s+)?wait(?:ing)?[\s\S]{0,100}(?:authori[sz]ation|permission|directory|folder)|(?:directory|folder)[\s\S]{0,100}(?:authorization|permission)[\s\S]{0,100}(?:required|pending|choose|select|grant)|\u8bf7[\s\S]{0,40}(?:\u9009\u62e9|\u6388\u6743)[\s\S]{0,40}(?:\u76ee\u5f55|\u6587\u4ef6\u5939)|(?:\u76ee\u5f55|\u6587\u4ef6\u5939)[\s\S]{0,40}(?:\u6388\u6743|\u6743\u9650)[\s\S]{0,40}(?:\u8bf7\u6c42|\u7b49\u5f85|\u9009\u62e9|\u786e\u8ba4|\u9700\u8981|\u672a\u6388\u6743)|\u7b49\u5f85[\s\S]{0,40}(?:\u9009\u62e9|\u6388\u6743|\u76ee\u5f55|\u6587\u4ef6\u5939))/i
 export const EXPLICIT_LOCAL_DIRECTORY_CONTEXT = /\[LOCAL PATH (?:ACCESS|REFERENCE)|\[VERIFIED LOCAL FILESYSTEM ACCESS\]|(?:^|[\s"'`])(?:[a-z]:[\\/]|\\\\[^\\\s]+\\[^\\\s]+|\/(?:home|users|workspace|mnt|tmp)\/)|(?:save|write|export).{0,40}(?:folder|directory|desktop)|(?:\u4fdd\u5b58|\u5199\u5165|\u5bfc\u51fa).{0,20}(?:\u76ee\u5f55|\u6587\u4ef6\u5939|\u684c\u9762)/im

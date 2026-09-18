@@ -11,14 +11,18 @@
 
 import { getDb } from '../db.js'
 import { createHash, randomUUID } from 'node:crypto'
+import { normalizedSearchText, rankMemoriesByQuery } from './memoryRelevance.js'
+import { searchLexicalMemories } from './memoryLexicalSearch.js'
+import { findIndexedMemory, findMemoryWithPredicate } from './memoryExactMatch.js'
+import { assertCompleteMemorySearchIndex, indexMemoryRow } from './memorySearchIndex.js'
+import { memorySimilarityById, searchMemoryEmbeddings } from './memoryEmbeddingStore.js'
+import { row2memory } from './memoryRowMapper.js'
+import { fitMemorySystemBlock } from './memoryPromptRendering.js'
+export { classifyMemoryFreshness, buildMemorySystemBlock } from './memoryPromptRendering.js'
+export { scoreMemoryRelevance } from './memoryRelevance.js'
 
 const ALLOWED_TYPES = ['user', 'feedback', 'project', 'reference']
-const DAY_MS = 24 * 60 * 60 * 1000
-const VERIFY_MEMORY_MS = DAY_MS
-const AGING_MEMORY_MS = 30 * DAY_MS
-const STALE_MEMORY_MS = 180 * DAY_MS
-const MAX_QUERY_TERMS = 24
-const MAX_SEARCH_CANDIDATES = 2000
+const RECENT_CANDIDATE_LIMIT = 60
 const MAX_LINK_DEPTH = 5
 const MAX_LINK_NODES = 200
 
@@ -42,153 +46,20 @@ function allocateMemorySlug(db, userId, title, memoryId) {
   return slug
 }
 
-function row2memory(row) {
-  if (!row) return null
-  let frontmatter = {}
-  try { frontmatter = row.frontmatter_json ? JSON.parse(row.frontmatter_json) : {} } catch { /* keep empty */ }
-  return {
-    id: row.id,
-    userId: row.user_id,
-    type: row.type,
-    title: row.title,
-    slug: row.slug,
-    body: row.body,
-    frontmatter,
-    pinned: !!row.pinned,
-    sourceSessionId: row.source_session_id || null,
-    sourceMessageId: row.source_message_id || null,
-    agentId: row.agent_id || null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    lastUsedAt: row.last_used_at,
-  }
-}
 
-function normalizedSearchText(value) {
-  return String(value || '').normalize('NFKC').trim().toLocaleLowerCase().replace(/\s+/g, ' ')
-}
-
-function queryTerms(query) {
-  const normalized = normalizedSearchText(query)
-  if (!normalized) return []
-  const terms = new Set([normalized])
-  const words = normalized.match(/[\p{L}\p{N}_-]+/gu) || []
-  for (const word of words) {
-    if (word.length > 1) terms.add(word)
-    for (const run of word.match(/\p{Script=Han}+/gu) || []) {
-      if (run.length < 3) continue
-      for (let index = 0; index < run.length - 1; index += 1) {
-        terms.add(run.slice(index, index + 2))
-      }
-    }
-  }
-  return [...terms].filter(Boolean).sort((a, b) => b.length - a.length).slice(0, MAX_QUERY_TERMS)
-}
-
-function countOccurrences(haystack, needle) {
-  if (!haystack || !needle) return 0
-  let count = 0
-  let offset = 0
-  while ((offset = haystack.indexOf(needle, offset)) >= 0) {
-    count += 1
-    offset += Math.max(needle.length, 1)
-    if (count >= 8) break
-  }
-  return count
-}
-
-export function scoreMemoryRelevance(memory, query) {
-  const fullQuery = normalizedSearchText(query)
-  const terms = queryTerms(query)
-  if (!fullQuery || !terms.length || !memory) return 0
-
-  const title = normalizedSearchText(memory.title)
-  const slug = normalizedSearchText(memory.slug)
-  const body = normalizedSearchText(memory.body)
-  const type = normalizedSearchText(memory.type)
-  const tags = Array.isArray(memory.frontmatter?.tags)
-    ? memory.frontmatter.tags.map(normalizedSearchText).filter(Boolean)
-    : []
-  let score = 0
-  if (title === fullQuery) score += 140
-  else if (title.includes(fullQuery)) score += 80
-  if (slug === fullQuery) score += 90
-  else if (slug.includes(fullQuery)) score += 45
-  if (body.includes(fullQuery)) score += 36 + Math.min(12, countOccurrences(body, fullQuery) * 2)
-  if (tags.includes(fullQuery)) score += 70
-
-  let matchedTerms = 0
-  for (const term of terms) {
-    let matched = false
-    if (title === term) {
-      score += 32
-      matched = true
-    } else if (title.includes(term)) {
-      score += 22
-      matched = true
-    }
-    if (slug === term) {
-      score += 24
-      matched = true
-    } else if (slug.includes(term)) {
-      score += 12
-      matched = true
-    }
-    if (body.includes(term)) {
-      score += 7 + Math.min(9, countOccurrences(body, term))
-      matched = true
-    }
-    if (tags.some((tag) => tag === term || tag.includes(term))) {
-      score += 18
-      matched = true
-    }
-    if (type === term) {
-      score += 8
-      matched = true
-    }
-    if (matched) matchedTerms += 1
-  }
-  if (!matchedTerms) return 0
-  const coverage = matchedTerms / terms.length
-  score += coverage * 24
-  if (coverage === 1) score += 12
-  return Math.round(score * 1000) / 1000
-}
-
-function memoryRecency(memory) {
-  return Number(memory.lastUsedAt || memory.updatedAt || memory.createdAt || 0)
-}
-
-function rankMemoriesByQuery(memories, query, { keepPinned = false } = {}) {
-  return memories
-    .map((memory) => ({ memory, score: scoreMemoryRelevance(memory, query) }))
-    .filter(({ memory, score }) => score > 0 || (keepPinned && memory.pinned))
-    .sort((a, b) => (
-      (keepPinned ? Number(b.memory.pinned) - Number(a.memory.pinned) : 0)
-      || b.score - a.score
-      || memoryRecency(b.memory) - memoryRecency(a.memory)
-      || String(a.memory.id).localeCompare(String(b.memory.id))
-    ))
-}
-
-function addQueryPredicate(sql, params, query, { includePinned = false } = {}) {
-  const terms = queryTerms(query)
-  if (!terms.length) return { sql, terms }
-  const clauses = terms.map(() => '(title LIKE ? OR slug LIKE ? OR body LIKE ? OR frontmatter_json LIKE ?)')
-  const predicate = clauses.join(' OR ')
-  sql += includePinned ? ` AND (pinned = 1 OR ${predicate})` : ` AND (${predicate})`
-  for (const term of terms) {
-    const pattern = `%${term}%`
-    params.push(pattern, pattern, pattern, pattern)
-  }
-  return { sql, terms }
-}
-
-export function listMemories({ userId, type = null, query = null, limit = 200, agentFilter = null }) {
+export function listMemories({ userId, type = null, query = null, limit = 200, agentFilter = null,
+  signal = null, lexicalLimits = {}, indexLimits = {} }) {
   if (!userId) return []
   const db = getDb()
   const params = [userId]
-  const safeLimit = Math.min(Math.max(1, Number(limit) || 200), 500)
+  const safeLimit = Math.floor(Math.min(Math.max(1, Number(limit) || 200), 500))
+  if (normalizedSearchText(query)) {
+    return searchLexicalMemories(db, {
+      userId, query, agentId: agentFilter === '__global__' ? null : agentFilter,
+      includeAllAgents: !agentFilter, type: ALLOWED_TYPES.includes(type) ? type : null,
+      signal, limits: { ...lexicalLimits, topK: safeLimit }, indexLimits,
+    }).memories
+  }
   let sql = 'SELECT * FROM memories WHERE user_id = ?'
   if (type && ALLOWED_TYPES.includes(type)) {
     sql += ' AND type = ?'
@@ -204,13 +75,30 @@ export function listMemories({ userId, type = null, query = null, limit = 200, a
     sql += ' AND agent_id = ?'
     params.push(agentFilter)
   }
-  const hasQuery = !!normalizedSearchText(query)
-  if (hasQuery) ({ sql } = addQueryPredicate(sql, params, query))
   sql += ' ORDER BY pinned DESC, COALESCE(last_used_at, updated_at) DESC LIMIT ?'
-  params.push(hasQuery ? Math.min(Math.max(safeLimit * 8, 200), MAX_SEARCH_CANDIDATES) : safeLimit)
+  params.push(safeLimit)
   const memories = db.prepare(sql).all(...params).map(row2memory)
-  if (!hasQuery) return memories
-  return rankMemoriesByQuery(memories, query).slice(0, safeLimit).map(({ memory }) => memory)
+  return memories
+}
+
+export function findMatchingMemory(options, matches) {
+  if (!options?.userId) return null
+  return findMemoryWithPredicate(getDb(), options, matches)
+}
+
+export function findExactMemory(options) {
+  if (!options?.userId) return null
+  return findIndexedMemory(getDb(), options)
+}
+
+/** Commit bounded index catch-up separately; then fence matching and mutation together. */
+export function withMemoryMatchTransaction(options, work) {
+  const db = getDb()
+  assertCompleteMemorySearchIndex(db, options)
+  return db.transaction(() => {
+    assertCompleteMemorySearchIndex(db, options)
+    return work()
+  }).immediate()
 }
 
 export function getMemory(userId, id) {
@@ -231,6 +119,9 @@ export function upsertMemory({ id, userId, type, title, body, frontmatter = {}, 
   const frontmatterJson = JSON.stringify(frontmatter || {})
 
   return db.transaction(() => {
+    if (agentId && !db.prepare('SELECT 1 FROM agents WHERE user_id = ? AND id = ?').get(userId, agentId)) {
+      throw Object.assign(new Error('Memory agent does not belong to this user'), { code: 'MEMORY_AGENT_NOT_FOUND' })
+    }
     const existing = db.prepare('SELECT id, slug, source_session_id, source_message_id FROM memories WHERE user_id = ? AND id = ?').get(userId, memoryId)
     // Slugs are stable identities, not a projection that changes with a title.
     // Preserve legacy links instead of ambiguously rewriting historical data.
@@ -267,6 +158,9 @@ export function upsertMemory({ id, userId, type, title, body, frontmatter = {}, 
     `)
     for (const s of links) insLink.run(memoryId, s)
 
+    indexMemoryRow(db, db.prepare('SELECT rowid AS memory_order,* FROM memories WHERE id = ? AND user_id = ?')
+      .get(memoryId, userId))
+
     return getMemory(userId, memoryId)
   })()
 }
@@ -290,93 +184,105 @@ export function touchMemoryUsage(userId, ids) {
 
 /**
  * 选 active 记忆做注入。优先 pinned > last_used_at > updated_at。
- * token 预算用粗算 (chars / 4)，超出就尾部裁掉。
  *
  * 阶段 6：支持 agentId 过滤。只返回 “agent_id IS NULL (全局) OR agent_id = :agentId” 的记忆。
  * agentId = null 则只拿全局记忆 (未绑 agent)。
  */
-export function selectActiveMemoriesForInjection({ userId, tokenCap = 800, agentId = null, query = null }) {
+export function selectActiveMemoriesForInjection({
+  userId, tokenCap = 800, agentId = null, query = null, queryVector = null, querySpace = null,
+  signal = null, semanticLimits = {}, lexicalLimits = {}, indexLimits = {}, lexicalCursor = null,
+  now = Date.now(), deferFitting = false,
+}) {
   if (!userId) return { memories: [], totalChars: 0 }
+  if (signal?.aborted) return { memories: [], totalChars: 0, diagnostics: { cancelled: true } }
   const db = getDb()
-  const params = [userId]
-  let sql
-  if (agentId) {
-    sql = 'SELECT * FROM memories WHERE user_id = ? AND (agent_id IS NULL OR agent_id = ?)'
-    params.push(agentId)
-  } else {
-    sql = 'SELECT * FROM memories WHERE user_id = ? AND agent_id IS NULL'
-  }
+  const normalizedTokenCap = memoryInjectionTokenCap(tokenCap)
   const hasQuery = !!normalizedSearchText(query)
-  if (hasQuery) ({ sql } = addQueryPredicate(sql, params, query, { includePinned: true }))
-  sql += ' ORDER BY pinned DESC, COALESCE(last_used_at, updated_at) DESC, id ASC LIMIT ?'
-  params.push(hasQuery ? 240 : 60)
-  const rows = db.prepare(sql).all(...params)
-  const memories = rows.map(row2memory)
-  const ranked = hasQuery
-    ? rankMemoriesByQuery(memories, query, { keepPinned: true }).map(({ memory }) => memory)
+  // Semantic scoring is only allowed when the caller can name the vector space
+  // the query came from. Without it a stored vector is not comparable, and
+  // guessing would silently rank unrelated memories.
+  const semanticActive = Array.isArray(queryVector) && queryVector.length > 0 && !!querySpace && querySpace !== 'unknown'
+  const scopeClause = agentId
+    ? 'AND (agent_id IS NULL OR agent_id = ?)'
+    : 'AND agent_id IS NULL'
+  const scopeParams = agentId ? [String(agentId)] : []
+  const orderBy = 'ORDER BY pinned DESC, COALESCE(last_used_at, updated_at) DESC, id ASC'
+  const readPool = (limit) => db.prepare(
+    `SELECT * FROM memories WHERE user_id = ? ${scopeClause} ${orderBy} LIMIT ?`,
+  ).all(String(userId), ...scopeParams, limit)
+  const byId = new Map()
+  const collect = (rows) => {
+    for (const row of rows) {
+      if (!byId.has(row.id)) byId.set(row.id, row2memory(row))
+    }
+  }
+
+  // Lexical candidates are never filtered by semantic index availability,
+  // embedding space, or the semantic scan's resource budget.
+  let lexical = null
+  if (hasQuery) {
+    lexical = searchLexicalMemories(db, {
+      userId, agentId, includeGlobal: true, query, signal,
+      limits: lexicalLimits, indexLimits, cursor: lexicalCursor,
+    })
+    for (const memory of lexical.memories) byId.set(memory.id, memory)
+    collect(db.prepare(`SELECT * FROM memories WHERE user_id = ? ${scopeClause} AND pinned = 1 ${orderBy} LIMIT ?`)
+      .all(String(userId), ...scopeParams, RECENT_CANDIDATE_LIMIT))
+  }
+  if (!hasQuery && !semanticActive) collect(readPool(RECENT_CANDIDATE_LIMIT))
+  if (!hasQuery && semanticActive) collect(db.prepare(
+    `SELECT * FROM memories WHERE user_id = ? ${scopeClause} AND pinned = 1 ${orderBy} LIMIT ?`,
+  ).all(String(userId), ...scopeParams, RECENT_CANDIDATE_LIMIT))
+  const lexicalCount = byId.size
+  const semantic = semanticActive ? searchMemoryEmbeddings({
+    userId, agentId, queryVector, querySpace, signal,
+    limits: semanticLimits,
+  }) : null
+  let similarityById = null
+  if (semantic) {
+    try {
+      similarityById = memorySimilarityById({ userId, memories: [...byId.values()], queryVector, querySpace })
+    } catch {
+      semantic.diagnostics.code = 'MEMORY_SEMANTIC_QUERY_FAILED'
+      semantic.diagnostics.truncated = true
+      semantic.diagnostics.coverage = 'partial'
+      similarityById = new Map()
+    }
+    for (const memory of semantic.memories) if (!byId.has(memory.id)) byId.set(memory.id, memory)
+    for (const [id, similarity] of semantic.similarityById) similarityById.set(id, similarity)
+  }
+  const memories = [...byId.values()]
+  const ranked = hasQuery || similarityById
+    ? rankMemoriesByQuery(memories, query, { keepPinned: true, similarityById }).map(({ memory }) => memory)
     : memories
-  const out = []
-  let charsUsed = 0
-  const charsCap = Math.max(200, tokenCap * 4)
-  for (const mem of ranked) {
-    const block = `### ${mem.type}: ${mem.title}\n${mem.body}\n`
-    if (charsUsed + block.length > charsCap) continue
-    out.push(mem)
-    charsUsed += block.length
+  const fitted = deferFitting
+    ? { memories: ranked, totalChars: 0, tokenTruncated: false }
+    : fitMemorySystemBlock(ranked, { tokenCap: normalizedTokenCap, query, now })
+  return {
+    memories: fitted.memories, totalChars: fitted.totalChars,
+    diagnostics: { lexicalCandidates: lexicalCount, lexical: lexical?.diagnostics || null, semantic: semantic?.diagnostics || null,
+      candidateCount: ranked.length, tokenTruncated: fitted.tokenTruncated },
   }
-  return { memories: out, totalChars: charsUsed }
 }
 
-export function classifyMemoryFreshness(updatedAt, { now = Date.now() } = {}) {
-  const timestamp = Number(updatedAt)
-  if (!Number.isFinite(timestamp) || timestamp <= 0) {
-    return { level: 'unknown', label: '时间未知，使用前核实', ageDays: null, warning: true }
-  }
-  const ageMs = Math.max(0, Number(now) - timestamp)
-  const ageDays = Math.floor(ageMs / DAY_MS)
-  if (ageMs > STALE_MEMORY_MS) return { level: 'stale', label: '陈旧，使用前核实', ageDays, warning: true }
-  if (ageMs > AGING_MEMORY_MS) return { level: 'aging', label: '较旧，注意核实', ageDays, warning: true }
-  if (ageMs > VERIFY_MEMORY_MS) {
-    return {
-      level: 'recent',
-      label: `近期（${ageDays} 天前写入；请对照当前代码和事实核实）`,
-      ageDays,
-      warning: true,
-    }
-  }
-  return { level: 'recent', label: '近期', ageDays, warning: false }
-}
-
-export function buildMemorySystemBlock(memories, { now = Date.now() } = {}) {
-  if (!memories?.length) return ''
-  const parts = [
-    '# 用户长期记忆 (memories)',
-    '以下是用户偏好、项目背景、反馈与参考资料。当前用户消息优先；与当前消息冲突或标记为较旧/陈旧/时间未知的内容，必须先核实再使用。\n',
-  ]
-  for (const m of memories) {
-    const freshness = classifyMemoryFreshness(m.updatedAt, { now })
-    const updated = Number.isFinite(Number(m.updatedAt)) && Number(m.updatedAt) > 0
-      ? new Date(Number(m.updatedAt)).toISOString().slice(0, 10)
-      : '未知日期'
-    parts.push(`## [${m.type}] ${m.title}（更新：${updated}；新鲜度：${freshness.label}）`)
-    if (freshness.warning && freshness.ageDays != null) {
-      parts.push(`> 这条记忆写于 ${freshness.ageDays} 天前；涉及文件、行号、版本或外部状态时，必须先核实。`)
-    }
-    parts.push(m.body)
-    parts.push('')
-  }
-  return parts.join('\n')
+/** Shared injection budget, including a finite upper bound for malformed config. */
+export function memoryInjectionTokenCap(tokenCap = 800) {
+  return clampInteger(tokenCap, 800, 1, 16_000)
 }
 
 export function buildMemoryIndex(userId) {
   if (!userId) return '# MEMORY.md\n\n(未登录)\n'
-  const list = listMemories({ userId, limit: 500 })
+  const { list, total } = getDb().transaction(() => ({
+    list: listMemories({ userId, limit: 500 }),
+    total: getDb().prepare('SELECT COUNT(*) AS total FROM memories WHERE user_id = ?').get(userId).total,
+  }))()
   const byType = {}
   for (const m of list) {
     if (!byType[m.type]) byType[m.type] = []
     byType[m.type].push(m)
   }
-  const lines = ['# MEMORY.md', '', `本用户共 ${list.length} 条记忆。\n`]
+  const lines = ['# MEMORY.md', '', `本用户共 ${total} 条记忆。\n`]
+  if (total > list.length) lines.push(`当前展示 ${list.length} 条记忆（上限 500 条）；以下分类数量仅统计已展示条目。\n`)
   for (const type of ALLOWED_TYPES) {
     const items = byType[type] || []
     if (!items.length) continue

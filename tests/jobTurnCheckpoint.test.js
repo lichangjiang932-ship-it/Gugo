@@ -178,7 +178,7 @@ test('resume never replays a side-effecting call left in executing state', async
   let toolResult = null
   const savedStates = []
 
-  const result = await runToolsLoop({
+  await assert.rejects(runToolsLoop({
     job: { id: 'resume-write-job', userId: alice },
     step: { id: 'resume-write-step' },
     messages: [],
@@ -192,13 +192,9 @@ test('resume never replays a side-effecting call left in executing state', async
       executeCount += 1
       return { ok: true }
     },
-    runModel: async ({ messages }) => {
-      toolResult = JSON.parse(messages.find((message) => message.role === 'tool').content)
-      return { content: 'verify before continuing', toolCalls: [] }
-    },
-  })
-
-  assert.equal(result.text, 'verify before continuing')
+    onToolCompleted: async ({ result }) => { toolResult = result },
+    runModel: async () => { assert.fail('an uncertain write cannot request model wrap-up') },
+  }), (error) => error?.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN' && error.unsafeToReplay === true)
   assert.equal(executeCount, 0)
   assert.equal(toolResult.code, 'tool_execution_outcome_unknown')
   assert.equal(toolResult.requiresUserVerification, true)
@@ -230,7 +226,7 @@ test('resume never replays run_code left in executing state', async () => {
   let toolResult = null
   const savedStates = []
 
-  const result = await runToolsLoop({
+  await assert.rejects(runToolsLoop({
     job: { id: 'resume-run-code-job', userId: alice },
     step: { id: 'resume-run-code-step' },
     messages: [],
@@ -244,13 +240,9 @@ test('resume never replays run_code left in executing state', async () => {
       executeCount += 1
       return { ok: true, value: 42 }
     },
-    runModel: async ({ messages }) => {
-      toolResult = JSON.parse(messages.find((message) => message.role === 'tool').content)
-      return { content: 'The prior code execution outcome must be verified.', toolCalls: [] }
-    },
-  })
-
-  assert.equal(result.text, 'The prior code execution outcome must be verified.')
+    onToolCompleted: async ({ result }) => { toolResult = result },
+    runModel: async () => { assert.fail('uncertain code execution cannot request model wrap-up') },
+  }), (error) => error?.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN' && error.unsafeToReplay === true)
   assert.equal(executeCount, 0)
   assert.equal(toolResult.code, 'tool_execution_outcome_unknown')
   assert.equal(toolResult.requiresUserVerification, true)
@@ -619,15 +611,12 @@ test('an executing connector checkpoint switched to plan is denied before idempo
         return { state: checkpoint }
       },
       executeTool,
-      runModel: async ({ messages }) => {
-        deniedResult = JSON.parse(messages.find((message) => (
-          message.role === 'tool' && message.tool_call_id === toolCallId
-        )).content)
-        return { content: 'connector write remained blocked in plan mode', toolCalls: [] }
-      },
+      onToolCompleted: async ({ result }) => { deniedResult = result },
+      runModel: async () => { assert.fail('plan mode refusal cannot request model wrap-up') },
     })
 
-    assert.equal(result.text, 'connector write remained blocked in plan mode')
+    assert.equal(result.code, 'policy_denied_plan_mode')
+    assert.equal(result.incomplete, true)
     assert.equal(executeCalls, 0)
     assert.equal(deniedResult.policyDenied, true)
     assert.equal(deniedResult.permissionMode, 'plan')

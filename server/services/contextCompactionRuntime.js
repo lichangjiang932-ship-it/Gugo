@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { logWarn } from '../utils/logger.js'
 import { normalizeTurnLocale } from '../../shared/turnLocale.js'
 import { resolveRuntimeContextCompactionStrategy } from './contextCompactionStrategy.js'
@@ -7,6 +8,7 @@ import { assertContextRecoveryActive, canonicalContextMessages } from './context
 import {
   DEFAULT_ACTIVE_CONTEXT_TOKENS,
   DEFAULT_CONTEXT_WINDOW,
+  estimateContextTokens,
   textTokens,
 } from './contextCompactionMetrics.js'
 
@@ -114,6 +116,19 @@ function dynamicTextTokens(messages = []) {
   }, 0)
 }
 
+/** System instructions plus tool schemas cannot be compacted away. */
+function fixedContextTokens(messages = [], tools = []) {
+  const systemTokens = (Array.isArray(messages) ? messages : [])
+    .filter((message) => message?.role === 'system')
+    .reduce((total, message) => total + 6 + textTokens(typeof message?.content === 'string' ? message.content : ''), 0)
+  return systemTokens + estimateContextTokens([], tools)
+}
+
+/** Identity of a prepared request, used to detect a retry that changes nothing. */
+function requestIdentity(messages, tools) {
+  return createHash('sha256').update(JSON.stringify([tools || [], messages || []])).digest('hex')
+}
+
 function assertPreparedDynamicContextFits(prepared, contextWindow, activeContextTokens) {
   const window = Number(contextWindow)
   const hardWindow = Number.isFinite(window) && window > 0 ? Math.floor(window) : DEFAULT_CONTEXT_WINDOW
@@ -127,17 +142,27 @@ function assertPreparedDynamicContextFits(prepared, contextWindow, activeContext
   // reliable preflight failure. Multimodal image bytes are deliberately not
   // priced as base64 text; providers tokenize those as images.
   const hardDynamicLimit = Math.min(hardWindow, activeLimit)
+  // Priced for diagnostics only: fixed content is not a preflight failure here
+  // because the configured window may be a local estimate, not the provider's
+  // real limit. When the request ultimately fails, the number explains why.
+  const fixedTokens = fixedContextTokens(prepared?.messages, prepared?.tools)
   const actualTokens = dynamicTextTokens(prepared?.messages)
   if (actualTokens <= hardDynamicLimit) return
   const error = new Error(
-    `上下文压缩未能收敛：最终可变文本约 ${actualTokens} token，当前硬预算为 ${hardDynamicLimit} token。`
+    `上下文压缩未能收敛：最终可变文本约 ${actualTokens} token，当前硬预算为 ${hardDynamicLimit} token`
+    + `（固定指令与工具定义另约 ${fixedTokens} token）。`
     + '请缩短本轮超长文本，或改用上下文窗口更大的模型。',
   )
   error.code = 'CONTEXT_COMPACTION_DID_NOT_CONVERGE'
   error.estimatedTokens = actualTokens
+  error.fixedTokens = fixedTokens
   error.threshold = hardDynamicLimit
   if (prepared?.error) error.cause = new Error(prepared.error)
   throw error
+}
+
+function fixedContextBreakdown(prepared) {
+  return fixedContextTokens(prepared?.messages, prepared?.tools)
 }
 
 function unrecoverableContextError(cause, prepared, contextWindow, locale) {
@@ -146,8 +171,19 @@ function unrecoverableContextError(cause, prepared, contextWindow, locale) {
       + "Check that the provider's context-window configuration matches the model's supported limit, then shorten this turn's input or use a model with a larger context window."
     : `上下文恢复未能在保留指令和工具历史的前提下适配当前 ${contextWindow} token 的上下文窗口。`
       + '请确认服务提供商的上下文窗口配置与模型实际支持范围一致，并缩短本轮输入，或改用上下文窗口更大的模型。'
-  const error = new Error(message, { cause })
+  const fixedTokens = fixedContextBreakdown(prepared)
+  const window = Number(contextWindow)
+  const note = Number.isFinite(window) && window > 0 && fixedTokens >= window
+    // The unshrinkable part alone is over the window. We still had to find that
+    // out from the provider, because the configured window may be a local
+    // guess; saying so makes an otherwise puzzling failure actionable.
+    ? (normalizeTurnLocale(locale) === 'en'
+      ? ` Fixed instructions and tool definitions alone are about ${fixedTokens} tokens, which already exceeds this ${window}-token window; no amount of history compaction can make this request fit. Disable unused tools or skills, or use a model with a larger window.`
+      : `仅固定指令与工具定义就约 ${fixedTokens} token，已经超过当前 ${window} token 的窗口；无论怎么压缩历史都无法让这次请求装下。请减少启用的工具/技能，或改用上下文窗口更大的模型。`)
+    : ''
+  const error = new Error(message + note, { cause })
   error.code = 'CONTEXT_UNRECOVERABLE'
+  if (fixedTokens > 0) error.fixedTokens = fixedTokens
   if (prepared.errorCode) error.compactionErrorCode = prepared.errorCode
   if (prepared.error) error.compactionError = prepared.error
   return error
@@ -187,6 +223,8 @@ export async function callModelWithContextRecovery({
   let prepared
   let sourceMessages = messages
   let lastError = null
+  let previousIdentity = null
+  let suppressedAttempts = 0
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const restored = recoveryCheckpoint?.restorePrepared(attempt, sourceMessages, { contextWindow, activeContextTokens })
     if (attempt < resumeAttempt) {
@@ -217,7 +255,21 @@ export async function callModelWithContextRecovery({
     assertContextRecoveryActive(signal)
     const requestMessages = ephemeralSuffix.length
       ? [...prepared.messages, ...ephemeralSuffix] : prepared.messages
-    assertPreparedDynamicContextFits({ messages: requestMessages }, contextWindow, activeContextTokens)
+    assertPreparedDynamicContextFits(
+      { messages: requestMessages, tools }, contextWindow, activeContextTokens,
+    )
+    // A retry that would send the identical request cannot succeed where the
+    // previous one failed, so it is skipped instead of repeated. Later attempts
+    // are still tried: they compact more aggressively and may differ.
+    const identity = requestIdentity(requestMessages, tools)
+    if (attempt > 0 && identity === previousIdentity) {
+      suppressedAttempts += 1
+      logWarn('compaction.retry_skipped', new Error('identical request'), {
+        userId, sessionId, attempt,
+      })
+      continue
+    }
+    previousIdentity = identity
     try {
       const response = await callModel({ ...modelOptions, messages: requestMessages, tools, signal })
       assertContextRecoveryActive(signal)
@@ -237,5 +289,13 @@ export async function callModelWithContextRecovery({
       sourceMessages = canonicalContextMessages(prepared)
     }
   }
-  throw unrecoverableContextError(lastError, prepared, contextWindow, locale)
+  const error = unrecoverableContextError(lastError, prepared, contextWindow, locale)
+  if (suppressedAttempts > 0) {
+    error.noProgress = true
+    error.suppressedAttempts = suppressedAttempts
+    error.message += normalizeTurnLocale(locale) === 'en'
+      ? ` ${suppressedAttempts} retry attempt(s) would have re-sent an identical request and were skipped.`
+      : ` 有 ${suppressedAttempts} 次重试与上一次请求完全相同，已跳过，没有重复发送。`
+  }
+  throw error
 }

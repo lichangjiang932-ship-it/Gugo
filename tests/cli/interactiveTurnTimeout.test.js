@@ -50,6 +50,98 @@ function assertDisposed(io, runtimeSignal) {
   assert.equal(getEventListeners(runtimeSignal, 'abort').length, 0)
 }
 
+for (const scenario of ['bare_success', 'conflicting_final_events', 'completed_then_cancelled', 'completed_then_deadline_error']) {
+  test(`chat deadline diagnoses ${scenario} without confirming contradictory output`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const io = fixture(t)
+    let runtimeSignal
+    let calls = 0
+    await assert.rejects(io.run(async (input) => {
+      calls++
+      runtimeSignal = input.signal
+      const completed = { type: 'turn.completed', payload: { text: 'unconfirmed completion' } }
+      if (scenario !== 'bare_success') await input.onEvent(completed)
+      if (scenario === 'conflicting_final_events') await input.onEvent({ type: 'turn.failed', payload: { code: 'MODEL_REQUEST_RESULT_UNKNOWN' } })
+      t.mock.timers.tick(100)
+      if (scenario === 'completed_then_deadline_error') throw input.signal.reason
+      return scenario === 'completed_then_cancelled' ? { status: 'cancelled', exitCode: 1 }
+        : { status: 'completed', exitCode: 0, ...(scenario === 'conflicting_final_events' ? { lastEvent: completed } : {}) }
+    }), { code: scenario === 'bare_success' ? 'CLI_RUN_TERMINAL_MISSING' : 'CLI_RUN_OUTCOME_CONFLICT' })
+    assert.equal(calls, 1)
+    assert.equal(io.out.text(), '')
+    assert.doesNotMatch(io.err.text(), /preserving|\[turn timed out\]/u)
+    assertDisposed(io, runtimeSignal)
+  })
+}
+
+test('chat keeps a known unknown-result terminal over a later cooperative deadline exception', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const io = fixture(t)
+  const result = await io.run(async (input) => {
+    await input.onEvent({ type: 'turn.blocked', sessionId: 'persisted-session', payload: { code: 'MODEL_REQUEST_RESULT_UNKNOWN' } })
+    t.mock.timers.tick(100)
+    throw input.signal.reason
+  })
+  assert.equal(result.status, 'blocked')
+  assert.equal(io.state.sessionId, 'persisted-session')
+  assert.match(io.err.text(), /MODEL_REQUEST_RESULT_UNKNOWN/u)
+  assert.doesNotMatch(io.err.text(), /\[turn timed out\]/u)
+})
+
+test('chat preserves a returned completed terminal without requiring its callback to be replayed', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const io = fixture(t)
+  const result = await io.run(async () => {
+    t.mock.timers.tick(100)
+    return { status: 'completed', exitCode: 0, lastEvent: { type: 'turn.completed', payload: { text: 'persisted answer' } } }
+  })
+  assert.equal(result.status, 'completed')
+  assert.equal(io.out.text(), 'persisted answer\n')
+})
+
+test('chat does not hide an irreversible failure behind a returned paused outcome after deadline', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const io = fixture(t)
+  const result = await io.run(async (input) => {
+    await input.onEvent({ type: 'turn.failed', payload: { code: 'TURN_PERSISTENCE_FAILED' } })
+    t.mock.timers.tick(100)
+    return { status: 'paused', exitCode: 1, lastEvent: { type: 'turn.paused', payload: { code: 'TURN_PAUSED' } } }
+  })
+  assert.equal(result.status, 'failed')
+  assert.match(io.err.text(), /TURN_PERSISTENCE_FAILED/u)
+  assert.doesNotMatch(io.err.text(), /\[turn paused/u)
+})
+
+test('chat rejects a mismatched completed session without adopting its identity', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const io = fixture(t)
+  await assert.rejects(io.run(async (input) => {
+    await input.onEvent({ type: 'turn.completed', sessionId: 'timeout-session', payload: { text: 'wrong session result' } })
+    t.mock.timers.tick(100)
+    return { status: 'completed', exitCode: 0, sessionId: 'foreign-session' }
+  }), { code: 'CLI_RUN_OUTCOME_CONFLICT' })
+  assert.equal(io.state.sessionId, 'timeout-session')
+  assert.equal(io.out.text(), '')
+})
+
+test('chat retains exact persistence and aggregate errors after observed completion without falsely confirming text', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  for (const aggregate of [false, true]) {
+    const io = fixture(t)
+    let failure
+    await assert.rejects(io.run(async (input) => {
+      await input.onEvent({ type: 'turn.completed', payload: { text: 'must remain unconfirmed' } })
+      t.mock.timers.tick(100)
+      failure = aggregate
+        ? new AggregateError([input.signal.reason, new Error('shutdown failed')], 'execution and cleanup failed')
+        : Object.assign(new Error('persistence failed'), { code: 'TURN_PERSISTENCE_FAILED' })
+      throw failure
+    }), (error) => error === failure)
+    assert.equal(io.out.text(), '')
+    assert.doesNotMatch(io.err.text(), /preserving|\[turn timed out\]/u)
+  }
+})
+
 test('chat timeout aborts a slow turn only at its deadline and waits for cleanup', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const io = fixture(t)

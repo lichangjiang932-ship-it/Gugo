@@ -1,4 +1,7 @@
 import { hasKnownLanguageFileRepairIntent } from './knownLanguageFileRepairIntent.js'
+import { isToolFreeResponseRequest } from '../../shared/toolFreeResponseIntent.js'
+
+export { isToolFreeResponseRequest }
 
 export const TURN_INTENT_MODES = Object.freeze(['auto', 'answer', 'execute'])
 
@@ -15,6 +18,10 @@ export const STATUS_INQUIRY_PROMPT = new RegExp(
 )
 
 const TURN_INTENT_MODE_SET = new Set(TURN_INTENT_MODES)
+// A narrow file-directed imperative, not a general "harden/repair" keyword.
+// Questions, negations, quoted examples and targets without a file suffix do
+// not turn into work orders. Normal read-only and approval gates still apply.
+const DIRECT_FILE_MAINTENANCE_ORDER = /^(?:please\s+)?(?:harden|repair)\s+(`[^`\r\n]+`|"[^"\r\n]+"|'[^'\r\n]+'|[^\s"'`]+)(?=\s|$)/iu
 const NUMBERED_STEP_LINE = /^(?:\d+[.)\u3001]|step\s+\d+|\u6b65\u9aa4\s*[0-9\u4e00-\u5341]+)\s*/i
 const STEP_EXECUTION_ACTION = /\b(?:implement|integrate|execute|run|apply|fix|create|generate|build|write|save|export|install|enable|open|click|upload|download|delete|rename|move|copy|test|verify|check|update|refactor)\b|(?:\u5b9e\u73b0|\u96c6\u6210|\u63a5\u5165|\u542f\u7528|\u6267\u884c|\u8fd0\u884c|\u4fee\u6539|\u4fee\u590d|\u521b\u5efa|\u751f\u6210|\u6784\u5efa|\u5199\u5165|\u4fdd\u5b58|\u5bfc\u51fa|\u5b89\u88c5|\u6253\u5f00|\u70b9\u51fb|\u4e0a\u4f20|\u4e0b\u8f7d|\u6dfb\u52a0|\u589e\u52a0|\u53bb\u6389|\u79fb\u9664|\u5220\u9664|\u6302\u8f7d|\u5206\u914d|\u91cd\u547d\u540d|\u79fb\u52a8|\u590d\u5236|\u6d4b\u8bd5|\u9a8c\u8bc1|\u68c0\u67e5|\u66f4\u65b0|\u91cd\u6784)/i
 const DIRECT_EXECUTION_INTENT = /(?:\b(?:implement|execute|run|apply|fix|create|generate|build|write|save|export)\b|(?:\u5b9e\u73b0|\u6267\u884c|\u8fd0\u884c|\u4fee\u590d|\u521b\u5efa|\u751f\u6210|\u6784\u5efa|\u5199\u5165|\u4fdd\u5b58|\u5bfc\u51fa|\u4fee\u6539))(?:[\s\S]{0,160})(?:\b(?:file|page|app|project|script|document|artifact)\b|(?:\u6587\u4ef6|\u7f51\u9875|\u9875\u9762|\u5e94\u7528|\u9879\u76ee|\u811a\u672c|\u6587\u6863|\u4ea7\u7269))/i
@@ -128,6 +135,13 @@ function hasDirectInspectionExecutionIntent(text) {
   return INSPECTION_TARGET_REFERENCE.test(prompt) || FILE_TARGET_REFERENCE.test(prompt)
 }
 
+function hasDirectFileMaintenanceOrder(text) {
+  const order = DIRECT_FILE_MAINTENANCE_ORDER.exec(String(text || '').trim())
+  if (!order) return false
+  const target = order[1].replace(/^[`"']|[`"']$/g, '').replace(/[.!?,;]+$/u, '')
+  return hasFileTargetReference(target)
+}
+
 function hasFollowUpExecutionOrder(text) {
   // Keep positions intact, but never split a quoted example into work orders.
   const unquoted = text.replace(/```[\s\S]*?```|`[^`\r\n]*`|"[^"\r\n]*"|(?<![\p{L}\p{N}])'[^'\r\n]*'|“[^”\r\n]*”|‘[^’\r\n]*’|「[^」\r\n]*」/gu,
@@ -155,6 +169,7 @@ function hasFollowUpExecutionOrder(text) {
 }
 
 export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) {
+  if (isToolFreeResponseRequest(text)) return false
   const mode = normalizeTurnIntentMode(intentMode)
   if (mode === 'execute') return true
   if (mode === 'answer') return false
@@ -166,6 +181,7 @@ export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) 
   // Evaluate the original complete clause: stripping a prohibition first
   // must not turn a mixed/read-only request into an affirmative repair.
   if (hasKnownLanguageFileRepairIntent(prompt, hasFileTargetReference)) return true
+  if (hasDirectFileMaintenanceOrder(prompt)) return true
   // Mutation verbs inside an explicit prohibition are constraints, not work
   // orders. Strip only the negated clause so mixed prompts remain executable:
   // "do not edit A; create B" still retains the affirmative second clause.
@@ -211,7 +227,9 @@ export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) 
 }
 
 export function hasMutationExecutionIntent(text = '') {
+  if (isToolFreeResponseRequest(text)) return false
   if (hasKnownLanguageFileRepairIntent(text, hasFileTargetReference)) return true
+  if (hasDirectFileMaintenanceOrder(text)) return true
   // A verification-only follow-up often says "do not regenerate/write". The
   // mutation words inside that prohibition are constraints, not a fresh write
   // order. Clause boundaries keep mixed requests safe: "do not edit A; create
@@ -237,6 +255,7 @@ export function hasMutationExecutionIntent(text = '') {
 export function normalizeChatTurnIntentMode(value, text = '') {
   const mode = normalizeTurnIntentMode(value)
   if (mode !== 'execute') return mode
+  if (isToolFreeResponseRequest(text)) return 'auto'
   const prompt = String(text || '').trim()
   if (isTextDeliverableRequest(prompt)) return 'auto'
   if (shouldRequireExecution({ intentMode: 'auto', text: prompt })

@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import { Buffer } from 'node:buffer'
 
 import { isPlainObject, safeStringify, toolError } from './toolCallPrimitives.js'
 import { cloneProviderReplay, geminiReplayParts } from '../adapters/providerReplayState.js'
+import { measureToolJson, TOOL_ARGUMENT_LIMITS } from './toolSchemaBudget.js'
+import { validateToolSchemaArguments, validateToolSchemaDefinition } from './toolJsonSchema.js'
 
 function createCallId() {
   return `call-${randomUUID()}`
@@ -67,13 +70,14 @@ export function parseToolArguments(rawArguments) {
 
   if (isPlainObject(rawArguments)) {
     try {
+      measureToolJson(rawArguments)
       return { ok: true, args: rawArguments, argumentsText: JSON.stringify(rawArguments) }
     } catch (error) {
       return {
         ok: false,
         args: null,
         argumentsText: '{}',
-        error: toolError('invalid_tool_arguments', `工具参数无法序列化：${error?.message || String(error)}`),
+        error: toolError(error?.code || 'invalid_tool_arguments', '工具参数不是安全预算内可序列化的 JSON 对象。'),
       }
     }
   }
@@ -88,6 +92,10 @@ export function parseToolArguments(rawArguments) {
   }
 
   const text = rawArguments.trim() || '{}'
+  if (Buffer.byteLength(text, 'utf8') > TOOL_ARGUMENT_LIMITS.bytes) {
+    return { ok: false, args: null, argumentsText: '{}',
+      error: toolError('tool_arguments_budget_exceeded', '工具参数 JSON 超过安全大小限制。') }
+  }
   try {
     const parsed = JSON.parse(text)
     if (!isPlainObject(parsed)) {
@@ -98,10 +106,19 @@ export function parseToolArguments(rawArguments) {
         error: toolError('invalid_tool_arguments', '工具参数 JSON 的顶层必须是对象。'),
       }
     }
+    measureToolJson(parsed)
     return { ok: true, args: parsed, argumentsText: text }
   } catch (error) {
+    if (error?.code) {
+      return { ok: false, args: null, argumentsText: text,
+        error: toolError(error.code, '工具参数不是安全预算内的有限 JSON 对象。') }
+    }
     const repaired = repairTruncatedJsonObject(text)
     if (repaired) {
+      try { measureToolJson(repaired.args) } catch (failure) {
+        return { ok: false, args: null, argumentsText: text,
+          error: toolError(failure?.code || 'invalid_tool_arguments', '工具参数不是安全预算内的有限 JSON 对象。') }
+      }
       return {
         ok: true,
         args: repaired.args,
@@ -118,7 +135,7 @@ export function parseToolArguments(rawArguments) {
       argumentsText: text,
       error: toolError(
         'invalid_tool_arguments',
-        `工具参数不是有效 JSON：${error?.message || String(error)}`,
+        '工具参数不是有效 JSON。',
         { hint: '请修正 JSON 后重新调用该工具，不要重复发送相同参数。' },
       ),
     }
@@ -151,15 +168,8 @@ export function normalizeToolCalls(rawCalls, { idFactory = createCallId, toolSpe
   })
 }
 
-function cloneSchemaValue(value, depth = 0) {
-  if (depth > 12) return value
-  if (Array.isArray(value)) return value.map((item) => cloneSchemaValue(item, depth + 1))
-  if (isPlainObject(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, cloneSchemaValue(item, depth + 1)]),
-    )
-  }
-  return value
+function cloneSchemaValue(value) {
+  return structuredClone(value)
 }
 
 function applySchemaDefaults(value, schema, path = '$', depth = 0) {
@@ -191,7 +201,7 @@ function applySchemaDefaults(value, schema, path = '$', depth = 0) {
       )
       if (child.applied.length === 0) continue
       if (output === nextValue) output = { ...nextValue }
-      output[key] = child.value
+      Object.defineProperty(output, key, { value: child.value, enumerable: true, configurable: true, writable: true })
       applied.push(...child.applied)
     }
     nextValue = output
@@ -223,132 +233,18 @@ export function applyToolSchemaDefaults(call, toolSpecs = []) {
   if (!call || call.parseError || !isPlainObject(call.args)) return call
   const spec = toolSpecs.find((item) => item?.function?.name === call.name)
   if (!spec) return call
+  const schemaError = validateToolSchemaDefinition(spec.function?.parameters)
+  if (schemaError) return { ...call, parseError: schemaError }
   const result = applySchemaDefaults(call.args, spec.function?.parameters)
   if (result.applied.length === 0) return call
+  try { measureToolJson(result.value) } catch (error) {
+    return { ...call, parseError: toolError(error?.code || 'invalid_tool_arguments', '工具默认参数展开超过安全校验预算。') }
+  }
   return {
     ...call,
     args: result.value,
     argumentsText: safeStringify(result.value),
     argumentDefaults: result.applied,
-  }
-}
-
-function typeMatches(value, type) {
-  switch (type) {
-    case 'object': return isPlainObject(value)
-    case 'array': return Array.isArray(value)
-    case 'string': return typeof value === 'string'
-    case 'number': return typeof value === 'number' && Number.isFinite(value)
-    case 'integer': return Number.isInteger(value)
-    case 'boolean': return typeof value === 'boolean'
-    case 'null': return value === null
-    default: return true
-  }
-}
-
-function addSchemaIssue(issues, message) {
-  if (issues.length < 8) issues.push(message)
-}
-
-function validateSchema(value, schema, path, issues, depth = 0) {
-  if (!schema || typeof schema !== 'object' || issues.length >= 8 || depth > 12) return
-
-  if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
-    const matched = schema.anyOf.some((candidate) => {
-      const candidateIssues = []
-      validateSchema(value, candidate, path, candidateIssues, depth + 1)
-      return candidateIssues.length === 0
-    })
-    if (!matched) addSchemaIssue(issues, `${path} 不符合任一允许的参数形状`)
-  }
-
-  if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
-    const matched = schema.oneOf.some((candidate) => {
-      const candidateIssues = []
-      validateSchema(value, candidate, path, candidateIssues, depth + 1)
-      return candidateIssues.length === 0
-    })
-    if (!matched) addSchemaIssue(issues, `${path} 不符合任一允许的参数形状`)
-  }
-
-  if (schema.type && !typeMatches(value, schema.type)) {
-    addSchemaIssue(issues, `${path} 应为 ${schema.type}`)
-    return
-  }
-  if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
-    addSchemaIssue(issues, `${path} 必须是 ${schema.enum.join(' / ')} 之一`)
-    return
-  }
-
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    if (Number.isFinite(schema.minimum) && value < schema.minimum) {
-      addSchemaIssue(issues, `${path} 不能小于 ${schema.minimum}`)
-    }
-    if (Number.isFinite(schema.maximum) && value > schema.maximum) {
-      addSchemaIssue(issues, `${path} 不能大于 ${schema.maximum}`)
-    }
-    if (Number.isFinite(schema.exclusiveMinimum) && value <= schema.exclusiveMinimum) {
-      addSchemaIssue(issues, `${path} 必须大于 ${schema.exclusiveMinimum}`)
-    }
-    if (Number.isFinite(schema.exclusiveMaximum) && value >= schema.exclusiveMaximum) {
-      addSchemaIssue(issues, `${path} 必须小于 ${schema.exclusiveMaximum}`)
-    }
-  }
-
-  if (typeof value === 'string') {
-    if (Number.isInteger(schema.minLength) && value.length < schema.minLength) {
-      addSchemaIssue(issues, `${path} 长度不能小于 ${schema.minLength}`)
-    }
-    if (Number.isInteger(schema.maxLength) && value.length > schema.maxLength) {
-      addSchemaIssue(issues, `${path} 长度不能大于 ${schema.maxLength}`)
-    }
-    if (typeof schema.pattern === 'string') {
-      try {
-        if (!new RegExp(schema.pattern, 'u').test(value)) {
-          addSchemaIssue(issues, `${path} 不符合要求的格式`)
-        }
-      } catch {
-        addSchemaIssue(issues, `${path} 的 pattern 定义无效`)
-      }
-    }
-  }
-
-  if (Array.isArray(value)) {
-    if (Number.isInteger(schema.minItems) && value.length < schema.minItems) {
-      addSchemaIssue(issues, `${path} 至少需要 ${schema.minItems} 项`)
-    }
-    if (Number.isInteger(schema.maxItems) && value.length > schema.maxItems) {
-      addSchemaIssue(issues, `${path} 最多允许 ${schema.maxItems} 项`)
-    }
-  }
-
-  const objectSchema = schema.type === 'object'
-    || Array.isArray(schema.required)
-    || (schema.properties && typeof schema.properties === 'object')
-    || schema.additionalProperties === false
-  if (objectSchema && isPlainObject(value)) {
-    for (const key of schema.required || []) {
-      if (!Object.hasOwn(value, key)) addSchemaIssue(issues, `${path}.${key} 为必填参数`)
-    }
-    const properties = schema.properties && typeof schema.properties === 'object'
-      ? schema.properties
-      : {}
-    for (const [key, child] of Object.entries(properties)) {
-      if (Object.hasOwn(value, key)) {
-        validateSchema(value[key], child, `${path}.${key}`, issues, depth + 1)
-      }
-    }
-    if (schema.additionalProperties === false) {
-      for (const key of Object.keys(value)) {
-        if (!Object.hasOwn(properties, key)) {
-          addSchemaIssue(issues, `${path}.${key} 是未允许的额外参数`)
-        }
-      }
-    }
-  } else if (Array.isArray(value) && (schema.type === 'array' || schema.items)) {
-    value.slice(0, 200).forEach((item, index) => {
-      validateSchema(item, schema.items, `${path}[${index}]`, issues, depth + 1)
-    })
   }
 }
 
@@ -369,16 +265,7 @@ export function validateToolCall(call, toolSpecs = [], { allowUnknown = false } 
     )
   }
 
-  const issues = []
-  validateSchema(call.args, spec.function?.parameters, '$', issues)
-  if (issues.length > 0) {
-    return toolError(
-      'tool_arguments_validation_failed',
-      `工具参数校验失败：${issues.join('；')}`,
-      { issues, hint: '请按工具参数定义修正后重新调用。' },
-    )
-  }
-  return null
+  return validateToolSchemaArguments(call.args, spec.function?.parameters)
 }
 
 export function buildAssistantToolCallsMessage(calls, content = '', { reasoning = '', providerReplay: replayState = null } = {}) {

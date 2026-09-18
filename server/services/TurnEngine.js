@@ -13,8 +13,9 @@ import { listRuntimePluginStates } from './runtimePluginStateStore.js'
 import { resolveToolImplementationRevisions as resolveCurrentToolImplementationRevisions } from './toolImplementationRevision.js'
 import { getActiveRuntimePolicyProvenance } from '../core/runtimeCapabilityState.js'
 import { getLocalFileAccessStatus, resolveTurnProjectDirectory, withTurnProjectDirectory } from './localFileAccessService.js'
-import { logWarn, newTraceId, withLogContext } from '../utils/logger.js'
+import { logWarn, withLogContext } from '../utils/logger.js'
 import { createTurnEventEmitter, isTerminalTurnEventType } from './turnEventEmitter.js'
+import { traceIdForTurn } from './turnTraceSpans.js'
 import { createTurnModelRequestRunner } from './turnModelRequestRuntime.js'
 import { TurnEngineError } from './turnResolutionRuntime.js'
 import { createTurnStartRuntime, normalizeTurnModelMode as normalizeModelMode, normalizeTurnOptionalId as normalizeOptionalId } from './turnStartRuntime.js'
@@ -62,6 +63,8 @@ export class TurnEngine {
     readRuntimePolicyProvenance = getActiveRuntimePolicyProvenance,
     preparePromptContext = missingTurnPromptRuntime,
     prepareInlineSkills = prepareBoundInlineSkillsForPrompt,
+    prepareMemoryQueryVector = null,
+    indexMemoryEmbeddings = null,
     resolveCanaryAssignment = resolveEvolutionCanaryAssignment,
     recordCanaryOutcome = recordEvolutionCanaryOutcome,
     resolveToolSpecs = resolveTurnToolSpecs,
@@ -99,6 +102,7 @@ export class TurnEngine {
       readPreviousUserMessage: persistenceDeps.readPreviousUserMessage,
       writeMessage: persistenceDeps.writeMessage, idFactory, now, toolSpecs, directoryAuthorizationToolSpecs,
       readApprovalMode, runWithApprovalMode, readRuntimePolicyProvenance, preparePromptContext, prepareInlineSkills,
+      prepareMemoryQueryVector, indexMemoryEmbeddings,
       resolveCanaryAssignment, recordCanaryOutcome,
       resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
       getContextWindow, readFileAccessStatus, resolveProjectDirectory, runWithProjectDirectory,
@@ -353,10 +357,15 @@ export class TurnEngine {
     if (this.closing) throw new TurnEngineError('TURN_ENGINE_SHUTTING_DOWN', 'turn engine is shutting down', 503)
     // 一轮 turn 的关联上下文：userId/sessionId/turnId/traceId 沿异步链传递，
     // 期间模型代理、工具循环、压缩恢复等结构化日志都能按 turnId 串起来。
+    // traceId 必须与 `gugo trace --export otel` 导出的 span trace id 相同，
+    // 否则日志和 span 各说各话，同一个 turn 出现两个 id，无法跨进程对齐。
     const { userId, sessionId, turnId } = args || {}
     const resolvedTurnId = turnId || this.deps.idFactory()
+    const resolveTraceId = typeof this.deps.traceIdForTurn === 'function'
+      ? this.deps.traceIdForTurn
+      : traceIdForTurn
     return withLogContext(
-      { userId, sessionId, turnId: resolvedTurnId, traceId: newTraceId() },
+      { userId, sessionId, turnId: resolvedTurnId, traceId: resolveTraceId(resolvedTurnId) },
       () => this.#startTurnInner({ ...args, turnId: resolvedTurnId }),
     )
   }

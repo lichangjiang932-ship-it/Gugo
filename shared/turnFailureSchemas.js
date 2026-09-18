@@ -30,6 +30,19 @@ export const taskVerificationSchema = z.object({
   consecutiveFailures: z.number().int().min(0).max(5),
   checks: z.array(taskVerificationCheckSchema).min(1).max(64),
 }).strict()
+
+/**
+ * Read-only completion-policy diagnostic. It reports the policy id, how many
+ * attempts a turn used and whether the policy was exhausted. It never carries
+ * control authority and is bounded so a terminal event stays small.
+ */
+const completionPolicyEntrySchema = z.object({
+  id: z.string().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/u),
+  attempts: z.number().int().nonnegative().max(1_000_000),
+  limit: z.number().int().positive().max(1_000_000).nullable(),
+  exhausted: z.boolean(),
+}).strict()
+export const completionPoliciesSchema = z.array(completionPolicyEntrySchema).max(16).optional()
 export const turnFailureSchema = toolFailureSchema.extend({
   // New terminal projections are code-only. `message` and `hint` remain
   // optional solely so clients can replay events written by older runtimes.

@@ -44,7 +44,7 @@ export async function* readModelSseLines(reader, { onFirstByte, onChunk } = {}) 
           sawFirstChunk = true
           notifyObserver(onFirstByte)
         }
-        if (typeof onChunk === 'function') onChunk()
+        if (typeof onChunk === 'function') onChunk(value)
         buffer += decoder.decode(value, { stream: true })
       }
 

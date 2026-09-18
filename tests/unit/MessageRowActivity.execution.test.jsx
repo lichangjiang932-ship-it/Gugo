@@ -4,8 +4,217 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
+import { translateKey } from '../../src/i18n/translations.js'
 import MessageRow from '../../src/pages/ChatSplit/chatMessages/MessageRow.jsx'
 import { setupDom } from './helpers/messageRowActivityTestUtils.js'
+import { createTurnEvent } from '../../shared/turnEvents.js'
+import { dispatchTurnEvent } from '../../src/lib/turnClient/turnEventDispatch.js'
+import { reduceMessageState } from '../../src/store/reducers/messageReducer.js'
+
+const diagnosticFingerprint = 'a'.repeat(64)
+const contextDiagnosticFixture = {
+  version: 1, stage: 'pre_compaction', comparisonScope: 'within_turn',
+  stablePrefixFingerprint: diagnosticFingerprint, contextFingerprint: diagnosticFingerprint,
+  toolsFingerprint: diagnosticFingerprint, stableBlockCount: 1, messageCount: 3, toolCount: 2,
+  prefixComparable: false, stablePrefixChanged: null, toolsChanged: null,
+  memory: { failed: false, touchFailed: false, linkedCount: 2,
+    semantic: { code: 'MEMORY_SEMANTIC_SCAN_LIMIT', coverage: 'partial', truncated: true, scanned: 42 } },
+}
+const wireDiagnosticFixture = {
+  version: 1, stage: 'wire', comparisonScope: 'same_owner_endpoint_model_config', prefixKind: 'leading_instructions',
+  available: true, truncated: false, bodyBytes: 100, ownerScopeFingerprint: diagnosticFingerprint,
+  endpointFingerprint: diagnosticFingerprint, modelFingerprint: diagnosticFingerprint, configFingerprint: diagnosticFingerprint,
+  bodyFingerprint: diagnosticFingerprint, prefixFingerprint: diagnosticFingerprint, toolsFingerprint: diagnosticFingerprint,
+  identityComparable: true, prefixBlocks: 1, messageCount: 3, toolCount: 2,
+  prefixComparable: true, prefixChanged: false, toolsChanged: false, bodyChanged: true,
+}
+
+function diagnosticState() {
+  let state = { activeSessionId: 'diagnostic-session', sessions: [{ id: 'diagnostic-session', messages: [{
+    id: 'diagnostic-message', role: 'assistant', content: '', meta: { streaming: true, executionStarted: true },
+  }] }] }
+  return {
+    message: () => state.sessions[0].messages[0],
+    send: (type, payload, sequence, overrides = {}) => dispatchTurnEvent(createTurnEvent({
+      id: `diagnostic-event-${sequence}`, sessionId: 'diagnostic-session', turnId: 'diagnostic-turn',
+      sequence, createdAt: 1000 + sequence, type, payload, ...overrides,
+    }), { taskId: 'diagnostic-task', messageTarget: { sessionId: 'diagnostic-session', messageId: 'diagnostic-message' },
+      dispatch: (action) => { state = reduceMessageState(state, action) || state },
+    }),
+  }
+}
+
+for (const lang of ['zh', 'en']) {
+  test(`wire/context events survive real dispatch, reducer and localized execution details (${lang})`, async (t) => {
+    const dom = setupDom()
+    const element = document.getElementById('root')
+    const root = createRoot(element)
+    const state = diagnosticState()
+    const translate = (key, vars = {}) => translateKey(key, lang).replace(/\{(\w+)\}/g, (_, name) => vars[name])
+    const network = t.mock.method(globalThis, 'fetch', async () => { throw new Error('diagnostics must not make requests') })
+    const render = () => act(async () => root.render(<I18nProvider><MessageRow msg={state.message()}
+      rowKey="diagnostic-message" generatingMessageId={state.message().meta.streaming ? 'diagnostic-message' : ''}
+      lang={lang} t={translate} /></I18nProvider>))
+    try {
+      await state.send('turn.started', {}, 0)
+      assert.equal((await state.send('model.phase', { phase: 'context_prepared', contextDiagnostics: contextDiagnosticFixture }, 1)).cursorCommitted, true)
+      assert.equal((await state.send('model.phase', { phase: 'wire_prepared', wireDiagnostics: wireDiagnosticFixture,
+        modelRequestId: 'request-fixture', physicalAttempt: 2 }, 2)).cursorCommitted, true)
+      assert.deepEqual(state.message().meta.modelContextDiagnostics, contextDiagnosticFixture)
+      assert.deepEqual(state.message().meta.modelWireDiagnostics, wireDiagnosticFixture)
+      assert.equal(state.message().meta.modelRequestId, 'request-fixture')
+      assert.equal(state.message().meta.modelPhysicalAttempt, 2)
+      await state.send('model.phase', { phase: 'wire_prepared', wireDiagnostics: wireDiagnosticFixture,
+        modelRequestId: 'stale-request', physicalAttempt: 1 }, 1)
+      assert.equal(state.message().meta.modelRequestId, 'request-fixture', 'stale diagnostic cannot replace current request identity')
+      await render()
+      const live = element.querySelector('[data-testid="execution-diagnostics"]')
+      assert.ok(live)
+      assert.match(live.textContent, /request-fixture/u)
+      assert.match(live.textContent, /MEMORY_SEMANTIC_SCAN_LIMIT/u)
+      assert.match(live.textContent, lang === 'zh' ? /不是缓存命中证据/u : /not cache-hit evidence/u)
+      assert.match(live.textContent, lang === 'zh' ? /实际 KV.*未知/u : /Actual KV.*unknown/u)
+      await state.send('model.phase', { phase: 'completed', usage: { promptTokens: 100, cacheHitTokens: 20 } }, 3)
+      await state.send('turn.completed', { text: 'Final fixture answer' }, 4)
+      await render()
+      const toggle = element.querySelector('[data-testid="execution-toggle"]')
+      assert.ok(toggle, 'diagnostics remain available after a tool-free terminal')
+      await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+      const final = element.querySelector('[data-testid="execution-diagnostics"]')
+      assert.ok(final)
+      assert.match(final.textContent, lang === 'zh' ? /供应商报告.*20/u : /Provider-reported.*20/u)
+      assert.doesNotMatch(final.textContent, lang === 'zh' ? /实际 KV.*未知/u : /Actual KV.*unknown/u)
+      assert.equal(network.mock.callCount(), 0)
+    } finally { await act(async () => root.unmount()); dom.window.close() }
+  })
+}
+
+test('completion-policy exhaustion survives dispatch to execution details without widening terminal success', async () => {
+  const dom = setupDom()
+  const element = document.getElementById('root')
+  const root = createRoot(element)
+  const state = diagnosticState()
+  const policies = [{ id: 'mutation_verification', attempts: 2, limit: 2, exhausted: true }]
+  const t = (key, vars = {}) => translateKey(key, 'en').replace(/\{(\w+)\}/g, (_, name) => vars[name])
+  try {
+    await state.send('turn.started', {}, 0)
+    await state.send('turn.failed', { code: 'TURN_INCOMPLETE', incompleteReason: 'task_verification_repair_exhausted', completionPolicies: policies }, 1)
+    assert.equal(state.message().meta.failed, true)
+    assert.deepEqual(state.message().meta.serverFailure.completionPolicies, policies)
+    await act(async () => root.render(<I18nProvider><MessageRow msg={state.message()} rowKey="diagnostic-message"
+      generatingMessageId="" lang="en" t={t} /></I18nProvider>))
+    const toggle = element.querySelector('[data-testid="execution-toggle"]')
+    assert.ok(toggle)
+    await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.match(element.querySelector('[data-testid="execution-diagnostics"]').textContent, /mutation_verification.*2\/2/u)
+  } finally { await act(async () => root.unmount()); dom.window.close() }
+})
+
+test('manual retry clears prior request diagnostics and cache usage atomically without stale resurrection', async () => {
+  const state = diagnosticState()
+  await state.send('model.phase', { phase: 'context_prepared', contextDiagnostics: contextDiagnosticFixture }, 0)
+  await state.send('model.phase', { phase: 'wire_prepared', wireDiagnostics: wireDiagnosticFixture,
+    modelRequestId: 'old-request', physicalAttempt: 1 }, 1)
+  await state.send('model.phase', { phase: 'completed', usage: { promptTokens: 30, cacheHitTokens: 20 } }, 2)
+  assert.equal(state.message().meta.modelUsage.cacheHitTokens, 20)
+  await state.send('turn.attempt', { attempt: 2, reason: 'checkpoint_resume', resetStreaming: true,
+    checkpointSequence: 1, previousStreamSequence: 2, assistantText: '', reasoningText: '' }, 3)
+  for (const key of ['modelContextDiagnostics', 'modelWireDiagnostics', 'modelRequestId', 'modelPhysicalAttempt', 'modelUsage']) {
+    assert.equal(state.message().meta[key], null, key)
+  }
+  await state.send('model.phase', { phase: 'wire_prepared', wireDiagnostics: wireDiagnosticFixture,
+    modelRequestId: 'stale-request', physicalAttempt: 1 }, 1)
+  assert.equal(state.message().meta.modelRequestId, null)
+  assert.equal(state.message().meta.serverLastSequence, 3)
+})
+
+test('validated diagnostics remain visible on failed model calls without inventing tools for pre-execution failures', async () => {
+  const dom = setupDom()
+  const element = document.getElementById('root')
+  const root = createRoot(element)
+  const state = diagnosticState()
+  const t = (key, vars = {}) => translateKey(key, 'en').replace(/\{(\w+)\}/g, (_, name) => vars[name])
+  const render = (msg) => act(async () => root.render(<I18nProvider><MessageRow msg={msg} rowKey={msg.id}
+    generatingMessageId="" lang="en" t={t} /></I18nProvider>))
+  try {
+    await state.send('model.phase', { phase: 'context_prepared', contextDiagnostics: contextDiagnosticFixture }, 0)
+    await state.send('model.phase', { phase: 'wire_prepared', wireDiagnostics: wireDiagnosticFixture,
+      modelRequestId: 'failed-request', physicalAttempt: 1 }, 1)
+    await state.send('turn.failed', { code: 'MODEL_NOT_LOADED' }, 2)
+    await render(state.message())
+    const toggle = element.querySelector('[data-testid="execution-toggle"]')
+    assert.ok(toggle)
+    await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.match(element.querySelector('[data-testid="execution-diagnostics"]').textContent, /failed-request/u)
+    assert.equal(element.querySelector('.chat-tool-list'), null)
+    await render({ id: 'before-execution', role: 'assistant', content: '', meta: {
+      streaming: false, failed: true, executionStarted: false, serverFailure: { code: 'MODEL_CONFIG_MISSING' },
+    } })
+    assert.equal(element.querySelector('[data-testid="execution-toggle"]'), null)
+    assert.equal(element.querySelector('[data-testid="execution-diagnostics"]'), null)
+    assert.equal(element.querySelector('.chat-tool-list'), null)
+  } finally { await act(async () => root.unmount()); dom.window.close() }
+})
+
+test('restored diagnostic metadata cannot render arbitrary prompt or credential fields', async () => {
+  const dom = setupDom()
+  const element = document.getElementById('root')
+  const root = createRoot(element)
+  const t = (key) => translateKey(key, 'en')
+  try {
+    await act(async () => root.render(<I18nProvider><MessageRow rowKey="unsafe-diagnostics" generatingMessageId=""
+      lang="en" t={t} msg={{ id: 'unsafe-diagnostics', role: 'assistant', content: 'Result', meta: {
+        streaming: false, modelWireDiagnostics: { ...wireDiagnosticFixture, prompt: 'PRIVATE_PROMPT' },
+        modelContextDiagnostics: { ...contextDiagnosticFixture, credentials: 'PRIVATE_TOKEN' },
+      } }} /></I18nProvider>))
+    const toggle = element.querySelector('[data-testid="execution-toggle"]')
+    await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(element.querySelector('[data-testid="execution-diagnostics"]'), null)
+    assert.doesNotMatch(element.textContent, /PRIVATE_/u)
+  } finally { await act(async () => root.unmount()); dom.window.close() }
+})
+
+for (const lang of ['zh', 'en']) {
+  test(`collapsed execution adds localized results without changing the duration header (${lang})`, async () => {
+    const dom = setupDom()
+    const element = document.getElementById('root')
+    const root = createRoot(element)
+    const t = (key, vars = {}) => translateKey(key, lang).replace(/\{(\w+)\}/g, (_, name) => vars[name])
+    const toolCalls = [
+      { id: 'write', name: 'write_file', arguments: { path: 'src/a.js' }, status: 'success' },
+      { id: 'edit', name: 'edit_file', arguments: { path: 'src/a.js' }, status: 'success' },
+      { id: 'failed', name: 'read_file', arguments: { path: 'missing.js' }, status: 'error', error: 'missing' },
+    ]
+    const render = (streaming, calls = toolCalls) => act(async () => root.render(
+      <I18nProvider>
+        <MessageRow msg={{ id: 'summary', role: 'assistant', content: 'Result', meta: { streaming, latency: 2400, toolCalls: calls } }}
+          rowKey="summary" generatingMessageId={streaming ? 'summary' : ''} lang={lang} t={t} />
+      </I18nProvider>,
+    ))
+    try {
+      await render(true)
+      assert.equal(element.querySelector('[data-testid="execution-result-summary"]'), null)
+      await render(false)
+      const toggle = element.querySelector('[data-testid="execution-toggle"]')
+      assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+      const summary = element.querySelector('[data-testid="execution-result-summary"]')
+      assert.equal(summary.parentElement, toggle)
+      assert.equal(summary.textContent.trim(), lang === 'zh' ? '· 已改 1 个文件 · 1 个工具失败' : '· 1 file changed · Failed tools: 1')
+      assert.equal(element.querySelector('[data-testid="task-duration-header"]').textContent,
+        [t('chatMessages.execution'), t('chatMessages.durationSeconds', { seconds: 2 }), t('chatMessages.executionToolCount', { count: 3 })].join(' · '))
+      await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+      assert.equal(element.querySelector('[data-testid="execution-result-summary"]'), null)
+      await render(false)
+      assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+      await act(async () => toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+      await render(false, [{ id: 'read', name: 'read_file', arguments: {}, status: 'success' }])
+      assert.equal(element.querySelector('[data-testid="execution-result-summary"]'), null)
+    } finally {
+      await act(async () => root.unmount())
+      dom.window.close()
+    }
+  })
+}
 
 test('tool readiness is visible without a tool card and yields to the single durable tool call', async () => {
   const dom = setupDom()

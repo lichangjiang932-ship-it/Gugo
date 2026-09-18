@@ -1,3 +1,5 @@
+import { resolveMaxIters } from '../services/loop/heuristics/constants.js'
+
 import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 
 export const MODEL_BUDGET_LIMIT_TYPES = Object.freeze({
@@ -39,12 +41,19 @@ function envLimit(env, name, fallback) {
 export function resolveJobBudgetDefaults(env = process.env) {
   const rawToolCalls = envLimit(env, 'JOB_MAX_TOOL_CALLS', 2000)
   const rawWallMs = envLimit(env, 'JOB_MAX_WALL_MS', 6 * 60 * 60 * 1000)
+  // The iteration cap and the model-call budget bound the same loop, one model
+  // call per iteration. Untuned they are both 2000, so raising GUGO_MAX_ITERS
+  // alone would leave the budget as the real limit and the turn would stop as
+  // `execution_budget_exhausted` — surprising, because the documented knob
+  // appeared to have room. Keep the default coherent; an explicit
+  // JOB_MAX_MODEL_CALLS still wins.
+  const maxModelCallsDefault = Math.max(2000, resolveMaxIters(env))
   return {
     maxTotalCalls: rawToolCalls > 0
       ? Math.floor(rawToolCalls)
       : 2000,
     maxWallMs: Math.floor(rawWallMs),
-    maxModelCalls: envLimit(env, 'JOB_MAX_MODEL_CALLS', 2000),
+    maxModelCalls: envLimit(env, 'JOB_MAX_MODEL_CALLS', maxModelCallsDefault),
     maxModelTokens: envLimit(env, 'JOB_MAX_MODEL_TOKENS', 0),
   }
 }

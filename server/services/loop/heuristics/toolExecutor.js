@@ -10,6 +10,7 @@ import { dispatchGitTool } from '../../../adapters/gitWorkbench.js'
 import { dispatchImageTool } from '../../../adapters/imageTools.js'
 import { dispatchMediaTool } from '../../../adapters/mediaTools.js'
 import { dispatchMemoryTool } from '../../../utils/memoryTools.js'
+import { GOAL_TOOL_NAMES, dispatchGoalTool } from '../../../utils/goalTools.js'
 import { dispatchSkillResourceTool, SKILL_RESOURCE_TOOL_NAME } from '../../../utils/skillResourceTools.js'
 import { dispatchPdfTool } from '../../../adapters/pdfTools.js'
 import { executeBrowserTool } from '../../browserToolExecutor.js'
@@ -322,6 +323,11 @@ async function executeAgentOrExternalTool(context, registeredTool) {
     userId: job?.userId || null,
     agentId: job?.agentId || null,
     sessionId: job?.sessionId || null,
+  })
+  if (GOAL_TOOL_NAMES.includes(name)) return dispatchGoalTool(name, args || {}, {
+    userId: job?.userId || null,
+    sessionId: job?.sessionId || null,
+    turnId: job?.id || null,
   })
   if (['reflect', 'request_clarification', 'request_directory', 'sleep_until'].includes(name)) {
     try {

@@ -1,5 +1,8 @@
-import { normalizeChatTurnIntentMode } from '../../utils/executionIntent.js'
+import { isToolFreeResponseRequest, normalizeChatTurnIntentMode } from '../../utils/executionIntent.js'
+import { restoreCompletionPolicyState } from './completionPolicy.js'
+import { initializeGoalToolVisibility } from './runtime-initializeGoalTools.js'
 import { userMessageText } from './userMessageText.js'
+import { getSubagentExecutionPolicy } from '../subagentExecutionPolicy.js'
 
 function initializeArtifactContracts(s) {
   const {
@@ -14,6 +17,10 @@ function initializeArtifactContracts(s) {
   s.restoredState = s.restored?.state && typeof s.restored.state === 'object'
     ? s.restored.state
     : s.restored && typeof s.restored === 'object' ? s.restored : null
+  // One versioned restore for every completion-policy counter. Legacy
+  // checkpoints (no version) upgrade with explicit zero defaults; an unknown
+  // future version fails closed instead of silently resetting retry counts.
+  s.completionPolicyState = restoreCompletionPolicyState(s.restoredState?.completionGuards)
   s.successfulExpectedPathWriteObserved = Boolean(
     s.restoredState?.completionGuards?.successfulExpectedPathWriteObserved,
   )
@@ -79,6 +86,8 @@ function initializeArtifactContracts(s) {
       : new Set(restoredAuthorized)
     s.authorizedArtifactTools.clear()
     s.expectedArtifactTools.clear()
+    s.skillArtifactTools.clear()
+    s.requestedArtifactTools.clear()
     for (const name of restoredAuthorized) s.authorizedArtifactTools.add(name)
     for (const name of restoredRequired) {
       if (s.artifactDeliveryStep && restoredAuthorized.has(name)) s.expectedArtifactTools.add(name)
@@ -156,7 +165,8 @@ function initializeExecutionIntent(s) {
   if (s.job?.origin === 'chat') {
     s.intentMode = normalizeChatTurnIntentMode(s.intentMode, s.executionIntentText)
   }
-  s.explicitReadOnlyConstraint = hasEffectiveReadOnlyBoundary(
+  const inheritedPolicy = getSubagentExecutionPolicy(s.approvalContext, { userId: s.job?.userId || null })
+  s.explicitReadOnlyConstraint = inheritedPolicy?.readOnly === true || hasEffectiveReadOnlyBoundary(
     s.executionIntentText,
     s.previousUserPrompt,
   )
@@ -444,11 +454,25 @@ function installCapabilityDecision(s) {
 }
 
 export async function initializeArtifacts(s) {
+  s.explicitToolFree = isToolFreeResponseRequest(userMessageText(s.job?.userPrompt)
+    || s.currentUserText || userMessageText(s.job?.prompt))
   initializeArtifactContracts(s)
+  if (s.explicitToolFree) {
+    s.authorizedArtifactTools.clear()
+    s.expectedArtifactTools.clear()
+    s.stepArtifactTools.clear()
+    s.requiresPersistedArtifact = false
+    s.revisesAdjacentArtifact = false
+  }
   initializeArtifactToolVisibility(s)
   initializeExecutionIntent(s)
   restoreDynamicSkills(s)
   restoreDynamicExecutionTools(s)
+  initializeGoalToolVisibility(s)
+  if (s.explicitToolFree) {
+    s.activeToolSpecs = []
+    s.availableVerificationToolNames = []
+  }
   installCapabilityDecision(s)
   return { kind: 'next' }
 }

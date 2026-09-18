@@ -2,8 +2,10 @@
 import { z } from 'zod'
 import { modelProviderStopDiagnostic } from './modelProviderStopDiagnostic.js'
 import { MODEL_PHASE_PROGRESS_FIELDS } from './modelPhaseProgress.js'
+import { modelContextDiagnosticsSchema } from './modelContextDiagnostics.js'
+import { modelWireDiagnosticsSchema } from './modelWireDiagnostics.js'
 import { toolFailureSchema, terminalReasonSchema, terminalNextActionSchema,
-  taskVerificationSchema, turnFailureSchema } from './turnFailureSchemas.js'
+  completionPoliciesSchema, taskVerificationSchema, turnFailureSchema } from './turnFailureSchemas.js'
 import {
   INLINE_SKILL_DEFINITION_LIMITS,
   unicodeCharacterLength,
@@ -162,6 +164,10 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     ...MODEL_PHASE_PROGRESS_FIELDS,
     phase: z.string(), iteration: z.number().int().nonnegative().optional(),
     usage: jsonRecord.nullable().optional(), modelName: nullableText, error: nullableText,
+    contextDiagnostics: modelContextDiagnosticsSchema.optional(),
+    wireDiagnostics: modelWireDiagnosticsSchema.optional(),
+    modelRequestId: z.string().regex(/^[A-Za-z0-9._:-]{1,200}$/u).optional(),
+    physicalAttempt: z.number().int().positive().optional(),
   }).strict(),
   'model.failover': z.object({
     kind: z.enum(['retry', 'failover']),
@@ -240,6 +246,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
     taskVerification: taskVerificationSchema.optional(),
+    completionPolicies: completionPoliciesSchema,
     retryable: z.boolean(),
     text: z.string().optional(),
     partialText: z.string().optional(),
@@ -262,6 +269,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
     taskVerification: taskVerificationSchema.optional(),
+    completionPolicies: completionPoliciesSchema,
     partialText: z.string().optional(),
     retryable: z.literal(false),
     manualRetryable: z.literal(true),
@@ -360,6 +368,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     nextAction: terminalNextActionSchema.optional(),
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+    completionPolicies: completionPoliciesSchema,
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
@@ -391,6 +400,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     turnModelUsage: jsonRecord.nullable().optional(),
     estimatedPromptTokens: z.number().int().nonnegative().optional(),
     paused: z.boolean().optional(), clarification: z.unknown().nullable().optional(), interrupted: z.boolean().optional(),
+    completionPolicies: completionPoliciesSchema,
   }).strict(),
   'turn.cancelled': z.object({
     // `reason` is retained for persisted legacy events. Public projections
@@ -400,6 +410,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     nextAction: terminalNextActionSchema.optional(),
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
+    completionPolicies: completionPoliciesSchema,
     partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
@@ -420,6 +431,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     incompleteReason: z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u).optional(),
     missingRequirements: z.array(z.string().min(1).max(96).regex(/^[a-z][a-z0-9_]*$/u)).max(16).optional(),
     taskVerification: taskVerificationSchema.optional(),
+    completionPolicies: completionPoliciesSchema,
     partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),

@@ -17,26 +17,17 @@ import { listUserToolSpecs } from '../mcp/mcpManager.js'
 import { listRegisteredBrowserToolSpecs } from './browserTools.js'
 import { listAllSpecs } from './toolRegistry.js'
 import { projectToolSpecsForRuntimePolicy } from './turnToolSpecs.js'
-import { allowedArtifactTools, isExplicitCodeSnippetRequest } from './artifactIntent.js'
-import { ensureSafetySystemMessages } from './promptCompiler.js'
-import { injectJobPromptContext, resolveJobSkillContext } from './jobPromptContext.js'
-import {
-  buildArtifactPrompt,
-  buildCitationPrompt,
-  buildCodeWorkflowPrompt,
-  buildDelayedFollowupPrompt,
-} from './jobPromptBlocks.js'
+import { allowedArtifactTools } from './artifactIntent.js'
+import { buildJobStepPromptMessages, resolveJobSkillContext } from './jobPromptContext.js'
+import { assertPromptContextActive } from './backgroundMemoryQuery.js'
 import {
   buildFinalOutput,
   buildPlanningBrief,
-  buildPriorStepsContext,
-  buildVerificationPrompt,
   shouldCompileDocx,
 } from './jobWorkflow.js'
 import { buildTextStepResult, buildToolStepResult } from './jobAcceptanceRuntime.js'
 import { createTaskReviewer } from './taskReviewer.js'
 import { createJobRuntimeCore } from './runtimeCore.js'
-import { getDefaultOutputDirectory, getProjectDirectory } from './localFileAccessService.js'
 import { markJobAwaitingApproval, markJobRunningAgain } from './jobRuntimeLifecycle.js'
 import { readJobModelRequestRecoveryResolution } from './jobModelRequestRecoveryService.js'
 import { buildUserModelEnv } from './modelProviderStore.js'
@@ -140,10 +131,10 @@ async function executeJobToolStep({
   runtimeCore,
   commitCheckpoint,
   evaluateCurrentStep,
+  checkpointContext,
+  promptContext,
 }) {
-  const checkpointEnabled = !!(
-    job?.id && job?.userId && step?.id && getJobRow(job.id, { userId: job.userId })
-  )
+  const checkpointEnabled = checkpointContext.enabled
   const loopModel = createJobLoopModelBridge({
     job, step, selectedModel, modelEnv, runModelWithTools,
     readModelRequestResolution, reconcileModelRequest,
@@ -164,7 +155,7 @@ async function executeJobToolStep({
     releaseSteering,
     loadCheckpoint: checkpointEnabled
       ? async () => filterLiveJobDirectoryAuthorizationCheckpoint(
-          await runtimeCore.checkpoint.load({ jobId: job.id, stepId: step.id, userId: job.userId }),
+          checkpointContext.loaded,
           { userId: job.userId },
         )
       : null,
@@ -172,7 +163,9 @@ async function executeJobToolStep({
       ? (state, metadata = {}) => {
           const save = () => runtimeCore.checkpoint.save(
             { jobId: job.id, stepId: step.id, userId: job.userId },
-            state,
+            { ...state, promptContext: {
+              memoryIds: promptContext.memoryIds || [], memoryDiagnostics: promptContext.memoryDiagnostics || null,
+            } },
             { checkpointWriteSequence: metadata.checkpointWriteSequence },
           )
           return typeof commitCheckpoint === 'function' ? commitCheckpoint(save) : save()
@@ -243,61 +236,26 @@ export function createDefaultExecuteStep({
       })
     }
 
-    const { skillId, userPrompt, skill } = resolveJobSkillContext({ prompt: job.prompt, userId: job.userId })
-    const messages = ensureSafetySystemMessages([])
+    assertPromptContextActive(signal)
+    modelEnv = Object.freeze({ ...(modelEnv || buildUserModelEnv({ userId: job.userId })) })
+    const checkpointEnabled = !!(enableServerTools && job?.id && job?.userId && step?.id
+      && getJobRow(job.id, { userId: job.userId }))
+    const loadedCheckpoint = checkpointEnabled
+      ? await runtimeCore.checkpoint.load({ jobId: job.id, stepId: step.id, userId: job.userId }) : null
 
-    // ★ 产物意图决定提示词分支(2026-07-31 事故修复)。
-    //   以前这段提示词无条件注入 —— 修 bug 的任务里也常驻 7 条「PPT 必守规则」
-    //   外加一句「不要把内容写成纯文本回答」,等于在推模型把中期汇报做成 PPT。
-    //   现在:用户没要文件,就一个字都不提文件工具;要了哪种,才注入哪种的规则。
+    const { skillId, userPrompt, skill } = resolveJobSkillContext({ prompt: job.prompt, userId: job.userId })
     const { artifactTools, jobToolSpecs } = await resolveJobToolCatalog({
       enableServerTools,
       job,
       skillId,
     })
-    let outputDirectoryContext = {}
-    try {
-      outputDirectoryContext = {
-        defaultOutputDirectory: getDefaultOutputDirectory({ userId: job.userId }),
-        projectDirectory: getProjectDirectory({ userId: job.userId }),
-      }
-    } catch {
-      // Optional prompt context must not block job execution.
-    }
+    const { messages, finalPrompt, promptContext } = await buildJobStepPromptMessages({
+      job, step, skill, skillId, userPrompt, artifactTools, enableServerTools,
+      preparePromptContext, modelEnv, signal, loadedCheckpoint,
+    })
 
     if (enableServerTools) {
-      // 提示词分支和工具集裁剪必须用同一份判定(见 toolLoopRuntime 里的注释),
-      // 这里按顺序注入:产物规则 → 代码工作流 → 引用/链接引导 → 延迟唤醒。
-      messages.push({
-        role: 'system',
-        content: buildArtifactPrompt(artifactTools, {
-          codeSnippetRequested: isExplicitCodeSnippetRequest(userPrompt || job.prompt),
-          ...outputDirectoryContext,
-        }),
-      })
-      messages.push({ role: 'system', content: buildCodeWorkflowPrompt() })
-      messages.push({ role: 'system', content: buildCitationPrompt() })
-      messages.push({ role: 'system', content: buildDelayedFollowupPrompt() })
-    }
-    const promptSuffix = step.kind === 'batch_item'
-      ? `\n\n这是批量任务中的第 ${step.input?.index || 1} / ${step.input?.total || 1} 项,请只完成这一项。`
-      : ''
-
-    // ★ Harness: 把已完成步骤的结论带进本步上下文。
-    // 以前每一步都是从 job.prompt 重新起一个 zero-shot 调用 —— 上一步的
-    // 工具循环结论在步骤边界就丢了,模型看不到自己刚做过什么,
-    // 多步任务实际退化成 N 个互不相干的单步任务。这是任务成功率的最大杀手。
-    const priorContext = buildPriorStepsContext(job.steps || [], step.id)
-    if (priorContext) messages.push({ role: 'system', content: priorContext })
-
-    const finalPrompt = step.kind === 'verify'
-      ? buildVerificationPrompt(job, step)
-      : `${userPrompt || job.prompt}${promptSuffix}`
-    injectJobPromptContext({ messages, job, skill, skillId, query: finalPrompt, preparePromptContext })
-    messages.push({ role: 'user', content: finalPrompt })
-
-    if (enableServerTools) {
-      return executeJobToolStep({
+      const result = await executeJobToolStep({
         job,
         step,
         messages,
@@ -314,7 +272,10 @@ export function createDefaultExecuteStep({
         runtimeCore,
         commitCheckpoint,
         evaluateCurrentStep,
+        checkpointContext: { enabled: checkpointEnabled, loaded: loadedCheckpoint },
+        promptContext,
       })
+      return withPromptContextDiagnostics(result, promptContext)
     }
 
     // 兼容路径:enableServerTools=false 时退回纯文本(老行为)
@@ -329,6 +290,13 @@ export function createDefaultExecuteStep({
       modelName: selectedModel,
       modelEnv,
     })
-    return buildTextStepResult({ job, step, text, taskEvaluator: evaluateCurrentStep })
+    const result = await buildTextStepResult({ job, step, text, taskEvaluator: evaluateCurrentStep })
+    return withPromptContextDiagnostics(result, promptContext)
   }
+}
+
+function withPromptContextDiagnostics(result, context) {
+  return { ...result, output: { ...result.output, promptContext: {
+    memoryIds: context.memoryIds || [], memoryDiagnostics: context.memoryDiagnostics || null,
+  } } }
 }

@@ -14,7 +14,73 @@ const {
   listUnfinishedTurnExecutions,
 } = await import('../server/services/turnExecutionLeaseStore.js')
 const { TurnRecoveryRuntime } = await import('../server/services/turnRecoveryRuntime.js')
+const { modelInterruptionRecoveryState } = await import('../server/services/turnResumeRuntime.js')
 const { SQLITE_TURN_PERSISTENCE_ADAPTER } = await import('../server/adapters/sqliteTurnPersistenceAdapter.js')
+
+function interruptionEvents(entries) {
+  return entries.map(([type, payload], sequence) => createTurnEvent({
+    id: `interruption-${sequence}`, userId: 'u', sessionId: 's', turnId: 't', sequence, type, payload,
+  }))
+}
+
+const interrupted = ['turn.interrupted', { code: 'MODEL_STREAM_INTERRUPTED', retryable: true }]
+const completedRead = (toolCallId, result = { ok: true, content: 'same contents' }, extra = {}) =>
+  ['tool.completed', { toolCallId, name: 'read_file', args: { path: '/project/a.txt' }, result, ...extra }]
+
+for (const [label, activity] of [
+  ['assistant text', ['assistant.delta', { text: 'I completed the task.' }]],
+  ['reasoning text', ['reasoning.delta', { text: 'Working on it.' }]],
+  ['missing result', ['tool.completed', { toolCallId: 'missing', name: 'read_file' }]],
+  ...[null, false, 'success', {}, { content: 'done' }, { ok: false },
+    { ok: true, error: 'failed' }, { ok: true, isError: true }, { ok: true, exitCode: 1 },
+    { ok: true, exitCode: null }, { ok: true, requiresUserVerification: true },
+    { ok: true, status: 'unknown' }, { ok: true, status: 'running' },
+    { ok: true, cancelled: true }, { ok: true, paused: true }, { ok: true, dryRun: true },
+    { ok: true, incomplete: true }].map((result) => [JSON.stringify(result), completedRead('bad', result)]),
+  ['outer failure', completedRead('bad', { ok: true }, { error: { code: 'FAILED', message: 'failed', retryable: false } })],
+  ['control work', completedRead('control', { ok: true }, { name: 'manage_todos' })],
+  ['missing identity', ['tool.completed', { name: 'read_file', result: { ok: true } }]],
+]) {
+  test(`interruption recovery does not reset for ${label}`, () => {
+    const events = interruptionEvents([interrupted, activity, interrupted, activity, interrupted])
+    const state = modelInterruptionRecoveryState(events, 3)
+    assert.deepEqual(state, { attempts: 3, limit: 3, exhausted: true, causeCode: 'MODEL_STREAM_INTERRUPTED' })
+  })
+}
+
+test('new successful completed work resets the interruption budget without granting task completion', () => {
+  for (const result of [{ ok: true, content: 'new content' }, { ok: true, exitCode: 0, stdout: 'passed' }]) {
+    const events = interruptionEvents([interrupted, interrupted, completedRead('new', result)])
+    assert.equal(modelInterruptionRecoveryState(events, 3).attempts, 0)
+    assert.equal(modelInterruptionRecoveryState([...events, ...interruptionEvents([interrupted])
+      .map((event) => ({ ...event, sequence: events.length }))], 3).attempts, 1)
+  }
+})
+
+test('replayed call identities and unchanged results under new call IDs cannot renew recovery', () => {
+  for (const repeated of [completedRead('first', { ok: true, content: 'changed but replayed ID' }),
+    completedRead('second'), completedRead('second', { content: 'same contents', ok: true }),
+    completedRead('second', { ok: true, content: 'same contents', durationMs: 19, updatedAt: 123 })]) {
+    const events = interruptionEvents([completedRead('first'), interrupted, repeated, interrupted, repeated, interrupted])
+    assert.equal(modelInterruptionRecoveryState(events.toReversed(), 3).exhausted, true)
+  }
+})
+
+test('new results and distinct executed targets reset recovery but prior successes remain seen', () => {
+  const initial = [completedRead('first'), interrupted, completedRead('second', { ok: true, content: 'changed' })]
+  assert.equal(modelInterruptionRecoveryState(interruptionEvents(initial), 3).attempts, 0)
+  const repeated = [...initial, interrupted, completedRead('third', { ok: true, content: 'changed' }), interrupted]
+  assert.equal(modelInterruptionRecoveryState(interruptionEvents(repeated), 2).exhausted, true)
+  const target = completedRead('fourth', { ok: true, content: 'changed' }, { args: { path: '/project/b.txt' } })
+  assert.equal(modelInterruptionRecoveryState(interruptionEvents([...repeated, target]), 2).attempts, 0)
+})
+
+test('explicit dead-letter boundary reopens attempts without forgetting old completed work', () => {
+  const entries = [completedRead('first'), interrupted, interrupted,
+    ['turn.blocked', { code: 'TURN_MODEL_RECOVERY_EXHAUSTED', retryable: false,
+      manualRetryable: true, recoveryStatus: 'dead_letter' }], interrupted, completedRead('again')]
+  assert.equal(modelInterruptionRecoveryState(interruptionEvents(entries), 2).attempts, 1)
+})
 
 const sqliteRecovery = SQLITE_TURN_PERSISTENCE_ADAPTER.recovery
 const explicitSqliteRecoveryDependencies = Object.freeze({

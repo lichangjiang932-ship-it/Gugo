@@ -170,13 +170,12 @@ export default function ChatSplitView({
             toolSpecs: contextToolSpecs,
             systemPrompt: contextSystemPrompt,
             approvalMode,
-            onOpenTasks: onInlineTasks,
-            onOpenContext: onInlineContext,
+            onOpenTasks: onInlineTasks, onOpenContext: onInlineContext,
           }}
           todos={activeSession?.todos || []}
+          sessionId={activeSessionId || ''}
           onGoalsChange={onGoalsChange}
-          onSubmitFeedback={onSubmitFeedback}
-          onManageMcp={onManageMcp}
+          onSubmitFeedback={onSubmitFeedback} onManageMcp={onManageMcp}
         />
         {directoryApproval.open && (
           <DirectoryApprovalModal

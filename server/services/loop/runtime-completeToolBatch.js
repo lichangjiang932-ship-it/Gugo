@@ -35,7 +35,7 @@ async function initializeToolBatch(s, i) {
     return isCommandExecutionTool(call) || metadata.isReadOnly !== true
   }
   i.shouldStopBatch = () => Boolean(
-    i.noProgressReason || i.budgetExceeded || i.pausedByClarification,
+    i.noProgressReason || i.budgetExceeded || i.pausedByClarification || i.goalPlanBlocked || i.toolStop,
   )
   i.skipRemainingCalls = async (startIndex) => {
     for (const skipped of i.toolCalls.slice(startIndex)) {
@@ -43,13 +43,19 @@ async function initializeToolBatch(s, i) {
       const skippedResult = {
         ok: false,
         code: 'tool_execution_skipped',
-        error: i.noProgressReason || i.budgetExceeded
+        error: i.toolStop?.error || i.goalPlanBlocked?.error || i.noProgressReason || i.budgetExceeded
           || (s.locale === 'zh' ? '当前轮已暂停' : 'The current round was paused.'),
         retryable: false,
+        executed: false,
       }
       s.convo.push(buildToolResultMessage(skipped, skippedResult))
       Object.assign(skipped, { checkpointStatus: 'completed', checkpointResult: skippedResult })
       recordToolProgress(s.progressState, { call: skipped, succeeded: false })
+      await s.persistTurn()
+      if (typeof s.onToolCompleted === 'function') {
+        await s.onToolCompleted({ call: skipped, executionArgs: skipped.args, result: skippedResult,
+          artifactId: null, artifactIds: [], artifacts: [] })
+      }
     }
     await s.persistTurn()
   }
@@ -89,7 +95,7 @@ async function initializeToolBatch(s, i) {
   i.batchSupersededBySteering = false
   i.firstPendingCallIndex = i.toolCalls.findIndex((call) => call.checkpointStatus !== 'completed')
   i.firstPendingCall = i.firstPendingCallIndex >= 0 ? i.toolCalls[i.firstPendingCallIndex] : null
-  if (i.modelMutationBatchScheduled
+  if (!i.shouldStopBatch() && i.modelMutationBatchScheduled
     && i.requiresPreExecutionSteeringCheck(i.firstPendingCall)
     && await i.claimSteeringAtToolBoundary(i.firstPendingCallIndex)) {
     i.batchSupersededBySteering = true
@@ -110,6 +116,10 @@ export async function completeToolBatch(s) {
   } = s.d
   await initializeToolBatch(s, i)
   while (!i.batchSupersededBySteering && i.callIndex < i.toolCalls.length) {
+        if (i.toolStop || i.goalPlanBlocked) {
+          await i.skipRemainingCalls(i.callIndex)
+          break
+        }
         const call = i.toolCalls[i.callIndex]
         if (call.checkpointStatus === 'completed') {
           i.callIndex += 1
@@ -125,9 +135,15 @@ export async function completeToolBatch(s) {
             readSegment.push(candidate)
             segmentEnd += 1
           }
-          const outcomes = await mapWithConcurrency(
+          const completed = new Array(readSegment.length)
+          let batchFailed = false
+          let batchError
+          await mapWithConcurrency(
             readSegment,
-            (candidate) => i.executeOne(candidate, { durableExecution: false }),
+            async (candidate, index) => {
+              completed[index] = await i.executeOne(candidate, { durableExecution: false })
+              return completed[index]
+            },
             {
               concurrency: readSegment.reduce((limit, candidate) => {
                 const declared = getToolMetadata(candidate.name, {
@@ -137,9 +153,11 @@ export async function completeToolBatch(s) {
                 return Number.isInteger(declared) ? Math.min(limit, declared) : limit
               }, JOB_READ_CONCURRENCY),
             },
-          )
+          ).catch((error) => { batchFailed = true; batchError = error })
+          const outcomes = completed.filter((outcome) => outcome !== undefined)
           const hardNoProgressOutcome = outcomes.find((outcome) => outcome.noProgressReason) || null
           for (const outcome of outcomes) await i.recordOutcome(outcome)
+          if (batchFailed) throw batchError
           // A later successful candidate proves progress after ordinary read
           // failures. It must not, however, erase a pre-execution hard fuse such
           // as the third identical call in the same segment.
@@ -158,12 +176,12 @@ export async function completeToolBatch(s) {
           i.callIndex += 1
         }
 
-        if (await i.claimSteeringAtToolBoundary(i.callIndex)) {
-          i.batchSupersededBySteering = true
-          break
-        }
         if (i.shouldStopBatch()) {
           await i.skipRemainingCalls(i.callIndex)
+          break
+        }
+        if (await i.claimSteeringAtToolBoundary(i.callIndex)) {
+          i.batchSupersededBySteering = true
           break
         }
       }
@@ -173,6 +191,7 @@ export async function completeToolBatch(s) {
   if (deferredSystemContextCount > 0) {
     await s.persistTurn({ boundary: 'post-tool-system-context' })
   }
+  if (i.goalPlanBlocked || i.toolStop) return { kind: 'next' }
   i.failureStrategyAdvisories = s.loopGuard.pendingAdvisories?.() || []
   for (const advisory of i.failureStrategyAdvisories) {
         s.convo.push({

@@ -13,11 +13,15 @@
  *     slug 会把中文剥光,不同标题会归一成同一个值互相覆盖)
  *   - 不做删除 —— 删记忆是用户的事,模型不该有这个权限
  */
-import { listMemories, upsertMemory } from '../services/memoryStore.js'
+import { findExactMemory, upsertMemory, withMemoryMatchTransaction } from '../services/memoryStore.js'
 
 const ALLOWED_TYPES = ['user', 'feedback', 'project', 'reference']
 const MAX_TITLE = 120
 const MAX_BODY = 4000
+const MEMORY_ERROR_CODES = new Set([
+  'MEMORY_MATCH_ABORTED', 'MEMORY_MATCH_SCAN_INCOMPLETE', 'MEMORY_SEARCH_INDEX_INCOMPLETE',
+  'MEMORY_SEARCH_INDEX_STALE', 'MEMORY_AGENT_NOT_FOUND',
+])
 
 export const MEMORY_TOOL_SPECS = [
   {
@@ -62,24 +66,19 @@ export function dispatchMemoryTool(name, args = {}, { userId = null, sessionId =
   if (!body) return { ok: false, error: 'body 不能为空' }
 
   try {
-    // Deduplicate by host scope, type and exact title, never by a display link.
-    // Legacy slugs may collide and another agent's memory is a different record.
-    let existingId = null
-    try {
-      const existing = listMemories({ userId, limit: 500, agentFilter: agentId || '__global__' })
-        .find((m) => m.type === type && String(m.title || '').trim() === title)
-      if (existing?.id) existingId = existing.id
-    } catch {
-      // 查重失败就当新建,不阻断
-    }
-    const memory = upsertMemory({
-      id: existingId || undefined,
-      userId,
-      type,
-      title,
-      body,
-      agentId: agentId || null,
-      sourceSessionId: sessionId || null,
+    return withMemoryMatchTransaction({ userId, agentId, type }, () => {
+      // Deduplicate by host scope, type and exact title, never by a display link.
+      // Legacy slugs may collide and another agent's memory is a different record.
+      const existing = findExactMemory({ userId, agentId, type, title, mode: 'exact_title' })
+      const existingId = existing?.id
+      const memory = upsertMemory({
+        id: existingId || undefined,
+        userId,
+        type,
+        title,
+        body,
+        agentId: agentId || null,
+        sourceSessionId: sessionId || null,
     })
     return {
       ok: true,
@@ -87,7 +86,11 @@ export function dispatchMemoryTool(name, args = {}, { userId = null, sessionId =
       updated: !!existingId,
       summary: `${existingId ? '已更新' : '已记住'}:${title}`,
     }
+    })
   } catch (err) {
-    return { ok: false, error: err?.message || String(err) }
+    return { ok: false, error: err?.message || String(err),
+      ...(err instanceof Error && MEMORY_ERROR_CODES.has(err.code)
+        ? { code: err.code, retryable: err.retryable === true } : {}),
+    }
   }
 }

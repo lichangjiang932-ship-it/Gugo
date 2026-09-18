@@ -53,14 +53,27 @@ export function canonicalizeModelToolSet(tools) {
 const ANTHROPIC_SHORT_CACHE_CONTROL = Object.freeze({ type: 'ephemeral' })
 const ANTHROPIC_LONG_CACHE_CONTROL = Object.freeze({ type: 'ephemeral', ttl: '1h' })
 
-/**
- * Anthropic gates 1-hour cache entries behind this beta header; a request that
- * sends ttl:'1h' without it fails upstream even though the body serializes
- * fine. Keyed by the cache_control ttl that requires it.
- */
-export const ANTHROPIC_CACHE_TTL_BETA_HEADERS = Object.freeze({
+// The public API has not required this beta since 2025-08-13. It remains an
+// explicit compatibility option for a configured legacy gateway, not a default.
+const ANTHROPIC_LEGACY_CACHE_TTL_BETA_HEADERS = Object.freeze({
   '1h': 'extended-cache-ttl-2025-04-11',
 })
+
+/** Merge only the legacy cache beta; preserve caller headers and never mutate them. */
+export function anthropicCacheHeaders(headers, cacheControl, profile = {}) {
+  const beta = profile.requiresPromptCacheTtlBeta === true
+    ? ANTHROPIC_LEGACY_CACHE_TTL_BETA_HEADERS[cacheControl?.ttl] : null
+  if (!beta) return headers
+  const merged = { ...headers }
+  const tokens = []
+  for (const name of Object.keys(merged)) {
+    if (name.toLowerCase() !== 'anthropic-beta') continue
+    tokens.push(...String(merged[name]).split(',').map((value) => value.trim()).filter(Boolean))
+    delete merged[name]
+  }
+  merged['anthropic-beta'] = [...new Set([...tokens, beta])].join(',')
+  return merged
+}
 
 /** Opt-in Anthropic wire policy; unspecified/unknown values preserve legacy requests. */
 export function anthropicPromptCacheControl(env = process.env) {

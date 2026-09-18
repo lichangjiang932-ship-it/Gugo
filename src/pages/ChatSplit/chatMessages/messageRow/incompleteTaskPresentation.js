@@ -131,6 +131,17 @@ function normalizeReason(failure) {
   return normalizePublicFailureCode(failure?.code, 'TURN_INCOMPLETE').toLowerCase()
 }
 
+function isGenericCancellation(msg, failure, incompleteReason) {
+  if (incompleteReason && incompleteReason !== 'turn_incomplete') return false
+  const code = normalizePublicFailureCode(failure.code, 'TURN_INCOMPLETE')
+  const confirmed = code === 'TURN_CANCELLED' || (msg?.meta?.cancelled === true && code === 'TURN_INCOMPLETE')
+  // A cancellation flag must not erase recovery/permission failures or an
+  // unresolved operation. Only the generic terminal fallback is replaceable.
+  return confirmed && msg?.meta?.serverConnectionState !== 'blocked'
+    && msg?.meta?.serverRecoveryBlocked !== true && !msg?.meta?.serverRecoveryKind
+    && !failure.recovery && !failure.cause
+}
+
 function defaultRequirementsForReason(reasonCode) {
   const explicit = DEFAULT_REQUIREMENTS[reasonCode]
   if (explicit) return explicit
@@ -186,6 +197,7 @@ export function buildIncompleteTaskPresentation(msg, t, {
 } = {}) {
   const failure = msg?.meta?.serverFailure || {}
   const incompleteReasonCode = normalizeIncompleteReasonCode(failure.incompleteReason)
+  const cancelled = isGenericCancellation(msg, failure, incompleteReasonCode)
   const reasonCode = normalizeReason(failure)
   const reasonKey = REASON_KEYS[reasonCode]
   const recordedUnknownReason = Boolean(
@@ -200,7 +212,8 @@ export function buildIncompleteTaskPresentation(msg, t, {
     && localizedFailureReason !== translated(t, 'errors.chatFailure')
       ? localizedFailureReason
       : ''
-  const reason = modelProviderStopDiagnostic(failure) || (reasonCode === 'model_request_outcome_unknown' ? modelRequestFailureCopy(failure, t).reason : reasonKey
+  const reason = cancelled ? translated(t, 'chatMessages.incompleteReasonCancelled')
+    : modelProviderStopDiagnostic(failure) || (reasonCode === 'model_request_outcome_unknown' ? modelRequestFailureCopy(failure, t).reason : reasonKey
     ? translated(t, reasonKey, { attempts: Number(failure.attempts) || 0 })
     : specificFailureReason || translated(t, recordedUnknownReason
       ? 'chatMessages.incompleteReasonRecordedCode'
@@ -238,7 +251,8 @@ export function buildIncompleteTaskPresentation(msg, t, {
   const manualRetryable = failure.manualRetryable === true
   const verificationNextStepKey = VERIFICATION_NEXT_STEP_KEYS[reasonCode]
   return {
-    code: incompleteReasonCode.toUpperCase()
+    titleKey: cancelled ? 'chatMessages.toolStopped' : 'chatMessages.incompleteTitle',
+    code: cancelled ? 'TURN_CANCELLED' : incompleteReasonCode.toUpperCase()
       || normalizePublicFailureCode(failure.code, 'TURN_INCOMPLETE'),
     missing,
     nextStep: translated(t, (reasonCode === 'model_request_outcome_unknown' ? 'modelRequestRecovery.nextVerifyModel' : verificationNextStepKey) || (retryable

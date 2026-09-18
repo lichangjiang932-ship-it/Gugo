@@ -363,3 +363,23 @@ test('a recovered response is fully accounted and retained when it crosses a bud
   assert.equal(budget.snapshot().modelTokens, 29)
   assert.equal(budget.snapshot().costUsd, 0.03)
 })
+
+test('raising the iteration cap keeps the model-call budget coherent', () => {
+  // The two bounds govern the same loop, one model call per iteration. If only
+  // GUGO_MAX_ITERS moves, the budget silently becomes the binding limit and the
+  // turn ends as `execution_budget_exhausted` despite the documented headroom.
+  const defaults = resolveJobBudgetDefaults({})
+  assert.equal(defaults.maxModelCalls, defaults.maxTotalCalls,
+    'untuned, the model-call budget must not undercut the loop')
+
+  for (const env of [{ GUGO_MAX_ITERS: '5000' }, { JOB_MAX_ITERS: '5000' }]) {
+    assert.equal(resolveJobBudgetDefaults(env).maxModelCalls, 5000)
+  }
+  // An explicit budget still wins: the coherence rule is a default, not a floor.
+  assert.equal(
+    resolveJobBudgetDefaults({ GUGO_MAX_ITERS: '5000', JOB_MAX_MODEL_CALLS: '10' }).maxModelCalls,
+    10,
+  )
+  // Lowering the cap must not raise the budget.
+  assert.equal(resolveJobBudgetDefaults({ GUGO_MAX_ITERS: '50' }).maxModelCalls, 2000)
+})

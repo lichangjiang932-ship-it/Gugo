@@ -11,6 +11,7 @@ const REASONING_REJECTION_KINDS = new Set(['anthropic', 'gemini'])
 
 const CORE_MESSAGE_KEYS = new Set(['role', 'content', 'name', 'tool_call_id', 'tool_calls'])
 const INTERNAL_KEYS = new Set([
+  '__gugoPromptStability',
   '_display',
   '_displayOnly',
   '_internal',
@@ -110,7 +111,7 @@ function sanitizeToolCalls(toolCalls = []) {
   })
 }
 
-function sanitizeMessage(message, providerKeys, { retainReasoning = false, replayContext = null } = {}) {
+function sanitizeMessage(message, providerKeys, { retainReasoning = false, replayContext = null, retainPromptStability = false } = {}) {
   const providerReplay = message.role === 'assistant' ? matchingProviderReplay(message.providerReplay, replayContext) : null
   const clean = {
     role: message.role,
@@ -118,6 +119,9 @@ function sanitizeMessage(message, providerKeys, { retainReasoning = false, repla
     ...(typeof message.name === 'string' ? { name: message.name } : {}),
     ...(typeof message.tool_call_id === 'string' ? { tool_call_id: message.tool_call_id } : {}),
     ...(providerReplay ? { providerReplay } : {}),
+    ...(retainPromptStability && message.role === 'system'
+      && ['stable', 'volatile'].includes(message.__gugoPromptStability)
+      ? { __gugoPromptStability: message.__gugoPromptStability } : {}),
     // Opt-in chain-of-thought replay (MODEL_REASONING_RETENTION=1). Only the
     // assistant's own retained reasoning travels back, and only to the same
     // request pipeline that produced it; every other consumer keeps the
@@ -154,6 +158,13 @@ function appendEphemeralContext(messages, ephemeralContext) {
   // Runtime hints belong after the existing history, never inside an earlier
   // user message. Changing a clock/budget must not rewrite the reusable prefix.
   // A user-role suffix is also accepted by native/local alternating-role APIs.
+  //
+  // Decision (2026-09-15): the loop has no per-iteration volatile prefix content
+  // today, so nothing passes `ephemeralContext` yet. This stays a tested,
+  // implementation-ready seam rather than dead code to delete: any future
+  // clock/remaining-budget hint must use it instead of editing the prefix, and
+  // in-position runtime guards keep using system messages (they are persisted
+  // for `hasRuntimeMarker` dedup and already sit near the tail).
   return [...messages, { role: 'user', content: context }]
 }
 
@@ -171,12 +182,16 @@ export function prepareOutboundMessages({
   baseUrl = '',
   ephemeralContext = '',
   retainReasoning = false,
+  retainPromptStability = false,
 } = {}) {
   const providerKeys = activeProviderKeys({ profile, providerKind, providerId })
   const replayContext = providerReplayContext({ config: { modelName, providerId, baseUrl }, profile })
   const sanitized = removeOrphanToolResults((Array.isArray(messages) ? messages : [])
     .filter((message) => message && typeof message === 'object' && !isDisplayOnly(message))
-    .map((message) => sanitizeMessage(message, providerKeys, { retainReasoning, replayContext })))
+    .map((message) => sanitizeMessage(message, providerKeys, {
+      retainReasoning, replayContext,
+      retainPromptStability: retainPromptStability && (providerKind || profile.kind) === 'anthropic',
+    })))
   const withContext = appendEphemeralContext(sanitized, ephemeralContext)
   const visionSafe = profile?.supportsVision === true
     ? withContext

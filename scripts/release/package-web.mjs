@@ -14,6 +14,7 @@ export const WEB_RELEASE_ENTRIES = Object.freeze([
   'package.json',
   'package-lock.json',
   'bin',
+  'sdk',
   'dist',
   'docs/CLI.md',
   'docs/CONTEXT_COMPACTION.md',

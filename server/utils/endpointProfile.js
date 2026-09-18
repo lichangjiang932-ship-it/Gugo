@@ -186,7 +186,7 @@ export function inferEndpointKind(baseUrl = '') {
  */
 const KIND_CAPABILITIES = {
   ollama: { supportsTools: true, supportsStreaming: true, supportsVision: false, supportsPdf: false, supportsParallelTools: false },
-  lmstudio: { supportsTools: true, supportsStreaming: true, supportsVision: false, supportsPdf: false, supportsParallelTools: false },
+  lmstudio: { supportsTools: true, supportsStreaming: true, supportsVision: false, supportsPdf: false, supportsParallelTools: false, supportsNamedToolChoice: false, supportsMidConversationSystem: false, supportsStreamUsage: true, requiresUserMessage: true },
   vllm: { supportsTools: true, supportsStreaming: true, supportsVision: false, supportsPdf: false, supportsParallelTools: false },
   llamacpp: { supportsTools: false, supportsStreaming: true, supportsVision: false, supportsPdf: false, supportsParallelTools: false },
   anthropic: { supportsTools: true, supportsStreaming: true, supportsVision: true, supportsPdf: true, supportsParallelTools: true },
@@ -307,6 +307,24 @@ function resolveTimeouts({ isLocal, env, overrides }) {
   return base
 }
 
+/** Wire-protocol capabilities, distinct from model/context limits and failover policy. */
+function resolveProtocolCapabilities({ kind, caps, overrides, supportsTools }) {
+  // LM Studio accepts none/auto/required but rejects the OpenAI named-object
+  // form. Keep this endpoint capability out of callers and probe heuristics.
+  const namedChoiceOverride = tribool(overrides.supportsNamedToolChoice)
+  const middleSystemOverride = tribool(overrides.supportsMidConversationSystem)
+  return {
+    supportsNamedToolChoice: supportsTools && (namedChoiceOverride ?? (caps.supportsNamedToolChoice !== false)),
+    supportsMidConversationSystem: middleSystemOverride ?? (caps.supportsMidConversationSystem !== false),
+    supportsStreamUsage: tribool(overrides.supportsStreamUsage) ?? caps.supportsStreamUsage ?? null,
+    requiresUserMessage: tribool(overrides.requiresUserMessage) ?? (caps.requiresUserMessage === true),
+    // Anthropic 1h retention is GA. Only explicitly configured legacy gateways
+    // need the historical beta header; truthy strings/numbers never opt in.
+    requiresPromptCacheTtlBeta: kind === 'anthropic'
+      && Object.hasOwn(overrides, 'requiresPromptCacheTtlBeta') && overrides.requiresPromptCacheTtlBeta === true,
+  }
+}
+
 /**
  * 解析一个端点的完整画像。
  *
@@ -321,7 +339,11 @@ function resolveTimeouts({ isLocal, env, overrides }) {
  *   timeouts: {probeMs:number, firstTokenMs:number, idleMs:number, requestMs:number, backgroundMs:number},
  *   contextWindow: number, contextWindowSource: string,
  *   supportsTools: boolean, supportsStreaming: boolean,
- *   supportsVision: boolean, supportsPdf: boolean, supportsParallelTools: boolean,
+ *   supportsVision: boolean, supportsPdf: boolean, supportsParallelTools: boolean, supportsNamedToolChoice: boolean,
+ *   supportsMidConversationSystem: boolean,
+ *   supportsStreamUsage: boolean|null,
+ *   requiresUserMessage: boolean,
+ *   requiresPromptCacheTtlBeta: boolean,
  *   failoverEligible: boolean, keepAlive: string|null,
  * }}
  */
@@ -421,6 +443,7 @@ export function resolveEndpointProfile({
       : (caps.supportsParallelTools || isNativeOpenAIEndpoint(baseUrl))
   }
   supportsParallelTools = supportsTools && supportsParallelTools
+  const protocolCapabilities = resolveProtocolCapabilities({ kind, caps, overrides: effectiveOverrides, supportsTools })
 
   // ---- failover ----
   // ★ 本地端点默认永不 failover。原来「本地慢 → 超时 → 伪装成 504 →
@@ -454,6 +477,7 @@ export function resolveEndpointProfile({
     supportsVision,
     supportsPdf,
     supportsParallelTools,
+    ...protocolCapabilities,
     failoverEligible,
     keepAlive,
   }

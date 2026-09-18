@@ -279,7 +279,7 @@ test('整棵子代理树沿用调用方传入的同一预算对象', async () =>
     tools: SUBAGENT_TYPES.general.tools,
     userId: USER,
     budget,
-    approveTool: async ({ args }) => ({ proceed: true, args }),
+    approveTool: async ({ args }) => ({ proceed: true, args, approvalId: 'fixture-budget-delegation' }),
     callModel: async () => {
       modelStep += 1
       if (modelStep === 1) return wireCall('Agent', { prompt: 'child', subagent_type: 'general' })
@@ -309,7 +309,7 @@ test('nested Agent calls inherit the selected skills through the subagent tool a
       name: 'Inline webpage',
       systemPrompt: 'Use the inherited webpage workflow.',
     }],
-    approveTool: async ({ args }) => ({ proceed: true, args }),
+    approveTool: async ({ args }) => ({ proceed: true, args, approvalId: 'fixture-skill-delegation' }),
     callModel: async () => {
       modelStep += 1
       if (modelStep === 1) return wireCall('Agent', { prompt: 'child', subagent_type: 'general' })

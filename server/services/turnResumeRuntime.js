@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto'
+import { isPlainObject } from '../utils/toolCallPrimitives.js'
+import { isSubstantiveToolCall } from '../utils/toolLoopGuard.js'
 import { isTerminalTurnEventType } from './turnEventEmitter.js'
 import { isSuccessfulTurnCompletedEvent } from '../../shared/turnEventProjection.js'
 import { recoveryCandidateVersion } from './turnEnginePolicy.js'
@@ -48,8 +51,43 @@ export function resolveModelInterruptionMaxAttempts(env = process.env) {
   return Number.isFinite(parsed) && parsed >= 1 ? parsed : DEFAULT_MODEL_INTERRUPTION_MAX_ATTEMPTS
 }
 
+const RECOVERY_RESULT_METADATA = new Set(['createdAt', 'updatedAt', 'durationMs', 'elapsedMs'])
+
+function recoveryEvidenceValue(value) {
+  if (Array.isArray(value)) return value.map(recoveryEvidenceValue)
+  if (!isPlainObject(value)) return value
+  return Object.fromEntries(Object.keys(value).sort()
+    .filter((key) => !RECOVERY_RESULT_METADATA.has(key))
+    .map((key) => [key, recoveryEvidenceValue(value[key])]))
+}
+
+function completedRecoveryWork(payload) {
+  const result = payload?.result
+  if (payload?.error || !isPlainObject(result) || result.ok !== true || result.error) return false
+  if (['isError', 'denied', 'cancelled', 'interrupted', 'paused', 'incomplete', 'dryRun', 'dry_run',
+    'requiresUserVerification'].some((key) => result[key] === true)) return false
+  if (Object.hasOwn(result, 'exitCode') && result.exitCode !== 0) return false
+  if (result.status != null && !['completed', 'complete', 'succeeded', 'success', 'ok']
+    .includes(String(result.status).trim().toLowerCase())) return false
+  return typeof payload.toolCallId === 'string' && payload.toolCallId.trim().length > 0
+    && isSubstantiveToolCall(payload)
+}
+
+function observeRecoveryWork(event, seenCalls, seenResults) {
+  if (event.type !== 'tool.completed' || !completedRecoveryWork(event.payload)) return false
+  const { toolCallId, name, args, result } = event.payload
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify(recoveryEvidenceValue({ name, args, result }))).digest('hex')
+  const fresh = !seenCalls.has(toolCallId) && !seenResults.has(fingerprint)
+  seenCalls.add(toolCallId)
+  seenResults.add(fingerprint)
+  return fresh
+}
+
 export function modelInterruptionRecoveryState(events = [], maxAttempts = DEFAULT_MODEL_INTERRUPTION_MAX_ATTEMPTS) {
   const limit = Math.max(1, Math.floor(Number(maxAttempts)) || DEFAULT_MODEL_INTERRUPTION_MAX_ATTEMPTS)
+  const seenCalls = new Set()
+  const seenResults = new Set()
   let attempts = 0
   let latest = null
   for (const event of [...events]
@@ -69,8 +107,7 @@ export function modelInterruptionRecoveryState(events = [], maxAttempts = DEFAUL
       latest = event
       continue
     }
-    const madeProgress = (event.type === 'assistant.delta' && String(event.payload?.text || '').length > 0)
-      || event.type === 'tool.completed'
+    const madeProgress = observeRecoveryWork(event, seenCalls, seenResults)
     if (madeProgress && latest && event.sequence > latest.sequence) {
       attempts = 0
       latest = null

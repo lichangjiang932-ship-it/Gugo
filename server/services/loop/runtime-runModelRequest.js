@@ -1,4 +1,5 @@
 import { normalizeOptionalUsageNumber } from '../../../shared/modelUsage.js'
+import { emitContextPreparation } from './runtimeContextDiagnostics.js'
 import { localizedTerminalModelText } from './incompleteTerminalPresentation.js'
 import { modelAssistantHistoryMessage } from './modelAssistantHistory.js'
 import { MODEL_PROVIDER_STOP_REASON_ERROR_CODE } from '../../../shared/modelProviderStopDiagnostic.js'
@@ -36,6 +37,14 @@ async function prepareModelRequestIteration(s) {
   s.activeToolSpecs = filterCurrentDynamicToolSpecs(s.activeToolSpecs, {
     userId: s.job?.userId || null,
   })
+  // Capture the base tool set once per turn. Later activations (skills, MCP,
+  // search_tools) are marked dynamic for the request so they append to the
+  // provider tool block instead of reordering it. See canonicalizeModelTools.
+  if (!(s.baseToolNames instanceof Set)) {
+    s.baseToolNames = new Set(
+      s.activeToolSpecs.map((spec) => toolNameFromSpec(spec)).filter(Boolean),
+    )
+  }
   const modelMayRequestMutation = s.activeToolSpecs.some((spec) => {
     const name = toolNameFromSpec(spec)
     if (!name || name === 'set_deliverables') return false
@@ -109,9 +118,22 @@ async function executeModelRequestRound(s, context) {
     sourceHandoffViolation,
   } = s.d
   let streamedText = false
+  // Base tools keep their stable name order; tools activated after turn start
+  // are appended so an append does not reorder the cached prefix.
+  const modelTools = s.baseToolNames instanceof Set
+    ? s.activeToolSpecs.map((spec) => {
+      const name = s.d.toolNameFromSpec(spec)
+      return name && s.baseToolNames.has(name) ? spec : { ...spec, __gugoDynamicTool: true }
+    })
+    : s.activeToolSpecs
+  if (s.signal?.aborted) {
+    throw s.signal.reason instanceof Error ? s.signal.reason
+      : Object.assign(new Error('Turn cancelled'), { name: 'AbortError' })
+  }
+  await emitContextPreparation(s, modelTools)
   const request = await s.callTrackedModel({
     messages: s.convo,
-    tools: s.activeToolSpecs,
+    tools: modelTools,
     ...(s.needsDeliverableSelection()
       ? { toolChoice: { type: 'function', function: { name: 'set_deliverables' } } }
       : s.forcedArtifactRequestPending()
@@ -294,7 +316,8 @@ async function handleModelRequestFailure(s, error, context) {
     if (typeof s.releaseSteering === 'function') await s.releaseSteering(i.steeringLeaseId)
     i.steeringLeaseId = null
   }
-  if (error?.name === 'AbortError' || s.iter === 0 || error?.code === MODEL_PROVIDER_STOP_REASON_ERROR_CODE) throw error
+  if (error?.name === 'AbortError' || s.iter === 0 || error?.code === MODEL_PROVIDER_STOP_REASON_ERROR_CODE
+    || error?.unsafeToReplay === true || error?.code === 'MODEL_REQUEST_OUTCOME_UNKNOWN') throw error
   const terminal = await s.finishTerminalResult(s.partialResultFallback.apply({
     text: '',
     artifactIds: s.artifactIds,

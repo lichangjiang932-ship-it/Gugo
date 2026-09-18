@@ -149,7 +149,8 @@ test('unknown in-flight writes are not replayed by a pending output continuation
   const unsupportedSuccess = 'The approved changes were pushed successfully.'
   let executions = 0
   const outcomes = []
-  const result = await run({
+  let modelCalls = 0
+  await assert.rejects(run({
     job: { id: 'unknown-output-write', userId: 'output-continuation-user', origin: 'chat', prompt, userPrompt: prompt },
     messages: [{ role: 'user', content: prompt }],
     toolSpecs: [push], intentMode: 'execute',
@@ -164,16 +165,13 @@ test('unknown in-flight writes are not replayed by a pending output continuation
       completionGuards: { outputContinuation: { version: 1, attempts: 1, prefix: 'Earlier partial answer.' } },
     }),
     onToolCompleted: async (outcome) => outcomes.push(outcome.result),
-    runModel: async () => ({ content: unsupportedSuccess, toolCalls: [] }),
+    runModel: async () => { modelCalls += 1; return { content: unsupportedSuccess, toolCalls: [] } },
     executeTool: async () => { executions += 1; return { ok: true } },
-  })
+  }), (error) => error?.code === 'SIDE_EFFECT_OUTCOME_UNKNOWN' && error.requiresUserVerification === true)
   assert.equal(executions, 0)
   assert.equal(outcomes.length, 1)
   assert.equal(outcomes[0].code, 'tool_execution_outcome_unknown')
   assert.equal(outcomes[0].retryable, false)
   assert.equal(outcomes[0].requiresUserVerification, true)
-  assert.equal(result.incomplete, true)
-  assert.equal(result.reason, 'execution_evidence_missing')
-  assert.ok(result.missingRequirements.includes('execution_evidence'))
-  assert.notEqual(result.text, unsupportedSuccess)
+  assert.equal(modelCalls, 0, 'unknown output cannot be repaired by generating another completion')
 })

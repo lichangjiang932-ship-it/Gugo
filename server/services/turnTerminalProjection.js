@@ -7,6 +7,17 @@ import { modelProviderStopDiagnostic } from '../../shared/modelProviderStopDiagn
 export const ARTIFACT_DELIVERY_INCOMPLETE_REASON = 'artifact_delivery_not_converged'
 
 const INCOMPLETE_REASON_REQUIREMENTS = Object.freeze({
+  approval_denied: ['user_direction'],
+  approval_required: ['tool_approval'],
+  approval_expired: ['renewed_tool_approval'],
+  tool_permission_denied: ['tool_permission'],
+  tool_authorization_unavailable: ['authorization_state_repair'],
+  explicit_read_only_constraint: ['explicit_user_authorization'],
+  explicit_tool_free_constraint: ['user_direction'],
+  tool_disabled_by_config: ['enabled_tool_configuration'],
+  goal_plan_approval_required: ['goal_plan_approval'],
+  goal_plan_changed: ['current_goal_plan_review'],
+  goal_plan_state_unavailable: ['goal_plan_state_verification'],
   [ARTIFACT_DELIVERY_INCOMPLETE_REASON]: ['deliverable_artifact'],
   deliverable_selection_missing: ['deliverable_selection'],
   directory_resume_not_converged: ['authorized_directory'],
@@ -16,6 +27,7 @@ const INCOMPLETE_REASON_REQUIREMENTS = Object.freeze({
   iteration_limit_reached: ['remaining_task_steps'],
   local_html_delivery_validation_failed: ['html_resource_validation'],
   model_call_interrupted: ['model_response', 'remaining_task_steps'],
+  model_not_loaded: ['loaded_model'],
   model_request_outcome_unknown: ['operation_outcome_verification'],
   pdf_layout_verification_missing: ['pdf_layout_validation'],
   post_mutation_verification_missing: ['mutation_readback', 'diff_or_project_check'],
@@ -170,15 +182,25 @@ export function publicIncompleteText(value, fallback = '') {
   return text
 }
 
+function diagnosticFailureCode(error, code, status) {
+  // A known HTTP rejection can carry no upstream code at all (LM Studio does
+  // this after unloading an idle model). Recognize only this bounded signature
+  // for presentation; never copy upstream prose or replace an authority/unknown
+  // code, and never mutate the transport error used by retry policy.
+  if (code !== 'TURN_FAILED' || status !== 400 || typeof error?.message !== 'string') return code
+  return /\bNo models loaded(?:[.!:]|\s|$)/iu.test(error.message.slice(0, 2_000))
+    ? 'MODEL_NOT_LOADED' : code
+}
+
 export function normalizeTurnFailure(error, {
   code = 'TURN_FAILED',
   retryable,
 } = {}) {
-  const normalizedCode = normalizePublicFailureCode(error?.code, code)
   const rawStatus = Number(error?.status ?? error?.statusCode)
   const status = Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599
     ? rawStatus
     : null
+  const normalizedCode = diagnosticFailureCode(error, normalizePublicFailureCode(error?.code, code), status)
   const inferredRetryable = status !== null
     ? status === 408 || status === 409 || status === 425 || status === 429 || status >= 500
     : error?.name === 'AbortError' || /(?:TIMEOUT|TEMPORAR|UNAVAILABLE|INTERRUPT)/i.test(normalizedCode)
@@ -201,7 +223,7 @@ export function normalizeTurnFailure(error, {
   if (/^[a-z][a-z0-9_]{0,79}$/u.test(rawNextAction)) failure.nextAction = rawNextAction
   const incompleteReason = error?.incompleteReason
     ? normalizeIncompleteReason(error.incompleteReason)
-    : ''
+    : normalizedCode === 'MODEL_NOT_LOADED' ? 'model_not_loaded' : ''
   if (incompleteReason) {
     failure.incompleteReason = incompleteReason
     // Exhausting the automatic repair budget is not a transient failure. A

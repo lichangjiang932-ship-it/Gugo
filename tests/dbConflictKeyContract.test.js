@@ -24,8 +24,8 @@ const LEGACY_CONFLICT_WRITE_TEST_PATTERN = /\b(?:INSERT\s+OR\s+(?:ROLLBACK|ABORT
 const ON_CONFLICT_PATTERN = /\bON\s+CONFLICT\b/gi
 const ON_CONFLICT_TEST_PATTERN = /\bON\s+CONFLICT\b/i
 const ON_CONFLICT_TARGET_PATTERN = /^\s*\(([^)]*)\)/
-const EXPECTED_RUNTIME_ON_CONFLICT_CALLS = 62
-const EXPECTED_RUNTIME_ON_CONFLICT_TARGETS = 53
+const EXPECTED_RUNTIME_ON_CONFLICT_CALLS = 64
+const EXPECTED_RUNTIME_ON_CONFLICT_TARGETS = 55
 const REQUIRED_NON_RUNTIME_KEY_IDS = new Set([
   'agent_event_outbox.cursor',
   'agent_event_subscription_dlq.dlq_id',
@@ -35,6 +35,13 @@ const REQUIRED_NON_RUNTIME_KEY_IDS = new Set([
   'session_meters.session_id',
   'todos.id',
   'users.email',
+  // Goal plan tables are only written through plain INSERT/UPDATE, never an UPSERT.
+  'goal_plans.id',
+  'goal_plan_steps.id',
+  'goal_plan_steps.plan_id,ordinal',
+  'goal_plan_events.id',
+  // The pending queue is populated by v120 triggers, not runtime UPSERT SQL.
+  'memory_search_pending.memory_id',
 ])
 
 function quoteIdentifier(value) {
@@ -360,6 +367,7 @@ test('every runtime ON CONFLICT target is declared by the schema contract', () =
     uniqueKeyId(table, columns)
   )))].sort()
   assert.equal(targetIds.length, EXPECTED_RUNTIME_ON_CONFLICT_TARGETS)
+  assert.ok(targetIds.includes('memory_search_index.memory_id'), 'v120 indexed memory UPSERT has an explicit declared key')
 
   const declaredIds = declaredConflictKeyIds()
   assert.deepEqual(

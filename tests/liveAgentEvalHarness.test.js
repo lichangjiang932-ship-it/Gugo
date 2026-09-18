@@ -5,6 +5,8 @@ import path from 'node:path'
 import test from 'node:test'
 
 import {
+  compareWithBaseline,
+  datasetFingerprint,
   loadLiveEvalDataset,
   runLiveEvaluation,
 } from '../scripts/run-live-agent-evals.mjs'
@@ -122,6 +124,116 @@ test('live eval records a false completion when the runtime completes but verifi
     assert.equal(report.metrics.falseCompletions, 1)
     assert.equal(report.results[0].terminalType, 'turn.completed')
     assert.equal(report.results[0].metrics.falseCompletion, true)
+  } finally {
+    await fs.rm(value.root, { recursive: true, force: true })
+  }
+})
+
+test('the dataset fingerprint pins tasks, verifiers and fixtures', async () => {
+  const value = await fixture()
+  try {
+    const loaded = await loadLiveEvalDataset(value.dataset)
+    const first = await datasetFingerprint(loaded)
+    assert.equal(await datasetFingerprint(await loadLiveEvalDataset(value.dataset)), first,
+      'an unchanged dataset must fingerprint identically')
+
+    await fs.writeFile(value.verifier, 'process.exitCode = 0\n')
+    assert.notEqual(await datasetFingerprint(await loadLiveEvalDataset(value.dataset)), first,
+      'editing a verifier must change the fingerprint')
+
+    const after = await datasetFingerprint(await loadLiveEvalDataset(value.dataset))
+    await fs.writeFile(path.join(value.workspace, 'source.txt'), 'mutated fixture')
+    assert.notEqual(await datasetFingerprint(await loadLiveEvalDataset(value.dataset)), after,
+      'editing a fixture must change the fingerprint')
+  } finally {
+    await fs.rm(value.root, { recursive: true, force: true })
+  }
+})
+
+test('baseline comparison separates regressions, fixes and stale fingerprints', () => {
+  const baseline = {
+    version: 2,
+    fingerprint: 'aaaa',
+    generatedAt: '2026-01-01T00:00:00.000Z',
+    passed: 1,
+    metrics: { modelRequests: 10, toolCalls: 4, approvalRequests: 0, falseCompletions: 0 },
+    results: [{ id: 'a', passed: true }, { id: 'b', passed: false }],
+  }
+  const current = {
+    fingerprint: 'aaaa',
+    metrics: { modelRequests: 12, toolCalls: 4, approvalRequests: 0, falseCompletions: 1 },
+    results: [{ id: 'a', passed: false, terminalType: 'turn.failed' }, { id: 'b', passed: true }],
+  }
+  const verdict = compareWithBaseline(current, baseline)
+  assert.equal(verdict.status, 'regressed')
+  assert.deepEqual(verdict.regressions, [{ id: 'a', from: 'passed', to: 'failed', terminalType: 'turn.failed' }])
+  assert.deepEqual(verdict.fixes, [{ id: 'b', from: 'failed', to: 'passed' }])
+  assert.deepEqual(verdict.metricDeltas.modelRequests, { before: 10, after: 12, delta: 2 })
+  assert.deepEqual(verdict.metricDeltas.falseCompletions, { before: 0, after: 1, delta: 1 })
+
+  // A changed dataset invalidates the comparison instead of certifying it.
+  const drifted = compareWithBaseline({ ...current, fingerprint: 'bbbb' }, baseline)
+  assert.equal(drifted.status, 'not_comparable')
+  assert.equal(drifted.fingerprintChanged, true)
+  assert.equal(drifted.comparable, false)
+  assert.equal(compareWithBaseline({ ...current, fingerprint: 'bbbb' }, baseline, {
+    allowFingerprintChange: true,
+  }).status, 'regressed')
+
+  // No regressions at all is a clean comparison.
+  const clean = compareWithBaseline({
+    fingerprint: 'aaaa', metrics: baseline.metrics, results: [{ id: 'a', passed: true }],
+  }, baseline)
+  assert.equal(clean.status, 'ok')
+  assert.equal(clean.comparable, true)
+})
+
+test('repeated runs are strict: every repetition must pass', async () => {
+  const value = await fixture()
+  try {
+    const report = await runLiveEvaluation({
+      datasetPath: value.dataset,
+      cliPath: value.cli,
+      repeat: 2,
+      env: { ...process.env, GUGO_LIVE_EVAL: '1' },
+    })
+    assert.equal(report.repeat, 2)
+    assert.equal(report.results[0].runs.length, 2)
+    assert.equal(report.results[0].passedRuns, 2)
+    assert.equal(report.results[0].passRate, 1)
+    assert.equal(report.results[0].passed, true)
+    // Aggregate metrics cover every repetition, not just the first.
+    assert.equal(report.metrics.modelRequests, 2)
+  } finally {
+    await fs.rm(value.root, { recursive: true, force: true })
+  }
+})
+
+test('a recorded baseline is attached to the report and flags drift', async () => {
+  const value = await fixture()
+  try {
+    const baseline = path.join(value.root, 'baseline.json')
+    const first = await runLiveEvaluation({
+      datasetPath: value.dataset, cliPath: value.cli, env: { ...process.env, GUGO_LIVE_EVAL: '1' },
+    })
+    await fs.writeFile(baseline, `${JSON.stringify(first, null, 2)}\n`)
+    const again = await runLiveEvaluation({
+      datasetPath: value.dataset, cliPath: value.cli, baselinePath: baseline,
+      env: { ...process.env, GUGO_LIVE_EVAL: '1' },
+    })
+    assert.equal(again.baseline.status, 'ok')
+    assert.equal(again.baseline.comparable, true)
+    assert.deepEqual(again.baseline.regressions, [])
+
+    // Breaking a verifier now shows up as a regression, not a silent pass.
+    await fs.writeFile(value.verifier, 'process.exitCode = 1\n')
+    const regressed = await runLiveEvaluation({
+      datasetPath: value.dataset, cliPath: value.cli, baselinePath: baseline,
+      allowFingerprintChange: true,
+      env: { ...process.env, GUGO_LIVE_EVAL: '1' },
+    })
+    assert.equal(regressed.baseline.status, 'regressed')
+    assert.equal(regressed.baseline.regressions[0].id, 'fixture-task')
   } finally {
     await fs.rm(value.root, { recursive: true, force: true })
   }

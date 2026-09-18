@@ -95,6 +95,8 @@ UI 差距需要真实运行对比与产品决策（布局密度、流式渲染�
 
 ## 五、2026-09-18 外部审查复核与修复
 
+> 历史记录更正（同日后续复核）：下述 R1 将旧 beta 要求误当成当前协议，**“缺 beta 头必被拒绝”不成立**。Anthropic 在 2025-08-13 已宣布 1h TTL 无需 beta 头；现行行为与来源见第六节。R2 的成功保留方向继续沿用，后续补齐矛盾/缺失终态及异常路径。本节保留当时判断与测试记录，不代表当前验收结论。
+
 对另一位审查者提出的三项不足逐项沿真实调用链独立复核，三项代码事实全部属实；其中一项的行为定性需要更正后才能修。
 
 ### R1（属实，已修）：`MODEL_PROMPT_CACHE_RETENTION=long` 缺少上游必需的 beta 头
@@ -120,3 +122,66 @@ UI 差距需要真实运行对比与产品决策（布局密度、流式渲染�
 - 改动文件 `npx eslint` 零问题。
 - 边界说明：R1 的 beta 头修复只保证请求形状符合 Anthropic 官方文档；真实 Anthropic 端到端缓存命中仍需显式 live eval 验证，本地 LM Studio（OpenAI 兼容）路径不受此头影响。
 
+## 六、2026-09-18 后续复核：现行协议更正与终态证据闭环
+
+本节在 `849b801` 及当时所有既有未提交修改之上增量修复，不撤销其他人的提交，不把此前验证记录改写成新结果。
+
+### R1 更正：1h TTL 已正式可用，旧 beta 仅作为显式兼容选项
+
+直接读取官方发布记录：[2025-08-13 API release notes](https://platform.claude.com/docs/en/release-notes/api#august-13-2025) 原文为 “The 1-hour cache duration for prompt caching no longer requires a beta header.” 当前 [1-hour cache duration](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#1-hour-cache-duration) 说明使用 `cache_control: {type: 'ephemeral', ttl: '1h'}`。因此第五节“当前缺头一定拒绝”的归因与“long 必须 beta”的测试预期过期；这不是收费模型请求验证所得的结论。
+
+现行实现：
+
+- `MODEL_PROMPT_CACHE_RETENTION` 仍是显式选择：默认/none 不添加断点，short 为默认 ephemeral TTL，long 为 1h。没有擅自开启、降级或替换模型端点。
+- 正式 API 默认不自动加旧 beta；调用方显式配置的 beta 仍保留。确需旧行为的网关可在命名 `MODEL_PROVIDER_<KEY>_PROFILE` 配置 `{"kind":"anthropic","requiresPromptCacheTtlBeta":true}`，并与已有 profile 字段合并。
+- 新能力经实际 `resolveModelConfigForModel → profileForConfig → resolveEndpointProfile` 链路生效；DB `modelProfiles` JSON 的白名单和往返保存保留 true/false，不需要 schema 迁移。精确模型的配置优先于 Provider 配置，默认 false，字符串/数字不隐式启用；非 Anthropic 协议不启用此能力。
+- 仅实际请求已有 1h 缓存断点时注入 legacy beta；不同大小写的 `anthropic-beta` 字段合并，逗号值去重，保留调用方其他字段，不修改源配置。
+- 不只检查 builder 字面对象：`nativePromptCacheTransport.test.js` 用注入式 fetch 覆盖配置到出站流式/非流式请求、调用者头合并、per-model false、无缓存块以及其他协议的反例。固定响应仅验证协议适配，不模拟并宣称真实 KV 命中。
+
+### R2 补齐：成功优先必须以一致的最终证据为前提
+
+继续保留 `849b801` 对“一致的完成事件 + 成功返回值”的修复。后续真实 CLI 入口探针另外复现：到期后的裸 success 无终态却退出 0、观察到 failed 却被返回的 completed 覆盖、completed 后返回 cancelled、具体失败后抛出本地 deadline 被 124 覆盖。仅更改 `timeoutReplacesResult` 的 true/false 无法闭合这些跨层情况。
+
+- `run` 与 `chat` 共用 deadline 结果归并，具体规则见 [CLI：deadline 与结果证据](CLI.md#deadline-与结果证据)。保留一致且完整的完成正文与退出 0；stderr 只提示 deadline 已过。
+- 已过 deadline 的裸成功无 completed 证据报 `CLI_RUN_TERMINAL_MISSING`；最终证据矛盾报 `CLI_RUN_OUTCOME_CONFLICT`，不静默宣称“已保留成功”。completed 后又抛出 deadline 也属于矛盾，不虚构成功结果。
+- 普通协作取消才归因本地 deadline。明确失败、未知请求/副作用、不可安全重放、blocked 等保留具体诊断；持久化失败、聚合异常和非精确取消异常不被错误吞掉。中途 waiting/awaiting_approval 不能把普通超时伪装成已有最终结果。
+- 恢复只返回持久化 `lastEvent` 而没有回调时，formatter 输出实际返回的终态一次；不因“没回调”丢正文，也不从 bare status 伪造终态。
+- 同一 attempt 的冲突通过有界终态观察器保留，不会被“只看最后一个回调”绕过；显式 `turn.attempt/resetStreaming` 正常重置。返回结果与 completed 两边已提供的会话/Turn 身份必须一致，chat 不在拒绝前采纳错误会话 ID。
+- 最终独立探针又复现一个遗漏：`completed → waiting → finish(completed)` 仍可能退出 0 却丢正文，`failed → waiting → finish(failed)` 则将具体错误替换成 Waiting。已让文本缓冲和观察器使用同一有效终态；补 27 个 text/chat/JSONL 与新 attempt 重置用例，先红后绿。原始 JSONL 事件保留，不篡改诊断流。
+- 新增回归通过真实 `cmdRun`/chat 与 formatter 检查 text/jsonl、stdout/stderr、退出码及状态一致性；旧的刻意晚成功防御测试历史仍保留在第五节说明中。
+
+### 本次验证记录与边界
+
+- 缓存配置/协议定向：6 个文件、108 项通过（`nativePromptCachePolicy`、`nativePromptCacheTransport`、`nativeModelProviders`、`promptCacheStability`、`endpointProfile`、`modelProviderModelProfiles`）。其中 transport 22 项覆盖流式/非流式真实适配调用链（含仅 system / 仅 tools 可缓存），网络依赖完全注入。
+- 复现失败日志与后续通过日志分别保留；不把预修复红灯删成只有成功记录。最终验收结果如下。
+- 第一轮全量在独立探针发现上述投影遗漏后主动中止，日志保留为未完成，未计入通过；仅停止本助手本次测试进程树，复查全部退出，既有 Pi 进程未被干预。修复重新冻结后启动第二轮全量。
+- 本轮没有调用真实 Anthropic 或其它收费模型，也没有生成替代 R2 的新发布包；源代码回归不能代替真实端点缓存命中或跨厂商任务成功率基线。
+- 跨 Turn 前缀历史、Node20 原生 SQLite、ANN/大库压力测试、Windows 原生安装器及实体键盘/完整终端矩阵仍按既有边界登记；本轮不宣称这些能力已实现或已实测。前缀指纹不是实际缓存命中指标。
+- 另行发现的旧能力配置缺口：`promptCacheKeyFor` 读取 `profile.supportsPromptCacheKey`，但常规 endpoint/profile 存储链未透传它，现有开关测试直接注入 profile。官方 OpenAI 端点的默认键生成路径不受此影响；本轮不顺带启用兼容端点的此项能力，后续应单独补配置链与请求验证。
+
+#### 冻结后最终验收（2026-09-18，Node.js v22.20.0 / Windows）
+
+| 验证入口 | 本次实际结果 |
+|---|---|
+| `npm test` | **PASS，996 个文件**：897 个常规文件 + 99 个 Windows 隔离文件；日志各 TAP 进程汇总 8866 项，8857 pass / 9 skip / 0 fail / 0 cancelled |
+| `npm run lint` | 0 error / 0 warning |
+| `npm run typecheck` | 通过，14 个非法调用 fixture 全部被正确拒绝 |
+| `npm run audit:functions -- --check` | 0 复杂度违规 / 0 parse errors；未调整门槛或添加豁免 |
+| `npm run deps:check`、`npm run debt:check` | 通过；debt 13/13 |
+| `npm run eval:offline` | 61/61，显式离线网络护栏与隔离数据目录 |
+| `npm run licenses` | 当前安装的 402 个生产包通过 |
+| 差异与快照 | 本轮改动差异检查通过（按 CRLF 行尾正确判定空白）；17 个本轮源码/测试文件的 SHA256 与启动最终全量前一致；HEAD 仍为 `849b801` |
+
+9 次 skip 保留而非算作通过：LibreOffice 未安装、Node20 专属用例在当前 Node22 跳过、当前文件系统不区分大小写、4 个 POSIX 专属分支，以及已有反馈表单跳过（由两个入口报告）。未为本次修复删断言或新增 skip。前端隔离用例通过不是实体浏览器/键盘验收，也不等于新安装器或发布包验收。
+
+原始记录保留于本机临时目录 `gugo-provider-deadline-review-5f1654dee21a464f86b758b4c81038fb`：最终全量 `full-test-final.log`、主动中止记录 `full-test-interrupted.md`、缓存与 capability 红/绿日志、`deadline/` 下身份及投影红/绿日志、各项门禁日志。未自动提交、推送或发布；旧 R2 包不包含本节源码增量。
+
+## 七、用户授权后的 Git 整合范围（2026-09-18）
+
+上述工作完成后，用户明确要求提交和推送。交付整合当前已验收的 369 项累计改动（177 项已跟踪变更、192 个新文件），不是仅提交最近的缓存/deadline 文件：CLI、DB migration、工具 schema、测试入口与网页诊断直接依赖尚未跟踪的新模块，必须保持依赖闭合。
+
+保留接手前既有的 CSS V1–V3 紧凑样式及对应测试，不将其称为本轮新增外观工作；同时保留本轮功能配套的证据摘要、可访问性与诊断样式。`used-symbols.txt` 的既有删除仅清理无生产引用、混有 Node warning 的生成符号清单，可从父提交恢复。没有回滚或覆盖其他 agent 的修改。
+
+提交前只读扫描覆盖当前候选及 3 个尚未推送的祖先提交（`a16a2aa`、`23c1dec`、`849b801`），未发现真实凭据、数据库、用户附件、日志或发布包。模式命中经复核为合成脱敏测试数据或 lockfile 元数据。本机无 gitleaks，不能将此扫描称为正式 gitleaks 全历史验收，也不调整现有豁免。推送限于现有功能分支；不强推、不合并 main、不打 tag 或发布版本。
+
+本次 Git 收尾另完成隔离 Vite 生产构建（禁用 dotenv/envDir，产物只写临时目录，未初始化数据库），16.29 秒通过，不覆盖旧 R2 或本地 dist。将新文件实际纳入 index 后，差异门禁发现 `interactiveHistory.js`、`runDiagnostics.js`、`artifactRevisionMode.js` 各一行多余 EOF 空行；仅删除这 3 个空行，无逻辑变化，4 个关联文件 70/70 回归与定向 lint 通过。前述 996 文件全量记录属于此 EOF 清理之前的冻结快照，不把两次验证时间点混为一次。

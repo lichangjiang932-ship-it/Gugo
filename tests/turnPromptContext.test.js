@@ -217,7 +217,7 @@ test('skill catalog failure does not block an explicitly selected skill', () => 
     env: { AGENT_INJECT_ENABLED: '0' },
   }, {
     prepareSkillCatalogForPrompt: () => {
-      throw new Error('catalog unavailable')
+      throw new Error('catalog unavailable PRIVATE_CATALOG_ARGUMENT')
     },
     prepareSkillsForPrompt: () => [{
       id: 'explicit-writer',
@@ -232,7 +232,8 @@ test('skill catalog failure does not block an explicitly selected skill', () => 
 
   assert.deepEqual(prepared.skillIds, ['explicit-writer'])
   assert.match(prepared.messages.map((message) => message.content).join('\n'), /EXPLICIT_SKILL_BODY_SURVIVES_CATALOG_FAILURE/)
-  assert.equal(warnings.some((warning) => warning.includes('catalog unavailable')), true)
+  assert.equal(warnings.some((warning) => warning.includes('skill catalog failed: PROMPT_CONTEXT_UNAVAILABLE')), true)
+  assert.doesNotMatch(warnings.join('\n'), /PRIVATE_CATALOG_ARGUMENT/u)
 })
 
 test('an unselected skill contributes catalog metadata without its instructions', () => {

@@ -2,6 +2,7 @@ import { assertRuntimeStage } from './runtimeContract.js'
 import { withProviderExecutionArguments } from '../../adapters/providerReplayState.js'
 import { recordMutationVerificationRecoveryOutcome } from './mutationVerificationRecovery.js'
 import { artifactPreviewIdentity } from '../artifactPreviewIdentity.js'
+import { toolStopBoundary } from './runtimeToolStop.js'
 
 function toolSearchScore(spec, query) {
   const name = String(spec?.function?.name || '').trim().toLowerCase()
@@ -213,7 +214,7 @@ function recordExecutionProgress(s, outcome, executedCall, succeeded) {
 function recordDynamicFailureRecovery(s, outcome, executedCall, succeeded) {
   const { DYNAMIC_EXECUTION_TOOL_RECOVERY_MARKER, DYNAMIC_MUTATION_TOOL_NAMES,
     toolNameFromSpec } = s.d
-  if (succeeded
+  if (succeeded || s.iteration.toolStop
     || !DYNAMIC_MUTATION_TOOL_NAMES.has(String(executedCall?.name || ''))
     || outcome.result?.denied === true
     || outcome.result?.requiresUserVerification === true
@@ -404,11 +405,10 @@ function recordVerificationObservations(s, outcome, executedCall, succeeded) {
   }
   if (s.requiresPdfLayoutVerification
     && isSuccessfulPdfLayoutVerification(executedCall, outcome.result)) {
+    // Layout markers contain no path-scoped write/deletion evidence. Keep those
+    // debts until recordMutationExecution observes matching verification results.
     s.pdfLayoutVerificationObserved = true
     s.pdfLayoutVerificationRetries = 0
-    s.pendingMutationTargets.clear()
-    s.pendingDeletionTargets.clear()
-    s.mutationVerificationRetries = 0
   }
 }
 
@@ -510,6 +510,7 @@ function appendToolOutcomeMessages(s, outcome, executedCall, succeeded) {
 
 function recordNoProgressAndSignals(s, outcome, executedCall) {
   const i = s.iteration
+  if (i.toolStop || i.goalPlanBlocked) return
   const convergenceBlocked = [
     'execution_convergence_probe_blocked',
     'execution_convergence_install_blocked',
@@ -546,6 +547,8 @@ async function recordOutcome(s, outcome) {
   const executedCall = outcome.executionArgs === outcome.call?.args
     ? outcome.call
     : { ...outcome.call, args: outcome.executionArgs }
+  if (outcome.result?.goalPlanBlocked === true) i.goalPlanBlocked = outcome.result
+  i.toolStop ||= toolStopBoundary(outcome.result, outcome.call?.id)
   activateSearchedTools(s, outcome, executedCall)
   activateRequestedSkill(s, outcome, executedCall)
   const succeeded = isSuccessfulToolResult(outcome.result)

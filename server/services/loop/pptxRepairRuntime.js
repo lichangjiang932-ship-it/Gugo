@@ -46,9 +46,10 @@ export function pptxExecutionInputError(name, args, locale = 'zh') {
 
 /** Refine diagnostics only; the complete strict schema remains the admission check. */
 function refinePptxAuthoringIssue(issue, args, locale) {
+  if (!Array.isArray(issue.issues)) return issue
   const hints = new Set(['Correct only the reported fields using the native authoring schema. Preserve all required words, fonts, styles and slide count.'])
   const issues = issue.issues.flatMap((message) => {
-    const match = message.match(/^(\$\.slides\[(\d+)\]\.elements\[(\d+)\])(?:\s|$)/u)
+    const match = message.match(/^(\$\.slides\[(\d+)\]\.elements\[(\d+)\])(?:\.|\s|$)/u)
     if (!match) return [message]
     const element = args?.slides?.[Number(match[2])]?.elements?.[Number(match[3])]
     const schema = PPTX_ELEMENT_SCHEMA.oneOf.find((branch) => branch.properties.type.const === element?.type)
@@ -63,7 +64,7 @@ function refinePptxAuthoringIssue(issue, args, locale) {
     if (element.type === 'shape' && Object.hasOwn(element, 'text')) {
       hints.add('type="shape" does not accept text. Omit an unintended empty text field; preserve any intended non-empty words in a separate editable type="text" element.')
     }
-    return detail.issues.map((entry) => entry.replace(/^\$/u, match[1]))
+    return Array.isArray(detail.issues) ? detail.issues.map((entry) => entry.replace(/^\$/u, match[1])) : [message]
   }).slice(0, 8)
   return { ...issue, issues, error: locale === 'zh'
     ? `工具参数校验失败：${issues.join('；')}`

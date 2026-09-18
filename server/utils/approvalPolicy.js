@@ -156,6 +156,7 @@ const PLAN_LOCAL_READ_TOOLS = new Set([
   'request_clarification',
   'request_directory',
   'manage_todos',
+  'goal_plan_status',
   'read_artifact_source',
   'list_directory',
   'read_file',

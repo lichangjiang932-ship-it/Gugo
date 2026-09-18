@@ -277,7 +277,7 @@ test('a prior failed turn cannot be changed to success by terse completion claim
     const result = await runToolsLoop({
       job: {
         id: `prior-failure-terse-completion-${index}`,
-        userId: null,
+        userId: 'prior-failure-status-user',
         origin: 'chat',
         locale: 'en',
         prompt: 'Is the work complete?',
@@ -295,6 +295,7 @@ test('a prior failed turn cannot be changed to success by terse completion claim
       toolSpecs: [readFile],
       maxIters: 3,
       enableToolHooks: false,
+      requestToolApproval: async ({ args }) => ({ proceed: true, args, approvalId: `prior-status-read-${index}` }),
       runModel: async () => {
         modelCalls += 1
         if (modelCalls === 1) {

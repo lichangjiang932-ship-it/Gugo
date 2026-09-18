@@ -2,6 +2,13 @@ import {
   missingRequirementsForIncompleteReason,
   normalizeIncompleteReason,
 } from '../turnTerminalProjection.js'
+import { completionPolicyDiagnostics } from './completionPolicy.js'
+
+/** Structured completion-policy diagnostics for an incomplete terminal. */
+function completionPolicyMetadata(s) {
+  const completionPolicies = completionPolicyDiagnostics(s)
+  return completionPolicies.length > 0 ? { completionPolicies } : {}
+}
 
 function normalizedRequirements(reason, provided) {
   const requirements = [...new Set((Array.isArray(provided)
@@ -32,6 +39,7 @@ function createFinishIncomplete(s, formatIncompleteTerminalText) {
       ...(typeof retryable === 'boolean' ? { retryable } : {}),
       ...(typeof manualRetryable === 'boolean' ? { manualRetryable } : {}),
       ...(taskVerification ? { taskVerification } : {}),
+      ...completionPolicyMetadata(s),
     }
     const localizedText = sourceHandoffFiltered
       ? s.protectTerminalText(text, { incomplete: true })
@@ -143,6 +151,7 @@ function createFinishTerminalResult(s, { formatIncompleteTerminalText, sourceHan
           ? { manualRetryable: result.manualRetryable }
           : {}),
         ...(result.taskVerification ? { taskVerification: result.taskVerification } : {}),
+        ...completionPolicyMetadata(s),
       }
       result = {
         ...result,

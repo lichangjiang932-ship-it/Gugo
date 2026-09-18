@@ -321,6 +321,7 @@ test('run_code approval cannot bypass execution trust revoked before dispatch', 
   ]
   const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]))
   let observedToolResult = null
+  let modelCalls = 0
   let approvals = 0
   try {
     process.env.AUTH_MODE = 'multi_user'
@@ -342,7 +343,9 @@ test('run_code approval cannot bypass execution trust revoked before dispatch', 
       toolSpecs: [runCodeSpec],
       maxIters: 3,
       enableToolHooks: false,
+      onToolCompleted: async ({ result }) => { observedToolResult = result },
       runModel: async ({ messages }) => {
+        modelCalls += 1
         const toolMessage = messages.find((message) => (
           message.role === 'tool' && message.name === 'run_code'
         ))
@@ -379,6 +382,7 @@ test('run_code approval cannot bypass execution trust revoked before dispatch', 
     })
 
     assert.equal(approvals, 1)
+    assert.equal(modelCalls, 1, 'revoked execution trust must not cause a model wrap-up')
     assert.equal(observedToolResult?.ok, false)
     assert.equal(observedToolResult?.code, 'CODE_MODE_DISABLED')
     assert.equal(observedToolResult?.denied, true)

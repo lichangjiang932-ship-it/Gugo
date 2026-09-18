@@ -1,7 +1,7 @@
 import { createRunInteractionPorts } from './runInteractionPorts.js'
-import { formatProgressEvent, terminalDescriptor } from './runDiagnostics.js'
+import { createRunTerminalObserver, formatProgressEvent } from './runDiagnostics.js'
 import { CliError } from './errors.js'
-import { timeoutReplacesResult } from './runDeadline.js'
+import { resolveRunDeadlineOutcome } from './runDeadline.js'
 
 function write(stream, text) {
   try { stream.write(text + '\n') } catch { /* Closed terminal. */ }
@@ -48,6 +48,7 @@ export async function runInteractiveTurn({
   // Release stdin for the whole turn: approval and recovery prompts create
   // their own interface, and two readers on one stdin drop each other's lines.
   let output
+  const terminalObserver = createRunTerminalObserver()
   try {
     reader.suspend()
     if (runtimeSignal.aborted) throw runtimeSignal.reason
@@ -61,9 +62,8 @@ export async function runInteractiveTurn({
     }]))
     const startedAt = Date.now()
     let usage = null
-    let observedTerminal = null
     if (runtimeSignal.aborted) throw runtimeSignal.reason
-    const result = await runtime({
+    let result = await runtime({
       prompt: parsed.prompt,
       ...(attachmentRequests.length ? { attachmentRequests } : {}),
       model: state.model,
@@ -77,9 +77,7 @@ export async function runInteractiveTurn({
       signal: runtimeSignal,
       env,
       onEvent: (event) => {
-        if (event?.type?.startsWith('turn.') && (event.type === 'turn.completed' || terminalDescriptor(event))) {
-          observedTerminal = event
-        }
+        terminalObserver.observe(event)
         if (event?.type === 'model.phase' && event?.payload?.phase === 'completed') {
           usage = formatProgressEvent(event)
         }
@@ -90,15 +88,20 @@ export async function runInteractiveTurn({
       ...guardedPorts,
     })
     timeout.clear()
-    if (result?.sessionId) state.sessionId = String(result.sessionId)
-    if (timeout.error && runtimeSignal.reason === timeout.error && timeoutReplacesResult(result, observedTerminal)) {
-      return await reportTurnTimeout(output, stderr, timeout.error)
-    }
     if (timeout.error && runtimeSignal.reason === timeout.error) {
-      // The deadline tripped but a more specific terminal outcome won the race;
-      // keep it and tell the user why the elapsed deadline did not become an error.
+      const outcome = resolveRunDeadlineOutcome({ result, timeoutError: timeout.error,
+        observedTerminal: terminalObserver.terminal, terminalConflict: terminalObserver.conflict })
+      if (Object.hasOwn(outcome, 'error')) {
+        if (outcome.error === timeout.error) {
+          if (result?.sessionId) state.sessionId = String(result.sessionId)
+          return await reportTurnTimeout(output, stderr, timeout.error)
+        }
+        throw outcome.error
+      }
+      result = outcome.result
       write(stderr, '[deadline elapsed; preserving the turn outcome]')
     }
+    if (result?.sessionId) state.sessionId = String(result.sessionId)
     await output.finish(result)
     const seconds = ((Date.now() - startedAt) / 1000).toFixed(1)
     write(stderr, `\n[turn ${result?.status || 'unknown'} in ${seconds}s${usage ? ` — ${usage}` : ''}]`)
@@ -111,7 +114,18 @@ export async function runInteractiveTurn({
       // persistence/shutdown failures must reach the CLI's fatal error handler.
       if (controller.signal.aborted && error === controller.signal.reason
         && runtimeSignal.reason === controller.signal.reason) {
-        if (error === timeout.error) return await reportTurnTimeout(output, stderr, error)
+        if (error === timeout.error) {
+          const outcome = resolveRunDeadlineOutcome({ error, didThrow: true, timeoutError: timeout.error,
+            observedTerminal: terminalObserver.terminal, terminalConflict: terminalObserver.conflict })
+          if (Object.hasOwn(outcome, 'error')) {
+            if (outcome.error === error) return await reportTurnTimeout(output, stderr, error)
+            throw outcome.error
+          }
+          await output.finish(outcome.result)
+          if (outcome.result.sessionId) state.sessionId = String(outcome.result.sessionId)
+          write(stderr, `[deadline elapsed; preserving the turn outcome: ${outcome.result.status}]`)
+          return outcome.result
+        }
         write(stderr, '[turn cancelled]')
         return null
       }

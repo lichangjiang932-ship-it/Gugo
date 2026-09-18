@@ -14,7 +14,7 @@ const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'u
 function createReleaseFixture(t) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-release-fixture-'))
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
-  const directories = new Set(['bin', 'dist', 'server', 'shared', 'seed', 'plugins', 'resources/licenses'])
+  const directories = new Set(['bin', 'dist', 'server', 'shared', 'sdk', 'seed', 'plugins', 'resources/licenses'])
   for (const entry of WEB_RELEASE_ENTRIES) {
     const target = path.join(rootDir, entry)
     if (directories.has(entry)) {
@@ -303,6 +303,21 @@ test('Web release includes the transitive artifact and skill runtime closure wit
   const skills = await import(pathToFileURL(path.join(stageDir, 'src/data/skillCatalog.js')).href)
   const copy = (await import(pathToFileURL(path.join(stageDir, 'src/i18n/domains/skillsMarket.js')).href)).default
   assert.equal(skills.SKILLS.find((skill) => skill.id === 'ppt').desc, copy.zh.builtInPptDescription)
+})
+
+test('Web distribution retains its advertised gugo/sdk export without installing or contacting dependencies', (t) => {
+  const rootDir = createReleaseFixture(t)
+  fs.cpSync(path.join(ROOT, 'sdk'), path.join(rootDir, 'sdk'), { recursive: true })
+  const metadata = JSON.parse(readFrom(rootDir, 'package.json'))
+  metadata.exports = { './sdk': './sdk/index.js' }
+  fs.writeFileSync(path.join(rootDir, 'package.json'), JSON.stringify(metadata))
+  const { stageDir } = stageWebRelease({ rootDir, outputDir: path.join(rootDir, 'output') })
+  assert.equal(fs.existsSync(path.join(stageDir, 'sdk/index.js')), true)
+  assert.equal(fs.existsSync(path.join(stageDir, 'sdk/python/gugo_sdk.py')), true)
+  const version = execFileSync(process.execPath, ['--input-type=module', '--eval',
+    'import { GUGO_SDK_CONTRACT_VERSION } from "gugo/sdk"; process.stdout.write(String(GUGO_SDK_CONTRACT_VERSION))'],
+  { cwd: stageDir, encoding: 'utf8', windowsHide: true })
+  assert.equal(version, '1')
 })
 
 function readFrom(rootDir, relativePath) {

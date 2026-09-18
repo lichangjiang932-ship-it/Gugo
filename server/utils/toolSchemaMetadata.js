@@ -5,6 +5,7 @@ import {
 import { isReadOnlyShellCommand } from './bashGuard.js'
 import { getDynamicTool } from './toolSchemaDynamicRegistry.js'
 import { normalizeToolRiskMetadata } from './toolRiskMetadata.js'
+import { isReadOnlySubagentRequest } from './subagentTaskPolicy.js'
 
 const RISK_LEVEL_BY_CATEGORY = Object.freeze({
   read: 'low',
@@ -56,9 +57,29 @@ function buildBuiltinToolMetadata(codexModelsToolName) {
     create_pptx: builtinMetadata('external', false),
     create_docx: builtinMetadata('external', false),
     create_xlsx: builtinMetadata('external', false),
-    Agent: builtinMetadata('read', false),
+    Agent: builtinMetadata('external', false),
     remember: builtinMetadata('external', false),
     manage_todos: builtinMetadata('external', false),
+    // Goal-plan bookkeeping has no filesystem or network side effects, the state
+    // machine bounds every transition, and a step only becomes `done` when the
+    // host re-verifies evidence against persisted Turn events. Approving each
+    // update would be approval spam with no safety gain, so it is grouped with
+    // the other server-owned local control (`set_deliverables`).
+    goal_plan_status: builtinMetadata('read', true),
+    goal_step_update: builtinMetadata('write_local', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isIdempotent: true,
+      interruptBehavior: 'block',
+      isDestructive: false,
+    }),
+    goal_plan_rewrite: builtinMetadata('write_local', false, {
+      requiredApproval: false,
+      requiresApproval: false,
+      isIdempotent: false,
+      interruptBehavior: 'block',
+      isDestructive: false,
+    }),
     set_deliverables: builtinMetadata('write_local', false, {
       requiredApproval: false,
       requiresApproval: false,
@@ -109,6 +130,7 @@ function buildBuiltinToolMetadata(codexModelsToolName) {
 }
 
 const READ_ONLY_MODE_TOOLS = new Set([
+  'goal_plan_status',
   'load_skill',
   'search_tools',
   'read_skill_resource',
@@ -225,6 +247,9 @@ export function createToolSchemaMetadataCatalog(
     }
 
     if (builtin.metadata) {
+      if (name === 'Agent' && isReadOnlySubagentRequest(args)) {
+        return normalizeToolRiskMetadata(builtinMetadata('read', false), { origin: 'builtin', source: 'declared' })
+      }
       // bash_exec retains its exact argv classifier. Other command runners
       // remain exec/high until they have dedicated safety parsers.
       if (name === 'bash_exec' && isReadOnlyShellCommand(args?.command)) {

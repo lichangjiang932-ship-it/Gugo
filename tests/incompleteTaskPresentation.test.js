@@ -11,6 +11,36 @@ import {
 
 const t = (key) => key
 
+test('confirmed cancellation with absent or generic reason is stopped, never unknown or successful', () => {
+  for (const incompleteReason of [undefined, 'turn_incomplete']) {
+    const result = buildIncompleteTaskPresentation({ meta: { cancelled: true, serverConnectionState: 'cancelled',
+      serverFailure: { code: 'TURN_CANCELLED', incompleteReason, missingRequirements: ['remaining_task_steps'] },
+    } }, t)
+    assert.equal(result.reason, 'chatMessages.incompleteReasonCancelled')
+    assert.equal(result.titleKey, 'chatMessages.toolStopped')
+    assert.equal(result.code, 'TURN_CANCELLED')
+    assert.equal(result.retryable, false)
+    assert.deepEqual(result.missing, ['chatMessages.incompleteRequirementRemainingSteps'])
+  }
+})
+
+test('cancellation cannot hide concrete unknown-outcome, verification, blocked or permission reasons', () => {
+  for (const incompleteReason of ['side_effect_outcome_unknown', 'model_request_outcome_unknown',
+    'task_verification_repair_exhausted', 'permission_denied', 'recovery_blocked']) {
+    const failure = { code: 'TURN_CANCELLED', incompleteReason }
+    const normal = buildIncompleteTaskPresentation({ meta: { serverFailure: failure } }, t)
+    const cancelled = buildIncompleteTaskPresentation({ meta: { cancelled: true, serverFailure: failure } }, t)
+    assert.equal(cancelled.reason, normal.reason)
+    assert.notEqual(cancelled.reason, 'chatMessages.incompleteReasonCancelled')
+    assert.notEqual(cancelled.titleKey, 'chatMessages.toolStopped')
+  }
+  for (const failure of [{ code: 'TURN_RECOVERY_BLOCKED' }, { code: 'TOOL_PERMISSION_DENIED' }]) {
+    const value = buildIncompleteTaskPresentation({ meta: { cancelled: true, serverFailure: failure } }, t)
+    assert.notEqual(value.reason, 'chatMessages.incompleteReasonCancelled')
+    assert.notEqual(value.titleKey, 'chatMessages.toolStopped')
+  }
+})
+
 test('known incomplete reasons produce deterministic reasons, requirements, and recovery actions', () => {
   const cases = [
     ['artifact_delivery_not_converged', 'chatMessages.incompleteReasonArtifactDelivery', 'chatMessages.incompleteRequirementArtifact'],

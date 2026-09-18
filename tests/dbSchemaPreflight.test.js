@@ -431,6 +431,10 @@ test('current-version databases with a missing critical column, index, or autoin
       label: 'missing-column',
       mutate(db) {
         db.exec(`
+          -- Remove dependent triggers so the fixture can construct the missing
+          -- column. The preflight must still detect it without repairing data.
+          DROP TRIGGER memory_search_insert_pending;
+          DROP TRIGGER memory_search_update_pending;
           DROP INDEX idx_memories_user_agent;
           ALTER TABLE memories DROP COLUMN agent_id;
         `)
@@ -785,6 +789,11 @@ test('fresh and v5→v6, v27→v28, and v29→v30 fixtures converge idempotently
       version: 5,
       mutate(db) {
         db.exec(`
+          -- These derived v120 objects did not exist in a v5 database.
+          DROP TRIGGER memory_search_insert_pending;
+          DROP TRIGGER memory_search_update_pending;
+          DROP TABLE memory_search_pending;
+          DROP TABLE memory_search_index;
           DROP INDEX idx_memories_user_agent;
           ALTER TABLE memories DROP COLUMN agent_id;
         `)
